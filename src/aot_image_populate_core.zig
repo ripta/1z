@@ -1321,7 +1321,7 @@ pub fn SlotPopulateCore(comptime Env: type) type {
                 var m: u32 = 0;
                 while (m < row.method_count) : (m += 1) {
                     const method = method_rows[m];
-                    methods.append(arena, .{ .symbol = nameSlice(method.name, method.name_len) }) catch
+                    methods.append(arena, value_mod.symbolValue(nameSlice(method.name, method.name_len))) catch
                         return LoaderError.OutOfMemory;
                     if (method.stack_effect_idx != 0) {
                         const effect = (try decodeStackEffect(arena, header, method.stack_effect_idx, protocol_slots)) orelse

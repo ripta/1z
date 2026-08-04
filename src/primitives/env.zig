@@ -30,7 +30,7 @@ fn nativeEnviron(ctx: *Context) anyerror!void {
     while (iter.next()) |entry| {
         const key = hash_alloc.dupe(u8, entry.key_ptr.*) catch return error.OutOfMemory;
         const val_str = alloc.dupe(u8, entry.value_ptr.*) catch return error.OutOfMemory;
-        hash.map.put(hash_alloc, key, .{ .string = val_str }) catch {
+        hash.map.put(hash_alloc, key, value_mod.stringValue(val_str)) catch {
             hash_alloc.free(key);
             return error.OutOfMemory;
         };
@@ -53,19 +53,19 @@ fn nativeSysInfo(ctx: *Context) anyerror!void {
     const os_name = @tagName(target.os.tag);
     const os_key = hash_alloc.dupe(u8, "os") catch return error.OutOfMemory;
     const os_val = alloc.dupe(u8, os_name) catch return error.OutOfMemory;
-    hash.map.put(hash_alloc, os_key, .{ .string = os_val }) catch return error.OutOfMemory;
+    hash.map.put(hash_alloc, os_key, value_mod.stringValue(os_val)) catch return error.OutOfMemory;
 
     // "arch" - e.g. "aarch64", "x86_64"
     const arch_name = @tagName(target.cpu.arch);
     const arch_key = hash_alloc.dupe(u8, "arch") catch return error.OutOfMemory;
     const arch_val = alloc.dupe(u8, arch_name) catch return error.OutOfMemory;
-    hash.map.put(hash_alloc, arch_key, .{ .string = arch_val }) catch return error.OutOfMemory;
+    hash.map.put(hash_alloc, arch_key, value_mod.stringValue(arch_val)) catch return error.OutOfMemory;
 
     // "abi" - e.g. "none", "gnu", "musl"
     const abi_name = @tagName(target.abi);
     const abi_key = hash_alloc.dupe(u8, "abi") catch return error.OutOfMemory;
     const abi_val = alloc.dupe(u8, abi_name) catch return error.OutOfMemory;
-    hash.map.put(hash_alloc, abi_key, .{ .string = abi_val }) catch return error.OutOfMemory;
+    hash.map.put(hash_alloc, abi_key, value_mod.stringValue(abi_val)) catch return error.OutOfMemory;
 
     // "endian" - "little" or "big"
     const endian_name = switch (target.cpu.arch.endian()) {
@@ -74,7 +74,7 @@ fn nativeSysInfo(ctx: *Context) anyerror!void {
     };
     const endian_key = hash_alloc.dupe(u8, "endian") catch return error.OutOfMemory;
     const endian_val = alloc.dupe(u8, endian_name) catch return error.OutOfMemory;
-    hash.map.put(hash_alloc, endian_key, .{ .string = endian_val }) catch return error.OutOfMemory;
+    hash.map.put(hash_alloc, endian_key, value_mod.stringValue(endian_val)) catch return error.OutOfMemory;
 
     // "ptr-width" - 32 or 64
     const pw_key = hash_alloc.dupe(u8, "ptr-width") catch return error.OutOfMemory;
@@ -84,7 +84,7 @@ fn nativeSysInfo(ctx: *Context) anyerror!void {
     const os_family = if (target.os.tag == .windows) "windows" else if (target.os.tag.isDarwin() or target.os.tag == .linux or target.os.tag == .freebsd or target.os.tag == .openbsd or target.os.tag == .netbsd or target.os.tag == .dragonfly or target.os.tag == .solaris) "unix" else "other";
     const fam_key = hash_alloc.dupe(u8, "os-family") catch return error.OutOfMemory;
     const fam_val = alloc.dupe(u8, os_family) catch return error.OutOfMemory;
-    hash.map.put(hash_alloc, fam_key, .{ .string = fam_val }) catch return error.OutOfMemory;
+    hash.map.put(hash_alloc, fam_key, value_mod.stringValue(fam_val)) catch return error.OutOfMemory;
 
     try ctx.stack.pushMoved(.{ .hash = hash });
 }
@@ -113,7 +113,7 @@ fn nativeTargetOs(ctx: *Context) anyerror!void {
         .freestanding => "freestanding",
         else => return throwUnsupportedTarget(ctx, "target-os", "OS", @tagName(ctx.target_os)),
     };
-    try ctx.stack.push(.{ .symbol = os_name });
+    try ctx.stack.push(value_mod.symbolValue(os_name));
 }
 
 /// target-arch ( -- symbol )
@@ -123,7 +123,7 @@ fn nativeTargetArch(ctx: *Context) anyerror!void {
         .aarch64 => "aarch64",
         else => return throwUnsupportedTarget(ctx, "target-arch", "architecture", @tagName(ctx.target_arch)),
     };
-    try ctx.stack.push(.{ .symbol = arch_name });
+    try ctx.stack.push(value_mod.symbolValue(arch_name));
 }
 
 const testing = std.testing;
@@ -134,15 +134,15 @@ test "target-os returns the enumerated OS symbol" {
 
     ctx.target_os = .macos;
     try nativeTargetOs(&ctx);
-    try testing.expectEqualStrings("macos", (try ctx.stack.pop()).symbol);
+    try testing.expectEqualStrings("macos", (try ctx.stack.pop()).symbol.bytes);
 
     ctx.target_os = .linux;
     try nativeTargetOs(&ctx);
-    try testing.expectEqualStrings("linux", (try ctx.stack.pop()).symbol);
+    try testing.expectEqualStrings("linux", (try ctx.stack.pop()).symbol.bytes);
 
     ctx.target_os = .freestanding;
     try nativeTargetOs(&ctx);
-    try testing.expectEqualStrings("freestanding", (try ctx.stack.pop()).symbol);
+    try testing.expectEqualStrings("freestanding", (try ctx.stack.pop()).symbol.bytes);
 }
 
 test "target-arch returns the enumerated architecture symbol" {
@@ -151,11 +151,11 @@ test "target-arch returns the enumerated architecture symbol" {
 
     ctx.target_arch = .aarch64;
     try nativeTargetArch(&ctx);
-    try testing.expectEqualStrings("aarch64", (try ctx.stack.pop()).symbol);
+    try testing.expectEqualStrings("aarch64", (try ctx.stack.pop()).symbol.bytes);
 
     ctx.target_arch = .x86_64;
     try nativeTargetArch(&ctx);
-    try testing.expectEqualStrings("x86_64", (try ctx.stack.pop()).symbol);
+    try testing.expectEqualStrings("x86_64", (try ctx.stack.pop()).symbol.bytes);
 }
 
 test "target-os errors on an unenumerated target" {

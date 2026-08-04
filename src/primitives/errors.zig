@@ -218,6 +218,8 @@ pub fn nativeCleanup(ctx: *Context) anyerror!void {
 /// rethrow ( error -- )
 pub fn nativeRethrow(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
+    // Releasing the popped error touches only its data payload; the details copied below borrow arena strings.
+    defer container_backing.releaseValue(val);
     switch (val) {
         .error_value => |err_obj| {
             // Restore the error details from the ErrorObject's stack trace
@@ -250,7 +252,11 @@ pub fn nativeRethrow(ctx: *Context) anyerror!void {
 /// type: string or symbol (error type name)
 fn nativeMakeError(ctx: *Context) anyerror!void {
     const type_val = try ctx.stack.pop();
+    // The type and message bytes are duped into the error box below, so both
+    // popped operands release here.
+    defer container_backing.releaseValue(type_val);
     const message_val = try ctx.stack.pop();
+    defer container_backing.releaseValue(message_val);
     const data_val = try ctx.stack.pop();
     // The data value's owning reference is transferred into the error box and
     // re-published by the final `pushMoved`. Until that succeeds, an early
@@ -259,8 +265,8 @@ fn nativeMakeError(ctx: *Context) anyerror!void {
 
     // Extract error type from string or symbol
     const error_type = switch (type_val) {
-        .string => |s| s,
-        .symbol => |s| s,
+        .string => |s| s.bytes,
+        .symbol => |s| s.bytes,
         else => {
             helpers.setTypeMismatchError(ctx, "string or symbol", type_val);
             return error.TypeMismatch;
@@ -269,7 +275,7 @@ fn nativeMakeError(ctx: *Context) anyerror!void {
 
     // Extract message from string or f (false = no message)
     const message = switch (message_val) {
-        .string => |s| s,
+        .string => |s| s.bytes,
         .boolean => |b| if (!b) error_type else {
             helpers.setTypeMismatchError(ctx, "string or f", message_val);
             return error.TypeMismatch;
@@ -316,13 +322,18 @@ fn nativeThrow(ctx: *Context) anyerror!void {
             // Clone the box so the stashed pointer is exclusive to the
             // throw path. The stack-resident original (from `dup` before
             // throw, or survival above the unwind frame) keeps its own
-            // box, which is freed at context teardown.
-            ctx.thrown_error = try value_mod.boxErrorObject(ctx.quotationAllocator(), err_obj.*);
+            // box, which is freed at context teardown. The popped value's
+            // data reference transfers to the stashed clone.
+            ctx.thrown_error = value_mod.boxErrorObject(ctx.quotationAllocator(), err_obj.*) catch |e| {
+                container_backing.releaseValue(val);
+                return e;
+            };
             return error.UserThrown;
         },
         else => {
             helpers.setErrorHint(ctx, "use `data message type make-error` to create an error value");
             helpers.setTypeMismatchError(ctx, "error", val);
+            container_backing.releaseValue(val);
             return error.TypeMismatch;
         },
     }

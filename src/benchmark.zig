@@ -1,5 +1,6 @@
 const std = @import("std");
-const Value = @import("value.zig").Value;
+const value_mod = @import("value.zig");
+const Value = value_mod.Value;
 const dispatch = @import("dispatch.zig");
 
 /// Output format for benchmark CLI reporting
@@ -1151,7 +1152,7 @@ test "collectVariantHistogram counts nested arrays hashes and quotation literals
 
     const nested_instrs = [_]Instruction{
         .{ .op = .{ .push_literal = .{ .boolean = true } }, .line = 1 },
-        .{ .op = .{ .push_literal = .{ .string = "hi" } }, .line = 1 },
+        .{ .op = .{ .push_literal = value_mod.stringValue("hi") }, .line = 1 },
     };
     const quot = Value{ .quotation = .{ .instructions = &nested_instrs } };
     const arr = [_]Value{

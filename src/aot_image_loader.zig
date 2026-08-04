@@ -2442,7 +2442,7 @@ test "loadIntoContext: tagged slot reconstructs Value via VirtualType back-refer
     defer inner_enc.deinit(testing.allocator);
     try instruction_bytecode.serializeValueInto(
         &inner_enc,
-        .{ .symbol = "red" },
+        value_mod.symbolValue("red"),
         testing.allocator,
         null,
         null,
@@ -2482,7 +2482,7 @@ test "loadIntoContext: tagged slot reconstructs Value via VirtualType back-refer
     try testing.expect(tagged_ptr.* == .tagged);
     try testing.expectEqualStrings("color:red", tagged_ptr.tagged.tag.name);
     try testing.expect(tagged_ptr.tagged.inner.* == .symbol);
-    try testing.expectEqualStrings("red", tagged_ptr.tagged.inner.symbol);
+    try testing.expectEqualStrings("red", tagged_ptr.tagged.inner.symbol.bytes);
 }
 
 test "populateMutableMapSlots: lower slot forward-references a higher slot" {
@@ -3742,11 +3742,11 @@ test "loadIntoContext: protocol descriptor slot reconstructs from description ro
 
     // Flat symbol/effect sequence: cmp + its effect, then bare show.
     try testing.expectEqual(@as(usize, 3), pd.methods.len);
-    try testing.expectEqualStrings("cmp", pd.methods[0].symbol);
+    try testing.expectEqualStrings("cmp", pd.methods[0].symbol.bytes);
     try testing.expect(pd.methods[1] == .stack_effect);
     try testing.expectEqual(@as(usize, 2), pd.methods[1].stack_effect.inputs.len);
     try testing.expectEqual(@as(usize, 1), pd.methods[1].stack_effect.outputs.len);
-    try testing.expectEqualStrings("show", pd.methods[2].symbol);
+    try testing.expectEqualStrings("show", pd.methods[2].symbol.bytes);
 
     // The slot pointer is the registered descriptor: identity is
     // single-sourced for the satisfies-memo and introspection.
@@ -3761,7 +3761,7 @@ test "loadIntoContext: protocol descriptor slot reuses same-named runtime descri
     var ctx = Context.init(testing.allocator);
     defer ctx.deinit();
 
-    const existing = try ctx.createProtocolDescriptor("orderly", &.{.{ .symbol = "cmp" }});
+    const existing = try ctx.createProtocolDescriptor("orderly", &.{value_mod.symbolValue("cmp")});
 
     const pd_name = "orderly";
     const descs = [_]ProtocolDescriptorDescription{.{

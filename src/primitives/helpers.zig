@@ -50,6 +50,32 @@ pub fn pushMovedIterator(ctx: *Context, iter: *Iterator) anyerror!void {
     };
 }
 
+/// Adopt freshly allocated bytes into a heap-backed string value and push it, transferring
+/// the backing's creation reference to the stack slot. `bytes` must have been allocated on
+/// `ctx.allocator`. The caller's ownership ends here on every path.
+pub fn pushOwnedString(ctx: *Context, bytes: []u8) anyerror!void {
+    const val = value_mod.ownedStringValue(ctx.allocator, bytes) catch |e| {
+        ctx.allocator.free(bytes);
+        return e;
+    };
+    ctx.stack.pushMoved(val) catch |e| {
+        container_backing.releaseValue(val);
+        return e;
+    };
+}
+
+/// Symbol twin of `pushOwnedString`.
+pub fn pushOwnedSymbol(ctx: *Context, bytes: []u8) anyerror!void {
+    const val = value_mod.ownedSymbolValue(ctx.allocator, bytes) catch |e| {
+        ctx.allocator.free(bytes);
+        return e;
+    };
+    ctx.stack.pushMoved(val) catch |e| {
+        container_backing.releaseValue(val);
+        return e;
+    };
+}
+
 /// Copy a borrowed slice of Values into a fresh owned array on `alloc` and
 /// push it. Each copied element is retained; the caller keeps its own
 /// references to `src`.
@@ -209,7 +235,7 @@ test "valueMatchesType accepts values matching anonymous union members" {
     const union_tv = try ctx.getOrCreateAnonymousUnionTypeValue(&.{ string_tv, fixnum_tv });
 
     try testing.expect(valueMatchesType(&ctx, .{ .fixnum = 42 }, union_tv));
-    try testing.expect(valueMatchesType(&ctx, .{ .string = "ok" }, union_tv));
+    try testing.expect(valueMatchesType(&ctx, value_mod.stringValue("ok"), union_tv));
     try testing.expect(!valueMatchesType(&ctx, .{ .boolean = true }, union_tv));
 }
 
@@ -247,7 +273,7 @@ test "valueMatchesType preserves tagged parent and base type checks" {
 
     const tagged_inner = try testing.allocator.create(Value);
     defer testing.allocator.destroy(tagged_inner);
-    tagged_inner.* = .{ .symbol = "red" };
+    tagged_inner.* = value_mod.symbolValue("red");
 
     const tagged = Value{ .tagged = .{
         .tag = variant_virtual,
@@ -325,17 +351,17 @@ pub fn formatValueBrief(allocator: Allocator, val: Value, max_len: usize) ![]con
         },
         .boolean => |b| allocator.dupe(u8, if (b) "t" else "f"),
         .string => |s| blk: {
-            if (s.len <= max_len) {
-                break :blk std.fmt.allocPrint(allocator, "\"{s}\"", .{s});
+            if (s.bytes.len <= max_len) {
+                break :blk std.fmt.allocPrint(allocator, "\"{s}\"", .{s.bytes});
             } else {
-                break :blk std.fmt.allocPrint(allocator, "\"{s}...\"", .{s[0..max_len]});
+                break :blk std.fmt.allocPrint(allocator, "\"{s}...\"", .{s.bytes[0..max_len]});
             }
         },
         .symbol => |s| blk: {
-            if (s.len <= max_len) {
-                break :blk std.fmt.allocPrint(allocator, "{s}:", .{s});
+            if (s.bytes.len <= max_len) {
+                break :blk std.fmt.allocPrint(allocator, "{s}:", .{s.bytes});
             } else {
-                break :blk std.fmt.allocPrint(allocator, "{s}...:", .{s[0..max_len]});
+                break :blk std.fmt.allocPrint(allocator, "{s}...:", .{s.bytes[0..max_len]});
             }
         },
         .array => |arr| std.fmt.allocPrint(allocator, "array[{d}]", .{arr.items.len}),
@@ -534,11 +560,15 @@ pub fn popCallableWithScope(ctx: *Context) !CallableWithScope {
     }
 }
 
-pub fn popSymbol(ctx: *Context) ![]const u8 {
+/// Pop a symbol, returning its full payload. The caller inherits the popped slot's owning
+/// reference: release it with `releaseValue(.{ .symbol = payload })` when the bytes are no
+/// longer needed, or hand the payload onward to transfer ownership.
+pub fn popSymbol(ctx: *Context) !value_mod.StringPayload {
     return popAs(.symbol, ctx);
 }
 
-pub fn popString(ctx: *Context) ![]const u8 {
+/// Pop a string, returning its full payload. Same ownership contract as `popSymbol`.
+pub fn popString(ctx: *Context) !value_mod.StringPayload {
     return popAs(.string, ctx);
 }
 
@@ -606,6 +636,7 @@ pub fn popNumber(ctx: *Context) !Number {
         .float => |f| .{ .float = f },
         else => {
             setTypeMismatchError(ctx, "number", val);
+            container_backing.releaseValue(val);
             return error.TypeMismatch;
         },
     };
@@ -632,18 +663,21 @@ pub fn popDuration(ctx: *Context) !struct { ns: i128, val: Value } {
         .tagged => |t| {
             if (!std.mem.eql(u8, t.tag.inner_type, "fixnum")) {
                 setTypeMismatchError(ctx, "duration", val);
+                container_backing.releaseValue(val);
                 return error.TypeMismatch;
             }
             return switch (t.inner.*) {
                 .fixnum => |i| .{ .ns = @as(i128, i), .val = val },
                 else => {
                     setTypeMismatchError(ctx, "duration", val);
+                    container_backing.releaseValue(val);
                     return error.TypeMismatch;
                 },
             };
         },
         else => {
             setTypeMismatchError(ctx, "duration", val);
+            container_backing.releaseValue(val);
             return error.TypeMismatch;
         },
     };

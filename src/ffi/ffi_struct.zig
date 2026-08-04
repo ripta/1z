@@ -99,8 +99,10 @@ fn nativeDefineFfiStruct(ctx: *Context) anyerror!void {
     );
 
     const name_val = try ctx.stack.pop();
+    defer container_backing.releaseValue(name_val);
+    // The name and field names escape into the long-lived layout and type descriptor.
     const name = switch (name_val) {
-        .symbol => |s| s,
+        .symbol => |s| try alloc.dupe(u8, s.bytes),
         else => {
             helpers.setTypeMismatchError(ctx, "symbol", name_val);
             return error.TypeMismatch;
@@ -118,7 +120,7 @@ fn nativeDefineFfiStruct(ctx: *Context) anyerror!void {
 
     for (0..num_fields) |i| {
         const name_tok = switch (fields_array[i * 2]) {
-            .string => |s| s,
+            .string => |s| s.bytes,
             else => {
                 helpers.setErrorContext(ctx, "ffi-struct{{ field name must be a string", .{});
                 return error.TypeMismatch;
@@ -126,13 +128,13 @@ fn nativeDefineFfiStruct(ctx: *Context) anyerror!void {
         };
 
         if (name_tok.len > 1 and name_tok[name_tok.len - 1] == ':') {
-            field_names[i] = name_tok[0 .. name_tok.len - 1];
+            field_names[i] = try alloc.dupe(u8, name_tok[0 .. name_tok.len - 1]);
         } else {
-            field_names[i] = name_tok;
+            field_names[i] = try alloc.dupe(u8, name_tok);
         }
 
         field_type_tokens[i] = switch (fields_array[i * 2 + 1]) {
-            .string => |s| s,
+            .string => |s| s.bytes,
             else => {
                 helpers.setErrorContext(ctx, "ffi-struct{{ field type must be a string", .{});
                 return error.TypeMismatch;
@@ -387,15 +389,15 @@ fn nativeDefineFfiStruct(ctx: *Context) anyerror!void {
     }
 
     var generated_words = std.ArrayListUnmanaged(Value){};
-    try generated_words.append(alloc, .{ .string = name });
-    try generated_words.append(alloc, .{ .string = make_name });
-    try generated_words.append(alloc, .{ .string = pred_name });
+    try generated_words.append(alloc, value_mod.stringValue(name));
+    try generated_words.append(alloc, value_mod.stringValue(make_name));
+    try generated_words.append(alloc, value_mod.stringValue(pred_name));
     for (getter_names) |gn| {
-        try generated_words.append(alloc, .{ .string = gn });
+        try generated_words.append(alloc, value_mod.stringValue(gn));
     }
     if (setter_names) |sn| {
         for (sn) |setter_name| {
-            try generated_words.append(alloc, .{ .string = setter_name });
+            try generated_words.append(alloc, value_mod.stringValue(setter_name));
         }
     }
     const gw_slice = try generated_words.toOwnedSlice(alloc);

@@ -292,19 +292,19 @@ pub fn nativeStringStreamToBytes(ctx: *Context) anyerror!void {
 
 /// string-stream>string! ( stream -- str )
 ///
-/// The live bytes are copied into the quotation arena because 1z strings are never freed
-/// individually; the GPA buffer is released. A later write throws ClosedStream.
+/// The live bytes are copied into a heap-backed string and the GPA buffer is released. A
+/// later write throws ClosedStream.
 pub fn nativeStringStreamToString(ctx: *Context) anyerror!void {
     const stream = try popStream(ctx);
     try ensureStreamOpen(stream);
     try requireMemStream(ctx, stream);
 
     const buf: *MemBuffer = @ptrCast(@alignCast(stream.impl.?));
-    const out = ctx.quotationAllocator().dupe(u8, buf.list.items) catch return error.OutOfMemory;
+    const out = ctx.allocator.dupe(u8, buf.list.items) catch return error.OutOfMemory;
 
     stream.vtable.close(stream);
     stream.closed = true;
-    try ctx.stack.push(.{ .string = out });
+    try helpers.pushOwnedString(ctx, out);
 }
 
 // =============================================================================
@@ -520,8 +520,12 @@ pub fn nativeStderr(ctx: *Context) anyerror!void {
 pub fn nativeStreamOpen(ctx: *Context) anyerror!void {
     if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "stream-open");
 
-    const mode_sym = try popSymbol(ctx);
-    const path = try popString(ctx);
+    const mode_val = try popSymbol(ctx);
+    defer container_backing.releaseValue(.{ .symbol = mode_val });
+    const mode_sym = mode_val.bytes;
+    const path_val = try popString(ctx);
+    defer container_backing.releaseValue(.{ .string = path_val });
+    const path = path_val.bytes;
     const alloc = ctx.quotationAllocator();
 
     // Parse mode symbol
@@ -603,7 +607,7 @@ pub fn nativeStreamWrite(ctx: *Context) anyerror!void {
     // Get bytes to write - accept byte arrays or strings
     const bytes: []const u8 = switch (bytes_val) {
         .byte_array => |ba| ba.slice(),
-        .string => |s| s,
+        .string => |s| s.bytes,
         else => {
             helpers.setTypeMismatchError(ctx, "string or byte-array", bytes_val);
             return error.TypeMismatch;
@@ -709,8 +713,8 @@ pub fn nativeStreamReadLine(ctx: *Context) anyerror!void {
         line_buf.append(alloc, byte) catch return error.OutOfMemory;
     }
 
-    const result = alloc.dupe(u8, line_buf.items) catch return error.OutOfMemory;
-    try ctx.stack.push(.{ .string = result });
+    const result = ctx.allocator.dupe(u8, line_buf.items) catch return error.OutOfMemory;
+    try helpers.pushOwnedString(ctx, result);
 }
 
 /// stream-read-all ( stream -- bytes )
@@ -815,12 +819,14 @@ pub fn nativeBufferingMode(ctx: *Context) anyerror!void {
     const stream = try popStream(ctx);
     try ensureStreamOpen(stream);
 
-    try ctx.stack.push(.{ .symbol = stream.buffering.toSymbol() });
+    try ctx.stack.push(value_mod.symbolValue(stream.buffering.toSymbol()));
 }
 
 /// set-buffering-mode ( stream symbol -- )
 pub fn nativeSetBufferingMode(ctx: *Context) anyerror!void {
-    const mode_sym = try popSymbol(ctx);
+    const mode_val = try popSymbol(ctx);
+    defer container_backing.releaseValue(.{ .symbol = mode_val });
+    const mode_sym = mode_val.bytes;
     const stream = try popStream(ctx);
     try ensureStreamOpen(stream);
 
@@ -916,23 +922,23 @@ pub fn nativeChr(ctx: *Context) anyerror!void {
     // interned shared slice instead of allocating a fresh one-character string.
     if (codepoint < 128) {
         if (ctx.internedAsciiByte(@intCast(codepoint))) |shared| {
-            try ctx.stack.push(.{ .string = shared });
+            try ctx.stack.push(value_mod.stringValue(shared));
             return;
         }
     }
 
-    const alloc = ctx.quotationAllocator();
     var buf: [4]u8 = undefined;
     const len = std.unicode.utf8Encode(codepoint, &buf) catch return error.InvalidArgument;
 
-    const str = alloc.dupe(u8, buf[0..len]) catch return error.OutOfMemory;
-    try ctx.stack.push(.{ .string = str });
+    const str = ctx.allocator.dupe(u8, buf[0..len]) catch return error.OutOfMemory;
+    try helpers.pushOwnedString(ctx, str);
 }
 
 /// >codepoint ( str -- int )
 pub fn nativeToCodepoint(ctx: *Context) anyerror!void {
     const str = try popString(ctx);
-    var iter = std.unicode.Utf8Iterator{ .bytes = str, .i = 0 };
+    defer container_backing.releaseValue(.{ .string = str });
+    var iter = std.unicode.Utf8Iterator{ .bytes = str.bytes, .i = 0 };
     const first_codepoint = iter.nextCodepoint() orelse {
         return error.InvalidArgument;
     };
@@ -986,20 +992,20 @@ test ">char interns ASCII codepoints" {
     try nativeChr(&ctx);
     const a = try ctx.stack.pop();
     try std.testing.expect(a == .string);
-    try std.testing.expectEqualStrings("A", a.string);
+    try std.testing.expectEqualStrings("A", a.string.bytes);
 
     // The same ASCII codepoint returns the same shared slice, not a fresh dupe.
     try ctx.stack.push(.{ .fixnum = 65 });
     try nativeChr(&ctx);
     const b = try ctx.stack.pop();
-    try std.testing.expectEqual(a.string.ptr, b.string.ptr);
+    try std.testing.expectEqual(a.string.bytes.ptr, b.string.bytes.ptr);
 
     // The tokenizer hot-path whitespace codepoints encode correctly.
     try ctx.stack.push(.{ .fixnum = 9 });
     try nativeChr(&ctx);
     const tab = try ctx.stack.pop();
-    try std.testing.expectEqualStrings("\t", tab.string);
-    try std.testing.expectEqual(ctx.internedAsciiByte('\t').?.ptr, tab.string.ptr);
+    try std.testing.expectEqualStrings("\t", tab.string.bytes);
+    try std.testing.expectEqual(ctx.internedAsciiByte('\t').?.ptr, tab.string.bytes.ptr);
 }
 
 test ">char allocates fresh for non-ASCII codepoints" {
@@ -1010,11 +1016,13 @@ test ">char allocates fresh for non-ASCII codepoints" {
     try ctx.stack.push(.{ .fixnum = 0x100 });
     try nativeChr(&ctx);
     const a = try ctx.stack.pop();
+    defer container_backing.releaseValue(a);
     try std.testing.expect(a == .string);
-    try std.testing.expectEqual(@as(usize, 2), a.string.len);
+    try std.testing.expectEqual(@as(usize, 2), a.string.bytes.len);
 
     try ctx.stack.push(.{ .fixnum = 0x100 });
     try nativeChr(&ctx);
     const b = try ctx.stack.pop();
-    try std.testing.expect(a.string.ptr != b.string.ptr);
+    defer container_backing.releaseValue(b);
+    try std.testing.expect(a.string.bytes.ptr != b.string.bytes.ptr);
 }

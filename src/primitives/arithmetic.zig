@@ -136,7 +136,9 @@ fn makeBinaryArithEntry(comptime op: ArithOp, comptime type_a: NumType, comptime
         fn func(ctx: *Context) anyerror!void {
             const alloc = ctx.arena.allocator();
             const b = try ctx.stack.pop();
+            defer container_backing.releaseValue(b);
             const a = try ctx.stack.pop();
+            defer container_backing.releaseValue(a);
 
             if (type_a == .fixnum and type_b == .fixnum) {
                 const result = switch (op) {
@@ -178,7 +180,9 @@ fn makeDivEntry(comptime type_a: NumType, comptime type_b: NumType) *const fn (*
         fn func(ctx: *Context) anyerror!void {
             const alloc = ctx.arena.allocator();
             const b = try ctx.stack.pop();
+            defer container_backing.releaseValue(b);
             const a = try ctx.stack.pop();
+            defer container_backing.releaseValue(a);
 
             if (type_a == .fixnum and type_b == .fixnum) {
                 if (b.fixnum == 0) return error.DivisionByZero;
@@ -223,7 +227,9 @@ fn makeModEntry(comptime type_a: NumType, comptime type_b: NumType) *const fn (*
         fn func(ctx: *Context) anyerror!void {
             const alloc = ctx.arena.allocator();
             const b = try ctx.stack.pop();
+            defer container_backing.releaseValue(b);
             const a = try ctx.stack.pop();
+            defer container_backing.releaseValue(a);
 
             if (type_a == .fixnum and type_b == .fixnum) {
                 if (b.fixnum == 0) return error.DivisionByZero;
@@ -255,7 +261,9 @@ fn makeEqCrossTypeEntry(comptime type_a: NumType, comptime type_b: NumType) *con
     return &struct {
         fn func(ctx: *Context) anyerror!void {
             const b = try ctx.stack.pop();
+            defer container_backing.releaseValue(b);
             const a = try ctx.stack.pop();
+            defer container_backing.releaseValue(a);
 
             if (type_a == .fixnum and type_b == .float) {
                 const af: f64 = @floatFromInt(a.fixnum);
@@ -283,7 +291,9 @@ fn makeLtEntry(comptime type_a: NumType, comptime type_b: NumType) *const fn (*C
     return &struct {
         fn func(ctx: *Context) anyerror!void {
             const b = try ctx.stack.pop();
+            defer container_backing.releaseValue(b);
             const a = try ctx.stack.pop();
+            defer container_backing.releaseValue(a);
 
             if (type_a == .fixnum and type_b == .fixnum) {
                 try ctx.stack.push(.{ .boolean = a.fixnum < b.fixnum });
@@ -313,7 +323,9 @@ fn makeGtEntry(comptime type_a: NumType, comptime type_b: NumType) *const fn (*C
     return &struct {
         fn func(ctx: *Context) anyerror!void {
             const b = try ctx.stack.pop();
+            defer container_backing.releaseValue(b);
             const a = try ctx.stack.pop();
+            defer container_backing.releaseValue(a);
 
             if (type_a == .fixnum and type_b == .fixnum) {
                 try ctx.stack.push(.{ .boolean = a.fixnum > b.fixnum });
@@ -343,7 +355,9 @@ fn makeCmpEntry(comptime type_a: NumType, comptime type_b: NumType) *const fn (*
     return &struct {
         fn func(ctx: *Context) anyerror!void {
             const b = try ctx.stack.pop();
+            defer container_backing.releaseValue(b);
             const a = try ctx.stack.pop();
+            defer container_backing.releaseValue(a);
 
             const result: i64 = blk: {
                 if (type_a == .fixnum and type_b == .fixnum) {
@@ -422,6 +436,7 @@ fn makeCmpEntry(comptime type_a: NumType, comptime type_b: NumType) *const fn (*
 
 fn nativeAbsFixnum(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
+    defer container_backing.releaseValue(val);
     const i = val.fixnum;
     if (i == std.math.minInt(i64)) {
         const alloc = ctx.arena.allocator();
@@ -435,6 +450,7 @@ fn nativeAbsFixnum(ctx: *Context) anyerror!void {
 
 fn nativeAbsBignum(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
+    defer container_backing.releaseValue(val);
     var big = try val.bignum.clone();
     big.abs();
     try ctx.stack.push(try demoteBignum(ctx.arena.allocator(), big));
@@ -442,11 +458,13 @@ fn nativeAbsBignum(ctx: *Context) anyerror!void {
 
 fn nativeAbsFloat(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
+    defer container_backing.releaseValue(val);
     try ctx.stack.push(.{ .float = @abs(val.float) });
 }
 
 fn nativeToFloatFixnum(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
+    defer container_backing.releaseValue(val);
     try ctx.stack.push(.{ .float = @floatFromInt(val.fixnum) });
 }
 
@@ -457,6 +475,7 @@ fn nativeToFloatPassthrough(ctx: *Context) anyerror!void {
 
 fn nativeToFloatBignum(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
+    defer container_backing.releaseValue(val);
     const alloc = ctx.arena.allocator();
     const str = try val.bignum.toConst().toStringAlloc(alloc, 10, .lower);
     const f = std.fmt.parseFloat(f64, str) catch {
@@ -468,8 +487,9 @@ fn nativeToFloatBignum(ctx: *Context) anyerror!void {
 
 fn nativeToFloatString(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
-    const f = std.fmt.parseFloat(f64, val.string) catch {
-        helpers.setErrorContext(ctx, ">float: cannot parse \"{s}\" as float", .{val.string});
+    defer container_backing.releaseValue(val);
+    const f = std.fmt.parseFloat(f64, val.string.bytes) catch {
+        helpers.setErrorContext(ctx, ">float: cannot parse \"{s}\" as float", .{val.string.bytes});
         return error.TypeMismatch;
     };
     try ctx.stack.push(.{ .float = f });
@@ -477,6 +497,7 @@ fn nativeToFloatString(ctx: *Context) anyerror!void {
 
 fn nativeToIntegerFloat(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
+    defer container_backing.releaseValue(val);
     const f = val.float;
     if (std.math.isNan(f)) {
         helpers.setErrorContext(ctx, ">integer: NaN cannot be converted to fixnum", .{});
@@ -507,7 +528,7 @@ const ByteType = enum { string, byte_array };
 
 fn extractBytes(comptime bt: ByteType, val: Value) []const u8 {
     return switch (bt) {
-        .string => val.string,
+        .string => val.string.bytes,
         .byte_array => val.byte_array.slice(),
     };
 }
@@ -1144,12 +1165,12 @@ fn nativeCmp(ctx: *Context) anyerror!void {
             },
         },
         .string => |av| switch (b) {
-            .string => |bv| switch (std.mem.order(u8, av, bv)) {
+            .string => |bv| switch (std.mem.order(u8, av.bytes, bv.bytes)) {
                 .lt => @as(i64, -1),
                 .gt => @as(i64, 1),
                 .eq => @as(i64, 0),
             },
-            .byte_array => |bv| switch (std.mem.order(u8, av, bv.slice())) {
+            .byte_array => |bv| switch (std.mem.order(u8, av.bytes, bv.slice())) {
                 .lt => @as(i64, -1),
                 .gt => @as(i64, 1),
                 .eq => @as(i64, 0),
@@ -1160,7 +1181,7 @@ fn nativeCmp(ctx: *Context) anyerror!void {
             },
         },
         .byte_array => |av| switch (b) {
-            .string => |bv| switch (std.mem.order(u8, av.slice(), bv)) {
+            .string => |bv| switch (std.mem.order(u8, av.slice(), bv.bytes)) {
                 .lt => @as(i64, -1),
                 .gt => @as(i64, 1),
                 .eq => @as(i64, 0),

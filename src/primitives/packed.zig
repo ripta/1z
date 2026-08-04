@@ -102,11 +102,12 @@ fn nativePackedFromArray(ctx: *Context) anyerror!void {
     const arena = ctx.arena.allocator();
 
     const type_str_val = try ctx.stack.pop();
+    defer container_backing.releaseValue(type_str_val);
     const arr_val = try ctx.stack.pop();
     defer container_backing.releaseValue(arr_val);
 
     const type_str = switch (type_str_val) {
-        .string => |s| s,
+        .string => |s| s.bytes,
         else => {
             helpers.setTypeMismatchError(ctx, "string", type_str_val);
             return error.TypeMismatch;
@@ -213,11 +214,14 @@ fn nativePackedFill(ctx: *Context) anyerror!void {
     const arena = ctx.arena.allocator();
 
     const type_str_val = try ctx.stack.pop();
+    defer container_backing.releaseValue(type_str_val);
     const value_val = try ctx.stack.pop();
+    defer container_backing.releaseValue(value_val);
     const n_val = try ctx.stack.pop();
+    defer container_backing.releaseValue(n_val);
 
     const type_str = switch (type_str_val) {
-        .string => |s| s,
+        .string => |s| s.bytes,
         else => {
             helpers.setTypeMismatchError(ctx, "string", type_str_val);
             return error.TypeMismatch;
@@ -477,6 +481,7 @@ fn packedScalarArithmeticOp(comptime op: packed_kernels.Op, ctx: *Context) anyer
     const arena = ctx.arena.allocator();
 
     const scalar_val = try ctx.stack.pop();
+    defer container_backing.releaseValue(scalar_val);
     const a_val = try ctx.stack.pop();
     defer container_backing.releaseValue(a_val);
 
@@ -677,6 +682,7 @@ fn nativePackedLen(ctx: *Context) anyerror!void {
 /// packed-nth ( packed-T fixnum -- value )
 fn nativePackedNth(ctx: *Context) anyerror!void {
     const idx_val = try ctx.stack.pop();
+    defer container_backing.releaseValue(idx_val);
     const a_val = try ctx.stack.pop();
     defer container_backing.releaseValue(a_val);
 
@@ -742,6 +748,7 @@ fn popPackedTagged(ctx: *Context) !TaggedPayload {
         .tagged => |t| t,
         else => {
             helpers.setTypeMismatchError(ctx, "packed-*", val);
+            container_backing.releaseValue(val);
             return error.TypeMismatch;
         },
     };

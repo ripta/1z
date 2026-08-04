@@ -4,7 +4,9 @@ const native_os = builtin.os.tag;
 const is_freestanding = native_os == .freestanding;
 
 const Context = @import("../context.zig").Context;
+const value_mod = @import("../value.zig");
 const helpers = @import("helpers.zig");
+const container_backing = @import("../container_backing.zig");
 
 const RegistryEntry = @import("types.zig").RegistryEntry;
 
@@ -20,7 +22,9 @@ pub const registry_entries = [_]RegistryEntry{
 /// Zig primitive per constant.
 fn nativePosixConst(ctx: *Context) anyerror!void {
     if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "posix-const");
-    const name = try helpers.popString(ctx);
+    const name_val = try helpers.popString(ctx);
+    defer container_backing.releaseValue(.{ .string = name_val });
+    const name = name_val.bytes;
 
     // POSIX_FADV_* exist only on Linux, and the constants come from
     // std.os.linux rather than std.posix. `std.posix.POSIX_FADV` is
@@ -141,7 +145,7 @@ const testing = std.testing;
 fn constOf(comptime name: []const u8) !i64 {
     var ctx = Context.init(testing.allocator);
     defer ctx.deinit();
-    try ctx.stack.push(.{ .string = name });
+    try ctx.stack.push(value_mod.stringValue(name));
     try nativePosixConst(&ctx);
     return (try ctx.stack.pop()).fixnum;
 }
@@ -299,7 +303,7 @@ test "posix-const errors on an unknown name" {
 
     var ctx = Context.init(testing.allocator);
     defer ctx.deinit();
-    try ctx.stack.push(.{ .string = "NOT_A_CONSTANT" });
+    try ctx.stack.push(value_mod.stringValue("NOT_A_CONSTANT"));
     try testing.expectError(error.InvalidArgument, nativePosixConst(&ctx));
     try testing.expectEqual(@as(usize, 0), ctx.stack.depth());
 }

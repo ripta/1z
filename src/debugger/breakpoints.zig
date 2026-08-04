@@ -7,6 +7,7 @@ const Value = value_mod.Value;
 const context_mod = @import("../context.zig");
 const Context = context_mod.Context;
 const StatementProcessor = @import("../statement.zig").StatementProcessor;
+const container_backing = @import("../container_backing.zig");
 
 pub const BreakpointKind = union(enum) {
     word_name: []const u8,
@@ -136,12 +137,17 @@ pub const BreakpointManager = struct {
         cloned.appendSlice(ctx.stack.allocator, original_items) catch return false;
         defer cloned.deinit(ctx.stack.allocator);
 
+        // The clone's slots are owning references alongside the originals, so
+        // condition code popping and releasing them stays balanced.
+        container_backing.retainValues(cloned.items);
+
         const saved_items = ctx.stack.items;
         ctx.stack.items = cloned;
         defer {
             // XXX: Restore original stack, since clone may have been modified
             cloned = ctx.stack.items;
             ctx.stack.items = saved_items;
+            container_backing.releaseValues(cloned.items);
         }
 
         // XXX: Null out debugger !!! recursive pauses
@@ -161,6 +167,7 @@ pub const BreakpointManager = struct {
 
         // Check if top of stack is truthy
         const top = ctx.stack.pop() catch return false;
+        defer container_backing.releaseValue(top);
         return switch (top) {
             .boolean => |b| b,
             .fixnum => |i| i != 0,

@@ -19,6 +19,7 @@ const StackEffect = stack_effect_mod.StackEffect;
 const StackEffectParam = stack_effect_mod.StackEffectParam;
 
 const Context = @import("context.zig").Context;
+const container_backing = @import("container_backing.zig");
 const markers_mod = @import("primitives/markers.zig");
 const Marker = value_mod.Marker;
 const constraint_analysis = @import("constraint_analysis.zig");
@@ -439,14 +440,14 @@ fn classifyLiteral(allocator: Allocator, token: []const u8) Allocator.Error!Clas
     }
     if (parseString(token)) |s| {
         const s_copy = try processEscapes(allocator, s);
-        return .{ .value = .{ .string = s_copy } };
+        return .{ .value = value_mod.stringValue(s_copy) };
     }
     if (token.len > 0 and token[0] == '"') {
         return .unmatched_quote;
     }
     if (token.len > 1 and token[token.len - 1] == ':') {
         const sym_copy = try allocator.dupe(u8, token[0 .. token.len - 1]);
-        return .{ .value = .{ .symbol = sym_copy } };
+        return .{ .value = value_mod.symbolValue(sym_copy) };
     }
     return .unrecognized;
 }
@@ -799,7 +800,9 @@ fn resolveTypeAnnotation(ctx: ?*Context, token: []const u8) ?ResolvedAnnotation 
 
             const post_depth = c.stack.depth();
             if (post_depth > pre_depth) {
+                // Release is a no-op for the type-shaped variants returned below.
                 const val = c.stack.pop() catch return null;
+                defer container_backing.releaseValue(val);
                 if (val == .type_val) return .{ .type = val.type_val };
                 if (val == .protocol_descriptor) return .{ .protocol = val.protocol_descriptor };
                 if (val == .constraint_combinator) return .{ .combination = val.constraint_combinator };
@@ -1449,7 +1452,7 @@ test "parse array with string" {
     const arr = try parseArray(arena.allocator(), &tokenizer, null, 0);
 
     try std.testing.expectEqual(@as(usize, 2), arr.items.len);
-    try std.testing.expectEqualStrings("hello", arr.items[0].string);
+    try std.testing.expectEqualStrings("hello", arr.items[0].string.bytes);
     try std.testing.expectEqual(@as(i64, 42), arr.items[1].fixnum);
 }
 
@@ -1606,7 +1609,7 @@ test "parse top level with stack effect" {
     const instrs = try parseTopLevel(arena.allocator(), &tokenizer, null);
 
     try std.testing.expectEqual(@as(usize, 2), instrs.len);
-    try std.testing.expectEqualStrings("foo", instrs[0].op.push_literal.symbol);
+    try std.testing.expectEqualStrings("foo", instrs[0].op.push_literal.symbol.bytes);
 
     const quot = instrs[1].op.push_literal.quotation;
     try std.testing.expect(quot.effect != null);
@@ -1661,8 +1664,8 @@ test "parse-time word preserves preceding literals" {
     const instrs = try parseTopLevel(alloc, &tokenizer, &ctx);
 
     try std.testing.expectEqual(@as(usize, 3), instrs.len);
-    try std.testing.expectEqualStrings("foo", instrs[0].op.push_literal.symbol);
-    try std.testing.expectEqualStrings("foo", instrs[1].op.push_literal.symbol);
+    try std.testing.expectEqualStrings("foo", instrs[0].op.push_literal.symbol.bytes);
+    try std.testing.expectEqualStrings("foo", instrs[1].op.push_literal.symbol.bytes);
     try std.testing.expectEqualStrings("bar", instrs[2].op.call_word);
 }
 
@@ -1691,10 +1694,10 @@ test "parse-time word preserves call_word barrier ordering" {
     const instrs = try parseTopLevel(alloc, &tokenizer, &ctx);
 
     try std.testing.expectEqual(@as(usize, 4), instrs.len);
-    try std.testing.expectEqualStrings("foo", instrs[0].op.push_literal.symbol);
+    try std.testing.expectEqualStrings("foo", instrs[0].op.push_literal.symbol.bytes);
     try std.testing.expectEqualStrings("some-word", instrs[1].op.call_word);
-    try std.testing.expectEqualStrings("bar", instrs[2].op.push_literal.symbol);
-    try std.testing.expectEqualStrings("bar", instrs[3].op.push_literal.symbol);
+    try std.testing.expectEqualStrings("bar", instrs[2].op.push_literal.symbol.bytes);
+    try std.testing.expectEqualStrings("bar", instrs[3].op.push_literal.symbol.bytes);
 }
 
 test "doc-comment before definition emits doc_string after symbol" {
@@ -1705,7 +1708,7 @@ test "doc-comment before definition emits doc_string after symbol" {
     const instrs = try parseTopLevel(arena.allocator(), &tokenizer, null);
 
     try std.testing.expectEqual(@as(usize, 3), instrs.len);
-    try std.testing.expectEqualStrings("foo", instrs[0].op.push_literal.symbol);
+    try std.testing.expectEqualStrings("foo", instrs[0].op.push_literal.symbol.bytes);
     try std.testing.expectEqualStrings("Add two numbers.", instrs[1].op.push_literal.doc_string);
     try std.testing.expectEqual(@as(i64, 42), instrs[2].op.push_literal.fixnum);
 }
@@ -1718,7 +1721,7 @@ test "consecutive doc-comments joined with newlines" {
     const instrs = try parseTopLevel(arena.allocator(), &tokenizer, null);
 
     try std.testing.expectEqual(@as(usize, 3), instrs.len);
-    try std.testing.expectEqualStrings("foo", instrs[0].op.push_literal.symbol);
+    try std.testing.expectEqualStrings("foo", instrs[0].op.push_literal.symbol.bytes);
     try std.testing.expectEqualStrings("line one\nline two", instrs[1].op.push_literal.doc_string);
     try std.testing.expectEqual(@as(i64, 1), instrs[2].op.push_literal.fixnum);
 }
@@ -1742,7 +1745,7 @@ test "doc-comment inside quotation emits doc_string after symbol" {
     const quot = try parseQuotation(arena.allocator(), &tokenizer, null, 0);
 
     try std.testing.expectEqual(@as(usize, 3), quot.instructions.len);
-    try std.testing.expectEqualStrings("bar", quot.instructions[0].op.push_literal.symbol);
+    try std.testing.expectEqualStrings("bar", quot.instructions[0].op.push_literal.symbol.bytes);
     try std.testing.expectEqualStrings("doc", quot.instructions[1].op.push_literal.doc_string);
     try std.testing.expectEqual(@as(i64, 1), quot.instructions[2].op.push_literal.fixnum);
 }
@@ -1772,7 +1775,7 @@ test "doc-comment with definition in quotation preserves leading stack effect" {
     try std.testing.expect(quot.effect != null);
 
     try std.testing.expectEqual(@as(usize, 3), quot.instructions.len);
-    try std.testing.expectEqualStrings("foo", quot.instructions[0].op.push_literal.symbol);
+    try std.testing.expectEqualStrings("foo", quot.instructions[0].op.push_literal.symbol.bytes);
     try std.testing.expectEqualStrings("doc", quot.instructions[1].op.push_literal.doc_string);
     try std.testing.expectEqual(@as(i64, 1), quot.instructions[2].op.push_literal.fixnum);
 }
@@ -1893,7 +1896,7 @@ test "named union definition parses anonymous union before semicolon" {
 
     // The trailing `;` is retained as a call that defines `number` at runtime.
     try std.testing.expectEqual(@as(usize, 3), instrs.len);
-    try std.testing.expectEqualStrings("number", instrs[0].op.push_literal.symbol);
+    try std.testing.expectEqualStrings("number", instrs[0].op.push_literal.symbol.bytes);
     try std.testing.expect(instrs[1].op.push_literal == .type_val);
     try std.testing.expect(instrs[1].op.push_literal.type_val.member_types != null);
     try std.testing.expectEqual(@as(usize, 3), instrs[1].op.push_literal.type_val.member_types.?.len);
@@ -1910,7 +1913,7 @@ test "named intersection definition parses a combinator before semicolon" {
     const instrs = try parseTopLevel(alloc, &tokenizer, &ctx);
 
     try std.testing.expectEqual(@as(usize, 3), instrs.len);
-    try std.testing.expectEqualStrings("ordered-stringable", instrs[0].op.push_literal.symbol);
+    try std.testing.expectEqualStrings("ordered-stringable", instrs[0].op.push_literal.symbol.bytes);
     try std.testing.expect(instrs[1].op.push_literal == .constraint_combinator);
     try std.testing.expect(instrs[2].op != .push_literal);
     const cc = instrs[1].op.push_literal.constraint_combinator;
@@ -1929,7 +1932,7 @@ test "named mixed union definition parses a combinator before semicolon" {
     const instrs = try parseTopLevel(alloc, &tokenizer, &ctx);
 
     try std.testing.expectEqual(@as(usize, 3), instrs.len);
-    try std.testing.expectEqualStrings("widget", instrs[0].op.push_literal.symbol);
+    try std.testing.expectEqualStrings("widget", instrs[0].op.push_literal.symbol.bytes);
     try std.testing.expect(instrs[1].op.push_literal == .constraint_combinator);
     try std.testing.expect(instrs[2].op != .push_literal);
     const cc = instrs[1].op.push_literal.constraint_combinator;

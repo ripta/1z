@@ -4,6 +4,7 @@ const value_mod = @import("../value.zig");
 const BigIntManaged = value_mod.BigIntManaged;
 const helpers = @import("helpers.zig");
 const RegistryEntry = @import("types.zig").RegistryEntry;
+const container_backing = @import("../container_backing.zig");
 
 pub const registry_entries = [_]RegistryEntry{
     .{ .name = "sin", .func = nativeSin },
@@ -134,12 +135,14 @@ fn nativeTruncate(ctx: *Context) anyerror!void {
 // ( float width -- fixnum )
 fn nativeFloatRawBits(ctx: *Context) anyerror!void {
     const width_val = try ctx.stack.pop();
+    defer container_backing.releaseValue(width_val);
     if (width_val != .fixnum or (width_val.fixnum != 32 and width_val.fixnum != 64)) {
         helpers.setErrorContext(ctx, "float-raw-bits: width must be 32 or 64", .{});
         return error.TypeMismatch;
     }
     const width: u7 = @intCast(width_val.fixnum);
     const val = try ctx.stack.pop();
+    defer container_backing.releaseValue(val);
     if (val != .float) {
         helpers.setTypeMismatchError(ctx, "float", val);
         return error.TypeMismatch;
@@ -163,12 +166,14 @@ fn nativeFloatRawBits(ctx: *Context) anyerror!void {
 // ( fixnum width -- float )
 fn nativeRawBitsFloat(ctx: *Context) anyerror!void {
     const width_val = try ctx.stack.pop();
+    defer container_backing.releaseValue(width_val);
     if (width_val != .fixnum or (width_val.fixnum != 32 and width_val.fixnum != 64)) {
         helpers.setErrorContext(ctx, "raw-bits-float: width must be 32 or 64", .{});
         return error.TypeMismatch;
     }
     const width: u7 = @intCast(width_val.fixnum);
     const val = try ctx.stack.pop();
+    defer container_backing.releaseValue(val);
     if (width == 32) {
         const bits: u32 = switch (val) {
             .fixnum => |i| blk: {

@@ -60,7 +60,9 @@ fn makeBinaryBitwiseEntry(comptime op: BitwiseOp, comptime type_a: BitType, comp
         fn func(ctx: *Context) anyerror!void {
             const alloc = ctx.arena.allocator();
             const b = try ctx.stack.pop();
+            defer container_backing.releaseValue(b);
             const a = try ctx.stack.pop();
+            defer container_backing.releaseValue(a);
 
             if (type_a == .fixnum and type_b == .fixnum) {
                 try ctx.stack.push(.{ .fixnum = switch (op) {
@@ -83,6 +85,7 @@ fn makeBitnotEntry(comptime t: BitType) *const fn (*Context) anyerror!void {
     return &struct {
         fn func(ctx: *Context) anyerror!void {
             const val = try ctx.stack.pop();
+            defer container_backing.releaseValue(val);
             if (t == .fixnum) {
                 try ctx.stack.push(.{ .fixnum = ~val.fixnum });
             } else {
@@ -103,6 +106,7 @@ fn makeShiftLeftEntry(comptime t: BitType) *const fn (*Context) anyerror!void {
         fn func(ctx: *Context) anyerror!void {
             const count = try popShiftCount(ctx);
             const val = try ctx.stack.pop();
+            defer container_backing.releaseValue(val);
             const alloc = ctx.arena.allocator();
             var big = try ensureBignum(alloc, if (t == .fixnum) val else val);
             try big.shiftLeft(&big, count);
@@ -116,6 +120,7 @@ fn makeShiftRightEntry(comptime t: BitType) *const fn (*Context) anyerror!void {
         fn func(ctx: *Context) anyerror!void {
             const count = try popShiftCount(ctx);
             const val = try ctx.stack.pop();
+            defer container_backing.releaseValue(val);
             if (t == .fixnum) {
                 if (count >= 64) {
                     try ctx.stack.push(.{ .fixnum = if (val.fixnum < 0) @as(i64, -1) else @as(i64, 0) });
@@ -137,6 +142,7 @@ fn makeUshiftRightEntry() *const fn (*Context) anyerror!void {
         fn func(ctx: *Context) anyerror!void {
             const count = try popShiftCount(ctx);
             const val = try ctx.stack.pop();
+            defer container_backing.releaseValue(val);
             if (count >= 64) {
                 try ctx.stack.push(.{ .fixnum = 0 });
             } else {
@@ -152,8 +158,10 @@ fn makeShiftEntry(comptime t: BitType) *const fn (*Context) anyerror!void {
     return &struct {
         fn func(ctx: *Context) anyerror!void {
             const count_val = try ctx.stack.pop();
+            defer container_backing.releaseValue(count_val);
             const count = count_val.fixnum;
             const val = try ctx.stack.pop();
+            defer container_backing.releaseValue(val);
             if (count >= 0) {
                 const alloc = ctx.arena.allocator();
                 var big = try ensureBignum(alloc, val);
@@ -346,6 +354,7 @@ fn nativeShift(ctx: *Context) anyerror!void {
 
 fn popShiftCount(ctx: *Context) !usize {
     const val = try ctx.stack.pop();
+    defer container_backing.releaseValue(val);
     if (val != .fixnum) {
         helpers.setErrorHint(ctx, "shift count must be a non-negative fixnum");
         helpers.setTypeMismatchError(ctx, "fixnum", val);

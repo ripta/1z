@@ -204,6 +204,7 @@ fn popSimdTagged(ctx: *Context) !TaggedPayload {
         .tagged => |t| t,
         else => {
             helpers.setTypeMismatchError(ctx, "simd-*", val);
+            container_backing.releaseValue(val);
             return error.TypeMismatch;
         },
     };
@@ -260,8 +261,9 @@ fn nativeSimdFromStack(ctx: *Context) anyerror!void {
     const arena = ctx.arena.allocator();
 
     const type_str_val = try ctx.stack.pop();
+    defer container_backing.releaseValue(type_str_val);
     const type_str = switch (type_str_val) {
-        .string => |s| s,
+        .string => |s| s.bytes,
         else => {
             helpers.setTypeMismatchError(ctx, "string", type_str_val);
             return error.TypeMismatch;
@@ -280,8 +282,12 @@ fn nativeSimdFromStack(ctx: *Context) anyerror!void {
     var i: usize = n;
     while (i > 0) {
         i -= 1;
-        vals[i] = try ctx.stack.pop();
+        vals[i] = ctx.stack.pop() catch |err| {
+            container_backing.releaseValues(vals[i + 1 .. n]);
+            return err;
+        };
     }
+    defer container_backing.releaseValues(vals[0..n]);
 
     const ba = try allocSimdByteArray(alloc);
     errdefer container_backing.releaseValue(.{ .byte_array = ba });
@@ -311,10 +317,12 @@ fn nativeSimdSplat(ctx: *Context) anyerror!void {
     const arena = ctx.arena.allocator();
 
     const type_str_val = try ctx.stack.pop();
+    defer container_backing.releaseValue(type_str_val);
     const value_val = try ctx.stack.pop();
+    defer container_backing.releaseValue(value_val);
 
     const type_str = switch (type_str_val) {
-        .string => |s| s,
+        .string => |s| s.bytes,
         else => {
             helpers.setTypeMismatchError(ctx, "string", type_str_val);
             return error.TypeMismatch;
@@ -376,6 +384,7 @@ fn nativeSimdToArray(ctx: *Context) anyerror!void {
 
 fn nativeSimdLaneGet(ctx: *Context) anyerror!void {
     const idx_val = try ctx.stack.pop();
+    defer container_backing.releaseValue(idx_val);
     const tagged = try popSimdTagged(ctx);
     defer container_backing.releaseValue(.{ .tagged = tagged });
     const ba = try extractByteArray(ctx, tagged);
@@ -414,7 +423,9 @@ fn nativeSimdLaneSet(ctx: *Context) anyerror!void {
     const arena = ctx.arena.allocator();
 
     const idx_val = try ctx.stack.pop();
+    defer container_backing.releaseValue(idx_val);
     const value_val = try ctx.stack.pop();
+    defer container_backing.releaseValue(value_val);
     const tagged = try popSimdTagged(ctx);
     defer container_backing.releaseValue(.{ .tagged = tagged });
     const ba = try extractByteArray(ctx, tagged);
@@ -634,6 +645,7 @@ fn nativeSimdSelect(ctx: *Context) anyerror!void {
 
 fn nativeSimdBlend(ctx: *Context) anyerror!void {
     const bitmask_val = try ctx.stack.pop();
+    defer container_backing.releaseValue(bitmask_val);
     const b_val = try ctx.stack.pop();
     defer container_backing.releaseValue(b_val);
     const a_val = try ctx.stack.pop();

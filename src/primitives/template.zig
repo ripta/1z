@@ -22,9 +22,10 @@ pub const primitives = [_]Primitive{
 /// template ( string -- template )
 fn nativeTemplate(ctx: *Context) anyerror!void {
     const input = try helpers.popString(ctx);
+    defer container_backing.releaseValue(.{ .string = input });
     const alloc = ctx.quotationAllocator();
 
-    const segments = try parseTemplate(ctx, alloc, input);
+    const segments = try parseTemplate(ctx, alloc, input.bytes);
     try ctx.stack.push(.{ .template = segments });
 }
 
@@ -33,6 +34,7 @@ fn nativeInterpolate(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
 
     const val = try ctx.stack.pop();
+    defer container_backing.releaseValue(val);
     const segments = switch (val) {
         .template => |t| t,
         else => {
@@ -70,14 +72,15 @@ fn nativeInterpolate(ctx: *Context) anyerror!void {
         }
     }
 
-    try ctx.stack.push(.{ .string = buf.toOwnedSlice(alloc) catch return error.OutOfMemory });
+    const result = ctx.allocator.dupe(u8, buf.items) catch return error.OutOfMemory;
+    try helpers.pushOwnedString(ctx, result);
 }
 
 /// Convert a value to its unquoted string representation, like `>string`
 /// but without pushing to the stack.
 fn valueToString(alloc: Allocator, val: Value) ![]const u8 {
     return switch (val) {
-        .string => |s| s,
+        .string => |s| s.bytes,
         else => {
             var buffer: std.ArrayListUnmanaged(u8) = .{};
             val.write(buffer.writer(alloc)) catch return error.OutOfMemory;
@@ -413,7 +416,7 @@ test "unknown format spec key is error" {
 }
 
 test "valueToString passes strings through" {
-    const result = try valueToString(test_alloc, .{ .string = "hello" });
+    const result = try valueToString(test_alloc, value_mod.stringValue("hello"));
     try testing.expectEqualStrings("hello", result);
 }
 

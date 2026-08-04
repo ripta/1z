@@ -80,8 +80,9 @@ fn nativeDefineMethod(ctx: *Context) anyerror!void {
     };
 
     const name_val = try ctx.stack.pop();
+    defer container_backing.releaseValue(name_val);
     const word_name = switch (name_val) {
-        .symbol => |s| s,
+        .symbol => |s| s.bytes,
         else => {
             helpers.setTypeMismatchError(ctx, "symbol", name_val);
             return error.TypeMismatch;
@@ -180,14 +181,14 @@ fn extractTypeValue(ctx: *Context, val: value_mod.Value) !*const value_mod.TypeV
             return error.InvalidArgument;
         },
         .string => |s| {
-            if (ctx.lookupTypeValueByName(s)) |tv| return tv;
+            if (ctx.lookupTypeValueByName(s.bytes)) |tv| return tv;
 
             // Try qualified name resolution: "module.typename"
-            if (std.mem.indexOfScalar(u8, s, '.') != null) {
-                if (resolveQualifiedTypeValue(ctx, s)) |tv| return tv;
+            if (std.mem.indexOfScalar(u8, s.bytes, '.') != null) {
+                if (resolveQualifiedTypeValue(ctx, s.bytes)) |tv| return tv;
             }
 
-            helpers.setErrorContext(ctx, "unknown type name '{s}' in method type position", .{s});
+            helpers.setErrorContext(ctx, "unknown type name '{s}' in method type position", .{s.bytes});
             return error.TypeMismatch;
         },
         else => {
@@ -293,7 +294,7 @@ fn registerUnaryMethod(
     // Stack order: name, descriptor, markers (popped in reverse). The map's
     // sole owning reference moves to the stack via pushMoved, so the eventual
     // release inside nativeDefineMethod destroys it exactly once.
-    try ctx.stack.push(.{ .symbol = word_name });
+    try ctx.stack.push(value_mod.symbolValue(word_name));
     try ctx.stack.pushMoved(.{ .mutable_map = desc_map });
     // The push retains the header, so the empty markers array needs an
     // initialized one; the context arena reclaims the static struct.

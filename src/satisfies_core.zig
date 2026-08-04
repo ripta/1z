@@ -150,7 +150,7 @@ pub fn SatisfiesCore(comptime Env: type) type {
             while (i < methods_array.len) {
                 const method_val = methods_array[i];
                 const method_name = switch (method_val) {
-                    .symbol => |s| s,
+                    .symbol => |s| s.bytes,
                     else => {
                         env.setErrorContext("protocol method entries must be symbols", .{});
                         return error.TypeMismatch;
@@ -230,7 +230,7 @@ pub fn SatisfiesCore(comptime Env: type) type {
             while (i < methods_array.len) {
                 const method_val = methods_array[i];
                 const method_name = switch (method_val) {
-                    .symbol => |s| s,
+                    .symbol => |s| s.bytes,
                     else => {
                         env.setErrorContext("protocol method entries must be symbols", .{});
                         return error.TypeMismatch;
@@ -275,7 +275,7 @@ pub fn SatisfiesCore(comptime Env: type) type {
             while (i < methods_array.len) {
                 const method_val = methods_array[i];
                 const method_name = switch (method_val) {
-                    .symbol => |s| s,
+                    .symbol => |s| s.bytes,
                     else => {
                         env.setErrorContext("protocol method entries must be symbols", .{});
                         return error.TypeMismatch;

@@ -128,9 +128,13 @@ pub fn nativeCount(ctx: *Context) anyerror!void {
 /// make-range-iter ( start end step infinite? -- iterator )
 fn nativeMakeRangeIter(ctx: *Context) anyerror!void {
     const infinite_val = try ctx.stack.pop();
+    defer container_backing.releaseValue(infinite_val);
     const step_val = try ctx.stack.pop();
+    defer container_backing.releaseValue(step_val);
     const end_val = try ctx.stack.pop();
+    defer container_backing.releaseValue(end_val);
     const start_val = try ctx.stack.pop();
+    defer container_backing.releaseValue(start_val);
 
     const start = switch (start_val) {
         .fixnum => |n| n,
@@ -172,6 +176,7 @@ fn nativeMakeCallbackIter(ctx: *Context) anyerror!void {
         .closure => |c| c.asQuotation(),
         else => {
             helpers.setTypeMismatchError(ctx, "quotation", val);
+            container_backing.releaseValue(val);
             return error.TypeMismatch;
         },
     };
@@ -193,6 +198,8 @@ fn nativeMakeCallbackIterWithCleanup(ctx: *Context) anyerror!void {
         .closure => |c| c.asQuotation(),
         else => {
             helpers.setTypeMismatchError(ctx, "quotation", cleanup_val);
+            container_backing.releaseValue(cleanup_val);
+            container_backing.releaseValue(step_val);
             return error.TypeMismatch;
         },
     };
@@ -201,6 +208,7 @@ fn nativeMakeCallbackIterWithCleanup(ctx: *Context) anyerror!void {
         .closure => |c| c.asQuotation(),
         else => {
             helpers.setTypeMismatchError(ctx, "quotation", step_val);
+            container_backing.releaseValue(step_val);
             return error.TypeMismatch;
         },
     };

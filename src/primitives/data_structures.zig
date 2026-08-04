@@ -31,8 +31,8 @@ pub const primitives = [_]Primitive{
 /// Helper to extract string from symbol or string value
 pub fn extractKeyString(ctx: *Context, val: Value) ![]const u8 {
     return switch (val) {
-        .symbol => |s| s,
-        .string => |s| s,
+        .symbol => |s| s.bytes,
+        .string => |s| s.bytes,
         else => {
             helpers.setTypeMismatchError(ctx, "symbol or string", val);
             return error.TypeMismatch;
@@ -58,8 +58,8 @@ pub fn nativeMakeHash(ctx: *Context) anyerror!void {
         const key_instr = instrs[i];
         const key = switch (key_instr.op) {
             .push_literal => |v| switch (v) {
-                .symbol => |s| s,
-                .string => |s| s,
+                .symbol => |s| s.bytes,
+                .string => |s| s.bytes,
                 else => {
                     const brief = helpers.formatValueBrief(ctx.arena.allocator(), v, 20) catch helpers.valueTypeName(v);
                     helpers.setErrorContext(ctx, "expected symbol or string key, got {s} {s}", .{ helpers.valueTypeName(v), brief });
@@ -101,15 +101,22 @@ pub fn nativeMakeHash(ctx: *Context) anyerror!void {
             };
         };
 
-        const key_copy = hash_alloc.dupe(u8, key) catch {
-            container_backing.releaseValue(val);
-            return error.OutOfMemory;
-        };
-        hash.map.put(hash_alloc, key_copy, val) catch {
-            hash_alloc.free(key_copy);
-            container_backing.releaseValue(val);
-            return error.OutOfMemory;
-        };
+        // A duplicate key keeps its existing key bytes and releases the displaced value.
+        if (hash.map.getEntry(key)) |entry| {
+            const displaced = entry.value_ptr.*;
+            entry.value_ptr.* = val;
+            container_backing.releaseValue(displaced);
+        } else {
+            const key_copy = hash_alloc.dupe(u8, key) catch {
+                container_backing.releaseValue(val);
+                return error.OutOfMemory;
+            };
+            hash.map.put(hash_alloc, key_copy, val) catch {
+                hash_alloc.free(key_copy);
+                container_backing.releaseValue(val);
+                return error.OutOfMemory;
+            };
+        }
     }
 
     try ctx.stack.pushMoved(.{ .hash = hash });
@@ -159,17 +166,20 @@ pub fn nativeMakeByteArray(ctx: *Context) anyerror!void {
     errdefer container_backing.releaseValue(.{ .byte_array = ba });
     const alloc = ba.header.allocator;
 
-    // Execute each instruction and collect byte values. Byte values are
-    // always fixnums, so the popped `call_word` results carry no refcounted
-    // backing and need no release.
+    // Execute each instruction and collect byte values. Ownership is normalized so the
+    // per-iteration defer also covers a non-fixnum result reaching the error exit.
     for (instrs) |instr| {
         const val = switch (instr.op) {
-            .push_literal => |v| v,
+            .push_literal => |v| blk: {
+                container_backing.retainValue(v);
+                break :blk v;
+            },
             .call_word, .call_word_direct, .call_word_module => blk: {
                 try ctx.executeQuotation(.{ .instructions = @as(*const [1]Instruction, &instr) });
                 break :blk ctx.stack.pop() catch return error.OutOfMemory;
             },
         };
+        defer container_backing.releaseValue(val);
         switch (val) {
             .fixnum => |int| {
                 if (int < 0 or int > 255) return error.FixnumOverflow;
@@ -241,8 +251,8 @@ pub fn nativeMakeMutableMap(ctx: *Context) anyerror!void {
         const key_instr = instrs[i];
         const key = switch (key_instr.op) {
             .push_literal => |v| switch (v) {
-                .symbol => |s| s,
-                .string => |s| s,
+                .symbol => |s| s.bytes,
+                .string => |s| s.bytes,
                 else => {
                     const brief = helpers.formatValueBrief(ctx.arena.allocator(), v, 20) catch helpers.valueTypeName(v);
                     helpers.setErrorContext(ctx, "expected symbol or string key, got {s} {s}", .{ helpers.valueTypeName(v), brief });
@@ -277,15 +287,22 @@ pub fn nativeMakeMutableMap(ctx: *Context) anyerror!void {
             };
         };
 
-        const key_copy = alloc.dupe(u8, key) catch {
-            container_backing.releaseValue(stored_val);
-            return error.OutOfMemory;
-        };
-        mmap.map.put(alloc, key_copy, stored_val) catch |err| {
-            alloc.free(key_copy);
-            container_backing.releaseValue(stored_val);
-            return err;
-        };
+        // A duplicate key keeps its existing key bytes and releases the displaced value.
+        if (mmap.map.getEntry(key)) |entry| {
+            const displaced = entry.value_ptr.*;
+            entry.value_ptr.* = stored_val;
+            container_backing.releaseValue(displaced);
+        } else {
+            const key_copy = alloc.dupe(u8, key) catch {
+                container_backing.releaseValue(stored_val);
+                return error.OutOfMemory;
+            };
+            mmap.map.put(alloc, key_copy, stored_val) catch |err| {
+                alloc.free(key_copy);
+                container_backing.releaseValue(stored_val);
+                return err;
+            };
+        }
     }
 
     try ctx.stack.pushMoved(.{ .mutable_map = mmap });
@@ -320,10 +337,22 @@ pub fn nativeAtSetMut(ctx: *Context) anyerror!void {
     }
 
     const new_value = try ctx.stack.pop();
-    const key = try ctx.stack.pop();
-    const obj = try ctx.stack.pop();
+    const key = ctx.stack.pop() catch |err| {
+        container_backing.releaseValue(new_value);
+        return err;
+    };
+    // The key's bytes are duped into the map on insert; the popped key itself is consumed here.
+    defer container_backing.releaseValue(key);
+    const obj = ctx.stack.pop() catch |err| {
+        container_backing.releaseValue(new_value);
+        return err;
+    };
 
-    const key_str = try extractKeyString(ctx, key);
+    const key_str = extractKeyString(ctx, key) catch |err| {
+        container_backing.releaseValue(new_value);
+        container_backing.releaseValue(obj);
+        return err;
+    };
 
     switch (obj) {
         .mutable_map => |m| {
@@ -403,7 +432,10 @@ pub fn nativeAtRemoveMut(ctx: *Context) anyerror!void {
     defer container_backing.releaseValue(key);
     const obj = try ctx.stack.pop();
 
-    const key_str = try extractKeyString(ctx, key);
+    const key_str = extractKeyString(ctx, key) catch |err| {
+        container_backing.releaseValue(obj);
+        return err;
+    };
 
     switch (obj) {
         .mutable_map => |m| {

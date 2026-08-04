@@ -130,13 +130,24 @@ const Closure = struct {
     segments: []const Segment,
 };
 
+/// Mirror of the hosted `StringBacking`, opaque here: the freestanding runtime never
+/// constructs a non-null backing, so it only needs the pointer's size and position.
+const StringBacking = opaque {};
+
+/// Mirror of the hosted `StringPayload`. Must match `value.zig`'s field set exactly, since
+/// AOT codegen bakes offsets discovered from the hosted union into the emitted C.
+const StringPayload = struct {
+    backing: ?*StringBacking = null,
+    bytes: []const u8,
+};
+
 const Value = union(enum) {
     fixnum: i64,
     float: f64,
     bignum: *BigIntManaged,
     boolean: bool,
-    string: []const u8,
-    symbol: []const u8,
+    string: StringPayload,
+    symbol: StringPayload,
     array: []const Value,
     quotation: Quotation,
     closure: *Closure,
@@ -393,7 +404,7 @@ fn popStream(handle: *OnezHandle) ?*Stream {
 fn popWritableBytes(handle: *OnezHandle) ?[]const u8 {
     const value = popValue(handle) orelse return null;
     return switch (value) {
-        .string => |s| s,
+        .string => |s| s.bytes,
         else => {
             setLastError(handle, "type mismatch: expected string or byte-array", .{});
             return null;
@@ -1478,6 +1489,8 @@ fn jitEnsureStackCapacity(jit_ctx_raw: usize, needed: usize) callconv(.c) i32 {
     return 2;
 }
 
+// Both slot hooks stay no-ops: this runtime has no refcounted backings, and every string or
+// symbol it constructs carries a null backing, so there is never a reference to balance.
 fn jitRetainSlot(value_ptr: usize) callconv(.c) i32 {
     _ = value_ptr;
     return 0;
@@ -1495,7 +1508,7 @@ fn jitPushString(ctx_raw: usize, str_ptr: usize, str_len: usize) callconv(.c) i3
         setLastError(handle, "out of memory while materializing string literal", .{});
         return 2;
     };
-    return pushValue(handle, .{ .string = copy });
+    return pushValue(handle, .{ .string = .{ .bytes = copy } });
 }
 
 fn jitPushSymbol(ctx_raw: usize, str_ptr: usize, str_len: usize) callconv(.c) i32 {
@@ -1505,7 +1518,7 @@ fn jitPushSymbol(ctx_raw: usize, str_ptr: usize, str_len: usize) callconv(.c) i3
         setLastError(handle, "out of memory while materializing symbol literal", .{});
         return 2;
     };
-    return pushValue(handle, .{ .symbol = copy });
+    return pushValue(handle, .{ .symbol = .{ .bytes = copy } });
 }
 
 fn jitPushQuotation(ctx_raw: usize, data_ptr: usize, data_len: usize, dest_raw: usize, quotation_id: usize) callconv(.c) i32 {
@@ -1631,8 +1644,8 @@ test "freestanding literal helpers push string and symbol values" {
     defer clearLastError(&handle);
     defer {
         for (handle.stack[0..handle.stack_len]) |value| switch (value) {
-            .string => |s| std.testing.allocator.free(s),
-            .symbol => |s| std.testing.allocator.free(s),
+            .string => |s| std.testing.allocator.free(s.bytes),
+            .symbol => |s| std.testing.allocator.free(s.bytes),
             else => {},
         };
     }
@@ -1640,12 +1653,12 @@ test "freestanding literal helpers push string and symbol values" {
     const text = "hello";
     try std.testing.expectEqual(@as(i32, 0), jitPushString(@intFromPtr(&handle), @intFromPtr(text.ptr), text.len));
     try std.testing.expectEqual(@as(usize, 1), handle.stack_len);
-    try std.testing.expectEqualStrings(text, handle.stack[0].string);
+    try std.testing.expectEqualStrings(text, handle.stack[0].string.bytes);
 
     const sym = "name";
     try std.testing.expectEqual(@as(i32, 0), jitPushSymbol(@intFromPtr(&handle), @intFromPtr(sym.ptr), sym.len));
     try std.testing.expectEqual(@as(usize, 2), handle.stack_len);
-    try std.testing.expectEqualStrings(sym, handle.stack[1].symbol);
+    try std.testing.expectEqualStrings(sym, handle.stack[1].symbol.bytes);
 }
 
 test "freestanding unsupported native helper records clear last_error" {
@@ -1738,7 +1751,7 @@ test "freestanding output parameter binding writes through stream native" {
     try std.testing.expectEqual(ONEZ_OK, onez_freestanding_init_output(&handle, &fake, FakeWriter.write));
     try std.testing.expectEqual(@as(i32, 0), pushValue(&handle, .{ .parameter = &handle.output_parameter }));
     try std.testing.expectEqual(@as(i32, 0), jitGet(@intFromPtr(&handle)));
-    try std.testing.expectEqual(@as(i32, 0), pushValue(&handle, .{ .string = "hello" }));
+    try std.testing.expectEqual(@as(i32, 0), pushValue(&handle, .{ .string = .{ .bytes = "hello" } }));
     try std.testing.expectEqual(@as(i32, 0), jitNativeWordCall(@intFromPtr(&handle), 0, 1));
     try std.testing.expectEqual(@as(usize, 1), handle.stack_len);
     try std.testing.expectEqual(@as(i64, 5), handle.stack[0].fixnum);
@@ -1925,7 +1938,7 @@ test "freestanding loader retains protocol descriptor slots" {
     try std.testing.expectEqualStrings("shape", pd.name);
     try std.testing.expectEqual(@as(u32, 7), pd.protocol_id);
     try std.testing.expectEqual(@as(usize, 1), pd.methods.len);
-    try std.testing.expectEqualStrings("area", pd.methods[0].symbol);
+    try std.testing.expectEqualStrings("area", pd.methods[0].symbol.bytes);
 }
 
 test "freestanding loader retains constraint combinator slots" {
@@ -2336,7 +2349,7 @@ test "freestanding generic dispatch runs replayed methods and falls back to the 
 
     // Binary exact hit on the (fixnum, string) method.
     handle.stack[0] = .{ .fixnum = 1 };
-    handle.stack[1] = .{ .string = "x" };
+    handle.stack[1] = .{ .string = .{ .bytes = "x" } };
     handle.stack_len = 2;
     try std.testing.expectEqual(@as(i32, 0), aotTryDispatchGenericOrCall(ctx_raw, 7, 0));
     try std.testing.expectEqual(@as(usize, 3), handle.stack_len);
@@ -2629,7 +2642,7 @@ test "freestanding protocol-bounded dispatch checks the operand and dispatches" 
 
     // string has a descriptor but no `label` method, so the bound is violated and the operand
     // stays on the stack.
-    handle.stack[0] = .{ .string = "x" };
+    handle.stack[0] = .{ .string = .{ .bytes = "x" } };
     handle.stack_len = 1;
     try std.testing.expectEqual(@as(i32, 2), aotSatisfiesAndDispatch(ctx_raw, 7, 0, unary, 0));
     try std.testing.expectEqual(@as(usize, 1), handle.stack_len);
@@ -2720,7 +2733,7 @@ test "freestanding combinator-bounded dispatch enforces an intersection of proto
     try std.testing.expectEqual(@as(i64, 202), handle.stack[1].fixnum);
 
     // string implements neither protocol, so the intersection is unsatisfied.
-    handle.stack[0] = .{ .string = "x" };
+    handle.stack[0] = .{ .string = .{ .bytes = "x" } };
     handle.stack_len = 1;
     try std.testing.expectEqual(@as(i32, 2), aotSatisfiesAndDispatchCombinator(ctx_raw, 8, 0, unary, 0));
     try std.testing.expectEqual(@as(usize, 1), handle.stack_len);

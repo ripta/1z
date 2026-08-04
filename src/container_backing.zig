@@ -210,6 +210,9 @@ pub const ContainerHeader = struct {
 /// `byte_array` carries a refcounted backing like `vector` and `mutable_map`; its bytes are not Values,
 /// so there is nothing to recurse into.
 ///
+/// `string` and `symbol` retain their optional `StringBacking`; a null backing means borrowed
+/// bytes that outlive the value, so retain and release are no-ops there.
+///
 /// Non-container variants are noöps by construction.
 ///
 /// Storage-boundary call sites (stack push, container insertion, dictionary entry, task result) route
@@ -226,6 +229,7 @@ pub fn retainValue(v: Value) void {
         .struct_instance => |si| if (si.header) |h| h.retain() else retainValues(si.fields),
         .error_value => |err| if (err.data) |data| retainValue(data.*),
         .iterator => |it| it.header.retain(),
+        .string, .symbol => |s| if (s.backing) |b| b.header.retain(),
         else => {},
     }
 }
@@ -250,6 +254,7 @@ pub fn releaseValue(v: Value) void {
         .struct_instance => |si| if (si.header) |h| h.release() else releaseValues(si.fields),
         .error_value => |err| if (err.data) |data| releaseValue(data.*),
         .iterator => |it| it.header.release(),
+        .string, .symbol => |s| if (s.backing) |b| b.header.release(),
         else => {},
     }
 }
@@ -266,6 +271,7 @@ pub fn valueCarriesBacking(v: Value) bool {
         .struct_instance => |si| si.header != null or valuesCarryBacking(si.fields),
         .error_value => |err| if (err.data) |data| valueCarriesBacking(data.*) else false,
         .iterator => true,
+        .string, .symbol => |s| s.backing != null,
         else => false,
     };
 }
@@ -413,6 +419,7 @@ pub fn retainInstructionsContainerLiterals(instructions: []const Instruction) vo
 pub fn valueHoldsRefcountedBacking(val: Value) bool {
     return switch (val) {
         .vector, .mutable_map, .byte_array, .hash, .set, .array, .iterator => true,
+        .string, .symbol => |s| s.backing != null,
         .tagged => |t| valueHoldsRefcountedBacking(t.inner.*),
         .struct_instance => |si| {
             if (si.header != null) return true;
@@ -991,8 +998,8 @@ test "valueShareable: immutable arena-payload leaves do not qualify" {
     defer big.deinit();
 
     const cases = [_]Value{
-        .{ .string = "s" },
-        .{ .symbol = "sym" },
+        value_mod.stringValue("s"),
+        value_mod.symbolValue("sym"),
         .{ .doc_string = "doc" },
         .{ .bignum = &big },
         .{ .template = &segments },
@@ -1054,7 +1061,7 @@ test "valueShareable: owned array of scalars qualifies and memoizes" {
 
 test "valueShareable: string elements and off-allocator backing block array sharing" {
     const items = try testing.allocator.alloc(Value, 1);
-    items[0] = .{ .string = "s" };
+    items[0] = value_mod.stringValue("s");
     const arr = try value_mod.Array.fromOwnedSlice(testing.allocator, items);
     defer releaseValue(.{ .array = arr });
     try testing.expect(!valueShareable(.{ .array = arr }, testing.allocator));
@@ -1098,7 +1105,7 @@ test "valueShareable: string values and mutable elements block sharing" {
     const h = try value_mod.HashTable.create(testing.allocator);
     defer releaseValue(.{ .hash = h });
     const h_alloc = h.header.allocator;
-    try h.map.put(h_alloc, try h_alloc.dupe(u8, "k"), .{ .string = "v" });
+    try h.map.put(h_alloc, try h_alloc.dupe(u8, "k"), value_mod.stringValue("v"));
     try testing.expect(!valueShareable(.{ .hash = h }, testing.allocator));
 
     const vec = try value_mod.Vector.create(testing.allocator);
@@ -1113,7 +1120,7 @@ test "valueShareable: string values and mutable elements block sharing" {
 
     const s = try value_mod.Set.create(testing.allocator);
     defer releaseValue(.{ .set = s });
-    try s.map.put(s.header.allocator, .{ .string = "member" }, {});
+    try s.map.put(s.header.allocator, value_mod.stringValue("member"), {});
     try testing.expect(!valueShareable(.{ .set = s }, testing.allocator));
 }
 
@@ -1160,7 +1167,7 @@ test "memoShareable: scans once and memoizes in the header" {
     // Repeat calls answer from the memo, not a rescan: contents made
     // contradictory after the state is recorded do not change the answer.
     // Test-only mutation; real hashes are immutable after construction.
-    try h.map.put(h_alloc, try h_alloc.dupe(u8, "s"), .{ .string = "v" });
+    try h.map.put(h_alloc, try h_alloc.dupe(u8, "s"), value_mod.stringValue("v"));
     try testing.expect(memoShareable(&h.header, .{ .hash = h }, testing.allocator));
 }
 
@@ -1168,7 +1175,7 @@ test "memoShareable: records a not-shareable verdict" {
     const h = try value_mod.HashTable.create(testing.allocator);
     defer releaseValue(.{ .hash = h });
     const h_alloc = h.header.allocator;
-    try h.map.put(h_alloc, try h_alloc.dupe(u8, "k"), .{ .string = "v" });
+    try h.map.put(h_alloc, try h_alloc.dupe(u8, "k"), value_mod.stringValue("v"));
 
     try testing.expect(!memoShareable(&h.header, .{ .hash = h }, testing.allocator));
     try testing.expectEqual(Shareable.not_shareable, h.header.shareableState());

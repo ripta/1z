@@ -178,7 +178,10 @@ pub fn nativeCurry(ctx: *Context) anyerror!void {
 
     // Allocate new instruction array: 1 (for push x) + original length
     const alloc = ctx.quotationAllocator();
-    const new_instrs = try alloc.alloc(Instruction, 1 + base_instrs.len);
+    const new_instrs = alloc.alloc(Instruction, 1 + base_instrs.len) catch |err| {
+        container_backing.releaseValue(x);
+        return err;
+    };
 
     // First instruction: push the value x.
     // x came from a pop (transfer); embedding here is also a transfer,

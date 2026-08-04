@@ -1,6 +1,7 @@
 const std = @import("std");
 const Context = @import("../context.zig").Context;
 const Value = @import("../value.zig").Value;
+const container_backing = @import("../container_backing.zig");
 const helpers = @import("helpers.zig");
 const SandboxSpec = @import("types.zig").SandboxSpec;
 const Primitive = @import("types.zig").Primitive;
@@ -15,6 +16,7 @@ pub const primitives = [_]Primitive{
 fn nativeWithSandbox(ctx: *Context) anyerror!void {
     const quot = try helpers.popQuotation(ctx);
     const spec_val = ctx.stack.pop() catch return error.StackUnderflow;
+    defer container_backing.releaseValue(spec_val);
     const spec = switch (spec_val) {
         .sandbox_spec => |s| s,
         else => {

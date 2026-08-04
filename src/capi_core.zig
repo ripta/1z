@@ -9,6 +9,7 @@ const StatementProcessor = statement_mod.StatementProcessor;
 
 const value_mod = @import("value.zig");
 const Value = value_mod.Value;
+const container_backing = @import("container_backing.zig");
 
 const dictionary_mod = @import("dictionary.zig");
 const HostCallbackFn = dictionary_mod.HostCallbackFn;
@@ -158,13 +159,27 @@ pub fn pushBool(ctx: *Context, value: bool) !void {
 }
 
 pub fn pushString(ctx: *Context, data: []const u8) !void {
-    const copy = try ctx.quotationAllocator().dupe(u8, data);
-    try ctx.stack.push(.{ .string = copy });
+    const copy = try ctx.allocator.dupe(u8, data);
+    const val = value_mod.ownedStringValue(ctx.allocator, copy) catch |err| {
+        ctx.allocator.free(copy);
+        return err;
+    };
+    ctx.stack.pushMoved(val) catch |err| {
+        container_backing.releaseValue(val);
+        return err;
+    };
 }
 
 pub fn pushSymbol(ctx: *Context, data: []const u8) !void {
-    const copy = try ctx.quotationAllocator().dupe(u8, data);
-    try ctx.stack.push(.{ .symbol = copy });
+    const copy = try ctx.allocator.dupe(u8, data);
+    const val = value_mod.ownedSymbolValue(ctx.allocator, copy) catch |err| {
+        ctx.allocator.free(copy);
+        return err;
+    };
+    ctx.stack.pushMoved(val) catch |err| {
+        container_backing.releaseValue(val);
+        return err;
+    };
 }
 
 /// Push a value the caller already owns a box for, without retaining -- mirrors
@@ -237,10 +252,20 @@ pub fn popBool(ctx: *Context, mismatched_out: *Value) !bool {
     }
 }
 
+/// Pop the top of the stack and require it to be a `.string`. The returned bytes are duped
+/// onto the context arena, so the C caller keeps today's until-teardown lifetime regardless
+/// of the popped value's backing. The popped reference is released here.
 pub fn popString(ctx: *Context, mismatched_out: *Value) ![]const u8 {
     const val = try ctx.stack.pop();
     switch (val) {
-        .string => |s| return s,
+        .string => |s| {
+            const copy = ctx.quotationAllocator().dupe(u8, s.bytes) catch |err| {
+                ctx.stack.pushMoved(val) catch {};
+                return err;
+            };
+            container_backing.releaseValue(val);
+            return copy;
+        },
         else => {
             ctx.stack.pushMoved(val) catch {};
             mismatched_out.* = val;

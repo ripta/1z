@@ -460,15 +460,15 @@ pub fn serializeValueInto(
         },
         .string => |v| {
             try buf.append(allocator, value_tag_string);
-            const len: u32 = @intCast(v.len);
+            const len: u32 = @intCast(v.bytes.len);
             try buf.appendSlice(allocator, std.mem.asBytes(&len));
-            try buf.appendSlice(allocator, v);
+            try buf.appendSlice(allocator, v.bytes);
         },
         .symbol => |v| {
             try buf.append(allocator, value_tag_symbol);
-            const len: u32 = @intCast(v.len);
+            const len: u32 = @intCast(v.bytes.len);
             try buf.appendSlice(allocator, std.mem.asBytes(&len));
-            try buf.appendSlice(allocator, v);
+            try buf.appendSlice(allocator, v.bytes);
         },
         .quotation => |q| {
             try buf.append(allocator, value_tag_quotation);
@@ -795,7 +795,7 @@ pub fn deserializeValueAt(data: []const u8, offset: *usize, allocator: Allocator
             if (offset.* + slen > data.len) return error.OutOfMemory;
             const copy = try allocator.dupe(u8, data[offset.*..][0..slen]);
             offset.* += slen;
-            break :blk .{ .string = copy };
+            break :blk value_mod.stringValue(copy);
         },
         value_tag_symbol => blk: {
             if (offset.* + 4 > data.len) return error.OutOfMemory;
@@ -804,7 +804,7 @@ pub fn deserializeValueAt(data: []const u8, offset: *usize, allocator: Allocator
             if (offset.* + slen > data.len) return error.OutOfMemory;
             const copy = try allocator.dupe(u8, data[offset.*..][0..slen]);
             offset.* += slen;
-            break :blk .{ .symbol = copy };
+            break :blk value_mod.symbolValue(copy);
         },
         value_tag_quotation => blk: {
             if (offset.* + 4 > data.len) return error.OutOfMemory;
@@ -1138,8 +1138,8 @@ fn freeDecodedOp(op: Instruction.Op) void {
 
 fn freeDecodedValue(v: Value) void {
     switch (v) {
-        .string => |s| testing.allocator.free(s),
-        .symbol => |s| testing.allocator.free(s),
+        .string => |s| testing.allocator.free(s.bytes),
+        .symbol => |s| testing.allocator.free(s.bytes),
         .array => |arr| {
             // Decoded arrays are static-storage, so the header release is a
             // no-op; free the raw allocations directly.
@@ -1270,7 +1270,7 @@ test "call target: the by-value decoder rejects a baked call, deferring to the i
 
 test "roundtrip: string literal" {
     const instrs = [_]Instruction{
-        .{ .op = .{ .push_literal = .{ .string = "hello" } }, .line = 1 },
+        .{ .op = .{ .push_literal = value_mod.stringValue("hello") }, .line = 1 },
     };
     const data = try serializeQuotationInstructions(&instrs, null, testing.allocator, null, null);
     defer testing.allocator.free(data);
@@ -1280,7 +1280,7 @@ test "roundtrip: string literal" {
 
     try testing.expectEqual(@as(usize, 1), decoded.len);
     try testing.expect(decoded[0].op.push_literal == .string);
-    try testing.expectEqualStrings("hello", decoded[0].op.push_literal.string);
+    try testing.expectEqualStrings("hello", decoded[0].op.push_literal.string.bytes);
 }
 
 test "roundtrip: empty body" {
@@ -1324,7 +1324,7 @@ test "preserves line and column" {
 
 test "roundtrip: symbol literal" {
     const instrs = [_]Instruction{
-        .{ .op = .{ .push_literal = .{ .symbol = "foo" } }, .line = 1 },
+        .{ .op = .{ .push_literal = value_mod.symbolValue("foo") }, .line = 1 },
     };
     const data = try serializeQuotationInstructions(&instrs, null, testing.allocator, null, null);
     defer testing.allocator.free(data);
@@ -1333,7 +1333,7 @@ test "roundtrip: symbol literal" {
     const decoded = decoded_q.instructions;
 
     try testing.expect(decoded[0].op.push_literal == .symbol);
-    try testing.expectEqualStrings("foo", decoded[0].op.push_literal.symbol);
+    try testing.expectEqualStrings("foo", decoded[0].op.push_literal.symbol.bytes);
 }
 
 test "roundtrip: empty array" {
@@ -1355,7 +1355,7 @@ test "roundtrip: empty array" {
 test "roundtrip: array with elements" {
     const elems = [_]Value{
         .{ .fixnum = 42 },
-        .{ .string = "hello" },
+        value_mod.stringValue("hello"),
         .{ .boolean = true },
     };
     var arr_lit = value_mod.Array{ .header = undefined, .items = &elems, .storage = .static };
@@ -1371,7 +1371,7 @@ test "roundtrip: array with elements" {
     const arr = decoded[0].op.push_literal.array.items;
     try testing.expectEqual(@as(usize, 3), arr.len);
     try testing.expectEqual(@as(i64, 42), arr[0].fixnum);
-    try testing.expectEqualStrings("hello", arr[1].string);
+    try testing.expectEqualStrings("hello", arr[1].string.bytes);
     try testing.expectEqual(true, arr[2].boolean);
 }
 
@@ -1465,7 +1465,7 @@ test "roundtrip: nested quotation" {
 }
 
 test "roundtrip: array containing symbol" {
-    const elems = [_]Value{.{ .symbol = "cond" }};
+    const elems = [_]Value{value_mod.symbolValue("cond")};
     var arr_lit = value_mod.Array{ .header = undefined, .items = &elems, .storage = .static };
     const instrs = [_]Instruction{
         .{ .op = .{ .push_literal = .{ .array = &arr_lit } }, .line = 1 },
@@ -1478,7 +1478,7 @@ test "roundtrip: array containing symbol" {
 
     const arr = decoded[0].op.push_literal.array.items;
     try testing.expectEqual(@as(usize, 1), arr.len);
-    try testing.expectEqualStrings("cond", arr[0].symbol);
+    try testing.expectEqualStrings("cond", arr[0].symbol.bytes);
 }
 
 test "roundtrip: stack_effect literal" {

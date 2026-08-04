@@ -27,8 +27,11 @@ pub const registry_entries = [_]RegistryEntry{
 /// register-pragma ( name validator -- )
 fn nativeRegisterPragma(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
+    // validator_val's quotation escapes into pragma_registry below; no release for it.
     const validator_val = try ctx.stack.pop();
+    errdefer container_backing.releaseValue(validator_val);
     const name = try popString(ctx);
+    defer container_backing.releaseValue(.{ .string = name });
 
     const registration: PragmaRegistration = switch (validator_val) {
         .boolean => |b| blk: {
@@ -45,7 +48,7 @@ fn nativeRegisterPragma(ctx: *Context) anyerror!void {
         },
     };
 
-    const duped_name = try alloc.dupe(u8, name);
+    const duped_name = try alloc.dupe(u8, name.bytes);
     try ctx.pragma_registry.put(ctx.allocator, duped_name, registration);
 }
 
@@ -53,9 +56,10 @@ fn nativeRegisterPragma(ctx: *Context) anyerror!void {
 fn nativePragmaBlock(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
 
-    try ctx.stack.push(.{ .string = "}" });
+    try ctx.stack.push(value_mod.stringValue("}"));
     try parse_time_mod.nativeParseUntil(ctx);
     const quot_val = try ctx.stack.pop();
+    defer container_backing.releaseValue(quot_val);
     const quot = (try helpers.asQuotationStamped(ctx, quot_val)) orelse return error.TypeMismatch;
 
     const depth_before = ctx.stack.depth();
@@ -77,6 +81,9 @@ fn nativePragmaBlock(ctx: *Context) anyerror!void {
         i -= 1;
         items[i] = try ctx.stack.pop();
     }
+    // The popped ownership stays in `items`: escaping names are duped, the validator re-push
+    // retains, and non-validator values are booleans, so one sweep releases every reference.
+    defer container_backing.releaseValues(items);
 
     var j: usize = 0;
     while (j < count) : (j += 2) {
@@ -84,7 +91,7 @@ fn nativePragmaBlock(ctx: *Context) anyerror!void {
         const value = items[j + 1];
 
         const pragma_name = switch (key) {
-            .symbol => |s| s,
+            .symbol => |s| try alloc.dupe(u8, s.bytes),
             else => return throwPragmaError(ctx, alloc, "pragma-error", "pragma key must be a symbol (key: value)"),
         };
 
@@ -112,7 +119,7 @@ fn nativePragmaBlock(ctx: *Context) anyerror!void {
 fn nativePragmaDefBlock(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
 
-    try ctx.stack.push(.{ .string = "}" });
+    try ctx.stack.push(value_mod.stringValue("}"));
     try parse_time_mod.nativeParseValuesUntil(ctx);
     const arr_val = try ctx.stack.pop();
     defer container_backing.releaseValue(arr_val);
@@ -127,12 +134,12 @@ fn nativePragmaDefBlock(ctx: *Context) anyerror!void {
 
         switch (item) {
             .string => |name| {
-                const duped_name = try alloc.dupe(u8, name);
+                const duped_name = try alloc.dupe(u8, name.bytes);
                 try ctx.pragma_registry.put(ctx.allocator, duped_name, .{ .validator = null });
             },
             .symbol => |name| {
                 if (i + 1 >= items.len) {
-                    const msg = std.fmt.allocPrint(alloc, "pragma-def: '{s}' requires a validator quotation", .{name}) catch "missing validator";
+                    const msg = std.fmt.allocPrint(alloc, "pragma-def: '{s}' requires a validator quotation", .{name.bytes}) catch "missing validator";
                     return throwPragmaError(ctx, alloc, "pragma-error", msg);
                 }
                 i += 1;
@@ -140,11 +147,11 @@ fn nativePragmaDefBlock(ctx: *Context) anyerror!void {
                 switch (next) {
                     .quotation, .closure => {
                         const q = (try helpers.asQuotationStamped(ctx, next)).?;
-                        const duped_name = try alloc.dupe(u8, name);
+                        const duped_name = try alloc.dupe(u8, name.bytes);
                         try ctx.pragma_registry.put(ctx.allocator, duped_name, .{ .validator = q });
                     },
                     else => {
-                        const msg = std.fmt.allocPrint(alloc, "pragma-def: '{s}' validator must be a quotation", .{name}) catch "expected quotation";
+                        const msg = std.fmt.allocPrint(alloc, "pragma-def: '{s}' validator must be a quotation", .{name.bytes}) catch "expected quotation";
                         return throwPragmaError(ctx, alloc, "pragma-error", msg);
                     },
                 }
@@ -159,7 +166,8 @@ fn nativePragmaDefBlock(ctx: *Context) anyerror!void {
 /// pragma? ( name -- ? )
 fn nativePragmaQuery(ctx: *Context) anyerror!void {
     const name = try popString(ctx);
-    const value = ctx.getPragma(name);
+    defer container_backing.releaseValue(.{ .string = name });
+    const value = ctx.getPragma(name.bytes);
     if (value) |v| {
         switch (v) {
             .boolean => |b| try ctx.stack.push(.{ .boolean = b }),
@@ -175,7 +183,8 @@ fn nativePragmaQuery(ctx: *Context) anyerror!void {
 /// Raw lookup backing the prelude's pragma-get?/pragma-get wrappers.
 fn nativePragmaGetRaw(ctx: *Context) anyerror!void {
     const name = try popString(ctx);
-    const value = ctx.getPragma(name);
+    defer container_backing.releaseValue(.{ .string = name });
+    const value = ctx.getPragma(name.bytes);
     if (value) |v| {
         try ctx.stack.push(v);
         try ctx.stack.push(.{ .boolean = true });
@@ -194,12 +203,15 @@ fn runValidator(ctx: *Context, alloc: std.mem.Allocator, reg: PragmaRegistration
 
     const ok = try helpers.popBoolean(ctx);
     if (ok) {
+        // The popped reference transfers into the pragma frame, which keeps it for the context.
         const validated = try ctx.stack.pop();
+        errdefer container_backing.releaseValue(validated);
         try ctx.setPragma(pragma_name, validated);
     } else {
         const err_val = try ctx.stack.pop();
+        defer container_backing.releaseValue(err_val);
         const err_msg = switch (err_val) {
-            .string => |s| s,
+            .string => |s| alloc.dupe(u8, s.bytes) catch "validation failed",
             else => "validation failed",
         };
         return throwPragmaError(ctx, alloc, "pragma-error", err_msg);

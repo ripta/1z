@@ -72,8 +72,10 @@ fn nativeDefineBuiltinType(ctx: *Context) anyerror!void {
     };
 
     const name_val = try ctx.stack.pop();
+    defer container_backing.releaseValue(name_val);
+    // The name escapes into the long-lived TypeValue and word definition.
     const name = switch (name_val) {
-        .symbol => |s| s,
+        .symbol => |s| try alloc.dupe(u8, s.bytes),
         else => {
             helpers.setTypeMismatchError(ctx, "symbol (word name)", name_val);
             return error.TypeMismatch;
@@ -161,8 +163,9 @@ fn applyDescriptorMerge(desc: *value_mod.TypeDescriptor, source: *const value_mo
 /// fields when they carry a non-default payload. Other property names return false.
 fn nativeTypeHasProperty(ctx: *Context) anyerror!void {
     const prop_val = try ctx.stack.pop();
+    defer container_backing.releaseValue(prop_val);
     const prop_str = switch (prop_val) {
-        .symbol, .string => |s| s,
+        .symbol, .string => |s| s.bytes,
         else => {
             helpers.setTypeMismatchError(ctx, "symbol or string", prop_val);
             return error.TypeMismatch;
@@ -170,6 +173,7 @@ fn nativeTypeHasProperty(ctx: *Context) anyerror!void {
     };
 
     const type_val = try ctx.stack.pop();
+    defer container_backing.releaseValue(type_val);
     switch (type_val) {
         .type_val => |tv| {
             const desc = tv.descriptor orelse unreachable;
@@ -222,12 +226,13 @@ fn nativeTypeHasProperty(ctx: *Context) anyerror!void {
 /// across concrete-type and protocol-bound annotations.
 fn nativeTypeName(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
+    defer container_backing.releaseValue(val);
     switch (val) {
         .type_val => |tv| {
-            try ctx.stack.push(.{ .string = tv.name });
+            try ctx.stack.push(value_mod.stringValue(tv.name));
         },
         .protocol_descriptor => |pd| {
-            try ctx.stack.push(.{ .string = pd.name });
+            try ctx.stack.push(value_mod.stringValue(pd.name));
         },
         else => {
             helpers.setTypeMismatchError(ctx, "type", val);
@@ -239,6 +244,7 @@ fn nativeTypeName(ctx: *Context) anyerror!void {
 /// native.type-members ( type -- array/f ) - Return member type values for a union type, or f otherwise.
 fn nativeTypeMembers(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
+    defer container_backing.releaseValue(val);
     switch (val) {
         .type_val => |tv| {
             if (tv.member_types) |members| {
@@ -261,6 +267,7 @@ fn nativeTypeMembers(ctx: *Context) anyerror!void {
 /// Used by the twelve descriptor accessors below.
 fn popDescriptor(ctx: *Context) anyerror!*const value_mod.TypeDescriptor {
     const val = try ctx.stack.pop();
+    defer container_backing.releaseValue(val);
     return switch (val) {
         .type_descriptor => |desc| desc,
         else => {
@@ -300,7 +307,7 @@ fn nativeDescriptorMutable(ctx: *Context) anyerror!void {
 
 fn nativeDescriptorKind(ctx: *Context) anyerror!void {
     const desc = try popDescriptor(ctx);
-    try ctx.stack.push(.{ .symbol = value_mod.typeKindSymbol(desc.kind) });
+    try ctx.stack.push(value_mod.symbolValue(value_mod.typeKindSymbol(desc.kind)));
 }
 
 /// descriptor-fields-raw ( descriptor -- array )
@@ -322,7 +329,7 @@ fn nativeDescriptorFieldsRaw(ctx: *Context) anyerror!void {
         },
     };
     const arr = try alloc.alloc(value_mod.Value, fields.len);
-    for (fields, 0..) |name, i| arr[i] = .{ .string = name };
+    for (fields, 0..) |name, i| arr[i] = value_mod.stringValue(name);
     try helpers.pushAdoptedArray(ctx, alloc, arr);
 }
 
@@ -464,7 +471,7 @@ fn nativeDescriptorVariantsRaw(ctx: *Context) anyerror!void {
     const arr = try alloc.alloc(value_mod.Value, variants.len);
     for (variants, 0..) |v, i| {
         const pair = try alloc.alloc(value_mod.Value, 2);
-        pair[0] = .{ .symbol = v.name };
+        pair[0] = value_mod.symbolValue(v.name);
         pair[1] = .{ .type_val = if (v.type_val) |tv| @constCast(tv) else unit_tv };
         arr[i] = .{ .array = try value_mod.Array.fromOwnedSlice(alloc, pair) };
     }
@@ -486,7 +493,7 @@ fn nativeDescriptorResourceKindRaw(ctx: *Context) anyerror!void {
         setKindMismatch(ctx, "resource with non-empty resource-kind", desc);
         return error.TypeMismatch;
     }
-    try ctx.stack.push(.{ .string = kind_name });
+    try ctx.stack.push(value_mod.stringValue(kind_name));
 }
 
 /// descriptor-ffi-layout-raw ( descriptor -- fixnum )
@@ -562,7 +569,7 @@ test "descriptor-kind returns the kind symbol" {
     try ctx.stack.push(.{ .type_descriptor = fixnumDescriptor(&ctx) });
     try nativeDescriptorKind(&ctx);
     const result = try ctx.stack.pop();
-    try testing.expectEqualStrings("builtin-type", result.symbol);
+    try testing.expectEqualStrings("builtin-type", result.symbol.bytes);
 }
 
 test "descriptor-fields-raw returns struct field names" {
@@ -580,8 +587,8 @@ test "descriptor-fields-raw returns struct field names" {
     const result = try ctx.stack.pop();
     try testing.expect(result == .array);
     try testing.expectEqual(@as(usize, 2), result.array.items.len);
-    try testing.expectEqualStrings("x", result.array.items[0].string);
-    try testing.expectEqualStrings("y", result.array.items[1].string);
+    try testing.expectEqualStrings("x", result.array.items[0].string.bytes);
+    try testing.expectEqualStrings("y", result.array.items[1].string.bytes);
 }
 
 test "descriptor-fields-raw throws on builtin descriptor" {
@@ -706,9 +713,9 @@ test "descriptor-variants-raw returns name/type pair arrays for enums" {
     const first = result.array.items[0];
     try testing.expect(first == .array);
     try testing.expectEqual(@as(usize, 2), first.array.items.len);
-    try testing.expectEqualStrings("red", first.array.items[0].symbol);
+    try testing.expectEqualStrings("red", first.array.items[0].symbol.bytes);
     try testing.expectEqualStrings("fixnum", first.array.items[1].type_val.name);
     const second = result.array.items[1];
-    try testing.expectEqualStrings("blue", second.array.items[0].symbol);
+    try testing.expectEqualStrings("blue", second.array.items[0].symbol.bytes);
     try testing.expect(second.array.items[1].type_val == unit_tv);
 }

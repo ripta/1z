@@ -78,9 +78,9 @@ pub fn registerNativeDispatch(dispatch: *DispatchTable, ctx: *Context) !void {
 /// of `push`.
 fn getErrorField(ctx: *Context, err: *const ErrorObject, field_name: []const u8) !Value {
     if (std.mem.eql(u8, field_name, "error-type")) {
-        return Value{ .symbol = err.error_type };
+        return value_mod.symbolValue(err.error_type);
     } else if (std.mem.eql(u8, field_name, "message")) {
-        return .{ .string = err.message };
+        return value_mod.stringValue(err.message);
     } else if (std.mem.eql(u8, field_name, "data")) {
         if (err.data) |data| {
             container_backing.retainValue(data.*);
@@ -103,7 +103,7 @@ fn getErrorField(ctx: *Context, err: *const ErrorObject, field_name: []const u8)
                 built = i + 1;
                 const hash_alloc = frame_hash.header.allocator;
                 const word_key = hash_alloc.dupe(u8, "word") catch return error.OutOfMemory;
-                frame_hash.map.put(hash_alloc, word_key, .{ .string = frame.word_name }) catch {
+                frame_hash.map.put(hash_alloc, word_key, value_mod.stringValue(frame.word_name)) catch {
                     hash_alloc.free(word_key);
                     return error.OutOfMemory;
                 };
@@ -381,7 +381,7 @@ fn nativeAtKeysHash(ctx: *Context) anyerror!void {
             ctx.allocator.free(keys);
             return error.OutOfMemory;
         };
-        keys[i] = .{ .symbol = key_copy };
+        keys[i] = value_mod.symbolValue(key_copy);
         i += 1;
     }
     try helpers.pushAdoptedArray(ctx, ctx.allocator, keys);
@@ -401,7 +401,7 @@ fn nativeAtKeysMutableMap(ctx: *Context) anyerror!void {
             ctx.allocator.free(keys);
             return error.OutOfMemory;
         };
-        keys[i] = .{ .symbol = key_copy };
+        keys[i] = value_mod.symbolValue(key_copy);
         i += 1;
     }
     try helpers.pushAdoptedArray(ctx, ctx.allocator, keys);
@@ -412,10 +412,10 @@ fn nativeAtKeysError(ctx: *Context) anyerror!void {
     defer container_backing.releaseValue(obj);
     // Error objects have fixed fields
     const keys = ctx.allocator.alloc(Value, 4) catch return error.OutOfMemory;
-    keys[0] = .{ .symbol = "error-type" };
-    keys[1] = .{ .symbol = "message" };
-    keys[2] = .{ .symbol = "data" };
-    keys[3] = .{ .symbol = "stack-trace" };
+    keys[0] = value_mod.symbolValue("error-type");
+    keys[1] = value_mod.symbolValue("message");
+    keys[2] = value_mod.symbolValue("data");
+    keys[3] = value_mod.symbolValue("stack-trace");
     try helpers.pushAdoptedArray(ctx, ctx.allocator, keys);
 }
 
@@ -427,7 +427,7 @@ fn nativeAtKeysModule(ctx: *Context) anyerror!void {
     var iter = mod.words.iterator();
     var i: usize = 0;
     while (iter.next()) |entry| {
-        keys[i] = .{ .symbol = entry.key_ptr.* };
+        keys[i] = value_mod.symbolValue(entry.key_ptr.*);
         i += 1;
     }
     try helpers.pushAdoptedArray(ctx, ctx.allocator, keys);
@@ -484,8 +484,8 @@ fn nativeAtValuesError(ctx: *Context) anyerror!void {
     // Get all four error field values. Both fetched fields come back
     // as owning references, so the array adopts them wholesale.
     const values = ctx.allocator.alloc(Value, 4) catch return error.OutOfMemory;
-    values[0] = Value{ .symbol = err.error_type };
-    values[1] = .{ .string = err.message };
+    values[0] = value_mod.symbolValue(err.error_type);
+    values[1] = value_mod.stringValue(err.message);
     values[2] = getErrorField(ctx, err, "data") catch |e| {
         ctx.allocator.free(values);
         return e;

@@ -310,7 +310,7 @@ pub const Server = struct {
             self.ctx.import_frame_index = saved_import_frame;
             // Truncate stack to saved depth
             while (self.ctx.stack.depth() > saved_stack_depth) {
-                _ = self.ctx.stack.pop() catch break;
+                self.ctx.stack.popAndRelease() catch break;
             }
         }
 
@@ -757,7 +757,7 @@ pub const Server = struct {
             self.ctx.check_mode = saved_check_mode;
             self.ctx.import_frame_index = saved_import_frame;
             while (self.ctx.stack.depth() > saved_stack_depth) {
-                _ = self.ctx.stack.pop() catch break;
+                self.ctx.stack.popAndRelease() catch break;
             }
         }
 
@@ -948,7 +948,7 @@ pub const Server = struct {
             self.ctx.check_mode = saved_check_mode;
             self.ctx.import_frame_index = saved_import_frame;
             while (self.ctx.stack.depth() > saved_stack_depth) {
-                _ = self.ctx.stack.pop() catch break;
+                self.ctx.stack.popAndRelease() catch break;
             }
         }
 

@@ -49,8 +49,9 @@ const AddrKind = enum { tcp, udp, unix };
 
 /// Extract addr variant info from a tagged value on the stack.
 ///
-/// The popped addr is consumed here: the extracted host/path strings are arena-owned and
-/// survive the release, so the returned AddrInfo stays valid after the instance backing drops.
+/// The popped addr is consumed here. The host/path bytes are copied onto the arena, since a
+/// heap-backed field string dies with the released instance and the caller reads the
+/// AddrInfo afterwards.
 fn extractAddr(ctx: *Context) !AddrInfo {
     const val = try ctx.stack.pop();
     defer container_backing.releaseValue(val);
@@ -77,7 +78,7 @@ fn extractAddrFromValue(ctx: *Context, val: Value) !AddrInfo {
                             return error.TypeMismatch;
                         }
                         const host = switch (si.fields[0]) {
-                            .string => |s| s,
+                            .string => |s| try ctx.quotationAllocator().dupe(u8, s.bytes),
                             else => {
                                 helpers.setErrorContext(ctx, "addr host field must be a string", .{});
                                 return error.TypeMismatch;
@@ -102,7 +103,7 @@ fn extractAddrFromValue(ctx: *Context, val: Value) !AddrInfo {
                             return error.TypeMismatch;
                         }
                         const path = switch (si.fields[0]) {
-                            .string => |s| s,
+                            .string => |s| try ctx.quotationAllocator().dupe(u8, s.bytes),
                             else => {
                                 helpers.setErrorContext(ctx, "addr:unix path field must be a string", .{});
                                 return error.TypeMismatch;
@@ -147,7 +148,7 @@ fn makeInetAddr(ctx: *Context, alloc: std.mem.Allocator, tag: *const VirtualType
     const fields = try ctx.allocator.alloc(Value, 2);
     var fields_owned = true;
     errdefer if (fields_owned) ctx.allocator.free(fields);
-    fields[0] = .{ .string = host };
+    fields[0] = value_mod.stringValue(host);
     fields[1] = .{ .fixnum = port };
 
     const instance = try value_mod.createStructInstance(ctx.allocator, struct_type, fields);
@@ -222,7 +223,14 @@ fn nativeResolve(ctx: *Context) anyerror!void {
             const fields = try ctx.allocator.alloc(Value, 1);
             var fields_owned = true;
             errdefer if (fields_owned) ctx.allocator.free(fields);
-            fields[0] = .{ .string = addr_info.path };
+            // The pushed instance outlives the addr this path came from, so the field adopts
+            // a fresh heap-backed copy. The instance's destroy releases it.
+            const path_copy = try ctx.allocator.dupe(u8, addr_info.path);
+            fields[0] = value_mod.ownedStringValue(ctx.allocator, path_copy) catch |e| {
+                ctx.allocator.free(path_copy);
+                return e;
+            };
+            errdefer if (fields_owned) container_backing.releaseValue(fields[0]);
 
             const instance = try value_mod.createStructInstance(ctx.allocator, struct_type, fields);
             fields_owned = false;
@@ -377,7 +385,7 @@ fn nativeAccept(ctx: *Context) anyerror!void {
         var ip_buf: [46]u8 = undefined;
         const ip_str = formatAddress(net_addr, &ip_buf);
         const host_copy = try alloc.dupe(u8, ip_str);
-        try ctx.stack.push(.{ .string = host_copy });
+        try ctx.stack.push(value_mod.stringValue(host_copy));
         try ctx.stack.push(.{ .fixnum = @intCast(net_addr.getPort()) });
         return;
     }
@@ -463,7 +471,7 @@ fn nativeFdSetBlocking(ctx: *Context) anyerror!void {
 fn extractDataBytes(ctx: *Context, val: Value) ![]const u8 {
     return switch (val) {
         .byte_array => |ba| ba.slice(),
-        .string => |s| s,
+        .string => |s| s.bytes,
         else => {
             helpers.setTypeMismatchError(ctx, "string or byte-array", val);
             return error.TypeMismatch;
@@ -486,6 +494,7 @@ fn nativeUdpSendto(ctx: *Context) anyerror!void {
     if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "udp-sendto");
     const addr_info = try extractAddr(ctx);
     const data_val = try ctx.stack.pop();
+    defer container_backing.releaseValue(data_val);
     const fd_val = try popFixnum(ctx);
     if (fd_val < 0) return error.InvalidArgument;
     const fd: std.posix.fd_t = @intCast(fd_val);
@@ -558,7 +567,7 @@ fn nativeUdpRecvfrom(ctx: *Context) anyerror!void {
         var ip_buf: [46]u8 = undefined;
         const ip_str = formatAddress(net_addr, &ip_buf);
         const host_copy = try alloc.dupe(u8, ip_str);
-        try ctx.stack.push(.{ .string = host_copy });
+        try ctx.stack.push(value_mod.stringValue(host_copy));
         try ctx.stack.push(.{ .fixnum = @intCast(net_addr.getPort()) });
         return;
     }
@@ -568,6 +577,7 @@ fn nativeUdpRecvfrom(ctx: *Context) anyerror!void {
 fn nativeUdpSend(ctx: *Context) anyerror!void {
     if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "udp-send");
     const data_val = try ctx.stack.pop();
+    defer container_backing.releaseValue(data_val);
     const fd_val = try popFixnum(ctx);
     if (fd_val < 0) return error.InvalidArgument;
     const fd: std.posix.fd_t = @intCast(fd_val);
@@ -638,6 +648,7 @@ fn nativeUdpRecv(ctx: *Context) anyerror!void {
 fn nativeSetsockopt(ctx: *Context) anyerror!void {
     if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "setsockopt");
     const val = try ctx.stack.pop();
+    defer container_backing.releaseValue(val);
     const optname_val = try popFixnum(ctx);
     const level_val = try popFixnum(ctx);
     const fd_val = try popFixnum(ctx);
@@ -671,7 +682,9 @@ fn nativeSetsockopt(ctx: *Context) anyerror!void {
 /// inet-pton ( family str -- bytes )
 fn nativeInetPton(ctx: *Context) anyerror!void {
     if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "inet-pton");
-    const str = try helpers.popString(ctx);
+    const str_val = try helpers.popString(ctx);
+    defer container_backing.releaseValue(.{ .string = str_val });
+    const str = str_val.bytes;
     const family = try popFixnum(ctx);
     const alloc = ctx.quotationAllocator();
 
@@ -702,7 +715,9 @@ fn nativeInetPton(ctx: *Context) anyerror!void {
 /// sock-const ( str -- n )
 fn nativeSockConst(ctx: *Context) anyerror!void {
     if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "sock-const");
-    const name = try helpers.popString(ctx);
+    const name_val = try helpers.popString(ctx);
+    defer container_backing.releaseValue(.{ .string = name_val });
+    const name = name_val.bytes;
 
     const val: i64 = if (std.mem.eql(u8, name, "SOL_SOCKET"))
         std.posix.SOL.SOCKET

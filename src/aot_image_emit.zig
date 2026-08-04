@@ -1991,7 +1991,7 @@ fn emitProtocolDescriptorStorage(
             try out.appendSlice(allocator, "static const char ");
             try writeProtocolMethodNameSym(out, allocator, i, m);
             try out.appendSlice(allocator, "[] = ");
-            try emitCStringLiteral(out, allocator, entry.symbol);
+            try emitCStringLiteral(out, allocator, entry.symbol.bytes);
             try out.appendSlice(allocator, ";\n");
             m += 1;
         }
@@ -2004,7 +2004,7 @@ fn emitProtocolDescriptorStorage(
             m = 0;
             while (mi < pd.methods.len) : (mi += 1) {
                 if (pd.methods[mi] != .symbol) continue;
-                const method_name = pd.methods[mi].symbol;
+                const method_name = pd.methods[mi].symbol.bytes;
                 // A `.stack_effect` immediately following the symbol is the
                 // method's declared effect, mirroring the satisfies-check
                 // walk in primitives/protocols.zig.
@@ -6202,7 +6202,7 @@ test "emitImageC: tagged literal reserves a slot and emits a description row" {
     tag_tv.virtual_type = tag_virtual;
 
     const inner_value = try arena.create(value_mod.Value);
-    inner_value.* = .{ .symbol = "red" };
+    inner_value.* = value_mod.symbolValue("red");
 
     const instrs = try arena.dupe(Instruction, &.{
         .{
@@ -6248,7 +6248,7 @@ test "emitImageC: repeated tagged literal with same (tag, inner) shares one slot
     tag_tv.virtual_type = tag_virtual;
 
     const inner_value = try arena.create(value_mod.Value);
-    inner_value.* = .{ .symbol = "red" };
+    inner_value.* = value_mod.symbolValue("red");
 
     const tagged_lit: value_mod.Value = .{ .tagged = .{ .tag = tag_virtual, .inner = inner_value } };
     const instrs_a = try arena.dupe(Instruction, &.{
@@ -6974,9 +6974,9 @@ test "emitImageC: protocol annotation interns descriptor and emits full descript
         .{ .name = "r" },
     });
     const methods = [_]value_mod.Value{
-        .{ .symbol = "cmp" },
+        value_mod.symbolValue("cmp"),
         .{ .stack_effect = .{ .inputs = cmp_inputs, .outputs = cmp_outputs } },
-        .{ .symbol = "show" },
+        value_mod.symbolValue("show"),
     };
     const pd = try ctx.createProtocolDescriptor("orderly", &methods);
 
@@ -7046,8 +7046,8 @@ test "emitImageC: combinator annotation interns descriptors across all three ele
     const arena = ctx.quotationAllocator();
 
     // Two protocols and a TypeValue, the three element-leaf kinds.
-    const pd = try ctx.createProtocolDescriptor("cmp-able", &.{.{ .symbol = "cmp" }});
-    const pd2 = try ctx.createProtocolDescriptor("show-able", &.{.{ .symbol = "show" }});
+    const pd = try ctx.createProtocolDescriptor("cmp-able", &.{value_mod.symbolValue("cmp")});
+    const pd2 = try ctx.createProtocolDescriptor("show-able", &.{value_mod.symbolValue("show")});
     const tv_desc = try value_mod.createBuiltinTypeDescriptor(arena, .{});
     const tv = try arena.create(value_mod.TypeValue);
     tv.* = .{ .name = "smallint", .descriptor = tv_desc };
@@ -7492,7 +7492,7 @@ test "registerProtocolMethodEffects reaches protocols and TypeValues through met
     const baseline = try baselineSlotCounts(&ctx);
 
     // Protocol Q, reachable only through P's method-effect annotation.
-    const q = try ctx.createProtocolDescriptor("quaffable", &.{.{ .symbol = "quaff" }});
+    const q = try ctx.createProtocolDescriptor("quaffable", &.{value_mod.symbolValue("quaff")});
 
     // A TypeValue reachable only through P's method-effect annotation.
     const desc = try value_mod.createBuiltinTypeDescriptor(arena, .{});
@@ -7505,7 +7505,7 @@ test "registerProtocolMethodEffects reaches protocols and TypeValues through met
     });
     const sip_outputs = try arena.dupe(StackEffectParam, &.{});
     const p_methods = [_]value_mod.Value{
-        .{ .symbol = "sip" },
+        value_mod.symbolValue("sip"),
         .{ .stack_effect = .{ .inputs = sip_inputs, .outputs = sip_outputs } },
     };
     const p = try ctx.createProtocolDescriptor("sippable", &p_methods);

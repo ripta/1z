@@ -57,7 +57,9 @@ fn nativeToModule(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
     const ht_val = try ctx.stack.pop();
     defer container_backing.releaseValue(ht_val);
-    const name = try popString(ctx);
+    const name_str = try popString(ctx);
+    defer container_backing.releaseValue(.{ .string = name_str });
+    const name = name_str.bytes;
 
     const entries: *std.StringHashMapUnmanaged(Value) = switch (ht_val) {
         .hash => |h| &h.map,
@@ -207,7 +209,9 @@ pub fn resolveLoadPath(ctx: *Context, filename: []const u8, alloc: std.mem.Alloc
 /// resolve-load-path ( filename -- resolved )
 fn nativeResolveLoadPath(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
-    const filename = try popString(ctx);
+    const filename_str = try popString(ctx);
+    defer container_backing.releaseValue(.{ .string = filename_str });
+    const filename = filename_str.bytes;
     const resolved = resolveLoadPath(ctx, filename, alloc) orelse {
         const msg = std.fmt.allocPrint(alloc, "path '{s}'", .{filename}) catch "path '<unknown>'";
         ctx.error_details.append(ctx.allocator, .{
@@ -219,7 +223,7 @@ fn nativeResolveLoadPath(ctx: *Context) anyerror!void {
         }) catch {};
         return error.FileNotFound;
     };
-    try ctx.stack.push(.{ .string = resolved });
+    try helpers.pushOwnedString(ctx, try ctx.allocator.dupe(u8, resolved));
 }
 
 /// Internal representation of a module source resolved by `load-file` et al.
@@ -538,7 +542,7 @@ pub fn nativeLoadImpl(ctx: *Context, cache: *value_mod.MutableMap, filename: []c
     }
     ctx.popPragmaFrame();
     ctx.popLocalFrame();
-    hooks.fireScopedHooks(ctx, "module-loaded-hooks", &.{ .{ .string = filename }, .{ .string = resolved } });
+    hooks.fireScopedHooks(ctx, "module-loaded-hooks", &.{ value_mod.stringValue(filename), value_mod.stringValue(resolved) });
     try ctx.stack.push(.{ .module = module });
 }
 
@@ -637,6 +641,7 @@ fn addNamedImportError(ctx: *Context, error_type: []const u8, message: []const u
 fn nativeImport(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
     const top_val = try ctx.stack.pop();
+    defer container_backing.releaseValue(top_val);
 
     switch (top_val) {
         .array => |names_arr| {
@@ -656,8 +661,9 @@ fn nativeImport(ctx: *Context) anyerror!void {
                 return error.EmptyImport;
             }
             for (names) |name_val| {
+                // Imported bindings keep the name as a frame key for the context's lifetime.
                 const name = switch (name_val) {
-                    .symbol, .string => |s| s,
+                    .symbol, .string => |s| try alloc.dupe(u8, s.bytes),
                     else => {
                         const type_name = helpers.valueTypeName(name_val);
                         const msg = std.fmt.allocPrint(alloc, "expected symbol, got {s}", .{type_name}) catch "expected symbol";
@@ -700,8 +706,10 @@ fn nativeImport(ctx: *Context) anyerror!void {
 
 fn nativeExport(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
-    const name = switch (try ctx.stack.pop()) {
-        .symbol, .string => |s| s,
+    const name_val = try ctx.stack.pop();
+    defer container_backing.releaseValue(name_val);
+    const name = switch (name_val) {
+        .symbol, .string => |s| s.bytes,
         else => |v| {
             helpers.setTypeMismatchError(ctx, "string or symbol", v);
             return error.TypeMismatch;
@@ -764,8 +772,10 @@ fn nativeBorrowDeps(ctx: *Context) anyerror!void {
         },
         .array => |names_arr| {
             for (names_arr.items) |name_val| {
+                // The imported binding keeps the name as a frame key, which outlives the
+                // released target array.
                 const name = switch (name_val) {
-                    .symbol, .string => |s| s,
+                    .symbol, .string => |s| try alloc.dupe(u8, s.bytes),
                     else => {
                         const type_name = helpers.valueTypeName(name_val);
                         const msg = std.fmt.allocPrint(alloc, "expected symbol, got {s}", .{type_name}) catch "expected symbol";
@@ -819,7 +829,7 @@ fn nativeCommandLineArgs(ctx: *Context) anyerror!void {
 
     const arr = alloc.alloc(Value, args.len) catch return error.OutOfMemory;
     for (args, 0..) |arg, i| {
-        arr[i] = .{ .string = arg };
+        arr[i] = value_mod.stringValue(arg);
     }
 
     try helpers.pushAdoptedArray(ctx, alloc, arr);
@@ -836,8 +846,9 @@ fn nativeSysExit(ctx: *Context) anyerror!void {
 
 /// add-load-path ( path -- )
 fn nativeAddLoadPath(ctx: *Context) anyerror!void {
-    const path = try popString(ctx);
-    const duped = ctx.quotationAllocator().dupe(u8, path) catch return error.OutOfMemory;
+    const path_str = try popString(ctx);
+    defer container_backing.releaseValue(.{ .string = path_str });
+    const duped = ctx.quotationAllocator().dupe(u8, path_str.bytes) catch return error.OutOfMemory;
     ctx.load_paths.append(ctx.allocator, duped) catch return error.OutOfMemory;
 }
 
@@ -945,7 +956,10 @@ fn resolveWordForDispatch(name: []const u8, user_data: *anyopaque) ?ir_codegen.R
 fn nativeCompile(ctx: *Context) anyerror!void {
     if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "compile!");
 
-    const sym = try helpers.popSymbol(ctx);
+    const sym_pay = try helpers.popSymbol(ctx);
+    defer container_backing.releaseValue(.{ .symbol = sym_pay });
+    // The JIT dispatch table stores the word name it is handed.
+    const sym = try ctx.quotationAllocator().dupe(u8, sym_pay.bytes);
     const word = ctx.lookupWord(sym) orelse {
         ctx.pending_error_message = "compile!: word not found";
         return error.UnknownWord;
@@ -1277,7 +1291,10 @@ fn nativeLoadFile(ctx: *Context) anyerror!void {
 
     const alloc = ctx.quotationAllocator();
 
-    const filename = try popString(ctx);
+    const filename_pay = try popString(ctx);
+    defer container_backing.releaseValue(.{ .string = filename_pay });
+    // Loaded definitions keep `source_file` slices of this name for the context's lifetime.
+    const filename = try alloc.dupe(u8, filename_pay.bytes);
     const cache_val = try ctx.stack.pop();
     defer container_backing.releaseValue(cache_val);
     const cache: *value_mod.MutableMap = switch (cache_val) {
@@ -1350,7 +1367,10 @@ fn nativeReloadFile(ctx: *Context) anyerror!void {
 
     const alloc = ctx.quotationAllocator();
 
-    const filename = try popString(ctx);
+    const filename_pay = try popString(ctx);
+    defer container_backing.releaseValue(.{ .string = filename_pay });
+    // Loaded definitions keep `source_file` slices of this name for the context's lifetime.
+    const filename = try alloc.dupe(u8, filename_pay.bytes);
     const cache_val = try ctx.stack.pop();
     defer container_backing.releaseValue(cache_val);
     const cache: *value_mod.MutableMap = switch (cache_val) {
@@ -1401,7 +1421,10 @@ fn nativeLoadCheckFile(ctx: *Context) anyerror!void {
 
     const alloc = ctx.quotationAllocator();
 
-    const filename = try popString(ctx);
+    const filename_pay = try popString(ctx);
+    defer container_backing.releaseValue(.{ .string = filename_pay });
+    // Loaded definitions keep `source_file` slices of this name for the context's lifetime.
+    const filename = try alloc.dupe(u8, filename_pay.bytes);
     const cache_val = try ctx.stack.pop();
     defer container_backing.releaseValue(cache_val);
     const cache: *value_mod.MutableMap = switch (cache_val) {
@@ -1445,7 +1468,9 @@ fn nativeModuleCacheValue(ctx: *Context) anyerror!void {
 /// eval-string ( string -- )
 fn nativeEvalString(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
-    const code = try popString(ctx);
+    const code_str = try popString(ctx);
+    defer container_backing.releaseValue(.{ .string = code_str });
+    const code = code_str.bytes;
 
     var processor: StatementProcessor = .{};
     defer processor.deinit();
@@ -1486,9 +1511,13 @@ fn nativeEvalString(ctx: *Context) anyerror!void {
 // Append an import record to the context's import history.
 // Allowed during parse-time or module loading.
 fn nativeRecordImport(ctx: *Context) anyerror!void {
-    const resolved_path = try popString(ctx);
+    const resolved_path_str = try popString(ctx);
+    defer container_backing.releaseValue(.{ .string = resolved_path_str });
+    const resolved_path = resolved_path_str.bytes;
     const words_or_f = try ctx.stack.pop();
-    const module_path = try popString(ctx);
+    const module_path_str = try popString(ctx);
+    defer container_backing.releaseValue(.{ .string = module_path_str });
+    const module_path = module_path_str.bytes;
 
     // Validate words-or-f is an array or false
     switch (words_or_f) {
@@ -1499,6 +1528,7 @@ fn nativeRecordImport(ctx: *Context) anyerror!void {
         },
         else => {
             helpers.setTypeMismatchError(ctx, "array or f", words_or_f);
+            container_backing.releaseValue(words_or_f);
             return error.TypeMismatch;
         },
     }
@@ -1512,15 +1542,15 @@ fn nativeRecordImport(ctx: *Context) anyerror!void {
     // For parse-time imports (e.g., `use`), parse_time_source_file holds the
     // file being parsed at the moment the parse-time word was invoked.
     const import_source = ctx.load_file_source orelse ctx.parse_time_source_file;
-    fields[0] = .{ .string = try arena.dupe(u8, import_source) };
+    fields[0] = value_mod.stringValue(try arena.dupe(u8, import_source));
     fields[1] = .{ .fixnum = @intCast(ctx.parse_time_source_line) };
     fields[2] = .{ .fixnum = @intCast(ctx.parse_time_source_column) };
-    fields[3] = .{ .string = try arena.dupe(u8, module_path) };
+    fields[3] = value_mod.stringValue(try arena.dupe(u8, module_path));
     // The popped reference transfers into the record and is never released:
     // import history lives for the context. Callers only pass `f` or a
     // parse-time static selection array of symbols, so nothing here can leak.
     fields[4] = words_or_f;
-    fields[5] = .{ .string = try arena.dupe(u8, resolved_path) };
+    fields[5] = value_mod.stringValue(try arena.dupe(u8, resolved_path));
 
     const arr = try value_mod.Array.fromOwnedSlice(arena, fields);
     try ctx.import_history.append(ctx.allocator, .{ .array = arr });
@@ -1541,7 +1571,7 @@ fn nativeParseSrcLoc(ctx: *Context) anyerror!void {
         return error.ParseError;
     }
 
-    try ctx.stack.push(.{ .string = ctx.current_source });
+    try ctx.stack.push(value_mod.stringValue(ctx.current_source));
     try ctx.stack.push(.{ .fixnum = @intCast(ctx.parse_time_source_line) });
     try ctx.stack.push(.{ .fixnum = @intCast(ctx.parse_time_source_column) });
 }
@@ -1550,6 +1580,7 @@ fn nativeParseSrcLoc(ctx: *Context) anyerror!void {
 // Extract the name from a module value.
 fn nativeModuleName(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
+    defer container_backing.releaseValue(val);
     const module = switch (val) {
         .module => |m| m,
         else => {
@@ -1557,7 +1588,7 @@ fn nativeModuleName(ctx: *Context) anyerror!void {
             return error.TypeMismatch;
         },
     };
-    try ctx.stack.push(.{ .string = module.name });
+    try ctx.stack.push(value_mod.stringValue(module.name));
 }
 
 const build_options = @import("build_options");
@@ -1664,11 +1695,12 @@ test ">module carries a quotation's attached effect into the word declaration" {
     try hash.map.put(alloc, "w", .{ .quotation = .{ .instructions = &.{}, .effect = effect } });
     try hash.map.put(alloc, "bare", .{ .quotation = .{ .instructions = &.{} } });
 
-    try ctx.stack.push(.{ .string = "m" });
+    try ctx.stack.push(value_mod.stringValue("m"));
     try ctx.stack.push(.{ .hash = hash });
     try nativeToModule(&ctx);
 
     const module_val = try ctx.stack.pop();
+    defer container_backing.releaseValue(module_val);
     try std.testing.expect(module_val == .module);
     const with_effect = module_val.module.words.get("w") orelse return error.TestExpectedWord;
     try std.testing.expectEqual(@as(usize, 1), with_effect.stack_effect.?.inputs.len);
@@ -1732,7 +1764,7 @@ test "load-file caches embedded module under virtual path" {
     ctx.load_paths.clearRetainingCapacity();
 
     try ctx.stack.push(.{ .mutable_map = ctx.module_cache_value });
-    try ctx.stack.push(.{ .string = "sequences" });
+    try ctx.stack.push(value_mod.stringValue("sequences"));
     try nativeLoadFile(&ctx);
 
     const top = try ctx.stack.pop();
@@ -1755,7 +1787,7 @@ test "reload-file pins embedded module across mid-session filesystem availabilit
 
     // Initial load: no filesystem stdlib, fall back to embedded bundle.
     try ctx.stack.push(.{ .mutable_map = ctx.module_cache_value });
-    try ctx.stack.push(.{ .string = "sequences" });
+    try ctx.stack.push(value_mod.stringValue("sequences"));
     try nativeLoadFile(&ctx);
     {
         const initial = try ctx.stack.pop();
@@ -1782,7 +1814,7 @@ test "reload-file pins embedded module across mid-session filesystem availabilit
 
     // Reload: must stay pinned to the embedded virtual path.
     try ctx.stack.push(.{ .mutable_map = ctx.module_cache_value });
-    try ctx.stack.push(.{ .string = "sequences" });
+    try ctx.stack.push(value_mod.stringValue("sequences"));
     try nativeReloadFile(&ctx);
     const reloaded = try ctx.stack.pop();
     defer container_backing.releaseValue(reloaded);
@@ -1811,7 +1843,7 @@ test "reload-file pins filesystem module across mid-session unavailability" {
 
     // Initial load: resolves to the disk file.
     try ctx.stack.push(.{ .mutable_map = ctx.module_cache_value });
-    try ctx.stack.push(.{ .string = "foo" });
+    try ctx.stack.push(value_mod.stringValue("foo"));
     try nativeLoadFile(&ctx);
     {
         const initial = try ctx.stack.pop();
@@ -1837,7 +1869,7 @@ test "reload-file pins filesystem module across mid-session unavailability" {
 
     // Reload: still pinned to the disk path, never regresses to embedded.
     try ctx.stack.push(.{ .mutable_map = ctx.module_cache_value });
-    try ctx.stack.push(.{ .string = "foo" });
+    try ctx.stack.push(value_mod.stringValue("foo"));
     try nativeReloadFile(&ctx);
     const reloaded = try ctx.stack.pop();
     defer container_backing.releaseValue(reloaded);

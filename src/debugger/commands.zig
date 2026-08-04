@@ -5,6 +5,7 @@ const BreakpointManager = @import("breakpoints.zig").BreakpointManager;
 const context_mod = @import("../context.zig");
 const Context = context_mod.Context;
 const StatementProcessor = @import("../statement.zig").StatementProcessor;
+const container_backing = @import("../container_backing.zig");
 
 /// Result of dispatching a command.
 pub const CommandResult = enum {
@@ -213,6 +214,7 @@ pub const CommandDispatcher = struct {
 
         if (std.mem.eql(u8, cmd, "pop")) {
             if (ctx.stack.pop()) |val| {
+                defer container_backing.releaseValue(val);
                 try val.write(writer);
                 try writer.writeAll("\n");
             } else |_| {

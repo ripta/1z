@@ -1,7 +1,9 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const Context = @import("../context.zig").Context;
+const value_mod = @import("../value.zig");
 const helpers = @import("helpers.zig");
+const container_backing = @import("../container_backing.zig");
 const popFixnum = helpers.popFixnum;
 const popString = helpers.popString;
 const setErrorContext = helpers.setErrorContext;
@@ -119,7 +121,9 @@ fn nativeTzDecompose(ctx: *Context) anyerror!void {
 
     const alloc = ctx.quotationAllocator();
 
-    const tz_name = try popString(ctx);
+    const tz_name_val = try popString(ctx);
+    defer container_backing.releaseValue(.{ .string = tz_name_val });
+    const tz_name = tz_name_val.bytes;
     const sec = try popFixnum(ctx);
 
     const tz_name_z = try alloc.dupeZ(u8, tz_name);
@@ -129,7 +133,7 @@ fn nativeTzDecompose(ctx: *Context) anyerror!void {
 
     // tm_zone is a pointer into libc memory that is invalidated
     // by subsequent tzset() calls, so we gotta copy it out
-    var tz_zone_str: []const u8 = undefined;
+    var tz_zone_str: []u8 = undefined;
 
     // If tz_name is empty, we can call localtime_r directly without modifying TZ env var.
     // Otherwise: set TZ, call tzset, then call localtime_r. 🤢
@@ -139,7 +143,7 @@ fn nativeTzDecompose(ctx: *Context) anyerror!void {
             return error.IOFailed;
         }
 
-        tz_zone_str = try alloc.dupe(u8, std.mem.sliceTo(result.tm_zone, 0));
+        tz_zone_str = try ctx.allocator.dupe(u8, std.mem.sliceTo(result.tm_zone, 0));
     } else {
         ctx.lock_order_tracker.acquire(.tz);
         tz_mutex.lock();
@@ -156,7 +160,7 @@ fn nativeTzDecompose(ctx: *Context) anyerror!void {
         const lr_result = c.localtime_r(&time_val, &result);
 
         if (lr_result != null) {
-            tz_zone_str = try alloc.dupe(u8, std.mem.sliceTo(result.tm_zone, 0));
+            tz_zone_str = try ctx.allocator.dupe(u8, std.mem.sliceTo(result.tm_zone, 0));
         }
 
         if (old_tz) |old| {
@@ -171,6 +175,8 @@ fn nativeTzDecompose(ctx: *Context) anyerror!void {
             return error.IOFailed;
         }
     }
+    var tz_owned = true;
+    errdefer if (tz_owned) ctx.allocator.free(tz_zone_str);
 
     try ctx.stack.push(.{ .fixnum = @as(i64, result.tm_year) + 1900 });
     try ctx.stack.push(.{ .fixnum = @as(i64, result.tm_mon) + 1 });
@@ -181,5 +187,6 @@ fn nativeTzDecompose(ctx: *Context) anyerror!void {
     try ctx.stack.push(.{ .fixnum = @intCast(result.tm_wday) });
     try ctx.stack.push(.{ .fixnum = @as(i64, result.tm_yday) + 1 });
     try ctx.stack.push(.{ .fixnum = @intCast(result.tm_gmtoff) });
-    try ctx.stack.push(.{ .string = tz_zone_str });
+    tz_owned = false;
+    try helpers.pushOwnedString(ctx, tz_zone_str);
 }

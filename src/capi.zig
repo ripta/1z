@@ -1298,7 +1298,7 @@ export fn onez_hash_keys(ptr: ?*anyopaque, val_ptr: ?*anyopaque, out: *?*anyopaq
             var i: usize = 0;
             var it = h.map.iterator();
             while (it.next()) |entry| {
-                keys[i] = .{ .symbol = entry.key_ptr.* };
+                keys[i] = value_mod.symbolValue(entry.key_ptr.*);
                 i += 1;
             }
             const keys_arr = value_mod.Array.fromOwnedSlice(alloc, keys) catch {

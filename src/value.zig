@@ -337,6 +337,84 @@ pub fn makeBorrowedByteArray(allocator: std.mem.Allocator, bytes: []u8) !*ByteAr
     return ba;
 }
 
+/// Refcounted backing for string and symbol byte payloads. A `StringPayload` carries an
+/// optional pointer to one of these alongside its direct byte slice; a null backing means the
+/// bytes belong to memory that outlives the value (source text, image data, interned tables),
+/// and retain/release are no-ops.
+///
+/// Mirrors `ByteArray`'s shape: a `ContainerHeader` for the cross-worker refcount lifecycle,
+/// and an owned/borrowed storage split. Only `.owned` is constructed today; `.borrowed` is the
+/// reserved shape for externally-owned bytes.
+pub const StringBacking = struct {
+    header: @import("container_backing.zig").ContainerHeader,
+    storage: union(enum) {
+        owned: []u8,
+        borrowed: []const u8,
+    },
+
+    /// Take ownership of `bytes`, which must have been allocated on `allocator`. The backing
+    /// frees them when the last reference drops.
+    pub fn adoptOwned(allocator: std.mem.Allocator, bytes: []u8) error{OutOfMemory}!*StringBacking {
+        const self = try allocator.create(StringBacking);
+        self.* = .{
+            .header = undefined,
+            .storage = .{ .owned = bytes },
+        };
+        self.header.init(allocator, destroyStringBacking);
+        return self;
+    }
+
+    pub fn isBorrowed(self: StringBacking) bool {
+        return self.storage == .borrowed;
+    }
+
+    fn destroyStringBacking(header: *@import("container_backing.zig").ContainerHeader) void {
+        const self: *StringBacking = @fieldParentPtr("header", header);
+        switch (self.storage) {
+            .owned => |bytes| header.allocator.free(bytes),
+            .borrowed => {},
+        }
+        header.allocator.destroy(self);
+    }
+};
+
+/// The payload of `Value.string` and `Value.symbol`: a direct byte slice plus an optional
+/// refcounted backing. `bytes` may be an interior sub-slice of the backing's storage;
+/// sub-slicing narrows `bytes` and shares `backing`, so it stays zero-copy.
+pub const StringPayload = struct {
+    backing: ?*StringBacking = null,
+    bytes: []const u8,
+
+    /// A payload over a sub-range of this payload's bytes, sharing the same backing. The
+    /// caller is responsible for the reference: pushing the result retains the backing
+    /// through the usual choke points.
+    pub fn sub(self: StringPayload, bytes: []const u8) StringPayload {
+        return .{ .backing = self.backing, .bytes = bytes };
+    }
+};
+
+/// A null-backed string value over bytes that outlive the value.
+pub fn stringValue(bytes: []const u8) Value {
+    return .{ .string = .{ .bytes = bytes } };
+}
+
+/// A null-backed symbol value over bytes that outlive the value.
+pub fn symbolValue(bytes: []const u8) Value {
+    return .{ .symbol = .{ .bytes = bytes } };
+}
+
+/// A string value owning `bytes` through a fresh heap backing. `bytes` must have been
+/// allocated on `allocator`. The returned value holds the backing's creation reference,
+/// which the caller transfers (`pushMoved`, container adoption) or releases.
+pub fn ownedStringValue(allocator: std.mem.Allocator, bytes: []u8) error{OutOfMemory}!Value {
+    return .{ .string = .{ .backing = try StringBacking.adoptOwned(allocator, bytes), .bytes = bytes } };
+}
+
+/// Symbol twin of `ownedStringValue`.
+pub fn ownedSymbolValue(allocator: std.mem.Allocator, bytes: []u8) error{OutOfMemory}!Value {
+    return .{ .symbol = .{ .backing = try StringBacking.adoptOwned(allocator, bytes), .bytes = bytes } };
+}
+
 pub fn valueContainsBorrowedBuffer(val: Value) bool {
     return switch (val) {
         .byte_array => |ba| ba.isBorrowed(),
@@ -377,13 +455,12 @@ pub fn valueContainsBorrowedBuffer(val: Value) bool {
         .struct_instance => |si| containsBorrowedInSlice(si.fields),
         .tagged => |t| valueContainsBorrowedBuffer(t.inner.*),
         .error_value => |err| if (err.data) |data| valueContainsBorrowedBuffer(data.*) else false,
+        .string, .symbol => |s| if (s.backing) |b| b.isBorrowed() else false,
         .fixnum,
         .float,
         .boolean,
         .unit,
         .bignum,
-        .string,
-        .symbol,
         .stream,
         .parameter,
         .marker,
@@ -1460,8 +1537,8 @@ pub const Value = union(enum) {
     float: f64,
     bignum: *BigIntManaged,
     boolean: bool,
-    string: []const u8,
-    symbol: []const u8,
+    string: StringPayload,
+    symbol: StringPayload,
     array: *Array,
     quotation: Quotation,
     closure: *Closure,
@@ -1515,8 +1592,8 @@ pub const Value = union(enum) {
                 try writer.writeAll(str);
             },
             .boolean => |b| try writer.writeAll(if (b) "t" else "f"),
-            .string => |s| try writer.print("\"{s}\"", .{s}),
-            .symbol => |s| try writer.print("{s}:", .{s}),
+            .string => |s| try writer.print("\"{s}\"", .{s.bytes}),
+            .symbol => |s| try writer.print("{s}:", .{s.bytes}),
             .array => |arr| {
                 try writer.writeAll("{ ");
                 for (arr.items) |item| {
@@ -1702,8 +1779,8 @@ pub const Value = union(enum) {
             .float => |a| a == other.float,
             .bignum => |a| a.toConst().eql(other.bignum.*.toConst()),
             .boolean => |a| a == other.boolean,
-            .string => |a| simd.eqlBytes(a, other.string),
-            .symbol => |a| simd.eqlBytes(a, other.symbol),
+            .string => |a| simd.eqlBytes(a.bytes, other.string.bytes),
+            .symbol => |a| simd.eqlBytes(a.bytes, other.symbol.bytes),
             .array => |a| {
                 const b = other.array;
                 if (a == b) return true;
@@ -1858,7 +1935,7 @@ pub const Value = union(enum) {
                 }
             },
             .boolean => |b| hasher.update(std.mem.asBytes(&b)),
-            .string, .symbol => |s| hasher.update(s),
+            .string, .symbol => |s| hasher.update(s.bytes),
             .array => |arr| {
                 for (arr.items) |elem| {
                     const elem_hash = elem.hashValue();
@@ -2202,8 +2279,8 @@ test "stack effect not equal to other types" {
         .inputs = &[_]StackEffectParam{.{ .name = "n" }},
         .outputs = &[_]StackEffectParam{.{ .name = "n" }},
     } };
-    const str = Value{ .string = "n -- n" };
-    const sym = Value{ .symbol = "n -- n" };
+    const str = stringValue("n -- n");
+    const sym = symbolValue("n -- n");
 
     try std.testing.expect(!effect.eql(str));
     try std.testing.expect(!effect.eql(sym));
@@ -2254,18 +2331,18 @@ test "boolean equality" {
 }
 
 test "string equality" {
-    const a = Value{ .string = "hello" };
-    const b = Value{ .string = "hello" };
-    const c = Value{ .string = "world" };
+    const a = stringValue("hello");
+    const b = stringValue("hello");
+    const c = stringValue("world");
 
     try std.testing.expect(a.eql(b));
     try std.testing.expect(!a.eql(c));
 }
 
 test "symbol equality" {
-    const a = Value{ .symbol = "foo" };
-    const b = Value{ .symbol = "foo" };
-    const c = Value{ .symbol = "bar" };
+    const a = symbolValue("foo");
+    const b = symbolValue("foo");
+    const c = symbolValue("bar");
 
     try std.testing.expect(a.eql(b));
     try std.testing.expect(!a.eql(c));
@@ -2306,6 +2383,44 @@ test "makeBorrowedByteArray constructs borrowed storage" {
     try std.testing.expect(ba.isBorrowed());
     try std.testing.expectEqualSlices(u8, items[0..], ba.slice());
     try std.testing.expectEqual(@intFromPtr(items[0..].ptr), @intFromPtr(ba.slice().ptr));
+}
+
+test "string backing adoptOwned lifecycle balances retain and release" {
+    const cb = @import("container_backing.zig");
+    const bytes = try std.testing.allocator.dupe(u8, "hello");
+    const val = try ownedStringValue(std.testing.allocator, bytes);
+    try std.testing.expectEqualStrings("hello", val.string.bytes);
+    try std.testing.expect(val.string.backing != null);
+
+    // A second owner retains; both releases drop, and the leak detector proves the free.
+    cb.retainValue(val);
+    cb.releaseValue(val);
+    cb.releaseValue(val);
+}
+
+test "string sub-slice shares the parent backing" {
+    const cb = @import("container_backing.zig");
+    const bytes = try std.testing.allocator.dupe(u8, "hello world");
+    const val = try ownedStringValue(std.testing.allocator, bytes);
+
+    const sub = Value{ .string = val.string.sub(val.string.bytes[6..]) };
+    try std.testing.expectEqualStrings("world", sub.string.bytes);
+    try std.testing.expectEqual(val.string.backing, sub.string.backing);
+
+    // The sub-slice's own retain keeps the bytes alive past the parent's release.
+    cb.retainValue(sub);
+    cb.releaseValue(val);
+    try std.testing.expectEqualStrings("world", sub.string.bytes);
+    cb.releaseValue(sub);
+}
+
+test "null-backed string retain and release are no-ops" {
+    const cb = @import("container_backing.zig");
+    const val = stringValue("static");
+    cb.retainValue(val);
+    cb.releaseValue(val);
+    cb.releaseValue(val);
+    try std.testing.expectEqualStrings("static", val.string.bytes);
 }
 
 test "byte array value uses slice for equality write and hash" {
@@ -2428,7 +2543,7 @@ test "findTaskArenaOwned finds direct nested and captured arena-owned variants" 
     try std.testing.expectEqual(.resource, findTaskArenaOwned(.{ .closure = &closure }));
     try std.testing.expectEqual(.resource, findTaskArenaOwned(.{ .error_value = &err_obj }));
     try std.testing.expectEqual(null, findTaskArenaOwned(.{ .fixnum = 42 }));
-    try std.testing.expectEqual(null, findTaskArenaOwned(.{ .string = "hello" }));
+    try std.testing.expectEqual(null, findTaskArenaOwned(stringValue("hello")));
 }
 
 test "array equality" {
@@ -2499,8 +2614,8 @@ test "quotation and closure with identical content compare and hash equal, both 
 test "cross-type inequality" {
     const int_val = Value{ .fixnum = 42 };
     const bool_val = Value{ .boolean = true };
-    const str_val = Value{ .string = "42" };
-    const sym_val = Value{ .symbol = "42" };
+    const str_val = stringValue("42");
+    const sym_val = symbolValue("42");
     var empty_arr = Array{ .header = undefined, .items = &[_]Value{}, .storage = .static };
     const arr_val = Value{ .array = &empty_arr };
 

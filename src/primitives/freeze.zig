@@ -91,7 +91,10 @@ fn freezeCopy(ctx: *Context, val: Value) anyerror!FreezeResult {
 
         .mutable_map => |m| return .{ .value = .{ .hash = try freezeMapCopy(ctx, &m.map) }, .changed = true },
 
-        .byte_array => |b| return .{ .value = .{ .string = try ctx.quotationAllocator().dupe(u8, b.slice()) }, .changed = true },
+        .byte_array => |b| {
+            const copy = try ctx.allocator.dupe(u8, b.slice());
+            return .{ .value = try value_mod.ownedStringValue(ctx.allocator, copy), .changed = true };
+        },
 
         .array => |arr| return freezeArray(ctx, arr, val),
         .hash => |h| return freezeHash(ctx, h, val),
@@ -488,7 +491,7 @@ test "freeze passes string leaves through and the scan blocks sharing" {
     defer ctx.deinit();
 
     const vec = try value_mod.Vector.create(ctx.allocator);
-    try vec.list.append(ctx.allocator, .{ .string = "hello" });
+    try vec.list.append(ctx.allocator, value_mod.stringValue("hello"));
     const input: Value = .{ .vector = vec };
     defer container_backing.releaseValue(input);
 
@@ -496,7 +499,7 @@ test "freeze passes string leaves through and the scan blocks sharing" {
     defer container_backing.releaseValue(frozen);
 
     try testing.expect(frozen == .array);
-    try testing.expectEqual(@as([*]const u8, "hello".ptr), frozen.array.items[0].string.ptr);
+    try testing.expectEqual(@as([*]const u8, "hello".ptr), frozen.array.items[0].string.bytes.ptr);
     try testing.expectEqual(container_backing.Shareable.not_shareable, frozen.array.header.shareableState());
 }
 
@@ -538,7 +541,7 @@ test "freeze converts a byte-array to a string" {
     defer container_backing.releaseValue(frozen);
 
     try testing.expect(frozen == .string);
-    try testing.expectEqualStrings("ab", frozen.string);
+    try testing.expectEqualStrings("ab", frozen.string.bytes);
 }
 
 test "freeze rebuilds a static array onto owned shareable storage" {

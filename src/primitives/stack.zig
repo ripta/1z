@@ -207,9 +207,17 @@ fn nativeApplyN(ctx: *Context) anyerror!void {
 
     ctx.stack.items.shrinkRetainingCapacity(start);
 
-    for (temp) |val| {
-        try ctx.stack.pushMoved(val);
-        try ctx.executeQuotationWithFrame(quot);
+    for (temp, 0..) |val, idx| {
+        // On an error exit the not-yet-pushed tail of the temp buffer still
+        // owns its values, so release it before propagating.
+        ctx.stack.pushMoved(val) catch |err| {
+            container_backing.releaseValues(temp[idx..]);
+            return err;
+        };
+        ctx.executeQuotationWithFrame(quot) catch |err| {
+            container_backing.releaseValues(temp[idx + 1 ..]);
+            return err;
+        };
     }
 }
 

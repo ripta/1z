@@ -5,6 +5,7 @@ const Marker = value_mod.Marker;
 const Value = value_mod.Value;
 
 const helpers = @import("helpers.zig");
+const container_backing = @import("../container_backing.zig");
 const types_mod = @import("types.zig");
 const Primitive = types_mod.Primitive;
 const RegistryEntry = types_mod.RegistryEntry;
@@ -535,8 +536,9 @@ fn nativeWordMarkers(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
 
     const name_val = try ctx.stack.pop();
+    defer container_backing.releaseValue(name_val);
     const name = switch (name_val) {
-        .symbol, .string => |s| s,
+        .symbol, .string => |s| s.bytes,
         else => {
             const type_name = helpers.valueTypeName(name_val);
             const msg = std.fmt.allocPrint(alloc, "expected symbol or string, got {s}", .{type_name}) catch "expected symbol or string";
@@ -552,6 +554,7 @@ fn nativeWordMarkers(ctx: *Context) anyerror!void {
     };
 
     const mod_val = try ctx.stack.pop();
+    defer container_backing.releaseValue(mod_val);
     const module = switch (mod_val) {
         .module => |m| m,
         else => {
@@ -586,8 +589,9 @@ fn nativeIsNative(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
 
     const name_val = try ctx.stack.pop();
+    defer container_backing.releaseValue(name_val);
     const name = switch (name_val) {
-        .symbol, .string => |s| s,
+        .symbol, .string => |s| s.bytes,
         else => {
             const type_name = helpers.valueTypeName(name_val);
             const msg = std.fmt.allocPrint(alloc, "expected symbol or string, got {s}", .{type_name}) catch "expected symbol or string";
@@ -603,6 +607,7 @@ fn nativeIsNative(ctx: *Context) anyerror!void {
     };
 
     const mod_val = try ctx.stack.pop();
+    defer container_backing.releaseValue(mod_val);
     const module = switch (mod_val) {
         .module => |m| m,
         else => {

@@ -260,13 +260,13 @@ pub fn writeValuePreview(val: Value, writer: anytype) !void {
         },
         .boolean => |b| try writer.writeAll(if (b) "t" else "f"),
         .string => |s| {
-            if (s.len <= 20) {
-                try writer.print("\"{s}\"", .{s});
+            if (s.bytes.len <= 20) {
+                try writer.print("\"{s}\"", .{s.bytes});
             } else {
-                try writer.print("\"{s}...\"", .{s[0..20]});
+                try writer.print("\"{s}...\"", .{s.bytes[0..20]});
             }
         },
-        .symbol => |s| try writer.print("{s}:", .{s}),
+        .symbol => |s| try writer.print("{s}:", .{s.bytes}),
         .array => |arr| try writer.print("<array:{d}>", .{arr.items.len}),
         .vector => |v| try writer.print("<vector:{d}>", .{v.list.items.len}),
         .byte_array => |b| try writer.print("<byte-array:{d}>", .{b.slice().len}),
@@ -1007,7 +1007,7 @@ test "formatStackPreview: mixed types" {
     defer stack.deinit();
     try stack.push(.{ .fixnum = 1 });
     try stack.push(.{ .boolean = true });
-    try stack.push(.{ .string = "hi" });
+    try stack.push(value_mod.stringValue("hi"));
 
     var buf: [256]u8 = undefined;
     var fbs = std.io.fixedBufferStream(&buf);
@@ -1032,20 +1032,20 @@ test "formatStackPreview: overflow with ellipsis" {
 test "writeValuePreview: string truncation" {
     var buf: [256]u8 = undefined;
     var fbs = std.io.fixedBufferStream(&buf);
-    try writeValuePreview(.{ .string = "this is a very long string that exceeds twenty" }, fbs.writer());
+    try writeValuePreview(value_mod.stringValue("this is a very long string that exceeds twenty"), fbs.writer());
     try std.testing.expectEqualStrings("\"this is a very long ...\"", fbs.getWritten());
 }
 
 test "writeValuePreview: short string" {
     var buf: [256]u8 = undefined;
     var fbs = std.io.fixedBufferStream(&buf);
-    try writeValuePreview(.{ .string = "short" }, fbs.writer());
+    try writeValuePreview(value_mod.stringValue("short"), fbs.writer());
     try std.testing.expectEqualStrings("\"short\"", fbs.getWritten());
 }
 
 test "writeValuePreview: symbol" {
     var buf: [256]u8 = undefined;
     var fbs = std.io.fixedBufferStream(&buf);
-    try writeValuePreview(.{ .symbol = "foo" }, fbs.writer());
+    try writeValuePreview(value_mod.symbolValue("foo"), fbs.writer());
     try std.testing.expectEqualStrings("foo:", fbs.getWritten());
 }

@@ -93,7 +93,7 @@ fn enumFromSymbolHelper(ctx: *Context) anyerror!void {
     const symbol_val = try ctx.stack.pop();
     defer container_backing.releaseValue(symbol_val);
     const variant_name = switch (symbol_val) {
-        .symbol => |s| s,
+        .symbol => |s| s.bytes,
         else => {
             helpers.setTypeMismatchError(ctx, "symbol", symbol_val);
             return error.TypeMismatch;
@@ -121,7 +121,7 @@ fn enumFromSymbolHelper(ctx: *Context) anyerror!void {
 
         const alloc = ctx.quotationAllocator();
         const inner = try alloc.create(Value);
-        inner.* = .{ .symbol = short_name };
+        inner.* = value_mod.symbolValue(short_name);
         try ctx.stack.push(.{ .tagged = .{ .tag = vtype, .inner = inner } });
         return;
     }
@@ -183,8 +183,10 @@ fn nativeDefineEnum(ctx: *Context) anyerror!void {
     };
 
     const name_val = try ctx.stack.pop();
+    defer container_backing.releaseValue(name_val);
+    // The name escapes into the long-lived TypeValue and word definitions.
     const enum_name = switch (name_val) {
-        .symbol => |s| s,
+        .symbol => |s| try alloc.dupe(u8, s.bytes),
         else => {
             helpers.setTypeMismatchError(ctx, "symbol", name_val);
             return error.TypeMismatch;
@@ -207,16 +209,18 @@ fn nativeDefineEnum(ctx: *Context) anyerror!void {
         while (vi < variants_array.len) {
             const variant_name_val = variants_array[vi];
             const raw_name = switch (variant_name_val) {
-                .symbol => |s| s,
+                .symbol => |s| s.bytes,
                 else => {
                     helpers.setTypeMismatchError(ctx, "symbol", variant_name_val);
                     return error.TypeMismatch;
                 },
             };
-            const bare_name = if (raw_name.len > 1 and raw_name[raw_name.len - 1] == ':')
+            // The variant name flows into the permanent descriptor and generated word bodies,
+            // which outlive the popped descriptor's collected values.
+            const bare_name = try alloc.dupe(u8, if (raw_name.len > 1 and raw_name[raw_name.len - 1] == ':')
                 raw_name[0 .. raw_name.len - 1]
             else
-                raw_name;
+                raw_name);
             if (vi + 1 >= variants_array.len) {
                 helpers.setErrorContext(ctx, "enum variant '{s}' is missing a type", .{raw_name});
                 return error.ParseError;
@@ -320,7 +324,7 @@ fn nativeDefineEnum(ctx: *Context) anyerror!void {
             try vtype_list.append(alloc, vtype);
 
             const inner = try alloc.create(Value);
-            inner.* = .{ .symbol = variant_sym };
+            inner.* = value_mod.symbolValue(variant_sym);
 
             const instrs = try alloc.alloc(Instruction, 1);
             instrs[0] = .{ .op = .{ .push_literal = .{ .tagged = .{ .tag = vtype, .inner = inner } } }, .line = 0 };
@@ -338,8 +342,8 @@ fn nativeDefineEnum(ctx: *Context) anyerror!void {
             try virtual.definePredicate(ctx, pred_name, vtype, markers_slice);
             try ctx.dispatch.registerNative(ctx.resolveDispatchId(">symbol").?, variant_tv, unary, enumVariantToSymbol);
 
-            try generated_words.append(alloc, .{ .string = full_name });
-            try generated_words.append(alloc, .{ .string = pred_name });
+            try generated_words.append(alloc, value_mod.stringValue(full_name));
+            try generated_words.append(alloc, value_mod.stringValue(pred_name));
         } else {
             // Data-carrying variant. Resolve the payload struct through the
             // base: a concrete base is the struct itself; a parameterized base
@@ -414,12 +418,12 @@ fn nativeDefineEnum(ctx: *Context) anyerror!void {
             try virtual.definePredicate(ctx, pred_name, vtype, markers_slice);
             try ctx.dispatch.registerNative(ctx.resolveDispatchId(">symbol").?, variant_tv, unary, enumDataVariantToSymbol);
 
-            try generated_words.append(alloc, .{ .string = wrap_name });
-            try generated_words.append(alloc, .{ .string = make_name_word });
-            try generated_words.append(alloc, .{ .string = unmake_name });
-            try generated_words.append(alloc, .{ .string = destruct_name });
-            try generated_words.append(alloc, .{ .string = to_hash_name });
-            try generated_words.append(alloc, .{ .string = pred_name });
+            try generated_words.append(alloc, value_mod.stringValue(wrap_name));
+            try generated_words.append(alloc, value_mod.stringValue(make_name_word));
+            try generated_words.append(alloc, value_mod.stringValue(unmake_name));
+            try generated_words.append(alloc, value_mod.stringValue(destruct_name));
+            try generated_words.append(alloc, value_mod.stringValue(to_hash_name));
+            try generated_words.append(alloc, value_mod.stringValue(pred_name));
         }
     }
 
@@ -465,9 +469,9 @@ fn nativeDefineEnum(ctx: *Context) anyerror!void {
         }, .{ .body = .{ .quotation = .{ .instructions = convert_instrs } } }, true);
     }
 
-    try generated_words.append(alloc, .{ .string = agg_pred_name });
-    try generated_words.append(alloc, .{ .string = convert_name });
-    try generated_words.append(alloc, .{ .string = try alloc.dupe(u8, enum_name) });
+    try generated_words.append(alloc, value_mod.stringValue(agg_pred_name));
+    try generated_words.append(alloc, value_mod.stringValue(convert_name));
+    try generated_words.append(alloc, value_mod.stringValue(try alloc.dupe(u8, enum_name)));
     const gw_slice = try generated_words.toOwnedSlice(alloc);
     enum_tv.generated_words = gw_slice;
     try ctx.registerTypeDescriptor(enum_name, enum_desc);
@@ -479,6 +483,7 @@ fn nativeDefineEnum(ctx: *Context) anyerror!void {
 /// Trampoline helper ( value enum-type-val -- bool )
 fn enumAggregatePredicateHelper(ctx: *Context) anyerror!void {
     const tv_val = try ctx.stack.pop();
+    defer container_backing.releaseValue(tv_val);
     const enum_tv_ptr = switch (tv_val) {
         .type_val => |tv| tv,
         else => {
@@ -504,7 +509,7 @@ fn nativeEnumOf(ctx: *Context) anyerror!void {
     switch (val) {
         .tagged => |t| {
             if (t.tag.parent_type) |pt| {
-                try ctx.stack.push(.{ .string = pt.name });
+                try ctx.stack.push(value_mod.stringValue(pt.name));
                 return;
             }
         },
@@ -516,8 +521,9 @@ fn nativeEnumOf(ctx: *Context) anyerror!void {
 /// enum-variants ( symbol -- array )
 fn nativeEnumVariants(ctx: *Context) anyerror!void {
     const name_val = try ctx.stack.pop();
+    defer container_backing.releaseValue(name_val);
     const enum_name = switch (name_val) {
-        .symbol => |s| s,
+        .symbol => |s| s.bytes,
         else => {
             helpers.setTypeMismatchError(ctx, "symbol", name_val);
             return error.TypeMismatch;
@@ -536,7 +542,7 @@ fn nativeEnumVariants(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
     const result = try alloc.alloc(Value, vtypes.len);
     for (vtypes, 0..) |vt, i| {
-        result[i] = .{ .symbol = vt.name };
+        result[i] = value_mod.symbolValue(vt.name);
     }
 
     try helpers.pushAdoptedArray(ctx, alloc, result);
@@ -598,13 +604,13 @@ fn nativeMatch(ctx: *Context) anyerror!void {
     while (i < branches.len) : (i += 2) {
         const key_val = branches[i];
         const is_default = switch (key_val) {
-            .symbol => |s| std.mem.eql(u8, s, "_"),
-            .string => |s| std.mem.eql(u8, s, "_"),
+            .symbol => |s| std.mem.eql(u8, s.bytes, "_"),
+            .string => |s| std.mem.eql(u8, s.bytes, "_"),
             else => false,
         };
         const key = switch (key_val) {
-            .symbol => |s| s,
-            .string => |s| if (std.mem.eql(u8, s, "_")) s else {
+            .symbol => |s| s.bytes,
+            .string => |s| if (std.mem.eql(u8, s.bytes, "_")) s.bytes else {
                 helpers.setErrorContext(ctx, "match branch key must be a symbol, got string", .{});
                 return error.TypeMismatch;
             },
@@ -753,13 +759,13 @@ fn nativeValidateMatchBlock(ctx: *Context) anyerror!void {
         // Key: symbol (variant name) or string "_" for default
         const key_val = arr[i];
         const is_default = switch (key_val) {
-            .symbol => |s| std.mem.eql(u8, s, "_"),
-            .string => |s| std.mem.eql(u8, s, "_"),
+            .symbol => |s| std.mem.eql(u8, s.bytes, "_"),
+            .string => |s| std.mem.eql(u8, s.bytes, "_"),
             else => false,
         };
         const key = switch (key_val) {
-            .symbol => |s| s,
-            .string => |s| s,
+            .symbol => |s| s.bytes,
+            .string => |s| s.bytes,
             else => {
                 helpers.setErrorContext(ctx, "match: expected symbol or quotation, got {s}", .{helpers.valueTypeName(key_val)});
                 return error.TypeMismatch;

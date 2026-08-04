@@ -21,19 +21,19 @@ const container_backing = @import("../container_backing.zig");
 fn nativeInspectGeneric(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
     defer container_backing.releaseValue(val);
-    const alloc = ctx.quotationAllocator();
     var buffer: std.ArrayListUnmanaged(u8) = .{};
-    try val.write(buffer.writer(alloc));
-    try ctx.stack.push(.{ .string = try buffer.toOwnedSlice(alloc) });
+    defer buffer.deinit(ctx.allocator);
+    try val.write(buffer.writer(ctx.allocator));
+    try helpers.pushOwnedString(ctx, try buffer.toOwnedSlice(ctx.allocator));
 }
 
 fn nativeAsStringGeneric(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
     defer container_backing.releaseValue(val);
-    const alloc = ctx.quotationAllocator();
     var buffer: std.ArrayListUnmanaged(u8) = .{};
-    try val.write(buffer.writer(alloc));
-    try ctx.stack.push(.{ .string = try buffer.toOwnedSlice(alloc) });
+    defer buffer.deinit(ctx.allocator);
+    try val.write(buffer.writer(ctx.allocator));
+    try helpers.pushOwnedString(ctx, try buffer.toOwnedSlice(ctx.allocator));
 }
 
 fn nativeAsStringPassthrough(ctx: *Context) anyerror!void {
@@ -42,12 +42,13 @@ fn nativeAsStringPassthrough(ctx: *Context) anyerror!void {
 
 fn nativeAsStringSymbol(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
-    try ctx.stack.push(.{ .string = val.symbol });
+    // The popped symbol's owning reference transfers into the pushed string, backing and all.
+    try ctx.stack.pushMoved(.{ .string = val.symbol });
 }
 
 fn nativeAsStringMarker(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
-    try ctx.stack.push(.{ .string = val.marker.name });
+    try ctx.stack.push(value_mod.stringValue(val.marker.name));
 }
 
 // =============================================================================
@@ -112,10 +113,10 @@ fn nativeInspect(ctx: *Context) anyerror!void {
 
     const val = try ctx.stack.pop();
     defer container_backing.releaseValue(val);
-    const alloc = ctx.quotationAllocator();
     var buffer: std.ArrayListUnmanaged(u8) = .{};
-    try val.write(buffer.writer(alloc));
-    try ctx.stack.push(.{ .string = try buffer.toOwnedSlice(alloc) });
+    defer buffer.deinit(ctx.allocator);
+    try val.write(buffer.writer(ctx.allocator));
+    try helpers.pushOwnedString(ctx, try buffer.toOwnedSlice(ctx.allocator));
 }
 
 /// >string ( value -- string )
@@ -124,10 +125,10 @@ fn nativeAsString(ctx: *Context) anyerror!void {
 
     const val = try ctx.stack.pop();
     defer container_backing.releaseValue(val);
-    const alloc = ctx.quotationAllocator();
     var buffer: std.ArrayListUnmanaged(u8) = .{};
-    try val.write(buffer.writer(alloc));
-    try ctx.stack.push(.{ .string = try buffer.toOwnedSlice(alloc) });
+    defer buffer.deinit(ctx.allocator);
+    try val.write(buffer.writer(ctx.allocator));
+    try helpers.pushOwnedString(ctx, try buffer.toOwnedSlice(ctx.allocator));
 }
 
 /// >symbol ( string -- symbol )
@@ -137,16 +138,17 @@ fn nativeToSymbol(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
     switch (val) {
         .string => |s| {
-            if (s.len == 0) return error.InvalidArgument;
-            if (s[0] == '"') return error.InvalidArgument;
-            for (s) |c| {
+            // The popped string's owning reference transfers into the pushed symbol on
+            // success; the error paths drop it instead.
+            errdefer container_backing.releaseValue(val);
+            if (s.bytes.len == 0) return error.InvalidArgument;
+            if (s.bytes[0] == '"') return error.InvalidArgument;
+            for (s.bytes) |c| {
                 if (c == ' ' or c == '\t' or c == '\n' or c == '\r') return error.InvalidArgument;
             }
-            try ctx.stack.push(.{ .symbol = s });
+            try ctx.stack.pushMoved(.{ .symbol = s });
         },
         else => {
-            // Only this arm releases. The `.string` arm hands its slice to the
-            // pushed symbol instead of dropping it.
             defer container_backing.releaseValue(val);
             helpers.setErrorHint(ctx, "use >string to convert a symbol to a string first");
             helpers.setTypeMismatchError(ctx, "string", val);
@@ -162,17 +164,18 @@ fn nativeToQuotation(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
 
     const val = try ctx.stack.pop();
+    defer container_backing.releaseValue(val);
     const name = switch (val) {
-        .string => |s| s,
-        .symbol => |s| s,
+        .string, .symbol => |s| s.bytes,
         else => {
             helpers.setTypeMismatchError(ctx, "string or symbol", val);
             return error.TypeMismatch;
         },
     };
 
+    // The instruction outlives the popped value.
     const instrs = try alloc.alloc(Instruction, 1);
-    instrs[0] = .{ .op = .{ .call_word = name }, .line = 0 };
+    instrs[0] = .{ .op = .{ .call_word = try alloc.dupe(u8, name) }, .line = 0 };
 
     try ctx.stack.push(.{ .quotation = .{ .instructions = instrs } });
 }
@@ -180,12 +183,13 @@ fn nativeToQuotation(ctx: *Context) anyerror!void {
 /// >bytes ( string -- byte-array )
 fn nativeToBytes(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
+    defer container_backing.releaseValue(val);
     switch (val) {
         .string => |s| {
             const alloc = ctx.quotationAllocator();
             const ba = ByteArray.create(alloc) catch return error.OutOfMemory;
-            ba.ensureTotalCapacity(alloc, s.len) catch return error.OutOfMemory;
-            for (s) |byte| {
+            ba.ensureTotalCapacity(alloc, s.bytes.len) catch return error.OutOfMemory;
+            for (s.bytes) |byte| {
                 ba.appendAssumeCapacity(byte);
             }
             try ctx.stack.push(.{ .byte_array = ba });
@@ -203,9 +207,8 @@ fn nativeBytesToString(ctx: *Context) anyerror!void {
     defer container_backing.releaseValue(val);
     switch (val) {
         .byte_array => |b| {
-            const alloc = ctx.quotationAllocator();
-            const result = alloc.dupe(u8, b.slice()) catch return error.OutOfMemory;
-            try ctx.stack.push(.{ .string = result });
+            const result = ctx.allocator.dupe(u8, b.slice()) catch return error.OutOfMemory;
+            try helpers.pushOwnedString(ctx, result);
         },
         else => {
             helpers.setTypeMismatchError(ctx, "byte-array", val);
@@ -217,13 +220,13 @@ fn nativeBytesToString(ctx: *Context) anyerror!void {
 /// uppercase ( str -- str )
 fn nativeUppercase(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
+    defer container_backing.releaseValue(val);
     switch (val) {
         .string => |s| {
-            const alloc = ctx.quotationAllocator();
-            const result = alloc.alloc(u8, s.len) catch return error.OutOfMemory;
-            @memcpy(result, s);
+            const result = ctx.allocator.alloc(u8, s.bytes.len) catch return error.OutOfMemory;
+            @memcpy(result, s.bytes);
             simd.uppercaseAscii(result);
-            try ctx.stack.push(.{ .string = result });
+            try helpers.pushOwnedString(ctx, result);
         },
         else => {
             helpers.setErrorHint(ctx, "use >string to convert to a string first");
@@ -236,13 +239,13 @@ fn nativeUppercase(ctx: *Context) anyerror!void {
 /// lowercase ( str -- str )
 fn nativeLowercase(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
+    defer container_backing.releaseValue(val);
     switch (val) {
         .string => |s| {
-            const alloc = ctx.quotationAllocator();
-            const result = alloc.alloc(u8, s.len) catch return error.OutOfMemory;
-            @memcpy(result, s);
+            const result = ctx.allocator.alloc(u8, s.bytes.len) catch return error.OutOfMemory;
+            @memcpy(result, s.bytes);
             simd.lowercaseAscii(result);
-            try ctx.stack.push(.{ .string = result });
+            try helpers.pushOwnedString(ctx, result);
         },
         else => {
             helpers.setErrorHint(ctx, "use >string to convert to a string first");
@@ -262,21 +265,48 @@ fn nativeToStringBase(ctx: *Context) anyerror!void {
     const base: u8 = @intCast(base_val);
 
     const val = try ctx.stack.pop();
+    defer container_backing.releaseValue(val);
     const alloc = ctx.quotationAllocator();
 
     switch (val) {
         .fixnum => |i| {
             var big = try BigIntManaged.initSet(alloc, i);
-            const str = try big.toConst().toStringAlloc(alloc, base, .lower);
-            try ctx.stack.push(.{ .string = str });
+            const str = try big.toConst().toStringAlloc(ctx.allocator, base, .lower);
+            try helpers.pushOwnedString(ctx, str);
         },
         .bignum => |b| {
-            const str = try b.toConst().toStringAlloc(alloc, base, .lower);
-            try ctx.stack.push(.{ .string = str });
+            const str = try b.toConst().toStringAlloc(ctx.allocator, base, .lower);
+            try helpers.pushOwnedString(ctx, str);
         },
         else => {
             helpers.setTypeMismatchError(ctx, "fixnum or bignum", val);
             return error.TypeMismatch;
         },
     }
+}
+
+test ">symbol transfers the popped string's backing to the symbol" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const bytes = try ctx.allocator.dupe(u8, "transfer");
+    try helpers.pushOwnedString(&ctx, bytes);
+    try nativeToSymbol(&ctx);
+
+    const sym = try ctx.stack.pop();
+    defer container_backing.releaseValue(sym);
+    try std.testing.expect(sym == .symbol);
+    try std.testing.expect(sym.symbol.backing != null);
+    try std.testing.expectEqualStrings("transfer", sym.symbol.bytes);
+}
+
+test "pushOwnedString hands the stack the only reference" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const bytes = try ctx.allocator.dupe(u8, "owned");
+    try helpers.pushOwnedString(&ctx, bytes);
+    const pay = try helpers.popString(&ctx);
+    defer container_backing.releaseValue(.{ .string = pay });
+    try std.testing.expectEqualStrings("owned", pay.bytes);
 }

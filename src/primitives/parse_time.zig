@@ -4,6 +4,7 @@ const parser = @import("../parser.zig");
 const tokenizer_mod = @import("../tokenizer.zig");
 const Token = tokenizer_mod.Token;
 const value_mod = @import("../value.zig");
+const container_backing = @import("../container_backing.zig");
 const Value = value_mod.Value;
 
 const helpers = @import("helpers.zig");
@@ -108,7 +109,7 @@ fn parseTokensUntilCore(ctx: *Context, delimiter: []const u8, mode: ParseMode) !
         }
 
         const token_copy = try alloc.dupe(u8, token);
-        try tokens.append(alloc, .{ .string = token_copy });
+        try tokens.append(alloc, value_mod.stringValue(token_copy));
     }
 
     if (!found_delimiter) return error.UnterminatedTokenScan;
@@ -134,12 +135,12 @@ fn resolveScalarLiteral(alloc: std.mem.Allocator, arena_alloc: std.mem.Allocator
 
     if (tokenizer_mod.parseString(token)) |s| {
         const s_copy = try parser.processEscapes(alloc, s);
-        return .{ .string = s_copy };
+        return value_mod.stringValue(s_copy);
     }
 
     if (token.len > 1 and token[token.len - 1] == ':') {
         const sym_copy = try alloc.dupe(u8, token[0 .. token.len - 1]);
-        return .{ .symbol = sym_copy };
+        return value_mod.symbolValue(sym_copy);
     }
 
     return null;
@@ -178,7 +179,9 @@ fn nativeOpenParen(ctx: *Context) anyerror!void {
 
 /// parse-until ( delimiter -- quotation )
 pub fn nativeParseUntil(ctx: *Context) anyerror!void {
-    const delimiter = try popString(ctx);
+    const delimiter_pay = try popString(ctx);
+    defer container_backing.releaseValue(.{ .string = delimiter_pay });
+    const delimiter = delimiter_pay.bytes;
 
     const tokenizer = ctx.parse_tokenizer.?;
 
@@ -194,7 +197,9 @@ pub fn nativeParseUntil(ctx: *Context) anyerror!void {
 /// placeholder carries only the body's parameters; the field/variant parser
 /// combines it with the adjacent base.
 fn nativeBindUntil(ctx: *Context) anyerror!void {
-    const delimiter = try popString(ctx);
+    const delimiter_pay = try popString(ctx);
+    defer container_backing.releaseValue(.{ .string = delimiter_pay });
+    const delimiter = delimiter_pay.bytes;
     const tokenizer = ctx.parse_tokenizer.?;
     const alloc = ctx.quotationAllocator();
 
@@ -225,22 +230,25 @@ fn nativeBindUntil(ctx: *Context) anyerror!void {
 /// Unlike parse-until, this does not parse tokens as instructions -- it returns them as literal
 /// strings, useful for syntax like `method{ type1 type2 }`.
 pub fn nativeParseTokensUntil(ctx: *Context) anyerror!void {
-    const delimiter = try popString(ctx);
-    const result = try parseTokensUntilCore(ctx, delimiter, .raw);
+    const delimiter_pay = try popString(ctx);
+    defer container_backing.releaseValue(.{ .string = delimiter_pay });
+    const result = try parseTokensUntilCore(ctx, delimiter_pay.bytes, .raw);
     try ctx.stack.pushMoved(result);
 }
 
 /// parse-values-until ( delimiter -- array )
 pub fn nativeParseValuesUntil(ctx: *Context) anyerror!void {
-    const delimiter = try popString(ctx);
-    const result = try parseTokensUntilCore(ctx, delimiter, .evaluate_parse_time);
+    const delimiter_pay = try popString(ctx);
+    defer container_backing.releaseValue(.{ .string = delimiter_pay });
+    const result = try parseTokensUntilCore(ctx, delimiter_pay.bytes, .evaluate_parse_time);
     try ctx.stack.pushMoved(result);
 }
 
 /// parse-types-until ( delimiter -- array )
 fn nativeParseTypesUntil(ctx: *Context) anyerror!void {
-    const delimiter = try popString(ctx);
-    const result = try parseTokensUntilCore(ctx, delimiter, .evaluate_parse_time_strict);
+    const delimiter_pay = try popString(ctx);
+    defer container_backing.releaseValue(.{ .string = delimiter_pay });
+    const result = try parseTokensUntilCore(ctx, delimiter_pay.bytes, .evaluate_parse_time_strict);
     try ctx.stack.pushMoved(result);
 }
 
@@ -251,7 +259,7 @@ fn nativeParseToken(ctx: *Context) anyerror!void {
     while (tokenizer.nextOrYield()) |tok| {
         if (isSkippable(tok.kind)) continue;
         const token_copy = try alloc.dupe(u8, tok.text);
-        try ctx.stack.push(.{ .string = token_copy });
+        try ctx.stack.push(value_mod.stringValue(token_copy));
         return;
     }
     return error.UnterminatedTokenScan;
@@ -265,7 +273,7 @@ fn nativePeekToken(ctx: *Context) anyerror!void {
         if (isSkippable(tok.kind)) continue;
         tokenizer.peeked = tok;
         const token_copy = try alloc.dupe(u8, tok.text);
-        try ctx.stack.push(.{ .string = token_copy });
+        try ctx.stack.push(value_mod.stringValue(token_copy));
         return;
     }
     return error.UnterminatedTokenScan;
@@ -274,9 +282,10 @@ fn nativePeekToken(ctx: *Context) anyerror!void {
 /// resolve-literal ( string -- value true | string false )
 fn nativeResolveLiteral(ctx: *Context) anyerror!void {
     const token = try popString(ctx);
+    defer container_backing.releaseValue(.{ .string = token });
     const alloc = ctx.quotationAllocator();
 
-    if (try resolveScalarLiteral(alloc, ctx.arena.allocator(), token)) |val| {
+    if (try resolveScalarLiteral(alloc, ctx.arena.allocator(), token.bytes)) |val| {
         try ctx.stack.push(val);
         try ctx.stack.push(.{ .boolean = true });
     } else {
@@ -287,8 +296,10 @@ fn nativeResolveLiteral(ctx: *Context) anyerror!void {
 
 /// emit-call ( symbol -- )
 fn nativeEmitCall(ctx: *Context) anyerror!void {
-    const name = switch (try ctx.stack.pop()) {
-        .symbol => |s| s,
+    const val = try ctx.stack.pop();
+    defer container_backing.releaseValue(val);
+    const name = switch (val) {
+        .symbol => |s| s.bytes,
         else => |v| {
             helpers.setTypeMismatchError(ctx, "symbol", v);
             return error.TypeMismatch;
@@ -302,7 +313,8 @@ fn nativeEmitCall(ctx: *Context) anyerror!void {
         }
     }
 
-    try ctx.parse_time_deferred_emissions.append(ctx.allocator, .{ .call = name });
+    // The deferred emission outlives the popped value.
+    try ctx.parse_time_deferred_emissions.append(ctx.allocator, .{ .call = try ctx.quotationAllocator().dupe(u8, name) });
 }
 
 /// emit-body ( quotation -- )

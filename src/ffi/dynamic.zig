@@ -265,7 +265,7 @@ fn raisePosixError(ctx: *Context, e: c_int) anyerror!void {
 fn stashPosixError(ctx: *Context, alloc: std.mem.Allocator, hash: *HashTable, e: c_int, name: []const u8) anyerror!void {
     const hash_alloc = hash.header.allocator;
     try hash.map.put(hash_alloc, try hash_alloc.dupe(u8, "errno"), .{ .fixnum = @as(i64, e) });
-    try hash.map.put(hash_alloc, try hash_alloc.dupe(u8, "name"), .{ .symbol = name });
+    try hash.map.put(hash_alloc, try hash_alloc.dupe(u8, "name"), value_mod.symbolValue(name));
 
     const data_ptr = try alloc.create(Value);
     data_ptr.* = .{ .hash = hash };
@@ -298,7 +298,9 @@ fn stashPosixError(ctx: *Context, alloc: std.mem.Allocator, hash: *HashTable, e:
 fn nativeLibOpen(ctx: *Context) anyerror!void {
     if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "lib-open");
     const alloc = ctx.arena.allocator();
-    const name = try helpers.popString(ctx);
+    const name_str = try helpers.popString(ctx);
+    defer container_backing.releaseValue(.{ .string = name_str });
+    const name = name_str.bytes;
 
     const is_static = for (ctx.static_ffi_libs) |lib| {
         if (std.mem.eql(u8, lib, name)) break true;
@@ -356,7 +358,9 @@ fn nativeLibOpen(ctx: *Context) anyerror!void {
 fn nativeLibSymbol(ctx: *Context) anyerror!void {
     if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "lib-symbol");
     const alloc = ctx.arena.allocator();
-    const name = try helpers.popString(ctx);
+    const name_str = try helpers.popString(ctx);
+    defer container_backing.releaseValue(.{ .string = name_str });
+    const name = name_str.bytes;
     const lib_resource = try helpers.popResource(ctx);
     try error_mapping.ensureResourceOpen(lib_resource);
 
@@ -408,6 +412,7 @@ fn nativeBindSig(ctx: *Context) anyerror!void {
     // it is parsed into the native FfiSignature before this release runs.
     defer container_backing.releaseValue(sig_val);
     const ffi_fn_val = try ctx.stack.pop();
+    errdefer container_backing.releaseValue(ffi_fn_val);
 
     // Validate ffi-fn resource
     const ffi_fn = switch (ffi_fn_val) {
@@ -449,7 +454,7 @@ fn nativeBindSig(ctx: *Context) anyerror!void {
     // Extract return type from field 1
     const return_type_val = si.fields[1];
     const return_type_str = switch (return_type_val) {
-        .string => |s| s,
+        .string => |s| s.bytes,
         else => {
             helpers.setTypeMismatchError(ctx, "string for return-type", return_type_val);
             return error.TypeMismatch;
@@ -462,7 +467,7 @@ fn nativeBindSig(ctx: *Context) anyerror!void {
 
     for (params_array, 0..) |param_val, i| {
         const token = switch (param_val) {
-            .string => |s| s,
+            .string => |s| s.bytes,
             else => {
                 helpers.setTypeMismatchError(ctx, "string for param type", param_val);
                 return error.TypeMismatch;
@@ -537,7 +542,7 @@ fn nativeBindSig(ctx: *Context) anyerror!void {
     };
 
     ffi_fn.ffi_signature = sig;
-    try ctx.stack.push(ffi_fn_val);
+    try ctx.stack.pushMoved(ffi_fn_val);
 }
 
 /// Parse the ffi-sig `errno` field into an ErrnoSentinel. `f` (boolean false)
@@ -551,10 +556,10 @@ fn parseErrnoSentinelField(ctx: *Context, val: Value) !ErrnoSentinel {
             return error.FFITypeMismatch;
         },
         .symbol => |s| {
-            if (std.mem.eql(u8, s, "neg1")) return .neg1;
-            if (std.mem.eql(u8, s, "null")) return .null_ptr;
-            if (std.mem.eql(u8, s, "neg")) return .neg;
-            helpers.setErrorContext(ctx, "invalid FFI errno sentinel '{s}': expected neg1, null, or neg", .{s});
+            if (std.mem.eql(u8, s.bytes, "neg1")) return .neg1;
+            if (std.mem.eql(u8, s.bytes, "null")) return .null_ptr;
+            if (std.mem.eql(u8, s.bytes, "neg")) return .neg;
+            helpers.setErrorContext(ctx, "invalid FFI errno sentinel '{s}': expected neg1, null, or neg", .{s.bytes});
             return error.FFITypeMismatch;
         },
         else => {
@@ -575,9 +580,9 @@ fn parseCapabilityField(ctx: *Context, val: Value) !Capability {
             return error.FFITypeMismatch;
         },
         .symbol => |s| {
-            if (std.mem.eql(u8, s, "none")) return .none;
-            return SandboxSpec.fromString(s) orelse {
-                helpers.setErrorContext(ctx, "unknown FFI capability '{s}'", .{s});
+            if (std.mem.eql(u8, s.bytes, "none")) return .none;
+            return SandboxSpec.fromString(s.bytes) orelse {
+                helpers.setErrorContext(ctx, "unknown FFI capability '{s}'", .{s.bytes});
                 return error.FFITypeMismatch;
             };
         },
@@ -632,7 +637,9 @@ fn resolveStructType(ctx: *const Context, token: []const u8) ?FfiType {
     return FfiType{
         .tag = .struct_type,
         .struct_layout = layout_ptr,
-        .struct_name = token,
+        // The signature outlives the sig struct's tokens, so the name references the type's
+        // own long-lived VirtualType name rather than borrowing the token.
+        .struct_name = if (layout_ptr.vtype) |vt| vt.name else null,
     };
 }
 
@@ -669,6 +676,7 @@ fn nativeFfiCall(ctx: *Context) anyerror!void {
     const alloc = ctx.arena.allocator();
 
     const ffi_fn_val = try ctx.stack.pop();
+    defer container_backing.releaseValue(ffi_fn_val);
     const ffi_fn = switch (ffi_fn_val) {
         .resource => |r| r,
         else => {
@@ -715,6 +723,9 @@ fn nativeFfiCall(ctx: *Context) anyerror!void {
         pop_i -= 1;
         arg_vals[pop_i] = try ctx.stack.pop();
     }
+    // Marshaling dupes every escaping byte onto the arena, so the popped
+    // argument references can drop once the call has completed.
+    defer container_backing.releaseValues(arg_vals);
 
     var arg_types = try alloc.alloc([*c]c_ffi.ffi_type, nargs);
     var arg_slots = try alloc.alloc(ArgSlot, nargs);
@@ -883,7 +894,7 @@ fn marshalVariadicArg(ctx: *Context, promoted_type: FfiType, val: Value, vararg_
         },
         .cstring => {
             const str = switch (val) {
-                .string => |s| s,
+                .string => |s| s.bytes,
                 else => {
                     helpers.setErrorContext(ctx, "variadic argument {d}: expected string, got {s}", .{ vararg_index + 1, helpers.valueTypeName(val) });
                     return error.FFITypeMismatch;
@@ -953,6 +964,9 @@ fn nativeFfiCallVariadic(ctx: *Context, ffi_fn: *Resource, sig: *const FfiSignat
         pop_i -= 1;
         fixed_vals[pop_i] = try ctx.stack.pop();
     }
+    // Marshaling dupes every escaping byte onto the arena, so the popped
+    // argument references can drop once the call has completed.
+    defer container_backing.releaseValues(fixed_vals);
 
     // Allocate combined arrays for all args (fixed + variadic)
     var arg_types = try alloc.alloc([*c]c_ffi.ffi_type, n_total);
@@ -1130,7 +1144,7 @@ fn marshalArg(ctx: *Context, param_type: FfiType, val: Value, arg_index: usize) 
         },
         .cstring, .cstring_retained => {
             const str = switch (val) {
-                .string => |s| s,
+                .string => |s| s.bytes,
                 else => return argTypeMismatch(ctx, "string for cstring", val, arg_index),
             };
             const cstr = try alloc.dupeZ(u8, str);
@@ -1300,32 +1314,32 @@ fn marshalReturn(ctx: *Context, return_type: FfiType, ret: *const ReturnStorage,
         .cstring => {
             const cptr: [*c]const u8 = @ptrCast(ret.as_ptr);
             if (cptr == null) {
-                try ctx.stack.push(.{ .string = "" });
+                try ctx.stack.push(value_mod.stringValue(""));
             } else {
                 const span = std.mem.span(cptr);
-                const str = try alloc.dupe(u8, span);
-                try ctx.stack.push(.{ .string = str });
+                const str = try ctx.allocator.dupe(u8, span);
+                try helpers.pushOwnedString(ctx, str);
             }
         },
         .cstring_owned => {
             const cptr: [*c]u8 = @ptrCast(ret.as_ptr);
             if (cptr == null) {
-                try ctx.stack.push(.{ .string = "" });
+                try ctx.stack.push(value_mod.stringValue(""));
             } else {
                 const span = std.mem.span(cptr);
-                const str = try alloc.dupe(u8, span);
+                const str = try ctx.allocator.dupe(u8, span);
                 std.c.free(cptr);
-                try ctx.stack.push(.{ .string = str });
+                try helpers.pushOwnedString(ctx, str);
             }
         },
         .cstring_retained => {
             const cptr: [*c]const u8 = @ptrCast(ret.as_ptr);
             if (cptr == null) {
-                try ctx.stack.push(.{ .string = "" });
+                try ctx.stack.push(value_mod.stringValue(""));
             } else {
                 const span = std.mem.span(cptr);
-                const str = try alloc.dupe(u8, span);
-                try ctx.stack.push(.{ .string = str });
+                const str = try ctx.allocator.dupe(u8, span);
+                try helpers.pushOwnedString(ctx, str);
             }
         },
         .ptr => {
@@ -1386,22 +1400,22 @@ fn marshalOutParam(ctx: *Context, param_type: FfiType, slot: *const ArgSlot) !vo
         .cstring, .cstring_retained => {
             const cptr: [*c]const u8 = @ptrCast(slot.ptr_val);
             if (cptr == null) {
-                try ctx.stack.push(.{ .string = "" });
+                try ctx.stack.push(value_mod.stringValue(""));
             } else {
                 const span = std.mem.span(cptr);
-                const str = try alloc.dupe(u8, span);
-                try ctx.stack.push(.{ .string = str });
+                const str = try ctx.allocator.dupe(u8, span);
+                try helpers.pushOwnedString(ctx, str);
             }
         },
         .cstring_owned => {
             const cptr: [*c]u8 = @ptrCast(slot.ptr_val);
             if (cptr == null) {
-                try ctx.stack.push(.{ .string = "" });
+                try ctx.stack.push(value_mod.stringValue(""));
             } else {
                 const span = std.mem.span(cptr);
-                const str = try alloc.dupe(u8, span);
+                const str = try ctx.allocator.dupe(u8, span);
                 std.c.free(cptr);
-                try ctx.stack.push(.{ .string = str });
+                try helpers.pushOwnedString(ctx, str);
             }
         },
         .void_type, .struct_type => unreachable,
@@ -1444,6 +1458,7 @@ fn nativeFfiPtrLenToBytes(ctx: *Context) anyerror!void {
     if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "ffi-ptr+len>bytes");
     const n_val = try helpers.popFixnum(ctx);
     const resource_val = try ctx.stack.pop();
+    defer container_backing.releaseValue(resource_val);
 
     const resource = switch (resource_val) {
         .resource => |r| r,
@@ -1486,6 +1501,7 @@ fn nativeFfiPtrLenToBorrowedBytes(ctx: *Context) anyerror!void {
     if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "ffi-ptr+len>borrowed-bytes");
     const n_val = try helpers.popFixnum(ctx);
     const resource_val = try ctx.stack.pop();
+    defer container_backing.releaseValue(resource_val);
 
     const resource = switch (resource_val) {
         .resource => |r| r,
@@ -1821,7 +1837,9 @@ fn nativeBindClose(ctx: *Context) anyerror!void {
     const alloc = ctx.arena.allocator();
 
     const ffi_fn_val = try ctx.stack.pop();
+    defer container_backing.releaseValue(ffi_fn_val);
     const resource_val = try ctx.stack.pop();
+    defer container_backing.releaseValue(resource_val);
 
     const resource = switch (resource_val) {
         .resource => |r| r,
@@ -1978,6 +1996,7 @@ fn callbackTrampoline(
         const result_val = ctx.stack.pop() catch {
             return callbackFail(ud, args, ret, error.StackUnderflow, false);
         };
+        defer container_backing.releaseValue(result_val);
         marshalCallbackReturn(ret, ud.sig.return_type, result_val) catch |err| {
             return callbackFail(ud, args, ret, err, false);
         };
@@ -2007,11 +2026,11 @@ fn unmarshalArg(ctx: *Context, param_type: FfiType, arg_ptr: *anyopaque) !void {
         .cstring, .cstring_retained => {
             const val: *const [*c]const u8 = @ptrCast(@alignCast(arg_ptr));
             if (val.* == null) {
-                try ctx.stack.push(.{ .string = "" });
+                try ctx.stack.push(value_mod.stringValue(""));
             } else {
                 const span = std.mem.span(val.*);
-                const str = try alloc.dupe(u8, span);
-                try ctx.stack.push(.{ .string = str });
+                const str = try ctx.allocator.dupe(u8, span);
+                try helpers.pushOwnedString(ctx, str);
             }
         },
         .ptr => {
@@ -2171,7 +2190,7 @@ fn nativeFfiCallback(ctx: *Context) anyerror!void {
 
     const return_type_val = si.fields[1];
     const return_type_str = switch (return_type_val) {
-        .string => |s| s,
+        .string => |s| s.bytes,
         else => {
             helpers.setTypeMismatchError(ctx, "string for return-type", return_type_val);
             return error.TypeMismatch;
@@ -2181,7 +2200,7 @@ fn nativeFfiCallback(ctx: *Context) anyerror!void {
     // Check for variadic tokens before parsing
     for (params_array) |pv| {
         const tok = switch (pv) {
-            .string => |s| s,
+            .string => |s| s.bytes,
             else => continue,
         };
         if (signature.parseVariadicToken(tok) != null) {
@@ -2193,7 +2212,7 @@ fn nativeFfiCallback(ctx: *Context) anyerror!void {
     var param_types = try alloc.alloc(FfiType, params_array.len);
     for (params_array, 0..) |param_val, i| {
         const token = switch (param_val) {
-            .string => |s| s,
+            .string => |s| s.bytes,
             else => {
                 helpers.setTypeMismatchError(ctx, "string for param type", param_val);
                 return error.TypeMismatch;

@@ -1,6 +1,7 @@
 const Context = @import("../context.zig").Context;
 const value_mod = @import("../value.zig");
 const Value = value_mod.Value;
+const container_backing = @import("../container_backing.zig");
 const Resource = value_mod.Resource;
 const Primitive = @import("types.zig").Primitive;
 const helpers = @import("helpers.zig");
@@ -52,10 +53,12 @@ fn nativeResourcePredicate(ctx: *Context) anyerror!void {
 /// <test-resource> ( name -- resource )
 fn nativeTestResource(ctx: *Context) anyerror!void {
     const name = try helpers.popString(ctx);
+    defer container_backing.releaseValue(.{ .string = name });
     const alloc = ctx.arena.allocator();
     const r = try alloc.create(Resource);
     r.* = .{
-        .type_name = name,
+        // The resource outlives the popped value.
+        .type_name = try alloc.dupe(u8, name.bytes),
         .ptr = @ptrCast(r),
         .closed = false,
         .close_fn = .none,

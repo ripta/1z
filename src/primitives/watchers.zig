@@ -11,6 +11,8 @@ const Primitive = @import("types.zig").Primitive;
 
 const helpers = @import("helpers.zig");
 
+const container_backing = @import("../container_backing.zig");
+
 const error_mapping = @import("error_mapping.zig");
 
 const streams = @import("streams.zig");
@@ -482,7 +484,9 @@ const PollingWatcher = struct {
 };
 
 fn nativeWatcherCreate(ctx: *Context) anyerror!void {
-    const mode = try helpers.popSymbol(ctx);
+    const mode_val = try helpers.popSymbol(ctx);
+    defer container_backing.releaseValue(.{ .symbol = mode_val });
+    const mode = mode_val.bytes;
     const handle = try ctx.quotationAllocator().create(WatcherHandle);
     errdefer ctx.quotationAllocator().destroy(handle);
 
@@ -528,12 +532,16 @@ fn nativeWatcherCreate(ctx: *Context) anyerror!void {
 
 fn nativeWatcherAdd(ctx: *Context) anyerror!void {
     const flags_val = try ctx.stack.pop();
+    defer container_backing.releaseValue(flags_val);
+    // Both watcher backends dupe the path onto their own allocator, so the
+    // popped bytes do not escape.
     const path = try helpers.popString(ctx);
+    defer container_backing.releaseValue(.{ .string = path });
     const watcher_resource = try popWatcherResource(ctx, "watcher-add");
     const watcher = watcherFromResource(watcher_resource);
     const mask = try parseMask(ctx, flags_val);
 
-    const watch_id = watcher.vtable.addWatch(watcher.ptr, path, if (mask.empty()) WatchEventMask.all() else mask) catch |err| {
+    const watch_id = watcher.vtable.addWatch(watcher.ptr, path.bytes, if (mask.empty()) WatchEventMask.all() else mask) catch |err| {
         helpers.setErrorContext(ctx, "watcher-add: {s}", .{@errorName(err)});
         return switch (err) {
             error.AccessDenied => error.PermissionDenied,
@@ -554,6 +562,20 @@ fn nativeWatcherRemove(ctx: *Context) anyerror!void {
         helpers.setErrorContext(ctx, "watcher-remove: unknown watch id {d}", .{watch_id});
         return error.KeyNotFound;
     };
+}
+
+/// Store a fresh heap-backed copy of `path` under `key` in an event hash. The value's
+/// creation reference transfers to the map slot; the errdefers cover a failed put.
+fn putOwnedPath(ctx: *Context, hash: *value_mod.HashTable, key: []const u8, path: []const u8) !void {
+    const copy = try ctx.allocator.dupe(u8, path);
+    const val = value_mod.ownedStringValue(ctx.allocator, copy) catch |e| {
+        ctx.allocator.free(copy);
+        return e;
+    };
+    errdefer container_backing.releaseValue(val);
+    const key_copy = try hash.header.allocator.dupe(u8, key);
+    errdefer hash.header.allocator.free(key_copy);
+    try hash.map.put(hash.header.allocator, key_copy, val);
 }
 
 fn nativeWatcherRead(ctx: *Context) anyerror!void {
@@ -581,16 +603,15 @@ fn nativeWatcherRead(ctx: *Context) anyerror!void {
             try helpers.checkCancellation(ctx);
         }
 
-        const alloc = ctx.quotationAllocator();
         const hash = try HashTable.create(ctx.allocator);
         errdefer hash.header.release();
         const hash_alloc = hash.header.allocator;
 
         try hash.map.put(hash_alloc, try hash_alloc.dupe(u8, "watch-id"), .{ .fixnum = event.watch_id });
-        try hash.map.put(hash_alloc, try hash_alloc.dupe(u8, "kind"), .{ .symbol = event.kind });
-        try hash.map.put(hash_alloc, try hash_alloc.dupe(u8, "path"), .{ .string = try alloc.dupe(u8, event.path) });
+        try hash.map.put(hash_alloc, try hash_alloc.dupe(u8, "kind"), value_mod.symbolValue(event.kind));
+        try putOwnedPath(ctx, hash, "path", event.path);
         if (event.new_path) |new_path| {
-            try hash.map.put(hash_alloc, try hash_alloc.dupe(u8, "new-path"), .{ .string = try alloc.dupe(u8, new_path) });
+            try putOwnedPath(ctx, hash, "new-path", new_path);
         } else {
             try hash.map.put(hash_alloc, try hash_alloc.dupe(u8, "new-path"), .{ .boolean = false });
         }
@@ -602,6 +623,7 @@ fn nativeWatcherRead(ctx: *Context) anyerror!void {
 
 fn nativeWatcherProbe(ctx: *Context) anyerror!void {
     const path = try helpers.popString(ctx);
+    defer container_backing.releaseValue(.{ .string = path });
     if (!supports_event_watch) {
         try ctx.stack.push(.{ .boolean = false });
         return;
@@ -614,7 +636,7 @@ fn nativeWatcherProbe(ctx: *Context) anyerror!void {
     };
     defer watcher.deinit();
 
-    const watch_id = watcher.addWatch(path, WatchEventMask.all()) catch {
+    const watch_id = watcher.addWatch(path.bytes, WatchEventMask.all()) catch {
         try ctx.stack.push(.{ .boolean = false });
         return;
     };
@@ -706,12 +728,12 @@ fn parseMask(ctx: *Context, val: value_mod.Value) !WatchEventMask {
             helpers.setTypeMismatchError(ctx, "array, symbol, or f", val);
             return error.TypeMismatch;
         },
-        .symbol => |sym| try parseMaskSymbol(ctx, sym),
+        .symbol => |sym| try parseMaskSymbol(ctx, sym.bytes),
         .array => |arr| blk: {
             var mask = WatchEventMask{};
             for (arr.items) |item| {
                 const sym = switch (item) {
-                    .symbol => |s| s,
+                    .symbol => |s| s.bytes,
                     else => {
                         helpers.setTypeMismatchError(ctx, "symbol", item);
                         return error.TypeMismatch;
@@ -857,7 +879,7 @@ test "watcher-create creates watcher resource" {
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
 
-    try ctx.stack.push(.{ .symbol = "event" });
+    try ctx.stack.push(value_mod.symbolValue("event"));
     try nativeWatcherCreate(&ctx);
 
     const resource = try helpers.popResource(&ctx);
@@ -881,7 +903,7 @@ test "watcher-add and watcher-read observe file modification" {
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
 
-    try ctx.stack.push(.{ .symbol = "event" });
+    try ctx.stack.push(value_mod.symbolValue("event"));
     try nativeWatcherCreate(&ctx);
     const resource = try helpers.popResource(&ctx);
     defer {
@@ -889,9 +911,9 @@ test "watcher-add and watcher-read observe file modification" {
     }
 
     const flag_items = try ctx.quotationAllocator().alloc(value_mod.Value, 1);
-    flag_items[0] = .{ .symbol = "modified" };
+    flag_items[0] = value_mod.symbolValue("modified");
     try ctx.stack.push(.{ .resource = resource });
-    try ctx.stack.push(.{ .string = try ctx.quotationAllocator().dupe(u8, path) });
+    try ctx.stack.push(value_mod.stringValue(try ctx.quotationAllocator().dupe(u8, path)));
     try helpers.pushAdoptedArray(&ctx, ctx.quotationAllocator(), flag_items);
     try nativeWatcherAdd(&ctx);
     const watch_id = try helpers.popFixnum(&ctx);
@@ -904,8 +926,8 @@ test "watcher-add and watcher-read observe file modification" {
     defer hash.header.release();
 
     try std.testing.expectEqual(watch_id, hash.map.get("watch-id").?.fixnum);
-    try std.testing.expectEqualStrings("modified", hash.map.get("kind").?.symbol);
-    try std.testing.expectEqualStrings(path, hash.map.get("path").?.string);
+    try std.testing.expectEqualStrings("modified", hash.map.get("kind").?.symbol.bytes);
+    try std.testing.expectEqualStrings(path, hash.map.get("path").?.string.bytes);
 
     try ctx.stack.push(.{ .resource = resource });
     try ctx.stack.push(.{ .fixnum = watch_id });
@@ -925,7 +947,7 @@ test "watcher-probe reports true for existing file" {
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
 
-    try ctx.stack.push(.{ .string = try ctx.quotationAllocator().dupe(u8, path) });
+    try ctx.stack.push(value_mod.stringValue(try ctx.quotationAllocator().dupe(u8, path)));
     try nativeWatcherProbe(&ctx);
     const result = try helpers.popBoolean(&ctx);
     try std.testing.expect(result);

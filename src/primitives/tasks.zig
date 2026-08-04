@@ -278,7 +278,10 @@ fn nativeSpawn(ctx: *Context) anyerror!void {
 fn nativeSpawnNamed(ctx: *Context) anyerror!void {
     if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "spawn-named");
 
-    const name = try helpers.popString(ctx);
+    const name_pay = try helpers.popString(ctx);
+    defer container_backing.releaseValue(.{ .string = name_pay });
+    // The task keeps its display name for its whole lifetime.
+    const name = try ctx.quotationAllocator().dupe(u8, name_pay.bytes);
     const callable = try helpers.popCallableWithScope(ctx);
 
     const scheduler = ctx.scheduler orelse {
@@ -839,8 +842,8 @@ pub fn deepCopyValue(val: Value, alloc: Allocator, longlived: Allocator) DeepCop
             break :blk .{ .bignum = try value_mod.boxBigInt(alloc, cloned) };
         },
 
-        .string => |s| .{ .string = try alloc.dupe(u8, s) },
-        .symbol => |s| .{ .symbol = try alloc.dupe(u8, s) },
+        .string => |s| value_mod.stringValue(try alloc.dupe(u8, s.bytes)),
+        .symbol => |s| value_mod.symbolValue(try alloc.dupe(u8, s.bytes)),
 
         .array => |arr| blk: {
             if (container_backing.memoShareable(&arr.header, val, longlived)) {
@@ -1254,7 +1257,7 @@ fn nativeContainerLimits(ctx: *Context) anyerror!void {
     const hash_alloc = hash.header.allocator;
 
     hash.map.put(hash_alloc, try hash_alloc.dupe(u8, "cpu-count"), .{ .fixnum = @intCast(cpu.count) }) catch return error.OutOfMemory;
-    hash.map.put(hash_alloc, try hash_alloc.dupe(u8, "cpu-source"), .{ .symbol = cpuSourceSymbol(cpu.source) }) catch return error.OutOfMemory;
+    hash.map.put(hash_alloc, try hash_alloc.dupe(u8, "cpu-source"), value_mod.symbolValue(cpuSourceSymbol(cpu.source))) catch return error.OutOfMemory;
     const cpu_raw: Value = if (cpu.raw_quota != null and cpu.raw_period != null) blk: {
         const inner = value_mod.HashTable.create(ctx.allocator) catch return error.OutOfMemory;
         errdefer inner.header.release();
@@ -1270,7 +1273,7 @@ fn nativeContainerLimits(ctx: *Context) anyerror!void {
     };
 
     hash.map.put(hash_alloc, try hash_alloc.dupe(u8, "memory-cap"), .{ .fixnum = @intCast(mem.cap) }) catch return error.OutOfMemory;
-    hash.map.put(hash_alloc, try hash_alloc.dupe(u8, "memory-source"), .{ .symbol = memSourceSymbol(mem.source) }) catch return error.OutOfMemory;
+    hash.map.put(hash_alloc, try hash_alloc.dupe(u8, "memory-source"), value_mod.symbolValue(memSourceSymbol(mem.source))) catch return error.OutOfMemory;
     const mem_raw: Value = if (mem.raw) |r| .{ .fixnum = @intCast(r) } else .{ .unit = {} };
     hash.map.put(hash_alloc, try hash_alloc.dupe(u8, "memory-raw"), mem_raw) catch return error.OutOfMemory;
 
@@ -1502,7 +1505,7 @@ test "deepCopyValue: string-bearing array is copied, not shared" {
     defer arena.deinit();
 
     const items = try testing.allocator.alloc(Value, 1);
-    items[0] = .{ .string = "s" };
+    items[0] = value_mod.stringValue("s");
     const arr = try value_mod.Array.fromOwnedSlice(testing.allocator, items);
     defer container_backing.releaseValue(.{ .array = arr });
 
@@ -1535,7 +1538,7 @@ test "deepCopyValue: string-bearing hash is copied, not shared" {
     const h = try value_mod.HashTable.create(testing.allocator);
     defer container_backing.releaseValue(.{ .hash = h });
     const h_alloc = h.header.allocator;
-    try h.map.put(h_alloc, try h_alloc.dupe(u8, "k"), .{ .string = "v" });
+    try h.map.put(h_alloc, try h_alloc.dupe(u8, "k"), value_mod.stringValue("v"));
 
     const copied = try deepCopyValue(.{ .hash = h }, arena.allocator(), testing.allocator);
     try testing.expect(copied.hash != h);
@@ -1595,7 +1598,7 @@ test "deepCopyValue: a scalar-parameterized tag does not exempt string contents 
     const h = try value_mod.HashTable.create(testing.allocator);
     defer container_backing.releaseValue(.{ .hash = h });
     const h_alloc = h.header.allocator;
-    try h.map.put(h_alloc, try h_alloc.dupe(u8, "k"), .{ .string = "v" });
+    try h.map.put(h_alloc, try h_alloc.dupe(u8, "k"), value_mod.stringValue("v"));
 
     const fixnum_tv = value_mod.TypeValue{ .name = "fixnum", .descriptor = null };
     var params = [_]*const value_mod.TypeValue{&fixnum_tv};

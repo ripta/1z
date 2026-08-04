@@ -1628,9 +1628,10 @@ fn runEval(
         const out = &stdout.interface;
 
         const inspected = ctx.stack.pop() catch return 2;
+        defer container_backing.releaseValue(inspected);
         switch (inspected) {
             .string => |s| {
-                out.writeAll(s) catch {};
+                out.writeAll(s.bytes) catch {};
                 out.writeAll("\n") catch {};
             },
             else => {
@@ -1731,7 +1732,7 @@ fn runTest(ctx: *Context, file_path: []const u8, err_writer: anytype) u8 {
         err_writer.flush() catch {};
         return 2;
     };
-    ctx.stack.push(.{ .string = path_owned }) catch {
+    ctx.stack.push(value_mod.stringValue(path_owned)) catch {
         err_writer.writeAll("Error: out of memory\n") catch {};
         err_writer.flush() catch {};
         return 2;
@@ -4181,7 +4182,7 @@ fn writeInspectReport(w: anytype, fields: AotInspectFields) !void {
 }
 
 fn repl(ctx: *Context, verbosity: Verbosity, max_memory_bytes: usize) void {
-    ctx.setPragma("redefinition-arity-mismatch", .{ .string = "warning" }) catch {};
+    ctx.setPragma("redefinition-arity-mismatch", value_mod.stringValue("warning")) catch {};
 
     const stdout_file: File = .stdout();
     var stdout_buf: [4096]u8 = undefined;

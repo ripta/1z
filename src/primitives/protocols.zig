@@ -160,8 +160,10 @@ fn nativeDefineProtocol(ctx: *Context) anyerror!void {
     }
 
     const name_val = try ctx.stack.pop();
+    // createProtocolDescriptor dupes the name, so the popped symbol releases here.
+    defer container_backing.releaseValue(name_val);
     const protocol_name = switch (name_val) {
-        .symbol => |s| s,
+        .symbol => |s| s.bytes,
         else => {
             helpers.setTypeMismatchError(ctx, "symbol", name_val);
             return error.TypeMismatch;
@@ -177,7 +179,9 @@ fn nativeDefineProtocol(ctx: *Context) anyerror!void {
     word_markers[0] = @constCast(&markers_mod.parse_time_marker);
     word_markers[1] = @constCast(&markers_mod.const_marker);
 
-    try ctx.defineWord(protocol_name, .{
+    // The dictionary borrows its key, so key the word on the descriptor's
+    // duped copy of the name rather than the released payload's bytes.
+    try ctx.defineWord(descriptor.name, .{
         .name = descriptor.name,
         .parse_time = true,
         .markers = word_markers,
@@ -193,8 +197,11 @@ fn nativeDefineProtocol(ctx: *Context) anyerror!void {
 /// protocol obligation while a module is still loading.
 fn protocolCheckHelper(ctx: *Context) anyerror!void {
     const desc_val = try ctx.stack.pop();
-    const type_name = switch (try ctx.stack.pop()) {
-        .symbol => |s| s,
+    defer container_backing.releaseValue(desc_val);
+    const name_val = try ctx.stack.pop();
+    defer container_backing.releaseValue(name_val);
+    const type_name = switch (name_val) {
+        .symbol => |s| s.bytes,
         else => {
             helpers.setErrorContext(ctx, "protocol validation expects a type name (symbol) on the stack", .{});
             return error.TypeMismatch;
@@ -204,8 +211,9 @@ fn protocolCheckHelper(ctx: *Context) anyerror!void {
     switch (desc_val) {
         .protocol_descriptor => |descriptor| {
             if (ctx.in_module_load) {
+                // The obligation outlives the popped value.
                 try ctx.protocol_obligations.append(ctx.allocator, .{
-                    .type_name = type_name,
+                    .type_name = try ctx.quotationAllocator().dupe(u8, type_name),
                     .constraint = .{ .protocol = descriptor },
                 });
                 return;
@@ -215,7 +223,7 @@ fn protocolCheckHelper(ctx: *Context) anyerror!void {
         .constraint_combinator => |cc| {
             if (ctx.in_module_load) {
                 try ctx.protocol_obligations.append(ctx.allocator, .{
-                    .type_name = type_name,
+                    .type_name = try ctx.quotationAllocator().dupe(u8, type_name),
                     .constraint = .{ .combination = cc },
                 });
                 return;
@@ -236,8 +244,11 @@ fn protocolCheckHelper(ctx: *Context) anyerror!void {
 /// steady-state path is a single hash lookup either way.
 fn nativeSatisfies(ctx: *Context) anyerror!void {
     const desc_val = try ctx.stack.pop();
-    const type_name = switch (try ctx.stack.pop()) {
-        .symbol => |s| s,
+    defer container_backing.releaseValue(desc_val);
+    const name_val = try ctx.stack.pop();
+    defer container_backing.releaseValue(name_val);
+    const type_name = switch (name_val) {
+        .symbol => |s| s.bytes,
         else => {
             helpers.setErrorContext(ctx, "satisfies? expects a type name (symbol) on the stack", .{});
             return error.TypeMismatch;
@@ -487,7 +498,7 @@ test "typeSatisfiesConstraintSameTypeOnly skips cross-type methods at load time"
     };
     const outputs = [_]stack_effect_mod.StackEffectParam{.{ .name = "result" }};
     const effect = StackEffect{ .inputs = &inputs, .outputs = &outputs };
-    const methods = [_]Value{ .{ .symbol = "scale-by" }, .{ .stack_effect = effect } };
+    const methods = [_]Value{ value_mod.symbolValue("scale-by"), .{ .stack_effect = effect } };
     const scaleable = try ctx.createProtocolDescriptor("scaleable", &methods);
 
     const proto_el: value_mod.ConstraintCombinator.Element = .{ .protocol = scaleable };

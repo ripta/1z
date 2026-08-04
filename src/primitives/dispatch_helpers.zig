@@ -569,7 +569,7 @@ pub fn satisfiesAndDispatch(
 pub fn protocolRequiresMethod(descriptor: *const ProtocolDescriptor, method_name: []const u8) bool {
     for (descriptor.methods) |entry| {
         switch (entry) {
-            .symbol => |s| if (std.mem.eql(u8, s, method_name)) return true,
+            .symbol => |s| if (std.mem.eql(u8, s.bytes, method_name)) return true,
             else => {},
         }
     }
@@ -775,7 +775,8 @@ test "tryDispatchGeneric dispatches unary method for native type" {
     // Method should have executed (inspect converts fixnum to string)
     try std.testing.expectEqual(@as(usize, 1), ctx.stack.depth());
     const top = try ctx.stack.pop();
-    try std.testing.expectEqualStrings("42", top.string);
+    defer container_backing.releaseValue(top);
+    try std.testing.expectEqualStrings("42", top.string.bytes);
 }
 
 test "tryDispatchGeneric tries binary before unary" {
@@ -975,7 +976,9 @@ test "tryDispatchGenericWithPic caches unary dispatch" {
     try ctx.stack.push(.{ .fixnum = 42 });
     const result = try tryDispatchGenericById(&ctx, dispatch_id, &cache);
     try std.testing.expect(result);
-    try std.testing.expectEqualStrings("42", (try ctx.stack.pop()).string);
+    const popped = try ctx.stack.pop();
+    defer container_backing.releaseValue(popped);
+    try std.testing.expectEqualStrings("42", popped.string.bytes);
 
     // Cache should record unary dispatch (type_b is unary_sentinel)
     try std.testing.expectEqual(@as(u8, 1), cache.count);
@@ -1006,7 +1009,7 @@ test "satisfiesAndDispatch dispatches a satisfying type" {
         false,
     );
 
-    const descriptor = try ctx.createProtocolDescriptor("describable", &[_]Value{.{ .symbol = "describe" }});
+    const descriptor = try ctx.createProtocolDescriptor("describable", &[_]Value{value_mod.symbolValue("describe")});
 
     try ctx.stack.push(.{ .fixnum = 42 });
     const frames_before = ctx.call_stack.items.len;
@@ -1016,7 +1019,9 @@ test "satisfiesAndDispatch dispatches a satisfying type" {
     // out, leaving the call stack balanced.
     try std.testing.expectEqual(frames_before, ctx.call_stack.items.len);
     try std.testing.expectEqual(@as(usize, 1), ctx.stack.depth());
-    try std.testing.expectEqualStrings("42", (try ctx.stack.pop()).string);
+    const popped = try ctx.stack.pop();
+    defer container_backing.releaseValue(popped);
+    try std.testing.expectEqualStrings("42", popped.string.bytes);
 }
 
 test "satisfiesAndDispatch raises protocol-error for a non-satisfying type" {
@@ -1036,7 +1041,7 @@ test "satisfiesAndDispatch raises protocol-error for a non-satisfying type" {
         false,
     );
 
-    const descriptor = try ctx.createProtocolDescriptor("describable", &[_]Value{.{ .symbol = "describe" }});
+    const descriptor = try ctx.createProtocolDescriptor("describable", &[_]Value{value_mod.symbolValue("describe")});
 
     try ctx.stack.push(.{ .boolean = true });
     const frames_before = ctx.call_stack.items.len;
@@ -1056,7 +1061,7 @@ test "satisfiesAndDispatch reaches a method registered after a failed check" {
 
     const fixnum_tv = ctx.lookupBuiltinTypeValue("fixnum").?;
     const did = try defineGenericForTest(&ctx, "describe");
-    const descriptor = try ctx.createProtocolDescriptor("describable", &[_]Value{.{ .symbol = "describe" }});
+    const descriptor = try ctx.createProtocolDescriptor("describable", &[_]Value{value_mod.symbolValue("describe")});
 
     // No method yet: the check fails and memoizes the negative answer.
     try ctx.stack.push(.{ .fixnum = 42 });
@@ -1076,7 +1081,9 @@ test "satisfiesAndDispatch reaches a method registered after a failed check" {
 
     try ctx.stack.push(.{ .fixnum = 42 });
     try satisfiesAndDispatch(&ctx, did, .{ .protocol = descriptor }, .unary, ctx.boundedDispatchTraceName(descriptor), 0);
-    try std.testing.expectEqualStrings("42", (try ctx.stack.pop()).string);
+    const popped = try ctx.stack.pop();
+    defer container_backing.releaseValue(popped);
+    try std.testing.expectEqualStrings("42", popped.string.bytes);
 }
 
 test "satisfiesAndDispatch handles a binary satisfying pair" {
@@ -1095,7 +1102,7 @@ test "satisfiesAndDispatch handles a binary satisfying pair" {
         false,
     );
 
-    const descriptor = try ctx.createProtocolDescriptor("comparable", &[_]Value{.{ .symbol = "cmp" }});
+    const descriptor = try ctx.createProtocolDescriptor("comparable", &[_]Value{value_mod.symbolValue("cmp")});
 
     try ctx.stack.push(.{ .fixnum = 3 });
     try ctx.stack.push(.{ .fixnum = 5 });
@@ -1112,7 +1119,7 @@ fn genericMarkers() [1]*Marker {
 }
 
 test "boundedDispatchFor: unary generic bounded by a requiring protocol" {
-    const pd = ProtocolDescriptor{ .name = "flyable", .methods = &[_]Value{.{ .symbol = "soar" }}, .protocol_id = 0 };
+    const pd = ProtocolDescriptor{ .name = "flyable", .methods = &[_]Value{value_mod.symbolValue("soar")}, .protocol_id = 0 };
     const effect = StackEffect{
         .inputs = &[_]StackEffectParam{.{ .name = "x", .type_annotation = .{ .protocol = &pd } }},
         .outputs = &[_]StackEffectParam{.{ .name = "y" }},
@@ -1124,7 +1131,7 @@ test "boundedDispatchFor: unary generic bounded by a requiring protocol" {
 }
 
 test "boundedDispatchFor: binary generic with one protocol on both operands" {
-    const pd = ProtocolDescriptor{ .name = "comparable", .methods = &[_]Value{.{ .symbol = "cmp" }}, .protocol_id = 0 };
+    const pd = ProtocolDescriptor{ .name = "comparable", .methods = &[_]Value{value_mod.symbolValue("cmp")}, .protocol_id = 0 };
     const effect = StackEffect{
         .inputs = &[_]StackEffectParam{
             .{ .name = "a", .type_annotation = .{ .protocol = &pd } },
@@ -1139,7 +1146,7 @@ test "boundedDispatchFor: binary generic with one protocol on both operands" {
 }
 
 test "boundedDispatchFor: non-generic word returns null" {
-    const pd = ProtocolDescriptor{ .name = "flyable", .methods = &[_]Value{.{ .symbol = "soar" }}, .protocol_id = 0 };
+    const pd = ProtocolDescriptor{ .name = "flyable", .methods = &[_]Value{value_mod.symbolValue("soar")}, .protocol_id = 0 };
     const effect = StackEffect{
         .inputs = &[_]StackEffectParam{.{ .name = "x", .type_annotation = .{ .protocol = &pd } }},
         .outputs = &[_]StackEffectParam{.{ .name = "y" }},
@@ -1149,7 +1156,7 @@ test "boundedDispatchFor: non-generic word returns null" {
 }
 
 test "boundedDispatchFor: protocol not requiring the generic returns null" {
-    const pd = ProtocolDescriptor{ .name = "flyable", .methods = &[_]Value{.{ .symbol = "fly" }}, .protocol_id = 0 };
+    const pd = ProtocolDescriptor{ .name = "flyable", .methods = &[_]Value{value_mod.symbolValue("fly")}, .protocol_id = 0 };
     const effect = StackEffect{
         .inputs = &[_]StackEffectParam{.{ .name = "x", .type_annotation = .{ .protocol = &pd } }},
         .outputs = &[_]StackEffectParam{.{ .name = "y" }},
@@ -1160,8 +1167,8 @@ test "boundedDispatchFor: protocol not requiring the generic returns null" {
 }
 
 test "boundedDispatchFor: mixed protocols return null" {
-    const fly = ProtocolDescriptor{ .name = "flyable", .methods = &[_]Value{.{ .symbol = "go" }}, .protocol_id = 0 };
-    const swim = ProtocolDescriptor{ .name = "swimmable", .methods = &[_]Value{.{ .symbol = "go" }}, .protocol_id = 1 };
+    const fly = ProtocolDescriptor{ .name = "flyable", .methods = &[_]Value{value_mod.symbolValue("go")}, .protocol_id = 0 };
+    const swim = ProtocolDescriptor{ .name = "swimmable", .methods = &[_]Value{value_mod.symbolValue("go")}, .protocol_id = 1 };
     const effect = StackEffect{
         .inputs = &[_]StackEffectParam{
             .{ .name = "a", .type_annotation = .{ .protocol = &fly } },
@@ -1184,7 +1191,7 @@ test "boundedDispatchFor: concrete-type annotation returns null" {
 }
 
 test "boundedDispatchFor: more than two inputs returns null" {
-    const pd = ProtocolDescriptor{ .name = "p", .methods = &[_]Value{.{ .symbol = "m" }}, .protocol_id = 0 };
+    const pd = ProtocolDescriptor{ .name = "p", .methods = &[_]Value{value_mod.symbolValue("m")}, .protocol_id = 0 };
     const effect = StackEffect{
         .inputs = &[_]StackEffectParam{
             .{ .name = "a", .type_annotation = .{ .protocol = &pd } },
@@ -1198,7 +1205,7 @@ test "boundedDispatchFor: more than two inputs returns null" {
 }
 
 test "boundedDispatchFor: unannotated input returns null" {
-    const pd = ProtocolDescriptor{ .name = "p", .methods = &[_]Value{.{ .symbol = "m" }}, .protocol_id = 0 };
+    const pd = ProtocolDescriptor{ .name = "p", .methods = &[_]Value{value_mod.symbolValue("m")}, .protocol_id = 0 };
     const effect = StackEffect{
         .inputs = &[_]StackEffectParam{
             .{ .name = "a", .type_annotation = .{ .protocol = &pd } },
@@ -1214,7 +1221,7 @@ test "protocolRequiresMethod: skips stack-effect entries" {
     const empty = StackEffect{ .inputs = &.{}, .outputs = &.{} };
     const pd = ProtocolDescriptor{
         .name = "p",
-        .methods = &[_]Value{ .{ .symbol = "m" }, .{ .stack_effect = empty }, .{ .symbol = "n" } },
+        .methods = &[_]Value{ value_mod.symbolValue("m"), .{ .stack_effect = empty }, value_mod.symbolValue("n") },
         .protocol_id = 0,
     };
     try std.testing.expect(protocolRequiresMethod(&pd, "m"));
@@ -1223,8 +1230,8 @@ test "protocolRequiresMethod: skips stack-effect entries" {
 }
 
 test "combinatorGuaranteesMethod: intersection needs one guaranteeing element" {
-    const requires_m = ProtocolDescriptor{ .name = "a", .methods = &[_]Value{.{ .symbol = "m" }}, .protocol_id = 0 };
-    const requires_other = ProtocolDescriptor{ .name = "b", .methods = &[_]Value{.{ .symbol = "n" }}, .protocol_id = 1 };
+    const requires_m = ProtocolDescriptor{ .name = "a", .methods = &[_]Value{value_mod.symbolValue("m")}, .protocol_id = 0 };
+    const requires_other = ProtocolDescriptor{ .name = "b", .methods = &[_]Value{value_mod.symbolValue("n")}, .protocol_id = 1 };
     const cc = ConstraintCombinator{
         .kind = .intersection,
         .elements = &[_]ConstraintCombinator.Element{ .{ .protocol = &requires_m }, .{ .protocol = &requires_other } },
@@ -1237,9 +1244,9 @@ test "combinatorGuaranteesMethod: intersection needs one guaranteeing element" {
 }
 
 test "combinatorGuaranteesMethod: union needs every element to guarantee" {
-    const requires_m = ProtocolDescriptor{ .name = "a", .methods = &[_]Value{.{ .symbol = "m" }}, .protocol_id = 0 };
-    const also_m = ProtocolDescriptor{ .name = "b", .methods = &[_]Value{.{ .symbol = "m" }}, .protocol_id = 1 };
-    const not_m = ProtocolDescriptor{ .name = "c", .methods = &[_]Value{.{ .symbol = "n" }}, .protocol_id = 2 };
+    const requires_m = ProtocolDescriptor{ .name = "a", .methods = &[_]Value{value_mod.symbolValue("m")}, .protocol_id = 0 };
+    const also_m = ProtocolDescriptor{ .name = "b", .methods = &[_]Value{value_mod.symbolValue("m")}, .protocol_id = 1 };
+    const not_m = ProtocolDescriptor{ .name = "c", .methods = &[_]Value{value_mod.symbolValue("n")}, .protocol_id = 2 };
 
     const both = ConstraintCombinator{
         .kind = .@"union",
@@ -1258,7 +1265,7 @@ test "combinatorGuaranteesMethod: union needs every element to guarantee" {
 
 test "combinatorGuaranteesMethod: concrete-type element never guarantees" {
     var tv = value_mod.TypeValue{ .name = "fixnum", .descriptor = null };
-    const requires_m = ProtocolDescriptor{ .name = "a", .methods = &[_]Value{.{ .symbol = "m" }}, .protocol_id = 0 };
+    const requires_m = ProtocolDescriptor{ .name = "a", .methods = &[_]Value{value_mod.symbolValue("m")}, .protocol_id = 0 };
     // A union with a type element can never guarantee the method for the type arm.
     const u = ConstraintCombinator{
         .kind = .@"union",
@@ -1276,8 +1283,8 @@ test "combinatorGuaranteesMethod: concrete-type element never guarantees" {
 }
 
 test "boundedDispatchFor: combinator intersection bound by a guaranteeing element" {
-    const requires_m = ProtocolDescriptor{ .name = "a", .methods = &[_]Value{.{ .symbol = "m" }}, .protocol_id = 0 };
-    const requires_n = ProtocolDescriptor{ .name = "b", .methods = &[_]Value{.{ .symbol = "n" }}, .protocol_id = 1 };
+    const requires_m = ProtocolDescriptor{ .name = "a", .methods = &[_]Value{value_mod.symbolValue("m")}, .protocol_id = 0 };
+    const requires_n = ProtocolDescriptor{ .name = "b", .methods = &[_]Value{value_mod.symbolValue("n")}, .protocol_id = 1 };
     const cc = ConstraintCombinator{
         .kind = .intersection,
         .elements = &[_]ConstraintCombinator.Element{ .{ .protocol = &requires_m }, .{ .protocol = &requires_n } },
@@ -1294,8 +1301,8 @@ test "boundedDispatchFor: combinator intersection bound by a guaranteeing elemen
 }
 
 test "boundedDispatchFor: non-guaranteeing union combinator returns null" {
-    const requires_m = ProtocolDescriptor{ .name = "a", .methods = &[_]Value{.{ .symbol = "m" }}, .protocol_id = 0 };
-    const requires_n = ProtocolDescriptor{ .name = "b", .methods = &[_]Value{.{ .symbol = "n" }}, .protocol_id = 1 };
+    const requires_m = ProtocolDescriptor{ .name = "a", .methods = &[_]Value{value_mod.symbolValue("m")}, .protocol_id = 0 };
+    const requires_n = ProtocolDescriptor{ .name = "b", .methods = &[_]Value{value_mod.symbolValue("n")}, .protocol_id = 1 };
     const cc = ConstraintCombinator{
         .kind = .@"union",
         .elements = &[_]ConstraintCombinator.Element{ .{ .protocol = &requires_m }, .{ .protocol = &requires_n } },
@@ -1311,7 +1318,7 @@ test "boundedDispatchFor: non-guaranteeing union combinator returns null" {
 }
 
 test "boundedDispatchFor: mixed protocol and combinator bounds return null" {
-    const requires_m = ProtocolDescriptor{ .name = "a", .methods = &[_]Value{.{ .symbol = "m" }}, .protocol_id = 0 };
+    const requires_m = ProtocolDescriptor{ .name = "a", .methods = &[_]Value{value_mod.symbolValue("m")}, .protocol_id = 0 };
     const cc = ConstraintCombinator{
         .kind = .intersection,
         .elements = &[_]ConstraintCombinator.Element{.{ .protocol = &requires_m }},
@@ -1333,7 +1340,7 @@ test "satisfiesAndDispatch raises protocol-error for a non-satisfying combinator
     defer ctx.deinit();
 
     const did = try defineGenericForTest(&ctx, "bump-it");
-    const addable = try ctx.createProtocolDescriptor("addable", &[_]Value{.{ .symbol = "bump-it" }});
+    const addable = try ctx.createProtocolDescriptor("addable", &[_]Value{value_mod.symbolValue("bump-it")});
     const cc = try ctx.createConstraintCombinator(.intersection, &[_]ConstraintCombinator.Element{.{ .protocol = addable }});
 
     // fixnum has no registered `bump-it`, so it does not satisfy `addable`.

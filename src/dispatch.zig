@@ -520,8 +520,8 @@ fn testDescriptor(_: []const u8) !*value_mod.TypeDescriptor {
 test "dispatchTypeName returns correct name for native types" {
     try std.testing.expectEqualStrings("fixnum", dispatchTypeName(.{ .fixnum = 42 }));
     try std.testing.expectEqualStrings("boolean", dispatchTypeName(.{ .boolean = true }));
-    try std.testing.expectEqualStrings("string", dispatchTypeName(.{ .string = "hello" }));
-    try std.testing.expectEqualStrings("symbol", dispatchTypeName(.{ .symbol = "foo" }));
+    try std.testing.expectEqualStrings("string", dispatchTypeName(value_mod.stringValue("hello")));
+    try std.testing.expectEqualStrings("symbol", dispatchTypeName(value_mod.symbolValue("foo")));
     var empty_arr = value_mod.Array{ .header = undefined, .items = &.{}, .storage = .static };
     try std.testing.expectEqualStrings("array", dispatchTypeName(.{ .array = &empty_arr }));
 }
@@ -962,8 +962,8 @@ test "builtinTypeName matches dispatchTypeName for static variants" {
             .fixnum => .{ .fixnum = 0 },
             .float => .{ .float = 0.0 },
             .boolean => .{ .boolean = false },
-            .string => .{ .string = "" },
-            .symbol => .{ .symbol = "" },
+            .string => value_mod.stringValue(""),
+            .symbol => value_mod.symbolValue(""),
             .array => .{ .array = &empty_arr },
             .doc_string => .{ .doc_string = "" },
             .unit => .{ .unit = {} },
@@ -987,10 +987,10 @@ test "dispatchDescriptor returns correct descriptor for builtin types" {
     const bool_desc = dispatchDescriptor(.{ .boolean = true }, &ctx);
     try std.testing.expectEqual(bool_desc, ctx.lookupBuiltinTypeValue("boolean").?.descriptor.?);
 
-    const string_desc = dispatchDescriptor(.{ .string = "hello" }, &ctx);
+    const string_desc = dispatchDescriptor(value_mod.stringValue("hello"), &ctx);
     try std.testing.expectEqual(string_desc, ctx.lookupBuiltinTypeValue("string").?.descriptor.?);
 
-    const symbol_desc = dispatchDescriptor(.{ .symbol = "foo" }, &ctx);
+    const symbol_desc = dispatchDescriptor(value_mod.symbolValue("foo"), &ctx);
     try std.testing.expectEqual(symbol_desc, ctx.lookupBuiltinTypeValue("symbol").?.descriptor.?);
 
     const unit_desc = dispatchDescriptor(.{ .unit = {} }, &ctx);
@@ -1066,8 +1066,8 @@ test "dispatchDescriptor matches builtin type descriptors" {
             .fixnum => .{ .fixnum = 0 },
             .float => .{ .float = 0.0 },
             .boolean => .{ .boolean = false },
-            .string => .{ .string = "" },
-            .symbol => .{ .symbol = "" },
+            .string => value_mod.stringValue(""),
+            .symbol => value_mod.symbolValue(""),
             .array => .{ .array = &empty_arr },
             .doc_string => .{ .doc_string = "" },
             .unit => .{ .unit = {} },

@@ -100,8 +100,10 @@ fn nativeDefineStruct(ctx: *Context) anyerror!void {
     const field_types_slice = parsed_fields.types;
 
     const name_val = try ctx.stack.pop();
+    defer container_backing.releaseValue(name_val);
+    // The name escapes into the long-lived StructType and TypeValue.
     const name = switch (name_val) {
-        .symbol => |s| s,
+        .symbol => |s| try alloc.dupe(u8, s.bytes),
         else => {
             helpers.setTypeMismatchError(ctx, "symbol", name_val);
             return error.TypeMismatch;
@@ -116,7 +118,7 @@ fn nativeDefineStruct(ctx: *Context) anyerror!void {
     if (raw_desc_map.map.get("src-loc")) |sl_val| {
         if (sl_val == .array and sl_val.array.items.len == 3) {
             const parts = sl_val.array.items;
-            if (parts[0] == .string) src_loc.file = try alloc.dupe(u8, parts[0].string);
+            if (parts[0] == .string) src_loc.file = try alloc.dupe(u8, parts[0].string.bytes);
             if (parts[1] == .fixnum) src_loc.line = @intCast(parts[1].fixnum);
             if (parts[2] == .fixnum) src_loc.column = @intCast(parts[2].fixnum);
         }
@@ -209,20 +211,20 @@ fn nativeDefineStruct(ctx: *Context) anyerror!void {
 
     // Build generated-words reverse index
     var generated_words = std.ArrayListUnmanaged(Value){};
-    try generated_words.append(alloc, .{ .string = name });
-    try generated_words.append(alloc, .{ .string = make_name });
-    try generated_words.append(alloc, .{ .string = convert_name });
-    try generated_words.append(alloc, .{ .string = unmake_name });
-    try generated_words.append(alloc, .{ .string = to_hash_name });
-    try generated_words.append(alloc, .{ .string = pred_name });
+    try generated_words.append(alloc, value_mod.stringValue(name));
+    try generated_words.append(alloc, value_mod.stringValue(make_name));
+    try generated_words.append(alloc, value_mod.stringValue(convert_name));
+    try generated_words.append(alloc, value_mod.stringValue(unmake_name));
+    try generated_words.append(alloc, value_mod.stringValue(to_hash_name));
+    try generated_words.append(alloc, value_mod.stringValue(pred_name));
     for (fields_slice) |field| {
         const gw_name = try std.fmt.allocPrint(alloc, "{s}>>", .{field});
-        try generated_words.append(alloc, .{ .string = gw_name });
+        try generated_words.append(alloc, value_mod.stringValue(gw_name));
     }
     if (has_mutable) {
         for (fields_slice) |field| {
             const gw_name = try std.fmt.allocPrint(alloc, ">>{s}", .{field});
-            try generated_words.append(alloc, .{ .string = gw_name });
+            try generated_words.append(alloc, value_mod.stringValue(gw_name));
         }
     }
     const gw_slice = try generated_words.toOwnedSlice(alloc);

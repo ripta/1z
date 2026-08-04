@@ -4998,7 +4998,7 @@ test "collectCompositeQuotations collects a quotation in a struct_instance field
     };
     var st = value_mod.StructType{ .name = "lint-rule", .fields = &.{ "id", "check" } };
     var fields = [_]Value{
-        .{ .string = "rule-id" },
+        value_mod.stringValue("rule-id"),
         .{ .quotation = .{ .instructions = inner_instrs } },
     };
     var si = value_mod.StructInstance{ .struct_type = &st, .fields = &fields };
@@ -5032,7 +5032,7 @@ test "collectDispatchContainerQuotationsPromoting promotes the check field quota
     };
     var st = value_mod.StructType{ .name = "lint-rule", .fields = &.{ "id", "check" } };
     var fields = [_]Value{
-        .{ .string = "rule-id" },
+        value_mod.stringValue("rule-id"),
         .{ .quotation = .{ .instructions = check_instrs } },
     };
     var si = value_mod.StructInstance{ .struct_type = &st, .fields = &fields };
@@ -5084,7 +5084,7 @@ test "collectDispatchContainerQuotationsPromoting promotes the match key quotati
     };
     const hash = try value_mod.HashTable.create(allocator);
     defer hash.header.release();
-    try hash.map.put(allocator, try allocator.dupe(u8, "kind"), .{ .symbol = "word" });
+    try hash.map.put(allocator, try allocator.dupe(u8, "kind"), value_mod.symbolValue("word"));
     try hash.map.put(allocator, try allocator.dupe(u8, "match"), .{ .quotation = .{ .instructions = match_instrs } });
     const outer_instrs = &[_]Instruction{
         .{ .op = .{ .push_literal = .{ .hash = hash } }, .line = 1 },
@@ -5129,7 +5129,7 @@ test "collectDispatchContainerQuotationsPromoting does not promote a struct_inst
     };
     var st = value_mod.StructType{ .name = "lint-rule", .fields = &.{ "id", "fix" } };
     var fields = [_]Value{
-        .{ .string = "rule-id" },
+        value_mod.stringValue("rule-id"),
         .{ .quotation = .{ .instructions = other_instrs } },
     };
     var si = value_mod.StructInstance{ .struct_type = &st, .fields = &fields };
@@ -5312,7 +5312,7 @@ test "collectBranchTableQuotationsPromoting promotes an unchecked-match table in
         .{ .op = .{ .call_word = "match-arm-callee" }, .line = 1 },
     };
     const table_elems = [_]Value{
-        .{ .symbol = "cons" },
+        value_mod.symbolValue("cons"),
         .{ .quotation = .{ .instructions = arm_instrs } },
     };
     var table_arr = value_mod.Array{ .header = undefined, .items = &table_elems, .storage = .static };

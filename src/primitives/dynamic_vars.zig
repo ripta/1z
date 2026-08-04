@@ -26,12 +26,14 @@ pub const primitives = [_]Primitive{
 /// make-parameter ( name: quot -- param )
 pub fn nativeMakeParameter(ctx: *Context) anyerror!void {
     const default_quot = try popQuotation(ctx);
+    // The parameter keeps its own dupe of the name, so the popped bytes do not escape.
     const name = try popSymbol(ctx);
+    defer container_backing.releaseValue(.{ .symbol = name });
 
     const alloc = ctx.quotationAllocator();
     const param = alloc.create(Parameter) catch return error.OutOfMemory;
     param.* = .{
-        .name = alloc.dupe(u8, name) catch return error.OutOfMemory,
+        .name = alloc.dupe(u8, name.bytes) catch return error.OutOfMemory,
         .default_quotation = default_quot,
     };
 
@@ -76,12 +78,14 @@ pub fn nativeDefineParameter(ctx: *Context) anyerror!void {
     };
 
     const doc_val: ?[]const u8 = if (desc_map.map.get("doc")) |v| switch (v) {
-        .doc_string, .string => |s| s,
+        .doc_string => |s| s,
+        .string => |s| s.bytes,
         else => null,
     } else null;
 
     const name = try popSymbol(ctx);
-    const name_copy = try alloc.dupe(u8, name);
+    defer container_backing.releaseValue(.{ .symbol = name });
+    const name_copy = try alloc.dupe(u8, name.bytes);
 
     const param = try alloc.create(Parameter);
     param.* = .{
@@ -119,6 +123,7 @@ pub fn nativeDefineParameter(ctx: *Context) anyerror!void {
 /// Searches parameter frames from top (innermost) to bottom (outermost).
 pub fn nativeGet(ctx: *Context) anyerror!void {
     const param_val = try ctx.stack.pop();
+    defer container_backing.releaseValue(param_val);
     const param = switch (param_val) {
         .parameter => |p| p,
         else => {
@@ -138,6 +143,7 @@ pub fn nativeGet(ctx: *Context) anyerror!void {
 pub fn nativeWithParameter(ctx: *Context) anyerror!void {
     const body_quot = try popQuotation(ctx);
     const param_val = try ctx.stack.pop();
+    defer container_backing.releaseValue(param_val);
     const param = switch (param_val) {
         .parameter => |p| p,
         else => {

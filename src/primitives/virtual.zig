@@ -132,8 +132,10 @@ fn nativeDefineVirtual(ctx: *Context) anyerror!void {
     };
 
     const name_val = try ctx.stack.pop();
+    defer container_backing.releaseValue(name_val);
+    // The name escapes into the long-lived VirtualType and TypeValue.
     const name = switch (name_val) {
-        .symbol => |s| s,
+        .symbol => |s| try alloc.dupe(u8, s.bytes),
         else => {
             helpers.setTypeMismatchError(ctx, "symbol", name_val);
             return error.TypeMismatch;
@@ -193,11 +195,11 @@ fn nativeDefineVirtual(ctx: *Context) anyerror!void {
             try definePredicate(ctx, pred_name, vtype, markers_slice);
 
             var generated_words = std.ArrayListUnmanaged(Value){};
-            try generated_words.append(alloc, .{ .string = name });
-            try generated_words.append(alloc, .{ .string = wrap_name });
-            try generated_words.append(alloc, .{ .string = make_name });
-            try generated_words.append(alloc, .{ .string = unmake_name });
-            try generated_words.append(alloc, .{ .string = pred_name });
+            try generated_words.append(alloc, value_mod.stringValue(name));
+            try generated_words.append(alloc, value_mod.stringValue(wrap_name));
+            try generated_words.append(alloc, value_mod.stringValue(make_name));
+            try generated_words.append(alloc, value_mod.stringValue(unmake_name));
+            try generated_words.append(alloc, value_mod.stringValue(pred_name));
             const gw_slice = try generated_words.toOwnedSlice(alloc);
             tv.generated_words = gw_slice;
             try ctx.registerTypeDescriptor(name, desc_map);
@@ -288,12 +290,12 @@ fn nativeDefineVirtual(ctx: *Context) anyerror!void {
             try definePredicate(ctx, pred_name, vtype, markers_slice);
 
             var generated_words = std.ArrayListUnmanaged(Value){};
-            try generated_words.append(alloc, .{ .string = name });
-            try generated_words.append(alloc, .{ .string = wrap_name });
-            try generated_words.append(alloc, .{ .string = make_name });
-            try generated_words.append(alloc, .{ .string = unmake_name });
-            try generated_words.append(alloc, .{ .string = to_hash_name });
-            try generated_words.append(alloc, .{ .string = pred_name });
+            try generated_words.append(alloc, value_mod.stringValue(name));
+            try generated_words.append(alloc, value_mod.stringValue(wrap_name));
+            try generated_words.append(alloc, value_mod.stringValue(make_name));
+            try generated_words.append(alloc, value_mod.stringValue(unmake_name));
+            try generated_words.append(alloc, value_mod.stringValue(to_hash_name));
+            try generated_words.append(alloc, value_mod.stringValue(pred_name));
             const gw_slice = try generated_words.toOwnedSlice(alloc);
             tv.generated_words = gw_slice;
             try ctx.registerTypeDescriptor(name, desc_map);
@@ -884,7 +886,11 @@ fn typedNthMutDispatch(ctx: *Context) anyerror!void {
     const vt = tv.virtual_type.?;
 
     var elem = try ctx.stack.pop();
+    var elem_owned = true;
+    errdefer if (elem_owned) container_backing.releaseValue(elem);
     const n = try ctx.stack.pop();
+    var n_owned = true;
+    errdefer if (n_owned) container_backing.releaseValue(n);
     const typed_vec = try ctx.stack.pop();
     // The consumed typed vector still owns its inner backing. The rewrap
     // below reuses the same mutated backing and takes a fresh owning
@@ -898,6 +904,8 @@ fn typedNthMutDispatch(ctx: *Context) anyerror!void {
             const actual_tv = dispatch_mod.dispatchTypeValue(elem, ctx);
             if (actual_tv != expected_tv) {
                 if (tryPromoteElement(alloc, elem, expected_tv.name)) |promoted| {
+                    // The promoted replacement supersedes the popped original.
+                    container_backing.releaseValue(elem);
                     elem = promoted;
                 } else {
                     helpers.setErrorContext(ctx, "{s} element has type {s}, expected {s}", .{ vt.name, actual_tv.name, expected_tv.name });
@@ -907,10 +915,13 @@ fn typedNthMutDispatch(ctx: *Context) anyerror!void {
         }
     }
 
-    // Unwrap tagged vec to raw vec, push raw-vec n elem for #nth!
+    // Unwrap tagged vec to raw vec, push raw-vec n elem for #nth!; the popped
+    // n and elem references transfer to the delegated word's operand slots.
     try ctx.stack.push(typed_vec.tagged.inner.*);
-    try ctx.stack.push(n);
-    try ctx.stack.push(elem);
+    try ctx.stack.pushMoved(n);
+    n_owned = false;
+    try ctx.stack.pushMoved(elem);
+    elem_owned = false;
 
     // Delegate to the raw #nth!
     const nth_mut_word = ctx.lookupWord("#nth!") orelse return error.WordNotFound;
@@ -922,7 +933,10 @@ fn typedNthMutDispatch(ctx: *Context) anyerror!void {
 
     // Rewrap: pop raw vec, wrap as tagged, push
     const result_vec = try ctx.stack.pop();
-    const inner = try alloc.create(Value);
+    const inner = alloc.create(Value) catch |err| {
+        container_backing.releaseValue(result_vec);
+        return err;
+    };
     inner.* = result_vec;
     try ctx.stack.pushMoved(.{ .tagged = .{ .tag = vt, .inner = inner } });
 }
@@ -935,7 +949,11 @@ fn typedAtSetMutDispatch(ctx: *Context) anyerror!void {
     const vt = tv.virtual_type.?;
 
     var new_value = try ctx.stack.pop();
+    var value_owned = true;
+    errdefer if (value_owned) container_backing.releaseValue(new_value);
     const key = try ctx.stack.pop();
+    var key_owned = true;
+    errdefer if (key_owned) container_backing.releaseValue(key);
     const typed_mmap = try ctx.stack.pop();
     // The rewrap reuses the same mutated backing and takes a fresh owning
     // reference, so release this consumed slot's reference on return.
@@ -948,6 +966,8 @@ fn typedAtSetMutDispatch(ctx: *Context) anyerror!void {
             const actual_tv = dispatch_mod.dispatchTypeValue(new_value, ctx);
             if (actual_tv != expected_tv) {
                 if (tryPromoteElement(alloc, new_value, expected_tv.name)) |promoted| {
+                    // The promoted replacement supersedes the popped original.
+                    container_backing.releaseValue(new_value);
                     new_value = promoted;
                 } else {
                     helpers.setErrorContext(ctx, "{s} element has type {s}, expected {s}", .{ vt.name, actual_tv.name, expected_tv.name });
@@ -957,10 +977,13 @@ fn typedAtSetMutDispatch(ctx: *Context) anyerror!void {
         }
     }
 
-    // Unwrap typed mmap to raw mmap, push raw-mmap key value for @set!
+    // Unwrap typed mmap to raw mmap, push raw-mmap key value for @set!; the
+    // popped key and value references transfer to the delegated word's slots.
     try ctx.stack.push(typed_mmap.tagged.inner.*);
-    try ctx.stack.push(key);
-    try ctx.stack.push(new_value);
+    try ctx.stack.pushMoved(key);
+    key_owned = false;
+    try ctx.stack.pushMoved(new_value);
+    value_owned = false;
 
     // Delegate to the raw @set!
     const at_set_word = ctx.lookupWord("@set!") orelse return error.WordNotFound;
@@ -972,7 +995,10 @@ fn typedAtSetMutDispatch(ctx: *Context) anyerror!void {
 
     // Rewrap: pop raw mmap, wrap as tagged, push
     const result_mmap = try ctx.stack.pop();
-    const inner = try alloc.create(Value);
+    const inner = alloc.create(Value) catch |err| {
+        container_backing.releaseValue(result_mmap);
+        return err;
+    };
     inner.* = result_mmap;
     try ctx.stack.pushMoved(.{ .tagged = .{ .tag = vt, .inner = inner } });
 }
@@ -985,14 +1011,18 @@ fn typedAtRemoveMutDispatch(ctx: *Context) anyerror!void {
     const vt = tv.virtual_type.?;
 
     const key = try ctx.stack.pop();
+    var key_owned = true;
+    errdefer if (key_owned) container_backing.releaseValue(key);
     const typed_mmap = try ctx.stack.pop();
     // The rewrap reuses the same mutated backing and takes a fresh owning
     // reference, so release this consumed slot's reference on return.
     defer container_backing.releaseValue(typed_mmap);
 
-    // Unwrap typed mmap to raw mmap, push raw-mmap key for @remove!
+    // Unwrap typed mmap to raw mmap, push raw-mmap key for @remove!; the
+    // popped key reference transfers to the delegated word's operand slot.
     try ctx.stack.push(typed_mmap.tagged.inner.*);
-    try ctx.stack.push(key);
+    try ctx.stack.pushMoved(key);
+    key_owned = false;
 
     // Delegate to the raw @remove!
     const at_remove_word = ctx.lookupWord("@remove!") orelse return error.WordNotFound;
@@ -1004,7 +1034,10 @@ fn typedAtRemoveMutDispatch(ctx: *Context) anyerror!void {
 
     // Rewrap: pop raw mmap, wrap as tagged, push
     const result_mmap = try ctx.stack.pop();
-    const inner = try alloc.create(Value);
+    const inner = alloc.create(Value) catch |err| {
+        container_backing.releaseValue(result_mmap);
+        return err;
+    };
     inner.* = result_mmap;
     try ctx.stack.pushMoved(.{ .tagged = .{ .tag = vt, .inner = inner } });
 }
@@ -1460,8 +1493,10 @@ fn nativeDefineParameterizedType(ctx: *Context) anyerror!void {
     };
 
     const name_val = try ctx.stack.pop();
+    defer container_backing.releaseValue(name_val);
+    // Same escape as `define-virtual-type`: the name outlives the popped value.
     const name = switch (name_val) {
-        .symbol => |s| s,
+        .symbol => |s| try alloc.dupe(u8, s.bytes),
         else => {
             helpers.setTypeMismatchError(ctx, "symbol", name_val);
             return error.TypeMismatch;
@@ -1560,11 +1595,11 @@ fn nativeDefineParameterizedType(ctx: *Context) anyerror!void {
     try definePredicate(ctx, pred_name, vtype, &.{});
 
     var generated_words = std.ArrayListUnmanaged(Value){};
-    try generated_words.append(alloc, .{ .string = name });
-    try generated_words.append(alloc, .{ .string = wrap_name });
-    try generated_words.append(alloc, .{ .string = make_name });
-    try generated_words.append(alloc, .{ .string = unmake_name });
-    try generated_words.append(alloc, .{ .string = pred_name });
+    try generated_words.append(alloc, value_mod.stringValue(name));
+    try generated_words.append(alloc, value_mod.stringValue(wrap_name));
+    try generated_words.append(alloc, value_mod.stringValue(make_name));
+    try generated_words.append(alloc, value_mod.stringValue(unmake_name));
+    try generated_words.append(alloc, value_mod.stringValue(pred_name));
 
     // Register vector mutation dispatch entries when base type is vector
     if (std.mem.eql(u8, base_tv.name, "vector")) {
@@ -1615,7 +1650,7 @@ fn registerVectorMutationDispatches(
             .type_b = ctx.getDispatchUnarySentinel().descriptor.?,
         }, .{ .body = .{ .quotation = .{ .instructions = instrs } } }, true);
 
-        try generated_words.append(alloc, .{ .string = op_name });
+        try generated_words.append(alloc, value_mod.stringValue(op_name));
     }
 
     // Element-removing ops: #pop!, #shift!
@@ -1638,7 +1673,7 @@ fn registerVectorMutationDispatches(
             .type_b = ctx.getDispatchUnarySentinel().descriptor.?,
         }, .{ .body = .{ .quotation = .{ .instructions = instrs } } }, true);
 
-        try generated_words.append(alloc, .{ .string = op_name });
+        try generated_words.append(alloc, value_mod.stringValue(op_name));
     }
 
     // #nth! -- Stack: typed-vec n elem
@@ -1655,7 +1690,7 @@ fn registerVectorMutationDispatches(
             .type_b = ctx.getDispatchUnarySentinel().descriptor.?,
         }, .{ .body = .{ .quotation = .{ .instructions = instrs } } }, true);
 
-        try generated_words.append(alloc, .{ .string = "#nth!" });
+        try generated_words.append(alloc, value_mod.stringValue("#nth!"));
     }
 
     // #append! -- Stack: typed-vec seq
@@ -1678,7 +1713,7 @@ fn registerVectorMutationDispatches(
             .type_b = ctx.getDispatchUnarySentinel().descriptor.?,
         }, .{ .body = .{ .quotation = .{ .instructions = instrs } } }, true);
 
-        try generated_words.append(alloc, .{ .string = "#append!" });
+        try generated_words.append(alloc, value_mod.stringValue("#append!"));
     }
 
     // freeze ( typed-vec -- typed-array )
@@ -1693,7 +1728,7 @@ fn registerVectorMutationDispatches(
             .type_b = ctx.getDispatchUnarySentinel().descriptor.?,
         }, .{ .body = .{ .quotation = .{ .instructions = instrs } } }, true);
 
-        try generated_words.append(alloc, .{ .string = "freeze" });
+        try generated_words.append(alloc, value_mod.stringValue("freeze"));
     }
 }
 
@@ -1721,7 +1756,7 @@ fn registerMutableMapMutationDispatches(
             .type_b = ctx.getDispatchUnarySentinel().descriptor.?,
         }, .{ .body = .{ .quotation = .{ .instructions = instrs } } }, true);
 
-        try generated_words.append(alloc, .{ .string = "@set!" });
+        try generated_words.append(alloc, value_mod.stringValue("@set!"));
     }
 
     // @remove! ( typed-mmap key -- typed-mmap )
@@ -1736,7 +1771,7 @@ fn registerMutableMapMutationDispatches(
             .type_b = ctx.getDispatchUnarySentinel().descriptor.?,
         }, .{ .body = .{ .quotation = .{ .instructions = instrs } } }, true);
 
-        try generated_words.append(alloc, .{ .string = "@remove!" });
+        try generated_words.append(alloc, value_mod.stringValue("@remove!"));
     }
 }
 

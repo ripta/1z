@@ -4,6 +4,7 @@ const builtin = @import("builtin");
 const Context = @import("../context.zig").Context;
 const value_mod = @import("../value.zig");
 const Value = value_mod.Value;
+const container_backing = @import("../container_backing.zig");
 const Stream = value_mod.Stream;
 const StreamVTable = value_mod.StreamVTable;
 const Resource = value_mod.Resource;
@@ -235,8 +236,9 @@ fn nativeTlsConfigNoVerify(ctx: *Context) anyerror!void {
 fn nativeTlsConfigAddCaPem(ctx: *Context) anyerror!void {
     if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "tls-config-add-ca-pem");
     const pem_val = try ctx.stack.pop();
+    defer container_backing.releaseValue(pem_val);
     const pem_data: []const u8 = switch (pem_val) {
-        .string => |s| s,
+        .string => |s| s.bytes,
         .byte_array => |ba| ba.slice(),
         else => {
             helpers.setTypeMismatchError(ctx, "string or byte-array", pem_val);
@@ -288,7 +290,8 @@ fn nativeTlsConfigAddCaPem(ctx: *Context) anyerror!void {
 /// through the TLS vtable and chains to the original stream via the `inner` pointer.
 fn nativeTlsUpgrade(ctx: *Context) anyerror!void {
     if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "tls-upgrade");
-    const hostname = try helpers.popString(ctx);
+    const hostname_pay = try helpers.popString(ctx);
+    defer container_backing.releaseValue(.{ .string = hostname_pay });
     const config_val = try ctx.stack.pop();
     const stream = try helpers.popStream(ctx);
 
@@ -306,6 +309,9 @@ fn nativeTlsUpgrade(ctx: *Context) anyerror!void {
 
     const alloc = ctx.arena.allocator();
     const fd = stream.fd;
+
+    // The TLS client retains the verification hostname for the connection's lifetime.
+    const hostname = try alloc.dupe(u8, hostname_pay.bytes);
 
     const tls_state = try alloc.create(TlsState);
     const read_buf = try alloc.alloc(u8, std.crypto.tls.max_ciphertext_record_len);

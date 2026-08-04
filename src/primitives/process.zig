@@ -43,9 +43,15 @@ pub const registry_entries = [_]RegistryEntry{
 
 fn nativeSpawnProcess(ctx: *Context) anyerror!void {
     if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "spawn-process");
-    const stderr_sym = try helpers.popSymbol(ctx);
-    const stdout_sym = try helpers.popSymbol(ctx);
-    const stdin_sym = try helpers.popSymbol(ctx);
+    const stderr_pay = try helpers.popSymbol(ctx);
+    defer container_backing.releaseValue(.{ .symbol = stderr_pay });
+    const stdout_pay = try helpers.popSymbol(ctx);
+    defer container_backing.releaseValue(.{ .symbol = stdout_pay });
+    const stdin_pay = try helpers.popSymbol(ctx);
+    defer container_backing.releaseValue(.{ .symbol = stdin_pay });
+    const stderr_sym = stderr_pay.bytes;
+    const stdout_sym = stdout_pay.bytes;
+    const stdin_sym = stdin_pay.bytes;
     const env_val = ctx.stack.pop() catch return error.StackUnderflow;
     defer container_backing.releaseValue(env_val);
     const cwd_val = ctx.stack.pop() catch return error.StackUnderflow;
@@ -134,7 +140,7 @@ fn parseArgv(ctx: *Context, argv_val: Value) ![]const []const u8 {
     const argv = try alloc.alloc([]const u8, items.len);
     for (items, 0..) |item, i| {
         argv[i] = switch (item) {
-            .string => |s| s,
+            .string => |s| s.bytes,
             else => {
                 helpers.setTypeMismatchError(ctx, "string", item);
                 return error.TypeMismatch;
@@ -164,7 +170,7 @@ fn parseOptionalCwd(ctx: *Context, cwd_val: Value) !?[]const u8 {
             helpers.setTypeMismatchError(ctx, "string or f", cwd_val);
             return error.TypeMismatch;
         },
-        .string => |s| s,
+        .string => |s| s.bytes,
         else => {
             helpers.setTypeMismatchError(ctx, "string or f", cwd_val);
             return error.TypeMismatch;
@@ -194,7 +200,7 @@ fn hashToEnvMap(ctx: *Context, env_hash: *HashTable) !std.process.EnvMap {
     while (iter.next()) |entry| {
         const value = entry.value_ptr.*;
         const value_str = switch (value) {
-            .string => |s| s,
+            .string => |s| s.bytes,
             else => {
                 helpers.setErrorContext(
                     ctx,

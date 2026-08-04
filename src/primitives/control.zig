@@ -145,18 +145,19 @@ const require_doc_marker: i64 = 8; // bit 3
 
 pub fn nativeRedefinitionArityMismatchValidator(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
+    defer container_backing.releaseValue(val);
     switch (val) {
         .string => |s| {
-            if (std.mem.eql(u8, s, "error") or std.mem.eql(u8, s, "warning")) {
+            if (std.mem.eql(u8, s.bytes, "error") or std.mem.eql(u8, s.bytes, "warning")) {
                 try ctx.stack.push(.{ .string = s });
                 try ctx.stack.push(.{ .boolean = true });
             } else {
-                try ctx.stack.push(.{ .string = "redefinition-arity-mismatch: expected \"error\" or \"warning\"" });
+                try ctx.stack.push(value_mod.stringValue("redefinition-arity-mismatch: expected \"error\" or \"warning\""));
                 try ctx.stack.push(.{ .boolean = false });
             }
         },
         else => {
-            try ctx.stack.push(.{ .string = "redefinition-arity-mismatch: expected \"error\" or \"warning\"" });
+            try ctx.stack.push(value_mod.stringValue("redefinition-arity-mismatch: expected \"error\" or \"warning\""));
             try ctx.stack.push(.{ .boolean = false });
         },
     }
@@ -165,18 +166,19 @@ pub fn nativeRedefinitionArityMismatchValidator(ctx: *Context) anyerror!void {
 /// Native validator for the callsite-arity-mismatch pragma.
 pub fn nativeCallsiteArityMismatchValidator(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
+    defer container_backing.releaseValue(val);
     switch (val) {
         .string => |s| {
-            if (std.mem.eql(u8, s, "error") or std.mem.eql(u8, s, "warning") or std.mem.eql(u8, s, "off")) {
+            if (std.mem.eql(u8, s.bytes, "error") or std.mem.eql(u8, s.bytes, "warning") or std.mem.eql(u8, s.bytes, "off")) {
                 try ctx.stack.push(.{ .string = s });
                 try ctx.stack.push(.{ .boolean = true });
             } else {
-                try ctx.stack.push(.{ .string = "callsite-arity-mismatch: expected \"error\", \"warning\", or \"off\"" });
+                try ctx.stack.push(value_mod.stringValue("callsite-arity-mismatch: expected \"error\", \"warning\", or \"off\""));
                 try ctx.stack.push(.{ .boolean = false });
             }
         },
         else => {
-            try ctx.stack.push(.{ .string = "callsite-arity-mismatch: expected \"error\", \"warning\", or \"off\"" });
+            try ctx.stack.push(value_mod.stringValue("callsite-arity-mismatch: expected \"error\", \"warning\", or \"off\""));
             try ctx.stack.push(.{ .boolean = false });
         },
     }
@@ -185,18 +187,19 @@ pub fn nativeCallsiteArityMismatchValidator(ctx: *Context) anyerror!void {
 /// Native validator for the type-check pragma.
 pub fn nativeTypeCheckValidator(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
+    defer container_backing.releaseValue(val);
     switch (val) {
         .string => |s| {
-            if (std.mem.eql(u8, s, "error") or std.mem.eql(u8, s, "warning") or std.mem.eql(u8, s, "off")) {
+            if (std.mem.eql(u8, s.bytes, "error") or std.mem.eql(u8, s.bytes, "warning") or std.mem.eql(u8, s.bytes, "off")) {
                 try ctx.stack.push(.{ .string = s });
                 try ctx.stack.push(.{ .boolean = true });
             } else {
-                try ctx.stack.push(.{ .string = "type-check: expected \"error\", \"warning\", or \"off\"" });
+                try ctx.stack.push(value_mod.stringValue("type-check: expected \"error\", \"warning\", or \"off\""));
                 try ctx.stack.push(.{ .boolean = false });
             }
         },
         else => {
-            try ctx.stack.push(.{ .string = "type-check: expected \"error\", \"warning\", or \"off\"" });
+            try ctx.stack.push(value_mod.stringValue("type-check: expected \"error\", \"warning\", or \"off\""));
             try ctx.stack.push(.{ .boolean = false });
         },
     }
@@ -205,18 +208,19 @@ pub fn nativeTypeCheckValidator(ctx: *Context) anyerror!void {
 /// Native validator for the never-returns-consistency pragma.
 pub fn nativeNeverReturnsConsistencyValidator(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
+    defer container_backing.releaseValue(val);
     switch (val) {
         .string => |s| {
-            if (std.mem.eql(u8, s, "error") or std.mem.eql(u8, s, "warning") or std.mem.eql(u8, s, "off")) {
+            if (std.mem.eql(u8, s.bytes, "error") or std.mem.eql(u8, s.bytes, "warning") or std.mem.eql(u8, s.bytes, "off")) {
                 try ctx.stack.push(.{ .string = s });
                 try ctx.stack.push(.{ .boolean = true });
             } else {
-                try ctx.stack.push(.{ .string = "never-returns-consistency: expected \"error\", \"warning\", or \"off\"" });
+                try ctx.stack.push(value_mod.stringValue("never-returns-consistency: expected \"error\", \"warning\", or \"off\""));
                 try ctx.stack.push(.{ .boolean = false });
             }
         },
         else => {
-            try ctx.stack.push(.{ .string = "never-returns-consistency: expected \"error\", \"warning\", or \"off\"" });
+            try ctx.stack.push(value_mod.stringValue("never-returns-consistency: expected \"error\", \"warning\", or \"off\""));
             try ctx.stack.push(.{ .boolean = false });
         },
     }
@@ -225,18 +229,19 @@ pub fn nativeNeverReturnsConsistencyValidator(ctx: *Context) anyerror!void {
 /// Native validator for the missing-default-arm pragma.
 pub fn nativeMissingDefaultArmValidator(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
+    defer container_backing.releaseValue(val);
     switch (val) {
         .string => |s| {
-            if (std.mem.eql(u8, s, "error") or std.mem.eql(u8, s, "warning") or std.mem.eql(u8, s, "off")) {
+            if (std.mem.eql(u8, s.bytes, "error") or std.mem.eql(u8, s.bytes, "warning") or std.mem.eql(u8, s.bytes, "off")) {
                 try ctx.stack.push(.{ .string = s });
                 try ctx.stack.push(.{ .boolean = true });
             } else {
-                try ctx.stack.push(.{ .string = "missing-default-arm: expected \"error\", \"warning\", or \"off\"" });
+                try ctx.stack.push(value_mod.stringValue("missing-default-arm: expected \"error\", \"warning\", or \"off\""));
                 try ctx.stack.push(.{ .boolean = false });
             }
         },
         else => {
-            try ctx.stack.push(.{ .string = "missing-default-arm: expected \"error\", \"warning\", or \"off\"" });
+            try ctx.stack.push(value_mod.stringValue("missing-default-arm: expected \"error\", \"warning\", or \"off\""));
             try ctx.stack.push(.{ .boolean = false });
         },
     }
@@ -247,19 +252,20 @@ pub fn nativeMissingDefaultArmValidator(ctx: *Context) anyerror!void {
 /// protocol as the other pragma validators.
 pub fn nativeRequireDocValidator(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
+    defer container_backing.releaseValue(val);
     switch (val) {
         .boolean => |b| {
             try ctx.stack.push(.{ .fixnum = if (b) require_doc_normal else 0 });
             try ctx.stack.push(.{ .boolean = true });
         },
         .string => |s| {
-            const level: ?i64 = if (std.mem.eql(u8, s, "relaxed"))
+            const level: ?i64 = if (std.mem.eql(u8, s.bytes, "relaxed"))
                 0
-            else if (std.mem.eql(u8, s, "standard"))
+            else if (std.mem.eql(u8, s.bytes, "standard"))
                 require_doc_normal
-            else if (std.mem.eql(u8, s, "strict"))
+            else if (std.mem.eql(u8, s.bytes, "strict"))
                 require_doc_normal | require_doc_parse_time | require_doc_type_descriptor
-            else if (std.mem.eql(u8, s, "pedantic"))
+            else if (std.mem.eql(u8, s.bytes, "pedantic"))
                 require_doc_normal | require_doc_parse_time | require_doc_type_descriptor | require_doc_marker
             else
                 null;
@@ -268,12 +274,12 @@ pub fn nativeRequireDocValidator(ctx: *Context) anyerror!void {
                 try ctx.stack.push(.{ .fixnum = l });
                 try ctx.stack.push(.{ .boolean = true });
             } else {
-                try ctx.stack.push(.{ .string = "require-doc: expected t, f, or one of relaxed, standard, strict, pedantic" });
+                try ctx.stack.push(value_mod.stringValue("require-doc: expected t, f, or one of relaxed, standard, strict, pedantic"));
                 try ctx.stack.push(.{ .boolean = false });
             }
         },
         else => {
-            try ctx.stack.push(.{ .string = "require-doc: expected t, f, or one of relaxed, standard, strict, pedantic" });
+            try ctx.stack.push(value_mod.stringValue("require-doc: expected t, f, or one of relaxed, standard, strict, pedantic"));
             try ctx.stack.push(.{ .boolean = false });
         },
     }
@@ -360,7 +366,9 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
                 }
             }
 
-            const name = try popSymbol(ctx);
+            const name_pay = try popSymbol(ctx);
+            defer container_backing.releaseValue(.{ .symbol = name_pay });
+            const name = name_pay.bytes;
             try enforceRequireDoc(ctx, name, has_doc, false, false, true);
             const name_copy = try alloc.dupe(u8, name);
 
@@ -385,6 +393,10 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
         },
 
         else => {
+            // Owned until a branch transfers it: into the descriptor consumer's slot, or into the word action.
+            var top_owned = true;
+            errdefer if (top_owned) container_backing.releaseValue(top_val);
+
             if (isDefinitionDescriptor(top_val)) {
                 const desc_map = getDescriptorMap(top_val) orelse {
                     helpers.setErrorContext(ctx, "definition descriptor has no accessible map", .{});
@@ -415,7 +427,9 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
                 }
 
                 const name = try popSymbol(ctx);
-                try enforceRequireDoc(ctx, name, captured_doc != null, false, true, false);
+                var name_owned = true;
+                errdefer if (name_owned) container_backing.releaseValue(.{ .symbol = name });
+                try enforceRequireDoc(ctx, name.bytes, captured_doc != null, false, true, false);
                 if (captured_doc) |doc_text| {
                     if (!desc_map.contains("doc")) {
                         const map_alloc = switch (top_val) {
@@ -427,7 +441,8 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
                         try desc_map.put(map_alloc, key_copy, .{ .doc_string = doc_text });
                     }
                 }
-                try ctx.stack.push(.{ .symbol = name });
+                try ctx.stack.pushMoved(.{ .symbol = name });
+                name_owned = false;
 
                 // Move ownership of `top_val` into the slot the consumer
                 // will pop. `pop` (line 294) already transferred the prior
@@ -436,6 +451,7 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
                 // an extra retain. The consumer's `releaseValue` on its
                 // descriptor local then balances the original creation.
                 try ctx.stack.pushMoved(top_val);
+                top_owned = false;
 
                 const markers_array = try alloc.alloc(Value, collected_markers.items.len);
                 for (collected_markers.items, 0..) |mk, i| {
@@ -500,7 +516,9 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
                     }
                 }
 
-                const name = try popSymbol(ctx);
+                const name_pay = try popSymbol(ctx);
+                defer container_backing.releaseValue(.{ .symbol = name_pay });
+                const name = name_pay.bytes;
 
                 const has_parse_time = for (collected_markers.items) |mk| {
                     if (mk == @as(*const Marker, &markers_mod.parse_time_marker)) break true;
@@ -528,6 +546,8 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
                     .closure => |c| .{ .compound = c.instructions },
                     else => try WordDefinition.literalOrCompoundAction(alloc, top_val),
                 };
+                // The action adopted the popped value (or borrows a backing-free body).
+                top_owned = false;
 
                 var markers_slice = try alloc.dupe(*Marker, collected_markers.items);
 
@@ -634,7 +654,7 @@ test "semicolon defines named union type as parse-time word" {
     const float_tv = ctx.lookupBuiltinTypeValue("float").?;
     const union_tv = try ctx.getOrCreateAnonymousUnionTypeValue(&.{ fixnum_tv, bignum_tv, float_tv });
 
-    try ctx.stack.push(.{ .symbol = "number" });
+    try ctx.stack.push(value_mod.symbolValue("number"));
     try ctx.stack.push(.{ .type_val = union_tv });
     try nativeSemicolon(&ctx);
 
@@ -671,7 +691,7 @@ test "fireWordDefinedHook skips buildWordInfo when no word-defined-hooks are reg
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
 
-    try ctx.stack.push(.{ .symbol = "foo" });
+    try ctx.stack.push(value_mod.symbolValue("foo"));
     try ctx.stack.push(.{ .fixnum = 42 });
     try nativeSemicolon(&ctx);
 
@@ -688,7 +708,7 @@ test "fireWordDefinedHook still builds and fires WordInfo when word-defined-hook
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
 
-    try ctx.stack.push(.{ .symbol = "foo" });
+    try ctx.stack.push(value_mod.symbolValue("foo"));
     try ctx.stack.push(.{ .fixnum = 42 });
     try nativeSemicolon(&ctx);
 
@@ -713,14 +733,14 @@ test "fireWordDefinedHook still builds and fires WordInfo when word-defined-hook
     const info = try ctx.stack.pop();
     try std.testing.expect(info == .array);
     try std.testing.expect(info.array.items[0] == .string);
-    try std.testing.expectEqualStrings("foo", info.array.items[0].string);
+    try std.testing.expectEqualStrings("foo", info.array.items[0].string.bytes);
 }
 
 test "semicolon binds a non-refcounted plain value as .literal, with no instruction allocation" {
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
 
-    try ctx.stack.push(.{ .symbol = "x" });
+    try ctx.stack.push(value_mod.symbolValue("x"));
     try ctx.stack.push(.{ .fixnum = 5 });
     try nativeSemicolon(&ctx);
 
@@ -750,7 +770,7 @@ test "semicolon keeps a container-backed plain value on the .compound push_liter
     elements[0] = .{ .fixnum = 7 };
     const arr = try value_mod.Array.fromOwnedSlice(alloc, elements);
 
-    try ctx.stack.push(.{ .symbol = "xs" });
+    try ctx.stack.push(value_mod.symbolValue("xs"));
     try ctx.stack.push(.{ .array = arr });
     try nativeSemicolon(&ctx);
 
@@ -779,7 +799,7 @@ test "semicolon marker-definition branch binds the tagged marker as .literal" {
 
     var marker: Marker = .{ .name = "" };
 
-    try ctx.stack.push(.{ .symbol = "my-marker" });
+    try ctx.stack.push(value_mod.symbolValue("my-marker"));
     try ctx.stack.push(.{ .marker = &marker });
     try nativeSemicolon(&ctx);
 
@@ -812,7 +832,7 @@ test "word with a scalar-valued named local does not blow up arena memory across
 
     var i: usize = 0;
     while (i < 57_344) : (i += 1) {
-        try ctx.stack.push(.{ .symbol = "a" });
+        try ctx.stack.push(value_mod.symbolValue("a"));
         try ctx.stack.push(.{ .fixnum = @as(i64, @intCast(i)) });
         try nativeSemicolon(&ctx);
         try ctx.executeQuotation(.{ .instructions = &call_body });
@@ -821,7 +841,7 @@ test "word with a scalar-valued named local does not blow up arena memory across
     const mid_bytes = mem_limit.currentBytes();
 
     while (i < 114_688) : (i += 1) {
-        try ctx.stack.push(.{ .symbol = "a" });
+        try ctx.stack.push(value_mod.symbolValue("a"));
         try ctx.stack.push(.{ .fixnum = @as(i64, @intCast(i)) });
         try nativeSemicolon(&ctx);
         try ctx.executeQuotation(.{ .instructions = &call_body });
@@ -859,7 +879,7 @@ test "word with a container-bound named local documents the accepted residual le
     // per batch is still large enough to show a clear, stable per-call rate.
     var i: usize = 0;
     while (i < 8_192) : (i += 1) {
-        try ctx.stack.push(.{ .symbol = "b" });
+        try ctx.stack.push(value_mod.symbolValue("b"));
         try ctx.stack.push(.{ .array = arr });
         try nativeSemicolon(&ctx);
         try ctx.executeQuotation(.{ .instructions = &call_body });
@@ -869,7 +889,7 @@ test "word with a container-bound named local documents the accepted residual le
     const first_batch_bytes = mem_limit.currentBytes();
 
     while (i < 16_384) : (i += 1) {
-        try ctx.stack.push(.{ .symbol = "b" });
+        try ctx.stack.push(value_mod.symbolValue("b"));
         try ctx.stack.push(.{ .array = arr });
         try nativeSemicolon(&ctx);
         try ctx.executeQuotation(.{ .instructions = &call_body });
@@ -894,7 +914,7 @@ test "word with a container-bound named local documents the accepted residual le
 }
 
 fn defineAndCallLiteral(ctx: *Context, name: []const u8, v: Value) !Value {
-    try ctx.stack.push(.{ .symbol = name });
+    try ctx.stack.push(value_mod.symbolValue(name));
     try ctx.stack.push(v);
     try nativeSemicolon(ctx);
 
@@ -992,7 +1012,7 @@ test "spot-check: representative unverified pointer types round-trip identically
         var closure: value_mod.Closure = .{ .instructions = closure_instrs, .segments = &.{} };
         const v: Value = .{ .closure = &closure };
 
-        try ctx.stack.push(.{ .symbol = "spot-closure-compound" });
+        try ctx.stack.push(value_mod.symbolValue("spot-closure-compound"));
         try ctx.stack.push(v);
         try nativeSemicolon(&ctx);
 

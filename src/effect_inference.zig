@@ -19,6 +19,7 @@ const stack_effect_mod = @import("stack_effect.zig");
 const StackEffect = stack_effect_mod.StackEffect;
 const StackEffectParam = stack_effect_mod.StackEffectParam;
 
+const container_backing = @import("container_backing.zig");
 const helpers = @import("primitives/helpers.zig");
 const markers = @import("primitives/markers.zig");
 const protocols_mod = @import("primitives/protocols.zig");
@@ -26,26 +27,27 @@ const Context = @import("context.zig").Context;
 
 pub fn nativeSuppressChecksValidator(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
+    defer container_backing.releaseValue(val);
     switch (val) {
         .boolean => |b| {
             if (b) {
-                try ctx.stack.push(.{ .string = "all" });
+                try ctx.stack.push(value_mod.stringValue("all"));
             } else {
                 try ctx.stack.push(.{ .boolean = false });
             }
             try ctx.stack.push(.{ .boolean = true });
         },
         .string => |s| {
-            if (std.mem.eql(u8, s, "all") or std.mem.eql(u8, s, "warn-only") or std.mem.eql(u8, s, "none")) {
+            if (std.mem.eql(u8, s.bytes, "all") or std.mem.eql(u8, s.bytes, "warn-only") or std.mem.eql(u8, s.bytes, "none")) {
                 try ctx.stack.push(.{ .string = s });
                 try ctx.stack.push(.{ .boolean = true });
             } else {
-                try ctx.stack.push(.{ .string = "suppress-checks: expected t, f, or one of all, warn-only, none" });
+                try ctx.stack.push(value_mod.stringValue("suppress-checks: expected t, f, or one of all, warn-only, none"));
                 try ctx.stack.push(.{ .boolean = false });
             }
         },
         else => {
-            try ctx.stack.push(.{ .string = "suppress-checks: expected t, f, or one of all, warn-only, none" });
+            try ctx.stack.push(value_mod.stringValue("suppress-checks: expected t, f, or one of all, warn-only, none"));
             try ctx.stack.push(.{ .boolean = false });
         },
     }
@@ -89,7 +91,7 @@ fn recoverLocalName(instructions: []const Instruction, semi_index: usize) ?Local
         switch (instructions[i].op) {
             .push_literal => |val| switch (val) {
                 .doc_string, .stack_effect => continue,
-                .symbol => |s| return .{ .name = s, .line = instructions[i].line },
+                .symbol => |s| return .{ .name = s.bytes, .line = instructions[i].line },
                 else => return null,
             },
             // A marker (or `const`) before the body is produced by a word call.
@@ -180,9 +182,9 @@ pub fn readCheckPragmas(ctx: *const Context) CheckPragmaSettings {
     if (ctx.getPragma("suppress-checks")) |pragma_val| {
         switch (pragma_val) {
             .string => |s| {
-                if (std.mem.eql(u8, s, "warn-only")) {
+                if (std.mem.eql(u8, s.bytes, "warn-only")) {
                     settings.severity_override = .warning;
-                } else if (std.mem.eql(u8, s, "all")) {
+                } else if (std.mem.eql(u8, s.bytes, "all")) {
                     settings.suppressed = true;
                 }
             },
@@ -202,9 +204,9 @@ pub fn readCheckPragmas(ctx: *const Context) CheckPragmaSettings {
     if (ctx.getPragma("type-check")) |pragma_val| {
         switch (pragma_val) {
             .string => |s| {
-                if (std.mem.eql(u8, s, "off")) {
+                if (std.mem.eql(u8, s.bytes, "off")) {
                     settings.type_check_mode = .off;
-                } else if (std.mem.eql(u8, s, "warning")) {
+                } else if (std.mem.eql(u8, s.bytes, "warning")) {
                     settings.type_check_mode = .warning;
                 }
             },
@@ -215,9 +217,9 @@ pub fn readCheckPragmas(ctx: *const Context) CheckPragmaSettings {
     if (ctx.getPragma("callsite-arity-mismatch")) |pragma_val| {
         switch (pragma_val) {
             .string => |s| {
-                if (std.mem.eql(u8, s, "off")) {
+                if (std.mem.eql(u8, s.bytes, "off")) {
                     settings.arity_check_mode = .off;
-                } else if (std.mem.eql(u8, s, "warning")) {
+                } else if (std.mem.eql(u8, s.bytes, "warning")) {
                     settings.arity_check_mode = .warning;
                 }
             },
@@ -228,9 +230,9 @@ pub fn readCheckPragmas(ctx: *const Context) CheckPragmaSettings {
     if (ctx.getPragma("missing-default-arm")) |pragma_val| {
         switch (pragma_val) {
             .string => |s| {
-                if (std.mem.eql(u8, s, "off")) {
+                if (std.mem.eql(u8, s.bytes, "off")) {
                     settings.default_arm_mode = .off;
-                } else if (std.mem.eql(u8, s, "warning")) {
+                } else if (std.mem.eql(u8, s.bytes, "warning")) {
                     settings.default_arm_mode = .warning;
                 }
             },
@@ -242,9 +244,9 @@ pub fn readCheckPragmas(ctx: *const Context) CheckPragmaSettings {
     if (ctx.getPragma("never-returns-consistency")) |pragma_val| {
         switch (pragma_val) {
             .string => |s| {
-                if (std.mem.eql(u8, s, "off")) {
+                if (std.mem.eql(u8, s.bytes, "off")) {
                     settings.never_returns_mode = .off;
-                } else if (std.mem.eql(u8, s, "error")) {
+                } else if (std.mem.eql(u8, s.bytes, "error")) {
                     settings.never_returns_mode = .err;
                 }
             },
@@ -3535,7 +3537,7 @@ test "type mismatch emits diagnostic" {
     });
 
     const body: []const Instruction = &.{
-        makeInstr(.{ .push_literal = .{ .string = "hello" } }),
+        makeInstr(.{ .push_literal = value_mod.stringValue("hello") }),
         makeInstr(.{ .call_word = "consume-fixnum" }),
     };
 
@@ -3662,7 +3664,7 @@ test "declared parent enum input accepts tagged variant value" {
         .parent_type = &color_tv,
         .type_val = &color_red_tv,
     };
-    var inner = Value{ .symbol = "red" };
+    var inner = value_mod.symbolValue("red");
     const tagged = Value{ .tagged = .{ .tag = &tagged_type, .inner = &inner } };
 
     const dummy: dictionary_mod.NativeFn = struct {
@@ -3842,7 +3844,7 @@ test "type check mode off skips all checks" {
     });
 
     const body: []const Instruction = &.{
-        makeInstr(.{ .push_literal = .{ .string = "hello" } }),
+        makeInstr(.{ .push_literal = value_mod.stringValue("hello") }),
         makeInstr(.{ .call_word = "consume-fixnum" }),
     };
 

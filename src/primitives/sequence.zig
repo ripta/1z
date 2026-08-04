@@ -105,7 +105,7 @@ pub fn classifySequence(val: Value) ?SequenceKind {
 /// Returns null if the value is not a sequence type.
 pub fn sequenceLength(val: Value) ?usize {
     return switch (val) {
-        .string => |s| utf8CodepointCount(s),
+        .string => |s| utf8CodepointCount(s.bytes),
         .array => |a| a.items.len,
         .vector => |v| v.list.items.len,
         .byte_array => |b| b.slice().len,
@@ -159,7 +159,7 @@ pub const SequenceIterator = struct {
             .string => |s| SequenceIterator{
                 .kind = .string,
                 .allocator = allocator,
-                .state = .{ .string = .{ .data = s, .byte_index = 0 } },
+                .state = .{ .string = .{ .data = s.bytes, .byte_index = 0 } },
             },
             .array => |a| SequenceIterator{
                 .kind = .array,
@@ -202,10 +202,10 @@ pub const SequenceIterator = struct {
                 self.state.string.byte_index += cp_len;
 
                 if (cp_len == 1 and cp_slice[0] < self.single_char_cache.len) {
-                    return Value{ .string = self.single_char_cache[cp_slice[0]] };
+                    return value_mod.stringValue(self.single_char_cache[cp_slice[0]]);
                 }
                 const char_str = self.allocator.dupe(u8, cp_slice) catch return error.OutOfMemory;
-                return Value{ .string = char_str };
+                return value_mod.stringValue(char_str);
             },
             .array => {
                 if (self.state.array.index < self.state.array.items.len) {
@@ -331,7 +331,7 @@ pub const SequenceBuilder = struct {
         switch (self.kind) {
             .string => {
                 // Expect string value, append its bytes
-                const s = val.string;
+                const s = val.string.bytes;
                 self.state.string.appendSlice(self.allocator, s) catch return error.OutOfMemory;
             },
             .array => {
@@ -359,7 +359,7 @@ pub const SequenceBuilder = struct {
     /// Finalize and return the built sequence as a Value.
     pub fn toValue(self: *SequenceBuilder) !Value {
         return switch (self.kind) {
-            .string => Value{ .string = self.state.string.toOwnedSlice(self.allocator) catch return error.OutOfMemory },
+            .string => value_mod.stringValue(self.state.string.toOwnedSlice(self.allocator) catch return error.OutOfMemory),
             .array => blk: {
                 const items = self.state.array.toOwnedSlice(self.allocator) catch return error.OutOfMemory;
                 const arr = value_mod.Array.fromOwnedSlice(self.allocator, items) catch |e| {
@@ -415,13 +415,13 @@ test "sequenceToValuesScratch splits slice and element allocators" {
 
     // The leak detector pins the split: codepoint dupes on the slice allocator would leak once
     // only the slice is freed.
-    const items = try sequenceToValuesScratch(.{ .string = "héllo" }, std.testing.allocator, elem_arena.allocator());
+    const items = try sequenceToValuesScratch(value_mod.stringValue("héllo"), std.testing.allocator, elem_arena.allocator());
     defer std.testing.allocator.free(items);
 
     try std.testing.expectEqual(@as(usize, 5), items.len);
-    try std.testing.expectEqualStrings("h", items[0].string);
-    try std.testing.expectEqualStrings("é", items[1].string);
-    try std.testing.expectEqualStrings("o", items[4].string);
+    try std.testing.expectEqualStrings("h", items[0].string.bytes);
+    try std.testing.expectEqualStrings("é", items[1].string.bytes);
+    try std.testing.expectEqualStrings("o", items[4].string.bytes);
 }
 
 test "utf8CodepointCount" {
@@ -447,8 +447,8 @@ test "utf8SliceByCodepoints" {
 }
 
 test "sequenceLength" {
-    try std.testing.expectEqual(@as(?usize, 5), sequenceLength(.{ .string = "hello" }));
-    try std.testing.expectEqual(@as(?usize, 4), sequenceLength(.{ .string = "café" }));
+    try std.testing.expectEqual(@as(?usize, 5), sequenceLength(value_mod.stringValue("hello")));
+    try std.testing.expectEqual(@as(?usize, 4), sequenceLength(value_mod.stringValue("café")));
 
     var arr = value_mod.Array{
         .header = undefined,
@@ -475,15 +475,15 @@ test "SequenceIterator over array" {
 
 test "SequenceIterator over string" {
     const allocator = std.testing.allocator;
-    var iter = SequenceIterator.init(.{ .string = "ab" }, allocator).?;
+    var iter = SequenceIterator.init(value_mod.stringValue("ab"), allocator).?;
 
     const a = (try iter.next()).?;
-    defer allocator.free(a.string);
-    try std.testing.expectEqualStrings("a", a.string);
+    defer allocator.free(a.string.bytes);
+    try std.testing.expectEqualStrings("a", a.string.bytes);
 
     const b = (try iter.next()).?;
-    defer allocator.free(b.string);
-    try std.testing.expectEqualStrings("b", b.string);
+    defer allocator.free(b.string.bytes);
+    try std.testing.expectEqualStrings("b", b.string.bytes);
 
     try std.testing.expect((try iter.next()) == null);
 }

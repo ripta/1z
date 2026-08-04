@@ -783,6 +783,7 @@ const ValueLayout = struct {
         bool_,
         ptr,
         slice,
+        string_payload,
         dual_ptr,
         inline_,
     };
@@ -794,7 +795,8 @@ const ValueLayout = struct {
             .float => .f64_,
             .boolean => .bool_,
             .hash, .vector, .byte_array, .set, .mutable_map, .array, .stream, .resource, .parameter, .module, .marker, .struct_type, .struct_instance, .task, .channel, .iterator, .type_val, .sandbox_spec, .error_value, .bignum => .ptr,
-            .string, .symbol, .doc_string, .template => .slice,
+            .string, .symbol => .string_payload,
+            .doc_string, .template => .slice,
             .tagged => .dual_ptr,
             .closure => .ptr,
             .quotation, .stack_effect => .inline_,
@@ -803,7 +805,9 @@ const ValueLayout = struct {
 
     var payload_offset: usize = 0;
     var tag_offset: usize = 0;
-    var slice_len_offset: usize = 0;
+    var string_backing_offset: usize = 0;
+    var string_bytes_ptr_offset: usize = 0;
+    var string_bytes_len_offset: usize = 0;
     var quotation_code_ptr_offset: usize = 0;
     var tagged_tag_ptr_offset: usize = 0;
     var tagged_inner_ptr_offset: usize = 0;
@@ -848,15 +852,42 @@ const ValueLayout = struct {
         }
         tag_offset = tag_candidate orelse @panic("Value tag offset discovery found no candidate position");
 
-        // Discover the slice len offset. Zig slices are {ptr, len} but the exact position
-        // relative to the Value base must be verified at runtime. The verification panics for the
-        // same reason the tag discovery does: a wrong layout must reject the build in release
-        // mode, not ship inside emitted code.
-        slice_len_offset = payload_offset + @sizeOf(usize);
-        var sv: Value = .{ .string = "ABCDE" };
+        // Discover the string payload's field offsets by sentinel scan. `.string` and
+        // `.symbol` share `StringPayload`, whose field positions inside the union are not
+        // guaranteed by the language, so each field is found by writing a distinct sentinel
+        // and scanning.
+        //
+        // Two candidate positions for one sentinel panic, matching the tag discovery above:
+        // union padding is undefined, so a stale byte pattern could impersonate a sentinel,
+        // and a guessed layout must reject the build. The panics survive release mode, so
+        // they are not debug asserts.
+        const backing_sentinel_addr: usize = 0xDEAD_BEEF_CAFE_0030;
+        const bytes_ptr_sentinel_addr: usize = 0xDEAD_BEEF_CAFE_0040;
+        const bytes_len_sentinel: usize = 0x0BAD_5EED_0BAD_5EED;
+        var sv: Value = .{ .string = .{
+            .backing = @ptrFromInt(backing_sentinel_addr),
+            .bytes = @as([*]const u8, @ptrFromInt(bytes_ptr_sentinel_addr))[0..bytes_len_sentinel],
+        } };
         const sv_bytes: [*]const u8 = @ptrCast(&sv);
-        const len_at_offset: *align(1) const usize = @ptrCast(sv_bytes + slice_len_offset);
-        if (len_at_offset.* != 5) @panic("Value slice len offset verification failed");
+        var backing_candidate: ?usize = null;
+        var bytes_ptr_candidate: ?usize = null;
+        var bytes_len_candidate: ?usize = null;
+        for (0..value_size - @sizeOf(usize) + 1) |offset| {
+            const at: *align(1) const usize = @ptrCast(sv_bytes + offset);
+            if (at.* == backing_sentinel_addr) {
+                if (backing_candidate != null) @panic("string backing offset discovery found two candidate positions");
+                backing_candidate = offset;
+            } else if (at.* == bytes_ptr_sentinel_addr) {
+                if (bytes_ptr_candidate != null) @panic("string bytes pointer offset discovery found two candidate positions");
+                bytes_ptr_candidate = offset;
+            } else if (at.* == bytes_len_sentinel) {
+                if (bytes_len_candidate != null) @panic("string bytes length offset discovery found two candidate positions");
+                bytes_len_candidate = offset;
+            }
+        }
+        string_backing_offset = backing_candidate orelse @panic("string backing offset discovery found no sentinel");
+        string_bytes_ptr_offset = bytes_ptr_candidate orelse @panic("string bytes pointer offset discovery found no sentinel");
+        string_bytes_len_offset = bytes_len_candidate orelse @panic("string bytes length offset discovery found no sentinel");
 
         // Discover the code_ptr offset within a quotation Value by writing
         // a sentinel pointer and scanning for it.
@@ -1162,22 +1193,6 @@ fn emitUnboxPtr(ctx: *c.ir_ctx, elem_addr: c.ir_ref, payload_offset_const: c.ir_
     return c._ir_LOAD(ctx, c.IR_ADDR, payload_addr);
 }
 
-const SliceRefs = struct { ptr: c.ir_ref, len: c.ir_ref };
-
-/// Load a slice (ptr + len) payload from a Value at elem_addr.
-fn emitUnboxSlice(
-    ctx: *c.ir_ctx,
-    elem_addr: c.ir_ref,
-    payload_offset_const: c.ir_ref,
-    slice_len_offset_const: c.ir_ref,
-) SliceRefs {
-    const ptr_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), elem_addr, payload_offset_const);
-    const ptr_val = c._ir_LOAD(ctx, c.IR_ADDR, ptr_addr);
-    const len_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), elem_addr, slice_len_offset_const);
-    const len_val = c._ir_LOAD(ctx, c.IR_ADDR, len_addr);
-    return .{ .ptr = ptr_val, .len = len_val };
-}
-
 /// Store a tag at tag_offset within a Value at dest_addr.
 fn emitBoxTag(ctx: *c.ir_ctx, dest_addr: c.ir_ref, tag_offset_const: c.ir_ref, tag_const: c.ir_ref) void {
     const tag_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), dest_addr, tag_offset_const);
@@ -1200,23 +1215,29 @@ fn emitBoxPayload(
     c._ir_STORE(ctx, payload_addr, val);
 }
 
-/// Store a tag and a slice (ptr + len) payload into a Value at dest_addr.
-/// Used to construct string/symbol literal Values inline from a static
-/// pointer and length, with no heap allocation.
-fn emitBoxSlice(
+/// Store a tag and a string payload (null backing + bytes ptr + bytes len) into a Value at
+/// dest_addr.
+///
+/// Constructs string/symbol literal Values inline from a static pointer and length, with no
+/// heap allocation.
+///
+/// The destination slot is reused stack memory, so the backing store is not optional: a
+/// skipped store would leave a garbage pointer that the next release of the slot
+/// dereferences.
+fn emitBoxStringValue(
     ctx: *c.ir_ctx,
     dest_addr: c.ir_ref,
     tag_offset_const: c.ir_ref,
-    payload_offset_const: c.ir_ref,
-    slice_len_offset_const: c.ir_ref,
     tag_const: c.ir_ref,
     ptr_val: c.ir_ref,
     len_val: c.ir_ref,
 ) void {
     emitBoxTag(ctx, dest_addr, tag_offset_const, tag_const);
-    const ptr_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), dest_addr, payload_offset_const);
+    const backing_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), dest_addr, c.ir_const_addr(ctx, ValueLayout.string_backing_offset));
+    c._ir_STORE(ctx, backing_addr, c.ir_const_addr(ctx, 0));
+    const ptr_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), dest_addr, c.ir_const_addr(ctx, ValueLayout.string_bytes_ptr_offset));
     c._ir_STORE(ctx, ptr_addr, ptr_val);
-    const len_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), dest_addr, slice_len_offset_const);
+    const len_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), dest_addr, c.ir_const_addr(ctx, ValueLayout.string_bytes_len_offset));
     c._ir_STORE(ctx, len_addr, len_val);
 }
 
@@ -2980,7 +3001,7 @@ fn narrowableAnnotation(state: *CompileState, ann: stack_effect_mod.TypeAnnotati
 pub fn typeCheckRelaxed(ctx: *const Context) bool {
     const pv = ctx.getPragma("type-check") orelse return false;
     if (pv != .string) return false;
-    return std.mem.eql(u8, pv.string, "off") or std.mem.eql(u8, pv.string, "warning");
+    return std.mem.eql(u8, pv.string.bytes, "off") or std.mem.eql(u8, pv.string.bytes, "warning");
 }
 
 /// Seed narrowed `.i64_ref`/`.f64_ref` entries for every parameter whose type is known at
@@ -7841,7 +7862,7 @@ fn compileInstructions(
                     // a string Value -- same slice payload at the same offsets,
                     // only the tag differs -- so the same construction applies.
                     const lits = state.aot_string_literals.?;
-                    const str_data = if (val == .string) val.string else val.symbol;
+                    const str_data = if (val == .string) val.string.bytes else val.symbol.bytes;
                     const lit_id = lits.items.len;
 
                     // The slice pointer is stored into a `uintptr_t` slot, and
@@ -7866,13 +7887,10 @@ fn compileInstructions(
                     // live buffer.
                     const dest_off = c.ir_const_addr(ctx, sp.* * ValueLayout.value_size);
                     const dest_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), liveBaseAddr(state).base_addr, dest_off);
-                    const slice_len_offset_const = c.ir_const_addr(ctx, ValueLayout.slice_len_offset);
-                    emitBoxSlice(
+                    emitBoxStringValue(
                         ctx,
                         dest_addr,
                         state.tag_offset_const,
-                        state.payload_offset_const,
-                        slice_len_offset_const,
                         if (val == .string) emitTagConst(ctx, .string) else emitTagConst(ctx, .symbol),
                         sym_ref,
                         len_const,
@@ -7891,7 +7909,7 @@ fn compileInstructions(
                     // raw bytes because they contain heap pointers. Emit a
                     // callback that pushes the literal using a C string
                     // constant embedded in the AOT binary.
-                    const str_data = if (val == .string) val.string else val.symbol;
+                    const str_data = if (val == .string) val.string.bytes else val.symbol.bytes;
                     const push_fn_name = if (val == .string) "onez_push_string" else "onez_push_symbol";
 
                     // Use a 3-arg prototype for (ctx, str_ptr, str_len).
@@ -8461,7 +8479,7 @@ fn isNestedDefinedName(instructions: []const Instruction, target: []const u8) bo
     for (instructions) |instr| {
         switch (instr.op) {
             .push_literal => |val| {
-                if (val == .symbol) pending_name = val.symbol;
+                if (val == .symbol) pending_name = val.symbol.bytes;
             },
             .call_word, .call_word_direct, .call_word_module => {
                 const cname = instr.op.callTargetName() orelse continue;
@@ -13401,8 +13419,6 @@ export fn jitCallValue(jit_ctx_raw: usize, value_ptr_raw: usize) callconv(.c) i3
     }
 }
 
-/// Push a string literal onto the stack. The string data is at `str_ptr`
-/// with length `str_len`. The runtime copies the data into a managed allocation.
 /// Retain the refcounted backing of the Value at a physical stack slot.
 /// Emitted where compiled code logically duplicates a `.raw_at_slot` entry
 /// (dup, over, combinator arg-copies) so the duplicate counts as a new
@@ -13423,15 +13439,25 @@ export fn jitReleaseSlot(value_ptr: usize) callconv(.c) i32 {
     return 0;
 }
 
+/// Push a string literal onto the stack. The string data is at `str_ptr` with length
+/// `str_len`.
 export fn jitPushString(ctx_raw: usize, str_ptr: usize, str_len: usize) callconv(.c) i32 {
     if (ctx_raw == 0) return 1;
     const ctx: *Context = @ptrFromInt(ctx_raw);
     const src: [*]const u8 = @ptrFromInt(str_ptr);
-    const copy = ctx.quotationAllocator().dupe(u8, src[0..str_len]) catch {
+    // A compiled body re-materializes the literal on every execution, so the copy is
+    // heap-backed and reclaimed when the value drops instead of accreting on the arena.
+    const copy = ctx.allocator.dupe(u8, src[0..str_len]) catch {
         ctx.jit_pending_error = error.OutOfMemory;
         return 2;
     };
-    ctx.stack.push(.{ .string = copy }) catch {
+    const val = value_mod.ownedStringValue(ctx.allocator, copy) catch {
+        ctx.allocator.free(copy);
+        ctx.jit_pending_error = error.OutOfMemory;
+        return 2;
+    };
+    ctx.stack.pushMoved(val) catch {
+        container_backing.releaseValue(val);
         ctx.jit_pending_error = error.OutOfMemory;
         return 2;
     };
@@ -13443,11 +13469,18 @@ export fn jitPushSymbol(ctx_raw: usize, str_ptr: usize, str_len: usize) callconv
     if (ctx_raw == 0) return 1;
     const ctx: *Context = @ptrFromInt(ctx_raw);
     const src: [*]const u8 = @ptrFromInt(str_ptr);
-    const copy = ctx.quotationAllocator().dupe(u8, src[0..str_len]) catch {
+    // Same heap-backed materialization as `jitPushString`.
+    const copy = ctx.allocator.dupe(u8, src[0..str_len]) catch {
         ctx.jit_pending_error = error.OutOfMemory;
         return 2;
     };
-    ctx.stack.push(.{ .symbol = copy }) catch {
+    const val = value_mod.ownedSymbolValue(ctx.allocator, copy) catch {
+        ctx.allocator.free(copy);
+        ctx.jit_pending_error = error.OutOfMemory;
+        return 2;
+    };
+    ctx.stack.pushMoved(val) catch {
+        container_backing.releaseValue(val);
         ctx.jit_pending_error = error.OutOfMemory;
         return 2;
     };
@@ -14418,8 +14451,8 @@ test "ValueLayout: discovered tag offset reads back every live variant's tag" {
         .{ .fixnum = 42 },
         .{ .float = 1.5 },
         .{ .boolean = true },
-        .{ .string = "abc" },
-        .{ .symbol = "sym" },
+        value_mod.stringValue("abc"),
+        value_mod.symbolValue("sym"),
         .{ .unit = {} },
     };
     for (cases) |case| {
@@ -14540,8 +14573,8 @@ test "jitNativeWordCall: dispatch miss falls through to the cached native functi
     // reaches the cached native function pointer directly and surfaces its
     // own type-mismatch error, proving the fallthrough path runs with no
     // dictionary lookup.
-    try ctx.stack.push(.{ .string = "a" });
-    try ctx.stack.push(.{ .string = "b" });
+    try ctx.stack.push(value_mod.stringValue("a"));
+    try ctx.stack.push(value_mod.stringValue("b"));
 
     const rc = jitNativeWordCall(@intFromPtr(&ctx), word_id, 1);
     try testing.expectEqual(@as(i32, 2), rc);
@@ -14743,11 +14776,12 @@ test "flush planner: cycle mixed with a dependent box" {
     try checkFlushPlan(&stack, 4);
 }
 
-test "ValueLayout slice offsets reconstruct a string Value" {
-    // The direct string-literal codegen writes a tag, slice pointer, and slice
-    // length at the discovered ValueLayout offsets. Mirror that here against a
-    // raw byte buffer and confirm it reads back as the intended string. Guards
-    // the offsets the codegen depends on and the fixed 40-byte layout.
+test "ValueLayout string offsets reconstruct a string Value" {
+    // The direct string-literal codegen writes a tag, a null backing, a bytes
+    // pointer, and a bytes length at the discovered ValueLayout offsets. Mirror
+    // that here against a raw byte buffer and confirm it reads back as the
+    // intended string. Guards the offsets the codegen depends on and the fixed
+    // 40-byte layout.
     try testing.expectEqual(@as(usize, 40), @sizeOf(Value));
     ValueLayout.ensureInit();
 
@@ -14757,15 +14791,19 @@ test "ValueLayout slice offsets reconstruct a string Value" {
     const tag_int: u8 = @intFromEnum(@as(ValueLayout.TagType, .string));
     @memcpy(buf[ValueLayout.tag_offset .. ValueLayout.tag_offset + ValueLayout.tag_size], std.mem.asBytes(&tag_int)[0..ValueLayout.tag_size]);
 
+    const backing_int: usize = 0;
+    @memcpy(buf[ValueLayout.string_backing_offset .. ValueLayout.string_backing_offset + @sizeOf(usize)], std.mem.asBytes(&backing_int));
+
     const ptr_int: usize = @intFromPtr(body.ptr);
-    @memcpy(buf[ValueLayout.payload_offset .. ValueLayout.payload_offset + @sizeOf(usize)], std.mem.asBytes(&ptr_int));
+    @memcpy(buf[ValueLayout.string_bytes_ptr_offset .. ValueLayout.string_bytes_ptr_offset + @sizeOf(usize)], std.mem.asBytes(&ptr_int));
 
     const len_val: usize = body.len;
-    @memcpy(buf[ValueLayout.slice_len_offset .. ValueLayout.slice_len_offset + @sizeOf(usize)], std.mem.asBytes(&len_val));
+    @memcpy(buf[ValueLayout.string_bytes_len_offset .. ValueLayout.string_bytes_len_offset + @sizeOf(usize)], std.mem.asBytes(&len_val));
 
     const reconstructed: *align(1) const Value = @ptrCast(&buf);
     try testing.expect(reconstructed.* == .string);
-    try testing.expectEqualStrings("hello", reconstructed.string);
+    try testing.expect(reconstructed.string.backing == null);
+    try testing.expectEqualStrings("hello", reconstructed.string.bytes);
 }
 
 fn makeInstructions(comptime ops: anytype) [ops.len]Instruction {
@@ -15573,7 +15611,7 @@ test "bail on non-fixnum input" {
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
-    var values = [_]Value{.{ .string = "hello" }};
+    var values = [_]Value{value_mod.stringValue("hello")};
     var sp: usize = 1;
     const status = callCompiledValues(func, &values, &sp);
     // requireI64 tag check still bails (will be converted when comparisons
@@ -15597,7 +15635,7 @@ test "bail on stack underflow" {
 
 test "compile string literal" {
     const instrs = [_]Instruction{
-        .{ .op = .{ .push_literal = .{ .string = "hello" } }, .line = 1 },
+        .{ .op = .{ .push_literal = value_mod.stringValue("hello") }, .line = 1 },
     };
     const result = try compileWord(&instrs, 0, 1, null, null, null, null, null);
     defer result.jit_buf.deinit();
@@ -15609,7 +15647,7 @@ test "compile string literal" {
     try testing.expectEqual(@as(i32, 0), status);
     try testing.expectEqual(@as(usize, 1), sp);
     try testing.expect(values[0] == .string);
-    try testing.expect(std.mem.eql(u8, "hello", values[0].string));
+    try testing.expect(std.mem.eql(u8, "hello", values[0].string.bytes));
 }
 
 test "compile float literal" {
@@ -15648,7 +15686,7 @@ test "compile boolean literal" {
 
 test "compile symbol literal" {
     const instrs = [_]Instruction{
-        .{ .op = .{ .push_literal = .{ .symbol = "foo" } }, .line = 1 },
+        .{ .op = .{ .push_literal = value_mod.symbolValue("foo") }, .line = 1 },
     };
     const result = try compileWord(&instrs, 0, 1, null, null, null, null, null);
     defer result.jit_buf.deinit();
@@ -15660,7 +15698,7 @@ test "compile symbol literal" {
     try testing.expectEqual(@as(i32, 0), status);
     try testing.expectEqual(@as(usize, 1), sp);
     try testing.expect(values[0] == .symbol);
-    try testing.expect(std.mem.eql(u8, "foo", values[0].symbol));
+    try testing.expect(std.mem.eql(u8, "foo", values[0].symbol.bytes));
 }
 
 test "compile unit literal" {
@@ -15681,7 +15719,7 @@ test "compile unit literal" {
 
 test "polymorphic arithmetic without a resolver is not compilable" {
     const instrs = [_]Instruction{
-        .{ .op = .{ .push_literal = .{ .string = "hello" } }, .line = 1 },
+        .{ .op = .{ .push_literal = value_mod.stringValue("hello") }, .line = 1 },
         .{ .op = .{ .call_word = "+" }, .line = 2 },
     };
     // Two runtime-unknown operands take the polymorphic path, whose fallback
@@ -15911,7 +15949,7 @@ test "compile swap drop (nip)" {
 
 test "compile non-fixnum literal dup" {
     const instrs = [_]Instruction{
-        .{ .op = .{ .push_literal = .{ .string = "hello" } }, .line = 1 },
+        .{ .op = .{ .push_literal = value_mod.stringValue("hello") }, .line = 1 },
         .{ .op = .{ .call_word = "dup" }, .line = 2 },
     };
     const result = try compileWord(&instrs, 0, 2, null, null, null, null, null);
@@ -15924,15 +15962,15 @@ test "compile non-fixnum literal dup" {
     try testing.expectEqual(@as(i32, 0), status);
     try testing.expectEqual(@as(usize, 2), sp);
     try testing.expect(values[0] == .string);
-    try testing.expect(std.mem.eql(u8, "hello", values[0].string));
+    try testing.expect(std.mem.eql(u8, "hello", values[0].string.bytes));
     try testing.expect(values[1] == .string);
-    try testing.expect(std.mem.eql(u8, "hello", values[1].string));
+    try testing.expect(std.mem.eql(u8, "hello", values[1].string.bytes));
 }
 
 test "compile non-fixnum literal swap" {
     const instrs = [_]Instruction{
-        .{ .op = .{ .push_literal = .{ .string = "aaa" } }, .line = 1 },
-        .{ .op = .{ .push_literal = .{ .string = "bbb" } }, .line = 2 },
+        .{ .op = .{ .push_literal = value_mod.stringValue("aaa") }, .line = 1 },
+        .{ .op = .{ .push_literal = value_mod.stringValue("bbb") }, .line = 2 },
         .{ .op = .{ .call_word = "swap" }, .line = 3 },
     };
     const result = try compileWord(&instrs, 0, 2, null, null, null, null, null);
@@ -15945,9 +15983,9 @@ test "compile non-fixnum literal swap" {
     try testing.expectEqual(@as(i32, 0), status);
     try testing.expectEqual(@as(usize, 2), sp);
     try testing.expect(values[0] == .string);
-    try testing.expect(std.mem.eql(u8, "bbb", values[0].string));
+    try testing.expect(std.mem.eql(u8, "bbb", values[0].string.bytes));
     try testing.expect(values[1] == .string);
-    try testing.expect(std.mem.eql(u8, "aaa", values[1].string));
+    try testing.expect(std.mem.eql(u8, "aaa", values[1].string.bytes));
 }
 
 test "compile literal + input swap" {
@@ -16051,7 +16089,7 @@ test "compile comparison on non-fixnum bails" {
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
-    var values = [_]Value{ .{ .string = "hello" }, .{ .fixnum = 5 } };
+    var values = [_]Value{ value_mod.stringValue("hello"), .{ .fixnum = 5 } };
     var sp: usize = 2;
     try testing.expectEqual(@as(i32, 1), callCompiledValues(func, &values, &sp));
     try testing.expectEqual(@as(usize, 2), sp);
@@ -16249,7 +16287,7 @@ test "armBodyBranchlessEligible: side-effecting, trapping, control-flow, and non
         .{ .op = .{ .call_word = "if" }, .line = 1 },
     };
     const non_scalar_literal = [_]Instruction{
-        .{ .op = .{ .push_literal = .{ .string = "x" } }, .line = 1 },
+        .{ .op = .{ .push_literal = value_mod.stringValue("x") }, .line = 1 },
     };
     // `nip` is trap-free but a prelude word, not an intrinsic: compiling it
     // flushes the abstract stack to physical slots, so it is excluded.
@@ -19920,7 +19958,7 @@ test "a relaxed type-check pragma disables output narrowing" {
 
     // A bare Context has no pragma frame; loadPrelude normally pushes the base one.
     try ictx.pushPragmaFrame();
-    try ictx.setPragma("type-check", .{ .string = "off" });
+    try ictx.setPragma("type-check", value_mod.stringValue("off"));
 
     const fixnum_tv = ictx.lookupBuiltinTypeValue("fixnum").?;
     const outputs = [_]stack_effect_mod.StackEffectParam{
@@ -20828,7 +20866,7 @@ test "aotSatisfiesAndDispatch dispatches through a populated slot table" {
         false,
     );
 
-    const descriptor = try ctx.createProtocolDescriptor("describable", &[_]Value{.{ .symbol = "describe" }});
+    const descriptor = try ctx.createProtocolDescriptor("describable", &[_]Value{value_mod.symbolValue("describe")});
     var slots = [_]?*const value_mod.ProtocolDescriptor{descriptor};
     ctx.image_protocoldescriptor_slots = &slots;
     ctx.image_protocoldescriptor_slot_count = 1;
@@ -20836,14 +20874,16 @@ test "aotSatisfiesAndDispatch dispatches through a populated slot table" {
     try ctx.stack.push(.{ .fixnum = 42 });
     const rc = aotSatisfiesAndDispatch(@intFromPtr(&ctx), did, 0, @intFromEnum(dispatch_helpers.ProtocolArity.unary), 0);
     try testing.expectEqual(@as(i32, 0), rc);
-    try testing.expectEqualStrings("42", (try ctx.stack.pop()).string);
+    const inspected = try ctx.stack.pop();
+    defer container_backing.releaseValue(inspected);
+    try testing.expectEqualStrings("42", inspected.string.bytes);
 }
 
 test "aotSatisfiesAndDispatch rejects an out-of-range slot index" {
     var ctx = Context.init(testing.allocator);
     defer ctx.deinit();
 
-    const descriptor = try ctx.createProtocolDescriptor("describable", &[_]Value{.{ .symbol = "describe" }});
+    const descriptor = try ctx.createProtocolDescriptor("describable", &[_]Value{value_mod.symbolValue("describe")});
     var slots = [_]?*const value_mod.ProtocolDescriptor{descriptor};
     ctx.image_protocoldescriptor_slots = &slots;
     ctx.image_protocoldescriptor_slot_count = 1;

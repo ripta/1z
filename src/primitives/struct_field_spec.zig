@@ -37,8 +37,8 @@ pub fn parse(
     var i: usize = 0;
     while (i < values.len) {
         const raw = switch (values[i]) {
-            .string => |s| s,
-            .symbol => |s| s,
+            .string => |s| s.bytes,
+            .symbol => |s| s.bytes,
             .type_val => |tv| tv.name,
             .marker => |mk| mk.name,
             else => {
@@ -61,10 +61,12 @@ pub fn parse(
                 .protocol_descriptor => |pd| .{ .protocol = pd },
                 .constraint_combinator => |cc| .{ .combinator = cc },
                 .symbol => |s| blk: {
-                    if (type_params.get(s)) |existing| break :blk .{ .type = existing };
-                    const param_tv = try value_mod.mintTypeParameter(allocator, s, next_param_pos);
+                    if (type_params.get(s.bytes)) |existing| break :blk .{ .type = existing };
+                    // The minted TypeValue outlives the collected values.
+                    const param_name = try allocator.dupe(u8, s.bytes);
+                    const param_tv = try value_mod.mintTypeParameter(allocator, param_name, next_param_pos);
                     next_param_pos += 1;
-                    try type_params.put(allocator, s, param_tv);
+                    try type_params.put(allocator, param_name, param_tv);
                     break :blk .{ .type = param_tv };
                 },
                 .marker => |mk| blk: {
@@ -90,7 +92,9 @@ pub fn parse(
                 return error.ParseError;
             }
             saw_typed = true;
-            try field_names.append(allocator, if (values[i] == .symbol) raw else raw[0 .. raw.len - 1]);
+            // Field names flow into interned descriptors that outlive the collected values.
+            const typed_name = if (values[i] == .symbol) raw else raw[0 .. raw.len - 1];
+            try field_names.append(allocator, try allocator.dupe(u8, typed_name));
             try field_types.append(allocator, element);
             i += advance;
             continue;
@@ -101,7 +105,7 @@ pub fn parse(
             return error.ParseError;
         }
         saw_untyped = true;
-        try field_names.append(allocator, raw);
+        try field_names.append(allocator, try allocator.dupe(u8, raw));
         i += 1;
     }
 
@@ -162,10 +166,11 @@ pub fn combineBindPlaceholder(
         tuple[k] = switch (pv) {
             .type_val => |tv| tv,
             .symbol => |s| blk: {
-                if (type_params.get(s)) |existing| break :blk existing;
-                const ptv = try value_mod.mintTypeParameter(allocator, s, next_param_pos.*);
+                if (type_params.get(s.bytes)) |existing| break :blk existing;
+                const param_name = try allocator.dupe(u8, s.bytes);
+                const ptv = try value_mod.mintTypeParameter(allocator, param_name, next_param_pos.*);
                 next_param_pos.* += 1;
-                try type_params.put(allocator, s, ptv);
+                try type_params.put(allocator, param_name, ptv);
                 break :blk ptv;
             },
             else => {
@@ -205,8 +210,8 @@ test "type-parameter symbols in the type slot mint per-position parameters" {
 
     // struct{ id: T: age: U: }
     const values = [_]Value{
-        .{ .symbol = "id" },  .{ .symbol = "T" },
-        .{ .symbol = "age" }, .{ .symbol = "U" },
+        value_mod.symbolValue("id"),  value_mod.symbolValue("T"),
+        value_mod.symbolValue("age"), value_mod.symbolValue("U"),
     };
     const parsed = try parse(alloc, &ctx, &values, "struct{");
 
@@ -234,8 +239,8 @@ test "a repeated type-parameter symbol is shared across fields" {
 
     // struct{ first: T: second: T: }
     const values = [_]Value{
-        .{ .symbol = "first" },  .{ .symbol = "T" },
-        .{ .symbol = "second" }, .{ .symbol = "T" },
+        value_mod.symbolValue("first"),  value_mod.symbolValue("T"),
+        value_mod.symbolValue("second"), value_mod.symbolValue("T"),
     };
     const parsed = try parse(alloc, &ctx, &values, "struct{");
 
@@ -254,8 +259,8 @@ test "same-spelled type parameters are independent across definitions" {
     defer arena.deinit();
     const alloc = arena.allocator();
 
-    const values_a = [_]Value{ .{ .symbol = "x" }, .{ .symbol = "T" } };
-    const values_b = [_]Value{ .{ .symbol = "y" }, .{ .symbol = "T" } };
+    const values_a = [_]Value{ value_mod.symbolValue("x"), value_mod.symbolValue("T") };
+    const values_b = [_]Value{ value_mod.symbolValue("y"), value_mod.symbolValue("T") };
     const parsed_a = try parse(alloc, &ctx, &values_a, "struct{");
     const parsed_b = try parse(alloc, &ctx, &values_b, "struct{");
 
@@ -276,9 +281,9 @@ test "struct descriptor projects declared type parameters in position order" {
 
     // struct{ id: T: age: U: first: T: } -- T shared by two slots, U once.
     const values = [_]Value{
-        .{ .symbol = "id" },    .{ .symbol = "T" },
-        .{ .symbol = "age" },   .{ .symbol = "U" },
-        .{ .symbol = "first" }, .{ .symbol = "T" },
+        value_mod.symbolValue("id"),    value_mod.symbolValue("T"),
+        value_mod.symbolValue("age"),   value_mod.symbolValue("U"),
+        value_mod.symbolValue("first"), value_mod.symbolValue("T"),
     };
     const parsed = try parse(alloc, &ctx, &values, "struct{");
 
@@ -297,7 +302,7 @@ test "struct descriptor projects declared type parameters in position order" {
 /// Build a one-parameter base struct `box: struct{ item: A: }` and return its
 /// TypeValue for the bind{ combine tests.
 fn makeBoxBaseType(alloc: Allocator, ctx: *Context) !*value_mod.TypeValue {
-    const base_vals = [_]Value{ .{ .symbol = "item" }, .{ .symbol = "A" } };
+    const base_vals = [_]Value{ value_mod.symbolValue("item"), value_mod.symbolValue("A") };
     const base_parsed = try parse(alloc, ctx, &base_vals, "struct{");
     const box_desc = try ctx.getOrCreateStructDescriptor(base_parsed.names, base_parsed.types, false);
     const box_tv = try alloc.create(value_mod.TypeValue);
@@ -317,11 +322,11 @@ test "a bind{ placeholder combines with a base into a parameterized field type" 
     // struct{ v: box bind{ T: } }
     const placeholder = [_]Value{
         .{ .marker = @constCast(&markers_mod.bind_placeholder_marker) },
-        .{ .symbol = "T" },
+        value_mod.symbolValue("T"),
     };
     var placeholder_arr = value_mod.Array{ .header = undefined, .items = &placeholder, .storage = .static };
     const values = [_]Value{
-        .{ .symbol = "v" }, .{ .type_val = box_tv }, .{ .array = &placeholder_arr },
+        value_mod.symbolValue("v"), .{ .type_val = box_tv }, .{ .array = &placeholder_arr },
     };
     const parsed = try parse(alloc, &ctx, &values, "struct{");
 
@@ -350,12 +355,12 @@ test "a bare parameter and a bind{ parameter share within one definition" {
     // struct{ a: T: b: box bind{ T: } }
     const placeholder = [_]Value{
         .{ .marker = @constCast(&markers_mod.bind_placeholder_marker) },
-        .{ .symbol = "T" },
+        value_mod.symbolValue("T"),
     };
     var placeholder_arr = value_mod.Array{ .header = undefined, .items = &placeholder, .storage = .static };
     const values = [_]Value{
-        .{ .symbol = "a" },             .{ .symbol = "T" },
-        .{ .symbol = "b" },             .{ .type_val = box_tv },
+        value_mod.symbolValue("a"),     value_mod.symbolValue("T"),
+        value_mod.symbolValue("b"),     .{ .type_val = box_tv },
         .{ .array = &placeholder_arr },
     };
     const parsed = try parse(alloc, &ctx, &values, "struct{");
@@ -382,12 +387,12 @@ test "a bind{ parameter count must match the base's unbound count" {
     // struct{ v: box bind{ T: U: } } -- two params for a one-parameter base.
     const placeholder = [_]Value{
         .{ .marker = @constCast(&markers_mod.bind_placeholder_marker) },
-        .{ .symbol = "T" },
-        .{ .symbol = "U" },
+        value_mod.symbolValue("T"),
+        value_mod.symbolValue("U"),
     };
     var placeholder_arr = value_mod.Array{ .header = undefined, .items = &placeholder, .storage = .static };
     const values = [_]Value{
-        .{ .symbol = "v" }, .{ .type_val = box_tv }, .{ .array = &placeholder_arr },
+        value_mod.symbolValue("v"), .{ .type_val = box_tv }, .{ .array = &placeholder_arr },
     };
     try testing.expectError(error.ParseError, parse(alloc, &ctx, &values, "struct{"));
 }
@@ -410,7 +415,7 @@ test "a bind{ placeholder with a concrete type param fully binds the base" {
     };
     var placeholder_arr = value_mod.Array{ .header = undefined, .items = &placeholder, .storage = .static };
     const values = [_]Value{
-        .{ .symbol = "v" }, .{ .type_val = box_tv }, .{ .array = &placeholder_arr },
+        value_mod.symbolValue("v"), .{ .type_val = box_tv }, .{ .array = &placeholder_arr },
     };
     const parsed = try parse(alloc, &ctx, &values, "struct{");
 

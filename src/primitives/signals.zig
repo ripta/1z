@@ -7,6 +7,7 @@ const is_freestanding = builtin.os.tag == .freestanding;
 const Context = @import("../context.zig").Context;
 const signal_mod = @import("../signal.zig");
 const helpers = @import("helpers.zig");
+const container_backing = @import("../container_backing.zig");
 
 const Primitive = @import("types.zig").Primitive;
 const RegistryEntry = @import("types.zig").RegistryEntry;
@@ -117,9 +118,10 @@ const signal_names = .{
 fn nativeSignalNumber(ctx: *Context) anyerror!void {
     if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "signal-number");
     const val = ctx.stack.pop() catch return error.StackUnderflow;
+    defer container_backing.releaseValue(val);
     const name = switch (val) {
-        .symbol => |s| s,
-        .string => |s| s,
+        .symbol => |s| s.bytes,
+        .string => |s| s.bytes,
         else => {
             ctx.pending_error_message = "signal-number expects a symbol or string";
             return error.TypeMismatch;

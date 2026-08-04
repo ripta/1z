@@ -38,9 +38,11 @@ pub const registry_entries = [_]RegistryEntry{
 fn nativeRegisterHook(ctx: *Context) anyerror!void {
     const quot = try helpers.popQuotation(ctx);
     const val = ctx.stack.pop() catch return error.StackUnderflow;
+    // The event-key bytes are duped for a fresh map entry below.
+    defer container_backing.releaseValue(val);
     const sym = switch (val) {
-        .symbol => |s| s,
-        .string => |s| s,
+        .symbol => |s| s.bytes,
+        .string => |s| s.bytes,
         else => {
             ctx.pending_error_message = "register-global-hook expects a symbol or string as the event key";
             return error.TypeMismatch;
@@ -52,7 +54,12 @@ fn nativeRegisterHook(ctx: *Context) anyerror!void {
 
     const result = registry.hooks.getOrPut(alloc, sym) catch return error.OutOfMemory;
     if (!result.found_existing) {
-        result.key_ptr.* = alloc.dupe(u8, sym) catch return error.OutOfMemory;
+        // A failed dupe must not leave the entry keyed by the popped value's
+        // bytes, which the deferred release may free.
+        result.key_ptr.* = alloc.dupe(u8, sym) catch {
+            registry.hooks.removeByPtr(result.key_ptr);
+            return error.OutOfMemory;
+        };
         result.value_ptr.* = .{};
     }
     result.value_ptr.append(alloc, quot) catch return error.OutOfMemory;
@@ -95,6 +102,7 @@ pub fn fireHooks(ctx: *Context, event_name: []const u8, args: []const Value) voi
 /// The parameter should hold an array of quotations, e.g., word-defined-hooks.
 fn nativeRegisterScopedHook(ctx: *Context) anyerror!void {
     const param_val = ctx.stack.pop() catch return error.StackUnderflow;
+    defer container_backing.releaseValue(param_val);
     const param = switch (param_val) {
         .parameter => |p| p,
         else => {
@@ -108,16 +116,21 @@ fn nativeRegisterScopedHook(ctx: *Context) anyerror!void {
         .quotation, .closure => {},
         else => {
             ctx.pending_error_message = "register-scoped-hook expects a quotation as first argument";
+            container_backing.releaseValue(quot_val);
             return error.TypeMismatch;
         },
     }
 
     const alloc = ctx.quotationAllocator();
 
+    var current_owned = false;
     const current = ctx.getParameterBinding(param.name) orelse blk: {
         ctx.executeQuotation(param.default_quotation) catch return error.OutOfMemory;
+        current_owned = true;
         break :blk ctx.stack.pop() catch return error.StackUnderflow;
     };
+    // A binding hit is a borrow; only the default-quotation result is owned here.
+    defer if (current_owned) container_backing.releaseValue(current);
 
     const old_items = switch (current) {
         .array => |arr| arr.items,

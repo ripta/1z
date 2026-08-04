@@ -183,7 +183,7 @@ fn sortByKeyCompareFn(sort_ctx: *SortByContext, a_idx: usize, b_idx: usize) bool
             else => {},
         },
         .string => |av| switch (b_key) {
-            .string => |bv| return std.mem.order(u8, av, bv) == .lt,
+            .string => |bv| return std.mem.order(u8, av.bytes, bv.bytes) == .lt,
             else => {},
         },
         else => {},
@@ -237,10 +237,15 @@ fn nativeSortBy(ctx: *Context) anyerror!void {
     }
 
     const keys = scratch.alloc(Value, items.len) catch return error.OutOfMemory;
+    // Keys popped so far are owned quotation outputs; release them if a later
+    // key extraction throws.
+    var keys_filled: usize = 0;
+    errdefer container_backing.releaseValues(keys[0..keys_filled]);
     for (items, 0..) |item, i| {
         try ctx.stack.push(item);
         try ctx.executeQuotationWithFrame(quot);
         keys[i] = try ctx.stack.pop();
+        keys_filled = i + 1;
     }
 
     const indices = scratch.alloc(usize, items.len) catch return error.OutOfMemory;
@@ -258,7 +263,6 @@ fn nativeSortBy(ctx: *Context) anyerror!void {
         if (e == error.NotComparable) {
             setErrorContext(ctx, "keys are not comparable", .{});
         }
-        container_backing.releaseValues(keys);
         return e;
     }
 
@@ -271,6 +275,7 @@ fn nativeSortBy(ctx: *Context) anyerror!void {
     alloc.free(items);
     // The keys are owned quotation outputs; drop them.
     container_backing.releaseValues(keys);
+    keys_filled = 0;
     try helpers.pushAdoptedArray(ctx, alloc, result);
 }
 
@@ -290,7 +295,8 @@ const utf8SliceByCodepoints = sequence.utf8SliceByCodepoints;
 
 fn nativeLenString(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
-    try ctx.stack.push(.{ .fixnum = @intCast(utf8CodepointCount(val.string)) });
+    defer container_backing.releaseValue(val);
+    try ctx.stack.push(.{ .fixnum = @intCast(utf8CodepointCount(val.string.bytes)) });
 }
 
 fn nativeLenArray(ctx: *Context) anyerror!void {
@@ -331,19 +337,22 @@ fn nativeLenMutableMap(ctx: *Context) anyerror!void {
 
 fn nativeLenModule(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
+    defer container_backing.releaseValue(val);
     try ctx.stack.push(.{ .fixnum = @intCast(val.module.words.count()) });
 }
 
 fn nativeNthString(ctx: *Context) anyerror!void {
     const b = try ctx.stack.pop();
+    defer container_backing.releaseValue(b);
     const a = try ctx.stack.pop();
+    defer container_backing.releaseValue(a);
     const index = b.fixnum;
     if (index < 0) {
         setErrorContext(ctx, "negative index {d}", .{index});
         return error.IndexOutOfBounds;
     }
     const idx: usize = @intCast(index);
-    const s = a.string;
+    const s = a.string.bytes;
     const cp_slice = utf8NthCodepoint(s, idx) orelse {
         const slen = std.unicode.utf8CountCodepoints(s) catch s.len;
         setErrorContext(ctx, "index {d} out of bounds for string of length {d}", .{ idx, slen });
@@ -351,16 +360,17 @@ fn nativeNthString(ctx: *Context) anyerror!void {
     };
     if (cp_slice.len == 1) {
         if (ctx.internedAsciiByte(cp_slice[0])) |shared| {
-            try ctx.stack.push(.{ .string = shared });
+            try ctx.stack.push(value_mod.stringValue(shared));
             return;
         }
     }
-    const result = ctx.quotationAllocator().dupe(u8, cp_slice) catch return error.OutOfMemory;
-    try ctx.stack.push(.{ .string = result });
+    // A multi-byte codepoint is a zero-copy sub-slice sharing the source's backing.
+    try ctx.stack.push(.{ .string = a.string.sub(cp_slice) });
 }
 
 fn nativeNthArray(ctx: *Context) anyerror!void {
     const b = try ctx.stack.pop();
+    defer container_backing.releaseValue(b);
     const a = try ctx.stack.pop();
     defer container_backing.releaseValue(a);
     const index = b.fixnum;
@@ -379,6 +389,7 @@ fn nativeNthArray(ctx: *Context) anyerror!void {
 
 fn nativeNthVector(ctx: *Context) anyerror!void {
     const b = try ctx.stack.pop();
+    defer container_backing.releaseValue(b);
     const a = try ctx.stack.pop();
     defer container_backing.releaseValue(a);
     const index = b.fixnum;
@@ -398,6 +409,7 @@ fn nativeNthVector(ctx: *Context) anyerror!void {
 
 fn nativeNthByteArray(ctx: *Context) anyerror!void {
     const b = try ctx.stack.pop();
+    defer container_backing.releaseValue(b);
     const a = try ctx.stack.pop();
     defer container_backing.releaseValue(a);
     const index = b.fixnum;
@@ -417,6 +429,8 @@ fn nativeNthByteArray(ctx: *Context) anyerror!void {
 
 fn nativeFirstString(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
+    // The yielded codepoint is an interned or arena-duped string, never a sub-slice of val.
+    defer container_backing.releaseValue(val);
     const alloc = ctx.quotationAllocator();
     var iter = SequenceIterator.init(val, alloc) orelse unreachable;
     iter.single_char_cache = ctx.single_char_strings;
@@ -463,6 +477,8 @@ fn nativeFirstByteArray(ctx: *Context) anyerror!void {
 
 fn nativeLastString(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
+    // The yielded codepoint is an arena-duped string, never a sub-slice of val.
+    defer container_backing.releaseValue(val);
     const alloc = ctx.quotationAllocator();
     var iter = SequenceIterator.init(val, alloc) orelse unreachable;
     var last: ?Value = null;
@@ -699,8 +715,14 @@ fn nativeNthMut(ctx: *Context) anyerror!void {
     }
 
     const value = try ctx.stack.pop();
-    const index = try popFixnum(ctx);
-    const seq = try ctx.stack.pop();
+    const index = popFixnum(ctx) catch |err| {
+        container_backing.releaseValue(value);
+        return err;
+    };
+    const seq = ctx.stack.pop() catch |err| {
+        container_backing.releaseValue(value);
+        return err;
+    };
 
     if (index < 0) {
         container_backing.releaseValue(value);
@@ -1053,12 +1075,12 @@ pub fn nativeSlice(ctx: *Context) anyerror!void {
             try helpers.pushCopiedArray(ctx, ctx.allocator, arr.items[start..end]);
         },
         .string => |s| {
-            const bounds = utf8SliceByCodepoints(s, start, end) orelse {
-                const slen = std.unicode.utf8CountCodepoints(s) catch s.len;
+            const bounds = utf8SliceByCodepoints(s.bytes, start, end) orelse {
+                const slen = std.unicode.utf8CountCodepoints(s.bytes) catch s.bytes.len;
                 setErrorContext(ctx, "slice [{}:{}] out of bounds for string of length {}", .{ start, end, slen });
                 return error.IndexOutOfBounds;
             };
-            try ctx.stack.push(.{ .string = s[bounds.start_byte..bounds.end_byte] });
+            try ctx.stack.push(.{ .string = s.sub(s.bytes[bounds.start_byte..bounds.end_byte]) });
         },
         .vector => |v| {
             if (end > v.list.items.len) {
@@ -1103,13 +1125,14 @@ fn nativeByteSlice(ctx: *Context) anyerror!void {
     const seq = try ctx.stack.pop();
     defer container_backing.releaseValue(seq);
 
-    const s = switch (seq) {
+    const pay = switch (seq) {
         .string => |str| str,
         else => {
             setErrorContext(ctx, "#byte-slice requires string, got {s}", .{valueTypeName(seq)});
             return error.TypeMismatch;
         },
     };
+    const s = pay.bytes;
 
     if (start_val < 0) {
         setErrorContext(ctx, "negative start byte offset {d}", .{start_val});
@@ -1144,7 +1167,7 @@ fn nativeByteSlice(ctx: *Context) anyerror!void {
         return error.InvalidUtf8;
     }
 
-    try ctx.stack.push(.{ .string = s[start..end] });
+    try ctx.stack.push(.{ .string = pay.sub(s[start..end]) });
 }
 
 /// #byte-len ( str -- n )
@@ -1153,7 +1176,7 @@ fn nativeByteLen(ctx: *Context) anyerror!void {
     defer container_backing.releaseValue(seq);
 
     const s = switch (seq) {
-        .string => |str| str,
+        .string => |str| str.bytes,
         else => {
             setErrorContext(ctx, "#byte-len requires string, got {s}", .{valueTypeName(seq)});
             return error.TypeMismatch;
@@ -1170,7 +1193,7 @@ fn nativeByteDecode(ctx: *Context) anyerror!void {
     defer container_backing.releaseValue(seq);
 
     const s = switch (seq) {
-        .string => |str| str,
+        .string => |str| str.bytes,
         else => {
             setErrorContext(ctx, "#byte-decode requires string, got {s}", .{valueTypeName(seq)});
             return error.TypeMismatch;
@@ -1203,7 +1226,7 @@ fn nativeByteDecode(ctx: *Context) anyerror!void {
         return error.InvalidUtf8;
     }
 
-    try ctx.stack.push(.{ .string = s[off..next] });
+    try ctx.stack.push(.{ .string = seq.string.sub(s[off..next]) });
     try ctx.stack.push(.{ .fixnum = @intCast(next) });
 }
 
@@ -1248,11 +1271,11 @@ pub fn nativeAppend(ctx: *Context) anyerror!void {
             // Fast path: seq2 is already byte-compatible, so memcpy directly instead of
             // expanding it into one boxed Value per byte via sequenceToValues below.
             if (seq2 == .string or seq2 == .byte_array) {
-                const bytes2: []const u8 = if (seq2 == .string) seq2.string else seq2.byte_array.slice();
-                const result = alloc.alloc(u8, s1.len + bytes2.len) catch return error.OutOfMemory;
-                @memcpy(result[0..s1.len], s1);
-                @memcpy(result[s1.len..], bytes2);
-                try ctx.stack.push(.{ .string = result });
+                const bytes2: []const u8 = if (seq2 == .string) seq2.string.bytes else seq2.byte_array.slice();
+                const result = ctx.allocator.alloc(u8, s1.bytes.len + bytes2.len) catch return error.OutOfMemory;
+                @memcpy(result[0..s1.bytes.len], s1.bytes);
+                @memcpy(result[s1.bytes.len..], bytes2);
+                try helpers.pushOwnedString(ctx, result);
                 return;
             }
 
@@ -1260,10 +1283,10 @@ pub fn nativeAppend(ctx: *Context) anyerror!void {
             // Accept both strings (codepoints) and integers 0-255 (single bytes)
             const items2 = try sequenceToValuesScratch(seq2, ctx.allocator, alloc);
             defer ctx.allocator.free(items2);
-            var total_len: usize = s1.len;
+            var total_len: usize = s1.bytes.len;
             for (items2) |item| {
                 switch (item) {
-                    .string => |s| total_len += s.len,
+                    .string => |s| total_len += s.bytes.len,
                     .fixnum => |i| {
                         if (i < 0 or i > 255) {
                             setErrorContext(ctx, "byte value {d} out of range 0-255", .{i});
@@ -1277,14 +1300,14 @@ pub fn nativeAppend(ctx: *Context) anyerror!void {
                     },
                 }
             }
-            const result = alloc.alloc(u8, total_len) catch return error.OutOfMemory;
-            @memcpy(result[0..s1.len], s1);
-            var pos: usize = s1.len;
+            const result = ctx.allocator.alloc(u8, total_len) catch return error.OutOfMemory;
+            @memcpy(result[0..s1.bytes.len], s1.bytes);
+            var pos: usize = s1.bytes.len;
             for (items2) |item| {
                 switch (item) {
                     .string => |s| {
-                        @memcpy(result[pos..][0..s.len], s);
-                        pos += s.len;
+                        @memcpy(result[pos..][0..s.bytes.len], s.bytes);
+                        pos += s.bytes.len;
                     },
                     .fixnum => |i| {
                         result[pos] = @intCast(i);
@@ -1293,13 +1316,13 @@ pub fn nativeAppend(ctx: *Context) anyerror!void {
                     else => unreachable,
                 }
             }
-            try ctx.stack.push(.{ .string = result });
+            try helpers.pushOwnedString(ctx, result);
         },
         .byte_array => |b1| {
             // Fast path: seq2 is already byte-compatible, so memcpy directly instead of
             // expanding it into one boxed Value per byte via sequenceToValues below.
             if (seq2 == .string or seq2 == .byte_array) {
-                const bytes2: []const u8 = if (seq2 == .string) seq2.string else seq2.byte_array.slice();
+                const bytes2: []const u8 = if (seq2 == .string) seq2.string.bytes else seq2.byte_array.slice();
                 const result_ba = ByteArray.create(alloc) catch return error.OutOfMemory;
                 const bytes1 = b1.slice();
                 result_ba.ensureTotalCapacity(alloc, bytes1.len + bytes2.len) catch return error.OutOfMemory;
@@ -1323,7 +1346,7 @@ pub fn nativeAppend(ctx: *Context) anyerror!void {
                         }
                         extra_len += 1;
                     },
-                    .string => |s| extra_len += s.len,
+                    .string => |s| extra_len += s.bytes.len,
                     else => {
                         setErrorContext(ctx, "cannot append {s} to byte-array", .{valueTypeName(item)});
                         return error.TypeMismatch;
@@ -1340,7 +1363,7 @@ pub fn nativeAppend(ctx: *Context) anyerror!void {
                         result_ba.appendAssumeCapacity(@intCast(i));
                     },
                     .string => |s| {
-                        for (s) |byte| {
+                        for (s.bytes) |byte| {
                             result_ba.appendAssumeCapacity(byte);
                         }
                     },
@@ -1460,10 +1483,10 @@ pub fn nativePrepend(ctx: *Context) anyerror!void {
             // Accept both strings (codepoints) and integers 0-255 (single bytes)
             const items2 = try sequenceToValuesScratch(seq2, ctx.allocator, alloc);
             defer ctx.allocator.free(items2);
-            var total_len: usize = s1.len;
+            var total_len: usize = s1.bytes.len;
             for (items2) |item| {
                 switch (item) {
-                    .string => |s| total_len += s.len,
+                    .string => |s| total_len += s.bytes.len,
                     .fixnum => |i| {
                         if (i < 0 or i > 255) {
                             setErrorContext(ctx, "byte value {d} out of range 0-255", .{i});
@@ -1478,13 +1501,13 @@ pub fn nativePrepend(ctx: *Context) anyerror!void {
                 }
             }
 
-            const result = alloc.alloc(u8, total_len) catch return error.OutOfMemory;
+            const result = ctx.allocator.alloc(u8, total_len) catch return error.OutOfMemory;
             var pos: usize = 0;
             for (items2) |item| {
                 switch (item) {
                     .string => |s| {
-                        @memcpy(result[pos..][0..s.len], s);
-                        pos += s.len;
+                        @memcpy(result[pos..][0..s.bytes.len], s.bytes);
+                        pos += s.bytes.len;
                     },
                     .fixnum => |i| {
                         result[pos] = @intCast(i);
@@ -1494,8 +1517,8 @@ pub fn nativePrepend(ctx: *Context) anyerror!void {
                 }
             }
 
-            @memcpy(result[pos..], s1);
-            try ctx.stack.push(.{ .string = result });
+            @memcpy(result[pos..], s1.bytes);
+            try helpers.pushOwnedString(ctx, result);
         },
         .byte_array => |b1| {
             // For byte arrays, accept integers 0-255 and strings (as UTF-8 bytes)
@@ -1512,7 +1535,7 @@ pub fn nativePrepend(ctx: *Context) anyerror!void {
                         }
                         extra_len += 1;
                     },
-                    .string => |s| extra_len += s.len,
+                    .string => |s| extra_len += s.bytes.len,
                     else => {
                         setErrorContext(ctx, "cannot prepend {s} to byte-array", .{valueTypeName(item)});
                         return error.TypeMismatch;
@@ -1529,7 +1552,7 @@ pub fn nativePrepend(ctx: *Context) anyerror!void {
                         result_ba.appendAssumeCapacity(@intCast(i));
                     },
                     .string => |s| {
-                        for (s) |byte| {
+                        for (s.bytes) |byte| {
                             result_ba.appendAssumeCapacity(byte);
                         }
                     },
@@ -1580,18 +1603,18 @@ fn nativePush(ctx: *Context) anyerror!void {
         .string => |s| {
             // Element must be a string
             const elem_str = switch (elem) {
-                .string => |es| es,
+                .string => |es| es.bytes,
                 else => {
                     container_backing.releaseValue(elem);
                     setErrorContext(ctx, "#push on string requires string element, got {s}", .{valueTypeName(elem)});
                     return error.TypeMismatch;
                 },
             };
-            const result = alloc.alloc(u8, s.len + elem_str.len) catch return error.OutOfMemory;
-            @memcpy(result[0..s.len], s);
-            @memcpy(result[s.len..], elem_str);
+            const result = ctx.allocator.alloc(u8, s.bytes.len + elem_str.len) catch return error.OutOfMemory;
+            @memcpy(result[0..s.bytes.len], s.bytes);
+            @memcpy(result[s.bytes.len..], elem_str);
             container_backing.releaseValue(elem);
-            try ctx.stack.push(.{ .string = result });
+            try helpers.pushOwnedString(ctx, result);
         },
         .byte_array => |b| {
             // Element must be a fixnum 0-255
@@ -1658,7 +1681,7 @@ fn nativePop(ctx: *Context) anyerror!void {
             try ctx.stack.push(vec.list.items[vec.list.items.len - 1]);
         },
         .string => |s| {
-            const cp_count = std.unicode.utf8CountCodepoints(s) catch {
+            const cp_count = std.unicode.utf8CountCodepoints(s.bytes) catch {
                 setErrorContext(ctx, "invalid UTF-8 in string", .{});
                 return error.InvalidUtf8;
             };
@@ -1666,12 +1689,12 @@ fn nativePop(ctx: *Context) anyerror!void {
                 setErrorContext(ctx, "cannot #pop from empty string", .{});
                 return error.EmptySequence;
             }
-            const bounds = utf8SliceByCodepoints(s, cp_count - 1, cp_count) orelse {
+            const bounds = utf8SliceByCodepoints(s.bytes, cp_count - 1, cp_count) orelse {
                 setErrorContext(ctx, "internal error getting last codepoint", .{});
                 return error.InvalidUtf8;
             };
-            try ctx.stack.push(.{ .string = s[0..bounds.start_byte] });
-            try ctx.stack.push(.{ .string = s[bounds.start_byte..bounds.end_byte] });
+            try ctx.stack.push(.{ .string = s.sub(s.bytes[0..bounds.start_byte]) });
+            try ctx.stack.push(.{ .string = s.sub(s.bytes[bounds.start_byte..bounds.end_byte]) });
         },
         .byte_array => |b| {
             const bytes = b.slice();
@@ -1724,18 +1747,18 @@ fn nativeUnshift(ctx: *Context) anyerror!void {
         },
         .string => |s| {
             const elem_str = switch (elem) {
-                .string => |es| es,
+                .string => |es| es.bytes,
                 else => {
                     container_backing.releaseValue(elem);
                     setErrorContext(ctx, "#unshift on string requires string element, got {s}", .{valueTypeName(elem)});
                     return error.TypeMismatch;
                 },
             };
-            const result = alloc.alloc(u8, elem_str.len + s.len) catch return error.OutOfMemory;
+            const result = ctx.allocator.alloc(u8, elem_str.len + s.bytes.len) catch return error.OutOfMemory;
             @memcpy(result[0..elem_str.len], elem_str);
-            @memcpy(result[elem_str.len..], s);
+            @memcpy(result[elem_str.len..], s.bytes);
             container_backing.releaseValue(elem);
-            try ctx.stack.push(.{ .string = result });
+            try helpers.pushOwnedString(ctx, result);
         },
         .byte_array => |b| {
             const byte_val: u8 = switch (elem) {
@@ -1801,7 +1824,7 @@ fn nativeShift(ctx: *Context) anyerror!void {
             try ctx.stack.push(vec.list.items[0]);
         },
         .string => |s| {
-            const cp_count = std.unicode.utf8CountCodepoints(s) catch {
+            const cp_count = std.unicode.utf8CountCodepoints(s.bytes) catch {
                 setErrorContext(ctx, "invalid UTF-8 in string", .{});
                 return error.InvalidUtf8;
             };
@@ -1809,12 +1832,12 @@ fn nativeShift(ctx: *Context) anyerror!void {
                 setErrorContext(ctx, "cannot #shift from empty string", .{});
                 return error.EmptySequence;
             }
-            const bounds = utf8SliceByCodepoints(s, 0, 1) orelse {
+            const bounds = utf8SliceByCodepoints(s.bytes, 0, 1) orelse {
                 setErrorContext(ctx, "internal error getting first codepoint", .{});
                 return error.InvalidUtf8;
             };
-            try ctx.stack.push(.{ .string = s[bounds.end_byte..] });
-            try ctx.stack.push(.{ .string = s[0..bounds.end_byte] });
+            try ctx.stack.push(.{ .string = s.sub(s.bytes[bounds.end_byte..]) });
+            try ctx.stack.push(.{ .string = s.sub(s.bytes[0..bounds.end_byte]) });
         },
         .byte_array => |b| {
             const bytes = b.slice();
@@ -2073,13 +2096,13 @@ fn nativeInString(ctx: *Context) anyerror!void {
     defer container_backing.releaseValue(elem);
     defer container_backing.releaseValue(seq);
     const needle = switch (elem) {
-        .string => |es| es,
+        .string => |es| es.bytes,
         else => {
             setErrorContext(ctx, "#in? on string requires string element, got {s}", .{valueTypeName(elem)});
             return error.TypeMismatch;
         },
     };
-    const found = std.mem.indexOf(u8, seq.string, needle) != null;
+    const found = std.mem.indexOf(u8, seq.string.bytes, needle) != null;
     try ctx.stack.push(.{ .boolean = found });
 }
 
@@ -2155,14 +2178,14 @@ fn nativeIndexOfString(ctx: *Context) anyerror!void {
     defer container_backing.releaseValue(elem);
     defer container_backing.releaseValue(seq);
     const needle = switch (elem) {
-        .string => |es| es,
+        .string => |es| es.bytes,
         else => {
             setErrorContext(ctx, "#index-of on string requires string element, got {s}", .{valueTypeName(elem)});
             return error.TypeMismatch;
         },
     };
-    if (std.mem.indexOf(u8, seq.string, needle)) |byte_idx| {
-        const cp_idx = sequence.utf8CodepointCount(seq.string[0..byte_idx]);
+    if (std.mem.indexOf(u8, seq.string.bytes, needle)) |byte_idx| {
+        const cp_idx = sequence.utf8CodepointCount(seq.string.bytes[0..byte_idx]);
         try ctx.stack.push(.{ .fixnum = @intCast(cp_idx) });
     } else {
         try ctx.stack.push(.{ .boolean = false });
@@ -2212,7 +2235,7 @@ fn nativeIndexOfFrom(ctx: *Context) anyerror!void {
     };
 
     const s = switch (seq) {
-        .string => |str| str,
+        .string => |str| str.bytes,
         else => {
             setErrorContext(ctx, "#index-of-from requires string, got {s}", .{valueTypeName(seq)});
             return error.TypeMismatch;
@@ -2220,7 +2243,7 @@ fn nativeIndexOfFrom(ctx: *Context) anyerror!void {
     };
 
     const needle = switch (elem) {
-        .string => |es| es,
+        .string => |es| es.bytes,
         else => {
             setErrorContext(ctx, "#index-of-from requires string needle, got {s}", .{valueTypeName(elem)});
             return error.TypeMismatch;
@@ -2281,7 +2304,7 @@ fn nativeByteIndexOfFrom(ctx: *Context) anyerror!void {
     };
 
     const s = switch (seq) {
-        .string => |str| str,
+        .string => |str| str.bytes,
         else => {
             setErrorContext(ctx, "#byte-index-of-from requires string, got {s}", .{valueTypeName(seq)});
             return error.TypeMismatch;
@@ -2289,7 +2312,7 @@ fn nativeByteIndexOfFrom(ctx: *Context) anyerror!void {
     };
 
     const needle = switch (elem) {
-        .string => |es| es,
+        .string => |es| es.bytes,
         else => {
             setErrorContext(ctx, "#byte-index-of-from requires string needle, got {s}", .{valueTypeName(elem)});
             return error.TypeMismatch;
@@ -2350,17 +2373,17 @@ pub fn nativeTake(ctx: *Context) anyerror!void {
 
     switch (seq) {
         .string => |s| {
-            const cp_count = sequence.utf8CodepointCount(s);
+            const cp_count = sequence.utf8CodepointCount(s.bytes);
             const take_count = @min(n, cp_count);
             if (take_count == 0) {
-                try ctx.stack.push(.{ .string = "" });
+                try ctx.stack.push(value_mod.stringValue(""));
                 return;
             }
-            const bounds = utf8SliceByCodepoints(s, 0, take_count) orelse {
-                try ctx.stack.push(.{ .string = "" });
+            const bounds = utf8SliceByCodepoints(s.bytes, 0, take_count) orelse {
+                try ctx.stack.push(value_mod.stringValue(""));
                 return;
             };
-            try ctx.stack.push(.{ .string = s[0..bounds.end_byte] });
+            try ctx.stack.push(.{ .string = s.sub(s.bytes[0..bounds.end_byte]) });
         },
         .array => |arr| {
             const take_count = @min(n, arr.items.len);
@@ -2420,16 +2443,16 @@ pub fn nativeDrop(ctx: *Context) anyerror!void {
 
     switch (seq) {
         .string => |s| {
-            const cp_count = sequence.utf8CodepointCount(s);
+            const cp_count = sequence.utf8CodepointCount(s.bytes);
             if (n >= cp_count) {
-                try ctx.stack.push(.{ .string = "" });
+                try ctx.stack.push(value_mod.stringValue(""));
                 return;
             }
-            const bounds = utf8SliceByCodepoints(s, n, cp_count) orelse {
-                try ctx.stack.push(.{ .string = "" });
+            const bounds = utf8SliceByCodepoints(s.bytes, n, cp_count) orelse {
+                try ctx.stack.push(value_mod.stringValue(""));
                 return;
             };
-            try ctx.stack.push(.{ .string = s[bounds.start_byte..bounds.end_byte] });
+            try ctx.stack.push(.{ .string = s.sub(s.bytes[bounds.start_byte..bounds.end_byte]) });
         },
         .array => |arr| {
             const drop_count = @min(n, arr.items.len);
@@ -2576,8 +2599,14 @@ fn nativeShrinkMut(ctx: *Context) anyerror!void {
 /// Polymorphic on byte-array and vector.
 fn nativeGrowMut(ctx: *Context) anyerror!void {
     const fill = try ctx.stack.pop();
-    const n_val = try popFixnum(ctx);
-    const seq = try ctx.stack.pop();
+    const n_val = popFixnum(ctx) catch |err| {
+        container_backing.releaseValue(fill);
+        return err;
+    };
+    const seq = ctx.stack.pop() catch |err| {
+        container_backing.releaseValue(fill);
+        return err;
+    };
 
     if (n_val < 0) {
         container_backing.releaseValue(fill);
@@ -2937,8 +2966,14 @@ fn nativePeekByteArray(ctx: *Context) anyerror!void {
 fn nativePokeByteArray(ctx: *Context) anyerror!void {
     const width_val = try popFixnum(ctx);
     const value = try ctx.stack.pop();
-    const offset_val = try popFixnum(ctx);
-    const ba_val = try ctx.stack.pop();
+    const offset_val = popFixnum(ctx) catch |err| {
+        container_backing.releaseValue(value);
+        return err;
+    };
+    const ba_val = ctx.stack.pop() catch |err| {
+        container_backing.releaseValue(value);
+        return err;
+    };
 
     const ba = ba_val.byte_array;
 
@@ -3068,10 +3103,11 @@ fn nativePeek(ctx: *Context) anyerror!void {
     }
 
     const val = try ctx.stack.pop();
-    _ = val;
+    defer container_backing.releaseValue(val);
     const val2 = try ctx.stack.pop();
-    _ = val2;
+    defer container_backing.releaseValue(val2);
     const val3 = try ctx.stack.pop();
+    defer container_backing.releaseValue(val3);
     setErrorContext(ctx, "#peek expected byte-array, got {s}", .{valueTypeName(val3)});
     return error.TypeMismatch;
 }
@@ -3109,12 +3145,13 @@ fn nativePoke(ctx: *Context) anyerror!void {
     }
 
     const val = try ctx.stack.pop();
-    _ = val;
+    defer container_backing.releaseValue(val);
     const val2 = try ctx.stack.pop();
-    _ = val2;
+    defer container_backing.releaseValue(val2);
     const val3 = try ctx.stack.pop();
-    _ = val3;
+    defer container_backing.releaseValue(val3);
     const val4 = try ctx.stack.pop();
+    defer container_backing.releaseValue(val4);
     setErrorContext(ctx, "#poke! expected byte-array, got {s}", .{valueTypeName(val4)});
     return error.TypeMismatch;
 }
@@ -3267,14 +3304,14 @@ test "string #nth interns single ASCII codepoint" {
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
 
-    try ctx.stack.push(.{ .string = "hello" });
+    try ctx.stack.push(value_mod.stringValue("hello"));
     try ctx.stack.push(.{ .fixnum = 1 });
     try nativeNthString(&ctx);
     const e = try ctx.stack.pop();
     try std.testing.expect(e == .string);
-    try std.testing.expectEqualStrings("e", e.string);
+    try std.testing.expectEqualStrings("e", e.string.bytes);
     // Shares the interned 'e' slice instead of allocating a fresh one.
-    try std.testing.expectEqual(ctx.internedAsciiByte('e').?.ptr, e.string.ptr);
+    try std.testing.expectEqual(ctx.internedAsciiByte('e').?.ptr, e.string.bytes.ptr);
 }
 
 test "string #nth allocates fresh for multi-byte codepoint" {
@@ -3282,32 +3319,32 @@ test "string #nth allocates fresh for multi-byte codepoint" {
     defer ctx.deinit();
 
     // "\xc3\xa1b": á (U+00E1) is a 2-byte codepoint, not interned.
-    try ctx.stack.push(.{ .string = "\xc3\xa1b" });
+    try ctx.stack.push(value_mod.stringValue("\xc3\xa1b"));
     try ctx.stack.push(.{ .fixnum = 0 });
     try nativeNthString(&ctx);
     const e = try ctx.stack.pop();
     try std.testing.expect(e == .string);
-    try std.testing.expectEqual(@as(usize, 2), e.string.len);
+    try std.testing.expectEqual(@as(usize, 2), e.string.bytes.len);
 }
 
 test "string #first interns single ASCII codepoint" {
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
 
-    try ctx.stack.push(.{ .string = "xyz" });
+    try ctx.stack.push(value_mod.stringValue("xyz"));
     try nativeFirstString(&ctx);
     const e = try ctx.stack.pop();
     try std.testing.expect(e == .string);
-    try std.testing.expectEqualStrings("x", e.string);
-    try std.testing.expectEqual(ctx.internedAsciiByte('x').?.ptr, e.string.ptr);
+    try std.testing.expectEqualStrings("x", e.string.bytes);
+    try std.testing.expectEqual(ctx.internedAsciiByte('x').?.ptr, e.string.bytes.ptr);
 }
 
 test "#index-of-from basic ASCII" {
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
 
-    try ctx.stack.push(.{ .string = "hello world" });
-    try ctx.stack.push(.{ .string = "world" });
+    try ctx.stack.push(value_mod.stringValue("hello world"));
+    try ctx.stack.push(value_mod.stringValue("world"));
     try ctx.stack.push(.{ .fixnum = 0 });
     try nativeIndexOfFrom(&ctx);
 
@@ -3320,8 +3357,8 @@ test "#index-of-from with offset skips earlier match" {
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
 
-    try ctx.stack.push(.{ .string = "a,b,c" });
-    try ctx.stack.push(.{ .string = "," });
+    try ctx.stack.push(value_mod.stringValue("a,b,c"));
+    try ctx.stack.push(value_mod.stringValue(","));
     try ctx.stack.push(.{ .fixnum = 2 });
     try nativeIndexOfFrom(&ctx);
 
@@ -3334,8 +3371,8 @@ test "#index-of-from not found returns f" {
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
 
-    try ctx.stack.push(.{ .string = "hello" });
-    try ctx.stack.push(.{ .string = "xyz" });
+    try ctx.stack.push(value_mod.stringValue("hello"));
+    try ctx.stack.push(value_mod.stringValue("xyz"));
     try ctx.stack.push(.{ .fixnum = 0 });
     try nativeIndexOfFrom(&ctx);
 
@@ -3348,8 +3385,8 @@ test "#index-of-from empty needle returns start" {
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
 
-    try ctx.stack.push(.{ .string = "hello" });
-    try ctx.stack.push(.{ .string = "" });
+    try ctx.stack.push(value_mod.stringValue("hello"));
+    try ctx.stack.push(value_mod.stringValue(""));
     try ctx.stack.push(.{ .fixnum = 3 });
     try nativeIndexOfFrom(&ctx);
 
@@ -3363,8 +3400,8 @@ test "#index-of-from multi-byte codepoints" {
     defer ctx.deinit();
 
     // "café,thé": 'é' is 2 bytes, comma is at codepoint index 4
-    try ctx.stack.push(.{ .string = "caf\xc3\xa9,th\xc3\xa9" });
-    try ctx.stack.push(.{ .string = "," });
+    try ctx.stack.push(value_mod.stringValue("caf\xc3\xa9,th\xc3\xa9"));
+    try ctx.stack.push(value_mod.stringValue(","));
     try ctx.stack.push(.{ .fixnum = 4 });
     try nativeIndexOfFrom(&ctx);
 
@@ -3378,8 +3415,8 @@ test "#index-of-from multi-byte delimiter" {
     defer ctx.deinit();
 
     // "a→b→c": '→' is 3 bytes (U+2192), second '→' is at codepoint index 3
-    try ctx.stack.push(.{ .string = "a\xe2\x86\x92b\xe2\x86\x92c" });
-    try ctx.stack.push(.{ .string = "\xe2\x86\x92" });
+    try ctx.stack.push(value_mod.stringValue("a\xe2\x86\x92b\xe2\x86\x92c"));
+    try ctx.stack.push(value_mod.stringValue("\xe2\x86\x92"));
     try ctx.stack.push(.{ .fixnum = 2 });
     try nativeIndexOfFrom(&ctx);
 
@@ -3392,8 +3429,8 @@ test "#index-of-from start at end with empty needle" {
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
 
-    try ctx.stack.push(.{ .string = "hello" });
-    try ctx.stack.push(.{ .string = "" });
+    try ctx.stack.push(value_mod.stringValue("hello"));
+    try ctx.stack.push(value_mod.stringValue(""));
     try ctx.stack.push(.{ .fixnum = 5 });
     try nativeIndexOfFrom(&ctx);
 
@@ -3406,8 +3443,8 @@ test "#index-of-from start at end with non-empty needle returns f" {
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
 
-    try ctx.stack.push(.{ .string = "hello" });
-    try ctx.stack.push(.{ .string = "o" });
+    try ctx.stack.push(value_mod.stringValue("hello"));
+    try ctx.stack.push(value_mod.stringValue("o"));
     try ctx.stack.push(.{ .fixnum = 5 });
     try nativeIndexOfFrom(&ctx);
 
@@ -3420,8 +3457,8 @@ test "#index-of-from negative start throws IndexOutOfBounds" {
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
 
-    try ctx.stack.push(.{ .string = "hello" });
-    try ctx.stack.push(.{ .string = "l" });
+    try ctx.stack.push(value_mod.stringValue("hello"));
+    try ctx.stack.push(value_mod.stringValue("l"));
     try ctx.stack.push(.{ .fixnum = -1 });
     try std.testing.expectError(error.IndexOutOfBounds, nativeIndexOfFrom(&ctx));
 }
@@ -3430,8 +3467,8 @@ test "#index-of-from start beyond end throws IndexOutOfBounds" {
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
 
-    try ctx.stack.push(.{ .string = "hello" });
-    try ctx.stack.push(.{ .string = "l" });
+    try ctx.stack.push(value_mod.stringValue("hello"));
+    try ctx.stack.push(value_mod.stringValue("l"));
     try ctx.stack.push(.{ .fixnum = 6 });
     try std.testing.expectError(error.IndexOutOfBounds, nativeIndexOfFrom(&ctx));
 }
@@ -3441,7 +3478,7 @@ test "#index-of-from non-string str throws TypeMismatch" {
     defer ctx.deinit();
 
     try ctx.stack.push(.{ .fixnum = 42 });
-    try ctx.stack.push(.{ .string = "x" });
+    try ctx.stack.push(value_mod.stringValue("x"));
     try ctx.stack.push(.{ .fixnum = 0 });
     try std.testing.expectError(error.TypeMismatch, nativeIndexOfFrom(&ctx));
 }
@@ -3450,7 +3487,7 @@ test "#index-of-from non-string needle throws TypeMismatch" {
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
 
-    try ctx.stack.push(.{ .string = "hello" });
+    try ctx.stack.push(value_mod.stringValue("hello"));
     try ctx.stack.push(.{ .fixnum = 42 });
     try ctx.stack.push(.{ .fixnum = 0 });
     try std.testing.expectError(error.TypeMismatch, nativeIndexOfFrom(&ctx));
@@ -3460,8 +3497,8 @@ test "#byte-index-of-from basic ASCII" {
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
 
-    try ctx.stack.push(.{ .string = "hello world" });
-    try ctx.stack.push(.{ .string = "world" });
+    try ctx.stack.push(value_mod.stringValue("hello world"));
+    try ctx.stack.push(value_mod.stringValue("world"));
     try ctx.stack.push(.{ .fixnum = 0 });
     try nativeByteIndexOfFrom(&ctx);
 
@@ -3473,8 +3510,8 @@ test "#byte-index-of-from with offset skips earlier match" {
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
 
-    try ctx.stack.push(.{ .string = "a,b,c" });
-    try ctx.stack.push(.{ .string = "," });
+    try ctx.stack.push(value_mod.stringValue("a,b,c"));
+    try ctx.stack.push(value_mod.stringValue(","));
     try ctx.stack.push(.{ .fixnum = 2 });
     try nativeByteIndexOfFrom(&ctx);
 
@@ -3486,8 +3523,8 @@ test "#byte-index-of-from not found returns f" {
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
 
-    try ctx.stack.push(.{ .string = "hello" });
-    try ctx.stack.push(.{ .string = "xyz" });
+    try ctx.stack.push(value_mod.stringValue("hello"));
+    try ctx.stack.push(value_mod.stringValue("xyz"));
     try ctx.stack.push(.{ .fixnum = 0 });
     try nativeByteIndexOfFrom(&ctx);
 
@@ -3499,8 +3536,8 @@ test "#byte-index-of-from empty needle returns start" {
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
 
-    try ctx.stack.push(.{ .string = "hello" });
-    try ctx.stack.push(.{ .string = "" });
+    try ctx.stack.push(value_mod.stringValue("hello"));
+    try ctx.stack.push(value_mod.stringValue(""));
     try ctx.stack.push(.{ .fixnum = 3 });
     try nativeByteIndexOfFrom(&ctx);
 
@@ -3513,8 +3550,8 @@ test "#byte-index-of-from returns byte offset past multi-byte codepoint" {
     defer ctx.deinit();
 
     // "héllo": h(1) é(2 bytes) l l o; "llo" starts at byte 3 (codepoint index 2).
-    try ctx.stack.push(.{ .string = "héllo" });
-    try ctx.stack.push(.{ .string = "llo" });
+    try ctx.stack.push(value_mod.stringValue("héllo"));
+    try ctx.stack.push(value_mod.stringValue("llo"));
     try ctx.stack.push(.{ .fixnum = 0 });
     try nativeByteIndexOfFrom(&ctx);
 
@@ -3526,8 +3563,8 @@ test "#byte-index-of-from start at end returns f" {
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
 
-    try ctx.stack.push(.{ .string = "hello" });
-    try ctx.stack.push(.{ .string = "l" });
+    try ctx.stack.push(value_mod.stringValue("hello"));
+    try ctx.stack.push(value_mod.stringValue("l"));
     try ctx.stack.push(.{ .fixnum = 5 });
     try nativeByteIndexOfFrom(&ctx);
 
@@ -3539,8 +3576,8 @@ test "#byte-index-of-from negative start throws IndexOutOfBounds" {
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
 
-    try ctx.stack.push(.{ .string = "hello" });
-    try ctx.stack.push(.{ .string = "l" });
+    try ctx.stack.push(value_mod.stringValue("hello"));
+    try ctx.stack.push(value_mod.stringValue("l"));
     try ctx.stack.push(.{ .fixnum = -1 });
     try std.testing.expectError(error.IndexOutOfBounds, nativeByteIndexOfFrom(&ctx));
 }
@@ -3549,8 +3586,8 @@ test "#byte-index-of-from start beyond end throws IndexOutOfBounds" {
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
 
-    try ctx.stack.push(.{ .string = "hello" });
-    try ctx.stack.push(.{ .string = "l" });
+    try ctx.stack.push(value_mod.stringValue("hello"));
+    try ctx.stack.push(value_mod.stringValue("l"));
     try ctx.stack.push(.{ .fixnum = 6 });
     try std.testing.expectError(error.IndexOutOfBounds, nativeByteIndexOfFrom(&ctx));
 }
@@ -3560,7 +3597,7 @@ test "#byte-index-of-from non-string str throws TypeMismatch" {
     defer ctx.deinit();
 
     try ctx.stack.push(.{ .fixnum = 42 });
-    try ctx.stack.push(.{ .string = "x" });
+    try ctx.stack.push(value_mod.stringValue("x"));
     try ctx.stack.push(.{ .fixnum = 0 });
     try std.testing.expectError(error.TypeMismatch, nativeByteIndexOfFrom(&ctx));
 }
@@ -3569,13 +3606,13 @@ test "#byte-slice basic ASCII" {
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
 
-    try ctx.stack.push(.{ .string = "hello world" });
+    try ctx.stack.push(value_mod.stringValue("hello world"));
     try ctx.stack.push(.{ .fixnum = 0 });
     try ctx.stack.push(.{ .fixnum = 5 });
     try nativeByteSlice(&ctx);
 
     const result = try ctx.stack.pop();
-    try std.testing.expectEqualStrings("hello", result.string);
+    try std.testing.expectEqualStrings("hello", result.string.bytes);
 }
 
 test "#byte-slice multi-byte on codepoint boundaries" {
@@ -3583,46 +3620,46 @@ test "#byte-slice multi-byte on codepoint boundaries" {
     defer ctx.deinit();
 
     // "héllo": bytes h=0, é=1..2, l=3, l=4, o=5 (len 6). [0:3] = "hé".
-    try ctx.stack.push(.{ .string = "héllo" });
+    try ctx.stack.push(value_mod.stringValue("héllo"));
     try ctx.stack.push(.{ .fixnum = 0 });
     try ctx.stack.push(.{ .fixnum = 3 });
     try nativeByteSlice(&ctx);
 
     const result = try ctx.stack.pop();
-    try std.testing.expectEqualStrings("hé", result.string);
+    try std.testing.expectEqualStrings("hé", result.string.bytes);
 }
 
 test "#byte-slice full string" {
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
 
-    try ctx.stack.push(.{ .string = "héllo" });
+    try ctx.stack.push(value_mod.stringValue("héllo"));
     try ctx.stack.push(.{ .fixnum = 0 });
     try ctx.stack.push(.{ .fixnum = 6 });
     try nativeByteSlice(&ctx);
 
     const result = try ctx.stack.pop();
-    try std.testing.expectEqualStrings("héllo", result.string);
+    try std.testing.expectEqualStrings("héllo", result.string.bytes);
 }
 
 test "#byte-slice empty slice" {
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
 
-    try ctx.stack.push(.{ .string = "hello" });
+    try ctx.stack.push(value_mod.stringValue("hello"));
     try ctx.stack.push(.{ .fixnum = 3 });
     try ctx.stack.push(.{ .fixnum = 3 });
     try nativeByteSlice(&ctx);
 
     const result = try ctx.stack.pop();
-    try std.testing.expectEqualStrings("", result.string);
+    try std.testing.expectEqualStrings("", result.string.bytes);
 }
 
 test "#byte-slice negative start throws IndexOutOfBounds" {
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
 
-    try ctx.stack.push(.{ .string = "hello" });
+    try ctx.stack.push(value_mod.stringValue("hello"));
     try ctx.stack.push(.{ .fixnum = -1 });
     try ctx.stack.push(.{ .fixnum = 3 });
     try std.testing.expectError(error.IndexOutOfBounds, nativeByteSlice(&ctx));
@@ -3632,7 +3669,7 @@ test "#byte-slice start greater than end throws IndexOutOfBounds" {
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
 
-    try ctx.stack.push(.{ .string = "hello" });
+    try ctx.stack.push(value_mod.stringValue("hello"));
     try ctx.stack.push(.{ .fixnum = 4 });
     try ctx.stack.push(.{ .fixnum = 2 });
     try std.testing.expectError(error.IndexOutOfBounds, nativeByteSlice(&ctx));
@@ -3642,7 +3679,7 @@ test "#byte-slice end beyond length throws IndexOutOfBounds" {
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
 
-    try ctx.stack.push(.{ .string = "hello" });
+    try ctx.stack.push(value_mod.stringValue("hello"));
     try ctx.stack.push(.{ .fixnum = 0 });
     try ctx.stack.push(.{ .fixnum = 6 });
     try std.testing.expectError(error.IndexOutOfBounds, nativeByteSlice(&ctx));
@@ -3653,7 +3690,7 @@ test "#byte-slice mid-codepoint start throws InvalidUtf8" {
     defer ctx.deinit();
 
     // byte 2 is the continuation byte of é, so starting there is mid-codepoint.
-    try ctx.stack.push(.{ .string = "héllo" });
+    try ctx.stack.push(value_mod.stringValue("héllo"));
     try ctx.stack.push(.{ .fixnum = 2 });
     try ctx.stack.push(.{ .fixnum = 3 });
     try std.testing.expectError(error.InvalidUtf8, nativeByteSlice(&ctx));
@@ -3664,7 +3701,7 @@ test "#byte-slice mid-codepoint end throws InvalidUtf8" {
     defer ctx.deinit();
 
     // byte 2 is the continuation byte of é, so ending there is mid-codepoint.
-    try ctx.stack.push(.{ .string = "héllo" });
+    try ctx.stack.push(value_mod.stringValue("héllo"));
     try ctx.stack.push(.{ .fixnum = 0 });
     try ctx.stack.push(.{ .fixnum = 2 });
     try std.testing.expectError(error.InvalidUtf8, nativeByteSlice(&ctx));
@@ -3718,15 +3755,15 @@ test "#append array arm keeps string-source codepoint elements readable" {
     defer ctx.deinit();
 
     try testPushFixnumArray(&ctx, &.{9});
-    try ctx.stack.push(.{ .string = "ab" });
+    try ctx.stack.push(value_mod.stringValue("ab"));
     try nativeAppend(&ctx);
 
     // The codepoint dupes live on the arena and outlive the freed scratch slice the result was
     // copied from.
     const result = try ctx.stack.pop();
     try std.testing.expectEqual(@as(usize, 3), result.array.items.len);
-    try std.testing.expectEqualStrings("a", result.array.items[1].string);
-    try std.testing.expectEqualStrings("b", result.array.items[2].string);
+    try std.testing.expectEqualStrings("a", result.array.items[1].string.bytes);
+    try std.testing.expectEqualStrings("b", result.array.items[2].string.bytes);
     container_backing.releaseValue(result);
 }
 
@@ -3734,12 +3771,13 @@ test "#prepend string arm frees its scratch slice" {
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
 
-    try ctx.stack.push(.{ .string = "world" });
-    try ctx.stack.push(.{ .string = "hi" });
+    try ctx.stack.push(value_mod.stringValue("world"));
+    try ctx.stack.push(value_mod.stringValue("hi"));
     try nativePrepend(&ctx);
 
     const result = try ctx.stack.pop();
-    try std.testing.expectEqualStrings("hiworld", result.string);
+    defer container_backing.releaseValue(result);
+    try std.testing.expectEqualStrings("hiworld", result.string.bytes);
 }
 
 test "#append! frees its scratch slice" {

@@ -514,8 +514,8 @@ test "classifyValue: scalars and static-string variants are structural" {
     try testing.expectEqual(ImagePath.structural, classifyValue(.{ .float = 1.5 }).path);
     try testing.expectEqual(ImagePath.structural, classifyValue(.{ .boolean = true }).path);
     try testing.expectEqual(ImagePath.structural, classifyValue(.{ .unit = {} }).path);
-    try testing.expectEqual(ImagePath.structural, classifyValue(.{ .string = "hi" }).path);
-    try testing.expectEqual(ImagePath.structural, classifyValue(.{ .symbol = "foo" }).path);
+    try testing.expectEqual(ImagePath.structural, classifyValue(value_mod.stringValue("hi")).path);
+    try testing.expectEqual(ImagePath.structural, classifyValue(value_mod.symbolValue("foo")).path);
     try testing.expectEqual(ImagePath.structural, classifyValue(.{ .doc_string = "doc" }).path);
 }
 
@@ -533,7 +533,7 @@ test "classifyValue: marker is structural" {
 test "classifyValue: array of structurals is structural" {
     const elems = [_]Value{
         .{ .fixnum = 1 },
-        .{ .symbol = "two" },
+        value_mod.symbolValue("two"),
         .{ .boolean = false },
     };
     var arr = value_mod.Array{ .header = undefined, .items = &elems, .storage = .static };
@@ -559,7 +559,7 @@ test "classifyValue: type_val is structural via the static C data path" {
 
 test "classifyValue: tagged with structural inner is structural" {
     var virt = value_mod.VirtualType{ .name = "stdio-mode", .inner_type = "symbol" };
-    const inner: Value = .{ .symbol = "inherit" };
+    const inner: Value = value_mod.symbolValue("inherit");
     const c = classifyValue(.{ .tagged = .{ .tag = &virt, .inner = &inner } });
     try testing.expectEqual(ImagePath.structural, c.path);
 }
@@ -639,7 +639,7 @@ test "classifyValue: struct_type is structural" {
 
 test "classifyValue: struct_instance with structural fields is structural" {
     var st = value_mod.StructType{ .name = "rec", .fields = &.{ "a", "b" } };
-    var fields = [_]Value{ .{ .fixnum = 1 }, .{ .symbol = "two" } };
+    var fields = [_]Value{ .{ .fixnum = 1 }, value_mod.symbolValue("two") };
     var si = value_mod.StructInstance{ .struct_type = &st, .fields = &fields };
     try testing.expectEqual(ImagePath.structural, classifyValue(.{ .struct_instance = &si }).path);
 }
@@ -659,7 +659,7 @@ test "classifyValue: empty vector is structural" {
 }
 
 test "classifyValue: populated vector with structural elements is structural" {
-    var elems = [_]Value{ .{ .fixnum = 1 }, .{ .symbol = "two" } };
+    var elems = [_]Value{ .{ .fixnum = 1 }, value_mod.symbolValue("two") };
     var vec = value_mod.Vector{ .header = undefined, .list = .{ .items = &elems, .capacity = elems.len } };
     try testing.expectEqual(ImagePath.structural, classifyValue(.{ .vector = &vec }).path);
 }

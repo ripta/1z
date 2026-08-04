@@ -4,7 +4,8 @@ const Context = @import("../context.zig").Context;
 const helpers = @import("../primitives/helpers.zig");
 const error_mapping = @import("../primitives/error_mapping.zig");
 const RegistryEntry = @import("../primitives/types.zig").RegistryEntry;
-const Resource = @import("../value.zig").Resource;
+const value_mod = @import("../value.zig");
+const Resource = value_mod.Resource;
 const container_backing = @import("../container_backing.zig");
 
 // The toy demo library is a C source excluded from the link on freestanding targets (see
@@ -40,7 +41,8 @@ fn nativeToyStrlen(ctx: *Context) anyerror!void {
 
     const alloc = ctx.arena.allocator();
     const s = try helpers.popString(ctx);
-    const cstr = try alloc.dupeZ(u8, s);
+    defer container_backing.releaseValue(.{ .string = s });
+    const cstr = try alloc.dupeZ(u8, s.bytes);
     const result = c.toy_strlen(cstr);
     try ctx.stack.push(.{ .fixnum = @intCast(result) });
 }
@@ -50,12 +52,13 @@ fn nativeToyGreeting(ctx: *Context) anyerror!void {
 
     const alloc = ctx.arena.allocator();
     const s = try helpers.popString(ctx);
-    const cstr = try alloc.dupeZ(u8, s);
+    defer container_backing.releaseValue(.{ .string = s });
+    const cstr = try alloc.dupeZ(u8, s.bytes);
     const cresult = c.toy_greeting(cstr) orelse return error.OutOfMemory;
     defer std.c.free(cresult);
     const span = std.mem.span(cresult);
-    const result = try alloc.dupe(u8, span);
-    try ctx.stack.push(.{ .string = result });
+    const result = try ctx.allocator.dupe(u8, span);
+    try helpers.pushOwnedString(ctx, result);
 }
 
 fn nativeToyChecksum(ctx: *Context) anyerror!void {

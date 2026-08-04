@@ -5,6 +5,7 @@ const value_mod = @import("../value.zig");
 const Value = value_mod.Value;
 const HashTable = value_mod.HashTable;
 const helpers = @import("helpers.zig");
+const container_backing = @import("../container_backing.zig");
 const mapFileOpenError = @import("error_mapping.zig").mapFileOpenError;
 const mapFileCreateError = @import("error_mapping.zig").mapFileCreateError;
 const Primitive = @import("types.zig").Primitive;
@@ -35,7 +36,8 @@ pub const registry_entries = [_]RegistryEntry{
 fn nativeCreateDirectory(ctx: *Context) anyerror!void {
     if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "create-directory");
     const path = try helpers.popString(ctx);
-    std.fs.cwd().makePath(path) catch |err| {
+    defer container_backing.releaseValue(.{ .string = path });
+    std.fs.cwd().makePath(path.bytes) catch |err| {
         helpers.setErrorContext(ctx, "create-directory: {s}", .{@errorName(err)});
         return mapFileCreateError(err);
     };
@@ -45,7 +47,8 @@ fn nativeCreateDirectory(ctx: *Context) anyerror!void {
 fn nativeDeleteDirectory(ctx: *Context) anyerror!void {
     if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "delete-directory");
     const path = try helpers.popString(ctx);
-    std.fs.cwd().deleteDir(path) catch |err| {
+    defer container_backing.releaseValue(.{ .string = path });
+    std.fs.cwd().deleteDir(path.bytes) catch |err| {
         helpers.setErrorContext(ctx, "delete-directory: {s}", .{@errorName(err)});
         return mapFileOpenError(err);
     };
@@ -55,9 +58,10 @@ fn nativeDeleteDirectory(ctx: *Context) anyerror!void {
 fn nativeListDirectory(ctx: *Context) anyerror!void {
     if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "list-directory");
     const path = try helpers.popString(ctx);
+    defer container_backing.releaseValue(.{ .string = path });
     const alloc = ctx.quotationAllocator();
 
-    var dir = std.fs.cwd().openDir(path, .{ .iterate = true }) catch |err| {
+    var dir = std.fs.cwd().openDir(path.bytes, .{ .iterate = true }) catch |err| {
         helpers.setErrorContext(ctx, "list-directory: {s}", .{@errorName(err)});
         return mapFileOpenError(err);
     };
@@ -78,8 +82,8 @@ fn nativeListDirectory(ctx: *Context) anyerror!void {
         };
 
         const pair = alloc.alloc(Value, 2) catch return error.OutOfMemory;
-        pair[0] = .{ .string = name };
-        pair[1] = .{ .symbol = type_sym };
+        pair[0] = value_mod.stringValue(name);
+        pair[1] = value_mod.symbolValue(type_sym);
 
         const pair_arr = value_mod.Array.fromOwnedSlice(alloc, pair) catch return error.OutOfMemory;
         entries.append(alloc, .{ .array = pair_arr }) catch return error.OutOfMemory;
@@ -93,7 +97,8 @@ fn nativeListDirectory(ctx: *Context) anyerror!void {
 fn nativeDeleteFile(ctx: *Context) anyerror!void {
     if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "delete-file");
     const path = try helpers.popString(ctx);
-    std.fs.cwd().deleteFile(path) catch |err| {
+    defer container_backing.releaseValue(.{ .string = path });
+    std.fs.cwd().deleteFile(path.bytes) catch |err| {
         helpers.setErrorContext(ctx, "delete-file: {s}", .{@errorName(err)});
         return mapFileOpenError(err);
     };
@@ -103,8 +108,10 @@ fn nativeDeleteFile(ctx: *Context) anyerror!void {
 fn nativeRenamePath(ctx: *Context) anyerror!void {
     if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "rename-path");
     const new = try helpers.popString(ctx);
+    defer container_backing.releaseValue(.{ .string = new });
     const old = try helpers.popString(ctx);
-    std.fs.cwd().rename(old, new) catch |err| {
+    defer container_backing.releaseValue(.{ .string = old });
+    std.fs.cwd().rename(old.bytes, new.bytes) catch |err| {
         helpers.setErrorContext(ctx, "rename-path: {s}", .{@errorName(err)});
         return mapFileOpenError(err);
     };
@@ -114,9 +121,11 @@ fn nativeRenamePath(ctx: *Context) anyerror!void {
 fn nativeCopyFile(ctx: *Context) anyerror!void {
     if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "copy-file");
     const dst = try helpers.popString(ctx);
+    defer container_backing.releaseValue(.{ .string = dst });
     const src = try helpers.popString(ctx);
+    defer container_backing.releaseValue(.{ .string = src });
     const cwd = std.fs.cwd();
-    cwd.copyFile(src, cwd, dst, .{}) catch |err| {
+    cwd.copyFile(src.bytes, cwd, dst.bytes, .{}) catch |err| {
         helpers.setErrorContext(ctx, "copy-file: {s}", .{@errorName(err)});
         return switch (err) {
             error.FileNotFound => error.FileNotFound,
@@ -130,7 +139,8 @@ fn nativeCopyFile(ctx: *Context) anyerror!void {
 fn nativePathExists(ctx: *Context) anyerror!void {
     if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "path-exists?");
     const path = try helpers.popString(ctx);
-    std.fs.cwd().access(path, .{}) catch |err| {
+    defer container_backing.releaseValue(.{ .string = path });
+    std.fs.cwd().access(path.bytes, .{}) catch |err| {
         if (err == error.FileNotFound) {
             try ctx.stack.push(.{ .boolean = false });
             return;
@@ -145,8 +155,9 @@ fn nativePathExists(ctx: *Context) anyerror!void {
 fn nativeFileInfo(ctx: *Context) anyerror!void {
     if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "file-info");
     const path = try helpers.popString(ctx);
+    defer container_backing.releaseValue(.{ .string = path });
 
-    const stat = std.fs.cwd().statFile(path) catch |err| {
+    const stat = std.fs.cwd().statFile(path.bytes) catch |err| {
         helpers.setErrorContext(ctx, "file-info: {s}", .{@errorName(err)});
         return mapFileOpenError(err);
     };
@@ -167,7 +178,7 @@ fn nativeFileInfo(ctx: *Context) anyerror!void {
         .sym_link => "symlink",
         else => "unknown",
     };
-    hash.map.put(hash_alloc, type_key, .{ .symbol = type_sym }) catch return error.OutOfMemory;
+    hash.map.put(hash_alloc, type_key, value_mod.symbolValue(type_sym)) catch return error.OutOfMemory;
 
     // modified (epoch seconds from nanoseconds)
     const mod_key = hash_alloc.dupe(u8, "modified") catch return error.OutOfMemory;
@@ -191,8 +202,10 @@ fn nativeFileInfo(ctx: *Context) anyerror!void {
 fn nativeCreateSymlink(ctx: *Context) anyerror!void {
     if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "create-symlink");
     const link_path = try helpers.popString(ctx);
+    defer container_backing.releaseValue(.{ .string = link_path });
     const target = try helpers.popString(ctx);
-    std.fs.cwd().symLink(target, link_path, .{}) catch |err| {
+    defer container_backing.releaseValue(.{ .string = target });
+    std.fs.cwd().symLink(target.bytes, link_path.bytes, .{}) catch |err| {
         helpers.setErrorContext(ctx, "create-symlink: {s}", .{@errorName(err)});
         return mapFileCreateError(err);
     };
@@ -202,14 +215,15 @@ fn nativeCreateSymlink(ctx: *Context) anyerror!void {
 fn nativeReadSymlink(ctx: *Context) anyerror!void {
     if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "read-symlink");
     const path = try helpers.popString(ctx);
+    defer container_backing.releaseValue(.{ .string = path });
     const alloc = ctx.quotationAllocator();
     var buf: [std.fs.max_path_bytes]u8 = undefined;
-    const target = std.fs.cwd().readLink(path, &buf) catch |err| {
+    const target = std.fs.cwd().readLink(path.bytes, &buf) catch |err| {
         helpers.setErrorContext(ctx, "read-symlink: {s}", .{@errorName(err)});
         return mapFileOpenError(err);
     };
     const result = alloc.dupe(u8, target) catch return error.OutOfMemory;
-    try ctx.stack.push(.{ .string = result });
+    try ctx.stack.push(value_mod.stringValue(result));
 }
 
 /// set-permissions ( path mode -- )
@@ -217,7 +231,8 @@ fn nativeSetPermissions(ctx: *Context) anyerror!void {
     if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "set-permissions");
     const mode = try helpers.popFixnum(ctx);
     const path = try helpers.popString(ctx);
-    std.posix.fchmodat(std.fs.cwd().fd, path, @intCast(mode), 0) catch |err| {
+    defer container_backing.releaseValue(.{ .string = path });
+    std.posix.fchmodat(std.fs.cwd().fd, path.bytes, @intCast(mode), 0) catch |err| {
         helpers.setErrorContext(ctx, "set-permissions: {s}", .{@errorName(err)});
         return switch (err) {
             error.FileNotFound => error.FileNotFound,

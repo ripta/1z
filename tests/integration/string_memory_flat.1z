@@ -1,0 +1,13 @@
+\ Bounded-memory regression for transient string results on the main task.
+\
+\ A string produced by #append or >string used to land on the context arena,
+\ which is never reclaimed on the main task, so each of these loops grew
+\ monotonically and exhausted the 4 MB cap set in the `.flags` sidecar
+\ partway through. String and symbol payloads now carry refcounted heap
+\ backings, so a dropped result is freed at the drop and both loops stay
+\ flat.
+
+20000 [ "hello, " "world" #append drop ] times
+20000 [ 123456789 >string drop ] times
+
+"flat" print-line

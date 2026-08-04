@@ -1549,6 +1549,8 @@ pub const Context = struct {
         self.jit_pending_trace_frames.deinit(self.allocator);
         self.load_paths.deinit(self.allocator);
         for (self.pragma_frames.items) |*frame| {
+            var pragma_vals = frame.valueIterator();
+            while (pragma_vals.next()) |v| container_backing.releaseValue(v.*);
             frame.deinit(self.allocator);
         }
         self.pragma_frames.deinit(self.allocator);
@@ -2583,16 +2585,22 @@ pub const Context = struct {
     fn popPragmaFrameLocked(self: *Context) void {
         if (self.pragma_frames.items.len > 0) {
             const last_idx = self.pragma_frames.items.len - 1;
+            var pragma_vals = self.pragma_frames.items[last_idx].valueIterator();
+            while (pragma_vals.next()) |v| container_backing.releaseValue(v.*);
             self.pragma_frames.items[last_idx].deinit(self.allocator);
             self.pragma_frames.items.len -= 1;
         }
     }
 
     /// Set a pragma value in the top frame.
+    /// Takes ownership of `value`'s reference; the frame releases it on overwrite,
+    /// frame pop, or context teardown.
     pub fn setPragma(self: *Context, name: []const u8, value: Value) !void {
         if (self.pragma_frames.items.len == 0) return error.OutOfMemory;
         const top_index = self.pragma_frames.items.len - 1;
-        try self.pragma_frames.items[top_index].put(self.allocator, name, value);
+        const gop = try self.pragma_frames.items[top_index].getOrPut(self.allocator, name);
+        if (gop.found_existing) container_backing.releaseValue(gop.value_ptr.*);
+        gop.value_ptr.* = value;
     }
 
     /// Get the current value of a pragma, searching frames top-to-bottom
@@ -2741,7 +2749,7 @@ pub const Context = struct {
                             const msg = std.fmt.allocPrint(self.arena.allocator(), "arity mismatch on redefinition of '{s}' (was {d} -> {d}, now {d} -> {d})", .{ name, old_effect.concreteInputCount(), old_effect.concreteOutputCount(), new_effect.concreteInputCount(), new_effect.concreteOutputCount() }) catch "arity mismatch on redefinition";
                             const pragma_val = self.getPragmaLocked("redefinition-arity-mismatch");
                             const is_warning = if (pragma_val) |pv| switch (pv) {
-                                .string => |s| std.mem.eql(u8, s, "warning"),
+                                .string => |s| std.mem.eql(u8, s.bytes, "warning"),
                                 else => false,
                             } else false;
                             if (is_warning) {
@@ -4838,7 +4846,9 @@ pub const Context = struct {
             return ExecutionError.UnknownWord;
         }
 
+        // Release is a no-op for the module hit; it covers the mismatch drop.
         const module_val = self.stack.pop() catch return ExecutionError.UnknownWord;
+        defer container_backing.releaseValue(module_val);
         const module = switch (module_val) {
             .module => |m| m,
             else => return error.TypeMismatch,
@@ -5559,7 +5569,7 @@ pub const Context = struct {
     pub fn validateTypeAnnotationsScoped(self: *Context, effect: *const StackEffect, scope: AnnotationScope) !void {
         // Check pragma for opt-out
         if (self.getPragma("type-check")) |pv| {
-            if (pv == .string and std.mem.eql(u8, pv.string, "off")) return;
+            if (pv == .string and std.mem.eql(u8, pv.string.bytes, "off")) return;
         }
 
         const concrete_params = effect.concreteInputCount();
@@ -5589,7 +5599,7 @@ pub const Context = struct {
                     const msg = std.fmt.allocPrint(self.arena.allocator(), "type mismatch for parameter '{s}': expected {s}, got {s}", .{ param.name, expected_tv.name, actual_name }) catch "type mismatch";
 
                     const is_warning = if (self.getPragma("type-check")) |pv2| switch (pv2) {
-                        .string => |s| std.mem.eql(u8, s, "warning"),
+                        .string => |s| std.mem.eql(u8, s.bytes, "warning"),
                         else => false,
                     } else false;
 
@@ -5614,7 +5624,7 @@ pub const Context = struct {
                     const msg = std.fmt.allocPrint(self.arena.allocator(), "parameter '{s}': type '{s}' does not satisfy protocol '{s}'", .{ param.name, actual_name, descriptor.name }) catch "protocol mismatch";
 
                     const is_warning = if (self.getPragma("type-check")) |pv2| switch (pv2) {
-                        .string => |s| std.mem.eql(u8, s, "warning"),
+                        .string => |s| std.mem.eql(u8, s.bytes, "warning"),
                         else => false,
                     } else false;
 
@@ -5638,7 +5648,7 @@ pub const Context = struct {
                     const msg = std.fmt.allocPrint(self.arena.allocator(), "parameter '{s}': type '{s}' does not satisfy the required constraint", .{ param.name, actual_name }) catch "constraint mismatch";
 
                     const is_warning = if (self.getPragma("type-check")) |pv2| switch (pv2) {
-                        .string => |s| std.mem.eql(u8, s, "warning"),
+                        .string => |s| std.mem.eql(u8, s.bytes, "warning"),
                         else => false,
                     } else false;
 
@@ -7396,8 +7406,8 @@ test "createProtocolDescriptor returns stable distinct pointers" {
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
 
-    const methods_a = [_]value_mod.Value{.{ .symbol = "cmp" }};
-    const methods_b = [_]value_mod.Value{.{ .symbol = "inspect" }};
+    const methods_a = [_]value_mod.Value{value_mod.symbolValue("cmp")};
+    const methods_b = [_]value_mod.Value{value_mod.symbolValue("inspect")};
 
     const desc1 = try ctx.createProtocolDescriptor("comparable", &methods_a);
     const desc2 = try ctx.createProtocolDescriptor("inspectable", &methods_b);
@@ -7413,20 +7423,20 @@ test "createProtocolDescriptor populates name and methods" {
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
 
-    const methods = [_]value_mod.Value{ .{ .symbol = "cmp" }, .{ .symbol = ">string" } };
+    const methods = [_]value_mod.Value{ value_mod.symbolValue("cmp"), value_mod.symbolValue(">string") };
     const desc = try ctx.createProtocolDescriptor("ordered-stringable", &methods);
 
     try std.testing.expectEqualStrings("ordered-stringable", desc.name);
     try std.testing.expectEqual(@as(usize, 2), desc.methods.len);
-    try std.testing.expectEqualStrings("cmp", desc.methods[0].symbol);
-    try std.testing.expectEqualStrings(">string", desc.methods[1].symbol);
+    try std.testing.expectEqualStrings("cmp", desc.methods[0].symbol.bytes);
+    try std.testing.expectEqualStrings(">string", desc.methods[1].symbol.bytes);
 }
 
 test "createProtocolDescriptor assigns monotonic protocol_id" {
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
 
-    const methods = [_]value_mod.Value{.{ .symbol = "cmp" }};
+    const methods = [_]value_mod.Value{value_mod.symbolValue("cmp")};
     const desc0 = try ctx.createProtocolDescriptor("p0", &methods);
     const desc1 = try ctx.createProtocolDescriptor("p1", &methods);
     const desc2 = try ctx.createProtocolDescriptor("p2", &methods);
@@ -7441,7 +7451,7 @@ test "createConstraintCombinator returns stable distinct pointers" {
     defer ctx.deinit();
 
     const fixnum_tv = ctx.lookupBuiltinTypeValue("fixnum").?;
-    const methods = [_]value_mod.Value{.{ .symbol = "cmp" }};
+    const methods = [_]value_mod.Value{value_mod.symbolValue("cmp")};
     const proto = try ctx.createProtocolDescriptor("comparable", &methods);
 
     const elements = [_]value_mod.ConstraintCombinator.Element{
@@ -7464,7 +7474,7 @@ test "createConstraintCombinator populates kind and elements" {
     defer ctx.deinit();
 
     const fixnum_tv = ctx.lookupBuiltinTypeValue("fixnum").?;
-    const methods = [_]value_mod.Value{.{ .symbol = "cmp" }};
+    const methods = [_]value_mod.Value{value_mod.symbolValue("cmp")};
     const proto = try ctx.createProtocolDescriptor("comparable", &methods);
 
     const elements = [_]value_mod.ConstraintCombinator.Element{
@@ -7507,7 +7517,7 @@ test "protocol satisfies cache returns stored hits" {
 
     const fixnum_tv = ctx.lookupBuiltinTypeValue("fixnum").?;
     const string_tv = ctx.lookupBuiltinTypeValue("string").?;
-    const methods = [_]value_mod.Value{.{ .symbol = "cmp" }};
+    const methods = [_]value_mod.Value{value_mod.symbolValue("cmp")};
     const desc = try ctx.createProtocolDescriptor("comparable", &methods);
 
     const key_yes = ProtocolSatisfiesKey{
@@ -7531,7 +7541,7 @@ test "protocol satisfies cache miss returns null" {
     defer ctx.deinit();
 
     const fixnum_tv = ctx.lookupBuiltinTypeValue("fixnum").?;
-    const methods = [_]value_mod.Value{.{ .symbol = "cmp" }};
+    const methods = [_]value_mod.Value{value_mod.symbolValue("cmp")};
     const desc = try ctx.createProtocolDescriptor("comparable", &methods);
 
     const key = ProtocolSatisfiesKey{
@@ -7546,7 +7556,7 @@ test "validateTypeAnnotationsScoped except_protocols skips protocol bounds" {
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
 
-    const methods = [_]value_mod.Value{.{ .symbol = "no-such-method" }};
+    const methods = [_]value_mod.Value{value_mod.symbolValue("no-such-method")};
     const desc = try ctx.createProtocolDescriptor("needy", &methods);
 
     const effect = StackEffect{
@@ -7588,7 +7598,7 @@ test "protocol satisfies cache invalidated by method registration" {
     defer ctx.deinit();
 
     const fixnum_tv = ctx.lookupBuiltinTypeValue("fixnum").?;
-    const methods = [_]value_mod.Value{.{ .symbol = "cmp" }};
+    const methods = [_]value_mod.Value{value_mod.symbolValue("cmp")};
     const desc = try ctx.createProtocolDescriptor("comparable", &methods);
 
     const key = ProtocolSatisfiesKey{
@@ -7613,7 +7623,7 @@ test "protocol satisfies cache invalidated by dispatch frame pop" {
     defer ctx.deinit();
 
     const fixnum_tv = ctx.lookupBuiltinTypeValue("fixnum").?;
-    const methods = [_]value_mod.Value{.{ .symbol = "cmp" }};
+    const methods = [_]value_mod.Value{value_mod.symbolValue("cmp")};
     const desc = try ctx.createProtocolDescriptor("comparable", &methods);
 
     const key = ProtocolSatisfiesKey{
