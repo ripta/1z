@@ -230,6 +230,8 @@ pub fn retainValue(v: Value) void {
         .error_value => |err| if (err.data) |data| retainValue(data.*),
         .iterator => |it| it.header.retain(),
         .string, .symbol => |s| if (s.backing) |b| b.header.retain(),
+        .bignum => |b| if (b.backing) |bk| bk.header.retain(),
+        .closure => |c| c.header.retain(),
         else => {},
     }
 }
@@ -255,6 +257,8 @@ pub fn releaseValue(v: Value) void {
         .error_value => |err| if (err.data) |data| releaseValue(data.*),
         .iterator => |it| it.header.release(),
         .string, .symbol => |s| if (s.backing) |b| b.header.release(),
+        .bignum => |b| if (b.backing) |bk| bk.header.release(),
+        .closure => |c| c.header.release(),
         else => {},
     }
 }
@@ -272,6 +276,8 @@ pub fn valueCarriesBacking(v: Value) bool {
         .error_value => |err| if (err.data) |data| valueCarriesBacking(data.*) else false,
         .iterator => true,
         .string, .symbol => |s| s.backing != null,
+        .bignum => |b| b.backing != null,
+        .closure => true,
         else => false,
     };
 }
@@ -418,8 +424,9 @@ pub fn retainInstructionsContainerLiterals(instructions: []const Instruction) vo
 /// be released at teardown.
 pub fn valueHoldsRefcountedBacking(val: Value) bool {
     return switch (val) {
-        .vector, .mutable_map, .byte_array, .hash, .set, .array, .iterator => true,
+        .vector, .mutable_map, .byte_array, .hash, .set, .array, .iterator, .closure => true,
         .string, .symbol => |s| s.backing != null,
+        .bignum => |b| b.backing != null,
         .tagged => |t| valueHoldsRefcountedBacking(t.inner.*),
         .struct_instance => |si| {
             if (si.header != null) return true;
@@ -1001,7 +1008,7 @@ test "valueShareable: immutable arena-payload leaves do not qualify" {
         value_mod.stringValue("s"),
         value_mod.symbolValue("sym"),
         .{ .doc_string = "doc" },
-        .{ .bignum = &big },
+        .{ .bignum = .{ .big = &big } },
         .{ .template = &segments },
         .{ .stack_effect = .{ .inputs = &.{}, .outputs = &.{} } },
     };

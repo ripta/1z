@@ -41,11 +41,21 @@ pub const Iterator = struct {
                 }
                 header.allocator.free(ai.items);
             },
-            .map => |it| it.inner.header.release(),
-            .filter => |it| it.inner.header.release(),
+            .map => |it| {
+                it.inner.header.release();
+                container_backing.releaseValue(it.quot_owner);
+            },
+            .filter => |it| {
+                it.inner.header.release();
+                container_backing.releaseValue(it.quot_owner);
+            },
             .take => |it| it.inner.header.release(),
             .drop => |it| it.inner.header.release(),
-            .range, .callback => {},
+            .callback => |it| {
+                container_backing.releaseValue(it.quot_owner);
+                container_backing.releaseValue(it.cleanup_owner);
+            },
+            .range => {},
         }
         header.allocator.destroy(self);
     }
@@ -175,6 +185,9 @@ pub const RangeIter = struct {
 pub const MapIter = struct {
     inner: *Iterator,
     quotation: Quotation,
+    /// Owning reference behind `quotation`, released at destroy so a closure
+    /// body stays alive across the lazy drain. Inert for a plain quotation.
+    quot_owner: Value = .unit,
 
     pub fn next(self: *MapIter, ctx: *Context) anyerror!?Value {
         const elem = try self.inner.next(ctx) orelse return null;
@@ -190,6 +203,8 @@ pub const MapIter = struct {
 pub const FilterIter = struct {
     inner: *Iterator,
     quotation: Quotation,
+    /// Owning reference behind `quotation`; see `MapIter.quot_owner`.
+    quot_owner: Value = .unit,
 
     pub fn next(self: *FilterIter, ctx: *Context) anyerror!?Value {
         while (try self.inner.next(ctx)) |elem| {
@@ -237,6 +252,9 @@ pub const CallbackIter = struct {
     exhausted: bool,
     cleanup_quotation: ?Quotation,
     cleanup_ran: bool,
+    /// Owning references behind the two quotations; see `MapIter.quot_owner`.
+    quot_owner: Value = .unit,
+    cleanup_owner: Value = .unit,
 
     pub fn next(self: *CallbackIter, ctx: *Context) anyerror!?Value {
         if (self.exhausted) return null;

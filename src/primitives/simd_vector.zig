@@ -105,7 +105,7 @@ fn valueToElement(comptime T: type, ctx: *Context, arena: Allocator, val: Value)
             .float => |f| @floatCast(f),
             .fixnum => |n| @floatFromInt(n),
             .bignum => |b| blk: {
-                const str = b.toConst().toStringAlloc(arena, 10, .lower) catch {
+                const str = b.big.toConst().toStringAlloc(arena, 10, .lower) catch {
                     helpers.setErrorContext(ctx, "simd: bignum too large for {s}", .{@typeName(T)});
                     return error.TypeMismatch;
                 };
@@ -130,7 +130,7 @@ fn valueToElement(comptime T: type, ctx: *Context, arena: Allocator, val: Value)
                 break :blk @intFromFloat(f);
             },
             .bignum => |b| {
-                if (b.fits(T)) return b.toInt(T) catch unreachable;
+                if (b.big.fits(T)) return b.big.toInt(T) catch unreachable;
                 helpers.setErrorContext(ctx, "simd: bignum out of range for {s}", .{@typeName(T)});
                 return error.TypeMismatch;
             },
@@ -156,9 +156,8 @@ fn elementToValue(comptime T: type, ctx: *Context, elem: T) !Value {
         if (info.int.signedness == .unsigned and @sizeOf(T) == 8) {
             // u64 is the one element type whose range exceeds fixnum; the upper half boxes as bignum
             if (elem > std.math.maxInt(i64)) {
-                const alloc = ctx.arena.allocator();
-                const big = try value_mod.BigIntManaged.initSet(alloc, elem);
-                return .{ .bignum = try value_mod.boxBigInt(alloc, big) };
+                const big = try value_mod.BigIntManaged.initSet(ctx.allocator, elem);
+                return try value_mod.ownedBignumValue(ctx.allocator, big);
             }
             return .{ .fixnum = @intCast(elem) };
         }
@@ -410,7 +409,7 @@ fn nativeSimdLaneGet(ctx: *Context) anyerror!void {
         inline .@"2xf64", .@"4xf32", .@"2xi64", .@"4xi32", .@"8xi16", .@"16xi8", .@"2xu64", .@"4xu32", .@"8xu16", .@"16xu8" => |et| {
             const T = comptime etToType(et);
             const N = comptime etToLaneCount(et);
-            try ctx.stack.push(try elementToValue(T, ctx, simd_kernels.simdGetLane(N, T, bytes, lane)));
+            try helpers.pushMovedValue(ctx, try elementToValue(T, ctx, simd_kernels.simdGetLane(N, T, bytes, lane)));
         },
     }
 }

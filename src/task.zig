@@ -169,6 +169,10 @@ pub const Task = struct {
     /// distinguish a value handoff from a close-channel wake.
     value_delivered: bool = false,
     quotation: Quotation,
+    /// The owning reference behind `quotation`, transferred from the spawner's
+    /// popped slot and released at reap: a closure body must outlive the task
+    /// that runs it. Inert for a plain quotation.
+    quot_owner: Value = .unit,
     peak_stack_usage: usize = 0,
     /// Task that is waiting for this task to complete (via await).
     awaiting_task: ?*Task = null,

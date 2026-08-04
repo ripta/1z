@@ -78,6 +78,13 @@ fn nativeDefineMethod(ctx: *Context) anyerror!void {
         helpers.setTypeMismatchError(ctx, "quotation", body_val);
         return error.TypeMismatch;
     };
+    // The dispatch entry borrows the body's instructions while the descriptor map holding the
+    // only owning reference is released above; a parse-time quotation body rides the arena.
+    if (body_val == .closure) {
+        container_backing.retainValue(body_val);
+        errdefer container_backing.releaseValue(body_val);
+        try ctx.dictionary.retainValueForTeardown(body_val);
+    }
 
     const name_val = try ctx.stack.pop();
     defer container_backing.releaseValue(name_val);

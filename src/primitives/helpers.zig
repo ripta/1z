@@ -76,6 +76,22 @@ pub fn pushOwnedSymbol(ctx: *Context, bytes: []u8) anyerror!void {
     };
 }
 
+/// Push a value whose owning reference the caller transfers to the stack slot. On push
+/// failure the reference is released. A no-op wrapper for refcount-inert values.
+pub fn pushMovedValue(ctx: *Context, val: Value) anyerror!void {
+    ctx.stack.pushMoved(val) catch |e| {
+        container_backing.releaseValue(val);
+        return e;
+    };
+}
+
+/// Demote `big` and push the result, transferring the owned backing's creation reference to
+/// the stack slot when the value stays a bignum. Takes ownership of `big` on every path; the
+/// backing lives on `ctx.allocator` so a dropped result is reclaimed.
+pub fn pushDemotedBignum(ctx: *Context, big: BigIntManaged) anyerror!void {
+    try pushMovedValue(ctx, try demoteBignum(ctx.allocator, big));
+}
+
 /// Copy a borrowed slice of Values into a fresh owned array on `alloc` and
 /// push it. Each copied element is retained; the caller keeps its own
 /// references to `src`.
@@ -335,7 +351,7 @@ pub fn valueTypeName(val: Value) []const u8 {
 pub fn formatValueBrief(allocator: Allocator, val: Value, max_len: usize) ![]const u8 {
     return switch (val) {
         .fixnum => |i| std.fmt.allocPrint(allocator, "{d}", .{i}),
-        .bignum => |b| b.toConst().toStringAlloc(allocator, 10, .lower) catch
+        .bignum => |b| b.big.toConst().toStringAlloc(allocator, 10, .lower) catch
             allocator.dupe(u8, "<bignum>"),
         .float => |f| blk: {
             if (std.math.isNan(f)) break :blk allocator.dupe(u8, "nan");
@@ -512,31 +528,65 @@ pub fn asQuotationStamped(ctx: *Context, val: Value) !?Quotation {
     };
 }
 
+/// A popped callable: the executable view plus the popped slot's owning
+/// reference. For a closure the reference is what keeps the body memory alive,
+/// so the caller holds it across execution (`defer pc.release()`) or hands it
+/// onward where the callable escapes. A plain quotation's release is a no-op.
+pub const PoppedCallable = struct {
+    quot: Quotation,
+    owner: Value,
+
+    pub fn release(self: PoppedCallable) void {
+        container_backing.releaseValue(self.owner);
+    }
+};
+
 /// Pop a callable quotation. A closure (the compiled form of a curry/compose
 /// result) is accepted too, viewed as its plain instruction body so every
 /// quotation consumer (`call`, `dip`, `keep`, `bi`, ...) runs it by
 /// re-interpretation; the segment fast path is used only by the compiled
-/// runtime-selected `call`.
-pub fn popQuotation(ctx: *Context) !Quotation {
+/// runtime-selected `call`. The caller inherits the popped owning reference
+/// through the returned `PoppedCallable`.
+pub fn popQuotation(ctx: *Context) !PoppedCallable {
     const val = try ctx.stack.pop();
-    return try asQuotationStamped(ctx, val) orelse {
+    const quot = try asQuotationStamped(ctx, val) orelse {
         setTypeMismatchError(ctx, "quotation", val);
         container_backing.releaseValue(val);
         return error.TypeMismatch;
     };
+    return .{ .quot = quot, .owner = val };
 }
 
-/// A callable body paired with the lexical scope it carries. See `popCallableWithScope`.
+/// Adopt a popped callable whose body escapes into context-lifetime storage
+/// (a parameter default, a signal handler, a deferred parse-time emission): a
+/// closure owner is parked on the dictionary's teardown list so the body
+/// outlives the value, and an inert owner is dropped.
+pub fn adoptCallableForTeardown(ctx: *Context, pc: PoppedCallable) !void {
+    if (pc.owner == .closure) {
+        try ctx.dictionary.retainValueForTeardown(pc.owner);
+    } else {
+        container_backing.releaseValue(pc.owner);
+    }
+}
+
+/// A callable body paired with the lexical scope it carries and the popped
+/// slot's owning reference. See `popCallableWithScope`.
 pub const CallableWithScope = struct {
     quot: Quotation,
     scope: ?*const CapturedScope,
+    owner: Value,
+
+    pub fn release(self: CallableWithScope) void {
+        container_backing.releaseValue(self.owner);
+    }
 };
 
 /// Pop a callable without stamping the current context, returning its body and its carried scope.
 ///
 /// `spawn` uses this because it runs the closure in a child task, not here: stamping this context
 /// would leak one scope copy per spawn and never reach the child. The caller stamps the child task
-/// context instead, before the child can start.
+/// context instead, before the child can start. The caller holds the popped owning reference at
+/// least until the body and scope have been copied for the child (`release`).
 pub fn popCallableWithScope(ctx: *Context) !CallableWithScope {
     const val = try ctx.stack.pop();
     switch (val) {
@@ -549,9 +599,19 @@ pub fn popCallableWithScope(ctx: *Context) !CallableWithScope {
                 const info = ctx.quotation_scope_info.get(@intFromPtr(q.instructions.ptr)) orelse break :blk null;
                 break :blk info.scope;
             } else null;
-            return .{ .quot = q, .scope = scope };
+            return .{ .quot = q, .scope = scope, .owner = val };
         },
-        .closure => |c| return .{ .quot = c.asQuotation(), .scope = c.captured_scope },
+        .closure => |c| {
+            // A closure normally carries its scope on the value. A residual null-scope closure,
+            // such as one whose bases contributed no deps at all, may still have a side-map entry
+            // for its body, so fall back to the same lookup the quotation arm makes.
+            const scope: ?*const CapturedScope = c.captured_scope orelse blk: {
+                if (ctx.quotation_scope_info.count() == 0) break :blk null;
+                const info = ctx.quotation_scope_info.get(@intFromPtr(c.instructions.ptr)) orelse break :blk null;
+                break :blk info.scope;
+            };
+            return .{ .quot = c.asQuotation(), .scope = scope, .owner = val };
+        },
         else => {
             setTypeMismatchError(ctx, "quotation", val);
             container_backing.releaseValue(val);
@@ -683,21 +743,29 @@ pub fn popDuration(ctx: *Context) !struct { ns: i128, val: Value } {
     };
 }
 
-/// Return fixnum if the bignum fits in i64, otherwise box the bignum on
-/// `alloc` and wrap it as a `bignum` Value. The boxed `BigIntManaged`
-/// header lives on `alloc`; its limb array continues to be owned by
-/// `big.allocator`. Both are typically `ctx.arena.allocator()`.
+/// Return fixnum if the bignum fits in i64, otherwise wrap the bignum in an
+/// owned heap backing on `alloc` and return it as a `bignum` Value. Takes
+/// ownership of `big` either way: the fixnum path deinits it, the bignum path
+/// adopts it. Callers pass `ctx.allocator` so a dropped result is reclaimed,
+/// and must not touch `big` afterwards.
 pub fn demoteBignum(alloc: Allocator, big: BigIntManaged) !Value {
     if (big.fits(i64)) {
-        return .{ .fixnum = big.toInt(i64) catch unreachable };
+        var owned = big;
+        defer owned.deinit();
+        return .{ .fixnum = owned.toInt(i64) catch unreachable };
     }
-    return .{ .bignum = try value_mod.boxBigInt(alloc, big) };
+    return value_mod.ownedBignumValue(alloc, big) catch |e| {
+        var owned = big;
+        owned.deinit();
+        return e;
+    };
 }
 
-/// Promote a fixnum to a Managed bignum. Bignums are cloned so the result
-/// always owns its own memory.
+/// Promote a fixnum to a Managed bignum. Bignums are cloned onto `alloc` so
+/// the result always owns its own memory there, even when the operand's limbs
+/// live on a different allocator (an arena-backed parse literal).
 pub fn ensureBignum(alloc: Allocator, val: Value) !BigIntManaged {
-    return if (val == .bignum) try val.bignum.clone() else try BigIntManaged.initSet(alloc, val.fixnum);
+    return if (val == .bignum) try val.bignum.big.cloneWithDifferentAllocator(alloc) else try BigIntManaged.initSet(alloc, val.fixnum);
 }
 
 /// Build a stack effect string for a constructor: "field1 field2 ... -- output_name"

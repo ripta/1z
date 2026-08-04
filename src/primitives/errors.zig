@@ -178,8 +178,12 @@ pub fn pushCaughtError(ctx: *Context, err: anyerror) anyerror!void {
 pub fn nativeRecover(ctx: *Context) anyerror!void {
     // Note: Parameter effects are validated statically by validateParameterEffects
     // before this function is called, so we just pop the quotations here.
-    const recover_quot = try popQuotation(ctx);
-    const try_quot = try popQuotation(ctx);
+    const recover_pc = try popQuotation(ctx);
+    defer recover_pc.release();
+    const recover_quot = recover_pc.quot;
+    const try_pc = try popQuotation(ctx);
+    defer try_pc.release();
+    const try_quot = try_pc.quot;
 
     // Execute try quotation with error-catching
     ctx.executeQuotationWithFrame(try_quot) catch |err| {
@@ -191,8 +195,12 @@ pub fn nativeRecover(ctx: *Context) anyerror!void {
 
 /// cleanup ( body-quot cleanup-quot -- )
 pub fn nativeCleanup(ctx: *Context) anyerror!void {
-    const cleanup_quot = try popQuotation(ctx);
-    const body_quot = try popQuotation(ctx);
+    const cleanup_pc = try popQuotation(ctx);
+    defer cleanup_pc.release();
+    const cleanup_quot = cleanup_pc.quot;
+    const body_pc = try popQuotation(ctx);
+    defer body_pc.release();
+    const body_quot = body_pc.quot;
 
     // Execute body quotation, capturing any error
     const body_result = ctx.executeQuotationWithFrame(body_quot);
@@ -423,7 +431,9 @@ fn checkIsolationBoundary(ctx: *Context, effect: *const StackEffect, isolation_f
 
 /// with-isolation ( quot -- )
 fn nativeWithIsolation(ctx: *Context) anyerror!void {
-    const quot = try popQuotation(ctx);
+    const pc = try popQuotation(ctx);
+    defer pc.release();
+    const quot = pc.quot;
 
     try ctx.pushTypeRegistryFrame();
     defer ctx.popTypeRegistryFrame();

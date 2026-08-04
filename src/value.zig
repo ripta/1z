@@ -415,6 +415,57 @@ pub fn ownedSymbolValue(allocator: std.mem.Allocator, bytes: []u8) error{OutOfMe
     return .{ .symbol = .{ .backing = try StringBacking.adoptOwned(allocator, bytes), .bytes = bytes } };
 }
 
+/// Refcounted backing for a bignum value. A `BignumPayload` carries an optional pointer to
+/// one of these alongside its direct `*BigIntManaged`; a null backing means the box and its
+/// limbs live on an arena that outlives the value, and retain/release are no-ops.
+///
+/// The backing embeds the `Managed` it owns, so an owned bignum is one allocation plus its
+/// limb array. The limbs are freed through `big.allocator`, which the constructors keep equal
+/// to the backing's own allocator.
+pub const BignumBacking = struct {
+    header: @import("container_backing.zig").ContainerHeader,
+    big: BigIntManaged,
+
+    /// Take ownership of `big`, whose limbs must have been allocated on `allocator`. The
+    /// backing deinits them when the last reference drops.
+    pub fn adopt(allocator: std.mem.Allocator, big: BigIntManaged) error{OutOfMemory}!*BignumBacking {
+        const self = try allocator.create(BignumBacking);
+        self.* = .{
+            .header = undefined,
+            .big = big,
+        };
+        self.header.init(allocator, destroyBignumBacking);
+        return self;
+    }
+
+    fn destroyBignumBacking(header: *@import("container_backing.zig").ContainerHeader) void {
+        const self: *BignumBacking = @fieldParentPtr("header", header);
+        self.big.deinit();
+        header.allocator.destroy(self);
+    }
+};
+
+/// The payload of `Value.bignum`: a direct pointer to the `Managed` plus an optional
+/// refcounted backing, mirroring `StringPayload`'s null-means-inert split. For an owned
+/// bignum, `big` points at the backing's embedded `Managed`.
+pub const BignumPayload = struct {
+    backing: ?*BignumBacking = null,
+    big: *BigIntManaged,
+};
+
+/// A null-backed bignum value whose box and limbs ride `alloc`'s lifetime (an arena).
+pub fn bignumValue(alloc: std.mem.Allocator, big: BigIntManaged) !Value {
+    return .{ .bignum = .{ .big = try boxBigInt(alloc, big) } };
+}
+
+/// A bignum value owning `big` through a fresh heap backing. `big`'s limbs must have been
+/// allocated on `allocator`. The returned value holds the backing's creation reference,
+/// which the caller transfers (`pushMoved`, container adoption) or releases.
+pub fn ownedBignumValue(allocator: std.mem.Allocator, big: BigIntManaged) error{OutOfMemory}!Value {
+    const backing = try BignumBacking.adopt(allocator, big);
+    return .{ .bignum = .{ .backing = backing, .big = &backing.big } };
+}
+
 pub fn valueContainsBorrowedBuffer(val: Value) bool {
     return switch (val) {
         .byte_array => |ba| ba.isBorrowed(),
@@ -1370,9 +1421,9 @@ pub fn boxErrorObject(alloc: std.mem.Allocator, obj: ErrorObject) !*ErrorObject 
 }
 
 /// Allocate a `BigIntManaged` box on the given allocator and return its
-/// pointer. The `bignum` `Value` variant stores this pointer; the limb
-/// array is still owned by `obj.allocator` (which is typically the same
-/// per-context arena). The box itself leaks until the arena is reclaimed.
+/// pointer, for a null-backed `BignumPayload` over arena memory. The limb
+/// array is still owned by `obj.allocator`; box and limbs ride the arena's
+/// lifetime. Reclaimable bignums go through `ownedBignumValue` instead.
 pub fn boxBigInt(alloc: std.mem.Allocator, obj: BigIntManaged) !*BigIntManaged {
     const ptr = try alloc.create(BigIntManaged);
     ptr.* = obj;
@@ -1455,18 +1506,99 @@ pub const Closure = struct {
     /// closure resolves its bare words at its creation site no matter which
     /// task later runs it. Null when the base closed over no lexical binding.
     ///
-    /// Independently owned: it is always a deep copy on this closure's own
-    /// quotation arena (`Context.dupeCapturedScope`), never a shared pointer
-    /// into a context's refcounted capture map, which is free to supersede and
-    /// free its own entries as the same body is pushed again elsewhere. See
-    /// `context.CapturedScope`.
+    /// Either a deep copy this closure owns (`owns_scope`), or the scope of a
+    /// retained base closure, kept alive through `bases`. Never a shared
+    /// pointer into a context's refcounted capture map, which is free to
+    /// supersede and free its own entries as the same body is pushed again
+    /// elsewhere. See `context.CapturedScope`.
     captured_scope: ?*const context_mod.CapturedScope = null,
+
+    /// Refcounted lifecycle header. Every closure carries one. A task-boundary
+    /// deep copy's header lives on the destination task arena with every
+    /// ownership flag false, so its destroy frees nothing real and the copy
+    /// rides the arena like the other cross-task copies.
+    header: @import("container_backing.zig").ContainerHeader,
+
+    /// Ownership follows "own what you allocate, retain what you alias": the
+    /// destroy path frees exactly what the creation site freshly allocated on
+    /// `header.allocator`, and releases `bases`, the source closures whose
+    /// memory this one still references.
+    ///
+    /// `owns_body` covers the instruction slice plus the container-literal
+    /// references embedded in it; `curry`/`compose` build a fresh body, while
+    /// a push-time promotion aliases the module-owned literal. `owns_segments`
+    /// covers the segments slice and every captures slice in it; the capture
+    /// values themselves are borrows whose owning references live in the owned
+    /// body or in a retained base's. `owns_scope` covers `captured_scope`, and
+    /// is false when the scope is shared from a base.
+    owns_body: bool = false,
+    owns_segments: bool = false,
+    owns_scope: bool = false,
+    bases: []const *Closure = &.{},
+
+    // The freestanding mirror in capi_freestanding.zig re-declares the three leading fields
+    // and reads `segments` through its own layout. Both declarations pin the offsets to the
+    // same constants, so a compiler reordering on either side fails the build.
+    comptime {
+        std.debug.assert(@offsetOf(Closure, "instructions") == 0);
+        std.debug.assert(@offsetOf(Closure, "effect") == 16);
+        std.debug.assert(@offsetOf(Closure, "segments") == 24);
+    }
+
+    /// Allocate a closure on `allocator` from a template whose `header` field
+    /// is ignored, initializing the refcount at 1. The caller transfers that
+    /// creation reference (`pushMoved`, container adoption) or releases it.
+    pub fn create(allocator: std.mem.Allocator, template: Closure) error{OutOfMemory}!*Closure {
+        const self = try allocator.create(Closure);
+        self.* = template;
+        self.header.init(allocator, destroyClosure);
+        return self;
+    }
 
     /// View the closure body as a plain quotation for interpreter execution and
     /// the reuse of quotation formatting/equality/hashing. `code_ptr` is null so
     /// the interpreter runs `instructions` rather than dispatching a base.
     pub fn asQuotation(self: *const Closure) Quotation {
         return .{ .instructions = self.instructions, .effect = self.effect };
+    }
+
+    /// Whether this closure's body is heap-owned somewhere in its retained chain: by the closure
+    /// itself, or by a base whose body it aliases, which is the `attach-stack-effect` shape. A
+    /// push-time promotion aliases a durable module body instead, so its chain owns nothing. `;`
+    /// keys its release-path handoff on this: a chain-owned body is released by the owning
+    /// closure's destroy, so it must not also sit on a dictionary release list.
+    pub fn ownsBodyTransitively(self: *const Closure) bool {
+        if (self.owns_body) return true;
+        for (self.bases) |base| {
+            if (base.instructions.ptr == self.instructions.ptr and base.ownsBodyTransitively()) return true;
+        }
+        return false;
+    }
+
+    /// Release-to-zero callback. Frees memory only; it never executes user code.
+    fn destroyClosure(header: *@import("container_backing.zig").ContainerHeader) void {
+        const cb = @import("container_backing.zig");
+        const self: *Closure = @fieldParentPtr("header", header);
+        const alloc = header.allocator;
+
+        if (self.owns_body) {
+            cb.releaseInstructionsContainerLiterals(self.instructions);
+            alloc.free(self.instructions);
+        }
+
+        if (self.owns_segments) {
+            for (self.segments) |seg| alloc.free(seg.captures);
+            alloc.free(self.segments);
+        }
+
+        if (self.owns_scope) {
+            if (self.captured_scope) |scope| @constCast(scope).release();
+        }
+
+        for (self.bases) |base| base.header.release();
+        alloc.free(self.bases);
+
+        alloc.destroy(self);
     }
 };
 
@@ -1535,7 +1667,7 @@ fn callableView(v: Value) Quotation {
 pub const Value = union(enum) {
     fixnum: i64,
     float: f64,
-    bignum: *BigIntManaged,
+    bignum: BignumPayload,
     boolean: bool,
     string: StringPayload,
     symbol: StringPayload,
@@ -1588,7 +1720,8 @@ pub const Value = union(enum) {
                 }
             },
             .bignum => |b| {
-                const str = try b.toConst().toStringAlloc(b.allocator, 10, .lower);
+                const str = try b.big.toConst().toStringAlloc(b.big.allocator, 10, .lower);
+                defer b.big.allocator.free(str);
                 try writer.writeAll(str);
             },
             .boolean => |b| try writer.writeAll(if (b) "t" else "f"),
@@ -1777,7 +1910,7 @@ pub const Value = union(enum) {
         return switch (self) {
             .fixnum => |a| a == other.fixnum,
             .float => |a| a == other.float,
-            .bignum => |a| a.toConst().eql(other.bignum.*.toConst()),
+            .bignum => |a| a.big.toConst().eql(other.bignum.big.toConst()),
             .boolean => |a| a == other.boolean,
             .string => |a| simd.eqlBytes(a.bytes, other.string.bytes),
             .symbol => |a| simd.eqlBytes(a.bytes, other.symbol.bytes),
@@ -1927,7 +2060,7 @@ pub const Value = union(enum) {
                 hasher.update(std.mem.asBytes(&canonical));
             },
             .bignum => |b| {
-                const c = b.toConst();
+                const c = b.big.toConst();
                 const positive_byte: u8 = if (c.positive) 1 else 0;
                 hasher.update(&.{positive_byte});
                 for (c.limbs[0..c.limbs.len]) |limb| {
@@ -2414,6 +2547,48 @@ test "string sub-slice shares the parent backing" {
     cb.releaseValue(sub);
 }
 
+test "bignum backing adopt lifecycle balances retain and release" {
+    const cb = @import("container_backing.zig");
+    const big = try BigIntManaged.initSet(std.testing.allocator, 123456789);
+    const val = try ownedBignumValue(std.testing.allocator, big);
+    try std.testing.expect(val.bignum.backing != null);
+    try std.testing.expect(cb.valueCarriesBacking(val));
+
+    // A second owner retains; both releases drop, and the leak detector proves
+    // the backing and the limb array are both freed.
+    cb.retainValue(val);
+    cb.releaseValue(val);
+    cb.releaseValue(val);
+}
+
+test "demoteBignum wraps an oversized value in an owned backing and deinits a fitting one" {
+    const cb = @import("container_backing.zig");
+    const helpers = @import("primitives/helpers.zig");
+
+    const small = try BigIntManaged.initSet(std.testing.allocator, 42);
+    const small_val = try helpers.demoteBignum(std.testing.allocator, small);
+    try std.testing.expectEqual(Value{ .fixnum = 42 }, small_val);
+
+    var large = try BigIntManaged.initSet(std.testing.allocator, std.math.maxInt(i64));
+    try large.addScalar(&large, 1);
+    const large_val = try helpers.demoteBignum(std.testing.allocator, large);
+    try std.testing.expect(large_val == .bignum);
+    try std.testing.expect(large_val.bignum.backing != null);
+    cb.releaseValue(large_val);
+}
+
+test "null-backed bignum retain and release are no-ops" {
+    const cb = @import("container_backing.zig");
+    var big = try BigIntManaged.initSet(std.testing.allocator, 7);
+    defer big.deinit();
+    const val = Value{ .bignum = .{ .big = &big } };
+    try std.testing.expect(!cb.valueCarriesBacking(val));
+    cb.retainValue(val);
+    cb.releaseValue(val);
+    cb.releaseValue(val);
+    try std.testing.expectEqual(@as(i64, 7), try val.bignum.big.toInt(i64));
+}
+
 test "null-backed string retain and release are no-ops" {
     const cb = @import("container_backing.zig");
     const val = stringValue("static");
@@ -2529,6 +2704,7 @@ test "findTaskArenaOwned finds direct nested and captured arena-owned variants" 
     var closure = Closure{
         .instructions = &.{},
         .segments = segments[0..],
+        .header = undefined,
     };
 
     var err_data = res_val;
@@ -2597,7 +2773,7 @@ test "quotation and closure with identical content compare and hash equal, both 
         .{ .op = .{ .push_literal = .{ .fixnum = 2 } }, .line = 1 },
     };
 
-    var closure = Closure{ .instructions = instrs1, .segments = &.{} };
+    var closure = Closure{ .instructions = instrs1, .segments = &.{}, .header = undefined };
 
     const quot = Value{ .quotation = .{ .instructions = instrs2 } };
     const clos = Value{ .closure = &closure };

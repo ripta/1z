@@ -1262,9 +1262,8 @@ fn pushCInt(ctx: *Context, comptime tag: FfiTypeTag, val: ffiTagToZigType(tag)) 
     const info = @typeInfo(T).int;
     if (comptime info.signedness == .unsigned and info.bits >= 64) {
         if (val > std.math.maxInt(i64)) {
-            const alloc = ctx.arena.allocator();
-            const big = try BigIntManaged.initSet(alloc, val);
-            try ctx.stack.push(try helpers.demoteBignum(alloc, big));
+            const big = try BigIntManaged.initSet(ctx.allocator, val);
+            try helpers.pushDemotedBignum(ctx, big);
         } else {
             try ctx.stack.push(.{ .fixnum = @intCast(val) });
         }
@@ -2123,6 +2122,7 @@ fn nativeFfiCallback(ctx: *Context) anyerror!void {
     // it is parsed into the native FfiSignature before this release runs.
     defer container_backing.releaseValue(sig_val);
     const quot_val = try ctx.stack.pop();
+    errdefer container_backing.releaseValue(quot_val);
 
     const quotation = (try helpers.asQuotationStamped(ctx, quot_val)) orelse {
         helpers.setTypeMismatchError(ctx, "quotation", quot_val);
@@ -2315,4 +2315,6 @@ fn nativeFfiCallback(ctx: *Context) anyerror!void {
         .close_fn = .{ .native = callbackCloseFn },
     };
     try ctx.stack.push(.{ .resource = r });
+    // The body escapes into the C callback's user data for the context's lifetime.
+    try helpers.adoptCallableForTeardown(ctx, .{ .quot = quotation, .owner = quot_val });
 }

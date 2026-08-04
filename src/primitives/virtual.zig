@@ -722,7 +722,7 @@ fn tryPromoteElement(alloc: Allocator, elem: Value, expected: []const u8) ?Value
         return switch (elem) {
             .fixnum => |i| .{ .float = @floatFromInt(i) },
             .bignum => |b| .{ .float = blk: {
-                const str = b.toConst().toStringAlloc(alloc, 10, .lower) catch break :blk std.math.nan(f64);
+                const str = b.big.toConst().toStringAlloc(alloc, 10, .lower) catch break :blk std.math.nan(f64);
                 break :blk std.fmt.parseFloat(f64, str) catch std.math.nan(f64);
             } },
             else => null,
@@ -733,7 +733,7 @@ fn tryPromoteElement(alloc: Allocator, elem: Value, expected: []const u8) ?Value
             .fixnum => |i| blk: {
                 const big = BigIntManaged.initSet(alloc, i) catch return null;
                 const ptr = value_mod.boxBigInt(alloc, big) catch return null;
-                break :blk .{ .bignum = ptr };
+                break :blk .{ .bignum = .{ .big = ptr } };
             },
             else => null,
         };

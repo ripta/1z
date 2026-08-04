@@ -49,7 +49,9 @@ pub const registry_entries = [_]RegistryEntry{
 /// ( signal quot -- )
 fn nativeSetSignalHandler(ctx: *Context) anyerror!void {
     if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "set-signal-handler");
-    const quot = try helpers.popQuotation(ctx);
+    // The handler body escapes into the global handler table.
+    const pc = try helpers.popQuotation(ctx);
+    errdefer pc.release();
     const signum = try helpers.popFixnum(ctx);
 
     if (!signal_mod.isHandleable(signum)) {
@@ -58,7 +60,8 @@ fn nativeSetSignalHandler(ctx: *Context) anyerror!void {
     }
 
     const s: u6 = @intCast(signum);
-    signal_mod.setUserHandler(s, quot);
+    signal_mod.setUserHandler(s, pc.quot);
+    try helpers.adoptCallableForTeardown(ctx, pc);
     signal_mod.installHandler(s);
 }
 

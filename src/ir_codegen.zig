@@ -794,10 +794,10 @@ const ValueLayout = struct {
             .fixnum => .i64_,
             .float => .f64_,
             .boolean => .bool_,
-            .hash, .vector, .byte_array, .set, .mutable_map, .array, .stream, .resource, .parameter, .module, .marker, .struct_type, .struct_instance, .task, .channel, .iterator, .type_val, .sandbox_spec, .error_value, .bignum => .ptr,
+            .hash, .vector, .byte_array, .set, .mutable_map, .array, .stream, .resource, .parameter, .module, .marker, .struct_type, .struct_instance, .task, .channel, .iterator, .type_val, .sandbox_spec, .error_value => .ptr,
             .string, .symbol => .string_payload,
             .doc_string, .template => .slice,
-            .tagged => .dual_ptr,
+            .tagged, .bignum => .dual_ptr,
             .closure => .ptr,
             .quotation, .stack_effect => .inline_,
         };
@@ -1382,7 +1382,7 @@ fn emitPerOperationFallback(
     // is available (JIT mode), jitNativeWordCall with word_id otherwise (AOT).
     if (!state.aot_mode and resolved.native_fn_ptr != null) {
         const fn_ptr_const = c.ir_const_addr(ctx, resolved.native_fn_ptr.?);
-        const call_result = c._ir_CALL_2(ctx, c.IR_I32, state.native_call_fn, ctx_val, fn_ptr_const);
+        const call_result = c._ir_CALL_2(ctx, c.IR_I32, jitNativeCallFn(state), ctx_val, fn_ptr_const);
         emitCallbackPostCheck(state, call_result, call_result, null, .{ .named = .{ .name = op_name, .line = line } });
     } else {
         const word_id_const = c.ir_const_addr(ctx, resolved.word_id);
@@ -3859,6 +3859,17 @@ fn emitEpilogue(
     c._ir_RETURN(ctx, state.ok_status);
 }
 
+/// The JIT-mode generic native callback ref, wired lazily: the emitter can discover a native
+/// callback need the pre-compilation scan did not predict, e.g. the row-region `drop` after a
+/// dynamic call, and calling through an unset ref is a call to address 0. Mirrors
+/// `pic_native_call_fn`'s on-demand allocation; AOT mode declares its callbacks unconditionally.
+fn jitNativeCallFn(state: *CompileState) c.ir_ref {
+    if (state.native_call_fn == c.IR_UNUSED) {
+        state.native_call_fn = c.ir_const_addr(state.ctx, @intFromPtr(&jitNativeCall));
+    }
+    return state.native_call_fn;
+}
+
 /// Emit a retain on the refcounted backing of the Value at physical `slot`.
 /// Call after physically duplicating a `.raw_at_slot` entry so the duplicate
 /// counts as a new owning reference. No-op for scalar Values at runtime.
@@ -4238,11 +4249,23 @@ fn emitValueQuotCall(
 /// the exposed stack top, inside the region the callee's own pushes reuse. A deep enough body
 /// clobbers the slot and the next iteration reads garbage. The spill lives on the C stack, which
 /// the 1z stack machinery never touches, so it stays valid for every iteration.
+///
+/// The consumed slot's owning reference moves into the spill, so the loop's fall-through exit
+/// must pair each spill with `emitReleaseSpilled`; a closure callable is reclaimed there the way
+/// the interpreted combinator's final drop reclaims it.
 fn emitCallableSpill(state: *CompileState, slot: usize) c.ir_ref {
     const ctx = state.ctx;
     const spill = c._ir_ALLOCA(ctx, c.ir_const_addr(ctx, ValueLayout.value_size));
     emitCopyToPtr(ctx, state.base_addr, slot, spill);
     return spill;
+}
+
+/// Release the owning reference a callable spill carries, at loop exit. An error unwind out of
+/// the loop skips this and leaks the reference, matching the other compiled error-path corners.
+fn emitReleaseSpilled(state: *CompileState, spill: ?c.ir_ref) void {
+    const s = spill orelse return;
+    if (state.release_slot_fn == c.IR_UNUSED) return;
+    _ = c._ir_CALL_1(state.ctx, c.IR_I32, state.release_slot_fn, s);
 }
 
 /// Settle one branch of an if-over-row before its END so both branches leave the
@@ -4389,16 +4412,19 @@ fn emitIfOverRow(
 /// Emit a runtime quotation dispatch for an `if` branch where the quotation
 /// is a `raw_at_slot` entry rather than a statically-known `quotation_body`.
 ///
-/// A single-shot dispatch reads the slot before any callee push can clobber
-/// it, so no spill is needed; the slot address goes straight to
-/// `emitValueQuotCall`.
+/// The slot is consumed by this single-shot dispatch, so the callable is
+/// spilled and its owning reference released once the call returns; releasing
+/// the stack slot after the call would touch whatever the callee's pushes
+/// left there instead.
 fn emitIfBranchDispatch(
     state: *CompileState,
     stack: []StackEntry,
     sp: *usize,
     slot: usize,
 ) void {
-    emitValueQuotCall(state, stack, sp, liveSlotAddr(state, slot), 0, .none);
+    const spill = emitCallableSpill(state, slot);
+    emitValueQuotCall(state, stack, sp, spill, 0, .none);
+    emitReleaseSpilled(state, spill);
 }
 
 /// Compile a while/until loop: pred and body quotations with an optional
@@ -4528,6 +4554,9 @@ fn compilePredBodyLoop(
     if (state.refresh_stack_fn != c.IR_UNUSED) {
         refreshCachedStackPointer(state);
     }
+
+    emitReleaseSpilled(state, pred_spill);
+    emitReleaseSpilled(state, body_spill);
 
     resetStackToPhysicalPreservingRows(stack, sp.*);
 }
@@ -5429,19 +5458,22 @@ fn emitIntrinsicCall(ec: EmitCtx) IrCodegenError!ControlFlow {
                 // before the runtime dereferences the pointer.
                 //
                 // Materialize the call arg to its natural top slot by including it in the flush,
-                // then dispatch on that slot. The by-value path below avoids this because it LOADs
-                // the code_ptr into an SSA temp before flushing.
+                // then dispatch on a spill of that slot: the slot itself is consumed and may be
+                // overwritten by the callee's own pushes, while the spill stays valid for the
+                // consumption release after the call. The by-value path below avoids this because
+                // it LOADs the code_ptr into an SSA temp before flushing.
                 sp.* += 1;
                 flushToPhysicalStack(state, stack, sp.*);
                 sp.* -= 1;
-                const arg_addr = liveSlotAddr(state, sp.*);
+                const spill = emitCallableSpill(state, sp.*);
 
                 const new_sp_const = c.ir_const_addr(ctx, sp.*);
                 const new_sp = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_idx, new_sp_const);
                 c._ir_STORE(ctx, state.sp_ptr, new_sp);
 
-                const call_result = c._ir_CALL_2(ctx, c.IR_I32, state.call_value_fn, state.jit_ctx_ptr, arg_addr);
+                const call_result = c._ir_CALL_2(ctx, c.IR_I32, state.call_value_fn, state.jit_ctx_ptr, spill);
                 emitCallbackPostCheck(state, call_result, call_result, null, .{ .builtin = .{ .kind = .call, .line = ec.line } });
+                emitReleaseSpilled(state, spill);
             } else {
                 // The slot value may be a compiled quotation, i.e., direct hot-path, an uncompiled
                 // quotation, or a closure from curry/compose.
@@ -5580,14 +5612,16 @@ fn emitIntrinsicCall(ec: EmitCtx) IrCodegenError!ControlFlow {
                 // reaches-row collapse leaves at physical slot base_idx (the last
                 // reloadBaseAfterDynamicCall set base_idx = live_sp - 1 and nothing was pushed
                 // since), so base_addr already points at the value to call. Mirror the
-                // .raw_at_slot interpreter-free path with sp.* == 0: dispatch the value at
-                // liveSlotAddr(state, 0) through jitCallValue (which calls a quotation's code_ptr,
-                // runs a closure's segments, or traps cleanly on a null code_ptr -- no interpreter
-                // re-entry), logically popping it by storing sp_ptr = base_idx + 0.
-                const arg_addr = liveSlotAddr(state, 0);
+                // .raw_at_slot interpreter-free path with sp.* == 0: dispatch a spill of the value
+                // through jitCallValue (which calls a quotation's code_ptr, runs a closure's
+                // segments, or traps cleanly on a null code_ptr -- no interpreter re-entry),
+                // logically popping it by storing sp_ptr = base_idx + 0. The spill carries the
+                // consumed slot's owning reference for the release after the call.
+                const spill = emitCallableSpill(state, 0);
                 c._ir_STORE(ctx, state.sp_ptr, state.base_idx);
-                const call_result = c._ir_CALL_2(ctx, c.IR_I32, state.call_value_fn, state.jit_ctx_ptr, arg_addr);
+                const call_result = c._ir_CALL_2(ctx, c.IR_I32, state.call_value_fn, state.jit_ctx_ptr, spill);
                 emitCallbackPostCheck(state, call_result, call_result, null, .{ .builtin = .{ .kind = .call, .line = ec.line } });
+                emitReleaseSpilled(state, spill);
                 reloadBaseAfterDynamicCall(state);
                 sp.* = 1;
                 stack[0] = .{ .row_region = state.nextRowId() };
@@ -7476,6 +7510,8 @@ fn emitIntrinsicTimes(ec: EmitCtx) IrCodegenError!ControlFlow {
 
     c._ir_MERGE_2(ctx, skip_end, exit_end);
 
+    emitReleaseSpilled(state, quot_spill);
+
     // The safepoint on the loop-continue path updated
     // state.items_ptr/base_addr to IR refs that don't dominate
     // this merge point. Re-LOAD to get dominating refs.
@@ -7570,6 +7606,8 @@ fn emitIntrinsicLoop(ec: EmitCtx) IrCodegenError!ControlFlow {
     if (state.refresh_stack_fn != c.IR_UNUSED) {
         refreshCachedStackPointer(state);
     }
+
+    emitReleaseSpilled(state, pred_spill);
     return .next;
 }
 
@@ -12663,7 +12701,7 @@ fn emitNativeWordCall(state: *CompileState, ctx_val: c.ir_ref, name: []const u8,
         emitCallbackPostCheck(state, call_result, state.error_propagate_status, if (resolved.never_returns) state.error_propagate_status else null, .none);
     } else {
         const fn_ptr_const = c.ir_const_addr(ictx, resolved.native_fn_ptr.?);
-        const call_result = c._ir_CALL_2(ictx, c.IR_I32, state.native_call_fn, ctx_val, fn_ptr_const);
+        const call_result = c._ir_CALL_2(ictx, c.IR_I32, jitNativeCallFn(state), ctx_val, fn_ptr_const);
         emitCallbackPostCheck(state, call_result, call_result, if (resolved.never_returns) state.error_propagate_status else null, .{ .named = .{ .name = name, .line = line } });
     }
 }
@@ -13331,8 +13369,12 @@ export fn jitCallQuotationValue(ctx_raw: usize, value_ptr_raw: usize) callconv(.
     }
 
     // Copy the Value out before executing: the execution below may push onto ctx.stack and
-    // reallocate the backing array out from under value_ptr_raw.
+    // reallocate the backing array out from under value_ptr_raw. Hold an execution-duration
+    // reference of our own, since the compiled caller may release its slot the moment this
+    // helper returns and a closure's body must stay alive while it runs.
     const val = @as(*const Value, @ptrFromInt(value_ptr_raw)).*;
+    container_backing.retainValue(val);
+    defer container_backing.releaseValue(val);
     const quot = (helpers.asQuotationStamped(ctx, val) catch |err| {
         ctx.jit_pending_error = err;
         return 2;
@@ -13393,6 +13435,11 @@ export fn jitCallValue(jit_ctx_raw: usize, value_ptr_raw: usize) callconv(.c) i3
                 ctx.jit_pending_error = error.NullCodePtr;
                 return 2;
             }
+            // Hold an execution-duration reference: a base body may push and
+            // pop stack slots whose releases could otherwise drop the
+            // dispatched slot's closure while its segments are being walked.
+            cl.header.retain();
+            defer cl.header.release();
             for (cl.segments) |seg| {
                 for (seg.captures) |cap| {
                     container_backing.retainValue(cap);

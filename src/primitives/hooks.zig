@@ -11,17 +11,26 @@ const Value = value_mod.Value;
 const helpers = @import("helpers.zig");
 const RegistryEntry = @import("types.zig").RegistryEntry;
 
-pub const HookRegistry = struct {
-    hooks: std.StringHashMapUnmanaged(std.ArrayListUnmanaged(Quotation)) = .{},
+/// A registered hook: the executable view plus the owning reference the
+/// registration transferred in. For a closure the reference keeps the body
+/// alive for the registry's lifetime; a plain quotation's owner is inert.
+pub const StoredHook = struct {
+    quot: Quotation,
+    owner: Value,
+};
 
-    /// Free the registry's owned storage: each event's quotation list, the
-    /// duped event-name keys, and the map itself. Quotation instruction
-    /// bodies are borrowed from the dictionary or a per-context arena and are
-    /// not freed here.
+pub const HookRegistry = struct {
+    hooks: std.StringHashMapUnmanaged(std.ArrayListUnmanaged(StoredHook)) = .{},
+
+    /// Free the registry's owned storage: each event's hook list with its
+    /// owning references, the duped event-name keys, and the map itself.
+    /// Plain quotation bodies are borrowed from the dictionary or a
+    /// per-context arena and are not freed here.
     pub fn deinit(self: *HookRegistry, allocator: std.mem.Allocator) void {
         var iter = self.hooks.iterator();
         while (iter.next()) |entry| {
             allocator.free(entry.key_ptr.*);
+            for (entry.value_ptr.items) |hook| container_backing.releaseValue(hook.owner);
             entry.value_ptr.deinit(allocator);
         }
         self.hooks.deinit(allocator);
@@ -36,7 +45,10 @@ pub const registry_entries = [_]RegistryEntry{
 /// ( key quot -- ) Register a hook quotation for a lifecycle event.
 /// The key can be a symbol or a string.
 fn nativeRegisterHook(ctx: *Context) anyerror!void {
-    const quot = try helpers.popQuotation(ctx);
+    // The popped owning reference transfers into the registry entry; every
+    // failure path below releases it instead.
+    const pc = try helpers.popQuotation(ctx);
+    errdefer pc.release();
     const val = ctx.stack.pop() catch return error.StackUnderflow;
     // The event-key bytes are duped for a fresh map entry below.
     defer container_backing.releaseValue(val);
@@ -62,7 +74,7 @@ fn nativeRegisterHook(ctx: *Context) anyerror!void {
         };
         result.value_ptr.* = .{};
     }
-    result.value_ptr.append(alloc, quot) catch return error.OutOfMemory;
+    result.value_ptr.append(alloc, .{ .quot = pc.quot, .owner = pc.owner }) catch return error.OutOfMemory;
 }
 
 /// Fire all hooks registered for the given event name.
@@ -76,7 +88,7 @@ pub fn fireHooks(ctx: *Context, event_name: []const u8, args: []const Value) voi
     var i = hook_list.items.len;
     while (i > 0) {
         i -= 1;
-        const quot = hook_list.items[i];
+        const quot = hook_list.items[i].quot;
 
         for (args) |arg| {
             ctx.stack.push(arg) catch continue;
@@ -219,9 +231,9 @@ test "LIFO ordering" {
     const quot2 = Quotation{ .instructions = instrs2 };
 
     const key = try alloc.dupe(u8, "test-event");
-    var list = std.ArrayListUnmanaged(Quotation){};
-    try list.append(alloc, quot1);
-    try list.append(alloc, quot2);
+    var list = std.ArrayListUnmanaged(StoredHook){};
+    try list.append(alloc, .{ .quot = quot1, .owner = .unit });
+    try list.append(alloc, .{ .quot = quot2, .owner = .unit });
     try registry.hooks.put(alloc, key, list);
 
     // LIFO: hook2 fires first, then hook1
@@ -258,10 +270,10 @@ test "error resilience" {
     // Register: quot1, quot2 (throws), quot3
     // LIFO firing: quot3 -> quot2 (error) -> quot1
     const key = try alloc.dupe(u8, "test-err");
-    var list = std.ArrayListUnmanaged(Quotation){};
-    try list.append(alloc, quot1);
-    try list.append(alloc, quot2);
-    try list.append(alloc, quot3);
+    var list = std.ArrayListUnmanaged(StoredHook){};
+    try list.append(alloc, .{ .quot = quot1, .owner = .unit });
+    try list.append(alloc, .{ .quot = quot2, .owner = .unit });
+    try list.append(alloc, .{ .quot = quot3, .owner = .unit });
     try registry.hooks.put(alloc, key, list);
 
     fireHooks(&ctx, "test-err", &.{});

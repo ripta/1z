@@ -137,7 +137,9 @@ fn sortCompareFn(sort_ctx: *SortContext, a: Value, b: Value) bool {
 }
 
 fn nativeSort(ctx: *Context) anyerror!void {
-    const quot = try popQuotation(ctx);
+    const pc = try popQuotation(ctx);
+    defer pc.release();
+    const quot = pc.quot;
     const seq = try ctx.stack.pop();
     defer container_backing.releaseValue(seq);
     const alloc = ctx.allocator;
@@ -213,7 +215,9 @@ fn sortByKeyCompareFn(sort_ctx: *SortByContext, a_idx: usize, b_idx: usize) bool
 }
 
 fn nativeSortBy(ctx: *Context) anyerror!void {
-    const quot = try popQuotation(ctx);
+    const pc = try popQuotation(ctx);
+    defer pc.release();
+    const quot = pc.quot;
     const seq = try ctx.stack.pop();
     defer container_backing.releaseValue(seq);
     const alloc = ctx.allocator;
@@ -833,7 +837,9 @@ pub fn nativeLast(ctx: *Context) anyerror!void {
 
 /// #each ( seq quot -- )
 pub fn nativeEach(ctx: *Context) anyerror!void {
-    const quot = try popQuotation(ctx);
+    const pc = try popQuotation(ctx);
+    defer pc.release();
+    const quot = pc.quot;
     const raw_seq = try ctx.stack.pop();
     // The iterator below borrows the container and is fully consumed before
     // this scope exits, so releasing the source on exit is safe.
@@ -864,7 +870,9 @@ pub fn nativeEach(ctx: *Context) anyerror!void {
 
 /// #each-index ( seq quot -- )
 pub fn nativeEachIndex(ctx: *Context) anyerror!void {
-    const quot = try popQuotation(ctx);
+    const pc = try popQuotation(ctx);
+    defer pc.release();
+    const quot = pc.quot;
     const raw_seq = try ctx.stack.pop();
     defer container_backing.releaseValue(raw_seq);
     const alloc = ctx.quotationAllocator();
@@ -899,8 +907,14 @@ pub fn nativeEachIndex(ctx: *Context) anyerror!void {
 /// Always returns a lazy iterator, regardless of input type. Use #collect
 /// to materialize the result into an array.
 pub fn nativeMap(ctx: *Context) anyerror!void {
-    const quot = try popQuotation(ctx);
-    const seq = try ctx.stack.pop();
+    // The popped quotation reference transfers into the iterator kind, which releases it at
+    // destroy: the lazy drain outlives this call. Each pre-transfer failure path releases it
+    // explicitly; an errdefer would double-release once `Iterator.create` has taken it over.
+    const pc = try popQuotation(ctx);
+    const seq = ctx.stack.pop() catch |err| {
+        pc.release();
+        return err;
+    };
     defer container_backing.releaseValue(seq);
 
     // The wrapper owns its inner iterator: an aliased inner is retained here because the deferred
@@ -908,13 +922,18 @@ pub fn nativeMap(ctx: *Context) anyerror!void {
     const inner = if (seq == .iterator) blk: {
         seq.iterator.header.retain();
         break :blk seq.iterator;
-    } else try seqToArrayIter(seq, ctx) orelse {
+    } else (seqToArrayIter(seq, ctx) catch |err| {
+        pc.release();
+        return err;
+    }) orelse {
+        pc.release();
         setErrorContext(ctx, "expected sequence, got {s}", .{valueTypeName(seq)});
         return error.TypeMismatch;
     };
 
-    const iter = Iterator.create(ctx.allocator, .{ .map = .{ .inner = inner, .quotation = quot } }) catch |err| {
+    const iter = Iterator.create(ctx.allocator, .{ .map = .{ .inner = inner, .quotation = pc.quot, .quot_owner = pc.owner } }) catch |err| {
         inner.header.release();
+        pc.release();
         return err;
     };
     try helpers.pushMovedIterator(ctx, iter);
@@ -922,8 +941,12 @@ pub fn nativeMap(ctx: *Context) anyerror!void {
 
 /// #filter ( seq quot -- iterator )
 pub fn nativeFilter(ctx: *Context) anyerror!void {
-    const quot = try popQuotation(ctx);
-    const seq = try ctx.stack.pop();
+    // Ownership mirrors `nativeMap`: explicit pre-transfer releases, no errdefer.
+    const pc = try popQuotation(ctx);
+    const seq = ctx.stack.pop() catch |err| {
+        pc.release();
+        return err;
+    };
     defer container_backing.releaseValue(seq);
 
     // The wrapper owns its inner iterator: an aliased inner is retained here because the deferred
@@ -931,13 +954,18 @@ pub fn nativeFilter(ctx: *Context) anyerror!void {
     const inner = if (seq == .iterator) blk: {
         seq.iterator.header.retain();
         break :blk seq.iterator;
-    } else try seqToArrayIter(seq, ctx) orelse {
+    } else (seqToArrayIter(seq, ctx) catch |err| {
+        pc.release();
+        return err;
+    }) orelse {
+        pc.release();
         setErrorContext(ctx, "expected sequence, got {s}", .{valueTypeName(seq)});
         return error.TypeMismatch;
     };
 
-    const iter = Iterator.create(ctx.allocator, .{ .filter = .{ .inner = inner, .quotation = quot } }) catch |err| {
+    const iter = Iterator.create(ctx.allocator, .{ .filter = .{ .inner = inner, .quotation = pc.quot, .quot_owner = pc.owner } }) catch |err| {
         inner.header.release();
+        pc.release();
         return err;
     };
     try helpers.pushMovedIterator(ctx, iter);
@@ -945,7 +973,9 @@ pub fn nativeFilter(ctx: *Context) anyerror!void {
 
 /// #reduce ( seq init quot -- result )
 pub fn nativeReduce(ctx: *Context) anyerror!void {
-    const quot = try popQuotation(ctx);
+    const pc = try popQuotation(ctx);
+    defer pc.release();
+    const quot = pc.quot;
     var acc = try ctx.stack.pop(); // initial accumulator
     // On any error unwind the local still owns the current accumulator's
     // reference; without this the in-flight accumulator leaks when the
@@ -994,7 +1024,9 @@ pub fn nativeReduce(ctx: *Context) anyerror!void {
 
 /// #reduce-index ( seq init quot -- result )
 pub fn nativeReduceIndex(ctx: *Context) anyerror!void {
-    const quot = try popQuotation(ctx);
+    const pc = try popQuotation(ctx);
+    defer pc.release();
+    const quot = pc.quot;
     var acc = try ctx.stack.pop();
     // Mirror of the `nativeReduce` errdefer: the local owns the in-flight
     // accumulator's reference across the quotation call.
@@ -2953,9 +2985,8 @@ fn nativePeekByteArray(ctx: *Context) anyerror!void {
             if (bits <= std.math.maxInt(i64)) {
                 try ctx.stack.push(.{ .fixnum = @intCast(bits) });
             } else {
-                const alloc = ctx.arena.allocator();
-                const big = try BigIntManaged.initSet(alloc, bits);
-                try ctx.stack.push(.{ .bignum = try value_mod.boxBigInt(alloc, big) });
+                const big = try BigIntManaged.initSet(ctx.allocator, bits);
+                try helpers.pushDemotedBignum(ctx, big);
             }
         },
         else => unreachable,
@@ -3027,14 +3058,14 @@ fn nativePokeByteArray(ctx: *Context) anyerror!void {
             break :blk u;
         },
         .bignum => |b| blk: {
-            if (!b.fits(u64)) {
+            if (!b.big.fits(u64)) {
                 ba.header.unlock();
                 container_backing.releaseValue(value);
                 container_backing.releaseValue(ba_val);
                 setErrorContext(ctx, "#poke! value exceeds range for width {d}", .{width});
                 return error.FixnumOverflow;
             }
-            const u = b.toInt(u64) catch unreachable;
+            const u = b.big.toInt(u64) catch unreachable;
             if (u > max_val) {
                 ba.header.unlock();
                 container_backing.releaseValue(value);

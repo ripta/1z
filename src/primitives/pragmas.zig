@@ -50,6 +50,11 @@ fn nativeRegisterPragma(ctx: *Context) anyerror!void {
 
     const duped_name = try alloc.dupe(u8, name.bytes);
     try ctx.pragma_registry.put(ctx.allocator, duped_name, registration);
+    // The registry keeps only the quotation view; the transferred closure reference needs a
+    // holder with a releaser.
+    if (validator_val == .closure) {
+        try ctx.dictionary.retainValueForTeardown(validator_val);
+    }
 }
 
 /// pragma{ ( -- )
@@ -147,6 +152,13 @@ fn nativePragmaDefBlock(ctx: *Context) anyerror!void {
                 switch (next) {
                     .quotation, .closure => {
                         const q = (try helpers.asQuotationStamped(ctx, next)).?;
+                        // The registry keeps only the view while the source array's reference is
+                        // released above, so a closure validator needs its own reference.
+                        if (next == .closure) {
+                            container_backing.retainValue(next);
+                            errdefer container_backing.releaseValue(next);
+                            try ctx.dictionary.retainValueForTeardown(next);
+                        }
                         const duped_name = try alloc.dupe(u8, name.bytes);
                         try ctx.pragma_registry.put(ctx.allocator, duped_name, .{ .validator = q });
                     },

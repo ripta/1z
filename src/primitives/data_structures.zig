@@ -45,7 +45,9 @@ pub fn extractKeyString(ctx: *Context, val: Value) ![]const u8 {
 /// The quotation should contain alternating symbol or string keys and values.
 /// Example: [ name: "Alice" age: 30 ] make-hash
 pub fn nativeMakeHash(ctx: *Context) anyerror!void {
-    const quot = try popQuotation(ctx);
+    const pc = try popQuotation(ctx);
+    defer pc.release();
+    const quot = pc.quot;
     const instrs = quot.instructions;
 
     const hash = HashTable.create(ctx.allocator) catch return error.OutOfMemory;
@@ -126,7 +128,9 @@ pub fn nativeMakeHash(ctx: *Context) anyerror!void {
 ///
 /// Example: [ 1 2 3 ] make-vector
 pub fn nativeMakeVector(ctx: *Context) anyerror!void {
-    const quot = try popQuotation(ctx);
+    const pc = try popQuotation(ctx);
+    defer pc.release();
+    const quot = pc.quot;
     const instrs = quot.instructions;
 
     const vec = Vector.create(ctx.allocator) catch return error.OutOfMemory;
@@ -157,7 +161,9 @@ pub fn nativeMakeVector(ctx: *Context) anyerror!void {
 ///
 /// Example: [ 0xFF 0x00 0x42 ] make-byte-array
 pub fn nativeMakeByteArray(ctx: *Context) anyerror!void {
-    const quot = try popQuotation(ctx);
+    const pc = try popQuotation(ctx);
+    defer pc.release();
+    const quot = pc.quot;
     const instrs = quot.instructions;
 
     // Create a new byte array on the thread-safe heap so the backing
@@ -200,7 +206,9 @@ pub fn nativeMakeByteArray(ctx: *Context) anyerror!void {
 ///
 /// Example: [ 1 2 3 2 1 ] make-set creates S{ 1 2 3 } (duplicates removed)
 pub fn nativeMakeSet(ctx: *Context) anyerror!void {
-    const quot = try popQuotation(ctx);
+    const pc = try popQuotation(ctx);
+    defer pc.release();
+    const quot = pc.quot;
     const instrs = quot.instructions;
 
     const set = Set.create(ctx.allocator) catch return error.OutOfMemory;
@@ -238,7 +246,9 @@ pub fn nativeMakeSet(ctx: *Context) anyerror!void {
 ///
 /// Example: [ name: "Alice" age: 30 ] make-mutable-map
 pub fn nativeMakeMutableMap(ctx: *Context) anyerror!void {
-    const quot = try popQuotation(ctx);
+    const pc = try popQuotation(ctx);
+    defer pc.release();
+    const quot = pc.quot;
     const instrs = quot.instructions;
 
     const mmap = MutableMap.create(ctx.allocator) catch return error.OutOfMemory;

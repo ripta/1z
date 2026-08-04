@@ -326,8 +326,11 @@ pub const primitives = [_]Primitive{
 ///
 /// Runs in a new local frame, so locals defined inside stay scoped to the call.
 pub fn nativeCall(ctx: *Context) anyerror!void {
-    const instrs = try popQuotation(ctx);
-    try ctx.executeQuotationWithFrame(instrs);
+    // Hold the popped reference across execution: for a closure it is what
+    // keeps the body alive while it runs.
+    const pc = try popQuotation(ctx);
+    defer pc.release();
+    try ctx.executeQuotationWithFrame(pc.quot);
 }
 
 /// ; ( name: quot -- ) or ( name: value -- ) or ( name: marker -- )
@@ -539,11 +542,18 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
                 const action: WordDefinition.Action = switch (top_val) {
                     .quotation => |quot| .{ .compound = quot.instructions },
                     // A closure is a quotation literal promoted at push time because it closed over
-                    // an outer local (see `Context.captureQuotationScope`). Without this arm it would
-                    // fall to `literalOrCompoundAction` below, which treats a closure as a
-                    // non-refcounted scalar and stores it as a `.literal` -- turning the defined word
-                    // into one that pushes the closure as a constant instead of calling it.
-                    .closure => |c| .{ .compound = c.instructions },
+                    // an outer local, or a curry/compose product (see `Context.captureQuotationScope`
+                    // and `nativeCurry`). Without this arm it would fall to `literalOrCompoundAction`
+                    // below, which would store the closure as a `.literal` -- turning the defined
+                    // word into one that pushes the closure as a constant instead of calling it.
+                    //
+                    // The word borrows the closure's body, so the popped reference is adopted by
+                    // the dictionary and released only at teardown, keeping the body alive for
+                    // every later call of the word.
+                    .closure => |c| blk: {
+                        try ctx.dictionary.retainValueForTeardown(top_val);
+                        break :blk .{ .compound = c.instructions };
+                    },
                     else => try WordDefinition.literalOrCompoundAction(alloc, top_val),
                 };
                 // The action adopted the popped value (or borrows a backing-free body).
@@ -612,6 +622,13 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
                     .doc = doc_val,
                     .action = action,
                 });
+                // For a chain-owned closure body the retained closure's destroy is the single
+                // release path for the embedded literals, so remove the generic compound
+                // registration `defineWord` just made; leaving both would double-release, and
+                // the destroy's body free would leave the dictionary walking a dead slice.
+                if (top_val == .closure and top_val.closure.ownsBodyTransitively()) {
+                    ctx.dictionary.unregisterCompoundBody(top_val.closure.instructions);
+                }
                 fireWordDefinedHook(ctx, alloc, name_copy);
             }
         },
@@ -640,9 +657,11 @@ pub fn nativeFalse(ctx: *Context) anyerror!void {
 /// enclosing word's TCO loop (e.g., times -> if -> [... times] tail-calls).
 pub fn nativeIf(ctx: *Context) anyerror!void {
     const false_quot = try popQuotation(ctx);
+    defer false_quot.release();
     const true_quot = try popQuotation(ctx);
+    defer true_quot.release();
     const cond = try popBoolean(ctx);
-    try ctx.executeQuotationInline(if (cond) true_quot else false_quot);
+    try ctx.executeQuotationInline(if (cond) true_quot.quot else false_quot.quot);
 }
 
 test "semicolon defines named union type as parse-time word" {
@@ -948,15 +967,15 @@ test "spot-check: representative unverified pointer types round-trip identically
     {
         var big = try value_mod.BigIntManaged.initSet(std.testing.allocator, 42);
         defer big.deinit();
-        const v: Value = .{ .bignum = &big };
+        const v: Value = .{ .bignum = .{ .big = &big } };
 
         const literal_result = try defineAndCallLiteral(&ctx, "spot-bignum-lit", v);
         try std.testing.expect(literal_result == .bignum);
-        try std.testing.expectEqual(&big, literal_result.bignum);
+        try std.testing.expectEqual(&big, literal_result.bignum.big);
 
         const compound_result = try defineAndCallForcedCompound(&ctx, "spot-bignum-cmp", v);
         try std.testing.expect(compound_result == .bignum);
-        try std.testing.expectEqual(&big, compound_result.bignum);
+        try std.testing.expectEqual(&big, compound_result.bignum.big);
     }
 
     // parameter
@@ -1009,8 +1028,15 @@ test "spot-check: representative unverified pointer types round-trip identically
     // runs its body instead of yielding the closure value back.
     {
         const closure_instrs = &[_]Instruction{.{ .op = .{ .push_literal = .{ .fixnum = 99 } }, .line = 0 }};
-        var closure: value_mod.Closure = .{ .instructions = closure_instrs, .segments = &.{} };
-        const v: Value = .{ .closure = &closure };
+        const closure = try value_mod.Closure.create(std.testing.allocator, .{
+            .instructions = closure_instrs,
+            .segments = &.{},
+            .header = undefined,
+        });
+        const v: Value = .{ .closure = closure };
+        // Drop the creation reference once the definition's adopted reference
+        // is the only intended owner.
+        defer container_backing.releaseValue(v);
 
         try ctx.stack.push(value_mod.symbolValue("spot-closure-compound"));
         try ctx.stack.push(v);

@@ -189,15 +189,16 @@ pub fn isSyntheticScopeModule(module: ?*const value_mod.Module) bool {
 /// `executeInstructions` call holding it for the call's duration, or a descendant task reached
 /// through `findCapturedScopeForBody`'s ancestor walk).
 ///
-/// A closure-owned ("tier-2") scope is an independent deep copy allocated on a closure's own
-/// quotation arena; it is never retained or released, since it rides the arena's teardown exactly
-/// like the `Closure` struct that owns it. `promoteToClosure` and `curry`/`compose`
-/// (`functional.zig`) build one of these via `dupeCapturedScope` whenever they hand a scope to
-/// something that can meaningfully outlive the map's current entry for the body it came from --
-/// see `promoteToClosure`'s doc comment for why copying here is load-bearing, not merely
-/// defensive. `findCapturedScopeForBody` builds its copy on whatever allocator the caller passes,
-/// so its result is tier-2 when `curry`/`compose` pass the quotation arena and tier-1 when the
-/// body-entry fill passes the durable allocator and installs the copy into the map.
+/// A closure-owned ("tier-2") scope is an independent deep copy the owning closure releases from
+/// its destroy path when its `owns_scope` flag is set (its creation reference is the only one, so
+/// that release frees it). `promoteToClosure` and `curry`/`compose` (`functional.zig`) build one
+/// of these via `dupeCapturedScope` whenever they hand a scope to something that can meaningfully
+/// outlive the map's current entry for the body it came from -- see `promoteToClosure`'s doc
+/// comment for why copying here is load-bearing, not merely defensive.
+/// `findCapturedScopeForBody` builds its copy on whatever allocator the caller passes, so its
+/// result is tier-2 when `curry`/`compose` pass the context allocator for a closure to own and
+/// tier-1 when the body-entry fill passes the durable allocator and installs the copy into the
+/// map. A task-boundary deep copy's scope still rides the destination task arena unreleased.
 ///
 /// `retain`/`release` mirror `container_backing.ContainerHeader`'s pattern, minus the mutex --
 /// `lexical_frames` is immutable after construction, so no lock is needed for reads.
@@ -1584,11 +1585,11 @@ pub const Context = struct {
             self.allocator.destroy(entry.value_ptr.*);
         }
         self.pic_cache.deinit(self.allocator);
-        // thrown_error, error_value boxes, bignum boxes (header and limbs),
-        // and task error_obj boxes are all arena-allocated; they are
-        // reclaimed by arena.deinit. The refcounted backing carried in an
-        // unrecovered error's `data` field is not arena-owned, so release it
-        // here before discarding the stash.
+        // thrown_error, error_value boxes, null-backed bignum boxes, and task
+        // error_obj boxes are all arena-allocated; they are reclaimed by
+        // arena.deinit. The refcounted backing carried in an unrecovered
+        // error's `data` field is not arena-owned, so release it here before
+        // discarding the stash.
         if (self.thrown_error) |thrown| {
             if (thrown.data) |data| container_backing.releaseValue(data.*);
         }
@@ -1601,6 +1602,7 @@ pub const Context = struct {
         // is torn down. Task contexts share the image slot tables with
         // their root, so only the root walks them.
         self.stack.clear();
+        self.dictionary.releaseRetainedValues();
         self.dictionary.walkContainerReleaseList();
         self.walkContainerReleaseList();
         self.container_release_list.deinit(self.allocator);
@@ -2092,10 +2094,10 @@ pub const Context = struct {
     /// Build a `.closure` wrapping `quot`'s existing instructions/effect plus a copy of `scope`,
     /// for a capturing quotation-literal push.
     ///
-    /// The scope is deep-copied onto the closure's own quotation arena rather than shared with the
+    /// The scope is deep-copied onto the closure's own allocator rather than shared with the
     /// map's entry: the map's copy is refcounted and can be superseded (and eventually freed) by a
     /// later push of the same body, but a closure holding it directly has no such lifecycle hook, so
-    /// it needs its own independently-owned copy that rides the closure's own arena teardown. This
+    /// it needs its own independently-owned copy that the closure's destroy releases. This
     /// is load-bearing, not defensive: `curry`, `compose`, and `spawn` can all hand a closure to a
     /// task that keeps running after the pushing context has moved on and superseded the entry this
     /// closure was built from (e.g. a `spawn-detached` per-connection handler in a server's
@@ -2114,21 +2116,28 @@ pub const Context = struct {
     /// A non-null `quot.code_ptr` becomes a one-entry compiled segment so a compiled fast path is
     /// not silently dropped by the promotion; otherwise the closure is uncompiled.
     fn promoteToClosure(self: *Context, quot: Quotation, scope: *const CapturedScope) !*value_mod.Closure {
-        const alloc = self.quotationAllocator();
+        const alloc = self.allocator;
         const segments: []const value_mod.Segment = if (quot.code_ptr) |cp| blk: {
             const segs = try alloc.alloc(value_mod.Segment, 1);
             segs[0] = .{ .captures = &.{}, .base_code_ptr = cp };
             break :blk segs;
         } else &.{};
+        errdefer alloc.free(segments);
 
-        const closure = try alloc.create(value_mod.Closure);
-        closure.* = .{
+        const scope_copy = try dupeCapturedScope(alloc, scope);
+        errdefer scope_copy.release();
+
+        // The body aliases the module-owned quotation literal, so the closure
+        // owns only the segments and the scope copy.
+        return try value_mod.Closure.create(alloc, .{
             .instructions = quot.instructions,
             .effect = quot.effect,
             .segments = segments,
-            .captured_scope = try dupeCapturedScope(alloc, scope),
-        };
-        return closure;
+            .captured_scope = scope_copy,
+            .header = undefined,
+            .owns_segments = true,
+            .owns_scope = true,
+        });
     }
 
     /// Resolve `name` against a captured lexical scope's transient frames, most-recently-pushed
@@ -5409,6 +5418,17 @@ pub const Context = struct {
         // If we can't infer the delta, don't error - allow dynamic validation
     }
 
+    /// The executable body behind a callable stack value, or null for anything
+    /// else. Curry and compose products are closures, so the parameter-effect
+    /// validation must see through both forms.
+    fn callableView(val: Value) ?Quotation {
+        return switch (val) {
+            .quotation => |q| q,
+            .closure => |c| c.asQuotation(),
+            else => null,
+        };
+    }
+
     /// Check if a row variable name is defined in a word's effect (inputs or outputs).
     fn isRowVariableDefined(row_var: []const u8, word_effect: *const StackEffect) bool {
         for (word_effect.inputs) |param| {
@@ -5501,8 +5521,7 @@ pub const Context = struct {
                     if (!expected_effect.hasBalancedRowVariables()) {
                         const offset_from_top = concrete_params - 1 - ci;
                         const stack_index = self.stack.depth() - 1 - offset_from_top;
-                        if (self.stack.items.items[stack_index] == .quotation) {
-                            const quot = self.stack.items.items[stack_index].quotation;
+                        if (callableView(self.stack.items.items[stack_index])) |quot| {
                             if (self.inferQuotationDelta(quot, effect)) |inferred_delta| {
                                 const input_rvs = expected_effect.inputRowVariableNames();
                                 const output_rvs = expected_effect.outputRowVariableNames();
@@ -5540,10 +5559,9 @@ pub const Context = struct {
                 // Calculate offset from top of stack: rightmost concrete param is on top
                 const offset_from_top = concrete_params - 1 - concrete_index;
 
-                // Get the stack value at this offset and validate if it's a quotation
+                // Get the stack value at this offset and validate if it's a callable
                 const stack_index = self.stack.depth() - 1 - offset_from_top;
-                if (self.stack.items.items[stack_index] == .quotation) {
-                    const quot = self.stack.items.items[stack_index].quotation;
+                if (callableView(self.stack.items.items[stack_index])) |quot| {
                     const env: ?*const RowVarEnv = if (row_env_valid and row_env.len > 0) &row_env else null;
 
                     try self.validateQuotationEffect(quot, expected_effect, param.name, effect, env);
@@ -6587,7 +6605,12 @@ pub const Context = struct {
                     // directly; a non-capturing push (the common case) is pushed unchanged.
                     if (val == .quotation) {
                         if (try self.captureQuotationScope(val.quotation.instructions)) |scope| {
-                            try self.stack.push(.{ .closure = try self.promoteToClosure(val.quotation, scope) });
+                            // The promotion's creation reference transfers into the slot.
+                            const promoted = try self.promoteToClosure(val.quotation, scope);
+                            self.stack.pushMoved(.{ .closure = promoted }) catch |err| {
+                                container_backing.releaseValue(.{ .closure = promoted });
+                                return err;
+                            };
                         } else {
                             try self.stack.push(val);
                         }
@@ -10152,7 +10175,7 @@ test "captureQuotationScope: a retained scope survives a supersede, frees only a
     first.release();
 }
 
-test "captureQuotationScope + promoteToClosure: repeated capture-and-immediate-use across many iterations grows memory at a steady rate" {
+test "captureQuotationScope + promoteToClosure: a dropped promotion is reclaimed, so repeated capture-and-drop stays flat" {
     var mem_limit = MemoryLimitAllocator.init(std.testing.allocator, 0);
     var ctx = Context.init(mem_limit.allocator());
     defer ctx.deinit();
@@ -10168,27 +10191,26 @@ test "captureQuotationScope + promoteToClosure: repeated capture-and-immediate-u
     // The binding stays fixed across the loop so this test isolates the closure-capture mechanism
     // from the cost of redefining the local itself, which is covered by its own tests elsewhere.
     var i: usize = 0;
-    while (i < 57_344) : (i += 1) {
+    while (i < 4096) : (i += 1) {
         const scope = (try ctx.captureQuotationScope(&body)) orelse return error.TestExpectedCapture;
-        _ = try ctx.promoteToClosure(quot, scope);
+        const cl = try ctx.promoteToClosure(quot, scope);
+        container_backing.releaseValue(.{ .closure = cl });
     }
     const first_batch_bytes = mem_limit.currentBytes();
 
-    while (i < 114_688) : (i += 1) {
+    while (i < 8192) : (i += 1) {
         const scope = (try ctx.captureQuotationScope(&body)) orelse return error.TestExpectedCapture;
-        _ = try ctx.promoteToClosure(quot, scope);
+        const cl = try ctx.promoteToClosure(quot, scope);
+        container_backing.releaseValue(.{ .closure = cl });
     }
-    const second_batch_bytes = mem_limit.currentBytes() - first_batch_bytes;
+    const second_batch_bytes = mem_limit.currentBytes();
 
     // `captureQuotationScope`'s own map entry is refcounted and freed on supersede (proven
-    // bounded by the tests above); the growth here comes from `promoteToClosure`, which builds a
-    // real `Closure` plus an independently-owned `CapturedScope` copy on the context's arena for
-    // every capturing push -- a deliberate, documented tradeoff, not a bug this test catches. What
-    // matters is that the per-call rate stays steady rather than accelerating, the same signal a
-    // container-bound named local's own accepted allocation cost is measured by elsewhere.
+    // bounded by the tests above), and a promoted closure now carries a refcounted header whose
+    // release frees the struct, its segments, and its owned scope copy. Dropping every promotion
+    // must therefore leave live bytes flat across the second batch.
     try std.testing.expect(first_batch_bytes > 0);
-    try std.testing.expect(second_batch_bytes > 0);
-    try std.testing.expect(second_batch_bytes < first_batch_bytes * 3);
+    try std.testing.expect(second_batch_bytes <= first_batch_bytes);
 }
 
 test "dupeCapturedScope: deep-copies into an independent scope resolving the same binding" {

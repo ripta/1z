@@ -204,6 +204,11 @@ pub const Dictionary = struct {
     /// swap there may still be readers holding the pointer, so the box stays
     /// allocated for the dictionary's lifetime and is freed in `deinit`.
     retired: std.ArrayListUnmanaged(*WordDefinition) = .{},
+    /// Owning references adopted by word definitions whose memory must stay
+    /// alive for the dictionary's lifetime -- a closure whose body became a
+    /// word's compound action. Released at teardown alongside the container
+    /// release list.
+    retained_values: std.ArrayListUnmanaged(Value) = .{},
 
     pub fn init(allocator: Allocator) Dictionary {
         return .{
@@ -223,6 +228,7 @@ pub const Dictionary = struct {
         for (self.retired.items) |def| self.allocator.destroy(def);
         self.retired.deinit(self.allocator);
         self.container_release_list.deinit(self.allocator);
+        self.retained_values.deinit(self.allocator);
     }
 
     pub fn put(self: *Dictionary, name: []const u8, definition: WordDefinition) !void {
@@ -294,6 +300,34 @@ pub const Dictionary = struct {
             if (existing.ptr == instructions.ptr) return;
         }
         try self.container_release_list.append(self.allocator, instructions);
+    }
+
+    /// Remove a compound body recorded by `registerCompoundBody`, for a body
+    /// whose embedded literals a retained value's own destroy releases instead.
+    pub fn unregisterCompoundBody(self: *Dictionary, instructions: []const Instruction) void {
+        var i: usize = 0;
+        while (i < self.container_release_list.items.len) {
+            if (self.container_release_list.items[i].ptr == instructions.ptr) {
+                _ = self.container_release_list.swapRemove(i);
+            } else {
+                i += 1;
+            }
+        }
+    }
+
+    /// Adopt an owning reference that must survive until teardown. The caller
+    /// transfers its reference; `releaseRetainedValues` drops it.
+    pub fn retainValueForTeardown(self: *Dictionary, val: Value) !void {
+        try self.retained_values.append(self.allocator, val);
+    }
+
+    /// Release every reference adopted by `retainValueForTeardown`, then clear
+    /// the list. Called at context teardown alongside the release-list walk.
+    pub fn releaseRetainedValues(self: *Dictionary) void {
+        for (self.retained_values.items) |v| {
+            container_backing.releaseValue(v);
+        }
+        self.retained_values.clearRetainingCapacity();
     }
 
     /// Release captured container literals from every registered

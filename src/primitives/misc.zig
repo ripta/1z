@@ -116,8 +116,15 @@ fn nativeToModule(ctx: *Context) anyerror!void {
             ctx.pending_error_message = msg;
             return error.TypeMismatch;
         };
-        // The module outlives `ht_val`; dupe the key into the module's
-        // allocator so freeing the source M{} (or its arena, for the
+        // The module outlives `ht_val`, so a closure body would dangle once the source
+        // container drops its reference.
+        if (val == .closure) {
+            container_backing.retainValue(val);
+            errdefer container_backing.releaseValue(val);
+            try ctx.dictionary.retainValueForTeardown(val);
+        }
+        // The module also outlives the source's keys; dupe each into the
+        // module's allocator so freeing the source M{} (or its arena, for the
         // legacy hash variant) does not leave dangling key pointers in
         // `module.words`.
         const key_copy = try alloc.dupe(u8, entry.key_ptr.*);

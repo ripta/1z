@@ -180,12 +180,18 @@ fn nativeMakeCallbackIter(ctx: *Context) anyerror!void {
             return error.TypeMismatch;
         },
     };
-    const iter = try Iterator.create(ctx.allocator, .{ .callback = .{
+    // The popped reference transfers into the iterator kind, released at
+    // destroy, so a closure body stays alive across the lazy drain.
+    const iter = Iterator.create(ctx.allocator, .{ .callback = .{
         .quotation = quotation,
         .exhausted = false,
         .cleanup_quotation = null,
         .cleanup_ran = false,
-    } });
+        .quot_owner = val,
+    } }) catch |err| {
+        container_backing.releaseValue(val);
+        return err;
+    };
     try helpers.pushMovedIterator(ctx, iter);
 }
 
@@ -212,12 +218,20 @@ fn nativeMakeCallbackIterWithCleanup(ctx: *Context) anyerror!void {
             return error.TypeMismatch;
         },
     };
-    const iter = try Iterator.create(ctx.allocator, .{ .callback = .{
+    // Both popped references transfer into the iterator kind, released at
+    // destroy, so closure bodies stay alive across the lazy drain.
+    const iter = Iterator.create(ctx.allocator, .{ .callback = .{
         .quotation = step_quotation,
         .exhausted = false,
         .cleanup_quotation = cleanup_quotation,
         .cleanup_ran = false,
-    } });
+        .quot_owner = step_val,
+        .cleanup_owner = cleanup_val,
+    } }) catch |err| {
+        container_backing.releaseValue(step_val);
+        container_backing.releaseValue(cleanup_val);
+        return err;
+    };
     try helpers.pushMovedIterator(ctx, iter);
 }
 

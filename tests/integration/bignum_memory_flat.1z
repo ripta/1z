@@ -1,0 +1,12 @@
+\ Bounded-memory regression for transient bignum results on the main task.
+\
+\ A bignum produced by arithmetic used to land its box and limb array on the
+\ context arena, which is never reclaimed on the main task, so this loop grew
+\ monotonically and exhausted the 4 MB cap set in the `.flags` sidecar partway
+\ through. Bignum payloads now carry refcounted heap backings, so a dropped
+\ result is freed at the drop and the loop stays flat.
+
+20000 [ 99999999999999999999999 12345 + drop ] times
+20000 [ 12345678901234567890 98765432109876543210 * drop ] times
+
+"flat" print-line

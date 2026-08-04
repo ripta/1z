@@ -124,15 +124,35 @@ const Segment = struct {
     base_code_ptr: *const anyopaque,
 };
 
+/// Mirror of the hosted `Closure`'s leading fields; the freestanding runtime only reads
+/// `segments`. The hosted struct's trailing lifecycle fields are omitted: no freestanding
+/// path constructs or destroys one. Both declarations pin the leading offsets to the same
+/// constants, so a compiler reordering on either side fails the build instead of skewing
+/// the read.
 const Closure = struct {
     instructions: []const Instruction,
     effect: ?*const StackEffect = null,
     segments: []const Segment,
+
+    comptime {
+        std.debug.assert(@offsetOf(Closure, "instructions") == 0);
+        std.debug.assert(@offsetOf(Closure, "effect") == 16);
+        std.debug.assert(@offsetOf(Closure, "segments") == 24);
+    }
 };
 
 /// Mirror of the hosted `StringBacking`, opaque here: the freestanding runtime never
 /// constructs a non-null backing, so it only needs the pointer's size and position.
 const StringBacking = opaque {};
+
+/// Mirror of the hosted `BignumBacking`, opaque for the same reason.
+const BignumBacking = opaque {};
+
+/// Mirror of the hosted `BignumPayload`. Must match `value.zig`'s field set exactly.
+const BignumPayload = struct {
+    backing: ?*BignumBacking = null,
+    big: *BigIntManaged,
+};
 
 /// Mirror of the hosted `StringPayload`. Must match `value.zig`'s field set exactly, since
 /// AOT codegen bakes offsets discovered from the hosted union into the emitted C.
@@ -144,7 +164,7 @@ const StringPayload = struct {
 const Value = union(enum) {
     fixnum: i64,
     float: f64,
-    bignum: *BigIntManaged,
+    bignum: BignumPayload,
     boolean: bool,
     string: StringPayload,
     symbol: StringPayload,

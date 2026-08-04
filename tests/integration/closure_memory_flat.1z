@@ -1,0 +1,14 @@
+\ Bounded-memory regression for transient curry and compose products on the
+\ main task.
+\
+\ A curry or compose result used to land its fresh instruction body on the
+\ context arena, which is never reclaimed on the main task, so each of these
+\ loops grew monotonically and exhausted the 4 MB cap set in the `.flags`
+\ sidecar partway through. Every curry/compose product is now a refcounted
+\ closure owning its body, so a dropped result is freed at the drop and both
+\ loops stay flat.
+
+20000 [ 2 [ * ] curry drop ] times
+20000 [ [ 2 * ] [ 3 + ] compose drop ] times
+
+"flat" print-line

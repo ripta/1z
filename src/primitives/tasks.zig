@@ -71,16 +71,21 @@ fn allocateTask(
     scope: *TaskScope,
     quotation: Quotation,
     captured_scope: ?*const CapturedScope,
+    quot_owner: Value,
 ) !*Task {
-    return allocateTaskWithEntry(ctx, scheduler, scope, quotation, captured_scope, &task_mod.taskEntryPoint);
+    return allocateTaskWithEntry(ctx, scheduler, scope, quotation, captured_scope, quot_owner, &task_mod.taskEntryPoint);
 }
 
+/// `quot_owner` is the owning reference behind `quotation`, transferred onto
+/// the task only on success (released at reap); on failure the caller still
+/// owns it.
 fn allocateTaskWithEntry(
     ctx: *Context,
     scheduler: *Scheduler,
     scope: *TaskScope,
     quotation: Quotation,
     captured_scope: ?*const CapturedScope,
+    quot_owner: Value,
     entry_fn: task_mod.CoroEntryFn,
 ) !*Task {
     const task = try ctx.allocator.create(Task);
@@ -102,6 +107,7 @@ fn allocateTaskWithEntry(
         .ctx = task_ctx,
         .scope = scope,
         .quotation = quotation,
+        .quot_owner = quot_owner,
     };
 
     try task_mod.initCoroContext(task, entry_fn, task_stack_size);
@@ -127,6 +133,10 @@ fn nativeTaskScope(ctx: *Context) anyerror!void {
     // call in a long-lived context that runs `task-scope` in a loop.
     const callable = try helpers.popCallableWithScope(ctx);
     const quot = callable.quot;
+    // The popped reference transfers onto the scope task, which releases it at
+    // reap; until that allocation succeeds this caller still owns it.
+    var owner_transferred = false;
+    errdefer if (!owner_transferred) callable.release();
 
     // Case: nested
     if (ctx.scheduler) |scheduler| {
@@ -134,7 +144,8 @@ fn nativeTaskScope(ctx: *Context) anyerror!void {
         defer scope.deinit();
         defer scheduler.reapScopeAtExit(&scope);
 
-        const scope_task = try allocateTask(ctx, scheduler, &scope, quot, callable.scope);
+        const scope_task = try allocateTask(ctx, scheduler, &scope, quot, callable.scope, callable.owner);
+        owner_transferred = true;
         scope.scope_task = scope_task;
 
         try scope.addChild(scope_task);
@@ -216,7 +227,8 @@ fn nativeTaskScope(ctx: *Context) anyerror!void {
     var scope = TaskScope.init(ctx.allocator);
     defer scope.deinit();
 
-    const scope_task = try allocateTask(ctx, &primary.scheduler, &scope, quot, callable.scope);
+    const scope_task = try allocateTask(ctx, &primary.scheduler, &scope, quot, callable.scope, callable.owner);
+    owner_transferred = true;
     scope.scope_task = scope_task;
 
     try scope.addChild(scope_task);
@@ -256,6 +268,8 @@ fn nativeSpawn(ctx: *Context) anyerror!void {
     if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "spawn");
 
     const callable = try helpers.popCallableWithScope(ctx);
+    var owner_transferred = false;
+    errdefer if (!owner_transferred) callable.release();
 
     const scheduler = ctx.scheduler orelse {
         ctx.pending_error_message = "spawn must be called within a task-scope";
@@ -268,7 +282,8 @@ fn nativeSpawn(ctx: *Context) anyerror!void {
     };
 
     const scope = current.scope;
-    const task = try spawnTaskOnPool(ctx, scheduler, scope, callable.quot, callable.scope);
+    const task = try spawnTaskOnPool(ctx, scheduler, scope, callable.quot, callable.scope, callable.owner);
+    owner_transferred = true;
     try ctx.stack.push(.{ .task = task });
 }
 
@@ -283,6 +298,8 @@ fn nativeSpawnNamed(ctx: *Context) anyerror!void {
     // The task keeps its display name for its whole lifetime.
     const name = try ctx.quotationAllocator().dupe(u8, name_pay.bytes);
     const callable = try helpers.popCallableWithScope(ctx);
+    var owner_transferred = false;
+    errdefer if (!owner_transferred) callable.release();
 
     const scheduler = ctx.scheduler orelse {
         ctx.pending_error_message = "spawn-named must be called within a task-scope";
@@ -295,7 +312,8 @@ fn nativeSpawnNamed(ctx: *Context) anyerror!void {
     };
 
     const scope = current.scope;
-    const task = try spawnTaskOnPool(ctx, scheduler, scope, callable.quot, callable.scope);
+    const task = try spawnTaskOnPool(ctx, scheduler, scope, callable.quot, callable.scope, callable.owner);
+    owner_transferred = true;
     task.name = name;
     try ctx.stack.push(.{ .task = task });
 }
@@ -308,6 +326,8 @@ fn nativeSpawnDetached(ctx: *Context) anyerror!void {
     if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "spawn-detached");
 
     const callable = try helpers.popCallableWithScope(ctx);
+    var owner_transferred = false;
+    errdefer if (!owner_transferred) callable.release();
 
     const scheduler = ctx.scheduler orelse {
         ctx.pending_error_message = "spawn-detached must be called within a task-scope";
@@ -320,7 +340,8 @@ fn nativeSpawnDetached(ctx: *Context) anyerror!void {
     };
 
     const scope = current.scope;
-    _ = try spawnDetachedOnPool(ctx, scheduler, scope, callable.quot, callable.scope);
+    _ = try spawnDetachedOnPool(ctx, scheduler, scope, callable.quot, callable.scope, callable.owner);
+    owner_transferred = true;
 }
 
 /// Allocate a child task on the least-loaded worker, attach it to the
@@ -330,13 +351,13 @@ fn nativeSpawnDetached(ctx: *Context) anyerror!void {
 /// even if allocation is still in progress. Falls back to the legacy
 /// single-scheduler enqueue when there is no `worker_pool` (standalone
 /// schedulers in tests).
-fn spawnTaskOnPool(ctx: *Context, scheduler: *Scheduler, scope: *TaskScope, quot: Quotation, captured_scope: ?*const CapturedScope) !*Task {
+fn spawnTaskOnPool(ctx: *Context, scheduler: *Scheduler, scope: *TaskScope, quot: Quotation, captured_scope: ?*const CapturedScope, quot_owner: Value) !*Task {
     if (ctx.worker_pool) |pool| {
         const target = pool.pickLeastLoaded();
         _ = target.active_tasks.fetchAdd(1, .release);
         errdefer _ = target.active_tasks.fetchSub(1, .release);
 
-        const task = try allocateTask(ctx, &target.scheduler, scope, quot, captured_scope);
+        const task = try allocateTask(ctx, &target.scheduler, scope, quot, captured_scope, quot_owner);
         try scope.addChild(task);
         if (&target.scheduler == scheduler) {
             try target.scheduler.enqueue(task);
@@ -347,7 +368,7 @@ fn spawnTaskOnPool(ctx: *Context, scheduler: *Scheduler, scope: *TaskScope, quot
     }
 
     // Legacy single-scheduler path (used by standalone schedulers in tests).
-    const task = try allocateTask(ctx, scheduler, scope, quot, captured_scope);
+    const task = try allocateTask(ctx, scheduler, scope, quot, captured_scope, quot_owner);
     try scope.addChild(task);
     try scheduler.enqueue(task);
     return task;
@@ -359,7 +380,7 @@ fn spawnTaskOnPool(ctx: *Context, scheduler: *Scheduler, scope: *TaskScope, quot
 /// still incremented so the pool stays alive while the detached task runs
 /// and a top-level scope waits for it. `detached` and `addDetached` are set
 /// before enqueue, so the task cannot start before it is fully registered.
-fn spawnDetachedOnPool(ctx: *Context, scheduler: *Scheduler, scope: *TaskScope, quot: Quotation, captured_scope: ?*const CapturedScope) !*Task {
+fn spawnDetachedOnPool(ctx: *Context, scheduler: *Scheduler, scope: *TaskScope, quot: Quotation, captured_scope: ?*const CapturedScope, quot_owner: Value) !*Task {
     if (ctx.worker_pool) |pool| {
         const target = pool.pickLeastLoaded();
         _ = target.active_tasks.fetchAdd(1, .release);
@@ -368,7 +389,7 @@ fn spawnDetachedOnPool(ctx: *Context, scheduler: *Scheduler, scope: *TaskScope, 
         _ = pool.detached_in_flight.fetchAdd(1, .acq_rel);
         errdefer _ = pool.detached_in_flight.fetchSub(1, .acq_rel);
 
-        const task = try allocateTask(ctx, &target.scheduler, scope, quot, captured_scope);
+        const task = try allocateTask(ctx, &target.scheduler, scope, quot, captured_scope, quot_owner);
         task.detached = true;
         try scope.addDetached(task);
         if (&target.scheduler == scheduler) {
@@ -380,7 +401,7 @@ fn spawnDetachedOnPool(ctx: *Context, scheduler: *Scheduler, scope: *TaskScope, 
     }
 
     // Legacy single-scheduler path (used by standalone schedulers in tests).
-    const task = try allocateTask(ctx, scheduler, scope, quot, captured_scope);
+    const task = try allocateTask(ctx, scheduler, scope, quot, captured_scope, quot_owner);
     task.detached = true;
     try scope.addDetached(task);
     try scheduler.enqueue(task);
@@ -451,6 +472,8 @@ fn nativeWithTimeout(ctx: *Context) anyerror!void {
     // stamping the caller would leak one copy per request.
     const callable = try helpers.popCallableWithScope(ctx);
     const quot = callable.quot;
+    var owner_transferred = false;
+    errdefer if (!owner_transferred) callable.release();
 
     if (dur.ns < 0) {
         ctx.pending_error_message = "timeout duration must be non-negative";
@@ -486,7 +509,8 @@ fn nativeWithTimeout(ctx: *Context) anyerror!void {
     scope.race_first_finisher = true;
 
     // NOTE(ripta): Do NOT set the task as the scope task so that sibling cancellation from the timer can reach it.
-    const main_task = try allocateTask(ctx, scheduler, &scope, quot, callable.scope);
+    const main_task = try allocateTask(ctx, scheduler, &scope, quot, callable.scope, callable.owner);
+    owner_transferred = true;
     try scope.addChild(main_task);
     try scheduler.enqueue(main_task);
     scheduler.notifyOwnerTaskSpawned();
@@ -498,7 +522,7 @@ fn nativeWithTimeout(ctx: *Context) anyerror!void {
     const timer_quot: Quotation = .{ .instructions = timer_instrs };
 
     // spawn the timer task with a custom entry point that marks as failed with a timeout error after the sleep completes
-    const timer_task = try allocateTaskWithEntry(ctx, scheduler, &scope, timer_quot, null, &timerTaskEntryPoint);
+    const timer_task = try allocateTaskWithEntry(ctx, scheduler, &scope, timer_quot, null, .unit, &timerTaskEntryPoint);
     try scope.addChild(timer_task);
     try scheduler.enqueue(timer_task);
     scheduler.notifyOwnerTaskSpawned();
@@ -838,8 +862,8 @@ pub fn deepCopyValue(val: Value, alloc: Allocator, longlived: Allocator) DeepCop
     return switch (val) {
         .fixnum, .float, .boolean, .unit => val,
         .bignum => |b| blk: {
-            const cloned = b.cloneWithDifferentAllocator(alloc) catch return error.OutOfMemory;
-            break :blk .{ .bignum = try value_mod.boxBigInt(alloc, cloned) };
+            const cloned = b.big.cloneWithDifferentAllocator(alloc) catch return error.OutOfMemory;
+            break :blk try value_mod.bignumValue(alloc, cloned);
         },
 
         .string => |s| value_mod.stringValue(try alloc.dupe(u8, s.bytes)),
@@ -861,7 +885,6 @@ pub fn deepCopyValue(val: Value, alloc: Allocator, longlived: Allocator) DeepCop
         .quotation => |quot| .{ .quotation = try deepCopyQuotation(quot, alloc, longlived) },
 
         .closure => |c| blk: {
-            const new_closure = try alloc.create(value_mod.Closure);
             const copied = try deepCopyQuotation(c.asQuotation(), alloc, longlived);
             const new_segments = try alloc.alloc(value_mod.Segment, c.segments.len);
             for (c.segments, 0..) |seg, i| {
@@ -872,19 +895,21 @@ pub fn deepCopyValue(val: Value, alloc: Allocator, longlived: Allocator) DeepCop
                 new_segments[i] = .{ .captures = new_caps, .base_code_ptr = seg.base_code_ptr };
             }
             // Copy the carried scope self-contained onto `alloc` so it rides the deep copy across a
-            // channel or task-result boundary. The source lives on the original closure's own
-            // quotation arena, which does not cross the worker boundary with this deep copy.
+            // channel or task-result boundary. The source's scope does not cross the worker
+            // boundary with this deep copy.
             const new_scope: ?*const CapturedScope = if (c.captured_scope) |cs|
                 try Context.dupeCapturedScope(alloc, cs)
             else
                 null;
-            new_closure.* = .{
+            // Every ownership flag stays false: the copy's pieces live on the destination task
+            // arena and ride its teardown, so the destroy frees nothing real.
+            break :blk .{ .closure = try value_mod.Closure.create(alloc, .{
                 .instructions = copied.instructions,
                 .effect = copied.effect,
                 .segments = new_segments,
                 .captured_scope = new_scope,
-            };
-            break :blk .{ .closure = new_closure };
+                .header = undefined,
+            }) };
         },
 
         .hash => |h| blk: {

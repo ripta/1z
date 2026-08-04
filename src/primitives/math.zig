@@ -156,9 +156,8 @@ fn nativeFloatRawBits(ctx: *Context) anyerror!void {
         if (bits >> 63 == 0) {
             try ctx.stack.push(.{ .fixnum = @intCast(bits) });
         } else {
-            const alloc = ctx.arena.allocator();
-            const big = try BigIntManaged.initSet(alloc, bits);
-            try ctx.stack.push(.{ .bignum = try value_mod.boxBigInt(alloc, big) });
+            const big = try BigIntManaged.initSet(ctx.allocator, bits);
+            try helpers.pushDemotedBignum(ctx, big);
         }
     }
 }
@@ -184,11 +183,11 @@ fn nativeRawBitsFloat(ctx: *Context) anyerror!void {
                 break :blk @intCast(i);
             },
             .bignum => |b| blk: {
-                if (!b.fits(u32)) {
+                if (!b.big.fits(u32)) {
                     helpers.setErrorContext(ctx, "raw-bits-float: value must be in range 0..2^32-1", .{});
                     return error.TypeMismatch;
                 }
-                break :blk b.toInt(u32) catch unreachable;
+                break :blk b.big.toInt(u32) catch unreachable;
             },
             else => {
                 helpers.setTypeMismatchError(ctx, "fixnum or bignum", val);
@@ -208,11 +207,11 @@ fn nativeRawBitsFloat(ctx: *Context) anyerror!void {
                 break :blk @intCast(i);
             },
             .bignum => |b| blk: {
-                if (!b.fits(u64)) {
+                if (!b.big.fits(u64)) {
                     helpers.setErrorContext(ctx, "raw-bits-float: value must be in range 0..2^64-1", .{});
                     return error.TypeMismatch;
                 }
-                break :blk b.toInt(u64) catch unreachable;
+                break :blk b.big.toInt(u64) catch unreachable;
             },
             else => {
                 helpers.setTypeMismatchError(ctx, "fixnum or bignum", val);

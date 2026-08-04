@@ -25,7 +25,10 @@ pub const primitives = [_]Primitive{
 
 /// make-parameter ( name: quot -- param )
 pub fn nativeMakeParameter(ctx: *Context) anyerror!void {
-    const default_quot = try popQuotation(ctx);
+    // The default body escapes into the context-lifetime parameter.
+    const default_pc = try popQuotation(ctx);
+    var adopted = false;
+    errdefer if (!adopted) default_pc.release();
     // The parameter keeps its own dupe of the name, so the popped bytes do not escape.
     const name = try popSymbol(ctx);
     defer container_backing.releaseValue(.{ .symbol = name });
@@ -34,8 +37,10 @@ pub fn nativeMakeParameter(ctx: *Context) anyerror!void {
     const param = alloc.create(Parameter) catch return error.OutOfMemory;
     param.* = .{
         .name = alloc.dupe(u8, name.bytes) catch return error.OutOfMemory,
-        .default_quotation = default_quot,
+        .default_quotation = default_pc.quot,
     };
+    try helpers.adoptCallableForTeardown(ctx, default_pc);
+    adopted = true;
 
     try ctx.stack.push(.{ .parameter = param });
 }
@@ -76,6 +81,13 @@ pub fn nativeDefineParameter(ctx: *Context) anyerror!void {
         helpers.setTypeMismatchError(ctx, "quotation", default_val);
         return error.TypeMismatch;
     };
+    // The default body escapes into the context-lifetime parameter while its owner, the
+    // descriptor map, is released above, so a closure default needs its own reference.
+    if (default_val == .closure) {
+        container_backing.retainValue(default_val);
+        errdefer container_backing.releaseValue(default_val);
+        try ctx.dictionary.retainValueForTeardown(default_val);
+    }
 
     const doc_val: ?[]const u8 = if (desc_map.map.get("doc")) |v| switch (v) {
         .doc_string => |s| s,
@@ -141,7 +153,9 @@ pub fn nativeGet(ctx: *Context) anyerror!void {
 
 /// with-parameter ( value param quot -- ... )
 pub fn nativeWithParameter(ctx: *Context) anyerror!void {
-    const body_quot = try popQuotation(ctx);
+    const body_pc = try popQuotation(ctx);
+    defer body_pc.release();
+    const body_quot = body_pc.quot;
     const param_val = try ctx.stack.pop();
     defer container_backing.releaseValue(param_val);
     const param = switch (param_val) {

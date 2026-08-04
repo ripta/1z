@@ -12,6 +12,7 @@ const ProcessWaitHandle = @import("multiplexer.zig").ProcessWaitHandle;
 const processWaitHandleKey = @import("multiplexer.zig").processWaitHandleKey;
 const trace = @import("trace.zig");
 const value_mod = @import("value.zig");
+const container_backing = @import("container_backing.zig");
 const profile = @import("profile.zig");
 const ProfileStats = profile.ProfileStats;
 const portable_atomic = @import("portable_atomic.zig");
@@ -389,6 +390,7 @@ pub const Scheduler = struct {
         self.drainTaskProfile(task);
         task_mod.coroDestroy(task);
         task_mod.releaseTaskResult(task);
+        container_backing.releaseValue(task.quot_owner);
         task.ctx.deinit();
         self.allocator.destroy(task.ctx);
         self.allocator.destroy(task);

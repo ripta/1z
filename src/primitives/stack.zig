@@ -56,7 +56,9 @@ pub fn nativeOver(ctx: *Context) anyerror!void {
 
 /// dip ( x quot -- x )
 pub fn nativeDip(ctx: *Context) anyerror!void {
-    const quot = try popQuotation(ctx);
+    const pc = try popQuotation(ctx);
+    defer pc.release();
+    const quot = pc.quot;
     const x = try ctx.stack.pop();
     // x was transferred to this C local by `pop`. The body may push or
     // throw; either way we must re-establish a stack slot for x on the
@@ -187,7 +189,9 @@ fn nativeApplyN(ctx: *Context) anyerror!void {
     const n = try helpers.popFixnum(ctx);
     if (n < 0) return error.StackUnderflow;
 
-    const quot = try popQuotation(ctx);
+    const pc = try popQuotation(ctx);
+    defer pc.release();
+    const quot = pc.quot;
 
     const count: usize = @intCast(n);
     if (count > ctx.stack.items.items.len) return error.StackUnderflow;

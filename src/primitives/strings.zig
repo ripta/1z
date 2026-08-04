@@ -266,16 +266,16 @@ fn nativeToStringBase(ctx: *Context) anyerror!void {
 
     const val = try ctx.stack.pop();
     defer container_backing.releaseValue(val);
-    const alloc = ctx.quotationAllocator();
 
     switch (val) {
         .fixnum => |i| {
-            var big = try BigIntManaged.initSet(alloc, i);
+            var big = try BigIntManaged.initSet(ctx.allocator, i);
+            defer big.deinit();
             const str = try big.toConst().toStringAlloc(ctx.allocator, base, .lower);
             try helpers.pushOwnedString(ctx, str);
         },
         .bignum => |b| {
-            const str = try b.toConst().toStringAlloc(ctx.allocator, base, .lower);
+            const str = try b.big.toConst().toStringAlloc(ctx.allocator, base, .lower);
             try helpers.pushOwnedString(ctx, str);
         },
         else => {

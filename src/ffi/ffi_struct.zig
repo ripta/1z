@@ -648,9 +648,8 @@ fn nativeFfiStructFieldGet(ctx: *Context) anyerror!void {
         .u64 => blk: {
             const v = std.mem.readInt(u64, buf[0..8], .little);
             if (v > @as(u64, @intCast(std.math.maxInt(i64)))) {
-                const alloc = ctx.quotationAllocator();
-                const big = try BigIntManaged.initSet(alloc, v);
-                break :blk .{ .bignum = try value_mod.boxBigInt(alloc, big) };
+                const big = try BigIntManaged.initSet(ctx.allocator, v);
+                break :blk try value_mod.ownedBignumValue(ctx.allocator, big);
             }
             break :blk .{ .fixnum = @intCast(v) };
         },
@@ -681,7 +680,7 @@ fn nativeFfiStructFieldGet(ctx: *Context) anyerror!void {
         },
     };
 
-    try ctx.stack.push(result);
+    try helpers.pushMovedValue(ctx, result);
 }
 
 /// ffi-struct-field-set ( tagged value layout-ptr field-index -- tagged )

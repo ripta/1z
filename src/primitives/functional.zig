@@ -43,43 +43,59 @@ fn callableInstrs(val: Value) ?[]const Instruction {
     };
 }
 
+/// A base callable's segments plus whether the slice is a fresh allocation the
+/// caller must free after copying it into the derived closure's own segments.
+const SegmentsView = struct {
+    segs: []const Segment,
+    owned: bool,
+};
+
 /// Decompose a callable into closure segments when every base it covers is
 /// already compiled (has a `code_ptr`), or null otherwise. A plain compiled
-/// quotation is a single capture-free segment; a closure carries its own
-/// segments. The returned captures borrow the constituent values -- the owning
-/// references live in the new closure's `instructions` (registered for release
-/// at teardown), and `jitCallClosure` retains each capture when it pushes it.
-fn segmentsOf(alloc: std.mem.Allocator, val: Value) !?[]const Segment {
+/// quotation is a single capture-free segment, freshly allocated and owned by
+/// the caller; a closure's own segments are returned aliased, kept alive by
+/// the base reference the caller retains. The captures borrow the constituent
+/// values -- the owning references live in the closure's `instructions` -- and
+/// `jitCallClosure` retains each capture when it pushes it.
+fn segmentsOf(alloc: std.mem.Allocator, val: Value) !?SegmentsView {
     return switch (val) {
         .quotation => |q| if (q.code_ptr) |cp| blk: {
             const segs = try alloc.alloc(Segment, 1);
             segs[0] = .{ .captures = &.{}, .base_code_ptr = cp };
-            break :blk segs;
+            break :blk .{ .segs = segs, .owned = true };
         } else null,
         // A scope-carrying closure over an uncompiled base has empty segments -- it is compiled in
         // no sense, so treat it like an uncompiled quotation and take the interpreter branch.
-        .closure => |c| if (c.segments.len == 0) null else c.segments,
+        .closure => |c| if (c.segments.len == 0) null else .{ .segs = c.segments, .owned = false },
         else => null,
     };
 }
+
+/// A base callable's carried scope plus whether it is a fresh copy the derived
+/// closure takes ownership of, as opposed to an alias into a retained base.
+const ScopeView = struct {
+    scope: ?*const CapturedScope = null,
+    owned: bool = false,
+};
 
 /// The lexical scope a base callable closes over, if any. A closure carries it on the value; a
 /// plain quotation's scope lives in the capture side map, looked up here in this context and, for a
 /// quotation created in an ancestor task, up the parent chain. `curry`/`compose` embed the result
 /// onto the closure they build so it rides the value across spawn boundaries.
 ///
-/// A closure's own `captured_scope` is already an independent, owned copy -- every closure built
-/// anywhere in the interpreter (`Context.promoteToClosure`, and `curry`/`compose` below) makes one
-/// -- so it is returned as-is, safe to share further: it is never retained, released, or
-/// superseded, unlike a map entry. A plain quotation's scope, if any, still lives in the refcounted
-/// capture map, so `findCapturedScopeForBody` returns a fresh, independently-owned copy on `alloc`
-/// rather than a shared pointer into it -- see `Context.promoteToClosure`'s doc comment for why
-/// that copy is load-bearing.
-fn baseCapturedScope(ctx: *Context, alloc: std.mem.Allocator, val: Value) !?*const CapturedScope {
+/// A closure's own `captured_scope` is returned aliased and not owned: the derived closure keeps
+/// the base alive through its retained `bases` reference. A plain quotation's scope, if any, still
+/// lives in the refcounted capture map, so `findCapturedScopeForBody` returns a fresh,
+/// independently-owned copy on `alloc` rather than a shared pointer into it -- see
+/// `Context.promoteToClosure`'s doc comment for why that copy is load-bearing.
+fn baseCapturedScope(ctx: *Context, alloc: std.mem.Allocator, val: Value) !ScopeView {
     return switch (val) {
-        .closure => |c| c.captured_scope,
-        .quotation => |q| try ctx.findCapturedScopeForBody(alloc, @intFromPtr(q.instructions.ptr)),
-        else => null,
+        .closure => |c| .{ .scope = c.captured_scope, .owned = false },
+        .quotation => |q| blk: {
+            const scope = try ctx.findCapturedScopeForBody(alloc, @intFromPtr(q.instructions.ptr));
+            break :blk .{ .scope = scope, .owned = scope != null };
+        },
+        else => .{},
     };
 }
 
@@ -121,25 +137,23 @@ fn mergeCapturedScopes(alloc: std.mem.Allocator, a: *const CapturedScope, b: *co
     return scope;
 }
 
-/// Carry the base bodies' ambient-deps snapshot onto the freshly allocated `new_instrs`, so a
-/// module-private word called inside a curried/composed body still resolves against its own
-/// module's deps frame under the `.module_deps` visibility filter -- even after the closure is
-/// spawned onto a child task, since the captured scope is what `spawn` copies into the child.
+/// Build a deps-only scope carrying the base bodies' ambient-deps snapshot, so a module-private
+/// word called inside a curried/composed body still resolves against its own module's deps frame
+/// under the `.module_deps` visibility filter -- in whatever context later runs the closure, since
+/// the scope rides the value. Returns null when neither the bases' recorded scopes nor the live
+/// frames contribute any deps. The caller owns the returned scope.
 ///
 /// Only called when `baseCapturedScope` carried nothing: a base with a genuine lexical scope
-/// already carries its own `deps_modules` on that scope, and `findCapturedScopeForBody` deliberately
-/// drops a *deps-only* (empty-lexical) entry so the closure it hands back never triggers the
-/// promotion that would bypass `.quotation`-only param validation. This records the dropped deps as
-/// a deps-only scope for the new body directly, keeping it a plain quotation.
+/// already carries its own `deps_modules` on that scope.
 ///
 /// The base-scope probe reads this context's own map only, with no ancestor walk. `curry` runs
 /// where the base was pushed, so its deps are in this context's map; the `appendLiveDepsModules`
 /// fallback below covers a base pushed by compiled code. The one uncovered shape -- a base created
 /// in a parent under a live deps frame, passed to a child, and curried in the child where that
 /// frame is not live -- falls back to the child's live frames and can under-propagate the parent's
-/// captured deps. This narrowing matches `findCapturedScopeForBody` dropping deps-only ancestor
-/// entries; its worst case is a fail-loud `UnknownWord` for that pattern, never a wrong resolution.
-fn propagateDeps(ctx: *Context, new_instrs: []const Instruction, bases: []const []const Instruction) !void {
+/// captured deps. Its worst case is a fail-loud `UnknownWord` for that pattern, never a wrong
+/// resolution.
+fn makeDepsOnlyScope(ctx: *Context, alloc: std.mem.Allocator, bases: []const []const Instruction) !?*CapturedScope {
     var deps: std.ArrayListUnmanaged(*const value_mod.Module) = .{};
     defer deps.deinit(ctx.allocator);
     for (bases) |base| {
@@ -154,19 +168,24 @@ fn propagateDeps(ctx: *Context, new_instrs: []const Instruction, bases: []const 
     // back to the frames live at curry time: curry runs where the base was pushed, so those are the
     // module frames the curried body will resolve against.
     if (deps.items.len == 0) try ctx.appendLiveDepsModules(&deps, ctx.allocator);
-    if (deps.items.len == 0) return;
+    if (deps.items.len == 0) return null;
 
-    var scope: CapturedScope = .{ .lexical_frames = &.{}, .deps_modules = deps.items, .allocator = ctx.allocator };
-    try ctx.stampCapturedScopeForExecution(new_instrs, &scope);
+    const deps_copy = try alloc.dupe(*const value_mod.Module, deps.items);
+    errdefer alloc.free(deps_copy);
+    const scope = try alloc.create(CapturedScope);
+    scope.* = .{ .lexical_frames = &.{}, .deps_modules = deps_copy, .allocator = alloc };
+    return scope;
 }
 
 /// curry ( x quot -- quot' )
 /// Example: 5 [ + ] curry creates [ 5 + ]
 ///
-/// When the base quotation is already compiled, the result is a closure that
-/// carries the base's `code_ptr` and `x` as a captured prefix, so it is callable
-/// in an interpreter-free AOT binary (push-then-call). Otherwise it is a plain
-/// quotation, unchanged from before.
+/// The result is always a closure that owns its fresh instruction body, so a
+/// dropped curry product is reclaimed at the drop. When the base is already
+/// compiled, the closure also carries the base's `code_ptr` and `x` as a
+/// captured prefix, so it is callable in an interpreter-free AOT binary
+/// (push-then-call); otherwise `segments` is empty and the interpreter runs
+/// the body.
 pub fn nativeCurry(ctx: *Context) anyerror!void {
     const quot_val = try ctx.stack.pop();
     const base_instrs = callableInstrs(quot_val) orelse {
@@ -174,10 +193,17 @@ pub fn nativeCurry(ctx: *Context) anyerror!void {
         container_backing.releaseValue(quot_val);
         return error.TypeMismatch;
     };
-    const x = try ctx.stack.pop();
+    const x = ctx.stack.pop() catch |err| {
+        container_backing.releaseValue(quot_val);
+        return err;
+    };
 
-    // Allocate new instruction array: 1 (for push x) + original length
-    const alloc = ctx.quotationAllocator();
+    // Every errdefer below disarms once the closure exists: from that point the closure owns
+    // each piece, and a push failure releases the closure itself.
+    const alloc = ctx.allocator;
+    var built = false;
+    errdefer if (!built) container_backing.releaseValue(quot_val);
+
     const new_instrs = alloc.alloc(Instruction, 1 + base_instrs.len) catch |err| {
         container_backing.releaseValue(x);
         return err;
@@ -188,56 +214,98 @@ pub fn nativeCurry(ctx: *Context) anyerror!void {
     // no retain needed.
     new_instrs[0] = .{ .op = .{ .push_literal = x }, .line = 0 };
 
-    // Copy original quotation instructions. Container literals shared
-    // with the source quotation gain a second owner (this new slice
-    // will also be registered for release at teardown), so retain each.
+    // Copy original quotation instructions. Container literals shared with the
+    // source quotation gain a second owner under the new body, so retain each;
+    // the closure's destroy releases them when the body is dropped.
     @memcpy(new_instrs[1..], base_instrs);
     container_backing.retainInstructionsContainerLiterals(new_instrs[1..]);
-
-    try ctx.registerQuotationContainerLiterals(new_instrs);
+    errdefer if (!built) {
+        container_backing.releaseInstructionsContainerLiterals(new_instrs);
+        alloc.free(new_instrs);
+    };
 
     // Carry the base's captured lexical scope onto the new body so a curried closure resolves its
-    // bare words at its creation site wherever it later runs.
-    const carried: ?*const CapturedScope = try baseCapturedScope(ctx, alloc, quot_val);
+    // bare words at its creation site wherever it later runs. A scope-less base still contributes
+    // its ambient deps as an owned deps-only scope, and the executing context's map is stamped too,
+    // so a `;`-adopted word body that runs without a pop resolves the same way.
+    var carried = try baseCapturedScope(ctx, alloc, quot_val);
+    errdefer if (!built and carried.owned) @constCast(carried.scope.?).release();
 
-    if (carried == null) try propagateDeps(ctx, new_instrs, &.{base_instrs});
+    if (carried.scope == null) {
+        if (try makeDepsOnlyScope(ctx, alloc, &.{base_instrs})) |scope| {
+            carried = .{ .scope = scope, .owned = true };
+            try ctx.stampCapturedScopeForExecution(new_instrs, scope);
+        }
+    }
 
     // Curried quotation has no effect - effect validation happens at parameter attachment time
-    if (try segmentsOf(alloc, quot_val)) |base_segments| {
-        const new_segments = try prependCapture(alloc, base_segments, x);
-        const cl = try alloc.create(Closure);
-        cl.* = .{ .instructions = new_instrs, .effect = null, .segments = new_segments, .captured_scope = carried };
-        try ctx.stack.push(.{ .closure = cl });
-    } else if (carried != null) {
-        // No compiled segments, but a scope to carry: box a closure over the interpreter body so
-        // the scope rides the value. `segments` is empty; the interpreter runs `instructions`.
-        const cl = try alloc.create(Closure);
-        cl.* = .{ .instructions = new_instrs, .effect = null, .segments = &.{}, .captured_scope = carried };
-        try ctx.stack.push(.{ .closure = cl });
-    } else {
-        try ctx.stack.push(.{ .quotation = .{ .instructions = new_instrs, .effect = null } });
-    }
+    const segments: []const Segment = if (try segmentsOf(alloc, quot_val)) |sv| blk: {
+        defer if (sv.owned) alloc.free(sv.segs);
+        break :blk try prependCapture(alloc, sv.segs, x);
+    } else &.{};
+    errdefer if (!built) {
+        for (segments) |seg| alloc.free(seg.captures);
+        alloc.free(segments);
+    };
+
+    // A closure base's popped reference transfers into `bases`, keeping the aliased captures and
+    // scope alive for this closure's lifetime.
+    const bases: []const *Closure = if (quot_val == .closure) blk: {
+        const b = try alloc.alloc(*Closure, 1);
+        b[0] = quot_val.closure;
+        break :blk b;
+    } else &.{};
+    errdefer if (!built) alloc.free(bases);
+
+    const cl = try Closure.create(alloc, .{
+        .instructions = new_instrs,
+        .effect = null,
+        .segments = segments,
+        .captured_scope = carried.scope,
+        .header = undefined,
+        .owns_body = true,
+        .owns_segments = true,
+        .owns_scope = carried.owned,
+        .bases = bases,
+    });
+    built = true;
+    try helpers.pushMovedValue(ctx, .{ .closure = cl });
 }
 
 /// Prepend a captured value to the first segment of a closure body. The first
 /// base runs after `x` and the segment's existing captures are on the stack.
+/// Every captures slice in the result is a fresh allocation, so the derived
+/// closure owns its segments uniformly; the capture values stay borrows.
 fn prependCapture(alloc: std.mem.Allocator, segs: []const Segment, x: Value) ![]const Segment {
     const new_segs = try alloc.alloc(Segment, segs.len);
+    var built: usize = 0;
+    errdefer {
+        for (new_segs[0..built]) |seg| alloc.free(seg.captures);
+        alloc.free(new_segs);
+    }
+
     const first = segs[0];
     const new_caps = try alloc.alloc(Value, 1 + first.captures.len);
     new_caps[0] = x;
     @memcpy(new_caps[1..], first.captures);
     new_segs[0] = .{ .captures = new_caps, .base_code_ptr = first.base_code_ptr };
-    @memcpy(new_segs[1..], segs[1..]);
+    built = 1;
+
+    for (segs[1..], 1..) |seg, i| {
+        new_segs[i] = .{ .captures = try alloc.dupe(Value, seg.captures), .base_code_ptr = seg.base_code_ptr };
+        built = i + 1;
+    }
     return new_segs;
 }
 
 /// compose ( quot1 quot2 -- quot' )
 /// Example: [ 2 * ] [ 3 + ] compose creates [ 2 * 3 + ]
 ///
-/// When both bases are compiled, the result is a closure whose segments are the
-/// two bases' segments in order, callable interpreter-free. If either base lacks
-/// a `code_ptr`, the result is a plain quotation, unchanged from before.
+/// The result is always a closure that owns its fresh instruction body, so a
+/// dropped compose product is reclaimed at the drop. When both bases are
+/// compiled, the closure's segments are the two bases' segments in order,
+/// callable interpreter-free; otherwise `segments` is empty and the
+/// interpreter runs the body.
 pub fn nativeCompose(ctx: *Context) anyerror!void {
     const quot2_val = try ctx.stack.pop();
     const instrs2 = callableInstrs(quot2_val) orelse {
@@ -245,54 +313,140 @@ pub fn nativeCompose(ctx: *Context) anyerror!void {
         container_backing.releaseValue(quot2_val);
         return error.TypeMismatch;
     };
-    const quot1_val = try ctx.stack.pop();
+    const quot1_val = ctx.stack.pop() catch |err| {
+        container_backing.releaseValue(quot2_val);
+        return err;
+    };
     const instrs1 = callableInstrs(quot1_val) orelse {
         helpers.setTypeMismatchError(ctx, "quotation", quot1_val);
         container_backing.releaseValue(quot1_val);
+        container_backing.releaseValue(quot2_val);
         return error.TypeMismatch;
     };
 
-    // Allocate new instruction array: quot1.len + quot2.len
-    const alloc = ctx.quotationAllocator();
+    // Every errdefer below disarms once the closure exists: from that point the closure owns
+    // each piece, and a push failure releases the closure itself.
+    const alloc = ctx.allocator;
+    var built = false;
+    errdefer if (!built) {
+        container_backing.releaseValue(quot1_val);
+        container_backing.releaseValue(quot2_val);
+    };
+
     const new_instrs = try alloc.alloc(Instruction, instrs1.len + instrs2.len);
 
     // Copy quot1 then quot2; container literals shared with the source
-    // quotations gain a second owner under this new registration, so
-    // retain each copied literal.
+    // quotations gain a second owner under the new body, so retain each; the
+    // closure's destroy releases them when the body is dropped.
     @memcpy(new_instrs[0..instrs1.len], instrs1);
     @memcpy(new_instrs[instrs1.len..], instrs2);
     container_backing.retainInstructionsContainerLiterals(new_instrs);
-
-    try ctx.registerQuotationContainerLiterals(new_instrs);
+    errdefer if (!built) {
+        container_backing.releaseInstructionsContainerLiterals(new_instrs);
+        alloc.free(new_instrs);
+    };
 
     // Carry the bases' captured lexical scopes onto the composed body. A single source is carried
-    // as-is; two are merged into one scope on the quotation arena, `quot1`'s frames before `quot2`'s.
-    const sa = try baseCapturedScope(ctx, alloc, quot1_val);
-    const sb = try baseCapturedScope(ctx, alloc, quot2_val);
-    const carried: ?*const CapturedScope = if (sa != null and sb != null)
-        try mergeCapturedScopes(alloc, sa.?, sb.?)
-    else
-        (sa orelse sb);
+    // as-is; two are merged into one fresh scope, `quot1`'s frames before `quot2`'s, and a merged
+    // input the composing side owned is released once the merge subsumes it.
+    var sa = try baseCapturedScope(ctx, alloc, quot1_val);
+    errdefer if (!built and sa.owned) @constCast(sa.scope.?).release();
+    var sb = try baseCapturedScope(ctx, alloc, quot2_val);
+    errdefer if (!built and sb.owned) @constCast(sb.scope.?).release();
 
-    if (carried == null) try propagateDeps(ctx, new_instrs, &.{ instrs1, instrs2 });
+    var carried: ?*const CapturedScope = null;
+    var carried_owned = false;
+    if (sa.scope != null and sb.scope != null) {
+        carried = try mergeCapturedScopes(alloc, sa.scope.?, sb.scope.?);
+        carried_owned = true;
+        if (sa.owned) {
+            @constCast(sa.scope.?).release();
+            sa.owned = false;
+        }
+        if (sb.owned) {
+            @constCast(sb.scope.?).release();
+            sb.owned = false;
+        }
+    } else if (sa.scope != null) {
+        carried = sa.scope;
+        carried_owned = sa.owned;
+        sa.owned = false;
+    } else if (sb.scope != null) {
+        carried = sb.scope;
+        carried_owned = sb.owned;
+        sb.owned = false;
+    }
+    errdefer if (!built and carried_owned) @constCast(carried.?).release();
+
+    if (carried == null) {
+        if (try makeDepsOnlyScope(ctx, alloc, &.{ instrs1, instrs2 })) |scope| {
+            carried = scope;
+            carried_owned = true;
+            try ctx.stampCapturedScopeForExecution(new_instrs, scope);
+        }
+    }
 
     // Composed quotation has no effect - effect validation happens at parameter attachment time
     const s1 = try segmentsOf(alloc, quot1_val);
+    defer if (s1) |sv| if (sv.owned) alloc.free(sv.segs);
     const s2 = try segmentsOf(alloc, quot2_val);
-    if (s1 != null and s2 != null) {
-        const new_segments = try alloc.alloc(Segment, s1.?.len + s2.?.len);
-        @memcpy(new_segments[0..s1.?.len], s1.?);
-        @memcpy(new_segments[s1.?.len..], s2.?);
-        const cl = try alloc.create(Closure);
-        cl.* = .{ .instructions = new_instrs, .effect = null, .segments = new_segments, .captured_scope = carried };
-        try ctx.stack.push(.{ .closure = cl });
-    } else if (carried != null) {
-        const cl = try alloc.create(Closure);
-        cl.* = .{ .instructions = new_instrs, .effect = null, .segments = &.{}, .captured_scope = carried };
-        try ctx.stack.push(.{ .closure = cl });
-    } else {
-        try ctx.stack.push(.{ .quotation = .{ .instructions = new_instrs, .effect = null } });
-    }
+    defer if (s2) |sv| if (sv.owned) alloc.free(sv.segs);
+
+    const segments: []const Segment = if (s1 != null and s2 != null) blk: {
+        const new_segments = try alloc.alloc(Segment, s1.?.segs.len + s2.?.segs.len);
+        var seg_built: usize = 0;
+        errdefer {
+            for (new_segments[0..seg_built]) |seg| alloc.free(seg.captures);
+            alloc.free(new_segments);
+        }
+        for (s1.?.segs, 0..) |seg, i| {
+            new_segments[i] = .{ .captures = try alloc.dupe(Value, seg.captures), .base_code_ptr = seg.base_code_ptr };
+            seg_built = i + 1;
+        }
+        for (s2.?.segs, 0..) |seg, j| {
+            new_segments[s1.?.segs.len + j] = .{ .captures = try alloc.dupe(Value, seg.captures), .base_code_ptr = seg.base_code_ptr };
+            seg_built = s1.?.segs.len + j + 1;
+        }
+        break :blk new_segments;
+    } else &.{};
+    errdefer if (!built) {
+        for (segments) |seg| alloc.free(seg.captures);
+        alloc.free(segments);
+    };
+
+    // A closure base's popped reference transfers into `bases`, keeping the aliased captures and
+    // scope alive for this closure's lifetime.
+    var base_count: usize = 0;
+    if (quot1_val == .closure) base_count += 1;
+    if (quot2_val == .closure) base_count += 1;
+    const bases: []const *Closure = if (base_count > 0) blk: {
+        const b = try alloc.alloc(*Closure, base_count);
+        var i: usize = 0;
+        if (quot1_val == .closure) {
+            b[i] = quot1_val.closure;
+            i += 1;
+        }
+        if (quot2_val == .closure) {
+            b[i] = quot2_val.closure;
+            i += 1;
+        }
+        break :blk b;
+    } else &.{};
+    errdefer if (!built) alloc.free(bases);
+
+    const cl = try Closure.create(alloc, .{
+        .instructions = new_instrs,
+        .effect = null,
+        .segments = segments,
+        .captured_scope = carried,
+        .header = undefined,
+        .owns_body = true,
+        .owns_segments = true,
+        .owns_scope = carried_owned,
+        .bases = bases,
+    });
+    built = true;
+    try helpers.pushMovedValue(ctx, .{ .closure = cl });
 }
 
 /// attach-stack-effect ( quot stack-effect -- quot' )
@@ -331,10 +485,27 @@ fn nativeAttachStackEffect(ctx: *Context) anyerror!void {
             } });
         },
         .closure => |c| {
-            const cl = try alloc.create(Closure);
-            cl.* = c.*;
-            cl.effect = eff_ptr;
-            try ctx.stack.push(.{ .closure = cl });
+            // The derived closure shares the source's body, segments, and scope, owning none
+            // of them; the popped source reference transfers into `bases` so the shared
+            // memory stays alive for the derived closure's lifetime.
+            const bases = ctx.allocator.alloc(*Closure, 1) catch |err| {
+                container_backing.releaseValue(quot_val);
+                return err;
+            };
+            bases[0] = c;
+            const cl = Closure.create(ctx.allocator, .{
+                .instructions = c.instructions,
+                .effect = eff_ptr,
+                .segments = c.segments,
+                .captured_scope = c.captured_scope,
+                .header = undefined,
+                .bases = bases,
+            }) catch |err| {
+                ctx.allocator.free(bases);
+                container_backing.releaseValue(quot_val);
+                return err;
+            };
+            try helpers.pushMovedValue(ctx, .{ .closure = cl });
         },
         else => {
             helpers.setTypeMismatchError(ctx, "quotation", quot_val);
@@ -428,10 +599,11 @@ fn executeBenchmarkN(ctx: *Context, quot: Quotation, n: u64) !*HashTable {
 ///
 /// The building block for the 1z benchmark words.
 pub fn nativeBenchmarkNRaw(ctx: *Context) anyerror!void {
-    const quot = try popQuotation(ctx);
+    const pc = try popQuotation(ctx);
+    defer pc.release();
     const n_raw = try popFixnum(ctx);
     if (n_raw < 1) return error.InvalidArgument;
-    const hash = try executeBenchmarkN(ctx, quot, @intCast(n_raw));
+    const hash = try executeBenchmarkN(ctx, pc.quot, @intCast(n_raw));
     try ctx.stack.pushMoved(.{ .hash = hash });
 }
 
@@ -445,6 +617,7 @@ test "curry over a compiled base produces a closure carrying the base code_ptr" 
     try nativeCurry(&ctx);
 
     const result = try ctx.stack.pop();
+    defer container_backing.releaseValue(result);
     try std.testing.expect(result == .closure);
     const cl = result.closure;
     try std.testing.expectEqual(@as(usize, 1), cl.segments.len);
@@ -453,7 +626,7 @@ test "curry over a compiled base produces a closure carrying the base code_ptr" 
     try std.testing.expectEqual(dummy_code, cl.segments[0].base_code_ptr);
 }
 
-test "curry over an uncompiled base produces a plain quotation" {
+test "curry over an uncompiled base produces an interpreter-run closure" {
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
 
@@ -462,7 +635,10 @@ test "curry over an uncompiled base produces a plain quotation" {
     try nativeCurry(&ctx);
 
     const result = try ctx.stack.pop();
-    try std.testing.expect(result == .quotation);
+    defer container_backing.releaseValue(result);
+    try std.testing.expect(result == .closure);
+    try std.testing.expectEqual(@as(usize, 0), result.closure.segments.len);
+    try std.testing.expect(result.closure.owns_body);
 }
 
 test "compose over compiled bases produces a closure with both segments in order" {
@@ -476,6 +652,7 @@ test "compose over compiled bases produces a closure with both segments in order
     try nativeCompose(&ctx);
 
     const result = try ctx.stack.pop();
+    defer container_backing.releaseValue(result);
     try std.testing.expect(result == .closure);
     const cl = result.closure;
     try std.testing.expectEqual(@as(usize, 2), cl.segments.len);
@@ -512,12 +689,14 @@ test "attach-stack-effect sets the effect on a curried closure" {
     try nativeAttachStackEffect(&ctx);
 
     const result = try ctx.stack.pop();
+    defer container_backing.releaseValue(result);
     try std.testing.expect(result == .closure);
     const cl = result.closure;
     try std.testing.expectEqual(@as(usize, 1), cl.effect.?.inputs.len);
     try std.testing.expectEqual(@as(usize, 1), cl.effect.?.outputs.len);
     try std.testing.expectEqual(@as(usize, 1), cl.segments.len);
     try std.testing.expectEqual(dummy_code, cl.segments[0].base_code_ptr);
+    try std.testing.expectEqual(@as(usize, 1), cl.bases.len);
 }
 
 test "attach-stack-effect type-mismatches a non-effect and a non-quotation" {
@@ -544,10 +723,13 @@ test "nested curry prepends a capture to the first segment" {
 
     const inner = try ctx.stack.pop();
     try ctx.stack.push(.{ .fixnum = 9 });
-    try ctx.stack.push(inner);
+    // Transfer the popped reference back to the slot; the outer curry then
+    // moves it into its retained `bases`.
+    try ctx.stack.pushMoved(inner);
     try nativeCurry(&ctx);
 
     const result = try ctx.stack.pop();
+    defer container_backing.releaseValue(result);
     try std.testing.expect(result == .closure);
     const cl = result.closure;
     try std.testing.expectEqual(@as(usize, 1), cl.segments.len);
@@ -555,4 +737,6 @@ test "nested curry prepends a capture to the first segment" {
     try std.testing.expectEqual(@as(i64, 9), cl.segments[0].captures[0].fixnum);
     try std.testing.expectEqual(@as(i64, 7), cl.segments[0].captures[1].fixnum);
     try std.testing.expectEqual(dummy_code, cl.segments[0].base_code_ptr);
+    try std.testing.expectEqual(@as(usize, 1), cl.bases.len);
+    try std.testing.expectEqual(inner.closure, cl.bases[0]);
 }

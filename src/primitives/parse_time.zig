@@ -126,7 +126,7 @@ fn resolveScalarLiteral(alloc: std.mem.Allocator, arena_alloc: std.mem.Allocator
     }
 
     if (tokenizer_mod.parseBigNum(arena_alloc, token)) |big| {
-        return .{ .bignum = try value_mod.boxBigInt(arena_alloc, big) };
+        return try value_mod.bignumValue(arena_alloc, big);
     }
 
     if (tokenizer_mod.parseFloat(token)) |f| {
@@ -319,8 +319,11 @@ fn nativeEmitCall(ctx: *Context) anyerror!void {
 
 /// emit-body ( quotation -- )
 fn nativeEmitBody(ctx: *Context) anyerror!void {
-    const quot = try helpers.popQuotation(ctx);
-    try ctx.parse_time_deferred_emissions.append(ctx.allocator, .{ .body = quot.instructions });
+    // The body escapes into the deferred-emission list.
+    const pc = try helpers.popQuotation(ctx);
+    errdefer pc.release();
+    try ctx.parse_time_deferred_emissions.append(ctx.allocator, .{ .body = pc.quot.instructions });
+    try helpers.adoptCallableForTeardown(ctx, pc);
 }
 
 /// parse-literal ( -- value )
