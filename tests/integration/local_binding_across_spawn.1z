@@ -1,0 +1,26 @@
+\ A spawned task clones the parent's live transient frames, so a frame-owned binding gains a
+\ second holder whose teardown drops a reference. Without a matching claim at the clone, the
+\ child's reap released a reference it never took and the parent's frame released it again,
+\ which read freed bytes and then tripped the refcount assertion.
+\
+\ The spawned bodies deliberately do not mention the bindings: having a live transient frame that
+\ holds one at spawn time is the whole trigger.
+
+use "bytes" ;
+
+[
+  "hello, " "world" #append
+  s: swap ;
+  64 bytes-alloc b: swap ;
+  [ "in-task" print-line ] task-scope
+  s print-line
+  b #len >string print-line
+] call
+
+gauge: virtual{ fixnum } ;
+
+[
+  42 >gauge g: swap ;
+  [ [ "in-spawn" print-line ] spawn drop ] task-scope
+  g unmake-gauge >string print-line
+] call

@@ -305,34 +305,6 @@ fn moduleWordToWordDef(name: []const u8, mw: ModuleWord) WordDefinition {
     };
 }
 
-fn wordDefToModuleWord(alloc: Allocator, def: WordDefinition) Allocator.Error!ModuleWord {
-    return .{
-        .stack_effect = def.stack_effect,
-        .markers = def.markers,
-        .source_module = def.source_module,
-        .doc = def.doc,
-        .source_file = def.source_file,
-        .source_line = def.source_line,
-        .source_column = def.source_column,
-        .provenance = def.provenance,
-        .dispatch_id = def.dispatch_id,
-        .action = switch (def.action) {
-            .compound => |instrs| .{ .compound = instrs },
-            .native => |f| .{ .native = f },
-            .host_callback => |host| .{ .host_callback = host },
-            // ModuleWord has no .literal counterpart: module-level word
-            // storage is populated once at load time, not re-created per
-            // call, so this one-time synthesis does not reopen the leak
-            // this variant exists to close.
-            .literal => |v| blk: {
-                const instrs = try alloc.alloc(Instruction, 1);
-                instrs[0] = .{ .op = .{ .push_literal = v }, .line = 0 };
-                break :blk .{ .compound = instrs };
-            },
-        },
-    };
-}
-
 const DeadDefinitionInfo = struct {
     name: []const u8,
     source_file: []const u8,
@@ -569,7 +541,7 @@ fn nativeCurrentScope(ctx: *Context) anyerror!void {
         while (iter.next()) |entry| {
             const gop = try seen.getOrPut(alloc, entry.key_ptr.*);
             if (!gop.found_existing) {
-                try module.words.put(alloc, entry.key_ptr.*, try wordDefToModuleWord(alloc, entry.value_ptr.*));
+                try module.words.put(alloc, entry.key_ptr.*, try ctx.moduleWordFor(alloc, entry.value_ptr.*));
             }
         }
     }
@@ -579,7 +551,7 @@ fn nativeCurrentScope(ctx: *Context) anyerror!void {
         while (iter.next()) |entry| {
             const gop = try seen.getOrPut(alloc, entry.key_ptr.*);
             if (!gop.found_existing) {
-                try module.words.put(alloc, entry.key_ptr.*, try wordDefToModuleWord(alloc, dictionary_mod.loadSlot(entry.value_ptr.*).*));
+                try module.words.put(alloc, entry.key_ptr.*, try ctx.moduleWordFor(alloc, dictionary_mod.loadSlot(entry.value_ptr.*).*));
             }
         }
     }
@@ -594,7 +566,7 @@ fn nativeCurrentScope(ctx: *Context) anyerror!void {
             while (iter.next()) |entry| {
                 const gop = try seen.getOrPut(alloc, entry.key_ptr.*);
                 if (!gop.found_existing) {
-                    try module.words.put(alloc, entry.key_ptr.*, try wordDefToModuleWord(alloc, entry.value_ptr.*));
+                    try module.words.put(alloc, entry.key_ptr.*, try ctx.moduleWordFor(alloc, entry.value_ptr.*));
                 }
             }
         }
@@ -604,7 +576,7 @@ fn nativeCurrentScope(ctx: *Context) anyerror!void {
             while (iter.next()) |entry| {
                 const gop = try seen.getOrPut(alloc, entry.key_ptr.*);
                 if (!gop.found_existing) {
-                    try module.words.put(alloc, entry.key_ptr.*, try wordDefToModuleWord(alloc, dictionary_mod.loadSlot(entry.value_ptr.*).*));
+                    try module.words.put(alloc, entry.key_ptr.*, try ctx.moduleWordFor(alloc, dictionary_mod.loadSlot(entry.value_ptr.*).*));
                 }
             }
         }
@@ -644,14 +616,14 @@ fn nativeLocalScope(ctx: *Context) anyerror!void {
         var dep_iter = frame.iterator();
         while (dep_iter.next()) |entry| {
             if (entry.value_ptr.*.imported) {
-                try module.deps.put(alloc, entry.key_ptr.*, try wordDefToModuleWord(alloc, entry.value_ptr.*));
+                try module.deps.put(alloc, entry.key_ptr.*, try ctx.moduleWordFor(alloc, entry.value_ptr.*));
             }
         }
     }
 
     var iter = ctx.local_frames.items[ctx.local_frames.items.len - 1].iterator();
     while (iter.next()) |entry| {
-        try module.words.put(alloc, entry.key_ptr.*, try wordDefToModuleWord(alloc, entry.value_ptr.*));
+        try module.words.put(alloc, entry.key_ptr.*, try ctx.moduleWordFor(alloc, entry.value_ptr.*));
     }
 
     try ctx.stack.push(.{ .module = module });

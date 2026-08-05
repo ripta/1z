@@ -95,37 +95,27 @@ pub const WordDefinition = struct {
     /// compound quotation. Unfortunate naming.
     action: Action,
 
+    /// Whether this definition holds an owning reference to `action.literal`.
+    ///
+    /// Set for a `name: swap ;` binding in a transient lexical frame, where the frame is the owner
+    /// and drops the reference when it dies. Any copy of such a definition that outlives that frame
+    /// takes a reference of its own and carries the flag with it.
+    ///
+    /// Every other definition leaves it false: a durable binding transfers its reference to the
+    /// dictionary's teardown list instead, and no other action variant carries a value at all.
+    owns_literal: bool = false,
+
     /// Either a native function, a host callback, a compound quotation body,
-    /// or a directly-bound literal value. Named so it can be built by a
-    /// standalone helper (`literalOrCompoundAction`) instead of only as an
-    /// inline struct-literal field.
+    /// or a directly-bound literal value.
     pub const Action = union(enum) {
         native: NativeFn,
         host_callback: HostCallback,
         compound: []const Instruction,
-        /// A `name: swap ;`-style local or marker definition bound to a
-        /// non-refcounted value, stored directly with no `Instruction`
-        /// slice allocated. See `literalOrCompoundAction` for the
-        /// eligibility rule and the container-backed fallback.
+        /// A `name: swap ;`-style local or marker definition's bound value, stored directly with
+        /// no `Instruction` slice allocated. A refcounted value is stored the same way; who owns
+        /// its reference is recorded in `owns_literal` and decided by `Context.defineWordLocked`.
         literal: Value,
     };
-
-    /// Builds the action for a plain (non-quotation) bound value, keyed on
-    /// whether the value needs retain/release bookkeeping:
-    /// `container_backing.valueCarriesBacking` is the same dispatch already
-    /// used at every other storage boundary to decide this. A non-refcounted
-    /// value stores directly as `.literal`, with no allocation. A
-    /// container-backed value (array, hash, vector, set, mutable-map,
-    /// byte-array, etc.) keeps the one-instruction `push_literal` wrapper as
-    /// `.compound`, unchanged from before this variant existed.
-    pub fn literalOrCompoundAction(alloc: Allocator, value: Value) !Action {
-        if (!container_backing.valueCarriesBacking(value)) {
-            return .{ .literal = value };
-        }
-        const instrs = try alloc.alloc(Instruction, 1);
-        instrs[0] = .{ .op = .{ .push_literal = value }, .line = 0 };
-        return .{ .compound = instrs };
-    }
 
     /// Returns true if this word is a native function or host callback, i.e., not a compound quotation.
     pub fn isNativeLike(self: WordDefinition) bool {
@@ -531,28 +521,11 @@ test "literal action is not native-like or builtin-native" {
     try std.testing.expectEqual(false, word.isBuiltinNative());
 }
 
-test "literalOrCompoundAction picks .literal for a non-refcounted value" {
-    const action = try WordDefinition.literalOrCompoundAction(std.testing.allocator, .{ .fixnum = 5 });
-    switch (action) {
-        .literal => |v| try std.testing.expectEqual(@as(i64, 5), v.fixnum),
-        .compound, .native, .host_callback => try std.testing.expect(false),
-    }
-}
+test "a definition defaults to not owning its literal" {
+    const word = WordDefinition{
+        .name = "x",
+        .action = .{ .literal = .{ .fixnum = 5 } },
+    };
 
-test "literalOrCompoundAction falls back to .compound for a container-backed value" {
-    const allocator = std.testing.allocator;
-    const dummy_vec = try value_mod.Vector.create(allocator);
-    defer container_backing.releaseValue(.{ .vector = dummy_vec });
-
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    defer arena.deinit();
-
-    const action = try WordDefinition.literalOrCompoundAction(arena.allocator(), .{ .vector = dummy_vec });
-    switch (action) {
-        .compound => |instrs| {
-            try std.testing.expectEqual(@as(usize, 1), instrs.len);
-            try std.testing.expect(instrs[0].op.push_literal == .vector);
-        },
-        .literal, .native, .host_callback => try std.testing.expect(false),
-    }
+    try std.testing.expectEqual(false, word.owns_literal);
 }

@@ -110,7 +110,10 @@ fn mergeCapturedScopes(alloc: std.mem.Allocator, a: *const CapturedScope, b: *co
     const frames = try alloc.alloc(LocalFrame, a_frames.len + b_frames.len);
     var built: usize = 0;
     errdefer {
-        for (frames[0..built]) |*f| f.deinit(alloc);
+        for (frames[0..built]) |*f| {
+            context_mod.releaseFrameBindings(f);
+            f.deinit(alloc);
+        }
         alloc.free(frames);
     }
 
@@ -120,6 +123,7 @@ fn mergeCapturedScopes(alloc: std.mem.Allocator, a: *const CapturedScope, b: *co
             errdefer clone.deinit(alloc);
             var it = sf.iterator();
             while (it.next()) |e| try clone.put(alloc, e.key_ptr.*, e.value_ptr.*);
+            context_mod.retainFrameBindings(&clone);
             frames[built] = clone;
             built += 1;
         }

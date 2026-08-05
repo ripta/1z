@@ -87,22 +87,7 @@ fn nativeToModule(ctx: *Context) anyerror!void {
         while (frame_iter.next()) |entry| {
             const word_def = entry.value_ptr.*;
             if (word_def.imported) {
-                try module.deps.put(alloc, entry.key_ptr.*, .{
-                    .stack_effect = word_def.stack_effect,
-                    .markers = word_def.markers,
-                    .source_module = word_def.source_module,
-                    .dispatch_id = word_def.dispatch_id,
-                    .action = switch (word_def.action) {
-                        .compound => |instrs| .{ .compound = instrs },
-                        .native => |func| .{ .native = func },
-                        .host_callback => |host| .{ .host_callback = host },
-                        .literal => |v| blk: {
-                            const instrs = try alloc.alloc(Instruction, 1);
-                            instrs[0] = .{ .op = .{ .push_literal = v }, .line = 0 };
-                            break :blk .{ .compound = instrs };
-                        },
-                    },
-                });
+                try module.deps.put(alloc, entry.key_ptr.*, try ctx.moduleWordFor(alloc, word_def));
             }
         }
     }
@@ -475,27 +460,7 @@ pub fn nativeLoadImpl(ctx: *Context, cache: *value_mod.MutableMap, filename: []c
     var iter = frame.iterator();
     while (iter.next()) |entry| {
         const word_def = entry.value_ptr.*;
-        const mod_word: value_mod.ModuleWord = .{
-            .stack_effect = word_def.stack_effect,
-            .markers = word_def.markers,
-            .source_module = word_def.source_module,
-            .dispatch_id = word_def.dispatch_id,
-            .doc = word_def.doc,
-            .source_file = word_def.source_file,
-            .source_line = word_def.source_line,
-            .source_column = word_def.source_column,
-            .provenance = word_def.provenance,
-            .action = switch (word_def.action) {
-                .compound => |instrs| .{ .compound = instrs },
-                .native => |func| .{ .native = func },
-                .host_callback => |host| .{ .host_callback = host },
-                .literal => |v| blk: {
-                    const instrs = try alloc.alloc(Instruction, 1);
-                    instrs[0] = .{ .op = .{ .push_literal = v }, .line = 0 };
-                    break :blk .{ .compound = instrs };
-                },
-            },
-        };
+        const mod_word = try ctx.moduleWordFor(alloc, word_def);
         if (word_def.imported) {
             try module.deps.put(alloc, entry.key_ptr.*, mod_word);
 

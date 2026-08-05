@@ -24,6 +24,16 @@ pub fn utf8NthCodepoint(s: []const u8, n: usize) ?[]const u8 {
     return null; // Index out of bounds
 }
 
+/// Get the byte slice for the final codepoint, walking back over continuation bytes rather than
+/// iterating the whole string forward.
+/// Assumes valid UTF-8 (strings are valid by construction).
+pub fn utf8LastCodepoint(s: []const u8) ?[]const u8 {
+    if (s.len == 0) return null;
+    var start = s.len - 1;
+    while (start > 0 and s[start] & 0xC0 == 0x80) start -= 1;
+    return s[start..];
+}
+
 /// Get byte range for codepoint slice [start, end).
 /// Assumes valid UTF-8 (strings are valid by construction).
 pub fn utf8SliceByCodepoints(s: []const u8, start: usize, end: usize) ?struct { start_byte: usize, end_byte: usize } {

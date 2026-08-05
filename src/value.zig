@@ -1357,11 +1357,13 @@ pub const ModuleWord = struct {
     /// through to compiled dispatch when their compound body is the M1
     /// stub.
     word_id: ?u32 = null,
-    action: union(enum) {
+    action: Action,
+
+    pub const Action = union(enum) {
         compound: []const Instruction,
         native: NativeFn,
         host_callback: HostCallback,
-    },
+    };
 
     pub fn invoke(self: ModuleWord, ctx: *Context) anyerror!void {
         switch (self.action) {
@@ -1564,9 +1566,9 @@ pub const Closure = struct {
     captured_scope: ?*const context_mod.CapturedScope = null,
 
     /// Refcounted lifecycle header. Every closure carries one. A task-boundary
-    /// deep copy's header lives on the destination task arena with every
-    /// ownership flag false, so its destroy frees nothing real and the copy
-    /// rides the arena like the other cross-task copies.
+    /// deep copy's header lives on the destination task arena, and the copy
+    /// rides the arena like the other cross-task copies; its destroy frees
+    /// nothing real beyond the scope copy's own binding references.
     header: @import("container_backing.zig").ContainerHeader,
 
     /// Ownership follows "own what you allocate, retain what you alias": the

@@ -198,7 +198,7 @@ pub fn isSyntheticScopeModule(module: ?*const value_mod.Module) bool {
 /// `findCapturedScopeForBody` builds its copy on whatever allocator the caller passes, so its
 /// result is tier-2 when `curry`/`compose` pass the context allocator for a closure to own and
 /// tier-1 when the body-entry fill passes the durable allocator and installs the copy into the
-/// map. A task-boundary deep copy's scope still rides the destination task arena unreleased.
+/// map. A task-boundary deep copy's scope is tier-2 as well, owned by the copied closure.
 ///
 /// `retain`/`release` mirror `container_backing.ContainerHeader`'s pattern, minus the mutex --
 /// `lexical_frames` is immutable after construction, so no lock is needed for reads.
@@ -214,8 +214,8 @@ pub const CapturedScope = struct {
         _ = self.refcount.fetchAdd(1, .monotonic);
     }
 
-    /// Decrement the refcount. On the last drop, free `lexical_frames` and this scope itself
-    /// using the allocator it was built with.
+    /// Decrement the refcount. On the last drop, drop each binding's owning reference, then free
+    /// `lexical_frames` and this scope itself using the allocator it was built with.
     ///
     /// `.acq_rel` ordering on the decrement gives release semantics to any preceding writes the
     /// dropping thread made, and acquire semantics on the returned previous value so the freeing
@@ -224,7 +224,10 @@ pub const CapturedScope = struct {
         const prev = self.refcount.fetchSub(1, .acq_rel);
         std.debug.assert(prev != 0);
         if (prev == 1) {
-            for (self.lexical_frames) |*f| f.deinit(self.allocator);
+            for (self.lexical_frames) |*f| {
+                releaseFrameBindings(f);
+                f.deinit(self.allocator);
+            }
             self.allocator.free(self.lexical_frames);
             self.allocator.free(self.deps_modules);
             self.allocator.destroy(self);
@@ -237,6 +240,40 @@ pub const CapturedScope = struct {
         return self.refcount.load(.monotonic);
     }
 };
+
+/// Claim a second owning reference to every bound value in a freshly cloned frame.
+///
+/// A frame clone outlives the frame it was copied from, so it cannot borrow.
+///
+/// Retaining the whole clone once its entries are copied, rather than per entry as they go, keeps a
+/// half-built clone's error path free of releases.
+pub fn retainFrameBindings(frame: *const LocalFrame) void {
+    var it = frame.iterator();
+    while (it.next()) |e| {
+        if (ownedBinding(e.value_ptr.*)) |v| container_backing.retainValue(v);
+    }
+}
+
+/// Drop the owning references a frame's bindings hold, for a frame that is about to die.
+pub fn releaseFrameBindings(frame: *const LocalFrame) void {
+    var it = frame.iterator();
+    while (it.next()) |e| {
+        if (ownedBinding(e.value_ptr.*)) |v| container_backing.releaseValue(v);
+    }
+}
+
+/// The value `def` owns a reference to, or null when it owns none.
+///
+/// The action tag is checked rather than trusted from `owns_literal` alone: a definition can be
+/// copied and rewritten to another action, and reading an inactive union field would panic in a
+/// safe build and read garbage in a fast one.
+fn ownedBinding(def: WordDefinition) ?Value {
+    if (!def.owns_literal) return null;
+    return switch (def.action) {
+        .literal => |v| v,
+        .native, .host_callback, .compound => null,
+    };
+}
 
 /// Everything resolution knows about one quotation/word body, keyed in `quotation_scope_info` by
 /// the body's instruction-slice pointer.
@@ -1337,9 +1374,9 @@ pub const Context = struct {
         // clone is what keeps that sibling frame live in the spawned task, which captured scope
         // can't cover.
         //
-        // `WordDefinition` borrows its name, effect, markers, and body slice and owns no allocation,
-        // so the frame clone copies entries directly without the container-backing retain the
-        // parameter snapshot needs.
+        // A `WordDefinition` borrows its name, effect, markers, and body slice, so the entries copy
+        // directly. Its bound value is the one thing it can own, and the clone outlives the frame it
+        // came from, so the clone takes references of its own.
         const transient_start = if (parent.import_frame_index) |idx| idx + 1 else 0;
         for (parent.local_frames.items[transient_start..], transient_start..) |parent_frame, src_idx| {
             var cloned_frame = LocalFrame{};
@@ -1348,6 +1385,9 @@ pub const Context = struct {
                 try cloned_frame.put(allocator, entry.key_ptr.*, entry.value_ptr.*);
             }
             try ctx.local_frames.append(allocator, cloned_frame);
+            // Retained after the append, so a failing append leaves no reference stranded on a
+            // frame the context never took over.
+            retainFrameBindings(&ctx.local_frames.items[ctx.local_frames.items.len - 1]);
             const kind: FrameKind = if (src_idx < parent.local_frame_kinds.items.len)
                 parent.local_frame_kinds.items[src_idx]
             else
@@ -1539,6 +1579,7 @@ pub const Context = struct {
         }
         self.parameter_env.deinit(self.allocator);
         for (self.local_frames.items) |*frame| {
+            releaseFrameBindings(frame);
             frame.deinit(self.allocator);
         }
         self.local_frames.deinit(self.allocator);
@@ -1831,6 +1872,7 @@ pub const Context = struct {
             {
                 self.live_module_deps_frames -= 1;
             }
+            releaseFrameBindings(&self.local_frames.items[last_idx]);
             self.local_frames.items[last_idx].deinit(self.allocator);
             self.local_frames.items.len -= 1;
             if (self.local_frame_kinds.items.len > 0) {
@@ -1944,7 +1986,10 @@ pub const Context = struct {
         // as before. `frames` stays empty when no live lexical binding is closed over.
         var frames: std.ArrayListUnmanaged(LocalFrame) = .{};
         errdefer {
-            for (frames.items) |*f| f.deinit(self.allocator);
+            for (frames.items) |*f| {
+                releaseFrameBindings(f);
+                f.deinit(self.allocator);
+            }
             frames.deinit(self.allocator);
         }
 
@@ -1961,6 +2006,8 @@ pub const Context = struct {
                 errdefer clone.deinit(self.allocator);
                 var it = src.iterator();
                 while (it.next()) |e| try clone.put(self.allocator, e.key_ptr.*, e.value_ptr.*);
+                retainFrameBindings(&clone);
+                errdefer releaseFrameBindings(&clone);
                 try frames.append(self.allocator, clone);
             }
         }
@@ -2018,7 +2065,10 @@ pub const Context = struct {
 
         const lexical_frames = try frames.toOwnedSlice(self.allocator);
         errdefer {
-            for (lexical_frames) |*f| f.deinit(self.allocator);
+            for (lexical_frames) |*f| {
+                releaseFrameBindings(f);
+                f.deinit(self.allocator);
+            }
             self.allocator.free(lexical_frames);
         }
 
@@ -2167,19 +2217,23 @@ pub const Context = struct {
     }
 
     /// Deep-copy a captured scope with `alloc`. Each `LocalFrame` is cloned entry-by-entry, the
-    /// same shallow copy `captureQuotationScope` uses because `WordDefinition` owns no allocation.
+    /// same shallow copy `captureQuotationScope` uses, then retained: a definition's bound value
+    /// is the one thing a `WordDefinition` can own, and the clone outlives its source.
     ///
     /// The allocator is a parameter so `promoteToClosure` and `curry`/`compose` can allocate the
     /// closure-carried copy on the quotation arena, while the execution stamp and the body-entry
     /// fill allocate the map-owned copy on the durable allocator. `findCapturedScopeForBody`
-    /// serves both shapes and passes its caller's allocator through. A copy allocated with the
-    /// durable allocator is released with `CapturedScope.release`; a copy on the arena rides its
-    /// context's teardown and is never retained or released.
+    /// serves both shapes and passes its caller's allocator through. Every copy is released with
+    /// `CapturedScope.release`, including one on an arena: the arena frees are noöps, but the
+    /// bindings' references are not.
     pub fn dupeCapturedScope(alloc: Allocator, src: *const CapturedScope) !*CapturedScope {
         const frames = try alloc.alloc(LocalFrame, src.lexical_frames.len);
         var built: usize = 0;
         errdefer {
-            for (frames[0..built]) |*f| f.deinit(alloc);
+            for (frames[0..built]) |*f| {
+                releaseFrameBindings(f);
+                f.deinit(alloc);
+            }
             alloc.free(frames);
         }
 
@@ -2188,6 +2242,7 @@ pub const Context = struct {
             errdefer clone.deinit(alloc);
             var it = sf.iterator();
             while (it.next()) |e| try clone.put(alloc, e.key_ptr.*, e.value_ptr.*);
+            retainFrameBindings(&clone);
             frames[i] = clone;
             built = i + 1;
         }
@@ -2368,6 +2423,44 @@ pub const Context = struct {
             .tagged => |t| try self.stampValueQuotations(t.inner.*, module),
             else => {},
         }
+    }
+
+    /// Build the module entry for a frame definition, the direction opposite `moduleWordFrameDef`.
+    ///
+    /// `ModuleWord` has no `.literal` counterpart, so a directly-bound value becomes the
+    /// one-instruction body it replaced. A module outlives the frame that defined its words, so a
+    /// frame-owned value needs a reference of its own here; the dictionary's teardown list holds it,
+    /// which is the same lifetime a durable binding's own definition would have given it.
+    ///
+    /// Every path that promotes a frame into a module goes through here: a file's own words at load
+    /// finalization, `private{ }`'s scope capture, and `>module`.
+    pub fn moduleWordFor(self: *Context, alloc: Allocator, def: WordDefinition) !value_mod.ModuleWord {
+        return .{
+            .stack_effect = def.stack_effect,
+            .markers = def.markers,
+            .source_module = def.source_module,
+            .dispatch_id = def.dispatch_id,
+            .doc = def.doc,
+            .source_file = def.source_file,
+            .source_line = def.source_line,
+            .source_column = def.source_column,
+            .provenance = def.provenance,
+            .action = switch (def.action) {
+                .compound => |instrs| .{ .compound = instrs },
+                .native => |func| .{ .native = func },
+                .host_callback => |host| .{ .host_callback = host },
+                .literal => |v| blk: {
+                    const instrs = try alloc.alloc(Instruction, 1);
+                    instrs[0] = .{ .op = .{ .push_literal = v }, .line = 0 };
+                    if (def.owns_literal) {
+                        container_backing.retainValue(v);
+                        errdefer container_backing.releaseValue(v);
+                        try self.dictionary.retainValueForTeardown(v);
+                    }
+                    break :blk .{ .compound = instrs };
+                },
+            },
+        };
     }
 
     /// Build the frame `WordDefinition` for a module dep/word entry. The
@@ -2707,7 +2800,11 @@ pub const Context = struct {
         self.acquireSharedWrite();
         defer self.releaseSharedWrite();
         if (self.defineTargetFrameIndex()) |top_index| {
-            const removed = self.local_frames.items[top_index].remove(name);
+            const entry = self.local_frames.items[top_index].fetchRemove(name);
+            if (entry) |e| {
+                if (e.value.owns_literal) container_backing.releaseValue(e.value.action.literal);
+            }
+            const removed = entry != null;
             if (removed and self.local_frames.items[top_index].count() == 0 and
                 self.isTransientLexicalFrame(top_index) and self.nonempty_transient_lexical_frames > 0)
             {
@@ -2800,9 +2897,27 @@ pub const Context = struct {
         }
         def.exec_flags = computeExecFlags(def);
 
+        // A bound value arrives owned: `;` popped it, so the definition inherits that reference.
+        // A binding in a transient lexical frame keeps the reference on the frame, so the call
+        // that created the binding reclaims it when its frame pops. A durable binding -- the
+        // import frame or the dictionary -- has no such point, so it hands the reference to the
+        // dictionary's teardown list below.
+        //
+        // Only a leaf backing takes frame ownership. A container would be reclaimed by a frame it
+        // can outlive through a captured scope that also owns it; see `valueCarriesLeafBacking`.
+        def.owns_literal = switch (def.action) {
+            .literal => |val| target_frame_index != null and
+                self.isTransientLexicalFrame(target_frame_index.?) and
+                container_backing.valueCarriesLeafBacking(val),
+            .native, .host_callback, .compound => false,
+        };
+
         if (target_frame_index) |top_index| {
             const was_empty = self.local_frames.items[top_index].count() == 0;
             try self.local_frames.items[top_index].put(self.allocator, name, def);
+            if (same_scope_existing) |displaced| {
+                if (displaced.owns_literal) container_backing.releaseValue(displaced.action.literal);
+            }
             if (was_empty and self.isTransientLexicalFrame(top_index)) {
                 self.nonempty_transient_lexical_frames += 1;
             }
@@ -2821,10 +2936,14 @@ pub const Context = struct {
                 self.unregisterQuotationContainerLiterals(instrs);
                 try self.dictionary.registerCompoundBody(instrs);
             },
-            // A .literal value is non-refcounted by construction, since
-            // that is the eligibility rule, so it can never carry a
-            // container literal needing release tracking.
-            .native, .host_callback, .literal => {},
+            .literal => |val| {
+                // The teardown list is the same lifetime the compound-body release list gave a
+                // bound container before bindings stopped allocating a body.
+                if (!def.owns_literal and container_backing.valueCarriesBacking(val)) {
+                    try self.dictionary.retainValueForTeardown(val);
+                }
+            },
+            .native, .host_callback => {},
         }
     }
 
@@ -8923,6 +9042,35 @@ test "initForTask: captures parent transient local frames at spawn" {
     try std.testing.expectEqualStrings("quo-local", found.name);
 }
 
+test "initForTask: the cloned frame takes its own reference to a frame-owned binding" {
+    var parent = Context.init(std.testing.allocator);
+    defer parent.deinit();
+
+    try parent.pushLocalFrame();
+
+    const bytes = try std.testing.allocator.dupe(u8, "computed");
+    const str = try value_mod.ownedStringValue(std.testing.allocator, bytes);
+    const backing = str.string.backing.?;
+    try parent.defineWord("s", .{ .name = "s", .action = .{ .literal = str } });
+
+    var scheduler = try std.testing.allocator.create(Scheduler);
+    defer std.testing.allocator.destroy(scheduler);
+    scheduler.* = try Scheduler.init(std.testing.allocator);
+    defer scheduler.deinit();
+
+    {
+        var task_ctx = try Context.initForTask(std.testing.allocator, &parent, scheduler);
+        defer task_ctx.deinit();
+        try std.testing.expectEqual(@as(u32, 2), backing.header.refcountValue());
+    }
+
+    // The child's teardown drops only what its own clone claimed, so the parent's binding is
+    // still readable afterward.
+    try std.testing.expectEqual(@as(u32, 1), backing.header.refcountValue());
+    const found = parent.lookupWord("s") orelse return error.TestExpectedLookup;
+    try std.testing.expectEqualStrings("computed", found.action.literal.string.bytes);
+}
+
 test "initForTask: captures only frames above the parent's import frame" {
     var parent = Context.init(std.testing.allocator);
     defer parent.deinit();
@@ -10159,6 +10307,106 @@ test "captureQuotationScope: a second call for the same body supersedes with a f
     try std.testing.expect(first_addr != @intFromPtr(second));
     const resolved = Context.lookupInCapturedScope(second, "local") orelse return error.TestExpectedResolution;
     try std.testing.expectEqualStrings("local-site", resolved.source_file.?);
+}
+
+test "defineWordLocked: a leaf-backed binding in a transient frame is released when the frame pops" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    try ctx.pushLocalFrame();
+    ctx.import_frame_index = 0;
+    try ctx.pushLocalFrame();
+
+    const bytes = try std.testing.allocator.dupe(u8, "computed");
+    const str = try value_mod.ownedStringValue(std.testing.allocator, bytes);
+    const backing = str.string.backing.?;
+
+    // A second reference stands in for the caller that outlives the binding, so the refcount is
+    // observable after the frame drops its own.
+    container_backing.retainValue(str);
+    defer container_backing.releaseValue(str);
+
+    try ctx.defineWord("s", .{ .name = "s", .action = .{ .literal = str } });
+    const def = ctx.lookupWord("s") orelse return error.TestExpectedWord;
+    try std.testing.expect(def.owns_literal);
+    try std.testing.expectEqual(@as(u32, 2), backing.header.refcountValue());
+
+    ctx.popLocalFrame();
+    try std.testing.expectEqual(@as(u32, 1), backing.header.refcountValue());
+}
+
+test "defineWordLocked: a container binding keeps the durable path even inside a transient frame" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    try ctx.pushLocalFrame();
+    ctx.import_frame_index = 0;
+    try ctx.pushLocalFrame();
+
+    const vec = try value_mod.Vector.create(std.testing.allocator);
+    try ctx.defineWord("v", .{ .name = "v", .action = .{ .literal = .{ .vector = vec } } });
+
+    // Frame ownership would let a captured scope holding this same binding outlive the reclamation
+    // and close a cycle through any closure the vector comes to hold, so the dictionary keeps the
+    // reference until teardown instead.
+    const def = ctx.lookupWord("v") orelse return error.TestExpectedWord;
+    try std.testing.expect(!def.owns_literal);
+    try std.testing.expectEqual(@as(u32, 1), vec.header.refcountValue());
+
+    ctx.popLocalFrame();
+    try std.testing.expectEqual(@as(u32, 1), vec.header.refcountValue());
+}
+
+test "defineWordLocked: rebinding a name in the same frame releases the displaced value" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    try ctx.pushLocalFrame();
+    ctx.import_frame_index = 0;
+    try ctx.pushLocalFrame();
+
+    const first_bytes = try std.testing.allocator.dupe(u8, "first");
+    const first = try value_mod.ownedStringValue(std.testing.allocator, first_bytes);
+    const first_backing = first.string.backing.?;
+    container_backing.retainValue(first);
+    defer container_backing.releaseValue(first);
+
+    const second_bytes = try std.testing.allocator.dupe(u8, "second");
+    const second = try value_mod.ownedStringValue(std.testing.allocator, second_bytes);
+
+    try ctx.defineWord("s", .{ .name = "s", .action = .{ .literal = first } });
+    try std.testing.expectEqual(@as(u32, 2), first_backing.header.refcountValue());
+
+    try ctx.defineWord("s", .{ .name = "s", .action = .{ .literal = second } });
+    try std.testing.expectEqual(@as(u32, 1), first_backing.header.refcountValue());
+}
+
+test "captureQuotationScope: a cloned binding outlives the frame it was captured from" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    try ctx.pushLocalFrame();
+    ctx.import_frame_index = 0;
+    try ctx.pushLocalFrame();
+
+    const bytes = try std.testing.allocator.dupe(u8, "captured");
+    const str = try value_mod.ownedStringValue(std.testing.allocator, bytes);
+    const backing = str.string.backing.?;
+    try ctx.defineWord("s", .{ .name = "s", .action = .{ .literal = str } });
+
+    const body = [_]Instruction{.{ .op = .{ .call_word = "s" }, .line = 0 }};
+    const scope: *CapturedScope = @constCast((try ctx.captureQuotationScope(&body)) orelse
+        return error.TestExpectedCapture);
+    scope.retain();
+    try std.testing.expectEqual(@as(u32, 2), backing.header.refcountValue());
+
+    // The frame's own reference goes, and the scope's keeps the bytes readable.
+    ctx.popLocalFrame();
+    try std.testing.expectEqual(@as(u32, 1), backing.header.refcountValue());
+    const resolved = Context.lookupInCapturedScope(scope, "s") orelse return error.TestExpectedResolution;
+    try std.testing.expectEqualStrings("captured", resolved.action.literal.string.bytes);
+
+    scope.release();
 }
 
 test "captureQuotationScope: superseding an unretained scope frees it immediately" {

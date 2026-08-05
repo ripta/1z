@@ -943,14 +943,17 @@ pub fn deepCopyValue(val: Value, alloc: Allocator, longlived: Allocator) DeepCop
                 try Context.dupeCapturedScope(alloc, cs)
             else
                 null;
-            // Every ownership flag stays false: the copy's pieces live on the destination task
-            // arena and ride its teardown, so the destroy frees nothing real.
+            // `owns_scope` is the one flag the copy sets: the scope copy claims its own reference to
+            // every refcounted value the source's bindings hold, so the destroy has to drop them.
+            // The rest of the copy's pieces live on the destination task arena and ride its
+            // teardown, so freeing them is a noöp.
             break :blk .{ .closure = try value_mod.Closure.create(alloc, .{
                 .instructions = copied.instructions,
                 .effect = copied.effect,
                 .segments = new_segments,
                 .captured_scope = new_scope,
                 .header = undefined,
+                .owns_scope = new_scope != null,
             }) };
         },
 

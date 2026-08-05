@@ -5,13 +5,12 @@
 \ that single buffer. The native `(wasm-framebuffer)` word (src/capi_wasm.zig) is the only
 \ Zig-level piece: a borrowed, mutable byte-array view over the wasm-owned framebuffer memory.
 \
-\ Two interpreter limitations shape the loop bodies below. A named `name: swap ;` local bound
-\ to a refcounted value (a color struct, say) leaks memory per call, and even a scalar-bound
-\ local costs per-call work, so the per-pixel (set-pixel!) helper uses no locals at all and
-\ the text words pack a color to a plain fixnum before any local binds it. An inner #each
-\ quotation sees a stale snapshot of an outer #each's per-iteration local, so every
-\ pixel-covering loop here is a single flat #each (row/column derived via div/%) rather than
-\ nested #eachs.
+\ Two things shape the loop bodies below. A named `name: swap ;` local bound to a struct is
+\ retained until the program exits, so the drawing words destructure a color or a sprite before
+\ binding, and the per-pixel (set-pixel!) helper uses no locals at all because it runs tens of
+\ thousands of times per call. An inner #each quotation sees a stale snapshot of an outer #each's
+\ per-iteration local, so every pixel-covering loop here is a single flat #each (row/column
+\ derived via div/%) rather than nested #eachs.
 
 use "ranges" ;
 use "sequences" ;
@@ -61,8 +60,11 @@ private{
   \\ RGBA8888: r lands in the lowest byte, matching #poke32!'s least-significant-byte-first
   \\ write order, so r/g/b/a end up in that order in memory.
   (color>packed): ( color -- packed ) [
-    pc: swap ;
-    pc r>> pc g>> 8 shift-left bitor pc b>> 16 shift-left bitor pc a>> 24 shift-left bitor
+    dup r>> cr: swap ;
+    dup g>> cg: swap ;
+    dup b>> cb: swap ;
+    a>> ca: swap ;
+    cr cg 8 shift-left bitor cb 16 shift-left bitor ca 24 shift-left bitor
   ] ;
 
   \\ Write one packed RGBA8888 pixel into current-framebuffer at (x, y), silently clipped if
@@ -93,68 +95,56 @@ private{
 draw-pixel: ( x y color -- ) [ (color>packed) (set-pixel!) ] ;
 
 \\ Fill the entire framebuffer with one color.
-\\
-\\ Zero name: swap ; locals: the packed color is curried directly into the per-pixel
-\\ quotation instead of being bound to a local. clear-background, draw-rectangle, and
-\\ blit-sprite are called once per rendered frame over a real gameplay session, so a
-\\ named local here leaks memory in proportion to call count -- see the workaround note
-\\ on (set-pixel!) above.
 clear-background: ( color -- ) [
   (color>packed)
-  [ swap dup framebuffer-width % [ framebuffer-width div ] dip -rot> swap (set-pixel!) ] curry
-  framebuffer-width framebuffer-height * iota >iterator
-  swap #each
+  cp: swap ;
+  framebuffer-width framebuffer-height * iota >iterator [
+    fi: swap ;
+    fi framebuffer-width % fi framebuffer-width div cp (set-pixel!)
+  ] #each
 ] ;
 
 \\ Fill an axis-aligned rectangle. width/height must be non-negative.
-\\
-\\ Zero name: swap ; locals: x, y, width, and the packed color are curried into the
-\\ per-pixel quotation, and the validation reads width/height with non-destructive
-\\ pick-n peeks instead of binding them.
 draw-rectangle: ( x y width height color -- ) [
   (color>packed)
-  1 pick-n 0 >= 3 pick-n 0 >= and
+  rp: swap ;
+  rh: swap ;
+  rw: swap ;
+  ry: swap ;
+  rx: swap ;
+  rw 0 >= rh 0 >= and
   not [ f "draw-rectangle requires non-negative width and height" EInvalidArgument make-error throw ] when
-
-  [ [ dup ] dip * [ -rot> ] dip ] dip
-  swap
-  [
-    [ [ 2dup div [ % ] dip ] 3dip [ [ swap ] dip [ + ] 2dip + ] dip (set-pixel!) ]
-    curry curry curry curry
-  ] dip
-  swap
-  [ iota >iterator ] dip
-  #each
+  rw rh * iota >iterator [
+    ri: swap ;
+    rx ri rw % + ry ri rw div + rp (set-pixel!)
+  ] #each
 ] ;
 
 \\ Copy a sprite's RGBA8888 pixels into current-framebuffer at (x, y). An opaque copy: alpha is
 \\ carried through as-is, with no blending against the destination.
 \\
-\\ Zero name: swap ; locals: x, y, and the sprite are curried into the per-pixel quotation.
+\\ The sprite is destructured into its three fields before any local binds, because a local bound
+\\ to the sprite itself would be retained for the rest of the program while a local bound to its
+\\ pixel byte-array is reclaimed when this call returns.
 blit-sprite: ( x y sprite -- ) [
-  dup dup width>> [ height>> ] dip [ pixels>> ] 2dip
-  dup [ * ] dip
-  swap
-  [ swap [ swap ] dip [ swap ] 2dip ] dip
-  [
-    [
-      [ [ dup ] dip 2dup div [ % ] dip ] 3dip
-      [ [ swap ] dip [ + ] 2dip + ] dip
-      [ swap ] 2dip [ swap ] dip swap
-      framebuffer-bytes-per-pixel * #peek32
-      (set-pixel!)
-    ]
-    curry curry curry curry
-  ] dip
-  swap
-  [ iota >iterator ] dip
-  #each
+  dup width>> bw: swap ;
+  dup height>> bh: swap ;
+  pixels>> bs: swap ;
+  by: swap ;
+  bx: swap ;
+  bw bh * iota >iterator [
+    bi: swap ;
+    bx bi bw % +
+    by bi bw div +
+    bs bi framebuffer-bytes-per-pixel * #peek32
+    (set-pixel!)
+  ] #each
 ] ;
 
 private{
   \\ Draw one glyph from an already-packed color. The shared body under draw-char and
   \\ draw-text: both pack the color before any local binds it, because a named local bound
-  \\ to a color struct leaks memory per call, and text is drawn every frame.
+  \\ to a color struct is retained until the program exits, and text is drawn every frame.
   (draw-glyph-packed): ( x y ch packed -- ) [
     dp:  swap ;
     dch: swap ;

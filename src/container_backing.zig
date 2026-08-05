@@ -285,6 +285,24 @@ pub fn valueCarriesBacking(v: Value) bool {
     };
 }
 
+/// Whether `v` carries a refcounted backing and can never reference another `Value`.
+///
+/// The byte- and limb-carrying kinds qualify, as does a `tagged` wrapper that bottoms out in one.
+/// No container kind does.
+///
+/// A caller that gives a value an owner with a bounded lifetime needs the distinction. A container
+/// can come to hold a closure whose captured scope holds the very binding that owns the container,
+/// and refcounting alone cannot break that reference cycle. A leaf cannot reach a closure at all,
+/// so a bounded owner is always safe for one.
+pub fn valueCarriesLeafBacking(v: Value) bool {
+    if (!valueCarriesBacking(v)) return false;
+    return switch (v) {
+        .string, .symbol, .bignum, .byte_array => true,
+        .tagged => |t| valueCarriesLeafBacking(t.inner.*) or !valueCarriesBacking(t.inner.*),
+        else => false,
+    };
+}
+
 fn valuesCarryBacking(items: []const Value) bool {
     for (items) |item| {
         if (valueCarriesBacking(item)) return true;
@@ -1007,6 +1025,45 @@ test "instructionsHaveContainerLiteral: detects container push_literal operands"
         .{ .op = .{ .push_literal = .{ .vector = dummy_vec } }, .line = 0 },
     };
     try testing.expect(instructionsHaveContainerLiteral(&with_vector));
+}
+
+test "valueCarriesLeafBacking: the byte- and limb-carrying kinds qualify" {
+    const bytes = try testing.allocator.dupe(u8, "hello");
+    const str = try value_mod.ownedStringValue(testing.allocator, bytes);
+    defer releaseValue(str);
+
+    const sym_bytes = try testing.allocator.dupe(u8, "sym");
+    const sym = try value_mod.ownedSymbolValue(testing.allocator, sym_bytes);
+    defer releaseValue(sym);
+
+    const ba = try value_mod.ByteArray.create(testing.allocator);
+    defer releaseValue(.{ .byte_array = ba });
+
+    try testing.expect(valueCarriesLeafBacking(str));
+    try testing.expect(valueCarriesLeafBacking(sym));
+    try testing.expect(valueCarriesLeafBacking(.{ .byte_array = ba }));
+}
+
+test "valueCarriesLeafBacking: a backing-free value and a container both refuse" {
+    const vec = try value_mod.Vector.create(testing.allocator);
+    defer releaseValue(.{ .vector = vec });
+
+    try testing.expect(!valueCarriesLeafBacking(.{ .fixnum = 7 }));
+    try testing.expect(!valueCarriesLeafBacking(value_mod.stringValue("borrowed")));
+    try testing.expect(!valueCarriesLeafBacking(.{ .vector = vec }));
+}
+
+test "valueCarriesLeafBacking: a tagged wrapper follows its inner value" {
+    var vt = value_mod.VirtualType{ .name = "gauge", .inner_type = "fixnum" };
+
+    const scalar = try value_mod.ownedTaggedValue(testing.allocator, &vt, .{ .fixnum = 3 });
+    defer releaseValue(scalar);
+    try testing.expect(valueCarriesLeafBacking(scalar));
+
+    const vec = try value_mod.Vector.create(testing.allocator);
+    const wrapped = try value_mod.ownedTaggedValue(testing.allocator, &vt, .{ .vector = vec });
+    defer releaseValue(wrapped);
+    try testing.expect(!valueCarriesLeafBacking(wrapped));
 }
 
 test "Shareable: header initializes to unknown and accessors roundtrip" {

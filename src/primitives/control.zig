@@ -383,14 +383,11 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
             marker.name = name_copy;
 
             // User-defined markers are automatically parse-time so they work
-            // correctly with parse-time constructs like struct{}. A marker
-            // value is never container-backed, so this always resolves to
-            // .literal, but goes through the shared helper for consistency
-            // with the plain-value branch below.
+            // correctly with parse-time constructs like struct{}.
             try ctx.defineWord(name_copy, WordDefinition{
                 .name = name_copy,
                 .parse_time = true,
-                .action = try WordDefinition.literalOrCompoundAction(alloc, top_val),
+                .action = .{ .literal = top_val },
             });
             fireWordDefinedHook(ctx, alloc, name_copy);
         },
@@ -536,14 +533,14 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
                 const name_copy = try alloc.dupe(u8, name);
 
                 // Only a quotation or closure body can contain a self-call: the non-quotation
-                // branch always synthesizes a single push_literal instruction (or, for an
-                // eligible value, no instructions at all), so containsNonTailSelfCall below is
-                // only ever meaningful for the .quotation/.closure case.
+                // branch stores the bound value directly and allocates no instructions at all,
+                // so containsNonTailSelfCall below is only ever meaningful for the
+                // .quotation/.closure case.
                 const action: WordDefinition.Action = switch (top_val) {
                     .quotation => |quot| .{ .compound = quot.instructions },
                     // A closure is a quotation literal promoted at push time because it closed over
                     // an outer local, or a curry/compose product (see `Context.captureQuotationScope`
-                    // and `nativeCurry`). Without this arm it would fall to `literalOrCompoundAction`
+                    // and `nativeCurry`). Without this arm it would fall to the bound-value branch
                     // below, which would store the closure as a `.literal` -- turning the defined
                     // word into one that pushes the closure as a constant instead of calling it.
                     //
@@ -552,12 +549,13 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
                     // every later call of the word.
                     .closure => |c| blk: {
                         try ctx.dictionary.retainValueForTeardown(top_val);
+                        // The dictionary adopted the popped reference here rather than at the
+                        // definition, so this arm alone hands ownership over early.
+                        top_owned = false;
                         break :blk .{ .compound = c.instructions };
                     },
-                    else => try WordDefinition.literalOrCompoundAction(alloc, top_val),
+                    else => .{ .literal = top_val },
                 };
-                // The action adopted the popped value (or borrows a backing-free body).
-                top_owned = false;
 
                 var markers_slice = try alloc.dupe(*Marker, collected_markers.items);
 
@@ -622,6 +620,10 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
                     .doc = doc_val,
                     .action = action,
                 });
+                // The definition now holds the popped reference. Until it does, every failure
+                // between the pop and here -- a const or arity rejection, or an allocation
+                // failure -- still has to release it.
+                top_owned = false;
                 // For a chain-owned closure body the retained closure's destroy is the single
                 // release path for the embedded literals, so remove the generic compound
                 // registration `defineWord` just made; leaving both would double-release, and
@@ -780,7 +782,7 @@ test "semicolon binds a non-refcounted plain value as .literal, with no instruct
     try std.testing.expectEqual(@as(i64, 5), result.fixnum);
 }
 
-test "semicolon keeps a container-backed plain value on the .compound push_literal path" {
+test "semicolon binds a container-backed plain value as .literal at durable scope" {
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
 
@@ -795,12 +797,11 @@ test "semicolon keeps a container-backed plain value on the .compound push_liter
 
     const word = ctx.lookupWord("xs") orelse return error.TestExpectedWord;
     switch (word.action) {
-        .compound => |instrs| {
-            try std.testing.expectEqual(@as(usize, 1), instrs.len);
-            try std.testing.expect(instrs[0].op.push_literal == .array);
-        },
-        .literal, .native, .host_callback => try std.testing.expect(false),
+        .literal => |v| try std.testing.expect(v == .array),
+        .compound, .native, .host_callback => try std.testing.expect(false),
     }
+    // A durable binding has no frame to reclaim its reference, so the dictionary holds it.
+    try std.testing.expect(!word.owns_literal);
 
     const body = [_]Instruction{.{ .op = .{ .call_word = "xs" }, .line = 0 }};
     try ctx.executeQuotation(.{ .instructions = &body });

@@ -1,0 +1,38 @@
+\ Bounded-memory regression for refcounted leaves bound as `name: swap ;` locals.
+\
+\ A leaf-backed value bound as a local is owned by the transient frame it lands in, so its
+\ reference drops when the call that made the binding returns. Before that, every refcounted bound
+\ value took the one-instruction compound-body path, whose slice the dictionary's release list held
+\ until context teardown, so each loop below grew monotonically and exhausted the 4 MB cap in the
+\ `.flags` sidecar partway through.
+\
+\ A container-valued local is deliberately absent: it keeps the until-teardown lifetime, because a
+\ frame that reclaimed it could be outlived by a captured scope holding the same binding.
+
+use "bytes" ;
+
+render-len: ( a b -- n ) [
+  #append
+  s: swap ;
+  s #len
+] ;
+
+20000 [ "hello, " "world" render-len drop ] times
+
+first-byte: ( bytes -- n ) [
+  b: swap ;
+  b 0 #peek8
+] ;
+
+20000 [ 64 bytes-alloc first-byte drop ] times
+
+gauge: virtual{ fixnum } ;
+
+gauge-twice: ( n -- n ) [
+  g: swap ;
+  g unmake-gauge 2 *
+] ;
+
+20000 [ 21 >gauge gauge-twice drop ] times
+
+"flat" print-line

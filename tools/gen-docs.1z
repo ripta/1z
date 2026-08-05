@@ -357,7 +357,6 @@ generate-one: ( key base-url grouped -- ) [
 load-source-base-url
 over [ generate-one ] curry
 curry
-[ curry [ spawn drop ] curry task-scope ] curry
 over @keys [ >string ] #sort-by
 swap #each
 

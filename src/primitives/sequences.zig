@@ -290,6 +290,7 @@ const classifySequence = sequence.classifySequence;
 const sequenceToValues = sequence.sequenceToValues;
 const sequenceToValuesScratch = sequence.sequenceToValuesScratch;
 const utf8NthCodepoint = sequence.utf8NthCodepoint;
+const utf8LastCodepoint = sequence.utf8LastCodepoint;
 const utf8CodepointCount = sequence.utf8CodepointCount;
 const utf8SliceByCodepoints = sequence.utf8SliceByCodepoints;
 
@@ -362,14 +363,7 @@ fn nativeNthString(ctx: *Context) anyerror!void {
         setErrorContext(ctx, "index {d} out of bounds for string of length {d}", .{ idx, slen });
         return error.IndexOutOfBounds;
     };
-    if (cp_slice.len == 1) {
-        if (ctx.internedAsciiByte(cp_slice[0])) |shared| {
-            try ctx.stack.push(value_mod.stringValue(shared));
-            return;
-        }
-    }
-    // A multi-byte codepoint is a zero-copy sub-slice sharing the source's backing.
-    try ctx.stack.push(.{ .string = a.string.sub(cp_slice) });
+    try pushCodepoint(ctx, a.string, cp_slice);
 }
 
 fn nativeNthArray(ctx: *Context) anyerror!void {
@@ -431,18 +425,29 @@ fn nativeNthByteArray(ctx: *Context) anyerror!void {
     try ctx.stack.push(.{ .fixnum = bytes[idx] });
 }
 
+/// Push one codepoint read out of `payload`. A single-byte codepoint is the interned shared string;
+/// a multi-byte one is a zero-copy sub-slice sharing the source's backing.
+///
+/// Interning the single-byte case is what keeps a one-character result from pinning a long source
+/// string alive through its backing.
+fn pushCodepoint(ctx: *Context, payload: value_mod.StringPayload, cp_slice: []const u8) !void {
+    if (cp_slice.len == 1) {
+        if (ctx.internedAsciiByte(cp_slice[0])) |shared| {
+            try ctx.stack.push(value_mod.stringValue(shared));
+            return;
+        }
+    }
+    try ctx.stack.push(.{ .string = payload.sub(cp_slice) });
+}
+
 fn nativeFirstString(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
-    // The yielded codepoint is an interned or arena-duped string, never a sub-slice of val.
     defer container_backing.releaseValue(val);
-    const alloc = ctx.quotationAllocator();
-    var iter = SequenceIterator.init(val, alloc) orelse unreachable;
-    iter.single_char_cache = ctx.single_char_strings;
-    const first = try iter.next() orelse {
+    const cp_slice = utf8NthCodepoint(val.string.bytes, 0) orelse {
         setErrorContext(ctx, "empty string", .{});
         return error.EmptySequence;
     };
-    try ctx.stack.push(first);
+    try pushCodepoint(ctx, val.string, cp_slice);
 }
 
 fn nativeFirstArray(ctx: *Context) anyerror!void {
@@ -481,18 +486,12 @@ fn nativeFirstByteArray(ctx: *Context) anyerror!void {
 
 fn nativeLastString(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
-    // The yielded codepoint is an arena-duped string, never a sub-slice of val.
     defer container_backing.releaseValue(val);
-    const alloc = ctx.quotationAllocator();
-    var iter = SequenceIterator.init(val, alloc) orelse unreachable;
-    var last: ?Value = null;
-    while (try iter.next()) |elem| {
-        last = elem;
-    }
-    try ctx.stack.push(last orelse {
+    const cp_slice = utf8LastCodepoint(val.string.bytes) orelse {
         setErrorContext(ctx, "empty string", .{});
         return error.EmptySequence;
-    });
+    };
+    try pushCodepoint(ctx, val.string, cp_slice);
 }
 
 fn nativeLastArray(ctx: *Context) anyerror!void {
@@ -3354,6 +3353,42 @@ test "string #first interns single ASCII codepoint" {
     try std.testing.expect(e == .string);
     try std.testing.expectEqualStrings("x", e.string.bytes);
     try std.testing.expectEqual(ctx.internedAsciiByte('x').?.ptr, e.string.bytes.ptr);
+}
+
+test "string #last interns single ASCII codepoint" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    try ctx.stack.push(value_mod.stringValue("xyz"));
+    try nativeLastString(&ctx);
+    const e = try ctx.stack.pop();
+    try std.testing.expect(e == .string);
+    try std.testing.expectEqualStrings("z", e.string.bytes);
+    try std.testing.expectEqual(ctx.internedAsciiByte('z').?.ptr, e.string.bytes.ptr);
+}
+
+test "string #first and #last share the source backing for a multi-byte codepoint" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    // "á" and "é" are 2-byte codepoints, so neither end is interned.
+    const bytes = try std.testing.allocator.dupe(u8, "\xc3\xa1z\xc3\xa9");
+    const src = try value_mod.ownedStringValue(std.testing.allocator, bytes);
+    defer container_backing.releaseValue(src);
+
+    try ctx.stack.push(src);
+    try nativeFirstString(&ctx);
+    const first = try ctx.stack.pop();
+    defer container_backing.releaseValue(first);
+    try std.testing.expectEqualStrings("\xc3\xa1", first.string.bytes);
+    try std.testing.expectEqual(src.string.backing, first.string.backing);
+
+    try ctx.stack.push(src);
+    try nativeLastString(&ctx);
+    const last = try ctx.stack.pop();
+    defer container_backing.releaseValue(last);
+    try std.testing.expectEqualStrings("\xc3\xa9", last.string.bytes);
+    try std.testing.expectEqual(src.string.backing, last.string.backing);
 }
 
 test "#index-of-from basic ASCII" {
