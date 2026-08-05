@@ -197,10 +197,13 @@ pub const TraceWriter = struct {
         return .{ .file = .stderr() };
     }
 
+    // Streaming, not positional: a positional writer starts at offset 0, so
+    // when stderr is a regular file (`2>err.log`) each fresh writer would
+    // overwrite the previous emission instead of appending after it.
     pub fn print(self: *TraceWriter, comptime fmt: []const u8, args: anytype) void {
         if (comptime is_freestanding) return;
         var buf: [4096]u8 = undefined;
-        var w = self.file.writer(&buf);
+        var w = self.file.writerStreaming(&buf);
         w.interface.print(fmt, args) catch return;
         w.interface.flush() catch return;
     }
@@ -208,7 +211,7 @@ pub const TraceWriter = struct {
     pub fn writeAll(self: *TraceWriter, bytes: []const u8) void {
         if (comptime is_freestanding) return;
         var buf: [4096]u8 = undefined;
-        var w = self.file.writer(&buf);
+        var w = self.file.writerStreaming(&buf);
         w.interface.writeAll(bytes) catch return;
         w.interface.flush() catch return;
     }

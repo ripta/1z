@@ -182,6 +182,15 @@ fn nativeTaskScope(ctx: *Context) anyerror!void {
     var pool: WorkerPool = undefined;
     try pool.init(ctx.allocator, n);
     defer pool.deinit();
+    // Disarm the sampler hook before `pool.deinit` runs.
+    //
+    // Scheduler teardown itself allocates, so a still-armed hook would sample workers
+    // mid-destruction. Background workers are joined by the explicit join before these defers
+    // run, so no other thread can still be inside the hook when it is cleared.
+    defer if (ctx.mem_limit) |ml| {
+        ml.sample_hook = null;
+        ml.sample_owner = null;
+    };
     // Stall detection is pool-wide: every worker reads the shared
     // threshold and timestamp so a busy background worker correctly
     // suppresses a false stall warning on an idle primary.
@@ -209,6 +218,16 @@ fn nativeTaskScope(ctx: *Context) anyerror!void {
         pool.mem_limit = ctx.mem_limit;
         pool.sampler_started_ns = now;
         pool.next_sample_ns.store(now + interval, .release);
+
+        // Fire samples from the allocation path too: a task in a tight loop never returns to
+        // the run loop, so the tick alone would starve.
+        //
+        // Installed before background workers start and removed after they are joined, so the
+        // plain hook fields never race.
+        if (ctx.mem_limit) |ml| {
+            ml.sample_owner = &pool;
+            ml.sample_hook = worker_mod.allocSampleHook;
+        }
     }
 
     const primary = pool.primary();
@@ -1423,6 +1442,46 @@ test "await-all propagates borrowed buffer escape from failed child" {
     try std.testing.expectError(error.UserThrown, nativeAwaitAll(&ctx));
     try std.testing.expect(ctx.thrown_error != null);
     try std.testing.expectEqualStrings("borrowed-buffer-escape", ctx.thrown_error.?.error_type);
+}
+
+test "runLoop swaps the thread-local current context around a task resume" {
+    const alloc = std.testing.allocator;
+
+    var ctx = Context.init(alloc);
+    defer ctx.deinit();
+
+    var sched = try Scheduler.init(alloc);
+    defer sched.deinit();
+    ctx.scheduler = &sched;
+
+    var scope = TaskScope.init(alloc);
+    defer scope.deinit();
+
+    const Probe = struct {
+        const memory_limit = @import("../memory_limit.zig");
+        var seen: ?*anyopaque = null;
+        fn entry(co: task_mod.CoroPtr) callconv(.c) void {
+            const task: *Task = @ptrCast(@alignCast(task_mod.getCoroUserData(co)));
+            seen = memory_limit.current_context;
+            task.setStatus(.completed);
+        }
+    };
+
+    // A sentinel outer value the resume must save and then restore, the way
+    // the primary worker's main thread carries the root context.
+    var outer_sentinel: u8 = 0;
+    Probe.memory_limit.current_context = &outer_sentinel;
+    defer Probe.memory_limit.current_context = null;
+
+    const task = try allocateTaskWithEntry(&ctx, &sched, &scope, .{ .instructions = &.{}, .effect = null }, null, .unit, &Probe.entry);
+    const expected: *anyopaque = @ptrCast(task.ctx);
+    try scope.addChild(task);
+    try sched.enqueue(task);
+
+    sched.runLoop();
+
+    try std.testing.expectEqual(@as(?*anyopaque, expected), Probe.seen);
+    try std.testing.expectEqual(@as(?*anyopaque, @as(*anyopaque, &outer_sentinel)), Probe.memory_limit.current_context);
 }
 
 test "deepCopyValue: a quotation's declared effect is copied, not shared" {

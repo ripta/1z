@@ -1017,6 +1017,11 @@ const ExecutionContext = struct {
         ec.ctx.worker_count = exec.worker_count;
         ec.ctx.mem_limit = mem_limit_ptr;
 
+        // A memory-limit abort reports the aborting thread's call stack; the main thread's
+        // current context is the root context.
+        mem_limit_ptr.abort_hook = Context.memoryAbortReport;
+        memory_limit.current_context = &ec.ctx;
+
         if (exec.trace_config.sample_memory) mem_limit_ptr.setPeakTracking(true);
 
         for (global.load_paths.items) |lp| {
@@ -1197,6 +1202,11 @@ const ExecutionContext = struct {
     }
 
     fn deinit(self: *ExecutionContext) void {
+        // Disarm the abort report before the context dies, so an abort during
+        // teardown cannot read a freed context.
+        self.mem_limit.abort_hook = null;
+        memory_limit.current_context = null;
+
         bail_stats_mod.deinitGlobal();
         if (self.watchdog) |t| t.detach();
         if (self.dbg != null) self.dbg.?.deinit();

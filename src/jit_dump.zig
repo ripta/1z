@@ -55,7 +55,9 @@ fn formatHexDump(w: anytype, name: []const u8, word_id: u32, ptr_addr: usize, by
 
 fn writeTextDump(name: []const u8, word_id: u32, ptr_addr: usize, bytes: []const u8) void {
     var buf: [4096]u8 = undefined;
-    var fw = std.fs.File.stderr().writer(&buf);
+    // Streaming, not positional: a positional writer starts at offset 0 and would overwrite
+    // the previous dump when stderr is a regular file.
+    var fw = std.fs.File.stderr().writerStreaming(&buf);
     formatHexDump(&fw.interface, name, word_id, ptr_addr, bytes) catch return;
     fw.interface.flush() catch return;
 }
@@ -97,7 +99,7 @@ fn writeBinToDir(dir_path: []const u8, name: []const u8, word_id: u32, bytes: []
 
 fn reportFailure(name: []const u8, word_id: u32, err: anyerror) void {
     var buf: [256]u8 = undefined;
-    var fw = std.fs.File.stderr().writer(&buf);
+    var fw = std.fs.File.stderr().writerStreaming(&buf);
     fw.interface.print(
         "Warning: failed to dump JIT bytes for {s} (wid={d}): {s}\n",
         .{ name, word_id, @errorName(err) },

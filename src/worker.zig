@@ -508,6 +508,26 @@ pub const WorkerPool = struct {
         }
     }
 
+    /// Try to take every worker's `all_tasks_mu` in ascending id order. On any unavailable
+    /// lock, release what was acquired and report false.
+    ///
+    /// Lets the allocation-path sampler back off instead of deadlocking: the allocating thread
+    /// may already hold one of these locks, since `trackTask`, `handleTaskDone`, and
+    /// `dumpAllTasks` all allocate inside their critical sections.
+    fn tryLockAllTasksMu(self: *WorkerPool) bool {
+        for (self.workers, 0..) |*w, acquired| {
+            if (!w.scheduler.all_tasks_mu.tryLock()) {
+                var i = acquired;
+                while (i > 0) {
+                    i -= 1;
+                    self.workers[i].scheduler.all_tasks_mu.unlock();
+                }
+                return false;
+            }
+        }
+        return true;
+    }
+
     /// Return true if any worker in the pool owns a non-terminal task.
     /// Locks every worker's `all_tasks_mu` in ascending id order so the
     /// answer is consistent against concurrent spawns; the spawner has to
@@ -611,14 +631,20 @@ pub const WorkerPool = struct {
     /// which also guards each scheduler's `finished_tasks` mutations, so the
     /// summed length is well-defined across workers.
     pub fn sampleCounts(self: *WorkerPool) SampleCounts {
+        self.lockAllTasksMu();
+        defer self.unlockAllTasksMu();
+        return self.sampleCountsLocked();
+    }
+
+    /// The count-gathering half of `sampleCounts`, with every `all_tasks_mu`
+    /// already held by the caller.
+    fn sampleCountsLocked(self: *WorkerPool) SampleCounts {
         var live: usize = 0;
         for (self.workers) |*w| live += w.active_tasks.load(.acquire);
         const detached = self.detached_in_flight.load(.acquire);
 
         var retained: usize = 0;
-        self.lockAllTasksMu();
         for (self.workers) |*w| retained += w.scheduler.finished_tasks.items.len;
-        self.unlockAllTasksMu();
 
         return .{ .live = live, .retained = retained, .detached = detached };
     }
@@ -626,7 +652,10 @@ pub const WorkerPool = struct {
     /// Emit one `SAMPLE:` line to stderr for the current tick. Called only by
     /// the worker that won `claimSampleTick`.
     pub fn emitSample(self: *WorkerPool) void {
-        const counts = self.sampleCounts();
+        self.emitSampleWithCounts(self.sampleCounts());
+    }
+
+    fn emitSampleWithCounts(self: *WorkerPool, counts: SampleCounts) void {
         const mem: ?MemSample = if (self.sample_memory) blk: {
             const ml = self.mem_limit orelse break :blk null;
             break :blk .{ .bytes = ml.currentBytes(), .peak = ml.peakBytes() };
@@ -638,7 +667,41 @@ pub const WorkerPool = struct {
         var tw = trace.TraceWriter.init();
         tw.print("{s}", .{line});
     }
+
+    /// Allocation-path sampling entry: emit a due sample without risking a deadlock against
+    /// the allocating thread's own locks. Runs inside an allocator callback, so nothing here
+    /// may allocate.
+    pub fn trySampleFromAlloc(self: *WorkerPool) void {
+        if (self.trySampleClaim()) |counts| self.emitSampleWithCounts(counts);
+    }
+
+    /// The decide half of `trySampleFromAlloc`: back off on any unavailable lock, gather
+    /// counts, and claim the tick, returning the counts to emit.
+    ///
+    /// The tick is claimed only after the counts are safely readable, so a skipped attempt
+    /// loses nothing and the next threshold crossing retries.
+    fn trySampleClaim(self: *WorkerPool) ?SampleCounts {
+        if (self.sampling_tick_ns == null) return null;
+        if (monotonicNowNs() < self.next_sample_ns.load(.acquire)) return null;
+
+        if (!self.tryLockAllTasksMu()) return null;
+        const counts = self.sampleCountsLocked();
+        self.unlockAllTasksMu();
+
+        if (!self.claimSampleTick(monotonicNowNs())) return null;
+        return counts;
+    }
 };
+
+/// Sample hook installed on the memory-cap allocator by `task-scope`, fired when cumulative
+/// allocation crosses the due-check threshold.
+///
+/// Covers the workload the run-loop tick cannot: a task in a tight loop that never yields back
+/// to the scheduler.
+pub fn allocSampleHook(owner: *anyopaque) void {
+    const pool: *WorkerPool = @ptrCast(@alignCast(owner));
+    pool.trySampleFromAlloc();
+}
 
 fn taskIdLessThan(_: void, a: *Task, b: *Task) bool {
     return a.id < b.id;
@@ -785,6 +848,56 @@ test "sampler snapshot: a bounded workload stays flat" {
         try std.testing.expectEqual(base.retained, counts.retained);
         try std.testing.expectEqual(base_bytes, mem_limit.currentBytes());
     }
+}
+
+test "trySampleClaim: claims a due tick and returns counts when the locks are free" {
+    var pool: WorkerPool = undefined;
+    try pool.init(std.testing.allocator, 2);
+    defer pool.deinit();
+
+    pool.sampling_tick_ns = 100;
+    pool.next_sample_ns.store(0, .release);
+    pool.workers[0].active_tasks.store(3, .release);
+
+    // Long past due with every lock free: the claim succeeds, returns the gathered counts,
+    // and re-arms the deadline to now + interval, far past the epoch.
+    const counts = pool.trySampleClaim() orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 3), counts.live);
+    try std.testing.expect(pool.next_sample_ns.load(.acquire) > 0);
+}
+
+test "allocSampleHook: backs off without claiming when a lock is held" {
+    var pool: WorkerPool = undefined;
+    try pool.init(std.testing.allocator, 2);
+    defer pool.deinit();
+
+    pool.sampling_tick_ns = 100;
+    pool.next_sample_ns.store(0, .release);
+
+    // Simulate the allocating thread already holding one of the ordered
+    // locks, the shape `trackTask` and `handleTaskDone` produce.
+    pool.workers[1].scheduler.all_tasks_mu.lock();
+    defer pool.workers[1].scheduler.all_tasks_mu.unlock();
+
+    allocSampleHook(@ptrCast(&pool));
+
+    // No claim: the deadline is untouched, so a later crossing retries.
+    try std.testing.expectEqual(@as(i128, 0), pool.next_sample_ns.load(.acquire));
+}
+
+test "tryLockAllTasksMu: releases partial acquisitions on failure" {
+    var pool: WorkerPool = undefined;
+    try pool.init(std.testing.allocator, 3);
+    defer pool.deinit();
+
+    pool.workers[2].scheduler.all_tasks_mu.lock();
+    try std.testing.expect(!pool.tryLockAllTasksMu());
+    pool.workers[2].scheduler.all_tasks_mu.unlock();
+
+    // Workers 0 and 1 were released on the failed attempt and worker 2 is
+    // free again, so a clean attempt takes all three.
+    try std.testing.expect(pool.tryLockAllTasksMu());
+    pool.unlockAllTasksMu();
 }
 
 test "claimSampleTick: elects one winner and re-arms past now" {

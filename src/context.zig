@@ -4953,6 +4953,43 @@ pub const Context = struct {
         }
     }
 
+    /// Memory-limit abort hook: write the aborting thread's call stack to stderr, innermost
+    /// frame first.
+    ///
+    /// Runs on the abort path, so it must not allocate; each line is formatted into a stack
+    /// buffer and written with a raw `write`.
+    pub fn memoryAbortReport(opaque_ctx: *anyopaque) void {
+        const ctx: *Context = @ptrCast(@alignCast(opaque_ctx));
+        const frames = ctx.call_stack.items;
+        var buf: [512]u8 = undefined;
+        var i = frames.len;
+        while (i > 0) {
+            i -= 1;
+            const line = formatAbortFrame(&buf, frames[i], i == frames.len - 1);
+            writeRawStderr(line);
+        }
+    }
+
+    /// Render one call frame for the memory-limit abort report into `buf`.
+    /// The innermost frame names the word; caller frames mirror the error
+    /// renderer's "called from" lines.
+    fn formatAbortFrame(buf: []u8, frame: CallFrame, innermost: bool) []const u8 {
+        if (innermost) {
+            if (frame.column > 0) {
+                return std.fmt.bufPrint(buf, "  at word '{s}' ({s}:{d}:{d})\n", .{ frame.word_name, frame.source, frame.line, frame.column }) catch "";
+            }
+            return std.fmt.bufPrint(buf, "  at word '{s}' ({s}:{d})\n", .{ frame.word_name, frame.source, frame.line }) catch "";
+        }
+        return std.fmt.bufPrint(buf, "  called from {s}:{d}: {s}\n", .{ frame.source, frame.line, frame.word_name }) catch "";
+    }
+
+    fn writeRawStderr(msg: []const u8) void {
+        var written: usize = 0;
+        while (written < msg.len) {
+            written += std.posix.write(std.posix.STDERR_FILENO, msg[written..]) catch break;
+        }
+    }
+
     const MAX_INFERENCE_DEPTH = 8;
 
     const RowVarBinding = struct {
@@ -10459,4 +10496,17 @@ test "dispatchEntriesForId breaks type-name ties by registration sequence" {
     for (pairs, tds) |pair, td| {
         try std.testing.expectEqual(@as(*const value_mod.TypeDescriptor, td), pair.key.type_a);
     }
+}
+
+test "formatAbortFrame renders innermost and caller frames" {
+    var buf: [512]u8 = undefined;
+
+    const inner = Context.formatAbortFrame(&buf, .{ .word_name = "boom", .source = "main.1z", .line = 12, .column = 3 }, true);
+    try std.testing.expectEqualStrings("  at word 'boom' (main.1z:12:3)\n", inner);
+
+    const inner_no_col = Context.formatAbortFrame(&buf, .{ .word_name = "boom", .source = "main.1z", .line = 12 }, true);
+    try std.testing.expectEqualStrings("  at word 'boom' (main.1z:12)\n", inner_no_col);
+
+    const caller = Context.formatAbortFrame(&buf, .{ .word_name = "outer", .source = "lib/util.1z", .line = 20 }, false);
+    try std.testing.expectEqualStrings("  called from lib/util.1z:20: outer\n", caller);
 }

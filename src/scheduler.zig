@@ -11,6 +11,7 @@ const IoEvent = @import("multiplexer.zig").IoEvent;
 const ProcessWaitHandle = @import("multiplexer.zig").ProcessWaitHandle;
 const processWaitHandleKey = @import("multiplexer.zig").processWaitHandleKey;
 const trace = @import("trace.zig");
+const memory_limit = @import("memory_limit.zig");
 const value_mod = @import("value.zig");
 const container_backing = @import("container_backing.zig");
 const profile = @import("profile.zig");
@@ -802,8 +803,17 @@ pub const Scheduler = struct {
                 const task = self.run_queue.orderedRemove(0);
                 self.current_task = task;
 
+                // The task's context is this thread's current context for the duration of the
+                // resume, so a memory-limit abort inside the task names its call stack.
+                //
+                // Restore rather than clear: the primary worker shares the main thread with
+                // the root context.
+                const prev_context = memory_limit.current_context;
+                memory_limit.current_context = task.ctx;
+
                 task.setStatus(.running);
                 task_mod.coroResume(task);
+                memory_limit.current_context = prev_context;
                 self.current_task = null;
                 switch (task.getStatus()) {
                     .completed, .failed, .cancelled => {

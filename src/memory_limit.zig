@@ -1,5 +1,13 @@
 const std = @import("std");
 
+/// The `Context` executing on the current thread, type-erased so this leaf module needs no
+/// runtime imports.
+///
+/// The interpreter sets it to the root context at startup, and the scheduler swaps it around
+/// every task resume. The memory-limit abort path hands it to `abort_hook` so the report names
+/// the aborting thread's call stack.
+pub threadlocal var current_context: ?*anyopaque = null;
+
 /// An allocator wrapper that enforces a hard cap on live memory usage.
 /// Tracks current live bytes (incremented on alloc/resize/remap, decremented on free).
 /// When the cap is exceeded, aborts the process with an error message to stderr.
@@ -21,6 +29,28 @@ pub const MemoryLimitAllocator = struct {
     peak_bytes: std.atomic.Value(usize),
     track_peak: bool,
 
+    /// Memory-limit abort diagnostic hook, called on the abort path with the thread-local
+    /// `current_context` pointer so the report can name the aborting thread's call stack.
+    ///
+    /// Must not allocate: an allocation here would re-enter the limit check and recurse into
+    /// the abort.
+    abort_hook: ?*const fn (ctx: *anyopaque) void,
+
+    /// Allocation-path sampler hook and its type-erased owner, the worker pool.
+    ///
+    /// Invoked from whatever thread crossed the due-check threshold, mid-allocation, so it
+    /// must not allocate and must not block on locks the allocating thread may already hold.
+    sample_owner: ?*anyopaque,
+    sample_hook: ?*const fn (owner: *anyopaque) void,
+
+    /// Bytes allocated since the last sampler due-check, across all threads.
+    sample_accum: std.atomic.Value(usize),
+
+    /// Cumulative allocation between sampler due-checks. Crossing it costs
+    /// one clock read plus a tick CAS; the emit cadence itself stays the
+    /// sampler's tick interval.
+    const sample_check_threshold: usize = 256 * 1024;
+
     pub fn init(backing: std.mem.Allocator, max_bytes: usize) MemoryLimitAllocator {
         return .{
             .backing_allocator = backing,
@@ -28,6 +58,10 @@ pub const MemoryLimitAllocator = struct {
             .max_bytes = max_bytes,
             .peak_bytes = std.atomic.Value(usize).init(0),
             .track_peak = false,
+            .abort_hook = null,
+            .sample_owner = null,
+            .sample_hook = null,
+            .sample_accum = std.atomic.Value(usize).init(0),
         };
     }
 
@@ -49,6 +83,21 @@ pub const MemoryLimitAllocator = struct {
         }
     }
 
+    /// Credit freshly-allocated bytes toward the sampler due-check threshold.
+    ///
+    /// Crossing it resets the accumulator and invokes the sample hook, which decides whether a
+    /// sample is actually due. Two threads crossing at once may both fire; the tick claim
+    /// downstream dedupes.
+    fn noteAllocated(self: *MemoryLimitAllocator, len: usize) void {
+        if (self.sample_hook == null) return;
+        const prev = self.sample_accum.fetchAdd(len, .monotonic);
+        if (prev + len < sample_check_threshold) return;
+        self.sample_accum.store(0, .monotonic);
+        const owner = self.sample_owner orelse return;
+        const hook = self.sample_hook orelse return;
+        hook(owner);
+    }
+
     pub fn allocator(self: *MemoryLimitAllocator) std.mem.Allocator {
         return .{
             .ptr = self,
@@ -67,13 +116,14 @@ pub const MemoryLimitAllocator = struct {
         const self: *MemoryLimitAllocator = @ptrCast(@alignCast(ctx));
 
         if (self.max_bytes > 0 and self.current_bytes.load(.monotonic) + len > self.max_bytes) {
-            abortWithMessage(self.max_bytes, len);
+            self.abortWithMessage(len);
         }
 
         const result = self.backing_allocator.rawAlloc(len, alignment, ret_addr);
         if (result != null) {
             const prev = self.current_bytes.fetchAdd(len, .monotonic);
             self.recordPeak(prev + len);
+            self.noteAllocated(len);
         }
         return result;
     }
@@ -84,7 +134,7 @@ pub const MemoryLimitAllocator = struct {
         if (new_len > memory.len) {
             const delta = new_len - memory.len;
             if (self.max_bytes > 0 and self.current_bytes.load(.monotonic) + delta > self.max_bytes) {
-                abortWithMessage(self.max_bytes, delta);
+                self.abortWithMessage(delta);
             }
         }
 
@@ -94,6 +144,7 @@ pub const MemoryLimitAllocator = struct {
             if (new_len > old_len) {
                 const prev = self.current_bytes.fetchAdd(new_len - old_len, .monotonic);
                 self.recordPeak(prev + (new_len - old_len));
+                self.noteAllocated(new_len - old_len);
             } else {
                 _ = self.current_bytes.fetchSub(old_len - new_len, .monotonic);
             }
@@ -107,7 +158,7 @@ pub const MemoryLimitAllocator = struct {
         if (new_len > memory.len) {
             const delta = new_len - memory.len;
             if (self.max_bytes > 0 and self.current_bytes.load(.monotonic) + delta > self.max_bytes) {
-                abortWithMessage(self.max_bytes, delta);
+                self.abortWithMessage(delta);
             }
         }
 
@@ -117,6 +168,7 @@ pub const MemoryLimitAllocator = struct {
             if (new_len > old_len) {
                 const prev = self.current_bytes.fetchAdd(new_len - old_len, .monotonic);
                 self.recordPeak(prev + (new_len - old_len));
+                self.noteAllocated(new_len - old_len);
             } else {
                 _ = self.current_bytes.fetchSub(old_len - new_len, .monotonic);
             }
@@ -130,19 +182,27 @@ pub const MemoryLimitAllocator = struct {
         _ = self.current_bytes.fetchSub(memory.len, .monotonic);
     }
 
-    fn abortWithMessage(limit: usize, attempted: usize) noreturn {
+    fn abortWithMessage(self: *MemoryLimitAllocator, attempted: usize) noreturn {
         // Format the message without allocating. Use a stack buffer.
         var buf: [256]u8 = undefined;
-        const msg = std.fmt.bufPrint(&buf, "Error: memory limit exceeded (limit: {s}, attempted allocation: {} bytes)\n", .{
-            formatBytesStatic(limit),
+        const msg = std.fmt.bufPrint(&buf, "Error: memory limit exceeded (limit: {s}, attempted allocation: {} bytes, live: {} bytes)\n", .{
+            formatBytesStatic(self.max_bytes),
             attempted,
+            self.currentBytes(),
         }) catch "Error: memory limit exceeded\n";
+        writeStderr(msg);
 
+        if (current_context) |p| {
+            if (self.abort_hook) |hook| hook(p);
+        }
+        std.process.exit(1);
+    }
+
+    fn writeStderr(msg: []const u8) void {
         var written: usize = 0;
         while (written < msg.len) {
             written += std.posix.write(std.posix.STDERR_FILENO, msg[written..]) catch break;
         }
-        std.process.exit(1);
     }
 
     pub fn formatBytesStatic(bytes: usize) []const u8 {
@@ -302,6 +362,46 @@ test "MemoryLimitAllocator: peak stays zero when tracking disabled" {
 
     try std.testing.expectEqual(@as(usize, 4096), mem_limit.currentBytes());
     try std.testing.expectEqual(@as(usize, 0), mem_limit.peakBytes());
+}
+
+test "MemoryLimitAllocator: sample hook fires once per threshold crossing" {
+    var mem_limit = MemoryLimitAllocator.init(std.testing.allocator, 0);
+    const Hook = struct {
+        fn fire(owner: *anyopaque) void {
+            const count: *usize = @ptrCast(@alignCast(owner));
+            count.* += 1;
+        }
+    };
+    var fired: usize = 0;
+    mem_limit.sample_owner = &fired;
+    mem_limit.sample_hook = Hook.fire;
+    const alloc = mem_limit.allocator();
+
+    // Below the threshold: nothing fires.
+    const small = try alloc.alloc(u8, 1024);
+    defer alloc.free(small);
+    try std.testing.expectEqual(@as(usize, 0), fired);
+
+    // Crossing it fires once and resets the accumulator.
+    const big = try alloc.alloc(u8, MemoryLimitAllocator.sample_check_threshold);
+    defer alloc.free(big);
+    try std.testing.expectEqual(@as(usize, 1), fired);
+    try std.testing.expectEqual(@as(usize, 0), mem_limit.sample_accum.load(.monotonic));
+
+    // A fresh accumulation starts from zero: no re-fire below the threshold.
+    const small2 = try alloc.alloc(u8, 1024);
+    defer alloc.free(small2);
+    try std.testing.expectEqual(@as(usize, 1), fired);
+}
+
+test "MemoryLimitAllocator: null sample hook skips accumulation entirely" {
+    var mem_limit = MemoryLimitAllocator.init(std.testing.allocator, 0);
+    const alloc = mem_limit.allocator();
+
+    const mem = try alloc.alloc(u8, MemoryLimitAllocator.sample_check_threshold * 2);
+    defer alloc.free(mem);
+
+    try std.testing.expectEqual(@as(usize, 0), mem_limit.sample_accum.load(.monotonic));
 }
 
 test "MemoryLimitAllocator: peak tracks a remap grow path" {
