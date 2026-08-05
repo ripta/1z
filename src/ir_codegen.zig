@@ -784,6 +784,7 @@ const ValueLayout = struct {
         ptr,
         slice,
         string_payload,
+        tagged_payload,
         dual_ptr,
         inline_,
     };
@@ -797,7 +798,8 @@ const ValueLayout = struct {
             .hash, .vector, .byte_array, .set, .mutable_map, .array, .stream, .resource, .parameter, .module, .marker, .struct_type, .struct_instance, .task, .channel, .iterator, .type_val, .sandbox_spec, .error_value => .ptr,
             .string, .symbol => .string_payload,
             .doc_string, .template => .slice,
-            .tagged, .bignum => .dual_ptr,
+            .tagged => .tagged_payload,
+            .bignum => .dual_ptr,
             .closure => .ptr,
             .quotation, .stack_effect => .inline_,
         };
@@ -809,6 +811,7 @@ const ValueLayout = struct {
     var string_bytes_ptr_offset: usize = 0;
     var string_bytes_len_offset: usize = 0;
     var quotation_code_ptr_offset: usize = 0;
+    var tagged_backing_offset: usize = 0;
     var tagged_tag_ptr_offset: usize = 0;
     var tagged_inner_ptr_offset: usize = 0;
     var initialized: bool = false;
@@ -905,33 +908,40 @@ const ValueLayout = struct {
         }
         if (!found_code_ptr) @panic("quotation code_ptr offset discovery found no sentinel");
 
-        // tag and inner pointer offsets within the `tagged` variant's double-indirection
+        // Discover the `TaggedPayload` field offsets by sentinel scan, with the same
+        // duplicate-candidate rejection as the string pass: union padding is undefined, so a
+        // stale byte pattern could impersonate a sentinel, and a guessed layout must reject
+        // the build.
+        const tagged_backing_sentinel_addr: usize = 0xDEAD_BEEF_CAFE_0050;
         const tag_sentinel_addr: usize = 0xDEAD_BEEF_CAFE_0010;
         const inner_sentinel_addr: usize = 0xDEAD_BEEF_CAFE_0020;
 
         var tv: Value = .{ .tagged = .{
+            .backing = @ptrFromInt(tagged_backing_sentinel_addr),
             .tag = @ptrFromInt(tag_sentinel_addr),
             .inner = @ptrFromInt(inner_sentinel_addr),
         } };
 
         const tv_bytes: [*]const u8 = @ptrCast(&tv);
-        var found_tag_ptr = false;
-        var found_inner_ptr = false;
-        for (0..@sizeOf(Value) - @sizeOf(usize) + 1) |offset| {
+        var tagged_backing_candidate: ?usize = null;
+        var tag_ptr_candidate: ?usize = null;
+        var inner_ptr_candidate: ?usize = null;
+        for (0..value_size - @sizeOf(usize) + 1) |offset| {
             const ptr_at: *align(1) const usize = @ptrCast(tv_bytes + offset);
-            if (!found_tag_ptr and ptr_at.* == tag_sentinel_addr) {
-                tagged_tag_ptr_offset = offset;
-                found_tag_ptr = true;
-            } else if (!found_inner_ptr and ptr_at.* == inner_sentinel_addr) {
-                tagged_inner_ptr_offset = offset;
-                found_inner_ptr = true;
+            if (ptr_at.* == tagged_backing_sentinel_addr) {
+                if (tagged_backing_candidate != null) @panic("tagged backing offset discovery found two candidate positions");
+                tagged_backing_candidate = offset;
+            } else if (ptr_at.* == tag_sentinel_addr) {
+                if (tag_ptr_candidate != null) @panic("tagged tag pointer offset discovery found two candidate positions");
+                tag_ptr_candidate = offset;
+            } else if (ptr_at.* == inner_sentinel_addr) {
+                if (inner_ptr_candidate != null) @panic("tagged inner pointer offset discovery found two candidate positions");
+                inner_ptr_candidate = offset;
             }
-
-            if (found_tag_ptr and found_inner_ptr) break;
         }
-
-        if (!found_tag_ptr) @panic("tagged tag pointer offset discovery found no sentinel");
-        if (!found_inner_ptr) @panic("tagged inner pointer offset discovery found no sentinel");
+        tagged_backing_offset = tagged_backing_candidate orelse @panic("tagged backing offset discovery found no sentinel");
+        tagged_tag_ptr_offset = tag_ptr_candidate orelse @panic("tagged tag pointer offset discovery found no sentinel");
+        tagged_inner_ptr_offset = inner_ptr_candidate orelse @panic("tagged inner pointer offset discovery found no sentinel");
 
         initialized = true;
     }
@@ -2026,6 +2036,11 @@ const CompileState = struct {
     /// holds across the generated-code boundary.
     retain_slot_fn: c.ir_ref = c.IR_UNUSED,
     release_slot_fn: c.ir_ref = c.IR_UNUSED,
+    /// Reference to jitUnwrapTaggedSlot: replace a backed tagged wrapper at a
+    /// physical stack slot with its inner value, keeping the slot's ownership
+    /// balanced. Emitted by the inline virtual-unwrap on the backed-wrapper
+    /// branch, where the raw byte copy would lose the backing's reference.
+    unwrap_tagged_slot_fn: c.ir_ref = c.IR_UNUSED,
     validate_params_fn: c.ir_ref = c.IR_UNUSED,
     /// Function ref for `jitSatisfiesAndDispatch`, emitted at protocol-bounded
     /// generic dispatch sites. JIT-only; left unused in AOT mode.
@@ -4614,9 +4629,33 @@ fn tryEmitInlineVirtualUnwrap(
     }
     c._ir_IF_FALSE(ctx, if_mismatch);
 
-    const inner_ptr_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), elem_addr, c.ir_const_addr(ctx, ValueLayout.tagged_inner_ptr_offset));
-    const inner_ptr = c._ir_LOAD(ctx, c.IR_ADDR, inner_ptr_addr);
-    emitCopyFromPtr(ctx, base_addr, inner_ptr, value_slot);
+    // A backed wrapper must go through the runtime helper: the raw byte copy
+    // would lose the backing's reference and with it the inner's. A null-backed
+    // wrapper is an arena box whose slot reference is the inner's own, so the
+    // inline copy is a balanced transfer. Emission paths that leave the helper
+    // unwired only ever see null-backed wrappers and keep the plain copy.
+    if (state.unwrap_tagged_slot_fn != c.IR_UNUSED) {
+        const backing_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), elem_addr, c.ir_const_addr(ctx, ValueLayout.tagged_backing_offset));
+        const backing_ptr = c._ir_LOAD(ctx, c.IR_ADDR, backing_addr);
+        const backed = c.ir_fold2(ctx, c.IR_OPT(c.IR_NE, c.IR_BOOL), backing_ptr, c.ir_const_addr(ctx, 0));
+        const if_backed = c._ir_IF(ctx, backed);
+
+        c._ir_IF_TRUE(ctx, if_backed);
+        _ = c._ir_CALL_1(ctx, c.IR_I32, state.unwrap_tagged_slot_fn, elem_addr);
+        const end_backed = c._ir_END(ctx);
+
+        c._ir_IF_FALSE(ctx, if_backed);
+        const inner_ptr_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), elem_addr, c.ir_const_addr(ctx, ValueLayout.tagged_inner_ptr_offset));
+        const inner_ptr = c._ir_LOAD(ctx, c.IR_ADDR, inner_ptr_addr);
+        emitCopyFromPtr(ctx, base_addr, inner_ptr, value_slot);
+        const end_inline = c._ir_END(ctx);
+
+        c._ir_MERGE_2(ctx, end_backed, end_inline);
+    } else {
+        const inner_ptr_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), elem_addr, c.ir_const_addr(ctx, ValueLayout.tagged_inner_ptr_offset));
+        const inner_ptr = c._ir_LOAD(ctx, c.IR_ADDR, inner_ptr_addr);
+        emitCopyFromPtr(ctx, base_addr, inner_ptr, value_slot);
+    }
 
     stack[sp.*] = .{ .raw_at_slot = value_slot };
     sp.* += 1;
@@ -8715,6 +8754,7 @@ fn compileWordPass(
     // any `.raw_at_slot` value may carry a backing.
     const retain_slot_fn = c.ir_const_addr(&ctx, @intFromPtr(&jitRetainSlot));
     const release_slot_fn = c.ir_const_addr(&ctx, @intFromPtr(&jitReleaseSlot));
+    const unwrap_tagged_slot_fn = c.ir_const_addr(&ctx, @intFromPtr(&jitUnwrapTaggedSlot));
 
     // jitEnsureStackCapacity grows ctx.stack to cover the word's peak depth
     // when the capacity reserved by executeCompiled is insufficient. Needed
@@ -8845,6 +8885,7 @@ fn compileWordPass(
         .refresh_stack_fn = refresh_stack_fn,
         .retain_slot_fn = retain_slot_fn,
         .release_slot_fn = release_slot_fn,
+        .unwrap_tagged_slot_fn = unwrap_tagged_slot_fn,
         .validate_params_fn = validate_params_fn,
         .satisfies_dispatch_fn = satisfies_dispatch_fn,
         .satisfies_dispatch_combinator_fn = satisfies_dispatch_combinator_fn,
@@ -9413,6 +9454,7 @@ fn emitWordCAotPass(
     // Refcount slot helpers, AOT counterpart of the JIT const_addr refs.
     const retain_slot_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "jitRetainSlot"), proto_1arg);
     const release_slot_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "jitReleaseSlot"), proto_1arg);
+    const unwrap_tagged_slot_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "jitUnwrapTaggedSlot"), proto_1arg);
 
     // jitEnsureStackCapacity is called unconditionally in the AOT prologue to
     // grow ctx.stack when the capacity reserved by executeCompiled is
@@ -9543,6 +9585,7 @@ fn emitWordCAotPass(
         .refresh_stack_fn = refresh_stack_fn,
         .retain_slot_fn = retain_slot_fn,
         .release_slot_fn = release_slot_fn,
+        .unwrap_tagged_slot_fn = unwrap_tagged_slot_fn,
         .validate_params_fn = validate_params_fn,
         .aot_satisfies_dispatch_fn = aot_satisfies_dispatch_fn,
         .aot_satisfies_dispatch_combinator_fn = aot_satisfies_dispatch_combinator_fn,
@@ -11011,6 +11054,7 @@ pub fn emitProgramC(
     try out.appendSlice(allocator, "extern int32_t jitRefreshStack(uintptr_t jit_ctx);\n");
     try out.appendSlice(allocator, "extern int32_t jitRetainSlot(uintptr_t value_ptr);\n");
     try out.appendSlice(allocator, "extern int32_t jitReleaseSlot(uintptr_t value_ptr);\n");
+    try out.appendSlice(allocator, "extern int32_t jitUnwrapTaggedSlot(uintptr_t value_ptr);\n");
     try out.appendSlice(allocator, "extern int32_t jitEnsureStackCapacity(uintptr_t jit_ctx, uintptr_t needed);\n");
     try out.appendSlice(allocator, "extern int32_t jitValidateParamEffects(uintptr_t ctx, uintptr_t effect_ptr);\n");
     try out.appendSlice(allocator, "extern int32_t jitCallQuotation(uintptr_t ctx);\n");
@@ -13486,6 +13530,16 @@ export fn jitReleaseSlot(value_ptr: usize) callconv(.c) i32 {
     return 0;
 }
 
+/// Replace a tagged wrapper at a physical stack slot with its inner value,
+/// retaining the inner for the slot before the wrapper's reference drops.
+/// Emitted by the inline virtual-unwrap on the backed-wrapper branch, where
+/// the raw byte copy would lose the backing's reference.
+export fn jitUnwrapTaggedSlot(value_ptr: usize) callconv(.c) i32 {
+    const slot: *Value = @ptrFromInt(value_ptr);
+    helpers.unwrapTaggedSlotInPlace(slot);
+    return 0;
+}
+
 /// Push a string literal onto the stack. The string data is at `str_ptr` with length
 /// `str_len`.
 export fn jitPushString(ctx_raw: usize, str_ptr: usize, str_len: usize) callconv(.c) i32 {
@@ -14851,6 +14905,35 @@ test "ValueLayout string offsets reconstruct a string Value" {
     try testing.expect(reconstructed.* == .string);
     try testing.expect(reconstructed.string.backing == null);
     try testing.expectEqualStrings("hello", reconstructed.string.bytes);
+}
+
+test "ValueLayout tagged offsets reconstruct a tagged Value" {
+    // The inline virtual-unwrap reads the backing, tag, and inner pointers at
+    // the discovered ValueLayout offsets. Mirror that here against a raw byte
+    // buffer and confirm it reads back as the intended null-backed wrapper.
+    ValueLayout.ensureInit();
+
+    var vt: VirtualType = undefined;
+    const inner = Value{ .fixnum = 7 };
+    var buf: [@sizeOf(Value)]u8 = undefined;
+
+    const tag_int: u8 = @intFromEnum(@as(ValueLayout.TagType, .tagged));
+    @memcpy(buf[ValueLayout.tag_offset .. ValueLayout.tag_offset + ValueLayout.tag_size], std.mem.asBytes(&tag_int)[0..ValueLayout.tag_size]);
+
+    const backing_int: usize = 0;
+    @memcpy(buf[ValueLayout.tagged_backing_offset .. ValueLayout.tagged_backing_offset + @sizeOf(usize)], std.mem.asBytes(&backing_int));
+
+    const tag_ptr_int: usize = @intFromPtr(&vt);
+    @memcpy(buf[ValueLayout.tagged_tag_ptr_offset .. ValueLayout.tagged_tag_ptr_offset + @sizeOf(usize)], std.mem.asBytes(&tag_ptr_int));
+
+    const inner_ptr_int: usize = @intFromPtr(&inner);
+    @memcpy(buf[ValueLayout.tagged_inner_ptr_offset .. ValueLayout.tagged_inner_ptr_offset + @sizeOf(usize)], std.mem.asBytes(&inner_ptr_int));
+
+    const reconstructed: *align(1) const Value = @ptrCast(&buf);
+    try testing.expect(reconstructed.* == .tagged);
+    try testing.expect(reconstructed.tagged.backing == null);
+    try testing.expect(reconstructed.tagged.tag == &vt);
+    try testing.expectEqual(@as(i64, 7), reconstructed.tagged.inner.fixnum);
 }
 
 fn makeInstructions(comptime ops: anytype) [ops.len]Instruction {

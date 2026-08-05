@@ -376,9 +376,11 @@ fn freezeTagged(ctx: *Context, t: TaggedPayload, val: Value) anyerror!FreezeResu
                 container_backing.retainValue(val);
                 return .{ .value = val, .changed = false };
             }
-            const box = try ctx.quotationAllocator().create(Value);
-            box.* = r.value;
-            return .{ .value = .{ .tagged = .{ .tag = t.tag, .inner = box } }, .changed = true };
+            const wrapped = value_mod.ownedTaggedValue(ctx.allocator, t.tag, r.value) catch |e| {
+                container_backing.releaseValue(r.value);
+                return e;
+            };
+            return .{ .value = wrapped, .changed = true };
         },
     }
 }

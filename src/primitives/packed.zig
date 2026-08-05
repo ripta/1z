@@ -414,20 +414,16 @@ fn packedArithmeticOp(comptime op: packed_kernels.Op, ctx: *Context) anyerror!vo
     }
 
     const out_ba = try ByteArray.create(alloc);
-    errdefer container_backing.releaseValue(.{ .byte_array = out_ba });
-    try out_ba.ensureTotalCapacity(alloc, a_bytes.len);
-    out_ba.items.len = a_bytes.len;
+    {
+        // Scoped so the release cannot double up with pushOwnedTagged's own
+        // failure handling, which owns the byte array from the call on.
+        errdefer container_backing.releaseValue(.{ .byte_array = out_ba });
+        try out_ba.ensureTotalCapacity(alloc, a_bytes.len);
+        out_ba.items.len = a_bytes.len;
+        try callKernel(op, elem_type, a_bytes, b_bytes, out_ba.items);
+    }
 
-    try callKernel(op, elem_type, a_bytes, b_bytes, out_ba.items);
-
-    const inner = try ctx.quotationAllocator().create(Value);
-    inner.* = .{ .byte_array = out_ba };
-    try ctx.stack.pushMoved(.{
-        .tagged = .{
-            .tag = a_tagged.tag,
-            .inner = inner,
-        },
-    });
+    try helpers.pushOwnedTagged(ctx, a_tagged.tag, .{ .byte_array = out_ba });
 }
 
 fn callKernel(comptime op: packed_kernels.Op, elem_type: PackedElementType, a: []const u8, b: []const u8, out: []u8) packed_kernels.DivideError!void {
@@ -506,26 +502,28 @@ fn packedScalarArithmeticOp(comptime op: packed_kernels.Op, ctx: *Context) anyer
     };
 
     const out_ba = try ByteArray.create(alloc);
-    errdefer container_backing.releaseValue(.{ .byte_array = out_ba });
-    const a_bytes = a_ba.slice();
-    try out_ba.ensureTotalCapacity(alloc, a_bytes.len);
-    out_ba.items.len = a_bytes.len;
+    {
+        // Scoped so the release cannot double up with pushOwnedTagged's own
+        // failure handling, which owns the byte array from the call on.
+        errdefer container_backing.releaseValue(.{ .byte_array = out_ba });
+        const a_bytes = a_ba.slice();
+        try out_ba.ensureTotalCapacity(alloc, a_bytes.len);
+        out_ba.items.len = a_bytes.len;
 
-    switch (elem_type) {
-        inline .f64, .f32, .i8, .i16, .i32, .i64, .u8, .u16, .u32, .u64 => |et| {
-            const T = comptime etToType(et);
-            const scalar = try valueToElement(T, ctx, arena, scalar_val);
-            if (comptime op == .div) {
-                try packed_kernels.scalarBinaryOp(T, op, a_bytes, scalar, out_ba.items);
-            } else {
-                packed_kernels.scalarBinaryOp(T, op, a_bytes, scalar, out_ba.items);
-            }
-        },
+        switch (elem_type) {
+            inline .f64, .f32, .i8, .i16, .i32, .i64, .u8, .u16, .u32, .u64 => |et| {
+                const T = comptime etToType(et);
+                const scalar = try valueToElement(T, ctx, arena, scalar_val);
+                if (comptime op == .div) {
+                    try packed_kernels.scalarBinaryOp(T, op, a_bytes, scalar, out_ba.items);
+                } else {
+                    packed_kernels.scalarBinaryOp(T, op, a_bytes, scalar, out_ba.items);
+                }
+            },
+        }
     }
 
-    const inner = try ctx.quotationAllocator().create(Value);
-    inner.* = .{ .byte_array = out_ba };
-    try ctx.stack.pushMoved(.{ .tagged = .{ .tag = a_tagged.tag, .inner = inner } });
+    try helpers.pushOwnedTagged(ctx, a_tagged.tag, .{ .byte_array = out_ba });
 }
 
 fn nativePackedScalarAdd(ctx: *Context) anyerror!void {

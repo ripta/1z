@@ -148,6 +148,16 @@ const StringBacking = opaque {};
 /// Mirror of the hosted `BignumBacking`, opaque for the same reason.
 const BignumBacking = opaque {};
 
+/// Mirror of the hosted `TaggedBacking`, opaque for the same reason.
+const TaggedBacking = opaque {};
+
+/// Mirror of the hosted `TaggedPayload`. Must match `value.zig`'s field set exactly.
+const TaggedPayload = struct {
+    backing: ?*TaggedBacking = null,
+    tag: *const VirtualType,
+    inner: *const Value,
+};
+
 /// Mirror of the hosted `BignumPayload`. Must match `value.zig`'s field set exactly.
 const BignumPayload = struct {
     backing: ?*BignumBacking = null,
@@ -183,7 +193,7 @@ const Value = union(enum) {
     marker: *Marker,
     struct_type: *StructType,
     struct_instance: *StructInstance,
-    tagged: struct { tag: *const VirtualType, inner: *const Value },
+    tagged: TaggedPayload,
     template: []const TemplateSegment,
     stack_effect: StackEffect,
     error_value: *ErrorObject,
@@ -232,6 +242,7 @@ comptime {
         @export(&jitEnsureStackCapacity, .{ .name = "jitEnsureStackCapacity" });
         @export(&jitRetainSlot, .{ .name = "jitRetainSlot" });
         @export(&jitReleaseSlot, .{ .name = "jitReleaseSlot" });
+        @export(&jitUnwrapTaggedSlot, .{ .name = "jitUnwrapTaggedSlot" });
         @export(&jitPushString, .{ .name = "jitPushString" });
         @export(&jitPushSymbol, .{ .name = "jitPushSymbol" });
         @export(&jitPushQuotation, .{ .name = "jitPushQuotation" });
@@ -1518,6 +1529,15 @@ fn jitRetainSlot(value_ptr: usize) callconv(.c) i32 {
 
 fn jitReleaseSlot(value_ptr: usize) callconv(.c) i32 {
     _ = value_ptr;
+    return 0;
+}
+
+/// The backed-wrapper branch of the inline virtual-unwrap. This runtime never constructs a
+/// backed wrapper, so the branch is unreachable here; the plain copy keeps the symbol
+/// linkable and correct if one ever arrives.
+fn jitUnwrapTaggedSlot(value_ptr: usize) callconv(.c) i32 {
+    const slot: *Value = @ptrFromInt(value_ptr);
+    slot.* = slot.tagged.inner.*;
     return 0;
 }
 

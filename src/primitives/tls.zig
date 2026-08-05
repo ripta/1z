@@ -246,6 +246,9 @@ fn nativeTlsConfigAddCaPem(ctx: *Context) anyerror!void {
         },
     };
     const config_val = try ctx.stack.pop();
+    // The final push takes its own reference, so the popped one drops at exit.
+    // The config resource itself is arena-owned, so the pointer stays valid.
+    defer container_backing.releaseValue(config_val);
     const config = try extractTlsConfig(ctx, config_val);
     const alloc = config.allocator;
 
@@ -293,6 +296,9 @@ fn nativeTlsUpgrade(ctx: *Context) anyerror!void {
     const hostname_pay = try helpers.popString(ctx);
     defer container_backing.releaseValue(.{ .string = hostname_pay });
     const config_val = try ctx.stack.pop();
+    // The config resource itself is arena-owned, so the pointer stays valid
+    // past the popped wrapper reference dropping at exit.
+    defer container_backing.releaseValue(config_val);
     const stream = try helpers.popStream(ctx);
 
     const config = try extractTlsConfig(ctx, config_val);

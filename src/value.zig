@@ -466,6 +466,56 @@ pub fn ownedBignumValue(allocator: std.mem.Allocator, big: BigIntManaged) error{
     return .{ .bignum = .{ .backing = backing, .big = &backing.big } };
 }
 
+/// Refcounted backing for a tagged value's inner box. A `TaggedPayload` carries an optional
+/// pointer to one of these alongside its direct inner pointer; a null backing means the box
+/// lives on an arena that outlives the value, and the wrapper's reference is the recursive
+/// claim on the inner value's own backings, exactly the pre-backing semantics.
+///
+/// The backing embeds the inner `Value` it owns, so an owned wrap is one allocation and the
+/// payload's `inner` points at the embedded cell.
+pub const TaggedBacking = struct {
+    header: @import("container_backing.zig").ContainerHeader,
+    inner: Value,
+
+    /// Take ownership of the caller's reference to `inner`. The backing releases it when the
+    /// last reference drops.
+    pub fn adopt(allocator: std.mem.Allocator, inner: Value) error{OutOfMemory}!*TaggedBacking {
+        const self = try allocator.create(TaggedBacking);
+        self.* = .{
+            .header = undefined,
+            .inner = inner,
+        };
+        self.header.init(allocator, destroyTaggedBacking);
+        return self;
+    }
+
+    /// Release-to-zero callback. Frees memory only; it never executes user code.
+    fn destroyTaggedBacking(header: *@import("container_backing.zig").ContainerHeader) void {
+        const cb = @import("container_backing.zig");
+        const self: *TaggedBacking = @fieldParentPtr("header", header);
+        cb.releaseValue(self.inner);
+        header.allocator.destroy(self);
+    }
+};
+
+/// The payload of `Value.tagged`: the virtual type, a direct pointer to the boxed inner
+/// value, plus an optional refcounted backing, mirroring `StringPayload`'s null-means-inert
+/// split. For an owned wrap, `inner` points at the backing's embedded cell.
+pub const TaggedPayload = struct {
+    backing: ?*TaggedBacking = null,
+    tag: *const VirtualType,
+    inner: *const Value,
+};
+
+/// A tagged value owning its inner box through a fresh heap backing, adopting the caller's
+/// reference to `inner`. The returned value holds the backing's creation reference, which
+/// the caller transfers (`pushMoved`, container adoption) or releases. On failure the
+/// caller still owns `inner`.
+pub fn ownedTaggedValue(allocator: std.mem.Allocator, tag: *const VirtualType, inner: Value) error{OutOfMemory}!Value {
+    const backing = try TaggedBacking.adopt(allocator, inner);
+    return .{ .tagged = .{ .backing = backing, .tag = tag, .inner = &backing.inner } };
+}
+
 pub fn valueContainsBorrowedBuffer(val: Value) bool {
     return switch (val) {
         .byte_array => |ba| ba.isBorrowed(),
@@ -1686,7 +1736,7 @@ pub const Value = union(enum) {
     marker: *Marker,
     struct_type: *StructType,
     struct_instance: *StructInstance,
-    tagged: struct { tag: *const VirtualType, inner: *const Value },
+    tagged: TaggedPayload,
     template: []const TemplateSegment,
     stack_effect: StackEffect,
     error_value: *ErrorObject,
@@ -2587,6 +2637,24 @@ test "null-backed bignum retain and release are no-ops" {
     cb.releaseValue(val);
     cb.releaseValue(val);
     try std.testing.expectEqual(@as(i64, 7), try val.bignum.big.toInt(i64));
+}
+
+test "tagged backing adopt lifecycle balances retain and release" {
+    const cb = @import("container_backing.zig");
+    const vec = try Vector.create(std.testing.allocator);
+    var dummy_vt: VirtualType = undefined;
+    const val = try ownedTaggedValue(std.testing.allocator, &dummy_vt, .{ .vector = vec });
+    try std.testing.expect(val.tagged.backing != null);
+    try std.testing.expect(cb.valueCarriesBacking(val));
+
+    // A second owner retains the backing header only; the inner vector's single
+    // reference belongs to the backing. Both releases drop, and the leak
+    // detector proves the box and the vector are both freed.
+    cb.retainValue(val);
+    try std.testing.expectEqual(@as(u32, 2), val.tagged.backing.?.header.refcountValue());
+    try std.testing.expectEqual(@as(u32, 1), vec.header.refcountValue());
+    cb.releaseValue(val);
+    cb.releaseValue(val);
 }
 
 test "null-backed string retain and release are no-ops" {

@@ -309,8 +309,6 @@ fn nativeDefineVirtual(ctx: *Context) anyerror!void {
 
 /// Trampoline helper ( value tv -- tagged )
 fn virtualWrapHelper(ctx: *Context) anyerror!void {
-    const alloc = ctx.quotationAllocator();
-
     const tv = try helpers.popTypeVal(ctx);
     const vt = tv.virtual_type.?;
 
@@ -327,13 +325,9 @@ fn virtualWrapHelper(ctx: *Context) anyerror!void {
         return error.TypeMismatch;
     }
 
-    const inner = try alloc.create(Value);
-    inner.* = val;
-
-    // `val` was popped (ownership transferred); wrapping it in the tagged
-    // makes the tagged its owner. pushMoved transfers that baseline to the
-    // slot without an extra retain.
-    try ctx.stack.pushMoved(.{ .tagged = .{ .tag = vt, .inner = inner } });
+    // The backing adopts the popped reference, so a dropped wrapper frees the
+    // box and releases the inner at the drop.
+    try helpers.pushOwnedTagged(ctx, vt, val);
 }
 
 /// Trampoline helper ( tagged tv -- value )
@@ -342,21 +336,23 @@ fn virtualUnwrapHelper(ctx: *Context) anyerror!void {
     const vt = tv.virtual_type.?;
 
     const val = try ctx.stack.pop();
+    defer container_backing.releaseValue(val);
+
     switch (val) {
         .tagged => |t| {
             if (t.tag == vt) {
-                // The consumed wrapper owns its inner value; unwrapping
-                // transfers that ownership to the new stack slot, so move
-                // the inner out rather than taking a second reference.
-                try ctx.stack.pushMoved(t.inner.*);
+                // Retain the inner for the new slot; the deferred release
+                // drops the popped wrapper reference. A backed wrapper at
+                // zero releases the inner once in destroy; a null-backed
+                // wrapper's release recurses into the inner, so the
+                // transfer balances either way.
+                try ctx.stack.push(t.inner.*);
             } else {
-                container_backing.releaseValue(val);
                 helpers.setErrorContext(ctx, "expected {s}, got {s}", .{ vt.name, t.tag.name });
                 return error.TypeMismatch;
             }
         },
         else => {
-            container_backing.releaseValue(val);
             helpers.setErrorContext(ctx, "expected {s}, got {s}", .{ vt.name, helpers.valueTypeName(val) });
             return error.TypeMismatch;
         },
@@ -455,8 +451,6 @@ pub fn definePredicate(ctx: *Context, name: []const u8, vtype: *const VirtualTyp
 
 /// Trampoline helper ( field1..fieldN tv -- tagged )
 fn virtualStructWrapHelper(ctx: *Context) anyerror!void {
-    const alloc = ctx.quotationAllocator();
-
     const tv = try helpers.popTypeVal(ctx);
     const vt = tv.virtual_type.?;
 
@@ -466,8 +460,6 @@ fn virtualStructWrapHelper(ctx: *Context) anyerror!void {
     };
     const num_fields = st.fields.len;
 
-    // Only the tagged shell's inner box stays arena-owned; the instance backing follows
-    // createStructInstance's process-lifetime contract.
     const field_values = try ctx.allocator.alloc(Value, num_fields);
     var lowest: usize = num_fields;
     var fields_owned = true;
@@ -484,14 +476,10 @@ fn virtualStructWrapHelper(ctx: *Context) anyerror!void {
 
     const instance = try value_mod.createStructInstance(ctx.allocator, st, field_values);
     fields_owned = false;
-    errdefer container_backing.releaseValue(.{ .struct_instance = instance });
 
-    const inner = try alloc.create(Value);
-    inner.* = .{ .struct_instance = instance };
-
-    // Fields were popped (ownership transferred); the tagged value inherits
-    // that ownership, so move it onto the stack without an extra retain.
-    try ctx.stack.pushMoved(.{ .tagged = .{ .tag = vt, .inner = inner } });
+    // The backing adopts the instance's creation reference, so a dropped
+    // wrapper frees the box and releases the instance at the drop.
+    try helpers.pushOwnedTagged(ctx, vt, .{ .struct_instance = instance });
 }
 
 /// Trampoline helper ( tagged tv -- field1..fieldN )
@@ -579,8 +567,6 @@ fn virtualStructToHashHelper(ctx: *Context) anyerror!void {
 
 /// Trampoline helper ( hash tv -- tagged )
 fn virtualStructHashWrapHelper(ctx: *Context) anyerror!void {
-    const alloc = ctx.quotationAllocator();
-
     const tv = try helpers.popTypeVal(ctx);
     const vt = tv.virtual_type.?;
 
@@ -622,12 +608,8 @@ fn virtualStructHashWrapHelper(ctx: *Context) anyerror!void {
 
     const instance = try value_mod.createStructInstance(ctx.allocator, st, field_values);
     fields_owned = false;
-    errdefer container_backing.releaseValue(.{ .struct_instance = instance });
 
-    const inner = try alloc.create(Value);
-    inner.* = .{ .struct_instance = instance };
-
-    try ctx.stack.pushMoved(.{ .tagged = .{ .tag = vt, .inner = inner } });
+    try helpers.pushOwnedTagged(ctx, vt, .{ .struct_instance = instance });
 }
 
 /// >NAME: ( hash -- tagged ) - hash-based wrap for struct-backed virtuals
@@ -933,12 +915,7 @@ fn typedNthMutDispatch(ctx: *Context) anyerror!void {
 
     // Rewrap: pop raw vec, wrap as tagged, push
     const result_vec = try ctx.stack.pop();
-    const inner = alloc.create(Value) catch |err| {
-        container_backing.releaseValue(result_vec);
-        return err;
-    };
-    inner.* = result_vec;
-    try ctx.stack.pushMoved(.{ .tagged = .{ .tag = vt, .inner = inner } });
+    try helpers.pushOwnedTagged(ctx, vt, result_vec);
 }
 
 /// Native dispatch helper for @set! on typed mutable maps.
@@ -995,18 +972,11 @@ fn typedAtSetMutDispatch(ctx: *Context) anyerror!void {
 
     // Rewrap: pop raw mmap, wrap as tagged, push
     const result_mmap = try ctx.stack.pop();
-    const inner = alloc.create(Value) catch |err| {
-        container_backing.releaseValue(result_mmap);
-        return err;
-    };
-    inner.* = result_mmap;
-    try ctx.stack.pushMoved(.{ .tagged = .{ .tag = vt, .inner = inner } });
+    try helpers.pushOwnedTagged(ctx, vt, result_mmap);
 }
 
 /// Native dispatch helper for @remove! on typed mutable maps.
 fn typedAtRemoveMutDispatch(ctx: *Context) anyerror!void {
-    const alloc = ctx.quotationAllocator();
-
     const tv = try helpers.popTypeVal(ctx);
     const vt = tv.virtual_type.?;
 
@@ -1034,12 +1004,7 @@ fn typedAtRemoveMutDispatch(ctx: *Context) anyerror!void {
 
     // Rewrap: pop raw mmap, wrap as tagged, push
     const result_mmap = try ctx.stack.pop();
-    const inner = alloc.create(Value) catch |err| {
-        container_backing.releaseValue(result_mmap);
-        return err;
-    };
-    inner.* = result_mmap;
-    try ctx.stack.pushMoved(.{ .tagged = .{ .tag = vt, .inner = inner } });
+    try helpers.pushOwnedTagged(ctx, vt, result_mmap);
 }
 
 /// Native dispatch helper for freeze on typed vectors. Delegates to the deep-freeze walker, which
@@ -1070,9 +1035,11 @@ fn virtualParameterizedWrapHelper(ctx: *Context) anyerror!void {
 
     var val = try ctx.stack.pop();
 
-    // Popped with ownership; it flows into the tagged inner on success (on either branch
-    // below), so release only on throw.
-    errdefer container_backing.releaseValue(val);
+    // Popped with ownership; it flows into the wrapper's backing on success (on
+    // either branch below), which consumes it on every path, so release only on
+    // a throw before that handoff.
+    var val_owned = true;
+    errdefer if (val_owned) container_backing.releaseValue(val);
 
     // A parameterized enum base (`result(fixnum,string)`) wraps a tagged variant,
     // not a bare value, so its payload validation substitutes the enum's bound
@@ -1080,6 +1047,7 @@ fn virtualParameterizedWrapHelper(ctx: *Context) anyerror!void {
     if (vt.base_type) |base_tv| {
         if (base_tv.descriptor) |bd| {
             if (bd.kind == .enum_) {
+                val_owned = false;
                 try wrapParameterizedEnumVariant(ctx, vt, base_tv, val);
                 return;
             }
@@ -1288,12 +1256,8 @@ fn virtualParameterizedWrapHelper(ctx: *Context) anyerror!void {
         }
     }
 
-    const inner = try alloc.create(Value);
-    inner.* = val;
-
-    // `val` was popped (ownership transferred); the tagged becomes its
-    // owner via pushMoved without an extra retain.
-    try ctx.stack.pushMoved(.{ .tagged = .{ .tag = vt, .inner = inner } });
+    val_owned = false;
+    try helpers.pushOwnedTagged(ctx, vt, val);
 }
 
 /// Validate and re-tag a variant payload for a parameterized enum instantiation.
@@ -1306,13 +1270,16 @@ fn virtualParameterizedWrapHelper(ctx: *Context) anyerror!void {
 /// concrete type), then the enum-level parameter's position indexes `vt`'s bound
 /// tuple. The field value is validated against the resolved concrete type. On
 /// success the whole variant is re-tagged with the parameterized enum type.
+///
+/// Takes ownership of the caller's reference to `val` on every path.
 fn wrapParameterizedEnumVariant(
     ctx: *Context,
     vt: *const VirtualType,
     enum_tv: *const value_mod.TypeValue,
     val: Value,
 ) anyerror!void {
-    const alloc = ctx.quotationAllocator();
+    var val_owned = true;
+    errdefer if (val_owned) container_backing.releaseValue(val);
 
     const variant: *const VirtualType = switch (val) {
         .tagged => |t| if (t.tag.parent_type == enum_tv)
@@ -1361,11 +1328,8 @@ fn wrapParameterizedEnumVariant(
         }
     }
 
-    const inner = try alloc.create(Value);
-    inner.* = val;
-    // `val` was popped (ownership transferred); the tagged inherits it via
-    // pushMoved without an extra retain.
-    try ctx.stack.pushMoved(.{ .tagged = .{ .tag = vt, .inner = inner } });
+    val_owned = false;
+    try helpers.pushOwnedTagged(ctx, vt, val);
 }
 
 /// >NAME: ( value -- tagged ) - validating wrap for parameterized types

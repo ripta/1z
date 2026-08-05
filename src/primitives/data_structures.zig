@@ -338,7 +338,7 @@ pub fn nativeAtSetMut(ctx: *Context) anyerror!void {
             if (dispatch_mod.dispatchBaseTypeValue(mmap_peek)) |bt| {
                 if (ctx.lookupUnaryDispatch(did, bt.descriptor.?)) |entry| {
                     const len = ctx.stack.items.items.len;
-                    ctx.stack.items.items[len - 3] = mmap_peek.tagged.inner.*;
+                    helpers.unwrapTaggedSlotInPlace(&ctx.stack.items.items[len - 3]);
                     try dispatch_helpers.executeDispatchBody(ctx, entry);
                     return;
                 }
@@ -430,7 +430,7 @@ pub fn nativeAtRemoveMut(ctx: *Context) anyerror!void {
             if (dispatch_mod.dispatchBaseTypeValue(mmap_peek)) |bt| {
                 if (ctx.lookupUnaryDispatch(did, bt.descriptor.?)) |entry| {
                     const len = ctx.stack.items.items.len;
-                    ctx.stack.items.items[len - 2] = mmap_peek.tagged.inner.*;
+                    helpers.unwrapTaggedSlotInPlace(&ctx.stack.items.items[len - 2]);
                     try dispatch_helpers.executeDispatchBody(ctx, entry);
                     return;
                 }

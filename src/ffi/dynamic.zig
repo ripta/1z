@@ -1366,9 +1366,7 @@ fn marshalReturn(ctx: *Context, return_type: FfiType, ret: *const ReturnStorage,
                 helpers.setErrorContext(ctx, "struct return missing byte array buffer", .{});
                 return error.FFICallFailed;
             };
-            const inner = try alloc.create(Value);
-            inner.* = .{ .byte_array = ba };
-            try ctx.stack.push(.{ .tagged = .{ .tag = vtype, .inner = inner } });
+            try helpers.pushOwnedTagged(ctx, vtype, .{ .byte_array = ba });
         },
     }
 }

@@ -710,7 +710,7 @@ fn nativeNthMut(ctx: *Context) anyerror!void {
             if (dispatch_mod.dispatchBaseTypeValue(seq_peek)) |bt| {
                 if (ctx.lookupUnaryDispatch(did, bt.descriptor.?)) |entry| {
                     const len = ctx.stack.items.items.len;
-                    ctx.stack.items.items[len - 3] = seq_peek.tagged.inner.*;
+                    helpers.unwrapTaggedSlotInPlace(&ctx.stack.items.items[len - 3]);
                     try dispatch_helpers.executeDispatchBody(ctx, entry);
                     return;
                 }
@@ -1431,7 +1431,7 @@ pub fn nativeAppendMut(ctx: *Context) anyerror!void {
             if (dispatch_mod.dispatchBaseTypeValue(seq_peek)) |bt| {
                 if (ctx.lookupUnaryDispatch(did, bt.descriptor.?)) |entry| {
                     const len = ctx.stack.items.items.len;
-                    ctx.stack.items.items[len - 2] = seq_peek.tagged.inner.*;
+                    helpers.unwrapTaggedSlotInPlace(&ctx.stack.items.items[len - 2]);
                     try dispatch_helpers.executeDispatchBody(ctx, entry);
                     return;
                 }
@@ -1913,7 +1913,7 @@ fn nativePushMut(ctx: *Context) anyerror!void {
             if (dispatch_mod.dispatchBaseTypeValue(seq_peek)) |bt| {
                 if (ctx.lookupUnaryDispatch(did, bt.descriptor.?)) |entry| {
                     const len = ctx.stack.items.items.len;
-                    ctx.stack.items.items[len - 2] = seq_peek.tagged.inner.*;
+                    helpers.unwrapTaggedSlotInPlace(&ctx.stack.items.items[len - 2]);
                     try dispatch_helpers.executeDispatchBody(ctx, entry);
                     return;
                 }
@@ -1962,7 +1962,7 @@ fn nativePopMut(ctx: *Context) anyerror!void {
             if (dispatch_mod.dispatchBaseTypeValue(seq_peek)) |bt| {
                 if (ctx.lookupUnaryDispatch(did, bt.descriptor.?)) |entry| {
                     const len = ctx.stack.items.items.len;
-                    ctx.stack.items.items[len - 1] = seq_peek.tagged.inner.*;
+                    helpers.unwrapTaggedSlotInPlace(&ctx.stack.items.items[len - 1]);
                     try dispatch_helpers.executeDispatchBody(ctx, entry);
                     return;
                 }
@@ -2013,7 +2013,7 @@ fn nativeUnshiftMut(ctx: *Context) anyerror!void {
             if (dispatch_mod.dispatchBaseTypeValue(seq_peek)) |bt| {
                 if (ctx.lookupUnaryDispatch(did, bt.descriptor.?)) |entry| {
                     const len = ctx.stack.items.items.len;
-                    ctx.stack.items.items[len - 2] = seq_peek.tagged.inner.*;
+                    helpers.unwrapTaggedSlotInPlace(&ctx.stack.items.items[len - 2]);
                     try dispatch_helpers.executeDispatchBody(ctx, entry);
                     return;
                 }
@@ -2062,7 +2062,7 @@ fn nativeShiftMut(ctx: *Context) anyerror!void {
             if (dispatch_mod.dispatchBaseTypeValue(seq_peek)) |bt| {
                 if (ctx.lookupUnaryDispatch(did, bt.descriptor.?)) |entry| {
                     const len = ctx.stack.items.items.len;
-                    ctx.stack.items.items[len - 1] = seq_peek.tagged.inner.*;
+                    helpers.unwrapTaggedSlotInPlace(&ctx.stack.items.items[len - 1]);
                     try dispatch_helpers.executeDispatchBody(ctx, entry);
                     return;
                 }
@@ -2837,23 +2837,9 @@ fn clonePackedToOwned(ctx: *Context, val: Value) !void {
         container_backing.releaseValue(val);
         return err;
     };
-    const new_inner = ctx.quotationAllocator().create(Value) catch {
-        container_backing.releaseValue(.{ .byte_array = owned_ba });
-        container_backing.releaseValue(val);
-        return error.OutOfMemory;
-    };
-    new_inner.* = .{ .byte_array = owned_ba };
     // The original borrowed packed value is consumed.
     container_backing.releaseValue(val);
-    ctx.stack.pushMoved(.{
-        .tagged = .{
-            .tag = tagged.tag,
-            .inner = new_inner,
-        },
-    }) catch |err| {
-        container_backing.releaseValue(.{ .tagged = .{ .tag = tagged.tag, .inner = new_inner } });
-        return err;
-    };
+    try helpers.pushOwnedTagged(ctx, tagged.tag, .{ .byte_array = owned_ba });
 }
 
 /// >byte-array ( value -- value )
@@ -3123,7 +3109,7 @@ fn nativePeek(ctx: *Context) anyerror!void {
             if (dispatch_mod.dispatchBaseTypeValue(seq_peek)) |bt| {
                 if (ctx.lookupUnaryDispatch(did, bt.descriptor.?)) |entry| {
                     const len = ctx.stack.items.items.len;
-                    ctx.stack.items.items[len - 3] = seq_peek.tagged.inner.*;
+                    helpers.unwrapTaggedSlotInPlace(&ctx.stack.items.items[len - 3]);
                     try dispatch_helpers.executeDispatchBody(ctx, entry);
                     return;
                 }
@@ -3165,7 +3151,7 @@ fn nativePoke(ctx: *Context) anyerror!void {
             if (dispatch_mod.dispatchBaseTypeValue(seq_peek)) |bt| {
                 if (ctx.lookupUnaryDispatch(did, bt.descriptor.?)) |entry| {
                     const len = ctx.stack.items.items.len;
-                    ctx.stack.items.items[len - 4] = seq_peek.tagged.inner.*;
+                    helpers.unwrapTaggedSlotInPlace(&ctx.stack.items.items[len - 4]);
                     try dispatch_helpers.executeDispatchBody(ctx, entry);
                     return;
                 }

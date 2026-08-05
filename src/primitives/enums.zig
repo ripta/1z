@@ -119,10 +119,7 @@ fn enumFromSymbolHelper(ctx: *Context) anyerror!void {
             return error.TypeMismatch;
         }
 
-        const alloc = ctx.quotationAllocator();
-        const inner = try alloc.create(Value);
-        inner.* = value_mod.symbolValue(short_name);
-        try ctx.stack.push(.{ .tagged = .{ .tag = vtype, .inner = inner } });
+        try helpers.pushOwnedTagged(ctx, vtype, value_mod.symbolValue(short_name));
         return;
     }
 

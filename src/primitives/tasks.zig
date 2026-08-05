@@ -448,6 +448,7 @@ fn nativeSleep(ctx: *Context) anyerror!void {
     }
 
     const dur = try helpers.popDuration(ctx);
+    container_backing.releaseValue(dur.val);
 
     if (dur.ns < 0) {
         ctx.pending_error_message = "sleep duration must be non-negative";
@@ -467,6 +468,10 @@ fn nativeSleep(ctx: *Context) anyerror!void {
 /// with-timeout ( quot duration -- value )
 fn nativeWithTimeout(ctx: *Context) anyerror!void {
     const dur = try helpers.popDuration(ctx);
+    // The popped duration is embedded in the timer quotation's push_literal
+    // below, whose arena-side instructions are never walked for release, so
+    // the popped reference drops here once the scope has drained.
+    defer container_backing.releaseValue(dur.val);
     // Pop without stamping this context: the body runs in the main child task, so its carried scope
     // is stamped there. `with-timeout` is called once per request in a long-lived serve loop, so
     // stamping the caller would leak one copy per request.
@@ -1213,6 +1218,7 @@ fn nativeFakeClock(ctx: *Context) anyerror!void {
 /// is not in fake mode.
 fn nativeAdvanceClock(ctx: *Context) anyerror!void {
     const dur = try helpers.popDuration(ctx);
+    container_backing.releaseValue(dur.val);
 
     const scheduler = ctx.scheduler orelse {
         ctx.pending_error_message = "advance-clock requires task-scope";
@@ -1610,6 +1616,22 @@ test "deepCopyValue: tagged hash shares the backing through the scan and copies 
 
     container_backing.releaseValue(copied);
     try testing.expectEqual(@as(u32, 1), h.header.refcountValue());
+}
+
+test "deepCopyValue: a backed tagged copies to a null-backed arena shell" {
+    const testing = std.testing;
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    var vt: value_mod.VirtualType = .{ .name = "gauge", .inner_type = "fixnum" };
+    const src = try value_mod.ownedTaggedValue(testing.allocator, &vt, .{ .fixnum = 9 });
+    defer container_backing.releaseValue(src);
+
+    // The copy rides the destination arena and is refcount-inert, so releasing
+    // the backed source cannot reach into it.
+    const copied = try deepCopyValue(src, arena.allocator(), testing.allocator);
+    try testing.expect(copied.tagged.backing == null);
+    try testing.expectEqual(@as(i64, 9), copied.tagged.inner.fixnum);
 }
 
 test "deepCopyValue: a scalar-parameterized tag does not exempt string contents from the scan" {

@@ -244,11 +244,8 @@ fn allocSimdByteArray(alloc: Allocator) !*ByteArray {
 
 fn wrapSimdResult(ctx: *Context, tag: *const VirtualType, out_bytes: [simd_kernels.SIMD_BYTES]u8) !void {
     const out_ba = try allocSimdByteArray(ctx.allocator);
-    errdefer container_backing.releaseValue(.{ .byte_array = out_ba });
     out_ba.items[0..simd_kernels.SIMD_BYTES].* = out_bytes;
-    const inner = try ctx.quotationAllocator().create(Value);
-    inner.* = .{ .byte_array = out_ba };
-    try ctx.stack.pushMoved(.{ .tagged = .{ .tag = tag, .inner = inner } });
+    try helpers.pushOwnedTagged(ctx, tag, .{ .byte_array = out_ba });
 }
 
 // ---------------------------------------------------------------------------

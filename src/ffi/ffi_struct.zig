@@ -423,12 +423,17 @@ fn nativeFfiStructMake(ctx: *Context) anyerror!void {
 
     const num_fields = layout.fields.len;
 
-    // field values
+    // Field values are marshaled into the byte array, not stored, so every
+    // popped reference drops at exit. The defer covers the filled tail even
+    // when a mid-loop pop fails.
     var field_vals = try alloc.alloc(Value, num_fields);
+    var popped: usize = 0;
+    defer container_backing.releaseValues(field_vals[num_fields - popped ..]);
     var i: usize = num_fields;
     while (i > 0) {
         i -= 1;
         field_vals[i] = try ctx.stack.pop();
+        popped += 1;
     }
 
     // zero-initialize byte array allocation of total_size
@@ -468,9 +473,7 @@ fn nativeFfiStructMake(ctx: *Context) anyerror!void {
         }
     }
 
-    const inner = try alloc.create(Value);
-    inner.* = .{ .byte_array = ba };
-    try ctx.stack.push(.{ .tagged = .{ .tag = vtype, .inner = inner } });
+    try helpers.pushOwnedTagged(ctx, vtype, .{ .byte_array = ba });
 }
 
 /// Marshal a single 1z value into a byte buffer at the appropriate size.
@@ -594,6 +597,9 @@ fn nativeFfiStructFieldGet(ctx: *Context) anyerror!void {
     const layout: *const FfiStructLayout = @ptrFromInt(@as(usize, @intCast(layout_fixnum)));
 
     const tagged_val = try ctx.stack.pop();
+    // The reads below borrow the wrapped byte array, so the popped reference
+    // drops only at exit, after the pushed result no longer needs the bytes.
+    defer container_backing.releaseValue(tagged_val);
     const ba = switch (tagged_val) {
         .tagged => |t| switch (t.inner.*) {
             .byte_array => |b| b,
@@ -629,10 +635,7 @@ fn nativeFfiStructFieldGet(ctx: *Context) anyerror!void {
         new_ba.items.len = field.size;
         @memcpy(new_ba.items[0..field.size], buf);
 
-        const inner = try alloc.create(Value);
-        inner.* = .{ .byte_array = new_ba };
-
-        try ctx.stack.push(.{ .tagged = .{ .tag = vtype, .inner = inner } });
+        try helpers.pushOwnedTagged(ctx, vtype, .{ .byte_array = new_ba });
         return;
     }
 
@@ -695,8 +698,12 @@ fn nativeFfiStructFieldSet(ctx: *Context) anyerror!void {
     const layout: *const FfiStructLayout = @ptrFromInt(@as(usize, @intCast(layout_fixnum)));
 
     const new_val = try ctx.stack.pop();
+    defer container_backing.releaseValue(new_val);
 
     const tagged_val = try ctx.stack.pop();
+    // The mutation writes into the wrapped byte array in place, and the final
+    // push takes its own reference, so the popped reference drops at exit.
+    defer container_backing.releaseValue(tagged_val);
     const tagged = switch (tagged_val) {
         .tagged => |t| t,
         else => {

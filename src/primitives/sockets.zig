@@ -136,15 +136,16 @@ fn resolveHostPort(host: []const u8, port: u16) !std.net.Address {
     };
 }
 
-/// Build an addr:tcp or addr:udp tagged value with the given host string and port.
-fn makeInetAddr(ctx: *Context, alloc: std.mem.Allocator, tag: *const VirtualType, host: []const u8, port: i64) !Value {
+/// Build an addr:tcp or addr:udp tagged value with the given host string and port. The
+/// returned value holds the wrapper backing's creation reference.
+fn makeInetAddr(ctx: *Context, tag: *const VirtualType, host: []const u8, port: i64) !Value {
     const struct_type = tag.anon_struct orelse {
         helpers.setErrorContext(ctx, "addr tag '{s}' has no anonymous struct descriptor", .{tag.name});
         return error.TypeMismatch;
     };
 
-    // The host string and the tagged shell's inner box stay arena-owned; the instance
-    // backing follows createStructInstance's process-lifetime contract.
+    // The host string stays arena-owned; the instance backing follows
+    // createStructInstance's process-lifetime contract.
     const fields = try ctx.allocator.alloc(Value, 2);
     var fields_owned = true;
     errdefer if (fields_owned) ctx.allocator.free(fields);
@@ -155,10 +156,7 @@ fn makeInetAddr(ctx: *Context, alloc: std.mem.Allocator, tag: *const VirtualType
     fields_owned = false;
     errdefer container_backing.releaseValue(.{ .struct_instance = instance });
 
-    const inner = try alloc.create(Value);
-    inner.* = .{ .struct_instance = instance };
-
-    return .{ .tagged = .{ .tag = tag, .inner = inner } };
+    return try value_mod.ownedTaggedValue(ctx.allocator, tag, .{ .struct_instance = instance });
 }
 
 /// resolve ( addr -- addrs )
@@ -182,8 +180,11 @@ fn nativeResolve(ctx: *Context) anyerror!void {
                 var ip_buf: [46]u8 = undefined;
                 const ip_str = formatAddress(net_addr, &ip_buf);
                 const host_copy = try alloc.dupe(u8, ip_str);
-                const addr_val = try makeInetAddr(ctx, alloc, addr_info.tag, host_copy, addr_info.port);
-                const arr = try alloc.alloc(Value, 1);
+                const addr_val = try makeInetAddr(ctx, addr_info.tag, host_copy, addr_info.port);
+                const arr = alloc.alloc(Value, 1) catch |e| {
+                    container_backing.releaseValue(addr_val);
+                    return e;
+                };
                 arr[0] = addr_val;
                 try helpers.pushAdoptedArray(ctx, alloc, arr);
                 return;
@@ -191,6 +192,7 @@ fn nativeResolve(ctx: *Context) anyerror!void {
 
             var results: std.ArrayListUnmanaged(Value) = .{};
             defer results.deinit(alloc);
+            errdefer container_backing.releaseValues(results.items);
 
             const list = std.net.getAddressList(alloc, addr_info.host, port) catch {
                 helpers.setErrorContext(ctx, "DNS resolution failed for {s}", .{addr_info.host});
@@ -202,8 +204,11 @@ fn nativeResolve(ctx: *Context) anyerror!void {
                 var ip_buf: [46]u8 = undefined;
                 const ip_str = formatAddress(net_addr, &ip_buf);
                 const host_copy = try alloc.dupe(u8, ip_str);
-                const addr_val = try makeInetAddr(ctx, alloc, addr_info.tag, host_copy, addr_info.port);
-                try results.append(alloc, addr_val);
+                const addr_val = try makeInetAddr(ctx, addr_info.tag, host_copy, addr_info.port);
+                results.append(alloc, addr_val) catch |e| {
+                    container_backing.releaseValue(addr_val);
+                    return e;
+                };
             }
 
             if (results.items.len == 0) {
@@ -212,6 +217,9 @@ fn nativeResolve(ctx: *Context) anyerror!void {
             }
 
             const arr = try alloc.dupe(Value, results.items);
+            // The references now live in `arr`; empty the list so the errdefer
+            // above cannot release them a second time.
+            results.clearRetainingCapacity();
             try helpers.pushAdoptedArray(ctx, alloc, arr);
         },
         .unix => {
@@ -234,13 +242,15 @@ fn nativeResolve(ctx: *Context) anyerror!void {
 
             const instance = try value_mod.createStructInstance(ctx.allocator, struct_type, fields);
             fields_owned = false;
-            errdefer container_backing.releaseValue(.{ .struct_instance = instance });
 
-            const inner = try alloc.create(Value);
-            inner.* = .{ .struct_instance = instance };
-
-            const addr_val = Value{ .tagged = .{ .tag = addr_info.tag, .inner = inner } };
-            const arr = try alloc.alloc(Value, 1);
+            const addr_val = value_mod.ownedTaggedValue(ctx.allocator, addr_info.tag, .{ .struct_instance = instance }) catch |e| {
+                container_backing.releaseValue(.{ .struct_instance = instance });
+                return e;
+            };
+            const arr = alloc.alloc(Value, 1) catch |e| {
+                container_backing.releaseValue(addr_val);
+                return e;
+            };
             arr[0] = addr_val;
             try helpers.pushAdoptedArray(ctx, alloc, arr);
         },

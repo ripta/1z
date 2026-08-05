@@ -1,0 +1,16 @@
+\ Bounded-memory regression for the tagged inner box.
+\
+\ Each virtual-type wrap used to allocate its inner box on the context
+\ arena, which is never reclaimed on the main task, so these loops grew
+\ by roughly 40 bytes per iteration and exhausted the 2 MB cap set in
+\ the `.flags` sidecar partway through. The box now lives in a
+\ refcounted backing on the general allocator and frees at the drop, so
+\ the loops stay flat and print the marker.
+
+gauge: virtual{ fixnum } ;
+
+20000 [ 42 >gauge drop ] times
+
+20000 [ 42 >gauge unmake-gauge drop ] times
+
+"flat" print-line

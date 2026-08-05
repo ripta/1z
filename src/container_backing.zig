@@ -198,14 +198,17 @@ pub const ContainerHeader = struct {
 /// carry a refcounted backing and route through `header.retain()`. Their contents are accounted
 /// only at `destroy`, so we don't recurse into them here.
 ///
-/// The headerless composites (i.e., `tagged`, `error_value`) own a reference to each refcounted
-/// value they embed, so a stack slot holding one must retain those embedded values recursively.
-/// An `error_value` owns the value carried in its `data` field.
+/// The headerless composite `error_value` owns a reference to the value carried in its `data`
+/// field, so a stack slot holding one must retain that embedded value recursively.
 ///
 /// A `struct_instance` is either form. A runtime-created instance carries a header and routes
 /// through it, so the instance is the single owner of its field set and the field setter can
 /// replace a field without unbalancing other copies. A headerless instance uses the recursive
 /// per-copy claims, which is only balanced while the fields never change.
+///
+/// A `tagged` is either form the same way: a backed wrapper routes through its `TaggedBacking`
+/// header, whose destroy releases the inner value once, while a null-backed wrapper is an arena
+/// box whose slot claims the inner value's backings recursively.
 ///
 /// `byte_array` carries a refcounted backing like `vector` and `mutable_map`; its bytes are not Values,
 /// so there is nothing to recurse into.
@@ -225,7 +228,7 @@ pub fn retainValue(v: Value) void {
         .hash => |h| h.header.retain(),
         .set => |s| s.header.retain(),
         .array => |arr| arr.header.retain(),
-        .tagged => |t| retainValue(t.inner.*),
+        .tagged => |t| if (t.backing) |b| b.header.retain() else retainValue(t.inner.*),
         .struct_instance => |si| if (si.header) |h| h.retain() else retainValues(si.fields),
         .error_value => |err| if (err.data) |data| retainValue(data.*),
         .iterator => |it| it.header.retain(),
@@ -252,7 +255,7 @@ pub fn releaseValue(v: Value) void {
         .hash => |h| h.header.release(),
         .set => |s| s.header.release(),
         .array => |arr| arr.header.release(),
-        .tagged => |t| releaseValue(t.inner.*),
+        .tagged => |t| if (t.backing) |b| b.header.release() else releaseValue(t.inner.*),
         .struct_instance => |si| if (si.header) |h| h.release() else releaseValues(si.fields),
         .error_value => |err| if (err.data) |data| releaseValue(data.*),
         .iterator => |it| it.header.release(),
@@ -271,7 +274,7 @@ pub fn releaseValue(v: Value) void {
 pub fn valueCarriesBacking(v: Value) bool {
     return switch (v) {
         .vector, .mutable_map, .byte_array, .hash, .set, .array => true,
-        .tagged => |t| valueCarriesBacking(t.inner.*),
+        .tagged => |t| t.backing != null or valueCarriesBacking(t.inner.*),
         .struct_instance => |si| si.header != null or valuesCarryBacking(si.fields),
         .error_value => |err| if (err.data) |data| valueCarriesBacking(data.*) else false,
         .iterator => true,
@@ -427,7 +430,7 @@ pub fn valueHoldsRefcountedBacking(val: Value) bool {
         .vector, .mutable_map, .byte_array, .hash, .set, .array, .iterator, .closure => true,
         .string, .symbol => |s| s.backing != null,
         .bignum => |b| b.backing != null,
-        .tagged => |t| valueHoldsRefcountedBacking(t.inner.*),
+        .tagged => |t| t.backing != null or valueHoldsRefcountedBacking(t.inner.*),
         .struct_instance => |si| {
             if (si.header != null) return true;
             for (si.fields) |field| {
@@ -786,6 +789,23 @@ test "retainValue/releaseValue: tagged propagates to inner vector" {
     try testing.expectEqual(@as(u32, 1), vec.header.refcountValue());
 
     vec.header.release();
+}
+
+test "retainValue/releaseValue: backed tagged routes through the backing header, not the inner" {
+    const vec = try value_mod.Vector.create(testing.allocator);
+    var dummy_vt: value_mod.VirtualType = undefined;
+    const val = try value_mod.ownedTaggedValue(testing.allocator, &dummy_vt, .{ .vector = vec });
+    try testing.expect(valueHoldsRefcountedBacking(val));
+
+    retainValue(val);
+    try testing.expectEqual(@as(u32, 2), val.tagged.backing.?.header.refcountValue());
+    try testing.expectEqual(@as(u32, 1), vec.header.refcountValue());
+
+    releaseValue(val);
+    try testing.expectEqual(@as(u32, 1), val.tagged.backing.?.header.refcountValue());
+
+    // The last release destroys the backing, which releases the inner vector.
+    releaseValue(val);
 }
 
 test "retainValue/releaseValue: headerless struct_instance propagates to field vector" {

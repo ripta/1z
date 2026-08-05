@@ -300,7 +300,7 @@ pub fn tryDispatchContainerAtDepth(ctx: *Context, word_name: []const u8, depth: 
         if (dispatch_mod.dispatchBaseTypeValue(peeked)) |bt| {
             if (ctx.lookupUnaryDispatch(dispatch_id, bt.descriptor.?)) |entry| {
                 const len = ctx.stack.items.items.len;
-                ctx.stack.items.items[len - (depth + 1)] = peeked.tagged.inner.*;
+                helpers.unwrapTaggedSlotInPlace(&ctx.stack.items.items[len - (depth + 1)]);
                 try executeDispatchBody(ctx, entry);
                 return true;
             }

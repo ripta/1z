@@ -85,6 +85,27 @@ pub fn pushMovedValue(ctx: *Context, val: Value) anyerror!void {
     };
 }
 
+/// Wrap `inner` in an owned tagged backing on `ctx.allocator` and push the wrapper,
+/// adopting the caller's reference to `inner` and transferring the backing's creation
+/// reference to the stack slot. The caller's ownership ends here on every path.
+pub fn pushOwnedTagged(ctx: *Context, tag: *const value_mod.VirtualType, inner: Value) anyerror!void {
+    const val = value_mod.ownedTaggedValue(ctx.allocator, tag, inner) catch |e| {
+        container_backing.releaseValue(inner);
+        return e;
+    };
+    try pushMovedValue(ctx, val);
+}
+
+/// Replace a stack slot holding a tagged wrapper with its inner value, keeping the slot's
+/// ownership balanced. The inner is retained for the slot before the wrapper's reference
+/// drops, since dropping a backed wrapper's last reference releases the inner.
+pub fn unwrapTaggedSlotInPlace(slot: *Value) void {
+    const wrapper = slot.*;
+    slot.* = wrapper.tagged.inner.*;
+    container_backing.retainValue(slot.*);
+    container_backing.releaseValue(wrapper);
+}
+
 /// Demote `big` and push the result, transferring the owned backing's creation reference to
 /// the stack slot when the value stays a bignum. Takes ownership of `big` on every path; the
 /// backing lives on `ctx.allocator` so a dropped result is reclaimed.
@@ -299,6 +320,28 @@ test "valueMatchesType preserves tagged parent and base type checks" {
     try testing.expect(valueMatchesType(&ctx, tagged, &parent_tv));
     try testing.expect(valueMatchesType(&ctx, tagged, array_tv));
     try testing.expect(!valueMatchesType(&ctx, tagged, &base_tv));
+}
+
+test "unwrapTaggedSlotInPlace balances backed and null-backed wrappers" {
+    var dummy_vt: value_mod.VirtualType = undefined;
+
+    // Backed: the rewrite retains the inner for the slot, and dropping the
+    // wrapper's last reference frees the box without touching that retain.
+    const vec = try value_mod.Vector.create(testing.allocator);
+    var slot = try value_mod.ownedTaggedValue(testing.allocator, &dummy_vt, .{ .vector = vec });
+    unwrapTaggedSlotInPlace(&slot);
+    try testing.expect(slot == .vector);
+    try testing.expectEqual(@as(u32, 1), vec.header.refcountValue());
+    container_backing.releaseValue(slot);
+
+    // Null-backed: the slot's reference is the inner's own, so the rewrite is
+    // a plain transfer.
+    const vec2 = try value_mod.Vector.create(testing.allocator);
+    var inner: Value = .{ .vector = vec2 };
+    var slot2 = Value{ .tagged = .{ .tag = &dummy_vt, .inner = &inner } };
+    unwrapTaggedSlotInPlace(&slot2);
+    try testing.expectEqual(@as(u32, 1), vec2.header.refcountValue());
+    container_backing.releaseValue(slot2);
 }
 
 // =============================================================================
