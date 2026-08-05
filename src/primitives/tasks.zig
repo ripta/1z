@@ -861,18 +861,36 @@ const DeepCopyError = Allocator.Error || error{TaskArenaEscape};
 ///
 /// `longlived` is the process-lifetime allocator (`ctx.allocator`); a headered container whose
 /// backing lives on it and whose contents are self-contained is shared by refcount bump instead
-/// of copied. The returned value carries a +1 owning reference either way: a fresh copy's
+/// of copied, as is a heap-backed string, symbol, bignum, or backed tagged wrapper that passes
+/// the same check. The returned value carries a +1 owning reference either way: a fresh copy's
 /// creation reference, or the share's retain.
 pub fn deepCopyValue(val: Value, alloc: Allocator, longlived: Allocator) DeepCopyError!Value {
     return switch (val) {
         .fixnum, .float, .boolean, .unit => val,
         .bignum => |b| blk: {
+            if (container_backing.valueShareable(val, longlived)) {
+                container_backing.retainValue(val);
+                break :blk val;
+            }
+
             const cloned = b.big.cloneWithDifferentAllocator(alloc) catch return error.OutOfMemory;
             break :blk try value_mod.bignumValue(alloc, cloned);
         },
 
-        .string => |s| value_mod.stringValue(try alloc.dupe(u8, s.bytes)),
-        .symbol => |s| value_mod.symbolValue(try alloc.dupe(u8, s.bytes)),
+        .string => |s| blk: {
+            if (container_backing.valueShareable(val, longlived)) {
+                container_backing.retainValue(val);
+                break :blk val;
+            }
+            break :blk value_mod.stringValue(try alloc.dupe(u8, s.bytes));
+        },
+        .symbol => |s| blk: {
+            if (container_backing.valueShareable(val, longlived)) {
+                container_backing.retainValue(val);
+                break :blk val;
+            }
+            break :blk value_mod.symbolValue(try alloc.dupe(u8, s.bytes));
+        },
 
         .array => |arr| blk: {
             if (container_backing.memoShareable(&arr.header, val, longlived)) {
@@ -990,11 +1008,21 @@ pub fn deepCopyValue(val: Value, alloc: Allocator, longlived: Allocator) DeepCop
             break :blk .{ .struct_instance = new_si };
         },
 
-        // The tagged shell is always copied; a wrapped hash/set backing shares through the
-        // recursion's scan-verified memo. Type parameters are not trusted as a share proof: the
-        // parameterized wrap validates array and struct elements but not hash or set contents, so
-        // a tag like hash(fixnum) can sit on a container holding arena-backed strings.
+        // A backed wrapper whose inner value passes the share scan crosses whole by refcount
+        // bump. Otherwise the tagged shell is copied; a wrapped hash/set backing still shares
+        // through the recursion's scan-verified memo.
+        //
+        // Type parameters are not trusted as a share proof: the parameterized wrap validates
+        // array and struct elements but not hash or set contents, so a tag like hash(fixnum)
+        // can sit on a container holding arena-backed strings.
         .tagged => |t| blk: {
+            if (t.backing) |b| {
+                if (container_backing.memoShareable(&b.header, val, longlived)) {
+                    b.header.retain();
+                    break :blk val;
+                }
+            }
+
             const new_inner = try alloc.create(Value);
             new_inner.* = try deepCopyValue(t.inner.*, alloc, longlived);
             break :blk .{ .tagged = .{ .tag = t.tag, .inner = new_inner } };
@@ -1618,7 +1646,7 @@ test "deepCopyValue: tagged hash shares the backing through the scan and copies 
     try testing.expectEqual(@as(u32, 1), h.header.refcountValue());
 }
 
-test "deepCopyValue: a backed tagged copies to a null-backed arena shell" {
+test "deepCopyValue: a backed shareable tagged shares whole by refcount bump" {
     const testing = std.testing;
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
@@ -1627,11 +1655,93 @@ test "deepCopyValue: a backed tagged copies to a null-backed arena shell" {
     const src = try value_mod.ownedTaggedValue(testing.allocator, &vt, .{ .fixnum = 9 });
     defer container_backing.releaseValue(src);
 
+    const copied = try deepCopyValue(src, arena.allocator(), testing.allocator);
+    try testing.expect(copied.tagged.backing == src.tagged.backing);
+    try testing.expectEqual(@as(u32, 2), src.tagged.backing.?.header.refcountValue());
+
+    container_backing.releaseValue(copied);
+    try testing.expectEqual(@as(u32, 1), src.tagged.backing.?.header.refcountValue());
+}
+
+test "deepCopyValue: a backed non-shareable tagged copies to a null-backed arena shell" {
+    const testing = std.testing;
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    var vt: value_mod.VirtualType = .{ .name = "label", .inner_type = "string" };
+    const src = try value_mod.ownedTaggedValue(testing.allocator, &vt, value_mod.stringValue("s"));
+    defer container_backing.releaseValue(src);
+
     // The copy rides the destination arena and is refcount-inert, so releasing
     // the backed source cannot reach into it.
     const copied = try deepCopyValue(src, arena.allocator(), testing.allocator);
     try testing.expect(copied.tagged.backing == null);
-    try testing.expectEqual(@as(i64, 9), copied.tagged.inner.fixnum);
+    try testing.expectEqualStrings("s", copied.tagged.inner.string.bytes);
+}
+
+test "deepCopyValue: shares a heap-backed string by refcount bump" {
+    const testing = std.testing;
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    const src = try value_mod.ownedStringValue(testing.allocator, try testing.allocator.dupe(u8, "shared"));
+    defer container_backing.releaseValue(src);
+
+    const copied = try deepCopyValue(src, arena.allocator(), testing.allocator);
+    try testing.expect(copied.string.backing == src.string.backing);
+    try testing.expect(copied.string.bytes.ptr == src.string.bytes.ptr);
+    try testing.expectEqual(@as(u32, 2), src.string.backing.?.header.refcountValue());
+
+    container_backing.releaseValue(copied);
+    try testing.expectEqual(@as(u32, 1), src.string.backing.?.header.refcountValue());
+}
+
+test "deepCopyValue: a null-backed string is copied, not shared" {
+    const testing = std.testing;
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    const src = value_mod.stringValue("s");
+    const copied = try deepCopyValue(src, arena.allocator(), testing.allocator);
+    try testing.expect(copied.string.backing == null);
+    try testing.expect(copied.string.bytes.ptr != src.string.bytes.ptr);
+    try testing.expectEqualStrings("s", copied.string.bytes);
+}
+
+test "deepCopyValue: shares a heap-backed symbol and bignum by refcount bump" {
+    const testing = std.testing;
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    const sym = try value_mod.ownedSymbolValue(testing.allocator, try testing.allocator.dupe(u8, "sym"));
+    defer container_backing.releaseValue(sym);
+    const sym_copy = try deepCopyValue(sym, arena.allocator(), testing.allocator);
+    try testing.expect(sym_copy.symbol.backing == sym.symbol.backing);
+    container_backing.releaseValue(sym_copy);
+
+    const big = try value_mod.BigIntManaged.initSet(testing.allocator, 12345);
+    const bn = try value_mod.ownedBignumValue(testing.allocator, big);
+    defer container_backing.releaseValue(bn);
+    const bn_copy = try deepCopyValue(bn, arena.allocator(), testing.allocator);
+    try testing.expect(bn_copy.bignum.backing == bn.bignum.backing);
+    try testing.expect(bn_copy.bignum.big == bn.bignum.big);
+    container_backing.releaseValue(bn_copy);
+}
+
+test "deepCopyValue: heap-backed string elements share with the array" {
+    const testing = std.testing;
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    const items = try testing.allocator.alloc(Value, 1);
+    items[0] = try value_mod.ownedStringValue(testing.allocator, try testing.allocator.dupe(u8, "s"));
+    const arr = try value_mod.Array.fromOwnedSlice(testing.allocator, items);
+    defer container_backing.releaseValue(.{ .array = arr });
+
+    const copied = try deepCopyValue(.{ .array = arr }, arena.allocator(), testing.allocator);
+    try testing.expect(copied.array == arr);
+    try testing.expectEqual(@as(u32, 2), arr.header.refcountValue());
+    container_backing.releaseValue(copied);
 }
 
 test "deepCopyValue: a scalar-parameterized tag does not exempt string contents from the scan" {

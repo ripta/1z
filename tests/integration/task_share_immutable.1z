@@ -62,9 +62,10 @@ test-await-shares-frozen-literal: ( -- ) [
   ] task-scope
 ] ;
 
-\ A frozen value holding strings stays on the deep-copy path; the received
-\ values read identically either way.
-test-await-copies-frozen-strings: ( -- ) [
+\ Freeze promotes string leaves onto heap backings, so a frozen value holding
+\ strings shares by refcount bump; the received values read identically either
+\ way.
+test-await-shares-frozen-strings: ( -- ) [
   [
     [ V{ } "a" #push! freeze ] spawn await
     dup #len 1 "awaited frozen string array length" assert=
@@ -78,4 +79,4 @@ test-await-all-shares-hashes
 test-await-shares-array
 test-await-copies-literal-array
 test-await-shares-frozen-literal
-test-await-copies-frozen-strings
+test-await-shares-frozen-strings

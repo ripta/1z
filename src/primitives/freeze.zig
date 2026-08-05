@@ -21,7 +21,7 @@ const valueTypeName = helpers.valueTypeName;
 const TaggedPayload = std.meta.TagPayload(Value, .tagged);
 
 pub const primitives = [_]Primitive{
-    .{ .name = "freeze", .stack_effect = "val -- frozen", .doc = "Deeply convert a value to its immutable counterpart (copy semantics): vectors become arrays, mutable-maps become hashes, byte-arrays become strings, recursively. Scalars and other immutable values pass through.", .func = nativeFreeze, .markers = &.{@constCast(&markers_mod.generic_marker)} },
+    .{ .name = "freeze", .stack_effect = "val -- frozen", .doc = "Deeply convert a value to its immutable counterpart (copy semantics): vectors become arrays, mutable-maps become hashes, byte-arrays become strings, recursively. String and symbol leaves are promoted onto heap backings so the frozen value can be shared across tasks. Scalars and other immutable values pass through.", .func = nativeFreeze, .markers = &.{@constCast(&markers_mod.generic_marker)} },
     .{ .name = "freeze!", .stack_effect = "val -- frozen", .doc = "Like freeze, but consumes the original. A sole-owner vector backing is converted in place; aliased values are copied.", .func = nativeFreezeBang, .markers = &.{@constCast(&markers_mod.generic_marker)} },
 };
 
@@ -104,16 +104,19 @@ fn freezeCopy(ctx: *Context, val: Value) anyerror!FreezeResult {
         .tagged => |t| return freezeTagged(ctx, t, val),
         .error_value => |err| return freezeErrorValue(ctx, err, val),
 
+        .string, .symbol => |s| return freezeStringLeaf(ctx, val, s),
+
         // Immutable leaves and reference types pass through. Reference types keep the treatment
         // deepCopyValue gives them; the share-safety scan classifies containers holding any of
         // these not-shareable, so passing them through cannot leak across a task boundary.
+        //
+        // A null-backed bignum stays a pass-through: promotion covers strings and symbols only,
+        // so a bignum literal in a container keeps the container on the deep-copy path.
         .fixnum,
         .float,
         .boolean,
         .unit,
         .bignum,
-        .string,
-        .symbol,
         .doc_string,
         .quotation,
         .closure,
@@ -173,6 +176,30 @@ fn freezeConsume(ctx: *Context, val: Value) anyerror!FreezeResult {
             return r;
         },
     }
+}
+
+/// Promote a null-backed string or symbol leaf onto a heap backing, so a literal-bearing frozen
+/// container passes the share-safety scan.
+///
+/// An already-backed durable leaf passes through by identity, mirroring the container fast path.
+/// `changed = true` on promotion is what forces an enclosing durable container to rebuild
+/// instead of returning by identity.
+fn freezeStringLeaf(ctx: *Context, val: Value, s: value_mod.StringPayload) anyerror!FreezeResult {
+    if (s.backing) |b| {
+        if (durableBacking(ctx, &b.header)) {
+            container_backing.retainValue(val);
+            return .{ .value = val, .changed = false };
+        }
+    }
+
+    const copy = try ctx.allocator.dupe(u8, s.bytes);
+    errdefer ctx.allocator.free(copy);
+    const promoted = switch (val) {
+        .string => try value_mod.ownedStringValue(ctx.allocator, copy),
+        .symbol => try value_mod.ownedSymbolValue(ctx.allocator, copy),
+        else => unreachable,
+    };
+    return .{ .value = promoted, .changed = true };
 }
 
 /// Freeze each element of a borrowed slice into a fresh slice on the process-lifetime allocator.
@@ -488,7 +515,7 @@ test "freeze recurses into nested vectors" {
     try testing.expectEqual(container_backing.Shareable.shareable, frozen.array.header.shareableState());
 }
 
-test "freeze passes string leaves through and the scan blocks sharing" {
+test "freeze promotes string leaves onto heap backings and the array shares" {
     var ctx = Context.init(testing.allocator);
     defer ctx.deinit();
 
@@ -501,8 +528,46 @@ test "freeze passes string leaves through and the scan blocks sharing" {
     defer container_backing.releaseValue(frozen);
 
     try testing.expect(frozen == .array);
-    try testing.expectEqual(@as([*]const u8, "hello".ptr), frozen.array.items[0].string.bytes.ptr);
-    try testing.expectEqual(container_backing.Shareable.not_shareable, frozen.array.header.shareableState());
+    const leaf = frozen.array.items[0].string;
+    try testing.expect(leaf.backing != null);
+    try testing.expect(leaf.bytes.ptr != @as([*]const u8, "hello".ptr));
+    try testing.expectEqualStrings("hello", leaf.bytes);
+    try testing.expectEqual(container_backing.Shareable.shareable, frozen.array.header.shareableState());
+}
+
+test "freeze promotes a bare string and symbol leaf" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    const frozen_str = try deepFreezeCopy(&ctx, value_mod.stringValue("lit"));
+    defer container_backing.releaseValue(frozen_str);
+    try testing.expect(frozen_str == .string);
+    try testing.expect(frozen_str.string.backing != null);
+    try testing.expectEqualStrings("lit", frozen_str.string.bytes);
+
+    const frozen_sym = try deepFreezeCopy(&ctx, value_mod.symbolValue("sym"));
+    defer container_backing.releaseValue(frozen_sym);
+    try testing.expect(frozen_sym == .symbol);
+    try testing.expect(frozen_sym.symbol.backing != null);
+    try testing.expectEqualStrings("sym", frozen_sym.symbol.bytes);
+}
+
+test "freeze returns a durable array of backed strings by identity" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    const items = try ctx.allocator.alloc(Value, 1);
+    items[0] = try value_mod.ownedStringValue(ctx.allocator, try ctx.allocator.dupe(u8, "owned"));
+    const arr = try value_mod.Array.fromOwnedSlice(ctx.allocator, items);
+    const input: Value = .{ .array = arr };
+    defer container_backing.releaseValue(input);
+
+    const frozen = try deepFreezeCopy(&ctx, input);
+    defer container_backing.releaseValue(frozen);
+
+    try testing.expect(frozen.array == arr);
+    try testing.expectEqual(@as(u32, 2), arr.header.refcountValue());
+    try testing.expectEqual(container_backing.Shareable.shareable, arr.header.shareableState());
 }
 
 test "freeze converts a mutable-map to a hash with frozen values" {
@@ -598,6 +663,24 @@ test "freeze! adopts a sole-owner vector backing in place" {
 
     try testing.expect(frozen == .array);
     try testing.expectEqual(items_ptr, frozen.array.items.ptr);
+    try testing.expectEqual(container_backing.Shareable.shareable, frozen.array.header.shareableState());
+}
+
+test "freeze! in-place vector adoption promotes string elements" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    const vec = try value_mod.Vector.create(ctx.allocator);
+    try vec.list.ensureTotalCapacityPrecise(ctx.allocator, 1);
+    vec.list.appendAssumeCapacity(value_mod.stringValue("lit"));
+    const items_ptr = vec.list.items.ptr;
+
+    const frozen = try deepFreezeConsume(&ctx, .{ .vector = vec });
+    defer container_backing.releaseValue(frozen);
+
+    try testing.expect(frozen == .array);
+    try testing.expectEqual(items_ptr, frozen.array.items.ptr);
+    try testing.expect(frozen.array.items[0].string.backing != null);
     try testing.expectEqual(container_backing.Shareable.shareable, frozen.array.header.shareableState());
 }
 

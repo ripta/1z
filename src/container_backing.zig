@@ -302,14 +302,17 @@ pub fn allocatorEql(a: std.mem.Allocator, b: std.mem.Allocator) bool {
 /// Whether a value tree is safe to share across a task boundary in place of a deep copy.
 ///
 /// Deep immutability alone is not enough: sharing also requires that no reachable byte dies with
-/// the creating task's arena. Strings, symbols, bignums, templates, and stack effects are
-/// immutable but carry arena-backed payloads, so they block sharing. What remains is
-/// payload-in-`Value` scalars plus headered `array`/`hash`/`set` whose backing was created on
-/// `longlived` (the process-lifetime allocator) and whose contents recursively qualify. Hash keys
-/// are byte slices duped onto the backing's own allocator at every insert path, so the backing
-/// identity check covers them. Static-storage arrays live on instruction memory and fail the
-/// backing identity check, so literals cross task boundaries by deep copy until `freeze` can
-/// produce a self-contained value.
+/// the creating task's arena. What qualifies is payload-in-`Value` scalars, the backed leaves
+/// (`string`, `symbol`, `bignum`) whose backing was created on `longlived` (the process-lifetime
+/// allocator), a backed `tagged` whose inner value recursively qualifies, and headered
+/// `array`/`hash`/`set` whose backing passes the same identity check and whose contents
+/// recursively qualify. Hash keys are byte slices duped onto the backing's own allocator at every
+/// insert path, so the backing identity check covers them.
+///
+/// A null backing is never shareable: source text parsed onto a task arena also produces one, and
+/// a `Value` records no allocator identity for it. `freeze` promotes null-backed string and
+/// symbol leaves into heap backings, so a literal-bearing frozen container qualifies.
+/// Static-storage arrays live on instruction memory and fail the backing identity check.
 ///
 /// Coverage can widen later without changing callers.
 pub fn valueShareable(v: Value, longlived: std.mem.Allocator) bool {
@@ -319,6 +322,9 @@ pub fn valueShareable(v: Value, longlived: std.mem.Allocator) bool {
         .boolean,
         .unit,
         => true,
+        .string, .symbol => |s| if (s.backing) |b| allocatorEql(b.header.allocator, longlived) else false,
+        .bignum => |b| if (b.backing) |bk| allocatorEql(bk.header.allocator, longlived) else false,
+        .tagged => |t| if (t.backing) |b| memoShareable(&b.header, v, longlived) else false,
         .array => |arr| memoShareable(&arr.header, v, longlived),
         .hash => |h| memoShareable(&h.header, v, longlived),
         .set => |s| memoShareable(&s.header, v, longlived),
@@ -353,6 +359,13 @@ fn scanShareable(v: Value, longlived: std.mem.Allocator) bool {
                 if (!valueShareable(key, longlived)) break :blk false;
             }
             break :blk true;
+        },
+        // Only a backed wrapper reaches here, through its backing's memo. The inner value is
+        // embedded in the backing and immutable post-construction, so the memo stays sound.
+        .tagged => |t| blk: {
+            const b = t.backing orelse break :blk false;
+            if (!allocatorEql(b.header.allocator, longlived)) break :blk false;
+            break :blk valueShareable(t.inner.*, longlived);
         },
         else => false,
     };
@@ -1066,6 +1079,52 @@ test "valueShareable: mutable containers, composites, and code values do not qua
     var items = [_]Value{.{ .fixnum = 1 }};
     var it = Iterator{ .header = undefined, .kind = .{ .array = .{ .items = &items, .index = 0 } } };
     try testing.expect(!valueShareable(.{ .iterator = &it }, testing.allocator));
+}
+
+test "valueShareable: heap-backed leaves qualify and off-allocator backings do not" {
+    const s = try value_mod.ownedStringValue(testing.allocator, try testing.allocator.dupe(u8, "s"));
+    defer releaseValue(s);
+    try testing.expect(valueShareable(s, testing.allocator));
+
+    const sym = try value_mod.ownedSymbolValue(testing.allocator, try testing.allocator.dupe(u8, "sym"));
+    defer releaseValue(sym);
+    try testing.expect(valueShareable(sym, testing.allocator));
+
+    const big = try value_mod.BigIntManaged.initSet(testing.allocator, 42);
+    const bn = try value_mod.ownedBignumValue(testing.allocator, big);
+    defer releaseValue(bn);
+    try testing.expect(valueShareable(bn, testing.allocator));
+
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const foreign = try value_mod.ownedStringValue(arena.allocator(), try arena.allocator().dupe(u8, "f"));
+    try testing.expect(!valueShareable(foreign, testing.allocator));
+    releaseValue(foreign);
+}
+
+test "valueShareable: backed tagged follows its inner value and memoizes" {
+    var dummy_vt: value_mod.VirtualType = undefined;
+
+    const ok = try value_mod.ownedTaggedValue(testing.allocator, &dummy_vt, .{ .fixnum = 4 });
+    defer releaseValue(ok);
+    try testing.expectEqual(Shareable.unknown, ok.tagged.backing.?.header.shareableState());
+    try testing.expect(valueShareable(ok, testing.allocator));
+    try testing.expectEqual(Shareable.shareable, ok.tagged.backing.?.header.shareableState());
+
+    const blocked = try value_mod.ownedTaggedValue(testing.allocator, &dummy_vt, value_mod.stringValue("s"));
+    defer releaseValue(blocked);
+    try testing.expect(!valueShareable(blocked, testing.allocator));
+    try testing.expectEqual(Shareable.not_shareable, blocked.tagged.backing.?.header.shareableState());
+}
+
+test "valueShareable: heap-backed string elements allow array sharing" {
+    const items = try testing.allocator.alloc(Value, 1);
+    items[0] = try value_mod.ownedStringValue(testing.allocator, try testing.allocator.dupe(u8, "s"));
+    const arr = try value_mod.Array.fromOwnedSlice(testing.allocator, items);
+    defer releaseValue(.{ .array = arr });
+
+    try testing.expect(valueShareable(.{ .array = arr }, testing.allocator));
+    try testing.expectEqual(Shareable.shareable, arr.header.shareableState());
 }
 
 test "valueShareable: owned array of scalars qualifies and memoizes" {
