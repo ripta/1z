@@ -321,9 +321,29 @@ fn nativeEmitCall(ctx: *Context) anyerror!void {
 fn nativeEmitBody(ctx: *Context) anyerror!void {
     // The body escapes into the deferred-emission list.
     const pc = try helpers.popQuotation(ctx);
-    errdefer pc.release();
-    try ctx.parse_time_deferred_emissions.append(ctx.allocator, .{ .body = pc.quot.instructions });
+    var adopted = false;
+    errdefer if (!adopted) pc.release();
+
+    // The splice copies these instructions into the enclosing body, which is registered for
+    // container-literal release in its own right. A closure body's literals are owned by the
+    // closure, which `adoptCallableForTeardown` parks for the context's lifetime, so the copy
+    // is a second owner and needs its own reference.
+    //
+    // A plain quotation owner needs no retain: its body is parsed instruction memory whose
+    // literals already carry exactly one registered release covering the splice.
+    const retained = pc.owner == .closure;
+    if (retained) container_backing.retainInstructionsContainerLiterals(pc.quot.instructions);
+    errdefer if (retained) container_backing.releaseInstructionsContainerLiterals(pc.quot.instructions);
+
+    // Adopt before queueing. Dropping the last reference to a closure owner frees the body, so
+    // an emission recorded first would be left pointing into freed memory if the adoption failed.
     try helpers.adoptCallableForTeardown(ctx, pc);
+    adopted = true;
+
+    try ctx.parse_time_deferred_emissions.append(ctx.allocator, .{ .body = .{
+        .instructions = pc.quot.instructions,
+        .retained_literals = retained,
+    } });
 }
 
 /// parse-literal ( -- value )

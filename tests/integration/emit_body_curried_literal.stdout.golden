@@ -1,0 +1,22 @@
+=== curried container literal ===
+Stack: [ ]
+Stack: [ ]
+PASS: a curried vector splices as a literal
+Stack: [ ]
+=== composed body carrying a container literal ===
+Stack: [ ]
+Stack: [ ]
+PASS: a composed body splices and runs
+Stack: [ ]
+=== curried literal inside a word body ===
+Stack: [ ]
+Stack: [ ]
+PASS: a curried vector splices into a word body
+Stack: [ ]
+=== repeated splices of the same closure body ===
+Stack: [ ]
+Stack: [ ]
+PASS: the second splice is intact
+Stack: [ 3 ]
+PASS: the first splice is intact
+Stack: [ ]

@@ -1,0 +1,38 @@
+\ Test emit-body when the spliced body was built by curry or compose.
+\
+\ Those return closures, which own the container literals in their body. The
+\ splice copies those instructions into the enclosing body, which is registered
+\ for container-literal release in its own right, so the copy needs its own
+\ reference. Without it the literal is released twice and the process aborts at
+\ teardown, after producing correct output.
+
+use "testing" ;
+
+"curried container literal" test-section
+
+\ The curried value is a vector, so the spliced instruction pushes a container.
+splice-vector: parse-time [ V{ 1 2 3 } [ ] curry emit-body ] ;
+
+splice-vector #len 3 "a curried vector splices as a literal" assert=
+
+"composed body carrying a container literal" test-section
+
+splice-composed: parse-time [ [ V{ 4 5 } ] [ #len ] compose [ ] curry emit-body call: emit-call ] ;
+
+splice-composed 2 "a composed body splices and runs" assert=
+
+"curried literal inside a word body" test-section
+
+\ The enclosing body is a word body here rather than the top-level stream, so
+\ the release goes through the dictionary's list instead of the context's.
+vector-len: ( -- n ) [ splice-vector #len ] ;
+
+vector-len 3 "a curried vector splices into a word body" assert=
+
+"repeated splices of the same closure body" test-section
+
+\ Each splice makes its own copy, so each needs its own reference.
+twice: ( -- a b ) [ splice-vector #len splice-vector #len ] ;
+
+twice 3 "the second splice is intact" assert=
+3 "the first splice is intact" assert=

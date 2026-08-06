@@ -120,7 +120,107 @@ test-group-brace-spacing: ( -- ) [
   "group braces need no surrounding whitespace" assert=
 ] ;
 
+"conditionals" test-section
+
+\ The condition every conditional test uses, and the two branch statements.
+ready-cond: ( -- expr-node ) [ "ready" 0 array-n invoke ] ;
+
+test-else-less-conditional: ( -- ) [
+  "if ready() then a()" block-stmts
+  dup #len 1 "a conditional is a single statement" assert=
+  0 #nth ready-cond "a" call-stmt if-stmt
+  "an else-less conditional parses to if-stmt" assert=
+] ;
+
+test-two-branch-conditional: ( -- ) [
+  "if ready() then a() else b()" block-stmts
+  0 #nth ready-cond "a" call-stmt "b" call-stmt if-else-stmt
+  "a conditional with else parses to if-else-stmt" assert=
+] ;
+
+test-comparison-condition: ( -- ) [
+  "if 1 < 2 then a()" block-stmts
+  0 #nth "<" 1 lit 2 lit binop "a" call-stmt if-stmt
+  "a comparison is a legal condition" assert=
+] ;
+
+test-group-branches: ( -- ) [
+  "if ready() then { a(); b() } else { c() }" block-stmts
+  0 #nth
+  ready-cond
+  "a" call-stmt "b" call-stmt 2 array-n group-stmt
+  "c" call-stmt 1 array-n group-stmt
+  if-else-stmt
+  "a group is a legal branch on either side" assert=
+] ;
+
+test-conditional-among-statements: ( -- ) [
+  "a(); if ready() then b(); c()" block-stmts
+  dup #len 3 "a conditional sequences like any other statement" assert=
+  dup 1 #nth if-stmt? "the middle statement is the conditional" assert-true
+  2 #nth "c" call-stmt "the statement after it is c()" assert=
+] ;
+
+test-conditional-trailing-semicolon: ( -- ) [
+  "if ready() then a();" block-stmts
+  "if ready() then a()" block-stmts
+  "a trailing ';' after a conditional parses the same as none" assert=
+] ;
+
+"dangling else" test-section
+
+test-dangling-else-binds-inward: ( -- ) [
+  \ The else belongs to the inner `if`, so the outer one has no else branch.
+  "if ready() then if ready() then a() else b()" block-stmts
+  0 #nth
+  ready-cond
+  ready-cond "a" call-stmt "b" call-stmt if-else-stmt
+  if-stmt
+  "a dangling else binds to the nearest unmatched if" assert=
+] ;
+
+test-group-moves-else-outward: ( -- ) [
+  \ The group closes the inner conditional, so the else binds to the outer one.
+  "if ready() then { if ready() then a() } else b()" block-stmts
+  0 #nth
+  ready-cond
+  ready-cond "a" call-stmt if-stmt 1 array-n group-stmt
+  "b" call-stmt
+  if-else-stmt
+  "a group in the then position moves the else to the outer if" assert=
+] ;
+
+test-else-if-chain: ( -- ) [
+  "if ready() then a() else if ready() then b() else c()" block-stmts
+  0 #nth
+  ready-cond
+  "a" call-stmt
+  ready-cond "b" call-stmt "c" call-stmt if-else-stmt
+  if-else-stmt
+  "an else-if chain nests in the else position" assert=
+] ;
+
 "parse errors" test-section
+
+test-missing-then: ( -- ) [
+  [ "if ready() a()" parse-stmt ] "a conditional without 'then' throws" assert-error
+] ;
+
+test-missing-then-at-end: ( -- ) [
+  [ "if ready()" parse-stmt ] "a conditional ending after its condition throws" assert-error
+] ;
+
+test-missing-then-branch: ( -- ) [
+  [ "if ready() then" parse-stmt ] "a conditional with no then branch throws" assert-error
+] ;
+
+test-missing-else-branch: ( -- ) [
+  [ "if ready() then a() else" parse-stmt ] "a conditional with no else branch throws" assert-error
+] ;
+
+test-stray-else: ( -- ) [
+  [ "else a()" parse-stmt ] "an else with no if throws" assert-error
+] ;
 
 test-missing-separator: ( -- ) [
   [ "a() b()" parse-stmt ] "two statements without a ';' throw" assert-error

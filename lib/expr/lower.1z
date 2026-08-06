@@ -6,7 +6,7 @@ use "expr/ast" ;
 
 private{
   \ Map each binary operator string to the quotation that performs it. The keys
-  \ match pratt/arith's operator table; a node carrying an unknown operator makes
+  \ match expr/parser's EXPR-OPS table; a node carrying an unknown operator makes
   \ @get throw, which is the correct failure.
   (BINOP-QUOTS): const [
     H{
@@ -14,6 +14,11 @@ private{
       "-" [ - ]
       "*" [ * ]
       "/" [ / ]
+      "=" [ = ]
+      "<" [ < ]
+      ">" [ > ]
+      "<=" [ <= ]
+      ">=" [ >= ]
     }
   ] ;
 }

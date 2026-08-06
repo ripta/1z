@@ -8,6 +8,32 @@ private{
   (unsupported-statement): ( -- ) [
     f "this statement kind has no lowering yet" EInvalidArgument make-error throw
   ] ;
+
+  \ Lower a stmt-node to a quotation that runs it, the counterpart of expr/lower's
+  \ `lower`. A branch is a quotation on the stack when `if` and `when` run, so a
+  \ statement nested in one cannot be spliced inline and has to become a value.
+  (lower-stmt): ( node: stmt-node -- quotation ) [
+    match{
+      stmt-node:expr-stmt:  [ lower ]
+      stmt-node:group-stmt: [ [ ] [ (lower-stmt) compose ] #reduce ]
+      stmt-node:if-stmt:    [  \ ( cond then )
+        (lower-stmt) [ ] curry  \ ( cond [ push then ] )
+        swap lower              \ ( [ push then ] [ cond ] )
+        swap compose            \ ( [ cond, push then ] )
+        when: >quotation compose
+      ]
+      stmt-node:if-else-stmt: [  \ ( cond then else )
+        (lower-stmt) [ ] curry   \ ( cond then [ push else ] )
+        swap (lower-stmt)        \ ( cond [ push else ] then-quot )
+        [ ] curry                \ ( cond [ push else ] [ push then ] )
+        swap compose             \ ( cond [ push then, push else ] )
+        swap lower               \ ( [ push then, push else ] [ cond ] )
+        swap compose             \ ( [ cond, push then, push else ] )
+        if: >quotation compose
+      ]
+      stmt-node:while-stmt: [ 2drop (unsupported-statement) ]
+    }
+  ] ;
 }
 
 \\ Emit a stmt-node AST as inline 1z instructions, in source order. An
@@ -17,14 +43,28 @@ private{
 \\ wrapper and emits its members in order, the way expression parens regroup
 \\ without producing a node.
 \\
+\\ A conditional emits its condition inline, then pushes each branch as a
+\\ quotation and calls `when` or `if`, so it runs as the equivalent hand-written
+\\ `cond [ then ] when` or `cond [ then ] [ else ] if`.
+\\
 \\ Emission uses the parse-time emit-body / emit-call splicing inherited from
 \\ emit-expr, so emit-stmt must run inside a parse-time word (stmt{).
 emit-stmt: ( node: stmt-node -- ) [
   match{
-    stmt-node:expr-stmt:    [ emit-expr ]
-    stmt-node:group-stmt:   [ [ emit-stmt ] #each ]
-    stmt-node:if-stmt:      [ 2drop (unsupported-statement) ]
-    stmt-node:if-else-stmt: [ 3drop (unsupported-statement) ]
-    stmt-node:while-stmt:   [ 2drop (unsupported-statement) ]
+    stmt-node:expr-stmt:  [ emit-expr ]
+    stmt-node:group-stmt: [ [ emit-stmt ] #each ]
+    stmt-node:if-stmt:    [  \ ( cond then )
+      swap emit-expr
+      (lower-stmt) [ ] curry emit-body
+      when: emit-call
+    ]
+    stmt-node:if-else-stmt: [  \ ( cond then else )
+      -rot> swap               \ ( else then cond )
+      emit-expr
+      (lower-stmt) [ ] curry emit-body
+      (lower-stmt) [ ] curry emit-body
+      if: emit-call
+    ]
+    stmt-node:while-stmt: [ 2drop (unsupported-statement) ]
   }
 ] ;

@@ -524,7 +524,19 @@ pub const DeferredEmission = union(enum) {
     /// A word name to emit as a `call_word` / `call_word_direct` instruction.
     call: []const u8,
     /// A quotation's instructions to splice inline into the parse stream.
-    body: []const Instruction,
+    body: SplicedBody,
+
+    /// A quotation body queued for splicing, and whether `emit-body` took a reference on its
+    /// container literals on the splice's behalf.
+    ///
+    /// It does so when the source is a closure, which owns those literals and outlives the
+    /// emission. The splice hands that reference to the enclosing body's own registered release.
+    /// Every other drain outcome -- a rollback that discards the emission, or the array context
+    /// that runs the body instead of copying it -- gives the reference back itself.
+    pub const SplicedBody = struct {
+        instructions: []const Instruction,
+        retained_literals: bool,
+    };
 };
 
 /// The Context holds all interpreter state.

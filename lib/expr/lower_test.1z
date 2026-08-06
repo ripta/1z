@@ -37,6 +37,38 @@ test-div-lowers: ( -- ) [
   20 4 / "division parity" assert=
 ] ;
 
+"comparison lowering" test-section
+
+test-equality-lowers: ( -- ) [
+  "=" 3 lit 3 lit binop lower call
+  3 3 = "equality parity" assert=
+] ;
+
+test-less-than-lowers: ( -- ) [
+  "<" 1 lit 2 lit binop lower call
+  1 2 < "less-than parity" assert=
+] ;
+
+test-greater-than-lowers: ( -- ) [
+  ">" 1 lit 2 lit binop lower call
+  1 2 > "greater-than parity" assert=
+] ;
+
+test-less-or-equal-lowers: ( -- ) [
+  "<=" 5 lit 5 lit binop lower call
+  5 5 <= "less-or-equal parity" assert=
+] ;
+
+test-greater-or-equal-lowers: ( -- ) [
+  ">=" 4 lit 9 lit binop lower call
+  4 9 >= "greater-or-equal parity" assert=
+] ;
+
+test-comparison-over-arithmetic-lowers: ( -- ) [
+  "1 + 2 < 4" parse-expr lower call
+  1 2 + 4 < "comparison over arithmetic parity" assert=
+] ;
+
 "nested lowering" test-section
 
 test-nested-binop-lowers: ( -- ) [

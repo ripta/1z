@@ -6,6 +6,10 @@
 \ expressions inside it are parsed by expr/parser's Pratt parser over that same
 \ stream, so a statement and the expressions it carries share one position.
 \
+\ `if`, `then`, and `else` are keywords of the statement grammar, not calls. A
+\ leading `if` in statement position always opens a conditional, so a hosted
+\ call by that name is unreachable there.
+\
 \ Reading a block's raw tokens off the 1z tokenizer lives here too, because
 \ finding the brace that closes the block requires knowing that `{` and `}`
 \ nest.
@@ -27,7 +31,7 @@ STMT-LEXER: const [
   skip-whitespace-rule #push!
   number-rule #push!
   word-rule #push!
-  { "+" "-" "*" "/" "(" ")" "," ";" "{" "}" } symbols-rule #push!
+  { "+" "-" "*" "/" "(" ")" "," "=" "<" ">" "<=" ">=" ";" "{" "}" } symbols-rule #push!
   >array <lexer>
 ] ;
 
@@ -82,15 +86,77 @@ private{
     ] if
   ] ;
 
-  \ Parse a single statement. A leading '{' opens a group; anything else is an
-  \ expression, parsed by the shared Pratt parser and evaluated for its effect.
-  (parse-one-stmt): ( peekable -- stmt-node ) [
+  \ True when the token is the given keyword. The end of input never is.
+  (keyword-token?): ( keyword: string token/f -- ? ) [
+    dup f = [ 2drop f ] [ value>> = ] if
+  ] ;
+
+  \ Consume the next token, requiring it to be `keyword`.
+  (expect-keyword): ( peekable keyword: string -- ) [
+    swap next-token
+    \ keyword token/f
+    2dup (keyword-token?) [
+      2drop
+    ] [
+      \ keyword token
+      swap "expected '" swap #append "'" #append
+      swap (unexpected-token)
+    ] if
+  ] ;
+
+  \ Consume a following 'else', reporting whether there was one. A token that is
+  \ not 'else' is left for the caller, and so is the end of input.
+  (take-else?): ( peekable -- ? ) [
+    dup peek-token
+    dup f = [
+      2drop f
+    ] [
+      value>> "else" = [
+        next-token drop t
+      ] [
+        drop f
+      ] if
+    ] if
+  ] ;
+
+  \ Parse a conditional. The leading 'if' has been peeked but not consumed.
+  \
+  \ The then-branch is parsed before the 'else' is looked for, so an inner
+  \ conditional in that position takes a following 'else' for itself: a dangling
+  \ 'else' binds to the nearest unmatched 'if'. A '{ }' group in the then
+  \ position ends at its own '}', which leaves the 'else' to this call instead.
+  (parse-if): stack-recursive ( peekable -- stmt-node ) [
+    dup next-token drop
+    dup <expr-pratt> 0 parse-pratt
+    \ peekable cond
+    over "then" (expect-keyword)
+    over (parse-one-stmt)
+    \ peekable cond then
+    2 pick-n (take-else?) [
+      2 pick-n (parse-one-stmt)
+      if-else-stmt
+    ] [
+      if-stmt
+    ] if
+    nip
+  ] ;
+
+  \ Parse a single statement. A leading '{' opens a group and a leading 'if'
+  \ opens a conditional; anything else is an expression, parsed by the shared
+  \ Pratt parser and evaluated for its effect.
+  (parse-one-stmt): stack-recursive ( peekable -- stmt-node ) [
     dup peek-token
     dup f = [ "expected statement" swap (unexpected-token) ] when
-    value>> "{" = [
-      (parse-brace-group)
+    value>>
+    \ peekable value
+    dup "{" = [
+      drop (parse-brace-group)
     ] [
-      <expr-pratt> 0 parse-pratt expr-stmt
+      "if" = [
+        (parse-if)
+      ] [
+        <expr-pratt> 0 parse-pratt expr-stmt
+      ] if
     ] if
   ] ;
 

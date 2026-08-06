@@ -109,6 +109,52 @@ test-subtraction-left-assoc: ( -- ) [
   "-" "10 - 3 - 2: outer op is -" assert=
 ] ;
 
+"comparison operators" test-section
+
+test-less-than: ( -- ) [
+  "1 < 2" parse-expr binop-parts  \ op left right
+  lit-value 2 "1 < 2: right is 2" assert=
+  lit-value 1 "1 < 2: left is 1" assert=
+  "<" "1 < 2: operator is <" assert=
+] ;
+
+test-two-character-comparison: ( -- ) [
+  \ The lexer tries `<=` before `<`, so this is one operator, not two tokens.
+  "1 <= 2" parse-expr binop-parts  \ op left right
+  lit-value 2 "1 <= 2: right is 2" assert=
+  lit-value 1 "1 <= 2: left is 1" assert=
+  "<=" "1 <= 2: operator is <=" assert=
+] ;
+
+test-comparison-binds-under-addition: ( -- ) [
+  "1 + 2 < 4" parse-expr binop-parts  \ op left right
+  lit-value 4 "1 + 2 < 4: right is 4" assert=
+  binop-parts  \ op iop il ir
+  lit-value 2 "1 + 2 < 4: nested right is 2" assert=
+  lit-value 1 "1 + 2 < 4: nested left is 1" assert=
+  "+" "1 + 2 < 4: nested op is +" assert=
+  "<" "1 + 2 < 4: outer op is <" assert=
+] ;
+
+test-comparison-right-side-groups-first: ( -- ) [
+  "1 < 2 + 3" parse-expr binop-parts  \ op left right
+  binop-parts                         \ op left iop il ir
+  lit-value 3 "1 < 2 + 3: nested right is 3" assert=
+  lit-value 2 "1 < 2 + 3: nested left is 2" assert=
+  "+" "1 < 2 + 3: nested op is +" assert=
+  lit-value 1 "1 < 2 + 3: outer left is 1" assert=
+  "<" "1 < 2 + 3: outer op is <" assert=
+] ;
+
+test-equality-over-calls: ( -- ) [
+  "f(1) = 2" parse-expr binop-parts  \ op left right
+  lit-value 2 "f(1) = 2: right is 2" assert=
+  invoke-parts  \ op callee args
+  #len 1 "f(1) = 2: left call has one argument" assert=
+  "f" "f(1) = 2: left callee is f" assert=
+  "=" "f(1) = 2: operator is =" assert=
+] ;
+
 "parentheses" test-section
 
 test-parens-override-precedence: ( -- ) [

@@ -3,10 +3,11 @@
 \ Turns an expression source string into the nominal expr-node AST defined in
 \ expr/ast. Lexing uses a punctuation-splitting sub-lexer (EXPR-LEXER /
 \ tokenize-expr) exposed for reuse by hosted-language header parsers; parsing
-\ uses the Pratt core from lib/pratt with the arithmetic operator set from
-\ lib/pratt/arith. The handlers build AST nodes rather than evaluating, and the
-\ selective import deliberately omits pratt's own `parse-expr` so this module
-\ can own that name for its string-to-AST entry word.
+\ uses the Pratt core from lib/pratt over EXPR-OPS, which extends
+\ lib/pratt/arith's arithmetic operator set with comparisons. The handlers build
+\ AST nodes rather than evaluating, and the selective import deliberately omits
+\ pratt's own `parse-expr` so this module can own that name for its
+\ string-to-AST entry word.
 
 use "lexer" ;
 use "conversions" ;
@@ -16,13 +17,28 @@ use { ARITHMETIC-OPS: UNARY-MINUS-BP: <pratt>: parse-pratt: parse-right: next-to
 
 \\ The lexer that splits an expression body into number and punctuation tokens,
 \\ skipping whitespace. Exposed for reuse by hosted-language header parsers.
+\\
+\\ `symbols-rule` tries its candidates longest-first, so `<=` and `>=` win over
+\\ the one-character comparisons they start with.
 EXPR-LEXER: const [
   V{ }
   skip-whitespace-rule #push!
   number-rule #push!
   word-rule #push!
-  { "+" "-" "*" "/" "(" ")" "," } symbols-rule #push!
+  { "+" "-" "*" "/" "(" ")" "," "=" "<" ">" "<=" ">=" } symbols-rule #push!
   >array <lexer>
+] ;
+
+\\ The operator table for hosted expressions: the arithmetic operators, plus the
+\\ comparisons a statement condition is written with. The comparisons bind
+\\ looser than `+` and `-`, so `1 + 2 < 4` groups as `(1 + 2) < 4`.
+EXPR-OPS: const [
+  ARITHMETIC-OPS
+  "=" H{ left-bp: 5 right-bp: 6 } @set
+  "<" H{ left-bp: 5 right-bp: 6 } @set
+  ">" H{ left-bp: 5 right-bp: 6 } @set
+  "<=" H{ left-bp: 5 right-bp: 6 } @set
+  ">=" H{ left-bp: 5 right-bp: 6 } @set
 ] ;
 
 \\ Tokenize an expression source string into a lazy token iterator.
@@ -185,11 +201,11 @@ private{
   ] ;
 }
 
-\\ Construct the Pratt parser that builds expr-node ASTs for arithmetic
-\\ expressions: `+`, `-`, `*`, `/`, parentheses, and unary minus.
+\\ Construct the Pratt parser that builds expr-node ASTs for hosted expressions:
+\\ `+`, `-`, `*`, `/`, the comparisons, parentheses, and unary minus.
 <expr-pratt>: ( -- parser ) [
   H{
-    operators: ARITHMETIC-OPS
+    operators: EXPR-OPS
     prefix:    [ (expr-prefix) ]
     infix:     [ (expr-infix) ]
   } <pratt>

@@ -19,6 +19,7 @@ const StackEffect = stack_effect_mod.StackEffect;
 const StackEffectParam = stack_effect_mod.StackEffectParam;
 
 const Context = @import("context.zig").Context;
+const DeferredEmission = @import("context.zig").DeferredEmission;
 const container_backing = @import("container_backing.zig");
 const markers_mod = @import("primitives/markers.zig");
 const Marker = value_mod.Marker;
@@ -126,7 +127,21 @@ fn rollbackParseTimeExecution(c: *Context, pre_depth: usize, pre_emissions: usiz
     while (c.stack.depth() > pre_depth) {
         c.stack.popAndRelease() catch break;
     }
+    releaseRetainedEmissionLiterals(c.parse_time_deferred_emissions.items[pre_emissions..]);
     c.parse_time_deferred_emissions.shrinkRetainingCapacity(pre_emissions);
+}
+
+/// Give back the references `emit-body` took on behalf of a splice that will not happen, or that
+/// has already handed its copy to the enclosing body.
+fn releaseRetainedEmissionLiterals(emissions: []const DeferredEmission) void {
+    for (emissions) |emission| {
+        switch (emission) {
+            .body => |body| {
+                if (body.retained_literals) container_backing.releaseInstructionsContainerLiterals(body.instructions);
+            },
+            .call => {},
+        }
+    }
 }
 
 /// Execute a parse-time word during parsing:
@@ -376,7 +391,9 @@ fn executeParseTimeWord(
                 }
             },
             .body => |body| {
-                for (body) |instr| {
+                // Any reference `emit-body` took follows the copy: the enclosing body is
+                // registered for container-literal release once this parse completes.
+                for (body.instructions) |instr| {
                     instructions.append(allocator, instr) catch return ParseError.OutOfMemory;
                 }
             },
@@ -1256,12 +1273,15 @@ fn executeParseTimeWordForArray(
                     }
                 }
             },
-            .body => |body| c.executeQuotationWithFrame(.{ .instructions = body }) catch |err| {
+            .body => |body| c.executeQuotationWithFrame(.{ .instructions = body.instructions }) catch |err| {
                 rollbackParseTimeExecution(c, pre_depth, pre_emissions);
                 return handleParseTimeError(c, err);
             },
         }
     }
+    // No copy of a body survives here, so a reference `emit-body` took has no later owner. An
+    // error above returns through the rollback, which releases the same range.
+    releaseRetainedEmissionLiterals(c.parse_time_deferred_emissions.items[pre_emissions..]);
     c.parse_time_deferred_emissions.clearRetainingCapacity();
 
     const post_depth = c.stack.depth();

@@ -10,6 +10,11 @@ add1: ( n -- n )   [ 1 + ] ;
 dbl:  ( n -- n )   [ 2 * ] ;
 sub2: ( a b -- c ) [ - ] ;
 
+\ Conditions. A hosted condition is an ordinary expression, so a call returning
+\ a boolean is the smallest one that exercises both outcomes.
+yes: ( -- ? ) [ t ] ;
+no: ( -- ? ) [ f ] ;
+
 "single statement" test-section
 
 test-single-call: ( -- ) [
@@ -67,6 +72,80 @@ test-group-brace-spacing: ( -- ) [
   stmt{ {add1(1); dbl(3)} }
   6 "an unspaced group brace lowers the same" assert=
   2 "and its first member still ran first" assert=
+] ;
+
+"else-less conditional" test-section
+
+test-when-taken: ( -- ) [
+  stmt{ if yes() then add1(1) }
+  yes [ 1 add1 ] when "a taken else-less conditional matches its `when`" assert=
+] ;
+
+test-when-not-taken: ( -- ) [
+  \ The branch runs for its effect, so an untaken one leaves the stack alone.
+  7 stmt{ if no() then add1(1) }
+  7 "an untaken else-less conditional emits nothing" assert=
+] ;
+
+test-when-comparison-condition: ( -- ) [
+  stmt{ if 1 + 2 < 4 then add1(1) }
+  1 2 + 4 < [ 1 add1 ] when "a comparison condition matches its `when`" assert=
+] ;
+
+"two-branch conditional" test-section
+
+test-if-taken: ( -- ) [
+  stmt{ if yes() then add1(1) else dbl(3) }
+  yes [ 1 add1 ] [ 3 dbl ] if "a taken conditional matches its `if`" assert=
+] ;
+
+test-if-not-taken: ( -- ) [
+  stmt{ if no() then add1(1) else dbl(3) }
+  no [ 1 add1 ] [ 3 dbl ] if "an untaken conditional matches its `if`" assert=
+] ;
+
+"group branches" test-section
+
+test-group-branch-runs-in-order: ( -- ) [
+  stmt{ if yes() then { add1(1); dbl(3) } else dbl(0) }
+  6 "the group branch's second statement is on top" assert=
+  2 "its first statement is beneath it" assert=
+] ;
+
+test-group-branch-not-taken: ( -- ) [
+  stmt{ if no() then { add1(1); dbl(3) } else dbl(4) }
+  8 "an untaken group branch runs nothing" assert=
+] ;
+
+"nesting" test-section
+
+test-dangling-else-binds-inward: ( -- ) [
+  \ The else belongs to the inner conditional, so this is `when` around `if`.
+  stmt{ if yes() then if no() then add1(1) else dbl(3) }
+  yes [ no [ 1 add1 ] [ 3 dbl ] if ] when
+  "a dangling else lowers as the inner conditional's" assert=
+] ;
+
+test-group-moves-else-outward: ( -- ) [
+  \ The group closes the inner conditional, so this is `if` around `when`.
+  stmt{ if no() then { if yes() then add1(1) } else dbl(3) }
+  no [ yes [ 1 add1 ] when ] [ 3 dbl ] if
+  "a group in the then position lowers the else to the outer conditional" assert=
+] ;
+
+test-else-if-chain: ( -- ) [
+  stmt{ if no() then add1(1) else if yes() then dbl(3) else dbl(4) }
+  no [ 1 add1 ] [ yes [ 3 dbl ] [ 4 dbl ] if ] if
+  "an else-if chain matches its nested `if`" assert=
+] ;
+
+"sequencing with conditionals" test-section
+
+test-conditional-among-statements: ( -- ) [
+  stmt{ add1(1); if yes() then dbl(3); add1(9) }
+  10 "the statement after a conditional runs after it" assert=
+  6 "the conditional's branch value is beneath it" assert=
+  2 "the statement before it ran first" assert=
 ] ;
 
 "multiline input" test-section
