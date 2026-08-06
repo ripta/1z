@@ -1,0 +1,72 @@
+\ lib/expr/stmt/ast.1z: AST for the hosted statement language
+\
+\ The hosted statement AST, layered on the expression AST in expr/ast.
+\
+\ Each node kind is a struct payload gathered under the stmt-node enum, so lowering dispatches
+\ with `match{` gains exhaustiveness. Statements are a separate enum from expressions: a
+\ statement carries expressions, but an expression never carries a statement.
+
+use "expr/ast" ;
+
+\\ An expression statement node, carrying the expression evaluated for its effect.
+expr-stmt-node: struct{ expr } ;
+
+\\ A statement group node, carrying an ordered list of statement nodes. Both a
+\\ `stmt{ }` block and a brace-delimited `{ }` branch group are this node.
+group-stmt-node: struct{ stmts } ;
+
+\\ An else-less conditional node: a condition expression and the statement run
+\\ when it is truthy.
+if-stmt-node: struct{ cond then } ;
+
+\\ A two-branch conditional node: a condition expression and the statements run
+\\ when it is truthy and when it is falsy.
+if-else-stmt-node: struct{ cond then else } ;
+
+\\ A loop node: a condition expression re-evaluated each iteration, and the
+\\ statement run for as long as it holds.
+while-stmt-node: struct{ cond body } ;
+
+\\ The tagged union of statement node kinds. Dispatch over it with `match{`,
+\\ which forces every site to handle each variant or fail at parse time.
+\\
+\\ A conditional is two variants rather than one variant with an optional else,
+\\ because the two lower to different words: an else-less conditional lowers to
+\\ `when` and a two-branch one lowers to `if`.
+stmt-node: enum{
+  expr-stmt:    expr-stmt-node
+  group-stmt:   group-stmt-node
+  if-stmt:      if-stmt-node
+  if-else-stmt: if-else-stmt-node
+  while-stmt:   while-stmt-node
+} ;
+
+\\ Wrap an expression node as an expression statement.
+expr-stmt: ( expr: expr-node -- stmt-node ) [ >stmt-node:expr-stmt ] ;
+
+\\ Build a statement group from an ordered list of statement nodes.
+group-stmt: ( stmts -- stmt-node ) [ >stmt-node:group-stmt ] ;
+
+\\ Build an else-less conditional from a condition expression and its then branch.
+if-stmt: ( cond: expr-node then: stmt-node -- stmt-node ) [ make-stmt-node:if-stmt ] ;
+
+\\ Build a two-branch conditional from a condition expression and its branches.
+if-else-stmt: ( cond: expr-node then: stmt-node else: stmt-node -- stmt-node ) [ make-stmt-node:if-else-stmt ] ;
+
+\\ Build a loop from a condition expression and its body statement.
+while-stmt: ( cond: expr-node body: stmt-node -- stmt-node ) [ make-stmt-node:while-stmt ] ;
+
+\\ True when the node is an expression statement; returns f for any other value.
+expr-stmt?: ( stmt-node -- bool ) [ stmt-node:expr-stmt? ] ;
+
+\\ True when the node is a statement group; returns f for any other value.
+group-stmt?: ( stmt-node -- bool ) [ stmt-node:group-stmt? ] ;
+
+\\ True when the node is an else-less conditional; returns f for any other value.
+if-stmt?: ( stmt-node -- bool ) [ stmt-node:if-stmt? ] ;
+
+\\ True when the node is a two-branch conditional; returns f for any other value.
+if-else-stmt?: ( stmt-node -- bool ) [ stmt-node:if-else-stmt? ] ;
+
+\\ True when the node is a loop; returns f for any other value.
+while-stmt?: ( stmt-node -- bool ) [ stmt-node:while-stmt? ] ;

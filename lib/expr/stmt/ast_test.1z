@@ -1,0 +1,218 @@
+\ Unit tests for lib/expr/stmt/ast.1z.
+
+use "testing" ;
+use "expr/ast" ;
+use "expr/stmt/ast" ;
+
+\\ Extract an expression statement's expression node, throwing on any other kind.
+unwrap-expr-stmt: ( stmt-node -- expr-node ) [
+  match{
+    stmt-node:expr-stmt:    [ ]
+    stmt-node:group-stmt:   [ drop f "expected expr-stmt, got group-stmt" throw ]
+    stmt-node:if-stmt:      [ drop drop f "expected expr-stmt, got if-stmt" throw ]
+    stmt-node:if-else-stmt: [ drop drop drop f "expected expr-stmt, got if-else-stmt" throw ]
+    stmt-node:while-stmt:   [ drop drop f "expected expr-stmt, got while-stmt" throw ]
+  }
+] ;
+
+\\ Extract a statement group's statement list, throwing on any other kind.
+unwrap-group-stmt: ( stmt-node -- stmts ) [
+  match{
+    stmt-node:expr-stmt:    [ drop f "expected group-stmt, got expr-stmt" throw ]
+    stmt-node:group-stmt:   [ ]
+    stmt-node:if-stmt:      [ drop drop f "expected group-stmt, got if-stmt" throw ]
+    stmt-node:if-else-stmt: [ drop drop drop f "expected group-stmt, got if-else-stmt" throw ]
+    stmt-node:while-stmt:   [ drop drop f "expected group-stmt, got while-stmt" throw ]
+  }
+] ;
+
+\ A truthy zero-argument call, standing in for a statement condition.
+ready-call: ( -- expr-node ) [ "ready" 0 array-n invoke ] ;
+
+\ A two-statement group, used across the tests.
+two-stmt-group: ( -- stmt-node ) [ 1 lit expr-stmt 2 lit expr-stmt 2 array-n group-stmt ] ;
+
+"node predicates" test-section
+
+test-expr-stmt-predicate: ( -- ) [
+  42 lit expr-stmt expr-stmt? "expr-stmt node is an expr-stmt" assert-true
+  42 lit expr-stmt group-stmt? "expr-stmt node is not a group-stmt" assert-false
+  42 lit expr-stmt if-stmt? "expr-stmt node is not an if-stmt" assert-false
+  42 lit expr-stmt if-else-stmt? "expr-stmt node is not an if-else-stmt" assert-false
+  42 lit expr-stmt while-stmt? "expr-stmt node is not a while-stmt" assert-false
+] ;
+
+test-group-stmt-predicate: ( -- ) [
+  two-stmt-group group-stmt? "group-stmt node is a group-stmt" assert-true
+  two-stmt-group expr-stmt? "group-stmt node is not an expr-stmt" assert-false
+  two-stmt-group if-stmt? "group-stmt node is not an if-stmt" assert-false
+  two-stmt-group if-else-stmt? "group-stmt node is not an if-else-stmt" assert-false
+  two-stmt-group while-stmt? "group-stmt node is not a while-stmt" assert-false
+] ;
+
+test-if-stmt-predicate: ( -- ) [
+  ready-call 1 lit expr-stmt if-stmt if-stmt? "if-stmt node is an if-stmt" assert-true
+  ready-call 1 lit expr-stmt if-stmt expr-stmt? "if-stmt node is not an expr-stmt" assert-false
+  ready-call 1 lit expr-stmt if-stmt group-stmt? "if-stmt node is not a group-stmt" assert-false
+  ready-call 1 lit expr-stmt if-stmt if-else-stmt? "if-stmt node is not an if-else-stmt" assert-false
+  ready-call 1 lit expr-stmt if-stmt while-stmt? "if-stmt node is not a while-stmt" assert-false
+] ;
+
+test-if-else-stmt-predicate: ( -- ) [
+  ready-call 1 lit expr-stmt 2 lit expr-stmt if-else-stmt
+  if-else-stmt? "if-else-stmt node is an if-else-stmt" assert-true
+  ready-call 1 lit expr-stmt 2 lit expr-stmt if-else-stmt
+  if-stmt? "if-else-stmt node is not an if-stmt" assert-false
+  ready-call 1 lit expr-stmt 2 lit expr-stmt if-else-stmt
+  expr-stmt? "if-else-stmt node is not an expr-stmt" assert-false
+  ready-call 1 lit expr-stmt 2 lit expr-stmt if-else-stmt
+  group-stmt? "if-else-stmt node is not a group-stmt" assert-false
+  ready-call 1 lit expr-stmt 2 lit expr-stmt if-else-stmt
+  while-stmt? "if-else-stmt node is not a while-stmt" assert-false
+] ;
+
+test-while-stmt-predicate: ( -- ) [
+  ready-call 1 lit expr-stmt while-stmt while-stmt? "while-stmt node is a while-stmt" assert-true
+  ready-call 1 lit expr-stmt while-stmt expr-stmt? "while-stmt node is not an expr-stmt" assert-false
+  ready-call 1 lit expr-stmt while-stmt group-stmt? "while-stmt node is not a group-stmt" assert-false
+  ready-call 1 lit expr-stmt while-stmt if-stmt? "while-stmt node is not an if-stmt" assert-false
+  ready-call 1 lit expr-stmt while-stmt if-else-stmt? "while-stmt node is not an if-else-stmt" assert-false
+] ;
+
+"expression statement payload" test-section
+
+test-expr-stmt-payload: ( -- ) [
+  42 lit expr-stmt unwrap-expr-stmt
+  42 lit "expression statement carries its expression" assert=
+] ;
+
+test-expr-stmt-carries-compound: ( -- ) [
+  "+" 1 lit 2 lit binop expr-stmt unwrap-expr-stmt
+  binop? "expression statement carries a compound expression unchanged" assert-true
+] ;
+
+"group payload" test-section
+
+test-group-stmt-payload: ( -- ) [
+  two-stmt-group unwrap-group-stmt
+  dup #len 2 "group carries two statements" assert=
+  dup 0 #nth 1 lit expr-stmt "group carries its first statement" assert=
+  1 #nth 2 lit expr-stmt "group carries its second statement" assert=
+] ;
+
+test-group-stmt-empty: ( -- ) [
+  0 array-n group-stmt unwrap-group-stmt
+  #len 0 "an empty group carries no statements" assert=
+] ;
+
+"conditional payloads" test-section
+
+test-if-stmt-payload: ( -- ) [
+  ready-call 1 lit expr-stmt if-stmt match{
+    stmt-node:expr-stmt:  [ drop f throw ]
+    stmt-node:group-stmt: [ drop f throw ]
+    stmt-node:if-stmt:    [  \ ( cond then )
+      1 lit expr-stmt "if-stmt carries its then branch" assert=
+      ready-call "if-stmt carries its condition" assert=
+    ]
+    stmt-node:if-else-stmt: [ drop drop drop f throw ]
+    stmt-node:while-stmt: [ drop drop f throw ]
+  }
+] ;
+
+test-if-else-stmt-payload: ( -- ) [
+  ready-call 1 lit expr-stmt 2 lit expr-stmt if-else-stmt match{
+    stmt-node:expr-stmt:    [ drop f throw ]
+    stmt-node:group-stmt:   [ drop f throw ]
+    stmt-node:if-stmt:      [ drop drop f throw ]
+    stmt-node:if-else-stmt: [  \ ( cond then else )
+      2 lit expr-stmt "if-else-stmt carries its else branch" assert=
+      1 lit expr-stmt "if-else-stmt carries its then branch" assert=
+      ready-call "if-else-stmt carries its condition" assert=
+    ]
+    stmt-node:while-stmt: [ drop drop f throw ]
+  }
+] ;
+
+"loop payload" test-section
+
+test-while-stmt-payload: ( -- ) [
+  ready-call 1 lit expr-stmt while-stmt match{
+    stmt-node:expr-stmt:    [ drop f throw ]
+    stmt-node:group-stmt:   [ drop f throw ]
+    stmt-node:if-stmt:      [ drop drop f throw ]
+    stmt-node:if-else-stmt: [ drop drop drop f throw ]
+    stmt-node:while-stmt:   [  \ ( cond body )
+      1 lit expr-stmt "while-stmt carries its body" assert=
+      ready-call "while-stmt carries its condition" assert=
+    ]
+  }
+] ;
+
+"recursive nesting" test-section
+
+test-group-nesting: ( -- ) [
+  two-stmt-group 3 lit expr-stmt 2 array-n group-stmt unwrap-group-stmt
+  dup #len 2 "outer group holds two statements" assert=
+  dup 0 #nth group-stmt? "outer group's first member is itself a group" assert-true
+  1 #nth expr-stmt? "outer group's second member is an expression statement" assert-true
+] ;
+
+test-group-as-branch: ( -- ) [
+  ready-call two-stmt-group 3 lit expr-stmt if-else-stmt match{
+    stmt-node:expr-stmt:    [ drop f throw ]
+    stmt-node:group-stmt:   [ drop f throw ]
+    stmt-node:if-stmt:      [ drop drop f throw ]
+    stmt-node:if-else-stmt: [  \ ( cond then else )
+      expr-stmt? "a lone statement is a legal branch" assert-true
+      group-stmt? "a group is a legal branch" assert-true
+      drop
+    ]
+    stmt-node:while-stmt: [ drop drop f throw ]
+  }
+] ;
+
+test-group-as-loop-body: ( -- ) [
+  ready-call two-stmt-group while-stmt match{
+    stmt-node:expr-stmt:    [ drop f throw ]
+    stmt-node:group-stmt:   [ drop f throw ]
+    stmt-node:if-stmt:      [ drop drop f throw ]
+    stmt-node:if-else-stmt: [ drop drop drop f throw ]
+    stmt-node:while-stmt:   [  \ ( cond body )
+      group-stmt? "a group is a legal loop body" assert-true
+      drop
+    ]
+  }
+] ;
+
+"constructor alias parity" test-section
+
+test-expr-stmt-alias-matches-raw: ( -- ) [
+  7 lit expr-stmt
+  7 lit >stmt-node:expr-stmt
+  = "expr-stmt alias equals raw wrap" assert-true
+] ;
+
+test-group-stmt-alias-matches-raw: ( -- ) [
+  8 lit expr-stmt 1 array-n group-stmt
+  8 lit expr-stmt 1 array-n >stmt-node:group-stmt
+  = "group-stmt alias equals raw wrap" assert-true
+] ;
+
+test-if-stmt-alias-matches-raw: ( -- ) [
+  ready-call 9 lit expr-stmt if-stmt
+  ready-call 9 lit expr-stmt make-stmt-node:if-stmt
+  = "if-stmt alias equals raw make" assert-true
+] ;
+
+test-if-else-stmt-alias-matches-raw: ( -- ) [
+  ready-call 9 lit expr-stmt 10 lit expr-stmt if-else-stmt
+  ready-call 9 lit expr-stmt 10 lit expr-stmt make-stmt-node:if-else-stmt
+  = "if-else-stmt alias equals raw make" assert-true
+] ;
+
+test-while-stmt-alias-matches-raw: ( -- ) [
+  ready-call 11 lit expr-stmt while-stmt
+  ready-call 11 lit expr-stmt make-stmt-node:while-stmt
+  = "while-stmt alias equals raw make" assert-true
+] ;
