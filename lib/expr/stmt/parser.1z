@@ -1,0 +1,170 @@
+\ lib/expr/stmt/parser.1z: parser for the hosted statement language.
+\
+\ Turns a statement block source string into the nominal stmt-node AST defined
+\ in expr/stmt/ast. Lexing extends the expression sub-lexer with the statement
+\ punctuation `;`, `{`, and `}`. The whole block is tokenized once, and the
+\ expressions inside it are parsed by expr/parser's Pratt parser over that same
+\ stream, so a statement and the expressions it carries share one position.
+\
+\ Reading a block's raw tokens off the 1z tokenizer lives here too, because
+\ finding the brace that closes the block requires knowing that `{` and `}`
+\ nest.
+
+use "lexer" ;
+use "conversions" ;
+use "strings" ;
+use "sequences" ;
+use "expr/ast" ;
+use "expr/stmt/ast" ;
+use { <expr-pratt>: } "expr/parser" ;
+use { <peekable>: parse-pratt: next-token: peek-token: } "pratt" ;
+
+\\ The lexer that splits a statement block into number, word, and punctuation
+\\ tokens, skipping whitespace. Extends the expression lexer's symbol set with
+\\ the statement separator and the group braces.
+STMT-LEXER: const [
+  V{ }
+  skip-whitespace-rule #push!
+  number-rule #push!
+  word-rule #push!
+  { "+" "-" "*" "/" "(" ")" "," ";" "{" "}" } symbols-rule #push!
+  >array <lexer>
+] ;
+
+\\ Tokenize a statement block source string into a lazy token iterator.
+tokenize-stmt: ( source: string -- iterator ) [ STMT-LEXER tokenize ] ;
+
+private{
+  (throw-invalid-argument): ( message -- ) [
+    f swap EInvalidArgument make-error throw
+  ] ;
+
+  \ Report an unexpected token, naming what was expected in its place.
+  (unexpected-token): ( expected: string token/f -- ) [
+    dup f = [
+      drop " at end of input" #append
+    ] [
+      dup value>> swap pos>>
+      \ expected value pos
+      <rot- ", got '" #append
+      \ value pos message
+      <rot- #append "' at byte " #append
+      swap >string #append
+    ] if
+    (throw-invalid-argument)
+  ] ;
+
+  \ Net brace nesting contributed by one raw 1z token. Counting characters
+  \ rather than whole tokens keeps `{ x(); y(); }`, `{x();y();}`, and the mixed
+  \ `{ x(); y();}` all accounted for, since the 1z tokenizer splits only on
+  \ whitespace.
+  (brace-delta): ( token: string -- n ) [
+    dup "{" split #len 1 -
+    swap "}" split #len 1 -
+    -
+  ] ;
+
+  \ Read one raw token and either finish the block or accumulate it. `depth` is
+  \ the group nesting the tokens read so far are still inside, so a standalone
+  \ `}` seen at depth 0 is the block's own closing brace rather than a group's.
+  (read-loop): stack-recursive ( acc depth -- source ) [
+    parse-token
+    \ acc depth token
+    dup "}" = 2 pick-n 0 = and [
+      2drop >array " " #join
+    ] [
+      dup (brace-delta)
+      \ acc depth token delta
+      <rot- + swap
+      \ acc depth' token
+      2 pick-n swap #push! drop
+      (read-loop)
+    ] if
+  ] ;
+
+  \ Parse a single statement. A leading '{' opens a group; anything else is an
+  \ expression, parsed by the shared Pratt parser and evaluated for its effect.
+  (parse-one-stmt): ( peekable -- stmt-node ) [
+    dup peek-token
+    dup f = [ "expected statement" swap (unexpected-token) ] when
+    value>> "{" = [
+      (parse-brace-group)
+    ] [
+      <expr-pratt> 0 parse-pratt expr-stmt
+    ] if
+  ] ;
+
+  \ Parse one statement and the separator that follows it, accumulating each
+  \ statement node into `acc`. A ';' separates statements and may also trail the
+  \ last one. Both a group's closing '}' and the end of input end the run, and
+  \ are left unconsumed for the caller to check.
+  (parse-stmt-seq): stack-recursive ( peekable acc -- stmts ) [
+    over peek-token
+    \ peekable acc token/f
+    dup f = [
+      drop >array nip
+    ] [
+      dup value>> "}" = [
+        drop >array nip
+      ] [
+        drop
+        over (parse-one-stmt)
+        over swap #push! drop
+        \ peekable acc
+        over peek-token
+        dup f = [
+          drop >array nip
+        ] [
+          dup value>> ";" = [
+            drop
+            over next-token drop
+            (parse-stmt-seq)
+          ] [
+            dup value>> "}" = [
+              drop >array nip
+            ] [
+              "expected ';' or '}'" swap (unexpected-token)
+            ] if
+          ] if
+        ] if
+      ] if
+    ] if
+  ] ;
+
+  \ Parse a brace-delimited statement group and consume its closing '}'. The
+  \ opening '{' has been peeked but not consumed.
+  (parse-brace-group): ( peekable -- stmt-node ) [
+    dup next-token drop
+    dup V{ } (parse-stmt-seq)
+    \ peekable stmts
+    swap next-token
+    dup f = [ "expected '}'" swap (unexpected-token) ] when
+    dup value>> "}" = not [ "expected '}'" swap (unexpected-token) ] when
+    drop group-stmt
+  ] ;
+}
+
+\\ Read the raw token text of a `stmt{ }` block, up to but excluding the brace
+\\ that closes it, and join it into a source string. Brace nesting is tracked so
+\\ a `{ }` statement group does not end the scan early. The block's own closing
+\\ brace must be a whitespace-separated token, the rule `expr{ }` already
+\\ imposes.
+\\
+\\ Reads from the 1z tokenizer through `parse-token`, so this runs only inside a
+\\ parse-time word.
+read-stmt-source: ( -- source: string ) [
+  V{ } 0 (read-loop)
+] ;
+
+\\ Parse a statement block source string into a stmt-node AST, requiring the
+\\ whole string to be consumed. The block is itself a statement group, so an
+\\ empty block yields a group carrying no statements. Throws on a malformed
+\\ statement or an unmatched '}'.
+parse-stmt: ( source: string -- stmt-node ) [
+  tokenize-stmt <peekable>
+  dup V{ } (parse-stmt-seq)
+  \ peekable stmts
+  swap next-token
+  dup f = [ drop ] [ "expected end of input" swap (unexpected-token) ] if
+  group-stmt
+] ;

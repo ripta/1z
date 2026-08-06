@@ -1,0 +1,147 @@
+\ Unit tests for lib/expr/stmt/parser.1z.
+
+use "testing" ;
+use "expr/ast" ;
+use "expr/stmt/ast" ;
+use "expr/stmt/parser" ;
+
+\ Report a statement node that is not the group these tests expect.
+(not-a-group): ( kind: string -- ) [
+  "expected group-stmt, got " swap #append
+  f swap EInvalidArgument make-error throw
+] ;
+
+\\ Extract a statement group's statement list, throwing on any other kind.
+unwrap-group-stmt: ( stmt-node -- stmts ) [
+  match{
+    stmt-node:expr-stmt:    [ drop "expr-stmt" (not-a-group) ]
+    stmt-node:group-stmt:   [ ]
+    stmt-node:if-stmt:      [ 2drop "if-stmt" (not-a-group) ]
+    stmt-node:if-else-stmt: [ 3drop "if-else-stmt" (not-a-group) ]
+    stmt-node:while-stmt:   [ 2drop "while-stmt" (not-a-group) ]
+  }
+] ;
+
+\ The statements of a parsed block, which is itself a group.
+block-stmts: ( source: string -- stmts ) [ parse-stmt unwrap-group-stmt ] ;
+
+\ A no-argument call statement, the shape most of these tests sequence.
+call-stmt: ( name: string -- stmt-node ) [ 0 array-n invoke expr-stmt ] ;
+
+"sequencing" test-section
+
+test-single-statement: ( -- ) [
+  "f(1)" block-stmts
+  dup #len 1 "one statement parses to one node" assert=
+  0 #nth "f" 1 lit 1 array-n invoke expr-stmt "the statement is the call f(1)" assert=
+] ;
+
+test-two-statements: ( -- ) [
+  "a(); b()" block-stmts
+  dup #len 2 "two statements parse to two nodes" assert=
+  dup 0 #nth "a" call-stmt "first statement is a()" assert=
+  1 #nth "b" call-stmt "second statement is b()" assert=
+] ;
+
+test-three-statements: ( -- ) [
+  "a(); b(); c()" block-stmts
+  dup #len 3 "three statements parse to three nodes" assert=
+  2 #nth "c" call-stmt "last statement is c()" assert=
+] ;
+
+test-trailing-semicolon-optional: ( -- ) [
+  "a(); b();" block-stmts
+  "a(); b()" block-stmts
+  "a trailing ';' parses the same as none" assert=
+] ;
+
+test-lone-trailing-semicolon: ( -- ) [
+  "a();" block-stmts
+  #len 1 "a single statement may carry a trailing ';'" assert=
+] ;
+
+test-separator-may-be-spaced: ( -- ) [
+  "a() ; b()" block-stmts
+  "a(); b()" block-stmts
+  "a spaced separator parses the same as an attached one" assert=
+] ;
+
+test-empty-block: ( -- ) [
+  "" block-stmts
+  #len 0 "an empty block carries no statements" assert=
+] ;
+
+test-statement-is-an-expression: ( -- ) [
+  "1 + 2 * 3" block-stmts
+  0 #nth "+" 1 lit "*" 2 lit 3 lit binop binop expr-stmt
+  "a statement carries a whole precedence-parsed expression" assert=
+] ;
+
+"groups" test-section
+
+test-group-as-statement: ( -- ) [
+  "{ a(); b() }" block-stmts
+  dup #len 1 "a group is a single statement" assert=
+  0 #nth unwrap-group-stmt
+  dup #len 2 "the group holds both statements" assert=
+  0 #nth "a" call-stmt "the group's first statement is a()" assert=
+] ;
+
+test-group-then-statement: ( -- ) [
+  "{ a(); b() }; c()" block-stmts
+  dup #len 2 "a group and the statement after it are two statements" assert=
+  dup 0 #nth group-stmt? "the first is a group" assert-true
+  1 #nth "c" call-stmt "the second is c()" assert=
+] ;
+
+test-nested-group: ( -- ) [
+  "{ { a() }; b() }" block-stmts
+  0 #nth unwrap-group-stmt
+  dup #len 2 "the outer group holds two statements" assert=
+  0 #nth unwrap-group-stmt
+  #len 1 "the inner group holds one statement" assert=
+] ;
+
+test-empty-group: ( -- ) [
+  "{ }" block-stmts
+  0 #nth unwrap-group-stmt
+  #len 0 "an empty group carries no statements" assert=
+] ;
+
+test-group-trailing-semicolon: ( -- ) [
+  "{ a(); b(); }" block-stmts
+  "{ a(); b() }" block-stmts
+  "a trailing ';' inside a group parses the same as none" assert=
+] ;
+
+test-group-brace-spacing: ( -- ) [
+  "{a(); b()}" block-stmts
+  "{ a(); b() }" block-stmts
+  "group braces need no surrounding whitespace" assert=
+] ;
+
+"parse errors" test-section
+
+test-missing-separator: ( -- ) [
+  [ "a() b()" parse-stmt ] "two statements without a ';' throw" assert-error
+] ;
+
+test-unclosed-group: ( -- ) [
+  [ "{ a(); b()" parse-stmt ] "an unclosed group throws" assert-error
+] ;
+
+test-stray-close-brace: ( -- ) [
+  [ "a() }" parse-stmt ] "a '}' with no open group throws" assert-error
+] ;
+
+test-leading-separator: ( -- ) [
+  [ "; a()" parse-stmt ] "a statement starting with ';' throws" assert-error
+] ;
+
+test-empty-statement-between-separators: ( -- ) [
+  [ "a(); ; b()" parse-stmt ] "an empty statement between separators throws" assert-error
+] ;
+
+test-unclosed-call: ( -- ) [
+  [ "a(1" parse-stmt ] "an unclosed argument list throws" assert-error
+] ;

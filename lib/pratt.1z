@@ -18,12 +18,16 @@ pratt: struct{ operators prefix infix } ;
   make-pratt
 ] ;
 
-\ Uses a mutable map so all call sites share state by reference.
-private{
-  (make-peekable): ( iterator -- peekable ) [
-    M{ } iter: <rot- @set! buf: option:none @set!
-  ] ;
-}
+\\ Wrap a token iterator so the next token can be peeked without consuming it.
+\\
+\\ A parser that reads the same stream it hands to `parse-pratt` builds one
+\\ peekable and shares it. The token the Pratt loop stopped on then stays
+\\ available to that parser.
+\\
+\\ Uses a mutable map so all call sites share state by reference.
+<peekable>: ( iterator -- peekable ) [
+  M{ } iter: <rot- @set! buf: option:none @set!
+] ;
 
 \\ Peek at the next token without consuming it. Returns token or f.
 peek-token: ( peekable -- token/f ) [
@@ -134,7 +138,7 @@ private{
 
 \\ Parse a token iterator using a Pratt parser. Returns the parsed value.
 parse-expr: ( iterator parser -- value ) [
-  swap (make-peekable) swap 0 (parse-expr)
+  swap <peekable> swap 0 (parse-expr)
 ] ;
 
 \\ Recursive parse entry point for use inside handler quotations.
@@ -159,7 +163,7 @@ parse-right: ( token parser tokens -- token right ) [
 \\ to be consumed. Like `parse-expr`, but throws if any token remains after the
 \\ expression instead of leaving the trailing input unconsumed.
 parse-complete: ( iterator parser -- value ) [
-  swap (make-peekable) swap
+  swap <peekable> swap
   \ peekable parser
   2dup 0 (parse-expr)
   \ peekable parser value

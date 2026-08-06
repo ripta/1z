@@ -1,0 +1,30 @@
+\ lib/expr/stmt/lower.1z: emit a stmt-node AST as inline 1z instructions.
+
+use "sequences" ;
+use "expr/lower" ;
+use "expr/stmt/ast" ;
+
+private{
+  (unsupported-statement): ( -- ) [
+    f "this statement kind has no lowering yet" EInvalidArgument make-error throw
+  ] ;
+}
+
+\\ Emit a stmt-node AST as inline 1z instructions, in source order. An
+\\ expression statement emits exactly its expression: 1z has no arity-independent
+\\ discard, so a statement's value is left on the stack for the surrounding code,
+\\ and keeping a block stack-neutral is the author's job. A group has no runtime
+\\ wrapper and emits its members in order, the way expression parens regroup
+\\ without producing a node.
+\\
+\\ Emission uses the parse-time emit-body / emit-call splicing inherited from
+\\ emit-expr, so emit-stmt must run inside a parse-time word (stmt{).
+emit-stmt: ( node: stmt-node -- ) [
+  match{
+    stmt-node:expr-stmt:    [ emit-expr ]
+    stmt-node:group-stmt:   [ [ emit-stmt ] #each ]
+    stmt-node:if-stmt:      [ 2drop (unsupported-statement) ]
+    stmt-node:if-else-stmt: [ 3drop (unsupported-statement) ]
+    stmt-node:while-stmt:   [ 2drop (unsupported-statement) ]
+  }
+] ;

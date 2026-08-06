@@ -1,0 +1,97 @@
+\ Runtime-equivalence tests for the `stmt{ }` surface form and its lowering.
+\ Each block is compared to the hand-written 1z it lowers to.
+
+use "testing" ;
+use "expr" ;
+
+\ Callees the statement blocks invoke. `sub2` is non-commutative, so it also
+\ verifies left-to-right argument order.
+add1: ( n -- n )   [ 1 + ] ;
+dbl:  ( n -- n )   [ 2 * ] ;
+sub2: ( a b -- c ) [ - ] ;
+
+"single statement" test-section
+
+test-single-call: ( -- ) [
+  stmt{ add1(41) } 41 add1 "add1(41) matches 41 add1" assert=
+] ;
+
+test-single-expression: ( -- ) [
+  stmt{ 1 + 2 * 3 } 1 2 3 * + "an expression statement matches its postfix form" assert=
+] ;
+
+test-trailing-semicolon: ( -- ) [
+  stmt{ add1(41); } 41 add1 "a trailing ';' changes nothing" assert=
+] ;
+
+"sequencing" test-section
+
+test-two-statements: ( -- ) [
+  stmt{ add1(1); dbl(3) }
+  6 "the second statement's value is on top" assert=
+  2 "the first statement's value is beneath it" assert=
+] ;
+
+test-statement-order: ( -- ) [
+  \ sub2 is not commutative, so this pins the order statements run in.
+  stmt{ sub2(10, 3); sub2(3, 10) }
+  -7 "the second statement computed 3 - 10" assert=
+  7 "the first statement computed 10 - 3" assert=
+] ;
+
+test-empty-block: ( -- ) [
+  7 stmt{ } 7 "an empty block emits nothing" assert=
+] ;
+
+"groups" test-section
+
+test-group-flattens: ( -- ) [
+  stmt{ { add1(1); dbl(3) } }
+  6 "a group emits its members with no wrapper" assert=
+  2 "the group's first member ran first" assert=
+] ;
+
+test-group-then-statement: ( -- ) [
+  stmt{ { add1(1) }; dbl(3) }
+  6 "the statement after a group runs after it" assert=
+  2 "the group's statement ran first" assert=
+] ;
+
+test-nested-group: ( -- ) [
+  stmt{ { { add1(1) }; dbl(3) } }
+  6 "a nested group's members still run in order" assert=
+  2 "the innermost group ran first" assert=
+] ;
+
+test-group-brace-spacing: ( -- ) [
+  stmt{ {add1(1); dbl(3)} }
+  6 "an unspaced group brace lowers the same" assert=
+  2 "and its first member still ran first" assert=
+] ;
+
+"multiline input" test-section
+
+test-multiline: ( -- ) [
+  stmt{
+    add1(10);
+    dbl(4)
+  }
+  8 "the second line's statement is on top" assert=
+  11 "the first line's statement is beneath it" assert=
+] ;
+
+"forward reference" test-section
+
+\ A call resolves through ordinary lookup, so a callee defined after the stmt{
+\ use still works: the emitted call_word is resolved at run time.
+test-forward-reference: ( -- ) [
+  stmt{ fwd9(5) } 5 fwd9 "fwd9(5) resolves a forward-referenced callee" assert=
+] ;
+
+fwd9: ( n -- n ) [ 9 + ] ;
+
+"public pipeline" test-section
+
+test-parse-stmt-reachable: ( -- ) [
+  "a(); b()" parse-stmt group-stmt? "parse-stmt is reachable through the expr facade" assert-true
+] ;
