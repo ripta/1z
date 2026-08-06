@@ -38,7 +38,12 @@ pub const FormatterToken = struct {
         if (std.mem.eql(u8, text, "]")) return .{ .kind = .close_bracket, .text = text };
         if (std.mem.eql(u8, text, "{")) return .{ .kind = .open_brace, .text = text };
         if (text.len > 1 and text[text.len - 1] == '{') return .{ .kind = .open_brace, .text = text };
-        if (std.mem.eql(u8, text, "}")) return .{ .kind = .close_brace, .text = text };
+
+        // The closing brace matches on the first character, mirroring the opening rule above.
+        //
+        // A hosted `{ }` statement group closes right before its separator, and the 1z tokenizer
+        // splits only on whitespace, so `};` arrives as one token.
+        if (text.len > 0 and text[0] == '}') return .{ .kind = .close_brace, .text = text };
         if (std.mem.eql(u8, text, "(")) return .{ .kind = .open_paren, .text = text };
         if (std.mem.eql(u8, text, ")")) return .{ .kind = .close_paren, .text = text };
         if (std.mem.eql(u8, text, "--")) return .{ .kind = .arrow, .text = text };

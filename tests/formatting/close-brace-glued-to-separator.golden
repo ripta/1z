@@ -1,0 +1,17 @@
+\ A hosted statement group closes right before its separator, so the 1z
+\ tokenizer hands the formatter `};` as a single token. It still closes the
+\ block, and the tokens after it keep their indentation.
+outer: ( -- ) [
+  stmt{ { a(); b() }; c() } 3drop
+] ;
+
+multiline: ( -- ) [
+  stmt{
+    { a(); b() };
+    c()
+  } 3drop
+] ;
+
+after: ( -- ) [
+  H{ a: 1 } drop
+] ;
