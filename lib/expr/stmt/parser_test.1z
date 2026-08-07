@@ -200,6 +200,81 @@ test-else-if-chain: ( -- ) [
   "an else-if chain nests in the else position" assert=
 ] ;
 
+"loops" test-section
+
+test-simple-loop: ( -- ) [
+  "while ready() do a()" block-stmts
+  dup #len 1 "a loop is a single statement" assert=
+  0 #nth ready-cond "a" call-stmt while-stmt
+  "a loop parses to while-stmt" assert=
+] ;
+
+test-loop-group-body: ( -- ) [
+  "while ready() do { a(); b() }" block-stmts
+  0 #nth
+  ready-cond
+  "a" call-stmt "b" call-stmt 2 array-n group-stmt
+  while-stmt
+  "a group is a legal loop body" assert=
+] ;
+
+test-loop-comparison-condition: ( -- ) [
+  "while 1 < 2 do a()" block-stmts
+  0 #nth "<" 1 lit 2 lit binop "a" call-stmt while-stmt
+  "a comparison is a legal loop condition" assert=
+] ;
+
+test-loop-among-statements: ( -- ) [
+  "a(); while ready() do b(); c()" block-stmts
+  dup #len 3 "a loop sequences like any other statement" assert=
+  dup 1 #nth while-stmt? "the middle statement is the loop" assert-true
+  2 #nth "c" call-stmt "the statement after it is c()" assert=
+] ;
+
+test-loop-trailing-semicolon: ( -- ) [
+  "while ready() do a();" block-stmts
+  "while ready() do a()" block-stmts
+  "a trailing ';' after a loop parses the same as none" assert=
+] ;
+
+test-conditional-in-loop-body: ( -- ) [
+  "while ready() do if ready() then a()" block-stmts
+  0 #nth
+  ready-cond
+  ready-cond "a" call-stmt if-stmt
+  while-stmt
+  "a conditional is a legal loop body" assert=
+] ;
+
+test-nested-loops: ( -- ) [
+  "while ready() do while ready() do a()" block-stmts
+  0 #nth
+  ready-cond
+  ready-cond "a" call-stmt while-stmt
+  while-stmt
+  "a loop is a legal loop body" assert=
+] ;
+
+test-loop-in-branch: ( -- ) [
+  "if ready() then while ready() do a()" block-stmts
+  0 #nth
+  ready-cond
+  ready-cond "a" call-stmt while-stmt
+  if-stmt
+  "a loop is a legal branch" assert=
+] ;
+
+test-else-after-loop-branch: ( -- ) [
+  \ A loop has no else form, so the else can only be the conditional's.
+  "if ready() then while ready() do a() else b()" block-stmts
+  0 #nth
+  ready-cond
+  ready-cond "a" call-stmt while-stmt
+  "b" call-stmt
+  if-else-stmt
+  "an else after a loop branch binds to the conditional" assert=
+] ;
+
 "parse errors" test-section
 
 test-missing-then: ( -- ) [
@@ -220,6 +295,18 @@ test-missing-else-branch: ( -- ) [
 
 test-stray-else: ( -- ) [
   [ "else a()" parse-stmt ] "an else with no if throws" assert-error
+] ;
+
+test-missing-do: ( -- ) [
+  [ "while ready() a()" parse-stmt ] "a loop without 'do' throws" assert-error
+] ;
+
+test-missing-do-at-end: ( -- ) [
+  [ "while ready()" parse-stmt ] "a loop ending after its condition throws" assert-error
+] ;
+
+test-missing-loop-body: ( -- ) [
+  [ "while ready() do" parse-stmt ] "a loop with no body throws" assert-error
 ] ;
 
 test-missing-separator: ( -- ) [

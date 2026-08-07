@@ -15,6 +15,30 @@ sub2: ( a b -- c ) [ - ] ;
 yes: ( -- ? ) [ t ] ;
 no: ( -- ? ) [ f ] ;
 
+\ The external state the loop tests advance. A hosted statement has no locals,
+\ so a loop terminates through state its body mutates by side effect. The step
+\ cell is the second counter a nested loop needs to bound its outer iteration.
+\
+\ Every word a hosted call names is alphanumeric, because the expression lexer
+\ matches an identifier as a letter followed by alphanumerics and would split a
+\ kebab-case name on its `-`.
+tick-cell: V{ 0 } ;
+step-cell: V{ 0 } ;
+
+ticks:  ( -- n ) [ tick-cell 0 #nth ] ;
+steps:  ( -- n ) [ step-cell 0 #nth ] ;
+bump:   ( -- )   [ tick-cell 0 ticks 1 + #nth! drop ] ;
+step:   ( -- )   [ step-cell 0 steps 1 + #nth! drop ] ;
+under3: ( -- ? ) [ ticks 3 < ] ;
+under2: ( -- ? ) [ steps 2 < ] ;
+
+\ The cells are module state shared by every test, so each loop test starts from
+\ zero.
+reset-counters: ( -- ) [
+  tick-cell 0 0 #nth! drop
+  step-cell 0 0 #nth! drop
+] ;
+
 "single statement" test-section
 
 test-single-call: ( -- ) [
@@ -137,6 +161,66 @@ test-else-if-chain: ( -- ) [
   stmt{ if no() then add1(1) else if yes() then dbl(3) else dbl(4) }
   no [ 1 add1 ] [ yes [ 3 dbl ] [ 4 dbl ] if ] if
   "an else-if chain matches its nested `if`" assert=
+] ;
+
+"loop" test-section
+
+test-loop-runs-until-the-condition-fails: ( -- ) [
+  reset-counters
+  stmt{ while under3() do bump() }
+  ticks 3 "the loop ran until its condition went false" assert=
+] ;
+
+test-loop-matches-hand-written-while: ( -- ) [
+  reset-counters stmt{ while under3() do bump() } ticks
+  reset-counters [ under3 ] [ bump ] while ticks
+  "a loop matches its hand-written `while`" assert=
+] ;
+
+test-loop-not-entered: ( -- ) [
+  \ The condition is checked before the first iteration, so a false one leaves
+  \ both the counter and the stack alone.
+  reset-counters
+  9 stmt{ while no() do bump() }
+  9 "an untaken loop emits nothing onto the stack" assert=
+  ticks 0 "and never ran its body" assert=
+] ;
+
+test-loop-group-body: ( -- ) [
+  reset-counters
+  stmt{ while under3() do { bump(); bump() } }
+  ticks 4 "a group body runs both its statements each iteration" assert=
+] ;
+
+test-loop-comparison-condition: ( -- ) [
+  reset-counters
+  stmt{ while ticks() < 2 do bump() }
+  ticks 2 "a comparison condition is re-evaluated each iteration" assert=
+] ;
+
+test-conditional-in-loop-body: ( -- ) [
+  reset-counters
+  stmt{ while under3() do if yes() then bump() }
+  ticks 3 "a conditional body runs each iteration" assert=
+] ;
+
+test-loop-in-branch: ( -- ) [
+  reset-counters
+  stmt{ if yes() then while under3() do bump() }
+  ticks
+  reset-counters
+  yes [ [ under3 ] [ bump ] while ] when
+  ticks
+  "a loop in a branch matches its hand-written form" assert=
+] ;
+
+test-nested-loops: ( -- ) [
+  \ The inner condition is already false on the second outer pass, so this also
+  \ pins that the inner loop re-checks rather than replaying its first result.
+  reset-counters
+  stmt{ while under2() do { step(); while under3() do bump() } }
+  steps 2 "the outer loop ran twice" assert=
+  ticks 3 "and the inner loop only ran on the first pass" assert=
 ] ;
 
 "sequencing with conditionals" test-section

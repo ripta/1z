@@ -6,9 +6,9 @@
 \ expressions inside it are parsed by expr/parser's Pratt parser over that same
 \ stream, so a statement and the expressions it carries share one position.
 \
-\ `if`, `then`, and `else` are keywords of the statement grammar, not calls. A
-\ leading `if` in statement position always opens a conditional, so a hosted
-\ call by that name is unreachable there.
+\ `if`, `then`, `else`, `while`, and `do` are keywords of the statement grammar,
+\ not calls. A leading `if` or `while` in statement position always opens a
+\ conditional or a loop, so a hosted call by either name is unreachable there.
 \
 \ Reading a block's raw tokens off the 1z tokenizer lives here too, because
 \ finding the brace that closes the block requires knowing that `{` and `}`
@@ -141,9 +141,21 @@ private{
     nip
   ] ;
 
-  \ Parse a single statement. A leading '{' opens a group and a leading 'if'
-  \ opens a conditional; anything else is an expression, parsed by the shared
-  \ Pratt parser and evaluated for its effect.
+  \ Parse a loop. The leading 'while' has been peeked but not consumed.
+  (parse-while): stack-recursive ( peekable -- stmt-node ) [
+    dup next-token drop
+    dup <expr-pratt> 0 parse-pratt
+    \ peekable cond
+    over "do" (expect-keyword)
+    over (parse-one-stmt)
+    \ peekable cond body
+    while-stmt
+    nip
+  ] ;
+
+  \ Parse a single statement. A leading '{' opens a group, a leading 'if' opens a
+  \ conditional, and a leading 'while' opens a loop; anything else is an
+  \ expression, parsed by the shared Pratt parser and evaluated for its effect.
   (parse-one-stmt): stack-recursive ( peekable -- stmt-node ) [
     dup peek-token
     dup f = [ "expected statement" swap (unexpected-token) ] when
@@ -152,10 +164,14 @@ private{
     dup "{" = [
       drop (parse-brace-group)
     ] [
-      "if" = [
-        (parse-if)
+      dup "if" = [
+        drop (parse-if)
       ] [
-        <expr-pratt> 0 parse-pratt expr-stmt
+        "while" = [
+          (parse-while)
+        ] [
+          <expr-pratt> 0 parse-pratt expr-stmt
+        ] if
       ] if
     ] if
   ] ;

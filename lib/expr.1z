@@ -20,6 +20,9 @@ expr{: parse-time [
 \\ Inline statement syntax: `;`-separated statements over hosted expressions,
 \\ with brace-delimited `{ }` groups. `stmt{ f(1); g(2) }` is equivalent to
 \\ `1 f 2 g`. A trailing `;` before the closing brace is optional.
+\\
+\\ A statement may also be a conditional, `if cond then a() else b()` with the
+\\ `else` optional, or a loop, `while cond do body()`.
 stmt{: parse-time [
   read-stmt-source  \ raw body tokens -> source string, brace nesting tracked
   parse-stmt        \ source -> statement AST

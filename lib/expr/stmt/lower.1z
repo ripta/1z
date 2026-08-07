@@ -5,10 +5,6 @@ use "expr/lower" ;
 use "expr/stmt/ast" ;
 
 private{
-  (unsupported-statement): ( -- ) [
-    f "this statement kind has no lowering yet" EInvalidArgument make-error throw
-  ] ;
-
   \ Lower a stmt-node to a quotation that runs it, the counterpart of expr/lower's
   \ `lower`. A branch is a quotation on the stack when `if` and `when` run, so a
   \ statement nested in one cannot be spliced inline and has to become a value.
@@ -31,7 +27,12 @@ private{
         swap compose             \ ( [ cond, push then, push else ] )
         if: >quotation compose
       ]
-      stmt-node:while-stmt: [ 2drop (unsupported-statement) ]
+      stmt-node:while-stmt: [   \ ( cond body )
+        (lower-stmt) [ ] curry  \ ( cond [ push body ] )
+        swap lower [ ] curry    \ ( [ push body ] [ push cond ] )
+        swap compose            \ ( [ push cond, push body ] )
+        while: >quotation compose
+      ]
     }
   ] ;
 }
@@ -46,6 +47,10 @@ private{
 \\ A conditional emits its condition inline, then pushes each branch as a
 \\ quotation and calls `when` or `if`, so it runs as the equivalent hand-written
 \\ `cond [ then ] when` or `cond [ then ] [ else ] if`.
+\\
+\\ A loop pushes both its condition and its body as quotations, because `while`
+\\ re-runs the condition each iteration and so cannot take it inline. It runs as
+\\ the equivalent hand-written `[ cond ] [ body ] while`.
 \\
 \\ Emission uses the parse-time emit-body / emit-call splicing inherited from
 \\ emit-expr, so emit-stmt must run inside a parse-time word (stmt{).
@@ -65,6 +70,10 @@ emit-stmt: ( node: stmt-node -- ) [
       (lower-stmt) [ ] curry emit-body
       if: emit-call
     ]
-    stmt-node:while-stmt: [ 2drop (unsupported-statement) ]
+    stmt-node:while-stmt: [  \ ( cond body )
+      swap lower [ ] curry emit-body
+      (lower-stmt) [ ] curry emit-body
+      while: emit-call
+    ]
   }
 ] ;
