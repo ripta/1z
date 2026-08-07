@@ -1,0 +1,79 @@
+--- lex (tokenize-stmt vs tokenize-expr on the same source) ---
+Name                        Iters      Elapsed   Elapsed/iter   Instrs/iter   Peak Stack
+-------------------------   -----   ----------   ------------   -----------   ----------
+lex-stmt  add1(1)               8   180.077 ms      22.509 ms         7,110           19
+lex-expr  add1(1)               8   167.270 ms      20.908 ms         6,783           19
+lex-stmt  3-statement seq       2   125.866 ms      62.933 ms        21,146           19
+lex-stmt  if / else             2   141.129 ms      70.564 ms        21,133           19
+lex-stmt  nested while          1   102.624 ms     102.624 ms        32,284           19
+
+--- parse (parse-stmt vs parse-expr on the same source) ---
+Name                         Iters      Elapsed   Elapsed/iter   Instrs/iter   Peak Stack
+--------------------------   -----   ----------   ------------   -----------   ----------
+parse-stmt add1(1)               6   182.394 ms      30.399 ms         7,958           33
+parse-expr add1(1)               6   166.681 ms      27.780 ms         7,468           32
+parse-stmt 3-statement seq       2   187.672 ms      93.836 ms        23,987           33
+parse-stmt { } group             2   141.198 ms      70.599 ms        18,452           36
+parse-stmt if, no else           2   125.778 ms      62.889 ms        16,076           35
+parse-stmt if / else             2   185.951 ms      92.975 ms        23,410           36
+parse-stmt else-if chain         1   158.676 ms     158.676 ms        38,621           39
+parse-stmt while                 2   123.072 ms      61.536 ms        16,268           30
+parse-stmt nested while          1   144.542 ms     144.542 ms        35,069           35
+
+--- lowering ((lower-stmt): AST -> quotation, AST precomputed) ---
+Name                         Iters      Elapsed   Elapsed/iter   Instrs/iter   Peak Stack
+--------------------------   -----   ----------   ------------   -----------   ----------
+lower-stmt add1(1)             312   162.162 ms     519.750 us            43            8
+lower      its expression      512   159.770 ms     312.050 us            34            8
+lower-stmt 3-statement seq      88   180.643 ms       2.052 ms           153           11
+lower-stmt if / else           116   199.503 ms       1.719 ms           126           10
+lower-stmt while               186   188.283 ms       1.012 ms            70            9
+lower-stmt nested while         82   196.298 ms       2.393 ms           153           11
+
+--- full parse-time via eval-string (read + parse + lower + emit) ---
+Name                           Iters      Elapsed   Elapsed/iter   Instrs/iter   Peak Stack
+----------------------------   -----   ----------   ------------   -----------   ----------
+eval stmt{ } sequence              2   118.562 ms      59.281 ms        14,947           33
+eval direct  sequence          2,060   136.783 ms      66.399 us            13            7
+eval stmt{ } untaken if            2   133.032 ms      66.516 ms        16,601           35
+eval direct  untaken when      1,638   107.860 ms      65.848 us             8            7
+eval stmt{ } unentered while       2   123.070 ms      61.535 ms        15,855           30
+eval direct  unentered while     698   153.823 ms     220.376 us            21            8
+
+--- runtime: sequencing and groups (spliced flat, expect parity) ---
+Name                           Iters      Elapsed   Elapsed/iter   Instrs/iter   Peak Stack
+---------------------------   ------   ----------   ------------   -----------   ----------
+gen  add1(1); dbl(3)          33,354   197.301 ms       5.915 us            12            7
+dir  1 add1 3 dbl             32,824   198.139 ms       6.036 us            12            7
+gen  { a; b }; sub2(10, 3)    10,972   101.218 ms       9.225 us            18            8
+dir  1 add1 3 dbl 10 3 sub2   10,726   100.475 ms       9.367 us            18            8
+
+--- runtime: conditionals (branch is a lowered quotation value) ---
+Name                         Iters      Elapsed   Elapsed/iter   Instrs/iter   Peak Stack
+-------------------------   ------   ----------   ------------   -----------   ----------
+gen  if yes then add1(1)     4,167   100.015 ms      24.001 us            12            7
+dir  yes [ 1 add1 ] when    33,052   194.968 ms       5.898 us            12            7
+gen  if no then add1(1)      5,714   117.421 ms      20.549 us             7            7
+dir  no [ 1 add1 ] when     56,078   201.378 ms       3.591 us             7            7
+gen  if yes then a else b    3,030   120.128 ms      39.646 us            11            7
+dir  yes [ a ] [ b ] if     38,802   198.130 ms       5.106 us            11            7
+gen  else-if chain           2,082   162.850 ms      78.218 us            16            7
+dir  nested if              27,066   196.072 ms       7.244 us            16            7
+
+--- runtime: loops (condition and body both lowered, 10 trips) ---
+Name                                   Iters      Elapsed   Elapsed/iter   Instrs/iter   Peak Stack
+------------------------------------   -----   ----------   ------------   -----------   ----------
+gen  while under10 do bump()             120   188.365 ms       1.569 ms           356            8
+dir  [ under10 ] [ bump ] while          138   186.293 ms       1.349 ms           356            8
+gen  while ... do { a; b }               208   197.722 ms     950.586 us           251            8
+dir  [ under10 ] [ bump bump ] while     244   207.862 ms     851.893 us           251            8
+gen  nested while                         60   140.707 ms       2.345 ms           468            8
+dir  nested while                         98   193.433 ms       1.973 ms           468            8
+
+--- diagnostic: where the conditional and loop overhead lives ---
+Name             Iters      Elapsed   Elapsed/iter   Instrs/iter   Peak Stack
+-------------   ------   ----------   ------------   -----------   ----------
+push literal    79,143   100.238 ms       1.266 us             3            5
+push composed    3,702   112.145 ms      30.293 us             6            6
+call literal    26,966   100.344 ms       3.721 us             8            6
+call composed    3,570   119.418 ms      33.450 us            11            6

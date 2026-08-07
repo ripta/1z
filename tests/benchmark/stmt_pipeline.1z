@@ -1,0 +1,238 @@
+\ Hosted statement pipeline benchmark (stmt{ }).
+\
+\ Measures the cost of the statement layer in tiers, reusing the expr{ } benchmarking substrate:
+\   - lex        (tokenize-stmt against tokenize-expr on the same source)
+\   - parse      (parse-stmt against parse-expr on the same source)
+\   - lowering   ((lower-stmt), AST precomputed)
+\   - parse-time (read-stmt-source + parse-stmt + emit-stmt, via eval-string)
+\   - runtime    of the generated control flow against equivalent direct 1z
+\
+\ Isolation, mirroring expr_pipeline.1z: the lex and parse rows run on `const` sources, so their
+\ timed loop excludes the later stages. The lowering rows run on ASTs built once through the public
+\ constructors, so their loop pays no parse cost. The runtime rows call words whose stmt{ } block
+\ was parsed and emitted at definition time, so their loop is execution-only.
+\
+\ The runtime tiers are the load-bearing comparison, and they split in two. emit-stmt splices a
+\ block's top-level statement sequence inline as flat 1z, so sequencing and groups match hand-written
+\ 1z exactly. But a branch of `if` or `when`, and both the condition and the body of `while`, have to
+\ be a quotation on the stack when the combinator runs. Those are built by (lower-stmt) as a curry /
+\ compose tree, where hand-written 1z has a plain quotation literal.
+\
+\ The cost of that difference is in pushing the value, not in running it, which the last tier
+\ isolates. So a conditional, which pays the push every time it executes, is several times slower
+\ than its hand-written form, while a loop, which pays it once and then re-enters the same two
+\ values every trip, is only slightly slower.
+\
+\ (lower-stmt) is private to expr/stmt/lower, so the lowering tier borrows it. read-stmt-source and
+\ emit-stmt are parse-time-only and cannot be looped standalone, so their cost is folded into the
+\ parse-time tier via eval-string, exactly as expr_pipeline.1z folds emit-expr. Each eval-string row
+\ is paired with a direct-1z row run through the same machinery, so the difference isolates the
+\ statement layer's contribution. Those rows use shapes whose execution is trivial, an untaken
+\ conditional and a loop that never enters, so runtime work does not pollute the parse-time reading.
+\
+\ The ASTs are built with the public constructors rather than parse-stmt, because a const body that
+\ runs the parser currently fails to resolve the Pratt parser's module-private prefix handler across
+\ the const force. A constructor-built AST is identical to what parse-stmt produces.
+
+use "expr" ;
+use "sequences" ;
+use "lexer" ;
+\ materializing the lazy token stream via #collect needs (lexer-step) in scope
+
+\ The lowering tier's subject. `use "expr"` already reexports this module's public emit-stmt, so the
+\ borrow shadows it with the identical word; shadow-ok accepts that.
+borrow { (lower-stmt): } "expr/stmt/lower" shadow-ok ;
+
+\ Callees the blocks invoke. sub2 is non-commutative, so the runtime rows also confirm left-to-right
+\ argument order. Every word a hosted call names is alphanumeric, because the expression lexer
+\ matches an identifier as a letter followed by alphanumerics and would split a kebab-case name.
+add1: ( n -- n )   [ 1 + ] ;
+dbl:  ( n -- n )   [ 2 * ] ;
+sub2: ( a b -- c ) [ - ] ;
+
+\ Conditions. A hosted condition is an ordinary expression, so a call returning a boolean is the
+\ smallest one that reaches both outcomes.
+yes: ( -- ? ) [ t ] ;
+no: ( -- ? ) [ f ] ;
+
+\ The external state the loop rows advance. A hosted statement has no locals, so a loop terminates
+\ through state its body mutates by side effect. The step cell is the second counter a nested loop
+\ needs to bound its outer iteration.
+\
+\ Ten trips, rather than the three the lowering tests use, so a row's per-trip cost outweighs the
+\ reset both sides of a pair pay.
+tick-cell: V{ 0 } ;
+step-cell: V{ 0 } ;
+
+ticks:   ( -- n ) [ tick-cell 0 #nth ] ;
+steps:   ( -- n ) [ step-cell 0 #nth ] ;
+bump:    ( -- )   [ tick-cell 0 ticks 1 + #nth! drop ] ;
+step:    ( -- )   [ step-cell 0 steps 1 + #nth! drop ] ;
+under10: ( -- ? ) [ ticks 10 < ] ;
+under2:  ( -- ? ) [ steps 2 < ] ;
+
+\ The cells are module state shared by every loop row, so each row starts from zero.
+reset-counters: ( -- ) [
+  tick-cell 0 0 #nth! drop
+  step-cell 0 0 #nth! drop
+] ;
+
+\ Block sources of growing shape, for the lex and parse rows.
+CALL-SRC:  const [ "add1(1)" ] ;
+SEQ3-SRC:  const [ "add1(1); dbl(3); sub2(10, 3)" ] ;
+GROUP-SRC: const [ "{ add1(1); dbl(3) }" ] ;
+WHEN-SRC:  const [ "if yes() then add1(1)" ] ;
+IF-SRC:    const [ "if yes() then add1(1) else dbl(3)" ] ;
+CHAIN-SRC: const [ "if no() then add1(1) else if yes() then dbl(3) else dbl(4)" ] ;
+WHILE-SRC: const [ "while under10() do bump()" ] ;
+NEST-SRC:  const [ "while under2() do { step(); while under10() do bump() }" ] ;
+
+\ The expression nodes the statement ASTs carry.
+ADD1-EXPR: const [ "add1" 1 lit 1 array-n invoke ] ;
+DBL3-EXPR: const [ "dbl" 3 lit 1 array-n invoke ] ;
+SUB2-EXPR: const [ "sub2" 10 lit 3 lit 2 array-n invoke ] ;
+YES-EXPR:  const [ "yes" 0 array-n invoke ] ;
+U10-EXPR:  const [ "under10" 0 array-n invoke ] ;
+U2-EXPR:   const [ "under2" 0 array-n invoke ] ;
+BUMP-EXPR: const [ "bump" 0 array-n invoke ] ;
+STEP-EXPR: const [ "step" 0 array-n invoke ] ;
+
+\ Statement ASTs built once, so the lowering rows pay no parse cost. Each matches the source of the
+\ same name above.
+CALL-AST:  const [ ADD1-EXPR expr-stmt ] ;
+SEQ3-AST:  const [ ADD1-EXPR expr-stmt DBL3-EXPR expr-stmt SUB2-EXPR expr-stmt 3 array-n group-stmt ] ;
+IF-AST:    const [ YES-EXPR ADD1-EXPR expr-stmt DBL3-EXPR expr-stmt if-else-stmt ] ;
+WHILE-AST: const [ U10-EXPR BUMP-EXPR expr-stmt while-stmt ] ;
+NEST-AST: const [
+  U2-EXPR
+  STEP-EXPR expr-stmt
+  U10-EXPR BUMP-EXPR expr-stmt while-stmt
+  2 array-n group-stmt
+  while-stmt
+] ;
+
+\ Inline stmt{ } words against their hand-written equivalents. Parsing and emission happen once, at
+\ definition time, so the runtime rows time execution only.
+GEN-SEQ:   [ stmt{ add1(1); dbl(3) } ] ;
+DIR-SEQ:   [ 1 add1 3 dbl ] ;
+GEN-GROUP: [ stmt{ { add1(1); dbl(3) }; sub2(10, 3) } ] ;
+DIR-GROUP: [ 1 add1 3 dbl 10 3 sub2 ] ;
+
+GEN-WHEN-T: [ stmt{ if yes() then add1(1) } ] ;
+DIR-WHEN-T: [ yes [ 1 add1 ] when ] ;
+GEN-WHEN-F: [ stmt{ if no() then add1(1) } ] ;
+DIR-WHEN-F: [ no [ 1 add1 ] when ] ;
+GEN-IF:     [ stmt{ if yes() then add1(1) else dbl(3) } ] ;
+DIR-IF:     [ yes [ 1 add1 ] [ 3 dbl ] if ] ;
+GEN-CHAIN:  [ stmt{ if no() then add1(1) else if yes() then dbl(3) else dbl(4) } ] ;
+DIR-CHAIN:  [ no [ 1 add1 ] [ yes [ 3 dbl ] [ 4 dbl ] if ] if ] ;
+
+GEN-LOOP:  [ stmt{ while under10() do bump() } ] ;
+DIR-LOOP:  [ [ under10 ] [ bump ] while ] ;
+GEN-GBODY: [ stmt{ while under10() do { bump(); bump() } } ] ;
+DIR-GBODY: [ [ under10 ] [ bump bump ] while ] ;
+GEN-NEST:  [ stmt{ while under2() do { step(); while under10() do bump() } } ] ;
+DIR-NEST:  [ [ under2 ] [ step [ under10 ] [ bump ] while ] while ] ;
+
+\ The two quotation shapes the conditional and loop rows compare, stripped of the statement layer.
+\ COMPOSED-QUOT is the `compose` shape (lower-stmt) builds; the literal is what hand-written 1z has.
+COMPOSED-QUOT: const [ [ 1 ] [ add1 ] compose ] ;
+
+PUSH-LITERAL:  [ [ 1 add1 ] drop ] ;
+PUSH-COMPOSED: [ COMPOSED-QUOT drop ] ;
+CALL-LITERAL:  [ [ 1 add1 ] call drop ] ;
+CALL-COMPOSED: [ COMPOSED-QUOT call drop ] ;
+
+"--- lex (tokenize-stmt vs tokenize-expr on the same source) ---" print-line
+[
+  "lex-stmt  add1(1)" [ CALL-SRC tokenize-stmt #collect drop ] benchmark-auto
+  "lex-expr  add1(1)" [ CALL-SRC tokenize-expr #collect drop ] benchmark-auto
+  "lex-stmt  3-statement seq" [ SEQ3-SRC tokenize-stmt #collect drop ] benchmark-auto
+  "lex-stmt  if / else" [ IF-SRC tokenize-stmt #collect drop ] benchmark-auto
+  "lex-stmt  nested while" [ NEST-SRC tokenize-stmt #collect drop ] benchmark-auto
+] run-benchmarks
+
+nl
+
+"--- parse (parse-stmt vs parse-expr on the same source) ---" print-line
+[
+  "parse-stmt add1(1)" [ CALL-SRC parse-stmt drop ] benchmark-auto
+  "parse-expr add1(1)" [ CALL-SRC parse-expr drop ] benchmark-auto
+  "parse-stmt 3-statement seq" [ SEQ3-SRC parse-stmt drop ] benchmark-auto
+  "parse-stmt { } group" [ GROUP-SRC parse-stmt drop ] benchmark-auto
+  "parse-stmt if, no else" [ WHEN-SRC parse-stmt drop ] benchmark-auto
+  "parse-stmt if / else" [ IF-SRC parse-stmt drop ] benchmark-auto
+  "parse-stmt else-if chain" [ CHAIN-SRC parse-stmt drop ] benchmark-auto
+  "parse-stmt while" [ WHILE-SRC parse-stmt drop ] benchmark-auto
+  "parse-stmt nested while" [ NEST-SRC parse-stmt drop ] benchmark-auto
+] run-benchmarks
+
+nl
+
+"--- lowering ((lower-stmt): AST -> quotation, AST precomputed) ---" print-line
+[
+  "lower-stmt add1(1)" [ CALL-AST (lower-stmt) drop ] benchmark-auto
+  "lower      its expression" [ ADD1-EXPR lower drop ] benchmark-auto
+  "lower-stmt 3-statement seq" [ SEQ3-AST (lower-stmt) drop ] benchmark-auto
+  "lower-stmt if / else" [ IF-AST (lower-stmt) drop ] benchmark-auto
+  "lower-stmt while" [ WHILE-AST (lower-stmt) drop ] benchmark-auto
+  "lower-stmt nested while" [ NEST-AST (lower-stmt) drop ] benchmark-auto
+] run-benchmarks
+
+nl
+
+"--- full parse-time via eval-string (read + parse + lower + emit) ---" print-line
+[
+  "eval stmt{ } sequence" [ "stmt{ add1(1); dbl(3) }" eval-string 2drop ] benchmark-auto
+  "eval direct  sequence" [ "1 add1 3 dbl" eval-string 2drop ] benchmark-auto
+  "eval stmt{ } untaken if" [ "stmt{ if no() then add1(1) }" eval-string ] benchmark-auto
+  "eval direct  untaken when" [ "no [ 1 add1 ] when" eval-string ] benchmark-auto
+  "eval stmt{ } unentered while" [ "stmt{ while no() do bump() }" eval-string ] benchmark-auto
+  "eval direct  unentered while" [ "[ no ] [ bump ] while" eval-string ] benchmark-auto
+] run-benchmarks
+
+nl
+
+"--- runtime: sequencing and groups (spliced flat, expect parity) ---" print-line
+[
+  "gen  add1(1); dbl(3)" [ GEN-SEQ 2drop ] benchmark-auto
+  "dir  1 add1 3 dbl" [ DIR-SEQ 2drop ] benchmark-auto
+  "gen  { a; b }; sub2(10, 3)" [ GEN-GROUP 3drop ] benchmark-auto
+  "dir  1 add1 3 dbl 10 3 sub2" [ DIR-GROUP 3drop ] benchmark-auto
+] run-benchmarks
+
+nl
+
+"--- runtime: conditionals (branch is a lowered quotation value) ---" print-line
+[
+  "gen  if yes then add1(1)" [ GEN-WHEN-T drop ] benchmark-auto
+  "dir  yes [ 1 add1 ] when" [ DIR-WHEN-T drop ] benchmark-auto
+  "gen  if no then add1(1)" [ GEN-WHEN-F ] benchmark-auto
+  "dir  no [ 1 add1 ] when" [ DIR-WHEN-F ] benchmark-auto
+  "gen  if yes then a else b" [ GEN-IF drop ] benchmark-auto
+  "dir  yes [ a ] [ b ] if" [ DIR-IF drop ] benchmark-auto
+  "gen  else-if chain" [ GEN-CHAIN drop ] benchmark-auto
+  "dir  nested if" [ DIR-CHAIN drop ] benchmark-auto
+] run-benchmarks
+
+nl
+
+"--- runtime: loops (condition and body both lowered, 10 trips) ---" print-line
+[
+  "gen  while under10 do bump()" [ reset-counters GEN-LOOP ] benchmark-auto
+  "dir  [ under10 ] [ bump ] while" [ reset-counters DIR-LOOP ] benchmark-auto
+  "gen  while ... do { a; b }" [ reset-counters GEN-GBODY ] benchmark-auto
+  "dir  [ under10 ] [ bump bump ] while" [ reset-counters DIR-GBODY ] benchmark-auto
+  "gen  nested while" [ reset-counters GEN-NEST ] benchmark-auto
+  "dir  nested while" [ reset-counters DIR-NEST ] benchmark-auto
+] run-benchmarks
+
+nl
+
+"--- diagnostic: where the conditional and loop overhead lives ---" print-line
+[
+  "push literal" [ PUSH-LITERAL ] benchmark-auto
+  "push composed" [ PUSH-COMPOSED ] benchmark-auto
+  "call literal" [ CALL-LITERAL ] benchmark-auto
+  "call composed" [ CALL-COMPOSED ] benchmark-auto
+] run-benchmarks

@@ -36,13 +36,12 @@
 \   - parser overhead   (parse-expr on call sources)
 \   - full parse-time   (tokenize + parse + emit-expr, via eval-string)
 \   - runtime overhead  (inline expr{ f(x) } vs hand-written direct 1z)
-\ Calls have no standalone lowering row: `lower` throws on invoke nodes by
-\ design (a call cannot be a self-contained quotation value), so calls lower
-\ only through the parse-time emit-expr path. That emission is parse-time-only
-\ (emit-body / emit-call), so its cost is folded into the full-parse-time tier
-\ rather than measured as a separate runtime loop. At runtime, emit-call emits an
-\ ordinary call_word, so an inline call expr{ } is byte-identical to hand-written
-\ 1z and should show parity.
+\ Calls have no standalone lowering row. `expr{ }` reaches a call only through
+\ emit-expr, so that is the path the production form runs. The emission is
+\ parse-time-only (emit-body / emit-call), so its cost is folded into the
+\ full-parse-time tier rather than measured as a separate runtime loop. At
+\ runtime, emit-call emits an ordinary call_word, so an inline call expr{ } is
+\ byte-identical to hand-written 1z and should show parity.
 
 use "expr" ;
 use "sequences" ;

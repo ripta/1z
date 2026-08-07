@@ -1,4 +1,4 @@
-.PHONY: all branch-info build release run fmt test test-threads-1 test-threads-auto unit-test capi-test capi-release-run embed-stdlib-test integration-test lib-test snake-test eager-test fmt-test leak-goldens-check lsp-test tree-sitter-test contrib aot-test aot-build aot-run aot-checks aot-checks-linux aot-interpreter-strip-check aot-line-directives-check aot-asm-name-check aot-string-literal-direct-check aot-symbol-literal-direct-check aot-trace-instr-check aot-trace-word-filter-check aot-param-inference-check aot-determinism-check aot-symbol-verify aot-symbol-verify-linux bail-stats ir-check ir-check-upstream ir-vendor lua-vendor font8x8-vendor update-golden update-fmt-golden update-aot-golden update-lsp-golden benchmark benchmark-fib benchmark-quotation benchmark-param-inference benchmark-ffi-gen-filter benchmark-word-resolution benchmark-protocol-dispatch benchmark-lint benchmark-collision-build benchmark-retention benchmark-tokenize benchmark-tokenize-alloc benchmark-expr benchmark-fn profiles build-example clean help docs docker-build docker-test freestanding-build wasm-freestanding-build wasm wasm-game-verify wasm-snake-verify baremetal-riscv64-test unit-coverage integration-coverage coverage
+.PHONY: all branch-info build release run fmt test test-threads-1 test-threads-auto unit-test capi-test capi-release-run embed-stdlib-test integration-test lib-test snake-test eager-test fmt-test leak-goldens-check lsp-test tree-sitter-test contrib aot-test aot-build aot-run aot-checks aot-checks-linux aot-interpreter-strip-check aot-line-directives-check aot-asm-name-check aot-string-literal-direct-check aot-symbol-literal-direct-check aot-trace-instr-check aot-trace-word-filter-check aot-param-inference-check aot-determinism-check aot-symbol-verify aot-symbol-verify-linux bail-stats ir-check ir-check-upstream ir-vendor lua-vendor font8x8-vendor update-golden update-fmt-golden update-aot-golden update-lsp-golden benchmark benchmark-fib benchmark-quotation benchmark-param-inference benchmark-ffi-gen-filter benchmark-word-resolution benchmark-protocol-dispatch benchmark-lint benchmark-collision-build benchmark-retention benchmark-tokenize benchmark-tokenize-alloc benchmark-expr benchmark-fn benchmark-stmt profiles build-example clean help docs docker-build docker-test freestanding-build wasm-freestanding-build wasm wasm-game-verify wasm-snake-verify baremetal-riscv64-test unit-coverage integration-coverage coverage
 
 export DEVELOPER_DIR := /Library/Developer/CommandLineTools
 SHELL := /bin/bash
@@ -674,6 +674,10 @@ benchmark-expr: build ## Run the hosted expression pipeline benchmark and record
 benchmark-fn: build ## Run the hosted function-definition benchmark and record the sample
 	./$(ZIG_PREFIX)/bin/1z run tests/benchmark/fn_pipeline.1z > tests/benchmark/fn_pipeline.sample
 	@cat tests/benchmark/fn_pipeline.sample
+
+benchmark-stmt: build ## Run the hosted statement benchmark and record the sample
+	./$(ZIG_PREFIX)/bin/1z run tests/benchmark/stmt_pipeline.1z > tests/benchmark/stmt_pipeline.sample
+	@cat tests/benchmark/stmt_pipeline.sample
 
 # NOTE(ripta): The focused split-based, index-based, flat (struct-free), and `while`-driven harnesses
 #              build successfully with `--emit-runtime-image`. Their AOT runtime currently errors at
