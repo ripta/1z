@@ -15,6 +15,10 @@ sub2: ( a b -- c ) [ - ] ;
 yes: ( -- ? ) [ t ] ;
 no: ( -- ? ) [ f ] ;
 
+\ A fixed number for the bare-identifier comparisons, so they do not depend on
+\ the loop counters the tests below advance.
+five: ( -- n ) [ 5 ] ;
+
 \ The external state the loop tests advance. A hosted statement has no locals,
 \ so a loop terminates through state its body mutates by side effect. The step
 \ cell is the second counter a nested loop needs to bound its outer iteration.
@@ -221,6 +225,45 @@ test-nested-loops: ( -- ) [
   stmt{ while under2() do { step(); while under3() do bump() } }
   steps 2 "the outer loop ran twice" assert=
   ticks 3 "and the inner loop only ran on the first pass" assert=
+] ;
+
+"bare identifiers" test-section
+
+\ A bare identifier is a call of the word of that name, in every position. The
+\ inline emission path and the quotation-value path reach a condition through
+\ different lowering words, so each position is pinned separately.
+
+test-bare-identifier-statement: ( -- ) [
+  stmt{ yes } yes "a bare identifier statement calls the word" assert=
+] ;
+
+test-bare-identifier-top-level-condition: ( -- ) [
+  stmt{ if yes then add1(1) }
+  yes [ 1 add1 ] when "a top-level bare condition matches its `when`" assert=
+] ;
+
+test-bare-identifier-comparison-taken: ( -- ) [
+  stmt{ if five > 3 then add1(1) }
+  five 3 > [ 1 add1 ] when "a bare-identifier comparison matches its `when`" assert=
+] ;
+
+test-bare-identifier-comparison-not-taken: ( -- ) [
+  7 stmt{ if five < 3 then add1(1) }
+  7 "an untaken bare-identifier comparison emits nothing" assert=
+] ;
+
+test-bare-identifier-nested-condition: ( -- ) [
+  \ A nested branch becomes a quotation value, so its condition lowers through
+  \ the other path.
+  stmt{ if yes() then if no then add1(1) else dbl(3) }
+  yes [ no [ 1 add1 ] [ 3 dbl ] if ] when
+  "a nested bare condition matches its hand-written form" assert=
+] ;
+
+test-bare-identifier-loop-condition: ( -- ) [
+  reset-counters
+  stmt{ while under3 do bump() }
+  ticks 3 "a bare loop condition is re-evaluated each iteration" assert=
 ] ;
 
 "sequencing with conditionals" test-section

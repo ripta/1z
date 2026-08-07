@@ -52,7 +52,8 @@ lower: ( node: expr-node -- quotation ) [
       swap >quotation compose  \ ( [ q1 q2 ... callee ] )
     ]
     expr-node:ref: [  \ ( name )
-      \ A parameter reference lowers to a call of the bound local word. The fn
+      \ A bare identifier lowers to a call of the word of that name, resolved by
+      \ ordinary 1z lookup. An fn parameter reference is that same call: the fn
       \ surface binds each parameter to a local word that pushes its value.
       >quotation
     ]
@@ -87,10 +88,8 @@ emit-expr: ( node: expr-node -- ) [
       [ emit-expr ] #each  \ emit each argument in source order, then ( callee )
       >symbol emit-call    \ emit the call
     ]
-    expr-node:ref: [  \ ( name )
-      \ A bare identifier is only meaningful inside an fn body, where parameters
-      \ are bound; in a plain expression it is an error.
-      drop f "a bare identifier reference is only valid in an fn body" throw
+    expr-node:ref: [     \ ( name )
+      >symbol emit-call  \ same as `lower`: a bare identifier is a word call
     ]
   }
 ] ;

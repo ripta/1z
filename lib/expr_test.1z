@@ -133,6 +133,25 @@ test-call-inside-comparison: ( -- ) [
   expr{ add1(1) > dbl(1) } 1 add1 1 dbl > "add1(1) > dbl(1) matches 1 add1 1 dbl >" assert=
 ] ;
 
+"bare identifiers" test-section
+
+\ A bare identifier is a call of the word of that name, the same instruction the
+\ `()` form emits. An fn parameter reference is that same call, since the fn
+\ preamble binds each parameter as a local word.
+test-bare-identifier: ( -- ) [
+  expr{ answer } answer "a bare identifier calls the word of that name" assert=
+] ;
+
+test-bare-identifier-matches-zero-arg-call: ( -- ) [
+  expr{ answer } expr{ answer() } "a bare identifier matches its `()` form" assert=
+] ;
+
+test-bare-identifier-in-arithmetic: ( -- ) [
+  expr{ answer + 1 } answer 1 + "a bare identifier composes into an expression" assert=
+] ;
+
+"calls, continued" test-section
+
 \ A call resolves through ordinary lookup, so a callee defined after the expr{
 \ use still works: the emitted call_word is resolved at run time.
 test-call-forward-reference: ( -- ) [
