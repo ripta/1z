@@ -29,12 +29,13 @@ five: ( -- n ) [ 5 ] ;
 tick-cell: V{ 0 } ;
 step-cell: V{ 0 } ;
 
-ticks:  ( -- n ) [ tick-cell 0 #nth ] ;
-steps:  ( -- n ) [ step-cell 0 #nth ] ;
-bump:   ( -- )   [ tick-cell 0 ticks 1 + #nth! drop ] ;
-step:   ( -- )   [ step-cell 0 steps 1 + #nth! drop ] ;
-under3: ( -- ? ) [ ticks 3 < ] ;
-under2: ( -- ? ) [ steps 2 < ] ;
+ticks:    ( -- n ) [ tick-cell 0 #nth ] ;
+steps:    ( -- n ) [ step-cell 0 #nth ] ;
+bump:     ( -- )   [ tick-cell 0 ticks 1 + #nth! drop ] ;
+step:     ( -- )   [ step-cell 0 steps 1 + #nth! drop ] ;
+bumpstep: ( -- )   [ bump step ] ;
+under3:   ( -- ? ) [ ticks 3 < ] ;
+under2:   ( -- ? ) [ steps 2 < ] ;
 
 \ The cells are module state shared by every test, so each loop test starts from
 \ zero.
@@ -65,11 +66,38 @@ test-two-statements: ( -- ) [
   2 "the first statement's value is beneath it" assert=
 ] ;
 
+\ A block that sequences leaves more than one value behind, so both sides are
+\ packed with `array-n` and the arrays compared. Comparing the bare stacks would
+\ pair the wrong values.
+test-two-statements-match-direct: ( -- ) [
+  stmt{ add1(1); dbl(3) } 2 array-n
+  1 add1 3 dbl 2 array-n
+  "a two-statement block matches its direct 1z" assert=
+] ;
+
 test-statement-order: ( -- ) [
   \ sub2 is not commutative, so this pins the order statements run in.
   stmt{ sub2(10, 3); sub2(3, 10) }
   -7 "the second statement computed 3 - 10" assert=
   7 "the first statement computed 10 - 3" assert=
+] ;
+
+test-statement-order-matches-direct: ( -- ) [
+  stmt{ sub2(10, 3); sub2(3, 10) } 2 array-n
+  10 3 sub2 3 10 sub2 2 array-n
+  "statement order matches its direct 1z" assert=
+] ;
+
+test-three-statements: ( -- ) [
+  stmt{ add1(1); dbl(3); sub2(10, 3) } 3 array-n
+  1 add1 3 dbl 10 3 sub2 3 array-n
+  "a three-statement block matches its direct 1z" assert=
+] ;
+
+test-spaced-separator: ( -- ) [
+  stmt{ add1(1) ; dbl(3) } 2 array-n
+  stmt{ add1(1); dbl(3) } 2 array-n
+  "a separator standing alone runs the same as an attached one" assert=
 ] ;
 
 test-empty-block: ( -- ) [
@@ -84,10 +112,36 @@ test-group-flattens: ( -- ) [
   2 "the group's first member ran first" assert=
 ] ;
 
+test-group-flattens-matches-direct: ( -- ) [
+  stmt{ { add1(1); dbl(3) } } 2 array-n
+  1 add1 3 dbl 2 array-n
+  "a group matches the direct 1z of its members" assert=
+] ;
+
 test-group-then-statement: ( -- ) [
   stmt{ { add1(1) }; dbl(3) }
   6 "the statement after a group runs after it" assert=
   2 "the group's statement ran first" assert=
+] ;
+
+test-group-then-statement-matches-direct: ( -- ) [
+  stmt{ { add1(1) }; dbl(3) } 2 array-n
+  1 add1 3 dbl 2 array-n
+  "a group and the statement after it match their direct 1z" assert=
+] ;
+
+test-empty-group: ( -- ) [
+  7 stmt{ { } } 7 "an empty group emits nothing" assert=
+] ;
+
+test-nested-empty-group: ( -- ) [
+  7 stmt{ { { } } } 7 "an empty group nested in another emits nothing" assert=
+] ;
+
+test-group-trailing-semicolon: ( -- ) [
+  stmt{ { add1(1); dbl(3); } } 2 array-n
+  stmt{ { add1(1); dbl(3) } } 2 array-n
+  "a trailing ';' inside a group runs the same as none" assert=
 ] ;
 
 test-nested-group: ( -- ) [
@@ -115,6 +169,14 @@ test-when-not-taken: ( -- ) [
   7 "an untaken else-less conditional emits nothing" assert=
 ] ;
 
+\ A sentinel sits under each side and one value is packed, so a stray push breaks
+\ the comparison instead of hiding beneath the value it was meant to match.
+test-when-not-taken-matches-direct: ( -- ) [
+  7 stmt{ if no() then add1(1) } 1 array-n
+  7 no [ 1 add1 ] when 1 array-n
+  "an untaken else-less conditional matches its `when`" assert=
+] ;
+
 test-when-comparison-condition: ( -- ) [
   stmt{ if 1 + 2 < 4 then add1(1) }
   1 2 + 4 < [ 1 add1 ] when "a comparison condition matches its `when`" assert=
@@ -140,9 +202,33 @@ test-group-branch-runs-in-order: ( -- ) [
   2 "its first statement is beneath it" assert=
 ] ;
 
+test-group-branch-matches-direct: ( -- ) [
+  stmt{ if yes() then { add1(1); dbl(3) } else dbl(0) } 2 array-n
+  yes [ 1 add1 3 dbl ] [ 0 dbl ] if 2 array-n
+  "a taken group branch matches its direct 1z" assert=
+] ;
+
 test-group-branch-not-taken: ( -- ) [
   stmt{ if no() then { add1(1); dbl(3) } else dbl(4) }
   8 "an untaken group branch runs nothing" assert=
+] ;
+
+test-group-branch-not-taken-matches-direct: ( -- ) [
+  stmt{ if no() then { add1(1); dbl(3) } else dbl(4) }
+  no [ 1 add1 3 dbl ] [ 4 dbl ] if
+  "an untaken group branch matches its direct 1z" assert=
+] ;
+
+test-group-in-else-position: ( -- ) [
+  stmt{ if no() then dbl(0) else { add1(1); dbl(3) } } 2 array-n
+  no [ 0 dbl ] [ 1 add1 3 dbl ] if 2 array-n
+  "a group in the else position matches its direct 1z" assert=
+] ;
+
+test-group-on-both-branches: ( -- ) [
+  stmt{ if yes() then { add1(1); dbl(3) } else { dbl(4); dbl(5) } } 2 array-n
+  yes [ 1 add1 3 dbl ] [ 4 dbl 5 dbl ] if 2 array-n
+  "groups on both branches match their direct 1z" assert=
 ] ;
 
 "nesting" test-section
@@ -161,10 +247,23 @@ test-group-moves-else-outward: ( -- ) [
   "a group in the then position lowers the else to the outer conditional" assert=
 ] ;
 
+test-three-level-dangling-else: ( -- ) [
+  \ Only the innermost conditional has an else, so the two outer ones are `when`.
+  stmt{ if yes() then if yes() then if no() then add1(1) else dbl(3) }
+  yes [ yes [ no [ 1 add1 ] [ 3 dbl ] if ] when ] when
+  "a three-level dangling else still binds to the innermost if" assert=
+] ;
+
 test-else-if-chain: ( -- ) [
   stmt{ if no() then add1(1) else if yes() then dbl(3) else dbl(4) }
   no [ 1 add1 ] [ yes [ 3 dbl ] [ 4 dbl ] if ] if
   "an else-if chain matches its nested `if`" assert=
+] ;
+
+test-two-level-else-if-chain: ( -- ) [
+  stmt{ if no() then add1(1) else if no() then dbl(3) else if yes() then dbl(4) else dbl(5) }
+  no [ 1 add1 ] [ no [ 3 dbl ] [ yes [ 4 dbl ] [ 5 dbl ] if ] if ] if
+  "a two-level else-if chain matches its nested `if`" assert=
 ] ;
 
 "loop" test-section
@@ -196,16 +295,48 @@ test-loop-group-body: ( -- ) [
   ticks 4 "a group body runs both its statements each iteration" assert=
 ] ;
 
+test-loop-group-body-matches-direct: ( -- ) [
+  reset-counters stmt{ while under3() do { bump(); bump() } } ticks
+  reset-counters [ under3 ] [ bump bump ] while ticks
+  "a group loop body matches its hand-written `while`" assert=
+] ;
+
 test-loop-comparison-condition: ( -- ) [
   reset-counters
   stmt{ while ticks() < 2 do bump() }
   ticks 2 "a comparison condition is re-evaluated each iteration" assert=
 ] ;
 
+test-loop-comparison-condition-matches-direct: ( -- ) [
+  reset-counters stmt{ while ticks() < 2 do bump() } ticks
+  reset-counters [ ticks 2 < ] [ bump ] while ticks
+  "a comparison loop condition matches its hand-written `while`" assert=
+] ;
+
+test-loop-trailing-semicolon: ( -- ) [
+  reset-counters stmt{ while under3() do bump(); } ticks
+  reset-counters stmt{ while under3() do bump() } ticks
+  "a trailing ';' after a loop runs the same as none" assert=
+] ;
+
+test-loop-among-statements: ( -- ) [
+  reset-counters
+  stmt{ add1(1); while under3() do bump(); dbl(3) } ticks 3 array-n
+  reset-counters
+  1 add1 [ under3 ] [ bump ] while 3 dbl ticks 3 array-n
+  "a loop among statements matches its direct 1z" assert=
+] ;
+
 test-conditional-in-loop-body: ( -- ) [
   reset-counters
   stmt{ while under3() do if yes() then bump() }
   ticks 3 "a conditional body runs each iteration" assert=
+] ;
+
+test-conditional-in-loop-body-matches-direct: ( -- ) [
+  reset-counters stmt{ while under3() do if yes() then bump() } ticks
+  reset-counters [ under3 ] [ yes [ bump ] when ] while ticks
+  "a conditional loop body matches its hand-written form" assert=
 ] ;
 
 test-loop-in-branch: ( -- ) [
@@ -218,6 +349,21 @@ test-loop-in-branch: ( -- ) [
   "a loop in a branch matches its hand-written form" assert=
 ] ;
 
+test-else-after-loop-branch: ( -- ) [
+  \ A loop has no else form, so the else belongs to the conditional.
+  reset-counters
+  stmt{ if no() then while under3() do bump() else dbl(3) } ticks 2 array-n
+  reset-counters
+  no [ [ under3 ] [ bump ] while ] [ 3 dbl ] if ticks 2 array-n
+  "an else after a loop branch matches its direct 1z" assert=
+] ;
+
+test-loop-in-else-position: ( -- ) [
+  reset-counters stmt{ if no() then dbl(0) else while under3() do bump() } ticks
+  reset-counters no [ 0 dbl ] [ [ under3 ] [ bump ] while ] if ticks
+  "a loop in the else position matches its direct 1z" assert=
+] ;
+
 test-nested-loops: ( -- ) [
   \ The inner condition is already false on the second outer pass, so this also
   \ pins that the inner loop re-checks rather than replaying its first result.
@@ -225,6 +371,24 @@ test-nested-loops: ( -- ) [
   stmt{ while under2() do { step(); while under3() do bump() } }
   steps 2 "the outer loop ran twice" assert=
   ticks 3 "and the inner loop only ran on the first pass" assert=
+] ;
+
+test-nested-loops-match-direct: ( -- ) [
+  reset-counters
+  stmt{ while under2() do { step(); while under3() do bump() } } steps ticks 2 array-n
+  reset-counters
+  [ under2 ] [ step [ under3 ] [ bump ] while ] while steps ticks 2 array-n
+  "nested loops match their hand-written form" assert=
+] ;
+
+test-nested-loops-without-a-group: ( -- ) [
+  \ The two loops read different counters and the body advances both. A shared
+  \ counter would read the same whether or not the nesting survived.
+  reset-counters
+  stmt{ while under2() do while under3() do bumpstep() } ticks steps 2 array-n
+  reset-counters
+  [ under2 ] [ [ under3 ] [ bumpstep ] while ] while ticks steps 2 array-n
+  "a bare nested loop matches its hand-written form" assert=
 ] ;
 
 "bare identifiers" test-section
@@ -275,6 +439,32 @@ test-conditional-among-statements: ( -- ) [
   2 "the statement before it ran first" assert=
 ] ;
 
+test-conditional-among-statements-matches-direct: ( -- ) [
+  stmt{ add1(1); if yes() then dbl(3); add1(9) } 3 array-n
+  1 add1 yes [ 3 dbl ] when 9 add1 3 array-n
+  "a conditional among statements matches its direct 1z" assert=
+] ;
+
+"expression and statement interaction" test-section
+
+test-condition-mixes-calls-and-arithmetic: ( -- ) [
+  stmt{ if add1(1) < dbl(2) then add1(1) }
+  1 add1 2 dbl < [ 1 add1 ] when
+  "a condition mixing calls and arithmetic matches its `when`" assert=
+] ;
+
+test-loop-condition-mixes-call-and-arithmetic: ( -- ) [
+  reset-counters stmt{ while ticks() + 1 < 4 do bump() } ticks
+  reset-counters [ ticks 1 + 4 < ] [ bump ] while ticks
+  "a loop condition mixing a call and arithmetic matches its `while`" assert=
+] ;
+
+test-arithmetic-statement-among-calls: ( -- ) [
+  stmt{ add1(1); 2 * 3 + 4; dbl(3) } 3 array-n
+  1 add1 2 3 * 4 + 3 dbl 3 array-n
+  "an arithmetic statement sequences with calls" assert=
+] ;
+
 "multiline input" test-section
 
 test-multiline: ( -- ) [
@@ -284,6 +474,30 @@ test-multiline: ( -- ) [
   }
   8 "the second line's statement is on top" assert=
   11 "the first line's statement is beneath it" assert=
+] ;
+
+test-multiline-conditional: ( -- ) [
+  stmt{
+    if yes()
+    then add1(1)
+    else dbl(3)
+  }
+  stmt{ if yes() then add1(1) else dbl(3) }
+  "a multiline conditional runs the same as its single-line form" assert=
+] ;
+
+test-multiline-loop: ( -- ) [
+  reset-counters
+  stmt{
+    while under3() do {
+      bump()
+    }
+  }
+  ticks
+  reset-counters
+  stmt{ while under3() do { bump() } }
+  ticks
+  "a multiline loop runs the same as its single-line form" assert=
 ] ;
 
 "forward reference" test-section
