@@ -1,0 +1,19 @@
+\ Two opaque operands a `swap` left in descending slot order, feeding the
+\ polymorphic arithmetic path. The cold arm reads both operands off the physical
+\ stack and sets SP from the second slot alone, so an unsettled pair points it
+\ below the operands. Padding keeps `sub2` past the splice threshold so the call
+\ site really calls it.
+\
+\ The overflow drives the pair into the cold arm, where the fixnum entry
+\ promotes; a misaddressed pair reports a dispatch miss or a stack underflow
+\ instead.
+
+kind: generic ( x -- s ) [ drop "other" ] ;
+kind: method{ fixnum } [ drop "fixnum" ] ;
+kind: method{ bignum } [ drop "bignum" ] ;
+
+sub2: ( a b -- r ) [ swap 0 drop 0 drop 0 drop 0 drop 0 drop 0 drop - ] ;
+
+pick-huge: ( b -- n ) [ [ 9223372036854775807 ] [ 2.5 ] if ] ;
+
+t pick-huge -9223372036854775807 sub2 kind print-line

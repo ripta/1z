@@ -1409,11 +1409,92 @@ fn emitPerOperationFallback(
     _ = slot_a;
 }
 
-/// Emit polymorphic binary arithmetic that handles both fixnum and float
-/// operands at runtime via tag-check branching. Non-numeric operands fall
-/// back to the polymorphic native via `jitNativeWordCall` (the
-/// `per_op_native` fallback category) for just that operation, then continue
-/// compiled execution. The result is written as a boxed Value at dest_slot.
+/// Emit the polymorphic cold arm for a build class that rejects every fallback emission:
+/// resolve the operand pair against the frozen dispatch table and run the method it names.
+///
+/// `emitPerOperationFallback`'s `jitNativeWordCall` is a fallback emission, so a locked build
+/// rejects it and a freestanding build has no such native to reach. The dispatch callback emits no
+/// fallback note, and its lookup is the interpreter's own ladder rather than the builtin-tags-only
+/// one `jitPicDispatch` uses, so a quotation-bodied method reaches its compiled body here.
+///
+/// Callback status 1 means no method covers the pair anywhere in the table, which the interpreter
+/// answers with `error.TypeMismatch`, so the miss trap raises the same error with the same message.
+fn emitPerOperationDispatch(
+    state: *CompileState,
+    op_name: []const u8,
+    slot_b: usize,
+    line: usize,
+) IrCodegenError!void {
+    const ctx = state.ctx;
+
+    const res = state.resolver orelse {
+        state.not_compilable_reason = .unresolvable_word;
+        return IrCodegenError.NotCompilable;
+    };
+    const resolved = res.resolve(op_name, res.user_data) orelse {
+        state.not_compilable_reason = .unresolvable_word;
+        return IrCodegenError.NotCompilable;
+    };
+    if (resolved.dispatch_id == 0) {
+        state.not_compilable_reason = .unresolvable_word;
+        return IrCodegenError.NotCompilable;
+    }
+
+    // Store physical SP so the callback sees both operands, as the native arm does.
+    const sp_for_call = c.ir_const_addr(ctx, slot_b + 1);
+    const new_sp = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_idx, sp_for_call);
+    c._ir_STORE(ctx, state.sp_ptr, new_sp);
+
+    const ctx_val = if (state.preloaded_ctx_val != c.IR_UNUSED)
+        state.preloaded_ctx_val
+    else blk: {
+        JitContextLayout.ensureInit();
+        const ctx_off = c.ir_const_addr(ctx, JitContextLayout.ctx_offset);
+        const ctx_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.jit_ctx_ptr, ctx_off);
+        break :blk c._ir_LOAD(ctx, c.IR_ADDR, ctx_addr);
+    };
+
+    const word_id_const = c.ir_const_addr(ctx, resolved.word_id);
+    const call_result = c._ir_CALL_3(
+        ctx,
+        c.IR_I32,
+        state.dispatch_full_fn,
+        ctx_val,
+        c.ir_const_addr(ctx, resolved.dispatch_id),
+        word_id_const,
+    );
+
+    const miss_status = c.ir_const_i32(ctx, 1);
+    const missed = c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), call_result, miss_status);
+    const if_miss = c._ir_IF(ctx, missed);
+    c._ir_IF_TRUE_cold(ctx, if_miss);
+    {
+        // The trap pushes its own call frame, so the site adds none here.
+        const trap_result = c._ir_CALL_3(
+            ctx,
+            c.IR_I32,
+            state.dispatch_miss_error_fn,
+            ctx_val,
+            word_id_const,
+            c.ir_const_addr(ctx, line),
+        );
+        c._ir_RETURN(ctx, trap_result);
+    }
+    c._ir_IF_FALSE(ctx, if_miss);
+
+    emitCallbackPostCheck(state, call_result, state.error_propagate_status, null, .{ .named = .{ .name = op_name, .line = line } });
+}
+
+/// Emit polymorphic binary arithmetic that handles both fixnum and float operands at runtime via
+/// tag-check branching. The result is written as a boxed Value at dest_slot.
+///
+/// Non-numeric operands and fixnum overflow share a cold arm. It calls the polymorphic native via
+/// `jitNativeWordCall` (the `per_op_native` fallback category), then continues compiled execution.
+/// A build class that rejects fallback emissions takes `emitPerOperationDispatch` instead, which
+/// reaches the same methods through the frozen dispatch table.
+///
+/// Both cold arms hand the operands over through the physical stack, and both set SP from
+/// `slot_b` alone. So the caller must have settled the pair at `slot_a`, `slot_a + 1` first.
 fn emitPolymorphicBinaryArith(
     state: *CompileState,
     slot_a: usize,
@@ -1581,7 +1662,11 @@ fn emitPolymorphicBinaryArith(
         // Save state refs before the callback (it may refresh them).
         const saved_items_ptr = state.items_ptr;
         const saved_base_addr = state.base_addr;
-        try emitPerOperationFallback(state, op_name, slot_a, slot_b, line);
+        if (state.aot_mode and (state.fallbacks_locked or state.freestanding)) {
+            try emitPerOperationDispatch(state, op_name, slot_b, line);
+        } else {
+            try emitPerOperationFallback(state, op_name, slot_a, slot_b, line);
+        }
         // Restore so the MERGE sees consistent refs from both paths.
         state.items_ptr = saved_items_ptr;
         state.base_addr = saved_base_addr;
@@ -2057,6 +2142,10 @@ const CompileState = struct {
     /// (non-bounded) generic call sites in AOT mode so a user generic
     /// dispatches by operand type, falling to its default body on a miss.
     aot_generic_dispatch_fn: c.ir_ref = c.IR_UNUSED,
+    /// Function refs for `jitDispatchFull` and `jitDispatchMissError`, the cold arm a build
+    /// class that rejects fallback emissions takes at a polymorphic arithmetic site.
+    dispatch_full_fn: c.ir_ref = c.IR_UNUSED,
+    dispatch_miss_error_fn: c.ir_ref = c.IR_UNUSED,
     interp_ctx: ?*const Context = null,
     /// Interpreter PIC table for the word being compiled. Each instruction
     /// index maps to a PolymorphicCache recording observed type pairs.
@@ -3096,13 +3185,15 @@ fn seedAnnotatedParams(state: *CompileState, stack: []StackEntry, input_count: u
 /// No tag check guards the plain proofs. A concrete table entry asserts that every call site in
 /// the program passes that type, which is a stronger guarantee than a declaration: an
 /// annotation states an intent the AOT direct-call path never verifies, while the proof
-/// is over the call sites themselves. A `_declared` proof rests on a callee's output annotation
-/// instead, so it gets a tag check at entry -- the enforcement that makes a lying annotation trap
-/// rather than flow garbage into unboxed arithmetic.
+/// is over the call sites themselves. A `_declared` proof rests on something the pass cannot
+/// observe at the call sites, so it gets a tag check at entry -- the enforcement that makes a
+/// lying annotation, or a promoted arithmetic result, trap rather than flow garbage into
+/// unboxed arithmetic.
 ///
 /// The `type-check` pragma does not apply here. It governs whether a declared annotation can be
-/// trusted at runtime; under a relaxed pragma the inference never produces `_declared` proofs,
-/// and the plain proofs read no declaration.
+/// trusted at runtime; under a relaxed pragma the inference produces no annotation-derived
+/// `_declared` proofs, and the plain proofs read no declaration. An arithmetic-derived
+/// `_declared` proof reads none either, so the pragma does not reach it.
 ///
 /// This is the only narrowing a quotation body gets: a quotation is compiled with no
 /// `StackEffect`, so it has no annotations to read.
@@ -6691,8 +6782,6 @@ fn emitIntrinsicGt(ec: EmitCtx) IrCodegenError!ControlFlow {
 /// side that bails when the value is the other numeric type, and an AOT bail
 /// has no interpreter to resume into, so it aborts the program. Under the JIT
 /// the bail deopts to the interpreter, so the speculative unboxed path stays.
-/// Locked and freestanding builds also keep the speculative path: this path's
-/// cold arm emits a per-op native fallback, which those build classes reject.
 fn emitPolyArithFastPath(ec: EmitCtx, op: PolyArithOp) IrCodegenError!bool {
     const state = ec.state;
     const ctx = state.ctx;
@@ -6706,15 +6795,24 @@ fn emitPolyArithFastPath(ec: EmitCtx, op: PolyArithOp) IrCodegenError!bool {
         // The polymorphic path's stores and cold native call cannot be folded
         // away from a discarded branchless trial.
         if (state.in_branchless_trial) return IrCodegenError.BranchlessTrialImpure;
+
+        // Two opaque entries are not necessarily adjacent, and not necessarily in order: a
+        // `swap` reorders them abstractly without moving anything. The cold arm sets SP from
+        // the second slot alone, so a descending pair points it below both operands.
+        sp.* += 2;
+        flushToPhysicalStack(state, stack, sp.*);
+        sp.* -= 2;
+        entry_a = stack[sp.*];
+        entry_b = stack[sp.* + 1];
     } else {
         const one_raw = (entry_a == .raw_at_slot) != (entry_b == .raw_at_slot);
         const known = if (entry_a == .raw_at_slot) entry_b else entry_a;
-        if (!state.aot_mode or state.fallbacks_locked or state.freestanding) return false;
+        if (!state.aot_mode) return false;
         if (!one_raw or !isKnownNumericEntry(known)) return false;
 
-        // The cold arm needs the polymorphic native. When it cannot be
-        // resolved, keep the concrete speculative path instead of rejecting
-        // the whole word.
+        // The cold arm needs the polymorphic native, or the operator's dispatch
+        // id where it dispatches instead. When neither resolves, keep the
+        // concrete speculative path instead of rejecting the whole word.
         const res = state.resolver orelse return false;
         const op_name: []const u8 = switch (op) {
             .add => "+",
@@ -6723,14 +6821,15 @@ fn emitPolyArithFastPath(ec: EmitCtx, op: PolyArithOp) IrCodegenError!bool {
             .div => "/",
             .mod => "%",
         };
-        if (res.resolve(op_name, res.user_data) == null) return false;
+        const resolved = res.resolve(op_name, res.user_data) orelse return false;
+        if (state.fallbacks_locked or state.freestanding) {
+            if (resolved.dispatch_id == 0) return false;
+        }
 
         if (state.in_branchless_trial) return IrCodegenError.BranchlessTrialImpure;
 
-        // The polymorphic emitter and its cold native fallback read both operands
-        // from physical memory at dest_slot and dest_slot+1. Flush to identity
-        // layout so the known operand is boxed into place and the opaque one is
-        // settled there by the proven move planner.
+        // Flush for the same reason, plus one more: the known operand has no physical slot at
+        // all until it is boxed into place.
         sp.* += 2;
         flushToPhysicalStack(state, stack, sp.*);
         sp.* -= 2;
@@ -9430,6 +9529,11 @@ fn emitWordCAotPass(
     // ir_emit_c emit a phantom LOAD. Cheap when unused.
     const aot_generic_dispatch_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "aotTryDispatchGenericOrCall"), proto_3arg);
 
+    // Declared unconditionally for the same reason: the polymorphic arithmetic cold arm is
+    // chosen during emission, after the pre-scan has run.
+    const dispatch_full_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "jitDispatchFull"), proto_3arg);
+    const dispatch_miss_error_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "jitDispatchMissError"), proto_3arg);
+
     const pic_dispatch_fn = if (scan_flags.needs_native_call or interp_ctx_param != null)
         c.ir_const_func(&ctx, c.ir_str(&ctx, "jitPicDispatch"), proto_4arg)
     else
@@ -9591,6 +9695,8 @@ fn emitWordCAotPass(
         .aot_satisfies_dispatch_fn = aot_satisfies_dispatch_fn,
         .aot_satisfies_dispatch_combinator_fn = aot_satisfies_dispatch_combinator_fn,
         .aot_generic_dispatch_fn = aot_generic_dispatch_fn,
+        .dispatch_full_fn = dispatch_full_fn,
+        .dispatch_miss_error_fn = dispatch_miss_error_fn,
         .pic_table = pic_table,
         .pic_stats = pic_stats_out,
         .aot_fallback_emit_count = aot_fallback_emit_count_out,
@@ -11104,6 +11210,8 @@ pub fn emitProgramC(
     try out.appendSlice(allocator, "extern int32_t aotSatisfiesAndDispatch(uintptr_t ctx, uintptr_t dispatch_id, uintptr_t slot_idx, uintptr_t arity, uintptr_t line);\n");
     try out.appendSlice(allocator, "extern int32_t aotSatisfiesAndDispatchCombinator(uintptr_t ctx, uintptr_t dispatch_id, uintptr_t slot_idx, uintptr_t arity, uintptr_t line);\n");
     try out.appendSlice(allocator, "extern int32_t aotTryDispatchGenericOrCall(uintptr_t ctx, uintptr_t dispatch_id, uintptr_t word_id);\n");
+    try out.appendSlice(allocator, "extern int32_t jitDispatchFull(uintptr_t ctx, uintptr_t dispatch_id, uintptr_t word_id);\n");
+    try out.appendSlice(allocator, "extern int32_t jitDispatchMissError(uintptr_t ctx, uintptr_t word_id, uintptr_t line);\n");
     try out.appendSlice(allocator, "\n");
 
     // 4a. Forward declarations (only for successfully compiled words)
@@ -15833,6 +15941,42 @@ test "emitProgramC: generated word with null parent falls back to bare asm-name"
 
     try testing.expect(std.mem.indexOf(u8, source, "asm(\"lonely?\")") != null);
     try testing.expect(std.mem.indexOf(u8, source, "/lonely?") == null);
+}
+
+/// Two opaque operands and a `+` that resolves to a native generic, the shape whose cold arm
+/// differs by build class. A call result carries no type, so `one one +` is the polymorphic
+/// pair without needing an interpreter context to leave a parameter unproven.
+const poly_arith_one_body = makeInstructions(.{@as(i64, 1)});
+const poly_arith_sum_body = [_]Instruction{
+    .{ .op = .{ .call_word = "one" }, .line = 1 },
+    .{ .op = .{ .call_word = "one" }, .line = 1 },
+    .{ .op = .{ .call_word = "+" }, .line = 1 },
+};
+const poly_arith_words = [_]AotWordDesc{
+    .{ .name = "sum", .instructions = &poly_arith_sum_body, .input_count = 0, .output_count = 1, .word_id = 0 },
+    .{ .name = "one", .instructions = &poly_arith_one_body, .input_count = 0, .output_count = 1, .word_id = 1 },
+    .{ .name = "+", .instructions = &.{}, .input_count = 2, .output_count = 1, .word_id = 2, .is_native = true, .is_prelude = true, .dispatch_id = 7 },
+};
+
+test "emitProgramC: a locked build's polymorphic arithmetic cold arm dispatches through the table" {
+    var diag: CodegenDiagnostics = .{};
+    const source = try emitProgramC(&poly_arith_words, &.{}, 0, 2, &.{}, .false, true, test_aot_metadata, &diag, null, false, &.{}, &.{}, &.{}, testing.allocator);
+    defer testing.allocator.free(source);
+
+    try testing.expect(std.mem.indexOf(u8, source, "= jitDispatchFull(") != null);
+    try testing.expect(std.mem.indexOf(u8, source, "= jitDispatchMissError(") != null);
+    // The fallback emission the lock rejects is gone, so the build no longer errors out.
+    try testing.expect(std.mem.indexOf(u8, source, "= jitNativeWordCall(") == null);
+}
+
+test "emitProgramC: a fallback-permitted build keeps the per-operation native cold arm" {
+    var diag: CodegenDiagnostics = .{};
+    defer if (diag.aot_fallback_report.sites.len > 0) testing.allocator.free(diag.aot_fallback_report.sites);
+    const source = try emitProgramC(&poly_arith_words, &.{}, 0, 2, &.{}, .auto, false, test_aot_metadata, &diag, null, false, &.{}, &.{}, &.{}, testing.allocator);
+    defer testing.allocator.free(source);
+
+    try testing.expect(std.mem.indexOf(u8, source, "= jitNativeWordCall(") != null);
+    try testing.expect(std.mem.indexOf(u8, source, "= jitDispatchFull(") == null);
 }
 
 test "emitProgramC: compiled quotation forward declaration carries asm-name" {

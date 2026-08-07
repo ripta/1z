@@ -1,0 +1,16 @@
+\ A promoted arithmetic result meeting a parameter the freeze-time inference
+\ proved fixnum. Under the lock the pass types `a + b` on two fixnums as fixnum,
+\ and `take`'s parameter is narrowed from that. The cold arm promotes on
+\ overflow, so the proof can be false at runtime.
+\
+\ The proof is marked declared for exactly this reason, which puts a tag check at
+\ `take`'s entry. The check traps instead of reading the bignum's payload as an
+\ i64. It carries no message today, which is the entry check's standing
+\ diagnostic gap rather than this site's.
+
+take: ( n -- ) [ 1 + drop "took it" print-line ] ;
+
+pick-huge: ( b -- n ) [ [ 9223372036854775807 ] [ 3 ] if ] ;
+
+f pick-huge 1 + take
+t pick-huge 1 + take

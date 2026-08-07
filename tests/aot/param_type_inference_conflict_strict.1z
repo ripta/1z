@@ -1,21 +1,24 @@
 \ A parameter whose call sites disagree stays opaque, so its arithmetic keeps the
-\ polymorphic path and the locked build is rejected. This is the negative control
-\ for `param_type_inference_fib_strict.1z`.
+\ polymorphic path. This is the negative control for
+\ `param_type_inference_fib_strict.1z`.
 \
 \ `twice` is called once with a fixnum and once with a float, so agree-only
 \ narrowing proves nothing about `x`. `dup +` then compiles with both operands
-\ opaque, which emits one per-operation native fallback for the cold arm shared
-\ by non-numeric operands and fixnum overflow, and any fallback rejects a locked
-\ build.
+\ opaque, and under the lock its cold arm resolves through the frozen dispatch
+\ table. Had the conflict check been missing, `x` would have narrowed to whichever
+\ call site was seen last and the other call would tag-check the wrong tag.
 \
-\ `param_type_inference_narrowing.1z` covers the same word without the lock,
-\ where the pass cannot type a fixnum arithmetic result at all. Under the lock it
-\ can, so this is the one configuration where a missing conflict check would have
-\ narrowed `x` to whichever call site was seen last.
-\
-\ Build-only: the golden is the rejection report.
+\ `param_type_inference_narrowing.1z` covers the same word without the lock, where
+\ the pass cannot type a fixnum arithmetic result at all. Under the lock it can, so
+\ this is the one configuration where the check is load-bearing.
+
+kind: generic ( x -- s ) [ drop "other" ] ;
+kind: method{ fixnum } [ drop "fixnum" ] ;
+kind: method{ float } [ drop "float" ] ;
 
 twice: ( x -- y ) [ dup + ] ;
 
-5 twice drop
-2.5 twice drop
+5 twice kind print-line
+2.5 twice kind print-line
+5 twice 10 = [ "fixnum double ok" ] [ "fixnum double wrong" ] if print-line
+2.5 twice 5.0 = [ "float double ok" ] [ "float double wrong" ] if print-line

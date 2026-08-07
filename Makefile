@@ -276,20 +276,21 @@ aot-param-inference-check: build ## Verify freeze-time call-site inference prove
 	@trap 'rm -f $(_bin) $(_stderr)' EXIT; \
 	: 'TraceWriter re-creates a File.Writer per line, so a seekable stderr overwrites at offset 0; pipe stderr through cat to keep it non-seekable and preserve every line.'; \
 	./$(ZIG_PREFIX)/bin/1z build tests/aot/param_type_inference.1z -o $(_bin) --interpreter-fallback=false --lock-interpreter-setting --trace-aot=freeze 2>&1 1>/dev/null | cat > $(_stderr) || true; \
-	for want in 'fib #0 -> fixnum' 'fib-step #0 -> fixnum' 'fib-step #1 -> fixnum' 'fib-step #2 -> fixnum'; do \
-		if ! grep -qF "AOT freeze param $$want" $(_stderr); then \
+	: 'fib #0 comes from two literal call sites and stays plain. The fib-step trio rests on arithmetic, which the cold arm can promote to bignum, so each demands the entry tag check a declared proof carries. Whole-line matches, since fixnum is a prefix of fixnum_declared.'; \
+	for want in 'fib #0 -> fixnum' 'fib-step #0 -> fixnum_declared' 'fib-step #1 -> fixnum_declared' 'fib-step #2 -> fixnum_declared'; do \
+		if ! grep -qxF "AOT freeze param $$want" $(_stderr); then \
 			echo "FAIL: locked build did not prove '$$want'"; \
 			grep -E '^AOT freeze param ' $(_stderr) || true; exit 1; \
 		fi; \
 	done; \
 	: 'The dip-invoked [ swap over + ] body is narrowed through its combinator call site, under its emitted C symbol.'; \
-	if ! grep -qE '^AOT freeze param onez_q_[0-9]+ #0 -> fixnum' $(_stderr); then \
+	if ! grep -qE '^AOT freeze param onez_q_[0-9]+ #0 -> fixnum_declared' $(_stderr); then \
 		echo "FAIL: locked build did not prove the dip-invoked quotation's parameters"; \
 		grep -E '^AOT freeze param ' $(_stderr) || true; exit 1; \
 	fi; \
 	: 'Without the lock, fixnum arithmetic can promote to bignum, so only the literal-fed parameter is provable.'; \
 	./$(ZIG_PREFIX)/bin/1z build tests/aot/param_type_inference.1z -o $(_bin) --trace-aot=freeze 2>&1 1>/dev/null | cat > $(_stderr) || true; \
-	if ! grep -qF 'AOT freeze param fib #0 -> fixnum' $(_stderr); then \
+	if ! grep -qxF 'AOT freeze param fib #0 -> fixnum' $(_stderr); then \
 		echo "FAIL: unlocked build dropped the literal-fed parameter, which needs no arithmetic rule"; \
 		grep -E '^AOT freeze param ' $(_stderr) || true; exit 1; \
 	fi; \
@@ -765,6 +766,7 @@ baremetal-riscv64-test: ## Build the riscv64 virt platform and AOT freestanding 
 	timeout $(TARGET_TIMEOUT) zig build baremetal-riscv64-test --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG)
 	scripts/baremetal-riscv64-test.sh $(ZIG_PREFIX)/baremetal/riscv64/1z-hello.elf tests/baremetal/riscv64/hello.serial.expected $(TARGET_TIMEOUT)
 	scripts/baremetal-riscv64-test.sh $(ZIG_PREFIX)/baremetal/riscv64/1z-dispatch.elf tests/baremetal/riscv64/dispatch.serial.expected $(TARGET_TIMEOUT)
+	scripts/baremetal-riscv64-test.sh $(ZIG_PREFIX)/baremetal/riscv64/1z-mixed-operand.elf tests/baremetal/riscv64/mixed_operand.serial.expected $(TARGET_TIMEOUT)
 
 clean: ## Remove build artifacts
 	mv .zig-cache .old.zig-cache

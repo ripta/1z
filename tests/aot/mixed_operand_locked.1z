@@ -1,0 +1,38 @@
+\ Mixed and opaque numeric operands under `--interpreter-fallback=false
+\ --lock-interpreter-setting`. The lock rejects every fallback emission, so an
+\ arithmetic site with an operand of unknown tag used to keep a speculative tag
+\ check that aborts when the value is the other numeric type. Such a site now
+\ branches on the tag inline and resolves the rest through the frozen dispatch
+\ table.
+\
+\ A branch merge of two numeric types is what leaves an operand opaque here. The
+\ freeze-time inference cannot type it, and codegen carries no type on a physical
+\ slot, so each `+` below meets one unboxed literal and one unknown.
+\
+\ Observation is constrained by the lock itself. `.` needs a proven parameter
+\ type before `inspect` monomorphizes, so a result's type is named by a user
+\ generic and its value is compared against a same-typed literal.
+
+kind: generic ( x -- s ) [ drop "other" ] ;
+kind: method{ fixnum } [ drop "fixnum" ] ;
+kind: method{ float } [ drop "float" ] ;
+kind: method{ bignum } [ drop "bignum" ] ;
+
+\ A quotation-bodied method on a pair the inline arms cannot serve. It resolves
+\ only through the cold arm's full lookup, and runs through its compiled body.
++: method{ string fixnum } [ drop drop 4242 ] ;
+
+pick-num:  ( b -- n ) [ [ 7 ] [ 2.5 ] if ] ;
+pick-huge: ( b -- n ) [ [ 9223372036854775807 ] [ 2.5 ] if ] ;
+pick-str:  ( b -- n ) [ [ "s" ] [ 2.5 ] if ] ;
+
+t pick-num 3 + kind print-line
+f pick-num 3 + kind print-line
+
+\ Overflow leaves the inline fixnum arm for the cold arm, where the fixnum pair's
+\ native entry promotes.
+t pick-huge 1 + kind print-line
+
+t pick-num 3 + 10 = [ "fixnum sum ok" ] [ "fixnum sum wrong" ] if print-line
+f pick-num 3 + 5.5 = [ "float sum ok" ] [ "float sum wrong" ] if print-line
+t pick-str 3 + 4242 = [ "user method ok" ] [ "user method wrong" ] if print-line

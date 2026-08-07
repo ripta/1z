@@ -63,9 +63,14 @@ pub const Options = struct {
     /// `+`, `-`, and `*` promote to bignum on fixnum overflow, and `div` promotes on `minInt / -1`,
     /// so none of those results is a fixnum in general. Compiled concrete arithmetic bails on each
     /// of those cases instead, and on the division-by-zero cases `rem` and `%` share. An AOT bail
-    /// aborts rather than resuming interpreted, so the only promoting path left inside compiled
-    /// code is the per-op native fallback. A locked build rejects any build that emits one, so an
-    /// execution that would falsify the rule cannot occur in a binary this flag ever ships in.
+    /// aborts rather than resuming interpreted.
+    ///
+    /// A polymorphic arithmetic site does promote, through the dispatch cold arm a locked build
+    /// takes. The pass and codegen disagree about which sites those are: this pass proves types
+    /// over the call sites, while codegen sends any operand it holds in an untyped physical slot
+    /// down the polymorphic path. So a site the pass typed `fixnum` can be the one that promotes.
+    /// The rule is unsound on its own, and `arithResult` marks every fixnum arithmetic result
+    /// `_declared` so codegen enforces it with an entry tag check.
     arithmetic_result_types: bool = false,
     /// Interned builtin type values for trusting a callee's declared output annotations. When set,
     /// a call to a word whose every declared output carries one of these annotations yields those
@@ -86,10 +91,11 @@ pub const Options = struct {
 /// `boolean` is tracked for branch and comparison precision even though it is never exported;
 /// codegen seeds only unboxed fixnum and float parameters.
 ///
-/// The `_declared` variants carry provenance: the type rests (at least in part) on a callee's
-/// declared output annotation rather than an observed fact. A proof fed such a value must be
-/// enforced with a tag check at the consuming word's entry, since the annotation itself is never
-/// validated at runtime. Taint spreads through joins and arithmetic, and through parameter
+/// The `_declared` variants carry provenance: the type rests (at least in part) on something the
+/// pass cannot observe at the call site. Two sources produce one. A callee's declared output
+/// annotation is never validated at runtime. A fixnum arithmetic result can promote to bignum
+/// through the dispatch cold arm. A proof fed such a value must be enforced with a tag check at
+/// the consuming word's entry. Taint spreads through joins and arithmetic, and through parameter
 /// seeding, so it survives any number of hops.
 const AbstractValue = union(enum) {
     unknown,
@@ -692,7 +698,10 @@ const Inference = struct {
             return if (tainted) .float_declared else .float;
         }
         if (a.isFixnumish() and b.isFixnumish() and self.options.arithmetic_result_types) {
-            return if (tainted) .fixnum_declared else .fixnum;
+            // Always tainted, even from two plain operands. Overflow promotes to bignum on the
+            // dispatch cold arm a locked build takes, so the proof needs the entry tag check a
+            // `_declared` state demands.
+            return .fixnum_declared;
         }
         return .unknown;
     }
@@ -1394,7 +1403,9 @@ test "float arithmetic is typed without the lock, fixnum arithmetic only with it
     var locked = try fixture(allocator, &words, &.{}, &.{});
     defer locked.deinit(allocator);
     try inferParamTypes(&locked, .{ .arithmetic_result_types = true }, allocator);
-    try testing.expectEqualSlices(InferredParamType, &.{.fixnum}, wordParams(&locked, "count"));
+    // Declared, not plain: overflow promotes on the dispatch cold arm, so the proof carries the
+    // entry-check requirement even though no annotation was read.
+    try testing.expectEqualSlices(InferredParamType, &.{.fixnum_declared}, wordParams(&locked, "count"));
     try testing.expectEqualSlices(InferredParamType, &.{.float}, wordParams(&locked, "take-float"));
 }
 

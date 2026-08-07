@@ -1,0 +1,6 @@
+fixnum
+float
+bignum
+fixnum sum ok
+float sum ok
+user method ok

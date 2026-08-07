@@ -724,6 +724,29 @@ fn addBaremetalRiscv64VirtTest(
 
     const install_dispatch = b.addInstallFile(dispatch_elf, "baremetal/riscv64/1z-dispatch.elf");
 
+    // NOTE(ripta): AOT-compile the mixed-operand program the same way. Its arithmetic sites take
+    //              the polymorphic tag branch, whose cold arm pulls in the freestanding
+    //              full-lookup dispatch and its named miss trap.
+    const mixed_build = b.addRunArtifact(host_exe);
+    mixed_build.setName("baremetal aot build: mixed-operand");
+    mixed_build.addArg("build");
+    mixed_build.addArg("--target=riscv64-freestanding-none");
+    mixed_build.addArg("--interpreter-fallback=false");
+    mixed_build.addPrefixedFileArg("--linker-script=", b.path("src/baremetal/riscv64/virt/linker.ld"));
+    mixed_build.addPrefixedFileArg("--link-object=", entry_lib.getEmittedBin());
+    mixed_build.addPrefixedFileArg("--link-object=", platform_lib.getEmittedBin());
+    mixed_build.addPrefixedFileArg("--link-object=", runtime_lib.getEmittedBin());
+    mixed_build.addArg("-o");
+    const mixed_elf = mixed_build.addOutputFileArg("1z-mixed-operand.elf");
+    mixed_build.addFileArg(b.path("tests/baremetal/riscv64/mixed_operand.1z"));
+
+    const mixed_verify = b.addSystemCommand(&.{ "sh", "-c", baremetal_verify_script, "baremetal-verify" });
+    mixed_verify.addFileArg(mixed_elf);
+    mixed_verify.setName("baremetal aot verify: mixed-operand symbols and no libc");
+    mixed_verify.expectExitCode(0);
+
+    const install_mixed = b.addInstallFile(mixed_elf, "baremetal/riscv64/1z-mixed-operand.elf");
+
     const test_step = b.step("baremetal-riscv64-test", "Compile riscv64 virt platform library, stubs, and AOT freestanding ELFs");
     test_step.dependOn(&platform_lib.step);
     test_step.dependOn(&runtime_lib.step);
@@ -734,6 +757,8 @@ fn addBaremetalRiscv64VirtTest(
     test_step.dependOn(&install_hello.step);
     test_step.dependOn(&dispatch_verify.step);
     test_step.dependOn(&install_dispatch.step);
+    test_step.dependOn(&mixed_verify.step);
+    test_step.dependOn(&install_mixed.step);
 
     return test_step;
 }

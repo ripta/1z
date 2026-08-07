@@ -1382,6 +1382,9 @@ fn drainWorklist(
                     .def = word,
                 });
                 emitFreezeWordTrace(ctx, name, "native");
+                if (isColdArmDispatchOperator(name)) {
+                    try walkDispatchMethodBodies(ctx, word, identity, worklist, seen, &result.quotation_bodies, quotation_seen, &result.method_body_ptrs, &result.pending_call_targets, &result.pending_callee_bindings, diagnostics, artifact_class, allocator, result_allocator);
+                }
                 continue;
             },
             .compound, .literal => {},
@@ -2194,6 +2197,21 @@ fn detectBuriedCallees(
     }
 }
 
+/// The native generics whose dispatch table compiled code resolves against directly, through the
+/// polymorphic arithmetic and comparison cold arms.
+///
+/// Every other native generic dispatches from inside its own native body, so widening this set is
+/// a separate question from the cold arm's reach. Widening it was measured: `#len` and `>iterator`
+/// then drag method bodies the freeze cannot compile into a strict build, which the fail-clean
+/// check rejects.
+fn isColdArmDispatchOperator(name: []const u8) bool {
+    if (name.len != 1) return false;
+    return switch (name[0]) {
+        '+', '-', '*', '/', '%', '=', '<', '>' => true,
+        else => false,
+    };
+}
+
 /// Walk every user `method{` dispatch entry registered for a generic word,
 /// treating each method body as if it were a nested quotation literal inside
 /// the polymorphic word. This serves two purposes:
@@ -2207,12 +2225,11 @@ fn detectBuriedCallees(
 ///
 /// Scope and limits:
 ///
-/// - Only words carrying the `generic` marker participate. Native polymorphic
-///   primitives like `+` keep their existing direct-call treatment; the BFS
-///   records them in `native_defs` and never reaches this helper. Generics with
-///   a non-empty default body participate too; their default body is collected
-///   separately by `collectCallWords` on the word body, and this helper adds the
-///   method bodies on top.
+/// - Only words carrying the `generic` marker participate. A native generic reaches this helper
+///   only for the operators `isColdArmDispatchOperator` names, since those are the ones compiled
+///   code resolves against directly. Generics with a non-empty default body participate too; their
+///   default body is collected separately by `collectCallWords` on the word body, and this helper
+///   adds the method bodies on top.
 /// - All entries for the generic's `dispatch_id` are walked, regardless of how
 ///   many methods are registered.
 /// - Only `.quotation` bodies are walked. `.native_fn` and `.host_callback`

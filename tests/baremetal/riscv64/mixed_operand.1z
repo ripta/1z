@@ -1,0 +1,18 @@
+\ Mixed numeric operands on bare metal. A branch merge of two numeric types
+\ leaves an operand opaque, so `3 +` below meets one unboxed literal and one
+\ value of unknown tag. Freestanding used to keep a speculative tag check there,
+\ which aborts on the other numeric type; the site now branches on the tag
+\ inline. The replayed table holds no native entries, so fixnum and float are
+\ exactly what the inline arms must cover.
+
+kind: generic ( x -- s ) [ drop "other" ] ;
+kind: method{ fixnum } [ drop "a fixnum" ] ;
+kind: method{ float } [ drop "a float" ] ;
+
+pick-num: ( b -- n ) [ [ 7 ] [ 2.5 ] if ] ;
+
+t pick-num 3 + kind print-line
+f pick-num 3 + kind print-line
+
+t pick-num 3 + 10 = [ "fixnum sum ok" ] [ "fixnum sum wrong" ] if print-line
+f pick-num 3 + 5.5 = [ "float sum ok" ] [ "float sum wrong" ] if print-line
