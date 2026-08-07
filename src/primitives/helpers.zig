@@ -496,6 +496,21 @@ pub fn setErrorHint(ctx: *Context, hint: []const u8) void {
     ctx.pending_error_hint = hint;
 }
 
+/// True for the numeric variants the arithmetic natives handle without a dispatch method.
+pub fn isNativeNumeric(val: Value) bool {
+    return val == .fixnum or val == .float or val == .bignum;
+}
+
+/// Report that `+ - * / %` found no applicable method for the operand pair.
+///
+/// The offending operand is the first non-numeric one, so a ratio meeting a fixnum names the
+/// ratio. Both the natives and the compiled dispatch-miss trap set the error here, so a locked
+/// AOT binary reports what the interpreter reports and the two can share a golden.
+pub fn setNumberOperandError(ctx: *Context, a: Value, b: Value) void {
+    setErrorHint(ctx, "operands must be numbers (fixnum, float, bignum, or ratio)");
+    setTypeMismatchError(ctx, "number", if (!isNativeNumeric(a)) a else b);
+}
+
 /// Report that a word is not available on the current build target.
 /// Used by capability-gated primitives in freestanding builds where the
 /// underlying OS surface is unavailable. The dispatch-time sandbox check

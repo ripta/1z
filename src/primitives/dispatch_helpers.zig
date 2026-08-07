@@ -67,7 +67,7 @@ fn autoUnwrapTopOperand(ctx: *Context) !void {
     try ctx.stack.push(val.tagged.inner.*);
 }
 
-fn autoUnwrapBinaryOperands(ctx: *Context, unwrap_a: bool, unwrap_b: bool) !void {
+pub fn autoUnwrapBinaryOperands(ctx: *Context, unwrap_a: bool, unwrap_b: bool) !void {
     const b = try ctx.stack.pop();
     const a = try ctx.stack.pop();
     defer container_backing.releaseValue(a);
@@ -78,6 +78,14 @@ fn autoUnwrapBinaryOperands(ctx: *Context, unwrap_a: bool, unwrap_b: bool) !void
     try ctx.stack.push(new_b);
 }
 
+/// A resolved dispatch entry, plus which operands the caller must unwrap before running it. The
+/// lookup itself never mutates the stack.
+pub const AutoUnwrap = struct {
+    entry: dispatch_mod.DispatchEntry,
+    unwrap_a: bool,
+    unwrap_b: bool,
+};
+
 /// Look up a binary dispatch entry, trying enum-level fallback.
 ///
 /// Precedence:
@@ -85,13 +93,8 @@ fn autoUnwrapBinaryOperands(ctx: *Context, unwrap_a: bool, unwrap_b: bool) !void
 /// 2. a's enum name with b's variant name
 /// 3. a's variant name with b's enum name
 /// 4. Both enum names
-const AutoUnwrap = struct {
-    entry: dispatch_mod.DispatchEntry,
-    unwrap_a: bool,
-    unwrap_b: bool,
-};
-
-fn lookupBinaryWithFallback(ctx: *Context, dispatch_id: u32, a: Value, b: Value) ?AutoUnwrap {
+/// 5. Either or both base types, for a parameterized operand, which the caller unwraps first
+pub fn lookupBinaryWithFallback(ctx: *Context, dispatch_id: u32, a: Value, b: Value) ?AutoUnwrap {
     const a_type = dispatch_mod.dispatchDescriptor(a, ctx);
     const b_type = dispatch_mod.dispatchDescriptor(b, ctx);
     if (ctx.lookupBinaryDispatch(dispatch_id, a_type, b_type)) |entry| return .{ .entry = entry, .unwrap_a = false, .unwrap_b = false };

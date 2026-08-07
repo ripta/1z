@@ -46,6 +46,7 @@ const iterators_mod = @import("primitives/iterators.zig");
 const sequences_mod = @import("primitives/sequences.zig");
 const control = @import("primitives/control.zig");
 const dispatch_helpers = @import("primitives/dispatch_helpers.zig");
+const arithmetic_mod = @import("primitives/arithmetic.zig");
 const markers_mod = @import("primitives/markers.zig");
 const WordDefinition = @import("dictionary.zig").WordDefinition;
 
@@ -14010,6 +14011,213 @@ export fn jitNullCodePtrError(ctx_raw: usize) callconv(.c) i32 {
     return setJitError(ctx_raw, error.NullCodePtr);
 }
 
+/// The three comparison words that derive an answer from a `cmp` method when the direct lookup
+/// misses, mirroring `nativeEq` / `nativeLt` / `nativeGt`.
+const CmpDerivedOp = enum { eq, lt, gt };
+
+fn cmpDerivedOpFor(word_name: []const u8) ?CmpDerivedOp {
+    if (std.mem.eql(u8, word_name, "=")) return .eq;
+    if (std.mem.eql(u8, word_name, "<")) return .lt;
+    if (std.mem.eql(u8, word_name, ">")) return .gt;
+    return null;
+}
+
+/// Which native's error tail a dispatch miss reproduces.
+///
+/// Only `+ - * / %` and `<` / `>` are emitted with a miss trap. `=` is not: its miss is a constant
+/// `f`, which the call site pushes directly. Any other word arriving here is a codegen bug, so it
+/// gets a message naming itself rather than one of the two shapes it does not have.
+const MissMessageKind = enum { number, ordering, unexpected };
+
+fn missMessageKindFor(word_name: []const u8) MissMessageKind {
+    if (word_name.len != 1) return .unexpected;
+    return switch (word_name[0]) {
+        '+', '-', '*', '/', '%' => .number,
+        '<', '>' => .ordering,
+        else => .unexpected,
+    };
+}
+
+/// Resolve the word a compiled call site baked, walking the parent-context chain the same way
+/// `jitNativeWordCall` does.
+fn jitWordEntryFor(ctx: *Context, word_id: u32) ?jit_dispatch_mod.JitEntry {
+    if (ctx.jit_dispatch.get(word_id)) |e| return e;
+    var parent = ctx.parent_context;
+    while (parent) |p| : (parent = p.parent_context) {
+        if (p.jit_dispatch.get(word_id)) |e| return e;
+    }
+    return null;
+}
+
+/// Run a resolved dispatch body without re-entering the interpreter.
+///
+/// An interpreter-free binary is produced by linker garbage collection, so `executeDispatchBody`
+/// cannot be reused: its quotation arm reaches `executeQuotationWithPic`, and that static edge
+/// keeps the whole interpreter linked. This is the second body-execution path that forces, and
+/// the two must stay in agreement on everything except the fallthrough.
+///
+/// A body with no compiled entry point cannot run in a binary that has no interpreter, so both a
+/// null `code_ptr` and a bail raise `NullCodePtr` -- the established trap for a compiled body that
+/// is not there. Neither is reachable from correct freeze output.
+fn runCompiledDispatchBody(ctx: *Context, entry: dispatch_mod.DispatchEntry) !void {
+    switch (entry.body) {
+        .quotation => |q| {
+            if (entry.source_module) |mod| {
+                try ctx.pushModuleDepsFrame(mod);
+                defer ctx.popModuleDepsFrameTraced(mod);
+                try runCompiledQuotationBody(ctx, q);
+            } else {
+                try runCompiledQuotationBody(ctx, q);
+            }
+        },
+        .native_fn => |func| try func(ctx),
+        .host_callback => |host| {
+            const rc = host.callback(host.handle, host.user_data);
+            if (rc != 0) return error.HostCallbackFailed;
+        },
+    }
+}
+
+fn runCompiledQuotationBody(ctx: *Context, q: value_mod.Quotation) !void {
+    const ptr = q.code_ptr orelse return error.NullCodePtr;
+
+    try ctx.pushLocalFrame();
+    defer ctx.popLocalFrame();
+
+    var jit_ctx = JitContext{
+        .items_ptr = ctx.stack.items.items.ptr,
+        .sp_ptr = &ctx.stack.items.items.len,
+        .capacity = ctx.stack.items.capacity,
+        .ctx = ctx,
+    };
+    const func: CompiledFn = @ptrCast(@alignCast(ptr));
+    switch (ExecResult.fromStatus(func(&jit_ctx))) {
+        .ok => {},
+        .error_propagate => {
+            const err = ctx.jit_pending_error orelse error.UserThrown;
+            ctx.jit_pending_error = null;
+            return err;
+        },
+        .bail => return error.NullCodePtr,
+    }
+}
+
+/// Derive `=` / `<` / `>` from a `cmp` method, the compiled counterpart of
+/// `tryDispatchBinaryViaCmp`. Returns false when no `cmp` method covers the operand pair.
+fn dispatchViaCmp(ctx: *Context, op: CmpDerivedOp) !bool {
+    const cmp_id = ctx.resolveDispatchId("cmp") orelse return false;
+
+    const a = try ctx.stack.peekN(1);
+    const b = try ctx.stack.peek();
+    const hit = dispatch_helpers.lookupBinaryWithFallback(ctx, cmp_id, a, b) orelse return false;
+
+    if (hit.unwrap_a or hit.unwrap_b) {
+        try dispatch_helpers.autoUnwrapBinaryOperands(ctx, hit.unwrap_a, hit.unwrap_b);
+    }
+    try runCompiledDispatchBody(ctx, hit.entry);
+
+    const cmp_result = try ctx.stack.pop();
+    defer container_backing.releaseValue(cmp_result);
+    const boolean = switch (cmp_result) {
+        .fixnum => |v| switch (op) {
+            .eq => v == 0,
+            .lt => v < 0,
+            .gt => v > 0,
+        },
+        .tagged => |t| blk: {
+            if (std.mem.eql(u8, t.tag.name, "ordering:lt")) break :blk op == .lt;
+            if (std.mem.eql(u8, t.tag.name, "ordering:eq")) break :blk op == .eq;
+            if (std.mem.eql(u8, t.tag.name, "ordering:gt")) break :blk op == .gt;
+            return error.TypeMismatch;
+        },
+        else => return error.TypeMismatch,
+    };
+    try ctx.stack.push(.{ .boolean = boolean });
+    return true;
+}
+
+/// Full-lookup binary dispatch for an AOT cold arm that cannot emit a fallback.
+///
+/// `jitPicDispatch` resolves descriptors only through `builtin_type_array` and runs native bodies
+/// only, which is exactly right where both operand types are proven builtin scalars. At a mixed
+/// site the opaque operand can be anything, so this reuses the interpreter's own
+/// `lookupBinaryWithFallback` ladder and supplies its own body runner. A ratio operand and a
+/// user-defined method on a virtual, struct, or enum type resolve here and would miss there.
+///
+/// Status 0 means a method ran, 1 that none exists for the operand pair, and 2 that the body
+/// raised and `jit_pending_error` is set. Operands are peeked, never popped, so a miss leaves the
+/// stack exactly as the call site arranged it.
+export fn jitDispatchFull(ctx_raw: usize, dispatch_id_raw: usize, word_id_raw: usize) callconv(.c) i32 {
+    if (ctx_raw == 0) return 1;
+    const ctx: *Context = @ptrFromInt(ctx_raw);
+    if (ctx.stack.depth() < 2) return 1;
+
+    const a = ctx.stack.peekN(1) catch return 1;
+    const b = ctx.stack.peek() catch return 1;
+
+    if (dispatch_helpers.lookupBinaryWithFallback(ctx, @intCast(dispatch_id_raw), a, b)) |hit| {
+        if (hit.unwrap_a or hit.unwrap_b) {
+            dispatch_helpers.autoUnwrapBinaryOperands(ctx, hit.unwrap_a, hit.unwrap_b) catch |err| {
+                ctx.jit_pending_error = err;
+                return 2;
+            };
+        }
+        runCompiledDispatchBody(ctx, hit.entry) catch |err| {
+            ctx.jit_pending_error = err;
+            return 2;
+        };
+        return 0;
+    }
+
+    const entry = jitWordEntryFor(ctx, @intCast(word_id_raw)) orelse return 1;
+    const op = cmpDerivedOpFor(entry.word_name) orelse return 1;
+    const derived = dispatchViaCmp(ctx, op) catch |err| {
+        ctx.jit_pending_error = err;
+        return 2;
+    };
+    return if (derived) 0 else 1;
+}
+
+/// Report a dispatch miss at a compiled arithmetic or comparison site.
+///
+/// The message mirrors each native's own error tail rather than naming the dispatch machinery, so
+/// a locked binary reports what the interpreter reports and the two share a golden. `=` never
+/// reaches here: its miss is a constant `f`, which the call site pushes directly.
+///
+/// The operands are consumed, as the natives consume them, so a `recover` handler sees the same
+/// stack depth in a locked binary that it sees interpreted.
+export fn jitDispatchMissError(ctx_raw: usize, word_id_raw: usize, line_raw: usize) callconv(.c) i32 {
+    if (ctx_raw == 0) return 2;
+    const ctx: *Context = @ptrFromInt(ctx_raw);
+    const entry = jitWordEntryFor(ctx, @intCast(word_id_raw));
+    const word_name = if (entry) |e| e.word_name else "";
+    const display_name = if (entry) |e| e.displayName() else "";
+
+    ctx.pushCallFrame(display_name, ctx.current_source, @intCast(line_raw), 0);
+
+    const items = ctx.stack.items.items;
+    if (items.len >= 2) {
+        const a = items[items.len - 2];
+        const b = items[items.len - 1];
+        switch (missMessageKindFor(word_name)) {
+            // `nativeLt` and `nativeGt` release the second operand unexamined and report the
+            // first, so the compiled trap names the same one.
+            .ordering => helpers.setTypeMismatchError(ctx, "fixnum or float", a),
+            .number => helpers.setNumberOperandError(ctx, a, b),
+            .unexpected => helpers.setErrorContext(ctx, "no applicable method for '{s}'", .{word_name}),
+        }
+        // The message holds arena copies of everything it needed, so the operands can go now.
+        ctx.stack.items.items.len -= 2;
+        container_backing.releaseValue(b);
+        container_backing.releaseValue(a);
+    } else {
+        helpers.setErrorContext(ctx, "no applicable method for '{s}'", .{word_name});
+    }
+
+    ctx.jit_pending_error = ctx.wordErrorCleanup(display_name, error.TypeMismatch);
+    return 2;
+}
+
 const ModuleWordHit = struct {
     word: value_mod.ModuleWord,
     module: *const value_mod.Module,
@@ -14689,6 +14897,246 @@ test "jitNativeWordCall: unrecognized word_id with no cached native leaf returns
     const word_id = try ctx.jit_dispatch.assignId("some-compound-word");
     const rc = jitNativeWordCall(@intFromPtr(&ctx), word_id, 1);
     try testing.expectEqual(@as(i32, 1), rc);
+}
+
+/// A compiled dispatch body: consumes two operands and pushes a marker, the shape an AOT-replayed
+/// method's `code_ptr` has.
+fn testDispatchBodyPush99(jit_ctx: *JitContext) callconv(.c) i32 {
+    const ctx: *Context = @ptrCast(@alignCast(jit_ctx.ctx));
+    ctx.stack.popAndRelease() catch return 2;
+    ctx.stack.popAndRelease() catch return 2;
+    ctx.stack.push(.{ .fixnum = 99 }) catch return 2;
+    jit_ctx.items_ptr = ctx.stack.items.items.ptr;
+    jit_ctx.capacity = ctx.stack.items.capacity;
+    return 0;
+}
+
+/// A compiled `cmp` body reporting "less than" for whatever pair it is handed.
+fn testCmpBodyPushLess(jit_ctx: *JitContext) callconv(.c) i32 {
+    const ctx: *Context = @ptrCast(@alignCast(jit_ctx.ctx));
+    ctx.stack.popAndRelease() catch return 2;
+    ctx.stack.popAndRelease() catch return 2;
+    ctx.stack.push(.{ .fixnum = -1 }) catch return 2;
+    jit_ctx.items_ptr = ctx.stack.items.items.ptr;
+    jit_ctx.capacity = ctx.stack.items.capacity;
+    return 0;
+}
+
+/// A `cmp` body violating the protocol: its result is neither a fixnum nor an `ordering:*`.
+fn testCmpBodyPushString(jit_ctx: *JitContext) callconv(.c) i32 {
+    const ctx: *Context = @ptrCast(@alignCast(jit_ctx.ctx));
+    ctx.stack.popAndRelease() catch return 2;
+    ctx.stack.popAndRelease() catch return 2;
+    ctx.stack.push(value_mod.stringValue("nope")) catch return 2;
+    jit_ctx.items_ptr = ctx.stack.items.items.ptr;
+    jit_ctx.capacity = ctx.stack.items.capacity;
+    return 0;
+}
+
+/// Define a generic word so it has a resolvable dispatch id, and assign it a compiled-call word id.
+fn defineDispatchTestWord(ctx: *Context, name: []const u8) !struct { dispatch_id: u32, word_id: u32 } {
+    try ctx.defineWord(name, .{ .name = name, .action = .{ .compound = &[_]value_mod.Instruction{} } });
+    return .{
+        .dispatch_id = ctx.resolveDispatchId(name).?,
+        .word_id = try ctx.jit_dispatch.assignId(name),
+    };
+}
+
+test "jitDispatchFull: a mixed fixnum/float pair resolves through the registered native entry" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    const def = ctx.dictionary.getPtr("+").?;
+    const word_id = try ctx.jit_dispatch.assignId("+");
+
+    try ctx.stack.push(.{ .fixnum = 1 });
+    try ctx.stack.push(.{ .float = 2.5 });
+
+    try testing.expectEqual(@as(i32, 0), jitDispatchFull(@intFromPtr(&ctx), def.dispatch_id, word_id));
+    try testing.expectEqual(@as(usize, 1), ctx.stack.depth());
+    try testing.expectEqual(@as(f64, 3.5), (try ctx.stack.pop()).float);
+}
+
+test "jitDispatchFull: a quotation-bodied method runs through its compiled code_ptr" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    const ids = try defineDispatchTestWord(&ctx, "combine");
+    const fixnum_tv = ctx.lookupBuiltinTypeValue("fixnum").?;
+    try ctx.registerDispatch(
+        .{ .dispatch_id = ids.dispatch_id, .type_a = fixnum_tv.descriptor.?, .type_b = fixnum_tv.descriptor.? },
+        .{ .body = .{ .quotation = .{ .instructions = &.{}, .code_ptr = @ptrCast(&testDispatchBodyPush99) } } },
+        false,
+    );
+
+    try ctx.stack.push(.{ .fixnum = 3 });
+    try ctx.stack.push(.{ .fixnum = 4 });
+
+    try testing.expectEqual(@as(i32, 0), jitDispatchFull(@intFromPtr(&ctx), ids.dispatch_id, ids.word_id));
+    try testing.expectEqual(@as(usize, 1), ctx.stack.depth());
+    try testing.expectEqual(@as(i64, 99), (try ctx.stack.pop()).fixnum);
+}
+
+test "jitDispatchFull: a quotation body with no compiled code_ptr traps" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    const ids = try defineDispatchTestWord(&ctx, "combine");
+    const fixnum_tv = ctx.lookupBuiltinTypeValue("fixnum").?;
+    try ctx.registerDispatch(
+        .{ .dispatch_id = ids.dispatch_id, .type_a = fixnum_tv.descriptor.?, .type_b = fixnum_tv.descriptor.? },
+        .{ .body = .{ .quotation = .{ .instructions = &.{} } } },
+        false,
+    );
+
+    try ctx.stack.push(.{ .fixnum = 3 });
+    try ctx.stack.push(.{ .fixnum = 4 });
+
+    try testing.expectEqual(@as(i32, 2), jitDispatchFull(@intFromPtr(&ctx), ids.dispatch_id, ids.word_id));
+    try testing.expectEqual(error.NullCodePtr, ctx.jit_pending_error.?);
+}
+
+test "jitDispatchFull: a parameterized operand resolves through the base-type arm and unwraps" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    const ids = try defineDispatchTestWord(&ctx, "combine");
+    const fixnum_tv = ctx.lookupBuiltinTypeValue("fixnum").?;
+    try ctx.registerDispatch(
+        .{ .dispatch_id = ids.dispatch_id, .type_a = fixnum_tv.descriptor.?, .type_b = fixnum_tv.descriptor.? },
+        .{ .body = .{ .quotation = .{ .instructions = &.{}, .code_ptr = @ptrCast(&testDispatchBodyPush99) } } },
+        false,
+    );
+
+    // `jitPicDispatch` resolves descriptors only through `builtin_type_array`, so a wrapper like
+    // this has no descriptor there at all. The full ladder reaches its base type.
+    var wrapper_desc = value_mod.TypeDescriptor{ .kind = .{ .builtin = {} } };
+    var wrapper_tv = value_mod.TypeValue{ .name = "meters", .descriptor = &wrapper_desc };
+    const vt = value_mod.VirtualType{
+        .name = "meters",
+        .inner_type = "fixnum",
+        .base_type = fixnum_tv,
+        .type_val = &wrapper_tv,
+    };
+    const inner = Value{ .fixnum = 3 };
+    try ctx.stack.push(.{ .tagged = .{ .tag = &vt, .inner = &inner } });
+    try ctx.stack.push(.{ .fixnum = 4 });
+
+    try testing.expectEqual(@as(i32, 0), jitDispatchFull(@intFromPtr(&ctx), ids.dispatch_id, ids.word_id));
+    try testing.expectEqual(@as(usize, 1), ctx.stack.depth());
+    try testing.expectEqual(@as(i64, 99), (try ctx.stack.pop()).fixnum);
+}
+
+test "jitDispatchFull: a cmp-only comparable type answers < and > through the derivation" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    const cmp_ids = try defineDispatchTestWord(&ctx, "cmp");
+    const boolean_tv = ctx.lookupBuiltinTypeValue("boolean").?;
+    try ctx.registerDispatch(
+        .{ .dispatch_id = cmp_ids.dispatch_id, .type_a = boolean_tv.descriptor.?, .type_b = boolean_tv.descriptor.? },
+        .{ .body = .{ .quotation = .{ .instructions = &.{}, .code_ptr = @ptrCast(&testCmpBodyPushLess) } } },
+        false,
+    );
+
+    // `<` registers native entries for the numeric and byte types only, so a boolean pair misses
+    // the direct lookup and falls to the `cmp` derivation.
+    const lt_def = ctx.dictionary.getPtr("<").?;
+    const lt_word_id = try ctx.jit_dispatch.assignId("<");
+    try ctx.stack.push(.{ .boolean = true });
+    try ctx.stack.push(.{ .boolean = false });
+    try testing.expectEqual(@as(i32, 0), jitDispatchFull(@intFromPtr(&ctx), lt_def.dispatch_id, lt_word_id));
+    try testing.expectEqual(true, (try ctx.stack.pop()).boolean);
+
+    const gt_def = ctx.dictionary.getPtr(">").?;
+    const gt_word_id = try ctx.jit_dispatch.assignId(">");
+    try ctx.stack.push(.{ .boolean = true });
+    try ctx.stack.push(.{ .boolean = false });
+    try testing.expectEqual(@as(i32, 0), jitDispatchFull(@intFromPtr(&ctx), gt_def.dispatch_id, gt_word_id));
+    try testing.expectEqual(false, (try ctx.stack.pop()).boolean);
+}
+
+test "jitDispatchFull: a non-ordering cmp result raises TypeMismatch" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    const cmp_ids = try defineDispatchTestWord(&ctx, "cmp");
+    const boolean_tv = ctx.lookupBuiltinTypeValue("boolean").?;
+    try ctx.registerDispatch(
+        .{ .dispatch_id = cmp_ids.dispatch_id, .type_a = boolean_tv.descriptor.?, .type_b = boolean_tv.descriptor.? },
+        .{ .body = .{ .quotation = .{ .instructions = &.{}, .code_ptr = @ptrCast(&testCmpBodyPushString) } } },
+        false,
+    );
+
+    const lt_def = ctx.dictionary.getPtr("<").?;
+    const lt_word_id = try ctx.jit_dispatch.assignId("<");
+    try ctx.stack.push(.{ .boolean = true });
+    try ctx.stack.push(.{ .boolean = false });
+
+    try testing.expectEqual(@as(i32, 2), jitDispatchFull(@intFromPtr(&ctx), lt_def.dispatch_id, lt_word_id));
+    try testing.expectEqual(error.TypeMismatch, ctx.jit_pending_error.?);
+}
+
+test "jitDispatchFull: a genuine miss returns 1 and leaves the stack untouched" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    const def = ctx.dictionary.getPtr("+").?;
+    const word_id = try ctx.jit_dispatch.assignId("+");
+
+    try ctx.stack.push(.{ .fixnum = 1 });
+    try ctx.stack.push(.{ .boolean = true });
+
+    try testing.expectEqual(@as(i32, 1), jitDispatchFull(@intFromPtr(&ctx), def.dispatch_id, word_id));
+    try testing.expectEqual(@as(usize, 2), ctx.stack.depth());
+    try testing.expectEqual(true, (try ctx.stack.pop()).boolean);
+    try testing.expectEqual(@as(i64, 1), (try ctx.stack.pop()).fixnum);
+}
+
+test "jitDispatchMissError: the arithmetic message and hint match the native's" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    const word_id = try ctx.jit_dispatch.assignId("+");
+    try ctx.stack.push(.{ .fixnum = 1 });
+    try ctx.stack.push(value_mod.stringValue("x"));
+    try testing.expectEqual(@as(i32, 2), jitDispatchMissError(@intFromPtr(&ctx), word_id, 7));
+    try testing.expectEqual(error.TypeMismatch, ctx.jit_pending_error.?);
+
+    // `wordErrorCleanup` drains the pending message and hint into the innermost captured frame,
+    // so the comparison reads them from there rather than off the context.
+    const captured = ctx.error_details.items[0];
+
+    var interp = Context.init(testing.allocator);
+    defer interp.deinit();
+    try interp.stack.push(.{ .fixnum = 1 });
+    try interp.stack.push(value_mod.stringValue("x"));
+    try testing.expectError(error.TypeMismatch, arithmetic_mod.nativeAdd(&interp));
+    try testing.expectEqualStrings(interp.pending_error_message.?, captured.message);
+    try testing.expectEqualStrings(interp.pending_error_hint.?, captured.hint.?);
+
+    // Both consume their operands, so a `recover` handler sees the same depth either way.
+    try testing.expectEqual(interp.stack.depth(), ctx.stack.depth());
+}
+
+test "jitDispatchMissError: the comparison message names the first operand and sets no hint" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    const word_id = try ctx.jit_dispatch.assignId("<");
+    try ctx.stack.push(value_mod.stringValue("x"));
+    try ctx.stack.push(.{ .fixnum = 1 });
+    try testing.expectEqual(@as(i32, 2), jitDispatchMissError(@intFromPtr(&ctx), word_id, 7));
+
+    const captured = ctx.error_details.items[0];
+    try testing.expectEqual(@as(?[]const u8, null), captured.hint);
+
+    var interp = Context.init(testing.allocator);
+    defer interp.deinit();
+    try interp.stack.push(value_mod.stringValue("x"));
+    try interp.stack.push(.{ .fixnum = 1 });
+    try testing.expectError(error.TypeMismatch, arithmetic_mod.nativeLt(&interp));
+    try testing.expectEqualStrings(interp.pending_error_message.?, captured.message);
 }
 
 test "jitInterpretedCall: entry module resolves that module's word, not the cache-scan winner" {

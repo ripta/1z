@@ -34,10 +34,6 @@ fn valToFloat(alloc: Allocator, val: Value) f64 {
     };
 }
 
-fn isNativeNumeric(val: Value) bool {
-    return val == .fixnum or val == .float or val == .bignum;
-}
-
 /// Convert a Value (fixnum or float) to a Number for the float promotion path.
 pub fn popNumVal(val: Value) Number {
     return if (val == .float) .{ .float = val.float } else .{ .fixnum = val.fixnum };
@@ -690,8 +686,7 @@ pub fn nativeAdd(ctx: *Context) anyerror!void {
     defer container_backing.releaseValue(b);
     const a = try ctx.stack.pop();
     defer container_backing.releaseValue(a);
-    helpers.setErrorHint(ctx, "operands must be numbers (fixnum, float, bignum, or ratio)");
-    helpers.setTypeMismatchError(ctx, "number", if (!isNativeNumeric(a)) a else b);
+    helpers.setNumberOperandError(ctx, a, b);
     return error.TypeMismatch;
 }
 
@@ -701,8 +696,7 @@ pub fn nativeSub(ctx: *Context) anyerror!void {
     defer container_backing.releaseValue(b);
     const a = try ctx.stack.pop();
     defer container_backing.releaseValue(a);
-    helpers.setErrorHint(ctx, "operands must be numbers (fixnum, float, bignum, or ratio)");
-    helpers.setTypeMismatchError(ctx, "number", if (!isNativeNumeric(a)) a else b);
+    helpers.setNumberOperandError(ctx, a, b);
     return error.TypeMismatch;
 }
 
@@ -712,8 +706,7 @@ pub fn nativeMul(ctx: *Context) anyerror!void {
     defer container_backing.releaseValue(b);
     const a = try ctx.stack.pop();
     defer container_backing.releaseValue(a);
-    helpers.setErrorHint(ctx, "operands must be numbers (fixnum, float, bignum, or ratio)");
-    helpers.setTypeMismatchError(ctx, "number", if (!isNativeNumeric(a)) a else b);
+    helpers.setNumberOperandError(ctx, a, b);
     return error.TypeMismatch;
 }
 
@@ -724,8 +717,7 @@ pub fn nativeDiv(ctx: *Context) anyerror!void {
     defer container_backing.releaseValue(b);
     const a = try ctx.stack.pop();
     defer container_backing.releaseValue(a);
-    helpers.setErrorHint(ctx, "operands must be numbers (fixnum, float, bignum, or ratio)");
-    helpers.setTypeMismatchError(ctx, "number", if (!isNativeNumeric(a)) a else b);
+    helpers.setNumberOperandError(ctx, a, b);
     return error.TypeMismatch;
 }
 
@@ -736,8 +728,7 @@ pub fn nativeMod(ctx: *Context) anyerror!void {
     defer container_backing.releaseValue(b);
     const a = try ctx.stack.pop();
     defer container_backing.releaseValue(a);
-    helpers.setErrorHint(ctx, "operands must be numbers (fixnum, float, bignum, or ratio)");
-    helpers.setTypeMismatchError(ctx, "number", if (!isNativeNumeric(a)) a else b);
+    helpers.setNumberOperandError(ctx, a, b);
     return error.TypeMismatch;
 }
 

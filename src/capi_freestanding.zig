@@ -260,6 +260,8 @@ comptime {
         @export(&jitInterpretedCall, .{ .name = "jitInterpretedCall" });
         @export(&jitNativeWordCall, .{ .name = "jitNativeWordCall" });
         @export(&aotTryDispatchGenericOrCall, .{ .name = "aotTryDispatchGenericOrCall" });
+        @export(&jitDispatchFull, .{ .name = "jitDispatchFull" });
+        @export(&jitDispatchMissError, .{ .name = "jitDispatchMissError" });
         @export(&aotSatisfiesAndDispatch, .{ .name = "aotSatisfiesAndDispatch" });
         @export(&aotSatisfiesAndDispatchCombinator, .{ .name = "aotSatisfiesAndDispatchCombinator" });
         @export(&jitOverflowError, .{ .name = "jitOverflowError" });
@@ -1125,6 +1127,172 @@ fn aotTryDispatchGenericOrCall(ctx_raw: usize, dispatch_id_raw: usize, word_id_r
         .ctx = handle,
     };
     return code_ptr(&jit_ctx);
+}
+
+/// The three comparison words that derive an answer from a `cmp` method when the direct lookup
+/// misses, mirroring the hosted `nativeEq` / `nativeLt` / `nativeGt`.
+const CmpDerivedOp = enum { eq, lt, gt };
+
+fn cmpDerivedOpFor(word_name: []const u8) ?CmpDerivedOp {
+    if (std.mem.eql(u8, word_name, "=")) return .eq;
+    if (std.mem.eql(u8, word_name, "<")) return .lt;
+    if (std.mem.eql(u8, word_name, ">")) return .gt;
+    return null;
+}
+
+fn freestandingWordName(handle: *OnezHandle, word_id: usize) ?[]const u8 {
+    if (word_id >= handle.word_names.len) return null;
+    const name_ptr = handle.word_names[word_id] orelse return null;
+    return std.mem.span(name_ptr);
+}
+
+/// Freestanding mirror of the hosted `helpers.valueTypeName`, for the dispatch-miss message.
+///
+/// A tagged value names its own virtual type; every other variant names its discriminant, a
+/// struct instance included. That is the hosted error convention, and it is not
+/// `dispatch_mod.dispatchTypeName`, which names a struct instance's own struct type.
+fn freestandingValueTypeName(v: Value) []const u8 {
+    switch (v) {
+        .tagged => |t| {
+            const vt: *const value_mod.VirtualType = @ptrCast(@alignCast(t.tag));
+            return vt.name;
+        },
+        inline else => |_, tag| {
+            return comptime dispatch_mod.builtinTypeName(@field(std.meta.Tag(value_mod.Value), @tagName(tag)));
+        },
+    }
+}
+
+fn isFreestandingNumeric(v: Value) bool {
+    return v == .fixnum or v == .float or v == .bignum;
+}
+
+/// Which native's error tail a dispatch miss reproduces.
+const MissMessageKind = enum { number, ordering, unexpected };
+
+fn missMessageKindFor(word_name: []const u8) MissMessageKind {
+    if (word_name.len != 1) return .unexpected;
+    return switch (word_name[0]) {
+        '+', '-', '*', '/', '%' => .number,
+        '<', '>' => .ordering,
+        else => .unexpected,
+    };
+}
+
+/// Run a dispatch body, converting a bail into a trap.
+///
+/// `jitDispatchFull` reserves status 1 for "no method exists", so a body returning it would read
+/// as a miss to the call site after the body already ran. A bail is a request to deoptimize into
+/// an interpreter this build does not have, which is why the hosted runner raises on it too.
+fn runDispatchBodyOrTrap(handle: *OnezHandle, entry: dispatch_mod.DispatchEntry) i32 {
+    const status = runFreestandingDispatchBody(handle, entry);
+    if (status == 1) {
+        setLastError(handle, "method dispatch body cannot deoptimize on this build", .{});
+        return 2;
+    }
+    return status;
+}
+
+/// Derive `=` / `<` / `>` from a `cmp` method. Returns the body's status on a hit, null when no
+/// `cmp` method covers the operand pair.
+///
+/// Without this a type made comparable through `cmp` alone would answer correctly under the
+/// interpreter lock and wrongly here, since a residual `=` miss pushes a constant `f`.
+fn freestandingDispatchViaCmp(handle: *OnezHandle, table: *const dispatch_mod.DispatchTable, op: CmpDerivedOp) ?i32 {
+    const env = FreestandingSatisfiesEnv{ .handle = handle };
+    const cmp_id = env.resolveDispatchId("cmp") orelse return null;
+
+    const a = handle.stack[handle.stack_len - 2];
+    const b = handle.stack[handle.stack_len - 1];
+    const hit = freestandingLookupBinary(handle, table, cmp_id, a, b) orelse return null;
+
+    if (hit.unwrap_a) handle.stack[handle.stack_len - 2] = handle.stack[handle.stack_len - 2].tagged.inner.*;
+    if (hit.unwrap_b) handle.stack[handle.stack_len - 1] = handle.stack[handle.stack_len - 1].tagged.inner.*;
+    const status = runDispatchBodyOrTrap(handle, hit.entry);
+    if (status != 0) return status;
+
+    const cmp_result = popValue(handle) orelse return 2;
+    const boolean = switch (cmp_result) {
+        .fixnum => |v| switch (op) {
+            .eq => v == 0,
+            .lt => v < 0,
+            .gt => v > 0,
+        },
+        .tagged => |t| blk: {
+            const vt: *const value_mod.VirtualType = @ptrCast(@alignCast(t.tag));
+            if (std.mem.eql(u8, vt.name, "ordering:lt")) break :blk op == .lt;
+            if (std.mem.eql(u8, vt.name, "ordering:eq")) break :blk op == .eq;
+            if (std.mem.eql(u8, vt.name, "ordering:gt")) break :blk op == .gt;
+            setLastError(handle, "cmp method returned a non-ordering value", .{});
+            return 2;
+        },
+        else => {
+            setLastError(handle, "cmp method returned a non-ordering value", .{});
+            return 2;
+        },
+    };
+    return pushValue(handle, .{ .boolean = boolean });
+}
+
+/// Full-lookup binary dispatch for an AOT cold arm that cannot emit a fallback.
+///
+/// The replayed table holds method rows only -- `registerNativeDispatch` populates a hosted
+/// `Context` at init, and there is no such init here. So fixnum and float operands are handled
+/// inline by the call site, a user-defined method resolves through this, and everything else
+/// misses and traps.
+///
+/// Status 0 means a method ran, 1 that none exists for the operand pair, and 2 that the body
+/// raised and `last_error` is set. Operands are read in place, never popped, so a miss leaves the
+/// stack exactly as the call site arranged it.
+fn jitDispatchFull(ctx_raw: usize, dispatch_id_raw: usize, word_id_raw: usize) callconv(.c) i32 {
+    const handle = handleFromContext(ctx_raw) orelse return 1;
+    const table: *const dispatch_mod.DispatchTable = if (handle.method_dispatch) |*t| t else return 1;
+    if (handle.stack_len < 2) return 1;
+
+    const a = handle.stack[handle.stack_len - 2];
+    const b = handle.stack[handle.stack_len - 1];
+    if (freestandingLookupBinary(handle, table, @intCast(dispatch_id_raw), a, b)) |hit| {
+        if (hit.unwrap_a) handle.stack[handle.stack_len - 2] = handle.stack[handle.stack_len - 2].tagged.inner.*;
+        if (hit.unwrap_b) handle.stack[handle.stack_len - 1] = handle.stack[handle.stack_len - 1].tagged.inner.*;
+        return runDispatchBodyOrTrap(handle, hit.entry);
+    }
+
+    const word_name = freestandingWordName(handle, word_id_raw) orelse return 1;
+    const op = cmpDerivedOpFor(word_name) orelse return 1;
+    return freestandingDispatchViaCmp(handle, table, op) orelse 1;
+}
+
+/// Report a dispatch miss at a compiled arithmetic or comparison site.
+///
+/// The message mirrors each native's own error tail. It carries no value brief: formatting an
+/// arbitrary value is a hosted capability this substrate does not have.
+///
+/// The operands are consumed, as the natives consume them, so the post-error stack depth matches
+/// the hosted trap's.
+fn jitDispatchMissError(ctx_raw: usize, word_id_raw: usize, line_raw: usize) callconv(.c) i32 {
+    // The line argument feeds hosted call frames, which this substrate does not keep.
+    _ = line_raw;
+    const handle = handleFromContext(ctx_raw) orelse return 2;
+    const word_name = freestandingWordName(handle, word_id_raw) orelse "";
+    if (handle.stack_len < 2) {
+        setLastError(handle, "no applicable method for '{s}'", .{word_name});
+        return 2;
+    }
+
+    const a = handle.stack[handle.stack_len - 2];
+    const b = handle.stack[handle.stack_len - 1];
+    handle.stack_len -= 2;
+    switch (missMessageKindFor(word_name)) {
+        // `nativeLt` and `nativeGt` release the second operand unexamined and report the first,
+        // so the compiled trap names the same one.
+        .ordering => setLastError(handle, "expected fixnum or float, got {s}", .{freestandingValueTypeName(a)}),
+        .number => {
+            const offender = if (!isFreestandingNumeric(a)) a else b;
+            setLastError(handle, "expected number, got {s}", .{freestandingValueTypeName(offender)});
+        },
+        .unexpected => setLastError(handle, "no applicable method for '{s}'", .{word_name}),
+    }
+    return 2;
 }
 
 /// Freestanding environment for the shared satisfies core.
@@ -2580,6 +2748,186 @@ test "freestanding generic dispatch unwraps parameterized operands on the base-t
     try std.testing.expectEqual(@as(usize, 2), handle.stack_len);
     try std.testing.expectEqual(@as(i64, 101), handle.stack[1].fixnum);
     try std.testing.expectEqual(@as(i64, 5), handle.stack[0].fixnum);
+}
+
+/// A binary dispatch-entry row carrying its generic name, which the `cmp` derivation scans for.
+fn namedDispatchTestRow(dispatch_id: u32, type_a_slot: u32, type_b_slot: u32, quotation_id: u32, generic_name: []const u8) populate_core.DispatchEntryDescription {
+    var row = dispatchTestRow(dispatch_id, type_a_slot, type_b_slot, quotation_id);
+    row.generic_name = generic_name.ptr;
+    row.generic_name_len = @intCast(generic_name.len);
+    return row;
+}
+
+/// A `cmp` body honoring the contract: consumes both operands and reports "less than".
+fn cmpBodyPushLess(jit_ctx: *JitContext) callconv(.c) i32 {
+    const sp = jit_ctx.sp_ptr;
+    if (sp.* < 2) return 2;
+    sp.* -= 2;
+    jit_ctx.items_ptr[sp.*] = .{ .fixnum = -1 };
+    sp.* += 1;
+    return 0;
+}
+
+test "freestanding jitDispatchFull resolves a replayed method and unwraps a parameterized operand" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var stack: [4]Value align(16) = undefined;
+    var handle = OnezHandle{ .allocator = arena.allocator(), .stack = stack[0..] };
+    defer if (handle.method_dispatch) |*table| table.deinit();
+
+    const descs = [_]populate_core.TypeDescriptor{std.mem.zeroes(populate_core.TypeDescriptor)};
+    const tv_rows = [_]populate_core.TypeValueRow{
+        .{ .name = "fixnum", .name_len = 6, .slot = 1, .descriptor = null, .member_type_slots = null, .member_type_count = 0 },
+    };
+    const rows = [_]populate_core.DispatchEntryDescription{
+        dispatchTestRow(21, 1, 1, 0),
+    };
+    var header = emptyTestImageHeader();
+    header.typevalue_slot_count = 2;
+    header.typevalue_count = tv_rows.len;
+    header.typevalues = &tv_rows;
+    header.typedescriptors = &descs;
+    header.dispatch_entry_slot_count = rows.len;
+    header.dispatch_entry_descriptions = &rows;
+
+    var tv_slots = [_]?*const value_mod.TypeValue{ null, null };
+    try std.testing.expectEqual(ONEZ_OK, onez_load_runtime_image(
+        &handle,
+        &header,
+        @ptrCast(&tv_slots),
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+    ));
+
+    var quotations = [_]?OnezWordFn{&methodBodyPush101};
+    handle.quotation_table = quotations[0..];
+    try std.testing.expectEqual(ONEZ_OK, onez_replay_method_dispatch(&handle));
+
+    const ctx_raw = @intFromPtr(&handle);
+
+    handle.stack[0] = .{ .fixnum = 3 };
+    handle.stack[1] = .{ .fixnum = 4 };
+    handle.stack_len = 2;
+    try std.testing.expectEqual(@as(i32, 0), jitDispatchFull(ctx_raw, 21, 0));
+    try std.testing.expectEqual(@as(usize, 3), handle.stack_len);
+    try std.testing.expectEqual(@as(i64, 101), handle.stack[2].fixnum);
+
+    // The base-type arm unwraps a parameterized wrapper before the fixnum/fixnum method runs.
+    var wrapper_desc = value_mod.TypeDescriptor{ .kind = .{ .builtin = {} } };
+    var wrapper_tv = value_mod.TypeValue{ .name = "meters", .descriptor = &wrapper_desc };
+    const vt = value_mod.VirtualType{
+        .name = "meters",
+        .inner_type = "fixnum",
+        .base_type = tv_slots[1].?,
+        .type_val = &wrapper_tv,
+    };
+    const inner = Value{ .fixnum = 5 };
+    handle.stack[0] = .{ .tagged = .{ .tag = @ptrCast(&vt), .inner = &inner } };
+    handle.stack[1] = .{ .fixnum = 4 };
+    handle.stack_len = 2;
+    try std.testing.expectEqual(@as(i32, 0), jitDispatchFull(ctx_raw, 21, 0));
+    try std.testing.expectEqual(@as(i64, 5), handle.stack[0].fixnum);
+    try std.testing.expectEqual(@as(i64, 101), handle.stack[2].fixnum);
+
+    // A boolean operand pair has no method anywhere, and this handle carries no word-name table,
+    // so the miss cannot reach a `cmp` derivation either.
+    handle.stack[0] = .{ .boolean = true };
+    handle.stack[1] = .{ .boolean = false };
+    handle.stack_len = 2;
+    try std.testing.expectEqual(@as(i32, 1), jitDispatchFull(ctx_raw, 21, 0));
+    try std.testing.expectEqual(@as(usize, 2), handle.stack_len);
+}
+
+test "freestanding jitDispatchFull derives < from a cmp-only method" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var stack: [4]Value align(16) = undefined;
+    var word_names = [_]?[*:0]const u8{"<"};
+    var handle = OnezHandle{
+        .allocator = arena.allocator(),
+        .stack = stack[0..],
+        .word_names = word_names[0..],
+    };
+    defer if (handle.method_dispatch) |*table| table.deinit();
+
+    const descs = [_]populate_core.TypeDescriptor{std.mem.zeroes(populate_core.TypeDescriptor)};
+    const tv_rows = [_]populate_core.TypeValueRow{
+        .{ .name = "boolean", .name_len = 7, .slot = 1, .descriptor = null, .member_type_slots = null, .member_type_count = 0 },
+    };
+    const rows = [_]populate_core.DispatchEntryDescription{
+        namedDispatchTestRow(31, 1, 1, 0, "cmp"),
+    };
+    var header = emptyTestImageHeader();
+    header.typevalue_slot_count = 2;
+    header.typevalue_count = tv_rows.len;
+    header.typevalues = &tv_rows;
+    header.typedescriptors = &descs;
+    header.dispatch_entry_slot_count = rows.len;
+    header.dispatch_entry_descriptions = &rows;
+
+    var tv_slots = [_]?*const value_mod.TypeValue{ null, null };
+    try std.testing.expectEqual(ONEZ_OK, onez_load_runtime_image(
+        &handle,
+        &header,
+        @ptrCast(&tv_slots),
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+    ));
+
+    var quotations = [_]?OnezWordFn{&cmpBodyPushLess};
+    handle.quotation_table = quotations[0..];
+    try std.testing.expectEqual(ONEZ_OK, onez_replay_method_dispatch(&handle));
+
+    // Dispatch id 99 has no method at all, so `<` falls to the `cmp` derivation.
+    handle.stack[0] = .{ .boolean = true };
+    handle.stack[1] = .{ .boolean = false };
+    handle.stack_len = 2;
+    try std.testing.expectEqual(@as(i32, 0), jitDispatchFull(@intFromPtr(&handle), 99, 0));
+    try std.testing.expectEqual(@as(usize, 1), handle.stack_len);
+    try std.testing.expectEqual(true, handle.stack[0].boolean);
+}
+
+test "freestanding jitDispatchMissError mirrors each native's error tail" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var stack: [2]Value align(16) = undefined;
+    var word_names = [_]?[*:0]const u8{ "+", "<" };
+    var handle = OnezHandle{
+        .allocator = arena.allocator(),
+        .stack = stack[0..],
+        .word_names = word_names[0..],
+    };
+    defer clearLastError(&handle);
+
+    const ctx_raw = @intFromPtr(&handle);
+
+    handle.stack[0] = .{ .fixnum = 1 };
+    handle.stack[1] = .{ .boolean = true };
+    handle.stack_len = 2;
+    try std.testing.expectEqual(@as(i32, 2), jitDispatchMissError(ctx_raw, 0, 7));
+    try std.testing.expectEqualStrings("expected number, got boolean", std.mem.span(onez_last_error(&handle).?));
+    try std.testing.expectEqual(@as(usize, 0), handle.stack_len);
+
+    // `<` reports the first operand unconditionally, matching `nativeLt`.
+    handle.stack[0] = .{ .boolean = true };
+    handle.stack[1] = .{ .fixnum = 1 };
+    handle.stack_len = 2;
+    try std.testing.expectEqual(@as(i32, 2), jitDispatchMissError(ctx_raw, 1, 7));
+    try std.testing.expectEqualStrings("expected fixnum or float, got boolean", std.mem.span(onez_last_error(&handle).?));
 }
 
 test "freestanding replay no-ops on a zero-entry image" {
