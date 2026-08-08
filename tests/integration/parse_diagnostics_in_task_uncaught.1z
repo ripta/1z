@@ -1,0 +1,11 @@
+\ An uncaught parse failure inside a task must carry its diagnostic across the task boundary.
+\
+\ The task boundary builds its error object from the context's thrown error or execution details.
+\ A parse failure left neither behind, so the scope reported `task failed without error details`
+\ and the message the parser had already computed was lost.
+
+boom: parse-time [ f "parse-time word failed" EUserThrown make-error throw ] ;
+
+[
+  [ "boom" eval-string ] spawn drop
+] task-scope

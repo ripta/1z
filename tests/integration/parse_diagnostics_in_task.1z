@@ -1,0 +1,52 @@
+\ A parse failure must report the same error type and message wherever it happens.
+\
+\ The parser records a failure on the executing context's `parse_diagnostics`, a side channel only
+\ the top-level renderers read. A runtime entry point such as `eval-string` returned the bare parse
+\ error into ordinary propagation, so the type and message were dropped. Inside a task nothing read
+\ the channel at all, and the failure reached the task boundary with no error object.
+
+use "testing" ;
+
+boom: parse-time [ f "parse-time word failed" EUserThrown make-error throw ] ;
+
+"a parse-time throw recovered on the main task" test-section
+
+[ "boom" eval-string ]
+[
+  dup error-type: @get user-thrown: "main task keeps the thrown error type" assert=
+  message: @get "parse-time word failed" "main task keeps the thrown message" assert=
+] recover
+
+"a parse-time throw recovered inside a task" test-section
+
+[
+  [
+    [ "boom" eval-string ]
+    [
+      dup error-type: @get user-thrown: "task keeps the thrown error type" assert=
+      message: @get "parse-time word failed" "task keeps the thrown message" assert=
+    ] recover
+  ] spawn drop
+] task-scope
+
+\ A malformed stack effect is a diagnostic the parser sets directly, not one derived from a throw.
+
+"a parser-set diagnostic recovered on the main task" test-section
+
+[ "bad: ( a: -- ) [ ] ;" eval-string ]
+[
+  dup error-type: @get malformed-stack-effect: "main task keeps the parser's error type" assert=
+  message: @get "expected a type after 'a:'" "main task keeps the parser's message" assert=
+] recover
+
+"a parser-set diagnostic recovered inside a task" test-section
+
+[
+  [
+    [ "also-bad: ( a: -- ) [ ] ;" eval-string ]
+    [
+      dup error-type: @get malformed-stack-effect: "task keeps the parser's error type" assert=
+      message: @get "expected a type after 'a:'" "task keeps the parser's message" assert=
+    ] recover
+  ] spawn drop
+] task-scope

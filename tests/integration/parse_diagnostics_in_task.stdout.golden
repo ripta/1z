@@ -1,0 +1,23 @@
+Stack: [ ]
+=== a parse-time throw recovered on the main task ===
+Stack: [ ]
+Stack: [ [ "boom" eval-string ] ]
+PASS: main task keeps the thrown error type
+PASS: main task keeps the thrown message
+Stack: [ ]
+=== a parse-time throw recovered inside a task ===
+Stack: [ ]
+PASS: task keeps the thrown error type
+PASS: task keeps the thrown message
+Stack: [ ]
+=== a parser-set diagnostic recovered on the main task ===
+Stack: [ ]
+Stack: [ [ "bad: ( a: -- ) [ ] ;" eval-string ] ]
+PASS: main task keeps the parser's error type
+PASS: main task keeps the parser's message
+Stack: [ ]
+=== a parser-set diagnostic recovered inside a task ===
+Stack: [ ]
+PASS: task keeps the parser's error type
+PASS: task keeps the parser's message
+Stack: [ ]

@@ -8,6 +8,7 @@ const Module = value_mod.Module;
 const ModuleWord = value_mod.ModuleWord;
 const Instruction = value_mod.Instruction;
 const StatementProcessor = @import("../statement.zig").StatementProcessor;
+const parser_mod = @import("../parser.zig");
 
 const markers_mod = @import("markers.zig");
 const dispatch_helpers = @import("dispatch_helpers.zig");
@@ -273,7 +274,7 @@ fn feedOneLine(
     }
     switch (processor.feedLine(alloc, line, ctx)) {
         .needs_more_input => {},
-        .parse_error => |err| return err,
+        .parse_error => |err| return parser_mod.raiseParseDiagnostics(ctx, err),
         .complete => |instrs| {
             if (instrs.len > 0 and (!ctx.check_mode or Context.isDefinitionStatement(instrs))) {
                 try ctx.executeQuotation(.{ .instructions = instrs });
@@ -290,7 +291,7 @@ fn flushProcessor(
 ) anyerror!void {
     switch (processor.flush(alloc, ctx)) {
         .needs_more_input => {},
-        .parse_error => |e| return e,
+        .parse_error => |e| return parser_mod.raiseParseDiagnostics(ctx, e),
         .complete => |instrs| {
             if (instrs.len > 0 and (!ctx.check_mode or Context.isDefinitionStatement(instrs))) {
                 try ctx.executeQuotation(.{ .instructions = instrs });
@@ -1458,7 +1459,7 @@ fn nativeEvalString(ctx: *Context) anyerror!void {
 
         switch (processor.feedLine(alloc, line, ctx)) {
             .needs_more_input => continue,
-            .parse_error => |err| return err,
+            .parse_error => |err| return parser_mod.raiseParseDiagnostics(ctx, err),
             .complete => |instrs| {
                 if (instrs.len > 0) {
                     try ctx.executeQuotation(.{ .instructions = instrs });
@@ -1470,7 +1471,7 @@ fn nativeEvalString(ctx: *Context) anyerror!void {
 
     switch (processor.flush(alloc, ctx)) {
         .needs_more_input => {},
-        .parse_error => |err| return err,
+        .parse_error => |err| return parser_mod.raiseParseDiagnostics(ctx, err),
         .complete => |instrs| {
             if (instrs.len > 0) {
                 try ctx.executeQuotation(.{ .instructions = instrs });

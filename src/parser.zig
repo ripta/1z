@@ -21,6 +21,7 @@ const StackEffectParam = stack_effect_mod.StackEffectParam;
 const Context = @import("context.zig").Context;
 const DeferredEmission = @import("context.zig").DeferredEmission;
 const container_backing = @import("container_backing.zig");
+const pascalToKebabRuntime = @import("primitives/errors.zig").pascalToKebabRuntime;
 const markers_mod = @import("primitives/markers.zig");
 const Marker = value_mod.Marker;
 const constraint_analysis = @import("constraint_analysis.zig");
@@ -100,6 +101,46 @@ pub const ParseError = error{
     ParseTimeExecutionError,
     DebuggerQuit,
 };
+
+/// Re-raise a parse failure as an ordinary thrown error carrying the parser's
+/// diagnostic. `parse_diagnostics` is a side channel only the top-level
+/// renderers read, so a `ParseError` returned into normal error propagation
+/// arrives stripped of its type and message.
+///
+/// Call this wherever a runtime entry point surfaces a `ParseError` to 1z code.
+/// The stashed object is what `recover` reports and what the task boundary
+/// converts into the failing task's error.
+pub fn raiseParseDiagnostics(c: *Context, err: anyerror) anyerror {
+    // `DebuggerQuit` is a control signal, and `OutOfMemory` must stay itself so
+    // allocation failure is not laundered into a user-visible throw.
+    if (err == error.DebuggerQuit or err == error.OutOfMemory) return err;
+
+    const diag = c.parse_diagnostics orelse return err;
+    const error_type = diag.error_type orelse return err;
+
+    // An existing stash is the original error object the diagnostic was derived
+    // from. It already carries the type and message, and re-boxing would drop
+    // the reference it holds on its data payload.
+    if (c.thrown_error != null) {
+        c.parse_diagnostics = null;
+        return error.UserThrown;
+    }
+
+    const alloc = c.quotationAllocator();
+    var kebab_buf: [128]u8 = undefined;
+    const kebab_name = pascalToKebabRuntime(error_type, &kebab_buf);
+    const duped_type = alloc.dupe(u8, kebab_name) catch return err;
+    const message = if (diag.message) |msg| (alloc.dupe(u8, msg) catch duped_type) else duped_type;
+
+    const boxed = value_mod.boxErrorObject(alloc, .{
+        .error_type = duped_type,
+        .message = message,
+    }) catch return err;
+
+    c.parse_diagnostics = null;
+    c.thrown_error = boxed;
+    return error.UserThrown;
+}
 
 /// Returns true if the parse error indicates incomplete input.
 pub fn isIncompleteError(err: anyerror) bool {

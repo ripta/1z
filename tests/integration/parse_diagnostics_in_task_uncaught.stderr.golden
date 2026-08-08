@@ -1,0 +1,2 @@
+tests/integration/parse_diagnostics_in_task_uncaught.1z:11: error 'user-thrown' parse-time word failed at word 'task-scope'
+  stack effect: ( quot --  )
