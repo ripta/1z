@@ -59,6 +59,7 @@ const lock_order = @import("lock_order.zig");
 const LockOrderTracker = lock_order.LockOrderTracker;
 
 const QuotationStampStore = @import("quotation_stamp_store.zig").QuotationStampStore;
+const CarryableScopeGate = @import("carryable_scope_gate.zig").CarryableScopeGate;
 const ReifiedDecodeCache = @import("reified_decode_cache.zig").ReifiedDecodeCache;
 
 const signal = @import("signal.zig");
@@ -1035,6 +1036,14 @@ pub const Context = struct {
     /// moment a spawned task executes a stored quotation. The per-execution captured-scope half
     /// stays in `quotation_scope_info`, which is genuinely per-context.
     quotation_stamp_store: *QuotationStampStore = undefined,
+    /// Process-shared set of bodies that have ever had a carryable captured scope installed in
+    /// some context's `quotation_scope_info`. Heap-allocated by the root context and shared by
+    /// pointer to all child task contexts.
+    ///
+    /// An absent body cannot have a carryable scope anywhere on the ancestor chain, so a body
+    /// entry that misses can skip `findCapturedScopeForBody` rather than locking every ancestor's
+    /// `captured_scope_mu` to learn the same thing.
+    carryable_scope_gate: *CarryableScopeGate = undefined,
 
     /// Returns true when the instruction sequence ends with a call to `;`,
     /// which means it is a word definition and should be executed even in
@@ -1192,6 +1201,12 @@ pub const Context = struct {
             std.debug.panic("Failed to allocate quotation stamp store: {any}", .{err});
         };
 
+        // Allocate the shared carryable-scope gate on the long-lived allocator; the root context
+        // frees it in deinit.
+        ctx.carryable_scope_gate = CarryableScopeGate.create(allocator) catch |err| {
+            std.debug.panic("Failed to allocate carryable scope gate: {any}", .{err});
+        };
+
         // Allocate the shared reified-quotation decode cache on the long-lived allocator; the
         // root context frees it in deinit.
         ctx.reified_decode_cache = ReifiedDecodeCache.create(allocator) catch |err| {
@@ -1335,6 +1350,10 @@ pub const Context = struct {
         // Share the parent's quotation stamp store so a stored quotation executing here resolves
         // against its own defining module. Aliased, never retained: the root owns it.
         ctx.quotation_stamp_store = parent.quotation_stamp_store;
+
+        // Share the parent's carryable-scope gate so a body marked anywhere is visible here.
+        // Aliased, never retained: the root owns it.
+        ctx.carryable_scope_gate = parent.carryable_scope_gate;
 
         // Share the parent's reified-quotation decode cache so a task's `jitPushQuotation`
         // reuses the process-wide decode instead of decoding onto its own arena. Aliased, never
@@ -1681,6 +1700,7 @@ pub const Context = struct {
             self.hook_registry.deinit(self.allocator);
             self.allocator.destroy(self.hook_registry);
             self.quotation_stamp_store.destroy();
+            self.carryable_scope_gate.destroy();
             self.reified_decode_cache.destroy();
             self.allocator.destroy(self.lock_order_tracker);
             self.allocator.destroy(self.shared_lock);
@@ -2115,6 +2135,11 @@ pub const Context = struct {
         // A fresh entry's module half is filled from the shared stamp store, keeping every entry's
         // module half authoritative: the body-entry probe trusts a map hit without a store probe.
         // The lookup is lock-free, so taking it under the mutex costs one probe on creation only.
+        //
+        // A deps-only entry carries no lexical frame and the walk steps past it, so it does not
+        // mark the gate.
+        if (has_lexical) _ = try self.carryable_scope_gate.mark(key);
+
         self.captured_scope_mu.lock();
         errdefer self.captured_scope_mu.unlock();
         const gop = try self.quotation_scope_info.getOrPut(self.allocator, key);
@@ -2359,7 +2384,11 @@ pub const Context = struct {
 
         // A fresh entry's module half is filled from the shared stamp store, so the body-entry
         // probe can trust a map hit without a store probe.
+        //
+        // A scope with no lexical frame is invisible to the walk, so it does not mark the gate.
         const key = @intFromPtr(instructions.ptr);
+        if (scope.lexical_frames.len > 0) _ = try self.carryable_scope_gate.mark(key);
+
         self.captured_scope_mu.lock();
         errdefer self.captured_scope_mu.unlock();
         const gop = try self.quotation_scope_info.getOrPut(self.allocator, key);
@@ -6704,6 +6733,14 @@ pub const Context = struct {
             const stamped = self.quotation_stamp_store.lookup(key);
             const inherited = try self.findCapturedScopeForBody(self.allocator, key);
             errdefer if (inherited) |s| s.release();
+
+            // The walk returns only carryable scopes, so a non-null result marks. The ancestor
+            // this was copied from already marked the same key, so the mark never adds one. It is
+            // written anyway to keep the mark-before-publish obligation checkable at each writer
+            // that installs a carryable scope, rather than resting on an argument about the other
+            // two.
+            if (inherited != null) _ = try self.carryable_scope_gate.mark(key);
+
             self.captured_scope_mu.lock();
             errdefer self.captured_scope_mu.unlock();
             const gop = try self.quotation_scope_info.getOrPut(self.allocator, key);
@@ -8965,6 +9002,43 @@ test "initForTask: shares the parent's quotation stamp store" {
     );
 }
 
+test "init: the root context owns an empty carryable scope gate" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    try std.testing.expectEqual(@as(usize, 0), ctx.carryable_scope_gate.count());
+    try std.testing.expect(!ctx.carryable_scope_gate.isMarked(0x1000));
+}
+
+test "initForTask: shares the parent's carryable scope gate" {
+    var parent = Context.init(std.testing.allocator);
+    defer parent.deinit();
+
+    var scheduler = try std.testing.allocator.create(Scheduler);
+    defer std.testing.allocator.destroy(scheduler);
+    scheduler.* = try Scheduler.init(std.testing.allocator);
+    defer scheduler.deinit();
+
+    _ = try parent.carryable_scope_gate.mark(0x1000);
+
+    {
+        var task_ctx = try Context.initForTask(std.testing.allocator, &parent, scheduler);
+        defer task_ctx.deinit();
+
+        // A mark written before the spawn is what tells a body entry here to walk the chain.
+        try std.testing.expectEqual(parent.carryable_scope_gate, task_ctx.carryable_scope_gate);
+        try std.testing.expect(task_ctx.carryable_scope_gate.isMarked(0x1000));
+
+        // A mark written inside the task is visible to the parent, which is what makes the gate
+        // exact per body rather than per context.
+        _ = try task_ctx.carryable_scope_gate.mark(0x2000);
+    }
+
+    // The task aliased the gate without retaining, so its teardown left the root's intact.
+    try std.testing.expect(parent.carryable_scope_gate.isMarked(0x1000));
+    try std.testing.expect(parent.carryable_scope_gate.isMarked(0x2000));
+}
+
 test "initForTask: inherits AOT runtime-image state from parent" {
     var parent = Context.init(std.testing.allocator);
     defer parent.deinit();
@@ -10170,6 +10244,116 @@ test "stampCapturedScopeForExecution: a fresh entry's module half is filled from
     try ctx.stampCapturedScopeForExecution(&body, &scope);
     const again = ctx.quotation_scope_info.get(@intFromPtr(&body)) orelse return error.TestExpectedEntry;
     try std.testing.expectEqual(@as(?*const value_mod.Module, &def_module), again.defining_module);
+}
+
+test "captureQuotationScope: a lexical capture marks the carryable scope gate" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    try ctx.pushLocalFrame();
+    ctx.import_frame_index = 0;
+
+    try ctx.pushLocalFrame();
+    try ctx.defineWord("local", .{ .name = "local", .action = .{ .compound = &.{} } });
+
+    const body = [_]Instruction{.{ .op = .{ .call_word = "local" }, .line = 0 }};
+    try std.testing.expect(!ctx.carryable_scope_gate.isMarked(@intFromPtr(&body)));
+
+    _ = (try ctx.captureQuotationScope(&body)) orelse return error.TestExpectedCapture;
+    try std.testing.expect(ctx.carryable_scope_gate.isMarked(@intFromPtr(&body)));
+}
+
+test "captureQuotationScope: a deps-only entry leaves the gate unmarked" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const noop: dict_mod.NativeFn = struct {
+        fn f(_: *Context) anyerror!void {}
+    }.f;
+
+    try ctx.pushLocalFrame();
+    ctx.import_frame_index = 0;
+
+    var dep_module: value_mod.Module = .{ .name = "dep", .words = .{} };
+    try dep_module.words.put(std.testing.allocator, "foo", .{ .action = .{ .native = noop } });
+    defer dep_module.words.deinit(std.testing.allocator);
+    try ctx.pushModuleDepsFrame(&dep_module);
+
+    // The entry is recorded, but it carries no lexical frame, so the walk would step past it. A
+    // mark here would send every descendant's first visit to this body up the chain for nothing.
+    const body = [_]Instruction{.{ .op = .{ .call_word = "foo" }, .line = 0 }};
+    try std.testing.expect((try ctx.captureQuotationScope(&body)) == null);
+    try std.testing.expect(ctx.quotation_scope_info.get(@intFromPtr(&body)) != null);
+    try std.testing.expect(!ctx.carryable_scope_gate.isMarked(@intFromPtr(&body)));
+}
+
+test "stampCapturedScopeForExecution: marks the gate only for a scope with a lexical frame" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const noop: dict_mod.NativeFn = struct {
+        fn f(_: *Context) anyerror!void {}
+    }.f;
+
+    const deps_body = [_]Instruction{.{ .op = .{ .call_word = "w" }, .line = 0 }};
+    var empty: CapturedScope = .{ .lexical_frames = &.{}, .deps_modules = &.{}, .allocator = ctx.allocator };
+    try ctx.stampCapturedScopeForExecution(&deps_body, &empty);
+    try std.testing.expect(!ctx.carryable_scope_gate.isMarked(@intFromPtr(&deps_body)));
+
+    var frame: LocalFrame = .{};
+    try frame.put(ctx.allocator, "local", .{ .name = "local", .action = .{ .native = noop } });
+    const frames = try ctx.allocator.alloc(LocalFrame, 1);
+    frames[0] = frame;
+    defer {
+        frames[0].deinit(ctx.allocator);
+        ctx.allocator.free(frames);
+    }
+    var lexical: CapturedScope = .{ .lexical_frames = frames, .deps_modules = &.{}, .allocator = ctx.allocator };
+
+    const lexical_body = [_]Instruction{.{ .op = .{ .call_word = "local" }, .line = 0 }};
+    try ctx.stampCapturedScopeForExecution(&lexical_body, &lexical);
+    try std.testing.expect(ctx.carryable_scope_gate.isMarked(@intFromPtr(&lexical_body)));
+}
+
+test "executeInstructions: the fill marks the gate when it caches an inherited scope" {
+    var parent = Context.init(std.testing.allocator);
+    defer parent.deinit();
+
+    var scheduler = try std.testing.allocator.create(Scheduler);
+    defer std.testing.allocator.destroy(scheduler);
+    scheduler.* = try Scheduler.init(std.testing.allocator);
+    defer scheduler.deinit();
+
+    const push_captured: dict_mod.NativeFn = struct {
+        fn f(c: *Context) anyerror!void {
+            try c.stack.push(.{ .fixnum = 2 });
+        }
+    }.f;
+
+    try parent.pushLocalFrame();
+    parent.import_frame_index = 0;
+
+    const arena_alloc = parent.arena.allocator();
+    const instrs = try arena_alloc.alloc(Instruction, 1);
+    instrs[0] = .{ .op = .{ .call_word = "probe-word" }, .line = 1 };
+
+    // The parent's entry is placed directly, bypassing the two writers that would have marked it,
+    // so whatever the gate holds afterwards came from the fill itself.
+    var frame: LocalFrame = .{};
+    try frame.put(parent.allocator, "probe-word", .{ .name = "probe-word", .action = .{ .native = push_captured } });
+    const frames = try parent.allocator.alloc(LocalFrame, 1);
+    frames[0] = frame;
+    const parent_scope = try parent.allocator.create(CapturedScope);
+    parent_scope.* = .{ .lexical_frames = frames, .allocator = parent.allocator };
+    try parent.quotation_scope_info.put(parent.allocator, @intFromPtr(instrs.ptr), .{ .scope = parent_scope });
+    try std.testing.expect(!parent.carryable_scope_gate.isMarked(@intFromPtr(instrs.ptr)));
+
+    var task_ctx = try Context.initForTask(std.testing.allocator, &parent, scheduler);
+    defer task_ctx.deinit();
+    try task_ctx.executeQuotation(.{ .instructions = instrs });
+    try std.testing.expectEqual(@as(i64, 2), (try task_ctx.stack.pop()).fixnum);
+
+    try std.testing.expect(parent.carryable_scope_gate.isMarked(@intFromPtr(instrs.ptr)));
 }
 
 test "stampQuotationBodies: repairs an entry created before the stamp" {
