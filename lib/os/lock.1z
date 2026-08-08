@@ -43,9 +43,15 @@ EFileLockError: ( -- sym ) [ file-lock-error: ] ;
 \ Cooperative retry loop: attempt, and on contention sleep with exponential backoff (capped)
 \ then retry. Keeps fd/op-nb/ms on the stack across retries; the wrapper drops them if a
 \ throw interrupts an in-flight acquire.
+\
+\ A successful attempt still checks for a pending cancellation through yield. The holder can
+\ release inside its own cancellation unwind, letting a waiter whose cancellation is already
+\ pending acquire on its next attempt. The check releases the just-taken lock and re-raises,
+\ so a cancelled waiter never returns holding the lock.
 (acquire-retry-loop): ( fd op-nb ms -- ) [
   2 pick-n 2 pick-n (try-acquire-once)
   acquired: = [
+    [ yield ] [ 3 pick-n "LOCK_UN" posix-const flock drop throw ] recover
     3drop
   ] [
     dup milliseconds sleep
@@ -74,9 +80,13 @@ EFileLockError: ( -- sym ) [ file-lock-error: ] ;
 ] ;
 
 \ Acquire the lock on stream, leaving the stream on the stack.
+\
+\ The scheduler probe re-raises a pending cancellation. That raise must not leak the
+\ fd/op working set already on the stack, so it is nipped here the way the retry
+\ wrapper nips its own.
 (cooperative-acquire): ( stream mode -- stream ) [
   over stream>fd swap (mode->flock-op)
-  (scheduler-present?)
+  [ (scheduler-present?) ] [ 2 nip-n throw ] recover
   [ "LOCK_NB" posix-const bitor (lock-backoff-start-ms) (acquire-retry) ]
   [ (blocking-acquire) ]
   if
@@ -86,8 +96,10 @@ EFileLockError: ( -- sym ) [ file-lock-error: ] ;
 \\ on the stack, and release on every exit path.
 \\
 \\ Blocks cooperatively under contention. `mode` is exclusive: or shared:. Release runs on
-\\ normal return, throw, and cancellation. A genuine acquire errno raises file-lock-error:
-\\ before the body runs, leaving the stream on the stack for the caller to close.
+\\ normal return, throw, and cancellation. A waiter cancelled while acquiring releases the
+\\ lock and re-raises without running the body. A genuine acquire errno raises
+\\ file-lock-error: before the body runs, leaving the stream on the stack for the caller to
+\\ close.
 using-file-lock: ( ..a stream mode quot: ( ..a stream -- ..b ) -- ..b ) [
   [ (cooperative-acquire) ] dip
   over [ stream>fd "LOCK_UN" posix-const flock drop ] curry

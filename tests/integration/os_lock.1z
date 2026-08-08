@@ -168,19 +168,33 @@ V{ }
 dup
 [
   "tests/integration/_tmp_oslock.txt" read-write: stream-open
-  [ exclusive: [ 1000 milliseconds sleep ] using-file-lock stream-close ] curry
+  [ exclusive: [ 100000 milliseconds sleep ] using-file-lock stream-close ] curry
   spawn
-  10 milliseconds sleep
-  over "tests/integration/_tmp_oslock.txt"
+
+  \ Wait until the holder actually holds the lock, rather than assuming it after
+  \ a fixed sleep.
+  [ "tests/integration/_tmp_oslock.txt" (probe-lockable?) ] [ 1 milliseconds sleep ] while
+
+  V{ }
+  2 pick-n over "tests/integration/_tmp_oslock.txt"
   [
     read-write: stream-open
+    swap waiting: #push! drop
     [ exclusive: [ ] using-file-lock stream-close acquired: ]
     [ 2drop cancelled: ]
     recover
     #push! drop
-  ] curry curry
+  ] curry curry curry
   spawn
-  10 milliseconds sleep
+
+  \ Wait until the waiter has signalled it is about to acquire. From that point
+  \ every path through the acquire observes the pending cancellation: a contended
+  \ attempt raises from its backoff sleep, and a successful attempt raises from
+  \ the cancellation check before the body runs.
+  swap
+  [ dup #len 0 = ] [ 1 milliseconds sleep ] while
+  drop
+
   cancel-task
   cancel-task
   drop
