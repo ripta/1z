@@ -1,0 +1,8 @@
+Stack: [ ]
+Stack: [ ]
+=== container literal with a missing element ===
+Stack: [ ]
+PASS: make-vector names the underflow
+PASS: make-byte-array names the underflow
+PASS: make-set names the underflow
+Stack: [ ]

@@ -137,7 +137,7 @@ fn nativeRegisterScopedHook(ctx: *Context) anyerror!void {
 
     var current_owned = false;
     const current = ctx.getParameterBinding(param.name) orelse blk: {
-        ctx.executeQuotation(param.default_quotation) catch return error.OutOfMemory;
+        try ctx.executeQuotation(param.default_quotation);
         current_owned = true;
         break :blk ctx.stack.pop() catch return error.StackUnderflow;
     };

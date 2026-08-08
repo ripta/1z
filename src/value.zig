@@ -282,25 +282,29 @@ pub const ByteArray = struct {
         }
     }
 
-    pub fn ensureTotalCapacity(self: *ByteArray, allocator: std.mem.Allocator, n: usize) error{OutOfMemory}!void {
+    /// A borrowed backing points at memory this ByteArray does not own, so it cannot be
+    /// resized in place. Callers that want to grow one must copy it to owned storage first.
+    pub const ResizeError = error{ OutOfMemory, BorrowedByteArray };
+
+    pub fn ensureTotalCapacity(self: *ByteArray, allocator: std.mem.Allocator, n: usize) ResizeError!void {
         switch (self.storage) {
             .owned => {
                 self.syncOwnedView();
                 try self.owned_items.ensureTotalCapacity(allocator, n);
                 self.refreshOwnedView();
             },
-            .borrowed => return error.OutOfMemory,
+            .borrowed => return error.BorrowedByteArray,
         }
     }
 
-    pub fn append(self: *ByteArray, allocator: std.mem.Allocator, item: u8) error{OutOfMemory}!void {
+    pub fn append(self: *ByteArray, allocator: std.mem.Allocator, item: u8) ResizeError!void {
         switch (self.storage) {
             .owned => {
                 self.syncOwnedView();
                 try self.owned_items.append(allocator, item);
                 self.refreshOwnedView();
             },
-            .borrowed => return error.OutOfMemory,
+            .borrowed => return error.BorrowedByteArray,
         }
     }
 

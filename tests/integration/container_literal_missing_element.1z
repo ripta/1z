@@ -1,0 +1,28 @@
+\ A word inside a container literal that produces no value is a stack
+\ underflow. The three collecting constructors used to report it as an
+\ out-of-memory, which named a condition that had not occurred.
+\
+\ Each case runs in a spawned task because the constructors only underflow on
+\ an empty stack. With anything below them they silently consume a caller's
+\ value instead, and a task starts with a stack of its own.
+
+use "testing" ;
+
+nothing: ( -- ) [ ] ;
+
+error-type-of: ( quot -- sym ) [ [ call f ] [ error-type: @get ] recover ] ;
+
+"container literal with a missing element" test-section
+
+[
+  [
+    [ V{ nothing } ] error-type-of
+    stack-underflow: "make-vector names the underflow" assert=
+
+    [ B{ nothing } ] error-type-of
+    stack-underflow: "make-byte-array names the underflow" assert=
+
+    [ [ nothing ] make-set ] error-type-of
+    stack-underflow: "make-set names the underflow" assert=
+  ] spawn drop
+] task-scope

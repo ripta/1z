@@ -145,7 +145,10 @@ pub fn nativeMakeVector(ctx: *Context) anyerror!void {
             },
             .call_word, .call_word_direct, .call_word_module => blk: {
                 try ctx.executeQuotation(.{ .instructions = @as(*const [1]Instruction, &instr) });
-                break :blk ctx.stack.pop() catch return error.OutOfMemory;
+                break :blk ctx.stack.pop() catch {
+                    helpers.setErrorContext(ctx, "make-vector: element produced no result", .{});
+                    return error.StackUnderflow;
+                };
             },
         };
         vec.list.append(vec.header.allocator, val) catch |err| {
@@ -182,7 +185,10 @@ pub fn nativeMakeByteArray(ctx: *Context) anyerror!void {
             },
             .call_word, .call_word_direct, .call_word_module => blk: {
                 try ctx.executeQuotation(.{ .instructions = @as(*const [1]Instruction, &instr) });
-                break :blk ctx.stack.pop() catch return error.OutOfMemory;
+                break :blk ctx.stack.pop() catch {
+                    helpers.setErrorContext(ctx, "make-byte-array: element produced no result", .{});
+                    return error.StackUnderflow;
+                };
             },
         };
         defer container_backing.releaseValue(val);
@@ -224,7 +230,10 @@ pub fn nativeMakeSet(ctx: *Context) anyerror!void {
             },
             .call_word, .call_word_direct, .call_word_module => blk: {
                 try ctx.executeQuotation(.{ .instructions = @as(*const [1]Instruction, &instr) });
-                break :blk ctx.stack.pop() catch return error.OutOfMemory;
+                break :blk ctx.stack.pop() catch {
+                    helpers.setErrorContext(ctx, "make-set: element produced no result", .{});
+                    return error.StackUnderflow;
+                };
             },
         };
 

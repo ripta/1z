@@ -868,7 +868,7 @@ fn handleAwaitResult(ctx: *Context, task: *Task) anyerror!void {
     }
 }
 
-const DeepCopyError = Allocator.Error || error{TaskArenaEscape};
+const DeepCopyError = Allocator.Error || value_mod.ByteArray.ResizeError || error{TaskArenaEscape};
 
 /// Deep-copy a Value into a destination allocator. Recursive for compound types.
 ///

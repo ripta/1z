@@ -1842,7 +1842,7 @@ pub const Context = struct {
     /// Assumes there is at least one frame on the stack.
     pub fn setParameterInTopFrame(self: *Context, name: []const u8, value: Value) !void {
         if (self.parameter_env.items.len == 0) {
-            return error.OutOfMemory; // Should never happen if pushParameterFrame was called
+            return error.NoParameterFrame;
         }
         const top_index = self.parameter_env.items.len - 1;
         // The frame slot takes an owning reference; release any value it
@@ -2719,7 +2719,7 @@ pub const Context = struct {
     /// Takes ownership of `value`'s reference; the frame releases it on overwrite,
     /// frame pop, or context teardown.
     pub fn setPragma(self: *Context, name: []const u8, value: Value) !void {
-        if (self.pragma_frames.items.len == 0) return error.OutOfMemory;
+        if (self.pragma_frames.items.len == 0) return error.NoPragmaFrame;
         const top_index = self.pragma_frames.items.len - 1;
         const gop = try self.pragma_frames.items[top_index].getOrPut(self.allocator, name);
         if (gop.found_existing) container_backing.releaseValue(gop.value_ptr.*);

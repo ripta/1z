@@ -741,7 +741,8 @@ pub fn nativeStreamReadAll(ctx: *Context) anyerror!void {
         }
 
         if (content.items.len + bytes_read > max_size) {
-            return error.OutOfMemory;
+            helpers.setErrorContext(ctx, "read-all: stream exceeds the {d} byte limit", .{max_size});
+            return error.StreamTooLarge;
         }
 
         content.appendSlice(alloc, buffer[0..bytes_read]) catch return error.OutOfMemory;
