@@ -1,0 +1,6 @@
+Task-shape body-entry cost: combinator_contention.1z
+binary=./zig-out/bin/1z   reps=7   mode=--compile=off
+
+shape                        flags                 median_ms         min_ms         max_ms
+---------------------------- ---------------- -------------- -------------- --------------
+combinator_contention.1z     --threads=auto          724.292        644.649        741.911
