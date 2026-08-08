@@ -6711,6 +6711,10 @@ pub const Context = struct {
         // restamps its carried scope. The walk covers the parent chain only; captures recorded in
         // a sibling task stay unreachable.
         //
+        // The walk runs only for a body the carryable-scope gate has marked. Every other body
+        // takes a second lock-free probe in place of an ancestor chain of mutex acquisitions,
+        // which is what keeps a task-heavy first-visit shape off the root context's map mutex.
+        //
         // The scope is retained for the full duration of this call and released via `defer`, so a
         // nested or recursive `executeInstructions` call made from within this one (e.g. through
         // `if`/`when`) is free to supersede the map's entry for this same body without freeing the
@@ -6730,8 +6734,17 @@ pub const Context = struct {
             // The insert is taken under the map mutex to exclude a descendant's parent-walk read,
             // released on the `getOrPut` error path. The walk's copy is released after unlocking
             // on the found-existing path, which single-writer-self makes unreachable in practice.
+            //
+            // Skipping the walk on an unmarked body is exactly equivalent to running it. The walk
+            // returns non-null only when a context on the chain holds a carryable entry for this
+            // body, and every writer that installs one marks the key before publishing the entry.
+            // A probe that lands before a concurrent writer's mark caches a null, which is what
+            // the walk itself would have found at that instant.
             const stamped = self.quotation_stamp_store.lookup(key);
-            const inherited = try self.findCapturedScopeForBody(self.allocator, key);
+            const inherited = if (self.carryable_scope_gate.isMarked(key))
+                try self.findCapturedScopeForBody(self.allocator, key)
+            else
+                null;
             errdefer if (inherited) |s| s.release();
 
             // The walk returns only carryable scopes, so a non-null result marks. The ancestor
@@ -9977,6 +9990,16 @@ test "executeInstructions: a stored quotation resolves its stamp in a child task
     try std.testing.expectEqual(@as(i64, 2), (try task_ctx.stack.pop()).fixnum);
 }
 
+/// Install a carryable scope into `ctx`'s map the way a production writer does: mark the gate,
+/// then publish the entry.
+///
+/// A test that hand-builds an ancestor entry bypasses `captureQuotationScope`, which is what marks
+/// in production, and an unmarked entry is a state the gate's invariant forbids.
+fn putCarryableScopeForTest(ctx: *Context, key: usize, scope: *CapturedScope) !void {
+    _ = try ctx.carryable_scope_gate.mark(key);
+    try ctx.quotation_scope_info.put(ctx.allocator, key, .{ .scope = scope });
+}
+
 test "executeInstructions: a stored quotation resolves a parent-captured lexical binding in a child task" {
     var parent = Context.init(std.testing.allocator);
     defer parent.deinit();
@@ -10023,7 +10046,7 @@ test "executeInstructions: a stored quotation resolves a parent-captured lexical
     frames[0] = frame;
     const parent_scope = try parent.allocator.create(CapturedScope);
     parent_scope.* = .{ .lexical_frames = frames, .allocator = parent.allocator };
-    try parent.quotation_scope_info.put(parent.allocator, @intFromPtr(instrs.ptr), .{ .scope = parent_scope });
+    try putCarryableScopeForTest(&parent, @intFromPtr(instrs.ptr), parent_scope);
 
     const module = try arena_alloc.create(value_mod.Module);
     module.* = .{ .name = "m", .words = .{} };
@@ -10084,7 +10107,7 @@ test "executeInstructions: the inherited scope copy survives the ancestor's entr
     }.f;
 
     const first = try makeScope(&parent, push_first);
-    try parent.quotation_scope_info.put(parent.allocator, @intFromPtr(instrs.ptr), .{ .scope = first });
+    try putCarryableScopeForTest(&parent, @intFromPtr(instrs.ptr), first);
 
     var task_ctx = try Context.initForTask(std.testing.allocator, &parent, scheduler);
     defer task_ctx.deinit();
@@ -10315,15 +10338,16 @@ test "stampCapturedScopeForExecution: marks the gate only for a scope with a lex
     try std.testing.expect(ctx.carryable_scope_gate.isMarked(@intFromPtr(&lexical_body)));
 }
 
-test "executeInstructions: the fill marks the gate when it caches an inherited scope" {
-    var parent = Context.init(std.testing.allocator);
-    defer parent.deinit();
-
-    var scheduler = try std.testing.allocator.create(Scheduler);
-    defer std.testing.allocator.destroy(scheduler);
-    scheduler.* = try Scheduler.init(std.testing.allocator);
-    defer scheduler.deinit();
-
+/// Give `parent` a durable `probe-word` pushing 1 and a carryable scope binding the same name to a
+/// word pushing 2, keyed by the returned body. A child executing that body resolves 2 when the
+/// walk reaches the scope and 1 when it does not, so the two gate tests below differ only in
+/// whether the entry is published with a mark.
+fn setupGateFillParent(parent: *Context, mark: bool) ![]Instruction {
+    const push_durable: dict_mod.NativeFn = struct {
+        fn f(c: *Context) anyerror!void {
+            try c.stack.push(.{ .fixnum = 1 });
+        }
+    }.f;
     const push_captured: dict_mod.NativeFn = struct {
         fn f(c: *Context) anyerror!void {
             try c.stack.push(.{ .fixnum = 2 });
@@ -10332,28 +10356,74 @@ test "executeInstructions: the fill marks the gate when it caches an inherited s
 
     try parent.pushLocalFrame();
     parent.import_frame_index = 0;
+    try parent.local_frames.items[0].put(parent.allocator, "probe-word", .{
+        .name = "probe-word",
+        .action = .{ .native = push_durable },
+    });
 
     const arena_alloc = parent.arena.allocator();
     const instrs = try arena_alloc.alloc(Instruction, 1);
     instrs[0] = .{ .op = .{ .call_word = "probe-word" }, .line = 1 };
 
-    // The parent's entry is placed directly, bypassing the two writers that would have marked it,
-    // so whatever the gate holds afterwards came from the fill itself.
     var frame: LocalFrame = .{};
     try frame.put(parent.allocator, "probe-word", .{ .name = "probe-word", .action = .{ .native = push_captured } });
     const frames = try parent.allocator.alloc(LocalFrame, 1);
     frames[0] = frame;
-    const parent_scope = try parent.allocator.create(CapturedScope);
-    parent_scope.* = .{ .lexical_frames = frames, .allocator = parent.allocator };
-    try parent.quotation_scope_info.put(parent.allocator, @intFromPtr(instrs.ptr), .{ .scope = parent_scope });
-    try std.testing.expect(!parent.carryable_scope_gate.isMarked(@intFromPtr(instrs.ptr)));
+    const scope = try parent.allocator.create(CapturedScope);
+    scope.* = .{ .lexical_frames = frames, .allocator = parent.allocator };
+
+    const key = @intFromPtr(instrs.ptr);
+    if (mark) {
+        try putCarryableScopeForTest(parent, key, scope);
+    } else {
+        try parent.quotation_scope_info.put(parent.allocator, key, .{ .scope = scope });
+    }
+    return instrs;
+}
+
+test "executeInstructions: the fill walks to a marked ancestor entry and caches it" {
+    var parent = Context.init(std.testing.allocator);
+    defer parent.deinit();
+
+    var scheduler = try std.testing.allocator.create(Scheduler);
+    defer std.testing.allocator.destroy(scheduler);
+    scheduler.* = try Scheduler.init(std.testing.allocator);
+    defer scheduler.deinit();
+
+    const instrs = try setupGateFillParent(&parent, true);
 
     var task_ctx = try Context.initForTask(std.testing.allocator, &parent, scheduler);
     defer task_ctx.deinit();
     try task_ctx.executeQuotation(.{ .instructions = instrs });
     try std.testing.expectEqual(@as(i64, 2), (try task_ctx.stack.pop()).fixnum);
 
-    try std.testing.expect(parent.carryable_scope_gate.isMarked(@intFromPtr(instrs.ptr)));
+    const info = task_ctx.quotation_scope_info.get(@intFromPtr(instrs.ptr)) orelse return error.TestExpectedEntry;
+    try std.testing.expect(info.scope != null);
+}
+
+test "executeInstructions: the fill skips the walk for an unmarked body" {
+    var parent = Context.init(std.testing.allocator);
+    defer parent.deinit();
+
+    var scheduler = try std.testing.allocator.create(Scheduler);
+    defer std.testing.allocator.destroy(scheduler);
+    scheduler.* = try Scheduler.init(std.testing.allocator);
+    defer scheduler.deinit();
+
+    // Publishing the entry without a mark is a state no production writer produces. Constructing
+    // it is the only way to observe that the walk was skipped, since a skipped walk and a walk
+    // that found nothing are otherwise indistinguishable.
+    const instrs = try setupGateFillParent(&parent, false);
+
+    var task_ctx = try Context.initForTask(std.testing.allocator, &parent, scheduler);
+    defer task_ctx.deinit();
+    try task_ctx.executeQuotation(.{ .instructions = instrs });
+
+    // The durable binding won, so the ancestor's scope was never reached.
+    try std.testing.expectEqual(@as(i64, 1), (try task_ctx.stack.pop()).fixnum);
+
+    const info = task_ctx.quotation_scope_info.get(@intFromPtr(instrs.ptr)) orelse return error.TestExpectedEntry;
+    try std.testing.expectEqual(@as(?*CapturedScope, null), info.scope);
 }
 
 test "stampQuotationBodies: repairs an entry created before the stamp" {
