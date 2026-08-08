@@ -14447,10 +14447,9 @@ fn invokeModuleWord(ctx: *Context, hit: ModuleWordHit) !void {
 /// `capi.registerNativeLeaf`) and are read here purely by word_id index, so
 /// generic dispatch is attempted unconditionally with no dictionary lookup.
 ///
-/// A second, rarer case reaches this function too: a module-private or
-/// dot-qualified native (e.g. `native.virtual-struct-wrap`), which
-/// `registerNativeLeaf` cannot resolve because it is never entered into
-/// `ctx.dictionary`. That case falls back to the original
+/// A second, rarer case reaches this function too: a module-private native,
+/// which `registerNativeLeaf` cannot resolve because it is never entered
+/// into `ctx.dictionary`. That case falls back to the original
 /// `ctx.lookupWord` / `lookupAnyModuleWord` resolution.
 ///
 /// The C ABI mirrors `jitInterpretedCall` so callers can swap one for the

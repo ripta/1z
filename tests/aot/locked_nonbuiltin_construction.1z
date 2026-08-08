@@ -1,0 +1,27 @@
+\ Constructing and reading non-builtin values under `--interpreter-fallback=false
+\ --lock-interpreter-setting`. The lock rejects every fallback emission, so a
+\ construction native that compiles to `jitNativeWordCall` makes the whole
+\ category of virtual-type and struct values unbuildable.
+\
+\ The three construction natives are reached only through their `native.`-qualified
+\ names, and the AOT direct-wrapper table is keyed by the name codegen resolves, so
+\ each one compiles to a direct call.
+\
+\ Observation is constrained by the lock itself. `.` needs a proven parameter type
+\ before `inspect` monomorphizes, so each value is compared against a literal and a
+\ fixed string is printed.
+
+boxed:   virtual{ fixnum } ;
+point:   struct{ x y } ;
+inner:   struct{ a } ;
+wrapped: virtual{ inner } ;
+
+\ native.virtual-wrap
+5 make-boxed unmake-boxed 5 = [ "virtual ok" ] [ "virtual wrong" ] if print-line
+
+\ native.make-struct-instance, then native.struct-field-get through the getter
+3 4 make-point x>> 3 = [ "struct ok" ] [ "struct wrong" ] if print-line
+3 4 make-point y>> 4 = [ "struct getter ok" ] [ "struct getter wrong" ] if print-line
+
+\ native.virtual-struct-wrap and native.virtual-struct-unwrap
+7 make-inner make-wrapped unmake-wrapped a>> 7 = [ "virtual struct ok" ] [ "virtual struct wrong" ] if print-line

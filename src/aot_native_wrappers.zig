@@ -76,6 +76,10 @@ pub fn wrapperSymbolName(comptime name: []const u8) []const u8 {
 
 /// A native word paired with the C symbol of its generated wrapper. The symbol is
 /// sentinel-terminated so it can be handed straight to `ir_str` as a C string.
+///
+/// `name` is the word name compiled code resolves against, not the bare dictionary name. A global
+/// primitive is reached bare, and a `native`-module registry entry is reached only through its
+/// `native.`-qualified name, so the two never share a key.
 const NativeWrapper = struct {
     name: []const u8,
     func: NativeFn,
@@ -94,11 +98,20 @@ fn primitiveIsGeneric(comptime mks: []const *Marker) bool {
 
 const wrappers_upper_bound = extracted_primitives.len + extracted_registry_entries.len;
 
+/// The module qualifier every `native`-module registry entry is reached through. The module is
+/// marked non-importable, so a registry entry has no bare-name spelling in compiled code.
+const native_module_prefix = "native.";
+
 /// The non-generic native surface that AOT codegen can direct-call, drawn from both the global
-/// primitives and the `native`-module registry entries. Primitives own the bare-name semantics
-/// compiled code resolves against, so on a name collision the primitive wins and the registry
-/// entry is dropped. Registry-entry natives carry no markers in the dictionary, so none of them
-/// dispatch generically and all are eligible.
+/// primitives and the `native`-module registry entries.
+///
+/// Each entry is keyed by the name codegen resolves against, so a registry entry is keyed
+/// `native.<name>` and a primitive by its bare name. `file-info` and `list-directory` exist in both
+/// sets, and keying by the resolved name keeps them as two independent wrappers instead of forcing
+/// one to displace the other.
+///
+/// Registry-entry natives carry no markers in the dictionary, so none of them dispatch generically
+/// and all are eligible. Their `polymorphic` flag drives effect inference, not method dispatch.
 const direct_natives_buf = blk: {
     @setEvalBranchQuota(8_000_000);
     var buf: [wrappers_upper_bound]NativeWrapper = undefined;
@@ -108,11 +121,9 @@ const direct_natives_buf = blk: {
         buf[n] = .{ .name = p.name, .func = p.func, .symbol = std.fmt.comptimePrint("{s}", .{wrapperSymbolName(p.name)}) };
         n += 1;
     }
-    registry: for (extracted_registry_entries) |e| {
-        for (buf[0..n]) |w| {
-            if (std.mem.eql(u8, w.name, e.name)) continue :registry;
-        }
-        buf[n] = .{ .name = e.name, .func = e.func, .symbol = std.fmt.comptimePrint("{s}", .{wrapperSymbolName(e.name)}) };
+    for (extracted_registry_entries) |e| {
+        const qualified = native_module_prefix ++ e.name;
+        buf[n] = .{ .name = qualified, .func = e.func, .symbol = std.fmt.comptimePrint("{s}", .{wrapperSymbolName(qualified)}) };
         n += 1;
     }
 
@@ -140,6 +151,9 @@ comptime {
 /// The generated wrapper symbol for the non-generic native `name`, or null if `name` is generic
 /// or not a native. AOT codegen emits a direct call into the wrapper instead of the
 /// runtime-resolving `jitNativeWordCall`.
+///
+/// `name` must be spelled the way codegen resolved it. A `native`-module registry entry is keyed
+/// under its `native.`-qualified name, so passing the bare name misses.
 pub fn registryWrapperSymbol(name: []const u8) ?[:0]const u8 {
     for (direct_natives) |w| {
         if (std.mem.eql(u8, w.name, name)) return w.symbol;
@@ -176,7 +190,7 @@ test "wrapper symbol generated and unique for every registry entry" {
     defer seen.deinit();
 
     inline for (extracted_registry_entries) |entry| {
-        const sym = comptime wrapperSymbolName(entry.name);
+        const sym = comptime wrapperSymbolName(native_module_prefix ++ entry.name);
         try testing.expect(std.mem.startsWith(u8, sym, "onez_n_"));
         const gop = try seen.getOrPut(sym);
         try testing.expect(!gop.found_existing);
@@ -191,11 +205,33 @@ test "registryWrapperSymbol resolves non-generic natives and rejects unknown nam
     try testing.expect(std.mem.startsWith(u8, flush, "onez_n_"));
     try testing.expectEqual(@as(u8, 0), flush.ptr[flush.len]); // sentinel terminator past the slice end
 
-    // A registry-entry native resolves too.
-    try testing.expect(registryWrapperSymbol("borrowed?") != null);
+    // A registry-entry native resolves under the qualified name codegen emits, not the bare one.
+    try testing.expect(registryWrapperSymbol("native.borrowed?") != null);
+    try testing.expect(registryWrapperSymbol("borrowed?") == null);
 
     // An unknown name does not.
     try testing.expect(registryWrapperSymbol("definitely-not-a-native-word") == null);
+    try testing.expect(registryWrapperSymbol("native.definitely-not-a-native-word") == null);
+}
+
+test "registryWrapperSymbol resolves the value constructors a locked build needs" {
+    // Every non-builtin construction path bottoms out in one of these. Missing any of them makes
+    // the whole category uncompilable under `--lock-interpreter-setting`.
+    try testing.expect(registryWrapperSymbol("native.virtual-wrap") != null);
+    try testing.expect(registryWrapperSymbol("native.virtual-struct-wrap") != null);
+    try testing.expect(registryWrapperSymbol("native.make-struct-instance") != null);
+    try testing.expect(registryWrapperSymbol("native.struct-field-get") != null);
+}
+
+test "a name in both the primitive and registry sets keeps a wrapper per origin" {
+    // `file-info` and `list-directory` are registered both globally and in the `native` module.
+    // Keying by the resolved name gives each origin its own wrapper instead of dropping one.
+    const bare = registryWrapperSymbol("file-info") orelse return error.MissingWrapper;
+    const qualified = registryWrapperSymbol("native.file-info") orelse return error.MissingWrapper;
+    try testing.expect(!std.mem.eql(u8, bare, qualified));
+
+    try testing.expect(registryWrapperSymbol("list-directory") != null);
+    try testing.expect(registryWrapperSymbol("native.list-directory") != null);
 }
 
 test "registryWrapperSymbol excludes generic natives so they keep generic dispatch" {
@@ -212,6 +248,7 @@ test "wrapper symbol name mirrors mangling with onez_n_ prefix" {
     try testing.expectEqualStrings("onez_n__Hmap", wrapperSymbolName("#map"));
     try testing.expectEqualStrings("onez_n__Qor_else", wrapperSymbolName("?or-else"));
     try testing.expectEqualStrings("onez_n__Gfloat", wrapperSymbolName(">float"));
+    try testing.expectEqualStrings("onez_n_native_Ovirtual_wrap", wrapperSymbolName("native.virtual-wrap"));
 }
 
 test "wrapper invokes its native: borrowed? on a fixnum returns false" {
