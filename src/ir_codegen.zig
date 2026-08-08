@@ -1180,6 +1180,83 @@ fn emitTagCheckOrError(
     c._ir_IF_FALSE(ctx, if_mismatch);
 }
 
+/// Address of a compile-time string a callback reads at runtime.
+///
+/// AOT registers the bytes as a program literal and refers to its emitted symbol, since the
+/// compiler's own addresses mean nothing to the generated binary. JIT shares the compiler's
+/// address space, so it bakes the pointer directly. An empty string yields a null pointer, which
+/// every caller pairs with a zero length.
+fn emitStringLiteralPtr(state: *CompileState, text: []const u8) c.ir_ref {
+    if (text.len == 0) return c.ir_const_addr(state.ctx, 0);
+    if (!state.aot_mode) return c.ir_const_addr(state.ctx, @intFromPtr(text.ptr));
+
+    const lits = state.aot_string_literals orelse return c.ir_const_addr(state.ctx, 0);
+    const lit_id = lits.items.len;
+    lits.append(std.heap.page_allocator, .{ .data = text, .is_symbol = false }) catch {
+        return c.ir_const_addr(state.ctx, 0);
+    };
+
+    var sym_buf: [32]u8 = undefined;
+    const sym_name = std.fmt.bufPrint(&sym_buf, "onez_lit_{d}", .{lit_id}) catch unreachable;
+    return c.ir_const_func(state.ctx, c.ir_strl(state.ctx, &sym_buf, sym_name.len), 0);
+}
+
+/// Tag-check a proved parameter at entry, naming the word, the type that was proved, and the
+/// value that arrived, instead of the bare `type_mismatch_error_fn` status.
+///
+/// The word's name is baked because the callback raises under a frame naming it, and without a
+/// frame the reporter has nothing to hang the message on and prints the bare error name. That is
+/// the gap this closes. The value is passed by slot address, which the callback only reads to
+/// format the message.
+///
+/// A body with no name to bake falls back to the shared bare trap.
+fn emitParamTagCheckOrError(
+    state: *CompileState,
+    elem_addr: c.ir_ref,
+    expected_tag: c.ir_ref,
+    expected: NarrowNumeric,
+) void {
+    const word_name = state.caller_name_for_report orelse "";
+    if (word_name.len == 0 or state.param_type_mismatch_error_fn == c.IR_UNUSED) {
+        emitTagCheckOrError(state, elem_addr, expected_tag, state.type_mismatch_error_fn);
+        return;
+    }
+
+    const ctx = state.ctx;
+    const tag_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), elem_addr, state.tag_offset_const);
+    const tag_val = c._ir_LOAD(ctx, ValueLayout.ir_tag_type, tag_addr);
+    const tag_mismatch = c.ir_fold2(ctx, c.IR_OPT(c.IR_NE, c.IR_BOOL), tag_val, expected_tag);
+    const if_mismatch = c._ir_IF(ctx, tag_mismatch);
+    c._ir_IF_TRUE_cold(ctx, if_mismatch);
+    {
+        const ctx_val = if (state.preloaded_ctx_val != c.IR_UNUSED)
+            state.preloaded_ctx_val
+        else blk: {
+            JitContextLayout.ensureInit();
+            const ctx_off = c.ir_const_addr(ctx, JitContextLayout.ctx_offset);
+            const ctx_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.jit_ctx_ptr, ctx_off);
+            break :blk c._ir_LOAD(ctx, c.IR_ADDR, ctx_addr);
+        };
+
+        const expected_tag_int: u8 = switch (expected) {
+            .fixnum => @intFromEnum(@as(ValueLayout.TagType, .fixnum)),
+            .float => @intFromEnum(@as(ValueLayout.TagType, .float)),
+        };
+        const call_result = c._ir_CALL_5(
+            ctx,
+            c.IR_I32,
+            state.param_type_mismatch_error_fn,
+            ctx_val,
+            emitStringLiteralPtr(state, word_name),
+            c.ir_const_addr(ctx, word_name.len),
+            c.ir_const_addr(ctx, expected_tag_int),
+            elem_addr,
+        );
+        c._ir_RETURN(ctx, call_result);
+    }
+    c._ir_IF_FALSE(ctx, if_mismatch);
+}
+
 /// Load an i64 payload from a Value at elem_addr.
 fn emitUnboxI64(ctx: *c.ir_ctx, elem_addr: c.ir_ref, payload_offset_const: c.ir_ref) c.ir_ref {
     const payload_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), elem_addr, payload_offset_const);
@@ -2244,6 +2321,11 @@ const CompileState = struct {
     overflow_error_fn: c.ir_ref = c.IR_UNUSED,
     div_zero_error_fn: c.ir_ref = c.IR_UNUSED,
     underflow_error_fn: c.ir_ref = c.IR_UNUSED,
+    /// Function ref for `jitParamTypeMismatchError`, the entry check on a parameter the
+    /// freeze-time inference proved rather than read from a declaration. The shared
+    /// `type_mismatch_error_fn` reports no message, which leaves a failed proof indistinguishable
+    /// from every other tag check in the binary.
+    param_type_mismatch_error_fn: c.ir_ref = c.IR_UNUSED,
     /// Defined runtime trap for an interpreter-free dynamic quotation call
     /// reaching a null code_ptr. Replaces the interpreter fallback the strict
     /// path cannot use; only emitted in AOT interpreter-free mode.
@@ -3246,12 +3328,12 @@ fn seedInferredParams(state: *CompileState, stack: []StackEntry, input_count: us
             },
             .fixnum_declared => {
                 const slot_addr = liveSlotAddr(state, i);
-                emitTagCheckOrError(state, slot_addr, state.fixnum_tag_const, state.type_mismatch_error_fn);
+                emitParamTagCheckOrError(state, slot_addr, state.fixnum_tag_const, .fixnum);
                 stack[i] = .{ .i64_ref = emitUnboxI64(state.ctx, slot_addr, state.payload_offset_const) };
             },
             .float_declared => {
                 const slot_addr = liveSlotAddr(state, i);
-                emitTagCheckOrError(state, slot_addr, state.float_tag_const, state.type_mismatch_error_fn);
+                emitParamTagCheckOrError(state, slot_addr, state.float_tag_const, .float);
                 stack[i] = .{ .f64_ref = emitUnboxF64(state.ctx, slot_addr, state.payload_offset_const) };
             },
         }
@@ -8838,6 +8920,7 @@ fn compileWordPass(
 
     // Error-reporting callbacks: set jit_pending_error and return 2.
     const type_mismatch_error_fn = c.ir_const_addr(&ctx, @intFromPtr(&jitTypeMismatchError));
+    const param_type_mismatch_error_fn = c.ir_const_addr(&ctx, @intFromPtr(&jitParamTypeMismatchError));
     const overflow_error_fn = c.ir_const_addr(&ctx, @intFromPtr(&jitOverflowError));
     const div_zero_error_fn = c.ir_const_addr(&ctx, @intFromPtr(&jitDivisionByZeroError));
     const underflow_error_fn = c.ir_const_addr(&ctx, @intFromPtr(&jitStackUnderflowError));
@@ -8993,6 +9076,7 @@ fn compileWordPass(
         .pic_table = pic_table,
         .error_propagate_status = error_propagate_status,
         .type_mismatch_error_fn = type_mismatch_error_fn,
+        .param_type_mismatch_error_fn = param_type_mismatch_error_fn,
         .overflow_error_fn = overflow_error_fn,
         .div_zero_error_fn = div_zero_error_fn,
         .underflow_error_fn = underflow_error_fn,
@@ -9168,7 +9252,9 @@ pub fn emitWordC(
     const proto_1arg = c.ir_proto_1(&ctx, 0, c.IR_I32, c.IR_ADDR);
     const proto_3arg = c.ir_proto_3(&ctx, 0, c.IR_I32, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR);
     const proto_4arg = c.ir_proto_4(&ctx, 0, c.IR_I32, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR);
+    const proto_5arg = c.ir_proto_5(&ctx, 0, c.IR_I32, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR);
     const type_mismatch_error_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "jitTypeMismatchError"), proto_1arg);
+    const param_type_mismatch_error_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "onez_param_type_mismatch"), proto_5arg);
     const overflow_error_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "jitOverflowError"), proto_1arg);
     const div_zero_error_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "jitDivisionByZeroError"), proto_1arg);
     const underflow_error_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "jitStackUnderflowError"), proto_1arg);
@@ -9232,6 +9318,7 @@ pub fn emitWordC(
         .jit_ctx_ptr = jit_ctx_ptr,
         .error_propagate_status = error_propagate_status,
         .type_mismatch_error_fn = type_mismatch_error_fn,
+        .param_type_mismatch_error_fn = param_type_mismatch_error_fn,
         .overflow_error_fn = overflow_error_fn,
         .div_zero_error_fn = div_zero_error_fn,
         .underflow_error_fn = underflow_error_fn,
@@ -9268,6 +9355,8 @@ pub fn emitWordC(
     const preamble =
         "#include <stdint.h>\n#include <stdbool.h>\n\n" ++
         "extern int32_t jitTypeMismatchError(uintptr_t ctx);\n" ++
+        "extern int32_t jitParamTypeMismatchError(uintptr_t ctx, uintptr_t name_ptr, uintptr_t name_len, uintptr_t expected, uintptr_t value_ptr);\n" ++
+        "static int32_t onez_param_type_mismatch(uintptr_t ctx, const char *name, uintptr_t len, uintptr_t expected, uintptr_t value_ptr) { return jitParamTypeMismatchError(ctx, (uintptr_t)name, len, expected, value_ptr); }\n" ++
         "extern int32_t jitOverflowError(uintptr_t ctx);\n" ++
         "extern int32_t jitDivisionByZeroError(uintptr_t ctx);\n" ++
         "extern int32_t jitStackUnderflowError(uintptr_t ctx);\n" ++
@@ -9581,6 +9670,7 @@ fn emitWordCAotPass(
 
     // Error-reporting callbacks: set jit_pending_error and return 2.
     const type_mismatch_error_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "jitTypeMismatchError"), proto_1arg);
+    const param_type_mismatch_error_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "onez_param_type_mismatch"), proto_5arg);
     const overflow_error_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "jitOverflowError"), proto_1arg);
     const div_zero_error_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "jitDivisionByZeroError"), proto_1arg);
     const underflow_error_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "jitStackUnderflowError"), proto_1arg);
@@ -9705,6 +9795,7 @@ fn emitWordCAotPass(
         .interp_ctx = interp_ctx_param,
         .error_propagate_status = error_propagate_status,
         .type_mismatch_error_fn = type_mismatch_error_fn,
+        .param_type_mismatch_error_fn = param_type_mismatch_error_fn,
         .overflow_error_fn = overflow_error_fn,
         .div_zero_error_fn = div_zero_error_fn,
         .underflow_error_fn = underflow_error_fn,
@@ -11169,6 +11260,8 @@ pub fn emitProgramC(
     try out.appendSlice(allocator, "extern int32_t jitCallCodePtr(uintptr_t jit_ctx, uintptr_t code_ptr);\n");
     try out.appendSlice(allocator, "extern int32_t jitCallValue(uintptr_t jit_ctx, uintptr_t value_ptr);\n");
     try out.appendSlice(allocator, "extern int32_t jitTypeMismatchError(uintptr_t ctx);\n");
+    try out.appendSlice(allocator, "extern int32_t jitParamTypeMismatchError(uintptr_t ctx, uintptr_t name_ptr, uintptr_t name_len, uintptr_t expected, uintptr_t value_ptr);\n");
+    try out.appendSlice(allocator, "static int32_t onez_param_type_mismatch(uintptr_t ctx, const char *name, uintptr_t len, uintptr_t expected, uintptr_t value_ptr) { return jitParamTypeMismatchError(ctx, (uintptr_t)name, len, expected, value_ptr); }\n");
     try out.appendSlice(allocator, "extern int32_t jitOverflowError(uintptr_t ctx);\n");
     try out.appendSlice(allocator, "extern int32_t jitDivisionByZeroError(uintptr_t ctx);\n");
     try out.appendSlice(allocator, "extern int32_t jitStackUnderflowError(uintptr_t ctx);\n");
@@ -12213,18 +12306,7 @@ fn emitWordTraceFrame(state: *CompileState, word_name: []const u8, line: usize) 
         const ctx_addr = c.ir_fold2(state.ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.jit_ctx_ptr, ctx_off);
         break :blk c._ir_LOAD(state.ctx, c.IR_ADDR, ctx_addr);
     };
-    const name_ptr = if (state.aot_mode) blk: {
-        const lit_id = if (state.aot_string_literals) |lits| lits.items.len else 0;
-        if (state.aot_string_literals) |lits| {
-            lits.append(std.heap.page_allocator, .{
-                .data = word_name,
-                .is_symbol = false,
-            }) catch return;
-        }
-        var sym_buf: [32]u8 = undefined;
-        const sym_name = std.fmt.bufPrint(&sym_buf, "onez_lit_{d}", .{lit_id}) catch unreachable;
-        break :blk c.ir_const_func(state.ctx, c.ir_strl(state.ctx, &sym_buf, sym_name.len), 0);
-    } else c.ir_const_addr(state.ctx, @intFromPtr(word_name.ptr));
+    const name_ptr = emitStringLiteralPtr(state, word_name);
     const name_len_const = c.ir_const_addr(state.ctx, word_name.len);
     const line_const = c.ir_const_addr(state.ctx, line);
     _ = c._ir_CALL_4(state.ctx, c.IR_I32, state.append_word_trace_frame_fn, ctx_val, name_ptr, name_len_const, line_const);
@@ -14117,6 +14199,42 @@ export fn jitTypeMismatchError(ctx_raw: usize) callconv(.c) i32 {
 
 export fn jitNullCodePtrError(ctx_raw: usize) callconv(.c) i32 {
     return setJitError(ctx_raw, error.NullCodePtr);
+}
+
+/// Report a mistyped argument at a compiled word's entry, where the freeze-time inference proved
+/// a type the caller did not supply.
+///
+/// The proof rests on something the pass cannot observe at the call sites, so it is enforced here
+/// rather than trusted. The message goes through `setTypeMismatchError`, so a failed proof reads
+/// like every other type failure.
+///
+/// `expected_tag_raw` is a `Value` tag, the encoding the freestanding twin also reads.
+export fn jitParamTypeMismatchError(
+    ctx_raw: usize,
+    name_ptr_raw: usize,
+    name_len_raw: usize,
+    expected_tag_raw: usize,
+    value_ptr_raw: usize,
+) callconv(.c) i32 {
+    if (ctx_raw == 0 or ctx_raw % @alignOf(Context) != 0) return 2;
+    if (name_ptr_raw == 0 or value_ptr_raw == 0) return setJitError(ctx_raw, error.TypeMismatch);
+
+    const ctx: *Context = @ptrFromInt(ctx_raw);
+    const name_ptr: [*]const u8 = @ptrFromInt(name_ptr_raw);
+    const word_name = name_ptr[0..name_len_raw];
+
+    // A word the runtime image carries locates the frame at its own definition; one it does not
+    // still gets named, just without a position.
+    const def = ctx.lookupWord(word_name);
+    const source = if (def) |d| d.source_file orelse ctx.current_source else ctx.current_source;
+    const line = if (def) |d| d.source_line else 0;
+    ctx.pushCallFrame(word_name, source, line, 0);
+
+    const expected = if (expected_tag_raw == @intFromEnum(@as(ValueLayout.TagType, .float))) "float" else "fixnum";
+    helpers.setTypeMismatchError(ctx, expected, @as(*const Value, @ptrFromInt(value_ptr_raw)).*);
+
+    ctx.jit_pending_error = ctx.wordErrorCleanup(word_name, error.TypeMismatch);
+    return 2;
 }
 
 /// The three comparison words that derive an answer from a `cmp` method when the direct lookup

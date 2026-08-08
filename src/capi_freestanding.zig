@@ -268,6 +268,7 @@ comptime {
         @export(&jitDivisionByZeroError, .{ .name = "jitDivisionByZeroError" });
         @export(&jitStackUnderflowError, .{ .name = "jitStackUnderflowError" });
         @export(&jitTypeMismatchError, .{ .name = "jitTypeMismatchError" });
+        @export(&jitParamTypeMismatchError, .{ .name = "jitParamTypeMismatchError" });
         @export(&jitNullCodePtrError, .{ .name = "jitNullCodePtrError" });
     }
 }
@@ -1835,6 +1836,33 @@ fn jitStackUnderflowError(ctx_raw: usize) callconv(.c) i32 {
 
 fn jitTypeMismatchError(ctx_raw: usize) callconv(.c) i32 {
     _ = ctx_raw;
+    return 2;
+}
+
+/// Report a mistyped argument at a compiled word's entry, mirroring the hosted trap.
+///
+/// The message carries no value brief: formatting an arbitrary value is a hosted capability this
+/// substrate does not have, so it names the offending type instead. There are no call frames here
+/// either, so the word is named in the message rather than by a frame.
+fn jitParamTypeMismatchError(
+    ctx_raw: usize,
+    name_ptr_raw: usize,
+    name_len_raw: usize,
+    expected_tag_raw: usize,
+    value_ptr_raw: usize,
+) callconv(.c) i32 {
+    const handle = handleFromContext(ctx_raw) orelse return 2;
+    if (name_ptr_raw == 0 or value_ptr_raw == 0) return 2;
+
+    const float_tag = @intFromEnum(@as(std.meta.Tag(value_mod.Value), .float));
+    const expected = if (expected_tag_raw == float_tag) "float" else "fixnum";
+    const name_ptr: [*]const u8 = @ptrFromInt(name_ptr_raw);
+
+    setLastError(handle, "expected {s}, got {s} at word '{s}'", .{
+        expected,
+        freestandingValueTypeName(@as(*const Value, @ptrFromInt(value_ptr_raw)).*),
+        name_ptr[0..name_len_raw],
+    });
     return 2;
 }
 

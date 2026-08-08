@@ -5,8 +5,7 @@
 \
 \ The proof is marked declared for exactly this reason, which puts a tag check at
 \ `take`'s entry. The check traps instead of reading the bignum's payload as an
-\ i64. It carries no message today, which is the entry check's standing
-\ diagnostic gap rather than this site's.
+\ i64, and names the word, the type it proved, and the value that arrived.
 
 take: ( n -- ) [ 1 + drop "took it" print-line ] ;
 
