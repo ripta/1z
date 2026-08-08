@@ -1,0 +1,32 @@
+\ Type-defining natives must work inside a spawned task, not only on the main
+\ task. A task context had no type registry frame, so every registration hit an
+\ empty-frame guard that returned a false out-of-memory.
+\
+\ The `struct{`, `virtual{`, and `enum{` forms run at parse time on the primary
+\ context, so they cannot reach the task path. These call the natives directly.
+
+use "testing" ;
+
+struct-desc:  ( -- m ) [ M{ type: struct-descriptor: } fields: { "x" "y" } @set! ] ;
+virtual-desc: ( -- m ) [ M{ type: virtual: } inner-type: { fixnum } @set! ] ;
+enum-desc:    ( -- m ) [ M{ type: enum-descriptor: } variants: { on: unit off: unit } @set! ] ;
+
+"type definition inside a task" test-section
+
+[
+  [
+    point: struct-desc { } define-struct
+    3 4 make-point y>> 4 "struct getter inside a task" assert=
+
+    meters: virtual-desc { } define-virtual
+    7 >meters meters? t "virtual predicate inside a task" assert=
+
+    switch: enum-desc { } define-enum
+    switch:on switch? t "enum predicate inside a task" assert=
+  ] spawn drop
+] task-scope
+
+"type definition on the main task" test-section
+
+main-point: struct-desc { } define-struct
+5 6 make-main-point x>> 5 "struct getter on the main task" assert=

@@ -1,0 +1,14 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+=== type definition inside a task ===
+Stack: [ ]
+PASS: struct getter inside a task
+PASS: virtual predicate inside a task
+PASS: enum predicate inside a task
+Stack: [ ]
+=== type definition on the main task ===
+Stack: [ ]
+Stack: [ ]
+PASS: struct getter on the main task
+Stack: [ ]

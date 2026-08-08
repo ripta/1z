@@ -1349,6 +1349,15 @@ pub const Context = struct {
             ctx.active_sandbox = copy;
         }
 
+        // Push the base type registry frame so a type defined inside the task has a target, the
+        // same frame `init` establishes for the primary context.
+        //
+        // The frame stays empty rather than cloning the parent's, since descriptor lookup already
+        // walks `parent_context`. It must also be the task's own frame: a descriptor built here is
+        // allocated on the task arena, so registering it into the root's frame would leave a
+        // dangling pointer once the task is reaped.
+        try ctx.type_registry_frames.append(allocator, .{});
+
         // Snapshot the parent's dynamic variable bindings into the task context.
         for (parent.parameter_env.items) |parent_frame| {
             var cloned_frame = ParameterFrame{};
@@ -4706,7 +4715,7 @@ pub const Context = struct {
     }
 
     fn registerTypeDescriptorLocked(self: *Context, name: []const u8, desc: *value_mod.TypeDescriptor) !void {
-        if (self.type_registry_frames.items.len == 0) return error.OutOfMemory;
+        if (self.type_registry_frames.items.len == 0) return error.NoTypeRegistryFrame;
         const top = self.type_registry_frames.items.len - 1;
         try self.type_registry_frames.items[top].type_descriptors.put(self.allocator, name, desc);
     }
@@ -4719,7 +4728,7 @@ pub const Context = struct {
     }
 
     fn registerEnumVariantsLocked(self: *Context, enum_tv: *const value_mod.TypeValue, variants: []const *const value_mod.VirtualType) !void {
-        if (self.type_registry_frames.items.len == 0) return error.OutOfMemory;
+        if (self.type_registry_frames.items.len == 0) return error.NoTypeRegistryFrame;
         const top = self.type_registry_frames.items.len - 1;
         try self.type_registry_frames.items[top].enum_registry.put(self.allocator, enum_tv, variants);
     }
