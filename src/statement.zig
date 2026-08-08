@@ -36,6 +36,10 @@ pub const StatementProcessor = struct {
     // Size for parser coroutine stack, which should be enough for typical parsing depth.
     const coroutine_stack_size = 1024 * 1024;
 
+    // Headroom the overflow guard keeps below the parser coroutine's usable stack, matching the
+    // one-eighth proportion tasks reserve on their own stacks.
+    const coroutine_stack_reserve = coroutine_stack_size / 8;
+
     pub const Result = union(enum) {
         needs_more_input,
         complete: []const Instruction,
@@ -93,7 +97,7 @@ pub const StatementProcessor = struct {
         // Attempt to parse
         if (self.coroutine != null) {
             self.coroutine.?.tokenizer.?.input = self.stmt_buf[0..self.stmt_len];
-            self.coroutine.?.@"resume"();
+            self.resumeCoroutine(ctx);
         } else {
             if (self.coroutine_stack == null) {
                 self.coroutine_stack = task_mod.allocateTaskStack(coroutine_stack_size) catch return .{ .parse_error = error.OutOfMemory };
@@ -106,10 +110,41 @@ pub const StatementProcessor = struct {
             };
             pc_mod.pending_entry_coroutine = &self.coroutine.?;
             pc_mod.initCoroutineContext(&self.coroutine.?);
-            (&self.coroutine.?).@"resume"();
+            self.resumeCoroutine(ctx);
         }
 
         return self.handleCoroutineReturn();
+    }
+
+    /// Resume the parser coroutine with the context's native-stack bounds describing that
+    /// coroutine's stack instead of whichever stack the caller is on.
+    ///
+    /// A compound parse-time word runs inside this resume, and the overflow guard in
+    /// `executeResolvedWord` compares `@frameAddress()` against these bounds. A task's bounds
+    /// describe a stack the parse-time word never runs on, so leaving them in place reads as
+    /// instant exhaustion. The save and restore nest, which an `eval-string` driving a second
+    /// processor on the same context relies on.
+    fn resumeCoroutine(self: *StatementProcessor, ctx: ?*Context) void {
+        const co = &self.coroutine.?;
+        const c = ctx orelse {
+            co.@"resume"();
+            return;
+        };
+
+        const saved_high = c.stack_high;
+        const saved_limit = c.stack_limit;
+        defer {
+            c.stack_high = saved_high;
+            c.stack_limit = saved_limit;
+        }
+
+        // allocateTaskStack lays the region out as [guard page][usable], and the coroutine's
+        // entry sp skips the guard page, so the usable span starts one page in.
+        const usable_low = @intFromPtr(co.stack_mem.ptr) + std.heap.page_size_min;
+        c.stack_high = @intFromPtr(co.stack_mem.ptr) + co.stack_mem.len;
+        c.stack_limit = usable_low + coroutine_stack_reserve;
+
+        co.@"resume"();
     }
 
     /// Handle the result of a coroutine resume, checking for completion or need for more input.
@@ -195,7 +230,7 @@ pub const StatementProcessor = struct {
         if (self.coroutine != null) {
             // resume without extending input; nextOrYield will see no growth and return null, causing
             // the parser to complete 😩
-            self.coroutine.?.@"resume"();
+            self.resumeCoroutine(ctx);
             const result = self.coroutine.?.result.?;
             self.coroutine = null;
             return switch (result) {

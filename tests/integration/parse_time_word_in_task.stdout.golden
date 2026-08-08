@@ -1,0 +1,15 @@
+Stack: [ ]
+=== compound parse-time words inside a spawned task ===
+Stack: [ ]
+PASS: a user-defined compound parse-time word runs in a task
+PASS: the prelude M{ form runs in a task
+PASS: the prelude H{ form runs in a task
+Stack: [ ]
+=== the same forms on the main task ===
+Stack: [ ]
+Stack: [ ]
+PASS: a user-defined compound parse-time word runs on the main task
+Stack: [ ]
+Stack: [ ]
+PASS: the prelude M{ form runs on the main task
+Stack: [ ]

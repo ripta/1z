@@ -1,0 +1,39 @@
+\ A compound parse-time word must behave inside a spawned task exactly as it does on the main task.
+\
+\ Parse-time execution runs on the parser coroutine's own stack, not the task's. The native-stack
+\ overflow guard compares the frame address against the executing context's recorded bounds, so a
+\ task's bounds describe a stack the parse-time word never runs on. Every inner word call in the
+\ parse-time word's body then read as instant exhaustion and raised `stack overflow`.
+
+use "testing" ;
+
+count-args: parse-time [ "}" parse-values-until #len ] ;
+
+"compound parse-time words inside a spawned task" test-section
+
+[
+  out: 3 <buffered-channel> ;
+
+  [
+    "u: [ count-args a b c } ] ;" eval-string
+    u out send
+
+    "m: [ M{ k: 7 } ] ;" eval-string
+    m k: @get out send
+
+    "h: [ H{ k: 9 } ] ;" eval-string
+    h k: @get out send
+  ] spawn drop
+
+  out receive 3 "a user-defined compound parse-time word runs in a task" assert=
+  out receive 7 "the prelude M{ form runs in a task" assert=
+  out receive 9 "the prelude H{ form runs in a task" assert=
+] task-scope
+
+"the same forms on the main task" test-section
+
+"main-u: [ count-args a b c } ] ;" eval-string
+main-u 3 "a user-defined compound parse-time word runs on the main task" assert=
+
+"main-m: [ M{ k: 7 } ] ;" eval-string
+main-m k: @get 7 "the prelude M{ form runs on the main task" assert=
