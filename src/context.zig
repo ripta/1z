@@ -3021,7 +3021,9 @@ pub const Context = struct {
         }
 
         var def = definition;
-        def.dispatch_id = self.next_dispatch_id.fetchAdd(1, .monotonic);
+
+        // Minted from the root so ids are process-globally unique
+        def.dispatch_id = self.rootContext().next_dispatch_id.fetchAdd(1, .monotonic);
         if (def.source_file == null) {
             def.source_file = self.current_source;
             if (self.call_stack.items.len > 0) {

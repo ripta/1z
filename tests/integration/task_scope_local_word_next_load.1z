@@ -1,0 +1,21 @@
+\ A spawned task executing a scope-local word consumes dispatch ids from its
+\ context. A later `load` on the same task-scope must still mint ids that are
+\ unique against the root dispatch table; a task-local zero-based counter made
+\ `define-virtual` inside the load collide with a prelude entry and raise
+\ `duplicate-method`.
+
+use "testing" ;
+
+[
+  done: 1 <buffered-channel> ;
+  reader: ( -- ) [
+    1 2 + drop
+    t done send
+  ] ;
+  [ reader ] spawn drop
+  done receive drop
+  "math" load drop
+] task-scope
+
+"load after task ran a scope-local word" test-section
+"math" load pi: @get call 3.14 > t "math loaded and usable" assert=

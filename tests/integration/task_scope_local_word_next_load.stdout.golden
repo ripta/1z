@@ -1,0 +1,5 @@
+Stack: [ ]
+=== load after task ran a scope-local word ===
+Stack: [ ]
+PASS: math loaded and usable
+Stack: [ ]
