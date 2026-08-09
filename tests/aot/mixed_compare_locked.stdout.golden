@@ -1,0 +1,13 @@
+lt fixnum ok
+gt fixnum ok
+lt promote ok
+eq fixnum ok
+eq float ok
+bignum gt ok
+bignum lt ok
+cmp lt ok
+cmp gt ok
+cmp eq ok
+eq miss ok
+eq miss swapped ok
+done

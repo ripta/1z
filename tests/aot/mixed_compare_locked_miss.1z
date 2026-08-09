@@ -1,0 +1,12 @@
+\ A genuine type error at a locked polymorphic comparison site. No method covers
+\ a string and a fixnum anywhere in the frozen table and no `cmp` method derives
+\ an ordering for the pair, so the cold arm's lookup misses and the site traps.
+\
+\ The trap reproduces the native's own error tail rather than naming the dispatch
+\ machinery, so a locked binary reports what the interpreter reports.
+\ tests/integration/mixed_compare_miss.1z runs the same program interpreted and
+\ pins the same message.
+
+pick-num: ( b -- n ) [ [ 7 ] [ "x" ] if ] ;
+
+f pick-num 3 < drop

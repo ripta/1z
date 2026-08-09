@@ -1,0 +1,8 @@
+\ The `>` half of tests/aot/mixed_compare_locked_miss.1z. The trap arm and the
+\ message kind are shared with `<`, and this pins `>` naming them too.
+\ tests/integration/mixed_compare_miss_gt.1z runs the same program interpreted
+\ and pins the same message.
+
+pick-num: ( b -- n ) [ [ 7 ] [ "x" ] if ] ;
+
+f pick-num 3 > drop

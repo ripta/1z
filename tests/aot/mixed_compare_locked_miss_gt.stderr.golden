@@ -1,0 +1,2 @@
+<aot>:8: error 'type-mismatch' expected fixnum or float, got string "x" at word '>'
+  stack effect: ( a b -- ? )

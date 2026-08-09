@@ -1422,6 +1422,29 @@ const PolyArithOp = enum {
     mod,
 };
 
+/// Polymorphic comparison operation identifier.
+const PolyCompareOp = enum {
+    eq,
+    lt,
+    gt,
+
+    fn wordName(self: PolyCompareOp) []const u8 {
+        return switch (self) {
+            .eq => "=",
+            .lt => "<",
+            .gt => ">",
+        };
+    }
+
+    fn irOp(self: PolyCompareOp) c_uint {
+        return switch (self) {
+            .eq => c.IR_EQ,
+            .lt => c.IR_LT,
+            .gt => c.IR_GT,
+        };
+    }
+};
+
 /// Emit a per-operation fallback that calls the polymorphic native for a single arithmetic operation.
 /// The operands are already in physical memory at slot_a and slot_b.
 /// The native pops both and pushes one result, leaving it at slot_a (dest_slot).
@@ -1486,6 +1509,21 @@ fn emitPerOperationFallback(
     _ = slot_a;
 }
 
+/// How a dispatch miss (callback status 1) at a polymorphic cold arm resolves.
+///
+/// `trap` raises through `jitDispatchMissError`, matching the interpreter's `error.TypeMismatch`
+/// for arithmetic and ordering. `push_false` serves `=`, whose miss is not an error: the known
+/// operand is a proven number and the table covers every numeric pair, so a residual miss implies
+/// differing tags and the answer is a constant `f`. The arm releases the opaque operand the way
+/// the native's pop does, boxes `f` into the result slot, and rejoins the hit arm.
+const DispatchMissBehavior = union(enum) {
+    trap,
+    push_false: struct {
+        opaque_slot: usize,
+        dest_slot: usize,
+    },
+};
+
 /// Emit the polymorphic cold arm for a build class that rejects every fallback emission:
 /// resolve the operand pair against the frozen dispatch table and run the method it names.
 ///
@@ -1494,13 +1532,14 @@ fn emitPerOperationFallback(
 /// fallback note, and its lookup is the interpreter's own ladder rather than the builtin-tags-only
 /// one `jitPicDispatch` uses, so a quotation-bodied method reaches its compiled body here.
 ///
-/// Callback status 1 means no method covers the pair anywhere in the table, which the interpreter
-/// answers with `error.TypeMismatch`, so the miss trap raises the same error with the same message.
+/// Callback status 1 means no method covers the pair anywhere in the table; `miss` picks how the
+/// site answers that.
 fn emitPerOperationDispatch(
     state: *CompileState,
     op_name: []const u8,
     slot_b: usize,
     line: usize,
+    miss: DispatchMissBehavior,
 ) IrCodegenError!void {
     const ctx = state.ctx;
 
@@ -1545,21 +1584,43 @@ fn emitPerOperationDispatch(
     const missed = c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), call_result, miss_status);
     const if_miss = c._ir_IF(ctx, missed);
     c._ir_IF_TRUE_cold(ctx, if_miss);
-    {
-        // The trap pushes its own call frame, so the site adds none here.
-        const trap_result = c._ir_CALL_3(
-            ctx,
-            c.IR_I32,
-            state.dispatch_miss_error_fn,
-            ctx_val,
-            word_id_const,
-            c.ir_const_addr(ctx, line),
-        );
-        c._ir_RETURN(ctx, trap_result);
-    }
-    c._ir_IF_FALSE(ctx, if_miss);
+    switch (miss) {
+        .trap => {
+            // The trap pushes its own call frame, so the site adds none here.
+            const trap_result = c._ir_CALL_3(
+                ctx,
+                c.IR_I32,
+                state.dispatch_miss_error_fn,
+                ctx_val,
+                word_id_const,
+                c.ir_const_addr(ctx, line),
+            );
+            c._ir_RETURN(ctx, trap_result);
+            c._ir_IF_FALSE(ctx, if_miss);
 
-    emitCallbackPostCheck(state, call_result, state.error_propagate_status, null, .{ .named = .{ .name = op_name, .line = line } });
+            emitCallbackPostCheck(state, call_result, state.error_propagate_status, null, .{ .named = .{ .name = op_name, .line = line } });
+        },
+        .push_false => |pf| {
+            // A miss ran nothing, so the pre-call stack backing is still live and both operands
+            // still sit in place. Release the opaque one as the native's pop would; the known
+            // operand is a proven number and carries no backing.
+            emitReleaseSlot(state, pf.opaque_slot);
+
+            const dest_addr = liveSlotAddr(state, pf.dest_slot);
+            emitBoxPayload(ctx, dest_addr, state.tag_offset_const, state.payload_offset_const, state.boolean_tag_const, c.ir_const_bool(ctx, false));
+
+            // Match the hit arm's depth: a method pops both operands and pushes one result.
+            const sp_after = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_idx, c.ir_const_addr(ctx, pf.dest_slot + 1));
+            c._ir_STORE(ctx, state.sp_ptr, sp_after);
+            const end_miss = c._ir_END(ctx);
+
+            c._ir_IF_FALSE(ctx, if_miss);
+            emitCallbackPostCheck(state, call_result, state.error_propagate_status, null, .{ .named = .{ .name = op_name, .line = line } });
+            const end_hit = c._ir_END(ctx);
+
+            c._ir_MERGE_2(ctx, end_miss, end_hit);
+        },
+    }
 }
 
 /// Emit polymorphic binary arithmetic that handles both fixnum and float operands at runtime via
@@ -1580,6 +1641,7 @@ fn emitPolymorphicBinaryArith(
     op: PolyArithOp,
     line: usize,
 ) IrCodegenError!void {
+    std.debug.assert(slot_b == slot_a + 1);
     const ctx = state.ctx;
 
     // Check both operands for numeric tags (no bail on mismatch).
@@ -1740,7 +1802,111 @@ fn emitPolymorphicBinaryArith(
         const saved_items_ptr = state.items_ptr;
         const saved_base_addr = state.base_addr;
         if (state.aot_mode and (state.fallbacks_locked or state.freestanding)) {
-            try emitPerOperationDispatch(state, op_name, slot_b, line);
+            try emitPerOperationDispatch(state, op_name, slot_b, line, .trap);
+        } else {
+            try emitPerOperationFallback(state, op_name, slot_a, slot_b, line);
+        }
+        // Restore so the MERGE sees consistent refs from both paths.
+        state.items_ptr = saved_items_ptr;
+        state.base_addr = saved_base_addr;
+    }
+    const end_fallback = c._ir_END(ctx);
+
+    c._ir_MERGE_2(ctx, end_numeric, end_fallback);
+
+    // After the merge, the stack backing may have been reallocated by the
+    // fallback path's native call. Refresh so subsequent code uses live refs.
+    refreshCachedStackPointer(state);
+}
+
+/// Emit polymorphic binary comparison that handles both fixnum and float operands at runtime via
+/// tag-check branching. The result is written as a boxed boolean at dest_slot.
+///
+/// A fixnum pair folds a direct compare. Any other numeric pair promotes to f64, the same
+/// promotion the natives' cross-type entries make, so the fold agrees with them bit for bit and
+/// NaN compares false. The cold arm serves everything else. A residual dispatch miss on `=`
+/// answers `f` where `<` and `>` trap, so `opaque_slot` names the operand the `push_false` arm
+/// releases.
+///
+/// Both cold arms hand the operands over through the physical stack, and both set SP from
+/// `slot_b` alone. So the caller must have settled the pair at `slot_a`, `slot_a + 1` first.
+fn emitPolymorphicBinaryCompare(
+    state: *CompileState,
+    slot_a: usize,
+    slot_b: usize,
+    dest_slot: usize,
+    op: PolyCompareOp,
+    opaque_slot: usize,
+    line: usize,
+) IrCodegenError!void {
+    std.debug.assert(slot_b == slot_a + 1);
+    const ctx = state.ctx;
+
+    const va = emitNumericTagCheckNoBail(
+        ctx,
+        slot_a,
+        state.base_addr,
+        state.tag_offset_const,
+        state.fixnum_tag_const,
+        state.float_tag_const,
+    );
+    const vb = emitNumericTagCheckNoBail(
+        ctx,
+        slot_b,
+        state.base_addr,
+        state.tag_offset_const,
+        state.fixnum_tag_const,
+        state.float_tag_const,
+    );
+
+    const both_numeric = c.ir_fold2(ctx, c.IR_OPT(c.IR_AND, c.IR_BOOL), va.is_numeric, vb.is_numeric);
+    const if_numeric = c._ir_IF(ctx, both_numeric);
+
+    // === Numeric path (hot) ===
+    c._ir_IF_TRUE(ctx, if_numeric);
+    {
+        const dest_addr = liveSlotAddr(state, dest_slot);
+
+        const both_fixnum = c.ir_fold2(ctx, c.IR_OPT(c.IR_AND, c.IR_BOOL), va.is_fixnum, vb.is_fixnum);
+        const if_both_fixnum = c._ir_IF(ctx, both_fixnum);
+
+        // === Fixnum path ===
+        c._ir_IF_TRUE(ctx, if_both_fixnum);
+        {
+            const a_i64 = emitUnboxI64(ctx, va.elem_addr, state.payload_offset_const);
+            const b_i64 = emitUnboxI64(ctx, vb.elem_addr, state.payload_offset_const);
+            const result = c.ir_fold2(ctx, c.IR_OPT(op.irOp(), c.IR_BOOL), a_i64, b_i64);
+            emitBoxPayload(ctx, dest_addr, state.tag_offset_const, state.payload_offset_const, state.boolean_tag_const, result);
+        }
+        const end_fixnum = c._ir_END(ctx);
+
+        // === Float path (at least one operand is float) ===
+        c._ir_IF_FALSE(ctx, if_both_fixnum);
+        {
+            const a_f64 = emitConditionalF64Load(ctx, va.elem_addr, va.is_fixnum, state.payload_offset_const);
+            const b_f64 = emitConditionalF64Load(ctx, vb.elem_addr, vb.is_fixnum, state.payload_offset_const);
+            const result = c.ir_fold2(ctx, c.IR_OPT(op.irOp(), c.IR_BOOL), a_f64, b_f64);
+            emitBoxPayload(ctx, dest_addr, state.tag_offset_const, state.payload_offset_const, state.boolean_tag_const, result);
+        }
+        const end_float = c._ir_END(ctx);
+
+        c._ir_MERGE_2(ctx, end_fixnum, end_float);
+    }
+    const end_numeric = c._ir_END(ctx);
+
+    // === Cold arm: a non-numeric operand resolves through the dispatch table or the native ===
+    c._ir_IF_FALSE_cold(ctx, if_numeric);
+    {
+        const op_name = op.wordName();
+        // Save state refs before the callback (it may refresh them).
+        const saved_items_ptr = state.items_ptr;
+        const saved_base_addr = state.base_addr;
+        if (state.aot_mode and (state.fallbacks_locked or state.freestanding)) {
+            const miss: DispatchMissBehavior = switch (op) {
+                .eq => .{ .push_false = .{ .opaque_slot = opaque_slot, .dest_slot = dest_slot } },
+                .lt, .gt => .trap,
+            };
+            try emitPerOperationDispatch(state, op_name, slot_b, line, miss);
         } else {
             try emitPerOperationFallback(state, op_name, slot_a, slot_b, line);
         }
@@ -6770,16 +6936,68 @@ fn emitIntrinsicIf(ec: EmitCtx) IrCodegenError!ControlFlow {
     return .next;
 }
 
+/// Mixed-shape polymorphic fast path for the comparison intrinsics (`=`, `<`, `>`): one operand a
+/// runtime unknown, the other a proven unboxed number.
+///
+/// In AOT mode such a pair emits inline tag-branching comparison instead of the speculative tag
+/// check, whose bail has no interpreter to resume into. Returns true when it consumed the
+/// operands; false when the caller should keep its own paths. The caller must have already popped
+/// the two operands, so they sit at sp and sp+1.
+///
+/// A raw/raw pair stays with the caller's whole-native delegation: on a residual `=` miss the
+/// inline emitter answers a constant `f`, which is exact only when one side is a proven number.
+/// Under the JIT the speculative unboxed path stays, since its bail deopts to the interpreter.
+fn emitPolyCompareFastPath(ec: EmitCtx, op: PolyCompareOp) IrCodegenError!bool {
+    const state = ec.state;
+    const stack = ec.stack;
+    const sp = ec.sp;
+    var entry_a = stack[sp.*];
+    var entry_b = stack[sp.* + 1];
+
+    const one_raw = (entry_a == .raw_at_slot) != (entry_b == .raw_at_slot);
+    const known = if (entry_a == .raw_at_slot) entry_b else entry_a;
+    if (!state.aot_mode) return false;
+    if (!one_raw or !isKnownNumericEntry(known)) return false;
+    const a_is_opaque = entry_a == .raw_at_slot;
+
+    // The cold arm needs the polymorphic native, or the operator's dispatch id where it dispatches
+    // instead. When neither resolves, keep the concrete speculative path instead of rejecting the
+    // whole word.
+    const res = state.resolver orelse return false;
+    const resolved = res.resolve(op.wordName(), res.user_data) orelse return false;
+    if (state.fallbacks_locked or state.freestanding) {
+        if (resolved.dispatch_id == 0) return false;
+    }
+
+    if (state.in_branchless_trial) return IrCodegenError.BranchlessTrialImpure;
+
+    // The cold arm sets SP from the second slot alone, so the pair must be settled adjacent and
+    // ascending; the known operand also has no physical slot at all until it is boxed into place.
+    sp.* += 2;
+    flushToPhysicalStack(state, stack, sp.*);
+    sp.* -= 2;
+    entry_a = stack[sp.*];
+    entry_b = stack[sp.* + 1];
+
+    // The flush relabeled every live entry below the operands to its own slot, so nothing aliases
+    // `dest_slot` and the write cannot clobber a value another entry still reads.
+    const dest_slot = sp.*;
+    const slot_a = entry_a.raw_at_slot;
+    const slot_b = entry_b.raw_at_slot;
+    const opaque_slot = if (a_is_opaque) slot_a else slot_b;
+    try emitPolymorphicBinaryCompare(state, slot_a, slot_b, dest_slot, op, opaque_slot, ec.line);
+    stack[sp.*] = .{ .raw_at_slot = sp.* };
+    sp.* += 1;
+    return true;
+}
+
 /// Shared body for the comparison intrinsics (`=`, `<`, `>`): pop two operands
-/// and fold a boolean compare with `ir_op`. When both operands are runtime
-/// unknowns, or are non-numeric, fall back to the polymorphic native comparison
-/// rather than optimistically assuming i64 (which would bail for type values,
-/// strings, etc.). In AOT mode a mixed pair -- one opaque slot, one unboxed
-/// number -- also delegates, because the AOT bail on a runtime tag mismatch
-/// aborts instead of deopting to the interpreter. Locked and freestanding
-/// builds reject the delegated call's fallback emission, so they keep the
-/// speculative path.
-fn emitComparison(ec: EmitCtx, ir_op: c_uint) IrCodegenError!ControlFlow {
+/// and fold a boolean compare. An AOT mixed pair -- one opaque slot, one
+/// unboxed number -- takes the inline polymorphic path in every AOT class.
+/// When both operands are runtime unknowns, or are non-numeric, fall back to
+/// the polymorphic native comparison rather than optimistically assuming i64
+/// (which would bail for type values, strings, etc.).
+fn emitComparison(ec: EmitCtx, op: PolyCompareOp) IrCodegenError!ControlFlow {
     const state = ec.state;
     const ctx = state.ctx;
     const stack = ec.stack;
@@ -6790,26 +7008,16 @@ fn emitComparison(ec: EmitCtx, ir_op: c_uint) IrCodegenError!ControlFlow {
     if (sp.* < 2) return IrCodegenError.StackUnderflow;
     sp.* -= 2;
 
+    if (try emitPolyCompareFastPath(ec, op)) return .next;
+
     // When both operands are runtime unknowns and a resolver is available,
     // delegate to the polymorphic native directly. resolveOperandPair would
     // optimistically assume i64 and emit a fixnum tag check that bails for
-    // non-numeric types (type values, strings, etc.). An AOT mixed pair
-    // delegates for the same reason: the tag check on the opaque side would
-    // bail when the value is the other numeric type, and an AOT bail is fatal.
+    // non-numeric types (type values, strings, etc.).
     const entry_a = stack[sp.*];
     const entry_b = stack[sp.* + 1];
     const both_raw = entry_a == .raw_at_slot and entry_b == .raw_at_slot;
-    const mixed_aot = state.aot_mode and !state.fallbacks_locked and !state.freestanding and
-        !both_raw and
-        ((entry_a == .raw_at_slot and isKnownNumericEntry(entry_b)) or
-            (entry_b == .raw_at_slot and isKnownNumericEntry(entry_a))) and
-        blk: {
-            // Delegating needs the resolved native. When it cannot be resolved,
-            // keep the concrete speculative path instead of rejecting the word.
-            const res = state.resolver orelse break :blk false;
-            break :blk res.resolve(name, res.user_data) != null;
-        };
-    if ((both_raw or mixed_aot) and state.resolver != null) {
+    if (both_raw and state.resolver != null) {
         // The delegated native call cannot be folded away from a discarded
         // branchless trial.
         if (state.in_branchless_trial) return IrCodegenError.BranchlessTrialImpure;
@@ -6831,8 +7039,8 @@ fn emitComparison(ec: EmitCtx, ir_op: c_uint) IrCodegenError!ControlFlow {
     };
 
     const result = switch (resolved) {
-        .i64_pair => |p| c.ir_fold2(ctx, c.IR_OPT(ir_op, c.IR_BOOL), p.a, p.b),
-        .f64_pair => |p| c.ir_fold2(ctx, c.IR_OPT(ir_op, c.IR_BOOL), p.a, p.b),
+        .i64_pair => |p| c.ir_fold2(ctx, c.IR_OPT(op.irOp(), c.IR_BOOL), p.a, p.b),
+        .f64_pair => |p| c.ir_fold2(ctx, c.IR_OPT(op.irOp(), c.IR_BOOL), p.a, p.b),
     };
     stack[sp.*] = .{ .bool_ref = result };
     sp.* += 1;
@@ -6840,15 +7048,15 @@ fn emitComparison(ec: EmitCtx, ir_op: c_uint) IrCodegenError!ControlFlow {
 }
 
 fn emitIntrinsicEq(ec: EmitCtx) IrCodegenError!ControlFlow {
-    return emitComparison(ec, c.IR_EQ);
+    return emitComparison(ec, .eq);
 }
 
 fn emitIntrinsicLt(ec: EmitCtx) IrCodegenError!ControlFlow {
-    return emitComparison(ec, c.IR_LT);
+    return emitComparison(ec, .lt);
 }
 
 fn emitIntrinsicGt(ec: EmitCtx) IrCodegenError!ControlFlow {
-    return emitComparison(ec, c.IR_GT);
+    return emitComparison(ec, .gt);
 }
 
 /// Shared polymorphic fast path for the arithmetic intrinsics that support
@@ -6866,7 +7074,6 @@ fn emitIntrinsicGt(ec: EmitCtx) IrCodegenError!ControlFlow {
 /// the bail deopts to the interpreter, so the speculative unboxed path stays.
 fn emitPolyArithFastPath(ec: EmitCtx, op: PolyArithOp) IrCodegenError!bool {
     const state = ec.state;
-    const ctx = state.ctx;
     const stack = ec.stack;
     const sp = ec.sp;
     var entry_a = stack[sp.*];
@@ -6919,18 +7126,9 @@ fn emitPolyArithFastPath(ec: EmitCtx, op: PolyArithOp) IrCodegenError!bool {
         entry_b = stack[sp.* + 1];
     }
 
-    // Polymorphic arith writes directly to a physical slot. If any entry below the operands
-    // aliases `dest_slot`, save dest_slot to a scratch slot first so the write doesn't
-    // clobber the aliased value.
+    // The flush relabeled every live entry below the operands to its own slot, so nothing aliases
+    // `dest_slot` and the write cannot clobber a value another entry still reads.
     const dest_slot = sp.*;
-    const scratch = @max(dest_slot, @max(entry_a.raw_at_slot, entry_b.raw_at_slot)) + 1;
-    for (0..sp.*) |j| {
-        if (stack[j] == .raw_at_slot and stack[j].raw_at_slot == dest_slot) {
-            emitCopySlot(ctx, state.base_addr, dest_slot, scratch);
-            stack[j] = .{ .raw_at_slot = scratch };
-            break;
-        }
-    }
     try emitPolymorphicBinaryArith(state, entry_a.raw_at_slot, entry_b.raw_at_slot, dest_slot, op, ec.line);
     stack[sp.*] = .{ .raw_at_slot = sp.* };
     sp.* += 1;
@@ -16092,6 +16290,54 @@ test "emitProgramC: a fallback-permitted build keeps the per-operation native co
     var diag: CodegenDiagnostics = .{};
     defer if (diag.aot_fallback_report.sites.len > 0) testing.allocator.free(diag.aot_fallback_report.sites);
     const source = try emitProgramC(&poly_arith_words, &.{}, 0, 2, &.{}, .auto, false, test_aot_metadata, &diag, null, false, &.{}, &.{}, &.{}, testing.allocator);
+    defer testing.allocator.free(source);
+
+    try testing.expect(std.mem.indexOf(u8, source, "= jitNativeWordCall(") != null);
+    try testing.expect(std.mem.indexOf(u8, source, "= jitDispatchFull(") == null);
+}
+
+/// One opaque call result against a proven fixnum literal at a comparison: the mixed shape whose
+/// inline polymorphic path is shared by every AOT class and whose cold arm differs by build class.
+const poly_compare_one_body = makeInstructions(.{@as(i64, 1)});
+const poly_compare_lt_body = makeInstructions(.{ "one", @as(i64, 1), "<" });
+const poly_compare_eq_body = makeInstructions(.{ "one", @as(i64, 1), "=" });
+const poly_compare_lt_words = [_]AotWordDesc{
+    .{ .name = "below", .instructions = &poly_compare_lt_body, .input_count = 0, .output_count = 1, .word_id = 0 },
+    .{ .name = "one", .instructions = &poly_compare_one_body, .input_count = 0, .output_count = 1, .word_id = 1 },
+    .{ .name = "<", .instructions = &.{}, .input_count = 2, .output_count = 1, .word_id = 2, .is_native = true, .is_prelude = true, .dispatch_id = 8 },
+};
+const poly_compare_eq_words = [_]AotWordDesc{
+    .{ .name = "same", .instructions = &poly_compare_eq_body, .input_count = 0, .output_count = 1, .word_id = 0 },
+    .{ .name = "one", .instructions = &poly_compare_one_body, .input_count = 0, .output_count = 1, .word_id = 1 },
+    .{ .name = "=", .instructions = &.{}, .input_count = 2, .output_count = 1, .word_id = 2, .is_native = true, .is_prelude = true, .dispatch_id = 9 },
+};
+
+test "emitProgramC: a locked build's mixed comparison cold arm dispatches through the table" {
+    var diag: CodegenDiagnostics = .{};
+    const source = try emitProgramC(&poly_compare_lt_words, &.{}, 0, 2, &.{}, .false, true, test_aot_metadata, &diag, null, false, &.{}, &.{}, &.{}, testing.allocator);
+    defer testing.allocator.free(source);
+
+    try testing.expect(std.mem.indexOf(u8, source, "= jitDispatchFull(") != null);
+    try testing.expect(std.mem.indexOf(u8, source, "= jitDispatchMissError(") != null);
+    try testing.expect(std.mem.indexOf(u8, source, "= jitNativeWordCall(") == null);
+}
+
+test "emitProgramC: a locked build's mixed `=` miss is an inline constant f, not a trap" {
+    var diag: CodegenDiagnostics = .{};
+    const source = try emitProgramC(&poly_compare_eq_words, &.{}, 0, 2, &.{}, .false, true, test_aot_metadata, &diag, null, false, &.{}, &.{}, &.{}, testing.allocator);
+    defer testing.allocator.free(source);
+
+    try testing.expect(std.mem.indexOf(u8, source, "= jitDispatchFull(") != null);
+    try testing.expect(std.mem.indexOf(u8, source, "= jitDispatchMissError(") == null);
+    // The miss arm releases the opaque operand the way the native's pop would.
+    try testing.expect(std.mem.indexOf(u8, source, "\tjitReleaseSlot(") != null);
+    try testing.expect(std.mem.indexOf(u8, source, "= jitNativeWordCall(") == null);
+}
+
+test "emitProgramC: a fallback-permitted build's mixed comparison keeps the per-operation native cold arm" {
+    var diag: CodegenDiagnostics = .{};
+    defer if (diag.aot_fallback_report.sites.len > 0) testing.allocator.free(diag.aot_fallback_report.sites);
+    const source = try emitProgramC(&poly_compare_lt_words, &.{}, 0, 2, &.{}, .auto, false, test_aot_metadata, &diag, null, false, &.{}, &.{}, &.{}, testing.allocator);
     defer testing.allocator.free(source);
 
     try testing.expect(std.mem.indexOf(u8, source, "= jitNativeWordCall(") != null);

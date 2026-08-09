@@ -1,0 +1,7 @@
+\ The interpreter half of tests/aot/mixed_compare_locked_miss_gt.1z. A locked
+\ AOT binary reports a dispatch miss at a `>` site through its own trap, and
+\ the two stderr goldens must differ only in the source path.
+
+pick-num: ( b -- n ) [ [ 7 ] [ "x" ] if ] ;
+
+f pick-num 3 > drop

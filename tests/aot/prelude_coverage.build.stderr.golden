@@ -5,8 +5,8 @@ Prelude compilation: 455/456 words compiled (99.8%)
 Quotation bodies compiled: 0
 Inline PIC sites: 88/263 generic call sites preseeded
 AOT interpreter fallbacks: 302 total
-  native: 265
-  per-op-native: 19
+  native: 242
+  per-op-native: 42
   compound-uncompiled: 1
   quotation: 17
   sites:

@@ -2,3 +2,6 @@ a fixnum
 a float
 fixnum sum ok
 float sum ok
+fixnum gt ok
+float lt ok
+float eq ok

@@ -1,5 +1,5 @@
-AOT interpreter fallbacks: 1289 total (native=1226 per-op-native=57 quotation=6)
-  static-check: jitInterpretedCall=0/0 jitNativeWordCall=1283/1283 jitCallQuotation=6/6 (matches build-time inventory)
+AOT interpreter fallbacks: 1307 total (native=1181 per-op-native=120 quotation=6)
+  static-check: jitInterpretedCall=0/0 jitNativeWordCall=1301/1301 jitCallQuotation=6/6 (matches build-time inventory)
 Warning: '2dip' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
 Warning: 'while' parameter 'pred' has row-variable effect; quotation call falls back to interpreter
 Warning: 'while' parameter 'body' has row-variable effect; quotation call falls back to interpreter

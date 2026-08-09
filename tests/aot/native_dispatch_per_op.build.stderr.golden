@@ -1,12 +1,27 @@
-Quotation bodies compiled: 0
-AOT interpreter fallbacks: 3 total
+Prelude compilation: 4/4 words compiled (100.0%)
+Quotation bodies compiled: 29/29 (100.0%)
+AOT interpreter fallbacks: 21 total
   native: 2
-  per-op-native: 1
+  per-op-native: 19
   sites:
     native: cmp-lt -> < (line 22)
+    per-op-native: cmp -> < (line 209)
+    per-op-native: cmp -> > (line 211)
     native: cmp-eq -> = (line 21)
     per-op-native: add -> + (line 20)
-  static-check: jitInterpretedCall=0/0 jitNativeWordCall=3/3 jitCallQuotation=0/0 (matches build-time inventory)
+    per-op-native: onez_q_1 -> > (line 211)
+    per-op-native: onez_q_4 -> < (line 1)
+    per-op-native: onez_q_4 -> > (line 1)
+    per-op-native: onez_q_6 -> > (line 1)
+    per-op-native: onez_q_9 -> < (line 1)
+    per-op-native: onez_q_9 -> > (line 1)
+    per-op-native: onez_q_11 -> > (line 1)
+    per-op-native: onez_q_14 -> < (line 5)
+    per-op-native: onez_q_14 -> > (line 5)
+    per-op-native: onez_q_16 -> > (line 5)
+    per-op-native: onez_q_19 -> < (line 1)
+    ... 5 more
+  static-check: jitInterpretedCall=0/0 jitNativeWordCall=21/21 jitCallQuotation=0/0 (matches build-time inventory)
 artifact: interpreter
 interpreter: linked (auto: compiled code calls interpreter)
 jitInterpretedCall: not linked

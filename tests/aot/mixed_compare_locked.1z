@@ -1,0 +1,44 @@
+\ Mixed known/opaque comparison operands under `--interpreter-fallback=false
+\ --lock-interpreter-setting`. The lock rejects every fallback emission, so a
+\ comparison site with an operand of unknown tag used to keep a speculative tag
+\ check that aborts when the value is the other numeric type. Such a site now
+\ branches on the tag inline and resolves the rest through the frozen dispatch
+\ table, exactly as the arithmetic sites do.
+\
+\ A branch merge of two numeric types is what leaves an operand opaque here.
+
+pick-num:  ( b -- n ) [ [ 7 ] [ 2.5 ] if ] ;
+pick-huge: ( b -- n ) [ [ 9223372036854775807 ] [ 2.5 ] if ] ;
+pick-str:  ( b -- n ) [ [ "s" ] [ 2.5 ] if ] ;
+
+\ A type comparable through `cmp` alone: no `=`, `<`, or `>` method exists, so
+\ the cold arm's direct lookup misses and the derivation answers all three.
+temperature: virtual{ fixnum } ;
+cmp: method{ fixnum temperature } [ unmake-temperature cmp ] ;
+pick-temp: ( b -- x ) [ [ 30 >temperature ] [ 2.5 ] if ] ;
+
+\ Inline arms: fixnum pair, promotion, and float equality.
+t pick-num 3 < [ "lt fixnum wrong" ] [ "lt fixnum ok" ] if print-line
+t pick-num 3 > [ "gt fixnum ok" ] [ "gt fixnum wrong" ] if print-line
+f pick-num 3 < [ "lt promote ok" ] [ "lt promote wrong" ] if print-line
+t pick-num 7 = [ "eq fixnum ok" ] [ "eq fixnum wrong" ] if print-line
+f pick-num 2.5 = [ "eq float ok" ] [ "eq float wrong" ] if print-line
+
+\ A bignum leaves the inline arms for the cold arm, where the native entries
+\ compare through the dispatch table. The overflow promotes in the arithmetic
+\ cold arm first.
+t pick-huge 1 + 0 > [ "bignum gt ok" ] [ "bignum gt wrong" ] if print-line
+t pick-huge 1 + 0 < [ "bignum lt wrong" ] [ "bignum lt ok" ] if print-line
+
+\ The cmp-only type answers `<`, `>`, and `=` through the derivation. The
+\ method's key is (fixnum, temperature), so the proven fixnum is swapped under
+\ the opaque operand, which also reorders the pair abstractly before the flush.
+t pick-temp 20 swap < [ "cmp lt ok" ] [ "cmp lt wrong" ] if print-line
+t pick-temp 40 swap > [ "cmp gt ok" ] [ "cmp gt wrong" ] if print-line
+t pick-temp 30 swap = [ "cmp eq ok" ] [ "cmp eq wrong" ] if print-line
+
+\ A residual `=` miss answers a constant f instead of trapping, in both operand
+\ orders, and the program keeps running.
+t pick-str 5 = [ "eq miss wrong" ] [ "eq miss ok" ] if print-line
+t pick-str 5 swap = [ "eq miss swapped wrong" ] [ "eq miss swapped ok" ] if print-line
+"done" print-line

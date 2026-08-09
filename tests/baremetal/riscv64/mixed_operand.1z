@@ -16,3 +16,9 @@ f pick-num 3 + kind print-line
 
 t pick-num 3 + 10 = [ "fixnum sum ok" ] [ "fixnum sum wrong" ] if print-line
 f pick-num 3 + 5.5 = [ "float sum ok" ] [ "float sum wrong" ] if print-line
+
+\ Mixed comparisons take the same inline arms: a fixnum pair folds a direct
+\ compare and a mixed pair promotes to f64.
+t pick-num 3 > [ "fixnum gt ok" ] [ "fixnum gt wrong" ] if print-line
+f pick-num 3 < [ "float lt ok" ] [ "float lt wrong" ] if print-line
+f pick-num 2.5 = [ "float eq ok" ] [ "float eq wrong" ] if print-line

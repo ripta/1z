@@ -1,0 +1,2 @@
+tests/integration/mixed_compare_miss_gt.1z:7: error 'type-mismatch' expected fixnum or float, got string "x" at word '>'
+  stack effect: ( a b -- ? )

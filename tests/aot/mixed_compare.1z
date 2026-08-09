@@ -1,0 +1,36 @@
+\ Mixed known/opaque comparison operands in the default AOT build class. A
+\ comparison site with one proven unboxed number and one opaque operand takes
+\ the inline polymorphic path: fixnum pairs fold a direct compare, anything
+\ else promotes to f64, and non-numeric operands cold-arm to the native.
+\
+\ A branch merge of two numeric types is what leaves an operand opaque here.
+
+pick-num: ( b -- n ) [ [ 7 ] [ 2.5 ] if ] ;
+
+\ NaN is computed at runtime by dividing an opaque zero: a literal `0.0 0.0 /`
+\ is miscompiled by constant emission, per
+\ spec/bugs/20260809-aot-constant-float-division-emits-integer-division.md.
+pick-zero: ( b -- n ) [ [ 0.0 ] [ 7 ] if ] ;
+pick-nan:  ( b -- n ) [ [ 0.0 t pick-zero / ] [ 7 ] if ] ;
+pick-str:  ( b -- n ) [ [ "s" ] [ 2.5 ] if ] ;
+
+\ Fixnum arm, both directions.
+t pick-num 3 < [ "lt fixnum wrong" ] [ "lt fixnum ok" ] if print-line
+t pick-num 3 > [ "gt fixnum ok" ] [ "gt fixnum wrong" ] if print-line
+t pick-num 7 = [ "eq fixnum ok" ] [ "eq fixnum wrong" ] if print-line
+
+\ Float arm with promotion: opaque float against a proven fixnum, and the
+\ swapped spelling that reorders the pair abstractly before the compare.
+f pick-num 3 < [ "lt promote ok" ] [ "lt promote wrong" ] if print-line
+f pick-num 3 swap < [ "lt swapped wrong" ] [ "lt swapped ok" ] if print-line
+f pick-num 2.5 = [ "eq float ok" ] [ "eq float wrong" ] if print-line
+
+\ NaN compares false under every operator, matching the natives' f64 fold.
+t pick-nan 3 < [ "nan lt wrong" ] [ "nan lt ok" ] if print-line
+t pick-nan 3 > [ "nan gt wrong" ] [ "nan gt ok" ] if print-line
+t pick-nan 3 = [ "nan eq wrong" ] [ "nan eq ok" ] if print-line
+
+\ An `=` whose pair no method covers answers f here through the native's
+\ structural-equality fallthrough, agreeing with the locked class's inline
+\ constant.
+t pick-str 5 = [ "eq miss wrong" ] [ "eq miss ok" ] if print-line

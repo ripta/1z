@@ -1,0 +1,10 @@
+lt fixnum ok
+gt fixnum ok
+eq fixnum ok
+lt promote ok
+lt swapped ok
+eq float ok
+nan lt ok
+nan gt ok
+nan eq ok
+eq miss ok

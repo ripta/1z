@@ -1387,6 +1387,19 @@ fn drainWorklist(
                 emitFreezeWordTrace(ctx, name, "native");
                 if (isColdArmDispatchOperator(name)) {
                     try walkDispatchMethodBodies(ctx, word, identity, worklist, seen, &result.quotation_bodies, quotation_seen, &result.method_body_ptrs, &result.pending_call_targets, &result.pending_callee_bindings, diagnostics, artifact_class, allocator, result_allocator);
+
+                    // The comparison cold arm probes `cmp` at runtime when its direct lookup
+                    // misses, so a type made comparable through `cmp` alone answers compiled
+                    // sites. That reach has no static call edge, so a discovered comparison
+                    // operator discovers `cmp` with it; otherwise no `cmp` method would replay
+                    // into the image and the derivation would miss.
+                    if (isCmpDerivedOperator(name)) {
+                        if (ctx.lookupWordFiltered("cmp", own_vis)) |cmp_word| {
+                            const cmp_identity = WordIdentity{ .module = cmp_word.source_module, .name = "cmp" };
+                            const gop = try seen.getOrPut(allocator, cmp_identity);
+                            if (!gop.found_existing) try worklist.append(allocator, cmp_identity);
+                        }
+                    }
                 }
                 continue;
             },
@@ -2211,6 +2224,16 @@ fn isColdArmDispatchOperator(name: []const u8) bool {
     if (name.len != 1) return false;
     return switch (name[0]) {
         '+', '-', '*', '/', '%', '=', '<', '>' => true,
+        else => false,
+    };
+}
+
+/// The subset of the cold-arm operators whose callback derives an answer from `cmp` on a direct
+/// dispatch miss, mirroring `tryDispatchBinaryViaCmp`.
+fn isCmpDerivedOperator(name: []const u8) bool {
+    if (name.len != 1) return false;
+    return switch (name[0]) {
+        '=', '<', '>' => true,
         else => false,
     };
 }
