@@ -6069,6 +6069,7 @@ fn putTopLevelWord(
     if (ctx.import_frame_index == null) {
         try ctx.pushLocalFrame();
         ctx.import_frame_index = ctx.local_frames.items.len - 1;
+        ctx.durable_frame_floor = ctx.import_frame_index;
     }
     const frame = &ctx.local_frames.items[ctx.import_frame_index.?];
     try frame.put(ctx.allocator, name, .{

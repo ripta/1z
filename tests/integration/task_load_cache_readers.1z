@@ -1,52 +1,40 @@
-\ Smoke test for the module cache lock: task-context readers hammer the
-\ cache-hit path of `load`, and the main task inserts fresh modules into the
-\ cache around them.
-\
-\ Two pre-existing defects constrain its shape. Task execution overlapping a
-\ main-task load reads the load's transient import frame and crashes, so the
-\ main task does not load while the readers run, and the file runs under
-\ --threads=1. A task executing a scope-local word poisons the next load, so
-\ the reader body is inlined into each spawn instead. Widen this to
-\ overlapping cross-worker coverage once both are fixed.
+\ Cross-cutting concurrency smoke test for runtime loads: task-context readers
+\ hammer the cache-hit path of `load` and generic-dispatch resolution while the
+\ main task inserts six fresh modules into the cache. Cache-miss loads overlap
+\ task-side bare-word resolution across workers, pinning that a load's live
+\ import frame stays above the durable floor and out of every other task's
+\ ancestor walk. The reader is a scope-local word on purpose: a task executing
+\ one used to poison the next load's dispatch ids, and this keeps that fix
+\ covered under concurrency.
 
 use "testing" ;
 
-"cache-hit readers from task contexts" test-section
+"cache readers during main-task loads" test-section
 
 \ Prime the readers' module so every load in the tasks below is a hit.
 "./task_load_cache_readers_hit_mod.1z" load drop
 
 [
   done: 3 <buffered-channel> ;
-  [
-    100 [
+  reader: ( -- ) [
+    200 [
       "./task_load_cache_readers_hit_mod.1z" load
       hit-mod-word: @get call drop
+      20 [ H{ } x: @has? drop ] times
     ] times
     t done send
-  ] spawn drop
-  [
-    100 [
-      "./task_load_cache_readers_hit_mod.1z" load
-      hit-mod-word: @get call drop
-    ] times
-    t done send
-  ] spawn drop
-  [
-    100 [
-      "./task_load_cache_readers_hit_mod.1z" load
-      hit-mod-word: @get call drop
-    ] times
-    t done send
-  ] spawn drop
+  ] ;
+  [ reader ] spawn drop
+  [ reader ] spawn drop
+  [ reader ] spawn drop
+  { "math" "strings" "char" "bytes" "sets" "ranges" } [ load drop ] #each
   done receive drop
   done receive drop
   done receive drop
 ] task-scope
 
-"cache inserts after task readers" test-section
-
-{ "math" "strings" "char" "bytes" "sets" "ranges" } [ load drop ] #each
-
 "./task_load_cache_readers_hit_mod.1z" load
 hit-mod-word: @get call "hit" "the hit module still works after the reader storm" assert=
+
+use "math" ;
+2.7 floor 2.0 "a module loaded during the reader storm answers" assert=

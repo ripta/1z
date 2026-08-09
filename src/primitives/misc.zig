@@ -385,6 +385,9 @@ pub fn nativeLoadImpl(ctx: *Context, cache: *value_mod.MutableMap, filename: []c
     // XXX(ripta): Hack to set import target frame, which may execute inside
     //             combinator frames like `if`, instead of global or ephemeral
     //             frame. No rugrats for now.
+    //
+    // `durable_frame_floor` deliberately stays put: this frame is live and other tasks' ancestor
+    // walks must not see it.
     const old_import_frame = ctx.import_frame_index;
     ctx.import_frame_index = ctx.local_frames.items.len - 1;
     defer ctx.import_frame_index = old_import_frame;
@@ -1235,10 +1238,10 @@ fn propagateWordId(ctx: *Context, name: []const u8, word_id: u32) void {
     var ancestor = ctx.parent_context;
     while (ancestor) |anc| {
         // Match `lookupWordLocked`'s bounded ancestor walk: a descendant only
-        // resolves an ancestor's stable scope (import frame and below), so back-
-        // writing a word_id into an ancestor's transient frame would land where
-        // resolution never looks.
-        const anc_cap = if (anc.import_frame_index) |idx| idx + 1 else 0;
+        // resolves an ancestor's stable scope (the durable floor and below),
+        // so back-writing a word_id into an ancestor's transient frame would
+        // land where resolution never looks.
+        const anc_cap = if (anc.durable_frame_floor) |idx| idx + 1 else 0;
         var j = anc_cap;
         while (j > 0) {
             j -= 1;

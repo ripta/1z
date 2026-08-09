@@ -1548,6 +1548,9 @@ fn runEval(
     const old_import_frame = ctx.import_frame_index;
     ctx.import_frame_index = ctx.local_frames.items.len - 1;
     defer ctx.import_frame_index = old_import_frame;
+    const old_durable_floor = ctx.durable_frame_floor;
+    ctx.durable_frame_floor = ctx.import_frame_index;
+    defer ctx.durable_frame_floor = old_durable_floor;
 
     var processor: StatementProcessor = .{};
     defer processor.deinit();
@@ -1734,6 +1737,9 @@ fn runTest(ctx: *Context, file_path: []const u8, err_writer: anytype) u8 {
     const old_import_frame = ctx.import_frame_index;
     ctx.import_frame_index = ctx.local_frames.items.len - 1;
     defer ctx.import_frame_index = old_import_frame;
+    const old_durable_floor = ctx.durable_frame_floor;
+    ctx.durable_frame_floor = ctx.import_frame_index;
+    defer ctx.durable_frame_floor = old_durable_floor;
 
     const alloc = ctx.quotationAllocator();
 
@@ -4239,6 +4245,9 @@ fn replInteractive(ctx: *Context, verbosity: Verbosity, writer: anytype) void {
     const old_import_frame = ctx.import_frame_index;
     ctx.import_frame_index = ctx.local_frames.items.len - 1;
     defer ctx.import_frame_index = old_import_frame;
+    const old_durable_floor = ctx.durable_frame_floor;
+    ctx.durable_frame_floor = ctx.import_frame_index;
+    defer ctx.durable_frame_floor = old_durable_floor;
 
     autoloadReplModules(ctx);
 
@@ -4344,6 +4353,9 @@ fn replPiped(ctx: *Context, verbosity: Verbosity, writer: anytype) void {
     const old_import_frame = ctx.import_frame_index;
     ctx.import_frame_index = ctx.local_frames.items.len - 1;
     defer ctx.import_frame_index = old_import_frame;
+    const old_durable_floor = ctx.durable_frame_floor;
+    ctx.durable_frame_floor = ctx.import_frame_index;
+    defer ctx.durable_frame_floor = old_durable_floor;
 
     autoloadReplModules(ctx);
 
@@ -4470,6 +4482,9 @@ fn batch(ctx: *Context, file_path: []const u8, show_stack: bool) u8 {
     const old_import_frame = ctx.import_frame_index;
     ctx.import_frame_index = ctx.local_frames.items.len - 1;
     defer ctx.import_frame_index = old_import_frame;
+    const old_durable_floor = ctx.durable_frame_floor;
+    ctx.durable_frame_floor = ctx.import_frame_index;
+    defer ctx.durable_frame_floor = old_durable_floor;
 
     var processor: StatementProcessor = .{};
     defer processor.deinit();

@@ -643,10 +643,18 @@ pub const Context = struct {
     /// an ephemeral combinator frame. When null, `import` writes to the
     /// global dictionary.
     import_frame_index: ?usize = null,
-    /// True while a `load` call is executing. Blocking primitives (yield,
-    /// sleep, await, await-all, send, receive, select) check this flag and
-    /// throw an error to prevent yielding mid-load, which would expose
-    /// half-defined module frames to other tasks via ancestor traversal.
+    /// Index of the durable import frame: the top of the stable scope a descendant context may
+    /// read through the ancestor walk, and the point the spawn-time frame clone starts above.
+    ///
+    /// Mirrors `import_frame_index` at every site except a runtime load, which moves only the
+    /// import target. The load's transient frame stays above this floor, invisible to other
+    /// tasks, until the finalized module publishes through the cache. Written only at
+    /// pre-worker-pool or single-context sites, so cross-task readers race with nothing.
+    durable_frame_floor: ?usize = null,
+    /// True while a `load` call is executing. Blocking primitives (yield, sleep, await,
+    /// await-all, send, receive, select) check this flag and throw an error to prevent yielding
+    /// mid-load, which would park the loader with the module's globally visible registry writes
+    /// half-done.
     in_module_load: bool = false,
     /// Re-entrancy guard for scoped hooks (e.g., word-defined).
     firing_scoped_hooks: bool = false,
@@ -1433,15 +1441,18 @@ pub const Context = struct {
         // Clone the parent's in-scope transient local frames at spawn, the same snapshot-at-spawn
         // discipline the parameter environment above uses.
         //
-        // The transient frames are those above the parent's resolution root: the parent's import
-        // frame and below are the durable scope a descendant reaches by walking `parent_context`,
-        // while the frames above it (module-deps and combinator frames, and any quotation-local
-        // definitions they hold) are per-task execution state a descendant has no live window
-        // into once cross-context resolution is task-private.
+        // The transient frames are those above the parent's durable floor: the floor and below are
+        // the durable scope a descendant reaches by walking `parent_context`, while the frames
+        // above it (module-deps and combinator frames, any quotation-local definitions they hold,
+        // and a runtime load's live import frame) are per-task execution state a descendant has no
+        // live window into once cross-context resolution is task-private.
         //
-        // A task parent has no import frame, so all of its frames are transient; the primary context
-        // contributes only frames above its `import_frame_index`. In the common case this set is
-        // empty, since top-level and word-body definitions land in the stable import frame.
+        // A task parent has no durable frame, so all of its frames are transient; the primary
+        // context contributes only frames above its floor. In the common case this set is empty,
+        // since top-level and word-body definitions land in the stable import frame. A spawn during
+        // a runtime load captures the load frame here, so module top-level code that spawns still
+        // resolves the module's already-defined words, from a frozen copy rather than the live
+        // frame.
         //
         // Per-quotation lexical capture sits in front of this clone: a spawned closure or plain
         // quotation carries its own captured scope, which `executeInstructions` resolves ahead of
@@ -1457,7 +1468,7 @@ pub const Context = struct {
         // A `WordDefinition` borrows its name, effect, markers, and body slice, so the entries copy
         // directly. Its bound value is the one thing it can own, and the clone outlives the frame it
         // came from, so the clone takes references of its own.
-        const transient_start = if (parent.import_frame_index) |idx| idx + 1 else 0;
+        const transient_start = if (parent.durable_frame_floor) |idx| idx + 1 else 0;
         for (parent.local_frames.items[transient_start..], transient_start..) |parent_frame, src_idx| {
             var cloned_frame = LocalFrame{};
             var iter = parent_frame.iterator();
@@ -1565,6 +1576,7 @@ pub const Context = struct {
         // frame instead of the global dictionary
         try self.pushLocalFrame();
         self.import_frame_index = self.local_frames.items.len - 1;
+        self.durable_frame_floor = self.import_frame_index;
 
         // Push the base pragma frame for file-scoped pragmas
         try self.pushPragmaFrame();
@@ -1957,11 +1969,10 @@ pub const Context = struct {
 
     /// Push a new empty local frame onto the frame stack.
     ///
-    /// No lock: a context's transient frames (those above `import_frame_index`)
-    /// are task-private. Only the owning task ever mutates them, and cross-task
-    /// resolution reads only an ancestor's stable scope, never its live
-    /// transient frames. The load-time import-frame push runs before any worker
-    /// pool exists, so it is uncontended too.
+    /// No lock: a context's frames above `durable_frame_floor` are task-private, including a
+    /// runtime load's import frame. Only the owning task ever mutates them, and cross-task
+    /// resolution reads only an ancestor's stable scope, capped at the floor, never its live
+    /// frames above it.
     pub fn pushLocalFrame(self: *Context) !void {
         try self.local_frames.append(self.allocator, LocalFrame{});
         errdefer self.local_frames.items.len -= 1;
@@ -3487,7 +3498,7 @@ pub const Context = struct {
     /// `vis`, when non-null, filters this context's own transient frames: a `.module_deps` frame the
     /// executing body may not see is skipped, so a stored quotation does not resolve against a
     /// foreign library's frame that merely happens to be live. Only the self walk is filtered; the
-    /// ancestor walk visits durable frames below the import floor, which are never `.module_deps`.
+    /// ancestor walk visits durable frames below the durable floor, which are never `.module_deps`.
     fn lookupWordLocked(self: *const Context, name: []const u8, vis: ?ModuleDepsVisibility) ?WordDefinition {
         var i = self.local_frames.items.len;
         while (i > 0) {
@@ -3509,7 +3520,7 @@ pub const Context = struct {
 
         var ancestor = self.parent_context;
         while (ancestor) |ctx| {
-            const anc_cap = if (ctx.import_frame_index) |idx| idx + 1 else 0;
+            const anc_cap = if (ctx.durable_frame_floor) |idx| idx + 1 else 0;
             var j = anc_cap;
             while (j > 0) {
                 j -= 1;
@@ -3716,7 +3727,7 @@ pub const Context = struct {
 
         var ancestor = self.parent_context;
         while (ancestor) |ctx| : (ancestor = ctx.parent_context) {
-            const anc_cap = if (ctx.import_frame_index) |idx| idx + 1 else 0;
+            const anc_cap = if (ctx.durable_frame_floor) |idx| idx + 1 else 0;
             for (ctx.local_frames.items[0..anc_cap]) |frame| {
                 if (frame.contains(name)) return null;
             }
@@ -3760,7 +3771,7 @@ pub const Context = struct {
 
         var ancestor = self.parent_context;
         while (ancestor) |ctx| {
-            const anc_cap = if (ctx.import_frame_index) |idx| idx + 1 else 0;
+            const anc_cap = if (ctx.durable_frame_floor) |idx| idx + 1 else 0;
             var j = anc_cap;
             while (j > 0) {
                 j -= 1;
@@ -3833,7 +3844,7 @@ pub const Context = struct {
 
         var ancestor = self.parent_context;
         while (ancestor) |ctx| {
-            const anc_cap = if (ctx.import_frame_index) |idx| idx + 1 else 0;
+            const anc_cap = if (ctx.durable_frame_floor) |idx| idx + 1 else 0;
             var j = anc_cap;
             while (j > 0) {
                 j -= 1;
@@ -3878,7 +3889,7 @@ pub const Context = struct {
             // Only the ancestor's stable scope is resolvable from a descendant
             // task; its transient frames are task-private execution state we do
             // not walk across the spawn boundary.
-            const anc_cap = if (ctx.import_frame_index) |idx| idx + 1 else 0;
+            const anc_cap = if (ctx.durable_frame_floor) |idx| idx + 1 else 0;
             var j = anc_cap;
             while (j > 0) {
                 j -= 1;
@@ -3914,7 +3925,7 @@ pub const Context = struct {
 
         var ancestor = self.parent_context;
         while (ancestor) |ctx| {
-            const anc_cap = if (ctx.import_frame_index) |idx| idx + 1 else 0;
+            const anc_cap = if (ctx.durable_frame_floor) |idx| idx + 1 else 0;
 
             var j = anc_cap;
             while (j > 0) {
@@ -4220,12 +4231,12 @@ pub const Context = struct {
         var ancestor = self;
         while (true) {
             // Self reads all its frames; an ancestor is read only through its
-            // stable scope (import frame and below), never its live transient
-            // frames, so this walk stays clear of another task's lockless
-            // combinator push/pop.
+            // stable scope (the durable floor and below), never its live
+            // transient frames, so this walk stays clear of another task's
+            // lockless combinator push/pop and of a runtime load's live frame.
             var frame_idx = if (ancestor == self)
                 ancestor.local_frames.items.len
-            else if (ancestor.import_frame_index) |idx| idx + 1 else 0;
+            else if (ancestor.durable_frame_floor) |idx| idx + 1 else 0;
             while (frame_idx > 0) {
                 frame_idx -= 1;
                 var frame_iter = ancestor.local_frames.items[frame_idx].iterator();
@@ -7263,11 +7274,11 @@ fn propagateWordId(ctx: *Context, name: []const u8, word_id: u32) void {
     var ancestor = ctx.parent_context;
     while (ancestor) |anc| {
         // Match `lookupWordLocked`'s bounded ancestor walk: a descendant only
-        // resolves an ancestor's stable scope (import frame and below), so
-        // back-writing a word_id into an ancestor's transient frame would land
-        // where resolution never looks, and would race the ancestor's lockless
-        // combinator push/pop.
-        const anc_cap = if (anc.import_frame_index) |idx| idx + 1 else 0;
+        // resolves an ancestor's stable scope (the durable floor and below),
+        // so back-writing a word_id into an ancestor's transient frame would
+        // land where resolution never looks, and would race the ancestor's
+        // lockless combinator push/pop.
+        const anc_cap = if (anc.durable_frame_floor) |idx| idx + 1 else 0;
         var j = anc_cap;
         while (j > 0) {
             j -= 1;
@@ -8407,6 +8418,7 @@ test "lookupWordLocked: descendant reads ancestor stable scope, not transient fr
     // Frame 0 is the parent's import frame: its durable scope.
     try parent.pushLocalFrame();
     parent.import_frame_index = parent.local_frames.items.len - 1;
+    parent.durable_frame_floor = parent.import_frame_index;
     try parent.local_frames.items[parent.import_frame_index.?].put(parent.allocator, "stable-word", .{
         .name = "stable-word",
         .action = .{ .native = noop },
@@ -8430,6 +8442,41 @@ test "lookupWordLocked: descendant reads ancestor stable scope, not transient fr
     try std.testing.expect(child.lookupWordLocked("transient-word", null) == null);
 }
 
+test "lookupWordLocked: ancestor walk caps at the durable floor, not the moved import frame" {
+    const noop: dict_mod.NativeFn = struct {
+        fn f(_: *Context) anyerror!void {}
+    }.f;
+
+    var parent = Context.init(std.testing.allocator);
+    defer parent.deinit();
+
+    // Mid-load shape: frame 0 is the durable scope, frame 1 is a runtime load's live import
+    // frame. The load moves `import_frame_index` but not the floor, so a descendant must not
+    // resolve the load frame's words.
+    try parent.pushLocalFrame();
+    parent.import_frame_index = 0;
+    parent.durable_frame_floor = 0;
+    try parent.local_frames.items[0].put(parent.allocator, "stable-word", .{
+        .name = "stable-word",
+        .action = .{ .native = noop },
+    });
+
+    try parent.pushLocalFrame();
+    parent.import_frame_index = 1;
+    try parent.local_frames.items[1].put(parent.allocator, "load-word", .{
+        .name = "load-word",
+        .action = .{ .native = noop },
+    });
+
+    var child = Context.init(std.testing.allocator);
+    defer child.deinit();
+    child.parent_context = &parent;
+    defer child.parent_context = null;
+
+    try std.testing.expect(child.lookupWordLocked("stable-word", null) != null);
+    try std.testing.expect(child.lookupWordLocked("load-word", null) == null);
+}
+
 test "lookupWordStackEffectPtrLocked: descendant skips ancestor transient frames" {
     const noop: dict_mod.NativeFn = struct {
         fn f(_: *Context) anyerror!void {}
@@ -8444,6 +8491,7 @@ test "lookupWordStackEffectPtrLocked: descendant skips ancestor transient frames
 
     try parent.pushLocalFrame();
     parent.import_frame_index = parent.local_frames.items.len - 1;
+    parent.durable_frame_floor = parent.import_frame_index;
     try parent.local_frames.items[parent.import_frame_index.?].put(parent.allocator, "stable-eff", .{
         .name = "stable-eff",
         .stack_effect = empty_effect,
@@ -8476,6 +8524,7 @@ test "preResolveCallTarget: ancestor transient frame no longer blocks, stable fr
 
     try parent.pushLocalFrame();
     parent.import_frame_index = parent.local_frames.items.len - 1;
+    parent.durable_frame_floor = parent.import_frame_index;
     // A stable-scope binding on an ancestor must still veto pre-resolution.
     try parent.local_frames.items[parent.import_frame_index.?].put(parent.allocator, "stable-claim", .{
         .name = "stable-claim",
@@ -8518,6 +8567,7 @@ test "propagateWordId: back-writes ancestor stable slot, not transient frame" {
     // the same name. A descendant's back-write must land on the stable slot.
     try parent.pushLocalFrame();
     parent.import_frame_index = parent.local_frames.items.len - 1;
+    parent.durable_frame_floor = parent.import_frame_index;
     try parent.local_frames.items[parent.import_frame_index.?].put(parent.allocator, "back-word", .{
         .name = "back-word",
         .action = .{ .native = noop },
@@ -8565,6 +8615,7 @@ test "lookupTypeNameByDescriptorLocked: descendant reads ancestor stable type, n
 
     try parent.pushLocalFrame();
     parent.import_frame_index = parent.local_frames.items.len - 1;
+    parent.durable_frame_floor = parent.import_frame_index;
     try parent.local_frames.items[parent.import_frame_index.?].put(parent.allocator, "stable-type", .{
         .name = "stable-type",
         .action = .{ .compound = stable_instrs },
@@ -9378,7 +9429,7 @@ test "initForTask: the cloned frame takes its own reference to a frame-owned bin
     try std.testing.expectEqualStrings("computed", found.action.literal.string.bytes);
 }
 
-test "initForTask: captures only frames above the parent's import frame" {
+test "initForTask: captures only frames above the parent's durable floor" {
     var parent = Context.init(std.testing.allocator);
     defer parent.deinit();
 
@@ -9391,6 +9442,7 @@ test "initForTask: captures only frames above the parent's import frame" {
         .action = .{ .compound = &.{} },
     });
     parent.import_frame_index = 0;
+    parent.durable_frame_floor = 0;
     try parent.pushLocalFrame();
     try parent.local_frames.items[1].put(std.testing.allocator, "transient-w", .{
         .name = "transient-w",
@@ -9410,6 +9462,40 @@ test "initForTask: captures only frames above the parent's import frame" {
     try std.testing.expect(task_ctx.local_frames.items[0].get("stable-w") == null);
 }
 
+test "initForTask: a spawn during a load captures the load frame as a frozen prefix" {
+    var parent = Context.init(std.testing.allocator);
+    defer parent.deinit();
+
+    // Mid-load shape: the load moved `import_frame_index` onto its live frame while the floor
+    // stayed at the durable scope. A child spawned by the module's top level captures the load
+    // frame, so the module's already-defined words resolve from the snapshot.
+    try parent.pushLocalFrame();
+    try parent.local_frames.items[0].put(std.testing.allocator, "stable-w", .{
+        .name = "stable-w",
+        .action = .{ .compound = &.{} },
+    });
+    parent.import_frame_index = 0;
+    parent.durable_frame_floor = 0;
+    try parent.pushLocalFrame();
+    parent.import_frame_index = 1;
+    try parent.local_frames.items[1].put(std.testing.allocator, "load-w", .{
+        .name = "load-w",
+        .action = .{ .compound = &.{} },
+    });
+
+    var scheduler = try std.testing.allocator.create(Scheduler);
+    defer std.testing.allocator.destroy(scheduler);
+    scheduler.* = try Scheduler.init(std.testing.allocator);
+    defer scheduler.deinit();
+
+    var task_ctx = try Context.initForTask(std.testing.allocator, &parent, scheduler);
+    defer task_ctx.deinit();
+
+    try std.testing.expectEqual(@as(usize, 1), task_ctx.local_frames.items.len);
+    try std.testing.expect(task_ctx.local_frames.items[0].get("load-w") != null);
+    try std.testing.expect(task_ctx.local_frames.items[0].get("stable-w") == null);
+}
+
 test "initForTask: seeds the gate counter from cloned non-empty transient frames" {
     var parent = Context.init(std.testing.allocator);
     defer parent.deinit();
@@ -9423,6 +9509,7 @@ test "initForTask: seeds the gate counter from cloned non-empty transient frames
         .action = .{ .compound = &.{} },
     });
     parent.import_frame_index = 0;
+    parent.durable_frame_floor = 0;
     try parent.pushLocalFrame();
     try parent.local_frames.items[1].put(std.testing.allocator, "transient-w", .{
         .name = "transient-w",
@@ -9825,6 +9912,7 @@ test "captureQuotationScope: snapshots a lexical local, skips a module-deps fram
     // Frame 0 is the durable import frame; captures start above it.
     try ctx.pushLocalFrame();
     ctx.import_frame_index = 0;
+    ctx.durable_frame_floor = 0;
 
     // A module-deps frame carrying a `shadow` word that must NOT be captured.
     var module: value_mod.Module = .{ .name = "m", .words = .{} };
@@ -9864,6 +9952,7 @@ test "captureQuotationScope: records ambient module-deps modules without promoti
 
     try ctx.pushLocalFrame();
     ctx.import_frame_index = 0;
+    ctx.durable_frame_floor = 0;
 
     var module: value_mod.Module = .{ .name = "m", .words = .{} };
     try module.words.put(std.testing.allocator, "foo", .{ .action = .{ .native = noop } });
@@ -9892,6 +9981,7 @@ test "captureQuotationScope: equality-skip leaves an unchanged deps-only entry i
 
     try ctx.pushLocalFrame();
     ctx.import_frame_index = 0;
+    ctx.durable_frame_floor = 0;
 
     var module: value_mod.Module = .{ .name = "m", .words = .{} };
     try module.words.put(std.testing.allocator, "foo", .{ .action = .{ .native = noop } });
@@ -9915,6 +10005,7 @@ test "captureQuotationScope: no live module-deps frame and no local records noth
 
     try ctx.pushLocalFrame();
     ctx.import_frame_index = 0;
+    ctx.durable_frame_floor = 0;
 
     // Neither a live `.module_deps` frame nor a captured local: the push must stay on the fast path,
     // recording no side-map entry, so the common hot-loop case pays no per-push map cost.
@@ -9936,6 +10027,7 @@ test "lookupWordLocked: visibility filter admits or skips a module-deps frame by
     // pushed on top, holds a different binding of the same name.
     try ctx.pushLocalFrame();
     ctx.import_frame_index = 0;
+    ctx.durable_frame_floor = 0;
     try ctx.local_frames.items[0].put(ctx.allocator, "shadowed", .{
         .name = "shadowed",
         .source_file = "durable",
@@ -9977,6 +10069,7 @@ test "lookupWordForExecutionOwnScope: words beat deps, defining module beats amb
     // module-scope hit below comes from the probe alone.
     try ctx.pushLocalFrame();
     ctx.import_frame_index = 0;
+    ctx.durable_frame_floor = 0;
     try ctx.local_frames.items[0].put(ctx.allocator, "shared", .{
         .name = "shared",
         .source_file = "durable",
@@ -10051,6 +10144,7 @@ test "executeInstructions: a stamped body resolves its own module ahead of the d
 
     try ctx.pushLocalFrame();
     ctx.import_frame_index = 0;
+    ctx.durable_frame_floor = 0;
     try ctx.local_frames.items[0].put(ctx.allocator, "probe-word", .{
         .name = "probe-word",
         .action = .{ .native = push_durable },
@@ -10097,6 +10191,7 @@ test "executeInstructions: a store miss is cached, so a late stamp is not observ
 
     try ctx.pushLocalFrame();
     ctx.import_frame_index = 0;
+    ctx.durable_frame_floor = 0;
     try ctx.local_frames.items[0].put(ctx.allocator, "probe-word", .{
         .name = "probe-word",
         .action = .{ .native = push_durable },
@@ -10168,6 +10263,7 @@ test "executeInstructions: a stored quotation resolves its stamp in a child task
     // unknown-word.
     try parent.pushLocalFrame();
     parent.import_frame_index = 0;
+    parent.durable_frame_floor = 0;
     try parent.local_frames.items[0].put(parent.allocator, "probe-word", .{
         .name = "probe-word",
         .action = .{ .native = push_durable },
@@ -10228,6 +10324,7 @@ test "executeInstructions: a stored quotation resolves a parent-captured lexical
     // were unreachable there -- the shadowing half of the gap, not just unknown-word.
     try parent.pushLocalFrame();
     parent.import_frame_index = 0;
+    parent.durable_frame_floor = 0;
     try parent.local_frames.items[0].put(parent.allocator, "probe-word", .{
         .name = "probe-word",
         .action = .{ .native = push_durable },
@@ -10288,6 +10385,7 @@ test "executeInstructions: the inherited scope copy survives the ancestor's entr
 
     try parent.pushLocalFrame();
     parent.import_frame_index = 0;
+    parent.durable_frame_floor = 0;
 
     const arena_alloc = parent.arena.allocator();
     const instrs = try arena_alloc.alloc(Instruction, 1);
@@ -10341,6 +10439,7 @@ test "executeInstructions: a deps-only ancestor entry is not carried by the fill
 
     try parent.pushLocalFrame();
     parent.import_frame_index = 0;
+    parent.durable_frame_floor = 0;
     try parent.local_frames.items[0].put(parent.allocator, "probe-word", .{
         .name = "probe-word",
         .action = .{ .native = push_durable },
@@ -10392,6 +10491,7 @@ test "executeInstructions: a walk miss caches a null scope, so a late ancestor c
 
     try parent.pushLocalFrame();
     parent.import_frame_index = 0;
+    parent.durable_frame_floor = 0;
     try parent.local_frames.items[0].put(parent.allocator, "probe-word", .{
         .name = "probe-word",
         .action = .{ .native = push_durable },
@@ -10430,6 +10530,7 @@ test "captureQuotationScope: a fresh entry's module half is filled from the stam
 
     try ctx.pushLocalFrame();
     ctx.import_frame_index = 0;
+    ctx.durable_frame_floor = 0;
 
     var dep_module: value_mod.Module = .{ .name = "dep", .words = .{} };
     try dep_module.words.put(std.testing.allocator, "foo", .{ .action = .{ .native = noop } });
@@ -10474,6 +10575,7 @@ test "captureQuotationScope: a lexical capture marks the carryable scope gate" {
 
     try ctx.pushLocalFrame();
     ctx.import_frame_index = 0;
+    ctx.durable_frame_floor = 0;
 
     try ctx.pushLocalFrame();
     try ctx.defineWord("local", .{ .name = "local", .action = .{ .compound = &.{} } });
@@ -10495,6 +10597,7 @@ test "captureQuotationScope: a deps-only entry leaves the gate unmarked" {
 
     try ctx.pushLocalFrame();
     ctx.import_frame_index = 0;
+    ctx.durable_frame_floor = 0;
 
     var dep_module: value_mod.Module = .{ .name = "dep", .words = .{} };
     try dep_module.words.put(std.testing.allocator, "foo", .{ .action = .{ .native = noop } });
@@ -10555,6 +10658,7 @@ fn setupGateFillParent(parent: *Context, mark: bool) ![]Instruction {
 
     try parent.pushLocalFrame();
     parent.import_frame_index = 0;
+    parent.durable_frame_floor = 0;
     try parent.local_frames.items[0].put(parent.allocator, "probe-word", .{
         .name = "probe-word",
         .action = .{ .native = push_durable },
@@ -10635,6 +10739,7 @@ test "stampQuotationBodies: repairs an entry created before the stamp" {
 
     try ctx.pushLocalFrame();
     ctx.import_frame_index = 0;
+    ctx.durable_frame_floor = 0;
 
     var dep_module: value_mod.Module = .{ .name = "dep", .words = .{} };
     try dep_module.words.put(std.testing.allocator, "foo", .{ .action = .{ .native = noop } });
@@ -10674,6 +10779,7 @@ test "executeInstructions: a synthetic-scope stamp leaves the own-module probe o
 
     try ctx.pushLocalFrame();
     ctx.import_frame_index = 0;
+    ctx.durable_frame_floor = 0;
     try ctx.local_frames.items[0].put(ctx.allocator, "probe-word", .{
         .name = "probe-word",
         .action = .{ .native = push_durable },
@@ -10701,6 +10807,7 @@ test "nonempty_transient_lexical_frames: define, remove, and pop stay balanced" 
     // Frame 0 is the durable import frame; only frames above it are counted.
     try ctx.pushLocalFrame();
     ctx.import_frame_index = 0;
+    ctx.durable_frame_floor = 0;
 
     try ctx.pushLocalFrame();
     try std.testing.expectEqual(@as(usize, 0), ctx.nonempty_transient_lexical_frames);
@@ -10734,6 +10841,7 @@ test "captureQuotationScope: empty combinator frames leave the counter zero and 
 
     try ctx.pushLocalFrame();
     ctx.import_frame_index = 0;
+    ctx.durable_frame_floor = 0;
 
     // Two empty lexical frames stand in for combinator frames that define no locals.
     try ctx.pushLocalFrame();
@@ -10750,6 +10858,7 @@ test "captureQuotationScope: a live local still captures through the gate" {
 
     try ctx.pushLocalFrame();
     ctx.import_frame_index = 0;
+    ctx.durable_frame_floor = 0;
 
     try ctx.pushLocalFrame();
     try ctx.defineWord("local", .{ .name = "local", .source_file = "local-site", .action = .{ .compound = &.{} } });
@@ -10767,6 +10876,7 @@ test "captureQuotationScope: a second call for the same body supersedes with a f
 
     try ctx.pushLocalFrame();
     ctx.import_frame_index = 0;
+    ctx.durable_frame_floor = 0;
 
     try ctx.pushLocalFrame();
     try ctx.defineWord("local", .{ .name = "local", .source_file = "local-site", .action = .{ .compound = &.{} } });
@@ -10789,6 +10899,7 @@ test "defineWordLocked: a leaf-backed binding in a transient frame is released w
 
     try ctx.pushLocalFrame();
     ctx.import_frame_index = 0;
+    ctx.durable_frame_floor = 0;
     try ctx.pushLocalFrame();
 
     const bytes = try std.testing.allocator.dupe(u8, "computed");
@@ -10815,6 +10926,7 @@ test "defineWordLocked: a container binding keeps the durable path even inside a
 
     try ctx.pushLocalFrame();
     ctx.import_frame_index = 0;
+    ctx.durable_frame_floor = 0;
     try ctx.pushLocalFrame();
 
     const vec = try value_mod.Vector.create(std.testing.allocator);
@@ -10837,6 +10949,7 @@ test "defineWordLocked: rebinding a name in the same frame releases the displace
 
     try ctx.pushLocalFrame();
     ctx.import_frame_index = 0;
+    ctx.durable_frame_floor = 0;
     try ctx.pushLocalFrame();
 
     const first_bytes = try std.testing.allocator.dupe(u8, "first");
@@ -10861,6 +10974,7 @@ test "captureQuotationScope: a cloned binding outlives the frame it was captured
 
     try ctx.pushLocalFrame();
     ctx.import_frame_index = 0;
+    ctx.durable_frame_floor = 0;
     try ctx.pushLocalFrame();
 
     const bytes = try std.testing.allocator.dupe(u8, "captured");
@@ -10889,6 +11003,7 @@ test "captureQuotationScope: superseding an unretained scope frees it immediatel
 
     try ctx.pushLocalFrame();
     ctx.import_frame_index = 0;
+    ctx.durable_frame_floor = 0;
     try ctx.pushLocalFrame();
     try ctx.defineWord("local", .{ .name = "local", .action = .{ .compound = &.{} } });
 
@@ -10908,6 +11023,7 @@ test "captureQuotationScope: a retained scope survives a supersede, frees only a
 
     try ctx.pushLocalFrame();
     ctx.import_frame_index = 0;
+    ctx.durable_frame_floor = 0;
     try ctx.pushLocalFrame();
     try ctx.defineWord("local", .{ .name = "local", .action = .{ .compound = &.{} } });
 
@@ -10941,6 +11057,7 @@ test "captureQuotationScope + promoteToClosure: a dropped promotion is reclaimed
 
     try ctx.pushLocalFrame();
     ctx.import_frame_index = 0;
+    ctx.durable_frame_floor = 0;
     try ctx.pushLocalFrame();
     try ctx.defineWord("local", .{ .name = "local", .action = .{ .compound = &.{} } });
 
@@ -11127,6 +11244,7 @@ test "findCapturedScopeForBody: the returned copy survives the ancestor's entry 
 
     try parent.pushLocalFrame();
     parent.import_frame_index = 0;
+    parent.durable_frame_floor = 0;
     try parent.pushLocalFrame();
     try parent.defineWord("w", .{ .name = "w", .action = .{ .compound = &.{} } });
 

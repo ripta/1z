@@ -1,0 +1,4 @@
+\ Companion module for task_load_concurrent_modules.1z, loaded concurrently
+\ with its sibling module from another worker.
+
+alpha: ( -- s ) [ "alpha" ] ;

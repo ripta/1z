@@ -558,7 +558,7 @@ fn nativeCurrentScope(ctx: *Context) anyerror!void {
 
     var ancestor = ctx.parent_context;
     while (ancestor) |anc| {
-        const anc_cap = if (anc.import_frame_index) |idx| idx + 1 else 0;
+        const anc_cap = if (anc.durable_frame_floor) |idx| idx + 1 else 0;
         var j = anc_cap;
         while (j > 0) {
             j -= 1;
@@ -974,7 +974,7 @@ fn nativeWordSource(ctx: *Context) anyerror!void {
 ///
 /// 1. local frames, up to import_frame_index to skip transient module-deps frames;
 /// 2. the global dictionary; and
-/// 3. ancestor contexts.
+/// 3. ancestor contexts, read only up to each ancestor's durable floor.
 ///
 /// Higher-priority definitions shadow lower ones.
 fn nativeAllWords(ctx: *Context) anyerror!void {
@@ -983,11 +983,11 @@ fn nativeAllWords(ctx: *Context) anyerror!void {
     var seen: std.StringHashMapUnmanaged(void) = .{};
     var results: std.ArrayListUnmanaged(Value) = .{};
 
-    try collectFrameWords(alloc, ctx, ctx, &seen, &results);
+    try collectFrameWords(alloc, ctx, ctx, &seen, &results, false);
 
     var ancestor = ctx.parent_context;
     while (ancestor) |anc| {
-        try collectFrameWords(alloc, ctx, anc, &seen, &results);
+        try collectFrameWords(alloc, ctx, anc, &seen, &results, true);
         ancestor = anc.parent_context;
     }
 
@@ -1005,7 +1005,7 @@ fn nativeScopeFrames(ctx: *Context) anyerror!void {
     var ancestor = ctx.parent_context;
     while (ancestor) |anc| {
         // A descendant task resolves only an ancestor's stable scope, so the
-        // dump stops at each ancestor's import frame rather than walking its
+        // dump stops at each ancestor's durable floor rather than walking its
         // task-private transient frames across the spawn boundary.
         try collectScopeFrames(alloc, ctx.allocator, anc, "parent-", &results, true);
         ancestor = anc.parent_context;
@@ -1067,15 +1067,18 @@ fn collectScopeFrames(
     const local_type = if (prefix.len > 0) "parent-local-frame" else "local-frame";
     const dict_type = if (prefix.len > 0) "parent-global-dict" else "global-dict";
 
-    // For an ancestor context, cap the walk at the import frame: its transient
-    // frames are task-private and not resolvable from a descendant.
+    // For an ancestor context, cap the walk at the durable floor: its frames
+    // above it are task-private and not resolvable from a descendant.
     var i = if (stable_only)
-        (if (source_ctx.import_frame_index) |idx| idx + 1 else 0)
+        (if (source_ctx.durable_frame_floor) |idx| idx + 1 else 0)
     else
         source_ctx.local_frames.items.len;
     while (i > 0) {
         i -= 1;
-        const is_import = source_ctx.import_frame_index != null and i == source_ctx.import_frame_index.?;
+        // For an ancestor the flag derives from the floor, since another task's `import_frame_index`
+        // is a live field a runtime load moves without synchronization.
+        const import_idx = if (stable_only) source_ctx.durable_frame_floor else source_ctx.import_frame_index;
+        const is_import = import_idx != null and i == import_idx.?;
         try results.append(alloc, try buildFrameHash(
             alloc,
             gpa,
@@ -1096,18 +1099,21 @@ fn collectScopeFrames(
     ));
 }
 
-/// Collect words from a single context's local frames and dictionary,
-/// skipping any names already in `seen`. Only iterates frames up to
-/// import_frame_index to exclude transient frames pushed during word
-/// execution (module deps frames, combinator frames).
+/// Collect words from a single context's local frames and dictionary, skipping any names already
+/// in `seen`. The self walk caps at import_frame_index to exclude transient frames pushed during
+/// word execution (module deps frames, combinator frames). An ancestor context passes `ancestor`,
+/// capping at the durable floor instead so the walk never reads another task's live frames.
 fn collectFrameWords(
     alloc: std.mem.Allocator,
     lookup_ctx: *Context,
     source_ctx: *const Context,
     seen: *std.StringHashMapUnmanaged(void),
     results: *std.ArrayListUnmanaged(Value),
+    ancestor: bool,
 ) !void {
-    const frame_cap = if (source_ctx.import_frame_index) |idx| idx + 1 else 0;
+    const frame_cap = if (ancestor)
+        (if (source_ctx.durable_frame_floor) |idx| idx + 1 else 0)
+    else if (source_ctx.import_frame_index) |idx| idx + 1 else 0;
     var i = frame_cap;
     while (i > 0) {
         i -= 1;

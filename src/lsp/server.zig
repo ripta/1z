@@ -300,6 +300,7 @@ pub const Server = struct {
         const saved_source_dir = self.ctx.current_source_dir;
         const saved_check_mode = self.ctx.check_mode;
         const saved_import_frame = self.ctx.import_frame_index;
+        const saved_durable_floor = self.ctx.durable_frame_floor;
         const saved_stack_depth = self.ctx.stack.depth();
 
         // Restore context state on exit
@@ -308,6 +309,7 @@ pub const Server = struct {
             self.ctx.current_source_dir = saved_source_dir;
             self.ctx.check_mode = saved_check_mode;
             self.ctx.import_frame_index = saved_import_frame;
+            self.ctx.durable_frame_floor = saved_durable_floor;
             // Truncate stack to saved depth
             while (self.ctx.stack.depth() > saved_stack_depth) {
                 self.ctx.stack.popAndRelease() catch break;
@@ -324,6 +326,7 @@ pub const Server = struct {
         self.ctx.check_mode = true;
         self.ctx.current_source = uri;
         self.ctx.import_frame_index = self.ctx.local_frames.items.len - 1;
+        self.ctx.durable_frame_floor = self.ctx.import_frame_index;
 
         // Parse and execute definitions using the parser directly
         var parse_error_diag: ?types.LspDiagnostic = null;
@@ -750,12 +753,14 @@ pub const Server = struct {
         const saved_source_dir = self.ctx.current_source_dir;
         const saved_check_mode = self.ctx.check_mode;
         const saved_import_frame = self.ctx.import_frame_index;
+        const saved_durable_floor = self.ctx.durable_frame_floor;
         const saved_stack_depth = self.ctx.stack.depth();
         defer {
             self.ctx.current_source = saved_source;
             self.ctx.current_source_dir = saved_source_dir;
             self.ctx.check_mode = saved_check_mode;
             self.ctx.import_frame_index = saved_import_frame;
+            self.ctx.durable_frame_floor = saved_durable_floor;
             while (self.ctx.stack.depth() > saved_stack_depth) {
                 self.ctx.stack.popAndRelease() catch break;
             }
@@ -776,6 +781,7 @@ pub const Server = struct {
         self.ctx.check_mode = true;
         self.ctx.current_source = uri;
         self.ctx.import_frame_index = self.ctx.local_frames.items.len - 1;
+        self.ctx.durable_frame_floor = self.ctx.import_frame_index;
 
         var tokenizer = Tokenizer.init(text);
         while (true) {
@@ -941,12 +947,14 @@ pub const Server = struct {
         const saved_source_dir = self.ctx.current_source_dir;
         const saved_check_mode = self.ctx.check_mode;
         const saved_import_frame = self.ctx.import_frame_index;
+        const saved_durable_floor = self.ctx.durable_frame_floor;
         const saved_stack_depth = self.ctx.stack.depth();
         defer {
             self.ctx.current_source = saved_source;
             self.ctx.current_source_dir = saved_source_dir;
             self.ctx.check_mode = saved_check_mode;
             self.ctx.import_frame_index = saved_import_frame;
+            self.ctx.durable_frame_floor = saved_durable_floor;
             while (self.ctx.stack.depth() > saved_stack_depth) {
                 self.ctx.stack.popAndRelease() catch break;
             }
@@ -967,6 +975,7 @@ pub const Server = struct {
         self.ctx.check_mode = true;
         self.ctx.current_source = uri;
         self.ctx.import_frame_index = self.ctx.local_frames.items.len - 1;
+        self.ctx.durable_frame_floor = self.ctx.import_frame_index;
 
         var tokenizer = Tokenizer.init(text);
         while (true) {

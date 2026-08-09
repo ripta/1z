@@ -1,0 +1,22 @@
+\ Concurrent loads of different modules from different workers. Both tasks race
+\ for the load lock, the loads serialize, and both modules come out complete:
+\ each loader calls its module's word, and the main task uses both modules
+\ after the scope. With --threads=4 the spawns land on background workers,
+\ since the primary worker is running the test driver.
+
+use "testing" ;
+
+"concurrent loads from different workers" test-section
+
+[
+  ta: [ "./task_load_concurrent_modules_mod_a.1z" load alpha: @get call ] spawn ;
+  tb: [ "./task_load_concurrent_modules_mod_b.1z" load beta: @get call ] spawn ;
+  ta await "alpha" "module A loads from its worker" assert=
+  tb await "beta" "module B loads from its worker" assert=
+] task-scope
+
+use "./task_load_concurrent_modules_mod_a.1z" ;
+use "./task_load_concurrent_modules_mod_b.1z" ;
+
+alpha "alpha" "module A answers on the main task" assert=
+beta "beta" "module B answers on the main task" assert=

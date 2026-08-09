@@ -1,0 +1,32 @@
+\ Sibling tasks resolve a task-loaded module after the loader is torn down.
+\ The loader runs in an inner task-scope, whose exit reaps it and frees its
+\ arena before any probe spawns. The stored quotation calls a private helper
+\ that only its defining-module stamp can resolve: the loading task is gone,
+\ the sibling never imported the module, and no deps frame of the module is
+\ live when the quotation runs. A second sibling constructs the module's
+\ struct type and dispatches its method, so the loader's registry writes
+\ answer from a task that never loaded them. With --threads=4 the spawns land
+\ on background workers.
+
+use "testing" ;
+
+"sibling tasks resolve a task-loaded module" test-section
+
+[
+  [
+    loader: [ "./task_load_sibling_stamps_mod.1z" load drop t ] spawn ;
+    loader await "the loader task completed" assert-true
+  ] task-scope
+
+  stamp-probe: [
+    "./task_load_sibling_stamps_mod.1z" load
+    handlers: @get call
+    probe: @get call
+  ] spawn ;
+  stamp-probe await "STAMP-TAG" "a stored quotation resolves its private helper after the loader is reaped" assert=
+
+  method-probe: [
+    7 "./task_load_sibling_stamps_mod.1z" load describe-n: @get call
+  ] spawn ;
+  method-probe await "a blip" "the loader's struct type and method answer after the loader is reaped" assert=
+] task-scope

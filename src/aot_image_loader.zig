@@ -476,6 +476,7 @@ fn populateEntryImports(ctx: *Context, header: *const Header) LoaderError!void {
 
     ctx.pushLocalFrame() catch return LoaderError.OutOfMemory;
     ctx.import_frame_index = ctx.local_frames.items.len - 1;
+    ctx.durable_frame_floor = ctx.import_frame_index;
     ctx.image_entry_import_frame = ctx.import_frame_index;
 
     var i: u32 = 0;

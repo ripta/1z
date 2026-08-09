@@ -1,0 +1,9 @@
+=== concurrent loads from different workers ===
+Stack: [ ]
+PASS: module A loads from its worker
+PASS: module B loads from its worker
+Stack: [ ]
+PASS: module A answers on the main task
+Stack: [ ]
+PASS: module B answers on the main task
+Stack: [ ]

@@ -766,6 +766,9 @@ fn executeAndCollectEntry(
     const old_import_frame = ctx.import_frame_index;
     ctx.import_frame_index = ctx.local_frames.items.len - 1;
     defer ctx.import_frame_index = old_import_frame;
+    const old_durable_floor = ctx.durable_frame_floor;
+    ctx.durable_frame_floor = ctx.import_frame_index;
+    defer ctx.durable_frame_floor = old_durable_floor;
 
     // Accumulate non-definition instructions for the entry word
     var entry_instrs: std.ArrayListUnmanaged(Instruction) = .{};

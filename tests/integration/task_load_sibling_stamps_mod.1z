@@ -1,0 +1,21 @@
+\ Companion module for task_load_sibling_stamps.1z. Loaded by one task and
+\ resolved by siblings after the loader exits: the handlers hash holds a
+\ stored quotation whose private helper resolves only through the quotation's
+\ defining-module stamp, and the struct type and method must answer from a
+\ task that never loaded them.
+
+private{
+  (stamp-tag): ( -- s ) [ "STAMP-TAG" ] ;
+}
+
+blip: struct{ n } ;
+
+describe: ( value -- string ) generic [ drop "?" ] ;
+describe: method{ blip } [ drop "a blip" ] ;
+
+\ Dispatch entry point for the sibling probe: a module word fetched with @get
+\ runs its body without generic dispatch, so the probe routes through this
+\ word and dispatches inside the module's own scope.
+describe-n: ( n -- s ) [ make-blip describe ] ;
+
+handlers: ( -- hash ) [ H{ probe: [ (stamp-tag) ] } ] ;

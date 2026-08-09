@@ -1,0 +1,6 @@
+=== sibling tasks resolve a task-loaded module ===
+Stack: [ ]
+PASS: the loader task completed
+PASS: a stored quotation resolves its private helper after the loader is reaped
+PASS: the loader's struct type and method answer after the loader is reaped
+Stack: [ ]
