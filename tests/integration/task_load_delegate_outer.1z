@@ -1,0 +1,12 @@
+\ Companion module for task_load_delegate.1z, loaded while MAIN holds the load
+\ lock. Its top-level scope spawns a task that loads the inner module; main is
+\ parked awaiting this scope, so the hold is delegated to the spawned task and
+\ the inner load runs inside this load's suspension window.
+
+"DELEGATE-OUTER-START" print-line
+
+[ [ "./task_load_delegate_inner.1z" load drop ] spawn drop ] task-scope
+
+"DELEGATE-OUTER-END" print-line
+
+outer-word: ( -- s ) [ "outer" ] ;

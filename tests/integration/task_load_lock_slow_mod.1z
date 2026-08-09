@@ -1,0 +1,14 @@
+\ Companion module for task_load_lock_contention.1z. Its top level parks the
+\ loading task mid-load: the inner task-scope body runs on a fresh task
+\ context, so the sleep gate on module loads does not apply to it. The two
+\ markers bracket the suspension window.
+
+use "time" ;
+
+"SLOW-MOD-START" print-line
+
+[ 5 milliseconds sleep ] task-scope
+
+"SLOW-MOD-END" print-line
+
+slow-word: ( -- s ) [ "slow" ] ;

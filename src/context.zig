@@ -60,6 +60,7 @@ const LockOrderTracker = lock_order.LockOrderTracker;
 
 const QuotationStampStore = @import("quotation_stamp_store.zig").QuotationStampStore;
 const CarryableScopeGate = @import("carryable_scope_gate.zig").CarryableScopeGate;
+const LoadLock = @import("load_lock.zig").LoadLock;
 const ReifiedDecodeCache = @import("reified_decode_cache.zig").ReifiedDecodeCache;
 
 const signal = @import("signal.zig");
@@ -1015,7 +1016,7 @@ pub const Context = struct {
     /// and shared by reference to all child task contexts.
     shared_lock: *std.Thread.RwLock = undefined,
     /// Debug-only tracker that asserts lock acquisition respects the ordering
-    /// hierarchy: context > channel > tz. Heap-allocated by the root context.
+    /// hierarchy in `lock_order.zig`. Heap-allocated by the root context.
     lock_order_tracker: *LockOrderTracker = undefined,
     /// Runtime gate for the permissive AOT fallback path. When false,
     /// `jitInterpretedCall` and `jitCallQuotation` crash with a diagnostic
@@ -1058,6 +1059,12 @@ pub const Context = struct {
     /// entry that misses can skip `findCapturedScopeForBody` rather than locking every ancestor's
     /// `captured_scope_mu` to learn the same thing.
     carryable_scope_gate: *CarryableScopeGate = undefined,
+    /// Process-wide lock serializing module loads. Heap-allocated by the root context and
+    /// shared by pointer to all child task contexts.
+    ///
+    /// The load entries hold it for a load's whole duration, across suspension, so only one
+    /// load at a time writes the root state a load targets.
+    load_lock: *LoadLock = undefined,
 
     /// Returns true when the instruction sequence ends with a call to `;`,
     /// which means it is a word definition and should be executed even in
@@ -1227,6 +1234,12 @@ pub const Context = struct {
             std.debug.panic("Failed to allocate reified decode cache: {any}", .{err});
         };
 
+        // Allocate the shared module-load lock on the long-lived allocator; the root context
+        // frees it in deinit.
+        ctx.load_lock = LoadLock.create(allocator) catch |err| {
+            std.debug.panic("Failed to allocate load lock: {any}", .{err});
+        };
+
         // Push base parameter frame so scoped hooks can be registered at top level.
         ctx.parameter_env.append(allocator, .{}) catch |err| {
             std.debug.panic("Failed to push base parameter frame: {any}", .{err});
@@ -1377,6 +1390,10 @@ pub const Context = struct {
         // reuses the process-wide decode instead of decoding onto its own arena. Aliased, never
         // retained: the root owns it.
         ctx.reified_decode_cache = parent.reified_decode_cache;
+
+        // Share the parent's module-load lock so loads serialize process-wide. Aliased, never
+        // retained: the root owns it.
+        ctx.load_lock = parent.load_lock;
 
         // Inherit the parent's active sandbox, if any. Allocate a copy on the
         // task's arena so the pointer outlives the parent's stack frame.
@@ -1720,6 +1737,7 @@ pub const Context = struct {
             self.quotation_stamp_store.destroy();
             self.carryable_scope_gate.destroy();
             self.reified_decode_cache.destroy();
+            self.load_lock.destroy();
             self.allocator.destroy(self.lock_order_tracker);
             self.allocator.destroy(self.shared_lock);
         }
@@ -9129,6 +9147,21 @@ test "initForTask: shares the parent's carryable scope gate" {
     // The task aliased the gate without retaining, so its teardown left the root's intact.
     try std.testing.expect(parent.carryable_scope_gate.isMarked(0x1000));
     try std.testing.expect(parent.carryable_scope_gate.isMarked(0x2000));
+}
+
+test "initForTask: shares the parent's module-load lock" {
+    var parent = Context.init(std.testing.allocator);
+    defer parent.deinit();
+
+    var scheduler = try std.testing.allocator.create(Scheduler);
+    defer std.testing.allocator.destroy(scheduler);
+    scheduler.* = try Scheduler.init(std.testing.allocator);
+    defer scheduler.deinit();
+
+    var task_ctx = try Context.initForTask(std.testing.allocator, &parent, scheduler);
+    defer task_ctx.deinit();
+
+    try std.testing.expectEqual(parent.load_lock, task_ctx.load_lock);
 }
 
 test "initForTask: chains root_context through a nested spawn" {

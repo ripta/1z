@@ -1,0 +1,6 @@
+=== nested use inside a task-loaded module ===
+Stack: [ ]
+PASS: loader task completed
+Stack: [ ]
+PASS: the outer word resolves its nested-use dep
+Stack: [ ]

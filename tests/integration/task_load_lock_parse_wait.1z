@@ -1,0 +1,31 @@
+\ A contended load-lock acquire from a parse-time word runs on the parser
+\ coroutine, where the scheduler cannot suspend the task, so it raises
+\ load-parse-wait instead of spinning. An uncontended parse-time load is
+\ unaffected, which the other load-lock tests cover through nested use.
+
+use "testing" ;
+use "time" ;
+
+"contended parse-time acquire raises" test-section
+
+outcomes: V{ } ;
+
+[
+  ready: 1 <buffered-channel> ;
+  [ t ready send "./task_load_lock_hold_mod.1z" load drop ] spawn drop
+  ready receive drop
+
+  [
+    [ "use \"./task_load_lock_never_mod.1z\" ;" eval-string loaded: ]
+    [ error-type: @get ]
+    recover
+    outcomes swap #push! drop
+  ] spawn drop
+] task-scope
+
+outcomes #len 1 "the parse-time contender recorded one outcome" assert=
+outcomes 0 #nth load-parse-wait: "a contended parse-time acquire raises load-parse-wait" assert=
+
+use "./task_load_lock_hold_mod.1z" ;
+
+hold-word "held" "the holder's load completed" assert=

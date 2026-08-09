@@ -1,0 +1,21 @@
+\ A waiter queued behind a borrowed hold is served when the borrow ends: the
+\ restore delegates onward to a queued waiter the restored owner awaits, since
+\ that owner's own release can never come first. The marker order pins both
+\ the serialization and the onward delegation: CHAIN-B-END before CHAIN-C,
+\ CHAIN-C before CHAIN-OUTER-END.
+
+use "testing" ;
+
+"a queued waiter is served across a restore" test-section
+
+use "./task_load_delegate_chain_outer.1z" ;
+
+chain-outer-word "chain-outer" "the outer module completed its load" assert=
+
+use "./task_load_delegate_chain_b.1z" ;
+
+chain-b-word "chain-b" "the borrowing child's module loaded" assert=
+
+use "./task_load_delegate_chain_c.1z" ;
+
+chain-c-word "chain-c" "the queued child's module loaded after the restore" assert=

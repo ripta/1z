@@ -164,6 +164,8 @@ pub const Task = struct {
     blocked_on_process_pid: ?i32 = null,
     blocked_on_process_key: ?u64 = null,
     blocked_on_scope: ?*TaskScope = null,
+    // *LoadLock as anyopaque, matching blocked_on_channel's import-cycle avoidance.
+    blocked_on_load_lock: ?*anyopaque = null,
     /// Set by a sender when it delivers a value directly to this receiver's
     /// stack. The receiver checks and clears this on resume so it can
     /// distinguish a value handoff from a close-channel wake.

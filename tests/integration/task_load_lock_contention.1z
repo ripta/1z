@@ -1,0 +1,23 @@
+\ Two tasks loading different modules serialize on the load lock. Task A's
+\ module parks it mid-load through an inner task-scope, so A suspends while
+\ holding the lock. Task B's load must wait out that suspension rather than
+\ interleave into it. The golden's marker order pins the serialization:
+\ SLOW-MOD-START, SLOW-MOD-END, FAST-MOD.
+
+use "testing" ;
+
+"loads serialize across task suspension" test-section
+
+[
+  done: 2 <buffered-channel> ;
+  [ "./task_load_lock_slow_mod.1z" load drop t done send ] spawn drop
+  [ "./task_load_lock_fast_mod.1z" load drop t done send ] spawn drop
+  done receive drop
+  done receive drop
+] task-scope
+
+use "./task_load_lock_slow_mod.1z" ;
+use "./task_load_lock_fast_mod.1z" ;
+
+slow-word "slow" "the suspending module's word works" assert=
+fast-word "fast" "the contending module's word works" assert=

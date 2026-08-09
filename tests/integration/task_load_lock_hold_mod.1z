@@ -1,0 +1,9 @@
+\ Companion module for task_load_lock_cancel.1z. The inner task-scope keeps the
+\ loading task suspended, and the load lock held, long enough for the entry to
+\ cancel the waiting task.
+
+use "time" ;
+
+[ 100 milliseconds sleep ] task-scope
+
+hold-word: ( -- s ) [ "held" ] ;

@@ -1,0 +1,15 @@
+\ Companion module for task_load_delegate_chain.1z. Two scope children load
+\ concurrently: the first borrows the hold from main and suspends mid-load,
+\ leaving the second queued behind the borrow. Serving the second relies on
+\ the ended borrow's restore delegating onward to it.
+
+"CHAIN-OUTER-START" print-line
+
+[
+  [ "./task_load_delegate_chain_b.1z" load drop ] spawn drop
+  [ "./task_load_delegate_chain_c.1z" load drop ] spawn drop
+] task-scope
+
+"CHAIN-OUTER-END" print-line
+
+chain-outer-word: ( -- s ) [ "chain-outer" ] ;

@@ -1,0 +1,13 @@
+=== a queued waiter is served across a restore ===
+Stack: [ ]
+CHAIN-OUTER-START
+CHAIN-B-START
+CHAIN-B-END
+CHAIN-C
+CHAIN-OUTER-END
+PASS: the outer module completed its load
+Stack: [ ]
+PASS: the borrowing child's module loaded
+Stack: [ ]
+PASS: the queued child's module loaded after the restore
+Stack: [ ]

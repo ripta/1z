@@ -1,0 +1,20 @@
+=== delegation while main holds the lock ===
+Stack: [ ]
+DELEGATE-OUTER-START
+DELEGATE-INNER
+DELEGATE-OUTER-END
+PASS: the outer module loaded through main's hold
+Stack: [ ]
+PASS: the awaited task's load was delegated
+Stack: [ ]
+=== delegation while a task holds the lock ===
+Stack: [ ]
+DELEGATE-OUTER2-START
+DELEGATE-INNER2
+DELEGATE-OUTER2-END
+PASS: loader task completed
+Stack: [ ]
+PASS: the outer module loaded through the task's hold
+Stack: [ ]
+PASS: the awaited task's load was delegated through the wait chain
+Stack: [ ]

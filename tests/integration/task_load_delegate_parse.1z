@@ -1,0 +1,15 @@
+\ A parse-time contender whose holder awaits it is delegated the hold rather
+\ than raising load-parse-wait: the delegation decision runs before the
+\ cannot-park check, and a granted borrow never needs to park.
+
+use "testing" ;
+
+"parse-time delegation outranks the parse-wait raise" test-section
+
+use "./task_load_delegate_parse_outer.1z" ;
+
+parse-outer-word "parse-outer" "the outer module completed its load" assert=
+
+use "./task_load_delegate_parse_inner.1z" ;
+
+parse-inner-word "parse-inner" "the parse-time load was delegated" assert=

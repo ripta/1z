@@ -1,0 +1,6 @@
+\ Companion module for task_load_delegate_chain.1z. Queued behind the sibling
+\ borrow; its marker must land after the sibling's end marker.
+
+"CHAIN-C" print-line
+
+chain-c-word: ( -- s ) [ "chain-c" ] ;

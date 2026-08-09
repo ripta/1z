@@ -1,0 +1,6 @@
+\ Companion module for task_load_delegate_parse.1z, loaded from parse-time
+\ execution by a task the holder awaits.
+
+"PARSE-DELEGATE-INNER" print-line
+
+parse-inner-word: ( -- s ) [ "parse-inner" ] ;

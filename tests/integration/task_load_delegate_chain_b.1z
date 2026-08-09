@@ -1,0 +1,12 @@
+\ Companion module for task_load_delegate_chain.1z. Suspends mid-load while
+\ holding the borrowed lock, so the sibling load queues behind it.
+
+use "time" ;
+
+"CHAIN-B-START" print-line
+
+[ 10 milliseconds sleep ] task-scope
+
+"CHAIN-B-END" print-line
+
+chain-b-word: ( -- s ) [ "chain-b" ] ;

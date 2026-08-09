@@ -1,0 +1,7 @@
+\ Companion module for task_load_nested_use.1z. The top-level use recurses
+\ into the load natives on the same task, exercising the load lock's
+\ reentrant pass-through.
+
+use "./task_load_nested_use_inner.1z" ;
+
+outer-word: ( -- s ) [ inner-word "+outer" #append ] ;

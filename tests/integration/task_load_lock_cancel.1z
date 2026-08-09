@@ -1,0 +1,36 @@
+\ A task cancelled while waiting for the load lock never acquires it, and the
+\ holder's load completes untouched. The waiter records the cancellation
+\ through recover, and its module's NEVER-MOD marker must not appear in this
+\ golden.
+
+use "testing" ;
+use "time" ;
+
+"cancellation while waiting for the load lock" test-section
+
+outcomes: V{ } ;
+
+[
+  ready: 1 <buffered-channel> ;
+  [ t ready send "./task_load_lock_hold_mod.1z" load drop ] spawn drop
+  ready receive drop
+
+  waiter: [
+    [ "./task_load_lock_never_mod.1z" load drop loaded: ]
+    [ error-type: @get ]
+    recover
+    outcomes swap #push! drop
+  ] spawn ;
+
+  \ The holder parked inside its load before the entry resumed, so one tick is
+  \ enough for the waiter to run and park on the lock.
+  1 milliseconds sleep
+  waiter cancel-task
+] task-scope
+
+outcomes #len 1 "the waiter recorded one outcome" assert=
+outcomes 0 #nth task-cancelled: "the waiter was cancelled, not served" assert=
+
+use "./task_load_lock_hold_mod.1z" ;
+
+hold-word "held" "the holder's load completed" assert=

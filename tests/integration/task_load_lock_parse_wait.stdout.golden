@@ -1,0 +1,10 @@
+=== contended parse-time acquire raises ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: the parse-time contender recorded one outcome
+Stack: [ ]
+PASS: a contended parse-time acquire raises load-parse-wait
+Stack: [ ]
+PASS: the holder's load completed
+Stack: [ ]

@@ -309,6 +309,11 @@ module-loaded-hooks: parameter{ [ { } ] } ;
 \\ Cache misses delegate to `load-file`, which is restricted to the primary
 \\ worker and throws `non-primary-worker` when called from any other worker
 \\ task. Cache hits perform no dictionary writes and are not gated.
+\\
+\\ Loads serialize on a process-wide lock. A contended load from parse-time
+\\ execution, such as a `use` inside `eval-string`, throws `load-parse-wait`
+\\ unless the lock's holder is waiting on the calling task, in which case the
+\\ load proceeds as if nested.
 load: dynamic-load ( filename -- module ) [
   dup native.resolve-load-path
   module-cache get over @has?
@@ -323,6 +328,9 @@ load: dynamic-load ( filename -- module ) [
 \\ stdlib becomes available mid-session. Delegates to `reload-file` and
 \\ therefore throws `non-primary-worker` when called from any task whose
 \\ home worker is not the primary.
+\\
+\\ Serializes on the same process-wide load lock as `load`, with the same
+\\ `load-parse-wait` behavior for a contended parse-time call.
 reload: dynamic-load ( filename -- module ) [
   module-cache get swap reload-file
 ] ;

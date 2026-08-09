@@ -1,0 +1,6 @@
+\ Companion module for task_load_delegate.1z, loaded by a task whose
+\ task-holder ancestor awaits it through the wait chain.
+
+"DELEGATE-INNER2" print-line
+
+inner2-word: ( -- s ) [ "inner2" ] ;

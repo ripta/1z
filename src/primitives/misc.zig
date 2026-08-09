@@ -25,6 +25,9 @@ const stack_effect_mod = @import("../stack_effect.zig");
 const container_backing = @import("../container_backing.zig");
 const dict_mod = @import("../dictionary.zig");
 const embedded_stdlib = @import("../embedded_stdlib.zig");
+const LoadLock = @import("../load_lock.zig").LoadLock;
+const Task = @import("../task.zig").Task;
+const TaskScope = @import("../task.zig").TaskScope;
 
 const popString = helpers.popString;
 
@@ -1248,6 +1251,148 @@ fn propagateWordId(ctx: *Context, name: []const u8, word_id: u32) void {
     }
 }
 
+/// The current execution's load-lock identity: the running task, or the main sentinel for
+/// the non-task main thread.
+fn loadLockOwner(ctx: *Context) LoadLock.Owner {
+    if (ctx.scheduler) |sched| {
+        if (sched.current_task) |task| return .{ .task = task };
+    }
+    return .main;
+}
+
+/// Acquire the process-wide load lock, serializing this load against every other.
+///
+/// A nested `use` on the same task passes through the reentrant depth. A contending task
+/// whose holder transitively awaits it borrows the hold instead, per `holderAwaitsTask`.
+/// Otherwise the contender is queued once and suspended through the scheduler until a
+/// release hands it ownership; a spurious wake parks it again without re-queueing.
+///
+/// Raises a `load-parse-wait` user error for a contended acquire that cannot park, which is
+/// any parse-time acquire outside the delegation case.
+///
+/// A task cancelled while waiting never returns holding the lock. A handoff that raced the
+/// cancellation is released, and a still-queued waiter is removed, before the cancellation
+/// propagates.
+fn acquireLoadLock(ctx: *Context) anyerror!void {
+    const lock = ctx.load_lock;
+    switch (loadLockOwner(ctx)) {
+        .main => lock.acquireMain(),
+        .task => |task| try acquireLoadLockAsTask(ctx, lock, task),
+    }
+}
+
+/// Whether `holder` cannot resume until `contender` finishes, so parking the contender on
+/// the holder's lock would deadlock.
+///
+/// Main qualifies whenever a task is alive at all: 1z code on the main thread and running
+/// tasks are mutually exclusive except while main is parked in a scope's run loop, and every
+/// live task is under that scope. A task holder qualifies when walking the contender's
+/// scope, its waiting task, that task's scope, and so on reaches it.
+///
+/// The walk reads waiter fields without locks. Each is set before its task parks, and a
+/// chain that reaches the holder cannot unwind while the contender is still running, so a
+/// true result is stable for as long as the caller needs it.
+fn holderAwaitsTask(holder: LoadLock.Owner, contender: *Task) bool {
+    const holder_task = switch (holder) {
+        .main => return true,
+        .task => |t| t,
+    };
+    var scope: ?*TaskScope = contender.scope;
+    while (scope) |s| {
+        const waiter = s.waiting_task orelse return false;
+        if (waiter == holder_task) return true;
+        scope = waiter.scope;
+    }
+    return false;
+}
+
+fn acquireLoadLockAsTask(ctx: *Context, lock: *LoadLock, task: *Task) anyerror!void {
+    const sched = ctx.scheduler.?;
+    const owner: LoadLock.Owner = .{ .task = task };
+    while (true) {
+        const holder = lock.tryAcquireOrHolder(owner) orelse return;
+
+        // A holder that transitively awaits this task is provably suspended until this task
+        // finishes, so parking would deadlock and borrowing is exclusive: delegate the hold
+        // instead. The borrow behaves like a nested `use` across the spawn boundary.
+        if (holderAwaitsTask(holder, task)) {
+            if (try lock.delegate(holder, owner)) return;
+            continue;
+        }
+
+        // A contended parse-time acquire runs on the parser coroutine's own stack, where the
+        // scheduler cannot suspend this task: minicoro refuses a yield whose stack pointer is
+        // outside the task's coroutine stack.
+        //
+        // The test uses the coro's bounds directly, since the context's stack fields describe
+        // the parser stack during a parse. Raising beats spinning on a wait that can never
+        // park.
+        const sp = @frameAddress();
+        const on_task_stack = if (task.coro) |co| blk: {
+            const base = @intFromPtr(co.stack_base);
+            break :blk sp >= base and sp < base + co.stack_size;
+        } else false;
+        if (!on_task_stack) {
+            ctx.thrown_error = try value_mod.boxErrorObject(ctx.quotationAllocator(), .{
+                .error_type = "load-parse-wait",
+                .message = "cannot wait for the load lock during parse-time execution",
+            });
+            return error.UserThrown;
+        }
+
+        if (!try lock.enqueueIfHeldBy(holder, task)) continue;
+
+        task.blocked_on_load_lock = @ptrCast(lock);
+        while (true) {
+            sched.suspendCurrentTask();
+            helpers.checkCancellation(ctx) catch |err| {
+                task.blocked_on_load_lock = null;
+                if (lock.isHeldBy(owner)) {
+                    releaseLoadLock(ctx);
+                } else {
+                    _ = lock.removeWaiter(task);
+                }
+                return err;
+            };
+            if (lock.isHeldBy(owner)) {
+                task.blocked_on_load_lock = null;
+                return;
+            }
+        }
+    }
+}
+
+/// Release one level of the load-lock hold. A zero-depth release hands ownership to the
+/// first queued waiter and wakes it outside the lock's internal mutex, or restores a
+/// suspended hold when a borrow ends; a restored hold delegates onward to a queued waiter
+/// the restored owner awaits, which its own release could never serve.
+///
+/// Panics when a waiter must be woken and the releasing context has no scheduler; a queued
+/// waiter implies a scheduler ran it.
+fn releaseLoadLock(ctx: *Context) void {
+    const lock = ctx.load_lock;
+    var result = lock.release(loadLockOwner(ctx));
+    while (true) {
+        const to_wake: *Task = switch (result) {
+            .none => return,
+            .restored => |restored| blk: {
+                const next = lock.delegateToAwaitedWaiter(restored, holderAwaitsTask) catch null;
+                break :blk next orelse return;
+            },
+            .wake => |task| task,
+        };
+        const sched = ctx.scheduler orelse
+            @panic("load-lock waiter queued with no scheduler on the releasing context");
+        sched.wakeTask(to_wake) catch {
+            // The waiter was made owner but its wake was dropped, so it can never run. Pass
+            // the hold on rather than leave a process-wide lock stranded on it.
+            result = lock.release(.{ .task = to_wake });
+            continue;
+        };
+        return;
+    }
+}
+
 /// load-file ( cache filename -- module )
 ///
 /// Restricted to the primary worker to avoid racing on module parsing.
@@ -1261,6 +1406,9 @@ fn nativeLoadFile(ctx: *Context) anyerror!void {
             return error.UserThrown;
         }
     }
+
+    try acquireLoadLock(ctx);
+    defer releaseLoadLock(ctx);
 
     // Target root state for the load's duration, so everything the load
     // produces outlives a loading task. Save/restore keeps a nested `use`
@@ -1345,6 +1493,9 @@ fn nativeReloadFile(ctx: *Context) anyerror!void {
         }
     }
 
+    try acquireLoadLock(ctx);
+    defer releaseLoadLock(ctx);
+
     // Target root state for the load's duration; see `nativeLoadFile`.
     const saved_target = ctx.load_target;
     ctx.load_target = ctx.rootContext();
@@ -1403,6 +1554,9 @@ fn nativeReloadFile(ctx: *Context) anyerror!void {
 /// not from `use` statements.
 fn nativeLoadCheckFile(ctx: *Context) anyerror!void {
     if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "load-check-file");
+
+    try acquireLoadLock(ctx);
+    defer releaseLoadLock(ctx);
 
     // Target root state for the load's duration; see `nativeLoadFile`.
     const saved_target = ctx.load_target;

@@ -1,0 +1,10 @@
+=== loads serialize across task suspension ===
+Stack: [ ]
+SLOW-MOD-START
+SLOW-MOD-END
+FAST-MOD
+Stack: [ ]
+PASS: the suspending module's word works
+Stack: [ ]
+PASS: the contending module's word works
+Stack: [ ]

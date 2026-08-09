@@ -1,0 +1,16 @@
+\ A nested use inside a task-loaded module passes through the load lock's
+\ reentrant hold instead of deadlocking against its own load.
+
+use "testing" ;
+
+"nested use inside a task-loaded module" test-section
+
+[
+  done: 1 <buffered-channel> ;
+  [ "./task_load_nested_use_outer.1z" load drop t done send ] spawn drop
+  done receive "loader task completed" assert-true
+] task-scope
+
+use "./task_load_nested_use_outer.1z" ;
+
+outer-word "inner+outer" "the outer word resolves its nested-use dep" assert=

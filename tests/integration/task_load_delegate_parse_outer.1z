@@ -1,0 +1,15 @@
+\ Companion module for task_load_delegate_parse.1z. The scope child loads from
+\ parse-time execution: a user parse-time word runs the load on the parser
+\ coroutine's stack. The holder awaits the child, so the borrow is granted
+\ before the parse-wait check ever applies. A `use` would exercise the same
+\ path, but its import step trips a pre-existing panic inside tasks.
+
+"PARSE-DELEGATE-OUTER-START" print-line
+
+[
+  [ "(pload): parse-time [ \"./task_load_delegate_parse_inner.1z\" load drop ] ; (pload)" eval-string ] spawn drop
+] task-scope
+
+"PARSE-DELEGATE-OUTER-END" print-line
+
+parse-outer-word: ( -- s ) [ "parse-outer" ] ;

@@ -1,0 +1,7 @@
+\ Companion module for task_load_lock_cancel.1z. Its top level must never run
+\ there: the task loading it is cancelled while waiting for the load lock, so
+\ NEVER-MOD's absence from that test's golden is the assertion.
+
+"NEVER-MOD" print-line
+
+never-word: ( -- s ) [ "never" ] ;

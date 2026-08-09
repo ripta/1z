@@ -1,0 +1,10 @@
+=== cancellation while waiting for the load lock ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: the waiter recorded one outcome
+Stack: [ ]
+PASS: the waiter was cancelled, not served
+Stack: [ ]
+PASS: the holder's load completed
+Stack: [ ]

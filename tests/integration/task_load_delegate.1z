@@ -1,0 +1,33 @@
+\ A holder that transitively awaits a contending task delegates the load lock
+\ to it instead of deadlocking: the contender's load runs inside the holder's
+\ suspension window and the hold reverts when it finishes. The marker order
+\ pins the delegation for both holder kinds: each OUTER-START is followed by
+\ its INNER before its OUTER-END.
+
+use "testing" ;
+
+"delegation while main holds the lock" test-section
+
+use "./task_load_delegate_outer.1z" ;
+
+outer-word "outer" "the outer module loaded through main's hold" assert=
+
+use "./task_load_delegate_inner.1z" ;
+
+inner-word "inner" "the awaited task's load was delegated" assert=
+
+"delegation while a task holds the lock" test-section
+
+[
+  done: 1 <buffered-channel> ;
+  [ "./task_load_delegate_outer2.1z" load drop t done send ] spawn drop
+  done receive "loader task completed" assert-true
+] task-scope
+
+use "./task_load_delegate_outer2.1z" ;
+
+outer2-word "outer2" "the outer module loaded through the task's hold" assert=
+
+use "./task_load_delegate_inner2.1z" ;
+
+inner2-word "inner2" "the awaited task's load was delegated through the wait chain" assert=

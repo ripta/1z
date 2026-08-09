@@ -6,22 +6,31 @@ const std = @import("std");
 /// strictly greater than any lock it currently holds, with the exception of
 /// same-level channel peers (address-ordered).
 ///
-/// Level 1: Context shared_lock (RwLock) -- shared registries
-/// Level 2: Channel mutex (per-channel Mutex, address-ordered among peers)
-/// Level 3: Container mutex (per-container Mutex on refcounted backings)
-/// Level 4: tz_mutex (leaf-only Mutex in time.zig)
+/// Level 1: Module-load lock (global, task-owned; see below)
+/// Level 2: Context shared_lock (RwLock) -- shared registries
+/// Level 3: Channel mutex (per-channel Mutex, address-ordered among peers)
+/// Level 4: Container mutex (per-container Mutex on refcounted backings)
+/// Level 5: tz_mutex (leaf-only Mutex in time.zig)
 ///
 /// Channels lock the channel mutex and may call `deepCopyValue`, which
 /// locks the source container's mutex while iterating; container therefore
 /// sits above channel in the order.
 ///
+/// The module-load lock sits at the bottom because a load's critical section
+/// acquires and releases the context RwLock many times. Its level is declared
+/// but never run through the tracker: ownership is a task identity held
+/// across scheduler suspension, while the tracker's state is threadlocal per
+/// worker, so another task running on the holder's worker between suspend and
+/// resume would observe bogus held state.
+///
 /// Atomics (Task.status, TaskScope counters) are outside the hierarchy.
 pub const LockLevel = enum(u8) {
     none = 0,
-    context_rw = 1,
-    channel = 2,
-    container = 3,
-    tz = 4,
+    module_load = 1,
+    context_rw = 2,
+    channel = 3,
+    container = 4,
+    tz = 5,
 };
 
 /// Per-thread lock-ordering state. Each OS thread maintains its own

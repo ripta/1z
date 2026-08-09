@@ -1,0 +1,9 @@
+=== parse-time delegation outranks the parse-wait raise ===
+Stack: [ ]
+PARSE-DELEGATE-OUTER-START
+PARSE-DELEGATE-INNER
+PARSE-DELEGATE-OUTER-END
+PASS: the outer module completed its load
+Stack: [ ]
+PASS: the parse-time load was delegated
+Stack: [ ]

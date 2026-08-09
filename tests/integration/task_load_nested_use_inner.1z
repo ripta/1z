@@ -1,0 +1,4 @@
+\ Companion module for task_load_nested_use.1z, pulled in by the outer
+\ module's top-level use.
+
+inner-word: ( -- s ) [ "inner" ] ;

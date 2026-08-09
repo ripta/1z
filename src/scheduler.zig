@@ -4,6 +4,7 @@ const Allocator = std.mem.Allocator;
 const task_mod = @import("task.zig");
 const Task = task_mod.Task;
 const Channel = @import("channel.zig").Channel;
+const LoadLock = @import("load_lock.zig").LoadLock;
 const TaskStatus = task_mod.TaskStatus;
 const TaskScope = task_mod.TaskScope;
 const Multiplexer = @import("multiplexer.zig").Multiplexer;
@@ -1040,6 +1041,7 @@ pub const Scheduler = struct {
         blocked_process,
         blocked_channel,
         blocked_scope,
+        blocked_load_lock,
         sleeping,
         runnable,
     };
@@ -1050,6 +1052,7 @@ pub const Scheduler = struct {
         if (task.blocked_on_process_pid != null) return .blocked_process;
         if (task.blocked_on_channel != null) return .blocked_channel;
         if (task.blocked_on_scope != null) return .blocked_scope;
+        if (task.blocked_on_load_lock != null) return .blocked_load_lock;
         for (self.sleep_queue.items[0..self.sleep_queue.count()]) |entry| {
             if (entry.task == task) return .sleeping;
         }
@@ -1072,6 +1075,7 @@ pub const Scheduler = struct {
             .blocked_process => w.print(" blocked_process={d}", .{task.blocked_on_process_pid.?}) catch return,
             .blocked_channel => w.writeAll(" blocked_channel") catch return,
             .blocked_scope => w.writeAll(" blocked_scope") catch return,
+            .blocked_load_lock => w.writeAll(" blocked_load_lock") catch return,
             .sleeping => {
                 const remaining = self.sleepRemaining(task);
                 if (remaining) |ns| {
@@ -1193,6 +1197,11 @@ pub const Scheduler = struct {
             task.blocked_on_process_pid = null;
             task.blocked_on_process_key = null;
             self.run_queue.append(self.allocator, task) catch {};
+        } else if (task.blocked_on_load_lock) |lock_ptr| {
+            const lock: *LoadLock = @ptrCast(@alignCast(lock_ptr));
+            if (lock.removeWaiter(task)) {
+                self.run_queue.append(self.allocator, task) catch {};
+            }
         } else if (task.blocked_on_scope) |scope| {
             {
                 scope.children_mu.lock();

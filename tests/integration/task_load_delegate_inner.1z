@@ -1,0 +1,6 @@
+\ Companion module for task_load_delegate.1z, loaded by a task the lock's
+\ holder awaits.
+
+"DELEGATE-INNER" print-line
+
+inner-word: ( -- s ) [ "inner" ] ;

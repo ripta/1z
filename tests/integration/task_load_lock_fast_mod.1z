@@ -1,0 +1,7 @@
+\ Companion module for task_load_lock_contention.1z. Its top-level marker must
+\ land after the slow module's markers: the contending load waits out the
+\ holder's suspension instead of interleaving into it.
+
+"FAST-MOD" print-line
+
+fast-word: ( -- s ) [ "fast" ] ;
