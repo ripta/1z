@@ -1967,18 +1967,40 @@ pub const Context = struct {
     // Local frame methods (lexical scoping for quotation-local definitions)
     // =========================================================================
 
+    /// Grow the three parallel frame arrays under the shared write lock when the next push
+    /// would move their backing.
+    ///
+    /// A push itself is task-private, but the backing array is shared storage: a descendant's
+    /// ancestor walk reads this context's durable frames from the same buffer under the shared
+    /// read lock, and a capacity-exceeding append frees that buffer under the reader. Taking
+    /// the write lock for the realloc alone excludes readers during the move, while the common
+    /// within-capacity push stays lock-free.
+    fn ensureFrameCapacityForPush(self: *Context) !void {
+        const needs_growth =
+            self.local_frames.items.len == self.local_frames.capacity or
+            self.local_frame_kinds.items.len == self.local_frame_kinds.capacity or
+            self.local_frame_modules.items.len == self.local_frame_modules.capacity;
+        if (!needs_growth) return;
+
+        self.acquireSharedWrite();
+        defer self.releaseSharedWrite();
+        try self.local_frames.ensureUnusedCapacity(self.allocator, 1);
+        try self.local_frame_kinds.ensureUnusedCapacity(self.allocator, 1);
+        try self.local_frame_modules.ensureUnusedCapacity(self.allocator, 1);
+    }
+
     /// Push a new empty local frame onto the frame stack.
     ///
-    /// No lock: a context's frames above `durable_frame_floor` are task-private, including a
-    /// runtime load's import frame. Only the owning task ever mutates them, and cross-task
-    /// resolution reads only an ancestor's stable scope, capped at the floor, never its live
-    /// frames above it.
+    /// No lock on the push itself: a context's frames above `durable_frame_floor` are
+    /// task-private, including a runtime load's import frame. Only the owning task ever mutates
+    /// them, and cross-task resolution reads only an ancestor's stable scope, capped at the
+    /// floor, never its live frames above it. Growth of the shared backing is the one locked
+    /// step; see `ensureFrameCapacityForPush`.
     pub fn pushLocalFrame(self: *Context) !void {
-        try self.local_frames.append(self.allocator, LocalFrame{});
-        errdefer self.local_frames.items.len -= 1;
-        try self.local_frame_kinds.append(self.allocator, .lexical);
-        errdefer self.local_frame_kinds.items.len -= 1;
-        try self.local_frame_modules.append(self.allocator, null);
+        try self.ensureFrameCapacityForPush();
+        self.local_frames.appendAssumeCapacity(LocalFrame{});
+        self.local_frame_kinds.appendAssumeCapacity(.lexical);
+        self.local_frame_modules.appendAssumeCapacity(null);
         self.assertFrameKindsParity();
     }
 
@@ -2740,23 +2762,25 @@ pub const Context = struct {
     /// resolution when executing the module's own words.
     ///
     /// The module's own words take precedence over its dependencies.
-    /// No lock: a module-deps frame is a transient frame like a combinator
-    /// frame, task-private and never read cross-task.
+    /// No lock on the push itself: a module-deps frame is a transient frame like a combinator
+    /// frame, task-private and never read cross-task. Growth of the shared backing is the one
+    /// locked step; see `ensureFrameCapacityForPush`.
     ///
     /// A module with a pre-built template gets a direct clone of it, avoiding a
     /// per-entry rehash. A module without one is rebuilt entry by entry. The
     /// empty frame is appended first so that a clone or populate failure unwinds
     /// through the same errdefer, with no owned allocation stranded.
     pub fn pushModuleDepsFrame(self: *Context, module: *const value_mod.Module) !void {
-        try self.local_frames.append(self.allocator, LocalFrame{});
+        try self.ensureFrameCapacityForPush();
+        self.local_frames.appendAssumeCapacity(LocalFrame{});
         errdefer {
             self.local_frames.items[self.local_frames.items.len - 1].deinit(self.allocator);
             self.local_frames.items.len -= 1;
         }
 
-        try self.local_frame_kinds.append(self.allocator, .module_deps);
+        self.local_frame_kinds.appendAssumeCapacity(.module_deps);
         errdefer self.local_frame_kinds.items.len -= 1;
-        try self.local_frame_modules.append(self.allocator, module);
+        self.local_frame_modules.appendAssumeCapacity(module);
         errdefer self.local_frame_modules.items.len -= 1;
         self.live_module_deps_frames += 1;
         errdefer self.live_module_deps_frames -= 1;
@@ -8512,6 +8536,79 @@ test "lookupWordStackEffectPtrLocked: descendant skips ancestor transient frames
 
     try std.testing.expect(child.lookupWordStackEffectPtrLocked("stable-eff") != null);
     try std.testing.expect(child.lookupWordStackEffectPtrLocked("transient-eff") == null);
+}
+
+test "pushLocalFrame: growth keeps the three frame arrays in parity" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    var i: usize = 0;
+    while (i < 100) : (i += 1) {
+        try ctx.pushLocalFrame();
+        try std.testing.expectEqual(ctx.local_frames.items.len, ctx.local_frame_kinds.items.len);
+        try std.testing.expectEqual(ctx.local_frames.items.len, ctx.local_frame_modules.items.len);
+    }
+
+    while (i > 0) : (i -= 1) ctx.popLocalFrame();
+}
+
+test "pushLocalFrame: capacity growth excludes a concurrent ancestor walk" {
+    const noop: dict_mod.NativeFn = struct {
+        fn f(_: *Context) anyerror!void {}
+    }.f;
+
+    // Each iteration starts from a fresh, tiny frame array so every deepening push
+    // reallocates the backing while the reader thread walks the durable frame under
+    // the shared read lock. Without the locked growth this dereferences the freed
+    // buffer, which the testing allocator's freed-memory poisoning turns into a crash.
+    const Reader = struct {
+        fn run(c: *Context, done: *std.atomic.Value(bool)) void {
+            while (!done.load(.acquire)) {
+                std.debug.assert(c.lookupWord("stable-word") != null);
+            }
+        }
+    };
+
+    var iter_n: usize = 0;
+    while (iter_n < 100) : (iter_n += 1) {
+        var parent = Context.init(std.testing.allocator);
+        defer parent.deinit();
+
+        try parent.pushLocalFrame();
+        parent.import_frame_index = 0;
+        parent.durable_frame_floor = 0;
+        try parent.local_frames.items[0].put(parent.allocator, "stable-word", .{
+            .name = "stable-word",
+            .action = .{ .native = noop },
+        });
+
+        var child = Context.init(std.testing.allocator);
+        defer child.deinit();
+        child.parent_context = &parent;
+        defer child.parent_context = null;
+
+        // Mirror `initForTask`: the walk and the growth must contend on one lock.
+        // The child's own lock is restored before deinit so each context still
+        // destroys the one it allocated.
+        const child_lock = child.shared_lock;
+        const child_tracker = child.lock_order_tracker;
+        child.shared_lock = parent.shared_lock;
+        child.lock_order_tracker = parent.lock_order_tracker;
+        defer {
+            child.shared_lock = child_lock;
+            child.lock_order_tracker = child_tracker;
+        }
+
+        var done = std.atomic.Value(bool).init(false);
+        const reader = try std.Thread.spawn(.{}, Reader.run, .{ &child, &done });
+
+        var depth: usize = 0;
+        while (depth < 2048) : (depth += 1) try parent.pushLocalFrame();
+        while (depth > 0) : (depth -= 1) parent.popLocalFrame();
+
+        done.store(true, .release);
+        reader.join();
+    }
 }
 
 test "preResolveCallTarget: ancestor transient frame no longer blocks, stable frame still does" {
