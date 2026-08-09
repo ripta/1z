@@ -41,8 +41,8 @@ pub const primitives = [_]Primitive{
     .{ .name = "eval-string", .stack_effect = "string --", .doc = "Execute a string as 1z code in the caller's scope.", .func = nativeEvalString, .capability = .eval, .markers = &.{ @constCast(&markers_mod.interpreter_dependent_marker), @constCast(&markers_mod.dynamic_eval_marker) } },
     .{ .name = "export", .stack_effect = "name --", .doc = "Promote an imported word to a public definition in the current scope.", .func = nativeExport },
     .{ .name = "compile!", .stack_effect = "sym --", .doc = "JIT-compile a word for integer arithmetic. Throws if the word is not found or not compilable.", .func = nativeCompile, .markers = &.{ @constCast(&markers_mod.interpreter_dependent_marker), @constCast(&markers_mod.dynamic_compile_marker) } },
-    .{ .name = "load-file", .stack_effect = "cache filename -- module", .doc = "Load a 1z source file and store the result in the given M{} cache. An already-cached path returns the cached module without re-executing; use `reload-file` to re-execute. Restricted to the primary worker; throws `non-primary-worker` when invoked from any other worker task.", .func = nativeLoadFile, .capability = .io_fs, .markers = &.{ @constCast(&markers_mod.interpreter_dependent_marker), @constCast(&markers_mod.dynamic_load_marker) } },
-    .{ .name = "reload-file", .stack_effect = "cache filename -- module", .doc = "Reload a 1z source file, pinned to its original source kind. Reuses the resolved path of an already-cached module instead of re-running the resolver chain, so a module first loaded from the embedded stdlib bundle reloads from the bundle even after a filesystem stdlib becomes available later in the session. Falls back to a fresh resolve when no cached entry exists. Restricted to the primary worker.", .func = nativeReloadFile, .capability = .io_fs, .markers = &.{ @constCast(&markers_mod.interpreter_dependent_marker), @constCast(&markers_mod.dynamic_load_marker) } },
+    .{ .name = "load-file", .stack_effect = "cache filename -- module", .doc = "Load a 1z source file and store the result in the given M{} cache. An already-cached path returns the cached module without re-executing; use `reload-file` to re-execute. Loads serialize on the process-wide load lock, so any worker may load.", .func = nativeLoadFile, .capability = .io_fs, .markers = &.{ @constCast(&markers_mod.interpreter_dependent_marker), @constCast(&markers_mod.dynamic_load_marker) } },
+    .{ .name = "reload-file", .stack_effect = "cache filename -- module", .doc = "Reload a 1z source file, pinned to its original source kind. Reuses the resolved path of an already-cached module instead of re-running the resolver chain, so a module first loaded from the embedded stdlib bundle reloads from the bundle even after a filesystem stdlib becomes available later in the session. Falls back to a fresh resolve when no cached entry exists.", .func = nativeReloadFile, .capability = .io_fs, .markers = &.{ @constCast(&markers_mod.interpreter_dependent_marker), @constCast(&markers_mod.dynamic_load_marker) } },
 };
 
 const RegistryEntry = @import("types.zig").RegistryEntry;
@@ -1399,20 +1399,10 @@ fn releaseLoadLock(ctx: *Context) void {
 
 /// load-file ( cache filename -- module )
 ///
-/// Restricted to the primary worker to avoid racing on module parsing. An already-cached
+/// Any worker may load; loads serialize on the process-wide load lock. An already-cached
 /// resolved path returns the cached module without executing; `reload-file` is the path that
 /// re-executes.
 fn nativeLoadFile(ctx: *Context) anyerror!void {
-    if (ctx.scheduler) |sched| {
-        if (sched.isBackgroundWorker()) {
-            ctx.thrown_error = try value_mod.boxErrorObject(ctx.quotationAllocator(), .{
-                .error_type = "non-primary-worker",
-                .message = "load-file cannot be called from a non-primary worker",
-            });
-            return error.UserThrown;
-        }
-    }
-
     try acquireLoadLock(ctx);
     defer releaseLoadLock(ctx);
 
@@ -1504,16 +1494,6 @@ fn findCachedResolvedPath(cache: *value_mod.MutableMap, filename: []const u8) ?[
 
 /// reload-file ( cache filename -- module )
 fn nativeReloadFile(ctx: *Context) anyerror!void {
-    if (ctx.scheduler) |sched| {
-        if (sched.isBackgroundWorker()) {
-            ctx.thrown_error = try value_mod.boxErrorObject(ctx.quotationAllocator(), .{
-                .error_type = "non-primary-worker",
-                .message = "reload-file cannot be called from a non-primary worker",
-            });
-            return error.UserThrown;
-        }
-    }
-
     try acquireLoadLock(ctx);
     defer releaseLoadLock(ctx);
 

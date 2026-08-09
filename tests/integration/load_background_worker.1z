@@ -1,0 +1,44 @@
+use "testing" ;
+
+\ Runtime module loading works from any worker: loads target root state and serialize on the
+\ process-wide load lock, so load-file, load, and reload all succeed from a task on a
+\ background worker.
+\
+\ With --threads=4, pickLeastLoaded picks the worker with the smallest active_tasks count and
+\ breaks ties by lowest id. The primary worker is already running the test driver, so a single
+\ spawn deterministically lands on a background worker.
+
+"module load from a background worker" test-section
+
+\ A fresh M{ } cache forces load-file itself, bypassing the shared cache.
+test-load-file-background: ( -- ) [
+  [
+    [ M{ } "math" load-file drop t ] spawn await
+    "load-file completes on a background worker" assert-true
+  ] task-scope
+] ;
+
+\ `math` is not in the shared module-cache yet, so `load` falls through to `load-file`. This
+\ is the load that populates the cache for the main task.
+test-load-cache-miss-background: ( -- ) [
+  [
+    [ "math" load drop t ] spawn await
+    "load (cache miss) completes on a background worker" assert-true
+  ] task-scope
+] ;
+
+test-reload-background: ( -- ) [
+  [
+    [ "math" reload drop t ] spawn await
+    "reload completes on a background worker" assert-true
+  ] task-scope
+] ;
+
+test-load-file-background
+test-load-cache-miss-background
+test-reload-background
+
+\ Top-level parsing is single-pass and interleaved with execution, so this `use` runs after
+\ the tests above and hits the cache entry the background-worker load inserted.
+use "math" ;
+2.7 floor 2.0 "a word from the background-loaded module answers on the main task" assert=

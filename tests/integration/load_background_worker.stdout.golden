@@ -1,0 +1,13 @@
+=== module load from a background worker ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: load-file completes on a background worker
+Stack: [ ]
+PASS: load (cache miss) completes on a background worker
+Stack: [ ]
+PASS: reload completes on a background worker
+Stack: [ ]
+PASS: a word from the background-loaded module answers on the main task
+Stack: [ ]

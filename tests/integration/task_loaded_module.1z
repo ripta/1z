@@ -1,7 +1,7 @@
-\ A module loaded inside a spawned task must target process-lifetime root
-\ state: the module cache retains it after the loading task is reaped. Under
-\ --threads=1 the task runs on the primary worker, so the non-primary-worker
-\ guard does not fire and the load itself succeeds.
+\ A module loaded inside a spawned task must target process-lifetime root state: the module
+\ cache retains it after the loading task is reaped. Pinned to --threads=1 to isolate the
+\ root-targeting from cross-worker effects; load_background_worker.1z covers the
+\ background-worker load.
 \
 \ The task loads at runtime via `load`, since `use` is parse-time and would
 \ run the load on the main context while this file parses. After the scope

@@ -307,9 +307,7 @@ module-loaded-hooks: parameter{ [ { } ] } ;
 
 \\ Load a module by name or file path, returning a cached copy if available. The cache probe runs
 \\ under the cache's own lock, so a hit on one worker is safe against a load inserting on another.
-\\ Cache misses delegate to `load-file`, which is restricted to the primary worker and throws
-\\ `non-primary-worker` when called from any other worker task. Cache hits perform no dictionary
-\\ writes and are not gated.
+\\ Cache misses delegate to `load-file`, which any worker may call.
 \\
 \\ Loads serialize on a process-wide lock. A contended load from parse-time
 \\ execution, such as a `use` inside `eval-string`, throws `load-parse-wait`
@@ -324,12 +322,10 @@ load: dynamic-load ( filename -- module ) [
   if
 ] ;
 
-\\ Load a module by name or file path, bypassing the cache. Pinned to the
-\\ original source kind: if the module was first loaded from the embedded
-\\ stdlib bundle, `reload` re-reads from the bundle even after a filesystem
-\\ stdlib becomes available mid-session. Delegates to `reload-file` and
-\\ therefore throws `non-primary-worker` when called from any task whose
-\\ home worker is not the primary.
+\\ Load a module by name or file path, bypassing the cache. Pinned to the original source kind:
+\\ if the module was first loaded from the embedded stdlib bundle, `reload` re-reads from the
+\\ bundle even after a filesystem stdlib becomes available mid-session. Delegates to
+\\ `reload-file`, which any worker may call.
 \\
 \\ Serializes on the same process-wide load lock as `load`, with the same
 \\ `load-parse-wait` behavior for a contended parse-time call.
