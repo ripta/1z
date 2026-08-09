@@ -49,11 +49,11 @@ fn nativeRegisterPragma(ctx: *Context) anyerror!void {
     };
 
     const duped_name = try alloc.dupe(u8, name.bytes);
-    try ctx.pragma_registry.put(ctx.allocator, duped_name, registration);
+    try ctx.registerPragmaKey(duped_name, registration);
     // The registry keeps only the quotation view; the transferred closure reference needs a
     // holder with a releaser.
     if (validator_val == .closure) {
-        try ctx.dictionary.retainValueForTeardown(validator_val);
+        try ctx.retainValueForTeardown(validator_val);
     }
 }
 
@@ -140,7 +140,7 @@ fn nativePragmaDefBlock(ctx: *Context) anyerror!void {
         switch (item) {
             .string => |name| {
                 const duped_name = try alloc.dupe(u8, name.bytes);
-                try ctx.pragma_registry.put(ctx.allocator, duped_name, .{ .validator = null });
+                try ctx.registerPragmaKey(duped_name, .{ .validator = null });
             },
             .symbol => |name| {
                 if (i + 1 >= items.len) {
@@ -157,10 +157,10 @@ fn nativePragmaDefBlock(ctx: *Context) anyerror!void {
                         if (next == .closure) {
                             container_backing.retainValue(next);
                             errdefer container_backing.releaseValue(next);
-                            try ctx.dictionary.retainValueForTeardown(next);
+                            try ctx.retainValueForTeardown(next);
                         }
                         const duped_name = try alloc.dupe(u8, name.bytes);
-                        try ctx.pragma_registry.put(ctx.allocator, duped_name, .{ .validator = q });
+                        try ctx.registerPragmaKey(duped_name, .{ .validator = q });
                     },
                     else => {
                         const msg = std.fmt.allocPrint(alloc, "pragma-def: '{s}' validator must be a quotation", .{name.bytes}) catch "expected quotation";

@@ -1,0 +1,16 @@
+\ Companion module for task_loaded_module.1z. It is loaded inside a spawned
+\ task, so every word, type, method, and container literal here must survive
+\ the loading task's teardown.
+
+private{
+  (tag): ( -- s ) [ "LIB-TAG" ] ;
+}
+
+greeting: ( -- s ) [ "from the lib" ] ;
+
+point: struct{ x y } ;
+
+describe: ( value -- string ) generic [ drop "?" ] ;
+describe: method{ point } [ drop "a point" ] ;
+
+handlers: ( -- hash ) [ H{ probe: [ (tag) ] } ] ;

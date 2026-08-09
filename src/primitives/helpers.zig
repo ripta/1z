@@ -621,7 +621,7 @@ pub fn popQuotation(ctx: *Context) !PoppedCallable {
 /// outlives the value, and an inert owner is dropped.
 pub fn adoptCallableForTeardown(ctx: *Context, pc: PoppedCallable) !void {
     if (pc.owner == .closure) {
-        try ctx.dictionary.retainValueForTeardown(pc.owner);
+        try ctx.retainValueForTeardown(pc.owner);
     } else {
         container_backing.releaseValue(pc.owner);
     }

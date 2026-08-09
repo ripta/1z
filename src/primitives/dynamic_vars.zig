@@ -86,7 +86,7 @@ pub fn nativeDefineParameter(ctx: *Context) anyerror!void {
     if (default_val == .closure) {
         container_backing.retainValue(default_val);
         errdefer container_backing.releaseValue(default_val);
-        try ctx.dictionary.retainValueForTeardown(default_val);
+        try ctx.retainValueForTeardown(default_val);
     }
 
     const doc_val: ?[]const u8 = if (desc_map.map.get("doc")) |v| switch (v) {

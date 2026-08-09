@@ -83,7 +83,7 @@ fn nativeDefineMethod(ctx: *Context) anyerror!void {
     if (body_val == .closure) {
         container_backing.retainValue(body_val);
         errdefer container_backing.releaseValue(body_val);
-        try ctx.dictionary.retainValueForTeardown(body_val);
+        try ctx.retainValueForTeardown(body_val);
     }
 
     const name_val = try ctx.stack.pop();

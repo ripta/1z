@@ -107,7 +107,7 @@ fn nativeToModule(ctx: *Context) anyerror!void {
         if (val == .closure) {
             container_backing.retainValue(val);
             errdefer container_backing.releaseValue(val);
-            try ctx.dictionary.retainValueForTeardown(val);
+            try ctx.retainValueForTeardown(val);
         }
         // The module also outlives the source's keys; dupe each into the
         // module's allocator so freeing the source M{} (or its arena, for the
@@ -1262,6 +1262,13 @@ fn nativeLoadFile(ctx: *Context) anyerror!void {
         }
     }
 
+    // Target root state for the load's duration, so everything the load
+    // produces outlives a loading task. Save/restore keeps a nested `use`
+    // reentrant.
+    const saved_target = ctx.load_target;
+    ctx.load_target = ctx.rootContext();
+    defer ctx.load_target = saved_target;
+
     const alloc = ctx.quotationAllocator();
 
     const filename_pay = try popString(ctx);
@@ -1338,6 +1345,11 @@ fn nativeReloadFile(ctx: *Context) anyerror!void {
         }
     }
 
+    // Target root state for the load's duration; see `nativeLoadFile`.
+    const saved_target = ctx.load_target;
+    ctx.load_target = ctx.rootContext();
+    defer ctx.load_target = saved_target;
+
     const alloc = ctx.quotationAllocator();
 
     const filename_pay = try popString(ctx);
@@ -1391,6 +1403,11 @@ fn nativeReloadFile(ctx: *Context) anyerror!void {
 /// not from `use` statements.
 fn nativeLoadCheckFile(ctx: *Context) anyerror!void {
     if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "load-check-file");
+
+    // Target root state for the load's duration; see `nativeLoadFile`.
+    const saved_target = ctx.load_target;
+    ctx.load_target = ctx.rootContext();
+    defer ctx.load_target = saved_target;
 
     const alloc = ctx.quotationAllocator();
 

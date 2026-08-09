@@ -548,7 +548,7 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
                     // the dictionary and released only at teardown, keeping the body alive for
                     // every later call of the word.
                     .closure => |c| blk: {
-                        try ctx.dictionary.retainValueForTeardown(top_val);
+                        try ctx.retainValueForTeardown(top_val);
                         // The dictionary adopted the popped reference here rather than at the
                         // definition, so this arm alone hands ownership over early.
                         top_owned = false;
@@ -629,7 +629,7 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
                 // registration `defineWord` just made; leaving both would double-release, and
                 // the destroy's body free would leave the dictionary walking a dead slice.
                 if (top_val == .closure and top_val.closure.ownsBodyTransitively()) {
-                    ctx.dictionary.unregisterCompoundBody(top_val.closure.instructions);
+                    ctx.unregisterCompoundBody(top_val.closure.instructions);
                 }
                 fireWordDefinedHook(ctx, alloc, name_copy);
             }

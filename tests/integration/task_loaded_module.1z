@@ -1,0 +1,28 @@
+\ A module loaded inside a spawned task must target process-lifetime root
+\ state: the module cache retains it after the loading task is reaped. Under
+\ --threads=1 the task runs on the primary worker, so the non-primary-worker
+\ guard does not fire and the load itself succeeds.
+\
+\ The task loads at runtime via `load`, since `use` is parse-time and would
+\ run the load on the main context while this file parses. After the scope
+\ exits, the main task's `use` hits the cache and must read live memory: the
+\ module's words, its struct type and accessors, a method on its generic, and
+\ a container literal holding a quotation that calls a private helper.
+
+use "testing" ;
+
+"module loaded inside a task" test-section
+
+[
+  out: 1 <buffered-channel> ;
+  [ "./task_loaded_module_lib.1z" load drop t out send ] spawn drop
+  out receive "loader task completed" assert-true
+] task-scope
+
+use "./task_loaded_module_lib.1z" ;
+
+greeting "from the lib" "a module word survives the loading task" assert=
+3 4 make-point x>> 3 "a struct accessor from the task-loaded module" assert=
+3 4 make-point describe "a point" "a method dispatches from the main task" assert=
+5 describe "?" "the generic fallthrough still answers" assert=
+handlers probe: @get call "LIB-TAG" "a container literal stays live past the loader" assert=

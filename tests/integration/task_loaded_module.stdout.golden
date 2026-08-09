@@ -1,0 +1,14 @@
+=== module loaded inside a task ===
+Stack: [ ]
+PASS: loader task completed
+Stack: [ ]
+PASS: a module word survives the loading task
+Stack: [ ]
+PASS: a struct accessor from the task-loaded module
+Stack: [ ]
+PASS: a method dispatches from the main task
+Stack: [ ]
+PASS: the generic fallthrough still answers
+Stack: [ ]
+PASS: a container literal stays live past the loader
+Stack: [ ]

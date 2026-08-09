@@ -997,6 +997,20 @@ pub const Context = struct {
     /// ancestor scopes, up to the root context which holds primitives and
     /// prelude words.
     parent_context: ?*const Context = null,
+    /// Mutable pointer to the root context, captured at task creation. Null on
+    /// the root itself; resolve through `rootContext`. `parent_context` is
+    /// const and points at the spawning context, which may itself be a task,
+    /// so it cannot serve writers that must reach the root.
+    root_context: ?*Context = null,
+    /// Durable-state target for module loads. Null means self.
+    ///
+    /// A module load must produce process-lifetime state no matter which
+    /// context runs it: the module cache and the quotation-stamp store retain
+    /// what the load builds. The load entries point this at the root for the
+    /// load's duration, and every writer of teardown-walked or ancestor-walked
+    /// state resolves its target through `stateTarget`. A registry added later
+    /// joins the redirected unit by following the same rule.
+    load_target: ?*Context = null,
     /// RwLock protecting shared registries. Heap-allocated by the root context
     /// and shared by reference to all child task contexts.
     shared_lock: *std.Thread.RwLock = undefined,
@@ -1303,6 +1317,10 @@ pub const Context = struct {
         // Share the parent's lock so all tasks use the same RwLock.
         ctx.shared_lock = parent.shared_lock;
         ctx.lock_order_tracker = parent.lock_order_tracker;
+
+        // Chain to the same root as the parent, so a nested spawn still
+        // resolves the process-lifetime context a module load targets.
+        ctx.root_context = parent.root_context orelse parent;
 
         // Share the parent's module cache so tasks don't re-load from disk.
         ctx.module_cache_value = parent.module_cache_value;
@@ -1708,9 +1726,24 @@ pub const Context = struct {
         self.stack.deinit();
     }
 
-    /// Allocator for quotations and other parsed data.
+    /// The root of this context's ancestor chain: self for the root context,
+    /// the process-lifetime root for any task context.
+    pub fn rootContext(self: *Context) *Context {
+        return self.root_context orelse self;
+    }
+
+    /// The context whose durable state writes should land on. Self outside a
+    /// module load; the root while one is running, so everything a load
+    /// produces outlives the executing task.
+    pub fn stateTarget(self: *Context) *Context {
+        return self.load_target orelse self;
+    }
+
+    /// Allocator for quotations and other parsed data. During a module load
+    /// this is the target context's arena, so parse-time products and module
+    /// bodies share the lifetime of the registries that retain them.
     pub fn quotationAllocator(self: *Context) Allocator {
-        return self.arena.allocator();
+        return self.stateTarget().arena.allocator();
     }
 
     /// If `instructions` contains any container-variant `push_literal`,
@@ -1721,7 +1754,8 @@ pub const Context = struct {
     /// quotation that captured them is freed.
     pub fn registerQuotationContainerLiterals(self: *Context, instructions: []const Instruction) !void {
         if (!container_backing.instructionsHaveContainerLiteral(instructions)) return;
-        try self.container_release_list.append(self.allocator, instructions);
+        const target = self.stateTarget();
+        try target.container_release_list.append(target.allocator, instructions);
     }
 
     /// Release the container literals captured by every quotation
@@ -1777,14 +1811,33 @@ pub const Context = struct {
     /// becomes the sole owner of the release callback and we don't
     /// double-release at teardown.
     pub fn unregisterQuotationContainerLiterals(self: *Context, instructions: []const Instruction) void {
+        const target = self.stateTarget();
         var i: usize = 0;
-        while (i < self.container_release_list.items.len) {
-            if (self.container_release_list.items[i].ptr == instructions.ptr) {
-                _ = self.container_release_list.swapRemove(i);
+        while (i < target.container_release_list.items.len) {
+            if (target.container_release_list.items[i].ptr == instructions.ptr) {
+                _ = target.container_release_list.swapRemove(i);
             } else {
                 i += 1;
             }
         }
+    }
+
+    /// Adopt an owning reference that must survive until teardown, on the
+    /// durable-state target's dictionary.
+    pub fn retainValueForTeardown(self: *Context, val: Value) !void {
+        try self.stateTarget().dictionary.retainValueForTeardown(val);
+    }
+
+    /// Record a compound body's container literals on the durable-state
+    /// target's dictionary release list.
+    pub fn registerCompoundBody(self: *Context, instructions: []const Instruction) !void {
+        try self.stateTarget().dictionary.registerCompoundBody(instructions);
+    }
+
+    /// Remove a compound body recorded by `registerCompoundBody`, for a body
+    /// whose embedded literals a retained value's own destroy releases instead.
+    pub fn unregisterCompoundBody(self: *Context, instructions: []const Instruction) void {
+        self.stateTarget().dictionary.unregisterCompoundBody(instructions);
     }
 
     /// Clear all error details and call stack.
@@ -2505,7 +2558,7 @@ pub const Context = struct {
                     if (def.owns_literal) {
                         container_backing.retainValue(v);
                         errdefer container_backing.releaseValue(v);
-                        try self.dictionary.retainValueForTeardown(v);
+                        try self.retainValueForTeardown(v);
                     }
                     break :blk .{ .compound = instrs };
                 },
@@ -2787,6 +2840,15 @@ pub const Context = struct {
         return null;
     }
 
+    /// Register a pragma key on the durable-state target, so a registration
+    /// made during a module load outlives the loading context.
+    pub fn registerPragmaKey(self: *Context, name: []const u8, registration: PragmaRegistration) !void {
+        self.acquireSharedWrite();
+        defer self.releaseSharedWrite();
+        const target = self.stateTarget();
+        try target.pragma_registry.put(target.allocator, name, registration);
+    }
+
     /// Look up a pragma registration by name, walking the parent context chain.
     pub fn lookupPragmaRegistration(self: *const Context, name: []const u8) ?PragmaRegistration {
         self.acquireSharedRead();
@@ -2984,13 +3046,13 @@ pub const Context = struct {
         switch (def.action) {
             .compound => |instrs| {
                 self.unregisterQuotationContainerLiterals(instrs);
-                try self.dictionary.registerCompoundBody(instrs);
+                try self.registerCompoundBody(instrs);
             },
             .literal => |val| {
                 // The teardown list is the same lifetime the compound-body release list gave a
                 // bound container before bindings stopped allocating a body.
                 if (!def.owns_literal and container_backing.valueCarriesBacking(val)) {
-                    try self.dictionary.retainValueForTeardown(val);
+                    try self.retainValueForTeardown(val);
                 }
             },
             .native, .host_callback => {},
@@ -4312,7 +4374,8 @@ pub const Context = struct {
     pub fn registerResourceTypeValue(self: *Context, name: []const u8, tv: *value_mod.TypeValue) !void {
         self.acquireSharedWrite();
         defer self.releaseSharedWrite();
-        try self.resource_type_values.put(self.allocator, name, tv);
+        const target = self.stateTarget();
+        try target.resource_type_values.put(target.allocator, name, tv);
     }
 
     /// Register a struct type by name.
@@ -4594,8 +4657,9 @@ pub const Context = struct {
             .{ .mutable = mutable },
         );
 
-        try self.struct_descriptors.put(
-            self.allocator,
+        const target = self.stateTarget();
+        try target.struct_descriptors.put(
+            target.allocator,
             .{ .fields = fields, .field_types = field_types, .mutable = mutable },
             desc,
         );
@@ -4744,9 +4808,10 @@ pub const Context = struct {
     }
 
     fn registerTypeDescriptorLocked(self: *Context, name: []const u8, desc: *value_mod.TypeDescriptor) !void {
-        if (self.type_registry_frames.items.len == 0) return error.NoTypeRegistryFrame;
-        const top = self.type_registry_frames.items.len - 1;
-        try self.type_registry_frames.items[top].type_descriptors.put(self.allocator, name, desc);
+        const target = self.stateTarget();
+        if (target.type_registry_frames.items.len == 0) return error.NoTypeRegistryFrame;
+        const top = target.type_registry_frames.items.len - 1;
+        try target.type_registry_frames.items[top].type_descriptors.put(target.allocator, name, desc);
     }
 
     /// Register enum variants into the topmost type registry frame.
@@ -4757,9 +4822,10 @@ pub const Context = struct {
     }
 
     fn registerEnumVariantsLocked(self: *Context, enum_tv: *const value_mod.TypeValue, variants: []const *const value_mod.VirtualType) !void {
-        if (self.type_registry_frames.items.len == 0) return error.NoTypeRegistryFrame;
-        const top = self.type_registry_frames.items.len - 1;
-        try self.type_registry_frames.items[top].enum_registry.put(self.allocator, enum_tv, variants);
+        const target = self.stateTarget();
+        if (target.type_registry_frames.items.len == 0) return error.NoTypeRegistryFrame;
+        const top = target.type_registry_frames.items.len - 1;
+        try target.type_registry_frames.items[top].enum_registry.put(target.allocator, enum_tv, variants);
     }
 
     // =========================================================================
@@ -4804,20 +4870,27 @@ pub const Context = struct {
     }
 
     fn registerDispatchLocked(self: *Context, key: DispatchKey, entry: DispatchEntry, allow_overwrite: bool) !void {
-        if (self.dispatch_frames.items.len > 0) {
-            const top = self.dispatch_frames.items.len - 1;
-            const gop = try self.dispatch_frames.items[top].entries.getOrPut(self.allocator, key);
+        const target = self.stateTarget();
+        if (target.dispatch_frames.items.len > 0) {
+            const top = target.dispatch_frames.items.len - 1;
+            const gop = try target.dispatch_frames.items[top].entries.getOrPut(target.allocator, key);
             if (gop.found_existing and !allow_overwrite) {
                 return error.DuplicateMethod;
             }
             gop.value_ptr.* = entry;
-            self.dispatch.generation +%= 1;
+            target.dispatch.generation +%= 1;
         } else {
-            try self.dispatch.register(key, entry, allow_overwrite);
+            try target.dispatch.register(key, entry, allow_overwrite);
         }
         // Any new method binding may flip a satisfies-check answer; clear
-        // coarsely. (Reached only on a successful register.)
-        self.protocol_satisfies_cache.clearRetainingCapacity();
+        // coarsely. (Reached only on a successful register.) A redirected
+        // register is observable through the executing context's ancestor
+        // walk too, so its cache and PIC generation invalidate as well.
+        target.protocol_satisfies_cache.clearRetainingCapacity();
+        if (target != self) {
+            self.dispatch.generation +%= 1;
+            self.protocol_satisfies_cache.clearRetainingCapacity();
+        }
     }
 
     /// Look up a dispatch entry by key, walking frames then base table.
@@ -4836,7 +4909,13 @@ pub const Context = struct {
             if (self.dispatch_frames.items[i].entries.get(key)) |entry| return entry;
         }
         // Base dispatch table
-        return self.dispatch.entries.get(key);
+        if (self.dispatch.entries.get(key)) |entry| return entry;
+        // A redirected load registers on the target, so a duplicate check
+        // during the load must see what was just written there.
+        if (self.load_target) |target| {
+            if (@as(*const Context, target) != self) return target.getDispatchEntryLocked(key);
+        }
+        return null;
     }
 
     /// Collect all dispatch key-entry pairs for a given dispatch ID, including
@@ -9050,6 +9129,76 @@ test "initForTask: shares the parent's carryable scope gate" {
     // The task aliased the gate without retaining, so its teardown left the root's intact.
     try std.testing.expect(parent.carryable_scope_gate.isMarked(0x1000));
     try std.testing.expect(parent.carryable_scope_gate.isMarked(0x2000));
+}
+
+test "initForTask: chains root_context through a nested spawn" {
+    var parent = Context.init(std.testing.allocator);
+    defer parent.deinit();
+
+    var scheduler = try std.testing.allocator.create(Scheduler);
+    defer std.testing.allocator.destroy(scheduler);
+    scheduler.* = try Scheduler.init(std.testing.allocator);
+    defer scheduler.deinit();
+
+    try std.testing.expectEqual(@as(?*Context, null), parent.root_context);
+    try std.testing.expectEqual(&parent, parent.rootContext());
+
+    var task_ctx = try Context.initForTask(std.testing.allocator, &parent, scheduler);
+    defer task_ctx.deinit();
+    try std.testing.expectEqual(&parent, task_ctx.rootContext());
+
+    var nested_ctx = try Context.initForTask(std.testing.allocator, &task_ctx, scheduler);
+    defer nested_ctx.deinit();
+    try std.testing.expectEqual(&parent, nested_ctx.rootContext());
+}
+
+test "stateTarget: defaults to self and follows load_target" {
+    var parent = Context.init(std.testing.allocator);
+    defer parent.deinit();
+
+    var scheduler = try std.testing.allocator.create(Scheduler);
+    defer std.testing.allocator.destroy(scheduler);
+    scheduler.* = try Scheduler.init(std.testing.allocator);
+    defer scheduler.deinit();
+
+    var task_ctx = try Context.initForTask(std.testing.allocator, &parent, scheduler);
+    defer task_ctx.deinit();
+
+    try std.testing.expectEqual(&task_ctx, task_ctx.stateTarget());
+    try std.testing.expectEqual(
+        @as(*anyopaque, @ptrCast(task_ctx.arena)),
+        task_ctx.quotationAllocator().ptr,
+    );
+
+    task_ctx.load_target = task_ctx.rootContext();
+    defer task_ctx.load_target = null;
+
+    try std.testing.expectEqual(&parent, task_ctx.stateTarget());
+    try std.testing.expectEqual(
+        @as(*anyopaque, @ptrCast(parent.arena)),
+        task_ctx.quotationAllocator().ptr,
+    );
+}
+
+test "retainValueForTeardown: a redirected retain lands on the target's dictionary" {
+    var parent = Context.init(std.testing.allocator);
+    defer parent.deinit();
+
+    var scheduler = try std.testing.allocator.create(Scheduler);
+    defer std.testing.allocator.destroy(scheduler);
+    scheduler.* = try Scheduler.init(std.testing.allocator);
+    defer scheduler.deinit();
+
+    var task_ctx = try Context.initForTask(std.testing.allocator, &parent, scheduler);
+    defer task_ctx.deinit();
+
+    task_ctx.load_target = task_ctx.rootContext();
+    defer task_ctx.load_target = null;
+
+    try task_ctx.retainValueForTeardown(.{ .fixnum = 42 });
+
+    try std.testing.expectEqual(@as(usize, 0), task_ctx.dictionary.retained_values.items.len);
+    try std.testing.expectEqual(@as(usize, 1), parent.dictionary.retained_values.items.len);
 }
 
 test "initForTask: inherits AOT runtime-image state from parent" {
