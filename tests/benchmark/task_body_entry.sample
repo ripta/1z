@@ -3,5 +3,5 @@ binary=./zig-out/bin/1z   reps=7   mode=--compile=off
 
 shape                        flags                 median_ms         min_ms         max_ms
 ---------------------------- ---------------- -------------- -------------- --------------
-task_body_entry.1z           --threads=auto           22.768         22.327         23.334
-task_body_entry.1z           --threads=1              23.390         23.012         23.969
+task_body_entry.1z           --threads=auto            6.794          6.316          7.224
+task_body_entry.1z           --threads=1              20.508         19.889         21.672
