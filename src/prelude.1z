@@ -305,10 +305,11 @@ word-defined-hooks: parameter{ [ { } ] } ;
 \\ Scoped hooks for module-loaded events (array of quotations).
 module-loaded-hooks: parameter{ [ { } ] } ;
 
-\\ Load a module by name or file path, returning a cached copy if available.
-\\ Cache misses delegate to `load-file`, which is restricted to the primary
-\\ worker and throws `non-primary-worker` when called from any other worker
-\\ task. Cache hits perform no dictionary writes and are not gated.
+\\ Load a module by name or file path, returning a cached copy if available. The cache probe runs
+\\ under the cache's own lock, so a hit on one worker is safe against a load inserting on another.
+\\ Cache misses delegate to `load-file`, which is restricted to the primary worker and throws
+\\ `non-primary-worker` when called from any other worker task. Cache hits perform no dictionary
+\\ writes and are not gated.
 \\
 \\ Loads serialize on a process-wide lock. A contended load from parse-time
 \\ execution, such as a `use` inside `eval-string`, throws `load-parse-wait`
@@ -316,8 +317,9 @@ module-loaded-hooks: parameter{ [ { } ] } ;
 \\ load proceeds as if nested.
 load: dynamic-load ( filename -- module ) [
   dup native.resolve-load-path
-  module-cache get over @has?
-  [ swap drop module-cache get swap @get ]
+  module-cache get swap native.cached-module
+  dup
+  [ swap drop ]
   [ drop module-cache get swap load-file ]
   if
 ] ;

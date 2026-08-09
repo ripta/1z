@@ -14491,6 +14491,8 @@ fn lookupAnyModuleWord(ctx: *Context, word_name: []const u8) ?ModuleWordHit {
         return null;
     }
 
+    ctx.module_cache_value.header.lock();
+    defer ctx.module_cache_value.header.unlock();
     var iter = ctx.module_cache_value.map.iterator();
     while (iter.next()) |entry| {
         if (entry.value_ptr.* != .module) continue;

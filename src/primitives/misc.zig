@@ -41,7 +41,7 @@ pub const primitives = [_]Primitive{
     .{ .name = "eval-string", .stack_effect = "string --", .doc = "Execute a string as 1z code in the caller's scope.", .func = nativeEvalString, .capability = .eval, .markers = &.{ @constCast(&markers_mod.interpreter_dependent_marker), @constCast(&markers_mod.dynamic_eval_marker) } },
     .{ .name = "export", .stack_effect = "name --", .doc = "Promote an imported word to a public definition in the current scope.", .func = nativeExport },
     .{ .name = "compile!", .stack_effect = "sym --", .doc = "JIT-compile a word for integer arithmetic. Throws if the word is not found or not compilable.", .func = nativeCompile, .markers = &.{ @constCast(&markers_mod.interpreter_dependent_marker), @constCast(&markers_mod.dynamic_compile_marker) } },
-    .{ .name = "load-file", .stack_effect = "cache filename -- module", .doc = "Load a 1z source file unconditionally (no cache check) and store the result in the given M{} cache. Restricted to the primary worker; throws `non-primary-worker` when invoked from any other worker task.", .func = nativeLoadFile, .capability = .io_fs, .markers = &.{ @constCast(&markers_mod.interpreter_dependent_marker), @constCast(&markers_mod.dynamic_load_marker) } },
+    .{ .name = "load-file", .stack_effect = "cache filename -- module", .doc = "Load a 1z source file and store the result in the given M{} cache. An already-cached path returns the cached module without re-executing; use `reload-file` to re-execute. Restricted to the primary worker; throws `non-primary-worker` when invoked from any other worker task.", .func = nativeLoadFile, .capability = .io_fs, .markers = &.{ @constCast(&markers_mod.interpreter_dependent_marker), @constCast(&markers_mod.dynamic_load_marker) } },
     .{ .name = "reload-file", .stack_effect = "cache filename -- module", .doc = "Reload a 1z source file, pinned to its original source kind. Reuses the resolved path of an already-cached module instead of re-running the resolver chain, so a module first loaded from the embedded stdlib bundle reloads from the bundle even after a filesystem stdlib becomes available later in the session. Falls back to a fresh resolve when no cached entry exists. Restricted to the primary worker.", .func = nativeReloadFile, .capability = .io_fs, .markers = &.{ @constCast(&markers_mod.interpreter_dependent_marker), @constCast(&markers_mod.dynamic_load_marker) } },
 };
 
@@ -49,6 +49,7 @@ const RegistryEntry = @import("types.zig").RegistryEntry;
 pub const registry_entries = [_]RegistryEntry{
     .{ .name = "resolve-load-path", .func = nativeResolveLoadPath, .stack_effect = "filename -- resolved", .capability = .io_fs },
     .{ .name = "module-cache-value", .func = nativeModuleCacheValue, .stack_effect = "-- cache" },
+    .{ .name = "cached-module", .func = nativeCachedModule, .stack_effect = "cache resolved -- module/f" },
     .{ .name = "record-import", .func = nativeRecordImport, .stack_effect = "module-path words-or-f resolved-path --" },
     .{ .name = "import-history", .func = nativeImportHistory, .stack_effect = "-- array" },
     .{ .name = "parse-source-loc", .func = nativeParseSrcLoc, .stack_effect = "-- file line column" },
@@ -507,8 +508,10 @@ pub fn nativeLoadImpl(ctx: *Context, cache: *value_mod.MutableMap, filename: []c
     // dies with it.
     try Context.buildModuleDepsTemplate(module, alloc);
 
-    // Only insert if the resolved path is not already in the cache; an
-    // overwrite would silently drop the fresh key dupe.
+    // Only insert if the resolved path is not already in the cache; an overwrite would silently
+    // drop the fresh key dupe. The header mutex excludes the resolution scans and cache probes
+    // running on other workers.
+    cache.header.lock();
     if (!cache.map.contains(resolved)) {
         if (cache.header.allocator.dupe(u8, resolved)) |resolved_owned| {
             cache.map.put(cache.header.allocator, resolved_owned, .{ .module = module }) catch {
@@ -516,6 +519,7 @@ pub fn nativeLoadImpl(ctx: *Context, cache: *value_mod.MutableMap, filename: []c
             };
         } else |_| {}
     }
+    cache.header.unlock();
     ctx.popPragmaFrame();
     ctx.popLocalFrame();
     hooks.fireScopedHooks(ctx, "module-loaded-hooks", &.{ value_mod.stringValue(filename), value_mod.stringValue(resolved) });
@@ -1395,7 +1399,9 @@ fn releaseLoadLock(ctx: *Context) void {
 
 /// load-file ( cache filename -- module )
 ///
-/// Restricted to the primary worker to avoid racing on module parsing.
+/// Restricted to the primary worker to avoid racing on module parsing. An already-cached
+/// resolved path returns the cached module without executing; `reload-file` is the path that
+/// re-executes.
 fn nativeLoadFile(ctx: *Context) anyerror!void {
     if (ctx.scheduler) |sched| {
         if (sched.isBackgroundWorker()) {
@@ -1445,6 +1451,19 @@ fn nativeLoadFile(ctx: *Context) anyerror!void {
         return error.FileNotFound;
     };
 
+    // A load that raced another load of the same path lost the probe-to-lock window: the winner
+    // inserted while this caller waited on the load lock. Returning the cached module here keeps
+    // the module top-level from executing a second time.
+    cache.header.lock();
+    const cached = cache.map.get(resolved);
+    cache.header.unlock();
+    if (cached) |hit| {
+        if (hit == .module) {
+            try ctx.stack.push(hit);
+            return;
+        }
+    }
+
     const resolved_module = classifyResolved(resolved) orelse {
         const msg = std.fmt.allocPrint(alloc, "path '{s}'", .{filename}) catch "path '<unknown>'";
         ctx.error_details.append(ctx.allocator, .{
@@ -1468,6 +1487,8 @@ fn nativeLoadFile(ctx: *Context) anyerror!void {
 /// the cached key is either a filesystem realpath or a `<stdlib>/...`
 /// virtual path, so reusing it preserves the bundle-vs-disk discriminator.
 fn findCachedResolvedPath(cache: *value_mod.MutableMap, filename: []const u8) ?[]const u8 {
+    cache.header.lock();
+    defer cache.header.unlock();
     var iter = cache.map.iterator();
     while (iter.next()) |entry| {
         const cached = switch (entry.value_ptr.*) {
@@ -1593,8 +1614,11 @@ fn nativeLoadCheckFile(ctx: *Context) anyerror!void {
 
     // Return cached module if already loaded, avoiding duplicate side effects
     // such as import-history records from re-executing use statements.
-    if (cache.map.get(resolved)) |cached| {
-        try ctx.stack.push(cached);
+    cache.header.lock();
+    const cached = cache.map.get(resolved);
+    cache.header.unlock();
+    if (cached) |hit| {
+        try ctx.stack.push(hit);
         return;
     }
 
@@ -1607,6 +1631,37 @@ fn nativeLoadCheckFile(ctx: *Context) anyerror!void {
 /// module-cache-value ( -- cache )
 fn nativeModuleCacheValue(ctx: *Context) anyerror!void {
     try ctx.stack.push(.{ .mutable_map = ctx.module_cache_value });
+}
+
+/// cached-module ( cache resolved -- module/f )
+///
+/// Probe the module cache under its header mutex, so a hit taken on one worker cannot observe
+/// another worker's insert mid-rehash. Pushes `f` on a miss or when the cached value is not a
+/// module.
+fn nativeCachedModule(ctx: *Context) anyerror!void {
+    const resolved_str = try popString(ctx);
+    defer container_backing.releaseValue(.{ .string = resolved_str });
+    const cache_val = try ctx.stack.pop();
+    defer container_backing.releaseValue(cache_val);
+    const cache: *value_mod.MutableMap = switch (cache_val) {
+        .mutable_map => |m| m,
+        else => {
+            helpers.setTypeMismatchError(ctx, "mutable-map", cache_val);
+            return error.TypeMismatch;
+        },
+    };
+
+    cache.header.lock();
+    const cached = cache.map.get(resolved_str.bytes);
+    cache.header.unlock();
+
+    if (cached) |hit| {
+        if (hit == .module) {
+            try ctx.stack.push(hit);
+            return;
+        }
+    }
+    try ctx.stack.push(.{ .boolean = false });
 }
 
 /// eval-string ( string -- )

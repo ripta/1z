@@ -3,29 +3,29 @@ Prelude compilation: 455/456 words compiled (99.8%)
       NC.13: word body underflows the abstract stack (row-variable effects)
       hint: blocked until row-variable stack regions can be modeled
 Quotation bodies compiled: 0
-Inline PIC sites: 88/265 generic call sites preseeded
+Inline PIC sites: 88/263 generic call sites preseeded
 AOT interpreter fallbacks: 302 total
   native: 265
   per-op-native: 19
   compound-uncompiled: 1
   quotation: 17
   sites:
-    native: nan? -> = (line 443)
-    quotation: run-benchmarks -> <quotation> (line 1225)
-    quotation: (any-loop) -> <quotation> (line 473)
-    native: quotation? -> = (line 408)
-    native: . -> inspect (line 716)
-    native: . -> inspect (line 716)
-    native: #ends-with? -> #len (line 1287)
-    native: #ends-with? -> #len (line 1287)
-    native: #ends-with? -> #len (line 1287)
-    native: #ends-with? -> #len (line 1287)
-    native: #ends-with? -> < (line 1287)
+    native: nan? -> = (line 445)
+    quotation: run-benchmarks -> <quotation> (line 1227)
+    quotation: (any-loop) -> <quotation> (line 475)
+    native: quotation? -> = (line 410)
+    native: . -> inspect (line 718)
+    native: . -> inspect (line 718)
     native: #ends-with? -> #len (line 1289)
     native: #ends-with? -> #len (line 1289)
     native: #ends-with? -> #len (line 1289)
     native: #ends-with? -> #len (line 1289)
-    per-op-native: #ends-with? -> - (line 1289)
+    native: #ends-with? -> < (line 1289)
+    native: #ends-with? -> #len (line 1291)
+    native: #ends-with? -> #len (line 1291)
+    native: #ends-with? -> #len (line 1291)
+    native: #ends-with? -> #len (line 1291)
+    per-op-native: #ends-with? -> - (line 1291)
     ... 286 more
   static-check: jitInterpretedCall=1/1 jitNativeWordCall=284/284 jitCallQuotation=17/17 (matches build-time inventory)
 Warning: '4keep' parameter 'quot' has row-variable effect; quotation call falls back to interpreter

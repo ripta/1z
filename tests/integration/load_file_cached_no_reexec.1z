@@ -1,0 +1,11 @@
+\ `load-file` on an already-cached resolved path returns the cached module
+\ without executing the file again. The fixture prints a marker at its top
+\ level, so the golden holds exactly one marker across two load-file calls.
+
+use "testing" ;
+
+"load-file returns the cached module without re-executing" test-section
+
+module-cache get "./load_file_cached_no_reexec_mod.1z" load-file drop
+module-cache get "./load_file_cached_no_reexec_mod.1z" load-file
+cached-mod-word: @get call "cached-mod-value" "second load-file returns a working cached module" assert=

@@ -262,16 +262,21 @@ semantic-word-names: ( semantic-context -- array ) [
   dup f = [ drop { } ] [ word-infos>> @keys ] if
 ] ;
 
+\ Load a module in check mode via the lint cache, or f on failure.
+(lint-fallback-load): ( resolved-path -- module/f ) [
+  [ (lint-load-cache) swap native.load-check-file ] [ drop f ] recover
+] ;
+
 \\ Load a module by resolved path using the lint cache, returning exported word
 \\ names as an array of strings, or an empty array on failure.
 lint-module-exports: ( resolved-path -- array ) [
-  \ First try the standard module cache (module was loaded during use).
-  [ native.module-cache-value swap @get ] [ 2drop f ] recover
-  dup f = [
-    drop
-    \ Fall back to loading via the lint cache.
-    [ (lint-load-cache) swap native.load-check-file ] [ drop f ] recover
-  ] when
+  \ First try the standard module cache (module was loaded during use),
+  \ then fall back to loading via the lint cache.
+  dup native.module-cache-value swap native.cached-module
+  dup
+  [ swap drop ]
+  [ drop (lint-fallback-load) ]
+  if
   dup f = [ drop { } ] [ @keys [ >string ] #map #collect ] if
 ] ;
 

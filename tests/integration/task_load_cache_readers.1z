@@ -1,0 +1,52 @@
+\ Smoke test for the module cache lock: task-context readers hammer the
+\ cache-hit path of `load`, and the main task inserts fresh modules into the
+\ cache around them.
+\
+\ Two pre-existing defects constrain its shape. Task execution overlapping a
+\ main-task load reads the load's transient import frame and crashes, so the
+\ main task does not load while the readers run, and the file runs under
+\ --threads=1. A task executing a scope-local word poisons the next load, so
+\ the reader body is inlined into each spawn instead. Widen this to
+\ overlapping cross-worker coverage once both are fixed.
+
+use "testing" ;
+
+"cache-hit readers from task contexts" test-section
+
+\ Prime the readers' module so every load in the tasks below is a hit.
+"./task_load_cache_readers_hit_mod.1z" load drop
+
+[
+  done: 3 <buffered-channel> ;
+  [
+    100 [
+      "./task_load_cache_readers_hit_mod.1z" load
+      hit-mod-word: @get call drop
+    ] times
+    t done send
+  ] spawn drop
+  [
+    100 [
+      "./task_load_cache_readers_hit_mod.1z" load
+      hit-mod-word: @get call drop
+    ] times
+    t done send
+  ] spawn drop
+  [
+    100 [
+      "./task_load_cache_readers_hit_mod.1z" load
+      hit-mod-word: @get call drop
+    ] times
+    t done send
+  ] spawn drop
+  done receive drop
+  done receive drop
+  done receive drop
+] task-scope
+
+"cache inserts after task readers" test-section
+
+{ "math" "strings" "char" "bytes" "sets" "ranges" } [ load drop ] #each
+
+"./task_load_cache_readers_hit_mod.1z" load
+hit-mod-word: @get call "hit" "the hit module still works after the reader storm" assert=

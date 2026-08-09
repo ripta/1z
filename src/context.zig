@@ -695,6 +695,11 @@ pub const Context = struct {
     /// Cache of loaded modules keyed by canonical file path.
     /// Prevents redundant loading when multiple files `use` the same module.
     /// Stored as an M{} value so it can be exposed as a dynamic parameter.
+    ///
+    /// A load inserts while resolution scans and cache probes read on every worker, so every
+    /// runtime access takes the backing's header mutex around its probe or iteration. The startup
+    /// image loader and the AOT build-time passes run before scheduler workers exist and access
+    /// the map bare.
     module_cache_value: *value_mod.MutableMap = undefined,
     /// Stashed error object from user `throw`, consumed by `recover`.
     /// Arena-allocated; owned by the context arena and freed at context
@@ -3536,6 +3541,7 @@ pub const Context = struct {
             cache_key: []const u8,
         };
         var best: ?Candidate = null;
+        self.module_cache_value.header.lock();
         var iter = self.module_cache_value.map.iterator();
         while (iter.next()) |entry| {
             if (entry.value_ptr.* != .module) continue;
@@ -3550,6 +3556,7 @@ pub const Context = struct {
                 best = .{ .mod_word = mod_word, .module = module, .cache_key = entry.key_ptr.* };
             }
         }
+        self.module_cache_value.header.unlock();
         const hit = best orelse return null;
         return wordDefFromModuleWord(name, hit.mod_word, hit.module);
     }
@@ -3570,6 +3577,8 @@ pub const Context = struct {
     /// resolve the entry word. The pre-gate scan resolved the module's word on that path too, so
     /// nothing that worked is lost.
     fn moduleCacheContainsWordLocked(self: *const Context, name: []const u8) bool {
+        self.module_cache_value.header.lock();
+        defer self.module_cache_value.header.unlock();
         var iter = self.module_cache_value.map.iterator();
         while (iter.next()) |entry| {
             if (entry.value_ptr.* != .module) continue;
@@ -3583,6 +3592,8 @@ pub const Context = struct {
     /// Used during AOT freeze to re-establish a callee's defining-module scope while discovering
     /// its body.
     pub fn moduleByNameInCache(self: *const Context, name: []const u8) ?*const value_mod.Module {
+        self.module_cache_value.header.lock();
+        defer self.module_cache_value.header.unlock();
         var iter = self.module_cache_value.map.iterator();
         while (iter.next()) |entry| {
             if (entry.value_ptr.* != .module) continue;
@@ -3606,6 +3617,7 @@ pub const Context = struct {
             cache_key: []const u8,
         };
         var best: ?Candidate = null;
+        self.module_cache_value.header.lock();
         var iter = self.module_cache_value.map.iterator();
         while (iter.next()) |entry| {
             if (entry.value_ptr.* != .module) continue;
@@ -3616,6 +3628,7 @@ pub const Context = struct {
                 best = .{ .module = module, .cache_key = entry.key_ptr.* };
             }
         }
+        self.module_cache_value.header.unlock();
         const hit = best orelse return null;
         return hit.module;
     }
@@ -3707,6 +3720,8 @@ pub const Context = struct {
             }
         }
 
+        self.module_cache_value.header.lock();
+        defer self.module_cache_value.header.unlock();
         var iter = self.module_cache_value.map.iterator();
         while (iter.next()) |entry| {
             if (entry.value_ptr.* != .module) continue;

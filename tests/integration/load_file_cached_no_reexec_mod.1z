@@ -1,0 +1,7 @@
+\ Companion module for load_file_cached_no_reexec.1z. The top-level marker
+\ prints once per execution, so the golden pins that a second load-file of the
+\ same path does not re-execute this file.
+
+"CACHED-MOD-TOP-LEVEL" print-line
+
+cached-mod-word: ( -- s ) [ "cached-mod-value" ] ;

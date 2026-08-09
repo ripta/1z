@@ -1,0 +1,6 @@
+\ Companion module for task_load_cache_readers.1z. The marker prints once: the
+\ main task primes the cache, and every later load is a hit.
+
+"HIT-MOD-TOP-LEVEL" print-line
+
+hit-mod-word: ( -- s ) [ "hit" ] ;

@@ -1,0 +1,7 @@
+=== load-file returns the cached module without re-executing ===
+Stack: [ ]
+CACHED-MOD-TOP-LEVEL
+Stack: [ ]
+Stack: [ <module:./load_file_cached_no_reexec_mod.1z (1 words)> ]
+PASS: second load-file returns a working cached module
+Stack: [ ]

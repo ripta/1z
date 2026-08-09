@@ -1982,7 +1982,10 @@ export fn onez_use_module(ptr: ?*anyopaque, name: [*]const u8, name_len: usize) 
     };
 
     // Check cache first
-    const module = if (ctx.module_cache_value.map.get(resolved)) |cached| blk: {
+    ctx.module_cache_value.header.lock();
+    const cache_probe = ctx.module_cache_value.map.get(resolved);
+    ctx.module_cache_value.header.unlock();
+    const module = if (cache_probe) |cached| blk: {
         switch (cached) {
             .module => |m| break :blk m,
             else => {

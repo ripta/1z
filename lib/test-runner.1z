@@ -166,9 +166,9 @@ use "os/path" ;
     [ native.resolve-load-path ] [ drop f ] recover  \ module resolved-or-f
     dup
     [
-      module-cache get over @has?
+      module-cache get swap native.cached-module  \ module sibling-or-f
+      dup
       [
-        module-cache get swap @get  \ module sibling-module
         2dup (imports-module?)
         [ swap native.borrow-deps ]
         [ 2drop ]

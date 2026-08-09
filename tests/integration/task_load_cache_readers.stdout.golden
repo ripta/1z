@@ -1,0 +1,11 @@
+=== cache-hit readers from task contexts ===
+Stack: [ ]
+HIT-MOD-TOP-LEVEL
+Stack: [ ]
+Stack: [ ]
+=== cache inserts after task readers ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ <module:./task_load_cache_readers_hit_mod.1z (1 words)> ]
+PASS: the hit module still works after the reader storm
+Stack: [ ]
