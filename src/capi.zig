@@ -2334,6 +2334,23 @@ export fn onez_runtime_run(ptr: ?*anyopaque, entry_word_id: u32) i32 {
         status = func(&jit_ctx);
     }
 
+    // A propagated error (status 2) arrives here with its details uncaptured. Fold the pending
+    // frames into error_details so onez_print_error renders the message and chain instead of the
+    // bare fallback line.
+    //
+    // jit_pending_error stays set: it remains the fallback channel if capture appended nothing.
+    if (comptime !is_freestanding) {
+        if (status == 2) {
+            const err = ctx.jit_pending_error orelse error.UserThrown;
+            const word = ctx.lookupWord(entry.word_name);
+            const source = if (word) |w| (w.source_file orelse ctx.current_source) else ctx.current_source;
+            const line = if (word) |w| w.source_line else 0;
+            ctx.pushCallFrame(entry.displayName(), source, line, 0);
+            ctx.captureCallStackOnError(err);
+            ctx.popCallFrame();
+        }
+    }
+
     return if (status == 0) 0 else 1;
 }
 

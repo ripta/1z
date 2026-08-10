@@ -1,1 +1,1 @@
-error.user-thrown
+<aot>:0: error 'protocol-error' type 'fixnum' does not satisfy protocol 'addable' at word '__entry__'

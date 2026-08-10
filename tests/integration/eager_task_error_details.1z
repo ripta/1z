@@ -1,0 +1,18 @@
+use "testing" ;
+
+\ A compiled task body whose raise reaches the task root as a propagated
+\ status, without any capture along the way, must still surface the real error
+\ type through await. The boundary in executeQuotationWithFrame folds the
+\ pending frames into error_details there, so the task reports its actual
+\ error instead of the "task failed without error details" placeholder.
+
+test-task-error-details: ( -- ) [
+  [
+    [ [ 1 0 / ] spawn await ] task-scope
+    f "await should have thrown" assert-true
+  ] [
+    error-type: @get division-by-zero: "task error keeps its type" assert=
+  ] recover
+] ;
+
+test-task-error-details

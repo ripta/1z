@@ -8,8 +8,7 @@
 pick-num: ( b -- n ) [ [ 7 ] [ 2.5 ] if ] ;
 
 \ NaN is computed at runtime by dividing an opaque zero: a literal `0.0 0.0 /`
-\ is miscompiled by constant emission, per
-\ spec/bugs/20260809-aot-constant-float-division-emits-integer-division.md.
+\ is miscompiled by constant emission.
 pick-zero: ( b -- n ) [ [ 0.0 ] [ 7 ] if ] ;
 pick-nan:  ( b -- n ) [ [ 0.0 t pick-zero / ] [ 7 ] if ] ;
 pick-str:  ( b -- n ) [ [ "s" ] [ 2.5 ] if ] ;

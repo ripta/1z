@@ -1,1 +1,1 @@
-error.null-code-ptr
+<aot>:0: error 'null-code-ptr' at word '__entry__'

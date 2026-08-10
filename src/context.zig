@@ -6038,7 +6038,7 @@ pub const Context = struct {
 
     /// Capture the current call stack to error_details.
     /// Only captures if error_details is empty (first error).
-    fn captureCallStackOnError(self: *Context, err: anyerror) void {
+    pub fn captureCallStackOnError(self: *Context, err: anyerror) void {
         // Only capture on first error
         if (self.error_details.items.len > 0) return;
 
@@ -6412,6 +6412,18 @@ pub const Context = struct {
                     .error_propagate => {
                         const err = self.jit_pending_error orelse error.UserThrown;
                         self.jit_pending_error = null;
+
+                        // A quotation has no word name and the interpreter renders no frame
+                        // for one, so push a stand-in frame only when capture would otherwise
+                        // see zero frames and silently drop the pending message.
+                        const bare = self.jit_pending_trace_frames.items.len == 0 and
+                            self.call_stack.items.len == 0;
+                        if (bare) {
+                            const line = if (quotation.instructions.len > 0) quotation.instructions[0].line else 0;
+                            self.pushCallFrame("quotation", self.current_source, line, 0);
+                        }
+                        self.captureCallStackOnError(err);
+                        if (bare) self.popCallFrame();
                         return err;
                     },
                     .bail => {
@@ -6637,6 +6649,18 @@ pub const Context = struct {
                     .error_propagate => {
                         const err = self.jit_pending_error orelse error.UserThrown;
                         self.jit_pending_error = null;
+
+                        if (self.benchmark) |b| b.endWordProfile(self.allocator, name);
+                        if (self.profile) |p| p.recordWordEnd(self.allocator, name);
+
+                        // The interpreter elides tail-call frames, so pushing this word's frame
+                        // when interpreted callers exist can add a row the interpreted run never
+                        // shows. Push only when the boundary is the outermost consumer, where the
+                        // frame names the entry point and guarantees the pending message lands.
+                        const outermost = self.call_stack.items.len == 0;
+                        if (outermost) self.pushCallFrame(name, self.current_source, instr.line, instr.column);
+                        self.captureCallStackOnError(err);
+                        if (outermost) self.popCallFrame();
                         return err;
                     },
                     .bail => {

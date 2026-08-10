@@ -1,2 +1,2 @@
 Fatal: word 'pragma-get?' requires interpreter fallback; rebuild with --interpreter-fallback=true
-error.interpreter-fallback-disabled
+<aot>:0: error 'interpreter-fallback-disabled' at word '__entry__'

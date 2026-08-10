@@ -1,1 +1,1 @@
-error.type-mismatch
+<aot>:0: error 'type-mismatch' at word '__entry__'
