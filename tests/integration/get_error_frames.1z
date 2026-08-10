@@ -1,0 +1,7 @@
+\ A raise from `get` inside a compiled body must render the `get` frame innermost, with the
+\ caller chain intact.
+\
+\ The eager suite reuses this golden, so passing both modes is the parity check.
+lookup-config: ( -- v ) [ config-key: get ] ;
+fetch-config: ( -- s ) [ lookup-config inspect ] ;
+fetch-config drop

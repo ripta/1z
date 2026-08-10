@@ -7486,7 +7486,7 @@ fn emitGenericResolvedNativeCall(ec: EmitCtx, resolved: ResolvedWord) IrCodegenE
         // `effective_in == 1` and cover strictly-unary generics like `inspect`. Each includes the
         // slow-path fallback internally, so when any one succeeds no separate call is needed.
         if (mono) |m| {
-            emitMonomorphizedDispatch(state, ctx_val, resolved, m);
+            emitMonomorphizedDispatch(state, ctx_val, name, resolved, m, line);
         } else if (!emitInlinePicCheck(state, idx, ctx_val, name, resolved, effective_in, line) and
             !emitInlineDispatchTableCheck(state, ctx_val, name, resolved, effective_in, line) and
             !emitInlinePicCheckUnary(state, idx, ctx_val, name, resolved, effective_in, line) and
@@ -7521,8 +7521,8 @@ fn emitGenericResolvedNativeCall(ec: EmitCtx, resolved: ResolvedWord) IrCodegenE
         _ = emitCallbackPreamble(state, sp.*);
 
         switch (resolved.bounded_constraint.?) {
-            .protocol => |pd| emitAotSatisfiesAndDispatch(state, resolved.dispatch_id, pd, resolved.bounded_arity, line),
-            .combinator => |cc| emitAotSatisfiesAndDispatchCombinator(state, resolved.dispatch_id, cc, resolved.bounded_arity, line),
+            .protocol => |pd| emitAotSatisfiesAndDispatch(state, resolved.dispatch_id, pd, resolved.bounded_arity, resolved.bounded_trace_name orelse name, line),
+            .combinator => |cc| emitAotSatisfiesAndDispatchCombinator(state, resolved.dispatch_id, cc, resolved.bounded_arity, resolved.bounded_trace_name orelse name, line),
         }
 
         if (exitFallsThrough(state.exit_kind)) {
@@ -8105,7 +8105,7 @@ fn emitIntrinsicGet(ec: EmitCtx) IrCodegenError!ControlFlow {
     const ctx_val = emitCallbackPreamble(state, sp.*);
 
     const call_result = c._ir_CALL_1(ctx, c.IR_I32, state.get_fn, ctx_val);
-    emitCallbackPostCheck(state, call_result, call_result, null, .none);
+    emitCallbackPostCheck(state, call_result, call_result, null, .{ .named = .{ .name = ec.name, .line = ec.line } });
 
     // get: pops 1 param, pushes 1 value (net 0)
     settleRowAwareStack(state, stack, sp, 1, 1);
@@ -8125,7 +8125,7 @@ fn emitIntrinsicWithParameter(ec: EmitCtx) IrCodegenError!ControlFlow {
     const ctx_val = emitCallbackPreamble(state, sp.*);
 
     const call_result = c._ir_CALL_1(ctx, c.IR_I32, state.with_parameter_fn, ctx_val);
-    emitCallbackPostCheck(state, call_result, call_result, null, .none);
+    emitCallbackPostCheck(state, call_result, call_result, null, .{ .named = .{ .name = ec.name, .line = ec.line } });
 
     // NOTE(ripta): with-parameter: The body quotation's row-variable output
     //              makes the stack opaque after the call. Collapse to a fresh
@@ -8202,7 +8202,7 @@ fn emitIteratorOp(ec: EmitCtx, opcode: IteratorOpcode) IrCodegenError!ControlFlo
 
     const opcode_const = c.ir_const_addr(ctx, @intFromEnum(opcode));
     const call_result = c._ir_CALL_2(ctx, c.IR_I32, state.iterator_fn, ctx_val, opcode_const);
-    emitCallbackPostCheck(state, call_result, call_result, null, .none);
+    emitCallbackPostCheck(state, call_result, call_result, null, .{ .named = .{ .name = ec.name, .line = ec.line } });
 
     settleRowAwareStack(state, stack, sp, effects.inputs, effects.outputs);
     return .next;
@@ -12723,7 +12723,7 @@ fn emitInlinePicEntries(
                     c._ir_CALL_3(ictx, c.IR_I32, state.pic_dispatch_unary_fn, ctx_val, word_id_const, tag_a_int)
                 else
                     c._ir_CALL_4(ictx, c.IR_I32, state.pic_dispatch_fn, ctx_val, word_id_const, tag_a_int, c.ir_const_addr(ictx, @intFromEnum(entry.tag_b)));
-                emitCallbackPostCheck(state, call_result, state.error_propagate_status, null, .none);
+                emitCallbackPostCheck(state, call_result, state.error_propagate_status, null, .{ .named = .{ .name = name, .line = line } });
             } else {
                 const fn_ptr_const = c.ir_const_addr(ictx, entry.native_fn_ptr);
                 const name_ptr_const = c.ir_const_addr(ictx, @intFromPtr(name.ptr));
@@ -13077,8 +13077,10 @@ fn monomorphizedDispatchTags(
 fn emitMonomorphizedDispatch(
     state: *CompileState,
     ctx_val: c.ir_ref,
+    name: []const u8,
     resolved: ResolvedWord,
     mono: MonomorphizedDispatch,
+    line: usize,
 ) void {
     const ictx = state.ctx;
     const word_id_const = c.ir_const_addr(ictx, resolved.word_id);
@@ -13095,7 +13097,7 @@ fn emitMonomorphizedDispatch(
     emitErrorReturn(state, state.null_code_ptr_error_fn);
     c._ir_IF_FALSE(ictx, if_miss);
 
-    emitCallbackPostCheck(state, call_result, state.error_propagate_status, null, .none);
+    emitCallbackPostCheck(state, call_result, state.error_propagate_status, null, .{ .named = .{ .name = name, .line = line } });
 
     if (state.pic_stats) |ps| ps.monomorphized += 1;
 }
@@ -13226,7 +13228,7 @@ fn emitSatisfiesAndDispatch(
         c.ir_const_addr(state.ctx, line),
     };
     const call_result = c._ir_CALL_N(state.ctx, c.IR_I32, state.satisfies_dispatch_fn, args.len, &args);
-    emitCallbackPostCheck(state, call_result, state.error_propagate_status, null, .none);
+    emitCallbackPostCheck(state, call_result, state.error_propagate_status, null, .{ .named = .{ .name = trace_name, .line = line } });
 }
 
 /// Emit the plain-generic dispatch helper at an AOT call site: try the
@@ -13260,6 +13262,7 @@ fn emitAotSatisfiesAndDispatch(
     dispatch_id: u32,
     protocol: *const value_mod.ProtocolDescriptor,
     arity: dispatch_helpers.ProtocolArity,
+    trace_name: []const u8,
     line: usize,
 ) void {
     if (state.aot_satisfies_dispatch_fn == c.IR_UNUSED) return;
@@ -13274,7 +13277,7 @@ fn emitAotSatisfiesAndDispatch(
         c.ir_const_addr(state.ctx, line),
     };
     const call_result = c._ir_CALL_N(state.ctx, c.IR_I32, state.aot_satisfies_dispatch_fn, args.len, &args);
-    emitCallbackPostCheck(state, call_result, state.error_propagate_status, null, .none);
+    emitCallbackPostCheck(state, call_result, state.error_propagate_status, null, .{ .named = .{ .name = trace_name, .line = line } });
 }
 
 /// Combinator-bounded counterpart of emitSatisfiesAndDispatch. Same JIT-only
@@ -13308,7 +13311,7 @@ fn emitSatisfiesAndDispatchCombinator(
         c.ir_const_addr(state.ctx, line),
     };
     const call_result = c._ir_CALL_N(state.ctx, c.IR_I32, state.satisfies_dispatch_combinator_fn, args.len, &args);
-    emitCallbackPostCheck(state, call_result, state.error_propagate_status, null, .none);
+    emitCallbackPostCheck(state, call_result, state.error_propagate_status, null, .{ .named = .{ .name = trace_name, .line = line } });
 }
 
 /// Combinator-bounded counterpart of emitAotSatisfiesAndDispatch. Looks up the
@@ -13319,6 +13322,7 @@ fn emitAotSatisfiesAndDispatchCombinator(
     dispatch_id: u32,
     combinator: *const value_mod.ConstraintCombinator,
     arity: dispatch_helpers.ProtocolArity,
+    trace_name: []const u8,
     line: usize,
 ) void {
     if (state.aot_satisfies_dispatch_combinator_fn == c.IR_UNUSED) return;
@@ -13333,7 +13337,7 @@ fn emitAotSatisfiesAndDispatchCombinator(
         c.ir_const_addr(state.ctx, line),
     };
     const call_result = c._ir_CALL_N(state.ctx, c.IR_I32, state.aot_satisfies_dispatch_combinator_fn, args.len, &args);
-    emitCallbackPostCheck(state, call_result, state.error_propagate_status, null, .none);
+    emitCallbackPostCheck(state, call_result, state.error_propagate_status, null, .{ .named = .{ .name = trace_name, .line = line } });
 }
 
 // =============================================================================

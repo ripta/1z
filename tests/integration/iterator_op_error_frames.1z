@@ -1,0 +1,7 @@
+\ An error raised by an iterator op inside a compiled body must render the op's own frame
+\ innermost, with the caller chain intact.
+\
+\ The eager suite reuses this golden, so passing both modes is the parity check.
+transform: ( n -- len ) [ [ 2 * ] #map #collect #len ] ;
+work: ( n -- len ) [ transform 1 + ] ;
+5 work .

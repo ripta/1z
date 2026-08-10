@@ -1,0 +1,4 @@
+tests/integration/with_parameter_error_frames.1z:5: error 'type-mismatch' expected parameter, got symbol config-key: at word 'with-parameter'
+  stack effect: ( value param quot --  )
+  called from tests/integration/with_parameter_error_frames.1z:6: bind-and-run
+  called from tests/integration/with_parameter_error_frames.1z:7: apply-config

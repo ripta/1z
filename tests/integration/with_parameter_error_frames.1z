@@ -1,0 +1,7 @@
+\ A raise from `with-parameter` inside a compiled body must render the `with-parameter` frame
+\ innermost, with the caller chain intact.
+\
+\ The eager suite reuses this golden, so passing both modes is the parity check.
+bind-and-run: ( -- n ) [ 42 config-key: [ 1 ] with-parameter ] ;
+apply-config: ( -- s ) [ bind-and-run inspect ] ;
+apply-config drop

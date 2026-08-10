@@ -1,0 +1,4 @@
+tests/integration/iterator_op_error_frames.1z:5: error 'type-mismatch' expected sequence, got fixnum at word '#map'
+  stack effect: ( seq quot: ( elem -- elem' ) -- seq' )
+  called from tests/integration/iterator_op_error_frames.1z:6: transform
+  called from tests/integration/iterator_op_error_frames.1z:7: work

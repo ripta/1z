@@ -1,0 +1,10 @@
+\ A synthetic frame queued while a compiled body unwinds a recovered error must not resurface
+\ as the innermost frame of the next, unrelated error.
+\
+\ The eager suite reuses this golden, so passing both modes is the parity check. The recovered
+\ error's `#each` unwind queues a frame after capture already ran; the `+` raise below must
+\ render its own frame, not the leftover.
+mid: ( -- ) [ 1 0 / drop ] ;
+outer: ( -- ) [ { 1 } [ drop mid ] #each ] ;
+[ outer ] [ drop ] recover
+"z" 1 +

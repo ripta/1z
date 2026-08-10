@@ -1879,6 +1879,7 @@ pub const Context = struct {
     pub fn clearExecutionDetails(self: *Context) void {
         self.error_details.clearRetainingCapacity();
         self.call_stack.clearRetainingCapacity();
+        self.clearPendingSyntheticErrorFrames();
         self.pending_error_message = null;
         self.pending_error_hint = null;
         self.pending_dispatch_actual_types = null;
@@ -6039,8 +6040,12 @@ pub const Context = struct {
     /// Capture the current call stack to error_details.
     /// Only captures if error_details is empty (first error).
     pub fn captureCallStackOnError(self: *Context, err: anyerror) void {
-        // Only capture on first error
-        if (self.error_details.items.len > 0) return;
+        // Only capture on first error. Frames queued after that capture still describe the
+        // current error's unwind; drop them so they cannot surface as another error's frames.
+        if (self.error_details.items.len > 0) {
+            self.clearPendingSyntheticErrorFrames();
+            return;
+        }
 
         // For user-thrown errors, use the ErrorObject's type and message
         // instead of the generic "user-thrown" Zig error name.

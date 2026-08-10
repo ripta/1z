@@ -1,0 +1,4 @@
+tests/integration/get_error_frames.1z:5: error 'type-mismatch' expected parameter, got symbol config-key: at word 'get'
+  stack effect: ( param -- value )
+  called from tests/integration/get_error_frames.1z:6: lookup-config
+  called from tests/integration/get_error_frames.1z:7: fetch-config
