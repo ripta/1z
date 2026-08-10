@@ -1,0 +1,4 @@
+<aot>:7: error 'type-mismatch' expected string or byte-array, got fixnum 42 at word 'stream-write'
+  stack effect: ( stream bytes -- n )
+  called from <aot>:8: inner
+  called from <aot>:10: outer

@@ -1,0 +1,4 @@
+tests/integration/error_frames_top_tail.1z:6: error 'type-mismatch' expected number, got string "x" at word '+'
+  stack effect: ( a b -- a+b )
+  hint: operands must be numbers (fixnum, float, bignum, or ratio)
+  called from tests/integration/error_frames_top_tail.1z:7: inner

@@ -91,11 +91,17 @@ pub const ExecutionError = error{
 };
 
 /// CallFrame represents a single frame in the call stack.
+///
+/// `definition_located` marks a frame positioned at the word's definition rather than a call
+/// site. A compiled entry trap pushes one because it cannot know whether its call site also
+/// queued a frame; when one did, the capture fold drops the definition-located twin so the word
+/// renders once, at the call site, matching the interpreter.
 pub const CallFrame = struct {
     word_name: []const u8,
     source: []const u8,
     line: usize,
     column: usize = 0,
+    definition_located: bool = false,
 };
 
 /// ParameterFrame holds parameter bindings for dynamic scoping.
@@ -1895,12 +1901,19 @@ pub const Context = struct {
     /// model. If broader compiled trace fidelity becomes important later, build
     /// a runtime frame stack for inlined combinators instead of extending this.
     pub fn appendPendingSyntheticErrorFrame(self: *Context, word_name: []const u8, source: []const u8, line: usize) void {
-        self.jit_pending_trace_frames.append(self.allocator, .{
+        self.appendPendingErrorFrame(.{
             .word_name = word_name,
             .source = source,
             .line = line,
             .column = 0,
-        }) catch {};
+        });
+    }
+
+    /// Queue an already-built frame, preserving every field. `wordErrorDeferCapture` uses this
+    /// to carry a shim-pushed frame, including its definition-located mark, into the pending
+    /// list.
+    pub fn appendPendingErrorFrame(self: *Context, frame: CallFrame) void {
+        self.jit_pending_trace_frames.append(self.allocator, frame) catch {};
     }
 
     pub fn clearPendingSyntheticErrorFrames(self: *Context) void {
@@ -5265,6 +5278,17 @@ pub const Context = struct {
         }) catch {};
     }
 
+    /// Push a frame located at the word's definition rather than a call site, marked so the
+    /// capture fold can drop it beside a same-word call-site row.
+    pub fn pushDefinitionLocatedCallFrame(self: *Context, word_name: []const u8, source: []const u8, line: usize) void {
+        self.call_stack.append(self.allocator, .{
+            .word_name = word_name,
+            .source = source,
+            .line = line,
+            .definition_located = true,
+        }) catch {};
+    }
+
     /// Pop a call frame from the call stack.
     pub fn popCallFrame(self: *Context) void {
         if (self.call_stack.items.len > 0) {
@@ -6088,6 +6112,15 @@ pub const Context = struct {
         var pending_i: usize = 0;
         while (pending_i < self.jit_pending_trace_frames.items.len) : (pending_i += 1) {
             const frame = self.jit_pending_trace_frames.items[pending_i];
+
+            // A definition-located frame whose call site queued its own frame for the same word
+            // would render that word twice. Drop it and let the call-site row take the message.
+            if (frame.definition_located and pending_i + 1 < self.jit_pending_trace_frames.items.len and
+                std.mem.eql(u8, self.jit_pending_trace_frames.items[pending_i + 1].word_name, frame.word_name))
+            {
+                continue;
+            }
+
             const message = if (is_innermost and thrown_msg != null)
                 thrown_msg.?
             else if (is_innermost and pending_msg != null)
@@ -6493,7 +6526,7 @@ pub const Context = struct {
         if (self.profile) |p| p.recordWordEnd(self.allocator, name);
         if (self.call_stack.items.len > 0) {
             const frame = self.call_stack.items[self.call_stack.items.len - 1];
-            self.appendPendingSyntheticErrorFrame(frame.word_name, frame.source, frame.line);
+            self.appendPendingErrorFrame(frame);
             self.popCallFrame();
         }
         return err;
@@ -6678,7 +6711,10 @@ pub const Context = struct {
                         // when interpreted callers exist can add a row the interpreted run never
                         // shows. Push only when the boundary is the outermost consumer, where the
                         // frame names the entry point and guarantees the pending message lands.
-                        const outermost = self.call_stack.items.len == 0;
+                        // A tail call at that boundary skips the push too, unless the pending
+                        // list is empty and the frame is the message's only carrier.
+                        const outermost = self.call_stack.items.len == 0 and
+                            (!is_last or self.jit_pending_trace_frames.items.len == 0);
                         if (outermost) self.pushCallFrame(name, self.current_source, instr.line, instr.column);
                         self.captureCallStackOnError(err);
                         if (outermost) self.popCallFrame();
@@ -7602,6 +7638,48 @@ test "wordErrorDeferCapture converts the pushed frame and the boundary capture f
     try std.testing.expectEqualStrings("boom went wrong", ctx.error_details.items[0].message);
     try std.testing.expectEqual(@as(usize, 0), ctx.jit_pending_trace_frames.items.len);
     try std.testing.expectEqual(@as(?[]const u8, null), ctx.pending_error_message);
+}
+
+test "capture drops a definition-located frame when the call site queued the same word" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    ctx.appendPendingErrorFrame(.{
+        .word_name = "take",
+        .source = "<test>",
+        .line = 0,
+        .definition_located = true,
+    });
+    ctx.appendPendingSyntheticErrorFrame("take", "<test>", 15);
+    ctx.pending_error_message = "expected fixnum, got bignum";
+
+    ctx.captureCallStackOnError(error.TypeMismatch);
+
+    try std.testing.expectEqual(@as(usize, 1), ctx.error_details.items.len);
+    try std.testing.expectEqualStrings("take", ctx.error_details.items[0].word_name.?);
+    try std.testing.expectEqual(@as(usize, 15), ctx.error_details.items[0].line);
+    try std.testing.expectEqualStrings("expected fixnum, got bignum", ctx.error_details.items[0].message);
+}
+
+test "capture keeps a definition-located frame with no same-word call-site row" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    ctx.appendPendingErrorFrame(.{
+        .word_name = "take",
+        .source = "<test>",
+        .line = 0,
+        .definition_located = true,
+    });
+    ctx.appendPendingSyntheticErrorFrame("caller", "<test>", 9);
+    ctx.pending_error_message = "expected fixnum, got bignum";
+
+    ctx.captureCallStackOnError(error.TypeMismatch);
+
+    try std.testing.expectEqual(@as(usize, 2), ctx.error_details.items.len);
+    try std.testing.expectEqualStrings("take", ctx.error_details.items[0].word_name.?);
+    try std.testing.expectEqualStrings("expected fixnum, got bignum", ctx.error_details.items[0].message);
+    try std.testing.expectEqualStrings("caller", ctx.error_details.items[1].word_name.?);
 }
 
 test "stack effect validation passes for correct effect" {

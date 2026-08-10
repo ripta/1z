@@ -1,3 +1,2 @@
 <aot>:12: error 'type-mismatch' expected fixnum or float, got string "x" at word '<'
   stack effect: ( a b -- ? )
-  called from <aot>:0: __entry__

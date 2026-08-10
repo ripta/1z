@@ -1,0 +1,5 @@
+tests/integration/error_frames_chain_generic.1z:7: error 'type-mismatch' expected number, got string "x" at word '+'
+  stack effect: ( a b -- a+b )
+  hint: operands must be numbers (fixnum, float, bignum, or ratio)
+  called from tests/integration/error_frames_chain_generic.1z:8: inner
+  called from tests/integration/error_frames_chain_generic.1z:10: outer

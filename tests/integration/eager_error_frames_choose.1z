@@ -1,0 +1,8 @@
+\ A raise inside a `choose` predicate, pinned eager. The compiled `choose` intrinsic inlines
+\ the predicate invocation, so the chain carries the `choose` row at the call site but not the
+\ prelude-internal `call` row an interpreted run shows. The interpreted twin is
+\ error_frames_choose.1z; the AOT twin aot_error_frames_choose.1z renders frame for frame.
+
+pick-bigger: ( a b -- x ) [ [ + 0 > ] choose 0 + ] ;
+
+1 "x" pick-bigger .

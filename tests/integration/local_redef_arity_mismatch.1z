@@ -1,0 +1,12 @@
+\ A quotation-local redefinition whose declared effect mismatches the shadowed word's arity
+\ raises arity-mismatch with the framed rendering. The eager suite reuses this golden, so
+\ passing both modes is the parity check.
+
+val: ( -- s ) [ "A" ] ;
+
+make-stored: ( -- s ) [
+  val: ( x y -- s ) [ 2drop "B" ] ;
+  val
+] ;
+
+make-stored drop

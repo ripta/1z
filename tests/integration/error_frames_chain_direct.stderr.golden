@@ -1,0 +1,4 @@
+tests/integration/error_frames_chain_direct.1z:7: error 'type-mismatch' expected string or byte-array, got fixnum 42 at word 'stream-write'
+  stack effect: ( stream bytes -- n )
+  called from tests/integration/error_frames_chain_direct.1z:8: inner
+  called from tests/integration/error_frames_chain_direct.1z:10: outer

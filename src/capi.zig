@@ -2338,16 +2338,23 @@ export fn onez_runtime_run(ptr: ?*anyopaque, entry_word_id: u32) i32 {
     // frames into error_details so onez_print_error renders the message and chain instead of the
     // bare fallback line.
     //
+    // The entry frame is a last resort: with zero frames anywhere, capture would consume the
+    // pending message and append nothing. When any real frame exists the push is skipped, since
+    // the interpreter renders no frame for top-level code.
+    //
     // jit_pending_error stays set: it remains the fallback channel if capture appended nothing.
     if (comptime !is_freestanding) {
         if (status == 2) {
             const err = ctx.jit_pending_error orelse error.UserThrown;
-            const word = ctx.lookupWord(entry.word_name);
-            const source = if (word) |w| (w.source_file orelse ctx.current_source) else ctx.current_source;
-            const line = if (word) |w| w.source_line else 0;
-            ctx.pushCallFrame(entry.displayName(), source, line, 0);
+            const frameless = ctx.call_stack.items.len == 0 and ctx.jit_pending_trace_frames.items.len == 0;
+            if (frameless) {
+                const word = ctx.lookupWord(entry.word_name);
+                const source = if (word) |w| (w.source_file orelse ctx.current_source) else ctx.current_source;
+                const line = if (word) |w| w.source_line else 0;
+                ctx.pushCallFrame(entry.displayName(), source, line, 0);
+            }
             ctx.captureCallStackOnError(err);
-            ctx.popCallFrame();
+            if (frameless) ctx.popCallFrame();
         }
     }
 

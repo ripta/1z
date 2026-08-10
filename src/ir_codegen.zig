@@ -2651,6 +2651,7 @@ const BuiltinTraceFrameKind = enum(usize) {
     call = 1,
     recover = 2,
     cleanup = 3,
+    choose_op = 4,
 };
 
 const InlineTraceFrame = struct {
@@ -4332,8 +4333,8 @@ fn emitResolvedNativeCallback(
 /// stack ops.
 ///
 /// Returns true when compilation should `continue`; false when it diverged and the caller should `break`.
-fn emitDynamicRowFallback(state: *CompileState, stack: []StackEntry, sp: *usize, name: []const u8, resolved: ResolvedWord, line: usize) IrCodegenError!bool {
-    return emitDynamicRowFallbackPreserving(state, stack, sp, name, resolved, line, 0);
+fn emitDynamicRowFallback(state: *CompileState, stack: []StackEntry, sp: *usize, name: []const u8, resolved: ResolvedWord, line: usize, is_tail: bool) IrCodegenError!bool {
+    return emitDynamicRowFallbackPreserving(state, stack, sp, name, resolved, line, 0, is_tail);
 }
 
 /// Emit a call that reaches below the abstract frame but has a CONCRETE net
@@ -4346,7 +4347,7 @@ fn emitDynamicRowFallback(state: *CompileState, stack: []StackEntry, sp: *usize,
 /// the reach-through-accumulator shape (`(push-non-kebab!)` inside a `#each`
 /// body): folding the invariant accumulator into a row is what mis-addressed a
 /// later store to a fixed outer slot.
-fn emitReachBelowConcrete(state: *CompileState, stack: []StackEntry, sp: *usize, name: []const u8, resolved: ResolvedWord, line: usize, effective_out: usize) IrCodegenError!bool {
+fn emitReachBelowConcrete(state: *CompileState, stack: []StackEntry, sp: *usize, name: []const u8, resolved: ResolvedWord, line: usize, effective_out: usize, is_tail: bool) IrCodegenError!bool {
     try materializeQuotations(state, stack, sp.*, false);
     flushToPhysicalStack(state, stack, sp.*);
 
@@ -4356,7 +4357,7 @@ fn emitReachBelowConcrete(state: *CompileState, stack: []StackEntry, sp: *usize,
     } else if (resolved.is_generic) {
         emitAotGenericDispatch(state, resolved.dispatch_id, resolved.word_id, name, line);
     } else {
-        emitAotWordCall(state, ctx_val, name, resolved, line);
+        emitAotWordCall(state, ctx_val, name, resolved, line, is_tail);
     }
 
     if (exitFallsThrough(state.exit_kind)) {
@@ -4398,7 +4399,7 @@ fn emitReachBelowConcrete(state: *CompileState, stack: []StackEntry, sp: *usize,
 /// base_idx is set to `new_sp - 1 - preserve` so abstract slot 0 (i.e., the row) maps just below the
 /// preserved suffix and abstract slots `1..=preserve` map to the top `preserve` physical slots.
 /// `preserve == 0` is the plain collapse to `sp == 1`.
-fn emitDynamicRowFallbackPreserving(state: *CompileState, stack: []StackEntry, sp: *usize, name: []const u8, resolved: ResolvedWord, line: usize, preserve: usize) IrCodegenError!bool {
+fn emitDynamicRowFallbackPreserving(state: *CompileState, stack: []StackEntry, sp: *usize, name: []const u8, resolved: ResolvedWord, line: usize, preserve: usize, is_tail: bool) IrCodegenError!bool {
     try materializeQuotations(state, stack, sp.*, false);
     flushToPhysicalStack(state, stack, sp.*);
 
@@ -4408,7 +4409,7 @@ fn emitDynamicRowFallbackPreserving(state: *CompileState, stack: []StackEntry, s
     } else if (resolved.is_generic) {
         emitAotGenericDispatch(state, resolved.dispatch_id, resolved.word_id, name, line);
     } else {
-        emitAotWordCall(state, ctx_val, name, resolved, line);
+        emitAotWordCall(state, ctx_val, name, resolved, line, is_tail);
     }
 
     if (exitFallsThrough(state.exit_kind)) {
@@ -4481,7 +4482,8 @@ fn emitInlineRowUnderflow(
         state.not_compilable_reason = .unresolvable_word;
         return IrCodegenError.NotCompilable;
     };
-    return emitDynamicRowFallback(state, stack, sp, name, resolved, line);
+    // Callers are shuffle natives, so the compound arm that consults is_tail is never taken.
+    return emitDynamicRowFallback(state, stack, sp, name, resolved, line, false);
 }
 
 /// Emit a runtime truthiness check for a Value at a physical stack slot.
@@ -6188,6 +6190,11 @@ fn emitIntrinsicChoose(ec: EmitCtx) IrCodegenError!ControlFlow {
     const entry_a2 = stack[output_slot + 1];
     const entry_quot = stack[output_slot + 2];
 
+    // A raise inside the predicate names `choose` as a mid-chain row, matching the frame the
+    // interpreter pushes for the prelude compound. A tail-position `choose` skips the row,
+    // matching the interpreter's tail elision.
+    const choose_tail = ec.idx == ec.instructions.len - 1;
+
     switch (entry_quot) {
         .quotation_body => |q| {
             // Flush a1/a2 to physical slots so they survive
@@ -6209,8 +6216,18 @@ fn emitIntrinsicChoose(ec: EmitCtx) IrCodegenError!ControlFlow {
             sp.* = output_slot + 4;
             if (sp.* > state.peak_sp) state.peak_sp = @intCast(sp.*);
 
-            // Compile the quotation body: consumes 2, pushes 1.
+            // Compile the quotation body: consumes 2, pushes 1. The inline trace frame carries
+            // the `choose` row for any post-check inside the inlined predicate.
+            const saved_inline_trace_frame_count = state.inline_trace_frame_count;
+            if (traceFramesEnabled(state) and !choose_tail and state.inline_trace_frame_count < max_inline_trace_frames) {
+                state.inline_trace_frames[state.inline_trace_frame_count] = .{
+                    .kind = .choose_op,
+                    .line = ec.line,
+                };
+                state.inline_trace_frame_count += 1;
+            }
             try compileInstructions(state, q.body, stack, sp);
+            if (traceFramesEnabled(state)) state.inline_trace_frame_count = saved_inline_trace_frame_count;
             if (sp.* != output_slot + 3) return IrCodegenError.StackShapeMismatch;
 
             // Pop the result and compute truthiness.
@@ -6237,6 +6254,12 @@ fn emitIntrinsicChoose(ec: EmitCtx) IrCodegenError!ControlFlow {
             stack[output_slot] = .{ .raw_at_slot = output_slot };
         },
         .raw_at_slot => |quot_slot| {
+            // The post-check frame carries the `choose` row at both invoke arms.
+            const choose_frame: CurrentTraceFrame = if (choose_tail)
+                .none
+            else
+                .{ .builtin = .{ .kind = .choose_op, .line = ec.line } };
+
             // Dynamic quotation: load code_ptr before rearranging.
             const quot_addr = liveSlotAddr(state, quot_slot);
 
@@ -6297,7 +6320,7 @@ fn emitIntrinsicChoose(ec: EmitCtx) IrCodegenError!ControlFlow {
                     c.ir_const_addr(ctx, @intFromPtr(&jitCallQuotation));
                 state.noteAotFallbackEmission(.quotation, "<quotation>", 0, ec.line);
                 const fb_result = c._ir_CALL_1(ctx, c.IR_I32, call_quot_fn, ctx_val);
-                emitCallbackPostCheck(state, fb_result, state.error_propagate_status, null, .none);
+                emitCallbackPostCheck(state, fb_result, state.error_propagate_status, null, choose_frame);
             }
             const end_fallback = c._ir_END(ctx);
 
@@ -6313,7 +6336,7 @@ fn emitIntrinsicChoose(ec: EmitCtx) IrCodegenError!ControlFlow {
                     c._ir_CALL_2(ctx, c.IR_I32, state.call_code_ptr_fn, state.jit_ctx_ptr, code_ptr_val)
                 else
                     c._ir_CALL_1(ctx, c.IR_I32, code_ptr_val, state.jit_ctx_ptr);
-                emitCallbackPostCheck(state, call_result, call_result, null, .none);
+                emitCallbackPostCheck(state, call_result, call_result, null, choose_frame);
             }
             const end_compiled = c._ir_END(ctx);
 
@@ -7400,6 +7423,7 @@ fn emitGenericResolvedNativeCall(ec: EmitCtx, resolved: ResolvedWord) IrCodegenE
     const name = ec.name;
     const idx = ec.idx;
     const line = ec.line;
+    const is_tail = idx == ec.instructions.len - 1;
 
     // Specialize input/output counts for row-variable effects
     // using literal quotation bodies visible on the abstract stack.
@@ -7443,7 +7467,7 @@ fn emitGenericResolvedNativeCall(ec: EmitCtx, resolved: ResolvedWord) IrCodegenE
             // real entries instead of reaching into a collapsed
             // region.
             const preserve = trailingConcreteOutputs(callee_eff);
-            if (try emitDynamicRowFallbackPreserving(state, stack, sp, name, resolved, line, preserve)) {
+            if (try emitDynamicRowFallbackPreserving(state, stack, sp, name, resolved, line, preserve, is_tail)) {
                 return .next;
             }
             return .stop;
@@ -7461,7 +7485,7 @@ fn emitGenericResolvedNativeCall(ec: EmitCtx, resolved: ResolvedWord) IrCodegenE
             // against the live stack and collapse to a row,
             // rather than rejecting as an abstract underflow.
             if (state.aot_mode) {
-                if (try emitDynamicRowFallback(state, stack, sp, name, resolved, line)) return .next;
+                if (try emitDynamicRowFallback(state, stack, sp, name, resolved, line, is_tail)) return .next;
                 return .stop;
             }
             return IrCodegenError.StackUnderflow;
@@ -7512,7 +7536,7 @@ fn emitGenericResolvedNativeCall(ec: EmitCtx, resolved: ResolvedWord) IrCodegenE
             // Reaches into the implicit caller row: route the
             // bounded generic through plain generic dispatch
             // against the live stack and collapse to a row.
-            if (try emitDynamicRowFallback(state, stack, sp, name, resolved, line)) return .next;
+            if (try emitDynamicRowFallback(state, stack, sp, name, resolved, line, is_tail)) return .next;
             return .stop;
         }
 
@@ -7543,10 +7567,10 @@ fn emitGenericResolvedNativeCall(ec: EmitCtx, resolved: ResolvedWord) IrCodegenE
             // reaching past an existing row, collapses to an opaque row (the
             // `(file-use-targets) nip` shape).
             if (!resolved.returns_row and !hasRowRegion(stack, sp.*)) {
-                if (try emitReachBelowConcrete(state, stack, sp, name, resolved, line, effective_out)) return .next;
+                if (try emitReachBelowConcrete(state, stack, sp, name, resolved, line, effective_out, is_tail)) return .next;
                 return .stop;
             }
-            if (try emitDynamicRowFallback(state, stack, sp, name, resolved, line)) return .next;
+            if (try emitDynamicRowFallback(state, stack, sp, name, resolved, line, is_tail)) return .next;
             return .stop;
         }
 
@@ -7563,7 +7587,7 @@ fn emitGenericResolvedNativeCall(ec: EmitCtx, resolved: ResolvedWord) IrCodegenE
         if (resolved.is_generic) {
             emitAotGenericDispatch(state, resolved.dispatch_id, resolved.word_id, name, line);
         } else {
-            emitAotWordCall(state, ctx_val, name, resolved, line);
+            emitAotWordCall(state, ctx_val, name, resolved, line, is_tail);
         }
 
         if (exitFallsThrough(state.exit_kind)) {
@@ -7643,11 +7667,14 @@ fn emitGenericResolvedNativeCall(ec: EmitCtx, resolved: ResolvedWord) IrCodegenE
         }
         const end_fallback = if (resolved.never_returns) c.IR_UNUSED else c._ir_END(ctx);
 
-        // Hot path: callee is compiled, call directly
+        // Hot path: callee is compiled, call directly. A tail call skips the `.named` post-check
+        // frame. The interpreter elides that frame, so a row here would never appear in an
+        // interpreted run.
         c._ir_IF_FALSE(ctx, if_null);
         {
             const call_result = c._ir_CALL_1(ctx, c.IR_I32, callee_code_ptr, state.jit_ctx_ptr);
-            emitCallbackPostCheck(state, call_result, call_result, if (resolved.never_returns) state.error_propagate_status else null, .{ .named = .{ .name = name, .line = line } });
+            const trace: CurrentTraceFrame = if (is_tail) .none else .{ .named = .{ .name = name, .line = line } };
+            emitCallbackPostCheck(state, call_result, call_result, if (resolved.never_returns) state.error_propagate_status else null, trace);
         }
         if (resolved.never_returns) {
             state.exit_kind = .terminal_return;
@@ -7722,7 +7749,7 @@ fn emitIndexedStackDispatch(ec: EmitCtx, op: IndexedStackOp) IrCodegenError!Cont
             }
 
             if (state.aot_mode) {
-                if (try emitDynamicRowFallback(state, stack, sp, name, resolved, ec.line)) return .next;
+                if (try emitDynamicRowFallback(state, stack, sp, name, resolved, ec.line, ec.idx == ec.instructions.len - 1)) return .next;
                 return .stop;
             }
 
@@ -7734,7 +7761,7 @@ fn emitIndexedStackDispatch(ec: EmitCtx, op: IndexedStackOp) IrCodegenError!Cont
         // which resets the abstract stack to mirror the physically-rearranged stack.
         return emitGenericResolvedNativeCall(ec, resolved);
     } else if (state.aot_mode) {
-        if (try emitDynamicRowFallback(state, stack, sp, name, resolved, ec.line)) return .next;
+        if (try emitDynamicRowFallback(state, stack, sp, name, resolved, ec.line, ec.idx == ec.instructions.len - 1)) return .next;
         return .stop;
     } else {
         state.not_compilable_reason = .indexed_access_into_row;
@@ -7793,7 +7820,7 @@ fn emitLiteralCountConsumingOp(ec: EmitCtx, produced: usize, escapes: bool) IrCo
 
     const depth = extractPrecedingLiteralDepth(ec.instructions, ec.idx) orelse {
         if (state.aot_mode) {
-            if (try emitDynamicRowFallback(state, stack, sp, name, resolved, ec.line)) return .next;
+            if (try emitDynamicRowFallback(state, stack, sp, name, resolved, ec.line, ec.idx == ec.instructions.len - 1)) return .next;
             return .stop;
         }
         state.not_compilable_reason = .indexed_access_into_row;
@@ -7810,7 +7837,7 @@ fn emitLiteralCountConsumingOp(ec: EmitCtx, produced: usize, escapes: bool) IrCo
         sp.* < consumed;
     if (reaches_row) {
         if (state.aot_mode) {
-            if (try emitDynamicRowFallback(state, stack, sp, name, resolved, ec.line)) return .next;
+            if (try emitDynamicRowFallback(state, stack, sp, name, resolved, ec.line, ec.idx == ec.instructions.len - 1)) return .next;
             return .stop;
         }
         state.not_compilable_reason = .indexed_access_into_row;
@@ -8595,7 +8622,7 @@ fn compileInstructions(
                             return IrCodegenError.NotCompilable;
                         };
 
-                        if (try emitDynamicRowFallback(state, stack, sp, name, resolved, instr.line)) continue;
+                        if (try emitDynamicRowFallback(state, stack, sp, name, resolved, instr.line, true)) continue;
                         break;
                     }
 
@@ -13161,7 +13188,11 @@ fn emitNativeWordCall(state: *CompileState, ctx_val: c.ir_ref, name: []const u8,
 /// compiled word set, emits a direct call by mangled name. Otherwise, falls
 /// through to `jitInterpretedCall` with the word ID (permissive AOT only;
 /// strict AOT fails the build at this site).
-fn emitAotWordCall(state: *CompileState, ctx_val: c.ir_ref, name: []const u8, resolved: ResolvedWord, line: usize) void {
+///
+/// A tail call skips the `.named` post-check frame. The interpreter pops a
+/// compound callee's frame before running its body when the call is the last
+/// instruction, so a frame here would add a row an interpreted run never shows.
+fn emitAotWordCall(state: *CompileState, ctx_val: c.ir_ref, name: []const u8, resolved: ResolvedWord, line: usize, is_tail: bool) void {
     const ictx = state.ctx;
     const target = state.calleeIdentity(name);
     if (state.aot_compiled_names) |names| {
@@ -13171,7 +13202,8 @@ fn emitAotWordCall(state: *CompileState, ctx_val: c.ir_ref, name: []const u8, re
             defer std.heap.page_allocator.free(mangled);
             const callee_fn = c.ir_const_func(ictx, c.ir_str(ictx, mangled.ptr), state.aot_proto_1arg);
             const call_result = c._ir_CALL_1(ictx, c.IR_I32, callee_fn, state.jit_ctx_ptr);
-            emitCallbackPostCheck(state, call_result, call_result, if (resolved.never_returns) state.error_propagate_status else null, .{ .named = .{ .name = name, .line = line } });
+            const trace: CurrentTraceFrame = if (is_tail) .none else .{ .named = .{ .name = name, .line = line } };
+            emitCallbackPostCheck(state, call_result, call_result, if (resolved.never_returns) state.error_propagate_status else null, trace);
             return;
         }
     }
@@ -14393,6 +14425,7 @@ export fn jitAppendBuiltinTraceFrame(
         .call => "call",
         .recover => "recover",
         .cleanup => "cleanup",
+        .choose_op => "choose",
     };
     const source = ctx.jit_trace_source orelse ctx.current_source;
     ctx.appendPendingSyntheticErrorFrame(word_name, source, @intCast(line_raw));
@@ -14442,11 +14475,12 @@ export fn jitParamTypeMismatchError(
     const word_name = name_ptr[0..name_len_raw];
 
     // A word the runtime image carries locates the frame at its own definition; one it does not
-    // still gets named, just without a position.
+    // still gets named, just without a position. The trap cannot know whether its call site also
+    // queued a frame, so the push carries the definition-located mark.
     const def = ctx.lookupWord(word_name);
     const source = if (def) |d| d.source_file orelse ctx.current_source else ctx.current_source;
     const line = if (def) |d| d.source_line else 0;
-    ctx.pushCallFrame(word_name, source, line, 0);
+    ctx.pushDefinitionLocatedCallFrame(word_name, source, line);
 
     const expected = if (expected_tag_raw == @intFromEnum(@as(ValueLayout.TagType, .float))) "float" else "fixnum";
     helpers.setTypeMismatchError(ctx, expected, @as(*const Value, @ptrFromInt(value_ptr_raw)).*);
