@@ -14435,7 +14435,7 @@ export fn jitParamTypeMismatchError(
     const expected = if (expected_tag_raw == @intFromEnum(@as(ValueLayout.TagType, .float))) "float" else "fixnum";
     helpers.setTypeMismatchError(ctx, expected, @as(*const Value, @ptrFromInt(value_ptr_raw)).*);
 
-    ctx.jit_pending_error = ctx.wordErrorCleanup(word_name, error.TypeMismatch);
+    ctx.jit_pending_error = ctx.wordErrorDeferCapture(word_name, error.TypeMismatch);
     return 2;
 }
 
@@ -14642,7 +14642,7 @@ export fn jitDispatchMissError(ctx_raw: usize, word_id_raw: usize, line_raw: usi
         helpers.setErrorContext(ctx, "no applicable method for '{s}'", .{word_name});
     }
 
-    ctx.jit_pending_error = ctx.wordErrorCleanup(display_name, error.TypeMismatch);
+    ctx.jit_pending_error = ctx.wordErrorDeferCapture(display_name, error.TypeMismatch);
     return 2;
 }
 
@@ -14799,11 +14799,11 @@ export fn jitNativeWordCall(ctx_raw: usize, word_id_raw: usize, line_raw: usize)
     if (entry.native) |leaf| {
         if (leaf.stack_effect) |effect| {
             ctx.validateParameterEffects(effect) catch |err| {
-                ctx.jit_pending_error = ctx.wordErrorCleanup(display_name, err);
+                ctx.jit_pending_error = ctx.wordErrorDeferCapture(display_name, err);
                 return 2;
             };
             ctx.validateTypeAnnotations(effect) catch |err| {
-                ctx.jit_pending_error = ctx.wordErrorCleanup(display_name, err);
+                ctx.jit_pending_error = ctx.wordErrorDeferCapture(display_name, err);
                 return 2;
             };
         }
@@ -14817,7 +14817,7 @@ export fn jitNativeWordCall(ctx_raw: usize, word_id_raw: usize, line_raw: usize)
             break :blk2 p;
         };
         const dispatched = dispatch_helpers.tryDispatchGenericById(ctx, leaf.dispatch_id, dispatch_pic) catch |err| {
-            ctx.jit_pending_error = ctx.wordErrorCleanup(display_name, err);
+            ctx.jit_pending_error = ctx.wordErrorDeferCapture(display_name, err);
             return 2;
         };
         if (dispatched) {
@@ -14842,7 +14842,7 @@ export fn jitNativeWordCall(ctx_raw: usize, word_id_raw: usize, line_raw: usize)
             };
             return 0;
         } else |err| {
-            ctx.jit_pending_error = ctx.wordErrorCleanup(display_name, err);
+            ctx.jit_pending_error = ctx.wordErrorDeferCapture(display_name, err);
             return 2;
         }
     }
@@ -14853,12 +14853,12 @@ export fn jitNativeWordCall(ctx_raw: usize, word_id_raw: usize, line_raw: usize)
     const result = if (looked_up_word) |word| blk: {
         if (word.stack_effect) |effect| {
             ctx.validateParameterEffects(&effect) catch |err| {
-                ctx.jit_pending_error = ctx.wordErrorCleanup(display_name, err);
+                ctx.jit_pending_error = ctx.wordErrorDeferCapture(display_name, err);
                 return 2;
             };
             if (!shouldSkipTypeAnnotationValidation(word)) {
                 ctx.validateTypeAnnotations(&effect) catch |err| {
-                    ctx.jit_pending_error = ctx.wordErrorCleanup(display_name, err);
+                    ctx.jit_pending_error = ctx.wordErrorDeferCapture(display_name, err);
                     return 2;
                 };
             }
@@ -14878,7 +14878,7 @@ export fn jitNativeWordCall(ctx_raw: usize, word_id_raw: usize, line_raw: usize)
                 break :blk2 p;
             };
             const dispatched = dispatch_helpers.tryDispatchGenericWithPic(ctx, word_name, dispatch_pic) catch |err| {
-                ctx.jit_pending_error = ctx.wordErrorCleanup(display_name, err);
+                ctx.jit_pending_error = ctx.wordErrorDeferCapture(display_name, err);
                 return 2;
             };
             if (dispatched) {
@@ -14925,7 +14925,7 @@ export fn jitNativeWordCall(ctx_raw: usize, word_id_raw: usize, line_raw: usize)
         };
         return 0;
     } else |err| {
-        ctx.jit_pending_error = ctx.wordErrorCleanup(display_name, err);
+        ctx.jit_pending_error = ctx.wordErrorDeferCapture(display_name, err);
         return 2;
     }
 }
@@ -14962,12 +14962,12 @@ export fn jitInterpretedCall(ctx_raw: usize, word_id_raw: usize, line_raw: usize
     const result = if (looked_up_word) |word| blk: {
         if (word.stack_effect) |effect| {
             ctx.validateParameterEffects(&effect) catch |err| {
-                ctx.jit_pending_error = ctx.wordErrorCleanup(display_name, err);
+                ctx.jit_pending_error = ctx.wordErrorDeferCapture(display_name, err);
                 return 2;
             };
             if (!shouldSkipTypeAnnotationValidation(word)) {
                 ctx.validateTypeAnnotations(&effect) catch |err| {
-                    ctx.jit_pending_error = ctx.wordErrorCleanup(display_name, err);
+                    ctx.jit_pending_error = ctx.wordErrorDeferCapture(display_name, err);
                     return 2;
                 };
             }
@@ -14988,7 +14988,7 @@ export fn jitInterpretedCall(ctx_raw: usize, word_id_raw: usize, line_raw: usize
                     break :blk2 p;
                 };
                 const dispatched = dispatch_helpers.tryDispatchGenericWithPic(ctx, word_name, dispatch_pic) catch |err| {
-                    ctx.jit_pending_error = ctx.wordErrorCleanup(display_name, err);
+                    ctx.jit_pending_error = ctx.wordErrorDeferCapture(display_name, err);
                     return 2;
                 };
                 if (dispatched) {
@@ -15000,7 +15000,7 @@ export fn jitInterpretedCall(ctx_raw: usize, word_id_raw: usize, line_raw: usize
                 }
                 if (word.action.compound.len == 0) {
                     ctx.setGenericDispatchErrorDetails(word_name, word.stack_effect);
-                    ctx.jit_pending_error = ctx.wordErrorCleanup(display_name, error.TypeError);
+                    ctx.jit_pending_error = ctx.wordErrorDeferCapture(display_name, error.TypeError);
                     return 2;
                 }
             }
@@ -15052,7 +15052,7 @@ export fn jitInterpretedCall(ctx_raw: usize, word_id_raw: usize, line_raw: usize
         };
         return 0;
     } else |err| {
-        ctx.jit_pending_error = ctx.wordErrorCleanup(display_name, err);
+        ctx.jit_pending_error = ctx.wordErrorDeferCapture(display_name, err);
         return 2;
     }
 }
@@ -15532,17 +15532,21 @@ test "jitDispatchMissError: the arithmetic message and hint match the native's" 
     try testing.expectEqual(@as(i32, 2), jitDispatchMissError(@intFromPtr(&ctx), word_id, 7));
     try testing.expectEqual(error.TypeMismatch, ctx.jit_pending_error.?);
 
-    // `wordErrorCleanup` drains the pending message and hint into the innermost captured frame,
-    // so the comparison reads them from there rather than off the context.
-    const captured = ctx.error_details.items[0];
+    // Capture is deferred to the propagate boundary: the shim leaves the message and hint
+    // pending and queues its frame as a pending synthetic frame.
+    try testing.expectEqual(@as(usize, 0), ctx.error_details.items.len);
+    try testing.expectEqual(@as(usize, 0), ctx.call_stack.items.len);
+    try testing.expectEqual(@as(usize, 1), ctx.jit_pending_trace_frames.items.len);
+    try testing.expectEqualStrings("+", ctx.jit_pending_trace_frames.items[0].word_name);
+    try testing.expectEqual(@as(usize, 7), ctx.jit_pending_trace_frames.items[0].line);
 
     var interp = Context.init(testing.allocator);
     defer interp.deinit();
     try interp.stack.push(.{ .fixnum = 1 });
     try interp.stack.push(value_mod.stringValue("x"));
     try testing.expectError(error.TypeMismatch, arithmetic_mod.nativeAdd(&interp));
-    try testing.expectEqualStrings(interp.pending_error_message.?, captured.message);
-    try testing.expectEqualStrings(interp.pending_error_hint.?, captured.hint.?);
+    try testing.expectEqualStrings(interp.pending_error_message.?, ctx.pending_error_message.?);
+    try testing.expectEqualStrings(interp.pending_error_hint.?, ctx.pending_error_hint.?);
 
     // Both consume their operands, so a `recover` handler sees the same depth either way.
     try testing.expectEqual(interp.stack.depth(), ctx.stack.depth());
@@ -15557,15 +15561,17 @@ test "jitDispatchMissError: the comparison message names the first operand and s
     try ctx.stack.push(.{ .fixnum = 1 });
     try testing.expectEqual(@as(i32, 2), jitDispatchMissError(@intFromPtr(&ctx), word_id, 7));
 
-    const captured = ctx.error_details.items[0];
-    try testing.expectEqual(@as(?[]const u8, null), captured.hint);
+    try testing.expectEqual(@as(usize, 0), ctx.error_details.items.len);
+    try testing.expectEqual(@as(usize, 1), ctx.jit_pending_trace_frames.items.len);
+    try testing.expectEqualStrings("<", ctx.jit_pending_trace_frames.items[0].word_name);
+    try testing.expectEqual(@as(?[]const u8, null), ctx.pending_error_hint);
 
     var interp = Context.init(testing.allocator);
     defer interp.deinit();
     try interp.stack.push(value_mod.stringValue("x"));
     try interp.stack.push(.{ .fixnum = 1 });
     try testing.expectError(error.TypeMismatch, arithmetic_mod.nativeLt(&interp));
-    try testing.expectEqualStrings(interp.pending_error_message.?, captured.message);
+    try testing.expectEqualStrings(interp.pending_error_message.?, ctx.pending_error_message.?);
 }
 
 test "jitInterpretedCall: entry module resolves that module's word, not the cache-scan winner" {

@@ -1,0 +1,9 @@
+\ A raise from a non-generic native reaches the propagate boundary through `AotDirectWrapper`.
+\
+\ Its queued frame must render the native's own message and the caller chain, in the same
+\ shape as the generic twin.
+
+inner: ( s v -- n ) [ stream-write ] ;
+outer: ( s v -- n ) [ inner ] ;
+
+stdout 42 outer .

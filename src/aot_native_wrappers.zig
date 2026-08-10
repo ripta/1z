@@ -20,9 +20,12 @@ const extracted_registry_entries = @import("primitives/mod.zig").extracted_regis
 
 /// Build the wrapper body for one native. Mirrors `jitNativeWordCall` minus the runtime
 /// dispatch-table lookup and generic dispatch: it pushes the native's call frame, invokes the
-/// native, and runs the same success / error cleanup. Preserving the frame and cleanup keeps the
-/// word name and stack effect on an error so AOT diagnostics match the interpreter; `line_raw` is
-/// the call-site line, used for the frame.
+/// native, and runs the same success cleanup.
+///
+/// On an error the frame becomes a pending synthetic frame and capture is deferred to the
+/// propagate boundary, so the compiled callers unwinding above this raise still land in the chain.
+///
+/// `line_raw` is the call-site line, used for the frame.
 pub fn AotDirectWrapper(comptime func: NativeFn, comptime word_name: []const u8) type {
     return struct {
         fn call(ctx_raw: usize, line_raw: usize) callconv(.c) i32 {
@@ -30,7 +33,7 @@ pub fn AotDirectWrapper(comptime func: NativeFn, comptime word_name: []const u8)
             const ctx: *Context = @ptrFromInt(ctx_raw);
             ctx.pushCallFrame(word_name, ctx.current_source, line_raw, 0);
             func(ctx) catch |err| {
-                ctx.jit_pending_error = ctx.wordErrorCleanup(word_name, err);
+                ctx.jit_pending_error = ctx.wordErrorDeferCapture(word_name, err);
                 return 2;
             };
             ctx.wordSuccessCleanup(word_name, null) catch |err| {
@@ -276,6 +279,13 @@ test "wrapper maps a native error to status 2 and sets the pending error" {
 
     try testing.expectEqual(@as(i32, 2), status);
     try testing.expect(ctx.jit_pending_error != null);
+
+    // Capture is deferred to the propagate boundary: the wrapper's frame moves to the
+    // pending synthetic list instead of being captured here.
+    try testing.expectEqual(@as(usize, 0), ctx.error_details.items.len);
+    try testing.expectEqual(@as(usize, 0), ctx.call_stack.items.len);
+    try testing.expectEqual(@as(usize, 1), ctx.jit_pending_trace_frames.items.len);
+    try testing.expectEqualStrings("borrowed?", ctx.jit_pending_trace_frames.items[0].word_name);
 }
 
 test "wrapper bails with status 1 on a null context" {

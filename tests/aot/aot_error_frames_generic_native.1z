@@ -1,0 +1,9 @@
+\ A raise from a generic native reaches the propagate boundary through `jitNativeWordCall`.
+\
+\ Its queued frame must render the native's own message and the caller chain, in the same
+\ shape as the direct-native twin.
+
+inner: ( a b -- c ) [ + ] ;
+outer: ( a b -- c ) [ inner ] ;
+
+1 "x" outer .

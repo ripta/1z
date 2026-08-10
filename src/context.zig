@@ -6483,6 +6483,22 @@ pub const Context = struct {
         return err;
     }
 
+    /// Compiled-shim counterpart of `wordErrorCleanup`: end profiling, convert the frame this
+    /// shim pushed into a pending synthetic frame, and propagate the error.
+    ///
+    /// Capture is deferred to the propagate boundary, so the compiled ancestors appended during
+    /// the unwind still land in the chain ahead of the interpreted callers.
+    pub fn wordErrorDeferCapture(self: *Context, name: []const u8, err: anyerror) anyerror {
+        if (self.benchmark) |b| b.endWordProfile(self.allocator, name);
+        if (self.profile) |p| p.recordWordEnd(self.allocator, name);
+        if (self.call_stack.items.len > 0) {
+            const frame = self.call_stack.items[self.call_stack.items.len - 1];
+            self.appendPendingSyntheticErrorFrame(frame.word_name, frame.source, frame.line);
+            self.popCallFrame();
+        }
+        return err;
+    }
+
     /// Validate the stack effect (if declared), end benchmark profiling with
     /// peak-depth update, and pop the call frame.
     pub fn wordSuccessCleanup(self: *Context, name: []const u8, stack_effect: ?StackEffect) !void {
@@ -7560,6 +7576,32 @@ test "clearExecutionDetails clears both call stack and error details" {
 
     try std.testing.expectEqual(@as(usize, 0), ctx.call_stack.items.len);
     try std.testing.expectEqual(@as(usize, 0), ctx.error_details.items.len);
+}
+
+test "wordErrorDeferCapture converts the pushed frame and the boundary capture folds it" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    ctx.pushCallFrame("boom", "<test>", 7, 0);
+    ctx.pending_error_message = "boom went wrong";
+
+    const err = ctx.wordErrorDeferCapture("boom", error.TypeMismatch);
+    try std.testing.expectEqual(error.TypeMismatch, err);
+
+    try std.testing.expectEqual(@as(usize, 0), ctx.call_stack.items.len);
+    try std.testing.expectEqual(@as(usize, 0), ctx.error_details.items.len);
+    try std.testing.expectEqual(@as(usize, 1), ctx.jit_pending_trace_frames.items.len);
+    try std.testing.expectEqualStrings("boom", ctx.jit_pending_trace_frames.items[0].word_name);
+    try std.testing.expectEqual(@as(usize, 7), ctx.jit_pending_trace_frames.items[0].line);
+    try std.testing.expectEqualStrings("boom went wrong", ctx.pending_error_message.?);
+
+    ctx.captureCallStackOnError(err);
+
+    try std.testing.expectEqual(@as(usize, 1), ctx.error_details.items.len);
+    try std.testing.expectEqualStrings("boom", ctx.error_details.items[0].word_name.?);
+    try std.testing.expectEqualStrings("boom went wrong", ctx.error_details.items[0].message);
+    try std.testing.expectEqual(@as(usize, 0), ctx.jit_pending_trace_frames.items.len);
+    try std.testing.expectEqual(@as(?[]const u8, null), ctx.pending_error_message);
 }
 
 test "stack effect validation passes for correct effect" {
