@@ -1,1 +1,3 @@
-<aot>:0: error 'protocol-error' type 'fixnum' does not satisfy protocol 'addable' at word '__entry__'
+<aot>:13: error 'protocol-error' type 'fixnum' does not satisfy protocol 'addable' at word 'bump-it'
+  called from <aot>:15: bounded-caller
+  called from <aot>:0: __entry__

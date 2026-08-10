@@ -9873,6 +9873,22 @@ fn emitWordCAotPass(
     const div_zero_error_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "jitDivisionByZeroError"), proto_1arg);
     const underflow_error_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "jitStackUnderflowError"), proto_1arg);
     const null_code_ptr_error_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "jitNullCodePtrError"), proto_1arg);
+
+    // Trace-frame callbacks name compiled callers in the cold bail arms.
+    //
+    // Hosted only: the freestanding runtime exports neither shim, so a freestanding build must
+    // emit no call site referencing them. The named frame goes through the
+    // onez_append_named_trace_frame wrapper rather than the raw extern. The name argument is an
+    // onez_lit_N char array, and passing it to the uintptr_t prototype would trip -Wint-conversion.
+    const append_word_trace_frame_fn = if (!freestanding)
+        c.ir_const_func(&ctx, c.ir_str(&ctx, "onez_append_named_trace_frame"), proto_4arg)
+    else
+        c.IR_UNUSED;
+    const append_builtin_trace_frame_fn = if (!freestanding)
+        c.ir_const_func(&ctx, c.ir_str(&ctx, "jitAppendBuiltinTraceFrame"), proto_3arg)
+    else
+        c.IR_UNUSED;
+
     const bail_status = c.ir_const_i32(&ctx, 1);
     const ok_status = c.ir_const_i32(&ctx, 0);
     const error_propagate_status = c.ir_const_i32(&ctx, 2);
@@ -9998,8 +10014,8 @@ fn emitWordCAotPass(
         .div_zero_error_fn = div_zero_error_fn,
         .underflow_error_fn = underflow_error_fn,
         .null_code_ptr_error_fn = null_code_ptr_error_fn,
-        .append_word_trace_frame_fn = c.IR_UNUSED,
-        .append_builtin_trace_frame_fn = c.IR_UNUSED,
+        .append_word_trace_frame_fn = append_word_trace_frame_fn,
+        .append_builtin_trace_frame_fn = append_builtin_trace_frame_fn,
         .aot_mode = true,
         .interpreter_free = interpreter_free,
         .freestanding = freestanding,

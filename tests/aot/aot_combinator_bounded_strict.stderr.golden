@@ -1,1 +1,3 @@
-<aot>:0: error 'protocol-error' type 'fixnum' does not satisfy the required constraint at word '__entry__'
+<aot>:20: error 'protocol-error' type 'fixnum' does not satisfy the required constraint at word 'bump-it'
+  called from <aot>:22: bounded-caller
+  called from <aot>:0: __entry__

@@ -1,1 +1,7 @@
-<aot>:0: error 'null-code-ptr' at word '__entry__'
+<aot>:993: error 'null-code-ptr' at word 'call'
+  stack effect: ( ..a quot: ( ..a -- ..b ) -- ..b )
+  called from <aot>:997: if
+  called from <aot>:998: if
+  called from <aot>:999: if
+  called from <aot>:7: case
+  called from <aot>:0: __entry__

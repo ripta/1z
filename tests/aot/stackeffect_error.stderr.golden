@@ -1,3 +1,6 @@
 <aot>:604: error 'type-mismatch' expected string or byte-array, got fixnum 42 at word 'stream-write'
   stack effect: ( stream bytes -- n )
+  called from <aot>:681: stream-write-string
+  called from <aot>:683: print
+  called from <aot>:3: print-line
   called from <aot>:0: __entry__
