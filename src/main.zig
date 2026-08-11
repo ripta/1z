@@ -112,7 +112,7 @@ fn printErrorDetails(ctx: *Context, writer: anytype, err: anyerror) void {
         const detail = details[0];
         writer.print("{s}:{d}: error '{s}'", .{ detail.source, detail.line, detail.error_type }) catch return;
 
-        if (detail.word_name != null and !std.mem.eql(u8, detail.message, detail.word_name.?)) {
+        if (detail.word_name == null or !std.mem.eql(u8, detail.message, detail.word_name.?)) {
             writer.print(" {s}", .{detail.message}) catch return;
         }
 

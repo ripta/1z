@@ -127,7 +127,7 @@ pub fn formatCapturedError(ctx: *Context, alloc: Allocator, err: anyerror) ?[:0]
         // A host callback's custom message (set via onez_set_error) is folded into the innermost
         // detail's message by captureCallStackOnError, so surface it the same way
         // onez_print_error does: append it when it carries more than the word name.
-        if (detail.word_name != null and !std.mem.eql(u8, detail.message, detail.word_name.?)) {
+        if (detail.word_name == null or !std.mem.eql(u8, detail.message, detail.word_name.?)) {
             return allocPrintZ(
                 alloc,
                 "{s}:{d}: error '{s}' {s}",

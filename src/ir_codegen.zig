@@ -14029,21 +14029,25 @@ export fn jitPushSymbol(ctx_raw: usize, str_ptr: usize, str_len: usize) callconv
     return 0;
 }
 
-/// Helper: report a typed-literal slot miss (out-of-range or NULL slot)
-/// onto the Context's error_details so the runtime emits a structured
-/// failure for compiled code that consulted a slot table without a live
-/// entry. Used by the four slot-indexed `jitPush*Slot` callbacks.
-fn recordSlotMiss(ctx: *Context, kind: []const u8, slot: usize) void {
+/// Stash a by-value decode failure's diagnostic as the pending error message, so the
+/// propagate-boundary capture renders the offset or tag on the innermost frame. On `OutOfMemory`
+/// the diagnostic is unwritten and nothing is stashed.
+fn setDecodeFailureMessage(ctx: *Context, diag: *const ibc.DecodeDiagnostic, err: ibc.DecodeError) void {
+    switch (err) {
+        error.TruncatedBytecode, error.UnknownTag, error.UnresolvedSlot => {},
+        error.OutOfMemory => return,
+    }
     var buf: [128]u8 = undefined;
-    const msg = std.fmt.bufPrint(&buf, "{s} slot {d}", .{ kind, slot }) catch return;
-    const owned = ctx.arena.allocator().dupe(u8, msg) catch return;
-    ctx.error_details.append(ctx.allocator, .{
-        .error_type = "image-slot-miss",
-        .message = owned,
-        .source = "<aot-runtime>",
-        .line = 0,
-        .word_name = owned,
-    }) catch {};
+    const msg = diag.describe(&buf);
+    ctx.pending_error_message = ctx.arena.allocator().dupe(u8, msg) catch return;
+}
+
+/// Fail a `jitPush*Slot` callback whose slot did not resolve: a missing table, an out-of-range
+/// index, or a NULL entry.
+fn slotMiss(ctx: *Context, kind: []const u8, slot: usize) i32 {
+    ctx.recordImageSlotMiss(kind, slot);
+    ctx.jit_pending_error = error.UnresolvedSlot;
+    return 2;
 }
 
 /// Push a `.type_val` literal by reading slot `slot` from
@@ -14053,16 +14057,9 @@ fn recordSlotMiss(ctx: *Context, kind: []const u8, slot: usize) void {
 export fn jitPushTypeValueSlot(ctx_raw: usize, slot: usize) callconv(.c) i32 {
     if (ctx_raw == 0) return 1;
     const ctx: *Context = @ptrFromInt(ctx_raw);
-    const table = ctx.image_typevalue_slots orelse {
-        recordSlotMiss(ctx, "typevalue", slot);
-        ctx.jit_pending_error = error.WordNotFound;
-        return 2;
-    };
-    const tv_const = table[slot] orelse {
-        recordSlotMiss(ctx, "typevalue", slot);
-        ctx.jit_pending_error = error.WordNotFound;
-        return 2;
-    };
+    const table = ctx.image_typevalue_slots orelse return slotMiss(ctx, "typevalue", slot);
+    if (slot >= ctx.image_typevalue_slot_count) return slotMiss(ctx, "typevalue", slot);
+    const tv_const = table[slot] orelse return slotMiss(ctx, "typevalue", slot);
     const tv: *value_mod.TypeValue = @constCast(tv_const);
     ctx.stack.push(.{ .type_val = tv }) catch {
         ctx.jit_pending_error = error.OutOfMemory;
@@ -14077,16 +14074,9 @@ export fn jitPushTypeValueSlot(ctx_raw: usize, slot: usize) callconv(.c) i32 {
 export fn jitPushStructTypeSlot(ctx_raw: usize, slot: usize) callconv(.c) i32 {
     if (ctx_raw == 0) return 1;
     const ctx: *Context = @ptrFromInt(ctx_raw);
-    const table = ctx.image_struct_type_slots orelse {
-        recordSlotMiss(ctx, "struct-type", slot);
-        ctx.jit_pending_error = error.WordNotFound;
-        return 2;
-    };
-    const st = table[slot] orelse {
-        recordSlotMiss(ctx, "struct-type", slot);
-        ctx.jit_pending_error = error.WordNotFound;
-        return 2;
-    };
+    const table = ctx.image_struct_type_slots orelse return slotMiss(ctx, "struct-type", slot);
+    if (slot >= ctx.image_struct_type_slot_count) return slotMiss(ctx, "struct-type", slot);
+    const st = table[slot] orelse return slotMiss(ctx, "struct-type", slot);
     ctx.stack.push(.{ .struct_type = st }) catch {
         ctx.jit_pending_error = error.OutOfMemory;
         return 2;
@@ -14101,16 +14091,9 @@ export fn jitPushStructTypeSlot(ctx_raw: usize, slot: usize) callconv(.c) i32 {
 export fn jitPushMarkerSlot(ctx_raw: usize, slot: usize) callconv(.c) i32 {
     if (ctx_raw == 0) return 1;
     const ctx: *Context = @ptrFromInt(ctx_raw);
-    const table = ctx.image_marker_slots orelse {
-        recordSlotMiss(ctx, "marker", slot);
-        ctx.jit_pending_error = error.WordNotFound;
-        return 2;
-    };
-    const mk = table[slot] orelse {
-        recordSlotMiss(ctx, "marker", slot);
-        ctx.jit_pending_error = error.WordNotFound;
-        return 2;
-    };
+    const table = ctx.image_marker_slots orelse return slotMiss(ctx, "marker", slot);
+    if (slot >= ctx.image_marker_slot_count) return slotMiss(ctx, "marker", slot);
+    const mk = table[slot] orelse return slotMiss(ctx, "marker", slot);
     ctx.stack.push(.{ .marker = mk }) catch {
         ctx.jit_pending_error = error.OutOfMemory;
         return 2;
@@ -14125,16 +14108,9 @@ export fn jitPushMarkerSlot(ctx_raw: usize, slot: usize) callconv(.c) i32 {
 export fn jitPushParameterSlot(ctx_raw: usize, slot: usize) callconv(.c) i32 {
     if (ctx_raw == 0) return 1;
     const ctx: *Context = @ptrFromInt(ctx_raw);
-    const table = ctx.image_parameter_slots orelse {
-        recordSlotMiss(ctx, "parameter", slot);
-        ctx.jit_pending_error = error.WordNotFound;
-        return 2;
-    };
-    const param = table[slot] orelse {
-        recordSlotMiss(ctx, "parameter", slot);
-        ctx.jit_pending_error = error.WordNotFound;
-        return 2;
-    };
+    const table = ctx.image_parameter_slots orelse return slotMiss(ctx, "parameter", slot);
+    if (slot >= ctx.image_parameter_slot_count) return slotMiss(ctx, "parameter", slot);
+    const param = table[slot] orelse return slotMiss(ctx, "parameter", slot);
     ctx.stack.push(.{ .parameter = param }) catch {
         ctx.jit_pending_error = error.OutOfMemory;
         return 2;
@@ -14150,16 +14126,9 @@ export fn jitPushParameterSlot(ctx_raw: usize, slot: usize) callconv(.c) i32 {
 export fn jitPushTaggedSlot(ctx_raw: usize, slot: usize) callconv(.c) i32 {
     if (ctx_raw == 0) return 1;
     const ctx: *Context = @ptrFromInt(ctx_raw);
-    const table = ctx.image_tagged_slots orelse {
-        recordSlotMiss(ctx, "tagged", slot);
-        ctx.jit_pending_error = error.WordNotFound;
-        return 2;
-    };
-    const entry = table[slot] orelse {
-        recordSlotMiss(ctx, "tagged", slot);
-        ctx.jit_pending_error = error.WordNotFound;
-        return 2;
-    };
+    const table = ctx.image_tagged_slots orelse return slotMiss(ctx, "tagged", slot);
+    if (slot >= ctx.image_tagged_slot_count) return slotMiss(ctx, "tagged", slot);
+    const entry = table[slot] orelse return slotMiss(ctx, "tagged", slot);
     ctx.stack.push(entry.*) catch {
         ctx.jit_pending_error = error.OutOfMemory;
         return 2;
@@ -14176,16 +14145,9 @@ export fn jitPushTaggedSlot(ctx_raw: usize, slot: usize) callconv(.c) i32 {
 export fn jitPushMutableMapSlot(ctx_raw: usize, slot: usize) callconv(.c) i32 {
     if (ctx_raw == 0) return 1;
     const ctx: *Context = @ptrFromInt(ctx_raw);
-    const table = ctx.image_mutable_map_slots orelse {
-        recordSlotMiss(ctx, "mutable_map", slot);
-        ctx.jit_pending_error = error.WordNotFound;
-        return 2;
-    };
-    const mmap = table[slot] orelse {
-        recordSlotMiss(ctx, "mutable_map", slot);
-        ctx.jit_pending_error = error.WordNotFound;
-        return 2;
-    };
+    const table = ctx.image_mutable_map_slots orelse return slotMiss(ctx, "mutable_map", slot);
+    if (slot >= ctx.image_mutable_map_slot_count) return slotMiss(ctx, "mutable_map", slot);
+    const mmap = table[slot] orelse return slotMiss(ctx, "mutable_map", slot);
     ctx.stack.push(.{ .mutable_map = mmap }) catch {
         ctx.jit_pending_error = error.OutOfMemory;
         return 2;
@@ -14199,16 +14161,9 @@ export fn jitPushMutableMapSlot(ctx_raw: usize, slot: usize) callconv(.c) i32 {
 export fn jitPushStructInstanceSlot(ctx_raw: usize, slot: usize) callconv(.c) i32 {
     if (ctx_raw == 0) return 1;
     const ctx: *Context = @ptrFromInt(ctx_raw);
-    const table = ctx.image_struct_instance_slots orelse {
-        recordSlotMiss(ctx, "struct_instance", slot);
-        ctx.jit_pending_error = error.WordNotFound;
-        return 2;
-    };
-    const si = table[slot] orelse {
-        recordSlotMiss(ctx, "struct_instance", slot);
-        ctx.jit_pending_error = error.WordNotFound;
-        return 2;
-    };
+    const table = ctx.image_struct_instance_slots orelse return slotMiss(ctx, "struct_instance", slot);
+    if (slot >= ctx.image_struct_instance_slot_count) return slotMiss(ctx, "struct_instance", slot);
+    const si = table[slot] orelse return slotMiss(ctx, "struct_instance", slot);
     ctx.stack.push(.{ .struct_instance = si }) catch {
         ctx.jit_pending_error = error.OutOfMemory;
         return 2;
@@ -14225,16 +14180,9 @@ export fn jitPushStructInstanceSlot(ctx_raw: usize, slot: usize) callconv(.c) i3
 export fn jitPushVectorSlot(ctx_raw: usize, slot: usize) callconv(.c) i32 {
     if (ctx_raw == 0) return 1;
     const ctx: *Context = @ptrFromInt(ctx_raw);
-    const table = ctx.image_vector_slots orelse {
-        recordSlotMiss(ctx, "vector", slot);
-        ctx.jit_pending_error = error.WordNotFound;
-        return 2;
-    };
-    const vec = table[slot] orelse {
-        recordSlotMiss(ctx, "vector", slot);
-        ctx.jit_pending_error = error.WordNotFound;
-        return 2;
-    };
+    const table = ctx.image_vector_slots orelse return slotMiss(ctx, "vector", slot);
+    if (slot >= ctx.image_vector_slot_count) return slotMiss(ctx, "vector", slot);
+    const vec = table[slot] orelse return slotMiss(ctx, "vector", slot);
     ctx.stack.push(.{ .vector = vec }) catch {
         ctx.jit_pending_error = error.OutOfMemory;
         return 2;
@@ -14279,7 +14227,9 @@ export fn jitPushQuotation(ctx_raw: usize, data_ptr: usize, data_len: usize, des
             // it individually. A failed decode is never cached, so a recovered-and-retried push
             // site strands another copy per attempt. Accepted: the failure needs a corrupt
             // stream or an exhausted allocator, neither of which retrying can outrun.
-            const decoded = deserializeQuotationInstructions(src[0..data_len], cache.decodeAllocator(), null, null) catch |err| {
+            var diag: ibc.DecodeDiagnostic = undefined;
+            const decoded = deserializeQuotationInstructions(src[0..data_len], cache.decodeAllocator(), null, &diag) catch |err| {
+                setDecodeFailureMessage(ctx, &diag, err);
                 ctx.jit_pending_error = err;
                 return 2;
             };
@@ -14297,7 +14247,9 @@ export fn jitPushQuotation(ctx_raw: usize, data_ptr: usize, data_len: usize, des
             };
             break :blk .{ .instructions = decoded.instructions, .effect = decoded.effect };
         }
-        const decoded = deserializeQuotationInstructions(src[0..data_len], ctx.quotationAllocator(), null, null) catch |err| {
+        var diag: ibc.DecodeDiagnostic = undefined;
+        const decoded = deserializeQuotationInstructions(src[0..data_len], ctx.quotationAllocator(), null, &diag) catch |err| {
+            setDecodeFailureMessage(ctx, &diag, err);
             ctx.jit_pending_error = err;
             return 2;
         };
@@ -14327,7 +14279,9 @@ export fn jitPushArray(ctx_raw: usize, data_ptr: usize, data_len: usize) callcon
     // Attach compiled code_ptrs to quotations nested in the composite, indexed by
     // the build-time quotation_id stamped into the serialized form.
     const qfns: ?[]const ?*const anyopaque = if (ctx.aot_quotation_fns) |fns| fns.table[0..fns.size] else null;
-    const val = deserializeValueAt(src[0..data_len], &offset, alloc, qfns, null) catch |err| {
+    var diag: ibc.DecodeDiagnostic = undefined;
+    const val = deserializeValueAt(src[0..data_len], &offset, alloc, qfns, &diag) catch |err| {
+        setDecodeFailureMessage(ctx, &diag, err);
         ctx.jit_pending_error = err;
         return 2;
     };
@@ -15329,6 +15283,7 @@ test "jitPushQuotation: a truncated stream propagates TruncatedBytecode" {
     const rc = jitPushQuotation(@intFromPtr(&ctx), @intFromPtr(&truncated), truncated.len, @intFromPtr(&dest), std.math.maxInt(usize));
     try testing.expectEqual(@as(i32, 2), rc);
     try testing.expectEqual(error.TruncatedBytecode, ctx.jit_pending_error.?);
+    try testing.expectEqualStrings("truncated bytecode at offset 1", ctx.pending_error_message.?);
 }
 
 test "jitPushArray: a truncated stream propagates TruncatedBytecode" {
@@ -15342,6 +15297,83 @@ test "jitPushArray: a truncated stream propagates TruncatedBytecode" {
     const rc = jitPushArray(@intFromPtr(&ctx), @intFromPtr(encoded.items.ptr), encoded.items.len - 1);
     try testing.expectEqual(@as(i32, 2), rc);
     try testing.expectEqual(error.TruncatedBytecode, ctx.jit_pending_error.?);
+    try testing.expectEqualStrings("truncated bytecode at offset 1", ctx.pending_error_message.?);
+}
+
+test "jitPush*Slot: every miss branch reports UnresolvedSlot with an image-slot-miss row" {
+    const shims = [_]struct {
+        f: *const fn (usize, usize) callconv(.c) i32,
+        kind: []const u8,
+    }{
+        .{ .f = &jitPushTypeValueSlot, .kind = "typevalue" },
+        .{ .f = &jitPushStructTypeSlot, .kind = "struct-type" },
+        .{ .f = &jitPushMarkerSlot, .kind = "marker" },
+        .{ .f = &jitPushParameterSlot, .kind = "parameter" },
+        .{ .f = &jitPushTaggedSlot, .kind = "tagged" },
+        .{ .f = &jitPushMutableMapSlot, .kind = "mutable_map" },
+        .{ .f = &jitPushStructInstanceSlot, .kind = "struct_instance" },
+        .{ .f = &jitPushVectorSlot, .kind = "vector" },
+    };
+
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    var rows: usize = 0;
+    const expectMiss = struct {
+        fn check(cx: *Context, row_idx: usize, kind: []const u8, slot: usize, rc: i32) !void {
+            try testing.expectEqual(@as(i32, 2), rc);
+            try testing.expectEqual(error.UnresolvedSlot, cx.jit_pending_error.?);
+            cx.jit_pending_error = null;
+
+            try testing.expectEqual(row_idx + 1, cx.error_details.items.len);
+            const row = cx.error_details.items[row_idx];
+            try testing.expectEqualStrings("image-slot-miss", row.error_type);
+            var buf: [64]u8 = undefined;
+            const want = try std.fmt.bufPrint(&buf, "{s} slot {d}", .{ kind, slot });
+            try testing.expectEqualStrings(want, row.message);
+        }
+    }.check;
+
+    // No table was loaded at all.
+    for (shims) |shim| {
+        try expectMiss(&ctx, rows, shim.kind, 3, shim.f(@intFromPtr(&ctx), 3));
+        rows += 1;
+    }
+
+    var typevalue_slots = [_]?*const value_mod.TypeValue{null};
+    ctx.image_typevalue_slots = &typevalue_slots;
+    ctx.image_typevalue_slot_count = 1;
+    var struct_type_slots = [_]?*value_mod.StructType{null};
+    ctx.image_struct_type_slots = &struct_type_slots;
+    ctx.image_struct_type_slot_count = 1;
+    var marker_slots = [_]?*value_mod.Marker{null};
+    ctx.image_marker_slots = &marker_slots;
+    ctx.image_marker_slot_count = 1;
+    var parameter_slots = [_]?*value_mod.Parameter{null};
+    ctx.image_parameter_slots = &parameter_slots;
+    ctx.image_parameter_slot_count = 1;
+    var tagged_slots = [_]?*const Value{null};
+    ctx.image_tagged_slots = &tagged_slots;
+    ctx.image_tagged_slot_count = 1;
+    var mutable_map_slots = [_]?*value_mod.MutableMap{null};
+    ctx.image_mutable_map_slots = &mutable_map_slots;
+    ctx.image_mutable_map_slot_count = 1;
+    var struct_instance_slots = [_]?*value_mod.StructInstance{null};
+    ctx.image_struct_instance_slots = &struct_instance_slots;
+    ctx.image_struct_instance_slot_count = 1;
+    var vector_slots = [_]?*value_mod.Vector{null};
+    ctx.image_vector_slots = &vector_slots;
+    ctx.image_vector_slot_count = 1;
+
+    for (shims) |shim| {
+        // Slot 1 is past the one-element table: the bounds check fires.
+        try expectMiss(&ctx, rows, shim.kind, 1, shim.f(@intFromPtr(&ctx), 1));
+        rows += 1;
+
+        // Slot 0 exists but was never patched: the null-entry check fires.
+        try expectMiss(&ctx, rows, shim.kind, 0, shim.f(@intFromPtr(&ctx), 0));
+        rows += 1;
+    }
 }
 
 test "jitNativeWordCall: dispatch hit runs the registered override, not the native's default body" {

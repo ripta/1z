@@ -318,7 +318,11 @@ fn decodeWordBodies(ctx: *Context, header: *const Header) LoaderError!void {
             cache_entry.*.module.words.getPtr(word_name) orelse continue;
 
         const bytes = w.body_bytecode.?[0..w.body_bytecode_len];
-        const decoded = try instruction_bytecode.deserializeQuotationInstructionsForImage(bytes, arena, &tables, null);
+        var diag: instruction_bytecode.DecodeDiagnostic = undefined;
+        const decoded = instruction_bytecode.deserializeQuotationInstructionsForImage(bytes, arena, &tables, &diag) catch |err| {
+            reportDecodeFailure(ctx, &diag, err);
+            return err;
+        };
         ctx.registerQuotationContainerLiterals(decoded.instructions) catch return LoaderError.OutOfMemory;
         word_entry.action = .{ .compound = decoded.instructions };
     }
@@ -527,13 +531,18 @@ fn stampWordBodies(ctx: *Context, header: *const Header) LoaderError!void {
 /// The emitter cleared `flag_bit_image_decode` on this row, so the stream is self-contained and
 /// a failure is a real failure, not a routing signal.
 fn decodeWordBodyInline(
+    ctx: *Context,
     arena: Allocator,
     w: Word,
     qfns: ?[]const ?*const anyopaque,
 ) LoaderError![]const value_mod.Instruction {
     if (w.body_bytecode == null or w.body_bytecode_len == 0) return &.{};
     const bytes = w.body_bytecode.?[0..w.body_bytecode_len];
-    const decoded = try instruction_bytecode.deserializeQuotationInstructions(bytes, arena, qfns, null);
+    var diag: instruction_bytecode.DecodeDiagnostic = undefined;
+    const decoded = instruction_bytecode.deserializeQuotationInstructions(bytes, arena, qfns, &diag) catch |err| {
+        reportDecodeFailure(ctx, &diag, err);
+        return err;
+    };
     return decoded.instructions;
 }
 
@@ -576,7 +585,7 @@ fn populateModulesAndWords(
             const body: []const value_mod.Instruction = if (w.flags & aot_image_emit.flag_bit_image_decode != 0)
                 &.{}
             else
-                try decodeWordBodyInline(arena, w, qfns);
+                try decodeWordBodyInline(ctx, arena, w, qfns);
             ctx.registerQuotationContainerLiterals(body) catch return LoaderError.OutOfMemory;
             const diag = decodeDiagnosticMetadata(w);
 
@@ -897,12 +906,16 @@ fn populateParameterSlots(
         var default_effect: ?*const stack_effect_mod.StackEffect = null;
         if (row.default_quotation_bytecode) |p| {
             if (row.default_quotation_bytecode_len > 0) {
-                const decoded = try instruction_bytecode.deserializeQuotationInstructions(
+                var diag: instruction_bytecode.DecodeDiagnostic = undefined;
+                const decoded = instruction_bytecode.deserializeQuotationInstructions(
                     p[0..row.default_quotation_bytecode_len],
                     arena,
                     null,
-                    null,
-                );
+                    &diag,
+                ) catch |err| {
+                    reportDecodeFailure(ctx, &diag, err);
+                    return err;
+                };
                 instructions = decoded.instructions;
                 default_effect = decoded.effect;
             }
@@ -1012,13 +1025,17 @@ fn populateMutableMapSlots(
             const key_src = bytes[offset .. offset + key_len];
             offset += key_len;
 
-            const value = try instruction_bytecode.deserializeValueAtForImage(
+            var diag: instruction_bytecode.DecodeDiagnostic = undefined;
+            const value = instruction_bytecode.deserializeValueAtForImage(
                 bytes,
                 &offset,
                 arena,
                 &slot_tables,
-                null,
-            );
+                &diag,
+            ) catch |err| {
+                reportDecodeFailure(ctx, &diag, err);
+                return err;
+            };
 
             const key_copy = arena.dupe(u8, key_src) catch return LoaderError.OutOfMemory;
             mmap.map.put(arena, key_copy, value) catch return LoaderError.OutOfMemory;
@@ -1099,13 +1116,17 @@ fn populateStructInstanceFields(
 
         var f: u32 = 0;
         while (f < field_count) : (f += 1) {
-            si.fields[f] = try instruction_bytecode.deserializeValueAtForImage(
+            var diag: instruction_bytecode.DecodeDiagnostic = undefined;
+            si.fields[f] = instruction_bytecode.deserializeValueAtForImage(
                 bytes,
                 &offset,
                 arena,
                 &slot_tables,
-                null,
-            );
+                &diag,
+            ) catch |err| {
+                reportDecodeFailure(ctx, &diag, err);
+                return err;
+            };
         }
     }
 }
@@ -1170,13 +1191,17 @@ fn populateVectorElements(
 
         var e: u32 = 0;
         while (e < elem_count) : (e += 1) {
-            const value = try instruction_bytecode.deserializeValueAtForImage(
+            var diag: instruction_bytecode.DecodeDiagnostic = undefined;
+            const value = instruction_bytecode.deserializeValueAtForImage(
                 bytes,
                 &offset,
                 arena,
                 &slot_tables,
-                null,
-            );
+                &diag,
+            ) catch |err| {
+                reportDecodeFailure(ctx, &diag, err);
+                return err;
+            };
             vec.list.append(arena, value) catch return LoaderError.OutOfMemory;
         }
     }
@@ -1218,13 +1243,17 @@ fn populateTaggedSlots(
         if (row.inner_bytecode) |p| {
             if (row.inner_bytecode_len > 0) {
                 var offset: usize = 0;
-                inner.* = try instruction_bytecode.deserializeValueAtForImage(
+                var diag: instruction_bytecode.DecodeDiagnostic = undefined;
+                inner.* = instruction_bytecode.deserializeValueAtForImage(
                     p[0..row.inner_bytecode_len],
                     &offset,
                     arena,
                     &slot_tables,
-                    null,
-                );
+                    &diag,
+                ) catch |err| {
+                    reportDecodeFailure(ctx, &diag, err);
+                    return err;
+                };
             } else {
                 inner.* = .{ .unit = {} };
             }
@@ -1309,7 +1338,11 @@ pub fn replayMethodDispatch(ctx: *Context) LoaderError!void {
             // `.struct_type` literals (e.g. generated field getters). The
             // tables are patched before replay runs, so they resolve here.
             const body_tables = imageSlotTables(ctx);
-            const decoded = try instruction_bytecode.deserializeQuotationInstructionsForImage(bytes, ctx.quotationAllocator(), &body_tables, null);
+            var diag: instruction_bytecode.DecodeDiagnostic = undefined;
+            const decoded = instruction_bytecode.deserializeQuotationInstructionsForImage(bytes, ctx.quotationAllocator(), &body_tables, &diag) catch |err| {
+                reportDecodeFailure(ctx, &diag, err);
+                return err;
+            };
             body_instructions = decoded.instructions;
             body_effect = decoded.effect;
             ctx.registerQuotationContainerLiterals(body_instructions) catch
@@ -1551,6 +1584,25 @@ fn appendErrorDetail(ctx: *Context, error_type: []const u8, message: []const u8)
         .message = message,
         .word_name = null,
     }) catch {};
+}
+
+/// Surface a decode failure's diagnostic as an error-detail row before the error propagates.
+/// An unresolved slot goes through `Context.recordImageSlotMiss`; the other two structural
+/// members render the offset and tag the decoder captured. On `OutOfMemory` the diagnostic is
+/// unwritten and nothing is recorded.
+fn reportDecodeFailure(
+    ctx: *Context,
+    diag: *const instruction_bytecode.DecodeDiagnostic,
+    err: instruction_bytecode.DecodeError,
+) void {
+    switch (err) {
+        error.UnresolvedSlot => ctx.recordImageSlotMiss(diag.slot_kind, diag.slot),
+        error.TruncatedBytecode, error.UnknownTag => {
+            var buf: [128]u8 = undefined;
+            recordLoaderError(ctx, "{s}", .{diag.describe(&buf)});
+        },
+        error.OutOfMemory => {},
+    }
 }
 
 // -- Tests -------------------------------------------------------------
@@ -3593,6 +3645,12 @@ test "loadIntoContext: truncated body bytecode surfaces TruncatedBytecode" {
         LoaderError.TruncatedBytecode,
         loadIntoContext(&ctx, &header, .{}, null),
     );
+
+    // The decoder's diagnostic reaches the detail row: the count read fails one byte in.
+    try testing.expectEqual(@as(usize, 1), ctx.error_details.items.len);
+    const row = ctx.error_details.items[0];
+    try testing.expectEqualStrings("runtime-image-load-failed", row.error_type);
+    try testing.expectEqualStrings("truncated bytecode at offset 1", row.message);
 }
 
 test "loadIntoContext: an image-decode flag defers a by-value-decodable body to the image pass" {
@@ -3669,6 +3727,61 @@ test "loadIntoContext: an unflagged body carrying an image-only tag fails instea
         LoaderError.UnknownTag,
         loadIntoContext(&ctx, &header, .{}, null),
     );
+
+    // The detail row distinguishes an image-only tag from a byte that is no tag at all.
+    try testing.expectEqual(@as(usize, 1), ctx.error_details.items.len);
+    const row = ctx.error_details.items[0];
+    try testing.expectEqualStrings("runtime-image-load-failed", row.error_type);
+    try testing.expectEqualStrings("image-only tag 2 at offset 13 reached the by-value decoder", row.message);
+}
+
+test "loadIntoContext: an unresolved value slot surfaces UnresolvedSlot with an image-slot-miss row" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    // Flagged body, hand-encoded: `has_effect 0 | count 1 | line | column | op tag push_literal |
+    // value tag type_val_slot | u32 slot 5`. The header carries no typevalue storage, so the
+    // decoder cannot resolve the slot.
+    var encoded: std.ArrayListUnmanaged(u8) = .{};
+    defer encoded.deinit(testing.allocator);
+    try encoded.append(testing.allocator, 0);
+    const one: u32 = 1;
+    try encoded.appendSlice(testing.allocator, std.mem.asBytes(&one));
+    const line: u32 = 1;
+    const col: u32 = 1;
+    try encoded.appendSlice(testing.allocator, std.mem.asBytes(&line));
+    try encoded.appendSlice(testing.allocator, std.mem.asBytes(&col));
+    try encoded.append(testing.allocator, 0);
+    try encoded.append(testing.allocator, 10);
+    const slot_index: u32 = 5;
+    try encoded.appendSlice(testing.allocator, std.mem.asBytes(&slot_index));
+
+    const m_name = "demo";
+    var w = wordRow("dangling", 1, 0);
+    w.flags = aot_image_emit.flag_bit_image_decode;
+    w.body_bytecode = encoded.items.ptr;
+    w.body_bytecode_len = @intCast(encoded.items.len);
+    const words = [_]Word{w};
+    const modules = [_]Module{
+        .{ .name = m_name.ptr, .name_len = m_name.len, .word_start_idx = 0, .word_count = 1 },
+    };
+    var header = emptyHeader();
+    header.module_count = 1;
+    header.word_count = 1;
+    header.modules = &modules;
+    header.words = &words;
+
+    try testing.expectError(
+        LoaderError.UnresolvedSlot,
+        loadIntoContext(&ctx, &header, .{}, null),
+    );
+
+    // The miss reports through the same helper the jitPush*Slot callbacks use, so the row
+    // carries the shared shape.
+    try testing.expectEqual(@as(usize, 1), ctx.error_details.items.len);
+    const row = ctx.error_details.items[0];
+    try testing.expectEqualStrings("image-slot-miss", row.error_type);
+    try testing.expectEqualStrings("typevalue slot 5", row.message);
 }
 
 test "loadIntoContext: a truncated mutable-map entries blob surfaces TruncatedBytecode" {

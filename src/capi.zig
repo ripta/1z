@@ -2386,7 +2386,7 @@ export fn onez_print_error(ptr: ?*anyopaque) void {
         const detail = details[0];
         stderr.interface.print("{s}:{d}: error '{s}'", .{ detail.source, detail.line, detail.error_type }) catch {};
 
-        if (detail.word_name != null and !std.mem.eql(u8, detail.message, detail.word_name.?)) {
+        if (detail.word_name == null or !std.mem.eql(u8, detail.message, detail.word_name.?)) {
             stderr.interface.print(" {s}", .{detail.message}) catch {};
         }
 

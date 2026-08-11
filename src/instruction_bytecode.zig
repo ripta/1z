@@ -155,6 +155,19 @@ pub const DecodeDiagnostic = struct {
     slot: usize = 0,
 
     pub const Kind = enum { truncated_bytecode, unknown_tag, unresolved_slot };
+
+    /// Render the failure's one-line description into `buf`, so every surface reporting a decode
+    /// failure carries the same text.
+    pub fn describe(self: DecodeDiagnostic, buf: []u8) []const u8 {
+        return switch (self.kind) {
+            .truncated_bytecode => std.fmt.bufPrint(buf, "truncated bytecode at offset {d}", .{self.offset}) catch buf[0..0],
+            .unknown_tag => if (self.image_only_tag)
+                std.fmt.bufPrint(buf, "image-only tag {d} at offset {d} reached the by-value decoder", .{ self.tag, self.offset }) catch buf[0..0]
+            else
+                std.fmt.bufPrint(buf, "unknown tag {d} at offset {d}", .{ self.tag, self.offset }) catch buf[0..0],
+            .unresolved_slot => std.fmt.bufPrint(buf, "{s} slot {d}", .{ self.slot_kind, self.slot }) catch buf[0..0],
+        };
+    }
 };
 
 /// Image-mode slot maps. When `serializeValueIntoForImage` receives a

@@ -6061,6 +6061,24 @@ pub const Context = struct {
         }
     }
 
+    /// Report an unresolved runtime-image slot as an `image-slot-miss` detail row.
+    ///
+    /// One condition, one name: the bytecode decoder's callers and the compiled `jitPush*Slot`
+    /// callbacks both report a slot miss through this helper, so the row shape stays identical
+    /// whether the miss was reached at load or through compiled code.
+    pub fn recordImageSlotMiss(self: *Context, kind: []const u8, slot: usize) void {
+        var buf: [128]u8 = undefined;
+        const msg = std.fmt.bufPrint(&buf, "{s} slot {d}", .{ kind, slot }) catch return;
+        const owned = self.arena.allocator().dupe(u8, msg) catch return;
+        self.error_details.append(self.allocator, .{
+            .error_type = "image-slot-miss",
+            .message = owned,
+            .source = "<aot-runtime>",
+            .line = 0,
+            .word_name = owned,
+        }) catch {};
+    }
+
     /// Capture the current call stack to error_details.
     /// Only captures if error_details is empty (first error).
     pub fn captureCallStackOnError(self: *Context, err: anyerror) void {
