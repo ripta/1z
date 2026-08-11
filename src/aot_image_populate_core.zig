@@ -20,6 +20,9 @@ const stack_effect_mod = @import("stack_effect.zig");
 ///
 /// The C-side caller maps these to `ONEZ_ERR_LOAD_FAILED` and uses the runtime's error surface
 /// for the human-readable message.
+///
+/// The three malformed-bytecode members mirror `instruction_bytecode.DecodeError`, so a decode
+/// failure propagates under its own name instead of being relabeled.
 pub const LoaderError = error{
     UnsupportedFormat,
     BadSlotIndex,
@@ -27,6 +30,9 @@ pub const LoaderError = error{
     BadStackEffectIndex,
     BadTypeKind,
     BadStructTypeIndex,
+    TruncatedBytecode,
+    UnknownTag,
+    UnresolvedSlot,
     OutOfMemory,
 };
 

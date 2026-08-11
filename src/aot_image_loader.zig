@@ -318,8 +318,7 @@ fn decodeWordBodies(ctx: *Context, header: *const Header) LoaderError!void {
             cache_entry.*.module.words.getPtr(word_name) orelse continue;
 
         const bytes = w.body_bytecode.?[0..w.body_bytecode_len];
-        const decoded = instruction_bytecode.deserializeQuotationInstructionsForImage(bytes, arena, &tables, null) catch
-            return LoaderError.OutOfMemory;
+        const decoded = try instruction_bytecode.deserializeQuotationInstructionsForImage(bytes, arena, &tables, null);
         ctx.registerQuotationContainerLiterals(decoded.instructions) catch return LoaderError.OutOfMemory;
         word_entry.action = .{ .compound = decoded.instructions };
     }
@@ -534,8 +533,7 @@ fn decodeWordBodyInline(
 ) LoaderError![]const value_mod.Instruction {
     if (w.body_bytecode == null or w.body_bytecode_len == 0) return &.{};
     const bytes = w.body_bytecode.?[0..w.body_bytecode_len];
-    const decoded = instruction_bytecode.deserializeQuotationInstructions(bytes, arena, qfns, null) catch
-        return LoaderError.OutOfMemory;
+    const decoded = try instruction_bytecode.deserializeQuotationInstructions(bytes, arena, qfns, null);
     return decoded.instructions;
 }
 
@@ -899,12 +897,12 @@ fn populateParameterSlots(
         var default_effect: ?*const stack_effect_mod.StackEffect = null;
         if (row.default_quotation_bytecode) |p| {
             if (row.default_quotation_bytecode_len > 0) {
-                const decoded = instruction_bytecode.deserializeQuotationInstructions(
+                const decoded = try instruction_bytecode.deserializeQuotationInstructions(
                     p[0..row.default_quotation_bytecode_len],
                     arena,
                     null,
                     null,
-                ) catch return LoaderError.OutOfMemory;
+                );
                 instructions = decoded.instructions;
                 default_effect = decoded.effect;
             }
@@ -999,7 +997,7 @@ fn populateMutableMapSlots(
             &[_]u8{};
 
         if (bytes.len == 0) continue;
-        if (bytes.len < @sizeOf(u32)) return LoaderError.OutOfMemory;
+        if (bytes.len < @sizeOf(u32)) return LoaderError.TruncatedBytecode;
 
         var offset: usize = 0;
         const entry_count = std.mem.bytesToValue(u32, bytes[offset .. offset + @sizeOf(u32)]);
@@ -1007,20 +1005,20 @@ fn populateMutableMapSlots(
 
         var e: u32 = 0;
         while (e < entry_count) : (e += 1) {
-            if (offset + @sizeOf(u32) > bytes.len) return LoaderError.OutOfMemory;
+            if (offset + @sizeOf(u32) > bytes.len) return LoaderError.TruncatedBytecode;
             const key_len = std.mem.bytesToValue(u32, bytes[offset .. offset + @sizeOf(u32)]);
             offset += @sizeOf(u32);
-            if (offset + key_len > bytes.len) return LoaderError.OutOfMemory;
+            if (offset + key_len > bytes.len) return LoaderError.TruncatedBytecode;
             const key_src = bytes[offset .. offset + key_len];
             offset += key_len;
 
-            const value = instruction_bytecode.deserializeValueAtForImage(
+            const value = try instruction_bytecode.deserializeValueAtForImage(
                 bytes,
                 &offset,
                 arena,
                 &slot_tables,
                 null,
-            ) catch return LoaderError.OutOfMemory;
+            );
 
             const key_copy = arena.dupe(u8, key_src) catch return LoaderError.OutOfMemory;
             mmap.map.put(arena, key_copy, value) catch return LoaderError.OutOfMemory;
@@ -1092,7 +1090,7 @@ fn populateStructInstanceFields(
         else
             &[_]u8{};
 
-        if (bytes.len < @sizeOf(u32)) return LoaderError.OutOfMemory;
+        if (bytes.len < @sizeOf(u32)) return LoaderError.TruncatedBytecode;
 
         var offset: usize = 0;
         const field_count = std.mem.bytesToValue(u32, bytes[offset .. offset + @sizeOf(u32)]);
@@ -1101,13 +1099,13 @@ fn populateStructInstanceFields(
 
         var f: u32 = 0;
         while (f < field_count) : (f += 1) {
-            si.fields[f] = instruction_bytecode.deserializeValueAtForImage(
+            si.fields[f] = try instruction_bytecode.deserializeValueAtForImage(
                 bytes,
                 &offset,
                 arena,
                 &slot_tables,
                 null,
-            ) catch return LoaderError.OutOfMemory;
+            );
         }
     }
 }
@@ -1165,20 +1163,20 @@ fn populateVectorElements(
         else
             &[_]u8{};
 
-        if (bytes.len < @sizeOf(u32)) return LoaderError.OutOfMemory;
+        if (bytes.len < @sizeOf(u32)) return LoaderError.TruncatedBytecode;
         var offset: usize = 0;
         const elem_count = std.mem.bytesToValue(u32, bytes[offset .. offset + @sizeOf(u32)]);
         offset += @sizeOf(u32);
 
         var e: u32 = 0;
         while (e < elem_count) : (e += 1) {
-            const value = instruction_bytecode.deserializeValueAtForImage(
+            const value = try instruction_bytecode.deserializeValueAtForImage(
                 bytes,
                 &offset,
                 arena,
                 &slot_tables,
                 null,
-            ) catch return LoaderError.OutOfMemory;
+            );
             vec.list.append(arena, value) catch return LoaderError.OutOfMemory;
         }
     }
@@ -1220,13 +1218,13 @@ fn populateTaggedSlots(
         if (row.inner_bytecode) |p| {
             if (row.inner_bytecode_len > 0) {
                 var offset: usize = 0;
-                inner.* = instruction_bytecode.deserializeValueAtForImage(
+                inner.* = try instruction_bytecode.deserializeValueAtForImage(
                     p[0..row.inner_bytecode_len],
                     &offset,
                     arena,
                     &slot_tables,
                     null,
-                ) catch return LoaderError.OutOfMemory;
+                );
             } else {
                 inner.* = .{ .unit = {} };
             }
@@ -1311,8 +1309,7 @@ pub fn replayMethodDispatch(ctx: *Context) LoaderError!void {
             // `.struct_type` literals (e.g. generated field getters). The
             // tables are patched before replay runs, so they resolve here.
             const body_tables = imageSlotTables(ctx);
-            const decoded = instruction_bytecode.deserializeQuotationInstructionsForImage(bytes, ctx.quotationAllocator(), &body_tables, null) catch
-                return LoaderError.OutOfMemory;
+            const decoded = try instruction_bytecode.deserializeQuotationInstructionsForImage(bytes, ctx.quotationAllocator(), &body_tables, null);
             body_instructions = decoded.instructions;
             body_effect = decoded.effect;
             ctx.registerQuotationContainerLiterals(body_instructions) catch
@@ -3571,7 +3568,7 @@ test "replayMethodDispatch: patches a private deps entry and templates the helpe
     try testing.expect(tmpl.frame.get("w") != null);
 }
 
-test "loadIntoContext: truncated body bytecode surfaces OutOfMemory" {
+test "loadIntoContext: truncated body bytecode surfaces TruncatedBytecode" {
     var ctx = Context.init(testing.allocator);
     defer ctx.deinit();
 
@@ -3593,7 +3590,7 @@ test "loadIntoContext: truncated body bytecode surfaces OutOfMemory" {
     header.words = &words;
 
     try testing.expectError(
-        LoaderError.OutOfMemory,
+        LoaderError.TruncatedBytecode,
         loadIntoContext(&ctx, &header, .{}, null),
     );
 }
@@ -3669,8 +3666,33 @@ test "loadIntoContext: an unflagged body carrying an image-only tag fails instea
     header.words = &words;
 
     try testing.expectError(
-        LoaderError.OutOfMemory,
+        LoaderError.UnknownTag,
         loadIntoContext(&ctx, &header, .{}, null),
+    );
+}
+
+test "loadIntoContext: a truncated mutable-map entries blob surfaces TruncatedBytecode" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    // Framing claims one entry, then the blob ends before the key length.
+    var encoded: std.ArrayListUnmanaged(u8) = .{};
+    defer encoded.deinit(testing.allocator);
+    const one: u32 = 1;
+    try encoded.appendSlice(testing.allocator, std.mem.asBytes(&one));
+
+    const descs = [_]MutableMapDescription{
+        .{ .slot = 0, .entries_bytecode = encoded.items.ptr, .entries_bytecode_len = @intCast(encoded.items.len) },
+    };
+    var mm_storage: [1]?*value_mod.MutableMap = .{null};
+
+    var header = emptyHeader();
+    header.mutable_map_slot_count = 1;
+    header.mutable_map_descriptions = &descs;
+
+    try testing.expectError(
+        LoaderError.TruncatedBytecode,
+        loadIntoContext(&ctx, &header, .{ .mutable_maps = &mm_storage }, null),
     );
 }
 

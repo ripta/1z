@@ -14276,10 +14276,11 @@ export fn jitPushQuotation(ctx_raw: usize, data_ptr: usize, data_len: usize, des
             if (cache.lookup(data_ptr)) |cached| break :blk .{ .instructions = cached.instructions, .effect = cached.effect };
 
             // A failure below strands the partial decode on the shared arena, which cannot free
-            // it individually. Accepted: these paths fire only on true backing-allocator
-            // exhaustion.
-            const decoded = deserializeQuotationInstructions(src[0..data_len], cache.decodeAllocator(), null, null) catch {
-                ctx.jit_pending_error = error.OutOfMemory;
+            // it individually. A failed decode is never cached, so a recovered-and-retried push
+            // site strands another copy per attempt. Accepted: the failure needs a corrupt
+            // stream or an exhausted allocator, neither of which retrying can outrun.
+            const decoded = deserializeQuotationInstructions(src[0..data_len], cache.decodeAllocator(), null, null) catch |err| {
+                ctx.jit_pending_error = err;
                 return 2;
             };
             if (ctx.image_reified_quotation_modules) |modules| {
@@ -14296,8 +14297,8 @@ export fn jitPushQuotation(ctx_raw: usize, data_ptr: usize, data_len: usize, des
             };
             break :blk .{ .instructions = decoded.instructions, .effect = decoded.effect };
         }
-        const decoded = deserializeQuotationInstructions(src[0..data_len], ctx.quotationAllocator(), null, null) catch {
-            ctx.jit_pending_error = error.OutOfMemory;
+        const decoded = deserializeQuotationInstructions(src[0..data_len], ctx.quotationAllocator(), null, null) catch |err| {
+            ctx.jit_pending_error = err;
             return 2;
         };
         break :blk .{ .instructions = decoded.instructions, .effect = decoded.effect };
@@ -14326,8 +14327,8 @@ export fn jitPushArray(ctx_raw: usize, data_ptr: usize, data_len: usize) callcon
     // Attach compiled code_ptrs to quotations nested in the composite, indexed by
     // the build-time quotation_id stamped into the serialized form.
     const qfns: ?[]const ?*const anyopaque = if (ctx.aot_quotation_fns) |fns| fns.table[0..fns.size] else null;
-    const val = deserializeValueAt(src[0..data_len], &offset, alloc, qfns, null) catch {
-        ctx.jit_pending_error = error.OutOfMemory;
+    const val = deserializeValueAt(src[0..data_len], &offset, alloc, qfns, null) catch |err| {
+        ctx.jit_pending_error = err;
         return 2;
     };
     // The deserialized composite is freshly constructed, so its slots already
@@ -15316,6 +15317,31 @@ test "jitPushQuotation: runtime-image push caches the decode and stamps the defi
 
     // The cached second push preserves the effect the first decode recovered.
     try testing.expectEqual(first.quotation.effect, second.quotation.effect);
+}
+
+test "jitPushQuotation: a truncated stream propagates TruncatedBytecode" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    // No-effect marker, then the stream ends before the u32 instruction count.
+    const truncated = [_]u8{0};
+    var dest: Value = undefined;
+    const rc = jitPushQuotation(@intFromPtr(&ctx), @intFromPtr(&truncated), truncated.len, @intFromPtr(&dest), std.math.maxInt(usize));
+    try testing.expectEqual(@as(i32, 2), rc);
+    try testing.expectEqual(error.TruncatedBytecode, ctx.jit_pending_error.?);
+}
+
+test "jitPushArray: a truncated stream propagates TruncatedBytecode" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    var encoded: std.ArrayListUnmanaged(u8) = .{};
+    defer encoded.deinit(testing.allocator);
+    try ibc.serializeValueInto(&encoded, .{ .fixnum = 7 }, testing.allocator, null, null);
+
+    const rc = jitPushArray(@intFromPtr(&ctx), @intFromPtr(encoded.items.ptr), encoded.items.len - 1);
+    try testing.expectEqual(@as(i32, 2), rc);
+    try testing.expectEqual(error.TruncatedBytecode, ctx.jit_pending_error.?);
 }
 
 test "jitNativeWordCall: dispatch hit runs the registered override, not the native's default body" {
