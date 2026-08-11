@@ -249,13 +249,6 @@ pub fn loadIntoContext(
     try fillCallTargetSlots(ctx, header);
 }
 
-/// Decode every word body now that the slot tables are patched.
-/// `populateModulesAndWords` left all bodies empty because a body may
-/// slot-encode `.struct_type` / `.mutable_map` / `.struct_instance`
-/// literals against tables that were not yet populated; this pass resolves
-/// them through `deserializeQuotationInstructionsForImage` and installs the
-/// real body. A slot-free body decodes identically through the image
-/// decoder, so generated and user words share one path.
 /// Build the slot-resolution tables for image-mode bytecode decoding from
 /// the Context's patched slot-table pointers. Both the generated-word-body
 /// pass and method-dispatch replay decode `.struct_type` (and other
@@ -292,6 +285,9 @@ fn imageSlotTables(ctx: *Context) instruction_bytecode.SlotResolutionTables {
     };
 }
 
+/// Decode every flagged word body and install it on the entry `populateModulesAndWords` left
+/// empty. This pass runs after the slot tables are patched, so the image decoder can resolve
+/// the slot-encoded literals and baked call targets a flagged body carries.
 fn decodeWordBodies(ctx: *Context, header: *const Header) LoaderError!void {
     if (header.word_count == 0) return;
     const words = header.words orelse return;
@@ -305,6 +301,8 @@ fn decodeWordBodies(ctx: *Context, header: *const Header) LoaderError!void {
         const w = words[wi];
         if (w.body_bytecode == null or w.body_bytecode_len == 0) continue;
         if (w.module_idx >= header.module_count) return LoaderError.BadWordIndex;
+        // An unflagged row's body was already decoded during the initial population pass.
+        if (w.flags & aot_image_emit.flag_bit_image_decode == 0) continue;
 
         const m = modules[w.module_idx];
         const module_name = nameSlice(m.name, m.name_len);
@@ -318,13 +316,6 @@ fn decodeWordBodies(ctx: *Context, header: *const Header) LoaderError!void {
             cache_entry.*.module.deps.getPtr(word_name) orelse continue
         else
             cache_entry.*.module.words.getPtr(word_name) orelse continue;
-
-        // A non-provenance word whose by-value decode already produced a body
-        // in `populateModulesAndWords` is final; only generator-emitted words
-        // and bodies that failed by-value decode because they slot-encode a
-        // literal are still empty and decode here, now that the slot tables
-        // are patched.
-        if (word_entry.action == .compound and word_entry.action.compound.len > 0) continue;
 
         const bytes = w.body_bytecode.?[0..w.body_bytecode_len];
         const decoded = instruction_bytecode.deserializeQuotationInstructionsForImage(bytes, arena, &tables) catch
@@ -532,15 +523,19 @@ fn stampWordBodies(ctx: *Context, header: *const Header) LoaderError!void {
     }
 }
 
-/// Decode a non-provenance word body through the by-value decoder during the
-/// initial population pass. A slot-free body decodes here; one that carries a
-/// slot-encoded literal fails (the slot tag is not a by-value tag) and is left
-/// empty so `decodeWordBodies` can decode it through the image decoder once the
-/// slot tables are patched.
-fn decodeWordBodyInline(arena: Allocator, w: Word) []const value_mod.Instruction {
+/// Decode a word body through the by-value decoder during the initial population pass.
+///
+/// The emitter cleared `flag_bit_image_decode` on this row, so the stream is self-contained and
+/// a failure is a real failure, not a routing signal.
+fn decodeWordBodyInline(
+    arena: Allocator,
+    w: Word,
+    qfns: ?[]const ?*const anyopaque,
+) LoaderError![]const value_mod.Instruction {
     if (w.body_bytecode == null or w.body_bytecode_len == 0) return &.{};
     const bytes = w.body_bytecode.?[0..w.body_bytecode_len];
-    const decoded = instruction_bytecode.deserializeQuotationInstructions(bytes, arena, null) catch return &.{};
+    const decoded = instruction_bytecode.deserializeQuotationInstructions(bytes, arena, qfns) catch
+        return LoaderError.OutOfMemory;
     return decoded.instructions;
 }
 
@@ -555,6 +550,8 @@ fn populateModulesAndWords(
     const modules = header.modules orelse return;
     const words = header.words orelse return;
     const arena = ctx.quotationAllocator();
+    const qfns: ?[]const ?*const anyopaque =
+        if (ctx.aot_quotation_fns) |f| f.table[0..f.size] else null;
 
     var module_i: u32 = 0;
     while (module_i < header.module_count) : (module_i += 1) {
@@ -576,22 +573,12 @@ fn populateModulesAndWords(
 
             const markers_slice = try buildMarkerSlice(arena, w);
             const stack_effect = try decodeStackEffect(arena, header, w.stack_effect_idx, protocol_slots);
-            // Generator-emitted words and any body carrying slot-encoded
-            // literals (struct_type, mutable_map, struct_instance, ...) decode
-            // after the slot tables are patched, in `decodeWordBodies`. A
-            // slot-free body decodes here through the by-value decoder; one
-            // that carries a slot tag fails that decode (the slot tag is not a
-            // by-value tag) and is left empty for the deferred image pass.
-            //
-            // An image carrying baked call targets skips the inline attempt entirely. Their tag is
-            // not a by-value tag either, so a body holding one would fail here after arena-allocating
-            // its instruction array and every name it had already decoded. That memory is
-            // unreclaimable on an arena, and a body calling a sibling word is the common case rather
-            // than the exception, so the wasted pass would scale with the image.
-            const body: []const value_mod.Instruction = if (w.provenance_generator != null or header.call_target_count != 0)
+            // The flag routes each body to the decoder that can read it, so a failure here is a
+            // real failure and propagates instead of installing a silent empty body.
+            const body: []const value_mod.Instruction = if (w.flags & aot_image_emit.flag_bit_image_decode != 0)
                 &.{}
             else
-                decodeWordBodyInline(arena, w);
+                try decodeWordBodyInline(arena, w, qfns);
             ctx.registerQuotationContainerLiterals(body) catch return LoaderError.OutOfMemory;
             const diag = decodeDiagnosticMetadata(w);
 
@@ -2984,6 +2971,7 @@ test "call-target slots: a decoded baked call carries the target module's own de
 
     const m_name = "demo";
     var caller = wordRow("caller", 0, 0);
+    caller.flags = aot_image_emit.flag_bit_image_decode;
     caller.body_bytecode = caller_enc.items.ptr;
     caller.body_bytecode_len = @intCast(caller_enc.items.len);
     var target = wordRow("target", 1, 0);
@@ -3464,7 +3452,7 @@ test "decodeWordBodies: provenanced private row decodes into the deps entry" {
     const parent = "point";
     const role = "getter";
     var w = wordRow("x>>", 1, 0);
-    w.flags = aot_image_emit.flag_bit_module_private;
+    w.flags = aot_image_emit.flag_bit_module_private | aot_image_emit.flag_bit_image_decode;
     w.body_bytecode = encoded.items.ptr;
     w.body_bytecode_len = @intCast(encoded.items.len);
     w.provenance_generator = gen.ptr;
@@ -3485,8 +3473,8 @@ test "decodeWordBodies: provenanced private row decodes into the deps entry" {
 
     try loadIntoContext(&ctx, &header, .{}, null);
 
-    // A provenanced row skips the inline by-value decode, so a body here proves the deferred
-    // image pass resolved the deps entry by its flag.
+    // A row flagged for image decode skips the inline pass, so a body here proves the deferred
+    // image pass resolved the deps entry by its private flag.
     const module_ptr = (ctx.module_cache_value.map.get(m_name) orelse return error.TestExpectedModule).module;
     const mw = module_ptr.deps.get("x>>") orelse return error.TestExpectedDep;
     try testing.expectEqual(@as(usize, 1), mw.action.compound.len);
@@ -3589,6 +3577,82 @@ test "loadIntoContext: truncated body bytecode surfaces OutOfMemory" {
     var w = wordRow(w_name, 1, 0);
     w.body_bytecode = &truncated;
     w.body_bytecode_len = truncated.len;
+    const words = [_]Word{w};
+    const modules = [_]Module{
+        .{ .name = m_name.ptr, .name_len = m_name.len, .word_start_idx = 0, .word_count = 1 },
+    };
+    var header = emptyHeader();
+    header.module_count = 1;
+    header.word_count = 1;
+    header.modules = &modules;
+    header.words = &words;
+
+    try testing.expectError(
+        LoaderError.OutOfMemory,
+        loadIntoContext(&ctx, &header, .{}, null),
+    );
+}
+
+test "loadIntoContext: an image-decode flag defers a by-value-decodable body to the image pass" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    const body = [_]value_mod.Instruction{
+        .{ .op = .{ .push_literal = .{ .fixnum = 4 } }, .line = 0, .column = 0 },
+    };
+    var encoded: std.ArrayListUnmanaged(u8) = .{};
+    defer encoded.deinit(testing.allocator);
+    try instruction_bytecode.serializeInstructionsInto(&encoded, &body, null, testing.allocator, null, null);
+
+    const m_name = "demo";
+    var w = wordRow("deferred", 1, 0);
+    w.flags = aot_image_emit.flag_bit_image_decode;
+    w.body_bytecode = encoded.items.ptr;
+    w.body_bytecode_len = @intCast(encoded.items.len);
+    const words = [_]Word{w};
+    const modules = [_]Module{
+        .{ .name = m_name.ptr, .name_len = m_name.len, .word_start_idx = 0, .word_count = 1 },
+    };
+    var header = emptyHeader();
+    header.module_count = 1;
+    header.word_count = 1;
+    header.modules = &modules;
+    header.words = &words;
+
+    try loadIntoContext(&ctx, &header, .{}, null);
+
+    // The flag alone routes the body to `decodeWordBodies`, so a populated compound proves the
+    // deferred pass decoded it rather than the inline pass.
+    const module_ptr = (ctx.module_cache_value.map.get(m_name) orelse return error.TestExpectedModule).module;
+    const mw = module_ptr.words.get("deferred") orelse return error.TestExpectedWord;
+    try testing.expectEqual(@as(usize, 1), mw.action.compound.len);
+    try testing.expectEqual(@as(i64, 4), mw.action.compound[0].op.push_literal.fixnum);
+}
+
+test "loadIntoContext: an unflagged body carrying an image-only tag fails instead of loading empty" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    // One baked call, hand-encoded: `has_effect 0 | count 1 | line | column | tag 2 | slot 0`.
+    // The row's flag is clear, so the inline by-value decoder reads it and rejects the tag. An
+    // emitter that bakes a target but drops the flag is the drift this pins as a hard error.
+    var encoded: std.ArrayListUnmanaged(u8) = .{};
+    defer encoded.deinit(testing.allocator);
+    try encoded.append(testing.allocator, 0);
+    const one: u32 = 1;
+    try encoded.appendSlice(testing.allocator, std.mem.asBytes(&one));
+    const line: u32 = 1;
+    const col: u32 = 1;
+    try encoded.appendSlice(testing.allocator, std.mem.asBytes(&line));
+    try encoded.appendSlice(testing.allocator, std.mem.asBytes(&col));
+    try encoded.append(testing.allocator, 2);
+    const slot_index: u32 = 0;
+    try encoded.appendSlice(testing.allocator, std.mem.asBytes(&slot_index));
+
+    const m_name = "demo";
+    var w = wordRow("drifted", 1, 0);
+    w.body_bytecode = encoded.items.ptr;
+    w.body_bytecode_len = @intCast(encoded.items.len);
     const words = [_]Word{w};
     const modules = [_]Module{
         .{ .name = m_name.ptr, .name_len = m_name.len, .word_start_idx = 0, .word_count = 1 },

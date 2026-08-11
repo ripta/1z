@@ -1167,7 +1167,7 @@ static const onez_image_word_t onez_image_words_storage[] = {
         .module_idx = 0,
         .classification = 0,
         .blob_reason = 0,
-        .flags = 8,
+        .flags = 72,
         ._reserved = 0,
         .input_count = 0,
         .output_count = 1,
@@ -1229,7 +1229,7 @@ static const onez_image_word_t onez_image_words_storage[] = {
         .module_idx = 0,
         .classification = 0,
         .blob_reason = 0,
-        .flags = 8,
+        .flags = 72,
         ._reserved = 0,
         .input_count = 0,
         .output_count = 1,
@@ -1381,7 +1381,7 @@ static const onez_image_entry_import_t onez_image_entry_imports_storage[] = {
 };
 
 __attribute__((used)) const onez_image_header_t onez_image_v1 = {
-    .format_version = 18,
+    .format_version = 19,
     .module_count = 1,
     .word_count = 8,
     .marker_pool_count = 4,

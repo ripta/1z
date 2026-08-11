@@ -1087,7 +1087,7 @@ static const onez_image_entry_import_t onez_image_entry_imports_storage[] = {
 };
 
 __attribute__((used)) const onez_image_header_t onez_image_v1 = {
-    .format_version = 18,
+    .format_version = 19,
     .module_count = 1,
     .word_count = 2,
     .marker_pool_count = 2,

@@ -62,10 +62,16 @@ const flag_bit_never_returns: u8 = 1 << 4;
 /// A `private{ }` helper row. The loader routes it into the module's `deps` instead of `words`,
 /// keeping it off the public by-name surface.
 pub const flag_bit_module_private: u8 = 1 << 5;
+/// The body bytecode carries slot references or baked call targets that only the image decoder
+/// reads.
+///
+/// The loader defers a flagged row to `decodeWordBodies`, after the slot tables are patched. An
+/// unflagged row decodes through the by-value decoder during the initial population pass.
+pub const flag_bit_image_decode: u8 = 1 << 6;
 
 /// Format version emitted into `onez_image_header.format_version`. Bumped
 /// when the on-disk layout changes in a way the loader cannot ignore.
-pub const format_version: u32 = 18;
+pub const format_version: u32 = 19;
 
 /// Counts that the metadata emitter plumbs back into `AotMetadata`. The
 /// codegen knows these as it walks the manifest, so emitting them here
@@ -303,6 +309,10 @@ pub fn emitImageCFromCollection(
     defer allocator.free(word_body_lens);
     @memset(word_body_lens, 0);
 
+    const word_image_decode = try allocator.alloc(bool, manifest.entries.len);
+    defer allocator.free(word_image_decode);
+    @memset(word_image_decode, false);
+
     try emitMarkerPool(out, allocator, marker_pool, &stats);
     try emitTypeValueSlotTable(out, allocator, effect_table);
     try emitMarkerSlotTable(out, allocator, effect_table);
@@ -333,9 +343,9 @@ pub fn emitImageCFromCollection(
     var call_targets: CallTargetTable = .{};
     defer call_targets.deinit(allocator);
     if (!options.metadata_only) {
-        try emitWordBodyBytecode(out, allocator, ctx, manifest, word_body_lens, effect_table, struct_index, &call_targets);
+        try emitWordBodyBytecode(out, allocator, ctx, manifest, word_body_lens, word_image_decode, effect_table, struct_index, &call_targets);
     }
-    try emitModuleAndWordTables(out, allocator, ctx, manifest, word_id_lookup, marker_pool, effect_table, word_to_typevalue_slot, word_body_lens, &stats);
+    try emitModuleAndWordTables(out, allocator, ctx, manifest, word_id_lookup, marker_pool, effect_table, word_to_typevalue_slot, word_body_lens, word_image_decode, &stats);
     try emitReifiedQuotationModules(out, allocator, reified_quotation_modules);
     const module_dep_count = try emitModuleDepTable(out, allocator, ctx, manifest);
     const entry_import_count = try emitEntryImportTable(out, allocator, ctx, manifest, entry_imports);
@@ -3817,24 +3827,16 @@ fn writeWordProvRoleSym(out: *std.ArrayListUnmanaged(u8), allocator: Allocator, 
     try out.appendSlice(allocator, s);
 }
 
-/// Serialize each structural compound word's body to bytecode and
-/// emit it as a `static const uint8_t onez_image_w_<idx>_body[]`
-/// array. Records the per-word byte length in `word_body_lens` so
-/// `emitModuleAndWordTables` can reference the symbol from the
-/// matching word-table row. Words that fall on the blob path, lack a
-/// compound action, or carry an empty body get a length of zero and
-/// the word table emits NULL for `body_bytecode`. The blob loader
-/// still rewrites empty bodies for `type_val` blob entries
-/// downstream, so dropping bytes there avoids redundant work.
+/// Serialize each structural compound word's body to bytecode and emit it as a
+/// `static const uint8_t onez_image_w_<idx>_body[]` array.
 ///
-/// Generator-emitted words (those with a non-null `provenance` such
-/// as virtual-type predicates, struct constructors, and FFI
-/// accessors) are also skipped: their bodies encode `@intFromPtr` of
-/// a runtime type as a fixnum literal, which is non-deterministic
-/// across builds and stale across runtime-image load. Such words
-/// still reach runtime through compiled dispatch via `word_id`; the
-/// only fidelity loss is that `>word-info` reports their body as
-/// empty instead of the original instruction stream.
+/// Records the per-word byte length in `word_body_lens` so `emitModuleAndWordTables` can
+/// reference the symbol from the matching word-table row, and records in `word_image_decode`
+/// which bodies only the image decoder reads, which that same table emits as
+/// `flag_bit_image_decode`. Words that fall on the blob path, lack a compound action, or carry
+/// an empty body get a length of zero and the word table emits NULL for `body_bytecode`. The
+/// blob loader still rewrites empty bodies for `type_val` blob entries downstream, so dropping
+/// bytes there avoids redundant work.
 ///
 /// Serialized bytes are owned by the codegen allocator for the
 /// duration of this helper -- they are rendered into `out` and
@@ -3846,6 +3848,7 @@ fn emitWordBodyBytecode(
     ctx: *const Context,
     manifest: ImageManifest,
     word_body_lens: []u32,
+    word_image_decode: []bool,
     effect_table: *const StackEffectTable,
     struct_index: *const std.AutoHashMapUnmanaged(*const value_mod.StructType, u32),
     call_targets: *CallTargetTable,
@@ -3902,6 +3905,8 @@ fn emitWordBodyBytecode(
         const resolver: ?instruction_bytecode.CallTargetResolver =
             if (resolver_state) |*s| s.resolver() else null;
 
+        var image_encoded = mw_ptr.provenance != null;
+
         // Generator-emitted words (struct constructors, getters,
         // predicates, ...) push a runtime `.struct_type` literal the
         // by-value serializer cannot encode. Route them through the
@@ -3923,14 +3928,21 @@ fn emitWordBodyBytecode(
                 // serializer cannot encode.
                 //
                 // Fall back to the image serializer so the literal slot-references the live runtime
-                // value. The loader decodes every body through the image decoder, which resolves the
-                // slot tags.
-                error.NotEncodable => instruction_bytecode.serializeQuotationInstructionsForImage(body, null, allocator, &slot_maps, resolver) catch |e| switch (e) {
-                    error.OutOfMemory => return error.OutOfMemory,
-                    error.NotEncodable => return error.NotEncodable,
+                // value. The loader resolves the slot tags through the image decoder.
+                error.NotEncodable => blk: {
+                    image_encoded = true;
+                    break :blk instruction_bytecode.serializeQuotationInstructionsForImage(body, null, allocator, &slot_maps, resolver) catch |e| switch (e) {
+                        error.OutOfMemory => return error.OutOfMemory,
+                        error.NotEncodable => return error.NotEncodable,
+                    };
                 },
             };
         defer allocator.free(bytes);
+
+        // A baked call target rides in the stream as a tag only the image decoder reads, so it
+        // forces the image route even when the body serialized by-value.
+        const baked = if (resolver_state) |s| s.baked else false;
+        word_image_decode[idx] = image_encoded or baked;
 
         try out.appendSlice(allocator, "static const uint8_t ");
         try writeWordBodySym(out, allocator, idx);
@@ -3970,6 +3982,7 @@ fn emitModuleAndWordTables(
     effect_table: *const StackEffectTable,
     word_to_typevalue_slot: []const u32,
     word_body_lens: []const u32,
+    word_image_decode: []const bool,
     stats: *ImageEmissionStats,
 ) Allocator.Error!void {
     if (manifest.entries.len == 0) {
@@ -4046,6 +4059,7 @@ fn emitModuleAndWordTables(
 
         var flags = computeFlags(mw_ptr);
         if (entry.module_private) flags |= flag_bit_module_private;
+        if (word_image_decode[idx]) flags |= flag_bit_image_decode;
         const input_count: u8 = if (mw_ptr.stack_effect) |eff|
             @intCast(eff.concreteInputCount())
         else
@@ -4386,6 +4400,8 @@ const CallTargetResolverState = struct {
     module_name: []const u8,
     row_index: *const RowIndex,
     table: *CallTargetTable,
+    /// Set when this body baked at least one call target, which makes the stream image-only.
+    baked: bool = false,
 
     fn resolver(self: *CallTargetResolverState) instruction_bytecode.CallTargetResolver {
         return .{ .state = self, .resolve = resolve };
@@ -4394,7 +4410,9 @@ const CallTargetResolverState = struct {
     fn resolve(state_raw: *anyopaque, name: []const u8) Allocator.Error!?u32 {
         const self: *CallTargetResolverState = @ptrCast(@alignCast(state_raw));
         const word_idx = self.rowFor(name) orelse return null;
-        return try self.table.intern(self.allocator, word_idx);
+        const slot = try self.table.intern(self.allocator, word_idx);
+        self.baked = true;
+        return slot;
     }
 
     fn rowFor(self: *const CallTargetResolverState, name: []const u8) ?u32 {
@@ -6512,6 +6530,51 @@ test "emitImageC: call targets bake own words, private helpers, and imports; oth
     // survive in the body bytecode as length-prefixed bytes; a baked call stores no name at all.
     try testing.expect(std.mem.indexOf(u8, out.items, "100,117,112") != null);
     try testing.expect(std.mem.indexOf(u8, out.items, "114,97,119") != null);
+
+    // `caller` baked targets into its stream, so its row alone routes to the image decoder.
+    // `sibling`'s slot-free body stays on the by-value route.
+    var flag_buf: [32]u8 = undefined;
+    const image_needle = std.fmt.bufPrint(&flag_buf, ".flags = {d}", .{flag_bit_image_decode}) catch unreachable;
+    try testing.expect(std.mem.indexOf(u8, out.items, image_needle) != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, ".flags = 0") != null);
+}
+
+test "emitImageC: a body that falls back to the image serializer flags its row" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+    const arena = ctx.quotationAllocator();
+
+    const mm = try value_mod.MutableMap.create(arena);
+
+    const owner = try arena.create(Module);
+    owner.* = .{ .name = "moda", .words = .{} };
+    // A mutable_map literal is structural but by-value-rejected, so `mapper`'s body takes the
+    // `NotEncodable` fallback into the image serializer.
+    try owner.words.put(arena, "mapper", .{ .action = .{ .compound = try arena.dupe(Instruction, &.{
+        .{ .op = .{ .push_literal = .{ .mutable_map = mm } }, .line = 0, .column = 0 },
+    }) } });
+    try owner.words.put(arena, "plain", .{ .action = .{ .compound = try arena.dupe(Instruction, &.{
+        .{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 0, .column = 0 },
+    }) } });
+
+    const cache_alloc = ctx.module_cache_value.header.allocator;
+    try ctx.module_cache_value.map.put(cache_alloc, try cache_alloc.dupe(u8, "moda"), .{ .module = owner });
+
+    var manifest = try aot_image.buildImageManifest(&ctx, testing.allocator);
+    defer manifest.deinit(testing.allocator);
+
+    var lookup: std.StringHashMapUnmanaged(u32) = .{};
+    defer lookup.deinit(testing.allocator);
+
+    var out: std.ArrayListUnmanaged(u8) = .{};
+    defer out.deinit(testing.allocator);
+
+    _ = try emitImageC(&out, testing.allocator, &ctx, manifest, &lookup, .{}, &.{});
+
+    var flag_buf: [32]u8 = undefined;
+    const image_needle = std.fmt.bufPrint(&flag_buf, ".flags = {d}", .{flag_bit_image_decode}) catch unreachable;
+    try testing.expect(std.mem.indexOf(u8, out.items, image_needle) != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, ".flags = 0") != null);
 }
 
 test "emitImageC: module dep row survives an embedded-stdlib source" {
