@@ -14278,7 +14278,7 @@ export fn jitPushQuotation(ctx_raw: usize, data_ptr: usize, data_len: usize, des
             // A failure below strands the partial decode on the shared arena, which cannot free
             // it individually. Accepted: these paths fire only on true backing-allocator
             // exhaustion.
-            const decoded = deserializeQuotationInstructions(src[0..data_len], cache.decodeAllocator(), null) catch {
+            const decoded = deserializeQuotationInstructions(src[0..data_len], cache.decodeAllocator(), null, null) catch {
                 ctx.jit_pending_error = error.OutOfMemory;
                 return 2;
             };
@@ -14296,7 +14296,7 @@ export fn jitPushQuotation(ctx_raw: usize, data_ptr: usize, data_len: usize, des
             };
             break :blk .{ .instructions = decoded.instructions, .effect = decoded.effect };
         }
-        const decoded = deserializeQuotationInstructions(src[0..data_len], ctx.quotationAllocator(), null) catch {
+        const decoded = deserializeQuotationInstructions(src[0..data_len], ctx.quotationAllocator(), null, null) catch {
             ctx.jit_pending_error = error.OutOfMemory;
             return 2;
         };
@@ -14326,7 +14326,7 @@ export fn jitPushArray(ctx_raw: usize, data_ptr: usize, data_len: usize) callcon
     // Attach compiled code_ptrs to quotations nested in the composite, indexed by
     // the build-time quotation_id stamped into the serialized form.
     const qfns: ?[]const ?*const anyopaque = if (ctx.aot_quotation_fns) |fns| fns.table[0..fns.size] else null;
-    const val = deserializeValueAt(src[0..data_len], &offset, alloc, qfns) catch {
+    const val = deserializeValueAt(src[0..data_len], &offset, alloc, qfns, null) catch {
         ctx.jit_pending_error = error.OutOfMemory;
         return 2;
     };

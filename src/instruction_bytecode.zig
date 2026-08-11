@@ -129,6 +129,34 @@ const container_backing = @import("container_backing.zig");
 /// Errors that can arise from the encoder.
 pub const SerializeError = Allocator.Error || error{NotEncodable};
 
+/// Errors that can arise from the decoder. The three malformed members name structural failures
+/// in the stream; `OutOfMemory` is reserved for genuine allocation failure.
+pub const DecodeError = Allocator.Error || error{
+    TruncatedBytecode,
+    UnknownTag,
+    UnresolvedSlot,
+};
+
+/// Structured report of a decode failure, written through the public entry points' `diag`
+/// out-param when the caller supplies one. The decoder allocates nothing for it; the caller
+/// formats the fields it cares about.
+pub const DecodeDiagnostic = struct {
+    kind: Kind,
+    /// Byte offset where the failure was detected. For `unknown_tag` it names the tag byte itself.
+    offset: usize,
+    /// `unknown_tag`: the offending byte.
+    tag: u8 = 0,
+    /// `unknown_tag`: the byte is a known image-only tag reached by the by-value decoder,
+    /// rather than no tag at all.
+    image_only_tag: bool = false,
+    /// `unresolved_slot`: static name of the slot family, e.g. "typevalue".
+    slot_kind: []const u8 = "",
+    /// `unresolved_slot`: the slot index that failed to resolve.
+    slot: usize = 0,
+
+    pub const Kind = enum { truncated_bytecode, unknown_tag, unresolved_slot };
+};
+
 /// Image-mode slot maps. When `serializeValueIntoForImage` receives a
 /// non-null `*const SlotEncodingMaps`, type-carrier Value variants
 /// (`.type_val`, `.struct_type`, `.tagged`, `.parameter`, `.marker`) are
@@ -654,48 +682,21 @@ pub const DecodedQuotation = struct {
 
 /// Decode a quotation stream from a serialized byte buffer. Caller owns
 /// the returned instructions, effect, and any string/symbol/array/hash
-/// payloads that were allocated through `allocator`.
-pub fn deserializeQuotationInstructions(data: []const u8, allocator: Allocator, qfns: ?[]const ?*const anyopaque) Allocator.Error!DecodedQuotation {
-    var offset: usize = 0;
-    return deserializeInstructionsAt(data, &offset, allocator, qfns);
+/// payloads that were allocated through `allocator`. On failure, `diag`
+/// (when non-null) receives the structural detail.
+pub fn deserializeQuotationInstructions(data: []const u8, allocator: Allocator, qfns: ?[]const ?*const anyopaque, diag: ?*DecodeDiagnostic) DecodeError!DecodedQuotation {
+    var d = Decoder{ .data = data, .offset = 0, .allocator = allocator, .qfns = qfns, .diag = diag };
+    return d.readInstructions();
 }
 
 /// Decode a quotation stream starting at `offset`, advancing it past the
 /// consumed bytes. When `qfns` is non-null, a nested quotation's decoded
 /// `quotation_id` indexes it to attach a compiled `code_ptr`; pass `null` to
 /// leave every reconstructed quotation's `code_ptr` null.
-pub fn deserializeInstructionsAt(data: []const u8, offset: *usize, allocator: Allocator, qfns: ?[]const ?*const anyopaque) Allocator.Error!DecodedQuotation {
-    const effect = try readStreamEffect(data, offset, allocator);
-    errdefer if (effect) |e| freeEffectTree(allocator, e);
-    if (offset.* + 4 > data.len) return error.OutOfMemory;
-    const count = std.mem.readInt(u32, data[offset.*..][0..4], .little);
-    offset.* += 4;
-    const instructions = try allocator.alloc(Instruction, count);
-    errdefer allocator.free(instructions);
-    for (instructions) |*instr| {
-        if (offset.* + 9 > data.len) return error.OutOfMemory; // line(4)+col(4)+op_tag(1)
-        const line = std.mem.readInt(u32, data[offset.*..][0..4], .little);
-        offset.* += 4;
-        const col = std.mem.readInt(u32, data[offset.*..][0..4], .little);
-        offset.* += 4;
-        const op_tag = data[offset.*];
-        offset.* += 1;
-        if (op_tag == op_tag_push_literal) {
-            const val = try deserializeValueAt(data, offset, allocator, qfns);
-            instr.* = .{ .op = .{ .push_literal = val }, .line = line, .column = col };
-        } else if (op_tag == op_tag_call_word) {
-            if (offset.* + 4 > data.len) return error.OutOfMemory;
-            const nlen = std.mem.readInt(u32, data[offset.*..][0..4], .little);
-            offset.* += 4;
-            if (offset.* + nlen > data.len) return error.OutOfMemory;
-            const name_copy = try allocator.dupe(u8, data[offset.*..][0..nlen]);
-            offset.* += nlen;
-            instr.* = .{ .op = .{ .call_word = name_copy }, .line = line, .column = col };
-        } else {
-            return error.OutOfMemory;
-        }
-    }
-    return .{ .instructions = instructions, .effect = effect };
+pub fn deserializeInstructionsAt(data: []const u8, offset: *usize, allocator: Allocator, qfns: ?[]const ?*const anyopaque, diag: ?*DecodeDiagnostic) DecodeError!DecodedQuotation {
+    var d = Decoder{ .data = data, .offset = offset.*, .allocator = allocator, .qfns = qfns, .diag = diag };
+    defer offset.* = d.offset;
+    return d.readInstructions();
 }
 
 /// Image-mode variant of `deserializeQuotationInstructions`. `push_literal`
@@ -708,9 +709,10 @@ pub fn deserializeQuotationInstructionsForImage(
     data: []const u8,
     allocator: Allocator,
     slot_tables: *const SlotResolutionTables,
-) Allocator.Error!DecodedQuotation {
-    var offset: usize = 0;
-    return deserializeInstructionsAtForImage(data, &offset, allocator, slot_tables);
+    diag: ?*DecodeDiagnostic,
+) DecodeError!DecodedQuotation {
+    var d = Decoder{ .data = data, .offset = 0, .allocator = allocator, .slot_tables = slot_tables, .diag = diag };
+    return d.readInstructionsForImage();
 }
 
 /// Image-mode variant of `deserializeInstructionsAt`. See
@@ -720,169 +722,27 @@ pub fn deserializeInstructionsAtForImage(
     offset: *usize,
     allocator: Allocator,
     slot_tables: *const SlotResolutionTables,
-) Allocator.Error!DecodedQuotation {
-    const effect = try readStreamEffect(data, offset, allocator);
-    errdefer if (effect) |e| freeEffectTree(allocator, e);
-    if (offset.* + 4 > data.len) return error.OutOfMemory;
-    const count = std.mem.readInt(u32, data[offset.*..][0..4], .little);
-    offset.* += 4;
-    const instructions = try allocator.alloc(Instruction, count);
-    errdefer allocator.free(instructions);
-    for (instructions) |*instr| {
-        if (offset.* + 9 > data.len) return error.OutOfMemory; // line(4)+col(4)+op_tag(1)
-        const line = std.mem.readInt(u32, data[offset.*..][0..4], .little);
-        offset.* += 4;
-        const col = std.mem.readInt(u32, data[offset.*..][0..4], .little);
-        offset.* += 4;
-        const op_tag = data[offset.*];
-        offset.* += 1;
-        if (op_tag == op_tag_push_literal) {
-            const val = try deserializeValueAtForImage(data, offset, allocator, slot_tables);
-            instr.* = .{ .op = .{ .push_literal = val }, .line = line, .column = col };
-        } else if (op_tag == op_tag_call_word) {
-            if (offset.* + 4 > data.len) return error.OutOfMemory;
-            const nlen = std.mem.readInt(u32, data[offset.*..][0..4], .little);
-            offset.* += 4;
-            if (offset.* + nlen > data.len) return error.OutOfMemory;
-            const name_copy = try allocator.dupe(u8, data[offset.*..][0..nlen]);
-            offset.* += nlen;
-            instr.* = .{ .op = .{ .call_word = name_copy }, .line = line, .column = col };
-        } else if (op_tag == op_tag_call_word_module) {
-            if (offset.* + 4 > data.len) return error.OutOfMemory;
-            const slot_index = std.mem.readInt(u32, data[offset.*..][0..4], .little);
-            offset.* += 4;
-            const slots = slot_tables.call_target_slots orelse return error.OutOfMemory;
-            if (slot_index >= slot_tables.call_target_slot_count) return error.OutOfMemory;
-            const slot = slots[slot_index] orelse return error.OutOfMemory;
-            instr.* = .{ .op = .{ .call_word_module = slot }, .line = line, .column = col };
-        } else {
-            return error.OutOfMemory;
-        }
-    }
-    return .{ .instructions = instructions, .effect = effect };
+    diag: ?*DecodeDiagnostic,
+) DecodeError!DecodedQuotation {
+    var d = Decoder{ .data = data, .offset = offset.*, .allocator = allocator, .slot_tables = slot_tables, .diag = diag };
+    defer offset.* = d.offset;
+    return d.readInstructionsForImage();
 }
 
 /// Decode a single value payload starting at `offset`, advancing it past
 /// the consumed bytes. The returned `Value` may transitively own
 /// allocations from `allocator`.
-pub fn deserializeValueAt(data: []const u8, offset: *usize, allocator: Allocator, qfns: ?[]const ?*const anyopaque) Allocator.Error!Value {
-    if (offset.* >= data.len) return error.OutOfMemory;
-    const val_tag = data[offset.*];
-    offset.* += 1;
-    return switch (val_tag) {
-        value_tag_fixnum => blk: {
-            if (offset.* + 8 > data.len) return error.OutOfMemory;
-            const v = std.mem.readInt(i64, data[offset.*..][0..8], .little);
-            offset.* += 8;
-            break :blk .{ .fixnum = v };
-        },
-        value_tag_float => blk: {
-            if (offset.* + 8 > data.len) return error.OutOfMemory;
-            const v = @as(f64, @bitCast(std.mem.readInt(u64, data[offset.*..][0..8], .little)));
-            offset.* += 8;
-            break :blk .{ .float = v };
-        },
-        value_tag_boolean => blk: {
-            if (offset.* >= data.len) return error.OutOfMemory;
-            const v = data[offset.*] != 0;
-            offset.* += 1;
-            break :blk .{ .boolean = v };
-        },
-        value_tag_string => blk: {
-            if (offset.* + 4 > data.len) return error.OutOfMemory;
-            const slen = std.mem.readInt(u32, data[offset.*..][0..4], .little);
-            offset.* += 4;
-            if (offset.* + slen > data.len) return error.OutOfMemory;
-            const copy = try allocator.dupe(u8, data[offset.*..][0..slen]);
-            offset.* += slen;
-            break :blk value_mod.stringValue(copy);
-        },
-        value_tag_symbol => blk: {
-            if (offset.* + 4 > data.len) return error.OutOfMemory;
-            const slen = std.mem.readInt(u32, data[offset.*..][0..4], .little);
-            offset.* += 4;
-            if (offset.* + slen > data.len) return error.OutOfMemory;
-            const copy = try allocator.dupe(u8, data[offset.*..][0..slen]);
-            offset.* += slen;
-            break :blk value_mod.symbolValue(copy);
-        },
-        value_tag_quotation => blk: {
-            if (offset.* + 4 > data.len) return error.OutOfMemory;
-            const q_id = std.mem.readInt(u32, data[offset.*..][0..4], .little);
-            offset.* += 4;
-            const nested = try deserializeInstructionsAt(data, offset, allocator, qfns);
-            const code_ptr: ?*const anyopaque = if (qfns) |t|
-                (if (q_id != quotation_id_sentinel and q_id < t.len) t[q_id] else null)
-            else
-                null;
-            break :blk .{ .quotation = .{ .instructions = nested.instructions, .effect = nested.effect, .code_ptr = code_ptr } };
-        },
-        value_tag_array => blk: {
-            if (offset.* + 4 > data.len) return error.OutOfMemory;
-            const elem_count = std.mem.readInt(u32, data[offset.*..][0..4], .little);
-            offset.* += 4;
-            const elems = try allocator.alloc(Value, elem_count);
-            for (elems) |*elem| {
-                elem.* = try deserializeValueAt(data, offset, allocator, qfns);
-            }
-            // Decoded literals mirror parse-time literals: static storage,
-            // struct and backing owned by the decode allocator.
-            const arr = value_mod.Array.createStatic(allocator, elems) catch return error.OutOfMemory;
-            break :blk .{ .array = arr };
-        },
-        value_tag_hash => blk: {
-            if (offset.* + 4 > data.len) return error.OutOfMemory;
-            const entry_count = std.mem.readInt(u32, data[offset.*..][0..4], .little);
-            offset.* += 4;
-            const h = HashTable.create(allocator) catch return error.OutOfMemory;
-            try h.map.ensureTotalCapacity(allocator, entry_count);
-            for (0..entry_count) |_| {
-                if (offset.* + 4 > data.len) return error.OutOfMemory;
-                const klen = std.mem.readInt(u32, data[offset.*..][0..4], .little);
-                offset.* += 4;
-                if (offset.* + klen > data.len) return error.OutOfMemory;
-                const key = try allocator.dupe(u8, data[offset.*..][0..klen]);
-                offset.* += klen;
-                const value = try deserializeValueAt(data, offset, allocator, qfns);
-                h.map.putAssumeCapacity(key, value);
-            }
-            break :blk .{ .hash = h };
-        },
-        value_tag_mutable_map => blk: {
-            if (offset.* + 4 > data.len) return error.OutOfMemory;
-            const entry_count = std.mem.readInt(u32, data[offset.*..][0..4], .little);
-            offset.* += 4;
-            const m = MutableMap.create(allocator) catch return error.OutOfMemory;
-            try m.map.ensureTotalCapacity(allocator, entry_count);
-            for (0..entry_count) |_| {
-                if (offset.* + 4 > data.len) return error.OutOfMemory;
-                const klen = std.mem.readInt(u32, data[offset.*..][0..4], .little);
-                offset.* += 4;
-                if (offset.* + klen > data.len) return error.OutOfMemory;
-                const key = try allocator.dupe(u8, data[offset.*..][0..klen]);
-                offset.* += klen;
-                const value = try deserializeValueAt(data, offset, allocator, qfns);
-                m.map.putAssumeCapacity(key, value);
-            }
-            break :blk .{ .mutable_map = m };
-        },
-        value_tag_stack_effect => blk: {
-            const inputs = try readParamArray(data, offset, allocator);
-            const outputs = try readParamArray(data, offset, allocator);
-            break :blk .{ .stack_effect = .{ .inputs = inputs, .outputs = outputs } };
-        },
-        value_tag_unit => .{ .unit = {} },
-        else => return error.OutOfMemory,
-    };
+pub fn deserializeValueAt(data: []const u8, offset: *usize, allocator: Allocator, qfns: ?[]const ?*const anyopaque, diag: ?*DecodeDiagnostic) DecodeError!Value {
+    var d = Decoder{ .data = data, .offset = offset.*, .allocator = allocator, .qfns = qfns, .diag = diag };
+    defer offset.* = d.offset;
+    return d.readValue();
 }
 
 /// Image-mode variant of `deserializeValueAt`. When the encoded value
 /// uses one of the slot-reference tags emitted by
 /// `serializeValueIntoForImage`, resolve the slot index through
-/// `slot_tables` and reconstruct the runtime Value. Slot indices that
-/// fall outside their table return `error.OutOfMemory` (the shared
-/// deserialize error channel, kept narrow to avoid a separate decoder
-/// error set).
+/// `slot_tables` and reconstruct the runtime Value. A slot index that
+/// fails to resolve raises `error.UnresolvedSlot`.
 ///
 /// Every decoded value lands in a stored position (a map entry, vector
 /// element, struct field, tagged inner, or push_literal operand), and a
@@ -897,164 +757,452 @@ pub fn deserializeValueAtForImage(
     offset: *usize,
     allocator: Allocator,
     slot_tables: ?*const SlotResolutionTables,
-) Allocator.Error!Value {
-    if (offset.* >= data.len) return error.OutOfMemory;
-    const val_tag = data[offset.*];
-    const tables = slot_tables orelse return deserializeValueAt(data, offset, allocator, null);
-    offset.* += 1;
-    return switch (val_tag) {
-        value_tag_type_val_slot => blk: {
-            if (offset.* + 4 > data.len) return error.OutOfMemory;
-            const slot = std.mem.readInt(u32, data[offset.*..][0..4], .little);
-            offset.* += 4;
-            if (slot >= tables.typevalue_slot_count) return error.OutOfMemory;
-            const table = tables.typevalue_slots orelse return error.OutOfMemory;
-            const tv = table[slot] orelse return error.OutOfMemory;
-            break :blk .{ .type_val = @constCast(tv) };
-        },
-        value_tag_struct_type_slot => blk: {
-            if (offset.* + 4 > data.len) return error.OutOfMemory;
-            const slot = std.mem.readInt(u32, data[offset.*..][0..4], .little);
-            offset.* += 4;
-            if (slot >= tables.struct_type_slot_count) return error.OutOfMemory;
-            const table = tables.struct_type_slots orelse return error.OutOfMemory;
-            const st = table[slot] orelse return error.OutOfMemory;
-            break :blk .{ .struct_type = st };
-        },
-        value_tag_marker_slot => blk: {
-            if (offset.* + 4 > data.len) return error.OutOfMemory;
-            const slot = std.mem.readInt(u32, data[offset.*..][0..4], .little);
-            offset.* += 4;
-            if (slot >= tables.marker_slot_count) return error.OutOfMemory;
-            const table = tables.marker_slots orelse return error.OutOfMemory;
-            const m = table[slot] orelse return error.OutOfMemory;
-            break :blk .{ .marker = m };
-        },
-        value_tag_parameter_slot => blk: {
-            if (offset.* + 4 > data.len) return error.OutOfMemory;
-            const slot = std.mem.readInt(u32, data[offset.*..][0..4], .little);
-            offset.* += 4;
-            if (slot >= tables.parameter_slot_count) return error.OutOfMemory;
-            const table = tables.parameter_slots orelse return error.OutOfMemory;
-            const p = table[slot] orelse return error.OutOfMemory;
-            break :blk .{ .parameter = p };
-        },
-        value_tag_tagged_slot => blk: {
-            if (offset.* + 4 > data.len) return error.OutOfMemory;
-            const slot = std.mem.readInt(u32, data[offset.*..][0..4], .little);
-            offset.* += 4;
-            if (slot >= tables.tagged_slot_count) return error.OutOfMemory;
-            const table = tables.tagged_slots orelse return error.OutOfMemory;
-            const tv = table[slot] orelse return error.OutOfMemory;
-            // The copy is a second reference to the boxed inner value; retain
-            // its transitive backings so the stored copy owns its edge like
-            // every other storage boundary.
-            container_backing.retainValue(tv.*);
-            break :blk tv.*;
-        },
-        value_tag_mutable_map_slot => blk: {
-            if (offset.* + 4 > data.len) return error.OutOfMemory;
-            const slot = std.mem.readInt(u32, data[offset.*..][0..4], .little);
-            offset.* += 4;
-            if (slot >= tables.mutable_map_slot_count) return error.OutOfMemory;
-            const table = tables.mutable_map_slots orelse return error.OutOfMemory;
-            const m = table[slot] orelse return error.OutOfMemory;
-            // The decoded value is stored (map entry, vector element, struct
-            // field, or push_literal operand), and a stored reference is an
-            // owning reference. The slot table keeps its own donated
-            // refcount, released by the context's image-slot teardown walk.
-            m.header.retain();
-            break :blk .{ .mutable_map = m };
-        },
-        value_tag_struct_instance_slot => blk: {
-            if (offset.* + 4 > data.len) return error.OutOfMemory;
-            const slot = std.mem.readInt(u32, data[offset.*..][0..4], .little);
-            offset.* += 4;
-            if (slot >= tables.struct_instance_slot_count) return error.OutOfMemory;
-            const table = tables.struct_instance_slots orelse return error.OutOfMemory;
-            const si = table[slot] orelse return error.OutOfMemory;
-            // The stored copy owns its edge through the instance header, which
-            // never touches the fields, so retaining here is safe even while
-            // the field pass has not filled them yet. Loader-created slot
-            // instances always carry a header.
-            si.header.?.retain();
-            break :blk .{ .struct_instance = si };
-        },
-        value_tag_vector_slot => blk: {
-            if (offset.* + 4 > data.len) return error.OutOfMemory;
-            const slot = std.mem.readInt(u32, data[offset.*..][0..4], .little);
-            offset.* += 4;
-            if (slot >= tables.vector_slot_count) return error.OutOfMemory;
-            const table = tables.vector_slots orelse return error.OutOfMemory;
-            const v = table[slot] orelse return error.OutOfMemory;
-            v.header.retain();
-            break :blk .{ .vector = v };
-        },
-        value_tag_array => blk: {
-            if (offset.* + 4 > data.len) return error.OutOfMemory;
-            const elem_count = std.mem.readInt(u32, data[offset.*..][0..4], .little);
-            offset.* += 4;
-            const elems = try allocator.alloc(Value, elem_count);
-            for (elems) |*elem| {
-                elem.* = try deserializeValueAtForImage(data, offset, allocator, slot_tables);
-            }
-            // Decoded literals mirror parse-time literals: static storage,
-            // struct and backing owned by the decode allocator.
-            const arr = value_mod.Array.createStatic(allocator, elems) catch return error.OutOfMemory;
-            break :blk .{ .array = arr };
-        },
-        value_tag_hash => blk: {
-            if (offset.* + 4 > data.len) return error.OutOfMemory;
-            const entry_count = std.mem.readInt(u32, data[offset.*..][0..4], .little);
-            offset.* += 4;
-            const h = HashTable.create(allocator) catch return error.OutOfMemory;
-            try h.map.ensureTotalCapacity(allocator, entry_count);
-            for (0..entry_count) |_| {
-                if (offset.* + 4 > data.len) return error.OutOfMemory;
-                const klen = std.mem.readInt(u32, data[offset.*..][0..4], .little);
-                offset.* += 4;
-                if (offset.* + klen > data.len) return error.OutOfMemory;
-                const key = try allocator.dupe(u8, data[offset.*..][0..klen]);
-                offset.* += klen;
-                const value = try deserializeValueAtForImage(data, offset, allocator, slot_tables);
-                h.map.putAssumeCapacity(key, value);
-            }
-            break :blk .{ .hash = h };
-        },
-        value_tag_quotation => blk: {
-            // Read the quotation_id and attach the compiled code_ptr from the
-            // quotation-fn table when supplied (id != sentinel, in bounds), so a
-            // runtime-selected dispatch of an image-decoded quotation runs
-            // compiled; otherwise leave it null (the pre-attachment behavior).
-            if (offset.* + 4 > data.len) return error.OutOfMemory;
-            const q_id = std.mem.readInt(u32, data[offset.*..][0..4], .little);
-            offset.* += 4;
-            const nested = try deserializeInstructionsAtForImage(data, offset, allocator, tables);
-            if (tables.decoded_streams) |streams| {
-                if (container_backing.instructionsHaveContainerLiteral(nested.instructions)) {
-                    try streams.append(tables.decoded_streams_allocator.?, nested.instructions);
-                }
-            }
-            const code_ptr: ?*const anyopaque = if (tables.quotation_fns) |t|
-                (if (q_id != quotation_id_sentinel and q_id < t.len) t[q_id] else null)
-            else
-                null;
-            break :blk .{ .quotation = .{ .instructions = nested.instructions, .effect = nested.effect, .code_ptr = code_ptr } };
-        },
-        else => blk: {
-            // Rewind one byte so the legacy decoder re-reads the tag.
-            offset.* -= 1;
-            break :blk deserializeValueAt(data, offset, allocator, null);
-        },
-    };
+    diag: ?*DecodeDiagnostic,
+) DecodeError!Value {
+    var d = Decoder{ .data = data, .offset = offset.*, .allocator = allocator, .slot_tables = slot_tables, .diag = diag };
+    defer offset.* = d.offset;
+    if (slot_tables == null) return d.readValue();
+    return d.readValueForImage();
 }
 
-fn readStreamEffect(data: []const u8, offset: *usize, allocator: Allocator) Allocator.Error!?*const StackEffect {
-    if (offset.* >= data.len) return error.OutOfMemory;
-    const has_effect = data[offset.*] != 0;
-    offset.* += 1;
-    if (!has_effect) return null;
-    return try readEffect(data, offset, allocator);
+/// Internal decoder state: the stream, the cursor, the decode allocator, and the mode-specific
+/// extras the public entry points used to thread by hand. One instance is shared down the
+/// recursion, so a failure anywhere lands in the same diagnostic slot.
+const Decoder = struct {
+    data: []const u8,
+    offset: usize,
+    allocator: Allocator,
+    /// By-value mode: quotation-fn table for `code_ptr` attachment.
+    qfns: ?[]const ?*const anyopaque = null,
+    /// Image mode: slot resolution tables. Null in by-value mode.
+    slot_tables: ?*const SlotResolutionTables = null,
+    diag: ?*DecodeDiagnostic = null,
+
+    fn failTruncated(self: *Decoder) DecodeError {
+        if (self.diag) |d| d.* = .{ .kind = .truncated_bytecode, .offset = self.offset };
+        return error.TruncatedBytecode;
+    }
+
+    /// The tag byte has already been consumed at every call site, so the recorded offset steps
+    /// back to name the byte itself.
+    fn failUnknownTag(self: *Decoder, tag: u8, image_only: bool) DecodeError {
+        if (self.diag) |d| d.* = .{
+            .kind = .unknown_tag,
+            .offset = self.offset - 1,
+            .tag = tag,
+            .image_only_tag = image_only,
+        };
+        return error.UnknownTag;
+    }
+
+    fn failUnresolvedSlot(self: *Decoder, kind: []const u8, slot: usize) DecodeError {
+        if (self.diag) |d| d.* = .{
+            .kind = .unresolved_slot,
+            .offset = self.offset,
+            .slot_kind = kind,
+            .slot = slot,
+        };
+        return error.UnresolvedSlot;
+    }
+
+    fn readInstructions(self: *Decoder) DecodeError!DecodedQuotation {
+        const effect = try self.readStreamEffect();
+        errdefer if (effect) |e| freeEffectTree(self.allocator, e);
+        if (self.offset + 4 > self.data.len) return self.failTruncated();
+        const count = std.mem.readInt(u32, self.data[self.offset..][0..4], .little);
+        self.offset += 4;
+        const instructions = try self.allocator.alloc(Instruction, count);
+        errdefer self.allocator.free(instructions);
+        for (instructions) |*instr| {
+            if (self.offset + 9 > self.data.len) return self.failTruncated(); // line(4)+col(4)+op_tag(1)
+            const line = std.mem.readInt(u32, self.data[self.offset..][0..4], .little);
+            self.offset += 4;
+            const col = std.mem.readInt(u32, self.data[self.offset..][0..4], .little);
+            self.offset += 4;
+            const op_tag = self.data[self.offset];
+            self.offset += 1;
+            if (op_tag == op_tag_push_literal) {
+                const val = try self.readValue();
+                instr.* = .{ .op = .{ .push_literal = val }, .line = line, .column = col };
+            } else if (op_tag == op_tag_call_word) {
+                if (self.offset + 4 > self.data.len) return self.failTruncated();
+                const nlen = std.mem.readInt(u32, self.data[self.offset..][0..4], .little);
+                self.offset += 4;
+                if (self.offset + nlen > self.data.len) return self.failTruncated();
+                const name_copy = try self.allocator.dupe(u8, self.data[self.offset..][0..nlen]);
+                self.offset += nlen;
+                instr.* = .{ .op = .{ .call_word = name_copy }, .line = line, .column = col };
+            } else {
+                return self.failUnknownTag(op_tag, op_tag == op_tag_call_word_module);
+            }
+        }
+        return .{ .instructions = instructions, .effect = effect };
+    }
+
+    fn readInstructionsForImage(self: *Decoder) DecodeError!DecodedQuotation {
+        const tables = self.slot_tables.?;
+        const effect = try self.readStreamEffect();
+        errdefer if (effect) |e| freeEffectTree(self.allocator, e);
+        if (self.offset + 4 > self.data.len) return self.failTruncated();
+        const count = std.mem.readInt(u32, self.data[self.offset..][0..4], .little);
+        self.offset += 4;
+        const instructions = try self.allocator.alloc(Instruction, count);
+        errdefer self.allocator.free(instructions);
+        for (instructions) |*instr| {
+            if (self.offset + 9 > self.data.len) return self.failTruncated(); // line(4)+col(4)+op_tag(1)
+            const line = std.mem.readInt(u32, self.data[self.offset..][0..4], .little);
+            self.offset += 4;
+            const col = std.mem.readInt(u32, self.data[self.offset..][0..4], .little);
+            self.offset += 4;
+            const op_tag = self.data[self.offset];
+            self.offset += 1;
+            if (op_tag == op_tag_push_literal) {
+                const val = try self.readValueForImage();
+                instr.* = .{ .op = .{ .push_literal = val }, .line = line, .column = col };
+            } else if (op_tag == op_tag_call_word) {
+                if (self.offset + 4 > self.data.len) return self.failTruncated();
+                const nlen = std.mem.readInt(u32, self.data[self.offset..][0..4], .little);
+                self.offset += 4;
+                if (self.offset + nlen > self.data.len) return self.failTruncated();
+                const name_copy = try self.allocator.dupe(u8, self.data[self.offset..][0..nlen]);
+                self.offset += nlen;
+                instr.* = .{ .op = .{ .call_word = name_copy }, .line = line, .column = col };
+            } else if (op_tag == op_tag_call_word_module) {
+                if (self.offset + 4 > self.data.len) return self.failTruncated();
+                const slot_index = std.mem.readInt(u32, self.data[self.offset..][0..4], .little);
+                self.offset += 4;
+                const slots = tables.call_target_slots orelse return self.failUnresolvedSlot("call-target", slot_index);
+                if (slot_index >= tables.call_target_slot_count) return self.failUnresolvedSlot("call-target", slot_index);
+                const slot = slots[slot_index] orelse return self.failUnresolvedSlot("call-target", slot_index);
+                instr.* = .{ .op = .{ .call_word_module = slot }, .line = line, .column = col };
+            } else {
+                return self.failUnknownTag(op_tag, false);
+            }
+        }
+        return .{ .instructions = instructions, .effect = effect };
+    }
+
+    fn readValue(self: *Decoder) DecodeError!Value {
+        if (self.offset >= self.data.len) return self.failTruncated();
+        const val_tag = self.data[self.offset];
+        self.offset += 1;
+        return switch (val_tag) {
+            value_tag_fixnum => blk: {
+                if (self.offset + 8 > self.data.len) return self.failTruncated();
+                const v = std.mem.readInt(i64, self.data[self.offset..][0..8], .little);
+                self.offset += 8;
+                break :blk .{ .fixnum = v };
+            },
+            value_tag_float => blk: {
+                if (self.offset + 8 > self.data.len) return self.failTruncated();
+                const v = @as(f64, @bitCast(std.mem.readInt(u64, self.data[self.offset..][0..8], .little)));
+                self.offset += 8;
+                break :blk .{ .float = v };
+            },
+            value_tag_boolean => blk: {
+                if (self.offset >= self.data.len) return self.failTruncated();
+                const v = self.data[self.offset] != 0;
+                self.offset += 1;
+                break :blk .{ .boolean = v };
+            },
+            value_tag_string => blk: {
+                if (self.offset + 4 > self.data.len) return self.failTruncated();
+                const slen = std.mem.readInt(u32, self.data[self.offset..][0..4], .little);
+                self.offset += 4;
+                if (self.offset + slen > self.data.len) return self.failTruncated();
+                const copy = try self.allocator.dupe(u8, self.data[self.offset..][0..slen]);
+                self.offset += slen;
+                break :blk value_mod.stringValue(copy);
+            },
+            value_tag_symbol => blk: {
+                if (self.offset + 4 > self.data.len) return self.failTruncated();
+                const slen = std.mem.readInt(u32, self.data[self.offset..][0..4], .little);
+                self.offset += 4;
+                if (self.offset + slen > self.data.len) return self.failTruncated();
+                const copy = try self.allocator.dupe(u8, self.data[self.offset..][0..slen]);
+                self.offset += slen;
+                break :blk value_mod.symbolValue(copy);
+            },
+            value_tag_quotation => blk: {
+                if (self.offset + 4 > self.data.len) return self.failTruncated();
+                const q_id = std.mem.readInt(u32, self.data[self.offset..][0..4], .little);
+                self.offset += 4;
+                const nested = try self.readInstructions();
+                const code_ptr: ?*const anyopaque = if (self.qfns) |t|
+                    (if (q_id != quotation_id_sentinel and q_id < t.len) t[q_id] else null)
+                else
+                    null;
+                break :blk .{ .quotation = .{ .instructions = nested.instructions, .effect = nested.effect, .code_ptr = code_ptr } };
+            },
+            value_tag_array => blk: {
+                if (self.offset + 4 > self.data.len) return self.failTruncated();
+                const elem_count = std.mem.readInt(u32, self.data[self.offset..][0..4], .little);
+                self.offset += 4;
+                const elems = try self.allocator.alloc(Value, elem_count);
+                for (elems) |*elem| {
+                    elem.* = try self.readValue();
+                }
+                // Decoded literals mirror parse-time literals: static storage,
+                // struct and backing owned by the decode allocator.
+                const arr = value_mod.Array.createStatic(self.allocator, elems) catch return error.OutOfMemory;
+                break :blk .{ .array = arr };
+            },
+            value_tag_hash => blk: {
+                if (self.offset + 4 > self.data.len) return self.failTruncated();
+                const entry_count = std.mem.readInt(u32, self.data[self.offset..][0..4], .little);
+                self.offset += 4;
+                const h = HashTable.create(self.allocator) catch return error.OutOfMemory;
+                try h.map.ensureTotalCapacity(self.allocator, entry_count);
+                for (0..entry_count) |_| {
+                    if (self.offset + 4 > self.data.len) return self.failTruncated();
+                    const klen = std.mem.readInt(u32, self.data[self.offset..][0..4], .little);
+                    self.offset += 4;
+                    if (self.offset + klen > self.data.len) return self.failTruncated();
+                    const key = try self.allocator.dupe(u8, self.data[self.offset..][0..klen]);
+                    self.offset += klen;
+                    const value = try self.readValue();
+                    h.map.putAssumeCapacity(key, value);
+                }
+                break :blk .{ .hash = h };
+            },
+            value_tag_mutable_map => blk: {
+                if (self.offset + 4 > self.data.len) return self.failTruncated();
+                const entry_count = std.mem.readInt(u32, self.data[self.offset..][0..4], .little);
+                self.offset += 4;
+                const m = MutableMap.create(self.allocator) catch return error.OutOfMemory;
+                try m.map.ensureTotalCapacity(self.allocator, entry_count);
+                for (0..entry_count) |_| {
+                    if (self.offset + 4 > self.data.len) return self.failTruncated();
+                    const klen = std.mem.readInt(u32, self.data[self.offset..][0..4], .little);
+                    self.offset += 4;
+                    if (self.offset + klen > self.data.len) return self.failTruncated();
+                    const key = try self.allocator.dupe(u8, self.data[self.offset..][0..klen]);
+                    self.offset += klen;
+                    const value = try self.readValue();
+                    m.map.putAssumeCapacity(key, value);
+                }
+                break :blk .{ .mutable_map = m };
+            },
+            value_tag_stack_effect => blk: {
+                const inputs = try self.readParamArray();
+                const outputs = try self.readParamArray();
+                break :blk .{ .stack_effect = .{ .inputs = inputs, .outputs = outputs } };
+            },
+            value_tag_unit => .{ .unit = {} },
+            else => return self.failUnknownTag(val_tag, isImageOnlyValueTag(val_tag)),
+        };
+    }
+
+    /// Image-mode variant of `readValue`. Resolves the slot-reference tags emitted by
+    /// `serializeValueIntoForImage` through the slot tables.
+    fn readValueForImage(self: *Decoder) DecodeError!Value {
+        const tables = self.slot_tables.?;
+        if (self.offset >= self.data.len) return self.failTruncated();
+        const val_tag = self.data[self.offset];
+        self.offset += 1;
+        return switch (val_tag) {
+            value_tag_type_val_slot => blk: {
+                if (self.offset + 4 > self.data.len) return self.failTruncated();
+                const slot = std.mem.readInt(u32, self.data[self.offset..][0..4], .little);
+                self.offset += 4;
+                if (slot >= tables.typevalue_slot_count) return self.failUnresolvedSlot("typevalue", slot);
+                const table = tables.typevalue_slots orelse return self.failUnresolvedSlot("typevalue", slot);
+                const tv = table[slot] orelse return self.failUnresolvedSlot("typevalue", slot);
+                break :blk .{ .type_val = @constCast(tv) };
+            },
+            value_tag_struct_type_slot => blk: {
+                if (self.offset + 4 > self.data.len) return self.failTruncated();
+                const slot = std.mem.readInt(u32, self.data[self.offset..][0..4], .little);
+                self.offset += 4;
+                if (slot >= tables.struct_type_slot_count) return self.failUnresolvedSlot("struct-type", slot);
+                const table = tables.struct_type_slots orelse return self.failUnresolvedSlot("struct-type", slot);
+                const st = table[slot] orelse return self.failUnresolvedSlot("struct-type", slot);
+                break :blk .{ .struct_type = st };
+            },
+            value_tag_marker_slot => blk: {
+                if (self.offset + 4 > self.data.len) return self.failTruncated();
+                const slot = std.mem.readInt(u32, self.data[self.offset..][0..4], .little);
+                self.offset += 4;
+                if (slot >= tables.marker_slot_count) return self.failUnresolvedSlot("marker", slot);
+                const table = tables.marker_slots orelse return self.failUnresolvedSlot("marker", slot);
+                const m = table[slot] orelse return self.failUnresolvedSlot("marker", slot);
+                break :blk .{ .marker = m };
+            },
+            value_tag_parameter_slot => blk: {
+                if (self.offset + 4 > self.data.len) return self.failTruncated();
+                const slot = std.mem.readInt(u32, self.data[self.offset..][0..4], .little);
+                self.offset += 4;
+                if (slot >= tables.parameter_slot_count) return self.failUnresolvedSlot("parameter", slot);
+                const table = tables.parameter_slots orelse return self.failUnresolvedSlot("parameter", slot);
+                const p = table[slot] orelse return self.failUnresolvedSlot("parameter", slot);
+                break :blk .{ .parameter = p };
+            },
+            value_tag_tagged_slot => blk: {
+                if (self.offset + 4 > self.data.len) return self.failTruncated();
+                const slot = std.mem.readInt(u32, self.data[self.offset..][0..4], .little);
+                self.offset += 4;
+                if (slot >= tables.tagged_slot_count) return self.failUnresolvedSlot("tagged", slot);
+                const table = tables.tagged_slots orelse return self.failUnresolvedSlot("tagged", slot);
+                const tv = table[slot] orelse return self.failUnresolvedSlot("tagged", slot);
+                // The copy is a second reference to the boxed inner value; retain
+                // its transitive backings so the stored copy owns its edge like
+                // every other storage boundary.
+                container_backing.retainValue(tv.*);
+                break :blk tv.*;
+            },
+            value_tag_mutable_map_slot => blk: {
+                if (self.offset + 4 > self.data.len) return self.failTruncated();
+                const slot = std.mem.readInt(u32, self.data[self.offset..][0..4], .little);
+                self.offset += 4;
+                if (slot >= tables.mutable_map_slot_count) return self.failUnresolvedSlot("mutable_map", slot);
+                const table = tables.mutable_map_slots orelse return self.failUnresolvedSlot("mutable_map", slot);
+                const m = table[slot] orelse return self.failUnresolvedSlot("mutable_map", slot);
+                // The decoded value is stored (map entry, vector element, struct
+                // field, or push_literal operand), and a stored reference is an
+                // owning reference. The slot table keeps its own donated
+                // refcount, released by the context's image-slot teardown walk.
+                m.header.retain();
+                break :blk .{ .mutable_map = m };
+            },
+            value_tag_struct_instance_slot => blk: {
+                if (self.offset + 4 > self.data.len) return self.failTruncated();
+                const slot = std.mem.readInt(u32, self.data[self.offset..][0..4], .little);
+                self.offset += 4;
+                if (slot >= tables.struct_instance_slot_count) return self.failUnresolvedSlot("struct_instance", slot);
+                const table = tables.struct_instance_slots orelse return self.failUnresolvedSlot("struct_instance", slot);
+                const si = table[slot] orelse return self.failUnresolvedSlot("struct_instance", slot);
+                // The stored copy owns its edge through the instance header, which
+                // never touches the fields, so retaining here is safe even while
+                // the field pass has not filled them yet. Loader-created slot
+                // instances always carry a header.
+                si.header.?.retain();
+                break :blk .{ .struct_instance = si };
+            },
+            value_tag_vector_slot => blk: {
+                if (self.offset + 4 > self.data.len) return self.failTruncated();
+                const slot = std.mem.readInt(u32, self.data[self.offset..][0..4], .little);
+                self.offset += 4;
+                if (slot >= tables.vector_slot_count) return self.failUnresolvedSlot("vector", slot);
+                const table = tables.vector_slots orelse return self.failUnresolvedSlot("vector", slot);
+                const v = table[slot] orelse return self.failUnresolvedSlot("vector", slot);
+                v.header.retain();
+                break :blk .{ .vector = v };
+            },
+            value_tag_array => blk: {
+                if (self.offset + 4 > self.data.len) return self.failTruncated();
+                const elem_count = std.mem.readInt(u32, self.data[self.offset..][0..4], .little);
+                self.offset += 4;
+                const elems = try self.allocator.alloc(Value, elem_count);
+                for (elems) |*elem| {
+                    elem.* = try self.readValueForImage();
+                }
+                // Decoded literals mirror parse-time literals: static storage,
+                // struct and backing owned by the decode allocator.
+                const arr = value_mod.Array.createStatic(self.allocator, elems) catch return error.OutOfMemory;
+                break :blk .{ .array = arr };
+            },
+            value_tag_hash => blk: {
+                if (self.offset + 4 > self.data.len) return self.failTruncated();
+                const entry_count = std.mem.readInt(u32, self.data[self.offset..][0..4], .little);
+                self.offset += 4;
+                const h = HashTable.create(self.allocator) catch return error.OutOfMemory;
+                try h.map.ensureTotalCapacity(self.allocator, entry_count);
+                for (0..entry_count) |_| {
+                    if (self.offset + 4 > self.data.len) return self.failTruncated();
+                    const klen = std.mem.readInt(u32, self.data[self.offset..][0..4], .little);
+                    self.offset += 4;
+                    if (self.offset + klen > self.data.len) return self.failTruncated();
+                    const key = try self.allocator.dupe(u8, self.data[self.offset..][0..klen]);
+                    self.offset += klen;
+                    const value = try self.readValueForImage();
+                    h.map.putAssumeCapacity(key, value);
+                }
+                break :blk .{ .hash = h };
+            },
+            value_tag_quotation => blk: {
+                // Read the quotation_id and attach the compiled code_ptr from the
+                // quotation-fn table when supplied (id != sentinel, in bounds), so a
+                // runtime-selected dispatch of an image-decoded quotation runs
+                // compiled; otherwise leave it null (the pre-attachment behavior).
+                if (self.offset + 4 > self.data.len) return self.failTruncated();
+                const q_id = std.mem.readInt(u32, self.data[self.offset..][0..4], .little);
+                self.offset += 4;
+                const nested = try self.readInstructionsForImage();
+                if (tables.decoded_streams) |streams| {
+                    if (container_backing.instructionsHaveContainerLiteral(nested.instructions)) {
+                        try streams.append(tables.decoded_streams_allocator.?, nested.instructions);
+                    }
+                }
+                const code_ptr: ?*const anyopaque = if (tables.quotation_fns) |t|
+                    (if (q_id != quotation_id_sentinel and q_id < t.len) t[q_id] else null)
+                else
+                    null;
+                break :blk .{ .quotation = .{ .instructions = nested.instructions, .effect = nested.effect, .code_ptr = code_ptr } };
+            },
+            else => blk: {
+                // Rewind one byte so the by-value decoder re-reads the tag.
+                self.offset -= 1;
+                break :blk self.readValue();
+            },
+        };
+    }
+
+    fn readStreamEffect(self: *Decoder) DecodeError!?*const StackEffect {
+        if (self.offset >= self.data.len) return self.failTruncated();
+        const has_effect = self.data[self.offset] != 0;
+        self.offset += 1;
+        if (!has_effect) return null;
+        return try self.readEffect();
+    }
+
+    /// Read an effect payload into a boxed `StackEffect`, the shape
+    /// `Quotation.effect` and `StackEffectParam.quotation_effect` point at.
+    fn readEffect(self: *Decoder) DecodeError!*const StackEffect {
+        const inputs = try self.readParamArray();
+        const outputs = try self.readParamArray();
+        const effect = try self.allocator.create(StackEffect);
+        effect.* = .{ .inputs = inputs, .outputs = outputs };
+        return effect;
+    }
+
+    fn readParamArray(self: *Decoder) DecodeError![]StackEffectParam {
+        if (self.offset + 4 > self.data.len) return self.failTruncated();
+        const count = std.mem.readInt(u32, self.data[self.offset..][0..4], .little);
+        self.offset += 4;
+        const params = try self.allocator.alloc(StackEffectParam, count);
+        for (params) |*param| {
+            if (self.offset + 5 > self.data.len) return self.failTruncated(); // is_row_variable(1)+name_len(4)
+            const is_row = self.data[self.offset] != 0;
+            self.offset += 1;
+            const nlen = std.mem.readInt(u32, self.data[self.offset..][0..4], .little);
+            self.offset += 4;
+            if (self.offset + nlen > self.data.len) return self.failTruncated();
+            const name = try self.allocator.dupe(u8, self.data[self.offset..][0..nlen]);
+            self.offset += nlen;
+            if (self.offset >= self.data.len) return self.failTruncated();
+            const has_nested = self.data[self.offset] != 0;
+            self.offset += 1;
+            const nested: ?*const StackEffect = if (has_nested) try self.readEffect() else null;
+            param.* = .{ .name = name, .is_row_variable = is_row, .quotation_effect = nested };
+        }
+        return params;
+    }
+};
+
+/// True for the slot-reference tags only the image decoder can resolve.
+fn isImageOnlyValueTag(tag: u8) bool {
+    return switch (tag) {
+        value_tag_type_val_slot,
+        value_tag_struct_type_slot,
+        value_tag_marker_slot,
+        value_tag_parameter_slot,
+        value_tag_tagged_slot,
+        value_tag_mutable_map_slot,
+        value_tag_struct_instance_slot,
+        value_tag_vector_slot,
+        => true,
+        else => false,
+    };
 }
 
 /// Free a decoded effect tree: the param arrays, their duped names, nested effects, and the box.
@@ -1072,39 +1220,6 @@ fn freeParamTree(allocator: Allocator, params: []const StackEffectParam) void {
         if (p.quotation_effect) |qe| freeEffectTree(allocator, qe);
     }
     allocator.free(params);
-}
-
-/// Read an effect payload into a boxed `StackEffect`, the shape
-/// `Quotation.effect` and `StackEffectParam.quotation_effect` point at.
-fn readEffect(data: []const u8, offset: *usize, allocator: Allocator) Allocator.Error!*const StackEffect {
-    const inputs = try readParamArray(data, offset, allocator);
-    const outputs = try readParamArray(data, offset, allocator);
-    const effect = try allocator.create(StackEffect);
-    effect.* = .{ .inputs = inputs, .outputs = outputs };
-    return effect;
-}
-
-fn readParamArray(data: []const u8, offset: *usize, allocator: Allocator) Allocator.Error![]StackEffectParam {
-    if (offset.* + 4 > data.len) return error.OutOfMemory;
-    const count = std.mem.readInt(u32, data[offset.*..][0..4], .little);
-    offset.* += 4;
-    const params = try allocator.alloc(StackEffectParam, count);
-    for (params) |*param| {
-        if (offset.* + 5 > data.len) return error.OutOfMemory; // is_row_variable(1)+name_len(4)
-        const is_row = data[offset.*] != 0;
-        offset.* += 1;
-        const nlen = std.mem.readInt(u32, data[offset.*..][0..4], .little);
-        offset.* += 4;
-        if (offset.* + nlen > data.len) return error.OutOfMemory;
-        const name = try allocator.dupe(u8, data[offset.*..][0..nlen]);
-        offset.* += nlen;
-        if (offset.* >= data.len) return error.OutOfMemory;
-        const has_nested = data[offset.*] != 0;
-        offset.* += 1;
-        const nested: ?*const StackEffect = if (has_nested) try readEffect(data, offset, allocator) else null;
-        param.* = .{ .name = name, .is_row_variable = is_row, .quotation_effect = nested };
-    }
-    return params;
 }
 
 // ---------------------------------------------------------------------------
@@ -1178,7 +1293,7 @@ test "roundtrip: fixnum push + call" {
     };
     const data = try serializeQuotationInstructions(&instrs, null, testing.allocator, null, null);
     defer testing.allocator.free(data);
-    const decoded_q = try deserializeQuotationInstructions(data, testing.allocator, null);
+    const decoded_q = try deserializeQuotationInstructions(data, testing.allocator, null, null);
     defer freeDecodedQuotation(decoded_q);
     const decoded = decoded_q.instructions;
 
@@ -1204,6 +1319,29 @@ const OneNameResolver = struct {
         return .{ .state = self, .resolve = resolve };
     }
 };
+
+/// All-null slot tables, for tests that drive the image decoder into a slot miss without wiring
+/// any real table.
+fn emptySlotTables() SlotResolutionTables {
+    return .{
+        .typevalue_slots = null,
+        .typevalue_slot_count = 0,
+        .struct_type_slots = null,
+        .struct_type_slot_count = 0,
+        .marker_slots = null,
+        .marker_slot_count = 0,
+        .parameter_slots = null,
+        .parameter_slot_count = 0,
+        .tagged_slots = null,
+        .tagged_slot_count = 0,
+        .mutable_map_slots = null,
+        .mutable_map_slot_count = 0,
+        .struct_instance_slots = null,
+        .struct_instance_slot_count = 0,
+        .vector_slots = null,
+        .vector_slot_count = 0,
+    };
+}
 
 test "call target: a resolved name bakes a slot index, an unresolved one stays a bare name" {
     const instrs = [_]Instruction{
@@ -1243,7 +1381,7 @@ test "call target: a resolved name bakes a slot index, an unresolved one stays a
         .call_target_slot_count = 1,
     };
 
-    const decoded_q = try deserializeQuotationInstructionsForImage(data, testing.allocator, &tables);
+    const decoded_q = try deserializeQuotationInstructionsForImage(data, testing.allocator, &tables, null);
     defer freeDecodedQuotation(decoded_q);
     const decoded = decoded_q.instructions;
 
@@ -1254,7 +1392,7 @@ test "call target: a resolved name bakes a slot index, an unresolved one stays a
     try testing.expectEqualStrings("+", decoded[1].op.call_word);
 }
 
-test "call target: the by-value decoder rejects a baked call, deferring to the image decoder" {
+test "call target: a baked call is an unknown tag to the by-value decoder" {
     const instrs = [_]Instruction{
         .{ .op = .{ .call_word = "own-word" }, .line = 1 },
     };
@@ -1262,10 +1400,126 @@ test "call target: the by-value decoder rejects a baked call, deferring to the i
     const data = try serializeQuotationInstructions(&instrs, null, testing.allocator, null, state.resolver());
     defer testing.allocator.free(data);
 
+    var diag: DecodeDiagnostic = undefined;
     try testing.expectError(
-        error.OutOfMemory,
-        deserializeQuotationInstructions(data, testing.allocator, null),
+        error.UnknownTag,
+        deserializeQuotationInstructions(data, testing.allocator, null, &diag),
     );
+    try testing.expectEqual(DecodeDiagnostic.Kind.unknown_tag, diag.kind);
+    try testing.expectEqual(op_tag_call_word_module, diag.tag);
+    try testing.expect(diag.image_only_tag);
+    // effect flag(1) + count(4) + line(4) + col(4) puts the op tag at 13.
+    try testing.expectEqual(@as(usize, 13), diag.offset);
+}
+
+test "decode error: a truncated stream reports TruncatedBytecode at the failing read" {
+    const instrs = [_]Instruction{
+        .{ .op = .{ .push_literal = .{ .fixnum = 42 } }, .line = 1 },
+    };
+    const data = try serializeQuotationInstructions(&instrs, null, testing.allocator, null, null);
+    defer testing.allocator.free(data);
+
+    var diag: DecodeDiagnostic = undefined;
+    try testing.expectError(
+        error.TruncatedBytecode,
+        deserializeQuotationInstructions(data[0 .. data.len - 1], testing.allocator, null, &diag),
+    );
+    try testing.expectEqual(DecodeDiagnostic.Kind.truncated_bytecode, diag.kind);
+    // effect flag(1) + count(4) + line(4) + col(4) + op tag(1) + value tag(1)
+    // puts the fixnum payload read at 15.
+    try testing.expectEqual(@as(usize, 15), diag.offset);
+}
+
+test "decode error: a byte that is no tag at all reports UnknownTag without the image-only mark" {
+    // effect flag 0, count 1, line 0, column 0, op tag push_literal, value tag 200.
+    const data = [_]u8{ 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, op_tag_push_literal, 200 };
+
+    var diag: DecodeDiagnostic = undefined;
+    try testing.expectError(
+        error.UnknownTag,
+        deserializeQuotationInstructions(&data, testing.allocator, null, &diag),
+    );
+    try testing.expectEqual(DecodeDiagnostic.Kind.unknown_tag, diag.kind);
+    try testing.expectEqual(@as(u8, 200), diag.tag);
+    try testing.expect(!diag.image_only_tag);
+    try testing.expectEqual(@as(usize, 14), diag.offset);
+}
+
+test "decode error: an image-only value tag reaching the by-value decoder is marked image-only" {
+    // effect flag 0, count 1, line 0, column 0, op tag push_literal,
+    // value tag type_val_slot, u32 slot 0.
+    const data = [_]u8{ 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, op_tag_push_literal, value_tag_type_val_slot, 0, 0, 0, 0 };
+
+    var diag: DecodeDiagnostic = undefined;
+    try testing.expectError(
+        error.UnknownTag,
+        deserializeQuotationInstructions(&data, testing.allocator, null, &diag),
+    );
+    try testing.expectEqual(DecodeDiagnostic.Kind.unknown_tag, diag.kind);
+    try testing.expectEqual(value_tag_type_val_slot, diag.tag);
+    try testing.expect(diag.image_only_tag);
+}
+
+test "decode error: a call-target slot outside its table reports UnresolvedSlot" {
+    const instrs = [_]Instruction{
+        .{ .op = .{ .call_word = "own-word" }, .line = 1 },
+    };
+    var state: OneNameResolver = .{ .name = "own-word", .slot_index = 3 };
+    const data = try serializeQuotationInstructions(&instrs, null, testing.allocator, null, state.resolver());
+    defer testing.allocator.free(data);
+
+    var slots = [_]?*WordSlot{null};
+    var tables = emptySlotTables();
+    tables.call_target_slots = &slots;
+    tables.call_target_slot_count = 1;
+
+    var diag: DecodeDiagnostic = undefined;
+    try testing.expectError(
+        error.UnresolvedSlot,
+        deserializeQuotationInstructionsForImage(data, testing.allocator, &tables, &diag),
+    );
+    try testing.expectEqual(DecodeDiagnostic.Kind.unresolved_slot, diag.kind);
+    try testing.expectEqualStrings("call-target", diag.slot_kind);
+    try testing.expectEqual(@as(usize, 3), diag.slot);
+}
+
+test "decode error: a null call-target slot entry reports UnresolvedSlot" {
+    const instrs = [_]Instruction{
+        .{ .op = .{ .call_word = "own-word" }, .line = 1 },
+    };
+    var state: OneNameResolver = .{ .name = "own-word", .slot_index = 0 };
+    const data = try serializeQuotationInstructions(&instrs, null, testing.allocator, null, state.resolver());
+    defer testing.allocator.free(data);
+
+    var slots = [_]?*WordSlot{null};
+    var tables = emptySlotTables();
+    tables.call_target_slots = &slots;
+    tables.call_target_slot_count = 1;
+
+    var diag: DecodeDiagnostic = undefined;
+    try testing.expectError(
+        error.UnresolvedSlot,
+        deserializeQuotationInstructionsForImage(data, testing.allocator, &tables, &diag),
+    );
+    try testing.expectEqual(DecodeDiagnostic.Kind.unresolved_slot, diag.kind);
+    try testing.expectEqualStrings("call-target", diag.slot_kind);
+    try testing.expectEqual(@as(usize, 0), diag.slot);
+}
+
+test "decode error: a value slot outside its table reports UnresolvedSlot with its family" {
+    // value tag type_val_slot, u32 slot 0, decoded against empty tables.
+    const data = [_]u8{ value_tag_type_val_slot, 0, 0, 0, 0 };
+    const tables = emptySlotTables();
+
+    var offset: usize = 0;
+    var diag: DecodeDiagnostic = undefined;
+    try testing.expectError(
+        error.UnresolvedSlot,
+        deserializeValueAtForImage(&data, &offset, testing.allocator, &tables, &diag),
+    );
+    try testing.expectEqual(DecodeDiagnostic.Kind.unresolved_slot, diag.kind);
+    try testing.expectEqualStrings("typevalue", diag.slot_kind);
+    try testing.expectEqual(@as(usize, 0), diag.slot);
 }
 
 test "roundtrip: string literal" {
@@ -1274,7 +1528,7 @@ test "roundtrip: string literal" {
     };
     const data = try serializeQuotationInstructions(&instrs, null, testing.allocator, null, null);
     defer testing.allocator.free(data);
-    const decoded_q = try deserializeQuotationInstructions(data, testing.allocator, null);
+    const decoded_q = try deserializeQuotationInstructions(data, testing.allocator, null, null);
     defer freeDecodedQuotation(decoded_q);
     const decoded = decoded_q.instructions;
 
@@ -1287,7 +1541,7 @@ test "roundtrip: empty body" {
     const instrs: [0]Instruction = .{};
     const data = try serializeQuotationInstructions(&instrs, null, testing.allocator, null, null);
     defer testing.allocator.free(data);
-    const decoded = try deserializeQuotationInstructions(data, testing.allocator, null);
+    const decoded = try deserializeQuotationInstructions(data, testing.allocator, null, null);
     defer testing.allocator.free(decoded.instructions);
     try testing.expectEqual(@as(usize, 0), decoded.instructions.len);
     try testing.expect(decoded.effect == null);
@@ -1300,7 +1554,7 @@ test "roundtrip: bool and float" {
     };
     const data = try serializeQuotationInstructions(&instrs, null, testing.allocator, null, null);
     defer testing.allocator.free(data);
-    const decoded_q = try deserializeQuotationInstructions(data, testing.allocator, null);
+    const decoded_q = try deserializeQuotationInstructions(data, testing.allocator, null, null);
     defer freeDecodedQuotation(decoded_q);
     const decoded = decoded_q.instructions;
 
@@ -1315,7 +1569,7 @@ test "preserves line and column" {
     };
     const data = try serializeQuotationInstructions(&instrs, null, testing.allocator, null, null);
     defer testing.allocator.free(data);
-    const decoded_q = try deserializeQuotationInstructions(data, testing.allocator, null);
+    const decoded_q = try deserializeQuotationInstructions(data, testing.allocator, null, null);
     defer freeDecodedQuotation(decoded_q);
     const decoded = decoded_q.instructions;
     try testing.expectEqual(@as(usize, 5), decoded[0].line);
@@ -1328,7 +1582,7 @@ test "roundtrip: symbol literal" {
     };
     const data = try serializeQuotationInstructions(&instrs, null, testing.allocator, null, null);
     defer testing.allocator.free(data);
-    const decoded_q = try deserializeQuotationInstructions(data, testing.allocator, null);
+    const decoded_q = try deserializeQuotationInstructions(data, testing.allocator, null, null);
     defer freeDecodedQuotation(decoded_q);
     const decoded = decoded_q.instructions;
 
@@ -1343,7 +1597,7 @@ test "roundtrip: empty array" {
     };
     const data = try serializeQuotationInstructions(&instrs, null, testing.allocator, null, null);
     defer testing.allocator.free(data);
-    const decoded_q = try deserializeQuotationInstructions(data, testing.allocator, null);
+    const decoded_q = try deserializeQuotationInstructions(data, testing.allocator, null, null);
     defer freeDecodedQuotation(decoded_q);
     const decoded = decoded_q.instructions;
 
@@ -1364,7 +1618,7 @@ test "roundtrip: array with elements" {
     };
     const data = try serializeQuotationInstructions(&instrs, null, testing.allocator, null, null);
     defer testing.allocator.free(data);
-    const decoded_q = try deserializeQuotationInstructions(data, testing.allocator, null);
+    const decoded_q = try deserializeQuotationInstructions(data, testing.allocator, null, null);
     defer freeDecodedQuotation(decoded_q);
     const decoded = decoded_q.instructions;
 
@@ -1390,7 +1644,7 @@ test "roundtrip: nested array" {
     };
     const data = try serializeQuotationInstructions(&instrs, null, testing.allocator, null, null);
     defer testing.allocator.free(data);
-    const decoded_q = try deserializeQuotationInstructions(data, testing.allocator, null);
+    const decoded_q = try deserializeQuotationInstructions(data, testing.allocator, null, null);
     defer freeDecodedQuotation(decoded_q);
     const decoded = decoded_q.instructions;
 
@@ -1411,7 +1665,7 @@ test "roundtrip: empty hash" {
     };
     const data = try serializeQuotationInstructions(&instrs, null, testing.allocator, null, null);
     defer testing.allocator.free(data);
-    const decoded_q = try deserializeQuotationInstructions(data, testing.allocator, null);
+    const decoded_q = try deserializeQuotationInstructions(data, testing.allocator, null, null);
     defer freeDecodedQuotation(decoded_q);
     const decoded = decoded_q.instructions;
 
@@ -1429,7 +1683,7 @@ test "roundtrip: hash with entries" {
     };
     const data = try serializeQuotationInstructions(&instrs, null, testing.allocator, null, null);
     defer testing.allocator.free(data);
-    const decoded_q = try deserializeQuotationInstructions(data, testing.allocator, null);
+    const decoded_q = try deserializeQuotationInstructions(data, testing.allocator, null, null);
     defer freeDecodedQuotation(decoded_q);
     const decoded = decoded_q.instructions;
 
@@ -1450,7 +1704,7 @@ test "roundtrip: nested quotation" {
     };
     const data = try serializeQuotationInstructions(&outer_instrs, null, testing.allocator, null, null);
     defer testing.allocator.free(data);
-    const decoded_q = try deserializeQuotationInstructions(data, testing.allocator, null);
+    const decoded_q = try deserializeQuotationInstructions(data, testing.allocator, null, null);
     defer freeDecodedQuotation(decoded_q);
     const decoded = decoded_q.instructions;
 
@@ -1472,7 +1726,7 @@ test "roundtrip: array containing symbol" {
     };
     const data = try serializeQuotationInstructions(&instrs, null, testing.allocator, null, null);
     defer testing.allocator.free(data);
-    const decoded_q = try deserializeQuotationInstructions(data, testing.allocator, null);
+    const decoded_q = try deserializeQuotationInstructions(data, testing.allocator, null, null);
     defer freeDecodedQuotation(decoded_q);
     const decoded = decoded_q.instructions;
 
@@ -1495,7 +1749,7 @@ test "roundtrip: stack_effect literal" {
     };
     const data = try serializeQuotationInstructions(&instrs, null, testing.allocator, null, null);
     defer testing.allocator.free(data);
-    const decoded_q = try deserializeQuotationInstructions(data, testing.allocator, null);
+    const decoded_q = try deserializeQuotationInstructions(data, testing.allocator, null, null);
     defer freeDecodedQuotation(decoded_q);
     const decoded = decoded_q.instructions;
 
@@ -1523,7 +1777,7 @@ test "roundtrip: stack_effect preserves is_row_variable" {
     };
     const data = try serializeQuotationInstructions(&instrs, null, testing.allocator, null, null);
     defer testing.allocator.free(data);
-    const decoded_q = try deserializeQuotationInstructions(data, testing.allocator, null);
+    const decoded_q = try deserializeQuotationInstructions(data, testing.allocator, null, null);
     defer freeDecodedQuotation(decoded_q);
     const decoded = decoded_q.instructions;
 
@@ -1541,7 +1795,7 @@ test "roundtrip: stack_effect with empty params" {
     };
     const data = try serializeQuotationInstructions(&instrs, null, testing.allocator, null, null);
     defer testing.allocator.free(data);
-    const decoded_q = try deserializeQuotationInstructions(data, testing.allocator, null);
+    const decoded_q = try deserializeQuotationInstructions(data, testing.allocator, null, null);
     defer freeDecodedQuotation(decoded_q);
     const decoded = decoded_q.instructions;
 
@@ -1556,7 +1810,7 @@ test "roundtrip: unit literal" {
     };
     const data = try serializeQuotationInstructions(&instrs, null, testing.allocator, null, null);
     defer testing.allocator.free(data);
-    const decoded_q = try deserializeQuotationInstructions(data, testing.allocator, null);
+    const decoded_q = try deserializeQuotationInstructions(data, testing.allocator, null, null);
     defer freeDecodedQuotation(decoded_q);
     const decoded = decoded_q.instructions;
 
@@ -1632,7 +1886,7 @@ test "image roundtrip: struct_instance encodes as a slot and decodes to the same
     };
 
     var offset: usize = 0;
-    const decoded = try deserializeValueAtForImage(buf.items, &offset, alloc, &tables);
+    const decoded = try deserializeValueAtForImage(buf.items, &offset, alloc, &tables, null);
     defer container_backing.releaseValue(decoded);
     try testing.expect(decoded == .struct_instance);
     try testing.expectEqual(@as(*StructInstance, si), decoded.struct_instance);
@@ -1707,7 +1961,7 @@ test "image roundtrip: quotation carrying a struct_type literal slot-encodes" {
     };
 
     var offset: usize = 0;
-    const decoded = try deserializeValueAtForImage(buf.items, &offset, alloc, &tables);
+    const decoded = try deserializeValueAtForImage(buf.items, &offset, alloc, &tables, null);
     defer alloc.free(decoded.quotation.instructions);
     try testing.expect(decoded == .quotation);
     const di = decoded.quotation.instructions;
@@ -1794,7 +2048,7 @@ test "image roundtrip: nested quotation carries id and compiled code_ptr" {
     };
 
     var offset: usize = 0;
-    const decoded = try deserializeValueAtForImage(buf.items, &offset, alloc, &tables);
+    const decoded = try deserializeValueAtForImage(buf.items, &offset, alloc, &tables, null);
     defer freeDecodedValue(decoded);
     try testing.expect(decoded == .quotation);
     try testing.expectEqual(dummy_fn, decoded.quotation.code_ptr.?);
@@ -1864,7 +2118,7 @@ test "image roundtrip: nested quotation decodes null code_ptr without a map or t
     };
 
     var offset: usize = 0;
-    const decoded = try deserializeValueAtForImage(buf.items, &offset, alloc, &tables);
+    const decoded = try deserializeValueAtForImage(buf.items, &offset, alloc, &tables, null);
     defer freeDecodedValue(decoded);
     try testing.expect(decoded == .quotation);
     try testing.expect(decoded.quotation.code_ptr == null);
@@ -1880,7 +2134,7 @@ test "lowering: type_val push_literal becomes call_word" {
     };
     const data = try serializeQuotationInstructions(&instrs, null, testing.allocator, null, null);
     defer testing.allocator.free(data);
-    const decoded_q = try deserializeQuotationInstructions(data, testing.allocator, null);
+    const decoded_q = try deserializeQuotationInstructions(data, testing.allocator, null, null);
     defer freeDecodedQuotation(decoded_q);
     const decoded = decoded_q.instructions;
 
@@ -1900,7 +2154,7 @@ test "lowering: tagged push_literal becomes call_word using tag name" {
     };
     const data = try serializeQuotationInstructions(&instrs, null, testing.allocator, null, null);
     defer testing.allocator.free(data);
-    const decoded_q = try deserializeQuotationInstructions(data, testing.allocator, null);
+    const decoded_q = try deserializeQuotationInstructions(data, testing.allocator, null, null);
     defer freeDecodedQuotation(decoded_q);
     const decoded = decoded_q.instructions;
 
@@ -1918,7 +2172,7 @@ test "lowering: parameter push_literal becomes call_word" {
     };
     const data = try serializeQuotationInstructions(&instrs, null, testing.allocator, null, null);
     defer testing.allocator.free(data);
-    const decoded_q = try deserializeQuotationInstructions(data, testing.allocator, null);
+    const decoded_q = try deserializeQuotationInstructions(data, testing.allocator, null, null);
     defer freeDecodedQuotation(decoded_q);
     const decoded = decoded_q.instructions;
 
@@ -1933,7 +2187,7 @@ test "lowering: marker push_literal becomes call_word" {
     };
     const data = try serializeQuotationInstructions(&instrs, null, testing.allocator, null, null);
     defer testing.allocator.free(data);
-    const decoded_q = try deserializeQuotationInstructions(data, testing.allocator, null);
+    const decoded_q = try deserializeQuotationInstructions(data, testing.allocator, null, null);
     defer freeDecodedQuotation(decoded_q);
     const decoded = decoded_q.instructions;
 
@@ -1969,7 +2223,7 @@ test "nested quotation in array literal carries compiled code_ptr" {
     var table = [_]?*const anyopaque{ null, null, null, dummy_fn };
 
     var offset: usize = 0;
-    const decoded = try deserializeValueAt(buf.items, &offset, testing.allocator, &table);
+    const decoded = try deserializeValueAt(buf.items, &offset, testing.allocator, &table, null);
     defer freeDecodedValue(decoded);
 
     try testing.expect(decoded == .array);
@@ -2002,7 +2256,7 @@ test "nested quotation in hash literal carries compiled code_ptr" {
     var table = [_]?*const anyopaque{ null, dummy_fn };
 
     var offset: usize = 0;
-    const decoded = try deserializeValueAt(buf.items, &offset, testing.allocator, &table);
+    const decoded = try deserializeValueAt(buf.items, &offset, testing.allocator, &table, null);
     defer freeDecodedValue(decoded);
 
     try testing.expect(decoded == .hash);
@@ -2029,7 +2283,7 @@ test "nested quotation decodes to null code_ptr without a map or table" {
     try serializeValueInto(&buf, arr, testing.allocator, null, null);
 
     var offset: usize = 0;
-    const decoded = try deserializeValueAt(buf.items, &offset, testing.allocator, null);
+    const decoded = try deserializeValueAt(buf.items, &offset, testing.allocator, null, null);
     defer freeDecodedValue(decoded);
 
     try testing.expect(decoded == .array);
@@ -2051,7 +2305,7 @@ test "roundtrip: stream carries a declared effect" {
     };
     const data = try serializeQuotationInstructions(&instrs, &effect, testing.allocator, null, null);
     defer testing.allocator.free(data);
-    const decoded = try deserializeQuotationInstructions(data, testing.allocator, null);
+    const decoded = try deserializeQuotationInstructions(data, testing.allocator, null, null);
     defer freeDecodedQuotation(decoded);
 
     try testing.expectEqual(@as(usize, 1), decoded.instructions.len);
@@ -2077,7 +2331,7 @@ test "roundtrip: nested quotation carries its declared effect" {
     };
     const data = try serializeQuotationInstructions(&outer_instrs, null, testing.allocator, null, null);
     defer testing.allocator.free(data);
-    const decoded = try deserializeQuotationInstructions(data, testing.allocator, null);
+    const decoded = try deserializeQuotationInstructions(data, testing.allocator, null, null);
     defer freeDecodedQuotation(decoded);
 
     try testing.expect(decoded.effect == null);
@@ -2101,7 +2355,7 @@ test "roundtrip: recursive quotation_effect on a param" {
     const instrs: [0]Instruction = .{};
     const data = try serializeQuotationInstructions(&instrs, &effect, testing.allocator, null, null);
     defer testing.allocator.free(data);
-    const decoded = try deserializeQuotationInstructions(data, testing.allocator, null);
+    const decoded = try deserializeQuotationInstructions(data, testing.allocator, null, null);
     defer freeDecodedQuotation(decoded);
 
     const dec_eff = decoded.effect.?;
@@ -2126,7 +2380,7 @@ test "roundtrip: stack_effect value carries a param's nested quotation_effect" {
     };
     const data = try serializeQuotationInstructions(&instrs, null, testing.allocator, null, null);
     defer testing.allocator.free(data);
-    const decoded_q = try deserializeQuotationInstructions(data, testing.allocator, null);
+    const decoded_q = try deserializeQuotationInstructions(data, testing.allocator, null, null);
     defer freeDecodedQuotation(decoded_q);
     const decoded = decoded_q.instructions;
 
@@ -2197,7 +2451,7 @@ test "image roundtrip: nested quotation carries its declared effect" {
     };
 
     var offset: usize = 0;
-    const decoded = try deserializeValueAtForImage(buf.items, &offset, alloc, &tables);
+    const decoded = try deserializeValueAtForImage(buf.items, &offset, alloc, &tables, null);
     defer freeDecodedValue(decoded);
     try testing.expect(decoded == .quotation);
     const dec_eff = decoded.quotation.effect.?;

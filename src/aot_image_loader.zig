@@ -318,7 +318,7 @@ fn decodeWordBodies(ctx: *Context, header: *const Header) LoaderError!void {
             cache_entry.*.module.words.getPtr(word_name) orelse continue;
 
         const bytes = w.body_bytecode.?[0..w.body_bytecode_len];
-        const decoded = instruction_bytecode.deserializeQuotationInstructionsForImage(bytes, arena, &tables) catch
+        const decoded = instruction_bytecode.deserializeQuotationInstructionsForImage(bytes, arena, &tables, null) catch
             return LoaderError.OutOfMemory;
         ctx.registerQuotationContainerLiterals(decoded.instructions) catch return LoaderError.OutOfMemory;
         word_entry.action = .{ .compound = decoded.instructions };
@@ -534,7 +534,7 @@ fn decodeWordBodyInline(
 ) LoaderError![]const value_mod.Instruction {
     if (w.body_bytecode == null or w.body_bytecode_len == 0) return &.{};
     const bytes = w.body_bytecode.?[0..w.body_bytecode_len];
-    const decoded = instruction_bytecode.deserializeQuotationInstructions(bytes, arena, qfns) catch
+    const decoded = instruction_bytecode.deserializeQuotationInstructions(bytes, arena, qfns, null) catch
         return LoaderError.OutOfMemory;
     return decoded.instructions;
 }
@@ -903,6 +903,7 @@ fn populateParameterSlots(
                     p[0..row.default_quotation_bytecode_len],
                     arena,
                     null,
+                    null,
                 ) catch return LoaderError.OutOfMemory;
                 instructions = decoded.instructions;
                 default_effect = decoded.effect;
@@ -1018,6 +1019,7 @@ fn populateMutableMapSlots(
                 &offset,
                 arena,
                 &slot_tables,
+                null,
             ) catch return LoaderError.OutOfMemory;
 
             const key_copy = arena.dupe(u8, key_src) catch return LoaderError.OutOfMemory;
@@ -1104,6 +1106,7 @@ fn populateStructInstanceFields(
                 &offset,
                 arena,
                 &slot_tables,
+                null,
             ) catch return LoaderError.OutOfMemory;
         }
     }
@@ -1174,6 +1177,7 @@ fn populateVectorElements(
                 &offset,
                 arena,
                 &slot_tables,
+                null,
             ) catch return LoaderError.OutOfMemory;
             vec.list.append(arena, value) catch return LoaderError.OutOfMemory;
         }
@@ -1221,6 +1225,7 @@ fn populateTaggedSlots(
                     &offset,
                     arena,
                     &slot_tables,
+                    null,
                 ) catch return LoaderError.OutOfMemory;
             } else {
                 inner.* = .{ .unit = {} };
@@ -1306,7 +1311,7 @@ pub fn replayMethodDispatch(ctx: *Context) LoaderError!void {
             // `.struct_type` literals (e.g. generated field getters). The
             // tables are patched before replay runs, so they resolve here.
             const body_tables = imageSlotTables(ctx);
-            const decoded = instruction_bytecode.deserializeQuotationInstructionsForImage(bytes, ctx.quotationAllocator(), &body_tables) catch
+            const decoded = instruction_bytecode.deserializeQuotationInstructionsForImage(bytes, ctx.quotationAllocator(), &body_tables, null) catch
                 return LoaderError.OutOfMemory;
             body_instructions = decoded.instructions;
             body_effect = decoded.effect;

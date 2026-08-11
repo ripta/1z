@@ -6010,7 +6010,7 @@ test "emitImageC: structural bytecode round-trips through decoder" {
         try bytes.append(testing.allocator, v);
     }
 
-    const decoded_q = try instruction_bytecode.deserializeQuotationInstructions(bytes.items, testing.allocator, null);
+    const decoded_q = try instruction_bytecode.deserializeQuotationInstructions(bytes.items, testing.allocator, null, null);
     const decoded = decoded_q.instructions;
     defer {
         for (decoded) |instr| {
