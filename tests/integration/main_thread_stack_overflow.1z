@@ -1,0 +1,15 @@
+use "testing" ;
+
+\ Deep non-tail recursion on the main task must raise a catchable
+\ stack-overflow error instead of running off the end of the OS thread stack.
+\ The raising quotation leaves depth-dependent residue on the stack, so this
+\ test runs with --no-show-stack.
+
+deep: stack-recursive ( n -- n ) [ dup 0 > [ 1 - deep 1 + ] when ] ;
+
+test-main-thread-overflow: ( -- ) [
+  [ 1000000 deep drop ] [ error-type: @get ] recover
+  stack-overflow: "main-thread deep recursion raises catchable stack-overflow" assert=
+] ;
+
+test-main-thread-overflow

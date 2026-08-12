@@ -1305,6 +1305,19 @@ pub const Context = struct {
         return ctx;
     }
 
+    /// Arm the native-stack overflow guard with the calling OS thread's stack bounds.
+    ///
+    /// Spawned tasks and the parser coroutine set `stack_high` / `stack_limit` from their own
+    /// stack regions, but nothing sets them for runtime execution on the root context, so deep
+    /// recursion on the main thread runs off the end of the OS stack and segfaults. The reserve
+    /// is an eighth of the stack, matching the task and coroutine guards. A no-op on platforms
+    /// with no way to query the current thread's stack region.
+    pub fn setStackBoundsFromCurrentThread(self: *Context) void {
+        const bounds = currentThreadStackBounds() orelse return;
+        self.stack_high = bounds.high;
+        self.stack_limit = bounds.low + (bounds.high - bounds.low) / 8;
+    }
+
     /// Create a lightweight Context for a spawned task. Primitives and the prelude are not
     /// registered here. They are resolved at lookup time by walking up the parent_context chain.
     /// Per-task state like the stack, dictionary, and arena are freshly allocated.
@@ -7299,6 +7312,44 @@ pub const Context = struct {
         }) catch {};
     }
 };
+
+const ThreadStackBounds = struct {
+    low: usize,
+    high: usize,
+};
+
+extern "c" fn pthread_get_stackaddr_np(thread: std.c.pthread_t) *anyopaque;
+extern "c" fn pthread_get_stacksize_np(thread: std.c.pthread_t) usize;
+extern "c" fn pthread_getattr_np(thread: std.c.pthread_t, attr: *std.c.pthread_attr_t) c_int;
+extern "c" fn pthread_attr_getstack(
+    attr: *const std.c.pthread_attr_t,
+    stackaddr: *?*anyopaque,
+    stacksize: *usize,
+) c_int;
+
+/// The stack region of the calling OS thread, or null where the platform offers no query.
+fn currentThreadStackBounds() ?ThreadStackBounds {
+    switch (builtin.os.tag) {
+        .macos, .ios, .tvos, .watchos => {
+            // Darwin reports the high end of the stack; the region grows down from it.
+            const self_thread = std.c.pthread_self();
+            const high = @intFromPtr(pthread_get_stackaddr_np(self_thread));
+            const size = pthread_get_stacksize_np(self_thread);
+            return .{ .low = high - size, .high = high };
+        },
+        .linux => {
+            var attr: std.c.pthread_attr_t = undefined;
+            if (pthread_getattr_np(std.c.pthread_self(), &attr) != 0) return null;
+            defer _ = std.c.pthread_attr_destroy(&attr);
+            var addr: ?*anyopaque = null;
+            var size: usize = 0;
+            if (pthread_attr_getstack(&attr, &addr, &size) != 0) return null;
+            const low = @intFromPtr(addr orelse return null);
+            return .{ .low = low, .high = low + size };
+        },
+        else => return null,
+    }
+}
 
 // =============================================================================
 // JIT auto-compile helpers (used by Context.tryAutoCompile)

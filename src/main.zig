@@ -1012,6 +1012,10 @@ const ExecutionContext = struct {
         };
         errdefer ec.ctx.deinit();
 
+        // Runtime execution on the root context happens on this thread; without these bounds the
+        // native-stack overflow guard is disarmed and deep recursion segfaults.
+        ec.ctx.setStackBoundsFromCurrentThread();
+
         ec.ctx.trace = exec.trace_config;
         ec.ctx.deadlock_detect_ns = exec.deadlock_detect_ns;
         ec.ctx.worker_count = exec.worker_count;

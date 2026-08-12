@@ -1,0 +1,1 @@
+PASS: main-thread deep recursion raises catchable stack-overflow
