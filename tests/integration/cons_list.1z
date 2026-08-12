@@ -170,3 +170,11 @@ nil >iterator #collect { } ">iterator nil collects to empty array" assert=
 { 1 2 3 } "take 3 from cons-list iterator" assert=
 { 1 2 3 4 5 } >cons-list >iterator 2 #drop #collect
 { 3 4 5 } "drop 2 from cons-list iterator" assert=
+
+">iterator state is per-call" test-section
+{ 1 2 3 } >cons-list
+dup >iterator #collect { 1 2 3 } "first drain sees all elements" assert=
+dup >iterator #collect { 1 2 3 } "second iterator is fresh" assert=
+dup >iterator 1 #take #collect { 1 } "partial consumption" assert=
+dup >iterator #collect { 1 2 3 } "full drain after partial consumption" assert=
+cons-list>array { 1 2 3 } "list unchanged after draining" assert=

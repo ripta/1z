@@ -140,5 +140,23 @@ list-filter: ( cons-list quot -- cons-list' ) [
   } unchecked-match
 ] ;
 
-\ Iterator protocol integration
->iterator: method{ cons-list } [ cons-list>array >iterator ] ;
+private{
+  \ Iterator step: state is a one-element vector holding the remaining list.
+  list-iter-step: ( state -- option ) [
+    dup 0 #nth
+    dup cons? [
+      dup head swap tail
+      2 pick-n 0 <rot- #nth! drop
+      nip >option:some
+    ] [
+      2drop option:none
+    ] if
+  ] ;
+}
+
+\ Iterator protocol integration: lazy spine walk, O(1) per step.
+>iterator: method{ cons-list } [
+  [ ] make-vector swap #push!
+  [ list-iter-step ] curry
+  >iterator
+] ;

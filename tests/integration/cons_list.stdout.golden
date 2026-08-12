@@ -234,7 +234,7 @@ PASS: reduce cons-list iterator
 Stack: [ ]
 === >iterator with chained adapters ===
 Stack: [ ]
-Stack: [ <iterator array 0/5> ]
+Stack: [ <iterator callback callback> ]
 Stack: [ { 6 8 10 } ]
 PASS: map then filter on cons-list iterator
 Stack: [ ]
@@ -250,4 +250,17 @@ PASS: take 3 from cons-list iterator
 Stack: [ ]
 Stack: [ { 3 4 5 } ]
 PASS: drop 2 from cons-list iterator
+Stack: [ ]
+=== >iterator state is per-call ===
+Stack: [ ]
+Stack: [ <cons-list:cons cons-cell{ head: 1 tail: <cons-list:cons cons-cell{ head: 2 tail: <cons-list:cons cons-cell{ head: 3 tail: <cons-list:nil nil:> }> }> }> ]
+PASS: first drain sees all elements
+Stack: [ <cons-list:cons cons-cell{ head: 1 tail: <cons-list:cons cons-cell{ head: 2 tail: <cons-list:cons cons-cell{ head: 3 tail: <cons-list:nil nil:> }> }> }> ]
+PASS: second iterator is fresh
+Stack: [ <cons-list:cons cons-cell{ head: 1 tail: <cons-list:cons cons-cell{ head: 2 tail: <cons-list:cons cons-cell{ head: 3 tail: <cons-list:nil nil:> }> }> }> ]
+PASS: partial consumption
+Stack: [ <cons-list:cons cons-cell{ head: 1 tail: <cons-list:cons cons-cell{ head: 2 tail: <cons-list:cons cons-cell{ head: 3 tail: <cons-list:nil nil:> }> }> }> ]
+PASS: full drain after partial consumption
+Stack: [ <cons-list:cons cons-cell{ head: 1 tail: <cons-list:cons cons-cell{ head: 2 tail: <cons-list:cons cons-cell{ head: 3 tail: <cons-list:nil nil:> }> }> }> ]
+PASS: list unchanged after draining
 Stack: [ ]
