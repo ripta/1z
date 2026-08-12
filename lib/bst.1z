@@ -1,7 +1,7 @@
 \ lib/bst.1z - Immutable red-black binary search tree
 
 \ Type definitions
-tree-node-data: struct{ color key left right } ;
+tree-node-data: struct{ color key left right size } ;
 tree-color: enum{ red: unit black: unit } ;
 tree-node: enum{
   branch:    tree-node-data
@@ -15,21 +15,42 @@ bst: struct{ root: tree-node comparator: quotation } ;
 leaf: ( -- tree-node ) [ tree-node:leaf ] ;
 leaf?: ( node -- bool ) [ tree-node:leaf? ] ;
 
-\ After unchecked-match on tree-node:branch, stack is ( color key left right )
+\ Cached subtree size, read from the node in O(1). Leaves are empty.
+node-size: ( node -- n ) [
+  {
+    tree-node:branch:    [ nip nip nip nip ]
+    tree-node:leaf:      [ 0 ]
+    tree-node:bb-leaf:   [ 0 ]
+    tree-node:bb-branch: [ nip nip nip nip ]
+  } unchecked-match
+] ;
+
+\ Branch constructors that derive the subtree size from the two children.
+\ Every branch construction routes through these, so a rebuilt node always
+\ recomputes its own size from whatever children it ends up with.
+branch-node: ( color key left right -- tree-node ) [
+  over node-size over node-size + 1 + make-tree-node:branch
+] ;
+
+bb-branch-node: ( color key left right -- tree-node ) [
+  over node-size over node-size + 1 + make-tree-node:bb-branch
+] ;
+
+\ After unchecked-match on tree-node:branch, stack is ( color key left right size )
 red-node: ( key left right -- tree-node ) [
-  [ [ tree-color:red ] dip ] 2dip make-tree-node:branch
+  [ [ tree-color:red ] dip ] 2dip branch-node
 ] ;
 
 black-node: ( key left right -- tree-node ) [
-  [ [ tree-color:black ] dip ] 2dip make-tree-node:branch
+  [ [ tree-color:black ] dip ] 2dip branch-node
 ] ;
 
 red-branch?: ( node -- bool ) [
   {
-    tree-node:branch:    [ drop drop drop tree-color:red? ]
+    tree-node:branch:    [ drop drop drop drop tree-color:red? ]
     tree-node:leaf:      [ f ]
     tree-node:bb-leaf:   [ f ]
-    tree-node:bb-branch: [ drop drop drop drop f ]
+    tree-node:bb-branch: [ drop drop drop drop drop f ]
   } unchecked-match
 ] ;
 
@@ -41,37 +62,37 @@ make-balanced: ( x a b y z c d -- tree-node ) [
 \ Node accessors
 node-color: ( branch-node -- color ) [
   {
-    tree-node:branch:    [ drop drop drop ]
+    tree-node:branch:    [ drop drop drop drop ]
     tree-node:leaf:      [ "node-color on leaf" throw ]
     tree-node:bb-leaf:   [ "node-color on bb-leaf" throw ]
-    tree-node:bb-branch: [ drop drop drop ]
+    tree-node:bb-branch: [ drop drop drop drop ]
   } unchecked-match
 ] ;
 
 node-key: ( branch-node -- key ) [
   {
-    tree-node:branch:    [ drop drop nip ]
+    tree-node:branch:    [ drop drop drop nip ]
     tree-node:leaf:      [ "node-key on leaf" throw ]
     tree-node:bb-leaf:   [ "node-key on bb-leaf" throw ]
-    tree-node:bb-branch: [ drop drop nip ]
+    tree-node:bb-branch: [ drop drop drop nip ]
   } unchecked-match
 ] ;
 
 node-left: ( branch-node -- left ) [
   {
-    tree-node:branch:    [ drop nip nip ]
+    tree-node:branch:    [ drop drop nip nip ]
     tree-node:leaf:      [ "node-left on leaf" throw ]
     tree-node:bb-leaf:   [ "node-left on bb-leaf" throw ]
-    tree-node:bb-branch: [ drop nip nip ]
+    tree-node:bb-branch: [ drop drop nip nip ]
   } unchecked-match
 ] ;
 
 node-right: ( branch-node -- right ) [
   {
-    tree-node:branch:    [ nip nip nip ]
+    tree-node:branch:    [ drop nip nip nip ]
     tree-node:leaf:      [ "node-right on leaf" throw ]
     tree-node:bb-leaf:   [ "node-right on bb-leaf" throw ]
-    tree-node:bb-branch: [ nip nip nip ]
+    tree-node:bb-branch: [ drop nip nip nip ]
   } unchecked-match
 ] ;
 
@@ -79,14 +100,14 @@ node-right: ( branch-node -- right ) [
 blacken: ( node -- node ) [
   {
     tree-node:branch: [
-      3 <rot-n drop tree-color:black 3 rot-n>
-      make-tree-node:branch
+      drop 3 <rot-n drop tree-color:black 3 rot-n>
+      branch-node
     ]
     tree-node:leaf:      [ leaf ]
     tree-node:bb-leaf:   [ leaf ]
     tree-node:bb-branch: [
-      3 <rot-n drop tree-color:black 3 rot-n>
-      make-tree-node:branch
+      drop 3 <rot-n drop tree-color:black 3 rot-n>
+      branch-node
     ]
   } unchecked-match
 ] ;
@@ -95,8 +116,8 @@ blacken: ( node -- node ) [
 bb?: ( node -- bool ) [
   {
     tree-node:bb-leaf:   [ t ]
-    tree-node:bb-branch: [ drop drop drop drop t ]
-    tree-node:branch:    [ drop drop drop drop f ]
+    tree-node:bb-branch: [ drop drop drop drop drop t ]
+    tree-node:branch:    [ drop drop drop drop drop f ]
     tree-node:leaf:      [ f ]
   } unchecked-match
 ] ;
@@ -105,11 +126,12 @@ bb?: ( node -- bool ) [
 blacker: ( node -- node ) [
   {
     tree-node:branch: [
-      \ ( color key left right )
+      \ ( color key left right size )
+      drop
       3 pick-n tree-color:red? [
-        3 <rot-n drop tree-color:black 3 rot-n> make-tree-node:branch
+        3 <rot-n drop tree-color:black 3 rot-n> branch-node
       ] [
-        make-tree-node:bb-branch
+        bb-branch-node
       ] if
     ]
     tree-node:leaf:      [ tree-node:bb-leaf ]
@@ -122,15 +144,16 @@ blacker: ( node -- node ) [
 redder: ( node -- node ) [
   {
     tree-node:branch: [
-      \ ( color key left right )
+      \ ( color key left right size )
+      drop
       3 pick-n tree-color:black? [
-        3 <rot-n drop tree-color:red 3 rot-n> make-tree-node:branch
+        3 <rot-n drop tree-color:red 3 rot-n> branch-node
       ] [
         "redder on red branch" throw
       ] if
     ]
     tree-node:bb-branch: [
-      3 <rot-n drop tree-color:black 3 rot-n> make-tree-node:branch
+      drop 3 <rot-n drop tree-color:black 3 rot-n> branch-node
     ]
     tree-node:bb-leaf: [ leaf ]
     tree-node:leaf: [ "redder on leaf" throw ]
@@ -249,7 +272,7 @@ balance: ( color key left right -- tree-node ) [
           \ LR: left red, left.right red
           3 <rot-n drop balance-lr
         ] [
-          make-tree-node:branch
+          branch-node
         ] if
       ] if
     ] [
@@ -262,15 +285,15 @@ balance: ( color key left right -- tree-node ) [
             \ RL: right red, right.left red
             3 <rot-n drop balance-rl
           ] [
-            make-tree-node:branch
+            branch-node
           ] if
         ] if
       ] [
-        make-tree-node:branch
+        branch-node
       ] if
     ] if
   ] [
-    make-tree-node:branch
+    branch-node
   ] if
 ] ;
 
@@ -299,7 +322,7 @@ balance-del: ( color key left right -- tree-node ) [
             \ ( color(5) z(4) bb(3) y(2) a(1) right'(0) )
             nip nip nip tree-color:black swap balance-del
           ] [
-            make-tree-node:branch
+            branch-node
           ] if
         ] if
       ] if
@@ -326,7 +349,7 @@ balance-del: ( color key left right -- tree-node ) [
               \ ( B(...)(1) b(0) )
               tree-color:black -rot> balance-del
             ] [
-              make-tree-node:branch
+              branch-node
             ] if
           ] if
         ] if
@@ -335,22 +358,22 @@ balance-del: ( color key left right -- tree-node ) [
         3 pick-n tree-color:red? [
           over bb? [
             \ R(x, BB, b) => B(x, redder(BB), b)
-            swap redder swap make-tree-node:branch
+            swap redder swap branch-node
           ] [
             dup bb? [
               \ R(x, a, BB) => B(x, a, redder(BB))
-              redder make-tree-node:branch
+              redder branch-node
             ] [
-              make-tree-node:branch
+              branch-node
             ] if
           ] if
         ] [
-          make-tree-node:branch
+          branch-node
         ] if
       ] if
     ] if
   ] [
-    make-tree-node:branch
+    branch-node
   ] if
 ] ;
 
@@ -386,7 +409,8 @@ bubble: ( color key left right -- tree-node ) [
 remove-min: stack-recursive ( node -- min-key node ) [
   {
     tree-node:branch: [
-      \ ( color key left right )
+      \ ( color key left right size )
+      drop
       over leaf? [
         \ This node is the minimum since left is a leaf.
         \ ( color key left right )
@@ -418,7 +442,8 @@ remove-min: stack-recursive ( node -- min-key node ) [
 delete-node: stack-recursive ( value comparator node -- tree-node ) [
   {
     tree-node:branch: [
-      \ ( value comparator color key left right )
+      \ ( value comparator color key left right size )
+      drop
       compare-with-key {
         ordering:lt: [
           \ Recurse into left subtree
@@ -484,6 +509,7 @@ delete-node: stack-recursive ( value comparator node -- tree-node ) [
     tree-node:bb-leaf: [ drop drop tree-node:bb-leaf ]
     tree-node:bb-branch: [
       \ Shouldn't happen during normal deletion, treat like branch
+      drop
       compare-with-key {
         ordering:lt: [
           5 pick-n 5 pick-n 3 pick-n delete-node
@@ -551,7 +577,8 @@ compare-with-key: ( value comparator color key left right -- ..a ordering ) [
 insert-node: stack-recursive ( value comparator node -- tree-node ) [
   {
     tree-node:branch: [
-      \ ( value comparator color key left right )
+      \ ( value comparator color key left right size )
+      drop
       compare-with-key {
         ordering:lt: [
           \ Recurse into left subtree, then balance
@@ -565,7 +592,7 @@ insert-node: stack-recursive ( value comparator node -- tree-node ) [
           \ Replace key with new value, keep same structure
           \ ( value(5) comparator(4) color(3) key(2) left(1) right(0) )
           3 pick-n 6 pick-n 3 pick-n 3 pick-n
-          make-tree-node:branch
+          branch-node
           nip nip nip nip nip nip
         ]
         ordering:gt: [
@@ -584,6 +611,7 @@ insert-node: stack-recursive ( value comparator node -- tree-node ) [
     ]
     tree-node:bb-leaf: [ drop leaf leaf red-node ]
     tree-node:bb-branch: [
+      drop
       compare-with-key {
         ordering:lt: [
           5 pick-n 5 pick-n 3 pick-n insert-node
@@ -592,7 +620,7 @@ insert-node: stack-recursive ( value comparator node -- tree-node ) [
         ]
         ordering:eq: [
           3 pick-n 6 pick-n 3 pick-n 3 pick-n
-          make-tree-node:branch
+          branch-node
           nip nip nip nip nip nip
         ]
         ordering:gt: [
@@ -609,7 +637,8 @@ insert-node: stack-recursive ( value comparator node -- tree-node ) [
 contains-node: stack-recursive ( value comparator node -- bool ) [
   {
     tree-node:branch: [
-      \ ( value comparator color key left right )
+      \ ( value comparator color key left right size )
+      drop
       compare-with-key {
         ordering:lt: [
           drop nip nip contains-node
@@ -627,6 +656,7 @@ contains-node: stack-recursive ( value comparator node -- bool ) [
     ]
     tree-node:bb-leaf: [ drop drop f ]
     tree-node:bb-branch: [
+      drop
       compare-with-key {
         ordering:lt: [ drop nip nip contains-node ]
         ordering:eq: [ drop drop drop drop drop drop t ]
@@ -658,8 +688,8 @@ tree-contains?: ( bst value -- bool ) [
 min-node: stack-recursive ( node -- option ) [
   {
     tree-node:branch: [
-      \ ( color key left right )
-      drop [ nip ] dip
+      \ ( color key left right size )
+      drop drop [ nip ] dip
       \ ( key left )
       dup leaf? [
         drop >option:some
@@ -670,7 +700,7 @@ min-node: stack-recursive ( node -- option ) [
     tree-node:leaf:      [ option:none ]
     tree-node:bb-leaf:   [ option:none ]
     tree-node:bb-branch: [
-      drop [ nip ] dip
+      drop drop [ nip ] dip
       dup leaf? [ drop >option:some ] [ nip min-node ] if
     ]
   } unchecked-match
@@ -679,8 +709,8 @@ min-node: stack-recursive ( node -- option ) [
 max-node: stack-recursive ( node -- option ) [
   {
     tree-node:branch: [
-      \ ( color key left right )
-      nip [ nip ] dip
+      \ ( color key left right size )
+      drop nip [ nip ] dip
       \ ( key right )
       dup leaf? [
         drop >option:some
@@ -691,22 +721,64 @@ max-node: stack-recursive ( node -- option ) [
     tree-node:leaf:      [ option:none ]
     tree-node:bb-leaf:   [ option:none ]
     tree-node:bb-branch: [
-      nip [ nip ] dip
+      drop nip [ nip ] dip
       dup leaf? [ drop >option:some ] [ nip max-node ] if
     ]
   } unchecked-match
 ] ;
 
-size-node: stack-recursive ( node -- n ) [
+\ Count nodes by full traversal, as an independent check of the cached sizes.
+count-nodes: stack-recursive ( node -- n ) [
   {
     tree-node:branch: [
-      \ ( color key left right )
-      swap size-node swap size-node + 1 + nip nip
+      \ ( color key left right size )
+      drop
+      swap count-nodes swap count-nodes + 1 + nip nip
     ]
     tree-node:leaf:      [ 0 ]
     tree-node:bb-leaf:   [ 0 ]
     tree-node:bb-branch: [
-      swap size-node swap size-node + 1 + nip nip
+      drop
+      swap count-nodes swap count-nodes + 1 + nip nip
+    ]
+  } unchecked-match
+] ;
+
+\ Order-statistic select: the key at 0-based rank n in sorted order.
+\ Descends by comparing n against the left subtree's cached size, so the
+\ cost is O(log n). Callers bounds-check n, making the leaf arms unreachable.
+nth-node: stack-recursive ( n node -- key ) [
+  {
+    tree-node:branch: [
+      \ ( n color key left right size )
+      drop over node-size 5 pick-n
+      \ ( n color key left right lsize n )
+      2dup > [
+        \ n falls in the left subtree
+        2drop drop nip nip nth-node
+      ] [
+        2dup = [
+          \ this node is the nth key
+          2drop 2drop nip nip
+        ] [
+          \ skip the left subtree and this node, recurse right
+          swap - -- swap [ nip nip nip nip ] dip nth-node
+        ] if
+      ] if
+    ]
+    tree-node:leaf:      [ "nth-node on leaf" throw ]
+    tree-node:bb-leaf:   [ "nth-node on bb-leaf" throw ]
+    tree-node:bb-branch: [
+      drop over node-size 5 pick-n
+      2dup > [
+        2drop drop nip nip nth-node
+      ] [
+        2dup = [
+          2drop 2drop nip nip
+        ] [
+          swap - -- swap [ nip nip nip nip ] dip nth-node
+        ] if
+      ] if
     ]
   } unchecked-match
 ] ;
@@ -714,7 +786,8 @@ size-node: stack-recursive ( node -- n ) [
 lookup-node: stack-recursive ( value comparator node -- option ) [
   {
     tree-node:branch: [
-      \ ( value comparator color key left right )
+      \ ( value comparator color key left right size )
+      drop
       compare-with-key {
         ordering:lt: [
           drop nip nip lookup-node
@@ -732,6 +805,7 @@ lookup-node: stack-recursive ( value comparator node -- option ) [
     ]
     tree-node:bb-leaf: [ drop drop option:none ]
     tree-node:bb-branch: [
+      drop
       compare-with-key {
         ordering:lt: [ drop nip nip lookup-node ]
         ordering:eq: [ drop drop nip nip nip >option:some ]
@@ -743,7 +817,7 @@ lookup-node: stack-recursive ( value comparator node -- option ) [
 
 tree-min:  ( bst -- option ) [ root>> min-node ] ;
 tree-max:  ( bst -- option ) [ root>> max-node ] ;
-tree-size: ( bst -- n )      [ root>> size-node ] ;
+tree-size: ( bst -- n )      [ root>> count-nodes ] ;
 
 tree-lookup: ( bst value -- option ) [
   swap unmake-bst  \ ( value root comparator )
@@ -754,7 +828,8 @@ tree-lookup: ( bst value -- option ) [
 each-node: stack-recursive ( node quot -- ) [
   swap {
     tree-node:branch: [
-      \ ( quot color key left right )
+      \ ( quot color key left right size )
+      drop
       swap 4 pick-n each-node  \ recurse left
       swap 3 pick-n call       \ call quot on key
       nip swap each-node       \ drop color, recurse right
@@ -762,6 +837,7 @@ each-node: stack-recursive ( node quot -- ) [
     tree-node:leaf:      [ drop ]
     tree-node:bb-leaf:   [ drop ]
     tree-node:bb-branch: [
+      drop
       swap 4 pick-n each-node
       swap 3 pick-n call
       nip swap each-node
@@ -772,7 +848,8 @@ each-node: stack-recursive ( node quot -- ) [
 fold-node: stack-recursive ( node acc quot -- acc ) [
   [ swap ] dip swap {
     tree-node:branch: [
-      \ ( acc quot color key left right )
+      \ ( acc quot color key left right size )
+      drop
       3 <rot-n drop
       \ ( acc quot key left right )
       swap 4 pick-n 4 pick-n fold-node
@@ -786,6 +863,7 @@ fold-node: stack-recursive ( node acc quot -- acc ) [
     tree-node:leaf:      [ drop ]
     tree-node:bb-leaf:   [ drop ]
     tree-node:bb-branch: [
+      drop
       3 <rot-n drop
       swap 4 pick-n 4 pick-n fold-node
       2 pick-n 4 pick-n call
@@ -808,15 +886,15 @@ private{
   tree-iter-descend: stack-recursive ( stack node -- stack ) [
     dup {
       tree-node:branch: [
-        \ ( stack node color key left right )
-        drop [ 2drop ] dip
+        \ ( stack node color key left right size )
+        drop drop [ 2drop ] dip
         [ #push! ] dip
         tree-iter-descend
       ]
       tree-node:leaf:      [ drop ]
       tree-node:bb-leaf:   [ drop ]
       tree-node:bb-branch: [
-        drop [ 2drop ] dip
+        drop drop [ 2drop ] dip
         [ #push! ] dip
         tree-iter-descend
       ]
@@ -832,15 +910,15 @@ private{
     ] [
       #pop! {
         tree-node:branch: [
-          \ ( stack color key left right )
-          nip [ nip ] dip
+          \ ( stack color key left right size )
+          drop nip [ nip ] dip
           swap [ tree-iter-descend drop ] dip
           >option:some
         ]
         tree-node:leaf:      [ drop option:none ]
         tree-node:bb-leaf:   [ drop option:none ]
         tree-node:bb-branch: [
-          nip [ nip ] dip
+          drop nip [ nip ] dip
           swap [ tree-iter-descend drop ] dip
           >option:some
         ]
@@ -854,6 +932,31 @@ private{
   root>> [ ] make-vector swap tree-iter-descend
   [ tree-iter-step ] curry
   >iterator
+] ;
+
+\ Cost-rule protocol conformance: #len reads the cached root size in O(1),
+\ #nth selects by rank in O(log n), #first and #last walk one spine in
+\ O(log n), and #empty? is an O(1) root check.
+#len: method{ bst } [ root>> node-size ] ;
+
+#empty?: method{ bst } [ tree-empty? ] ;
+
+#first: method{ bst } [
+  tree-min dup option:some? [ option:some> ] [
+    drop f "first of empty tree" EIndexOutOfBounds make-error throw
+  ] if
+] ;
+
+#last: method{ bst } [
+  tree-max dup option:some? [ option:some> ] [
+    drop f "last of empty tree" EIndexOutOfBounds make-error throw
+  ] if
+] ;
+
+#nth: method{ bst fixnum } [
+  dup 0 < [ f "negative index" EIndexOutOfBounds make-error throw ] when
+  over #len over <= [ f "index out of bounds" EIndexOutOfBounds make-error throw ] when
+  swap root>> nth-node
 ] ;
 
 >bst: ( array comparator -- bst ) [

@@ -3,8 +3,19 @@
 use "testing" ;
 use "bst" ;
 
+\ Order-statistic invariant: the cached subtree size must match an actual
+\ traversal count.
+assert-size-invariant: ( bst -- bst ) [
+  dup root>> node-size over root>> count-nodes
+  "cached size equals traversal count" assert=
+] ;
+
+assert-map-size-invariant: ( bst-map -- bst-map ) [
+  unmake-bst-map assert-size-invariant make-bst-map
+] ;
+
 "empty tree" test-section
-[ cmp ] <bst> tree-empty? t "new bst is empty" assert=
+[ cmp ] <bst> assert-size-invariant tree-empty? t "new bst is empty" assert=
 
 "bst getters" test-section
 [ cmp ] <bst>
@@ -12,12 +23,12 @@ dup root>> leaf? t "root>> returns leaf for empty tree" assert=
 comparator>> quotation? t "comparator>> returns quotation" assert=
 
 "single insert" test-section
-[ cmp ] <bst> 42 tree-insert tree-empty? f "tree with element is not empty" assert=
+[ cmp ] <bst> 42 tree-insert assert-size-invariant tree-empty? f "tree with element is not empty" assert=
 [ cmp ] <bst> 42 tree-insert 42 tree-contains? t "contains inserted element" assert=
 [ cmp ] <bst> 42 tree-insert 99 tree-contains? f "does not contain absent element" assert=
 
 "multiple inserts" test-section
-[ cmp ] <bst> 10 tree-insert 20 tree-insert 30 tree-insert
+[ cmp ] <bst> 10 tree-insert 20 tree-insert 30 tree-insert assert-size-invariant
 dup 10 tree-contains? t "contains 10" assert=
 dup 20 tree-contains? t "contains 20" assert=
 dup 30 tree-contains? t "contains 30" assert=
@@ -26,11 +37,11 @@ dup 5 tree-contains? f "does not contain 5" assert=
 drop
 
 "duplicate insert" test-section
-[ cmp ] <bst> 42 tree-insert 42 tree-insert
+[ cmp ] <bst> 42 tree-insert 42 tree-insert assert-size-invariant
 42 tree-contains? t "still contains element after dup insert" assert=
 
 ">bst from array" test-section
-{ 5 3 8 1 4 } [ cmp ] >bst
+{ 5 3 8 1 4 } [ cmp ] >bst assert-size-invariant
 dup 5 tree-contains? t ">bst contains 5" assert=
 dup 3 tree-contains? t ">bst contains 3" assert=
 dup 8 tree-contains? t ">bst contains 8" assert=
@@ -40,7 +51,7 @@ dup 6 tree-contains? f ">bst does not contain 6" assert=
 drop
 
 "sorted sequence insert" test-section
-{ 1 2 3 4 5 6 7 8 9 10 } [ cmp ] >bst
+{ 1 2 3 4 5 6 7 8 9 10 } [ cmp ] >bst assert-size-invariant
 dup 1 tree-contains? t "sorted: contains 1" assert=
 dup 5 tree-contains? t "sorted: contains 5" assert=
 dup 10 tree-contains? t "sorted: contains 10" assert=
@@ -48,7 +59,7 @@ dup 0 tree-contains? f "sorted: does not contain 0" assert=
 drop
 
 "reverse sorted sequence" test-section
-{ 10 9 8 7 6 5 4 3 2 1 } [ cmp ] >bst
+{ 10 9 8 7 6 5 4 3 2 1 } [ cmp ] >bst assert-size-invariant
 dup 1 tree-contains? t "reverse: contains 1" assert=
 dup 5 tree-contains? t "reverse: contains 5" assert=
 dup 10 tree-contains? t "reverse: contains 10" assert=
@@ -56,7 +67,7 @@ dup 11 tree-contains? f "reverse: does not contain 11" assert=
 drop
 
 "string keys" test-section
-{ "apple" "banana" "cherry" } [ cmp ] >bst
+{ "apple" "banana" "cherry" } [ cmp ] >bst assert-size-invariant
 dup "apple" tree-contains? t "contains apple" assert=
 dup "banana" tree-contains? t "contains banana" assert=
 dup "cherry" tree-contains? t "contains cherry" assert=
@@ -64,7 +75,7 @@ dup "date" tree-contains? f "does not contain date" assert=
 drop
 
 "custom comparator (reverse)" test-section
-{ 1 2 3 4 5 } [ swap cmp ] >bst
+{ 1 2 3 4 5 } [ swap cmp ] >bst assert-size-invariant
 dup 1 tree-contains? t "reverse cmp: contains 1" assert=
 dup 3 tree-contains? t "reverse cmp: contains 3" assert=
 dup 5 tree-contains? t "reverse cmp: contains 5" assert=
@@ -76,7 +87,7 @@ drop
 
 "tree-min on non-empty tree" test-section
 { 5 3 8 1 4 } [ cmp ] >bst tree-min option:some> 1 "min is 1" assert=
-{ 42 } [ cmp ] >bst tree-min option:some> 42 "min of singleton is 42" assert=
+{ 42 } [ cmp ] >bst assert-size-invariant tree-min option:some> 42 "min of singleton is 42" assert=
 { 10 9 8 7 6 5 4 3 2 1 } [ cmp ] >bst tree-min option:some> 1 "min of reverse sorted is 1" assert=
 
 "tree-max on empty tree" test-section
@@ -92,7 +103,7 @@ drop
 [ cmp ] <bst> 42 tree-insert tree-size 1 "size after 1 insert is 1" assert=
 { 5 3 8 1 4 } [ cmp ] >bst tree-size 5 "size of 5-element tree is 5" assert=
 { 1 2 3 4 5 6 7 8 9 10 } [ cmp ] >bst tree-size 10 "size of 10-element tree is 10" assert=
-{ 5 5 5 } [ cmp ] >bst tree-size 1 "duplicate inserts do not increase size" assert=
+{ 5 5 5 } [ cmp ] >bst assert-size-invariant tree-size 1 "duplicate inserts do not increase size" assert=
 
 "tree-lookup present" test-section
 { 5 3 8 1 4 } [ cmp ] >bst
@@ -155,27 +166,64 @@ dup >iterator 2 #take #collect { 1 3 } "partial consumption" assert=
 dup >iterator #collect { 1 3 4 5 8 } "full drain after partial consumption" assert=
 tree>array { 1 3 4 5 8 } "tree unchanged after draining" assert=
 
+"#len" test-section
+[ cmp ] <bst> #len 0 "#len of empty tree is 0" assert=
+[ cmp ] <bst> 42 tree-insert #len 1 "#len after one insert is 1" assert=
+{ 5 3 8 1 4 } [ cmp ] >bst #len 5 "#len of five-element tree is 5" assert=
+{ 5 5 5 } [ cmp ] >bst #len 1 "#len with duplicate inserts is 1" assert=
+{ 5 3 8 1 4 } [ cmp ] >bst 3 tree-delete #len 4 "#len after a delete is 4" assert=
+
+"#empty?" test-section
+[ cmp ] <bst> #empty? t "#empty? on empty tree" assert=
+{ 1 } [ cmp ] >bst #empty? f "#empty? on non-empty tree" assert=
+
+"#first and #last" test-section
+{ 5 3 8 1 4 } [ cmp ] >bst #first 1 "#first is the minimum" assert=
+{ 5 3 8 1 4 } [ cmp ] >bst #last 8 "#last is the maximum" assert=
+[ [ cmp ] <bst> #first ] index-out-of-bounds: "#first on empty tree throws" assert-error-type
+[ [ cmp ] <bst> #last ] index-out-of-bounds: "#last on empty tree throws" assert-error-type
+
+"#first? and #last?" test-section
+{ 5 3 8 1 4 } [ cmp ] >bst #first? option:some> 1 "#first? unwraps the minimum" assert=
+[ cmp ] <bst> #first? option:none? t "#first? on empty tree is none" assert=
+{ 5 3 8 1 4 } [ cmp ] >bst #last? option:some> 8 "#last? unwraps the maximum" assert=
+[ cmp ] <bst> #last? option:none? t "#last? on empty tree is none" assert=
+
+"#nth" test-section
+{ 5 3 8 1 4 } [ cmp ] >bst
+dup 0 #nth 1 "#nth 0 is rank 0" assert=
+dup 1 #nth 3 "#nth 1 is rank 1" assert=
+dup 2 #nth 4 "#nth 2 is rank 2" assert=
+dup 3 #nth 5 "#nth 3 is rank 3" assert=
+dup 4 #nth 8 "#nth 4 is rank 4" assert=
+drop
+{ 5 3 8 1 4 } [ cmp ] >bst 3 tree-delete 1 #nth
+4 "#nth after delete shifts ranks" assert=
+[ { 5 3 8 1 4 } [ cmp ] >bst -1 #nth ] index-out-of-bounds: "#nth negative index throws" assert-error-type
+[ { 5 3 8 1 4 } [ cmp ] >bst 5 #nth ] index-out-of-bounds: "#nth past the end throws" assert-error-type
+[ [ cmp ] <bst> 0 #nth ] index-out-of-bounds: "#nth on empty tree throws" assert-error-type
+
 \ === Deletion tests ===
 
 "delete from empty tree" test-section
-[ cmp ] <bst> 42 tree-delete tree-empty? t "delete from empty is no-op" assert=
+[ cmp ] <bst> 42 tree-delete assert-size-invariant tree-empty? t "delete from empty is no-op" assert=
 
 "delete single element" test-section
-[ cmp ] <bst> 42 tree-insert 42 tree-delete
+[ cmp ] <bst> 42 tree-insert 42 tree-delete assert-size-invariant
 dup tree-empty? t "tree is empty after deleting only element" assert=
 42 tree-contains? f "does not contain deleted element" assert=
 
 "delete leaf node" test-section
-{ 5 3 8 } [ cmp ] >bst 3 tree-delete
+{ 5 3 8 } [ cmp ] >bst 3 tree-delete assert-size-invariant
 dup tree>array { 5 8 } "delete leaf 3" assert=
 drop
 
 "delete node with two children" test-section
-{ 2 1 3 } [ cmp ] >bst 2 tree-delete
+{ 2 1 3 } [ cmp ] >bst 2 tree-delete assert-size-invariant
 tree>array { 1 3 } "delete root with two children" assert=
 
 "delete from multi-element tree" test-section
-{ 5 3 8 1 4 } [ cmp ] >bst 3 tree-delete
+{ 5 3 8 1 4 } [ cmp ] >bst 3 tree-delete assert-size-invariant
 dup 3 tree-contains? f "does not contain deleted 3" assert=
 dup 5 tree-contains? t "still contains 5" assert=
 dup 8 tree-contains? t "still contains 8" assert=
@@ -185,20 +233,24 @@ drop
 
 "delete non-existent element" test-section
 { 5 3 8 1 4 } [ cmp ] >bst
-dup tree-size swap 99 tree-delete tree-size
+dup tree-size swap 99 tree-delete assert-size-invariant tree-size
 "delete non-existent does not change size" assert=
 
 "delete all elements one by one" test-section
 { 5 3 8 1 4 } [ cmp ] >bst
-5 tree-delete 3 tree-delete 8 tree-delete 1 tree-delete 4 tree-delete
+5 tree-delete assert-size-invariant
+3 tree-delete assert-size-invariant
+8 tree-delete assert-size-invariant
+1 tree-delete assert-size-invariant
+4 tree-delete assert-size-invariant
 tree-empty? t "tree is empty after deleting all elements" assert=
 
 "tree-size after deletions" test-section
 { 5 3 8 1 4 } [ cmp ] >bst
 dup tree-size 5 "size before deletion" assert=
-3 tree-delete
+3 tree-delete assert-size-invariant
 dup tree-size 4 "size after deleting one" assert=
-8 tree-delete
+8 tree-delete assert-size-invariant
 tree-size 3 "size after deleting two" assert=
 
 "tree>array after deletions" test-section
@@ -208,14 +260,17 @@ tree-size 3 "size after deleting two" assert=
 { 1 3 4 8 } "tree>array after deleting 5 (root)" assert=
 
 "delete root node" test-section
-{ 10 5 15 3 7 12 20 } [ cmp ] >bst 10 tree-delete
+{ 10 5 15 3 7 12 20 } [ cmp ] >bst assert-size-invariant 10 tree-delete assert-size-invariant
 dup 10 tree-contains? f "root deleted" assert=
 dup tree-size 6 "size after root deletion" assert=
 tree>array { 3 5 7 12 15 20 } "sorted after root deletion" assert=
 
 "large sorted insert then delete" test-section
-{ 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 } [ cmp ] >bst
-5 tree-delete 10 tree-delete 15 tree-delete 20 tree-delete
+{ 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 } [ cmp ] >bst assert-size-invariant
+5 tree-delete assert-size-invariant
+10 tree-delete assert-size-invariant
+15 tree-delete assert-size-invariant
+20 tree-delete assert-size-invariant
 dup tree-size 16 "size after 4 deletions from 20" assert=
 dup 5 tree-contains? f "does not contain 5" assert=
 dup 10 tree-contains? f "does not contain 10" assert=
@@ -237,6 +292,7 @@ tree>array { 1 2 3 4 6 7 8 9 11 12 13 14 16 17 18 19 }
 "a" 1 map-insert
 "b" 2 map-insert
 "c" 3 map-insert
+assert-map-size-invariant
 dup "a" map-lookup option:some> 1 "lookup a" assert=
 dup "b" map-lookup option:some> 2 "lookup b" assert=
 dup "c" map-lookup option:some> 3 "lookup c" assert=
@@ -247,6 +303,7 @@ drop
 [ cmp ] <bst-map>
 "x" 1 map-insert
 "x" 99 map-insert
+assert-map-size-invariant
 "x" map-lookup option:some> 99 "overwritten value" assert=
 
 "map-delete" test-section
@@ -255,6 +312,7 @@ drop
 "b" 2 map-insert
 "c" 3 map-insert
 "b" map-delete
+assert-map-size-invariant
 dup "b" map-lookup option:none? t "deleted key is none" assert=
 dup "a" map-lookup option:some> 1 "a still present" assert=
 dup "c" map-lookup option:some> 3 "c still present" assert=
@@ -263,7 +321,7 @@ drop
 "map-delete non-existent" test-section
 [ cmp ] <bst-map>
 "a" 1 map-insert
-dup map-size swap "z" map-delete map-size
+dup map-size swap "z" map-delete assert-map-size-invariant map-size
 "delete non-existent key is no-op" assert=
 
 "map-size on bst-map" test-section
@@ -278,6 +336,7 @@ map-size 3 "bst-map size is 3" assert=
 "a" 1 map-insert
 "b" 2 map-insert
 "c" 3 map-insert
+assert-map-size-invariant
 dup "a" map-lookup option:some> 1 "reverse cmp lookup a" assert=
 dup "c" map-lookup option:some> 3 "reverse cmp lookup c" assert=
 drop
