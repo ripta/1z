@@ -213,6 +213,19 @@ Stack: [ ]
 Stack: [ 21 ]
 PASS: >iterator #reduce sums elements
 Stack: [ ]
+=== >iterator state is per-call ===
+Stack: [ ]
+Stack: [ bst{ root: <tree-node:branch tree-node-data{ color: <tree-color:black black:> key: 3 left: <tree-node:branch tree-node-data{ color: <tree-color:black black:> key: 1 left: <tree-node:leaf leaf:> right: <tree-node:leaf leaf:> }> right: <tree-node:branch tree-node-data{ color: <tree-color:black black:> key: 5 left: <tree-node:branch tree-node-data{ color: <tree-color:red red:> key: 4 left: <tree-node:leaf leaf:> right: <tree-node:leaf leaf:> }> right: <tree-node:branch tree-node-data{ color: <tree-color:red red:> key: 8 left: <tree-node:leaf leaf:> right: <tree-node:leaf leaf:> }> }> }> comparator: [ cmp ] } ]
+PASS: first drain sees all elements in order
+Stack: [ bst{ root: <tree-node:branch tree-node-data{ color: <tree-color:black black:> key: 3 left: <tree-node:branch tree-node-data{ color: <tree-color:black black:> key: 1 left: <tree-node:leaf leaf:> right: <tree-node:leaf leaf:> }> right: <tree-node:branch tree-node-data{ color: <tree-color:black black:> key: 5 left: <tree-node:branch tree-node-data{ color: <tree-color:red red:> key: 4 left: <tree-node:leaf leaf:> right: <tree-node:leaf leaf:> }> right: <tree-node:branch tree-node-data{ color: <tree-color:red red:> key: 8 left: <tree-node:leaf leaf:> right: <tree-node:leaf leaf:> }> }> }> comparator: [ cmp ] } ]
+PASS: second iterator is fresh
+Stack: [ bst{ root: <tree-node:branch tree-node-data{ color: <tree-color:black black:> key: 3 left: <tree-node:branch tree-node-data{ color: <tree-color:black black:> key: 1 left: <tree-node:leaf leaf:> right: <tree-node:leaf leaf:> }> right: <tree-node:branch tree-node-data{ color: <tree-color:black black:> key: 5 left: <tree-node:branch tree-node-data{ color: <tree-color:red red:> key: 4 left: <tree-node:leaf leaf:> right: <tree-node:leaf leaf:> }> right: <tree-node:branch tree-node-data{ color: <tree-color:red red:> key: 8 left: <tree-node:leaf leaf:> right: <tree-node:leaf leaf:> }> }> }> comparator: [ cmp ] } ]
+PASS: partial consumption
+Stack: [ bst{ root: <tree-node:branch tree-node-data{ color: <tree-color:black black:> key: 3 left: <tree-node:branch tree-node-data{ color: <tree-color:black black:> key: 1 left: <tree-node:leaf leaf:> right: <tree-node:leaf leaf:> }> right: <tree-node:branch tree-node-data{ color: <tree-color:black black:> key: 5 left: <tree-node:branch tree-node-data{ color: <tree-color:red red:> key: 4 left: <tree-node:leaf leaf:> right: <tree-node:leaf leaf:> }> right: <tree-node:branch tree-node-data{ color: <tree-color:red red:> key: 8 left: <tree-node:leaf leaf:> right: <tree-node:leaf leaf:> }> }> }> comparator: [ cmp ] } ]
+PASS: full drain after partial consumption
+Stack: [ bst{ root: <tree-node:branch tree-node-data{ color: <tree-color:black black:> key: 3 left: <tree-node:branch tree-node-data{ color: <tree-color:black black:> key: 1 left: <tree-node:leaf leaf:> right: <tree-node:leaf leaf:> }> right: <tree-node:branch tree-node-data{ color: <tree-color:black black:> key: 5 left: <tree-node:branch tree-node-data{ color: <tree-color:red red:> key: 4 left: <tree-node:leaf leaf:> right: <tree-node:leaf leaf:> }> right: <tree-node:branch tree-node-data{ color: <tree-color:red red:> key: 8 left: <tree-node:leaf leaf:> right: <tree-node:leaf leaf:> }> }> }> comparator: [ cmp ] } ]
+PASS: tree unchanged after draining
+Stack: [ ]
 === delete from empty tree ===
 Stack: [ ]
 PASS: delete from empty is no-op

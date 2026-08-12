@@ -803,7 +803,58 @@ tree>array: ( bst -- array ) [
   { } [ #push ] tree-fold
 ] ;
 
->iterator: method{ bst } [ tree>array >iterator ] ;
+private{
+  \ Push node and its left spine onto the pending stack, deepest last.
+  tree-iter-descend: stack-recursive ( stack node -- stack ) [
+    dup {
+      tree-node:branch: [
+        \ ( stack node color key left right )
+        drop [ 2drop ] dip
+        [ #push! ] dip
+        tree-iter-descend
+      ]
+      tree-node:leaf:      [ drop ]
+      tree-node:bb-leaf:   [ drop ]
+      tree-node:bb-branch: [
+        drop [ 2drop ] dip
+        [ #push! ] dip
+        tree-iter-descend
+      ]
+    } unchecked-match
+  ] ;
+
+  \ Iterator step: state is the pending-node stack.
+  \
+  \ Only branch nodes are ever pushed, so the leaf arms are unreachable.
+  tree-iter-step: ( state -- option ) [
+    dup #empty? [
+      drop option:none
+    ] [
+      #pop! {
+        tree-node:branch: [
+          \ ( stack color key left right )
+          nip [ nip ] dip
+          swap [ tree-iter-descend drop ] dip
+          >option:some
+        ]
+        tree-node:leaf:      [ drop option:none ]
+        tree-node:bb-leaf:   [ drop option:none ]
+        tree-node:bb-branch: [
+          nip [ nip ] dip
+          swap [ tree-iter-descend drop ] dip
+          >option:some
+        ]
+      } unchecked-match
+    ] if
+  ] ;
+}
+
+\ Iterator protocol integration: lazy in-order traversal, O(height) space.
+>iterator: method{ bst } [
+  root>> [ ] make-vector swap tree-iter-descend
+  [ tree-iter-step ] curry
+  >iterator
+] ;
 
 >bst: ( array comparator -- bst ) [
   <bst> swap [ tree-insert ] #each

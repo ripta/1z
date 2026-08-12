@@ -147,6 +147,14 @@ dup tree>array swap >iterator #collect
 { 5 3 8 1 4 } [ cmp ] >bst >iterator 0 [ + ] #reduce
 21 ">iterator #reduce sums elements" assert=
 
+">iterator state is per-call" test-section
+{ 5 3 8 1 4 } [ cmp ] >bst
+dup >iterator #collect { 1 3 4 5 8 } "first drain sees all elements in order" assert=
+dup >iterator #collect { 1 3 4 5 8 } "second iterator is fresh" assert=
+dup >iterator 2 #take #collect { 1 3 } "partial consumption" assert=
+dup >iterator #collect { 1 3 4 5 8 } "full drain after partial consumption" assert=
+tree>array { 1 3 4 5 8 } "tree unchanged after draining" assert=
+
 \ === Deletion tests ===
 
 "delete from empty tree" test-section
