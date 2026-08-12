@@ -33,6 +33,18 @@ Current set:
   the `overflow` IR ref instead of `def` so the subsequent `def =
   overflow_N` line carries the computed result. Not absorbed upstream
   as of the pinned commit.
+- `patches/0003-emit-c-line-directives.patch` -- emits `#line`
+  directives inside generated C functions at control-flow boundaries,
+  driven by an optional side table installed via `ctx->data`. Local to
+  this project; not upstreamable as-is.
+- `patches/0004-emit-c-float-constants.patch` -- prints float/double
+  constants C-correctly in `ir_emit_c_const`. The shared
+  `ir_print_const` uses `%g`, which renders `0.0` as `0` (making an
+  all-constant expression evaluate with integer semantics; `0 / 0` is
+  UB) and NaN as the bare identifier `nan`. The C path now guarantees
+  a decimal point or exponent, adds an `f` suffix for floats, and
+  spells NaN and the infinities as IEEE division expressions. Not
+  absorbed upstream as of the pinned commit.
 
 ### Local-only files (preserve across upgrade)
 

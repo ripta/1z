@@ -1,0 +1,9 @@
+const nan lt ok
+const nan gt ok
+const nan nan? ok
+prelude nan ok
+prelude inf ok
+prelude -inf ok
+inf minus inf ok
+0.5
+-0.5

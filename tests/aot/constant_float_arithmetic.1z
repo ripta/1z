@@ -1,0 +1,22 @@
+\ All-constant float arithmetic must emit float-typed C constants. The
+\ vendored emitter's %g printing rendered 0.0 as the integer literal 0, so
+\ `0.0 0.0 /` emitted as `0 / 0` -- undefined integer division -- and every
+\ NaN-producing literal expression computed garbage in AOT binaries.
+
+pick-nan: ( b -- n ) [ [ 0.0 0.0 / ] [ 2.5 ] if ] ;
+
+\ A constant NaN compares false under every operator.
+t pick-nan 3 < [ "const nan lt wrong" ] [ "const nan lt ok" ] if print-line
+t pick-nan 3 > [ "const nan gt wrong" ] [ "const nan gt ok" ] if print-line
+t pick-nan nan? [ "const nan nan? ok" ] [ "const nan nan? wrong" ] if print-line
+
+\ The prelude words built from all-constant division.
+nan nan? [ "prelude nan ok" ] [ "prelude nan wrong" ] if print-line
+inf infinite? [ "prelude inf ok" ] [ "prelude inf wrong" ] if print-line
+-inf infinite? [ "prelude -inf ok" ] [ "prelude -inf wrong" ] if print-line
+inf inf - nan? [ "inf minus inf ok" ] [ "inf minus inf wrong" ] if print-line
+
+\ Finite all-constant division: 1 / 2 truncates to 0 under integer
+\ semantics, so a wrong emission is visible in the printed quotient.
+1.0 2.0 / .
+-2.0 4.0 / .

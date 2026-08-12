@@ -8,6 +8,8 @@
 #include "ir.h"
 #include "ir_private.h"
 
+#include <math.h>
+
 #define IR_TYPE_TNAME(name, type, field, flags) #field,
 
 static const char *ir_type_tname[IR_LAST_TYPE] = {
@@ -86,6 +88,49 @@ static void ir_resolve_label_syms(ir_ctx *ctx)
 	}
 }
 
+/* C needs float/double constants to keep a floating spelling. The shared
+ * ir_print_const prints them with %g for the ir textual grammar, which
+ * renders 0.0 as "0" (so an all-constant expression evaluates with integer
+ * semantics) and NaN as the bare identifier "nan". Print them C-correctly
+ * here instead: a guaranteed decimal point or exponent, an "f" suffix for
+ * floats, and IEEE division expressions for NaN and the infinities. */
+static void ir_emit_c_float_const(ir_insn *insn, FILE *f)
+{
+	char buf[128];
+	bool is_float = insn->type == IR_FLOAT;
+	double d = is_float ? (double)insn->val.f : insn->val.d;
+
+	if (isnan(d)) {
+		fprintf(f, is_float ? "(0.0f/0.0f)" : "(0.0/0.0)");
+		return;
+	}
+	if (isinf(d)) {
+		if (d < 0) {
+			fprintf(f, is_float ? "(-1.0f/0.0f)" : "(-1.0/0.0)");
+		} else {
+			fprintf(f, is_float ? "(1.0f/0.0f)" : "(1.0/0.0)");
+		}
+		return;
+	}
+	if (is_float) {
+		snprintf(buf, sizeof(buf), "%g", insn->val.f);
+		if (strtof(buf, NULL) != insn->val.f) {
+			snprintf(buf, sizeof(buf), "%.24e", insn->val.f);
+			IR_ASSERT(strtof(buf, NULL) == insn->val.f);
+		}
+	} else {
+		snprintf(buf, sizeof(buf), "%g", insn->val.d);
+		if (strtod(buf, NULL) != insn->val.d) {
+			snprintf(buf, sizeof(buf), "%.53e", insn->val.d);
+			IR_ASSERT(strtod(buf, NULL) == insn->val.d);
+		}
+	}
+	if (!strpbrk(buf, ".eE")) {
+		strcat(buf, ".0");
+	}
+	fprintf(f, is_float ? "%sf" : "%s", buf);
+}
+
 static void ir_emit_c_const(ir_ctx *ctx, ir_insn *insn, FILE *f)
 {
 	if (insn->op == IR_LABEL) {
@@ -96,6 +141,9 @@ static void ir_emit_c_const(ir_ctx *ctx, ir_insn *insn, FILE *f)
 			ir_resolve_label_syms(ctx);
 		}
 		fprintf(f, "&&bb%d", insn->val.u32_hi);
+	} else if ((insn->type == IR_DOUBLE || insn->type == IR_FLOAT)
+			&& insn->op != IR_FUNC && insn->op != IR_SYM && insn->op != IR_STR) {
+		ir_emit_c_float_const(insn, f);
 	} else {
 		if (insn->op == IR_SYM) {
 			fprintf(f, "&");
