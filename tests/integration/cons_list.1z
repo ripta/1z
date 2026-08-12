@@ -171,6 +171,23 @@ nil >iterator #collect { } ">iterator nil collects to empty array" assert=
 { 1 2 3 4 5 } >cons-list >iterator 2 #drop #collect
 { 3 4 5 } "drop 2 from cons-list iterator" assert=
 
+"#first" test-section
+{ 42 } >cons-list #first 42 "#first of single element" assert=
+{ 1 2 3 } >cons-list #first 1 "#first of three elements" assert=
+[ nil #first ] "#first of nil throws" assert-error
+
+"#first?" test-section
+{ 1 2 } >cons-list #first? option:some? t "#first? on cons is some" assert=
+{ 1 2 } >cons-list #first? option:some> 1 "#first? unwraps head" assert=
+nil #first? option:none? t "#first? on nil is none" assert=
+
+"#empty?" test-section
+nil #empty? t "nil is empty" assert=
+1 nil cons #empty? f "cons is not empty" assert=
+{ 1 2 3 } >cons-list #empty? f "list from array is not empty" assert=
+{ } #empty? t "#empty? fallthrough on empty array" assert=
+{ 1 } #empty? f "#empty? fallthrough on non-empty array" assert=
+
 ">iterator state is per-call" test-section
 { 1 2 3 } >cons-list
 dup >iterator #collect { 1 2 3 } "first drain sees all elements" assert=

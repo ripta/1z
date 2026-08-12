@@ -184,6 +184,25 @@ test-foldr-subtract: ( -- ) [
   2 1 2 3 nil cons cons cons 0 [ - ] list-foldr "foldr folds right, tail to head" assert=
 ] ;
 
+\ --- protocol methods: #first and #empty? ---
+
+test-first-method: ( -- ) [
+  "protocol methods" test-section
+  1 1 2 3 nil cons cons cons #first "#first returns the head" assert=
+] ;
+
+test-first-empty-throws: ( -- ) [
+  [ nil #first ] index-out-of-bounds: "#first on empty list throws" assert-error-type
+] ;
+
+test-empty-method-nil: ( -- ) [
+  nil #empty? "#empty? on nil is true" assert-true
+] ;
+
+test-empty-method-cons: ( -- ) [
+  1 nil cons #empty? "#empty? on a cons cell is false" assert-false
+] ;
+
 \ --- imported-word resolution inside a quotation across a module boundary ---
 \ assert-error-type tail-calls into the testing module, which pops this test
 \ module's deps frame. A quotation handed to it must still resolve `head` and

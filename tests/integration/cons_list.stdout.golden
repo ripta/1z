@@ -251,6 +251,34 @@ Stack: [ ]
 Stack: [ { 3 4 5 } ]
 PASS: drop 2 from cons-list iterator
 Stack: [ ]
+=== #first ===
+Stack: [ ]
+PASS: #first of single element
+Stack: [ ]
+PASS: #first of three elements
+Stack: [ ]
+PASS: #first of nil throws
+Stack: [ ]
+=== #first? ===
+Stack: [ ]
+PASS: #first? on cons is some
+Stack: [ ]
+PASS: #first? unwraps head
+Stack: [ ]
+PASS: #first? on nil is none
+Stack: [ ]
+=== #empty? ===
+Stack: [ ]
+PASS: nil is empty
+Stack: [ ]
+PASS: cons is not empty
+Stack: [ ]
+PASS: list from array is not empty
+Stack: [ ]
+PASS: #empty? fallthrough on empty array
+Stack: [ ]
+PASS: #empty? fallthrough on non-empty array
+Stack: [ ]
 === >iterator state is per-call ===
 Stack: [ ]
 Stack: [ <cons-list:cons cons-cell{ head: 1 tail: <cons-list:cons cons-cell{ head: 2 tail: <cons-list:cons cons-cell{ head: 3 tail: <cons-list:nil nil:> }> }> }> ]

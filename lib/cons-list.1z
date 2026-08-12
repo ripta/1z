@@ -160,3 +160,10 @@ private{
   [ list-iter-step ] curry
   >iterator
 ] ;
+
+\ O(1) protocol conformance: #first is the head, #empty? is nil?.
+\
+\ #len, #last, and #nth are left unimplemented. Each is an O(n) spine walk, so iteration
+\ through >iterator stays the visible path for them.
+#first: method{ cons-list } [ head ] ;
+#empty?: method{ cons-list } [ nil? ] ;
