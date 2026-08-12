@@ -2,6 +2,10 @@
 \
 \ Compares construction, access, and mutation performance
 \ across all data structure types.
+use "ranges" ;
+use "cons-list" ;
+use "bst" ;
+
 benchmark-section: ( msg -- ) [ "=== " swap #append " ===" #append print-line ] ;
 
 bench-struct: struct{ a b c } ;
@@ -55,3 +59,68 @@ nl "[-- Mutation --]" print-line
   "Set @adjoin" 5000 [ pre-set 4 @adjoin drop ] benchmark-n
   "Byte Array #append" 5000 [ pre-ba B{ 4 } #append drop ] benchmark-n
 ] run-benchmarks
+
+\ Scaling sweep: cons-list and bst across n, following the bench_tokenize_scaling.1z shape. Both
+\ structures' >iterator materializes the whole structure into an array today, so the iter-new and
+\ first rows cost O(n): their elapsed_ns should read ~2x across adjacent 2x size steps, and flat
+\ once the iterators are lazy. The construct and drain rows stay O(n) and guard constant factors.
+\ tree-size is an O(n) walk today and reads O(1) once branch nodes carry subtree sizes; the insert
+\ row is the mutation cost that change promises to keep flat.
+\
+\ The cons-list sweep stops at n=400: >cons-list and cons-list>array recurse once per element, and
+\ near n=600 a release build overflows the main thread's native stack, which has no overflow guard
+\ there. bst recursion depth is the tree height, so its sweep reaches n=800.
+
+nl "[-- Scaling: cons-list / bst --]" print-line
+
+\\ Emit one timed row: "<label> n=<n> iters=<iters>  elapsed_ns=<ns>", running quot iters times in
+\\ one timing window.
+\\
+\\ quot sees the fixture on top of the stack and must leave it there.
+scale-row: ( fixture label n iters quot: ( fixture -- fixture ) -- fixture ) [
+  [
+    [ swap " n=" #append swap >string #append ] dip
+    dup >string " iters=" swap #append
+    swap [ #append "  elapsed_ns=" #append print ] dip
+  ] dip
+  [ times ] curry curry
+  benchmark "elapsed_ns" @get >string print-line
+] ;
+
+list-sweep: ( n -- ) [
+  dup iota >iterator #collect
+  "cons-list construct" pick 1 [ dup >cons-list drop ] scale-row
+  >cons-list
+  "cons-list iter-new" pick 5 [ dup >iterator drop ] scale-row
+  "cons-list first" pick 5 [ dup [ drop t ] #any drop ] scale-row
+  "cons-list drain" pick 5 [ dup >iterator #count drop ] scale-row
+  2drop
+] ;
+
+bst-sweep: ( n -- ) [
+  dup iota >iterator #collect
+  "bst construct" pick 1 [ dup [ cmp ] >bst drop ] scale-row
+  [ cmp ] >bst
+  "bst iter-new" pick 5 [ dup >iterator drop ] scale-row
+  "bst first" pick 5 [ dup [ drop t ] #any drop ] scale-row
+  "bst drain" pick 5 [ dup >iterator #count drop ] scale-row
+  "bst tree-size" pick 5 [ dup tree-size drop ] scale-row
+  \ 1000000000 is absent from every fixture, so the insert always grows the tree instead of
+  \ replacing an equal key.
+  "bst insert" pick 5 [ dup 1000000000 tree-insert drop ] scale-row
+  2drop
+] ;
+
+\ warm
+{ 1 2 3 } >cons-list >iterator #count drop
+{ 1 2 3 } [ cmp ] >bst >iterator #count drop
+
+50 list-sweep
+100 list-sweep
+200 list-sweep
+400 list-sweep
+
+100 bst-sweep
+200 bst-sweep
+400 bst-sweep
+800 bst-sweep
