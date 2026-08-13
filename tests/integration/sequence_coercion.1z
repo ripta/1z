@@ -52,6 +52,17 @@ S{ 5 } 1 #take dup iterator? t "#take on a set yields an iterator" assert=
 dup [ 2 * ] #map #collect { 2 4 6 } "first drain sees all elements" assert=
 [ 2 * ] #map #collect { 2 4 6 } "second call gets a fresh iterator" assert=
 
+"#collect and #count coerce" test-section
+{ 1 2 3 } >cons-list #count 3 "#count on a cons-list" assert=
+{ 1 2 3 } #count 3 "#count on an array" assert=
+"hello" #count 5 "#count on a string" assert=
+0 5 <range> #collect { 0 1 2 3 4 } "#collect on a range" assert=
+{ 1 2 3 } >cons-list
+dup #count 3 "first #count drains a fresh iterator" assert=
+#count 3 "second #count gets a fresh iterator" assert=
+
 "a type with no >iterator route still raises" test-section
 [ 5 [ drop ] #each ] "#each on a fixnum raises" assert-error
 [ 5 2 #take ] "#take on a fixnum raises" assert-error
+[ 5 #collect ] "#collect on a fixnum raises" assert-error
+[ 5 #count ] "#count on a fixnum raises" assert-error

@@ -79,50 +79,48 @@ pub fn nativeNext(ctx: *Context) anyerror!void {
 pub fn nativeCollect(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
     defer container_backing.releaseValue(val);
-    switch (val) {
-        .iterator => |iter| {
-            const alloc = ctx.allocator;
-            var list = std.ArrayListUnmanaged(Value){};
-            errdefer {
-                container_backing.releaseValues(list.items);
-                list.deinit(alloc);
-            }
-            while (try iter.next(ctx)) |elem| {
-                list.append(alloc, elem) catch {
-                    container_backing.releaseValue(elem);
-                    return error.OutOfMemory;
-                };
-            }
-            // The iterator's yields are owning references; the result array
-            // adopts them wholesale.
-            const items = list.toOwnedSlice(alloc) catch return error.OutOfMemory;
-            try helpers.pushAdoptedArray(ctx, alloc, items);
-        },
-        else => {
-            helpers.setTypeMismatchError(ctx, "iterator", val);
-            return error.TypeMismatch;
-        },
+    const coerced = (try sequences.coerceSequenceOperand(ctx, val, .iterator_only)) orelse {
+        sequences.setSequenceOperandMismatch(ctx, val);
+        return error.TypeMismatch;
+    };
+    defer container_backing.releaseValue(coerced);
+    const iter = coerced.iterator;
+
+    const alloc = ctx.allocator;
+    var list = std.ArrayListUnmanaged(Value){};
+    errdefer {
+        container_backing.releaseValues(list.items);
+        list.deinit(alloc);
     }
+    while (try iter.next(ctx)) |elem| {
+        list.append(alloc, elem) catch {
+            container_backing.releaseValue(elem);
+            return error.OutOfMemory;
+        };
+    }
+    // The iterator's yields are owning references; the result array
+    // adopts them wholesale.
+    const items = list.toOwnedSlice(alloc) catch return error.OutOfMemory;
+    try helpers.pushAdoptedArray(ctx, alloc, items);
 }
 
 /// #count ( iterator -- n )
 pub fn nativeCount(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
     defer container_backing.releaseValue(val);
-    switch (val) {
-        .iterator => |iter| {
-            var count: i64 = 0;
-            while (try iter.next(ctx)) |elem| {
-                container_backing.releaseValue(elem);
-                count += 1;
-            }
-            try ctx.stack.push(.{ .fixnum = count });
-        },
-        else => {
-            helpers.setTypeMismatchError(ctx, "iterator", val);
-            return error.TypeMismatch;
-        },
+    const coerced = (try sequences.coerceSequenceOperand(ctx, val, .iterator_only)) orelse {
+        sequences.setSequenceOperandMismatch(ctx, val);
+        return error.TypeMismatch;
+    };
+    defer container_backing.releaseValue(coerced);
+    const iter = coerced.iterator;
+
+    var count: i64 = 0;
+    while (try iter.next(ctx)) |elem| {
+        container_backing.releaseValue(elem);
+        count += 1;
     }
+    try ctx.stack.push(.{ .fixnum = count });
 }
 
 /// make-range-iter ( start end step infinite? -- iterator )

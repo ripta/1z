@@ -31,7 +31,7 @@ test-collect-map-filter-chain: ( -- ) [
 ] ;
 
 test-collect-type-error: ( -- ) [
-  [ 42 #collect ] "#collect on non-iterator throws" assert-error
+  [ 42 #collect ] "#collect on non-iterable throws" assert-error
 ] ;
 
 \ -- #count --
@@ -58,7 +58,7 @@ test-count-consumes: ( -- ) [
 ] ;
 
 test-count-type-error: ( -- ) [
-  [ "hello" #count ] "#count on non-iterator throws" assert-error
+  [ 42 #count ] "#count on non-iterable throws" assert-error
 ] ;
 
 \ -- #take on iterators --

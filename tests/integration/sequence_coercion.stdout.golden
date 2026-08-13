@@ -71,9 +71,28 @@ PASS: first drain sees all elements
 Stack: [ <cons-list:cons cons-cell{ head: 1 tail: <cons-list:cons cons-cell{ head: 2 tail: <cons-list:cons cons-cell{ head: 3 tail: <cons-list:nil nil:> }> }> }> ]
 PASS: second call gets a fresh iterator
 Stack: [ ]
+=== #collect and #count coerce ===
+Stack: [ ]
+PASS: #count on a cons-list
+Stack: [ ]
+PASS: #count on an array
+Stack: [ ]
+PASS: #count on a string
+Stack: [ ]
+PASS: #collect on a range
+Stack: [ ]
+Stack: [ <cons-list:cons cons-cell{ head: 1 tail: <cons-list:cons cons-cell{ head: 2 tail: <cons-list:cons cons-cell{ head: 3 tail: <cons-list:nil nil:> }> }> }> ]
+PASS: first #count drains a fresh iterator
+Stack: [ <cons-list:cons cons-cell{ head: 1 tail: <cons-list:cons cons-cell{ head: 2 tail: <cons-list:cons cons-cell{ head: 3 tail: <cons-list:nil nil:> }> }> }> ]
+PASS: second #count gets a fresh iterator
+Stack: [ ]
 === a type with no >iterator route still raises ===
 Stack: [ ]
 PASS: #each on a fixnum raises
 Stack: [ ]
 PASS: #take on a fixnum raises
+Stack: [ ]
+PASS: #collect on a fixnum raises
+Stack: [ ]
+PASS: #count on a fixnum raises
 Stack: [ ]

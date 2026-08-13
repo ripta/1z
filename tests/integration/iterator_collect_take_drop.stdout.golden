@@ -36,7 +36,7 @@ PASS: collect after filter
 Stack: [ ]
 PASS: collect after map+filter chain
 Stack: [ ]
-PASS: #collect on non-iterator throws
+PASS: #collect on non-iterable throws
 Stack: [ ]
 PASS: count returns element count
 Stack: [ ]
@@ -46,7 +46,7 @@ PASS: count after filter
 Stack: [ ]
 PASS: iterator exhausted after count
 Stack: [ ]
-PASS: #count on non-iterator throws
+PASS: #count on non-iterable throws
 Stack: [ ]
 PASS: take returns iterator
 Stack: [ ]
