@@ -270,6 +270,22 @@ fn tryDispatchUnaryById(ctx: *Context, dispatch_id: u32) !bool {
     return false;
 }
 
+/// Dispatch `dispatch_id`'s unary method on `val`, pushing it and leaving the method's result on
+/// the stack. Returns false without touching the stack when no method is registered.
+///
+/// Unlike `tryDispatchUnary`, the operand is in the caller's hands rather than on the stack, and
+/// no PIC is consulted: `ctx.current_pic_entry` belongs to the enclosing word's call site, and
+/// seeding it with another word's entries would poison that cache.
+pub fn dispatchUnaryOnValue(ctx: *Context, dispatch_id: u32, val: Value) !bool {
+    const result = lookupUnaryWithFallback(ctx, dispatch_id, val) orelse return false;
+    try ctx.stack.push(val);
+    if (result.unwrap_a) {
+        try autoUnwrapTopOperand(ctx);
+    }
+    try executeDispatchBody(ctx, result.entry);
+    return true;
+}
+
 /// Dispatch a container-keyed word whose container operand sits `depth` slots below the top of stack, the
 /// `#nth!` / `#poke!` shape. The dispatch key is the container's type with the unary sentinel, so a user
 /// type registers `method{ your-type }` and the key/value operands above the container ride along untouched.

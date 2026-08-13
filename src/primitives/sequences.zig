@@ -71,6 +71,62 @@ pub fn seqToArrayIter(seq: Value, ctx: *Context) !?*Iterator {
 const arithmetic = @import("arithmetic.zig");
 const container_backing = @import("../container_backing.zig");
 
+/// What the calling native's own type switch consumes unaided, so `coerceSequenceOperand` can
+/// hand such operands back untouched. The sets mirror each native's existing accept switch:
+/// `#take`/`#drop` neither unwrap tagged values nor accept sets, and `#collect`/`#count` accept
+/// only an iterator.
+pub const OperandPassthrough = enum { native_seqs, native_seqs_no_set, iterator_only };
+
+/// Normalize an iterator-consuming native's popped sequence operand, called immediately after
+/// the pops. The operand is borrowed; the result is a new owned reference the caller releases.
+///
+/// An operand the native's own switch consumes comes back as itself, retained. Anything else is
+/// routed the way the generic `>iterator` word routes it: the type's registered `>iterator`
+/// method first, then the native sequence conversion. Returns null when no route exists, leaving
+/// the caller to raise its own error.
+pub fn coerceSequenceOperand(ctx: *Context, raw: Value, passthrough: OperandPassthrough) !?Value {
+    const consumable = switch (passthrough) {
+        .native_seqs => switch (unwrapBaseType(raw)) {
+            .iterator, .string, .array, .vector, .byte_array, .set => true,
+            else => false,
+        },
+        .native_seqs_no_set => switch (raw) {
+            .iterator, .string, .array, .vector, .byte_array => true,
+            else => false,
+        },
+        .iterator_only => raw == .iterator,
+    };
+    if (consumable) {
+        container_backing.retainValue(raw);
+        return raw;
+    }
+
+    if (ctx.resolveDispatchId(">iterator")) |did| {
+        if (try dispatch_helpers.dispatchUnaryOnValue(ctx, did, raw)) {
+            const result = try ctx.stack.pop();
+            if (result != .iterator) {
+                container_backing.releaseValue(result);
+                setErrorContext(ctx, "expected >iterator method to return an iterator, got {s}", .{valueTypeName(result)});
+                return error.TypeMismatch;
+            }
+            return result;
+        }
+    }
+
+    if (try seqToArrayIter(raw, ctx)) |iter| {
+        return .{ .iterator = iter };
+    }
+
+    return null;
+}
+
+/// Report that an iterator-consuming native's operand is neither a sequence it consumes natively
+/// nor a value whose type offers a `>iterator` route.
+pub fn setSequenceOperandMismatch(ctx: *Context, raw: Value) void {
+    setErrorContext(ctx, "expected sequence or a value with a >iterator method, got {s}", .{valueTypeName(raw)});
+    helpers.setErrorHint(ctx, "register a >iterator method to make this type iterable");
+}
+
 /// Materialize any iterable to a mutable []Value for in-place sorting.
 ///
 /// The returned slice owns one reference per element: array and sequence
@@ -103,7 +159,7 @@ fn collectToMutableArray(in_seq: Value, ctx: *Context, alloc: Allocator) ![]Valu
             return result;
         },
         else => {
-            setErrorContext(ctx, "expected sequence, got {s}", .{valueTypeName(seq)});
+            setSequenceOperandMismatch(ctx, in_seq);
             return error.TypeMismatch;
         },
     }
@@ -858,7 +914,7 @@ pub fn nativeEach(ctx: *Context) anyerror!void {
     }
 
     var iter = SequenceIterator.init(seq, alloc) orelse {
-        setErrorContext(ctx, "expected sequence, got {s}", .{valueTypeName(raw_seq)});
+        setSequenceOperandMismatch(ctx, raw_seq);
         return error.TypeMismatch;
     };
     while (try iter.next()) |elem| {
@@ -890,7 +946,7 @@ pub fn nativeEachIndex(ctx: *Context) anyerror!void {
     }
 
     var iter = SequenceIterator.init(seq, alloc) orelse {
-        setErrorContext(ctx, "expected sequence, got {s}", .{valueTypeName(raw_seq)});
+        setSequenceOperandMismatch(ctx, raw_seq);
         return error.TypeMismatch;
     };
     while (try iter.next()) |elem| {
@@ -926,7 +982,7 @@ pub fn nativeMap(ctx: *Context) anyerror!void {
         return err;
     }) orelse {
         pc.release();
-        setErrorContext(ctx, "expected sequence, got {s}", .{valueTypeName(seq)});
+        setSequenceOperandMismatch(ctx, seq);
         return error.TypeMismatch;
     };
 
@@ -958,7 +1014,7 @@ pub fn nativeFilter(ctx: *Context) anyerror!void {
         return err;
     }) orelse {
         pc.release();
-        setErrorContext(ctx, "expected sequence, got {s}", .{valueTypeName(seq)});
+        setSequenceOperandMismatch(ctx, seq);
         return error.TypeMismatch;
     };
 
@@ -1004,7 +1060,7 @@ pub fn nativeReduce(ctx: *Context) anyerror!void {
     }
 
     var iter = SequenceIterator.init(seq, alloc) orelse {
-        setErrorContext(ctx, "expected sequence, got {s}", .{valueTypeName(seq)});
+        setSequenceOperandMismatch(ctx, raw_seq);
         return error.TypeMismatch;
     };
     while (try iter.next()) |elem| {
@@ -1055,7 +1111,7 @@ pub fn nativeReduceIndex(ctx: *Context) anyerror!void {
     }
 
     var iter = SequenceIterator.init(seq, alloc) orelse {
-        setErrorContext(ctx, "expected sequence, got {s}", .{valueTypeName(raw_seq)});
+        setSequenceOperandMismatch(ctx, raw_seq);
         return error.TypeMismatch;
     };
     while (try iter.next()) |elem| {
@@ -2442,7 +2498,7 @@ pub fn nativeTake(ctx: *Context) anyerror!void {
             try ctx.stack.push(.{ .byte_array = result_ba });
         },
         else => {
-            setErrorContext(ctx, "expected sequence, got {s}", .{valueTypeName(seq)});
+            setSequenceOperandMismatch(ctx, seq);
             return error.TypeMismatch;
         },
     }
@@ -2519,7 +2575,7 @@ pub fn nativeDrop(ctx: *Context) anyerror!void {
             try ctx.stack.push(.{ .byte_array = result_ba });
         },
         else => {
-            setErrorContext(ctx, "expected sequence, got {s}", .{valueTypeName(seq)});
+            setSequenceOperandMismatch(ctx, seq);
             return error.TypeMismatch;
         },
     }
@@ -3915,4 +3971,115 @@ test "two wrappers over one inner both die cleanly" {
     container_backing.releaseValue(first);
     try std.testing.expectEqual(@as(u32, 1), inner.header.refcountValue());
     container_backing.releaseValue(second);
+}
+
+fn testToIterMethodBody(ctx: *Context) anyerror!void {
+    const v = try ctx.stack.pop();
+    container_backing.releaseValue(v);
+    const items = try std.testing.allocator.alloc(Value, 1);
+    items[0] = .{ .fixnum = 42 };
+    const iter = try Iterator.create(std.testing.allocator, .{ .array = .{ .items = items, .index = 0 } });
+    try helpers.pushMovedIterator(ctx, iter);
+}
+
+fn testNonIterMethodBody(ctx: *Context) anyerror!void {
+    const v = try ctx.stack.pop();
+    container_backing.releaseValue(v);
+    try ctx.stack.push(.{ .fixnum = 7 });
+}
+
+fn testRegisterToIterMethod(ctx: *Context, body: *const fn (*Context) anyerror!void) !void {
+    try ctx.defineWord(">iterator", .{ .name = ">iterator", .action = .{ .compound = &[_]value_mod.Instruction{} } });
+    const did = ctx.resolveDispatchId(">iterator").?;
+    const fixnum_tv = ctx.lookupBuiltinTypeValue("fixnum").?;
+    try ctx.registerDispatch(
+        .{ .dispatch_id = did, .type_a = fixnum_tv.descriptor.?, .type_b = ctx.getDispatchUnarySentinel().descriptor.? },
+        .{ .body = .{ .native_fn = body } },
+        false,
+    );
+}
+
+test "coerceSequenceOperand passes a consumable operand through retained" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const items = try std.testing.allocator.alloc(Value, 2);
+    items[0] = .{ .fixnum = 1 };
+    items[1] = .{ .fixnum = 2 };
+    const arr = try value_mod.Array.fromOwnedSlice(std.testing.allocator, items);
+    defer container_backing.releaseValue(.{ .array = arr });
+
+    const coerced = (try coerceSequenceOperand(&ctx, .{ .array = arr }, .native_seqs)).?;
+    try std.testing.expect(coerced == .array);
+    try std.testing.expect(coerced.array == arr);
+    try std.testing.expectEqual(@as(u32, 2), arr.header.refcountValue());
+    container_backing.releaseValue(coerced);
+}
+
+test "coerceSequenceOperand routes a set to an iterator when the caller takes no sets" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const set = try value_mod.Set.create(std.testing.allocator);
+    defer container_backing.releaseValue(.{ .set = set });
+    _ = try set.map.getOrPut(set.header.allocator, .{ .fixnum = 5 });
+
+    const coerced = (try coerceSequenceOperand(&ctx, .{ .set = set }, .native_seqs_no_set)).?;
+    try std.testing.expect(coerced == .iterator);
+    const elem = (try coerced.iterator.next(&ctx)).?;
+    try std.testing.expectEqual(@as(i64, 5), elem.fixnum);
+    try std.testing.expect(try coerced.iterator.next(&ctx) == null);
+    container_backing.releaseValue(coerced);
+}
+
+test "coerceSequenceOperand routes a native sequence to an iterator in iterator-only mode" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const items = try std.testing.allocator.alloc(Value, 2);
+    items[0] = .{ .fixnum = 3 };
+    items[1] = .{ .fixnum = 4 };
+    const arr = try value_mod.Array.fromOwnedSlice(std.testing.allocator, items);
+    defer container_backing.releaseValue(.{ .array = arr });
+
+    const coerced = (try coerceSequenceOperand(&ctx, .{ .array = arr }, .iterator_only)).?;
+    try std.testing.expect(coerced == .iterator);
+    const elem = (try coerced.iterator.next(&ctx)).?;
+    try std.testing.expectEqual(@as(i64, 3), elem.fixnum);
+    container_backing.releaseValue(coerced);
+}
+
+test "coerceSequenceOperand reports no route for a methodless type" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const coerced = try coerceSequenceOperand(&ctx, .{ .fixnum = 9 }, .native_seqs);
+    try std.testing.expect(coerced == null);
+    try std.testing.expectEqual(@as(usize, 0), ctx.stack.depth());
+}
+
+test "coerceSequenceOperand dispatches a registered >iterator method" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    try testRegisterToIterMethod(&ctx, &testToIterMethodBody);
+
+    const coerced = (try coerceSequenceOperand(&ctx, .{ .fixnum = 9 }, .native_seqs)).?;
+    try std.testing.expect(coerced == .iterator);
+    try std.testing.expectEqual(@as(u32, 1), coerced.iterator.header.refcountValue());
+    const elem = (try coerced.iterator.next(&ctx)).?;
+    try std.testing.expectEqual(@as(i64, 42), elem.fixnum);
+    try std.testing.expectEqual(@as(usize, 0), ctx.stack.depth());
+    container_backing.releaseValue(coerced);
+}
+
+test "coerceSequenceOperand rejects a >iterator method returning a non-iterator" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    try testRegisterToIterMethod(&ctx, &testNonIterMethodBody);
+
+    const result = coerceSequenceOperand(&ctx, .{ .fixnum = 9 }, .native_seqs);
+    try std.testing.expectError(error.TypeMismatch, result);
+    try std.testing.expect(std.mem.indexOf(u8, ctx.pending_error_message.?, ">iterator") != null);
 }
