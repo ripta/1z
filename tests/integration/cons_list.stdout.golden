@@ -279,6 +279,12 @@ PASS: #empty? fallthrough on empty array
 Stack: [ ]
 PASS: #empty? fallthrough on non-empty array
 Stack: [ ]
+=== >array method ===
+Stack: [ ]
+PASS: >array of nil is empty
+Stack: [ ]
+PASS: >array preserves order
+Stack: [ ]
 === >iterator state is per-call ===
 Stack: [ ]
 Stack: [ <cons-list:cons cons-cell{ head: 1 tail: <cons-list:cons cons-cell{ head: 2 tail: <cons-list:cons cons-cell{ head: 3 tail: <cons-list:nil nil:> }> }> }> ]

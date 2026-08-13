@@ -564,7 +564,7 @@ map-delete: ( bst-map key -- bst-map ) [
 
 \ bst-map wrappers for tree operations
 map-empty?: ( bst-map -- bool )  [ unmake-bst-map tree-empty? ] ;
-map-size:   ( bst-map -- n )     [ unmake-bst-map tree-size ] ;
+map-size:   ( bst-map -- n )     [ unmake-bst-map #len ] ;
 map>array:  ( bst-map -- array ) [ unmake-bst-map tree>array ] ;
 
 \ Compare value with key using the comparator.
@@ -815,9 +815,11 @@ lookup-node: stack-recursive ( value comparator node -- option ) [
   } unchecked-match
 ] ;
 
-tree-min:  ( bst -- option ) [ root>> min-node ] ;
-tree-max:  ( bst -- option ) [ root>> max-node ] ;
-tree-size: ( bst -- n )      [ root>> count-nodes ] ;
+tree-min: ( bst -- option ) [ root>> min-node ] ;
+tree-max: ( bst -- option ) [ root>> max-node ] ;
+
+\\ Deprecated alias of `#len`.
+tree-size: deprecated ( bst -- n ) [ #len ] ;
 
 tree-lookup: ( bst value -- option ) [
   swap unmake-bst  \ ( value root comparator )
@@ -958,6 +960,8 @@ private{
   over #len over <= [ f "index out of bounds" EIndexOutOfBounds make-error throw ] when
   swap root>> nth-node
 ] ;
+
+>array: method{ bst } [ tree>array ] ;
 
 >bst: ( array comparator -- bst ) [
   <bst> swap [ tree-insert ] #each

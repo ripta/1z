@@ -225,6 +225,14 @@ test-nth-out-of-bounds-throws: ( -- ) [
   [ { 5 3 8 1 4 } [ cmp ] >bst 5 #nth ] index-out-of-bounds: "#nth past the end throws" assert-error-type
 ] ;
 
+test-to-array-method: ( -- ) [
+  { 5 3 8 1 4 } [ cmp ] >bst >array { 1 3 4 5 8 } ">array yields sorted in-order output" assert=
+] ;
+
+test-to-array-method-empty: ( -- ) [
+  [ cmp ] <bst> >array { } ">array of empty tree is empty" assert=
+] ;
+
 \ --- bst-map ---
 
 test-map-empty: ( -- ) [

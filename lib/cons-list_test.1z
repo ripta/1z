@@ -203,6 +203,14 @@ test-empty-method-cons: ( -- ) [
   1 nil cons #empty? "#empty? on a cons cell is false" assert-false
 ] ;
 
+test-to-array-method: ( -- ) [
+  { 1 2 3 } 1 2 3 nil cons cons cons >array ">array preserves cons order" assert=
+] ;
+
+test-to-array-method-nil: ( -- ) [
+  { } nil >array ">array of nil is empty" assert=
+] ;
+
 \ --- imported-word resolution inside a quotation across a module boundary ---
 \ assert-error-type tail-calls into the testing module, which pops this test
 \ module's deps frame. A quotation handed to it must still resolve `head` and

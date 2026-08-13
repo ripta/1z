@@ -188,6 +188,10 @@ nil #empty? t "nil is empty" assert=
 { } #empty? t "#empty? fallthrough on empty array" assert=
 { 1 } #empty? f "#empty? fallthrough on non-empty array" assert=
 
+">array method" test-section
+nil >array { } ">array of nil is empty" assert=
+{ 1 2 3 } >cons-list >array { 1 2 3 } ">array preserves order" assert=
+
 ">iterator state is per-call" test-section
 { 1 2 3 } >cons-list
 dup >iterator #collect { 1 2 3 } "first drain sees all elements" assert=

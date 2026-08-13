@@ -167,3 +167,5 @@ private{
 \ through >iterator stays the visible path for them.
 #first: method{ cons-list } [ head ] ;
 #empty?: method{ cons-list } [ nil? ] ;
+
+>array: method{ cons-list } [ cons-list>array ] ;

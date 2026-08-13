@@ -300,6 +300,12 @@ PASS: #nth past the end throws
 Stack: [ ]
 PASS: #nth on empty tree throws
 Stack: [ ]
+=== >array method ===
+Stack: [ ]
+PASS: >array of empty tree is empty
+Stack: [ ]
+PASS: >array yields sorted in-order output
+Stack: [ ]
 === delete from empty tree ===
 Stack: [ ]
 PASS: cached size equals traversal count
