@@ -2,77 +2,77 @@
 [-- Construction --]
 Name          Iters      Elapsed   Elapsed/iter   Instrs/iter   Peak Stack
 -----------   -----   ----------   ------------   -----------   ----------
-Array         5,000   286.000 us          57 ns             2            3
-Struct        5,000     2.247 ms         449 ns             8            7
-Mut Struct    5,000     1.683 ms         336 ns             8            7
-Hash          5,000   279.000 us          55 ns             2            3
-Vector        5,000   845.000 us         169 ns             3            3
-Mutable Map   5,000     1.286 ms         257 ns             3            3
-Set           5,000   283.000 us          56 ns             2            3
-Byte Array    5,000   829.000 us         165 ns             3            3
+Array         5,000   261.000 us          52 ns             2            3
+Struct        5,000     1.705 ms         341 ns             8            7
+Mut Struct    5,000     1.698 ms         339 ns             8            7
+Hash          5,000   271.000 us          54 ns             2            3
+Vector        5,000   801.000 us         160 ns             3            3
+Mutable Map   5,000     1.453 ms         290 ns             3            3
+Set           5,000   288.000 us          57 ns             2            3
+Byte Array    5,000   989.000 us         197 ns             3            3
 
 [-- Access --]
 Name                  Iters    Elapsed   Elapsed/iter   Instrs/iter   Peak Stack
 -------------------   -----   --------   ------------   -----------   ----------
-Array       #nth      5,000   2.086 ms         417 ns             8            4
-Struct      field>>   5,000   4.326 ms         865 ns            14            6
-Mut Struct  field>>   5,000   4.312 ms         862 ns            14            6
-Hash        @get      5,000   2.107 ms         421 ns             8            4
-Vector      #nth      5,000   2.314 ms         462 ns             8            4
-Mutable Map @get      5,000   2.107 ms         421 ns             8            4
-Set         @in?      5,000   1.656 ms         331 ns             8            4
-Byte Array  #nth      5,000   2.158 ms         431 ns             8            4
+Array       #nth      5,000   2.016 ms         403 ns             8            4
+Struct      field>>   5,000   4.242 ms         848 ns            14            6
+Mut Struct  field>>   5,000   4.162 ms         832 ns            14            6
+Hash        @get      5,000   2.121 ms         424 ns             8            4
+Vector      #nth      5,000   2.110 ms         422 ns             8            4
+Mutable Map @get      5,000   2.054 ms         410 ns             8            4
+Set         @in?      5,000   1.710 ms         342 ns             8            4
+Byte Array  #nth      5,000   2.006 ms         401 ns             8            4
 
 [-- Mutation --]
 Name                 Iters    Elapsed   Elapsed/iter   Instrs/iter   Peak Stack
 ------------------   -----   --------   ------------   -----------   ----------
-Array #append        5,000   1.346 ms         269 ns             4            4
-Mut Struct >>field   5,000   1.853 ms         370 ns             8            7
-Hash @set (update)   5,000   1.913 ms         382 ns             5            5
-Hash @set (insert)   5,000   2.010 ms         402 ns             5            5
-Vector #push!        5,000   1.314 ms         262 ns             5            4
-Mutable Map @set!    5,000   1.156 ms         231 ns             5            5
-Set @adjoin          5,000   1.787 ms         357 ns             4            4
-Byte Array #append   5,000   1.494 ms         298 ns             5            4
+Array #append        5,000   1.243 ms         248 ns             4            4
+Mut Struct >>field   5,000   1.881 ms         376 ns             8            7
+Hash @set (update)   5,000   1.890 ms         378 ns             5            5
+Hash @set (insert)   5,000   1.967 ms         393 ns             5            5
+Vector #push!        5,000   1.301 ms         260 ns             5            4
+Mutable Map @set!    5,000   1.108 ms         221 ns             5            5
+Set @adjoin          5,000   1.742 ms         348 ns             4            4
+Byte Array #append   5,000   1.340 ms         268 ns             5            4
 
 [-- Scaling: cons-list / bst --]
-cons-list construct n=50 iters=1  elapsed_ns=395000
-cons-list iter-new n=50 iters=5  elapsed_ns=321000
-cons-list first n=50 iters=5  elapsed_ns=338000
-cons-list drain n=50 iters=5  elapsed_ns=318000
-cons-list construct n=100 iters=1  elapsed_ns=700000
-cons-list iter-new n=100 iters=5  elapsed_ns=660000
-cons-list first n=100 iters=5  elapsed_ns=671000
-cons-list drain n=100 iters=5  elapsed_ns=676000
-cons-list construct n=200 iters=1  elapsed_ns=1814000
-cons-list iter-new n=200 iters=5  elapsed_ns=1430000
-cons-list first n=200 iters=5  elapsed_ns=1425000
-cons-list drain n=200 iters=5  elapsed_ns=1432000
-cons-list construct n=400 iters=1  elapsed_ns=5697000
-cons-list iter-new n=400 iters=5  elapsed_ns=3649000
-cons-list first n=400 iters=5  elapsed_ns=3587000
-cons-list drain n=400 iters=5  elapsed_ns=3603000
-bst construct n=100 iters=1  elapsed_ns=20824000
-bst iter-new n=100 iters=5  elapsed_ns=3297000
-bst first n=100 iters=5  elapsed_ns=3307000
-bst drain n=100 iters=5  elapsed_ns=3278000
-bst tree-size n=100 iters=5  elapsed_ns=2049000
-bst insert n=100 iters=5  elapsed_ns=1292000
-bst construct n=200 iters=1  elapsed_ns=48242000
-bst iter-new n=200 iters=5  elapsed_ns=6770000
-bst first n=200 iters=5  elapsed_ns=6748000
-bst drain n=200 iters=5  elapsed_ns=6728000
-bst tree-size n=200 iters=5  elapsed_ns=4124000
-bst insert n=200 iters=5  elapsed_ns=1393000
-bst construct n=400 iters=1  elapsed_ns=109917000
-bst iter-new n=400 iters=5  elapsed_ns=14413000
-bst first n=400 iters=5  elapsed_ns=14424000
-bst drain n=400 iters=5  elapsed_ns=14605000
-bst tree-size n=400 iters=5  elapsed_ns=8254000
-bst insert n=400 iters=5  elapsed_ns=1605000
-bst construct n=800 iters=1  elapsed_ns=249498000
-bst iter-new n=800 iters=5  elapsed_ns=34989000
-bst first n=800 iters=5  elapsed_ns=31505000
-bst drain n=800 iters=5  elapsed_ns=31540000
-bst tree-size n=800 iters=5  elapsed_ns=16331000
-bst insert n=800 iters=5  elapsed_ns=1657000
+cons-list construct n=50 iters=1  elapsed_ns=334000
+cons-list iter-new n=50 iters=5  elapsed_ns=30000
+cons-list first n=50 iters=5  elapsed_ns=85000
+cons-list drain n=50 iters=5  elapsed_ns=1900000
+cons-list construct n=100 iters=1  elapsed_ns=673000
+cons-list iter-new n=100 iters=5  elapsed_ns=26000
+cons-list first n=100 iters=5  elapsed_ns=78000
+cons-list drain n=100 iters=5  elapsed_ns=3722000
+cons-list construct n=200 iters=1  elapsed_ns=1801000
+cons-list iter-new n=200 iters=5  elapsed_ns=26000
+cons-list first n=200 iters=5  elapsed_ns=80000
+cons-list drain n=200 iters=5  elapsed_ns=7631000
+cons-list construct n=400 iters=1  elapsed_ns=5655000
+cons-list iter-new n=400 iters=5  elapsed_ns=29000
+cons-list first n=400 iters=5  elapsed_ns=84000
+cons-list drain n=400 iters=5  elapsed_ns=15147000
+bst construct n=100 iters=1  elapsed_ns=26805000
+bst iter-new n=100 iters=5  elapsed_ns=190000
+bst first n=100 iters=5  elapsed_ns=253000
+bst drain n=100 iters=5  elapsed_ns=6811000
+bst #len n=100 iters=5  elapsed_ns=32000
+bst insert n=100 iters=5  elapsed_ns=1701000
+bst construct n=200 iters=1  elapsed_ns=63239000
+bst iter-new n=200 iters=5  elapsed_ns=228000
+bst first n=200 iters=5  elapsed_ns=284000
+bst drain n=200 iters=5  elapsed_ns=13522000
+bst #len n=200 iters=5  elapsed_ns=31000
+bst insert n=200 iters=5  elapsed_ns=1802000
+bst construct n=400 iters=1  elapsed_ns=144298000
+bst iter-new n=400 iters=5  elapsed_ns=248000
+bst first n=400 iters=5  elapsed_ns=295000
+bst drain n=400 iters=5  elapsed_ns=27191000
+bst #len n=400 iters=5  elapsed_ns=39000
+bst insert n=400 iters=5  elapsed_ns=1956000
+bst construct n=800 iters=1  elapsed_ns=322303000
+bst iter-new n=800 iters=5  elapsed_ns=267000
+bst first n=800 iters=5  elapsed_ns=316000
+bst drain n=800 iters=5  elapsed_ns=53157000
+bst #len n=800 iters=5  elapsed_ns=36000
+bst insert n=800 iters=5  elapsed_ns=2105000

@@ -61,11 +61,11 @@ nl "[-- Mutation --]" print-line
 ] run-benchmarks
 
 \ Scaling sweep: cons-list and bst across n, following the bench_tokenize_scaling.1z shape. Both
-\ structures' >iterator materializes the whole structure into an array today, so the iter-new and
-\ first rows cost O(n): their elapsed_ns should read ~2x across adjacent 2x size steps, and flat
-\ once the iterators are lazy. The construct and drain rows stay O(n) and guard constant factors.
-\ tree-size is an O(n) walk today and reads O(1) once branch nodes carry subtree sizes; the insert
-\ row is the mutation cost that change promises to keep flat.
+\ structures' >iterator is lazy. cons-list's iter-new and first rows are O(1); bst's descend the
+\ left spine at creation, so they are O(log n). Both should read near-flat across adjacent 2x size
+\ steps. The construct and drain rows stay O(n) and guard constant factors. #len reads the subtree
+\ size cached on every bst branch node, so it is O(1) and should read flat; the insert row is the
+\ mutation cost that caching promises to keep flat.
 \
 \ The cons-list sweep stops at n=400: >cons-list and cons-list>array recurse once per element, and
 \ near n=600 a release build overflows the main thread's native stack, which has no overflow guard
@@ -104,7 +104,7 @@ bst-sweep: ( n -- ) [
   "bst iter-new" pick 5 [ dup >iterator drop ] scale-row
   "bst first" pick 5 [ dup [ drop t ] #any drop ] scale-row
   "bst drain" pick 5 [ dup >iterator #count drop ] scale-row
-  "bst tree-size" pick 5 [ dup tree-size drop ] scale-row
+  "bst #len" pick 5 [ dup #len drop ] scale-row
   \ 1000000000 is absent from every fixture, so the insert always grows the tree instead of
   \ replacing an equal key.
   "bst insert" pick 5 [ dup 1000000000 tree-insert drop ] scale-row
