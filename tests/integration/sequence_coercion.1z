@@ -61,6 +61,13 @@ dup [ 2 * ] #map #collect { 2 4 6 } "first drain sees all elements" assert=
 dup #count 3 "first #count drains a fresh iterator" assert=
 #count 3 "second #count gets a fresh iterator" assert=
 
+">iterator passes an iterator through" test-section
+{ 1 2 } >iterator >iterator #collect { 1 2 } ">iterator on an iterator is identity" assert=
+{ 1 2 3 } >iterator [ 3 = ] #any t "#any on an iterator" assert=
+{ 2 4 } >iterator [ 2 % 0 = ] #all t "#all on an iterator" assert=
+{ 1 3 } >iterator [ 2 % 0 = ] #none t "#none on an iterator" assert=
+{ 1 2 3 } [ 2 * ] #map [ 4 = ] #any t "#any chained after #map" assert=
+
 "a type with no >iterator route still raises" test-section
 [ 5 [ drop ] #each ] "#each on a fixnum raises" assert-error
 [ 5 2 #take ] "#take on a fixnum raises" assert-error

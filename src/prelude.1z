@@ -480,10 +480,16 @@ bytes-resize!: ( byte-array n -- byte-array ) [ over #len over < [ 0x00 native.#
   ] [ drop 2drop t ] if
 ] ;
 \\ Test whether any element satisfies the predicate. Short-circuits.
+\\
+\\ A non-iterator operand is routed through >iterator.
 #any: ( seq quot -- ? ) [ swap >iterator swap (any-loop) ] ;
 \\ Test whether no element satisfies the predicate.
+\\
+\\ A non-iterator operand is routed through >iterator.
 #none: ( seq quot -- ? ) [ #any not ] ;
 \\ Test whether all elements satisfy the predicate. Short-circuits.
+\\
+\\ A non-iterator operand is routed through >iterator.
 #all: ( seq quot -- ? ) [ swap >iterator swap (all-loop) ] ;
 \\ Test if sequence is empty.
 #empty?: generic ( seq -- ? ) [ #len 0 = ] ;
@@ -1307,8 +1313,9 @@ try: ( ..a quot: ( ..a -- x ) -- result ) [ [ call >result:ok ] [ >result:err ] 
 \\ Try to receive from a channel. Returns some(value) on success, none if closed and empty.
 receive?: ( ch -- option ) [ [ receive >option:some ] [ drop option:none ] recover ] ;
 
-\\ Create an iterator. Accepts a sequence (delegates to the native) or a quotation
-\\ returning option values (wraps to the raw flag convention and creates a callback iterator).
+\\ Create an iterator. Accepts a sequence (delegates to the native), a quotation
+\\ returning option values (wraps to the raw flag convention and creates a callback
+\\ iterator), or an iterator, which passes through unchanged.
 >iterator: generic ( seq-or-quot -- iterator ) [
   dup quotation? [
     [ call dup option:some? [ option:some> t ] [ drop f ] if ] curry
@@ -1317,6 +1324,7 @@ receive?: ( ch -- option ) [ [ receive >option:some ] [ drop option:none ] recov
     native.>iterator
   ] if
 ] ;
+>iterator: method{ iterator } [ ] ;
 
 \\ Create an iterator with a cleanup quotation. The step quotation returns option values;
 \\ the cleanup quotation runs automatically when the callback iterator is naturally exhausted.

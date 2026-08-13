@@ -5,8 +5,8 @@ AOT interpreter fallbacks: 3 total
   native: 2
   per-op-native: 1
   sites:
-    native: . -> inspect (line 714)
-    native: . -> inspect (line 714)
+    native: . -> inspect (line 720)
+    native: . -> inspect (line 720)
     per-op-native: onez_q_5 -> + (line 11)
   static-check: jitInterpretedCall=0/0 jitNativeWordCall=3/3 jitCallQuotation=0/0 (matches build-time inventory)
 artifact: interpreter

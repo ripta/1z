@@ -1,6 +1,6 @@
 src/prelude.1z:6: error 'type-mismatch' expected number, got string "x" at word '+'
   stack effect: ( a b -- a+b )
   hint: operands must be numbers (fixnum, float, bignum, or ratio)
-  called from src/prelude.1z:546: call
+  called from src/prelude.1z:552: call
   called from tests/integration/error_frames_choose.1z:6: choose
   called from tests/integration/error_frames_choose.1z:8: pick-bigger

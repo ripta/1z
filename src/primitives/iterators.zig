@@ -21,11 +21,11 @@ pub const registry_entries = [_]RegistryEntry{
 
 pub const primitives = [_]Primitive{
     .{ .name = "#next", .stack_effect = "iterator -- value", .doc = "Advance an iterator and return the next value. Throws if exhausted.", .func = nativeNext },
-    .{ .name = "#collect", .stack_effect = "iterator -- array", .doc = "Materialize all iterator elements into an array.", .func = nativeCollect },
+    .{ .name = "#collect", .stack_effect = "iterator -- array", .doc = "Materialize all iterator elements into an array. A non-iterator operand is routed through >iterator.", .func = nativeCollect },
     .{
         .name = "#count",
         .stack_effect = "iterator -- n",
-        .doc = "Count elements by consuming the iterator. Unlike #len, this exhausts the iterator; it cannot be used afterward.",
+        .doc = "Count elements by consuming the iterator. Unlike #len, this exhausts the iterator; it cannot be used afterward. A non-iterator operand is routed through >iterator.",
         .func = nativeCount,
     },
     .{
