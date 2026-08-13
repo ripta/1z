@@ -134,7 +134,12 @@ pub fn setSequenceOperandMismatch(ctx: *Context, raw: Value) void {
 /// owned references its `next` already yields. The caller owns the slice and
 /// its element references, and typically adopts both into the result array.
 fn collectToMutableArray(in_seq: Value, ctx: *Context, alloc: Allocator) ![]Value {
-    const seq = unwrapBaseType(in_seq);
+    const coerced = (try coerceSequenceOperand(ctx, in_seq, .native_seqs)) orelse {
+        setSequenceOperandMismatch(ctx, in_seq);
+        return error.TypeMismatch;
+    };
+    defer container_backing.releaseValue(coerced);
+    const seq = unwrapBaseType(coerced);
     switch (seq) {
         .array => |arr| {
             const result = alloc.alloc(Value, arr.items.len) catch return error.OutOfMemory;
@@ -900,7 +905,12 @@ pub fn nativeEach(ctx: *Context) anyerror!void {
     // this scope exits, so releasing the source on exit is safe.
     defer container_backing.releaseValue(raw_seq);
     const alloc = ctx.quotationAllocator();
-    const seq = unwrapBaseType(raw_seq);
+    const coerced = (try coerceSequenceOperand(ctx, raw_seq, .native_seqs)) orelse {
+        setSequenceOperandMismatch(ctx, raw_seq);
+        return error.TypeMismatch;
+    };
+    defer container_backing.releaseValue(coerced);
+    const seq = unwrapBaseType(coerced);
 
     if (seq == .iterator) {
         while (try seq.iterator.next(ctx)) |elem| {
@@ -931,7 +941,12 @@ pub fn nativeEachIndex(ctx: *Context) anyerror!void {
     const raw_seq = try ctx.stack.pop();
     defer container_backing.releaseValue(raw_seq);
     const alloc = ctx.quotationAllocator();
-    const seq = unwrapBaseType(raw_seq);
+    const coerced = (try coerceSequenceOperand(ctx, raw_seq, .native_seqs)) orelse {
+        setSequenceOperandMismatch(ctx, raw_seq);
+        return error.TypeMismatch;
+    };
+    defer container_backing.releaseValue(coerced);
+    const seq = unwrapBaseType(coerced);
     var idx: i64 = 0;
 
     if (seq == .iterator) {
@@ -972,12 +987,22 @@ pub fn nativeMap(ctx: *Context) anyerror!void {
     };
     defer container_backing.releaseValue(seq);
 
+    const coerced = (coerceSequenceOperand(ctx, seq, .native_seqs) catch |err| {
+        pc.release();
+        return err;
+    }) orelse {
+        pc.release();
+        setSequenceOperandMismatch(ctx, seq);
+        return error.TypeMismatch;
+    };
+    defer container_backing.releaseValue(coerced);
+
     // The wrapper owns its inner iterator: an aliased inner is retained here because the deferred
-    // release drops the popped slot's reference, and a fresh one hands over its creation reference.
-    const inner = if (seq == .iterator) blk: {
-        seq.iterator.header.retain();
-        break :blk seq.iterator;
-    } else (seqToArrayIter(seq, ctx) catch |err| {
+    // release drops the coerced reference, and a fresh one hands over its creation reference.
+    const inner = if (coerced == .iterator) blk: {
+        coerced.iterator.header.retain();
+        break :blk coerced.iterator;
+    } else (seqToArrayIter(coerced, ctx) catch |err| {
         pc.release();
         return err;
     }) orelse {
@@ -1004,12 +1029,22 @@ pub fn nativeFilter(ctx: *Context) anyerror!void {
     };
     defer container_backing.releaseValue(seq);
 
+    const coerced = (coerceSequenceOperand(ctx, seq, .native_seqs) catch |err| {
+        pc.release();
+        return err;
+    }) orelse {
+        pc.release();
+        setSequenceOperandMismatch(ctx, seq);
+        return error.TypeMismatch;
+    };
+    defer container_backing.releaseValue(coerced);
+
     // The wrapper owns its inner iterator: an aliased inner is retained here because the deferred
-    // release drops the popped slot's reference, and a fresh one hands over its creation reference.
-    const inner = if (seq == .iterator) blk: {
-        seq.iterator.header.retain();
-        break :blk seq.iterator;
-    } else (seqToArrayIter(seq, ctx) catch |err| {
+    // release drops the coerced reference, and a fresh one hands over its creation reference.
+    const inner = if (coerced == .iterator) blk: {
+        coerced.iterator.header.retain();
+        break :blk coerced.iterator;
+    } else (seqToArrayIter(coerced, ctx) catch |err| {
         pc.release();
         return err;
     }) orelse {
@@ -1039,7 +1074,12 @@ pub fn nativeReduce(ctx: *Context) anyerror!void {
     const raw_seq = try ctx.stack.pop();
     defer container_backing.releaseValue(raw_seq);
     const alloc = ctx.quotationAllocator();
-    const seq = unwrapBaseType(raw_seq);
+    const coerced = (try coerceSequenceOperand(ctx, raw_seq, .native_seqs)) orelse {
+        setSequenceOperandMismatch(ctx, raw_seq);
+        return error.TypeMismatch;
+    };
+    defer container_backing.releaseValue(coerced);
+    const seq = unwrapBaseType(coerced);
 
     if (seq == .iterator) {
         while (try seq.iterator.next(ctx)) |elem| {
@@ -1089,7 +1129,12 @@ pub fn nativeReduceIndex(ctx: *Context) anyerror!void {
     const raw_seq = try ctx.stack.pop();
     defer container_backing.releaseValue(raw_seq);
     const alloc = ctx.quotationAllocator();
-    const seq = unwrapBaseType(raw_seq);
+    const coerced = (try coerceSequenceOperand(ctx, raw_seq, .native_seqs)) orelse {
+        setSequenceOperandMismatch(ctx, raw_seq);
+        return error.TypeMismatch;
+    };
+    defer container_backing.releaseValue(coerced);
+    const seq = unwrapBaseType(coerced);
     var idx: i64 = 0;
 
     if (seq == .iterator) {
@@ -2437,28 +2482,33 @@ fn nativeByteIndexOfFrom(ctx: *Context) anyerror!void {
 /// #take ( seq n -- seq' )
 pub fn nativeTake(ctx: *Context) anyerror!void {
     const n_val = try popFixnum(ctx);
-    const seq = try ctx.stack.pop();
+    const raw_seq = try ctx.stack.pop();
+    defer container_backing.releaseValue(raw_seq);
 
     if (n_val < 0) {
-        container_backing.releaseValue(seq);
         setErrorContext(ctx, "negative count {d}", .{n_val});
         return error.IndexOutOfBounds;
     }
     const n: usize = @intCast(n_val);
     const alloc = ctx.quotationAllocator();
 
-    if (seq == .iterator) {
-        // The wrapper takes over the popped slot's reference to the inner.
-        const iter = Iterator.create(ctx.allocator, .{ .take = .{ .inner = seq.iterator, .remaining = n } }) catch |err| {
-            container_backing.releaseValue(seq);
+    const coerced = (try coerceSequenceOperand(ctx, raw_seq, .native_seqs_no_set)) orelse {
+        setSequenceOperandMismatch(ctx, raw_seq);
+        return error.TypeMismatch;
+    };
+
+    if (coerced == .iterator) {
+        // The wrapper takes over the coerced reference to the inner.
+        const iter = Iterator.create(ctx.allocator, .{ .take = .{ .inner = coerced.iterator, .remaining = n } }) catch |err| {
+            container_backing.releaseValue(coerced);
             return err;
         };
         try helpers.pushMovedIterator(ctx, iter);
         return;
     }
-    defer container_backing.releaseValue(seq);
+    defer container_backing.releaseValue(coerced);
 
-    switch (seq) {
+    switch (coerced) {
         .string => |s| {
             const cp_count = sequence.utf8CodepointCount(s.bytes);
             const take_count = @min(n, cp_count);
@@ -2498,7 +2548,7 @@ pub fn nativeTake(ctx: *Context) anyerror!void {
             try ctx.stack.push(.{ .byte_array = result_ba });
         },
         else => {
-            setSequenceOperandMismatch(ctx, seq);
+            setSequenceOperandMismatch(ctx, raw_seq);
             return error.TypeMismatch;
         },
     }
@@ -2507,28 +2557,33 @@ pub fn nativeTake(ctx: *Context) anyerror!void {
 /// #drop ( seq n -- seq' )
 pub fn nativeDrop(ctx: *Context) anyerror!void {
     const n_val = try popFixnum(ctx);
-    const seq = try ctx.stack.pop();
+    const raw_seq = try ctx.stack.pop();
+    defer container_backing.releaseValue(raw_seq);
 
     if (n_val < 0) {
-        container_backing.releaseValue(seq);
         setErrorContext(ctx, "negative count {d}", .{n_val});
         return error.IndexOutOfBounds;
     }
     const n: usize = @intCast(n_val);
     const alloc = ctx.quotationAllocator();
 
-    if (seq == .iterator) {
-        // The wrapper takes over the popped slot's reference to the inner.
-        const iter = Iterator.create(ctx.allocator, .{ .drop = .{ .inner = seq.iterator, .to_skip = n } }) catch |err| {
-            container_backing.releaseValue(seq);
+    const coerced = (try coerceSequenceOperand(ctx, raw_seq, .native_seqs_no_set)) orelse {
+        setSequenceOperandMismatch(ctx, raw_seq);
+        return error.TypeMismatch;
+    };
+
+    if (coerced == .iterator) {
+        // The wrapper takes over the coerced reference to the inner.
+        const iter = Iterator.create(ctx.allocator, .{ .drop = .{ .inner = coerced.iterator, .to_skip = n } }) catch |err| {
+            container_backing.releaseValue(coerced);
             return err;
         };
         try helpers.pushMovedIterator(ctx, iter);
         return;
     }
-    defer container_backing.releaseValue(seq);
+    defer container_backing.releaseValue(coerced);
 
-    switch (seq) {
+    switch (coerced) {
         .string => |s| {
             const cp_count = sequence.utf8CodepointCount(s.bytes);
             if (n >= cp_count) {
@@ -2575,7 +2630,7 @@ pub fn nativeDrop(ctx: *Context) anyerror!void {
             try ctx.stack.push(.{ .byte_array = result_ba });
         },
         else => {
-            setSequenceOperandMismatch(ctx, seq);
+            setSequenceOperandMismatch(ctx, raw_seq);
             return error.TypeMismatch;
         },
     }

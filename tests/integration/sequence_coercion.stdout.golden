@@ -1,0 +1,79 @@
+=== range coercion ===
+Stack: [ ]
+PASS: #map over a range
+Stack: [ ]
+PASS: #filter over a range
+Stack: [ ]
+PASS: #each over a range
+Stack: [ ]
+PASS: #each-index over a range
+Stack: [ ]
+PASS: #reduce over a range
+Stack: [ ]
+PASS: #reduce-index over a range
+Stack: [ ]
+PASS: #sort over a range
+Stack: [ ]
+PASS: #sort-by over a range
+Stack: [ ]
+=== coerced #take and #drop return an iterator ===
+Stack: [ ]
+PASS: #take on a range yields an iterator
+Stack: [ <iterator take take(2, 0..5 step 1)> ]
+PASS: #take on a range takes the first elements
+Stack: [ ]
+PASS: #drop on a cons-list yields an iterator
+Stack: [ <iterator drop drop(callback)> ]
+PASS: #drop on a cons-list skips the first elements
+Stack: [ ]
+=== native sequences keep their type ===
+Stack: [ ]
+PASS: #take on a string stays a string
+Stack: [ ]
+PASS: #take on a vector stays a vector
+Stack: [ V{ 1 2 } ]
+PASS: #take on a vector takes the first elements
+Stack: [ ]
+PASS: #drop on an array stays an array
+Stack: [ { 2 3 } ]
+PASS: #drop on an array skips the first element
+Stack: [ ]
+=== set coerces for #take ===
+Stack: [ ]
+PASS: #take on a set yields an iterator
+Stack: [ <iterator take take(1, 0/1)> ]
+PASS: #take on a set drains through the iterator
+Stack: [ ]
+=== cons-list coercion ===
+Stack: [ ]
+PASS: #map over a cons-list
+Stack: [ ]
+PASS: #filter over a cons-list
+Stack: [ ]
+PASS: #each over a cons-list
+Stack: [ ]
+PASS: #reduce over a cons-list
+Stack: [ ]
+PASS: #sort over a cons-list
+Stack: [ ]
+=== bst coercion iterates in order ===
+Stack: [ ]
+PASS: #map over a bst
+Stack: [ ]
+PASS: #reduce over a bst
+Stack: [ ]
+PASS: #take over a bst
+Stack: [ ]
+=== coercion builds a fresh iterator per call ===
+Stack: [ ]
+Stack: [ <cons-list:cons cons-cell{ head: 1 tail: <cons-list:cons cons-cell{ head: 2 tail: <cons-list:cons cons-cell{ head: 3 tail: <cons-list:nil nil:> }> }> }> ]
+PASS: first drain sees all elements
+Stack: [ <cons-list:cons cons-cell{ head: 1 tail: <cons-list:cons cons-cell{ head: 2 tail: <cons-list:cons cons-cell{ head: 3 tail: <cons-list:nil nil:> }> }> }> ]
+PASS: second call gets a fresh iterator
+Stack: [ ]
+=== a type with no >iterator route still raises ===
+Stack: [ ]
+PASS: #each on a fixnum raises
+Stack: [ ]
+PASS: #take on a fixnum raises
+Stack: [ ]

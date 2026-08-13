@@ -1,0 +1,57 @@
+\ Sequence natives coerce a non-iterator operand through its >iterator method,
+\ so a conforming type works without an explicit >iterator at the call site.
+\ The eager suite reuses this corpus, so passing both modes is the compiled-tier
+\ check.
+
+use "testing" ;
+use "ranges" ;
+use "cons-list" ;
+use "bst" ;
+
+"range coercion" test-section
+0 5 <range> [ 2 * ] #map #collect { 0 2 4 6 8 } "#map over a range" assert=
+0 6 <range> [ 2 % 0 = ] #filter #collect { 0 2 4 } "#filter over a range" assert=
+0 0 4 <range> [ + ] #each 6 "#each over a range" assert=
+0 0 3 <range> [ + + ] #each-index 6 "#each-index over a range" assert=
+0 4 <range> 0 [ + ] #reduce 6 "#reduce over a range" assert=
+0 3 <range> 0 [ * + ] #reduce-index 5 "#reduce-index over a range" assert=
+0 4 <range> [ > ] #sort { 3 2 1 0 } "#sort over a range" assert=
+0 4 <range> [ -1 * ] #sort-by { 3 2 1 0 } "#sort-by over a range" assert=
+
+"coerced #take and #drop return an iterator" test-section
+0 5 <range> 2 #take dup iterator? t "#take on a range yields an iterator" assert=
+#collect { 0 1 } "#take on a range takes the first elements" assert=
+{ 1 2 3 4 5 } >cons-list 2 #drop dup iterator? t "#drop on a cons-list yields an iterator" assert=
+#collect { 3 4 5 } "#drop on a cons-list skips the first elements" assert=
+
+"native sequences keep their type" test-section
+"hello" 3 #take "hel" "#take on a string stays a string" assert=
+V{ 1 2 3 } 2 #take dup vector? t "#take on a vector stays a vector" assert=
+>array { 1 2 } "#take on a vector takes the first elements" assert=
+{ 1 2 3 } 1 #drop dup array? t "#drop on an array stays an array" assert=
+{ 2 3 } "#drop on an array skips the first element" assert=
+
+"set coerces for #take" test-section
+S{ 5 } 1 #take dup iterator? t "#take on a set yields an iterator" assert=
+#collect { 5 } "#take on a set drains through the iterator" assert=
+
+"cons-list coercion" test-section
+{ 1 2 3 } >cons-list [ 10 * ] #map #collect { 10 20 30 } "#map over a cons-list" assert=
+{ 1 2 3 4 } >cons-list [ 2 % 0 = ] #filter #collect { 2 4 } "#filter over a cons-list" assert=
+0 { 1 2 3 } >cons-list [ + ] #each 6 "#each over a cons-list" assert=
+{ 1 2 3 } >cons-list 0 [ + ] #reduce 6 "#reduce over a cons-list" assert=
+{ 3 1 2 } >cons-list [ < ] #sort { 1 2 3 } "#sort over a cons-list" assert=
+
+"bst coercion iterates in order" test-section
+{ 5 3 8 1 4 } [ cmp ] >bst [ 1 + ] #map #collect { 2 4 5 6 9 } "#map over a bst" assert=
+{ 5 3 8 } [ cmp ] >bst 0 [ + ] #reduce 16 "#reduce over a bst" assert=
+{ 5 3 8 1 4 } [ cmp ] >bst 2 #take #collect { 1 3 } "#take over a bst" assert=
+
+"coercion builds a fresh iterator per call" test-section
+{ 1 2 3 } >cons-list
+dup [ 2 * ] #map #collect { 2 4 6 } "first drain sees all elements" assert=
+[ 2 * ] #map #collect { 2 4 6 } "second call gets a fresh iterator" assert=
+
+"a type with no >iterator route still raises" test-section
+[ 5 [ drop ] #each ] "#each on a fixnum raises" assert-error
+[ 5 2 #take ] "#take on a fixnum raises" assert-error
