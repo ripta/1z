@@ -1,0 +1,29 @@
+\ A recognized #map keeps its vectorized chain only while no method has been registered on
+\ the arithmetic it matched. Registering one part-way through a drain retires the chain and
+\ hands every element that has not been yielded yet to the quotation. Isolated from the
+\ other packed tests because these registrations mutate global dispatch state.
+
+use "testing" ;
+use "math/packed" ;
+
+"method registered mid-drain" test-section
+
+{ 1.0 2.0 3.0 } >packed:f64 [ 2.0 * ] #map
+dup #next 2.0 "first element still vectorized" assert=
+*: method{ float float } [ drop drop 999.0 ] ;
+#collect { 999.0 999.0 } "remaining elements honor the mid-drain method" assert=
+
+"the bail is element-exact across a chunk" test-section
+
+\ Eight elements span more than one SIMD chunk, so the first #next leaves the rest of its
+\ chunk computed but unyielded. Those are rewound and recomputed, not handed over.
+8 3.0 packed-fill:f64 [ 1.0 + ] #map
+dup #next 4.0 "first element still vectorized" assert=
++: method{ float float } [ drop drop 5.0 ] ;
+#collect { 5.0 5.0 5.0 5.0 5.0 5.0 5.0 } "no element of the computed chunk survives the bail" assert=
+
+"a chain recognized after the registration is never built" test-section
+
+\ The creation-time guard refuses the same method the drain-time guard bails on, so a #map
+\ built now takes the scalar path from its first element.
+{ 1.0 2.0 } >packed:f64 [ 4.0 * ] #map #collect { 999.0 999.0 } "recognition refused up front" assert=

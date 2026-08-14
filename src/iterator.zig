@@ -59,7 +59,7 @@ pub const Iterator = struct {
             },
             .packed_elems => |it| {
                 it.source.header.release();
-                if (it.chain.len > 0) header.allocator.free(it.chain);
+                if (it.recognized) |rec| header.allocator.free(rec.chain);
             },
             .range => {},
         }
@@ -75,7 +75,7 @@ pub const Iterator = struct {
             .take => |*it| try it.next(ctx),
             .drop => |*it| try it.next(ctx),
             .callback => |*it| try it.next(ctx),
-            .packed_elems => |*it| try it.next(ctx.allocator),
+            .packed_elems => |*it| try it.next(ctx),
         };
     }
 
@@ -289,6 +289,29 @@ pub const PackedIter = struct {
     /// One SIMD chunk of either float element type; the wider of the two widths.
     pub const chain_buf_cap = @max(packed_kernels.chainChunkLen(f32), packed_kernels.chainChunkLen(f64));
 
+    /// A recognized arithmetic quotation and what recognition assumed about it. The three
+    /// travel together so that a chain can never exist without the body it stands in for,
+    /// which is what a retired chain hands the rest of the drain to.
+    pub const Recognized = struct {
+        /// Applied chunk-by-chunk as the iterator drains. Built only for `.f32` and `.f64`
+        /// element types, the invariant the recognizer enforces. Owned: allocated on the
+        /// iterator's allocator, freed at destroy.
+        chain: []const packed_kernels.ChainOp,
+
+        /// The dispatch generation recognition ran under. A method registered afterwards
+        /// bumps it, which retires the chain, so a method the kernel cannot honor is
+        /// honored by `quotation` anyway.
+        ///
+        /// Registration is all this catches. Redefining an arithmetic word does not bump
+        /// the generation, and noticing one would need a by-name dispatch resolution per
+        /// element, which costs more than the vectorization saves.
+        dispatch_generation: u32,
+
+        /// The body the chain was matched from. It needs no owning reference: `nativeMap`
+        /// recognizes only a plain quotation, whose body outlives the iterator.
+        quotation: Quotation,
+    };
+
     /// The iterator holds one reference on the byte-array's header, dropped at destroy.
     ///
     /// `next` re-reads `source.slice()` and the element count on every call: an owned
@@ -299,21 +322,50 @@ pub const PackedIter = struct {
     elem_type: packed_kernels.ElementType,
     index: usize,
 
-    /// A recognized arithmetic chain applied chunk-by-chunk as the iterator drains.
-    /// Empty for a plain element iterator. Non-empty only for `.f32` and `.f64`
-    /// element types, the invariant the recognizer enforces at construction. Owned
-    /// when non-empty: allocated on the iterator's allocator, freed at destroy.
-    chain: []const packed_kernels.ChainOp = &.{},
+    /// Null for a plain element iterator, which is what `>iterator` builds.
+    recognized: ?Recognized = null,
     buf: [chain_buf_cap]f64 = undefined,
     buf_len: usize = 0,
     buf_pos: usize = 0,
+
+    /// Set once the generation guard fails, retiring the chain for the rest of this
+    /// iterator's life. The chain stays allocated: `next` holds only the draining context's
+    /// allocator, which need not be the one the iterator was created on.
+    bailed: bool = false,
 
     fn elemCount(self: *const PackedIter) usize {
         return self.source.slice().len / self.elem_type.elemSize();
     }
 
-    pub fn next(self: *PackedIter, allocator: std.mem.Allocator) error{OutOfMemory}!?Value {
-        if (self.chain.len > 0) return self.nextChained();
+    /// Retire the chain and rewind to the first element it computed but has not yielded.
+    /// Those buffered elements came out of a kernel the guard has just disowned, so they
+    /// are recomputed through the quotation rather than handed over.
+    fn bail(self: *PackedIter) void {
+        self.index -= self.buf_len - self.buf_pos;
+        self.buf_len = 0;
+        self.buf_pos = 0;
+        self.bailed = true;
+    }
+
+    pub fn next(self: *PackedIter, ctx: *Context) anyerror!?Value {
+        const rec = self.recognized orelse return self.nextElement(ctx.allocator);
+
+        if (!self.bailed) {
+            if (ctx.dispatch.generation == rec.dispatch_generation) return self.nextChained(rec.chain);
+            self.bail();
+        }
+
+        const elem = try self.nextElement(ctx.allocator) orelse return null;
+
+        // The element is owned; the quotation output returned in its place is a separate
+        // owned reference, so release the consumed input here.
+        defer container_backing.releaseValue(elem);
+        try ctx.stack.push(elem);
+        try ctx.executeQuotationWithFrame(rec.quotation);
+        return try ctx.stack.pop();
+    }
+
+    fn nextElement(self: *PackedIter, allocator: std.mem.Allocator) error{OutOfMemory}!?Value {
         const bytes = self.source.slice();
         switch (self.elem_type) {
             inline else => |et| {
@@ -332,12 +384,12 @@ pub const PackedIter = struct {
     /// dry. Results are f64 in the buffer, so boxing allocates nothing; an f32 source
     /// computes in f32 and widens at buffer fill, the same widening the plain path
     /// applies at boxing.
-    fn nextChained(self: *PackedIter) ?Value {
+    fn nextChained(self: *PackedIter, chain: []const packed_kernels.ChainOp) ?Value {
         if (self.buf_pos >= self.buf_len) {
             const bytes = self.source.slice();
             const produced = switch (self.elem_type) {
-                .f32 => packed_kernels.applyChainChunk(f32, bytes, self.index, self.chain, &self.buf),
-                .f64 => packed_kernels.applyChainChunk(f64, bytes, self.index, self.chain, &self.buf),
+                .f32 => packed_kernels.applyChainChunk(f32, bytes, self.index, chain, &self.buf),
+                .f64 => packed_kernels.applyChainChunk(f64, bytes, self.index, chain, &self.buf),
                 else => unreachable,
             };
             if (produced == 0) return null;
@@ -413,6 +465,9 @@ test "RangeIter kindName returns range" {
 }
 
 test "PackedIter walks an f64 backing and yields floats" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
     const ba = try value_mod.ByteArray.create(std.testing.allocator);
     defer container_backing.releaseValue(.{ .byte_array = ba });
     try ba.ensureTotalCapacity(std.testing.allocator, 3 * 8);
@@ -422,22 +477,28 @@ test "PackedIter walks an f64 backing and yields floats" {
     packed_kernels.writeElement(f64, ba.items, 2, 3.5);
 
     var it = PackedIter{ .source = ba, .elem_type = .f64, .index = 0 };
-    try std.testing.expectEqual(@as(f64, 1.5), (try it.next(std.testing.allocator)).?.float);
-    try std.testing.expectEqual(@as(f64, 2.5), (try it.next(std.testing.allocator)).?.float);
-    try std.testing.expectEqual(@as(f64, 3.5), (try it.next(std.testing.allocator)).?.float);
-    try std.testing.expect(try it.next(std.testing.allocator) == null);
-    try std.testing.expect(try it.next(std.testing.allocator) == null);
+    try std.testing.expectEqual(@as(f64, 1.5), (try it.next(&ctx)).?.float);
+    try std.testing.expectEqual(@as(f64, 2.5), (try it.next(&ctx)).?.float);
+    try std.testing.expectEqual(@as(f64, 3.5), (try it.next(&ctx)).?.float);
+    try std.testing.expect(try it.next(&ctx) == null);
+    try std.testing.expect(try it.next(&ctx) == null);
 }
 
 test "PackedIter on empty backing returns null immediately" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
     const ba = try value_mod.ByteArray.create(std.testing.allocator);
     defer container_backing.releaseValue(.{ .byte_array = ba });
 
     var it = PackedIter{ .source = ba, .elem_type = .f64, .index = 0 };
-    try std.testing.expect(try it.next(std.testing.allocator) == null);
+    try std.testing.expect(try it.next(&ctx) == null);
 }
 
 test "PackedIter boxes the u64 upper half as an owned bignum" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
     const ba = try value_mod.ByteArray.create(std.testing.allocator);
     defer container_backing.releaseValue(.{ .byte_array = ba });
     try ba.ensureTotalCapacity(std.testing.allocator, 2 * 8);
@@ -446,14 +507,17 @@ test "PackedIter boxes the u64 upper half as an owned bignum" {
     packed_kernels.writeElement(u64, ba.items, 1, @as(u64, std.math.maxInt(i64)) + 1);
 
     var it = PackedIter{ .source = ba, .elem_type = .u64, .index = 0 };
-    try std.testing.expectEqual(@as(i64, 7), (try it.next(std.testing.allocator)).?.fixnum);
-    const big = (try it.next(std.testing.allocator)).?;
+    try std.testing.expectEqual(@as(i64, 7), (try it.next(&ctx)).?.fixnum);
+    const big = (try it.next(&ctx)).?;
     try std.testing.expect(big == .bignum);
     container_backing.releaseValue(big);
-    try std.testing.expect(try it.next(std.testing.allocator) == null);
+    try std.testing.expect(try it.next(&ctx) == null);
 }
 
 test "PackedIter applies a chain across chunk boundaries" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
     const ba = try value_mod.ByteArray.create(std.testing.allocator);
     defer container_backing.releaseValue(.{ .byte_array = ba });
     const n = PackedIter.chain_buf_cap + 1;
@@ -467,16 +531,23 @@ test "PackedIter applies a chain across chunk boundaries" {
         .{ .op = .mul, .scalar = 2.0 },
         .{ .op = .add, .scalar = 1.0 },
     };
-    var it = PackedIter{ .source = ba, .elem_type = .f64, .index = 0, .chain = &chain };
+    var it = PackedIter{ .source = ba, .elem_type = .f64, .index = 0, .recognized = .{
+        .chain = &chain,
+        .dispatch_generation = ctx.dispatch.generation,
+        .quotation = .{ .instructions = &.{} },
+    } };
     for (0..n) |i| {
         const expected: f64 = @as(f64, @floatFromInt(i)) * 2.0 + 1.0;
-        try std.testing.expectEqual(expected, (try it.next(std.testing.allocator)).?.float);
+        try std.testing.expectEqual(expected, (try it.next(&ctx)).?.float);
     }
-    try std.testing.expect(try it.next(std.testing.allocator) == null);
-    try std.testing.expect(try it.next(std.testing.allocator) == null);
+    try std.testing.expect(try it.next(&ctx) == null);
+    try std.testing.expect(try it.next(&ctx) == null);
 }
 
 test "PackedIter chained f32 computes in f32 and widens" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
     const ba = try value_mod.ByteArray.create(std.testing.allocator);
     defer container_backing.releaseValue(.{ .byte_array = ba });
     try ba.ensureTotalCapacity(std.testing.allocator, 4);
@@ -484,19 +555,63 @@ test "PackedIter chained f32 computes in f32 and widens" {
     packed_kernels.writeElement(f32, ba.items, 0, 1.1);
 
     const chain = [_]packed_kernels.ChainOp{.{ .op = .mul, .scalar = 3.0 }};
-    var it = PackedIter{ .source = ba, .elem_type = .f32, .index = 0, .chain = &chain };
+    var it = PackedIter{ .source = ba, .elem_type = .f32, .index = 0, .recognized = .{
+        .chain = &chain,
+        .dispatch_generation = ctx.dispatch.generation,
+        .quotation = .{ .instructions = &.{} },
+    } };
     const expected: f32 = @as(f32, 1.1) * 3.0;
-    try std.testing.expectEqual(@as(f64, @floatCast(expected)), (try it.next(std.testing.allocator)).?.float);
-    try std.testing.expect(try it.next(std.testing.allocator) == null);
+    try std.testing.expectEqual(@as(f64, @floatCast(expected)), (try it.next(&ctx)).?.float);
+    try std.testing.expect(try it.next(&ctx) == null);
 }
 
 test "PackedIter chained on empty backing returns null immediately" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
     const ba = try value_mod.ByteArray.create(std.testing.allocator);
     defer container_backing.releaseValue(.{ .byte_array = ba });
 
     const chain = [_]packed_kernels.ChainOp{.{ .op = .add, .scalar = 1.0 }};
-    var it = PackedIter{ .source = ba, .elem_type = .f64, .index = 0, .chain = &chain };
-    try std.testing.expect(try it.next(std.testing.allocator) == null);
+    var it = PackedIter{ .source = ba, .elem_type = .f64, .index = 0, .recognized = .{
+        .chain = &chain,
+        .dispatch_generation = ctx.dispatch.generation,
+        .quotation = .{ .instructions = &.{} },
+    } };
+    try std.testing.expect(try it.next(&ctx) == null);
+}
+
+test "PackedIter bails the unyielded remainder when the dispatch generation changes" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const ba = try value_mod.ByteArray.create(std.testing.allocator);
+    defer container_backing.releaseValue(.{ .byte_array = ba });
+    const n = 4 * packed_kernels.chainChunkLen(f64);
+    try ba.ensureTotalCapacity(std.testing.allocator, n * 8);
+    ba.items.len = n * 8;
+    for (0..n) |i| {
+        packed_kernels.writeElement(f64, ba.items, i, @floatFromInt(i + 1));
+    }
+
+    // An empty body is the identity map, so a bailed element arrives as itself and a
+    // chained one arrives doubled. That is what makes the handover point readable.
+    const chain = [_]packed_kernels.ChainOp{.{ .op = .mul, .scalar = 2.0 }};
+    var it = PackedIter{ .source = ba, .elem_type = .f64, .index = 0, .recognized = .{
+        .chain = &chain,
+        .dispatch_generation = ctx.dispatch.generation,
+        .quotation = .{ .instructions = &.{} },
+    } };
+
+    try std.testing.expectEqual(@as(f64, 2.0), (try it.next(&ctx)).?.float);
+
+    // One yield leaves the rest of the first chunk computed but unyielded, so the rewind is
+    // what keeps those elements from being skipped or handed over doubled.
+    ctx.dispatch.generation +%= 1;
+    for (1..n) |i| {
+        try std.testing.expectEqual(@as(f64, @floatFromInt(i + 1)), (try it.next(&ctx)).?.float);
+    }
+    try std.testing.expect(try it.next(&ctx) == null);
 }
 
 test "Iterator kindName returns packed" {

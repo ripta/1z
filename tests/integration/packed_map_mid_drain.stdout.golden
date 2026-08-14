@@ -1,0 +1,20 @@
+=== method registered mid-drain ===
+Stack: [ ]
+Stack: [ <iterator packed 0/3> ]
+PASS: first element still vectorized
+Stack: [ <iterator packed 2/3> ]
+Stack: [ <iterator packed 2/3> ]
+PASS: remaining elements honor the mid-drain method
+Stack: [ ]
+=== the bail is element-exact across a chunk ===
+Stack: [ ]
+Stack: [ <iterator packed 0/8> ]
+PASS: first element still vectorized
+Stack: [ <iterator packed 2/8> ]
+Stack: [ <iterator packed 2/8> ]
+PASS: no element of the computed chunk survives the bail
+Stack: [ ]
+=== a chain recognized after the registration is never built ===
+Stack: [ ]
+PASS: recognition refused up front
+Stack: [ ]

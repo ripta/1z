@@ -1004,7 +1004,7 @@ fn builtinArithOp(ctx: *Context, instr: value_mod.Instruction) ?packed_kernels.O
 /// (float element, literal) must be the native baseline. A user `method{}` overwrite,
 /// a wildcard arm, or a dispatch-frame entry all carry non-native provenance, and any
 /// of them refuses recognition so the scalar path can honor the method. Registration
-/// after creation is the drain-time generation guard's concern, not this one's.
+/// after creation is the iterator's drain-time generation guard's concern, not this one's.
 fn scalarEntryIsNativeBaseline(ctx: *Context, op: packed_kernels.Op, lit: Value) bool {
     const name: []const u8 = switch (op) {
         .add => "+",
@@ -1082,6 +1082,11 @@ fn literalChainScalar(lit: Value, elem_type: packed_kernels.ElementType) f64 {
 ///
 /// Returns true with the chunked iterator pushed. The caller still owns `pc` and `seq`.
 fn tryVectorizedPackedMap(ctx: *Context, seq: Value, pc: helpers.PoppedCallable) anyerror!bool {
+    // Read the generation before matching, not after. The protocol probe below runs a 1z
+    // method body, so a method registered from there has to invalidate the recognition
+    // rather than slip in underneath a generation read that follows it.
+    const generation = ctx.dispatch.generation;
+
     const steps = (try matchArithChain(ctx, ctx.allocator, pc.quot.instructions)) orelse return false;
     defer ctx.allocator.free(steps);
 
@@ -1118,12 +1123,17 @@ fn tryVectorizedPackedMap(ctx: *Context, seq: Value, pc: helpers.PoppedCallable)
         out.* = .{ .op = step.op, .scalar = literalChainScalar(step.lit, elem_type) };
     }
 
-    // The popped byte-array reference transfers into the kind, released at destroy.
+    // The popped byte-array reference transfers into the kind, released at destroy, and so
+    // does the chain.
     const iter = Iterator.create(ctx.allocator, .{ .packed_elems = .{
         .source = ba_val.byte_array,
         .elem_type = elem_type,
         .index = 0,
-        .chain = chain,
+        .recognized = .{
+            .chain = chain,
+            .dispatch_generation = generation,
+            .quotation = pc.quot,
+        },
     } }) catch |err| {
         ctx.allocator.free(chain);
         container_backing.releaseValue(ba_val);
