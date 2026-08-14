@@ -292,16 +292,16 @@ packed-dot: method{ packed-f64 packed-f64 } [ native.packed-dot-impl ] ;
 #nth: method{ packed-f32 fixnum } [ native.packed-nth ] ;
 #nth: method{ packed-f64 fixnum } [ native.packed-nth ] ;
 
->iterator: method{ packed-i8 } [ packed>array >iterator ] ;
->iterator: method{ packed-i16 } [ packed>array >iterator ] ;
->iterator: method{ packed-i32 } [ packed>array >iterator ] ;
->iterator: method{ packed-i64 } [ packed>array >iterator ] ;
->iterator: method{ packed-u8 } [ packed>array >iterator ] ;
->iterator: method{ packed-u16 } [ packed>array >iterator ] ;
->iterator: method{ packed-u32 } [ packed>array >iterator ] ;
->iterator: method{ packed-u64 } [ packed>array >iterator ] ;
->iterator: method{ packed-f32 } [ packed>array >iterator ] ;
->iterator: method{ packed-f64 } [ packed>array >iterator ] ;
+>iterator: method{ packed-i8 } [ unmake-packed-i8 "i8" native.packed-iterator ] ;
+>iterator: method{ packed-i16 } [ unmake-packed-i16 "i16" native.packed-iterator ] ;
+>iterator: method{ packed-i32 } [ unmake-packed-i32 "i32" native.packed-iterator ] ;
+>iterator: method{ packed-i64 } [ unmake-packed-i64 "i64" native.packed-iterator ] ;
+>iterator: method{ packed-u8 } [ unmake-packed-u8 "u8" native.packed-iterator ] ;
+>iterator: method{ packed-u16 } [ unmake-packed-u16 "u16" native.packed-iterator ] ;
+>iterator: method{ packed-u32 } [ unmake-packed-u32 "u32" native.packed-iterator ] ;
+>iterator: method{ packed-u64 } [ unmake-packed-u64 "u64" native.packed-iterator ] ;
+>iterator: method{ packed-f32 } [ unmake-packed-f32 "f32" native.packed-iterator ] ;
+>iterator: method{ packed-f64 } [ unmake-packed-f64 "f64" native.packed-iterator ] ;
 
 \ Display support
 

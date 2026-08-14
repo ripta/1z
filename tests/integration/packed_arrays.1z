@@ -207,6 +207,25 @@ division-by-zero: "i32 / zero in SIMD chunk" assert-error-type
 { 1 2 3 } >packed:i32 >iterator [ 10 * ] #map #collect { 10 20 30 } "i32 iterate+map" assert=
 { } >packed:f64 >iterator #collect { } "f64 iterator empty" assert=
 
+{ -1 2 } >packed:i8 >iterator #collect { -1 2 } "i8 iterator roundtrip" assert=
+{ -300 300 } >packed:i16 >iterator #collect { -300 300 } "i16 iterator roundtrip" assert=
+{ 1 2 } >packed:i64 >iterator #collect { 1 2 } "i64 iterator roundtrip" assert=
+{ 1 2 } >packed:u8 >iterator #collect { 1 2 } "u8 iterator roundtrip" assert=
+{ 1 2 } >packed:u16 >iterator #collect { 1 2 } "u16 iterator roundtrip" assert=
+{ 1 2 } >packed:u32 >iterator #collect { 1 2 } "u32 iterator roundtrip" assert=
+{ 1 2 } >packed:u64 >iterator #collect { 1 2 } "u64 iterator roundtrip" assert=
+{ 1.5 2.5 } >packed:f32 >iterator #collect { 1.5 2.5 } "f32 iterator roundtrip" assert=
+
+{ 18446744073709551615 } >packed:u64 >iterator #collect { 18446744073709551615 } "u64 upper half through iterator" assert=
+{ 1.0 2.0 3.0 } >packed:f64 >iterator 2 #take #collect { 1.0 2.0 } "f64 iterator take" assert=
+{ 1.0 2.0 3.0 } >packed:f64 [ 2.0 > ] #any t "f64 #any" assert=
+{ 1.0 2.0 3.0 } >packed:f64 [ 0.0 > ] #all t "f64 #all" assert=
+{ 1.0 2.0 3.0 } >packed:f64 [ 5.0 > ] #none t "f64 #none" assert=
+{ 1.0 2.0 } >packed:f64 >iterator close-iterator
+
+[ 5 "f64" native.packed-iterator ] "packed-iterator rejects non-byte-array" assert-error
+[ { 1.0 } >packed:f64 unmake-packed-f64 "nope" native.packed-iterator ] "packed-iterator rejects unknown element type" assert-error
+
 "large reductions exercise SIMD path" test-section
 
 64 1.0 packed-fill:f64 packed-sum 64.0 "64-element sum" assert=

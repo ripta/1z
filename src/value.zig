@@ -470,6 +470,27 @@ pub fn ownedBignumValue(allocator: std.mem.Allocator, big: BigIntManaged) error{
     return .{ .bignum = .{ .backing = backing, .big = &backing.big } };
 }
 
+/// Box a packed-array element. Floats box as `.float` (an f32 widens to f64), integers as
+/// `.fixnum`, except the upper half of u64, which exceeds fixnum range and boxes as an owned
+/// bignum on `allocator`.
+pub fn packedElementValue(comptime T: type, allocator: std.mem.Allocator, elem: T) error{OutOfMemory}!Value {
+    const info = @typeInfo(T);
+    if (info == .float) {
+        return .{ .float = @floatCast(elem) };
+    } else if (info == .int) {
+        if (info.int.signedness == .unsigned and @sizeOf(T) == 8) {
+            if (elem > std.math.maxInt(i64)) {
+                const big = try BigIntManaged.initSet(allocator, elem);
+                return try ownedBignumValue(allocator, big);
+            }
+            return .{ .fixnum = @intCast(elem) };
+        }
+        return .{ .fixnum = @intCast(elem) };
+    } else {
+        unreachable;
+    }
+}
+
 /// Refcounted backing for a tagged value's inner box. A `TaggedPayload` carries an optional
 /// pointer to one of these alongside its direct inner pointer; a null backing means the box
 /// lives on an arena that outlives the value, and the wrapper's reference is the recursive

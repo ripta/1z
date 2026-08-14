@@ -248,6 +248,37 @@ PASS: i32 iterate+map
 Stack: [ ]
 PASS: f64 iterator empty
 Stack: [ ]
+PASS: i8 iterator roundtrip
+Stack: [ ]
+PASS: i16 iterator roundtrip
+Stack: [ ]
+PASS: i64 iterator roundtrip
+Stack: [ ]
+PASS: u8 iterator roundtrip
+Stack: [ ]
+PASS: u16 iterator roundtrip
+Stack: [ ]
+PASS: u32 iterator roundtrip
+Stack: [ ]
+PASS: u64 iterator roundtrip
+Stack: [ ]
+PASS: f32 iterator roundtrip
+Stack: [ ]
+PASS: u64 upper half through iterator
+Stack: [ ]
+PASS: f64 iterator take
+Stack: [ ]
+PASS: f64 #any
+Stack: [ ]
+PASS: f64 #all
+Stack: [ ]
+PASS: f64 #none
+Stack: [ ]
+Stack: [ ]
+PASS: packed-iterator rejects non-byte-array
+Stack: [ ]
+PASS: packed-iterator rejects unknown element type
+Stack: [ ]
 === large reductions exercise SIMD path ===
 Stack: [ ]
 PASS: 64-element sum

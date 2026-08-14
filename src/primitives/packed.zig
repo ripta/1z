@@ -5,11 +5,11 @@ const value_mod = @import("../value.zig");
 const Value = value_mod.Value;
 const ByteArray = value_mod.ByteArray;
 const VirtualType = value_mod.VirtualType;
-const BigIntManaged = value_mod.BigIntManaged;
 const helpers = @import("helpers.zig");
 const RegistryEntry = @import("types.zig").RegistryEntry;
 const packed_kernels = @import("../packed.zig");
 const container_backing = @import("../container_backing.zig");
+const Iterator = @import("../iterator.zig").Iterator;
 
 pub const registry_entries = [_]RegistryEntry{
     .{ .name = "packed-from-array", .func = nativePackedFromArray, .stack_effect = "array elem-type-str -- byte-array" },
@@ -30,67 +30,10 @@ pub const registry_entries = [_]RegistryEntry{
     .{ .name = "packed-dot-impl", .func = nativePackedDot, .stack_effect = "packed-T packed-T -- number" },
     .{ .name = "packed-len", .func = nativePackedLen, .stack_effect = "packed-T -- fixnum" },
     .{ .name = "packed-nth", .func = nativePackedNth, .stack_effect = "packed-T fixnum -- value" },
+    .{ .name = "packed-iterator", .func = nativePackedIterator, .stack_effect = "byte-array elem-type-str -- iterator" },
 };
 
-const PackedElementType = enum {
-    i8,
-    i16,
-    i32,
-    i64,
-    u8,
-    u16,
-    u32,
-    u64,
-    f32,
-    f64,
-
-    fn fromString(s: []const u8) ?PackedElementType {
-        const map = std.StaticStringMap(PackedElementType).initComptime(.{
-            .{ "i8", .i8 },
-            .{ "i16", .i16 },
-            .{ "i32", .i32 },
-            .{ "i64", .i64 },
-            .{ "u8", .u8 },
-            .{ "u16", .u16 },
-            .{ "u32", .u32 },
-            .{ "u64", .u64 },
-            .{ "f32", .f32 },
-            .{ "f64", .f64 },
-        });
-        return map.get(s);
-    }
-
-    fn fromTagName(name: []const u8) ?PackedElementType {
-        if (std.mem.startsWith(u8, name, "packed-")) {
-            return fromString(name["packed-".len..]);
-        }
-        return null;
-    }
-
-    fn elemSize(self: PackedElementType) usize {
-        return switch (self) {
-            .i8, .u8 => 1,
-            .i16, .u16 => 2,
-            .i32, .u32, .f32 => 4,
-            .i64, .u64, .f64 => 8,
-        };
-    }
-
-    fn typeName(self: PackedElementType) []const u8 {
-        return switch (self) {
-            .i8 => "i8",
-            .i16 => "i16",
-            .i32 => "i32",
-            .i64 => "i64",
-            .u8 => "u8",
-            .u16 => "u16",
-            .u32 => "u32",
-            .u64 => "u64",
-            .f32 => "f32",
-            .f64 => "f64",
-        };
-    }
-};
+const PackedElementType = packed_kernels.ElementType;
 
 // ---------------------------------------------------------------------------
 // Construction: packed-from-array ( array elem-type-str -- byte-array )
@@ -305,7 +248,7 @@ fn nativePackedToArray(ctx: *Context) anyerror!void {
 
     switch (elem_type) {
         inline .f64, .f32, .i8, .i16, .i32, .i64, .u8, .u16, .u32, .u64 => |et| {
-            try readElements(etToType(et), ctx, bytes, result);
+            try readElements(et.toType(), ctx, bytes, result);
         },
     }
 
@@ -320,22 +263,7 @@ fn readElements(comptime T: type, ctx: *Context, bytes: []const u8, out: []Value
 }
 
 fn elementToValue(comptime T: type, ctx: *Context, elem: T) !Value {
-    const info = @typeInfo(T);
-    if (info == .float) {
-        return .{ .float = @floatCast(elem) };
-    } else if (info == .int) {
-        if (info.int.signedness == .unsigned and @sizeOf(T) == 8) {
-            // u64 is the one element type whose range exceeds fixnum; the upper half boxes as bignum
-            if (elem > std.math.maxInt(i64)) {
-                const big = try BigIntManaged.initSet(ctx.allocator, elem);
-                return try value_mod.ownedBignumValue(ctx.allocator, big);
-            }
-            return .{ .fixnum = @intCast(elem) };
-        }
-        return .{ .fixnum = @intCast(elem) };
-    } else {
-        unreachable;
-    }
+    return value_mod.packedElementValue(T, ctx.allocator, elem);
 }
 
 // ---------------------------------------------------------------------------
@@ -512,7 +440,7 @@ fn packedScalarArithmeticOp(comptime op: packed_kernels.Op, ctx: *Context) anyer
 
         switch (elem_type) {
             inline .f64, .f32, .i8, .i16, .i32, .i64, .u8, .u16, .u32, .u64 => |et| {
-                const T = comptime etToType(et);
+                const T = comptime et.toType();
                 const scalar = try valueToElement(T, ctx, arena, scalar_val);
                 if (comptime op == .div) {
                     try packed_kernels.scalarBinaryOp(T, op, a_bytes, scalar, out_ba.items);
@@ -555,7 +483,7 @@ fn nativePackedSum(ctx: *Context) anyerror!void {
 
     switch (elem_type) {
         inline .f64, .f32, .i8, .i16, .i32, .i64, .u8, .u16, .u32, .u64 => |et| {
-            const T = comptime etToType(et);
+            const T = comptime et.toType();
             try helpers.pushMovedValue(ctx, try elementToValue(T, ctx, packed_kernels.sumPacked(T, ba.slice())));
         },
     }
@@ -570,7 +498,7 @@ fn nativePackedProduct(ctx: *Context) anyerror!void {
 
     switch (elem_type) {
         inline .f64, .f32, .i8, .i16, .i32, .i64, .u8, .u16, .u32, .u64 => |et| {
-            const T = comptime etToType(et);
+            const T = comptime et.toType();
             try helpers.pushMovedValue(ctx, try elementToValue(T, ctx, packed_kernels.productPacked(T, ba.slice())));
         },
     }
@@ -585,7 +513,7 @@ fn nativePackedMin(ctx: *Context) anyerror!void {
 
     switch (elem_type) {
         inline .f64, .f32, .i8, .i16, .i32, .i64, .u8, .u16, .u32, .u64 => |et| {
-            const T = comptime etToType(et);
+            const T = comptime et.toType();
             const result = packed_kernels.minPacked(T, ba.slice()) orelse {
                 helpers.setErrorContext(ctx, "packed-min: empty array", .{});
                 return error.InvalidArgument;
@@ -604,7 +532,7 @@ fn nativePackedMax(ctx: *Context) anyerror!void {
 
     switch (elem_type) {
         inline .f64, .f32, .i8, .i16, .i32, .i64, .u8, .u16, .u32, .u64 => |et| {
-            const T = comptime etToType(et);
+            const T = comptime et.toType();
             const result = packed_kernels.maxPacked(T, ba.slice()) orelse {
                 helpers.setErrorContext(ctx, "packed-max: empty array", .{});
                 return error.InvalidArgument;
@@ -656,7 +584,7 @@ fn nativePackedDot(ctx: *Context) anyerror!void {
 
     switch (elem_type) {
         inline .f64, .f32, .i8, .i16, .i32, .i64, .u8, .u16, .u32, .u64 => |et| {
-            const T = comptime etToType(et);
+            const T = comptime et.toType();
             try helpers.pushMovedValue(ctx, try elementToValue(T, ctx, packed_kernels.dotPacked(T, a_bytes, b_bytes)));
         },
     }
@@ -712,30 +640,58 @@ fn nativePackedNth(ctx: *Context) anyerror!void {
     const i: usize = @intCast(idx);
     switch (elem_type) {
         inline .f64, .f32, .i8, .i16, .i32, .i64, .u8, .u16, .u32, .u64 => |et| {
-            const T = comptime etToType(et);
+            const T = comptime et.toType();
             try helpers.pushMovedValue(ctx, try elementToValue(T, ctx, packed_kernels.readElement(T, bytes, i)));
         },
     }
 }
 
+/// packed-iterator ( byte-array elem-type-str -- iterator )
+fn nativePackedIterator(ctx: *Context) anyerror!void {
+    const type_str_val = try ctx.stack.pop();
+    defer container_backing.releaseValue(type_str_val);
+    const ba_val = try ctx.stack.pop();
+
+    const type_str = switch (type_str_val) {
+        .string => |s| s.bytes,
+        else => {
+            helpers.setTypeMismatchError(ctx, "string", type_str_val);
+            container_backing.releaseValue(ba_val);
+            return error.TypeMismatch;
+        },
+    };
+
+    const elem_type = PackedElementType.fromString(type_str) orelse {
+        helpers.setErrorContext(ctx, "packed-iterator: unknown element type \"{s}\"", .{type_str});
+        container_backing.releaseValue(ba_val);
+        return error.TypeMismatch;
+    };
+
+    const ba = switch (ba_val) {
+        .byte_array => |b| b,
+        else => {
+            helpers.setTypeMismatchError(ctx, "byte-array", ba_val);
+            container_backing.releaseValue(ba_val);
+            return error.TypeMismatch;
+        },
+    };
+
+    // The popped byte-array reference transfers into the kind, released at destroy,
+    // so the backing stays alive across the lazy drain.
+    const iter = Iterator.create(ctx.allocator, .{ .packed_elems = .{
+        .source = ba,
+        .elem_type = elem_type,
+        .index = 0,
+    } }) catch |err| {
+        container_backing.releaseValue(ba_val);
+        return err;
+    };
+    try helpers.pushMovedIterator(ctx, iter);
+}
+
 // ---------------------------------------------------------------------------
 // Shared extraction helpers
 // ---------------------------------------------------------------------------
-
-fn etToType(comptime et: PackedElementType) type {
-    return switch (et) {
-        .f64 => f64,
-        .f32 => f32,
-        .i8 => i8,
-        .i16 => i16,
-        .i32 => i32,
-        .i64 => i64,
-        .u8 => u8,
-        .u16 => u16,
-        .u32 => u32,
-        .u64 => u64,
-    };
-}
 
 const TaggedPayload = std.meta.TagPayload(Value, .tagged);
 

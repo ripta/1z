@@ -11,6 +11,83 @@ fn OpResult(comptime op: Op) type {
     return if (op == .div) DivideError!void else void;
 }
 
+/// The ten packed element types. Names match the `"i8"`..`"f64"` strings the packed
+/// natives take and the `packed-<name>` virtual type names.
+pub const ElementType = enum {
+    i8,
+    i16,
+    i32,
+    i64,
+    u8,
+    u16,
+    u32,
+    u64,
+    f32,
+    f64,
+
+    pub fn fromString(s: []const u8) ?ElementType {
+        const map = std.StaticStringMap(ElementType).initComptime(.{
+            .{ "i8", .i8 },
+            .{ "i16", .i16 },
+            .{ "i32", .i32 },
+            .{ "i64", .i64 },
+            .{ "u8", .u8 },
+            .{ "u16", .u16 },
+            .{ "u32", .u32 },
+            .{ "u64", .u64 },
+            .{ "f32", .f32 },
+            .{ "f64", .f64 },
+        });
+        return map.get(s);
+    }
+
+    pub fn fromTagName(name: []const u8) ?ElementType {
+        if (std.mem.startsWith(u8, name, "packed-")) {
+            return fromString(name["packed-".len..]);
+        }
+        return null;
+    }
+
+    pub fn elemSize(self: ElementType) usize {
+        return switch (self) {
+            .i8, .u8 => 1,
+            .i16, .u16 => 2,
+            .i32, .u32, .f32 => 4,
+            .i64, .u64, .f64 => 8,
+        };
+    }
+
+    pub fn typeName(self: ElementType) []const u8 {
+        return switch (self) {
+            .i8 => "i8",
+            .i16 => "i16",
+            .i32 => "i32",
+            .i64 => "i64",
+            .u8 => "u8",
+            .u16 => "u16",
+            .u32 => "u32",
+            .u64 => "u64",
+            .f32 => "f32",
+            .f64 => "f64",
+        };
+    }
+
+    pub fn toType(comptime self: ElementType) type {
+        return switch (self) {
+            .f64 => f64,
+            .f32 => f32,
+            .i8 => i8,
+            .i16 => i16,
+            .i32 => i32,
+            .i64 => i64,
+            .u8 => u8,
+            .u16 => u16,
+            .u32 => u32,
+            .u64 => u64,
+        };
+    }
+};
+
 /// Element-wise addition on packed byte slices interpreted as type T.
 pub fn addPacked(comptime T: type, a: []const u8, b: []const u8, out: []u8) void {
     binaryOp(T, .add, a, b, out);

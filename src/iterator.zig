@@ -4,6 +4,7 @@ const Value = value_mod.Value;
 const Quotation = value_mod.Quotation;
 const Context = @import("context.zig").Context;
 const container_backing = @import("container_backing.zig");
+const packed_kernels = @import("packed.zig");
 
 pub const Iterator = struct {
     header: container_backing.ContainerHeader,
@@ -17,6 +18,7 @@ pub const Iterator = struct {
         take: TakeIter,
         drop: DropIter,
         callback: CallbackIter,
+        packed_elems: PackedIter,
     };
 
     pub fn create(allocator: std.mem.Allocator, kind: Kind) error{OutOfMemory}!*Iterator {
@@ -55,6 +57,7 @@ pub const Iterator = struct {
                 container_backing.releaseValue(it.quot_owner);
                 container_backing.releaseValue(it.cleanup_owner);
             },
+            .packed_elems => |it| it.source.header.release(),
             .range => {},
         }
         header.allocator.destroy(self);
@@ -69,6 +72,7 @@ pub const Iterator = struct {
             .take => |*it| try it.next(ctx),
             .drop => |*it| try it.next(ctx),
             .callback => |*it| try it.next(ctx),
+            .packed_elems => |*it| try it.next(ctx.allocator),
         };
     }
 
@@ -87,7 +91,7 @@ pub const Iterator = struct {
                     }
                 }
             },
-            .array, .range => {},
+            .array, .range, .packed_elems => {},
         }
     }
 
@@ -100,6 +104,7 @@ pub const Iterator = struct {
             .take => "take",
             .drop => "drop",
             .callback => "callback",
+            .packed_elems => "packed",
         };
     }
 
@@ -133,6 +138,7 @@ pub const Iterator = struct {
                 try writer.writeAll(")");
             },
             .callback => try writer.writeAll("callback"),
+            .packed_elems => |it| try writer.print("{d}/{d}", .{ it.index, it.elemCount() }),
         }
     }
 };
@@ -276,6 +282,36 @@ pub const CallbackIter = struct {
     }
 };
 
+pub const PackedIter = struct {
+    /// The iterator holds one reference on the byte-array's header, dropped at destroy.
+    ///
+    /// `next` re-reads `source.slice()` and the element count on every call: an owned
+    /// backing's `items` can be re-pointed or shrunk by `append`/`ensureTotalCapacity`,
+    /// unlike `Array.items`, which is immutable after construction.
+    source: *value_mod.ByteArray,
+    elem_type: packed_kernels.ElementType,
+    index: usize,
+
+    fn elemCount(self: *const PackedIter) usize {
+        return self.source.slice().len / self.elem_type.elemSize();
+    }
+
+    pub fn next(self: *PackedIter, allocator: std.mem.Allocator) error{OutOfMemory}!?Value {
+        const bytes = self.source.slice();
+        switch (self.elem_type) {
+            inline else => |et| {
+                const T = comptime et.toType();
+                if (self.index >= packed_kernels.elementCount(T, bytes)) return null;
+                const elem = packed_kernels.readElement(T, bytes, self.index);
+                self.index += 1;
+                // The element is freshly boxed, so the construction reference is the
+                // yield; no retain is needed.
+                return try value_mod.packedElementValue(T, allocator, elem);
+            },
+        }
+    }
+};
+
 // =============================================================================
 // Tests
 // =============================================================================
@@ -335,6 +371,52 @@ test "RangeIter empty when start equals end" {
 test "RangeIter kindName returns range" {
     const iter = Iterator{ .header = undefined, .kind = .{ .range = .{ .current = 0, .end = 10, .step = 1, .infinite = false } } };
     try std.testing.expectEqualStrings("range", iter.kindName());
+}
+
+test "PackedIter walks an f64 backing and yields floats" {
+    const ba = try value_mod.ByteArray.create(std.testing.allocator);
+    defer container_backing.releaseValue(.{ .byte_array = ba });
+    try ba.ensureTotalCapacity(std.testing.allocator, 3 * 8);
+    ba.items.len = 3 * 8;
+    packed_kernels.writeElement(f64, ba.items, 0, 1.5);
+    packed_kernels.writeElement(f64, ba.items, 1, 2.5);
+    packed_kernels.writeElement(f64, ba.items, 2, 3.5);
+
+    var it = PackedIter{ .source = ba, .elem_type = .f64, .index = 0 };
+    try std.testing.expectEqual(@as(f64, 1.5), (try it.next(std.testing.allocator)).?.float);
+    try std.testing.expectEqual(@as(f64, 2.5), (try it.next(std.testing.allocator)).?.float);
+    try std.testing.expectEqual(@as(f64, 3.5), (try it.next(std.testing.allocator)).?.float);
+    try std.testing.expect(try it.next(std.testing.allocator) == null);
+    try std.testing.expect(try it.next(std.testing.allocator) == null);
+}
+
+test "PackedIter on empty backing returns null immediately" {
+    const ba = try value_mod.ByteArray.create(std.testing.allocator);
+    defer container_backing.releaseValue(.{ .byte_array = ba });
+
+    var it = PackedIter{ .source = ba, .elem_type = .f64, .index = 0 };
+    try std.testing.expect(try it.next(std.testing.allocator) == null);
+}
+
+test "PackedIter boxes the u64 upper half as an owned bignum" {
+    const ba = try value_mod.ByteArray.create(std.testing.allocator);
+    defer container_backing.releaseValue(.{ .byte_array = ba });
+    try ba.ensureTotalCapacity(std.testing.allocator, 2 * 8);
+    ba.items.len = 2 * 8;
+    packed_kernels.writeElement(u64, ba.items, 0, 7);
+    packed_kernels.writeElement(u64, ba.items, 1, @as(u64, std.math.maxInt(i64)) + 1);
+
+    var it = PackedIter{ .source = ba, .elem_type = .u64, .index = 0 };
+    try std.testing.expectEqual(@as(i64, 7), (try it.next(std.testing.allocator)).?.fixnum);
+    const big = (try it.next(std.testing.allocator)).?;
+    try std.testing.expect(big == .bignum);
+    container_backing.releaseValue(big);
+    try std.testing.expect(try it.next(std.testing.allocator) == null);
+}
+
+test "Iterator kindName returns packed" {
+    const iter = Iterator{ .header = undefined, .kind = .{ .packed_elems = .{ .source = undefined, .elem_type = .f64, .index = 0 } } };
+    try std.testing.expectEqualStrings("packed", iter.kindName());
 }
 
 test "ArrayIter yields an owned reference for refcounted elements" {
