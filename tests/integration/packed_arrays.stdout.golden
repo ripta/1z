@@ -311,3 +311,43 @@ PASS: above u64 max rejected
 Stack: [ ]
 PASS: negative rejected for u64
 Stack: [ ]
+=== vectorized #map ===
+Stack: [ ]
+PASS: f64 map mul
+Stack: [ ]
+PASS: f64 map add
+Stack: [ ]
+PASS: f64 map sub broadcasts right
+Stack: [ ]
+PASS: f64 map div broadcasts right
+Stack: [ ]
+PASS: f64 map chained
+Stack: [ ]
+PASS: f64 map four-op chain with tail
+Stack: [ ]
+PASS: f64 map fixnum literal
+Stack: [ ]
+PASS: f64 map empty
+Stack: [ ]
+PASS: f64 map across chunks
+Stack: [ ]
+PASS: f64 map take prefix
+Stack: [ ]
+PASS: f32 map exact
+Stack: [ ]
+PASS: f32 map computes in f32
+Stack: [ ]
+PASS: unrecognized quotation falls back
+Stack: [ ]
+PASS: i64 map never recognized, promotes on overflow
+Stack: [ ]
+=== packed-parts ===
+Stack: [ ]
+PASS: packed-parts yields elem symbol
+PASS: packed-parts yields backing bytes
+Stack: [ ]
+PASS: packed-parts f32 symbol
+PASS: packed-parts f32 backing bytes
+Stack: [ ]
+PASS: packed-parts throws on non-float packed
+Stack: [ ]

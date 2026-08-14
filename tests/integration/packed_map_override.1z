@@ -1,0 +1,17 @@
+\ Recognition must never bypass user dispatch: a method registered on float
+\ arithmetic, or a redefinition of an arithmetic word, sends #map over a packed
+\ float array down the scalar path that honors it. Isolated from the other
+\ packed tests because these registrations mutate global dispatch state.
+
+use "testing" ;
+use "math/packed" ;
+
+"redefined arithmetic word disables recognition" test-section
+
+/: ( a b -- c ) [ drop drop 7.0 ] ;
+{ 1.0 2.0 } >packed:f64 [ 2.0 / ] #map #collect { 7.0 7.0 } "redefinition honored per element" assert=
+
+"user method on float arithmetic disables recognition" test-section
+
+*: method{ float float } [ drop drop 999.0 ] ;
+{ 1.0 2.0 } >packed:f64 [ 3.0 * ] #map #collect { 999.0 999.0 } "pre-registered method honored per element" assert=

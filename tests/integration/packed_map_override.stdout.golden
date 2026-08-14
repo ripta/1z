@@ -1,0 +1,10 @@
+=== redefined arithmetic word disables recognition ===
+Stack: [ ]
+Stack: [ ]
+PASS: redefinition honored per element
+Stack: [ ]
+=== user method on float arithmetic disables recognition ===
+Stack: [ ]
+Stack: [ ]
+PASS: pre-registered method honored per element
+Stack: [ ]

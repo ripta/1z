@@ -303,6 +303,17 @@ packed-dot: method{ packed-f64 packed-f64 } [ native.packed-dot-impl ] ;
 >iterator: method{ packed-f32 } [ unmake-packed-f32 "f32" native.packed-iterator ] ;
 >iterator: method{ packed-f64 } [ unmake-packed-f64 "f64" native.packed-iterator ] ;
 
+\\ Decompose a packed float array into its backing byte-array and element-type symbol.
+\\
+\\ #map probes this word to vectorize a recognized arithmetic quotation. Only the float
+\\ types register it: a recognized #map over a packed-f32 computes in f32, matching the
+\\ explicit broadcast path rather than the f64 the scalar quotation path computes in.
+packed-parts: generic ( packed-T -- byte-array elem-type ) [
+  f "packed-parts: not a packed float type" EInvalidArgument make-error throw
+] ;
+packed-parts: method{ packed-f32 } [ unmake-packed-f32 f32: ] ;
+packed-parts: method{ packed-f64 } [ unmake-packed-f64 f64: ] ;
+
 \ Display support
 
 (packed-inspect-helper): ( packed-T type-name -- string ) [

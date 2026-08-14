@@ -337,6 +337,84 @@ pub fn scalarBinaryOp(comptime T: type, comptime op: Op, a: []const u8, scalar: 
 }
 
 // ---------------------------------------------------------------------------
+// Chained scalar operations
+// ---------------------------------------------------------------------------
+
+/// One step of a recognized arithmetic chain: the element is the left operand,
+/// the scalar the right.
+///
+/// Scalars are stored as f64 and cast to the element type when the chain is applied.
+/// The cast is exact because the builder converts each literal to the element type
+/// before widening it for storage.
+pub const ChainOp = struct {
+    op: Op,
+    scalar: f64,
+};
+
+/// The SIMD chunk width `applyChainChunk` produces for element type T. The chunk
+/// buffer a caller passes as `out` must be sized from this same function, so the
+/// fallback width and the real width can never disagree.
+pub fn chainChunkLen(comptime T: type) comptime_int {
+    return std.simd.suggestVectorLength(T) orelse 4;
+}
+
+/// Apply an operation chain to up to one SIMD chunk of float elements starting at
+/// element index `start`, widening results to f64 into `out`. Returns the number of
+/// elements produced, zero at the end of the array. The chunk stays in registers
+/// across the chain, so each additional operation costs one instruction per chunk.
+///
+/// Float-only: integer element types diverge from the scalar tower on overflow and
+/// are never recognized, so no wrapping or division guards are needed here.
+pub fn applyChainChunk(comptime T: type, bytes: []const u8, start: usize, chain: []const ChainOp, out: []f64) usize {
+    comptime std.debug.assert(@typeInfo(T) == .float);
+    const elem_size = @sizeOf(T);
+    const n = bytes.len / elem_size;
+    if (start >= n) return 0;
+
+    const chunk = chainChunkLen(T);
+    const remaining = n - start;
+
+    if (remaining >= chunk) {
+        const chunk_bytes = chunk * elem_size;
+        const byte_off = start * elem_size;
+        var a_buf: [chunk_bytes]u8 align(@alignOf(@Vector(chunk, T))) = undefined;
+        @memcpy(&a_buf, bytes[byte_off..][0..chunk_bytes]);
+
+        const a_aligned: *align(@alignOf(@Vector(chunk, T))) const [chunk]T = @ptrCast(&a_buf);
+        var va: @Vector(chunk, T) = a_aligned.*;
+        for (chain) |step| {
+            const vb: @Vector(chunk, T) = @splat(@floatCast(step.scalar));
+            va = switch (step.op) {
+                .add => va + vb,
+                .sub => va - vb,
+                .mul => va * vb,
+                .div => va / vb,
+            };
+        }
+
+        for (0..chunk) |lane| {
+            out[lane] = @floatCast(va[lane]);
+        }
+        return chunk;
+    }
+
+    for (0..remaining) |i| {
+        var e = readElement(T, bytes, start + i);
+        for (chain) |step| {
+            const s: T = @floatCast(step.scalar);
+            e = switch (step.op) {
+                .add => e + s,
+                .sub => e - s,
+                .mul => e * s,
+                .div => e / s,
+            };
+        }
+        out[i] = @floatCast(e);
+    }
+    return remaining;
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
@@ -743,6 +821,98 @@ test "scalarBinaryOp f32 div: zero divisor follows IEEE" {
     var out_bytes: [4]u8 = undefined;
     try scalarBinaryOp(f32, .div, std.mem.sliceAsBytes(&a_vals), 0.0, &out_bytes);
     try testing.expect(std.math.isInf(readElement(f32, &out_bytes, 0)));
+}
+
+// ---------------------------------------------------------------------------
+// Chain kernel tests
+// ---------------------------------------------------------------------------
+
+test "applyChainChunk f64: single op over a full chunk" {
+    const chunk = chainChunkLen(f64);
+    var vals: [chunk]f64 = undefined;
+    for (0..chunk) |i| vals[i] = @floatFromInt(i + 1);
+    const chain = [_]ChainOp{.{ .op = .mul, .scalar = 2.0 }};
+    var out: [chunk]f64 = undefined;
+    const produced = applyChainChunk(f64, std.mem.sliceAsBytes(&vals), 0, &chain, &out);
+    try testing.expectEqual(chunk, produced);
+    for (0..chunk) |i| {
+        try testing.expectEqual(@as(f64, @floatFromInt((i + 1) * 2)), out[i]);
+    }
+}
+
+test "applyChainChunk f64: chained ops stay left-to-right" {
+    const vals = [_]f64{ 1.0, 2.0, 3.0 };
+    const chain = [_]ChainOp{
+        .{ .op = .mul, .scalar = 2.0 },
+        .{ .op = .add, .scalar = 1.0 },
+    };
+    var results: [3]f64 = undefined;
+    var out: [3]f64 = undefined;
+    var start: usize = 0;
+    while (start < vals.len) {
+        const produced = applyChainChunk(f64, std.mem.sliceAsBytes(&vals), start, &chain, &out);
+        try testing.expect(produced > 0);
+        @memcpy(results[start..][0..produced], out[0..produced]);
+        start += produced;
+    }
+    try testing.expectEqual(@as(f64, 3.0), results[0]);
+    try testing.expectEqual(@as(f64, 5.0), results[1]);
+    try testing.expectEqual(@as(f64, 7.0), results[2]);
+}
+
+test "applyChainChunk f64: sub and div broadcast to the right operand" {
+    const vals = [_]f64{ 10.0, 20.0 };
+    const chain = [_]ChainOp{
+        .{ .op = .sub, .scalar = 2.0 },
+        .{ .op = .div, .scalar = 4.0 },
+    };
+    var out: [2]f64 = undefined;
+    _ = applyChainChunk(f64, std.mem.sliceAsBytes(&vals), 0, &chain, &out);
+    try testing.expectEqual(@as(f64, 2.0), out[0]);
+    try testing.expectEqual(@as(f64, 4.5), out[1]);
+}
+
+test "applyChainChunk f64: partial tail and exhaustion" {
+    const chunk = chainChunkLen(f64);
+    const n = chunk + 1;
+    var vals: [n]f64 = undefined;
+    for (0..n) |i| vals[i] = @floatFromInt(i);
+    const chain = [_]ChainOp{.{ .op = .add, .scalar = 0.5 }};
+    var out: [chunk]f64 = undefined;
+
+    const first = applyChainChunk(f64, std.mem.sliceAsBytes(&vals), 0, &chain, &out);
+    try testing.expectEqual(chunk, first);
+
+    const tail = applyChainChunk(f64, std.mem.sliceAsBytes(&vals), first, &chain, &out);
+    try testing.expectEqual(@as(usize, 1), tail);
+    try testing.expectEqual(@as(f64, @floatFromInt(chunk)) + 0.5, out[0]);
+
+    const done = applyChainChunk(f64, std.mem.sliceAsBytes(&vals), n, &chain, &out);
+    try testing.expectEqual(@as(usize, 0), done);
+}
+
+test "applyChainChunk f32: computes in f32, matching the broadcast kernel" {
+    const vals = [_]f32{1.1};
+    const chain = [_]ChainOp{.{ .op = .mul, .scalar = 3.0 }};
+    var out: [1]f64 = undefined;
+    _ = applyChainChunk(f32, std.mem.sliceAsBytes(&vals), 0, &chain, &out);
+    const expected: f32 = @as(f32, 1.1) * 3.0;
+    try testing.expectEqual(@as(f64, @floatCast(expected)), out[0]);
+}
+
+test "applyChainChunk f32: full chunk agrees with scalarBinaryOp" {
+    const chunk = chainChunkLen(f32);
+    var vals: [chunk]f32 = undefined;
+    for (0..chunk) |i| vals[i] = @as(f32, @floatFromInt(i)) + 0.25;
+    const chain = [_]ChainOp{.{ .op = .mul, .scalar = 3.0 }};
+    var out: [chunk]f64 = undefined;
+    _ = applyChainChunk(f32, std.mem.sliceAsBytes(&vals), 0, &chain, &out);
+
+    var broadcast_bytes: [chunk * 4]u8 = undefined;
+    scalarBinaryOp(f32, .mul, std.mem.sliceAsBytes(&vals), 3.0, &broadcast_bytes);
+    for (0..chunk) |i| {
+        try testing.expectEqual(@as(f64, @floatCast(readElement(f32, &broadcast_bytes, i))), out[i]);
+    }
 }
 
 // ---------------------------------------------------------------------------

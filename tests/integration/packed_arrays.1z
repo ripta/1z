@@ -248,3 +248,28 @@ division-by-zero: "i32 / zero in SIMD chunk" assert-error-type
 
 [ { 18446744073709551616 } >packed:u64 ] "above u64 max rejected" assert-error
 [ { -1 } >packed:u64 ] "negative rejected for u64" assert-error
+
+"vectorized #map" test-section
+
+{ 1.0 2.0 3.0 } >packed:f64 [ 2.0 * ] #map #collect { 2.0 4.0 6.0 } "f64 map mul" assert=
+{ 1.0 2.0 3.0 } >packed:f64 [ 1.0 + ] #map #collect { 2.0 3.0 4.0 } "f64 map add" assert=
+{ 10.0 20.0 } >packed:f64 [ 2.0 - ] #map #collect { 8.0 18.0 } "f64 map sub broadcasts right" assert=
+{ 10.0 20.0 } >packed:f64 [ 4.0 / ] #map #collect { 2.5 5.0 } "f64 map div broadcasts right" assert=
+{ 1.0 2.0 3.0 } >packed:f64 [ 2.0 * 1.0 + ] #map #collect { 3.0 5.0 7.0 } "f64 map chained" assert=
+{ 1.0 2.0 3.0 4.0 5.0 } >packed:f64 [ 2.0 * 6.0 + 2.0 / 1.0 - ] #map #collect { 3.0 4.0 5.0 6.0 7.0 } "f64 map four-op chain with tail" assert=
+{ 1.0 2.0 3.0 } >packed:f64 [ 2 * ] #map #collect { 2.0 4.0 6.0 } "f64 map fixnum literal" assert=
+{ } >packed:f64 [ 2.0 * ] #map #collect { } "f64 map empty" assert=
+8 3.0 packed-fill:f64 [ 2.0 * ] #map #collect { 6.0 6.0 6.0 6.0 6.0 6.0 6.0 6.0 } "f64 map across chunks" assert=
+{ 1.0 2.0 3.0 4.0 5.0 } >packed:f64 [ 10.0 * ] #map 2 #take #collect { 10.0 20.0 } "f64 map take prefix" assert=
+
+{ 1.5 } >packed:f32 [ 2.0 * ] #map #collect { 3.0 } "f32 map exact" assert=
+{ 1.1 } >packed:f32 [ 3.0 * ] #map #collect 0 #nth 3.3000001907348633 "f32 map computes in f32" assert=
+
+{ 1.0 2.0 3.0 } >packed:f64 [ dup * ] #map #collect { 1.0 4.0 9.0 } "unrecognized quotation falls back" assert=
+{ 4611686018427387904 } >packed:i64 [ 2 * ] #map #collect { 9223372036854775808 } "i64 map never recognized, promotes on overflow" assert=
+
+"packed-parts" test-section
+
+{ 1.0 2.0 } >packed:f64 packed-parts f64: "packed-parts yields elem symbol" assert= #len 16 "packed-parts yields backing bytes" assert=
+{ 1.5 } >packed:f32 packed-parts f32: "packed-parts f32 symbol" assert= #len 4 "packed-parts f32 backing bytes" assert=
+[ { 1 2 } >packed:i64 packed-parts ] "packed-parts throws on non-float packed" assert-error

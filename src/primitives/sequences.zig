@@ -70,6 +70,8 @@ pub fn seqToArrayIter(seq: Value, ctx: *Context) !?*Iterator {
 
 const arithmetic = @import("arithmetic.zig");
 const container_backing = @import("../container_backing.zig");
+const dict_mod = @import("../dictionary.zig");
+const packed_kernels = @import("../packed.zig");
 
 /// What the calling native's own type switch consumes unaided, so `coerceSequenceOperand` can
 /// hand such operands back untouched. The sets mirror each native's existing accept switch:
@@ -691,7 +693,7 @@ pub const primitives = [_]Primitive{
     // Sequence transformations
     .{ .name = "#each", .stack_effect = "seq quot: ( elem -- ) --", .doc = "Execute quotation for each element of sequence. An operand that is neither a native sequence nor an iterator is routed through >iterator.", .func = nativeEach },
     .{ .name = "#each-index", .stack_effect = "seq quot: ( elem idx -- ) --", .doc = "Execute quotation for each element of sequence with its zero-based index. An operand that is neither a native sequence nor an iterator is routed through >iterator.", .func = nativeEachIndex },
-    .{ .name = "#map", .stack_effect = "seq quot: ( elem -- elem' ) -- seq'", .doc = "Transform each element of sequence using quotation. An operand that is neither a native sequence nor an iterator is routed through >iterator.", .func = nativeMap },
+    .{ .name = "#map", .stack_effect = "seq quot: ( elem -- elem' ) -- seq'", .doc = "Transform each element of sequence using quotation. An operand that is neither a native sequence nor an iterator is routed through >iterator. A quotation that is a chain of + - * / against numeric literals over a packed float array is vectorized chunk-by-chunk; a recognized packed-f32 computes in f32.", .func = nativeMap },
     .{ .name = "#filter", .stack_effect = "seq quot: ( elem -- ? ) -- seq'", .doc = "Keep elements where quotation returns true. An operand that is neither a native sequence nor an iterator is routed through >iterator.", .func = nativeFilter },
     .{ .name = "#reduce", .stack_effect = "seq init quot: ( acc elem -- acc' ) -- value", .doc = "Fold sequence with accumulator. An operand that is neither a native sequence nor an iterator is routed through >iterator.", .func = nativeReduce },
     .{ .name = "#reduce-index", .stack_effect = "seq init quot: ( acc elem idx -- acc' ) -- value", .doc = "Fold sequence with accumulator and zero-based index. An operand that is neither a native sequence nor an iterator is routed through >iterator.", .func = nativeReduceIndex },
@@ -972,6 +974,165 @@ pub fn nativeEachIndex(ctx: *Context) anyerror!void {
     }
 }
 
+/// A matched step of an arithmetic quotation body. The literal keeps its original tag
+/// until the element type is known, so a fixnum converts through the element type the
+/// way the broadcast path's scalar conversion does.
+const RecognizedStep = struct {
+    op: packed_kernels.Op,
+    lit: Value,
+};
+
+/// Map an instruction to the builtin arithmetic native it calls, or null. Identity is
+/// the word definition's function pointer, so a word redefined over `+ - * /` never
+/// matches, whichever of the three call forms the body carries.
+fn builtinArithOp(ctx: *Context, instr: value_mod.Instruction) ?packed_kernels.Op {
+    const def: dict_mod.WordDefinition = switch (instr.op) {
+        .call_word_direct, .call_word_module => |slot| dict_mod.loadSlot(slot).*,
+        .call_word => |name| ctx.lookupWord(name) orelse return null,
+        else => return null,
+    };
+    if (def.action != .native) return null;
+    const f = def.action.native;
+    if (f == &arithmetic.nativeAdd) return .add;
+    if (f == &arithmetic.nativeSub) return .sub;
+    if (f == &arithmetic.nativeMul) return .mul;
+    if (f == &arithmetic.nativeDiv) return .div;
+    return null;
+}
+
+/// The creation-time method guard: the entry the scalar path would dispatch to for
+/// (float element, literal) must be the native baseline. A user `method{}` overwrite,
+/// a wildcard arm, or a dispatch-frame entry all carry non-native provenance, and any
+/// of them refuses recognition so the scalar path can honor the method. Registration
+/// after creation is the drain-time generation guard's concern, not this one's.
+fn scalarEntryIsNativeBaseline(ctx: *Context, op: packed_kernels.Op, lit: Value) bool {
+    const name: []const u8 = switch (op) {
+        .add => "+",
+        .sub => "-",
+        .mul => "*",
+        .div => "/",
+    };
+    const did = ctx.resolveDispatchId(name) orelse return false;
+    const elem_desc = dispatch_mod.dispatchDescriptor(.{ .float = 0.0 }, ctx);
+    const lit_desc = dispatch_mod.dispatchDescriptor(lit, ctx);
+    const entry = ctx.lookupBinaryDispatch(did, elem_desc, lit_desc) orelse return false;
+    const prov = entry.provenance orelse return false;
+    return std.mem.eql(u8, prov.generator, "native");
+}
+
+/// Match a quotation body as a chain of one or more binary arithmetic operations, each a
+/// float or fixnum literal followed by a builtin `+ - * /` call with the element as the
+/// left operand. Returns the matched steps on the given allocator, or null for any other
+/// body shape.
+///
+/// The steps are captured here rather than re-derived later because the protocol probe
+/// between match and build runs user code that could rebind the words.
+fn matchArithChain(ctx: *Context, alloc: Allocator, instrs: []const value_mod.Instruction) !?[]RecognizedStep {
+    if (instrs.len < 2 or instrs.len % 2 != 0) return null;
+
+    const steps = try alloc.alloc(RecognizedStep, instrs.len / 2);
+    var i: usize = 0;
+    while (i < instrs.len) : (i += 2) {
+        const lit = switch (instrs[i].op) {
+            .push_literal => |v| v,
+            else => {
+                alloc.free(steps);
+                return null;
+            },
+        };
+        if (lit != .float and lit != .fixnum) {
+            alloc.free(steps);
+            return null;
+        }
+
+        const op = builtinArithOp(ctx, instrs[i + 1]) orelse {
+            alloc.free(steps);
+            return null;
+        };
+        if (!scalarEntryIsNativeBaseline(ctx, op, lit)) {
+            alloc.free(steps);
+            return null;
+        }
+
+        steps[i / 2] = .{ .op = op, .lit = lit };
+    }
+    return steps;
+}
+
+/// Convert a matched literal to the chain's stored f64 scalar. A fixnum converts through
+/// the element type first, matching the broadcast path's `@floatFromInt` conversion; the
+/// widening back to f64 is exact, and the apply-time cast to the element type round-trips.
+fn literalChainScalar(lit: Value, elem_type: packed_kernels.ElementType) f64 {
+    return switch (lit) {
+        .float => |f| f,
+        .fixnum => |n| switch (elem_type) {
+            .f32 => @as(f32, @floatFromInt(n)),
+            else => @as(f64, @floatFromInt(n)),
+        },
+        else => unreachable,
+    };
+}
+
+/// Vectorize `#map` over a packed float array when the quotation is a recognized
+/// arithmetic chain, probing the `packed-parts` protocol word for the operand's backing
+/// and element type.
+///
+/// A probe miss, an ineligible element type, or a malformed protocol result all return
+/// false so the caller falls through to the coercion path unchanged.
+///
+/// Returns true with the chunked iterator pushed. The caller still owns `pc` and `seq`.
+fn tryVectorizedPackedMap(ctx: *Context, seq: Value, pc: helpers.PoppedCallable) anyerror!bool {
+    const steps = (try matchArithChain(ctx, ctx.allocator, pc.quot.instructions)) orelse return false;
+    defer ctx.allocator.free(steps);
+
+    const did = ctx.resolveDispatchId("packed-parts") orelse return false;
+    if (!(try dispatch_helpers.dispatchUnaryOnValue(ctx, did, seq))) return false;
+
+    // The method consumed the operand and left ( byte-array elem-sym ). Anything but
+    // that shape degrades to the scalar path rather than raising, since recognition
+    // must never change what a program computes.
+    const sym_val = try ctx.stack.pop();
+    defer container_backing.releaseValue(sym_val);
+    const ba_val = try ctx.stack.pop();
+    if (ba_val != .byte_array) {
+        container_backing.releaseValue(ba_val);
+        return false;
+    }
+    const elem_type = blk: {
+        if (sym_val != .symbol) break :blk null;
+        const et = packed_kernels.ElementType.fromString(sym_val.symbol.bytes) orelse break :blk null;
+        break :blk switch (et) {
+            .f32, .f64 => et,
+            else => null,
+        };
+    } orelse {
+        container_backing.releaseValue(ba_val);
+        return false;
+    };
+
+    const chain = ctx.allocator.alloc(packed_kernels.ChainOp, steps.len) catch |err| {
+        container_backing.releaseValue(ba_val);
+        return err;
+    };
+    for (steps, chain) |step, *out| {
+        out.* = .{ .op = step.op, .scalar = literalChainScalar(step.lit, elem_type) };
+    }
+
+    // The popped byte-array reference transfers into the kind, released at destroy.
+    const iter = Iterator.create(ctx.allocator, .{ .packed_elems = .{
+        .source = ba_val.byte_array,
+        .elem_type = elem_type,
+        .index = 0,
+        .chain = chain,
+    } }) catch |err| {
+        ctx.allocator.free(chain);
+        container_backing.releaseValue(ba_val);
+        return err;
+    };
+    try helpers.pushMovedIterator(ctx, iter);
+    return true;
+}
+
 /// #map ( seq quot -- iterator )
 ///
 /// Always returns a lazy iterator, regardless of input type. Use #collect
@@ -986,6 +1147,23 @@ pub fn nativeMap(ctx: *Context) anyerror!void {
         return err;
     };
     defer container_backing.releaseValue(seq);
+
+    // The vectorization probe must precede the coercion below, which would replace the
+    // packed value with a boxed-element iterator and erase the identity the recognizer
+    // needs.
+    //
+    // The closure gate is a soundness bound: a closure's bare words may resolve through
+    // its captured scope, where name-based recognition of `*` does not hold.
+    if (seq == .tagged and pc.owner != .closure) {
+        const vectorized = tryVectorizedPackedMap(ctx, seq, pc) catch |err| {
+            pc.release();
+            return err;
+        };
+        if (vectorized) {
+            pc.release();
+            return;
+        }
+    }
 
     const coerced = (coerceSequenceOperand(ctx, seq, .native_seqs) catch |err| {
         pc.release();

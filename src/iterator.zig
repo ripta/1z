@@ -57,7 +57,10 @@ pub const Iterator = struct {
                 container_backing.releaseValue(it.quot_owner);
                 container_backing.releaseValue(it.cleanup_owner);
             },
-            .packed_elems => |it| it.source.header.release(),
+            .packed_elems => |it| {
+                it.source.header.release();
+                if (it.chain.len > 0) header.allocator.free(it.chain);
+            },
             .range => {},
         }
         header.allocator.destroy(self);
@@ -283,20 +286,34 @@ pub const CallbackIter = struct {
 };
 
 pub const PackedIter = struct {
+    /// One SIMD chunk of either float element type; the wider of the two widths.
+    pub const chain_buf_cap = @max(packed_kernels.chainChunkLen(f32), packed_kernels.chainChunkLen(f64));
+
     /// The iterator holds one reference on the byte-array's header, dropped at destroy.
     ///
     /// `next` re-reads `source.slice()` and the element count on every call: an owned
     /// backing's `items` can be re-pointed or shrunk by `append`/`ensureTotalCapacity`,
-    /// unlike `Array.items`, which is immutable after construction.
+    /// unlike `Array.items`, which is immutable after construction. A chained drain
+    /// re-reads at the same points, one chunk at a time.
     source: *value_mod.ByteArray,
     elem_type: packed_kernels.ElementType,
     index: usize,
+
+    /// A recognized arithmetic chain applied chunk-by-chunk as the iterator drains.
+    /// Empty for a plain element iterator. Non-empty only for `.f32` and `.f64`
+    /// element types, the invariant the recognizer enforces at construction. Owned
+    /// when non-empty: allocated on the iterator's allocator, freed at destroy.
+    chain: []const packed_kernels.ChainOp = &.{},
+    buf: [chain_buf_cap]f64 = undefined,
+    buf_len: usize = 0,
+    buf_pos: usize = 0,
 
     fn elemCount(self: *const PackedIter) usize {
         return self.source.slice().len / self.elem_type.elemSize();
     }
 
     pub fn next(self: *PackedIter, allocator: std.mem.Allocator) error{OutOfMemory}!?Value {
+        if (self.chain.len > 0) return self.nextChained();
         const bytes = self.source.slice();
         switch (self.elem_type) {
             inline else => |et| {
@@ -309,6 +326,28 @@ pub const PackedIter = struct {
                 return try value_mod.packedElementValue(T, allocator, elem);
             },
         }
+    }
+
+    /// Yield from the vectorized chunk buffer, computing the next chunk when it runs
+    /// dry. Results are f64 in the buffer, so boxing allocates nothing; an f32 source
+    /// computes in f32 and widens at buffer fill, the same widening the plain path
+    /// applies at boxing.
+    fn nextChained(self: *PackedIter) ?Value {
+        if (self.buf_pos >= self.buf_len) {
+            const bytes = self.source.slice();
+            const produced = switch (self.elem_type) {
+                .f32 => packed_kernels.applyChainChunk(f32, bytes, self.index, self.chain, &self.buf),
+                .f64 => packed_kernels.applyChainChunk(f64, bytes, self.index, self.chain, &self.buf),
+                else => unreachable,
+            };
+            if (produced == 0) return null;
+            self.index += produced;
+            self.buf_len = produced;
+            self.buf_pos = 0;
+        }
+        const v = self.buf[self.buf_pos];
+        self.buf_pos += 1;
+        return .{ .float = v };
     }
 };
 
@@ -411,6 +450,52 @@ test "PackedIter boxes the u64 upper half as an owned bignum" {
     const big = (try it.next(std.testing.allocator)).?;
     try std.testing.expect(big == .bignum);
     container_backing.releaseValue(big);
+    try std.testing.expect(try it.next(std.testing.allocator) == null);
+}
+
+test "PackedIter applies a chain across chunk boundaries" {
+    const ba = try value_mod.ByteArray.create(std.testing.allocator);
+    defer container_backing.releaseValue(.{ .byte_array = ba });
+    const n = PackedIter.chain_buf_cap + 1;
+    try ba.ensureTotalCapacity(std.testing.allocator, n * 8);
+    ba.items.len = n * 8;
+    for (0..n) |i| {
+        packed_kernels.writeElement(f64, ba.items, i, @floatFromInt(i));
+    }
+
+    const chain = [_]packed_kernels.ChainOp{
+        .{ .op = .mul, .scalar = 2.0 },
+        .{ .op = .add, .scalar = 1.0 },
+    };
+    var it = PackedIter{ .source = ba, .elem_type = .f64, .index = 0, .chain = &chain };
+    for (0..n) |i| {
+        const expected: f64 = @as(f64, @floatFromInt(i)) * 2.0 + 1.0;
+        try std.testing.expectEqual(expected, (try it.next(std.testing.allocator)).?.float);
+    }
+    try std.testing.expect(try it.next(std.testing.allocator) == null);
+    try std.testing.expect(try it.next(std.testing.allocator) == null);
+}
+
+test "PackedIter chained f32 computes in f32 and widens" {
+    const ba = try value_mod.ByteArray.create(std.testing.allocator);
+    defer container_backing.releaseValue(.{ .byte_array = ba });
+    try ba.ensureTotalCapacity(std.testing.allocator, 4);
+    ba.items.len = 4;
+    packed_kernels.writeElement(f32, ba.items, 0, 1.1);
+
+    const chain = [_]packed_kernels.ChainOp{.{ .op = .mul, .scalar = 3.0 }};
+    var it = PackedIter{ .source = ba, .elem_type = .f32, .index = 0, .chain = &chain };
+    const expected: f32 = @as(f32, 1.1) * 3.0;
+    try std.testing.expectEqual(@as(f64, @floatCast(expected)), (try it.next(std.testing.allocator)).?.float);
+    try std.testing.expect(try it.next(std.testing.allocator) == null);
+}
+
+test "PackedIter chained on empty backing returns null immediately" {
+    const ba = try value_mod.ByteArray.create(std.testing.allocator);
+    defer container_backing.releaseValue(.{ .byte_array = ba });
+
+    const chain = [_]packed_kernels.ChainOp{.{ .op = .add, .scalar = 1.0 }};
+    var it = PackedIter{ .source = ba, .elem_type = .f64, .index = 0, .chain = &chain };
     try std.testing.expect(try it.next(std.testing.allocator) == null);
 }
 
