@@ -1,0 +1,54 @@
+
+[-- Scaling: packed-f64 --]
+packed-f64 iter-new n=1024 iters=5  elapsed_ns=79000
+packed-f64 first n=1024 iters=5  elapsed_ns=77000
+packed-f64 drain n=1024 iters=5  elapsed_ns=87000
+packed-f64 map-1 n=1024 iters=5  elapsed_ns=809000
+packed-f64 map-2 n=1024 iters=5  elapsed_ns=1473000
+packed-f64 map-4 n=1024 iters=5  elapsed_ns=2704000
+packed-f64 take-8 n=1024 iters=5  elapsed_ns=71000
+packed-f64 broadcast n=1024 iters=5  elapsed_ns=17000
+packed-f64 iter-new n=4096 iters=5  elapsed_ns=109000
+packed-f64 first n=4096 iters=5  elapsed_ns=169000
+packed-f64 drain n=4096 iters=5  elapsed_ns=213000
+packed-f64 map-1 n=4096 iters=5  elapsed_ns=2973000
+packed-f64 map-2 n=4096 iters=5  elapsed_ns=5710000
+packed-f64 map-4 n=4096 iters=5  elapsed_ns=10357000
+packed-f64 take-8 n=4096 iters=5  elapsed_ns=185000
+packed-f64 broadcast n=4096 iters=5  elapsed_ns=24000
+packed-f64 iter-new n=16384 iters=5  elapsed_ns=428000
+packed-f64 first n=16384 iters=5  elapsed_ns=381000
+packed-f64 drain n=16384 iters=5  elapsed_ns=702000
+packed-f64 map-1 n=16384 iters=5  elapsed_ns=11581000
+packed-f64 map-2 n=16384 iters=5  elapsed_ns=21666000
+packed-f64 map-4 n=16384 iters=5  elapsed_ns=41383000
+packed-f64 take-8 n=16384 iters=5  elapsed_ns=440000
+packed-f64 broadcast n=16384 iters=5  elapsed_ns=38000
+packed-f64 iter-new n=65536 iters=5  elapsed_ns=1201000
+packed-f64 first n=65536 iters=5  elapsed_ns=1423000
+packed-f64 drain n=65536 iters=5  elapsed_ns=2802000
+packed-f64 map-1 n=65536 iters=5  elapsed_ns=45309000
+packed-f64 map-2 n=65536 iters=5  elapsed_ns=85772000
+packed-f64 map-4 n=65536 iters=5  elapsed_ns=165043000
+packed-f64 take-8 n=65536 iters=5  elapsed_ns=1337000
+packed-f64 broadcast n=65536 iters=5  elapsed_ns=99000
+
+[-- Scaling: packed-f32 --]
+packed-f32 map-1 n=1024 iters=5  elapsed_ns=731000
+packed-f32 map-2 n=1024 iters=5  elapsed_ns=1351000
+packed-f32 map-4 n=1024 iters=5  elapsed_ns=2673000
+packed-f32 map-1 n=4096 iters=5  elapsed_ns=2859000
+packed-f32 map-2 n=4096 iters=5  elapsed_ns=5372000
+packed-f32 map-4 n=4096 iters=5  elapsed_ns=10453000
+packed-f32 map-1 n=16384 iters=5  elapsed_ns=11731000
+packed-f32 map-2 n=16384 iters=5  elapsed_ns=21960000
+packed-f32 map-4 n=16384 iters=5  elapsed_ns=41637000
+packed-f32 map-1 n=65536 iters=5  elapsed_ns=46430000
+packed-f32 map-2 n=65536 iters=5  elapsed_ns=86624000
+packed-f32 map-4 n=65536 iters=5  elapsed_ns=166115000
+
+[-- Scaling: packed-i64 --]
+packed-i64 map-1 n=1024 iters=5  elapsed_ns=745000
+packed-i64 map-1 n=4096 iters=5  elapsed_ns=2832000
+packed-i64 map-1 n=16384 iters=5  elapsed_ns=11334000
+packed-i64 map-1 n=65536 iters=5  elapsed_ns=45508000

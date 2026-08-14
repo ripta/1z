@@ -1,0 +1,85 @@
+\ Benchmark: packed-array iteration and #map, across n and quotation chain length.
+\
+\ The packed >iterator is `packed>array >iterator` today: it materializes the whole array into
+\ boxed values before the first element is read. Every row below therefore pays O(n) up front and
+\ should scale ~4x across the 4x size steps, including iter-new, first, and take-8, which read at
+\ most a handful of elements.
+\
+\ This is the baseline recorded before the lazy chunked packed iterator and the
+\ arithmetic-quotation recognizer land. After those, iter-new and first should read flat, take-8
+\ should stop tracking n, and the recognized map rows should close on the broadcast control, which
+\ is the native SIMD path (`packed 2.0 *`). The map rows sweep chain length -- one, two, and four
+\ operations against a literal -- because a chunked kernel holds the chunk in registers between
+\ operations while the boxed scalar path pays per element per operation. packed-i64 map-1 is the
+\ fallback control: integer arithmetic is never recognized, so it can improve only from lazy
+\ iteration.
+
+use "math/packed" ;
+
+\\ Emit one timed row: "<label> n=<n> iters=<iters>  elapsed_ns=<ns>", running quot iters times in
+\\ one timing window.
+\\
+\\ quot sees the fixture on top of the stack and must leave it there.
+scale-row: ( fixture label n iters quot: ( fixture -- fixture ) -- fixture ) [
+  [
+    [ swap " n=" #append swap >string #append ] dip
+    dup >string " iters=" swap #append
+    swap [ #append "  elapsed_ns=" #append print ] dip
+  ] dip
+  [ times ] curry curry
+  benchmark "elapsed_ns" @get >string print-line
+] ;
+
+f64-sweep: ( n -- ) [
+  dup 1.5 packed-fill:f64
+  "packed-f64 iter-new" pick 5 [ dup >iterator drop ] scale-row
+  "packed-f64 first" pick 5 [ dup [ drop t ] #any drop ] scale-row
+  "packed-f64 drain" pick 5 [ dup >iterator #count drop ] scale-row
+  "packed-f64 map-1" pick 5 [ dup [ 2.0 * ] #map #count drop ] scale-row
+  "packed-f64 map-2" pick 5 [ dup [ 2.0 * 1.0 + ] #map #count drop ] scale-row
+  "packed-f64 map-4" pick 5 [ dup [ 2.0 * 1.0 + 3.0 / 0.5 - ] #map #count drop ] scale-row
+  "packed-f64 take-8" pick 5 [ dup [ 2.0 * ] #map 8 #take #count drop ] scale-row
+  "packed-f64 broadcast" pick 5 [ dup 2.0 * drop ] scale-row
+  2drop
+] ;
+
+f32-sweep: ( n -- ) [
+  dup 1.5 packed-fill:f32
+  "packed-f32 map-1" pick 5 [ dup [ 2.0 * ] #map #count drop ] scale-row
+  "packed-f32 map-2" pick 5 [ dup [ 2.0 * 1.0 + ] #map #count drop ] scale-row
+  "packed-f32 map-4" pick 5 [ dup [ 2.0 * 1.0 + 3.0 / 0.5 - ] #map #count drop ] scale-row
+  2drop
+] ;
+
+i64-sweep: ( n -- ) [
+  dup 3 packed-fill:i64
+  "packed-i64 map-1" pick 5 [ dup [ 2 * ] #map #count drop ] scale-row
+  2drop
+] ;
+
+\ warm
+{ 1.0 2.0 3.0 } >packed:f64 [ 2.0 * ] #map #count drop
+{ 1.0 2.0 3.0 } >packed:f64 2.0 * drop
+{ 1.0 2.0 3.0 } >packed:f32 [ 2.0 * ] #map #count drop
+{ 1 2 3 } >packed:i64 [ 2 * ] #map #count drop
+
+nl "[-- Scaling: packed-f64 --]" print-line
+
+1024 f64-sweep
+4096 f64-sweep
+16384 f64-sweep
+65536 f64-sweep
+
+nl "[-- Scaling: packed-f32 --]" print-line
+
+1024 f32-sweep
+4096 f32-sweep
+16384 f32-sweep
+65536 f32-sweep
+
+nl "[-- Scaling: packed-i64 --]" print-line
+
+1024 i64-sweep
+4096 i64-sweep
+16384 i64-sweep
+65536 i64-sweep
