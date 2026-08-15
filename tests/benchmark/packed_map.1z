@@ -1,18 +1,24 @@
 \ Benchmark: packed-array iteration and #map, across n and quotation chain length.
 \
-\ The packed >iterator is `packed>array >iterator` today: it materializes the whole array into
-\ boxed values before the first element is read. Every row below therefore pays O(n) up front and
-\ should scale ~4x across the 4x size steps, including iter-new, first, and take-8, which read at
-\ most a handful of elements.
+\ The packed >iterator is lazy. It holds the backing and a cursor, and reads one element or one
+\ SIMD chunk per step. So iter-new, first, and take-8 are O(1), and their elapsed_ns reads flat
+\ across the 4x size steps. Before the lazy iterator they scaled with n: `packed>array >iterator`
+\ boxed the whole array before the first element could be read.
 \
-\ This is the baseline recorded before the lazy chunked packed iterator and the
-\ arithmetic-quotation recognizer land. After those, iter-new and first should read flat, take-8
-\ should stop tracking n, and the recognized map rows should close on the broadcast control, which
-\ is the native SIMD path (`packed 2.0 *`). The map rows sweep chain length -- one, two, and four
-\ operations against a literal -- because a chunked kernel holds the chunk in registers between
-\ operations while the boxed scalar path pays per element per operation. packed-i64 map-1 is the
-\ fallback control: integer arithmetic is never recognized, so it can improve only from lazy
-\ iteration.
+\ #map recognizes a chain of binary operations against a literal over a packed float array. It
+\ vectorizes that chain chunk-by-chunk, holding the chunk in registers across the whole chain. So
+\ chain length nearly stops mattering. The map rows sweep one, two, and four operations, and map-4
+\ costs about 1.15x map-1. The boxed scalar path charged per element per operation, where map-4
+\ cost 3.6x map-1.
+\
+\ The map rows still read well above the broadcast control, which is the native SIMD path
+\ (`packed 2.0 *`). What separates them now is the per-element iterator protocol, not the
+\ arithmetic.
+\
+\ packed-i64 map-1 is the fallback control: integer arithmetic is never recognized. It reads
+\ within noise of its pre-lazy number. Boxing the array up front is a small share of the cost of
+\ running a quotation n times, so the lazy iterator pays off in early termination rather than in a
+\ full drain.
 
 use "math/packed" ;
 
