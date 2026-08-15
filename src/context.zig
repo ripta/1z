@@ -3258,7 +3258,7 @@ pub const Context = struct {
             }
         };
 
-        const compiled = ir_codegen.compileWordWithPicSnapshot(instrs, input_count, output_count, resolver, name, pic_snapshot, self, null, &effect) catch return;
+        const compiled = ir_codegen.compileWordWithPicSnapshot(instrs, input_count, output_count, resolver, name, pic_snapshot, self, null, &effect, def.source_file) catch return;
 
         const final_id = if (def.word_id) |existing_id| blk: {
             if (self.jit_dispatch.get(existing_id) != null) {

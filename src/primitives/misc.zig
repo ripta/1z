@@ -1179,7 +1179,7 @@ fn compileSingleWord(ctx: *Context, sym: []const u8, mutual_group: ?[]const []co
         ctx.allocator.destroy(ps);
     };
 
-    const compiled = ir_codegen.compileWordWithPicSnapshot(instrs, input_count, output_count, resolver, sym, pic_snapshot, ctx, mutual_group, &effect) catch {
+    const compiled = ir_codegen.compileWordWithPicSnapshot(instrs, input_count, output_count, resolver, sym, pic_snapshot, ctx, mutual_group, &effect, word.source_file) catch {
         return error.TypeMismatch;
     };
 

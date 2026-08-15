@@ -9027,7 +9027,7 @@ pub fn compileWord(
     mutual_group: ?[]const []const u8,
     stack_effect: ?*const StackEffect,
 ) IrCodegenError!CompiledWord {
-    return compileWordWithPicSnapshot(instructions, input_count, output_count, resolver, self_name, null, interp_ctx, mutual_group, stack_effect);
+    return compileWordWithPicSnapshot(instructions, input_count, output_count, resolver, self_name, null, interp_ctx, mutual_group, stack_effect, null);
 }
 
 pub fn compileWordWithPicSnapshot(
@@ -9040,9 +9040,10 @@ pub fn compileWordWithPicSnapshot(
     interp_ctx: ?*const Context,
     mutual_group: ?[]const []const u8,
     stack_effect: ?*const StackEffect,
+    source_file: ?[]const u8,
 ) IrCodegenError!CompiledWord {
-    const discovered = try compileWordPass(instructions, input_count, output_count, resolver, self_name, pic_table, interp_ctx, mutual_group, stack_effect, null, false);
-    const second = try compileWordPass(instructions, input_count, output_count, resolver, self_name, pic_table, interp_ctx, mutual_group, stack_effect, discovered.peak_stack_depth, discovered.row_aware_self_loop);
+    const discovered = try compileWordPass(instructions, input_count, output_count, resolver, self_name, pic_table, interp_ctx, mutual_group, stack_effect, source_file, null, false);
+    const second = try compileWordPass(instructions, input_count, output_count, resolver, self_name, pic_table, interp_ctx, mutual_group, stack_effect, source_file, discovered.peak_stack_depth, discovered.row_aware_self_loop);
     return second.compiled orelse IrCodegenError.CompilationFailed;
 }
 
@@ -9062,6 +9063,7 @@ fn compileWordPass(
     interp_ctx: ?*const Context,
     mutual_group: ?[]const []const u8,
     stack_effect: ?*const StackEffect,
+    source_file: ?[]const u8,
     known_peak: ?u32,
     row_aware_self_loop: bool,
 ) IrCodegenError!CompileWordPassResult {
@@ -9310,6 +9312,7 @@ fn compileWordPass(
         .peak_sp = @intCast(input_count),
         .stack_effect = stack_effect,
         .quotation_slots = buildQuotationSlotMap(stack_effect) orelse return IrCodegenError.NotCompilable,
+        .source_file = source_file,
     };
 
     // If this word contains a self-tail-call, wrap the body in a LOOP_BEGIN
@@ -9475,17 +9478,17 @@ pub fn emitWordC(
     const error_propagate_status = c.ir_const_i32(&ctx, 2);
 
     const proto_1arg = c.ir_proto_1(&ctx, 0, c.IR_I32, c.IR_ADDR);
-    const proto_3arg = c.ir_proto_3(&ctx, 0, c.IR_I32, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR);
-    const proto_4arg = c.ir_proto_4(&ctx, 0, c.IR_I32, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR);
     const proto_5arg = c.ir_proto_5(&ctx, 0, c.IR_I32, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR);
+    var proto_6arg_params = [_]u8{ c.IR_ADDR, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR };
+    const proto_6arg = c.ir_proto(&ctx, 0, c.IR_I32, proto_6arg_params.len, &proto_6arg_params);
     const type_mismatch_error_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "jitTypeMismatchError"), proto_1arg);
     const param_type_mismatch_error_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "onez_param_type_mismatch"), proto_5arg);
     const overflow_error_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "jitOverflowError"), proto_1arg);
     const div_zero_error_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "jitDivisionByZeroError"), proto_1arg);
     const underflow_error_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "jitStackUnderflowError"), proto_1arg);
     const null_code_ptr_error_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "jitNullCodePtrError"), proto_1arg);
-    const append_word_trace_frame_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "onez_append_named_trace_frame"), proto_4arg);
-    const append_builtin_trace_frame_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "jitAppendBuiltinTraceFrame"), proto_3arg);
+    const append_word_trace_frame_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "onez_append_named_trace_frame"), proto_6arg);
+    const append_builtin_trace_frame_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "onez_append_builtin_trace_frame"), proto_5arg);
 
     const sp_val = c._ir_LOAD(&ctx, c.IR_ADDR, sp_ptr);
 
@@ -9586,9 +9589,10 @@ pub fn emitWordC(
         "extern int32_t jitDivisionByZeroError(uintptr_t ctx);\n" ++
         "extern int32_t jitStackUnderflowError(uintptr_t ctx);\n" ++
         "extern int32_t jitNullCodePtrError(uintptr_t ctx);\n" ++
-        "extern int32_t jitAppendNamedTraceFrame(uintptr_t ctx, uintptr_t name_ptr, uintptr_t name_len, uintptr_t line);\n" ++
-        "extern int32_t jitAppendBuiltinTraceFrame(uintptr_t ctx, uintptr_t frame_kind, uintptr_t line);\n" ++
-        "static int32_t onez_append_named_trace_frame(uintptr_t ctx, const char *name, uintptr_t len, uintptr_t line) { return jitAppendNamedTraceFrame(ctx, (uintptr_t)name, len, line); }\n\n";
+        "extern int32_t jitAppendNamedTraceFrame(uintptr_t ctx, uintptr_t name_ptr, uintptr_t name_len, uintptr_t src_ptr, uintptr_t src_len, uintptr_t line);\n" ++
+        "extern int32_t jitAppendBuiltinTraceFrame(uintptr_t ctx, uintptr_t frame_kind, uintptr_t src_ptr, uintptr_t src_len, uintptr_t line);\n" ++
+        "static int32_t onez_append_named_trace_frame(uintptr_t ctx, const char *name, uintptr_t len, const char *src, uintptr_t src_len, uintptr_t line) { return jitAppendNamedTraceFrame(ctx, (uintptr_t)name, len, (uintptr_t)src, src_len, line); }\n" ++
+        "static int32_t onez_append_builtin_trace_frame(uintptr_t ctx, uintptr_t frame_kind, const char *src, uintptr_t src_len, uintptr_t line) { return jitAppendBuiltinTraceFrame(ctx, frame_kind, (uintptr_t)src, src_len, line); }\n\n";
     const result = try allocator.alloc(u8, preamble.len + body.len);
     @memcpy(result[0..preamble.len], preamble);
     @memcpy(result[preamble.len..], body);
@@ -9904,15 +9908,17 @@ fn emitWordCAotPass(
     // Trace-frame callbacks name compiled callers in the cold bail arms.
     //
     // Hosted only: the freestanding runtime exports neither shim, so a freestanding build must
-    // emit no call site referencing them. The named frame goes through the
-    // onez_append_named_trace_frame wrapper rather than the raw extern. The name argument is an
-    // onez_lit_N char array, and passing it to the uintptr_t prototype would trip -Wint-conversion.
+    // emit no call site referencing them. Both frames go through static wrappers rather than the
+    // raw externs: the name and source parameters are char arrays at the C level, so a uintptr_t
+    // prototype would trip -Wint-conversion wherever an onez_lit_N literal is passed.
+    var trace_frame_proto_params = [_]u8{ c.IR_ADDR, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR };
+    const trace_frame_proto_6arg = c.ir_proto(&ctx, 0, c.IR_I32, trace_frame_proto_params.len, &trace_frame_proto_params);
     const append_word_trace_frame_fn = if (!freestanding)
-        c.ir_const_func(&ctx, c.ir_str(&ctx, "onez_append_named_trace_frame"), proto_4arg)
+        c.ir_const_func(&ctx, c.ir_str(&ctx, "onez_append_named_trace_frame"), trace_frame_proto_6arg)
     else
         c.IR_UNUSED;
     const append_builtin_trace_frame_fn = if (!freestanding)
-        c.ir_const_func(&ctx, c.ir_str(&ctx, "jitAppendBuiltinTraceFrame"), proto_3arg)
+        c.ir_const_func(&ctx, c.ir_str(&ctx, "onez_append_builtin_trace_frame"), proto_5arg)
     else
         c.IR_UNUSED;
 
@@ -11507,9 +11513,10 @@ pub fn emitProgramC(
     try out.appendSlice(allocator, "extern int32_t jitDivisionByZeroError(uintptr_t ctx);\n");
     try out.appendSlice(allocator, "extern int32_t jitStackUnderflowError(uintptr_t ctx);\n");
     try out.appendSlice(allocator, "extern int32_t jitNullCodePtrError(uintptr_t ctx);\n");
-    try out.appendSlice(allocator, "extern int32_t jitAppendNamedTraceFrame(uintptr_t ctx, uintptr_t name_ptr, uintptr_t name_len, uintptr_t line);\n");
-    try out.appendSlice(allocator, "extern int32_t jitAppendBuiltinTraceFrame(uintptr_t ctx, uintptr_t frame_kind, uintptr_t line);\n");
-    try out.appendSlice(allocator, "static int32_t onez_append_named_trace_frame(uintptr_t ctx, const char *name, uintptr_t len, uintptr_t line) { return jitAppendNamedTraceFrame(ctx, (uintptr_t)name, len, line); }\n");
+    try out.appendSlice(allocator, "extern int32_t jitAppendNamedTraceFrame(uintptr_t ctx, uintptr_t name_ptr, uintptr_t name_len, uintptr_t src_ptr, uintptr_t src_len, uintptr_t line);\n");
+    try out.appendSlice(allocator, "extern int32_t jitAppendBuiltinTraceFrame(uintptr_t ctx, uintptr_t frame_kind, uintptr_t src_ptr, uintptr_t src_len, uintptr_t line);\n");
+    try out.appendSlice(allocator, "static int32_t onez_append_named_trace_frame(uintptr_t ctx, const char *name, uintptr_t len, const char *src, uintptr_t src_len, uintptr_t line) { return jitAppendNamedTraceFrame(ctx, (uintptr_t)name, len, (uintptr_t)src, src_len, line); }\n");
+    try out.appendSlice(allocator, "static int32_t onez_append_builtin_trace_frame(uintptr_t ctx, uintptr_t frame_kind, const char *src, uintptr_t src_len, uintptr_t line) { return jitAppendBuiltinTraceFrame(ctx, frame_kind, (uintptr_t)src, src_len, line); }\n");
     try out.appendSlice(allocator, "extern int32_t jitPushString(uintptr_t ctx, uintptr_t str_ptr, uintptr_t str_len);\n");
     try out.appendSlice(allocator, "extern int32_t jitPushSymbol(uintptr_t ctx, uintptr_t str_ptr, uintptr_t str_len);\n");
     try out.appendSlice(allocator, "extern int32_t jitPushQuotation(uintptr_t ctx, uintptr_t data, uintptr_t len, uintptr_t dest, uintptr_t quotation_id);\n");
@@ -12522,6 +12529,25 @@ const CurrentTraceFrame = union(enum) {
     },
 };
 
+/// The source pointer and length arguments for a trace-frame append call.
+const TraceSourceArgs = struct {
+    ptr: c.ir_ref,
+    len: c.ir_ref,
+};
+
+/// The JIT bakes the enclosing word's interpreter-owned `source_file` slice directly, the same
+/// lifetime as `jit_trace_source`. AOT mode and sourceless bodies pass null, and the shim falls
+/// back to `jit_trace_source orelse current_source` at runtime.
+fn emitTraceSourceArgs(state: *CompileState) TraceSourceArgs {
+    const zero = c.ir_const_addr(state.ctx, 0);
+    if (state.aot_mode) return .{ .ptr = zero, .len = zero };
+    const sf = state.source_file orelse return .{ .ptr = zero, .len = zero };
+    return .{
+        .ptr = c.ir_const_addr(state.ctx, @intFromPtr(sf.ptr)),
+        .len = c.ir_const_addr(state.ctx, sf.len),
+    };
+}
+
 fn emitBuiltinTraceFrame(state: *CompileState, kind: BuiltinTraceFrameKind, line: usize) void {
     if (state.append_builtin_trace_frame_fn == c.IR_UNUSED) return;
     const ctx_val = if (state.preloaded_ctx_val != c.IR_UNUSED)
@@ -12533,8 +12559,9 @@ fn emitBuiltinTraceFrame(state: *CompileState, kind: BuiltinTraceFrameKind, line
         break :blk c._ir_LOAD(state.ctx, c.IR_ADDR, ctx_addr);
     };
     const kind_const = c.ir_const_addr(state.ctx, @intFromEnum(kind));
+    const src = emitTraceSourceArgs(state);
     const line_const = c.ir_const_addr(state.ctx, line);
-    _ = c._ir_CALL_3(state.ctx, c.IR_I32, state.append_builtin_trace_frame_fn, ctx_val, kind_const, line_const);
+    _ = c._ir_CALL_5(state.ctx, c.IR_I32, state.append_builtin_trace_frame_fn, ctx_val, kind_const, src.ptr, src.len, line_const);
 }
 
 fn emitWordTraceFrame(state: *CompileState, word_name: []const u8, line: usize) void {
@@ -12549,8 +12576,9 @@ fn emitWordTraceFrame(state: *CompileState, word_name: []const u8, line: usize) 
     };
     const name_ptr = emitStringLiteralPtr(state, word_name);
     const name_len_const = c.ir_const_addr(state.ctx, word_name.len);
+    const src = emitTraceSourceArgs(state);
     const line_const = c.ir_const_addr(state.ctx, line);
-    _ = c._ir_CALL_4(state.ctx, c.IR_I32, state.append_word_trace_frame_fn, ctx_val, name_ptr, name_len_const, line_const);
+    _ = c._ir_CALL_6(state.ctx, c.IR_I32, state.append_word_trace_frame_fn, ctx_val, name_ptr, name_len_const, src.ptr, src.len, line_const);
 }
 
 fn emitActiveInlineTraceFrames(state: *CompileState) void {
@@ -14351,10 +14379,22 @@ fn setJitError(ctx_raw: usize, err: anyerror) i32 {
     return 2;
 }
 
+/// Resolve a trace frame's source from the per-call arguments, falling back to the
+/// per-entry `jit_trace_source` when the emission site had no source to bake.
+fn traceFrameSource(ctx: *Context, src_ptr_raw: usize, src_len_raw: usize) []const u8 {
+    if (src_ptr_raw != 0 and src_len_raw != 0) {
+        const src_ptr: [*]const u8 = @ptrFromInt(src_ptr_raw);
+        return src_ptr[0..src_len_raw];
+    }
+    return ctx.jit_trace_source orelse ctx.current_source;
+}
+
 export fn jitAppendNamedTraceFrame(
     ctx_raw: usize,
     name_ptr_raw: usize,
     name_len_raw: usize,
+    src_ptr_raw: usize,
+    src_len_raw: usize,
     line_raw: usize,
 ) callconv(.c) i32 {
     if (ctx_raw == 0) return 0;
@@ -14362,7 +14402,7 @@ export fn jitAppendNamedTraceFrame(
     const ctx: *Context = @ptrFromInt(ctx_raw);
     const name_ptr: [*]const u8 = @ptrFromInt(name_ptr_raw);
     const word_name = name_ptr[0..name_len_raw];
-    const source = ctx.jit_trace_source orelse ctx.current_source;
+    const source = traceFrameSource(ctx, src_ptr_raw, src_len_raw);
     ctx.appendPendingSyntheticErrorFrame(word_name, source, @intCast(line_raw));
     return 0;
 }
@@ -14370,6 +14410,8 @@ export fn jitAppendNamedTraceFrame(
 export fn jitAppendBuiltinTraceFrame(
     ctx_raw: usize,
     frame_kind_raw: usize,
+    src_ptr_raw: usize,
+    src_len_raw: usize,
     line_raw: usize,
 ) callconv(.c) i32 {
     if (ctx_raw == 0) return 0;
@@ -14382,7 +14424,7 @@ export fn jitAppendBuiltinTraceFrame(
         .cleanup => "cleanup",
         .choose_op => "choose",
     };
-    const source = ctx.jit_trace_source orelse ctx.current_source;
+    const source = traceFrameSource(ctx, src_ptr_raw, src_len_raw);
     ctx.appendPendingSyntheticErrorFrame(word_name, source, @intCast(line_raw));
     return 0;
 }
