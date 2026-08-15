@@ -5,11 +5,11 @@ AOT interpreter fallbacks: 20 total
   native: 2
   per-op-native: 18
   sites:
-    per-op-native: cmp -> < (line 209)
-    per-op-native: cmp -> > (line 211)
-    native: . -> inspect (line 720)
-    native: . -> inspect (line 720)
-    per-op-native: onez_q_1 -> > (line 211)
+    per-op-native: cmp -> < (line 211)
+    per-op-native: cmp -> > (line 213)
+    native: . -> inspect (line 723)
+    native: . -> inspect (line 723)
+    per-op-native: onez_q_1 -> > (line 213)
     per-op-native: onez_q_4 -> < (line 1)
     per-op-native: onez_q_4 -> > (line 1)
     per-op-native: onez_q_6 -> > (line 1)

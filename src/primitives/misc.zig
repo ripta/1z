@@ -1753,7 +1753,13 @@ fn nativeParseSrcLoc(ctx: *Context) anyerror!void {
         return error.ParseError;
     }
 
-    try ctx.stack.push(value_mod.stringValue(ctx.current_source));
+    // The invocation snapshot, not `current_source`: a parse-time word with a compound body runs
+    // that body under its own defining file, which would pair the prelude against a user file's
+    // line. `executeParseTimeWordForArray` leaves the snapshot unset, so that path still reads the
+    // live source.
+    const file = if (ctx.parse_time_source_file.len > 0) ctx.parse_time_source_file else ctx.current_source;
+
+    try ctx.stack.push(value_mod.stringValue(file));
     try ctx.stack.push(.{ .fixnum = @intCast(ctx.parse_time_source_line) });
     try ctx.stack.push(.{ .fixnum = @intCast(ctx.parse_time_source_column) });
 }

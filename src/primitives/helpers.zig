@@ -25,6 +25,27 @@ const StackEffect = stack_effect_mod.StackEffect;
 const StackEffectParam = stack_effect_mod.StackEffectParam;
 const TypeValue = value_mod.TypeValue;
 
+const GenSrcLoc = @import("../dictionary.zig").GenSrcLoc;
+
+/// Read the `src-loc` entry a type-declaration descriptor carries as a `{ file line column }`
+/// array, which `struct{`, `enum{`, `virtual{`, and `protocol{` fill from `parse-source-loc`.
+///
+/// The descriptor and its borrowed file string are released when the native returns, so the file
+/// is duped onto `alloc`. A descriptor without the entry yields the empty location, which leaves
+/// the generated words to `defineWord`'s own stamping.
+pub fn genSrcLocFrom(alloc: Allocator, entry: ?Value) !GenSrcLoc {
+    var src_loc: GenSrcLoc = .{};
+
+    const sl_val = entry orelse return src_loc;
+    if (sl_val != .array or sl_val.array.items.len != 3) return src_loc;
+
+    const parts = sl_val.array.items;
+    if (parts[0] == .string) src_loc.file = try alloc.dupe(u8, parts[0].string.bytes);
+    if (parts[1] == .fixnum) src_loc.line = @intCast(parts[1].fixnum);
+    if (parts[2] == .fixnum) src_loc.column = @intCast(parts[2].fixnum);
+    return src_loc;
+}
+
 /// Adopt a filled slice into a fresh owned array and push it, transferring
 /// the slice and its element references to the stack slot. The caller's
 /// ownership of `items` ends here on every path: on failure the elements are

@@ -59,6 +59,7 @@ const lock_order = @import("lock_order.zig");
 const LockOrderTracker = lock_order.LockOrderTracker;
 
 const QuotationStampStore = @import("quotation_stamp_store.zig").QuotationStampStore;
+const QuotationSourceStore = @import("quotation_source_store.zig").QuotationSourceStore;
 const CarryableScopeGate = @import("carryable_scope_gate.zig").CarryableScopeGate;
 const LoadLock = @import("load_lock.zig").LoadLock;
 const ReifiedDecodeCache = @import("reified_decode_cache.zig").ReifiedDecodeCache;
@@ -681,6 +682,13 @@ pub const Context = struct {
     parse_time_source_line: usize = 0,
     /// Source column of the current parse-time word invocation.
     parse_time_source_column: usize = 0,
+    /// Declaration site of the type definition currently generating words.
+    ///
+    /// Set with save/restore by `define-struct`, `define-enum`, `define-virtual`, and
+    /// `define-protocol` from the `src-loc` their descriptor carries, and read by `defineWord` for
+    /// every word they generate, including the ones they generate through a shared helper. Without
+    /// it a generated word records the prelude quotation that ran the `define-*` native.
+    generated_src_loc: ?dict_mod.GenSrcLoc = null,
     /// Resolved build-target OS / architecture for the parse-time `target-os`
     /// and `target-arch` accessors. Defaults to the host's `builtin.target`,
     /// which is correct for `1z run` / `eval` / the REPL and non-cross AOT
@@ -1070,6 +1078,13 @@ pub const Context = struct {
     /// moment a spawned task executes a stored quotation. The per-execution captured-scope half
     /// stays in `quotation_scope_info`, which is genuinely per-context.
     quotation_stamp_store: *QuotationStampStore = undefined,
+    /// Process-shared source files for parsed bodies, keyed by instruction-slice pointer.
+    /// Heap-allocated by the root context and shared by pointer to all child task contexts.
+    ///
+    /// A body's file is fixed when it is parsed, and a body outlives the context that parsed it
+    /// once it is stored in a word or spawned onto a task. So this cannot be a per-context map
+    /// either.
+    quotation_source_store: *QuotationSourceStore = undefined,
     /// Process-shared set of bodies that have ever had a carryable captured scope installed in
     /// some context's `quotation_scope_info`. Heap-allocated by the root context and shared by
     /// pointer to all child task contexts.
@@ -1239,6 +1254,12 @@ pub const Context = struct {
         // context frees it in deinit.
         ctx.quotation_stamp_store = QuotationStampStore.create(allocator) catch |err| {
             std.debug.panic("Failed to allocate quotation stamp store: {any}", .{err});
+        };
+
+        // Allocate the shared quotation source store on the long-lived allocator; the root
+        // context frees it in deinit.
+        ctx.quotation_source_store = QuotationSourceStore.create(allocator) catch |err| {
+            std.debug.panic("Failed to allocate quotation source store: {any}", .{err});
         };
 
         // Allocate the shared carryable-scope gate on the long-lived allocator; the root context
@@ -1413,6 +1434,10 @@ pub const Context = struct {
         // Share the parent's quotation stamp store so a stored quotation executing here resolves
         // against its own defining module. Aliased, never retained: the root owns it.
         ctx.quotation_stamp_store = parent.quotation_stamp_store;
+
+        // Share the parent's quotation source store so a body parsed there keeps its own file in
+        // the error frames a raise here produces. Aliased, never retained: the root owns it.
+        ctx.quotation_source_store = parent.quotation_source_store;
 
         // Share the parent's carryable-scope gate so a body marked anywhere is visible here.
         // Aliased, never retained: the root owns it.
@@ -1771,6 +1796,7 @@ pub const Context = struct {
             self.hook_registry.deinit(self.allocator);
             self.allocator.destroy(self.hook_registry);
             self.quotation_stamp_store.destroy();
+            self.quotation_source_store.destroy();
             self.carryable_scope_gate.destroy();
             self.reified_decode_cache.destroy();
             self.load_lock.destroy();
@@ -1798,6 +1824,28 @@ pub const Context = struct {
     /// bodies share the lifetime of the registries that retain them.
     pub fn quotationAllocator(self: *Context) Allocator {
         return self.stateTarget().arena.allocator();
+    }
+
+    /// Record the file `instructions` was parsed from, so a call frame pushed while the body runs
+    /// names the file its line belongs to rather than the innermost executing word's file.
+    ///
+    /// The parser calls this for every body it finishes, which is where `current_source` is known
+    /// to be the file being read. Bodies built at runtime, by `curry` or an image decode, carry no
+    /// record and fall back to `current_source`.
+    ///
+    /// Stamps are permanent, so only a body the root arena owns may enter: a body parsed onto a
+    /// task or scoped-eval arena dies with it, and its key would then falsely match a later
+    /// unrelated allocation at the same address.
+    pub fn stampQuotationBodySource(self: *Context, instructions: []const Instruction) !void {
+        if (instructions.len == 0) return;
+        if (self.stateTarget() != self.rootContext()) return;
+        try self.quotation_source_store.stamp(@intFromPtr(instructions.ptr), self.current_source);
+    }
+
+    /// The file `instructions` was parsed from, or null for a body that was never stamped.
+    pub fn quotationBodySource(self: *const Context, instructions: []const Instruction) ?[]const u8 {
+        if (instructions.len == 0) return null;
+        return self.quotation_source_store.lookup(@intFromPtr(instructions.ptr));
     }
 
     /// If `instructions` contains any container-variant `push_literal`,
@@ -3087,11 +3135,17 @@ pub const Context = struct {
         // Minted from the root so ids are process-globally unique
         def.dispatch_id = self.rootContext().next_dispatch_id.fetchAdd(1, .monotonic);
         if (def.source_file == null) {
-            def.source_file = self.current_source;
-            if (self.call_stack.items.len > 0) {
-                const frame = self.call_stack.items[self.call_stack.items.len - 1];
-                def.source_line = frame.line;
-                def.source_column = frame.column;
+            if (self.generated_src_loc) |gen| {
+                def.source_file = gen.file;
+                def.source_line = gen.line;
+                def.source_column = gen.column;
+            } else {
+                def.source_file = self.current_source;
+                if (self.call_stack.items.len > 0) {
+                    const frame = self.call_stack.items[self.call_stack.items.len - 1];
+                    def.source_line = frame.line;
+                    def.source_column = frame.column;
+                }
             }
         }
         def.exec_flags = computeExecFlags(def);
@@ -5235,6 +5289,12 @@ pub const Context = struct {
             }
             defer self.popCallFrame();
 
+            // A qualified call reaches the body without going through `executeResolvedWord`, so
+            // the callee's file is installed here instead.
+            const saved_source = self.current_source;
+            defer self.current_source = saved_source;
+            if (mod_word.source_file) |sf| self.current_source = sf;
+
             switch (mod_word.action) {
                 .compound => |instrs| {
                     try self.pushModuleDepsFrame(module);
@@ -6346,8 +6406,30 @@ pub const Context = struct {
     /// Execute a quotation's instructions with optional effect validation.
     /// Contains the TCO loop: when executeInstructions signals a tail call,
     /// this function pops the dangling call frame and loops with new instructions.
+    ///
+    /// This is the entry point for a body reached as a value rather than as a word: a quotation
+    /// passed to a combinator, a top-level statement, a tail-called body replayed by the
+    /// debugger. A word body enters through `executeQuotationWithPic` directly, with
+    /// `current_source` already set from the word's own file.
     pub fn executeQuotation(self: *Context, quotation: Quotation) anyerror!void {
+        const saved_source = self.current_source;
+        defer self.current_source = saved_source;
+        self.enterBodySource(quotation.instructions);
+
         return self.executeQuotationWithPic(quotation, null, null);
+    }
+
+    /// Point `current_source` at the file `instructions` was parsed from, leaving it alone for a
+    /// body with no recorded file. The caller owns the save and restore.
+    ///
+    /// A frame pushed while the body runs then names the file its line belongs to. Without this a
+    /// quotation written in one file and called by a word defined in another reports the word's
+    /// file against the quotation's line.
+    ///
+    /// Every entry point that runs a body reached as a value owes this call. A word body is
+    /// exempt: `executeResolvedWord` installs the word's own file before it runs the body.
+    pub fn enterBodySource(self: *Context, instructions: []const Instruction) void {
+        if (self.quotationBodySource(instructions)) |src| self.current_source = src;
     }
 
     /// Execute a quotation with an optional PIC table for inline caching.
@@ -6357,6 +6439,11 @@ pub const Context = struct {
     /// where the pointer-keyed stamp is absent (e.g. a spawned child whose stamp map is empty). It is
     /// distinct from `current_module`, which tracks frame *ownership*: a body-module hint never pushes
     /// a frame.
+    ///
+    /// This does not install the body's source file. Callers arrive with it already pointed at the
+    /// right file: a word body from the word's own `source_file`, a body reached as a value from
+    /// `enterBodySource`. Probing here instead would put a lookup on every word call to recompute
+    /// what the caller already knows.
     pub fn executeQuotationWithPic(self: *Context, quotation: Quotation, pic_table: ?*PicTable, initial_module: ?*const value_mod.Module) anyerror!void {
         const saved_source = self.current_source;
         defer self.current_source = saved_source;
@@ -6489,7 +6576,8 @@ pub const Context = struct {
                             self.call_stack.items.len == 0;
                         if (bare) {
                             const line = if (quotation.instructions.len > 0) quotation.instructions[0].line else 0;
-                            self.pushCallFrame("quotation", self.current_source, line, 0);
+                            const source = self.quotationBodySource(quotation.instructions) orelse self.current_source;
+                            self.pushCallFrame("quotation", source, line, 0);
                         }
                         self.captureCallStackOnError(err);
                         if (bare) self.popCallFrame();
@@ -6516,6 +6604,12 @@ pub const Context = struct {
     pub fn executeQuotationInline(self: *Context, quotation: Quotation) anyerror!void {
         try self.pushLocalFrame();
         defer self.popLocalFrame();
+
+        // Restoring before a pending tail call is replayed is correct: the enclosing
+        // `executeQuotationWithPic` loop reinstalls the callee's file from `tail_call_source`.
+        const saved_source = self.current_source;
+        defer self.current_source = saved_source;
+        self.enterBodySource(quotation.instructions);
 
         const depth_before = self.stack.depth();
         try self.executeInstructions(quotation.instructions, null, null);
@@ -9493,6 +9587,30 @@ test "initForTask: shares the parent's quotation stamp store" {
         @as(?*const value_mod.Module, &module),
         parent.quotation_stamp_store.lookup(0x1000),
     );
+}
+
+test "initForTask: shares the parent's quotation source store" {
+    var parent = Context.init(std.testing.allocator);
+    defer parent.deinit();
+
+    var scheduler = try std.testing.allocator.create(Scheduler);
+    defer std.testing.allocator.destroy(scheduler);
+    scheduler.* = try Scheduler.init(std.testing.allocator);
+    defer scheduler.deinit();
+
+    try parent.quotation_source_store.stamp(0x1000, "parent.1z");
+
+    {
+        var task_ctx = try Context.initForTask(std.testing.allocator, &parent, scheduler);
+        defer task_ctx.deinit();
+
+        // A body parsed on the parent keeps its own file in the frames a raise here produces.
+        try std.testing.expectEqual(parent.quotation_source_store, task_ctx.quotation_source_store);
+        try std.testing.expectEqualStrings("parent.1z", task_ctx.quotation_source_store.lookup(0x1000).?);
+    }
+
+    // The task aliased the store without retaining, so its teardown left the root's intact.
+    try std.testing.expectEqualStrings("parent.1z", parent.quotation_source_store.lookup(0x1000).?);
 }
 
 test "init: the root context owns an empty carryable scope gate" {

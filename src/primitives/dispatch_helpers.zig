@@ -57,6 +57,12 @@ fn runDispatchQuotation(ctx: *Context, q: value_mod.Quotation, body_module: ?*co
     if (q.code_ptr != null) {
         try ctx.executeQuotationWithFrame(q);
     } else {
+        // A method body is reached as a dispatch entry rather than as a word, so nothing upstream
+        // has pointed `current_source` at the file the body was written in.
+        const saved_source = ctx.current_source;
+        defer ctx.current_source = saved_source;
+        ctx.enterBodySource(q.instructions);
+
         try ctx.executeQuotationWithPic(.{ .instructions = q.instructions }, null, body_module);
     }
 }

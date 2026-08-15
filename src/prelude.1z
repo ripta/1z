@@ -95,7 +95,8 @@ virtual{: parse-time [
   [ M{ type: virtual: } ]
   if
   inner-type: "}" parse-types-until @set!
-  define: [ define-virtual ] @set!
+  src-loc:    native.parse-source-loc 3 array-n @set!
+  define:     [ define-virtual ] @set!
 ] ;
 
 \\ Enum type definition syntax.
@@ -103,7 +104,8 @@ virtual{: parse-time [
 enum{: parse-time [
   M{ type: enum-descriptor: }
   variants: "}" parse-values-until @set!
-  define: [ define-enum ] @set!
+  src-loc:  native.parse-source-loc 3 array-n @set!
+  define:   [ define-enum ] @set!
 ] ;
 
 \\ Parse-time validated exhaustive match on enum variants.
@@ -258,7 +260,8 @@ method{: parse-time [
 protocol{: parse-time [
   M{ }
   methods: "}" parse-values-until @set!
-  define: [ define-protocol ] @set!
+  src-loc: native.parse-source-loc 3 array-n @set!
+  define:  [ define-protocol ] @set!
 ] ;
 
 \\ Protocol for types that support three-way comparison via cmp.

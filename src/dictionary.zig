@@ -29,6 +29,15 @@ pub const WordProvenance = struct {
     role: []const u8,
 };
 
+/// Source location of a type declaration, stamped on every word the declaration generates so
+/// introspection and the linter see the declaration site rather than the prelude quotation that
+/// runs the `define-*` native.
+pub const GenSrcLoc = struct {
+    file: ?[]const u8 = null,
+    line: usize = 0,
+    column: usize = 0,
+};
+
 /// Precomputed constant-per-word facts, a derived cache of `markers` and
 /// `action` populated at definition time. Distinct from the primary fields:
 /// these are recomputed whenever the definition is finalized.
