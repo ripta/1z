@@ -1270,8 +1270,10 @@ fn jitDispatchFull(ctx_raw: usize, dispatch_id_raw: usize, word_id_raw: usize) c
 ///
 /// The operands are consumed, as the natives consume them, so the post-error stack depth matches
 /// the hosted trap's.
-fn jitDispatchMissError(ctx_raw: usize, word_id_raw: usize, line_raw: usize) callconv(.c) i32 {
-    // The line argument feeds hosted call frames, which this substrate does not keep.
+fn jitDispatchMissError(ctx_raw: usize, word_id_raw: usize, src_ptr_raw: usize, src_len_raw: usize, line_raw: usize) callconv(.c) i32 {
+    // The source and line arguments feed hosted call frames, which this substrate does not keep.
+    _ = src_ptr_raw;
+    _ = src_len_raw;
     _ = line_raw;
     const handle = handleFromContext(ctx_raw) orelse return 2;
     const word_name = freestandingWordName(handle, word_id_raw) orelse "";
@@ -1531,9 +1533,11 @@ fn freestandingSatisfiesAndDispatch(
 
 /// Freestanding body for the protocol-bounded dispatch helper compiled call sites emit,
 /// mirroring the hosted export in `ir_codegen.zig`: resolve the protocol descriptor from the
-/// retained image slot table by slot index, then satisfies-check and dispatch. The line argument
-/// feeds hosted call frames, which this substrate does not keep.
-fn aotSatisfiesAndDispatch(ctx_raw: usize, dispatch_id_raw: usize, slot_idx_raw: usize, arity_raw: usize, line_raw: usize) callconv(.c) i32 {
+/// retained image slot table by slot index, then satisfies-check and dispatch. The source and
+/// line arguments feed hosted call frames, which this substrate does not keep.
+fn aotSatisfiesAndDispatch(ctx_raw: usize, dispatch_id_raw: usize, slot_idx_raw: usize, arity_raw: usize, src_ptr_raw: usize, src_len_raw: usize, line_raw: usize) callconv(.c) i32 {
+    _ = src_ptr_raw;
+    _ = src_len_raw;
     _ = line_raw;
     const handle = handleFromContext(ctx_raw) orelse return 1;
     const slots = handle.image_protocoldescriptor_slots orelse {
@@ -1557,7 +1561,9 @@ fn aotSatisfiesAndDispatch(ctx_raw: usize, dispatch_id_raw: usize, slot_idx_raw:
 
 /// Combinator-bounded counterpart of `aotSatisfiesAndDispatch`, resolving through the retained
 /// constraint-combinator slot table.
-fn aotSatisfiesAndDispatchCombinator(ctx_raw: usize, dispatch_id_raw: usize, slot_idx_raw: usize, arity_raw: usize, line_raw: usize) callconv(.c) i32 {
+fn aotSatisfiesAndDispatchCombinator(ctx_raw: usize, dispatch_id_raw: usize, slot_idx_raw: usize, arity_raw: usize, src_ptr_raw: usize, src_len_raw: usize, line_raw: usize) callconv(.c) i32 {
+    _ = src_ptr_raw;
+    _ = src_len_raw;
     _ = line_raw;
     const handle = handleFromContext(ctx_raw) orelse return 1;
     const slots = handle.image_constraintcombinator_slots orelse {
@@ -1805,13 +1811,17 @@ fn jitWithParameter(ctx_raw: usize) callconv(.c) i32 {
     return unsupportedJit(ctx_raw, "dynamic parameter scopes");
 }
 
-fn jitInterpretedCall(ctx_raw: usize, word_id_raw: usize, line_raw: usize) callconv(.c) i32 {
+fn jitInterpretedCall(ctx_raw: usize, word_id_raw: usize, src_ptr_raw: usize, src_len_raw: usize, line_raw: usize) callconv(.c) i32 {
     _ = word_id_raw;
+    _ = src_ptr_raw;
+    _ = src_len_raw;
     _ = line_raw;
     return unsupportedJit(ctx_raw, "interpreter fallback");
 }
 
-fn jitNativeWordCall(ctx_raw: usize, word_id_raw: usize, line_raw: usize) callconv(.c) i32 {
+fn jitNativeWordCall(ctx_raw: usize, word_id_raw: usize, src_ptr_raw: usize, src_len_raw: usize, line_raw: usize) callconv(.c) i32 {
+    _ = src_ptr_raw;
+    _ = src_len_raw;
     _ = line_raw;
     const handle = handleFromContext(ctx_raw) orelse return 1;
     if (word_id_raw >= handle.word_names.len) return unsupportedJit(ctx_raw, "native helper calls");
@@ -1905,7 +1915,7 @@ test "freestanding unsupported native helper records clear last_error" {
     };
     defer clearLastError(&handle);
 
-    try std.testing.expectEqual(@as(i32, 2), jitNativeWordCall(@intFromPtr(&handle), 7, 1));
+    try std.testing.expectEqual(@as(i32, 2), jitNativeWordCall(@intFromPtr(&handle), 7, 0, 0, 1));
     const msg = onez_last_error(&handle) orelse return error.TestExpectedError;
     try std.testing.expect(std.mem.indexOf(u8, std.mem.span(msg), "native helper calls is not available on this build") != null);
 }
@@ -1988,7 +1998,7 @@ test "freestanding output parameter binding writes through stream native" {
     try std.testing.expectEqual(@as(i32, 0), pushValue(&handle, .{ .parameter = &handle.output_parameter }));
     try std.testing.expectEqual(@as(i32, 0), jitGet(@intFromPtr(&handle)));
     try std.testing.expectEqual(@as(i32, 0), pushValue(&handle, .{ .string = .{ .bytes = "hello" } }));
-    try std.testing.expectEqual(@as(i32, 0), jitNativeWordCall(@intFromPtr(&handle), 0, 1));
+    try std.testing.expectEqual(@as(i32, 0), jitNativeWordCall(@intFromPtr(&handle), 0, 0, 0, 1));
     try std.testing.expectEqual(@as(usize, 1), handle.stack_len);
     try std.testing.expectEqual(@as(i64, 5), handle.stack[0].fixnum);
     try std.testing.expectEqualStrings("hello", written.items);
@@ -2946,7 +2956,7 @@ test "freestanding jitDispatchMissError mirrors each native's error tail" {
     handle.stack[0] = .{ .fixnum = 1 };
     handle.stack[1] = .{ .boolean = true };
     handle.stack_len = 2;
-    try std.testing.expectEqual(@as(i32, 2), jitDispatchMissError(ctx_raw, 0, 7));
+    try std.testing.expectEqual(@as(i32, 2), jitDispatchMissError(ctx_raw, 0, 0, 0, 7));
     try std.testing.expectEqualStrings("expected number, got boolean", std.mem.span(onez_last_error(&handle).?));
     try std.testing.expectEqual(@as(usize, 0), handle.stack_len);
 
@@ -2954,7 +2964,7 @@ test "freestanding jitDispatchMissError mirrors each native's error tail" {
     handle.stack[0] = .{ .boolean = true };
     handle.stack[1] = .{ .fixnum = 1 };
     handle.stack_len = 2;
-    try std.testing.expectEqual(@as(i32, 2), jitDispatchMissError(ctx_raw, 1, 7));
+    try std.testing.expectEqual(@as(i32, 2), jitDispatchMissError(ctx_raw, 1, 0, 0, 7));
     try std.testing.expectEqualStrings("expected fixnum or float, got boolean", std.mem.span(onez_last_error(&handle).?));
 }
 
@@ -3047,20 +3057,20 @@ test "freestanding protocol-bounded dispatch checks the operand and dispatches" 
     // fixnum registers `label`, so it satisfies `labeled` and the method runs.
     handle.stack[0] = .{ .fixnum = 42 };
     handle.stack_len = 1;
-    try std.testing.expectEqual(@as(i32, 0), aotSatisfiesAndDispatch(ctx_raw, 7, 0, unary, 0));
+    try std.testing.expectEqual(@as(i32, 0), aotSatisfiesAndDispatch(ctx_raw, 7, 0, unary, 0, 0, 0));
     try std.testing.expectEqual(@as(usize, 2), handle.stack_len);
     try std.testing.expectEqual(@as(i64, 101), handle.stack[1].fixnum);
 
     // A second satisfied call takes the memo path and still dispatches.
     handle.stack_len = 1;
-    try std.testing.expectEqual(@as(i32, 0), aotSatisfiesAndDispatch(ctx_raw, 7, 0, unary, 0));
+    try std.testing.expectEqual(@as(i32, 0), aotSatisfiesAndDispatch(ctx_raw, 7, 0, unary, 0, 0, 0));
     try std.testing.expectEqual(@as(i64, 101), handle.stack[1].fixnum);
 
     // string has a descriptor but no `label` method, so the bound is violated and the operand
     // stays on the stack.
     handle.stack[0] = .{ .string = .{ .bytes = "x" } };
     handle.stack_len = 1;
-    try std.testing.expectEqual(@as(i32, 2), aotSatisfiesAndDispatch(ctx_raw, 7, 0, unary, 0));
+    try std.testing.expectEqual(@as(i32, 2), aotSatisfiesAndDispatch(ctx_raw, 7, 0, unary, 0, 0, 0));
     try std.testing.expectEqual(@as(usize, 1), handle.stack_len);
     const msg = onez_last_error(&handle) orelse return error.TestExpectedError;
     try std.testing.expect(std.mem.indexOf(u8, std.mem.span(msg), "type 'string' does not satisfy protocol 'labeled'") != null);
@@ -3144,14 +3154,14 @@ test "freestanding combinator-bounded dispatch enforces an intersection of proto
     // dispatches the `size-class` method (dispatch id 8).
     handle.stack[0] = .{ .fixnum = 42 };
     handle.stack_len = 1;
-    try std.testing.expectEqual(@as(i32, 0), aotSatisfiesAndDispatchCombinator(ctx_raw, 8, 0, unary, 0));
+    try std.testing.expectEqual(@as(i32, 0), aotSatisfiesAndDispatchCombinator(ctx_raw, 8, 0, unary, 0, 0, 0));
     try std.testing.expectEqual(@as(usize, 2), handle.stack_len);
     try std.testing.expectEqual(@as(i64, 202), handle.stack[1].fixnum);
 
     // string implements neither protocol, so the intersection is unsatisfied.
     handle.stack[0] = .{ .string = .{ .bytes = "x" } };
     handle.stack_len = 1;
-    try std.testing.expectEqual(@as(i32, 2), aotSatisfiesAndDispatchCombinator(ctx_raw, 8, 0, unary, 0));
+    try std.testing.expectEqual(@as(i32, 2), aotSatisfiesAndDispatchCombinator(ctx_raw, 8, 0, unary, 0, 0, 0));
     try std.testing.expectEqual(@as(usize, 1), handle.stack_len);
     const msg = onez_last_error(&handle) orelse return error.TestExpectedError;
     try std.testing.expect(std.mem.indexOf(u8, std.mem.span(msg), "type 'string' does not satisfy the required constraint") != null);
@@ -3170,11 +3180,11 @@ test "freestanding bounded dispatch reports missing tables and out-of-range slot
     handle.stack_len = 1;
 
     // No protocol/combinator slot tables were loaded.
-    try std.testing.expectEqual(@as(i32, 2), aotSatisfiesAndDispatch(ctx_raw, 7, 0, unary, 0));
+    try std.testing.expectEqual(@as(i32, 2), aotSatisfiesAndDispatch(ctx_raw, 7, 0, unary, 0, 0, 0));
     const proto_msg = onez_last_error(&handle) orelse return error.TestExpectedError;
     try std.testing.expect(std.mem.indexOf(u8, std.mem.span(proto_msg), "protocol descriptor slots are not available") != null);
 
-    try std.testing.expectEqual(@as(i32, 2), aotSatisfiesAndDispatchCombinator(ctx_raw, 7, 0, unary, 0));
+    try std.testing.expectEqual(@as(i32, 2), aotSatisfiesAndDispatchCombinator(ctx_raw, 7, 0, unary, 0, 0, 0));
     const combo_msg = onez_last_error(&handle) orelse return error.TestExpectedError;
     try std.testing.expect(std.mem.indexOf(u8, std.mem.span(combo_msg), "constraint combinator slots are not available") != null);
 
@@ -3182,7 +3192,7 @@ test "freestanding bounded dispatch reports missing tables and out-of-range slot
     var pd_slots = [_]?*const value_mod.ProtocolDescriptor{null};
     handle.image_protocoldescriptor_slots = @ptrCast(&pd_slots);
     handle.image_protocoldescriptor_slot_count = 1;
-    try std.testing.expectEqual(@as(i32, 2), aotSatisfiesAndDispatch(ctx_raw, 7, 5, unary, 0));
+    try std.testing.expectEqual(@as(i32, 2), aotSatisfiesAndDispatch(ctx_raw, 7, 5, unary, 0, 0, 0));
     const range_msg = onez_last_error(&handle) orelse return error.TestExpectedError;
     try std.testing.expect(std.mem.indexOf(u8, std.mem.span(range_msg), "slot 5 is out of range") != null);
 }

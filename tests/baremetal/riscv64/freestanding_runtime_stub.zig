@@ -5,7 +5,7 @@ extern fn onez_freestanding_init_output(ctx: ?*anyopaque, writer_ctx: ?*anyopaqu
 extern fn onez_freestanding_write_output(ctx: ?*anyopaque, ptr: [*]const u8, len: usize) c_int;
 extern fn onez_last_error(ctx: ?*anyopaque) ?[*:0]const u8;
 extern fn jitPushString(ctx: usize, str_ptr: usize, str_len: usize) callconv(.c) i32;
-extern fn jitNativeWordCall(ctx: usize, word_id: usize, line: usize) callconv(.c) i32;
+extern fn jitNativeWordCall(ctx: usize, word_id: usize, src_ptr: usize, src_len: usize, line: usize) callconv(.c) i32;
 
 fn platformWrite(_: ?*anyopaque, ptr: [*]const u8, len: usize) callconv(.c) usize {
     platform.uart.writeAll(ptr[0..len]);
@@ -25,7 +25,7 @@ pub export fn onez_baremetal_main() noreturn {
     if (jitPushString(@intFromPtr(ctx), @intFromPtr(text.ptr), text.len) != 0) {
         platform.shutdown.fail(2);
     }
-    if (jitNativeWordCall(@intFromPtr(ctx), 0, 1) != 2) {
+    if (jitNativeWordCall(@intFromPtr(ctx), 0, 0, 0, 1) != 2) {
         platform.shutdown.fail(3);
     }
     if (onez_last_error(ctx) == null) {

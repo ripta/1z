@@ -465,12 +465,22 @@ pub const FreezeOptions = struct {
 /// Error paths pop it before returning.
 pub fn freezeModuleGraphOpts(
     ctx: *Context,
-    entry_file: []const u8,
+    entry_file_arg: []const u8,
     diagnostics: *FreezeDiagnostics,
     allocator: Allocator,
     options: FreezeOptions,
 ) (FreezeError || Allocator.Error)!FreezeResult {
     diagnostics.* = .{};
+
+    // Strip the cwd prefix once, so every baked source downstream -- the entry body's own frames
+    // and the entry-file definitions alike -- renders build-invocation relative, as `run` does.
+    var cwd_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const entry_file = if (std.fs.cwd().realpath(".", &cwd_buf)) |cwd_path| blk: {
+        if (std.mem.startsWith(u8, entry_file_arg, cwd_path) and entry_file_arg.len > cwd_path.len and entry_file_arg[cwd_path.len] == '/') {
+            break :blk entry_file_arg[cwd_path.len + 1 ..];
+        }
+        break :blk entry_file_arg;
+    } else |_| entry_file_arg;
 
     // Snapshot prelude word names before loading the entry file. Words
     // that exist now will be available in the AOT runtime dictionary

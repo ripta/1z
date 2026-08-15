@@ -1502,9 +1502,10 @@ fn emitPerOperationFallback(
         emitCallbackPostCheck(state, call_result, call_result, null, .{ .named = .{ .name = op_name, .line = line } });
     } else {
         const word_id_const = c.ir_const_addr(ctx, resolved.word_id);
+        const src = emitTraceSourceArgs(state);
         const line_const = c.ir_const_addr(ctx, line);
         state.noteAotFallbackEmission(.per_op_native, op_name, resolved.word_id, line);
-        const call_result = c._ir_CALL_3(ctx, c.IR_I32, state.native_word_call_fn, ctx_val, word_id_const, line_const);
+        const call_result = c._ir_CALL_5(ctx, c.IR_I32, state.native_word_call_fn, ctx_val, word_id_const, src.ptr, src.len, line_const);
         emitCallbackPostCheck(state, call_result, state.error_propagate_status, null, .none);
     }
 
@@ -1592,12 +1593,15 @@ fn emitPerOperationDispatch(
     switch (miss) {
         .trap => {
             // The trap pushes its own call frame, so the site adds none here.
-            const trap_result = c._ir_CALL_3(
+            const trap_src = emitTraceSourceArgs(state);
+            const trap_result = c._ir_CALL_5(
                 ctx,
                 c.IR_I32,
                 state.dispatch_miss_error_fn,
                 ctx_val,
                 word_id_const,
+                trap_src.ptr,
+                trap_src.len,
                 c.ir_const_addr(ctx, line),
             );
             c._ir_RETURN(ctx, trap_result);
@@ -2468,8 +2472,9 @@ const CompileState = struct {
     aot_callee_resolution: CalleeResolution = .{},
     /// Prototype ref for 1-arg callbacks in AOT mode: (uintptr_t) -> int32_t.
     aot_proto_1arg: c.ir_ref = c.IR_UNUSED,
-    /// Prototype ref for 2-arg callbacks in AOT mode: (uintptr_t, uintptr_t) -> int32_t.
-    aot_proto_2arg: c.ir_ref = c.IR_UNUSED,
+    /// Prototype ref for 4-arg callbacks in AOT mode, used by the direct native wrappers,
+    /// whose calls carry the baked source pair between the context and the line.
+    aot_proto_4arg: c.ir_ref = c.IR_UNUSED,
     /// jitCallQuotation callback ref (used inline, not stored in CompileState for JIT).
     call_quotation_fn: c.ir_ref = c.IR_UNUSED,
     /// jitCallQuotationValue callback ref: interpreter fallback for a callable
@@ -7696,9 +7701,10 @@ fn emitGenericResolvedNativeCall(ec: EmitCtx, resolved: ResolvedWord) IrCodegenE
             const ctx_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.jit_ctx_ptr, ctx_off);
             const ctx_val2 = c._ir_LOAD(ctx, c.IR_ADDR, ctx_addr);
             const word_id_const = c.ir_const_addr(ctx, resolved.word_id);
+            const src = emitTraceSourceArgs(state);
             const line_const = c.ir_const_addr(ctx, line);
             state.noteAotFallbackEmission(.compound_uncompiled, name, resolved.word_id, line);
-            const fb_result = c._ir_CALL_3(ctx, c.IR_I32, state.interpreted_call_fn, ctx_val2, word_id_const, line_const);
+            const fb_result = c._ir_CALL_5(ctx, c.IR_I32, state.interpreted_call_fn, ctx_val2, word_id_const, src.ptr, src.len, line_const);
             emitCallbackPostCheck(state, fb_result, state.error_propagate_status, if (resolved.never_returns) state.error_propagate_status else null, .none);
         }
         const end_fallback = if (resolved.never_returns) c.IR_UNUSED else c._ir_END(ctx);
@@ -9819,6 +9825,10 @@ fn emitWordCAotPass(
     const proto_1arg = c.ir_proto_1(&ctx, 0, c.IR_I32, c.IR_ADDR);
     const proto_2arg = c.ir_proto_2(&ctx, 0, c.IR_I32, c.IR_ADDR, c.IR_ADDR);
     const proto_3arg = c.ir_proto_3(&ctx, 0, c.IR_I32, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR);
+    const proto_4arg = c.ir_proto_4(&ctx, 0, c.IR_I32, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR);
+    const proto_5arg = c.ir_proto_5(&ctx, 0, c.IR_I32, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR);
+    var proto_7arg_params = [_]u8{ c.IR_ADDR, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR };
+    const proto_7arg = c.ir_proto(&ctx, 0, c.IR_I32, proto_7arg_params.len, &proto_7arg_params);
 
     // Named callback references for AOT C emission
     const safepoint_fn = if (scan_flags.needs_safepoint)
@@ -9855,7 +9865,7 @@ fn emitWordCAotPass(
         c.IR_UNUSED;
 
     const interpreted_call_fn = if (scan_flags.needs_dispatch or scan_flags.needs_native_call or scan_flags.needs_poly_fallback)
-        c.ir_const_func(&ctx, c.ir_str(&ctx, "jitInterpretedCall"), proto_3arg)
+        c.ir_const_func(&ctx, c.ir_str(&ctx, "jitInterpretedCall"), proto_5arg)
     else
         c.IR_UNUSED;
 
@@ -9863,18 +9873,15 @@ fn emitWordCAotPass(
     // two-pass codegen may introduce native call sites that the pre-scan
     // didn't predict, and an unset reference would let ir_emit_c emit a
     // phantom LOAD that collides with vreg 0.
-    const native_word_call_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "jitNativeWordCall"), proto_3arg);
-
-    const proto_4arg = c.ir_proto_4(&ctx, 0, c.IR_I32, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR);
-    const proto_5arg = c.ir_proto_5(&ctx, 0, c.IR_I32, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR);
+    const native_word_call_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "jitNativeWordCall"), proto_5arg);
 
     const aot_satisfies_dispatch_fn = if (scan_flags.needs_satisfies_dispatch)
-        c.ir_const_func(&ctx, c.ir_str(&ctx, "aotSatisfiesAndDispatch"), proto_5arg)
+        c.ir_const_func(&ctx, c.ir_str(&ctx, "aotSatisfiesAndDispatch"), proto_7arg)
     else
         c.IR_UNUSED;
 
     const aot_satisfies_dispatch_combinator_fn = if (scan_flags.needs_satisfies_dispatch)
-        c.ir_const_func(&ctx, c.ir_str(&ctx, "aotSatisfiesAndDispatchCombinator"), proto_5arg)
+        c.ir_const_func(&ctx, c.ir_str(&ctx, "aotSatisfiesAndDispatchCombinator"), proto_7arg)
     else
         c.IR_UNUSED;
 
@@ -9886,7 +9893,7 @@ fn emitWordCAotPass(
     // Declared unconditionally for the same reason: the polymorphic arithmetic cold arm is
     // chosen during emission, after the pre-scan has run.
     const dispatch_full_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "jitDispatchFull"), proto_3arg);
-    const dispatch_miss_error_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "jitDispatchMissError"), proto_3arg);
+    const dispatch_miss_error_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "jitDispatchMissError"), proto_5arg);
 
     const pic_dispatch_fn = if (scan_flags.needs_native_call or interp_ctx_param != null)
         c.ir_const_func(&ctx, c.ir_str(&ctx, "jitPicDispatch"), proto_4arg)
@@ -10092,7 +10099,7 @@ fn emitWordCAotPass(
         .aot_compiled_names = aot_compiled_names,
         .aot_callee_resolution = callee_resolution,
         .aot_proto_1arg = proto_1arg,
-        .aot_proto_2arg = proto_2arg,
+        .aot_proto_4arg = proto_4arg,
         .call_quotation_fn = call_quotation_fn,
         .call_quotation_value_fn = call_quotation_value_fn,
         .call_code_ptr_fn = call_code_ptr_fn,
@@ -11517,7 +11524,7 @@ pub fn emitProgramC(
     // unconditional because compiled bodies may legitimately reference
     // them in all artifact classes.
     if (jit_interpreted_call_linked) {
-        try out.appendSlice(allocator, "extern int32_t jitInterpretedCall(uintptr_t ctx, uintptr_t word_id, uintptr_t line);\n");
+        try out.appendSlice(allocator, "extern int32_t jitInterpretedCall(uintptr_t ctx, uintptr_t word_id, const char *src, uintptr_t src_len, uintptr_t line);\n");
     }
     try out.appendSlice(allocator, "extern int32_t jitSafepoint(uintptr_t ctx);\n");
     try out.appendSlice(allocator, "extern int32_t jitRecover(uintptr_t ctx);\n");
@@ -11530,7 +11537,7 @@ pub fn emitProgramC(
     try out.appendSlice(allocator, "extern int32_t jitPicDispatch(uintptr_t ctx, uintptr_t word_id, uintptr_t tag_a, uintptr_t tag_b);\n");
     try out.appendSlice(allocator, "extern int32_t jitPicTopTagMatch(uintptr_t ctx, uintptr_t tag_a);\n");
     try out.appendSlice(allocator, "extern int32_t jitPicDispatchUnary(uintptr_t ctx, uintptr_t word_id, uintptr_t tag_a);\n");
-    try out.appendSlice(allocator, "extern int32_t jitNativeWordCall(uintptr_t ctx, uintptr_t word_id, uintptr_t line);\n");
+    try out.appendSlice(allocator, "extern int32_t jitNativeWordCall(uintptr_t ctx, uintptr_t word_id, const char *src, uintptr_t src_len, uintptr_t line);\n");
     try out.appendSlice(allocator, aot_wrappers.registry_wrapper_externs);
     try out.appendSlice(allocator, "extern int32_t jitRefreshStack(uintptr_t jit_ctx);\n");
     try out.appendSlice(allocator, "extern int32_t jitRetainSlot(uintptr_t value_ptr);\n");
@@ -11584,11 +11591,11 @@ pub fn emitProgramC(
     try out.appendSlice(allocator, "static inline int32_t onez_push_struct_instance_slot(uintptr_t ctx, uintptr_t slot) { return jitPushStructInstanceSlot(ctx, slot); }\n");
     try out.appendSlice(allocator, "extern int32_t jitPushVectorSlot(uintptr_t ctx, uintptr_t slot);\n");
     try out.appendSlice(allocator, "static inline int32_t onez_push_vector_slot(uintptr_t ctx, uintptr_t slot) { return jitPushVectorSlot(ctx, slot); }\n");
-    try out.appendSlice(allocator, "extern int32_t aotSatisfiesAndDispatch(uintptr_t ctx, uintptr_t dispatch_id, uintptr_t slot_idx, uintptr_t arity, uintptr_t line);\n");
-    try out.appendSlice(allocator, "extern int32_t aotSatisfiesAndDispatchCombinator(uintptr_t ctx, uintptr_t dispatch_id, uintptr_t slot_idx, uintptr_t arity, uintptr_t line);\n");
+    try out.appendSlice(allocator, "extern int32_t aotSatisfiesAndDispatch(uintptr_t ctx, uintptr_t dispatch_id, uintptr_t slot_idx, uintptr_t arity, const char *src, uintptr_t src_len, uintptr_t line);\n");
+    try out.appendSlice(allocator, "extern int32_t aotSatisfiesAndDispatchCombinator(uintptr_t ctx, uintptr_t dispatch_id, uintptr_t slot_idx, uintptr_t arity, const char *src, uintptr_t src_len, uintptr_t line);\n");
     try out.appendSlice(allocator, "extern int32_t aotTryDispatchGenericOrCall(uintptr_t ctx, uintptr_t dispatch_id, uintptr_t word_id);\n");
     try out.appendSlice(allocator, "extern int32_t jitDispatchFull(uintptr_t ctx, uintptr_t dispatch_id, uintptr_t word_id);\n");
-    try out.appendSlice(allocator, "extern int32_t jitDispatchMissError(uintptr_t ctx, uintptr_t word_id, uintptr_t line);\n");
+    try out.appendSlice(allocator, "extern int32_t jitDispatchMissError(uintptr_t ctx, uintptr_t word_id, const char *src, uintptr_t src_len, uintptr_t line);\n");
     try out.appendSlice(allocator, "\n");
 
     // 4a. Forward declarations (only for successfully compiled words)
@@ -13236,7 +13243,8 @@ fn emitNativeWordCall(state: *CompileState, ctx_val: c.ir_ref, name: []const u8,
         // interpreter fallback. `registryWrapperSymbol` returns null for a generic
         // native, whose slow path must keep routing through `jitNativeWordCall` so
         // generic dispatch fires for uncached operand types. The wrapper takes the
-        // call-site line so it can rebuild the native's call frame for error reporting.
+        // call site's baked source and line so it can rebuild the native's call frame
+        // for error reporting.
         //
         // The `onez_n_*` wrapper symbols are exported by the hosted runtime only, so a
         // freestanding build routes every native through `jitNativeWordCall`, whose
@@ -13244,17 +13252,19 @@ fn emitNativeWordCall(state: *CompileState, ctx_val: c.ir_ref, name: []const u8,
         // and errors on the rest.
         if (!state.freestanding) {
             if (aot_wrappers.registryWrapperSymbol(name)) |symbol| {
-                const callee_fn = c.ir_const_func(ictx, c.ir_str(ictx, symbol.ptr), state.aot_proto_2arg);
+                const callee_fn = c.ir_const_func(ictx, c.ir_str(ictx, symbol.ptr), state.aot_proto_4arg);
+                const src = emitTraceSourceArgs(state);
                 const line_arg = c.ir_const_addr(ictx, line);
-                const call_result = c._ir_CALL_2(ictx, c.IR_I32, callee_fn, ctx_val, line_arg);
+                const call_result = c._ir_CALL_4(ictx, c.IR_I32, callee_fn, ctx_val, src.ptr, src.len, line_arg);
                 emitCallbackPostCheck(state, call_result, state.error_propagate_status, if (resolved.never_returns) state.error_propagate_status else null, .none);
                 return;
             }
         }
         const word_id_const = c.ir_const_addr(ictx, resolved.word_id);
+        const src = emitTraceSourceArgs(state);
         const line_const = c.ir_const_addr(ictx, line);
         state.noteAotFallbackEmission(.native, name, resolved.word_id, line);
-        const call_result = c._ir_CALL_3(ictx, c.IR_I32, state.native_word_call_fn, ctx_val, word_id_const, line_const);
+        const call_result = c._ir_CALL_5(ictx, c.IR_I32, state.native_word_call_fn, ctx_val, word_id_const, src.ptr, src.len, line_const);
         emitCallbackPostCheck(state, call_result, state.error_propagate_status, if (resolved.never_returns) state.error_propagate_status else null, .none);
     } else {
         const fn_ptr_const = c.ir_const_addr(ictx, resolved.native_fn_ptr.?);
@@ -13288,9 +13298,10 @@ fn emitAotWordCall(state: *CompileState, ctx_val: c.ir_ref, name: []const u8, re
     }
     // Fall through to interpreter for uncompiled words
     const word_id_const = c.ir_const_addr(ictx, resolved.word_id);
+    const src = emitTraceSourceArgs(state);
     const line_const = c.ir_const_addr(ictx, line);
     state.noteAotFallbackEmission(.compound_uncompiled, target, resolved.word_id, line);
-    const call_result = c._ir_CALL_3(ictx, c.IR_I32, state.interpreted_call_fn, ctx_val, word_id_const, line_const);
+    const call_result = c._ir_CALL_5(ictx, c.IR_I32, state.interpreted_call_fn, ctx_val, word_id_const, src.ptr, src.len, line_const);
     emitCallbackPostCheck(state, call_result, state.error_propagate_status, if (resolved.never_returns) state.error_propagate_status else null, .none);
 }
 
@@ -13381,7 +13392,7 @@ fn emitAotGenericDispatch(
 }
 
 /// AOT counterpart of emitSatisfiesAndDispatch. Looks up the protocol
-/// descriptor's slot index and emits a 5-arg call to `aotSatisfiesAndDispatch`,
+/// descriptor's slot index and emits a call to `aotSatisfiesAndDispatch`,
 /// which dereferences the slot at runtime to get the descriptor. This avoids
 /// baking process-local descriptor pointers into the AOT binary.
 fn emitAotSatisfiesAndDispatch(
@@ -13396,11 +13407,14 @@ fn emitAotSatisfiesAndDispatch(
     const maps = state.aot_slot_maps orelse return;
     const slot_idx = maps.protocol_slot_index.get(protocol) orelse return;
     const ctx_val = state.preloaded_ctx_val;
+    const src = emitTraceSourceArgs(state);
     var args = [_]c.ir_ref{
         ctx_val,
         c.ir_const_addr(state.ctx, dispatch_id),
         c.ir_const_addr(state.ctx, slot_idx),
         c.ir_const_addr(state.ctx, @intFromEnum(arity)),
+        src.ptr,
+        src.len,
         c.ir_const_addr(state.ctx, line),
     };
     const call_result = c._ir_CALL_N(state.ctx, c.IR_I32, state.aot_satisfies_dispatch_fn, args.len, &args);
@@ -13443,7 +13457,7 @@ fn emitSatisfiesAndDispatchCombinator(
 
 /// Combinator-bounded counterpart of emitAotSatisfiesAndDispatch. Looks up the
 /// combinator's slot index in the parallel combinator slot table and emits a
-/// 5-arg call to `aotSatisfiesAndDispatchCombinator`.
+/// call to `aotSatisfiesAndDispatchCombinator`.
 fn emitAotSatisfiesAndDispatchCombinator(
     state: *CompileState,
     dispatch_id: u32,
@@ -13456,11 +13470,14 @@ fn emitAotSatisfiesAndDispatchCombinator(
     const maps = state.aot_slot_maps orelse return;
     const slot_idx = maps.combinator_slot_index.get(combinator) orelse return;
     const ctx_val = state.preloaded_ctx_val;
+    const src = emitTraceSourceArgs(state);
     var args = [_]c.ir_ref{
         ctx_val,
         c.ir_const_addr(state.ctx, dispatch_id),
         c.ir_const_addr(state.ctx, slot_idx),
         c.ir_const_addr(state.ctx, @intFromEnum(arity)),
+        src.ptr,
+        src.len,
         c.ir_const_addr(state.ctx, line),
     };
     const call_result = c._ir_CALL_N(state.ctx, c.IR_I32, state.aot_satisfies_dispatch_combinator_fn, args.len, &args);
@@ -13576,7 +13593,7 @@ export fn jitSatisfiesAndDispatch(
         @as([*]const u8, @ptrFromInt(name_ptr_raw))[0..name_len_raw]
     else
         "satisfies-and-dispatch";
-    dispatch_helpers.satisfiesAndDispatch(ctx, @intCast(dispatch_id_raw), .{ .protocol = descriptor }, arity, trace_name, @intCast(line_raw)) catch |err| {
+    dispatch_helpers.satisfiesAndDispatch(ctx, @intCast(dispatch_id_raw), .{ .protocol = descriptor }, arity, trace_name, null, @intCast(line_raw)) catch |err| {
         ctx.jit_pending_error = err;
         return 2;
     };
@@ -13625,6 +13642,8 @@ export fn aotSatisfiesAndDispatch(
     dispatch_id_raw: usize,
     slot_idx_raw: usize,
     arity_raw: usize,
+    src_ptr_raw: usize,
+    src_len_raw: usize,
     line_raw: usize,
 ) callconv(.c) i32 {
     if (ctx_raw == 0) return 1;
@@ -13647,7 +13666,7 @@ export fn aotSatisfiesAndDispatch(
     };
     var trace_buf: [128]u8 = undefined;
     const trace_name = std.fmt.bufPrint(&trace_buf, "satisfies-and-dispatch[{s}]", .{descriptor.name}) catch "satisfies-and-dispatch";
-    dispatch_helpers.satisfiesAndDispatch(ctx, @intCast(dispatch_id_raw), .{ .protocol = descriptor }, arity, trace_name, @intCast(line_raw)) catch |err| {
+    dispatch_helpers.satisfiesAndDispatch(ctx, @intCast(dispatch_id_raw), .{ .protocol = descriptor }, arity, trace_name, ctx.traceFrameSource(src_ptr_raw, src_len_raw), @intCast(line_raw)) catch |err| {
         ctx.jit_pending_error = err;
         return 2;
     };
@@ -13674,7 +13693,7 @@ export fn jitSatisfiesAndDispatchCombinator(
         @as([*]const u8, @ptrFromInt(name_ptr_raw))[0..name_len_raw]
     else
         "satisfies-and-dispatch";
-    dispatch_helpers.satisfiesAndDispatch(ctx, @intCast(dispatch_id_raw), .{ .combinator = combinator }, arity, trace_name, @intCast(line_raw)) catch |err| {
+    dispatch_helpers.satisfiesAndDispatch(ctx, @intCast(dispatch_id_raw), .{ .combinator = combinator }, arity, trace_name, null, @intCast(line_raw)) catch |err| {
         ctx.jit_pending_error = err;
         return 2;
     };
@@ -13690,6 +13709,8 @@ export fn aotSatisfiesAndDispatchCombinator(
     dispatch_id_raw: usize,
     slot_idx_raw: usize,
     arity_raw: usize,
+    src_ptr_raw: usize,
+    src_len_raw: usize,
     line_raw: usize,
 ) callconv(.c) i32 {
     if (ctx_raw == 0) return 1;
@@ -13710,7 +13731,7 @@ export fn aotSatisfiesAndDispatchCombinator(
         ctx.jit_pending_error = error.UserThrown;
         return 2;
     };
-    dispatch_helpers.satisfiesAndDispatch(ctx, @intCast(dispatch_id_raw), .{ .combinator = combinator }, arity, "satisfies-and-dispatch[constraint]", @intCast(line_raw)) catch |err| {
+    dispatch_helpers.satisfiesAndDispatch(ctx, @intCast(dispatch_id_raw), .{ .combinator = combinator }, arity, "satisfies-and-dispatch[constraint]", ctx.traceFrameSource(src_ptr_raw, src_len_raw), @intCast(line_raw)) catch |err| {
         ctx.jit_pending_error = err;
         return 2;
     };
@@ -14430,16 +14451,6 @@ fn setJitError(ctx_raw: usize, err: anyerror) i32 {
     return 2;
 }
 
-/// Resolve a trace frame's source from the per-call arguments, falling back to the
-/// per-entry `jit_trace_source` when the emission site had no source to bake.
-fn traceFrameSource(ctx: *Context, src_ptr_raw: usize, src_len_raw: usize) []const u8 {
-    if (src_ptr_raw != 0 and src_len_raw != 0) {
-        const src_ptr: [*]const u8 = @ptrFromInt(src_ptr_raw);
-        return src_ptr[0..src_len_raw];
-    }
-    return ctx.jit_trace_source orelse ctx.current_source;
-}
-
 export fn jitAppendNamedTraceFrame(
     ctx_raw: usize,
     name_ptr_raw: usize,
@@ -14453,7 +14464,7 @@ export fn jitAppendNamedTraceFrame(
     const ctx: *Context = @ptrFromInt(ctx_raw);
     const name_ptr: [*]const u8 = @ptrFromInt(name_ptr_raw);
     const word_name = name_ptr[0..name_len_raw];
-    const source = traceFrameSource(ctx, src_ptr_raw, src_len_raw);
+    const source = ctx.traceFrameSource(src_ptr_raw, src_len_raw);
     ctx.appendPendingSyntheticErrorFrame(word_name, source, @intCast(line_raw));
     return 0;
 }
@@ -14475,7 +14486,7 @@ export fn jitAppendBuiltinTraceFrame(
         .cleanup => "cleanup",
         .choose_op => "choose",
     };
-    const source = traceFrameSource(ctx, src_ptr_raw, src_len_raw);
+    const source = ctx.traceFrameSource(src_ptr_raw, src_len_raw);
     ctx.appendPendingSyntheticErrorFrame(word_name, source, @intCast(line_raw));
     return 0;
 }
@@ -14712,14 +14723,14 @@ export fn jitDispatchFull(ctx_raw: usize, dispatch_id_raw: usize, word_id_raw: u
 ///
 /// The operands are consumed, as the natives consume them, so a `recover` handler sees the same
 /// stack depth in a locked binary that it sees interpreted.
-export fn jitDispatchMissError(ctx_raw: usize, word_id_raw: usize, line_raw: usize) callconv(.c) i32 {
+export fn jitDispatchMissError(ctx_raw: usize, word_id_raw: usize, src_ptr_raw: usize, src_len_raw: usize, line_raw: usize) callconv(.c) i32 {
     if (ctx_raw == 0) return 2;
     const ctx: *Context = @ptrFromInt(ctx_raw);
     const entry = jitWordEntryFor(ctx, @intCast(word_id_raw));
     const word_name = if (entry) |e| e.word_name else "";
     const display_name = if (entry) |e| e.displayName() else "";
 
-    ctx.pushCallFrame(display_name, ctx.current_source, @intCast(line_raw), 0);
+    ctx.pushCallFrame(display_name, ctx.traceFrameSource(src_ptr_raw, src_len_raw), @intCast(line_raw), 0);
 
     const items = ctx.stack.items.items;
     if (items.len >= 2) {
@@ -14874,7 +14885,7 @@ fn invokeModuleWord(ctx: *Context, hit: ModuleWordHit) !void {
 ///
 /// The C ABI mirrors `jitInterpretedCall` so callers can swap one for the
 /// other in generated code.
-export fn jitNativeWordCall(ctx_raw: usize, word_id_raw: usize, line_raw: usize) callconv(.c) i32 {
+export fn jitNativeWordCall(ctx_raw: usize, word_id_raw: usize, src_ptr_raw: usize, src_len_raw: usize, line_raw: usize) callconv(.c) i32 {
     if (ctx_raw == 0) return 1;
     const ctx: *Context = @ptrFromInt(ctx_raw);
     const word_id: u32 = @intCast(word_id_raw);
@@ -14892,7 +14903,7 @@ export fn jitNativeWordCall(ctx_raw: usize, word_id_raw: usize, line_raw: usize)
         bail_stats_mod.global.recordInterpretedCall(word_id, display_name);
     }
 
-    ctx.pushCallFrame(display_name, ctx.current_source, @intCast(line_raw), 0);
+    ctx.pushCallFrame(display_name, ctx.traceFrameSource(src_ptr_raw, src_len_raw), @intCast(line_raw), 0);
 
     if (entry.native) |leaf| {
         if (leaf.stack_effect) |effect| {
@@ -15028,7 +15039,7 @@ export fn jitNativeWordCall(ctx_raw: usize, word_id_raw: usize, line_raw: usize)
     }
 }
 
-export fn jitInterpretedCall(ctx_raw: usize, word_id_raw: usize, line_raw: usize) callconv(.c) i32 {
+export fn jitInterpretedCall(ctx_raw: usize, word_id_raw: usize, src_ptr_raw: usize, src_len_raw: usize, line_raw: usize) callconv(.c) i32 {
     if (ctx_raw == 0) return 1;
     const ctx: *Context = @ptrFromInt(ctx_raw);
     const word_id: u32 = @intCast(word_id_raw);
@@ -15053,7 +15064,7 @@ export fn jitInterpretedCall(ctx_raw: usize, word_id_raw: usize, line_raw: usize
         bail_stats_mod.global.recordInterpretedCall(word_id, display_name);
     }
 
-    ctx.pushCallFrame(display_name, ctx.current_source, @intCast(line_raw), 0);
+    ctx.pushCallFrame(display_name, ctx.traceFrameSource(src_ptr_raw, src_len_raw), @intCast(line_raw), 0);
     const looked_up_word = resolveEntryWord(ctx, entry, word_name);
     const module_hit = if (looked_up_word == null) lookupAnyModuleWord(ctx, word_name) else null;
 
@@ -15493,7 +15504,7 @@ test "jitNativeWordCall: dispatch hit runs the registered override, not the nati
     try ctx.stack.push(.{ .fixnum = 1 });
     try ctx.stack.push(.{ .fixnum = 2 });
 
-    const rc = jitNativeWordCall(@intFromPtr(&ctx), word_id, 1);
+    const rc = jitNativeWordCall(@intFromPtr(&ctx), word_id, 0, 0, 1);
     try testing.expectEqual(@as(i32, 0), rc);
 
     const result = try ctx.stack.pop();
@@ -15515,7 +15526,7 @@ test "jitNativeWordCall: dispatch miss falls through to the cached native functi
     try ctx.stack.push(value_mod.stringValue("a"));
     try ctx.stack.push(value_mod.stringValue("b"));
 
-    const rc = jitNativeWordCall(@intFromPtr(&ctx), word_id, 1);
+    const rc = jitNativeWordCall(@intFromPtr(&ctx), word_id, 0, 0, 1);
     try testing.expectEqual(@as(i32, 2), rc);
     try testing.expectEqual(error.TypeMismatch, ctx.jit_pending_error.?);
 }
@@ -15525,7 +15536,7 @@ test "jitNativeWordCall: unrecognized word_id with no cached native leaf returns
     defer ctx.deinit();
 
     const word_id = try ctx.jit_dispatch.assignId("some-compound-word");
-    const rc = jitNativeWordCall(@intFromPtr(&ctx), word_id, 1);
+    const rc = jitNativeWordCall(@intFromPtr(&ctx), word_id, 0, 0, 1);
     try testing.expectEqual(@as(i32, 1), rc);
 }
 
@@ -15730,7 +15741,7 @@ test "jitDispatchMissError: the arithmetic message and hint match the native's" 
     const word_id = try ctx.jit_dispatch.assignId("+");
     try ctx.stack.push(.{ .fixnum = 1 });
     try ctx.stack.push(value_mod.stringValue("x"));
-    try testing.expectEqual(@as(i32, 2), jitDispatchMissError(@intFromPtr(&ctx), word_id, 7));
+    try testing.expectEqual(@as(i32, 2), jitDispatchMissError(@intFromPtr(&ctx), word_id, 0, 0, 7));
     try testing.expectEqual(error.TypeMismatch, ctx.jit_pending_error.?);
 
     // Capture is deferred to the propagate boundary: the shim leaves the message and hint
@@ -15760,7 +15771,7 @@ test "jitDispatchMissError: the comparison message names the first operand and s
     const word_id = try ctx.jit_dispatch.assignId("<");
     try ctx.stack.push(value_mod.stringValue("x"));
     try ctx.stack.push(.{ .fixnum = 1 });
-    try testing.expectEqual(@as(i32, 2), jitDispatchMissError(@intFromPtr(&ctx), word_id, 7));
+    try testing.expectEqual(@as(i32, 2), jitDispatchMissError(@intFromPtr(&ctx), word_id, 0, 0, 7));
 
     try testing.expectEqual(@as(usize, 0), ctx.error_details.items.len);
     try testing.expectEqual(@as(usize, 1), ctx.jit_pending_trace_frames.items.len);
@@ -15812,7 +15823,7 @@ test "jitInterpretedCall: entry module resolves that module's word, not the cach
     const word_id = try ctx.jit_dispatch.assignId("probe");
     ctx.jit_dispatch.getMut(word_id).?.module = "zeta-mod";
 
-    const rc = jitInterpretedCall(@intFromPtr(&ctx), word_id, 1);
+    const rc = jitInterpretedCall(@intFromPtr(&ctx), word_id, 0, 0, 1);
     try testing.expectEqual(@as(i32, 0), rc);
 
     const result = try ctx.stack.pop();
@@ -15850,7 +15861,7 @@ test "jitInterpretedCall: the qualified display name reaches the call frame" {
     entry.module = "zeta-mod";
     entry.qualified_name = try testing.allocator.dupe(u8, "zeta-mod/probe");
 
-    const rc = jitInterpretedCall(@intFromPtr(&ctx), word_id, 1);
+    const rc = jitInterpretedCall(@intFromPtr(&ctx), word_id, 0, 0, 1);
     try testing.expectEqual(@as(i32, 0), rc);
 }
 
@@ -22099,12 +22110,12 @@ test "verifyAotFallbackInventory matches when source agrees with builder" {
     // plus one real call site each for jitCallQuotation and
     // jitCallQuotationValue, which share the quotation category.
     const source =
-        "extern int32_t jitInterpretedCall(uintptr_t, uintptr_t, uintptr_t);\n" ++
-        "extern int32_t jitNativeWordCall(uintptr_t, uintptr_t, uintptr_t);\n" ++
+        "extern int32_t jitInterpretedCall(uintptr_t, uintptr_t, const char *, uintptr_t, uintptr_t);\n" ++
+        "extern int32_t jitNativeWordCall(uintptr_t, uintptr_t, const char *, uintptr_t, uintptr_t);\n" ++
         "extern int32_t jitCallQuotation(uintptr_t);\n" ++
         "extern int32_t jitCallQuotationValue(uintptr_t, uintptr_t);\n" ++
-        "int32_t f(void) { jitInterpretedCall(0,1,2); return 0; }\n" ++
-        "int32_t h(void) { jitNativeWordCall(0,1,2); jitNativeWordCall(0,3,4); return 0; }\n" ++
+        "int32_t f(void) { jitInterpretedCall(0,1,0,0,2); return 0; }\n" ++
+        "int32_t h(void) { jitNativeWordCall(0,1,0,0,2); jitNativeWordCall(0,3,0,0,4); return 0; }\n" ++
         "int32_t g(void) { jitCallQuotation(0); jitCallQuotationValue(0,1); return 0; }\n";
 
     var report: AotFallbackReport = .{};
@@ -22128,10 +22139,10 @@ test "verifyAotFallbackInventory flags mismatch when builder undercounts" {
     // Three real jitNativeWordCall sites plus the extern declaration but
     // the builder only recorded two native emissions.
     const source =
-        "extern int32_t jitInterpretedCall(uintptr_t, uintptr_t, uintptr_t);\n" ++
-        "extern int32_t jitNativeWordCall(uintptr_t, uintptr_t, uintptr_t);\n" ++
+        "extern int32_t jitInterpretedCall(uintptr_t, uintptr_t, const char *, uintptr_t, uintptr_t);\n" ++
+        "extern int32_t jitNativeWordCall(uintptr_t, uintptr_t, const char *, uintptr_t, uintptr_t);\n" ++
         "extern int32_t jitCallQuotation(uintptr_t);\n" ++
-        "int32_t f(void) { jitNativeWordCall(0,1,2); jitNativeWordCall(0,3,4); jitNativeWordCall(0,5,6); return 0; }\n";
+        "int32_t f(void) { jitNativeWordCall(0,1,0,0,2); jitNativeWordCall(0,3,0,0,4); jitNativeWordCall(0,5,0,0,6); return 0; }\n";
 
     var report: AotFallbackReport = .{};
     report.totals[@intFromEnum(AotFallbackCategory.native)] = 2;
@@ -22164,7 +22175,7 @@ test "verifyAotFallbackInventory counts call sites without an extern" {
     // Interpreter-free build dropped the extern declaration but a codegen
     // path leaked a call site. The raw count is the call-site count
     // exactly; no minus-one adjustment.
-    const source = "int32_t f(void) { jitInterpretedCall(0,1,2); return 0; }\n";
+    const source = "int32_t f(void) { jitInterpretedCall(0,1,0,0,2); return 0; }\n";
 
     var report: AotFallbackReport = .{};
 
@@ -22197,7 +22208,7 @@ test "aotSatisfiesAndDispatch dispatches through a populated slot table" {
     ctx.image_protocoldescriptor_slot_count = 1;
 
     try ctx.stack.push(.{ .fixnum = 42 });
-    const rc = aotSatisfiesAndDispatch(@intFromPtr(&ctx), did, 0, @intFromEnum(dispatch_helpers.ProtocolArity.unary), 0);
+    const rc = aotSatisfiesAndDispatch(@intFromPtr(&ctx), did, 0, @intFromEnum(dispatch_helpers.ProtocolArity.unary), 0, 0, 0);
     try testing.expectEqual(@as(i32, 0), rc);
     const inspected = try ctx.stack.pop();
     defer container_backing.releaseValue(inspected);
@@ -22213,7 +22224,7 @@ test "aotSatisfiesAndDispatch rejects an out-of-range slot index" {
     ctx.image_protocoldescriptor_slots = &slots;
     ctx.image_protocoldescriptor_slot_count = 1;
 
-    const rc = aotSatisfiesAndDispatch(@intFromPtr(&ctx), 0, 5, @intFromEnum(dispatch_helpers.ProtocolArity.unary), 0);
+    const rc = aotSatisfiesAndDispatch(@intFromPtr(&ctx), 0, 5, @intFromEnum(dispatch_helpers.ProtocolArity.unary), 0, 0, 0);
     try testing.expectEqual(@as(i32, 2), rc);
     try testing.expectEqual(error.UserThrown, ctx.jit_pending_error.?);
 }
@@ -22223,14 +22234,14 @@ test "aotSatisfiesAndDispatch rejects a null slot entry and a missing table" {
     defer ctx.deinit();
 
     // Missing table: the loader never populated the slots.
-    var rc = aotSatisfiesAndDispatch(@intFromPtr(&ctx), 0, 0, @intFromEnum(dispatch_helpers.ProtocolArity.unary), 0);
+    var rc = aotSatisfiesAndDispatch(@intFromPtr(&ctx), 0, 0, @intFromEnum(dispatch_helpers.ProtocolArity.unary), 0, 0, 0);
     try testing.expectEqual(@as(i32, 2), rc);
 
     // Present table, unpatched slot.
     var slots = [_]?*const value_mod.ProtocolDescriptor{null};
     ctx.image_protocoldescriptor_slots = &slots;
     ctx.image_protocoldescriptor_slot_count = 1;
-    rc = aotSatisfiesAndDispatch(@intFromPtr(&ctx), 0, 0, @intFromEnum(dispatch_helpers.ProtocolArity.unary), 0);
+    rc = aotSatisfiesAndDispatch(@intFromPtr(&ctx), 0, 0, @intFromEnum(dispatch_helpers.ProtocolArity.unary), 0, 0, 0);
     try testing.expectEqual(@as(i32, 2), rc);
     try testing.expectEqual(error.UserThrown, ctx.jit_pending_error.?);
 }

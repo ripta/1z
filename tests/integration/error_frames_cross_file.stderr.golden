@@ -2,3 +2,5 @@ src/prelude.1z:613: error 'type-mismatch' expected string or byte-array, got fix
   stack effect: ( stream bytes -- n )
   called from src/prelude.1z:690: stream-write-string
   called from src/prelude.1z:692: print
+  called from tests/integration/error_frames_cross_file.1z:7: print-line
+  called from tests/integration/error_frames_cross_file.1z:8: say

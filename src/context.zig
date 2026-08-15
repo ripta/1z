@@ -1957,6 +1957,16 @@ pub const Context = struct {
         return self.arena.allocator().dupe(u8, self.current_source) catch self.current_source;
     }
 
+    /// Resolve a trace frame's source from the per-call arguments, falling back to the
+    /// per-entry `jit_trace_source` when the emission site had no source to bake.
+    pub fn traceFrameSource(self: *Context, src_ptr_raw: usize, src_len_raw: usize) []const u8 {
+        if (src_ptr_raw != 0 and src_len_raw != 0) {
+            const src_ptr: [*]const u8 = @ptrFromInt(src_ptr_raw);
+            return src_ptr[0..src_len_raw];
+        }
+        return self.jit_trace_source orelse self.current_source;
+    }
+
     /// Queue a synthetic frame for compiled error propagation. This is a
     /// targeted parity fix for current JIT trace gaps, not a general JIT frame
     /// model. If broader compiled trace fidelity becomes important later, build

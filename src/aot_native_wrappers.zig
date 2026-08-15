@@ -25,13 +25,14 @@ const extracted_registry_entries = @import("primitives/mod.zig").extracted_regis
 /// On an error the frame becomes a pending synthetic frame and capture is deferred to the
 /// propagate boundary, so the compiled callers unwinding above this raise still land in the chain.
 ///
-/// `line_raw` is the call-site line, used for the frame.
+/// `line_raw` is the call-site line, used for the frame. `src_ptr_raw`/`src_len_raw` carry the
+/// call site's baked source file, with the null pair falling back to the per-entry trace source.
 pub fn AotDirectWrapper(comptime func: NativeFn, comptime word_name: []const u8) type {
     return struct {
-        fn call(ctx_raw: usize, line_raw: usize) callconv(.c) i32 {
+        fn call(ctx_raw: usize, src_ptr_raw: usize, src_len_raw: usize, line_raw: usize) callconv(.c) i32 {
             if (ctx_raw == 0) return 1;
             const ctx: *Context = @ptrFromInt(ctx_raw);
-            ctx.pushCallFrame(word_name, ctx.current_source, line_raw, 0);
+            ctx.pushCallFrame(word_name, ctx.traceFrameSource(src_ptr_raw, src_len_raw), line_raw, 0);
             func(ctx) catch |err| {
                 ctx.jit_pending_error = ctx.wordErrorDeferCapture(word_name, err);
                 return 2;
@@ -170,7 +171,7 @@ pub const registry_wrapper_externs = blk: {
     @setEvalBranchQuota(8_000_000);
     var s: []const u8 = "";
     for (direct_natives) |w| {
-        s = s ++ "extern int32_t " ++ w.symbol ++ "(uintptr_t ctx, uintptr_t line);\n";
+        s = s ++ "extern int32_t " ++ w.symbol ++ "(uintptr_t ctx, const char *src, uintptr_t src_len, uintptr_t line);\n";
     }
     break :blk s;
 };
@@ -261,7 +262,7 @@ test "wrapper invokes its native: borrowed? on a fixnum returns false" {
     try ctx.stack.push(.{ .fixnum = 7 });
 
     const wrapper = AotDirectWrapper(registryFunc("borrowed?"), "borrowed?").call;
-    const status = wrapper(@intFromPtr(&ctx), 0);
+    const status = wrapper(@intFromPtr(&ctx), 0, 0, 0);
 
     try testing.expectEqual(@as(i32, 0), status);
     const top = try ctx.stack.pop();
@@ -275,7 +276,7 @@ test "wrapper maps a native error to status 2 and sets the pending error" {
 
     // Empty stack: `borrowed?` pops an operand and underflows.
     const wrapper = AotDirectWrapper(registryFunc("borrowed?"), "borrowed?").call;
-    const status = wrapper(@intFromPtr(&ctx), 0);
+    const status = wrapper(@intFromPtr(&ctx), 0, 0, 0);
 
     try testing.expectEqual(@as(i32, 2), status);
     try testing.expect(ctx.jit_pending_error != null);
@@ -290,5 +291,5 @@ test "wrapper maps a native error to status 2 and sets the pending error" {
 
 test "wrapper bails with status 1 on a null context" {
     const wrapper = AotDirectWrapper(registryFunc("borrowed?"), "borrowed?").call;
-    try testing.expectEqual(@as(i32, 1), wrapper(0, 0));
+    try testing.expectEqual(@as(i32, 1), wrapper(0, 0, 0, 0));
 }

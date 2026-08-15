@@ -1,2 +1,2 @@
-<aot>:16: error 'protocol-error' type 'fixnum' does not satisfy protocol 'addable' at word 'bump-it'
-  called from <aot>:18: bounded-caller
+tests/aot/aot_protocol_bounded_strict.1z:16: error 'protocol-error' type 'fixnum' does not satisfy protocol 'addable' at word 'bump-it'
+  called from tests/aot/aot_protocol_bounded_strict.1z:18: bounded-caller

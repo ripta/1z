@@ -1,7 +1,7 @@
 \ A three-deep chain of tail calls ending in a raising non-generic native. The interpreter
 \ elides the tail frames, so only the non-tail top-level call renders a row. The eager and AOT
-\ runs must elide the same frames; the AOT twin is aot_error_frames_direct_native.1z, which
-\ keeps the same line layout.
+\ runs must elide the same frames; the AOT suite builds this file through a `.source` redirect
+\ and diffs the same golden.
 
 inner: ( s v -- n ) [ stream-write ] ;
 outer: ( s v -- n ) [ inner ] ;

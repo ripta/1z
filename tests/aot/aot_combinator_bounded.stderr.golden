@@ -1,2 +1,2 @@
-<aot>:19: error 'protocol-error' type 'fixnum' does not satisfy the required constraint at word 'bump-it'
-  called from <aot>:21: bounded-caller
+tests/aot/aot_combinator_bounded.1z:19: error 'protocol-error' type 'fixnum' does not satisfy the required constraint at word 'bump-it'
+  called from tests/aot/aot_combinator_bounded.1z:21: bounded-caller

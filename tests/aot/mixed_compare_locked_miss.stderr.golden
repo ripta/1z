@@ -1,2 +1,2 @@
-<aot>:12: error 'type-mismatch' expected fixnum or float, got string "x" at word '<'
+tests/aot/mixed_compare_locked_miss.1z:12: error 'type-mismatch' expected fixnum or float, got string "x" at word '<'
   stack effect: ( a b -- ? )

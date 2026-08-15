@@ -1,9 +1,0 @@
-\ A raise reached through a compiled word called in tail position at the top level. The
-\ interpreter TCOs the top-level call, so no row names it; the eager boundary and the AOT
-\ entry gate must elide the same row. The integration and AOT twins share this source
-\ verbatim.
-
-inner: ( a b -- c ) [ + 0 + ] ;
-outer: ( -- ) [ 1 "x" inner drop ] ;
-
-outer

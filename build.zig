@@ -1374,6 +1374,11 @@ const AotTestEntry = struct {
     env_path: []const u8,
     flags_lines: ?[]const u8,
     flags_path: []const u8,
+    /// True for a `.source`-redirected entry, whose stderr golden and exit code live beside the
+    /// redirected file and are owned by that suite.
+    ///
+    /// `update-aot-golden` skips such entries, so a divergence fails this suite as the parity check.
+    golden_shared: bool,
 };
 
 fn collectAotTestEntries(b: *std.Build, aot_dir: *std.fs.Dir) ![]const AotTestEntry {
@@ -1382,10 +1387,34 @@ fn collectAotTestEntries(b: *std.Build, aot_dir: *std.fs.Dir) ![]const AotTestEn
     var iter = aot_dir.iterate();
     while (iter.next() catch null) |entry| {
         if (entry.kind != .file) continue;
-        if (!std.mem.endsWith(u8, entry.name, ".1z")) continue;
+        const is_redirect = std.mem.endsWith(u8, entry.name, ".source");
+        if (!is_redirect and !std.mem.endsWith(u8, entry.name, ".1z")) continue;
 
-        const name_without_ext = b.dupe(entry.name[0 .. entry.name.len - 3]);
-        const file_path = b.fmt("tests/aot/{s}", .{entry.name});
+        const ext_len: usize = if (is_redirect) ".source".len else ".1z".len;
+        const name_without_ext = b.dupe(entry.name[0 .. entry.name.len - ext_len]);
+
+        // A `.source` sidecar holds a build-root-relative path to a test file owned by another
+        // suite. The entry builds that file and diffs stderr and exit code against the sidecars
+        // beside it, so one golden serves both suites.
+        //
+        // Stdout is not shareable: the integration harness injects `--show-stack`, whose output a
+        // standalone binary never prints, so stdout stays keyed in tests/aot.
+        var file_path = b.fmt("tests/aot/{s}", .{entry.name});
+        var run_golden_base = b.fmt("tests/aot/{s}", .{name_without_ext});
+        if (is_redirect) {
+            const raw = blk: {
+                const file = aot_dir.openFile(entry.name, .{}) catch break :blk "";
+                defer file.close();
+                break :blk file.readToEndAlloc(b.allocator, 4096) catch "";
+            };
+            const redirected = std.mem.trim(u8, raw, " \t\r\n");
+            if (!std.mem.endsWith(u8, redirected, ".1z")) {
+                std.debug.print("Warning: tests/aot/{s} does not name a .1z file; skipping\n", .{entry.name});
+                continue;
+            }
+            file_path = b.dupe(redirected);
+            run_golden_base = b.dupe(redirected[0 .. redirected.len - 3]);
+        }
 
         var has_build_stdout_golden = false;
         var build_stdout_content: []const u8 = "";
@@ -1429,8 +1458,8 @@ fn collectAotTestEntries(b: *std.Build, aot_dir: *std.fs.Dir) ![]const AotTestEn
 
         var has_stderr_golden = false;
         var stderr_content: []const u8 = "";
-        const stderr_golden_path = b.fmt("tests/aot/{s}.stderr.golden", .{name_without_ext});
-        if (aot_dir.openFile(b.fmt("{s}.stderr.golden", .{name_without_ext}), .{})) |file| {
+        const stderr_golden_path = b.fmt("{s}.stderr.golden", .{run_golden_base});
+        if (b.build_root.handle.openFile(stderr_golden_path, .{})) |file| {
             defer file.close();
             stderr_content = file.readToEndAlloc(b.allocator, 1024 * 1024) catch "";
             has_stderr_golden = true;
@@ -1438,8 +1467,8 @@ fn collectAotTestEntries(b: *std.Build, aot_dir: *std.fs.Dir) ![]const AotTestEn
 
         var has_exitcode = false;
         var expected_exit_code: ?u8 = null;
-        const exitcode_path = b.fmt("tests/aot/{s}.exitcode", .{name_without_ext});
-        if (aot_dir.openFile(b.fmt("{s}.exitcode", .{name_without_ext}), .{})) |file| {
+        const exitcode_path = b.fmt("{s}.exitcode", .{run_golden_base});
+        if (b.build_root.handle.openFile(exitcode_path, .{})) |file| {
             defer file.close();
             has_exitcode = true;
             const code_str = file.readToEndAlloc(b.allocator, 64) catch "";
@@ -1559,6 +1588,7 @@ fn collectAotTestEntries(b: *std.Build, aot_dir: *std.fs.Dir) ![]const AotTestEn
             .env_path = env_path,
             .flags_lines = flags_lines,
             .flags_path = flags_path,
+            .golden_shared = is_redirect,
         }) catch return error.OutOfMemory;
     }
 
@@ -1820,7 +1850,7 @@ fn addAotTests(
             addGoldenDiff(b, test_step, exec_run.captureStdOut(), if (te.has_stdout_golden) te.stdout_golden_path else null, te.file_path);
 
             const normalize_stderr = b.addSystemCommand(&.{
-                "sed", "s|[^ ]*/aot_[^ :]*|<aot>|g",
+                "sed", "s|[^ ]*\\.zig-cache[^ :]*|<aot>|g",
             });
             normalize_stderr.addFileArg(exec_run.captureStdErr());
             addGoldenDiff(b, test_step, normalize_stderr.captureStdOut(), if (te.has_stderr_golden) te.stderr_golden_path else null, te.file_path);
@@ -1834,7 +1864,7 @@ fn addAotTests(
             if (te.has_stderr_golden) {
                 const captured_stderr = exec_run.captureStdErr();
                 const normalize_stderr = b.addSystemCommand(&.{
-                    "sed", "s|[^ ]*/aot_[^ :]*|<aot>|g",
+                    "sed", "s|[^ ]*\\.zig-cache[^ :]*|<aot>|g",
                 });
                 normalize_stderr.addFileArg(captured_stderr);
                 normalize_stderr.expectStdOutEqual(te.stderr_content);
@@ -1844,8 +1874,9 @@ fn addAotTests(
             }
         }
 
-        // Update golden
-        {
+        // Update golden. A shared golden is owned by the suite the `.source`
+        // sidecar points into, so this suite never rewrites it.
+        if (!te.golden_shared) {
             const update_compile = b.addSystemCommand(&.{exe_path});
             update_compile.addArg("build");
             update_compile.addArg(b.fmt("--stdlib-path={s}/lib", .{b.build_root.path orelse "."}));
@@ -1876,7 +1907,7 @@ fn addAotTests(
             if (te.has_stderr_golden or expected_exit != 0) {
                 const update_stderr = update_exec.captureStdErr();
                 const update_normalize = b.addSystemCommand(&.{
-                    "sed", "s|[^ ]*/aot_[^ :]*|<aot>|g",
+                    "sed", "s|[^ ]*\\.zig-cache[^ :]*|<aot>|g",
                 });
                 update_normalize.addFileArg(update_stderr);
                 update_files.*.addCopyFileToSource(update_normalize.captureStdOut(), te.stderr_golden_path);

@@ -1,4 +1,4 @@
-<aot>:7: error 'type-mismatch' expected number, got string "x" at word '+'
+tests/aot/aot_native_leaf_dispatch_miss.1z:7: error 'type-mismatch' expected number, got string "x" at word '+'
   stack effect: ( a b -- a+b )
   hint: operands must be numbers (fixnum, float, bignum, or ratio)
-  called from <aot>:9: add
+  called from tests/aot/aot_native_leaf_dispatch_miss.1z:9: add

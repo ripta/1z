@@ -2,7 +2,7 @@
 \ every frame renders.
 \
 \ The interpreter, eager, and AOT runs of this program must render the chain frame for frame
-\ identically; the integration and AOT twins share this source verbatim.
+\ identically; the AOT suite builds this file through a `.source` redirect and diffs the same golden.
 
 inner: ( a b -- c ) [ + 0 + ] ;
 outer: ( a b -- c ) [ inner 0 + ] ;

@@ -537,13 +537,14 @@ pub fn satisfiesAndDispatch(
     constraint: BoundedConstraint,
     arity: ProtocolArity,
     trace_name: []const u8,
+    source_override: ?[]const u8,
     line: usize,
 ) !void {
     // Name the bounded site by its protocol for the duration of the dispatch.
     // The frame makes the site visible to scheduler task dumps when a body
     // parks here and to call-stack-based error backtraces; the live event
     // mirrors the interpreter's `--trace-words` output for an ordinary word.
-    const source = ctx.jit_trace_source orelse ctx.current_source;
+    const source = source_override orelse (ctx.jit_trace_source orelse ctx.current_source);
     ctx.pushCallFrame(trace_name, source, line, 0);
     defer ctx.popCallFrame();
     if (ctx.trace.trace_words and trace_mod.matchesPattern(trace_name, ctx.trace.trace_words_pattern)) {
@@ -1038,7 +1039,7 @@ test "satisfiesAndDispatch dispatches a satisfying type" {
 
     try ctx.stack.push(.{ .fixnum = 42 });
     const frames_before = ctx.call_stack.items.len;
-    try satisfiesAndDispatch(&ctx, did, .{ .protocol = descriptor }, .unary, ctx.boundedDispatchTraceName(descriptor), 0);
+    try satisfiesAndDispatch(&ctx, did, .{ .protocol = descriptor }, .unary, ctx.boundedDispatchTraceName(descriptor), null, 0);
 
     // The diagnostic frame is pushed for the dispatch and popped on the way
     // out, leaving the call stack balanced.
@@ -1070,7 +1071,7 @@ test "satisfiesAndDispatch raises protocol-error for a non-satisfying type" {
 
     try ctx.stack.push(.{ .boolean = true });
     const frames_before = ctx.call_stack.items.len;
-    const result = satisfiesAndDispatch(&ctx, did, .{ .protocol = descriptor }, .unary, ctx.boundedDispatchTraceName(descriptor), 0);
+    const result = satisfiesAndDispatch(&ctx, did, .{ .protocol = descriptor }, .unary, ctx.boundedDispatchTraceName(descriptor), null, 0);
     try std.testing.expectError(error.UserThrown, result);
 
     // The diagnostic frame is popped even on the protocol-error path.
@@ -1090,7 +1091,7 @@ test "satisfiesAndDispatch reaches a method registered after a failed check" {
 
     // No method yet: the check fails and memoizes the negative answer.
     try ctx.stack.push(.{ .fixnum = 42 });
-    try std.testing.expectError(error.UserThrown, satisfiesAndDispatch(&ctx, did, .{ .protocol = descriptor }, .unary, ctx.boundedDispatchTraceName(descriptor), 0));
+    try std.testing.expectError(error.UserThrown, satisfiesAndDispatch(&ctx, did, .{ .protocol = descriptor }, .unary, ctx.boundedDispatchTraceName(descriptor), null, 0));
     try ctx.stack.popAndRelease();
 
     // Registering the method invalidates the satisfies memo coarsely, so the
@@ -1105,7 +1106,7 @@ test "satisfiesAndDispatch reaches a method registered after a failed check" {
     );
 
     try ctx.stack.push(.{ .fixnum = 42 });
-    try satisfiesAndDispatch(&ctx, did, .{ .protocol = descriptor }, .unary, ctx.boundedDispatchTraceName(descriptor), 0);
+    try satisfiesAndDispatch(&ctx, did, .{ .protocol = descriptor }, .unary, ctx.boundedDispatchTraceName(descriptor), null, 0);
     const popped = try ctx.stack.pop();
     defer container_backing.releaseValue(popped);
     try std.testing.expectEqualStrings("42", popped.string.bytes);
@@ -1131,7 +1132,7 @@ test "satisfiesAndDispatch handles a binary satisfying pair" {
 
     try ctx.stack.push(.{ .fixnum = 3 });
     try ctx.stack.push(.{ .fixnum = 5 });
-    try satisfiesAndDispatch(&ctx, did, .{ .protocol = descriptor }, .binary, ctx.boundedDispatchTraceName(descriptor), 0);
+    try satisfiesAndDispatch(&ctx, did, .{ .protocol = descriptor }, .binary, ctx.boundedDispatchTraceName(descriptor), null, 0);
 
     try std.testing.expectEqual(@as(usize, 1), ctx.stack.depth());
     try std.testing.expectEqual(@as(i64, 8), (try ctx.stack.pop()).fixnum);
@@ -1370,6 +1371,6 @@ test "satisfiesAndDispatch raises protocol-error for a non-satisfying combinator
 
     // fixnum has no registered `bump-it`, so it does not satisfy `addable`.
     try ctx.stack.push(.{ .fixnum = 3 });
-    const err = satisfiesAndDispatch(&ctx, did, .{ .combinator = cc }, .unary, "satisfies-and-dispatch[constraint]", 0);
+    const err = satisfiesAndDispatch(&ctx, did, .{ .combinator = cc }, .unary, "satisfies-and-dispatch[constraint]", null, 0);
     try std.testing.expectError(error.UserThrown, err);
 }
