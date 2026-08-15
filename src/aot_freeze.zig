@@ -1343,7 +1343,7 @@ fn drainWorklist(
         else
             null;
 
-        const word = ctx.lookupWordFiltered(name, own_vis) orelse {
+        var word = ctx.lookupWordFiltered(name, own_vis) orelse {
             // Try module-qualified resolution (e.g., "native.struct-field-get").
             // Generated words from struct{, virtual{, and enum{ call native
             // operations via qualified names that lookupWord cannot resolve
@@ -1380,6 +1380,20 @@ fn drainWorklist(
             }
             continue;
         };
+
+        // A word resolved through a module deps frame carries no source: the
+        // frame defs come from moduleWordFrameDef, which stays source-free so
+        // the interpreter's current_source installation is not disturbed.
+        // Recover the defining file from the module's own entry so the freeze
+        // bakes real sources into the descriptors.
+        if (word.source_file == null) {
+            if (identity.module) |m| {
+                if (m.words.get(name)) |mw| {
+                    word.source_file = mw.source_file;
+                    word.source_line = mw.source_line;
+                }
+            }
+        }
 
         // Skip parse-time-only words
         if (word.parse_time_only) continue;
@@ -2380,6 +2394,8 @@ fn wordDefFromModuleWord(name: []const u8, mod_word: value_mod.ModuleWord) WordD
     return .{
         .name = name,
         .stack_effect = mod_word.stack_effect,
+        .source_file = mod_word.source_file,
+        .source_line = mod_word.source_line,
         .action = switch (mod_word.action) {
             .native => |f| .{ .native = f },
             .host_callback => |h| .{ .host_callback = h },

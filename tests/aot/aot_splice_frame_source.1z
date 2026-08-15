@@ -1,0 +1,10 @@
+\ Regression: a frame emitted inside a compound-spliced region bakes the
+\ callee's source file. The literal 5 is the typed operand the splicer
+\ requires, so `combine`'s body splices into the entry body, and the opaque
+\ string operand sends the spliced `+` to the mixed-operand trap at runtime.
+\ The error's innermost frame must name the support module's file and line,
+\ not this file.
+
+use "./support/splice_mixed_add.1z" ;
+
+"str" 5 combine drop

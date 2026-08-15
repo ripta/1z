@@ -1022,6 +1022,11 @@ pub const ResolvedWord = struct {
     /// splicer. Read only at compile time; never baked into emitted code.
     /// Null for natives and for resolvers with no body at hand.
     body: ?[]const Instruction = null,
+    /// Source file of the callee's definition, or null when unknown. The
+    /// compound splicer installs it as `state.source_file` around the spliced
+    /// region so frames emitted inside pair the callee's file with the
+    /// callee's lines.
+    source_file: ?[]const u8 = null,
 };
 
 /// Callback interface for resolving word names to dispatch table IDs.
@@ -2134,6 +2139,10 @@ const RowId = u32;
 pub const LineEntry = extern struct {
     ref: u32,
     line: u32,
+    /// Per-entry source-file override, or null to use the side table's
+    /// per-body default file. Set for entries recorded inside a compound
+    /// splice, whose lines belong to the callee's file.
+    file: ?[*:0]const u8 = null,
 };
 
 /// Magic tag that marks a `ctx.data` pointer as the source-line side
@@ -2577,6 +2586,10 @@ const CompileState = struct {
     /// directives between blocks. Populated by `recordBlockStart`;
     /// flushed by `flushPendingLine` at the next instruction.
     source_line_entries: std.ArrayListUnmanaged(LineEntry) = .{},
+    /// Z-terminated copies of source files attached to individual `#line`
+    /// entries, interned by content. Owned by the compile pass alongside
+    /// `source_line_entries`.
+    line_entry_files: std.ArrayListUnmanaged([:0]const u8) = .{},
     /// Most recent block-start ir_ref whose source-line attribution is
     /// still unknown. `flushPendingLine` consumes this on the next
     /// `compileInstructions` iteration with a non-zero `instr.line`,
@@ -2617,8 +2630,23 @@ const CompileState = struct {
         try state.source_line_entries.append(state.allocator, .{
             .ref = @intCast(state.pending_line_ref),
             .line = line,
+            .file = try state.internLineEntryFile(),
         });
         state.pending_line_ref = c.IR_UNUSED;
+    }
+
+    /// Z-terminated file for a `#line` entry recorded inside a spliced
+    /// region, where `state.source_file` names the callee's file rather than
+    /// the side table's per-body default. Null outside splices.
+    fn internLineEntryFile(state: *CompileState) Allocator.Error!?[*:0]const u8 {
+        if (state.splice_depth == 0) return null;
+        const sf = state.source_file orelse return null;
+        for (state.line_entry_files.items) |existing| {
+            if (std.mem.eql(u8, existing, sf)) return existing.ptr;
+        }
+        const copy = try state.allocator.dupeZ(u8, sf);
+        try state.line_entry_files.append(state.allocator, copy);
+        return copy.ptr;
     }
 
     /// Record an AOT-mode CALL through interpreted_call_fn or
@@ -2667,6 +2695,10 @@ const BuiltinTraceFrameKind = enum(usize) {
 const InlineTraceFrame = struct {
     kind: BuiltinTraceFrameKind,
     line: usize,
+    /// Source file captured when the frame was queued. Emission must not read
+    /// `state.source_file`, which a compound splice swaps to the callee's file
+    /// while a caller-line frame is still pending.
+    source: ?[]const u8 = null,
 };
 
 const max_inline_trace_frames = 8;
@@ -5853,6 +5885,7 @@ fn emitIntrinsicCall(ec: EmitCtx) IrCodegenError!ControlFlow {
                 state.inline_trace_frames[state.inline_trace_frame_count] = .{
                     .kind = .call,
                     .line = ec.line,
+                    .source = state.source_file,
                 };
                 state.inline_trace_frame_count += 1;
             }
@@ -6194,6 +6227,7 @@ fn spliceDipRetaining(ec: EmitCtx, retain_count: usize) IrCodegenError!ControlFl
         state.inline_trace_frames[state.inline_trace_frame_count] = .{
             .kind = .call,
             .line = ec.line,
+            .source = state.source_file,
         };
         state.inline_trace_frame_count += 1;
     }
@@ -6264,6 +6298,7 @@ fn emitIntrinsicChoose(ec: EmitCtx) IrCodegenError!ControlFlow {
                 state.inline_trace_frames[state.inline_trace_frame_count] = .{
                     .kind = .choose_op,
                     .line = ec.line,
+                    .source = state.source_file,
                 };
                 state.inline_trace_frame_count += 1;
             }
@@ -6843,6 +6878,7 @@ fn emitIntrinsicIf(ec: EmitCtx) IrCodegenError!ControlFlow {
         state.inline_trace_frames[state.inline_trace_frame_count] = .{
             .kind = .if_op,
             .line = ec.line,
+            .source = state.source_file,
         };
         state.inline_trace_frame_count += 1;
     }
@@ -6900,6 +6936,7 @@ fn emitIntrinsicIf(ec: EmitCtx) IrCodegenError!ControlFlow {
         state.inline_trace_frames[state.inline_trace_frame_count] = .{
             .kind = .if_op,
             .line = ec.line,
+            .source = state.source_file,
         };
         state.inline_trace_frame_count += 1;
     }
@@ -7428,9 +7465,19 @@ fn trySpliceCompoundBody(
         state.inline_trace_frames[state.inline_trace_frame_count] = .{
             .kind = .call,
             .line = ec.line,
+            .source = state.source_file,
         };
         state.inline_trace_frame_count += 1;
     }
+
+    // The spliced instructions carry the callee's lines, so frames and #line
+    // entries emitted inside the region must pair them with the callee's file
+    // rather than the enclosing body's. The inline `.call` frame above keeps
+    // the caller's source, captured at its push.
+    const saved_source_file = state.source_file;
+    state.source_file = resolved.source_file;
+    defer state.source_file = saved_source_file;
+
     const sp_before = sp.*;
     try compileInstructions(state, body, stack, sp);
     if (traceFramesEnabled(state)) state.inline_trace_frame_count = saved_inline_trace_frame_count;
@@ -10121,6 +10168,10 @@ fn emitWordCAotPass(
         },
     };
     defer state.source_line_entries.deinit(allocator);
+    defer {
+        for (state.line_entry_files.items) |f| allocator.free(f);
+        state.line_entry_files.deinit(allocator);
+    }
 
     // Self-tail-call detection for AOT
     if (self_name) |sn| {
@@ -10734,7 +10785,10 @@ pub fn emitProgramC(
                 .is_generic = entry.is_generic,
                 .returns_row = self.returns_row_names.contains(identity),
             };
-            if (!entry.is_native) result.body = entry.instructions;
+            if (!entry.is_native) {
+                result.body = entry.instructions;
+                result.source_file = entry.source_file;
+            }
             if (entry.stack_effect) |*eff| {
                 if (stack_effect_mod.hasAnyRowVariable(eff.*)) {
                     result.callee_effect = eff;
@@ -12586,9 +12640,15 @@ const TraceSourceArgs = struct {
 ///
 /// Sourceless bodies pass a null pair and leave the frame's source to the runtime fallback.
 fn emitTraceSourceArgs(state: *CompileState) TraceSourceArgs {
+    return emitTraceSourceArgsFor(state, state.source_file);
+}
+
+/// `emitTraceSourceArgs` with an explicit source, for frames queued before a
+/// compound splice swapped `state.source_file`.
+fn emitTraceSourceArgsFor(state: *CompileState, source: ?[]const u8) TraceSourceArgs {
     const zero = c.ir_const_addr(state.ctx, 0);
     const none: TraceSourceArgs = .{ .ptr = zero, .len = zero };
-    const sf = state.source_file orelse return none;
+    const sf = source orelse return none;
     if (sf.len == 0) return none;
 
     if (!state.aot_mode) {
@@ -12606,7 +12666,7 @@ fn emitTraceSourceArgs(state: *CompileState) TraceSourceArgs {
     };
 }
 
-fn emitBuiltinTraceFrame(state: *CompileState, kind: BuiltinTraceFrameKind, line: usize) void {
+fn emitBuiltinTraceFrame(state: *CompileState, kind: BuiltinTraceFrameKind, line: usize, source: ?[]const u8) void {
     if (state.append_builtin_trace_frame_fn == c.IR_UNUSED) return;
     const ctx_val = if (state.preloaded_ctx_val != c.IR_UNUSED)
         state.preloaded_ctx_val
@@ -12617,7 +12677,7 @@ fn emitBuiltinTraceFrame(state: *CompileState, kind: BuiltinTraceFrameKind, line
         break :blk c._ir_LOAD(state.ctx, c.IR_ADDR, ctx_addr);
     };
     const kind_const = c.ir_const_addr(state.ctx, @intFromEnum(kind));
-    const src = emitTraceSourceArgs(state);
+    const src = emitTraceSourceArgsFor(state, source);
     const line_const = c.ir_const_addr(state.ctx, line);
     _ = c._ir_CALL_5(state.ctx, c.IR_I32, state.append_builtin_trace_frame_fn, ctx_val, kind_const, src.ptr, src.len, line_const);
 }
@@ -12644,7 +12704,7 @@ fn emitActiveInlineTraceFrames(state: *CompileState) void {
     while (i > 0) {
         i -= 1;
         const frame = state.inline_trace_frames[i];
-        emitBuiltinTraceFrame(state, frame.kind, frame.line);
+        emitBuiltinTraceFrame(state, frame.kind, frame.line, frame.source);
     }
 }
 
@@ -12664,7 +12724,7 @@ fn emitCallbackPostCheck(
         switch (current_trace_frame) {
             .none => {},
             .named => |frame| if (frame.line != 0) emitWordTraceFrame(state, frame.name, frame.line),
-            .builtin => |frame| if (frame.line != 0) emitBuiltinTraceFrame(state, frame.kind, frame.line),
+            .builtin => |frame| if (frame.line != 0) emitBuiltinTraceFrame(state, frame.kind, frame.line, state.source_file),
         }
         emitActiveInlineTraceFrames(state);
     }

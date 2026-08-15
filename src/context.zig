@@ -7529,6 +7529,7 @@ fn resolveWordForDispatch(name: []const u8, user_data: *anyopaque) ?ir_codegen.R
         .output_params = output_params,
         .input_params = input_params,
         .body = if (callee.action == .compound) callee.action.compound else null,
+        .source_file = if (callee.action == .compound) callee.source_file else null,
     };
     if (stack_effect_mod.hasAnyRowVariable(effect)) {
         result.callee_effect = ctx.lookupWordStackEffectPtr(name);

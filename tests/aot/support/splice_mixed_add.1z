@@ -1,0 +1,5 @@
+\ A compound small enough for the call-site splicer: one instruction, no
+\ annotated inputs. Lives in its own file so a frame raised inside the
+\ spliced region must bake this file, not the entry's.
+
+combine: ( a b -- c ) [ + ] ;

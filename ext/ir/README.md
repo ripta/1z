@@ -45,6 +45,11 @@ Current set:
   a decimal point or exponent, adds an `f` suffix for floats, and
   spells NaN and the infinities as IEEE division expressions. Not
   absorbed upstream as of the pinned commit.
+- `patches/0005-emit-c-line-directive-files.patch` -- gives each
+  source-line side-table entry an optional per-entry file, so a `#line`
+  directive recorded inside a compound-spliced region names the callee's
+  file instead of the containing body's default. Local to this project;
+  not upstreamable as-is.
 
 ### Local-only files (preserve across upgrade)
 

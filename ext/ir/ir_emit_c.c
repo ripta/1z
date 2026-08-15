@@ -29,6 +29,8 @@ static const char *ir_type_tname[IR_LAST_TYPE] = {
 typedef struct _ir_c_line_entry {
 	uint32_t ref;
 	uint32_t line;
+	/* Per-entry source-file override; NULL uses ir_c_source_lines.file. */
+	const char *file;
 } ir_c_line_entry;
 
 typedef struct _ir_c_source_lines {
@@ -1042,7 +1044,7 @@ static int ir_emit_func(ir_ctx *ctx, const char *name, FILE *f)
 			 || (start_op == IR_BEGIN && ctx->ir_base[bb->start].op2)) {
 				const ir_c_line_entry *e = ir_c_lookup_source_line(data.source_lines, (uint32_t)bb->start);
 				if (e != NULL) {
-					fprintf(f, "#line %u \"%s\"\n", e->line, data.source_lines->file);
+					fprintf(f, "#line %u \"%s\"\n", e->line, e->file ? e->file : data.source_lines->file);
 				}
 			}
 		}
