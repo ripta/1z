@@ -1,4 +1,4 @@
 <aot>:613: error 'type-mismatch' expected string or byte-array, got fixnum 42 at word 'stream-write'
   stack effect: ( stream bytes -- n )
-  called from <aot>:690: stream-write-string
-  called from <aot>:692: print
+  called from src/prelude.1z:690: stream-write-string
+  called from src/prelude.1z:692: print

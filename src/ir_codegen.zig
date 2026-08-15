@@ -1191,11 +1191,16 @@ fn emitStringLiteralPtr(state: *CompileState, text: []const u8) c.ir_ref {
     if (!state.aot_mode) return c.ir_const_addr(state.ctx, @intFromPtr(text.ptr));
 
     const lits = state.aot_string_literals orelse return c.ir_const_addr(state.ctx, 0);
-    const lit_id = lits.items.len;
-    lits.append(std.heap.page_allocator, .{ .data = text, .is_symbol = false }) catch {
+    const lit_id = lits.items.items.len;
+    lits.items.append(std.heap.page_allocator, .{ .data = text, .is_symbol = false }) catch {
         return c.ir_const_addr(state.ctx, 0);
     };
 
+    return emitLiteralSymbolRef(state, lit_id);
+}
+
+/// An `ir_const_func` ref naming the emitted `onez_lit_N` array for a literal id.
+fn emitLiteralSymbolRef(state: *CompileState, lit_id: usize) c.ir_ref {
     var sym_buf: [32]u8 = undefined;
     const sym_name = std.fmt.bufPrint(&sym_buf, "onez_lit_{d}", .{lit_id}) catch unreachable;
     return c.ir_const_func(state.ctx, c.ir_strl(state.ctx, &sym_buf, sym_name.len), 0);
@@ -2504,7 +2509,7 @@ const CompileState = struct {
     preloaded_ctx_val: c.ir_ref = c.IR_UNUSED,
     /// Accumulator for string/symbol literals encountered during AOT compilation.
     /// Each entry gets emitted as a `static const char[]` in the C preamble.
-    aot_string_literals: ?*std.ArrayListUnmanaged(AotStringLiteral) = null,
+    aot_string_literals: ?*AotStringLiteralTable = null,
     /// Identity-keyed slot-index maps for the typed-literal pushes
     /// (TypeValue, StructType, Marker, Parameter). Populated by the
     /// runtime-image collection walk before Pass 2 begins. Null when
@@ -3277,6 +3282,37 @@ fn lookupBinding(bindings: []const RowVarBinding, name: []const u8) ?u8 {
 const AotStringLiteral = struct {
     data: []const u8,
     is_symbol: bool,
+};
+
+/// The program-wide accumulator for AOT string literals.
+///
+/// Only source-file literals are interned; every other literal appends per call. Emission reads
+/// the insertion-ordered list alone, so `onez_lit_N` numbering stays deterministic. The map is
+/// never iterated.
+///
+/// All allocation goes through `std.heap.page_allocator`, matching the direct appends in
+/// `emitStringLiteralPtr` and the literal-push emission sites.
+const AotStringLiteralTable = struct {
+    items: std.ArrayListUnmanaged(AotStringLiteral) = .{},
+    /// Content-keyed ids of interned source-file literals.
+    source_ids: std.StringHashMapUnmanaged(u32) = .{},
+
+    fn deinit(self: *AotStringLiteralTable) void {
+        self.items.deinit(std.heap.page_allocator);
+        self.source_ids.deinit(std.heap.page_allocator);
+    }
+
+    /// The literal id for a source-file string, appending it on first sight.
+    ///
+    /// A failed map put degrades to duplicate literals on later interns, which costs bytes in
+    /// the emitted C but stays correct.
+    fn internSource(self: *AotStringLiteralTable, text: []const u8) ?u32 {
+        if (self.source_ids.get(text)) |id| return id;
+        const id: u32 = @intCast(self.items.items.len);
+        self.items.append(std.heap.page_allocator, .{ .data = text, .is_symbol = false }) catch return null;
+        self.source_ids.put(std.heap.page_allocator, text, id) catch {};
+        return id;
+    }
 };
 
 /// Extract or emit an i64 IR ref from a stack entry. For raw_at_slot entries,
@@ -8347,7 +8383,7 @@ fn compileInstructions(
                     // only the tag differs -- so the same construction applies.
                     const lits = state.aot_string_literals.?;
                     const str_data = if (val == .string) val.string.bytes else val.symbol.bytes;
-                    const lit_id = lits.items.len;
+                    const lit_id = lits.items.items.len;
 
                     // The slice pointer is stored into a `uintptr_t` slot, and
                     // the C backend never casts a stored value. Build the symbol
@@ -8381,7 +8417,7 @@ fn compileInstructions(
                     );
 
                     // Record the literal so the C preamble emits its static array.
-                    lits.append(std.heap.page_allocator, .{
+                    lits.items.append(std.heap.page_allocator, .{
                         .data = str_data,
                         .is_symbol = val == .symbol,
                     }) catch {};
@@ -8416,7 +8452,7 @@ fn compileInstructions(
 
                     // Reference the string via ir_const_sym. The symbol is
                     // defined as a static const char[] in emitProgramC.
-                    const lit_id = if (state.aot_string_literals) |lits| lits.items.len else 0;
+                    const lit_id = if (state.aot_string_literals) |lits| lits.items.items.len else 0;
                     var sym_buf: [32]u8 = undefined;
                     const sym_name = std.fmt.bufPrint(&sym_buf, "onez_lit_{d}", .{lit_id}) catch unreachable;
                     // Use ir_const_func (not ir_const_sym) so the C emitter
@@ -8430,7 +8466,7 @@ fn compileInstructions(
 
                     // Record the literal for emission in the C preamble.
                     if (state.aot_string_literals) |lits| {
-                        lits.append(std.heap.page_allocator, .{
+                        lits.items.append(std.heap.page_allocator, .{
                             .data = str_data,
                             .is_symbol = val == .symbol,
                         }) catch {};
@@ -9615,7 +9651,7 @@ pub fn emitWordCAot(
     self_name: ?[]const u8,
     aot_compiled_names: *const std.StringHashMapUnmanaged(u32),
     callee_resolution: CalleeResolution,
-    string_literals: ?*std.ArrayListUnmanaged(AotStringLiteral),
+    string_literals: ?*AotStringLiteralTable,
     quotation_literals: ?*std.ArrayListUnmanaged(AotQuotationLiteral),
     array_literals: ?*std.ArrayListUnmanaged(AotArrayLiteral),
     allocator: Allocator,
@@ -9651,7 +9687,7 @@ fn emitWordCAotWithCName(
     self_name: ?[]const u8,
     aot_compiled_names: *const std.StringHashMapUnmanaged(u32),
     callee_resolution: CalleeResolution,
-    string_literals: ?*std.ArrayListUnmanaged(AotStringLiteral),
+    string_literals: ?*AotStringLiteralTable,
     quotation_literals: ?*std.ArrayListUnmanaged(AotQuotationLiteral),
     array_literals: ?*std.ArrayListUnmanaged(AotArrayLiteral),
     allocator: Allocator,
@@ -9714,7 +9750,7 @@ fn emitWordCAotPass(
     self_name: ?[]const u8,
     aot_compiled_names: *const std.StringHashMapUnmanaged(u32),
     callee_resolution: CalleeResolution,
-    string_literals: ?*std.ArrayListUnmanaged(AotStringLiteral),
+    string_literals: ?*AotStringLiteralTable,
     quotation_literals: ?*std.ArrayListUnmanaged(AotQuotationLiteral),
     array_literals: ?*std.ArrayListUnmanaged(AotArrayLiteral),
     allocator: Allocator,
@@ -11026,8 +11062,8 @@ pub fn emitProgramC(
     }
 
     // String literal table populated during pass 2.
-    var string_literals: std.ArrayListUnmanaged(AotStringLiteral) = .{};
-    defer string_literals.deinit(std.heap.page_allocator);
+    var string_literals: AotStringLiteralTable = .{};
+    defer string_literals.deinit();
 
     // Quotation literal table populated during pass 2.
     var quotation_literals: std.ArrayListUnmanaged(AotQuotationLiteral) = .{};
@@ -11410,7 +11446,7 @@ pub fn emitProgramC(
     }
 
     // 3.5. String/symbol literal constants
-    for (string_literals.items, 0..) |lit, lit_idx| {
+    for (string_literals.items.items, 0..) |lit, lit_idx| {
         var idx_buf: [20]u8 = undefined;
         const idx_str = std.fmt.bufPrint(&idx_buf, "{d}", .{lit_idx}) catch unreachable;
         try out.appendSlice(allocator, "static const char onez_lit_");
@@ -11432,7 +11468,7 @@ pub fn emitProgramC(
         }
         try out.appendSlice(allocator, "\";\n");
     }
-    if (string_literals.items.len > 0) {
+    if (string_literals.items.items.len > 0) {
         try out.appendSlice(allocator, "\n");
     }
 
@@ -12535,15 +12571,30 @@ const TraceSourceArgs = struct {
     len: c.ir_ref,
 };
 
+/// Build the source argument pair for a trace-frame append call.
+///
 /// The JIT bakes the enclosing word's interpreter-owned `source_file` slice directly, the same
-/// lifetime as `jit_trace_source`. AOT mode and sourceless bodies pass null, and the shim falls
-/// back to `jit_trace_source orelse current_source` at runtime.
+/// lifetime as `jit_trace_source`. AOT interns the source in the shared literal table, so every
+/// emission site sharing a source names one `onez_lit_N` array.
+///
+/// Sourceless bodies pass a null pair and leave the frame's source to the runtime fallback.
 fn emitTraceSourceArgs(state: *CompileState) TraceSourceArgs {
     const zero = c.ir_const_addr(state.ctx, 0);
-    if (state.aot_mode) return .{ .ptr = zero, .len = zero };
-    const sf = state.source_file orelse return .{ .ptr = zero, .len = zero };
+    const none: TraceSourceArgs = .{ .ptr = zero, .len = zero };
+    const sf = state.source_file orelse return none;
+    if (sf.len == 0) return none;
+
+    if (!state.aot_mode) {
+        return .{
+            .ptr = c.ir_const_addr(state.ctx, @intFromPtr(sf.ptr)),
+            .len = c.ir_const_addr(state.ctx, sf.len),
+        };
+    }
+
+    const lits = state.aot_string_literals orelse return none;
+    const lit_id = lits.internSource(sf) orelse return none;
     return .{
-        .ptr = c.ir_const_addr(state.ctx, @intFromPtr(sf.ptr)),
+        .ptr = emitLiteralSymbolRef(state, lit_id),
         .len = c.ir_const_addr(state.ctx, sf.len),
     };
 }
@@ -16057,6 +16108,33 @@ fn callCompiledValues(func: CompiledFn, values: []Value, sp: *usize) i32 {
     const status = func(&jit_ctx);
     @memcpy(values, buf[0..values.len]);
     return status;
+}
+
+test "AotStringLiteralTable: interning is content-keyed with one entry per distinct source" {
+    var table: AotStringLiteralTable = .{};
+    defer table.deinit();
+
+    const prelude = table.internSource("src/prelude.1z").?;
+    const user = table.internSource("tests/aot/example.1z").?;
+    const prelude_again = table.internSource("src/prelude.1z").?;
+
+    try testing.expectEqual(prelude, prelude_again);
+    try testing.expect(prelude != user);
+    try testing.expectEqual(@as(usize, 2), table.items.items.len);
+    try testing.expectEqualStrings("src/prelude.1z", table.items.items[prelude].data);
+    try testing.expectEqualStrings("tests/aot/example.1z", table.items.items[user].data);
+}
+
+test "AotStringLiteralTable: interned ids stay stable across interleaved per-call appends" {
+    var table: AotStringLiteralTable = .{};
+    defer table.deinit();
+
+    const first = table.internSource("src/prelude.1z").?;
+    table.items.append(std.heap.page_allocator, .{ .data = "word-name", .is_symbol = false }) catch unreachable;
+    const again = table.internSource("src/prelude.1z").?;
+
+    try testing.expectEqual(first, again);
+    try testing.expectEqual(@as(usize, 2), table.items.items.len);
 }
 
 test "appendLineDirective: basic format" {
