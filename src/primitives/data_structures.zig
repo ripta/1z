@@ -11,7 +11,6 @@ const MutableMap = value_mod.MutableMap;
 
 const helpers = @import("helpers.zig");
 const dispatch_helpers = @import("dispatch_helpers.zig");
-const dispatch_mod = @import("../dispatch.zig");
 const Primitive = @import("types.zig").Primitive;
 const tasks = @import("tasks.zig");
 const container_backing = @import("../container_backing.zig");
@@ -329,31 +328,8 @@ pub fn nativeMakeMutableMap(ctx: *Context) anyerror!void {
 
 /// @set! ( mmap key value -- mmap )
 pub fn nativeAtSetMut(ctx: *Context) anyerror!void {
-    // dispatch: mmap is at position 2 (below key and value)
-    if (ctx.stack.depth() >= 3) {
-        if (ctx.resolveDispatchId("@set!")) |did| {
-            const mmap_peek = try ctx.stack.peekN(2);
-            const a_type = dispatch_mod.dispatchDescriptor(mmap_peek, ctx);
-            if (ctx.lookupUnaryDispatch(did, a_type)) |entry| {
-                try dispatch_helpers.executeDispatchBody(ctx, entry);
-                return;
-            }
-            if (dispatch_mod.dispatchEnumTypeValue(mmap_peek)) |ae| {
-                if (ctx.lookupUnaryDispatch(did, ae.descriptor.?)) |entry| {
-                    try dispatch_helpers.executeDispatchBody(ctx, entry);
-                    return;
-                }
-            }
-            if (dispatch_mod.dispatchBaseTypeValue(mmap_peek)) |bt| {
-                if (ctx.lookupUnaryDispatch(did, bt.descriptor.?)) |entry| {
-                    const len = ctx.stack.items.items.len;
-                    helpers.unwrapTaggedSlotInPlace(&ctx.stack.items.items[len - 3]);
-                    try dispatch_helpers.executeDispatchBody(ctx, entry);
-                    return;
-                }
-            }
-        }
-    }
+    // mmap is at position 2, below key and value
+    if (try dispatch_helpers.tryDispatchContainerAtDepth(ctx, ctx.nativeDispatchId(.at_set_mut), 2, true)) return;
 
     const new_value = try ctx.stack.pop();
     const key = ctx.stack.pop() catch |err| {
@@ -421,31 +397,8 @@ pub fn nativeAtSetMut(ctx: *Context) anyerror!void {
 
 /// @remove! ( mmap key -- mmap )
 pub fn nativeAtRemoveMut(ctx: *Context) anyerror!void {
-    // dispatch: mmap is at position 1 (below key)
-    if (ctx.stack.depth() >= 2) {
-        if (ctx.resolveDispatchId("@remove!")) |did| {
-            const mmap_peek = try ctx.stack.peekN(1);
-            const a_type = dispatch_mod.dispatchDescriptor(mmap_peek, ctx);
-            if (ctx.lookupUnaryDispatch(did, a_type)) |entry| {
-                try dispatch_helpers.executeDispatchBody(ctx, entry);
-                return;
-            }
-            if (dispatch_mod.dispatchEnumTypeValue(mmap_peek)) |ae| {
-                if (ctx.lookupUnaryDispatch(did, ae.descriptor.?)) |entry| {
-                    try dispatch_helpers.executeDispatchBody(ctx, entry);
-                    return;
-                }
-            }
-            if (dispatch_mod.dispatchBaseTypeValue(mmap_peek)) |bt| {
-                if (ctx.lookupUnaryDispatch(did, bt.descriptor.?)) |entry| {
-                    const len = ctx.stack.items.items.len;
-                    helpers.unwrapTaggedSlotInPlace(&ctx.stack.items.items[len - 2]);
-                    try dispatch_helpers.executeDispatchBody(ctx, entry);
-                    return;
-                }
-            }
-        }
-    }
+    // mmap is at position 1, below key
+    if (try dispatch_helpers.tryDispatchContainerAtDepth(ctx, ctx.nativeDispatchId(.at_remove_mut), 1, true)) return;
 
     const key = try ctx.stack.pop();
     defer container_backing.releaseValue(key);

@@ -16,8 +16,11 @@ const helpers = @import("helpers.zig");
 const markers_mod = @import("markers.zig");
 const struct_field_spec = @import("struct_field_spec.zig");
 const dispatch_mod = @import("../dispatch.zig");
+const NativeDispatchWord = dispatch_mod.NativeDispatchWord;
 const container_backing = @import("../container_backing.zig");
 const freeze_mod = @import("freeze.zig");
+const sequences_mod = @import("sequences.zig");
+const data_structures_mod = @import("data_structures.zig");
 
 const types_mod = @import("types.zig");
 const Primitive = types_mod.Primitive;
@@ -912,13 +915,9 @@ fn typedNthMutDispatch(ctx: *Context) anyerror!void {
     try ctx.stack.pushMoved(elem);
     elem_owned = false;
 
-    // Delegate to the raw #nth!
-    const nth_mut_word = ctx.lookupWord("#nth!") orelse return error.WordNotFound;
-    switch (nth_mut_word.action) {
-        .native, .host_callback => try nth_mut_word.invoke(ctx),
-        .compound => |instrs| try ctx.executeQuotation(.{ .instructions = instrs }),
-        .literal => |v| try ctx.stack.push(v),
-    }
+    // Delegate straight to the raw #nth! native. Resolving the name instead would walk the
+    // shadowing ladder, so a caller's binding of the name would answer here.
+    try sequences_mod.nativeNthMut(ctx);
 
     // Rewrap: pop raw vec, wrap as tagged, push
     const result_vec = try ctx.stack.pop();
@@ -969,13 +968,8 @@ fn typedAtSetMutDispatch(ctx: *Context) anyerror!void {
     try ctx.stack.pushMoved(new_value);
     value_owned = false;
 
-    // Delegate to the raw @set!
-    const at_set_word = ctx.lookupWord("@set!") orelse return error.WordNotFound;
-    switch (at_set_word.action) {
-        .native, .host_callback => try at_set_word.invoke(ctx),
-        .compound => |instrs| try ctx.executeQuotation(.{ .instructions = instrs }),
-        .literal => |v| try ctx.stack.push(v),
-    }
+    // Delegate straight to the raw @set! native, for the reason typedNthMutDispatch gives.
+    try data_structures_mod.nativeAtSetMut(ctx);
 
     // Rewrap: pop raw mmap, wrap as tagged, push
     const result_mmap = try ctx.stack.pop();
@@ -1001,13 +995,8 @@ fn typedAtRemoveMutDispatch(ctx: *Context) anyerror!void {
     try ctx.stack.pushMoved(key);
     key_owned = false;
 
-    // Delegate to the raw @remove!
-    const at_remove_word = ctx.lookupWord("@remove!") orelse return error.WordNotFound;
-    switch (at_remove_word.action) {
-        .native, .host_callback => try at_remove_word.invoke(ctx),
-        .compound => |instrs| try ctx.executeQuotation(.{ .instructions = instrs }),
-        .literal => |v| try ctx.stack.push(v),
-    }
+    // Delegate straight to the raw @remove! native, for the reason typedNthMutDispatch gives.
+    try data_structures_mod.nativeAtRemoveMut(ctx);
 
     // Rewrap: pop raw mmap, wrap as tagged, push
     const result_mmap = try ctx.stack.pop();
@@ -1602,8 +1591,9 @@ fn registerVectorMutationDispatches(
     // Element-adding ops: #push!, #unshift!
     // Stack: typed-vec elem
     // Body: validate+promote elem, swap, unwrap vec, swap, base-op, rewrap
-    const adding_ops = [_][]const u8{ "#push!", "#unshift!" };
-    for (adding_ops) |op_name| {
+    const adding_ops = [_]NativeDispatchWord{ .push_mut, .unshift_mut };
+    for (adding_ops) |op| {
+        const op_name = op.wordName();
         const instrs = try alloc.alloc(Instruction, 9);
         instrs[0] = .{ .op = .{ .push_literal = vtype_ptr }, .line = 0 };
         instrs[1] = .{ .op = .{ .call_word = "native.typed-validate-and-promote" }, .line = 0 };
@@ -1616,7 +1606,7 @@ fn registerVectorMutationDispatches(
         instrs[8] = .{ .op = .{ .call_word = "native.virtual-wrap" }, .line = 0 };
 
         try ctx.registerDispatch(.{
-            .dispatch_id = ctx.lookupWord(op_name).?.dispatch_id,
+            .dispatch_id = ctx.nativeDispatchId(op),
             .type_a = type_tv.descriptor.?,
             .type_b = ctx.getDispatchUnarySentinel().descriptor.?,
         }, .{ .body = .{ .quotation = .{ .instructions = instrs } } }, true);
@@ -1627,8 +1617,9 @@ fn registerVectorMutationDispatches(
     // Element-removing ops: #pop!, #shift!
     // Stack: typed-vec
     // Body: unwrap vec, base-op (leaves vec elem), swap, rewrap, swap
-    const removing_ops = [_][]const u8{ "#pop!", "#shift!" };
-    for (removing_ops) |op_name| {
+    const removing_ops = [_]NativeDispatchWord{ .pop_mut, .shift_mut };
+    for (removing_ops) |op| {
+        const op_name = op.wordName();
         const instrs = try alloc.alloc(Instruction, 7);
         instrs[0] = .{ .op = .{ .push_literal = vtype_ptr }, .line = 0 };
         instrs[1] = .{ .op = .{ .call_word = "native.virtual-unwrap" }, .line = 0 };
@@ -1639,7 +1630,7 @@ fn registerVectorMutationDispatches(
         instrs[6] = .{ .op = .{ .call_word = "swap" }, .line = 0 };
 
         try ctx.registerDispatch(.{
-            .dispatch_id = ctx.lookupWord(op_name).?.dispatch_id,
+            .dispatch_id = ctx.nativeDispatchId(op),
             .type_a = type_tv.descriptor.?,
             .type_b = ctx.getDispatchUnarySentinel().descriptor.?,
         }, .{ .body = .{ .quotation = .{ .instructions = instrs } } }, true);
@@ -1656,7 +1647,7 @@ fn registerVectorMutationDispatches(
         instrs[1] = .{ .op = .{ .call_word = "native.typed-nth-mut-dispatch" }, .line = 0 };
 
         try ctx.registerDispatch(.{
-            .dispatch_id = ctx.lookupWord("#nth!").?.dispatch_id,
+            .dispatch_id = ctx.nativeDispatchId(.nth_mut),
             .type_a = type_tv.descriptor.?,
             .type_b = ctx.getDispatchUnarySentinel().descriptor.?,
         }, .{ .body = .{ .quotation = .{ .instructions = instrs } } }, true);
@@ -1679,7 +1670,7 @@ fn registerVectorMutationDispatches(
         instrs[8] = .{ .op = .{ .call_word = "native.virtual-wrap" }, .line = 0 };
 
         try ctx.registerDispatch(.{
-            .dispatch_id = ctx.lookupWord("#append!").?.dispatch_id,
+            .dispatch_id = ctx.nativeDispatchId(.append_mut),
             .type_a = type_tv.descriptor.?,
             .type_b = ctx.getDispatchUnarySentinel().descriptor.?,
         }, .{ .body = .{ .quotation = .{ .instructions = instrs } } }, true);
@@ -1694,7 +1685,7 @@ fn registerVectorMutationDispatches(
         instrs[1] = .{ .op = .{ .call_word = "native.typed-freeze-dispatch" }, .line = 0 };
 
         try ctx.registerDispatch(.{
-            .dispatch_id = ctx.lookupWord("freeze").?.dispatch_id,
+            .dispatch_id = ctx.nativeDispatchId(.freeze),
             .type_a = type_tv.descriptor.?,
             .type_b = ctx.getDispatchUnarySentinel().descriptor.?,
         }, .{ .body = .{ .quotation = .{ .instructions = instrs } } }, true);
@@ -1722,7 +1713,7 @@ fn registerMutableMapMutationDispatches(
         instrs[1] = .{ .op = .{ .call_word = "native.typed-at-set-mut-dispatch" }, .line = 0 };
 
         try ctx.registerDispatch(.{
-            .dispatch_id = ctx.lookupWord("@set!").?.dispatch_id,
+            .dispatch_id = ctx.nativeDispatchId(.at_set_mut),
             .type_a = type_tv.descriptor.?,
             .type_b = ctx.getDispatchUnarySentinel().descriptor.?,
         }, .{ .body = .{ .quotation = .{ .instructions = instrs } } }, true);
@@ -1737,7 +1728,7 @@ fn registerMutableMapMutationDispatches(
         instrs[1] = .{ .op = .{ .call_word = "native.typed-at-remove-mut-dispatch" }, .line = 0 };
 
         try ctx.registerDispatch(.{
-            .dispatch_id = ctx.lookupWord("@remove!").?.dispatch_id,
+            .dispatch_id = ctx.nativeDispatchId(.at_remove_mut),
             .type_a = type_tv.descriptor.?,
             .type_b = ctx.getDispatchUnarySentinel().descriptor.?,
         }, .{ .body = .{ .quotation = .{ .instructions = instrs } } }, true);
@@ -1770,7 +1761,7 @@ pub fn registerHashDispatch(ctx: *Context, type_tv: *const value_mod.TypeValue, 
     }
 
     try ctx.registerDispatch(.{
-        .dispatch_id = ctx.lookupWord(">hash").?.dispatch_id,
+        .dispatch_id = ctx.nativeDispatchId(.to_hash),
         .type_a = type_tv.descriptor.?,
         .type_b = ctx.getDispatchUnarySentinel().descriptor.?,
     }, .{ .body = .{ .quotation = .{ .instructions = instrs } } }, true);

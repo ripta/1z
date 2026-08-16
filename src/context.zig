@@ -771,7 +771,7 @@ pub const Context = struct {
     /// The dispatch id each identity-carrying native's entries were registered under, indexed by
     /// `NativeDispatchWord`.
     ///
-    /// Populated once by `registerNativeDispatch` during init and immutable after; task contexts
+    /// Populated once by `captureNativeDispatchIds` during init and immutable after; task contexts
     /// inherit the values by copy in `initForTask`. Reading this instead of resolving the native's
     /// name keeps a shadowing binding from capturing the native's entries.
     native_dispatch_ids: std.enums.EnumArray(dispatch_mod.NativeDispatchWord, u32) = std.enums.EnumArray(dispatch_mod.NativeDispatchWord, u32).initFill(0),
@@ -1316,6 +1316,8 @@ pub const Context = struct {
         primitives.createNativeModule(&ctx.dictionary, ctx.arena.allocator(), &ctx.next_dispatch_id) catch |err| {
             std.debug.panic("Failed to create native module: {any}", .{err});
         };
+
+        ctx.captureNativeDispatchIds();
 
         primitives.registerNativeDispatch(&ctx.dispatch, &ctx) catch |err| {
             std.debug.panic("Failed to register native dispatch: {any}", .{err});
@@ -4149,15 +4151,22 @@ pub const Context = struct {
         return self.native_dispatch_ids.get(word);
     }
 
-    /// Resolve `word`'s dispatch id by name and record it as the native's own identity.
+    /// Record every identity-carrying native's own dispatch id.
     ///
-    /// Called only from `registerNativeDispatch` during init, before any user frame exists, so
-    /// the by-name resolution reaches the dictionary definition the entries are registered
-    /// against.
-    pub fn captureNativeDispatchId(self: *Context, word: dispatch_mod.NativeDispatchWord) u32 {
-        const did = self.resolveDispatchId(word.wordName()).?;
-        self.native_dispatch_ids.set(word, did);
-        return did;
+    /// Called once from `init`, after the primitives are in the dictionary and before any frame
+    /// exists, so each by-name resolution reaches the dictionary definition its entries key off.
+    /// A word that resolves to nothing panics here rather than leaving a zero behind, since zero
+    /// is a real primitive's id and would silently dispatch under that word's identity.
+    ///
+    /// The sweep covers the whole enum rather than each module capturing its own, because several
+    /// of these natives have no entries at init: `freeze!` has none at all, and `>symbol` and the
+    /// typed-container mutators get theirs when an `enum{` or a parameterized type is defined.
+    pub fn captureNativeDispatchIds(self: *Context) void {
+        for (std.enums.values(dispatch_mod.NativeDispatchWord)) |word| {
+            const did = self.resolveDispatchId(word.wordName()) orelse
+                std.debug.panic("Native dispatch word '{s}' is not a primitive", .{word.wordName()});
+            self.native_dispatch_ids.set(word, did);
+        }
     }
 
     /// Look up a binary dispatch entry in the native-only shadow table,

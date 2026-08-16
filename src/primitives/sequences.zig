@@ -614,7 +614,7 @@ pub fn registerNativeDispatch(dispatch: *DispatchTable, ctx: *Context) !void {
     const fixnum = tv(ctx, "fixnum");
 
     // #len : unary entries
-    const len_did = ctx.resolveDispatchId("#len").?;
+    const len_did = ctx.nativeDispatchId(.len);
     try dispatch.registerNative(len_did, string, unary, nativeLenString);
     try dispatch.registerNative(len_did, array, unary, nativeLenArray);
     try dispatch.registerNative(len_did, vector, unary, nativeLenVector);
@@ -625,21 +625,21 @@ pub fn registerNativeDispatch(dispatch: *DispatchTable, ctx: *Context) !void {
     try dispatch.registerNative(len_did, module, unary, nativeLenModule);
 
     // #nth : binary entries (all with type_b = fixnum)
-    const nth_did = ctx.resolveDispatchId("#nth").?;
+    const nth_did = ctx.nativeDispatchId(.nth);
     try dispatch.registerNative(nth_did, string, fixnum, nativeNthString);
     try dispatch.registerNative(nth_did, array, fixnum, nativeNthArray);
     try dispatch.registerNative(nth_did, vector, fixnum, nativeNthVector);
     try dispatch.registerNative(nth_did, byte_array, fixnum, nativeNthByteArray);
 
     // #first : unary entries
-    const first_did = ctx.resolveDispatchId("#first").?;
+    const first_did = ctx.nativeDispatchId(.first);
     try dispatch.registerNative(first_did, string, unary, nativeFirstString);
     try dispatch.registerNative(first_did, array, unary, nativeFirstArray);
     try dispatch.registerNative(first_did, vector, unary, nativeFirstVector);
     try dispatch.registerNative(first_did, byte_array, unary, nativeFirstByteArray);
 
     // #last : unary entries
-    const last_did = ctx.resolveDispatchId("#last").?;
+    const last_did = ctx.nativeDispatchId(.last);
     try dispatch.registerNative(last_did, string, unary, nativeLastString);
     try dispatch.registerNative(last_did, array, unary, nativeLastArray);
     try dispatch.registerNative(last_did, vector, unary, nativeLastVector);
@@ -647,7 +647,7 @@ pub fn registerNativeDispatch(dispatch: *DispatchTable, ctx: *Context) !void {
 
     // #in? : container-keyed entries (type_b = any, so any element type routes
     // to the arm, which validates it). array/vector are 1z method{} entries.
-    const in_did = ctx.resolveDispatchId("#in?").?;
+    const in_did = ctx.nativeDispatchId(.in);
     const any_tv = ctx.getDispatchAnySentinel();
     try dispatch.registerNative(in_did, string, any_tv, nativeInString);
     try dispatch.registerNative(in_did, byte_array, any_tv, nativeInByteArray);
@@ -655,25 +655,25 @@ pub fn registerNativeDispatch(dispatch: *DispatchTable, ctx: *Context) !void {
 
     // #index-of : same container-keyed split as #in?. string and byte-array stay
     // native; array/vector are 1z method{} entries. Sets are unordered and have no arm.
-    const index_of_did = ctx.resolveDispatchId("#index-of").?;
+    const index_of_did = ctx.nativeDispatchId(.index_of);
     try dispatch.registerNative(index_of_did, string, any_tv, nativeIndexOfString);
     try dispatch.registerNative(index_of_did, byte_array, any_tv, nativeIndexOfByteArray);
 
     // >array : unary entries
-    const to_array_did = ctx.resolveDispatchId(">array").?;
+    const to_array_did = ctx.nativeDispatchId(.to_array);
     try dispatch.registerNative(to_array_did, vector, unary, nativeToArrayVector);
     try dispatch.registerNative(to_array_did, byte_array, unary, nativeToArrayByteArray);
     try dispatch.registerNative(to_array_did, set, unary, nativeToArraySet);
     try dispatch.registerNative(to_array_did, array, unary, nativeToArrayArray);
 
     // >hash : unary entries
-    const to_hash_did = ctx.resolveDispatchId(">hash").?;
+    const to_hash_did = ctx.nativeDispatchId(.to_hash);
     try dispatch.registerNative(to_hash_did, mutable_map, unary, nativeToHashMutableMap);
     try dispatch.registerNative(to_hash_did, hash, unary, nativeToHashHash);
 
     // #peek / #poke! : byte-level access
-    try dispatch.registerNative(ctx.resolveDispatchId("#peek").?, byte_array, unary, nativePeekByteArray);
-    try dispatch.registerNative(ctx.resolveDispatchId("#poke!").?, byte_array, unary, nativePokeByteArray);
+    try dispatch.registerNative(ctx.nativeDispatchId(.peek), byte_array, unary, nativePeekByteArray);
+    try dispatch.registerNative(ctx.nativeDispatchId(.poke_mut), byte_array, unary, nativePokeByteArray);
 }
 
 pub const primitives = [_]Primitive{
@@ -734,7 +734,7 @@ pub const primitives = [_]Primitive{
 
 /// #len ( seq -- n )
 pub fn nativeLen(ctx: *Context) anyerror!void {
-    if (try dispatch_helpers.tryDispatchUnaryByName(ctx, "#len")) return;
+    if (try dispatch_helpers.tryDispatchUnary(ctx, ctx.nativeDispatchId(.len))) return;
     const val = try ctx.stack.pop();
     defer container_backing.releaseValue(val);
     setErrorContext(ctx, "expected sequence, got {s}", .{valueTypeName(val)});
@@ -743,7 +743,7 @@ pub fn nativeLen(ctx: *Context) anyerror!void {
 
 /// #nth ( seq n -- elem )
 pub fn nativeNth(ctx: *Context) anyerror!void {
-    if (try dispatch_helpers.tryDispatchBinaryByName(ctx, "#nth")) return;
+    if (try dispatch_helpers.tryDispatchBinary(ctx, ctx.nativeDispatchId(.nth))) return;
     const b = try ctx.stack.pop();
     defer container_backing.releaseValue(b);
     const a = try ctx.stack.pop();
@@ -753,32 +753,9 @@ pub fn nativeNth(ctx: *Context) anyerror!void {
 }
 
 /// #nth! ( seq n value -- seq )
-fn nativeNthMut(ctx: *Context) anyerror!void {
-    // dispatch: seq is at position 2, below n and value
-    if (ctx.stack.depth() >= 3) {
-        const seq_peek = try ctx.stack.peekN(2);
-        const a_type = dispatch_mod.dispatchDescriptor(seq_peek, ctx);
-        if (ctx.resolveDispatchId("#nth!")) |did| {
-            if (ctx.lookupUnaryDispatch(did, a_type)) |entry| {
-                try dispatch_helpers.executeDispatchBody(ctx, entry);
-                return;
-            }
-            if (dispatch_mod.dispatchEnumTypeValue(seq_peek)) |ae| {
-                if (ctx.lookupUnaryDispatch(did, ae.descriptor.?)) |entry| {
-                    try dispatch_helpers.executeDispatchBody(ctx, entry);
-                    return;
-                }
-            }
-            if (dispatch_mod.dispatchBaseTypeValue(seq_peek)) |bt| {
-                if (ctx.lookupUnaryDispatch(did, bt.descriptor.?)) |entry| {
-                    const len = ctx.stack.items.items.len;
-                    helpers.unwrapTaggedSlotInPlace(&ctx.stack.items.items[len - 3]);
-                    try dispatch_helpers.executeDispatchBody(ctx, entry);
-                    return;
-                }
-            }
-        }
-    }
+pub fn nativeNthMut(ctx: *Context) anyerror!void {
+    // seq is at position 2, below n and value
+    if (try dispatch_helpers.tryDispatchContainerAtDepth(ctx, ctx.nativeDispatchId(.nth_mut), 2, true)) return;
 
     const value = try ctx.stack.pop();
     const index = popFixnum(ctx) catch |err| {
@@ -873,7 +850,7 @@ fn nativeNthMut(ctx: *Context) anyerror!void {
 
 /// #first ( seq -- elem )
 pub fn nativeFirst(ctx: *Context) anyerror!void {
-    if (try dispatch_helpers.tryDispatchUnaryByName(ctx, "#first")) return;
+    if (try dispatch_helpers.tryDispatchUnary(ctx, ctx.nativeDispatchId(.first))) return;
     const val = try ctx.stack.pop();
     defer container_backing.releaseValue(val);
     if (val == .set) {
@@ -886,7 +863,7 @@ pub fn nativeFirst(ctx: *Context) anyerror!void {
 
 /// #last ( seq -- elem )
 pub fn nativeLast(ctx: *Context) anyerror!void {
-    if (try dispatch_helpers.tryDispatchUnaryByName(ctx, "#last")) return;
+    if (try dispatch_helpers.tryDispatchUnary(ctx, ctx.nativeDispatchId(.last))) return;
     const val = try ctx.stack.pop();
     defer container_backing.releaseValue(val);
     if (val == .set) {
@@ -1006,13 +983,12 @@ fn builtinArithOp(ctx: *Context, instr: value_mod.Instruction) ?packed_kernels.O
 /// of them refuses recognition so the scalar path can honor the method. Registration
 /// after creation is the iterator's drain-time generation guard's concern, not this one's.
 fn scalarEntryIsNativeBaseline(ctx: *Context, op: packed_kernels.Op, lit: Value) bool {
-    const name: []const u8 = switch (op) {
-        .add => "+",
-        .sub => "-",
-        .mul => "*",
-        .div => "/",
-    };
-    const did = ctx.resolveDispatchId(name) orelse return false;
+    const did = ctx.nativeDispatchId(switch (op) {
+        .add => .add,
+        .sub => .sub,
+        .mul => .mul,
+        .div => .div,
+    });
     const elem_desc = dispatch_mod.dispatchDescriptor(.{ .float = 0.0 }, ctx);
     const lit_desc = dispatch_mod.dispatchDescriptor(lit, ctx);
     const entry = ctx.lookupBinaryDispatch(did, elem_desc, lit_desc) orelse return false;
@@ -1701,31 +1677,8 @@ pub fn nativeAppend(ctx: *Context) anyerror!void {
 
 /// #append! ( vec seq -- vec )
 pub fn nativeAppendMut(ctx: *Context) anyerror!void {
-    // dispatch: vec is at position 1, below seq
-    if (ctx.stack.depth() >= 2) {
-        const seq_peek = try ctx.stack.peekN(1);
-        const a_type = dispatch_mod.dispatchDescriptor(seq_peek, ctx);
-        if (ctx.resolveDispatchId("#append!")) |did| {
-            if (ctx.lookupUnaryDispatch(did, a_type)) |entry| {
-                try dispatch_helpers.executeDispatchBody(ctx, entry);
-                return;
-            }
-            if (dispatch_mod.dispatchEnumTypeValue(seq_peek)) |ae| {
-                if (ctx.lookupUnaryDispatch(did, ae.descriptor.?)) |entry| {
-                    try dispatch_helpers.executeDispatchBody(ctx, entry);
-                    return;
-                }
-            }
-            if (dispatch_mod.dispatchBaseTypeValue(seq_peek)) |bt| {
-                if (ctx.lookupUnaryDispatch(did, bt.descriptor.?)) |entry| {
-                    const len = ctx.stack.items.items.len;
-                    helpers.unwrapTaggedSlotInPlace(&ctx.stack.items.items[len - 2]);
-                    try dispatch_helpers.executeDispatchBody(ctx, entry);
-                    return;
-                }
-            }
-        }
-    }
+    // vec is at position 1, below seq
+    if (try dispatch_helpers.tryDispatchContainerAtDepth(ctx, ctx.nativeDispatchId(.append_mut), 1, true)) return;
 
     const seq = try ctx.stack.pop();
     const vec = popVector(ctx) catch |err| {
@@ -2183,31 +2136,8 @@ fn nativeShift(ctx: *Context) anyerror!void {
 
 /// #push! ( vec elem -- vec )
 fn nativePushMut(ctx: *Context) anyerror!void {
-    // dispatch: vec is at position 1, below elem
-    if (ctx.stack.depth() >= 2) {
-        const seq_peek = try ctx.stack.peekN(1);
-        const a_type = dispatch_mod.dispatchDescriptor(seq_peek, ctx);
-        if (ctx.resolveDispatchId("#push!")) |did| {
-            if (ctx.lookupUnaryDispatch(did, a_type)) |entry| {
-                try dispatch_helpers.executeDispatchBody(ctx, entry);
-                return;
-            }
-            if (dispatch_mod.dispatchEnumTypeValue(seq_peek)) |ae| {
-                if (ctx.lookupUnaryDispatch(did, ae.descriptor.?)) |entry| {
-                    try dispatch_helpers.executeDispatchBody(ctx, entry);
-                    return;
-                }
-            }
-            if (dispatch_mod.dispatchBaseTypeValue(seq_peek)) |bt| {
-                if (ctx.lookupUnaryDispatch(did, bt.descriptor.?)) |entry| {
-                    const len = ctx.stack.items.items.len;
-                    helpers.unwrapTaggedSlotInPlace(&ctx.stack.items.items[len - 2]);
-                    try dispatch_helpers.executeDispatchBody(ctx, entry);
-                    return;
-                }
-            }
-        }
-    }
+    // vec is at position 1, below elem
+    if (try dispatch_helpers.tryDispatchContainerAtDepth(ctx, ctx.nativeDispatchId(.push_mut), 1, true)) return;
 
     const elem = try ctx.stack.pop();
     const vec = popVector(ctx) catch |err| {
@@ -2232,31 +2162,7 @@ fn nativePushMut(ctx: *Context) anyerror!void {
 
 /// #pop! ( vec -- vec elem )
 fn nativePopMut(ctx: *Context) anyerror!void {
-    // dispatch: vec is at position 0
-    if (ctx.stack.depth() >= 1) {
-        const seq_peek = try ctx.stack.peek();
-        const a_type = dispatch_mod.dispatchDescriptor(seq_peek, ctx);
-        if (ctx.resolveDispatchId("#pop!")) |did| {
-            if (ctx.lookupUnaryDispatch(did, a_type)) |entry| {
-                try dispatch_helpers.executeDispatchBody(ctx, entry);
-                return;
-            }
-            if (dispatch_mod.dispatchEnumTypeValue(seq_peek)) |ae| {
-                if (ctx.lookupUnaryDispatch(did, ae.descriptor.?)) |entry| {
-                    try dispatch_helpers.executeDispatchBody(ctx, entry);
-                    return;
-                }
-            }
-            if (dispatch_mod.dispatchBaseTypeValue(seq_peek)) |bt| {
-                if (ctx.lookupUnaryDispatch(did, bt.descriptor.?)) |entry| {
-                    const len = ctx.stack.items.items.len;
-                    helpers.unwrapTaggedSlotInPlace(&ctx.stack.items.items[len - 1]);
-                    try dispatch_helpers.executeDispatchBody(ctx, entry);
-                    return;
-                }
-            }
-        }
-    }
+    if (try dispatch_helpers.tryDispatchContainerAtDepth(ctx, ctx.nativeDispatchId(.pop_mut), 0, true)) return;
 
     const vec = try popVector(ctx);
 
@@ -2283,31 +2189,8 @@ fn nativePopMut(ctx: *Context) anyerror!void {
 
 /// #unshift! ( vec elem -- vec )
 fn nativeUnshiftMut(ctx: *Context) anyerror!void {
-    // dispatch: vec is at position 1, below elem
-    if (ctx.stack.depth() >= 2) {
-        const seq_peek = try ctx.stack.peekN(1);
-        const a_type = dispatch_mod.dispatchDescriptor(seq_peek, ctx);
-        if (ctx.resolveDispatchId("#unshift!")) |did| {
-            if (ctx.lookupUnaryDispatch(did, a_type)) |entry| {
-                try dispatch_helpers.executeDispatchBody(ctx, entry);
-                return;
-            }
-            if (dispatch_mod.dispatchEnumTypeValue(seq_peek)) |ae| {
-                if (ctx.lookupUnaryDispatch(did, ae.descriptor.?)) |entry| {
-                    try dispatch_helpers.executeDispatchBody(ctx, entry);
-                    return;
-                }
-            }
-            if (dispatch_mod.dispatchBaseTypeValue(seq_peek)) |bt| {
-                if (ctx.lookupUnaryDispatch(did, bt.descriptor.?)) |entry| {
-                    const len = ctx.stack.items.items.len;
-                    helpers.unwrapTaggedSlotInPlace(&ctx.stack.items.items[len - 2]);
-                    try dispatch_helpers.executeDispatchBody(ctx, entry);
-                    return;
-                }
-            }
-        }
-    }
+    // vec is at position 1, below elem
+    if (try dispatch_helpers.tryDispatchContainerAtDepth(ctx, ctx.nativeDispatchId(.unshift_mut), 1, true)) return;
 
     const elem = try ctx.stack.pop();
     const vec = popVector(ctx) catch |err| {
@@ -2332,31 +2215,7 @@ fn nativeUnshiftMut(ctx: *Context) anyerror!void {
 
 /// #shift! ( vec -- vec elem )
 fn nativeShiftMut(ctx: *Context) anyerror!void {
-    // dispatch: vec is at position 0
-    if (ctx.stack.depth() >= 1) {
-        const seq_peek = try ctx.stack.peek();
-        const a_type = dispatch_mod.dispatchDescriptor(seq_peek, ctx);
-        if (ctx.resolveDispatchId("#shift!")) |did| {
-            if (ctx.lookupUnaryDispatch(did, a_type)) |entry| {
-                try dispatch_helpers.executeDispatchBody(ctx, entry);
-                return;
-            }
-            if (dispatch_mod.dispatchEnumTypeValue(seq_peek)) |ae| {
-                if (ctx.lookupUnaryDispatch(did, ae.descriptor.?)) |entry| {
-                    try dispatch_helpers.executeDispatchBody(ctx, entry);
-                    return;
-                }
-            }
-            if (dispatch_mod.dispatchBaseTypeValue(seq_peek)) |bt| {
-                if (ctx.lookupUnaryDispatch(did, bt.descriptor.?)) |entry| {
-                    const len = ctx.stack.items.items.len;
-                    helpers.unwrapTaggedSlotInPlace(&ctx.stack.items.items[len - 1]);
-                    try dispatch_helpers.executeDispatchBody(ctx, entry);
-                    return;
-                }
-            }
-        }
-    }
+    if (try dispatch_helpers.tryDispatchContainerAtDepth(ctx, ctx.nativeDispatchId(.shift_mut), 0, true)) return;
 
     const vec = try popVector(ctx);
 
@@ -2387,7 +2246,7 @@ fn nativeShiftMut(ctx: *Context) anyerror!void {
 /// vector are 1z `method{` entries. The iterator scan below is the fallback when a dispatch arm is
 /// absent, such as a custom prelude missing the array/vector methods.
 pub fn nativeIn(ctx: *Context) anyerror!void {
-    if (try dispatch_helpers.tryDispatchBinaryByName(ctx, "#in?")) return;
+    if (try dispatch_helpers.tryDispatchBinary(ctx, ctx.nativeDispatchId(.in))) return;
 
     const elem = try ctx.stack.pop();
     const seq = try ctx.stack.pop();
@@ -2463,7 +2322,7 @@ fn nativeInSet(ctx: *Context) anyerror!void {
 /// 1z `method{` entries. The counted iterator scan below is the fallback when a dispatch arm is
 /// absent. Sets are unordered, so they are rejected here rather than scanned.
 pub fn nativeIndexOf(ctx: *Context) anyerror!void {
-    if (try dispatch_helpers.tryDispatchBinaryByName(ctx, "#index-of")) return;
+    if (try dispatch_helpers.tryDispatchBinary(ctx, ctx.nativeDispatchId(.index_of))) return;
 
     const elem = try ctx.stack.pop();
     const seq = try ctx.stack.pop();
@@ -3090,7 +2949,7 @@ fn nativeToArrayArray(_: *Context) anyerror!void {
 
 /// >array ( container -- array )
 fn nativeToArray(ctx: *Context) anyerror!void {
-    if (try dispatch_helpers.tryDispatchUnaryByName(ctx, ">array")) return;
+    if (try dispatch_helpers.tryDispatchUnary(ctx, ctx.nativeDispatchId(.to_array))) return;
     const val = try ctx.stack.pop();
     defer container_backing.releaseValue(val);
     setErrorContext(ctx, ">array expected vector, byte-array, set, or array, got {s}", .{valueTypeName(val)});
@@ -3204,7 +3063,7 @@ fn nativeToHashHash(_: *Context) anyerror!void {}
 
 /// >hash ( container -- hash )
 fn nativeToHash(ctx: *Context) anyerror!void {
-    if (try dispatch_helpers.tryDispatchUnaryByName(ctx, ">hash")) return;
+    if (try dispatch_helpers.tryDispatchUnary(ctx, ctx.nativeDispatchId(.to_hash))) return;
     const val = try ctx.stack.pop();
     defer container_backing.releaseValue(val);
     setErrorContext(ctx, ">hash expected mutable-map, hash, struct, virtual, or enum, got {s}", .{valueTypeName(val)});
@@ -3389,32 +3248,10 @@ fn nativePokeByteArray(ctx: *Context) anyerror!void {
 ///
 /// Dispatch entry point; falls back to `nativePeekByteArray` when no dispatch arm is registered.
 fn nativePeek(ctx: *Context) anyerror!void {
-    // dispatch: byte-array is at stack depth 2 (below offset and width)
+    // byte-array is at stack depth 2, below offset and width
     if (ctx.stack.depth() >= 3) {
-        const seq_peek = try ctx.stack.peekN(2);
-        const a_type = dispatch_mod.dispatchDescriptor(seq_peek, ctx);
-        if (ctx.resolveDispatchId("#peek")) |did| {
-            if (ctx.lookupUnaryDispatch(did, a_type)) |entry| {
-                try dispatch_helpers.executeDispatchBody(ctx, entry);
-                return;
-            }
-            if (dispatch_mod.dispatchEnumTypeValue(seq_peek)) |ae| {
-                if (ctx.lookupUnaryDispatch(did, ae.descriptor.?)) |entry| {
-                    try dispatch_helpers.executeDispatchBody(ctx, entry);
-                    return;
-                }
-            }
-            if (dispatch_mod.dispatchBaseTypeValue(seq_peek)) |bt| {
-                if (ctx.lookupUnaryDispatch(did, bt.descriptor.?)) |entry| {
-                    const len = ctx.stack.items.items.len;
-                    helpers.unwrapTaggedSlotInPlace(&ctx.stack.items.items[len - 3]);
-                    try dispatch_helpers.executeDispatchBody(ctx, entry);
-                    return;
-                }
-            }
-        }
-
-        if (seq_peek == .byte_array) return nativePeekByteArray(ctx);
+        if (try dispatch_helpers.tryDispatchContainerAtDepth(ctx, ctx.nativeDispatchId(.peek), 2, true)) return;
+        if ((try ctx.stack.peekN(2)) == .byte_array) return nativePeekByteArray(ctx);
     }
 
     const val = try ctx.stack.pop();
@@ -3431,32 +3268,10 @@ fn nativePeek(ctx: *Context) anyerror!void {
 ///
 /// Dispatch entry point; falls back to `nativePokeByteArray` when no dispatch arm is registered.
 fn nativePoke(ctx: *Context) anyerror!void {
-    // dispatch: byte-array is at stack depth 3 (below offset, value, and width)
+    // byte-array is at stack depth 3, below offset, value, and width
     if (ctx.stack.depth() >= 4) {
-        const seq_peek = try ctx.stack.peekN(3);
-        const a_type = dispatch_mod.dispatchDescriptor(seq_peek, ctx);
-        if (ctx.resolveDispatchId("#poke!")) |did| {
-            if (ctx.lookupUnaryDispatch(did, a_type)) |entry| {
-                try dispatch_helpers.executeDispatchBody(ctx, entry);
-                return;
-            }
-            if (dispatch_mod.dispatchEnumTypeValue(seq_peek)) |ae| {
-                if (ctx.lookupUnaryDispatch(did, ae.descriptor.?)) |entry| {
-                    try dispatch_helpers.executeDispatchBody(ctx, entry);
-                    return;
-                }
-            }
-            if (dispatch_mod.dispatchBaseTypeValue(seq_peek)) |bt| {
-                if (ctx.lookupUnaryDispatch(did, bt.descriptor.?)) |entry| {
-                    const len = ctx.stack.items.items.len;
-                    helpers.unwrapTaggedSlotInPlace(&ctx.stack.items.items[len - 4]);
-                    try dispatch_helpers.executeDispatchBody(ctx, entry);
-                    return;
-                }
-            }
-        }
-
-        if (seq_peek == .byte_array) return nativePokeByteArray(ctx);
+        if (try dispatch_helpers.tryDispatchContainerAtDepth(ctx, ctx.nativeDispatchId(.poke_mut), 3, true)) return;
+        if ((try ctx.stack.peekN(3)) == .byte_array) return nativePokeByteArray(ctx);
     }
 
     const val = try ctx.stack.pop();

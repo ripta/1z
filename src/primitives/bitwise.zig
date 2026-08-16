@@ -9,6 +9,7 @@ const Primitive = @import("types.zig").Primitive;
 const dispatch_helpers = @import("dispatch_helpers.zig");
 const dispatch_mod = @import("../dispatch.zig");
 const DispatchTable = dispatch_mod.DispatchTable;
+const NativeDispatchWord = dispatch_mod.NativeDispatchWord;
 const markers_mod = @import("markers.zig");
 const container_backing = @import("../container_backing.zig");
 
@@ -197,12 +198,12 @@ pub fn registerNativeDispatch(dispatch: *DispatchTable, ctx: *Context) !void {
     const bit_tvs = [_]*const value_mod.TypeValue{ fixnum_tv, bignum_tv };
 
     // bitand, bitor, bitxor: 4 entries each (2x2 bit-type matrix)
-    inline for ([_]struct { op: BitwiseOp, name: []const u8 }{
-        .{ .op = .bitand, .name = "bitand" },
-        .{ .op = .bitor, .name = "bitor" },
-        .{ .op = .bitxor, .name = "bitxor" },
+    inline for ([_]struct { op: BitwiseOp, word: NativeDispatchWord }{
+        .{ .op = .bitand, .word = .bitand },
+        .{ .op = .bitor, .word = .bitor },
+        .{ .op = .bitxor, .word = .bitxor },
     }) |item| {
-        const did = ctx.resolveDispatchId(item.name).?;
+        const did = ctx.nativeDispatchId(item.word);
         inline for (bit_types) |ta| {
             inline for (bit_types) |tb| {
                 try dispatch.registerNative(did, bit_tvs[@intFromEnum(ta)], bit_tvs[@intFromEnum(tb)], makeBinaryBitwiseEntry(item.op, ta, tb));
@@ -211,28 +212,28 @@ pub fn registerNativeDispatch(dispatch: *DispatchTable, ctx: *Context) !void {
     }
 
     // bitnot: 2 entries (unary)
-    const bitnot_did = ctx.resolveDispatchId("bitnot").?;
+    const bitnot_did = ctx.nativeDispatchId(.bitnot);
     inline for (bit_types) |t| {
         try dispatch.registerNative(bitnot_did, bit_tvs[@intFromEnum(t)], unary, makeBitnotEntry(t));
     }
 
     // shift-left: 2 entries (fixnum x fixnum, bignum x fixnum)
-    const shift_left_did = ctx.resolveDispatchId("shift-left").?;
+    const shift_left_did = ctx.nativeDispatchId(.shift_left);
     inline for (bit_types) |t| {
         try dispatch.registerNative(shift_left_did, bit_tvs[@intFromEnum(t)], fixnum_tv, makeShiftLeftEntry(t));
     }
 
     // shift-right: 2 entries (fixnum x fixnum, bignum x fixnum)
-    const shift_right_did = ctx.resolveDispatchId("shift-right").?;
+    const shift_right_did = ctx.nativeDispatchId(.shift_right);
     inline for (bit_types) |t| {
         try dispatch.registerNative(shift_right_did, bit_tvs[@intFromEnum(t)], fixnum_tv, makeShiftRightEntry(t));
     }
 
     // ushift-right: 1 entry (fixnum x fixnum only)
-    try dispatch.registerNative(ctx.resolveDispatchId("ushift-right").?, fixnum_tv, fixnum_tv, makeUshiftRightEntry());
+    try dispatch.registerNative(ctx.nativeDispatchId(.ushift_right), fixnum_tv, fixnum_tv, makeUshiftRightEntry());
 
     // shift: 2 entries (fixnum x fixnum, bignum x fixnum)
-    const shift_did = ctx.resolveDispatchId("shift").?;
+    const shift_did = ctx.nativeDispatchId(.shift);
     inline for (bit_types) |t| {
         try dispatch.registerNative(shift_did, bit_tvs[@intFromEnum(t)], fixnum_tv, makeShiftEntry(t));
     }
@@ -247,7 +248,7 @@ fn isNativeBitwise(val: Value) bool {
 }
 
 fn nativeBitand(ctx: *Context) anyerror!void {
-    if (try dispatch_helpers.tryDispatchBinaryByName(ctx, "bitand")) return;
+    if (try dispatch_helpers.tryDispatchBinary(ctx, ctx.nativeDispatchId(.bitand))) return;
     const b = try ctx.stack.pop();
     defer container_backing.releaseValue(b);
     const a = try ctx.stack.pop();
@@ -258,7 +259,7 @@ fn nativeBitand(ctx: *Context) anyerror!void {
 }
 
 fn nativeBitor(ctx: *Context) anyerror!void {
-    if (try dispatch_helpers.tryDispatchBinaryByName(ctx, "bitor")) return;
+    if (try dispatch_helpers.tryDispatchBinary(ctx, ctx.nativeDispatchId(.bitor))) return;
     const b = try ctx.stack.pop();
     defer container_backing.releaseValue(b);
     const a = try ctx.stack.pop();
@@ -269,7 +270,7 @@ fn nativeBitor(ctx: *Context) anyerror!void {
 }
 
 fn nativeBitxor(ctx: *Context) anyerror!void {
-    if (try dispatch_helpers.tryDispatchBinaryByName(ctx, "bitxor")) return;
+    if (try dispatch_helpers.tryDispatchBinary(ctx, ctx.nativeDispatchId(.bitxor))) return;
     const b = try ctx.stack.pop();
     defer container_backing.releaseValue(b);
     const a = try ctx.stack.pop();
@@ -280,7 +281,7 @@ fn nativeBitxor(ctx: *Context) anyerror!void {
 }
 
 fn nativeBitnot(ctx: *Context) anyerror!void {
-    if (try dispatch_helpers.tryDispatchUnaryByName(ctx, "bitnot")) return;
+    if (try dispatch_helpers.tryDispatchUnary(ctx, ctx.nativeDispatchId(.bitnot))) return;
     const val = try ctx.stack.pop();
     defer container_backing.releaseValue(val);
     helpers.setErrorHint(ctx, "operand must be an integer (fixnum or bignum)");
@@ -289,7 +290,7 @@ fn nativeBitnot(ctx: *Context) anyerror!void {
 }
 
 fn nativeShiftLeft(ctx: *Context) anyerror!void {
-    if (try dispatch_helpers.tryDispatchBinaryByName(ctx, "shift-left")) return;
+    if (try dispatch_helpers.tryDispatchBinary(ctx, ctx.nativeDispatchId(.shift_left))) return;
     const count = try ctx.stack.pop();
     defer container_backing.releaseValue(count);
     const val = try ctx.stack.pop();
@@ -305,7 +306,7 @@ fn nativeShiftLeft(ctx: *Context) anyerror!void {
 }
 
 fn nativeShiftRight(ctx: *Context) anyerror!void {
-    if (try dispatch_helpers.tryDispatchBinaryByName(ctx, "shift-right")) return;
+    if (try dispatch_helpers.tryDispatchBinary(ctx, ctx.nativeDispatchId(.shift_right))) return;
     const count = try ctx.stack.pop();
     defer container_backing.releaseValue(count);
     const val = try ctx.stack.pop();
@@ -321,7 +322,7 @@ fn nativeShiftRight(ctx: *Context) anyerror!void {
 }
 
 fn nativeUshiftRight(ctx: *Context) anyerror!void {
-    if (try dispatch_helpers.tryDispatchBinaryByName(ctx, "ushift-right")) return;
+    if (try dispatch_helpers.tryDispatchBinary(ctx, ctx.nativeDispatchId(.ushift_right))) return;
     const count = try ctx.stack.pop();
     defer container_backing.releaseValue(count);
     const val = try ctx.stack.pop();
@@ -337,7 +338,7 @@ fn nativeUshiftRight(ctx: *Context) anyerror!void {
 }
 
 fn nativeShift(ctx: *Context) anyerror!void {
-    if (try dispatch_helpers.tryDispatchBinaryByName(ctx, "shift")) return;
+    if (try dispatch_helpers.tryDispatchBinary(ctx, ctx.nativeDispatchId(.shift))) return;
     const count = try ctx.stack.pop();
     defer container_backing.releaseValue(count);
     const val = try ctx.stack.pop();

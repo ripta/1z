@@ -27,7 +27,7 @@ pub const primitives = [_]Primitive{
 
 /// freeze ( val -- frozen )
 fn nativeFreeze(ctx: *Context) anyerror!void {
-    if (try dispatch_helpers.tryDispatchUnaryByName(ctx, "freeze")) return;
+    if (try dispatch_helpers.tryDispatchUnary(ctx, ctx.nativeDispatchId(.freeze))) return;
 
     const val = try ctx.stack.pop();
     defer container_backing.releaseValue(val);
@@ -41,7 +41,7 @@ fn nativeFreeze(ctx: *Context) anyerror!void {
 
 /// freeze! ( val -- frozen )
 fn nativeFreezeBang(ctx: *Context) anyerror!void {
-    if (try dispatch_helpers.tryDispatchUnaryByName(ctx, "freeze!")) return;
+    if (try dispatch_helpers.tryDispatchUnary(ctx, ctx.nativeDispatchId(.freeze_bang))) return;
 
     const val = try ctx.stack.pop();
     const frozen = deepFreezeConsume(ctx, val) catch |e| {

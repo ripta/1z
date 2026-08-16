@@ -157,14 +157,6 @@ fn lookupUnaryWithFallback(ctx: *Context, dispatch_id: u32, a: Value) ?AutoUnwra
     return null;
 }
 
-/// By-name binary dispatch for the natives not yet carrying their own dispatch id. Resolving the
-/// name walks the shadowing ladder, so a visible binding of the name answers in the native's
-/// place; identity-carrying natives call `tryDispatchBinary` with their stored id instead.
-pub fn tryDispatchBinaryByName(ctx: *Context, word_name: []const u8) !bool {
-    const dispatch_id = ctx.resolveDispatchId(word_name) orelse return false;
-    return tryDispatchBinary(ctx, dispatch_id);
-}
-
 /// Try to dispatch a binary operation via the dispatch table.
 ///
 /// Peeks at the top two stack values and looks up a registered method, executing the body with
@@ -221,14 +213,6 @@ pub fn tryDispatchBinary(ctx: *Context, dispatch_id: u32) !bool {
     }
 
     return false;
-}
-
-/// By-name unary dispatch for the natives not yet carrying their own dispatch id. Resolving the
-/// name walks the shadowing ladder, so a visible binding of the name answers in the native's
-/// place; identity-carrying natives call `tryDispatchUnary` with their stored id instead.
-pub fn tryDispatchUnaryByName(ctx: *Context, word_name: []const u8) !bool {
-    const dispatch_id = ctx.resolveDispatchId(word_name) orelse return false;
-    return tryDispatchUnary(ctx, dispatch_id);
 }
 
 /// Try to dispatch a unary operation via the dispatch table.
@@ -309,8 +293,7 @@ pub fn dispatchUnaryOnValue(ctx: *Context, dispatch_id: u32, val: Value) !bool {
 ///
 /// Returns true when an arm ran. Returns false when no arm matched, leaving the stack untouched so the
 /// caller can pop and report its own type error.
-pub fn tryDispatchContainerAtDepth(ctx: *Context, word_name: []const u8, depth: usize, unwrap_base: bool) !bool {
-    const dispatch_id = ctx.resolveDispatchId(word_name) orelse return false;
+pub fn tryDispatchContainerAtDepth(ctx: *Context, dispatch_id: u32, depth: usize, unwrap_base: bool) !bool {
     if (ctx.stack.depth() < depth + 1) return false;
 
     const peeked = try ctx.stack.peekN(depth);
@@ -728,14 +711,16 @@ test "tryDispatchBinary returns false with empty stack" {
     try std.testing.expect(!result);
 }
 
-test "tryDispatchBinaryByName returns false for an unresolvable name" {
+test "tryDispatchBinary returns false when the id owns no entries" {
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
+
+    try ctx.defineWord("no-such-word", .{ .name = "no-such-word", .action = .{ .compound = &[_]Instruction{} } });
 
     try ctx.stack.push(.{ .fixnum = 1 });
     try ctx.stack.push(.{ .fixnum = 2 });
 
-    const result = try tryDispatchBinaryByName(&ctx, "no-such-word");
+    const result = try tryDispatchBinary(&ctx, ctx.resolveDispatchId("no-such-word").?);
     try std.testing.expect(!result);
 
     try std.testing.expectEqual(@as(usize, 2), ctx.stack.depth());
@@ -749,13 +734,15 @@ test "tryDispatchUnary returns false with empty stack" {
     try std.testing.expect(!result);
 }
 
-test "tryDispatchUnaryByName returns false when no method registered" {
+test "tryDispatchUnary returns false when the id owns no entries" {
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
 
+    try ctx.defineWord("serialize", .{ .name = "serialize", .action = .{ .compound = &[_]Instruction{} } });
+
     try ctx.stack.push(.{ .fixnum = 42 });
 
-    const result = try tryDispatchUnaryByName(&ctx, "serialize");
+    const result = try tryDispatchUnary(&ctx, ctx.resolveDispatchId("serialize").?);
     try std.testing.expect(!result);
 
     try std.testing.expectEqual(@as(usize, 1), ctx.stack.depth());
@@ -777,6 +764,53 @@ test "tryDispatchBinary with the native's own id ignores a shadowing frame bindi
     try std.testing.expect(result);
     try std.testing.expectEqual(@as(usize, 1), ctx.stack.depth());
     try std.testing.expectEqual(@as(f64, 60.0), (try ctx.stack.pop()).float);
+}
+
+test "tryDispatchUnary with the native's own id ignores a shadowing frame binding" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    try ctx.pushLocalFrame();
+    defer ctx.popLocalFrame();
+    try ctx.defineWord("abs", .{ .name = "abs", .action = .{ .compound = &[_]Instruction{} } });
+
+    try ctx.stack.push(.{ .float = -3.5 });
+
+    const result = try tryDispatchUnary(&ctx, ctx.nativeDispatchId(.abs));
+    try std.testing.expect(result);
+    try std.testing.expectEqual(@as(usize, 1), ctx.stack.depth());
+    try std.testing.expectEqual(@as(f64, 3.5), (try ctx.stack.pop()).float);
+}
+
+test "tryDispatchContainerAtDepth with the native's own id ignores a shadowing frame binding" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    // `@get`'s builtin arms key on container types the test cannot cheaply build, so the arm
+    // under test keys on the fixnum standing in for the container.
+    const fixnum_tv = ctx.lookupBuiltinTypeValue("fixnum").?;
+    const body = &[_]Instruction{
+        .{ .op = .{ .call_word = "drop" }, .line = 0 },
+        .{ .op = .{ .call_word = "drop" }, .line = 0 },
+        .{ .op = .{ .push_literal = .{ .fixnum = 99 } }, .line = 0 },
+    };
+    try ctx.dispatch.register(
+        .{ .dispatch_id = ctx.nativeDispatchId(.at_get), .type_a = fixnum_tv.descriptor.?, .type_b = ctx.getDispatchUnarySentinel().descriptor.? },
+        .{ .body = .{ .quotation = .{ .instructions = body } } },
+        false,
+    );
+
+    try ctx.pushLocalFrame();
+    defer ctx.popLocalFrame();
+    try ctx.defineWord("@get", .{ .name = "@get", .action = .{ .compound = &[_]Instruction{} } });
+
+    try ctx.stack.push(.{ .fixnum = 7 });
+    try ctx.stack.push(.{ .fixnum = 1 });
+
+    const result = try tryDispatchContainerAtDepth(&ctx, ctx.nativeDispatchId(.at_get), 1, true);
+    try std.testing.expect(result);
+    try std.testing.expectEqual(@as(usize, 1), ctx.stack.depth());
+    try std.testing.expectEqual(@as(i64, 99), (try ctx.stack.pop()).fixnum);
 }
 
 test "tryDispatchGeneric returns false with empty stack" {

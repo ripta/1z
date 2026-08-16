@@ -42,32 +42,32 @@ pub fn registerNativeDispatch(dispatch: *DispatchTable, ctx: *Context) !void {
     const module = tv(ctx, "module");
 
     // @get / @has? : container-keyed at depth 1 (key rides on top).
-    const get_did = ctx.resolveDispatchId("@get").?;
+    const get_did = ctx.nativeDispatchId(.at_get);
     try dispatch.registerNative(get_did, hash, unary, nativeAtGetHash);
     try dispatch.registerNative(get_did, mutable_map, unary, nativeAtGetMutableMap);
     try dispatch.registerNative(get_did, err_tv, unary, nativeAtGetError);
     try dispatch.registerNative(get_did, module, unary, nativeAtGetModule);
 
-    const has_did = ctx.resolveDispatchId("@has?").?;
+    const has_did = ctx.nativeDispatchId(.at_has);
     try dispatch.registerNative(has_did, hash, unary, nativeAtHasHash);
     try dispatch.registerNative(has_did, mutable_map, unary, nativeAtHasMutableMap);
     try dispatch.registerNative(has_did, err_tv, unary, nativeAtHasError);
     try dispatch.registerNative(has_did, module, unary, nativeAtHasModule);
 
     // @set : a hash arm and an error arm that rejects.
-    const set_did = ctx.resolveDispatchId("@set").?;
+    const set_did = ctx.nativeDispatchId(.at_set);
     try dispatch.registerNative(set_did, hash, unary, nativeAtSetHash);
     try dispatch.registerNative(set_did, err_tv, unary, nativeAtSetErrorReject);
 
     // @keys : container at top of stack.
-    const keys_did = ctx.resolveDispatchId("@keys").?;
+    const keys_did = ctx.nativeDispatchId(.at_keys);
     try dispatch.registerNative(keys_did, hash, unary, nativeAtKeysHash);
     try dispatch.registerNative(keys_did, mutable_map, unary, nativeAtKeysMutableMap);
     try dispatch.registerNative(keys_did, err_tv, unary, nativeAtKeysError);
     try dispatch.registerNative(keys_did, module, unary, nativeAtKeysModule);
 
     // @values : container at top of stack. Hash, mutable-map, and error arms.
-    const values_did = ctx.resolveDispatchId("@values").?;
+    const values_did = ctx.nativeDispatchId(.at_values);
     try dispatch.registerNative(values_did, hash, unary, nativeAtValuesHash);
     try dispatch.registerNative(values_did, mutable_map, unary, nativeAtValuesMutableMap);
     try dispatch.registerNative(values_did, err_tv, unary, nativeAtValuesError);
@@ -126,7 +126,7 @@ fn getErrorField(ctx: *Context, err: *const ErrorObject, field_name: []const u8)
 
 /// @get ( assoc key -- value ) - Get value by key/field
 pub fn nativeAtGet(ctx: *Context) anyerror!void {
-    if (try dispatch_helpers.tryDispatchContainerAtDepth(ctx, "@get", 1, true)) return;
+    if (try dispatch_helpers.tryDispatchContainerAtDepth(ctx, ctx.nativeDispatchId(.at_get), 1, true)) return;
 
     const key = try ctx.stack.pop();
     defer container_backing.releaseValue(key);
@@ -205,7 +205,7 @@ fn nativeAtGetModule(ctx: *Context) anyerror!void {
 
 /// @has? ( assoc key -- ? ) - Check if key/field exists
 pub fn nativeAtHas(ctx: *Context) anyerror!void {
-    if (try dispatch_helpers.tryDispatchContainerAtDepth(ctx, "@has?", 1, true)) return;
+    if (try dispatch_helpers.tryDispatchContainerAtDepth(ctx, ctx.nativeDispatchId(.at_has), 1, true)) return;
 
     const key = try ctx.stack.pop();
     defer container_backing.releaseValue(key);
@@ -264,7 +264,7 @@ fn nativeAtHasModule(ctx: *Context) anyerror!void {
 ///
 /// Hash-only; the error arm rejects explicitly.
 pub fn nativeAtSet(ctx: *Context) anyerror!void {
-    if (try dispatch_helpers.tryDispatchContainerAtDepth(ctx, "@set", 2, false)) return;
+    if (try dispatch_helpers.tryDispatchContainerAtDepth(ctx, ctx.nativeDispatchId(.at_set), 2, false)) return;
 
     const new_value = try ctx.stack.pop();
     const key = try ctx.stack.pop();
@@ -359,7 +359,7 @@ fn nativeAtSetErrorReject(ctx: *Context) anyerror!void {
 
 /// @keys ( assoc -- array ) - Get all keys
 pub fn nativeAtKeys(ctx: *Context) anyerror!void {
-    if (try dispatch_helpers.tryDispatchUnaryByName(ctx, "@keys")) return;
+    if (try dispatch_helpers.tryDispatchUnary(ctx, ctx.nativeDispatchId(.at_keys))) return;
 
     const obj = try ctx.stack.pop();
     defer container_backing.releaseValue(obj);
@@ -437,7 +437,7 @@ fn nativeAtKeysModule(ctx: *Context) anyerror!void {
 ///
 /// No module arm, unlike @get/@has?/@keys.
 pub fn nativeAtValues(ctx: *Context) anyerror!void {
-    if (try dispatch_helpers.tryDispatchUnaryByName(ctx, "@values")) return;
+    if (try dispatch_helpers.tryDispatchUnary(ctx, ctx.nativeDispatchId(.at_values))) return;
 
     const obj = try ctx.stack.pop();
     defer container_backing.releaseValue(obj);

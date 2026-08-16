@@ -178,9 +178,12 @@ pub const DispatchKeyContext = struct {
 /// A generic native's entries are keyed by the dispatch id of its own word definition. Resolving
 /// that id by name at call time would let any visible binding of the name answer in the native's
 /// place, so each of these natives instead reads the id its entries were registered under from
-/// per-Context storage populated once at registration. The storage is per-Context rather than a
-/// comptime global because `next_dispatch_id` is per-root-context and an embedding can hold more
-/// than one.
+/// per-Context storage that `captureNativeDispatchIds` fills once at init. The storage is
+/// per-Context rather than a comptime global because `next_dispatch_id` is per-root-context and an
+/// embedding can hold more than one.
+///
+/// Every value here has to name a word in some module's `primitives` array, since the capture
+/// resolves it through `lookupWord`, which never reaches the `native.*` registry entries.
 pub const NativeDispatchWord = enum {
     add,
     sub,
@@ -193,6 +196,47 @@ pub const NativeDispatchWord = enum {
     to_float,
     to_integer,
     abs,
+
+    bitand,
+    bitor,
+    bitxor,
+    bitnot,
+    shift_left,
+    shift_right,
+    ushift_right,
+    shift,
+
+    len,
+    nth,
+    first,
+    last,
+    in,
+    index_of,
+    to_array,
+    to_hash,
+    nth_mut,
+    append_mut,
+    push_mut,
+    pop_mut,
+    unshift_mut,
+    shift_mut,
+    peek,
+    poke_mut,
+
+    at_get,
+    at_has,
+    at_set,
+    at_keys,
+    at_values,
+    at_set_mut,
+    at_remove_mut,
+
+    inspect,
+    to_string,
+    to_symbol,
+
+    freeze,
+    freeze_bang,
 
     pub fn wordName(self: NativeDispatchWord) []const u8 {
         return switch (self) {
@@ -207,6 +251,47 @@ pub const NativeDispatchWord = enum {
             .to_float => ">float",
             .to_integer => ">integer",
             .abs => "abs",
+
+            .bitand => "bitand",
+            .bitor => "bitor",
+            .bitxor => "bitxor",
+            .bitnot => "bitnot",
+            .shift_left => "shift-left",
+            .shift_right => "shift-right",
+            .ushift_right => "ushift-right",
+            .shift => "shift",
+
+            .len => "#len",
+            .nth => "#nth",
+            .first => "#first",
+            .last => "#last",
+            .in => "#in?",
+            .index_of => "#index-of",
+            .to_array => ">array",
+            .to_hash => ">hash",
+            .nth_mut => "#nth!",
+            .append_mut => "#append!",
+            .push_mut => "#push!",
+            .pop_mut => "#pop!",
+            .unshift_mut => "#unshift!",
+            .shift_mut => "#shift!",
+            .peek => "#peek",
+            .poke_mut => "#poke!",
+
+            .at_get => "@get",
+            .at_has => "@has?",
+            .at_set => "@set",
+            .at_keys => "@keys",
+            .at_values => "@values",
+            .at_set_mut => "@set!",
+            .at_remove_mut => "@remove!",
+
+            .inspect => "inspect",
+            .to_string => ">string",
+            .to_symbol => ">symbol",
+
+            .freeze => "freeze",
+            .freeze_bang => "freeze!",
         };
     }
 };

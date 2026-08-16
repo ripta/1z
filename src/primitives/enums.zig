@@ -344,7 +344,7 @@ fn nativeDefineEnum(ctx: *Context) anyerror!void {
 
             const pred_name = try std.fmt.allocPrint(alloc, "{s}:{s}?", .{ enum_name, variant_sym });
             try virtual.definePredicate(ctx, pred_name, vtype, markers_slice);
-            try ctx.dispatch.registerNative(ctx.resolveDispatchId(">symbol").?, variant_tv, unary, enumVariantToSymbol);
+            try ctx.dispatch.registerNative(ctx.nativeDispatchId(.to_symbol), variant_tv, unary, enumVariantToSymbol);
 
             try generated_words.append(alloc, value_mod.stringValue(full_name));
             try generated_words.append(alloc, value_mod.stringValue(pred_name));
@@ -420,7 +420,7 @@ fn nativeDefineEnum(ctx: *Context) anyerror!void {
 
             const pred_name = try std.fmt.allocPrint(alloc, "{s}?", .{full_name});
             try virtual.definePredicate(ctx, pred_name, vtype, markers_slice);
-            try ctx.dispatch.registerNative(ctx.resolveDispatchId(">symbol").?, variant_tv, unary, enumDataVariantToSymbol);
+            try ctx.dispatch.registerNative(ctx.nativeDispatchId(.to_symbol), variant_tv, unary, enumDataVariantToSymbol);
 
             try generated_words.append(alloc, value_mod.stringValue(wrap_name));
             try generated_words.append(alloc, value_mod.stringValue(make_name_word));

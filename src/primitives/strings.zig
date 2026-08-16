@@ -70,7 +70,7 @@ pub fn registerNativeDispatch(dispatch: *DispatchTable, ctx: *Context) !void {
         "doc-string",  "type",         "unit",
     };
 
-    const inspect_id = ctx.resolveDispatchId("inspect").?;
+    const inspect_id = ctx.nativeDispatchId(.inspect);
     for (inspect_type_names) |name| {
         const tv = ctx.lookupBuiltinTypeValue(name).?;
         try dispatch.registerNative(inspect_id, tv, unary, nativeInspectGeneric);
@@ -80,7 +80,7 @@ pub fn registerNativeDispatch(dispatch: *DispatchTable, ctx: *Context) !void {
     const symbol_tv = ctx.lookupBuiltinTypeValue("symbol").?;
     const marker_tv = ctx.lookupBuiltinTypeValue("marker").?;
 
-    const to_string_id = ctx.resolveDispatchId(">string").?;
+    const to_string_id = ctx.nativeDispatchId(.to_string);
     for (inspect_type_names) |name| {
         const tv = ctx.lookupBuiltinTypeValue(name).?;
         if (tv == string_tv) {
@@ -109,7 +109,7 @@ pub const primitives = [_]Primitive{
 
 /// inspect ( value -- string )
 fn nativeInspect(ctx: *Context) anyerror!void {
-    if (try dispatch_helpers.tryDispatchUnaryByName(ctx, "inspect")) return;
+    if (try dispatch_helpers.tryDispatchUnary(ctx, ctx.nativeDispatchId(.inspect))) return;
 
     const val = try ctx.stack.pop();
     defer container_backing.releaseValue(val);
@@ -121,7 +121,7 @@ fn nativeInspect(ctx: *Context) anyerror!void {
 
 /// >string ( value -- string )
 fn nativeAsString(ctx: *Context) anyerror!void {
-    if (try dispatch_helpers.tryDispatchUnaryByName(ctx, ">string")) return;
+    if (try dispatch_helpers.tryDispatchUnary(ctx, ctx.nativeDispatchId(.to_string))) return;
 
     const val = try ctx.stack.pop();
     defer container_backing.releaseValue(val);
@@ -133,7 +133,7 @@ fn nativeAsString(ctx: *Context) anyerror!void {
 
 /// >symbol ( string -- symbol )
 fn nativeToSymbol(ctx: *Context) anyerror!void {
-    if (try dispatch_helpers.tryDispatchUnaryByName(ctx, ">symbol")) return;
+    if (try dispatch_helpers.tryDispatchUnary(ctx, ctx.nativeDispatchId(.to_symbol))) return;
 
     const val = try ctx.stack.pop();
     switch (val) {

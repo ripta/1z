@@ -592,7 +592,7 @@ pub fn registerNativeDispatch(dispatch: *DispatchTable, ctx: *Context) !void {
         .{ .op = .sub, .word = .sub },
         .{ .op = .mul, .word = .mul },
     }) |item| {
-        const did = ctx.captureNativeDispatchId(item.word);
+        const did = ctx.nativeDispatchId(item.word);
         inline for (num_types) |ta| {
             inline for (num_types) |tb| {
                 try dispatch.registerNative(did, num_tvs[@intFromEnum(ta)].descriptor.?, num_tvs[@intFromEnum(tb)].descriptor.?, makeBinaryArithEntry(item.op, ta, tb));
@@ -601,7 +601,7 @@ pub fn registerNativeDispatch(dispatch: *DispatchTable, ctx: *Context) !void {
     }
 
     // / : 9 entries
-    const div_did = ctx.captureNativeDispatchId(.div);
+    const div_did = ctx.nativeDispatchId(.div);
     inline for (num_types) |ta| {
         inline for (num_types) |tb| {
             try dispatch.registerNative(div_did, num_tvs[@intFromEnum(ta)].descriptor.?, num_tvs[@intFromEnum(tb)].descriptor.?, makeDivEntry(ta, tb));
@@ -609,7 +609,7 @@ pub fn registerNativeDispatch(dispatch: *DispatchTable, ctx: *Context) !void {
     }
 
     // % : 9 entries
-    const mod_did = ctx.captureNativeDispatchId(.mod);
+    const mod_did = ctx.nativeDispatchId(.mod);
     inline for (num_types) |ta| {
         inline for (num_types) |tb| {
             try dispatch.registerNative(mod_did, num_tvs[@intFromEnum(ta)].descriptor.?, num_tvs[@intFromEnum(tb)].descriptor.?, makeModEntry(ta, tb));
@@ -620,7 +620,7 @@ pub fn registerNativeDispatch(dispatch: *DispatchTable, ctx: *Context) !void {
     // comparable builtin. The same-type entries keep `=` on native value
     // equality instead of deriving it from `cmp` (which throws on NaN) once the
     // comparable builtins gained `cmp` methods.
-    const eq_did = ctx.captureNativeDispatchId(.eq);
+    const eq_did = ctx.nativeDispatchId(.eq);
     inline for (num_types) |ta| {
         inline for (num_types) |tb| {
             if (ta != tb) {
@@ -635,7 +635,7 @@ pub fn registerNativeDispatch(dispatch: *DispatchTable, ctx: *Context) !void {
     }
 
     // < : 9 entries
-    const lt_did = ctx.captureNativeDispatchId(.lt);
+    const lt_did = ctx.nativeDispatchId(.lt);
     inline for (num_types) |ta| {
         inline for (num_types) |tb| {
             try dispatch.registerNative(lt_did, num_tvs[@intFromEnum(ta)], num_tvs[@intFromEnum(tb)], makeLtEntry(ta, tb));
@@ -643,7 +643,7 @@ pub fn registerNativeDispatch(dispatch: *DispatchTable, ctx: *Context) !void {
     }
 
     // > : 9 entries
-    const gt_did = ctx.captureNativeDispatchId(.gt);
+    const gt_did = ctx.nativeDispatchId(.gt);
     inline for (num_types) |ta| {
         inline for (num_types) |tb| {
             try dispatch.registerNative(gt_did, num_tvs[@intFromEnum(ta)], num_tvs[@intFromEnum(tb)], makeGtEntry(ta, tb));
@@ -651,20 +651,20 @@ pub fn registerNativeDispatch(dispatch: *DispatchTable, ctx: *Context) !void {
     }
 
     // abs : 3 entries
-    const abs_did = ctx.captureNativeDispatchId(.abs);
+    const abs_did = ctx.nativeDispatchId(.abs);
     try dispatch.registerNative(abs_did, fixnum_tv, unary, nativeAbsFixnum);
     try dispatch.registerNative(abs_did, bignum_tv, unary, nativeAbsBignum);
     try dispatch.registerNative(abs_did, float_tv, unary, nativeAbsFloat);
 
     // >float : 4 entries
-    const to_float_did = ctx.captureNativeDispatchId(.to_float);
+    const to_float_did = ctx.nativeDispatchId(.to_float);
     try dispatch.registerNative(to_float_did, fixnum_tv, unary, nativeToFloatFixnum);
     try dispatch.registerNative(to_float_did, float_tv, unary, nativeToFloatPassthrough);
     try dispatch.registerNative(to_float_did, bignum_tv, unary, nativeToFloatBignum);
     try dispatch.registerNative(to_float_did, string_tv, unary, nativeToFloatString);
 
     // >integer : 2 entries
-    const to_integer_did = ctx.captureNativeDispatchId(.to_integer);
+    const to_integer_did = ctx.nativeDispatchId(.to_integer);
     try dispatch.registerNative(to_integer_did, float_tv, unary, nativeToIntegerFloat);
     try dispatch.registerNative(to_integer_did, fixnum_tv, unary, nativeToIntegerPassthrough);
 

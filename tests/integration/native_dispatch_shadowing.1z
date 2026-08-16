@@ -14,3 +14,46 @@ with-shadow: ( -- a ) [ -: [ drop drop 0 ] ; inner-sub ] ;
 victim .
 caller .
 with-shadow .
+
+\ The same shape holds for every other native that carries its own dispatch identity. Each victim
+\ below reaches an entry the native's fallthrough would not reproduce, so a captured identity shows
+\ up as a different value or an error rather than as the same answer by another route.
+len-victim: ( -- n ) [ { 1 2 3 } #len ] ;
+len-caller: ( -- n ) [ #len: [ drop 0 ] ; len-victim ] ;
+
+\ `>string` on a symbol drops the trailing colon its fallthrough writer keeps.
+string-victim: ( -- s ) [ foo: >string ] ;
+string-caller: ( -- s ) [ >string: [ drop "shadowed" ] ; string-victim ] ;
+
+get-victim: ( -- n ) [ H{ a: 1 } a: @get ] ;
+get-caller: ( -- n ) [ @get: [ drop drop 0 ] ; get-victim ] ;
+
+bitand-victim: ( -- n ) [ 12 10 bitand ] ;
+bitand-caller: ( -- n ) [ bitand: [ drop drop 0 ] ; bitand-victim ] ;
+
+len-victim .
+len-caller .
+string-victim .
+string-caller .
+get-victim .
+get-caller .
+bitand-victim .
+bitand-caller .
+
+\ A typed container registers its mutation arms when the type is defined, so the registration and
+\ the call site have to agree on the native's identity rather than on what its name resolves to at
+\ either moment.
+vector(fixnum): M{ inner-type: vector element-type: fixnum define: [ define-parameterized-type ] } ;
+
+push-victim: ( -- s ) [ V{ 1 2 } >vector(fixnum) 3 #push! type-name ] ;
+push-caller: ( -- s ) [ #push!: [ drop ] ; push-victim ] ;
+
+\ A typed arm that delegates back to the raw native has to reach it by identity too, or the caller's
+\ binding answers in the raw native's place.
+nth-mut-victim: ( -- n ) [ V{ 1 2 } >vector(fixnum) 0 99 #nth! unmake-vector(fixnum) 0 #nth ] ;
+nth-mut-caller: ( -- n ) [ #nth!: [ drop drop drop 0 ] ; nth-mut-victim ] ;
+
+push-victim .
+push-caller .
+nth-mut-victim .
+nth-mut-caller .
