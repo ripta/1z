@@ -55,6 +55,12 @@ pub const JitEntry = struct {
     /// Present only when this word_id is a hosted-AOT native primitive.
     /// See `NativeLeafData`.
     native: ?*NativeLeafData = null,
+    /// The word's own boxed declared effect, borrowed from its definition, so an error frame
+    /// keyed by word_id carries the effect without resolving the name.
+    ///
+    /// Set with the definition in hand: at compile time on the JIT tier, at startup
+    /// registration on the AOT tier.
+    stack_effect: ?*const StackEffect = null,
 
     /// The name traces, profiles, and error frames display for this word.
     pub fn displayName(self: JitEntry) []const u8 {

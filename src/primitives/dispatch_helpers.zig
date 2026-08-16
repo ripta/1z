@@ -534,7 +534,7 @@ pub fn satisfiesAndDispatch(
     // parks here and to call-stack-based error backtraces; the live event
     // mirrors the interpreter's `--trace-words` output for an ordinary word.
     const source = source_override orelse (ctx.jit_trace_source orelse ctx.current_source);
-    ctx.pushCallFrame(trace_name, source, line, 0);
+    ctx.pushCallFrame(trace_name, source, line, 0, null);
     defer ctx.popCallFrame();
     if (ctx.trace.trace_words and trace_mod.matchesPattern(trace_name, ctx.trace.trace_words_pattern)) {
         var tw = trace_mod.TraceWriter.init();

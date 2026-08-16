@@ -2058,6 +2058,9 @@ export fn onez_runtime_register_compiled(ptr: ?*anyopaque, table: [*]const ?*con
                 ) catch null;
             }
         }
+        if (names[i]) |name_ptr| {
+            registerEntryStackEffect(ctx, @intCast(i), std.mem.span(name_ptr), module_segment, table[i] != null);
+        }
         if (table[i]) |code_ptr| {
             ctx.jit_dispatch.setCodePtr(@intCast(i), code_ptr);
         } else if (names[i]) |name_ptr| {
@@ -2065,6 +2068,52 @@ export fn onez_runtime_register_compiled(ptr: ?*anyopaque, table: [*]const ?*con
         }
     }
     return ONEZ_OK;
+}
+
+/// Record `word_id`'s own boxed effect on its entry, resolved once at startup, so an error frame
+/// keyed by word_id carries the word's effect without a by-name lookup at raise time.
+///
+/// A module-carrying word resolves through its cached module's own scope. A module-less word is
+/// either a dictionary native, probed only when the entry is uncompiled so a compiled compound
+/// named like a native never inherits the native's effect, or a compiled word living in a cached
+/// module's word map -- the synthesized entry module is the standard case -- matched by its own
+/// word_id rather than its name.
+fn registerEntryStackEffect(ctx: *Context, word_id: u32, name: []const u8, module_segment: ?[]const u8, compiled: bool) void {
+    const effect: ?*const StackEffect = blk: {
+        if (module_segment) |segment| {
+            const module = ctx.cachedModuleBySegment(segment) orelse break :blk null;
+            const mod_word = module.words.get(name) orelse module.deps.get(name) orelse break :blk null;
+            break :blk mod_word.stack_effect;
+        }
+        if (!compiled) {
+            if (ctx.dictionary.getSlot(name)) |slot| {
+                const def = dictionary_mod.loadSlot(slot);
+                if (def.action == .native) break :blk def.stack_effect;
+            }
+        }
+        break :blk moduleCacheEffectById(ctx, word_id, name);
+    };
+    if (effect) |e| {
+        if (ctx.jit_dispatch.getMut(word_id)) |entry| entry.stack_effect = e;
+    }
+}
+
+/// The effect of the cached-module word whose own word_id is `word_id`, or null.
+///
+/// The id match is the identity check: a same-named word in an unrelated module carries a
+/// different id or none, so nothing here answers by name alone.
+fn moduleCacheEffectById(ctx: *Context, word_id: u32, name: []const u8) ?*const StackEffect {
+    ctx.module_cache_value.header.lock();
+    defer ctx.module_cache_value.header.unlock();
+    var iter = ctx.module_cache_value.map.iterator();
+    while (iter.next()) |entry| {
+        if (entry.value_ptr.* != .module) continue;
+        const module = entry.value_ptr.*.module;
+        const mw = module.words.get(name) orelse continue;
+        const wid = mw.word_id orelse continue;
+        if (wid == word_id) return mw.stack_effect;
+    }
+    return null;
 }
 
 /// Resolve `name`'s dictionary slot once, at startup, caching leaf-dispatch
@@ -2337,7 +2386,8 @@ export fn onez_runtime_run(ptr: ?*anyopaque, entry_word_id: u32) i32 {
                 const word = ctx.lookupWord(entry.word_name);
                 const source = if (word) |w| (w.source_file orelse ctx.current_source) else ctx.current_source;
                 const line = if (word) |w| w.source_line else 0;
-                ctx.pushCallFrame(entry.displayName(), source, line, 0);
+                const effect = if (word) |w| w.stack_effect else null;
+                ctx.pushCallFrame(entry.displayName(), source, line, 0, effect);
             }
             ctx.captureCallStackOnError(err);
             if (frameless) ctx.popCallFrame();

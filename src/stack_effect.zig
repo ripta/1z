@@ -94,6 +94,12 @@ pub const StackEffect = struct {
 
     pub fn write(self: StackEffect, writer: anytype) anyerror!void {
         try writer.writeAll("( ");
+        try self.writeBody(writer);
+        try writer.writeAll(" )");
+    }
+
+    /// Write the effect without the surrounding parens.
+    pub fn writeBody(self: StackEffect, writer: anytype) anyerror!void {
         for (self.inputs, 0..) |param, i| {
             if (i > 0) try writer.writeAll(" ");
             try param.write(writer);
@@ -103,7 +109,6 @@ pub const StackEffect = struct {
             if (i > 0) try writer.writeAll(" ");
             try param.write(writer);
         }
-        try writer.writeAll(" )");
     }
 
     pub fn eql(self: StackEffect, other: StackEffect) bool {

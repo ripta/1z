@@ -103,6 +103,9 @@ pub const CallFrame = struct {
     line: usize,
     column: usize = 0,
     definition_located: bool = false,
+    /// The named word's own declared effect, set at push from the definition in hand, so the
+    /// error renderer never resolves `word_name` through a ladder a shadowing binding can answer.
+    stack_effect: ?*const StackEffect = null,
 };
 
 /// ParameterFrame holds parameter bindings for dynamic scoping.
@@ -1981,12 +1984,13 @@ pub const Context = struct {
     /// targeted parity fix for current JIT trace gaps, not a general JIT frame
     /// model. If broader compiled trace fidelity becomes important later, build
     /// a runtime frame stack for inlined combinators instead of extending this.
-    pub fn appendPendingSyntheticErrorFrame(self: *Context, word_name: []const u8, source: []const u8, line: usize) void {
+    pub fn appendPendingSyntheticErrorFrame(self: *Context, word_name: []const u8, source: []const u8, line: usize, effect: ?*const StackEffect) void {
         self.appendPendingErrorFrame(.{
             .word_name = word_name,
             .source = source,
             .line = line,
             .column = 0,
+            .stack_effect = effect,
         });
     }
 
@@ -3322,6 +3326,7 @@ pub const Context = struct {
 
         self.jit_dispatch.replacePicSnapshot(final_id, pic_snapshot);
         pic_snapshot_owned = false;
+        if (self.jit_dispatch.getMut(final_id)) |em| em.stack_effect = def.stack_effect;
 
         if (self.trace.trace_jit) {
             var tw = trace_mod.TraceWriter.init();
@@ -3356,6 +3361,7 @@ pub const Context = struct {
         if (def.word_id != null) return;
 
         const new_id = self.jit_dispatch.assignId(name) catch return;
+        if (self.jit_dispatch.getMut(new_id)) |em| em.stack_effect = def.stack_effect;
         propagateWordId(self, name, new_id);
     }
 
@@ -5272,7 +5278,7 @@ pub const Context = struct {
         const word_name = qn.word_name;
 
         if (self.lookupWord(module_path)) |module_word| {
-            self.pushCallFrame(module_path, self.current_source, line, column);
+            self.pushCallFrame(module_path, self.current_source, line, column, module_word.stack_effect);
             defer self.popCallFrame();
 
             switch (module_word.action) {
@@ -5299,7 +5305,7 @@ pub const Context = struct {
         if (module.words.get(word_name)) |mod_word| {
             if (self.active_sandbox) |sandbox| {
                 if (!sandbox.allows(mod_word.capability)) {
-                    self.pushCallFrame(name, self.current_source, line, column);
+                    self.pushCallFrame(name, self.current_source, line, column, mod_word.stack_effect);
                     self.pending_error_message = std.fmt.allocPrint(
                         self.arena.allocator(),
                         "'{s}' requires capability '{s}' which is not granted by the active sandbox",
@@ -5316,7 +5322,7 @@ pub const Context = struct {
                 trace_mod.traceResolve(&tw, name, .{ .qualified_found = .{ .module = module_path, .word = word_name } });
             }
 
-            self.pushCallFrame(name, self.current_source, line, column);
+            self.pushCallFrame(name, self.current_source, line, column, mod_word.stack_effect);
             if (self.trace.trace_words and trace_mod.matchesPattern(name, self.trace.trace_words_pattern)) {
                 var tw = trace_mod.TraceWriter.init();
                 trace_mod.traceWord(&tw, name, self.current_source, line, &self.stack);
@@ -5376,24 +5382,36 @@ pub const Context = struct {
     }
 
     /// Push a call frame onto the call stack.
-    pub fn pushCallFrame(self: *Context, word_name: []const u8, source: []const u8, line: usize, column: usize) void {
+    ///
+    /// `effect` is the named word's own declared effect when the caller has its definition in
+    /// hand, and null otherwise.
+    pub fn pushCallFrame(self: *Context, word_name: []const u8, source: []const u8, line: usize, column: usize, effect: ?*const StackEffect) void {
         self.call_stack.append(self.allocator, .{
             .word_name = word_name,
             .source = source,
             .line = line,
             .column = column,
+            .stack_effect = effect,
         }) catch {};
     }
 
     /// Push a frame located at the word's definition rather than a call site, marked so the
     /// capture fold can drop it beside a same-word call-site row.
-    pub fn pushDefinitionLocatedCallFrame(self: *Context, word_name: []const u8, source: []const u8, line: usize) void {
+    pub fn pushDefinitionLocatedCallFrame(self: *Context, word_name: []const u8, source: []const u8, line: usize, effect: ?*const StackEffect) void {
         self.call_stack.append(self.allocator, .{
             .word_name = word_name,
             .source = source,
             .line = line,
             .definition_located = true,
+            .stack_effect = effect,
         }) catch {};
+    }
+
+    /// Set the topmost frame's effect, for the shims that resolve their word only after pushing.
+    pub fn setTopCallFrameEffect(self: *Context, effect: ?*const StackEffect) void {
+        if (self.call_stack.items.len > 0) {
+            self.call_stack.items[self.call_stack.items.len - 1].stack_effect = effect;
+        }
     }
 
     /// Pop a call frame from the call stack.
@@ -6239,10 +6257,14 @@ pub const Context = struct {
             const frame = self.jit_pending_trace_frames.items[pending_i];
 
             // A definition-located frame whose call site queued its own frame for the same word
-            // would render that word twice. Drop it and let the call-site row take the message.
+            // would render that word twice. Drop it and let the call-site row take the message,
+            // carrying the effect along when the surviving row has none of its own.
             if (frame.definition_located and pending_i + 1 < self.jit_pending_trace_frames.items.len and
                 std.mem.eql(u8, self.jit_pending_trace_frames.items[pending_i + 1].word_name, frame.word_name))
             {
+                if (self.jit_pending_trace_frames.items[pending_i + 1].stack_effect == null) {
+                    self.jit_pending_trace_frames.items[pending_i + 1].stack_effect = frame.stack_effect;
+                }
                 continue;
             }
 
@@ -6253,17 +6275,7 @@ pub const Context = struct {
             else
                 frame.word_name;
 
-            const se_str: ?[]const u8 = if (is_innermost) blk: {
-                if (self.lookupWord(frame.word_name)) |defn| {
-                    if (defn.stack_effect) |se| {
-                        var buf: [256]u8 = undefined;
-                        var fbs = std.io.fixedBufferStream(&buf);
-                        se.write(fbs.writer()) catch break :blk null;
-                        break :blk self.arena.allocator().dupe(u8, fbs.getWritten()) catch null;
-                    }
-                }
-                break :blk null;
-            } else null;
+            const se_str: ?[]const u8 = if (is_innermost) self.renderFrameStackEffect(frame) else null;
 
             self.error_details.append(self.allocator, .{
                 .error_type = error_type,
@@ -6293,17 +6305,7 @@ pub const Context = struct {
             else
                 frame.word_name;
 
-            const se_str: ?[]const u8 = if (is_innermost) blk: {
-                if (self.lookupWord(frame.word_name)) |defn| {
-                    if (defn.stack_effect) |se| {
-                        var buf: [256]u8 = undefined;
-                        var fbs = std.io.fixedBufferStream(&buf);
-                        se.write(fbs.writer()) catch break :blk null;
-                        break :blk self.arena.allocator().dupe(u8, fbs.getWritten()) catch null;
-                    }
-                }
-                break :blk null;
-            } else null;
+            const se_str: ?[]const u8 = if (is_innermost) self.renderFrameStackEffect(frame) else null;
 
             self.error_details.append(self.allocator, .{
                 .error_type = error_type,
@@ -6318,6 +6320,19 @@ pub const Context = struct {
             }) catch {};
             is_innermost = false;
         }
+    }
+
+    /// Render the frame's carried effect for an error row.
+    ///
+    /// The frame's own pointer is the only source consulted. Resolving `frame.word_name` here
+    /// would answer with whichever binding holds the name now, which is the misattribution the
+    /// carried effect exists to remove.
+    fn renderFrameStackEffect(self: *Context, frame: CallFrame) ?[]const u8 {
+        const se = frame.stack_effect orelse return null;
+        var buf: [256]u8 = undefined;
+        var fbs = std.io.fixedBufferStream(&buf);
+        se.write(fbs.writer()) catch return null;
+        return self.arena.allocator().dupe(u8, fbs.getWritten()) catch null;
     }
 
     fn formatDispatchTypeName(self: *const Context, desc: *const value_mod.TypeDescriptor) []const u8 {
@@ -6611,7 +6626,7 @@ pub const Context = struct {
                         if (bare) {
                             const line = if (quotation.instructions.len > 0) quotation.instructions[0].line else 0;
                             const source = self.quotationBodySource(quotation.instructions) orelse self.current_source;
-                            self.pushCallFrame("quotation", source, line, 0);
+                            self.pushCallFrame("quotation", source, line, 0, null);
                         }
                         self.captureCallStackOnError(err);
                         if (bare) self.popCallFrame();
@@ -6789,7 +6804,7 @@ pub const Context = struct {
     ) anyerror!ResolvedWordResult {
         if (self.active_sandbox) |sandbox| {
             if (!sandbox.allows(word.capability)) {
-                self.pushCallFrame(name, self.current_source, instr.line, instr.column);
+                self.pushCallFrame(name, self.current_source, instr.line, instr.column, word.stack_effect);
                 self.pending_error_message = std.fmt.allocPrint(
                     self.arena.allocator(),
                     "'{s}' requires capability '{s}' which is not granted by the active sandbox",
@@ -6800,7 +6815,7 @@ pub const Context = struct {
         }
 
         if (word.parse_time_only and self.parse_tokenizer == null) {
-            self.pushCallFrame(name, self.current_source, instr.line, instr.column);
+            self.pushCallFrame(name, self.current_source, instr.line, instr.column, word.stack_effect);
             self.pending_error_message = "parse-time-only word cannot be called at runtime";
             return self.wordErrorCleanup(name, error.ParseError);
         }
@@ -6826,13 +6841,13 @@ pub const Context = struct {
                 if (word.stack_effect) |effect| {
                     if (word.exec_flags.has_param_effects) {
                         self.validateParameterEffects(effect) catch |err| {
-                            self.pushCallFrame(name, self.current_source, instr.line, instr.column);
+                            self.pushCallFrame(name, self.current_source, instr.line, instr.column, word.stack_effect);
                             return self.wordErrorCleanup(name, err);
                         };
                     }
                     if (word.exec_flags.has_type_annotations and !word.exec_flags.skip_type_validation) {
                         self.validateTypeAnnotations(effect) catch |err| {
-                            self.pushCallFrame(name, self.current_source, instr.line, instr.column);
+                            self.pushCallFrame(name, self.current_source, instr.line, instr.column, word.stack_effect);
                             return self.wordErrorCleanup(name, err);
                         };
                     }
@@ -6842,7 +6857,7 @@ pub const Context = struct {
                 const jit_result = if (word.source_module) |mod| blk: {
                     self.pushModuleDepsFrame(mod) catch |err| {
                         self.current_source = saved_source;
-                        self.pushCallFrame(name, self.current_source, instr.line, instr.column);
+                        self.pushCallFrame(name, self.current_source, instr.line, instr.column, word.stack_effect);
                         return self.wordErrorCleanup(name, err);
                     };
                     defer self.popModuleDepsFrameTraced(mod);
@@ -6874,7 +6889,7 @@ pub const Context = struct {
                         // list is empty and the frame is the message's only carrier.
                         const outermost = self.call_stack.items.len == 0 and
                             (!is_last or self.jit_pending_trace_frames.items.len == 0);
-                        if (outermost) self.pushCallFrame(name, self.current_source, instr.line, instr.column);
+                        if (outermost) self.pushCallFrame(name, self.current_source, instr.line, instr.column, word.stack_effect);
                         self.captureCallStackOnError(err);
                         if (outermost) self.popCallFrame();
                         return err;
@@ -6888,7 +6903,7 @@ pub const Context = struct {
             }
         }
 
-        self.pushCallFrame(name, self.current_source, instr.line, instr.column);
+        self.pushCallFrame(name, self.current_source, instr.line, instr.column, word.stack_effect);
         self.traceWordExecution(name, instr);
 
         if (word.stack_effect) |effect| {
@@ -7240,7 +7255,7 @@ pub const Context = struct {
                 },
                 .call_word => |name| {
                     signal.checkPendingSignals(self) catch |err| {
-                        self.pushCallFrame(name, self.current_source, instr.line, instr.column);
+                        self.pushCallFrame(name, self.current_source, instr.line, instr.column, null);
                         return self.wordErrorCleanup(name, err);
                     };
 
@@ -7267,7 +7282,7 @@ pub const Context = struct {
                         }
                     } else if (splitQualifiedName(name) != null) {
                         self.executeQualifiedName(name, instr.line, instr.column) catch |err| {
-                            self.pushCallFrame(name, self.current_source, instr.line, instr.column);
+                            self.pushCallFrame(name, self.current_source, instr.line, instr.column, null);
                             self.captureCallStackOnError(err);
                             self.popCallFrame();
                             return err;
@@ -7337,7 +7352,7 @@ pub const Context = struct {
                             var tw = trace_mod.TraceWriter.init();
                             trace_mod.traceResolve(&tw, name, .not_found);
                         }
-                        self.pushCallFrame(name, self.current_source, instr.line, instr.column);
+                        self.pushCallFrame(name, self.current_source, instr.line, instr.column, null);
                         self.captureCallStackOnError(ExecutionError.UnknownWord);
                         self.popCallFrame();
                         return ExecutionError.UnknownWord;
@@ -7346,7 +7361,7 @@ pub const Context = struct {
                 .call_word_direct => |slot| {
                     const name = slot.name;
                     signal.checkPendingSignals(self) catch |err| {
-                        self.pushCallFrame(name, self.current_source, instr.line, instr.column);
+                        self.pushCallFrame(name, self.current_source, instr.line, instr.column, dict_mod.loadSlot(slot).stack_effect);
                         return self.wordErrorCleanup(name, err);
                     };
 
@@ -7365,7 +7380,7 @@ pub const Context = struct {
                 .call_word_module => |slot| {
                     const name = slot.name;
                     signal.checkPendingSignals(self) catch |err| {
-                        self.pushCallFrame(name, self.current_source, instr.line, instr.column);
+                        self.pushCallFrame(name, self.current_source, instr.line, instr.column, dict_mod.loadSlot(slot).stack_effect);
                         return self.wordErrorCleanup(name, err);
                     };
 
@@ -7539,6 +7554,9 @@ fn resolveWordForDispatch(name: []const u8, user_data: *anyopaque) ?ir_codegen.R
         propagateWordId(ctx, name, id);
         break :blk id;
     };
+    if (ctx.jit_dispatch.getMut(word_id)) |em| {
+        if (em.stack_effect == null) em.stack_effect = callee.stack_effect;
+    }
 
     const bounded = dispatch_helpers.boundedDispatchFor(effect, callee.markers, name);
 
@@ -7817,7 +7835,7 @@ test "wordErrorDeferCapture converts the pushed frame and the boundary capture f
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
 
-    ctx.pushCallFrame("boom", "<test>", 7, 0);
+    ctx.pushCallFrame("boom", "<test>", 7, 0, null);
     ctx.pending_error_message = "boom went wrong";
 
     const err = ctx.wordErrorDeferCapture("boom", error.TypeMismatch);
@@ -7849,7 +7867,7 @@ test "capture drops a definition-located frame when the call site queued the sam
         .line = 0,
         .definition_located = true,
     });
-    ctx.appendPendingSyntheticErrorFrame("take", "<test>", 15);
+    ctx.appendPendingSyntheticErrorFrame("take", "<test>", 15, null);
     ctx.pending_error_message = "expected fixnum, got bignum";
 
     ctx.captureCallStackOnError(error.TypeMismatch);
@@ -7870,7 +7888,7 @@ test "capture keeps a definition-located frame with no same-word call-site row" 
         .line = 0,
         .definition_located = true,
     });
-    ctx.appendPendingSyntheticErrorFrame("caller", "<test>", 9);
+    ctx.appendPendingSyntheticErrorFrame("caller", "<test>", 9, null);
     ctx.pending_error_message = "expected fixnum, got bignum";
 
     ctx.captureCallStackOnError(error.TypeMismatch);
@@ -7879,6 +7897,77 @@ test "capture keeps a definition-located frame with no same-word call-site row" 
     try std.testing.expectEqualStrings("take", ctx.error_details.items[0].word_name.?);
     try std.testing.expectEqualStrings("expected fixnum, got bignum", ctx.error_details.items[0].message);
     try std.testing.expectEqualStrings("caller", ctx.error_details.items[1].word_name.?);
+}
+
+test "capture renders the frame's carried effect, not a visible binding's" {
+    const noop: dict_mod.NativeFn = struct {
+        fn f(_: *Context) anyerror!void {}
+    }.f;
+    const native_effect = StackEffect{
+        .inputs = &[_]StackEffectParam{ .{ .name = "a" }, .{ .name = "b" } },
+        .outputs = &[_]StackEffectParam{.{ .name = "a-b" }},
+    };
+    const binding_effect = StackEffect{
+        .inputs = &[_]StackEffectParam{.{ .name = "q" }},
+        .outputs = &[_]StackEffectParam{.{ .name = "r" }},
+    };
+
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    // A live binding of the same name, which the old by-name resolution would have reported.
+    try ctx.pushLocalFrame();
+    try ctx.local_frames.items[ctx.local_frames.items.len - 1].put(ctx.allocator, "shadowed-op", .{
+        .name = "shadowed-op",
+        .stack_effect = &binding_effect,
+        .action = .{ .native = noop },
+    });
+
+    ctx.pushCallFrame("shadowed-op", "<test>", 3, 0, &native_effect);
+    ctx.captureCallStackOnError(error.TypeMismatch);
+    ctx.popCallFrame();
+    ctx.popLocalFrame();
+
+    try std.testing.expectEqual(@as(usize, 1), ctx.error_details.items.len);
+    try std.testing.expectEqualStrings("( a b -- a-b )", ctx.error_details.items[0].stack_effect_str.?);
+}
+
+test "capture renders no effect for a frame that carries none" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    ctx.pushCallFrame("dup", "<test>", 1, 0, null);
+    ctx.captureCallStackOnError(error.StackUnderflow);
+    ctx.popCallFrame();
+
+    try std.testing.expectEqual(@as(usize, 1), ctx.error_details.items.len);
+    try std.testing.expectEqual(@as(?[]const u8, null), ctx.error_details.items[0].stack_effect_str);
+}
+
+test "capture dedupe carries the dropped definition-located frame's effect" {
+    const trap_effect = StackEffect{
+        .inputs = &[_]StackEffectParam{.{ .name = "n" }},
+        .outputs = &[_]StackEffectParam{.{ .name = "m" }},
+    };
+
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    ctx.appendPendingErrorFrame(.{
+        .word_name = "take",
+        .source = "<test>",
+        .line = 0,
+        .definition_located = true,
+        .stack_effect = &trap_effect,
+    });
+    ctx.appendPendingSyntheticErrorFrame("take", "<test>", 15, null);
+    ctx.pending_error_message = "expected fixnum, got bignum";
+
+    ctx.captureCallStackOnError(error.TypeMismatch);
+
+    try std.testing.expectEqual(@as(usize, 1), ctx.error_details.items.len);
+    try std.testing.expectEqual(@as(usize, 15), ctx.error_details.items[0].line);
+    try std.testing.expectEqualStrings("( n -- m )", ctx.error_details.items[0].stack_effect_str.?);
 }
 
 test "stack effect validation passes for correct effect" {

@@ -40,6 +40,7 @@ const trace_mod = @import("trace.zig");
 const Scheduler = @import("scheduler.zig").Scheduler;
 
 const helpers = @import("primitives/helpers.zig");
+const primitives_specs = @import("primitives/mod.zig");
 const dynamic_vars_mod = @import("primitives/dynamic_vars.zig");
 const errors_mod = @import("primitives/errors.zig");
 const iterators_mod = @import("primitives/iterators.zig");
@@ -1612,7 +1613,7 @@ fn emitPerOperationDispatch(
             c._ir_RETURN(ctx, trap_result);
             c._ir_IF_FALSE(ctx, if_miss);
 
-            emitCallbackPostCheck(state, call_result, state.error_propagate_status, null, .{ .named = .{ .name = op_name, .line = line } });
+            emitCallbackPostCheck(state, call_result, state.error_propagate_status, null, .{ .named = .{ .name = op_name, .line = line, .word_id = resolved.word_id } });
         },
         .push_false => |pf| {
             // A miss ran nothing, so the pre-call stack backing is still live and both operands
@@ -1629,7 +1630,7 @@ fn emitPerOperationDispatch(
             const end_miss = c._ir_END(ctx);
 
             c._ir_IF_FALSE(ctx, if_miss);
-            emitCallbackPostCheck(state, call_result, state.error_propagate_status, null, .{ .named = .{ .name = op_name, .line = line } });
+            emitCallbackPostCheck(state, call_result, state.error_propagate_status, null, .{ .named = .{ .name = op_name, .line = line, .word_id = resolved.word_id } });
             const end_hit = c._ir_END(ctx);
 
             c._ir_MERGE_2(ctx, end_miss, end_hit);
@@ -3323,15 +3324,15 @@ const AotStringLiteral = struct {
 
 /// The program-wide accumulator for AOT string literals.
 ///
-/// Only source-file literals are interned; every other literal appends per call. Emission reads
-/// the insertion-ordered list alone, so `onez_lit_N` numbering stays deterministic. The map is
-/// never iterated.
+/// Only source-file and effect-body literals are interned; every other literal appends per call.
+/// Emission reads the insertion-ordered list alone, so `onez_lit_N` numbering stays
+/// deterministic. The map is never iterated.
 ///
 /// All allocation goes through `std.heap.page_allocator`, matching the direct appends in
 /// `emitStringLiteralPtr` and the literal-push emission sites.
 const AotStringLiteralTable = struct {
     items: std.ArrayListUnmanaged(AotStringLiteral) = .{},
-    /// Content-keyed ids of interned source-file literals.
+    /// Content-keyed ids of the interned literals.
     source_ids: std.StringHashMapUnmanaged(u32) = .{},
 
     fn deinit(self: *AotStringLiteralTable) void {
@@ -3348,6 +3349,17 @@ const AotStringLiteralTable = struct {
         const id: u32 = @intCast(self.items.items.len);
         self.items.append(std.heap.page_allocator, .{ .data = text, .is_symbol = false }) catch return null;
         self.source_ids.put(std.heap.page_allocator, text, id) catch {};
+        return id;
+    }
+
+    /// The literal id for a rendered stack-effect body, interned by content like a source
+    /// literal. The text is duped here because callers render into a stack buffer.
+    fn internEffect(self: *AotStringLiteralTable, text: []const u8) ?u32 {
+        if (self.source_ids.get(text)) |id| return id;
+        const stable = std.heap.page_allocator.dupe(u8, text) catch return null;
+        const id: u32 = @intCast(self.items.items.len);
+        self.items.append(std.heap.page_allocator, .{ .data = stable, .is_symbol = false }) catch return null;
+        self.source_ids.put(std.heap.page_allocator, stable, id) catch {};
         return id;
     }
 };
@@ -9568,15 +9580,15 @@ pub fn emitWordC(
 
     const proto_1arg = c.ir_proto_1(&ctx, 0, c.IR_I32, c.IR_ADDR);
     const proto_5arg = c.ir_proto_5(&ctx, 0, c.IR_I32, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR);
-    var proto_6arg_params = [_]u8{ c.IR_ADDR, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR };
-    const proto_6arg = c.ir_proto(&ctx, 0, c.IR_I32, proto_6arg_params.len, &proto_6arg_params);
+    var proto_9arg_params = [_]u8{ c.IR_ADDR, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR };
+    const proto_9arg = c.ir_proto(&ctx, 0, c.IR_I32, proto_9arg_params.len, &proto_9arg_params);
     const type_mismatch_error_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "jitTypeMismatchError"), proto_1arg);
     const param_type_mismatch_error_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "onez_param_type_mismatch"), proto_5arg);
     const overflow_error_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "jitOverflowError"), proto_1arg);
     const div_zero_error_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "jitDivisionByZeroError"), proto_1arg);
     const underflow_error_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "jitStackUnderflowError"), proto_1arg);
     const null_code_ptr_error_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "jitNullCodePtrError"), proto_1arg);
-    const append_word_trace_frame_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "onez_append_named_trace_frame"), proto_6arg);
+    const append_word_trace_frame_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "onez_append_named_trace_frame"), proto_9arg);
     const append_builtin_trace_frame_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "onez_append_builtin_trace_frame"), proto_5arg);
 
     const sp_val = c._ir_LOAD(&ctx, c.IR_ADDR, sp_ptr);
@@ -9678,9 +9690,9 @@ pub fn emitWordC(
         "extern int32_t jitDivisionByZeroError(uintptr_t ctx);\n" ++
         "extern int32_t jitStackUnderflowError(uintptr_t ctx);\n" ++
         "extern int32_t jitNullCodePtrError(uintptr_t ctx);\n" ++
-        "extern int32_t jitAppendNamedTraceFrame(uintptr_t ctx, uintptr_t name_ptr, uintptr_t name_len, uintptr_t src_ptr, uintptr_t src_len, uintptr_t line);\n" ++
+        "extern int32_t jitAppendNamedTraceFrame(uintptr_t ctx, uintptr_t name_ptr, uintptr_t name_len, uintptr_t src_ptr, uintptr_t src_len, uintptr_t line, uintptr_t effect_ptr, uintptr_t effect_len, uintptr_t word_id_plus_one);\n" ++
         "extern int32_t jitAppendBuiltinTraceFrame(uintptr_t ctx, uintptr_t frame_kind, uintptr_t src_ptr, uintptr_t src_len, uintptr_t line);\n" ++
-        "static int32_t onez_append_named_trace_frame(uintptr_t ctx, const char *name, uintptr_t len, const char *src, uintptr_t src_len, uintptr_t line) { return jitAppendNamedTraceFrame(ctx, (uintptr_t)name, len, (uintptr_t)src, src_len, line); }\n" ++
+        "static int32_t onez_append_named_trace_frame(uintptr_t ctx, const char *name, uintptr_t len, const char *src, uintptr_t src_len, uintptr_t line, const char *effect, uintptr_t effect_len, uintptr_t word_id_plus_one) { return jitAppendNamedTraceFrame(ctx, (uintptr_t)name, len, (uintptr_t)src, src_len, line, (uintptr_t)effect, effect_len, word_id_plus_one); }\n" ++
         "static int32_t onez_append_builtin_trace_frame(uintptr_t ctx, uintptr_t frame_kind, const char *src, uintptr_t src_len, uintptr_t line) { return jitAppendBuiltinTraceFrame(ctx, frame_kind, (uintptr_t)src, src_len, line); }\n\n";
     const result = try allocator.alloc(u8, preamble.len + body.len);
     @memcpy(result[0..preamble.len], preamble);
@@ -10001,10 +10013,10 @@ fn emitWordCAotPass(
     // emit no call site referencing them. Both frames go through static wrappers rather than the
     // raw externs: the name and source parameters are char arrays at the C level, so a uintptr_t
     // prototype would trip -Wint-conversion wherever an onez_lit_N literal is passed.
-    var trace_frame_proto_params = [_]u8{ c.IR_ADDR, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR };
-    const trace_frame_proto_6arg = c.ir_proto(&ctx, 0, c.IR_I32, trace_frame_proto_params.len, &trace_frame_proto_params);
+    var trace_frame_proto_params = [_]u8{ c.IR_ADDR, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR };
+    const trace_frame_proto_9arg = c.ir_proto(&ctx, 0, c.IR_I32, trace_frame_proto_params.len, &trace_frame_proto_params);
     const append_word_trace_frame_fn = if (!freestanding)
-        c.ir_const_func(&ctx, c.ir_str(&ctx, "onez_append_named_trace_frame"), trace_frame_proto_6arg)
+        c.ir_const_func(&ctx, c.ir_str(&ctx, "onez_append_named_trace_frame"), trace_frame_proto_9arg)
     else
         c.IR_UNUSED;
     const append_builtin_trace_frame_fn = if (!freestanding)
@@ -11610,9 +11622,9 @@ pub fn emitProgramC(
     try out.appendSlice(allocator, "extern int32_t jitDivisionByZeroError(uintptr_t ctx);\n");
     try out.appendSlice(allocator, "extern int32_t jitStackUnderflowError(uintptr_t ctx);\n");
     try out.appendSlice(allocator, "extern int32_t jitNullCodePtrError(uintptr_t ctx);\n");
-    try out.appendSlice(allocator, "extern int32_t jitAppendNamedTraceFrame(uintptr_t ctx, uintptr_t name_ptr, uintptr_t name_len, uintptr_t src_ptr, uintptr_t src_len, uintptr_t line);\n");
+    try out.appendSlice(allocator, "extern int32_t jitAppendNamedTraceFrame(uintptr_t ctx, uintptr_t name_ptr, uintptr_t name_len, uintptr_t src_ptr, uintptr_t src_len, uintptr_t line, uintptr_t effect_ptr, uintptr_t effect_len, uintptr_t word_id_plus_one);\n");
     try out.appendSlice(allocator, "extern int32_t jitAppendBuiltinTraceFrame(uintptr_t ctx, uintptr_t frame_kind, uintptr_t src_ptr, uintptr_t src_len, uintptr_t line);\n");
-    try out.appendSlice(allocator, "static int32_t onez_append_named_trace_frame(uintptr_t ctx, const char *name, uintptr_t len, const char *src, uintptr_t src_len, uintptr_t line) { return jitAppendNamedTraceFrame(ctx, (uintptr_t)name, len, (uintptr_t)src, src_len, line); }\n");
+    try out.appendSlice(allocator, "static int32_t onez_append_named_trace_frame(uintptr_t ctx, const char *name, uintptr_t len, const char *src, uintptr_t src_len, uintptr_t line, const char *effect, uintptr_t effect_len, uintptr_t word_id_plus_one) { return jitAppendNamedTraceFrame(ctx, (uintptr_t)name, len, (uintptr_t)src, src_len, line, (uintptr_t)effect, effect_len, word_id_plus_one); }\n");
     try out.appendSlice(allocator, "static int32_t onez_append_builtin_trace_frame(uintptr_t ctx, uintptr_t frame_kind, const char *src, uintptr_t src_len, uintptr_t line) { return jitAppendBuiltinTraceFrame(ctx, frame_kind, (uintptr_t)src, src_len, line); }\n");
     try out.appendSlice(allocator, "extern int32_t jitPushString(uintptr_t ctx, uintptr_t str_ptr, uintptr_t str_len);\n");
     try out.appendSlice(allocator, "extern int32_t jitPushSymbol(uintptr_t ctx, uintptr_t str_ptr, uintptr_t str_len);\n");
@@ -12619,6 +12631,10 @@ const CurrentTraceFrame = union(enum) {
     named: struct {
         name: []const u8,
         line: usize,
+        /// The callee's word_id when the emission site holds an authentic one, so the AOT frame
+        /// resolves its effect by identity at runtime. Left null where the resolver returned a
+        /// dummy id, such as a JIT-tier native.
+        word_id: ?u32 = null,
     },
     builtin: struct {
         kind: BuiltinTraceFrameKind,
@@ -12626,7 +12642,8 @@ const CurrentTraceFrame = union(enum) {
     },
 };
 
-/// The source pointer and length arguments for a trace-frame append call.
+/// A pointer and length argument pair for a trace-frame append call, serving both the source
+/// arguments and the baked-effect arguments.
 const TraceSourceArgs = struct {
     ptr: c.ir_ref,
     len: c.ir_ref,
@@ -12682,7 +12699,75 @@ fn emitBuiltinTraceFrame(state: *CompileState, kind: BuiltinTraceFrameKind, line
     _ = c._ir_CALL_5(state.ctx, c.IR_I32, state.append_builtin_trace_frame_fn, ctx_val, kind_const, src.ptr, src.len, line_const);
 }
 
-fn emitWordTraceFrame(state: *CompileState, word_name: []const u8, line: usize) void {
+/// The baked effect argument pair for a named trace frame: the word's own boxed effect,
+/// resolved once at compile time in the same scope the call emission resolved the word.
+///
+/// The JIT bakes the pointer directly with a zero length. AOT cannot bake a process pointer, so
+/// it interns the rendered effect body as a literal, which the shim parses on its cold path. A
+/// body the parse cannot read back verbatim is not baked at all, so an annotated effect never
+/// renders in a mangled form.
+///
+/// An AOT callee the live ladder cannot see -- a fully compiled entry-file word has no runtime
+/// definition at all -- falls back to the freeze resolver's own declared parameter lists.
+fn emitTraceEffectArgs(state: *CompileState, word_name: []const u8) TraceSourceArgs {
+    const zero = c.ir_const_addr(state.ctx, 0);
+    const none: TraceSourceArgs = .{ .ptr = zero, .len = zero };
+    const ictx = state.interp_ctx orelse return none;
+
+    if (ictx.lookupWordStackEffectPtr(word_name)) |eff| {
+        if (!state.aot_mode) {
+            return .{ .ptr = c.ir_const_addr(state.ctx, @intFromPtr(eff)), .len = zero };
+        }
+        return emitInternedEffectBody(state, eff.*) orelse none;
+    }
+
+    if (!state.aot_mode) return none;
+    const res = state.resolver orelse return none;
+    const resolved = res.resolve(word_name, res.user_data) orelse return none;
+    const inputs = resolved.input_params orelse return none;
+    const outputs = resolved.output_params orelse return none;
+    const declared = StackEffect{ .inputs = inputs, .outputs = outputs };
+    return emitInternedEffectBody(state, declared) orelse none;
+}
+
+/// Render `eff`'s body, verify the shim's parse reads it back verbatim, and intern it, returning
+/// the baked argument pair or null.
+fn emitInternedEffectBody(state: *CompileState, eff: StackEffect) ?TraceSourceArgs {
+    const lits = state.aot_string_literals orelse return null;
+    var buf: [256]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buf);
+    eff.writeBody(fbs.writer()) catch return null;
+    const body = fbs.getWritten();
+    if (!effectBodyRoundTrips(eff, body)) return null;
+    const lit_id = lits.internEffect(body) orelse return null;
+    return .{
+        .ptr = emitLiteralSymbolRef(state, lit_id),
+        .len = c.ir_const_addr(state.ctx, body.len),
+    };
+}
+
+/// True when parsing `body` back through `makeSimpleEffect` renders byte-identically to `eff`.
+///
+/// The simple parser has no annotation handling, so a `name: type` parameter comes back as two
+/// bare names and a constraint annotation as its placeholder. Fidelity is checked at emission,
+/// where the original rendering is in hand, rather than trusted.
+fn effectBodyRoundTrips(eff: StackEffect, body: []const u8) bool {
+    var parse_buf: [4096]u8 = undefined;
+    var fba = std.heap.FixedBufferAllocator.init(&parse_buf);
+    const reparsed = helpers.makeSimpleEffect(fba.allocator(), body) catch return false;
+
+    var original: [256]u8 = undefined;
+    var original_fbs = std.io.fixedBufferStream(&original);
+    eff.write(original_fbs.writer()) catch return false;
+
+    var rendered: [256]u8 = undefined;
+    var rendered_fbs = std.io.fixedBufferStream(&rendered);
+    reparsed.write(rendered_fbs.writer()) catch return false;
+
+    return std.mem.eql(u8, original_fbs.getWritten(), rendered_fbs.getWritten());
+}
+
+fn emitWordTraceFrame(state: *CompileState, word_name: []const u8, line: usize, word_id: ?u32) void {
     if (state.append_word_trace_frame_fn == c.IR_UNUSED) return;
     const ctx_val = if (state.preloaded_ctx_val != c.IR_UNUSED)
         state.preloaded_ctx_val
@@ -12696,7 +12781,19 @@ fn emitWordTraceFrame(state: *CompileState, word_name: []const u8, line: usize) 
     const name_len_const = c.ir_const_addr(state.ctx, word_name.len);
     const src = emitTraceSourceArgs(state);
     const line_const = c.ir_const_addr(state.ctx, line);
-    _ = c._ir_CALL_6(state.ctx, c.IR_I32, state.append_word_trace_frame_fn, ctx_val, name_ptr, name_len_const, src.ptr, src.len, line_const);
+
+    // The AOT tier bakes the word_id too, which the shim prefers: it resolves the loaded
+    // definition's own boxed effect with full fidelity. The baked pair stays beside it as the
+    // JIT's pointer, and as AOT's fallback for a word the runtime carries no definition for.
+    const wid_plus_one: usize = if (state.aot_mode)
+        (if (word_id) |wid| @as(usize, wid) + 1 else 0)
+    else
+        0;
+    const eff = emitTraceEffectArgs(state, word_name);
+    const wid_const = c.ir_const_addr(state.ctx, wid_plus_one);
+
+    var args = [_]c.ir_ref{ ctx_val, name_ptr, name_len_const, src.ptr, src.len, line_const, eff.ptr, eff.len, wid_const };
+    _ = c._ir_CALL_N(state.ctx, c.IR_I32, state.append_word_trace_frame_fn, args.len, &args);
 }
 
 fn emitActiveInlineTraceFrames(state: *CompileState) void {
@@ -12723,7 +12820,7 @@ fn emitCallbackPostCheck(
     if (traceFramesEnabled(state)) {
         switch (current_trace_frame) {
             .none => {},
-            .named => |frame| if (frame.line != 0) emitWordTraceFrame(state, frame.name, frame.line),
+            .named => |frame| if (frame.line != 0) emitWordTraceFrame(state, frame.name, frame.line, frame.word_id),
             .builtin => |frame| if (frame.line != 0) emitBuiltinTraceFrame(state, frame.kind, frame.line, state.source_file),
         }
         emitActiveInlineTraceFrames(state);
@@ -12912,13 +13009,13 @@ fn emitInlinePicEntries(
                     c._ir_CALL_3(ictx, c.IR_I32, state.pic_dispatch_unary_fn, ctx_val, word_id_const, tag_a_int)
                 else
                     c._ir_CALL_4(ictx, c.IR_I32, state.pic_dispatch_fn, ctx_val, word_id_const, tag_a_int, c.ir_const_addr(ictx, @intFromEnum(entry.tag_b)));
-                emitCallbackPostCheck(state, call_result, state.error_propagate_status, null, .{ .named = .{ .name = name, .line = line } });
+                emitCallbackPostCheck(state, call_result, state.error_propagate_status, null, .{ .named = .{ .name = name, .line = line, .word_id = resolved.word_id } });
             } else {
                 const fn_ptr_const = c.ir_const_addr(ictx, entry.native_fn_ptr);
                 const name_ptr_const = c.ir_const_addr(ictx, @intFromPtr(name.ptr));
                 const name_len_const = c.ir_const_addr(ictx, name.len);
                 const call_result = c._ir_CALL_4(ictx, c.IR_I32, state.pic_native_call_fn, ctx_val, fn_ptr_const, name_ptr_const, name_len_const);
-                emitCallbackPostCheck(state, call_result, call_result, null, .{ .named = .{ .name = name, .line = line } });
+                emitCallbackPostCheck(state, call_result, call_result, null, .{ .named = .{ .name = name, .line = line, .word_id = resolved.word_id } });
             }
             // Restore state for next branch
             state.items_ptr = saved_items_ptr;
@@ -13351,7 +13448,7 @@ fn emitAotWordCall(state: *CompileState, ctx_val: c.ir_ref, name: []const u8, re
             defer std.heap.page_allocator.free(mangled);
             const callee_fn = c.ir_const_func(ictx, c.ir_str(ictx, mangled.ptr), state.aot_proto_1arg);
             const call_result = c._ir_CALL_1(ictx, c.IR_I32, callee_fn, state.jit_ctx_ptr);
-            const trace: CurrentTraceFrame = if (is_tail) .none else .{ .named = .{ .name = name, .line = line } };
+            const trace: CurrentTraceFrame = if (is_tail) .none else .{ .named = .{ .name = name, .line = line, .word_id = resolved.word_id } };
             emitCallbackPostCheck(state, call_result, call_result, if (resolved.never_returns) state.error_propagate_status else null, trace);
             return;
         }
@@ -13448,7 +13545,7 @@ fn emitAotGenericDispatch(
         c.ir_const_addr(state.ctx, word_id),
     };
     const call_result = c._ir_CALL_N(state.ctx, c.IR_I32, state.aot_generic_dispatch_fn, args.len, &args);
-    emitCallbackPostCheck(state, call_result, call_result, null, .{ .named = .{ .name = name, .line = line } });
+    emitCallbackPostCheck(state, call_result, call_result, null, .{ .named = .{ .name = name, .line = line, .word_id = word_id } });
 }
 
 /// AOT counterpart of emitSatisfiesAndDispatch. Looks up the protocol
@@ -14511,6 +14608,18 @@ fn setJitError(ctx_raw: usize, err: anyerror) i32 {
     return 2;
 }
 
+/// Decode the baked effect argument pair on a named trace-frame append.
+///
+/// The JIT bakes the definition's boxed effect pointer with a zero length. AOT cannot bake a
+/// process pointer, so it bakes the rendered effect body as a literal, parsed here on the cold
+/// path onto the context arena.
+fn resolveBakedTraceEffect(ctx: *Context, effect_ptr_raw: usize, effect_len_raw: usize) ?*const StackEffect {
+    if (effect_ptr_raw == 0) return null;
+    if (effect_len_raw == 0) return @ptrFromInt(effect_ptr_raw);
+    const bytes: [*]const u8 = @ptrFromInt(effect_ptr_raw);
+    return helpers.makeBoxedEffect(ctx.arena.allocator(), bytes[0..effect_len_raw]) catch null;
+}
+
 export fn jitAppendNamedTraceFrame(
     ctx_raw: usize,
     name_ptr_raw: usize,
@@ -14518,6 +14627,9 @@ export fn jitAppendNamedTraceFrame(
     src_ptr_raw: usize,
     src_len_raw: usize,
     line_raw: usize,
+    effect_ptr_raw: usize,
+    effect_len_raw: usize,
+    word_id_plus_one_raw: usize,
 ) callconv(.c) i32 {
     if (ctx_raw == 0) return 0;
     if (name_ptr_raw == 0) return 0;
@@ -14525,8 +14637,36 @@ export fn jitAppendNamedTraceFrame(
     const name_ptr: [*]const u8 = @ptrFromInt(name_ptr_raw);
     const word_name = name_ptr[0..name_len_raw];
     const source = ctx.traceFrameSource(src_ptr_raw, src_len_raw);
-    ctx.appendPendingSyntheticErrorFrame(word_name, source, @intCast(line_raw));
+
+    // A baked word_id resolves the entry's own boxed effect, the by-identity path. The baked
+    // pair covers the rest: id-less frames, and an id whose word the runtime carries no
+    // definition for.
+    const effect: ?*const StackEffect = blk: {
+        if (word_id_plus_one_raw > 0) {
+            if (jitWordEntryFor(ctx, @intCast(word_id_plus_one_raw - 1))) |entry| {
+                if (entry.native) |leaf| {
+                    if (leaf.stack_effect) |se| break :blk se;
+                } else if (entry.stack_effect) |se| {
+                    break :blk se;
+                }
+            }
+        }
+        break :blk resolveBakedTraceEffect(ctx, effect_ptr_raw, effect_len_raw);
+    };
+
+    ctx.appendPendingSyntheticErrorFrame(word_name, source, @intCast(line_raw), effect);
     return 0;
+}
+
+/// The spec effect string for a builtin-frame native, read from the same comptime table its
+/// registration parses.
+///
+/// `choose` is prelude-defined, so its lookup misses and its frame carries no effect.
+fn builtinFrameEffectString(comptime name: []const u8) ?[]const u8 {
+    inline for (primitives_specs.extracted_primitives) |p| {
+        if (comptime std.mem.eql(u8, p.name, name)) return p.stack_effect;
+    }
+    return null;
 }
 
 export fn jitAppendBuiltinTraceFrame(
@@ -14546,8 +14686,19 @@ export fn jitAppendBuiltinTraceFrame(
         .cleanup => "cleanup",
         .choose_op => "choose",
     };
+    const effect_str: ?[]const u8 = switch (kind) {
+        .if_op => comptime builtinFrameEffectString("if"),
+        .call => comptime builtinFrameEffectString("call"),
+        .recover => comptime builtinFrameEffectString("recover"),
+        .cleanup => comptime builtinFrameEffectString("cleanup"),
+        .choose_op => comptime builtinFrameEffectString("choose"),
+    };
+    const effect: ?*const StackEffect = if (effect_str) |raw|
+        helpers.makeBoxedEffect(ctx.arena.allocator(), raw) catch null
+    else
+        null;
     const source = ctx.traceFrameSource(src_ptr_raw, src_len_raw);
-    ctx.appendPendingSyntheticErrorFrame(word_name, source, @intCast(line_raw));
+    ctx.appendPendingSyntheticErrorFrame(word_name, source, @intCast(line_raw), effect);
     return 0;
 }
 
@@ -14599,7 +14750,8 @@ export fn jitParamTypeMismatchError(
     const def = ctx.lookupWord(word_name);
     const source = if (def) |d| d.source_file orelse ctx.current_source else ctx.current_source;
     const line = if (def) |d| d.source_line else 0;
-    ctx.pushDefinitionLocatedCallFrame(word_name, source, line);
+    const effect = if (def) |d| d.stack_effect else null;
+    ctx.pushDefinitionLocatedCallFrame(word_name, source, line, effect);
 
     const expected = if (expected_tag_raw == @intFromEnum(@as(ValueLayout.TagType, .float))) "float" else "fixnum";
     helpers.setTypeMismatchError(ctx, expected, @as(*const Value, @ptrFromInt(value_ptr_raw)).*);
@@ -14789,8 +14941,12 @@ export fn jitDispatchMissError(ctx_raw: usize, word_id_raw: usize, src_ptr_raw: 
     const entry = jitWordEntryFor(ctx, @intCast(word_id_raw));
     const word_name = if (entry) |e| e.word_name else "";
     const display_name = if (entry) |e| e.displayName() else "";
+    const frame_effect: ?*const StackEffect = if (entry) |e|
+        (if (e.native) |leaf| leaf.stack_effect else e.stack_effect)
+    else
+        null;
 
-    ctx.pushCallFrame(display_name, ctx.traceFrameSource(src_ptr_raw, src_len_raw), @intCast(line_raw), 0);
+    ctx.pushCallFrame(display_name, ctx.traceFrameSource(src_ptr_raw, src_len_raw), @intCast(line_raw), 0, frame_effect);
 
     const items = ctx.stack.items.items;
     if (items.len >= 2) {
@@ -14963,7 +15119,7 @@ export fn jitNativeWordCall(ctx_raw: usize, word_id_raw: usize, src_ptr_raw: usi
         bail_stats_mod.global.recordInterpretedCall(word_id, display_name);
     }
 
-    ctx.pushCallFrame(display_name, ctx.traceFrameSource(src_ptr_raw, src_len_raw), @intCast(line_raw), 0);
+    ctx.pushCallFrame(display_name, ctx.traceFrameSource(src_ptr_raw, src_len_raw), @intCast(line_raw), 0, if (entry.native) |leaf| leaf.stack_effect else null);
 
     if (entry.native) |leaf| {
         if (leaf.stack_effect) |effect| {
@@ -15018,6 +15174,11 @@ export fn jitNativeWordCall(ctx_raw: usize, word_id_raw: usize, src_ptr_raw: usi
 
     const looked_up_word = resolveEntryWord(ctx, entry, word_name);
     const module_hit = if (looked_up_word == null) lookupAnyModuleWord(ctx, word_name) else null;
+    if (looked_up_word) |word| {
+        ctx.setTopCallFrameEffect(word.stack_effect);
+    } else if (module_hit) |hit| {
+        ctx.setTopCallFrameEffect(hit.word.stack_effect);
+    }
 
     const result = if (looked_up_word) |word| blk: {
         if (word.stack_effect) |effect| {
@@ -15124,9 +15285,14 @@ export fn jitInterpretedCall(ctx_raw: usize, word_id_raw: usize, src_ptr_raw: us
         bail_stats_mod.global.recordInterpretedCall(word_id, display_name);
     }
 
-    ctx.pushCallFrame(display_name, ctx.traceFrameSource(src_ptr_raw, src_len_raw), @intCast(line_raw), 0);
+    ctx.pushCallFrame(display_name, ctx.traceFrameSource(src_ptr_raw, src_len_raw), @intCast(line_raw), 0, null);
     const looked_up_word = resolveEntryWord(ctx, entry, word_name);
     const module_hit = if (looked_up_word == null) lookupAnyModuleWord(ctx, word_name) else null;
+    if (looked_up_word) |word| {
+        ctx.setTopCallFrameEffect(word.stack_effect);
+    } else if (module_hit) |hit| {
+        ctx.setTopCallFrameEffect(hit.word.stack_effect);
+    }
 
     const result = if (looked_up_word) |word| blk: {
         if (word.stack_effect) |effect| {
@@ -15844,6 +16010,90 @@ test "jitDispatchMissError: the comparison message names the first operand and s
     try interp.stack.push(.{ .fixnum = 1 });
     try testing.expectError(error.TypeMismatch, arithmetic_mod.nativeLt(&interp));
     try testing.expectEqualStrings(interp.pending_error_message.?, ctx.pending_error_message.?);
+}
+
+test "jitDispatchMissError: the pending frame carries the entry's own effect" {
+    const miss_effect = stack_effect_mod.StackEffect{
+        .inputs = &[_]stack_effect_mod.StackEffectParam{ .{ .name = "a" }, .{ .name = "b" } },
+        .outputs = &[_]stack_effect_mod.StackEffectParam{.{ .name = "a+b" }},
+    };
+
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    const word_id = try ctx.jit_dispatch.assignId("+");
+    ctx.jit_dispatch.getMut(word_id).?.stack_effect = &miss_effect;
+    try ctx.stack.push(.{ .fixnum = 1 });
+    try ctx.stack.push(value_mod.stringValue("x"));
+    try testing.expectEqual(@as(i32, 2), jitDispatchMissError(@intFromPtr(&ctx), word_id, 0, 0, 7));
+
+    try testing.expectEqual(@as(usize, 1), ctx.jit_pending_trace_frames.items.len);
+    try testing.expectEqual(@as(?*const stack_effect_mod.StackEffect, &miss_effect), ctx.jit_pending_trace_frames.items[0].stack_effect);
+}
+
+test "jitAppendNamedTraceFrame: a zero length treats the baked argument as an effect pointer" {
+    const baked = stack_effect_mod.StackEffect{
+        .inputs = &[_]stack_effect_mod.StackEffectParam{.{ .name = "x" }},
+        .outputs = &[_]stack_effect_mod.StackEffectParam{.{ .name = "y" }},
+    };
+
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    const name = "callee";
+    _ = jitAppendNamedTraceFrame(@intFromPtr(&ctx), @intFromPtr(name.ptr), name.len, 0, 0, 4, @intFromPtr(&baked), 0, 0);
+
+    try testing.expectEqual(@as(usize, 1), ctx.jit_pending_trace_frames.items.len);
+    try testing.expectEqual(@as(?*const stack_effect_mod.StackEffect, &baked), ctx.jit_pending_trace_frames.items[0].stack_effect);
+}
+
+test "jitAppendNamedTraceFrame: a non-zero length parses the baked argument as an effect body" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    const name = "callee";
+    const body = "a b -- sum";
+    _ = jitAppendNamedTraceFrame(@intFromPtr(&ctx), @intFromPtr(name.ptr), name.len, 0, 0, 4, @intFromPtr(body.ptr), body.len, 0);
+
+    try testing.expectEqual(@as(usize, 1), ctx.jit_pending_trace_frames.items.len);
+    const effect = ctx.jit_pending_trace_frames.items[0].stack_effect orelse return error.TestExpectedEffect;
+    try testing.expectEqual(@as(usize, 2), effect.inputs.len);
+    try testing.expectEqualStrings("sum", effect.outputs[0].name);
+}
+
+test "jitAppendNamedTraceFrame: a baked word_id resolves the entry's own effect" {
+    const entry_effect = stack_effect_mod.StackEffect{
+        .inputs = &[_]stack_effect_mod.StackEffectParam{.{ .name = "x" }},
+        .outputs = &[_]stack_effect_mod.StackEffectParam{.{ .name = "y" }},
+    };
+
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    const word_id = try ctx.jit_dispatch.assignId("callee");
+    ctx.jit_dispatch.getMut(word_id).?.stack_effect = &entry_effect;
+
+    const name = "callee";
+    _ = jitAppendNamedTraceFrame(@intFromPtr(&ctx), @intFromPtr(name.ptr), name.len, 0, 0, 4, 0, 0, @as(usize, word_id) + 1);
+
+    try testing.expectEqual(@as(usize, 1), ctx.jit_pending_trace_frames.items.len);
+    try testing.expectEqual(@as(?*const stack_effect_mod.StackEffect, &entry_effect), ctx.jit_pending_trace_frames.items[0].stack_effect);
+}
+
+test "jitAppendBuiltinTraceFrame: the call frame carries the native's spec effect" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    _ = jitAppendBuiltinTraceFrame(@intFromPtr(&ctx), @intFromEnum(BuiltinTraceFrameKind.call), 0, 0, 9);
+
+    try testing.expectEqual(@as(usize, 1), ctx.jit_pending_trace_frames.items.len);
+    try testing.expectEqualStrings("call", ctx.jit_pending_trace_frames.items[0].word_name);
+    const effect = ctx.jit_pending_trace_frames.items[0].stack_effect orelse return error.TestExpectedEffect;
+
+    var buf: [256]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buf);
+    try effect.write(fbs.writer());
+    try testing.expectEqualStrings("( ..a quot: ( ..a -- ..b ) -- ..b )", fbs.getWritten());
 }
 
 test "jitInterpretedCall: entry module resolves that module's word, not the cache-scan winner" {

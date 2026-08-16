@@ -14,6 +14,7 @@ const NativeFn = @import("dictionary.zig").NativeFn;
 const Marker = @import("value.zig").Marker;
 
 const markers_mod = @import("primitives/markers.zig");
+const helpers = @import("primitives/helpers.zig");
 
 const extracted_primitives = @import("primitives/mod.zig").extracted_primitives;
 const extracted_registry_entries = @import("primitives/mod.zig").extracted_registry_entries;
@@ -25,15 +26,23 @@ const extracted_registry_entries = @import("primitives/mod.zig").extracted_regis
 /// On an error the frame becomes a pending synthetic frame and capture is deferred to the
 /// propagate boundary, so the compiled callers unwinding above this raise still land in the chain.
 ///
+/// `effect_str` is the native's spec effect string, parsed on the cold error path so the frame
+/// carries the native's own declared effect. No tier answers by name: a dictionary lookup here
+/// would report whichever binding holds the name at raise time.
+///
 /// `line_raw` is the call-site line, used for the frame. `src_ptr_raw`/`src_len_raw` carry the
 /// call site's baked source file, with the null pair falling back to the per-entry trace source.
-pub fn AotDirectWrapper(comptime func: NativeFn, comptime word_name: []const u8) type {
+pub fn AotDirectWrapper(comptime func: NativeFn, comptime word_name: []const u8, comptime effect_str: ?[]const u8) type {
     return struct {
         fn call(ctx_raw: usize, src_ptr_raw: usize, src_len_raw: usize, line_raw: usize) callconv(.c) i32 {
             if (ctx_raw == 0) return 1;
             const ctx: *Context = @ptrFromInt(ctx_raw);
-            ctx.pushCallFrame(word_name, ctx.traceFrameSource(src_ptr_raw, src_len_raw), line_raw, 0);
+            ctx.pushCallFrame(word_name, ctx.traceFrameSource(src_ptr_raw, src_len_raw), line_raw, 0, null);
             func(ctx) catch |err| {
+                if (effect_str) |raw| {
+                    const effect = helpers.makeBoxedEffect(ctx.arena.allocator(), raw) catch null;
+                    ctx.setTopCallFrameEffect(effect);
+                }
                 ctx.jit_pending_error = ctx.wordErrorDeferCapture(word_name, err);
                 return 2;
             };
@@ -88,6 +97,7 @@ const NativeWrapper = struct {
     name: []const u8,
     func: NativeFn,
     symbol: [:0]const u8,
+    effect: ?[]const u8,
 };
 
 /// True when a primitive carries the generic marker, so its dictionary word dispatches to
@@ -122,12 +132,12 @@ const direct_natives_buf = blk: {
     var n: usize = 0;
     for (extracted_primitives) |p| {
         if (primitiveIsGeneric(p.markers)) continue;
-        buf[n] = .{ .name = p.name, .func = p.func, .symbol = std.fmt.comptimePrint("{s}", .{wrapperSymbolName(p.name)}) };
+        buf[n] = .{ .name = p.name, .func = p.func, .symbol = std.fmt.comptimePrint("{s}", .{wrapperSymbolName(p.name)}), .effect = p.stack_effect };
         n += 1;
     }
     for (extracted_registry_entries) |e| {
         const qualified = native_module_prefix ++ e.name;
-        buf[n] = .{ .name = qualified, .func = e.func, .symbol = std.fmt.comptimePrint("{s}", .{wrapperSymbolName(qualified)}) };
+        buf[n] = .{ .name = qualified, .func = e.func, .symbol = std.fmt.comptimePrint("{s}", .{wrapperSymbolName(qualified)}), .effect = e.stack_effect };
         n += 1;
     }
 
@@ -148,7 +158,7 @@ const direct_natives: [direct_natives_buf.count]NativeWrapper = direct_natives_b
 
 comptime {
     for (direct_natives) |w| {
-        @export(&AotDirectWrapper(w.func, w.name).call, .{ .name = w.symbol });
+        @export(&AotDirectWrapper(w.func, w.name, w.effect).call, .{ .name = w.symbol });
     }
 }
 
@@ -261,7 +271,7 @@ test "wrapper invokes its native: borrowed? on a fixnum returns false" {
 
     try ctx.stack.push(.{ .fixnum = 7 });
 
-    const wrapper = AotDirectWrapper(registryFunc("borrowed?"), "borrowed?").call;
+    const wrapper = AotDirectWrapper(registryFunc("borrowed?"), "borrowed?", "value -- bool").call;
     const status = wrapper(@intFromPtr(&ctx), 0, 0, 0);
 
     try testing.expectEqual(@as(i32, 0), status);
@@ -275,7 +285,7 @@ test "wrapper maps a native error to status 2 and sets the pending error" {
     defer ctx.deinit();
 
     // Empty stack: `borrowed?` pops an operand and underflows.
-    const wrapper = AotDirectWrapper(registryFunc("borrowed?"), "borrowed?").call;
+    const wrapper = AotDirectWrapper(registryFunc("borrowed?"), "borrowed?", "value -- bool").call;
     const status = wrapper(@intFromPtr(&ctx), 0, 0, 0);
 
     try testing.expectEqual(@as(i32, 2), status);
@@ -287,9 +297,16 @@ test "wrapper maps a native error to status 2 and sets the pending error" {
     try testing.expectEqual(@as(usize, 0), ctx.call_stack.items.len);
     try testing.expectEqual(@as(usize, 1), ctx.jit_pending_trace_frames.items.len);
     try testing.expectEqualStrings("borrowed?", ctx.jit_pending_trace_frames.items[0].word_name);
+
+    // The pending frame carries the effect parsed from the comptime spec string.
+    const effect = ctx.jit_pending_trace_frames.items[0].stack_effect orelse return error.TestExpectedEffect;
+    try testing.expectEqual(@as(usize, 1), effect.inputs.len);
+    try testing.expectEqualStrings("value", effect.inputs[0].name);
+    try testing.expectEqual(@as(usize, 1), effect.outputs.len);
+    try testing.expectEqualStrings("bool", effect.outputs[0].name);
 }
 
 test "wrapper bails with status 1 on a null context" {
-    const wrapper = AotDirectWrapper(registryFunc("borrowed?"), "borrowed?").call;
+    const wrapper = AotDirectWrapper(registryFunc("borrowed?"), "borrowed?", null).call;
     try testing.expectEqual(@as(i32, 1), wrapper(0, 0, 0, 0));
 }

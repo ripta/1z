@@ -919,6 +919,9 @@ fn resolveWordForDispatch(name: []const u8, user_data: *anyopaque) ?ir_codegen.R
         propagateWordId(ctx, name, id);
         break :blk id;
     };
+    if (ctx.jit_dispatch.getMut(word_id)) |em| {
+        if (em.stack_effect == null) em.stack_effect = callee.stack_effect;
+    }
 
     const bounded = dispatch_helpers.boundedDispatchFor(effect, callee.markers, name);
 
@@ -974,6 +977,7 @@ fn nativeCompile(ctx: *Context) anyerror!void {
             const member_word = ctx.lookupWord(member_name) orelse continue;
             if (member_word.word_id == null) {
                 const id = ctx.jit_dispatch.assignId(member_name) catch continue;
+                if (ctx.jit_dispatch.getMut(id)) |em| em.stack_effect = member_word.stack_effect;
                 propagateWordId(ctx, member_name, id);
             }
         }
@@ -1213,6 +1217,7 @@ fn compileSingleWord(ctx: *Context, sym: []const u8, mutual_group: ?[]const []co
         break :blk new_id;
     };
     ctx.jit_dispatch.replacePicSnapshot(final_id, pic_snapshot);
+    if (ctx.jit_dispatch.getMut(final_id)) |em| em.stack_effect = word.stack_effect;
     if (ctx.trace.trace_jit) {
         var tw = trace_mod.TraceWriter.init();
         trace_mod.traceJitCompile(&tw, sym, final_id);
