@@ -732,16 +732,21 @@ read-line: ( -- str/f ) [ input-stream get stream-read-line ] ;
 
 EImportConflict: ( -- sym ) [ import-conflict: ] ;
 
-\ True when `name` resolves to the same definition in the incoming `module` and in the current
-\ scope.
+\ True when `name` resolves to the same definition in the incoming `module` and in the import
+\ frame.
 \
 \ Word identity is the source module: two imports of one word from one cached module share its
-\ source-module pointer, so this dedupes the diamond where the imported module and the importer
-\ both `use` a third module. A word with no source module (`f`) is never a match.
-(same-source?): ( module name -- ? ) [
-  2dup native.word-source                            \ module name incoming-src
-  over native.current-scope swap native.word-source  \ module name incoming-src local-src
-  over module? over module? and
+\ source-module pointer, so this dedupes a direct re-import and the diamond where the imported
+\ module and the importer both `use` a third module.
+\
+\ A word the incoming module defines itself reports no source, so the module stands in as its
+\ own source, mirroring the import sink's anchor. On the local side no source means the word
+\ was defined locally rather than imported, so it is never a match.
+(same-source?): ( module: module name -- ? ) [
+  2dup native.word-source
+  dup [ ] [ drop over ] if       \ module name incoming-src
+  over native.local-word-source  \ module name incoming-src local-src
+  dup module?
   [ = ] [ 2drop f ] if  \ module name same?
   nip nip
 ] ;
@@ -749,13 +754,13 @@ EImportConflict: ( -- sym ) [ import-conflict: ] ;
 \\ Check that none of the given names shadow words in the current import frame.
 \\
 \\ Throws an `import-conflict` error naming the importing construct if any name is already locally
-\\ defined. When `dedupe?` is true, a name already bound from the same source module is skipped.
+\\ defined. A name already bound from the same source module is skipped.
 \\
 \\ Generic words are exempt when both sides are generic: multiple modules may contribute dispatch
 \\ methods for the same word.
-assert-no-shadow: ( module: module names: array construct: string dedupe?: boolean -- ) [
-  swap " would shadow existing words: " #append
-  [ [ over [ swap (same-source?) not ] curry #filter #collect ] when ] dip
+assert-no-shadow: ( module: module names: array construct: string -- ) [
+  " would shadow existing words: " #append
+  [ over [ swap (same-source?) not ] curry #filter #collect ] dip
   <rot- <rot-
   { } swap
   [
@@ -775,7 +780,7 @@ assert-no-shadow: ( module: module names: array construct: string dedupe?: boole
     "" swap
     [
       >string
-      dup native.current-scope swap native.word-source dup
+      dup native.local-word-source dup
       [ inspect swap " (from " #append swap #append ")" #append ]
       [ drop ]
       if
@@ -820,7 +825,7 @@ use: parse-time [
       ";" parse-values-until dup (validate-use-tail)
       dup [ (use-load) ] dip
       shadow-ok #in? not
-      [ dup dup @keys "use" f assert-no-shadow ] when
+      [ dup dup @keys "use" assert-no-shadow ] when
       import
     ] dip  \ filename
     f (record-use)
@@ -833,7 +838,7 @@ use: parse-time [
       ";" parse-values-until dup (validate-use-tail)
       dup [ (use-load) ] dip  \ { sel } module { mods }
       shadow-ok #in? not      \ { sel } module no-shadow?
-      [ over over swap "use" f assert-no-shadow ] when
+      [ over over swap "use" assert-no-shadow ] when
       swap import
     ] 2dip  \ selection filename
     swap (record-use)
@@ -854,15 +859,15 @@ use: parse-time [
 borrow: parse-time [
   \ Shadow-check the whole borrow surface: the module's public words and all its private deps.
   (borrow-shadow-check-all): ( module -- ) [
-    dup dup @keys "borrow" t assert-no-shadow
-    native.module-deps dup @keys "borrow" t assert-no-shadow
+    dup dup @keys "borrow" assert-no-shadow
+    native.module-deps dup @keys "borrow" assert-no-shadow
   ] ;
 
   \ Shadow-check a subset borrow: the module's public words and only the selected deps.
   (borrow-subset-check): ( selection module -- selection module ) [
-    dup dup @keys "borrow" t assert-no-shadow
+    dup dup @keys "borrow" assert-no-shadow
     over over native.module-deps
-    swap "borrow" t assert-no-shadow
+    swap "borrow" assert-no-shadow
   ] ;
 
   (validate-borrow-tail): ( values -- ) [

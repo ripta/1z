@@ -1,8 +1,10 @@
-\ Double import tests
+\ Re-importing one module is not a conflict. The shadow check dedupes by source module, so a
+\ second full `use` and a selective re-import both pass without `shadow-ok`.
 
 use "testing" ;
 use "time" ;
-use "time" shadow-ok ;
+use "time" ;
+use { seconds: } "time" ;
 
-t "double-import-no-crash" assert-true
+t "double-import-no-conflict" assert-true
 1 seconds 1 seconds + unmake-duration 2000000000 "duration-arithmetic-after-double-import" assert=

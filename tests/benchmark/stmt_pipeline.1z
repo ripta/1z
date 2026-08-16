@@ -40,8 +40,8 @@ use "lexer" ;
 \ materializing the lazy token stream via #collect needs (lexer-step) in scope
 
 \ The lowering tier's subject. `use "expr"` already reexports this module's public emit-stmt, so the
-\ borrow shadows it with the identical word; shadow-ok accepts that.
-borrow { (lower-stmt): } "expr/stmt/lower" shadow-ok ;
+\ borrow re-imports the identical word; the shadow check dedupes it by source module.
+borrow { (lower-stmt): } "expr/stmt/lower" ;
 
 \ Callees the blocks invoke. sub2 is non-commutative, so the runtime rows also confirm left-to-right
 \ argument order. Every word a hosted call names is alphanumeric, because the expression lexer

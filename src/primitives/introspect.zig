@@ -42,6 +42,7 @@ pub const registry_entries = [_]RegistryEntry{
     .{ .name = ">constraint-info", .func = nativeConstraintToInfo, .stack_effect = "constraint -- array" },
     .{ .name = "dead-definitions", .func = nativeDeadDefinitions },
     .{ .name = "defined?", .func = nativeDefined, .stack_effect = "module name -- ?" },
+    .{ .name = "local-word-source", .func = nativeLocalWordSource, .stack_effect = "name -- module/f" },
     .{ .name = "locally-defined?", .func = nativeLocallyDefined, .stack_effect = "name -- ?" },
     .{ .name = "scope-frames", .func = nativeScopeFrames },
     .{ .name = "stack-snapshot", .func = nativeStackSnapshot },
@@ -908,6 +909,36 @@ fn nativeLocallyDefined(ctx: *Context) anyerror!void {
 
     const found = ctx.local_frames.items[idx].get(name) != null;
     try ctx.stack.push(.{ .boolean = found });
+}
+
+/// local-word-source ( name -- module/f ) - Return the source module of the import-frame
+/// binding for a word, or f when the word is absent, locally defined, or not imported.
+fn nativeLocalWordSource(ctx: *Context) anyerror!void {
+    const val = try ctx.stack.pop();
+    defer container_backing.releaseValue(val);
+    const name = switch (val) {
+        .symbol => |s| s.bytes,
+        .string => |s| s.bytes,
+        else => {
+            helpers.setTypeMismatchError(ctx, "symbol or string", val);
+            return error.TypeMismatch;
+        },
+    };
+
+    const idx = ctx.import_frame_index orelse {
+        try ctx.stack.push(.{ .boolean = false });
+        return;
+    };
+
+    if (ctx.local_frames.items[idx].get(name)) |existing| {
+        if (existing.imported) {
+            if (existing.source_module) |mod| {
+                try ctx.stack.push(.{ .module = @constCast(mod) });
+                return;
+            }
+        }
+    }
+    try ctx.stack.push(.{ .boolean = false });
 }
 
 /// defined? ( module name -- bool ) - Check if a word exists in a module.

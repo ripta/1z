@@ -15,7 +15,7 @@ use "strings" ;
 "selective import" test-section
 
 \ Import only the words you need. Names are symbols (trailing colon):
-use { split: } "strings" shadow-ok ;
+use { split: } "strings" ;
 
 \ split is in scope:
 "a,b" "," split { "a" "b" } "selective import works" assert=
@@ -28,12 +28,13 @@ m: "math" load ;
 
 m.pi 3.0 > "pi via qualified access" assert-true
 
-"shadow-ok for deliberate shadowing" test-section
+"re-importing a module" test-section
 
-\ If two modules export the same word, importing both raises
-\ a shadow warning. Use shadow-ok to suppress it when the
-\ shadowing is intentional.
-use "strings" shadow-ok ;
+\ Importing the same module again is not a conflict: the shadow
+\ check skips names already bound from the same source module.
+\ shadow-ok is only needed when two different modules export the
+\ same word and the shadowing is intentional.
+use "strings" ;
 
-\ The import succeeds without a warning.
-t "shadow-ok suppresses warning" assert-true
+\ The re-import succeeds without shadow-ok.
+t "re-import is silent" assert-true

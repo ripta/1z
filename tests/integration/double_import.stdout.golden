@@ -1,4 +1,4 @@
-PASS: double-import-no-crash
+PASS: double-import-no-conflict
 Stack: [ ]
 PASS: duration-arithmetic-after-double-import
 Stack: [ ]
