@@ -1,0 +1,22 @@
+=== Reexport of a module with a conflicting word name errors ===
+Stack: [ ]
+Stack: [ [ "strict_use_mod_b.1z" load reexport ] ]
+PASS: conflicting reexport throws import-conflict
+Stack: [ <module:strict_use_mod_b.1z (2 words)> ]
+Stack: [ ]
+=== A failing reexport imports none of the module's words ===
+Stack: [ ]
+PASS: non-conflicting word not imported by failed reexport
+Stack: [ ]
+=== reexport(shadow-ok) suppresses the shadow check ===
+Stack: [ ]
+Stack: [ ]
+PASS: shadow-ok reexport uses later module
+Stack: [ ]
+PASS: shadow-ok reexport imports the whole module
+Stack: [ ]
+=== Reexporting an already-imported module is silent ===
+Stack: [ ]
+Stack: [ ]
+PASS: same-source reexport works
+Stack: [ ]

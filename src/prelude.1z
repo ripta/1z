@@ -921,13 +921,21 @@ borrow: parse-time [
   if
 ] ;
 
-\\ Reexport all words from a module as public definitions.
-reexport: ( module -- ) [
+\\ Reexport all words from a module as public definitions, skipping the shadow check.
+reexport(shadow-ok): ( module -- ) [
   dup native.module-name swap  \ module-name module
   dup @keys swap import        \ module-name
   [ export ] #each             \ module-name
   dup f swap                   \ module-name f module-name
   native.record-import
+] ;
+
+\\ Reexport all words from a module as public definitions.
+\\ Throws import-conflict when a name would shadow an existing local word.
+\\ Use `reexport(shadow-ok)` to suppress the shadow check.
+reexport: ( module -- ) [
+  dup dup @keys "reexport" assert-no-shadow
+  reexport(shadow-ok)
 ] ;
 
 \ Loops

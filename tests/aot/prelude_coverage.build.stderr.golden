@@ -1,9 +1,9 @@
-Prelude compilation: 456/457 words compiled (99.8%)
+Prelude compilation: 457/458 words compiled (99.8%)
   word 'pragma-get?' cannot be compiled
       NC.13: word body underflows the abstract stack (row-variable effects)
       hint: blocked until row-variable stack regions can be modeled
 Quotation bodies compiled: 0
-Inline PIC sites: 88/265 generic call sites preseeded
+Inline PIC sites: 89/266 generic call sites preseeded
 AOT interpreter fallbacks: 303 total
   native: 243
   per-op-native: 42
@@ -11,21 +11,21 @@ AOT interpreter fallbacks: 303 total
   quotation: 17
   sites:
     native: nan? -> = (line 444)
-    quotation: run-benchmarks -> <quotation> (line 1202)
+    quotation: run-benchmarks -> <quotation> (line 1210)
     quotation: (any-loop) -> <quotation> (line 474)
     native: quotation? -> = (line 409)
     native: . -> inspect (line 723)
     native: . -> inspect (line 723)
-    native: #ends-with? -> #len (line 1264)
-    native: #ends-with? -> #len (line 1264)
-    native: #ends-with? -> #len (line 1264)
-    native: #ends-with? -> #len (line 1264)
-    native: #ends-with? -> < (line 1264)
-    native: #ends-with? -> #len (line 1266)
-    native: #ends-with? -> #len (line 1266)
-    native: #ends-with? -> #len (line 1266)
-    native: #ends-with? -> #len (line 1266)
-    per-op-native: #ends-with? -> - (line 1266)
+    native: #ends-with? -> #len (line 1272)
+    native: #ends-with? -> #len (line 1272)
+    native: #ends-with? -> #len (line 1272)
+    native: #ends-with? -> #len (line 1272)
+    native: #ends-with? -> < (line 1272)
+    native: #ends-with? -> #len (line 1274)
+    native: #ends-with? -> #len (line 1274)
+    native: #ends-with? -> #len (line 1274)
+    native: #ends-with? -> #len (line 1274)
+    per-op-native: #ends-with? -> - (line 1274)
     ... 287 more
   static-check: jitInterpretedCall=1/1 jitNativeWordCall=285/285 jitCallQuotation=17/17 (matches build-time inventory)
 Warning: '4keep' parameter 'quot' has row-variable effect; quotation call falls back to interpreter

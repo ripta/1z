@@ -1,0 +1,29 @@
+\ Reexport shadow check tests
+
+use "testing" ;
+
+\ === Conflicting reexport errors ===
+"Reexport of a module with a conflicting word name errors" test-section
+
+use "strict_use_mod_a.1z" ;
+[ "strict_use_mod_b.1z" load reexport ]
+[ error-type: @get EImportConflict "conflicting reexport throws import-conflict" assert= ] recover
+drop  \ the failed reexport leaves the module behind
+\ === A failing reexport writes nothing ===
+"A failing reexport imports none of the module's words" test-section
+
+"mul" native.locally-defined? f "non-conflicting word not imported by failed reexport" assert=
+
+\ === reexport(shadow-ok) suppresses the error ===
+"reexport(shadow-ok) suppresses the shadow check" test-section
+
+"strict_use_mod_b.1z" load reexport(shadow-ok)
+greet "hello from B" "shadow-ok reexport uses later module" assert=
+6 7 mul 42 "shadow-ok reexport imports the whole module" assert=
+
+\ === Same-source reexport is not a conflict ===
+"Reexporting an already-imported module is silent" test-section
+
+use "strict_use_mod_c.1z" ;
+"strict_use_mod_c.1z" load reexport
+5 3 sub 2 "same-source reexport works" assert=
