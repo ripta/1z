@@ -3089,7 +3089,8 @@ pub const Context = struct {
         // while a check-mode load runs from inside a module word whose module imports that const,
         // must not block the loaded file's own definitions.
         const const_guard_vis: ModuleDepsVisibility = .{ .deps_modules = &.{}, .defining_module = null };
-        if (self.lookupWordLocked(name, const_guard_vis)) |existing| {
+        const visible_existing = self.lookupWordLocked(name, const_guard_vis);
+        if (visible_existing) |existing| {
             for (existing.markers) |mk| {
                 if (markers_mod.isConstMarker(mk)) {
                     self.pending_error_message = std.fmt.allocPrint(
@@ -3196,6 +3197,23 @@ pub const Context = struct {
             }
         } else {
             try self.dictionary.put(name, def);
+        }
+
+        // A definition of a name that already named a word strands the dispatch entries keyed to
+        // the id that name used to carry.
+        //
+        // A displaced same-scope word loses its own id. A definition landing above a lower-scope
+        // word instead changes which id an already-warm call site resolves to. Either way a warm
+        // cache answers for a word the scope no longer names, and the satisfies memo counts those
+        // same entries.
+        if (visible_existing != null or same_scope_existing != null) {
+            const target = self.stateTarget();
+            target.dispatch.generation +%= 1;
+            target.protocol_satisfies_cache.clearRetainingCapacity();
+            if (target != self) {
+                self.dispatch.generation +%= 1;
+                self.protocol_satisfies_cache.clearRetainingCapacity();
+            }
         }
 
         // Compound bodies that capture container literals must be
@@ -8395,6 +8413,55 @@ test "protocol satisfies cache invalidated by dispatch frame pop" {
 
     ctx.popDispatchFrame();
     try std.testing.expectEqual(@as(?bool, null), ctx.lookupProtocolSatisfies(key));
+}
+
+test "protocol satisfies cache invalidated by redefinition" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const fixnum_tv = ctx.lookupBuiltinTypeValue("fixnum").?;
+    const methods = [_]value_mod.Value{value_mod.symbolValue("cmp")};
+    const desc = try ctx.createProtocolDescriptor("comparable", &methods);
+
+    const key = ProtocolSatisfiesKey{
+        .type_descriptor = fixnum_tv.descriptor.?,
+        .protocol_descriptor = desc,
+    };
+
+    try ctx.defineWord("cmp", .{ .name = "cmp", .action = .{ .literal = .{ .fixnum = 1 } } });
+    ctx.storeProtocolSatisfies(key, true);
+    try std.testing.expectEqual(@as(?bool, true), ctx.lookupProtocolSatisfies(key));
+
+    // The memo counts entries keyed by the protocol word's dispatch id, and the redefinition
+    // mints a new one, so the answer it holds no longer describes the word named `cmp`.
+    try ctx.defineWord("cmp", .{ .name = "cmp", .action = .{ .literal = .{ .fixnum = 2 } } });
+    try std.testing.expectEqual(@as(?bool, null), ctx.lookupProtocolSatisfies(key));
+}
+
+test "defineWordLocked: the dispatch generation moves only when the name already named a word" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const fresh_before = ctx.dispatch.generation;
+    try ctx.defineWord("w", .{ .name = "w", .action = .{ .literal = .{ .fixnum = 1 } } });
+    try std.testing.expectEqual(fresh_before, ctx.dispatch.generation);
+
+    const redef_before = ctx.dispatch.generation;
+    try ctx.defineWord("w", .{ .name = "w", .action = .{ .literal = .{ .fixnum = 2 } } });
+    try std.testing.expect(ctx.dispatch.generation != redef_before);
+
+    // A definition landing above an existing word changes which definition an already-warm
+    // call site resolves to, so it strands cached entries the same way a redefinition does.
+    try ctx.pushLocalFrame();
+    defer ctx.popLocalFrame();
+
+    const shadow_before = ctx.dispatch.generation;
+    try ctx.defineWord("w", .{ .name = "w", .action = .{ .literal = .{ .fixnum = 3 } } });
+    try std.testing.expect(ctx.dispatch.generation != shadow_before);
+
+    const unrelated_before = ctx.dispatch.generation;
+    try ctx.defineWord("v", .{ .name = "v", .action = .{ .literal = .{ .fixnum = 4 } } });
+    try std.testing.expectEqual(unrelated_before, ctx.dispatch.generation);
 }
 
 test "anonymous union descriptor flags are inferred by intersection" {

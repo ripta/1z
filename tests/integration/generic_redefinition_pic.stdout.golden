@@ -1,0 +1,23 @@
+=== warm site after a redefinition ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: warm site dispatches the registered method
+Stack: [ ]
+Stack: [ ]
+PASS: warm site runs the redefinition's fallthrough
+Stack: [ ]
+Stack: [ ]
+PASS: warm site dispatches a method registered after the redefinition
+Stack: [ ]
+Stack: [ ]
+PASS: rewarmed site keeps dispatching the new method
+Stack: [ ]
+=== native dispatch survives the flush ===
+Stack: [ ]
+PASS: native arithmetic after the flush
+Stack: [ ]
+PASS: native sequence dispatch after the flush
+Stack: [ ]
