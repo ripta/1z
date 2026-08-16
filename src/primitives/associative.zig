@@ -359,7 +359,7 @@ fn nativeAtSetErrorReject(ctx: *Context) anyerror!void {
 
 /// @keys ( assoc -- array ) - Get all keys
 pub fn nativeAtKeys(ctx: *Context) anyerror!void {
-    if (try dispatch_helpers.tryDispatchUnary(ctx, "@keys")) return;
+    if (try dispatch_helpers.tryDispatchUnaryByName(ctx, "@keys")) return;
 
     const obj = try ctx.stack.pop();
     defer container_backing.releaseValue(obj);
@@ -437,7 +437,7 @@ fn nativeAtKeysModule(ctx: *Context) anyerror!void {
 ///
 /// No module arm, unlike @get/@has?/@keys.
 pub fn nativeAtValues(ctx: *Context) anyerror!void {
-    if (try dispatch_helpers.tryDispatchUnary(ctx, "@values")) return;
+    if (try dispatch_helpers.tryDispatchUnaryByName(ctx, "@values")) return;
 
     const obj = try ctx.stack.pop();
     defer container_backing.releaseValue(obj);

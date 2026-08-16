@@ -109,7 +109,7 @@ pub const primitives = [_]Primitive{
 
 /// inspect ( value -- string )
 fn nativeInspect(ctx: *Context) anyerror!void {
-    if (try dispatch_helpers.tryDispatchUnary(ctx, "inspect")) return;
+    if (try dispatch_helpers.tryDispatchUnaryByName(ctx, "inspect")) return;
 
     const val = try ctx.stack.pop();
     defer container_backing.releaseValue(val);
@@ -121,7 +121,7 @@ fn nativeInspect(ctx: *Context) anyerror!void {
 
 /// >string ( value -- string )
 fn nativeAsString(ctx: *Context) anyerror!void {
-    if (try dispatch_helpers.tryDispatchUnary(ctx, ">string")) return;
+    if (try dispatch_helpers.tryDispatchUnaryByName(ctx, ">string")) return;
 
     const val = try ctx.stack.pop();
     defer container_backing.releaseValue(val);
@@ -133,7 +133,7 @@ fn nativeAsString(ctx: *Context) anyerror!void {
 
 /// >symbol ( string -- symbol )
 fn nativeToSymbol(ctx: *Context) anyerror!void {
-    if (try dispatch_helpers.tryDispatchUnary(ctx, ">symbol")) return;
+    if (try dispatch_helpers.tryDispatchUnaryByName(ctx, ">symbol")) return;
 
     const val = try ctx.stack.pop();
     switch (val) {

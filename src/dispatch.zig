@@ -173,6 +173,44 @@ pub const DispatchKeyContext = struct {
     }
 };
 
+/// The natives that carry their own dispatch identity.
+///
+/// A generic native's entries are keyed by the dispatch id of its own word definition. Resolving
+/// that id by name at call time would let any visible binding of the name answer in the native's
+/// place, so each of these natives instead reads the id its entries were registered under from
+/// per-Context storage populated once at registration. The storage is per-Context rather than a
+/// comptime global because `next_dispatch_id` is per-root-context and an embedding can hold more
+/// than one.
+pub const NativeDispatchWord = enum {
+    add,
+    sub,
+    mul,
+    div,
+    mod,
+    eq,
+    lt,
+    gt,
+    to_float,
+    to_integer,
+    abs,
+
+    pub fn wordName(self: NativeDispatchWord) []const u8 {
+        return switch (self) {
+            .add => "+",
+            .sub => "-",
+            .mul => "*",
+            .div => "/",
+            .mod => "%",
+            .eq => "=",
+            .lt => "<",
+            .gt => ">",
+            .to_float => ">float",
+            .to_integer => ">integer",
+            .abs => "abs",
+        };
+    }
+};
+
 /// Provenance metadata for a dispatch entry: which generator created it and why.
 pub const DispatchProvenance = struct {
     generator: []const u8,

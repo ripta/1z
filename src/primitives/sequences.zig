@@ -734,7 +734,7 @@ pub const primitives = [_]Primitive{
 
 /// #len ( seq -- n )
 pub fn nativeLen(ctx: *Context) anyerror!void {
-    if (try dispatch_helpers.tryDispatchUnary(ctx, "#len")) return;
+    if (try dispatch_helpers.tryDispatchUnaryByName(ctx, "#len")) return;
     const val = try ctx.stack.pop();
     defer container_backing.releaseValue(val);
     setErrorContext(ctx, "expected sequence, got {s}", .{valueTypeName(val)});
@@ -743,7 +743,7 @@ pub fn nativeLen(ctx: *Context) anyerror!void {
 
 /// #nth ( seq n -- elem )
 pub fn nativeNth(ctx: *Context) anyerror!void {
-    if (try dispatch_helpers.tryDispatchBinary(ctx, "#nth")) return;
+    if (try dispatch_helpers.tryDispatchBinaryByName(ctx, "#nth")) return;
     const b = try ctx.stack.pop();
     defer container_backing.releaseValue(b);
     const a = try ctx.stack.pop();
@@ -873,7 +873,7 @@ fn nativeNthMut(ctx: *Context) anyerror!void {
 
 /// #first ( seq -- elem )
 pub fn nativeFirst(ctx: *Context) anyerror!void {
-    if (try dispatch_helpers.tryDispatchUnary(ctx, "#first")) return;
+    if (try dispatch_helpers.tryDispatchUnaryByName(ctx, "#first")) return;
     const val = try ctx.stack.pop();
     defer container_backing.releaseValue(val);
     if (val == .set) {
@@ -886,7 +886,7 @@ pub fn nativeFirst(ctx: *Context) anyerror!void {
 
 /// #last ( seq -- elem )
 pub fn nativeLast(ctx: *Context) anyerror!void {
-    if (try dispatch_helpers.tryDispatchUnary(ctx, "#last")) return;
+    if (try dispatch_helpers.tryDispatchUnaryByName(ctx, "#last")) return;
     const val = try ctx.stack.pop();
     defer container_backing.releaseValue(val);
     if (val == .set) {
@@ -2387,7 +2387,7 @@ fn nativeShiftMut(ctx: *Context) anyerror!void {
 /// vector are 1z `method{` entries. The iterator scan below is the fallback when a dispatch arm is
 /// absent, such as a custom prelude missing the array/vector methods.
 pub fn nativeIn(ctx: *Context) anyerror!void {
-    if (try dispatch_helpers.tryDispatchBinary(ctx, "#in?")) return;
+    if (try dispatch_helpers.tryDispatchBinaryByName(ctx, "#in?")) return;
 
     const elem = try ctx.stack.pop();
     const seq = try ctx.stack.pop();
@@ -2463,7 +2463,7 @@ fn nativeInSet(ctx: *Context) anyerror!void {
 /// 1z `method{` entries. The counted iterator scan below is the fallback when a dispatch arm is
 /// absent. Sets are unordered, so they are rejected here rather than scanned.
 pub fn nativeIndexOf(ctx: *Context) anyerror!void {
-    if (try dispatch_helpers.tryDispatchBinary(ctx, "#index-of")) return;
+    if (try dispatch_helpers.tryDispatchBinaryByName(ctx, "#index-of")) return;
 
     const elem = try ctx.stack.pop();
     const seq = try ctx.stack.pop();
@@ -3090,7 +3090,7 @@ fn nativeToArrayArray(_: *Context) anyerror!void {
 
 /// >array ( container -- array )
 fn nativeToArray(ctx: *Context) anyerror!void {
-    if (try dispatch_helpers.tryDispatchUnary(ctx, ">array")) return;
+    if (try dispatch_helpers.tryDispatchUnaryByName(ctx, ">array")) return;
     const val = try ctx.stack.pop();
     defer container_backing.releaseValue(val);
     setErrorContext(ctx, ">array expected vector, byte-array, set, or array, got {s}", .{valueTypeName(val)});
@@ -3204,7 +3204,7 @@ fn nativeToHashHash(_: *Context) anyerror!void {}
 
 /// >hash ( container -- hash )
 fn nativeToHash(ctx: *Context) anyerror!void {
-    if (try dispatch_helpers.tryDispatchUnary(ctx, ">hash")) return;
+    if (try dispatch_helpers.tryDispatchUnaryByName(ctx, ">hash")) return;
     const val = try ctx.stack.pop();
     defer container_backing.releaseValue(val);
     setErrorContext(ctx, ">hash expected mutable-map, hash, struct, virtual, or enum, got {s}", .{valueTypeName(val)});

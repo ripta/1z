@@ -1,8 +1,8 @@
 \ A raise inside a prelude compound reached through non-tail user words, so one chain crosses
 \ source files: the raising native and its prelude callers render src/prelude.1z rows above the
 \ user-file rows. Pinned interpreted; the AOT suite builds this file through a `.source` redirect
-\ and renders the same chain. The eager tier drops the `say` row, recorded in
-\ spec/bugs/20260815-eager-drops-mid-chain-compiled-frame.md, so this file does not pin it.
+\ and renders the same chain. The eager tier drops the `say` row, a known frame-presence bug,
+\ so this file does not pin that tier.
 
 say: ( v -- ) [ print-line 0 drop ] ;
 report: ( v -- ) [ say 0 drop ] ;

@@ -157,6 +157,14 @@ fn lookupUnaryWithFallback(ctx: *Context, dispatch_id: u32, a: Value) ?AutoUnwra
     return null;
 }
 
+/// By-name binary dispatch for the natives not yet carrying their own dispatch id. Resolving the
+/// name walks the shadowing ladder, so a visible binding of the name answers in the native's
+/// place; identity-carrying natives call `tryDispatchBinary` with their stored id instead.
+pub fn tryDispatchBinaryByName(ctx: *Context, word_name: []const u8) !bool {
+    const dispatch_id = ctx.resolveDispatchId(word_name) orelse return false;
+    return tryDispatchBinary(ctx, dispatch_id);
+}
+
 /// Try to dispatch a binary operation via the dispatch table.
 ///
 /// Peeks at the top two stack values and looks up a registered method, executing the body with
@@ -166,12 +174,7 @@ fn lookupUnaryWithFallback(ctx: *Context, dispatch_id: u32, a: Value) ?AutoUnwra
 /// natives that branch on operand types (arithmetic, comparison, inspect, sequence ops, etc.)
 /// should opt in; type-agnostic natives (dup, drop, swap, etc.) must not dispatch. See also notes
 /// in the implementation of `nativeDefineMethod`.
-pub fn tryDispatchBinary(ctx: *Context, word_name: []const u8) !bool {
-    const dispatch_id = ctx.resolveDispatchId(word_name) orelse return false;
-    return tryDispatchBinaryById(ctx, dispatch_id);
-}
-
-fn tryDispatchBinaryById(ctx: *Context, dispatch_id: u32) !bool {
+pub fn tryDispatchBinary(ctx: *Context, dispatch_id: u32) !bool {
     if (ctx.stack.depth() < 2) return false;
 
     const a = try ctx.stack.peekN(1);
@@ -220,18 +223,21 @@ fn tryDispatchBinaryById(ctx: *Context, dispatch_id: u32) !bool {
     return false;
 }
 
+/// By-name unary dispatch for the natives not yet carrying their own dispatch id. Resolving the
+/// name walks the shadowing ladder, so a visible binding of the name answers in the native's
+/// place; identity-carrying natives call `tryDispatchUnary` with their stored id instead.
+pub fn tryDispatchUnaryByName(ctx: *Context, word_name: []const u8) !bool {
+    const dispatch_id = ctx.resolveDispatchId(word_name) orelse return false;
+    return tryDispatchUnary(ctx, dispatch_id);
+}
+
 /// Try to dispatch a unary operation via the dispatch table.
 ///
 /// Peeks at the top stack value and looks up a registered method, executing the body with the
 /// operand left on the stack. Returns true if dispatched.
 ///
 /// Same opt-in rules as tryDispatchBinary.
-pub fn tryDispatchUnary(ctx: *Context, word_name: []const u8) !bool {
-    const dispatch_id = ctx.resolveDispatchId(word_name) orelse return false;
-    return tryDispatchUnaryById(ctx, dispatch_id);
-}
-
-fn tryDispatchUnaryById(ctx: *Context, dispatch_id: u32) !bool {
+pub fn tryDispatchUnary(ctx: *Context, dispatch_id: u32) !bool {
     if (ctx.stack.depth() < 1) return false;
 
     const a = try ctx.stack.peek();
@@ -718,18 +724,18 @@ test "tryDispatchBinary returns false with empty stack" {
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
 
-    const result = try tryDispatchBinary(&ctx, "+");
+    const result = try tryDispatchBinary(&ctx, ctx.nativeDispatchId(.add));
     try std.testing.expect(!result);
 }
 
-test "tryDispatchBinary returns false when no method registered" {
+test "tryDispatchBinaryByName returns false for an unresolvable name" {
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
 
     try ctx.stack.push(.{ .fixnum = 1 });
     try ctx.stack.push(.{ .fixnum = 2 });
 
-    const result = try tryDispatchBinary(&ctx, "no-such-word");
+    const result = try tryDispatchBinaryByName(&ctx, "no-such-word");
     try std.testing.expect(!result);
 
     try std.testing.expectEqual(@as(usize, 2), ctx.stack.depth());
@@ -739,20 +745,38 @@ test "tryDispatchUnary returns false with empty stack" {
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
 
-    const result = try tryDispatchUnary(&ctx, "serialize");
+    const result = try tryDispatchUnary(&ctx, ctx.nativeDispatchId(.abs));
     try std.testing.expect(!result);
 }
 
-test "tryDispatchUnary returns false when no method registered" {
+test "tryDispatchUnaryByName returns false when no method registered" {
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
 
     try ctx.stack.push(.{ .fixnum = 42 });
 
-    const result = try tryDispatchUnary(&ctx, "serialize");
+    const result = try tryDispatchUnaryByName(&ctx, "serialize");
     try std.testing.expect(!result);
 
     try std.testing.expectEqual(@as(usize, 1), ctx.stack.depth());
+}
+
+test "tryDispatchBinary with the native's own id ignores a shadowing frame binding" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    // A frame-local binding named `-` shadows the native for by-name resolution.
+    try ctx.pushLocalFrame();
+    defer ctx.popLocalFrame();
+    try ctx.defineWord("-", .{ .name = "-", .action = .{ .compound = &[_]Instruction{} } });
+
+    try ctx.stack.push(.{ .float = 100.0 });
+    try ctx.stack.push(.{ .float = 40.0 });
+
+    const result = try tryDispatchBinary(&ctx, ctx.nativeDispatchId(.sub));
+    try std.testing.expect(result);
+    try std.testing.expectEqual(@as(usize, 1), ctx.stack.depth());
+    try std.testing.expectEqual(@as(f64, 60.0), (try ctx.stack.pop()).float);
 }
 
 test "tryDispatchGeneric returns false with empty stack" {

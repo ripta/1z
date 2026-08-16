@@ -768,6 +768,13 @@ pub const Context = struct {
     /// Monotonic counter for assigning unique dispatch IDs to word definitions.
     /// Atomic for future thread-safety requirements.
     next_dispatch_id: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+    /// The dispatch id each identity-carrying native's entries were registered under, indexed by
+    /// `NativeDispatchWord`.
+    ///
+    /// Populated once by `registerNativeDispatch` during init and immutable after; task contexts
+    /// inherit the values by copy in `initForTask`. Reading this instead of resolving the native's
+    /// name keeps a shadowing binding from capturing the native's entries.
+    native_dispatch_ids: std.enums.EnumArray(dispatch_mod.NativeDispatchWord, u32) = std.enums.EnumArray(dispatch_mod.NativeDispatchWord, u32).initFill(0),
     /// Monotonic counter for assigning unique IDs to protocol descriptors.
     /// Atomic for future thread-safety requirements (M:N scheduler).
     next_protocol_id: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
@@ -1373,6 +1380,7 @@ pub const Context = struct {
             .program_args = parent.program_args,
             .static_ffi_libs = parent.static_ffi_libs,
             .builtin_type_array = parent.builtin_type_array,
+            .native_dispatch_ids = parent.native_dispatch_ids,
             .single_char_strings = parent.single_char_strings,
             .dispatch_any_sentinel = parent.dispatch_any_sentinel,
             .dispatch_unary_sentinel = parent.dispatch_unary_sentinel,
@@ -4131,6 +4139,25 @@ pub const Context = struct {
             c = cur.parent_context;
         }
         return null;
+    }
+
+    /// The dispatch id `word`'s native entries were registered under.
+    ///
+    /// This is the native's own identity, so a shadowing binding of the name never answers in
+    /// its place.
+    pub fn nativeDispatchId(self: *const Context, word: dispatch_mod.NativeDispatchWord) u32 {
+        return self.native_dispatch_ids.get(word);
+    }
+
+    /// Resolve `word`'s dispatch id by name and record it as the native's own identity.
+    ///
+    /// Called only from `registerNativeDispatch` during init, before any user frame exists, so
+    /// the by-name resolution reaches the dictionary definition the entries are registered
+    /// against.
+    pub fn captureNativeDispatchId(self: *Context, word: dispatch_mod.NativeDispatchWord) u32 {
+        const did = self.resolveDispatchId(word.wordName()).?;
+        self.native_dispatch_ids.set(word, did);
+        return did;
     }
 
     /// Look up a binary dispatch entry in the native-only shadow table,

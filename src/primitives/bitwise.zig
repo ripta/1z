@@ -247,7 +247,7 @@ fn isNativeBitwise(val: Value) bool {
 }
 
 fn nativeBitand(ctx: *Context) anyerror!void {
-    if (try dispatch_helpers.tryDispatchBinary(ctx, "bitand")) return;
+    if (try dispatch_helpers.tryDispatchBinaryByName(ctx, "bitand")) return;
     const b = try ctx.stack.pop();
     defer container_backing.releaseValue(b);
     const a = try ctx.stack.pop();
@@ -258,7 +258,7 @@ fn nativeBitand(ctx: *Context) anyerror!void {
 }
 
 fn nativeBitor(ctx: *Context) anyerror!void {
-    if (try dispatch_helpers.tryDispatchBinary(ctx, "bitor")) return;
+    if (try dispatch_helpers.tryDispatchBinaryByName(ctx, "bitor")) return;
     const b = try ctx.stack.pop();
     defer container_backing.releaseValue(b);
     const a = try ctx.stack.pop();
@@ -269,7 +269,7 @@ fn nativeBitor(ctx: *Context) anyerror!void {
 }
 
 fn nativeBitxor(ctx: *Context) anyerror!void {
-    if (try dispatch_helpers.tryDispatchBinary(ctx, "bitxor")) return;
+    if (try dispatch_helpers.tryDispatchBinaryByName(ctx, "bitxor")) return;
     const b = try ctx.stack.pop();
     defer container_backing.releaseValue(b);
     const a = try ctx.stack.pop();
@@ -280,7 +280,7 @@ fn nativeBitxor(ctx: *Context) anyerror!void {
 }
 
 fn nativeBitnot(ctx: *Context) anyerror!void {
-    if (try dispatch_helpers.tryDispatchUnary(ctx, "bitnot")) return;
+    if (try dispatch_helpers.tryDispatchUnaryByName(ctx, "bitnot")) return;
     const val = try ctx.stack.pop();
     defer container_backing.releaseValue(val);
     helpers.setErrorHint(ctx, "operand must be an integer (fixnum or bignum)");
@@ -289,7 +289,7 @@ fn nativeBitnot(ctx: *Context) anyerror!void {
 }
 
 fn nativeShiftLeft(ctx: *Context) anyerror!void {
-    if (try dispatch_helpers.tryDispatchBinary(ctx, "shift-left")) return;
+    if (try dispatch_helpers.tryDispatchBinaryByName(ctx, "shift-left")) return;
     const count = try ctx.stack.pop();
     defer container_backing.releaseValue(count);
     const val = try ctx.stack.pop();
@@ -305,7 +305,7 @@ fn nativeShiftLeft(ctx: *Context) anyerror!void {
 }
 
 fn nativeShiftRight(ctx: *Context) anyerror!void {
-    if (try dispatch_helpers.tryDispatchBinary(ctx, "shift-right")) return;
+    if (try dispatch_helpers.tryDispatchBinaryByName(ctx, "shift-right")) return;
     const count = try ctx.stack.pop();
     defer container_backing.releaseValue(count);
     const val = try ctx.stack.pop();
@@ -321,7 +321,7 @@ fn nativeShiftRight(ctx: *Context) anyerror!void {
 }
 
 fn nativeUshiftRight(ctx: *Context) anyerror!void {
-    if (try dispatch_helpers.tryDispatchBinary(ctx, "ushift-right")) return;
+    if (try dispatch_helpers.tryDispatchBinaryByName(ctx, "ushift-right")) return;
     const count = try ctx.stack.pop();
     defer container_backing.releaseValue(count);
     const val = try ctx.stack.pop();
@@ -337,7 +337,7 @@ fn nativeUshiftRight(ctx: *Context) anyerror!void {
 }
 
 fn nativeShift(ctx: *Context) anyerror!void {
-    if (try dispatch_helpers.tryDispatchBinary(ctx, "shift")) return;
+    if (try dispatch_helpers.tryDispatchBinaryByName(ctx, "shift")) return;
     const count = try ctx.stack.pop();
     defer container_backing.releaseValue(count);
     const val = try ctx.stack.pop();

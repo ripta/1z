@@ -1,0 +1,16 @@
+\ A native carries the dispatch id its entries were registered under, so a binding named after a
+\ generic native cannot capture the native's entries.
+
+\ A binding named `-` in the caller leaves arithmetic intact in an unrelated word further down
+\ the call stack.
+victim: ( -- x ) [ 100.0 40.0 - ] ;
+caller: ( -- x ) [ -: [ drop drop 99.0 ] ; victim ] ;
+
+\ The prelude computes with its own words under the shadow: the quotation is written where `-`
+\ still means the native, and `#map` runs it under a frame that binds `-` to something else.
+inner-sub: ( -- a ) [ { 1 2 3 } [ 1 - ] #map #collect ] ;
+with-shadow: ( -- a ) [ -: [ drop drop 0 ] ; inner-sub ] ;
+
+victim .
+caller .
+with-shadow .

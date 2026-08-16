@@ -1,0 +1,15 @@
+\ A top-level redefinition of a generic native is an ordinary new binding in its own scope. A
+\ call site parsed before it keeps the native, warm or cold; a call site parsed after it reaches
+\ the redefinition.
+
+sub10: ( x -- y ) [ 10.0 - ] ;
+1.0 sub10 .
+
+-: ( a b -- c ) [ drop drop 7.0 ] ;
+
+\ The pre-resolved site keeps the native for a warm float pair and a cold mixed pair alike.
+1.0 sub10 .
+1 sub10 .
+
+\ A call site parsed after the redefinition reaches the new binding.
+1.0 2.0 - .

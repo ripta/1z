@@ -11,6 +11,7 @@ const dispatch_helpers = @import("dispatch_helpers.zig");
 const dispatch_mod = @import("../dispatch.zig");
 const container_backing = @import("../container_backing.zig");
 const DispatchTable = dispatch_mod.DispatchTable;
+const NativeDispatchWord = dispatch_mod.NativeDispatchWord;
 const markers_mod = @import("markers.zig");
 
 const popFixnum = helpers.popFixnum;
@@ -586,12 +587,12 @@ pub fn registerNativeDispatch(dispatch: *DispatchTable, ctx: *Context) !void {
     const byte_tvs = [_]*const value_mod.TypeValue{ string_tv, byte_array_tv };
 
     // +, -, * : 9 entries each (3x3 numeric matrix)
-    inline for ([_]struct { op: ArithOp, name: []const u8 }{
-        .{ .op = .add, .name = "+" },
-        .{ .op = .sub, .name = "-" },
-        .{ .op = .mul, .name = "*" },
+    inline for ([_]struct { op: ArithOp, word: NativeDispatchWord }{
+        .{ .op = .add, .word = .add },
+        .{ .op = .sub, .word = .sub },
+        .{ .op = .mul, .word = .mul },
     }) |item| {
-        const did = ctx.resolveDispatchId(item.name).?;
+        const did = ctx.captureNativeDispatchId(item.word);
         inline for (num_types) |ta| {
             inline for (num_types) |tb| {
                 try dispatch.registerNative(did, num_tvs[@intFromEnum(ta)].descriptor.?, num_tvs[@intFromEnum(tb)].descriptor.?, makeBinaryArithEntry(item.op, ta, tb));
@@ -600,7 +601,7 @@ pub fn registerNativeDispatch(dispatch: *DispatchTable, ctx: *Context) !void {
     }
 
     // / : 9 entries
-    const div_did = ctx.resolveDispatchId("/").?;
+    const div_did = ctx.captureNativeDispatchId(.div);
     inline for (num_types) |ta| {
         inline for (num_types) |tb| {
             try dispatch.registerNative(div_did, num_tvs[@intFromEnum(ta)].descriptor.?, num_tvs[@intFromEnum(tb)].descriptor.?, makeDivEntry(ta, tb));
@@ -608,7 +609,7 @@ pub fn registerNativeDispatch(dispatch: *DispatchTable, ctx: *Context) !void {
     }
 
     // % : 9 entries
-    const mod_did = ctx.resolveDispatchId("%").?;
+    const mod_did = ctx.captureNativeDispatchId(.mod);
     inline for (num_types) |ta| {
         inline for (num_types) |tb| {
             try dispatch.registerNative(mod_did, num_tvs[@intFromEnum(ta)].descriptor.?, num_tvs[@intFromEnum(tb)].descriptor.?, makeModEntry(ta, tb));
@@ -619,7 +620,7 @@ pub fn registerNativeDispatch(dispatch: *DispatchTable, ctx: *Context) !void {
     // comparable builtin. The same-type entries keep `=` on native value
     // equality instead of deriving it from `cmp` (which throws on NaN) once the
     // comparable builtins gained `cmp` methods.
-    const eq_did = ctx.resolveDispatchId("=").?;
+    const eq_did = ctx.captureNativeDispatchId(.eq);
     inline for (num_types) |ta| {
         inline for (num_types) |tb| {
             if (ta != tb) {
@@ -634,7 +635,7 @@ pub fn registerNativeDispatch(dispatch: *DispatchTable, ctx: *Context) !void {
     }
 
     // < : 9 entries
-    const lt_did = ctx.resolveDispatchId("<").?;
+    const lt_did = ctx.captureNativeDispatchId(.lt);
     inline for (num_types) |ta| {
         inline for (num_types) |tb| {
             try dispatch.registerNative(lt_did, num_tvs[@intFromEnum(ta)], num_tvs[@intFromEnum(tb)], makeLtEntry(ta, tb));
@@ -642,7 +643,7 @@ pub fn registerNativeDispatch(dispatch: *DispatchTable, ctx: *Context) !void {
     }
 
     // > : 9 entries
-    const gt_did = ctx.resolveDispatchId(">").?;
+    const gt_did = ctx.captureNativeDispatchId(.gt);
     inline for (num_types) |ta| {
         inline for (num_types) |tb| {
             try dispatch.registerNative(gt_did, num_tvs[@intFromEnum(ta)], num_tvs[@intFromEnum(tb)], makeGtEntry(ta, tb));
@@ -650,20 +651,20 @@ pub fn registerNativeDispatch(dispatch: *DispatchTable, ctx: *Context) !void {
     }
 
     // abs : 3 entries
-    const abs_did = ctx.resolveDispatchId("abs").?;
+    const abs_did = ctx.captureNativeDispatchId(.abs);
     try dispatch.registerNative(abs_did, fixnum_tv, unary, nativeAbsFixnum);
     try dispatch.registerNative(abs_did, bignum_tv, unary, nativeAbsBignum);
     try dispatch.registerNative(abs_did, float_tv, unary, nativeAbsFloat);
 
     // >float : 4 entries
-    const to_float_did = ctx.resolveDispatchId(">float").?;
+    const to_float_did = ctx.captureNativeDispatchId(.to_float);
     try dispatch.registerNative(to_float_did, fixnum_tv, unary, nativeToFloatFixnum);
     try dispatch.registerNative(to_float_did, float_tv, unary, nativeToFloatPassthrough);
     try dispatch.registerNative(to_float_did, bignum_tv, unary, nativeToFloatBignum);
     try dispatch.registerNative(to_float_did, string_tv, unary, nativeToFloatString);
 
     // >integer : 2 entries
-    const to_integer_did = ctx.resolveDispatchId(">integer").?;
+    const to_integer_did = ctx.captureNativeDispatchId(.to_integer);
     try dispatch.registerNative(to_integer_did, float_tv, unary, nativeToIntegerFloat);
     try dispatch.registerNative(to_integer_did, fixnum_tv, unary, nativeToIntegerPassthrough);
 
@@ -681,7 +682,7 @@ pub fn registerNativeDispatch(dispatch: *DispatchTable, ctx: *Context) !void {
 // =============================================================================
 
 pub fn nativeAdd(ctx: *Context) anyerror!void {
-    if (try dispatch_helpers.tryDispatchBinary(ctx, "+")) return;
+    if (try dispatch_helpers.tryDispatchBinary(ctx, ctx.nativeDispatchId(.add))) return;
     const b = try ctx.stack.pop();
     defer container_backing.releaseValue(b);
     const a = try ctx.stack.pop();
@@ -691,7 +692,7 @@ pub fn nativeAdd(ctx: *Context) anyerror!void {
 }
 
 pub fn nativeSub(ctx: *Context) anyerror!void {
-    if (try dispatch_helpers.tryDispatchBinary(ctx, "-")) return;
+    if (try dispatch_helpers.tryDispatchBinary(ctx, ctx.nativeDispatchId(.sub))) return;
     const b = try ctx.stack.pop();
     defer container_backing.releaseValue(b);
     const a = try ctx.stack.pop();
@@ -701,7 +702,7 @@ pub fn nativeSub(ctx: *Context) anyerror!void {
 }
 
 pub fn nativeMul(ctx: *Context) anyerror!void {
-    if (try dispatch_helpers.tryDispatchBinary(ctx, "*")) return;
+    if (try dispatch_helpers.tryDispatchBinary(ctx, ctx.nativeDispatchId(.mul))) return;
     const b = try ctx.stack.pop();
     defer container_backing.releaseValue(b);
     const a = try ctx.stack.pop();
@@ -712,7 +713,7 @@ pub fn nativeMul(ctx: *Context) anyerror!void {
 
 /// / ( a b -- a/b ) - Division
 pub fn nativeDiv(ctx: *Context) anyerror!void {
-    if (try dispatch_helpers.tryDispatchBinary(ctx, "/")) return;
+    if (try dispatch_helpers.tryDispatchBinary(ctx, ctx.nativeDispatchId(.div))) return;
     const b = try ctx.stack.pop();
     defer container_backing.releaseValue(b);
     const a = try ctx.stack.pop();
@@ -723,7 +724,7 @@ pub fn nativeDiv(ctx: *Context) anyerror!void {
 
 /// % ( a b -- a%b ) - Modulo / fmod
 pub fn nativeMod(ctx: *Context) anyerror!void {
-    if (try dispatch_helpers.tryDispatchBinary(ctx, "%")) return;
+    if (try dispatch_helpers.tryDispatchBinary(ctx, ctx.nativeDispatchId(.mod))) return;
     const b = try ctx.stack.pop();
     defer container_backing.releaseValue(b);
     const a = try ctx.stack.pop();
@@ -754,7 +755,7 @@ pub fn nativeMulWrap(ctx: *Context) anyerror!void {
 
 /// = ( a b -- ? ) - Equality comparison
 pub fn nativeEq(ctx: *Context) anyerror!void {
-    if (try dispatch_helpers.tryDispatchBinary(ctx, "=")) return;
+    if (try dispatch_helpers.tryDispatchBinary(ctx, ctx.nativeDispatchId(.eq))) return;
     if (try dispatch_helpers.tryDispatchBinaryViaCmp(ctx, .eq)) return;
     const b = try ctx.stack.pop();
     defer container_backing.releaseValue(b);
@@ -788,7 +789,7 @@ pub fn nativeInnerEq(ctx: *Context) anyerror!void {
 
 /// < ( a b -- ? ) - Less than
 pub fn nativeLt(ctx: *Context) anyerror!void {
-    if (try dispatch_helpers.tryDispatchBinary(ctx, "<")) return;
+    if (try dispatch_helpers.tryDispatchBinary(ctx, ctx.nativeDispatchId(.lt))) return;
     if (try dispatch_helpers.tryDispatchBinaryViaCmp(ctx, .lt)) return;
     try ctx.stack.popAndRelease();
     const a = try ctx.stack.pop();
@@ -799,7 +800,7 @@ pub fn nativeLt(ctx: *Context) anyerror!void {
 
 /// > ( a b -- ? ) - Greater than
 pub fn nativeGt(ctx: *Context) anyerror!void {
-    if (try dispatch_helpers.tryDispatchBinary(ctx, ">")) return;
+    if (try dispatch_helpers.tryDispatchBinary(ctx, ctx.nativeDispatchId(.gt))) return;
     if (try dispatch_helpers.tryDispatchBinaryViaCmp(ctx, .gt)) return;
     try ctx.stack.popAndRelease();
     const a = try ctx.stack.pop();
@@ -810,7 +811,7 @@ pub fn nativeGt(ctx: *Context) anyerror!void {
 
 /// >float ( x -- f ) - Convert fixnum or string to float
 fn nativeToFloat(ctx: *Context) anyerror!void {
-    if (try dispatch_helpers.tryDispatchUnary(ctx, ">float")) return;
+    if (try dispatch_helpers.tryDispatchUnary(ctx, ctx.nativeDispatchId(.to_float))) return;
     const val = try ctx.stack.pop();
     defer container_backing.releaseValue(val);
     helpers.setTypeMismatchError(ctx, "fixnum, bignum, float, or string", val);
@@ -819,7 +820,7 @@ fn nativeToFloat(ctx: *Context) anyerror!void {
 
 /// >integer ( f -- n ) - Float to fixnum, truncate toward zero
 fn nativeToInteger(ctx: *Context) anyerror!void {
-    if (try dispatch_helpers.tryDispatchUnary(ctx, ">integer")) return;
+    if (try dispatch_helpers.tryDispatchUnary(ctx, ctx.nativeDispatchId(.to_integer))) return;
     const val = try ctx.stack.pop();
     defer container_backing.releaseValue(val);
     helpers.setTypeMismatchError(ctx, "float or fixnum", val);
@@ -869,7 +870,7 @@ fn nativeFloatParts(ctx: *Context) anyerror!void {
 
 /// abs ( n -- n ) - Absolute value for fixnums, bignums, and floats
 fn nativeAbs(ctx: *Context) anyerror!void {
-    if (try dispatch_helpers.tryDispatchUnary(ctx, "abs")) return;
+    if (try dispatch_helpers.tryDispatchUnary(ctx, ctx.nativeDispatchId(.abs))) return;
     const val = try ctx.stack.pop();
     defer container_backing.releaseValue(val);
     helpers.setTypeMismatchError(ctx, "number", val);
