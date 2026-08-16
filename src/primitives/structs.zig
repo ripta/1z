@@ -143,7 +143,7 @@ fn nativeDefineStruct(ctx: *Context) anyerror!void {
     try ctx.defineWord(name, .{
         .name = name,
         .parse_time = true,
-        .stack_effect = try helpers.makeSimpleEffect(alloc, "-- type"),
+        .stack_effect = try helpers.makeBoxedEffect(alloc, "-- type"),
         .markers = type_markers,
         .provenance = .{ .generator = "struct", .parent = name, .role = "type" },
         .action = .{ .compound = type_instrs },
@@ -471,7 +471,7 @@ fn defineHashConverter(ctx: *Context, name: []const u8, struct_type: *const Stru
     const effect_str = try std.fmt.allocPrint(alloc, "hash -- {s}", .{struct_type.name});
     try ctx.defineWord(name, .{
         .name = name,
-        .stack_effect = try helpers.makeSimpleEffect(alloc, effect_str),
+        .stack_effect = try helpers.makeBoxedEffect(alloc, effect_str),
         .markers = generic_markers,
         .provenance = .{ .generator = "struct", .parent = struct_type.name, .role = "hash-converter" },
         .action = .{ .compound = instrs },
@@ -503,7 +503,7 @@ fn defineDestructor(ctx: *Context, name: []const u8, struct_type: *const StructT
     const effect_str = try helpers.buildDestructorEffectStr(alloc, struct_type.fields, struct_type.name);
     try ctx.defineWord(name, .{
         .name = name,
-        .stack_effect = try helpers.makeSimpleEffect(alloc, effect_str),
+        .stack_effect = try helpers.makeBoxedEffect(alloc, effect_str),
         .markers = markers,
         .provenance = .{ .generator = "struct", .parent = struct_type.name, .role = "destructor" },
         .action = .{ .compound = instrs },
@@ -521,7 +521,7 @@ fn defineToHash(ctx: *Context, name: []const u8, struct_type: *const StructType,
     const effect_str = try std.fmt.allocPrint(alloc, "{s} -- hash", .{struct_type.name});
     try ctx.defineWord(name, .{
         .name = name,
-        .stack_effect = try helpers.makeSimpleEffect(alloc, effect_str),
+        .stack_effect = try helpers.makeBoxedEffect(alloc, effect_str),
         .markers = markers,
         .provenance = .{ .generator = "struct", .parent = struct_type.name, .role = "to-hash" },
         .action = .{ .compound = instrs },
@@ -538,7 +538,7 @@ fn defineTypePredicate(ctx: *Context, name: []const u8, struct_type: *const Stru
 
     try ctx.defineWord(name, .{
         .name = name,
-        .stack_effect = try helpers.makeSimpleEffect(alloc, "val -- ?"),
+        .stack_effect = try helpers.makeBoxedEffect(alloc, "val -- ?"),
         .markers = markers,
         .provenance = .{ .generator = "struct", .parent = struct_type.name, .role = "predicate" },
         .action = .{ .compound = instrs },
@@ -680,7 +680,7 @@ fn typeValAnnotation(struct_type: *const StructType) ?stack_effect_mod.TypeAnnot
     return .{ .type = tv };
 }
 
-fn buildConstructorEffect(alloc: std.mem.Allocator, struct_type: *const StructType) !StackEffect {
+fn buildConstructorEffect(alloc: std.mem.Allocator, struct_type: *const StructType) !*const StackEffect {
     const inputs = try alloc.alloc(StackEffectParam, struct_type.fields.len);
     for (struct_type.fields, 0..) |field, i| {
         inputs[i] = .{
@@ -695,10 +695,10 @@ fn buildConstructorEffect(alloc: std.mem.Allocator, struct_type: *const StructTy
         .type_annotation = typeValAnnotation(struct_type),
     };
 
-    return .{ .inputs = inputs, .outputs = outputs };
+    return stack_effect_mod.box(alloc, .{ .inputs = inputs, .outputs = outputs });
 }
 
-fn buildGetterEffect(alloc: std.mem.Allocator, struct_type: *const StructType, field_index: usize) !StackEffect {
+fn buildGetterEffect(alloc: std.mem.Allocator, struct_type: *const StructType, field_index: usize) !*const StackEffect {
     const inputs = try alloc.alloc(StackEffectParam, 1);
     inputs[0] = .{
         .name = "instance",
@@ -711,10 +711,10 @@ fn buildGetterEffect(alloc: std.mem.Allocator, struct_type: *const StructType, f
         .type_annotation = fieldAnnotation(struct_type, field_index),
     };
 
-    return .{ .inputs = inputs, .outputs = outputs };
+    return stack_effect_mod.box(alloc, .{ .inputs = inputs, .outputs = outputs });
 }
 
-fn buildSetterEffect(alloc: std.mem.Allocator, struct_type: *const StructType, field_index: usize) !StackEffect {
+fn buildSetterEffect(alloc: std.mem.Allocator, struct_type: *const StructType, field_index: usize) !*const StackEffect {
     const inputs = try alloc.alloc(StackEffectParam, 2);
     inputs[0] = .{
         .name = "instance",
@@ -731,5 +731,5 @@ fn buildSetterEffect(alloc: std.mem.Allocator, struct_type: *const StructType, f
         .type_annotation = typeValAnnotation(struct_type),
     };
 
-    return .{ .inputs = inputs, .outputs = outputs };
+    return stack_effect_mod.box(alloc, .{ .inputs = inputs, .outputs = outputs });
 }

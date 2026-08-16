@@ -6,7 +6,8 @@ const Marker = value_mod.Marker;
 const Value = value_mod.Value;
 const Quotation = value_mod.Quotation;
 
-const StackEffect = @import("../stack_effect.zig").StackEffect;
+const stack_effect_mod = @import("../stack_effect.zig");
+const StackEffect = stack_effect_mod.StackEffect;
 
 const dictionary_mod = @import("../dictionary.zig");
 const WordProvenance = dictionary_mod.WordProvenance;
@@ -467,7 +468,7 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
                 try ctx.executeQuotation(define_quot);
             } else {
                 // Fall back to normal word definition
-                var stack_effect_val: ?StackEffect = null;
+                var stack_effect_val: ?*const StackEffect = null;
                 var doc_val: ?[]const u8 = null;
                 var collected_markers = std.ArrayListUnmanaged(*Marker){};
                 defer collected_markers.deinit(alloc);
@@ -489,9 +490,12 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
                     .closure => |c| c.effect,
                     else => null,
                 };
-                if (top_effect) |eff| {
-                    stack_effect_val = eff.*;
-                }
+
+                // The definition owns its effect rather than sharing the value's. One parsed body
+                // is executed once per scope that loads it, so the same parse-owned effect would
+                // otherwise be reached by definitions on arenas that outlive each other in either
+                // order.
+                if (top_effect) |eff| stack_effect_val = try stack_effect_mod.copyOnto(alloc, eff.*);
 
                 while (true) {
                     const next_val = try ctx.stack.peek();
@@ -506,7 +510,9 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
                         },
                         .stack_effect => |eff| {
                             try ctx.stack.popAndRelease();
-                            if (stack_effect_val == null) stack_effect_val = eff;
+                            if (stack_effect_val == null) {
+                                stack_effect_val = try stack_effect_mod.box(alloc, eff);
+                            }
                         },
                         .symbol => break,
                         else => {
@@ -706,6 +712,39 @@ test "semicolon defines named union type as parse-time word" {
         },
         .compound, .native, .host_callback => try std.testing.expect(false),
     }
+}
+
+test "semicolon copies the declared effect onto its own arena, parameters included" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    // Stands in for the parse that produced the quotation, whose arena is not the definition's.
+    var parse_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    errdefer parse_arena.deinit();
+
+    const nested = try stack_effect_mod.box(parse_arena.allocator(), .{ .inputs = &.{}, .outputs = &.{} });
+    const parse_effect = try stack_effect_mod.box(parse_arena.allocator(), .{
+        .inputs = try parse_arena.allocator().dupe(stack_effect_mod.StackEffectParam, &.{
+            .{ .name = "q", .quotation_effect = nested },
+        }),
+        .outputs = try parse_arena.allocator().dupe(stack_effect_mod.StackEffectParam, &.{.{ .name = "b" }}),
+    });
+
+    try ctx.stack.push(value_mod.symbolValue("effect-owner"));
+    try ctx.stack.push(.{ .quotation = .{ .instructions = &.{}, .effect = parse_effect } });
+    try nativeSemicolon(&ctx);
+
+    const effect = (ctx.lookupWord("effect-owner") orelse return error.TestExpectedWord).stack_effect.?;
+    try std.testing.expect(effect != parse_effect);
+    try std.testing.expect(effect.inputs.ptr != parse_effect.inputs.ptr);
+    try std.testing.expect(effect.inputs[0].quotation_effect.? != nested);
+
+    // Everything read past here would be the parse's memory had the copy been shallow.
+    parse_arena.deinit();
+
+    try std.testing.expectEqualStrings("q", effect.inputs[0].name);
+    try std.testing.expectEqualStrings("b", effect.outputs[0].name);
+    try std.testing.expectEqual(@as(usize, 0), effect.inputs[0].quotation_effect.?.inputs.len);
 }
 
 test "fireWordDefinedHook skips buildWordInfo when no word-defined-hooks are registered" {

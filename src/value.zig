@@ -1365,7 +1365,9 @@ fn structTypeDescriptor(st: *const StructType) ?*const TypeDescriptor {
 /// ModuleWord represents a word definition captured from a loaded file
 /// or registered in a virtual module.
 pub const ModuleWord = struct {
-    stack_effect: ?StackEffect = null,
+    /// Boxed for the same reason `WordDefinition.stack_effect` is: a module's word map stores
+    /// its entries by value, so an interior pointer dies on the next rehash.
+    stack_effect: ?*const StackEffect = null,
     polymorphic: bool = false,
     markers: []const *Marker = &.{},
     source_module: ?*const Module = null,

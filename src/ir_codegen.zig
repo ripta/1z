@@ -15005,7 +15005,7 @@ export fn jitNativeWordCall(ctx_raw: usize, word_id_raw: usize, src_ptr_raw: usi
                 ctx.jit_pending_error = err;
                 return 2;
             };
-            ctx.wordSuccessCleanup(display_name, if (leaf.stack_effect) |se| se.* else null) catch |err| {
+            ctx.wordSuccessCleanup(display_name, leaf.stack_effect) catch |err| {
                 ctx.jit_pending_error = err;
                 return 2;
             };
@@ -15021,12 +15021,12 @@ export fn jitNativeWordCall(ctx_raw: usize, word_id_raw: usize, src_ptr_raw: usi
 
     const result = if (looked_up_word) |word| blk: {
         if (word.stack_effect) |effect| {
-            ctx.validateParameterEffects(&effect) catch |err| {
+            ctx.validateParameterEffects(effect) catch |err| {
                 ctx.jit_pending_error = ctx.wordErrorDeferCapture(display_name, err);
                 return 2;
             };
             if (!shouldSkipTypeAnnotationValidation(word)) {
-                ctx.validateTypeAnnotations(&effect) catch |err| {
+                ctx.validateTypeAnnotations(effect) catch |err| {
                     ctx.jit_pending_error = ctx.wordErrorDeferCapture(display_name, err);
                     return 2;
                 };
@@ -15130,12 +15130,12 @@ export fn jitInterpretedCall(ctx_raw: usize, word_id_raw: usize, src_ptr_raw: us
 
     const result = if (looked_up_word) |word| blk: {
         if (word.stack_effect) |effect| {
-            ctx.validateParameterEffects(&effect) catch |err| {
+            ctx.validateParameterEffects(effect) catch |err| {
                 ctx.jit_pending_error = ctx.wordErrorDeferCapture(display_name, err);
                 return 2;
             };
             if (!shouldSkipTypeAnnotationValidation(word)) {
-                ctx.validateTypeAnnotations(&effect) catch |err| {
+                ctx.validateTypeAnnotations(effect) catch |err| {
                     ctx.jit_pending_error = ctx.wordErrorDeferCapture(display_name, err);
                     return 2;
                 };
@@ -15344,7 +15344,7 @@ fn registerTestNativeLeaf(ctx: *Context, word_id: u32, def: *WordDefinition) !vo
     leaf.* = .{
         .fn_ptr = def.action.native,
         .dispatch_id = def.dispatch_id,
-        .stack_effect = if (def.stack_effect != null) &def.stack_effect.? else null,
+        .stack_effect = def.stack_effect,
         .source_file = def.source_file,
     };
     ctx.jit_dispatch.getMut(word_id).?.native = leaf;

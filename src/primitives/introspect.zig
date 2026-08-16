@@ -170,7 +170,7 @@ fn buildStackEffectValue(alloc: Allocator, effect: *const StackEffect) Allocator
 
 pub fn buildWordInfo(alloc: Allocator, ctx: *const Context, name: []const u8, word: WordDefinition) !Value {
     const effect_val: Value = if (word.stack_effect) |effect|
-        try buildStackEffectValue(alloc, &effect)
+        try buildStackEffectValue(alloc, effect)
     else
         .{ .boolean = false };
 

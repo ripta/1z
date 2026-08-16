@@ -3047,7 +3047,7 @@ fn buildAotDescs(
                     .output_count = @intCast(effect.concreteOutputCount()),
                     .word_id = id,
                     .is_prelude = prelude_words.contains(name),
-                    .stack_effect = effect,
+                    .stack_effect = effect.*,
                     .never_returns = hasNeverReturnsMarker(def),
                     .source_file = def.source_file,
                     .source_line = def.source_line,
@@ -3073,7 +3073,7 @@ fn buildAotDescs(
                 .word_id = id,
                 .is_prelude = true,
                 .is_native = true,
-                .stack_effect = effect,
+                .stack_effect = effect.*,
                 .never_returns = hasNeverReturnsMarker(def),
                 .source_file = def.source_file,
                 .source_line = def.source_line,
@@ -3098,7 +3098,7 @@ fn buildAotDescs(
             if (def.provenance) |p| if (p.parent.len > 0) break :blk p.parent;
             break :blk null;
         };
-        const bounded = dispatch_helpers.boundedDispatchFor(&effect, def.markers, name);
+        const bounded = dispatch_helpers.boundedDispatchFor(effect, def.markers, name);
         try appendDesc(&words, &word_identities, allocator, .{
             .name = name,
             .module = discovered_word.module,
@@ -3107,7 +3107,7 @@ fn buildAotDescs(
             .output_count = @intCast(effect.concreteOutputCount()),
             .word_id = id,
             .is_prelude = prelude_words.contains(name),
-            .stack_effect = effect,
+            .stack_effect = effect.*,
             .never_returns = hasNeverReturnsMarker(def),
             .pic_snapshot = pic_snapshot,
             .source_file = def.source_file,
@@ -3169,7 +3169,7 @@ fn buildAotDescs(
                 }
                 break :blk null;
             },
-            .stack_effect = effect,
+            .stack_effect = effect.*,
             .never_returns = hasNeverReturnsMarker(def),
             .source_file = def.source_file,
             .source_line = def.source_line,
@@ -3520,11 +3520,11 @@ test "discovery: two modules exporting one name both reach the manifest under th
 
     const mod_a = try arena_alloc.create(value_mod.Module);
     mod_a.* = .{ .name = "mod-a", .words = .{} };
-    try mod_a.words.put(arena_alloc, "probe", .{ .stack_effect = effect, .action = .{ .compound = probe_a_body } });
-    try mod_a.words.put(arena_alloc, "a-probe", .{ .stack_effect = effect, .action = .{ .compound = a_probe_body } });
+    try mod_a.words.put(arena_alloc, "probe", .{ .stack_effect = &effect, .action = .{ .compound = probe_a_body } });
+    try mod_a.words.put(arena_alloc, "a-probe", .{ .stack_effect = &effect, .action = .{ .compound = a_probe_body } });
     const mod_b = try arena_alloc.create(value_mod.Module);
     mod_b.* = .{ .name = "mod-b", .words = .{} };
-    try mod_b.words.put(arena_alloc, "probe", .{ .stack_effect = effect, .action = .{ .compound = probe_b_body } });
+    try mod_b.words.put(arena_alloc, "probe", .{ .stack_effect = &effect, .action = .{ .compound = probe_b_body } });
 
     try Context.buildModuleDepsTemplate(mod_a, arena_alloc);
     try Context.buildModuleDepsTemplate(mod_b, arena_alloc);
@@ -3539,14 +3539,14 @@ test "discovery: two modules exporting one name both reach the manifest under th
         .name = "a-probe",
         .imported = true,
         .source_module = mod_a,
-        .stack_effect = effect,
+        .stack_effect = &effect,
         .action = .{ .compound = a_probe_body },
     });
     try frame.put(allocator, "probe", .{
         .name = "probe",
         .imported = true,
         .source_module = mod_b,
-        .stack_effect = effect,
+        .stack_effect = &effect,
         .action = .{ .compound = probe_b_body },
     });
 
@@ -3679,7 +3679,7 @@ test "buildAotDescs assigns sequential IDs and skips effectless words" {
     try discovered.words.append(allocator, moduleLessWord("foo", .{
         .name = "foo",
         .action = .{ .compound = &.{} },
-        .stack_effect = effect,
+        .stack_effect = &effect,
     }));
 
     // Word without effect (should be skipped)
@@ -3741,7 +3741,7 @@ test "freezeModuleGraphOpts cleanup releases pic snapshots when stack effects ar
     try discovered.words.append(allocator, moduleLessWord("foo", .{
         .name = "foo",
         .action = .{ .compound = compound_instrs },
-        .stack_effect = effect,
+        .stack_effect = &effect,
     }));
 
     // Word without effect: triggers the MissingStackEffects path in the
@@ -3791,14 +3791,14 @@ test "buildAotDescs includes native words with is_prelude and empty instructions
     try discovered.words.append(allocator, moduleLessWord("foo", .{
         .name = "foo",
         .action = .{ .compound = &.{} },
-        .stack_effect = effect,
+        .stack_effect = &effect,
     }));
 
     // Native word
     try discovered.natives.append(allocator, moduleLessWord("type-of", .{
         .name = "type-of",
         .action = .{ .native = undefined },
-        .stack_effect = native_effect,
+        .stack_effect = &native_effect,
     }));
 
     var prelude_words = std.StringHashMapUnmanaged(void){};
@@ -4242,7 +4242,7 @@ test "buildAotDescs assigns sequential quotation IDs" {
     try discovered.words.append(allocator, moduleLessWord("foo", .{
         .name = "foo",
         .action = .{ .compound = &.{} },
-        .stack_effect = effect,
+        .stack_effect = &effect,
     }));
 
     try discovered.quotation_bodies.append(allocator, q_body_1);
@@ -4306,7 +4306,7 @@ test "buildAotDescs infers effect for quotation calling discovered word" {
     try discovered.words.append(allocator, moduleLessWord("double", .{
         .name = "double",
         .action = .{ .compound = double_body },
-        .stack_effect = double_effect,
+        .stack_effect = &double_effect,
     }));
 
     try discovered.quotation_bodies.append(allocator, q_body);
@@ -4902,12 +4902,12 @@ test "seedCompositeQuotationCallees seeds a module-scoped callee and skips a mod
     try frame.put(allocator, "mod-probe", .{
         .name = "mod-probe",
         .source_module = mod,
-        .stack_effect = effect,
+        .stack_effect = &effect,
         .action = .{ .compound = probe_body },
     });
     try frame.put(allocator, "bare-probe", .{
         .name = "bare-probe",
-        .stack_effect = effect,
+        .stack_effect = &effect,
         .action = .{ .compound = probe_body },
     });
 
@@ -5608,12 +5608,12 @@ test "buildAotDescs remaps caller name to caller_word_id and resolves callees" {
     try discovered.words.append(allocator, moduleLessWord("foo", .{
         .name = "foo",
         .action = .{ .compound = &.{} },
-        .stack_effect = effect,
+        .stack_effect = &effect,
     }));
     try discovered.natives.append(allocator, moduleLessWord("bar", .{
         .name = "bar",
         .action = .{ .native = callTargetsNoopNative },
-        .stack_effect = effect,
+        .stack_effect = &effect,
     }));
 
     const pending = [_]PendingCallTarget{
@@ -5680,7 +5680,7 @@ test "buildAotDescs preserves quotation_path through dupe" {
     try discovered.natives.append(allocator, moduleLessWord("n", .{
         .name = "n",
         .action = .{ .native = callTargetsNoopNative },
-        .stack_effect = effect,
+        .stack_effect = &effect,
     }));
 
     // BFS-time path slice owned by the test; the dupe-into-result pattern
@@ -5756,7 +5756,7 @@ test "buildAotDescs throughput ceiling on synthetic graph" {
         try discovered.words.append(allocator, moduleLessWord(name_buf.items[i], .{
             .name = name_buf.items[i],
             .action = .{ .compound = body },
-            .stack_effect = effect,
+            .stack_effect = &effect,
         }));
     }
 
@@ -5821,14 +5821,14 @@ fn callerIndexFixture(
         try discovered.words.append(allocator, moduleLessWord(w.name, .{
             .name = w.name,
             .action = .{ .compound = w.body },
-            .stack_effect = effect,
+            .stack_effect = &effect,
         }));
     }
     for (natives) |n| {
         try discovered.natives.append(allocator, moduleLessWord(n, .{
             .name = n,
             .action = .{ .native = callTargetsNoopNative },
-            .stack_effect = effect,
+            .stack_effect = &effect,
         }));
     }
 
@@ -5858,11 +5858,11 @@ test "buildAotDescs assigns dense word ids even when a word is skipped" {
     defer discovered.natives.deinit(allocator);
 
     const effect = StackEffect{ .inputs = &.{}, .outputs = &.{} };
-    try discovered.words.append(allocator, moduleLessWord("kept-a", .{ .name = "kept-a", .action = .{ .compound = &.{} }, .stack_effect = effect }));
+    try discovered.words.append(allocator, moduleLessWord("kept-a", .{ .name = "kept-a", .action = .{ .compound = &.{} }, .stack_effect = &effect }));
     // No stack effect: dropped before an id is taken.
     try discovered.words.append(allocator, moduleLessWord("dropped", .{ .name = "dropped", .action = .{ .compound = &.{} } }));
-    try discovered.words.append(allocator, moduleLessWord("kept-b", .{ .name = "kept-b", .action = .{ .compound = &.{} }, .stack_effect = effect }));
-    try discovered.natives.append(allocator, moduleLessWord("nat", .{ .name = "nat", .action = .{ .native = callTargetsNoopNative }, .stack_effect = effect }));
+    try discovered.words.append(allocator, moduleLessWord("kept-b", .{ .name = "kept-b", .action = .{ .compound = &.{} }, .stack_effect = &effect }));
+    try discovered.natives.append(allocator, moduleLessWord("nat", .{ .name = "nat", .action = .{ .native = callTargetsNoopNative }, .stack_effect = &effect }));
 
     var prelude_words = std.StringHashMapUnmanaged(void){};
     var result = try buildAotDescs(&.{}, "", &discovered, &.{}, &prelude_words, null, allocator);
@@ -6310,12 +6310,12 @@ test "struct accessor body resolves through buildAotDescs as a compound call" {
     try discovered.words.append(allocator, moduleLessWord("x>>", .{
         .name = "x>>",
         .action = .{ .compound = accessor_body },
-        .stack_effect = effect,
+        .stack_effect = &effect,
     }));
     try discovered.natives.append(allocator, moduleLessWord("native.struct-field-get", .{
         .name = "native.struct-field-get",
         .action = .{ .native = generatorTestNoopNative },
-        .stack_effect = native_effect,
+        .stack_effect = &native_effect,
     }));
 
     const pending = [_]PendingCallTarget{
@@ -6372,12 +6372,12 @@ test "virtual constructor body resolves through buildAotDescs as a compound call
     try discovered.words.append(allocator, moduleLessWord(">point", .{
         .name = ">point",
         .action = .{ .compound = wrap_body },
-        .stack_effect = effect,
+        .stack_effect = &effect,
     }));
     try discovered.natives.append(allocator, moduleLessWord("native.virtual-wrap", .{
         .name = "native.virtual-wrap",
         .action = .{ .native = generatorTestNoopNative },
-        .stack_effect = native_effect,
+        .stack_effect = &native_effect,
     }));
 
     const pending = [_]PendingCallTarget{
@@ -6428,7 +6428,7 @@ test "method dispatcher resolves through buildAotDescs as a compound call" {
     try discovered.words.append(allocator, moduleLessWord("area", .{
         .name = "area",
         .action = .{ .compound = &.{} },
-        .stack_effect = effect,
+        .stack_effect = &effect,
         .markers = &.{@constCast(&markers_mod.generic_marker)},
     }));
 

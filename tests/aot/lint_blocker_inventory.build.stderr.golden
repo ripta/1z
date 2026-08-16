@@ -8,4 +8,4 @@ Warning: 'keep' parameter 'quot' has row-variable effect; quotation call falls b
 artifact: interpreter
 interpreter: linked (auto: compiled code calls interpreter)
 jitInterpretedCall: not linked
-runtime-image: words=549 stack-effects=547 typevalue-slots=80 blob-present=true
+runtime-image: words=549 stack-effects=453 typevalue-slots=80 blob-present=true

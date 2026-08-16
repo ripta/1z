@@ -266,7 +266,7 @@ fn nativeDefineFfiStruct(ctx: *Context) anyerror!void {
     try ctx.defineWord(name, .{
         .name = name,
         .parse_time = true,
-        .stack_effect = try helpers.makeSimpleEffect(alloc, "-- type"),
+        .stack_effect = try helpers.makeBoxedEffect(alloc, "-- type"),
         .markers = type_markers,
         .provenance = .{ .generator = "ffi-struct", .parent = name, .role = "type" },
         .action = .{ .compound = type_instrs },
@@ -290,7 +290,7 @@ fn nativeDefineFfiStruct(ctx: *Context) anyerror!void {
 
     try ctx.defineWord(make_name, .{
         .name = make_name,
-        .stack_effect = try helpers.makeSimpleEffect(alloc, effect_str),
+        .stack_effect = try helpers.makeBoxedEffect(alloc, effect_str),
         .markers = markers_slice,
         .provenance = .{ .generator = "ffi-struct", .parent = name, .role = "constructor" },
         .action = .{ .compound = make_instrs },
@@ -324,7 +324,7 @@ fn nativeDefineFfiStruct(ctx: *Context) anyerror!void {
 
             try ctx.defineWord(getter_name, .{
                 .name = getter_name,
-                .stack_effect = try helpers.makeSimpleEffect(alloc, "instance -- value"),
+                .stack_effect = try helpers.makeBoxedEffect(alloc, "instance -- value"),
                 .markers = generic_markers,
                 .action = .{ .compound = &.{} },
             });
@@ -370,7 +370,7 @@ fn nativeDefineFfiStruct(ctx: *Context) anyerror!void {
 
                 try ctx.defineWord(setter_name, .{
                     .name = setter_name,
-                    .stack_effect = try helpers.makeSimpleEffect(alloc, "instance value -- instance"),
+                    .stack_effect = try helpers.makeBoxedEffect(alloc, "instance value -- instance"),
                     .markers = generic_markers,
                     .action = .{ .compound = &.{} },
                 });

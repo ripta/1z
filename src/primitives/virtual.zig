@@ -183,7 +183,7 @@ fn nativeDefineVirtual(ctx: *Context) anyerror!void {
             try ctx.defineWord(name, .{
                 .name = name,
                 .parse_time = true,
-                .stack_effect = try helpers.makeSimpleEffect(alloc, "-- type"),
+                .stack_effect = try helpers.makeBoxedEffect(alloc, "-- type"),
                 .markers = type_markers,
                 .provenance = .{ .generator = "virtual", .parent = name, .role = "type" },
                 .action = .{ .compound = type_instrs },
@@ -270,7 +270,7 @@ fn nativeDefineVirtual(ctx: *Context) anyerror!void {
             try ctx.defineWord(name, .{
                 .name = name,
                 .parse_time = true,
-                .stack_effect = try helpers.makeSimpleEffect(alloc, "-- type"),
+                .stack_effect = try helpers.makeBoxedEffect(alloc, "-- type"),
                 .markers = type_markers,
                 .provenance = .{ .generator = "virtual", .parent = name, .role = "type" },
                 .action = .{ .compound = type_instrs },
@@ -407,7 +407,7 @@ pub fn defineWrap(ctx: *Context, name: []const u8, vtype: *const VirtualType, ma
     const effect_str = try std.fmt.allocPrint(alloc, "value -- {s}", .{vtype.name});
     try ctx.defineWord(name, .{
         .name = name,
-        .stack_effect = try helpers.makeSimpleEffect(alloc, effect_str),
+        .stack_effect = try helpers.makeBoxedEffect(alloc, effect_str),
         .markers = generic_markers,
         .provenance = vtypeProvenance(vtype, "wrap"),
         .action = .{ .compound = instrs },
@@ -435,7 +435,7 @@ pub fn defineUnwrap(ctx: *Context, name: []const u8, vtype: *const VirtualType, 
     const effect_str = try std.fmt.allocPrint(alloc, "{s} -- value", .{vtype.name});
     try ctx.defineWord(name, .{
         .name = name,
-        .stack_effect = try helpers.makeSimpleEffect(alloc, effect_str),
+        .stack_effect = try helpers.makeBoxedEffect(alloc, effect_str),
         .markers = markers,
         .provenance = vtypeProvenance(vtype, "unwrap"),
         .action = .{ .compound = instrs },
@@ -452,7 +452,7 @@ pub fn definePredicate(ctx: *Context, name: []const u8, vtype: *const VirtualTyp
 
     try ctx.defineWord(name, .{
         .name = name,
-        .stack_effect = try helpers.makeSimpleEffect(alloc, "val -- ?"),
+        .stack_effect = try helpers.makeBoxedEffect(alloc, "val -- ?"),
         .markers = markers,
         .provenance = vtypeProvenance(vtype, "predicate"),
         .action = .{ .compound = instrs },
@@ -637,7 +637,7 @@ pub fn defineStructHashWrap(ctx: *Context, name: []const u8, vtype: *const Virtu
     const effect_str = try std.fmt.allocPrint(alloc, "hash -- {s}", .{vtype.name});
     try ctx.defineWord(name, .{
         .name = name,
-        .stack_effect = try helpers.makeSimpleEffect(alloc, effect_str),
+        .stack_effect = try helpers.makeBoxedEffect(alloc, effect_str),
         .markers = generic_markers,
         .provenance = vtypeProvenance(vtype, "hash-wrap"),
         .action = .{ .compound = instrs },
@@ -663,7 +663,7 @@ pub fn defineStructWrap(ctx: *Context, name: []const u8, vtype: *const VirtualTy
     const effect_str = try helpers.buildConstructorEffectStr(alloc, fields, vtype.name);
     try ctx.defineWord(name, .{
         .name = name,
-        .stack_effect = try helpers.makeSimpleEffect(alloc, effect_str),
+        .stack_effect = try helpers.makeBoxedEffect(alloc, effect_str),
         .markers = markers,
         .provenance = vtypeProvenance(vtype, "constructor"),
         .action = .{ .compound = instrs },
@@ -682,7 +682,7 @@ pub fn defineStructUnwrap(ctx: *Context, name: []const u8, vtype: *const Virtual
     const effect_str = try helpers.buildDestructorEffectStr(alloc, fields, vtype.name);
     try ctx.defineWord(name, .{
         .name = name,
-        .stack_effect = try helpers.makeSimpleEffect(alloc, effect_str),
+        .stack_effect = try helpers.makeBoxedEffect(alloc, effect_str),
         .markers = markers,
         .provenance = vtypeProvenance(vtype, "unwrap"),
         .action = .{ .compound = instrs },
@@ -700,7 +700,7 @@ pub fn defineVirtualToHash(ctx: *Context, name: []const u8, vtype: *const Virtua
     const effect_str = try std.fmt.allocPrint(alloc, "{s} -- hash", .{vtype.name});
     try ctx.defineWord(name, .{
         .name = name,
-        .stack_effect = try helpers.makeSimpleEffect(alloc, effect_str),
+        .stack_effect = try helpers.makeBoxedEffect(alloc, effect_str),
         .markers = markers,
         .provenance = vtypeProvenance(vtype, "to-hash"),
         .action = .{ .compound = instrs },
@@ -1339,7 +1339,7 @@ pub fn defineParameterizedWrap(ctx: *Context, name: []const u8, vtype: *const Vi
     const effect_str = try std.fmt.allocPrint(alloc, "value -- {s}", .{vtype.name});
     try ctx.defineWord(name, .{
         .name = name,
-        .stack_effect = try helpers.makeSimpleEffect(alloc, effect_str),
+        .stack_effect = try helpers.makeBoxedEffect(alloc, effect_str),
         .markers = markers,
         .provenance = vtypeProvenance(vtype, "wrap"),
         .action = .{ .compound = instrs },
@@ -1532,7 +1532,7 @@ fn nativeDefineParameterizedType(ctx: *Context) anyerror!void {
     try ctx.defineWord(name, .{
         .name = name,
         .parse_time = true,
-        .stack_effect = try helpers.makeSimpleEffect(alloc, "-- type"),
+        .stack_effect = try helpers.makeBoxedEffect(alloc, "-- type"),
         .markers = type_markers,
         .provenance = .{ .generator = "virtual", .parent = name, .role = "type" },
         .action = .{ .compound = type_instrs },
@@ -1754,7 +1754,7 @@ pub fn registerHashDispatch(ctx: *Context, type_tv: *const value_mod.TypeValue, 
 
         try ctx.defineWord(">hash", .{
             .name = ">hash",
-            .stack_effect = try helpers.makeSimpleEffect(alloc, "val -- hash"),
+            .stack_effect = try helpers.makeBoxedEffect(alloc, "val -- hash"),
             .markers = generic_markers,
             .action = .{ .compound = &.{} },
         });

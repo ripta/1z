@@ -1258,7 +1258,7 @@ fn makeCompletionItem(name: []const u8, def: WordDefinition) types.CompletionIte
     return .{
         .label = name,
         .kind = kind,
-        .detail = if (def.stack_effect) |effect| formatEffectStatic(effect) else null,
+        .detail = if (def.stack_effect) |effect| formatEffectStatic(effect.*) else null,
         .documentation = if (def.doc) |doc| .{ .value = doc } else null,
     };
 }
@@ -1749,7 +1749,7 @@ test "formatHoverMarkdown with stack effect and doc" {
     const allocator = std.testing.allocator;
     const def = WordDefinition{
         .name = "dup",
-        .stack_effect = .{
+        .stack_effect = &.{
             .inputs = &.{.{ .name = "a" }},
             .outputs = &.{ .{ .name = "a" }, .{ .name = "a" } },
         },

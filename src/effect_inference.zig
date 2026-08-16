@@ -530,7 +530,7 @@ pub const InferenceEngine = struct {
                     }
                     try self.type_cache.put(self.allocator, name, out_types);
                 }
-                return computeDeclaredDelta(eff) orelse .unknown;
+                return computeDeclaredDelta(eff.*) orelse .unknown;
             }
             return .unknown;
         }
@@ -551,7 +551,7 @@ pub const InferenceEngine = struct {
             },
             .native, .host_callback => {
                 const result = if (word_def.stack_effect) |eff|
-                    computeDeclaredDelta(eff) orelse .unknown
+                    computeDeclaredDelta(eff.*) orelse .unknown
                 else
                     .unknown;
                 try self.cache.put(self.allocator, name, result);
@@ -564,7 +564,7 @@ pub const InferenceEngine = struct {
         }
 
         if (word_def.stack_effect) |eff| {
-            if (stack_effect_mod.hasAnyRowVariable(eff)) {
+            if (stack_effect_mod.hasAnyRowVariable(eff.*)) {
                 try self.cache.put(self.allocator, name, .unknown);
                 return .unknown;
             }
@@ -580,7 +580,7 @@ pub const InferenceEngine = struct {
                     }
                     try self.type_cache.put(self.allocator, name, out_types);
                 }
-                const result = computeDeclaredDelta(eff) orelse .unknown;
+                const result = computeDeclaredDelta(eff.*) orelse .unknown;
                 try self.cache.put(self.allocator, name, result);
                 return result;
             }
@@ -588,7 +588,7 @@ pub const InferenceEngine = struct {
 
         try self.in_progress.put(self.allocator, name, {});
         const declared_inputs: ?usize = if (word_def.stack_effect) |eff| blk: {
-            if (stack_effect_mod.hasAnyRowVariable(eff)) break :blk null;
+            if (stack_effect_mod.hasAnyRowVariable(eff.*)) break :blk null;
             break :blk eff.concreteInputCount();
         } else null;
         const caller_info = CallerInfo{
@@ -613,7 +613,7 @@ pub const InferenceEngine = struct {
 
         const generic_uses_declared_delta = isGeneric(&word_def) and instructions.len == 0 and word_def.stack_effect != null;
         const inferred_for_delta = if (generic_uses_declared_delta)
-            computeDeclaredDelta(word_def.stack_effect.?) orelse inferred
+            computeDeclaredDelta(word_def.stack_effect.?.*) orelse inferred
         else
             inferred;
 
@@ -627,7 +627,7 @@ pub const InferenceEngine = struct {
         }
 
         if (word_def.stack_effect) |eff| {
-            if (computeDeclaredDelta(eff)) |declared| {
+            if (computeDeclaredDelta(eff.*)) |declared| {
                 switch (inferred_for_delta) {
                     .known => |inferred_delta| {
                         if (declared.known != inferred_delta) {
@@ -814,7 +814,7 @@ pub const InferenceEngine = struct {
                             if (self.resolveQualifiedName(name)) |mod_word| {
                                 if (mod_word.polymorphic) {
                                     if (mod_word.stack_effect) |eff| {
-                                        if (computeDeclaredDelta(eff)) |result| {
+                                        if (computeDeclaredDelta(eff.*)) |result| {
                                             delta += result.known;
                                             try adjustStackModel(&stack_model, result.known, self.allocator);
                                             uncertain = true;
@@ -829,7 +829,7 @@ pub const InferenceEngine = struct {
                                     return .unknown;
                                 }
                                 if (mod_word.stack_effect) |eff| {
-                                    if (computeDeclaredDelta(eff)) |result| {
+                                    if (computeDeclaredDelta(eff.*)) |result| {
                                         delta += result.known;
                                         try adjustStackModel(&stack_model, result.known, self.allocator);
                                         continue;
@@ -877,7 +877,7 @@ pub const InferenceEngine = struct {
 
                     // Try row-polymorphic path for any word with row-poly effect and quotation annotations
                     if (wd.stack_effect) |eff| {
-                        if (stack_effect_mod.hasAnyRowVariable(eff)) {
+                        if (stack_effect_mod.hasAnyRowVariable(eff.*)) {
                             const rp_result = try self.handleRowPoly(
                                 &wd,
                                 combinator_kind,
@@ -916,7 +916,7 @@ pub const InferenceEngine = struct {
                     // Try concrete combinator path for branch/loop without row vars
                     if (combinator_kind != .none) {
                         if (wd.stack_effect) |eff| {
-                            if (!stack_effect_mod.hasAnyRowVariable(eff)) {
+                            if (!stack_effect_mod.hasAnyRowVariable(eff.*)) {
                                 const result = try self.handleCombinator(
                                     &wd,
                                     combinator_kind,
@@ -977,7 +977,7 @@ pub const InferenceEngine = struct {
 
                     if (isDynamicCall(&wd)) {
                         if (wd.stack_effect) |eff| {
-                            if (computeDeclaredDelta(eff)) |result| {
+                            if (computeDeclaredDelta(eff.*)) |result| {
                                 delta += result.known;
                                 try adjustStackModel(&stack_model, result.known, self.allocator);
                                 uncertain = true;
@@ -996,7 +996,7 @@ pub const InferenceEngine = struct {
                         },
                         .unknown => {
                             if (wd.stack_effect) |eff| {
-                                if (computeDeclaredDelta(eff)) |result| {
+                                if (computeDeclaredDelta(eff.*)) |result| {
                                     delta += result.known;
                                     try adjustStackModel(&stack_model, result.known, self.allocator);
                                     uncertain = true;
@@ -1088,7 +1088,7 @@ pub const InferenceEngine = struct {
         caller: CallerInfo,
     ) Allocator.Error!CombinatorResult {
         const eff = word_def.stack_effect orelse return .fallthrough;
-        const declared = computeDeclaredDelta(eff) orelse return .fallthrough;
+        const declared = computeDeclaredDelta(eff.*) orelse return .fallthrough;
 
         const input_count = eff.inputs.len;
 
@@ -1654,7 +1654,7 @@ pub const InferenceEngine = struct {
     ) Allocator.Error!bool {
         const caller_inputs = caller.declared_input_count orelse return false;
         const callee_eff = word_def.stack_effect orelse return false;
-        if (stack_effect_mod.hasAnyRowVariable(callee_eff)) return false;
+        if (stack_effect_mod.hasAnyRowVariable(callee_eff.*)) return false;
         const required = callee_eff.concreteInputCount();
         if (required == 0) return false;
         const available = @as(i64, @intCast(caller_inputs)) + delta;
@@ -1701,7 +1701,7 @@ pub const InferenceEngine = struct {
             return;
         };
 
-        if (stack_effect_mod.hasAnyRowVariable(eff)) {
+        if (stack_effect_mod.hasAnyRowVariable(eff.*)) {
             try adjustStackModel(stack_model, callee_delta, self.allocator);
             return;
         }
@@ -1824,7 +1824,7 @@ test "native word uses declared effect" {
 
     try dict.put("dup", .{
         .name = "dup",
-        .stack_effect = .{
+        .stack_effect = &.{
             .inputs = &.{.{ .name = "a" }},
             .outputs = &.{ .{ .name = "a" }, .{ .name = "a" } },
         },
@@ -1850,7 +1850,7 @@ test "compound word with inferrable body" {
 
     try dict.put("dup", .{
         .name = "dup",
-        .stack_effect = .{
+        .stack_effect = &.{
             .inputs = &.{.{ .name = "a" }},
             .outputs = &.{ .{ .name = "a" }, .{ .name = "a" } },
         },
@@ -1859,7 +1859,7 @@ test "compound word with inferrable body" {
 
     try dict.put("drop", .{
         .name = "drop",
-        .stack_effect = .{
+        .stack_effect = &.{
             .inputs = &.{.{ .name = "a" }},
             .outputs = &.{},
         },
@@ -1897,7 +1897,7 @@ test "row-variable effect returns unknown" {
     try dict.put("row-word", .{
         .name = "row-word",
         .source_file = "test.1z",
-        .stack_effect = .{
+        .stack_effect = &.{
             .inputs = &.{.{ .name = "..a", .is_row_variable = true }},
             .outputs = &.{ .{ .name = "..a", .is_row_variable = true }, .{ .name = "n" } },
         },
@@ -1929,7 +1929,7 @@ test "branch combinator with agreeing quotations" {
     try dict.put("if", .{
         .name = "if",
         .markers = &.{@constCast(&markers.branch_combinator_marker)},
-        .stack_effect = .{
+        .stack_effect = &.{
             .inputs = &.{
                 .{ .name = "?" },
                 .{ .name = "true-quot", .quotation_effect = &quot_effect },
@@ -1986,7 +1986,7 @@ test "branch combinator with disagreeing quotations emits diagnostic" {
     try dict.put("if", .{
         .name = "if",
         .markers = &.{@constCast(&markers.branch_combinator_marker)},
-        .stack_effect = .{
+        .stack_effect = &.{
             .inputs = &.{
                 .{ .name = "?" },
                 .{ .name = "true-quot", .quotation_effect = &quot_effect },
@@ -2037,7 +2037,7 @@ fn putCaseWord(dict: *Dictionary) !void {
             @constCast(&markers.branch_combinator_marker),
             @constCast(&markers.partial_dispatch_marker),
         },
-        .stack_effect = .{
+        .stack_effect = &.{
             .inputs = &.{ .{ .name = "val" }, .{ .name = "branches" } },
             .outputs = &.{.{ .name = "x" }},
         },
@@ -2055,7 +2055,7 @@ fn putCondWord(dict: *Dictionary) !void {
             @constCast(&markers.branch_combinator_marker),
             @constCast(&markers.partial_dispatch_marker),
         },
-        .stack_effect = .{
+        .stack_effect = &.{
             .inputs = &.{.{ .name = "branches" }},
             .outputs = &.{.{ .name = "x" }},
         },
@@ -2149,7 +2149,7 @@ fn putNeverReturnsWord(dict: *Dictionary, name: []const u8, out_name: []const u8
     try dict.put(name, .{
         .name = name,
         .source_file = "test.1z",
-        .stack_effect = .{
+        .stack_effect = &.{
             .inputs = &.{},
             .outputs = &.{.{ .name = out_name }},
         },
@@ -2381,7 +2381,7 @@ test "user word carrying dynamic-eval is treated as a dynamic call" {
         try dict.put("my-eval", .{
             .name = "my-eval",
             .markers = &.{@constCast(&markers.dynamic_eval_marker)},
-            .stack_effect = eval_effect,
+            .stack_effect = &eval_effect,
             .action = .{ .native = dummy },
         });
         try dict.put("caller", .{
@@ -2408,7 +2408,7 @@ test "user word carrying dynamic-eval is treated as a dynamic call" {
 
         try dict.put("my-eval", .{
             .name = "my-eval",
-            .stack_effect = eval_effect,
+            .stack_effect = &eval_effect,
             .action = .{ .native = dummy },
         });
         try dict.put("caller", .{
@@ -2444,7 +2444,7 @@ test "loop combinator with zero-delta body" {
     try dict.put("times", .{
         .name = "times",
         .markers = &.{@constCast(&markers.loop_combinator_marker)},
-        .stack_effect = .{
+        .stack_effect = &.{
             .inputs = &.{
                 .{ .name = "n" },
                 .{ .name = "quot", .quotation_effect = &quot_effect },
@@ -2456,7 +2456,7 @@ test "loop combinator with zero-delta body" {
 
     try dict.put("dup", .{
         .name = "dup",
-        .stack_effect = .{
+        .stack_effect = &.{
             .inputs = &.{.{ .name = "a" }},
             .outputs = &.{ .{ .name = "a" }, .{ .name = "a" } },
         },
@@ -2465,7 +2465,7 @@ test "loop combinator with zero-delta body" {
 
     try dict.put("drop", .{
         .name = "drop",
-        .stack_effect = .{
+        .stack_effect = &.{
             .inputs = &.{.{ .name = "a" }},
             .outputs = &.{},
         },
@@ -2515,7 +2515,7 @@ test "loop combinator with non-zero-delta body emits diagnostic" {
     try dict.put("times", .{
         .name = "times",
         .markers = &.{@constCast(&markers.loop_combinator_marker)},
-        .stack_effect = .{
+        .stack_effect = &.{
             .inputs = &.{
                 .{ .name = "n" },
                 .{ .name = "quot", .quotation_effect = &quot_effect },
@@ -2527,7 +2527,7 @@ test "loop combinator with non-zero-delta body emits diagnostic" {
 
     try dict.put("dup", .{
         .name = "dup",
-        .stack_effect = .{
+        .stack_effect = &.{
             .inputs = &.{.{ .name = "a" }},
             .outputs = &.{ .{ .name = "a" }, .{ .name = "a" } },
         },
@@ -2606,7 +2606,7 @@ test "recursive cycle with declared effect breaks correctly" {
     try dict.put("rec", .{
         .name = "rec",
         .source_file = "test.1z",
-        .stack_effect = .{
+        .stack_effect = &.{
             .inputs = &.{.{ .name = "a" }},
             .outputs = &.{.{ .name = "b" }},
         },
@@ -2751,7 +2751,7 @@ test "non-literal quotation args fall back to declared effect" {
     try dict.put("if", .{
         .name = "if",
         .markers = &.{@constCast(&markers.branch_combinator_marker)},
-        .stack_effect = .{
+        .stack_effect = &.{
             .inputs = &.{
                 .{ .name = "?" },
                 .{ .name = "true-quot", .quotation_effect = &quot_effect },
@@ -2764,7 +2764,7 @@ test "non-literal quotation args fall back to declared effect" {
 
     try dict.put("get-quot", .{
         .name = "get-quot",
-        .stack_effect = .{
+        .stack_effect = &.{
             .inputs = &.{},
             .outputs = &.{.{ .name = "q" }},
         },
@@ -2806,7 +2806,7 @@ test "declared vs inferred mismatch emits diagnostic" {
     try dict.put("bad-decl", .{
         .name = "bad-decl",
         .source_file = "test.1z",
-        .stack_effect = .{
+        .stack_effect = &.{
             .inputs = &.{},
             .outputs = &.{.{ .name = "a" }},
         },
@@ -2875,7 +2875,7 @@ test "row-poly keep with literal quotation computes delta" {
 
     try dict.put("keep", .{
         .name = "keep",
-        .stack_effect = .{
+        .stack_effect = &.{
             .inputs = &.{
                 .{ .name = "..a", .is_row_variable = true },
                 .{ .name = "x" },
@@ -2891,7 +2891,7 @@ test "row-poly keep with literal quotation computes delta" {
 
     try dict.put("drop", .{
         .name = "drop",
-        .stack_effect = .{
+        .stack_effect = &.{
             .inputs = &.{.{ .name = "a" }},
             .outputs = &.{},
         },
@@ -2914,7 +2914,7 @@ test "row-poly keep with literal quotation computes delta" {
     try dict.put("test-word", .{
         .name = "test-word",
         .source_file = "test.1z",
-        .stack_effect = .{
+        .stack_effect = &.{
             .inputs = &.{},
             .outputs = &.{},
         },
@@ -2969,7 +2969,7 @@ test "row-poly while with balanced quotations" {
     try dict.put("while", .{
         .name = "while",
         .markers = &.{@constCast(&markers.loop_combinator_marker)},
-        .stack_effect = .{
+        .stack_effect = &.{
             .inputs = &.{
                 .{ .name = "..a", .is_row_variable = true },
                 .{ .name = "pred", .quotation_effect = &pred_annotation },
@@ -3001,7 +3001,7 @@ test "row-poly while with balanced quotations" {
     try dict.put("test-word", .{
         .name = "test-word",
         .source_file = "test.1z",
-        .stack_effect = .{
+        .stack_effect = &.{
             .inputs = &.{},
             .outputs = &.{},
         },
@@ -3053,7 +3053,7 @@ test "row-poly while with unbalanced quotations emits diagnostic" {
     try dict.put("while", .{
         .name = "while",
         .markers = &.{@constCast(&markers.loop_combinator_marker)},
-        .stack_effect = .{
+        .stack_effect = &.{
             .inputs = &.{
                 .{ .name = "..a", .is_row_variable = true },
                 .{ .name = "pred", .quotation_effect = &pred_annotation },
@@ -3120,7 +3120,7 @@ test "row-poly keep with insufficient stack falls through" {
 
     try dict.put("keep", .{
         .name = "keep",
-        .stack_effect = .{
+        .stack_effect = &.{
             .inputs = &.{
                 .{ .name = "..a", .is_row_variable = true },
                 .{ .name = "x" },
@@ -3179,7 +3179,7 @@ test "row-poly keep with non-literal quotation falls through" {
 
     try dict.put("keep", .{
         .name = "keep",
-        .stack_effect = .{
+        .stack_effect = &.{
             .inputs = &.{
                 .{ .name = "..a", .is_row_variable = true },
                 .{ .name = "x" },
@@ -3195,7 +3195,7 @@ test "row-poly keep with non-literal quotation falls through" {
 
     try dict.put("get-quot", .{
         .name = "get-quot",
-        .stack_effect = .{
+        .stack_effect = &.{
             .inputs = &.{},
             .outputs = &.{.{ .name = "q" }},
         },
@@ -3252,7 +3252,7 @@ test "qualified name resolves to known delta" {
     }.f;
 
     try mod.words.put(testing.allocator, "double", .{
-        .stack_effect = .{
+        .stack_effect = &.{
             .inputs = &.{.{ .name = "n" }},
             .outputs = &.{.{ .name = "n" }},
         },
@@ -3276,7 +3276,7 @@ test "qualified name resolves to known delta" {
     try dict.put("test-word", .{
         .name = "test-word",
         .source_file = "test.1z",
-        .stack_effect = .{
+        .stack_effect = &.{
             .inputs = &.{},
             .outputs = &.{.{ .name = "n" }},
         },
@@ -3307,7 +3307,7 @@ test "polymorphic qualified name falls back to declared delta with note" {
 
     try mod.words.put(testing.allocator, "poly-word", .{
         .polymorphic = true,
-        .stack_effect = .{
+        .stack_effect = &.{
             .inputs = &.{.{ .name = "a" }},
             .outputs = &.{.{ .name = "b" }},
         },
@@ -3331,7 +3331,7 @@ test "polymorphic qualified name falls back to declared delta with note" {
     try dict.put("caller", .{
         .name = "caller",
         .source_file = "test.1z",
-        .stack_effect = .{
+        .stack_effect = &.{
             .inputs = &.{},
             .outputs = &.{.{ .name = "x" }},
         },
@@ -3362,7 +3362,7 @@ test "declared-delta fallback prevents cascade" {
     try dict.put("word-a", .{
         .name = "word-a",
         .source_file = "test.1z",
-        .stack_effect = .{
+        .stack_effect = &.{
             .inputs = &.{.{ .name = "x" }},
             .outputs = &.{.{ .name = "y" }},
         },
@@ -3378,7 +3378,7 @@ test "declared-delta fallback prevents cascade" {
     try dict.put("word-b", .{
         .name = "word-b",
         .source_file = "test.1z",
-        .stack_effect = .{
+        .stack_effect = &.{
             .inputs = &.{},
             .outputs = &.{.{ .name = "r" }},
         },
@@ -3416,7 +3416,7 @@ test "generated word calling polymorphic callee is silent" {
 
     try mod.words.put(testing.allocator, "poly-word", .{
         .polymorphic = true,
-        .stack_effect = .{
+        .stack_effect = &.{
             .inputs = &.{.{ .name = "a" }},
             .outputs = &.{.{ .name = "b" }},
         },
@@ -3447,7 +3447,7 @@ test "generated word calling polymorphic callee is silent" {
         .name = "generated-caller",
         .source_file = "test.1z",
         .provenance = provenance,
-        .stack_effect = .{
+        .stack_effect = &.{
             .inputs = &.{},
             .outputs = &.{.{ .name = "x" }},
         },
@@ -3484,7 +3484,7 @@ test "typed literal produces typed stack entry" {
 
     try dict.put("consume-fixnum", .{
         .name = "consume-fixnum",
-        .stack_effect = .{
+        .stack_effect = &.{
             .inputs = &.{.{ .name = "n", .type_annotation = .{ .type = &fixnum_tv } }},
             .outputs = &.{},
         },
@@ -3529,7 +3529,7 @@ test "type mismatch emits diagnostic" {
 
     try dict.put("consume-fixnum", .{
         .name = "consume-fixnum",
-        .stack_effect = .{
+        .stack_effect = &.{
             .inputs = &.{.{ .name = "n", .type_annotation = .{ .type = &fixnum_tv } }},
             .outputs = &.{},
         },
@@ -3577,7 +3577,7 @@ test "declared union input accepts matching typed value" {
 
     try dict.put("consume-union", .{
         .name = "consume-union",
-        .stack_effect = .{
+        .stack_effect = &.{
             .inputs = &.{.{ .name = "x", .type_annotation = .{ .type = &union_tv } }},
             .outputs = &.{},
         },
@@ -3621,7 +3621,7 @@ test "declared any input accepts concrete typed value" {
 
     try dict.put("consume-any", .{
         .name = "consume-any",
-        .stack_effect = .{
+        .stack_effect = &.{
             .inputs = &.{.{ .name = "x", .type_annotation = .{ .type = &any_tv } }},
             .outputs = &.{},
         },
@@ -3673,7 +3673,7 @@ test "declared parent enum input accepts tagged variant value" {
 
     try dict.put("consume-color", .{
         .name = "consume-color",
-        .stack_effect = .{
+        .stack_effect = &.{
             .inputs = &.{.{ .name = "c", .type_annotation = .{ .type = &color_tv } }},
             .outputs = &.{},
         },
@@ -3727,7 +3727,7 @@ test "declared base input accepts parameterized tagged value" {
 
     try dict.put("consume-array", .{
         .name = "consume-array",
-        .stack_effect = .{
+        .stack_effect = &.{
             .inputs = &.{.{ .name = "xs", .type_annotation = .{ .type = &array_tv } }},
             .outputs = &.{},
         },
@@ -3782,7 +3782,7 @@ test "unknown type skips check" {
 
     try dict.put("unknown-producer", .{
         .name = "unknown-producer",
-        .stack_effect = .{
+        .stack_effect = &.{
             .inputs = &.{},
             .outputs = &.{.{ .name = "x" }},
         },
@@ -3791,7 +3791,7 @@ test "unknown type skips check" {
 
     try dict.put("consume-fixnum", .{
         .name = "consume-fixnum",
-        .stack_effect = .{
+        .stack_effect = &.{
             .inputs = &.{.{ .name = "n", .type_annotation = .{ .type = &fixnum_tv } }},
             .outputs = &.{},
         },
@@ -3836,7 +3836,7 @@ test "type check mode off skips all checks" {
 
     try dict.put("consume-fixnum", .{
         .name = "consume-fixnum",
-        .stack_effect = .{
+        .stack_effect = &.{
             .inputs = &.{.{ .name = "n", .type_annotation = .{ .type = &fixnum_tv } }},
             .outputs = &.{},
         },
@@ -3880,7 +3880,7 @@ test "protocol-bounded output flowing into same-protocol input emits no diagnost
 
     try dict.put("produce-p", .{
         .name = "produce-p",
-        .stack_effect = .{
+        .stack_effect = &.{
             .inputs = &.{},
             .outputs = &.{.{ .name = "y", .type_annotation = .{ .protocol = &p_desc } }},
         },
@@ -3889,7 +3889,7 @@ test "protocol-bounded output flowing into same-protocol input emits no diagnost
 
     try dict.put("consume-p", .{
         .name = "consume-p",
-        .stack_effect = .{
+        .stack_effect = &.{
             .inputs = &.{.{ .name = "x", .type_annotation = .{ .protocol = &p_desc } }},
             .outputs = &.{},
         },
@@ -3929,7 +3929,7 @@ test "protocol-bounded output flowing into different-protocol input defers silen
 
     try dict.put("produce-p", .{
         .name = "produce-p",
-        .stack_effect = .{
+        .stack_effect = &.{
             .inputs = &.{},
             .outputs = &.{.{ .name = "y", .type_annotation = .{ .protocol = &p_desc } }},
         },
@@ -3938,7 +3938,7 @@ test "protocol-bounded output flowing into different-protocol input defers silen
 
     try dict.put("consume-q", .{
         .name = "consume-q",
-        .stack_effect = .{
+        .stack_effect = &.{
             .inputs = &.{.{ .name = "x", .type_annotation = .{ .protocol = &q_desc } }},
             .outputs = &.{},
         },
@@ -3981,7 +3981,7 @@ test "protocol-bounded output flowing into concrete input defers silently" {
 
     try dict.put("produce-p", .{
         .name = "produce-p",
-        .stack_effect = .{
+        .stack_effect = &.{
             .inputs = &.{},
             .outputs = &.{.{ .name = "y", .type_annotation = .{ .protocol = &p_desc } }},
         },
@@ -3990,7 +3990,7 @@ test "protocol-bounded output flowing into concrete input defers silently" {
 
     try dict.put("consume-fixnum", .{
         .name = "consume-fixnum",
-        .stack_effect = .{
+        .stack_effect = &.{
             .inputs = &.{.{ .name = "n", .type_annotation = .{ .type = &fixnum_tv } }},
             .outputs = &.{},
         },
@@ -4033,7 +4033,7 @@ test "concrete typed entry flowing into protocol input without ctx is silently s
 
     try dict.put("consume-p", .{
         .name = "consume-p",
-        .stack_effect = .{
+        .stack_effect = &.{
             .inputs = &.{.{ .name = "x", .type_annotation = .{ .protocol = &p_desc } }},
             .outputs = &.{},
         },

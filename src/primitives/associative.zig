@@ -5,7 +5,6 @@ const Value = value_mod.Value;
 const HashTable = value_mod.HashTable;
 const ErrorObject = value_mod.ErrorObject;
 const Module = value_mod.Module;
-const Quotation = value_mod.Quotation;
 
 const dispatch_mod = @import("../dispatch.zig");
 const DispatchTable = dispatch_mod.DispatchTable;
@@ -184,14 +183,7 @@ fn nativeAtGetModule(ctx: *Context) anyerror!void {
     if (obj.module.words.get(key_str)) |word| {
         switch (word.action) {
             .compound => |instrs| {
-                const alloc = ctx.quotationAllocator();
-                var quot = Quotation{ .instructions = instrs };
-                if (word.stack_effect) |effect| {
-                    const effect_ptr = alloc.create(@TypeOf(effect)) catch return error.OutOfMemory;
-                    effect_ptr.* = effect;
-                    quot.effect = effect_ptr;
-                }
-                try ctx.stack.push(.{ .quotation = quot });
+                try ctx.stack.push(.{ .quotation = .{ .instructions = instrs, .effect = word.stack_effect } });
             },
             .native, .host_callback => {
                 try word.invoke(ctx);

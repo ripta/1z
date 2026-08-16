@@ -280,7 +280,7 @@ pub fn popString(ctx: *Context, mismatched_out: *Value) ![]const u8 {
 pub fn defineHostWord(
     ctx: *Context,
     name_copy: []const u8,
-    effect: ?StackEffect,
+    effect: ?*const StackEffect,
     callback: HostCallbackFn,
     callback_handle: ?*anyopaque,
     user_data: ?*anyopaque,

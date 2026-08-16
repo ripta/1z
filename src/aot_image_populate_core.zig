@@ -548,7 +548,7 @@ pub fn decodeStackEffect(
     header: *const Header,
     effect_idx: u32,
     protocol_slots: ?ProtocolDescriptorSlotTable,
-) LoaderError!?stack_effect_mod.StackEffect {
+) LoaderError!?*const stack_effect_mod.StackEffect {
     if (effect_idx == 0) return null;
     if (effect_idx >= header.stack_effect_count) return LoaderError.BadStackEffectIndex;
     const effects = header.stack_effects orelse return LoaderError.BadStackEffectIndex;
@@ -556,10 +556,10 @@ pub fn decodeStackEffect(
 
     const inputs = try decodeStackEffectParams(arena, header, eff.inputs, eff.input_count, protocol_slots);
     const outputs = try decodeStackEffectParams(arena, header, eff.outputs, eff.output_count, protocol_slots);
-    return stack_effect_mod.StackEffect{
+    return try stack_effect_mod.box(arena, .{
         .inputs = inputs,
         .outputs = outputs,
-    };
+    });
 }
 
 fn decodeStackEffectParams(
@@ -1332,7 +1332,7 @@ pub fn SlotPopulateCore(comptime Env: type) type {
                     if (method.stack_effect_idx != 0) {
                         const effect = (try decodeStackEffect(arena, header, method.stack_effect_idx, protocol_slots)) orelse
                             return LoaderError.BadStackEffectIndex;
-                        methods.append(arena, .{ .stack_effect = effect }) catch
+                        methods.append(arena, .{ .stack_effect = effect.* }) catch
                             return LoaderError.OutOfMemory;
                     }
                 }

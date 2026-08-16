@@ -288,7 +288,7 @@ fn nativeDefineEnum(ctx: *Context) anyerror!void {
     try ctx.defineWord(enum_name, .{
         .name = enum_name,
         .parse_time = true,
-        .stack_effect = try helpers.makeSimpleEffect(alloc, "-- type"),
+        .stack_effect = try helpers.makeBoxedEffect(alloc, "-- type"),
         .markers = type_markers,
         .provenance = .{ .generator = "enum", .parent = enum_name, .role = "type" },
         .action = .{ .compound = type_instrs },
@@ -336,7 +336,7 @@ fn nativeDefineEnum(ctx: *Context) anyerror!void {
             const variant_effect_str = try std.fmt.allocPrint(alloc, "-- {s}", .{full_name});
             try ctx.defineWord(full_name, .{
                 .name = full_name,
-                .stack_effect = try helpers.makeSimpleEffect(alloc, variant_effect_str),
+                .stack_effect = try helpers.makeBoxedEffect(alloc, variant_effect_str),
                 .markers = markers_slice,
                 .provenance = .{ .generator = "enum", .parent = enum_name, .role = "variant-constructor" },
                 .action = .{ .compound = instrs },
@@ -439,7 +439,7 @@ fn nativeDefineEnum(ctx: *Context) anyerror!void {
 
     try ctx.defineWord(agg_pred_name, .{
         .name = agg_pred_name,
-        .stack_effect = try helpers.makeSimpleEffect(alloc, "val -- ?"),
+        .stack_effect = try helpers.makeBoxedEffect(alloc, "val -- ?"),
         .markers = markers_slice,
         .provenance = .{ .generator = "enum", .parent = enum_name, .role = "predicate" },
         .action = .{ .compound = agg_instrs },
@@ -458,7 +458,7 @@ fn nativeDefineEnum(ctx: *Context) anyerror!void {
 
     try ctx.defineWord(convert_name, .{
         .name = convert_name,
-        .stack_effect = try helpers.makeSimpleEffect(alloc, convert_effect),
+        .stack_effect = try helpers.makeBoxedEffect(alloc, convert_effect),
         .markers = convert_markers,
         .provenance = .{ .generator = "enum", .parent = enum_name, .role = "conversion" },
         .action = .{ .compound = convert_instrs },

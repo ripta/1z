@@ -131,7 +131,7 @@ fn nativeDefineBuiltinType(ctx: *Context) anyerror!void {
     try ctx.defineWord(name, .{
         .name = name,
         .parse_time = true,
-        .stack_effect = try helpers.makeSimpleEffect(alloc, "-- type"),
+        .stack_effect = try helpers.makeBoxedEffect(alloc, "-- type"),
         .markers = type_markers,
         .provenance = .{ .generator = "builtin-type", .parent = name, .role = "type" },
         .action = .{ .compound = type_instrs },

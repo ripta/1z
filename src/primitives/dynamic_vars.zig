@@ -122,7 +122,7 @@ pub fn nativeDefineParameter(ctx: *Context) anyerror!void {
 
     try ctx.defineWord(name_copy, WordDefinition{
         .name = name_copy,
-        .stack_effect = try helpers.makeSimpleEffect(alloc, "-- param"),
+        .stack_effect = try helpers.makeBoxedEffect(alloc, "-- param"),
         .markers = markers_slice,
         .doc = doc_val,
         .provenance = .{ .generator = "parameter", .parent = name_copy, .role = "parameter" },

@@ -145,6 +145,12 @@ pub fn pushCopiedArray(ctx: *Context, alloc: Allocator, src: []const Value) anye
     };
 }
 
+/// `makeSimpleEffect` boxed onto the same allocator, for the definition sites that need a
+/// stable address rather than a value.
+pub fn makeBoxedEffect(allocator: Allocator, raw: []const u8) !*const StackEffect {
+    return stack_effect_mod.box(allocator, try makeSimpleEffect(allocator, raw));
+}
+
 /// Create a stack effect from a raw string at runtime.
 /// Supports quotation annotations like "seq quot: ( elem -- elem' ) -- seq'"
 pub fn makeSimpleEffect(allocator: Allocator, raw: []const u8) !StackEffect {

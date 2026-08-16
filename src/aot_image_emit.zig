@@ -1112,7 +1112,7 @@ fn collectStackEffects(
     for (manifest.entries) |entry| {
         const mw_ptr = lookupModuleWord(ctx, entry) orelse continue;
         if (mw_ptr.stack_effect == null) continue;
-        try registerStackEffect(table, &mw_ptr.stack_effect.?);
+        try registerStackEffect(table, mw_ptr.stack_effect.?);
     }
 }
 
@@ -4093,7 +4093,7 @@ fn emitModuleAndWordTables(
         try out.appendSlice(allocator, ",\n        .output_count = ");
         try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{output_count}) catch unreachable);
         const stack_effect_idx: u32 = if (mw_ptr.stack_effect != null)
-            effect_table.lookupEffect(&mw_ptr.stack_effect.?)
+            effect_table.lookupEffect(mw_ptr.stack_effect.?)
         else
             0;
         try out.appendSlice(allocator,
@@ -5106,11 +5106,11 @@ test "emitImageC: stack-effect table dedupes type slots and emits sentinel index
     m.* = .{ .name = "demo", .words = .{} };
     try m.words.put(arena, "alpha", .{
         .action = .{ .compound = struct_instrs },
-        .stack_effect = .{ .inputs = eff_a_inputs, .outputs = eff_a_outputs },
+        .stack_effect = try stack_effect_mod.box(arena, .{ .inputs = eff_a_inputs, .outputs = eff_a_outputs }),
     });
     try m.words.put(arena, "beta", .{
         .action = .{ .compound = struct_instrs },
-        .stack_effect = .{ .inputs = eff_b_inputs, .outputs = eff_b_outputs },
+        .stack_effect = try stack_effect_mod.box(arena, .{ .inputs = eff_b_inputs, .outputs = eff_b_outputs }),
     });
     {
         const cache_alloc_demo = ctx.module_cache_value.header.allocator;
@@ -5364,7 +5364,7 @@ test "collectTypeValueData dedupes against stack-effect-discovered TypeValues" {
     m.* = .{ .name = "demo", .words = .{} };
     try m.words.put(arena, "color", .{
         .action = .{ .compound = instrs },
-        .stack_effect = .{ .inputs = eff_inputs, .outputs = eff_outputs },
+        .stack_effect = try stack_effect_mod.box(arena, .{ .inputs = eff_inputs, .outputs = eff_outputs }),
     });
     {
         const cache_alloc_demo = ctx.module_cache_value.header.allocator;
@@ -7057,7 +7057,7 @@ test "emitImageC: protocol annotation interns descriptor and emits full descript
     m.* = .{ .name = "demo", .words = .{} };
     try m.words.put(arena, "bounded", .{
         .action = .{ .compound = instrs },
-        .stack_effect = .{ .inputs = eff_inputs, .outputs = eff_outputs },
+        .stack_effect = try stack_effect_mod.box(arena, .{ .inputs = eff_inputs, .outputs = eff_outputs }),
     });
     {
         const cache_alloc = ctx.module_cache_value.header.allocator;
@@ -7142,7 +7142,7 @@ test "emitImageC: combinator annotation interns descriptors across all three ele
     m.* = .{ .name = "demo", .words = .{} };
     try m.words.put(arena, "bounded", .{
         .action = .{ .compound = instrs },
-        .stack_effect = .{ .inputs = eff_inputs, .outputs = eff_outputs },
+        .stack_effect = try stack_effect_mod.box(arena, .{ .inputs = eff_inputs, .outputs = eff_outputs }),
     });
     {
         const cache_alloc = ctx.module_cache_value.header.allocator;
@@ -7323,7 +7323,7 @@ test "emitDispatchEntryTable: a shared descriptor resolves to the smallest inter
     m.* = .{ .name = "demo", .words = .{} };
     try m.words.put(arena, "alpha", .{
         .action = .{ .compound = instrs },
-        .stack_effect = .{ .inputs = eff_inputs, .outputs = eff_outputs },
+        .stack_effect = try stack_effect_mod.box(arena, .{ .inputs = eff_inputs, .outputs = eff_outputs }),
     });
     {
         const cache_alloc = ctx.module_cache_value.header.allocator;
@@ -7587,7 +7587,7 @@ test "registerProtocolMethodEffects reaches protocols and TypeValues through met
     m.* = .{ .name = "demo", .words = .{} };
     try m.words.put(arena, "bounded", .{
         .action = .{ .compound = instrs },
-        .stack_effect = .{ .inputs = eff_inputs, .outputs = eff_outputs },
+        .stack_effect = try stack_effect_mod.box(arena, .{ .inputs = eff_inputs, .outputs = eff_outputs }),
     });
     {
         const cache_alloc = ctx.module_cache_value.header.allocator;

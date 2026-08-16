@@ -16,17 +16,10 @@ pub const NativeLeafData = struct {
     fn_ptr: dictionary_mod.NativeFn,
     /// Mirrors `WordDefinition.dispatch_id`; passed to `tryDispatchGenericById`.
     dispatch_id: u32,
-    /// Pointer into the dictionary's heap-boxed `WordDefinition`, reached
-    /// via its `WordSlot`. Valid for the process's lifetime, even across
-    /// redefinition (a displaced definition box is retired, not freed).
-    ///
-    /// A module-resolved leaf instead points at `owned_stack_effect`, a heap
-    /// copy, because a pointer into a module's word map would not survive the
-    /// map rehashing.
+    /// Borrowed from the definition this leaf was resolved from. The definition boxes its own
+    /// effect on a context arena, so the pointer is valid for the process's lifetime whether the
+    /// leaf came from the dictionary or from a module's word map.
     stack_effect: ?*const StackEffect,
-    /// Set when `stack_effect` is a heap copy owned by this leaf rather than
-    /// a borrow of the dictionary's box; `JitDispatchTable.deinit` frees it.
-    owned_stack_effect: ?*StackEffect = null,
     source_file: ?[]const u8,
 };
 
@@ -93,9 +86,6 @@ pub const JitDispatchTable = struct {
                 self.allocator.destroy(dp);
             }
             if (entry.native) |n| {
-                if (n.owned_stack_effect) |se| {
-                    self.allocator.destroy(se);
-                }
                 self.allocator.destroy(n);
             }
             if (entry.qualified_name) |q| {

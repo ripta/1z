@@ -69,7 +69,13 @@ pub const WordDefinition = struct {
     /// Whether this word was imported from another module.
     imported: bool = false,
     /// Stack effect annotation for this word, if any.
-    stack_effect: ?StackEffect = null,
+    ///
+    /// Boxed so the address is stable however the definition is copied. A definition lives by
+    /// value in `LocalFrame` and in a module's word map, where an interior pointer dies on the
+    /// next rehash, and it is passed by value to `executeResolvedWord`, where one dies on return.
+    ///
+    /// The definition owns what the box points at too, so a holder may borrow the parameters.
+    stack_effect: ?*const StackEffect = null,
     /// Whether this word is effect-transparent, meaning its stack effect
     /// depends on a quotation argument rather than being fixed.
     effect_transparent: bool = false,

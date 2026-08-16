@@ -200,7 +200,7 @@ export fn onez_init() ?*anyopaque {
     handle.* = .{ .allocator = alloc, .gpa = root.gpa, .ctx = ctx };
     handle.output_stream.impl = handle;
 
-    const present_frame_effect = helpers.makeSimpleEffect(ctx.quotationAllocator(), "--") catch {
+    const present_frame_effect = helpers.makeBoxedEffect(ctx.quotationAllocator(), "--") catch {
         onez_deinit(handle);
         return null;
     };
@@ -213,7 +213,7 @@ export fn onez_init() ?*anyopaque {
         onez_deinit(handle);
         return null;
     };
-    const framebuffer_bytes_effect = helpers.makeSimpleEffect(ctx.quotationAllocator(), "-- byte-array") catch {
+    const framebuffer_bytes_effect = helpers.makeBoxedEffect(ctx.quotationAllocator(), "-- byte-array") catch {
         onez_deinit(handle);
         return null;
     };
@@ -226,7 +226,7 @@ export fn onez_init() ?*anyopaque {
         onez_deinit(handle);
         return null;
     };
-    const keyboard_bytes_effect = helpers.makeSimpleEffect(ctx.quotationAllocator(), "-- byte-array") catch {
+    const keyboard_bytes_effect = helpers.makeBoxedEffect(ctx.quotationAllocator(), "-- byte-array") catch {
         onez_deinit(handle);
         return null;
     };
@@ -239,7 +239,7 @@ export fn onez_init() ?*anyopaque {
     // colon as the start of a quotation annotation, not a type annotation, so writing
     // `channels: fixnum` would parse as two separate parameters and inflate the arity. The
     // callbacks type-check their own inputs instead.
-    const load_sample_effect = helpers.makeSimpleEffect(ctx.quotationAllocator(), "bytes channels rate -- handle") catch {
+    const load_sample_effect = helpers.makeBoxedEffect(ctx.quotationAllocator(), "bytes channels rate -- handle") catch {
         onez_deinit(handle);
         return null;
     };
@@ -248,7 +248,7 @@ export fn onez_init() ?*anyopaque {
         return null;
     };
 
-    const play_sample_effect = helpers.makeSimpleEffect(ctx.quotationAllocator(), "handle --") catch {
+    const play_sample_effect = helpers.makeBoxedEffect(ctx.quotationAllocator(), "handle --") catch {
         onez_deinit(handle);
         return null;
     };
@@ -834,7 +834,7 @@ export fn onez_register_word_with_effect(
         return ONEZ_ERR_TYPE_MISMATCH;
     }
 
-    const parsed_effect: ?StackEffect = if (effect_str) |eptr| blk: {
+    const parsed_effect: ?*const StackEffect = if (effect_str) |eptr| blk: {
         const raw = std.mem.span(eptr);
         if (raw.len == 0) break :blk null;
         const stripped = stripEffectParens(raw);
@@ -842,7 +842,7 @@ export fn onez_register_word_with_effect(
             setLastError(handle, "stack effect string must contain '--'", .{});
             return ONEZ_ERR_INVALID_EFFECT;
         }
-        break :blk helpers.makeSimpleEffect(handle.ctx.quotationAllocator(), stripped) catch {
+        break :blk helpers.makeBoxedEffect(handle.ctx.quotationAllocator(), stripped) catch {
             setLastError(handle, "invalid stack effect string", .{});
             return ONEZ_ERR_INVALID_EFFECT;
         };

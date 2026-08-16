@@ -3275,7 +3275,7 @@ pub const Context = struct {
             if (markers_mod.isGenericMarker(mk)) return;
         }
 
-        if (stack_effect_mod.hasAnyRowVariable(effect)) return;
+        if (stack_effect_mod.hasAnyRowVariable(effect.*)) return;
 
         const input_count: u8 = @intCast(effect.inputs.len);
         const output_count: u8 = @intCast(effect.outputs.len);
@@ -3296,7 +3296,7 @@ pub const Context = struct {
             }
         };
 
-        const compiled = ir_codegen.compileWordWithPicSnapshot(instrs, input_count, output_count, resolver, name, pic_snapshot, self, null, &effect, def.source_file) catch return;
+        const compiled = ir_codegen.compileWordWithPicSnapshot(instrs, input_count, output_count, resolver, name, pic_snapshot, self, null, effect, def.source_file) catch return;
 
         const final_id = if (def.word_id) |existing_id| blk: {
             if (self.jit_dispatch.get(existing_id) != null) {
@@ -3351,7 +3351,7 @@ pub const Context = struct {
             if (markers_mod.isNoCompileMarker(mk)) return;
         }
 
-        if (stack_effect_mod.hasAnyRowVariable(effect)) return;
+        if (stack_effect_mod.hasAnyRowVariable(effect.*)) return;
 
         if (def.word_id != null) return;
 
@@ -3889,8 +3889,9 @@ pub const Context = struct {
         return slot;
     }
 
-    /// Look up a word and return a stable pointer to its stack effect field.
-    /// Used by the JIT compiler to bake effect pointers as compile-time constants.
+    /// Look up a word and return its stack effect pointer, which the JIT compiler bakes as a
+    /// compile-time constant. The address is the definition's own boxed effect, so it stays
+    /// valid for the process however the definition is copied around.
     pub fn lookupWordStackEffectPtr(self: *const Context, name: []const u8) ?*const StackEffect {
         self.acquireSharedRead();
         defer self.releaseSharedRead();
@@ -3898,39 +3899,8 @@ pub const Context = struct {
     }
 
     fn lookupWordStackEffectPtrLocked(self: *const Context, name: []const u8) ?*const StackEffect {
-        var i = self.local_frames.items.len;
-        while (i > 0) {
-            i -= 1;
-            if (self.local_frames.items[i].getPtr(name)) |def| {
-                if (def.stack_effect) |*eff| return eff;
-                return null;
-            }
-        }
-
-        if (self.dictionary.getPtr(name)) |def| {
-            if (def.stack_effect) |*eff| return eff;
-            return null;
-        }
-
-        var ancestor = self.parent_context;
-        while (ancestor) |ctx| {
-            const anc_cap = if (ctx.durable_frame_floor) |idx| idx + 1 else 0;
-            var j = anc_cap;
-            while (j > 0) {
-                j -= 1;
-                if (ctx.local_frames.items[j].getPtr(name)) |def| {
-                    if (def.stack_effect) |*eff| return eff;
-                    return null;
-                }
-            }
-            if (ctx.dictionary.getPtr(name)) |def| {
-                if (def.stack_effect) |*eff| return eff;
-                return null;
-            }
-            ancestor = ctx.parent_context;
-        }
-
-        return null;
+        const def = self.lookupWordLocked(name, null) orelse return null;
+        return def.stack_effect;
     }
 
     /// Get or lazily allocate a PIC table for an instruction slice.
@@ -5588,14 +5558,14 @@ pub const Context = struct {
                             if (self.resolveTransparentDelta(word, &shadow)) |resolved| {
                                 delta += resolved.delta;
                                 if (word.stack_effect) |word_effect| {
-                                    self.adjustShadowForTransparent(&shadow, word_effect, resolved.quot_delta);
+                                    self.adjustShadowForTransparent(&shadow, word_effect.*, resolved.quot_delta);
                                 }
                             } else {
                                 return null;
                             }
                         } else if (word.stack_effect) |word_effect| {
                             if (!word_effect.hasBalancedRowVariables()) {
-                                if (self.resolveUnbalancedDelta(word_effect, &shadow)) |resolved_delta| {
+                                if (self.resolveUnbalancedDelta(word_effect.*, &shadow)) |resolved_delta| {
                                     delta += resolved_delta;
                                     self.adjustShadowStack(&shadow, resolved_delta);
                                 } else {
@@ -6387,7 +6357,7 @@ pub const Context = struct {
         try writer.print("method{{ {s} {s} }}", .{ type_a_name, type_b_name });
     }
 
-    fn inferGenericDispatchArity(self: *Context, word_name: []const u8, stack_effect: ?StackEffect) usize {
+    fn inferGenericDispatchArity(self: *Context, word_name: []const u8, stack_effect: ?*const StackEffect) usize {
         const alloc = self.arena.allocator();
         const entries = self.dispatchEntriesForWord(word_name, alloc) catch &.{};
         for (entries) |pair| {
@@ -6399,7 +6369,7 @@ pub const Context = struct {
         return 1;
     }
 
-    pub fn setGenericDispatchErrorDetails(self: *Context, word_name: []const u8, stack_effect: ?StackEffect) void {
+    pub fn setGenericDispatchErrorDetails(self: *Context, word_name: []const u8, stack_effect: ?*const StackEffect) void {
         self.pending_error_message = "no method found for generic word";
         self.pending_dispatch_actual_types = self.renderDispatchArgumentTypes(self.inferGenericDispatchArity(word_name, stack_effect));
 
@@ -6723,11 +6693,11 @@ pub const Context = struct {
 
     /// Validate the stack effect (if declared), end benchmark profiling with
     /// peak-depth update, and pop the call frame.
-    pub fn wordSuccessCleanup(self: *Context, name: []const u8, stack_effect: ?StackEffect) !void {
+    pub fn wordSuccessCleanup(self: *Context, name: []const u8, stack_effect: ?*const StackEffect) !void {
         if (stack_effect) |effect| {
             const depth_after = self.stack.depth();
             if (depth_after < effect.concreteOutputCount()) {
-                self.captureStackEffectMismatch(name, effect, depth_after);
+                self.captureStackEffectMismatch(name, effect.*, depth_after);
                 if (self.benchmark) |b| b.endWordProfile(self.allocator, name);
                 if (self.profile) |p| p.recordWordEnd(self.allocator, name);
                 self.popCallFrame();
@@ -6855,13 +6825,13 @@ pub const Context = struct {
             if (effective_word_id) |wid| {
                 if (word.stack_effect) |effect| {
                     if (word.exec_flags.has_param_effects) {
-                        self.validateParameterEffects(&effect) catch |err| {
+                        self.validateParameterEffects(effect) catch |err| {
                             self.pushCallFrame(name, self.current_source, instr.line, instr.column);
                             return self.wordErrorCleanup(name, err);
                         };
                     }
                     if (word.exec_flags.has_type_annotations and !word.exec_flags.skip_type_validation) {
-                        self.validateTypeAnnotations(&effect) catch |err| {
+                        self.validateTypeAnnotations(effect) catch |err| {
                             self.pushCallFrame(name, self.current_source, instr.line, instr.column);
                             return self.wordErrorCleanup(name, err);
                         };
@@ -6923,11 +6893,11 @@ pub const Context = struct {
 
         if (word.stack_effect) |effect| {
             if (word.exec_flags.has_param_effects) {
-                self.validateParameterEffects(&effect) catch |err|
+                self.validateParameterEffects(effect) catch |err|
                     return self.wordErrorCleanup(name, err);
             }
             if (word.exec_flags.has_type_annotations and !word.exec_flags.skip_type_validation) {
-                self.validateTypeAnnotations(&effect) catch |err|
+                self.validateTypeAnnotations(effect) catch |err|
                     return self.wordErrorCleanup(name, err);
             }
         }
@@ -7529,7 +7499,8 @@ fn resolveWordForDispatch(name: []const u8, user_data: *anyopaque) ?ir_codegen.R
     const ctx = state.context;
     const callee = ctx.lookupWord(name) orelse return null;
 
-    // The outputs slice points into dictionary-owned storage, so the by-value effect copy is safe.
+    // The param slices outlive this resolution inside the returned `ResolvedWord`. They are safe
+    // to borrow because a definition owns its effect outright, parameters included.
     const output_params: ?[]const stack_effect_mod.StackEffectParam =
         if (callee.stack_effect) |eff| eff.outputs else null;
     const input_params: ?[]const stack_effect_mod.StackEffectParam =
@@ -7553,8 +7524,8 @@ fn resolveWordForDispatch(name: []const u8, user_data: *anyopaque) ?ir_codegen.R
                 .output_params = output_params,
                 .input_params = input_params,
             };
-            if (stack_effect_mod.hasAnyRowVariable(effect)) {
-                result.callee_effect = ctx.lookupWordStackEffectPtr(name);
+            if (stack_effect_mod.hasAnyRowVariable(effect.*)) {
+                result.callee_effect = effect;
             }
             return result;
         },
@@ -7569,7 +7540,7 @@ fn resolveWordForDispatch(name: []const u8, user_data: *anyopaque) ?ir_codegen.R
         break :blk id;
     };
 
-    const bounded = dispatch_helpers.boundedDispatchFor(&effect, callee.markers, name);
+    const bounded = dispatch_helpers.boundedDispatchFor(effect, callee.markers, name);
 
     var result = ir_codegen.ResolvedWord{
         .word_id = word_id,
@@ -7585,8 +7556,8 @@ fn resolveWordForDispatch(name: []const u8, user_data: *anyopaque) ?ir_codegen.R
         .body = if (callee.action == .compound) callee.action.compound else null,
         .source_file = if (callee.action == .compound) callee.source_file else null,
     };
-    if (stack_effect_mod.hasAnyRowVariable(effect)) {
-        result.callee_effect = ctx.lookupWordStackEffectPtr(name);
+    if (stack_effect_mod.hasAnyRowVariable(effect.*)) {
+        result.callee_effect = effect;
     }
     return result;
 }
@@ -7940,10 +7911,10 @@ test "stack effect validation fails when word produces fewer outputs than declar
 
     try ctx.dictionary.put("bad-word", .{
         .name = "bad-word",
-        .stack_effect = .{
+        .stack_effect = try stack_effect_mod.box(alloc, .{
             .inputs = &[_]StackEffectParam{},
             .outputs = outputs,
-        },
+        }),
         .action = .{ .compound = empty_instrs },
     });
 
@@ -8944,14 +8915,14 @@ test "lookupWordStackEffectPtrLocked: descendant skips ancestor transient frames
     parent.durable_frame_floor = parent.import_frame_index;
     try parent.local_frames.items[parent.import_frame_index.?].put(parent.allocator, "stable-eff", .{
         .name = "stable-eff",
-        .stack_effect = empty_effect,
+        .stack_effect = &empty_effect,
         .action = .{ .native = noop },
     });
 
     try parent.pushLocalFrame();
     try parent.local_frames.items[parent.local_frames.items.len - 1].put(parent.allocator, "transient-eff", .{
         .name = "transient-eff",
-        .stack_effect = empty_effect,
+        .stack_effect = &empty_effect,
         .action = .{ .native = noop },
     });
 
@@ -10153,7 +10124,7 @@ test "computeExecFlags: input with a quotation effect sets has_param_effects onl
     const body = [_]Instruction{.{ .op = .{ .call_word = "noop" }, .line = 0 }};
     const def = WordDefinition{
         .name = "with-quot",
-        .stack_effect = .{ .inputs = &inputs, .outputs = &.{} },
+        .stack_effect = &.{ .inputs = &inputs, .outputs = &.{} },
         .action = .{ .compound = &body },
     };
     const flags = computeExecFlags(def);
@@ -10167,7 +10138,7 @@ test "computeExecFlags: input with a type annotation sets has_type_annotations o
     const body = [_]Instruction{.{ .op = .{ .call_word = "noop" }, .line = 0 }};
     const def = WordDefinition{
         .name = "with-type",
-        .stack_effect = .{ .inputs = &inputs, .outputs = &.{} },
+        .stack_effect = &.{ .inputs = &inputs, .outputs = &.{} },
         .action = .{ .compound = &body },
     };
     const flags = computeExecFlags(def);
@@ -10180,7 +10151,7 @@ test "computeExecFlags: plain untyped inputs set neither validation flag" {
     const body = [_]Instruction{.{ .op = .{ .call_word = "noop" }, .line = 0 }};
     const def = WordDefinition{
         .name = "untyped",
-        .stack_effect = .{ .inputs = &inputs, .outputs = &.{} },
+        .stack_effect = &.{ .inputs = &inputs, .outputs = &.{} },
         .action = .{ .compound = &body },
     };
     const flags = computeExecFlags(def);

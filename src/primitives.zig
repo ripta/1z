@@ -13,7 +13,7 @@ const Instruction = value_mod.Instruction;
 const primitives_mod = @import("primitives/mod.zig");
 pub const InterpreterError = primitives_mod.InterpreterError;
 const Primitive = primitives_mod.Primitive;
-const makeSimpleEffect = primitives_mod.makeSimpleEffect;
+const makeBoxedEffect = primitives_mod.makeBoxedEffect;
 const all_primitives = primitives_mod.extracted_primitives;
 const all_registry_entries = primitives_mod.extracted_registry_entries;
 
@@ -30,8 +30,8 @@ const Context = @import("context.zig").Context;
 
 pub fn registerPrimitives(dict: *Dictionary, allocator: Allocator, dispatch_counter: *std.atomic.Value(u32)) !void {
     for (all_primitives) |p| {
-        const effect: ?StackEffect = if (p.stack_effect) |raw|
-            try makeSimpleEffect(allocator, raw)
+        const effect: ?*const StackEffect = if (p.stack_effect) |raw|
+            try makeBoxedEffect(allocator, raw)
         else
             null;
 
@@ -67,8 +67,8 @@ pub fn createNativeModule(dict: *Dictionary, allocator: Allocator, dispatch_coun
     };
 
     for (all_registry_entries) |entry| {
-        const effect: ?StackEffect = if (entry.stack_effect) |raw|
-            try makeSimpleEffect(allocator, raw)
+        const effect: ?*const StackEffect = if (entry.stack_effect) |raw|
+            try makeBoxedEffect(allocator, raw)
         else
             null;
         try module.words.put(allocator, entry.name, .{

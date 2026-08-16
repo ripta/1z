@@ -319,7 +319,7 @@ fn isCompilable(word_def: *const WordDefinition) bool {
         if (markers.isParseTimeMarker(mk)) return false;
         if (markers.isGenericMarker(mk)) return false;
     }
-    if (stack_effect_mod.hasAnyRowVariable(effect)) return false;
+    if (stack_effect_mod.hasAnyRowVariable(effect.*)) return false;
     return true;
 }
 
@@ -760,8 +760,8 @@ test "findMutualTcoGroups: all tail-call edges produces group" {
 
     var dict = Dictionary.init(std.testing.allocator);
     defer dict.deinit();
-    try dict.put("A", .{ .name = "A", .action = .{ .compound = a_instrs }, .stack_effect = simple_effect });
-    try dict.put("B", .{ .name = "B", .action = .{ .compound = b_instrs }, .stack_effect = simple_effect });
+    try dict.put("A", .{ .name = "A", .action = .{ .compound = a_instrs }, .stack_effect = &simple_effect });
+    try dict.put("B", .{ .name = "B", .action = .{ .compound = b_instrs }, .stack_effect = &simple_effect });
 
     var dispatch = DispatchTable.init(std.testing.allocator);
     defer dispatch.deinit();
@@ -790,8 +790,8 @@ test "findMutualTcoGroups: one non-tail edge disqualifies" {
 
     var dict = Dictionary.init(std.testing.allocator);
     defer dict.deinit();
-    try dict.put("A", .{ .name = "A", .action = .{ .compound = a_instrs }, .stack_effect = simple_effect });
-    try dict.put("B", .{ .name = "B", .action = .{ .compound = b_instrs }, .stack_effect = simple_effect });
+    try dict.put("A", .{ .name = "A", .action = .{ .compound = a_instrs }, .stack_effect = &simple_effect });
+    try dict.put("B", .{ .name = "B", .action = .{ .compound = b_instrs }, .stack_effect = &simple_effect });
 
     var dispatch = DispatchTable.init(std.testing.allocator);
     defer dispatch.deinit();
@@ -815,8 +815,8 @@ test "findMutualTcoGroups: opaque member disqualifies" {
 
     var dict = Dictionary.init(std.testing.allocator);
     defer dict.deinit();
-    try dict.put("A", .{ .name = "A", .action = .{ .compound = a_instrs }, .stack_effect = simple_effect });
-    try dict.put("B", .{ .name = "B", .action = .{ .compound = b_instrs }, .stack_effect = simple_effect });
+    try dict.put("A", .{ .name = "A", .action = .{ .compound = a_instrs }, .stack_effect = &simple_effect });
+    try dict.put("B", .{ .name = "B", .action = .{ .compound = b_instrs }, .stack_effect = &simple_effect });
 
     var dispatch = DispatchTable.init(std.testing.allocator);
     defer dispatch.deinit();
@@ -845,8 +845,8 @@ test "findMutualTcoGroups: mismatched arities disqualifies" {
 
     var dict = Dictionary.init(std.testing.allocator);
     defer dict.deinit();
-    try dict.put("A", .{ .name = "A", .action = .{ .compound = a_instrs }, .stack_effect = simple_effect });
-    try dict.put("B", .{ .name = "B", .action = .{ .compound = b_instrs }, .stack_effect = two_in_effect });
+    try dict.put("A", .{ .name = "A", .action = .{ .compound = a_instrs }, .stack_effect = &simple_effect });
+    try dict.put("B", .{ .name = "B", .action = .{ .compound = b_instrs }, .stack_effect = &two_in_effect });
 
     var dispatch = DispatchTable.init(std.testing.allocator);
     defer dispatch.deinit();
@@ -866,8 +866,8 @@ test "findMutualTcoGroups: native member disqualifies" {
 
     var dict = Dictionary.init(std.testing.allocator);
     defer dict.deinit();
-    try dict.put("A", .{ .name = "A", .action = .{ .compound = a_instrs }, .stack_effect = simple_effect });
-    try dict.put("B", .{ .name = "B", .action = .{ .native = dummyNative }, .stack_effect = simple_effect });
+    try dict.put("A", .{ .name = "A", .action = .{ .compound = a_instrs }, .stack_effect = &simple_effect });
+    try dict.put("B", .{ .name = "B", .action = .{ .native = dummyNative }, .stack_effect = &simple_effect });
 
     var dispatch = DispatchTable.init(std.testing.allocator);
     defer dispatch.deinit();

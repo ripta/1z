@@ -288,6 +288,43 @@ pub fn passThroughParams(effect: StackEffect) PassThroughResult {
     return result;
 }
 
+/// Copy `effect` onto `alloc` and return its address.
+///
+/// A definition's effect is reached by pointer so the address survives every by-value copy of
+/// the definition. `alloc` must therefore outlive every definition that will hold the result;
+/// callers pass a context arena.
+pub fn box(alloc: std.mem.Allocator, effect: StackEffect) !*const StackEffect {
+    const boxed = try alloc.create(StackEffect);
+    boxed.* = effect;
+    return boxed;
+}
+
+/// `box`, plus a copy of everything the effect points at: both parameter lists and, recursively,
+/// each parameter's nested quotation effect.
+///
+/// Use this where the source effect's memory has a different owner than the holder of the result.
+/// One parsed body can be executed under more than one `stateTarget`, so the same parse-owned
+/// effect reaches definitions whose home arenas differ and outlive each other in either order.
+/// Copying the box alone would leave the holder pointing at the other arena's parameters.
+///
+/// Parameter names are not copied. A name borrows the source text, which outlives any arena a
+/// definition lives on.
+pub fn copyOnto(alloc: std.mem.Allocator, effect: StackEffect) std.mem.Allocator.Error!*const StackEffect {
+    return box(alloc, .{
+        .inputs = try copyParams(alloc, effect.inputs),
+        .outputs = try copyParams(alloc, effect.outputs),
+    });
+}
+
+fn copyParams(alloc: std.mem.Allocator, params: []const StackEffectParam) std.mem.Allocator.Error![]const StackEffectParam {
+    const copied = try alloc.alloc(StackEffectParam, params.len);
+    for (params, copied) |src, *dst| {
+        dst.* = src;
+        if (src.quotation_effect) |nested| dst.quotation_effect = try copyOnto(alloc, nested.*);
+    }
+    return copied;
+}
+
 /// Check if a parameter name is a row variable (starts with "..")
 pub fn isRowVariable(name: []const u8) bool {
     return name.len >= 2 and name[0] == '.' and name[1] == '.';

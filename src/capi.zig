@@ -950,7 +950,7 @@ export fn onez_register_word_with_effect(
         return ONEZ_ERR_TYPE_MISMATCH;
     }
 
-    const parsed_effect: ?StackEffect = if (effect_str) |eptr| blk: {
+    const parsed_effect: ?*const StackEffect = if (effect_str) |eptr| blk: {
         const raw = std.mem.span(eptr);
         if (raw.len == 0) break :blk null;
         const stripped = stripEffectParens(raw);
@@ -958,7 +958,7 @@ export fn onez_register_word_with_effect(
             setLastError(handle, "stack effect string must contain '--'", .{});
             return ONEZ_ERR_INVALID_EFFECT;
         }
-        break :blk helpers.makeSimpleEffect(handle.ctx.quotationAllocator(), stripped) catch {
+        break :blk helpers.makeBoxedEffect(handle.ctx.quotationAllocator(), stripped) catch {
             setLastError(handle, "invalid stack effect string", .{});
             return ONEZ_ERR_INVALID_EFFECT;
         };
@@ -2094,7 +2094,7 @@ fn registerNativeLeaf(ctx: *Context, word_id: u32, name: []const u8, module_segm
     leaf.* = .{
         .fn_ptr = def.action.native,
         .dispatch_id = def.dispatch_id,
-        .stack_effect = if (def.stack_effect != null) &def.stack_effect.? else null,
+        .stack_effect = def.stack_effect,
         .source_file = def.source_file,
     };
     attachNativeLeaf(ctx, word_id, leaf);
@@ -2105,45 +2105,28 @@ fn registerNativeLeaf(ctx: *Context, word_id: u32, name: []const u8, module_segm
 /// A no-op when the segment names no cached module -- a build embedding no image registers
 /// before anything populates the cache -- or when the module's word is not a native; the
 /// call-time slow path resolves those.
-///
-/// The stack effect is heap-copied rather than borrowed: a pointer into the module's word map
-/// would not survive the map rehashing.
 fn registerModuleNativeLeaf(ctx: *Context, word_id: u32, name: []const u8, segment: []const u8) void {
     const module = ctx.cachedModuleBySegment(segment) orelse return;
     const mod_word = module.words.get(name) orelse module.deps.get(name) orelse return;
     if (mod_word.action != .native) return;
 
-    const owned_effect: ?*StackEffect = if (mod_word.stack_effect) |se| blk: {
-        const boxed = ctx.allocator.create(StackEffect) catch break :blk null;
-        boxed.* = se;
-        break :blk boxed;
-    } else null;
-
-    const leaf = ctx.allocator.create(jit_dispatch_mod.NativeLeafData) catch {
-        if (owned_effect) |se| ctx.allocator.destroy(se);
-        return;
-    };
+    const leaf = ctx.allocator.create(jit_dispatch_mod.NativeLeafData) catch return;
     leaf.* = .{
         .fn_ptr = mod_word.action.native,
         .dispatch_id = mod_word.dispatch_id,
-        .stack_effect = owned_effect,
-        .owned_stack_effect = owned_effect,
+        .stack_effect = mod_word.stack_effect,
         .source_file = mod_word.source_file,
     };
     attachNativeLeaf(ctx, word_id, leaf);
 }
 
 /// Store `leaf` on `word_id`'s entry. A replaced leaf, or `leaf` itself when the entry does not
-/// exist, is freed here along with its owned stack effect.
+/// exist, is freed here.
 fn attachNativeLeaf(ctx: *Context, word_id: u32, leaf: *jit_dispatch_mod.NativeLeafData) void {
     if (ctx.jit_dispatch.getMut(word_id)) |entry| {
-        if (entry.native) |old| {
-            if (old.owned_stack_effect) |se| ctx.allocator.destroy(se);
-            ctx.allocator.destroy(old);
-        }
+        if (entry.native) |old| ctx.allocator.destroy(old);
         entry.native = leaf;
     } else {
-        if (leaf.owned_stack_effect) |se| ctx.allocator.destroy(se);
         ctx.allocator.destroy(leaf);
     }
 }
@@ -2257,13 +2240,15 @@ test "registerNativeLeaf: binds a cached module's own native through the segment
         fn f(_: *Context) anyerror!void {}
     }.f;
 
+    const probe_effect: StackEffect = .{ .inputs = &.{}, .outputs = &.{} };
+
     const arena_alloc = ctx.arena.allocator();
     const module = try arena_alloc.create(value_mod.Module);
     module.* = .{ .name = "mod-native", .words = .{} };
     try module.words.put(arena_alloc, "probe", .{
         .source_module = module,
         .action = .{ .native = noop },
-        .stack_effect = .{ .inputs = &.{}, .outputs = &.{} },
+        .stack_effect = &probe_effect,
         .dispatch_id = 7,
     });
 
@@ -2283,8 +2268,9 @@ test "registerNativeLeaf: binds a cached module's own native through the segment
     const leaf = entry.native orelse return error.TestExpectedLeafData;
     try std.testing.expectEqual(noop, leaf.fn_ptr);
     try std.testing.expectEqual(@as(u32, 7), leaf.dispatch_id);
-    try std.testing.expect(leaf.stack_effect != null);
-    try std.testing.expectEqual(leaf.owned_stack_effect.?, @constCast(leaf.stack_effect.?));
+    // The leaf borrows the module word's own boxed effect rather than copying it, so a caller
+    // reading the leaf and a caller reading the module word see one address.
+    try std.testing.expectEqual(&probe_effect, leaf.stack_effect.?);
 }
 
 export fn onez_runtime_register_quotations(ptr: ?*anyopaque, table: [*]const ?*const anyopaque, size: u32) i32 {

@@ -118,8 +118,12 @@ fn nativeToModule(ctx: *Context) anyerror!void {
         // legacy hash variant) does not leave dangling key pointers in
         // `module.words`.
         const key_copy = try alloc.dupe(u8, entry.key_ptr.*);
+        // The effect is copied onto the module's own allocator for the same reason the keys are
+        // duped: it belongs to the parse that produced the quotation, whose arena is not the
+        // module's.
+        const effect = if (quot.effect) |eff| try stack_effect_mod.copyOnto(alloc, eff.*) else null;
         try module.words.put(alloc, key_copy, .{
-            .stack_effect = if (quot.effect) |eff| eff.* else null,
+            .stack_effect = effect,
             .action = .{ .compound = quot.instructions },
         });
     }
@@ -871,15 +875,14 @@ fn resolveWordForDispatch(name: []const u8, user_data: *anyopaque) ?ir_codegen.R
     const ctx = state.context;
     const callee = ctx.lookupWord(name) orelse return null;
 
-    const effect_ptr: ?usize = if (callee.stack_effect) |eff| blk: {
-        if (hasQuotationParams(eff)) {
-            const ptr = ctx.lookupWordStackEffectPtr(name) orelse break :blk @as(?usize, null);
-            break :blk @intFromPtr(ptr);
-        }
-        break :blk null;
-    } else null;
+    // A definition owns its effect outright, parameters included, so both the address baked into
+    // compiled code and the param slices handed to `ResolvedWord` stay valid for as long as the
+    // definition does.
+    const effect_ptr: ?usize = if (callee.stack_effect) |eff|
+        (if (hasQuotationParams(eff.*)) @intFromPtr(eff) else null)
+    else
+        null;
 
-    // The outputs slice points into dictionary-owned storage, so the by-value effect copy is safe.
     const output_params: ?[]const stack_effect_mod.StackEffectParam =
         if (callee.stack_effect) |eff| eff.outputs else null;
     const input_params: ?[]const stack_effect_mod.StackEffectParam =
@@ -892,7 +895,7 @@ fn resolveWordForDispatch(name: []const u8, user_data: *anyopaque) ?ir_codegen.R
         .compound, .literal => {},
         .native => |func| {
             const effect = callee.stack_effect orelse return null;
-            if (stack_effect_mod.hasAnyRowVariable(effect)) return null;
+            if (stack_effect_mod.hasAnyRowVariable(effect.*)) return null;
             return ir_codegen.ResolvedWord{
                 .word_id = 0,
                 .input_count = @intCast(effect.inputs.len),
@@ -917,7 +920,7 @@ fn resolveWordForDispatch(name: []const u8, user_data: *anyopaque) ?ir_codegen.R
         break :blk id;
     };
 
-    const bounded = dispatch_helpers.boundedDispatchFor(&effect, callee.markers, name);
+    const bounded = dispatch_helpers.boundedDispatchFor(effect, callee.markers, name);
 
     return ir_codegen.ResolvedWord{
         .word_id = word_id,
@@ -1122,7 +1125,7 @@ fn isSccEligibleViaLookup(
             if (markers_mod.isParseTimeMarker(mk)) return false;
             if (markers_mod.isGenericMarker(mk)) return false;
         }
-        if (stack_effect_ns.hasAnyRowVariable(effect)) return false;
+        if (stack_effect_ns.hasAnyRowVariable(effect.*)) return false;
 
         // Arity uniformity
         if (ref_inputs) |ri| {
@@ -1179,7 +1182,7 @@ fn compileSingleWord(ctx: *Context, sym: []const u8, mutual_group: ?[]const []co
         ctx.allocator.destroy(ps);
     };
 
-    const compiled = ir_codegen.compileWordWithPicSnapshot(instrs, input_count, output_count, resolver, sym, pic_snapshot, ctx, mutual_group, &effect, word.source_file) catch {
+    const compiled = ir_codegen.compileWordWithPicSnapshot(instrs, input_count, output_count, resolver, sym, pic_snapshot, ctx, mutual_group, effect, word.source_file) catch {
         return error.TypeMismatch;
     };
 
