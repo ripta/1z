@@ -7,7 +7,7 @@ use "testing" ;
 
 use "strict_use_mod_a.1z" ;
 \ Test that importing a module with conflicting names throws import-conflict
-[ "strict_use_mod_b.1z" load @keys assert-no-shadow ]
+[ "strict_use_mod_b.1z" load dup @keys "use" f assert-no-shadow ]
 [ error-type: @get EImportConflict "conflicting full import throws import-conflict" assert= ] recover
 
 \ === shadow-ok suppresses the error ===
@@ -19,7 +19,7 @@ greet "hello from B" "shadow-ok full import uses later module" assert=
 \ === Selective import conflict detection ===
 "Selective import of conflicting word errors" test-section
 
-[ { greet: } assert-no-shadow ]
+[ "strict_use_mod_a.1z" load { greet: } "use" f assert-no-shadow ]
 [ error-type: @get EImportConflict "conflicting selective import throws import-conflict" assert= ] recover
 
 \ === Selective import with shadow-ok ===

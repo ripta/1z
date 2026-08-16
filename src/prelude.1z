@@ -732,11 +732,31 @@ read-line: ( -- str/f ) [ input-stream get stream-read-line ] ;
 
 EImportConflict: ( -- sym ) [ import-conflict: ] ;
 
+\ True when `name` resolves to the same definition in the incoming `module` and in the current
+\ scope.
+\
+\ Word identity is the source module: two imports of one word from one cached module share its
+\ source-module pointer, so this dedupes the diamond where the imported module and the importer
+\ both `use` a third module. A word with no source module (`f`) is never a match.
+(same-source?): ( module name -- ? ) [
+  2dup native.word-source                            \ module name incoming-src
+  over native.current-scope swap native.word-source  \ module name incoming-src local-src
+  over module? over module? and
+  [ = ] [ 2drop f ] if  \ module name same?
+  nip nip
+] ;
+
 \\ Check that none of the given names shadow words in the current import frame.
-\\ Throws an `import-conflict` error if any name is already locally defined.
-\\ Generic words are exempt when both sides are generic: multiple modules may
-\\ contribute dispatch methods for the same word.
-assert-no-shadow: ( module names -- ) [
+\\
+\\ Throws an `import-conflict` error naming the importing construct if any name is already locally
+\\ defined. When `dedupe?` is true, a name already bound from the same source module is skipped.
+\\
+\\ Generic words are exempt when both sides are generic: multiple modules may contribute dispatch
+\\ methods for the same word.
+assert-no-shadow: ( module: module names: array construct: string dedupe?: boolean -- ) [
+  swap " would shadow existing words: " #append
+  [ [ over [ swap (same-source?) not ] curry #filter #collect ] when ] dip
+  <rot- <rot-
   { } swap
   [
     dup native.locally-defined?
@@ -750,7 +770,7 @@ assert-no-shadow: ( module names -- ) [
     if
   ] #each
   dup #empty?
-  [ drop drop ]
+  [ drop drop drop ]
   [
     "" swap
     [
@@ -761,7 +781,7 @@ assert-no-shadow: ( module names -- ) [
       if
       swap dup #empty? [ swap #append ] [ ", " #append swap #append ] if
     ] #each
-    "use would shadow existing words: " swap #append
+    <rot- swap #append nip
     f swap EImportConflict make-error throw
   ]
   if
@@ -800,7 +820,7 @@ use: parse-time [
       ";" parse-values-until dup (validate-use-tail)
       dup [ (use-load) ] dip
       shadow-ok #in? not
-      [ dup dup @keys assert-no-shadow ] when
+      [ dup dup @keys "use" f assert-no-shadow ] when
       import
     ] dip  \ filename
     f (record-use)
@@ -813,7 +833,7 @@ use: parse-time [
       ";" parse-values-until dup (validate-use-tail)
       dup [ (use-load) ] dip  \ { sel } module { mods }
       shadow-ok #in? not      \ { sel } module no-shadow?
-      [ over over swap assert-no-shadow ] when
+      [ over over swap "use" f assert-no-shadow ] when
       swap import
     ] 2dip  \ selection filename
     swap (record-use)
@@ -832,72 +852,17 @@ use: parse-time [
 \\ Insert `shadow-ok` before `;` to suppress the shadow check.
 \\ Insert `reload` before `;` to bypass the module cache.
 borrow: parse-time [
-  \ True when `name` resolves to the same definition in the incoming `module` and in the current
-  \ scope.
-  \
-  \ Word identity is the source module: two imports of one word from one cached module share its
-  \ source-module pointer, so this dedupes the diamond where a borrowed module and the borrower both
-  \ `use` a third module. A word with no source module (`f`) is never a match.
-  (borrow-same-source?): ( module name -- ? ) [
-    2dup native.word-source                            \ module name incoming-src
-    over native.current-scope swap native.word-source  \ module name incoming-src local-src
-    over module? over module? and
-    [ = ] [ 2drop f ] if  \ module name same?
-    nip nip
-  ] ;
-
-  \ The `borrow` shadow check: an identity-deduped variant of `assert-no-shadow`.
-  \
-  \ `names` are the incoming words; `module` supplies their source and markers. A name only conflicts
-  \ when it is already locally defined, is not the same definition (identity dedupe), and is not a
-  \ generic merging into an existing generic. Genuine conflicts throw `import-conflict`.
-  (assert-no-borrow-shadow): ( module names -- ) [
-    { } swap
-    [
-      dup native.locally-defined?
-      [
-        2 pick-n over (borrow-same-source?)
-        [ drop ]
-        [
-          dup generic?
-          [ 2 pick-n over native.word-markers [ generic = ] #any [ drop ] [ 1array #append ] if ]
-          [ 1array #append ]
-          if
-        ]
-        if
-      ]
-      [ drop ]
-      if
-    ] #each
-    dup #empty?
-    [ drop drop ]
-    [
-      "" swap
-      [
-        >string
-        dup native.current-scope swap native.word-source dup
-        [ inspect swap " (from " #append swap #append ")" #append ]
-        [ drop ]
-        if
-        swap dup #empty? [ swap #append ] [ ", " #append swap #append ] if
-      ] #each
-      "borrow would shadow existing words: " swap #append
-      f swap EImportConflict make-error throw
-    ]
-    if
-  ] ;
-
   \ Shadow-check the whole borrow surface: the module's public words and all its private deps.
   (borrow-shadow-check-all): ( module -- ) [
-    dup dup @keys (assert-no-borrow-shadow)
-    native.module-deps dup @keys (assert-no-borrow-shadow)
+    dup dup @keys "borrow" t assert-no-shadow
+    native.module-deps dup @keys "borrow" t assert-no-shadow
   ] ;
 
   \ Shadow-check a subset borrow: the module's public words and only the selected deps.
   (borrow-subset-check): ( selection module -- selection module ) [
-    dup dup @keys (assert-no-borrow-shadow)
+    dup dup @keys "borrow" t assert-no-shadow
     over over native.module-deps
-    swap (assert-no-borrow-shadow)
+    swap "borrow" t assert-no-shadow
   ] ;
 
   (validate-borrow-tail): ( values -- ) [

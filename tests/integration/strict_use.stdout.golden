@@ -1,6 +1,6 @@
 === Full import of two modules with overlapping word names errors ===
 Stack: [ ]
-Stack: [ [ "strict_use_mod_b.1z" load @keys assert-no-shadow ] ]
+Stack: [ [ "strict_use_mod_b.1z" load dup @keys "use" f assert-no-shadow ] ]
 PASS: conflicting full import throws import-conflict
 Stack: [ ]
 === shadow-ok suppresses import conflict on full import ===
@@ -9,7 +9,7 @@ PASS: shadow-ok full import uses later module
 Stack: [ ]
 === Selective import of conflicting word errors ===
 Stack: [ ]
-Stack: [ [ { greet: } assert-no-shadow ] ]
+Stack: [ [ "strict_use_mod_a.1z" load { greet: } "use" f assert-no-shadow ] ]
 PASS: conflicting selective import throws import-conflict
 Stack: [ ]
 === shadow-ok suppresses selective import conflict ===
