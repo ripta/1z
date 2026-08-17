@@ -30,7 +30,7 @@ pratt: struct{ operators prefix infix } ;
 ] ;
 
 \\ Peek at the next token without consuming it. Returns token or f.
-peek-token: ( peekable -- token/f ) [
+peek-token: override ( peekable -- token/f ) [
   dup buf: @get
   dup option:some? [
     option:some> nip

@@ -96,7 +96,7 @@ over-add: compile!
 
 "compile! nip pattern" test-section
 
-nip: ( a b -- b ) [ swap drop ] ;
+nip: override ( a b -- b ) [ swap drop ] ;
 nip: compile!
 3 10 nip 10 "nip 3 10" assert=
 

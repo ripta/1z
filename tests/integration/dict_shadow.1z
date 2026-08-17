@@ -1,0 +1,43 @@
+\ Dictionary-shadow guard tests: a top-level definition whose name resolves in the base scope --
+\ a below-floor frame or the native dictionary -- throws import-conflict unless it claims the
+\ `override` marker.
+
+use "testing" ;
+
+"top-level shadow of a native word" test-section
+
+[ "dict_shadow_conflict.1z" load ]
+EImportConflict "shadowing a native word throws import-conflict" assert-error-type
+
+"module top-level shadow of a prelude word" test-section
+
+[ "dict_shadow_prelude_conflict.1z" load ]
+EImportConflict "a module shadowing a prelude word throws import-conflict" assert-error-type
+
+"module top-level shadow inside a spawned task" test-section
+
+\ A task context reaches the prelude and the natives only through its ancestors, so the probe has
+\ to walk the parent chain for the guard to reach a task-loaded module.
+[ [ [ "dict_shadow_conflict.1z" load ] spawn await ] task-scope ]
+EImportConflict "a task-loaded module shadowing a native throws import-conflict" assert-error-type
+
+"a module may define a name the loading file also defines" test-section
+
+helper: ( -- string ) [ "entry" ] ;
+use { other-word: } "dict_shadow_privacy_mod.1z" ;
+helper "entry" "entry file's own word unchanged" assert=
+other-word "other" "selective import from the module works" assert=
+
+"a definition in a transient frame above the floor" test-section
+
+[ -: ( -- y ) [ 42 ] ; ] call
+3 1 - 2 "dictionary word untouched after the transient binding pops" assert=
+
+[ nip: ( -- y ) [ 42 ] ; nip ] call
+42 "transient binding over a prelude word resolves inside the quotation" assert=
+1 2 nip 2 "prelude word unchanged after the transient binding pops" assert=
+
+"override escapes the guard" test-section
+
+abs: override ( x -- y ) [ drop 7 ] ;
+-1 abs 7 "override definition wins" assert=

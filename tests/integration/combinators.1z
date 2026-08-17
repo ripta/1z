@@ -33,10 +33,10 @@ use "testing" ;
 { 1 2 3 4 5 } 0 [ drop 1 + ] #reduce 5 "array #reduce count" assert=
 
 "#reduce finding max/min" test-section
-max: ( a b -- max ) [ over over > [ drop ] [ swap drop ] if ] ;
-{ 3 7 2 9 1 } 0 [ max ] #reduce 9 "array #reduce max" assert=
-min: ( a b -- min ) [ over over < [ drop ] [ swap drop ] if ] ;
-{ 3 7 2 9 1 } 999 [ min ] #reduce 1 "array #reduce min" assert=
+bigger: ( a b -- max ) [ over over > [ drop ] [ swap drop ] if ] ;
+{ 3 7 2 9 1 } 0 [ bigger ] #reduce 9 "array #reduce max" assert=
+smaller: ( a b -- min ) [ over over < [ drop ] [ swap drop ] if ] ;
+{ 3 7 2 9 1 } 999 [ smaller ] #reduce 1 "array #reduce min" assert=
 
 "#reduce-index" test-section
 

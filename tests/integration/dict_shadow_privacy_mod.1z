@@ -1,0 +1,5 @@
+\ Companion module for dict_shadow.1z: defines its own `helper`, a name the loading file also
+\ defines. The entry file's frame is the durable floor, which the shadow probe excludes.
+
+helper: ( -- string ) [ "module" ] ;
+other-word: ( -- string ) [ "other" ] ;

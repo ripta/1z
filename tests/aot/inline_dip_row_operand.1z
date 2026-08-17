@@ -9,6 +9,6 @@
 \ reachable when `f` itself compiled. A regressed splice fails `f` instead,
 \ and the error becomes the compound-fallback inventory.
 
-f: ( q -- ) [ call 5 [ 1 + ] dip drop drop ] ;
+f: override ( q -- ) [ call 5 [ 1 + ] dip drop drop ] ;
 
 [ 7 ] f

@@ -11,7 +11,7 @@ double: ( n -- n ) [ 2 * ] ;
 \ Multi-line `if` with f64 arms to exercise control-flow boundary directives:
 \ same-type i64/bool scalar arms fold to a branchless select with no arm blocks,
 \ so float arms keep real IF_TRUE / IF_FALSE bodies for the `#line` check.
-abs: ( x -- x ) [
+abs: override ( x -- x ) [
   dup 0.0 <
   [ -1.0 * ]
   [ 0.0 + ]

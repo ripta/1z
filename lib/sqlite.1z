@@ -89,7 +89,7 @@ with-stmt: deprecated ( ..a db: db-handle sql: string quot: ( ..a stmt: stmt-han
 
 \\ Bind a value to a prepared statement parameter by index (1-based).
 \\ Dispatches on the value's type: fixnum, float, string, byte-array, or option:none.
-bind: ( stmt i value -- ) [ [ unmake-stmt-handle ] 2dip (bind) ] ;
+bind: override ( stmt i value -- ) [ [ unmake-stmt-handle ] 2dip (bind) ] ;
 
 \\ Bind against the unwrapped raw statement resource.
 (bind): ( stmt i value -- ) [

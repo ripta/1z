@@ -219,18 +219,14 @@ do-twice: ( quot -- ) [ dup call call ] ;
 "" print-line
 "=== Abstractions ===" print-line
 
-\ Check if zero
-zero?: ( n -- ? ) [ 0 = ] ;
-"Is 0 zero?" print-line 0 zero? .  \ t
-"Is 5 zero?" print-line 5 zero? .  \ f
-\ Check if positive
-positive?: ( n -- ? ) [ 0 > ] ;
-"Is 5 positive?" print-line 5 positive? .
-
-\ Check if negative
-negative?: ( n -- ? ) [ 0 < ] ;
-"Is -3 negative?" print-line 0 3 - negative? .
-
+\ Predicates follow the `name?` convention. The prelude already ships the
+\ common numeric ones:
+"Is 0 zero?" print-line 0 zero? .          \ t
+"Is 5 positive?" print-line 5 positive? .  \ t
+\ Define your own predicate for a domain concept
+freezing?: ( celsius -- ? ) [ 0 < ] ;
+"Is -3 freezing?" print-line -3 freezing? .  \ t
+"Is 20 freezing?" print-line 20 freezing? .  \ f
 \ Quadruple by composing double
 quadruple: ( n -- n ) [ double double ] ;
 "3 quadrupled:" print-line 3 quadruple .

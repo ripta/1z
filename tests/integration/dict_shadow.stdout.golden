@@ -1,0 +1,37 @@
+=== top-level shadow of a native word ===
+Stack: [ ]
+Stack: [ [ "dict_shadow_conflict.1z" load ] ]
+PASS: shadowing a native word throws import-conflict
+Stack: [ ]
+=== module top-level shadow of a prelude word ===
+Stack: [ ]
+Stack: [ [ "dict_shadow_prelude_conflict.1z" load ] ]
+PASS: a module shadowing a prelude word throws import-conflict
+Stack: [ ]
+=== module top-level shadow inside a spawned task ===
+Stack: [ ]
+Stack: [ [ [ [ "dict_shadow_conflict.1z" load ] spawn await ] task-scope ] ]
+PASS: a task-loaded module shadowing a native throws import-conflict
+Stack: [ ]
+=== a module may define a name the loading file also defines ===
+Stack: [ ]
+Stack: [ ]
+PASS: entry file's own word unchanged
+Stack: [ ]
+PASS: selective import from the module works
+Stack: [ ]
+=== a definition in a transient frame above the floor ===
+Stack: [ ]
+Stack: [ ]
+PASS: dictionary word untouched after the transient binding pops
+Stack: [ ]
+Stack: [ 42 ]
+PASS: transient binding over a prelude word resolves inside the quotation
+Stack: [ ]
+PASS: prelude word unchanged after the transient binding pops
+Stack: [ ]
+=== override escapes the guard ===
+Stack: [ ]
+Stack: [ ]
+PASS: override definition wins
+Stack: [ ]

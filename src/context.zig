@@ -3114,6 +3114,10 @@ pub const Context = struct {
         else
             self.dictionary.get(name);
 
+        const claims_override = for (definition.markers) |mk| {
+            if (markers_mod.isOverrideMarker(mk)) break true;
+        } else false;
+
         // The definition-side half of the import/definition collision guard: the import side is
         // `assert-no-shadow` in the prelude.
         //
@@ -3121,9 +3125,6 @@ pub const Context = struct {
         // frame bindings.
         if (same_scope_existing) |existing| {
             if (existing.imported) {
-                const claims_override = for (definition.markers) |mk| {
-                    if (markers_mod.isOverrideMarker(mk)) break true;
-                } else false;
                 if (!claims_override) {
                     self.pending_error_hint = "add the 'override' marker if intentional";
                     self.pending_error_message = if (existing.source_module) |sm|
@@ -3139,6 +3140,74 @@ pub const Context = struct {
                             .{name},
                         ) catch "definition would overwrite an imported word";
                     return error.ImportConflict;
+                }
+            }
+        }
+
+        // The dictionary-shadow half of the collision guard: a top-level definition whose name is
+        // absent from its own frame but resolves in the base scope, which is the frames below the
+        // durable floor, today the prelude frame, plus the native dictionary.
+        //
+        // The gate is the import-target frame rather than the floor itself. A runtime load moves
+        // only the import target and leaves the floor behind, so a module's own top level is
+        // guarded, while the floor bounds the probe so the entry file's frame stays out of it. A
+        // module defining a name the loading file also defines is therefore not a collision.
+        // Word-body and quotation frames sit above the import target, so a transient binding named
+        // like a prelude word stays legal.
+        //
+        // The probe walks the ancestor chain the way `lookupWordLocked` does, because a task
+        // context has a null floor and an empty dictionary: a load inside a spawned task reaches
+        // the prelude and the natives only through its ancestors, and its module is
+        // process-lifetime, so the shadow is as durable as one made on the main task.
+        if (same_scope_existing == null and !claims_override) {
+            if (target_frame_index) |ti| {
+                if (self.import_frame_index) |ifi| {
+                    if (ti == ifi) {
+                        var frame_hit: ?WordDefinition = null;
+                        var dict_hit = false;
+                        var ctx_iter: ?*const Context = self;
+                        probe: while (ctx_iter) |c| : (ctx_iter = c.parent_context) {
+                            if (c.durable_frame_floor) |floor| {
+                                for (c.local_frames.items[0..floor]) |frame| {
+                                    if (frame.get(name)) |d| {
+                                        frame_hit = d;
+                                        break :probe;
+                                    }
+                                }
+                            }
+                            if (c.dictionary.get(name) != null) {
+                                dict_hit = true;
+                                break :probe;
+                            }
+                        }
+
+                        if (frame_hit) |sh| {
+                            self.pending_error_hint = "add the 'override' marker if intentional";
+                            self.pending_error_message = if (sh.source_file) |src|
+                                std.fmt.allocPrint(
+                                    self.arena.allocator(),
+                                    "defining '{s}' would shadow a word from \"{s}\"",
+                                    .{ name, src },
+                                ) catch "definition would shadow an existing word"
+                            else
+                                std.fmt.allocPrint(
+                                    self.arena.allocator(),
+                                    "defining '{s}' would shadow an existing word",
+                                    .{name},
+                                ) catch "definition would shadow an existing word";
+                            return error.ImportConflict;
+                        }
+
+                        if (dict_hit) {
+                            self.pending_error_hint = "add the 'override' marker if intentional";
+                            self.pending_error_message = std.fmt.allocPrint(
+                                self.arena.allocator(),
+                                "defining '{s}' would shadow a native word",
+                                .{name},
+                            ) catch "definition would shadow a native word";
+                            return error.ImportConflict;
+                        }
+                    }
                 }
             }
         }

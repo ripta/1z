@@ -8,7 +8,7 @@ use "math/packed" ;
 
 "redefined arithmetic word disables recognition" test-section
 
-/: ( a b -- c ) [ drop drop 7.0 ] ;
+/: override ( a b -- c ) [ drop drop 7.0 ] ;
 { 1.0 2.0 } >packed:f64 [ 2.0 / ] #map #collect { 7.0 7.0 } "redefinition honored per element" assert=
 
 "user method on float arithmetic disables recognition" test-section

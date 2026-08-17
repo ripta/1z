@@ -630,7 +630,7 @@ resolve(rfc3986): ( uri string -- uri ) [ t (resolve-impl) ] ;
 resolve(whatwg): ( uri string -- uri ) [ f (resolve-impl) ] ;
 
 \\ Default resolver: strict RFC 3986. Equivalent to `resolve(rfc3986)`.
-resolve: ( uri string -- uri ) [ resolve(rfc3986) ] ;
+resolve: override ( uri string -- uri ) [ resolve(rfc3986) ] ;
 
 \ === Serialization ===
 

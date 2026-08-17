@@ -7,12 +7,12 @@ use "time" ;
 
 dir-entry:      struct{ name: string type: symbol } ;
 file-info-data: struct{ size: fixnum type: symbol modified: timestamp accessed: timestamp permissions: fixnum } ;
-file-info:      virtual{ file-info-data } ;
+file-info:      override virtual{ file-info-data } ;
 
 \ Directory listing
 
 \\ List directory entries as an array of dir-entry structs.
-list-directory: ( path -- array ) [
+list-directory: override ( path -- array ) [
   native.list-directory
   [ dup #first swap #last make-dir-entry ] #map #collect
 ] ;

@@ -1,2 +1,2 @@
 \ Test helper module that exports a word with the same name as a prelude word
-nip: [ "custom nip" ] ;
+nip: override [ "custom nip" ] ;

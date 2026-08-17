@@ -5,7 +5,7 @@
 sub10: ( x -- y ) [ 10.0 - ] ;
 1.0 sub10 .
 
--: ( a b -- c ) [ drop drop 7.0 ] ;
+-: override ( a b -- c ) [ drop drop 7.0 ] ;
 
 \ The pre-resolved site keeps the native for a warm float pair and a cold mixed pair alike.
 1.0 sub10 .

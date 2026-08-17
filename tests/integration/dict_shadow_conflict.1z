@@ -1,0 +1,3 @@
+\ A top-level definition shadowing a dictionary native aborts with an import-conflict.
+
+dup: ( -- x ) [ 0 ] ;

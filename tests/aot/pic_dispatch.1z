@@ -5,17 +5,17 @@
 
 add-nums: ( a b -- c ) [ + ] ;
 mul-nums: ( a b -- c ) [ * ] ;
-cmp: ( a b -- ? ) [ = ] ;
+eq-nums:  ( a b -- ? ) [ = ] ;
 
 \ Fixnum pairs: PIC-eligible, seeded during freeze
 1 2 add-nums .
 3 4 mul-nums .
-5 5 cmp .
+5 5 eq-nums .
 
 \ Float pairs: separate PIC entry
 1.5 2.5 add-nums .
 2.0 3.0 mul-nums .
-4.0 4.0 cmp .
+4.0 4.0 eq-nums .
 
 \ Mixed: exercises the slow path when PIC misses
 3 2.5 add-nums .

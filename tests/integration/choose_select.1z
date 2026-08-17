@@ -25,16 +25,16 @@ os-tag "linux" "selected branch defines at module scope" assert=
 \ A matching key earlier in the list wins; a later `_` does not override it.
 macos: choose{
   linux: [
-    pick: [ 1 ] ;
+    picked: [ 1 ] ;
   ]
   macos: [
-    pick: [ 2 ] ;
+    picked: [ 2 ] ;
   ]
   _ [
-    pick: [ 9 ] ;
+    picked: [ 9 ] ;
   ]
 }
-pick 2 "first matching key wins over a trailing _" assert=
+picked 2 "first matching key wins over a trailing _" assert=
 
 "choose unselected parse-time words never fire" test-section
 

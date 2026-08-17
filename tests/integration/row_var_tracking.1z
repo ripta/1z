@@ -15,9 +15,9 @@ weird-while: ( n -- n n ) [ [ dup dup 10 < ] [ drop 1 + ] while ] ;
 "row variable inference through if" test-section
 
 \ if with matched branches
-choose: ( n -- n ) [ dup 5 > [ 1 + ] [ 1 - ] if ] ;
-3 choose 2 "if below threshold" assert=
-7 choose 8 "if above threshold" assert=
+nudge: ( n -- n ) [ dup 5 > [ 1 + ] [ 1 - ] if ] ;
+3 nudge 2 "if below threshold" assert=
+7 nudge 8 "if above threshold" assert=
 
 "when with intentional no-op false branch" test-section
 

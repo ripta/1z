@@ -172,10 +172,14 @@ fn nativeDefineVirtual(ctx: *Context) anyerror!void {
             tv.virtual_type = vtype;
 
             // NAME: ( -- type ) - the virtual type itself pushing a TypeValue
-            const type_markers = try alloc.alloc(*Marker, 3);
+            //
+            // User-written markers ride along so the declared name can claim `override` when it
+            // shadows a base-scope word.
+            const type_markers = try alloc.alloc(*Marker, 3 + markers_slice.len);
             type_markers[0] = @constCast(&markers_mod.parse_time_marker);
             type_markers[1] = @constCast(&markers_mod.const_marker);
             type_markers[2] = @constCast(&markers_mod.typed_marker);
+            @memcpy(type_markers[3..], markers_slice);
 
             const type_instrs = try alloc.alloc(Instruction, 1);
             type_instrs[0] = .{ .op = .{ .push_literal = .{ .type_val = tv } }, .line = 0 };
@@ -259,10 +263,14 @@ fn nativeDefineVirtual(ctx: *Context) anyerror!void {
             tv.virtual_type = vtype;
 
             // NAME: ( -- type ) - the virtual type itself pushing a TypeValue
-            const type_markers = try alloc.alloc(*Marker, 3);
+            //
+            // User-written markers ride along so the declared name can claim `override` when it
+            // shadows a base-scope word.
+            const type_markers = try alloc.alloc(*Marker, 3 + markers_slice.len);
             type_markers[0] = @constCast(&markers_mod.parse_time_marker);
             type_markers[1] = @constCast(&markers_mod.const_marker);
             type_markers[2] = @constCast(&markers_mod.typed_marker);
+            @memcpy(type_markers[3..], markers_slice);
 
             const type_instrs = try alloc.alloc(Instruction, 1);
             type_instrs[0] = .{ .op = .{ .push_literal = .{ .type_val = tv } }, .line = 0 };

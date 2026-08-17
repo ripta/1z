@@ -51,7 +51,7 @@ printable: protocol{ inspect: } ;
 
 my-label: virtual{ string } ;
 
-inspect: generic ( val -- str ) [ drop "" ] ;
+inspect: generic override ( val -- str ) [ drop "" ] ;
 
 inspect: method{ my-label } [
   unmake-my-label

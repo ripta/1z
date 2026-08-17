@@ -1,0 +1,5 @@
+\ A top-level definition shadowing a prelude word aborts the same way; the message names the
+\ prelude as the origin. Also loaded by dict_shadow.1z, so the same collision is pinned at a
+\ loaded module's own top level.
+
+nip: ( x y -- y ) [ swap drop ] ;

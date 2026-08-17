@@ -4,12 +4,12 @@
 \ A binding named `-` in the caller leaves arithmetic intact in an unrelated word further down
 \ the call stack.
 victim: ( -- x ) [ 100.0 40.0 - ] ;
-caller: ( -- x ) [ -: [ drop drop 99.0 ] ; victim ] ;
+caller: ( -- x ) [ -: override [ drop drop 99.0 ] ; victim ] ;
 
 \ The prelude computes with its own words under the shadow: the quotation is written where `-`
 \ still means the native, and `#map` runs it under a frame that binds `-` to something else.
 inner-sub: ( -- a ) [ { 1 2 3 } [ 1 - ] #map #collect ] ;
-with-shadow: ( -- a ) [ -: [ drop drop 0 ] ; inner-sub ] ;
+with-shadow: ( -- a ) [ -: override [ drop drop 0 ] ; inner-sub ] ;
 
 victim .
 caller .
@@ -19,17 +19,17 @@ with-shadow .
 \ below reaches an entry the native's fallthrough would not reproduce, so a captured identity shows
 \ up as a different value or an error rather than as the same answer by another route.
 len-victim: ( -- n ) [ { 1 2 3 } #len ] ;
-len-caller: ( -- n ) [ #len: [ drop 0 ] ; len-victim ] ;
+len-caller: ( -- n ) [ #len: override [ drop 0 ] ; len-victim ] ;
 
 \ `>string` on a symbol drops the trailing colon its fallthrough writer keeps.
 string-victim: ( -- s ) [ foo: >string ] ;
-string-caller: ( -- s ) [ >string: [ drop "shadowed" ] ; string-victim ] ;
+string-caller: ( -- s ) [ >string: override [ drop "shadowed" ] ; string-victim ] ;
 
 get-victim: ( -- n ) [ H{ a: 1 } a: @get ] ;
-get-caller: ( -- n ) [ @get: [ drop drop 0 ] ; get-victim ] ;
+get-caller: ( -- n ) [ @get: override [ drop drop 0 ] ; get-victim ] ;
 
 bitand-victim: ( -- n ) [ 12 10 bitand ] ;
-bitand-caller: ( -- n ) [ bitand: [ drop drop 0 ] ; bitand-victim ] ;
+bitand-caller: ( -- n ) [ bitand: override [ drop drop 0 ] ; bitand-victim ] ;
 
 len-victim .
 len-caller .
@@ -46,12 +46,12 @@ bitand-caller .
 vector(fixnum): M{ inner-type: vector element-type: fixnum define: [ define-parameterized-type ] } ;
 
 push-victim: ( -- s ) [ V{ 1 2 } >vector(fixnum) 3 #push! type-name ] ;
-push-caller: ( -- s ) [ #push!: [ drop ] ; push-victim ] ;
+push-caller: ( -- s ) [ #push!: override [ drop ] ; push-victim ] ;
 
 \ A typed arm that delegates back to the raw native has to reach it by identity too, or the caller's
 \ binding answers in the raw native's place.
 nth-mut-victim: ( -- n ) [ V{ 1 2 } >vector(fixnum) 0 99 #nth! unmake-vector(fixnum) 0 #nth ] ;
-nth-mut-caller: ( -- n ) [ #nth!: [ drop drop drop 0 ] ; nth-mut-victim ] ;
+nth-mut-caller: ( -- n ) [ #nth!: override [ drop drop drop 0 ] ; nth-mut-victim ] ;
 
 push-victim .
 push-caller .

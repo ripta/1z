@@ -1,12 +1,12 @@
 \ A live binding of a native's name must not change the effect the native's own raise reports.
-\ `victim`'s `-` is pre-resolved to the dictionary native, and the caller's frame binding named
-\ `-` is still live when the raise is captured; the effect row is the native's own
-\ `( a b -- a-b )`, not the binding's `( a b -- c )`.
+\ `victim`'s `-` is pre-resolved to the native before the binding exists, and the binding is live in
+\ the file's frame at capture; the row is the native's `( a b -- a-b )`, not the binding's
+\ `( a b -- c )`. The binding sits at top level; a marker inside `caller` would block AOT compilation.
 \
 \ The interpreter, eager, and AOT runs of this program must render the chain frame for frame
 \ identically; the AOT suite builds this file through a `.source` redirect and diffs the same golden.
 
 victim: ( -- x ) [ "x" 40.0 - 1.0 + ] ;
-caller: ( -- x ) [ -: ( a b -- c ) [ drop drop 99.0 ] ; victim 2.0 + ] ;
-
+caller: ( -- x ) [ victim 2.0 + ] ;
+-: override ( a b -- c ) [ drop drop 99.0 ] ;
 caller .
