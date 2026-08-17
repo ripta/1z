@@ -1,0 +1,10 @@
+1
+<repl>:4: error 'import-conflict' defining 'dup' would shadow a native word at word ';'
+  stack effect: ( name quot --  )
+  hint: add the 'override' marker if intentional
+7
+9
+<repl>:10: error 'import-conflict' defining 'now' would overwrite a word imported from "time" at word ';'
+  stack effect: ( name quot --  )
+  hint: add the 'override' marker if intentional
+f

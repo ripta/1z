@@ -41,3 +41,18 @@ other-word "other" "selective import from the module works" assert=
 
 abs: override ( x -- y ) [ drop 7 ] ;
 -1 abs 7 "override definition wins" assert=
+
+"generic-on-generic shadows are exempt" test-section
+
+use { probe-shadowed-index: probe-shadowed-empty: } "dict_shadow_generic_mod.1z" ;
+probe-shadowed-index 42 "generic definition over a generic native defines" assert=
+probe-shadowed-empty t "generic definition over a generic prelude word defines" assert=
+{ 1 2 } 3 #index-of f "native #index-of unchanged outside the module" assert=
+
+"asymmetric generic shadows still throw" test-section
+
+[ "dict_shadow_generic_over_plain_conflict.1z" load ]
+EImportConflict "generic definition over a plain prelude word throws" assert-error-type
+
+[ "dict_shadow_plain_over_generic_conflict.1z" load ]
+EImportConflict "plain definition over a generic native throws" assert-error-type

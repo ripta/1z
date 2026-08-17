@@ -1,0 +1,3 @@
+\ Module fixture: a const word whose marker must travel into the importing scope.
+
+LIMIT: const 42 ;

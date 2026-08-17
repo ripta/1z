@@ -327,6 +327,14 @@ fn computeExecFlags(def: WordDefinition) dict_mod.ExecFlags {
     return flags;
 }
 
+/// Whether a definition's marker slice carries the `generic` marker.
+fn markersContainGeneric(markers: []const *value_mod.Marker) bool {
+    for (markers) |mk| {
+        if (markers_mod.isGenericMarker(mk)) return true;
+    }
+    return false;
+}
+
 /// PragmaRegistration holds metadata for a registered pragma key.
 /// If both validators are null, the pragma accepts only boolean values.
 /// If validator is a quotation, it is called with the value on the stack
@@ -3118,13 +3126,20 @@ pub const Context = struct {
             if (markers_mod.isOverrideMarker(mk)) break true;
         } else false;
 
+        // Both guards below skip when the existing and incoming words are both generic: two
+        // generics of one name are one extension point.
+        //
+        // Unlike the import sink, the exemption skips the guard rather than the write, so the
+        // definition still defines.
+        const incoming_generic = markersContainGeneric(definition.markers);
+
         // The definition-side half of the import/definition collision guard: the import side is
         // `assert-no-shadow` in the prelude.
         //
         // Same-scope only. The dictionary is never the target of an import, so this fires only on
         // frame bindings.
         if (same_scope_existing) |existing| {
-            if (existing.imported) {
+            if (existing.imported and !(incoming_generic and markersContainGeneric(existing.markers))) {
                 if (!claims_override) {
                     self.pending_error_hint = "add the 'override' marker if intentional";
                     self.pending_error_message = if (existing.source_module) |sm|
@@ -3164,7 +3179,7 @@ pub const Context = struct {
                 if (self.import_frame_index) |ifi| {
                     if (ti == ifi) {
                         var frame_hit: ?WordDefinition = null;
-                        var dict_hit = false;
+                        var dict_hit: ?WordDefinition = null;
                         var ctx_iter: ?*const Context = self;
                         probe: while (ctx_iter) |c| : (ctx_iter = c.parent_context) {
                             if (c.durable_frame_floor) |floor| {
@@ -3175,37 +3190,41 @@ pub const Context = struct {
                                     }
                                 }
                             }
-                            if (c.dictionary.get(name) != null) {
-                                dict_hit = true;
+                            if (c.dictionary.get(name)) |d| {
+                                dict_hit = d;
                                 break :probe;
                             }
                         }
 
                         if (frame_hit) |sh| {
-                            self.pending_error_hint = "add the 'override' marker if intentional";
-                            self.pending_error_message = if (sh.source_file) |src|
-                                std.fmt.allocPrint(
-                                    self.arena.allocator(),
-                                    "defining '{s}' would shadow a word from \"{s}\"",
-                                    .{ name, src },
-                                ) catch "definition would shadow an existing word"
-                            else
-                                std.fmt.allocPrint(
-                                    self.arena.allocator(),
-                                    "defining '{s}' would shadow an existing word",
-                                    .{name},
-                                ) catch "definition would shadow an existing word";
-                            return error.ImportConflict;
+                            if (!(incoming_generic and markersContainGeneric(sh.markers))) {
+                                self.pending_error_hint = "add the 'override' marker if intentional";
+                                self.pending_error_message = if (sh.source_file) |src|
+                                    std.fmt.allocPrint(
+                                        self.arena.allocator(),
+                                        "defining '{s}' would shadow a word from \"{s}\"",
+                                        .{ name, src },
+                                    ) catch "definition would shadow an existing word"
+                                else
+                                    std.fmt.allocPrint(
+                                        self.arena.allocator(),
+                                        "defining '{s}' would shadow an existing word",
+                                        .{name},
+                                    ) catch "definition would shadow an existing word";
+                                return error.ImportConflict;
+                            }
                         }
 
-                        if (dict_hit) {
-                            self.pending_error_hint = "add the 'override' marker if intentional";
-                            self.pending_error_message = std.fmt.allocPrint(
-                                self.arena.allocator(),
-                                "defining '{s}' would shadow a native word",
-                                .{name},
-                            ) catch "definition would shadow a native word";
-                            return error.ImportConflict;
+                        if (dict_hit) |d| {
+                            if (!(incoming_generic and markersContainGeneric(d.markers))) {
+                                self.pending_error_hint = "add the 'override' marker if intentional";
+                                self.pending_error_message = std.fmt.allocPrint(
+                                    self.arena.allocator(),
+                                    "defining '{s}' would shadow a native word",
+                                    .{name},
+                                ) catch "definition would shadow a native word";
+                                return error.ImportConflict;
+                            }
                         }
                     }
                 }
@@ -3527,13 +3546,7 @@ pub const Context = struct {
                 }
             }
 
-            const existing_generic = for (existing.markers) |mk| {
-                if (markers_mod.isGenericMarker(mk)) break true;
-            } else false;
-            const incoming_generic = for (definition.markers) |mk| {
-                if (markers_mod.isGenericMarker(mk)) break true;
-            } else false;
-            if (existing_generic and incoming_generic) {
+            if (markersContainGeneric(existing.markers) and markersContainGeneric(definition.markers)) {
                 return;
             }
 

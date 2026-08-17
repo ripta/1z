@@ -35,3 +35,19 @@ Stack: [ ]
 Stack: [ ]
 PASS: override definition wins
 Stack: [ ]
+=== generic-on-generic shadows are exempt ===
+Stack: [ ]
+PASS: generic definition over a generic native defines
+Stack: [ ]
+PASS: generic definition over a generic prelude word defines
+Stack: [ ]
+PASS: native #index-of unchanged outside the module
+Stack: [ ]
+=== asymmetric generic shadows still throw ===
+Stack: [ ]
+Stack: [ [ "dict_shadow_generic_over_plain_conflict.1z" load ] ]
+PASS: generic definition over a plain prelude word throws
+Stack: [ ]
+Stack: [ [ "dict_shadow_plain_over_generic_conflict.1z" load ] ]
+PASS: plain definition over a generic native throws
+Stack: [ ]

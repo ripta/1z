@@ -28,3 +28,19 @@ taken 1 "override definition wins" assert=
 private{ (helper): ( -- string ) [ "private" ] ; }
 (helper): override ( -- string ) [ "public" ] ;
 (helper) "public" "override definition wins over a private word" assert=
+
+"generic-on-generic is exempt" test-section
+
+\ The exemption skips the guard, not the write: unlike the import path, which drops the
+\ incoming binding, the definition still defines and wins.
+use { gpick: } "def_over_import_generic_mod.1z" ;
+gpick: generic ( a -- b ) [ drop 2 ] ;
+0 gpick 2 "generic definition over a generic import defines and wins" assert=
+
+"asymmetric generic collisions still throw" test-section
+
+[ "def_over_import_generic_over_plain_conflict.1z" load ]
+EImportConflict "generic definition over a plain import throws" assert-error-type
+
+[ "def_over_import_plain_over_generic_conflict.1z" load ]
+EImportConflict "plain definition over a generic import throws" assert-error-type

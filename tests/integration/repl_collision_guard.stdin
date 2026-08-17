@@ -1,0 +1,12 @@
+counter: ( -- n ) [ 0 ] ;
+counter: ( -- n ) [ 1 ] ;
+counter >string print-line
+dup: ( x -- x x ) [ ] ;
+dup: override ( x -- y ) [ drop 7 ] ;
+1 dup >string print-line
+abs: generic ( n -- n ) [ drop 9 ] ;
+-1 abs >string print-line
+use "time" ;
+now: ( -- t ) [ f ] ;
+now: override ( -- t ) [ f ] ;
+now >string print-line

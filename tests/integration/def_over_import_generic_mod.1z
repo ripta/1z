@@ -1,0 +1,4 @@
+\ Module fixture for the generic-on-generic exemption: a generic word another file imports and
+\ then lands a definition on.
+
+gpick: generic ( a -- b ) [ drop 1 ] ;

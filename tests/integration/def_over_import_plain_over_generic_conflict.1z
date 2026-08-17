@@ -1,0 +1,6 @@
+\ A plain definition landing on a generic import still throws: the exemption requires both
+\ sides generic.
+
+use { gpick: } "def_over_import_generic_mod.1z" ;
+
+gpick: ( a -- b ) [ drop 3 ] ;

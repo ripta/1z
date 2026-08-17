@@ -21,3 +21,16 @@ Stack: [ ]
 Stack: [ ]
 PASS: override definition wins over a private word
 Stack: [ ]
+=== generic-on-generic is exempt ===
+Stack: [ ]
+Stack: [ ]
+PASS: generic definition over a generic import defines and wins
+Stack: [ ]
+=== asymmetric generic collisions still throw ===
+Stack: [ ]
+Stack: [ [ "def_over_import_generic_over_plain_conflict.1z" load ] ]
+PASS: generic definition over a plain import throws
+Stack: [ ]
+Stack: [ [ "def_over_import_plain_over_generic_conflict.1z" load ] ]
+PASS: plain definition over a generic import throws
+Stack: [ ]

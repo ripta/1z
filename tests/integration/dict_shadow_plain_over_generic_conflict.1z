@@ -1,0 +1,4 @@
+\ A plain definition over a generic native still throws: the exemption requires both sides
+\ generic.
+
+#peek: ( bytes offset width -- fixnum ) [ 2drop drop 0 ] ;

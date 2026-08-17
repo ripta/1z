@@ -1,0 +1,4 @@
+\ Placeholder: argv-mode test drives a piped repl session from repl_collision_guard.stdin;
+\ this file is not executed. It pins that both definition-side guards fire at the repl
+\ exactly as they do in a file, that override escapes them, and that the generic-on-generic
+\ exemption holds.

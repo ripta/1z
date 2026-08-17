@@ -1,0 +1,21 @@
+\ The const guard is absolute: it runs before the override read, so an override claim never
+\ escapes it, and an imported word's const marker keeps blocking in the importing scope.
+
+use "testing" ;
+
+"const beats an override claim" test-section
+
+TEST-CONST: const 3 ;
+[ TEST-CONST: override 4 ; ]
+ECannotRedefineConst "override does not escape const" assert-error-type
+
+"imported const blocks absolutely" test-section
+
+use { LIMIT: } "const_import_mod.1z" ;
+LIMIT 42 "imported const value" assert=
+
+[ LIMIT: 99 ; ]
+ECannotRedefineConst "plain redefinition of an imported const throws" assert-error-type
+
+[ LIMIT: override 99 ; ]
+ECannotRedefineConst "override redefinition of an imported const throws" assert-error-type

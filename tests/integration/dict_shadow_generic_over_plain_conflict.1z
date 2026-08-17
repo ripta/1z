@@ -1,0 +1,4 @@
+\ A generic definition over a plain prelude word still throws: the exemption requires both
+\ sides generic.
+
+nip: generic ( x y -- y ) [ swap drop ] ;

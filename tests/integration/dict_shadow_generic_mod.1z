@@ -1,0 +1,9 @@
+\ Module fixture for the generic-on-generic exemption: generic definitions over a generic
+\ native (#index-of, a dictionary hit) and a generic prelude word (#empty?, a below-floor
+\ frame hit), confined to this module's own frame.
+
+#index-of: generic ( seq elem -- n/f ) [ 2drop 42 ] ;
+#empty?: generic ( seq -- ? ) [ drop t ] ;
+
+probe-shadowed-index: ( -- n ) [ f f #index-of ] ;
+probe-shadowed-empty: ( -- ? ) [ 5 #empty? ] ;

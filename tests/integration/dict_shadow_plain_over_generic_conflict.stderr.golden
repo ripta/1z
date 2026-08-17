@@ -1,0 +1,3 @@
+tests/integration/dict_shadow_plain_over_generic_conflict.1z:4: error 'import-conflict' defining '#peek' would shadow a native word at word ';'
+  stack effect: ( name quot --  )
+  hint: add the 'override' marker if intentional

@@ -1,0 +1,16 @@
+=== const beats an override claim ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ [ TEST-CONST: <marker:override> 4 ; ] ]
+PASS: override does not escape const
+Stack: [ ]
+=== imported const blocks absolutely ===
+Stack: [ ]
+PASS: imported const value
+Stack: [ ]
+Stack: [ [ LIMIT: 99 ; ] ]
+PASS: plain redefinition of an imported const throws
+Stack: [ ]
+Stack: [ [ LIMIT: <marker:override> 99 ; ] ]
+PASS: override redefinition of an imported const throws
+Stack: [ ]

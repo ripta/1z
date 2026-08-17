@@ -1,0 +1,6 @@
+\ A generic definition landing on a plain import still throws: the exemption requires both
+\ sides generic.
+
+use { taken: } "def_over_import_mod.1z" ;
+
+taken: generic ( -- fixnum ) [ 1 ] ;
