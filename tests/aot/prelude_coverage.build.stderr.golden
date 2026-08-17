@@ -1,14 +1,14 @@
-Prelude compilation: 457/458 words compiled (99.8%)
+Prelude compilation: 458/459 words compiled (99.8%)
   word 'pragma-get?' cannot be compiled
       NC.13: word body underflows the abstract stack (row-variable effects)
       hint: blocked until row-variable stack regions can be modeled
 Quotation bodies compiled: 0
-Inline PIC sites: 89/266 generic call sites preseeded
-AOT interpreter fallbacks: 303 total
+Inline PIC sites: 90/269 generic call sites preseeded
+AOT interpreter fallbacks: 304 total
   native: 243
   per-op-native: 42
   compound-uncompiled: 1
-  quotation: 17
+  quotation: 18
   sites:
     native: nan? -> = (line 444)
     quotation: run-benchmarks -> <quotation> (line 1210)
@@ -26,8 +26,8 @@ AOT interpreter fallbacks: 303 total
     native: #ends-with? -> #len (line 1274)
     native: #ends-with? -> #len (line 1274)
     per-op-native: #ends-with? -> - (line 1274)
-    ... 287 more
-  static-check: jitInterpretedCall=1/1 jitNativeWordCall=285/285 jitCallQuotation=17/17 (matches build-time inventory)
+    ... 288 more
+  static-check: jitInterpretedCall=1/1 jitNativeWordCall=285/285 jitCallQuotation=18/18 (matches build-time inventory)
 Warning: '4keep' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
 Warning: 'try' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
 Warning: 'bi' parameter 'p' has row-variable effect; quotation call falls back to interpreter

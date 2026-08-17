@@ -1,0 +1,4 @@
+\ Companion module for override_marker. Defines a word carrying the override marker so the runtime
+\ image serializes a word-level override marker.
+
+marked-word: override ( -- n ) [ 42 ] ;

@@ -1,0 +1,35 @@
+\ private{ shadow check tests
+
+use "testing" ;
+
+\ === Conflicting private block errors ===
+"A private definition colliding with an existing word errors" test-section
+
+pub-word: ( -- s ) [ "public" ] ;
+[ private{ pub-word: [ "private" ] ; sibling-helper: [ 1 ] ; } ]
+[ error-type: @get EImportConflict "conflicting private{ throws import-conflict" assert= ] recover
+drop  \ the failed private block leaves the snapshot module behind
+\ === A failing private block writes nothing ===
+"A failing private{ imports none of the block's words" test-section
+
+"sibling-helper" native.locally-defined? f "non-conflicting word not imported by failed private{" assert=
+pub-word "public" "existing word unchanged after failed private{" assert=
+
+\ === private(shadow-ok){ suppresses the error ===
+"private(shadow-ok){ suppresses the shadow check" test-section
+
+private(shadow-ok){ pub-word: ( -- s ) [ "private" ] ; }
+pub-word "private" "shadow-ok private block overrides" assert=
+
+\ === An import over a private word conflicts ===
+"A public import landing on a private word errors" test-section
+
+private{ greet: ( -- s ) [ "local" ] ; }
+[ "use \"strict_use_mod_a.1z\" ;" eval-string ] "importing over a private word errors" assert-error
+greet "local" "private word survives the failed import" assert=
+
+\ === A misspelled valve variant is an unknown word ===
+"A misspelled shadow-ok variant is rejected" test-section
+
+[ "private(shadowok){" eval-string ] unknown-word: "misspelled variant is an unknown word" assert-error-type
+[ "private(shadowok){ x: [ 1 ] ; }" eval-string ] "misspelled variant block is rejected" assert-error

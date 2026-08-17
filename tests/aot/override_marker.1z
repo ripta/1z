@@ -1,0 +1,13 @@
+\ Exercises the well-known override marker under runtime-image AOT. The freshly-pushed marker must
+\ compare equal to the one serialized onto the module word's definition: the image loader resolves
+\ the serialized marker through lookupWellKnownMarker back to the static singleton, preserving
+\ freeze->runtime pointer identity.
+\
+\ The marked word lives in a companion module because the image carries module words only; an
+\ entry-file definition would not be serialized at all.
+
+use "./support/override_marked.1z" ;
+
+marked-word 42 = .
+override override = .
+"marked-word" word-markers [ override = ] #filter #count 0 > .

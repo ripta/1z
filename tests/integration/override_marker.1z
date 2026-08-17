@@ -1,0 +1,16 @@
+\ Test that the override marker pushes with pointer identity, parses on a word definition, and
+\ round-trips through word-markers.
+
+use "testing" ;
+
+"override marker identity" test-section
+
+override override =
+t "override marker has pointer identity" assert=
+
+"override on user-defined words" test-section
+
+marked-word: override ( -- n ) [ 42 ] ;
+marked-word 42 "marked word still runs" assert=
+"marked-word" word-markers [ override = ] #filter #count 1 =
+t "user word carries override" assert=

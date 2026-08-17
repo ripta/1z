@@ -1521,6 +1521,20 @@ local-scope: ( -- module ) [ native.local-scope ] ;
 \\ definitions become private helpers visible to the module's own public words but not to importers.
 import-locals: ( quotation -- ) [ [ local-scope ] compose call import ] ;
 
+\ `import-locals` with the shadow check between the snapshot and the import: the runtime half of
+\ `private{`.
+(import-locals-checked): ( quotation -- ) [
+  [ local-scope ] compose call
+  dup dup @keys "private{" assert-no-shadow
+  import
+] ;
+
+\\ Block-syntax sugar over `import-locals`, skipping the shadow check.
+\\
+\\ Inside `private(shadow-ok){ ... }`, ordinary `name: [ ... ] ;` definitions become private
+\\ helpers of the enclosing module, overwriting any existing words of the same name.
+private(shadow-ok){: parse-time [ "}" parse-until import-locals: emit-call ] ;
+
 \\ Block-syntax sugar over `import-locals`.
 \\
 \\ Inside `private{ ... }`, ordinary `name: [ ... ] ;` definitions become private helpers of the
@@ -1531,7 +1545,10 @@ import-locals: ( quotation -- ) [ [ local-scope ] compose call import ] ;
 \\   }
 \\
 \\   foo: ( -- string ) [ (helper) ] ;
-private{: parse-time [ "}" parse-until import-locals: emit-call ] ;
+\\
+\\ Throws import-conflict when a name would shadow an existing local word.
+\\ Use `private(shadow-ok){ ... }` to suppress the shadow check.
+private{: parse-time [ "}" parse-until (import-locals-checked): emit-call ] ;
 
 \\ Safe variant of >word-info that returns an option instead of throwing.
 >word-info?: ( symbol -- option ) [ [ >word-info >option:some ] [ drop option:none ] recover ] ;

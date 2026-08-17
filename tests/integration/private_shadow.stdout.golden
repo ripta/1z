@@ -1,0 +1,31 @@
+=== A private definition colliding with an existing word errors ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ [ [ pub-word: [ "private" ] ; sibling-helper: [ 1 ] ; ] (import-locals-checked) ] ]
+PASS: conflicting private{ throws import-conflict
+Stack: [ <module:<local-scope> (2 words)> ]
+Stack: [ ]
+=== A failing private{ imports none of the block's words ===
+Stack: [ ]
+PASS: non-conflicting word not imported by failed private{
+Stack: [ ]
+PASS: existing word unchanged after failed private{
+Stack: [ ]
+=== private(shadow-ok){ suppresses the shadow check ===
+Stack: [ ]
+Stack: [ ]
+PASS: shadow-ok private block overrides
+Stack: [ ]
+=== A public import landing on a private word errors ===
+Stack: [ ]
+Stack: [ ]
+PASS: importing over a private word errors
+Stack: [ ]
+PASS: private word survives the failed import
+Stack: [ ]
+=== A misspelled shadow-ok variant is rejected ===
+Stack: [ ]
+PASS: misspelled variant is an unknown word
+Stack: [ ]
+PASS: misspelled variant block is rejected
+Stack: [ ]

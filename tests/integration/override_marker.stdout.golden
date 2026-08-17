@@ -1,0 +1,13 @@
+=== override marker identity ===
+Stack: [ ]
+Stack: [ t ]
+PASS: override marker has pointer identity
+Stack: [ ]
+=== override on user-defined words ===
+Stack: [ ]
+Stack: [ ]
+PASS: marked word still runs
+Stack: [ ]
+Stack: [ t ]
+PASS: user word carries override
+Stack: [ ]

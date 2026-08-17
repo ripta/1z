@@ -54,6 +54,10 @@ pub const partial_dispatch_marker: Marker = .{ .name = "partial-dispatch" };
 /// When present on a `use` invocation, suppresses the import conflict check.
 pub const shadow_ok_marker: Marker = .{ .name = "shadow-ok" };
 
+/// Well-known marker for override word definitions.
+/// When present on a definition, claims that the definition may overwrite an existing binding.
+pub const override_marker: Marker = .{ .name = "override" };
+
 /// Well-known marker for type word definitions. When present, the word pushes a first-class type value.
 /// Called "typed" rather than "type" to avoid conflicting with the `type` built-in type value word.
 pub const typed_marker: Marker = .{ .name = "typed" };
@@ -261,6 +265,7 @@ pub const primitives = [_]Primitive{
     .{ .name = "loop-combinator", .stack_effect = "-- marker", .doc = "Push the well-known loop-combinator marker.", .func = nativeLoopCombinatorMarker, .parse_time = true },
     .{ .name = "partial-dispatch", .stack_effect = "-- marker", .doc = "Push the well-known partial-dispatch marker. Indicates open, non-exhaustive branch dispatch.", .func = nativePartialDispatchMarker, .parse_time = true },
     .{ .name = "shadow-ok", .stack_effect = "-- marker", .doc = "Push the well-known shadow-ok marker. Suppresses the import conflict check on `use`.", .func = nativeShadowOkMarker, .parse_time = true },
+    .{ .name = "override", .stack_effect = "-- marker", .doc = "Push the well-known override marker. On a definition, claims permission to overwrite an existing binding.", .func = nativeOverrideMarker, .parse_time = true },
     .{ .name = "typed", .stack_effect = "-- marker", .doc = "Push the well-known typed marker.", .func = nativeTypedMarker, .parse_time = true },
     .{ .name = "stack-recursive", .stack_effect = "-- marker", .doc = "Push the well-known stack-recursive marker.", .func = nativeStackRecursiveMarker, .parse_time = true },
     .{ .name = "no-compile", .stack_effect = "-- marker", .doc = "Push the well-known no-compile marker. Opts a word out of automatic compilation.", .func = nativeNoCompileMarker, .parse_time = true },
@@ -333,6 +338,11 @@ pub fn nativePartialDispatchMarker(ctx: *Context) anyerror!void {
 /// shadow-ok ( -- marker )
 pub fn nativeShadowOkMarker(ctx: *Context) anyerror!void {
     try ctx.stack.push(.{ .marker = @constCast(&shadow_ok_marker) });
+}
+
+/// override ( -- marker )
+pub fn nativeOverrideMarker(ctx: *Context) anyerror!void {
+    try ctx.stack.push(.{ .marker = @constCast(&override_marker) });
 }
 
 /// typed ( -- marker )
@@ -440,6 +450,11 @@ pub fn isShadowOkMarker(mk: *const Marker) bool {
     return mk == &shadow_ok_marker;
 }
 
+/// Check if a marker is the well-known override marker
+pub fn isOverrideMarker(mk: *const Marker) bool {
+    return mk == &override_marker;
+}
+
 /// Check if a marker is the well-known typed marker
 pub fn isTypedMarker(mk: *const Marker) bool {
     return mk == &typed_marker;
@@ -516,6 +531,7 @@ pub fn lookupWellKnownMarker(name: []const u8) ?*Marker {
     if (std.mem.eql(u8, name, "loop-combinator")) return @constCast(&loop_combinator_marker);
     if (std.mem.eql(u8, name, "partial-dispatch")) return @constCast(&partial_dispatch_marker);
     if (std.mem.eql(u8, name, "shadow-ok")) return @constCast(&shadow_ok_marker);
+    if (std.mem.eql(u8, name, "override")) return @constCast(&override_marker);
     if (std.mem.eql(u8, name, "typed")) return @constCast(&typed_marker);
     if (std.mem.eql(u8, name, "stack-recursive")) return @constCast(&stack_recursive_marker);
     if (std.mem.eql(u8, name, "no-compile")) return @constCast(&no_compile_marker);
