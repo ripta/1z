@@ -1,0 +1,4 @@
+\ Helper module for the def-over-import guard tests. Its public `taken` is imported by the test
+\ files, which then define `taken` themselves.
+
+taken: ( -- fixnum ) [ 7 ] ;

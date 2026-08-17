@@ -1,0 +1,4 @@
+src/prelude.1z:83: error 'import-conflict' defining 'size>>' would overwrite a word imported from "def_over_import_accessor_mod.1z" at word 'define-struct'
+  stack effect: ( name descriptor markers --  )
+  hint: add the 'override' marker if intentional
+  called from tests/integration/def_over_import_struct_conflict.1z:7: ;

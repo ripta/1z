@@ -4,11 +4,11 @@ use "conversions" ;
 
 \ --- Test helpers ---
 
-(esc): ( -- str ) [ 27 >char ] ;
+(esc-char): ( -- str ) [ 27 >char ] ;
 
 \ Check whether an ANSI SGR code appears anywhere in a string.
 (has-sgr): ( str code -- ? ) [
-  (esc) "[" #append swap #append "m" #append
+  (esc-char) "[" #append swap #append "m" #append
   #index-of f = not
 ] ;
 
@@ -81,6 +81,6 @@ dup "<span" #index-of f = not
 drop
 
 "42" "ansi" "" (highlight-with-options)
-dup (esc) #index-of f = not
+dup (esc-char) #index-of f = not
 "ansi format produces escape codes" assert-true
 drop

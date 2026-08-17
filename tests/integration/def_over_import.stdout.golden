@@ -1,0 +1,23 @@
+=== definition over an imported word ===
+Stack: [ ]
+Stack: [ [ "def_over_import_conflict.1z" load ] ]
+PASS: definition over import throws import-conflict
+Stack: [ ]
+=== a quotation-nested definition is a new binding ===
+Stack: [ ]
+Stack: [ 1 ]
+PASS: nested definition does not conflict
+Stack: [ ]
+PASS: imported word unchanged after the nested binding pops
+Stack: [ ]
+=== override escapes the guard ===
+Stack: [ ]
+Stack: [ ]
+PASS: override definition wins
+Stack: [ ]
+=== override escapes the guard for private words ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: override definition wins over a private word
+Stack: [ ]

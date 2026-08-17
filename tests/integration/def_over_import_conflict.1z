@@ -1,0 +1,6 @@
+\ A definition landing on a same-scope import aborts with an import-conflict. `taken` arrives via
+\ a full `use`, then the file defines `taken` itself without the `override` marker.
+
+use "def_over_import_mod.1z" ;
+
+taken: ( -- fixnum ) [ 1 ] ;

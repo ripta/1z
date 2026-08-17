@@ -5,17 +5,17 @@ use "conversions" ;
 \ --- Test helpers ---
 
 \ Build an ANSI-wrapped string: value surrounded by SGR code and reset.
-(esc): ( -- str ) [ 27 >char ] ;
+(esc-char): ( -- str ) [ 27 >char ] ;
 (ansi-wrap): ( value code -- str ) [
-  (esc) "[" #append swap #append "m" #append
+  (esc-char) "[" #append swap #append "m" #append
   swap #append
-  (esc) "[0m" #append #append
+  (esc-char) "[0m" #append #append
 ] ;
 
 \ Check whether an ANSI SGR code appears anywhere in a string.
 (has-sgr): ( str code -- ? ) [
   \ build the needle: "\e[" + code + "m"
-  (esc) "[" #append swap #append "m" #append
+  (esc-char) "[" #append swap #append "m" #append
   \ stack: str needle
   #index-of f = not
 ] ;

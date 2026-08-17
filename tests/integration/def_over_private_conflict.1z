@@ -1,0 +1,6 @@
+\ The other order of the private/public collision: `private{` imports its names into the file's
+\ frame, so a later public definition of the same name aborts with an import-conflict.
+
+private{ (helper): ( -- string ) [ "private" ] ; }
+
+(helper): ( -- string ) [ "public" ] ;

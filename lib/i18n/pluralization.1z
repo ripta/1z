@@ -7,7 +7,7 @@ use "ffi" ;
 use "strings" ;
 use "i18n/icu" ;
 use "i18n/locale" ;
-use "i18n/number" ;
+use { format-number: } "i18n/number" ;
 
 \ --- Library loading and FFI bindings ---
 

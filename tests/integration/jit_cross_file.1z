@@ -37,7 +37,7 @@ jit-add5: compile!
 rd-caller: ( n -- n ) [ jit-add5 ] ;
 rd-caller: compile!
 10 rd-caller 15 "before redefine" assert=
-jit-add5: ( n -- n ) [ 50 + ] ;
+jit-add5: override ( n -- n ) [ 50 + ] ;
 10 rd-caller 60 "after redefine, caller picks up new definition" assert=
 
 "redefine + recompile" test-section

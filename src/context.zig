@@ -3113,6 +3113,36 @@ pub const Context = struct {
             self.local_frames.items[ti].get(name)
         else
             self.dictionary.get(name);
+
+        // The definition-side half of the import/definition collision guard: the import side is
+        // `assert-no-shadow` in the prelude.
+        //
+        // Same-scope only. The dictionary is never the target of an import, so this fires only on
+        // frame bindings.
+        if (same_scope_existing) |existing| {
+            if (existing.imported) {
+                const claims_override = for (definition.markers) |mk| {
+                    if (markers_mod.isOverrideMarker(mk)) break true;
+                } else false;
+                if (!claims_override) {
+                    self.pending_error_hint = "add the 'override' marker if intentional";
+                    self.pending_error_message = if (existing.source_module) |sm|
+                        std.fmt.allocPrint(
+                            self.arena.allocator(),
+                            "defining '{s}' would overwrite a word imported from \"{s}\"",
+                            .{ name, sm.name },
+                        ) catch "definition would overwrite an imported word"
+                    else
+                        std.fmt.allocPrint(
+                            self.arena.allocator(),
+                            "defining '{s}' would overwrite an imported word",
+                            .{name},
+                        ) catch "definition would overwrite an imported word";
+                    return error.ImportConflict;
+                }
+            }
+        }
+
         if (same_scope_existing) |existing| {
             // XXX(ripta): Skip arity check for auto-generated words, e.g., `virtual{`, `struct{`,
             //             since users legitly override generated constructors

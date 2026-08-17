@@ -1,0 +1,7 @@
+\ A generated definition is a definition like any other: the `size>>` getter a struct field
+\ generates lands on a same-scope import and throws import-conflict. A generated word has no
+\ override slot; the escape is renaming the field or narrowing the import.
+
+use "def_over_import_accessor_mod.1z" ;
+
+box: struct{ size } ;

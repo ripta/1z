@@ -4,38 +4,38 @@ use "testing" ;
 use "sqlite" ;
 
 \\ Assert that a return code is SQLITE_OK.
-(check-ok): ( rc msg -- ) [ SQLITE_OK swap assert= ] ;
+(assert-ok): ( rc msg -- ) [ SQLITE_OK swap assert= ] ;
 
 "open and close in-memory database" test-section
 ":memory:" (open)
-"open rc" (check-ok)
+"open rc" (assert-ok)
 (close-v2)
-"close rc" (check-ok)
+"close rc" (assert-ok)
 
 "DDL and DML via exec" test-section
-":memory:" (open) "open" (check-ok)
+":memory:" (open) "open" (assert-ok)
 dup "CREATE TABLE t1 (id INTEGER PRIMARY KEY, name TEXT, value REAL)" 0 0 0 (exec)
-"create table" (check-ok)
+"create table" (assert-ok)
 dup "INSERT INTO t1 VALUES (1, 'alice', 2.5)" 0 0 0 (exec)
-"insert via exec" (check-ok)
+"insert via exec" (assert-ok)
 (close-v2) drop
 
 "prepare, bind, step, and column reading" test-section
-":memory:" (open) "open" (check-ok)
+":memory:" (open) "open" (assert-ok)
 dup "CREATE TABLE t1 (id INTEGER PRIMARY KEY, name TEXT, value REAL)" 0 0 0 (exec)
-"create table" (check-ok)
+"create table" (assert-ok)
 \\ Prepare INSERT
-dup "INSERT INTO t1 VALUES (?1, ?2, ?3)" -1 0 (prepare-v2) "prepare insert" (check-ok)
+dup "INSERT INTO t1 VALUES (?1, ?2, ?3)" -1 0 (prepare-v2) "prepare insert" (assert-ok)
 \\ Bind parameters
-dup 1 42 (bind-int64) "bind int64" (check-ok)
-dup 2 "hello" -1 -1 (bind-text) "bind text" (check-ok)
-dup 3 3.14 (bind-double) "bind double" (check-ok)
+dup 1 42 (bind-int64) "bind int64" (assert-ok)
+dup 2 "hello" -1 -1 (bind-text) "bind text" (assert-ok)
+dup 3 3.14 (bind-double) "bind double" (assert-ok)
 \\ Step to execute
 dup (step) SQLITE_DONE "step insert done" assert=
 \\ Finalize INSERT
 (finalize) drop
 \\ Prepare SELECT
-dup "SELECT id, name, value FROM t1" -1 0 (prepare-v2) "prepare select" (check-ok)
+dup "SELECT id, name, value FROM t1" -1 0 (prepare-v2) "prepare select" (assert-ok)
 \\ Step to get first row
 dup (step) SQLITE_ROW "step select row" assert=
 \\ Read columns
@@ -49,22 +49,22 @@ dup (step) SQLITE_DONE "step select done" assert=
 (close-v2) drop
 
 "NULL binding and column type detection" test-section
-":memory:" (open) "open" (check-ok)
-dup "CREATE TABLE t2 (x INTEGER)" 0 0 0 (exec) "create t2" (check-ok)
+":memory:" (open) "open" (assert-ok)
+dup "CREATE TABLE t2 (x INTEGER)" 0 0 0 (exec) "create t2" (assert-ok)
 \\ Insert NULL via bind_null
-dup "INSERT INTO t2 VALUES (?1)" -1 0 (prepare-v2) "prepare null insert" (check-ok)
-dup 1 (bind-null) "bind null" (check-ok)
+dup "INSERT INTO t2 VALUES (?1)" -1 0 (prepare-v2) "prepare null insert" (assert-ok)
+dup 1 (bind-null) "bind null" (assert-ok)
 dup (step) SQLITE_DONE "step null insert" assert=
 (finalize) drop
 \\ Read back and check column type
-dup "SELECT x FROM t2" -1 0 (prepare-v2) "prepare null select" (check-ok)
+dup "SELECT x FROM t2" -1 0 (prepare-v2) "prepare null select" (assert-ok)
 dup (step) SQLITE_ROW "step null select" assert=
 dup 0 (column-type) 5 "column type is SQLITE_NULL" assert=
 (finalize) drop
 (close-v2) drop
 
 "prepare invalid SQL returns error" test-section
-":memory:" (open) "open" (check-ok)
+":memory:" (open) "open" (assert-ok)
 dup "NOT VALID SQL !!!" -1 0 (prepare-v2)
 swap drop
 SQLITE_OK = f "non-zero error code" assert=

@@ -1,0 +1,30 @@
+\ def-over-import guard tests: a definition landing on a same-scope imported word throws
+\ import-conflict unless it claims the `override` marker.
+
+use "testing" ;
+
+"definition over an imported word" test-section
+
+\ The colliding definition has to share the import's frame, so the collision runs at a loaded
+\ module's own top level. A definition inside a quotation lands in the quotation's transient
+\ frame, which the same-scope rule exempts.
+[ "def_over_import_conflict.1z" load ]
+EImportConflict "definition over import throws import-conflict" assert-error-type
+
+"a quotation-nested definition is a new binding" test-section
+
+use { taken: } "def_over_import_mod.1z" ;
+[ taken: ( -- fixnum ) [ 1 ] ; taken ] call
+1 "nested definition does not conflict" assert=
+taken 7 "imported word unchanged after the nested binding pops" assert=
+
+"override escapes the guard" test-section
+
+taken: override ( -- fixnum ) [ 1 ] ;
+taken 1 "override definition wins" assert=
+
+"override escapes the guard for private words" test-section
+
+private{ (helper): ( -- string ) [ "private" ] ; }
+(helper): override ( -- string ) [ "public" ] ;
+(helper) "public" "override definition wins over a private word" assert=

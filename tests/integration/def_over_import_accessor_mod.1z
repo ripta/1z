@@ -1,0 +1,4 @@
+\ Helper module for the generated-definition guard test. Its public `size>>` collides with the
+\ getter a `struct{` field named `size` generates.
+
+size>>: ( -- fixnum ) [ 7 ] ;

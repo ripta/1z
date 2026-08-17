@@ -24,6 +24,6 @@ use "./module_deps_invalidation_lib.1z" reload shadow-ok ;
 "top-level redefinition does not leak into a module's template" test-section
 
 report "module-helper" "module word uses its own helper" assert=
-helper: ( -- s ) [ "top-helper" ] ;
+helper: override ( -- s ) [ "top-helper" ] ;
 helper "top-helper" "redefinition is in effect at top level" assert=
 report "module-helper" "module word still uses its own helper after redefine" assert=
