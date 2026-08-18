@@ -3,9 +3,11 @@
 Redefining your own word is ordinary and silent. Two other collisions used
 to be silent too, and are now loud: a definition and an import landing on
 the same name, and a top-level definition shadowing a prelude or native
-word. Both throw `import-conflict`. This guide covers the two collision
-kinds, the permission that escapes them, and the release valve each
-importing construct provides.
+word. Both throw `import-conflict`. A third silent loss is loud as well: a
+redefinition that drops registered methods throws `orphaned-methods`. This
+guide covers the two collision kinds, the orphaned-method report, the
+permission that escapes them, and the release valve each importing
+construct provides.
 
 ## Ordinary Redefinition Stays Silent
 
@@ -25,9 +27,10 @@ Output:
 ```
 
 This is how iterative development works, especially at the REPL. The guard
-never fires on it. The only diagnostic that can fire here is the separate
-arity check, when both definitions declare stack effects and the arities
-disagree.
+never fires on it. Two separate diagnostics can still fire here: the arity
+check, when both definitions declare stack effects and the arities
+disagree, and the orphaned-method report below, when the word being
+replaced owns registered methods.
 
 ## The Two Collision Kinds
 
@@ -133,6 +136,52 @@ A module defining a name the loading file also defines is not a collision
 either. Each file's own top level is compared against the scopes below it,
 not against its loaders.
 
+## Redefinition That Drops Registered Methods
+
+A word that owns `method{` registrations is a dispatch surface, not just a
+binding. Redefining it in the same scope gives the name a fresh dispatch
+identity, so every registered method becomes unreachable, and nothing
+later throws to say so. That silent loss is reported at the redefinition,
+naming how many methods it would drop:
+
+```
+area: generic ( x -- n ) [ drop 0 ] ;
+area: method{ fixnum } [ drop 42 ] ;
+area: ( x -- n ) [ drop 7 ] ;
+```
+
+Output:
+
+```
+main.1z:3: error 'orphaned-methods' redefining 'area' would drop 1 registered method at word ';'
+  stack effect: ( name quot --  )
+  hint: add the 'override' marker if intentional
+```
+
+A deliberate replacement claims `override`, exactly as with the collision
+kinds:
+
+```
+area: override ( x -- n ) [ drop 7 ] ;
+```
+
+Two things distinguish this report from the collision kinds. There is no
+generic exemption: a `generic` redefinition of a `generic` word drops the
+methods all the same, so it throws too. And unlike the arity check, no
+pragma downgrades it to a warning. The collision kinds report a visibility
+surprise the program survives, while this one reports a correctness loss
+nothing later throws about, so a program that relaxed it would never learn
+what it gave up.
+
+A generated existing word is exempt, exactly as it is for the arity check.
+Replacing a `virtual{` or `struct{` constructor with a convenience version
+is an established pattern, and the entries the generator registered under
+it are scaffolding of the word being replaced, not user methods.
+
+A shadow in a nested frame is not a redefinition. It takes a fresh
+identity of its own, leaves the outer generic's methods intact, and the
+outer generic answers again when the frame pops.
+
 ## The `override` Marker
 
 A deliberate replacement says so at the definition, with the `override`
@@ -150,10 +199,11 @@ Output:
 7
 ```
 
-`override` escapes both definition-side guards: defining over an import,
-and shadowing a prelude or native word. The claim sits in the source at the
-exact place the overwrite happens, so a reader sees the intent without
-tracing any imports.
+`override` escapes all three definition-side guards: defining over an
+import, shadowing a prelude or native word, and a redefinition that drops
+registered methods. The claim sits in the source at the exact place the
+overwrite happens, so a reader sees the intent without tracing any
+imports.
 
 ## Release Valves
 
@@ -210,12 +260,13 @@ a definition or an import -- resolves as follows:
 | incoming binding claims the permission (`shadow-ok` / `override`) | allowed |
 | definition and import cross, no claim | `import-conflict` |
 | top-level definition shadows a prelude or native word, no claim | `import-conflict` |
+| same-scope redefinition drops registered methods, no claim | `orphaned-methods` |
 | ordinary redefinition of your own word | silent |
-| both existing and incoming are `generic` | exempt -- method contributions merge |
+| both existing and incoming are `generic` | exempt from the collision kinds -- method contributions merge |
 
-`const` blocks absolutely, a claim allows, and otherwise the two conflict
-rows throw. The rules never contradict: `const` and a claim never both
-apply to a permitted case.
+`const` blocks absolutely, a claim allows, and otherwise the conflict rows
+throw. The rules never contradict: `const` and a claim never both apply to
+a permitted case.
 
 ## `const` Is Absolute
 
@@ -242,9 +293,14 @@ Output:
 ## The Generic Exemption
 
 Two `generic` words of one name are one extension point, not a collision.
-Every guard skips when both the existing and the incoming word are
-`generic`, so a module contributing `method{` arms to a shared generic
-imports cleanly.
+Both collision guards skip when the existing and the incoming word are
+both `generic`, so a module contributing `method{` arms to a shared
+generic imports cleanly.
+
+The orphaned-method report does not share the exemption. A generic
+redefinition of a generic word still gives the name a fresh dispatch
+identity and drops the registered methods, so it throws without an
+`override` claim.
 
 The exemption is not an override claim, and the two do opposite things. On
 an import, the exemption keeps the existing binding and drops the incoming
@@ -269,8 +325,8 @@ different modules export the same name and the shadowing is intentional.
 
 ## The REPL Behaves Like a File
 
-Both guards fire at the REPL exactly as they do in a file, and `override`
-is the escape in both. Redefining your own word, which is what REPL
+The guards fire at the REPL exactly as they do in a file, and `override`
+is the escape in each. Redefining your own word, which is what REPL
 iteration consists of, stays silent. What the guard catches interactively
 is the same thing it catches in a file: `dup: [ ... ] ;` throws until it
 claims `override`. A session that works can therefore be pasted into a

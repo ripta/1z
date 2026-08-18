@@ -349,7 +349,7 @@ test "cross-module method records the defining module, not the type's module" {
     var type_module = value_mod.Module{ .name = "palette", .words = .{} };
     var body_module = value_mod.Module{ .name = "renderer", .words = .{} };
 
-    const entry = (try registerUnaryMethod(&ctx, "inspect", &tv, &body_module)).?;
+    const entry = (try registerUnaryMethod(&ctx, "paint", &tv, &body_module)).?;
     try testing.expectEqual(@as(?*const value_mod.Module, &body_module), entry.source_module);
     try testing.expect(entry.source_module != &type_module);
 }

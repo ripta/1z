@@ -14,7 +14,8 @@ call-area: ( x -- n ) [ area ] ;
 1 call-area 42 "warm site dispatches the registered method" assert=
 
 \ The redefinition registers no method, so the definition is the only thing that can invalidate.
-area: generic ( x -- n ) [ drop 7 ] ;
+\ It claims `override` because it drops the method registered above.
+area: generic override ( x -- n ) [ drop 7 ] ;
 1 call-area 7 "warm site runs the redefinition's fallthrough" assert=
 
 \ The site rewarms rather than staying dead.

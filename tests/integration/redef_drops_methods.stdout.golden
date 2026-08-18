@@ -1,0 +1,35 @@
+=== redefinition dropping methods ===
+Stack: [ ]
+Stack: [ [ "redef_drops_methods_conflict.1z" load ] ]
+PASS: redefinition dropping methods throws orphaned-methods
+Stack: [ ]
+=== generic-on-generic still drops methods ===
+Stack: [ ]
+Stack: [ [ "redef_drops_methods_generic_conflict.1z" load ] ]
+PASS: generic redefinition dropping methods throws
+Stack: [ ]
+=== a nested shadow leaves the outer generic intact ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ 7 ]
+PASS: nested shadow runs its own body
+Stack: [ ]
+PASS: outer generic dispatches its method after the shadow pops
+Stack: [ ]
+=== override escapes the guard ===
+Stack: [ ]
+Stack: [ ]
+PASS: override redefinition wins
+Stack: [ ]
+=== a methodless redefinition stays silent ===
+Stack: [ ]
+Stack: [ ]
+PASS: redefinition of a methodless word stays silent
+Stack: [ ]
+=== overriding a generated constructor stays silent ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: generated constructor override stays silent
+Stack: [ ]

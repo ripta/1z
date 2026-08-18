@@ -1,0 +1,8 @@
+\ A same-scope redefinition of a generic that owns registered methods aborts with an
+\ orphaned-methods error naming the dropped count. The redefinition claims no `override` marker.
+
+area: generic ( x -- n ) [ drop 0 ] ;
+area: method{ fixnum } [ drop 42 ] ;
+area: method{ float } [ drop 43 ] ;
+
+area: ( x -- n ) [ drop 7 ] ;

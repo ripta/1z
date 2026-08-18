@@ -1,0 +1,7 @@
+\ A generic redefinition of a generic that owns a registered method drops it all the same: the
+\ orphaned-method report has no generic-on-generic exemption.
+
+area: generic ( x -- n ) [ drop 0 ] ;
+area: method{ fixnum } [ drop 42 ] ;
+
+area: generic ( x -- n ) [ drop 7 ] ;

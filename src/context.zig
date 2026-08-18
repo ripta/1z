@@ -3231,6 +3231,33 @@ pub const Context = struct {
             }
         }
 
+        // A redefinition mints a fresh dispatch id, stranding the entries registered under the
+        // old one with no later diagnostic. Dropping registered methods is reported here instead;
+        // `override` claims the replacement deliberate.
+        //
+        // A generated existing word is exempt, matching the arity check below: overriding a
+        // generated constructor is legitimate, and its entries are the generator's scaffolding.
+        //
+        // The table scan is gated on the existing word being able to receive methods at all,
+        // which `define-method` limits to native-like words and generic-marked ones. A plain
+        // word's redefinition, the common case, never walks the dispatch table.
+        if (same_scope_existing) |existing| {
+            if (existing.provenance == null and !claims_override and
+                (existing.isNativeLike() or markersContainGeneric(existing.markers)))
+            {
+                const dropped = (try self.dispatchKeysForIdLocked(existing.dispatch_id, self.arena.allocator())).len;
+                if (dropped > 0) {
+                    self.pending_error_hint = "add the 'override' marker if intentional";
+                    self.pending_error_message = std.fmt.allocPrint(
+                        self.arena.allocator(),
+                        "redefining '{s}' would drop {d} registered method{s}",
+                        .{ name, dropped, if (dropped == 1) @as([]const u8, "") else "s" },
+                    ) catch "redefinition would drop registered methods";
+                    return error.OrphanedMethods;
+                }
+            }
+        }
+
         if (same_scope_existing) |existing| {
             // XXX(ripta): Skip arity check for auto-generated words, e.g., `virtual{`, `struct{`,
             //             since users legitly override generated constructors
@@ -8634,6 +8661,68 @@ test "defineWordLocked: the dispatch generation moves only when the name already
     const unrelated_before = ctx.dispatch.generation;
     try ctx.defineWord("v", .{ .name = "v", .action = .{ .literal = .{ .fixnum = 4 } } });
     try std.testing.expectEqual(unrelated_before, ctx.dispatch.generation);
+}
+
+test "defineWordLocked: a redefinition dropping registered methods reports unless override is claimed" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    try ctx.defineWord("area", .{
+        .name = "area",
+        .action = .{ .literal = .{ .fixnum = 1 } },
+        .markers = &.{@constCast(&markers_mod.generic_marker)},
+    });
+    const old_id = ctx.lookupWord("area").?.dispatch_id;
+
+    const fixnum_tv = ctx.lookupBuiltinTypeValue("fixnum").?;
+    const body = [_]Instruction{.{ .op = .{ .push_literal = .{ .fixnum = 0 } }, .line = 0 }};
+    try ctx.registerDispatch(
+        .{ .dispatch_id = old_id, .type_a = fixnum_tv.descriptor.?, .type_b = ctx.getDispatchUnarySentinel().descriptor.? },
+        .{ .body = .{ .quotation = .{ .instructions = &body } } },
+        false,
+    );
+
+    try std.testing.expectError(error.OrphanedMethods, ctx.defineWord("area", .{ .name = "area", .action = .{ .literal = .{ .fixnum = 2 } } }));
+    try std.testing.expectEqualStrings("redefining 'area' would drop 1 registered method", ctx.pending_error_message.?);
+
+    // A definition in a fresh frame is a shadow, not a same-scope redefinition.
+    {
+        try ctx.pushLocalFrame();
+        defer ctx.popLocalFrame();
+        try ctx.defineWord("area", .{ .name = "area", .action = .{ .literal = .{ .fixnum = 3 } } });
+    }
+
+    try ctx.defineWord("area", .{
+        .name = "area",
+        .action = .{ .literal = .{ .fixnum = 4 } },
+        .markers = &.{@constCast(&markers_mod.override_marker)},
+    });
+
+    // A generated existing word is exempt even when its id owns entries.
+    try ctx.defineWord("gen", .{
+        .name = "gen",
+        .action = .{ .literal = .{ .fixnum = 5 } },
+        .markers = &.{@constCast(&markers_mod.generic_marker)},
+        .provenance = .{ .generator = "struct", .parent = "gen-type", .role = "constructor" },
+    });
+    const gen_id = ctx.lookupWord("gen").?.dispatch_id;
+    try ctx.registerDispatch(
+        .{ .dispatch_id = gen_id, .type_a = fixnum_tv.descriptor.?, .type_b = ctx.getDispatchUnarySentinel().descriptor.? },
+        .{ .body = .{ .quotation = .{ .instructions = &body } } },
+        false,
+    );
+    try ctx.defineWord("gen", .{ .name = "gen", .action = .{ .literal = .{ .fixnum = 6 } } });
+
+    // A word that cannot receive methods is never scanned, so a Zig-side registration under a
+    // plain word's id stays outside the guard's reach.
+    try ctx.defineWord("plain", .{ .name = "plain", .action = .{ .literal = .{ .fixnum = 7 } } });
+    const plain_id = ctx.lookupWord("plain").?.dispatch_id;
+    try ctx.registerDispatch(
+        .{ .dispatch_id = plain_id, .type_a = fixnum_tv.descriptor.?, .type_b = ctx.getDispatchUnarySentinel().descriptor.? },
+        .{ .body = .{ .quotation = .{ .instructions = &body } } },
+        false,
+    );
+    try ctx.defineWord("plain", .{ .name = "plain", .action = .{ .literal = .{ .fixnum = 8 } } });
 }
 
 test "anonymous union descriptor flags are inferred by intersection" {

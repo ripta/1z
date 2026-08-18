@@ -2,4 +2,4 @@ tests/integration/error_frames_quotation_source.1z:8: error 'type-mismatch' expe
   stack effect: ( a b -- a+b )
   hint: operands must be numbers (fixnum, float, bignum, or ratio)
   called from tests/integration/error_frames_quotation_source.1z:10: boom
-  called from src/prelude.1z:555: call
+  called from src/prelude.1z:556: call

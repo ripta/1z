@@ -1,0 +1,43 @@
+\ Orphaned-method guard tests: a same-scope redefinition that drops registered dispatch entries
+\ throws orphaned-methods unless it claims the `override` marker.
+
+use "testing" ;
+
+"redefinition dropping methods" test-section
+
+\ The redefinition has to share the generic's frame, so the error case runs at a loaded file's
+\ own top level. A definition inside a quotation lands in the quotation's transient frame, which
+\ the same-scope rule exempts.
+[ "redef_drops_methods_conflict.1z" load ]
+EOrphanedMethods "redefinition dropping methods throws orphaned-methods" assert-error-type
+
+"generic-on-generic still drops methods" test-section
+
+[ "redef_drops_methods_generic_conflict.1z" load ]
+EOrphanedMethods "generic redefinition dropping methods throws" assert-error-type
+
+"a nested shadow leaves the outer generic intact" test-section
+
+area: generic ( x -- n ) [ drop 0 ] ;
+area: method{ fixnum } [ drop 42 ] ;
+[ area: ( x -- n ) [ drop 7 ] ; 1 area ] call
+7 "nested shadow runs its own body" assert=
+1 area 42 "outer generic dispatches its method after the shadow pops" assert=
+
+"override escapes the guard" test-section
+
+area: override generic ( x -- n ) [ drop 1 ] ;
+1 area 1 "override redefinition wins" assert=
+
+"a methodless redefinition stays silent" test-section
+
+area: ( x -- n ) [ drop 2 ] ;
+1 area 2 "redefinition of a methodless word stays silent" assert=
+
+"overriding a generated constructor stays silent" test-section
+
+\ The generated `make-report` owns a scaffolding dispatch entry, but a generated word is
+\ exempt, so replacing it with a convenience constructor needs no `override`.
+report: virtual{ array } ;
+make-report: ( -- report ) [ { } >report ] ;
+make-report report? t "generated constructor override stays silent" assert=
