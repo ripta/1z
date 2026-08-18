@@ -115,19 +115,26 @@ hidden. Requesting a word that does not exist throws `EKeyNotFound`.
 By default, `use` refuses to pull in a word that already exists in scope:
 
 ```
-use "module_lib.1z" ;
-use "module_lib.1z" ;  \ error: double already defined
+double: ( n -- n ) [ 2 + ] ;
+use "module_lib.1z" ;  \ error: use would shadow existing words: double
 ```
 
-The `shadow-ok` marker silences this check:
+The check throws `import-conflict` before anything is imported, and it
+names every conflicting word at once. The `shadow-ok` marker silences it:
 
 ```
-use "module_lib.1z" shadow-ok ;
-use "module_lib.1z" shadow-ok ;  \ fine
+double: ( n -- n ) [ 2 + ] ;
+use "module_lib.1z" shadow-ok ;  \ fine; the module's double wins
 ```
 
-Use `shadow-ok` when you intentionally want to override an existing word --
-for instance, a module that extends or replaces a prelude word.
+Importing the same module twice is not a conflict. Names already bound
+from the same source module are skipped, so `shadow-ok` is only needed
+when the shadowing crosses modules and is intentional.
+
+`borrow`, `private{`, and `reexport` run the same check, each with its own
+release valve. The [Redefinition and Shadowing
+guide](redefinition-and-shadowing.md) covers the full model, including the
+definition-side guards and the `override` marker.
 
 ## Private Helpers
 
@@ -163,12 +170,19 @@ A caller that does `use "data/html"` gets `escape` in scope, but not
 convention used throughout the standard library to flag privacy visually at
 every call site; the language treats `(foo)` as an ordinary identifier.
 
-`private{` is sugar over the prelude word `import-locals`, which itself
-wraps `local-scope`. `local-scope` snapshots the topmost local frame as a
-module value; `import-locals` runs a quotation in a fresh frame and routes
-the snapshot into the enclosing module's private deps. Reach for those
-words directly when you need to build a private scope dynamically rather
-than through the block syntax.
+Private names land in the same scope as the module's public words, so a
+helper colliding with a public word throws `import-conflict`, and a
+failing block imports nothing. When the collision is intentional, the
+`private(shadow-ok){ ... }` variant suppresses the check.
+
+`private(shadow-ok){` is sugar over the prelude word `import-locals`,
+which itself wraps `local-scope`. `local-scope` snapshots the topmost
+local frame as a module value; `import-locals` runs a quotation in a
+fresh frame and routes the snapshot into the enclosing module's private
+deps. The plain `private{` runs the shadow check between the snapshot and
+the import. Reach for `import-locals` directly when you need to build a
+private scope dynamically rather than through the block syntax, keeping
+in mind that it runs no shadow check.
 
 ## Module Introspection
 
@@ -238,6 +252,10 @@ defined locally:
 Now anyone who imports `facade.1z` gets the helpers module's words too. Handy
 for assembling a public API from multiple internal pieces.
 
+`reexport` runs the shadow check like `use` does. Because it is an inline
+expression with no terminating `;`, its release valve is a variant word
+rather than a trailing marker: `"helpers.1z" load reexport(shadow-ok)`.
+
 ## Caching and `reload`
 
 Modules are cached after the first `load`. Loading the same path twice
@@ -260,4 +278,5 @@ to pick up changes without restarting.
 
 See also: [Module Organization cookbook](../cookbook/module-organization.md)
 
-The [next guide](iterators.md) covers lazy iteration and sequence pipelines.
+The [next guide](redefinition-and-shadowing.md) covers the collision guard
+that backs the shadow check, and the `override` marker.

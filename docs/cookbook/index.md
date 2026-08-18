@@ -20,7 +20,7 @@ comfortable with the material in the [Language Tutorials](../tutorials/index.md)
 7. [Testing Patterns](testing-patterns.md) -- assertions, grouping, and
    error testing
 8. [Module Organization](module-organization.md) -- imports, selective
-   imports, qualified access, and shadow suppression
+   imports, qualified access, and shadow conflicts
 
 Runnable example files for each recipe live in `examples/cookbook/`.
 

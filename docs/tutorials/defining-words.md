@@ -106,6 +106,18 @@ Output:
 
 A `const` word ignores the stack entirely -- it just pushes its value.
 
+The `override` marker claims permission to replace an existing word. A
+top-level definition that would overwrite an import, or shadow a prelude
+or native word like `dup`, throws `import-conflict` unless it carries the
+marker:
+
+```
+dup: override ( a -- x ) [ drop 0 ] ;
+```
+
+Redefining your own word needs no marker. The [Redefinition and Shadowing
+guide](../guides/redefinition-and-shadowing.md) covers the full model.
+
 ## Naming Conventions
 
 1z uses prefixes and suffixes to signal what a word does at a glance:

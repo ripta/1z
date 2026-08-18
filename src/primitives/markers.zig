@@ -51,7 +51,7 @@ pub const loop_combinator_marker: Marker = .{ .name = "loop-combinator" };
 pub const partial_dispatch_marker: Marker = .{ .name = "partial-dispatch" };
 
 /// Well-known marker for shadow-ok word definitions.
-/// When present on a `use` invocation, suppresses the import conflict check.
+/// When present on a `use` or `borrow` invocation, suppresses the import conflict check.
 pub const shadow_ok_marker: Marker = .{ .name = "shadow-ok" };
 
 /// Well-known marker for override word definitions.
@@ -264,7 +264,7 @@ pub const primitives = [_]Primitive{
     .{ .name = "branch-combinator", .stack_effect = "-- marker", .doc = "Push the well-known branch-combinator marker.", .func = nativeBranchCombinatorMarker, .parse_time = true },
     .{ .name = "loop-combinator", .stack_effect = "-- marker", .doc = "Push the well-known loop-combinator marker.", .func = nativeLoopCombinatorMarker, .parse_time = true },
     .{ .name = "partial-dispatch", .stack_effect = "-- marker", .doc = "Push the well-known partial-dispatch marker. Indicates open, non-exhaustive branch dispatch.", .func = nativePartialDispatchMarker, .parse_time = true },
-    .{ .name = "shadow-ok", .stack_effect = "-- marker", .doc = "Push the well-known shadow-ok marker. Suppresses the import conflict check on `use`.", .func = nativeShadowOkMarker, .parse_time = true },
+    .{ .name = "shadow-ok", .stack_effect = "-- marker", .doc = "Push the well-known shadow-ok marker. Suppresses the import conflict check on `use` and `borrow`.", .func = nativeShadowOkMarker, .parse_time = true },
     .{ .name = "override", .stack_effect = "-- marker", .doc = "Push the well-known override marker. On a definition, claims permission to overwrite an existing binding.", .func = nativeOverrideMarker, .parse_time = true },
     .{ .name = "typed", .stack_effect = "-- marker", .doc = "Push the well-known typed marker.", .func = nativeTypedMarker, .parse_time = true },
     .{ .name = "stack-recursive", .stack_effect = "-- marker", .doc = "Push the well-known stack-recursive marker.", .func = nativeStackRecursiveMarker, .parse_time = true },

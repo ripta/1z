@@ -53,14 +53,22 @@ Output:
 Dot notation accesses module words without importing them into the current
 scope. This avoids collisions when two modules export the same name.
 
-## Suppressing shadow warnings
+## Re-importing a module
 
-If two modules export the same word, importing both raises a shadow warning.
-Use `shadow-ok` when the shadowing is intentional:
+Importing the same module twice is not a conflict. The shadow check skips
+names already bound from the same source module:
 
 ```
 use "strings" ;
-use "strings" shadow-ok ;   \ no warning
+use "strings" ;   \ silent
+```
+
+If two different modules export the same word, importing both throws
+`import-conflict`. Use `shadow-ok` when that shadowing is intentional:
+
+```
+use "./first.1z" ;
+use "./second.1z" shadow-ok ;   \ second's words win
 ```
 
 ## Private helpers
@@ -88,4 +96,5 @@ The public `escape` word can call `(escape-char)`, but a caller that does
 stdlib convention that flags privacy at the call site; the language treats
 `(foo)` as an ordinary identifier.
 
-See also: [Modules guide](../guides/modules.md)
+See also: [Modules guide](../guides/modules.md),
+[Redefinition and Shadowing guide](../guides/redefinition-and-shadowing.md)

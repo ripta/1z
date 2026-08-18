@@ -55,6 +55,7 @@ double: ( n -- n ) [ 2 * ] ;             \ with stack effect
 PI: const [ 3.14159 ] ;                  \ constant
 describe: generic [ "unknown" ] ;        \ generic (dispatched)
 H{: parse-time [ "}" parse-until ... ] ; \ parse-time word
+dup: override [ ... ] ;                  \ replace an imported, prelude, or native word
 ```
 
 See also: [Defining Words](tutorials/defining-words.md)
@@ -269,12 +270,15 @@ use "testing" ;                  \ load from lib/
 use "./local.1z" ;               \ relative path
 use { split: } "strings" ;      \ selective import
 use "file.1z" shadow-ok ;       \ suppress shadow check
+"file.1z" load reexport(shadow-ok)   \ reexport, shadow check suppressed
+private(shadow-ok){ ... }        \ private block, shadow check suppressed
 
 m: "math" load ;                 \ bind module to name
 m.sin m.cos m.pi                 \ qualified access via dot notation
 ```
 
 See also: [Modules](guides/modules.md),
+[Redefinition and Shadowing](guides/redefinition-and-shadowing.md),
 [Module Organization cookbook](cookbook/module-organization.md)
 
 ## Concurrency
