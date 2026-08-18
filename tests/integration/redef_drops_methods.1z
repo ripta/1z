@@ -41,3 +41,12 @@ area: ( x -- n ) [ drop 2 ] ;
 report: virtual{ array } ;
 make-report: ( -- report ) [ { } >report ] ;
 make-report report? t "generated constructor override stays silent" assert=
+
+"two structs sharing a field name stay silent" test-section
+
+\ The second struct's accessor generation finds `tag>>` already generic and skips the
+\ definition entirely, so the guard never sees a redefinition.
+blip: struct{ pos tag } ;
+blop: struct{ tag hue } ;
+1 2 make-blip tag>> 2 "first struct's tag>> dispatches" assert=
+3 4 make-blop tag>> 3 "second struct's tag>> dispatches" assert=

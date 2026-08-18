@@ -1,0 +1,27 @@
+\ Reloading a module that defines a generic must not fire the orphaned-methods guard.
+\
+\ The module body re-executes into a fresh frame, so its definitions are not same-scope
+\ redefinitions. The `use ... reload` re-import binds through the import sink, which has
+\ no orphaned-method scan.
+
+use "testing" ;
+
+"a loaded generic dispatches" test-section
+
+mod-a: "fixtures/reload_generic_lib.1z" load ;
+42 mod-a.describe "int" "method dispatches after load" assert=
+1.5 mod-a.describe "other" "fallthrough body answers after load" assert=
+
+"reload re-executes the generic definitions silently" test-section
+
+mod-b: "fixtures/reload_generic_lib.1z" reload ;
+42 mod-b.describe "int" "method dispatches after reload" assert=
+mod-c: "fixtures/reload_generic_lib.1z" reload ;
+42 mod-c.describe "int" "method dispatches after a second reload" assert=
+
+"use with reload re-imports the generic silently" test-section
+
+use "fixtures/reload_generic_lib.1z" ;
+42 describe "int" "imported generic dispatches" assert=
+use "fixtures/reload_generic_lib.1z" reload shadow-ok ;
+42 describe "int" "reimported generic dispatches after reload" assert=

@@ -33,3 +33,11 @@ Stack: [ ]
 Stack: [ ]
 PASS: generated constructor override stays silent
 Stack: [ ]
+=== two structs sharing a field name stay silent ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: first struct's tag>> dispatches
+Stack: [ ]
+PASS: second struct's tag>> dispatches
+Stack: [ ]

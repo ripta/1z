@@ -1,0 +1,21 @@
+=== a loaded generic dispatches ===
+Stack: [ ]
+Stack: [ ]
+PASS: method dispatches after load
+Stack: [ ]
+PASS: fallthrough body answers after load
+Stack: [ ]
+=== reload re-executes the generic definitions silently ===
+Stack: [ ]
+Stack: [ ]
+PASS: method dispatches after reload
+Stack: [ ]
+Stack: [ ]
+PASS: method dispatches after a second reload
+Stack: [ ]
+=== use with reload re-imports the generic silently ===
+Stack: [ ]
+PASS: imported generic dispatches
+Stack: [ ]
+PASS: reimported generic dispatches after reload
+Stack: [ ]

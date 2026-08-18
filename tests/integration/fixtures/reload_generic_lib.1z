@@ -1,0 +1,6 @@
+\ A generic with a registered method, reloaded by the driver to confirm the orphaned-methods
+\ guard stays silent: each load executes this body into a fresh frame, so no definition here
+\ is a same-scope redefinition.
+
+describe: generic ( value -- string ) [ drop "other" ] ;
+describe: method{ fixnum } [ drop "int" ] ;
