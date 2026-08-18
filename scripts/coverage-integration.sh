@@ -85,7 +85,8 @@ run_one() {
       return $?
       ;;
     lib)
-      timeout "$COVERAGE_TIMEOUT" "$KCOV" $KCOV_ARGS "$shard_dir" "$ONEZ" \
+      timeout "$COVERAGE_TIMEOUT" env ONEZ_NO_STARTUP=1 \
+        "$KCOV" $KCOV_ARGS "$shard_dir" "$ONEZ" \
         test "--stdlib-path=$STDLIB" "--test-timeout=$TEST_CASE_TIMEOUT" --threads=1 "$token" > /dev/null 2>&1
       return $?
       ;;
@@ -95,7 +96,7 @@ run_one() {
   local name="$token"
   local base="$TESTDIR/$name" file="$TESTDIR/$name.1z"
   local flags_file="$base.flags"
-  local raw=0 subcommand="" show_stack=1 has_test_timeout=0 has_threads=0
+  local raw=0 subcommand="" show_stack=1 has_test_timeout=0 has_threads=0 has_startup_env=0
   local -a argv=() env_assign=()
   local line t a
 
@@ -115,8 +116,15 @@ run_one() {
   if [[ -f "$base.env" ]]; then
     while IFS= read -r line || [[ -n "$line" ]]; do
       t="$(trim "$line")"; [[ -z "$t" ]] && continue
+      [[ "$t" == ONEZ_STARTUP=* ]] && has_startup_env=1
       [[ "$t" == *=* ]] && env_assign+=( "$t" )
     done < "$base.env"
+  fi
+
+  # The suite must not read a developer's own startup file. A case naming ONEZ_STARTUP supplies its
+  # own fixture, so the skip stays out of its way. Prepended, so an explicit .env entry still wins.
+  if [[ $has_startup_env -eq 0 ]]; then
+    env_assign=( "ONEZ_NO_STARTUP=1" "${env_assign[@]}" )
   fi
 
   if [[ $raw -eq 1 ]]; then

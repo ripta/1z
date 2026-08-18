@@ -1,0 +1,3 @@
+\ --no-startup is a global flag, so every subcommand accepts it rather than reporting an unknown
+\ flag. It skips the user startup file, which this run has none of.
+1 2 +

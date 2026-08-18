@@ -51,6 +51,16 @@ COVERAGE_JOBS ?= 4
 # path. Abort the recipe instead.
 mktemp_or_die = $(or $(shell mktemp $(1)),$(error mktemp failed for $(1)))
 
+# Neither the suite nor anything writing a committed artifact may read a developer's own startup
+# file. The targets here are the ones that reach an executing subcommand outside the `zig build`
+# harness, which sets the variable itself in configureIntegrationRun. `run` is deliberately absent:
+# that is the developer running their own program.
+#
+# The pattern and the explicit list are separate lines because make rejects a rule mixing pattern
+# and normal targets.
+lib-test snake-test docs profiles benchmark: export ONEZ_NO_STARTUP := 1
+benchmark-%: export ONEZ_NO_STARTUP := 1
+
 all: build test
 
 branch-info: ## Print branch, HEAD, and describe before building/testing

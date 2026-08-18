@@ -223,6 +223,7 @@ const GlobalFlags = struct {
     load_paths: std.ArrayListUnmanaged([]const u8) = .{},
     stdlib_path: ?[]const u8 = null,
     prelude_path: ?[]const u8 = null,
+    no_startup: bool = false,
 
     fn deinit(self: *GlobalFlags, allocator: std.mem.Allocator) void {
         self.load_paths.deinit(allocator);
@@ -243,6 +244,50 @@ fn resolveMemoryDefault(global: *GlobalFlags, trace_enabled: bool) void {
     }
     const det = container_limits.detectMemory(trace_enabled);
     if (det.source != .fallback) global.max_memory_bytes = det.cap;
+}
+
+/// The startup file path chain, with the environment supplied by the caller so it can be exercised
+/// without touching the process environment.
+///
+/// A skip wins over every path source, including an explicit `ONEZ_STARTUP`.
+fn startupPathFrom(
+    allocator: std.mem.Allocator,
+    skip: bool,
+    startup: ?[]const u8,
+    xdg_config_home: ?[]const u8,
+    home: ?[]const u8,
+) ?[]u8 {
+    if (skip) return null;
+
+    if (startup) |path| {
+        return allocator.dupe(u8, path) catch null;
+    }
+
+    if (xdg_config_home) |xdg| {
+        return std.fs.path.join(allocator, &.{ xdg, "1z", "startup.1z" }) catch null;
+    }
+
+    const h = home orelse return null;
+    return std.fs.path.join(allocator, &.{ h, ".config", "1z", "startup.1z" }) catch null;
+}
+
+/// Resolve the user startup file path. Returns null when the startup file is skipped or no path can
+/// be determined. Up to the caller to free the returned slice.
+///
+/// Prioritize $ONEZ_STARTUP if set, otherwise $XDG_CONFIG_HOME/1z/startup.1z, and lastly
+/// ~/.config/1z/startup.1z (the default).
+///
+/// `--no-startup` and $ONEZ_NO_STARTUP both skip. The variable skips on presence, so its value is
+/// never read and an empty setting still skips.
+fn resolveStartupPath(allocator: std.mem.Allocator, global: *const GlobalFlags) ?[]u8 {
+    const skip = global.no_startup or std.posix.getenv("ONEZ_NO_STARTUP") != null;
+    return startupPathFrom(
+        allocator,
+        skip,
+        std.posix.getenv("ONEZ_STARTUP"),
+        std.posix.getenv("XDG_CONFIG_HOME"),
+        std.posix.getenv("HOME"),
+    );
 }
 
 /// Shared state for flags that affect the runtime environment regardless of which subcommand is running.
@@ -304,6 +349,10 @@ fn parseGlobalFlag(
     }
     if (std.mem.startsWith(u8, arg, "--prelude=")) {
         state.prelude_path = arg["--prelude=".len..];
+        return .consumed;
+    }
+    if (std.mem.eql(u8, arg, "--no-startup")) {
+        state.no_startup = true;
         return .consumed;
     }
     return .not_mine;
@@ -4685,6 +4734,81 @@ test "parseSamplingTick: malformed input returns null" {
     try std.testing.expectEqual(@as(?i128, null), parseSamplingTick("5x"));
     try std.testing.expectEqual(@as(?i128, null), parseSamplingTick("1.5"));
     try std.testing.expectEqual(@as(?i128, null), parseSamplingTick("-1"));
+}
+
+test "parseGlobalFlag: --no-startup" {
+    var buf: [256]u8 = undefined;
+
+    {
+        var w = std.Io.Writer.fixed(&buf);
+        var state = GlobalFlags{};
+        defer state.deinit(std.testing.allocator);
+        try std.testing.expectEqual(
+            FlagParseResult.consumed,
+            try parseGlobalFlag("--no-startup", &state, std.testing.allocator, &w),
+        );
+        try std.testing.expect(state.no_startup);
+    }
+
+    {
+        var w = std.Io.Writer.fixed(&buf);
+        var state = GlobalFlags{};
+        defer state.deinit(std.testing.allocator);
+        try std.testing.expectEqual(
+            FlagParseResult.consumed,
+            try parseGlobalFlag("--prelude=/dev/null", &state, std.testing.allocator, &w),
+        );
+        try std.testing.expect(!state.no_startup);
+    }
+
+    // The match is exact, so a value form is nobody's flag and each caller reports it as unknown.
+    {
+        var w = std.Io.Writer.fixed(&buf);
+        var state = GlobalFlags{};
+        defer state.deinit(std.testing.allocator);
+        try std.testing.expectEqual(
+            FlagParseResult.not_mine,
+            try parseGlobalFlag("--no-startup=1", &state, std.testing.allocator, &w),
+        );
+        try std.testing.expect(!state.no_startup);
+    }
+}
+
+test "startupPathFrom: chain precedence" {
+    const alloc = std.testing.allocator;
+
+    {
+        const path = startupPathFrom(alloc, false, "/tmp/custom.1z", "/xdg", "/home/u").?;
+        defer alloc.free(path);
+        try std.testing.expectEqualStrings("/tmp/custom.1z", path);
+    }
+
+    {
+        const path = startupPathFrom(alloc, false, null, "/xdg", "/home/u").?;
+        defer alloc.free(path);
+        try std.testing.expectEqualStrings("/xdg/1z/startup.1z", path);
+    }
+
+    {
+        const path = startupPathFrom(alloc, false, null, null, "/home/u").?;
+        defer alloc.free(path);
+        try std.testing.expectEqualStrings("/home/u/.config/1z/startup.1z", path);
+    }
+
+    try std.testing.expectEqual(@as(?[]u8, null), startupPathFrom(alloc, false, null, null, null));
+}
+
+test "startupPathFrom: the skip beats every path source" {
+    const alloc = std.testing.allocator;
+    try std.testing.expectEqual(
+        @as(?[]u8, null),
+        startupPathFrom(alloc, true, "/tmp/custom.1z", "/xdg", "/home/u"),
+    );
+}
+
+test "resolveStartupPath: --no-startup skips whatever the environment holds" {
+    const global = GlobalFlags{ .no_startup = true };
+    try std.testing.expectEqual(@as(?[]u8, null), resolveStartupPath(std.testing.allocator, &global));
 }
 
 test "parseExecutionFlag: sample axes and sampling-tick" {

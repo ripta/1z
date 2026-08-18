@@ -1077,6 +1077,17 @@ fn flagsContainSubcommand(flags_lines: ?[]const u8, sub: []const u8) bool {
     return false;
 }
 
+fn envLinesSetKey(env_lines: ?[]const u8, key: []const u8) bool {
+    const el = env_lines orelse return false;
+    var env_iter = std.mem.splitScalar(u8, el, '\n');
+    while (env_iter.next()) |line| {
+        const trimmed = std.mem.trim(u8, line, " \t\r");
+        const eq_pos = std.mem.indexOfScalar(u8, trimmed, '=') orelse continue;
+        if (std.mem.eql(u8, trimmed[0..eq_pos], key)) return true;
+    }
+    return false;
+}
+
 fn hasTestTimeoutFlag(flags_lines: ?[]const u8) bool {
     const fl = flags_lines orelse return false;
     var flag_iter = std.mem.splitScalar(u8, fl, '\n');
@@ -1941,6 +1952,15 @@ fn configureIntegrationRun(
     test_threads: []const u8,
     artifact: *std.Build.Step.Compile,
 ) void {
+    // The suite must not read a developer's own startup file.
+    //
+    // This sets the variable rather than passing `--no-startup`. A test that spawns child
+    // interpreters builds their argv by hand, so a flag would never reach them. A case naming
+    // `ONEZ_STARTUP` in its `.env` supplies its own fixture, so the skip stays out of its way.
+    if (!envLinesSetKey(te.env_lines, "ONEZ_STARTUP")) {
+        run.setEnvironmentVariable("ONEZ_NO_STARTUP", "1");
+    }
+
     var raw_mode = false;
     var detected_subcommand: ?[]const u8 = null;
     if (te.flags_lines) |fl| {
