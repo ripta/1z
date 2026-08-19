@@ -1,0 +1,2 @@
+tests/integration/fixtures/startup_runtime_fault.1z:5: error 'division-by-zero' at word '/'
+  stack effect: ( a b -- a/b )

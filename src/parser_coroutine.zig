@@ -40,6 +40,8 @@ pub const ParserCoroutine = struct {
     allocator: Allocator,
     ctx: ?*Context,
     initial_input: []const u8 = "",
+    /// Passed through to the tokenizer this coroutine builds. See `Tokenizer.at_source_start`.
+    at_source_start: bool = true,
 
     pub fn yield(self: *ParserCoroutine) void {
         if (comptime is_freestanding) unreachable;
@@ -69,6 +71,7 @@ pub fn parserEntryPoint() callconv(.c) void {
 
     var tokenizer = Tokenizer.init(co.initial_input);
     tokenizer.parser_coroutine = co;
+    tokenizer.at_source_start = co.at_source_start;
     co.tokenizer = &tokenizer;
 
     const instrs = parser.parseTopLevel(

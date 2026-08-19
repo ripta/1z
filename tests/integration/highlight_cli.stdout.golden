@@ -55,6 +55,16 @@ double: [ 2 * ] ;
 Stack: [ ]
 PASS: run-highlight-cli with custom theme completes
 Stack: [ ]
+=== shebang line ===
+Stack: [ ]
+Stack: [ "<span class="token-comment">#!/usr/bin/env -S 1z</span>
+<span class="token-number">42</span>" ]
+Stack: [ "<span class="token-comment">#!/usr/bin/env -S 1z</span>
+<span class="token-number">42</span>" t ]
+PASS: interpreter line is highlighted as a comment
+Stack: [ "<span class="token-comment">#!/usr/bin/env -S 1z</span>
+<span class="token-number">42</span>" ]
+Stack: [ ]
 === empty input ===
 Stack: [ ]
 Stack: [ "" ]

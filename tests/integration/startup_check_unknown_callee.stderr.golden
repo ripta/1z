@@ -1,0 +1,1 @@
+tests/integration/startup_check_unknown_callee.1z:4: warning: say-greeting: cannot verify say-greeting: callee startup-greeting has unknown effect

@@ -46,6 +46,15 @@ pub const StatementProcessor = struct {
         parse_error: anyerror,
     };
 
+    /// Whether the buffered statement begins at the source's very first byte.
+    ///
+    /// Each statement is tokenized as its own input, so the tokenizer cannot tell the file's first
+    /// byte from a later statement's on its own. A caller that never calls `trackLine` leaves
+    /// `start_line` at zero, and is feeding a fragment rather than a file.
+    fn atSourceStart(self: *const StatementProcessor) bool {
+        return self.start_line == 1;
+    }
+
     /// Track the current file line number for error reporting.
     pub fn trackLine(self: *StatementProcessor, line_num: usize) void {
         if (self.stmt_len == 0) {
@@ -107,6 +116,7 @@ pub const StatementProcessor = struct {
                 .allocator = allocator,
                 .ctx = ctx,
                 .initial_input = self.stmt_buf[0..self.stmt_len],
+                .at_source_start = self.atSourceStart(),
             };
             pc_mod.pending_entry_coroutine = &self.coroutine.?;
             pc_mod.initCoroutineContext(&self.coroutine.?);
@@ -187,6 +197,7 @@ pub const StatementProcessor = struct {
     fn tryParseDirect(self: *StatementProcessor, allocator: Allocator, ctx: ?*Context) Result {
         const stack_depth_before: ?usize = if (ctx) |c| c.stack.depth() else null;
         var tokenizer = Tokenizer.init(self.stmt_buf[0..self.stmt_len]);
+        tokenizer.at_source_start = self.atSourceStart();
         const instrs = parser.parseTopLevel(allocator, &tokenizer, ctx) catch |err| {
             if (parser.isIncompleteError(err)) {
                 if (ctx) |c| if (stack_depth_before) |before| {
@@ -245,6 +256,7 @@ pub const StatementProcessor = struct {
 
         // bo active coroutine but buffered content, e.g., doc-comment accumulation followed by EOF(?)
         var tokenizer = Tokenizer.init(self.stmt_buf[0..self.stmt_len]);
+        tokenizer.at_source_start = self.atSourceStart();
         const instrs = parser.parseTopLevel(allocator, &tokenizer, ctx) catch |err| {
             return .{ .parse_error = err };
         };
@@ -269,6 +281,9 @@ fn adjustInstructionLines(instrs: []const Instruction, line_offset: usize) void 
     }
 }
 
+/// Callers reach this only when the buffer parsed to no instructions, so the tokenizer's default
+/// `at_source_start` cannot diverge from the statement's: a buffer whose leading `#!` was read as a
+/// word would have produced one.
 fn bufferOnlyHasDocComments(buf: []const u8) bool {
     var tokenizer = Tokenizer.init(buf);
     var saw_doc_comment = false;

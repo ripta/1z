@@ -1,0 +1,4 @@
+\ The twin of `startup_check_known_callee.1z`, run with no startup file. The callee is unknown, so
+\ the caller cannot be verified. This is the false diagnostic that putting `check` in the
+\ executing set removes.
+say-greeting: ( -- ) [ startup-greeting print-line ] ;

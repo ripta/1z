@@ -1,0 +1,4 @@
+\ `check` executes the startup file, so a caller of a word the file defines verifies instead of
+\ warning about an unknown callee. The twin `startup_check_unknown_callee.1z` is the same program
+\ with no startup file, and it warns.
+say-greeting: ( -- ) [ startup-greeting print-line ] ;

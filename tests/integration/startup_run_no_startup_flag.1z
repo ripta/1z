@@ -1,0 +1,3 @@
+\ `--no-startup` beats an explicit ONEZ_STARTUP on the batch path as it does at the prompt, so
+\ the word the startup file would have defined is unknown here.
+startup-greeting print-line

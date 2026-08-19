@@ -99,7 +99,27 @@ use "conversions" ;
   ] [ drop f ] if
 ] ;
 
-\ --- Rule 5: string literal ---
+\ --- Rule 5: interpreter line (#! at the very start of the source) ---
+\
+\ Emitted as a comment, matching the host tokenizer, so an executable script lints and
+\ highlights like any other file. Off the first character a `#` falls through to the word rule,
+\ which is what keeps `#len` and its siblings intact.
+
+(starts-shebang?): ( scanner -- ? ) [
+  dup position>> 0 = [
+    dup peek "#" = [ advance peek "!" = ] [ drop f ] if
+  ] [ drop f ] if
+] ;
+
+(shebang-match): ( scanner -- new-scanner token | f ) [
+  dup (starts-shebang?) [
+    dup position>> swap
+    [ (non-newline?) ] take-while
+    <rot- [ comment: swap ] dip make-token
+  ] [ drop f ] if
+] ;
+
+\ --- Rule 6: string literal ---
 
 (string-loop): ( scanner -- scanner ) [
   dup at-end? not [
@@ -130,7 +150,7 @@ use "conversions" ;
   ] [ drop f ] if
 ] ;
 
-\ --- Rule 6: stack effect ( ... ) ---
+\ --- Rule 7: stack effect ( ... ) ---
 
 (stack-effect-loop): ( scanner -- scanner found? ) [
   dup at-end? [ f ] [
@@ -163,7 +183,7 @@ use "conversions" ;
   ] [ drop f ] if
 ] ;
 
-\ --- Rule 7: number literal ---
+\ --- Rule 8: number literal ---
 
 (digit-or-sep?):  ( ch -- ? ) [ dup digit? swap "_" = or ] ;
 (hex-or-sep?):    ( ch -- ? ) [ dup hex-digit? swap "_" = or ] ;
@@ -253,7 +273,7 @@ use "conversions" ;
   ] [ drop f ] if
 ] ;
 
-\ --- Rule 8: semicolon ---
+\ --- Rule 9: semicolon ---
 
 (semicolon-match): ( scanner -- new-scanner token | f ) [
   dup peek ";" = [
@@ -262,7 +282,7 @@ use "conversions" ;
   ] [ drop f ] if
 ] ;
 
-\ --- Rule 9: open-bracket ---
+\ --- Rule 10: open-bracket ---
 
 (open-bracket-match): ( scanner -- new-scanner token | f ) [
   dup peek "[" = [
@@ -271,7 +291,7 @@ use "conversions" ;
   ] [ drop f ] if
 ] ;
 
-\ --- Rule 10: close-bracket ---
+\ --- Rule 11: close-bracket ---
 
 (close-bracket-match): ( scanner -- new-scanner token | f ) [
   dup peek "]" = [
@@ -280,7 +300,7 @@ use "conversions" ;
   ] [ drop f ] if
 ] ;
 
-\ --- Rule 11: close-brace ---
+\ --- Rule 12: close-brace ---
 
 (close-brace-match): ( scanner -- new-scanner token | f ) [
   dup peek "}" = [
@@ -289,7 +309,7 @@ use "conversions" ;
   ] [ drop f ] if
 ] ;
 
-\ --- Rule 12: open-brace (including compound forms) ---
+\ --- Rule 13: open-brace (including compound forms) ---
 
 BRACE-PREFIXES: ( -- array ) const [
   { "virtual{" "struct{" "pragma{" "method{" "match{" "enum{" "H{" "V{" "M{" "{" }
@@ -318,7 +338,7 @@ BRACE-PREFIXES: ( -- array ) const [
   ] if
 ] ;
 
-\ --- Rule 13: symbol (2+ non-whitespace chars ending in :) ---
+\ --- Rule 14: symbol (2+ non-whitespace chars ending in :) ---
 
 (symbol-match): ( scanner -- new-scanner token | f ) [
   dup position>> swap
@@ -331,7 +351,7 @@ BRACE-PREFIXES: ( -- array ) const [
   ] if
 ] ;
 
-\ --- Rule 14: word (fallback, any non-whitespace) ---
+\ --- Rule 15: word (fallback, any non-whitespace) ---
 
 (1z-word-match): ( scanner -- new-scanner token | f ) [
   dup peek dup f = [ 2drop f ] [
@@ -362,6 +382,7 @@ BRACE-PREFIXES: ( -- array ) const [
     H{ kind: whitespace: first: " \t" match: [ (ws-match) ] } #push!
     H{ kind: doc-comment: first: "\\" match: [ (doc-comment-match) ] } #push!
     H{ kind: comment: first: "\\" match: [ (comment-match) ] } #push!
+    H{ kind: comment: first: "#" match: [ (shebang-match) ] } #push!
     H{ kind: string: first: "\"" match: [ (string-match) ] } #push!
     H{ kind: stack-effect: first: "(" match: [ (stack-effect-match) ] } #push!
     H{ kind: number: first: "-0123456789" match: [ (1z-number-match) ] } #push!

@@ -1,0 +1,3 @@
+\ A faulting startup file prints one diagnostic and is abandoned at the fault. The program still
+\ runs, and the exit code is the program's rather than the startup file's.
+before-fault print-line

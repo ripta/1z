@@ -1,0 +1,1 @@
+tests/integration/startup_run_no_startup_flag.1z:3: error 'unknown-word' at word 'startup-greeting'

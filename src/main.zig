@@ -1545,6 +1545,10 @@ fn handleRun(gpa: std.mem.Allocator, args: []const []const u8) u8 {
         ec.armWatchdog(timeout_ns);
     }
 
+    // Placed after the watchdog is armed, since that thread exits the process. A startup file that
+    // never finishes is then caught rather than hanging the invocation.
+    runStartupFile(&ec.ctx, &global, err_writer);
+
     const result = batch(&ec.ctx, path, exec.show_stack);
     ec.fireExitHooks(result);
     ec.finalizeBenchmark(&exec);
@@ -1617,11 +1621,16 @@ fn handleCheck(gpa: std.mem.Allocator, args: []const []const u8) u8 {
     const ec = ExecutionContext.init(gpa, &global, &exec, err_writer) catch return 1;
     defer ec.deinit();
 
-    ec.ctx.check_mode = true;
-
     if (exec.test_timeout_ns) |timeout_ns| {
         ec.armWatchdog(timeout_ns);
     }
+
+    // Runs before check mode is on, so a `use` in the startup file executes its module exactly as
+    // it does under `run`. The definitions-only gate exists so the checker does not run the
+    // program. The startup file is the user's environment rather than the program.
+    runStartupFile(&ec.ctx, &global, err_writer);
+
+    ec.ctx.check_mode = true;
 
     const result = batch(&ec.ctx, path, exec.show_stack);
     ec.fireExitHooks(result);

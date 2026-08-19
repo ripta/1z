@@ -1195,6 +1195,8 @@ fn nativeParseStackEffect(ctx: *Context) anyerror!void {
     // parsing.
     const wrapped = try std.fmt.allocPrint(alloc, "{s} )", .{raw});
     var tokenizer = Tokenizer.init(wrapped);
+    // An effect body is a fragment, not a source, so a leading `#!` in it is an ordinary word.
+    tokenizer.at_source_start = false;
     ctx.parse_diagnostics = null;
     const effect = parser_mod.parseStackEffect(alloc, &tokenizer, ctx, 0) catch |err| {
         if (err == error.OutOfMemory) return error.OutOfMemory;

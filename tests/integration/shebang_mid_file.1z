@@ -1,0 +1,5 @@
+\ A `#!` line is an interpreter line only at the source's very first byte. The interpreter reads a
+\ file one statement at a time, so a later statement begins at its own byte 0 and must not be read
+\ as one. Here it stays an ordinary word and raises, rather than being silently skipped.
+"first" print-line
+#!fake

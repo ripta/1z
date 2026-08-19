@@ -1,0 +1,4 @@
+\ The bare `1z <file>` form routes to the same handler as `1z run`, so it executes the user
+\ startup file too. A shebang script invokes the interpreter with the same argv, so this covers
+\ that form as well.
+startup-greeting print-line

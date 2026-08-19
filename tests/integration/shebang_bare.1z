@@ -1,0 +1,4 @@
+#!/usr/bin/env -S 1z
+\ An executable script's interpreter line is a comment, so the kernel's `1z <file>` invocation runs
+\ the file as written. This is the form the cgi guide tells users to write.
+"shebang script ran" print-line

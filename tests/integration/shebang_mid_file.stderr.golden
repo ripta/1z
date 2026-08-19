@@ -1,0 +1,1 @@
+tests/integration/shebang_mid_file.1z:5: error 'unknown-word' at word '#!fake'

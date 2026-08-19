@@ -292,6 +292,14 @@ appear in `help` output.
 double: ( n -- n ) [ dup + ] ;
 ```
 
+A `#!` interpreter line on the very first line of a file is also a comment, so a
+1z file can be an executable script:
+
+```
+#!/usr/bin/env -S 1z
+"hello" print-line
+```
+
 ## Next Steps
 
 That covers the fundamentals. The [language tutorials](../tutorials/index.md)

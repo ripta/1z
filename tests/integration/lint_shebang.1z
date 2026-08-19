@@ -1,0 +1,4 @@
+#!/usr/bin/env -S 1z
+\ A shebang-led file lints clean, so the tooling accepts the same script the interpreter runs.
+\ It carries no definitions, which would trigger dead-definition in a single-file lint, and no
+\ imports.

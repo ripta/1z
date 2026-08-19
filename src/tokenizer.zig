@@ -41,6 +41,13 @@ pub const Tokenizer = struct {
     preserve_newlines: bool,
     parser_coroutine: ?*ParserCoroutine = null,
     peeked: ?Token = null,
+    /// Whether byte 0 of `input` is byte 0 of the source, which is what makes an interpreter line
+    /// an interpreter line.
+    ///
+    /// It defaults to true, since a caller handing over a whole source is the common case. The
+    /// interpreter is the exception: it tokenizes a file one top-level statement at a time, so
+    /// every statement after the first begins at its own byte 0 and must say so.
+    at_source_start: bool = true,
 
     pub fn init(input: []const u8) Tokenizer {
         return .{
@@ -88,6 +95,18 @@ pub const Tokenizer = struct {
         const start = self.pos;
         const token_line = self.line;
         const token_column = start - self.line_start + 1;
+
+        // Interpreter line: `#!` at the very first byte of the source runs to end of line.
+        //
+        // It is a comment token rather than a skip, so the formatter round-trips it. It lives in
+        // the tokenizer rather than in a file reader, so every consumer accepts an executable
+        // script.
+        if (self.at_source_start and start == 0 and std.mem.startsWith(u8, self.input, "#!")) {
+            while (self.pos < self.input.len and self.input[self.pos] != '\n') {
+                self.pos += 1;
+            }
+            return .{ .kind = .comment, .text = self.input[start..self.pos], .line = token_line, .column = token_column };
+        }
 
         // Doc-comment: `\\` followed by space/tab/newline/CR or end-of-input
         if (self.input[self.pos] == '\\' and
@@ -503,6 +522,51 @@ test "backslash not followed by space is not a comment" {
     var t = Tokenizer.init("\\n foo");
     try std.testing.expectEqualStrings("\\n", t.next().?.text);
     try std.testing.expectEqualStrings("foo", t.next().?.text);
+    try std.testing.expectEqual(null, t.next());
+}
+
+test "shebang line is a comment" {
+    var t = Tokenizer.init("#!/usr/bin/env -S 1z\n42");
+    const shebang = t.next().?;
+    try std.testing.expectEqual(Token.Kind.comment, shebang.kind);
+    try std.testing.expectEqualStrings("#!/usr/bin/env -S 1z", shebang.text);
+    try std.testing.expectEqualStrings("42", t.next().?.text);
+    try std.testing.expectEqual(null, t.next());
+}
+
+test "shebang at end of input" {
+    var t = Tokenizer.init("#!/usr/bin/env 1z");
+    const shebang = t.next().?;
+    try std.testing.expectEqual(Token.Kind.comment, shebang.kind);
+    try std.testing.expectEqualStrings("#!/usr/bin/env 1z", shebang.text);
+    try std.testing.expectEqual(null, t.next());
+}
+
+test "shebang off the first byte is an ordinary word" {
+    var t = Tokenizer.init(" #!/usr/bin/env");
+    try std.testing.expectEqualStrings("#!/usr/bin/env", t.next().?.text);
+    try std.testing.expectEqual(null, t.next());
+
+    var second_line = Tokenizer.init("42\n#!/usr/bin/env");
+    try std.testing.expectEqualStrings("42", second_line.next().?.text);
+    try std.testing.expectEqualStrings("#!/usr/bin/env", second_line.next().?.text);
+    try std.testing.expectEqual(null, second_line.next());
+}
+
+test "sequence words keep their leading hash" {
+    var t = Tokenizer.init("#len #map");
+    try std.testing.expectEqualStrings("#len", t.next().?.text);
+    try std.testing.expectEqualStrings("#map", t.next().?.text);
+    try std.testing.expectEqual(null, t.next());
+}
+
+test "a shebang away from the source start is an ordinary word" {
+    var t = Tokenizer.init("#!/usr/bin/env 1z");
+    t.at_source_start = false;
+    const tok = t.next().?;
+    try std.testing.expectEqual(Token.Kind.word, tok.kind);
+    try std.testing.expectEqualStrings("#!/usr/bin/env", tok.text);
+    try std.testing.expectEqualStrings("1z", t.next().?.text);
     try std.testing.expectEqual(null, t.next());
 }
 

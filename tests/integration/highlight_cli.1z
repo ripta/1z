@@ -65,6 +65,13 @@ t "run-highlight-cli HTML completes" assert-true
 run-highlight-cli
 t "run-highlight-cli with custom theme completes" assert-true
 
+"shebang line" test-section
+
+"#!/usr/bin/env -S 1z\n42" "html" "" (highlight-with-options)
+dup "<span class=\"token-comment\">#!/usr/bin/env -S 1z</span>" #index-of f = not
+"interpreter line is highlighted as a comment" assert-true
+drop
+
 "empty input" test-section
 
 "" "ansi" "" (highlight-with-options)

@@ -1,0 +1,4 @@
+\ Pins that `run` executes the user startup file: a word it defines and a module it imports are
+\ both reachable from the program.
+startup-greeting print-line
+2.7 floor >string print-line
