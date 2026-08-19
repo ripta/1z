@@ -290,6 +290,152 @@ fn resolveStartupPath(allocator: std.mem.Allocator, global: *const GlobalFlags) 
     );
 }
 
+/// Whether the rest of the startup file should still be read.
+const StartupStep = enum { proceed, abandon };
+
+/// Run one statement of the user startup file, reporting a fault against `ctx.current_source`.
+///
+/// A fault abandons the rest of the file rather than continuing statement by statement. A broken
+/// import makes every statement below it fail too, so continuing would turn one fault into a
+/// cascade in which only the first line is informative.
+fn applyStartupStatement(
+    ctx: *Context,
+    err_writer: anytype,
+    processor: *StatementProcessor,
+    result: StatementProcessor.Result,
+    file_line: usize,
+) StartupStep {
+    switch (result) {
+        .needs_more_input => return .proceed,
+        .parse_error => |err| {
+            if (err != error.DebuggerQuit) {
+                if (ctx.parse_diagnostics != null) {
+                    printParseDiagnostics(ctx, err_writer, ctx.current_source, file_line, processor.start_line);
+                } else {
+                    // Same `source:line: error 'type'` shape the two real printers use, so a
+                    // diagnostic always names the startup file whichever path reports it.
+                    var kebab_buf: [128]u8 = undefined;
+                    const kebab_name = pascalToKebabRuntime(@errorName(err), &kebab_buf);
+                    err_writer.print("{s}:{d}: error '{s}'\n", .{ ctx.current_source, file_line, kebab_name }) catch {};
+                }
+                err_writer.flush() catch {};
+            }
+            ctx.clearExecutionDetails();
+            return .abandon;
+        },
+        .complete => |instrs| {
+            if (instrs.len > 0) {
+                ctx.executeQuotation(.{ .instructions = instrs }) catch |err| {
+                    if (err != debugger_mod.DebuggerQuit.DebuggerQuit) {
+                        printErrorDetails(ctx, err_writer, err);
+                        err_writer.flush() catch {};
+                    }
+                    return .abandon;
+                };
+            }
+            processor.reset();
+            return .proceed;
+        },
+    }
+}
+
+/// Execute the user startup file, when the path chain resolves one and it exists.
+///
+/// The file gets a session-long local frame above the prelude's, and that frame becomes both the
+/// import target and the durable floor. It is deliberately never popped, so a word the file defines
+/// stays visible for the whole invocation and is attributable to the startup file rather than to
+/// the prelude. `Context.deinit` reclaims it.
+///
+/// No pragma frame is pushed. A `pragma{ }` in the file lands in the base frame `loadPrelude`
+/// pushes and never pops, so the setting survives into whatever the subcommand runs next.
+///
+/// A fault prints one diagnostic and abandons the rest of the file. The invocation continues, so
+/// its exit code reflects the program rather than the startup file.
+fn runStartupFile(ctx: *Context, global: *const GlobalFlags, err_writer: anytype) void {
+    // The ctx arena owns the path: `current_source` points at it and the error-detail rows borrow
+    // it, so it has to outlive this call.
+    const path = resolveStartupPath(ctx.quotationAllocator(), global) orelse return;
+
+    const file = std.fs.cwd().openFile(path, .{}) catch |err| {
+        // Having no startup file is the common case. A path that exists and cannot be opened is
+        // the user's own file failing, so that one is worth a line.
+        if (err != error.FileNotFound) {
+            err_writer.print("Error: cannot read startup file '{s}': {any}\n", .{ path, err }) catch {};
+            err_writer.flush() catch {};
+        }
+        return;
+    };
+    defer file.close();
+
+    ctx.pushLocalFrame() catch return;
+    ctx.import_frame_index = ctx.local_frames.items.len - 1;
+    ctx.durable_frame_floor = ctx.import_frame_index;
+
+    // The path is reported verbatim rather than made relative to the cwd, so a diagnostic names the
+    // path the user configured.
+    const old_source = ctx.current_source;
+    defer ctx.current_source = old_source;
+    ctx.current_source = path;
+
+    const old_source_dir = ctx.current_source_dir;
+    defer ctx.current_source_dir = old_source_dir;
+    var abs_buf: [std.fs.max_path_bytes]u8 = undefined;
+    if (std.fs.cwd().realpath(path, &abs_buf)) |abs_path| {
+        if (std.fs.path.dirname(abs_path)) |dir| {
+            ctx.current_source_dir = ctx.quotationAllocator().dupe(u8, dir) catch null;
+        }
+    } else |_| {
+        ctx.current_source_dir = std.fs.path.dirname(path);
+    }
+
+    // The REPL read loop never writes this, so an offset left behind by a multiline startup
+    // statement would skew every later diagnostic in the session.
+    const old_line_offset = ctx.parse_line_offset;
+    defer ctx.parse_line_offset = old_line_offset;
+
+    defer {
+        // A fault leaves the raise's state behind, and the invocation continues past it. A stale
+        // thrown error would reach the next `printErrorDetails` hook fire, and an interrupt raised
+        // here would make the REPL read an unrelated later error as an interrupt.
+        if (ctx.thrown_error) |thrown| {
+            if (thrown.data) |data| container_backing.releaseValue(data.*);
+            ctx.thrown_error = null;
+        }
+        signal.reset();
+    }
+
+    var file_buf: [4096]u8 = undefined;
+    var reader = file.reader(&file_buf);
+
+    var processor: StatementProcessor = .{};
+    defer processor.deinit();
+
+    var file_line: usize = 0;
+    while (true) {
+        const line = reader.interface.takeDelimiterInclusive('\n') catch |err| switch (err) {
+            error.EndOfStream => {
+                const flushed = processor.flush(ctx.quotationAllocator(), ctx);
+                _ = applyStartupStatement(ctx, err_writer, &processor, flushed, file_line);
+                return;
+            },
+            else => {
+                err_writer.print("Error: cannot read startup file '{s}': {any}\n", .{ path, err }) catch {};
+                err_writer.flush() catch {};
+                return;
+            },
+        };
+
+        file_line += 1;
+        processor.trackLine(file_line);
+        if (processor.start_line > 0) {
+            ctx.parse_line_offset = processor.start_line - 1;
+        }
+
+        const fed = processor.feedLine(ctx.quotationAllocator(), line, ctx);
+        if (applyStartupStatement(ctx, err_writer, &processor, fed, file_line) == .abandon) return;
+    }
+}
+
 /// Shared state for flags that affect the runtime environment regardless of which subcommand is running.
 const ExecutionFlags = struct {
     show_stack: bool = false,
@@ -1515,6 +1661,8 @@ fn handleRepl(gpa: std.mem.Allocator, args: []const []const u8) u8 {
 
     const ec = ExecutionContext.init(gpa, &global, &exec, err_writer) catch return 1;
     defer ec.deinit();
+
+    runStartupFile(&ec.ctx, &global, err_writer);
 
     repl(&ec.ctx, exec.verbosity, global.max_memory_bytes);
     ec.fireExitHooks(0);
@@ -4251,7 +4399,11 @@ fn writeInspectReport(w: anytype, fields: AotInspectFields) !void {
 }
 
 fn repl(ctx: *Context, verbosity: Verbosity, max_memory_bytes: usize) void {
-    ctx.setPragma("redefinition-arity-mismatch", value_mod.stringValue("warning")) catch {};
+    // The looser prompt severity is a default, not a policy. The startup file writes to the same
+    // base pragma frame and runs first, so a user who asked for the strict setting keeps it.
+    if (ctx.getPragma("redefinition-arity-mismatch") == null) {
+        ctx.setPragma("redefinition-arity-mismatch", value_mod.stringValue("warning")) catch {};
+    }
 
     const stdout_file: File = .stdout();
     var stdout_buf: [4096]u8 = undefined;

@@ -1,0 +1,5 @@
+startup-greeting print-line
+2.7 floor >string print-line
+startup-greeting: ( -- s ) [ "redefined at the prompt" ] ;
+startup-greeting: override ( -- s ) [ "redefined at the prompt" ] ;
+startup-greeting print-line

@@ -1,0 +1,3 @@
+widen: ( a -- b ) [ 1 + ] ;
+widen: ( a b -- c ) [ + ] ;
+3 4 widen >string print-line

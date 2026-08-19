@@ -1,0 +1,3 @@
+\ Placeholder: argv-mode test drives a piped repl session from startup_repl_no_startup_flag.stdin;
+\ this file is not executed. It pins that `--no-startup` beats an explicit ONEZ_STARTUP, so the
+\ word the named file defines is unknown at the prompt.

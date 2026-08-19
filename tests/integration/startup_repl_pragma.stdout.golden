@@ -1,0 +1,3 @@
+<repl>:2: error 'arity-mismatch' arity mismatch on redefinition of 'widen' (was 1 -> 1, now 2 -> 1) at word ';'
+  stack effect: ( name quot --  )
+5

@@ -1,0 +1,1 @@
+tests/integration/fixtures/startup_parse_fault.1z:5: error 'unmatched-close-brace'

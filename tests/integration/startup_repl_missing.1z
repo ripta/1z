@@ -1,0 +1,3 @@
+\ Placeholder: argv-mode test drives a piped repl session from startup_repl_missing.stdin; this file
+\ is not executed. It pins that a startup path naming a file that does not exist is silent, since
+\ having no startup file is the common case. The absent stderr golden is the silence.

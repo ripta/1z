@@ -1,0 +1,4 @@
+\ Placeholder: argv-mode test drives a piped repl session from startup_repl_word.stdin; this file is
+\ not executed. It pins that a word the user startup file defines and a module it imports are both
+\ reachable at the prompt, and that the startup file's own frame makes the word attributable to that
+\ file rather than to the prelude when a prompt definition shadows it.

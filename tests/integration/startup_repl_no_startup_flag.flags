@@ -1,0 +1,5 @@
+@raw
+repl
+-qq
+--stdlib-path=lib
+--no-startup

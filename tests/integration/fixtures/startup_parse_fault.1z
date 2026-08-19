@@ -1,0 +1,7 @@
+\ Startup file fixture: a parse fault mid-file. The word above it is defined, the word below it is
+\ not, because the fault abandons the rest of the file.
+before-fault: ( -- s ) [ "defined before the fault" ] ;
+
+}
+
+after-fault: ( -- s ) [ "never defined" ] ;

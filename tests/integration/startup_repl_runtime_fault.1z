@@ -1,0 +1,3 @@
+\ Placeholder: argv-mode test drives a piped repl session from startup_repl_runtime_fault.stdin;
+\ this file is not executed. It pins the failure shape for a runtime fault in the user startup
+\ file: one diagnostic naming the file, the rest of the file abandoned, and the session continuing.

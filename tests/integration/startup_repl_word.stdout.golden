@@ -1,0 +1,6 @@
+hello from the startup file
+2.0
+<repl>:3: error 'import-conflict' defining 'startup-greeting' would shadow a word from "tests/integration/fixtures/startup_word.1z" at word ';'
+  stack effect: ( name quot --  )
+  hint: add the 'override' marker if intentional
+redefined at the prompt

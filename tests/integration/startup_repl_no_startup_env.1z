@@ -1,0 +1,3 @@
+\ Placeholder: argv-mode test drives a piped repl session from startup_repl_no_startup_env.stdin;
+\ this file is not executed. It pins that ONEZ_NO_STARTUP beats an explicit ONEZ_STARTUP, and that
+\ it skips on presence alone, since the value here is never read.

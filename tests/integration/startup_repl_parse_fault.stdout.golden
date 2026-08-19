@@ -1,0 +1,2 @@
+defined before the fault
+<repl>:2: error 'unknown-word' at word 'after-fault'

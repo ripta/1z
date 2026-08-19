@@ -1,0 +1,5 @@
+\ Startup file fixture: an import and a word, both of which the session should see. The import is
+\ what exercises the startup frame as the import target.
+use "math" ;
+
+startup-greeting: ( -- s ) [ "hello from the startup file" ] ;

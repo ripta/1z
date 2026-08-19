@@ -1,0 +1,3 @@
+\ Startup file fixture: a pragma set. The repl relaxes this key to "warning" by default, so the
+\ session keeping "error" is what shows a user preference beating that default.
+pragma{ redefinition-arity-mismatch: "error" }
