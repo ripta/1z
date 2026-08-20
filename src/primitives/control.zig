@@ -248,6 +248,65 @@ pub fn nativeMissingDefaultArmValidator(ctx: *Context) anyerror!void {
     }
 }
 
+/// Native validator for the dictionary-shadow pragma, which relaxes the guard on a top-level
+/// definition shadowing a prelude or native word.
+pub fn nativeDictionaryShadowValidator(ctx: *Context) anyerror!void {
+    return collisionGuardValidator(ctx, "dictionary-shadow");
+}
+
+/// Native validator for the import-collision pragma, which relaxes the guard on a definition and
+/// an import landing on one name in one scope.
+pub fn nativeImportCollisionValidator(ctx: *Context) anyerror!void {
+    return collisionGuardValidator(ctx, "import-collision");
+}
+
+/// Shared validator for the two pragmas that relax a redefinition collision guard. These express a
+/// user's preference for their own environment, so a set is accepted from the startup file and
+/// from a REPL prompt and refused from a source file.
+///
+/// The set site is checked before the value, so a source file learns the rule rather than being
+/// told its value is wrong when the value was never the problem.
+fn collisionGuardValidator(ctx: *Context, comptime key: []const u8) anyerror!void {
+    const val = try ctx.stack.pop();
+    defer container_backing.releaseValue(val);
+
+    if (!ctx.pragmaEnvironmentSetSite()) {
+        try ctx.stack.push(value_mod.stringValue(key ++ ": may be set only from a startup file or a REPL prompt, not from a source file"));
+        try ctx.stack.push(.{ .boolean = false });
+        return;
+    }
+
+    if (collisionGuardValueOk(val)) {
+        try ctx.stack.push(val);
+        try ctx.stack.push(.{ .boolean = true });
+        return;
+    }
+
+    try ctx.stack.push(value_mod.stringValue(key ++ ": expected \"error\", \"warning\", \"off\", or an array of word-name symbols"));
+    try ctx.stack.push(.{ .boolean = false });
+}
+
+/// A severity word, or an allowlist of word names.
+///
+/// Names are symbols because a word name is a symbol everywhere else in the language, and because
+/// it keeps an allowlist from reading like a severity.
+///
+/// An empty allowlist is legal and allows nothing, which is what an unset key already means.
+fn collisionGuardValueOk(val: Value) bool {
+    switch (val) {
+        .string => |s| return std.mem.eql(u8, s.bytes, "error") or
+            std.mem.eql(u8, s.bytes, "warning") or
+            std.mem.eql(u8, s.bytes, "off"),
+        .array => |a| {
+            for (a.items) |item| {
+                if (item != .symbol) return false;
+            }
+            return true;
+        },
+        else => return false,
+    }
+}
+
 /// Native validator for the require-doc pragma. Maps level names to the bitmask
 /// consumed by enforceRequireDoc. Follows the same push-value/t or push-error/f
 /// protocol as the other pragma validators.

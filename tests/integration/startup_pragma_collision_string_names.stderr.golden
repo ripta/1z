@@ -1,0 +1,1 @@
+tests/integration/fixtures/startup_collision_pragma_string_names.1z:3: error 'pragma-error' dictionary-shadow: expected "error", "warning", "off", or an array of word-name symbols

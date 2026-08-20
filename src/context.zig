@@ -635,6 +635,12 @@ pub const Context = struct {
     struct_type_count: usize = 0,
     /// Current source file name for error reporting (defaults to "<repl>")
     current_source: []const u8 = "<repl>",
+    /// Resolved path of the user startup file, once one has been opened. Borrowed from the
+    /// context arena.
+    ///
+    /// An environment-only pragma compares `current_source` against this to tell a set the user
+    /// made for themselves from one a source file makes for its readers.
+    startup_source: ?[]const u8 = null,
     /// Tail call target for TCO, which is set by executeInstructions and consumed by executeQuotation
     tail_call_instructions: ?[]const Instruction = null,
     /// Module whose deps frame should be pushed for the tail call target.
@@ -1387,6 +1393,7 @@ pub const Context = struct {
             .deadlock_detect_ns = parent.deadlock_detect_ns,
             .mem_limit = parent.mem_limit,
             .current_source = parent.current_source,
+            .startup_source = parent.startup_source,
             .current_source_dir = parent.current_source_dir,
             .load_paths = parent.load_paths,
             .stdlib_path = parent.stdlib_path,
@@ -1619,6 +1626,18 @@ pub const Context = struct {
         };
     }
 
+    /// Whether the code executing right now may set an environment-only pragma. True at a REPL
+    /// prompt and inside the user startup file, false everywhere else, source files included.
+    ///
+    /// The comparison is against the startup path rather than a flag saying the startup file is
+    /// running, because a module the startup file loads points `current_source` at the module. A
+    /// module is a source file whoever loads it.
+    pub fn pragmaEnvironmentSetSite(self: *const Context) bool {
+        if (std.mem.eql(u8, self.current_source, "<repl>")) return true;
+        const startup = self.startup_source orelse return false;
+        return std.mem.eql(u8, self.current_source, startup);
+    }
+
     /// Emit a non-fatal constraint diagnostic to stderr. Matches the
     /// redefinition / type-check warning convention: an immediate `warning:`
     /// line rather than a collected diagnostic.
@@ -1676,6 +1695,14 @@ pub const Context = struct {
 
         try self.pragma_registry.put(self.allocator, "never-returns-consistency", .{
             .native_validator = &control.nativeNeverReturnsConsistencyValidator,
+        });
+
+        try self.pragma_registry.put(self.allocator, "dictionary-shadow", .{
+            .native_validator = &control.nativeDictionaryShadowValidator,
+        });
+
+        try self.pragma_registry.put(self.allocator, "import-collision", .{
+            .native_validator = &control.nativeImportCollisionValidator,
         });
 
         try self.pragma_registry.put(self.allocator, "allow-uninhabited-constraint", .{});
@@ -7800,6 +7827,27 @@ test "init and deinit" {
     defer ctx.deinit();
 
     try std.testing.expectEqual(@as(usize, 0), ctx.stack.depth());
+}
+
+test "pragmaEnvironmentSetSite accepts a prompt and the startup file, and refuses a source file" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    try std.testing.expect(ctx.pragmaEnvironmentSetSite());
+
+    ctx.current_source = "app.1z";
+    try std.testing.expect(!ctx.pragmaEnvironmentSetSite());
+
+    ctx.startup_source = "/home/u/.config/1z/startup.1z";
+    try std.testing.expect(!ctx.pragmaEnvironmentSetSite());
+
+    ctx.current_source = "/home/u/.config/1z/startup.1z";
+    try std.testing.expect(ctx.pragmaEnvironmentSetSite());
+
+    // A module the startup file loads points current_source at the module, which is a source file
+    // whoever loads it.
+    ctx.current_source = "lib/math.1z";
+    try std.testing.expect(!ctx.pragmaEnvironmentSetSite());
 }
 
 test "stack operations through context" {

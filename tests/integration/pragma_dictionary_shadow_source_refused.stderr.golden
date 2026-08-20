@@ -1,0 +1,1 @@
+tests/integration/pragma_dictionary_shadow_source_refused.1z:3: error 'pragma-error' dictionary-shadow: may be set only from a startup file or a REPL prompt, not from a source file

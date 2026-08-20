@@ -1,0 +1,4 @@
+pragma{ dictionary-shadow: "warning" }
+pragma{ import-collision: { dup: } }
+"dictionary-shadow" pragma-get inspect print-line
+"import-collision" pragma-get inspect print-line

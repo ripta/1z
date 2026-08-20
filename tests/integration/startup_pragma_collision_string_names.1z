@@ -1,0 +1,3 @@
+\ Pins the allowlist element spelling: entries are word-name symbols, and a string list is rejected
+\ with the same message a bad severity gets.
+"dictionary-shadow" pragma-get? option:none? >string print-line

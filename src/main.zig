@@ -377,6 +377,10 @@ fn runStartupFile(ctx: *Context, global: *const GlobalFlags, err_writer: anytype
     defer ctx.current_source = old_source;
     ctx.current_source = path;
 
+    // Deliberately not restored, unlike the line above. Every read of this happens long after the
+    // file has been read.
+    ctx.startup_source = path;
+
     const old_source_dir = ctx.current_source_dir;
     defer ctx.current_source_dir = old_source_dir;
     var abs_buf: [std.fs.max_path_bytes]u8 = undefined;

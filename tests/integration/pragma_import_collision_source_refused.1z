@@ -1,0 +1,2 @@
+\ The import-collision key is refused from a source file on the same terms as its sibling.
+pragma{ import-collision: { dup: } }

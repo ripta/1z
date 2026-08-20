@@ -1,0 +1,3 @@
+\ Startup file fixture: an allowlist written with strings. Allowlist entries are word names, and a
+\ word name is a symbol.
+pragma{ dictionary-shadow: { "dup" "nip" } }

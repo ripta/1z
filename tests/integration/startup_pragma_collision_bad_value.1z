@@ -1,0 +1,3 @@
+\ A rejected value faults against the startup file, and the invocation carries on with the key
+\ unset.
+"dictionary-shadow" pragma-get? option:none? >string print-line

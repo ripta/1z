@@ -1,0 +1,4 @@
+\ Startup file fixture: both collision-guard keys, one as a severity and one as an allowlist, set
+\ from the one place a user's own preference belongs.
+pragma{ dictionary-shadow: "off" }
+pragma{ import-collision: { dup: nip: } }

@@ -1,0 +1,3 @@
+\ Startup file fixture: a severity word outside the accepted vocabulary. The key is settable here,
+\ so the value is what the validator rejects.
+pragma{ dictionary-shadow: "quiet" }
