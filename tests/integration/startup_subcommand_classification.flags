@@ -1,0 +1,3 @@
+@self-exe
+--no-show-stack
+--no-startup

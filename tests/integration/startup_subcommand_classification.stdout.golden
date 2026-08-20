@@ -1,0 +1,24 @@
+=== the executing set ===
+PASS: run exits cleanly
+PASS: run executes the startup file
+PASS: eval exits cleanly
+PASS: eval executes the startup file
+PASS: check exits cleanly
+PASS: check executes the startup file
+PASS: test exits cleanly
+PASS: test executes the startup file
+PASS: repl exits cleanly
+PASS: repl executes the startup file
+=== the excluded set ===
+PASS: lint exits cleanly
+PASS: lint does not execute the startup file
+PASS: highlight exits cleanly
+PASS: highlight does not execute the startup file
+PASS: fmt exits cleanly
+PASS: fmt does not execute the startup file
+PASS: build exits cleanly
+PASS: build does not execute the startup file
+PASS: inspect exits cleanly
+PASS: inspect does not execute the startup file
+PASS: version exits cleanly
+PASS: version does not execute the startup file

@@ -1,0 +1,7 @@
+\ Probe test module for the subcommand-classification test's `test` row. `1z test` loads its
+\ argument as a module and runs the test words it finds, so that row needs a module that has one.
+use "testing" ;
+
+test-probe-noop: ( -- ) [
+  t "the probe test module runs" assert-true
+] ;

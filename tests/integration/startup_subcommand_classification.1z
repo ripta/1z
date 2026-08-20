@@ -1,0 +1,91 @@
+\ One place pinning which subcommands execute the user startup file, covering both sides of the
+\ rule. The startup fixture prints a marker, so a child interpreter that ran it says so on its own
+\ stdout.
+\
+\ Every row asserts the child's exit code as well. A wrong argv would otherwise make a child fail
+\ before it got anywhere, leave the marker absent, and read as a passing exclusion.
+\
+\ The parent carries --no-startup, so its own run stays out of the captured output. Each child
+\ builds its argv by hand, so the flag never reaches it and it reads ONEZ_STARTUP from the inherited
+\ environment. The interpreter path arrives as the sole command-line argument via the harness
+\ @self-exe directive.
+use "conversions" ;
+use "os/fs" ;
+use "process" ;
+use "testing" ;
+
+startup-marker:  ( -- s: string )    [ "startup-file-executed" ] ;
+probe-file:      ( -- path: string ) [ "tests/integration/fixtures/startup_probe.1z" ] ;
+probe-test-file: ( -- path: string ) [ "tests/integration/fixtures/startup_probe_test.1z" ] ;
+build-out-file:  ( -- path: string ) [ "tests/integration/_tmp_startup_class_out" ] ;
+stdlib-flag:     ( -- flag: string ) [ "--stdlib-path=lib" ] ;
+
+(exe): ( -- path: string ) [ command-line-args 0 #nth ] ;
+
+(rm-if): ( path: string -- ) [ dup file-exists? [ delete-file ] [ drop ] if ] ;
+
+\ Run one child interpreter to completion, reporting whether the startup file's marker reached its
+\ stdout and what it exited with.
+\
+\ stdin is a pipe the parent closes at once, so the repl row reads end-of-file rather than
+\ inheriting the harness's own stdin and blocking on it.
+(probe-subcommand): ( args: array -- ran?: boolean code: fixnum ) [
+  (exe) 1array #prepend
+  <stdio-opts> stdio-mode:pipe >>stdin
+  capture-all
+  dup stdout>> bytes> startup-marker #index-of [ t ] [ f ] if
+  swap exit-code>>
+] ;
+
+"the executing set" test-section
+
+"run" stdlib-flag probe-file 3 array-n (probe-subcommand)
+0 "run exits cleanly" assert=
+t "run executes the startup file" assert=
+
+"eval" stdlib-flag "1 2 + drop" 3 array-n (probe-subcommand)
+0 "eval exits cleanly" assert=
+t "eval executes the startup file" assert=
+
+"check" stdlib-flag probe-file 3 array-n (probe-subcommand)
+0 "check exits cleanly" assert=
+t "check executes the startup file" assert=
+
+"test" stdlib-flag probe-test-file 3 array-n (probe-subcommand)
+0 "test exits cleanly" assert=
+t "test executes the startup file" assert=
+
+"repl" "-qq" stdlib-flag 3 array-n (probe-subcommand)
+0 "repl exits cleanly" assert=
+t "repl executes the startup file" assert=
+
+"the excluded set" test-section
+
+"lint" stdlib-flag probe-file 3 array-n (probe-subcommand)
+0 "lint exits cleanly" assert=
+f "lint does not execute the startup file" assert=
+
+"highlight" stdlib-flag probe-file 3 array-n (probe-subcommand)
+0 "highlight exits cleanly" assert=
+f "highlight does not execute the startup file" assert=
+
+"fmt" "--check" probe-file 3 array-n (probe-subcommand)
+0 "fmt exits cleanly" assert=
+f "fmt does not execute the startup file" assert=
+
+\ The dump flag runs the real freeze path, where a hook would sit, and returns without invoking a C
+\ compiler. It still touches the -o path, so that file is cleared before and after.
+build-out-file (rm-if)
+"build" stdlib-flag "--dump-aot-image-classification" "-o" build-out-file probe-file 6 array-n
+(probe-subcommand)
+0 "build exits cleanly" assert=
+f "build does not execute the startup file" assert=
+build-out-file (rm-if)
+
+"inspect" stdlib-flag "--reach" "eval" probe-file 5 array-n (probe-subcommand)
+0 "inspect exits cleanly" assert=
+f "inspect does not execute the startup file" assert=
+
+"version" 1 array-n (probe-subcommand)
+0 "version exits cleanly" assert=
+f "version does not execute the startup file" assert=

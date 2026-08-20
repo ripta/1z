@@ -1,0 +1,8 @@
+\ Probe source for the subcommand-classification test. Every file-taking subcommand in that test
+\ operates on this file.
+\
+\ It carries no imports and no definitions, because both draw linter diagnostics, and every row
+\ there asserts its child exits cleanly.
+\
+\ The expression drops its result, so nothing is left on the stack for a subcommand to trip over.
+1 2 + drop

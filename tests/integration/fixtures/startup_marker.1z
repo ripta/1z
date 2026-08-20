@@ -1,0 +1,3 @@
+\ Startup file fixture for the subcommand-classification test. It prints a marker, so a child
+\ interpreter that executed the startup file says so on its own stdout.
+"startup-file-executed" print-line
