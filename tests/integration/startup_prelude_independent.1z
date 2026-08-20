@@ -1,0 +1,5 @@
+\ Pins that a substituted prelude neither suppresses nor alters the startup file. The two are
+\ independent mechanisms, so an explicit `--prelude` leaves the startup word and the startup
+\ file's own import reachable exactly as the default prelude does.
+startup-greeting print-line
+2.7 floor >string print-line

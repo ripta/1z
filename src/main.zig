@@ -818,6 +818,7 @@ fn printUsage() void {
         \\  --load-path=PATH        Add a module search path (repeatable)
         \\  --stdlib-path=PATH      Override standard library path
         \\  --prelude=PATH          Override prelude file path
+        \\  --no-startup            Skip the user startup file
         \\
         \\Execution options (run, eval, repl, check):
         \\  --threads=N|auto        Worker threads, or 'auto' to detect (default: auto)
@@ -833,6 +834,9 @@ fn printUsage() void {
         \\  ONEZ_PRELUDE            Default prelude path (overridden by --prelude)
         \\  ONEZ_LOAD_PATH          Colon-separated module search paths
         \\  ONEZ_STDLIB             Default standard library path
+        \\  ONEZ_STARTUP            User startup file path
+        \\  ONEZ_NO_STARTUP         Skip the user startup file (any value)
+        \\  ONEZ_HISTFILE           REPL history file path
         \\
         \\Run '1z <subcommand> --help' for subcommand-specific options.
         \\
@@ -873,6 +877,7 @@ const global_flags_help =
     \\  --load-path=PATH          Add a module search path (repeatable)
     \\  --stdlib-path=PATH        Override standard library path
     \\  --prelude=PATH            Override prelude file path
+    \\  --no-startup              Skip the user startup file
 ;
 
 fn printRunHelp() void {

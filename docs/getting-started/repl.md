@@ -88,6 +88,25 @@ Stack: [ ]
 ./zig-out/bin/1z -qq
 ```
 
+## Startup File
+
+Words, imports, and pragmas you want in every session go in
+`~/.config/1z/startup.1z`. The REPL runs it before the first prompt:
+
+```
+\ ~/.config/1z/startup.1z
+use "math" ;
+```
+
+```
+> 2.7 floor
+Stack: [ 2.0 ]
+```
+
+`--no-startup` skips it for one run. The
+[User Startup Configuration](../guides/startup-config.md) guide covers the
+full path chain and which other commands run the file.
+
 ## Exiting
 
 Ctrl-D on an empty line. The REPL prints "Goodbye!" and exits.
