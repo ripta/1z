@@ -1,0 +1,12 @@
+\ `test` executes the user startup file, so a test word reaches both a word the file defines and a
+\ module the file imports. The test file is loaded as a module, which is a frame above the startup
+\ file's, so this covers the whole ladder from the test word down to the startup frame.
+use "testing" ;
+
+test-startup-import: ( -- ) [
+  2.7 floor >string "2.0" "the startup file's math import is reachable" assert=
+] ;
+
+test-startup-word: ( -- ) [
+  startup-greeting "hello from the startup file" "the startup file's word is reachable" assert=
+] ;

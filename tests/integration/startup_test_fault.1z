@@ -1,0 +1,7 @@
+\ A faulting startup file prints one diagnostic and is abandoned at the fault. The test run still
+\ happens, and the exit code is the test result's rather than the startup file's.
+use "testing" ;
+
+test-partial-startup: ( -- ) [
+  before-fault "defined before the fault" "the statement above the fault applied" assert=
+] ;

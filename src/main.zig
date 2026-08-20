@@ -1733,6 +1733,8 @@ fn handleEval(gpa: std.mem.Allocator, args: []const []const u8) u8 {
         ec.armWatchdog(timeout_ns);
     }
 
+    runStartupFile(&ec.ctx, &global, err_writer);
+
     const result = runEval(&ec.ctx, code, print_top, exec.show_stack, err_writer);
     ec.fireExitHooks(result);
     ec.finalizeBenchmark(&exec);
@@ -1926,6 +1928,8 @@ fn handleTest(gpa: std.mem.Allocator, args: []const []const u8) u8 {
     if (exec.test_timeout_ns) |timeout_ns| {
         ec.armWatchdog(timeout_ns);
     }
+
+    runStartupFile(&ec.ctx, &global, err_writer);
 
     const result = runTest(&ec.ctx, path, err_writer);
     ec.fireExitHooks(result);

@@ -1,0 +1,2 @@
+PASS: the startup file's math import is reachable
+PASS: the startup file's word is reachable
