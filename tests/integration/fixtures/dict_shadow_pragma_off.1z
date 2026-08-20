@@ -1,0 +1,2 @@
+\ Startup file fixture: the dictionary-shadow guard turned off for this user's own environment.
+pragma{ dictionary-shadow: "off" }

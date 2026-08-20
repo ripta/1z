@@ -1,0 +1,4 @@
+9
+<repl>:5: error 'import-conflict' defining 'dup' would shadow a native word at word ';'
+  stack effect: ( name quot --  )
+  hint: add the 'override' marker if intentional

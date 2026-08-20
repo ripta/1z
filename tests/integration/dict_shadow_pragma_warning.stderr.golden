@@ -1,0 +1,2 @@
+warning: defining 'dup' would shadow a native word
+warning: defining 'nip' would shadow a word from "src/prelude.1z"

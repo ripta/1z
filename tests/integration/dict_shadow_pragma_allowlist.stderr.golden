@@ -1,0 +1,3 @@
+tests/integration/dict_shadow_pragma_allowlist.1z:7: error 'import-conflict' defining 'dup' would shadow a native word at word ';'
+  stack effect: ( name quot --  )
+  hint: add the 'override' marker if intentional

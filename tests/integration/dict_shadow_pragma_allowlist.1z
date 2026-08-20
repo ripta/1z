@@ -1,0 +1,7 @@
+\ An allowlist relaxes exactly the names on it. `nip` is listed and defines silently; `dup` is not
+\ and still throws, which is what keeps a mistyped name from going quiet along with the meant one.
+
+nip: ( -- fixnum ) [ 9 ] ;
+nip inspect print-line
+
+dup: ( -- fixnum ) [ 7 ] ;

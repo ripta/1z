@@ -1,0 +1,3 @@
+\ Startup file fixture: an allowlist naming the one word this user means to shadow. Every other
+\ name keeps the guard.
+pragma{ dictionary-shadow: { nip: } }

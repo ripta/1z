@@ -1,0 +1,8 @@
+\ `warning` reports each shadow and proceeds. The two lines pin both message shapes: a dictionary
+\ native names no origin, a below-floor frame word names the file it came from.
+
+dup: ( -- fixnum ) [ 7 ] ;
+nip: ( -- fixnum ) [ 9 ] ;
+
+dup inspect print-line
+nip inspect print-line

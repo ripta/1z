@@ -1,0 +1,8 @@
+\ `off` relaxes the dictionary-shadow guard silently, and the shadowing definition takes effect.
+\ Both origins the guard reports are covered: `dup` is a dictionary native, `nip` a prelude word.
+
+dup: ( -- fixnum ) [ 7 ] ;
+nip: ( -- fixnum ) [ 9 ] ;
+
+dup inspect print-line
+nip inspect print-line

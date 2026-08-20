@@ -3032,6 +3032,35 @@ pub const Context = struct {
         return null;
     }
 
+    /// How one of the redefinition collision guards reports a name.
+    const CollisionGuardMode = enum { err, warning, off };
+
+    /// Read the environment pragma `key` and decide how a collision on `name` is reported. An
+    /// unset key is `error`, which is the severity both guards ship with.
+    ///
+    /// An allowlist relaxes exactly the names on it, so a word the user meant to shadow is silent
+    /// while one they mistyped still throws. The validator has already proven the value is a
+    /// severity word or an array of symbols, so anything else here is `error`.
+    ///
+    /// Callers hold the write lock, so the read goes through `getPragmaLocked`.
+    fn collisionGuardMode(self: *const Context, key: []const u8, name: []const u8) CollisionGuardMode {
+        const val = self.getPragmaLocked(key) orelse return .err;
+        switch (val) {
+            .string => |s| {
+                if (std.mem.eql(u8, s.bytes, "warning")) return .warning;
+                if (std.mem.eql(u8, s.bytes, "off")) return .off;
+                return .err;
+            },
+            .array => |a| {
+                for (a.items) |item| {
+                    if (item == .symbol and std.mem.eql(u8, item.symbol.bytes, name)) return .off;
+                }
+                return .err;
+            },
+            else => return .err,
+        }
+    }
+
     /// Register a pragma key on the durable-state target, so a registration
     /// made during a module load outlives the loading context.
     pub fn registerPragmaKey(self: *Context, name: []const u8, registration: PragmaRegistration) !void {
@@ -3205,52 +3234,61 @@ pub const Context = struct {
             if (target_frame_index) |ti| {
                 if (self.import_frame_index) |ifi| {
                     if (ti == ifi) {
-                        var frame_hit: ?WordDefinition = null;
-                        var dict_hit: ?WordDefinition = null;
+                        var shadowed: ?WordDefinition = null;
+                        var shadowed_is_native = false;
                         var ctx_iter: ?*const Context = self;
                         probe: while (ctx_iter) |c| : (ctx_iter = c.parent_context) {
                             if (c.durable_frame_floor) |floor| {
                                 for (c.local_frames.items[0..floor]) |frame| {
                                     if (frame.get(name)) |d| {
-                                        frame_hit = d;
+                                        shadowed = d;
                                         break :probe;
                                     }
                                 }
                             }
                             if (c.dictionary.get(name)) |d| {
-                                dict_hit = d;
+                                shadowed = d;
+                                shadowed_is_native = true;
                                 break :probe;
                             }
                         }
 
-                        if (frame_hit) |sh| {
+                        if (shadowed) |sh| {
                             if (!(incoming_generic and markersContainGeneric(sh.markers))) {
-                                self.pending_error_hint = "add the 'override' marker if intentional";
-                                self.pending_error_message = if (sh.source_file) |src|
-                                    std.fmt.allocPrint(
-                                        self.arena.allocator(),
-                                        "defining '{s}' would shadow a word from \"{s}\"",
-                                        .{ name, src },
-                                    ) catch "definition would shadow an existing word"
-                                else
-                                    std.fmt.allocPrint(
-                                        self.arena.allocator(),
-                                        "defining '{s}' would shadow an existing word",
-                                        .{name},
-                                    ) catch "definition would shadow an existing word";
-                                return error.ImportConflict;
-                            }
-                        }
+                                // Read after the probe rather than before it, so an ordinary
+                                // top-level definition pays no pragma walk.
+                                const mode = self.collisionGuardMode("dictionary-shadow", name);
+                                if (mode != .off) {
+                                    const msg = if (shadowed_is_native)
+                                        std.fmt.allocPrint(
+                                            self.arena.allocator(),
+                                            "defining '{s}' would shadow a native word",
+                                            .{name},
+                                        ) catch "definition would shadow a native word"
+                                    else if (sh.source_file) |src|
+                                        std.fmt.allocPrint(
+                                            self.arena.allocator(),
+                                            "defining '{s}' would shadow a word from \"{s}\"",
+                                            .{ name, src },
+                                        ) catch "definition would shadow an existing word"
+                                    else
+                                        std.fmt.allocPrint(
+                                            self.arena.allocator(),
+                                            "defining '{s}' would shadow an existing word",
+                                            .{name},
+                                        ) catch "definition would shadow an existing word";
 
-                        if (dict_hit) |d| {
-                            if (!(incoming_generic and markersContainGeneric(d.markers))) {
-                                self.pending_error_hint = "add the 'override' marker if intentional";
-                                self.pending_error_message = std.fmt.allocPrint(
-                                    self.arena.allocator(),
-                                    "defining '{s}' would shadow a native word",
-                                    .{name},
-                                ) catch "definition would shadow a native word";
-                                return error.ImportConflict;
+                                    if (mode == .warning) {
+                                        // No `override` hint: a user who asked for a warning chose
+                                        // the relaxation and is not looking for the marker.
+                                        var tw = trace_mod.TraceWriter.init();
+                                        tw.print("warning: {s}\n", .{msg});
+                                    } else {
+                                        self.pending_error_hint = "add the 'override' marker if intentional";
+                                        self.pending_error_message = msg;
+                                        return error.ImportConflict;
+                                    }
+                                }
                             }
                         }
                     }
@@ -7848,6 +7886,38 @@ test "pragmaEnvironmentSetSite accepts a prompt and the startup file, and refuse
     // whoever loads it.
     ctx.current_source = "lib/math.1z";
     try std.testing.expect(!ctx.pragmaEnvironmentSetSite());
+}
+
+test "collisionGuardMode maps each accepted value, and defaults to error" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    try ctx.pushPragmaFrame();
+
+    try std.testing.expectEqual(Context.CollisionGuardMode.err, ctx.collisionGuardMode("dictionary-shadow", "dup"));
+
+    try ctx.setPragma("dictionary-shadow", value_mod.stringValue("error"));
+    try std.testing.expectEqual(Context.CollisionGuardMode.err, ctx.collisionGuardMode("dictionary-shadow", "dup"));
+
+    try ctx.setPragma("dictionary-shadow", value_mod.stringValue("warning"));
+    try std.testing.expectEqual(Context.CollisionGuardMode.warning, ctx.collisionGuardMode("dictionary-shadow", "dup"));
+
+    try ctx.setPragma("dictionary-shadow", value_mod.stringValue("off"));
+    try std.testing.expectEqual(Context.CollisionGuardMode.off, ctx.collisionGuardMode("dictionary-shadow", "dup"));
+
+    // The validator refuses this, so reaching it means the value came from somewhere else.
+    try ctx.setPragma("dictionary-shadow", value_mod.stringValue("quiet"));
+    try std.testing.expectEqual(Context.CollisionGuardMode.err, ctx.collisionGuardMode("dictionary-shadow", "dup"));
+
+    const names = try std.testing.allocator.alloc(Value, 1);
+    names[0] = value_mod.symbolValue("dup");
+    const allowlist = try value_mod.Array.fromOwnedSlice(std.testing.allocator, names);
+    try ctx.setPragma("dictionary-shadow", .{ .array = allowlist });
+    try std.testing.expectEqual(Context.CollisionGuardMode.off, ctx.collisionGuardMode("dictionary-shadow", "dup"));
+    try std.testing.expectEqual(Context.CollisionGuardMode.err, ctx.collisionGuardMode("dictionary-shadow", "nip"));
+
+    // Each key is read on its own, so relaxing one guard leaves the other at its default.
+    try std.testing.expectEqual(Context.CollisionGuardMode.err, ctx.collisionGuardMode("import-collision", "dup"));
 }
 
 test "stack operations through context" {

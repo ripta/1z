@@ -1,0 +1,5 @@
+pragma{ dictionary-shadow: "off" }
+nip: ( -- fixnum ) [ 9 ] ;
+nip inspect print-line
+pragma{ dictionary-shadow: "error" }
+dup: ( -- fixnum ) [ 7 ] ;

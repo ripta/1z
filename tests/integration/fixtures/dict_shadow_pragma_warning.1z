@@ -1,0 +1,3 @@
+\ Startup file fixture: the dictionary-shadow guard downgraded to a warning, so a shadow is still
+\ reported and the program still runs.
+pragma{ dictionary-shadow: "warning" }
