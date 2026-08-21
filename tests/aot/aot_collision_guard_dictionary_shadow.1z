@@ -1,0 +1,23 @@
+\ An AOT binary runs the dictionary-shadow guard at the default severity. A source file cannot set
+\ the relaxing pragma and a binary reads no startup file, so no set site is reachable and the guard
+\ has nothing to read. The .env names a startup file relaxing both keys, and the throw below is what
+\ shows that relaxation never arrives.
+\
+\ The collision has to happen at binary runtime, not at freeze. The freeze executes the entry file's
+\ definition statements and collects the rest, so a top-level `dup:` would throw during the build
+\ instead. A word body reaches the guard the same way a top level does, because it pushes no frame
+\ of its own and its definitions land in the import frame.
+\
+\ The call is bare rather than wrapped in `recover`, because a quotation pushes a transient frame
+\ and a definition landing there is exempt by design. So the binary aborts, and its diagnostic is
+\ the golden.
+\
+\ The import is what gives the binary that import frame: an image carrying no entry imports never
+\ pushes the durable frame an interpreter driver gives the entry file.
+use { taken: } "fixtures/aot_collision_guard_mod.1z" ;
+
+taken .
+
+shadow-native: ( -- ) [ dup: ( -- x ) [ 0 ] ; ] ;
+
+shadow-native

@@ -71,8 +71,7 @@ const Verbosity = enum(u8) {
     silent = 2,
 };
 
-/// Print error details from the context's error stack.
-/// Format: source:line: error.TYPE message at word 'WORD'
+/// Fire the unhandled-error hooks, then print the context's error stack.
 fn printErrorDetails(ctx: *Context, writer: anytype, err: anyerror) void {
     if (ctx.thrown_error) |thrown| {
         hooks.fireHooks(ctx, "on:unhandled-error", &.{.{ .error_value = thrown }});
@@ -106,6 +105,15 @@ fn printErrorDetails(ctx: *Context, writer: anytype, err: anyerror) void {
         hooks.fireHooks(ctx, "on:unhandled-error", &.{.{ .error_value = &error_obj }});
     }
 
+    printErrorDetailRows(ctx, writer, err);
+}
+
+/// Render the captured error chain as `source:line: error 'TYPE' MESSAGE at word 'WORD'` plus its
+/// caller rows, without firing `on:unhandled-error`.
+///
+/// Split from `printErrorDetails` for the AOT build path, which surfaces a failure from the entry
+/// file's own execution and must not run a user hook as a side effect of compiling.
+fn printErrorDetailRows(ctx: *Context, writer: anytype, err: anyerror) void {
     const details = ctx.error_details.items;
     if (details.len > 0) {
         // print first (innermost) error location
@@ -3155,26 +3163,27 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
             } else {
                 err_writer.writeAll("Error: AOT build rejected an unidentified interpreter-dependent native\n") catch {};
             }
-        } else if (err == error.ExecutionFailed and ctx.parse_diagnostics != null) {
-            // A parse-time word threw while the entry file was being executed during freeze. The
-            // rich diagnostic it computed lives in `parse_diagnostics`, so we'll need tto surface
-            // it separately instead of the generic `ExecutionFailed` errorName.
-            const diag = ctx.parse_diagnostics.?;
-            if (diag.error_type) |error_type| {
-                var kebab_buf: [128]u8 = undefined;
-                const kebab_name = pascalToKebabRuntime(error_type, &kebab_buf);
-                if (diag.source_file) |sf| {
-                    err_writer.print("{s}: error '{s}'", .{ sf, kebab_name }) catch {};
-                } else {
-                    err_writer.print("error '{s}'", .{kebab_name}) catch {};
-                }
-                if (diag.message) |msg| {
-                    err_writer.print(" {s}", .{msg}) catch {};
-                }
-                err_writer.writeAll("\n") catch {};
+        } else if (err == error.ExecutionFailed and freeze_diagnostics.entry_failure != null) {
+            // The entry file's own execution stopped on a failure.
+            //
+            // A parse failure leaves its diagnostic in `parse_diagnostics`, and a runtime one
+            // leaves a chain in `error_details`. Which one fired picks the renderer, since a
+            // swallowed parse failure earlier in the file can leave `parse_diagnostics` populated
+            // across a later runtime throw.
+            //
+            // Both render against the statement the freeze stopped on, so a build names the file
+            // and line a run names.
+            const failure = freeze_diagnostics.entry_failure.?;
+            const has_parse_diagnostic = if (ctx.parse_diagnostics) |diag| diag.error_type != null else false;
+
+            if (failure.parse_failure and has_parse_diagnostic) {
+                printParseDiagnostics(ctx, err_writer, failure.source, failure.line, failure.start_line);
+            } else if (ctx.error_details.items.len > 0) {
+                printErrorDetailRows(ctx, err_writer, err);
             } else {
                 err_writer.print("Error freezing module graph: {s}\n", .{@errorName(err)}) catch {};
             }
+
             ctx.parse_diagnostics = null;
         } else {
             err_writer.print("Error freezing module graph: {s}\n", .{@errorName(err)}) catch {};

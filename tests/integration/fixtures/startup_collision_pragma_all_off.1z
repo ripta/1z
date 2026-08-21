@@ -1,0 +1,4 @@
+\ Startup file fixture: both collision-guard keys turned off as far as they go, so a test can show
+\ what still throws with the pragma relaxed to its limit.
+pragma{ dictionary-shadow: "off" }
+pragma{ import-collision: "off" }

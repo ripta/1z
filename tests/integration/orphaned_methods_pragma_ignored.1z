@@ -1,0 +1,30 @@
+\ Neither collision key reaches the orphaned-method error. Both are turned off from the startup
+\ file, and a redefinition that drops registered methods still throws.
+\
+\ The two collision kinds report a visibility surprise the program survives once the user accepts
+\ it. This one reports methods going unreachable, which nothing later throws about, so a user who
+\ relaxed it would never learn what they gave up.
+use "testing" ;
+
+"both keys off" test-section
+
+\ Reading the values back is what makes the throw below evidence, rather than a startup file that
+\ never arrived.
+"dictionary-shadow" pragma-get "off" "the dictionary-shadow key is off" assert=
+"import-collision" pragma-get "off" "the import-collision key is off" assert=
+
+"the orphaned-method error is untouched" test-section
+
+\ The redefinition has to share the generic's frame, so it runs at a loaded file's own top level.
+[ "redef_drops_methods_conflict.1z" load ]
+EOrphanedMethods "a redefinition dropping methods still throws" assert-error-type
+
+"the guards the keys do reach stay silent" test-section
+
+\ Both shadows land last: each one takes over its name for the rest of the file.
+dup: ( -- x ) [ 0 ] ;
+dup 0 "a native shadow is accepted and takes effect" assert=
+
+use { taken: } "def_over_import_mod.1z" ;
+taken: ( -- fixnum ) [ 1 ] ;
+taken 1 "a definition over an import is accepted and takes effect" assert=

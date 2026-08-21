@@ -1,0 +1,61 @@
+\ A source file may not relax either collision guard, and `build` refuses on exactly the terms `run`
+\ does. The freeze reads the entry file statement by statement with `current_source` set to it, so
+\ the set site is the same one either way.
+\
+\ Comparing the two children's stderr directly is what pins "the same line". A pair of goldens would
+\ leave a reader to check that equality by eye.
+\
+\ The parent carries --no-startup. Each child builds its argv by hand, so the flag never reaches it,
+\ and the inherited ONEZ_NO_STARTUP is what keeps a child off a developer's own startup file. The
+\ interpreter path arrives as the sole command-line argument via the harness @self-exe directive.
+use "conversions" ;
+use "os/fs" ;
+use "process" ;
+use "testing" ;
+
+build-out-file: ( -- path: string ) [ "tests/integration/_tmp_collision_parity_out" ] ;
+stdlib-flag: ( -- flag: string ) [ "--stdlib-path=lib" ] ;
+
+(exe): ( -- path: string ) [ command-line-args 0 #nth ] ;
+
+(rm-if): ( path: string -- ) [ dup file-exists? [ delete-file ] [ drop ] if ] ;
+
+\ Run one child interpreter to completion, reporting its stderr and exit code.
+(probe): ( args: array -- err: string code: fixnum ) [
+  (exe) 1array #prepend
+  <stdio-opts> capture-all
+  dup stderr>> bytes>
+  swap exit-code>>
+] ;
+
+(run-stderr): ( file: string -- err: string ) [
+  "run" swap stdlib-flag 3 array-n (probe)
+  1 "exits 1 under run" assert=
+] ;
+
+\ The build stops during the freeze, well before codegen, so the -o path goes untouched. It is
+\ cleared anyway: an argv mistake that let the build through would leave a binary behind.
+(build-stderr): ( file: string -- err: string ) [
+  build-out-file (rm-if)
+  "build" swap stdlib-flag "-o" build-out-file 5 array-n (probe)
+  1 "exits 1 under build" assert=
+  build-out-file (rm-if)
+] ;
+
+(assert-parity): ( file: string -- ) [
+  [ (run-stderr) ] [ (build-stderr) ] bi swap
+  "build reports the same diagnostic as run" assert=
+] ;
+
+"a refused pragma set" test-section
+
+"tests/integration/pragma_dictionary_shadow_source_refused.1z" (assert-parity)
+"tests/integration/pragma_import_collision_source_refused.1z" (assert-parity)
+
+\ The refusals above are parse failures, which carry their message on a different channel from a
+\ word that throws while it runs. A definition statement is the only thing a freeze executes, so a
+\ collision guard is what reaches the second channel.
+"a guard collision while the entry file runs" test-section
+
+"tests/integration/dict_shadow_conflict.1z" (assert-parity)
+"tests/integration/def_over_import_conflict.1z" (assert-parity)

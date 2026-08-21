@@ -1,0 +1,6 @@
+\ A startup file relaxing both collision guards, named by the AOT collision-guard entries through
+\ ONEZ_STARTUP. Nothing ever reads it: an AOT binary is a separate executable with no startup-file
+\ path, which is what those entries pin.
+
+pragma{ dictionary-shadow: "off" }
+pragma{ import-collision: "off" }

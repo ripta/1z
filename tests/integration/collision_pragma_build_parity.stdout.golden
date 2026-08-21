@@ -1,0 +1,14 @@
+=== a refused pragma set ===
+PASS: exits 1 under run
+PASS: exits 1 under build
+PASS: build reports the same diagnostic as run
+PASS: exits 1 under run
+PASS: exits 1 under build
+PASS: build reports the same diagnostic as run
+=== a guard collision while the entry file runs ===
+PASS: exits 1 under run
+PASS: exits 1 under build
+PASS: build reports the same diagnostic as run
+PASS: exits 1 under run
+PASS: exits 1 under build
+PASS: build reports the same diagnostic as run

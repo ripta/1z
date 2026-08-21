@@ -1,0 +1,8 @@
+=== both keys off ===
+PASS: the dictionary-shadow key is off
+PASS: the import-collision key is off
+=== the orphaned-method error is untouched ===
+PASS: a redefinition dropping methods still throws
+=== the guards the keys do reach stay silent ===
+PASS: a native shadow is accepted and takes effect
+PASS: a definition over an import is accepted and takes effect

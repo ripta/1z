@@ -1,0 +1,10 @@
+\ The sibling of aot_collision_guard_dictionary_shadow.1z, for the other collision kind: a
+\ definition landing on a same-scope import. The image restores the entry file's imports marked
+\ `imported`, so the guard sees at binary runtime what it sees interpreted.
+use { taken: } "fixtures/aot_collision_guard_mod.1z" ;
+
+taken .
+
+clash-import: ( -- ) [ taken: ( -- n ) [ 1 ] ; ] ;
+
+clash-import

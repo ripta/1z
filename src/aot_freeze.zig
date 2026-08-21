@@ -407,6 +407,24 @@ pub const UnresolvedCalleeHint = struct {
     reason: UnresolvedReason,
 };
 
+/// Where the entry file's statement-by-statement execution stopped, when it stopped on a failure.
+///
+/// A run renders a failure against the statement it was feeding. The freeze reads the entry file
+/// the same way, so carrying the position out is what lets a build name the same file and line.
+pub const EntryFailure = struct {
+    /// The entry path, which aliases the `build` argument for the process. `freezeModuleGraphOpts`
+    /// sub-slices it to strip the cwd rather than copying, so it outlives the freeze.
+    source: []const u8,
+    /// The last line fed before the failure, which is the line a run reports.
+    line: usize,
+    /// The line the statement began on, which the renderer uses for a multi-line construct's
+    /// "opened at" note.
+    start_line: usize,
+    /// True when the statement failed to parse rather than failing while it executed. It picks the
+    /// renderer, the way a run picks one from which arm of the statement loop failed.
+    parse_failure: bool,
+};
+
 pub const FreezeDiagnostics = struct {
     fatal_dynamic_feature: ?FreezeFeatureUse = null,
     fatal_native_interpreter_dependency: ?FreezeFeatureUse = null,
@@ -417,6 +435,7 @@ pub const FreezeDiagnostics = struct {
     /// first-use generators would also surface here.
     unresolved_callee_hint: ?UnresolvedCalleeHint = null,
     missing_stack_effects: []const []const u8 = &.{},
+    entry_failure: ?EntryFailure = null,
 };
 
 pub const FreezeError = error{
@@ -508,7 +527,7 @@ pub fn freezeModuleGraphOpts(
     // Phase 1: Execute entry file, collect non-definition instructions.
     // The local frame and pragma frame are kept alive so that lookupWord
     // can find words defined in the entry file during discovery.
-    const entry_instrs = executeAndCollectEntry(ctx, entry_file, allocator) catch |err| switch (err) {
+    const entry_instrs = executeAndCollectEntry(ctx, entry_file, diagnostics, allocator) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         error.FileNotFound => return error.FileNotFound,
         error.FileReadFailed => return error.FileReadFailed,
@@ -742,6 +761,7 @@ const EntryInstructions = []const Instruction;
 fn executeAndCollectEntry(
     ctx: *Context,
     entry_file: []const u8,
+    diagnostics: *FreezeDiagnostics,
     _: Allocator,
 ) anyerror!EntryInstructions {
     const file = std.fs.cwd().openFile(entry_file, .{}) catch {
@@ -794,12 +814,26 @@ fn executeAndCollectEntry(
     // directives in AOT C emission) lose file accuracy.
     var file_line: usize = 0;
 
+    // A failure below stops on the statement being fed, so the position at unwind is that
+    // statement's. The read and allocation failures record one too, and nothing reads theirs:
+    // `ExecutionFailed` is the only error this position renders under.
+    var parse_failed = false;
+    errdefer diagnostics.entry_failure = .{
+        .source = entry_file,
+        .line = file_line,
+        .start_line = processor.start_line,
+        .parse_failure = parse_failed,
+    };
+
     while (true) {
         const line = reader.interface.takeDelimiterInclusive('\n') catch |err| switch (err) {
             error.EndOfStream => {
                 switch (processor.flush(ctx.quotationAllocator(), ctx)) {
                     .needs_more_input => {},
-                    .parse_error => |e| return e,
+                    .parse_error => |e| {
+                        parse_failed = true;
+                        return e;
+                    },
                     .complete => |instrs| {
                         if (instrs.len > 0) {
                             const is_def = Context.isDefinitionStatement(instrs);
@@ -824,7 +858,10 @@ fn executeAndCollectEntry(
 
         switch (processor.feedLine(ctx.quotationAllocator(), line, ctx)) {
             .needs_more_input => continue,
-            .parse_error => |err| return err,
+            .parse_error => |err| {
+                parse_failed = true;
+                return err;
+            },
             .complete => |instrs| {
                 if (instrs.len > 0) {
                     const is_def = Context.isDefinitionStatement(instrs);

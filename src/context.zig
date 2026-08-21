@@ -528,7 +528,6 @@ pub const ParseDiagnostics = struct {
     message: ?[]const u8 = null,
     error_type: ?[]const u8 = null,
     opening_line: ?usize = null,
-    source_file: ?[]const u8 = null,
 };
 
 pub const AotQuotationFnTable = struct {

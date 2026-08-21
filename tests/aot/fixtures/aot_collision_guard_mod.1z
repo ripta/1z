@@ -1,0 +1,4 @@
+\ Helper module for the AOT collision-guard entries. Its public `taken` is imported by both, and
+\ the import entry then defines `taken` itself from inside a word body.
+
+taken: ( -- fixnum ) [ 7 ] ;
