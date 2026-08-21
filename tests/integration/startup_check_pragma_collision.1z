@@ -1,0 +1,7 @@
+\ `check` pushes its own pragma frame above the base one the startup file writes to, so a
+\ relaxation the user set for themselves reaches the checked program. `check` executes only
+\ definition statements, so the guard staying silent is the whole observable: without the startup
+\ value both definitions would throw.
+
+dup: ( -- fixnum ) [ 7 ] ;
+nip: ( -- fixnum ) [ 9 ] ;

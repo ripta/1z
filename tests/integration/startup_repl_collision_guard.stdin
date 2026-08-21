@@ -1,0 +1,4 @@
+"dictionary-shadow" pragma-get inspect print-line
+"import-collision" pragma-get inspect print-line
+nip: ( -- fixnum ) [ 9 ] ;
+nip inspect print-line

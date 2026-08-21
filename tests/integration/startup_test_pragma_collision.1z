@@ -1,0 +1,17 @@
+\ `test` loads the test file as a module, which is the one path where the program's own top level
+\ sits in a module frame. The shadowing definition below drives the dictionary-shadow guard there,
+\ and the module's own pragma frame is popped by the time a test word runs, so the assertions read
+\ both keys through the base frame the startup file wrote to.
+
+use "testing" ;
+
+nip: ( -- fixnum ) [ 9 ] ;
+
+test-startup-relaxation-reaches-a-loaded-module: ( -- ) [
+  nip 9 "the shadowing definition stands at the module's own top level" assert=
+] ;
+
+test-startup-pragma-values-survive: ( -- ) [
+  "dictionary-shadow" pragma-get "off" "the dictionary-shadow severity survives into `test`" assert=
+  "import-collision" pragma-get inspect "{ dup: nip: }" "the import-collision allowlist survives into `test`" assert=
+] ;

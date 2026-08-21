@@ -1,0 +1,3 @@
+PASS: the dictionary-shadow severity survives into `test`
+PASS: the import-collision allowlist survives into `test`
+PASS: the shadowing definition stands at the module's own top level

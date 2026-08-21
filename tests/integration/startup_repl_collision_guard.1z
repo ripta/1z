@@ -1,0 +1,3 @@
+\ Placeholder: piped-repl test, the session is driven from .stdin.
+\ This .1z file is not executed. It pins that both keys the startup file sets survive into the read
+\ loop, and that the guard at the prompt honors the value the file set rather than its own default.
