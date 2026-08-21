@@ -11,7 +11,8 @@ definitions, and control flow.
 2. [Modules](modules.md) -- loading, importing, qualified access, and
    selective imports
 3. [Redefinition and Shadowing](redefinition-and-shadowing.md) -- the
-   collision guard, the `override` marker, and each construct's release valve
+   collision guard, the `override` marker, each construct's release valve, and
+   the two pragmas that relax the guard for your own environment
 4. [Standard Library Resolution](stdlib-resolution.md) -- how imports are
    resolved across the interpreter, embedding hosts, and AOT binaries
 5. [User Startup Configuration](startup-config.md) -- the path chain, which

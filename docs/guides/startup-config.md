@@ -68,6 +68,12 @@ redefining a word at a different arity while iterating is quiet. It applies
 that only when the startup file has not already set the key, so the file above
 keeps the strict setting at the prompt.
 
+Two keys go further. `dictionary-shadow` and `import-collision` relax the
+redefinition collision guards. This file and a REPL prompt are the only two
+places either may be set, and a source file that sets one throws. A relaxation
+is a preference you hold for yourself, and program text is where it would stop
+being one.
+
 ## Which Commands Run It
 
 | Command | Runs the startup file |
@@ -198,8 +204,13 @@ made that message blame the prelude. The hazard a startup file carries is that
 your own configuration silently changes what a program means, so being able to
 trace a word back to it is worth the frame.
 
-[Redefinition and Shadowing](redefinition-and-shadowing.md) covers that error
-and the `override` marker that escapes it.
+The frame has a consequence for the file itself. Being the floor is what makes
+a startup file that shadows a prelude word trip the guard on its own
+definition. `dictionary-shadow` is the way out. `pragma{ }` takes effect while
+the file is parsed, so put the key on a line above the definition it covers.
+
+[Redefinition and Shadowing](redefinition-and-shadowing.md) covers that error,
+the `override` marker that escapes it, and both relaxing keys.
 
 ## Independent of `--prelude`
 

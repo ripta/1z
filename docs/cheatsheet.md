@@ -385,8 +385,12 @@ parse-literal                   \ read and resolve next literal
 ## Pragmas
 
 ```
-pragma{ require-doc: relaxed }  \ file-scoped directive
-pragma? require-doc:            \ query at parse time
+pragma{ require-doc: "relaxed" }  \ file-scoped directive
+"require-doc" pragma?             \ query at parse time
+
+\ these two are settable only from a startup file or a REPL prompt
+pragma{ dictionary-shadow: "warning" }  \ relax the prelude/native shadow guard
+pragma{ import-collision: { dup: } }    \ relax the definition/import collision
 ```
 
 ## Tooling

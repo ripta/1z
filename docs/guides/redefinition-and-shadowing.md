@@ -6,8 +6,9 @@ the same name, and a top-level definition shadowing a prelude or native
 word. Both throw `import-conflict`. A third silent loss is loud as well: a
 redefinition that drops registered methods throws `orphaned-methods`. This
 guide covers the two collision kinds, the orphaned-method report, the
-permission that escapes them, and the release valve each importing
-construct provides.
+permission that escapes them, the release valve each importing construct
+provides, and the two pragmas that relax the collision kinds for your own
+environment.
 
 ## Ordinary Redefinition Stays Silent
 
@@ -167,11 +168,11 @@ area: override ( x -- n ) [ drop 7 ] ;
 
 Two things distinguish this report from the collision kinds. There is no
 generic exemption: a `generic` redefinition of a `generic` word drops the
-methods all the same, so it throws too. And unlike the arity check, no
-pragma downgrades it to a warning. The collision kinds report a visibility
-surprise the program survives, while this one reports a correctness loss
-nothing later throws about, so a program that relaxed it would never learn
-what it gave up.
+methods all the same, so it throws too. And no pragma downgrades it, unlike
+the arity check and both collision kinds. The collision kinds report a
+visibility surprise the program survives, while this one reports a
+correctness loss nothing later throws about, so a program that relaxed it
+would never learn what it gave up.
 
 A generated existing word is exempt, exactly as it is for the arity check.
 Replacing a `virtual{` or `struct{` constructor with a convenience version
@@ -249,6 +250,115 @@ If what you want is a word others extend deliberately, redefinition is the
 wrong tool. Define the word `generic` and let extenders register `method{`
 arms; no name is overwritten and no valve is needed.
 
+## Relaxing the Guards for Your Own Environment
+
+Every valve above is per-site. It is written where the collision happens,
+so a reader of that line sees the claim. Two pragmas relax the collision
+kinds per-environment instead. They exist for a user who wants their own
+sessions looser, not for a program tuning its own severity.
+
+### The Two Keys
+
+One key per collision kind:
+
+| Key | Guard it relaxes |
+|-----|------------------|
+| `dictionary-shadow` | a top-level definition shadowing a prelude or native word |
+| `import-collision` | a definition and an import colliding, in either order |
+
+Each takes a severity word -- `"error"`, `"warning"`, or `"off"` -- or an
+array of word-name symbols. An unset key reads as `"error"`, which is the
+severity both guards ship with.
+
+```
+\ ~/.config/1z/startup.1z
+pragma{ dictionary-shadow: "warning" }
+```
+
+```
+nip: ( -- n ) [ 9 ] ;
+nip .
+```
+
+The definition stands and `9` prints. On stderr:
+
+```
+warning: defining 'nip' would shadow a word from "src/prelude.1z"
+```
+
+A warning carries no `override` hint. You already chose the relaxation, so
+the marker is not what you are looking for.
+
+An allowlist relaxes exactly the names on it:
+
+```
+\ ~/.config/1z/startup.1z
+pragma{ dictionary-shadow: { nip: } }
+```
+
+`nip:` now defines silently, and `dup:` still throws. That is what a list
+buys over a bare `"off"`: a word you meant to shadow goes quiet, and one
+you mistyped does not. The list doubles as a record of what you shadowed.
+
+The names are symbols rather than strings, because a word name is a symbol
+everywhere else in the language. `{ "nip" }` is rejected.
+
+The two keys are separate because the two guards catch different mistakes.
+Relaxing prelude shadowing must not also silence a definition and an import
+colliding, which is a local mistake in nearly every instance.
+
+### Where a Set Is Accepted
+
+A startup file and a REPL prompt. Nothing else. A source file throws:
+
+```
+\ app.1z
+pragma{ dictionary-shadow: "off" }
+```
+
+Output:
+
+```
+app.1z:2: error 'pragma-error' dictionary-shadow: may be set only from a startup file or a REPL prompt, not from a source file
+```
+
+An `eval` string is refused on the same terms. So is a module the startup
+file loads, since a module is a source file whoever loads it.
+
+The rule rests on the same argument as the `override` marker. A relaxation
+written in program text is authorized by its author. It is met by every
+later reader of that file, who inherits a dialect they did not choose. A
+startup file is a preference you hold across sessions. A prompt is one you
+hold for the next few minutes. Neither reaches anyone else.
+
+A startup file that shadows a prelude word trips the guard itself, because
+its own frame is the durable floor. `pragma{ }` takes effect while the file
+is parsed, so put the key on a line above the definition it covers.
+
+### What the Keys Do Not Reach
+
+Neither key relaxes the orphaned-method error. A relaxed collision is a
+visibility surprise the program survives once you accept it. Dropped
+methods are a correctness loss nothing later throws about, so a user who
+relaxed that would never learn what they gave up.
+
+Neither key reaches a build artifact. `build` does not run the startup
+file. A source file cannot set a key. Between them, a build reaches no set
+at all. An AOT binary reads no startup file either, so both guards run at
+their default severity for the life of the binary.
+
+One consequence is worth stating plainly. A program that runs clean under
+`1z run` with a relaxed startup file does not build. A build executes the
+entry file's definition statements as it loads the program, so a top-level
+collision throws during `1z build` itself and no binary is produced.
+
+A collision the build does not reach waits for the binary to run instead. A
+definition inside a word body is the shape that does this: the build defines
+the enclosing word and records the call to it rather than making it.
+
+Either way the failure is a loud throw naming the collision, never silence.
+The preference belongs to you rather than to the artifact.
+
 ## The Interaction Matrix
 
 A same-name collision between an existing word and an incoming binding --
@@ -267,6 +377,11 @@ a definition or an import -- resolves as follows:
 `const` blocks absolutely, a claim allows, and otherwise the conflict rows
 throw. The rules never contradict: `const` and a claim never both apply to
 a permitted case.
+
+The two `import-conflict` rows report at their key's severity, which is
+`error` until a startup file or a prompt relaxes it. Nothing else in the
+table moves. `const` still blocks, a claim still allows, and the
+orphaned-method row has no key at all.
 
 ## `const` Is Absolute
 
@@ -331,6 +446,12 @@ iteration consists of, stays silent. What the guard catches interactively
 is the same thing it catches in a file: `dup: [ ... ] ;` throws until it
 claims `override`. A session that works can therefore be pasted into a
 file unchanged.
+
+A prompt is also one of the two places the relaxing keys may be set, so
+`pragma{ dictionary-shadow: "off" }` is a legal line to type. Setting
+`"error"` again restores the default. A key set at a prompt lasts for the
+session and no longer, so a session that leaned on one is the exception to
+pasting out unchanged.
 
 See also: [Modules](modules.md),
 [Defining Words](../tutorials/defining-words.md)
