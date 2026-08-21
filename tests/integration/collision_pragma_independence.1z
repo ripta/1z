@@ -1,0 +1,9 @@
+\ Each key answers for its own guard. The cross is relaxed to `off`, so a definition over an import
+\ proceeds. The dictionary-shadow key is untouched, so shadowing a native still throws.
+
+use "def_over_import_mod.1z" ;
+
+taken: ( -- fixnum ) [ 1 ] ;
+taken inspect print-line
+
+dup: ( -- fixnum ) [ 7 ] ;

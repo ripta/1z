@@ -1,0 +1,2 @@
+\ Startup file fixture: the cross reports but does not stop the program.
+pragma{ import-collision: "warning" }

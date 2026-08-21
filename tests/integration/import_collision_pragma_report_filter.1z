@@ -1,0 +1,8 @@
+\ The import side reports every conflicting name at once, so an allowlist filters the reported set
+\ rather than stopping at the first listed name. Both `alpha` and `beta` are already defined here;
+\ only `alpha` is listed, so the report still names `beta`.
+
+alpha: ( -- fixnum ) [ 8 ] ;
+beta: ( -- fixnum ) [ 9 ] ;
+
+use "import_collision_two_mod.1z" ;

@@ -752,6 +752,57 @@ EImportConflict: ( -- sym ) [ import-conflict: ] ;
   nip nip
 ] ;
 
+\ Apply the `import-collision` pragma to a set of shadowed names, returning the names that still
+\ report and whether to warn rather than throw.
+\
+\ `off` and an allowlist both work by removing names, so what survives is reported exactly the way
+\ an unfiltered set is. The arms mirror `collisionGuardMode` in the interpreter, down to treating a
+\ value that is neither a severity nor an array as `error`. That value cannot be set through
+\ `pragma{`, which runs the key's validator, so both sides are defending the same unreachable case.
+(import-collision-relax): ( names: array -- array ? ) [
+  "import-collision" pragma-get?
+  dup option:some?
+  [
+    option:some>
+    dup string?
+    [ dup "off" = [ 2drop { } f ] [ "warning" = ] if ]
+    [ dup array? [ [ swap #in? not ] curry #filter #collect f ] [ drop f ] if ]
+    if
+  ]
+  [ drop f ]
+  if
+] ;
+
+\ Report the names an importing construct would shadow. The set can empty out under an allowlist,
+\ in which case nothing is reported at all.
+\
+\ A warning goes to `stderr` rather than to `error-stream`, matching the definition-side guard,
+\ which writes to the same descriptor from the interpreter. Every guard warning is a host
+\ diagnostic, so none of them is redirectable.
+(report-shadowed): ( msg: string names: array -- ) [
+  (import-collision-relax)
+  over #empty?
+  [ drop 2drop ]
+  [
+    [
+      "" swap
+      [
+        >string
+        dup native.local-word-source dup
+        [ inspect swap " (from " #append swap #append ")" #append ]
+        [ drop ]
+        if
+        swap dup #empty? [ swap #append ] [ ", " #append swap #append ] if
+      ] #each
+      #append
+    ] dip
+    [ "warning: " swap #append "\n" #append stderr swap stream-write-string drop ]
+    [ f swap EImportConflict make-error throw ]
+    if
+  ]
+  if
+] ;
+
 \\ Check that none of the given names shadow words in the current import frame.
 \\
 \\ Throws an `import-conflict` error naming the importing construct if any name is already locally
@@ -759,6 +810,9 @@ EImportConflict: ( -- sym ) [ import-conflict: ] ;
 \\
 \\ Generic words are exempt when both sides are generic: multiple modules may contribute dispatch
 \\ methods for the same word.
+\\
+\\ The `import-collision` pragma relaxes the report: a listed name drops out of it, and a severity
+\\ of `warning` writes the same line to stderr instead of throwing.
 assert-no-shadow: ( module: module names: array construct: string -- ) [
   " would shadow existing words: " #append
   [ over [ swap (same-source?) not ] curry #filter #collect ] dip
@@ -777,19 +831,7 @@ assert-no-shadow: ( module: module names: array construct: string -- ) [
   ] #each
   dup #empty?
   [ drop drop drop ]
-  [
-    "" swap
-    [
-      >string
-      dup native.local-word-source dup
-      [ inspect swap " (from " #append swap #append ")" #append ]
-      [ drop ]
-      if
-      swap dup #empty? [ swap #append ] [ ", " #append swap #append ] if
-    ] #each
-    <rot- swap #append nip
-    f swap EImportConflict make-error throw
-  ]
+  [ nip (report-shadowed) ]
   if
 ] ;
 

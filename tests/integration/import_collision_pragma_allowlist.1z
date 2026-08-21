@@ -1,0 +1,11 @@
+\ An allowlist relaxes exactly the names on it. `taken` is listed and overwrites its import
+\ silently; `alpha` is not, and still throws. That is what keeps a mistyped name from going quiet
+\ along with the meant one.
+
+use "def_over_import_mod.1z" ;
+use "import_collision_two_mod.1z" ;
+
+taken: ( -- fixnum ) [ 1 ] ;
+taken inspect print-line
+
+alpha: ( -- fixnum ) [ 9 ] ;

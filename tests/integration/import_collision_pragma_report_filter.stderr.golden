@@ -1,0 +1,1 @@
+tests/integration/import_collision_pragma_report_filter.1z:8: error 'import-conflict' use would shadow existing words: beta

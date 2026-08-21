@@ -1,0 +1,3 @@
+\ Startup file fixture: an allowlist naming the one imported word this user means to overwrite.
+\ Every other name keeps the guard.
+pragma{ import-collision: { taken: } }

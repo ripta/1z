@@ -1,0 +1,3 @@
+\ Startup file fixture: a user who wants the import/definition cross silent in their own
+\ environment. Both halves of the guard stop reporting.
+pragma{ import-collision: "off" }

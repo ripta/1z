@@ -1,0 +1,14 @@
+\ `off` silences both halves of the import/definition cross. The definition side is a definition
+\ landing on a same-scope import; the import side is a `private{` helper landing on an existing
+\ local word. Both overwrite and the program runs to completion.
+
+use "def_over_import_mod.1z" ;
+
+taken: ( -- fixnum ) [ 1 ] ;
+taken inspect print-line
+
+kept: ( -- fixnum ) [ 2 ] ;
+private{
+  kept: ( -- fixnum ) [ 3 ] ;
+}
+kept inspect print-line

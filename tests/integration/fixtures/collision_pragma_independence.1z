@@ -1,0 +1,3 @@
+\ Startup file fixture: the cross is relaxed and the dictionary-shadow key is left alone, so each
+\ guard answers to its own key.
+pragma{ import-collision: "off" }

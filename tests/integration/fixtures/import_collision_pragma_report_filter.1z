@@ -1,0 +1,3 @@
+\ Startup file fixture: one of the two names an import would shadow. The report drops it and still
+\ names the other, rather than stopping at the first listed name.
+pragma{ import-collision: { alpha: } }

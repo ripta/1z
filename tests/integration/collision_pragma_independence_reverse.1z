@@ -1,0 +1,9 @@
+\ The other direction of the same rule. `dictionary-shadow` is relaxed to `off`, so shadowing a
+\ prelude word proceeds. The cross is untouched, so a definition over an import still throws.
+
+use "def_over_import_mod.1z" ;
+
+nip: ( -- fixnum ) [ 9 ] ;
+nip inspect print-line
+
+taken: ( -- fixnum ) [ 1 ] ;

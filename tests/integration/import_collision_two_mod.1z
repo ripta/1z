@@ -1,0 +1,5 @@
+\ Helper module for the import-collision report-filter test. It exports two words, so an import of
+\ the whole module shadows two names at once and the report has something to filter.
+
+alpha: ( -- fixnum ) [ 1 ] ;
+beta: ( -- fixnum ) [ 2 ] ;

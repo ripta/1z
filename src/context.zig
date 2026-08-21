@@ -3061,6 +3061,28 @@ pub const Context = struct {
         }
     }
 
+    /// Report a collision one of the guards has just confirmed: warn and let the definition stand,
+    /// or throw.
+    ///
+    /// The caller reads the mode and formats `msg` only when it is not `.off`, so a relaxed name
+    /// costs no allocation. That gating is why `.off` is a no-op here rather than unreachable.
+    fn reportCollisionGuard(self: *Context, mode: CollisionGuardMode, msg: []const u8) error{ImportConflict}!void {
+        switch (mode) {
+            .off => {},
+            .warning => {
+                // No `override` hint: a user who asked for a warning chose the relaxation and is
+                // not looking for the marker.
+                var tw = trace_mod.TraceWriter.init();
+                tw.print("warning: {s}\n", .{msg});
+            },
+            .err => {
+                self.pending_error_hint = "add the 'override' marker if intentional";
+                self.pending_error_message = msg;
+                return error.ImportConflict;
+            },
+        }
+    }
+
     /// Register a pragma key on the durable-state target, so a registration
     /// made during a module load outlives the loading context.
     pub fn registerPragmaKey(self: *Context, name: []const u8, registration: PragmaRegistration) !void {
@@ -3197,20 +3219,25 @@ pub const Context = struct {
         if (same_scope_existing) |existing| {
             if (existing.imported and !(incoming_generic and markersContainGeneric(existing.markers))) {
                 if (!claims_override) {
-                    self.pending_error_hint = "add the 'override' marker if intentional";
-                    self.pending_error_message = if (existing.source_module) |sm|
-                        std.fmt.allocPrint(
-                            self.arena.allocator(),
-                            "defining '{s}' would overwrite a word imported from \"{s}\"",
-                            .{ name, sm.name },
-                        ) catch "definition would overwrite an imported word"
-                    else
-                        std.fmt.allocPrint(
-                            self.arena.allocator(),
-                            "defining '{s}' would overwrite an imported word",
-                            .{name},
-                        ) catch "definition would overwrite an imported word";
-                    return error.ImportConflict;
+                    // Read once the collision is confirmed, so an ordinary redefinition pays no
+                    // pragma walk.
+                    const mode = self.collisionGuardMode("import-collision", name);
+                    if (mode != .off) {
+                        const msg = if (existing.source_module) |sm|
+                            std.fmt.allocPrint(
+                                self.arena.allocator(),
+                                "defining '{s}' would overwrite a word imported from \"{s}\"",
+                                .{ name, sm.name },
+                            ) catch "definition would overwrite an imported word"
+                        else
+                            std.fmt.allocPrint(
+                                self.arena.allocator(),
+                                "defining '{s}' would overwrite an imported word",
+                                .{name},
+                            ) catch "definition would overwrite an imported word";
+
+                        try self.reportCollisionGuard(mode, msg);
+                    }
                 }
             }
         }
@@ -3278,16 +3305,7 @@ pub const Context = struct {
                                             .{name},
                                         ) catch "definition would shadow an existing word";
 
-                                    if (mode == .warning) {
-                                        // No `override` hint: a user who asked for a warning chose
-                                        // the relaxation and is not looking for the marker.
-                                        var tw = trace_mod.TraceWriter.init();
-                                        tw.print("warning: {s}\n", .{msg});
-                                    } else {
-                                        self.pending_error_hint = "add the 'override' marker if intentional";
-                                        self.pending_error_message = msg;
-                                        return error.ImportConflict;
-                                    }
+                                    try self.reportCollisionGuard(mode, msg);
                                 }
                             }
                         }

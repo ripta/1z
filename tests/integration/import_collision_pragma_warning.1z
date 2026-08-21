@@ -1,0 +1,14 @@
+\ `warning` reports both halves and lets the program run. Each half writes its own line, from the
+\ layer its guard lives in: the definition side from the interpreter, the import side from the
+\ prelude.
+
+use "def_over_import_mod.1z" ;
+
+taken: ( -- fixnum ) [ 1 ] ;
+taken inspect print-line
+
+kept: ( -- fixnum ) [ 2 ] ;
+private{
+  kept: ( -- fixnum ) [ 3 ] ;
+}
+kept inspect print-line
