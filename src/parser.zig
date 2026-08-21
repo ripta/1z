@@ -213,6 +213,8 @@ fn handleParseTimeError(c: *Context, err: anyerror) ParseError {
         };
     }
 
+    c.finalizeErrorDetails(err);
+
     if (c.parse_diagnostics != null) {
         // Primitive already set diagnostics directly; preserve them.
     } else if (c.thrown_error) |thrown| {

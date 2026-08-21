@@ -748,10 +748,10 @@ pub const Context = struct {
     /// and consumed by the display sites in main.zig.
     parse_diagnostics: ?ParseDiagnostics = null,
     /// Pending error message set by primitives before returning an error.
-    /// Used by captureCallStackOnError for the innermost frame's message.
+    /// Used by finalizeErrorDetails for the innermost frame's message.
     pending_error_message: ?[]const u8 = null,
     /// Pending error hint set by primitives before returning an error.
-    /// Consumed by captureCallStackOnError for the innermost frame's hint.
+    /// Consumed by finalizeErrorDetails for the innermost frame's hint.
     pending_error_hint: ?[]const u8 = null,
     /// Pending generic-dispatch argument type tuple for the innermost frame.
     pending_dispatch_actual_types: ?[]const u8 = null,
@@ -889,7 +889,7 @@ pub const Context = struct {
     /// mutable runtime current_source.
     jit_trace_source: ?[]const u8 = null,
     /// Synthetic frames accumulated by compiled code on a cold error path.
-    /// These are folded into error_details by captureCallStackOnError so the
+    /// These are folded into error_details by finalizeErrorDetails so the
     /// interpreter can still append its outer frames afterward.
     jit_pending_trace_frames: std.ArrayListUnmanaged(CallFrame) = .{},
     /// PIC cache mapping instruction slice pointers to their PIC tables.
@@ -6425,13 +6425,24 @@ pub const Context = struct {
         }) catch {};
     }
 
-    /// Capture the current call stack to error_details.
-    /// Only captures if error_details is empty (first error).
-    pub fn captureCallStackOnError(self: *Context, err: anyerror) void {
-        // Only capture on first error. Frames queued after that capture still describe the
-        // current error's unwind; drop them so they cannot surface as another error's frames.
+    /// Fold the pending compiled frames and the live call stack into error_details, attaching
+    /// the pending message, hint, and dispatch diagnostics to the innermost row.
+    ///
+    /// Idempotent, so every reader of error_details calls it before reading.
+    ///
+    /// A chain already present is the first error's. Frames queued after its capture still
+    /// describe that error's unwind, so they are dropped rather than surfacing as another
+    /// error's frames.
+    ///
+    /// With nothing to fold, no pending state is consumed, so a pending message survives for
+    /// the readers that render it without frames.
+    pub fn finalizeErrorDetails(self: *Context, err: anyerror) void {
         if (self.error_details.items.len > 0) {
             self.clearPendingSyntheticErrorFrames();
+            return;
+        }
+
+        if (self.jit_pending_trace_frames.items.len == 0 and self.call_stack.items.len == 0) {
             return;
         }
 
@@ -6541,6 +6552,12 @@ pub const Context = struct {
             }) catch {};
             is_innermost = false;
         }
+    }
+
+    /// The raise-site spelling of `finalizeErrorDetails`, kept while the raise path still
+    /// captures instead of pending its frames.
+    pub fn captureCallStackOnError(self: *Context, err: anyerror) void {
+        self.finalizeErrorDetails(err);
     }
 
     /// Render the frame's carried effect for an error row.
@@ -8129,6 +8146,37 @@ test "wordErrorDeferCapture converts the pushed frame and the boundary capture f
     try std.testing.expectEqualStrings("boom went wrong", ctx.error_details.items[0].message);
     try std.testing.expectEqual(@as(usize, 0), ctx.jit_pending_trace_frames.items.len);
     try std.testing.expectEqual(@as(?[]const u8, null), ctx.pending_error_message);
+}
+
+test "finalizeErrorDetails is idempotent: a second fold keeps the chain and clears late frames" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    ctx.pushCallFrame("inner", "<test>", 3, 0, null);
+    ctx.finalizeErrorDetails(error.TypeMismatch);
+
+    try std.testing.expectEqual(@as(usize, 1), ctx.error_details.items.len);
+
+    ctx.appendPendingSyntheticErrorFrame("late", "<test>", 9, null);
+    ctx.finalizeErrorDetails(error.TypeMismatch);
+
+    try std.testing.expectEqual(@as(usize, 1), ctx.error_details.items.len);
+    try std.testing.expectEqualStrings("inner", ctx.error_details.items[0].word_name.?);
+    try std.testing.expectEqual(@as(usize, 0), ctx.jit_pending_trace_frames.items.len);
+}
+
+test "finalizeErrorDetails with nothing to fold preserves the pending message" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    ctx.pending_error_message = "kept for the frameless fallback";
+    ctx.pending_error_hint = "kept too";
+
+    ctx.finalizeErrorDetails(error.TypeMismatch);
+
+    try std.testing.expectEqual(@as(usize, 0), ctx.error_details.items.len);
+    try std.testing.expectEqualStrings("kept for the frameless fallback", ctx.pending_error_message.?);
+    try std.testing.expectEqualStrings("kept too", ctx.pending_error_hint.?);
 }
 
 test "capture drops a definition-located frame when the call site queued the same word" {

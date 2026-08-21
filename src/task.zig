@@ -90,7 +90,8 @@ pub fn coroDestroy(task: *Task) void {
 pub fn taskEntryPoint(co: CoroPtr) callconv(.c) void {
     const task: *Task = @ptrCast(@alignCast(mc.mco_get_user_data(co)));
 
-    task.ctx.executeQuotationWithFrame(task.quotation) catch {
+    task.ctx.executeQuotationWithFrame(task.quotation) catch |err| {
+        task.ctx.finalizeErrorDetails(err);
         if (task.ctx.error_details.items.len > 0) {
             const detail = task.ctx.error_details.items[0];
             task.error_obj = value_mod.boxErrorObject(task.ctx.quotationAllocator(), .{

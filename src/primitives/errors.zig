@@ -114,6 +114,8 @@ pub const primitives = [_]Primitive{
 /// stack trace when err is a user throw, else a generic error object named
 /// after the kebab-cased Zig error. Clears the execution details it captures.
 pub fn pushCaughtError(ctx: *Context, err: anyerror) anyerror!void {
+    ctx.finalizeErrorDetails(err);
+
     // Check if this is a user-thrown error with a stashed ErrorObject
     if (err == error.UserThrown) {
         if (ctx.thrown_error) |thrown_ptr| {

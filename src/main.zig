@@ -73,6 +73,8 @@ const Verbosity = enum(u8) {
 
 /// Fire the unhandled-error hooks, then print the context's error stack.
 fn printErrorDetails(ctx: *Context, writer: anytype, err: anyerror) void {
+    ctx.finalizeErrorDetails(err);
+
     if (ctx.thrown_error) |thrown| {
         hooks.fireHooks(ctx, "on:unhandled-error", &.{.{ .error_value = thrown }});
     } else {
@@ -114,6 +116,8 @@ fn printErrorDetails(ctx: *Context, writer: anytype, err: anyerror) void {
 /// Split from `printErrorDetails` for the AOT build path, which surfaces a failure from the entry
 /// file's own execution and must not run a user hook as a side effect of compiling.
 fn printErrorDetailRows(ctx: *Context, writer: anytype, err: anyerror) void {
+    ctx.finalizeErrorDetails(err);
+
     const details = ctx.error_details.items;
     if (details.len > 0) {
         // print first (innermost) error location
@@ -3175,6 +3179,7 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
             // and line a run names.
             const failure = freeze_diagnostics.entry_failure.?;
             const has_parse_diagnostic = if (ctx.parse_diagnostics) |diag| diag.error_type != null else false;
+            ctx.finalizeErrorDetails(err);
 
             if (failure.parse_failure and has_parse_diagnostic) {
                 printParseDiagnostics(ctx, err_writer, failure.source, failure.line, failure.start_line);

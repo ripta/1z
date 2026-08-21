@@ -121,11 +121,13 @@ pub fn allocPrintZ(alloc: Allocator, comptime fmt: []const u8, args: anytype) ![
 /// mirroring the message shape callers already surface via `onez_print_error`. Returns null only
 /// on an allocation failure.
 pub fn formatCapturedError(ctx: *Context, alloc: Allocator, err: anyerror) ?[:0]const u8 {
+    ctx.finalizeErrorDetails(err);
+
     const details = ctx.error_details.items;
     if (details.len > 0) {
         const detail = details[0];
         // A host callback's custom message (set via onez_set_error) is folded into the innermost
-        // detail's message by captureCallStackOnError, so surface it the same way
+        // detail's message by finalizeErrorDetails, so surface it the same way
         // onez_print_error does: append it when it carries more than the word name.
         if (detail.word_name == null or !std.mem.eql(u8, detail.message, detail.word_name.?)) {
             return allocPrintZ(

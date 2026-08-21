@@ -499,7 +499,7 @@ pub fn formatValueBrief(allocator: Allocator, val: Value, max_len: usize) ![]con
 // =============================================================================
 
 /// Set a pending error message on the context for richer error reporting.
-/// The message is arena-allocated and will be used by captureCallStackOnError
+/// The message is arena-allocated and will be used by finalizeErrorDetails
 /// for the innermost call frame's message field.
 pub fn setErrorContext(ctx: *Context, comptime fmt: []const u8, args: anytype) void {
     ctx.pending_error_message = std.fmt.allocPrint(ctx.arena.allocator(), fmt, args) catch null;

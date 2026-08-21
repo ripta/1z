@@ -524,12 +524,20 @@ export fn onez_eval_file(ptr: ?*anyopaque, path: ?[*:0]const u8) c_int {
     };
     defer file.close();
 
+    // Definitions made by the evaluated file freeze `def.source_file = current_source` and
+    // outlive this call, so the path is duped onto the context arena rather than borrowed from
+    // the host's buffer.
+    const source_name = alloc.dupe(u8, filepath) catch {
+        setLastError(handle, "allocation failure copying source path", .{});
+        return ONEZ_ERR_ALLOC;
+    };
+
     const old_source = ctx.current_source;
-    ctx.current_source = filepath;
+    ctx.current_source = source_name;
     defer ctx.current_source = old_source;
 
     const old_source_dir = ctx.current_source_dir;
-    ctx.current_source_dir = std.fs.path.dirname(filepath);
+    ctx.current_source_dir = std.fs.path.dirname(source_name);
     defer ctx.current_source_dir = old_source_dir;
 
     var file_buf: [4096]u8 = undefined;
@@ -2373,11 +2381,11 @@ export fn onez_runtime_run(ptr: ?*anyopaque, entry_word_id: u32) i32 {
     // frames into error_details so onez_print_error renders the message and chain instead of the
     // bare fallback line.
     //
-    // The entry frame is a last resort: with zero frames anywhere, capture would consume the
-    // pending message and append nothing. When any real frame exists the push is skipped, since
-    // the interpreter renders no frame for top-level code.
+    // The entry frame is a last resort: with zero frames anywhere, the fold appends nothing and
+    // the pending message never renders as a row. When any real frame exists the push is skipped,
+    // since the interpreter renders no frame for top-level code.
     //
-    // jit_pending_error stays set: it remains the fallback channel if capture appended nothing.
+    // jit_pending_error stays set: it remains the fallback channel if the fold appended nothing.
     if (comptime !is_freestanding) {
         if (status == 2) {
             const err = ctx.jit_pending_error orelse error.UserThrown;
@@ -2389,7 +2397,7 @@ export fn onez_runtime_run(ptr: ?*anyopaque, entry_word_id: u32) i32 {
                 const effect = if (word) |w| w.stack_effect else null;
                 ctx.pushCallFrame(entry.displayName(), source, line, 0, effect);
             }
-            ctx.captureCallStackOnError(err);
+            ctx.finalizeErrorDetails(err);
             if (frameless) ctx.popCallFrame();
         }
     }
@@ -2416,6 +2424,8 @@ export fn onez_print_error(ptr: ?*anyopaque) void {
     const stderr_file: std.fs.File = .stderr();
     var stderr_buf: [4096]u8 = undefined;
     var stderr = stderr_file.writer(&stderr_buf);
+
+    ctx.finalizeErrorDetails(ctx.jit_pending_error orelse error.UserThrown);
 
     const details = ctx.error_details.items;
     if (details.len > 0) {
