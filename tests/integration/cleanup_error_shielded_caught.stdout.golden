@@ -1,0 +1,7 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ [ [ boom ] [ spoil ] cleanup ] ]
+Stack: [ [ [ boom ] [ spoil ] cleanup ] [ dup error-type: @get . message: @get print-line ] ]
+body-error:
+body failed
+Stack: [ ]

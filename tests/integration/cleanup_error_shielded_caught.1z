@@ -1,0 +1,10 @@
+\ The caught-error twin of cleanup_error_shielded.1z: a recover around the cleanup boxes the
+\ body's error, not the suppressed cleanup failure's. Before the shield, the cleanup throw
+\ replaced the stashed thrown object, so the boxed error carried `cleanup-error:` here.
+
+boom: ( -- ) [ f "body failed" body-error: make-error throw ] ;
+spoil: ( -- ) [ f "cleanup failed" cleanup-error: make-error throw ] ;
+
+[ [ boom ] [ spoil ] cleanup ]
+[ dup error-type: @get . message: @get print-line ]
+recover

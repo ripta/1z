@@ -1,0 +1,11 @@
+\ A raise inside a prelude compound reached from a compiled user word. Under eager the chain
+\ crosses the compiled/interpreted boundary at `print-line`, and the `say` row is contributed
+\ by compiled `report` during the unwind. No flags: one golden binds the interpreted and eager
+\ suites, which is the pin that neither tier drops the row. The interpreted twin with the
+\ eager drop documented is error_frames_cross_file.1z, still pinned `--compile=off` until the
+\ golden-convergence pass retires that fork.
+
+say: ( v -- ) [ print-line 0 drop ] ;
+report: ( v -- ) [ say 0 drop ] ;
+
+42 report

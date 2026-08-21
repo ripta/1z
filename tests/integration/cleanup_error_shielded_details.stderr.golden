@@ -1,0 +1,3 @@
+tests/integration/cleanup_error_shielded_details.1z:5: error 'body-error' body failed at word 'throw'
+  stack effect: ( error --  )
+  called from tests/integration/cleanup_error_shielded_details.1z:7: cleanup

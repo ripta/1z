@@ -43,7 +43,7 @@ pub fn AotDirectWrapper(comptime func: NativeFn, comptime word_name: []const u8,
                     const effect = helpers.makeBoxedEffect(ctx.arena.allocator(), raw) catch null;
                     ctx.setTopCallFrameEffect(effect);
                 }
-                ctx.jit_pending_error = ctx.wordErrorDeferCapture(word_name, err);
+                ctx.jit_pending_error = ctx.wordErrorCleanup(word_name, err);
                 return 2;
             };
             ctx.wordSuccessCleanup(word_name, null) catch |err| {

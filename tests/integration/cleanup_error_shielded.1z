@@ -1,0 +1,9 @@
+\ A cleanup quotation's own failure is suppressed, and suppression must be complete: the
+\ body's propagating error keeps its type, message, and frames, with nothing from the
+\ cleanup failure bleeding in. No flags, so the interpreted and eager suites bind one
+\ golden and the compiled cleanup path is covered by the rerun.
+
+boom: ( -- ) [ f "body failed" body-error: make-error throw ] ;
+spoil: ( -- ) [ f "cleanup failed" cleanup-error: make-error throw ] ;
+
+[ boom ] [ spoil ] cleanup

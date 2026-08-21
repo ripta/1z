@@ -1,1 +1,2 @@
 <aot>:8: error 'unknown-word' at word 'b-only'
+  called from tests/aot/own_module_image_scan_unknown.1z:13: call

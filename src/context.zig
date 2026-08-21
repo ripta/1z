@@ -888,9 +888,11 @@ pub const Context = struct {
     /// Used by JIT error callbacks so synthetic frames do not depend on the
     /// mutable runtime current_source.
     jit_trace_source: ?[]const u8 = null,
-    /// Synthetic frames accumulated by compiled code on a cold error path.
-    /// These are folded into error_details by finalizeErrorDetails so the
-    /// interpreter can still append its outer frames afterward.
+    /// Frames pended during an error unwind, in unwind order: the raise site first, then
+    /// each compiled or interpreted caller as it unwinds.
+    ///
+    /// finalizeErrorDetails folds the list into error_details at the consumption point
+    /// that owns the error.
     jit_pending_trace_frames: std.ArrayListUnmanaged(CallFrame) = .{},
     /// PIC cache mapping instruction slice pointers to their PIC tables.
     /// Lazily populated on first generic dispatch through a compound word body.
@@ -2014,10 +2016,8 @@ pub const Context = struct {
         return self.jit_trace_source orelse self.current_source;
     }
 
-    /// Queue a synthetic frame for compiled error propagation. This is a
-    /// targeted parity fix for current JIT trace gaps, not a general JIT frame
-    /// model. If broader compiled trace fidelity becomes important later, build
-    /// a runtime frame stack for inlined combinators instead of extending this.
+    /// Queue a synthetic frame built from parts, for raise sites that never pushed a
+    /// live `CallFrame` to convert.
     pub fn appendPendingSyntheticErrorFrame(self: *Context, word_name: []const u8, source: []const u8, line: usize, effect: ?*const StackEffect) void {
         self.appendPendingErrorFrame(.{
             .word_name = word_name,
@@ -2028,15 +2028,23 @@ pub const Context = struct {
         });
     }
 
-    /// Queue an already-built frame, preserving every field. `wordErrorDeferCapture` uses this
-    /// to carry a shim-pushed frame, including its definition-located mark, into the pending
-    /// list.
+    /// Queue an already-built frame, preserving every field, including the
+    /// definition-located mark the fold's dedupe reads.
     pub fn appendPendingErrorFrame(self: *Context, frame: CallFrame) void {
         self.jit_pending_trace_frames.append(self.allocator, frame) catch {};
     }
 
     pub fn clearPendingSyntheticErrorFrames(self: *Context) void {
         self.jit_pending_trace_frames.clearRetainingCapacity();
+    }
+
+    /// Drop pending unwind frames above `mark`, keeping any an enclosing unwind owns.
+    ///
+    /// The guard covers a nested consumer having already cleared the whole list.
+    pub fn truncatePendingErrorFrames(self: *Context, mark: usize) void {
+        if (self.jit_pending_trace_frames.items.len > mark) {
+            self.jit_pending_trace_frames.shrinkRetainingCapacity(mark);
+        }
     }
 
     /// Get the current binding for a parameter by name.
@@ -5526,14 +5534,18 @@ pub const Context = struct {
         if (module.words.get(word_name)) |mod_word| {
             if (self.active_sandbox) |sandbox| {
                 if (!sandbox.allows(mod_word.capability)) {
-                    self.pushCallFrame(name, self.current_source, line, column, mod_word.stack_effect);
                     self.pending_error_message = std.fmt.allocPrint(
                         self.arena.allocator(),
                         "'{s}' requires capability '{s}' which is not granted by the active sandbox",
                         .{ name, mod_word.capability.displayName() },
                     ) catch "word denied by sandbox";
-                    self.captureCallStackOnError(error.PermissionDenied);
-                    self.popCallFrame();
+                    self.appendPendingErrorFrame(.{
+                        .word_name = name,
+                        .source = self.current_source,
+                        .line = line,
+                        .column = column,
+                        .stack_effect = mod_word.stack_effect,
+                    });
                     return error.PermissionDenied;
                 }
             }
@@ -5549,6 +5561,19 @@ pub const Context = struct {
                 trace_mod.traceWord(&tw, name, self.current_source, line, &self.stack);
             }
             defer self.popCallFrame();
+
+            // On error, pend this frame before the defer pops it, so a raise inside the
+            // body keeps its qualified row.
+            //
+            // The effect is dropped deliberately: the innermost qualified row has never
+            // rendered a stack-effect line, and pinned goldens hold that shape.
+            errdefer {
+                if (self.call_stack.items.len > 0) {
+                    var frame = self.call_stack.items[self.call_stack.items.len - 1];
+                    frame.stack_effect = null;
+                    self.appendPendingErrorFrame(frame);
+                }
+            }
 
             // A qualified call reaches the body without going through `executeResolvedWord`, so
             // the callee's file is installed here instead.
@@ -6554,12 +6579,6 @@ pub const Context = struct {
         }
     }
 
-    /// The raise-site spelling of `finalizeErrorDetails`, kept while the raise path still
-    /// captures instead of pending its frames.
-    pub fn captureCallStackOnError(self: *Context, err: anyerror) void {
-        self.finalizeErrorDetails(err);
-    }
-
     /// Render the frame's carried effect for an error row.
     ///
     /// The frame's own pointer is the only source consulted. Resolving `frame.word_name` here
@@ -6857,17 +6876,15 @@ pub const Context = struct {
                         self.jit_pending_error = null;
 
                         // A quotation has no word name and the interpreter renders no frame
-                        // for one, so push a stand-in frame only when capture would otherwise
+                        // for one, so pend a stand-in frame only when the fold would otherwise
                         // see zero frames and silently drop the pending message.
                         const bare = self.jit_pending_trace_frames.items.len == 0 and
                             self.call_stack.items.len == 0;
                         if (bare) {
                             const line = if (quotation.instructions.len > 0) quotation.instructions[0].line else 0;
                             const source = self.quotationBodySource(quotation.instructions) orelse self.current_source;
-                            self.pushCallFrame("quotation", source, line, 0, null);
+                            self.appendPendingSyntheticErrorFrame("quotation", source, line, null);
                         }
-                        self.captureCallStackOnError(err);
-                        if (bare) self.popCallFrame();
                         return err;
                     },
                     .bail => {
@@ -6918,22 +6935,13 @@ pub const Context = struct {
         }
     }
 
-    /// End benchmark profiling, capture the call stack, pop the call frame,
-    /// and propagate the error.
-    pub fn wordErrorCleanup(self: *Context, name: []const u8, err: anyerror) anyerror {
-        if (self.benchmark) |b| b.endWordProfile(self.allocator, name);
-        if (self.profile) |p| p.recordWordEnd(self.allocator, name);
-        self.captureCallStackOnError(err);
-        self.popCallFrame();
-        return err;
-    }
-
-    /// Compiled-shim counterpart of `wordErrorCleanup`: end profiling, convert the frame this
-    /// shim pushed into a pending synthetic frame, and propagate the error.
+    /// End profiling, convert the frame this caller pushed into a pending unwind frame,
+    /// pop it, and propagate the error.
     ///
-    /// Capture is deferred to the propagate boundary, so the compiled ancestors appended during
-    /// the unwind still land in the chain ahead of the interpreted callers.
-    pub fn wordErrorDeferCapture(self: *Context, name: []const u8, err: anyerror) anyerror {
+    /// Nothing captures here. Every unwinding frame pends, so the compiled ancestors and
+    /// interpreted callers appended later during the unwind still land in the chain, and the
+    /// fold runs once at the consumption point that owns the error.
+    pub fn wordErrorCleanup(self: *Context, name: []const u8, err: anyerror) anyerror {
         if (self.benchmark) |b| b.endWordProfile(self.allocator, name);
         if (self.profile) |p| p.recordWordEnd(self.allocator, name);
         if (self.call_stack.items.len > 0) {
@@ -7119,17 +7127,23 @@ pub const Context = struct {
                         if (self.benchmark) |b| b.endWordProfile(self.allocator, name);
                         if (self.profile) |p| p.recordWordEnd(self.allocator, name);
 
-                        // The interpreter elides tail-call frames, so pushing this word's frame
-                        // when interpreted callers exist can add a row the interpreted run never
-                        // shows. Push only when the boundary is the outermost consumer, where the
-                        // frame names the entry point and guarantees the pending message lands.
-                        // A tail call at that boundary skips the push too, unless the pending
-                        // list is empty and the frame is the message's only carrier.
-                        const outermost = self.call_stack.items.len == 0 and
-                            (!is_last or self.jit_pending_trace_frames.items.len == 0);
-                        if (outermost) self.pushCallFrame(name, self.current_source, instr.line, instr.column, word.stack_effect);
-                        self.captureCallStackOnError(err);
-                        if (outermost) self.popCallFrame();
+                        // A non-tail call always pends this word's frame: the interpreted run
+                        // of the same call shows the row whether or not interpreted callers
+                        // sit above.
+                        //
+                        // The interpreter elides tail-call frames, so a tail call pends only
+                        // when nothing else carries the pending message.
+                        const pend = !is_last or
+                            (self.jit_pending_trace_frames.items.len == 0 and self.call_stack.items.len == 0);
+                        if (pend) {
+                            self.appendPendingErrorFrame(.{
+                                .word_name = name,
+                                .source = self.current_source,
+                                .line = instr.line,
+                                .column = instr.column,
+                                .stack_effect = word.stack_effect,
+                            });
+                        }
                         return err;
                     },
                     .bail => {
@@ -7519,10 +7533,21 @@ pub const Context = struct {
                             .tail_call_set => return,
                         }
                     } else if (splitQualifiedName(name) != null) {
+                        // The call site pends its own row only when the callee pended nothing,
+                        // which is resolution failing before any frame was armed: the module
+                        // binding missing, the binding not yielding a module, or the name not
+                        // in the module. A raise past resolution pends the qualified row itself.
+                        const pend_mark = self.jit_pending_trace_frames.items.len;
                         self.executeQualifiedName(name, instr.line, instr.column) catch |err| {
-                            self.pushCallFrame(name, self.current_source, instr.line, instr.column, null);
-                            self.captureCallStackOnError(err);
-                            self.popCallFrame();
+                            if (self.jit_pending_trace_frames.items.len == pend_mark) {
+                                self.appendPendingErrorFrame(.{
+                                    .word_name = name,
+                                    .source = self.current_source,
+                                    .line = instr.line,
+                                    .column = instr.column,
+                                    .stack_effect = null,
+                                });
+                            }
                             return err;
                         };
                         if (self.benchmark) |b| {
@@ -7590,9 +7615,13 @@ pub const Context = struct {
                             var tw = trace_mod.TraceWriter.init();
                             trace_mod.traceResolve(&tw, name, .not_found);
                         }
-                        self.pushCallFrame(name, self.current_source, instr.line, instr.column, null);
-                        self.captureCallStackOnError(ExecutionError.UnknownWord);
-                        self.popCallFrame();
+                        self.appendPendingErrorFrame(.{
+                            .word_name = name,
+                            .source = self.current_source,
+                            .line = instr.line,
+                            .column = instr.column,
+                            .stack_effect = null,
+                        });
                         return ExecutionError.UnknownWord;
                     }
                 },
@@ -8031,7 +8060,7 @@ test "Context.deinit walks release list before arena teardown" {
     ctx.deinit();
 }
 
-test "call stack captured on error, calling an unknown word" {
+test "unwind pends the chain for an unknown word and the fold orders it innermost first" {
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
 
@@ -8065,7 +8094,9 @@ test "call stack captured on error, calling an unknown word" {
     const result = ctx.executeQuotation(.{ .instructions = top_instrs });
     try std.testing.expectError(ExecutionError.UnknownWord, result);
 
-    // Check error_details captured the call stack (innermost first)
+    // Nothing folds at the raise; the consumer folds the pended chain.
+    try std.testing.expectEqual(@as(usize, 0), ctx.error_details.items.len);
+    ctx.finalizeErrorDetails(ExecutionError.UnknownWord);
     try std.testing.expectEqual(@as(usize, 3), ctx.error_details.items.len);
 
     // First entry: nonexistent (innermost, where error occurred)
@@ -8122,14 +8153,14 @@ test "clearExecutionDetails clears both call stack and error details" {
     try std.testing.expectEqual(@as(usize, 0), ctx.error_details.items.len);
 }
 
-test "wordErrorDeferCapture converts the pushed frame and the boundary capture folds it" {
+test "wordErrorCleanup pends the pushed frame and the consumer's fold renders it" {
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
 
     ctx.pushCallFrame("boom", "<test>", 7, 0, null);
     ctx.pending_error_message = "boom went wrong";
 
-    const err = ctx.wordErrorDeferCapture("boom", error.TypeMismatch);
+    const err = ctx.wordErrorCleanup("boom", error.TypeMismatch);
     try std.testing.expectEqual(error.TypeMismatch, err);
 
     try std.testing.expectEqual(@as(usize, 0), ctx.call_stack.items.len);
@@ -8139,7 +8170,7 @@ test "wordErrorDeferCapture converts the pushed frame and the boundary capture f
     try std.testing.expectEqual(@as(usize, 7), ctx.jit_pending_trace_frames.items[0].line);
     try std.testing.expectEqualStrings("boom went wrong", ctx.pending_error_message.?);
 
-    ctx.captureCallStackOnError(err);
+    ctx.finalizeErrorDetails(err);
 
     try std.testing.expectEqual(@as(usize, 1), ctx.error_details.items.len);
     try std.testing.expectEqualStrings("boom", ctx.error_details.items[0].word_name.?);
@@ -8192,7 +8223,7 @@ test "capture drops a definition-located frame when the call site queued the sam
     ctx.appendPendingSyntheticErrorFrame("take", "<test>", 15, null);
     ctx.pending_error_message = "expected fixnum, got bignum";
 
-    ctx.captureCallStackOnError(error.TypeMismatch);
+    ctx.finalizeErrorDetails(error.TypeMismatch);
 
     try std.testing.expectEqual(@as(usize, 1), ctx.error_details.items.len);
     try std.testing.expectEqualStrings("take", ctx.error_details.items[0].word_name.?);
@@ -8213,7 +8244,7 @@ test "capture keeps a definition-located frame with no same-word call-site row" 
     ctx.appendPendingSyntheticErrorFrame("caller", "<test>", 9, null);
     ctx.pending_error_message = "expected fixnum, got bignum";
 
-    ctx.captureCallStackOnError(error.TypeMismatch);
+    ctx.finalizeErrorDetails(error.TypeMismatch);
 
     try std.testing.expectEqual(@as(usize, 2), ctx.error_details.items.len);
     try std.testing.expectEqualStrings("take", ctx.error_details.items[0].word_name.?);
@@ -8246,7 +8277,7 @@ test "capture renders the frame's carried effect, not a visible binding's" {
     });
 
     ctx.pushCallFrame("shadowed-op", "<test>", 3, 0, &native_effect);
-    ctx.captureCallStackOnError(error.TypeMismatch);
+    ctx.finalizeErrorDetails(error.TypeMismatch);
     ctx.popCallFrame();
     ctx.popLocalFrame();
 
@@ -8259,7 +8290,7 @@ test "capture renders no effect for a frame that carries none" {
     defer ctx.deinit();
 
     ctx.pushCallFrame("dup", "<test>", 1, 0, null);
-    ctx.captureCallStackOnError(error.StackUnderflow);
+    ctx.finalizeErrorDetails(error.StackUnderflow);
     ctx.popCallFrame();
 
     try std.testing.expectEqual(@as(usize, 1), ctx.error_details.items.len);
@@ -8285,7 +8316,7 @@ test "capture dedupe carries the dropped definition-located frame's effect" {
     ctx.appendPendingSyntheticErrorFrame("take", "<test>", 15, null);
     ctx.pending_error_message = "expected fixnum, got bignum";
 
-    ctx.captureCallStackOnError(error.TypeMismatch);
+    ctx.finalizeErrorDetails(error.TypeMismatch);
 
     try std.testing.expectEqual(@as(usize, 1), ctx.error_details.items.len);
     try std.testing.expectEqual(@as(usize, 15), ctx.error_details.items[0].line);

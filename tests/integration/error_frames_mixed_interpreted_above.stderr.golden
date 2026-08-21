@@ -1,0 +1,7 @@
+src/prelude.1z:614: error 'type-mismatch' expected string or byte-array, got fixnum 42 at word 'stream-write'
+  stack effect: ( stream bytes -- n )
+  called from src/prelude.1z:691: stream-write-string
+  called from src/prelude.1z:693: print
+  called from tests/integration/error_frames_mixed_interpreted_above.1z:9: print-line
+  called from tests/integration/error_frames_mixed_interpreted_above.1z:10: deep
+  called from tests/integration/error_frames_mixed_interpreted_above.1z:11: mid

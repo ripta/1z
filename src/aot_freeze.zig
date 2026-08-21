@@ -531,7 +531,12 @@ pub fn freezeModuleGraphOpts(
         error.OutOfMemory => return error.OutOfMemory,
         error.FileNotFound => return error.FileNotFound,
         error.FileReadFailed => return error.FileReadFailed,
-        else => return error.ExecutionFailed,
+        else => {
+            // Fold before the wrap erases the error's identity: a user-thrown chain is
+            // labeled from the thrown object only while the error still reads as UserThrown.
+            ctx.finalizeErrorDetails(err);
+            return error.ExecutionFailed;
+        },
     };
     const entry_frame_index = ctx.local_frames.items.len - 1;
 

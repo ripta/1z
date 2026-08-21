@@ -1,0 +1,13 @@
+\ The inverse boundary shape: a compiled word raising below interpreted callers. `deep`
+\ compiles under eager; `mid` and `top` stay interpreted because their bodies drop into the
+\ symbolic row region, which the compiler rejects. The raise therefore crosses the boundary
+\ at `deep`'s own call site. No flags: one golden binds the interpreted and eager suites, so
+\ `deep` keeps its own row on both tiers. The pin depends on row-region drops staying
+\ uncompilable; if that changes, `mid` and `top` compile and this file stops covering the
+\ boundary.
+
+deep: ( v -- )             [ print-line 0 drop ] ;
+mid:  ( ..a x v -- ..a )   [ deep drop ] ;
+top:  ( ..a x y v -- ..a ) [ mid drop ] ;
+
+0 0 42 top

@@ -1,0 +1,7 @@
+\ The suppressed cleanup failure here writes finished error_details rows directly instead of
+\ going through the pending channels, so the shield must truncate those rows too. Before it
+\ did, the cleanup's file-not-found row replaced the body error's entire rendering.
+
+boom: ( -- ) [ f "body failed" body-error: make-error throw ] ;
+
+[ boom ] [ "nope-xyz" native.resolve-load-path drop ] cleanup

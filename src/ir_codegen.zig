@@ -14756,7 +14756,7 @@ export fn jitParamTypeMismatchError(
     const expected = if (expected_tag_raw == @intFromEnum(@as(ValueLayout.TagType, .float))) "float" else "fixnum";
     helpers.setTypeMismatchError(ctx, expected, @as(*const Value, @ptrFromInt(value_ptr_raw)).*);
 
-    ctx.jit_pending_error = ctx.wordErrorDeferCapture(word_name, error.TypeMismatch);
+    ctx.jit_pending_error = ctx.wordErrorCleanup(word_name, error.TypeMismatch);
     return 2;
 }
 
@@ -14967,7 +14967,7 @@ export fn jitDispatchMissError(ctx_raw: usize, word_id_raw: usize, src_ptr_raw: 
         helpers.setErrorContext(ctx, "no applicable method for '{s}'", .{word_name});
     }
 
-    ctx.jit_pending_error = ctx.wordErrorDeferCapture(display_name, error.TypeMismatch);
+    ctx.jit_pending_error = ctx.wordErrorCleanup(display_name, error.TypeMismatch);
     return 2;
 }
 
@@ -15124,11 +15124,11 @@ export fn jitNativeWordCall(ctx_raw: usize, word_id_raw: usize, src_ptr_raw: usi
     if (entry.native) |leaf| {
         if (leaf.stack_effect) |effect| {
             ctx.validateParameterEffects(effect) catch |err| {
-                ctx.jit_pending_error = ctx.wordErrorDeferCapture(display_name, err);
+                ctx.jit_pending_error = ctx.wordErrorCleanup(display_name, err);
                 return 2;
             };
             ctx.validateTypeAnnotations(effect) catch |err| {
-                ctx.jit_pending_error = ctx.wordErrorDeferCapture(display_name, err);
+                ctx.jit_pending_error = ctx.wordErrorCleanup(display_name, err);
                 return 2;
             };
         }
@@ -15142,7 +15142,7 @@ export fn jitNativeWordCall(ctx_raw: usize, word_id_raw: usize, src_ptr_raw: usi
             break :blk2 p;
         };
         const dispatched = dispatch_helpers.tryDispatchGenericById(ctx, leaf.dispatch_id, dispatch_pic) catch |err| {
-            ctx.jit_pending_error = ctx.wordErrorDeferCapture(display_name, err);
+            ctx.jit_pending_error = ctx.wordErrorCleanup(display_name, err);
             return 2;
         };
         if (dispatched) {
@@ -15167,7 +15167,7 @@ export fn jitNativeWordCall(ctx_raw: usize, word_id_raw: usize, src_ptr_raw: usi
             };
             return 0;
         } else |err| {
-            ctx.jit_pending_error = ctx.wordErrorDeferCapture(display_name, err);
+            ctx.jit_pending_error = ctx.wordErrorCleanup(display_name, err);
             return 2;
         }
     }
@@ -15183,12 +15183,12 @@ export fn jitNativeWordCall(ctx_raw: usize, word_id_raw: usize, src_ptr_raw: usi
     const result = if (looked_up_word) |word| blk: {
         if (word.stack_effect) |effect| {
             ctx.validateParameterEffects(effect) catch |err| {
-                ctx.jit_pending_error = ctx.wordErrorDeferCapture(display_name, err);
+                ctx.jit_pending_error = ctx.wordErrorCleanup(display_name, err);
                 return 2;
             };
             if (!shouldSkipTypeAnnotationValidation(word)) {
                 ctx.validateTypeAnnotations(effect) catch |err| {
-                    ctx.jit_pending_error = ctx.wordErrorDeferCapture(display_name, err);
+                    ctx.jit_pending_error = ctx.wordErrorCleanup(display_name, err);
                     return 2;
                 };
             }
@@ -15208,7 +15208,7 @@ export fn jitNativeWordCall(ctx_raw: usize, word_id_raw: usize, src_ptr_raw: usi
                 break :blk2 p;
             };
             const dispatched = dispatch_helpers.tryDispatchGenericWithPic(ctx, word_name, dispatch_pic) catch |err| {
-                ctx.jit_pending_error = ctx.wordErrorDeferCapture(display_name, err);
+                ctx.jit_pending_error = ctx.wordErrorCleanup(display_name, err);
                 return 2;
             };
             if (dispatched) {
@@ -15255,7 +15255,7 @@ export fn jitNativeWordCall(ctx_raw: usize, word_id_raw: usize, src_ptr_raw: usi
         };
         return 0;
     } else |err| {
-        ctx.jit_pending_error = ctx.wordErrorDeferCapture(display_name, err);
+        ctx.jit_pending_error = ctx.wordErrorCleanup(display_name, err);
         return 2;
     }
 }
@@ -15297,12 +15297,12 @@ export fn jitInterpretedCall(ctx_raw: usize, word_id_raw: usize, src_ptr_raw: us
     const result = if (looked_up_word) |word| blk: {
         if (word.stack_effect) |effect| {
             ctx.validateParameterEffects(effect) catch |err| {
-                ctx.jit_pending_error = ctx.wordErrorDeferCapture(display_name, err);
+                ctx.jit_pending_error = ctx.wordErrorCleanup(display_name, err);
                 return 2;
             };
             if (!shouldSkipTypeAnnotationValidation(word)) {
                 ctx.validateTypeAnnotations(effect) catch |err| {
-                    ctx.jit_pending_error = ctx.wordErrorDeferCapture(display_name, err);
+                    ctx.jit_pending_error = ctx.wordErrorCleanup(display_name, err);
                     return 2;
                 };
             }
@@ -15323,7 +15323,7 @@ export fn jitInterpretedCall(ctx_raw: usize, word_id_raw: usize, src_ptr_raw: us
                     break :blk2 p;
                 };
                 const dispatched = dispatch_helpers.tryDispatchGenericWithPic(ctx, word_name, dispatch_pic) catch |err| {
-                    ctx.jit_pending_error = ctx.wordErrorDeferCapture(display_name, err);
+                    ctx.jit_pending_error = ctx.wordErrorCleanup(display_name, err);
                     return 2;
                 };
                 if (dispatched) {
@@ -15335,7 +15335,7 @@ export fn jitInterpretedCall(ctx_raw: usize, word_id_raw: usize, src_ptr_raw: us
                 }
                 if (word.action.compound.len == 0) {
                     ctx.setGenericDispatchErrorDetails(word_name, word.stack_effect);
-                    ctx.jit_pending_error = ctx.wordErrorDeferCapture(display_name, error.TypeError);
+                    ctx.jit_pending_error = ctx.wordErrorCleanup(display_name, error.TypeError);
                     return 2;
                 }
             }
@@ -15387,7 +15387,7 @@ export fn jitInterpretedCall(ctx_raw: usize, word_id_raw: usize, src_ptr_raw: us
         };
         return 0;
     } else |err| {
-        ctx.jit_pending_error = ctx.wordErrorDeferCapture(display_name, err);
+        ctx.jit_pending_error = ctx.wordErrorCleanup(display_name, err);
         return 2;
     }
 }
@@ -15416,7 +15416,9 @@ pub const ExecResult = enum {
 /// .bail if the compiled function signals a type mismatch or overflow, in
 /// which case the stack is unchanged.
 pub fn executeCompiled(ctx: *Context, word_id: u32) ExecResult {
-    ctx.clearPendingSyntheticErrorFrames();
+    // Frames already pending belong to an enclosing unwind whose cleanup quotation reached
+    // this call. Leave them; discard only what this execution appends and abandons.
+    const pending_mark = ctx.jit_pending_trace_frames.items.len;
     const saved_trace_source = ctx.jit_trace_source;
     defer ctx.jit_trace_source = saved_trace_source;
     const entry = ctx.jit_dispatch.get(word_id) orelse blk: {
@@ -15482,7 +15484,6 @@ pub fn executeCompiled(ctx: *Context, word_id: u32) ExecResult {
 
     const result = ExecResult.fromStatus(status);
     if (result == .bail) {
-        ctx.clearPendingSyntheticErrorFrames();
         if (bail_stats_mod.enabled) {
             const entry_name = if (ctx.jit_dispatch.get(word_id)) |e| e.displayName() else "?";
             bail_stats_mod.global.recordBail(word_id, entry_name);
@@ -15490,7 +15491,7 @@ pub fn executeCompiled(ctx: *Context, word_id: u32) ExecResult {
         ctx.stack.items.items.len = saved_sp;
     }
     if (result != .error_propagate) {
-        ctx.clearPendingSyntheticErrorFrames();
+        ctx.truncatePendingErrorFrames(pending_mark);
     }
     return result;
 }

@@ -213,11 +213,43 @@ pub fn nativeCleanup(ctx: *Context) anyerror!void {
     const was_unwinding = if (task) |t| t.getCancellationPhase() == .unwinding else false;
     if (was_unwinding) task.?.setCancellationPhase(.shielded);
 
+    // A suppressed cleanup failure must not bleed into the body error's in-flight state.
+    //
+    // Everything a raise can write is saved and restored: the pending message, hint, and
+    // dispatch diagnostics, the thrown stash, directly appended error_details rows, and
+    // pended unwind frames. Any of those left behind would replace or extend the chain
+    // the body is still propagating.
+    const saved_message = ctx.pending_error_message;
+    const saved_hint = ctx.pending_error_hint;
+    const saved_dispatch_types = ctx.pending_dispatch_actual_types;
+    const saved_dispatch_methods = ctx.pending_dispatch_available_methods;
+    const saved_thrown = ctx.thrown_error;
+    const pend_mark = ctx.jit_pending_trace_frames.items.len;
+    const detail_mark = ctx.error_details.items.len;
+
     // Always execute cleanup quotation, even if body failed
     // If cleanup also fails, we ignore that error and prioritize the body error
     ctx.executeQuotationWithFrame(cleanup_quot) catch {
         // Cleanup error is suppressed; body error takes priority
     };
+
+    // The cleanup's own thrown stash is discarded with the rest of its state. The box is
+    // arena-owned, but a refcounted `data` payload is not, so release it here.
+    if (ctx.thrown_error) |cleanup_thrown| {
+        if (cleanup_thrown != saved_thrown) {
+            if (cleanup_thrown.data) |data| container_backing.releaseValue(data.*);
+        }
+    }
+
+    ctx.pending_error_message = saved_message;
+    ctx.pending_error_hint = saved_hint;
+    ctx.pending_dispatch_actual_types = saved_dispatch_types;
+    ctx.pending_dispatch_available_methods = saved_dispatch_methods;
+    ctx.thrown_error = saved_thrown;
+    ctx.truncatePendingErrorFrames(pend_mark);
+    if (ctx.error_details.items.len > detail_mark) {
+        ctx.error_details.shrinkRetainingCapacity(detail_mark);
+    }
 
     if (was_unwinding) task.?.setCancellationPhase(.unwinding);
 
