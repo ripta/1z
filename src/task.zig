@@ -85,35 +85,54 @@ pub fn coroDestroy(task: *Task) void {
     }
 }
 
+/// Fold the pending unwind into `error_details` and box the failure for `task.error_obj`.
+///
+/// The fold must run on the worker that owns `ctx`, while the task's frames and arena are
+/// still alive, which is the task's own teardown. The boxed object is the only thing that
+/// crosses workers; the scope's collection deep-copies it and never reads this context.
+///
+/// Boxes from the folded innermost row when the fold produced one, else transfers the
+/// thrown stash, else returns null for the caller's no-details fallback.
+pub fn foldAndBoxTaskError(ctx: *Context, err: anyerror) ?*ErrorObject {
+    ctx.finalizeErrorDetails(err);
+
+    if (ctx.error_details.items.len > 0) {
+        const detail = ctx.error_details.items[0];
+        return value_mod.boxErrorObject(ctx.quotationAllocator(), .{
+            .error_type = detail.error_type,
+            .message = detail.message,
+        }) catch null;
+    }
+
+    if (ctx.thrown_error) |thrown| {
+        ctx.thrown_error = null;
+        return thrown;
+    }
+
+    return null;
+}
+
 /// Entry function for task coroutines. Called by minicoro with the coroutine
 /// pointer as the sole argument; reads the task pointer from user_data.
 pub fn taskEntryPoint(co: CoroPtr) callconv(.c) void {
     const task: *Task = @ptrCast(@alignCast(mc.mco_get_user_data(co)));
 
     task.ctx.executeQuotationWithFrame(task.quotation) catch |err| {
-        task.ctx.finalizeErrorDetails(err);
-        if (task.ctx.error_details.items.len > 0) {
-            const detail = task.ctx.error_details.items[0];
-            task.error_obj = value_mod.boxErrorObject(task.ctx.quotationAllocator(), .{
-                .error_type = detail.error_type,
-                .message = detail.message,
-            }) catch null;
-            if (task.getCancellationPhase() != .none and std.mem.eql(u8, detail.error_type, "task-cancelled")) {
-                task.setStatus(.cancelled);
-            } else {
-                task.setStatus(.failed);
-            }
-        } else if (task.ctx.thrown_error) |thrown| {
-            task.error_obj = thrown;
-            task.ctx.thrown_error = null;
-            if (task.getCancellationPhase() != .none and std.mem.eql(u8, thrown.error_type, "task-cancelled")) {
-                task.setStatus(.cancelled);
-            } else {
-                task.setStatus(.failed);
-            }
-        } else {
-            task.setStatus(.failed);
-        }
+        task.error_obj = foldAndBoxTaskError(task.ctx, err);
+
+        // The status reads the folded row rather than the boxed object, so an allocation
+        // failure in the boxing cannot reclassify a genuine cancellation as a failure the
+        // scope would propagate.
+        const details = task.ctx.error_details.items;
+        const error_type: []const u8 = if (details.len > 0)
+            details[0].error_type
+        else if (task.error_obj) |obj|
+            obj.error_type
+        else
+            "";
+        const cancelled = task.getCancellationPhase() != .none and
+            std.mem.eql(u8, error_type, "task-cancelled");
+        task.setStatus(if (cancelled) .cancelled else .failed);
         return;
     };
 
@@ -644,4 +663,42 @@ test "publishTaskResult rejects borrowed buffer results" {
     try std.testing.expect(task.result == null);
     try std.testing.expect(task.error_obj != null);
     try std.testing.expectEqualStrings("borrowed-buffer-escape", task.error_obj.?.error_type);
+}
+
+test "foldAndBoxTaskError folds the pended unwind before boxing" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    ctx.appendPendingSyntheticErrorFrame("boom", "<test>", 7, null);
+    ctx.pending_error_message = "boom went wrong";
+
+    const boxed = foldAndBoxTaskError(&ctx, error.TypeMismatch);
+
+    try std.testing.expect(boxed != null);
+    try std.testing.expectEqualStrings("type-mismatch", boxed.?.error_type);
+    try std.testing.expectEqualStrings("boom went wrong", boxed.?.message);
+    try std.testing.expectEqual(@as(usize, 1), ctx.error_details.items.len);
+}
+
+test "foldAndBoxTaskError transfers the thrown box when nothing folds" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const thrown = try value_mod.boxErrorObject(ctx.quotationAllocator(), .{
+        .error_type = "task-cancelled",
+        .message = "task was cancelled",
+    });
+    ctx.thrown_error = thrown;
+
+    const boxed = foldAndBoxTaskError(&ctx, error.UserThrown);
+
+    try std.testing.expectEqual(thrown, boxed.?);
+    try std.testing.expect(ctx.thrown_error == null);
+}
+
+test "foldAndBoxTaskError returns null with nothing to box" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    try std.testing.expect(foldAndBoxTaskError(&ctx, error.TypeMismatch) == null);
 }

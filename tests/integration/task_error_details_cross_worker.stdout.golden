@@ -1,0 +1,8 @@
+Stack: [ ]
+Stack: [ ]
+PASS: cross-worker failure keeps its type
+PASS: cross-worker failure keeps its message
+Stack: [ ]
+Stack: [ ]
+PASS: spawn-order selection unchanged under four workers
+Stack: [ ]

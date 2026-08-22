@@ -1,0 +1,23 @@
+use "testing" ;
+use "strings" ;
+
+\ The caught error's boxed stack trace holds the complete chain for the recover's subtree,
+\ with the frames above the consumer following as the outer rows. `boom` and `mid` compile
+\ under eager, so the subtree crosses the compiled/interpreted boundary at `print-line`;
+\ `catcher` stays interpreted because its body drops into the symbolic row region, which the
+\ compiler rejects, so the outer rows exist on both tiers. The `0 drop` tails keep each call
+\ non-tail, so no row is tail-elided. No flags: one golden binds the interpreted and eager
+\ suites.
+
+boom: ( v -- ) [ print-line 0 drop ] ;
+mid: ( v -- ) [ boom 0 drop ] ;
+
+check-trace: ( err -- ) [
+  stack-trace: @get [ "word" @get ] #map #collect ", " #join
+  "stream-write, stream-write-string, print, print-line, boom, mid, recover, catcher"
+  "recover boxes the subtree and the outer rows" assert=
+] ;
+
+catcher: ( ..a x v -- ..a ) [ [ mid 0 drop ] [ check-trace ] recover drop ] ;
+
+0 42 catcher 0 drop

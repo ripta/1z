@@ -600,16 +600,13 @@ fn nativeWithTimeout(ctx: *Context) anyerror!void {
 fn timerTaskEntryPoint(co: task_mod.CoroPtr) callconv(.c) void {
     const task: *Task = @ptrCast(@alignCast(task_mod.getCoroUserData(co)));
 
-    task.ctx.executeQuotation(task.quotation) catch {
+    task.ctx.executeQuotation(task.quotation) catch |err| {
         if (task.getCancellationPhase() != .none) {
             task.setStatus(.cancelled);
         } else {
             task.setStatus(.failed);
         }
-        if (task.ctx.thrown_error) |thrown| {
-            task.error_obj = thrown;
-            task.ctx.thrown_error = null;
-        }
+        task.error_obj = task_mod.foldAndBoxTaskError(task.ctx, err);
         return;
     };
 

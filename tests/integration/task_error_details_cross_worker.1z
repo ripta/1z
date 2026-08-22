@@ -1,0 +1,36 @@
+use "testing" ;
+
+\ A failing child's chain folds at its own teardown, on the worker that owns the task's
+\ context, before `error_obj` is boxed. The raise here is not user-thrown, so its type and
+\ message exist only in the pending unwind state; without the teardown fold the scope would
+\ report the "task failed without error details" placeholder. Four workers force the boxed
+\ object to be what crosses back.
+
+fail-deep: ( -- ) [ 42 print-line 0 drop ] ;
+
+test-cross-worker-details: ( -- ) [
+  [
+    [ [ fail-deep ] spawn drop ] task-scope
+    f "scope should have thrown" assert-true
+  ] [
+    dup error-type: @get type-mismatch: "cross-worker failure keeps its type" assert=
+    message: @get "expected string or byte-array, got fixnum 42"
+    "cross-worker failure keeps its message" assert=
+  ] recover
+] ;
+
+test-cross-worker-details
+
+\ The scope still selects the propagated error in spawn order, not wall-clock order, when
+\ the children fail on different workers.
+
+test-spawn-order-selection: ( -- ) [
+  [
+    [
+      [ f "first" first-error: make-error throw ] spawn drop
+      [ f "second" second-error: make-error throw ] spawn drop
+    ] task-scope
+  ] first-error: "spawn-order selection unchanged under four workers" assert-error-type
+] ;
+
+test-spawn-order-selection
