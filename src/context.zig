@@ -558,6 +558,17 @@ pub const DeferredEmission = union(enum) {
     };
 };
 
+/// The base scope an AOT binary bakes for the redefinition guards: the names the interpreted
+/// probes find in the frames below the durable floor, each with its defining source and marker
+/// bits. Three parallel arrays borrowed from the binary's rodata, sorted by name at emission.
+/// Flag bit 0 is the generic marker, bit 1 the const marker.
+pub const AotBaseScope = struct {
+    names: [*]const [*:0]const u8,
+    sources: [*]const ?[*:0]const u8,
+    flags: [*]const u8,
+    count: u32,
+};
+
 /// The Context holds all interpreter state.
 pub const Context = struct {
     stack: Stack,
@@ -880,6 +891,12 @@ pub const Context = struct {
     /// leave this false, so the fallback stays inert and module
     /// privacy holds.
     runtime_image_loaded: bool = false,
+    /// The freeze-time base scope baked into an AOT binary, registered once at boot by the
+    /// generated `main`. The shadow probe's baked rung and the const guard read it, so a
+    /// redefinition reports from a binary exactly as it does under `1z run`.
+    ///
+    /// Null in interpreter sessions, which keeps both readers inert there.
+    aot_base_scope: ?AotBaseScope = null,
     /// Pending error from a JIT error-handling callback (recover/cleanup).
     /// Set by the callback when it returns error_propagate status, consumed
     /// by the interpreter dispatch loop.
@@ -3283,6 +3300,21 @@ pub const Context = struct {
         return self.dictionary.remove(name);
     }
 
+    /// Whether `name` is a const-marked word in the baked base scope, walking the ancestor chain
+    /// the way the const guard's lookup does. Read only when that lookup misses, so a visible
+    /// binding keeps answering for the name first.
+    fn bakedBaseScopeConstLocked(self: *const Context, name: []const u8) bool {
+        var ctx_iter: ?*const Context = self;
+        while (ctx_iter) |c| : (ctx_iter = c.parent_context) {
+            const scope = c.aot_base_scope orelse continue;
+            for (0..scope.count) |i| {
+                if (!std.mem.eql(u8, std.mem.span(scope.names[i]), name)) continue;
+                return scope.flags[i] & 2 != 0;
+            }
+        }
+        return false;
+    }
+
     fn defineWordLocked(self: *Context, name: []const u8, definition: WordDefinition) !void {
         // The const guard looks through an empty visibility, which admits no module and so skips
         // every `module_deps` frame. A deps frame is execution context for a module's bodies, not
@@ -3291,17 +3323,25 @@ pub const Context = struct {
         // must not block the loaded file's own definitions.
         const const_guard_vis: ModuleDepsVisibility = .{ .deps_modules = &.{}, .defining_module = null };
         const visible_existing = self.lookupWordLocked(name, const_guard_vis);
-        if (visible_existing) |existing| {
-            for (existing.markers) |mk| {
-                if (markers_mod.isConstMarker(mk)) {
-                    self.pending_error_message = std.fmt.allocPrint(
-                        self.arena.allocator(),
-                        "cannot redefine const word '{s}'",
-                        .{name},
-                    ) catch "cannot redefine const word";
-                    return error.CannotRedefineConst;
+        const existing_is_const = blk: {
+            if (visible_existing) |existing| {
+                for (existing.markers) |mk| {
+                    if (markers_mod.isConstMarker(mk)) break :blk true;
                 }
+                break :blk false;
             }
+            // In an AOT binary a const prelude binding lives in no frame and no dictionary, so
+            // the baked base scope completes this guard's storage. A visible non-const binding
+            // above it shadows it here as interpreted, since the lookup answered first.
+            break :blk self.bakedBaseScopeConstLocked(name);
+        };
+        if (existing_is_const) {
+            self.pending_error_message = std.fmt.allocPrint(
+                self.arena.allocator(),
+                "cannot redefine const word '{s}'",
+                .{name},
+            ) catch "cannot redefine const word";
+            return error.CannotRedefineConst;
         }
 
         const target_frame_index = self.defineTargetFrameIndex();
@@ -3354,8 +3394,9 @@ pub const Context = struct {
         }
 
         // The dictionary-shadow half of the collision guard: a top-level definition whose name is
-        // absent from its own frame but resolves in the base scope, which is the frames below the
-        // durable floor, today the prelude frame, plus the native dictionary.
+        // absent from its own frame but resolves in the base scope, in whatever form the tier
+        // stores it: the frames below the durable floor, today the prelude frame, the native
+        // dictionary, and an AOT binary's baked base scope.
         //
         // The gate is the import-target frame rather than the floor itself. A runtime load moves
         // only the import target and leaves the floor behind, so a module's own top level is
@@ -3388,6 +3429,23 @@ pub const Context = struct {
                                 shadowed = d;
                                 shadowed_is_native = true;
                                 break :probe;
+                            }
+
+                            // The baked base scope: an AOT binary loads no prelude frame, so the
+                            // freeze bakes that frame's content instead, reachable or not. Only
+                            // an AOT boot registers the tables, which keeps this rung inert in
+                            // interpreter and eager sessions.
+                            if (c.aot_base_scope) |scope| {
+                                for (0..scope.count) |i| {
+                                    if (!std.mem.eql(u8, std.mem.span(scope.names[i]), name)) continue;
+                                    shadowed = .{
+                                        .name = name,
+                                        .source_file = if (scope.sources[i]) |src| std.mem.span(src) else null,
+                                        .markers = if (scope.flags[i] & 1 != 0) &seeded_generic_markers else &.{},
+                                        .action = .{ .native = aotCompiledOnlyBailSentinel },
+                                    };
+                                    break :probe;
+                                }
                             }
                         }
 
@@ -9088,6 +9146,128 @@ test "defineWordLocked: the shadow guard fires from the durable frame with no pr
         .action = .{ .literal = .{ .fixnum = 1 } },
     }));
     try std.testing.expectEqualStrings("defining 'dup' would shadow a native word", ctx.pending_error_message.?);
+}
+
+/// One durable entry frame at index 0, the interpreter-free boot shape the baked-rung tests
+/// share, with a baked base scope attached.
+fn setupBakedScopeProbe(ctx: *Context, scope: AotBaseScope) !void {
+    try ctx.pushLocalFrame();
+    ctx.import_frame_index = 0;
+    ctx.durable_frame_floor = 0;
+    ctx.image_entry_import_frame = 0;
+    ctx.aot_base_scope = scope;
+}
+
+const baked_scope_names = [_][*:0]const u8{"baked-prelude-word"};
+const baked_scope_sources = [_]?[*:0]const u8{"src/prelude.1z"};
+const baked_scope_no_sources = [_]?[*:0]const u8{null};
+const baked_scope_plain_flags = [_]u8{0};
+const baked_scope_generic_flags = [_]u8{1};
+const baked_scope_const_flags = [_]u8{2};
+
+test "defineWordLocked: the baked base-scope rung reports a shadow with its baked source" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    try setupBakedScopeProbe(&ctx, .{
+        .names = &baked_scope_names,
+        .sources = &baked_scope_sources,
+        .flags = &baked_scope_plain_flags,
+        .count = 1,
+    });
+
+    try std.testing.expectError(error.ImportConflict, ctx.defineWord("baked-prelude-word", .{
+        .name = "baked-prelude-word",
+        .action = .{ .literal = .{ .fixnum = 1 } },
+    }));
+    try std.testing.expectEqualStrings(
+        "defining 'baked-prelude-word' would shadow a word from \"src/prelude.1z\"",
+        ctx.pending_error_message.?,
+    );
+}
+
+test "defineWordLocked: a sourceless baked row degrades to the no-origin message" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    try setupBakedScopeProbe(&ctx, .{
+        .names = &baked_scope_names,
+        .sources = &baked_scope_no_sources,
+        .flags = &baked_scope_plain_flags,
+        .count = 1,
+    });
+
+    try std.testing.expectError(error.ImportConflict, ctx.defineWord("baked-prelude-word", .{
+        .name = "baked-prelude-word",
+        .action = .{ .literal = .{ .fixnum = 1 } },
+    }));
+    try std.testing.expectEqualStrings(
+        "defining 'baked-prelude-word' would shadow an existing word",
+        ctx.pending_error_message.?,
+    );
+}
+
+test "defineWordLocked: no baked scope leaves the rung inert" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    // The interpreter-session shape: nothing registers the tables, so a fresh definition of a
+    // name outside the frames and the dictionary stays silent.
+    try ctx.pushLocalFrame();
+    ctx.import_frame_index = 0;
+    ctx.durable_frame_floor = 0;
+    ctx.image_entry_import_frame = 0;
+
+    try ctx.defineWord("baked-prelude-word", .{
+        .name = "baked-prelude-word",
+        .action = .{ .literal = .{ .fixnum = 1 } },
+    });
+}
+
+test "defineWordLocked: the baked rung honors the generic-merge exemption" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    try setupBakedScopeProbe(&ctx, .{
+        .names = &baked_scope_names,
+        .sources = &baked_scope_sources,
+        .flags = &baked_scope_generic_flags,
+        .count = 1,
+    });
+
+    // A non-generic incoming definition still collides with the generic row.
+    try std.testing.expectError(error.ImportConflict, ctx.defineWord("baked-prelude-word", .{
+        .name = "baked-prelude-word",
+        .action = .{ .literal = .{ .fixnum = 1 } },
+    }));
+
+    // Generic over generic merges interpreted, so the rung stays silent for it too.
+    try ctx.defineWord("baked-prelude-word", .{
+        .name = "baked-prelude-word",
+        .action = .{ .literal = .{ .fixnum = 1 } },
+        .markers = &.{@constCast(&markers_mod.generic_marker)},
+    });
+}
+
+test "defineWordLocked: a const-marked baked row refuses through the const guard" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    try setupBakedScopeProbe(&ctx, .{
+        .names = &baked_scope_names,
+        .sources = &baked_scope_sources,
+        .flags = &baked_scope_const_flags,
+        .count = 1,
+    });
+
+    try std.testing.expectError(error.CannotRedefineConst, ctx.defineWord("baked-prelude-word", .{
+        .name = "baked-prelude-word",
+        .action = .{ .literal = .{ .fixnum = 1 } },
+    }));
+    try std.testing.expectEqualStrings(
+        "cannot redefine const word 'baked-prelude-word'",
+        ctx.pending_error_message.?,
+    );
 }
 
 test "seedEntryWord: the baked dispatch id keeps another word's replayed methods out of the guard" {

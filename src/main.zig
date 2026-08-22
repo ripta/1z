@@ -3372,6 +3372,7 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
         freeze_result.interpreted_reach,
         entry_import_inputs.items,
         entry_word_inputs.items,
+        freeze_result.base_scope_words,
         freeze_result.callee_scopes,
         allocator,
     ) catch |err| {

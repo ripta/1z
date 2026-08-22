@@ -1,0 +1,2 @@
+tests/integration/runtime_const_redef.1z:15: error 'cannot-redefine-const' cannot redefine const word 'constraint-info' at word ';'
+  stack effect: ( name quot --  )

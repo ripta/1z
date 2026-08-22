@@ -326,6 +326,36 @@ export fn onez_seed_entry_words(
     return ONEZ_OK;
 }
 
+/// Attach the baked base scope to the context, from the tables the freeze emitted: the words the
+/// interpreted probes find in the frames below the durable floor, with their sources and marker
+/// bits. The generated AOT `main` calls this once at boot; the shadow guard's baked rung and the
+/// const guard read it so a binary reports the same collisions `1z run` reports.
+///
+/// A plain field store borrowing the binary's static arrays. Interpreter sessions never call
+/// this, which is what keeps both readers inert there.
+export fn onez_register_base_scope(
+    ptr: ?*anyopaque,
+    names: ?[*]const [*:0]const u8,
+    sources: ?[*]const ?[*:0]const u8,
+    flags: ?[*]const u8,
+    count: u32,
+) c_int {
+    const handle = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
+    if (count == 0) return ONEZ_OK;
+
+    const names_arr = names orelse return ONEZ_ERR_NULL_VALUE;
+    const sources_arr = sources orelse return ONEZ_ERR_NULL_VALUE;
+    const flags_arr = flags orelse return ONEZ_ERR_NULL_VALUE;
+
+    handle.ctx.aot_base_scope = .{
+        .names = names_arr,
+        .sources = sources_arr,
+        .flags = flags_arr,
+        .count = count,
+    };
+    return ONEZ_OK;
+}
+
 export fn onez_deinit(ptr: ?*anyopaque) void {
     bail_stats_mod.deinitGlobal();
 

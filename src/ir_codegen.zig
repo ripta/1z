@@ -572,6 +572,20 @@ pub const EntryWordInput = struct {
     is_generic: bool,
 };
 
+/// One base-scope word for the guards' baked rungs: a name the interpreted probes would find in
+/// the frames below the durable floor, with the source the shadow message names, the generic bit
+/// the merge exemption reads, and the const bit the const guard refuses on.
+pub const BaseScopeWordInput = struct {
+    name: []const u8,
+    source_file: ?[]const u8,
+    is_generic: bool,
+    is_const: bool,
+};
+
+fn baseScopeWordLessThan(_: void, a: BaseScopeWordInput, b: BaseScopeWordInput) bool {
+    return std.mem.lessThan(u8, a.name, b.name);
+}
+
 /// Description of a word to be compiled for AOT C emission.
 pub const AotWordDesc = struct {
     name: []const u8,
@@ -10676,6 +10690,10 @@ pub fn emitProgramC(
     /// The entry file's own top-level words, baked as static seed tables the generated `main`
     /// restores into the durable entry frame at boot.
     entry_words: []const EntryWordInput,
+    /// The freeze-time base scope: the words the interpreted shadow probe finds in the frames
+    /// below the durable floor, baked as static tables the generated `main` registers at boot so
+    /// the guard reports the same set from a binary.
+    base_scope_words: []const BaseScopeWordInput,
     /// What freeze resolved each defining body's callees to, so a call site picks the callee's own
     /// compiled function instead of whichever same-named word its bare spelling reaches first.
     freeze_callee_scopes: []const CalleeScope,
@@ -10784,6 +10802,7 @@ pub fn emitProgramC(
         \\extern void *onez_init_no_prelude(void);
         \\extern int onez_push_entry_frame(void *rt);
         \\extern int onez_seed_entry_words(void *rt, const char **names, const char **effects, const int32_t *word_ids, const uint32_t *dispatch_ids, const uint8_t *flags, uint32_t count);
+        \\extern int onez_register_base_scope(void *rt, const char **names, const char **sources, const uint8_t *flags, uint32_t count);
         \\extern int onez_set_args(void *ctx, int argc, char **argv);
         \\extern int onez_set_source(void *ctx, const char *data, unsigned long len);
         \\extern int32_t onez_runtime_register_compiled(void *rt, int32_t (**table)(uintptr_t), const char **names, const char **modules, uint32_t size);
@@ -11898,6 +11917,49 @@ pub fn emitProgramC(
         try out.appendSlice(allocator, "};\n\n");
     }
 
+    // 5b'''. Base-scope tables: the freeze-time content of the frames below the durable floor,
+    // which the generated `main` registers at boot so the redefinition guards report the same set
+    // a `1z run` of the program would.
+    //
+    // Sorted by name at this emission boundary, since the frame walk that produced the rows is
+    // hash-ordered.
+    const sorted_base_scope = try allocator.dupe(BaseScopeWordInput, base_scope_words);
+    defer allocator.free(sorted_base_scope);
+    std.mem.sort(BaseScopeWordInput, sorted_base_scope, {}, baseScopeWordLessThan);
+    const emit_base_scope = sorted_base_scope.len > 0 and !meta.freestanding;
+    if (emit_base_scope) {
+        try out.appendSlice(allocator, "static const char *onez_base_scope_names[] = {\n");
+        for (sorted_base_scope) |bw| {
+            try out.appendSlice(allocator, "    ");
+            try appendCStringLiteral(&out, allocator, bw.name);
+            try out.appendSlice(allocator, ",\n");
+        }
+        try out.appendSlice(allocator, "};\n");
+
+        try out.appendSlice(allocator, "static const char *onez_base_scope_sources[] = {\n");
+        for (sorted_base_scope) |bw| {
+            if (bw.source_file) |source| {
+                try out.appendSlice(allocator, "    ");
+                try appendCStringLiteral(&out, allocator, source);
+                try out.appendSlice(allocator, ",\n");
+            } else {
+                try out.appendSlice(allocator, "    NULL,\n");
+            }
+        }
+        try out.appendSlice(allocator, "};\n");
+
+        try out.appendSlice(allocator, "static const uint8_t onez_base_scope_flags[] = {\n");
+        for (sorted_base_scope) |bw| {
+            var flags: u8 = 0;
+            if (bw.is_generic) flags |= 1;
+            if (bw.is_const) flags |= 2;
+            var flags_buf: [16]u8 = undefined;
+            const flags_str = std.fmt.bufPrint(&flags_buf, "    {d},\n", .{flags}) catch unreachable;
+            try out.appendSlice(allocator, flags_str);
+        }
+        try out.appendSlice(allocator, "};\n\n");
+    }
+
     // 5c. Quotation function table
     if (quotations.len > 0) {
         var max_q_id: u32 = 0;
@@ -12347,6 +12409,17 @@ pub fn emitProgramC(
             \\    }
             \\
         );
+    }
+
+    // Register the baked base scope for the guards. A plain field store borrowing the static
+    // tables, so there is no failure to bail on. The freestanding runtime has no definition path
+    // and would discard the tables, so that tier emits neither them nor the call.
+    if (emit_base_scope) {
+        var scope_count_buf: [20]u8 = undefined;
+        const scope_count_str = std.fmt.bufPrint(&scope_count_buf, "{d}", .{sorted_base_scope.len}) catch unreachable;
+        try out.appendSlice(allocator, "    onez_register_base_scope(rt, onez_base_scope_names, onez_base_scope_sources, onez_base_scope_flags, ");
+        try out.appendSlice(allocator, scope_count_str);
+        try out.appendSlice(allocator, ");\n");
     }
 
     if (!meta.freestanding) {
@@ -16873,7 +16946,7 @@ test "emitProgramC: two modules' same-named words get their own functions and ca
     const scopes = [_]CalleeScope{.{ .caller = "moda/a-probe", .bindings = &bindings }};
 
     var diag: CodegenDiagnostics = .{};
-    const source = try emitProgramC(&words, &.{}, 2, 2, &.{}, .auto, false, test_aot_metadata, &diag, null, false, &.{}, &.{}, &.{}, &scopes, testing.allocator);
+    const source = try emitProgramC(&words, &.{}, 2, 2, &.{}, .auto, false, test_aot_metadata, &diag, null, false, &.{}, &.{}, &.{}, &.{}, &scopes, testing.allocator);
     defer testing.allocator.free(source);
 
     try testing.expect(std.mem.indexOf(u8, source, "int32_t onez_w_moda_Dprobe(uintptr_t jit_ctx) asm(\"moda/probe\")") != null);
@@ -16910,7 +16983,7 @@ test "emitProgramC: a module-less word's module row is NULL" {
     };
 
     var diag: CodegenDiagnostics = .{};
-    const source = try emitProgramC(&words, &.{}, 0, 0, &.{}, .auto, false, test_aot_metadata, &diag, null, false, &.{}, &.{}, &.{}, &.{}, testing.allocator);
+    const source = try emitProgramC(&words, &.{}, 0, 0, &.{}, .auto, false, test_aot_metadata, &diag, null, false, &.{}, &.{}, &.{}, &.{}, &.{}, testing.allocator);
     defer testing.allocator.free(source);
 
     try testing.expect(std.mem.indexOf(u8, source,
@@ -16918,6 +16991,64 @@ test "emitProgramC: a module-less word's module row is NULL" {
         \\    NULL,
         \\};
     ) != null);
+}
+
+test "emitProgramC: base-scope tables carry the baked names, sources, and generic bits" {
+    const body_instrs = makeInstructions(.{@as(i64, 1)});
+
+    const words = [_]AotWordDesc{
+        .{ .name = "top-word", .instructions = &body_instrs, .input_count = 0, .output_count = 1, .word_id = 0 },
+    };
+
+    const base_scope = [_]BaseScopeWordInput{
+        .{ .name = "nip", .source_file = "src/prelude.1z", .is_generic = false, .is_const = false },
+        .{ .name = "inspect", .source_file = "src/prelude.1z", .is_generic = true, .is_const = false },
+        .{ .name = "sourceless", .source_file = null, .is_generic = false, .is_const = true },
+    };
+
+    var diag: CodegenDiagnostics = .{};
+    const source = try emitProgramC(&words, &.{}, 0, 0, &.{}, .auto, false, test_aot_metadata, &diag, null, false, &.{}, &.{}, &.{}, &base_scope, &.{}, testing.allocator);
+    defer testing.allocator.free(source);
+
+    // Rows are sorted by name at the emission boundary, so the walk order of the frame that
+    // produced them cannot leak into the bytes.
+    try testing.expect(std.mem.indexOf(u8, source,
+        \\static const char *onez_base_scope_names[] = {
+        \\    "inspect",
+        \\    "nip",
+        \\    "sourceless",
+        \\};
+    ) != null);
+    try testing.expect(std.mem.indexOf(u8, source,
+        \\static const char *onez_base_scope_sources[] = {
+        \\    "src/prelude.1z",
+        \\    "src/prelude.1z",
+        \\    NULL,
+        \\};
+    ) != null);
+    try testing.expect(std.mem.indexOf(u8, source,
+        \\static const uint8_t onez_base_scope_flags[] = {
+        \\    1,
+        \\    0,
+        \\    2,
+        \\};
+    ) != null);
+    try testing.expect(std.mem.indexOf(u8, source, "onez_register_base_scope(rt, onez_base_scope_names, onez_base_scope_sources, onez_base_scope_flags, 3);") != null);
+}
+
+test "emitProgramC: no base-scope rows emits no base-scope tables and no registration call" {
+    const body_instrs = makeInstructions(.{@as(i64, 1)});
+
+    const words = [_]AotWordDesc{
+        .{ .name = "top-word", .instructions = &body_instrs, .input_count = 0, .output_count = 1, .word_id = 0 },
+    };
+
+    var diag: CodegenDiagnostics = .{};
+    const source = try emitProgramC(&words, &.{}, 0, 0, &.{}, .auto, false, test_aot_metadata, &diag, null, false, &.{}, &.{}, &.{}, &.{}, &.{}, testing.allocator);
+    defer testing.allocator.free(source);
+
+    try testing.expect(std.mem.indexOf(u8, source, "onez_base_scope_names") == null);
+    try testing.expect(std.mem.indexOf(u8, source, "onez_register_base_scope(rt,") == null);
 }
 
 test "appendCStringLiteral escapes quotes and backslashes and drops controls" {
@@ -16939,7 +17070,7 @@ test "emitProgramC: entry-word seed tables are sorted, escaped, and gated on the
     };
 
     var diag: CodegenDiagnostics = .{};
-    const source = try emitProgramC(&words, &.{}, 0, 0, &.{}, .auto, false, test_aot_metadata, &diag, null, false, &.{}, &.{}, &entry_words, &.{}, testing.allocator);
+    const source = try emitProgramC(&words, &.{}, 0, 0, &.{}, .auto, false, test_aot_metadata, &diag, null, false, &.{}, &.{}, &entry_words, &.{}, &.{}, testing.allocator);
     defer testing.allocator.free(source);
 
     // Sorted by name at the emission boundary; the frame iteration upstream is hash-ordered.
@@ -16991,7 +17122,7 @@ test "emitProgramC: no entry words emits neither seed tables nor the seed call" 
     };
 
     var diag: CodegenDiagnostics = .{};
-    const source = try emitProgramC(&words, &.{}, 0, 0, &.{}, .auto, false, test_aot_metadata, &diag, null, false, &.{}, &.{}, &.{}, &.{}, testing.allocator);
+    const source = try emitProgramC(&words, &.{}, 0, 0, &.{}, .auto, false, test_aot_metadata, &diag, null, false, &.{}, &.{}, &.{}, &.{}, &.{}, testing.allocator);
     defer testing.allocator.free(source);
 
     try testing.expect(std.mem.indexOf(u8, source, "onez_entry_word_names") == null);
@@ -17014,7 +17145,7 @@ test "emitProgramC: generated word forward declaration carries qualified asm-nam
     };
 
     var diag: CodegenDiagnostics = .{};
-    const source = try emitProgramC(&words, &.{}, 0, 0, &.{}, .auto, false, test_aot_metadata, &diag, null, false, &.{}, &.{}, &.{}, &.{}, testing.allocator);
+    const source = try emitProgramC(&words, &.{}, 0, 0, &.{}, .auto, false, test_aot_metadata, &diag, null, false, &.{}, &.{}, &.{}, &.{}, &.{}, testing.allocator);
     defer testing.allocator.free(source);
 
     try testing.expect(std.mem.indexOf(u8, source, "asm(\"Person/name>>\")") != null);
@@ -17036,7 +17167,7 @@ test "emitProgramC: generated word with null parent falls back to bare asm-name"
     };
 
     var diag: CodegenDiagnostics = .{};
-    const source = try emitProgramC(&words, &.{}, 0, 0, &.{}, .auto, false, test_aot_metadata, &diag, null, false, &.{}, &.{}, &.{}, &.{}, testing.allocator);
+    const source = try emitProgramC(&words, &.{}, 0, 0, &.{}, .auto, false, test_aot_metadata, &diag, null, false, &.{}, &.{}, &.{}, &.{}, &.{}, testing.allocator);
     defer testing.allocator.free(source);
 
     try testing.expect(std.mem.indexOf(u8, source, "asm(\"lonely?\")") != null);
@@ -17060,7 +17191,7 @@ const poly_arith_words = [_]AotWordDesc{
 
 test "emitProgramC: a locked build's polymorphic arithmetic cold arm dispatches through the table" {
     var diag: CodegenDiagnostics = .{};
-    const source = try emitProgramC(&poly_arith_words, &.{}, 0, 2, &.{}, .false, true, test_aot_metadata, &diag, null, false, &.{}, &.{}, &.{}, &.{}, testing.allocator);
+    const source = try emitProgramC(&poly_arith_words, &.{}, 0, 2, &.{}, .false, true, test_aot_metadata, &diag, null, false, &.{}, &.{}, &.{}, &.{}, &.{}, testing.allocator);
     defer testing.allocator.free(source);
 
     try testing.expect(std.mem.indexOf(u8, source, "= jitDispatchFull(") != null);
@@ -17072,7 +17203,7 @@ test "emitProgramC: a locked build's polymorphic arithmetic cold arm dispatches 
 test "emitProgramC: a fallback-permitted build keeps the per-operation native cold arm" {
     var diag: CodegenDiagnostics = .{};
     defer if (diag.aot_fallback_report.sites.len > 0) testing.allocator.free(diag.aot_fallback_report.sites);
-    const source = try emitProgramC(&poly_arith_words, &.{}, 0, 2, &.{}, .auto, false, test_aot_metadata, &diag, null, false, &.{}, &.{}, &.{}, &.{}, testing.allocator);
+    const source = try emitProgramC(&poly_arith_words, &.{}, 0, 2, &.{}, .auto, false, test_aot_metadata, &diag, null, false, &.{}, &.{}, &.{}, &.{}, &.{}, testing.allocator);
     defer testing.allocator.free(source);
 
     try testing.expect(std.mem.indexOf(u8, source, "= jitNativeWordCall(") != null);
@@ -17097,7 +17228,7 @@ const poly_compare_eq_words = [_]AotWordDesc{
 
 test "emitProgramC: a locked build's mixed comparison cold arm dispatches through the table" {
     var diag: CodegenDiagnostics = .{};
-    const source = try emitProgramC(&poly_compare_lt_words, &.{}, 0, 2, &.{}, .false, true, test_aot_metadata, &diag, null, false, &.{}, &.{}, &.{}, &.{}, testing.allocator);
+    const source = try emitProgramC(&poly_compare_lt_words, &.{}, 0, 2, &.{}, .false, true, test_aot_metadata, &diag, null, false, &.{}, &.{}, &.{}, &.{}, &.{}, testing.allocator);
     defer testing.allocator.free(source);
 
     try testing.expect(std.mem.indexOf(u8, source, "= jitDispatchFull(") != null);
@@ -17107,7 +17238,7 @@ test "emitProgramC: a locked build's mixed comparison cold arm dispatches throug
 
 test "emitProgramC: a locked build's mixed `=` miss is an inline constant f, not a trap" {
     var diag: CodegenDiagnostics = .{};
-    const source = try emitProgramC(&poly_compare_eq_words, &.{}, 0, 2, &.{}, .false, true, test_aot_metadata, &diag, null, false, &.{}, &.{}, &.{}, &.{}, testing.allocator);
+    const source = try emitProgramC(&poly_compare_eq_words, &.{}, 0, 2, &.{}, .false, true, test_aot_metadata, &diag, null, false, &.{}, &.{}, &.{}, &.{}, &.{}, testing.allocator);
     defer testing.allocator.free(source);
 
     try testing.expect(std.mem.indexOf(u8, source, "= jitDispatchFull(") != null);
@@ -17120,7 +17251,7 @@ test "emitProgramC: a locked build's mixed `=` miss is an inline constant f, not
 test "emitProgramC: a fallback-permitted build's mixed comparison keeps the per-operation native cold arm" {
     var diag: CodegenDiagnostics = .{};
     defer if (diag.aot_fallback_report.sites.len > 0) testing.allocator.free(diag.aot_fallback_report.sites);
-    const source = try emitProgramC(&poly_compare_lt_words, &.{}, 0, 2, &.{}, .auto, false, test_aot_metadata, &diag, null, false, &.{}, &.{}, &.{}, &.{}, testing.allocator);
+    const source = try emitProgramC(&poly_compare_lt_words, &.{}, 0, 2, &.{}, .auto, false, test_aot_metadata, &diag, null, false, &.{}, &.{}, &.{}, &.{}, &.{}, testing.allocator);
     defer testing.allocator.free(source);
 
     try testing.expect(std.mem.indexOf(u8, source, "= jitNativeWordCall(") != null);
@@ -17147,7 +17278,7 @@ test "emitProgramC: compiled quotation forward declaration carries asm-name" {
     };
 
     var diag: CodegenDiagnostics = .{};
-    const source = try emitProgramC(&words, &quotations, 0, 0, &.{}, .auto, false, test_aot_metadata, &diag, null, false, &.{}, &.{}, &.{}, &.{}, testing.allocator);
+    const source = try emitProgramC(&words, &quotations, 0, 0, &.{}, .auto, false, test_aot_metadata, &diag, null, false, &.{}, &.{}, &.{}, &.{}, &.{}, testing.allocator);
     defer testing.allocator.free(source);
 
     try testing.expect(std.mem.indexOf(u8, source, "int32_t onez_q_0(uintptr_t jit_ctx) asm(\"main/quot@7:11\");") != null);
@@ -17161,7 +17292,7 @@ test "emitProgramC: hosted preamble contains libc includes and main shim" {
     };
 
     var diag: CodegenDiagnostics = .{};
-    const source = try emitProgramC(&words, &.{}, 0, 0, &.{}, .auto, false, test_aot_metadata, &diag, null, false, &.{}, &.{}, &.{}, &.{}, testing.allocator);
+    const source = try emitProgramC(&words, &.{}, 0, 0, &.{}, .auto, false, test_aot_metadata, &diag, null, false, &.{}, &.{}, &.{}, &.{}, &.{}, testing.allocator);
     defer testing.allocator.free(source);
 
     try testing.expect(std.mem.indexOf(u8, source, "#include <stdio.h>") != null);
@@ -17194,7 +17325,7 @@ test "emitProgramC: freestanding preamble drops libc and emits kernel_main" {
     meta.target_triple = "riscv64-freestanding-none";
 
     var diag: CodegenDiagnostics = .{};
-    const source = try emitProgramC(&words, &.{}, 0, 0, &.{}, .auto, false, meta, &diag, null, false, &.{}, &.{}, &.{}, &.{}, testing.allocator);
+    const source = try emitProgramC(&words, &.{}, 0, 0, &.{}, .auto, false, meta, &diag, null, false, &.{}, &.{}, &.{}, &.{}, &.{}, testing.allocator);
     defer testing.allocator.free(source);
 
     try testing.expect(std.mem.indexOf(u8, source, "#include <stdio.h>") == null);
@@ -19627,7 +19758,7 @@ test "emitProgramC generates complete C source" {
     };
 
     var diag: CodegenDiagnostics = .{};
-    const source = try emitProgramC(&words, &.{}, 0, 1, &.{}, .auto, false, test_aot_metadata, &diag, null, false, &.{}, &.{}, &.{}, &.{}, testing.allocator);
+    const source = try emitProgramC(&words, &.{}, 0, 1, &.{}, .auto, false, test_aot_metadata, &diag, null, false, &.{}, &.{}, &.{}, &.{}, &.{}, testing.allocator);
     defer testing.allocator.free(source);
 
     // Preamble
@@ -19675,7 +19806,7 @@ test "emitProgramC omits legacy name-lookup typed-literal helpers" {
     };
 
     var diag: CodegenDiagnostics = .{};
-    const source = try emitProgramC(&words, &.{}, 0, 0, &.{}, .auto, false, test_aot_metadata, &diag, null, false, &.{}, &.{}, &.{}, &.{}, testing.allocator);
+    const source = try emitProgramC(&words, &.{}, 0, 0, &.{}, .auto, false, test_aot_metadata, &diag, null, false, &.{}, &.{}, &.{}, &.{}, &.{}, testing.allocator);
     defer testing.allocator.free(source);
 
     try testing.expect(std.mem.indexOf(u8, source, "jitPushWordLiteral") == null);
@@ -19693,7 +19824,7 @@ test "emitProgramC dispatch table has correct entries" {
     };
 
     var diag2: CodegenDiagnostics = .{};
-    const source = try emitProgramC(&words, &.{}, 0, 2, &.{}, .auto, false, test_aot_metadata, &diag2, null, false, &.{}, &.{}, &.{}, &.{}, testing.allocator);
+    const source = try emitProgramC(&words, &.{}, 0, 2, &.{}, .auto, false, test_aot_metadata, &diag2, null, false, &.{}, &.{}, &.{}, &.{}, &.{}, testing.allocator);
     defer testing.allocator.free(source);
 
     // word_id 0 -> onez_w_foo
@@ -19718,7 +19849,7 @@ test "emitProgramC quotation table with all compiled entries" {
     };
 
     var diag: CodegenDiagnostics = .{};
-    const source = try emitProgramC(&words, &quotations, 0, 0, &.{}, .auto, false, test_aot_metadata, &diag, null, false, &.{}, &.{}, &.{}, &.{}, testing.allocator);
+    const source = try emitProgramC(&words, &quotations, 0, 0, &.{}, .auto, false, test_aot_metadata, &diag, null, false, &.{}, &.{}, &.{}, &.{}, &.{}, testing.allocator);
     defer testing.allocator.free(source);
 
     // Table exists with all entries
@@ -19756,7 +19887,7 @@ test "emitProgramC rejects uncompiled quotation bodies with inferred effects" {
     };
 
     var diag: CodegenDiagnostics = .{};
-    const result = emitProgramC(&words, &quotations, 0, 0, &.{}, .auto, false, test_aot_metadata, &diag, null, false, &.{}, &.{}, &.{}, &.{}, testing.allocator);
+    const result = emitProgramC(&words, &quotations, 0, 0, &.{}, .auto, false, test_aot_metadata, &diag, null, false, &.{}, &.{}, &.{}, &.{}, &.{}, testing.allocator);
     try testing.expectError(error.UncompiledQuotations, result);
 
     // Diagnostics report the uncompiled quotation
@@ -19786,7 +19917,7 @@ test "emitProgramC applies Option C to an escaping uncompiled quotation" {
             .{ .quotation_id = 0, .instructions = &bad_instrs, .c_name = "onez_q_0", .inferred_effect = .{ .input_count = 1, .output_count = 1 } },
         };
         var diag: CodegenDiagnostics = .{};
-        const result = emitProgramC(&words, &quotations, 0, 0, &.{}, .false, true, test_aot_metadata, &diag, null, false, &.{}, &.{}, &.{}, &.{}, testing.allocator);
+        const result = emitProgramC(&words, &quotations, 0, 0, &.{}, .false, true, test_aot_metadata, &diag, null, false, &.{}, &.{}, &.{}, &.{}, &.{}, testing.allocator);
         try testing.expectError(error.UncompiledQuotations, result);
         try testing.expectEqual(@as(usize, 1), diag.uncompiled_quotations.len);
         try testing.expectEqualStrings("onez_q_0", diag.uncompiled_quotations[0].c_name);
@@ -19802,7 +19933,7 @@ test "emitProgramC applies Option C to an escaping uncompiled quotation" {
             .{ .quotation_id = 0, .instructions = &bad_instrs, .c_name = "onez_q_0", .inferred_effect = .{ .input_count = 1, .output_count = 1 } },
         };
         var diag: CodegenDiagnostics = .{};
-        const source = try emitProgramC(&words, &quotations, 0, 0, &.{}, .auto, false, test_aot_metadata, &diag, null, false, &.{}, &.{}, &.{}, &.{}, testing.allocator);
+        const source = try emitProgramC(&words, &quotations, 0, 0, &.{}, .auto, false, test_aot_metadata, &diag, null, false, &.{}, &.{}, &.{}, &.{}, &.{}, testing.allocator);
         defer testing.allocator.free(source);
         try testing.expectEqual(@as(usize, 0), diag.uncompiled_quotations.len);
     }
@@ -19816,7 +19947,7 @@ test "emitProgramC no quotation table when quotations empty" {
     };
 
     var diag: CodegenDiagnostics = .{};
-    const source = try emitProgramC(&words, &.{}, 0, 0, &.{}, .auto, false, test_aot_metadata, &diag, null, false, &.{}, &.{}, &.{}, &.{}, testing.allocator);
+    const source = try emitProgramC(&words, &.{}, 0, 0, &.{}, .auto, false, test_aot_metadata, &diag, null, false, &.{}, &.{}, &.{}, &.{}, &.{}, testing.allocator);
     defer testing.allocator.free(source);
 
     // No quotation table emitted (extern decl exists but table and call do not)
@@ -19834,7 +19965,7 @@ test "emitProgramC output compiles with cc" {
     };
 
     var diag3: CodegenDiagnostics = .{};
-    const source = try emitProgramC(&words, &.{}, 1, 1, &.{}, .auto, false, test_aot_metadata, &diag3, null, false, &.{}, &.{}, &.{}, &.{}, testing.allocator);
+    const source = try emitProgramC(&words, &.{}, 1, 1, &.{}, .auto, false, test_aot_metadata, &diag3, null, false, &.{}, &.{}, &.{}, &.{}, &.{}, testing.allocator);
     defer testing.allocator.free(source);
 
     var tmp_dir = testing.tmpDir(.{});

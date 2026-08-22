@@ -157,6 +157,12 @@ pub const FreezeResult = struct {
     entry_imports: []EntryImport = &.{},
     /// The entry file's own top-level words, the boot-time seed for the durable entry frame.
     entry_words: []EntryWord = &.{},
+    /// The freeze-time base scope: the words the interpreted redefinition guards find in the
+    /// frames below the durable floor, baked so a binary reports the same set.
+    ///
+    /// Names and sources are borrowed from the context's own frame defs, which outlive emission,
+    /// so `deinit` frees only the slice.
+    base_scope_words: []const ir_codegen.BaseScopeWordInput = &.{},
     /// Per-body callee resolution, one entry per defining body that resolved at least one callee.
     /// Unordered.
     callee_scopes: []const CalleeScope = &.{},
@@ -207,6 +213,7 @@ pub const FreezeResult = struct {
             if (ew.effect_body) |body| allocator.free(body);
         }
         allocator.free(self.entry_words);
+        allocator.free(self.base_scope_words);
         for (self.callee_scopes) |scope| allocator.free(scope.bindings);
         allocator.free(self.callee_scopes);
         for (self.identity_storage) |s| allocator.free(s);
@@ -767,6 +774,44 @@ pub fn freezeModuleGraphOpts(
         }
     }
 
+    // Snapshot the base scope: every frame below the entry frame, walked in the guards' own
+    // ascending order with first-hit-wins dedup.
+    //
+    // The rows borrow the frame defs' own strings. The frames below the entry frame are never
+    // popped, so the slices live on the context past emission.
+    var base_scope_list: std.ArrayListUnmanaged(ir_codegen.BaseScopeWordInput) = .{};
+    errdefer base_scope_list.deinit(allocator);
+    {
+        var base_seen: std.StringHashMapUnmanaged(void) = .{};
+        defer base_seen.deinit(allocator);
+        for (ctx.local_frames.items[0..entry_frame_index]) |frame| {
+            var base_it = frame.iterator();
+            while (base_it.next()) |entry| {
+                const gop = try base_seen.getOrPut(allocator, entry.key_ptr.*);
+                if (gop.found_existing) continue;
+
+                const src: ?[]const u8 = if (entry.value_ptr.source_file) |sf|
+                    (if (sf.len > 0) sf else null)
+                else
+                    null;
+
+                var is_generic = false;
+                var is_const = false;
+                for (entry.value_ptr.markers) |mk| {
+                    if (markers_mod.isGenericMarker(mk)) is_generic = true;
+                    if (markers_mod.isConstMarker(mk)) is_const = true;
+                }
+
+                try base_scope_list.append(allocator, .{
+                    .name = entry.key_ptr.*,
+                    .source_file = src,
+                    .is_generic = is_generic,
+                    .is_const = is_const,
+                });
+            }
+        }
+    }
+
     // The pragma frame outlives freeze on success (see the function doc); error paths from here
     // still pop it.
     ctx.popLocalFrame();
@@ -805,6 +850,7 @@ pub fn freezeModuleGraphOpts(
         }
     }
     result.entry_words = try entry_words_list.toOwnedSlice(allocator);
+    result.base_scope_words = try base_scope_list.toOwnedSlice(allocator);
 
     // Success: path slices have been duped into result.call_targets. Free
     // the BFS-time originals; the idempotent free renders the errdefer

@@ -1,0 +1,9 @@
+\ Helper module for the compiled-table probe's negative pins. Its public `via-helper` calls the
+\ private `probe-helper`, so the helper is reachable, compiled into an AOT binary's dispatch
+\ table, and carries this module's segment there.
+
+private{
+  probe-helper: ( -- fixnum ) [ 41 ] ;
+}
+
+via-helper: ( -- fixnum ) [ probe-helper 1 + ] ;

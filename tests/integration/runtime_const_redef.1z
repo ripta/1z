@@ -1,0 +1,17 @@
+\ A runtime redefinition of a const prelude binding refuses with `cannot-redefine-const` on every
+\ tier. `constraint-info` is a `struct{ }` type word the prelude defines, so its binding carries
+\ the const marker. The const guard reads the visible scope first and the baked base scope when
+\ that misses, so an interpreter-free binary, which holds the prelude in no frame, refuses with
+\ the same error instead of reporting a shadow whose `override` hint a const word cannot honor.
+\
+\ The redefinition sits inside a word body called from top level, so it fires while the file
+\ runs. The `use` gives the entry file an import. The bare call is the file's last statement, so
+\ the raise stays in tail position on every tier.
+
+use { taken: } "def_over_import_mod.1z" ;
+
+taken .
+
+redefine-const: ( -- ) [ constraint-info: ( -- n ) [ 0 ] ; ] ;
+
+redefine-const
