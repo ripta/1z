@@ -1,9 +1,9 @@
-\ A raise inside a word called from a quotation that a prelude combinator runs, pinned interpreted.
+\ A raise inside a word called from a quotation that a prelude combinator runs. The `choose`
+\ call is top-level, so it stays interpreted under eager and one golden binds both suites.
 \
-\ The `boom` row is the shape the header alone does not cover. Its frame is pushed while the
-\ quotation's body is executing, so its source is the file the quotation was written in, not the
-\ prelude file `choose` was defined in. `5 drop` keeps the call out of tail position, where the
-\ frame would be elided.
+\ The `boom` row is the pinned shape: its frame is pushed while the quotation's body runs, so
+\ its source is the quotation's file, not the prelude file `choose` was defined in. `5 drop`
+\ keeps the call out of tail position, where the frame would be elided.
 
 boom: [ 1 "x" + ] ;
 

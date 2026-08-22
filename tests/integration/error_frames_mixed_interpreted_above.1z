@@ -1,8 +1,8 @@
 \ The inverse boundary shape: a compiled word raising below interpreted callers. `deep`
 \ compiles under eager; `mid` and `top` stay interpreted because their bodies drop into the
 \ symbolic row region, which the compiler rejects. The raise therefore crosses the boundary
-\ at `deep`'s own call site. No flags: one golden binds the interpreted and eager suites, so
-\ `deep` keeps its own row on both tiers. The pin depends on row-region drops staying
+\ at `deep`'s own call site. No flags: one golden binds the interpreted suite, the eager
+\ suite, and the AOT `.source` redirect. The eager pin depends on row-region drops staying
 \ uncompilable; if that changes, `mid` and `top` compile and this file stops covering the
 \ boundary.
 

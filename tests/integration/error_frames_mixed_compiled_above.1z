@@ -1,9 +1,9 @@
 \ A raise inside a prelude compound reached from a compiled user word. Under eager the chain
 \ crosses the compiled/interpreted boundary at `print-line`, and the `say` row is contributed
 \ by compiled `report` during the unwind. No flags: one golden binds the interpreted and eager
-\ suites, which is the pin that neither tier drops the row. The interpreted twin with the
-\ eager drop documented is error_frames_cross_file.1z, still pinned `--compile=off` until the
-\ golden-convergence pass retires that fork.
+\ suites, which is the pin that neither tier drops the row, and the AOT suite builds this file
+\ through a `.source` redirect and diffs the same golden. The cross-file twin of this program
+\ is error_frames_cross_file.1z, whose pin is the src/prelude.1z source rows.
 
 say: ( v -- ) [ print-line 0 drop ] ;
 report: ( v -- ) [ say 0 drop ] ;

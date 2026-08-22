@@ -1,8 +1,8 @@
 \ A three-deep user chain above an interpreted prelude subtree. Under eager, `say` and
 \ `report` are compiled rows contributed during the unwind, above the boundary at
 \ `print-line`; `relay` is tail-elided at the top level on both tiers. No flags: one golden
-\ binds the interpreted and eager suites, so every compiled row above the interpreted subtree
-\ is pinned.
+\ binds the interpreted suite, the eager suite, and the AOT `.source` redirect, so every
+\ compiled row above the interpreted subtree is pinned.
 
 say:    ( v -- ) [ print-line 0 drop ] ;
 report: ( v -- ) [ say 0 drop ] ;
