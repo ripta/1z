@@ -1304,6 +1304,11 @@ pub fn replayMethodDispatch(ctx: *Context) LoaderError!void {
     while (i < count) : (i += 1) {
         const row = rows[i];
 
+        // The row's id was issued by the freeze's counter, not this process's. Advance the mint
+        // counter past it, before any skip below, so a runtime definition can never mint an id
+        // that aliases this row's identity.
+        ctx.advanceDispatchIdPast(row.dispatch_id);
+
         const type_a = (try resolveDispatchTypeDescriptor(ctx, slots, slot_count, row.type_a_slot)) orelse continue;
         const type_b = (try resolveDispatchTypeDescriptor(ctx, slots, slot_count, row.type_b_slot)) orelse continue;
 
@@ -1373,10 +1378,11 @@ pub fn replayMethodDispatch(ctx: *Context) LoaderError!void {
 
         // dispatch_id consistency invariant: the row carries the freeze-time
         // dispatch_id verbatim and the key reuses it directly. The loader never
-        // re-runs the monotonic `next_dispatch_id` counter, so a replayed
-        // entry's dispatch_id equals the id a compiled call site bakes as a u32
-        // literal for the same generic; otherwise dispatch would silently
-        // misroute.
+        // re-mints replayed ids from the `next_dispatch_id` counter, so a
+        // replayed entry's dispatch_id equals the id a compiled call site bakes
+        // as a u32 literal for the same generic; otherwise dispatch would
+        // silently misroute. The counter is only advanced past the row ids,
+        // which preserves them.
         const key = dispatch_mod.DispatchKey{
             .dispatch_id = row.dispatch_id,
             .type_a = type_a,
@@ -3346,6 +3352,41 @@ test "replayMethodDispatch: patches an entry-import frame def's dispatch_id" {
     const frame_idx = ctx.image_entry_import_frame orelse return error.TestExpectedFrame;
     const def = ctx.local_frames.items[frame_idx].get(generic_name) orelse return error.TestExpectedImport;
     try testing.expectEqual(@as(u32, 7), def.dispatch_id);
+}
+
+test "replayMethodDispatch: advances the mint counter past the replayed ids" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    const body = [_]value_mod.Instruction{
+        .{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 0, .column = 0 },
+    };
+    var encoded: std.ArrayListUnmanaged(u8) = .{};
+    defer encoded.deinit(testing.allocator);
+    try instruction_bytecode.serializeInstructionsInto(&encoded, &body, null, testing.allocator, null, null);
+
+    const generic_name = "gword";
+    const rows = [_]DispatchEntryDescription{.{
+        .dispatch_id = 5000,
+        .type_a_slot = dispatch_type_any,
+        .type_b_slot = dispatch_type_unary,
+        .quotation_id = populate_core.dispatch_interp_quotation_id_sentinel,
+        .module_name = null,
+        .module_name_len = 0,
+        .generic_name = generic_name.ptr,
+        .generic_name_len = generic_name.len,
+        .body_bytecode = encoded.items.ptr,
+        .body_bytecode_len = @intCast(encoded.items.len),
+    }};
+
+    var header = emptyHeader();
+    header.dispatch_entry_slot_count = 1;
+    header.dispatch_entry_descriptions = &rows;
+
+    try loadIntoContext(&ctx, &header, .{}, null);
+    try replayMethodDispatch(&ctx);
+
+    try testing.expect(ctx.next_dispatch_id.load(.monotonic) > 5000);
 }
 
 test "replayMethodDispatch: patches a dep entry's dispatch_id like a word entry" {

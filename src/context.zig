@@ -2836,6 +2836,28 @@ pub const Context = struct {
         is_generic: bool,
     };
 
+    /// Advance the root mint counter past a freeze-time dispatch id installed at boot.
+    ///
+    /// Replayed method entries and seeded entry words carry ids the freeze's counter issued, not
+    /// this process's. Without the advance a later runtime definition can mint an id equal to one
+    /// of them and inherit that identity's registered methods.
+    pub fn advanceDispatchIdPast(self: *Context, id: u32) void {
+        _ = self.rootContext().next_dispatch_id.fetchMax(id +| 1, .monotonic);
+    }
+
+    /// Debug-only choke-point check for the id-uniqueness invariant: a freshly-minted dispatch id
+    /// must carry no dispatch state installed under a freeze-time id. Boot reconciles the counter
+    /// through `advanceDispatchIdPast`; this catches a future install site that forgets to.
+    fn assertMintedDispatchIdFresh(self: *Context, id: u32) void {
+        if (builtin.mode != .Debug) return;
+
+        const keys = self.dispatchKeysForIdLocked(id, self.arena.allocator()) catch return;
+        std.debug.assert(keys.len == 0);
+
+        var it = self.rootContext().aot_generic_dispatch_ids.valueIterator();
+        while (it.next()) |baked| std.debug.assert(baked.* != id);
+    }
+
     /// Seed one of the entry file's own top-level names into the durable entry frame at AOT boot,
     /// so a runtime redefinition finds the name where an interpreter driver would put it and
     /// takes the same guard path: not `imported`, so it routes to the arity check rather than the
@@ -2848,10 +2870,10 @@ pub const Context = struct {
     /// compiled body exists.
     ///
     /// The dispatch_id is the word's own freeze-time id, baked into the seed row. Replayed method
-    /// entries and compiled call sites carry freeze-time ids verbatim, and the runtime counter is
-    /// never advanced past them, so a freshly-minted id would alias some other word's replayed
-    /// identity: the orphaned-methods walk would then report dropping an unrelated generic's
-    /// methods, and `>word-info` would list them.
+    /// entries and compiled call sites carry freeze-time ids verbatim, so a minted id would be a
+    /// fresh identity none of them reference: a seeded generic would lose its own replayed
+    /// methods. The counter is also advanced past every baked id, seeded or skipped, so a later
+    /// runtime mint cannot alias one.
     ///
     /// Writes the frame without the shared lock: the only caller runs during boot, before any
     /// worker thread exists. A name already present -- a restored entry import -- is left alone,
@@ -2864,6 +2886,8 @@ pub const Context = struct {
     /// replace the one error frames render. The cost is one corner: redefining such a name at
     /// runtime renders the shadow guard rather than the interpreted arity check, loud either way.
     pub fn seedEntryWord(self: *Context, seed: EntryWordSeed) !void {
+        self.advanceDispatchIdPast(seed.dispatch_id);
+
         const idx = self.image_entry_import_frame orelse return;
         const frame = &self.local_frames.items[idx];
         if (frame.contains(seed.name)) return;
@@ -3474,6 +3498,7 @@ pub const Context = struct {
 
         // Minted from the root so ids are process-globally unique
         def.dispatch_id = self.rootContext().next_dispatch_id.fetchAdd(1, .monotonic);
+        self.assertMintedDispatchIdFresh(def.dispatch_id);
         if (def.source_file == null) {
             if (self.generated_src_loc) |gen| {
                 def.source_file = gen.file;
@@ -9134,6 +9159,34 @@ test "seedEntryWord: the baked dispatch id keeps another word's replayed methods
         .action = .{ .literal = .{ .fixnum = 3 } },
         .markers = &.{@constCast(&markers_mod.override_marker)},
     });
+}
+
+test "seedEntryWord: seeding advances the mint counter past the baked id" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    try ctx.pushLocalFrame();
+    ctx.import_frame_index = 0;
+    ctx.durable_frame_floor = 0;
+    ctx.image_entry_import_frame = 0;
+
+    try ctx.seedEntryWord(.{
+        .name = "p1",
+        .effect = null,
+        .word_id = null,
+        .dispatch_id = 5000,
+        .generated = false,
+        .is_const = false,
+        .is_generic = false,
+    });
+
+    try std.testing.expect(ctx.next_dispatch_id.load(.monotonic) > 5000);
+
+    // A later runtime mint lands above every baked id, so it can never inherit a
+    // replayed or seeded identity's registered methods.
+    try ctx.defineWord("q1", .{ .name = "q1", .action = .{ .literal = .{ .fixnum = 1 } } });
+    const def = ctx.local_frames.items[0].get("q1") orelse return error.TestExpectedDefinition;
+    try std.testing.expect(def.dispatch_id > 5000);
 }
 
 test "anonymous union descriptor flags are inferred by intersection" {
