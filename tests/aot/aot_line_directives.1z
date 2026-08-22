@@ -26,3 +26,9 @@ abs: override ( x -- x ) [
   "loop-a" print-line
   "loop-b" print-line
 ] times
+
+\ A used module's `private{` helper must carry the module's own file in its
+\ `#line`, not the file of the parse-time word that read the block.
+use { via-line-probe: } "aot_line_directives_mod.1z" ;
+
+via-line-probe .

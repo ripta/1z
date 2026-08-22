@@ -1,0 +1,8 @@
+\ Companion module for `make aot-line-directives-check`. Its `private{` helper's emitted body
+\ must carry this file's name: the block is read by a parse-time word whose execution points
+\ `current_source` at the word's own file, and a stamp taken from that would name the prelude.
+private{
+  line-probe: ( -- fixnum ) [ 11 ] ;
+}
+
+via-line-probe: ( -- fixnum ) [ line-probe 1 + ] ;

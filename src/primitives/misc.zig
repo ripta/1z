@@ -366,6 +366,12 @@ pub fn nativeLoadImpl(ctx: *Context, cache: *value_mod.MutableMap, filename: []c
     ctx.current_source = filename;
     defer ctx.current_source = old_source;
 
+    // A load triggered from inside a parse-time invocation (a `use` in a parsed block) starts a
+    // new parse session: the loaded file's own bodies stamp against its `current_source`.
+    const old_stamp_source = ctx.parse_stamp_source;
+    ctx.parse_stamp_source = null;
+    defer ctx.parse_stamp_source = old_stamp_source;
+
     const old_load_file_source = ctx.load_file_source;
     ctx.load_file_source = filename;
     defer ctx.load_file_source = old_load_file_source;
@@ -1661,6 +1667,12 @@ fn nativeEvalString(ctx: *Context) anyerror!void {
     const code_str = try popString(ctx);
     defer container_backing.releaseValue(.{ .string = code_str });
     const code = code_str.bytes;
+
+    // The eval'd string is its own parse session, not part of any file a parse-time invocation
+    // is reading.
+    const old_stamp_source = ctx.parse_stamp_source;
+    ctx.parse_stamp_source = null;
+    defer ctx.parse_stamp_source = old_stamp_source;
 
     var processor: StatementProcessor = .{};
     defer processor.deinit();

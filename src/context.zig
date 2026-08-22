@@ -704,6 +704,15 @@ pub const Context = struct {
     /// Set by the parser before invoking a parse-time word body (before any
     /// compound-word execution-source tracking can change current_source).
     parse_time_source_file: []const u8 = "",
+    /// The file whose tokens the parser is currently reading, when that differs from
+    /// `current_source`. Body stamps read this first.
+    ///
+    /// The outermost parse-time invocation sets it, because executing the parse-time word's body
+    /// points `current_source` at the word's defining file while the parser keeps reading the
+    /// invoking file (e.g. through `parse-until`). A nested invocation inherits it. A nested parse
+    /// session reading a different source -- a module load, an eval string -- saves and clears it
+    /// so its own `current_source` governs. Null outside parse-time invocations.
+    parse_stamp_source: ?[]const u8 = null,
     /// Source line of the current parse-time word invocation (file-relative).
     /// Set by executeParseTimeWord with save/restore for nesting.
     parse_time_source_line: usize = 0,
@@ -1895,9 +1904,11 @@ pub const Context = struct {
     /// Record the file `instructions` was parsed from, so a call frame pushed while the body runs
     /// names the file its line belongs to rather than the innermost executing word's file.
     ///
-    /// The parser calls this for every body it finishes, which is where `current_source` is known
-    /// to be the file being read. Bodies built at runtime, by `curry` or an image decode, carry no
-    /// record and fall back to `current_source`.
+    /// The parser calls this for every body it finishes. The file being read is `current_source`,
+    /// except while a parse-time word executes: its body execution points `current_source` at the
+    /// word's own file, and `parse_stamp_source` holds the invoking file the parser is still
+    /// reading. Bodies built at runtime, by `curry` or an image decode, carry no record and fall
+    /// back to `current_source`.
     ///
     /// Stamps are permanent, so only a body the root arena owns may enter: a body parsed onto a
     /// task or scoped-eval arena dies with it, and its key would then falsely match a later
@@ -1905,13 +1916,28 @@ pub const Context = struct {
     pub fn stampQuotationBodySource(self: *Context, instructions: []const Instruction) !void {
         if (instructions.len == 0) return;
         if (self.stateTarget() != self.rootContext()) return;
-        try self.quotation_source_store.stamp(@intFromPtr(instructions.ptr), self.current_source);
+        const source = self.parse_stamp_source orelse self.current_source;
+        try self.quotation_source_store.stamp(@intFromPtr(instructions.ptr), source);
     }
 
     /// The file `instructions` was parsed from, or null for a body that was never stamped.
     pub fn quotationBodySource(self: *const Context, instructions: []const Instruction) ?[]const u8 {
         if (instructions.len == 0) return null;
         return self.quotation_source_store.lookup(@intFromPtr(instructions.ptr));
+    }
+
+    /// The file `def`'s compound body was parsed in, from the body stamps. Null when the action
+    /// carries no instructions or the body was built at runtime and never stamped.
+    ///
+    /// Definition sites prefer this over `current_source`. A definition executed inside a
+    /// runtime-built quotation, which carries no source stamp, runs under the executing word's
+    /// file and would freeze that as its own. A `private{` helper would record the prelude,
+    /// whose `(import-locals-checked)` composes and calls the block.
+    fn defBodyParseSource(self: *const Context, def: WordDefinition) ?[]const u8 {
+        return switch (def.action) {
+            .compound => |instrs| self.quotationBodySource(instrs),
+            .native, .host_callback, .literal => null,
+        };
     }
 
     /// If `instructions` contains any container-variant `push_literal`,
@@ -3563,7 +3589,7 @@ pub const Context = struct {
                 def.source_line = gen.line;
                 def.source_column = gen.column;
             } else {
-                def.source_file = self.current_source;
+                def.source_file = self.defBodyParseSource(def) orelse self.current_source;
                 if (self.call_stack.items.len > 0) {
                     const frame = self.call_stack.items[self.call_stack.items.len - 1];
                     def.source_line = frame.line;
@@ -3848,7 +3874,7 @@ pub const Context = struct {
 
         var def = definition;
         if (def.source_file == null) {
-            def.source_file = self.current_source;
+            def.source_file = self.defBodyParseSource(def) orelse self.current_source;
             if (self.call_stack.items.len > 0) {
                 const frame = self.call_stack.items[self.call_stack.items.len - 1];
                 def.source_line = frame.line;
@@ -11126,6 +11152,55 @@ test "defineWord: exec_flags populated and recomputed on redefinition" {
     try std.testing.expect(second.exec_flags.is_generic);
     try std.testing.expect(second.exec_flags.empty_compound_body);
     try std.testing.expect(second.exec_flags.skip_type_validation);
+}
+
+test "defineWord: a stamped body's parse file outranks the ambient current_source" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const body = [_]Instruction{.{ .op = .{ .call_word = "noop" }, .line = 0 }};
+    ctx.current_source = "mod.1z";
+    try ctx.stampQuotationBodySource(&body);
+
+    // A definition made while another word's body executes, e.g. a `private{` helper defined
+    // inside the composed quotation the prelude calls, sees that word's file here.
+    ctx.current_source = "src/prelude.1z";
+    try ctx.defineWord("w", .{
+        .name = "w",
+        .action = .{ .compound = &body },
+    });
+
+    const def = ctx.lookupWordForExecution("w") orelse return error.TestExpectedLookup;
+    try std.testing.expectEqualStrings("mod.1z", def.source_file.?);
+}
+
+test "defineWord: an unstamped body falls back to current_source" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const body = [_]Instruction{.{ .op = .{ .call_word = "noop" }, .line = 0 }};
+    ctx.current_source = "app.1z";
+    try ctx.defineWord("w", .{
+        .name = "w",
+        .action = .{ .compound = &body },
+    });
+
+    const def = ctx.lookupWordForExecution("w") orelse return error.TestExpectedLookup;
+    try std.testing.expectEqualStrings("app.1z", def.source_file.?);
+}
+
+test "stampQuotationBodySource: parse_stamp_source outranks current_source" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    // While a parse-time word executes, `current_source` names the word's own file, and the
+    // parser's saved invoking file is what the tokens being read belong to.
+    const body = [_]Instruction{.{ .op = .{ .call_word = "noop" }, .line = 0 }};
+    ctx.current_source = "src/prelude.1z";
+    ctx.parse_stamp_source = "mod.1z";
+    try ctx.stampQuotationBodySource(&body);
+
+    try std.testing.expectEqualStrings("mod.1z", ctx.quotationBodySource(&body).?);
 }
 
 test "wordDefFromModuleWord: synthesized definition carries computed exec_flags" {

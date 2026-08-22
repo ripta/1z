@@ -233,7 +233,11 @@ aot-line-directives-check: build ## Verify AOT-emitted C carries `#line` directi
 		echo "FAIL: missing #line 26 inside onez_w___entry__ (multi-line loop body)"; \
 		echo "$$entry_body" | grep '^#line' || true; exit 1; \
 	fi; \
-	echo "PASS: AOT-emitted C carries #line directives for user words, quotations, prelude, if arms, and loop bodies"
+	if ! grep -B1 '^int32_t onez_w_aot_line_directives_mod_O1z_Dline_probe(uintptr_t jit_ctx)$$' "$$saved" | grep -qE '^#line 5 "aot_line_directives_mod.1z"'; then \
+		echo "FAIL: private{ helper 'line-probe' does not carry its module's file (expected line 5 of aot_line_directives_mod.1z)"; \
+		grep -B1 'onez_w_aot_line_directives_mod_O1z_Dline_probe(uintptr_t jit_ctx)$$' "$$saved" || true; exit 1; \
+	fi; \
+	echo "PASS: AOT-emitted C carries #line directives for user words, quotations, prelude, if arms, loop bodies, and private module helpers"
 
 aot-trace-instr-check: build ## Verify --trace-aot=instr fires per-instruction for a non-recursive word and locates its NC.13
 	$(eval _bin := $(call mktemp_or_die,/tmp/1z-trace-instr-XXXXXX))

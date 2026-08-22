@@ -368,6 +368,13 @@ fn executeParseTimeWord(
     defer c.parse_time_source_line = old_invoke_line;
     defer c.parse_time_source_column = old_invoke_column;
 
+    // A body the word parses out of the token stream (e.g. through `parse-until`) must stamp the
+    // file being read, not the file the word's execution points `current_source` at. A nested
+    // invocation keeps the outer value: it still reads the same file's tokens.
+    const old_stamp_source = c.parse_stamp_source;
+    if (c.parse_stamp_source == null) c.parse_stamp_source = c.current_source;
+    defer c.parse_stamp_source = old_stamp_source;
+
     const old_tokenizer = c.parse_tokenizer;
     c.parse_tokenizer = tokenizer;
     defer c.parse_tokenizer = old_tokenizer;
