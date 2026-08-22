@@ -10940,6 +10940,75 @@ test "initForTask: captures only frames above the parent's durable floor" {
     try std.testing.expect(task_ctx.local_frames.items[0].get("stable-w") == null);
 }
 
+test "initForTask: an interpreter-free boot clones nothing and reads the entry frame via the ancestor walk" {
+    const noop: dict_mod.NativeFn = struct {
+        fn f(_: *Context) anyerror!void {}
+    }.f;
+
+    var parent = Context.init(std.testing.allocator);
+    defer parent.deinit();
+
+    // The shape `onez_push_entry_frame` leaves on a no-prelude boot: one durable frame at floor 0
+    // holding the entry file's bindings, and nothing above it. The spawn snapshot starts at
+    // floor + 1, so there is nothing to clone, and the entry frame stays reachable only through
+    // the ancestor walk.
+    try parent.pushLocalFrame();
+    parent.import_frame_index = 0;
+    parent.durable_frame_floor = 0;
+    try parent.local_frames.items[0].put(parent.allocator, "entry-word", .{
+        .name = "entry-word",
+        .action = .{ .native = noop },
+    });
+
+    var scheduler = try std.testing.allocator.create(Scheduler);
+    defer std.testing.allocator.destroy(scheduler);
+    scheduler.* = try Scheduler.init(std.testing.allocator);
+    defer scheduler.deinit();
+
+    var task_ctx = try Context.initForTask(std.testing.allocator, &parent, scheduler);
+    defer task_ctx.deinit();
+
+    try std.testing.expectEqual(@as(usize, 0), task_ctx.local_frames.items.len);
+    try std.testing.expect(task_ctx.lookupWordLocked("entry-word", null) != null);
+}
+
+test "initForTask: a prelude boot with the entry frame at floor 1 clones nothing and reads both frames" {
+    const noop: dict_mod.NativeFn = struct {
+        fn f(_: *Context) anyerror!void {}
+    }.f;
+
+    var parent = Context.init(std.testing.allocator);
+    defer parent.deinit();
+
+    // The shape `onez_push_entry_frame` leaves on a prelude boot: the prelude frame at 0, the
+    // entry frame at floor 1, nothing above. Both sit at or below the floor, so the clone is
+    // empty and both resolve through the ancestor walk.
+    try parent.pushLocalFrame();
+    try parent.local_frames.items[0].put(parent.allocator, "prelude-word", .{
+        .name = "prelude-word",
+        .action = .{ .native = noop },
+    });
+    try parent.pushLocalFrame();
+    parent.import_frame_index = 1;
+    parent.durable_frame_floor = 1;
+    try parent.local_frames.items[1].put(parent.allocator, "entry-word", .{
+        .name = "entry-word",
+        .action = .{ .native = noop },
+    });
+
+    var scheduler = try std.testing.allocator.create(Scheduler);
+    defer std.testing.allocator.destroy(scheduler);
+    scheduler.* = try Scheduler.init(std.testing.allocator);
+    defer scheduler.deinit();
+
+    var task_ctx = try Context.initForTask(std.testing.allocator, &parent, scheduler);
+    defer task_ctx.deinit();
+
+    try std.testing.expectEqual(@as(usize, 0), task_ctx.local_frames.items.len);
+    try std.testing.expect(task_ctx.lookupWordLocked("prelude-word", null) != null);
+    try std.testing.expect(task_ctx.lookupWordLocked("entry-word", null) != null);
+}
+
 test "initForTask: a spawn during a load captures the load frame as a frozen prefix" {
     var parent = Context.init(std.testing.allocator);
     defer parent.deinit();

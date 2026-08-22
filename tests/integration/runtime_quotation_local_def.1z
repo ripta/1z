@@ -1,0 +1,12 @@
+\ A definition made inside a called quotation stays legal at binary runtime. The interpreter
+\ gives the quotation a transient lexical frame, so the binding is exempt from the collision
+\ guards and pops with the frame. An interpreter-free binary pushes no transient frame; the
+\ definition lands in the durable entry frame, runs the guards, and a fresh name passes them.
+\
+\ The helper is deliberately never called: a body that calls its own nested definition cannot be
+\ AOT-compiled, so a call would turn this pin into a build failure rather than a
+\ runtime-legality check.
+
+[ helper: ( -- n ) [ 42 ] ; ] call
+
+"after" print-line
