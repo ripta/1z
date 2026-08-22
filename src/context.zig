@@ -845,10 +845,10 @@ pub const Context = struct {
     /// image loader on process-lifetime storage and shared by pointer with
     /// spawned task contexts.
     image_reified_quotation_modules: ?*const std.AutoHashMapUnmanaged(usize, *const value_mod.Module) = null,
-    /// Index of the durable import frame the image loader pushed for the entry
-    /// file's restored `use` imports. Null when no image or no entry imports
-    /// loaded. Guards the replay dispatch_id patch so it never touches the
-    /// prelude frame.
+    /// Index of the durable entry frame `onez_push_entry_frame` pushed at AOT boot, which holds
+    /// the entry file's restored `use` imports. Null on interpreter drivers and embedders, whose
+    /// boot never calls the push. Guards the entry-import restore and the replay dispatch_id
+    /// patch so neither touches the prelude frame.
     image_entry_import_frame: ?usize = null,
     /// Decoded-instruction cache for reified quotation pushes, keyed by the same static data
     /// pointer. Root-owned and process-shared; slices live on the cache's own arena, so the keys
@@ -2793,21 +2793,23 @@ pub const Context = struct {
         return def;
     }
 
-    /// Restore one image-serialized entry-file import into the durable import
-    /// frame at `import_frame_index`. The definition goes through the
-    /// module-word conversion and is marked `imported`, matching what the
-    /// interpreter's `use` records there.
+    /// Restore one image-serialized entry-file import into the durable entry frame at
+    /// `image_entry_import_frame`. The definition goes through the module-word conversion and is
+    /// marked `imported`, matching what the interpreter's `use` records there.
     ///
-    /// Writes the frame without the shared lock: the only caller runs during
-    /// image load, before any worker thread exists. A null
-    /// `import_frame_index` is a no-prelude boot with nothing to restore.
+    /// Writes the frame without the shared lock: the only caller runs during image load, before
+    /// any worker thread exists. The target is `image_entry_import_frame` rather than
+    /// `import_frame_index` because only the boot's `onez_push_entry_frame` sets it, while the
+    /// prelude load also sets the latter. A null value is a boot that never pushed, an embedder's
+    /// shape, and writing an entry import into an embedder's prelude frame would plant it in the
+    /// base scope the shadow probe reads.
     pub fn defineImageEntryImport(
         self: *Context,
         name: []const u8,
         mod_word: value_mod.ModuleWord,
         source: *const value_mod.Module,
     ) !void {
-        const idx = self.import_frame_index orelse return;
+        const idx = self.image_entry_import_frame orelse return;
         var def = moduleWordFrameDef(name, mod_word, source);
         def.imported = true;
         try self.local_frames.items[idx].put(self.allocator, name, def);
@@ -8937,6 +8939,52 @@ test "defineWordLocked: a redefinition dropping registered methods reports unles
         false,
     );
     try ctx.defineWord("plain", .{ .name = "plain", .action = .{ .literal = .{ .fixnum = 8 } } });
+}
+
+test "defineWordLocked: a durable-frame shadow leaves the native's dictionary slot intact" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    // A clobbering `Dictionary.put` reuses the existing slot and swaps its boxed definition, so
+    // the detector is the loaded definition still being the native. The slot-identity check pins
+    // the shape baked call sites depend on: they hold this pointer.
+    const native_slot = ctx.dictionary.getSlot("dup").?;
+    const native_fn = ctx.dictionary.get("dup").?.action.native;
+
+    // The durable entry frame every AOT binary pushes at boot, in the interpreter-free shape:
+    // frame 0, no prelude frame below it.
+    try ctx.pushLocalFrame();
+    ctx.import_frame_index = 0;
+    ctx.durable_frame_floor = 0;
+    ctx.image_entry_import_frame = 0;
+
+    try ctx.defineWord("dup", .{
+        .name = "dup",
+        .action = .{ .literal = .{ .fixnum = 1 } },
+        .markers = &.{@constCast(&markers_mod.override_marker)},
+    });
+
+    try std.testing.expectEqual(native_slot, ctx.dictionary.getSlot("dup").?);
+    try std.testing.expectEqual(native_fn, ctx.dictionary.get("dup").?.action.native);
+    try std.testing.expect(ctx.lookupWord("dup").?.action == .literal);
+}
+
+test "defineWordLocked: the shadow guard fires from the durable frame with no prelude frame below" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    try ctx.pushLocalFrame();
+    ctx.import_frame_index = 0;
+    ctx.durable_frame_floor = 0;
+    ctx.image_entry_import_frame = 0;
+
+    // The probe's frame rung walks `[0..floor]`, which is empty here, so the dictionary rung is
+    // what finds the native.
+    try std.testing.expectError(error.ImportConflict, ctx.defineWord("dup", .{
+        .name = "dup",
+        .action = .{ .literal = .{ .fixnum = 1 } },
+    }));
+    try std.testing.expectEqualStrings("defining 'dup' would shadow a native word", ctx.pending_error_message.?);
 }
 
 test "anonymous union descriptor flags are inferred by intersection" {

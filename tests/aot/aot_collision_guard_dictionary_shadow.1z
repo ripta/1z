@@ -12,8 +12,8 @@
 \ and a definition landing there is exempt by design. So the binary aborts, and its diagnostic is
 \ the golden.
 \
-\ The import is what gives the binary that import frame: an image carrying no entry imports never
-\ pushes the durable frame an interpreter driver gives the entry file.
+\ The import is not load-bearing for the frame: every AOT binary pushes the durable entry frame at
+\ boot. The import stays so this entry covers the guard with an imported name sitting in the frame.
 use { taken: } "fixtures/aot_collision_guard_mod.1z" ;
 
 taken .

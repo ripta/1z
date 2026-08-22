@@ -220,6 +220,7 @@ comptime {
     if (builtin.os.tag == .freestanding) {
         @export(&onez_init_no_prelude, .{ .name = "onez_init_no_prelude" });
         @export(&onez_init, .{ .name = "onez_init" });
+        @export(&onez_push_entry_frame, .{ .name = "onez_push_entry_frame" });
         @export(&onez_deinit, .{ .name = "onez_deinit" });
         @export(&onez_freestanding_init_output, .{ .name = "onez_freestanding_init_output" });
         @export(&onez_freestanding_output_stream, .{ .name = "onez_freestanding_output_stream" });
@@ -1624,6 +1625,14 @@ fn onez_set_args(ptr: ?*anyopaque, argc: c_int, argv: [*]const [*:0]const u8) ca
     _ = ptr;
     _ = argc;
     _ = argv;
+    return ONEZ_OK;
+}
+
+/// The generated `main` pushes the entry file's durable frame unconditionally on every tier. This
+/// runtime has no `Context`, no local frames, and no runtime-definition path, so there is nothing
+/// to push into and the call succeeds vacuously.
+fn onez_push_entry_frame(ptr: ?*anyopaque) callconv(.c) c_int {
+    _ = ptr;
     return ONEZ_OK;
 }
 

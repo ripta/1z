@@ -1,2 +1,0 @@
-tests/integration/runtime_dict_shadow_native.1z:13: error 'arity-mismatch' arity mismatch on redefinition of 'dup' (was 1 -> 2, now 0 -> 1) at word ';'
-  stack effect: ( name quot --  )

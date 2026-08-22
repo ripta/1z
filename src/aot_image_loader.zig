@@ -454,24 +454,17 @@ fn populateModuleDeps(ctx: *Context, header: *const Header) LoaderError!void {
     }
 }
 
-/// Restore the entry file's `use` imports into a fresh durable import frame, so an interpreted
+/// Restore the entry file's `use` imports into the durable entry frame, so an interpreted
 /// entry-body call resolves them at the frame walk instead of the module-cache scan.
 ///
-/// The frame is pushed above the prelude frame and `import_frame_index` repoints to it, the shape
-/// every interpreter driver gives the entry file, so an entry import shadows a prelude word
-/// exactly as it does interpreted.
-///
-/// A no-prelude boot has no durable frame and nothing resolving through frames, so the whole pass
-/// is skipped there.
+/// The frame itself is pushed by the generated `main` through `onez_push_entry_frame`, before any
+/// image load and on every tier, so this pass only writes into it. The gate is
+/// `image_entry_import_frame`, which only that push sets: a boot that never pushed skips the pass
+/// rather than landing entry imports in whatever frame `import_frame_index` happens to name.
 fn populateEntryImports(ctx: *Context, header: *const Header) LoaderError!void {
     if (header.entry_import_count == 0) return;
     const rows = header.entry_imports orelse return;
-    if (ctx.import_frame_index == null) return;
-
-    ctx.pushLocalFrame() catch return LoaderError.OutOfMemory;
-    ctx.import_frame_index = ctx.local_frames.items.len - 1;
-    ctx.durable_frame_floor = ctx.import_frame_index;
-    ctx.image_entry_import_frame = ctx.import_frame_index;
+    if (ctx.image_entry_import_frame == null) return;
 
     var i: u32 = 0;
     while (i < header.entry_import_count) : (i += 1) {
@@ -3148,13 +3141,17 @@ test "populateModuleDeps: unresolvable rows are skipped, bad owner index errors"
     );
 }
 
-test "populateEntryImports: restores imports into a fresh durable frame above the prelude frame" {
+test "populateEntryImports: writes imports into the durable entry frame the binary pushed" {
     var ctx = Context.init(testing.allocator);
     defer ctx.deinit();
 
-    // Stand in for the prelude frame `loadPrelude` would have pushed.
+    // Stand in for the prelude frame `loadPrelude` would have pushed, then the entry frame
+    // `onez_push_entry_frame` builds at boot, before any image load.
     try ctx.pushLocalFrame();
-    ctx.import_frame_index = 0;
+    try ctx.pushLocalFrame();
+    ctx.import_frame_index = 1;
+    ctx.durable_frame_floor = 1;
+    ctx.image_entry_import_frame = 1;
 
     const body = [_]value_mod.Instruction{
         .{ .op = .{ .push_literal = .{ .fixnum = 7 } }, .line = 0, .column = 0 },
@@ -3205,6 +3202,7 @@ test "populateEntryImports: restores imports into a fresh durable frame above th
 
     try loadIntoContext(&ctx, &header, .{}, null);
 
+    // The loader pushes nothing of its own.
     try testing.expectEqual(@as(usize, 2), ctx.local_frames.items.len);
     try testing.expectEqual(@as(?usize, 1), ctx.import_frame_index);
     try testing.expectEqual(@as(?usize, 1), ctx.image_entry_import_frame);
@@ -3251,12 +3249,54 @@ test "populateEntryImports: skipped when no durable frame exists" {
     try testing.expectEqual(@as(?usize, null), ctx.image_entry_import_frame);
 }
 
+test "populateEntryImports: skipped when the boot never pushed the entry frame" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    // An embedder's shape: a prelude frame names `import_frame_index`, but nothing set
+    // `image_entry_import_frame`. The pass must skip rather than plant the import in the prelude
+    // frame, which sits in the base scope the shadow probe reads.
+    try ctx.pushLocalFrame();
+    ctx.import_frame_index = 0;
+    ctx.durable_frame_floor = 0;
+
+    const source_name = "modc";
+    const import_name = "probe";
+    const words = [_]Word{wordRow(import_name, 0, 0)};
+    const modules = [_]Module{
+        .{ .name = source_name.ptr, .name_len = source_name.len, .word_start_idx = 0, .word_count = 1 },
+    };
+    const imports = [_]EntryImport{.{
+        .name = import_name.ptr,
+        .name_len = import_name.len,
+        .source_module_name = source_name.ptr,
+        .source_module_name_len = source_name.len,
+    }};
+
+    var header = emptyHeader();
+    header.module_count = 1;
+    header.word_count = 1;
+    header.modules = &modules;
+    header.words = &words;
+    header.entry_import_count = 1;
+    header.entry_imports = &imports;
+
+    try loadIntoContext(&ctx, &header, .{}, null);
+
+    try testing.expectEqual(@as(usize, 1), ctx.local_frames.items.len);
+    try testing.expectEqual(@as(usize, 0), ctx.local_frames.items[0].count());
+    try testing.expectEqual(@as(?usize, null), ctx.image_entry_import_frame);
+}
+
 test "replayMethodDispatch: patches an entry-import frame def's dispatch_id" {
     var ctx = Context.init(testing.allocator);
     defer ctx.deinit();
 
+    // The interpreter-free boot shape: the entry frame is frame 0, with no prelude frame below it.
     try ctx.pushLocalFrame();
     ctx.import_frame_index = 0;
+    ctx.durable_frame_floor = 0;
+    ctx.image_entry_import_frame = 0;
 
     const body = [_]value_mod.Instruction{
         .{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 0, .column = 0 },

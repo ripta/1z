@@ -254,6 +254,27 @@ export fn onez_init() ?*anyopaque {
     return handle;
 }
 
+/// Push the entry file's durable local frame and point `import_frame_index`,
+/// `durable_frame_floor`, and `image_entry_import_frame` at it.
+///
+/// The generated AOT `main` calls this once, right after init and before any image load, on every
+/// tier. Without the frame, a definition made at binary runtime lands in the prelude frame or in
+/// the native dictionary, where `Dictionary.put` replaces a native's slot in place, and neither
+/// collision guard can fire.
+///
+/// The frame is deliberately not pushed inside `onez_init`, so a C host embedder keeps the
+/// context shape it sees today.
+export fn onez_push_entry_frame(ptr: ?*anyopaque) c_int {
+    const handle = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
+    const ctx = handle.ctx;
+
+    ctx.pushLocalFrame() catch return ONEZ_ERR_ALLOC;
+    ctx.import_frame_index = ctx.local_frames.items.len - 1;
+    ctx.durable_frame_floor = ctx.import_frame_index;
+    ctx.image_entry_import_frame = ctx.import_frame_index;
+    return ONEZ_OK;
+}
+
 export fn onez_deinit(ptr: ?*anyopaque) void {
     bail_stats_mod.deinitGlobal();
 
@@ -2560,6 +2581,34 @@ test "init/eval/deinit round-trip" {
     try std.testing.expectEqual(@as(c_int, 0), rc);
 
     onez_deinit(handle_ptr);
+}
+
+test "push_entry_frame: a no-prelude boot gets frame 0 as the durable entry frame" {
+    const handle_ptr = onez_init_no_prelude();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    try std.testing.expectEqual(ONEZ_OK, onez_push_entry_frame(handle_ptr));
+
+    const ctx = castHandle(handle_ptr).?.ctx;
+    try std.testing.expectEqual(@as(usize, 1), ctx.local_frames.items.len);
+    try std.testing.expectEqual(@as(?usize, 0), ctx.import_frame_index);
+    try std.testing.expectEqual(@as(?usize, 0), ctx.durable_frame_floor);
+    try std.testing.expectEqual(@as(?usize, 0), ctx.image_entry_import_frame);
+}
+
+test "push_entry_frame: a prelude boot gets the entry frame above the prelude frame" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    try std.testing.expectEqual(ONEZ_OK, onez_push_entry_frame(handle_ptr));
+
+    const ctx = castHandle(handle_ptr).?.ctx;
+    try std.testing.expectEqual(@as(usize, 2), ctx.local_frames.items.len);
+    try std.testing.expectEqual(@as(?usize, 1), ctx.import_frame_index);
+    try std.testing.expectEqual(@as(?usize, 1), ctx.durable_frame_floor);
+    try std.testing.expectEqual(@as(?usize, 1), ctx.image_entry_import_frame);
 }
 
 test "root allocator gate matches build mode" {

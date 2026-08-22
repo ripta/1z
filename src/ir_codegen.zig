@@ -10742,6 +10742,7 @@ pub fn emitProgramC(
         \\
         \\extern void *onez_init(void);
         \\extern void *onez_init_no_prelude(void);
+        \\extern int onez_push_entry_frame(void *rt);
         \\extern int onez_set_args(void *ctx, int argc, char **argv);
         \\extern int onez_set_source(void *ctx, const char *data, unsigned long len);
         \\extern int32_t onez_runtime_register_compiled(void *rt, int32_t (**table)(uintptr_t), const char **names, const char **modules, uint32_t size);
@@ -12071,6 +12072,19 @@ pub fn emitProgramC(
         "    void *rt = onez_init_no_prelude();\n"
     else
         "    void *rt = onez_init();\n");
+
+    // The entry file's durable frame, pushed unconditionally on every tier: a definition made at
+    // binary runtime must land where an interpreter driver puts it, or it falls into the prelude
+    // frame or replaces a native's dictionary slot in place.
+    //
+    // The push cannot ride the image hookup below, which a build with no image never emits.
+    try out.appendSlice(allocator,
+        \\    if (onez_push_entry_frame(rt) != 0) {
+        \\        onez_deinit(rt);
+        \\        return 1;
+        \\    }
+        \\
+    );
 
     // Register the compiled-quotation table before loading the runtime image.
     // The image loader decodes module-private container slot values (mutable
@@ -16945,6 +16959,10 @@ test "emitProgramC: hosted preamble contains libc includes and main shim" {
     try testing.expect(std.mem.indexOf(u8, source, "#include <stdlib.h>") != null);
     try testing.expect(std.mem.indexOf(u8, source, "#include <string.h>") != null);
     try testing.expect(std.mem.indexOf(u8, source, "int main(int argc, char **argv)") != null);
+    // The push must precede every later boot step, or `populateEntryImports` has no frame to
+    // write into.
+    try testing.expect(std.mem.indexOf(u8, source, "onez_push_entry_frame(rt)").? <
+        std.mem.indexOf(u8, source, "onez_runtime_register_compiled(rt").?);
     // program_args excludes the program name (argv[0]), matching the interpreter.
     try testing.expect(std.mem.indexOf(u8, source, "onez_set_args(rt, argc - 1, argv + 1)") != null);
     try testing.expect(std.mem.indexOf(u8, source, "onez_set_source(rt, argv[0]") != null);
@@ -16980,6 +16998,9 @@ test "emitProgramC: freestanding preamble drops libc and emits kernel_main" {
     try testing.expect(std.mem.indexOf(u8, source, "getenv(") == null);
     try testing.expect(std.mem.indexOf(u8, source, "fprintf(") == null);
     try testing.expect(std.mem.indexOf(u8, source, "int kernel_main(void)") != null);
+    // The entry-frame push is unconditional across tiers; freestanding satisfies it
+    // through the capi_freestanding no-op stub.
+    try testing.expect(std.mem.indexOf(u8, source, "onez_push_entry_frame(rt)") != null);
     try testing.expect(std.mem.indexOf(u8, source, "#include <stdint.h>") != null);
     try testing.expect(std.mem.indexOf(u8, source, "#include <stdbool.h>") != null);
     try testing.expect(std.mem.indexOf(u8, source, "#include <stddef.h>") != null);
@@ -19406,6 +19427,7 @@ test "emitProgramC generates complete C source" {
 
     // Runtime externs
     try testing.expect(std.mem.indexOf(u8, source, "onez_init") != null);
+    try testing.expect(std.mem.indexOf(u8, source, "onez_push_entry_frame") != null);
     try testing.expect(std.mem.indexOf(u8, source, "onez_set_args") != null);
     try testing.expect(std.mem.indexOf(u8, source, "onez_runtime_run") != null);
     try testing.expect(std.mem.indexOf(u8, source, "onez_print_error") != null);
