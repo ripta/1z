@@ -1,1 +1,2 @@
 <aot>:0: error 'type-mismatch' expected fixnum, got bignum 9223372036854775808 at word 'take'
+  stack effect: ( n --  )

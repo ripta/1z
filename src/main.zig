@@ -3214,6 +3214,25 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
         };
     }
 
+    // The freeze-side entry-word snapshot in the emitter's input shape.
+    var entry_word_inputs: std.ArrayListUnmanaged(ir_codegen.EntryWordInput) = .{};
+    defer entry_word_inputs.deinit(allocator);
+    for (freeze_result.entry_words) |ew| {
+        entry_word_inputs.append(allocator, .{
+            .name = ew.name,
+            .effect_body = ew.effect_body,
+            .word_id = ew.word_id,
+            .dispatch_id = ew.dispatch_id,
+            .generated = ew.generated,
+            .is_const = ew.is_const,
+            .is_generic = ew.is_generic,
+        }) catch {
+            err_writer.writeAll("Error: out of memory while collecting entry words\n") catch {};
+            err_writer.flush() catch {};
+            return 1;
+        };
+    }
+
     if (dump_image_classification) {
         var manifest = aot_image.buildImageManifest(ctx, allocator) catch |err| {
             err_writer.print("Error building image manifest: {s}\n", .{@errorName(err)}) catch {};
@@ -3352,6 +3371,7 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
         emit_runtime_image_flag,
         freeze_result.interpreted_reach,
         entry_import_inputs.items,
+        entry_word_inputs.items,
         freeze_result.callee_scopes,
         allocator,
     ) catch |err| {

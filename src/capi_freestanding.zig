@@ -221,6 +221,7 @@ comptime {
         @export(&onez_init_no_prelude, .{ .name = "onez_init_no_prelude" });
         @export(&onez_init, .{ .name = "onez_init" });
         @export(&onez_push_entry_frame, .{ .name = "onez_push_entry_frame" });
+        @export(&onez_seed_entry_words, .{ .name = "onez_seed_entry_words" });
         @export(&onez_deinit, .{ .name = "onez_deinit" });
         @export(&onez_freestanding_init_output, .{ .name = "onez_freestanding_init_output" });
         @export(&onez_freestanding_output_stream, .{ .name = "onez_freestanding_output_stream" });
@@ -1633,6 +1634,27 @@ fn onez_set_args(ptr: ?*anyopaque, argc: c_int, argv: [*]const [*:0]const u8) ca
 /// to push into and the call succeeds vacuously.
 fn onez_push_entry_frame(ptr: ?*anyopaque) callconv(.c) c_int {
     _ = ptr;
+    return ONEZ_OK;
+}
+
+/// This runtime has no frames and no runtime-definition path, so there is nothing to seed and
+/// nothing the seed protects. The call succeeds vacuously.
+fn onez_seed_entry_words(
+    ptr: ?*anyopaque,
+    names: ?[*]const [*:0]const u8,
+    effects: ?[*]const ?[*:0]const u8,
+    word_ids: ?[*]const i32,
+    dispatch_ids: ?[*]const u32,
+    flags: ?[*]const u8,
+    count: u32,
+) callconv(.c) c_int {
+    _ = ptr;
+    _ = names;
+    _ = effects;
+    _ = word_ids;
+    _ = dispatch_ids;
+    _ = flags;
+    _ = count;
     return ONEZ_OK;
 }
 

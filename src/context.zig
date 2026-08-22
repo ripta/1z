@@ -2815,6 +2815,84 @@ pub const Context = struct {
         try self.local_frames.items[idx].put(self.allocator, name, def);
     }
 
+    /// Marker slices for a seeded entry word whose original definition carried the const or
+    /// generic marker. Const keeps `CannotRedefineConst` refusing a runtime redefinition, and
+    /// generic keeps the binding's derived exec flags and introspected markers faithful.
+    const seeded_const_markers = [_]*value_mod.Marker{@constCast(&markers_mod.const_marker)};
+    const seeded_generic_markers = [_]*value_mod.Marker{@constCast(&markers_mod.generic_marker)};
+    const seeded_const_generic_markers = [_]*value_mod.Marker{
+        @constCast(&markers_mod.const_marker),
+        @constCast(&markers_mod.generic_marker),
+    };
+
+    /// One baked seed row for `seedEntryWord`, decoded from the tables the freeze emitted.
+    pub const EntryWordSeed = struct {
+        name: []const u8,
+        effect: ?*const StackEffect,
+        word_id: ?u32,
+        dispatch_id: u32,
+        generated: bool,
+        is_const: bool,
+        is_generic: bool,
+    };
+
+    /// Seed one of the entry file's own top-level names into the durable entry frame at AOT boot,
+    /// so a runtime redefinition finds the name where an interpreter driver would put it and
+    /// takes the same guard path: not `imported`, so it routes to the arity check rather than the
+    /// import-conflict guard, with the declared effect the check compares.
+    ///
+    /// The word's body is not restorable -- it was executed at the freeze and lives only in the
+    /// compiled dispatch table -- so the binding takes the shape `lookupAotCompiledWordLocked`
+    /// synthesizes for the same words today: `word_id` drives the compiled dispatch in
+    /// `executeResolvedWord`, and the bail sentinel raises rather than silently no-opping when no
+    /// compiled body exists.
+    ///
+    /// The dispatch_id is the word's own freeze-time id, baked into the seed row. Replayed method
+    /// entries and compiled call sites carry freeze-time ids verbatim, and the runtime counter is
+    /// never advanced past them, so a freshly-minted id would alias some other word's replayed
+    /// identity: the orphaned-methods walk would then report dropping an unrelated generic's
+    /// methods, and `>word-info` would list them.
+    ///
+    /// Writes the frame without the shared lock: the only caller runs during boot, before any
+    /// worker thread exists. A name already present -- a restored entry import -- is left alone,
+    /// since whatever the loader wrote is more faithful than this stub.
+    ///
+    /// A name the base scope below the entry frame resolves -- a prelude binding or a dictionary
+    /// native -- is not seeded either. Such a definition existed at freeze only through
+    /// `override`, and the binary's by-name resolution for it is anchored below this frame; a
+    /// stub in front would shadow the binding execution still reaches, and its effect would
+    /// replace the one error frames render. The cost is one corner: redefining such a name at
+    /// runtime renders the shadow guard rather than the interpreted arity check, loud either way.
+    pub fn seedEntryWord(self: *Context, seed: EntryWordSeed) !void {
+        const idx = self.image_entry_import_frame orelse return;
+        const frame = &self.local_frames.items[idx];
+        if (frame.contains(seed.name)) return;
+
+        for (self.local_frames.items[0..idx]) |below| {
+            if (below.contains(seed.name)) return;
+        }
+        if (self.dictionary.getSlot(seed.name) != null) return;
+
+        var def: WordDefinition = .{
+            .name = seed.name,
+            .stack_effect = seed.effect,
+            .word_id = seed.word_id,
+            .dispatch_id = seed.dispatch_id,
+            .provenance = if (seed.generated) .{ .generator = "entry-seed", .parent = "", .role = "" } else null,
+            .markers = if (seed.is_const and seed.is_generic)
+                &seeded_const_generic_markers
+            else if (seed.is_const)
+                &seeded_const_markers
+            else if (seed.is_generic)
+                &seeded_generic_markers
+            else
+                &.{},
+            .action = .{ .native = aotCompiledOnlyBailSentinel },
+        };
+        def.exec_flags = computeExecFlags(def);
+        try frame.put(self.allocator, seed.name, def);
+    }
+
     /// Fill `frame` with `module`'s deps then words (words override same-named
     /// deps), synthesizing a `WordDefinition` per entry with `allocator`. Shared
     /// by the template builder and the un-templated fallback in
@@ -8985,6 +9063,77 @@ test "defineWordLocked: the shadow guard fires from the durable frame with no pr
         .action = .{ .literal = .{ .fixnum = 1 } },
     }));
     try std.testing.expectEqualStrings("defining 'dup' would shadow a native word", ctx.pending_error_message.?);
+}
+
+test "seedEntryWord: the baked dispatch id keeps another word's replayed methods out of the guard" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    try ctx.pushLocalFrame();
+    ctx.import_frame_index = 0;
+    ctx.durable_frame_floor = 0;
+    ctx.image_entry_import_frame = 0;
+
+    // A replayed generic's method, registered under a freeze-time id the runtime counter was
+    // never advanced past -- the shape the image loader's dispatch replay leaves.
+    const fixnum_tv = ctx.lookupBuiltinTypeValue("fixnum").?;
+    const body = [_]Instruction{.{ .op = .{ .push_literal = .{ .fixnum = 0 } }, .line = 0 }};
+    try ctx.registerDispatch(
+        .{ .dispatch_id = 950, .type_a = fixnum_tv.descriptor.?, .type_b = ctx.getDispatchUnarySentinel().descriptor.? },
+        .{ .body = .{ .quotation = .{ .instructions = &body } } },
+        false,
+    );
+
+    // A plain seeded word carries its own freeze-time id, so its redefinition reaches the arity
+    // check instead of reporting the unrelated methods a minted id could alias.
+    const one_out = [_]StackEffectParam{.{ .name = "n" }};
+    const seed_effect = StackEffect{ .inputs = &.{}, .outputs = &one_out };
+    try ctx.seedEntryWord(.{
+        .name = "p1",
+        .effect = &seed_effect,
+        .word_id = null,
+        .dispatch_id = 951,
+        .generated = false,
+        .is_const = false,
+        .is_generic = false,
+    });
+
+    const two_in = [_]StackEffectParam{ .{ .name = "x" }, .{ .name = "y" } };
+    const redef_effect = StackEffect{ .inputs = &two_in, .outputs = &one_out };
+    try std.testing.expectError(error.ArityMismatch, ctx.defineWord("p1", .{
+        .name = "p1",
+        .stack_effect = &redef_effect,
+        .action = .{ .literal = .{ .fixnum = 1 } },
+    }));
+    try std.testing.expectEqualStrings(
+        "arity mismatch on redefinition of 'p1' (was 0 -> 1, now 2 -> 1)",
+        ctx.pending_error_message.?,
+    );
+
+    // A seeded generic reuses the id its own replayed methods registered under, so an unguarded
+    // redefinition reports dropping them, as interpreted.
+    try ctx.seedEntryWord(.{
+        .name = "gen1",
+        .effect = null,
+        .word_id = null,
+        .dispatch_id = 950,
+        .generated = false,
+        .is_const = false,
+        .is_generic = true,
+    });
+    ctx.pending_error_message = null;
+    try std.testing.expectError(error.OrphanedMethods, ctx.defineWord("gen1", .{
+        .name = "gen1",
+        .action = .{ .literal = .{ .fixnum = 2 } },
+    }));
+    try std.testing.expectEqualStrings("redefining 'gen1' would drop 1 registered method", ctx.pending_error_message.?);
+
+    // `override` stays the escape, exactly as for an interpreted generic's redefinition.
+    try ctx.defineWord("gen1", .{
+        .name = "gen1",
+        .action = .{ .literal = .{ .fixnum = 3 } },
+        .markers = &.{@constCast(&markers_mod.override_marker)},
+    });
 }
 
 test "anonymous union descriptor flags are inferred by intersection" {

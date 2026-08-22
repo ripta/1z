@@ -275,6 +275,57 @@ export fn onez_push_entry_frame(ptr: ?*anyopaque) c_int {
     return ONEZ_OK;
 }
 
+/// Seed the durable entry frame with the entry file's own top-level names, from the baked tables
+/// the freeze emitted. The generated AOT `main` calls this once, after the image hookup restored
+/// the entry imports and before `onez_runtime_register_compiled`.
+///
+/// `effects` entries are bare-name effect bodies ("x y -- z") or NULL for a word that declared
+/// none; each is parsed onto the process-lifetime allocator, so the boxed effect outlives every
+/// copy of the binding. `word_ids` entries are the freeze-assigned ids, -1 for a word that was
+/// never compiled. `dispatch_ids` entries are each word's own freeze-time dispatch id. `flags`
+/// bit 0 marks a generated word, bit 1 a const one, and bit 2 a generic one.
+///
+/// A boot that never pushed the frame, an embedder's shape, is a no-op success.
+export fn onez_seed_entry_words(
+    ptr: ?*anyopaque,
+    names: ?[*]const [*:0]const u8,
+    effects: ?[*]const ?[*:0]const u8,
+    word_ids: ?[*]const i32,
+    dispatch_ids: ?[*]const u32,
+    flags: ?[*]const u8,
+    count: u32,
+) c_int {
+    const handle = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
+    const ctx = handle.ctx;
+    if (ctx.image_entry_import_frame == null) return ONEZ_OK;
+    if (count == 0) return ONEZ_OK;
+
+    const names_arr = names orelse return ONEZ_ERR_NULL_VALUE;
+    const effects_arr = effects orelse return ONEZ_ERR_NULL_VALUE;
+    const ids_arr = word_ids orelse return ONEZ_ERR_NULL_VALUE;
+    const dispatch_ids_arr = dispatch_ids orelse return ONEZ_ERR_NULL_VALUE;
+    const flags_arr = flags orelse return ONEZ_ERR_NULL_VALUE;
+
+    var i: u32 = 0;
+    while (i < count) : (i += 1) {
+        const effect: ?*const StackEffect = if (effects_arr[i]) |eptr|
+            helpers.makeBoxedEffect(ctx.quotationAllocator(), std.mem.span(eptr)) catch return ONEZ_ERR_ALLOC
+        else
+            null;
+
+        ctx.seedEntryWord(.{
+            .name = std.mem.span(names_arr[i]),
+            .effect = effect,
+            .word_id = if (ids_arr[i] >= 0) @intCast(ids_arr[i]) else null,
+            .dispatch_id = dispatch_ids_arr[i],
+            .generated = flags_arr[i] & 1 != 0,
+            .is_const = flags_arr[i] & 2 != 0,
+            .is_generic = flags_arr[i] & 4 != 0,
+        }) catch return ONEZ_ERR_ALLOC;
+    }
+    return ONEZ_OK;
+}
+
 export fn onez_deinit(ptr: ?*anyopaque) void {
     bail_stats_mod.deinitGlobal();
 
@@ -2609,6 +2660,143 @@ test "push_entry_frame: a prelude boot gets the entry frame above the prelude fr
     try std.testing.expectEqual(@as(?usize, 1), ctx.import_frame_index);
     try std.testing.expectEqual(@as(?usize, 1), ctx.durable_frame_floor);
     try std.testing.expectEqual(@as(?usize, 1), ctx.image_entry_import_frame);
+}
+
+test "seed_entry_words: a runtime redefinition of a seeded word takes the interpreted arity path" {
+    const handle_ptr = onez_init_no_prelude();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+    try std.testing.expectEqual(ONEZ_OK, onez_push_entry_frame(handle_ptr));
+
+    const names = [_][*:0]const u8{"val"};
+    const effects = [_]?[*:0]const u8{" -- s"};
+    const ids = [_]i32{-1};
+    const dids = [_]u32{900};
+    const flags = [_]u8{0};
+    try std.testing.expectEqual(ONEZ_OK, onez_seed_entry_words(handle_ptr, &names, &effects, &ids, &dids, &flags, 1));
+
+    const ctx = castHandle(handle_ptr).?.ctx;
+    const seeded = ctx.lookupWord("val").?;
+    try std.testing.expect(!seeded.imported);
+    try std.testing.expectEqual(@as(usize, 0), seeded.stack_effect.?.concreteInputCount());
+    try std.testing.expectEqual(@as(usize, 1), seeded.stack_effect.?.concreteOutputCount());
+
+    // A mismatched redefinition throws the interpreted message; a matched one lands silently.
+    try std.testing.expectError(error.ArityMismatch, ctx.defineWord("val", .{
+        .name = "val",
+        .stack_effect = try helpers.makeBoxedEffect(ctx.quotationAllocator(), "x y -- s"),
+        .action = .{ .literal = .{ .fixnum = 1 } },
+    }));
+    try std.testing.expectEqualStrings(
+        "arity mismatch on redefinition of 'val' (was 0 -> 1, now 2 -> 1)",
+        ctx.pending_error_message.?,
+    );
+
+    ctx.pending_error_message = null;
+    try ctx.defineWord("val", .{
+        .name = "val",
+        .stack_effect = try helpers.makeBoxedEffect(ctx.quotationAllocator(), " -- s"),
+        .action = .{ .literal = .{ .fixnum = 2 } },
+    });
+    try std.testing.expect(ctx.lookupWord("val").?.action == .literal);
+}
+
+test "seed_entry_words: the generated flag keeps the arity exemption and the const flag refuses" {
+    const handle_ptr = onez_init_no_prelude();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+    try std.testing.expectEqual(ONEZ_OK, onez_push_entry_frame(handle_ptr));
+
+    const names = [_][*:0]const u8{ "acc>>", "PI" };
+    const effects = [_]?[*:0]const u8{ "s -- v", null };
+    const ids = [_]i32{ -1, -1 };
+    const dids = [_]u32{ 901, 902 };
+    const flags = [_]u8{ 1, 2 };
+    try std.testing.expectEqual(ONEZ_OK, onez_seed_entry_words(handle_ptr, &names, &effects, &ids, &dids, &flags, 2));
+
+    const ctx = castHandle(handle_ptr).?.ctx;
+
+    // Interpreted, a generated word's redefinition skips the arity check outright.
+    try ctx.defineWord("acc>>", .{
+        .name = "acc>>",
+        .stack_effect = try helpers.makeBoxedEffect(ctx.quotationAllocator(), "a b c -- v"),
+        .action = .{ .literal = .{ .fixnum = 1 } },
+    });
+
+    try std.testing.expectError(error.CannotRedefineConst, ctx.defineWord("PI", .{
+        .name = "PI",
+        .action = .{ .literal = .{ .fixnum = 3 } },
+    }));
+}
+
+test "seed_entry_words: a boot that never pushed is a no-op, and a present name is left alone" {
+    const handle_ptr = onez_init_no_prelude();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    const names = [_][*:0]const u8{"taken"};
+    const effects = [_]?[*:0]const u8{null};
+    const ids = [_]i32{-1};
+    const dids = [_]u32{903};
+    const flags = [_]u8{0};
+
+    // No push: the embedder shape. The seed succeeds without touching anything.
+    try std.testing.expectEqual(ONEZ_OK, onez_seed_entry_words(handle_ptr, &names, &effects, &ids, &dids, &flags, 1));
+    const ctx = castHandle(handle_ptr).?.ctx;
+    try std.testing.expectEqual(@as(usize, 0), ctx.local_frames.items.len);
+
+    // A restored entry import already in the frame wins over the seed's stub.
+    try std.testing.expectEqual(ONEZ_OK, onez_push_entry_frame(handle_ptr));
+    try ctx.local_frames.items[0].put(ctx.allocator, "taken", .{
+        .name = "taken",
+        .imported = true,
+        .action = .{ .native = undefined },
+    });
+    try std.testing.expectEqual(ONEZ_OK, onez_seed_entry_words(handle_ptr, &names, &effects, &ids, &dids, &flags, 1));
+    try std.testing.expect(ctx.local_frames.items[0].get("taken").?.imported);
+}
+
+test "seed_entry_words: a name the base scope resolves is not seeded" {
+    const handle_ptr = onez_init_no_prelude();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+    try std.testing.expectEqual(ONEZ_OK, onez_push_entry_frame(handle_ptr));
+
+    // An entry word named `dup` exists at freeze only through `override`. Seeding it would put a
+    // stub in front of the native that by-name execution still reaches.
+    const names = [_][*:0]const u8{"dup"};
+    const effects = [_]?[*:0]const u8{"a b -- c"};
+    const ids = [_]i32{-1};
+    const dids = [_]u32{904};
+    const flags = [_]u8{0};
+    try std.testing.expectEqual(ONEZ_OK, onez_seed_entry_words(handle_ptr, &names, &effects, &ids, &dids, &flags, 1));
+
+    const ctx = castHandle(handle_ptr).?.ctx;
+    try std.testing.expectEqual(@as(usize, 0), ctx.local_frames.items[0].count());
+    try std.testing.expect(ctx.lookupWord("dup").?.action == .native);
+}
+
+test "seed_entry_words: a seeded binding carries the compiled-dispatch shape" {
+    const handle_ptr = onez_init_no_prelude();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+    try std.testing.expectEqual(ONEZ_OK, onez_push_entry_frame(handle_ptr));
+
+    const names = [_][*:0]const u8{"greet"};
+    const effects = [_]?[*:0]const u8{" -- "};
+    const ids = [_]i32{5};
+    const dids = [_]u32{905};
+    const flags = [_]u8{0};
+    try std.testing.expectEqual(ONEZ_OK, onez_seed_entry_words(handle_ptr, &names, &effects, &ids, &dids, &flags, 1));
+
+    // The shape `lookupAotCompiledWordLocked` synthesizes for the same word today: the word_id
+    // drives the compiled dispatch in `executeResolvedWord`, and the native action is the bail
+    // sentinel behind it. The dispatch id is the baked freeze-time one, not a minted value.
+    const ctx = castHandle(handle_ptr).?.ctx;
+    const seeded = ctx.lookupWord("greet").?;
+    try std.testing.expectEqual(@as(?u32, 5), seeded.word_id);
+    try std.testing.expect(seeded.action == .native);
+    try std.testing.expectEqual(@as(u32, 905), seeded.dispatch_id);
 }
 
 test "root allocator gate matches build mode" {

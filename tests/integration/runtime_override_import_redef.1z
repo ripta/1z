@@ -1,0 +1,17 @@
+\ A definition claiming `override` over an imported name wins the frame binding, and a runtime
+\ redefinition of that name then takes the own-word arity path rather than the import-conflict
+\ guard. In a binary this pins the seed order: the entry-word seed runs after the imports are
+\ restored, so the overriding definition's binding is what the redefinition finds, exactly as
+\ interpreted.
+\
+\ The bare call is the file's last statement, so the raise stays in tail position on every tier.
+
+use { taken: } "def_over_import_mod.1z" ;
+
+taken: override ( -- s ) [ "mine" ] ;
+
+taken print-line
+
+redefine-own: ( -- ) [ taken: ( x -- s ) [ drop "B" ] ; ] ;
+
+redefine-own

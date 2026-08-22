@@ -80,6 +80,37 @@ pub const EntryImport = struct {
     source_module_name: []const u8,
 };
 
+/// One of the entry file's own top-level words: the seed row the generated `main` restores into
+/// the durable entry frame at boot, so a runtime redefinition finds the name where an interpreter
+/// driver would and takes the same guard path.
+///
+/// Snapshotted from the entry's durable frame before freeze pops it, the inverse of the
+/// `EntryImport` filter. The frame is the only complete source: a never-called word is reachable
+/// from no body and so never enters the compiled word list.
+pub const EntryWord = struct {
+    name: []const u8,
+    /// Bare-name effect body ("x y -- z"), or null when the definition declared none. Rendered
+    /// from parameter names alone, annotations stripped, because the boot side re-parses with
+    /// `makeSimpleEffect`, which reads `name: type` as two parameters and would inflate the
+    /// concrete counts the redefinition arity check compares.
+    effect_body: ?[]const u8,
+    /// The word's compiled id, correlated by name from the descriptor list after `buildAotDescs`
+    /// runs, or null when the word was never discovered. Emission additionally validates the id
+    /// against the compiled dispatch table before baking it.
+    word_id: ?u32,
+    /// The definition's own freeze-time dispatch id. Replayed method entries and compiled call
+    /// sites carry freeze-time ids verbatim, so the seeded binding must reuse this identity: a
+    /// runtime-minted id would alias some other word's replayed methods.
+    dispatch_id: u32,
+    /// The definition carried provenance, which exempts it from the redefinition arity check.
+    generated: bool,
+    /// The definition carried the const marker, which refuses redefinition outright.
+    is_const: bool,
+    /// The definition carried the generic marker, so the seeded binding's derived exec flags and
+    /// introspected markers stay faithful.
+    is_generic: bool,
+};
+
 /// One callee a body resolved: the bare name its call sites spell, and the identity string of the
 /// word freeze resolved that name to.
 pub const CalleeBinding = struct {
@@ -124,6 +155,8 @@ pub const FreezeResult = struct {
     inferred_param_storage: []ir_codegen.InferredParamType = &.{},
     /// The entry file's `use` imports.
     entry_imports: []EntryImport = &.{},
+    /// The entry file's own top-level words, the boot-time seed for the durable entry frame.
+    entry_words: []EntryWord = &.{},
     /// Per-body callee resolution, one entry per defining body that resolved at least one callee.
     /// Unordered.
     callee_scopes: []const CalleeScope = &.{},
@@ -169,6 +202,11 @@ pub const FreezeResult = struct {
             allocator.free(ei.source_module_name);
         }
         allocator.free(self.entry_imports);
+        for (self.entry_words) |ew| {
+            allocator.free(ew.name);
+            if (ew.effect_body) |body| allocator.free(body);
+        }
+        allocator.free(self.entry_words);
         for (self.callee_scopes) |scope| allocator.free(scope.bindings);
         allocator.free(self.callee_scopes);
         for (self.identity_storage) |s| allocator.free(s);
@@ -664,7 +702,9 @@ pub fn freezeModuleGraphOpts(
         }
     }
 
-    // Snapshot the entry file's `use` imports before the frame holding them is destroyed.
+    // Snapshot the entry file's `use` imports and its own top-level words before the frame
+    // holding them is destroyed. Imports feed the runtime image's entry-import table; own words
+    // feed the boot seed the generated `main` restores into the durable entry frame.
     var entry_imports_list: std.ArrayListUnmanaged(EntryImport) = .{};
     errdefer {
         for (entry_imports_list.items) |ei| {
@@ -673,21 +713,57 @@ pub fn freezeModuleGraphOpts(
         }
         entry_imports_list.deinit(allocator);
     }
+    var entry_words_list: std.ArrayListUnmanaged(EntryWord) = .{};
+    errdefer {
+        for (entry_words_list.items) |ew| {
+            allocator.free(ew.name);
+            if (ew.effect_body) |body| allocator.free(body);
+        }
+        entry_words_list.deinit(allocator);
+    }
     {
         var frame_it = ctx.local_frames.items[entry_frame_index].iterator();
         while (frame_it.next()) |entry| {
-            if (!entry.value_ptr.imported) continue;
-            const source = entry.value_ptr.source_module orelse continue;
+            if (entry.value_ptr.imported) {
+                const source = entry.value_ptr.source_module orelse continue;
 
-            const name_copy = try allocator.dupe(u8, entry.key_ptr.*);
-            errdefer allocator.free(name_copy);
-            const module_copy = try allocator.dupe(u8, source.name);
-            errdefer allocator.free(module_copy);
+                const name_copy = try allocator.dupe(u8, entry.key_ptr.*);
+                errdefer allocator.free(name_copy);
+                const module_copy = try allocator.dupe(u8, source.name);
+                errdefer allocator.free(module_copy);
 
-            try entry_imports_list.append(allocator, .{
-                .name = name_copy,
-                .source_module_name = module_copy,
-            });
+                try entry_imports_list.append(allocator, .{
+                    .name = name_copy,
+                    .source_module_name = module_copy,
+                });
+            } else {
+                const name_copy = try allocator.dupe(u8, entry.key_ptr.*);
+                errdefer allocator.free(name_copy);
+                const effect_body: ?[]const u8 = if (entry.value_ptr.stack_effect) |eff|
+                    try renderBareEffectBody(allocator, eff.*)
+                else
+                    null;
+                errdefer if (effect_body) |body| allocator.free(body);
+
+                var is_const = false;
+                var is_generic = false;
+                for (entry.value_ptr.markers) |mk| {
+                    if (markers_mod.isConstMarker(mk)) is_const = true;
+                    if (markers_mod.isGenericMarker(mk)) is_generic = true;
+                }
+
+                try entry_words_list.append(allocator, .{
+                    .name = name_copy,
+                    .effect_body = effect_body,
+                    // The frame def's own `word_id` indexes the interpreter's dispatch table, not
+                    // the AOT descriptor space; the correlation below fills the AOT id.
+                    .word_id = null,
+                    .dispatch_id = entry.value_ptr.dispatch_id,
+                    .generated = entry.value_ptr.provenance != null,
+                    .is_const = is_const,
+                    .is_generic = is_generic,
+                });
+            }
         }
     }
 
@@ -708,12 +784,58 @@ pub fn freezeModuleGraphOpts(
     result.interpreted_reach = try allocator.dupe(ir_codegen.InterpretedReachViolation, discovered.interpreted_reach.items);
     result.entry_imports = try entry_imports_list.toOwnedSlice(allocator);
 
+    // Correlate the seed rows to compiled descriptors by name. The frame defs carry no AOT word
+    // ids -- `buildAotDescs` assigns those from its own counter, after the frame walk above -- so
+    // the snapshot's ids are filled here from the module-less non-prelude non-native descriptors,
+    // which are the entry file's own discovered words.
+    //
+    // A name two such descriptors share is ambiguous, so it keeps a null id and the seeded
+    // binding falls to the bail sentinel: a raise on a by-name hit, never a different word's
+    // compiled body.
+    {
+        var id_by_name: std.StringHashMapUnmanaged(?u32) = .{};
+        defer id_by_name.deinit(allocator);
+        for (result.words) |w| {
+            if (w.module != null or w.is_prelude or w.is_native) continue;
+            const gop = try id_by_name.getOrPut(allocator, w.name);
+            gop.value_ptr.* = if (gop.found_existing) null else w.word_id;
+        }
+        for (entry_words_list.items) |*ew| {
+            ew.word_id = if (id_by_name.get(ew.name)) |id| id else null;
+        }
+    }
+    result.entry_words = try entry_words_list.toOwnedSlice(allocator);
+
     // Success: path slices have been duped into result.call_targets. Free
     // the BFS-time originals; the idempotent free renders the errdefer
     // above a no-op if any subsequent step fails.
     freePendingCallTargetPaths(&discovered.pending_call_targets, allocator);
 
     return result;
+}
+
+/// Render `eff` as a bare-name body: parameter names joined by spaces around `--`, type
+/// annotations and quotation effects dropped, row variables kept verbatim.
+///
+/// The boot-side seed re-parses this with `makeSimpleEffect`, whose token-per-parameter model
+/// reads an annotated parameter as two names. Bare names map one token to one parameter, so the
+/// re-parsed effect carries the concrete counts the definition declared, which is all the
+/// redefinition arity check reads.
+fn renderBareEffectBody(allocator: Allocator, eff: StackEffect) ![]const u8 {
+    var buf: std.ArrayListUnmanaged(u8) = .{};
+    errdefer buf.deinit(allocator);
+
+    for (eff.inputs, 0..) |param, i| {
+        if (i > 0) try buf.append(allocator, ' ');
+        try buf.appendSlice(allocator, param.name);
+    }
+    try buf.appendSlice(allocator, " -- ");
+    for (eff.outputs, 0..) |param, i| {
+        if (i > 0) try buf.append(allocator, ' ');
+        try buf.appendSlice(allocator, param.name);
+    }
+
+    return buf.toOwnedSlice(allocator);
 }
 
 /// Phase 2b helper: resolve every unseen callee in `instrs` into the discovered set, descending
@@ -6845,4 +6967,52 @@ test "DisallowedDynamicFeature leaves unresolved-callee hint null for resolved n
 
     try testing.expect(diagnostics.fatal_dynamic_feature != null);
     try testing.expect(diagnostics.unresolved_callee_hint == null);
+}
+
+test "renderBareEffectBody drops parameter suffixes and keeps row variables" {
+    const helpers = @import("primitives/helpers.zig");
+    const alloc = testing.allocator;
+
+    const nested = StackEffect{
+        .inputs = &.{.{ .name = "elem" }},
+        .outputs = &.{.{ .name = "elem2" }},
+    };
+    const inputs = [_]stack_effect_mod.StackEffectParam{
+        .{ .name = "..a", .is_row_variable = true },
+        .{ .name = "x" },
+        .{ .name = "quot", .quotation_effect = &nested },
+    };
+    const outputs = [_]stack_effect_mod.StackEffectParam{
+        .{ .name = "..a", .is_row_variable = true },
+        .{ .name = "res/f" },
+    };
+    const eff = StackEffect{ .inputs = &inputs, .outputs = &outputs };
+
+    const body = try renderBareEffectBody(alloc, eff);
+    defer alloc.free(body);
+    try testing.expectEqualStrings("..a x quot -- ..a res/f", body);
+
+    // The boot seed re-parses with `makeSimpleEffect`; the concrete counts must survive the
+    // round trip, since they are what the redefinition arity check compares.
+    var arena = std.heap.ArenaAllocator.init(alloc);
+    defer arena.deinit();
+    const reparsed = try helpers.makeSimpleEffect(arena.allocator(), body);
+    try testing.expectEqual(eff.concreteInputCount(), reparsed.concreteInputCount());
+    try testing.expectEqual(eff.concreteOutputCount(), reparsed.concreteOutputCount());
+}
+
+test "renderBareEffectBody renders an empty effect makeSimpleEffect reads back as zero counts" {
+    const helpers = @import("primitives/helpers.zig");
+    const alloc = testing.allocator;
+
+    const eff = StackEffect{ .inputs = &.{}, .outputs = &.{} };
+    const body = try renderBareEffectBody(alloc, eff);
+    defer alloc.free(body);
+    try testing.expectEqualStrings(" -- ", body);
+
+    var arena = std.heap.ArenaAllocator.init(alloc);
+    defer arena.deinit();
+    const reparsed = try helpers.makeSimpleEffect(arena.allocator(), body);
+    try testing.expectEqual(@as(usize, 0), reparsed.concreteInputCount());
+    try testing.expectEqual(@as(usize, 0), reparsed.concreteOutputCount());
 }
