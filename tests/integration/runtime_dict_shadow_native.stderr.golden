@@ -1,0 +1,3 @@
+tests/integration/runtime_dict_shadow_native.1z:13: error 'import-conflict' defining 'dup' would shadow a native word at word ';'
+  stack effect: ( name quot --  )
+  hint: add the 'override' marker if intentional

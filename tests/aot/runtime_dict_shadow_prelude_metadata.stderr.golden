@@ -1,0 +1,2 @@
+tests/integration/runtime_dict_shadow_prelude.1z:14: error 'arity-mismatch' arity mismatch on redefinition of 'nip' (was 2 -> 1, now 0 -> 1) at word ';'
+  stack effect: ( name quot --  )

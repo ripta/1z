@@ -1,0 +1,2 @@
+tests/integration/runtime_own_word_redef.1z:16: error 'arity-mismatch' arity mismatch on redefinition of 'val' (was 0 -> 1, now 2 -> 1) at word ';'
+  stack effect: ( name quot --  )

@@ -1,0 +1,15 @@
+\ A runtime definition landing on a same-scope import. The collision sits inside a word body
+\ called from top level, so it fires while the file runs rather than at parse time, and an AOT
+\ build of this file reaches it at binary runtime instead of during the freeze.
+\
+\ The bare call is the file's last statement, so the raise stays in tail position on every tier.
+\ No caller frame row forks the rendering. A configuration that accepts the overwrite in silence
+\ shows as exit 0 with an empty stderr.
+
+use "def_over_import_mod.1z" ;
+
+taken .
+
+clash-import: ( -- ) [ taken: ( -- n ) [ 1 ] ; ] ;
+
+clash-import

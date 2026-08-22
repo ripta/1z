@@ -1388,8 +1388,19 @@ const AotTestEntry = struct {
     /// True for a `.source`-redirected entry, whose stderr golden and exit code live beside the
     /// redirected file and are owned by that suite.
     ///
-    /// `update-aot-golden` skips such entries, so a divergence fails this suite as the parity check.
+    /// `update-aot-golden` never rewrites a shared golden, so a divergence fails this suite as the
+    /// parity check.
+    ///
+    /// The per-entry stdout golden is still updated: stdout is never shared, because the
+    /// integration harness injects `--show-stack`.
     golden_shared: bool,
+    /// True for a redirect entry carrying a hand-written `.exitcode` beside its `.source` sidecar.
+    ///
+    /// The marker pins a rendering that diverges from the redirected suite's: the stderr golden
+    /// and exit code switch to per-entry files in tests/aot, and `update-aot-golden` owns that
+    /// stderr golden. Deleting the `.exitcode` and `.stderr.golden` pair restores the shared
+    /// binding.
+    override_pinned: bool,
 };
 
 fn collectAotTestEntries(b: *std.Build, aot_dir: *std.fs.Dir) ![]const AotTestEntry {
@@ -1408,10 +1419,14 @@ fn collectAotTestEntries(b: *std.Build, aot_dir: *std.fs.Dir) ![]const AotTestEn
         // suite. The entry builds that file and diffs stderr and exit code against the sidecars
         // beside it, so one golden serves both suites.
         //
+        // A hand-written `.exitcode` beside the `.source` sidecar overrides that sharing; see
+        // `override_pinned`.
+        //
         // Stdout is not shareable: the integration harness injects `--show-stack`, whose output a
         // standalone binary never prints, so stdout stays keyed in tests/aot.
         var file_path = b.fmt("tests/aot/{s}", .{entry.name});
         var run_golden_base = b.fmt("tests/aot/{s}", .{name_without_ext});
+        var override_pinned = false;
         if (is_redirect) {
             const raw = blk: {
                 const file = aot_dir.openFile(entry.name, .{}) catch break :blk "";
@@ -1425,6 +1440,11 @@ fn collectAotTestEntries(b: *std.Build, aot_dir: *std.fs.Dir) ![]const AotTestEn
             }
             file_path = b.dupe(redirected);
             run_golden_base = b.dupe(redirected[0 .. redirected.len - 3]);
+
+            if (aot_dir.access(b.fmt("{s}.exitcode", .{name_without_ext}), .{})) |_| {
+                override_pinned = true;
+                run_golden_base = b.fmt("tests/aot/{s}", .{name_without_ext});
+            } else |_| {}
         }
 
         var has_build_stdout_golden = false;
@@ -1600,6 +1620,7 @@ fn collectAotTestEntries(b: *std.Build, aot_dir: *std.fs.Dir) ![]const AotTestEn
             .flags_lines = flags_lines,
             .flags_path = flags_path,
             .golden_shared = is_redirect,
+            .override_pinned = override_pinned,
         }) catch return error.OutOfMemory;
     }
 
@@ -1885,9 +1906,10 @@ fn addAotTests(
             }
         }
 
-        // Update golden. A shared golden is owned by the suite the `.source`
-        // sidecar points into, so this suite never rewrites it.
-        if (!te.golden_shared) {
+        // Update golden. A shared stderr golden is owned by the suite the `.source` sidecar
+        // points into, so this suite rewrites stderr only for its own entries and for
+        // override-pinned redirects. The per-entry stdout golden is always this suite's.
+        {
             const update_compile = b.addSystemCommand(&.{exe_path});
             update_compile.addArg("build");
             update_compile.addArg(b.fmt("--stdlib-path={s}/lib", .{b.build_root.path orelse "."}));
@@ -1915,7 +1937,11 @@ fn addAotTests(
 
             update_files.*.addCopyFileToSource(update_exec.captureStdOut(), te.stdout_golden_path);
 
-            if (te.has_stderr_golden or expected_exit != 0) {
+            const owns_stderr = if (te.golden_shared)
+                te.override_pinned
+            else
+                te.has_stderr_golden or expected_exit != 0;
+            if (owns_stderr) {
                 const update_stderr = update_exec.captureStdErr();
                 const update_normalize = b.addSystemCommand(&.{
                     "sed", "s|[^ ]*\\.zig-cache[^ :]*|<aot>|g",
