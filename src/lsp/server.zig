@@ -1039,7 +1039,7 @@ pub const Server = struct {
         _ = self;
         const stderr_file: std.fs.File = .stderr();
         var stderr_buf: [4096]u8 = undefined;
-        var stderr = stderr_file.writer(&stderr_buf);
+        var stderr = stderr_file.writerStreaming(&stderr_buf);
         stderr.interface.print("[1z-lsp] " ++ fmt ++ "\n", args) catch {};
         stderr.interface.flush() catch {};
     }

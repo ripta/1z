@@ -79,6 +79,7 @@ fn nativeRegisterHook(ctx: *Context) anyerror!void {
 
 /// Fire all hooks registered for the given event name.
 /// Pushes args onto the stack before each hook. Iterates in reverse (LIFO).
+/// Restores the in-flight error state after every hook, failed or not.
 /// On error, logs to stderr and continues with remaining hooks.
 pub fn fireHooks(ctx: *Context, event_name: []const u8, args: []const Value) void {
     const registry = ctx.hook_registry;
@@ -94,18 +95,23 @@ pub fn fireHooks(ctx: *Context, event_name: []const u8, args: []const Value) voi
             ctx.stack.push(arg) catch continue;
         }
 
+        // The hook's error is reported and dropped, so it must not extend or replace the chain
+        // of whatever is propagating around this fire, nor hand its state to the next hook.
+        const saved_error_state = ctx.saveErrorState();
+
         ctx.executeQuotation(quot) catch |err| {
             // Freestanding has no real stderr (STDOUT/STDERR_FILENO are undefined there); this
             // diagnostic is a nicety, not load-bearing, so it's silently skipped on that target.
             if (!builtin.is_test and !is_freestanding) {
                 const stderr_file: std.fs.File = .stderr();
                 var buf: [256]u8 = undefined;
-                var writer = stderr_file.writer(&buf);
+                var writer = stderr_file.writerStreaming(&buf);
                 writer.interface.print("hook error ({s}): {s}\n", .{ event_name, @errorName(err) }) catch {};
                 writer.interface.flush() catch {};
             }
-            continue;
         };
+
+        ctx.restoreErrorState(saved_error_state);
     }
 }
 
@@ -196,16 +202,19 @@ pub fn fireScopedHooks(ctx: *Context, param_name: []const u8, args: []const Valu
             ctx.stack.push(arg) catch continue;
         }
 
+        const saved_error_state = ctx.saveErrorState();
+
         ctx.executeQuotation(quot) catch |err| {
             if (!builtin.is_test and !is_freestanding) {
                 const stderr_file: std.fs.File = .stderr();
                 var buf: [256]u8 = undefined;
-                var writer = stderr_file.writer(&buf);
+                var writer = stderr_file.writerStreaming(&buf);
                 writer.interface.print("scoped hook error ({s}): {s}\n", .{ param_name, @errorName(err) }) catch {};
                 writer.interface.flush() catch {};
             }
-            continue;
         };
+
+        ctx.restoreErrorState(saved_error_state);
     }
 }
 
@@ -283,6 +292,33 @@ test "error resilience" {
     try std.testing.expectEqual(@as(i64, 42), top.fixnum);
     const second = try ctx.stack.pop();
     try std.testing.expectEqual(@as(i64, 99), second.fixnum);
+}
+
+test "a failing hook gives back the error state it overwrote" {
+    var ctx = context_mod.Context.init(std.testing.allocator);
+    defer ctx.deinit();
+    ctx.loadPrelude(null) catch unreachable;
+
+    const alloc = ctx.allocator;
+    const ialloc = ctx.quotationAllocator();
+    const registry = ctx.hook_registry;
+
+    const instrs = try ialloc.alloc(Instruction, 1);
+    instrs[0] = makeInstr(.{ .call_word = "nonexistent-word-for-hook-shield-test" });
+
+    const key = try alloc.dupe(u8, "test-shield");
+    var list = std.ArrayListUnmanaged(StoredHook){};
+    try list.append(alloc, .{ .quot = .{ .instructions = instrs }, .owner = .unit });
+    try registry.hooks.put(alloc, key, list);
+
+    ctx.pending_error_message = "body failed";
+    ctx.appendPendingSyntheticErrorFrame("boom", "<test>", 4, null);
+
+    fireHooks(&ctx, "test-shield", &.{});
+
+    try std.testing.expectEqualStrings("body failed", ctx.pending_error_message.?);
+    try std.testing.expectEqual(@as(usize, 1), ctx.jit_pending_trace_frames.items.len);
+    try std.testing.expectEqualStrings("boom", ctx.jit_pending_trace_frames.items[0].word_name);
 }
 
 test "empty registry" {

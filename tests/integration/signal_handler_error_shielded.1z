@@ -1,0 +1,18 @@
+\ A signal handler's error is dropped by the dispatcher, and the drop must be complete: an
+\ unrelated error raised later renders only its own chain. Before the shield, the handler's
+\ frame survived and rendered as the innermost row of that later error.
+\
+\ `kill` delivers to this process synchronously, and the `drop` that consumes its result is
+\ the safe point where the handler runs. Both sit at this file's top level, which stays
+\ interpreted under eager compilation too, so one golden binds both suites.
+
+use "os/signal" ;
+use "posix" ;
+
+SIGUSR1 [ drop this-word-does-not-exist ] on-signal
+
+getpid SIGUSR1 unmake-signal kill drop
+
+boom: ( -- ) [ f "real error" real-error: make-error throw ] ;
+
+boom

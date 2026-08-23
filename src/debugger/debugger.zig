@@ -144,7 +144,7 @@ pub const Debugger = struct {
 
         const stderr_file: std.fs.File = .stderr();
         var stderr_buf: [4096]u8 = undefined;
-        var stderr = stderr_file.writer(&stderr_buf);
+        var stderr = stderr_file.writerStreaming(&stderr_buf);
         const writer = &stderr.interface;
 
         // Display the current instruction context

@@ -1,0 +1,3 @@
+tests/integration/signal_handler_user_throw.1z:12: error 'handler-error' handler boom at word 'throw'
+  stack effect: ( error --  )
+  called from tests/integration/signal_handler_user_throw.1z:14: drop

@@ -2525,7 +2525,7 @@ export fn onez_print_error(ptr: ?*anyopaque) void {
 
     const stderr_file: std.fs.File = .stderr();
     var stderr_buf: [4096]u8 = undefined;
-    var stderr = stderr_file.writer(&stderr_buf);
+    var stderr = stderr_file.writerStreaming(&stderr_buf);
 
     ctx.finalizeErrorDetails(ctx.jit_pending_error orelse error.UserThrown);
 

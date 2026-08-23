@@ -1,0 +1,14 @@
+\ A signal handler's user throw propagates out of the dispatcher, so the state that raise
+\ wrote belongs to it and must survive: the error keeps its own type and message rather than
+\ degrading to a bare user-thrown line. This is the one dispatch path the error-state shield
+\ deliberately skips.
+\
+\ Same delivery shape as signal_handler_error_shielded.1z: `kill` delivers synchronously and
+\ the following `drop` is the safe point that runs the handler.
+
+use "os/signal" ;
+use "posix" ;
+
+SIGUSR1 [ drop f "handler boom" handler-error: make-error throw ] on-signal
+
+getpid SIGUSR1 unmake-signal kill drop

@@ -1,0 +1,2 @@
+tests/integration/signal_handler_error_shielded.1z:16: error 'real-error' real error at word 'throw'
+  stack effect: ( error --  )

@@ -120,12 +120,20 @@ pub fn checkPendingSignals(ctx: *Context) error{UserThrown}!void {
 
             if (user_handlers[i]) |handler| {
                 ctx.stack.push(.{ .fixnum = @intCast(i) }) catch return;
-                ctx.executeQuotation(handler) catch |err| {
-                    switch (err) {
-                        error.UserThrown => return error.UserThrown,
-                        else => return,
-                    }
+
+                // A dropped handler error must not bleed into whatever the interrupted program
+                // raises next. A user throw is the exception: it propagates from here, so the
+                // state that raise wrote belongs to it and is left in place.
+                const saved_error_state = ctx.saveErrorState();
+                const handler_failed = if (ctx.executeQuotation(handler)) |_|
+                    false
+                else |err| blk: {
+                    if (err == error.UserThrown) return error.UserThrown;
+                    break :blk true;
                 };
+                ctx.restoreErrorState(saved_error_state);
+
+                if (handler_failed) return;
             } else if (i == @as(usize, @intCast(SIG.INT))) {
                 ctx.thrown_error = value_mod.boxErrorObject(ctx.quotationAllocator(), .{
                     .error_type = "interrupted",
@@ -187,6 +195,30 @@ test "checkPendingSignals ignores non-SIGINT with no user handler" {
     try testing.expect(ctx.thrown_error == null);
     // Flag should be cleared
     try testing.expect(!signal_pending[@intCast(SIG.TERM)].load(.acquire));
+}
+
+test "a swallowed handler error gives back the state it overwrote" {
+    var ctx = testContext();
+    defer ctx.deinit();
+
+    const instrs = try ctx.quotationAllocator().alloc(value_mod.Instruction, 1);
+    instrs[0] = .{ .op = .{ .call_word = "nonexistent-word-for-signal-shield-test" }, .line = 1 };
+
+    const signum: u6 = @intCast(SIG.TERM);
+    setUserHandler(signum, .{ .instructions = instrs });
+    defer setUserHandler(signum, null);
+
+    ctx.pending_error_message = "body failed";
+    ctx.appendPendingSyntheticErrorFrame("boom", "<test>", 4, null);
+
+    signal_pending[signum].store(true, .release);
+    defer signal_pending[signum].store(false, .release);
+
+    try checkPendingSignals(&ctx);
+
+    try testing.expectEqualStrings("body failed", ctx.pending_error_message.?);
+    try testing.expectEqual(@as(usize, 1), ctx.jit_pending_trace_frames.items.len);
+    try testing.expectEqualStrings("boom", ctx.jit_pending_trace_frames.items[0].word_name);
 }
 
 test "reset clears all pending flags" {

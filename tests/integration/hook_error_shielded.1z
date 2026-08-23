@@ -1,0 +1,12 @@
+\ A hook's error is reported and dropped, and the drop must be complete: nothing the hook
+\ raised may extend or relocate the chain of an unrelated error raised later. Before the
+\ shield, each swallowed hook error left one stale pending frame, and both rendered as inner
+\ rows of the real error with its innermost location moved to the hook's line. No flags, so
+\ the interpreted and eager suites bind one golden.
+
+on:word-defined [ drop f "hook boom" hook-error: make-error throw ] add-hook
+
+deep: ( -- ) [ f "real error" real-error: make-error throw ] ;
+outer: ( -- ) [ deep ] ;
+
+outer

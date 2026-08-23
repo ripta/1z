@@ -1,0 +1,4 @@
+scoped hook error (word-defined-hooks): UserThrown
+scoped hook error (word-defined-hooks): UserThrown
+tests/integration/hook_error_shielded.1z:9: error 'real-error' real error at word 'throw'
+  stack effect: ( error --  )
