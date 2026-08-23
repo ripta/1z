@@ -183,6 +183,15 @@ pub const Primitive = struct {
     parse_time: bool = false,
     parse_time_only: bool = false,
     effect_transparent: bool = false,
+    /// Whether calling this native can install a word definition. Three ways in: reaching
+    /// `Context.defineWord` / `Context.defineImportedWord` itself, executing arbitrary source that
+    /// does, or invoking a word chosen at runtime that does.
+    ///
+    /// The compiled tier reads it to decide whether a quotation body needs the interpreter's
+    /// transient lexical frame. The set has to stay complete: an unflagged definer lets a
+    /// compiled quotation drop a binding into the durable frame the interpreter keeps it out
+    /// of. A Debug-only assertion at both define choke points holds the set honest.
+    defines_word: bool = false,
     markers: []const *Marker = &.{},
     capability: Capability = .none,
 };
@@ -192,6 +201,8 @@ pub const RegistryEntry = struct {
     func: NativeFn,
     stack_effect: ?[]const u8 = null,
     polymorphic: bool = false,
+    /// Whether calling this native can install a word definition. See `Primitive.defines_word`.
+    defines_word: bool = false,
     capability: Capability = .none,
 };
 

@@ -4903,6 +4903,7 @@ test {
     _ = @import("multiplexer.zig");
     _ = @import("trace.zig");
     _ = @import("call_graph.zig");
+    _ = @import("may_define.zig");
     _ = @import("effect_inference.zig");
     _ = @import("lsp/mod.zig");
     _ = @import("simd.zig");

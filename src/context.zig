@@ -685,6 +685,17 @@ pub const Context = struct {
     /// tasks, until the finalized module publishes through the cache. Written only at
     /// pre-worker-pool or single-context sites, so cross-task readers race with nothing.
     durable_frame_floor: ?usize = null,
+    /// Name of the innermost native primitive whose Zig function is running, with no compiled-code
+    /// or host-callback frame in between. Null outside one.
+    ///
+    /// Bookkeeping for `assertDefiningNativeDeclared`, which is what keeps the `defines_word`
+    /// table complete. Written by `withCurrentNative` at every site that invokes a `NativeFn`.
+    ///
+    /// Cleared on entry to compiled code and to a host callback. Neither runs through a native the
+    /// assertion could name, so a definition made under one is left unattributed.
+    ///
+    /// The field is present in every build, but only a Debug build writes or reads it.
+    current_native: ?[]const u8 = null,
     /// True while a `load` call is executing. Blocking primitives (yield, sleep, await,
     /// await-all, send, receive, select) check this flag and throw an error to prevent yielding
     /// mid-load, which would park the loader with the module's globally visible registry writes
@@ -3452,6 +3463,54 @@ pub const Context = struct {
         return null;
     }
 
+    /// Record `name` as the native in flight for the duration of the caller's scope, restoring
+    /// whatever was in flight before. Definers nest: `;` runs a descriptor's `define:` quotation,
+    /// which calls `define-struct`. The assertion wants the innermost one.
+    ///
+    /// Pass null on entry to compiled code or a host callback. Leaving a stale outer name in place
+    /// there would blame it for a define it did not make.
+    pub fn withCurrentNative(self: *Context, name: ?[]const u8) ?[]const u8 {
+        if (comptime builtin.mode != .Debug) return null;
+        const saved = self.current_native;
+        self.current_native = name;
+        return saved;
+    }
+
+    /// Restore what `withCurrentNative` returned.
+    pub fn restoreCurrentNative(self: *Context, saved: ?[]const u8) void {
+        if (comptime builtin.mode != .Debug) return;
+        self.current_native = saved;
+    }
+
+    /// The `current_native` value an action runs under. A native names itself. A host callback
+    /// clears the slot, since the assertion cannot attribute what host code defines. A body keeps
+    /// whatever is already in flight, so an inner native still names itself.
+    ///
+    /// Takes `anytype` because `WordDefinition.Action` and `ModuleWord.Action` are separate unions
+    /// over the same executable shapes.
+    fn currentNativeFor(action: anytype, name: []const u8, in_flight: ?[]const u8) ?[]const u8 {
+        return switch (action) {
+            .native => name,
+            .host_callback => null,
+            else => in_flight,
+        };
+    }
+
+    /// Every word installed while a native is in flight must come from a native that declared
+    /// `defines_word`. The compiled tier reads that flag to decide whether a quotation body needs
+    /// the interpreter's transient lexical frame, so an unflagged definer silently drops a binding
+    /// into the durable frame the interpreter keeps it out of.
+    ///
+    /// The two define choke points are `defineWordLocked` and `defineImportedWordLocked`. A define
+    /// with nothing in flight is out of scope: prelude registration, the C API, the image loader,
+    /// and anything reached from compiled code all arrive that way.
+    fn assertDefiningNativeDeclared(self: *const Context) void {
+        if (comptime builtin.mode != .Debug) return;
+        const native = self.current_native orelse return;
+        if (primitives.nativeNameDefinesWord(native)) return;
+        std.debug.panic("native '{s}' defines a word but is not marked defines_word", .{native});
+    }
+
     /// Define a word in the current local frame if one exists, otherwise
     /// in global dictionary.
     pub fn defineWord(self: *Context, name: []const u8, definition: WordDefinition) !void {
@@ -3529,6 +3588,8 @@ pub const Context = struct {
     }
 
     fn defineWordLocked(self: *Context, name: []const u8, definition: WordDefinition) !void {
+        self.assertDefiningNativeDeclared();
+
         // The const guard looks through an empty visibility, which admits no module and so skips
         // every `module_deps` frame. A deps frame is execution context for a module's bodies, not
         // a scope definitions land in. A const word visible only through such a frame, e.g.,
@@ -4025,6 +4086,8 @@ pub const Context = struct {
     }
 
     fn defineImportedWordLocked(self: *Context, name: []const u8, definition: WordDefinition) !void {
+        self.assertDefiningNativeDeclared();
+
         // Check only the target frame for dedup, not the full lookup chain.
         // The full lookupWord traverses parent frames, which would suppress
         // imports that the current module needs captured in its own frame
@@ -5886,6 +5949,9 @@ pub const Context = struct {
             self.pushCallFrame(module_path, self.current_source, line, column, module_word.stack_effect);
             defer self.popCallFrame();
 
+            const saved_native = self.withCurrentNative(currentNativeFor(module_word.action, module_path, self.current_native));
+            defer self.restoreCurrentNative(saved_native);
+
             switch (module_word.action) {
                 .native => |func| try func(self),
                 .host_callback => |host| {
@@ -5937,6 +6003,10 @@ pub const Context = struct {
                 trace_mod.traceWord(&tw, name, self.current_source, line, &self.stack);
             }
             defer self.popCallFrame();
+
+            // The bare name, which is how a `native`-module registry entry is keyed.
+            const saved_word_native = self.withCurrentNative(currentNativeFor(mod_word.action, word_name, self.current_native));
+            defer self.restoreCurrentNative(saved_word_native);
 
             // On error, pend this frame before the defer pops it, so a raise inside the
             // body keeps its qualified row.
@@ -7255,6 +7325,8 @@ pub const Context = struct {
                     .capacity = self.stack.items.capacity,
                     .ctx = self,
                 };
+                const saved_native = self.withCurrentNative(null);
+                defer self.restoreCurrentNative(saved_native);
                 const func: ir_codegen.CompiledFn = @ptrCast(@alignCast(ptr));
                 switch (ir_codegen.ExecResult.fromStatus(func(&jit_ctx))) {
                     .ok => return,
@@ -7582,6 +7654,9 @@ pub const Context = struct {
                 }
             }
         }
+
+        const saved_native = self.withCurrentNative(currentNativeFor(word.action, name, self.current_native));
+        defer self.restoreCurrentNative(saved_native);
 
         if (is_last) {
             switch (word.action) {
@@ -8188,6 +8263,7 @@ fn resolveWordForDispatch(name: []const u8, user_data: *anyopaque) ?ir_codegen.R
                 .output_count = @intCast(effect.outputs.len),
                 .is_native = true,
                 .native_fn_ptr = @intFromPtr(func),
+                .defines_word = primitives.nativeDefinesWord(func),
                 .never_returns = hasNeverReturnsMarker(callee.markers),
                 .dispatch_id = callee.dispatch_id,
                 .output_params = output_params,

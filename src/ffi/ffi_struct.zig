@@ -30,7 +30,7 @@ const FfiStructLayout = struct_layout.FfiStructLayout;
 const FfiStructField = struct_layout.FfiStructField;
 
 pub const primitives = [_]Primitive{
-    .{ .name = "define-ffi-struct", .stack_effect = "name: descriptor markers --", .doc = "Define an FFI struct layout type.", .func = nativeDefineFfiStruct },
+    .{ .name = "define-ffi-struct", .stack_effect = "name: descriptor markers --", .doc = "Define an FFI struct layout type.", .func = nativeDefineFfiStruct, .defines_word = true },
 };
 
 pub const registry_entries = [_]RegistryEntry{

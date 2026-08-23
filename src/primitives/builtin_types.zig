@@ -15,7 +15,7 @@ const markers_mod = @import("markers.zig");
 const container_backing = @import("../container_backing.zig");
 
 pub const primitives = [_]Primitive{
-    .{ .name = "define-builtin-type", .stack_effect = "name: descriptor markers --", .doc = "Define a built-in type word from a descriptor map.", .func = nativeDefineBuiltinType },
+    .{ .name = "define-builtin-type", .stack_effect = "name: descriptor markers --", .doc = "Define a built-in type word from a descriptor map.", .func = nativeDefineBuiltinType, .defines_word = true },
 };
 
 pub const registry_entries = [_]RegistryEntry{

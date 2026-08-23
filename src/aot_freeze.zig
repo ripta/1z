@@ -23,6 +23,8 @@ const WordDefinition = dictionary_mod.WordDefinition;
 const markers_mod = @import("primitives/markers.zig");
 const ArtifactClass = markers_mod.ArtifactClass;
 
+const primitives_mod = @import("primitives.zig");
+
 const aot_image = @import("aot_image.zig");
 
 const dispatch_helpers = @import("primitives/dispatch_helpers.zig");
@@ -2974,6 +2976,15 @@ fn hasNeverReturnsMarker(def: WordDefinition) bool {
     return false;
 }
 
+/// Whether a call to this word can install a definition. Only a native can answer here. A compound
+/// carries its body, which the may-define analysis walks instead.
+fn definesWord(def: WordDefinition) bool {
+    return switch (def.action) {
+        .native => |func| primitives_mod.nativeDefinesWord(func),
+        .host_callback, .compound, .literal => false,
+    };
+}
+
 fn hasInterpreterDependentMarker(def: WordDefinition) bool {
     for (def.markers) |mk| {
         if (markers_mod.isInterpreterDependentMarker(mk)) return true;
@@ -3249,6 +3260,10 @@ fn buildAotDescs(
                     if (devirt.provenance) |p| if (p.parent.len > 0) break :blk p.parent;
                     break :blk null;
                 };
+                // No `dispatch_id` here, unlike the arm below: devirtualization fires only for a
+                // single registered method, and that method's body is what this descriptor
+                // carries. The may-define analysis walks it directly, so it needs no way to look
+                // the method up.
                 try appendDesc(&words, &word_identities, allocator, .{
                     .name = name,
                     .module = discovered_word.module,
@@ -3283,6 +3298,10 @@ fn buildAotDescs(
                 .word_id = id,
                 .is_prelude = true,
                 .is_native = true,
+                .defines_word = definesWord(def),
+                // The word's methods are its whole behavior here, so the may-define analysis has
+                // to reach them. It looks them up by this id.
+                .dispatch_id = def.dispatch_id,
                 .stack_effect = effect.*,
                 .never_returns = hasNeverReturnsMarker(def),
                 .source_file = def.source_file,
@@ -3354,6 +3373,7 @@ fn buildAotDescs(
                 .word_id = id,
                 .is_prelude = true,
                 .is_native = true,
+                .defines_word = definesWord(def),
                 .never_returns = hasNeverReturnsMarker(def),
                 .source_file = def.source_file,
                 .source_line = def.source_line,
@@ -3372,6 +3392,7 @@ fn buildAotDescs(
             .word_id = id,
             .is_prelude = true,
             .is_native = true,
+            .defines_word = definesWord(def),
             .native_fn_ptr = blk: {
                 if (def.action != .native) break :blk null;
                 for (def.markers) |mk| {
@@ -3536,6 +3557,10 @@ fn buildAotDescs(
                 .never_returns = entry.never_returns,
                 .is_native = entry.is_native,
                 .native_fn_ptr = entry.native_fn_ptr,
+                .defines_word = entry.defines_word,
+                // The may-define analysis looks a callee's methods up by this id. Effect
+                // inference, this resolver's only other consumer, does not read it.
+                .dispatch_id = entry.dispatch_id,
             };
             if (!entry.is_native) result.body = entry.instructions;
             if (entry.stack_effect) |*eff| {

@@ -28,7 +28,7 @@ const StackEffect = stack_effect_mod.StackEffect;
 const StackEffectParam = stack_effect_mod.StackEffectParam;
 
 pub const primitives = [_]Primitive{
-    .{ .name = "define-struct", .stack_effect = "name: descriptor markers --", .doc = "Define a struct type and its accessor words.", .func = nativeDefineStruct },
+    .{ .name = "define-struct", .stack_effect = "name: descriptor markers --", .doc = "Define a struct type and its accessor words.", .func = nativeDefineStruct, .defines_word = true },
 };
 
 pub const registry_entries = [_]RegistryEntry{

@@ -25,7 +25,7 @@ const Primitive = types_mod.Primitive;
 const RegistryEntry = types_mod.RegistryEntry;
 
 pub const primitives = [_]Primitive{
-    .{ .name = "define-protocol", .stack_effect = "name: descriptor markers --", .doc = "Define a protocol word that validates a type implements all required methods.", .func = nativeDefineProtocol },
+    .{ .name = "define-protocol", .stack_effect = "name: descriptor markers --", .doc = "Define a protocol word that validates a type implements all required methods.", .func = nativeDefineProtocol, .defines_word = true },
     .{ .name = "assert-satisfies", .stack_effect = "type-sym constraint --", .doc = "Throws a protocol-error if the named type does not satisfy the given protocol constraint.", .func = protocolCheckHelper },
     .{ .name = "satisfies?", .stack_effect = "type-sym constraint -- ?", .doc = "Returns t if the named type satisfies the protocol constraint, f otherwise.", .func = nativeSatisfies },
 };

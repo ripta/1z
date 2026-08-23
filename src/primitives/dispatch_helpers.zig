@@ -37,8 +37,14 @@ pub fn executeDispatchBody(ctx: *Context, entry: dispatch_mod.DispatchEntry) !vo
                 try runDispatchQuotation(ctx, q, null);
             }
         },
+        // A registered native method keeps the in-flight name. It is reached through the generic
+        // the caller named, and that generic is what the may-define analysis resolves and flags,
+        // so the generic is the right thing for the define assertion to blame.
         .native_fn => |func| try func(ctx),
+        // Host code is outside the primitive tables and can carry no flag.
         .host_callback => |host| {
+            const saved_native = ctx.withCurrentNative(null);
+            defer ctx.restoreCurrentNative(saved_native);
             const rc = host.callback(host.handle, host.user_data);
             if (rc != 0) return error.HostCallbackFailed;
         },

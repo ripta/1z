@@ -31,8 +31,8 @@ const WordProvenance = dictionary_mod.WordProvenance;
 const WordDefinition = dictionary_mod.WordDefinition;
 
 pub const primitives = [_]Primitive{
-    .{ .name = "define-virtual", .stack_effect = "name: descriptor markers --", .doc = "Define a virtual type and its accessor words.", .func = nativeDefineVirtual },
-    .{ .name = "define-parameterized-type", .stack_effect = "name: descriptor markers --", .doc = "Define a parameterized virtual type from a descriptor map carrying inner-type, element-type, and define fields.", .func = nativeDefineParameterizedType },
+    .{ .name = "define-virtual", .stack_effect = "name: descriptor markers --", .doc = "Define a virtual type and its accessor words.", .func = nativeDefineVirtual, .defines_word = true },
+    .{ .name = "define-parameterized-type", .stack_effect = "name: descriptor markers --", .doc = "Define a parameterized virtual type from a descriptor map carrying inner-type, element-type, and define fields.", .func = nativeDefineParameterizedType, .defines_word = true },
 };
 
 pub const registry_entries = [_]RegistryEntry{

@@ -18,7 +18,7 @@ const popSymbol = helpers.popSymbol;
 
 pub const primitives = [_]Primitive{
     .{ .name = "make-parameter", .stack_effect = "name: quot -- param", .doc = "Create a dynamic parameter with a name and default quotation.", .func = nativeMakeParameter },
-    .{ .name = "define-parameter", .stack_effect = "name: descriptor markers --", .doc = "Define a dynamic parameter word from a descriptor map carrying a 'default' quotation.", .func = nativeDefineParameter },
+    .{ .name = "define-parameter", .stack_effect = "name: descriptor markers --", .doc = "Define a dynamic parameter word from a descriptor map carrying a 'default' quotation.", .func = nativeDefineParameter, .defines_word = true },
     .{ .name = "get", .stack_effect = "param -- value", .doc = "Get the current value of a dynamic parameter.", .func = nativeGet },
     .{ .name = "with-parameter", .stack_effect = "value param quot --", .doc = "Execute quotation with parameter temporarily bound to value.", .func = nativeWithParameter },
 };

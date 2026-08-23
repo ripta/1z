@@ -626,6 +626,10 @@ pub const AotWordDesc = struct {
     /// Used by the AOT resolver to populate ResolvedWord.native_fn_ptr
     /// so emitInlinePicCheck can fire at generic call sites.
     native_fn_ptr: ?usize = null,
+    /// True when calling this word can install a word definition. See `ResolvedWord.defines_word`.
+    /// Carried here rather than derived from `native_fn_ptr`, which the freeze leaves null for a
+    /// non-generic native.
+    defines_word: bool = false,
     /// Full stack effect declaration for this word. Used by the compiler
     /// to track stack shapes through quotation calls.
     stack_effect: ?StackEffect = null,
@@ -1049,6 +1053,11 @@ pub const ResolvedWord = struct {
     /// splicer. Read only at compile time; never baked into emitted code.
     /// Null for natives and for resolvers with no body at hand.
     body: ?[]const Instruction = null,
+    /// True when calling this word can install a word definition, carried from the primitive
+    /// table's `defines_word`. Read by the may-define analysis, which decides whether a compiled
+    /// quotation body needs the interpreter's transient lexical frame. Read only at compile time;
+    /// never baked into emitted code.
+    defines_word: bool = false,
     /// Source file of the callee's definition, or null when unknown. The
     /// compound splicer installs it as `state.source_file` around the spliced
     /// region so frames emitted inside pair the callee's file with the
@@ -10863,6 +10872,7 @@ pub fn emitProgramC(
                 .never_returns = entry.never_returns,
                 .is_native = entry.is_native,
                 .native_fn_ptr = entry.native_fn_ptr,
+                .defines_word = entry.defines_word,
                 .dispatch_id = if (entry.bounded_constraint != null) entry.bounded_dispatch_id else entry.dispatch_id,
                 .bounded_constraint = entry.bounded_constraint,
                 .bounded_arity = entry.bounded_arity,
@@ -15107,7 +15117,11 @@ fn runCompiledDispatchBody(ctx: *Context, entry: dispatch_mod.DispatchEntry) !vo
             }
         },
         .native_fn => |func| try func(ctx),
+        // Matches `executeDispatchBody`: host code is outside the primitive tables, so the define
+        // assertion cannot attribute what it installs.
         .host_callback => |host| {
+            const saved_native = ctx.withCurrentNative(null);
+            defer ctx.restoreCurrentNative(saved_native);
             const rc = host.callback(host.handle, host.user_data);
             if (rc != 0) return error.HostCallbackFailed;
         },
@@ -15126,6 +15140,8 @@ fn runCompiledQuotationBody(ctx: *Context, q: value_mod.Quotation) !void {
         .capacity = ctx.stack.items.capacity,
         .ctx = ctx,
     };
+    const saved_native = ctx.withCurrentNative(null);
+    defer ctx.restoreCurrentNative(saved_native);
     const func: CompiledFn = @ptrCast(@alignCast(ptr));
     switch (ExecResult.fromStatus(func(&jit_ctx))) {
         .ok => {},
@@ -15708,6 +15724,12 @@ pub fn executeCompiled(ctx: *Context, word_id: u32) ExecResult {
     const pending_mark = ctx.jit_pending_trace_frames.items.len;
     const saved_trace_source = ctx.jit_trace_source;
     defer ctx.jit_trace_source = saved_trace_source;
+
+    // Compiled code calls natives through baked function pointers, so nothing sets
+    // `current_native` inside. Clearing it keeps the define assertion from blaming whatever
+    // native was in flight when compiled code was entered.
+    const saved_native = ctx.withCurrentNative(null);
+    defer ctx.restoreCurrentNative(saved_native);
     const entry = ctx.jit_dispatch.get(word_id) orelse blk: {
         var parent = ctx.parent_context;
         while (parent) |p| : (parent = p.parent_context) {

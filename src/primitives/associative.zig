@@ -20,7 +20,9 @@ const data_structures = @import("data_structures.zig");
 const extractKeyString = data_structures.extractKeyString;
 
 pub const primitives = [_]Primitive{
-    .{ .name = "@get", .stack_effect = "assoc key -- value", .doc = "Get value by key from an associative type.", .func = nativeAtGet },
+    // `defines_word`: the module arm invokes the named word when it is a native, so `@get` can
+    // reach any registry entry, `borrow-deps` included. See `nativeAtGetModule`.
+    .{ .name = "@get", .stack_effect = "assoc key -- value", .doc = "Get value by key from an associative type.", .func = nativeAtGet, .defines_word = true },
     .{ .name = "@has?", .stack_effect = "assoc key -- ?", .doc = "Check if key exists in an associative type.", .func = nativeAtHas },
     .{ .name = "@set", .stack_effect = "assoc key value -- assoc'", .doc = "Set value by key, returns new hash.", .func = nativeAtSet },
     .{ .name = "@keys", .stack_effect = "assoc -- array", .doc = "Get all keys from an associative type.", .func = nativeAtKeys },

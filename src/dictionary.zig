@@ -150,6 +150,12 @@ pub const WordDefinition = struct {
 
     /// Invokes this word's action. For native functions, calls the function with the given context.
     pub fn invoke(self: WordDefinition, ctx: *Context) anyerror!void {
+        const saved_native = ctx.withCurrentNative(switch (self.action) {
+            .native => self.name,
+            .host_callback, .compound, .literal => null,
+        });
+        defer ctx.restoreCurrentNative(saved_native);
+
         switch (self.action) {
             .native => |func| try func(ctx),
             .host_callback => |host| {

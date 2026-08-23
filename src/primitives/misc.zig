@@ -24,6 +24,7 @@ const ir_codegen = @import("../ir_codegen.zig");
 const stack_effect_mod = @import("../stack_effect.zig");
 const container_backing = @import("../container_backing.zig");
 const dict_mod = @import("../dictionary.zig");
+const primitives_root = @import("../primitives.zig");
 const embedded_stdlib = @import("../embedded_stdlib.zig");
 const LoadLock = @import("../load_lock.zig").LoadLock;
 const Task = @import("../task.zig").Task;
@@ -32,17 +33,17 @@ const TaskScope = @import("../task.zig").TaskScope;
 const popString = helpers.popString;
 
 pub const primitives = [_]Primitive{
-    .{ .name = "import", .stack_effect = "module --", .doc = "Bring module words into the current scope.", .func = nativeImport },
+    .{ .name = "import", .stack_effect = "module --", .doc = "Bring module words into the current scope.", .func = nativeImport, .defines_word = true },
     .{ .name = ">module", .stack_effect = "name hashtable -- module", .doc = "Convert a name string and a hashtable of quotations into a module value suitable for import.", .func = nativeToModule },
     .{ .name = "1array", .stack_effect = "elem -- array", .doc = "Wrap element in a single-element array.", .func = native1Array },
     .{ .name = "command-line-args", .stack_effect = "-- args", .doc = "Push program arguments as an array of strings.", .func = nativeCommandLineArgs, .capability = .system },
     .{ .name = "sys-exit", .stack_effect = "code --", .doc = "Exit the process with the given exit code.", .func = nativeSysExit, .capability = .system, .markers = &.{@constCast(&markers_mod.never_returns_marker)} },
     .{ .name = "add-load-path", .stack_effect = "path --", .doc = "Add a directory to the load path search list.", .func = nativeAddLoadPath },
-    .{ .name = "eval-string", .stack_effect = "string --", .doc = "Execute a string as 1z code in the caller's scope.", .func = nativeEvalString, .capability = .eval, .markers = &.{ @constCast(&markers_mod.interpreter_dependent_marker), @constCast(&markers_mod.dynamic_eval_marker) } },
+    .{ .name = "eval-string", .stack_effect = "string --", .doc = "Execute a string as 1z code in the caller's scope.", .func = nativeEvalString, .capability = .eval, .defines_word = true, .markers = &.{ @constCast(&markers_mod.interpreter_dependent_marker), @constCast(&markers_mod.dynamic_eval_marker) } },
     .{ .name = "export", .stack_effect = "name --", .doc = "Promote an imported word to a public definition in the current scope.", .func = nativeExport },
     .{ .name = "compile!", .stack_effect = "sym --", .doc = "JIT-compile a word for integer arithmetic. Throws if the word is not found or not compilable.", .func = nativeCompile, .markers = &.{ @constCast(&markers_mod.interpreter_dependent_marker), @constCast(&markers_mod.dynamic_compile_marker) } },
-    .{ .name = "load-file", .stack_effect = "cache filename -- module", .doc = "Load a 1z source file and store the result in the given M{} cache. An already-cached path returns the cached module without re-executing; use `reload-file` to re-execute. Loads serialize on the process-wide load lock, so any worker may load.", .func = nativeLoadFile, .capability = .io_fs, .markers = &.{ @constCast(&markers_mod.interpreter_dependent_marker), @constCast(&markers_mod.dynamic_load_marker) } },
-    .{ .name = "reload-file", .stack_effect = "cache filename -- module", .doc = "Reload a 1z source file, pinned to its original source kind. Reuses the resolved path of an already-cached module instead of re-running the resolver chain, so a module first loaded from the embedded stdlib bundle reloads from the bundle even after a filesystem stdlib becomes available later in the session. Falls back to a fresh resolve when no cached entry exists.", .func = nativeReloadFile, .capability = .io_fs, .markers = &.{ @constCast(&markers_mod.interpreter_dependent_marker), @constCast(&markers_mod.dynamic_load_marker) } },
+    .{ .name = "load-file", .stack_effect = "cache filename -- module", .doc = "Load a 1z source file and store the result in the given M{} cache. An already-cached path returns the cached module without re-executing; use `reload-file` to re-execute. Loads serialize on the process-wide load lock, so any worker may load.", .func = nativeLoadFile, .capability = .io_fs, .defines_word = true, .markers = &.{ @constCast(&markers_mod.interpreter_dependent_marker), @constCast(&markers_mod.dynamic_load_marker) } },
+    .{ .name = "reload-file", .stack_effect = "cache filename -- module", .doc = "Reload a 1z source file, pinned to its original source kind. Reuses the resolved path of an already-cached module instead of re-running the resolver chain, so a module first loaded from the embedded stdlib bundle reloads from the bundle even after a filesystem stdlib becomes available later in the session. Falls back to a fresh resolve when no cached entry exists.", .func = nativeReloadFile, .capability = .io_fs, .defines_word = true, .markers = &.{ @constCast(&markers_mod.interpreter_dependent_marker), @constCast(&markers_mod.dynamic_load_marker) } },
 };
 
 const RegistryEntry = @import("types.zig").RegistryEntry;
@@ -54,8 +55,8 @@ pub const registry_entries = [_]RegistryEntry{
     .{ .name = "import-history", .func = nativeImportHistory, .stack_effect = "-- array" },
     .{ .name = "parse-source-loc", .func = nativeParseSrcLoc, .stack_effect = "-- file line column" },
     .{ .name = "module-name", .func = nativeModuleName, .stack_effect = "module -- name" },
-    .{ .name = "load-check-file", .func = nativeLoadCheckFile, .stack_effect = "cache filename -- module", .capability = .io_fs },
-    .{ .name = "borrow-deps", .func = nativeBorrowDeps, .stack_effect = "source-module target --" },
+    .{ .name = "load-check-file", .func = nativeLoadCheckFile, .stack_effect = "cache filename -- module", .defines_word = true, .capability = .io_fs },
+    .{ .name = "borrow-deps", .func = nativeBorrowDeps, .stack_effect = "source-module target --", .defines_word = true },
 };
 
 fn nativeToModule(ctx: *Context) anyerror!void {
@@ -908,6 +909,7 @@ fn resolveWordForDispatch(name: []const u8, user_data: *anyopaque) ?ir_codegen.R
                 .output_count = @intCast(effect.outputs.len),
                 .is_native = true,
                 .native_fn_ptr = @intFromPtr(func),
+                .defines_word = primitives_root.nativeDefinesWord(func),
                 .stack_effect_ptr = effect_ptr,
                 .never_returns = hasNeverReturnsMarker(callee.markers),
                 .dispatch_id = callee.dispatch_id,
