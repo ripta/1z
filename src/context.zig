@@ -2090,6 +2090,60 @@ pub const Context = struct {
         }
     }
 
+    /// The in-flight error channels as they stood before an execution whose failure the
+    /// caller discards.
+    ///
+    /// The scalars are held by value and the two lists by mark, so a restore can only
+    /// shrink them. That is what lets shields nest: an inner restore lands on the
+    /// pre-execution state exactly, and can never reach below an enclosing shield's mark.
+    pub const ErrorStateSnapshot = struct {
+        message: ?[]const u8,
+        hint: ?[]const u8,
+        dispatch_actual_types: ?[]const u8,
+        dispatch_available_methods: ?[]const u8,
+        thrown: ?*value_mod.ErrorObject,
+        pending_frame_mark: usize,
+        detail_mark: usize,
+    };
+
+    /// Record everything a raise can write, ahead of an execution whose error is swallowed.
+    pub fn saveErrorState(self: *Context) ErrorStateSnapshot {
+        return .{
+            .message = self.pending_error_message,
+            .hint = self.pending_error_hint,
+            .dispatch_actual_types = self.pending_dispatch_actual_types,
+            .dispatch_available_methods = self.pending_dispatch_available_methods,
+            .thrown = self.thrown_error,
+            .pending_frame_mark = self.jit_pending_trace_frames.items.len,
+            .detail_mark = self.error_details.items.len,
+        };
+    }
+
+    /// Give back the state a swallowed error overwrote, so the next error renders only its
+    /// own chain.
+    ///
+    /// A thrown box the swallowed execution installed is discarded here. The box is
+    /// arena-owned, but a refcounted `data` payload is not, so its reference is released.
+    /// The identity check is what keeps an unchanged stash from being released twice, once
+    /// here and once at `deinit`.
+    pub fn restoreErrorState(self: *Context, saved: ErrorStateSnapshot) void {
+        if (self.thrown_error) |thrown| {
+            if (thrown != saved.thrown) {
+                if (thrown.data) |data| container_backing.releaseValue(data.*);
+            }
+        }
+
+        self.pending_error_message = saved.message;
+        self.pending_error_hint = saved.hint;
+        self.pending_dispatch_actual_types = saved.dispatch_actual_types;
+        self.pending_dispatch_available_methods = saved.dispatch_available_methods;
+        self.thrown_error = saved.thrown;
+        self.truncatePendingErrorFrames(saved.pending_frame_mark);
+        if (self.error_details.items.len > saved.detail_mark) {
+            self.error_details.shrinkRetainingCapacity(saved.detail_mark);
+        }
+    }
+
     /// Get the current binding for a parameter by name.
     /// Searches frames from top (innermost) to bottom (outermost).
     /// Returns null if the parameter is not bound in any frame.
@@ -8510,6 +8564,111 @@ test "capture dedupe carries the dropped definition-located frame's effect" {
     try std.testing.expectEqual(@as(usize, 1), ctx.error_details.items.len);
     try std.testing.expectEqual(@as(usize, 15), ctx.error_details.items[0].line);
     try std.testing.expectEqualStrings("( n -- m )", ctx.error_details.items[0].stack_effect_str.?);
+}
+
+test "restoreErrorState gives back every channel a swallowed error overwrote" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const outer_thrown = try value_mod.boxErrorObject(ctx.quotationAllocator(), .{
+        .error_type = "body-error",
+        .message = "body failed",
+    });
+
+    ctx.pending_error_message = "body failed";
+    ctx.pending_error_hint = "try a fixnum";
+    ctx.pending_dispatch_actual_types = "( string )";
+    ctx.pending_dispatch_available_methods = "fixnum, float";
+    ctx.thrown_error = outer_thrown;
+    ctx.appendPendingSyntheticErrorFrame("boom", "<test>", 6, null);
+    try ctx.error_details.append(ctx.allocator, .{
+        .error_type = "body-error",
+        .message = "body failed",
+        .source = "<test>",
+        .line = 6,
+        .word_name = "boom",
+    });
+
+    const saved = ctx.saveErrorState();
+
+    const inner_thrown = try value_mod.boxErrorObject(ctx.quotationAllocator(), .{
+        .error_type = "cleanup-error",
+        .message = "cleanup failed",
+    });
+
+    ctx.pending_error_message = "cleanup failed";
+    ctx.pending_error_hint = null;
+    ctx.pending_dispatch_actual_types = null;
+    ctx.pending_dispatch_available_methods = "symbol";
+    ctx.thrown_error = inner_thrown;
+    ctx.appendPendingSyntheticErrorFrame("spoil", "<test>", 7, null);
+    try ctx.error_details.append(ctx.allocator, .{
+        .error_type = "cleanup-error",
+        .message = "cleanup failed",
+        .source = "<test>",
+        .line = 7,
+        .word_name = "spoil",
+    });
+
+    ctx.restoreErrorState(saved);
+
+    try std.testing.expectEqualStrings("body failed", ctx.pending_error_message.?);
+    try std.testing.expectEqualStrings("try a fixnum", ctx.pending_error_hint.?);
+    try std.testing.expectEqualStrings("( string )", ctx.pending_dispatch_actual_types.?);
+    try std.testing.expectEqualStrings("fixnum, float", ctx.pending_dispatch_available_methods.?);
+    try std.testing.expectEqual(outer_thrown, ctx.thrown_error.?);
+
+    try std.testing.expectEqual(@as(usize, 1), ctx.jit_pending_trace_frames.items.len);
+    try std.testing.expectEqualStrings("boom", ctx.jit_pending_trace_frames.items[0].word_name);
+    try std.testing.expectEqual(@as(usize, 1), ctx.error_details.items.len);
+    try std.testing.expectEqualStrings("boom", ctx.error_details.items[0].word_name.?);
+}
+
+test "restoreErrorState releases a discarded thrown box's refcounted payload" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    // One reference for the box's own claim, one to keep the count inspectable afterwards.
+    const vec = try value_mod.Vector.create(std.testing.allocator);
+    defer vec.header.release();
+    vec.header.retain();
+
+    const saved = ctx.saveErrorState();
+
+    const data = try ctx.quotationAllocator().create(Value);
+    data.* = .{ .vector = vec };
+    ctx.thrown_error = try value_mod.boxErrorObject(ctx.quotationAllocator(), .{
+        .error_type = "cleanup-error",
+        .message = "cleanup failed",
+        .data = data,
+    });
+
+    ctx.restoreErrorState(saved);
+
+    try std.testing.expectEqual(@as(?*value_mod.ErrorObject, null), ctx.thrown_error);
+    try std.testing.expectEqual(@as(u32, 1), vec.header.refcountValue());
+}
+
+test "restoreErrorState keeps the payload of a stash the execution never replaced" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const vec = try value_mod.Vector.create(std.testing.allocator);
+    defer vec.header.release();
+    vec.header.retain();
+
+    const data = try ctx.quotationAllocator().create(Value);
+    data.* = .{ .vector = vec };
+    ctx.thrown_error = try value_mod.boxErrorObject(ctx.quotationAllocator(), .{
+        .error_type = "body-error",
+        .message = "body failed",
+        .data = data,
+    });
+
+    const saved = ctx.saveErrorState();
+    ctx.restoreErrorState(saved);
+
+    try std.testing.expectEqual(@as(u32, 2), vec.header.refcountValue());
 }
 
 test "stack effect validation passes for correct effect" {
