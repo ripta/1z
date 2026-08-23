@@ -222,6 +222,7 @@ comptime {
         @export(&onez_init, .{ .name = "onez_init" });
         @export(&onez_push_entry_frame, .{ .name = "onez_push_entry_frame" });
         @export(&onez_seed_entry_words, .{ .name = "onez_seed_entry_words" });
+        @export(&onez_seed_entry_imports, .{ .name = "onez_seed_entry_imports" });
         @export(&onez_register_base_scope, .{ .name = "onez_register_base_scope" });
         @export(&onez_deinit, .{ .name = "onez_deinit" });
         @export(&onez_freestanding_init_output, .{ .name = "onez_freestanding_init_output" });
@@ -1651,6 +1652,21 @@ fn onez_register_base_scope(
     _ = names;
     _ = sources;
     _ = flags;
+    _ = count;
+    return ONEZ_OK;
+}
+
+/// This runtime has no module cache and no runtime-definition path, so there is nothing to
+/// resolve a row against and no guard the seed would serve. The call succeeds vacuously.
+fn onez_seed_entry_imports(
+    ptr: ?*anyopaque,
+    names: ?[*]const [*:0]const u8,
+    sources: ?[*]const [*:0]const u8,
+    count: u32,
+) callconv(.c) c_int {
+    _ = ptr;
+    _ = names;
+    _ = sources;
     _ = count;
     return ONEZ_OK;
 }

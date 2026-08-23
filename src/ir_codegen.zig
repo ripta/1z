@@ -10453,6 +10453,16 @@ fn entryWordLessThan(_: void, a: EntryWordInput, b: EntryWordInput) bool {
     return std.mem.lessThan(u8, a.name, b.name);
 }
 
+/// Source module breaks a name tie, so the emitted order is total rather than merely sorted.
+fn entryImportLessThan(
+    _: void,
+    a: aot_image_emit_mod.EntryImportInput,
+    b: aot_image_emit_mod.EntryImportInput,
+) bool {
+    if (!std.mem.eql(u8, a.name, b.name)) return std.mem.lessThan(u8, a.name, b.name);
+    return std.mem.lessThan(u8, a.source_module_name, b.source_module_name);
+}
+
 /// Work around ir_emit_c vreg 0 bug: if the emitted C body uses `d_0` but
 /// does not declare it, insert `\tuintptr_t d_0;\n` after the opening brace.
 fn patchMissingD0(body: []u8, allocator: Allocator) Allocator.Error![]u8 {
@@ -10802,6 +10812,7 @@ pub fn emitProgramC(
         \\extern void *onez_init_no_prelude(void);
         \\extern int onez_push_entry_frame(void *rt);
         \\extern int onez_seed_entry_words(void *rt, const char **names, const char **effects, const int32_t *word_ids, const uint32_t *dispatch_ids, const uint8_t *flags, uint32_t count);
+        \\extern int onez_seed_entry_imports(void *rt, const char **names, const char **sources, uint32_t count);
         \\extern int onez_register_base_scope(void *rt, const char **names, const char **sources, const uint8_t *flags, uint32_t count);
         \\extern int onez_set_args(void *ctx, int argc, char **argv);
         \\extern int onez_set_source(void *ctx, const char *data, unsigned long len);
@@ -11850,6 +11861,25 @@ pub fn emitProgramC(
     }
     try out.appendSlice(allocator, "};\n\n");
 
+    // Interpreter-free decision: an AOT binary can drop the interpreter when either the user
+    // explicitly opted out and locked the setting, or auto mode confirmed no fallback was emitted.
+    //
+    // Resolved here, ahead of the seed tables below, because the entry-import seed is emitted only
+    // for the tiers whose image carries no entry-import rows. Every input is final by this point:
+    // the word-emission loop that advances `aot_fallback_emit_count` and the two sites that set
+    // `force_interpreter_linked` all run above.
+    const interpreter_callbacks_emitted = aot_fallback_emit_count > 0;
+    // A serialized interpreter-run method body needs the interpreter linked to execute it, so it
+    // overrides an otherwise interpreter-free auto build. It is only ever set when the interpreter
+    // can be linked, never under `--interpreter-fallback=false --lock-interpreter-setting`, so
+    // this never contradicts a locked-off setting.
+    const interpreter_free = !force_interpreter_linked and switch (interpreter_fallback) {
+        .true => false,
+        .false => lock_interpreter_setting,
+        .auto => !interpreter_callbacks_emitted,
+    };
+    const want_metadata_only = !emit_runtime_image;
+
     // 5b''. Entry-word seed tables: the entry file's own top-level names, which the generated
     // `main` restores into the durable entry frame so a runtime redefinition finds the name where
     // an interpreter driver would put it.
@@ -11917,7 +11947,41 @@ pub fn emitProgramC(
         try out.appendSlice(allocator, "};\n\n");
     }
 
-    // 5b'''. Base-scope tables: the freeze-time content of the frames below the durable floor,
+    // 5b'''. Entry-import seed tables: the entry file's `use` imports, which the generated `main`
+    // seeds into the durable entry frame so a runtime definition over an imported name reports the
+    // import-conflict `1z run` reports.
+    //
+    // Emitted only for the tiers whose image carries no entry-import rows. A runtime-image
+    // interpreter-linked binary restores those rows in the loader, and its bindings carry real
+    // bodies these stubs cannot. The freestanding runtime has no module cache to resolve a row
+    // against, so it emits neither the tables nor the call.
+    //
+    // Sorted by name at this emission boundary, since the freeze-side snapshot is hash-ordered.
+    const sorted_entry_imports = try allocator.dupe(aot_image_emit_mod.EntryImportInput, entry_imports);
+    defer allocator.free(sorted_entry_imports);
+    std.mem.sort(aot_image_emit_mod.EntryImportInput, sorted_entry_imports, {}, entryImportLessThan);
+    const emit_entry_import_seed = sorted_entry_imports.len > 0 and
+        !meta.freestanding and
+        (want_metadata_only or interpreter_free);
+    if (emit_entry_import_seed) {
+        try out.appendSlice(allocator, "static const char *onez_entry_import_names[] = {\n");
+        for (sorted_entry_imports) |ei| {
+            try out.appendSlice(allocator, "    ");
+            try appendCStringLiteral(&out, allocator, ei.name);
+            try out.appendSlice(allocator, ",\n");
+        }
+        try out.appendSlice(allocator, "};\n");
+
+        try out.appendSlice(allocator, "static const char *onez_entry_import_sources[] = {\n");
+        for (sorted_entry_imports) |ei| {
+            try out.appendSlice(allocator, "    ");
+            try appendCStringLiteral(&out, allocator, ei.source_module_name);
+            try out.appendSlice(allocator, ",\n");
+        }
+        try out.appendSlice(allocator, "};\n\n");
+    }
+
+    // 5b''''. Base-scope tables: the freeze-time content of the frames below the durable floor,
     // which the generated `main` registers at boot so the redefinition guards report the same set
     // a `1z run` of the program would.
     //
@@ -11987,23 +12051,6 @@ pub fn emitProgramC(
         try out.appendSlice(allocator, "};\n\n");
     }
 
-    // Interpreter-free decision: an AOT binary can drop the interpreter when
-    // either the user explicitly opted out and locked the setting, or auto
-    // mode confirmed no fallback was emitted. Computed here, before the
-    // image emission, so the image emitter can pick metadata-only vs
-    // full runtime image based on the resolved class.
-    const interpreter_callbacks_emitted = aot_fallback_emit_count > 0;
-    // A serialized interpreter-run method body needs the interpreter linked to
-    // execute it, so it overrides an otherwise interpreter-free auto build. It
-    // is only ever set when the interpreter can be linked (never under
-    // `--interpreter-fallback=false --lock-interpreter-setting`), so this never
-    // contradicts a locked-off setting.
-    const interpreter_free = !force_interpreter_linked and switch (interpreter_fallback) {
-        .true => false,
-        .false => lock_interpreter_setting,
-        .auto => !interpreter_callbacks_emitted,
-    };
-
     // Image emission. Two paths produce distinct image shapes:
     //
     // 1. `--emit-runtime-image` -> full runtime image with executable
@@ -12018,7 +12065,6 @@ pub fn emitProgramC(
     //    TypeValues by name during loader patching, preserving identity
     //    with the dispatch table the prelude reload populates.
     if (interp_ctx) |ctx| {
-        const want_metadata_only = !emit_runtime_image;
         const manifest = image_manifest orelse return IrCodegenError.CompilationFailed;
         const collection = if (image_collection) |*coll| coll else return IrCodegenError.CompilationFailed;
 
@@ -12381,6 +12427,29 @@ pub fn emitProgramC(
         try out.appendSlice(allocator,
             \\) != 0) {
             \\        onez_print_error(rt);
+            \\        onez_deinit(rt);
+            \\        return 1;
+            \\    }
+            \\
+        );
+    }
+
+    // Seed the durable entry frame with the entry file's `use` imports, on the tiers whose image
+    // carries no entry-import rows for the loader to restore.
+    //
+    // Sits after the image hookup because each row is resolved against the module cache the hookup
+    // populates, and before the entry-word seed so an entry word claiming `override` over an
+    // imported name still wins.
+    //
+    // A failed seed is a Zig-side allocation failure with no pending 1z error to render, so the
+    // bail arm skips `onez_print_error`.
+    if (emit_entry_import_seed) {
+        var import_count_buf: [20]u8 = undefined;
+        const import_count_str = std.fmt.bufPrint(&import_count_buf, "{d}", .{sorted_entry_imports.len}) catch unreachable;
+        try out.appendSlice(allocator, "    if (onez_seed_entry_imports(rt, onez_entry_import_names, onez_entry_import_sources, ");
+        try out.appendSlice(allocator, import_count_str);
+        try out.appendSlice(allocator,
+            \\) != 0) {
             \\        onez_deinit(rt);
             \\        return 1;
             \\    }
@@ -16991,6 +17060,69 @@ test "emitProgramC: a module-less word's module row is NULL" {
         \\    NULL,
         \\};
     ) != null);
+}
+
+test "emitProgramC: entry-import seed tables are emitted for a tier whose image drops the rows" {
+    const body_instrs = makeInstructions(.{@as(i64, 1)});
+
+    const words = [_]AotWordDesc{
+        .{ .name = "top-word", .instructions = &body_instrs, .input_count = 0, .output_count = 1, .word_id = 0 },
+    };
+
+    const entry_imports = [_]aot_image_emit_mod.EntryImportInput{
+        .{ .name = "taken", .source_module_name = "modb" },
+        .{ .name = "given", .source_module_name = "moda" },
+    };
+
+    const entry_words = [_]EntryWordInput{
+        .{ .name = "own-word", .effect_body = null, .word_id = null, .dispatch_id = 1, .generated = false, .is_const = false, .is_generic = false },
+    };
+
+    // A metadata-only build: `emit_runtime_image` false, so the loader restores no entry imports
+    // and the seed is what gives the guard its binding.
+    var diag: CodegenDiagnostics = .{};
+    const source = try emitProgramC(&words, &.{}, 0, 0, &.{}, .auto, false, test_aot_metadata, &diag, null, false, &.{}, &entry_imports, &entry_words, &.{}, &.{}, testing.allocator);
+    defer testing.allocator.free(source);
+
+    try testing.expect(std.mem.indexOf(u8, source,
+        \\static const char *onez_entry_import_names[] = {
+        \\    "given",
+        \\    "taken",
+        \\};
+    ) != null);
+    try testing.expect(std.mem.indexOf(u8, source,
+        \\static const char *onez_entry_import_sources[] = {
+        \\    "moda",
+        \\    "modb",
+        \\};
+    ) != null);
+
+    // The seed runs before the entry-word seed, so an entry word claiming `override` over an
+    // imported name still wins, as it does interpreted.
+    const import_pos = std.mem.indexOf(u8, source, "onez_seed_entry_imports(rt, onez_entry_import_names, onez_entry_import_sources, 2)").?;
+    const word_pos = std.mem.indexOf(u8, source, "onez_seed_entry_words(rt").?;
+    try testing.expect(import_pos < word_pos);
+}
+
+test "emitProgramC: a runtime-image interpreter-linked tier emits no entry-import seed" {
+    const body_instrs = makeInstructions(.{@as(i64, 1)});
+
+    const words = [_]AotWordDesc{
+        .{ .name = "top-word", .instructions = &body_instrs, .input_count = 0, .output_count = 1, .word_id = 0 },
+    };
+
+    const entry_imports = [_]aot_image_emit_mod.EntryImportInput{
+        .{ .name = "taken", .source_module_name = "modb" },
+    };
+
+    // The loader restores these rows itself, and its bindings carry real bodies the seed's stubs
+    // cannot, so the seed must stay out of this tier.
+    var diag: CodegenDiagnostics = .{};
+    const source = try emitProgramC(&words, &.{}, 0, 0, &.{}, .true, false, test_aot_metadata, &diag, null, true, &.{}, &entry_imports, &.{}, &.{}, &.{}, testing.allocator);
+    defer testing.allocator.free(source);
+
+    try testing.expect(std.mem.indexOf(u8, source, "onez_entry_import_names") == null);
+    try testing.expect(std.mem.indexOf(u8, source, "onez_seed_entry_imports(rt") == null);
 }
 
 test "emitProgramC: base-scope tables carry the baked names, sources, and generic bits" {

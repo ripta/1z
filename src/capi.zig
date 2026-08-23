@@ -326,6 +326,39 @@ export fn onez_seed_entry_words(
     return ONEZ_OK;
 }
 
+/// Seed the durable entry frame with the entry file's `use` imports, from the baked tables the
+/// freeze emitted. Only a tier whose image carries no entry-import rows emits the call, so a
+/// runtime-image interpreter-linked binary keeps the loader's bindings and their real bodies.
+///
+/// `sources` names each import's defining module, which must already be in the module cache: the
+/// generated `main` calls this after the image hookup for that reason. A row whose module or word
+/// is absent is skipped rather than guessed at.
+///
+/// A boot that never pushed the frame, an embedder's shape, is a no-op success.
+export fn onez_seed_entry_imports(
+    ptr: ?*anyopaque,
+    names: ?[*]const [*:0]const u8,
+    sources: ?[*]const [*:0]const u8,
+    count: u32,
+) c_int {
+    const handle = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
+    const ctx = handle.ctx;
+    if (ctx.image_entry_import_frame == null) return ONEZ_OK;
+    if (count == 0) return ONEZ_OK;
+
+    const names_arr = names orelse return ONEZ_ERR_NULL_VALUE;
+    const sources_arr = sources orelse return ONEZ_ERR_NULL_VALUE;
+
+    var i: u32 = 0;
+    while (i < count) : (i += 1) {
+        ctx.seedEntryImport(
+            std.mem.span(names_arr[i]),
+            std.mem.span(sources_arr[i]),
+        ) catch return ONEZ_ERR_ALLOC;
+    }
+    return ONEZ_OK;
+}
+
 /// Attach the baked base scope to the context, from the tables the freeze emitted: the words the
 /// interpreted probes find in the frames below the durable floor, with their sources and marker
 /// bits. The generated AOT `main` calls this once at boot; the shadow guard's baked rung and the

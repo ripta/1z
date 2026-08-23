@@ -3108,6 +3108,45 @@ pub const Context = struct {
         try frame.put(self.allocator, seed.name, def);
     }
 
+    /// Seed one of the entry file's `use` imports into the durable entry frame at AOT boot, on the
+    /// tiers whose image carries no entry-import rows. The binding exists for the collision
+    /// guards: `imported` routes a runtime definition of the name to the import-conflict guard,
+    /// and the source module supplies the origin that guard's message names.
+    ///
+    /// The body is deliberately not restored, which is what separates this from
+    /// `defineImageEntryImport`. A metadata-only image rehydrates compound words with empty
+    /// instruction streams, so installing one here would shadow the module-cache scan an
+    /// interpreted call otherwise falls through to, turning a working call into a silent no-op.
+    /// The action is the compiled-only bail sentinel instead, so such a reach raises. `word_id`
+    /// still carries the freeze-time id, so a compiled call site dispatches the real body.
+    ///
+    /// Writes the frame without the shared lock: the only caller runs during boot, before any
+    /// worker thread exists. A name already present is left alone, since a binding the loader
+    /// restored carries a real body this one cannot.
+    pub fn seedEntryImport(self: *Context, name: []const u8, source_name: []const u8) !void {
+        const idx = self.image_entry_import_frame orelse return;
+        const frame = &self.local_frames.items[idx];
+        if (frame.contains(name)) return;
+
+        const cached = self.module_cache_value.map.get(source_name) orelse return;
+        if (cached != .module) return;
+        const mod_word = cached.module.words.get(name) orelse return;
+
+        var def: WordDefinition = .{
+            .name = name,
+            .stack_effect = mod_word.stack_effect,
+            .markers = mod_word.markers,
+            .source_module = mod_word.source_module orelse cached.module,
+            .capability = mod_word.capability,
+            .dispatch_id = mod_word.dispatch_id,
+            .word_id = mod_word.word_id,
+            .imported = true,
+            .action = .{ .native = aotCompiledOnlyBailSentinel },
+        };
+        def.exec_flags = computeExecFlags(def);
+        try frame.put(self.allocator, name, def);
+    }
+
     /// Fill `frame` with `module`'s deps then words (words override same-named
     /// deps), synthesizing a `WordDefinition` per entry with `allocator`. Shared
     /// by the template builder and the un-templated fallback in
@@ -9763,6 +9802,95 @@ test "seedEntryWord: seeding advances the mint counter past the baked id" {
     try ctx.defineWord("q1", .{ .name = "q1", .action = .{ .literal = .{ .fixnum = 1 } } });
     const def = ctx.local_frames.items[0].get("q1") orelse return error.TestExpectedDefinition;
     try std.testing.expect(def.dispatch_id > 5000);
+}
+
+/// Stand in for the prelude frame `loadPrelude` pushes and the entry frame
+/// `onez_push_entry_frame` builds at boot, plus one cached module holding `word_name`.
+fn seedEntryImportFixture(ctx: *Context, module_name: []const u8, word_name: []const u8) !void {
+    const noop: dict_mod.NativeFn = struct {
+        fn f(_: *Context) anyerror!void {}
+    }.f;
+
+    try ctx.pushLocalFrame();
+    try ctx.pushLocalFrame();
+    ctx.import_frame_index = 1;
+    ctx.durable_frame_floor = 1;
+    ctx.image_entry_import_frame = 1;
+
+    const arena_alloc = ctx.arena.allocator();
+    const module = try arena_alloc.create(value_mod.Module);
+    module.* = .{ .name = module_name, .words = .{} };
+    try module.words.put(arena_alloc, word_name, .{ .word_id = 42, .action = .{ .native = noop } });
+
+    const cache_alloc = ctx.module_cache_value.header.allocator;
+    try ctx.module_cache_value.map.put(
+        cache_alloc,
+        try cache_alloc.dupe(u8, module_name),
+        .{ .module = module },
+    );
+}
+
+test "seedEntryImport: the seeded binding carries what the import-collision guard reads" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    try seedEntryImportFixture(&ctx, "modc", "probe");
+    try ctx.seedEntryImport("probe", "modc");
+
+    const def = ctx.local_frames.items[1].get("probe") orelse return error.TestExpectedImport;
+    try std.testing.expect(def.imported);
+    try std.testing.expectEqualStrings("modc", (def.source_module orelse return error.TestExpectedModule).name);
+    try std.testing.expectEqual(@as(?u32, 42), def.word_id);
+
+    // The body is deliberately the bail sentinel rather than the module word's action, so an
+    // interpreted reach raises instead of running a metadata-only image's empty stream.
+    try std.testing.expectEqual(Context.aotCompiledOnlyBailSentinel, def.action.native);
+}
+
+test "seedEntryImport: a definition over a seeded import reports the import conflict" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    try seedEntryImportFixture(&ctx, "modc", "probe");
+    try ctx.seedEntryImport("probe", "modc");
+
+    try std.testing.expectError(error.ImportConflict, ctx.defineWord("probe", .{
+        .name = "probe",
+        .action = .{ .literal = .{ .fixnum = 1 } },
+    }));
+    try std.testing.expect(std.mem.indexOf(u8, ctx.pending_error_message.?, "\"modc\"") != null);
+}
+
+test "seedEntryImport: an unresolvable row and an occupied name are both skipped" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    try seedEntryImportFixture(&ctx, "modc", "probe");
+
+    // Neither an absent module nor an absent word is guessed at.
+    try ctx.seedEntryImport("probe", "nowhere");
+    try ctx.seedEntryImport("ghost", "modc");
+    try std.testing.expectEqual(@as(usize, 0), ctx.local_frames.items[1].count());
+
+    // A binding the loader already restored wins: it carries a real body this stub cannot.
+    try ctx.local_frames.items[1].put(ctx.allocator, "probe", .{
+        .name = "probe",
+        .action = .{ .literal = .{ .fixnum = 9 } },
+    });
+    try ctx.seedEntryImport("probe", "modc");
+    const def = ctx.local_frames.items[1].get("probe") orelse return error.TestExpectedImport;
+    try std.testing.expect(!def.imported);
+}
+
+test "seedEntryImport: a boot that never pushed the entry frame seeds nothing" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    try seedEntryImportFixture(&ctx, "modc", "probe");
+    ctx.image_entry_import_frame = null;
+
+    try ctx.seedEntryImport("probe", "modc");
+    try std.testing.expectEqual(@as(usize, 0), ctx.local_frames.items[1].count());
 }
 
 test "anonymous union descriptor flags are inferred by intersection" {
