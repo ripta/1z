@@ -1,0 +1,16 @@
+\ An error raised inside a quotation body that made a definition leaves the transient lexical
+\ frame open: the compiled epilogue's pop is skipped on an error return. The compiled-entry
+\ boundary restores the depth instead.
+\
+\ The probe is the dictionary-shadow guard, which fires only when a definition lands in the import
+\ frame. A stray frame left behind by the unwind would take the definition instead and the guard
+\ would stay silent, so the throw below is what proves the depth came back.
+\
+\ There is no AOT redirect: a freeze executes the entry file's definition statements, so the last
+\ line throws at build time rather than at binary runtime.
+
+raiser: ( -- ) [ [ helper: ( -- n ) [ 1 ] ; f "boom" EUserThrown make-error throw ] call ] ;
+
+[ raiser ] [ drop "caught" ] recover print-line
+
+nip: ( -- y ) [ 0 ] ;

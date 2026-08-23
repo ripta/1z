@@ -260,6 +260,8 @@ comptime {
         @export(&jitCallQuotation, .{ .name = "jitCallQuotation" });
         @export(&jitCallQuotationValue, .{ .name = "jitCallQuotationValue" });
         @export(&jitGet, .{ .name = "jitGet" });
+        @export(&jitPushLexicalFrame, .{ .name = "jitPushLexicalFrame" });
+        @export(&jitPopLexicalFrame, .{ .name = "jitPopLexicalFrame" });
         @export(&jitWithParameter, .{ .name = "jitWithParameter" });
         @export(&jitInterpretedCall, .{ .name = "jitInterpretedCall" });
         @export(&jitNativeWordCall, .{ .name = "jitNativeWordCall" });
@@ -1870,6 +1872,16 @@ fn jitGet(ctx_raw: usize) callconv(.c) i32 {
     }
     setLastError(handle, "parameter binding is not available on this build", .{});
     return 2;
+}
+
+fn jitPushLexicalFrame(ctx_raw: usize) callconv(.c) i32 {
+    _ = ctx_raw;
+    return 0;
+}
+
+fn jitPopLexicalFrame(ctx_raw: usize) callconv(.c) i32 {
+    _ = ctx_raw;
+    return 0;
 }
 
 fn jitWithParameter(ctx_raw: usize) callconv(.c) i32 {

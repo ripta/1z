@@ -1,0 +1,22 @@
+\ The row-aware self-tail-call back-edge is a second route out of a bracketed splice, and it is
+\ AOT-only: this combinator's body collapses to a bounded row, which the ordinary back-edge
+\ declines. See `aot_row_tail_loop.1z` for the same shape without a definition.
+\
+\ The recursing branch defines a word, so the may-define analysis brackets it and the back-edge
+\ has an open transient frame to pop before it jumps. A frame left open would still be on the
+\ stack when `shadow-prelude` runs, and its definition would land there instead of in the entry
+\ frame, so the dictionary-shadow guard's gate would not hold and the throw below would not
+\ happen. One leaked frame is enough to lose it.
+my-times: ( n quot -- ) [
+  over 0 >
+  [ helper: [ 1 ] ; dup 2dip swap -- swap my-times ]
+  [ 2drop ]
+  if
+] ;
+
+\ A word body is bare on every tier, so this definition targets whatever frame is topmost.
+shadow-prelude: ( -- ) [ nip: ( -- y ) [ 0 ] ; ] ;
+
+3 [ ] my-times
+
+shadow-prelude

@@ -2378,6 +2378,18 @@ pub const Context = struct {
         }
     }
 
+    /// Pop local frames until only `mark` remain. Shrink-only.
+    ///
+    /// A compiled body brackets a spliced quotation that may define in a transient lexical frame.
+    /// An error return or a bail leaves before the closing pop, so the compiled-entry boundary
+    /// restores the depth through here. Each frame goes through `popLocalFrame`, so its bindings
+    /// are released and the two fast-path counters stay true.
+    pub fn truncateLocalFrames(self: *Context, mark: usize) void {
+        while (self.local_frames.items.len > mark) {
+            self.popLocalFrame();
+        }
+    }
+
     /// Debug-only invariant: the kind tag array stays index-parallel with the frame array.
     ///
     /// A desync means a push or pop touched one without the other.
@@ -7313,7 +7325,12 @@ pub const Context = struct {
     /// function instead of interpreting instructions.
     pub fn executeQuotationWithFrame(self: *Context, quotation: Quotation) anyerror!void {
         try self.pushLocalFrame();
+        // Truncation before the pop, not instead of it: a spliced quotation body inside the
+        // compiled arm can leave its own transient frame open on an error return, and
+        // `popLocalFrame` pops the top.
+        const frame_mark = self.local_frames.items.len;
         defer self.popLocalFrame();
+        defer self.truncateLocalFrames(frame_mark);
 
         // quotation.code_ptr is never set on freestanding targets.
         if (comptime !is_freestanding) {
@@ -11581,6 +11598,47 @@ test "initForTask: a prelude boot with the entry frame at floor 1 clones nothing
     try std.testing.expectEqual(@as(usize, 0), task_ctx.local_frames.items.len);
     try std.testing.expect(task_ctx.lookupWordLocked("prelude-word", null) != null);
     try std.testing.expect(task_ctx.lookupWordLocked("entry-word", null) != null);
+}
+
+test "truncateLocalFrames: pops down to the mark and releases what it pops" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    try ctx.pushLocalFrame();
+    ctx.import_frame_index = 0;
+    ctx.durable_frame_floor = 0;
+
+    const mark = ctx.local_frames.items.len;
+
+    // Two transient lexical frames above the mark, the shape an error return through nested
+    // bracketed splices leaves behind. Only a non-empty one moves the counter.
+    try ctx.pushLocalFrame();
+    try ctx.defineWord("stray", .{ .name = "stray", .action = .{ .compound = &.{} } });
+    try ctx.pushLocalFrame();
+
+    try std.testing.expectEqual(mark + 2, ctx.local_frames.items.len);
+    try std.testing.expectEqual(@as(usize, 1), ctx.nonempty_transient_lexical_frames);
+
+    ctx.truncateLocalFrames(mark);
+
+    try std.testing.expectEqual(mark, ctx.local_frames.items.len);
+    try std.testing.expectEqual(mark, ctx.local_frame_kinds.items.len);
+    try std.testing.expectEqual(@as(usize, 0), ctx.nonempty_transient_lexical_frames);
+    try std.testing.expect(ctx.lookupWordLocked("stray", null) == null);
+}
+
+test "truncateLocalFrames: a mark at or above the current depth changes nothing" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    try ctx.pushLocalFrame();
+    try ctx.pushLocalFrame();
+
+    ctx.truncateLocalFrames(2);
+    try std.testing.expectEqual(@as(usize, 2), ctx.local_frames.items.len);
+
+    ctx.truncateLocalFrames(9);
+    try std.testing.expectEqual(@as(usize, 2), ctx.local_frames.items.len);
 }
 
 test "initForTask: a spawn during a load captures the load frame as a frozen prefix" {

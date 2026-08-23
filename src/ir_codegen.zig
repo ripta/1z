@@ -30,6 +30,7 @@ const aot_image_mod = @import("aot_image.zig");
 const aot_image_emit_mod = @import("aot_image_emit.zig");
 const bail_stats_mod = @import("bail_stats.zig");
 const ibc = @import("instruction_bytecode.zig");
+const may_define = @import("may_define.zig");
 
 const stack_effect_mod = @import("stack_effect.zig");
 const StackEffect = stack_effect_mod.StackEffect;
@@ -2398,6 +2399,11 @@ const CompileState = struct {
     recover_fn: c.ir_ref = c.IR_UNUSED,
     cleanup_fn: c.ir_ref = c.IR_UNUSED,
     get_fn: c.ir_ref = c.IR_UNUSED,
+    /// References to jitPushLexicalFrame / jitPopLexicalFrame: open and close the transient
+    /// lexical frame a spliced quotation body runs in. Bound unconditionally, because whether a
+    /// body needs the frame is decided during emission, after the pre-scan has run.
+    push_lexical_frame_fn: c.ir_ref = c.IR_UNUSED,
+    pop_lexical_frame_fn: c.ir_ref = c.IR_UNUSED,
     with_parameter_fn: c.ir_ref = c.IR_UNUSED,
     iterator_fn: c.ir_ref = c.IR_UNUSED,
     native_call_fn: c.ir_ref = c.IR_UNUSED,
@@ -2602,6 +2608,16 @@ const CompileState = struct {
     quotation_slots: QuotationSlotMap = .{},
     inline_trace_frames: [max_inline_trace_frames]InlineTraceFrame = undefined,
     inline_trace_frame_count: usize = 0,
+    /// Transient lexical frames opened by enclosing splices and not yet closed. Read where
+    /// control leaves a bracketed region by a route the epilogue pop cannot cover.
+    open_lexical_frames: usize = 0,
+    /// Method bodies registered against a dispatch id, for the may-define analysis. Built on
+    /// first use, since a word with no quotation splice never asks.
+    method_index: ?may_define.DispatchMethodIndex = null,
+    /// May-define answers shared by this state's splice sites, so the callee closure below them is
+    /// descended once. Scoped to the state because the AOT driver rebinds its callee scope per
+    /// compiled body, and an answer only holds while every name resolves the same way.
+    may_define_memo: ?may_define.Memo = null,
     /// Names of the compound words currently being spliced inline on this call path, innermost
     /// last. Guards the compound splicer against cycles and bounds its nesting depth.
     splice_names: [max_splice_depth][]const u8 = undefined,
@@ -4011,6 +4027,11 @@ fn emitRowAwareSelfTailCall(state: *CompileState, stack: []StackEntry, sp: *usiz
     const height_const = c.ir_const_addr(ctx, 1 + ic);
     const height = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_idx, height_const);
     c._ir_STORE(ctx, state.sp_ptr, height);
+
+    // This back-edge leaves a bracketed splice the same way the ordinary one does; see
+    // `emitOpenLexicalFramePops`.
+    emitOpenLexicalFramePops(state);
+
     emitSafepointCall(state);
 
     const loop_end = c._ir_LOOP_END(ctx);
@@ -4811,7 +4832,7 @@ fn emitIfOverRow(
     var true_sp: usize = 1;
     stack[0] = .{ .row_region = state.nextRowId() };
     if (true_body) |tb| {
-        try compileInstructions(state, tb, stack, &true_sp);
+        try compileQuotationBodyInline(state, tb, stack, &true_sp);
     } else {
         emitIfBranchDispatch(state, stack, &true_sp, true_entry.raw_at_slot);
     }
@@ -4835,7 +4856,7 @@ fn emitIfOverRow(
     var false_sp: usize = 1;
     stack[0] = .{ .row_region = state.nextRowId() };
     if (false_body) |fb| {
-        try compileInstructions(state, fb, stack, &false_sp);
+        try compileQuotationBodyInline(state, fb, stack, &false_sp);
     } else {
         emitIfBranchDispatch(state, stack, &false_sp, false_entry.raw_at_slot);
     }
@@ -4969,7 +4990,7 @@ fn compilePredBodyLoop(
     switch (pred_entry) {
         .quotation_body => |q| {
             resetStackToPhysicalPreservingRows(stack, sp.*);
-            try compileInstructions(state, q.body, stack, sp);
+            try compileQuotationBodyInline(state, q.body, stack, sp);
         },
         .raw_at_slot => {
             emitValueQuotCall(state, stack, sp, pred_spill.?, 0, .{ .builtin = .{ .kind = .call, .line = 0 } });
@@ -5004,7 +5025,7 @@ fn compilePredBodyLoop(
     switch (body_source) {
         .quotation => |body| {
             resetStackToPhysicalPreservingRows(stack, sp.*);
-            try compileInstructions(state, body, stack, sp);
+            try compileQuotationBodyInline(state, body, stack, sp);
             if (!symbolicShapeMatches(stack, sp.*, loop_entry_stack, loop_entry_sp)) return IrCodegenError.StackShapeMismatch;
             flushToPhysicalStack(state, stack, sp.*);
         },
@@ -5936,7 +5957,7 @@ fn emitIntrinsicCall(ec: EmitCtx) IrCodegenError!ControlFlow {
                 };
                 state.inline_trace_frame_count += 1;
             }
-            try compileInstructions(state, q.body, stack, sp);
+            try compileQuotationBodyInline(state, q.body, stack, sp);
             if (traceFramesEnabled(state)) state.inline_trace_frame_count = saved_inline_trace_frame_count;
         },
         .raw_at_slot => |s| {
@@ -6278,7 +6299,7 @@ fn spliceDipRetaining(ec: EmitCtx, retain_count: usize) IrCodegenError!ControlFl
         };
         state.inline_trace_frame_count += 1;
     }
-    try compileInstructions(state, body, stack, sp);
+    try compileQuotationBodyInline(state, body, stack, sp);
     if (traceFramesEnabled(state)) state.inline_trace_frame_count = saved_inline_trace_frame_count;
 
     if (state.pic_stats) |ps| ps.inlined += 1;
@@ -6349,7 +6370,7 @@ fn emitIntrinsicChoose(ec: EmitCtx) IrCodegenError!ControlFlow {
                 };
                 state.inline_trace_frame_count += 1;
             }
-            try compileInstructions(state, q.body, stack, sp);
+            try compileQuotationBodyInline(state, q.body, stack, sp);
             if (traceFramesEnabled(state)) state.inline_trace_frame_count = saved_inline_trace_frame_count;
             if (sp.* != output_slot + 3) return IrCodegenError.StackShapeMismatch;
 
@@ -6735,11 +6756,11 @@ fn emitIntrinsicIf(ec: EmitCtx) IrCodegenError!ControlFlow {
                     const saved_exit_kind = state.exit_kind;
                     const saved_loop_end_set = state.loop_end_set;
                     state.exit_kind = .falls_through;
-                    try compileInstructions(state, fb, false_stack, &false_sp);
+                    try compileQuotationBodyInline(state, fb, false_stack, &false_sp);
                     const false_exit_kind = state.exit_kind;
                     state.exit_kind = .falls_through;
                     state.loop_end_set = saved_loop_end_set;
-                    try compileInstructions(state, tb, stack, sp);
+                    try compileQuotationBodyInline(state, tb, stack, sp);
                     if (exitFallsThrough(false_exit_kind) and !symbolicShapeMatches(stack, sp.*, false_stack, false_sp)) return IrCodegenError.StackShapeMismatch;
                     if (!exitFallsThrough(false_exit_kind) and exitFallsThrough(state.exit_kind)) {
                         state.loop_end_set = saved_loop_end_set;
@@ -6752,7 +6773,7 @@ fn emitIntrinsicIf(ec: EmitCtx) IrCodegenError!ControlFlow {
                         state.exit_kind = saved_exit_kind;
                     }
                 } else {
-                    try compileInstructions(state, tb, stack, sp);
+                    try compileQuotationBodyInline(state, tb, stack, sp);
                 }
             } else {
                 // True branch is raw_at_slot: dispatch at runtime.
@@ -6824,6 +6845,11 @@ fn emitIntrinsicIf(ec: EmitCtx) IrCodegenError!ControlFlow {
                 // arms inside real branches, where the emission is safe. The
                 // impure op raises before emitting, so the abandoned trial leaves
                 // only foldable pure code behind.
+                //
+                // The arms compile bare, without the transient-lexical-frame bracket the other
+                // splice sites emit. `armBodyBranchlessEligible` admits no defining call, so no
+                // arm reaching here needs one, and a bracket's push and pop are exactly the
+                // unfoldable emission the discarded trial cannot absorb.
                 state.in_branchless_trial = true;
                 var trial_ok = true;
                 var t_sp = base_sp;
@@ -6930,7 +6956,7 @@ fn emitIntrinsicIf(ec: EmitCtx) IrCodegenError!ControlFlow {
         state.inline_trace_frame_count += 1;
     }
     if (true_body) |tb| {
-        try compileInstructions(state, tb, stack, sp);
+        try compileQuotationBodyInline(state, tb, stack, sp);
     } else {
         // Runtime dispatch for raw_at_slot quotation
         emitIfBranchDispatch(state, stack, sp, true_entry.raw_at_slot);
@@ -6988,7 +7014,7 @@ fn emitIntrinsicIf(ec: EmitCtx) IrCodegenError!ControlFlow {
         state.inline_trace_frame_count += 1;
     }
     if (false_body) |fb| {
-        try compileInstructions(state, fb, saved_stack, &false_sp);
+        try compileQuotationBodyInline(state, fb, saved_stack, &false_sp);
     } else {
         emitIfBranchDispatch(state, saved_stack, &false_sp, false_entry.raw_at_slot);
         const eff = branch_effect.?;
@@ -8057,7 +8083,7 @@ fn emitIntrinsicTimes(ec: EmitCtx) IrCodegenError!ControlFlow {
     switch (quot_entry) {
         .quotation_body => |q| {
             resetStackToPhysicalPreservingRows(stack, sp.*);
-            try compileInstructions(state, q.body, stack, sp);
+            try compileQuotationBodyInline(state, q.body, stack, sp);
             if (!symbolicShapeMatches(stack, sp.*, loop_entry_stack, loop_entry_sp)) return IrCodegenError.StackShapeMismatch;
             // Flush body results back
             flushToPhysicalStack(state, stack, sp.*);
@@ -8150,7 +8176,7 @@ fn emitIntrinsicLoop(ec: EmitCtx) IrCodegenError!ControlFlow {
     switch (pred_entry) {
         .quotation_body => |q| {
             resetStackToPhysicalPreservingRows(stack, sp.*);
-            try compileInstructions(state, q.body, stack, sp);
+            try compileQuotationBodyInline(state, q.body, stack, sp);
         },
         .raw_at_slot => {
             emitValueQuotCall(state, stack, sp, pred_spill.?, ec.line, .{ .builtin = .{ .kind = .call, .line = ec.line } });
@@ -8790,6 +8816,12 @@ fn compileInstructions(
                     // with sp_val items on the physical stack)
                     c._ir_STORE(ctx, state.sp_ptr, state.sp_val);
 
+                    // The back-edge jumps to the function's own loop header, so a transient
+                    // lexical frame opened by an enclosing quotation splice would never reach that
+                    // splice's pop. The compiled-entry boundary only truncates once the word
+                    // returns, so the frames would accumulate for the whole loop.
+                    emitOpenLexicalFramePops(state);
+
                     // Safepoint before looping back
                     emitSafepointCall(state);
 
@@ -8840,6 +8872,11 @@ fn compileInstructions(
                     const tramp_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.jit_ctx_ptr, tramp_off);
                     const target_const = c.ir_const_u32(ctx, resolved.word_id);
                     c._ir_STORE(ctx, tramp_addr, target_const);
+
+                    // The boundary's truncation runs after the whole trampoline loop, not between
+                    // hops, so a transient lexical frame opened by an enclosing quotation splice
+                    // would accumulate one frame per hop.
+                    emitOpenLexicalFramePops(state);
 
                     c._ir_RETURN(ctx, state.trampoline_status);
                     state.exit_kind = .terminal_return;
@@ -9261,6 +9298,9 @@ fn compileWordPass(
     else
         c.IR_UNUSED;
 
+    const push_lexical_frame_fn = c.ir_const_addr(&ctx, @intFromPtr(&jitPushLexicalFrame));
+    const pop_lexical_frame_fn = c.ir_const_addr(&ctx, @intFromPtr(&jitPopLexicalFrame));
+
     const iterator_fn = if (scan_flags.needs_iterators)
         c.ir_const_addr(&ctx, @intFromPtr(&jitIteratorOp))
     else
@@ -9423,6 +9463,8 @@ fn compileWordPass(
         .recover_fn = recover_fn,
         .cleanup_fn = cleanup_fn,
         .get_fn = get_fn,
+        .push_lexical_frame_fn = push_lexical_frame_fn,
+        .pop_lexical_frame_fn = pop_lexical_frame_fn,
         .with_parameter_fn = with_parameter_fn,
         .iterator_fn = iterator_fn,
         .native_call_fn = native_call_fn,
@@ -9450,6 +9492,8 @@ fn compileWordPass(
         .quotation_slots = buildQuotationSlotMap(stack_effect) orelse return IrCodegenError.NotCompilable,
         .source_file = source_file,
     };
+    defer if (state.method_index) |*mi| mi.deinit();
+    defer if (state.may_define_memo) |*m| m.deinit();
 
     // If this word contains a self-tail-call, wrap the body in a LOOP_BEGIN
     // so the self-call becomes a back-edge instead of a recursive native call.
@@ -9625,6 +9669,8 @@ pub fn emitWordC(
     const null_code_ptr_error_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "jitNullCodePtrError"), proto_1arg);
     const append_word_trace_frame_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "onez_append_named_trace_frame"), proto_9arg);
     const append_builtin_trace_frame_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "onez_append_builtin_trace_frame"), proto_5arg);
+    const push_lexical_frame_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "jitPushLexicalFrame"), proto_1arg);
+    const pop_lexical_frame_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "jitPopLexicalFrame"), proto_1arg);
 
     const sp_val = c._ir_LOAD(&ctx, c.IR_ADDR, sp_ptr);
 
@@ -9689,7 +9735,11 @@ pub fn emitWordC(
         .null_code_ptr_error_fn = null_code_ptr_error_fn,
         .append_word_trace_frame_fn = append_word_trace_frame_fn,
         .append_builtin_trace_frame_fn = append_builtin_trace_frame_fn,
+        .push_lexical_frame_fn = push_lexical_frame_fn,
+        .pop_lexical_frame_fn = pop_lexical_frame_fn,
     };
+    defer if (state.method_index) |*mi| mi.deinit();
+    defer if (state.may_define_memo) |*m| m.deinit();
 
     try compileInstructions(&state, instructions, stack, &sp);
 
@@ -9948,6 +9998,9 @@ fn emitWordCAotPass(
     else
         c.IR_UNUSED;
 
+    const push_lexical_frame_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "jitPushLexicalFrame"), proto_1arg);
+    const pop_lexical_frame_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "jitPopLexicalFrame"), proto_1arg);
+
     const iterator_fn = if (scan_flags.needs_iterators)
         c.ir_const_func(&ctx, c.ir_str(&ctx, "jitIteratorOp"), proto_2arg)
     else
@@ -10152,6 +10205,8 @@ fn emitWordCAotPass(
         .recover_fn = recover_fn,
         .cleanup_fn = cleanup_fn,
         .get_fn = get_fn,
+        .push_lexical_frame_fn = push_lexical_frame_fn,
+        .pop_lexical_frame_fn = pop_lexical_frame_fn,
         .with_parameter_fn = with_parameter_fn,
         .iterator_fn = iterator_fn,
         .native_call_fn = native_call_fn,
@@ -10219,6 +10274,8 @@ fn emitWordCAotPass(
         for (state.line_entry_files.items) |f| allocator.free(f);
         state.line_entry_files.deinit(allocator);
     }
+    defer if (state.method_index) |*mi| mi.deinit();
+    defer if (state.may_define_memo) |*m| m.deinit();
 
     // Self-tail-call detection for AOT
     if (self_name) |sn| {
@@ -11678,6 +11735,8 @@ pub fn emitProgramC(
     try out.appendSlice(allocator, "extern int32_t jitRecover(uintptr_t ctx);\n");
     try out.appendSlice(allocator, "extern int32_t jitCleanup(uintptr_t ctx);\n");
     try out.appendSlice(allocator, "extern int32_t jitGet(uintptr_t ctx);\n");
+    try out.appendSlice(allocator, "extern int32_t jitPushLexicalFrame(uintptr_t ctx);\n");
+    try out.appendSlice(allocator, "extern int32_t jitPopLexicalFrame(uintptr_t ctx);\n");
     try out.appendSlice(allocator, "extern int32_t jitWithParameter(uintptr_t ctx);\n");
     try out.appendSlice(allocator, "extern int32_t jitIteratorOp(uintptr_t ctx, uintptr_t opcode);\n");
     try out.appendSlice(allocator, "extern int32_t jitNativeCall(uintptr_t ctx, uintptr_t fn_ptr);\n");
@@ -13192,16 +13251,97 @@ fn refreshCachedStackPointer(state: *CompileState) void {
 fn emitSafepointCall(state: *CompileState) void {
     if (state.safepoint_fn == c.IR_UNUSED) return;
 
-    const ctx_val = if (state.preloaded_ctx_val != c.IR_UNUSED)
-        state.preloaded_ctx_val
-    else blk: {
-        JitContextLayout.ensureInit();
-        const ctx_off = c.ir_const_addr(state.ctx, JitContextLayout.ctx_offset);
-        const ctx_addr = c.ir_fold2(state.ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.jit_ctx_ptr, ctx_off);
-        break :blk c._ir_LOAD(state.ctx, c.IR_ADDR, ctx_addr);
-    };
-    const call_result = c._ir_CALL_1(state.ctx, c.IR_I32, state.safepoint_fn, ctx_val);
+    const call_result = c._ir_CALL_1(state.ctx, c.IR_I32, state.safepoint_fn, ctxValRef(state));
     emitCallbackPostCheck(state, call_result, state.error_propagate_status, null, .none);
+}
+
+/// The interpreter `*Context` as an IR ref at the current position. Reuses the AOT prologue's
+/// preloaded value where there is one; see `emitCallbackPreamble`.
+fn ctxValRef(state: *CompileState) c.ir_ref {
+    if (state.preloaded_ctx_val != c.IR_UNUSED) return state.preloaded_ctx_val;
+
+    JitContextLayout.ensureInit();
+    const ctx_off = c.ir_const_addr(state.ctx, JitContextLayout.ctx_offset);
+    const ctx_addr = c.ir_fold2(state.ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.jit_ctx_ptr, ctx_off);
+    return c._ir_LOAD(state.ctx, c.IR_ADDR, ctx_addr);
+}
+
+/// Open the transient lexical frame a spliced quotation body runs in.
+///
+/// The only failure is an allocation failure inside the frame stack, which propagates like any
+/// other callback failure. No stack pointer is stored first: the helper reads no operands.
+fn emitPushLexicalFrame(state: *CompileState) void {
+    const call_result = c._ir_CALL_1(state.ctx, c.IR_I32, state.push_lexical_frame_fn, ctxValRef(state));
+    emitCallbackPostCheck(state, call_result, state.error_propagate_status, null, .none);
+}
+
+/// Close one transient lexical frame. Cannot fail, so no post-check.
+fn emitPopLexicalFrame(state: *CompileState) void {
+    _ = c._ir_CALL_1(state.ctx, c.IR_I32, state.pop_lexical_frame_fn, ctxValRef(state));
+}
+
+/// Close every transient lexical frame the enclosing splices left open.
+///
+/// Emitted where control leaves a bracketed region by a route the splice's own epilogue pop cannot
+/// follow and the compiled-entry boundary does not immediately reclaim: the self-tail-call
+/// back-edge, which jumps to this function's loop header, and the mutual-recursion trampoline,
+/// whose caller re-dispatches in a loop before it truncates. An ordinary error return needs
+/// nothing here, since it leaves compiled code and the boundary truncates on the way out.
+fn emitOpenLexicalFramePops(state: *CompileState) void {
+    for (0..state.open_lexical_frames) |_| emitPopLexicalFrame(state);
+}
+
+/// Compile a quotation body inline at its call site, in the transient lexical frame the
+/// interpreter would have pushed around it.
+///
+/// The frame is what keeps a definition made during the body's execution out of the durable entry
+/// frame, so the collision guards' gate never fires and the binding pops at body exit. A body the
+/// may-define analysis clears keeps its bare-call cost.
+///
+/// A body that does not fall through gets no pop: the pop would be dead code the C backend cannot
+/// emit after a return. The routes out are covered elsewhere, by `emitOpenLexicalFramePops` where
+/// control jumps or re-dispatches, and by the compiled-entry boundary's truncation where it
+/// returns.
+fn compileQuotationBodyInline(
+    state: *CompileState,
+    body: []const Instruction,
+    stack: []StackEntry,
+    sp: *usize,
+) IrCodegenError!void {
+    if (!quotationBodyNeedsFrame(state, body)) {
+        return compileInstructions(state, body, stack, sp);
+    }
+
+    emitPushLexicalFrame(state);
+    state.open_lexical_frames += 1;
+    defer state.open_lexical_frames -= 1;
+
+    try compileInstructions(state, body, stack, sp);
+
+    if (exitFallsThrough(state.exit_kind)) emitPopLexicalFrame(state);
+}
+
+/// Whether a spliced quotation body can install a word definition, and so needs the frame.
+///
+/// The dispatch-method index is built on first ask, because a word with no quotation splice never
+/// asks. An index that cannot be built leaves the walk with no method visibility, which it answers
+/// conservatively.
+///
+/// Without an interpreter context the emitter has no dispatch table to read, so the analysis has
+/// no answer to give and the body keeps its bare call. That shape is unit-test-only: the two JIT
+/// entry points and the AOT program driver each pass a live context.
+fn quotationBodyNeedsFrame(state: *CompileState, body: []const Instruction) bool {
+    if (state.method_index == null) {
+        const ictx = state.interp_ctx orelse return false;
+        state.method_index = may_define.DispatchMethodIndex.init(state.allocator, &ictx.dispatch) catch return true;
+        state.may_define_memo = may_define.Memo.init(state.allocator);
+    }
+    return may_define.bodyMayDefineCached(
+        body,
+        state.resolver,
+        state.method_index.?.source(),
+        &state.may_define_memo.?,
+    );
 }
 
 /// A compile-time-filtered PIC entry ready for inline emission.
@@ -13981,6 +14121,30 @@ export fn jitGet(ctx_raw: usize) callconv(.c) i32 {
     return 0;
 }
 
+/// Open the transient lexical frame a spliced quotation body runs in.
+///
+/// The interpreter brackets every quotation execution this way, so a definition made during the
+/// execution lands above the import target and pops with the frame. A compiled splice emits this
+/// pair around a body the may-define analysis flagged.
+export fn jitPushLexicalFrame(ctx_raw: usize) callconv(.c) i32 {
+    if (ctx_raw == 0) return 1;
+    const ctx: *Context = @ptrFromInt(ctx_raw);
+    ctx.pushLocalFrame() catch |err| {
+        ctx.jit_pending_error = err;
+        return 2;
+    };
+    return 0;
+}
+
+/// Close what `jitPushLexicalFrame` opened. Skipped on an error return, where the compiled-entry
+/// boundary truncates the frame stack back to its own mark instead.
+export fn jitPopLexicalFrame(ctx_raw: usize) callconv(.c) i32 {
+    if (ctx_raw == 0) return 1;
+    const ctx: *Context = @ptrFromInt(ctx_raw);
+    ctx.popLocalFrame();
+    return 0;
+}
+
 export fn jitWithParameter(ctx_raw: usize) callconv(.c) i32 {
     if (ctx_raw == 0) return 1;
     const ctx: *Context = @ptrFromInt(ctx_raw);
@@ -14081,6 +14245,12 @@ export fn aotTryDispatchGenericOrCall(
     // registered under its word_id.
     const entry = ctx.jit_dispatch.get(@intCast(word_id_raw)) orelse return 1;
     const code_ptr = entry.code_ptr orelse return 1;
+
+    // The default body may splice a flagged quotation body, whose transient lexical frame stays
+    // open on an error return. See `executeCompiled`.
+    const frame_mark = ctx.local_frames.items.len;
+    defer ctx.truncateLocalFrames(frame_mark);
+
     const func: CompiledFn = @ptrCast(@alignCast(code_ptr));
     var jit_ctx = JitContext{
         .items_ptr = ctx.stack.items.items.ptr,
@@ -15132,7 +15302,11 @@ fn runCompiledQuotationBody(ctx: *Context, q: value_mod.Quotation) !void {
     const ptr = q.code_ptr orelse return error.NullCodePtr;
 
     try ctx.pushLocalFrame();
+    // Truncation before the pop, not instead of it: a spliced quotation body inside this one can
+    // leave its own transient frame open on an error return, and `popLocalFrame` pops the top.
+    const frame_mark = ctx.local_frames.items.len;
     defer ctx.popLocalFrame();
+    defer ctx.truncateLocalFrames(frame_mark);
 
     var jit_ctx = JitContext{
         .items_ptr = ctx.stack.items.items.ptr,
@@ -15725,6 +15899,12 @@ pub fn executeCompiled(ctx: *Context, word_id: u32) ExecResult {
     const saved_trace_source = ctx.jit_trace_source;
     defer ctx.jit_trace_source = saved_trace_source;
 
+    // A spliced quotation body the may-define analysis flagged opens a transient lexical frame
+    // and closes it on the way out. An error return or a bail leaves before the close, so the
+    // depth is restored here rather than by the emitted pop.
+    const frame_mark = ctx.local_frames.items.len;
+    defer ctx.truncateLocalFrames(frame_mark);
+
     // Compiled code calls natives through baked function pointers, so nothing sets
     // `current_native` inside. Clearing it keeps the define assertion from blaming whatever
     // native was in flight when compiled code was entered.
@@ -16108,6 +16288,28 @@ fn testCmpBodyPushString(jit_ctx: *JitContext) callconv(.c) i32 {
     jit_ctx.items_ptr = ctx.stack.items.items.ptr;
     jit_ctx.capacity = ctx.stack.items.capacity;
     return 0;
+}
+
+/// Stands in for a compiled body whose flagged quotation splice opened a transient lexical frame
+/// and then raised. The emitted pop never runs on that path, so the frame is the boundary's to
+/// reclaim.
+fn testLeakLexicalFrameThenRaise(jit_ctx: *JitContext) callconv(.c) i32 {
+    const ctx: *Context = @ptrCast(@alignCast(jit_ctx.ctx));
+    ctx.pushLocalFrame() catch return 1;
+    ctx.jit_pending_error = error.UserThrown;
+    return 2;
+}
+
+test "executeCompiled: an error return reclaims a transient frame the body left open" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    const word_id = try ctx.jit_dispatch.assignId("leaky");
+    ctx.jit_dispatch.setCodePtr(word_id, @ptrCast(&testLeakLexicalFrameThenRaise));
+
+    const before = ctx.local_frames.items.len;
+    try testing.expectEqual(ExecResult.error_propagate, executeCompiled(&ctx, word_id));
+    try testing.expectEqual(before, ctx.local_frames.items.len);
 }
 
 /// Define a generic word so it has a resolvable dispatch id, and assign it a compiled-call word id.
@@ -19701,6 +19903,98 @@ test "emitWordCAot basic arithmetic" {
     try testing.expect(std.mem.indexOf(u8, source, "return") != null);
     // No preamble -- caller adds it
     try testing.expect(!std.mem.startsWith(u8, source, "#include"));
+}
+
+/// Resolve `noop` as an inert native and `;` as a defining one, the two answers the may-define
+/// analysis reads off a callee. Both leave the stack where they found it, so a body built from
+/// them needs no other word to balance.
+fn resolveDefineFamilyForTest(name: []const u8, user_data: *anyopaque) ?ResolvedWord {
+    _ = user_data;
+    if (std.mem.eql(u8, name, "noop")) {
+        return .{ .word_id = 0, .input_count = 0, .output_count = 0, .is_native = true };
+    }
+    if (std.mem.eql(u8, name, ";")) {
+        return .{ .word_id = 1, .input_count = 2, .output_count = 0, .is_native = true, .defines_word = true };
+    }
+    return null;
+}
+
+var define_family_resolver_dummy: u8 = 0;
+
+const define_family_resolver = WordResolver{
+    .resolve = &resolveDefineFamilyForTest,
+    .user_data = @ptrCast(&define_family_resolver_dummy),
+    .dispatch_table_ptr = @ptrCast(&define_family_resolver_dummy),
+};
+
+/// Emit AOT C for `[ body ] call` under a resolver that knows the define family. The context is
+/// what gives the may-define walk its method visibility, so the splice decision is the analysis's
+/// rather than the no-context default's.
+fn emitCallOverQuotationForTest(ctx: *const Context, body: []const Instruction) ![]u8 {
+    const instrs = [_]Instruction{
+        .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = body } } }, .line = 1 },
+        .{ .op = .{ .call_word = "call" }, .line = 1 },
+    };
+    var compiled_names: std.StringHashMapUnmanaged(u32) = .{};
+    defer compiled_names.deinit(testing.allocator);
+
+    return emitWordCAot(
+        &instrs,
+        0,
+        0,
+        "wrapper",
+        define_family_resolver,
+        null,
+        &compiled_names,
+        .{},
+        null,
+        null,
+        null,
+        testing.allocator,
+        null,
+        &.{},
+        null,
+        null,
+        null,
+        ctx,
+        null,
+        null,
+        null,
+        null,
+        false,
+        null,
+        false,
+        false,
+        false,
+    );
+}
+
+test "a spliced body that cannot define keeps its bare call" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    const body = [_]Instruction{.{ .op = .{ .call_word = "noop" }, .line = 1 }};
+    const source = try emitCallOverQuotationForTest(&ctx, &body);
+    defer testing.allocator.free(source);
+
+    try testing.expect(std.mem.indexOf(u8, source, "jitPushLexicalFrame(") == null);
+}
+
+test "a spliced body that may define is bracketed in a transient lexical frame" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    const body = [_]Instruction{
+        .{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 1 },
+        .{ .op = .{ .push_literal = .{ .fixnum = 2 } }, .line = 1 },
+        .{ .op = .{ .call_word = ";" }, .line = 1 },
+    };
+    const source = try emitCallOverQuotationForTest(&ctx, &body);
+    defer testing.allocator.free(source);
+
+    const push_at = std.mem.indexOf(u8, source, "jitPushLexicalFrame(") orelse return error.NoBracket;
+    const pop_at = std.mem.indexOf(u8, source, "jitPopLexicalFrame(") orelse return error.NoBracket;
+    try testing.expect(push_at < pop_at);
 }
 
 test "emitWordCAot quotation call emits code_ptr dispatch" {

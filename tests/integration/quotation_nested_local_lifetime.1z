@@ -1,0 +1,9 @@
+\ A binding made inside a called quotation pops with the quotation's transient lexical frame, so
+\ it is gone by the time the next statement runs.
+\
+\ The probe is `>word-info?` rather than a call: a call to the name would fail the freeze as an
+\ unknown word, and no binary reaching the persisted binding would exist to test.
+
+[ (gone): ( -- n ) [ 1 ] ; ] call
+
+(gone): >word-info? option:some? [ "still bound" ] [ "gone at body exit" ] if print-line

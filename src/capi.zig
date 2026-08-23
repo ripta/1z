@@ -2489,6 +2489,14 @@ export fn onez_runtime_run(ptr: ?*anyopaque, entry_word_id: u32) i32 {
     const handle = castHandle(ptr) orelse return 1;
     const ctx = handle.ctx;
 
+    // The binary's outermost compiled-entry boundary. A spliced quotation body the may-define
+    // analysis flagged opens a transient lexical frame, and an error return leaves before its
+    // pop, so the depth is restored here. The generated `main` fires the `on:exit` hooks after
+    // this returns, and a stray frame would put that interpreted code in a scope the failed run
+    // bound names into.
+    const frame_mark = ctx.local_frames.items.len;
+    defer ctx.truncateLocalFrames(frame_mark);
+
     const entry = ctx.jit_dispatch.get(entry_word_id) orelse return 1;
     var code_ptr = entry.code_ptr orelse return 1;
 

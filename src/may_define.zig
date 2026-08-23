@@ -11,9 +11,15 @@
 //! the interpreter keeps it out of. So every construct the walk cannot see through answers true.
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 
 const value_mod = @import("value.zig");
 const Instruction = value_mod.Instruction;
+
+const dispatch_mod = @import("dispatch.zig");
+const DispatchTable = dispatch_mod.DispatchTable;
+
+const primitives = @import("primitives.zig");
 
 const ir_codegen = @import("ir_codegen.zig");
 const WordResolver = ir_codegen.WordResolver;
@@ -22,8 +28,7 @@ const WordResolver = ir_codegen.WordResolver;
 const max_depth = 32;
 
 /// Most call instructions the walk resolves before giving up and answering true. Bounds the
-/// exponential blow-up a diamond-shaped call graph would otherwise cost, since the walk memoizes
-/// nothing.
+/// blow-up a diamond-shaped call graph costs on the paths a `Memo` cannot shorten.
 const max_visits = 4096;
 
 /// Supplies the method bodies registered against a dispatch id.
@@ -45,6 +50,9 @@ pub const MethodSource = struct {
     user_data: *anyopaque,
 };
 
+/// `Walk.cycle_floor` when no back edge has been seen. Above every reachable depth.
+const no_cycle = std.math.maxInt(usize);
+
 /// Identity of a body on the walk's path. Address and length both, so a body and a sub-slice view
 /// of it are two nodes rather than one.
 const BodyKey = struct { ptr: usize, len: usize };
@@ -53,14 +61,50 @@ fn bodyKey(body: []const Instruction) BodyKey {
     return .{ .ptr = @intFromPtr(body.ptr), .len = body.len };
 }
 
+/// Answers carried between walks, so the callee closure below a body is descended once rather
+/// than once per splice site.
+///
+/// Only an answer the walk reached without a path-dependent shortcut is stored. A back edge and an
+/// exhausted budget each answer from where the walk happens to be rather than from the body alone.
+/// A budget is the walk's, so exhausting one stops caching outright; a cycle is local, so it stops
+/// caching only for the bodies between the back edge and the one it points at.
+///
+/// A memo is valid only while every name resolves the same way, which means one resolver binding.
+/// The AOT driver rebinds its callee scope per compiled body, so a memo lives exactly as long as
+/// the `CompileState` that owns it.
+pub const Memo = struct {
+    entries: std.AutoHashMapUnmanaged(BodyKey, bool) = .{},
+    allocator: Allocator,
+
+    pub fn init(allocator: Allocator) Memo {
+        return .{ .allocator = allocator };
+    }
+
+    pub fn deinit(self: *Memo) void {
+        self.entries.deinit(self.allocator);
+    }
+};
+
 /// One traversal's scratch. Public so a `MethodSource` can re-enter the walk it was called from.
 pub const Walk = struct {
     resolver: ?WordResolver,
     methods: ?MethodSource,
+    memo: ?*Memo = null,
     /// Bodies currently being walked, innermost last.
     on_path: [max_depth]BodyKey = undefined,
     depth: usize = 0,
     visits: usize = max_visits,
+    /// Shallowest depth a back edge in the current subtree pointed at, or `no_cycle`.
+    ///
+    /// A back edge answers from where the walk is rather than from the body alone, so every body
+    /// between the edge and the one it targets is uncacheable. The body it targets is not: the
+    /// walk entered the cycle there and explored all of it, so that answer is complete. Tracking
+    /// the shallowest target is what tells those two apart, and it is what keeps one recursive
+    /// prelude word from poisoning every body above it.
+    cycle_floor: usize = no_cycle,
+    /// Whether the walk ran out of depth or visits. Both budgets are the walk's, not the body's,
+    /// so nothing reached after one is exhausted can be cached.
+    exhausted: bool = false,
 
     /// Whether executing `body` can install a word definition.
     ///
@@ -75,18 +119,54 @@ pub const Walk = struct {
         //
         // Checked on entry rather than at the recursion site, so a `MethodSource` re-entering the
         // walk is covered by the same guard.
-        if (self.onPath(body)) return false;
+        if (self.onPath(body)) |target| {
+            self.cycle_floor = @min(self.cycle_floor, target);
+            return false;
+        }
 
-        if (self.depth == max_depth) return true;
+        if (self.depth == max_depth) {
+            self.exhausted = true;
+            return true;
+        }
 
-        self.on_path[self.depth] = bodyKey(body);
+        const key = bodyKey(body);
+        if (self.memo) |m| {
+            if (m.entries.get(key)) |cached| return cached;
+        }
+
+        const own_depth = self.depth;
+        self.on_path[own_depth] = key;
         self.depth += 1;
-        defer self.depth -= 1;
 
+        const enclosing_floor = self.cycle_floor;
+        self.cycle_floor = no_cycle;
+
+        const answer = self.walkCalls(body);
+
+        const subtree_floor = self.cycle_floor;
+        self.depth -= 1;
+
+        // A cycle reaching this body or deeper is closed here, so it constrains nothing above.
+        // One reaching past it leaves this body's answer resting on where the walk came from.
+        const closed_here = subtree_floor >= own_depth;
+        self.cycle_floor = if (closed_here) enclosing_floor else @min(enclosing_floor, subtree_floor);
+
+        if (closed_here and !self.exhausted) {
+            if (self.memo) |m| m.entries.put(m.allocator, key, answer) catch {};
+        }
+        return answer;
+    }
+
+    /// The body's own top-level calls. Split out so `bodyMayDefine` owns the path, taint, and memo
+    /// bookkeeping at one exit rather than at each of these returns.
+    fn walkCalls(self: *Walk, body: []const Instruction) bool {
         for (body) |instr| {
             if (!instr.op.isCall()) continue;
 
-            if (self.visits == 0) return true;
+            if (self.visits == 0) {
+                self.exhausted = true;
+                return true;
+            }
             self.visits -= 1;
 
             const name = instr.op.callTargetName().?;
@@ -110,21 +190,84 @@ pub const Walk = struct {
         return false;
     }
 
-    /// Whether `body` is already being walked further out.
-    fn onPath(self: *const Walk, body: []const Instruction) bool {
+    /// The depth at which `body` is already being walked further out, or null.
+    fn onPath(self: *const Walk, body: []const Instruction) ?usize {
         const key = bodyKey(body);
-        for (self.on_path[0..self.depth]) |seen| {
-            if (seen.ptr == key.ptr and seen.len == key.len) return true;
+        for (self.on_path[0..self.depth], 0..) |seen, i| {
+            if (seen.ptr == key.ptr and seen.len == key.len) return i;
+        }
+        return null;
+    }
+};
+
+/// Whether executing `body` can install a word definition, descending fresh. See
+/// `Walk.bodyMayDefine`.
+pub fn bodyMayDefine(body: []const Instruction, resolver: ?WordResolver, methods: ?MethodSource) bool {
+    return bodyMayDefineCached(body, resolver, methods, null);
+}
+
+/// Whether executing `body` can install a word definition, reusing and extending `memo`.
+pub fn bodyMayDefineCached(
+    body: []const Instruction,
+    resolver: ?WordResolver,
+    methods: ?MethodSource,
+    memo: ?*Memo,
+) bool {
+    var walk = Walk{ .resolver = resolver, .methods = methods, .memo = memo };
+    return walk.bodyMayDefine(body);
+}
+
+/// A `MethodSource` over a live dispatch table.
+///
+/// The walk queries a method source once per resolved callee, thousands of times over one word's
+/// compilation, so the query has to be a hash lookup. One scan groups the registered bodies by
+/// dispatch id up front; a callee whose id owns none then answers without reading the table at all.
+///
+/// The grouping is structural, so building it cannot interact with the walk's cycle bookkeeping. A
+/// per-id result memo would: the walk answers false for a back edge, and caching that answer would
+/// hand it to a later query that is not on the cycle.
+pub const DispatchMethodIndex = struct {
+    groups: std.AutoHashMapUnmanaged(u32, std.ArrayListUnmanaged(dispatch_mod.DispatchBody)) = .{},
+    allocator: Allocator,
+
+    pub fn init(allocator: Allocator, table: *const DispatchTable) !DispatchMethodIndex {
+        var self = DispatchMethodIndex{ .allocator = allocator };
+        errdefer self.deinit();
+
+        var it = table.entries.iterator();
+        while (it.next()) |entry| {
+            const gop = try self.groups.getOrPut(allocator, entry.key_ptr.dispatch_id);
+            if (!gop.found_existing) gop.value_ptr.* = .{};
+            try gop.value_ptr.append(allocator, entry.value_ptr.body);
+        }
+        return self;
+    }
+
+    pub fn deinit(self: *DispatchMethodIndex) void {
+        var it = self.groups.valueIterator();
+        while (it.next()) |bodies| bodies.deinit(self.allocator);
+        self.groups.deinit(self.allocator);
+    }
+
+    pub fn source(self: *DispatchMethodIndex) MethodSource {
+        return .{ .anyMethodMayDefine = &DispatchMethodIndex.anyMethodMayDefine, .user_data = @ptrCast(self) };
+    }
+
+    fn anyMethodMayDefine(user_data: *anyopaque, dispatch_id: u32, walk: *Walk) bool {
+        const self: *const DispatchMethodIndex = @ptrCast(@alignCast(user_data));
+        const bodies = self.groups.getPtr(dispatch_id) orelse return false;
+
+        for (bodies.items) |body| {
+            switch (body) {
+                .quotation => |q| if (walk.bodyMayDefine(q.instructions)) return true,
+                .native_fn => |func| if (primitives.nativeDefinesWord(func)) return true,
+                // Host code is outside the primitive tables, so nothing declares what it installs.
+                .host_callback => return true,
+            }
         }
         return false;
     }
 };
-
-/// Whether executing `body` can install a word definition. See `Walk.bodyMayDefine`.
-pub fn bodyMayDefine(body: []const Instruction, resolver: ?WordResolver, methods: ?MethodSource) bool {
-    var walk = Walk{ .resolver = resolver, .methods = methods };
-    return walk.bodyMayDefine(body);
-}
 
 // =============================================================================
 // Tests
@@ -403,4 +546,191 @@ test "exhausting the visit budget flags" {
     for (&body) |*instr| instr.* = call("dup");
     var data = TestResolver{ .words = &.{dup} };
     try std.testing.expect(bodyMayDefine(body[0..], data.resolver(), noMethods()));
+}
+
+// --- Memo ---
+
+/// Answer `body` cold, then twice more against one memo, and require all three to agree.
+///
+/// The second call is the one that can read what the first stored, so a wrong cache entry shows up
+/// as a disagreement rather than as a shape the caller has to know to look for.
+fn agreesAcrossMemo(body: []const Instruction, resolver: ?WordResolver, methods: ?MethodSource) !bool {
+    const cold = bodyMayDefine(body, resolver, methods);
+
+    var memo = Memo.init(std.testing.allocator);
+    defer memo.deinit();
+
+    try std.testing.expectEqual(cold, bodyMayDefineCached(body, resolver, methods, &memo));
+    try std.testing.expectEqual(cold, bodyMayDefineCached(body, resolver, methods, &memo));
+    return cold;
+}
+
+test "a memo answers a definition-free chain the same way twice" {
+    const inner_body = [_]Instruction{call("dup")};
+    const middle_body = [_]Instruction{call("inner")};
+    var data = TestResolver{ .words = &.{
+        dup,
+        .{ .name = "inner", .body = &inner_body },
+        .{ .name = "middle", .body = &middle_body },
+    } };
+    const body = [_]Instruction{call("middle")};
+    try std.testing.expect(!try agreesAcrossMemo(&body, data.resolver(), noMethods()));
+}
+
+test "a memo answers a transitive definer the same way twice" {
+    const inner_body = [_]Instruction{call(";")};
+    const middle_body = [_]Instruction{call("inner")};
+    var data = TestResolver{ .words = &.{
+        semicolon,
+        .{ .name = "inner", .body = &inner_body },
+        .{ .name = "middle", .body = &middle_body },
+    } };
+    const body = [_]Instruction{call("middle")};
+    try std.testing.expect(try agreesAcrossMemo(&body, data.resolver(), noMethods()));
+}
+
+test "a memo does not carry a back edge's answer out of its cycle" {
+    // `b` answers true only because it calls `;` itself; the `false` the walk gives at the `a`
+    // back edge is the shape a memo must not store for `a`.
+    const a_body = [_]Instruction{call("b")};
+    const b_body = [_]Instruction{ call("a"), call(";") };
+    var data = TestResolver{ .words = &.{
+        semicolon,
+        .{ .name = "a", .body = &a_body },
+        .{ .name = "b", .body = &b_body },
+    } };
+    try std.testing.expect(try agreesAcrossMemo(&a_body, data.resolver(), noMethods()));
+    try std.testing.expect(try agreesAcrossMemo(&b_body, data.resolver(), noMethods()));
+
+    // Both entries through one memo, so the second reads whatever the first left.
+    var memo = Memo.init(std.testing.allocator);
+    defer memo.deinit();
+    try std.testing.expect(bodyMayDefineCached(&a_body, data.resolver(), noMethods(), &memo));
+    try std.testing.expect(bodyMayDefineCached(&b_body, data.resolver(), noMethods(), &memo));
+}
+
+test "a memo stores the body a cycle closes at, and not the ones inside it" {
+    // `outer` sits above the `a`/`b` cycle. The cycle's own bodies rest on where the walk entered,
+    // so only `outer` and the body the back edge points at are unconditional.
+    const a_body = [_]Instruction{call("b")};
+    const b_body = [_]Instruction{call("a")};
+    const outer_body = [_]Instruction{call("a")};
+    var data = TestResolver{ .words = &.{
+        .{ .name = "a", .body = &a_body },
+        .{ .name = "b", .body = &b_body },
+    } };
+
+    var memo = Memo.init(std.testing.allocator);
+    defer memo.deinit();
+    try std.testing.expect(!bodyMayDefineCached(&outer_body, data.resolver(), noMethods(), &memo));
+
+    try std.testing.expect(memo.entries.contains(bodyKey(&outer_body)));
+    try std.testing.expect(memo.entries.contains(bodyKey(&a_body)));
+    try std.testing.expect(!memo.entries.contains(bodyKey(&b_body)));
+}
+
+test "an exhausted visit budget is not cached" {
+    var body: [max_visits + 1]Instruction = undefined;
+    for (&body) |*instr| instr.* = call("dup");
+    var data = TestResolver{ .words = &.{dup} };
+
+    var memo = Memo.init(std.testing.allocator);
+    defer memo.deinit();
+    try std.testing.expect(bodyMayDefineCached(body[0..], data.resolver(), noMethods(), &memo));
+    try std.testing.expectEqual(@as(u32, 0), memo.entries.count());
+}
+
+// --- DispatchMethodIndex ---
+
+const primitives_mod = @import("primitives/mod.zig");
+const Context = @import("context.zig").Context;
+
+/// A descriptor whose only role is pointer identity in a dispatch key.
+fn testDescriptor() !*value_mod.TypeDescriptor {
+    return try value_mod.createBuiltinTypeDescriptor(std.testing.allocator, .{});
+}
+
+fn inertNativeFn(_: *Context) anyerror!void {}
+
+/// A table holding one method for `dispatch_id`, plus the descriptor its key borrows.
+const IndexFixture = struct {
+    table: DispatchTable,
+    desc: *value_mod.TypeDescriptor,
+
+    fn init(dispatch_id: u32, body: dispatch_mod.DispatchBody) !IndexFixture {
+        var self = IndexFixture{
+            .table = DispatchTable.init(std.testing.allocator),
+            .desc = try testDescriptor(),
+        };
+        try self.table.register(
+            .{ .dispatch_id = dispatch_id, .type_a = self.desc, .type_b = self.desc },
+            .{ .body = body },
+            false,
+        );
+        return self;
+    }
+
+    fn deinit(self: *IndexFixture) void {
+        self.table.deinit();
+        value_mod.destroyTypeDescriptor(std.testing.allocator, self.desc);
+    }
+};
+
+test "a dispatch id owning a defining quotation method flags its caller" {
+    const method_body = [_]Instruction{call(";")};
+    var fixture = try IndexFixture.init(7, .{ .quotation = .{ .instructions = &method_body } });
+    defer fixture.deinit();
+
+    var index = try DispatchMethodIndex.init(std.testing.allocator, &fixture.table);
+    defer index.deinit();
+
+    var data = TestResolver{ .words = &.{
+        semicolon,
+        .{ .name = "gen", .is_native = true, .dispatch_id = 7 },
+    } };
+    const body = [_]Instruction{call("gen")};
+    try std.testing.expect(bodyMayDefine(&body, data.resolver(), index.source()));
+}
+
+test "a dispatch id owning only an inert quotation method does not flag" {
+    const method_body = [_]Instruction{call("dup")};
+    var fixture = try IndexFixture.init(7, .{ .quotation = .{ .instructions = &method_body } });
+    defer fixture.deinit();
+
+    var index = try DispatchMethodIndex.init(std.testing.allocator, &fixture.table);
+    defer index.deinit();
+
+    var data = TestResolver{ .words = &.{
+        dup,
+        .{ .name = "gen", .is_native = true, .dispatch_id = 7 },
+    } };
+    const body = [_]Instruction{call("gen")};
+    try std.testing.expect(!bodyMayDefine(&body, data.resolver(), index.source()));
+}
+
+test "a dispatch id owning a defining native method flags its caller" {
+    var fixture = try IndexFixture.init(7, .{ .native_fn = primitives_mod.control.nativeSemicolon });
+    defer fixture.deinit();
+
+    var index = try DispatchMethodIndex.init(std.testing.allocator, &fixture.table);
+    defer index.deinit();
+
+    var data = TestResolver{ .words = &.{.{ .name = "gen", .is_native = true, .dispatch_id = 7 }} };
+    const body = [_]Instruction{call("gen")};
+    try std.testing.expect(bodyMayDefine(&body, data.resolver(), index.source()));
+}
+
+test "a dispatch id absent from the index answers no" {
+    var fixture = try IndexFixture.init(7, .{ .native_fn = inertNativeFn });
+    defer fixture.deinit();
+
+    var index = try DispatchMethodIndex.init(std.testing.allocator, &fixture.table);
+    defer index.deinit();
+
+    try std.testing.expect(index.groups.contains(7));
+    try std.testing.expect(!index.groups.contains(8));
+
+    var data = TestResolver{ .words = &.{.{ .name = "plain", .is_native = true, .dispatch_id = 8 }} };
+    const body = [_]Instruction{call("plain")};
+    try std.testing.expect(!bodyMayDefine(&body, data.resolver(), index.source()));
 }

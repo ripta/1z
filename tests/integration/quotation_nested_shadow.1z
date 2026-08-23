@@ -1,0 +1,9 @@
+\ A definition made inside a called quotation is exempt from the collision guards, because the
+\ quotation body runs in a transient lexical frame and the binding pops with it.
+\
+\ The helper shadows a prelude word and is never called. Calling it would fail the freeze as a
+\ nested definition, which would turn this runtime-legality pin into a build failure.
+
+[ nip: ( -- y ) [ 42 ] ; ] call
+
+"after" print-line

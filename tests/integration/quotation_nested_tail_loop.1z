@@ -1,0 +1,19 @@
+\ A flagged quotation body that ends in a self-tail-call leaves through the back-edge, which jumps
+\ to the compiled word's own loop header rather than returning. The splice's epilogue pop never
+\ runs on that route, and the compiled-entry boundary only truncates once the word returns, so the
+\ transient frames would pile up for the whole loop.
+\
+\ The memory cap in the flags sidecar is the discriminator: 20000 leaked frames blow it, while a
+\ balanced bracket keeps the run flat. There is no AOT redirect, because a binary has no way to
+\ set the cap and the default one is too loose to catch the leak.
+
+countdown: ( n -- n ) [
+  dup 0 >
+  [ helper: [ 1 ] ; 1 - countdown ]
+  [ ]
+  if
+] ;
+
+20000 countdown drop
+
+"done" print-line

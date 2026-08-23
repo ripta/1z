@@ -1,0 +1,23 @@
+\ The transient-frame exemption holds at a compiled call site, not just an interpreted one. Each
+\ word body below compiles under eager and in an AOT binary, and each shadows a prelude word from
+\ inside a called quotation.
+\
+\ None of the shadowing definitions is ever called. A body that calls its own nested definition is
+\ not AOT-compilable, so a call would turn these runtime-legality pins into build failures.
+
+\ `call` over a literal quotation.
+shadow-via-call: ( -- ) [ [ nip: ( -- y ) [ 1 ] ; ] call ] ;
+
+\ An `if` branch, which the compiler splices the same way.
+shadow-via-if: ( -- ) [ t [ over: ( -- y ) [ 2 ] ; ] [ ] if ] ;
+
+\ The definition sits in a callee's body, so the exemption is dynamic-extent rather than lexical.
+\ Calling `(definer)` outside a quotation would throw on every tier.
+(definer): ( -- ) [ 2dup: ( -- y ) [ 3 ] ; ] ;
+shadow-via-callee: ( -- ) [ [ (definer) ] call ] ;
+
+shadow-via-call
+shadow-via-if
+shadow-via-callee
+
+"after" print-line
