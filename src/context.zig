@@ -7368,6 +7368,10 @@ pub const Context = struct {
                             bail_stats_mod.global.recordQuotationBail();
                         }
                         self.stack.items.items.len = saved_sp;
+                        // The re-run below repeats the attempt from where it began, so a transient
+                        // frame the bailed body opened is discarded here. Leaving it to the
+                        // deferred truncation would keep it live for the whole re-run.
+                        self.truncateLocalFrames(frame_mark);
                     },
                 }
             }

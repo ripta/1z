@@ -9821,7 +9821,7 @@ pub fn emitWordCAot(
     freestanding: bool,
     fallbacks_locked: bool,
 ) (IrCodegenError || ir_mod.IrError || Allocator.Error)![]u8 {
-    return emitWordCAotWithCName(instructions, input_count, output_count, name, null, resolver, self_name, aot_compiled_names, callee_resolution, string_literals, quotation_literals, array_literals, allocator, stack_effect, inferred_param_types, reason_out, quotation_id_map, pic_table, interp_ctx, pic_stats_out, aot_fallback_emit_count_out, aot_fallback_report_out, slot_maps, emit_slot_table_literals, source_file, interpreter_free, freestanding, fallbacks_locked);
+    return emitWordCAotWithCName(instructions, input_count, output_count, name, null, resolver, self_name, aot_compiled_names, callee_resolution, string_literals, quotation_literals, array_literals, allocator, stack_effect, inferred_param_types, reason_out, quotation_id_map, pic_table, interp_ctx, pic_stats_out, aot_fallback_emit_count_out, aot_fallback_report_out, slot_maps, emit_slot_table_literals, source_file, interpreter_free, freestanding, fallbacks_locked, false);
 }
 
 /// Like emitWordCAot but with a pre-mangled C function name override.
@@ -9856,15 +9856,16 @@ fn emitWordCAotWithCName(
     interpreter_free: bool,
     freestanding: bool,
     fallbacks_locked: bool,
+    needs_lexical_frame: bool,
 ) (IrCodegenError || ir_mod.IrError || Allocator.Error)![]u8 {
     var reason: ?NotCompilableReason = null;
-    const discovered = emitWordCAotPass(instructions, input_count, output_count, name, c_name_override, resolver, self_name, aot_compiled_names, callee_resolution, string_literals, quotation_literals, array_literals, allocator, stack_effect, inferred_param_types, null, &reason, quotation_id_map, pic_table, interp_ctx, null, null, null, slot_maps, emit_slot_table_literals, source_file, interpreter_free, freestanding, fallbacks_locked, false) catch |err| {
+    const discovered = emitWordCAotPass(instructions, input_count, output_count, name, c_name_override, resolver, self_name, aot_compiled_names, callee_resolution, string_literals, quotation_literals, array_literals, allocator, stack_effect, inferred_param_types, null, &reason, quotation_id_map, pic_table, interp_ctx, null, null, null, slot_maps, emit_slot_table_literals, source_file, interpreter_free, freestanding, fallbacks_locked, false, needs_lexical_frame) catch |err| {
         if (reason_out) |ro| ro.* = reason;
         return err;
     };
     if (discovered.body) |b| allocator.free(b);
     reason = null;
-    const result = emitWordCAotPass(instructions, input_count, output_count, name, c_name_override, resolver, self_name, aot_compiled_names, callee_resolution, string_literals, quotation_literals, array_literals, allocator, stack_effect, inferred_param_types, discovered.peak_stack_depth, &reason, quotation_id_map, pic_table, interp_ctx, pic_stats_out, aot_fallback_emit_count_out, aot_fallback_report_out, slot_maps, emit_slot_table_literals, source_file, interpreter_free, freestanding, fallbacks_locked, discovered.row_aware_self_loop) catch |err| {
+    const result = emitWordCAotPass(instructions, input_count, output_count, name, c_name_override, resolver, self_name, aot_compiled_names, callee_resolution, string_literals, quotation_literals, array_literals, allocator, stack_effect, inferred_param_types, discovered.peak_stack_depth, &reason, quotation_id_map, pic_table, interp_ctx, pic_stats_out, aot_fallback_emit_count_out, aot_fallback_report_out, slot_maps, emit_slot_table_literals, source_file, interpreter_free, freestanding, fallbacks_locked, discovered.row_aware_self_loop, needs_lexical_frame) catch |err| {
         if (reason_out) |ro| ro.* = reason;
         return err;
     };
@@ -9921,6 +9922,13 @@ fn emitWordCAotPass(
     freestanding: bool,
     fallbacks_locked: bool,
     row_aware_self_loop: bool,
+    /// Bracket the whole body in a transient lexical frame, the way the interpreter's `call`
+    /// brackets a quotation.
+    ///
+    /// Set for a compiled quotation body the may-define analysis flagged, so a runtime-selected
+    /// dispatch straight to its code pointer still gets the frame. A word body is bare on every
+    /// tier and never asks for it.
+    needs_lexical_frame: bool,
 ) (IrCodegenError || ir_mod.IrError || Allocator.Error)!EmitWordCAotPassResult {
     ValueLayout.ensureInit();
 
@@ -10302,6 +10310,13 @@ fn emitWordCAotPass(
         }
     }
 
+    // The frame opens inside any loop header above, so a back-edge that pops it through
+    // `emitOpenLexicalFramePops` finds it re-pushed on the next iteration.
+    if (needs_lexical_frame) {
+        emitPushLexicalFrame(&state);
+        state.open_lexical_frames += 1;
+    }
+
     // Built-in word bodies: emit custom IR instead of compiling the body.
     if (std.mem.eql(u8, name, "choose")) {
         emitChooseBuiltin(&state, stack_buf, &sp) catch |err| {
@@ -10319,6 +10334,13 @@ fn emitWordCAotPass(
             }
             return err;
         };
+    }
+
+    // No pop where the body does not fall through: a back-edge pops before it jumps, and a
+    // returning path is truncated at the compiled-entry boundary.
+    if (needs_lexical_frame) {
+        if (exitFallsThrough(state.exit_kind)) emitPopLexicalFrame(&state);
+        state.open_lexical_frames -= 1;
     }
 
     if (state.exit_kind == .loop_diverged) {
@@ -11100,6 +11122,7 @@ pub fn emitProgramC(
                     meta.freestanding,
                     fallbacks_locked,
                     false,
+                    false,
                 ) catch continue;
                 if (discovered.body) |b| allocator.free(b);
                 if (discovered.returns_row) {
@@ -11169,6 +11192,7 @@ pub fn emitProgramC(
             strict_interpreter_free,
             meta.freestanding,
             fallbacks_locked,
+            false,
         ) catch |err| {
             const rejected: ?NotCompilableReason = if (reason) |r|
                 r
@@ -11185,13 +11209,29 @@ pub fn emitProgramC(
         try compilable_names.put(allocator, identities[i], w.word_id);
     }
 
+    // One method index for every quotation's may-define query.
+    //
+    // The grouping is structural over the live dispatch table, so one holds for the whole
+    // emission. An index built inside the emitter is rebuilt once per codegen pass instead, and a
+    // quotation body goes through several.
+    var quotation_method_index: ?may_define.DispatchMethodIndex =
+        if (interp_ctx) |ictx| try may_define.DispatchMethodIndex.init(allocator, &ictx.dispatch) else null;
+    defer if (quotation_method_index) |*mi| mi.deinit();
+    const quotation_method_source: ?may_define.MethodSource =
+        if (quotation_method_index) |*mi| mi.source() else null;
+
     // Pass 1b: trial compile quotation bodies to discover the compilable set
     var compilable_quotation_ids: std.AutoHashMapUnmanaged(u32, void) = .{};
     defer compilable_quotation_ids.deinit(allocator);
+    var bracketed_quotation_ids: std.AutoHashMapUnmanaged(u32, void) = .{};
+    defer bracketed_quotation_ids.deinit(allocator);
     for (quotations) |*q| {
         // A quotation resolves its bare words under its defining body's scope, which is the
         // visibility `collectCallWords` walked it under at freeze.
         resolver_data.callee_resolution.scope = scopeFor(&callee_scopes, q.defining_word);
+        if (quotationFunctionNeedsFrame(q.instructions, resolver, quotation_method_source, allocator)) {
+            try bracketed_quotation_ids.put(allocator, q.quotation_id, {});
+        }
         const effect = q.inferred_effect orelse blk: {
             // Compile-to-discover: `inferQuotationEffect` could not derive an effect for this
             // quotation, e.g., its body uses a row-variable combinator like `dip`, which
@@ -11213,7 +11253,7 @@ pub fn emitProgramC(
                 var dreason: ?NotCompilableReason = null;
                 // No inferred types: the freeze-time pass sizes a quotation's table by its
                 // `inferred_effect`, and this branch runs precisely when it has none.
-                const dres = emitWordCAotPass(q.instructions, ic, 0, q.c_name, q.c_name, resolver, null, &compiled_names, resolver_data.callee_resolution, null, null, null, allocator, null, &.{}, null, &dreason, null, null, interp_ctx, null, null, null, slot_maps_ptr, emit_slot_table_literals, q.source_file, strict_interpreter_free, meta.freestanding, fallbacks_locked, false) catch {
+                const dres = emitWordCAotPass(q.instructions, ic, 0, q.c_name, q.c_name, resolver, null, &compiled_names, resolver_data.callee_resolution, null, null, null, allocator, null, &.{}, null, &dreason, null, null, interp_ctx, null, null, null, slot_maps_ptr, emit_slot_table_literals, q.source_file, strict_interpreter_free, meta.freestanding, fallbacks_locked, false, bracketed_quotation_ids.contains(q.quotation_id)) catch {
                     emitAotEffectTrace(interp_ctx, q.c_name, ic, null, dreason);
                     continue;
                 };
@@ -11256,6 +11296,7 @@ pub fn emitProgramC(
             strict_interpreter_free,
             meta.freestanding,
             fallbacks_locked,
+            bracketed_quotation_ids.contains(q.quotation_id),
         ) catch {
             emitAotCodegenTrace(interp_ctx, "quot", q.c_name, qreason orelse .unknown_reason);
             continue;
@@ -11332,6 +11373,7 @@ pub fn emitProgramC(
             strict_interpreter_free,
             meta.freestanding,
             fallbacks_locked,
+            false,
         ) catch |err| switch (err) {
             error.NotCompilable => continue,
             else => return err,
@@ -11381,6 +11423,7 @@ pub fn emitProgramC(
             strict_interpreter_free,
             meta.freestanding,
             fallbacks_locked,
+            bracketed_quotation_ids.contains(q.quotation_id),
         ) catch |err| switch (err) {
             error.NotCompilable => continue,
             else => return err,
@@ -13342,6 +13385,28 @@ fn quotationBodyNeedsFrame(state: *CompileState, body: []const Instruction) bool
         state.method_index.?.source(),
         &state.may_define_memo.?,
     );
+}
+
+/// Whether a quotation's own compiled function must open the transient lexical frame, so a
+/// runtime-selected dispatch straight to its code pointer runs the body the way the interpreter's
+/// `call` would.
+///
+/// The memo is built per call. It holds only while every name resolves the same way, and the
+/// caller rebinds the callee scope for each quotation it asks about.
+///
+/// A null method source means no interpreter context, and so no dispatch table to read. That
+/// leaves the walk no answer to give, so the body keeps its bare call.
+fn quotationFunctionNeedsFrame(
+    body: []const Instruction,
+    resolver: ?WordResolver,
+    methods: ?may_define.MethodSource,
+    allocator: Allocator,
+) bool {
+    if (methods == null) return false;
+
+    var memo = may_define.Memo.init(allocator);
+    defer memo.deinit();
+    return may_define.bodyMayDefineCached(body, resolver, methods, &memo);
 }
 
 /// A compile-time-filtered PIC entry ready for inline emission.
@@ -19523,7 +19588,7 @@ test "emitWordCAotPass reports discovered_output as the body's final depth" {
     const dup_instrs = [_]Instruction{
         .{ .op = .{ .call_word = "dup" }, .line = 1 },
     };
-    const dup_res = try emitWordCAotPass(&dup_instrs, 1, 2, "q", "q", null, null, &compiled_names, .{}, null, null, null, testing.allocator, null, &.{}, null, &reason, null, null, null, null, null, null, null, false, null, false, false, false, false);
+    const dup_res = try emitWordCAotPass(&dup_instrs, 1, 2, "q", "q", null, null, &compiled_names, .{}, null, null, null, testing.allocator, null, &.{}, null, &reason, null, null, null, null, null, null, null, false, null, false, false, false, false, false);
     if (dup_res.body) |b| testing.allocator.free(b);
     try testing.expectEqual(@as(u8, 2), dup_res.discovered_output);
 
@@ -19531,7 +19596,7 @@ test "emitWordCAotPass reports discovered_output as the body's final depth" {
     const drop_instrs = [_]Instruction{
         .{ .op = .{ .call_word = "drop" }, .line = 1 },
     };
-    const drop_res = try emitWordCAotPass(&drop_instrs, 1, 0, "q", "q", null, null, &compiled_names, .{}, null, null, null, testing.allocator, null, &.{}, null, &reason, null, null, null, null, null, null, null, false, null, false, false, false, false);
+    const drop_res = try emitWordCAotPass(&drop_instrs, 1, 0, "q", "q", null, null, &compiled_names, .{}, null, null, null, testing.allocator, null, &.{}, null, &reason, null, null, null, null, null, null, null, false, null, false, false, false, false, false);
     if (drop_res.body) |b| testing.allocator.free(b);
     try testing.expectEqual(@as(u8, 0), drop_res.discovered_output);
 }
@@ -19990,6 +20055,86 @@ test "a spliced body that may define is bracketed in a transient lexical frame" 
         .{ .op = .{ .call_word = ";" }, .line = 1 },
     };
     const source = try emitCallOverQuotationForTest(&ctx, &body);
+    defer testing.allocator.free(source);
+
+    const push_at = std.mem.indexOf(u8, source, "jitPushLexicalFrame(") orelse return error.NoBracket;
+    const pop_at = std.mem.indexOf(u8, source, "jitPopLexicalFrame(") orelse return error.NoBracket;
+    try testing.expect(push_at < pop_at);
+}
+
+/// Emit AOT C for `body` as its own compiled function, deciding the bracket the way `emitProgramC`
+/// decides it for each reached quotation.
+///
+/// A runtime-selected dispatch reaches this function rather than a splice, so the frame has to
+/// come from the function itself.
+fn emitQuotationBodyForTest(ctx: *const Context, body: []const Instruction) ![]u8 {
+    var compiled_names: std.StringHashMapUnmanaged(u32) = .{};
+    defer compiled_names.deinit(testing.allocator);
+
+    var index = try may_define.DispatchMethodIndex.init(testing.allocator, &ctx.dispatch);
+    defer index.deinit();
+
+    const needs_frame = quotationFunctionNeedsFrame(
+        body,
+        define_family_resolver,
+        index.source(),
+        testing.allocator,
+    );
+
+    return emitWordCAotWithCName(
+        body,
+        0,
+        0,
+        "onez_q_0",
+        "onez_q_0",
+        define_family_resolver,
+        null,
+        &compiled_names,
+        .{},
+        null,
+        null,
+        null,
+        testing.allocator,
+        null,
+        &.{},
+        null,
+        null,
+        null,
+        ctx,
+        null,
+        null,
+        null,
+        null,
+        false,
+        null,
+        false,
+        false,
+        false,
+        needs_frame,
+    );
+}
+
+test "a compiled quotation body that cannot define keeps its bare body" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    const body = [_]Instruction{.{ .op = .{ .call_word = "noop" }, .line = 1 }};
+    const source = try emitQuotationBodyForTest(&ctx, &body);
+    defer testing.allocator.free(source);
+
+    try testing.expect(std.mem.indexOf(u8, source, "jitPushLexicalFrame(") == null);
+}
+
+test "a compiled quotation body that may define opens its own lexical frame" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    const body = [_]Instruction{
+        .{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 1 },
+        .{ .op = .{ .push_literal = .{ .fixnum = 2 } }, .line = 1 },
+        .{ .op = .{ .call_word = ";" }, .line = 1 },
+    };
+    const source = try emitQuotationBodyForTest(&ctx, &body);
     defer testing.allocator.free(source);
 
     const push_at = std.mem.indexOf(u8, source, "jitPushLexicalFrame(") orelse return error.NoBracket;

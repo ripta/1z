@@ -1,0 +1,18 @@
+\ A definition made inside a quotation dispatched as a runtime-selected value is exempt from the
+\ collision guards, the same way a spliced one is. `run` cannot see its argument's body, so the
+\ call reaches the quotation's own compiled function rather than splicing it, and that function
+\ opens the transient lexical frame itself.
+\
+\ Neither shadowing definition is ever called. A body that calls its own nested definition is not
+\ AOT-compilable, so a call would turn these runtime-legality pins into build failures.
+
+run: ( q -- ) [ call ] ;
+
+\ A quotation the callee picks up at runtime.
+[ nip: ( -- y ) [ 1 ] ; ] run
+
+\ A closure over the same shape: `curry` decomposes into a segment over the base's compiled
+\ function, so the base's own prologue is what brackets it.
+42 [ drop over: ( -- y ) [ 2 ] ; ] curry run
+
+"after" print-line

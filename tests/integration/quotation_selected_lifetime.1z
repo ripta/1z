@@ -1,0 +1,14 @@
+\ A binding made inside a runtime-selected quotation pops with the transient lexical frame that
+\ quotation's own compiled function opened, so it is gone by the time the next statement runs.
+\
+\ `run` cannot see its argument's body, so the call reaches the compiled function rather than
+\ splicing the body at the call site.
+\
+\ The probe is `>word-info?` rather than a call: a call to the name would fail the freeze as an
+\ unknown word, and no binary reaching the persisted binding would exist to test.
+
+run: ( q -- ) [ call ] ;
+
+[ (gone): ( -- n ) [ 1 ] ; ] run
+
+(gone): >word-info? option:some? [ "still bound" ] [ "gone at body exit" ] if print-line
