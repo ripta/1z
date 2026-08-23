@@ -155,6 +155,12 @@ pub const BreakpointManager = struct {
         ctx.debugger = null;
         defer ctx.debugger = saved_debugger;
 
+        // A condition that fails reads as "not matched" and its error is dropped, so nothing
+        // it raised may reach the chain of whatever the paused program raises next. The
+        // restore is deferred because every failure below has its own early return.
+        const saved_error_state = ctx.saveErrorState();
+        defer ctx.restoreErrorState(saved_error_state);
+
         // Parse and execute the condition
         var processor: StatementProcessor = .{};
         const result = processor.feedLine(ctx.quotationAllocator(), condition, ctx);
@@ -229,3 +235,22 @@ pub const BreakpointManager = struct {
         }
     }
 };
+
+test "a failing breakpoint condition gives back the error state it overwrote" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+    try ctx.loadPrelude(null);
+
+    var manager = BreakpointManager.init(std.testing.allocator);
+    defer manager.deinit();
+
+    ctx.pending_error_message = "body failed";
+    ctx.appendPendingSyntheticErrorFrame("boom", "<test>", 4, null);
+
+    try std.testing.expect(!manager.evaluateCondition("1 0 /", &ctx));
+
+    try std.testing.expectEqualStrings("body failed", ctx.pending_error_message.?);
+    try std.testing.expectEqual(@as(usize, 1), ctx.jit_pending_trace_frames.items.len);
+    try std.testing.expectEqualStrings("boom", ctx.jit_pending_trace_frames.items[0].word_name);
+    try std.testing.expect(ctx.thrown_error == null);
+}

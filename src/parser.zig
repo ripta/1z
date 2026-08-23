@@ -860,6 +860,12 @@ fn resolveTypeAnnotation(ctx: ?*Context, token: []const u8) ?ResolvedAnnotation 
             const old_tokenizer = c.parse_tokenizer;
             defer c.parse_tokenizer = old_tokenizer;
 
+            // A resolution that fails is dropped so the caller can report its own
+            // diagnostic, so nothing the attempt raised may reach the next error's chain.
+            // The restore is deferred because every exit below abandons the attempt.
+            const saved_error_state = c.saveErrorState();
+            defer c.restoreErrorState(saved_error_state);
+
             const pre_depth = c.stack.depth();
             switch (word.action) {
                 .native, .host_callback => word.invoke(c) catch return null,

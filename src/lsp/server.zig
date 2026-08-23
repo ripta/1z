@@ -333,6 +333,14 @@ pub const Server = struct {
         var tokenizer = Tokenizer.init(text);
 
         while (true) {
+            // Analysis drops whatever a statement raises, and the drop must be complete: the
+            // residue would otherwise reach the next statement, the inference pass below, and
+            // every later request on this long-lived context. The bracket covers the parse as
+            // well as the execution, since a parse-time word's failure clears to zero rather
+            // than to an enclosing shield's mark.
+            const saved_error_state = self.ctx.saveErrorState();
+            defer self.ctx.restoreErrorState(saved_error_state);
+
             const prev_pos = tokenizer.pos;
             const instrs = parser.parseTopLevel(self.ctx.quotationAllocator(), &tokenizer, self.ctx) catch {
                 const lsp_line: i64 = if (tokenizer.line > 1) @intCast(tokenizer.line - 1) else 0;
@@ -785,6 +793,12 @@ pub const Server = struct {
 
         var tokenizer = Tokenizer.init(text);
         while (true) {
+            // Re-analysis drops whatever a statement raises, and the drop must be complete: the
+            // residue would otherwise reach the next statement, the symbol walk below, and
+            // every later request on this long-lived context.
+            const saved_error_state = self.ctx.saveErrorState();
+            defer self.ctx.restoreErrorState(saved_error_state);
+
             const prev_pos = tokenizer.pos;
             const instrs = parser.parseTopLevel(self.ctx.quotationAllocator(), &tokenizer, self.ctx) catch break;
             if (instrs.len == 0 and tokenizer.pos == prev_pos) break;
@@ -979,6 +993,12 @@ pub const Server = struct {
 
         var tokenizer = Tokenizer.init(text);
         while (true) {
+            // Re-analysis drops whatever a statement raises, and the drop must be complete: the
+            // residue would otherwise reach the next statement, the lookup below, and every
+            // later request on this long-lived context.
+            const saved_error_state = self.ctx.saveErrorState();
+            defer self.ctx.restoreErrorState(saved_error_state);
+
             const prev_pos = tokenizer.pos;
             const instrs = parser.parseTopLevel(self.ctx.quotationAllocator(), &tokenizer, self.ctx) catch break;
             if (instrs.len == 0 and tokenizer.pos == prev_pos) break;
@@ -1371,13 +1391,19 @@ const RunResult = struct {
 };
 
 fn runServer(input: []const u8, out_buf: []u8) RunResult {
-    var reader = IoReader.fixed(input);
-    var writer = IoWriter.fixed(out_buf);
-    var transport = Transport.init(std.testing.allocator, &reader, &writer);
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
     ctx.loadPrelude(null) catch return .{ .exit_code = 255, .output = "" };
-    var server = Server.init(std.testing.allocator, &transport, &ctx);
+    return runServerWithContext(&ctx, input, out_buf);
+}
+
+/// Drive a whole session over a caller-owned context, so a test can seed state before the
+/// session and read what the session left behind.
+fn runServerWithContext(ctx: *Context, input: []const u8, out_buf: []u8) RunResult {
+    var reader = IoReader.fixed(input);
+    var writer = IoWriter.fixed(out_buf);
+    var transport = Transport.init(std.testing.allocator, &reader, &writer);
+    var server = Server.init(std.testing.allocator, &transport, ctx);
     const exit_code = server.run();
     return .{ .exit_code = exit_code, .output = writer.buffered() };
 }
@@ -1904,6 +1930,113 @@ test "didOpen with bad definition publishes error diagnostic" {
     try std.testing.expect(std.mem.indexOf(u8, diag_resp.?, "textDocument/publishDiagnostics") != null);
     // Should contain diagnostics (not empty) because the word declares output but produces nothing
     try std.testing.expect(std.mem.indexOf(u8, diag_resp.?, "\"diagnostics\":[]") == null);
+}
+
+/// Seed the in-flight error channels, standing in for an error propagating around the
+/// session.
+fn seedErrorState(ctx: *Context) void {
+    ctx.pending_error_message = "body failed";
+    ctx.appendPendingSyntheticErrorFrame("boom", "<test>", 4, null);
+}
+
+/// Assert the session gave back exactly what `seedErrorState` wrote, and installed no
+/// thrown stash of its own.
+fn expectSeededErrorState(ctx: *Context) !void {
+    try std.testing.expectEqualStrings("body failed", ctx.pending_error_message.?);
+    try std.testing.expectEqual(@as(usize, 1), ctx.jit_pending_trace_frames.items.len);
+    try std.testing.expectEqualStrings("boom", ctx.jit_pending_trace_frames.items[0].word_name);
+    try std.testing.expect(ctx.thrown_error == null);
+}
+
+// The document each of the three analysis pins opens redefines `foo` at a different arity,
+// which the redefinition guard rejects from `;`. That is a definition statement, so the
+// analysis loop executes it and drops the error it raises.
+test "didOpen analysis gives back the error state a failed definition overwrote" {
+    const allocator = std.testing.allocator;
+    const input = try buildInput(allocator, &.{
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{}}}
+        ,
+        \\{"jsonrpc":"2.0","method":"initialized","params":{}}
+        ,
+        \\{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///test.1z","languageId":"1z","version":1,"text":"foo: ( -- ) [ ] ; foo: ( a -- ) [ drop ] ;"}}}
+        ,
+        \\{"jsonrpc":"2.0","id":2,"method":"shutdown"}
+        ,
+        \\{"jsonrpc":"2.0","method":"exit"}
+        ,
+    });
+    defer allocator.free(input);
+
+    var ctx = Context.init(allocator);
+    defer ctx.deinit();
+    try ctx.loadPrelude(null);
+    seedErrorState(&ctx);
+
+    var out_buf: [65536]u8 = undefined;
+    const result = runServerWithContext(&ctx, input, &out_buf);
+    try std.testing.expectEqual(@as(u8, 0), result.exit_code);
+
+    try expectSeededErrorState(&ctx);
+}
+
+test "documentSymbol analysis gives back the error state a failed definition overwrote" {
+    const allocator = std.testing.allocator;
+    const input = try buildInput(allocator, &.{
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{}}}
+        ,
+        \\{"jsonrpc":"2.0","method":"initialized","params":{}}
+        ,
+        \\{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///test.1z","languageId":"1z","version":1,"text":"foo: ( -- ) [ ] ; foo: ( a -- ) [ drop ] ;"}}}
+        ,
+        \\{"jsonrpc":"2.0","id":2,"method":"textDocument/documentSymbol","params":{"textDocument":{"uri":"file:///test.1z"}}}
+        ,
+        \\{"jsonrpc":"2.0","id":3,"method":"shutdown"}
+        ,
+        \\{"jsonrpc":"2.0","method":"exit"}
+        ,
+    });
+    defer allocator.free(input);
+
+    var ctx = Context.init(allocator);
+    defer ctx.deinit();
+    try ctx.loadPrelude(null);
+    seedErrorState(&ctx);
+
+    var out_buf: [65536]u8 = undefined;
+    const result = runServerWithContext(&ctx, input, &out_buf);
+    try std.testing.expectEqual(@as(u8, 0), result.exit_code);
+
+    try expectSeededErrorState(&ctx);
+}
+
+test "definition analysis gives back the error state a failed definition overwrote" {
+    const allocator = std.testing.allocator;
+    const input = try buildInput(allocator, &.{
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{}}}
+        ,
+        \\{"jsonrpc":"2.0","method":"initialized","params":{}}
+        ,
+        \\{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///test.1z","languageId":"1z","version":1,"text":"foo: ( -- ) [ ] ; foo: ( a -- ) [ drop ] ;"}}}
+        ,
+        \\{"jsonrpc":"2.0","id":2,"method":"textDocument/definition","params":{"textDocument":{"uri":"file:///test.1z"},"position":{"line":0,"character":0}}}
+        ,
+        \\{"jsonrpc":"2.0","id":3,"method":"shutdown"}
+        ,
+        \\{"jsonrpc":"2.0","method":"exit"}
+        ,
+    });
+    defer allocator.free(input);
+
+    var ctx = Context.init(allocator);
+    defer ctx.deinit();
+    try ctx.loadPrelude(null);
+    seedErrorState(&ctx);
+
+    var out_buf: [65536]u8 = undefined;
+    const result = runServerWithContext(&ctx, input, &out_buf);
+    try std.testing.expectEqual(@as(u8, 0), result.exit_code);
+
+    try expectSeededErrorState(&ctx);
 }
 
 test "findWordBeforePosition" {

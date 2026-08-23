@@ -1,0 +1,15 @@
+\ Resolving a type annotation runs the named parse-time word. A word that throws there is
+\ dropped so the caller can report its own diagnostic, and the drop must be complete: the
+\ error reported next renders only its own chain. Before the shield, the dropped throw left
+\ a pending frame that rendered as the innermost row, moving the word name, the location,
+\ and the stack effect onto the annotation word's body.
+\
+\ The pin goes through `native.parse-stack-effect` because an annotation that fails to
+\ resolve in source aborts the parse, and a parse diagnostic renders no chain rows. The
+\ runtime entry point shares the same parser and turns the failure into an ordinary error,
+\ so the render is reached with the residue still live. No flags, so the interpreted and
+\ eager suites bind one golden.
+
+annot-boom: parse-time [ 1 0 / ] ;
+
+"n: annot-boom -- " native.parse-stack-effect

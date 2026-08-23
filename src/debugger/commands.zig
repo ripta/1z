@@ -289,6 +289,11 @@ pub const CommandDispatcher = struct {
         ctx.debugger = null;
         defer ctx.debugger = saved_debugger;
 
+        // The failure is printed and dropped, so it must not extend or replace the chain the
+        // paused program is still holding.
+        const saved_error_state = ctx.saveErrorState();
+        defer ctx.restoreErrorState(saved_error_state);
+
         var processor: StatementProcessor = .{};
         const result = processor.feedLine(ctx.quotationAllocator(), code, ctx);
         switch (result) {
@@ -341,3 +346,22 @@ pub const CommandDispatcher = struct {
         );
     }
 };
+
+test "a failing debugger eval gives back the error state it overwrote" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+    try ctx.loadPrelude(null);
+
+    ctx.pending_error_message = "body failed";
+    ctx.appendPendingSyntheticErrorFrame("boom", "<test>", 4, null);
+
+    var out_buf: [256]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&out_buf);
+    CommandDispatcher.evalCode("1 0 /", &ctx, &writer);
+    try std.testing.expect(std.mem.indexOf(u8, writer.buffered(), "Error: ") != null);
+
+    try std.testing.expectEqualStrings("body failed", ctx.pending_error_message.?);
+    try std.testing.expectEqual(@as(usize, 1), ctx.jit_pending_trace_frames.items.len);
+    try std.testing.expectEqualStrings("boom", ctx.jit_pending_trace_frames.items[0].word_name);
+    try std.testing.expect(ctx.thrown_error == null);
+}

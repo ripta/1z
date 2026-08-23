@@ -1,0 +1,1 @@
+tests/integration/parse_time_annotation_error_shielded.1z:15: error 'invalid-argument' parse-stack-effect: 'annot-boom' is not a known type or constraint at word 'native.parse-stack-effect'
