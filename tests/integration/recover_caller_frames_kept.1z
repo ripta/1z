@@ -1,0 +1,13 @@
+\ A recover consumes the error its own subtree raised, and nothing else. Its callers are still
+\ live, so a later unrelated error in the same word renders the whole chain that reaches it.
+\ Before the consumption bound, the capture cleared the live call stack too, and the `outer`
+\ and `mid` rows below vanished from any error raised after a recover ran.
+\
+\ The `0 drop` tails keep each call non-tail, so no row is tail-elided. No flags, so the
+\ interpreted and eager suites bind one golden.
+
+quiet: ( -- ) [ [ f "caught here" caught: make-error throw ] [ drop ] recover ] ;
+outer: ( -- ) [ quiet f "boom" late-error: make-error throw ] ;
+mid:   ( -- ) [ outer 0 drop ] ;
+
+mid 0 drop

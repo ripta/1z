@@ -1,0 +1,12 @@
+\ A recover inside a cleanup quotation consumes its own error, and only its own. The body's
+\ error is still unwinding through the same context, so its type, message, and frames must
+\ reach the renderer intact. Before the consumption bound, the recover's capture folded the
+\ body's pended frames into the caught error and then cleared them, and the body error
+\ degraded to a bare `error.user-thrown` line with no chain at all.
+\
+\ No flags, so the interpreted and eager suites bind one golden.
+
+boom: ( -- ) [ f "body failed" body-error: make-error throw ] ;
+oops: ( -- ) [ f "cleanup caught this" cleanup-error: make-error throw ] ;
+
+[ boom ] [ [ oops ] [ drop ] recover ] cleanup

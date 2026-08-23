@@ -782,6 +782,9 @@ pub const Context = struct {
     callback_error: ?anyerror = null,
     /// Human-readable context string for the callback error.
     callback_error_context: ?[]const u8 = null,
+    /// The error state the failing callback produced, lifted off the live channels by
+    /// `detachErrorStateForCallback` and re-installed by whichever drain takes the courier.
+    callback_error_state: ?DetachedErrorState = null,
     /// True while a callback error-hook is being invoked. A hook that never
     /// returns (a longjmp such as lua_error) leaves it set, marking the stashed
     /// callback error as owned by the C library's error protocol: the automatic
@@ -1847,6 +1850,9 @@ pub const Context = struct {
         }
         self.thrown_error = null;
 
+        // An undrained callback courier holds a stash of its own, on the same terms.
+        self.dropCallbackErrorState();
+
         // Drop owning references in lifecycle order: residual stack
         // slots first, then captured container literals in word bodies
         // (dictionary) and arena-owned quotations. All releases must
@@ -2133,6 +2139,14 @@ pub const Context = struct {
             }
         }
 
+        self.resetErrorStateTo(saved);
+    }
+
+    /// Put the channels back to `saved` without releasing the stash being displaced.
+    ///
+    /// Only a caller that hands the displaced stash to a new owner may use this directly;
+    /// everything else goes through `restoreErrorState`.
+    fn resetErrorStateTo(self: *Context, saved: ErrorStateSnapshot) void {
         self.pending_error_message = saved.message;
         self.pending_error_hint = saved.hint;
         self.pending_dispatch_actual_types = saved.dispatch_actual_types;
@@ -2142,6 +2156,86 @@ pub const Context = struct {
         if (self.error_details.items.len > saved.detail_mark) {
             self.error_details.shrinkRetainingCapacity(saved.detail_mark);
         }
+    }
+
+    /// An error's in-flight state lifted off the live channels, to be re-installed elsewhere.
+    ///
+    /// An FFI callback raises inside a C call, and the courier it leaves behind may not be
+    /// drained until arbitrary 1z code has run. Holding the state here rather than on the live
+    /// channels is what keeps that intervening code rendering its own errors.
+    ///
+    /// The struct owns the thrown box's refcounted payload and the two slices.
+    pub const DetachedErrorState = struct {
+        message: ?[]const u8,
+        hint: ?[]const u8,
+        dispatch_actual_types: ?[]const u8,
+        dispatch_available_methods: ?[]const u8,
+        thrown: ?*value_mod.ErrorObject,
+        frames: []CallFrame,
+        details: []ErrorDetail,
+    };
+
+    /// Lift the callback's own contribution off the live channels and restore `saved`.
+    ///
+    /// A prior stash is dropped, matching how the outer failure already overwrites
+    /// `callback_error` when one callback fails inside another.
+    ///
+    /// An allocation failure leaves the state live, which is the behavior that predates the
+    /// detach. The trampoline has no C caller to propagate to.
+    pub fn detachErrorStateForCallback(self: *Context, saved: ErrorStateSnapshot) void {
+        self.dropCallbackErrorState();
+
+        const pending = self.jit_pending_trace_frames.items[saved.pending_frame_mark..];
+        const rows = self.error_details.items[saved.detail_mark..];
+
+        const frames = self.allocator.dupe(CallFrame, pending) catch return;
+        const details = self.allocator.dupe(ErrorDetail, rows) catch {
+            self.allocator.free(frames);
+            return;
+        };
+
+        self.callback_error_state = .{
+            .message = self.pending_error_message,
+            .hint = self.pending_error_hint,
+            .dispatch_actual_types = self.pending_dispatch_actual_types,
+            .dispatch_available_methods = self.pending_dispatch_available_methods,
+            .thrown = self.thrown_error,
+            .frames = frames,
+            .details = details,
+        };
+
+        // The stash moves into the detached state, so its payload must not be released here.
+        self.resetErrorStateTo(saved);
+    }
+
+    /// Put a detached callback error's state back on the live channels, above whatever is
+    /// already there, so the drain that consumes the courier folds the rows it would have.
+    pub fn reattachCallbackErrorState(self: *Context) void {
+        const detached = self.callback_error_state orelse return;
+        self.callback_error_state = null;
+
+        self.pending_error_message = detached.message;
+        self.pending_error_hint = detached.hint;
+        self.pending_dispatch_actual_types = detached.dispatch_actual_types;
+        self.pending_dispatch_available_methods = detached.dispatch_available_methods;
+        self.thrown_error = detached.thrown;
+        self.jit_pending_trace_frames.appendSlice(self.allocator, detached.frames) catch {};
+        self.error_details.appendSlice(self.allocator, detached.details) catch {};
+
+        self.allocator.free(detached.frames);
+        self.allocator.free(detached.details);
+    }
+
+    /// Discard a detached callback error nobody drained, releasing what it owns.
+    fn dropCallbackErrorState(self: *Context) void {
+        const detached = self.callback_error_state orelse return;
+        self.callback_error_state = null;
+
+        if (detached.thrown) |thrown| {
+            if (thrown.data) |data| container_backing.releaseValue(data.*);
+        }
+        self.allocator.free(detached.frames);
+        self.allocator.free(detached.details);
     }
 
     /// Get the current binding for a parameter by name.
@@ -6693,24 +6787,35 @@ pub const Context = struct {
         }) catch {};
     }
 
+    /// Fold everything in flight. A reader at the outermost boundary owns every row and frame
+    /// there is, so it takes no mark.
+    pub fn finalizeErrorDetails(self: *Context, err: anyerror) void {
+        self.finalizeErrorDetailsAbove(err, 0, 0);
+    }
+
     /// Fold the pending compiled frames and the live call stack into error_details, attaching
     /// the pending message, hint, and dispatch diagnostics to the innermost row.
     ///
     /// Idempotent, so every reader of error_details calls it before reading.
     ///
-    /// A chain already present is the first error's. Frames queued after its capture still
-    /// describe that error's unwind, so they are dropped rather than surfacing as another
-    /// error's frames.
+    /// The two marks come from a mid-chain consumer's entry snapshot and bound the fold to the
+    /// state that consumer's own subtree produced. Rows and frames below them belong to an
+    /// enclosing unwind and are left where they are. `call_stack` takes no mark: its frames are
+    /// live callers, and they are the caught error's outer rows.
+    ///
+    /// A chain already present above `detail_mark` is the first error's. Frames queued after its
+    /// capture still describe that error's unwind, so they are dropped rather than surfacing as
+    /// another error's frames.
     ///
     /// With nothing to fold, no pending state is consumed, so a pending message survives for
     /// the readers that render it without frames.
-    pub fn finalizeErrorDetails(self: *Context, err: anyerror) void {
-        if (self.error_details.items.len > 0) {
-            self.clearPendingSyntheticErrorFrames();
+    pub fn finalizeErrorDetailsAbove(self: *Context, err: anyerror, detail_mark: usize, pending_frame_mark: usize) void {
+        if (self.error_details.items.len > detail_mark) {
+            self.truncatePendingErrorFrames(pending_frame_mark);
             return;
         }
 
-        if (self.jit_pending_trace_frames.items.len == 0 and self.call_stack.items.len == 0) {
+        if (self.jit_pending_trace_frames.items.len <= pending_frame_mark and self.call_stack.items.len == 0) {
             return;
         }
 
@@ -6752,7 +6857,7 @@ pub const Context = struct {
 
         var is_innermost = true;
 
-        var pending_i: usize = 0;
+        var pending_i: usize = pending_frame_mark;
         while (pending_i < self.jit_pending_trace_frames.items.len) : (pending_i += 1) {
             const frame = self.jit_pending_trace_frames.items[pending_i];
 
@@ -6791,7 +6896,7 @@ pub const Context = struct {
             is_innermost = false;
         }
 
-        self.clearPendingSyntheticErrorFrames();
+        self.truncatePendingErrorFrames(pending_frame_mark);
 
         // Iterate call_stack in reverse (innermost first for display)
         var i = self.call_stack.items.len;
@@ -8439,6 +8544,46 @@ test "finalizeErrorDetails is idempotent: a second fold keeps the chain and clea
     try std.testing.expectEqual(@as(usize, 0), ctx.jit_pending_trace_frames.items.len);
 }
 
+test "finalizeErrorDetailsAbove folds only the frames above the mark" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    ctx.appendPendingSyntheticErrorFrame("enclosing", "<test>", 2, null);
+    const mark = ctx.jit_pending_trace_frames.items.len;
+    ctx.appendPendingSyntheticErrorFrame("mine", "<test>", 5, null);
+    ctx.pending_error_message = "mine went wrong";
+
+    ctx.finalizeErrorDetailsAbove(error.TypeMismatch, 0, mark);
+
+    try std.testing.expectEqual(@as(usize, 1), ctx.error_details.items.len);
+    try std.testing.expectEqualStrings("mine", ctx.error_details.items[0].word_name.?);
+    try std.testing.expectEqualStrings("mine went wrong", ctx.error_details.items[0].message);
+
+    try std.testing.expectEqual(@as(usize, 1), ctx.jit_pending_trace_frames.items.len);
+    try std.testing.expectEqualStrings("enclosing", ctx.jit_pending_trace_frames.items[0].word_name);
+}
+
+test "finalizeErrorDetailsAbove reads the first-error gate against its own mark" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    try ctx.error_details.append(ctx.allocator, .{
+        .error_type = "body-error",
+        .message = "body failed",
+        .source = "<test>",
+        .line = 2,
+        .word_name = "enclosing",
+    });
+    const mark = ctx.error_details.items.len;
+    ctx.appendPendingSyntheticErrorFrame("mine", "<test>", 5, null);
+
+    ctx.finalizeErrorDetailsAbove(error.TypeMismatch, mark, 0);
+
+    try std.testing.expectEqual(@as(usize, 2), ctx.error_details.items.len);
+    try std.testing.expectEqualStrings("enclosing", ctx.error_details.items[0].word_name.?);
+    try std.testing.expectEqualStrings("mine", ctx.error_details.items[1].word_name.?);
+}
+
 test "finalizeErrorDetails with nothing to fold preserves the pending message" {
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
@@ -8669,6 +8814,72 @@ test "restoreErrorState keeps the payload of a stash the execution never replace
     ctx.restoreErrorState(saved);
 
     try std.testing.expectEqual(@as(u32, 2), vec.header.refcountValue());
+}
+
+test "a detached callback error leaves the enclosing state live and comes back whole" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const enclosing_thrown = try value_mod.boxErrorObject(ctx.quotationAllocator(), .{
+        .error_type = "body-error",
+        .message = "body failed",
+    });
+    ctx.pending_error_message = "body failed";
+    ctx.thrown_error = enclosing_thrown;
+    ctx.appendPendingSyntheticErrorFrame("enclosing", "<test>", 2, null);
+
+    const saved = ctx.saveErrorState();
+
+    const callback_thrown = try value_mod.boxErrorObject(ctx.quotationAllocator(), .{
+        .error_type = "callback-error",
+        .message = "callback failed",
+    });
+    ctx.pending_error_message = "callback failed";
+    ctx.pending_error_hint = "check the signature";
+    ctx.thrown_error = callback_thrown;
+    ctx.appendPendingSyntheticErrorFrame("throw", "<test>", 9, null);
+
+    ctx.detachErrorStateForCallback(saved);
+
+    try std.testing.expectEqualStrings("body failed", ctx.pending_error_message.?);
+    try std.testing.expectEqual(@as(?[]const u8, null), ctx.pending_error_hint);
+    try std.testing.expectEqual(enclosing_thrown, ctx.thrown_error.?);
+    try std.testing.expectEqual(@as(usize, 1), ctx.jit_pending_trace_frames.items.len);
+    try std.testing.expectEqualStrings("enclosing", ctx.jit_pending_trace_frames.items[0].word_name);
+
+    ctx.reattachCallbackErrorState();
+
+    try std.testing.expectEqualStrings("callback failed", ctx.pending_error_message.?);
+    try std.testing.expectEqualStrings("check the signature", ctx.pending_error_hint.?);
+    try std.testing.expectEqual(callback_thrown, ctx.thrown_error.?);
+    try std.testing.expectEqual(@as(usize, 2), ctx.jit_pending_trace_frames.items.len);
+    try std.testing.expectEqualStrings("throw", ctx.jit_pending_trace_frames.items[1].word_name);
+    try std.testing.expectEqual(@as(?Context.DetachedErrorState, null), ctx.callback_error_state);
+}
+
+test "dropping an undrained callback error releases its stash's payload" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const vec = try value_mod.Vector.create(std.testing.allocator);
+    defer vec.header.release();
+    vec.header.retain();
+
+    const saved = ctx.saveErrorState();
+
+    const data = try ctx.quotationAllocator().create(Value);
+    data.* = .{ .vector = vec };
+    ctx.thrown_error = try value_mod.boxErrorObject(ctx.quotationAllocator(), .{
+        .error_type = "callback-error",
+        .message = "callback failed",
+        .data = data,
+    });
+
+    ctx.detachErrorStateForCallback(saved);
+    try std.testing.expectEqual(@as(u32, 2), vec.header.refcountValue());
+
+    ctx.dropCallbackErrorState();
+    try std.testing.expectEqual(@as(u32, 1), vec.header.refcountValue());
 }
 
 test "stack effect validation passes for correct effect" {

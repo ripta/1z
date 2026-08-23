@@ -1,0 +1,3 @@
+tests/integration/recover_in_cleanup_shielded.1z:9: error 'body-error' body failed at word 'throw'
+  stack effect: ( error --  )
+  called from tests/integration/recover_in_cleanup_shielded.1z:12: cleanup

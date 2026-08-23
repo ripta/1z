@@ -1,0 +1,4 @@
+tests/integration/recover_caller_frames_kept.1z:10: error 'late-error' boom at word 'throw'
+  stack effect: ( error --  )
+  called from tests/integration/recover_caller_frames_kept.1z:11: outer
+  called from tests/integration/recover_caller_frames_kept.1z:13: mid

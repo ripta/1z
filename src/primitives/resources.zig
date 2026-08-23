@@ -31,17 +31,7 @@ fn nativeResourceClose(ctx: *Context) anyerror!void {
     r.ptr = null;
     r.closed = true;
 
-    // A hook-raised courier is exempt (see nativeFfiCall in ffi/dynamic.zig).
-    if (!ctx.callback_error_hook_raised) {
-        if (ctx.callback_error) |err| {
-            ctx.callback_error = null;
-            if (ctx.callback_error_context) |ectx| {
-                helpers.setErrorContext(ctx, "{s}", .{ectx});
-                ctx.callback_error_context = null;
-            }
-            return err;
-        }
-    }
+    if (dynamic.drainCallbackError(ctx)) |err| return err;
 }
 
 /// resource? ( val -- bool )

@@ -110,58 +110,55 @@ pub const primitives = [_]Primitive{
     .{ .name = "with-isolation", .stack_effect = "quot --", .doc = "Execute quotation with isolated type registry, dispatch tables, and protocol obligations. Only stack effects survive.", .func = nativeWithIsolation },
 };
 
+/// Copy the rows this consumer owns into a boxed error's stack trace.
+///
+/// Rows below `detail_mark` describe an enclosing unwind, so they are not this error's.
+fn traceFromDetails(ctx: *Context, detail_mark: usize) ?[]const StackFrame {
+    if (ctx.error_details.items.len <= detail_mark) return null;
+
+    const rows = ctx.error_details.items[detail_mark..];
+    const frames = ctx.quotationAllocator().alloc(StackFrame, rows.len) catch return null;
+    for (rows, 0..) |detail, i| {
+        frames[i] = .{
+            .word_name = detail.word_name orelse detail.message,
+            .source = detail.source,
+            .line = detail.line,
+        };
+    }
+    return frames;
+}
+
 /// Box a caught error onto the stack: the stashed thrown ErrorObject with its
 /// stack trace when err is a user throw, else a generic error object named
-/// after the kebab-cased Zig error. Clears the execution details it captures.
-pub fn pushCaughtError(ctx: *Context, err: anyerror) anyerror!void {
-    ctx.finalizeErrorDetails(err);
+/// after the kebab-cased Zig error.
+///
+/// `saved` is the caller's entry snapshot, and it bounds both halves of the consumption. The
+/// fold builds this error's chain from the frames the caller's subtree pended, and the restore
+/// gives back everything below the marks. An enclosing unwind is still propagating through
+/// this context, and its chain has to survive intact.
+pub fn pushCaughtError(ctx: *Context, err: anyerror, saved: Context.ErrorStateSnapshot) anyerror!void {
+    ctx.finalizeErrorDetailsAbove(err, saved.detail_mark, saved.pending_frame_mark);
 
     // Check if this is a user-thrown error with a stashed ErrorObject
     if (err == error.UserThrown) {
         if (ctx.thrown_error) |thrown_ptr| {
             ctx.thrown_error = null;
 
-            // Capture stack trace from error_details if not already present
-            if (thrown_ptr.stack_trace == null and ctx.error_details.items.len > 0) {
-                const alloc = ctx.quotationAllocator();
-                const frames = alloc.alloc(StackFrame, ctx.error_details.items.len) catch null;
-                if (frames) |f| {
-                    for (ctx.error_details.items, 0..) |detail, i| {
-                        f[i] = .{
-                            .word_name = detail.word_name orelse detail.message,
-                            .source = detail.source,
-                            .line = detail.line,
-                        };
-                    }
-                    thrown_ptr.stack_trace = f;
-                }
+            if (thrown_ptr.stack_trace == null) {
+                thrown_ptr.stack_trace = traceFromDetails(ctx, saved.detail_mark);
             }
 
             // The stash held the sole owning reference to the thrown
             // error's data; transfer it to the stack slot without an
             // extra retain.
             try ctx.stack.pushMoved(.{ .error_value = thrown_ptr });
-            ctx.clearExecutionDetails();
+            ctx.restoreErrorState(saved);
             return;
         }
     }
 
     const alloc = ctx.quotationAllocator();
-    var stack_trace: ?[]const StackFrame = null;
-
-    if (ctx.error_details.items.len > 0) {
-        const frames = alloc.alloc(StackFrame, ctx.error_details.items.len) catch null;
-        if (frames) |f| {
-            for (ctx.error_details.items, 0..) |detail, i| {
-                f[i] = .{
-                    .word_name = detail.word_name orelse detail.message,
-                    .source = detail.source,
-                    .line = detail.line,
-                };
-            }
-            stack_trace = f;
-        }
-    }
+    const stack_trace = traceFromDetails(ctx, saved.detail_mark);
 
     var kebab_buf: [128]u8 = undefined;
     const kebab_name = pascalToKebabRuntime(@errorName(err), &kebab_buf);
@@ -173,11 +170,15 @@ pub fn pushCaughtError(ctx: *Context, err: anyerror) anyerror!void {
         .stack_trace = stack_trace,
     });
     try ctx.stack.push(.{ .error_value = error_ptr });
-    ctx.clearExecutionDetails();
+    ctx.restoreErrorState(saved);
 }
 
 /// recover ( try-quot recover-quot -- )
 pub fn nativeRecover(ctx: *Context) anyerror!void {
+    // A recover reached from inside a cleanup quotation runs while the body's error is still
+    // unwinding. That chain is not this consumer's to take, so the state is marked on the way in.
+    const saved_error_state = ctx.saveErrorState();
+
     // Note: Parameter effects are validated statically by validateParameterEffects
     // before this function is called, so we just pop the quotations here.
     const recover_pc = try popQuotation(ctx);
@@ -189,7 +190,7 @@ pub fn nativeRecover(ctx: *Context) anyerror!void {
 
     // Execute try quotation with error-catching
     ctx.executeQuotationWithFrame(try_quot) catch |err| {
-        try pushCaughtError(ctx, err);
+        try pushCaughtError(ctx, err, saved_error_state);
         try ctx.executeQuotationWithFrame(recover_quot);
         return;
     };

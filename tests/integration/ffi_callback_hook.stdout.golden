@@ -3,6 +3,7 @@ Stack: [ ]
 Stack: [ ]
 PASS: the longjmp aborts the protected C call
 PASS: take-callback-error delivers the original error type
+PASS: the taken error keeps the callback's raise site
 PASS: the taken error preserves the thrown message
 PASS: a second take yields f
 PASS: the hook received the thrown message
@@ -20,4 +21,8 @@ PASS: a non-ffi-fn hook is rejected
 PASS: userdata without a hook is rejected
 PASS: t is not a valid hook
 PASS: t is not a valid userdata
+Stack: [ ]
+PASS: an error raised before the drain renders its own innermost frame
+PASS: the drain leaves the body error in place
+PASS: the body error keeps its own innermost frame
 Stack: [ ]

@@ -808,19 +808,7 @@ fn nativeFfiCall(ctx: *Context) anyerror!void {
         else
             null;
 
-    // A hook-raised courier is exempt: the longjmp delivered the error into the
-    // C library's own error protocol, so the binding reconciles it against the
-    // library's status via take-callback-error.
-    if (!ctx.callback_error_hook_raised) {
-        if (ctx.callback_error) |err| {
-            ctx.callback_error = null;
-            if (ctx.callback_error_context) |ectx| {
-                helpers.setErrorContext(ctx, "{s}", .{ectx});
-                ctx.callback_error_context = null;
-            }
-            return err;
-        }
-    }
+    if (drainCallbackError(ctx)) |err| return err;
 
     if (posix_errno) |e| return raisePosixError(ctx, e);
 
@@ -1071,17 +1059,7 @@ fn nativeFfiCallVariadic(ctx: *Context, ffi_fn: *Resource, sig: *const FfiSignat
         else
             null;
 
-    // A hook-raised courier is exempt (see nativeFfiCall).
-    if (!ctx.callback_error_hook_raised) {
-        if (ctx.callback_error) |err| {
-            ctx.callback_error = null;
-            if (ctx.callback_error_context) |ectx| {
-                helpers.setErrorContext(ctx, "{s}", .{ectx});
-                ctx.callback_error_context = null;
-            }
-            return err;
-        }
-    }
+    if (drainCallbackError(ctx)) |err| return err;
 
     if (posix_errno) |e| return raisePosixError(ctx, e);
 
@@ -1680,9 +1658,10 @@ test "callbackFail invokes the error hook with the courier already set" {
     var ud = testCallbackUserData(&ctx, &sig, testErrorHook, @ptrCast(&marker));
 
     var ret_buf = [_]u8{0xFF} ** 8;
+    const saved = ctx.saveErrorState();
     ctx.pending_error_message = "callback exploded";
     var no_args = [_]?*anyopaque{};
-    callbackFail(&ud, &no_args, @ptrCast(&ret_buf), error.UserThrown, true);
+    callbackFail(&ud, &no_args, @ptrCast(&ret_buf), error.UserThrown, true, saved);
 
     try std.testing.expect(test_hook_state.fired);
     try std.testing.expect(test_hook_state.courier_set_before_hook);
@@ -1691,7 +1670,11 @@ test "callbackFail invokes the error hook with the courier already set" {
     try std.testing.expectEqualStrings("callback exploded", test_hook_state.message[0..test_hook_state.message_len]);
     try std.testing.expect(ctx.callback_error != null);
     try std.testing.expectEqualSlices(u8, &([_]u8{0} ** 8), &ret_buf);
-    ctx.pending_error_message = null;
+
+    // The hook read the message before the detach lifted it onto the courier.
+    try std.testing.expect(ctx.pending_error_message == null);
+    try std.testing.expectEqualStrings("callback exploded", ctx.callback_error_state.?.message.?);
+
     ctx.callback_error = null;
     ctx.callback_error_context = null;
 }
@@ -1708,7 +1691,7 @@ test "callbackFail passes the first ptr argument as arg0" {
 
     var arg0_slot: ?*anyopaque = @ptrCast(&target);
     var args = [_]?*anyopaque{@ptrCast(&arg0_slot)};
-    callbackFail(&ud, &args, null, error.FFITypeMismatch, false);
+    callbackFail(&ud, &args, null, error.FFITypeMismatch, false, ctx.saveErrorState());
 
     try std.testing.expect(test_hook_state.fired);
     try std.testing.expect(test_hook_state.arg0 == @as(?*anyopaque, @ptrCast(&target)));
@@ -1726,7 +1709,7 @@ test "callbackFail without a hook keeps the stash-only path" {
 
     var ret_buf = [_]u8{0xFF} ** 8;
     var no_args = [_]?*anyopaque{};
-    callbackFail(&ud, &no_args, @ptrCast(&ret_buf), error.StackUnderflow, false);
+    callbackFail(&ud, &no_args, @ptrCast(&ret_buf), error.StackUnderflow, false, ctx.saveErrorState());
 
     try std.testing.expect(!test_hook_state.fired);
     try std.testing.expect(ctx.callback_error != null);
@@ -1757,7 +1740,7 @@ test "callbackFail sets the hook-raised flag only while the hook runs" {
     var ud = testCallbackUserData(&ctx, &sig, testErrorHook, null);
 
     var no_args = [_]?*anyopaque{};
-    callbackFail(&ud, &no_args, null, error.UserThrown, true);
+    callbackFail(&ud, &no_args, null, error.UserThrown, true, ctx.saveErrorState());
 
     // The returning hook saw the flag set; after it returned, the courier is
     // back on the auto-drained stash semantics.
@@ -1782,6 +1765,8 @@ test "take-callback-error delivers the boxed thrown error and clears the courier
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
 
+    // The courier's state travels detached, exactly as callbackFail leaves it.
+    const saved = ctx.saveErrorState();
     const thrown = try value_mod.boxErrorObject(ctx.quotationAllocator(), .{
         .error_type = "test-error",
         .message = "boom",
@@ -1792,6 +1777,7 @@ test "take-callback-error delivers the boxed thrown error and clears the courier
     ctx.callback_error = error.UserThrown;
     ctx.callback_error_context = "boom context";
     ctx.callback_error_hook_raised = true;
+    ctx.detachErrorStateForCallback(saved);
 
     try nativeTakeCallbackError(&ctx);
 
@@ -1920,21 +1906,33 @@ fn callbackErrorMessage(ctx: *Context, err: anyerror, quotation_throw: bool) [*:
 }
 
 /// Shared failure path for every trampoline catch site: stash the courier so the driver can
-/// re-raise the original error, zero the C return slot, then invoke the error hook when one is
-/// bound.
+/// re-raise the original error, lift the callback's error state off the live channels, zero the
+/// C return slot, then invoke the error hook when one is bound.
 ///
-/// The courier is set before the hook because the hook may never return.
+/// The courier is set before the hook because the hook may never return. The detach runs before
+/// it for the same reason. The hook's message reads the channels the detach lifts, so it is
+/// built ahead of both.
+///
+/// `saved` is the trampoline's entry snapshot. Everything above its marks is the callback
+/// quotation's own, and it travels with the courier until a drain re-installs it.
 fn callbackFail(
     ud: *CallbackUserData,
     args: [*c]?*anyopaque,
     ret: ?*anyopaque,
     err: anyerror,
     quotation_throw: bool,
+    saved: Context.ErrorStateSnapshot,
 ) void {
     const ctx = ud.ctx;
     ctx.callback_error = err;
     ctx.callback_error_hook_raised = false;
     if (quotation_throw) ctx.callback_error_context = ctx.pending_error_message;
+
+    const hook_message: ?[*:0]const u8 =
+        if (ud.error_hook != null) callbackErrorMessage(ctx, err, quotation_throw) else null;
+
+    ctx.detachErrorStateForCallback(saved);
+
     if (ret) |r| @memset(@as([*]u8, @ptrCast(r))[0..8], 0);
 
     if (ud.error_hook) |hook| {
@@ -1947,9 +1945,28 @@ fn callbackFail(
         // Set before the hook call so a hook that longjmps leaves it set; a
         // hook that returns falls back to the auto-drained stash semantics.
         ctx.callback_error_hook_raised = true;
-        hook(arg0, ud.error_hook_userdata, callbackErrorMessage(ctx, err, quotation_throw));
+        hook(arg0, ud.error_hook_userdata, hook_message.?);
         ctx.callback_error_hook_raised = false;
     }
+}
+
+/// Take a pending callback courier, re-installing the error state the callback produced so the
+/// re-raised error renders the chain that reaches its raise site.
+///
+/// A hook-raised courier is exempt: the longjmp delivered the error into the C library's own
+/// error protocol, so the binding reconciles it against the library's status via
+/// take-callback-error.
+pub fn drainCallbackError(ctx: *Context) ?anyerror {
+    if (ctx.callback_error_hook_raised) return null;
+    const err = ctx.callback_error orelse return null;
+
+    ctx.callback_error = null;
+    ctx.reattachCallbackErrorState();
+    if (ctx.callback_error_context) |ectx| {
+        helpers.setErrorContext(ctx, "{s}", .{ectx});
+        ctx.callback_error_context = null;
+    }
+    return err;
 }
 
 /// take-callback-error ( -- error/f )
@@ -1966,7 +1983,12 @@ fn nativeTakeCallbackError(ctx: *Context) anyerror!void {
     ctx.callback_error = null;
     ctx.callback_error_hook_raised = false;
     ctx.callback_error_context = null;
-    try errors_mod.pushCaughtError(ctx, err);
+
+    // Marked before the reattach, so the box consumes the callback's re-installed state alone.
+    // Whatever was already in flight here belongs to its own unwind and is given back.
+    const saved_error_state = ctx.saveErrorState();
+    ctx.reattachCallbackErrorState();
+    try errors_mod.pushCaughtError(ctx, err, saved_error_state);
 }
 
 fn callbackTrampoline(
@@ -1978,24 +2000,28 @@ fn callbackTrampoline(
     const ud: *CallbackUserData = @ptrCast(@alignCast(user_data.?));
     const ctx = ud.ctx;
 
+    // The C caller may be running under a 1z error that is still unwinding, so the callback's
+    // own contribution is bounded from here.
+    const saved_error_state = ctx.saveErrorState();
+
     for (ud.sig.param_types, 0..) |pt, i| {
         const arg_ptr = args[i].?;
         unmarshalArg(ctx, pt, arg_ptr) catch |err| {
-            return callbackFail(ud, args, ret, err, false);
+            return callbackFail(ud, args, ret, err, false, saved_error_state);
         };
     }
 
     ctx.executeQuotationWithFrame(ud.quotation) catch |err| {
-        return callbackFail(ud, args, ret, err, true);
+        return callbackFail(ud, args, ret, err, true, saved_error_state);
     };
 
     if (ud.sig.return_type.tag != .void_type) {
         const result_val = ctx.stack.pop() catch {
-            return callbackFail(ud, args, ret, error.StackUnderflow, false);
+            return callbackFail(ud, args, ret, error.StackUnderflow, false, saved_error_state);
         };
         defer container_backing.releaseValue(result_val);
         marshalCallbackReturn(ret, ud.sig.return_type, result_val) catch |err| {
-            return callbackFail(ud, args, ret, err, false);
+            return callbackFail(ud, args, ret, err, false, saved_error_state);
         };
     }
 }
