@@ -13,6 +13,7 @@ pub fn build(b: *std.Build) void {
     const bail_stats = b.option(bool, "bail-stats", "Enable bail frequency instrumentation (writes stats to stderr on exit)") orelse false;
     const embed_stdlib = b.option(bool, "embed-stdlib", "Embed lib/ stdlib source as a fallback module backing store") orelse false;
     const freestanding_heap_mib = b.option(u32, "freestanding-heap-mib", "Static-region size for the bare-metal freestanding allocator in MiB (wasm targets use a real growable allocator instead)") orelse 16;
+    const alloc_stack_traces = b.option(bool, "alloc-stack-traces", "Capture allocation stack traces in Debug builds, so leak reports name the allocation site") orelse false;
 
     const options = b.addOptions();
     options.addOption([]const u8, "version", version);
@@ -23,6 +24,7 @@ pub fn build(b: *std.Build) void {
     options.addOption(bool, "bail_stats", bail_stats);
     options.addOption(bool, "embed_stdlib", embed_stdlib);
     options.addOption(u32, "freestanding_heap_mib", freestanding_heap_mib);
+    options.addOption(bool, "alloc_stack_traces", alloc_stack_traces);
 
     const embedded_stdlib_path = generateEmbeddedStdlib(b, embed_stdlib);
 

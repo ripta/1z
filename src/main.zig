@@ -50,6 +50,16 @@ pub const git_commit = build_options.git_commit;
 /// pages from the OS per allocation.
 const root_allocator_is_debug = builtin.mode == .Debug;
 
+/// Capturing an allocation stack trace costs a `msync` syscall per frame read, on both the alloc
+/// and the free, so it dominates the run time of allocating code.
+///
+/// Leak, double-free, and use-after-free detection are gated on the allocator's `safety` flag
+/// instead, and stay on either way. A trace only adds the allocation site to a leak report, so it
+/// is opt-in via `-Dalloc-stack-traces`.
+const debug_gpa_config: std.heap.DebugAllocatorConfig = .{
+    .stack_trace_frames = if (build_options.alloc_stack_traces) 6 else 0,
+};
+
 /// Compile-time-rendered Zig compiler version string. Format matches
 /// `<major>.<minor>.<patch>`, with `-pre.<n>` appended only when the
 /// running Zig is a pre-release build.
@@ -1442,7 +1452,7 @@ const ExecutionContext = struct {
 };
 
 pub fn main() u8 {
-    var debug_gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var debug_gpa = std.heap.GeneralPurposeAllocator(debug_gpa_config){};
     const gpa_allocator, const using_debug_gpa = alloc: {
         break :alloc switch (builtin.mode) {
             .Debug => .{ debug_gpa.allocator(), true },
@@ -4920,6 +4930,14 @@ test "root allocator gate selects the debug allocator under Debug builds" {
     // The unit test suite runs under Debug, so the safety-checked allocator is
     // active and its leak / use-after-free detection covers every test.
     try std.testing.expect(root_allocator_is_debug);
+}
+
+test "debug allocator captures stack traces only when the build option asks for it" {
+    const expected_frames: usize = if (build_options.alloc_stack_traces) 6 else 0;
+    try std.testing.expectEqual(expected_frames, debug_gpa_config.stack_trace_frames);
+
+    // Leak, double-free, and use-after-free detection ride `safety`, so they stay on with traces off.
+    try std.testing.expect(debug_gpa_config.safety);
 }
 
 test "writeVersion emits '1z <version>\\n'" {

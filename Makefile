@@ -73,6 +73,9 @@ branch-info: ## Print branch, HEAD, and describe before building/testing
 build: branch-info ## Build the project (default)
 	zig build --prefix $(ZIG_PREFIX) $(ZIG_CPU_ARG)
 
+build-leaks: branch-info ## Build with allocation stack traces, so leak reports name the allocation site
+	zig build -Dalloc-stack-traces --prefix $(ZIG_PREFIX) $(ZIG_CPU_ARG)
+
 release: branch-info ## Build with optimizations
 	zig build --release=fast --prefix $(ZIG_PREFIX) $(ZIG_CPU_ARG)
 
