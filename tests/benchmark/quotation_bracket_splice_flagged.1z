@@ -1,0 +1,24 @@
+\ Benchmark: the flagged half of the spliced-quotation bracket pair.
+\
+\ The loop body is an `if` branch. The compiler splices such a branch inline at the call site.
+\ `@get` can install a word through its module arm, so the may-define analysis flags the branch.
+\ The splice then opens a transient lexical frame around it. On a hash `@get` installs nothing, so
+\ what the flagged run pays over its twin is the frame.
+\
+\ The bare twin is quotation_bracket_splice_bare.1z. It differs in one word. Both natives pop the
+\ key and the receiver, extract the key string, and read the same map. One pushes the value and the
+\ other a boolean. So the lookup either side pays is the same.
+\
+\ The loop is a tail-recursive word for AOT compatibility.
+
+test-hash: ( -- h ) const [ H{ k: 1 } ] ;
+
+bench-lookup: ( n -- ) [
+  dup 0 = [ drop ] [
+    1 - test-hash k: @get drop bench-lookup
+  ] if
+] ;
+
+400000 bench-lookup
+
+"done" print-line

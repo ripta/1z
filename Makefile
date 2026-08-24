@@ -1,4 +1,4 @@
-.PHONY: all branch-info build release run fmt test test-threads-1 test-threads-auto unit-test capi-test capi-release-run embed-stdlib-test integration-test lib-test snake-test eager-test fmt-test leak-goldens-check lsp-test tree-sitter-test contrib aot-test aot-build aot-run aot-checks aot-checks-linux aot-interpreter-strip-check aot-line-directives-check aot-asm-name-check aot-string-literal-direct-check aot-symbol-literal-direct-check aot-trace-instr-check aot-trace-word-filter-check aot-param-inference-check aot-determinism-check aot-symbol-verify aot-symbol-verify-linux bail-stats ir-check ir-check-upstream ir-vendor lua-vendor font8x8-vendor update-golden update-fmt-golden update-aot-golden update-lsp-golden benchmark benchmark-ab benchmark-fib benchmark-quotation benchmark-param-inference benchmark-ffi-gen-filter benchmark-word-resolution benchmark-protocol-dispatch benchmark-lint benchmark-collision-build benchmark-retention benchmark-task-shapes benchmark-tokenize benchmark-tokenize-alloc benchmark-data-structures benchmark-packed benchmark-expr benchmark-fn benchmark-stmt profiles build-example clean help docs docker-build docker-test freestanding-build wasm-freestanding-build wasm wasm-game-verify wasm-snake-verify baremetal-riscv64-test unit-coverage integration-coverage coverage
+.PHONY: all branch-info build release run fmt test test-threads-1 test-threads-auto unit-test capi-test capi-release-run embed-stdlib-test integration-test lib-test snake-test eager-test fmt-test leak-goldens-check lsp-test tree-sitter-test contrib aot-test aot-build aot-run aot-checks aot-checks-linux aot-interpreter-strip-check aot-line-directives-check aot-asm-name-check aot-string-literal-direct-check aot-symbol-literal-direct-check aot-trace-instr-check aot-trace-word-filter-check aot-param-inference-check aot-determinism-check aot-symbol-verify aot-symbol-verify-linux bail-stats ir-check ir-check-upstream ir-vendor lua-vendor font8x8-vendor update-golden update-fmt-golden update-aot-golden update-lsp-golden benchmark benchmark-ab benchmark-fib benchmark-quotation benchmark-quotation-bracket benchmark-param-inference benchmark-ffi-gen-filter benchmark-word-resolution benchmark-protocol-dispatch benchmark-lint benchmark-collision-build benchmark-retention benchmark-task-shapes benchmark-tokenize benchmark-tokenize-alloc benchmark-data-structures benchmark-packed benchmark-expr benchmark-fn benchmark-stmt profiles build-example clean help docs docker-build docker-test freestanding-build wasm-freestanding-build wasm wasm-game-verify wasm-snake-verify baremetal-riscv64-test unit-coverage integration-coverage coverage
 
 export DEVELOPER_DIR := /Library/Developer/CommandLineTools
 SHELL := /bin/bash
@@ -627,6 +627,13 @@ benchmark-quotation: build ## Run quotation sequence benchmark across all execut
 	@scripts/benchmark-quotation.sh ./$(ZIG_PREFIX)/bin/1z tests/benchmark/quotation_seq.1z $(ZIG_PREFIX)/benchmark-quotation-aot \
 		> tests/benchmark/quotation_seq.sample
 	@cat tests/benchmark/quotation_seq.sample
+
+benchmark-quotation-bracket: build ## A/B what the transient lexical frame costs a flagged quotation body, per path and mode
+	@scripts/benchmark-quotation-bracket.sh ./$(ZIG_PREFIX)/bin/1z $(ZIG_PREFIX) 7 \
+		"splice|tests/benchmark/quotation_bracket_splice_bare.1z|tests/benchmark/quotation_bracket_splice_flagged.1z" \
+		"per-element|tests/benchmark/quotation_bracket_each_bare.1z|tests/benchmark/quotation_bracket_each_flagged.1z" \
+		> tests/benchmark/quotation_bracket.sample
+	@cat tests/benchmark/quotation_bracket.sample
 
 benchmark-scanner: build ## Run scanner vs direct benchmark across interpreter modes and record the sample
 	@scripts/benchmark-scanner.sh ./$(ZIG_PREFIX)/bin/1z tests/benchmark/scanner_vs_direct.1z \

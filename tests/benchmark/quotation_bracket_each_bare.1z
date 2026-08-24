@@ -1,0 +1,25 @@
+\ Benchmark: the unflagged half of the per-element quotation bracket pair.
+\
+\ The timed body is the quotation `#each` runs once per element. A quotation reached as a runtime
+\ value compiles into a standalone function. That function opens its own transient lexical frame
+\ when the may-define analysis flags it. `@has?` cannot install a word, so this one stays bare.
+\
+\ The flagged twin is quotation_bracket_each_flagged.1z. It differs in one word. Both natives pop
+\ the key and the receiver, extract the key string, and read the same map. One pushes the value and
+\ the other a boolean. So the lookup either side pays is the same.
+\
+\ The sequence is a string because an array literal is not a simple AOT literal. The loop is a
+\ tail-recursive word for AOT compatibility.
+
+test-str: ( -- s ) const [ "abcdefghijklmnopqrstuvwxyz" ] ;
+test-hash: ( -- h ) const [ H{ k: 1 } ] ;
+
+bench-each: ( n -- ) [
+  dup 0 = [ drop ] [
+    1 - test-str [ drop test-hash k: @has? drop ] #each bench-each
+  ] if
+] ;
+
+15000 bench-each
+
+"done" print-line

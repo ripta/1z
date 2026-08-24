@@ -18,9 +18,9 @@ done
 
 Mode               Prelude        JIT       User      Total
 --------------- ---------- ---------- ---------- ----------
-interpreted           22ms        0ms     1.995s     2.017s
-hybrid                22ms        0ms     2.361s     2.383s
-eager                 21ms        0ms     2.359s     2.381s
-aot                     --         --     1.581s     1.581s
+interpreted           27ms        0ms    11.867s    11.895s
+hybrid                27ms        0ms    12.645s    12.672s
+eager                 27ms        0ms    12.307s    12.335s
+aot                     --         --    10.350s    10.350s
 
-AOT build time: 446ms
+AOT build time: 766ms
