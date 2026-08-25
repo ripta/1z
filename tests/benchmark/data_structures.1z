@@ -5,6 +5,7 @@
 use "ranges" ;
 use "cons-list" ;
 use "bst" ;
+use "deque" ;
 
 benchmark-section: ( msg -- ) [ "=== " swap #append " ===" #append print-line ] ;
 
@@ -111,9 +112,39 @@ bst-sweep: ( n -- ) [
   2drop
 ] ;
 
+\ The deque sweep is what separates a real-time queue from a quadratic one. `fill+drain` is
+\ the whole workload, so it stays O(n) and its per-element cost has to read flat across the
+\ 2x steps. A vector-backed queue doubles there instead, since #shift! is O(n).
+\
+\ The four per-operation rows are the worst-case O(1) claim itself. They land on one of two
+\ levels rather than one, because each row re-runs against the same fixture: a fixture left
+\ mid-rotation pays the rotation's per-operation step budget on every iteration, and one left
+\ idle pays none. Both levels are flat across n, which is what O(1) means here.
+
+deque-fill: ( n -- deque ) [ <deque> swap 0 swap <range> [ deque-push-back ] #each ] ;
+
+deque-drain: ( deque n -- deque ) [
+  0 swap <range> [ drop deque-pop-front drop ] #each
+] ;
+
+deque-round-trip: ( n -- ) [ dup deque-fill swap deque-drain drop ] ;
+
+deque-sweep: ( n -- ) [
+  dup
+  "deque fill+drain" pick 1 [ dup deque-round-trip ] scale-row
+  drop
+  dup deque-fill
+  "deque push-back" pick 5 [ dup 0 deque-push-back drop ] scale-row
+  "deque push-front" pick 5 [ dup 0 deque-push-front drop ] scale-row
+  "deque pop-front" pick 5 [ dup deque-pop-front 2drop ] scale-row
+  "deque pop-back" pick 5 [ dup deque-pop-back 2drop ] scale-row
+  2drop
+] ;
+
 \ warm
 { 1 2 3 } >cons-list >iterator #count drop
 { 1 2 3 } [ cmp ] >bst >iterator #count drop
+3 deque-round-trip
 
 50 list-sweep
 100 list-sweep
@@ -124,3 +155,10 @@ bst-sweep: ( n -- ) [
 200 bst-sweep
 400 bst-sweep
 800 bst-sweep
+
+nl "[-- Scaling: deque --]" print-line
+
+250 deque-sweep
+500 deque-sweep
+1000 deque-sweep
+2000 deque-sweep

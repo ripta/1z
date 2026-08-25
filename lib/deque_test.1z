@@ -1,0 +1,191 @@
+\ Unit tests for lib/deque.1z.
+\
+\ The sizes here are chosen to run well past the first rotation, so pushes and pops land in
+\ every phase of the incremental rebalance rather than only on an idle deque.
+
+use "deque" ;
+use { <range>: } "ranges" ;
+use "testing" ;
+
+\ --- Helpers ---
+
+\ Push 0, 1, ... n-1 onto one end.
+push-back-n: ( deque n -- deque ) [ 0 swap <range> [ deque-push-back ] #each ] ;
+push-front-n: ( deque n -- deque ) [ 0 swap <range> [ deque-push-front ] #each ] ;
+
+\ Pop n values off one end, oldest popped first.
+pop-front-n: ( deque n -- deque array ) [
+  { } swap 0 swap <range> [ drop swap deque-pop-front [ swap ] dip #push ] #each
+] ;
+
+pop-back-n: ( deque n -- deque array ) [
+  { } swap 0 swap <range> [ drop swap deque-pop-back [ swap ] dip #push ] #each
+] ;
+
+\ Pop the same end off both the deque and the vector model, and report whether they agreed.
+\ The script threads that answer rather than asserting per pop, so hundreds of operations
+\ collapse to one assertion.
+pop-both-front: ( deque model -- deque model ? ) [
+  swap deque-pop-front [ swap ] dip [ #shift! ] dip =
+] ;
+
+pop-both-back: ( deque model -- deque model ? ) [
+  swap deque-pop-back [ swap ] dip [ #pop! ] dip =
+] ;
+
+do-push-front: ( deque model i -- deque model ) [
+  [ swap ] dip dup [ deque-push-front ] dip [ swap ] dip #unshift!
+] ;
+
+do-push-back: ( deque model i -- deque model ) [
+  [ swap ] dip dup [ deque-push-back ] dip [ swap ] dip #push!
+] ;
+
+do-pop-front: ( deque model ? i -- deque model ? ) [
+  drop over #len 0 > [ [ pop-both-front ] dip and ] when
+] ;
+
+do-pop-back: ( deque model ? i -- deque model ? ) [
+  drop over #len 0 > [ [ pop-both-back ] dip and ] when
+] ;
+
+\ One step of the interleaved script. The residue picks the operation, so pushes outnumber
+\ pops and the deque grows while both ends stay busy.
+script-step: ( deque model ? i -- deque model ? ) [
+  dup 5 % 0 = [ swap [ do-push-front ] dip ] [
+    dup 5 % 1 = [ swap [ do-push-back ] dip ] [
+      dup 5 % 2 = [ swap [ do-push-back ] dip ] [
+        dup 5 % 3 = [ do-pop-front ] [ do-pop-back ] if
+      ] if
+    ] if
+  ] if
+] ;
+
+\ Run the script for n steps, then drain what is left and compare it with the model.
+run-script: ( n -- ) [
+  dup [ <deque> [ ] make-vector t ] dip
+  0 swap <range> [ script-step ] #each
+  "every pop during the script matched the model" assert-true
+  dup #len [ swap ] dip pop-front-n nip
+  swap >array "what the script left matches the model" assert=
+  drop
+] ;
+
+\ --- Empty deque ---
+
+test-pop-front-on-empty-throws: ( -- ) [
+  "empty deque" test-section
+  [ <deque> deque-pop-front ] empty-sequence: "pop-front on empty throws" assert-error-type
+] ;
+
+test-pop-back-on-empty-throws: ( -- ) [
+  [ <deque> deque-pop-back ] empty-sequence: "pop-back on empty throws" assert-error-type
+] ;
+
+test-drained-deque-throws-again: ( -- ) [
+  [ <deque> 1 deque-push-back deque-pop-front drop deque-pop-front ]
+  empty-sequence: "pop after the last value throws" assert-error-type
+] ;
+
+\ --- One value ---
+
+test-single-value-reachable-from-both-ends: ( -- ) [
+  "single value" test-section
+  <deque> 7 deque-push-back deque-pop-back nip 7 "back push, back pop" assert=
+  <deque> 7 deque-push-back deque-pop-front nip 7 "back push, front pop" assert=
+  <deque> 7 deque-push-front deque-pop-back nip 7 "front push, back pop" assert=
+  <deque> 7 deque-push-front deque-pop-front nip 7 "front push, front pop" assert=
+] ;
+
+\ --- Order, small enough to read ---
+
+test-front-pushes-reverse: ( -- ) [
+  "ordering" test-section
+  <deque> 3 push-front-n 3 pop-front-n nip
+  { 2 1 0 } "front pushes come back reversed" assert=
+] ;
+
+test-back-pushes-keep-order: ( -- ) [
+  <deque> 3 push-back-n 3 pop-front-n nip
+  { 0 1 2 } "back pushes come off the front in order" assert=
+] ;
+
+test-back-pops-reverse-back-pushes: ( -- ) [
+  <deque> 3 push-back-n 3 pop-back-n nip
+  { 2 1 0 } "back pushes come off the back reversed" assert=
+] ;
+
+\ --- Across rotations ---
+
+test-queue-order-across-rotations: ( -- ) [
+  "rotations" test-section
+  <deque> 200 push-back-n 200 pop-front-n nip
+  0 200 <range> #collect ">array of a drained queue is the enqueue order" assert=
+] ;
+
+test-stack-order-across-rotations: ( -- ) [
+  <deque> 200 push-back-n 200 pop-back-n nip
+  0 200 <range> [ 199 swap - ] #map #collect "back pops reverse the back pushes" assert=
+] ;
+
+test-front-fill-drains-from-the-back-in-order: ( -- ) [
+  <deque> 200 push-front-n 200 pop-back-n nip
+  0 200 <range> #collect "front fill drains off the back in push order" assert=
+] ;
+
+test-alternating-ends-drain-correctly: ( -- ) [
+  \ 0 2 4 ... go on the back and 1 3 5 ... on the front, so the front holds the odds
+  \ descending and the back the evens ascending.
+  <deque> 0 300 <range>
+  [ dup even? [ deque-push-back ] [ deque-push-front ] if ] #each
+  150 pop-front-n nip
+  0 150 <range> [ 2 * 299 swap - ] #map #collect
+  "odds come off the front, largest first" assert=
+] ;
+
+\ --- Interleaved against a model ---
+
+test-short-script-matches-model: ( -- ) [
+  "interleaved" test-section
+  40 run-script
+] ;
+
+test-long-script-matches-model: ( -- ) [
+  400 run-script
+] ;
+
+\ --- Persistence ---
+
+\ A retained version is re-used across the rotation its own operation triggers. Every reuse
+\ has to see the same deque, which is what an amortized structure cannot promise.
+\ One reuse of a retained version: push onto it, then read both ends of the result.
+reuse-once: ( deque ? -- deque ? ) [
+  [
+    dup 999 deque-push-back
+    dup deque-pop-front nip 0 =
+    swap deque-pop-back nip 999 = and
+  ] dip and
+] ;
+
+test-retained-version-reused: ( -- ) [
+  "persistence" test-section
+  <deque> 150 push-back-n t
+  0 60 <range> [ drop reuse-once ] #each
+  "every reuse of the retained version saw the same deque" assert-true
+  drop
+] ;
+
+test-retained-version-branches-independently: ( -- ) [
+  <deque> 120 push-back-n
+  dup 1000 deque-push-front
+  swap 2000 deque-push-front
+  deque-pop-front nip 2000 "second branch sees its own push" assert=
+  deque-pop-front nip 1000 "first branch is undisturbed" assert=
+] ;
+
+\ --- Error constant ---
+
+test-empty-sequence-constant: ( -- ) [
+  "error constant" test-section
+  EEmptySequence empty-sequence: "EEmptySequence carries the empty-sequence type" assert=
+] ;

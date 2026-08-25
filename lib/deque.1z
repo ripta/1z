@@ -1,0 +1,654 @@
+\ lib/deque.1z - Persistent double-ended queue over cons-list
+\
+\ The deque is two cons-lists, one per end. When one end outgrows the other it is rebalanced
+\ by a rotation, and the rotation runs a fixed number of steps per deque operation instead of
+\ all at once, so no operation pays for a whole rebalance. That bound survives persistence:
+\ re-running the operation that triggered a rotation on a retained old version costs the same
+\ as any other operation.
+\
+\ The rotation is Hood-Melville's incremental copy generalized to both ends. A pop during a
+\ rotation is charged to a counter and paid back by trimming the rebuilt list's head. A push
+\ during a rotation stays at the head of the end's live list and is drained onto the rebuilt
+\ list once the build finishes.
+
+use "cons-list" ;
+
+private{
+  \ How far one end may outgrow the other before a rotation starts. The shorter end holds
+  \ 1/(BALANCE+1) of the deque and is the live list a rotation has to outrun, so raising this
+  \ shortens the deadline rather than lengthening it.
+  DEQUE-BALANCE: const [ 2 ] ;
+
+  \ Rotation steps run per deque operation.
+  \
+  \ A rotation that starts with m cells on the shorter end costs about 5.5m steps to build
+  \ the two new lists, and it has only m operations to get there, because m pops empty that
+  \ end's live list and there is nothing else to read from until the rebuild lands. Each of
+  \ those pops also charges a cell to trim, so after k of them the rotation owes 5.5m + k
+  \ steps and has been given k times this budget. Solving for k <= m puts the floor at 6.5,
+  \ and 7 was measured to be too tight once the fixed per-rotation work is counted.
+  DEQUE-STEPS: const [ 9 ] ;
+
+  \ Steps per pass when a shortfall guard runs a rotation out. Bigger than the per-operation
+  \ budget only to keep the rare catch-up from re-entering the driver once per step.
+  DEQUE-FINISH-CHUNK: const [ 64 ] ;
+
+  \\ One end of the deque. `list` holds its live cells, nearest end first. `n` is the length
+  \\ the end will have once a rotation in flight installs, so the two disagree while one runs.
+  deque-end: struct{ n list } ;
+
+  \\ A transfer in flight. One step moves a cell from `src` to `dst`. `n` counts the cells
+  \\ still to move, and is negative when the transfer instead runs until `src` is exhausted.
+  \\ A count rather than a flag keeps the step and its completion test branch-free.
+  rot-job: struct{ src dst n } ;
+
+  \ The `n` a transfer carries when it runs until its source is exhausted.
+  UNBOUNDED: const [ -1 ] ;
+
+  \\ What each end still owes its rebuilt list. `dropped` cells come off the rebuilt list's
+  \\ head. `pushed` cells sit at the head of the end's live list and are drained onto it.
+  rot-marks: struct{ front-dropped front-pushed back-dropped back-pushed } ;
+
+  \\ `long-end` is the end that had outgrown the other when the rotation started. `work-end`
+  \\ is the end the current trim or drain round serves. `short-snap` is the shorter end's
+  \\ list as it stood at rotation start.
+  rot-plan: struct{ long-end work-end short-snap } ;
+
+  \\ Lists parked between the phase that produces one and the phase that consumes it. Each
+  \\ built list is `f` until its build phase finishes.
+  rot-lists: struct{ keep moved built-front built-back } ;
+
+  \\ The two halves of a rotation's bookkeeping: `plan` is what it decided at the start and
+  \\ never recomputes, `lists` is what it has built so far.
+  rot-state: struct{ plan lists } ;
+
+  \\ Phases run in the order listed down to `build-short`, after which trim and drain rounds
+  \\ repeat until neither end owes anything and the rotation reaches `done`.
+  rot-phase: enum{
+    split-keep:  unit
+    split-move:  unit
+    build-long:  unit
+    rev-short:   unit
+    build-short: unit
+    trim: unit
+    drain-rev: unit
+    drain-emit: unit
+    done: unit
+  } ;
+
+  \\ A rebalance in flight. The fields are ordered by how often they are rewritten, rarest
+  \\ first, because a persistent record is rebuilt through `unmake` and the last field is the
+  \\ only one a rewrite can reach without shuffling. `job` changes every step and `marks`
+  \\ every operation.
+  rotation: struct{ state marks phase job } ;
+
+  \\ What the rotation has left to do once both builds have landed. `settle` means neither
+  \\ end owes anything and the rebuilt lists can replace the live ones.
+  rot-action: enum{
+    trim-front:  unit
+    trim-back:   unit
+    drain-front: unit
+    drain-back:  unit
+    settle:      unit
+  } ;
+
+  \ --- Field setters ---
+  \
+  \ Each rebuilds its record with one field replaced. The dip nesting counts the replaced
+  \ field's depth in the unmade record, and the trailing rotate sinks the new value to match.
+
+  set-lists-built-back: ( rot-lists list -- rot-lists ) [
+    [ unmake-rot-lists ] dip nip make-rot-lists
+  ] ;
+
+  set-lists-built-front: ( rot-lists list -- rot-lists ) [
+    [ unmake-rot-lists ] dip [ nip ] dip swap make-rot-lists
+  ] ;
+
+  set-lists-moved: ( rot-lists list -- rot-lists ) [
+    [ unmake-rot-lists ] dip [ [ nip ] dip ] dip -rot> make-rot-lists
+  ] ;
+
+  set-lists-keep: ( rot-lists list -- rot-lists ) [
+    [ unmake-rot-lists ] dip [ [ [ nip ] dip ] dip ] dip 3 rot-n> make-rot-lists
+  ] ;
+
+  set-plan-short-snap: ( rot-plan list -- rot-plan ) [
+    [ unmake-rot-plan ] dip nip make-rot-plan
+  ] ;
+
+  set-plan-work-end: ( rot-plan end -- rot-plan ) [
+    [ unmake-rot-plan ] dip [ nip ] dip swap make-rot-plan
+  ] ;
+
+  set-state-lists: ( rot-state rot-lists -- rot-state ) [
+    [ unmake-rot-state ] dip nip make-rot-state
+  ] ;
+
+  set-state-plan: ( rot-state rot-plan -- rot-state ) [
+    [ unmake-rot-state ] dip [ nip ] dip swap make-rot-state
+  ] ;
+
+  set-job: ( rotation rot-job -- rotation ) [
+    [ unmake-rotation ] dip nip make-rotation
+  ] ;
+
+  set-phase: ( rotation phase -- rotation ) [
+    [ unmake-rotation ] dip [ nip ] dip swap make-rotation
+  ] ;
+
+  set-marks: ( rotation rot-marks -- rotation ) [
+    [ unmake-rotation ] dip [ [ nip ] dip ] dip -rot> make-rotation
+  ] ;
+
+  set-state: ( rotation rot-state -- rotation ) [
+    [ unmake-rotation ] dip [ [ [ nip ] dip ] dip ] dip 3 rot-n> make-rotation
+  ] ;
+
+  set-deque-rot: ( deque rot -- deque ) [
+    [ unmake-deque ] dip nip make-deque
+  ] ;
+
+  set-deque-back: ( deque deque-end -- deque ) [
+    [ unmake-deque ] dip [ nip ] dip swap make-deque
+  ] ;
+
+  set-deque-front: ( deque deque-end -- deque ) [
+    [ unmake-deque ] dip [ [ nip ] dip ] dip -rot> make-deque
+  ] ;
+
+  \ --- Reading and writing through the rotation ---
+
+  other-end: ( end -- end ) [ front: = [ back: ] [ front: ] if ] ;
+
+  rot-long-end:    ( rotation -- end ) [ state>> plan>> long-end>> ] ;
+  rot-short-end:   ( rotation -- end ) [ rot-long-end other-end ] ;
+  rot-work-end:    ( rotation -- end ) [ state>> plan>> work-end>> ] ;
+  rot-short-snap:  ( rotation -- list ) [ state>> plan>> short-snap>> ] ;
+  rot-keep:        ( rotation -- list ) [ state>> lists>> keep>> ] ;
+  rot-moved:       ( rotation -- list ) [ state>> lists>> moved>> ] ;
+  rot-built-front: ( rotation -- list ) [ state>> lists>> built-front>> ] ;
+  rot-built-back:  ( rotation -- list ) [ state>> lists>> built-back>> ] ;
+
+  rot-built-for: ( rotation end -- list ) [
+    front: = [ rot-built-front ] [ rot-built-back ] if
+  ] ;
+
+  set-state-work-end: ( rot-state end -- rot-state ) [
+    over plan>> swap set-plan-work-end set-state-plan
+  ] ;
+
+  set-state-short-snap: ( rot-state list -- rot-state ) [
+    over plan>> swap set-plan-short-snap set-state-plan
+  ] ;
+
+  set-state-keep: ( rot-state list -- rot-state ) [
+    over lists>> swap set-lists-keep set-state-lists
+  ] ;
+
+  set-state-moved: ( rot-state list -- rot-state ) [
+    over lists>> swap set-lists-moved set-state-lists
+  ] ;
+
+  set-state-built-front: ( rot-state list -- rot-state ) [
+    over lists>> swap set-lists-built-front set-state-lists
+  ] ;
+
+  set-state-built-back: ( rot-state list -- rot-state ) [
+    over lists>> swap set-lists-built-back set-state-lists
+  ] ;
+
+  rot-set-work-end: ( rotation end -- rotation ) [
+    over state>> swap set-state-work-end set-state
+  ] ;
+
+  rot-set-short-snap: ( rotation list -- rotation ) [
+    over state>> swap set-state-short-snap set-state
+  ] ;
+
+  rot-set-keep: ( rotation list -- rotation ) [
+    over state>> swap set-state-keep set-state
+  ] ;
+
+  rot-set-moved: ( rotation list -- rotation ) [
+    over state>> swap set-state-moved set-state
+  ] ;
+
+  rot-set-built-front: ( rotation list -- rotation ) [
+    over state>> swap set-state-built-front set-state
+  ] ;
+
+  rot-set-built-back: ( rotation list -- rotation ) [
+    over state>> swap set-state-built-back set-state
+  ] ;
+
+  rot-set-built: ( rotation end list -- rotation ) [
+    [ front: = ] dip swap [ rot-set-built-front ] [ rot-set-built-back ] if
+  ] ;
+
+  \ --- Marks ---
+
+  \ A pop takes back an undrained push when there is one, and otherwise leaves a cell for the
+  \ trim to take off the rebuilt list's head.
+  marks-take: ( dropped pushed -- dropped' pushed' ) [
+    dup 0 > [ 1 - ] [ drop 1 + 0 ] if
+  ] ;
+
+  marks-push-front: ( rot-marks -- rot-marks ) [
+    unmake-rot-marks [ [ 1 + ] dip ] dip make-rot-marks
+  ] ;
+
+  marks-push-back: ( rot-marks -- rot-marks ) [
+    unmake-rot-marks 1 + make-rot-marks
+  ] ;
+
+  marks-pop-front: ( rot-marks -- rot-marks ) [
+    unmake-rot-marks [ [ marks-take ] dip ] dip make-rot-marks
+  ] ;
+
+  marks-pop-back: ( rot-marks -- rot-marks ) [
+    unmake-rot-marks marks-take make-rot-marks
+  ] ;
+
+  marks-trimmed-front: ( rot-marks -- rot-marks ) [
+    unmake-rot-marks [ [ [ 1 - ] dip ] dip ] dip make-rot-marks
+  ] ;
+
+  marks-trimmed-back: ( rot-marks -- rot-marks ) [
+    unmake-rot-marks [ 1 - ] dip make-rot-marks
+  ] ;
+
+  marks-cleared-front: ( rot-marks -- rot-marks ) [
+    unmake-rot-marks [ [ drop 0 ] dip ] dip make-rot-marks
+  ] ;
+
+  marks-cleared-back: ( rot-marks -- rot-marks ) [
+    unmake-rot-marks drop 0 make-rot-marks
+  ] ;
+
+  marks-pushed-for: ( rot-marks end -- n ) [
+    front: = [ front-pushed>> ] [ back-pushed>> ] if
+  ] ;
+
+  marks-dropped-for: ( rot-marks end -- n ) [
+    front: = [ front-dropped>> ] [ back-dropped>> ] if
+  ] ;
+
+  rot-pushed-for: ( rotation end -- n ) [ swap marks>> swap marks-pushed-for ] ;
+  rot-dropped-for: ( rotation end -- n ) [ swap marks>> swap marks-dropped-for ] ;
+
+  rot-mark-push: ( rotation end -- rotation ) [
+    over marks>> swap front: = [ marks-push-front ] [ marks-push-back ] if set-marks
+  ] ;
+
+  rot-mark-pop: ( rotation end -- rotation ) [
+    over marks>> swap front: = [ marks-pop-front ] [ marks-pop-back ] if set-marks
+  ] ;
+
+  rot-mark-trimmed: ( rotation end -- rotation ) [
+    over marks>> swap front: = [ marks-trimmed-front ] [ marks-trimmed-back ] if set-marks
+  ] ;
+
+  rot-clear-pushed: ( rotation end -- rotation ) [
+    over marks>> swap front: = [ marks-cleared-front ] [ marks-cleared-back ] if set-marks
+  ] ;
+
+  \ --- The transfer that every phase runs ---
+
+  job-done?: ( rot-job -- ? ) [
+    unmake-rot-job nip 0 = swap nil? or
+  ] ;
+
+  \ Move one cell from the transfer's source to its destination.
+  \
+  \ A step only ever runs on a non-empty source, so it reads the cell through the variant
+  \ accessor rather than through `head` and `tail`, which would each rebuild a match table.
+  job-step: ( rot-job -- rot-job ) [
+    unmake-rot-job
+    [ swap cons-list:cons> [ swap cons ] dip swap ] dip
+    1 -
+    make-rot-job
+  ] ;
+
+  \ --- Starting a rotation ---
+
+  \ `work-end` names no end until a trim or drain round picks one, so it starts arbitrarily.
+  new-rotation: ( keep-n long-snap short-snap long-end -- rotation ) [
+    swap [ front: ] dip make-rot-plan          \ ( keep-n long-snap plan )
+    nil nil f f make-rot-lists make-rot-state  \ ( keep-n long-snap state )
+    [ swap nil swap make-rot-job ] dip swap    \ ( state job )
+    [ 0 0 0 0 make-rot-marks rot-phase:split-keep ] dip
+    make-rotation
+  ] ;
+
+  \ Pick which end the rotation walks. The long end keeps the cells it is entitled to under
+  \ the new split and hands the rest to the short end. Each arm drops the other end's length
+  \ and leaves the four values `new-rotation` reads.
+  plan-rotation: ( front-n front-list back-n back-list end -- rotation ) [
+    dup front: =
+    [ [ [ drop ] dip ] dip ]                       \ ( front-n front-list back-list end )
+    [ [ [ [ nip ] dip ] dip ] dip [ <rot- ] dip ]  \ ( back-n back-list front-list end )
+    if
+    new-rotation
+  ] ;
+
+  \ Begin a rotation with `end` as the end that has outgrown the other. Both lengths become
+  \ their balanced targets right away. The live lists stay as they are and keep serving reads
+  \ until the rebuilt ones land.
+  begin-rotation: ( deque end -- deque ) [
+    over front>> n>> 2 pick-n back>> n>> +  \ ( deque end total )
+    \ `div`, not `/`. `math/ratio` registers `/` for two fixnums, so any program that loads
+    \ it would halve the deque into a ratio and no length would ever compare equal to zero.
+    dup 2 div tuck -              \ ( deque end front-n back-n )
+    3 pick-n front>> list>> swap  \ ( deque end front-n front-list back-n )
+    4 pick-n back>> list>>        \ ( deque end front-n front-list back-n back-list )
+    \ the planner consumes all four, and the two new ends need them again
+    3 pick-n 3 pick-n 3 pick-n 3 pick-n 8 pick-n plan-rotation
+    [ make-deque-end ] dip          \ ( deque end front-n front-list back' rotation )
+    [ [ make-deque-end ] dip ] dip  \ ( deque end front' back' rotation )
+    make-deque nip nip
+  ] ;
+
+  \ --- Phase transitions ---
+  \
+  \ Each parks the job's output where the phase that consumes it will look, then installs the
+  \ next job. They run only when the current job has finished, so the job's `src` is what is
+  \ left of its source and its `dst` is the whole of what it built.
+
+  to-split-move: ( rotation -- rotation ) [
+    dup job>> unmake-rot-job drop   \ ( rotation rest keep-rev )
+    [ swap ] dip rot-set-keep swap  \ ( rotation rest )
+    nil UNBOUNDED make-rot-job set-job
+    rot-phase:split-move set-phase
+  ] ;
+
+  to-build-long: ( rotation -- rotation ) [
+    dup job>> dst>> rot-set-moved
+    dup rot-keep nil UNBOUNDED make-rot-job set-job
+    nil rot-set-keep
+    rot-phase:build-long set-phase
+  ] ;
+
+  to-rev-short: ( rotation -- rotation ) [
+    dup rot-long-end over job>> dst>> rot-set-built
+    dup rot-short-snap nil UNBOUNDED make-rot-job set-job
+    nil rot-set-short-snap
+    rot-phase:rev-short set-phase
+  ] ;
+
+  to-build-short: ( rotation -- rotation ) [
+    dup job>> dst>> over rot-moved UNBOUNDED make-rot-job set-job
+    nil rot-set-moved
+    rot-phase:build-short set-phase
+  ] ;
+
+  to-drain-emit: ( rotation -- rotation ) [
+    dup job>> dst>> over dup rot-work-end rot-built-for UNBOUNDED make-rot-job set-job
+    dup rot-work-end f rot-set-built
+    rot-phase:drain-emit set-phase
+  ] ;
+
+  begin-trim: ( rotation end -- rotation ) [
+    rot-set-work-end rot-phase:trim set-phase
+  ] ;
+
+  \ The round's source is the end's live list, whose first `pushed` cells are the pushes that
+  \ have not reached the rebuilt list yet. Zeroing the count hands any later push to the next
+  \ round rather than to this one.
+  begin-drain: ( rotation list end -- rotation ) [
+    2 pick-n over rot-pushed-for           \ ( rotation list end pushed )
+    [ swap ] dip [ nil ] dip make-rot-job  \ ( rotation end job )
+    [ swap ] dip set-job swap              \ ( rotation end )
+    dup [ rot-clear-pushed ] dip
+    rot-set-work-end
+    rot-phase:drain-rev set-phase
+  ] ;
+
+  \ What the rotation owes once a build or a round finishes. Trims come before drains, so a
+  \ rebuilt list has already lost its dead head cells when the pushes land in front of them.
+  next-action: ( rotation -- rot-action ) [
+    marks>>
+    dup front-dropped>> 0 >
+    [ drop rot-action:trim-front ]
+    [ dup back-dropped>> 0 > [ drop rot-action:trim-back ] [ next-drain-action ] if ]
+    if
+  ] ;
+
+  next-drain-action: ( rot-marks -- rot-action ) [
+    dup front-pushed>> 0 >
+    [ drop rot-action:drain-front ]
+    [ back-pushed>> 0 > [ rot-action:drain-back ] [ rot-action:settle ] if ]
+    if
+  ] ;
+
+  \ A drain round reads its source from its end's live list, so each drain arm keeps that one
+  \ list and drops the other.
+  rot-next: ( front-list back-list rotation -- rotation ) [
+    dup next-action {
+      rot-action:trim-front:  [ [ 2drop ] dip front: begin-trim ]
+      rot-action:trim-back:   [ [ 2drop ] dip back: begin-trim ]
+      rot-action:drain-front: [ [ drop ] dip swap front: begin-drain ]
+      rot-action:drain-back:  [ [ nip ] dip swap back: begin-drain ]
+      rot-action:settle:      [ [ 2drop ] dip rot-phase:done set-phase ]
+    } unchecked-match
+  ] ;
+
+  finish-build-short: ( front-list back-list rotation -- rotation ) [
+    dup rot-short-end over job>> dst>> rot-set-built
+    rot-next
+  ] ;
+
+  finish-drain: ( front-list back-list rotation -- rotation ) [
+    dup rot-work-end over job>> dst>> rot-set-built
+    rot-next
+  ] ;
+
+  \ Take one dead cell off the rebuilt list's head, which is where a pop during the rotation
+  \ left its debt.
+  trim-step: ( front-list back-list rotation -- rotation ? ) [
+    dup dup rot-work-end rot-dropped-for 0 =
+    [ rot-next f ]
+    [
+      [ 2drop ] dip
+      dup rot-work-end 2dup rot-built-for tail rot-set-built
+      dup rot-work-end rot-mark-trimmed
+      t
+    ]
+    if
+  ] ;
+
+  \ Total over the phase enum. `trim` never reaches here, because `rot-step` routes it, and
+  \ `done` never does either, because reaching it ends the run.
+  rot-advance: ( front-list back-list rotation -- rotation ) [
+    dup phase>> {
+      rot-phase:split-keep:  [ [ 2drop ] dip to-split-move ]
+      rot-phase:split-move:  [ [ 2drop ] dip to-build-long ]
+      rot-phase:build-long:  [ [ 2drop ] dip to-rev-short ]
+      rot-phase:rev-short:   [ [ 2drop ] dip to-build-short ]
+      rot-phase:build-short: [ finish-build-short ]
+      rot-phase:drain-rev:   [ [ 2drop ] dip to-drain-emit ]
+      rot-phase:drain-emit:  [ finish-drain ]
+      rot-phase:trim:        [ rot-next ]
+      rot-phase:done:        [ [ 2drop ] dip ]
+    } unchecked-match
+  ] ;
+
+  job-advance: ( rotation -- rotation ) [ unmake-rotation job-step make-rotation ] ;
+
+  \ Advance the rotation once, reporting whether the step moved a cell.
+  \
+  \ A step that only takes the rotation to its next phase reports `f` and costs the caller
+  \ nothing. A rotation has a fixed handful of transitions whatever its size, so charging for
+  \ them would put small rotations permanently behind the budget.
+  \
+  \ Transitions cannot chain forever. Each one reaches either a phase whose first step moves
+  \ a cell, or `done`, which ends the run.
+  rot-step: ( front-list back-list rotation -- rotation ? ) [
+    dup phase>> rot-phase:trim?
+    [ trim-step ]
+    [ dup job>> job-done? [ rot-advance f ] [ [ 2drop ] dip job-advance t ] if ]
+    if
+  ] ;
+
+  \ --- Driving the rotation from the deque ---
+
+  \ The rebuilt lists replace the live ones. Each end keeps the length it has been carrying,
+  \ which the rotation set to its target and every operation since has adjusted.
+  install-rotation: ( deque-end deque-end rotation -- deque ) [
+    dup rot-built-back swap rot-built-front  \ ( front back new-back new-front )
+    3 rot-n>                                 \ ( new-front front back new-back )
+    swap n>> swap make-deque-end             \ ( new-front front back' )
+    [ n>> swap make-deque-end ] dip          \ ( front' back' )
+    f make-deque
+  ] ;
+
+  deque-rotating?: ( deque -- ? ) [ rot>> rotation? ] ;
+
+  \ The live lists cannot change while the rotation steps, so they are read once and carried
+  \ through the loop rather than re-read from the deque per step.
+  rot-step-keep: ( front-list back-list rotation -- front-list back-list rotation ? ) [
+    [ 2dup ] dip rot-step
+  ] ;
+
+  rot-run: ( front-list back-list rotation n -- rotation ) [
+    [ dup 0 > 2 pick-n phase>> rot-phase:done? not and ]
+    [ [ rot-step-keep ] dip swap [ 1 - ] when ]
+    while
+    drop nip nip
+  ] ;
+
+  deque-run: ( deque n -- deque ) [
+    over deque-rotating?
+    [
+      [ unmake-deque 2 pick-n list>> 2 pick-n list>> <rot- ] dip
+      rot-run
+      dup phase>> rot-phase:done? [ install-rotation ] [ make-deque ] if
+    ]
+    [ drop ]
+    if
+  ] ;
+
+  deque-exec: ( deque -- deque ) [ DEQUE-STEPS deque-run ] ;
+
+  deque-finish: ( deque -- deque ) [
+    [ dup deque-rotating? ] [ DEQUE-FINISH-CHUNK deque-run ] while
+  ] ;
+
+  \ Which end has outgrown the other, or `f` when the deque is balanced.
+  imbalance: ( deque -- end ) [
+    dup front>> n>> swap back>> n>>
+    2dup DEQUE-BALANCE * 1 + >
+    [ 2drop front: ]
+    [ 2dup swap DEQUE-BALANCE * 1 + > [ 2drop back: ] [ 2drop f ] if ]
+    if
+  ] ;
+
+  deque-check: ( deque -- deque ) [
+    dup deque-rotating? [ ] [ dup imbalance dup [ begin-rotation ] [ drop ] if ] if
+    deque-exec
+  ] ;
+
+  \ Finish whatever is in flight and rebalance in one go. Only the shortfall guards reach
+  \ this, and it costs a whole rotation.
+  deque-rebalance: ( deque -- deque ) [
+    deque-finish
+    dup imbalance dup [ begin-rotation deque-finish ] [ drop ] if
+  ] ;
+
+  \ The two words below cover the two ways a rotation can fall behind the operations running
+  \ alongside it. An end is only ever read from its own live cells, so the first guard catches
+  \ that list running dry. An end can also be popped down to nothing while the deque still
+  \ claims cells for it, which the second guard catches.
+  \
+  \ Neither fires at the shipped step budget. That was measured across fill-and-drain at every
+  \ size to 120, a push-heavy interleaved script, and a conveyor over 2000 elements. The
+  \ guards are what makes a budget that is too small cost time rather than correctness.
+  ensure-front: ( deque -- deque ) [
+    dup front>> list>> nil? over front>> n>> 0 > and [ deque-finish ] when
+    dup front>> n>> 0 = over back>> n>> 1 > and [ deque-rebalance ] when
+  ] ;
+
+  ensure-back: ( deque -- deque ) [
+    dup back>> list>> nil? over back>> n>> 0 > and [ deque-finish ] when
+    dup back>> n>> 0 = over front>> n>> 1 > and [ deque-rebalance ] when
+  ] ;
+
+  end-push: ( deque-end value -- deque-end ) [
+    swap unmake-deque-end <rot- swap cons [ 1 + ] dip make-deque-end
+  ] ;
+
+  end-pop: ( deque-end -- deque-end value ) [
+    unmake-deque-end dup head swap tail [ swap 1 - ] dip make-deque-end swap
+  ] ;
+
+  deque-mark: ( deque end quot: ( rotation end -- rotation ) -- deque ) [
+    2 pick-n rot>> rotation?
+    [ [ over rot>> swap ] dip call set-deque-rot ]
+    [ 2drop ]
+    if
+  ] ;
+
+  deque-len: ( deque -- n ) [ dup front>> n>> swap back>> n>> + ] ;
+
+  throw-empty: never-returns ( -- * ) [
+    f "operation on an empty deque" EEmptySequence make-error throw
+  ] ;
+
+  pop-front-cell: ( deque -- deque value ) [
+    dup front>> end-pop
+    [ set-deque-front front: [ rot-mark-pop ] deque-mark deque-check ] dip
+  ] ;
+
+  pop-back-cell: ( deque -- deque value ) [
+    dup back>> end-pop
+    [ set-deque-back back: [ rot-mark-pop ] deque-mark deque-check ] dip
+  ] ;
+}
+
+\\ A persistent double-ended queue. Every push and pop at either end is worst-case O(1),
+\\ including on a version retained from before a rebalance.
+deque: struct{ front back rot } ;
+
+\\ An empty deque.
+<deque>: ( -- deque ) [ 0 nil make-deque-end 0 nil make-deque-end f make-deque ] ;
+
+\\ Add a value at the front.
+\\
+\\   <deque> 1 deque-push-front 2 deque-push-front deque-pop-front nip
+\\   => 2
+deque-push-front: ( deque: deque value -- deque ) [
+  over front>> swap end-push set-deque-front
+  front: [ rot-mark-push ] deque-mark
+  deque-check
+] ;
+
+\\ Add a value at the back. This is the enqueue end: values pushed here come back off the
+\\ front in the order they went on.
+\\
+\\   <deque> 1 deque-push-back 2 deque-push-back deque-pop-front nip
+\\   => 1
+deque-push-back: ( deque: deque value -- deque ) [
+  over back>> swap end-push set-deque-back
+  back: [ rot-mark-push ] deque-mark
+  deque-check
+] ;
+
+\\ Remove and return the front value. Throws `empty-sequence` on an empty deque.
+\\
+\\   <deque> 1 deque-push-back 2 deque-push-back deque-pop-front nip
+\\   => 1
+deque-pop-front: ( deque: deque -- deque value ) [
+  dup deque-len 0 = [ throw-empty ] when
+  ensure-front
+  dup front>> n>> 0 = [ pop-back-cell ] [ pop-front-cell ] if
+] ;
+
+\\ Remove and return the back value. Throws `empty-sequence` on an empty deque.
+\\
+\\   <deque> 1 deque-push-back 2 deque-push-back deque-pop-back nip
+\\   => 2
+deque-pop-back: ( deque: deque -- deque value ) [
+  dup deque-len 0 = [ throw-empty ] when
+  ensure-back
+  dup back>> n>> 0 = [ pop-front-cell ] [ pop-back-cell ] if
+] ;

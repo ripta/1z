@@ -18,8 +18,14 @@ use "math/ratio" ;
 \ Verify new error type constants exist and are symbols
 EIndexOutOfBounds type-of symbol "EIndexOutOfBounds is a symbol" assert=
 EInvalidArgument type-of symbol "EInvalidArgument is a symbol" assert=
+EEmptySequence type-of symbol "EEmptySequence is a symbol" assert=
 EIndexOutOfBounds index-out-of-bounds: "EIndexOutOfBounds value" assert=
 EInvalidArgument invalid-argument: "EInvalidArgument value" assert=
+EEmptySequence empty-sequence: "EEmptySequence value" assert=
+
+\ The constant names the type the native mutable pops already raise.
+[ V{ } #pop! ] EEmptySequence "#pop! on empty vector throws EEmptySequence" assert-error-type
+[ V{ } #shift! ] EEmptySequence "#shift! on empty vector throws EEmptySequence" assert-error-type
 
 "prelude throws proper error types" test-section
 

@@ -1,5 +1,5 @@
-src/prelude.1z:1023: error 'null-code-ptr' at word 'call'
+src/prelude.1z:1024: error 'null-code-ptr' at word 'call'
   stack effect: ( ..a quot: ( ..a -- ..b ) -- ..b )
-  called from src/prelude.1z:1027: if
   called from src/prelude.1z:1028: if
   called from src/prelude.1z:1029: if
+  called from src/prelude.1z:1030: if

@@ -14,9 +14,17 @@ PASS: EIndexOutOfBounds is a symbol
 Stack: [ ]
 PASS: EInvalidArgument is a symbol
 Stack: [ ]
+PASS: EEmptySequence is a symbol
+Stack: [ ]
 PASS: EIndexOutOfBounds value
 Stack: [ ]
 PASS: EInvalidArgument value
+Stack: [ ]
+PASS: EEmptySequence value
+Stack: [ ]
+PASS: #pop! on empty vector throws EEmptySequence
+Stack: [ ]
+PASS: #shift! on empty vector throws EEmptySequence
 Stack: [ ]
 === prelude throws proper error types ===
 Stack: [ ]

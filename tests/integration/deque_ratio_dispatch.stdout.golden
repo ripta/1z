@@ -1,0 +1,12 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+=== ratio dispatch does not reach the deque's split point ===
+Stack: [ ]
+PASS: a queue drains in order with ratios loaded
+Stack: [ ]
+PASS: a front fill drains off the back in order
+Stack: [ ]
+PASS: an empty deque still throws
+Stack: [ ]

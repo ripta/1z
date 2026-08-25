@@ -1,0 +1,38 @@
+\ The deque halves its length to pick a rotation's split point. `/` is a generic, and
+\ `math/ratio` registers it for two fixnums, so a deque that halved with `/` would start
+\ carrying ratio lengths as soon as any module in the program loaded ratios. No length would
+\ then compare equal to zero, and the second pop would read past the end of a live list.
+\
+\ The round trips run inside words so no deque is left on the stack between statements; the
+\ golden would otherwise carry a full dump of the rotation's internals.
+
+use "testing" ;
+use "math/ratio" ;
+use "ranges" ;
+use "deque" ;
+
+drain-front: ( deque n -- array ) [
+  { } swap 0 swap <range> [ drop swap deque-pop-front [ swap ] dip #push ] #each nip
+] ;
+
+drain-back: ( deque n -- array ) [
+  { } swap 0 swap <range> [ drop swap deque-pop-back [ swap ] dip #push ] #each nip
+] ;
+
+\ Enqueue 0..n-1 at the back, then drain from the front. n is large enough to rotate.
+queue-round-trip: ( n -- array ) [
+  dup <deque> swap 0 swap <range> [ deque-push-back ] #each
+  swap drain-front
+] ;
+
+\ Push 0..n-1 at the front, then drain from the back, which reads them in push order.
+front-fill-round-trip: ( n -- array ) [
+  dup <deque> swap 0 swap <range> [ deque-push-front ] #each
+  swap drain-back
+] ;
+
+"ratio dispatch does not reach the deque's split point" test-section
+
+60 queue-round-trip 0 60 <range> #collect "a queue drains in order with ratios loaded" assert=
+60 front-fill-round-trip 0 60 <range> #collect "a front fill drains off the back in order" assert=
+[ <deque> deque-pop-front ] empty-sequence: "an empty deque still throws" assert-error-type

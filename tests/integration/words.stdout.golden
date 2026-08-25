@@ -421,6 +421,7 @@ B{
 EArityMismatch ( -- sym )
 ECannotRedefineConst ( -- sym )
 EDivisionByZero ( -- sym )
+EEmptySequence ( -- sym )
 EFileNotFound ( -- sym )
 EFileReadFailed ( -- sym )
 EFixnumOverflow ( -- sym )
