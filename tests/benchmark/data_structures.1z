@@ -120,6 +120,9 @@ bst-sweep: ( n -- ) [
 \ levels rather than one, because each row re-runs against the same fixture: a fixture left
 \ mid-rotation pays the rotation's per-operation step budget on every iteration, and one left
 \ idle pays none. Both levels are flat across n, which is what O(1) means here.
+\
+\ The conformance rows ride the same fixture: iter-new and #len are O(1) and read flat, and
+\ drain is O(n) by repeated front-pop, so its per-element cost reads flat like fill+drain.
 
 deque-fill: ( n -- deque ) [ <deque> swap 0 swap <range> [ deque-push-back ] #each ] ;
 
@@ -138,6 +141,9 @@ deque-sweep: ( n -- ) [
   "deque push-front" pick 5 [ dup 0 deque-push-front drop ] scale-row
   "deque pop-front" pick 5 [ dup deque-pop-front 2drop ] scale-row
   "deque pop-back" pick 5 [ dup deque-pop-back 2drop ] scale-row
+  "deque iter-new" pick 5 [ dup >iterator drop ] scale-row
+  "deque drain" pick 5 [ dup >iterator #count drop ] scale-row
+  "deque #len" pick 5 [ dup #len drop ] scale-row
   2drop
 ] ;
 

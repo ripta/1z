@@ -1,0 +1,55 @@
+\ Integration tests for the deque's sequence protocol conformance
+
+use "testing" ;
+use "deque" ;
+use { <range>: } "ranges" ;
+
+\ Push 0, 1, ... n-1 onto the back.
+push-back-n: ( deque n -- deque ) [ 0 swap <range> [ deque-push-back ] #each ] ;
+
+\ Built once and read repeatedly: 64 back-pushes cross several rotations, and persistence
+\ lets every read below start from this same version. One shared fill also keeps the file
+\ inside the harness budget, since a Debug build pays a documented per-allocation cost that
+\ makes each push expensive.
+rot-fixture: const [ <deque> 64 push-back-n ] ;
+
+">iterator on empty deque" test-section
+<deque> >iterator #collect { } ">iterator on empty collects to empty array" assert=
+
+">iterator on deque" test-section
+<deque> 1 deque-push-back 2 deque-push-back 3 deque-push-front
+>iterator #collect { 3 1 2 } ">iterator collects front-to-back" assert=
+
+">iterator across rotations" test-section
+rot-fixture >iterator #count 64 "drain sees every element pushed past the first rotation" assert=
+rot-fixture >iterator #collect 0 #nth 0 "front element survives the rotations" assert=
+rot-fixture >iterator #collect 63 #nth 63 "back element survives the rotations" assert=
+
+">iterator with lazy adapters" test-section
+<deque> 5 push-back-n >iterator [ 10 * ] #map #collect
+{ 0 10 20 30 40 } "lazy map over deque iterator" assert=
+<deque> 5 push-back-n >iterator [ 2 > ] #filter #collect
+{ 3 4 } "lazy filter over deque iterator" assert=
+<deque> 5 push-back-n >iterator 2 #take #collect
+{ 0 1 } "take 2 from deque iterator" assert=
+<deque> 5 push-back-n >iterator 0 [ + ] #reduce
+10 "reduce over deque iterator" assert=
+
+">iterator state is per-call" test-section
+<deque> 3 push-back-n
+dup >iterator #collect { 0 1 2 } "first drain sees all elements" assert=
+dup >iterator #collect { 0 1 2 } "second iterator is fresh" assert=
+dup >iterator 1 #take #collect { 0 } "partial consumption" assert=
+dup >iterator #collect { 0 1 2 } "full drain after partial consumption" assert=
+#len 3 "deque unchanged after draining" assert=
+
+"#push and #pop" test-section
+<deque> 1 #push 2 #push dup #last 2 "#push adds at the back" assert=
+dup #pop nip 2 "#pop returns the back element" assert=
+dup #pop drop #len 1 "#pop leaves the shorter deque" assert=
+dup #pop 2drop dup #pop 2drop >array { 1 2 } "popped versions leave the source usable" assert=
+
+"#push and #pop fallthrough" test-section
+{ 1 2 } 3 #push { 1 2 3 } "#push fallthrough on array" assert=
+{ 1 2 3 } #pop 3 "#pop fallthrough returns array element" assert=
+{ 1 2 } "#pop fallthrough returns shorter array" assert=

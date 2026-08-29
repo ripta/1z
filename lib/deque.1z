@@ -719,3 +719,42 @@ dequeue: ( deque: deque -- deque value ) [ deque-pop-front ] ;
 \\ Alias of `deque-pop-front?`. On an empty deque the deque comes back unchanged with
 \\ `option:none`.
 dequeue?: ( deque: deque -- deque option ) [ deque-pop-front? ] ;
+
+private{
+  \ Iterator step: state is a one-element vector holding the deque still to drain.
+  deque-iter-step: ( state -- option ) [
+    dup 0 #nth deque-pop-front?
+    swap 2 pick-n 0 <rot- #nth! drop
+    nip
+  ] ;
+}
+
+\ Iterator protocol integration: lazy front-to-back drain by repeated front-pop, worst-case
+\ O(1) per step.
+>iterator: method{ deque } [
+  [ ] make-vector swap #push!
+  [ deque-iter-step ] curry
+  >iterator
+] ;
+
+\ Cost-rule protocol conformance: #len sums the two end lengths in O(1), and the peeks and
+\ back operations ride the worst-case O(1) end words, so #first, #last, and #pop throw
+\ `empty-sequence` on an empty deque like the bare words they delegate to.
+\
+\ #nth is left unimplemented. It would be an O(n) walk under an O(1) expectation, so
+\ iteration through >iterator stays the visible path for positional access.
+#len: method{ deque } [ deque-len ] ;
+#empty?: method{ deque } [ deque-len 0 = ] ;
+
+\ The peeks drop the deque before throwing on empty. The prelude's #first? and #last? recover
+\ around the bare form, and recover keeps whatever the failed quotation left behind, so a
+\ method that throws with its operand still up leaks it into the caller's stack.
+#first: method{ deque } [ dup deque-len 0 = [ drop throw-empty ] [ deque-front ] if ] ;
+#last: method{ deque } [ dup deque-len 0 = [ drop throw-empty ] [ deque-back ] if ] ;
+
+>array: method{ deque } [ #collect ] ;
+
+\ The stack flavor: #push and #pop operate at the back, matching the array semantics of
+\ "end of sequence".
+#push: method{ deque } [ deque-push-back ] ;
+#pop: method{ deque } [ deque-pop-back ] ;

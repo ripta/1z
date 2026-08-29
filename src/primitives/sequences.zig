@@ -1848,6 +1848,7 @@ pub fn nativePrepend(ctx: *Context) anyerror!void {
 
 /// #push ( seq elem -- seq' )
 fn nativePush(ctx: *Context) anyerror!void {
+    if (try dispatch_helpers.tryDispatchContainerAtDepth(ctx, ctx.nativeDispatchId(.push), 1, true)) return;
     const elem = try ctx.stack.pop();
     const seq = try ctx.stack.pop();
     defer container_backing.releaseValue(seq);
@@ -1925,6 +1926,7 @@ fn nativePush(ctx: *Context) anyerror!void {
 
 /// #pop ( seq -- seq' elem )
 fn nativePop(ctx: *Context) anyerror!void {
+    if (try dispatch_helpers.tryDispatchContainerAtDepth(ctx, ctx.nativeDispatchId(.pop), 0, true)) return;
     const seq = try ctx.stack.pop();
     defer container_backing.releaseValue(seq);
     const alloc = ctx.quotationAllocator();

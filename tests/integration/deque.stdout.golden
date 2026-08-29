@@ -1,0 +1,64 @@
+Stack: [ ]
+Stack: [ ]
+=== >iterator on empty deque ===
+Stack: [ ]
+PASS: >iterator on empty collects to empty array
+Stack: [ ]
+=== >iterator on deque ===
+Stack: [ ]
+Stack: [ deque{ front: deque-end{ n: 2 list: <cons-list:cons cons-cell{ head: 3 tail: <cons-list:cons cons-cell{ head: 1 tail: <cons-list:nil nil:> }> }> } back: deque-end{ n: 1 list: <cons-list:cons cons-cell{ head: 2 tail: <cons-list:nil nil:> }> } rot: f } ]
+PASS: >iterator collects front-to-back
+Stack: [ ]
+=== >iterator across rotations ===
+Stack: [ ]
+PASS: drain sees every element pushed past the first rotation
+Stack: [ ]
+PASS: front element survives the rotations
+Stack: [ ]
+PASS: back element survives the rotations
+Stack: [ ]
+=== >iterator with lazy adapters ===
+Stack: [ ]
+Stack: [ { 0 10 20 30 40 } ]
+PASS: lazy map over deque iterator
+Stack: [ ]
+Stack: [ { 3 4 } ]
+PASS: lazy filter over deque iterator
+Stack: [ ]
+Stack: [ { 0 1 } ]
+PASS: take 2 from deque iterator
+Stack: [ ]
+Stack: [ 10 ]
+PASS: reduce over deque iterator
+Stack: [ ]
+=== >iterator state is per-call ===
+Stack: [ ]
+Stack: [ deque{ front: deque-end{ n: 1 list: <cons-list:cons cons-cell{ head: 0 tail: <cons-list:nil nil:> }> } back: deque-end{ n: 2 list: <cons-list:cons cons-cell{ head: 2 tail: <cons-list:cons cons-cell{ head: 1 tail: <cons-list:nil nil:> }> }> } rot: f } ]
+PASS: first drain sees all elements
+Stack: [ deque{ front: deque-end{ n: 1 list: <cons-list:cons cons-cell{ head: 0 tail: <cons-list:nil nil:> }> } back: deque-end{ n: 2 list: <cons-list:cons cons-cell{ head: 2 tail: <cons-list:cons cons-cell{ head: 1 tail: <cons-list:nil nil:> }> }> } rot: f } ]
+PASS: second iterator is fresh
+Stack: [ deque{ front: deque-end{ n: 1 list: <cons-list:cons cons-cell{ head: 0 tail: <cons-list:nil nil:> }> } back: deque-end{ n: 2 list: <cons-list:cons cons-cell{ head: 2 tail: <cons-list:cons cons-cell{ head: 1 tail: <cons-list:nil nil:> }> }> } rot: f } ]
+PASS: partial consumption
+Stack: [ deque{ front: deque-end{ n: 1 list: <cons-list:cons cons-cell{ head: 0 tail: <cons-list:nil nil:> }> } back: deque-end{ n: 2 list: <cons-list:cons cons-cell{ head: 2 tail: <cons-list:cons cons-cell{ head: 1 tail: <cons-list:nil nil:> }> }> } rot: f } ]
+PASS: full drain after partial consumption
+Stack: [ deque{ front: deque-end{ n: 1 list: <cons-list:cons cons-cell{ head: 0 tail: <cons-list:nil nil:> }> } back: deque-end{ n: 2 list: <cons-list:cons cons-cell{ head: 2 tail: <cons-list:cons cons-cell{ head: 1 tail: <cons-list:nil nil:> }> }> } rot: f } ]
+PASS: deque unchanged after draining
+Stack: [ ]
+=== #push and #pop ===
+Stack: [ ]
+PASS: #push adds at the back
+Stack: [ deque{ front: deque-end{ n: 1 list: <cons-list:cons cons-cell{ head: 1 tail: <cons-list:nil nil:> }> } back: deque-end{ n: 1 list: <cons-list:cons cons-cell{ head: 2 tail: <cons-list:nil nil:> }> } rot: f } ]
+PASS: #pop returns the back element
+Stack: [ deque{ front: deque-end{ n: 1 list: <cons-list:cons cons-cell{ head: 1 tail: <cons-list:nil nil:> }> } back: deque-end{ n: 1 list: <cons-list:cons cons-cell{ head: 2 tail: <cons-list:nil nil:> }> } rot: f } ]
+PASS: #pop leaves the shorter deque
+Stack: [ deque{ front: deque-end{ n: 1 list: <cons-list:cons cons-cell{ head: 1 tail: <cons-list:nil nil:> }> } back: deque-end{ n: 1 list: <cons-list:cons cons-cell{ head: 2 tail: <cons-list:nil nil:> }> } rot: f } ]
+PASS: popped versions leave the source usable
+Stack: [ ]
+=== #push and #pop fallthrough ===
+Stack: [ ]
+PASS: #push fallthrough on array
+Stack: [ ]
+PASS: #pop fallthrough returns array element
+Stack: [ { 1 2 } ]
+PASS: #pop fallthrough returns shorter array
+Stack: [ ]

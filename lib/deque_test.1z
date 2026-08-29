@@ -267,3 +267,62 @@ test-empty-sequence-constant: ( -- ) [
   "error constant" test-section
   EEmptySequence empty-sequence: "EEmptySequence carries the empty-sequence type" assert=
 ] ;
+
+\ --- Protocol methods ---
+
+test-len-and-empty: ( -- ) [
+  "protocol methods" test-section
+  <deque> #len 0 "#len of empty is 0" assert=
+  <deque> #empty? "empty deque is #empty?" assert-true
+  <deque> 3 push-back-n 2 push-front-n
+  dup #len 5 "#len sums both ends" assert=
+  #empty? f "populated deque is not #empty?" assert=
+  <deque> 64 push-back-n #len 64 "#len past a rotation" assert=
+] ;
+
+test-first-and-last: ( -- ) [
+  <deque> 3 push-back-n
+  dup #first 0 "#first reads the front" assert=
+  #last 2 "#last reads the back" assert=
+  [ <deque> #first ] empty-sequence: "#first on empty throws" assert-error-type
+  [ <deque> #last ] empty-sequence: "#last on empty throws" assert-error-type
+] ;
+
+test-first-and-last-twins: ( -- ) [
+  <deque> #first? option:none? "#first? on empty is none" assert-true
+  <deque> #last? option:none? "#last? on empty is none" assert-true
+  <deque> 3 push-back-n
+  dup #first? option:some> 0 "#first? wraps the front" assert=
+  #last? option:some> 2 "#last? wraps the back" assert=
+] ;
+
+test-to-array-method: ( -- ) [
+  <deque> >array { } ">array of empty is the empty array" assert=
+  <deque> 1 deque-push-back 2 deque-push-back 3 deque-push-front
+  >array { 3 1 2 } ">array reads front-to-back" assert=
+] ;
+
+test-iterator-is-fresh-per-call: ( -- ) [
+  <deque> 3 push-back-n
+  dup >iterator 1 #take #collect { 0 } "partial take reads the front" assert=
+  dup >iterator #collect { 0 1 2 } "a later iterator is fresh" assert=
+  #len 3 "iteration leaves the deque unchanged" assert=
+] ;
+
+test-push-pop-methods-operate-at-the-back: ( -- ) [
+  <deque> 1 #push 2 #push
+  dup #first 1 "#push leaves the front alone" assert=
+  dup #last 2 "#push lands at the back" assert=
+  dup #pop nip 2 "#pop takes the back" assert=
+  #pop drop #pop nip 1 "consecutive #pops walk the back inward" assert=
+] ;
+
+test-nth-is-not-registered: ( -- ) [
+  [ <deque> 1 #push 0 #nth ] "#nth on a deque throws" assert-error
+] ;
+
+test-push-pop-fallthrough: ( -- ) [
+  { 1 2 } 3 #push { 1 2 3 } "#push fallthrough on array" assert=
+  { 1 2 3 } #pop 3 "#pop fallthrough returns the array element" assert=
+  { 1 2 } "#pop fallthrough leaves the shorter array" assert=
+] ;
