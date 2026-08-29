@@ -309,3 +309,141 @@ test-deep-iteration: ( -- ) [
   dup heap-unsorted #count 2000 "the unsorted walk covers a deep tree" assert=
   >iterator #count 2000 "the sorted drain covers a deep tree" assert=
 ] ;
+
+\ --- priority-queue ---
+
+\ Drain the queue's values in priority order by repeated pop-min.
+drain-pq-values: ( pq -- array ) [
+  { } swap [ dup #len 0 > ] [ priority-queue-pop-min value>> swap [ #push ] dip ] while drop
+] ;
+
+test-pq-constructor-is-empty: ( -- ) [
+  "priority-queue" test-section
+  [ cmp ] <priority-queue> #len 0 "#len of an empty queue is 0" assert=
+  [ cmp ] <priority-queue> #empty? "an empty queue is #empty?" assert-true
+] ;
+
+test-pq-insert-and-min-entry: ( -- ) [
+  [ cmp ] <priority-queue> 2 20 priority-queue-insert 1 10 priority-queue-insert
+  dup #len 2 "#len counts the entries" assert=
+  priority-queue-min
+  dup priority>> 1 "min surfaces the smallest priority" assert=
+  value>> 10 "min carries that priority's value" assert=
+] ;
+
+test-pq-drains-in-priority-order: ( -- ) [
+  [ cmp ] <priority-queue>
+  3 30 priority-queue-insert 1 10 priority-queue-insert
+  4 40 priority-queue-insert 2 20 priority-queue-insert
+  drain-pq-values { 10 20 30 40 } "values drain in priority order" assert=
+] ;
+
+test-pq-keeps-equal-priorities: ( -- ) [
+  [ cmp ] <priority-queue> 1 10 priority-queue-insert 1 11 priority-queue-insert
+  dup #len 2 "equal priorities do not overwrite" assert=
+  drain-pq-values [ < ] #sort { 10 11 } "both values drain" assert=
+] ;
+
+test-pq-empty-behavior: ( -- ) [
+  [ [ cmp ] <priority-queue> priority-queue-min ] empty-heap:
+  "min on empty throws" assert-error-type
+  [ [ cmp ] <priority-queue> priority-queue-pop-min ] empty-heap:
+  "pop-min on empty throws" assert-error-type
+  [ cmp ] <priority-queue> priority-queue-min? option:none? "min? on empty is none" assert-true
+] ;
+
+test-pq-pop-min-empty-twin: ( -- ) [
+  [ cmp ] <priority-queue> priority-queue-pop-min?
+  option:none? "pop-min? on empty is none" assert-true
+  dup #len 0 "the queue comes back unchanged" assert=
+  7 70 priority-queue-insert priority-queue-pop-min nip
+  value>> 70 "the unchanged queue still works" assert=
+] ;
+
+test-pq-merge: ( -- ) [
+  [ cmp ] <priority-queue> 2 20 priority-queue-insert
+  [ cmp ] <priority-queue> 1 10 priority-queue-insert
+  priority-queue-merge
+  dup #len 2 "#len of a merge sums both operands" assert=
+  priority-queue-min value>> 10 "the merge surfaces the global min" assert=
+] ;
+
+test-pq-is-persistent: ( -- ) [
+  [ cmp ] <priority-queue> 2 20 priority-queue-insert 1 10 priority-queue-insert
+  dup priority-queue-pop-min 2drop
+  dup #len 2 "the retained version kept its entries" assert=
+  drain-pq-values { 10 20 } "the retained version drains whole" assert=
+] ;
+
+\ --- priority-queue aliases ---
+
+test-pq-aliases: ( -- ) [
+  "priority-queue aliases" test-section
+  [ cmp ] <priority-queue> 2 20 pq-insert 1 10 pq-insert
+  dup pq-min value>> 10 "pq-min surfaces the min entry" assert=
+  dup pq-min? option:some> priority>> 1 "pq-min? wraps the min entry" assert=
+  pq-pop-min value>> 10 "pq-pop-min takes the min entry" assert=
+  pq-pop-min value>> 20 "then the next" assert=
+  drop
+] ;
+
+\ Drain with the option twin until it answers none, keeping priority order.
+pq-drain-all: ( pq -- array ) [
+  { } swap
+  [ pq-pop-min? dup option:some? ]
+  [ option:some> value>> swap [ #push ] dip ]
+  while
+  2drop
+] ;
+
+test-pq-pop-twin-composes-a-drain-loop: ( -- ) [
+  [ cmp ] <priority-queue>
+  3 30 pq-insert 1 10 pq-insert 2 20 pq-insert
+  pq-drain-all { 10 20 30 } "the drain loop stops on none and keeps priority order" assert=
+] ;
+
+\ --- priority-queue protocol methods ---
+
+test-pq-iterator-yields-entries-sorted: ( -- ) [
+  "priority-queue protocol methods" test-section
+  [ cmp ] <priority-queue>
+  3 30 priority-queue-insert 1 10 priority-queue-insert 2 20 priority-queue-insert
+  >iterator [ value>> ] #map #collect
+  { 10 20 30 } ">iterator yields entries in priority order" assert=
+] ;
+
+test-pq-sorted-is-lazy: ( -- ) [
+  [ cmp ] <priority-queue>
+  3 30 priority-queue-insert 1 10 priority-queue-insert 2 20 priority-queue-insert
+  dup priority-queue-sorted 1 #take [ priority>> ] #map #collect
+  { 1 } "taking one yields the smallest" assert=
+  #len 3 "the source queue is unchanged after a partial take" assert=
+] ;
+
+test-pq-unsorted-yields-every-entry: ( -- ) [
+  [ cmp ] <priority-queue>
+  3 30 priority-queue-insert 1 10 priority-queue-insert 2 20 priority-queue-insert
+  priority-queue-unsorted [ value>> ] #map [ < ] #sort
+  { 10 20 30 } "the unsorted walk yields exactly the entries" assert=
+] ;
+
+test-pq-first-and-twin: ( -- ) [
+  [ cmp ] <priority-queue> 2 20 priority-queue-insert 1 10 priority-queue-insert
+  #first value>> 10 "#first is the min entry" assert=
+  [ cmp ] <priority-queue> 2 20 priority-queue-insert 1 10 priority-queue-insert
+  #first? option:some> value>> 10 "#first? surfaces the min entry" assert=
+  [ [ cmp ] <priority-queue> #first ] empty-heap: "#first on empty throws empty-heap" assert-error-type
+  [ cmp ] <priority-queue> #first? option:none? "#first? on empty is none" assert-true
+] ;
+
+test-pq-to-array-is-the-sorted-entry-dump: ( -- ) [
+  [ cmp ] <priority-queue> 2 20 priority-queue-insert 1 10 priority-queue-insert
+  >array [ priority>> ] #map #collect { 1 2 } ">array is the sorted entry dump" assert=
+] ;
+
+test-pq-unregistered-words-throw: ( -- ) [
+  [ [ cmp ] <priority-queue> 1 10 priority-queue-insert 0 #nth ] "#nth on a queue throws" assert-error
+  [ [ cmp ] <priority-queue> 1 10 priority-queue-insert #last ] "#last on a queue throws" assert-error
+  [ [ cmp ] <priority-queue> 1 10 priority-queue-insert 2 #push ] "#push on a queue throws" assert-error
+  [ [ cmp ] <priority-queue> 1 10 priority-queue-insert #pop ] "#pop on a queue throws" assert-error
+] ;

@@ -323,3 +323,127 @@ heap-unsorted: ( heap: heap -- iterator ) [
 #empty?:   method{ heap } [ size>> 0 = ] ;
 #first:    method{ heap } [ heap-min ] ;
 >array:    method{ heap } [ #collect ] ;
+
+\\ A priority/value entry: what the priority queue stores in its base heap and what its
+\\ peeks, pops, and iterators yield.
+pq-entry: struct{ priority value } ;
+
+\\ A priority queue: a pairing heap of `pq-entry` values ordered by priority. The wrapper's
+\\ words build the entries, so a scheduling consumer never writes the projection by hand.
+priority-queue: virtual{ heap } ;
+
+\\ An empty priority queue. The comparator has effect `( p1 p2 -- ordering )` over
+\\ priorities, as `cmp` does, and is curried to read each entry's priority.
+\\
+\\   [ cmp ] <priority-queue> #len
+\\   => 0
+<priority-queue>: ( comparator: quotation -- priority-queue ) [
+  [ [ [ priority>> ] dip priority>> ] dip call ] curry
+  <heap> make-priority-queue
+] ;
+
+\\ Add a value at a priority in worst-case O(1). Entries with equal priorities are all
+\\ kept and pop in no guaranteed order among themselves.
+\\
+\\   [ cmp ] <priority-queue> 2 20 priority-queue-insert 1 10 priority-queue-insert #len
+\\   => 2
+priority-queue-insert: ( pq: priority-queue priority value -- priority-queue ) [
+  make-pq-entry swap unmake-priority-queue swap heap-insert make-priority-queue
+] ;
+
+\\ Merge two priority queues in worst-case O(1). Both operands must have been built with
+\\ the same comparator; that precondition is not checked, and the result carries the left
+\\ operand's comparator.
+\\
+\\   [ cmp ] <priority-queue> 1 10 priority-queue-insert
+\\   [ cmp ] <priority-queue> 2 20 priority-queue-insert
+\\   priority-queue-merge #len
+\\   => 2
+priority-queue-merge: ( pq: priority-queue other: priority-queue -- priority-queue ) [
+  unmake-priority-queue [ unmake-priority-queue ] dip heap-merge make-priority-queue
+] ;
+
+\\ The minimum-priority entry in O(1). Throws `empty-heap` on an empty queue.
+\\
+\\   [ cmp ] <priority-queue> 2 20 priority-queue-insert 1 10 priority-queue-insert
+\\   priority-queue-min value>>
+\\   => 10
+priority-queue-min: ( pq: priority-queue -- entry ) [
+  unmake-priority-queue heap-min
+] ;
+
+\\ The minimum-priority entry as an option, `option:none` on an empty queue.
+\\
+\\   [ cmp ] <priority-queue> priority-queue-min? option:none?
+\\   => t
+priority-queue-min?: ( pq: priority-queue -- option ) [
+  unmake-priority-queue heap-min?
+] ;
+
+\\ Remove and return the minimum-priority entry in O(log n) amortized. Throws `empty-heap`
+\\ on an empty queue.
+\\
+\\   [ cmp ] <priority-queue> 2 20 priority-queue-insert 1 10 priority-queue-insert
+\\   priority-queue-pop-min nip value>>
+\\   => 10
+priority-queue-pop-min: ( pq: priority-queue -- priority-queue entry ) [
+  unmake-priority-queue heap-pop-min [ make-priority-queue ] dip
+] ;
+
+\\ Remove and return the minimum-priority entry as an option. On an empty queue the queue
+\\ comes back unchanged with `option:none`.
+\\
+\\   [ cmp ] <priority-queue> 1 10 priority-queue-insert
+\\   priority-queue-pop-min? nip option:some> value>>
+\\   => 10
+priority-queue-pop-min?: ( pq: priority-queue -- priority-queue option ) [
+  unmake-priority-queue heap-pop-min? [ make-priority-queue ] dip
+] ;
+
+\\ A lazy iterator over the entries in priority order, by repeated pop-min over the
+\\ persistent base heap. Taking k entries costs O(k log n) amortized, and the source
+\\ queue is unchanged.
+\\
+\\   [ cmp ] <priority-queue> 2 20 priority-queue-insert 1 10 priority-queue-insert
+\\   priority-queue-sorted [ value>> ] #map #collect
+\\   => { 10 20 }
+priority-queue-sorted: ( pq: priority-queue -- iterator ) [
+  unmake-priority-queue heap-sorted
+] ;
+
+\\ A lazy iterator over the entries in structural order, O(1) amortized per step, with no
+\\ order guarantee.
+\\
+\\   [ cmp ] <priority-queue> 1 10 priority-queue-insert
+\\   priority-queue-unsorted [ value>> ] #map #collect
+\\   => { 10 }
+priority-queue-unsorted: ( pq: priority-queue -- iterator ) [
+  unmake-priority-queue heap-unsorted
+] ;
+
+\\ Alias of `priority-queue-insert`.
+pq-insert: ( pq: priority-queue priority value -- priority-queue ) [ priority-queue-insert ] ;
+
+\\ Alias of `priority-queue-min`. Throws `empty-heap` on an empty queue.
+pq-min: ( pq: priority-queue -- entry ) [ priority-queue-min ] ;
+
+\\ Alias of `priority-queue-min?`. On an empty queue answers `option:none`.
+pq-min?: ( pq: priority-queue -- option ) [ priority-queue-min? ] ;
+
+\\ Alias of `priority-queue-pop-min`. Throws `empty-heap` on an empty queue.
+pq-pop-min: ( pq: priority-queue -- priority-queue entry ) [ priority-queue-pop-min ] ;
+
+\\ Alias of `priority-queue-pop-min?`. On an empty queue the queue comes back unchanged
+\\ with `option:none`.
+pq-pop-min?: ( pq: priority-queue -- priority-queue option ) [ priority-queue-pop-min? ] ;
+
+\ The pair layer's conformance surface, yielding entries. A virtual type inherits no
+\ methods, so the wrapper registers its own set over the same O(1) reads. #first needs no
+\ drop-before-throw guard for the heap's reason: priority-queue-min consumes the queue on
+\ every path before the empty arm throws. #last, #nth, #push, and #pop stay unregistered,
+\ as on the heap.
+>iterator: method{ priority-queue } [ priority-queue-sorted ] ;
+#len:      method{ priority-queue } [ unmake-priority-queue size>> ] ;
+#empty?:   method{ priority-queue } [ unmake-priority-queue size>> 0 = ] ;
+#first:    method{ priority-queue } [ priority-queue-min ] ;
+>array:    method{ priority-queue } [ #collect ] ;
