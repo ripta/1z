@@ -148,23 +148,34 @@ deque-sweep: ( n -- ) [
   2drop
 ] ;
 
-\ The heap rows are the O(1) claims on insert and merge. Both land on a fixture of size n
-\ and have to read flat across the 2x steps: an insert melds one singleton against the
-\ root, and a merge melds two roots, so neither looks past the top of either tree. The
-\ merge row merges the fixture with itself, which persistence makes safe. The fill row is
-\ O(n) and guards the constant factor; #len reads the size field. No pop row exists yet,
-\ because the pairing pass only runs under a pop and the pop words land with the
-\ min-vocabulary surface.
+\ The heap rows are the O(1) claims on insert, merge, and min, plus the amortized pop
+\ chain. The per-operation rows land on a fixture of size n and have to read flat across
+\ the 2x steps: an insert melds one singleton against the root, a merge melds two roots,
+\ and a min reads the root element. The merge row merges the fixture with itself, which
+\ persistence makes safe. The fill row is O(n) and guards the constant factor; #len reads
+\ the size field.
+\
+\ There is no per-operation pop row. Re-popping one retained version every iteration is
+\ the branching-versions shape the amortized bound excludes: a fill leaves O(n) children
+\ on the root, and every rep would repay that first pairing pass. The pop cost rides
+\ fill+drain instead, whose per-element cost may grow only logarithmically across the
+\ steps.
 
 heap-fill: ( n -- heap ) [ [ cmp ] <heap> swap 0 swap <range> [ heap-insert ] #each ] ;
+
+heap-drain: ( heap n -- heap ) [ 0 swap <range> [ drop heap-pop-min drop ] #each ] ;
+
+heap-round-trip: ( n -- ) [ dup heap-fill swap heap-drain drop ] ;
 
 heap-sweep: ( n -- ) [
   dup
   "heap fill" pick 1 [ dup heap-fill drop ] scale-row
+  "heap fill+drain" pick 1 [ dup heap-round-trip ] scale-row
   drop
   dup heap-fill
   "heap insert" pick 5 [ dup 0 heap-insert drop ] scale-row
   "heap merge" pick 5 [ dup dup heap-merge drop ] scale-row
+  "heap min" pick 5 [ dup heap-min drop ] scale-row
   "heap #len" pick 5 [ dup #len drop ] scale-row
   2drop
 ] ;
@@ -174,6 +185,7 @@ heap-sweep: ( n -- ) [
 { 1 2 3 } [ cmp ] >bst >iterator #count drop
 3 deque-round-trip
 3 heap-fill #len drop
+3 heap-round-trip
 
 50 list-sweep
 100 list-sweep

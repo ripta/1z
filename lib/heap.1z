@@ -38,32 +38,33 @@ private{
   \ Pass 1 of the pairing pass: meld adjacent pairs left-to-right, prepending each result
   \ to acc, with an odd leftover prepended as-is. The output lands in reverse order, which
   \ is the order pass 2 wants to fold in.
+  \
+  \ Both passes are explicit loops rather than self-calls from match arms. Such a call
+  \ keeps the arm's frames live, and one pass runs over a root's whole child list, which
+  \ an ascending fill grows to O(n): deep enough to exhaust the task stack.
   meld-pairs: ( comparator acc children -- comparator acc ) [
-    {
-      cons-list:cons: [
-        {
-          cons-list:cons: [
-            [ 3 pick-n meld ] dip
-            [ swap cons ] dip
-            meld-pairs
-          ]
-          cons-list:nil: [ swap cons ]
-        } unchecked-match
+    [ dup cons? ] [
+      cons-list:cons>
+      dup cons?
+      [
+        cons-list:cons>
+        [ 3 pick-n meld ] dip
+        [ swap cons ] dip
       ]
-      cons-list:nil: [ ]
-    } unchecked-match
+      [ drop swap cons nil ]
+      if
+    ] while
+    drop
   ] ;
 
   \ Pass 2 of the pairing pass: fold the reversed pair list into one node, which combines
   \ the original pairs right-to-left.
   meld-fold: ( comparator node pairs -- node ) [
-    {
-      cons-list:cons: [
-        [ 2 pick-n meld ] dip
-        meld-fold
-      ]
-      cons-list:nil: [ nip ]
-    } unchecked-match
+    [ dup cons? ] [
+      cons-list:cons>
+      [ 2 pick-n meld ] dip
+    ] while
+    drop nip
   ] ;
 
   \ The pairing pass delete-min runs: rebuild a root from a former root's children.
@@ -136,6 +137,125 @@ heap-merge: ( heap: heap other: heap -- heap ) [
   swap [ + ] dip
   swap [ swap dup [ root-merge ] dip ] dip
   make-heap
+] ;
+
+private{
+  throw-empty: never-returns ( -- * ) [
+    f "operation on an empty heap" EEmptyHeap make-error throw
+  ] ;
+
+  throw-key-not-found: never-returns ( -- * ) [
+    f "no element comparator-equal to the key" EKeyNotFound make-error throw
+  ] ;
+
+  \ The scan's seed: the root's node as a one-node list, or nil for an empty root.
+  root-nodes: ( root -- cons-list ) [
+    {
+      heap-root:empty: [ nil ]
+      heap-root:node: [ make-heap-node nil cons ]
+    } unchecked-match
+  ] ;
+
+  \ Collect every element reachable from the worklist, in structural order. `current` is
+  \ the child list being walked and `pending` holds the child lists still to visit. A loop
+  \ for the meld-pairs reason: a root can carry O(n) children and a tree can run O(n)
+  \ deep, and neither shape may cost native stack.
+  collect-elements: ( acc pending current -- acc ) [
+    [ dup cons? 2 pick-n cons? or ] [
+      dup cons?
+      [
+        cons-list:cons>
+        swap [ swap cons ] dip
+        unmake-heap-node
+        [ swap [ swap cons ] dip ] dip
+      ]
+      [ drop cons-list:cons> swap ]
+      if
+    ] while
+    2drop
+  ] ;
+
+  \ Split off the first element comparator-equal to target. The skipped prefix and the
+  \ untouched rest come back as two lists, since the rebuild that consumes them is
+  \ order-blind. Throws when the walk runs out without a match.
+  remove-first: ( comparator target acc list -- acc rest ) [
+    [
+      dup nil? [ throw-key-not-found ] when
+      cons-list:cons>
+      over 4 pick-n 6 pick-n call ordering:eq?
+      [ [ drop ] dip [ 2drop ] 2dip f ]
+      [ [ swap cons ] dip t ]
+      if
+    ] loop
+  ] ;
+
+  \ Insert every element of the list. A loop stand-in for list-foldl, which self-calls
+  \ from a match arm once per element and overflows on the scans' O(n) lists.
+  fold-insert: ( heap list -- heap ) [
+    [ dup cons? ] [ cons-list:cons> [ heap-insert ] dip ] while
+    drop
+  ] ;
+}
+
+\\ The minimum element in O(1). Throws `empty-heap` on an empty heap.
+\\
+\\   [ cmp ] <heap> 3 heap-insert 1 heap-insert heap-min
+\\   => 1
+heap-min: ( heap: heap -- value ) [
+  root>> {
+    heap-root:empty: [ throw-empty ]
+    heap-root:node: [ drop ]
+  } unchecked-match
+] ;
+
+\\ The minimum element as an option, `option:none` on an empty heap.
+\\
+\\   [ cmp ] <heap> heap-min? option:none?
+\\   => t
+heap-min?: ( heap: heap -- option ) [
+  dup size>> 0 = [ drop option:none ] [ heap-min >option:some ] if
+] ;
+
+\\ Remove and return the minimum in O(log n) amortized. Throws `empty-heap` on an empty
+\\ heap.
+\\
+\\   [ cmp ] <heap> 3 heap-insert 1 heap-insert heap-pop-min nip
+\\   => 1
+heap-pop-min: ( heap: heap -- heap value ) [
+  dup size>> 0 = [ throw-empty ] when
+  unmake-heap 1 -
+  [ [ heap-root:node> ] dip dup [ merge-pairs ] dip ] dip
+  make-heap swap
+] ;
+
+\\ Remove and return the minimum as an option. On an empty heap the heap comes back
+\\ unchanged with `option:none`.
+\\
+\\   [ cmp ] <heap> 1 heap-insert heap-pop-min? nip option:some>
+\\   => 1
+heap-pop-min?: ( heap: heap -- heap option ) [
+  dup size>> 0 = [ option:none ] [ heap-pop-min >option:some ] if
+] ;
+
+\\ Replace one element comparator-equal to `old` with `new`. The persistent heap has no
+\\ node handles, so the element is found by an O(n) scan and the heap is rebuilt by
+\\ reinserting everything else. Throws `key-not-found` when no element matches.
+\\
+\\ A consumer that would decrease keys in a loop, such as Dijkstra, should use lazy
+\\ deletion instead: insert the decreased value as a duplicate and skip stale entries on
+\\ pop.
+\\
+\\   [ cmp ] <heap> 5 heap-insert 9 heap-insert 9 1 heap-decrease-key heap-min
+\\   => 1
+heap-decrease-key: ( heap: heap old new -- heap ) [
+  [ dup comparator>> swap root>> root-nodes ] 2dip
+  [ [ nil nil ] dip collect-elements ] 2dip
+  3 pick-n 2 pick-n nil 5 pick-n remove-first
+  [ [ nip drop ] dip ] 2dip
+  [ [ <heap> ] dip swap ] 2dip
+  [ fold-insert ] dip
+  fold-insert
+  swap heap-insert
 ] ;
 
 \ Cost-rule protocol conformance: #len reads the size field in O(1).

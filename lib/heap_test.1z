@@ -1,10 +1,9 @@
 \ Unit tests for lib/heap.1z.
 \
-\ The public pops land in a later milestone, so ordering is pinned through the borrowed
-\ pairing pass: draining by repeated merge-pairs over each root's children is exactly the
-\ delete-min chain.
+\ Ordering is pinned by draining through repeated heap-pop-min, which is the delete-min
+\ chain along one version.
 
-borrow "heap" ;
+use "heap" ;
 use { <range>: } "ranges" ;
 use "testing" ;
 
@@ -23,25 +22,9 @@ scramble: ( n m -- array ) [
 
 insert-scrambled: ( heap n m -- heap ) [ scramble [ heap-insert ] #each ] ;
 
-\ The root's element. The borrowed variant unwrap pushes the payload's fields.
-heap-min-borrowed: ( heap -- elem ) [ root>> heap-root:node> drop ] ;
-
-\ Drain the whole heap in priority order by repeated pairing passes.
-drain-loop: ( comparator arr root -- array ) [
-  {
-    heap-root:empty: [ nip ]
-    heap-root:node: [
-      [ #push ] dip
-      2 pick-n merge-pairs
-      drain-loop
-    ]
-  } unchecked-match
-] ;
-
+\ Drain the whole heap in priority order by repeated pop-min.
 drain-min: ( heap -- array ) [
-  dup comparator>> swap root>>
-  { } swap
-  drain-loop
+  { } swap [ dup #len 0 > ] [ heap-pop-min swap [ #push ] dip ] while drop
 ] ;
 
 \ --- Error constant ---
@@ -100,12 +83,12 @@ test-merge-carries-left-comparator: ( -- ) [
 
 \ --- Ordering through the pairing pass ---
 
-test-root-holds-min: ( -- ) [
+test-min-after-inserts: ( -- ) [
   "ordering" test-section
-  [ cmp ] <heap> 8 insert-n heap-min-borrowed 0 "min after ascending inserts" assert=
-  [ cmp ] <heap> 8 3 insert-scrambled heap-min-borrowed 0 "min after scrambled inserts" assert=
+  [ cmp ] <heap> 8 insert-n heap-min 0 "min after ascending inserts" assert=
+  [ cmp ] <heap> 8 3 insert-scrambled heap-min 0 "min after scrambled inserts" assert=
   [ cmp ] <heap> 7 heap-insert 3 heap-insert 5 heap-insert
-  heap-min-borrowed 3 "min after interleaved inserts" assert=
+  heap-min 3 "min after interleaved inserts" assert=
 ] ;
 
 test-drain-is-sorted: ( -- ) [
@@ -117,7 +100,7 @@ test-drain-is-sorted: ( -- ) [
 
 test-max-heap-via-inverted-comparator: ( -- ) [
   [ swap cmp ] <heap> 16 5 insert-scrambled
-  dup heap-min-borrowed 15 "inverted comparator surfaces the max" assert=
+  dup heap-min 15 "inverted comparator surfaces the max" assert=
   drain-min 0 16 <range> [ 15 swap - ] #map #collect "inverted comparator drains descending" assert=
 ] ;
 
@@ -144,4 +127,109 @@ test-drain-twice-answers-the-same: ( -- ) [
   [ cmp ] <heap> 32 7 insert-scrambled
   dup drain-min swap drain-min
   "draining the same version twice answers the same array" assert=
+] ;
+
+test-pop-min-is-persistent: ( -- ) [
+  [ cmp ] <heap> 8 3 insert-scrambled
+  dup heap-pop-min 2drop
+  drain-min 0 8 <range> #collect "a pop leaves the retained version whole" assert=
+] ;
+
+\ --- Pop-min ---
+
+test-pop-min-shrinks: ( -- ) [
+  "pop-min" test-section
+  [ cmp ] <heap> 8 3 insert-scrambled
+  heap-pop-min 0 "pop-min returns the min" assert=
+  #len 7 "pop-min removes one element" assert=
+] ;
+
+\ --- Empty behavior and option twins ---
+
+test-empty-behavior: ( -- ) [
+  "empty behavior" test-section
+  [ [ cmp ] <heap> heap-min ] empty-heap: "min on empty throws" assert-error-type
+  [ [ cmp ] <heap> heap-pop-min ] empty-heap: "pop-min on empty throws" assert-error-type
+  [ cmp ] <heap> heap-min? option:none? "min? on empty is none" assert-true
+] ;
+
+test-pop-min-empty-twin: ( -- ) [
+  [ cmp ] <heap> heap-pop-min?
+  option:none? "pop-min? on empty is none" assert-true
+  dup #len 0 "the heap comes back unchanged" assert=
+  7 heap-insert heap-pop-min nip 7 "the unchanged heap still works" assert=
+] ;
+
+test-twins-surface-the-min: ( -- ) [
+  [ cmp ] <heap> 8 3 insert-scrambled heap-min? option:some>
+  0 "min? surfaces the min" assert=
+  [ cmp ] <heap> 5 heap-insert 2 heap-insert heap-pop-min? nip option:some>
+  2 "pop-min? surfaces the min" assert=
+] ;
+
+\ --- Decrease-key ---
+
+test-decrease-key-reorders: ( -- ) [
+  "decrease-key" test-section
+  [ cmp ] <heap> 8 3 insert-scrambled
+  5 -1 heap-decrease-key
+  dup #len 8 "size is unchanged" assert=
+  dup heap-min -1 "the replacement is the new min" assert=
+  heap-pop-min drop
+  drain-min { 0 1 2 3 4 6 7 } "the old element is gone" assert=
+] ;
+
+test-decrease-key-general-replace: ( -- ) [
+  [ cmp ] <heap> 3 heap-insert 7 heap-insert
+  3 5 heap-decrease-key
+  drain-min { 5 7 } "the min is replaceable by a larger value" assert=
+] ;
+
+test-decrease-key-removes-one-duplicate: ( -- ) [
+  [ cmp ] <heap> 4 heap-insert 4 heap-insert 4 heap-insert
+  4 1 heap-decrease-key
+  drain-min { 1 4 4 } "duplicates lose exactly one element" assert=
+] ;
+
+test-decrease-key-matches-by-comparator: ( -- ) [
+  [ [ 0 #nth ] dip 0 #nth cmp ] <heap>
+  { 1 10 } heap-insert { 2 20 } heap-insert
+  { 1 99 } { 0 0 } heap-decrease-key
+  heap-min { 0 0 } "the match is by comparator equality, not structural equality" assert=
+] ;
+
+test-decrease-key-not-found-throws: ( -- ) [
+  [ [ cmp ] <heap> 3 heap-insert 9 1 heap-decrease-key ]
+  key-not-found: "a missing key throws" assert-error-type
+  [ [ cmp ] <heap> 9 1 heap-decrease-key ]
+  key-not-found: "an empty heap throws" assert-error-type
+] ;
+
+test-decrease-key-is-persistent: ( -- ) [
+  [ cmp ] <heap> 8 3 insert-scrambled
+  dup 5 -1 heap-decrease-key drop
+  drain-min 0 8 <range> #collect "the original version is untouched" assert=
+] ;
+
+\ --- Deep shapes ---
+\
+\ An ascending fill hangs every element off the root, so the first pop runs one pairing
+\ pass over O(n) children and a full-scan replace walks the same width. An inverted
+\ comparator turns the same fill into the deep-tree shape. Pinned at a width that
+\ overflowed the task stack when the pass and the scans were arm-tail recursion.
+
+test-deep-wide-root: ( -- ) [
+  "deep shapes" test-section
+  [ cmp ] <heap> 2000 insert-n
+  dup heap-pop-min 0 "the first pop of a wide root answers the min" assert=
+  #len 1999 "the wide-root pop removed one element" assert=
+  0 -5 heap-decrease-key
+  dup #len 2000 "a full-scan replace keeps the size" assert=
+  heap-min -5 "a full-scan replace of the root landed" assert=
+] ;
+
+test-deep-tree-scan: ( -- ) [
+  [ swap cmp ] <heap> 2000 insert-n
+  0 5000 heap-decrease-key
+  heap-min 5000 "a deep-tree scan lands the replacement" assert=
 ] ;
