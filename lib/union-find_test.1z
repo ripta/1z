@@ -1,0 +1,141 @@
+\ Unit tests for lib/union-find.1z.
+\
+\ The forest is mutable, so every test builds its own structure. Path halving is pinned
+\ by reading the parent vector around a root query, which is the write that makes a
+\ repeat query cheaper. The runner executes test words in alphabetical order, so each
+\ group's section banner sits on its alphabetically first word.
+
+use "union-find" ;
+use { <range>: } "ranges" ;
+use "testing" ;
+
+\ --- Helpers ---
+
+\ A forest of the shape 0 <- { 1, 2 }, 2 <- 3. Merging two equal-size pairs puts the
+\ second pair's root one level down, so element 3 sits at depth two.
+depth-two-fixture: ( -- uf ) [
+  4 <union-find>
+  dup 0 1 union-find-merge drop
+  dup 2 3 union-find-merge drop
+  dup 0 2 union-find-merge drop
+] ;
+
+\ --- Add ---
+
+test-add-appends-singletons: ( -- ) [
+  "add" test-section
+  2 <union-find>
+  dup union-find-add 2 "the first add returns the next index" assert=
+  dup union-find-add 3 "adds return sequential indices" assert=
+  dup components>> 4 "each add is one more component" assert=
+  3 union-find-root 3 "an added element is its own root" assert=
+] ;
+
+test-add-matches-presized: ( -- ) [
+  0 <union-find> 3 [ dup union-find-add drop ] times
+  3 <union-find>
+  over parents>> >array over parents>> >array "grown parents match presized" assert=
+  over sizes>> >array over sizes>> >array "grown sizes match presized" assert=
+  over components>> over components>> "grown component count matches presized" assert=
+  2drop
+] ;
+
+\ --- Out of range ---
+
+test-bounds-merge-throws: ( -- ) [
+  "out of range" test-section
+  [ 2 <union-find> 0 5 union-find-merge ] index-out-of-bounds:
+  "merge with an out-of-range index throws" assert-error-type
+] ;
+
+test-bounds-negative-throws: ( -- ) [
+  [ 2 <union-find> -1 union-find-root ] index-out-of-bounds:
+  "root at a negative index throws" assert-error-type
+] ;
+
+test-bounds-nothing-extended: ( -- ) [
+  2 <union-find>
+  dup [ 2 union-find-root ] curry index-out-of-bounds: "root at n throws" assert-error-type
+  union-find-add 2 "the failed lookup extended nothing" assert=
+] ;
+
+test-bounds-root-throws: ( -- ) [
+  [ 2 <union-find> 2 union-find-root ] index-out-of-bounds:
+  "root at n throws" assert-error-type
+] ;
+
+\ --- Construction ---
+
+test-construct-empty: ( -- ) [
+  "construction" test-section
+  0 <union-find> components>> 0 "an empty union-find has zero components" assert=
+] ;
+
+test-construct-negative-throws: ( -- ) [
+  [ -1 <union-find> ] invalid-argument: "a negative count throws" assert-error-type
+] ;
+
+test-construct-singletons: ( -- ) [
+  3 <union-find>
+  dup 0 union-find-root 0 "element 0 is its own root" assert=
+  dup 2 union-find-root 2 "element 2 is its own root" assert=
+  components>> 3 "n singletons are n components" assert=
+] ;
+
+\ --- Path halving ---
+
+test-halving-repoints-to-grandparent: ( -- ) [
+  "path halving" test-section
+  depth-two-fixture
+  dup parents>> 3 #nth 2 "element 3 starts at depth two" assert=
+  dup 3 union-find-root 0 "the deep element resolves to the root" assert=
+  parents>> 3 #nth 0 "the query re-pointed 3 at its grandparent" assert=
+] ;
+
+\ --- Merge ---
+
+test-merge-connects-transitively: ( -- ) [
+  "merge" test-section
+  4 <union-find>
+  dup 0 1 union-find-merge drop
+  dup 1 2 union-find-merge drop
+  dup 0 union-find-root over 2 union-find-root "chained merges share one root" assert=
+  drop
+] ;
+
+test-merge-joins-and-reports: ( -- ) [
+  3 <union-find>
+  dup 0 1 union-find-merge t "joining two singletons reports t" assert=
+  dup 0 union-find-root over 1 union-find-root "merged elements share a root" assert=
+  dup 0 1 union-find-merge f "an already-connected pair reports f" assert=
+  components>> 2 "only the join dropped the component count" assert=
+] ;
+
+\ --- Scale ---
+
+test-scale-chain-collapses: ( -- ) [
+  "scale" test-section
+  2000 <union-find>
+  0 1999 <range> [ over swap dup 1 + union-find-merge drop ] #each
+  dup 0 union-find-root over 1999 union-find-root "the chain collapses to one root" assert=
+  components>> 1 "one component remains" assert=
+] ;
+
+\ --- Union by size ---
+
+test-size-attaches-smaller-under-larger: ( -- ) [
+  "union by size" test-section
+  4 <union-find>
+  dup 0 1 union-find-merge drop
+  dup 0 2 union-find-merge drop
+  dup 3 0 union-find-merge drop
+  dup 3 union-find-root 0 "the singleton joined the larger tree's root" assert=
+  dup parents>> 3 #nth 0 "the smaller tree's root moved, not the larger's" assert=
+  sizes>> 0 #nth 4 "the winner's size is the exact sum" assert=
+] ;
+
+test-size-tie-moves-second-arguments-root: ( -- ) [
+  2 <union-find>
+  dup 1 0 union-find-merge drop
+  parents>> 0 #nth 1 "on a tie the second argument's root moves" assert=
+] ;

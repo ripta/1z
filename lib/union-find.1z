@@ -1,0 +1,99 @@
+\ lib/union-find.1z - Mutable disjoint-set forest (union-find).
+\
+\ Each element in [0, n) stores a parent index, and a set is the tree of elements that
+\ reach the same root. A merge re-points the smaller tree's root at the larger's, which
+\ is union by size. A representative query re-points each node it visits at its
+\ grandparent, which is path halving, so a repeat query walks a shorter path. Together
+\ the two heuristics make every operation amortized O(α(n)), effectively constant.
+\
+\ The structure is ephemeral: a merge destroys the prior state, and a query writes
+\ during the read, so there is no old version to retain. The mathematical name for the
+\ same object is a partition.
+
+private{
+  \ Walk i to its set's root with path halving: each visited node is re-pointed at its
+  \ grandparent and the walk continues from there, advancing two levels per iteration.
+  \ The predicate leaves the parent it read for the body, so a path of length L costs
+  \ L reads and L/2 writes.
+  root-walk: ( parents i -- root ) [
+    [ 2dup #nth 2dup = not ]
+    [ 2 pick-n over #nth nip dup 3 rot-n> #nth! swap ]
+    while
+    drop nip
+  ] ;
+}
+
+\\ A mutable disjoint-set forest over fixnum indices in `[0, n)`. `parents` holds each
+\\ element's parent index, and a root is its own parent. `sizes` holds the exact element
+\\ count of the tree below each root; the entry under a non-root is stale. `components`
+\\ counts the disjoint sets and is maintained in O(1) by every operation.
+union-find: mutable struct{ parents: vector sizes: vector components: fixnum } ;
+
+\\ A union-find of n singleton sets over indices `[0, n)`. O(n). Throws
+\\ `invalid-argument` on a negative count.
+\\
+\\   3 <union-find> components>>
+\\   => 3
+<union-find>: ( n: fixnum -- union-find ) [
+  dup 0 < [ f "<union-find> requires a non-negative count" EInvalidArgument make-error throw ] when
+  [ ] make-vector [ ] make-vector 0
+  [ dup 4 pick-n < ]
+  [
+    2 pick-n over #push! drop
+    over 1 #push! drop
+    1 +
+  ] while
+  drop <rot- make-union-find
+] ;
+
+\\ Append one singleton set and return its index, the next index above the current
+\\ range. Amortized O(1). Growing an empty union-find by adds yields the same structure
+\\ as presizing.
+\\
+\\   0 <union-find> dup union-find-add drop union-find-add
+\\   => 1
+union-find-add: ( uf: union-find -- index ) [
+  dup parents>> dup #len tuck #push! drop
+  over sizes>> 1 #push! drop
+  over dup components>> 1 + >>components drop
+  nip
+] ;
+
+\\ The representative of i's set, amortized O(α(n)). The walk halves the path it
+\\ follows, so a repeat query is cheaper. Throws `index-out-of-bounds` when i is outside
+\\ `[0, n)`.
+\\
+\\   2 <union-find> dup 0 1 union-find-merge drop 1 union-find-root
+\\   => 0
+union-find-root: ( uf: union-find i: fixnum -- root ) [
+  [ parents>> ] dip root-walk
+] ;
+
+\\ Merge the sets containing i and j, amortized O(α(n)). Returns `t` when two distinct
+\\ sets were joined and `f` when i and j were already connected. The smaller tree's root
+\\ is re-pointed at the larger's; on a size tie the second argument's root moves. Throws
+\\ `index-out-of-bounds` when either index is outside `[0, n)`.
+\\
+\\   3 <union-find> 0 1 union-find-merge
+\\   => t
+union-find-merge: ( uf: union-find i: fixnum j: fixnum -- joined? ) [
+  2 pick-n parents>> swap root-walk
+  swap 2 pick-n parents>> swap root-walk
+  2dup = [
+    2drop drop f
+  ] [
+    2 pick-n sizes>> over #nth
+    3 pick-n sizes>> 3 pick-n #nth
+
+    \ Normalize to ( uf loser winner total ): the flag orders the roots so the smaller
+    \ tree loses, and a tie leaves the first argument's root as the winner.
+    2dup < [ + ] dip [ [ swap ] dip ] when
+
+    3 pick-n parents>> 3 pick-n 3 pick-n #nth! drop
+    3 pick-n sizes>> 2 pick-n 2 pick-n #nth! drop
+    2drop drop
+
+    dup components>> 1 - >>components drop
+    t
+  ] if
+] ;
