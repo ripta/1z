@@ -1,0 +1,142 @@
+\ lib/heap.1z - Persistent pairing heap.
+\
+\ A pairing heap is a tree of nodes, each holding an element and a cons-list of child
+\ trees. Melding two trees compares their root elements and makes the loser the winner's
+\ first child, so insert and merge are worst-case O(1). Removing the minimum leaves the
+\ root's children, and the pairing pass rebuilds a tree from them: it melds adjacent pairs
+\ left-to-right, then folds the results back right-to-left. That pass is O(log n)
+\ amortized, and the bound holds along one chain of versions. A caller that branches many
+\ versions off one heap pays the pass once per branch.
+
+use "cons-list" ;
+
+\ The node struct sits in its own block: a private{ } body is parsed whole before it runs,
+\ so a parse-time type reference like the enum's payload only resolves names a previous
+\ statement has already installed.
+private{
+  \\ A pairing-heap node: the element plus a cons-list of child nodes. Child lists hold
+  \\ only real nodes; emptiness exists only at the heap's root slot.
+  heap-node: struct{ element children } ;
+}
+
+private{
+  \\ The root slot: empty, or the tree's root node.
+  heap-root: enum{ empty: unit node: heap-node } ;
+
+  \ Wrap a bare node as a root. The variant constructor takes the payload's fields.
+  node>root: ( node -- root ) [ unmake-heap-node make-heap-root:node ] ;
+
+  \ Meld two trees in O(1): the tree whose root element sorts later becomes the other's
+  \ first child. On lt or eq the left operand keeps the root, so ties stay with the heap
+  \ the element came in on.
+  meld: ( a b comparator -- node ) [
+    2 pick-n element>> 2 pick-n element>> 2 pick-n call nip
+    ordering:gt? [ swap ] unless
+    unmake-heap-node <rot- swap cons make-heap-node
+  ] ;
+
+  \ Pass 1 of the pairing pass: meld adjacent pairs left-to-right, prepending each result
+  \ to acc, with an odd leftover prepended as-is. The output lands in reverse order, which
+  \ is the order pass 2 wants to fold in.
+  meld-pairs: ( comparator acc children -- comparator acc ) [
+    {
+      cons-list:cons: [
+        {
+          cons-list:cons: [
+            [ 3 pick-n meld ] dip
+            [ swap cons ] dip
+            meld-pairs
+          ]
+          cons-list:nil: [ swap cons ]
+        } unchecked-match
+      ]
+      cons-list:nil: [ ]
+    } unchecked-match
+  ] ;
+
+  \ Pass 2 of the pairing pass: fold the reversed pair list into one node, which combines
+  \ the original pairs right-to-left.
+  meld-fold: ( comparator node pairs -- node ) [
+    {
+      cons-list:cons: [
+        [ 2 pick-n meld ] dip
+        meld-fold
+      ]
+      cons-list:nil: [ nip ]
+    } unchecked-match
+  ] ;
+
+  \ The pairing pass delete-min runs: rebuild a root from a former root's children.
+  \ O(log n) amortized in the melds both passes perform.
+  merge-pairs: ( children comparator -- root ) [
+    over nil? [ 2drop heap-root:empty ] [
+      swap nil swap
+      meld-pairs
+      dup head swap tail
+      meld-fold
+      node>root
+    ] if
+  ] ;
+
+  \ Meld a bare node into a root, absorbing the empty case. O(1).
+  root-meld: ( node root comparator -- root ) [
+    swap {
+      heap-root:empty: [ drop node>root ]
+      heap-root:node: [ make-heap-node -rot> meld node>root ]
+    } unchecked-match
+  ] ;
+
+  \ Meld two roots, absorbing the empty cases. The left root keeps ties. O(1).
+  root-merge: ( a b comparator -- root ) [
+    swap {
+      heap-root:empty: [ drop ]
+      heap-root:node: [ make-heap-node -rot> root-meld ]
+    } unchecked-match
+  ] ;
+}
+
+\\ Error type thrown by the bare peeks and pops on an empty heap.
+EEmptyHeap: ( -- sym ) [ empty-heap: ] ;
+
+\\ A persistent min-heap. The comparator has effect `( a b -- ordering )`, as `cmp` does,
+\\ and the element the comparator sorts first is the minimum. A max-heap is the same type
+\\ built with an inverted comparator such as `[ swap cmp ]`. `size` counts the elements
+\\ and is maintained in O(1) by every operation.
+heap: struct{ root: heap-root comparator: quotation size: fixnum } ;
+
+\\ An empty heap ordered by the comparator.
+\\
+\\   [ cmp ] <heap> #len
+\\   => 0
+<heap>: ( comparator: quotation -- heap ) [ heap-root:empty swap 0 make-heap ] ;
+
+\\ Add a value in worst-case O(1).
+\\
+\\   [ cmp ] <heap> 3 heap-insert 1 heap-insert #len
+\\   => 2
+heap-insert: ( heap: heap value -- heap ) [
+  nil make-heap-node
+  swap unmake-heap
+  1 +
+  [ dup [ root-meld ] dip ] dip
+  make-heap
+] ;
+
+\\ Merge two heaps in worst-case O(1). Both operands must have been built with the same
+\\ comparator; that precondition is not checked, and the result carries the left
+\\ operand's comparator.
+\\
+\\   [ cmp ] <heap> 1 heap-insert
+\\   [ cmp ] <heap> 2 heap-insert
+\\   heap-merge #len
+\\   => 2
+heap-merge: ( heap: heap other: heap -- heap ) [
+  unmake-heap nip
+  [ unmake-heap ] 2dip
+  swap [ + ] dip
+  swap [ swap dup [ root-merge ] dip ] dip
+  make-heap
+] ;
+
+\ Cost-rule protocol conformance: #len reads the size field in O(1).
+#len: method{ heap } [ size>> ] ;

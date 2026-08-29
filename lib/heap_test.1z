@@ -1,0 +1,147 @@
+\ Unit tests for lib/heap.1z.
+\
+\ The public pops land in a later milestone, so ordering is pinned through the borrowed
+\ pairing pass: draining by repeated merge-pairs over each root's children is exactly the
+\ delete-min chain.
+
+borrow "heap" ;
+use { <range>: } "ranges" ;
+use "testing" ;
+
+\ --- Helpers ---
+
+\ Insert 0, 1, ... n-1.
+insert-n: ( heap n -- heap ) [ 0 swap <range> [ heap-insert ] #each ] ;
+
+\ A permutation of 0 .. n-1: i * m mod n over i = 0 .. n-1, for m coprime with n.
+scramble: ( n m -- array ) [
+  [ * ] curry
+  over [ % ] curry compose
+  [ 0 swap <range> ] dip
+  #map #collect
+] ;
+
+insert-scrambled: ( heap n m -- heap ) [ scramble [ heap-insert ] #each ] ;
+
+\ The root's element. The borrowed variant unwrap pushes the payload's fields.
+heap-min-borrowed: ( heap -- elem ) [ root>> heap-root:node> drop ] ;
+
+\ Drain the whole heap in priority order by repeated pairing passes.
+drain-loop: ( comparator arr root -- array ) [
+  {
+    heap-root:empty: [ nip ]
+    heap-root:node: [
+      [ #push ] dip
+      2 pick-n merge-pairs
+      drain-loop
+    ]
+  } unchecked-match
+] ;
+
+drain-min: ( heap -- array ) [
+  dup comparator>> swap root>>
+  { } swap
+  drain-loop
+] ;
+
+\ --- Error constant ---
+
+test-empty-heap-constant: ( -- ) [
+  "error constant" test-section
+  EEmptyHeap empty-heap: "EEmptyHeap carries the empty-heap type" assert=
+] ;
+
+\ --- Construction and size ---
+
+test-constructor-is-empty: ( -- ) [
+  "construction" test-section
+  [ cmp ] <heap> #len 0 "#len of an empty heap is 0" assert=
+] ;
+
+test-insert-maintains-size: ( -- ) [
+  "size" test-section
+  [ cmp ] <heap> 1 insert-n #len 1 "#len after one insert" assert=
+  [ cmp ] <heap> 64 insert-n #len 64 "#len after 64 inserts" assert=
+] ;
+
+test-merge-sums-sizes: ( -- ) [
+  [ cmp ] <heap> 3 insert-n
+  [ cmp ] <heap> 4 insert-n
+  heap-merge #len 7 "#len of a merge sums both operands" assert=
+  [ cmp ] <heap> [ cmp ] <heap> heap-merge #len 0 "merging two empty heaps stays empty" assert=
+] ;
+
+\ --- Merge ---
+
+test-merge-with-empty-keeps-elements: ( -- ) [
+  "merge" test-section
+  [ cmp ] <heap> 5 insert-n
+  [ cmp ] <heap> heap-merge
+  drain-min 0 5 <range> #collect "empty right operand keeps the left elements" assert=
+  [ cmp ] <heap>
+  [ cmp ] <heap> 5 insert-n heap-merge
+  drain-min 0 5 <range> #collect "empty left operand keeps the right elements" assert=
+] ;
+
+test-merge-interleaves: ( -- ) [
+  [ cmp ] <heap> 0 heap-insert 2 heap-insert 4 heap-insert
+  [ cmp ] <heap> 1 heap-insert 3 heap-insert 5 heap-insert
+  heap-merge drain-min
+  0 6 <range> #collect "a merge drains both operands' elements in order" assert=
+] ;
+
+test-merge-carries-left-comparator: ( -- ) [
+  [ 2drop ordering:lt ] <heap>
+  [ 2drop ordering:gt ] <heap>
+  heap-merge comparator>>
+  [ 1 2 ] dip call
+  ordering:lt? "the merged heap answers with the left comparator" assert-true
+] ;
+
+\ --- Ordering through the pairing pass ---
+
+test-root-holds-min: ( -- ) [
+  "ordering" test-section
+  [ cmp ] <heap> 8 insert-n heap-min-borrowed 0 "min after ascending inserts" assert=
+  [ cmp ] <heap> 8 3 insert-scrambled heap-min-borrowed 0 "min after scrambled inserts" assert=
+  [ cmp ] <heap> 7 heap-insert 3 heap-insert 5 heap-insert
+  heap-min-borrowed 3 "min after interleaved inserts" assert=
+] ;
+
+test-drain-is-sorted: ( -- ) [
+  [ cmp ] <heap> 64 insert-n drain-min
+  0 64 <range> #collect "ascending fill drains sorted" assert=
+  [ cmp ] <heap> 64 37 insert-scrambled drain-min
+  0 64 <range> #collect "scrambled fill drains sorted" assert=
+] ;
+
+test-max-heap-via-inverted-comparator: ( -- ) [
+  [ swap cmp ] <heap> 16 5 insert-scrambled
+  dup heap-min-borrowed 15 "inverted comparator surfaces the max" assert=
+  drain-min 0 16 <range> [ 15 swap - ] #map #collect "inverted comparator drains descending" assert=
+] ;
+
+\ --- Persistence ---
+
+test-insert-is-persistent: ( -- ) [
+  "persistence" test-section
+  [ cmp ] <heap> 4 insert-n
+  dup 99 heap-insert
+  #len 5 "the new version grew" assert=
+  dup #len 4 "the retained version kept its size" assert=
+  drain-min 0 4 <range> #collect "the retained version kept its elements" assert=
+] ;
+
+test-merge-is-persistent: ( -- ) [
+  [ cmp ] <heap> 3 insert-n
+  [ cmp ] <heap> 3 insert-n
+  2dup heap-merge #len 6 "the merged version holds both" assert=
+  [ #len 3 "the left operand is unchanged" assert= ] dip
+  #len 3 "the right operand is unchanged" assert=
+] ;
+
+test-drain-twice-answers-the-same: ( -- ) [
+  [ cmp ] <heap> 32 7 insert-scrambled
+  dup drain-min swap drain-min
+  "draining the same version twice answers the same array" assert=
+] ;

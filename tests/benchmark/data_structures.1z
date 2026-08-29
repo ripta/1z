@@ -6,6 +6,7 @@ use "ranges" ;
 use "cons-list" ;
 use "bst" ;
 use "deque" ;
+use "heap" ;
 
 benchmark-section: ( msg -- ) [ "=== " swap #append " ===" #append print-line ] ;
 
@@ -147,10 +148,32 @@ deque-sweep: ( n -- ) [
   2drop
 ] ;
 
+\ The heap rows are the O(1) claims on insert and merge. Both land on a fixture of size n
+\ and have to read flat across the 2x steps: an insert melds one singleton against the
+\ root, and a merge melds two roots, so neither looks past the top of either tree. The
+\ merge row merges the fixture with itself, which persistence makes safe. The fill row is
+\ O(n) and guards the constant factor; #len reads the size field. No pop row exists yet,
+\ because the pairing pass only runs under a pop and the pop words land with the
+\ min-vocabulary surface.
+
+heap-fill: ( n -- heap ) [ [ cmp ] <heap> swap 0 swap <range> [ heap-insert ] #each ] ;
+
+heap-sweep: ( n -- ) [
+  dup
+  "heap fill" pick 1 [ dup heap-fill drop ] scale-row
+  drop
+  dup heap-fill
+  "heap insert" pick 5 [ dup 0 heap-insert drop ] scale-row
+  "heap merge" pick 5 [ dup dup heap-merge drop ] scale-row
+  "heap #len" pick 5 [ dup #len drop ] scale-row
+  2drop
+] ;
+
 \ warm
 { 1 2 3 } >cons-list >iterator #count drop
 { 1 2 3 } [ cmp ] >bst >iterator #count drop
 3 deque-round-trip
+3 heap-fill #len drop
 
 50 list-sweep
 100 list-sweep
@@ -168,3 +191,10 @@ nl "[-- Scaling: deque --]" print-line
 500 deque-sweep
 1000 deque-sweep
 2000 deque-sweep
+
+nl "[-- Scaling: heap --]" print-line
+
+250 heap-sweep
+500 heap-sweep
+1000 heap-sweep
+2000 heap-sweep
