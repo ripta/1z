@@ -652,3 +652,70 @@ deque-pop-back: ( deque: deque -- deque value ) [
   ensure-back
   dup back>> n>> 0 = [ pop-front-cell ] [ pop-back-cell ] if
 ] ;
+
+\ A peek is a pop that drops the popped deque. Persistence makes that safe. The cost stays
+\ worst-case O(1).
+\
+\ The pop already covers what a direct head read would get wrong: a live list run dry
+\ mid-rotation, and a last value held on the other end's list.
+
+\\ The front value. Throws `empty-sequence` on an empty deque.
+\\
+\\   <deque> 1 deque-push-back 2 deque-push-back deque-front
+\\   => 1
+deque-front: ( deque: deque -- value ) [ deque-pop-front nip ] ;
+
+\\ The back value. Throws `empty-sequence` on an empty deque.
+\\
+\\   <deque> 1 deque-push-back 2 deque-push-back deque-back
+\\   => 2
+deque-back: ( deque: deque -- value ) [ deque-pop-back nip ] ;
+
+\ The option twins test the length directly rather than catching the bare form's throw.
+\
+\ A recover would swallow unrelated errors. It would also lose the unchanged deque the pop
+\ twins return on empty.
+
+\\ Remove and return the front value as an option. On an empty deque the deque comes back
+\\ unchanged with `option:none`.
+\\
+\\   <deque> 1 deque-push-back deque-pop-front? nip option:some>
+\\   => 1
+deque-pop-front?: ( deque: deque -- deque option ) [
+  dup deque-len 0 = [ option:none ] [ deque-pop-front >option:some ] if
+] ;
+
+\\ Remove and return the back value as an option. On an empty deque the deque comes back
+\\ unchanged with `option:none`.
+\\
+\\   <deque> 1 deque-push-back deque-pop-back? nip option:some>
+\\   => 1
+deque-pop-back?: ( deque: deque -- deque option ) [
+  dup deque-len 0 = [ option:none ] [ deque-pop-back >option:some ] if
+] ;
+
+\\ The front value as an option, `option:none` on an empty deque.
+\\
+\\   <deque> deque-front? option:none?
+\\   => t
+deque-front?: ( deque: deque -- option ) [
+  dup deque-len 0 = [ drop option:none ] [ deque-front >option:some ] if
+] ;
+
+\\ The back value as an option, `option:none` on an empty deque.
+\\
+\\   <deque> 1 deque-push-back deque-back? option:some>
+\\   => 1
+deque-back?: ( deque: deque -- option ) [
+  dup deque-len 0 = [ drop option:none ] [ deque-back >option:some ] if
+] ;
+
+\\ Alias of `deque-push-back`.
+enqueue: ( deque: deque value -- deque ) [ deque-push-back ] ;
+
+\\ Alias of `deque-pop-front`. Throws `empty-sequence` on an empty deque.
+dequeue: ( deque: deque -- deque value ) [ deque-pop-front ] ;
+
+\\ Alias of `deque-pop-front?`. On an empty deque the deque comes back unchanged with
+\\ `option:none`.
+dequeue?: ( deque: deque -- deque option ) [ deque-pop-front? ] ;

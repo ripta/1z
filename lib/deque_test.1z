@@ -183,6 +183,84 @@ test-retained-version-branches-independently: ( -- ) [
   deque-pop-front nip 1000 "first branch is undisturbed" assert=
 ] ;
 
+\ --- Peeks ---
+
+test-peek-reads-both-ends: ( -- ) [
+  "peeks" test-section
+  <deque> 3 push-back-n
+  dup deque-front 0 "front peek reads the oldest push" assert=
+  deque-back 2 "back peek reads the newest push" assert=
+] ;
+
+test-peek-on-empty-throws: ( -- ) [
+  [ <deque> deque-front ] empty-sequence: "front peek on empty throws" assert-error-type
+  [ <deque> deque-back ] empty-sequence: "back peek on empty throws" assert-error-type
+] ;
+
+test-peek-leaves-the-deque-as-it-was: ( -- ) [
+  <deque> 200 push-back-n
+  dup deque-front 0 "front peek past a rotation" assert=
+  dup deque-back 199 "back peek past a rotation" assert=
+  deque-pop-front nip 0 "the peeked deque still pops the same front" assert=
+] ;
+
+\ --- Option twins ---
+
+test-pop-twins-agree-with-the-bare-pops: ( -- ) [
+  "option twins" test-section
+  <deque> 5 push-back-n
+  dup deque-pop-front nip
+  swap deque-pop-front? nip option:some>
+  "front pop twin unwraps to what the bare pop returns" assert=
+  <deque> 5 push-back-n
+  dup deque-pop-back nip
+  swap deque-pop-back? nip option:some>
+  "back pop twin unwraps to what the bare pop returns" assert=
+] ;
+
+test-pop-twins-on-empty-answer-none: ( -- ) [
+  <deque> deque-pop-front?
+  option:none? "front pop twin answers none on empty" assert-true
+  deque-pop-back?
+  option:none? "back pop twin answers none on empty" assert-true
+  7 deque-push-back deque-pop-front nip 7 "the unchanged deque still works" assert=
+] ;
+
+test-peek-twins: ( -- ) [
+  <deque> deque-front? option:none? "front peek twin answers none on empty" assert-true
+  <deque> deque-back? option:none? "back peek twin answers none on empty" assert-true
+  <deque> 3 push-back-n
+  dup deque-front? option:some> 0 "front peek twin wraps the front" assert=
+  deque-back? option:some> 2 "back peek twin wraps the back" assert=
+] ;
+
+\ --- Queue aliases ---
+
+test-enqueue-dequeue-fifo: ( -- ) [
+  "queue aliases" test-section
+  <deque> 0 200 <range> [ enqueue ] #each
+  200 pop-front-n nip
+  0 200 <range> #collect "enqueue feeds the front in arrival order" assert=
+  <deque> 1 enqueue 2 enqueue
+  dequeue 1 "dequeue takes the oldest value" assert=
+  dequeue 2 "then the next oldest" assert=
+  drop
+] ;
+
+\ Drain with the option twin until it answers none, keeping arrival order.
+dequeue-all: ( deque -- array ) [
+  { } swap
+  [ dequeue? dup option:some? ]
+  [ option:some> swap [ #push ] dip ]
+  while
+  2drop
+] ;
+
+test-dequeue-twin-composes-a-drain-loop: ( -- ) [
+  <deque> 50 push-back-n dequeue-all
+  0 50 <range> #collect "the drain loop stops on none and keeps the enqueue order" assert=
+] ;
+
 \ --- Error constant ---
 
 test-empty-sequence-constant: ( -- ) [
