@@ -160,6 +160,11 @@ deque-sweep: ( n -- ) [
 \ on the root, and every rep would repay that first pairing pass. The pop cost rides
 \ fill+drain instead, whose per-element cost may grow only logarithmically across the
 \ steps.
+\
+\ The iteration rows split by what a step does. The unsorted walk never pops, so it rides
+\ the retained fixture and reads flat per element, and iter-new only boxes the heap. The
+\ sorted drain pops, so it fills fresh per rep like fill+drain for the branching-versions
+\ reason above.
 
 heap-fill: ( n -- heap ) [ [ cmp ] <heap> swap 0 swap <range> [ heap-insert ] #each ] ;
 
@@ -171,11 +176,14 @@ heap-sweep: ( n -- ) [
   dup
   "heap fill" pick 1 [ dup heap-fill drop ] scale-row
   "heap fill+drain" pick 1 [ dup heap-round-trip ] scale-row
+  "heap sorted-drain" pick 1 [ dup heap-fill >iterator #count drop ] scale-row
   drop
   dup heap-fill
   "heap insert" pick 5 [ dup 0 heap-insert drop ] scale-row
   "heap merge" pick 5 [ dup dup heap-merge drop ] scale-row
   "heap min" pick 5 [ dup heap-min drop ] scale-row
+  "heap iter-new" pick 5 [ dup >iterator drop ] scale-row
+  "heap unsorted-drain" pick 5 [ dup heap-unsorted #count drop ] scale-row
   "heap #len" pick 5 [ dup #len drop ] scale-row
   2drop
 ] ;
@@ -186,6 +194,8 @@ heap-sweep: ( n -- ) [
 3 deque-round-trip
 3 heap-fill #len drop
 3 heap-round-trip
+3 heap-fill >iterator #count drop
+3 heap-fill heap-unsorted #count drop
 
 50 list-sweep
 100 list-sweep

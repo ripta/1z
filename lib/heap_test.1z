@@ -211,12 +211,79 @@ test-decrease-key-is-persistent: ( -- ) [
   drain-min 0 8 <range> #collect "the original version is untouched" assert=
 ] ;
 
+\ --- Iteration ---
+
+test-sorted-agrees-with-drain-min: ( -- ) [
+  "iteration" test-section
+  [ cmp ] <heap> 64 37 insert-scrambled
+  dup heap-sorted #collect
+  swap drain-min "heap-sorted agrees with the pop-min drain" assert=
+] ;
+
+test-sorted-is-lazy-and-persistent: ( -- ) [
+  [ cmp ] <heap> 16 5 insert-scrambled
+  dup heap-sorted 3 #take #collect { 0 1 2 } "taking three yields the three smallest" assert=
+  dup #len 16 "the source heap is unchanged after a partial take" assert=
+  dup heap-sorted #collect 0 16 <range> #collect "a fresh iterator sees everything" assert=
+  heap-sorted #collect 0 16 <range> #collect "each call carries independent state" assert=
+] ;
+
+test-iteration-on-empty: ( -- ) [
+  [ cmp ] <heap> heap-sorted #collect { } "sorted over an empty heap yields nothing" assert=
+  [ cmp ] <heap> heap-unsorted #collect { } "unsorted over an empty heap yields nothing" assert=
+] ;
+
+test-unsorted-yields-every-element: ( -- ) [
+  [ cmp ] <heap> 64 37 insert-scrambled
+  dup heap-unsorted [ < ] #sort
+  swap drain-min "the unsorted walk yields exactly the heap's elements" assert=
+] ;
+
+test-unsorted-leaves-heap-intact: ( -- ) [
+  [ cmp ] <heap> 32 7 insert-scrambled
+  dup heap-unsorted #count 32 "the unsorted walk visits every element" assert=
+  #len 32 "the walk is read-only" assert=
+] ;
+
+\ --- Protocol methods ---
+
+test-iterator-dispatches-sorted: ( -- ) [
+  "protocol methods" test-section
+  [ cmp ] <heap> 16 5 insert-scrambled
+  >iterator #collect 0 16 <range> #collect ">iterator drains in priority order" assert=
+] ;
+
+test-empty-method: ( -- ) [
+  [ cmp ] <heap> #empty? "an empty heap is #empty?" assert-true
+  [ cmp ] <heap> 1 heap-insert #empty? "a filled heap is not #empty?" assert-false
+] ;
+
+test-first-and-twin: ( -- ) [
+  [ cmp ] <heap> 8 3 insert-scrambled #first 0 "#first is the min" assert=
+  [ [ cmp ] <heap> #first ] empty-heap: "#first on empty throws empty-heap" assert-error-type
+  [ cmp ] <heap> 8 3 insert-scrambled #first? option:some> 0 "#first? surfaces the min" assert=
+  [ cmp ] <heap> #first? option:none? "#first? on empty is none" assert-true
+] ;
+
+test-to-array-is-the-sorted-dump: ( -- ) [
+  [ cmp ] <heap> 16 5 insert-scrambled >array
+  0 16 <range> #collect ">array is the sorted dump" assert=
+] ;
+
+test-unregistered-words-throw: ( -- ) [
+  [ [ cmp ] <heap> 1 heap-insert 0 #nth ] "#nth on a heap throws" assert-error
+  [ [ cmp ] <heap> 1 heap-insert #last ] "#last on a heap throws" assert-error
+  [ [ cmp ] <heap> 1 heap-insert 2 #push ] "#push on a heap throws" assert-error
+  [ [ cmp ] <heap> 1 heap-insert #pop ] "#pop on a heap throws" assert-error
+] ;
+
 \ --- Deep shapes ---
 \
 \ An ascending fill hangs every element off the root, so the first pop runs one pairing
 \ pass over O(n) children and a full-scan replace walks the same width. An inverted
 \ comparator turns the same fill into the deep-tree shape. Pinned at a width that
-\ overflowed the task stack when the pass and the scans were arm-tail recursion.
+\ overflowed the task stack when the pass and the scans were arm-tail recursion. The
+\ iterator walks ride the same two shapes.
 
 test-deep-wide-root: ( -- ) [
   "deep shapes" test-section
@@ -232,4 +299,13 @@ test-deep-tree-scan: ( -- ) [
   [ swap cmp ] <heap> 2000 insert-n
   0 5000 heap-decrease-key
   heap-min 5000 "a deep-tree scan lands the replacement" assert=
+] ;
+
+test-deep-iteration: ( -- ) [
+  [ cmp ] <heap> 2000 insert-n
+  dup heap-unsorted #count 2000 "the unsorted walk covers a wide root" assert=
+  >iterator #count 2000 "the sorted drain covers a wide root" assert=
+  [ swap cmp ] <heap> 2000 insert-n
+  dup heap-unsorted #count 2000 "the unsorted walk covers a deep tree" assert=
+  >iterator #count 2000 "the sorted drain covers a deep tree" assert=
 ] ;

@@ -258,5 +258,68 @@ heap-decrease-key: ( heap: heap old new -- heap ) [
   swap heap-insert
 ] ;
 
-\ Cost-rule protocol conformance: #len reads the size field in O(1).
-#len: method{ heap } [ size>> ] ;
+private{
+  \ Iterator step: state is a one-element vector holding the heap still to drain.
+  sorted-iter-step: ( state -- option ) [
+    dup 0 #nth heap-pop-min?
+    swap 2 pick-n 0 <rot- #nth! drop
+    nip
+  ] ;
+
+  \ Push each node of a child list onto the stack vector.
+  push-nodes: ( vec list -- vec ) [
+    [ dup cons? ] [ cons-list:cons> [ #push! ] dip ] while
+    drop
+  ] ;
+
+  \ Iterator step for the structural walk: state is a vector of pending nodes. Each node is
+  \ pushed exactly once, so a step is O(1) amortized.
+  unsorted-iter-step: ( state -- option ) [
+    dup #empty? [ drop option:none ] [
+      #pop! unmake-heap-node
+      swap [ push-nodes drop ] dip
+      >option:some
+    ] if
+  ] ;
+}
+
+\\ A lazy iterator over the elements in priority order, by repeated pop-min over the
+\\ persistent heap. Nothing is materialized: taking k elements costs O(k log n) amortized,
+\\ and the source heap is unchanged.
+\\
+\\   [ cmp ] <heap> 3 heap-insert 1 heap-insert heap-sorted #collect
+\\   => { 1 3 }
+heap-sorted: ( heap: heap -- iterator ) [
+  [ ] make-vector swap #push!
+  [ sorted-iter-step ] curry
+  >iterator
+] ;
+
+\\ A lazy iterator over the elements in structural order, O(1) amortized per step. The
+\\ order is representation-dependent: it follows the tree the melds happened to build, so
+\\ content-equal heaps may yield differently. Order-blind callers get O(n) here where the
+\\ sorted drain costs O(n log n).
+\\
+\\   [ cmp ] <heap> 1 heap-insert heap-unsorted #collect
+\\   => { 1 }
+heap-unsorted: ( heap: heap -- iterator ) [
+  [ ] make-vector swap root>> root-nodes push-nodes
+  [ unsorted-iter-step ] curry
+  >iterator
+] ;
+
+\ Cost-rule protocol conformance: >iterator dispatches to the sorted drain, #len and
+\ #empty? read the size field in O(1), #first is heap-min at O(1), and >array is the
+\ sorted dump through the iterator.
+\
+\ #first needs no drop-before-throw guard: heap-min consumes the heap on every path
+\ before the empty arm throws, so the prelude's recover-based #first? sees a clean stack.
+\
+\ #last and #nth are left unimplemented, each an O(n) walk or worse under an O(1)
+\ expectation. #push and #pop are not registered either: a heap has no end of sequence
+\ for them to name, and heap-insert / heap-pop-min are the honest spellings.
+>iterator: method{ heap } [ heap-sorted ] ;
+#len:      method{ heap } [ size>> ] ;
+#empty?:   method{ heap } [ size>> 0 = ] ;
+#first:    method{ heap } [ heap-min ] ;
+>array:    method{ heap } [ #collect ] ;
