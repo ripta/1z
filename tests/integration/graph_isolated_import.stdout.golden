@@ -1,9 +1,27 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
 === graph in isolation ===
 Stack: [ ]
-Stack: [ graph{ adjacency: <bst-map bst{ root: <tree-node:leaf leaf:> comparator: [ [ cmp ] [ [ key>> ] dip key>> ] dip call ] }> comparator: [ cmp ] directed?: f } ]
+Stack: [ graph{ adjacency: <bst-map bst{ root: <tree-node:leaf leaf:> comparator: [ [ cmp ] [ [ key>> ] dip key>> ] dip call ] }> comparator: [ cmp ] directed?: f edge-count: 0 } ]
 PASS: the constructor yields a graph
-Stack: [ graph{ adjacency: <bst-map bst{ root: <tree-node:leaf leaf:> comparator: [ [ cmp ] [ [ key>> ] dip key>> ] dip call ] }> comparator: [ cmp ] directed?: f } ]
+Stack: [ graph{ adjacency: <bst-map bst{ root: <tree-node:leaf leaf:> comparator: [ [ cmp ] [ [ key>> ] dip key>> ] dip call ] }> comparator: [ cmp ] directed?: f edge-count: 0 } ]
 PASS: an undirected graph reports f
 Stack: [ ]
 PASS: a digraph reports t
+Stack: [ ]
+PASS: vertices come ascending
+Stack: [ ]
+PASS: three logical edges
+Stack: [ ]
+PASS: the middle vertex has two
+Stack: [ ]
+PASS: one edge survives the removal
+Stack: [ 2 ]
+PASS: and two vertices
+Stack: [ ]
+PASS: removing every vertex empties the graph
 Stack: [ ]

@@ -1,15 +1,71 @@
 \ Unit tests for lib/graph.1z.
 \
-\ Only the type, the constructors, and the flag are public at this stage. The
-\ adjacency machinery is private, and the runner borrows it in, so the vertex and
-\ edge groups call ensure-vertex, insert-edge-entry, and vertex-edges? directly.
-\ The runner executes test words in alphabetical order, so each group's section
-\ banner sits on its alphabetically first word.
+\ The mutation and lookup surface is public, so the groups below reach the structure
+\ through it rather than through the adjacency machinery the runner borrows in. The
+\ runner executes test words in alphabetical order, so each group's section banner sits
+\ on its alphabetically first word.
 
 use "graph" ;
-use { map-empty?: map-size: } "bst" ;
-use { list-len: list-nth: nil?: } "cons-list" ;
+use { <range>: } "ranges" ;
 use "testing" ;
+
+\ --- Helpers ---
+
+\ A triangle over 1, 2, 3, whichever kind the constructor built.
+triangle: ( g -- g ) [ 1 2 graph-add-edge 2 3 graph-add-edge 3 1 graph-add-edge ] ;
+
+\ A star of n leaves around 0.
+star: ( g n -- g ) [ 1 swap 1 + <range> [ 0 swap graph-add-edge ] #each ] ;
+
+\ n parallel edges between 0 and 1, which is the cheapest way to grow one adjacency
+\ list: every insert lands in a two-key map.
+parallel-bundle: ( g n -- g ) [ 0 swap <range> [ drop 0 1 graph-add-edge ] #each ] ;
+
+\ --- Add edge ---
+
+test-add-edge-creates-endpoints: ( -- ) [
+  "add edge" test-section
+  [ cmp ] <graph> 1 2 graph-add-edge
+  dup 1 graph-has-vertex? "the source is created" assert-true
+  2 graph-has-vertex? "the target is created" assert-true
+  [ cmp ] <digraph> 1 2 graph-add-edge
+  2 graph-has-vertex? "a digraph creates its target too" assert-true
+] ;
+
+test-add-edge-payload-default: ( -- ) [
+  [ cmp ] <graph> 1 2 graph-add-edge 1 2 graph-edge-get payload>> f
+  "the payload-less form stores f" assert=
+  [ cmp ] <graph> 1 2 weight: graph-add-edge-with-payload 1 2 graph-edge-get payload>> weight:
+  "the payload-bearing twin stores what it is given" assert=
+] ;
+
+test-add-edge-undirected-both-ends: ( -- ) [
+  [ cmp ] <graph> 1 2 graph-add-edge
+  dup 1 2 graph-has-edge? "the edge is visible from the source" assert-true
+  dup 2 1 graph-has-edge? "and from the target" assert-true
+  graph-edge-count 1 "but it counts once" assert=
+] ;
+
+\ --- Add vertex ---
+
+test-add-vertex-idempotent: ( -- ) [
+  "add vertex" test-section
+  [ cmp ] <graph> 1 graph-add-vertex 1 graph-add-vertex graph-vertex-count 1
+  "a repeated add adds nothing" assert=
+] ;
+
+test-add-vertex-isolated: ( -- ) [
+  [ cmp ] <graph> 1 graph-add-vertex
+  dup 1 graph-has-vertex? "an isolated vertex exists" assert-true
+  dup 1 graph-neighbors #len 0 "with no edges" assert=
+  graph-edge-count 0 "and no edge count" assert=
+] ;
+
+test-add-vertex-keeps-edges: ( -- ) [
+  [ cmp ] <graph> 1 2 graph-add-edge 1 graph-add-vertex
+  dup 1 graph-neighbors #len 1 "a re-added vertex keeps its edges" assert=
+  graph-edge-count 1 "and the count is untouched" assert=
+] ;
 
 \ --- Constructors ---
 
@@ -18,8 +74,11 @@ test-construct-digraph-flag: ( -- ) [
   [ cmp ] <digraph> graph-directed? "a digraph is directed" assert-true
 ] ;
 
-test-construct-empty-adjacency: ( -- ) [
-  [ cmp ] <graph> adjacency>> map-empty? "a fresh graph has no vertices" assert-true
+test-construct-empty: ( -- ) [
+  [ cmp ] <graph>
+  dup graph-empty? "a fresh graph is empty" assert-true
+  dup graph-vertex-count 0 "with no vertices" assert=
+  graph-edge-count 0 "and no edges" assert=
 ] ;
 
 test-construct-graph-flag: ( -- ) [
@@ -29,6 +88,91 @@ test-construct-graph-flag: ( -- ) [
 test-construct-same-type: ( -- ) [
   [ cmp ] <graph> graph? "the undirected constructor yields a graph" assert-true
   [ cmp ] <digraph> graph? "the directed constructor yields the same type" assert-true
+] ;
+
+\ --- Contents ---
+
+test-contents-edge-type: ( -- ) [
+  "contents" test-section
+  [ cmp ] <graph> 1 2 graph-add-edge
+  dup graph-edges #first graph-edge? "graph-edges yields edge records" assert-true
+  2 graph-neighbors #first graph-edge? "and so does graph-neighbors" assert-true
+] ;
+
+test-contents-edges-deduped: ( -- ) [
+  [ cmp ] <graph> triangle graph-edges #len 3
+  "each undirected edge is emitted once" assert=
+  [ cmp ] <digraph> triangle graph-edges #len 3
+  "a digraph emits every stored entry" assert=
+] ;
+
+test-contents-edges-forward: ( -- ) [
+  [ cmp ] <graph> 2 1 graph-add-edge graph-edges #first
+  dup source>> 1 "the emitted end is the one sorting first" assert=
+  target>> 2 "with the other as its target" assert=
+] ;
+
+test-contents-neighbors-source: ( -- ) [
+  [ cmp ] <graph> 1 2 graph-add-edge 2 graph-neighbors #first
+  dup source>> 2 "an entry's source is the vertex it is stored under" assert=
+  target>> 1 "and its target the other end" assert=
+] ;
+
+test-contents-vertices-ascending: ( -- ) [
+  [ cmp ] <graph> 3 graph-add-vertex 1 graph-add-vertex 2 graph-add-vertex
+  graph-vertices { 1 2 3 } "vertices come ascending under the comparator" assert=
+] ;
+
+test-contents-vertex-domains: ( -- ) [
+  [ cmp ] <graph> 7 graph-add-vertex 7 graph-has-vertex?
+  "a fixnum vertex is stored" assert-true
+  [ cmp ] <graph> "a" graph-add-vertex "a" graph-has-vertex?
+  "a string vertex is stored" assert-true
+  [ [ >string ] dip >string cmp ] <graph> left: graph-add-vertex left: graph-has-vertex?
+  "a symbol vertex is stored" assert-true
+] ;
+
+\ --- Counts ---
+
+test-counts-edge-count-parallel: ( -- ) [
+  "counts" test-section
+  [ cmp ] <graph> 1 2 graph-add-edge 1 2 graph-add-edge graph-edge-count 2
+  "a repeated add counts again" assert=
+] ;
+
+test-counts-empty-is-vertices: ( -- ) [
+  [ cmp ] <graph> 1 graph-add-vertex graph-empty?
+  "a graph with an isolated vertex is not empty" assert-false
+] ;
+
+test-counts-vertex-count: ( -- ) [
+  [ cmp ] <graph> triangle
+  dup graph-vertex-count 3 "the triangle has three vertices" assert=
+  graph-edge-count 3 "and three edges" assert=
+] ;
+
+\ --- Digraph ---
+
+test-digraph-edges-one-way: ( -- ) [
+  "digraph" test-section
+  [ cmp ] <digraph> 1 2 graph-add-edge
+  dup 1 2 graph-has-edge? "the edge runs from source to target" assert-true
+  dup 2 1 graph-has-edge? "and not back" assert-false
+  dup 2 graph-neighbors #len 0 "the target has no out-edges" assert=
+  graph-edge-count 1 "one edge" assert=
+] ;
+
+test-digraph-remove-vertex-clears-in-edges: ( -- ) [
+  [ cmp ] <digraph> 1 2 graph-add-edge 3 2 graph-add-edge 2 graph-remove-vertex
+  dup graph-edge-count 0 "in-edges go with the vertex" assert=
+  dup 1 graph-neighbors #len 0 "the first source lost its edge" assert=
+  dup 3 graph-neighbors #len 0 "and so did the second" assert=
+  graph-vertex-count 2 "the sources remain" assert=
+] ;
+
+test-digraph-remove-vertex-counts-both-ways: ( -- ) [
+  [ cmp ] <digraph> 1 2 graph-add-edge 2 3 graph-add-edge 2 graph-remove-vertex
+  graph-edge-count 0 "an out-edge and an in-edge both leave the count" assert=
 ] ;
 
 \ --- Edge record ---
@@ -46,68 +190,202 @@ test-edge-record-predicate: ( -- ) [
   5 graph-edge? "a bare value does not" assert-false
 ] ;
 
-\ --- Edge entries ---
+\ --- Errors ---
 
-test-insert-edge-appends: ( -- ) [
-  "edge entries" test-section
-  [ cmp ] <graph> 1 ensure-vertex 2 ensure-vertex
-  1 1 2 f make-graph-edge insert-edge-entry
-  dup 1 vertex-edges? option:some>
-  dup list-len 1 "the source's list holds one edge" assert=
-  dup 0 list-nth source>> 1 "the stored edge keeps its source" assert=
-  dup 0 list-nth target>> 2 "the stored edge keeps its target" assert=
-  0 list-nth payload>> f "the payload-less edge stores f" assert=
-  2 vertex-edges? option:some> nil? "the target's list stays empty" assert-true
+test-errors-edge-get-missing: ( -- ) [
+  "errors" test-section
+  [ [ cmp ] <graph> 1 2 graph-edge-get ] key-not-found:
+  "edge-get on an unknown vertex throws" assert-error-type
+  [ [ cmp ] <graph> 1 graph-add-vertex 2 graph-add-vertex 1 2 graph-edge-get ] key-not-found:
+  "edge-get on a pair with no edge throws" assert-error-type
 ] ;
 
-test-insert-edge-persistent: ( -- ) [
-  [ cmp ] <graph> 1 ensure-vertex 2 ensure-vertex
-  dup 1 1 2 f make-graph-edge insert-edge-entry
-  1 vertex-edges? option:some> list-len 1 "the new version holds the edge" assert=
-  1 vertex-edges? option:some> nil? "the prior version is unchanged" assert-true
+test-errors-has-edge-is-quiet: ( -- ) [
+  [ cmp ] <graph> 1 2 graph-has-edge?
+  "has-edge? on an unknown vertex answers f" assert-false
 ] ;
 
-test-insert-edge-second-grows: ( -- ) [
-  [ cmp ] <graph> 1 ensure-vertex 2 ensure-vertex 3 ensure-vertex
-  1 1 2 f make-graph-edge insert-edge-entry
-  1 1 3 f make-graph-edge insert-edge-entry
-  1 vertex-edges? option:some> list-len 2 "a second edge grows the list" assert=
+test-errors-neighbors-unknown: ( -- ) [
+  [ [ cmp ] <graph> 1 graph-neighbors ] key-not-found:
+  "neighbors on an unknown vertex throws" assert-error-type
 ] ;
 
-\ --- Vertices ---
-
-test-vertex-domains: ( -- ) [
-  "vertices" test-section
-  [ cmp ] <graph> 7 ensure-vertex 7 vertex-edges? option:some?
-  "a fixnum vertex is stored" assert-true
-  [ cmp ] <graph> "a" ensure-vertex "a" vertex-edges? option:some?
-  "a string vertex is stored" assert-true
-  [ [ >string ] dip >string cmp ] <graph> left: ensure-vertex left: vertex-edges? option:some?
-  "a symbol vertex is stored" assert-true
-  [ cmp ] <graph> 7 ensure-vertex 9 vertex-edges? option:some?
-  "an unknown vertex reads none" assert-false
+test-errors-removals-are-quiet: ( -- ) [
+  [ cmp ] <graph> 1 graph-add-vertex 5 graph-remove-vertex graph-vertex-count 1
+  "removing an unknown vertex changes nothing" assert=
+  [ cmp ] <graph> 1 2 graph-add-edge 1 3 graph-remove-edge graph-edge-count 1
+  "removing a missing edge changes nothing" assert=
 ] ;
 
-test-vertex-ensure-idempotent: ( -- ) [
-  [ cmp ] <graph> 1 ensure-vertex 1 ensure-vertex
-  adjacency>> map-size 1 "a repeated ensure adds nothing" assert=
+\ --- Lookups ---
+
+test-lookup-edge-get-newest: ( -- ) [
+  "lookups" test-section
+  [ cmp ] <graph> 1 2 first: graph-add-edge-with-payload 1 2 second: graph-add-edge-with-payload
+  1 2 graph-edge-get payload>> second: "edge-get answers with the newest entry" assert=
 ] ;
 
-test-vertex-ensure-keeps-edges: ( -- ) [
-  [ cmp ] <graph> 1 ensure-vertex 2 ensure-vertex
-  1 1 2 f make-graph-edge insert-edge-entry
-  1 ensure-vertex
-  1 vertex-edges? option:some> list-len 1 "a re-ensured vertex keeps its edges" assert=
+test-lookup-option-twins: ( -- ) [
+  [ cmp ] <graph> 1 2 graph-add-edge
+  dup 1 2 graph-edge-get? option:some> target>> 2 "edge-get? unwraps the edge" assert=
+  dup 1 3 graph-edge-get? option:none? "edge-get? on a missing edge is none" assert-true
+  dup 1 graph-neighbors? option:some> #len 1 "neighbors? unwraps the edges" assert=
+  9 graph-neighbors? option:none? "neighbors? on an unknown vertex is none" assert-true
 ] ;
 
-test-vertex-isolated-empty-list: ( -- ) [
-  [ cmp ] <graph> 1 ensure-vertex 1 vertex-edges? option:some> nil?
-  "an isolated vertex is stored with an empty edge list" assert-true
+test-lookup-twins-agree: ( -- ) [
+  [ cmp ] <graph> 1 2 graph-add-edge
+  dup dup 1 2 graph-edge-get? option:some> swap 1 2 graph-edge-get
+  "edge-get? agrees with the bare form" assert=
+  dup 1 graph-neighbors? option:some> swap 1 graph-neighbors
+  "neighbors? agrees with the bare form" assert=
 ] ;
 
-test-vertex-persistence: ( -- ) [
-  [ cmp ] <graph>
-  dup 1 ensure-vertex
-  adjacency>> map-size 1 "the new version holds the vertex" assert=
-  adjacency>> map-size 0 "the prior version is unchanged" assert=
+\ --- Parallel edges ---
+
+test-parallel-lists-both-entries: ( -- ) [
+  "parallel edges" test-section
+  [ cmp ] <graph> 1 2 graph-add-edge 1 2 graph-add-edge
+  dup 1 graph-neighbors #len 2 "both entries are stored" assert=
+  dup 2 graph-neighbors #len 2 "at both ends" assert=
+  graph-edges #len 2 "and both are emitted" assert=
+] ;
+
+test-parallel-remove-takes-all: ( -- ) [
+  [ cmp ] <graph> 1 2 graph-add-edge 1 2 graph-add-edge 1 2 graph-remove-edge
+  dup graph-edge-count 0 "one removal takes every parallel entry" assert=
+  dup 1 graph-neighbors #len 0 "the source's list is empty" assert=
+  2 graph-neighbors #len 0 "and so is the target's" assert=
+] ;
+
+\ --- Persistence ---
+
+test-persistence-add-edge: ( -- ) [
+  "persistence" test-section
+  [ cmp ] <graph> 1 2 graph-add-edge
+  dup 2 3 graph-add-edge graph-edge-count 2 "the new version has both edges" assert=
+  graph-edge-count 1 "the prior version is unchanged" assert=
+] ;
+
+test-persistence-remove-edge: ( -- ) [
+  [ cmp ] <graph> 1 2 graph-add-edge
+  dup 1 2 graph-remove-edge graph-edge-count 0 "the new version lost the edge" assert=
+  dup 1 2 graph-has-edge? "the prior version still has it" assert-true
+  graph-edge-count 1 "count included" assert=
+] ;
+
+test-persistence-remove-vertex: ( -- ) [
+  [ cmp ] <graph> triangle
+  dup 2 graph-remove-vertex graph-vertex-count 2 "the new version lost the vertex" assert=
+  dup 2 graph-has-vertex? "the prior version still has it" assert-true
+  graph-edge-count 3 "with all three edges" assert=
+] ;
+
+\ --- Protocol decline ---
+
+test-protocol-no-iterator: ( -- ) [
+  "protocol decline" test-section
+  [ [ cmp ] <graph> >iterator ] ">iterator on a graph throws" assert-error
+  [ [ cmp ] <graph> #len ] "#len on a graph throws" assert-error
+  [ [ cmp ] <graph> #first ] "#first on a graph throws" assert-error
+] ;
+
+\ --- Remove edge ---
+
+test-remove-edge-directed-one-way: ( -- ) [
+  "remove edge" test-section
+  [ cmp ] <digraph> 1 2 graph-add-edge 2 1 graph-add-edge 1 2 graph-remove-edge
+  dup 1 2 graph-has-edge? "the named direction goes" assert-false
+  dup 2 1 graph-has-edge? "the other direction stays" assert-true
+  graph-edge-count 1 "one edge left" assert=
+] ;
+
+test-remove-edge-undirected-both-ends: ( -- ) [
+  [ cmp ] <graph> 1 2 graph-add-edge 2 3 graph-add-edge 1 2 graph-remove-edge
+  dup 1 2 graph-has-edge? "the entry at the source goes" assert-false
+  dup 2 1 graph-has-edge? "and the entry at the target too" assert-false
+  dup 2 3 graph-has-edge? "the other edge is untouched" assert-true
+  graph-edge-count 1 "one edge left" assert=
+] ;
+
+test-remove-edge-keeps-vertices: ( -- ) [
+  [ cmp ] <graph> 1 2 graph-add-edge 1 2 graph-remove-edge
+  graph-vertex-count 2 "removing an edge leaves both vertices" assert=
+] ;
+
+\ --- Remove vertex ---
+
+test-remove-vertex-clears-back-edges: ( -- ) [
+  "remove vertex" test-section
+  [ cmp ] <graph> triangle 2 graph-remove-vertex
+  dup graph-vertex-count 2 "two vertices remain" assert=
+  dup graph-edge-count 1 "one edge remains" assert=
+  dup 1 graph-neighbors #len 1 "the first neighbor kept only its other edge" assert=
+  3 graph-neighbors #len 1 "and so did the second" assert=
+] ;
+
+test-remove-vertex-isolated: ( -- ) [
+  [ cmp ] <graph> 1 graph-add-vertex 1 graph-remove-vertex
+  graph-empty? "removing the only vertex empties the graph" assert-true
+] ;
+
+\ --- Scale ---
+
+\ A cons-list word that recurses once per element overflows the task stack somewhere
+\ between 600 and 800 entries, so a 1000-entry adjacency list is what pins the walks
+\ below to their loop form.
+
+test-scale-parallel-bundle: ( -- ) [
+  "scale" test-section
+  [ cmp ] <graph> 1000 parallel-bundle
+  dup 0 graph-neighbors #len 1000 "a 1000-entry list walks" assert=
+  dup graph-edges #len 1000 "and so does the whole-graph walk" assert=
+  dup graph-edge-count 1000 "the count tracks every parallel add" assert=
+  dup 0 1 graph-remove-edge graph-edge-count 0 "one removal clears the bundle" assert=
+  0 graph-remove-vertex graph-edge-count 0 "so does removing an endpoint" assert=
+] ;
+
+test-scale-star: ( -- ) [
+  [ cmp ] <graph> 200 star
+  dup 0 graph-neighbors #len 200 "the center carries every leaf" assert=
+  dup graph-edges #len 200 "each spoke is emitted once" assert=
+  dup graph-vertex-count 201 "the center and its leaves" assert=
+  0 graph-remove-vertex
+  dup graph-edge-count 0 "removing the center clears every spoke" assert=
+  graph-vertex-count 200 "and leaves the leaves" assert=
+] ;
+
+\ --- Self loop ---
+
+test-self-loop-counts-once: ( -- ) [
+  "self loop" test-section
+  [ cmp ] <graph> 1 1 graph-add-edge
+  dup graph-edge-count 1 "an undirected self-loop counts once" assert=
+  dup 1 graph-neighbors #len 1 "and is stored once" assert=
+  graph-edges #len 1 "and is emitted once" assert=
+] ;
+
+test-self-loop-digraph: ( -- ) [
+  [ cmp ] <digraph> 1 1 graph-add-edge
+  dup graph-edge-count 1 "a directed self-loop counts once" assert=
+  dup 1 1 graph-has-edge? "and is found from its own end" assert-true
+  1 graph-remove-vertex graph-edge-count 0 "removing the vertex clears it" assert=
+] ;
+
+test-self-loop-removal: ( -- ) [
+  [ cmp ] <graph> 1 1 graph-add-edge 1 1 graph-remove-edge
+  dup graph-edge-count 0 "removing a self-loop clears the count" assert=
+  1 graph-has-vertex? "and leaves the vertex" assert-true
+  [ cmp ] <graph> 1 1 graph-add-edge 1 graph-remove-vertex
+  graph-edge-count 0 "removing the vertex clears it too" assert=
+] ;
+
+test-self-loop-with-neighbors: ( -- ) [
+  [ cmp ] <graph> 1 1 graph-add-edge 1 2 graph-add-edge 1 3 graph-add-edge
+  dup graph-edge-count 3 "the loop and two spokes" assert=
+  dup 1 graph-neighbors #len 3 "all three sit in the vertex's own list" assert=
+  1 graph-remove-vertex
+  dup graph-edge-count 0 "removing it takes the loop and both spokes" assert=
+  dup 2 graph-neighbors #len 0 "the first spoke's other end is clear" assert=
+  3 graph-neighbors #len 0 "and so is the second's" assert=
 ] ;

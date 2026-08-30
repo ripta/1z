@@ -8,6 +8,7 @@ use "bst" ;
 use "deque" ;
 use "heap" ;
 use "union-find" ;
+use "graph" ;
 
 benchmark-section: ( msg -- ) [ "=== " swap #append " ===" #append print-line ] ;
 
@@ -250,6 +251,58 @@ union-find-map-sweep: ( n -- ) [
   2drop
 ] ;
 
+\ The graph rows are the O(log V) insert claim and the O(deg) reads over it. path fill and
+\ star fill build the same edge count at opposite degree profiles: the path spreads its
+\ edges over n vertices and the star piles them onto one. Both are O(E log V), so their
+\ per-element costs must track each other across the 2x steps. An insert that scanned the
+\ source's list to detect a duplicate would leave the star quadratic while the path stayed
+\ linear, which is what makes the pair worth running.
+\
+\ The per-operation rows ride a path fixture, where every vertex has degree two, so
+\ add-edge, has-edge?, edge-get, has-vertex?, neighbors and remove-edge are O(log V) and
+\ must read flat. remove-vertex on an interior path vertex touches only its two
+\ neighbors, so it is flat too. vertex-count and edge-count are field reads.
+\
+\ vertices and edges are O(V) and O(V+E), so they run at one iteration and their
+\ per-element costs read flat. The digraph remove-vertex row is the other half of the
+\ removal: a digraph's in-edges are not locatable from the vertex, so every adjacency list
+\ is swept and the row is O(V log V + E), the one row here expected to grow.
+
+graph-path-fill: ( n -- graph ) [
+  [ cmp ] <graph> swap 1 swap 1 + <range> [ dup 1 - swap graph-add-edge ] #each
+] ;
+
+graph-star-fill: ( n -- graph ) [
+  [ cmp ] <graph> swap 1 swap 1 + <range> [ 0 swap graph-add-edge ] #each
+] ;
+
+graph-digraph-fill: ( n -- graph ) [
+  [ cmp ] <digraph> swap 1 swap 1 + <range> [ 0 swap graph-add-edge ] #each
+] ;
+
+graph-sweep: ( n -- ) [
+  dup
+  "graph path fill" pick 1 [ dup graph-path-fill drop ] scale-row
+  "graph star fill" pick 1 [ dup graph-star-fill drop ] scale-row
+  drop
+  dup graph-path-fill
+  "graph add-edge" pick 5 [ dup 0 1 graph-add-edge drop ] scale-row
+  "graph has-edge?" pick 5 [ dup 0 1 graph-has-edge? drop ] scale-row
+  "graph edge-get" pick 5 [ dup 0 1 graph-edge-get drop ] scale-row
+  "graph has-vertex?" pick 5 [ dup 1 graph-has-vertex? drop ] scale-row
+  "graph neighbors" pick 5 [ dup 1 graph-neighbors drop ] scale-row
+  "graph remove-edge" pick 5 [ dup 0 1 graph-remove-edge drop ] scale-row
+  "graph remove-vertex" pick 5 [ dup 1 graph-remove-vertex drop ] scale-row
+  "graph vertex-count" pick 5 [ dup graph-vertex-count drop ] scale-row
+  "graph edge-count" pick 5 [ dup graph-edge-count drop ] scale-row
+  "graph vertices" pick 1 [ dup graph-vertices drop ] scale-row
+  "graph edges" pick 1 [ dup graph-edges drop ] scale-row
+  drop
+  dup graph-digraph-fill
+  "graph digraph remove-vertex" pick 1 [ dup 1 graph-remove-vertex drop ] scale-row
+  2drop
+] ;
+
 \ warm
 { 1 2 3 } >cons-list >iterator #count drop
 { 1 2 3 } [ cmp ] >bst >iterator #count drop
@@ -262,6 +315,9 @@ union-find-map-sweep: ( n -- ) [
 3 union-find-connect >iterator #count drop
 3 union-find-connect dup 0 1 union-find-connected? drop 1 union-find-size drop
 3 union-find-map-connect 1 union-find-map-root drop
+3 graph-path-fill dup graph-edges drop dup 1 graph-neighbors drop 1 graph-remove-vertex drop
+3 graph-star-fill graph-vertices drop
+3 graph-digraph-fill 1 graph-remove-vertex drop
 
 50 list-sweep
 100 list-sweep
@@ -300,3 +356,10 @@ nl "[-- Scaling: union-find-map --]" print-line
 500 union-find-map-sweep
 1000 union-find-map-sweep
 2000 union-find-map-sweep
+
+nl "[-- Scaling: graph --]" print-line
+
+250 graph-sweep
+500 graph-sweep
+1000 graph-sweep
+2000 graph-sweep

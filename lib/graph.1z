@@ -7,13 +7,19 @@
 \ type serves both kinds: the `directed?` flag distinguishes a digraph, and the edge
 \ words consult it rather than splitting the type.
 \
+\ Adding an edge that is already present appends a second one rather than replacing it.
+\ Detecting the duplicate would cost a scan of the source's edge list on every insert,
+\ including the inserts that add nothing, which makes building a high-degree vertex
+\ quadratic. A caller that wants at most one edge per pair probes with `graph-has-edge?`
+\ and pays that scan where it writes it.
+\
 \ The graph registers no sequence protocol method, `>iterator` included. Vertices and
 \ edges are both first-class readings, so `#len` and a drained `#count` would have no
 \ subject recoverable from the call site. Contents ship under explicit per-reading
 \ names instead.
 
-use { bst-map: <bst-map>: map-insert: map-lookup: } "bst" ;
-use { nil: cons: } "cons-list" ;
+use { bst-map: <bst-map>: map-insert: map-lookup: map-delete: map-size: map-empty?: map>array: key>>: unmake-kv-pair: } "bst" ;
+use { nil: cons: cons?: head: tail: list-len: } "cons-list" ;
 
 \\ One edge. `source` and `target` are vertices, and `payload` is an arbitrary
 \\ per-edge value; an unweighted edge stores `f`. Adjacency stores this record with
@@ -23,20 +29,21 @@ graph-edge: struct{ source target payload } ;
 \\ A persistent graph over arbitrary vertices. `adjacency` maps a vertex to the
 \\ cons-list of `graph-edge` records leaving it. `comparator` has effect
 \\ `( a b -- ordering )`, as `cmp` does, and identifies vertices. `directed?` records
-\\ which constructor built the graph.
-graph: struct{ adjacency: bst-map comparator: quotation directed?: boolean } ;
+\\ which constructor built the graph. `edge-count` is the logical edge count, which
+\\ every mutation maintains in O(1).
+graph: struct{ adjacency: bst-map comparator: quotation directed?: boolean edge-count: fixnum } ;
 
 \\ An empty undirected graph over vertices ordered by the comparator.
 \\
 \\   [ cmp ] <graph> graph-directed?
 \\   => f
-<graph>: ( comparator: quotation -- graph ) [ dup <bst-map> swap f make-graph ] ;
+<graph>: ( comparator: quotation -- graph ) [ dup <bst-map> swap f 0 make-graph ] ;
 
 \\ An empty directed graph over vertices ordered by the comparator.
 \\
 \\   [ cmp ] <digraph> graph-directed?
 \\   => t
-<digraph>: ( comparator: quotation -- graph ) [ dup <bst-map> swap t make-graph ] ;
+<digraph>: ( comparator: quotation -- graph ) [ dup <bst-map> swap t 0 make-graph ] ;
 
 \\ Whether the graph is directed.
 \\
@@ -45,10 +52,80 @@ graph: struct{ adjacency: bst-map comparator: quotation directed?: boolean } ;
 graph-directed?: ( g: graph -- ? ) [ directed?>> ] ;
 
 private{
-  \ Rebuild the graph around a new adjacency map, keeping the comparator and the
-  \ flag. Every persistent update routes its rewrap through here.
+  \ Every adjacency walk below is a loop. The recursive cons-list words keep one native
+  \ frame per element, and a vertex's edge list runs as long as its degree, which a star
+  \ takes to O(V).
+
+  \ Reverse a list, O(n).
+  list-reverse-loop: ( list -- list' ) [
+    nil swap
+    [ dup cons? ] [ dup head swap tail [ swap cons ] dip ] while
+    drop
+  ] ;
+
+  \ Append every entry of the list to the vector, head first.
+  entries>vector: ( vec: vector list -- vec ) [
+    [ dup cons? ] [ dup head swap tail [ #push! ] dip ] while
+    drop
+  ] ;
+
+  \ The first entry whose target is comparator-equal to the argument. The list head is
+  \ the most recently added entry, so this is the newest of a set of parallel edges.
+  find-entry?: ( comparator: quotation target list -- option ) [
+    option:none swap
+    [ dup cons? ] [
+      dup head dup target>>
+      4 pick-n 6 pick-n call ordering:eq?
+      [ >option:some [ 2drop ] dip nil ]
+      [ drop tail ]
+      if
+    ] while
+    drop nip nip
+  ] ;
+
+  \ Drop every entry whose target is comparator-equal to the argument, reporting how
+  \ many went. The kept entries come back in their original relative order: the filter
+  \ pass reverses, and the second pass puts them back.
+  drop-entries: ( comparator: quotation target list -- list' removed ) [
+    0 swap nil swap
+    [ dup cons? ] [
+      dup head dup target>>
+      5 pick-n 7 pick-n call ordering:eq?
+      [ drop tail [ [ 1 + ] dip ] dip ]
+      [ swap tail [ swap cons ] dip ]
+      if
+    ] while
+    drop list-reverse-loop swap [ 2drop ] 2dip
+  ] ;
+
+  throw-unknown-vertex: never-returns ( -- * ) [
+    f "graph has no such vertex" EKeyNotFound make-error throw
+  ] ;
+
+  throw-no-such-edge: never-returns ( -- * ) [
+    f "graph has no such edge" EKeyNotFound make-error throw
+  ] ;
+
+  \ Rebuild the graph around a new adjacency map and edge count, keeping the comparator
+  \ and the flag. Every persistent update routes its rewrap through here.
+  rebuild: ( adj: bst-map count: fixnum g: graph -- g' ) [
+    unmake-graph drop [ drop ] 2dip <rot- make-graph
+  ] ;
+
+  \ Rewrap around a new adjacency, leaving the edge count alone.
   with-adjacency: ( g: graph adj: bst-map -- g' ) [
-    swap unmake-graph [ drop ] 2dip make-graph
+    over edge-count>> 2 pick-n rebuild nip
+  ] ;
+
+  increment-edge-count: ( g: graph -- g' ) [
+    dup adjacency>> over edge-count>> 1 + 2 pick-n rebuild nip
+  ] ;
+
+  decrement-edge-count: ( g: graph n: fixnum -- g' ) [
+    over adjacency>>
+    2 pick-n edge-count>> 2 pick-n -
+    3 pick-n rebuild
+    nip nip
   ] ;
 
   \ The edge list stored under v, or `option:none` for an unknown vertex. O(log V).
@@ -63,12 +140,269 @@ private{
     if
   ] ;
 
-  \ Cons the edge onto u's list and store it back: one adjacency entry,
-  \ unconditionally, at O(log V). u must already be present.
-  insert-edge-entry: ( g: graph u edge: graph-edge -- g' ) [
-    2 pick-n 2 pick-n vertex-edges? option:some>
+  \ Cons one adjacency entry for source -> target onto source's list, creating source
+  \ when it is absent. One lookup and one insert, O(log V). The target is left to the
+  \ caller, which either mirrors the entry or ensures the vertex.
+  add-entry: ( g: graph source target payload -- g' ) [
+    2 pick-n 2 pick-n 2 pick-n make-graph-edge
+    [ 2drop ] dip
+    2 pick-n 2 pick-n vertex-edges?
+    dup option:some? [ option:some> ] [ drop nil ] if
     cons
     2 pick-n adjacency>> -rot>
     map-insert with-adjacency
   ] ;
+
+  \ Drop every entry from u's list that targets v, reporting how many went. An unknown u
+  \ removes nothing. O(log V + deg u).
+  drop-edges-to: ( g: graph u v -- g' removed ) [
+    2 pick-n 2 pick-n vertex-edges?
+    dup option:some? [
+      option:some>
+      3 pick-n comparator>> 2 pick-n 2 pick-n drop-entries
+      [ nip nip ] dip
+      [ 2 pick-n adjacency>> -rot> map-insert with-adjacency ] dip
+    ] [
+      drop 2drop 0
+    ] if
+  ] ;
+
+  \ The two sweeps below account for their own removals, so they discard the count.
+  strip-back-edge: ( g: graph u v -- g' ) [ drop-edges-to drop ] ;
+
+  \ Every vertex, ascending under the comparator. O(V).
+  vertex-array: ( g: graph -- array ) [ adjacency>> map>array [ key>> ] #map #collect ] ;
+
+  \ Every stored adjacency entry. An undirected edge appears twice, once per endpoint.
+  \ O(V + E).
+  all-entries: ( g: graph -- array ) [
+    adjacency>> map>array
+    [ ] make-vector swap
+    [ unmake-kv-pair nip entries>vector ] #each
+    >array
+  ] ;
+
+  \ Whether the entry has v at either end.
+  edge-touches?: ( edge: graph-edge comparator: quotation v -- ? ) [
+    2 pick-n source>> over 3 pick-n call ordering:eq?
+    3 pick-n target>> 2 pick-n 4 pick-n call ordering:eq?
+    or
+    nip nip nip
+  ] ;
+
+  \ How many stored entries have v at either end, O(V + E). On a digraph that is the
+  \ number of logical edges v is part of, since each is stored once.
+  count-incident: ( g: graph v -- n ) [
+    over comparator>> over [ edge-touches? ] curry curry
+    2 pick-n all-entries swap #filter #count
+    nip nip
+  ] ;
+
+  \ Strip v out of the lists of the vertices named by its own edge list. Sound only when
+  \ the graph is undirected, where every edge is stored at both endpoints.
+  strip-neighbors: ( g: graph v vlist -- g' ) [
+    [ ] make-vector swap entries>vector [ target>> ] #map #collect
+    over [ strip-back-edge ] curry
+    [ drop ] 2dip
+    #each
+  ] ;
+
+  \ Strip v out of every list. A digraph's in-edges are not locatable from v, so the
+  \ whole map is swept: O(V log V + E).
+  strip-all: ( g: graph v -- g' ) [
+    over vertex-array
+    over [ strip-back-edge ] curry
+    [ drop ] 2dip
+    #each
+  ] ;
+
+  \ Delete v's own entry and subtract the edges the removal took with it.
+  finish-remove-vertex: ( g: graph v n: fixnum -- g' ) [
+    2 pick-n adjacency>> 2 pick-n map-delete
+    3 pick-n edge-count>> 2 pick-n -
+    4 pick-n rebuild
+    nip nip nip
+  ] ;
+
+  \ Remove a vertex that is known to be present, along with every edge touching it. The
+  \ decrement differs by kind: an undirected edge appears once in v's own list, where a
+  \ digraph's in-edges appear in lists v does not name.
+  remove-known-vertex: ( g: graph v vlist -- g' ) [
+    2 pick-n directed?>> [
+      2 pick-n 2 pick-n count-incident
+      [ drop dup [ strip-all ] dip ] dip
+    ] [
+      dup list-len
+      [ over [ strip-neighbors ] dip ] dip
+    ] if
+    finish-remove-vertex
+  ] ;
 }
+
+\\ Add v with no edges. A vertex that is already present is left as it is, edges
+\\ included. O(log V).
+\\
+\\   [ cmp ] <graph> 1 graph-add-vertex graph-vertex-count
+\\   => 1
+graph-add-vertex: ( g: graph v -- g' ) [ ensure-vertex ] ;
+
+\\ Remove v and every edge touching it. An unknown vertex is left alone. Undirected
+\\ edges are stored at both endpoints, so only v's neighbors are touched, at
+\\ O(deg log V); a digraph's in-edges are not locatable from v, so every list is
+\\ swept, at O(V log V + E).
+\\
+\\   [ cmp ] <graph> 1 2 graph-add-edge 1 graph-remove-vertex graph-edge-count
+\\   => 0
+graph-remove-vertex: ( g: graph v -- g' ) [
+  2dup vertex-edges?
+  dup option:some?
+  [ option:some> remove-known-vertex ]
+  [ 2drop ]
+  if
+] ;
+
+\\ Add an edge from u to v carrying the payload, adding either endpoint that is absent.
+\\ O(log V). An undirected graph stores the edge at both endpoints, except a self-loop,
+\\ which is stored once. A pair that already has an edge gains a second one.
+\\
+\\   [ cmp ] <graph> 1 2 weight: graph-add-edge-with-payload 1 2 graph-edge-get payload>>
+\\   => weight:
+graph-add-edge-with-payload: ( g: graph u v payload -- g' ) [
+  3 pick-n 3 pick-n 3 pick-n 3 pick-n add-entry
+  dup directed?>> [
+    2 pick-n ensure-vertex
+  ] [
+    3 pick-n 3 pick-n 2 pick-n comparator>> call ordering:eq? not
+    [ 2 pick-n 4 pick-n 3 pick-n add-entry ] when
+  ] if
+  increment-edge-count
+  [ 2drop 2drop ] dip
+] ;
+
+\\ Add an unweighted edge from u to v, storing `f` as the payload. O(log V).
+\\
+\\   [ cmp ] <graph> 1 2 graph-add-edge 1 2 graph-has-edge?
+\\   => t
+graph-add-edge: ( g: graph u v -- g' ) [ f graph-add-edge-with-payload ] ;
+
+\\ Remove every edge from u to v, and on an undirected graph the entries stored at v as
+\\ well. A pair with no edge is left alone. O(log V + deg u + deg v).
+\\
+\\   [ cmp ] <graph> 1 2 graph-add-edge 1 2 graph-remove-edge 1 2 graph-has-edge?
+\\   => f
+graph-remove-edge: ( g: graph u v -- g' ) [
+  2 pick-n directed?>> [
+    drop-edges-to
+  ] [
+    \ Strip u's list, then v's with the endpoints swapped. The count from the first
+    \ strip is rotated over the second call's operands, since both take the same edges.
+    2dup [ drop-edges-to ] 2dip
+    swap <rot-
+    [ drop-edges-to drop ] dip
+  ] if
+  decrement-edge-count
+] ;
+
+private{
+  \ Materialize an edge list, head first, so the newest entry leads.
+  entries>array: ( list -- array ) [ [ ] make-vector swap entries>vector >array ] ;
+
+  \ Whether an undirected edge should be emitted from this end: the one whose source
+  \ sorts at or before its target, so each logical edge is reported once.
+  edge-forward?: ( edge: graph-edge comparator: quotation -- ? ) [
+    swap dup source>> swap target>> 2 pick-n call ordering:gt? not nip
+  ] ;
+}
+
+\\ Whether v is a vertex of the graph. O(log V).
+\\
+\\   [ cmp ] <graph> 1 graph-add-vertex 1 graph-has-vertex?
+\\   => t
+graph-has-vertex?: ( g: graph v -- ? ) [ vertex-edges? option:some? ] ;
+
+\\ The newest edge from u to v as an option, `option:none` when u is not a vertex or
+\\ carries no such edge. O(log V + deg u).
+\\
+\\   [ cmp ] <graph> 1 2 graph-edge-get? option:none?
+\\   => t
+graph-edge-get?: ( g: graph u v -- option ) [
+  2 pick-n 2 pick-n vertex-edges?
+  dup option:some? [
+    option:some>
+    3 pick-n comparator>> 2 pick-n 2 pick-n find-entry?
+    [ 2drop 2drop ] dip
+  ] [
+    2drop 2drop option:none
+  ] if
+] ;
+
+\\ The newest edge from u to v. O(log V + deg u). Throws `key-not-found` when u is not
+\\ a vertex or carries no such edge.
+\\
+\\   [ cmp ] <graph> 1 2 graph-add-edge 1 2 graph-edge-get target>>
+\\   => 2
+graph-edge-get: ( g: graph u v -- edge: graph-edge ) [
+  graph-edge-get? dup option:some? [ option:some> ] [ drop throw-no-such-edge ] if
+] ;
+
+\\ Whether an edge runs from u to v. An unknown u answers `f` rather than throwing.
+\\ O(log V + deg u).
+\\
+\\   [ cmp ] <digraph> 1 2 graph-add-edge 2 1 graph-has-edge?
+\\   => f
+graph-has-edge?: ( g: graph u v -- ? ) [ graph-edge-get? option:some? ] ;
+
+\\ The edges leaving v as an option, `option:none` for an unknown vertex. The newest
+\\ entry leads. O(log V + deg v).
+\\
+\\   [ cmp ] <graph> 1 graph-neighbors? option:none?
+\\   => t
+graph-neighbors?: ( g: graph v -- option ) [ vertex-edges? [ entries>array ] ?map ] ;
+
+\\ The edges leaving v, newest first. O(log V + deg v). Throws `key-not-found` for a
+\\ vertex the graph does not have.
+\\
+\\   [ cmp ] <graph> 1 2 graph-add-edge 1 graph-neighbors #len
+\\   => 1
+graph-neighbors: ( g: graph v -- array ) [
+  graph-neighbors? dup option:some? [ option:some> ] [ drop throw-unknown-vertex ] if
+] ;
+
+\\ Every vertex, ascending under the comparator. O(V).
+\\
+\\   [ cmp ] <graph> 2 graph-add-vertex 1 graph-add-vertex graph-vertices
+\\   => { 1 2 }
+graph-vertices: ( g: graph -- array ) [ vertex-array ] ;
+
+\\ Every edge, one record per logical edge. On an undirected graph each edge is stored
+\\ at both endpoints, so only the end whose source sorts at or before its target is
+\\ emitted. O(V + E).
+\\
+\\   [ cmp ] <graph> 1 2 graph-add-edge graph-edges #len
+\\   => 1
+graph-edges: ( g: graph -- array ) [
+  dup all-entries swap
+  dup directed?>>
+  [ drop ]
+  [ comparator>> [ edge-forward? ] curry #filter #collect ]
+  if
+] ;
+
+\\ How many vertices the graph has, O(1).
+\\
+\\   [ cmp ] <graph> 1 2 graph-add-edge graph-vertex-count
+\\   => 2
+graph-vertex-count: ( g: graph -- n ) [ adjacency>> map-size ] ;
+
+\\ How many edges the graph has, O(1). An undirected edge counts once even though it is
+\\ stored at both endpoints, and a repeated add counts again.
+\\
+\\   [ cmp ] <graph> 1 2 graph-add-edge 1 2 graph-add-edge graph-edge-count
+\\   => 2
+graph-edge-count: ( g: graph -- n ) [ edge-count>> ] ;
+
+\\ Whether the graph has no vertices, O(1).
+\\
+\\   [ cmp ] <graph> graph-empty?
+\\   => t
+graph-empty?: ( g: graph -- ? ) [ adjacency>> map-empty? ] ;

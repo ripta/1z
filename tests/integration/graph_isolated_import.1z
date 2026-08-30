@@ -1,13 +1,31 @@
 \ The graph module in isolation: nothing here imports "bst" or "cons-list", so the
-\ constructor's internal <bst-map> use must resolve from the module's own imports.
-\ The unit suite imports both for its own assertions, which would mask a missing
-\ import in the library.
+\ adjacency machinery's internal <bst-map>, map>array, map-delete, key>>,
+\ unmake-kv-pair, head, tail and list-len uses must all resolve from the module's own
+\ imports. The unit suite imports "ranges" for its own loops, which would mask a
+\ missing import in the library.
+\
+\ Each reading runs inside a word so no graph rests on the stack between statements;
+\ the golden would otherwise carry a full dump of the adjacency map.
 
 use "testing" ;
 use "graph" ;
+
+triangle: ( -- graph ) [ [ cmp ] <graph> 1 2 graph-add-edge 2 3 graph-add-edge 3 1 graph-add-edge ] ;
+
+vertices:       ( -- array ) [ triangle graph-vertices ] ;
+edge-count:     ( -- n )     [ triangle graph-edges #len ] ;
+neighbor-count: ( -- n )     [ triangle 2 graph-neighbors #len ] ;
+after-removal:  ( -- n n )   [ triangle 2 graph-remove-vertex dup graph-vertex-count swap graph-edge-count ] ;
+drained:        ( -- ? )     [ triangle 1 graph-remove-vertex 2 graph-remove-vertex 3 graph-remove-vertex graph-empty? ] ;
 
 "graph in isolation" test-section
 [ cmp ] <graph>
 dup graph? "the constructor yields a graph" assert-true
 graph-directed? "an undirected graph reports f" assert-false
 [ cmp ] <digraph> graph-directed? "a digraph reports t" assert-true
+vertices { 1 2 3 } "vertices come ascending" assert=
+edge-count 3 "three logical edges" assert=
+neighbor-count 2 "the middle vertex has two" assert=
+after-removal 1 "one edge survives the removal" assert=
+2 "and two vertices" assert=
+drained "removing every vertex empties the graph" assert-true
