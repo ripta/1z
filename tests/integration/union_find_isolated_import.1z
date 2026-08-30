@@ -1,0 +1,16 @@
+\ The union-find module in isolation: nothing here imports "ranges", so the iterator's
+\ internal <range> use must resolve from the module's own imports. The unit suite and
+\ the benchmark both import "ranges" for their own loops, which would mask a missing
+\ import in the library.
+
+use "testing" ;
+use "union-find" ;
+
+"conformance in isolation" test-section
+3 <union-find>
+dup 0 1 union-find-merge drop
+dup >iterator #collect { { 0 1 } { 2 } } "components group and order" assert=
+dup 0 1 union-find-connected? "the merged pair is connected" assert-true
+dup 0 union-find-size 2 "the merged set counts two" assert=
+dup #len 2 "#len is the component count" assert=
+#empty? "a filled union-find is not #empty?" assert-false

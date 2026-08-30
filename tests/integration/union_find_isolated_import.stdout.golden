@@ -1,0 +1,14 @@
+=== conformance in isolation ===
+Stack: [ ]
+Stack: [ union-find{ parents: V{ 0 1 2 } sizes: V{ 1 1 1 } components: 3 } ]
+Stack: [ union-find{ parents: V{ 0 0 2 } sizes: V{ 2 1 1 } components: 2 } ]
+PASS: components group and order
+Stack: [ union-find{ parents: V{ 0 0 2 } sizes: V{ 2 1 1 } components: 2 } ]
+PASS: the merged pair is connected
+Stack: [ union-find{ parents: V{ 0 0 2 } sizes: V{ 2 1 1 } components: 2 } ]
+PASS: the merged set counts two
+Stack: [ union-find{ parents: V{ 0 0 2 } sizes: V{ 2 1 1 } components: 2 } ]
+PASS: #len is the component count
+Stack: [ union-find{ parents: V{ 0 0 2 } sizes: V{ 2 1 1 } components: 2 } ]
+PASS: a filled union-find is not #empty?
+Stack: [ ]

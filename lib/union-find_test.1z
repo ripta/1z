@@ -20,6 +20,16 @@ depth-two-fixture: ( -- uf ) [
   dup 0 2 union-find-merge drop
 ] ;
 
+\ Six elements merged as (5,0) and (1,2). Both are size ties, so the second argument's
+\ root moves and the first component's root is 5 while its smallest member is 0.
+\ First-encounter iteration order therefore differs from root order, which is what pins
+\ the documented ordering.
+iteration-fixture: ( -- uf ) [
+  6 <union-find>
+  dup 5 0 union-find-merge drop
+  dup 1 2 union-find-merge drop
+] ;
+
 \ --- Add ---
 
 test-add-appends-singletons: ( -- ) [
@@ -42,8 +52,13 @@ test-add-matches-presized: ( -- ) [
 
 \ --- Out of range ---
 
-test-bounds-merge-throws: ( -- ) [
+test-bounds-connected-throws: ( -- ) [
   "out of range" test-section
+  [ 2 <union-find> 0 5 union-find-connected? ] index-out-of-bounds:
+  "connected? with an out-of-range index throws" assert-error-type
+] ;
+
+test-bounds-merge-throws: ( -- ) [
   [ 2 <union-find> 0 5 union-find-merge ] index-out-of-bounds:
   "merge with an out-of-range index throws" assert-error-type
 ] ;
@@ -62,6 +77,56 @@ test-bounds-nothing-extended: ( -- ) [
 test-bounds-root-throws: ( -- ) [
   [ 2 <union-find> 2 union-find-root ] index-out-of-bounds:
   "root at n throws" assert-error-type
+] ;
+
+test-bounds-size-throws: ( -- ) [
+  [ 2 <union-find> 2 union-find-size ] index-out-of-bounds:
+  "size at n throws" assert-error-type
+] ;
+
+\ --- Component size ---
+
+test-component-size-after-merges: ( -- ) [
+  "component size" test-section
+  4 <union-find>
+  dup 0 1 union-find-merge drop
+  dup 0 2 union-find-merge drop
+  dup 0 union-find-size 3 "the merged set counts three" assert=
+  dup 3 union-find-size 1 "the untouched singleton counts one" assert=
+  drop
+] ;
+
+test-component-size-either-member: ( -- ) [
+  3 <union-find>
+  dup 0 1 union-find-merge drop
+  dup 1 union-find-size over 0 union-find-size "either member reads the same size" assert=
+  drop
+] ;
+
+test-component-size-singleton-after-add: ( -- ) [
+  1 <union-find>
+  dup union-find-add
+  union-find-size 1 "an added element is a singleton" assert=
+] ;
+
+\ --- Connected ---
+
+test-connected-reports-pairs: ( -- ) [
+  "connected" test-section
+  3 <union-find>
+  dup 0 1 union-find-merge drop
+  dup 0 1 union-find-connected? "a merged pair is connected" assert-true
+  dup 1 0 union-find-connected? "connectedness is symmetric" assert-true
+  dup 0 2 union-find-connected? "an unmerged pair is not connected" assert-false
+  drop
+] ;
+
+test-connected-transitive: ( -- ) [
+  4 <union-find>
+  dup 0 1 union-find-merge drop
+  dup 1 2 union-find-merge drop
+  dup 0 2 union-find-connected? "connectivity is transitive" assert-true
+  drop
 ] ;
 
 \ --- Construction ---
@@ -92,6 +157,38 @@ test-halving-repoints-to-grandparent: ( -- ) [
   parents>> 3 #nth 0 "the query re-pointed 3 at its grandparent" assert=
 ] ;
 
+\ --- Iteration ---
+
+test-iter-components-ordered: ( -- ) [
+  "iteration" test-section
+  iteration-fixture >iterator #collect
+  { { 0 5 } { 1 2 } { 3 } { 4 } }
+  "components come by smallest member, members ascending" assert=
+] ;
+
+test-iter-empty-structure: ( -- ) [
+  0 <union-find> >iterator #collect { } "no elements yield no components" assert=
+] ;
+
+test-iter-groups-at-first-step: ( -- ) [
+  4 <union-find>
+  dup >iterator
+  over 0 1 union-find-merge drop
+  #collect nip
+  { { 0 1 } { 2 } { 3 } }
+  "grouping runs at the first step, not at iterator creation" assert=
+] ;
+
+test-iter-snapshot-survives-merge: ( -- ) [
+  iteration-fixture
+  dup >iterator
+  dup [ drop t ] #any drop
+  over 3 4 union-find-merge drop
+  #collect nip
+  { { 1 2 } { 3 } { 4 } }
+  "a merge does not disturb an iterator already in flight" assert=
+] ;
+
 \ --- Merge ---
 
 test-merge-connects-transitively: ( -- ) [
@@ -111,6 +208,30 @@ test-merge-joins-and-reports: ( -- ) [
   components>> 2 "only the join dropped the component count" assert=
 ] ;
 
+\ --- Protocol methods ---
+
+test-protocol-empty: ( -- ) [
+  "protocol methods" test-section
+  0 <union-find> #empty? "no elements is #empty?" assert-true
+  1 <union-find> #empty? "a singleton is not #empty?" assert-false
+] ;
+
+test-protocol-len-counts-components: ( -- ) [
+  3 <union-find>
+  dup #len 3 "#len is the component count" assert=
+  dup 0 1 union-find-merge drop
+  dup #len 2 "a join drops #len by one" assert=
+  dup #len over components>> "#len reads the maintained counter" assert=
+  drop
+] ;
+
+test-protocol-unregistered-throw: ( -- ) [
+  [ 2 <union-find> 0 #nth ] "#nth on a union-find throws" assert-error
+  [ 2 <union-find> #first ] "#first on a union-find throws" assert-error
+  [ 2 <union-find> 9 #push ] "#push on a union-find throws" assert-error
+  [ 2 <union-find> #pop ] "#pop on a union-find throws" assert-error
+] ;
+
 \ --- Scale ---
 
 test-scale-chain-collapses: ( -- ) [
@@ -119,6 +240,13 @@ test-scale-chain-collapses: ( -- ) [
   0 1999 <range> [ over swap dup 1 + union-find-merge drop ] #each
   dup 0 union-find-root over 1999 union-find-root "the chain collapses to one root" assert=
   components>> 1 "one component remains" assert=
+] ;
+
+test-scale-components-cover-all: ( -- ) [
+  2000 <union-find>
+  0 1999 <range> [ over swap dup 1 + union-find-merge drop ] #each
+  dup #len 1 "one component remains through the protocol" assert=
+  >iterator #collect 0 #nth #len 2000 "the single component holds every element" assert=
 ] ;
 
 \ --- Union by size ---

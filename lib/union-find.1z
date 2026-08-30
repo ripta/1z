@@ -10,6 +10,8 @@
 \ during the read, so there is no old version to retain. The mathematical name for the
 \ same object is a partition.
 
+use { <range>: } "ranges" ;
+
 private{
   \ Walk i to its set's root with path halving: each visited node is re-pointed at its
   \ grandparent and the walk continues from there, advancing two levels per iteration.
@@ -97,3 +99,87 @@ union-find-merge: ( uf: union-find i: fixnum j: fixnum -- joined? ) [
     t
   ] if
 ] ;
+
+\\ Whether i and j are in the same set, amortized O(α(n)): two representative queries
+\\ compared. Throws `index-out-of-bounds` when either index is outside `[0, n)`.
+\\
+\\   3 <union-find> dup 0 1 union-find-merge drop 0 1 union-find-connected?
+\\   => t
+union-find-connected?: ( uf: union-find i: fixnum j: fixnum -- connected? ) [
+  2 pick-n parents>> swap root-walk
+  swap 2 pick-n parents>> swap root-walk
+  = nip
+] ;
+
+\\ The exact element count of i's set, amortized O(α(n)). The size entry under a
+\\ non-root is stale, so the read happens at the representative. Throws
+\\ `index-out-of-bounds` when i is outside `[0, n)`.
+\\
+\\   3 <union-find> dup 0 1 union-find-merge drop 0 union-find-size
+\\   => 2
+union-find-size: ( uf: union-find i: fixnum -- size ) [
+  over parents>> swap root-walk
+  swap sizes>> swap #nth
+] ;
+
+private{
+  \ Group elements by root in one index-order scan, O(n · α(n)). An n-slot table maps a
+  \ root index to its group vector, and an ordered collection gains each group once, at
+  \ first encounter, so the two share the vectors and later member pushes land in both.
+  \ Sealing each group to an array yields the immutable snapshot: components ordered by
+  \ smallest member, members ascending.
+  group-components: ( uf -- components ) [
+    parents>> dup #len
+    [ ] make-vector swap [ f #push! ] times
+    [ ] make-vector
+    2 pick-n #len 0 swap <range> [
+      3 pick-n over root-walk
+      3 pick-n over #nth
+      dup not [
+        drop [ ] make-vector
+        4 pick-n 2 pick-n 2 pick-n #nth! drop
+        3 pick-n over #push! drop
+      ] when
+      2 pick-n #push! drop 2drop
+    ] #each
+    [ >array ] #map #collect nip nip
+  ] ;
+
+  \ Iterator step: slot 0 holds f until the first step runs the grouping pass, then the
+  \ component snapshot; slot 1 holds the source union-find until then, then the cursor.
+  components-iter-step: ( state -- option ) [
+    dup 0 #nth not [
+      dup 1 #nth group-components
+      over 0 <rot- #nth! drop
+      dup 1 0 #nth! drop
+    ] when
+    dup 0 #nth over 1 #nth
+    2dup swap #len < [
+      2dup #nth >option:some
+      [ 1 + 2 pick-n 1 <rot- #nth! drop ] dip
+      nip nip
+    ] [
+      2drop drop option:none
+    ] if
+  ] ;
+}
+
+\ Iterator protocol integration: one component per step, each an array of its members.
+\ The first step pays the O(n · α(n)) grouping pass and later steps are O(1). The
+\ snapshot is taken at that first step, so a merge during iteration does not disturb an
+\ iterator already in flight. Components come in first-encounter order, which is
+\ ascending smallest member, with members ascending within each.
+>iterator: method{ union-find } [
+  [ ] make-vector f #push! swap #push!
+  [ components-iter-step ] curry
+  >iterator
+] ;
+
+\ Cost-rule protocol conformance: #len is the component count, which every operation
+\ already maintains in O(1), and a structure with no elements has no components.
+\
+\ Nothing else is registered. Components are the structure's one first-class reading,
+\ so #nth, #first, and the end operations have no meaning recoverable from the call
+\ site.
+#len: method{ union-find } [ components>> ] ;
+#empty?: method{ union-find } [ components>> 0 = ] ;

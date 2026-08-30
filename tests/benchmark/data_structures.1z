@@ -196,6 +196,12 @@ heap-sweep: ( n -- ) [
 \ rows land on a star: root and merge-joined read one or two parent slots and must stay
 \ flat, and add appends singletons at amortized O(1) vector growth. merge-joined is the
 \ Kruskal inner test on an already-connected pair, so it reports f and writes nothing.
+\
+\ connected? is two root reads and size is one root read plus a size slot, so both ride
+\ the star and must stay flat. iter-new only boxes the source and #len reads the
+\ component counter, so both are O(1). components-drain pays the grouping pass on its
+\ first step, so it runs at one iteration like fill+connect and its per-element cost
+\ must read flat.
 
 union-find-connect: ( n -- uf ) [
   dup <union-find> swap
@@ -210,7 +216,12 @@ union-find-sweep: ( n -- ) [
   dup union-find-connect
   "union-find root" pick 5 [ dup 1 union-find-root drop ] scale-row
   "union-find merge-joined" pick 5 [ dup 0 1 union-find-merge drop ] scale-row
+  "union-find connected?" pick 5 [ dup 0 1 union-find-connected? drop ] scale-row
+  "union-find size" pick 5 [ dup 1 union-find-size drop ] scale-row
   "union-find add" pick 5 [ dup union-find-add drop ] scale-row
+  "union-find iter-new" pick 5 [ dup >iterator drop ] scale-row
+  "union-find components-drain" pick 1 [ dup >iterator #count drop ] scale-row
+  "union-find #len" pick 5 [ dup #len drop ] scale-row
   2drop
 ] ;
 
@@ -223,6 +234,8 @@ union-find-sweep: ( n -- ) [
 3 heap-fill >iterator #count drop
 3 heap-fill heap-unsorted #count drop
 3 union-find-connect 1 union-find-root drop
+3 union-find-connect >iterator #count drop
+3 union-find-connect dup 0 1 union-find-connected? drop 1 union-find-size drop
 
 50 list-sweep
 100 list-sweep
