@@ -1,0 +1,23 @@
+\ The union-find-map layer in isolation: nothing here imports "bst", so `<bst-map>`,
+\ `map-insert`, and `map-lookup` must resolve from lib/union-find.1z's own selective
+\ import. The benchmark imports "bst" for its own sweep, which would mask a missing
+\ module import the way the core's isolated-import pin describes for "ranges".
+
+use "testing" ;
+use "union-find" ;
+
+"union-find-map isolated import" test-section
+
+[ cmp ] <union-find-map>
+dup #len 0 "an empty map has no components" assert=
+dup "a" union-find-map-add
+dup "b" union-find-map-add
+dup "c" union-find-map-add
+dup "a" "b" union-find-map-merge "joining two singletons reports t" assert-true
+dup "b" union-find-map-root "a" "root answers in the element domain" assert=
+dup "b" union-find-map-root? option:some> "a" "root? unwraps to the representative" assert=
+dup "z" union-find-map-root? option:some? "root? on an unknown element is none" assert-false
+dup "a" union-find-map-size 2 "the merged set counts two" assert=
+dup "a" "c" union-find-map-connected? "unmerged elements are not connected" assert-false
+dup >iterator #collect { { "a" "b" } { "c" } } "components come as element arrays" assert=
+drop

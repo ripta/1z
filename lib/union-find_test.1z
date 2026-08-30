@@ -189,6 +189,99 @@ test-iter-snapshot-survives-merge: ( -- ) [
   "a merge does not disturb an iterator already in flight" assert=
 ] ;
 
+\ --- Union-find-map ---
+
+test-map-add-and-root: ( -- ) [
+  "union-find-map" test-section
+  [ cmp ] <union-find-map>
+  dup 10 union-find-map-add
+  dup 20 union-find-map-add
+  dup 30 union-find-map-add
+  dup 10 20 union-find-map-merge t "joining two singletons reports t" assert=
+  dup 10 20 union-find-map-merge f "an already-connected pair reports f" assert=
+  dup 20 union-find-map-root 10 "root answers in the element domain" assert=
+  dup 10 30 union-find-map-connected? "unmerged elements are not connected" assert-false
+  10 union-find-map-size 2 "the merged set counts two" assert=
+] ;
+
+test-map-domains: ( -- ) [
+  [ cmp ] <union-find-map>
+  dup 7 union-find-map-add
+  dup 9 union-find-map-add
+  dup 7 9 union-find-map-merge drop
+  9 union-find-map-root 7 "fixnum elements resolve" assert=
+  [ cmp ] <union-find-map>
+  dup "left" union-find-map-add
+  dup "right" union-find-map-add
+  dup "left" "right" union-find-map-merge drop
+  "right" union-find-map-root "left" "string elements resolve" assert=
+  [ [ >string ] dip >string cmp ] <union-find-map>
+  dup left: union-find-map-add
+  dup right: union-find-map-add
+  dup left: right: union-find-map-merge drop
+  right: union-find-map-root left: "symbol elements resolve" assert=
+] ;
+
+test-map-duplicate-add: ( -- ) [
+  [ cmp ] <union-find-map>
+  dup "a" union-find-map-add
+  dup "a" union-find-map-add
+  dup #len 1 "a repeated add is a no-op" assert=
+  dup "a" union-find-map-size 1 "the element is still a singleton" assert=
+  "a" union-find-map-root "a" "the element still roots itself" assert=
+] ;
+
+test-map-iteration: ( -- ) [
+  [ cmp ] <union-find-map>
+  dup "a" union-find-map-add
+  dup "b" union-find-map-add
+  dup "c" union-find-map-add
+  dup "d" union-find-map-add
+  dup "c" "a" union-find-map-merge drop
+  dup >iterator #collect
+  { { "a" "c" } { "b" } { "d" } }
+  "components come as element arrays in first-encounter order" assert=
+  "a" union-find-map-root "c" "on a tie the second argument's root moved" assert=
+] ;
+
+test-map-protocol: ( -- ) [
+  [ cmp ] <union-find-map>
+  dup #empty? "an empty map is #empty?" assert-true
+  dup #len 0 "an empty map has zero components" assert=
+  dup "a" union-find-map-add
+  dup "b" union-find-map-add
+  dup #empty? "elements make it non-empty" assert-false
+  dup #len 2 "#len is the component count" assert=
+  dup "a" "b" union-find-map-merge drop
+  dup #len 1 "a join drops #len by one" assert=
+  [ 0 #nth ] curry "#nth on a union-find-map throws" assert-error
+  [ cmp ] <union-find-map> [ #first ] curry "#first on a union-find-map throws" assert-error
+] ;
+
+test-map-root-option: ( -- ) [
+  [ cmp ] <union-find-map>
+  dup "a" union-find-map-add
+  dup "a" union-find-map-root? option:some> "a" "root? unwraps to the representative" assert=
+  dup "z" union-find-map-root? option:some? "root? on an unknown element is none" assert-false
+  #len 1 "the failed lookup interned nothing" assert=
+] ;
+
+test-map-unknown-raises: ( -- ) [
+  [ cmp ] <union-find-map>
+  dup "a" union-find-map-add
+  dup [ "z" union-find-map-root ] curry index-out-of-bounds:
+  "root on an unknown element throws" assert-error-type
+  dup [ "z" "a" union-find-map-merge ] curry index-out-of-bounds:
+  "merge on an unknown first element throws" assert-error-type
+  dup [ "a" "z" union-find-map-merge ] curry index-out-of-bounds:
+  "merge on an unknown second element throws" assert-error-type
+  dup [ "z" "a" union-find-map-connected? ] curry index-out-of-bounds:
+  "connected? on an unknown element throws" assert-error-type
+  dup [ "z" union-find-map-size ] curry index-out-of-bounds:
+  "size on an unknown element throws" assert-error-type
+  #len 1 "the failed lookups interned nothing" assert=
+] ;
+
 \ --- Merge ---
 
 test-merge-connects-transitively: ( -- ) [

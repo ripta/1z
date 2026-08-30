@@ -597,11 +597,14 @@ fn nativeMatch(ctx: *Context) anyerror!void {
         return error.NameError;
     };
 
-    const alloc = ctx.quotationAllocator();
-
     var matched_body: ?value_mod.Quotation = null;
     var default_body: ?value_mod.Quotation = null;
+
+    // Per-call scratch. The state arena would retain it for the context's lifetime,
+    // and this native runs once per match execution.
     var seen = std.StringHashMapUnmanaged(void){};
+    defer seen.deinit(ctx.allocator);
+
     var has_default = false;
 
     var i: usize = 0;
@@ -654,7 +657,7 @@ fn nativeMatch(ctx: *Context) anyerror!void {
             helpers.setErrorContext(ctx, "duplicate match branch for '{s}'", .{key});
             return error.ParseError;
         }
-        try seen.put(alloc, key, {});
+        try seen.put(ctx.allocator, key, {});
 
         if (std.mem.eql(u8, tag.tag.name, key)) {
             matched_body = body;
@@ -754,7 +757,12 @@ fn nativeValidateMatchBlock(ctx: *Context) anyerror!void {
     }
 
     const alloc = ctx.quotationAllocator();
+
+    // Per-call scratch. `alloc` stays arena-backed because `pending_error_message`
+    // escapes this call and needs it.
     var seen = std.StringHashMapUnmanaged(void){};
+    defer seen.deinit(ctx.allocator);
+
     var has_default = false;
     var enum_info: ?EnumInfo = null;
 
@@ -821,7 +829,7 @@ fn nativeValidateMatchBlock(ctx: *Context) anyerror!void {
             helpers.setErrorContext(ctx, "match: duplicate branch for '{s}'", .{key});
             return error.ParseError;
         }
-        try seen.put(alloc, key, {});
+        try seen.put(ctx.allocator, key, {});
     }
 
     // Exhaustiveness check

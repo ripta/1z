@@ -225,6 +225,31 @@ union-find-sweep: ( n -- ) [
   2drop
 ] ;
 
+\ The union-find-map rows carry the side table: every operation consults a bst-map of
+\ interned elements, so unlike the core's flat rows the per-element cost may grow
+\ logarithmically across the 2x steps. fill is n adds, the layer's add-cost row. root
+\ rides the same star shape as the core's root row, plus one side-table lookup and one
+\ back-translation read.
+
+union-find-map-fill: ( n -- ufm ) [
+  [ cmp ] <union-find-map> swap
+  0 swap <range> [ over swap union-find-map-add ] #each
+] ;
+
+union-find-map-connect: ( n -- ufm ) [
+  dup union-find-map-fill swap
+  1 - 0 swap <range> [ over swap dup 1 + union-find-map-merge drop ] #each
+] ;
+
+union-find-map-sweep: ( n -- ) [
+  dup
+  "union-find-map fill" pick 1 [ dup union-find-map-fill drop ] scale-row
+  drop
+  dup union-find-map-connect
+  "union-find-map root" pick 5 [ dup 1 union-find-map-root drop ] scale-row
+  2drop
+] ;
+
 \ warm
 { 1 2 3 } >cons-list >iterator #count drop
 { 1 2 3 } [ cmp ] >bst >iterator #count drop
@@ -236,6 +261,7 @@ union-find-sweep: ( n -- ) [
 3 union-find-connect 1 union-find-root drop
 3 union-find-connect >iterator #count drop
 3 union-find-connect dup 0 1 union-find-connected? drop 1 union-find-size drop
+3 union-find-map-connect 1 union-find-map-root drop
 
 50 list-sweep
 100 list-sweep
@@ -267,3 +293,10 @@ nl "[-- Scaling: union-find --]" print-line
 500 union-find-sweep
 1000 union-find-sweep
 2000 union-find-sweep
+
+nl "[-- Scaling: union-find-map --]" print-line
+
+250 union-find-map-sweep
+500 union-find-map-sweep
+1000 union-find-map-sweep
+2000 union-find-map-sweep

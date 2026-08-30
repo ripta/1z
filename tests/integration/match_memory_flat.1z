@@ -1,0 +1,11 @@
+\ Bounded-memory regression for match dispatch on the main task.
+\
+\ `unchecked-match` and the parse-time match validator used to allocate their
+\ duplicate-branch scratch map from the state arena, which is never reclaimed, so
+\ each dispatch retained about 150 bytes and this loop exhausted the 4 MB cap set
+\ in the `.flags` sidecar partway through. The scratch is now freed per call, so
+\ the loop stays flat.
+
+50000 [ option:none { option:some: [ drop 1 ] option:none: [ 0 ] } unchecked-match drop ] times
+
+"flat" print-line

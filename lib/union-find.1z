@@ -9,8 +9,13 @@
 \ The structure is ephemeral: a merge destroys the prior state, and a query writes
 \ during the read, so there is no old version to retain. The mathematical name for the
 \ same object is a partition.
+\
+\ Two layers ship: the dense-index core below, and the `union-find-map` value layer at
+\ the bottom of the file, which interns arbitrary elements through a
+\ comparator-parameterized side table and answers in the element domain.
 
 use { <range>: } "ranges" ;
+use { bst-map: <bst-map>: map-insert: map-lookup: } "bst" ;
 
 private{
   \ Walk i to its set's root with path halving: each visited node is re-pointed at its
@@ -183,3 +188,124 @@ private{
 \ site.
 #len: method{ union-find } [ components>> ] ;
 #empty?: method{ union-find } [ components>> 0 = ] ;
+
+\\ A value-keyed layer over the dense-index core. `table` is a comparator-parameterized
+\\ `bst-map` interning each element to its index, `elements` translates an index back,
+\\ and `core` holds the forest itself. Every side-table consultation costs O(log n)
+\\ comparisons, so the layer's operations run at O(α(n) · log n) against the core's
+\\ O(α(n)). The mathematical name for the same object is a partition-map.
+union-find-map: mutable struct{ core: union-find table: bst-map elements: vector } ;
+
+\\ An empty union-find-map. The comparator has effect `( e1 e2 -- ordering )` over
+\\ elements, as `cmp` does.
+\\
+\\   [ cmp ] <union-find-map> #len
+\\   => 0
+<union-find-map>: ( comparator: quotation -- union-find-map ) [
+  <bst-map> 0 <union-find> swap [ ] make-vector make-union-find-map
+] ;
+
+private{
+  throw-unknown-element: never-returns ( -- * ) [
+    f "union-find-map has no such element" EIndexOutOfBounds make-error throw
+  ] ;
+
+  \ Intern lookup shared by every delegating word, so the raising behavior has one
+  \ choke point.
+  require-index: ( ufm elem -- index ) [
+    [ table>> ] dip map-lookup
+    dup option:some? [ option:some> ] [ drop throw-unknown-element ] if
+  ] ;
+
+  \ Translate an interned index to its set's representative element.
+  index-root-elem: ( ufm index -- root-elem ) [
+    over core>> swap union-find-root
+    swap elements>> swap #nth
+  ] ;
+}
+
+\\ Intern elem as a new singleton set; a repeated add is a no-op. O(α(n) · log n): one
+\\ side-table lookup, and on a fresh element one core add plus a side-table insert.
+\\
+\\   [ cmp ] <union-find-map> dup "a" union-find-map-add #len
+\\   => 1
+union-find-map-add: ( ufm: union-find-map elem -- ) [
+  2dup [ table>> ] dip map-lookup option:some? [
+    2drop
+  ] [
+    over core>> union-find-add
+    2 pick-n table>> 2 pick-n 2 pick-n map-insert
+    3 pick-n swap >>table drop
+    drop
+    swap elements>> swap #push! drop
+  ] if
+] ;
+
+\\ The representative element of elem's set, O(α(n) · log n). Raises
+\\ `index-out-of-bounds` on an element that was never added.
+\\
+\\   [ cmp ] <union-find-map> dup 7 union-find-map-add
+\\   dup 9 union-find-map-add dup 7 9 union-find-map-merge drop 9 union-find-map-root
+\\   => 7
+union-find-map-root: ( ufm: union-find-map elem -- root-elem ) [
+  2dup require-index nip index-root-elem
+] ;
+
+\\ Option twin of `union-find-map-root`: `option:none` for an element that was never
+\\ added, leaving the structure unchanged.
+\\
+\\   [ cmp ] <union-find-map> 7 union-find-map-root?
+\\   => option:none
+union-find-map-root?: ( ufm: union-find-map elem -- option ) [
+  2dup [ table>> ] dip map-lookup nip
+  swap [ swap index-root-elem ] curry ?map
+] ;
+
+\\ Merge the sets containing e1 and e2, O(α(n) · log n). Returns `t` when two distinct
+\\ sets were joined and `f` when already connected, as the core's merge does. Raises
+\\ `index-out-of-bounds` on an element that was never added.
+\\
+\\   [ cmp ] <union-find-map> dup "a" union-find-map-add
+\\   dup "b" union-find-map-add dup "a" "b" union-find-map-merge
+\\   => t
+union-find-map-merge: ( ufm: union-find-map e1 e2 -- joined? ) [
+  [ 2dup require-index nip ] dip
+  2 pick-n swap require-index
+  [ core>> ] 2dip union-find-merge
+] ;
+
+\\ Whether e1 and e2 are in the same set, O(α(n) · log n). Raises
+\\ `index-out-of-bounds` on an element that was never added.
+\\
+\\   [ cmp ] <union-find-map> dup "a" union-find-map-add
+\\   dup "b" union-find-map-add "a" "b" union-find-map-connected?
+\\   => f
+union-find-map-connected?: ( ufm: union-find-map e1 e2 -- connected? ) [
+  [ 2dup require-index nip ] dip
+  2 pick-n swap require-index
+  [ core>> ] 2dip union-find-connected?
+] ;
+
+\\ The exact element count of elem's set, O(α(n) · log n). Raises
+\\ `index-out-of-bounds` on an element that was never added.
+\\
+\\   [ cmp ] <union-find-map> dup "a" union-find-map-add "a" union-find-map-size
+\\   => 1
+union-find-map-size: ( ufm: union-find-map elem -- size ) [
+  2dup require-index nip
+  swap core>> swap union-find-size
+] ;
+
+\ The layer's components read as the core's, translated to the element domain: one
+\ component per step, each an array of its members, first-encounter order. The first
+\ step pays the core's grouping pass, and each later step adds the component's length
+\ for translation.
+>iterator: method{ union-find-map } [
+  dup elements>> [ [ swap #nth ] curry #map #collect ] curry
+  swap core>> >iterator swap #map
+] ;
+
+\ A struct type inherits no methods, so the layer registers the core's O(1) reads
+\ under its own type. Nothing else is registered, for the core's reasons.
+#len: method{ union-find-map } [ core>> components>> ] ;
+#empty?: method{ union-find-map } [ core>> components>> 0 = ] ;
