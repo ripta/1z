@@ -16,7 +16,6 @@ pub const primitives = [_]Primitive{
 fn nativeWithSandbox(ctx: *Context) anyerror!void {
     const pc = try helpers.popQuotation(ctx);
     defer pc.release();
-    const quot = pc.quot;
     const spec_val = ctx.stack.pop() catch return error.StackUnderflow;
     defer container_backing.releaseValue(spec_val);
     const spec = switch (spec_val) {
@@ -36,7 +35,7 @@ fn nativeWithSandbox(ctx: *Context) anyerror!void {
     ctx.active_sandbox = &effective;
     defer ctx.active_sandbox = saved;
 
-    try ctx.executeQuotationWithFrame(quot);
+    try pc.executeWithFrame(ctx);
 }
 
 /// sandbox{ ( -- sandbox-spec )

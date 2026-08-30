@@ -2,10 +2,10 @@ const std = @import("std");
 const builtin = @import("builtin");
 const container_backing = @import("container_backing.zig");
 const Allocator = std.mem.Allocator;
+const Callable = @import("callable.zig").Callable;
 const Context = @import("context.zig").Context;
 const value_mod = @import("value.zig");
 const Value = value_mod.Value;
-const Quotation = value_mod.Quotation;
 const ErrorObject = value_mod.ErrorObject;
 
 const is_freestanding = builtin.os.tag == .freestanding;
@@ -117,7 +117,7 @@ pub fn foldAndBoxTaskError(ctx: *Context, err: anyerror) ?*ErrorObject {
 pub fn taskEntryPoint(co: CoroPtr) callconv(.c) void {
     const task: *Task = @ptrCast(@alignCast(mc.mco_get_user_data(co)));
 
-    task.ctx.executeQuotationWithFrame(task.quotation) catch |err| {
+    task.callable.executeWithFrame(task.ctx) catch |err| {
         task.error_obj = foldAndBoxTaskError(task.ctx, err);
 
         // The status reads the folded row rather than the boxed object, so an allocation
@@ -190,11 +190,10 @@ pub const Task = struct {
     /// stack. The receiver checks and clears this on resume so it can
     /// distinguish a value handoff from a close-channel wake.
     value_delivered: bool = false,
-    quotation: Quotation,
-    /// The owning reference behind `quotation`, transferred from the spawner's
-    /// popped slot and released at reap: a closure body must outlive the task
-    /// that runs it. Inert for a plain quotation.
-    quot_owner: Value = .unit,
+    /// The body this task runs, with the reference behind it. Transferred from
+    /// the spawner's popped slot and released at reap: a closure body must
+    /// outlive the task that runs it.
+    callable: Callable,
     peak_stack_usage: usize = 0,
     /// Task that is waiting for this task to complete (via await).
     awaiting_task: ?*Task = null,
@@ -478,7 +477,7 @@ test "addDetached and removeDetached track the detached counter and list" {
         .status = std.atomic.Value(TaskStatus).init(.pending),
         .ctx = undefined,
         .scope = &scope,
-        .quotation = .{ .instructions = &.{}, .effect = null },
+        .callable = .{ .quot = .{ .instructions = &.{}, .effect = null }, .owner = .unit },
     };
     var t1 = Task{
         .id = 2,
@@ -486,7 +485,7 @@ test "addDetached and removeDetached track the detached counter and list" {
         .status = std.atomic.Value(TaskStatus).init(.pending),
         .ctx = undefined,
         .scope = &scope,
-        .quotation = .{ .instructions = &.{}, .effect = null },
+        .callable = .{ .quot = .{ .instructions = &.{}, .effect = null }, .owner = .unit },
     };
 
     try std.testing.expectEqual(@as(u32, 0), scope.detached_active.load(.acquire));
@@ -537,7 +536,7 @@ test "firstFailedChildError walks children in spawn order" {
         .status = std.atomic.Value(TaskStatus).init(.completed),
         .ctx = undefined,
         .scope = &scope,
-        .quotation = .{ .instructions = &.{}, .effect = null },
+        .callable = .{ .quot = .{ .instructions = &.{}, .effect = null }, .owner = .unit },
     };
     var t1 = Task{
         .id = 2,
@@ -546,7 +545,7 @@ test "firstFailedChildError walks children in spawn order" {
         .error_obj = &first,
         .ctx = undefined,
         .scope = &scope,
-        .quotation = .{ .instructions = &.{}, .effect = null },
+        .callable = .{ .quot = .{ .instructions = &.{}, .effect = null }, .owner = .unit },
     };
     var t2 = Task{
         .id = 3,
@@ -555,7 +554,7 @@ test "firstFailedChildError walks children in spawn order" {
         .error_obj = &second,
         .ctx = undefined,
         .scope = &scope,
-        .quotation = .{ .instructions = &.{}, .effect = null },
+        .callable = .{ .quot = .{ .instructions = &.{}, .effect = null }, .owner = .unit },
     };
 
     try scope.children.append(scope.allocator, &t0);
@@ -577,7 +576,7 @@ test "firstFailedChildError returns null when no child failed" {
         .status = std.atomic.Value(TaskStatus).init(.completed),
         .ctx = undefined,
         .scope = &scope,
-        .quotation = .{ .instructions = &.{}, .effect = null },
+        .callable = .{ .quot = .{ .instructions = &.{}, .effect = null }, .owner = .unit },
     };
     var t1 = Task{
         .id = 2,
@@ -585,7 +584,7 @@ test "firstFailedChildError returns null when no child failed" {
         .status = std.atomic.Value(TaskStatus).init(.cancelled),
         .ctx = undefined,
         .scope = &scope,
-        .quotation = .{ .instructions = &.{}, .effect = null },
+        .callable = .{ .quot = .{ .instructions = &.{}, .effect = null }, .owner = .unit },
     };
 
     try scope.children.append(scope.allocator, &t0);
@@ -606,7 +605,7 @@ test "firstFailedChildError skips completed and cancelled children" {
         .status = std.atomic.Value(TaskStatus).init(.cancelled),
         .ctx = undefined,
         .scope = &scope,
-        .quotation = .{ .instructions = &.{}, .effect = null },
+        .callable = .{ .quot = .{ .instructions = &.{}, .effect = null }, .owner = .unit },
     };
     var t1 = Task{
         .id = 2,
@@ -614,7 +613,7 @@ test "firstFailedChildError skips completed and cancelled children" {
         .status = std.atomic.Value(TaskStatus).init(.completed),
         .ctx = undefined,
         .scope = &scope,
-        .quotation = .{ .instructions = &.{}, .effect = null },
+        .callable = .{ .quot = .{ .instructions = &.{}, .effect = null }, .owner = .unit },
     };
     var t2 = Task{
         .id = 3,
@@ -623,7 +622,7 @@ test "firstFailedChildError skips completed and cancelled children" {
         .error_obj = &err,
         .ctx = undefined,
         .scope = &scope,
-        .quotation = .{ .instructions = &.{}, .effect = null },
+        .callable = .{ .quot = .{ .instructions = &.{}, .effect = null }, .owner = .unit },
     };
 
     try scope.children.append(scope.allocator, &t0);
@@ -654,7 +653,7 @@ test "publishTaskResult rejects borrowed buffer results" {
         .status = std.atomic.Value(TaskStatus).init(.running),
         .ctx = &ctx,
         .scope = &scope,
-        .quotation = .{ .instructions = &.{}, .effect = null },
+        .callable = .{ .quot = .{ .instructions = &.{}, .effect = null }, .owner = .unit },
     };
 
     publishTaskResult(&task);

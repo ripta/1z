@@ -2,6 +2,7 @@ const std = @import("std");
 const value_mod = @import("value.zig");
 const Value = value_mod.Value;
 const Quotation = value_mod.Quotation;
+const Callable = @import("callable.zig").Callable;
 const Context = @import("context.zig").Context;
 const container_backing = @import("container_backing.zig");
 const packed_kernels = @import("packed.zig");
@@ -45,17 +46,17 @@ pub const Iterator = struct {
             },
             .map => |it| {
                 it.inner.header.release();
-                container_backing.releaseValue(it.quot_owner);
+                it.callable.release();
             },
             .filter => |it| {
                 it.inner.header.release();
-                container_backing.releaseValue(it.quot_owner);
+                it.callable.release();
             },
             .take => |it| it.inner.header.release(),
             .drop => |it| it.inner.header.release(),
             .callback => |it| {
-                container_backing.releaseValue(it.quot_owner);
-                container_backing.releaseValue(it.cleanup_owner);
+                it.callable.release();
+                if (it.cleanup) |c| c.release();
             },
             .packed_elems => |it| {
                 it.source.header.release();
@@ -86,11 +87,11 @@ pub const Iterator = struct {
             .take => |it| try it.inner.close(ctx),
             .drop => |it| try it.inner.close(ctx),
             .callback => |*it| {
-                if (it.cleanup_quotation) |cq| {
+                if (it.cleanup) |cleanup| {
                     if (!it.cleanup_ran) {
                         it.cleanup_ran = true;
                         it.exhausted = true;
-                        try ctx.executeQuotationWithFrame(cq);
+                        try cleanup.executeWithFrame(ctx);
                     }
                 }
             },
@@ -193,10 +194,9 @@ pub const RangeIter = struct {
 
 pub const MapIter = struct {
     inner: *Iterator,
-    quotation: Quotation,
-    /// Owning reference behind `quotation`, released at destroy so a closure
-    /// body stays alive across the lazy drain. Inert for a plain quotation.
-    quot_owner: Value = .unit,
+    /// Owned: released at destroy, so a closure body stays alive across the
+    /// lazy drain. A plain quotation's release is inert.
+    callable: Callable,
 
     pub fn next(self: *MapIter, ctx: *Context) anyerror!?Value {
         const elem = try self.inner.next(ctx) orelse return null;
@@ -204,21 +204,20 @@ pub const MapIter = struct {
         // separate owned reference, so release the consumed input here.
         defer container_backing.releaseValue(elem);
         try ctx.stack.push(elem);
-        try ctx.executeQuotationWithFrame(self.quotation);
+        try self.callable.executeWithFrame(ctx);
         return try ctx.stack.pop();
     }
 };
 
 pub const FilterIter = struct {
     inner: *Iterator,
-    quotation: Quotation,
-    /// Owning reference behind `quotation`; see `MapIter.quot_owner`.
-    quot_owner: Value = .unit,
+    /// Owned; see `MapIter.callable`.
+    callable: Callable,
 
     pub fn next(self: *FilterIter, ctx: *Context) anyerror!?Value {
         while (try self.inner.next(ctx)) |elem| {
             try ctx.stack.push(elem);
-            try ctx.executeQuotationWithFrame(self.quotation);
+            try self.callable.executeWithFrame(ctx);
             const result = try ctx.stack.pop();
             const keep = result != .boolean or result.boolean;
             // The inner element is owned. Keeping forwards that ownership to the
@@ -257,27 +256,25 @@ pub const DropIter = struct {
 };
 
 pub const CallbackIter = struct {
-    quotation: Quotation,
+    /// Both owned; see `MapIter.callable`.
+    callable: Callable,
     exhausted: bool,
-    cleanup_quotation: ?Quotation,
+    cleanup: ?Callable,
     cleanup_ran: bool,
-    /// Owning references behind the two quotations; see `MapIter.quot_owner`.
-    quot_owner: Value = .unit,
-    cleanup_owner: Value = .unit,
 
     pub fn next(self: *CallbackIter, ctx: *Context) anyerror!?Value {
         if (self.exhausted) return null;
-        try ctx.executeQuotationWithFrame(self.quotation);
+        try self.callable.executeWithFrame(ctx);
         const flag = try ctx.stack.pop();
         const is_true = flag != .boolean or flag.boolean;
         if (is_true) {
             return try ctx.stack.pop();
         } else {
             self.exhausted = true;
-            if (self.cleanup_quotation) |cq| {
+            if (self.cleanup) |cleanup| {
                 if (!self.cleanup_ran) {
                     self.cleanup_ran = true;
-                    try ctx.executeQuotationWithFrame(cq);
+                    try cleanup.executeWithFrame(ctx);
                 }
             }
             return null;

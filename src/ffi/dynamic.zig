@@ -78,6 +78,7 @@ pub const c_ffi = if (is_freestanding) struct {
     @cInclude("ffi.h");
 });
 
+const Callable = @import("../callable.zig").Callable;
 const Context = @import("../context.zig").Context;
 const helpers = @import("../primitives/helpers.zig");
 const error_mapping = @import("../primitives/error_mapping.zig");
@@ -2340,5 +2341,6 @@ fn nativeFfiCallback(ctx: *Context) anyerror!void {
     };
     try ctx.stack.push(.{ .resource = r });
     // The body escapes into the C callback's user data for the context's lifetime.
-    try helpers.adoptCallableForTeardown(ctx, .{ .quot = quotation, .owner = quot_val });
+    const callable: Callable = .{ .quot = quotation, .owner = quot_val };
+    try callable.adoptForTeardown(ctx);
 }

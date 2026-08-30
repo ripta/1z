@@ -183,15 +183,13 @@ pub fn nativeRecover(ctx: *Context) anyerror!void {
     // before this function is called, so we just pop the quotations here.
     const recover_pc = try popQuotation(ctx);
     defer recover_pc.release();
-    const recover_quot = recover_pc.quot;
     const try_pc = try popQuotation(ctx);
     defer try_pc.release();
-    const try_quot = try_pc.quot;
 
     // Execute try quotation with error-catching
-    ctx.executeQuotationWithFrame(try_quot) catch |err| {
+    try_pc.executeWithFrame(ctx) catch |err| {
         try pushCaughtError(ctx, err, saved_error_state);
-        try ctx.executeQuotationWithFrame(recover_quot);
+        try recover_pc.executeWithFrame(ctx);
         return;
     };
 }
@@ -200,13 +198,11 @@ pub fn nativeRecover(ctx: *Context) anyerror!void {
 pub fn nativeCleanup(ctx: *Context) anyerror!void {
     const cleanup_pc = try popQuotation(ctx);
     defer cleanup_pc.release();
-    const cleanup_quot = cleanup_pc.quot;
     const body_pc = try popQuotation(ctx);
     defer body_pc.release();
-    const body_quot = body_pc.quot;
 
     // Execute body quotation, capturing any error
-    const body_result = ctx.executeQuotationWithFrame(body_quot);
+    const body_result = body_pc.executeWithFrame(ctx);
 
     // Shield the cleanup quotation from re-cancellation so it can yield,
     // sleep, or do I/O without being interrupted by a pending cancellation.
@@ -220,7 +216,7 @@ pub fn nativeCleanup(ctx: *Context) anyerror!void {
 
     // Always execute cleanup quotation, even if body failed
     // If cleanup also fails, we ignore that error and prioritize the body error
-    ctx.executeQuotationWithFrame(cleanup_quot) catch {
+    cleanup_pc.executeWithFrame(ctx) catch {
         // Cleanup error is suppressed; body error takes priority
     };
 
@@ -442,7 +438,6 @@ fn checkIsolationBoundary(ctx: *Context, effect: *const StackEffect, isolation_f
 fn nativeWithIsolation(ctx: *Context) anyerror!void {
     const pc = try popQuotation(ctx);
     defer pc.release();
-    const quot = pc.quot;
 
     try ctx.pushTypeRegistryFrame();
     defer ctx.popTypeRegistryFrame();
@@ -457,9 +452,9 @@ fn nativeWithIsolation(ctx: *Context) anyerror!void {
         ctx.protocol_obligations = saved_obligations;
     }
 
-    try ctx.executeQuotationWithFrame(quot);
+    try pc.executeWithFrame(ctx);
 
-    if (quot.effect) |effect| {
+    if (pc.quot.effect) |effect| {
         const frames = ctx.type_registry_frames.items;
         if (frames.len > 0) {
             try checkIsolationBoundary(ctx, effect, &frames[frames.len - 1]);

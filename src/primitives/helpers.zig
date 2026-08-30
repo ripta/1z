@@ -14,6 +14,7 @@ const Module = value_mod.Module;
 const Marker = value_mod.Marker;
 const StructType = value_mod.StructType;
 const StructInstance = value_mod.StructInstance;
+const Callable = @import("../callable.zig").Callable;
 const Iterator = @import("../iterator.zig").Iterator;
 const Task = @import("../task.zig").Task;
 const Channel = @import("../channel.zig").Channel;
@@ -613,26 +614,14 @@ pub fn asQuotationStamped(ctx: *Context, val: Value) !?Quotation {
     };
 }
 
-/// A popped callable: the executable view plus the popped slot's owning
-/// reference. For a closure the reference is what keeps the body memory alive,
-/// so the caller holds it across execution (`defer pc.release()`) or hands it
-/// onward where the callable escapes. A plain quotation's release is a no-op.
-pub const PoppedCallable = struct {
-    quot: Quotation,
-    owner: Value,
-
-    pub fn release(self: PoppedCallable) void {
-        container_backing.releaseValue(self.owner);
-    }
-};
-
 /// Pop a callable quotation. A closure (the compiled form of a curry/compose
 /// result) is accepted too, viewed as its plain instruction body so every
 /// quotation consumer (`call`, `dip`, `keep`, `bi`, ...) runs it by
 /// re-interpretation; the segment fast path is used only by the compiled
 /// runtime-selected `call`. The caller inherits the popped owning reference
-/// through the returned `PoppedCallable`.
-pub fn popQuotation(ctx: *Context) !PoppedCallable {
+/// through the returned `Callable`, holding it across execution
+/// (`defer pc.release()`) or handing it onward where the callable escapes.
+pub fn popQuotation(ctx: *Context) !Callable {
     const val = try ctx.stack.pop();
     const quot = try asQuotationStamped(ctx, val) orelse {
         setTypeMismatchError(ctx, "quotation", val);
@@ -642,27 +631,13 @@ pub fn popQuotation(ctx: *Context) !PoppedCallable {
     return .{ .quot = quot, .owner = val };
 }
 
-/// Adopt a popped callable whose body escapes into context-lifetime storage
-/// (a parameter default, a signal handler, a deferred parse-time emission): a
-/// closure owner is parked on the dictionary's teardown list so the body
-/// outlives the value, and an inert owner is dropped.
-pub fn adoptCallableForTeardown(ctx: *Context, pc: PoppedCallable) !void {
-    if (pc.owner == .closure) {
-        try ctx.retainValueForTeardown(pc.owner);
-    } else {
-        container_backing.releaseValue(pc.owner);
-    }
-}
-
-/// A callable body paired with the lexical scope it carries and the popped
-/// slot's owning reference. See `popCallableWithScope`.
+/// A callable paired with the lexical scope it carries. See `popCallableWithScope`.
 pub const CallableWithScope = struct {
-    quot: Quotation,
+    callable: Callable,
     scope: ?*const CapturedScope,
-    owner: Value,
 
     pub fn release(self: CallableWithScope) void {
-        container_backing.releaseValue(self.owner);
+        self.callable.release();
     }
 };
 
@@ -684,7 +659,7 @@ pub fn popCallableWithScope(ctx: *Context) !CallableWithScope {
                 const info = ctx.quotation_scope_info.get(@intFromPtr(q.instructions.ptr)) orelse break :blk null;
                 break :blk info.scope;
             } else null;
-            return .{ .quot = q, .scope = scope, .owner = val };
+            return .{ .callable = .{ .quot = q, .owner = val }, .scope = scope };
         },
         .closure => |c| {
             // A closure normally carries its scope on the value. A residual null-scope closure,
@@ -695,7 +670,7 @@ pub fn popCallableWithScope(ctx: *Context) !CallableWithScope {
                 const info = ctx.quotation_scope_info.get(@intFromPtr(c.instructions.ptr)) orelse break :blk null;
                 break :blk info.scope;
             };
-            return .{ .quot = c.asQuotation(), .scope = scope, .owner = val };
+            return .{ .callable = .{ .quot = c.asQuotation(), .owner = val }, .scope = scope };
         },
         else => {
             setTypeMismatchError(ctx, "quotation", val);

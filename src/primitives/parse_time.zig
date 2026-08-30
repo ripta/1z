@@ -326,7 +326,7 @@ fn nativeEmitBody(ctx: *Context) anyerror!void {
 
     // The splice copies these instructions into the enclosing body, which is registered for
     // container-literal release in its own right. A closure body's literals are owned by the
-    // closure, which `adoptCallableForTeardown` parks for the context's lifetime, so the copy
+    // closure, which `adoptForTeardown` parks for the context's lifetime, so the copy
     // is a second owner and needs its own reference.
     //
     // A plain quotation owner needs no retain: its body is parsed instruction memory whose
@@ -337,7 +337,7 @@ fn nativeEmitBody(ctx: *Context) anyerror!void {
 
     // Adopt before queueing. Dropping the last reference to a closure owner frees the body, so
     // an emission recorded first would be left pointing into freed memory if the adoption failed.
-    try helpers.adoptCallableForTeardown(ctx, pc);
+    try pc.adoptForTeardown(ctx);
     adopted = true;
 
     try ctx.parse_time_deferred_emissions.append(ctx.allocator, .{ .body = .{

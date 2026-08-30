@@ -390,7 +390,7 @@ pub fn nativeCall(ctx: *Context) anyerror!void {
     // keeps the body alive while it runs.
     const pc = try popQuotation(ctx);
     defer pc.release();
-    try ctx.executeQuotationWithFrame(pc.quot);
+    try pc.executeWithFrame(ctx);
 }
 
 /// ; ( name: quot -- ) or ( name: value -- ) or ( name: marker -- )
@@ -728,7 +728,7 @@ pub fn nativeIf(ctx: *Context) anyerror!void {
     const true_quot = try popQuotation(ctx);
     defer true_quot.release();
     const cond = try popBoolean(ctx);
-    try ctx.executeQuotationInline(if (cond) true_quot.quot else false_quot.quot);
+    try (if (cond) true_quot else false_quot).executeInline(ctx);
 }
 
 test "semicolon defines named union type as parse-time word" {

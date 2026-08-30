@@ -392,7 +392,7 @@ pub const Scheduler = struct {
         self.drainTaskProfile(task);
         task_mod.coroDestroy(task);
         task_mod.releaseTaskResult(task);
-        container_backing.releaseValue(task.quot_owner);
+        task.callable.release();
         task.ctx.deinit();
         self.allocator.destroy(task.ctx);
         self.allocator.destroy(task);
@@ -1528,7 +1528,7 @@ test "drainTaskProfile copies samples into the worker collection with labels" {
         .status = std.atomic.Value(TaskStatus).init(.completed),
         .ctx = &ctx,
         .scope = undefined,
-        .quotation = undefined,
+        .callable = undefined,
     };
 
     sched.drainTaskProfile(&task);
@@ -1575,7 +1575,7 @@ test "Scheduler.deinit frees drained task profiles when no sink is set" {
         .status = std.atomic.Value(TaskStatus).init(.completed),
         .ctx = &ctx,
         .scope = undefined,
-        .quotation = undefined,
+        .callable = undefined,
     };
 
     sched.drainTaskProfile(&task);
@@ -1604,7 +1604,7 @@ test "drainTaskProfile is a no-op when the task carries no owned profile" {
         .status = std.atomic.Value(TaskStatus).init(.completed),
         .ctx = &ctx,
         .scope = undefined,
-        .quotation = undefined,
+        .callable = undefined,
     };
 
     sched.drainTaskProfile(&task);

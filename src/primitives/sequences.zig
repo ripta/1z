@@ -15,6 +15,7 @@ const dispatch_mod = @import("../dispatch.zig");
 const DispatchTable = dispatch_mod.DispatchTable;
 const markers_mod = @import("markers.zig");
 const sequence = @import("sequence.zig");
+const Callable = @import("../callable.zig").Callable;
 const Iterator = @import("../iterator.zig").Iterator;
 const tasks = @import("tasks.zig");
 
@@ -174,7 +175,9 @@ fn collectToMutableArray(in_seq: Value, ctx: *Context, alloc: Allocator) ![]Valu
 
 const SortContext = struct {
     ctx: *Context,
-    quotation: value_mod.Quotation,
+    /// Borrowed: the popped reference stays with the caller's `defer pc.release()`, which
+    /// outlives the sort.
+    callable: Callable,
     err: ?anyerror,
 };
 
@@ -188,7 +191,7 @@ fn sortCompareFn(sort_ctx: *SortContext, a: Value, b: Value) bool {
         sort_ctx.err = e;
         return false;
     };
-    sort_ctx.ctx.executeQuotationWithFrame(sort_ctx.quotation) catch |e| {
+    sort_ctx.callable.executeWithFrame(sort_ctx.ctx) catch |e| {
         sort_ctx.err = e;
         return false;
     };
@@ -202,7 +205,6 @@ fn sortCompareFn(sort_ctx: *SortContext, a: Value, b: Value) bool {
 fn nativeSort(ctx: *Context) anyerror!void {
     const pc = try popQuotation(ctx);
     defer pc.release();
-    const quot = pc.quot;
     const seq = try ctx.stack.pop();
     defer container_backing.releaseValue(seq);
     const alloc = ctx.allocator;
@@ -214,7 +216,7 @@ fn nativeSort(ctx: *Context) anyerror!void {
     if (items.len > 1) {
         var sort_ctx = SortContext{
             .ctx = ctx,
-            .quotation = quot,
+            .callable = pc,
             .err = null,
         };
         std.mem.sort(Value, items, &sort_ctx, sortCompareFn);
@@ -280,7 +282,6 @@ fn sortByKeyCompareFn(sort_ctx: *SortByContext, a_idx: usize, b_idx: usize) bool
 fn nativeSortBy(ctx: *Context) anyerror!void {
     const pc = try popQuotation(ctx);
     defer pc.release();
-    const quot = pc.quot;
     const seq = try ctx.stack.pop();
     defer container_backing.releaseValue(seq);
     const alloc = ctx.allocator;
@@ -310,7 +311,7 @@ fn nativeSortBy(ctx: *Context) anyerror!void {
     errdefer container_backing.releaseValues(keys[0..keys_filled]);
     for (items, 0..) |item, i| {
         try ctx.stack.push(item);
-        try ctx.executeQuotationWithFrame(quot);
+        try pc.executeWithFrame(ctx);
         keys[i] = try ctx.stack.pop();
         keys_filled = i + 1;
     }
@@ -878,7 +879,6 @@ pub fn nativeLast(ctx: *Context) anyerror!void {
 pub fn nativeEach(ctx: *Context) anyerror!void {
     const pc = try popQuotation(ctx);
     defer pc.release();
-    const quot = pc.quot;
     const raw_seq = try ctx.stack.pop();
     // The iterator below borrows the container and is fully consumed before
     // this scope exits, so releasing the source on exit is safe.
@@ -894,7 +894,7 @@ pub fn nativeEach(ctx: *Context) anyerror!void {
     if (seq == .iterator) {
         while (try seq.iterator.next(ctx)) |elem| {
             try ctx.stack.push(elem);
-            try ctx.executeQuotationWithFrame(quot);
+            try pc.executeWithFrame(ctx);
             // The iterator yield is owned; the quotation consumed the pushed
             // copy, so drop the yield's reference here.
             container_backing.releaseValue(elem);
@@ -908,7 +908,7 @@ pub fn nativeEach(ctx: *Context) anyerror!void {
     };
     while (try iter.next()) |elem| {
         try ctx.stack.push(elem);
-        try ctx.executeQuotationWithFrame(quot);
+        try pc.executeWithFrame(ctx);
     }
 }
 
@@ -916,7 +916,6 @@ pub fn nativeEach(ctx: *Context) anyerror!void {
 pub fn nativeEachIndex(ctx: *Context) anyerror!void {
     const pc = try popQuotation(ctx);
     defer pc.release();
-    const quot = pc.quot;
     const raw_seq = try ctx.stack.pop();
     defer container_backing.releaseValue(raw_seq);
     const alloc = ctx.quotationAllocator();
@@ -932,7 +931,7 @@ pub fn nativeEachIndex(ctx: *Context) anyerror!void {
         while (try seq.iterator.next(ctx)) |elem| {
             try ctx.stack.push(elem);
             try ctx.stack.push(.{ .fixnum = idx });
-            try ctx.executeQuotationWithFrame(quot);
+            try pc.executeWithFrame(ctx);
             container_backing.releaseValue(elem);
             idx += 1;
         }
@@ -946,7 +945,7 @@ pub fn nativeEachIndex(ctx: *Context) anyerror!void {
     while (try iter.next()) |elem| {
         try ctx.stack.push(elem);
         try ctx.stack.push(.{ .fixnum = idx });
-        try ctx.executeQuotationWithFrame(quot);
+        try pc.executeWithFrame(ctx);
         idx += 1;
     }
 }
@@ -1057,7 +1056,7 @@ fn literalChainScalar(lit: Value, elem_type: packed_kernels.ElementType) f64 {
 /// false so the caller falls through to the coercion path unchanged.
 ///
 /// Returns true with the chunked iterator pushed. The caller still owns `pc` and `seq`.
-fn tryVectorizedPackedMap(ctx: *Context, seq: Value, pc: helpers.PoppedCallable) anyerror!bool {
+fn tryVectorizedPackedMap(ctx: *Context, seq: Value, pc: Callable) anyerror!bool {
     // Read the generation before matching, not after. The protocol probe below runs a 1z
     // method body, so a method registered from there has to invalidate the recognition
     // rather than slip in underneath a generation read that follows it.
@@ -1175,7 +1174,7 @@ pub fn nativeMap(ctx: *Context) anyerror!void {
         return error.TypeMismatch;
     };
 
-    const iter = Iterator.create(ctx.allocator, .{ .map = .{ .inner = inner, .quotation = pc.quot, .quot_owner = pc.owner } }) catch |err| {
+    const iter = Iterator.create(ctx.allocator, .{ .map = .{ .inner = inner, .callable = pc } }) catch |err| {
         inner.header.release();
         pc.release();
         return err;
@@ -1217,7 +1216,7 @@ pub fn nativeFilter(ctx: *Context) anyerror!void {
         return error.TypeMismatch;
     };
 
-    const iter = Iterator.create(ctx.allocator, .{ .filter = .{ .inner = inner, .quotation = pc.quot, .quot_owner = pc.owner } }) catch |err| {
+    const iter = Iterator.create(ctx.allocator, .{ .filter = .{ .inner = inner, .callable = pc } }) catch |err| {
         inner.header.release();
         pc.release();
         return err;
@@ -1229,7 +1228,6 @@ pub fn nativeFilter(ctx: *Context) anyerror!void {
 pub fn nativeReduce(ctx: *Context) anyerror!void {
     const pc = try popQuotation(ctx);
     defer pc.release();
-    const quot = pc.quot;
     var acc = try ctx.stack.pop(); // initial accumulator
     // On any error unwind the local still owns the current accumulator's
     // reference; without this the in-flight accumulator leaks when the
@@ -1250,7 +1248,7 @@ pub fn nativeReduce(ctx: *Context) anyerror!void {
             errdefer container_backing.releaseValue(elem);
             try ctx.stack.push(acc);
             try ctx.stack.push(elem);
-            try ctx.executeQuotationWithFrame(quot);
+            try pc.executeWithFrame(ctx);
             const new_acc = try ctx.stack.pop();
             // The quotation consumed the pushed copies; drop the owning
             // references held by our locals before adopting the new accumulator.
@@ -1270,7 +1268,7 @@ pub fn nativeReduce(ctx: *Context) anyerror!void {
     while (try iter.next()) |elem| {
         try ctx.stack.push(acc);
         try ctx.stack.push(elem);
-        try ctx.executeQuotationWithFrame(quot);
+        try pc.executeWithFrame(ctx);
         const new_acc = try ctx.stack.pop();
         // SequenceIterator yields borrowed elements, so only the accumulator's
         // owning reference is dropped here.
@@ -1285,7 +1283,6 @@ pub fn nativeReduce(ctx: *Context) anyerror!void {
 pub fn nativeReduceIndex(ctx: *Context) anyerror!void {
     const pc = try popQuotation(ctx);
     defer pc.release();
-    const quot = pc.quot;
     var acc = try ctx.stack.pop();
     // Mirror of the `nativeReduce` errdefer: the local owns the in-flight
     // accumulator's reference across the quotation call.
@@ -1307,7 +1304,7 @@ pub fn nativeReduceIndex(ctx: *Context) anyerror!void {
             try ctx.stack.push(acc);
             try ctx.stack.push(elem);
             try ctx.stack.push(.{ .fixnum = idx });
-            try ctx.executeQuotationWithFrame(quot);
+            try pc.executeWithFrame(ctx);
             const new_acc = try ctx.stack.pop();
             container_backing.releaseValue(acc);
             container_backing.releaseValue(elem);
@@ -1327,7 +1324,7 @@ pub fn nativeReduceIndex(ctx: *Context) anyerror!void {
         try ctx.stack.push(acc);
         try ctx.stack.push(elem);
         try ctx.stack.push(.{ .fixnum = idx });
-        try ctx.executeQuotationWithFrame(quot);
+        try pc.executeWithFrame(ctx);
         const new_acc = try ctx.stack.pop();
         container_backing.releaseValue(acc);
         acc = new_acc;

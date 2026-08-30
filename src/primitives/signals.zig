@@ -61,7 +61,7 @@ fn nativeSetSignalHandler(ctx: *Context) anyerror!void {
 
     const s: u6 = @intCast(signum);
     signal_mod.setUserHandler(s, pc.quot);
-    try helpers.adoptCallableForTeardown(ctx, pc);
+    try pc.adoptForTeardown(ctx);
     signal_mod.installHandler(s);
 }
 

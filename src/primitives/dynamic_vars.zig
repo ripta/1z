@@ -39,7 +39,7 @@ pub fn nativeMakeParameter(ctx: *Context) anyerror!void {
         .name = alloc.dupe(u8, name.bytes) catch return error.OutOfMemory,
         .default_quotation = default_pc.quot,
     };
-    try helpers.adoptCallableForTeardown(ctx, default_pc);
+    try default_pc.adoptForTeardown(ctx);
     adopted = true;
 
     try ctx.stack.push(.{ .parameter = param });
@@ -155,7 +155,6 @@ pub fn nativeGet(ctx: *Context) anyerror!void {
 pub fn nativeWithParameter(ctx: *Context) anyerror!void {
     const body_pc = try popQuotation(ctx);
     defer body_pc.release();
-    const body_quot = body_pc.quot;
     const param_val = try ctx.stack.pop();
     defer container_backing.releaseValue(param_val);
     const param = switch (param_val) {
@@ -173,7 +172,7 @@ pub fn nativeWithParameter(ctx: *Context) anyerror!void {
     try ctx.pushParameterFrame();
     try ctx.setParameterInTopFrame(param.name, new_value);
 
-    const result = ctx.executeQuotationWithFrame(body_quot);
+    const result = body_pc.executeWithFrame(ctx);
     ctx.popParameterFrame();
     try result;
 }

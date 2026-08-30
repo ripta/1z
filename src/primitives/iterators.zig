@@ -181,11 +181,10 @@ fn nativeMakeCallbackIter(ctx: *Context) anyerror!void {
     // The popped reference transfers into the iterator kind, released at
     // destroy, so a closure body stays alive across the lazy drain.
     const iter = Iterator.create(ctx.allocator, .{ .callback = .{
-        .quotation = quotation,
+        .callable = .{ .quot = quotation, .owner = val },
         .exhausted = false,
-        .cleanup_quotation = null,
+        .cleanup = null,
         .cleanup_ran = false,
-        .quot_owner = val,
     } }) catch |err| {
         container_backing.releaseValue(val);
         return err;
@@ -219,12 +218,10 @@ fn nativeMakeCallbackIterWithCleanup(ctx: *Context) anyerror!void {
     // Both popped references transfer into the iterator kind, released at
     // destroy, so closure bodies stay alive across the lazy drain.
     const iter = Iterator.create(ctx.allocator, .{ .callback = .{
-        .quotation = step_quotation,
+        .callable = .{ .quot = step_quotation, .owner = step_val },
         .exhausted = false,
-        .cleanup_quotation = cleanup_quotation,
+        .cleanup = .{ .quot = cleanup_quotation, .owner = cleanup_val },
         .cleanup_ran = false,
-        .quot_owner = step_val,
-        .cleanup_owner = cleanup_val,
     } }) catch |err| {
         container_backing.releaseValue(step_val);
         container_backing.releaseValue(cleanup_val);

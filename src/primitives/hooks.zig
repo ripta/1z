@@ -8,19 +8,14 @@ const container_backing = @import("../container_backing.zig");
 const Instruction = value_mod.Instruction;
 const Quotation = value_mod.Quotation;
 const Value = value_mod.Value;
+const Callable = @import("../callable.zig").Callable;
 const helpers = @import("helpers.zig");
 const RegistryEntry = @import("types.zig").RegistryEntry;
 
-/// A registered hook: the executable view plus the owning reference the
-/// registration transferred in. For a closure the reference keeps the body
-/// alive for the registry's lifetime; a plain quotation's owner is inert.
-pub const StoredHook = struct {
-    quot: Quotation,
-    owner: Value,
-};
-
 pub const HookRegistry = struct {
-    hooks: std.StringHashMapUnmanaged(std.ArrayListUnmanaged(StoredHook)) = .{},
+    /// Each registered hook owns the reference its registration transferred in, which for a
+    /// closure keeps the body alive for the registry's lifetime.
+    hooks: std.StringHashMapUnmanaged(std.ArrayListUnmanaged(Callable)) = .{},
 
     /// Free the registry's owned storage: each event's hook list with its
     /// owning references, the duped event-name keys, and the map itself.
@@ -30,7 +25,7 @@ pub const HookRegistry = struct {
         var iter = self.hooks.iterator();
         while (iter.next()) |entry| {
             allocator.free(entry.key_ptr.*);
-            for (entry.value_ptr.items) |hook| container_backing.releaseValue(hook.owner);
+            for (entry.value_ptr.items) |hook| hook.release();
             entry.value_ptr.deinit(allocator);
         }
         self.hooks.deinit(allocator);
@@ -74,7 +69,7 @@ fn nativeRegisterHook(ctx: *Context) anyerror!void {
         };
         result.value_ptr.* = .{};
     }
-    result.value_ptr.append(alloc, .{ .quot = pc.quot, .owner = pc.owner }) catch return error.OutOfMemory;
+    result.value_ptr.append(alloc, pc) catch return error.OutOfMemory;
 }
 
 /// Fire all hooks registered for the given event name.
@@ -89,7 +84,7 @@ pub fn fireHooks(ctx: *Context, event_name: []const u8, args: []const Value) voi
     var i = hook_list.items.len;
     while (i > 0) {
         i -= 1;
-        const quot = hook_list.items[i].quot;
+        const hook = hook_list.items[i];
 
         for (args) |arg| {
             ctx.stack.push(arg) catch continue;
@@ -99,7 +94,7 @@ pub fn fireHooks(ctx: *Context, event_name: []const u8, args: []const Value) voi
         // of whatever is propagating around this fire, nor hand its state to the next hook.
         const saved_error_state = ctx.saveErrorState();
 
-        ctx.executeQuotation(quot) catch |err| {
+        hook.execute(ctx) catch |err| {
             // Freestanding has no real stderr (STDOUT/STDERR_FILENO are undefined there); this
             // diagnostic is a nicety, not load-bearing, so it's silently skipped on that target.
             if (!builtin.is_test and !is_freestanding) {
@@ -240,7 +235,7 @@ test "LIFO ordering" {
     const quot2 = Quotation{ .instructions = instrs2 };
 
     const key = try alloc.dupe(u8, "test-event");
-    var list = std.ArrayListUnmanaged(StoredHook){};
+    var list = std.ArrayListUnmanaged(Callable){};
     try list.append(alloc, .{ .quot = quot1, .owner = .unit });
     try list.append(alloc, .{ .quot = quot2, .owner = .unit });
     try registry.hooks.put(alloc, key, list);
@@ -279,7 +274,7 @@ test "error resilience" {
     // Register: quot1, quot2 (throws), quot3
     // LIFO firing: quot3 -> quot2 (error) -> quot1
     const key = try alloc.dupe(u8, "test-err");
-    var list = std.ArrayListUnmanaged(StoredHook){};
+    var list = std.ArrayListUnmanaged(Callable){};
     try list.append(alloc, .{ .quot = quot1, .owner = .unit });
     try list.append(alloc, .{ .quot = quot2, .owner = .unit });
     try list.append(alloc, .{ .quot = quot3, .owner = .unit });
@@ -307,7 +302,7 @@ test "a failing hook gives back the error state it overwrote" {
     instrs[0] = makeInstr(.{ .call_word = "nonexistent-word-for-hook-shield-test" });
 
     const key = try alloc.dupe(u8, "test-shield");
-    var list = std.ArrayListUnmanaged(StoredHook){};
+    var list = std.ArrayListUnmanaged(Callable){};
     try list.append(alloc, .{ .quot = .{ .instructions = instrs }, .owner = .unit });
     try registry.hooks.put(alloc, key, list);
 

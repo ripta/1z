@@ -1,5 +1,6 @@
 const std = @import("std");
 const scheduler_mod = @import("../scheduler.zig");
+const Callable = @import("../callable.zig").Callable;
 const context_mod = @import("../context.zig");
 const Context = context_mod.Context;
 const CapturedScope = context_mod.CapturedScope;
@@ -8,7 +9,6 @@ const value_mod = @import("../value.zig");
 const Value = value_mod.Value;
 const Instruction = value_mod.Instruction;
 const HashTable = value_mod.HashTable;
-const Quotation = value_mod.Quotation;
 const Closure = value_mod.Closure;
 const Segment = value_mod.Segment;
 const benchmark_mod = @import("../benchmark.zig");
@@ -520,7 +520,7 @@ fn nativeAttachStackEffect(ctx: *Context) anyerror!void {
 }
 
 /// Execute a quotation N times inside a single timing window.
-fn executeBenchmarkN(ctx: *Context, quot: Quotation, n: u64) !*HashTable {
+fn executeBenchmarkN(ctx: *Context, callable: Callable, n: u64) !*HashTable {
     // Create temporary benchmark stats for this execution
     var local_stats = BenchmarkStats{};
     defer local_stats.deinit(ctx.allocator);
@@ -542,7 +542,7 @@ fn executeBenchmarkN(ctx: *Context, quot: Quotation, n: u64) !*HashTable {
     // and `for` range bounds must fit usize, which is only 32 bits on wasm32.
     var i: u64 = 0;
     while (i < n) : (i += 1) {
-        exec_result = ctx.executeQuotationWithFrame(quot);
+        exec_result = callable.executeWithFrame(ctx);
         if (exec_result) |_| {} else |_| break;
     }
 
@@ -607,7 +607,7 @@ pub fn nativeBenchmarkNRaw(ctx: *Context) anyerror!void {
     defer pc.release();
     const n_raw = try popFixnum(ctx);
     if (n_raw < 1) return error.InvalidArgument;
-    const hash = try executeBenchmarkN(ctx, pc.quot, @intCast(n_raw));
+    const hash = try executeBenchmarkN(ctx, pc, @intCast(n_raw));
     try ctx.stack.pushMoved(.{ .hash = hash });
 }
 

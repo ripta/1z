@@ -697,7 +697,7 @@ test "send rejects borrowed buffer before buffered channel insertion" {
         .status = std.atomic.Value(task_mod.TaskStatus).init(.running),
         .ctx = &ctx,
         .scope = &scope,
-        .quotation = .{ .instructions = &.{}, .effect = null },
+        .callable = .{ .quot = .{ .instructions = &.{}, .effect = null }, .owner = .unit },
     };
     scheduler.current_task = &current;
     ctx.scheduler = &scheduler;
@@ -738,7 +738,7 @@ test "send rejects arena-owned value before unbuffered parking" {
         .status = std.atomic.Value(task_mod.TaskStatus).init(.running),
         .ctx = &ctx,
         .scope = &scope,
-        .quotation = .{ .instructions = &.{}, .effect = null },
+        .callable = .{ .quot = .{ .instructions = &.{}, .effect = null }, .owner = .unit },
     };
     scheduler.current_task = &current;
     ctx.scheduler = &scheduler;
@@ -777,7 +777,7 @@ test "send accepts owned buffer into buffered channel" {
         .status = std.atomic.Value(task_mod.TaskStatus).init(.running),
         .ctx = &ctx,
         .scope = &scope,
-        .quotation = .{ .instructions = &.{}, .effect = null },
+        .callable = .{ .quot = .{ .instructions = &.{}, .effect = null }, .owner = .unit },
     };
     scheduler.current_task = &current;
     ctx.scheduler = &scheduler;

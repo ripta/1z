@@ -1,6 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
+const Callable = @import("../callable.zig").Callable;
 const Context = @import("../context.zig").Context;
 const CapturedScope = @import("../context.zig").CapturedScope;
 
@@ -20,7 +21,6 @@ const container_backing = @import("../container_backing.zig");
 const Value = value_mod.Value;
 const Instruction = value_mod.Instruction;
 const ErrorObject = value_mod.ErrorObject;
-const Quotation = value_mod.Quotation;
 const stack_effect_mod = @import("../stack_effect.zig");
 const StackEffect = stack_effect_mod.StackEffect;
 const StackEffectParam = stack_effect_mod.StackEffectParam;
@@ -69,23 +69,21 @@ fn allocateTask(
     ctx: *Context,
     scheduler: *Scheduler,
     scope: *TaskScope,
-    quotation: Quotation,
+    callable: Callable,
     captured_scope: ?*const CapturedScope,
-    quot_owner: Value,
 ) !*Task {
-    return allocateTaskWithEntry(ctx, scheduler, scope, quotation, captured_scope, quot_owner, &task_mod.taskEntryPoint);
+    return allocateTaskWithEntry(ctx, scheduler, scope, callable, captured_scope, &task_mod.taskEntryPoint);
 }
 
-/// `quot_owner` is the owning reference behind `quotation`, transferred onto
+/// `callable` carries the owning reference behind the body, transferred onto
 /// the task only on success (released at reap); on failure the caller still
 /// owns it.
 fn allocateTaskWithEntry(
     ctx: *Context,
     scheduler: *Scheduler,
     scope: *TaskScope,
-    quotation: Quotation,
+    callable: Callable,
     captured_scope: ?*const CapturedScope,
-    quot_owner: Value,
     entry_fn: task_mod.CoroEntryFn,
 ) !*Task {
     const task = try ctx.allocator.create(Task);
@@ -98,7 +96,7 @@ fn allocateTaskWithEntry(
     // A spawned closure carries its creation-site scope on the value. Stamp it into the child task
     // context here, before the child can be enqueued and run, so its body resolves bare words at its
     // creation site. The copy is child-owned and freed when the task is reaped.
-    if (captured_scope) |cs| try task_ctx.stampCapturedScopeForExecution(quotation.instructions, cs);
+    if (captured_scope) |cs| try task_ctx.stampCapturedScopeForExecution(callable.quot.instructions, cs);
 
     task.* = .{
         .id = scheduler.nextId(),
@@ -106,8 +104,7 @@ fn allocateTaskWithEntry(
         .status = std.atomic.Value(task_mod.TaskStatus).init(.pending),
         .ctx = task_ctx,
         .scope = scope,
-        .quotation = quotation,
-        .quot_owner = quot_owner,
+        .callable = callable,
     };
 
     try task_mod.initCoroContext(task, entry_fn, task_stack_size);
@@ -131,12 +128,11 @@ fn nativeTaskScope(ctx: *Context) anyerror!void {
     // Pop without stamping this context: the scope body runs in the scope task, so its carried
     // scope is stamped into that child, not the caller. Stamping the caller would leak one copy per
     // call in a long-lived context that runs `task-scope` in a loop.
-    const callable = try helpers.popCallableWithScope(ctx);
-    const quot = callable.quot;
+    const popped = try helpers.popCallableWithScope(ctx);
     // The popped reference transfers onto the scope task, which releases it at
     // reap; until that allocation succeeds this caller still owns it.
     var owner_transferred = false;
-    errdefer if (!owner_transferred) callable.release();
+    errdefer if (!owner_transferred) popped.release();
 
     // Case: nested
     if (ctx.scheduler) |scheduler| {
@@ -144,7 +140,7 @@ fn nativeTaskScope(ctx: *Context) anyerror!void {
         defer scope.deinit();
         defer scheduler.reapScopeAtExit(&scope);
 
-        const scope_task = try allocateTask(ctx, scheduler, &scope, quot, callable.scope, callable.owner);
+        const scope_task = try allocateTask(ctx, scheduler, &scope, popped.callable, popped.scope);
         owner_transferred = true;
         scope.scope_task = scope_task;
 
@@ -246,7 +242,7 @@ fn nativeTaskScope(ctx: *Context) anyerror!void {
     var scope = TaskScope.init(ctx.allocator);
     defer scope.deinit();
 
-    const scope_task = try allocateTask(ctx, &primary.scheduler, &scope, quot, callable.scope, callable.owner);
+    const scope_task = try allocateTask(ctx, &primary.scheduler, &scope, popped.callable, popped.scope);
     owner_transferred = true;
     scope.scope_task = scope_task;
 
@@ -286,9 +282,9 @@ fn nativeSpawn(ctx: *Context) anyerror!void {
     // shipping that as a silent no-op. Real wasm coroutine support needs its own follow-up.
     if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "spawn");
 
-    const callable = try helpers.popCallableWithScope(ctx);
+    const popped = try helpers.popCallableWithScope(ctx);
     var owner_transferred = false;
-    errdefer if (!owner_transferred) callable.release();
+    errdefer if (!owner_transferred) popped.release();
 
     const scheduler = ctx.scheduler orelse {
         ctx.pending_error_message = "spawn must be called within a task-scope";
@@ -301,7 +297,7 @@ fn nativeSpawn(ctx: *Context) anyerror!void {
     };
 
     const scope = current.scope;
-    const task = try spawnTaskOnPool(ctx, scheduler, scope, callable.quot, callable.scope, callable.owner);
+    const task = try spawnTaskOnPool(ctx, scheduler, scope, popped.callable, popped.scope);
     owner_transferred = true;
     try ctx.stack.push(.{ .task = task });
 }
@@ -316,9 +312,9 @@ fn nativeSpawnNamed(ctx: *Context) anyerror!void {
     defer container_backing.releaseValue(.{ .string = name_pay });
     // The task keeps its display name for its whole lifetime.
     const name = try ctx.quotationAllocator().dupe(u8, name_pay.bytes);
-    const callable = try helpers.popCallableWithScope(ctx);
+    const popped = try helpers.popCallableWithScope(ctx);
     var owner_transferred = false;
-    errdefer if (!owner_transferred) callable.release();
+    errdefer if (!owner_transferred) popped.release();
 
     const scheduler = ctx.scheduler orelse {
         ctx.pending_error_message = "spawn-named must be called within a task-scope";
@@ -331,7 +327,7 @@ fn nativeSpawnNamed(ctx: *Context) anyerror!void {
     };
 
     const scope = current.scope;
-    const task = try spawnTaskOnPool(ctx, scheduler, scope, callable.quot, callable.scope, callable.owner);
+    const task = try spawnTaskOnPool(ctx, scheduler, scope, popped.callable, popped.scope);
     owner_transferred = true;
     task.name = name;
     try ctx.stack.push(.{ .task = task });
@@ -344,9 +340,9 @@ fn nativeSpawnNamed(ctx: *Context) anyerror!void {
 fn nativeSpawnDetached(ctx: *Context) anyerror!void {
     if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "spawn-detached");
 
-    const callable = try helpers.popCallableWithScope(ctx);
+    const popped = try helpers.popCallableWithScope(ctx);
     var owner_transferred = false;
-    errdefer if (!owner_transferred) callable.release();
+    errdefer if (!owner_transferred) popped.release();
 
     const scheduler = ctx.scheduler orelse {
         ctx.pending_error_message = "spawn-detached must be called within a task-scope";
@@ -359,7 +355,7 @@ fn nativeSpawnDetached(ctx: *Context) anyerror!void {
     };
 
     const scope = current.scope;
-    _ = try spawnDetachedOnPool(ctx, scheduler, scope, callable.quot, callable.scope, callable.owner);
+    _ = try spawnDetachedOnPool(ctx, scheduler, scope, popped.callable, popped.scope);
     owner_transferred = true;
 }
 
@@ -370,13 +366,13 @@ fn nativeSpawnDetached(ctx: *Context) anyerror!void {
 /// even if allocation is still in progress. Falls back to the legacy
 /// single-scheduler enqueue when there is no `worker_pool` (standalone
 /// schedulers in tests).
-fn spawnTaskOnPool(ctx: *Context, scheduler: *Scheduler, scope: *TaskScope, quot: Quotation, captured_scope: ?*const CapturedScope, quot_owner: Value) !*Task {
+fn spawnTaskOnPool(ctx: *Context, scheduler: *Scheduler, scope: *TaskScope, callable: Callable, captured_scope: ?*const CapturedScope) !*Task {
     if (ctx.worker_pool) |pool| {
         const target = pool.pickLeastLoaded();
         _ = target.active_tasks.fetchAdd(1, .release);
         errdefer _ = target.active_tasks.fetchSub(1, .release);
 
-        const task = try allocateTask(ctx, &target.scheduler, scope, quot, captured_scope, quot_owner);
+        const task = try allocateTask(ctx, &target.scheduler, scope, callable, captured_scope);
         try scope.addChild(task);
         if (&target.scheduler == scheduler) {
             try target.scheduler.enqueue(task);
@@ -387,7 +383,7 @@ fn spawnTaskOnPool(ctx: *Context, scheduler: *Scheduler, scope: *TaskScope, quot
     }
 
     // Legacy single-scheduler path (used by standalone schedulers in tests).
-    const task = try allocateTask(ctx, scheduler, scope, quot, captured_scope, quot_owner);
+    const task = try allocateTask(ctx, scheduler, scope, callable, captured_scope);
     try scope.addChild(task);
     try scheduler.enqueue(task);
     return task;
@@ -399,7 +395,7 @@ fn spawnTaskOnPool(ctx: *Context, scheduler: *Scheduler, scope: *TaskScope, quot
 /// still incremented so the pool stays alive while the detached task runs
 /// and a top-level scope waits for it. `detached` and `addDetached` are set
 /// before enqueue, so the task cannot start before it is fully registered.
-fn spawnDetachedOnPool(ctx: *Context, scheduler: *Scheduler, scope: *TaskScope, quot: Quotation, captured_scope: ?*const CapturedScope, quot_owner: Value) !*Task {
+fn spawnDetachedOnPool(ctx: *Context, scheduler: *Scheduler, scope: *TaskScope, callable: Callable, captured_scope: ?*const CapturedScope) !*Task {
     if (ctx.worker_pool) |pool| {
         const target = pool.pickLeastLoaded();
         _ = target.active_tasks.fetchAdd(1, .release);
@@ -408,7 +404,7 @@ fn spawnDetachedOnPool(ctx: *Context, scheduler: *Scheduler, scope: *TaskScope, 
         _ = pool.detached_in_flight.fetchAdd(1, .acq_rel);
         errdefer _ = pool.detached_in_flight.fetchSub(1, .acq_rel);
 
-        const task = try allocateTask(ctx, &target.scheduler, scope, quot, captured_scope, quot_owner);
+        const task = try allocateTask(ctx, &target.scheduler, scope, callable, captured_scope);
         task.detached = true;
         try scope.addDetached(task);
         if (&target.scheduler == scheduler) {
@@ -420,7 +416,7 @@ fn spawnDetachedOnPool(ctx: *Context, scheduler: *Scheduler, scope: *TaskScope, 
     }
 
     // Legacy single-scheduler path (used by standalone schedulers in tests).
-    const task = try allocateTask(ctx, scheduler, scope, quot, captured_scope, quot_owner);
+    const task = try allocateTask(ctx, scheduler, scope, callable, captured_scope);
     task.detached = true;
     try scope.addDetached(task);
     try scheduler.enqueue(task);
@@ -494,10 +490,9 @@ fn nativeWithTimeout(ctx: *Context) anyerror!void {
     // Pop without stamping this context: the body runs in the main child task, so its carried scope
     // is stamped there. `with-timeout` is called once per request in a long-lived serve loop, so
     // stamping the caller would leak one copy per request.
-    const callable = try helpers.popCallableWithScope(ctx);
-    const quot = callable.quot;
+    const popped = try helpers.popCallableWithScope(ctx);
     var owner_transferred = false;
-    errdefer if (!owner_transferred) callable.release();
+    errdefer if (!owner_transferred) popped.release();
 
     if (dur.ns < 0) {
         ctx.pending_error_message = "timeout duration must be non-negative";
@@ -533,7 +528,7 @@ fn nativeWithTimeout(ctx: *Context) anyerror!void {
     scope.race_first_finisher = true;
 
     // NOTE(ripta): Do NOT set the task as the scope task so that sibling cancellation from the timer can reach it.
-    const main_task = try allocateTask(ctx, scheduler, &scope, quot, callable.scope, callable.owner);
+    const main_task = try allocateTask(ctx, scheduler, &scope, popped.callable, popped.scope);
     owner_transferred = true;
     try scope.addChild(main_task);
     try scheduler.enqueue(main_task);
@@ -543,10 +538,11 @@ fn nativeWithTimeout(ctx: *Context) anyerror!void {
     const timer_instrs = try alloc.alloc(Instruction, 2);
     timer_instrs[0] = .{ .op = .{ .push_literal = dur.val }, .line = 0 };
     timer_instrs[1] = .{ .op = .{ .call_word = "sleep" }, .line = 0 };
-    const timer_quot: Quotation = .{ .instructions = timer_instrs };
+    // The body is synthesized onto the arena rather than popped, so there is no reference behind it.
+    const timer_callable: Callable = .{ .quot = .{ .instructions = timer_instrs }, .owner = .unit };
 
     // spawn the timer task with a custom entry point that marks as failed with a timeout error after the sleep completes
-    const timer_task = try allocateTaskWithEntry(ctx, scheduler, &scope, timer_quot, null, .unit, &timerTaskEntryPoint);
+    const timer_task = try allocateTaskWithEntry(ctx, scheduler, &scope, timer_callable, null, &timerTaskEntryPoint);
     try scope.addChild(timer_task);
     try scheduler.enqueue(timer_task);
     scheduler.notifyOwnerTaskSpawned();
@@ -600,7 +596,7 @@ fn nativeWithTimeout(ctx: *Context) anyerror!void {
 fn timerTaskEntryPoint(co: task_mod.CoroPtr) callconv(.c) void {
     const task: *Task = @ptrCast(@alignCast(task_mod.getCoroUserData(co)));
 
-    task.ctx.executeQuotation(task.quotation) catch |err| {
+    task.callable.execute(task.ctx) catch |err| {
         if (task.getCancellationPhase() != .none) {
             task.setStatus(.cancelled);
         } else {
@@ -1376,7 +1372,7 @@ test "handleAwaitResult rethrows borrowed buffer escape" {
         .error_obj = &err_obj,
         .ctx = &ctx,
         .scope = &scope,
-        .quotation = .{ .instructions = &.{}, .effect = null },
+        .callable = .{ .quot = .{ .instructions = &.{}, .effect = null }, .owner = .unit },
     };
 
     try std.testing.expectError(error.UserThrown, handleAwaitResult(&ctx, &task));
@@ -1403,7 +1399,7 @@ test "await-all propagates borrowed buffer escape from failed child" {
         .status = std.atomic.Value(task_mod.TaskStatus).init(.running),
         .ctx = &ctx,
         .scope = &parent_scope,
-        .quotation = .{ .instructions = &.{}, .effect = null },
+        .callable = .{ .quot = .{ .instructions = &.{}, .effect = null }, .owner = .unit },
     };
     scheduler.current_task = &parent_task;
 
@@ -1418,7 +1414,7 @@ test "await-all propagates borrowed buffer escape from failed child" {
         .error_obj = &err_obj,
         .ctx = &ctx,
         .scope = &child_scope,
-        .quotation = .{ .instructions = &.{}, .effect = null },
+        .callable = .{ .quot = .{ .instructions = &.{}, .effect = null }, .owner = .unit },
     };
     var completed_child = Task{
         .id = 3,
@@ -1427,7 +1423,7 @@ test "await-all propagates borrowed buffer escape from failed child" {
         .result = .{ .fixnum = 42 },
         .ctx = &ctx,
         .scope = &child_scope,
-        .quotation = .{ .instructions = &.{}, .effect = null },
+        .callable = .{ .quot = .{ .instructions = &.{}, .effect = null }, .owner = .unit },
     };
 
     var task_values = [_]Value{
@@ -1473,7 +1469,7 @@ test "runLoop swaps the thread-local current context around a task resume" {
     Probe.memory_limit.current_context = &outer_sentinel;
     defer Probe.memory_limit.current_context = null;
 
-    const task = try allocateTaskWithEntry(&ctx, &sched, &scope, .{ .instructions = &.{}, .effect = null }, null, .unit, &Probe.entry);
+    const task = try allocateTaskWithEntry(&ctx, &sched, &scope, .{ .quot = .{ .instructions = &.{}, .effect = null }, .owner = .unit }, null, &Probe.entry);
     const expected: *anyopaque = @ptrCast(task.ctx);
     try scope.addChild(task);
     try sched.enqueue(task);
