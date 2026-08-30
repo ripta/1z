@@ -4,6 +4,15 @@ Stack: [ ]
 Stack: [ ]
 Stack: [ ]
 Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
 === graph in isolation ===
 Stack: [ ]
 Stack: [ graph{ adjacency: <bst-map bst{ root: <tree-node:leaf leaf:> comparator: [ [ cmp ] [ [ key>> ] dip key>> ] dip call ] }> comparator: [ cmp ] directed?: f edge-count: 0 } ]
@@ -24,4 +33,20 @@ Stack: [ 2 ]
 PASS: and two vertices
 Stack: [ ]
 PASS: removing every vertex empties the graph
+Stack: [ ]
+PASS: a breadth-first walk reaches every vertex
+Stack: [ ]
+PASS: and so does a depth-first one
+Stack: [ ]
+PASS: the far end of the chain is two edges away
+Stack: [ ]
+PASS: and was reached from the middle
+Stack: [ ]
+PASS: the chain sorts into its one possible order
+Stack: [ ]
+PASS: the triangle and the isolated vertex are two components
+Stack: [ ]
+PASS: an undirected graph has no topological order
+Stack: [ ]
+PASS: a cycle closes off the order
 Stack: [ ]

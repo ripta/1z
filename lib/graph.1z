@@ -437,6 +437,14 @@ private{
   \\ `indices` translates the other way, both over `[0, V)`. `adjacency` holds each
   \\ vertex's dense entries at that vertex's own index.
   dense-graph: struct{ vertices: vector indices: bst-map adjacency: vector } ;
+
+  \\ A traversal in progress, in dense indices where `graph-traversal` holds vertices.
+  \\ `visits` is the visit order, `depths` holds each vertex's distance and `origins` its
+  \\ parent, both at the vertex's own index.
+  \\
+  \\ An `f` in `depths` is the unvisited mark, and an `f` in `origins` means the vertex
+  \\ started the walk. Only `f` is falsy, so depth 0 and index 0 both read as set.
+  dense-walk: struct{ visits: vector depths: vector origins: vector } ;
 }
 
 private{
@@ -510,4 +518,431 @@ private{
     [ indices>> ] dip map-lookup
     dup option:some? [ option:some> ] [ drop throw-unknown-vertex ] if
   ] ;
+
+  \ The vertex at a dense index. The index comes first so a curried form feeds #map, which
+  \ is why this reads the other way round from dense-index.
+  index-vertex: ( i: fixnum dg: dense-graph -- v ) [ vertices>> swap #nth ] ;
+
+  \ A vector of n slots, each holding the fill value. Nothing preallocates a vector, so
+  \ this is n pushes.
+  filled-vector: ( n: fixnum fill -- vector ) [
+    [ ] make-vector -rot>
+    [ #push! ] curry
+    times
+  ] ;
+
+  \ A vector of n slots, each holding a fresh empty vector of its own. Not filled-vector,
+  \ which would put one shared vector in every slot.
+  slot-vectors: ( n: fixnum -- vector ) [
+    [ ] make-vector swap [ [ ] make-vector #push! ] times
+  ] ;
 }
+
+\\ What one traversal pass produced. `order` is the vertices in visit order, `distances`
+\\ maps a reached vertex to its distance from the source, and `parents` maps a reached
+\\ vertex to the one it was reached from. All three come out of the same pass, so a caller
+\\ wanting two of them pays for one traversal rather than two.
+\\
+\\ Only reached vertices appear. The source has distance 0 and no parent entry, since it
+\\ was reached from nowhere.
+graph-traversal: struct{ order: array distances: bst-map parents: bst-map } ;
+
+\\ The distance from the traversal's source to v, or `option:none` when the traversal did
+\\ not reach v. O(log V).
+\\
+\\   [ cmp ] <graph> 1 2 graph-add-edge 1 graph-breadth-first 2 graph-traversal-distance? option:some>
+\\   => 1
+graph-traversal-distance?: ( t: graph-traversal v -- option ) [ [ distances>> ] dip map-lookup ] ;
+
+\\ The vertex v was reached from, or `option:none` when the traversal did not reach v or
+\\ when v is the source it started from. `graph-traversal-distance?` is what tells those two
+\\ apart. O(log V).
+\\
+\\   [ cmp ] <graph> 1 2 graph-add-edge 1 graph-breadth-first 2 graph-traversal-parent? option:some>
+\\   => 1
+graph-traversal-parent?: ( t: graph-traversal v -- option ) [ [ parents>> ] dip map-lookup ] ;
+
+private{
+  \ Fresh scratch for a walk over n vertices.
+  <dense-walk>: ( n: fixnum -- dense-walk ) [
+    [ ] make-vector swap
+    dup f filled-vector
+    swap f filled-vector
+    make-dense-walk
+  ] ;
+
+  \ Record v as reached from origin at the given depth, and append it to the visit order.
+  mark-visit: ( walk: dense-walk v: fixnum origin depth: fixnum -- ) [
+    3 pick-n depths>> 3 pick-n 2 pick-n #nth! drop
+    3 pick-n origins>> 3 pick-n 3 pick-n #nth! drop
+    2drop
+    over visits>> swap #push! 2drop
+  ] ;
+
+  \ The visit order as vertex values. O(V).
+  visit-order: ( dg: dense-graph walk: dense-walk -- array ) [
+    visits>> swap [ index-vertex ] curry #map #collect
+  ] ;
+
+  \ Map every visited vertex to its depth. O(V log V).
+  depth-map: ( g: graph dg: dense-graph walk: dense-walk -- map: bst-map ) [
+    0 3 pick-n comparator>> <bst-map>
+    [ over 3 pick-n visits>> #len < ]
+    [
+      2 pick-n visits>> 2 pick-n #nth
+      dup 5 pick-n index-vertex
+      4 pick-n depths>> 2 pick-n #nth
+      [ drop ] 2dip
+      map-insert
+      [ 1 + ] dip
+    ]
+    while
+    [ 2drop 2drop ] dip
+  ] ;
+
+  \ Map every visited vertex to the vertex it was reached from. A slot holding f means the
+  \ vertex started the walk, so it gets no entry. O(V log V).
+  origin-map: ( g: graph dg: dense-graph walk: dense-walk -- map: bst-map ) [
+    0 3 pick-n comparator>> <bst-map>
+    [ over 3 pick-n visits>> #len < ]
+    [
+      2 pick-n visits>> 2 pick-n #nth
+      3 pick-n origins>> over #nth
+      dup not
+      [ 2drop ]
+      [
+        5 pick-n index-vertex
+        [ dup 5 pick-n index-vertex ] dip
+        [ drop ] 2dip
+        map-insert
+      ]
+      if
+      [ 1 + ] dip
+    ]
+    while
+    [ 2drop 2drop ] dip
+  ] ;
+
+  \ Translate a finished walk to vertex values.
+  walk>traversal: ( g: graph dg: dense-graph walk: dense-walk -- traversal: graph-traversal ) [
+    3dup depth-map
+    [ 3dup origin-map ] dip
+    [ [ drop ] 2dip visit-order ] 2dip
+    swap make-graph-traversal
+  ] ;
+
+  \ Reach one dense entry's target during breadth-first search: an unmarked target is
+  \ recorded at one more than the current vertex's depth and appended to the frontier. The
+  \ entry comes first so a curried form feeds #each.
+  bfs-reach: ( e: dense-edge walk: dense-walk u: fixnum -- ) [
+    [ target>> ] 2dip <rot-
+    2 pick-n depths>> over #nth not
+    [
+      2 pick-n depths>> 2 pick-n #nth 1 +
+      [ swap ] dip
+      mark-visit
+    ]
+    [ 3drop ]
+    if
+  ] ;
+
+  \ Breadth-first from s. The visit order doubles as the frontier: a cursor walks it while
+  \ newly-marked vertices are appended to its tail, so nothing ever shifts. Marking on push
+  \ is what enqueues each vertex exactly once. O(V + E).
+  bfs-walk: ( dg: dense-graph s: fixnum -- walk: dense-walk ) [
+    over vertices>> #len <dense-walk>
+    -rot>
+    2 pick-n swap f 0 mark-visit
+    0
+    [ dup 3 pick-n visits>> #len < ]
+    [
+      2 pick-n visits>> over #nth
+      2 pick-n adjacency>> over #nth
+      4 pick-n 2 pick-n [ bfs-reach ] curry curry
+      #each
+      drop 1 +
+    ]
+    while
+    2drop
+  ] ;
+
+  \ Push v's unmarked neighbors onto the pending stacks, back to front, so the newest entry
+  \ ends up on top and is popped first. That is what makes the visit order follow
+  \ graph-neighbors rather than reverse it.
+  dfs-push-neighbors: ( walk: dense-walk pending: vector pending-origins: vector v: fixnum adj: vector -- ) [
+    dup #len 1 -
+    [ dup 0 >= ]
+    [
+      2dup #nth target>>
+      6 pick-n depths>> over #nth not
+      [
+        5 pick-n over #push! drop
+        4 pick-n 4 pick-n #push! drop
+      ]
+      when
+      drop 1 -
+    ]
+    while
+    2drop 2drop 2drop
+  ] ;
+
+  \ Depth-first from s over two pending stacks holding a vertex and the vertex it was
+  \ reached from. Marking happens on pop, so a vertex may sit on the stack more than once
+  \ and the first pop wins, which is what makes the recorded parent the depth-first tree's
+  \ parent rather than whichever push landed last. O(V + E).
+  dfs-walk: ( dg: dense-graph s: fixnum -- walk: dense-walk ) [
+    over vertices>> #len <dense-walk>
+    swap
+    [ ] make-vector swap #push!
+    [ ] make-vector f #push!
+    [ over #len 0 > ]
+    [
+      [ #pop! ] dip #pop! [ swap ] dip
+      4 pick-n depths>> 2 pick-n #nth
+      [ 2drop ]
+      [
+        [ dup ] dip
+        dup dup not [ drop 0 ] [ 6 pick-n depths>> swap #nth 1 + ] if
+        6 pick-n 3 rot-n> mark-visit
+        4 pick-n adjacency>> over #nth
+        4 pick-n 4 pick-n 4 pick-n 4 pick-n 4 pick-n dfs-push-neighbors
+        2drop
+      ]
+      if
+    ]
+    while
+    2drop nip
+  ] ;
+}
+
+\\ Breadth-first search from the source, reaching every vertex a path leads to. `distances`
+\\ is the number of edges on a shortest path from the source, since a breadth-first frontier
+\\ reaches every vertex at its shortest depth. O((V + E) log V), the projection's cost, with
+\\ the search itself O(V + E). Throws `key-not-found` when the source is not a vertex.
+\\
+\\   [ cmp ] <graph> 1 2 graph-add-edge 2 3 graph-add-edge 1 graph-breadth-first order>>
+\\   => { 1 2 3 }
+graph-breadth-first: ( g: graph source -- traversal: graph-traversal ) [
+  over project
+  tuck swap dense-index
+  over swap bfs-walk
+  walk>traversal
+] ;
+
+\\ Alias of `graph-breadth-first`.
+graph-bfs: ( g: graph source -- traversal: graph-traversal ) [ graph-breadth-first ] ;
+
+\\ Depth-first search from the source, reaching every vertex a path leads to. Neighbors are
+\\ followed in `graph-neighbors` order. `distances` is depth in the depth-first tree, which
+\\ is not a shortest-path distance: a vertex reached down a long branch records that
+\\ branch's depth. O((V + E) log V), the projection's cost, with the search itself O(V + E).
+\\ Throws `key-not-found` when the source is not a vertex.
+\\
+\\   [ cmp ] <graph> 1 2 graph-add-edge 2 3 graph-add-edge 1 graph-depth-first order>>
+\\   => { 1 2 3 }
+graph-depth-first: ( g: graph source -- traversal: graph-traversal ) [
+  over project
+  tuck swap dense-index
+  over swap dfs-walk
+  walk>traversal
+] ;
+
+\\ Alias of `graph-depth-first`.
+graph-dfs: ( g: graph source -- traversal: graph-traversal ) [ graph-depth-first ] ;
+
+\\ Error type thrown when a digraph has a cycle, so it has no topological order.
+ECyclicGraph: ( -- sym ) [ cyclic-graph: ] ;
+
+private{
+  throw-undirected-sort: never-returns ( -- * ) [
+    f "topological sort requires a digraph" EInvalidArgument make-error throw
+  ] ;
+
+  throw-cyclic-graph: never-returns ( -- * ) [
+    f "graph has a cycle, so it has no topological order" ECyclicGraph make-error throw
+  ] ;
+
+  \ Add one to the target's incoming count. The entry comes first so a curried form feeds
+  \ #each.
+  tally-target: ( e: dense-edge degrees: vector -- ) [
+    over target>> 2dup #nth 1 + #nth! 2drop
+  ] ;
+
+  \ How many incoming edges each vertex has. O(V + E).
+  in-degrees: ( dg: dense-graph -- degrees: vector ) [
+    dup vertices>> #len 0 filled-vector
+    tuck [ tally-target ] curry [ #each ] curry
+    swap adjacency>> swap #each
+  ] ;
+
+  \ Take one incoming edge off the target, and release it once its last one is gone. The
+  \ entry comes first so a curried form feeds #each.
+  kahn-release: ( e: dense-edge degrees: vector queue: vector -- ) [
+    2 pick-n target>>
+    2 pick-n over #nth 1 -
+    3 pick-n 2 pick-n 2 pick-n #nth! drop
+    0 = [ 2dup #push! drop ] when
+    2drop 2drop
+  ] ;
+
+  \ Kahn's algorithm on the dense form: seed the queue with every vertex that has no
+  \ incoming edge, then release a target as its last one is removed. The queue doubles as
+  \ the emitted order and is walked by a cursor, so nothing ever shifts. A queue shorter
+  \ than the vertex count means the rest sit on a cycle. O(V + E).
+  kahn-order: ( dg: dense-graph -- queue: vector ) [
+    dup in-degrees
+    [ ] make-vector
+    0
+    [ dup 3 pick-n #len < ]
+    [
+      2 pick-n over #nth 0 = [ 2dup #push! drop ] when
+      1 +
+    ]
+    while
+    drop
+    0
+    [ dup 2 pick-n #len < ]
+    [
+      2dup #nth
+      4 pick-n adjacency>> over #nth
+      4 pick-n 4 pick-n [ kahn-release ] curry curry
+      #each
+      drop 1 +
+    ]
+    while
+    drop nip nip
+  ] ;
+}
+
+\\ The vertices in an order that puts every edge's source before its target.
+\\ O((V + E) log V), the projection's cost, with the sort itself O(V + E).
+\\
+\\ The order is deterministic for a given graph but is not the lexicographically smallest
+\\ topological order. The vertices with no incoming edge lead, ascending under the
+\\ comparator, and each later vertex joins as its last incoming edge is removed, which
+\\ follows stored edge order.
+\\
+\\ Throws `cyclic-graph` when the digraph has a cycle. Throws `invalid-argument` on an
+\\ undirected graph, which has no topological order at all: every undirected edge is stored
+\\ at both endpoints, so any edge is a two-cycle.
+\\
+\\   [ cmp ] <digraph> 1 2 graph-add-edge 2 3 graph-add-edge graph-topological-sort
+\\   => { 1 2 3 }
+graph-topological-sort: ( g: graph -- array ) [
+  dup graph-directed? not [ throw-undirected-sort ] when
+  project dup kahn-order
+  dup #len 2 pick-n vertices>> #len < [ throw-cyclic-graph ] when
+  swap [ index-vertex ] curry #map #collect
+] ;
+
+private{
+  \ Record one direction-free adjacency. Every stored entry contributes its target to its
+  \ source's list, and on a digraph its source to its target's list as well. The entry comes
+  \ first so a curried form feeds #each.
+  link-neighbor: ( e: dense-edge neighbors: vector directed?: boolean u: fixnum -- ) [
+    3 pick-n target>>
+    3 pick-n 2 pick-n #nth over #push! drop
+    2 pick-n [ 3 pick-n over #nth 2 pick-n #push! drop ] when
+    3drop 2drop
+  ] ;
+
+  \ A neighbor view that ignores direction. An undirected graph already stores both ends of
+  \ every edge, so the mirror pass runs only for a digraph and one walk covers both kinds.
+  \ O(V + E).
+  undirected-neighbors: ( dg: dense-graph directed?: boolean -- neighbors: vector ) [
+    over vertices>> #len slot-vectors
+    0
+    [ dup 2 pick-n #len < ]
+    [
+      3 pick-n adjacency>> over #nth
+      2 pick-n 4 pick-n 3 pick-n [ link-neighbor ] curry curry curry
+      #each
+      1 +
+    ]
+    while
+    drop nip nip
+  ] ;
+
+  \ Push an unlabelled neighbor onto the pending stack. The neighbor comes first so a
+  \ curried form feeds #each.
+  flood-push: ( w: fixnum labels: vector pending: vector -- ) [
+    over 3 pick-n #nth not [ dup 3 pick-n #push! drop ] when
+    3drop
+  ] ;
+
+  \ Label everything reachable from start, by a depth-first walk over the direction-free
+  \ neighbor view. Amortized O(1) per vertex and edge reached.
+  flood-component: ( neighbors: vector labels: vector label: fixnum start: fixnum -- ) [
+    [ ] make-vector swap #push!
+    [ dup #len 0 > ]
+    [
+      #pop!
+      3 pick-n over #nth not
+      [
+        3 pick-n over 4 pick-n #nth! drop
+        4 pick-n over #nth
+        4 pick-n 3 pick-n [ flood-push ] curry curry
+        #each
+      ]
+      when
+      drop
+    ]
+    while
+    2drop 2drop
+  ] ;
+
+  \ Label each vertex with the component it lands in, sweeping depth-first from every vertex
+  \ no earlier sweep reached. O(V + E).
+  component-labels: ( neighbors: vector -- labels: vector count: fixnum ) [
+    dup #len f filled-vector
+    0
+    0
+    [ dup 3 pick-n #len < ]
+    [
+      2 pick-n over #nth not
+      [ 3 pick-n 3 pick-n 3 pick-n 3 pick-n flood-component [ 1 + ] dip ]
+      when
+      1 +
+    ]
+    while
+    drop
+    [ drop ] 2dip
+  ] ;
+
+  \ Group the vertices by label in one index-order scan. Components come out ordered by
+  \ smallest member with members ascending, since a dense index is ascending under the
+  \ comparator. O(V).
+  group-by-label: ( dg: dense-graph labels: vector count: fixnum -- array ) [
+    slot-vectors
+    0
+    [ dup 3 pick-n #len < ]
+    [
+      2 pick-n over #nth
+      2 pick-n swap #nth
+      over 5 pick-n index-vertex
+      #push! drop
+      1 +
+    ]
+    while
+    drop
+    [ >array ] #map #collect
+    [ 2drop ] dip
+  ] ;
+}
+
+\\ The connected components, each an array of its vertices. Components come ordered by
+\\ smallest member with members ascending, both under the graph's comparator. An isolated
+\\ vertex is a component of its own. O((V + E) log V), the projection's cost, with the sweep
+\\ itself O(V + E).
+\\
+\\ The components are those of the underlying undirected graph, which on a digraph makes
+\\ them the weakly connected components rather than the strongly connected ones.
+\\
+\\   [ cmp ] <graph> 1 2 graph-add-edge 5 graph-add-vertex graph-connected-components
+\\   => { { 1 2 } { 5 } }
+graph-connected-components: ( g: graph -- array ) [
+  dup graph-directed? swap project swap
+  over swap undirected-neighbors
+  component-labels
+  group-by-label
+] ;

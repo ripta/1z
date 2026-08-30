@@ -4,6 +4,10 @@
 \ own imports. The unit suite imports "ranges" for its own loops, which would mask a
 \ missing import in the library.
 \
+\ The algorithms are exercised here for the same reason: their walks and their result maps
+\ are the module's other unqualified uses of the imported bst words and of the prelude's
+\ loop combinators.
+\
 \ Each reading runs inside a word so no graph rests on the stack between statements;
 \ the golden would otherwise carry a full dump of the adjacency map.
 
@@ -11,12 +15,22 @@ use "testing" ;
 use "graph" ;
 
 triangle: ( -- graph ) [ [ cmp ] <graph> 1 2 graph-add-edge 2 3 graph-add-edge 3 1 graph-add-edge ] ;
+chain: ( -- graph ) [ [ cmp ] <digraph> 1 2 graph-add-edge 2 3 graph-add-edge ] ;
 
 vertices:       ( -- array ) [ triangle graph-vertices ] ;
 edge-count:     ( -- n )     [ triangle graph-edges #len ] ;
 neighbor-count: ( -- n )     [ triangle 2 graph-neighbors #len ] ;
 after-removal:  ( -- n n )   [ triangle 2 graph-remove-vertex dup graph-vertex-count swap graph-edge-count ] ;
 drained:        ( -- ? )     [ triangle 1 graph-remove-vertex 2 graph-remove-vertex 3 graph-remove-vertex graph-empty? ] ;
+
+breadth-count: ( -- n )     [ triangle 1 graph-breadth-first order>> #len ] ;
+depth-count:   ( -- n )     [ triangle 1 graph-depth-first order>> #len ] ;
+far-distance:  ( -- n )     [ chain 1 graph-bfs 3 graph-traversal-distance? option:some> ] ;
+far-parent:    ( -- v )     [ chain 1 graph-dfs 3 graph-traversal-parent? option:some> ] ;
+sorted:        ( -- array ) [ chain graph-topological-sort ] ;
+components:    ( -- array ) [ triangle 9 graph-add-vertex graph-connected-components ] ;
+undirected-sort: ( -- ) [ [ triangle graph-topological-sort ] invalid-argument: "an undirected graph has no topological order" assert-error-type ] ;
+cyclic-sort: ( -- ) [ [ chain 3 1 graph-add-edge graph-topological-sort ] ECyclicGraph "a cycle closes off the order" assert-error-type ] ;
 
 "graph in isolation" test-section
 [ cmp ] <graph>
@@ -29,3 +43,11 @@ neighbor-count 2 "the middle vertex has two" assert=
 after-removal 1 "one edge survives the removal" assert=
 2 "and two vertices" assert=
 drained "removing every vertex empties the graph" assert-true
+breadth-count 3 "a breadth-first walk reaches every vertex" assert=
+depth-count 3 "and so does a depth-first one" assert=
+far-distance 2 "the far end of the chain is two edges away" assert=
+far-parent 2 "and was reached from the middle" assert=
+sorted { 1 2 3 } "the chain sorts into its one possible order" assert=
+components { { 1 2 3 } { 9 } } "the triangle and the isolated vertex are two components" assert=
+undirected-sort
+cyclic-sort

@@ -21,6 +21,19 @@ star: ( g n -- g ) [ 1 swap 1 + <range> [ 0 swap graph-add-edge ] #each ] ;
 \ list: every insert lands in a two-key map.
 parallel-bundle: ( g n -- g ) [ 0 swap <range> [ drop 0 1 graph-add-edge ] #each ] ;
 
+\ A path 0-1-2-...-n.
+path: ( g n -- g ) [ 1 swap 1 + <range> [ dup 1 - swap graph-add-edge ] #each ] ;
+
+\ A ring 0-1-...-n-0.
+ring: ( g n -- g ) [ dup [ path ] dip 0 graph-add-edge ] ;
+
+\ A path 1-2-3-4 with 1 and 4 also joined, so a depth-first walk down the 4 end reaches 2
+\ at depth 3 where a breadth-first one reaches it at depth 1.
+loop4: ( g -- g ) [ 1 2 graph-add-edge 2 3 graph-add-edge 3 4 graph-add-edge 1 4 graph-add-edge ] ;
+
+\ A fork: 1 joined to 2 and 3, with 3 carrying a further 4.
+fork: ( g -- g ) [ 1 2 graph-add-edge 1 3 graph-add-edge 3 4 graph-add-edge ] ;
+
 \ --- Add edge ---
 
 test-add-edge-creates-endpoints: ( -- ) [
@@ -65,6 +78,87 @@ test-add-vertex-keeps-edges: ( -- ) [
   [ cmp ] <graph> 1 2 graph-add-edge 1 graph-add-vertex
   dup 1 graph-neighbors #len 1 "a re-added vertex keeps its edges" assert=
   graph-edge-count 1 "and the count is untouched" assert=
+] ;
+
+\ --- Breadth-first search ---
+
+test-bfs-alias-agrees: ( -- ) [
+  "breadth-first search" test-section
+  [ cmp ] <graph> fork
+  dup 1 graph-bfs order>> swap 1 graph-breadth-first order>>
+  "graph-bfs agrees with the canonical word" assert=
+] ;
+
+test-bfs-digraph-out-edges: ( -- ) [
+  [ cmp ] <digraph> 1 2 graph-add-edge 3 2 graph-add-edge 1 graph-breadth-first
+  dup order>> { 1 2 } "a digraph is followed along its out-edges only" assert=
+  3 graph-traversal-distance? option:none? "the in-edge's source is not reached" assert-true
+] ;
+
+test-bfs-distances-and-order: ( -- ) [
+  [ cmp ] <graph> 4 path 0 graph-breadth-first
+  dup order>> { 0 1 2 3 4 } "a path is walked end to end" assert=
+  dup 0 graph-traversal-distance? option:some> 0 "the source is at distance zero" assert=
+  4 graph-traversal-distance? option:some> 4 "and the far end at the path length" assert=
+] ;
+
+test-bfs-level-order: ( -- ) [
+  [ cmp ] <graph> fork 1 graph-breadth-first
+  dup order>> { 1 3 2 4 } "the whole level comes before the next one" assert=
+  dup 2 graph-traversal-distance? option:some> 1 "both of the source's neighbors are one away" assert=
+  4 graph-traversal-distance? option:some> 2 "and the vertex behind one of them is two" assert=
+] ;
+
+test-bfs-parents: ( -- ) [
+  [ cmp ] <graph> fork 1 graph-breadth-first
+  dup 4 graph-traversal-parent? option:some> 3 "a vertex names the one it was reached from" assert=
+  3 graph-traversal-parent? option:some> 1 "and the chain leads back to the source" assert=
+] ;
+
+test-bfs-source-has-no-parent: ( -- ) [
+  [ cmp ] <graph> fork 1 graph-breadth-first
+  1 graph-traversal-parent? option:none? "the source was reached from nowhere" assert-true
+] ;
+
+test-bfs-unknown-source: ( -- ) [
+  [ [ cmp ] <graph> 1 graph-add-vertex 9 graph-breadth-first ] key-not-found:
+  "a source the graph does not have throws" assert-error-type
+] ;
+
+test-bfs-unreached-absent: ( -- ) [
+  [ cmp ] <graph> 1 2 graph-add-edge 8 9 graph-add-edge 1 graph-breadth-first
+  dup order>> { 1 2 } "only the source's own component is walked" assert=
+  dup 9 graph-traversal-distance? option:none? "an unreached vertex has no distance" assert-true
+  9 graph-traversal-parent? option:none? "and no parent" assert-true
+] ;
+
+\ --- Connected components ---
+
+test-components-digraph-weak: ( -- ) [
+  "connected components" test-section
+  [ cmp ] <digraph> 1 2 graph-add-edge 3 2 graph-add-edge 9 graph-add-vertex
+  graph-connected-components { { 1 2 3 } { 9 } }
+  "a digraph yields the components of the underlying undirected graph" assert=
+] ;
+
+test-components-empty: ( -- ) [
+  [ cmp ] <graph> graph-connected-components { } "an empty graph has no components" assert=
+] ;
+
+test-components-isolated: ( -- ) [
+  [ cmp ] <graph> 1 2 graph-add-edge 5 graph-add-vertex graph-connected-components
+  { { 1 2 } { 5 } } "an isolated vertex is a component of its own" assert=
+] ;
+
+test-components-ordering: ( -- ) [
+  [ cmp ] <graph> 7 8 graph-add-edge 2 5 graph-add-edge 5 3 graph-add-edge
+  graph-connected-components { { 2 3 5 } { 7 8 } }
+  "components come ordered by smallest member, members ascending" assert=
+] ;
+
+test-components-single: ( -- ) [
+  [ cmp ] <graph> triangle graph-connected-components { { 1 2 3 } }
+  "a connected graph is one component" assert=
 ] ;
 
 \ --- Constructors ---
@@ -149,6 +243,49 @@ test-counts-vertex-count: ( -- ) [
   [ cmp ] <graph> triangle
   dup graph-vertex-count 3 "the triangle has three vertices" assert=
   graph-edge-count 3 "and three edges" assert=
+] ;
+
+\ --- Depth-first search ---
+
+test-dfs-alias-agrees: ( -- ) [
+  "depth-first search" test-section
+  [ cmp ] <graph> fork
+  dup 1 graph-dfs order>> swap 1 graph-depth-first order>>
+  "graph-dfs agrees with the canonical word" assert=
+] ;
+
+test-dfs-depth-is-tree-depth: ( -- ) [
+  [ cmp ] <graph> loop4
+  dup 1 graph-depth-first 2 graph-traversal-distance? option:some> 3
+  "a vertex reached down a long branch records that branch's depth" assert=
+  1 graph-breadth-first 2 graph-traversal-distance? option:some> 1
+  "where a breadth-first walk reaches it by the short way" assert=
+] ;
+
+test-dfs-goes-deep-first: ( -- ) [
+  [ cmp ] <graph> fork
+  dup 1 graph-depth-first order>> { 1 3 4 2 }
+  "a branch is finished before the next one starts" assert=
+  1 graph-breadth-first order>> { 1 3 2 4 }
+  "where a breadth-first walk takes the level first" assert=
+] ;
+
+test-dfs-neighbor-order: ( -- ) [
+  [ cmp ] <graph> fork
+  dup 1 graph-neighbors [ target>> ] #map #collect { 3 2 }
+  "the stored neighbors lead with the newest" assert=
+  1 graph-depth-first order>> { 1 3 4 2 } "and the walk follows that order" assert=
+] ;
+
+test-dfs-parents: ( -- ) [
+  [ cmp ] <graph> fork 1 graph-depth-first
+  dup 4 graph-traversal-parent? option:some> 3 "a vertex names the one it was reached from" assert=
+  1 graph-traversal-parent? option:none? "and the source was reached from nowhere" assert-true
+] ;
+
+test-dfs-unknown-source: ( -- ) [
+  [ [ cmp ] <graph> 1 graph-add-vertex 9 graph-depth-first ] key-not-found:
+  "a source the graph does not have throws" assert-error-type
 ] ;
 
 \ --- Digraph ---
@@ -422,6 +559,20 @@ test-scale-star: ( -- ) [
   graph-vertex-count 200 "and leaves the leaves" assert=
 ] ;
 
+\ A ring is where a walk that re-enqueued an already-marked vertex would never finish, and
+\ a 200-deep chain is where one that recursed per vertex would exhaust the task stack. The
+\ size is what an interpreted O((V + E) log V) projection plus O(V log V) of result
+\ building affords: a traversal costs roughly a second per hundred vertices here.
+
+test-scale-traversal: ( -- ) [
+  [ cmp ] <graph> 200 ring
+  dup 0 graph-breadth-first
+  dup order>> #len 201 "every vertex of the ring is visited once" assert=
+  100 graph-traversal-distance? option:some> 100 "and the far side is half the ring away" assert=
+  dup 0 graph-depth-first order>> #len 201 "a 200-deep chain walks without recursing" assert=
+  graph-connected-components #len 1 "and the ring is one component" assert=
+] ;
+
 \ --- Self loop ---
 
 test-self-loop-counts-once: ( -- ) [
@@ -455,4 +606,68 @@ test-self-loop-with-neighbors: ( -- ) [
   dup graph-edge-count 0 "removing it takes the loop and both spokes" assert=
   dup 2 graph-neighbors #len 0 "the first spoke's other end is clear" assert=
   3 graph-neighbors #len 0 "and so is the second's" assert=
+] ;
+
+\ --- Topological sort ---
+
+test-topological-cycle: ( -- ) [
+  "topological sort" test-section
+  [ [ cmp ] <digraph> 1 2 graph-add-edge 2 3 graph-add-edge 3 1 graph-add-edge
+    graph-topological-sort
+  ] cyclic-graph:
+  "a digraph with a cycle has no topological order" assert-error-type
+] ;
+
+test-topological-edgeless: ( -- ) [
+  [ cmp ] <digraph> 3 graph-add-vertex 1 graph-add-vertex 2 graph-add-vertex
+  graph-topological-sort { 1 2 3 }
+  "vertices with no edges come out ascending under the comparator" assert=
+] ;
+
+test-topological-empty: ( -- ) [
+  [ cmp ] <digraph> graph-topological-sort { } "an empty digraph sorts to nothing" assert=
+] ;
+
+test-topological-isolated-vertex: ( -- ) [
+  [ cmp ] <digraph> 1 2 graph-add-edge 9 graph-add-vertex graph-topological-sort
+  { 1 9 2 } "a vertex with no edges still appears" assert=
+] ;
+
+test-topological-respects-edges: ( -- ) [
+  [ cmp ] <digraph> 3 4 graph-add-edge 1 2 graph-add-edge 2 3 graph-add-edge
+  graph-topological-sort { 1 2 3 4 }
+  "a chain comes out in its one possible order, whatever order it was built in" assert=
+] ;
+
+test-topological-self-loop: ( -- ) [
+  [ [ cmp ] <digraph> 1 1 graph-add-edge graph-topological-sort ] cyclic-graph:
+  "a self-loop is a cycle of one" assert-error-type
+] ;
+
+test-topological-tie-order: ( -- ) [
+  [ cmp ] <digraph> 1 2 graph-add-edge 1 3 graph-add-edge
+  2 4 graph-add-edge 3 4 graph-add-edge
+  graph-topological-sort { 1 3 2 4 }
+  "a vertex freed later joins in the order its last incoming edge was stored" assert=
+] ;
+
+test-topological-undirected: ( -- ) [
+  [ [ cmp ] <graph> 1 2 graph-add-edge graph-topological-sort ] invalid-argument:
+  "an undirected graph has no topological order at all" assert-error-type
+] ;
+
+\ --- Traversal lookups ---
+
+test-traversal-fields: ( -- ) [
+  "traversal lookups" test-section
+  [ cmp ] <graph> 1 2 graph-add-edge 1 graph-breadth-first
+  dup graph-traversal? "a traversal is its own record type" assert-true
+  order>> { 1 2 } "carrying the visit order" assert=
+] ;
+
+test-traversal-unknown-vertex: ( -- ) [
+  [ cmp ] <graph> 1 2 graph-add-edge 1 graph-breadth-first
+  dup 9 graph-traversal-distance? option:none?
+  "a vertex the graph never had has no distance" assert-true
+  9 graph-traversal-parent? option:none? "and no parent" assert-true
 ] ;

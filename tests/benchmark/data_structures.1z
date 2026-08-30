@@ -272,6 +272,13 @@ union-find-map-sweep: ( n -- ) [
 \ remove-vertex row is the other half of the removal: a digraph's in-edges are not
 \ locatable from the vertex, so every adjacency list is swept and the row is
 \ O(V log V + E), the other row here expected to grow.
+\
+\ The algorithm rows are all O(V + E) behind that same projection, so each one may grow
+\ logarithmically and no faster; a frontier that shifted or a walk that re-enqueued would
+\ show up as a row growing faster than project does beside it. breadth-first and
+\ depth-first additionally build two result maps, which is another O(V log V) of bst
+\ inserts, so they sit well above connected-components even though all three walk the same
+\ edges. topological-sort rides the digraph fixture, whose star shape is a DAG.
 
 graph-path-fill: ( n -- graph ) [
   [ cmp ] <graph> swap 1 swap 1 + <range> [ dup 1 - swap graph-add-edge ] #each
@@ -303,9 +310,13 @@ graph-sweep: ( n -- ) [
   "graph vertices" pick 1 [ dup graph-vertices drop ] scale-row
   "graph edges" pick 1 [ dup graph-edges drop ] scale-row
   "graph project" pick 1 [ dup project drop ] scale-row
+  "graph breadth-first" pick 1 [ dup 0 graph-breadth-first drop ] scale-row
+  "graph depth-first" pick 1 [ dup 0 graph-depth-first drop ] scale-row
+  "graph connected-components" pick 1 [ dup graph-connected-components drop ] scale-row
   drop
   dup graph-digraph-fill
   "graph digraph remove-vertex" pick 1 [ dup 1 graph-remove-vertex drop ] scale-row
+  "graph topological-sort" pick 1 [ dup graph-topological-sort drop ] scale-row
   2drop
 ] ;
 
@@ -322,9 +333,10 @@ graph-sweep: ( n -- ) [
 3 union-find-connect dup 0 1 union-find-connected? drop 1 union-find-size drop
 3 union-find-map-connect 1 union-find-map-root drop
 3 graph-path-fill dup graph-edges drop dup 1 graph-neighbors drop dup project drop
+dup 0 graph-breadth-first drop dup 0 graph-depth-first drop dup graph-connected-components drop
 1 graph-remove-vertex drop
 3 graph-star-fill graph-vertices drop
-3 graph-digraph-fill 1 graph-remove-vertex drop
+3 graph-digraph-fill dup graph-topological-sort drop 1 graph-remove-vertex drop
 
 50 list-sweep
 100 list-sweep
