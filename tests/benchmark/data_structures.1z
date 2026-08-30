@@ -286,6 +286,12 @@ union-find-map-sweep: ( n -- ) [
 \ the same edges and the difference is the queue. Their per-element costs may therefore grow
 \ by two log factors, the projection's and the heap's, and no more. prim sits below dijkstra
 \ because it builds one array where dijkstra builds two bst-maps.
+\
+\ kruskal spans what prim spans, over the same fixture and the same constant weight, so the
+\ pair is where the two cost profiles are read against each other. It is O(E log E) for the
+\ sort rather than O(E log V) for the heap, so it too may grow by two log factors and no
+\ more, and on this fixture E tracks V so the two factors are within a constant of each
+\ other. What is left is the union-find pass, effectively linear.
 
 graph-path-fill: ( n -- graph ) [
   [ cmp ] <graph> swap 1 swap 1 + <range> [ dup 1 - swap graph-add-edge ] #each
@@ -322,6 +328,7 @@ graph-sweep: ( n -- ) [
   "graph connected-components" pick 1 [ dup graph-connected-components drop ] scale-row
   "graph dijkstra" pick 1 [ dup 0 [ drop 1 ] graph-dijkstra drop ] scale-row
   "graph prim" pick 1 [ dup [ drop 1 ] graph-prim drop ] scale-row
+  "graph kruskal" pick 1 [ dup [ drop 1 ] graph-kruskal drop ] scale-row
   drop
   dup graph-digraph-fill
   "graph digraph remove-vertex" pick 1 [ dup 1 graph-remove-vertex drop ] scale-row
@@ -345,6 +352,7 @@ graph-sweep: ( n -- ) [
 dup 0 graph-breadth-first drop dup 0 graph-depth-first drop dup graph-connected-components drop
 dup 0 [ drop 1 ] graph-dijkstra drop
 dup [ drop 1 ] graph-prim drop
+dup [ drop 1 ] graph-kruskal drop
 1 graph-remove-vertex drop
 3 graph-star-fill graph-vertices drop
 3 graph-digraph-fill dup graph-topological-sort drop 1 graph-remove-vertex drop

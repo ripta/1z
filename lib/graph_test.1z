@@ -457,6 +457,106 @@ test-errors-removals-are-quiet: ( -- ) [
   "removing a missing edge changes nothing" assert=
 ] ;
 
+\ --- Kruskal ---
+
+test-kruskal-agrees-with-prim: ( -- ) [
+  "kruskal" test-section
+  [ cmp ] <graph> detour
+  dup [ payload>> ] graph-kruskal spanning-weight
+  swap [ payload>> ] graph-prim spanning-weight
+  "the two span a connected graph at the same weight" assert=
+  [ cmp ] <graph> 1 2 5 graph-add-edge-with-payload 8 9 1 graph-add-edge-with-payload
+  dup [ payload>> ] graph-kruskal spanning-weight
+  swap [ payload>> ] graph-prim spanning-weight
+  "and a disconnected one at the same forest weight" assert=
+] ;
+
+test-kruskal-cheapest-edges: ( -- ) [
+  [ cmp ] <graph> detour [ payload>> ] graph-kruskal
+  dup #len 2 "three vertices take two edges" assert=
+  spanning-weight 2 "and the cheap pair beats the direct edge" assert=
+] ;
+
+test-kruskal-digraph-raises: ( -- ) [
+  [ [ cmp ] <digraph> 1 2 graph-add-edge [ payload>> ] graph-kruskal ] invalid-argument:
+  "a digraph has no minimum spanning tree" assert-error-type
+] ;
+
+test-kruskal-empty: ( -- ) [
+  [ cmp ] <graph> [ payload>> ] graph-kruskal { } "an empty graph spans nothing" assert=
+] ;
+
+test-kruskal-forest: ( -- ) [
+  [ cmp ] <graph> 1 2 1 graph-add-edge-with-payload 8 9 1 graph-add-edge-with-payload
+  [ payload>> ] graph-kruskal
+  dup #len 2 "each component contributes its own tree" assert=
+  dup 0 #nth source>> 1 "at equal weights the two components keep enumeration order" assert=
+  1 #nth source>> 8 "which runs the vertices ascending" assert=
+] ;
+
+test-kruskal-isolated-vertices: ( -- ) [
+  [ cmp ] <graph> 1 graph-add-vertex 2 graph-add-vertex [ payload>> ] graph-kruskal
+  { } "a vertex with no edges contributes none" assert=
+] ;
+
+\ Kruskal compares weights and never adds them, as Prim does, so a negative weight leaves a
+\ spanning tree well defined here too.
+
+test-kruskal-negative-weight: ( -- ) [
+  [ cmp ] <graph> detour [ drop -1 ] graph-kruskal #len 2
+  "a negative weight spans as any other does" assert=
+] ;
+
+\ Prim's source is whichever end was already in the tree, and Kruskal's is whichever end sorts
+\ first. The two part company wherever the tree grew into a vertex from a higher-sorting one.
+
+test-kruskal-orientation: ( -- ) [
+  [ cmp ] <graph> 1 3 5 graph-add-edge-with-payload 3 2 1 graph-add-edge-with-payload
+  dup [ payload>> ] graph-kruskal 0 #nth
+  dup source>> 2 "the cheap edge is reported from its lower end" assert=
+  target>> 3 "and runs to its higher one" assert=
+  [ payload>> ] graph-prim 1 #nth source>> 3
+  "where prim reports the same edge from the end already in the tree" assert=
+] ;
+
+test-kruskal-parallel-edges: ( -- ) [
+  [ cmp ] <graph> 1 2 9 graph-add-edge-with-payload 1 2 4 graph-add-edge-with-payload
+  [ payload>> ] graph-kruskal
+  dup #len 1 "two edges between one pair contribute one" assert=
+  spanning-weight 4 "and it is the cheaper of them" assert=
+] ;
+
+\ A self-loop's two ends are connected by definition, so it can never join two components. The
+\ enumeration drops it before the sort rather than leaving the merge to report it.
+
+test-kruskal-self-loop: ( -- ) [
+  [ cmp ] <graph> 1 1 5 graph-add-edge-with-payload 1 2 1 graph-add-edge-with-payload
+  [ payload>> ] graph-kruskal
+  dup #len 1 "a self-loop is never a tree edge" assert=
+  spanning-weight 1 "so only the other edge is weighed" assert=
+] ;
+
+test-kruskal-spans-connected: ( -- ) [
+  [ cmp ] <graph> 20 weighted-path [ payload>> ] graph-kruskal
+  #len 20 "a connected graph of V vertices takes V-1 edges" assert=
+] ;
+
+\ What the tie rule rests on is the sort being stable. A path's edges all weigh one and
+\ enumerate by ascending source, and twenty of them is past the point where the sort stops
+\ being a plain insertion pass over the whole input.
+
+test-kruskal-tie-order: ( -- ) [
+  [ cmp ] <graph> 20 weighted-path [ payload>> ] graph-kruskal [ source>> ] #map #collect
+  { 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 }
+  "equal weights come in enumeration order" assert=
+] ;
+
+test-kruskal-weight-order: ( -- ) [
+  [ cmp ] <graph> 1 2 5 graph-add-edge-with-payload 8 9 1 graph-add-edge-with-payload
+  [ payload>> ] graph-kruskal [ payload>> ] #map #collect { 1 5 }
+  "edges come ascending by weight across the whole graph" assert=
+] ;
+
 \ --- Lookups ---
 
 test-lookup-edge-get-newest: ( -- ) [
@@ -745,6 +845,16 @@ test-scale-traversal: ( -- ) [
   100 graph-traversal-distance? option:some> 100 "and the far side is half the ring away" assert=
   dup 0 graph-depth-first order>> #len 201 "a 200-deep chain walks without recursing" assert=
   graph-connected-components #len 1 "and the ring is one component" assert=
+] ;
+
+\ The same ring the spanning-tree test below uses, taken by the other algorithm. Its size is
+\ what pins the enumeration and the union-find pass to their loop forms, since neither may
+\ recurse once per edge.
+
+test-scale-weighted-kruskal: ( -- ) [
+  [ cmp ] <graph> 200 weighted-ring [ payload>> ] graph-kruskal
+  dup #len 200 "a ring spans with one edge fewer than it has" assert=
+  spanning-weight 200 "each of them weighing one" assert=
 ] ;
 
 \ A ring is also where stale entries pile up: both ways round reach the far side, so half the

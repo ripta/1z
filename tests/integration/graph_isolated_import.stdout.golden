@@ -20,6 +20,9 @@ Stack: [ ]
 Stack: [ ]
 Stack: [ ]
 Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
 === graph in isolation ===
 Stack: [ ]
 Stack: [ graph{ adjacency: <bst-map bst{ root: <tree-node:leaf leaf:> comparator: [ [ cmp ] [ [ key>> ] dip key>> ] dip call ] }> comparator: [ cmp ] directed?: f edge-count: 0 } ]
@@ -61,6 +64,10 @@ PASS: the detour spans with two of its three edges
 Stack: [ ]
 PASS: the cheap pair of them
 Stack: [ ]
+PASS: the other spanning tree takes as many
+Stack: [ ]
+PASS: and costs the same
+Stack: [ ]
 PASS: an undirected graph has no topological order
 Stack: [ ]
 PASS: a cycle closes off the order
@@ -68,4 +75,6 @@ Stack: [ ]
 PASS: a negative weight has no cheapest path
 Stack: [ ]
 PASS: a digraph has no minimum spanning tree
+Stack: [ ]
+PASS: and kruskal refuses a digraph too
 Stack: [ ]

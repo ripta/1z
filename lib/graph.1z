@@ -21,6 +21,7 @@
 use { bst-map: <bst-map>: map-insert: map-lookup: map-delete: map-size: map-empty?: unmake-bst-map: tree-each: key>>: unmake-kv-pair: } "bst" ;
 use { nil: cons: cons?: head: tail: list-len: } "cons-list" ;
 use { <heap>: heap-insert: heap-pop-min?: } "heap" ;
+use { union-find: <union-find>: union-find-merge: } "union-find" ;
 
 \\ One edge. `source` and `target` are vertices, and `payload` is an arbitrary
 \\ per-edge value; an unweighted edge stores `f`. Adjacency stores this record with
@@ -1217,4 +1218,115 @@ graph-prim: ( g: graph weight: quotation -- array ) [
   over graph-directed? [ throw-directed-spanning-tree ] when
   [ project ] dip
   prim-forest
+] ;
+
+\ Kruskal reaches the same spanning tree Prim does, from the other end. Prim grows one tree
+\ outward and asks which edge joins it next, which is what the heap answers. Kruskal takes
+\ every edge in weight order and asks whether its two ends are already joined, which is what
+\ union-find answers.
+\
+\ The forest falls out of that question rather than out of a sweep. An edge whose ends are
+\ already connected is passed over, and nothing requires the edges it does take to touch, so
+\ a disconnected graph needs no second pass over its components.
+
+private{
+  \\ One candidate edge, weighed once and held with both ends in dense form. `cost` is what
+  \\ the sort orders on, `source` and `target` are what union-find is asked about, and `edge`
+  \\ is the stored record the result is built out of.
+  kruskal-entry: struct{ cost: any source: fixnum target: fixnum edge: graph-edge } ;
+}
+
+private{
+  \ Weigh one of i's edges and hold it as a candidate. An undirected edge is stored at both
+  \ ends, so only the end with the smaller index takes it. Dense indices ascend under the
+  \ comparator, so that is the rule graph-edges applies, read off the projection with no
+  \ comparator call.
+  \
+  \ A self-loop has no smaller end and so is never a candidate. Nothing is lost: its two ends
+  \ are connected by definition, so it could never join two components.
+  \
+  \ The entry comes first so a curried form feeds #each.
+  kruskal-offer: ( e: dense-edge out: vector weight: quotation i: fixnum -- ) [
+    3 pick-n target>>
+    2dup <
+    [
+      4 pick-n 3 pick-n edge-weight
+      2 pick-n 2 pick-n 7 pick-n edge>> make-kruskal-entry
+      4 pick-n swap #push! drop
+    ] when
+    2drop 2drop drop
+  ] ;
+
+  \ Every logical edge as a candidate, ascending by weight. The sort is stable, so equal
+  \ weights keep enumeration order, which runs the source indices ascending and each source's
+  \ stored entries newest first. O(E log E), the sort; the caller's projection runs once per
+  \ candidate.
+  kruskal-candidates: ( dg: dense-graph weight: quotation -- array ) [
+    [ ] make-vector 0
+    [ dup 4 pick-n adjacency>> #len < ]
+    [
+      3 pick-n adjacency>> over #nth
+      2 pick-n 4 pick-n 3 pick-n [ kruskal-offer ] curry curry curry
+      #each
+      1 +
+    ]
+    while
+    drop nip nip
+    [ cost>> ] #sort-by
+  ] ;
+
+  \ Take one candidate when its two ends are in different sets, which merging them reports.
+  \ That one call is the whole test: asking first and merging after would walk both ends
+  \ twice. Amortized O(α(V)).
+  \
+  \ The entry comes first so a curried form feeds #each.
+  kruskal-join: ( e: kruskal-entry uf: union-find tree: vector -- ) [
+    1 pick-n 3 pick-n source>> 4 pick-n target>> union-find-merge
+    [ dup 3 pick-n edge>> #push! drop ] when
+    3drop
+  ] ;
+
+  \ Take every candidate in weight order, keeping the ones that join two components. Every
+  \ vertex starts in a set of its own, so a connected graph ends in one set having taken V-1
+  \ edges, and a graph of C components takes V-C. O(E log E), the candidates' sort, with the
+  \ pass over them O(E · α(V)).
+  kruskal-forest: ( dg: dense-graph weight: quotation -- array ) [
+    2dup kruskal-candidates
+    [ drop vertices>> #len <union-find> ] dip
+    [ ] make-vector
+    2 pick-n 1 pick-n [ kruskal-join ] curry curry
+    2 pick-n swap #each
+    >array
+    nip nip
+  ] ;
+}
+
+\\ A minimum spanning tree, as the tree edges. A disconnected graph gives a minimum spanning
+\\ forest, as `graph-prim` does, and the two agree on the total weight of what they return.
+\\ They agree on nothing else.
+\\
+\\ The edges come ascending by weight across the whole graph, so a cheap edge of a later
+\\ component precedes a dear one of an earlier component. Equal weights come in enumeration
+\\ order, which runs the vertices ascending under the comparator and each vertex's stored
+\\ edges newest first. Each record's `source` is whichever end sorts first, the orientation
+\\ `graph-edges` reports, where `graph-prim` orients by discovery instead.
+\\
+\\ The projection has effect `( edge: graph-edge -- weight )`, as `graph-prim`'s does.
+\\ Weights are compared and never added, so a negative one is fine here as it is there. Every
+\\ logical edge but a self-loop is priced exactly once, where `graph-prim` skips an edge whose
+\\ target has already joined the tree.
+\\
+\\ O((V + E) log V + E log E), the projection and then the sort, with the union-find pass
+\\ O(E · α(V)) over them. That second term is what separates the two words: `graph-prim` pays
+\\ O(E log V) through the heap and suits a dense graph, and this pays O(E log E) through the
+\\ sort and suits a sparse one. Throws `invalid-argument` on a digraph, whose spanning problem
+\\ is a different one.
+\\
+\\   [ cmp ] <graph> 1 2 1 graph-add-edge-with-payload 2 3 1 graph-add-edge-with-payload
+\\   1 3 10 graph-add-edge-with-payload [ payload>> ] graph-kruskal #len
+\\   => 2
+graph-kruskal: ( g: graph weight: quotation -- array ) [
+  over graph-directed? [ throw-directed-spanning-tree ] when
+  [ project ] dip
+  kruskal-forest
 ] ;

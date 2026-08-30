@@ -1,9 +1,10 @@
-\ The graph module in isolation: nothing here imports "bst", "cons-list" or "heap", so the
-\ adjacency machinery's internal <bst-map>, unmake-bst-map, tree-each, map-delete,
-\ key>>, unmake-kv-pair, head, tail and list-len uses, and the shortest-path and
-\ spanning-tree walks' <heap>, heap-insert and heap-pop-min? uses, must all resolve from the
-\ module's own imports. The unit suite imports "ranges" for its own loops, which would mask a
-\ missing import in the library.
+\ The graph module in isolation: nothing here imports "bst", "cons-list", "heap" or
+\ "union-find", so the adjacency machinery's internal <bst-map>, unmake-bst-map, tree-each,
+\ map-delete, key>>, unmake-kv-pair, head, tail and list-len uses, the shortest-path and
+\ spanning-tree walks' <heap>, heap-insert and heap-pop-min? uses, and the other spanning
+\ tree's <union-find> and union-find-merge uses, must all resolve from the module's own
+\ imports. The unit suite imports "ranges" for its own loops, which would mask a missing
+\ import in the library.
 \
 \ The algorithms are exercised here for the same reason: their walks and their result maps
 \ are the module's other unqualified uses of the imported bst words and of the prelude's
@@ -44,6 +45,9 @@ negative-weight:   ( -- )   [ [ detour 1 [ drop -1 ] graph-dijkstra ] invalid-ar
 spanning:          ( -- n ) [ detour [ payload>> ] graph-prim #len ] ;
 spanning-cost:     ( -- n ) [ detour [ payload>> ] graph-prim [ payload>> ] #map 0 [ + ] #reduce ] ;
 directed-spanning: ( -- )   [ [ chain [ payload>> ] graph-prim ] invalid-argument: "a digraph has no minimum spanning tree" assert-error-type ] ;
+kruskal-spanning:  ( -- n ) [ detour [ payload>> ] graph-kruskal #len ] ;
+kruskal-cost:      ( -- n ) [ detour [ payload>> ] graph-kruskal [ payload>> ] #map 0 [ + ] #reduce ] ;
+kruskal-directed:  ( -- )   [ [ chain [ payload>> ] graph-kruskal ] invalid-argument: "and kruskal refuses a digraph too" assert-error-type ] ;
 
 "graph in isolation" test-section
 [ cmp ] <graph>
@@ -66,7 +70,10 @@ cheapest 2 "the cheapest route to the far end is the long way round" assert=
 cheapest-via 2 "and it arrives from the vertex on that way" assert=
 spanning 2 "the detour spans with two of its three edges" assert=
 spanning-cost 2 "the cheap pair of them" assert=
+kruskal-spanning 2 "the other spanning tree takes as many" assert=
+kruskal-cost 2 "and costs the same" assert=
 undirected-sort
 cyclic-sort
 negative-weight
 directed-spanning
+kruskal-directed
