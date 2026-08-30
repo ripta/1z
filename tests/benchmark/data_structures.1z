@@ -10,6 +10,9 @@ use "heap" ;
 use "union-find" ;
 use "graph" ;
 
+\ The dense projection is private, and its cost claim is what the projection row measures.
+borrow { project: } "graph" ;
+
 benchmark-section: ( msg -- ) [ "=== " swap #append " ===" #append print-line ] ;
 
 bench-struct: struct{ a b c } ;
@@ -264,9 +267,11 @@ union-find-map-sweep: ( n -- ) [
 \ neighbors, so it is flat too. vertex-count and edge-count are field reads.
 \
 \ vertices and edges are O(V) and O(V+E), so they run at one iteration and their
-\ per-element costs read flat. The digraph remove-vertex row is the other half of the
-\ removal: a digraph's in-edges are not locatable from the vertex, so every adjacency list
-\ is swept and the row is O(V log V + E), the one row here expected to grow.
+\ per-element costs read flat. project is O((V + E) log V) and runs at one iteration too,
+\ so its per-element cost may grow logarithmically and no faster. The digraph
+\ remove-vertex row is the other half of the removal: a digraph's in-edges are not
+\ locatable from the vertex, so every adjacency list is swept and the row is
+\ O(V log V + E), the other row here expected to grow.
 
 graph-path-fill: ( n -- graph ) [
   [ cmp ] <graph> swap 1 swap 1 + <range> [ dup 1 - swap graph-add-edge ] #each
@@ -297,6 +302,7 @@ graph-sweep: ( n -- ) [
   "graph edge-count" pick 5 [ dup graph-edge-count drop ] scale-row
   "graph vertices" pick 1 [ dup graph-vertices drop ] scale-row
   "graph edges" pick 1 [ dup graph-edges drop ] scale-row
+  "graph project" pick 1 [ dup project drop ] scale-row
   drop
   dup graph-digraph-fill
   "graph digraph remove-vertex" pick 1 [ dup 1 graph-remove-vertex drop ] scale-row
@@ -315,7 +321,8 @@ graph-sweep: ( n -- ) [
 3 union-find-connect >iterator #count drop
 3 union-find-connect dup 0 1 union-find-connected? drop 1 union-find-size drop
 3 union-find-map-connect 1 union-find-map-root drop
-3 graph-path-fill dup graph-edges drop dup 1 graph-neighbors drop 1 graph-remove-vertex drop
+3 graph-path-fill dup graph-edges drop dup 1 graph-neighbors drop dup project drop
+1 graph-remove-vertex drop
 3 graph-star-fill graph-vertices drop
 3 graph-digraph-fill 1 graph-remove-vertex drop
 

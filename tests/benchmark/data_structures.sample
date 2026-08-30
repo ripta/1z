@@ -2,259 +2,263 @@
 [-- Construction --]
 Name          Iters      Elapsed   Elapsed/iter   Instrs/iter   Peak Stack
 -----------   -----   ----------   ------------   -----------   ----------
-Array         5,000   293.000 us          58 ns             2            3
-Struct        5,000     1.633 ms         326 ns             8            7
-Mut Struct    5,000     1.665 ms         333 ns             8            7
-Hash          5,000   288.000 us          57 ns             2            3
-Vector        5,000   818.000 us         163 ns             3            3
-Mutable Map   5,000     1.364 ms         272 ns             3            3
-Set           5,000   281.000 us          56 ns             2            3
-Byte Array    5,000   803.000 us         160 ns             3            3
+Array         5,000   282.000 us          56 ns             2            3
+Struct        5,000     1.620 ms         324 ns             8            7
+Mut Struct    5,000     1.627 ms         325 ns             8            7
+Hash          5,000   271.000 us          54 ns             2            3
+Vector        5,000   800.000 us         160 ns             3            3
+Mutable Map   5,000     1.374 ms         274 ns             3            3
+Set           5,000   274.000 us          54 ns             2            3
+Byte Array    5,000   788.000 us         157 ns             3            3
 
 [-- Access --]
 Name                  Iters    Elapsed   Elapsed/iter   Instrs/iter   Peak Stack
 -------------------   -----   --------   ------------   -----------   ----------
-Array       #nth      5,000   1.849 ms         369 ns             8            4
-Struct      field>>   5,000   4.099 ms         819 ns            14            6
-Mut Struct  field>>   5,000   4.135 ms         827 ns            14            6
-Hash        @get      5,000   1.776 ms         355 ns             8            4
-Vector      #nth      5,000   1.796 ms         359 ns             8            4
-Mutable Map @get      5,000   1.836 ms         367 ns             8            4
-Set         @in?      5,000   1.570 ms         314 ns             8            4
-Byte Array  #nth      5,000   2.060 ms         412 ns             8            4
+Array       #nth      5,000   1.926 ms         385 ns             8            4
+Struct      field>>   5,000   3.960 ms         792 ns            14            6
+Mut Struct  field>>   5,000   4.029 ms         805 ns            14            6
+Hash        @get      5,000   1.762 ms         352 ns             8            4
+Vector      #nth      5,000   1.696 ms         339 ns             8            4
+Mutable Map @get      5,000   1.793 ms         358 ns             8            4
+Set         @in?      5,000   1.534 ms         306 ns             8            4
+Byte Array  #nth      5,000   1.963 ms         392 ns             8            4
 
 [-- Mutation --]
-Name                 Iters      Elapsed   Elapsed/iter   Instrs/iter   Peak Stack
-------------------   -----   ----------   ------------   -----------   ----------
-Array #append        5,000     1.304 ms         260 ns             4            4
-Mut Struct >>field   5,000     1.713 ms         342 ns             8            7
-Hash @set (update)   5,000     1.720 ms         344 ns             5            5
-Hash @set (insert)   5,000     1.800 ms         360 ns             5            5
-Vector #push!        5,000     1.163 ms         232 ns             5            4
-Mutable Map @set!    5,000   997.000 us         199 ns             5            5
-Set @adjoin          5,000     1.716 ms         343 ns             4            4
-Byte Array #append   5,000     1.620 ms         324 ns             5            4
+Name                 Iters    Elapsed   Elapsed/iter   Instrs/iter   Peak Stack
+------------------   -----   --------   ------------   -----------   ----------
+Array #append        5,000   1.330 ms         266 ns             4            4
+Mut Struct >>field   5,000   1.749 ms         349 ns             8            7
+Hash @set (update)   5,000   1.714 ms         342 ns             5            5
+Hash @set (insert)   5,000   1.814 ms         362 ns             5            5
+Vector #push!        5,000   1.148 ms         229 ns             5            4
+Mutable Map @set!    5,000   1.012 ms         202 ns             5            5
+Set @adjoin          5,000   1.767 ms         353 ns             4            4
+Byte Array #append   5,000   1.416 ms         283 ns             5            4
 
 [-- Scaling: cons-list / bst --]
-cons-list construct n=50 iters=1  elapsed_ns=423000
-cons-list iter-new n=50 iters=5  elapsed_ns=29000
+cons-list construct n=50 iters=1  elapsed_ns=290000
+cons-list iter-new n=50 iters=5  elapsed_ns=27000
 cons-list first n=50 iters=5  elapsed_ns=85000
-cons-list drain n=50 iters=5  elapsed_ns=1625000
-cons-list construct n=100 iters=1  elapsed_ns=567000
-cons-list iter-new n=100 iters=5  elapsed_ns=25000
-cons-list first n=100 iters=5  elapsed_ns=75000
-cons-list drain n=100 iters=5  elapsed_ns=3420000
-cons-list construct n=200 iters=1  elapsed_ns=1355000
-cons-list iter-new n=200 iters=5  elapsed_ns=23000
-cons-list first n=200 iters=5  elapsed_ns=74000
-cons-list drain n=200 iters=5  elapsed_ns=7140000
-cons-list construct n=400 iters=1  elapsed_ns=4831000
-cons-list iter-new n=400 iters=5  elapsed_ns=30000
-cons-list first n=400 iters=5  elapsed_ns=87000
-cons-list drain n=400 iters=5  elapsed_ns=13389000
-bst construct n=100 iters=1  elapsed_ns=26869000
-bst iter-new n=100 iters=5  elapsed_ns=216000
-bst first n=100 iters=5  elapsed_ns=234000
-bst drain n=100 iters=5  elapsed_ns=6239000
-bst #len n=100 iters=5  elapsed_ns=32000
-bst insert n=100 iters=5  elapsed_ns=1713000
-bst construct n=200 iters=1  elapsed_ns=62836000
-bst iter-new n=200 iters=5  elapsed_ns=226000
-bst first n=200 iters=5  elapsed_ns=251000
-bst drain n=200 iters=5  elapsed_ns=12543000
-bst #len n=200 iters=5  elapsed_ns=33000
-bst insert n=200 iters=5  elapsed_ns=1786000
-bst construct n=400 iters=1  elapsed_ns=142551000
-bst iter-new n=400 iters=5  elapsed_ns=246000
-bst first n=400 iters=5  elapsed_ns=278000
-bst drain n=400 iters=5  elapsed_ns=24847000
-bst #len n=400 iters=5  elapsed_ns=34000
-bst insert n=400 iters=5  elapsed_ns=2069000
-bst construct n=800 iters=1  elapsed_ns=319878000
-bst iter-new n=800 iters=5  elapsed_ns=270000
-bst first n=800 iters=5  elapsed_ns=295000
-bst drain n=800 iters=5  elapsed_ns=49907000
-bst #len n=800 iters=5  elapsed_ns=34000
-bst insert n=800 iters=5  elapsed_ns=2103000
+cons-list drain n=50 iters=5  elapsed_ns=1756000
+cons-list construct n=100 iters=1  elapsed_ns=528000
+cons-list iter-new n=100 iters=5  elapsed_ns=24000
+cons-list first n=100 iters=5  elapsed_ns=74000
+cons-list drain n=100 iters=5  elapsed_ns=3457000
+cons-list construct n=200 iters=1  elapsed_ns=1317000
+cons-list iter-new n=200 iters=5  elapsed_ns=24000
+cons-list first n=200 iters=5  elapsed_ns=73000
+cons-list drain n=200 iters=5  elapsed_ns=6764000
+cons-list construct n=400 iters=1  elapsed_ns=3512000
+cons-list iter-new n=400 iters=5  elapsed_ns=34000
+cons-list first n=400 iters=5  elapsed_ns=81000
+cons-list drain n=400 iters=5  elapsed_ns=13709000
+bst construct n=100 iters=1  elapsed_ns=26389000
+bst iter-new n=100 iters=5  elapsed_ns=208000
+bst first n=100 iters=5  elapsed_ns=250000
+bst drain n=100 iters=5  elapsed_ns=6318000
+bst #len n=100 iters=5  elapsed_ns=29000
+bst insert n=100 iters=5  elapsed_ns=1620000
+bst construct n=200 iters=1  elapsed_ns=60903000
+bst iter-new n=200 iters=5  elapsed_ns=189000
+bst first n=200 iters=5  elapsed_ns=246000
+bst drain n=200 iters=5  elapsed_ns=12531000
+bst #len n=200 iters=5  elapsed_ns=29000
+bst insert n=200 iters=5  elapsed_ns=1748000
+bst construct n=400 iters=1  elapsed_ns=139223000
+bst iter-new n=400 iters=5  elapsed_ns=229000
+bst first n=400 iters=5  elapsed_ns=270000
+bst drain n=400 iters=5  elapsed_ns=24915000
+bst #len n=400 iters=5  elapsed_ns=30000
+bst insert n=400 iters=5  elapsed_ns=1876000
+bst construct n=800 iters=1  elapsed_ns=315147000
+bst iter-new n=800 iters=5  elapsed_ns=261000
+bst first n=800 iters=5  elapsed_ns=299000
+bst drain n=800 iters=5  elapsed_ns=50160000
+bst #len n=800 iters=5  elapsed_ns=30000
+bst insert n=800 iters=5  elapsed_ns=2034000
 
 [-- Scaling: deque --]
-deque fill+drain n=250 iters=1  elapsed_ns=386664000
-deque push-back n=250 iters=5  elapsed_ns=539000
-deque push-front n=250 iters=5  elapsed_ns=535000
-deque pop-front n=250 iters=5  elapsed_ns=732000
-deque pop-back n=250 iters=5  elapsed_ns=738000
-deque iter-new n=250 iters=5  elapsed_ns=41000
-deque drain n=250 iters=5  elapsed_ns=1269119000
-deque #len n=250 iters=5  elapsed_ns=120000
-deque fill+drain n=500 iters=1  elapsed_ns=753078000
-deque push-back n=500 iters=5  elapsed_ns=4356000
-deque push-front n=500 iters=5  elapsed_ns=4165000
-deque pop-front n=500 iters=5  elapsed_ns=4454000
-deque pop-back n=500 iters=5  elapsed_ns=4400000
-deque iter-new n=500 iters=5  elapsed_ns=36000
-deque drain n=500 iters=5  elapsed_ns=2456253000
-deque #len n=500 iters=5  elapsed_ns=112000
-deque fill+drain n=1000 iters=1  elapsed_ns=1487315000
-deque push-back n=1000 iters=5  elapsed_ns=4178000
-deque push-front n=1000 iters=5  elapsed_ns=4143000
-deque pop-front n=1000 iters=5  elapsed_ns=4612000
-deque pop-back n=1000 iters=5  elapsed_ns=4386000
-deque iter-new n=1000 iters=5  elapsed_ns=37000
-deque drain n=1000 iters=5  elapsed_ns=5080931000
-deque #len n=1000 iters=5  elapsed_ns=108000
-deque fill+drain n=2000 iters=1  elapsed_ns=2959389000
-deque push-back n=2000 iters=5  elapsed_ns=541000
-deque push-front n=2000 iters=5  elapsed_ns=551000
-deque pop-front n=2000 iters=5  elapsed_ns=742000
-deque pop-back n=2000 iters=5  elapsed_ns=728000
-deque iter-new n=2000 iters=5  elapsed_ns=38000
-deque drain n=2000 iters=5  elapsed_ns=10118264000
-deque #len n=2000 iters=5  elapsed_ns=109000
+deque fill+drain n=250 iters=1  elapsed_ns=382141000
+deque push-back n=250 iters=5  elapsed_ns=540000
+deque push-front n=250 iters=5  elapsed_ns=532000
+deque pop-front n=250 iters=5  elapsed_ns=735000
+deque pop-back n=250 iters=5  elapsed_ns=733000
+deque iter-new n=250 iters=5  elapsed_ns=46000
+deque drain n=250 iters=5  elapsed_ns=1246905000
+deque #len n=250 iters=5  elapsed_ns=108000
+deque fill+drain n=500 iters=1  elapsed_ns=747605000
+deque push-back n=500 iters=5  elapsed_ns=4173000
+deque push-front n=500 iters=5  elapsed_ns=4132000
+deque pop-front n=500 iters=5  elapsed_ns=4435000
+deque pop-back n=500 iters=5  elapsed_ns=4354000
+deque iter-new n=500 iters=5  elapsed_ns=37000
+deque drain n=500 iters=5  elapsed_ns=2405176000
+deque #len n=500 iters=5  elapsed_ns=109000
+deque fill+drain n=1000 iters=1  elapsed_ns=1480563000
+deque push-back n=1000 iters=5  elapsed_ns=4137000
+deque push-front n=1000 iters=5  elapsed_ns=4115000
+deque pop-front n=1000 iters=5  elapsed_ns=4451000
+deque pop-back n=1000 iters=5  elapsed_ns=4326000
+deque iter-new n=1000 iters=5  elapsed_ns=38000
+deque drain n=1000 iters=5  elapsed_ns=4987976000
+deque #len n=1000 iters=5  elapsed_ns=107000
+deque fill+drain n=2000 iters=1  elapsed_ns=2947853000
+deque push-back n=2000 iters=5  elapsed_ns=546000
+deque push-front n=2000 iters=5  elapsed_ns=534000
+deque pop-front n=2000 iters=5  elapsed_ns=741000
+deque pop-back n=2000 iters=5  elapsed_ns=729000
+deque iter-new n=2000 iters=5  elapsed_ns=41000
+deque drain n=2000 iters=5  elapsed_ns=9898577000
+deque #len n=2000 iters=5  elapsed_ns=108000
 
 [-- Scaling: heap --]
-heap fill n=250 iters=1  elapsed_ns=19520000
-heap fill+drain n=250 iters=1  elapsed_ns=66395000
-heap sorted-drain n=250 iters=1  elapsed_ns=71169000
-heap insert n=250 iters=5  elapsed_ns=420000
-heap merge n=250 iters=5  elapsed_ns=473000
-heap min n=250 iters=5  elapsed_ns=27000
-heap iter-new n=250 iters=5  elapsed_ns=47000
-heap unsorted-drain n=250 iters=5  elapsed_ns=47235000
-heap #len n=250 iters=5  elapsed_ns=20000
-heap fill n=500 iters=1  elapsed_ns=38812000
-heap fill+drain n=500 iters=1  elapsed_ns=134033000
-heap sorted-drain n=500 iters=1  elapsed_ns=143915000
-heap insert n=500 iters=5  elapsed_ns=410000
-heap merge n=500 iters=5  elapsed_ns=465000
-heap min n=500 iters=5  elapsed_ns=22000
-heap iter-new n=500 iters=5  elapsed_ns=38000
-heap unsorted-drain n=500 iters=5  elapsed_ns=93948000
-heap #len n=500 iters=5  elapsed_ns=23000
-heap fill n=1000 iters=1  elapsed_ns=77068000
-heap fill+drain n=1000 iters=1  elapsed_ns=269693000
-heap sorted-drain n=1000 iters=1  elapsed_ns=287683000
-heap insert n=1000 iters=5  elapsed_ns=432000
-heap merge n=1000 iters=5  elapsed_ns=478000
-heap min n=1000 iters=5  elapsed_ns=21000
-heap iter-new n=1000 iters=5  elapsed_ns=40000
-heap unsorted-drain n=1000 iters=5  elapsed_ns=189450000
-heap #len n=1000 iters=5  elapsed_ns=23000
-heap fill n=2000 iters=1  elapsed_ns=154286000
-heap fill+drain n=2000 iters=1  elapsed_ns=540850000
-heap sorted-drain n=2000 iters=1  elapsed_ns=580743000
-heap insert n=2000 iters=5  elapsed_ns=435000
-heap merge n=2000 iters=5  elapsed_ns=552000
-heap min n=2000 iters=5  elapsed_ns=27000
-heap iter-new n=2000 iters=5  elapsed_ns=43000
-heap unsorted-drain n=2000 iters=5  elapsed_ns=376182000
-heap #len n=2000 iters=5  elapsed_ns=25000
+heap fill n=250 iters=1  elapsed_ns=19191000
+heap fill+drain n=250 iters=1  elapsed_ns=65607000
+heap sorted-drain n=250 iters=1  elapsed_ns=70872000
+heap insert n=250 iters=5  elapsed_ns=409000
+heap merge n=250 iters=5  elapsed_ns=482000
+heap min n=250 iters=5  elapsed_ns=22000
+heap iter-new n=250 iters=5  elapsed_ns=38000
+heap unsorted-drain n=250 iters=5  elapsed_ns=46663000
+heap #len n=250 iters=5  elapsed_ns=21000
+heap fill n=500 iters=1  elapsed_ns=38061000
+heap fill+drain n=500 iters=1  elapsed_ns=136922000
+heap sorted-drain n=500 iters=1  elapsed_ns=141481000
+heap insert n=500 iters=5  elapsed_ns=405000
+heap merge n=500 iters=5  elapsed_ns=463000
+heap min n=500 iters=5  elapsed_ns=21000
+heap iter-new n=500 iters=5  elapsed_ns=36000
+heap unsorted-drain n=500 iters=5  elapsed_ns=95838000
+heap #len n=500 iters=5  elapsed_ns=25000
+heap fill n=1000 iters=1  elapsed_ns=86083000
+heap fill+drain n=1000 iters=1  elapsed_ns=283610000
+heap sorted-drain n=1000 iters=1  elapsed_ns=307193000
+heap insert n=1000 iters=5  elapsed_ns=416000
+heap merge n=1000 iters=5  elapsed_ns=466000
+heap min n=1000 iters=5  elapsed_ns=22000
+heap iter-new n=1000 iters=5  elapsed_ns=39000
+heap unsorted-drain n=1000 iters=5  elapsed_ns=204678000
+heap #len n=1000 iters=5  elapsed_ns=29000
+heap fill n=2000 iters=1  elapsed_ns=159594000
+heap fill+drain n=2000 iters=1  elapsed_ns=561416000
+heap sorted-drain n=2000 iters=1  elapsed_ns=618389000
+heap insert n=2000 iters=5  elapsed_ns=382000
+heap merge n=2000 iters=5  elapsed_ns=447000
+heap min n=2000 iters=5  elapsed_ns=22000
+heap iter-new n=2000 iters=5  elapsed_ns=38000
+heap unsorted-drain n=2000 iters=5  elapsed_ns=395600000
+heap #len n=2000 iters=5  elapsed_ns=23000
 
 [-- Scaling: union-find --]
-union-find fill n=250 iters=1  elapsed_ns=668000
-union-find fill+connect n=250 iters=1  elapsed_ns=11881000
+union-find fill n=250 iters=1  elapsed_ns=670000
+union-find fill+connect n=250 iters=1  elapsed_ns=12420000
 union-find root n=250 iters=5  elapsed_ns=129000
-union-find merge-joined n=250 iters=5  elapsed_ns=224000
-union-find connected? n=250 iters=5  elapsed_ns=218000
-union-find size n=250 iters=5  elapsed_ns=123000
-union-find add n=250 iters=5  elapsed_ns=31000
-union-find iter-new n=250 iters=5  elapsed_ns=26000
-union-find components-drain n=250 iters=1  elapsed_ns=6492000
-union-find #len n=250 iters=5  elapsed_ns=17000
-union-find fill n=500 iters=1  elapsed_ns=1311000
-union-find fill+connect n=500 iters=1  elapsed_ns=23161000
-union-find root n=500 iters=5  elapsed_ns=122000
+union-find merge-joined n=250 iters=5  elapsed_ns=212000
+union-find connected? n=250 iters=5  elapsed_ns=207000
+union-find size n=250 iters=5  elapsed_ns=124000
+union-find add n=250 iters=5  elapsed_ns=30000
+union-find iter-new n=250 iters=5  elapsed_ns=28000
+union-find components-drain n=250 iters=1  elapsed_ns=6716000
+union-find #len n=250 iters=5  elapsed_ns=16000
+union-find fill n=500 iters=1  elapsed_ns=1277000
+union-find fill+connect n=500 iters=1  elapsed_ns=24994000
+union-find root n=500 iters=5  elapsed_ns=136000
 union-find merge-joined n=500 iters=5  elapsed_ns=216000
-union-find connected? n=500 iters=5  elapsed_ns=215000
-union-find size n=500 iters=5  elapsed_ns=122000
-union-find add n=500 iters=5  elapsed_ns=26000
+union-find connected? n=500 iters=5  elapsed_ns=211000
+union-find size n=500 iters=5  elapsed_ns=126000
+union-find add n=500 iters=5  elapsed_ns=28000
 union-find iter-new n=500 iters=5  elapsed_ns=26000
-union-find components-drain n=500 iters=1  elapsed_ns=12577000
-union-find #len n=500 iters=5  elapsed_ns=16000
-union-find fill n=1000 iters=1  elapsed_ns=2507000
-union-find fill+connect n=1000 iters=1  elapsed_ns=47364000
-union-find root n=1000 iters=5  elapsed_ns=150000
-union-find merge-joined n=1000 iters=5  elapsed_ns=217000
-union-find connected? n=1000 iters=5  elapsed_ns=213000
-union-find size n=1000 iters=5  elapsed_ns=125000
+union-find components-drain n=500 iters=1  elapsed_ns=13401000
+union-find #len n=500 iters=5  elapsed_ns=20000
+union-find fill n=1000 iters=1  elapsed_ns=2730000
+union-find fill+connect n=1000 iters=1  elapsed_ns=49054000
+union-find root n=1000 iters=5  elapsed_ns=128000
+union-find merge-joined n=1000 iters=5  elapsed_ns=213000
+union-find connected? n=1000 iters=5  elapsed_ns=205000
+union-find size n=1000 iters=5  elapsed_ns=123000
 union-find add n=1000 iters=5  elapsed_ns=30000
-union-find iter-new n=1000 iters=5  elapsed_ns=32000
-union-find components-drain n=1000 iters=1  elapsed_ns=24938000
-union-find #len n=1000 iters=5  elapsed_ns=20000
-union-find fill n=2000 iters=1  elapsed_ns=5086000
-union-find fill+connect n=2000 iters=1  elapsed_ns=95170000
-union-find root n=2000 iters=5  elapsed_ns=131000
-union-find merge-joined n=2000 iters=5  elapsed_ns=220000
-union-find connected? n=2000 iters=5  elapsed_ns=216000
+union-find iter-new n=1000 iters=5  elapsed_ns=27000
+union-find components-drain n=1000 iters=1  elapsed_ns=25209000
+union-find #len n=1000 iters=5  elapsed_ns=16000
+union-find fill n=2000 iters=1  elapsed_ns=5005000
+union-find fill+connect n=2000 iters=1  elapsed_ns=99802000
+union-find root n=2000 iters=5  elapsed_ns=125000
+union-find merge-joined n=2000 iters=5  elapsed_ns=211000
+union-find connected? n=2000 iters=5  elapsed_ns=207000
 union-find size n=2000 iters=5  elapsed_ns=124000
-union-find add n=2000 iters=5  elapsed_ns=29000
-union-find iter-new n=2000 iters=5  elapsed_ns=28000
-union-find components-drain n=2000 iters=1  elapsed_ns=48779000
-union-find #len n=2000 iters=5  elapsed_ns=17000
+union-find add n=2000 iters=5  elapsed_ns=26000
+union-find iter-new n=2000 iters=5  elapsed_ns=26000
+union-find components-drain n=2000 iters=1  elapsed_ns=52716000
+union-find #len n=2000 iters=5  elapsed_ns=15000
 
 [-- Scaling: union-find-map --]
-union-find-map fill n=250 iters=1  elapsed_ns=111124000
-union-find-map root n=250 iters=5  elapsed_ns=578000
-union-find-map fill n=500 iters=1  elapsed_ns=252298000
-union-find-map root n=500 iters=5  elapsed_ns=625000
-union-find-map fill n=1000 iters=1  elapsed_ns=565433000
-union-find-map root n=1000 iters=5  elapsed_ns=673000
-union-find-map fill n=2000 iters=1  elapsed_ns=1256208000
-union-find-map root n=2000 iters=5  elapsed_ns=709000
+union-find-map fill n=250 iters=1  elapsed_ns=119454000
+union-find-map root n=250 iters=5  elapsed_ns=571000
+union-find-map fill n=500 iters=1  elapsed_ns=268538000
+union-find-map root n=500 iters=5  elapsed_ns=627000
+union-find-map fill n=1000 iters=1  elapsed_ns=698494000
+union-find-map root n=1000 iters=5  elapsed_ns=706000
+union-find-map fill n=2000 iters=1  elapsed_ns=1361601000
+union-find-map root n=2000 iters=5  elapsed_ns=726000
 
 [-- Scaling: graph --]
-graph path fill n=250 iters=1  elapsed_ns=221417000
-graph star fill n=250 iters=1  elapsed_ns=188619000
-graph add-edge n=250 iters=5  elapsed_ns=3025000
-graph has-edge? n=250 iters=5  elapsed_ns=590000
+graph path fill n=250 iters=1  elapsed_ns=229272000
+graph star fill n=250 iters=1  elapsed_ns=200116000
+graph add-edge n=250 iters=5  elapsed_ns=3014000
+graph has-edge? n=250 iters=5  elapsed_ns=578000
 graph edge-get n=250 iters=5  elapsed_ns=547000
-graph has-vertex? n=250 iters=5  elapsed_ns=353000
-graph neighbors n=250 iters=5  elapsed_ns=615000
-graph remove-edge n=250 iters=5  elapsed_ns=3577000
-graph remove-vertex n=250 iters=5  elapsed_ns=6815000
-graph vertex-count n=250 iters=5  elapsed_ns=54000
-graph edge-count n=250 iters=5  elapsed_ns=20000
-graph vertices n=250 iters=1  elapsed_ns=2006000
-graph edges n=250 iters=1  elapsed_ns=16679000
-graph digraph remove-vertex n=250 iters=1  elapsed_ns=110517000
-graph path fill n=500 iters=1  elapsed_ns=494594000
-graph star fill n=500 iters=1  elapsed_ns=424156000
-graph add-edge n=500 iters=5  elapsed_ns=3298000
-graph has-edge? n=500 iters=5  elapsed_ns=602000
-graph edge-get n=500 iters=5  elapsed_ns=577000
-graph has-vertex? n=500 iters=5  elapsed_ns=391000
-graph neighbors n=500 iters=5  elapsed_ns=643000
-graph remove-edge n=500 iters=5  elapsed_ns=3978000
-graph remove-vertex n=500 iters=5  elapsed_ns=8178000
-graph vertex-count n=500 iters=5  elapsed_ns=60000
-graph edge-count n=500 iters=5  elapsed_ns=15000
-graph vertices n=500 iters=1  elapsed_ns=4420000
-graph edges n=500 iters=1  elapsed_ns=33655000
-graph digraph remove-vertex n=500 iters=1  elapsed_ns=246648000
-graph path fill n=1000 iters=1  elapsed_ns=1170190000
-graph star fill n=1000 iters=1  elapsed_ns=983349000
-graph add-edge n=1000 iters=5  elapsed_ns=4275000
-graph has-edge? n=1000 iters=5  elapsed_ns=649000
-graph edge-get n=1000 iters=5  elapsed_ns=628000
-graph has-vertex? n=1000 iters=5  elapsed_ns=428000
-graph neighbors n=1000 iters=5  elapsed_ns=683000
-graph remove-edge n=1000 iters=5  elapsed_ns=4734000
-graph remove-vertex n=1000 iters=5  elapsed_ns=9457000
-graph vertex-count n=1000 iters=5  elapsed_ns=55000
-graph edge-count n=1000 iters=5  elapsed_ns=15000
-graph vertices n=1000 iters=1  elapsed_ns=10607000
-graph edges n=1000 iters=1  elapsed_ns=73693000
-graph digraph remove-vertex n=1000 iters=1  elapsed_ns=544062000
-graph path fill n=2000 iters=1  elapsed_ns=2467212000
-graph star fill n=2000 iters=1  elapsed_ns=2074339000
-graph add-edge n=2000 iters=5  elapsed_ns=4057000
-graph has-edge? n=2000 iters=5  elapsed_ns=699000
-graph edge-get n=2000 iters=5  elapsed_ns=657000
-graph has-vertex? n=2000 iters=5  elapsed_ns=478000
-graph neighbors n=2000 iters=5  elapsed_ns=744000
-graph remove-edge n=2000 iters=5  elapsed_ns=4766000
-graph remove-vertex n=2000 iters=5  elapsed_ns=9014000
-graph vertex-count n=2000 iters=5  elapsed_ns=52000
-graph edge-count n=2000 iters=5  elapsed_ns=15000
-graph vertices n=2000 iters=1  elapsed_ns=25706000
-graph edges n=2000 iters=1  elapsed_ns=143229000
-graph digraph remove-vertex n=2000 iters=1  elapsed_ns=1122176000
+graph has-vertex? n=250 iters=5  elapsed_ns=379000
+graph neighbors n=250 iters=5  elapsed_ns=620000
+graph remove-edge n=250 iters=5  elapsed_ns=3986000
+graph remove-vertex n=250 iters=5  elapsed_ns=7505000
+graph vertex-count n=250 iters=5  elapsed_ns=60000
+graph edge-count n=250 iters=5  elapsed_ns=16000
+graph vertices n=250 iters=1  elapsed_ns=1549000
+graph edges n=250 iters=1  elapsed_ns=16691000
+graph project n=250 iters=1  elapsed_ns=150808000
+graph digraph remove-vertex n=250 iters=1  elapsed_ns=122056000
+graph path fill n=500 iters=1  elapsed_ns=520339000
+graph star fill n=500 iters=1  elapsed_ns=446070000
+graph add-edge n=500 iters=5  elapsed_ns=3772000
+graph has-edge? n=500 iters=5  elapsed_ns=679000
+graph edge-get n=500 iters=5  elapsed_ns=604000
+graph has-vertex? n=500 iters=5  elapsed_ns=411000
+graph neighbors n=500 iters=5  elapsed_ns=762000
+graph remove-edge n=500 iters=5  elapsed_ns=4175000
+graph remove-vertex n=500 iters=5  elapsed_ns=8080000
+graph vertex-count n=500 iters=5  elapsed_ns=54000
+graph edge-count n=500 iters=5  elapsed_ns=19000
+graph vertices n=500 iters=1  elapsed_ns=2809000
+graph edges n=500 iters=1  elapsed_ns=35182000
+graph project n=500 iters=1  elapsed_ns=332481000
+graph digraph remove-vertex n=500 iters=1  elapsed_ns=242691000
+graph path fill n=1000 iters=1  elapsed_ns=1163810000
+graph star fill n=1000 iters=1  elapsed_ns=1000720000
+graph add-edge n=1000 iters=5  elapsed_ns=3761000
+graph has-edge? n=1000 iters=5  elapsed_ns=996000
+graph edge-get n=1000 iters=5  elapsed_ns=685000
+graph has-vertex? n=1000 iters=5  elapsed_ns=437000
+graph neighbors n=1000 iters=5  elapsed_ns=713000
+graph remove-edge n=1000 iters=5  elapsed_ns=4639000
+graph remove-vertex n=1000 iters=5  elapsed_ns=9165000
+graph vertex-count n=1000 iters=5  elapsed_ns=57000
+graph edge-count n=1000 iters=5  elapsed_ns=16000
+graph vertices n=1000 iters=1  elapsed_ns=5987000
+graph edges n=1000 iters=1  elapsed_ns=66843000
+graph project n=1000 iters=1  elapsed_ns=714365000
+graph digraph remove-vertex n=1000 iters=1  elapsed_ns=529318000
+graph path fill n=2000 iters=1  elapsed_ns=2556088000
+graph star fill n=2000 iters=1  elapsed_ns=2230825000
+graph add-edge n=2000 iters=5  elapsed_ns=4602000
+graph has-edge? n=2000 iters=5  elapsed_ns=702000
+graph edge-get n=2000 iters=5  elapsed_ns=674000
+graph has-vertex? n=2000 iters=5  elapsed_ns=475000
+graph neighbors n=2000 iters=5  elapsed_ns=714000
+graph remove-edge n=2000 iters=5  elapsed_ns=4980000
+graph remove-vertex n=2000 iters=5  elapsed_ns=9426000
+graph vertex-count n=2000 iters=5  elapsed_ns=61000
+graph edge-count n=2000 iters=5  elapsed_ns=18000
+graph vertices n=2000 iters=1  elapsed_ns=11091000
+graph edges n=2000 iters=1  elapsed_ns=140842000
+graph project n=2000 iters=1  elapsed_ns=1626780000
+graph digraph remove-vertex n=2000 iters=1  elapsed_ns=1108066000

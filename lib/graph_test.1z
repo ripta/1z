@@ -281,6 +281,73 @@ test-persistence-remove-vertex: ( -- ) [
   graph-edge-count 3 "with all three edges" assert=
 ] ;
 
+\ --- Projection ---
+
+\ The dense form is private and the runner borrows the sibling's privates in, so the group
+\ below calls project and dense-index by name.
+
+\ The dense target indices stored at one vertex's own index.
+dense-targets: ( dg i -- array ) [
+  swap adjacency>> swap #nth [ target>> ] #map #collect
+] ;
+
+test-projection-adjacency-order: ( -- ) [
+  "projection" test-section
+  [ cmp ] <graph> 1 2 graph-add-edge 2 3 graph-add-edge project
+  dup 1 dense-targets { 2 0 }
+  "a vertex's entries are its stored ones, newest first" assert=
+  dup 0 dense-targets { 1 } "each names the other end by index" assert=
+  adjacency>> 1 #nth 0 #nth edge>> target>> 3 "and carries the record it came from" assert=
+  [ cmp ] <graph> 1 2 weight: graph-add-edge-with-payload project
+  adjacency>> 0 #nth 0 #nth edge>> payload>> weight: "the payload travels with it" assert=
+] ;
+
+test-projection-digraph-out-edges: ( -- ) [
+  [ cmp ] <digraph> 1 2 graph-add-edge project
+  dup 0 dense-targets { 1 } "a digraph entry sits at its source" assert=
+  1 dense-targets { } "and nowhere else" assert=
+] ;
+
+test-projection-empty: ( -- ) [
+  [ cmp ] <graph> project
+  dup vertices>> #len 0 "an empty graph projects to no vertices" assert=
+  adjacency>> #len 0 "and no adjacency slots" assert=
+] ;
+
+test-projection-index-round-trip: ( -- ) [
+  [ cmp ] <graph> triangle
+  dup project swap graph-vertices
+  over vertices>> >array over "the numbering follows the comparator order" assert=
+  dup 2 pick-n [ tuck swap dense-index swap vertices>> swap #nth ] curry #map #collect
+  swap "every vertex survives the round trip" assert=
+  drop
+] ;
+
+test-projection-isolated-vertex: ( -- ) [
+  [ cmp ] <graph> 1 2 graph-add-edge 5 graph-add-vertex project
+  dup 2 dense-targets { } "an isolated vertex gets an empty slot" assert=
+  adjacency>> #len 3 "and a slot of its own" assert=
+] ;
+
+test-projection-scale: ( -- ) [
+  [ cmp ] <graph> 1000 parallel-bundle project
+  0 dense-targets #len 1000 "a 1000-entry list projects" assert=
+  [ cmp ] <graph> 200 star project
+  dup 0 dense-targets #len 200 "so does a 200-leaf center" assert=
+  vertices>> #len 201 "with every leaf numbered" assert=
+] ;
+
+test-projection-self-loop: ( -- ) [
+  [ cmp ] <graph> 1 1 graph-add-edge project
+  0 dense-targets { 0 } "a self-loop points at its own index, once" assert=
+] ;
+
+test-projection-unknown-vertex: ( -- ) [
+  [ cmp ] <graph> 1 graph-add-vertex project
+  [ 9 dense-index ] curry key-not-found:
+  "dense-index on an unknown vertex throws" assert-error-type
+] ;
+
 \ --- Protocol decline ---
 
 test-protocol-no-iterator: ( -- ) [

@@ -1,7 +1,7 @@
 \ The graph module in isolation: nothing here imports "bst" or "cons-list", so the
-\ adjacency machinery's internal <bst-map>, map>array, map-delete, key>>,
-\ unmake-kv-pair, head, tail and list-len uses must all resolve from the module's own
-\ imports. The unit suite imports "ranges" for its own loops, which would mask a
+\ adjacency machinery's internal <bst-map>, unmake-bst-map, tree-each, map-delete,
+\ key>>, unmake-kv-pair, head, tail and list-len uses must all resolve from the module's
+\ own imports. The unit suite imports "ranges" for its own loops, which would mask a
 \ missing import in the library.
 \
 \ Each reading runs inside a word so no graph rests on the stack between statements;

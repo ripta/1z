@@ -18,7 +18,7 @@
 \ subject recoverable from the call site. Contents ship under explicit per-reading
 \ names instead.
 
-use { bst-map: <bst-map>: map-insert: map-lookup: map-delete: map-size: map-empty?: map>array: key>>: unmake-kv-pair: } "bst" ;
+use { bst-map: <bst-map>: map-insert: map-lookup: map-delete: map-size: map-empty?: unmake-bst-map: tree-each: key>>: unmake-kv-pair: } "bst" ;
 use { nil: cons: cons?: head: tail: list-len: } "cons-list" ;
 
 \\ One edge. `source` and `target` are vertices, and `payload` is an arbitrary
@@ -170,13 +170,23 @@ private{
   \ The two sweeps below account for their own removals, so they discard the count.
   strip-back-edge: ( g: graph u v -- g' ) [ drop-edges-to drop ] ;
 
+  \ Every adjacency entry as a kv-pair, ascending under the comparator. O(V).
+  \
+  \ Not map>array: that builds its result with the array #push, which allocates and copies
+  \ the whole array on every call, so it costs O(V^2). The in-order walk into a mutable
+  \ vector is what makes this and its three callers meet the bounds they document.
+  map-entries: ( m: bst-map -- vector ) [
+    [ ] make-vector dup [ swap #push! drop ] curry
+    <rot- unmake-bst-map swap tree-each
+  ] ;
+
   \ Every vertex, ascending under the comparator. O(V).
-  vertex-array: ( g: graph -- array ) [ adjacency>> map>array [ key>> ] #map #collect ] ;
+  vertex-array: ( g: graph -- array ) [ adjacency>> map-entries [ key>> ] #map #collect ] ;
 
   \ Every stored adjacency entry. An undirected edge appears twice, once per endpoint.
   \ O(V + E).
   all-entries: ( g: graph -- array ) [
-    adjacency>> map>array
+    adjacency>> map-entries
     [ ] make-vector swap
     [ unmake-kv-pair nip entries>vector ] #each
     >array
@@ -406,3 +416,98 @@ graph-edge-count: ( g: graph -- n ) [ edge-count>> ] ;
 \\   [ cmp ] <graph> graph-empty?
 \\   => t
 graph-empty?: ( g: graph -- ? ) [ adjacency>> map-empty? ] ;
+
+\ The dense projection every algorithm runs on. Reading adjacency through the persistent
+\ map would turn each visited mark and distance write into a map probe, which costs
+\ breadth-first search a log factor and Dijkstra two. Projecting once per call moves that
+\ cost out of the inner loop: the algorithm reads vector slots at O(1), and translates its
+\ results back to vertex values on the way out.
+\
+\ The two struct declarations sit in their own block. A private{ } body is parsed whole
+\ before it runs, so a parse-time type reference resolves only names an earlier top-level
+\ statement installed.
+
+private{
+  \\ One dense adjacency entry: the target's dense index, and the stored record the entry
+  \\ came from. The index is what an unweighted algorithm reads. The record is where a
+  \\ weighted one reads its payload, so a weight projection costs no second map lookup.
+  dense-edge: struct{ target: fixnum edge: graph-edge } ;
+
+  \\ A graph in dense form. `vertices` translates an index back to its vertex and
+  \\ `indices` translates the other way, both over `[0, V)`. `adjacency` holds each
+  \\ vertex's dense entries at that vertex's own index.
+  dense-graph: struct{ vertices: vector indices: bst-map adjacency: vector } ;
+}
+
+private{
+  \ Drain a sequence into a fresh vector.
+  seq>vector: ( seq -- vector ) [
+    [ ] make-vector dup [ swap #push! drop ] curry <rot- swap #each
+  ] ;
+
+  \ Pass one: number the vertices in entry order, which is ascending under the comparator.
+  \ Both translations fall out of the same walk. O(V log V), the map inserts.
+  index-vertices: ( comparator: quotation entries: vector -- vertices indices ) [
+    [ key>> ] #map seq>vector
+    swap <bst-map>
+    0 swap
+    [ 1 pick-n 3 pick-n #len < ]
+    [ 2 pick-n 2 pick-n #nth 2 pick-n map-insert swap 1 + swap ]
+    while
+    swap drop
+  ] ;
+
+  \ One vertex's edge list as dense records, head first, so the newest entry leads as
+  \ graph-neighbors does. O(deg log V), one index lookup per entry.
+  \
+  \ The lookup cannot miss: both endpoints of an edge are stored as vertices when it is
+  \ added, and removing a vertex strips the entries that name it.
+  entries>dense: ( indices: bst-map list -- vector ) [
+    [ ] make-vector swap
+    [ dup cons? ] [
+      dup head
+      dup target>> 4 pick-n swap map-lookup option:some>
+      swap make-dense-edge
+      2 pick-n swap #push! drop
+      tail
+    ] while
+    drop nip
+  ] ;
+
+  \ Pass two: each vertex's entries, at that vertex's own index. It cannot share pass one's
+  \ walk, since an edge leaving the first vertex may target the last and the map has to be
+  \ complete before any target is translated. O(E log V).
+  dense-adjacency: ( indices: bst-map entries: vector -- adjacency ) [
+    0 [ ] make-vector
+    [ 1 pick-n 3 pick-n #len < ]
+    [
+      2 pick-n 2 pick-n #nth unmake-kv-pair nip
+      4 pick-n swap entries>dense
+      #push!
+      swap 1 + swap
+    ]
+    while
+    swap drop nip nip
+  ] ;
+
+  \ Project the graph to dense form, O((V + E) log V): one walk of the vertices to build
+  \ the numbering, and one of the stored entries to translate their targets against it.
+  \ Both terms carry the map's log factor, the first from its inserts and the second from
+  \ its lookups.
+  \
+  \ The result is a snapshot. Every algorithm builds its own, so a graph run from many
+  \ sources pays one projection per run.
+  project: ( g: graph -- dense-graph ) [
+    dup comparator>> swap adjacency>> map-entries
+    dup [ index-vertices ] dip
+    over swap dense-adjacency
+    make-dense-graph
+  ] ;
+
+  \ The dense index of a vertex an algorithm was handed. Throws `key-not-found` for a
+  \ vertex the graph does not have, as the public lookups do.
+  dense-index: ( dg: dense-graph v -- i ) [
+    [ indices>> ] dip map-lookup
+    dup option:some? [ option:some> ] [ drop throw-unknown-vertex ] if
+  ] ;
+}
