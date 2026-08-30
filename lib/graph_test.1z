@@ -34,6 +34,23 @@ loop4: ( g -- g ) [ 1 2 graph-add-edge 2 3 graph-add-edge 3 4 graph-add-edge 1 4
 \ A fork: 1 joined to 2 and 3, with 3 carrying a further 4.
 fork: ( g -- g ) [ 1 2 graph-add-edge 1 3 graph-add-edge 3 4 graph-add-edge ] ;
 
+\ A detour: 1 and 3 joined directly at weight 10 and by way of 2 at weight 1 each, so the
+\ cheapest route between them is the one with the most edges. 3 is also queued twice, which
+\ is what makes it the stale-entry fixture as well.
+detour: ( g -- g ) [
+  1 2 1 graph-add-edge-with-payload
+  2 3 1 graph-add-edge-with-payload
+  1 3 10 graph-add-edge-with-payload
+] ;
+
+\ A path 0-1-2-...-n with every edge at weight 1.
+weighted-path: ( g n -- g ) [
+  1 swap 1 + <range> [ dup 1 - swap 1 graph-add-edge-with-payload ] #each
+] ;
+
+\ A weighted-path closed into a ring.
+weighted-ring: ( g n -- g ) [ dup [ weighted-path ] dip 0 1 graph-add-edge-with-payload ] ;
+
 \ --- Add edge ---
 
 test-add-edge-creates-endpoints: ( -- ) [
@@ -312,6 +329,88 @@ test-digraph-remove-vertex-counts-both-ways: ( -- ) [
   graph-edge-count 0 "an out-edge and an in-edge both leave the count" assert=
 ] ;
 
+\ --- Dijkstra ---
+
+test-dijkstra-digraph-out-edges: ( -- ) [
+  "dijkstra" test-section
+  [ cmp ] <digraph> 1 2 5 graph-add-edge-with-payload 3 2 1 graph-add-edge-with-payload
+  1 [ payload>> ] graph-dijkstra
+  dup order>> { 1 2 } "a digraph is followed along its out-edges only" assert=
+  3 graph-traversal-distance? option:none? "the in-edge's source is not reached" assert-true
+] ;
+
+test-dijkstra-distances-beat-hops: ( -- ) [
+  [ cmp ] <graph> detour
+  dup 1 [ payload>> ] graph-dijkstra
+  dup 3 graph-traversal-distance? option:some> 2
+  "the cheapest route is taken over the shortest one" assert=
+  3 graph-traversal-parent? option:some> 2 "so the far end names the vertex on it" assert=
+  1 graph-breadth-first 3 graph-traversal-distance? option:some> 1
+  "where a breadth-first walk counts edges and takes the direct one" assert=
+] ;
+
+test-dijkstra-negative-weight: ( -- ) [
+  [ [ cmp ] <graph> detour 1 [ drop -1 ] graph-dijkstra ] invalid-argument:
+  "a negative weight has no cheapest path" assert-error-type
+] ;
+
+test-dijkstra-order-by-distance: ( -- ) [
+  [ cmp ] <graph> 1 3 2 graph-add-edge-with-payload 1 2 7 graph-add-edge-with-payload
+  dup 1 [ payload>> ] graph-dijkstra order>> { 1 3 2 }
+  "vertices settle nearest first" assert=
+  1 graph-breadth-first order>> { 1 2 3 }
+  "where a breadth-first walk takes them in stored order" assert=
+] ;
+
+test-dijkstra-parallel-edges: ( -- ) [
+  [ cmp ] <graph> 1 2 9 graph-add-edge-with-payload 1 2 4 graph-add-edge-with-payload
+  1 [ payload>> ] graph-dijkstra 2 graph-traversal-distance? option:some> 4
+  "the cheaper of two edges between one pair wins" assert=
+] ;
+
+test-dijkstra-source-has-no-parent: ( -- ) [
+  [ cmp ] <graph> detour 1 [ payload>> ] graph-dijkstra
+  dup 1 graph-traversal-parent? option:none? "the source was reached from nowhere" assert-true
+  1 graph-traversal-distance? option:some> 0 "and sits at distance zero" assert=
+] ;
+
+test-dijkstra-stale-entry-dropped: ( -- ) [
+  [ cmp ] <graph> detour 1 [ payload>> ] graph-dijkstra
+  dup order>> { 1 2 3 } "a vertex queued by two routes settles once" assert=
+  3 graph-traversal-distance? option:some> 2 "at the cheaper of them" assert=
+] ;
+
+test-dijkstra-two-projections: ( -- ) [
+  [ cmp ] <graph> detour
+  dup 1 [ payload>> ] graph-dijkstra 3 graph-traversal-distance? option:some> 2
+  "the stored weights put the far end two away" assert=
+  1 [ drop 1 ] graph-dijkstra 3 graph-traversal-distance? option:some> 1
+  "and a second projection over the same graph puts it one away" assert=
+] ;
+
+test-dijkstra-unknown-source: ( -- ) [
+  [ [ cmp ] <graph> 1 graph-add-vertex 9 [ payload>> ] graph-dijkstra ] key-not-found:
+  "a source the graph does not have throws" assert-error-type
+] ;
+
+test-dijkstra-unreached-absent: ( -- ) [
+  [ cmp ] <graph> 1 2 1 graph-add-edge-with-payload 8 9 1 graph-add-edge-with-payload
+  1 [ payload>> ] graph-dijkstra
+  dup order>> { 1 2 } "only the source's own component is settled" assert=
+  dup 9 graph-traversal-distance? option:none? "an unreached vertex has no distance" assert-true
+  9 graph-traversal-parent? option:none? "and no parent" assert-true
+] ;
+
+\ Only f is falsy, so a vertex settled at distance zero has to read as settled rather than
+\ as unvisited. A zero-weight edge is what puts a reached vertex there.
+
+test-dijkstra-zero-weight: ( -- ) [
+  [ cmp ] <graph> 1 2 0 graph-add-edge-with-payload 2 3 4 graph-add-edge-with-payload
+  1 [ payload>> ] graph-dijkstra
+  dup order>> { 1 2 3 } "a vertex settled at distance zero is not revisited" assert=
+  2 graph-traversal-distance? option:some> 0 "and a zero-weight edge costs nothing" assert=
+] ;
+
 \ --- Edge record ---
 
 test-edge-record-fields: ( -- ) [
@@ -571,6 +670,16 @@ test-scale-traversal: ( -- ) [
   100 graph-traversal-distance? option:some> 100 "and the far side is half the ring away" assert=
   dup 0 graph-depth-first order>> #len 201 "a 200-deep chain walks without recursing" assert=
   graph-connected-components #len 1 "and the ring is one component" assert=
+] ;
+
+\ A ring is also where stale entries pile up: both ways round reach the far side, so half the
+\ ring is queued twice. The size matches the unweighted walk above, since a shortest-path walk
+\ pays the same projection plus one heap push per edge.
+
+test-scale-weighted-traversal: ( -- ) [
+  [ cmp ] <graph> 200 weighted-ring 0 [ payload>> ] graph-dijkstra
+  dup order>> #len 201 "every vertex of the ring settles once" assert=
+  100 graph-traversal-distance? option:some> 100 "and the far side is half the ring away" assert=
 ] ;
 
 \ --- Self loop ---

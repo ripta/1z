@@ -20,6 +20,7 @@
 
 use { bst-map: <bst-map>: map-insert: map-lookup: map-delete: map-size: map-empty?: unmake-bst-map: tree-each: key>>: unmake-kv-pair: } "bst" ;
 use { nil: cons: cons?: head: tail: list-len: } "cons-list" ;
+use { <heap>: heap-insert: heap-pop-min?: } "heap" ;
 
 \\ One edge. `source` and `target` are vertices, and `payload` is an arbitrary
 \\ per-edge value; an unweighted edge stores `f`. Adjacency stores this record with
@@ -572,7 +573,9 @@ private{
   ] ;
 
   \ Record v as reached from origin at the given depth, and append it to the visit order.
-  mark-visit: ( walk: dense-walk v: fixnum origin depth: fixnum -- ) [
+  \ The depth is untyped because it is an edge count for the traversals and a weight the
+  \ caller's projection produced for the shortest-path walk.
+  mark-visit: ( walk: dense-walk v: fixnum origin depth -- ) [
     3 pick-n depths>> 3 pick-n 2 pick-n #nth! drop
     3 pick-n origins>> 3 pick-n 3 pick-n #nth! drop
     2drop
@@ -945,4 +948,132 @@ graph-connected-components: ( g: graph -- array ) [
   over swap undirected-neighbors
   component-labels
   group-by-label
+] ;
+
+\ Dijkstra runs on the same dense form the traversals do, with the heap standing in for the
+\ breadth-first frontier. A frontier settles a vertex the first time it is reached. That is
+\ a cheapest route only when every edge costs the same. The heap settles a vertex when it
+\ comes off cheapest instead.
+\
+\ A stale route is dropped rather than corrected. The persistent heap has no node handles,
+\ so heap-decrease-key is an O(n) scan, and its own doc comment names lazy deletion as the
+\ alternative for this consumer. A cheaper route to a vertex is queued as a second entry.
+\ Whichever entry loses is dropped when its vertex comes off already settled.
+
+private{
+  \\ One queued route: the distance a path through `origin` reaches `vertex` at. `origin` is
+  \\ f for the source, which was reached from nowhere, as `dense-walk` records it.
+  dijkstra-entry: struct{ distance: any vertex: fixnum origin: any } ;
+
+  \\ The three things a relaxation reads and one run never changes. `queue` is a one-element
+  \\ vector holding the heap, since a step fed to #each cannot hand a persistent value back.
+  dijkstra-scratch: struct{ walk: dense-walk queue: vector weight: quotation } ;
+}
+
+private{
+  throw-negative-weight: never-returns ( -- * ) [
+    f "shortest paths require non-negative edge weights" EInvalidArgument make-error throw
+  ] ;
+
+  \ Take the queue's cheapest route, leaving the rest boxed. option:none once it is drained.
+  queue-pop?: ( st: dijkstra-scratch -- option ) [
+    queue>>
+    dup 0 #nth heap-pop-min?
+    swap 2 pick-n 0 <rot- #nth! drop
+    nip
+  ] ;
+
+  \ Add a route to the boxed queue.
+  queue-push: ( st: dijkstra-scratch e: dijkstra-entry -- ) [
+    [ queue>> ] dip
+    over 0 #nth swap heap-insert
+    swap 0 <rot- #nth! drop
+  ] ;
+
+  \ One edge's weight under the caller's projection. This is the only place a weight is
+  \ read, so the guard here sees every weight the walk examines, and only those.
+  edge-weight: ( e: dense-edge weight: quotation -- w ) [
+    [ edge>> ] dip call
+    dup 0 cmp ordering:lt? [ throw-negative-weight ] when
+  ] ;
+
+  \ Offer one of u's edges as a route to its target, at the distance through u. A settled
+  \ target cannot improve, so nothing is queued for it. A target that already has a better
+  \ pending route is left to the check on pop. The entry comes first so a curried form feeds
+  \ #each.
+  dijkstra-relax: ( e: dense-edge st: dijkstra-scratch dist u: fixnum -- ) [
+    3 pick-n target>>
+    3 pick-n walk>> depths>> over #nth
+    [ ]
+    [
+      4 pick-n 4 pick-n weight>> edge-weight
+      3 pick-n +
+      1 pick-n 3 pick-n make-dijkstra-entry
+      4 pick-n swap queue-push
+    ]
+    if
+    2drop 2drop drop
+  ] ;
+
+  \ Settle one queued route, or drop it when a cheaper one already settled its vertex.
+  \ Settling records the distance and the origin, then offers every edge leaving the vertex.
+  dijkstra-settle: ( dg: dense-graph st: dijkstra-scratch e: dijkstra-entry -- ) [
+    dup vertex>>
+    2 pick-n walk>> depths>> over #nth
+    [ ]
+    [
+      2 pick-n walk>> 1 pick-n 3 pick-n origin>> 4 pick-n distance>> mark-visit
+      3 pick-n adjacency>> over #nth
+      3 pick-n 3 pick-n distance>> 3 pick-n [ dijkstra-relax ] curry curry curry
+      #each
+    ]
+    if
+    2drop 2drop
+  ] ;
+
+  \ Dijkstra from s, seeded with the source at distance zero. Each pop settles a vertex or
+  \ is dropped as stale, and each settlement queues a route along every edge leaving it.
+  \ O(E log V): one push per edge, and one pop for each.
+  dijkstra-walk: ( dg: dense-graph s: fixnum weight: quotation -- walk: dense-walk ) [
+    2 pick-n vertices>> #len <dense-walk>
+    [ ] make-vector [ [ distance>> ] dip distance>> cmp ] <heap> #push!
+    2 pick-n make-dijkstra-scratch
+    dup 0 4 pick-n f make-dijkstra-entry queue-push
+    [ 2drop ] dip
+    [
+      dup queue-pop?
+      dup option:some?
+      [ option:some> [ 1 pick-n 1 pick-n ] dip dijkstra-settle t ]
+      [ drop f ]
+      if
+    ] loop
+    nip walk>>
+  ] ;
+}
+
+\\ Cheapest paths from the source, priced by the weight projection. `distances` is a
+\\ cheapest path's total weight, where a breadth-first walk's is an edge count. `parents`
+\\ names the vertex before this one on that path, so a route reads back by following
+\\ `parents` from the far end. `order` is settle order, so it is non-decreasing in distance.
+\\ Among equal distances it follows the queue rather than the comparator. Only reached
+\\ vertices appear, as in the traversals.
+\\
+\\ The projection has effect `( edge: graph-edge -- weight )`. It is an argument rather than
+\\ a field on the graph, so one graph runs as distance and then as time with no second
+\\ graph. Weights are compared with `cmp` and added with `+`, and the source starts at 0. A
+\\ digraph is followed along its out-edges.
+\\
+\\ O((V + E) log V), the projection's cost, with the search itself O(E log V). Throws
+\\ `key-not-found` when the source is not a vertex. Throws `invalid-argument` on a negative
+\\ weight; only the edges the walk examines are priced, so only those can raise.
+\\
+\\   [ cmp ] <graph> 1 2 1 graph-add-edge-with-payload 2 3 1 graph-add-edge-with-payload
+\\   1 3 10 graph-add-edge-with-payload 1 [ payload>> ] graph-dijkstra
+\\   3 graph-traversal-distance? option:some>
+\\   => 2
+graph-dijkstra: ( g: graph source weight: quotation -- traversal: graph-traversal ) [
+  [ over project tuck swap dense-index ] dip
+  [ over swap ] dip
+  dijkstra-walk
+  walk>traversal
 ] ;

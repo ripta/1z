@@ -13,6 +13,10 @@ Stack: [ ]
 Stack: [ ]
 Stack: [ ]
 Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
 === graph in isolation ===
 Stack: [ ]
 Stack: [ graph{ adjacency: <bst-map bst{ root: <tree-node:leaf leaf:> comparator: [ [ cmp ] [ [ key>> ] dip key>> ] dip call ] }> comparator: [ cmp ] directed?: f edge-count: 0 } ]
@@ -46,7 +50,13 @@ PASS: the chain sorts into its one possible order
 Stack: [ ]
 PASS: the triangle and the isolated vertex are two components
 Stack: [ ]
+PASS: the cheapest route to the far end is the long way round
+Stack: [ ]
+PASS: and it arrives from the vertex on that way
+Stack: [ ]
 PASS: an undirected graph has no topological order
 Stack: [ ]
 PASS: a cycle closes off the order
+Stack: [ ]
+PASS: a negative weight has no cheapest path
 Stack: [ ]
