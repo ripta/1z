@@ -1,0 +1,13 @@
+\ The graph module in isolation: nothing here imports "bst" or "cons-list", so the
+\ constructor's internal <bst-map> use must resolve from the module's own imports.
+\ The unit suite imports both for its own assertions, which would mask a missing
+\ import in the library.
+
+use "testing" ;
+use "graph" ;
+
+"graph in isolation" test-section
+[ cmp ] <graph>
+dup graph? "the constructor yields a graph" assert-true
+graph-directed? "an undirected graph reports f" assert-false
+[ cmp ] <digraph> graph-directed? "a digraph reports t" assert-true

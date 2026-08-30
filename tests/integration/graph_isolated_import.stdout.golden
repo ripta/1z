@@ -1,0 +1,9 @@
+=== graph in isolation ===
+Stack: [ ]
+Stack: [ graph{ adjacency: <bst-map bst{ root: <tree-node:leaf leaf:> comparator: [ [ cmp ] [ [ key>> ] dip key>> ] dip call ] }> comparator: [ cmp ] directed?: f } ]
+PASS: the constructor yields a graph
+Stack: [ graph{ adjacency: <bst-map bst{ root: <tree-node:leaf leaf:> comparator: [ [ cmp ] [ [ key>> ] dip key>> ] dip call ] }> comparator: [ cmp ] directed?: f } ]
+PASS: an undirected graph reports f
+Stack: [ ]
+PASS: a digraph reports t
+Stack: [ ]

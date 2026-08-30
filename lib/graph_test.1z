@@ -1,0 +1,113 @@
+\ Unit tests for lib/graph.1z.
+\
+\ Only the type, the constructors, and the flag are public at this stage. The
+\ adjacency machinery is private, and the runner borrows it in, so the vertex and
+\ edge groups call ensure-vertex, insert-edge-entry, and vertex-edges? directly.
+\ The runner executes test words in alphabetical order, so each group's section
+\ banner sits on its alphabetically first word.
+
+use "graph" ;
+use { map-empty?: map-size: } "bst" ;
+use { list-len: list-nth: nil?: } "cons-list" ;
+use "testing" ;
+
+\ --- Constructors ---
+
+test-construct-digraph-flag: ( -- ) [
+  "constructors" test-section
+  [ cmp ] <digraph> graph-directed? "a digraph is directed" assert-true
+] ;
+
+test-construct-empty-adjacency: ( -- ) [
+  [ cmp ] <graph> adjacency>> map-empty? "a fresh graph has no vertices" assert-true
+] ;
+
+test-construct-graph-flag: ( -- ) [
+  [ cmp ] <graph> graph-directed? "an undirected graph is not directed" assert-false
+] ;
+
+test-construct-same-type: ( -- ) [
+  [ cmp ] <graph> graph? "the undirected constructor yields a graph" assert-true
+  [ cmp ] <digraph> graph? "the directed constructor yields the same type" assert-true
+] ;
+
+\ --- Edge record ---
+
+test-edge-record-fields: ( -- ) [
+  "edge record" test-section
+  1 2 weight: make-graph-edge
+  dup source>> 1 "the record keeps its source" assert=
+  dup target>> 2 "the record keeps its target" assert=
+  payload>> weight: "the record keeps its payload" assert=
+] ;
+
+test-edge-record-predicate: ( -- ) [
+  1 2 f make-graph-edge graph-edge? "an edge record satisfies graph-edge?" assert-true
+  5 graph-edge? "a bare value does not" assert-false
+] ;
+
+\ --- Edge entries ---
+
+test-insert-edge-appends: ( -- ) [
+  "edge entries" test-section
+  [ cmp ] <graph> 1 ensure-vertex 2 ensure-vertex
+  1 1 2 f make-graph-edge insert-edge-entry
+  dup 1 vertex-edges? option:some>
+  dup list-len 1 "the source's list holds one edge" assert=
+  dup 0 list-nth source>> 1 "the stored edge keeps its source" assert=
+  dup 0 list-nth target>> 2 "the stored edge keeps its target" assert=
+  0 list-nth payload>> f "the payload-less edge stores f" assert=
+  2 vertex-edges? option:some> nil? "the target's list stays empty" assert-true
+] ;
+
+test-insert-edge-persistent: ( -- ) [
+  [ cmp ] <graph> 1 ensure-vertex 2 ensure-vertex
+  dup 1 1 2 f make-graph-edge insert-edge-entry
+  1 vertex-edges? option:some> list-len 1 "the new version holds the edge" assert=
+  1 vertex-edges? option:some> nil? "the prior version is unchanged" assert-true
+] ;
+
+test-insert-edge-second-grows: ( -- ) [
+  [ cmp ] <graph> 1 ensure-vertex 2 ensure-vertex 3 ensure-vertex
+  1 1 2 f make-graph-edge insert-edge-entry
+  1 1 3 f make-graph-edge insert-edge-entry
+  1 vertex-edges? option:some> list-len 2 "a second edge grows the list" assert=
+] ;
+
+\ --- Vertices ---
+
+test-vertex-domains: ( -- ) [
+  "vertices" test-section
+  [ cmp ] <graph> 7 ensure-vertex 7 vertex-edges? option:some?
+  "a fixnum vertex is stored" assert-true
+  [ cmp ] <graph> "a" ensure-vertex "a" vertex-edges? option:some?
+  "a string vertex is stored" assert-true
+  [ [ >string ] dip >string cmp ] <graph> left: ensure-vertex left: vertex-edges? option:some?
+  "a symbol vertex is stored" assert-true
+  [ cmp ] <graph> 7 ensure-vertex 9 vertex-edges? option:some?
+  "an unknown vertex reads none" assert-false
+] ;
+
+test-vertex-ensure-idempotent: ( -- ) [
+  [ cmp ] <graph> 1 ensure-vertex 1 ensure-vertex
+  adjacency>> map-size 1 "a repeated ensure adds nothing" assert=
+] ;
+
+test-vertex-ensure-keeps-edges: ( -- ) [
+  [ cmp ] <graph> 1 ensure-vertex 2 ensure-vertex
+  1 1 2 f make-graph-edge insert-edge-entry
+  1 ensure-vertex
+  1 vertex-edges? option:some> list-len 1 "a re-ensured vertex keeps its edges" assert=
+] ;
+
+test-vertex-isolated-empty-list: ( -- ) [
+  [ cmp ] <graph> 1 ensure-vertex 1 vertex-edges? option:some> nil?
+  "an isolated vertex is stored with an empty edge list" assert-true
+] ;
+
+test-vertex-persistence: ( -- ) [
+  [ cmp ] <graph>
+  dup 1 ensure-vertex
+  adjacency>> map-size 1 "the new version holds the vertex" assert=
+  adjacency>> map-size 0 "the prior version is unchanged" assert=
+] ;

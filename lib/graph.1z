@@ -1,0 +1,74 @@
+\ lib/graph.1z - Persistent graph over a bst-map adjacency.
+\
+\ Adjacency is a persistent `bst-map` from a vertex to a `cons-list` of `graph-edge`
+\ records, so an edge insert is O(log V) and building E edges is O(E log V). Vertices
+\ are arbitrary values identified by the comparator the constructor takes. A vertex
+\ with no edges is stored with an empty edge list, so isolated vertices exist. One
+\ type serves both kinds: the `directed?` flag distinguishes a digraph, and the edge
+\ words consult it rather than splitting the type.
+\
+\ The graph registers no sequence protocol method, `>iterator` included. Vertices and
+\ edges are both first-class readings, so `#len` and a drained `#count` would have no
+\ subject recoverable from the call site. Contents ship under explicit per-reading
+\ names instead.
+
+use { bst-map: <bst-map>: map-insert: map-lookup: } "bst" ;
+use { nil: cons: } "cons-list" ;
+
+\\ One edge. `source` and `target` are vertices, and `payload` is an arbitrary
+\\ per-edge value; an unweighted edge stores `f`. Adjacency stores this record with
+\\ `source` filled in, so every edge-yielding word returns the same type.
+graph-edge: struct{ source target payload } ;
+
+\\ A persistent graph over arbitrary vertices. `adjacency` maps a vertex to the
+\\ cons-list of `graph-edge` records leaving it. `comparator` has effect
+\\ `( a b -- ordering )`, as `cmp` does, and identifies vertices. `directed?` records
+\\ which constructor built the graph.
+graph: struct{ adjacency: bst-map comparator: quotation directed?: boolean } ;
+
+\\ An empty undirected graph over vertices ordered by the comparator.
+\\
+\\   [ cmp ] <graph> graph-directed?
+\\   => f
+<graph>: ( comparator: quotation -- graph ) [ dup <bst-map> swap f make-graph ] ;
+
+\\ An empty directed graph over vertices ordered by the comparator.
+\\
+\\   [ cmp ] <digraph> graph-directed?
+\\   => t
+<digraph>: ( comparator: quotation -- graph ) [ dup <bst-map> swap t make-graph ] ;
+
+\\ Whether the graph is directed.
+\\
+\\   [ cmp ] <digraph> graph-directed?
+\\   => t
+graph-directed?: ( g: graph -- ? ) [ directed?>> ] ;
+
+private{
+  \ Rebuild the graph around a new adjacency map, keeping the comparator and the
+  \ flag. Every persistent update routes its rewrap through here.
+  with-adjacency: ( g: graph adj: bst-map -- g' ) [
+    swap unmake-graph [ drop ] 2dip make-graph
+  ] ;
+
+  \ The edge list stored under v, or `option:none` for an unknown vertex. O(log V).
+  vertex-edges?: ( g: graph v -- option ) [ [ adjacency>> ] dip map-lookup ] ;
+
+  \ Store v with an empty edge list when absent. A known vertex is left as it is,
+  \ edges included. O(log V).
+  ensure-vertex: ( g: graph v -- g' ) [
+    2dup vertex-edges? option:some?
+    [ drop ]
+    [ over adjacency>> swap nil map-insert with-adjacency ]
+    if
+  ] ;
+
+  \ Cons the edge onto u's list and store it back: one adjacency entry,
+  \ unconditionally, at O(log V). u must already be present.
+  insert-edge-entry: ( g: graph u edge: graph-edge -- g' ) [
+    2 pick-n 2 pick-n vertex-edges? option:some>
+    cons
+    2 pick-n adjacency>> -rot>
+    map-insert with-adjacency
+  ] ;
+}
