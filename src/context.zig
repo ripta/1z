@@ -8078,8 +8078,12 @@ pub const Context = struct {
 
                             if (lazy_pushed.items.len > 0) {
                                 const lazy_module = body_module orelse stamp_module;
+                                // `lazy_pushed`, not `lazy_deps`: the stamp frame is pushed here too,
+                                // and a synthetic-scope `body_module` would otherwise make
+                                // `defining_module` name the scope rather than the stamp, so the
+                                // filter rejected the stamp frame this block had just pushed.
                                 const lazy_vis: ModuleDepsVisibility = .{
-                                    .deps_modules = lazy_deps,
+                                    .deps_modules = lazy_pushed.items,
                                     .defining_module = lazy_module,
                                 };
                                 // A synthetic-scope stamp counts as module-less for the scan gate,

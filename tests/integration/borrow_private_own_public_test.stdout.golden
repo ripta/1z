@@ -1,0 +1,5 @@
+PASS: a direct call resolves the module's public word
+PASS: a helper reading only prelude words reports its real error
+PASS: a helper reading its module's import reports its real error
+PASS: a helper reading its module's public word reports its real error
+PASS: a helper reading its module's generated accessor reports its real error

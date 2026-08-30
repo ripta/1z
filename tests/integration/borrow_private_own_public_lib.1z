@@ -1,0 +1,15 @@
+\ Module under test for borrow_private_own_public_test.1z. Each private helper reads a
+\ different class of name, so a fix that covers only the public-word class is visible.
+
+use { split: } "strings" ;
+
+own-public: ( -- string ) [ "public" ] ;
+
+holder: struct{ alpha } ;
+
+private{
+  reads-own-public:   ( -- string ) [ own-public ] ;
+  reads-own-accessor: ( h -- v ) [ alpha>> ] ;
+  reads-import:       ( -- v ) [ "a,b" "," split ] ;
+  reads-prelude:      ( -- fixnum ) [ 1 2 + ] ;
+}

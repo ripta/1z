@@ -1,0 +1,35 @@
+\ A borrowed private word called from inside a quotation that another module invokes
+\ must resolve its own module's public words. The asserted quotation crosses into
+\ `testing`, so no frame carrying the borrowed module's public surface is live when the
+\ helper runs. The helper's own stamp frame supplies them.
+\
+\ Each assertion names a real error type. Before the fix the public-word cases reported
+\ `unknown-word` instead, which is why the controls below read the other name classes.
+
+use "borrow_private_own_public_lib.1z" ;
+use "testing" ;
+borrow "borrow_private_own_public_lib.1z" ;
+
+test-a-direct-call: ( -- ) [
+  reads-own-public "public" "a direct call resolves the module's public word" assert=
+] ;
+
+test-b-prelude-only: ( -- ) [
+  [ reads-prelude drop f "boom" EKeyNotFound make-error throw ] key-not-found:
+  "a helper reading only prelude words reports its real error" assert-error-type
+] ;
+
+test-c-imported-word: ( -- ) [
+  [ reads-import drop f "boom" EKeyNotFound make-error throw ] key-not-found:
+  "a helper reading its module's import reports its real error" assert-error-type
+] ;
+
+test-d-own-public-word: ( -- ) [
+  [ reads-own-public drop f "boom" EKeyNotFound make-error throw ] key-not-found:
+  "a helper reading its module's public word reports its real error" assert-error-type
+] ;
+
+test-e-own-struct-accessor: ( -- ) [
+  [ 1 make-holder reads-own-accessor drop f "boom" EKeyNotFound make-error throw ] key-not-found:
+  "a helper reading its module's generated accessor reports its real error" assert-error-type
+] ;
