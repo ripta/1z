@@ -51,6 +51,10 @@ weighted-path: ( g n -- g ) [
 \ A weighted-path closed into a ring.
 weighted-ring: ( g n -- g ) [ dup [ weighted-path ] dip 0 1 graph-add-edge-with-payload ] ;
 
+\ What a spanning tree over the weighted fixtures above costs, where every payload is its
+\ edge's weight.
+spanning-weight: ( edges -- n ) [ [ payload>> ] #map 0 [ + ] #reduce ] ;
+
 \ --- Add edge ---
 
 test-add-edge-creates-endpoints: ( -- ) [
@@ -517,6 +521,77 @@ test-persistence-remove-vertex: ( -- ) [
   graph-edge-count 3 "with all three edges" assert=
 ] ;
 
+\ --- Prim ---
+
+test-prim-cheapest-edges: ( -- ) [
+  "prim" test-section
+  [ cmp ] <graph> detour [ payload>> ] graph-prim
+  dup #len 2 "three vertices take two edges" assert=
+  spanning-weight 2 "and the cheap pair beats the direct edge" assert=
+] ;
+
+test-prim-digraph-raises: ( -- ) [
+  [ [ cmp ] <digraph> 1 2 graph-add-edge [ payload>> ] graph-prim ] invalid-argument:
+  "a digraph has no minimum spanning tree" assert-error-type
+] ;
+
+test-prim-empty: ( -- ) [
+  [ cmp ] <graph> [ payload>> ] graph-prim { } "an empty graph spans nothing" assert=
+] ;
+
+test-prim-forest: ( -- ) [
+  [ cmp ] <graph> 1 2 1 graph-add-edge-with-payload 8 9 1 graph-add-edge-with-payload
+  [ payload>> ] graph-prim
+  dup #len 2 "each component contributes its own tree" assert=
+  dup 0 #nth source>> 1 "the component with the smallest member comes first" assert=
+  1 #nth source>> 8 "and the other behind it" assert=
+] ;
+
+test-prim-isolated-vertices: ( -- ) [
+  [ cmp ] <graph> 1 graph-add-vertex 2 graph-add-vertex [ payload>> ] graph-prim
+  { } "a vertex with no edges contributes none" assert=
+] ;
+
+\ Prim only compares weights, where a cheapest path also adds them. That is why a negative
+\ weight leaves a spanning tree well defined and leaves a cheapest path undefined.
+
+test-prim-negative-weight: ( -- ) [
+  [ cmp ] <graph> detour [ drop -1 ] graph-prim #len 2
+  "a negative weight spans as any other does" assert=
+  [ [ cmp ] <graph> detour 1 [ drop -1 ] graph-dijkstra ] invalid-argument:
+  "where a cheapest path rejects it" assert-error-type
+] ;
+
+test-prim-orientation: ( -- ) [
+  [ cmp ] <graph> 1 2 1 graph-add-edge-with-payload 2 3 1 graph-add-edge-with-payload
+  [ payload>> ] graph-prim
+  dup 0 #nth dup source>> 1 "the first edge leaves the root" assert=
+  target>> 2 "for the vertex it brings in" assert=
+  1 #nth source>> 2 "and the next leaves the end already in the tree" assert=
+] ;
+
+test-prim-parallel-edges: ( -- ) [
+  [ cmp ] <graph> 1 2 9 graph-add-edge-with-payload 1 2 4 graph-add-edge-with-payload
+  [ payload>> ] graph-prim
+  dup #len 1 "two edges between one pair contribute one" assert=
+  spanning-weight 4 "and it is the cheaper of them" assert=
+] ;
+
+\ A vertex's own edges are offered only after it joins, so its self-loop finds its target
+\ already in the tree.
+
+test-prim-self-loop: ( -- ) [
+  [ cmp ] <graph> 1 1 5 graph-add-edge-with-payload 1 2 1 graph-add-edge-with-payload
+  [ payload>> ] graph-prim
+  dup #len 1 "a self-loop is never a tree edge" assert=
+  spanning-weight 1 "so only the other edge is weighed" assert=
+] ;
+
+test-prim-spans-connected: ( -- ) [
+  [ cmp ] <graph> 20 weighted-path [ payload>> ] graph-prim
+  #len 20 "a connected graph of V vertices takes V-1 edges" assert=
+] ;
+
 \ --- Projection ---
 
 \ The dense form is private and the runner borrows the sibling's privates in, so the group
@@ -680,6 +755,15 @@ test-scale-weighted-traversal: ( -- ) [
   [ cmp ] <graph> 200 weighted-ring 0 [ payload>> ] graph-dijkstra
   dup order>> #len 201 "every vertex of the ring settles once" assert=
   100 graph-traversal-distance? option:some> 100 "and the far side is half the ring away" assert=
+] ;
+
+\ A ring is one edge away from a tree, so a spanning tree over it drops exactly one. A growth
+\ that re-admitted a vertex would take an extra edge with it, and the count is what says so.
+
+test-scale-weighted-tree: ( -- ) [
+  [ cmp ] <graph> 200 weighted-ring [ payload>> ] graph-prim
+  dup #len 200 "a ring spans with one edge fewer than it has" assert=
+  spanning-weight 200 "each of them weighing one" assert=
 ] ;
 
 \ --- Self loop ---

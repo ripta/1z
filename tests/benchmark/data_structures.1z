@@ -280,11 +280,12 @@ union-find-map-sweep: ( n -- ) [
 \ inserts, so they sit well above connected-components even though all three walk the same
 \ edges. topological-sort rides the digraph fixture, whose star shape is a DAG.
 \
-\ dijkstra is the one algorithm row that is not O(V + E): it is O(E log V), because every
-\ edge is a heap push and every push is popped. It runs on the path fixture the other rows
-\ use, under a constant weight, so it is read against breadth-first over the same edges and
-\ the difference is the queue. Its per-element cost may therefore grow by two log factors,
-\ the projection's and the heap's, and no more.
+\ dijkstra and prim are the two algorithm rows that are not O(V + E): each is O(E log V),
+\ because every edge is a heap push and every push is popped. Both run on the path fixture
+\ the other rows use, under a constant weight, so they are read against breadth-first over
+\ the same edges and the difference is the queue. Their per-element costs may therefore grow
+\ by two log factors, the projection's and the heap's, and no more. prim sits below dijkstra
+\ because it builds one array where dijkstra builds two bst-maps.
 
 graph-path-fill: ( n -- graph ) [
   [ cmp ] <graph> swap 1 swap 1 + <range> [ dup 1 - swap graph-add-edge ] #each
@@ -320,6 +321,7 @@ graph-sweep: ( n -- ) [
   "graph depth-first" pick 1 [ dup 0 graph-depth-first drop ] scale-row
   "graph connected-components" pick 1 [ dup graph-connected-components drop ] scale-row
   "graph dijkstra" pick 1 [ dup 0 [ drop 1 ] graph-dijkstra drop ] scale-row
+  "graph prim" pick 1 [ dup [ drop 1 ] graph-prim drop ] scale-row
   drop
   dup graph-digraph-fill
   "graph digraph remove-vertex" pick 1 [ dup 1 graph-remove-vertex drop ] scale-row
@@ -342,6 +344,7 @@ graph-sweep: ( n -- ) [
 3 graph-path-fill dup graph-edges drop dup 1 graph-neighbors drop dup project drop
 dup 0 graph-breadth-first drop dup 0 graph-depth-first drop dup graph-connected-components drop
 dup 0 [ drop 1 ] graph-dijkstra drop
+dup [ drop 1 ] graph-prim drop
 1 graph-remove-vertex drop
 3 graph-star-fill graph-vertices drop
 3 graph-digraph-fill dup graph-topological-sort drop 1 graph-remove-vertex drop

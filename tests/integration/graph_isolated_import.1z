@@ -1,9 +1,9 @@
 \ The graph module in isolation: nothing here imports "bst", "cons-list" or "heap", so the
 \ adjacency machinery's internal <bst-map>, unmake-bst-map, tree-each, map-delete,
-\ key>>, unmake-kv-pair, head, tail and list-len uses, and the shortest-path walk's <heap>,
-\ heap-insert and heap-pop-min? uses, must all resolve from the module's own imports. The
-\ unit suite imports "ranges" for its own loops, which would mask a missing import in the
-\ library.
+\ key>>, unmake-kv-pair, head, tail and list-len uses, and the shortest-path and
+\ spanning-tree walks' <heap>, heap-insert and heap-pop-min? uses, must all resolve from the
+\ module's own imports. The unit suite imports "ranges" for its own loops, which would mask a
+\ missing import in the library.
 \
 \ The algorithms are exercised here for the same reason: their walks and their result maps
 \ are the module's other unqualified uses of the imported bst words and of the prelude's
@@ -36,11 +36,14 @@ far-distance:  ( -- n )     [ chain 1 graph-bfs 3 graph-traversal-distance? opti
 far-parent:    ( -- v )     [ chain 1 graph-dfs 3 graph-traversal-parent? option:some> ] ;
 sorted:        ( -- array ) [ chain graph-topological-sort ] ;
 components:    ( -- array ) [ triangle 9 graph-add-vertex graph-connected-components ] ;
-undirected-sort: ( -- )   [ [ triangle graph-topological-sort ] invalid-argument: "an undirected graph has no topological order" assert-error-type ] ;
-cyclic-sort:     ( -- )   [ [ chain 3 1 graph-add-edge graph-topological-sort ] ECyclicGraph "a cycle closes off the order" assert-error-type ] ;
-cheapest:        ( -- n ) [ detour 1 [ payload>> ] graph-dijkstra 3 graph-traversal-distance? option:some> ] ;
-cheapest-via:    ( -- v ) [ detour 1 [ payload>> ] graph-dijkstra 3 graph-traversal-parent? option:some> ] ;
-negative-weight: ( -- )   [ [ detour 1 [ drop -1 ] graph-dijkstra ] invalid-argument: "a negative weight has no cheapest path" assert-error-type ] ;
+undirected-sort:   ( -- )   [ [ triangle graph-topological-sort ] invalid-argument: "an undirected graph has no topological order" assert-error-type ] ;
+cyclic-sort:       ( -- )   [ [ chain 3 1 graph-add-edge graph-topological-sort ] ECyclicGraph "a cycle closes off the order" assert-error-type ] ;
+cheapest:          ( -- n ) [ detour 1 [ payload>> ] graph-dijkstra 3 graph-traversal-distance? option:some> ] ;
+cheapest-via:      ( -- v ) [ detour 1 [ payload>> ] graph-dijkstra 3 graph-traversal-parent? option:some> ] ;
+negative-weight:   ( -- )   [ [ detour 1 [ drop -1 ] graph-dijkstra ] invalid-argument: "a negative weight has no cheapest path" assert-error-type ] ;
+spanning:          ( -- n ) [ detour [ payload>> ] graph-prim #len ] ;
+spanning-cost:     ( -- n ) [ detour [ payload>> ] graph-prim [ payload>> ] #map 0 [ + ] #reduce ] ;
+directed-spanning: ( -- )   [ [ chain [ payload>> ] graph-prim ] invalid-argument: "a digraph has no minimum spanning tree" assert-error-type ] ;
 
 "graph in isolation" test-section
 [ cmp ] <graph>
@@ -61,6 +64,9 @@ sorted { 1 2 3 } "the chain sorts into its one possible order" assert=
 components { { 1 2 3 } { 9 } } "the triangle and the isolated vertex are two components" assert=
 cheapest 2 "the cheapest route to the far end is the long way round" assert=
 cheapest-via 2 "and it arrives from the vertex on that way" assert=
+spanning 2 "the detour spans with two of its three edges" assert=
+spanning-cost 2 "the cheap pair of them" assert=
 undirected-sort
 cyclic-sort
 negative-weight
+directed-spanning

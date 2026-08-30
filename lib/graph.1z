@@ -975,25 +975,30 @@ private{
     f "shortest paths require non-negative edge weights" EInvalidArgument make-error throw
   ] ;
 
-  \ Take the queue's cheapest route, leaving the rest boxed. option:none once it is drained.
-  queue-pop?: ( st: dijkstra-scratch -- option ) [
-    queue>>
+  \ Take the boxed queue's cheapest entry, leaving the rest boxed. option:none once it is
+  \ drained.
+  queue-pop?: ( q: vector -- option ) [
     dup 0 #nth heap-pop-min?
     swap 2 pick-n 0 <rot- #nth! drop
     nip
   ] ;
 
-  \ Add a route to the boxed queue.
-  queue-push: ( st: dijkstra-scratch e: dijkstra-entry -- ) [
-    [ queue>> ] dip
+  \ Add an entry to the boxed queue.
+  queue-push: ( q: vector e -- ) [
     over 0 #nth swap heap-insert
     swap 0 <rot- #nth! drop
   ] ;
 
-  \ One edge's weight under the caller's projection. This is the only place a weight is
-  \ read, so the guard here sees every weight the walk examines, and only those.
-  edge-weight: ( e: dense-edge weight: quotation -- w ) [
-    [ edge>> ] dip call
+  \ One edge's weight under the caller's projection.
+  edge-weight: ( e: dense-edge weight: quotation -- w ) [ [ edge>> ] dip call ] ;
+
+  \ A weight for a shortest-path walk. This is the only place Dijkstra reads one, so the
+  \ guard here sees every weight that walk examines, and only those.
+  \
+  \ Prim reads weights through the unguarded word instead. A minimum spanning tree is well
+  \ defined for a negative weight, where a cheapest path is not.
+  checked-weight: ( e: dense-edge weight: quotation -- w ) [
+    edge-weight
     dup 0 cmp ordering:lt? [ throw-negative-weight ] when
   ] ;
 
@@ -1006,10 +1011,10 @@ private{
     3 pick-n walk>> depths>> over #nth
     [ ]
     [
-      4 pick-n 4 pick-n weight>> edge-weight
+      4 pick-n 4 pick-n weight>> checked-weight
       3 pick-n +
       1 pick-n 3 pick-n make-dijkstra-entry
-      4 pick-n swap queue-push
+      4 pick-n queue>> swap queue-push
     ]
     if
     2drop 2drop drop
@@ -1038,10 +1043,10 @@ private{
     2 pick-n vertices>> #len <dense-walk>
     [ ] make-vector [ [ distance>> ] dip distance>> cmp ] <heap> #push!
     2 pick-n make-dijkstra-scratch
-    dup 0 4 pick-n f make-dijkstra-entry queue-push
+    dup queue>> 0 4 pick-n f make-dijkstra-entry queue-push
     [ 2drop ] dip
     [
-      dup queue-pop?
+      dup queue>> queue-pop?
       dup option:some?
       [ option:some> [ 1 pick-n 1 pick-n ] dip dijkstra-settle t ]
       [ drop f ]
@@ -1076,4 +1081,140 @@ graph-dijkstra: ( g: graph source weight: quotation -- traversal: graph-traversa
   [ over swap ] dip
   dijkstra-walk
   walk>traversal
+] ;
+
+\ Prim runs on the same dense form Dijkstra does, over the same heap and the same lazy
+\ deletion, but it queues a different key. Dijkstra queues a vertex at its total distance
+\ from the source, so it settles cheapest-route-first. Prim queues a vertex at the weight of
+\ the one edge that would join it to the tree built so far, so it settles cheapest-edge-first.
+\ That one difference is all that separates the two.
+\
+\ The tree grows one component at a time. A vertex no earlier growth reached starts the next
+\ one, so a disconnected graph comes out as a spanning forest.
+
+private{
+  \\ One queued candidate: the weight of the edge that would bring `target` into the tree,
+  \\ and the stored record that edge came from, which is what the result is built out of.
+  prim-entry: struct{ cost: any target: fixnum edge: graph-edge } ;
+
+  \\ What one growth reads and writes. `in-tree` marks the vertices already joined, and
+  \\ `tree` collects the records it accepted.
+  \\
+  \\ `queue` is a one-element vector holding the heap, since a step fed to #each cannot hand
+  \\ a persistent value back.
+  prim-scratch: struct{ in-tree: vector queue: vector weight: quotation tree: vector } ;
+}
+
+private{
+  throw-directed-spanning-tree: never-returns ( -- * ) [
+    f "a minimum spanning tree requires an undirected graph" EInvalidArgument make-error throw
+  ] ;
+
+  \ Queue one of an in-tree vertex's edges as a way to reach its target. The entry comes
+  \ first so a curried form feeds #each.
+  \
+  \ A target already in the tree needs no edge. That is also what drops a self-loop, since a
+  \ vertex's own edges are offered only after it joins.
+  prim-offer: ( e: dense-edge st: prim-scratch -- ) [
+    over target>>
+    over in-tree>> over #nth
+    [ ]
+    [
+      2 pick-n 2 pick-n weight>> edge-weight
+      over 4 pick-n edge>> make-prim-entry
+      2 pick-n queue>> swap queue-push
+    ]
+    if
+    3drop
+  ] ;
+
+  \ Join v to the tree and offer every edge leaving it. Each vertex joins once, so each of
+  \ its stored entries is offered once.
+  prim-admit: ( dg: dense-graph st: prim-scratch v: fixnum -- ) [
+    over in-tree>> over t #nth! drop
+    2 pick-n adjacency>> over #nth
+    2 pick-n [ prim-offer ] curry
+    #each
+    3drop
+  ] ;
+
+  \ Take a popped candidate, or drop it when a cheaper one already brought its target in.
+  \ Taking it records the edge and joins the target.
+  prim-accept: ( dg: dense-graph st: prim-scratch e: prim-entry -- ) [
+    dup target>>
+    2 pick-n in-tree>> over #nth
+    [ ]
+    [
+      2 pick-n tree>> 2 pick-n edge>> #push! drop
+      3 pick-n 3 pick-n 2 pick-n prim-admit
+    ]
+    if
+    2drop 2drop
+  ] ;
+
+  \ Grow one component, starting from a root that is not yet in the tree. Only an in-tree
+  \ vertex offers edges, so the queue drains exactly when the component is covered, which
+  \ leaves it empty for the next root.
+  prim-grow: ( dg: dense-graph st: prim-scratch root: fixnum -- ) [
+    2 pick-n 2 pick-n 2 pick-n prim-admit
+    drop
+    [
+      dup queue>> queue-pop?
+      dup option:some?
+      [ option:some> [ 1 pick-n 1 pick-n ] dip prim-accept t ]
+      [ drop f ]
+      if
+    ] loop
+    2drop
+  ] ;
+
+  \ Grow from every vertex no earlier growth reached, in index order. O(V + E log V): the
+  \ sweep looks at every vertex whatever the edge count, and each stored entry is pushed once
+  \ and popped once.
+  prim-forest: ( dg: dense-graph weight: quotation -- array ) [
+    over vertices>> #len f filled-vector
+    [ ] make-vector [ [ cost>> ] dip cost>> cmp ] <heap> #push!
+    2 pick-n
+    [ ] make-vector
+    make-prim-scratch
+    0
+    [ dup 2 pick-n in-tree>> #len < ]
+    [
+      1 pick-n in-tree>> over #nth not
+      [ 3 pick-n 2 pick-n 2 pick-n prim-grow ]
+      when
+      1 +
+    ]
+    while
+    drop
+    tree>> >array
+    nip nip
+  ] ;
+}
+
+\\ A minimum spanning tree, as the tree edges. A disconnected graph gives a minimum spanning
+\\ forest, one tree per component, so a connected graph of V vertices gives V-1 edges and a
+\\ graph of C components gives V-C. An isolated vertex contributes none.
+\\
+\\ Components come ordered by smallest member, as `graph-connected-components` does, and
+\\ within each the edges come in the order the tree took them. Each record's `source` is the
+\\ endpoint that was already in the tree, so orientation follows the order of discovery
+\\ rather than the comparator.
+\\
+\\ The projection has effect `( edge: graph-edge -- weight )`, as `graph-dijkstra`'s does.
+\\ Weights are compared with `cmp` and never added, so a negative one is fine here where a
+\\ cheapest path rejects it. An edge is priced only when it is offered as a way in, so the
+\\ projection runs at most once per stored entry.
+\\
+\\ O((V + E) log V), the projection's cost, with the walk itself O(V + E log V). The V term is
+\\ the sweep that finds each component's root, which `graph-dijkstra` has no counterpart to.
+\\ Throws `invalid-argument` on a digraph, whose spanning problem is a different one.
+\\
+\\   [ cmp ] <graph> 1 2 1 graph-add-edge-with-payload 2 3 1 graph-add-edge-with-payload
+\\   1 3 10 graph-add-edge-with-payload [ payload>> ] graph-prim #len
+\\   => 2
+graph-prim: ( g: graph weight: quotation -- array ) [
+  over graph-directed? [ throw-directed-spanning-tree ] when
+  [ project ] dip
+  prim-forest
 ] ;
