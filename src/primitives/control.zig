@@ -524,6 +524,8 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
                     helpers.setTypeMismatchError(ctx, "quotation for definition descriptor 'define' field", define_val);
                     return error.TypeMismatch;
                 };
+                // No owner: `define_val` is borrowed out of the descriptor whose own reference now
+                // lives in the slot this body pops, so it is not held across the execution.
                 try ctx.executeQuotation(define_quot);
             } else {
                 // Fall back to normal word definition

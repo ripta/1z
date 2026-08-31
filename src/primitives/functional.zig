@@ -99,6 +99,30 @@ fn baseCapturedScope(ctx: *Context, alloc: std.mem.Allocator, val: Value) !Scope
     };
 }
 
+/// The module a base callable's body was written in, for the derived closure to carry.
+///
+/// A `curry`/`compose` product allocates a fresh body, so nothing keyed by that body's address
+/// can answer for it. Reading the base's module here and putting it on the value is what lets
+/// the product resolve a bare word against the module its code came from, in whatever context
+/// later runs it.
+///
+/// A closure that already carries one answers from the value. Otherwise the base body is
+/// probed, this context's map first and then the shared stamp store. That probe is what covers
+/// a push-time promotion, whose own field is null because it aliases a module literal rather
+/// than allocating a body.
+fn baseDefiningModule(ctx: *Context, val: Value) ?*const value_mod.Module {
+    if (val == .closure) {
+        if (val.closure.defining_module) |m| return m;
+    }
+
+    const instrs = callableInstrs(val) orelse return null;
+    const key = @intFromPtr(instrs.ptr);
+    if (ctx.quotation_scope_info.get(key)) |info| {
+        if (info.defining_module) |m| return m;
+    }
+    return ctx.quotation_stamp_store.lookup(key);
+}
+
 /// Deep-copy the concatenation of two source scopes onto `alloc`, `a`'s frames before `b`'s.
 /// `compose` runs `instrs1` then `instrs2`, so a name bound in both resolves to `b`'s binding,
 /// matching `lookupInCapturedScope`'s most-recent-first walk. Only reached when both bases carry a
@@ -266,6 +290,7 @@ pub fn nativeCurry(ctx: *Context) anyerror!void {
         .effect = null,
         .segments = segments,
         .captured_scope = carried.scope,
+        .defining_module = baseDefiningModule(ctx, quot_val),
         .header = undefined,
         .owns_body = true,
         .owns_segments = true,
@@ -438,11 +463,18 @@ pub fn nativeCompose(ctx: *Context) anyerror!void {
     } else &.{};
     errdefer if (!built) alloc.free(bases);
 
+    // The composed body is two halves, so it carries a defining module only where both halves
+    // agree on one. Taking `quot1`'s alone would show `quot2`'s half a module it was not written
+    // in; the disagreeing case rides the `deps_modules` merged above instead.
+    const module1 = baseDefiningModule(ctx, quot1_val);
+    const module2 = baseDefiningModule(ctx, quot2_val);
+
     const cl = try Closure.create(alloc, .{
         .instructions = new_instrs,
         .effect = null,
         .segments = segments,
         .captured_scope = carried,
+        .defining_module = if (module1 == module2) module1 else null,
         .header = undefined,
         .owns_body = true,
         .owns_segments = true,
@@ -502,6 +534,7 @@ fn nativeAttachStackEffect(ctx: *Context) anyerror!void {
                 .effect = eff_ptr,
                 .segments = c.segments,
                 .captured_scope = c.captured_scope,
+                .defining_module = c.defining_module,
                 .header = undefined,
                 .bases = bases,
             }) catch |err| {
@@ -743,4 +776,93 @@ test "nested curry prepends a capture to the first segment" {
     try std.testing.expectEqual(dummy_code, cl.segments[0].base_code_ptr);
     try std.testing.expectEqual(@as(usize, 1), cl.bases.len);
     try std.testing.expectEqual(inner.closure, cl.bases[0]);
+}
+
+/// A stamped one-instruction body, standing in for a quotation literal written inside `module`.
+fn stampedBase(ctx: *Context, module: *const value_mod.Module) !Value {
+    const instrs = try ctx.arena.allocator().alloc(Instruction, 1);
+    instrs[0] = .{ .op = .{ .push_literal = .{ .fixnum = 0 } }, .line = 1 };
+    _ = try ctx.quotation_stamp_store.stamp(@intFromPtr(instrs.ptr), module);
+    return .{ .quotation = .{ .instructions = instrs } };
+}
+
+test "curry: the product carries the base body's defining module" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    var module: value_mod.Module = .{ .name = "m", .words = .{} };
+    try ctx.stack.push(.{ .fixnum = 7 });
+    try ctx.stack.push(try stampedBase(&ctx, &module));
+    try nativeCurry(&ctx);
+
+    const result = try ctx.stack.pop();
+    defer container_backing.releaseValue(result);
+    // The product's body is a fresh allocation, so nothing keyed by its address knows the module.
+    try std.testing.expectEqual(@as(?*const value_mod.Module, &module), result.closure.defining_module);
+}
+
+test "curry: an unstamped base leaves the product with no defining module" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    try ctx.stack.push(.{ .fixnum = 7 });
+    try ctx.stack.push(.{ .quotation = .{ .instructions = &.{} } });
+    try nativeCurry(&ctx);
+
+    const result = try ctx.stack.pop();
+    defer container_backing.releaseValue(result);
+    try std.testing.expectEqual(@as(?*const value_mod.Module, null), result.closure.defining_module);
+}
+
+test "compose: the product carries a defining module only where both bases agree" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    var module_a: value_mod.Module = .{ .name = "a", .words = .{} };
+    var module_b: value_mod.Module = .{ .name = "b", .words = .{} };
+
+    try ctx.stack.push(try stampedBase(&ctx, &module_a));
+    try ctx.stack.push(try stampedBase(&ctx, &module_a));
+    try nativeCompose(&ctx);
+    const agreed = try ctx.stack.pop();
+    defer container_backing.releaseValue(agreed);
+    try std.testing.expectEqual(@as(?*const value_mod.Module, &module_a), agreed.closure.defining_module);
+
+    // Two modules, one field: naming either would show the other half a module it was not written
+    // in, so the composed body carries none and rides its merged deps instead.
+    try ctx.stack.push(try stampedBase(&ctx, &module_a));
+    try ctx.stack.push(try stampedBase(&ctx, &module_b));
+    try nativeCompose(&ctx);
+    const split = try ctx.stack.pop();
+    defer container_backing.releaseValue(split);
+    try std.testing.expectEqual(@as(?*const value_mod.Module, null), split.closure.defining_module);
+
+    // Two unstamped bases agree on null, which the equality test must read as "no module" rather
+    // than as an agreement worth recording.
+    try ctx.stack.push(.{ .quotation = .{ .instructions = &.{} } });
+    try ctx.stack.push(.{ .quotation = .{ .instructions = &.{} } });
+    try nativeCompose(&ctx);
+    const neither = try ctx.stack.pop();
+    defer container_backing.releaseValue(neither);
+    try std.testing.expectEqual(@as(?*const value_mod.Module, null), neither.closure.defining_module);
+}
+
+test "attach-stack-effect: the derived closure inherits the base's defining module" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    var module: value_mod.Module = .{ .name = "m", .words = .{} };
+    try ctx.stack.push(.{ .fixnum = 7 });
+    try ctx.stack.push(try stampedBase(&ctx, &module));
+    try nativeCurry(&ctx);
+
+    // The derived closure aliases the base's body, so `ownsBodyTransitively` still reports true
+    // through `bases` and body entry reads the module off this value rather than the map.
+    try ctx.stack.push(.{ .stack_effect = try helpers.makeSimpleEffect(ctx.quotationAllocator(), "x -- y") });
+    try nativeAttachStackEffect(&ctx);
+
+    const result = try ctx.stack.pop();
+    defer container_backing.releaseValue(result);
+    try std.testing.expect(result.closure.ownsBodyTransitively());
+    try std.testing.expectEqual(@as(?*const value_mod.Module, &module), result.closure.defining_module);
 }

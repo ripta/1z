@@ -385,7 +385,7 @@ fn executeParseTimeWord(
             rollbackParseTimeExecution(c, pre_depth, pre_emissions);
             return handleParseTimeError(c, err);
         },
-        .compound => |instrs| c.executeQuotationWithFrame(.{ .instructions = instrs }) catch |err| {
+        .compound => |instrs| c.executeQuotationWithFrame(.{ .instructions = instrs }, null) catch |err| {
             rollbackParseTimeExecution(c, pre_depth, pre_emissions);
             return handleParseTimeError(c, err);
         },
@@ -1296,7 +1296,7 @@ fn executeParseTimeWordForArray(
             rollbackParseTimeExecution(c, pre_depth, pre_emissions);
             return handleParseTimeError(c, err);
         },
-        .compound => |instrs| c.executeQuotationWithFrame(.{ .instructions = instrs }) catch |err| {
+        .compound => |instrs| c.executeQuotationWithFrame(.{ .instructions = instrs }, null) catch |err| {
             rollbackParseTimeExecution(c, pre_depth, pre_emissions);
             return handleParseTimeError(c, err);
         },
@@ -1320,7 +1320,7 @@ fn executeParseTimeWordForArray(
                             rollbackParseTimeExecution(c, pre_depth, pre_emissions);
                             return handleParseTimeError(c, err);
                         },
-                        .compound => |instrs| c.executeQuotationWithFrame(.{ .instructions = instrs }) catch |err| {
+                        .compound => |instrs| c.executeQuotationWithFrame(.{ .instructions = instrs }, null) catch |err| {
                             rollbackParseTimeExecution(c, pre_depth, pre_emissions);
                             return handleParseTimeError(c, err);
                         },
@@ -1331,7 +1331,7 @@ fn executeParseTimeWordForArray(
                     }
                 }
             },
-            .body => |body| c.executeQuotationWithFrame(.{ .instructions = body.instructions }) catch |err| {
+            .body => |body| c.executeQuotationWithFrame(.{ .instructions = body.instructions }, null) catch |err| {
                 rollbackParseTimeExecution(c, pre_depth, pre_emissions);
                 return handleParseTimeError(c, err);
             },

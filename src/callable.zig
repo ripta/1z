@@ -2,6 +2,7 @@ const container_backing = @import("container_backing.zig");
 const context_mod = @import("context.zig");
 const value_mod = @import("value.zig");
 
+const Closure = value_mod.Closure;
 const Context = context_mod.Context;
 const Quotation = value_mod.Quotation;
 const Value = value_mod.Value;
@@ -46,19 +47,30 @@ pub const Callable = struct {
         }
     }
 
+    /// The closure behind the body, for a body it may own.
+    ///
+    /// Body entry reads a closure-owned body's captured scope and defining module off this rather
+    /// than out of the pointer-keyed side map, which such a body never enters.
+    pub fn ownerClosure(self: Callable) ?*const Closure {
+        return switch (self.owner) {
+            .closure => |c| c,
+            else => null,
+        };
+    }
+
     /// Run the body without a lexical frame of its own.
     pub fn execute(self: Callable, ctx: *Context) anyerror!void {
-        return ctx.executeQuotation(self.quot);
+        return ctx.executeQuotationWithOwner(self.quot, self.ownerClosure());
     }
 
     /// Run the body in a fresh lexical frame. The common form.
     pub fn executeWithFrame(self: Callable, ctx: *Context) anyerror!void {
-        return ctx.executeQuotationWithFrame(self.quot);
+        return ctx.executeQuotationWithFrame(self.quot, self.ownerClosure());
     }
 
     /// Run the body in a fresh lexical frame but outside the tail-call loop, so a pending tail
     /// call propagates to the enclosing loop. `if` is the only caller.
     pub fn executeInline(self: Callable, ctx: *Context) anyerror!void {
-        return ctx.executeQuotationInline(self.quot);
+        return ctx.executeQuotationInline(self.quot, self.ownerClosure());
     }
 };

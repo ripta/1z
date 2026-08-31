@@ -2688,7 +2688,9 @@ pub const Context = struct {
         errdefer scope_copy.release();
 
         // The body aliases the module-owned quotation literal, so the closure
-        // owns only the segments and the scope copy.
+        // owns only the segments and the scope copy. It carries no defining
+        // module either: an aliased body is not closure-owned, so body entry
+        // keeps reading the map, whose key is the literal's own address.
         return try value_mod.Closure.create(alloc, .{
             .instructions = quot.instructions,
             .effect = quot.effect,
@@ -2917,10 +2919,17 @@ pub const Context = struct {
     ///
     /// At module finalization the value is the as-parsed literal, immutable and acyclic, so the
     /// recursion terminates.
+    ///
+    /// A closure also takes the stamp onto the value, when it has none yet. Its body may be one
+    /// the closure owns. Body entry reads that off the value rather than out of the map, so the
+    /// two have to agree.
     pub fn stampValueQuotations(self: *Context, val: Value, module: *const value_mod.Module) error{OutOfMemory}!void {
         switch (val) {
             .quotation => |q| try self.stampQuotationBodies(q.instructions, module),
-            .closure => |c| try self.stampQuotationBodies(c.instructions, module),
+            .closure => |c| {
+                if (c.defining_module == null) c.defining_module = module;
+                try self.stampQuotationBodies(c.instructions, module);
+            },
             .parameter => |p| try self.stampQuotationBodies(p.default_quotation.instructions, module),
             .array => |a| for (a.items) |item| try self.stampValueQuotations(item, module),
             .vector => |v| for (v.list.items) |item| try self.stampValueQuotations(item, module),
@@ -5970,7 +5979,7 @@ pub const Context = struct {
                     const rc = host.callback(host.handle, host.user_data);
                     if (rc != 0) return error.HostCallbackFailed;
                 },
-                .compound => |instrs| try self.executeInstructions(instrs, null, null),
+                .compound => |instrs| try self.executeInstructions(instrs, null, null, null),
                 .literal => |v| try self.stack.push(v),
             }
         } else {
@@ -6068,7 +6077,7 @@ pub const Context = struct {
                     //              must have that tail call resolved here, while this module-deps frame
                     //              is still live, instead of leaking a pending tail call past the
                     //              deps-frame teardown.
-                    try self.executeQuotationWithPic(.{ .instructions = instrs }, null, module);
+                    try self.executeQuotationWithPic(.{ .instructions = instrs }, null, module, null);
                 },
                 .native => |func| try func(self),
                 .host_callback => |host| {
@@ -7187,11 +7196,24 @@ pub const Context = struct {
     /// debugger. A word body enters through `executeQuotationWithPic` directly, with
     /// `current_source` already set from the word's own file.
     pub fn executeQuotation(self: *Context, quotation: Quotation) anyerror!void {
+        return self.executeQuotationWithOwner(quotation, null);
+    }
+
+    /// `executeQuotation` for a body reached through a value that may own it.
+    ///
+    /// `owner` is the closure the body belongs to, or null. A body a closure owns carries its
+    /// captured scope and defining module on that closure instead of in `quotation_scope_info`,
+    /// which is keyed by an address the closure frees on release. Threading the value through is
+    /// what lets body entry read them.
+    ///
+    /// A sibling rather than a widened `executeQuotation`, because the hundred-odd call sites of
+    /// that name almost all run a word body or a synthesized one and have no owner to state.
+    pub fn executeQuotationWithOwner(self: *Context, quotation: Quotation, owner: ?*const value_mod.Closure) anyerror!void {
         const saved_source = self.current_source;
         defer self.current_source = saved_source;
         self.enterBodySource(quotation.instructions);
 
-        return self.executeQuotationWithPic(quotation, null, null);
+        return self.executeQuotationWithPic(quotation, null, null, owner);
     }
 
     /// Point `current_source` at the file `instructions` was parsed from, leaving it alone for a
@@ -7215,11 +7237,14 @@ pub const Context = struct {
     /// distinct from `current_module`, which tracks frame *ownership*: a body-module hint never pushes
     /// a frame.
     ///
+    /// `owner` is the closure `quotation` came out of, when the body may be one that closure
+    /// owns. See `executeQuotationWithOwner`.
+    ///
     /// This does not install the body's source file. Callers arrive with it already pointed at the
     /// right file: a word body from the word's own `source_file`, a body reached as a value from
     /// `enterBodySource`. Probing here instead would put a lookup on every word call to recompute
     /// what the caller already knows.
-    pub fn executeQuotationWithPic(self: *Context, quotation: Quotation, pic_table: ?*PicTable, initial_module: ?*const value_mod.Module) anyerror!void {
+    pub fn executeQuotationWithPic(self: *Context, quotation: Quotation, pic_table: ?*PicTable, initial_module: ?*const value_mod.Module, owner: ?*const value_mod.Closure) anyerror!void {
         const saved_source = self.current_source;
         defer self.current_source = saved_source;
 
@@ -7245,7 +7270,11 @@ pub const Context = struct {
                 owns_frame = true;
             }
 
-            const exec_result = self.executeInstructions(current_instructions, current_pic, body_module);
+            // Nothing clears `owner` on a tail call, unlike `current_pic` below. A tail call into
+            // the closure's own body is reachable -- `;` binds `c.instructions` as the defined
+            // word's compound action -- and that body still resolves off the value it came from.
+            // Body entry sorts the two cases out.
+            const exec_result = self.executeInstructions(current_instructions, current_pic, body_module, owner);
             exec_result catch |err| {
                 if (owns_frame) {
                     if (self.trace.trace_modules.deps) {
@@ -7323,7 +7352,10 @@ pub const Context = struct {
     /// Execute a quotation with a new local frame for *lexical* scoping.
     /// If the quotation has a compiled code_ptr, dispatches to the compiled
     /// function instead of interpreting instructions.
-    pub fn executeQuotationWithFrame(self: *Context, quotation: Quotation) anyerror!void {
+    ///
+    /// `owner` is the closure `quotation` came out of, when the body may be one that closure
+    /// owns. See `executeQuotationWithOwner`.
+    pub fn executeQuotationWithFrame(self: *Context, quotation: Quotation, owner: ?*const value_mod.Closure) anyerror!void {
         try self.pushLocalFrame();
         // Truncation before the pop, not instead of it: a spliced quotation body inside the
         // compiled arm can leave its own transient frame open on an error return, and
@@ -7377,7 +7409,7 @@ pub const Context = struct {
             }
         }
 
-        try self.executeQuotation(quotation);
+        try self.executeQuotationWithOwner(quotation, owner);
     }
 
     /// Execute a quotation with a local frame but WITHOUT the TCO loop.
@@ -7385,7 +7417,10 @@ pub const Context = struct {
     /// Tail call "flag" propagates upward to the caller's executeQuotation loop.
     /// Used only by `if` so that tail calls in conditional branches propagate
     /// through to the enclosing word's TCO loop (e.g., times -> if -> times).
-    pub fn executeQuotationInline(self: *Context, quotation: Quotation) anyerror!void {
+    ///
+    /// `owner` is the closure `quotation` came out of, when the body may be one that closure
+    /// owns. See `executeQuotationWithOwner`.
+    pub fn executeQuotationInline(self: *Context, quotation: Quotation, owner: ?*const value_mod.Closure) anyerror!void {
         try self.pushLocalFrame();
         defer self.popLocalFrame();
 
@@ -7396,7 +7431,7 @@ pub const Context = struct {
         self.enterBodySource(quotation.instructions);
 
         const depth_before = self.stack.depth();
-        try self.executeInstructions(quotation.instructions, null, null);
+        try self.executeInstructions(quotation.instructions, null, null, owner);
 
         // If tail call is pending, skip the stack-effect validation and propagate upward
         if (self.tail_call_instructions != null) {
@@ -7765,7 +7800,7 @@ pub const Context = struct {
                         .compound => |instrs| {
                             self.pushModuleDepsFrame(mod) catch |e| break :blk @as(anyerror!void, e);
                             defer self.popModuleDepsFrameTraced(mod);
-                            break :blk self.executeQuotationWithPic(.{ .instructions = instrs }, callee_pic, mod);
+                            break :blk self.executeQuotationWithPic(.{ .instructions = instrs }, callee_pic, mod, null);
                         },
                         .native => |func| break :blk func(self),
                         .host_callback => |host| break :blk host_result: {
@@ -7786,7 +7821,7 @@ pub const Context = struct {
                             if (rc != 0) break :host_result error.HostCallbackFailed;
                             break :host_result;
                         },
-                        .compound => |instrs| self.executeQuotationWithPic(.{ .instructions = instrs }, callee_pic, null),
+                        .compound => |instrs| self.executeQuotationWithPic(.{ .instructions = instrs }, callee_pic, null, null),
                         .literal => |v| self.stack.push(v),
                     };
                 }
@@ -7809,7 +7844,10 @@ pub const Context = struct {
     ///
     /// Supports tail call optimization: i.e., when the last instruction is a
     /// compound `call_word`, sets `tail_call_instructions` instead of recursing.
-    fn executeInstructions(self: *Context, instructions: []const Instruction, pic_table: ?*PicTable, body_module: ?*const value_mod.Module) anyerror!void {
+    ///
+    /// `owner` is a closure that may own `instructions`; see `executeQuotationWithOwner`. It is a
+    /// hint, validated where it is admitted below.
+    fn executeInstructions(self: *Context, instructions: []const Instruction, pic_table: ?*PicTable, body_module: ?*const value_mod.Module, owner: ?*const value_mod.Closure) anyerror!void {
         // Holds this body's creation-site module deps frames after a lazy re-resolution of a
         // `use`-imported word: its captured ambient-deps modules plus its defining-module stamp.
         // These are the frames the body could reach at creation but that may not be live where it
@@ -7859,7 +7897,30 @@ pub const Context = struct {
         // `if`/`when`) is free to supersede the map's entry for this same body without freeing the
         // scope this outer frame still holds. `own_ambient_deps` below rides the retained scope,
         // which is what keeps it alive for the whole body.
-        const scope_info: QuotationScopeInfo = blk: {
+        //
+        // A body its closure owns takes none of that. Its address is freed when the closure is
+        // released, so it never enters the map, and both halves ride the value instead.
+        //
+        // The pointer test is what makes `owner` a hint rather than an assertion. It admits the
+        // closure only for the body the closure names, so a splice, a tail call into an unrelated
+        // word, and a caller threading a stale value all fall through to the map instead of
+        // borrowing a scope that belongs to different code.
+        //
+        // An empty body is excluded on the same terms the map path and the stamp store exclude it:
+        // every zero-length allocation shares one sentinel address, so the pointer test cannot
+        // tell two of them apart.
+        const from_closure = if (owner) |c|
+            instructions.len != 0 and c.instructions.ptr == instructions.ptr and c.ownsBodyTransitively()
+        else
+            false;
+
+        const scope_info: QuotationScopeInfo = if (from_closure) .{
+            // The store still has the last word where the value has none: `;` turns a closure into
+            // a compound word over its own body, and module finalization stamps that slice.
+            .defining_module = owner.?.defining_module orelse
+                self.quotation_stamp_store.lookup(@intFromPtr(instructions.ptr)),
+            .scope = @constCast(owner.?.captured_scope),
+        } else blk: {
             const key = @intFromPtr(instructions.ptr);
             if (self.quotation_scope_info.count() != 0) {
                 if (self.quotation_scope_info.get(key)) |info| break :blk info;
@@ -7903,9 +7964,12 @@ pub const Context = struct {
             if (!fresh) if (inherited) |s| s.release();
             break :blk info;
         };
+        // A map entry is supersedable, so the map path holds its own reference for the call. A
+        // closure-carried scope needs none: the caller holds the closure across the execution,
+        // which is what keeps the body memory alive in the first place.
         const captured_scope: ?*CapturedScope = scope_info.scope;
-        if (captured_scope) |cs| cs.retain();
-        defer if (captured_scope) |cs| cs.release();
+        if (!from_closure) if (captured_scope) |cs| cs.retain();
+        defer if (!from_closure) if (captured_scope) |cs| cs.release();
 
         // The body's own module scope, consulted by resolution ahead of the transient frame walk:
         // its defining module plus the ambient-deps modules captured at its creation. The defining
@@ -8052,7 +8116,14 @@ pub const Context = struct {
                             // the body-entry fill skips: a word body (`body_module` threaded) may
                             // have no map entry, and its stamp is still needed for the deps-frame
                             // push below. A value-invoked body always hits the filled entry.
-                            const lazy_info: QuotationScopeInfo =
+                            //
+                            // A closure-owned body has no entry to fetch, so it reuses what body
+                            // entry already read off the value. Without that it would push no
+                            // creation-site frame at all and fail the re-resolve this block exists
+                            // for.
+                            const lazy_info: QuotationScopeInfo = if (from_closure)
+                                scope_info
+                            else
                                 self.quotation_scope_info.get(@intFromPtr(instructions.ptr)) orelse .{};
                             const lazy_deps: []const *const value_mod.Module = if (deps_vis) |v|
                                 v.deps_modules
@@ -12464,14 +12535,194 @@ test "executeInstructions: the fill skips word bodies and empty bodies" {
     const arena_alloc = ctx.arena.allocator();
     const instrs = try arena_alloc.alloc(Instruction, 1);
     instrs[0] = .{ .op = .{ .push_literal = .{ .fixnum = 42 } }, .line = 1 };
-    try ctx.executeInstructions(instrs, null, &module);
+    try ctx.executeInstructions(instrs, null, &module, null);
     try std.testing.expectEqual(@as(i64, 42), (try ctx.stack.pop()).fixnum);
     try std.testing.expectEqual(@as(usize, 0), ctx.quotation_scope_info.count());
 
     // Empty bodies share a sentinel pointer and are never stamped: no entry either.
     const empty: []const Instruction = &.{};
-    try ctx.executeInstructions(empty, null, null);
+    try ctx.executeInstructions(empty, null, null, null);
     try std.testing.expectEqual(@as(usize, 0), ctx.quotation_scope_info.count());
+}
+
+/// Build a closure that owns a one-instruction body calling `probe-word`, the shape `curry` and
+/// `compose` produce. The caller releases it.
+fn closureOwnedProbeBody(ctx: *Context, module: ?*const value_mod.Module, scope: ?*const CapturedScope) !*value_mod.Closure {
+    const body = try ctx.allocator.alloc(Instruction, 1);
+    body[0] = .{ .op = .{ .call_word = "probe-word" }, .line = 1 };
+    return value_mod.Closure.create(ctx.allocator, .{
+        .instructions = body,
+        .segments = &.{},
+        .captured_scope = scope,
+        .defining_module = module,
+        .header = undefined,
+        .owns_body = true,
+        .owns_scope = scope != null,
+    });
+}
+
+/// A durable-frame `probe-word` pushing 1 and a module one pushing 2, so which of the two a body
+/// resolved is readable off the stack. Returns the module.
+fn installProbeWordRivals(ctx: *Context) !*value_mod.Module {
+    const push_durable: dict_mod.NativeFn = struct {
+        fn f(c: *Context) anyerror!void {
+            try c.stack.push(.{ .fixnum = 1 });
+        }
+    }.f;
+    const push_module: dict_mod.NativeFn = struct {
+        fn f(c: *Context) anyerror!void {
+            try c.stack.push(.{ .fixnum = 2 });
+        }
+    }.f;
+
+    try ctx.pushLocalFrame();
+    ctx.import_frame_index = 0;
+    ctx.durable_frame_floor = 0;
+    try ctx.local_frames.items[0].put(ctx.allocator, "probe-word", .{
+        .name = "probe-word",
+        .action = .{ .native = push_durable },
+    });
+
+    const arena_alloc = ctx.arena.allocator();
+    const module = try arena_alloc.create(value_mod.Module);
+    module.* = .{ .name = "m", .words = .{} };
+    try module.words.put(arena_alloc, "probe-word", .{ .action = .{ .native = push_module } });
+    return module;
+}
+
+test "executeInstructions: a closure-owned body reads its defining module off the carrier" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const module = try installProbeWordRivals(&ctx);
+    const cl = try closureOwnedProbeBody(&ctx, module, null);
+    defer container_backing.releaseValue(.{ .closure = cl });
+
+    // A map entry for the same key claims the body has no module. The carrier outranks it, so the
+    // entry the leak used to leave behind can no longer answer for a body it does not describe.
+    try ctx.quotation_scope_info.put(ctx.allocator, @intFromPtr(cl.instructions.ptr), .{});
+
+    try ctx.executeQuotationWithOwner(cl.asQuotation(), cl);
+    try std.testing.expectEqual(@as(i64, 2), (try ctx.stack.pop()).fixnum);
+}
+
+test "executeInstructions: the carrier is ignored for a body it does not name" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const module = try installProbeWordRivals(&ctx);
+    const cl = try closureOwnedProbeBody(&ctx, module, null);
+    defer container_backing.releaseValue(.{ .closure = cl });
+
+    // A different body threaded with the same carrier: a splice, a tail call into another word, or
+    // a caller passing a stale value. It must resolve as itself, not as the closure.
+    const other = try ctx.arena.allocator().alloc(Instruction, 1);
+    other[0] = .{ .op = .{ .call_word = "probe-word" }, .line = 1 };
+
+    try ctx.executeQuotationWithOwner(.{ .instructions = other }, cl);
+    try std.testing.expectEqual(@as(i64, 1), (try ctx.stack.pop()).fixnum);
+}
+
+test "executeInstructions: a push-time promotion keeps the map path" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const module = try installProbeWordRivals(&ctx);
+
+    // A promotion aliases the module-owned literal rather than allocating, so its body address is
+    // process-lifetime and the map is still the right home for it.
+    const body = try ctx.arena.allocator().alloc(Instruction, 1);
+    body[0] = .{ .op = .{ .call_word = "probe-word" }, .line = 1 };
+    const cl = try value_mod.Closure.create(ctx.allocator, .{
+        .instructions = body,
+        .segments = &.{},
+        .header = undefined,
+    });
+    defer container_backing.releaseValue(.{ .closure = cl });
+
+    try ctx.quotation_scope_info.put(ctx.allocator, @intFromPtr(body.ptr), .{ .defining_module = module });
+
+    try ctx.executeQuotationWithOwner(cl.asQuotation(), cl);
+    try std.testing.expectEqual(@as(i64, 2), (try ctx.stack.pop()).fixnum);
+}
+
+test "executeInstructions: a tail call out of a closure-owned body resolves as the callee" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const module = try installProbeWordRivals(&ctx);
+
+    const callee_body = try ctx.arena.allocator().alloc(Instruction, 1);
+    callee_body[0] = .{ .op = .{ .call_word = "probe-word" }, .line = 1 };
+    try ctx.local_frames.items[0].put(ctx.allocator, "callee", .{
+        .name = "callee",
+        .action = .{ .compound = callee_body },
+    });
+
+    const body = try ctx.allocator.alloc(Instruction, 1);
+    body[0] = .{ .op = .{ .call_word = "callee" }, .line = 1 };
+    const cl = try value_mod.Closure.create(ctx.allocator, .{
+        .instructions = body,
+        .segments = &.{},
+        .defining_module = module,
+        .header = undefined,
+        .owns_body = true,
+    });
+    defer container_backing.releaseValue(.{ .closure = cl });
+
+    // The call is the body's last instruction, so the TCO loop runs the callee's own body on its
+    // next turn with the carrier still in hand. The callee is module-less, so it must reach the
+    // durable frame rather than borrowing the closure's module.
+    try ctx.executeQuotationWithOwner(cl.asQuotation(), cl);
+    try std.testing.expectEqual(@as(i64, 1), (try ctx.stack.pop()).fixnum);
+}
+
+test "executeInstructions: a closure-owned body with no carried module falls back to the stamp store" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const module = try installProbeWordRivals(&ctx);
+    const cl = try closureOwnedProbeBody(&ctx, null, null);
+    defer container_backing.releaseValue(.{ .closure = cl });
+
+    // `;` turns a closure into a compound word over its own body, which module finalization then
+    // stamps. The value never learns of that stamp, so the store keeps the last word.
+    _ = try ctx.quotation_stamp_store.stamp(@intFromPtr(cl.instructions.ptr), module);
+
+    try ctx.executeQuotationWithOwner(cl.asQuotation(), cl);
+    try std.testing.expectEqual(@as(i64, 2), (try ctx.stack.pop()).fixnum);
+}
+
+test "executeInstructions: a closure-owned body reads its captured scope off the carrier" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const module = try installProbeWordRivals(&ctx);
+
+    const push_scope: dict_mod.NativeFn = struct {
+        fn f(c: *Context) anyerror!void {
+            try c.stack.push(.{ .fixnum = 3 });
+        }
+    }.f;
+    var frame: LocalFrame = .{};
+    try frame.put(ctx.allocator, "probe-word", .{ .name = "probe-word", .action = .{ .native = push_scope } });
+    const frames = try ctx.allocator.alloc(LocalFrame, 1);
+    frames[0] = frame;
+    const scope = try ctx.allocator.create(CapturedScope);
+    scope.* = .{ .lexical_frames = frames, .allocator = ctx.allocator };
+
+    const cl = try closureOwnedProbeBody(&ctx, module, scope);
+    defer container_backing.releaseValue(.{ .closure = cl });
+
+    // The captured scope is consulted ahead of the defining module, and the map holds nothing for
+    // this body, so the binding can only have come off the value.
+    try ctx.executeQuotationWithOwner(cl.asQuotation(), cl);
+    try std.testing.expectEqual(@as(i64, 3), (try ctx.stack.pop()).fixnum);
+    try std.testing.expectEqual(@as(usize, 0), ctx.quotation_scope_info.count());
+
+    // The closure holds the only reference. Body entry takes none of its own, because the caller's
+    // hold on the closure is what keeps the scope alive for the call.
+    try std.testing.expectEqual(@as(u32, 1), scope.refcountValue());
 }
 
 test "executeInstructions: a stored quotation resolves its stamp in a child task" {

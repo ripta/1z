@@ -183,7 +183,14 @@ pub fn hasScopedHooks(ctx: *Context, param_name: []const u8) bool {
 pub fn fireScopedHooks(ctx: *Context, param_name: []const u8, args: []const Value) void {
     if (!hasScopedHooks(ctx, param_name)) return;
 
-    const items = ctx.getParameterBinding(param_name).?.array.items;
+    // The binding is only borrowed, and a hook may register another one, which rebinds the
+    // parameter and releases what this loop is walking. Holding the array for the sweep keeps both
+    // the slice and every closure body in it alive; reëntrancy suppression covers firing, not
+    // registration.
+    const bound = ctx.getParameterBinding(param_name).?;
+    container_backing.retainValue(bound);
+    defer container_backing.releaseValue(bound);
+    const items = bound.array.items;
 
     ctx.firing_scoped_hooks = true;
     defer ctx.firing_scoped_hooks = false;
@@ -191,7 +198,8 @@ pub fn fireScopedHooks(ctx: *Context, param_name: []const u8, args: []const Valu
     var i = items.len;
     while (i > 0) {
         i -= 1;
-        const quot = (helpers.asQuotationStamped(ctx, items[i]) catch continue) orelse continue;
+        const hook = items[i];
+        const quot = (helpers.asQuotationStamped(ctx, hook) catch continue) orelse continue;
 
         for (args) |arg| {
             ctx.stack.push(arg) catch continue;
@@ -199,7 +207,9 @@ pub fn fireScopedHooks(ctx: *Context, param_name: []const u8, args: []const Valu
 
         const saved_error_state = ctx.saveErrorState();
 
-        ctx.executeQuotation(quot) catch |err| {
+        // Borrowed: the retained array above owns every element for the sweep.
+        const callable: Callable = .{ .quot = quot, .owner = hook };
+        callable.execute(ctx) catch |err| {
             if (!builtin.is_test and !is_freestanding) {
                 const stderr_file: std.fs.File = .stderr();
                 var buf: [256]u8 = undefined;

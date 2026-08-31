@@ -358,7 +358,7 @@ pub const PackedIter = struct {
         // owned reference, so release the consumed input here.
         defer container_backing.releaseValue(elem);
         try ctx.stack.push(elem);
-        try ctx.executeQuotationWithFrame(rec.quotation);
+        try ctx.executeQuotationWithFrame(rec.quotation, null);
         return try ctx.stack.pop();
     }
 

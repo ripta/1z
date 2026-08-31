@@ -1,4 +1,5 @@
 const std = @import("std");
+const Callable = @import("../callable.zig").Callable;
 const context_mod = @import("../context.zig");
 const Context = context_mod.Context;
 const PragmaRegistration = context_mod.PragmaRegistration;
@@ -68,7 +69,9 @@ fn nativePragmaBlock(ctx: *Context) anyerror!void {
     const quot = (try helpers.asQuotationStamped(ctx, quot_val)) orelse return error.TypeMismatch;
 
     const depth_before = ctx.stack.depth();
-    try ctx.executeQuotation(quot);
+    // Borrowed: the `defer` above holds `quot_val` past the call.
+    const callable: Callable = .{ .quot = quot, .owner = quot_val };
+    try callable.execute(ctx);
     const depth_after = ctx.stack.depth();
 
     if (depth_after < depth_before) {

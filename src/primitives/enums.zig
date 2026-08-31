@@ -1,4 +1,5 @@
 const std = @import("std");
+const Callable = @import("../callable.zig").Callable;
 const Context = @import("../context.zig").Context;
 const value_mod = @import("../value.zig");
 const Value = value_mod.Value;
@@ -597,8 +598,9 @@ fn nativeMatch(ctx: *Context) anyerror!void {
         return error.NameError;
     };
 
-    var matched_body: ?value_mod.Quotation = null;
-    var default_body: ?value_mod.Quotation = null;
+    // Borrowed: the popped `branches_val` reference above outlives the branch body's execution.
+    var matched_body: ?Callable = null;
+    var default_body: ?Callable = null;
 
     // Per-call scratch. The state arena would retain it for the context's lifetime,
     // and this native runs once per match execution.
@@ -626,9 +628,13 @@ fn nativeMatch(ctx: *Context) anyerror!void {
                 return error.TypeMismatch;
             },
         };
-        const body = (try helpers.asQuotationStamped(ctx, branches[i + 1])) orelse {
-            helpers.setErrorContext(ctx, "match branch body must be a quotation", .{});
-            return error.TypeMismatch;
+        const body_val = branches[i + 1];
+        const body: Callable = .{
+            .quot = (try helpers.asQuotationStamped(ctx, body_val)) orelse {
+                helpers.setErrorContext(ctx, "match branch body must be a quotation", .{});
+                return error.TypeMismatch;
+            },
+            .owner = body_val,
         };
 
         if (is_default) {
@@ -686,11 +692,11 @@ fn nativeMatch(ctx: *Context) anyerror!void {
                 else => {},
             }
         }
-        try ctx.executeQuotation(body);
+        try body.execute(ctx);
     } else if (default_body) |body| {
         // Default branch receives the raw tagged value, not unwrapped
         try ctx.stack.push(val);
-        try ctx.executeQuotation(body);
+        try body.execute(ctx);
     } else {
         unreachable;
     }

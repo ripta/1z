@@ -940,11 +940,16 @@ pub fn deepCopyValue(val: Value, alloc: Allocator, longlived: Allocator) DeepCop
             // every refcounted value the source's bindings hold, so the destroy has to drop them.
             // The rest of the copy's pieces live on the destination task arena and ride its
             // teardown, so freeing them is a noöp.
+            //
+            // The defining module copies by pointer: modules are process-shared through the module
+            // cache. Carrying it is what keeps the copy resolvable at all, since the body was
+            // duplicated onto this arena and the shared stamp store cannot answer for the new key.
             break :blk .{ .closure = try value_mod.Closure.create(alloc, .{
                 .instructions = copied.instructions,
                 .effect = copied.effect,
                 .segments = new_segments,
                 .captured_scope = new_scope,
+                .defining_module = c.defining_module,
                 .header = undefined,
                 .owns_scope = new_scope != null,
             }) };
@@ -1511,6 +1516,28 @@ test "deepCopyValue: a quotation's declared effect is copied, not shared" {
     try testing.expect(copied_nested != &nested);
     try testing.expectEqualStrings("x", copied_nested.inputs[0].name);
     try testing.expect(copied_effect.outputs[0].is_row_variable);
+}
+
+test "deepCopyValue: a closure copy carries its defining module" {
+    const testing = std.testing;
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    var module: value_mod.Module = .{ .name = "m", .words = .{} };
+    const instrs = [_]Instruction{.{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 1 }};
+    const cl = try value_mod.Closure.create(testing.allocator, .{
+        .instructions = &instrs,
+        .segments = &.{},
+        .defining_module = &module,
+        .header = undefined,
+    });
+    defer container_backing.releaseValue(.{ .closure = cl });
+
+    // The copy's body lands on the destination task's arena, a key the shared stamp store cannot
+    // answer for, so the module has to ride the value across.
+    const copied = try deepCopyValue(.{ .closure = cl }, arena.allocator(), testing.allocator);
+    try testing.expect(copied.closure.instructions.ptr != cl.instructions.ptr);
+    try testing.expectEqual(@as(?*const value_mod.Module, &module), copied.closure.defining_module);
 }
 
 test "deepCopyValue: shares a self-contained hash by refcount bump" {

@@ -24,6 +24,7 @@ const dispatch_mod = @import("dispatch.zig");
 const context_module = @import("context.zig");
 const Context = context_module.Context;
 
+const Callable = @import("callable.zig").Callable;
 const container_backing = @import("container_backing.zig");
 
 const aot_image_mod = @import("aot_image.zig");
@@ -14658,7 +14659,9 @@ export fn jitCallQuotationValue(ctx_raw: usize, value_ptr_raw: usize) callconv(.
         return 2;
     };
 
-    ctx.executeQuotationWithFrame(quot) catch |err| {
+    // The retain above holds `val` across the execution, so the callable may borrow it.
+    const callable: Callable = .{ .quot = quot, .owner = val };
+    callable.executeWithFrame(ctx) catch |err| {
         ctx.jit_pending_error = err;
         return 2;
     };
@@ -15889,7 +15892,7 @@ export fn jitInterpretedCall(ctx_raw: usize, word_id_raw: usize, src_ptr_raw: us
                 .compound => |instrs| {
                     ctx.pushModuleDepsFrame(mod) catch |e| break :blk @as(anyerror!void, e);
                     defer ctx.popModuleDepsFrameTraced(mod);
-                    break :blk ctx.executeQuotationWithPic(.{ .instructions = instrs }, entry.pic_snapshot, mod);
+                    break :blk ctx.executeQuotationWithPic(.{ .instructions = instrs }, entry.pic_snapshot, mod, null);
                 },
                 .native => |func| break :blk func(ctx),
                 .host_callback => |host| break :blk host_result: {
@@ -15907,7 +15910,7 @@ export fn jitInterpretedCall(ctx_raw: usize, word_id_raw: usize, src_ptr_raw: us
                     if (rc != 0) break :host_result error.HostCallbackFailed;
                     break :host_result;
                 },
-                .compound => |instrs| ctx.executeQuotationWithPic(.{ .instructions = instrs }, entry.pic_snapshot, null),
+                .compound => |instrs| ctx.executeQuotationWithPic(.{ .instructions = instrs }, entry.pic_snapshot, null, null),
                 .literal => |v| ctx.stack.push(v),
             };
         }

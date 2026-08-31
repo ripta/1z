@@ -1592,6 +1592,15 @@ pub const Closure = struct {
     /// elsewhere. See `context.CapturedScope`.
     captured_scope: ?*const context_mod.CapturedScope = null,
 
+    /// The module the base body was written in, recorded by `curry`/`compose` at construction
+    /// and forwarded by every closure derived from another.
+    ///
+    /// A body this closure owns never enters the pointer-keyed `quotation_scope_info`, so this
+    /// is where body entry reads the defining module for it. Null when no base named one, or
+    /// when `compose`'s two bases named different ones: one field cannot stand for both halves
+    /// of the composed body.
+    defining_module: ?*const Module = null,
+
     /// Refcounted lifecycle header. Every closure carries one. A task-boundary
     /// deep copy's header lives on the destination task arena, and the copy
     /// rides the arena like the other cross-task copies; its destroy frees

@@ -2012,7 +2012,9 @@ fn callbackTrampoline(
         };
     }
 
-    ctx.executeQuotationWithFrame(ud.quotation) catch |err| {
+    // No owner: the registration parked its reference on the dictionary's teardown list and kept
+    // only the quotation view, so the callback has no value to carry here.
+    ctx.executeQuotationWithFrame(ud.quotation, null) catch |err| {
         return callbackFail(ud, args, ret, err, true, saved_error_state);
     };
 
