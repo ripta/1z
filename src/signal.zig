@@ -3,8 +3,9 @@ const builtin = @import("builtin");
 const posix = std.posix;
 
 const Context = @import("context.zig").Context;
+const container_backing = @import("container_backing.zig");
 const value_mod = @import("value.zig");
-const Quotation = value_mod.Quotation;
+const Callable = @import("callable.zig").Callable;
 
 const is_freestanding = builtin.os.tag == .freestanding;
 
@@ -20,19 +21,18 @@ var signal_pending: [MAX_SIGNALS]std.atomic.Value(bool) = blk: {
     break :blk arr;
 };
 
-/// A registered handler body and the closure behind it.
-///
-/// `owner` is borrowed: registration parked the owning reference on the dictionary's teardown
-/// list and kept only the view, so the pointer is what carries the body's captured scope and
-/// defining module to the dispatch below. Null for a plain quotation.
-pub const UserHandler = struct {
-    quot: Quotation,
-    owner: ?*const value_mod.Closure = null,
-};
-
 /// Per-signal user handlers. null means no user handler.
-/// Only accessed from the main interpreter thread; no synchronization needed.
-var user_handlers: [MAX_SIGNALS]?UserHandler = .{null} ** MAX_SIGNALS;
+///
+/// The table owns each entry: registration transfers the popped reference in, and replacement,
+/// clearing, and root-context teardown release it. That is what keeps a handler's body alive for
+/// as long as the table can dispatch it, including a handler registered inside a task that has
+/// since been reaped.
+///
+/// Guarded by `handlers_mutex`, since registration can run on any worker and dispatch reads at
+/// every worker's safe points. The mutex is a leaf: nothing that locks is called while it is
+/// held, and handler bodies execute only after it is released.
+var user_handlers: [MAX_SIGNALS]?Callable = .{null} ** MAX_SIGNALS;
+var handlers_mutex: std.Thread.Mutex = .{};
 
 /// Previous sigaction states for restoring defaults on removeHandler.
 var prev_actions: [MAX_SIGNALS]?posix.Sigaction = .{null} ** MAX_SIGNALS;
@@ -78,27 +78,52 @@ pub fn installHandler(signum: u6) void {
     };
     var old: posix.Sigaction = undefined;
     posix.sigaction(@intCast(signum), &act, &old);
+    handlers_mutex.lock();
+    defer handlers_mutex.unlock();
     prev_actions[signum] = old;
 }
 
 /// Restore the previous OS signal action and clear the user handler.
 pub fn removeHandler(signum: u6) void {
+    handlers_mutex.lock();
     if (prev_actions[signum]) |old| {
         posix.sigaction(@intCast(signum), &old, null);
         prev_actions[signum] = null;
     }
+    const displaced = user_handlers[signum];
     user_handlers[signum] = null;
+    handlers_mutex.unlock();
+    if (displaced) |d| d.release();
     signal_pending[signum].store(false, .release);
 }
 
-/// Register a user handler for a signal.
-pub fn setUserHandler(signum: u6, handler: ?UserHandler) void {
+/// Register a user handler for a signal, transferring ownership of `handler` into the table.
+/// The displaced entry, if any, is released.
+pub fn setUserHandler(signum: u6, handler: ?Callable) void {
+    handlers_mutex.lock();
+    const displaced = user_handlers[signum];
     user_handlers[signum] = handler;
+    handlers_mutex.unlock();
+    if (displaced) |d| d.release();
 }
 
-/// Retrieve the user handler for a signal, or null.
-pub fn getUserHandler(signum: u6) ?UserHandler {
-    return user_handlers[signum];
+/// Retain and return the handler for a signal, or null. The caller owns the returned copy and
+/// releases it after use, so a concurrent clear cannot free the body out from under a dispatch
+/// or a read-back.
+pub fn retainUserHandler(signum: u6) ?Callable {
+    handlers_mutex.lock();
+    defer handlers_mutex.unlock();
+    const h = user_handlers[signum] orelse return null;
+    container_backing.retainValue(h.owner);
+    return h;
+}
+
+/// Release every registered handler and clear the table. Called at root-context teardown, before
+/// the allocators behind the handler bodies go away.
+pub fn releaseUserHandlers() void {
+    for (0..MAX_SIGNALS) |i| {
+        setUserHandler(@intCast(i), null);
+    }
 }
 
 /// Returns true if the signal number is valid and can be caught
@@ -128,14 +153,15 @@ pub fn checkPendingSignals(ctx: *Context) error{UserThrown}!void {
         if (signal_pending[i].load(.acquire)) {
             signal_pending[i].store(false, .release);
 
-            if (user_handlers[i]) |handler| {
+            if (retainUserHandler(@intCast(i))) |handler| {
+                defer handler.release();
                 ctx.stack.push(.{ .fixnum = @intCast(i) }) catch return;
 
                 // A dropped handler error must not bleed into whatever the interrupted program
                 // raises next. A user throw is the exception: it propagates from here, so the
                 // state that raise wrote belongs to it and is left in place.
                 const saved_error_state = ctx.saveErrorState();
-                const handler_failed = if (ctx.executeQuotationWithOwner(handler.quot, handler.owner)) |_|
+                const handler_failed = if (ctx.executeQuotationWithOwner(handler.quot, handler.ownerClosure())) |_|
                     false
                 else |err| blk: {
                     if (err == error.UserThrown) return error.UserThrown;
@@ -215,7 +241,7 @@ test "a swallowed handler error gives back the state it overwrote" {
     instrs[0] = .{ .op = .{ .call_word = "nonexistent-word-for-signal-shield-test" }, .line = 1 };
 
     const signum: u6 = @intCast(SIG.TERM);
-    setUserHandler(signum, .{ .quot = .{ .instructions = instrs } });
+    setUserHandler(signum, .{ .quot = .{ .instructions = instrs }, .owner = .unit });
     defer setUserHandler(signum, null);
 
     ctx.pending_error_message = "body failed";
@@ -256,14 +282,16 @@ test "install does not crash" {
 
 test "user handler storage round-trips" {
     const signum: u6 = @intCast(SIG.TERM);
-    try testing.expect(getUserHandler(signum) == null);
+    try testing.expect(retainUserHandler(signum) == null);
 
-    const dummy = UserHandler{ .quot = .{ .instructions = &.{} } };
+    const dummy = Callable{ .quot = .{ .instructions = &.{} }, .owner = .unit };
     setUserHandler(signum, dummy);
-    try testing.expect(getUserHandler(signum) != null);
+    const got = retainUserHandler(signum);
+    try testing.expect(got != null);
+    got.?.release();
 
     setUserHandler(signum, null);
-    try testing.expect(getUserHandler(signum) == null);
+    try testing.expect(retainUserHandler(signum) == null);
 }
 
 fn testContext() Context {

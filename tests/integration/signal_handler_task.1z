@@ -1,0 +1,20 @@
+use "os/signal" ;
+use "posix" ;
+
+\ A handler registered inside a task must stay dispatchable after the task is
+\ reaped. The curried body is closure-owned, so this is the shape that dangled
+\ while the owning reference was parked on the task's dictionary.
+[ [ SIGWINCH "fired" [ swap drop print-line ] curry on-signal ] spawn drop ] task-scope
+
+\ Churn allocations so a freed body would be reused rather than read intact.
+1000 [ 123456789 inspect drop ] times
+
+getpid WINCH: send-signal
+100 [ ] times
+
+SIGWINCH signal-handler f = not [ "handler still registered" print-line ] when
+
+SIGWINCH off-signal
+f SIGWINCH signal-handler = [ "handler cleared" print-line ] when
+
+"done" print-line

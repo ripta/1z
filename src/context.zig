@@ -1881,6 +1881,9 @@ pub const Context = struct {
         // is torn down. Task contexts share the image slot tables with
         // their root, so only the root walks them.
         self.stack.clear();
+        // The process-global signal handler table owns its entries; the root releases them here,
+        // before the allocators behind the handler bodies go away.
+        if (self.parent_context == null) signal.releaseUserHandlers();
         self.dictionary.releaseRetainedValues();
         self.dictionary.walkContainerReleaseList();
         self.walkContainerReleaseList();

@@ -21,9 +21,9 @@ const Value = value_mod.Value;
 /// - The owner is parked on the dictionary's teardown list, which makes the body
 ///   context-lifetime. `adoptForTeardown` is that path.
 ///
-///   A parameter's default, a dispatch entry's method body, a pragma validator, a signal handler,
-///   an FFI callback, and a closure-bodied word definition each keep a `?*const Closure` carrier
-///   beside the view, from `ownerClosureOf`, since a body its closure owns resolves off the value.
+///   A parameter's default, a dispatch entry's method body, a pragma validator, an FFI callback,
+///   and a closure-bodied word definition each keep a `?*const Closure` carrier beside the view,
+///   from `ownerClosureOf`, since a body its closure owns resolves off the value.
 ///   A deferred parse-time emission needs none: it is spliced into the enclosing body rather than
 ///   run from where it was stored.
 /// - The owner is borrowed from a live container the site does not hold: `fireScopedHooks` runs

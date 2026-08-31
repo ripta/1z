@@ -49,7 +49,10 @@ pub const registry_entries = [_]RegistryEntry{
 /// ( signal quot -- )
 fn nativeSetSignalHandler(ctx: *Context) anyerror!void {
     if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "set-signal-handler");
-    // The handler body escapes into the global handler table.
+    // The popped reference transfers into the global handler table, which owns it until the
+    // handler is replaced, cleared, or the root context tears down. Parking it on the calling
+    // context's dictionary would free a task-registered handler at reap while the table can
+    // still dispatch it.
     const pc = try helpers.popQuotation(ctx);
     errdefer pc.release();
     const signum = try helpers.popFixnum(ctx);
@@ -60,8 +63,7 @@ fn nativeSetSignalHandler(ctx: *Context) anyerror!void {
     }
 
     const s: u6 = @intCast(signum);
-    signal_mod.setUserHandler(s, .{ .quot = pc.quot, .owner = pc.ownerClosure() });
-    try pc.adoptForTeardown(ctx);
+    signal_mod.setUserHandler(s, pc);
     signal_mod.installHandler(s);
 }
 
@@ -95,11 +97,16 @@ fn nativeGetSignalHandler(ctx: *Context) anyerror!void {
     }
 
     const s: u6 = @intCast(signum);
-    if (signal_mod.getUserHandler(s)) |handler| {
-        // The bare view, not the closure behind it. `push` retains, and this table's entry can
-        // outlive its own registration: a handler registered inside a task is parked on that
-        // task's dictionary and freed at reap, leaving a pointer only a read survives.
-        try ctx.stack.push(.{ .quotation = handler.quot });
+    if (signal_mod.retainUserHandler(s)) |handler| {
+        if (handler.owner == .closure) {
+            // The retained copy transfers into the stack slot, so the read-back keeps the
+            // handler's creation-site scope.
+            errdefer handler.release();
+            try ctx.stack.pushMoved(handler.owner);
+        } else {
+            defer handler.release();
+            try ctx.stack.push(.{ .quotation = handler.quot });
+        }
     } else {
         try ctx.stack.push(.{ .boolean = false });
     }
