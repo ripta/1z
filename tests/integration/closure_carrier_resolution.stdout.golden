@@ -1,0 +1,16 @@
+Stack: [ ]
+=== direct call ===
+Stack: [ ]
+Stack: [ "LIB-SECRET" ]
+PASS: a curried closure resolves its module-private word at a direct call
+Stack: [ ]
+=== spawned task ===
+Stack: [ ]
+PASS: a closure created before the spawn resolves inside the task
+Stack: [ ]
+=== stored iterator ===
+Stack: [ ]
+Stack: [ { "LIB-SECRET" "LIB-SECRET" "LIB-SECRET" } ]
+Stack: [ { "LIB-SECRET" "LIB-SECRET" "LIB-SECRET" } { "LIB-SECRET" "LIB-SECRET" "LIB-SECRET" } ]
+PASS: a stored iterator hands the closure back at each element
+Stack: [ ]

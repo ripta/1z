@@ -1,5 +1,7 @@
 const std = @import("std");
 
+const closure_body_registry = @import("closure_body_registry.zig");
+
 const context_mod = @import("context.zig");
 const Context = context_mod.Context;
 
@@ -1651,6 +1653,8 @@ pub const Closure = struct {
         const self = try allocator.create(Closure);
         self.* = template;
         self.header.init(allocator, destroyClosure);
+        if (self.owns_body)
+            closure_body_registry.register(@intFromPtr(self.instructions.ptr), self.instructions.len);
         return self;
     }
 
@@ -1696,6 +1700,7 @@ pub const Closure = struct {
         const alloc = header.allocator;
 
         if (self.owns_body) {
+            closure_body_registry.deregister(@intFromPtr(self.instructions.ptr), self.instructions.len);
             cb.releaseInstructionsContainerLiterals(self.instructions);
             alloc.free(self.instructions);
         }

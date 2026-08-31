@@ -1,0 +1,16 @@
+\ Bounded-memory regression for executed closure bodies.
+\
+\ Executing a curry or compose product used to leave a permanent entry in the
+\ body-keyed resolution maps, keyed by a body address the closure frees on
+\ release. The loop words build one closure per iteration, so every loop below
+\ `times` grew memory linearly with its iteration count and exhausted the 4 MB
+\ cap set in the `.flags` sidecar partway through. A closure-owned body now
+\ never enters the maps, so all three probes stay flat.
+
+50000 [ 1 [ drop ] curry call ] times
+
+0 [ 1 + dup 50000 < ] loop drop
+
+50000 [ dup 0 > ] [ 1 - ] while drop
+
+"flat" print-line

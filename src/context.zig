@@ -61,6 +61,7 @@ const LockOrderTracker = lock_order.LockOrderTracker;
 const QuotationStampStore = @import("quotation_stamp_store.zig").QuotationStampStore;
 const QuotationSourceStore = @import("quotation_source_store.zig").QuotationSourceStore;
 const CarryableScopeGate = @import("carryable_scope_gate.zig").CarryableScopeGate;
+const closure_body_registry = @import("closure_body_registry.zig");
 const LoadLock = @import("load_lock.zig").LoadLock;
 const ReifiedDecodeCache = @import("reified_decode_cache.zig").ReifiedDecodeCache;
 
@@ -2601,32 +2602,78 @@ pub const Context = struct {
             .allocator = self.allocator,
         };
 
-        // A descendant task may read this map through `findCapturedScopeForBody`'s parent walk, so
-        // the swap is taken under this context's map mutex to exclude a concurrent read during a
-        // rehash. Only self ever writes self's map, so this stays consistent without holding the
-        // mutex across the frame build above. The superseded scope is released after unlocking,
-        // since a free should not run while the mutex is held. The mutex is also released on the
-        // `getOrPut` error path (e.g. an OOM rehash), so a failed capture can't leave a live
-        // descendant-task read permanently blocked on this context's mutex.
-        //
-        // A fresh entry's module half is filled from the shared stamp store, keeping every entry's
-        // module half authoritative: the body-entry probe trusts a map hit without a store probe.
-        // The lookup is lock-free, so taking it under the mutex costs one probe on creation only.
-        //
-        // A deps-only entry carries no lexical frame and the walk steps past it, so it does not
-        // mark the gate.
-        if (has_lexical) _ = try self.carryable_scope_gate.mark(key);
+        // The push-literal caller holds no closure, and a pushed literal's body is module-owned,
+        // so the carrier is truthfully null here.
+        _ = try self.publishQuotationScopeEntry(instructions, scope, null, .supersede);
+        return if (has_lexical) scope else null;
+    }
+
+    /// How `publishQuotationScopeEntry` resolves a collision. `.supersede` replaces the entry's
+    /// scope and releases the one it displaced. `.fill_if_absent` keeps a collision's existing
+    /// entry and releases the offered scope instead, which is the read-through fill's
+    /// first-write-wins.
+    const ScopePublishMode = enum { supersede, fill_if_absent };
+
+    /// The one writer of `quotation_scope_info` and the one marker of `carryable_scope_gate`.
+    ///
+    /// Every production insert funnels through here, so the admission rule has a single choke
+    /// point: a body a closure owns never enters either structure, because its address dies with
+    /// the closure and its resolution data rides the value. The carrier assert re-checks what the
+    /// caller already decided. The live-body registry answers independently off the closure
+    /// lifecycle, so it also catches a writer that threads no carrier at all.
+    ///
+    /// Ownership of `scope` transfers in, resolved per `mode`. The gate is marked before the
+    /// entry is published whenever the installed scope carries a lexical frame; a deps-only
+    /// scope is invisible to the ancestor walk and does not mark. A fresh entry's module half is
+    /// filled from the shared stamp store, keeping every entry's module half authoritative: the
+    /// body-entry probe trusts a map hit without a store probe. The lookup is lock-free, so
+    /// taking it under the mutex costs one probe on creation only.
+    ///
+    /// A descendant task may read this map through `findCapturedScopeForBody`'s parent walk, so
+    /// the publish is taken under this context's map mutex to exclude a concurrent read during a
+    /// rehash. The displaced scope is released after unlocking, since a free should not run
+    /// while the mutex is held. The mutex is also released on the `getOrPut` error path (e.g. an
+    /// OOM rehash), so a failed publish can't leave a live descendant-task read permanently
+    /// blocked on this context's mutex.
+    fn publishQuotationScopeEntry(
+        self: *Context,
+        instructions: []const Instruction,
+        scope: ?*CapturedScope,
+        owner: ?*const value_mod.Closure,
+        mode: ScopePublishMode,
+    ) !QuotationScopeInfo {
+        const key = @intFromPtr(instructions.ptr);
+
+        if (comptime builtin.mode == .Debug) {
+            if (owner) |c| std.debug.assert(!c.ownsBody(instructions));
+            closure_body_registry.assertNotLive(key);
+        }
+
+        const carryable = if (scope) |s| s.lexical_frames.len > 0 else false;
+        if (carryable) _ = try self.carryable_scope_gate.mark(key);
 
         self.captured_scope_mu.lock();
         errdefer self.captured_scope_mu.unlock();
         const gop = try self.quotation_scope_info.getOrPut(self.allocator, key);
-        if (!gop.found_existing)
+        const fresh = !gop.found_existing;
+        if (fresh)
             gop.value_ptr.* = .{ .defining_module = self.quotation_stamp_store.lookup(key) };
-        const superseded: ?*CapturedScope = gop.value_ptr.scope;
-        gop.value_ptr.scope = scope;
+
+        var displaced: ?*CapturedScope = null;
+        switch (mode) {
+            .supersede => {
+                displaced = gop.value_ptr.scope;
+                gop.value_ptr.scope = scope;
+            },
+            .fill_if_absent => {
+                if (fresh) gop.value_ptr.scope = scope else displaced = scope;
+            },
+        }
+
+        const info = gop.value_ptr.*;
         self.captured_scope_mu.unlock();
-        if (superseded) |old| old.release();
-        return if (has_lexical) scope else null;
+        if (displaced) |old| old.release();
+        return info;
     }
 
     /// Append the modules whose `.module_deps` frame is currently live above the import floor.
@@ -2848,13 +2895,10 @@ pub const Context = struct {
     /// dropped, leaving `executeInstructions`'s lookup resolving the second closure's bare words
     /// against the first closure's stale scope.
     ///
-    /// The swap is taken under this context's map mutex to exclude a descendant's parent-walk
-    /// read, mirroring `captureQuotationScope`. The superseded copy is released after unlocking, so
-    /// a free never runs while the mutex is held. For a leaf task no descendant reads its map, so
-    /// the mutex is uncontended. `scope` (the source being copied) is always either an
-    /// independently-owned closure copy or a map entry read and consumed synchronously within the
-    /// same native call (e.g. `spawn`), so no retain of `scope` itself is needed here -- it cannot
-    /// be superseded out from under this call.
+    /// `scope` (the source being copied) is always either an independently-owned closure copy or
+    /// a map entry read and consumed synchronously within the same native call (e.g. `spawn`).
+    /// It cannot be superseded out from under this call, so no retain of `scope` itself is
+    /// needed here.
     ///
     /// `owner` is the closure the body came out of, when there is one. A body that closure owns is
     /// refused: its address dies with the closure, so a permanent entry under it would outlive its
@@ -2872,22 +2916,7 @@ pub const Context = struct {
         const dup = try dupeCapturedScope(self.allocator, scope);
         errdefer dup.release();
 
-        // A fresh entry's module half is filled from the shared stamp store, so the body-entry
-        // probe can trust a map hit without a store probe.
-        //
-        // A scope with no lexical frame is invisible to the walk, so it does not mark the gate.
-        const key = @intFromPtr(instructions.ptr);
-        if (scope.lexical_frames.len > 0) _ = try self.carryable_scope_gate.mark(key);
-
-        self.captured_scope_mu.lock();
-        errdefer self.captured_scope_mu.unlock();
-        const gop = try self.quotation_scope_info.getOrPut(self.allocator, key);
-        if (!gop.found_existing)
-            gop.value_ptr.* = .{ .defining_module = self.quotation_stamp_store.lookup(key) };
-        const superseded: ?*CapturedScope = gop.value_ptr.scope;
-        gop.value_ptr.scope = dup;
-        self.captured_scope_mu.unlock();
-        if (superseded) |old| old.release();
+        _ = try self.publishQuotationScopeEntry(instructions, dup, owner, .supersede);
     }
 
     /// Record `module` as the defining module of this body and every quotation
@@ -7956,42 +7985,22 @@ pub const Context = struct {
             }
             if (body_module != null or instructions.len == 0) break :blk .{};
 
-            // The store probe and the ancestor walk run before the lock: the probe is lock-free,
-            // the walk takes one ancestor mutex at a time and never this context's own, and self
-            // is the map's only writer, so the miss above cannot be raced.
-            //
-            // The insert is taken under the map mutex to exclude a descendant's parent-walk read,
-            // released on the `getOrPut` error path. The walk's copy is released after unlocking
-            // on the found-existing path, which single-writer-self makes unreachable in practice.
+            // The ancestor walk runs before the publish takes this context's map mutex: it takes
+            // one ancestor mutex at a time and never this context's own, and self is the map's
+            // only writer, so the miss above cannot be raced.
             //
             // Skipping the walk on an unmarked body is exactly equivalent to running it. The walk
             // returns non-null only when a context on the chain holds a carryable entry for this
             // body, and every writer that installs one marks the key before publishing the entry.
             // A probe that lands before a concurrent writer's mark caches a null, which is what
             // the walk itself would have found at that instant.
-            const stamped = self.quotation_stamp_store.lookup(key);
             const inherited = if (self.carryable_scope_gate.isMarked(key))
                 try self.findCapturedScopeForBody(self.allocator, key)
             else
                 null;
             errdefer if (inherited) |s| s.release();
 
-            // The walk returns only carryable scopes, so a non-null result marks. The ancestor
-            // this was copied from already marked the same key, so the mark never adds one. It is
-            // written anyway to keep the mark-before-publish obligation checkable at each writer
-            // that installs a carryable scope, rather than resting on an argument about the other
-            // two.
-            if (inherited != null) _ = try self.carryable_scope_gate.mark(key);
-
-            self.captured_scope_mu.lock();
-            errdefer self.captured_scope_mu.unlock();
-            const gop = try self.quotation_scope_info.getOrPut(self.allocator, key);
-            const fresh = !gop.found_existing;
-            if (fresh) gop.value_ptr.* = .{ .defining_module = stamped, .scope = inherited };
-            const info = gop.value_ptr.*;
-            self.captured_scope_mu.unlock();
-            if (!fresh) if (inherited) |s| s.release();
-            break :blk info;
+            break :blk try self.publishQuotationScopeEntry(instructions, inherited, owner, .fill_if_absent);
         };
         // A map entry is supersedable, so the map path holds its own reference for the call. A
         // closure-carried scope needs none: the caller holds the closure across the execution,

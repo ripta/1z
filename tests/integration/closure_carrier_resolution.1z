@@ -1,0 +1,34 @@
+\ Regression test: a curried closure resolves its creation-site bare words at every consumer
+\ shape: a direct call, a spawned task, and an iterator stored across statements.
+\
+\ A body its closure owns never enters the pointer-keyed resolution maps, so each consumer must
+\ carry the closure to the execution entry point. The stored iterator is the long-lived shape: it
+\ holds the closure beside the body and hands it back at each element, well after the statement
+\ that built it has finished.
+
+use "testing" ;
+use { make-secret-caller: make-secret-method: } "./closure_carrier_holder.1z" ;
+
+\ Stored first, drained last, so the closure rides the iterator across the other two sections.
+held: { 1 2 3 } >iterator make-secret-method #map ;
+
+"direct call" test-section
+
+make-secret-caller call
+"LIB-SECRET" "a curried closure resolves its module-private word at a direct call" assert=
+
+"spawned task" test-section
+
+[
+  out: 1 <buffered-channel> ;
+  parent-made: make-secret-caller ;
+  [ parent-made out send ] spawn drop
+  out receive
+  "LIB-SECRET" "a closure created before the spawn resolves inside the task" assert=
+] task-scope
+
+"stored iterator" test-section
+
+held #collect
+{ "LIB-SECRET" "LIB-SECRET" "LIB-SECRET" }
+"a stored iterator hands the closure back at each element" assert=
