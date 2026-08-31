@@ -343,6 +343,12 @@ fn markersContainGeneric(markers: []const *value_mod.Marker) bool {
 /// with the same protocol.
 pub const PragmaRegistration = struct {
     validator: ?value_mod.Quotation = null,
+
+    /// The closure behind `validator`, for a body it owns. Borrowed: registration parked the
+    /// owning reference on the dictionary's teardown list and kept only the view, so the pointer
+    /// is what carries the body's captured scope and defining module to the call below.
+    validator_owner: ?*const value_mod.Closure = null,
+
     native_validator: ?*const fn (*Context) anyerror!void = null,
 };
 
@@ -659,6 +665,10 @@ pub const Context = struct {
     /// Source file of the tail call target, for execution-source tracking.
     /// Set alongside tail_call_instructions when the tail-called word has a source_file.
     tail_call_source: ?[]const u8 = null,
+    /// Closure behind the tail call target's body, for a body it owns. Set alongside
+    /// `tail_call_instructions` from the callee's `body_owner`, so a `;`- or `>module`-adopted
+    /// closure body reached in tail position resolves off its own value rather than the caller's.
+    tail_call_body_owner: ?*const value_mod.Closure = null,
     /// Directory of the currently executing source file for relative path resolution
     current_source_dir: ?[]const u8 = null,
     /// User-configured load paths for search-mode module resolution
@@ -2842,8 +2852,19 @@ pub const Context = struct {
     /// independently-owned closure copy or a map entry read and consumed synchronously within the
     /// same native call (e.g. `spawn`), so no retain of `scope` itself is needed here -- it cannot
     /// be superseded out from under this call.
-    pub fn stampCapturedScopeForExecution(self: *Context, instructions: []const Instruction, scope: *const CapturedScope) !void {
+    ///
+    /// `owner` is the closure the body came out of, when there is one. A body that closure owns is
+    /// refused: its address dies with the closure, so a permanent entry under it would outlive its
+    /// own key, and it carries `scope` on the value already. A push-time promotion aliases a module
+    /// literal rather than allocating, so it is not owned and still stamps.
+    pub fn stampCapturedScopeForExecution(
+        self: *Context,
+        instructions: []const Instruction,
+        scope: *const CapturedScope,
+        owner: ?*const value_mod.Closure,
+    ) !void {
         if (instructions.len == 0) return;
+        if (owner) |c| if (c.ownsBody(instructions)) return;
 
         const dup = try dupeCapturedScope(self.allocator, scope);
         errdefer dup.release();
@@ -2968,6 +2989,7 @@ pub const Context = struct {
             .source_line = def.source_line,
             .source_column = def.source_column,
             .provenance = def.provenance,
+            .body_owner = def.body_owner,
             .action = switch (def.action) {
                 .compound => |instrs| .{ .compound = instrs },
                 .native => |func| .{ .native = func },
@@ -3006,6 +3028,7 @@ pub const Context = struct {
             // Compiled functions and image word rows are keyed per (module, word), so the row's
             // id names this entry's own body and a frame or probe hit dispatches compiled.
             .word_id = mod_word.word_id,
+            .body_owner = mod_word.body_owner,
             .action = switch (mod_word.action) {
                 .compound => |instrs| .{ .compound = instrs },
                 .native => |func| .{ .native = func },
@@ -4532,6 +4555,7 @@ pub const Context = struct {
             .capability = mod_word.capability,
             .word_id = mod_word.word_id,
             .dispatch_id = mod_word.dispatch_id,
+            .body_owner = mod_word.body_owner,
             .action = switch (mod_word.action) {
                 .compound => |instrs| .{ .compound = instrs },
                 .native => |func| .{ .native = func },
@@ -5979,7 +6003,7 @@ pub const Context = struct {
                     const rc = host.callback(host.handle, host.user_data);
                     if (rc != 0) return error.HostCallbackFailed;
                 },
-                .compound => |instrs| try self.executeInstructions(instrs, null, null, null),
+                .compound => |instrs| try self.executeInstructions(instrs, null, null, module_word.body_owner),
                 .literal => |v| try self.stack.push(v),
             }
         } else {
@@ -6077,7 +6101,7 @@ pub const Context = struct {
                     //              must have that tail call resolved here, while this module-deps frame
                     //              is still live, instead of leaking a pending tail call past the
                     //              deps-frame teardown.
-                    try self.executeQuotationWithPic(.{ .instructions = instrs }, null, module, null);
+                    try self.executeQuotationWithPic(.{ .instructions = instrs }, null, module, mod_word.body_owner);
                 },
                 .native => |func| try func(self),
                 .host_callback => |host| {
@@ -7252,6 +7276,7 @@ pub const Context = struct {
         var current_pic = pic_table;
         var current_module: ?*const value_mod.Module = null;
         var body_module: ?*const value_mod.Module = initial_module;
+        var current_owner = owner;
         var owns_frame = false;
 
         while (true) {
@@ -7260,6 +7285,7 @@ pub const Context = struct {
             self.tail_call_instructions = null;
             self.tail_call_module = null;
             self.tail_call_source = null;
+            self.tail_call_body_owner = null;
 
             // Push module deps frame on first entry into a module context. On
             // subsequent iterations, the frame persists so that runtime-defined
@@ -7270,11 +7296,7 @@ pub const Context = struct {
                 owns_frame = true;
             }
 
-            // Nothing clears `owner` on a tail call, unlike `current_pic` below. A tail call into
-            // the closure's own body is reachable -- `;` binds `c.instructions` as the defined
-            // word's compound action -- and that body still resolves off the value it came from.
-            // Body entry sorts the two cases out.
-            const exec_result = self.executeInstructions(current_instructions, current_pic, body_module, owner);
+            const exec_result = self.executeInstructions(current_instructions, current_pic, body_module, current_owner);
             exec_result catch |err| {
                 if (owns_frame) {
                     if (self.trace.trace_modules.deps) {
@@ -7300,6 +7322,13 @@ pub const Context = struct {
 
                 if (self.tail_call_source) |tcs| self.current_source = tcs;
                 self.tail_call_source = null;
+
+                // The carrier follows the body, so it is replaced rather than inherited: the
+                // callee names its own closure when it has one, and null when it does not. A tail
+                // call back into the same body still resolves, because `;` records that closure on
+                // the word it defines.
+                current_owner = self.tail_call_body_owner;
+                self.tail_call_body_owner = null;
 
                 const new_module = self.tail_call_module;
                 self.tail_call_module = null;
@@ -7527,11 +7556,14 @@ pub const Context = struct {
         const tci_module = self.tail_call_module;
         self.tail_call_module = null;
 
+        const tci_owner = self.tail_call_body_owner;
+        self.tail_call_body_owner = null;
+
         if (tci_module) |mod| {
             self.pushModuleDepsFrame(mod) catch |e| return self.wordErrorCleanup(name, e);
         }
 
-        self.executeQuotation(.{ .instructions = tci }) catch |err| {
+        self.executeQuotationWithOwner(.{ .instructions = tci }, tci_owner) catch |err| {
             if (tci_module) |mod| self.popModuleDepsFrameTraced(mod);
             return self.wordErrorCleanup(name, err);
         };
@@ -7722,6 +7754,7 @@ pub const Context = struct {
                     self.tail_call_instructions = instrs;
                     self.tail_call_module = word.source_module;
                     self.tail_call_source = word.source_file;
+                    self.tail_call_body_owner = word.body_owner;
                     return .tail_call_set;
                 },
                 .native => |func| {
@@ -7800,7 +7833,7 @@ pub const Context = struct {
                         .compound => |instrs| {
                             self.pushModuleDepsFrame(mod) catch |e| break :blk @as(anyerror!void, e);
                             defer self.popModuleDepsFrameTraced(mod);
-                            break :blk self.executeQuotationWithPic(.{ .instructions = instrs }, callee_pic, mod, null);
+                            break :blk self.executeQuotationWithPic(.{ .instructions = instrs }, callee_pic, mod, word.body_owner);
                         },
                         .native => |func| break :blk func(self),
                         .host_callback => |host| break :blk host_result: {
@@ -7821,7 +7854,7 @@ pub const Context = struct {
                             if (rc != 0) break :host_result error.HostCallbackFailed;
                             break :host_result;
                         },
-                        .compound => |instrs| self.executeQuotationWithPic(.{ .instructions = instrs }, callee_pic, null, null),
+                        .compound => |instrs| self.executeQuotationWithPic(.{ .instructions = instrs }, callee_pic, null, word.body_owner),
                         .literal => |v| self.stack.push(v),
                     };
                 }
@@ -7901,18 +7934,11 @@ pub const Context = struct {
         // A body its closure owns takes none of that. Its address is freed when the closure is
         // released, so it never enters the map, and both halves ride the value instead.
         //
-        // The pointer test is what makes `owner` a hint rather than an assertion. It admits the
-        // closure only for the body the closure names, so a splice, a tail call into an unrelated
-        // word, and a caller threading a stale value all fall through to the map instead of
-        // borrowing a scope that belongs to different code.
-        //
-        // An empty body is excluded on the same terms the map path and the stamp store exclude it:
-        // every zero-length allocation shares one sentinel address, so the pointer test cannot
-        // tell two of them apart.
-        const from_closure = if (owner) |c|
-            instructions.len != 0 and c.instructions.ptr == instructions.ptr and c.ownsBodyTransitively()
-        else
-            false;
+        // `ownsBody` is what makes `owner` a hint rather than an assertion. It admits the closure
+        // only for the body the closure names, so a splice, a tail call into an unrelated word, and
+        // a caller threading a stale value all fall through to the map instead of borrowing a scope
+        // that belongs to different code.
+        const from_closure = if (owner) |c| c.ownsBody(instructions) else false;
 
         const scope_info: QuotationScopeInfo = if (from_closure) .{
             // The store still has the last word where the value has none: `;` turns a closure into
@@ -13045,15 +13071,73 @@ test "stampCapturedScopeForExecution: a fresh entry's module half is filled from
     _ = try ctx.quotation_stamp_store.stamp(@intFromPtr(&body), &def_module);
 
     var scope: CapturedScope = .{ .lexical_frames = &.{}, .deps_modules = &.{}, .allocator = ctx.allocator };
-    try ctx.stampCapturedScopeForExecution(&body, &scope);
+    try ctx.stampCapturedScopeForExecution(&body, &scope, null);
     const info = ctx.quotation_scope_info.get(@intFromPtr(&body)) orelse return error.TestExpectedEntry;
     try std.testing.expectEqual(@as(?*const value_mod.Module, &def_module), info.defining_module);
     try std.testing.expect(info.scope != null);
 
     // A supersede rewrites only the scope half; the cached stamp stays.
-    try ctx.stampCapturedScopeForExecution(&body, &scope);
+    try ctx.stampCapturedScopeForExecution(&body, &scope, null);
     const again = ctx.quotation_scope_info.get(@intFromPtr(&body)) orelse return error.TestExpectedEntry;
     try std.testing.expectEqual(@as(?*const value_mod.Module, &def_module), again.defining_module);
+}
+
+test "stampCapturedScopeForExecution: a closure-owned body enters neither the map nor the gate" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    // A lexical frame, so a stamp that went through would mark the gate as well as the map.
+    var frame: LocalFrame = .{};
+    try frame.put(ctx.allocator, "local", .{ .name = "local", .action = .{ .compound = &.{} } });
+    const frames = try ctx.allocator.alloc(LocalFrame, 1);
+    frames[0] = frame;
+    defer {
+        frames[0].deinit(ctx.allocator);
+        ctx.allocator.free(frames);
+    }
+    var scope: CapturedScope = .{ .lexical_frames = frames, .deps_modules = &.{}, .allocator = ctx.allocator };
+
+    const cl = try closureOwnedProbeBody(&ctx, null, null);
+    defer container_backing.releaseValue(.{ .closure = cl });
+
+    try ctx.stampCapturedScopeForExecution(cl.instructions, &scope, cl);
+    try std.testing.expectEqual(@as(usize, 0), ctx.quotation_scope_info.count());
+    try std.testing.expect(!ctx.carryable_scope_gate.isMarked(@intFromPtr(cl.instructions.ptr)));
+}
+
+test "stampCapturedScopeForExecution: a push-time promotion still stamps" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    // A promotion aliases the module-owned literal rather than allocating, so its body address is
+    // process-lifetime and the map is still the right home for it.
+    const body = try ctx.arena.allocator().alloc(Instruction, 1);
+    body[0] = .{ .op = .{ .call_word = "w" }, .line = 1 };
+    const cl = try value_mod.Closure.create(ctx.allocator, .{
+        .instructions = body,
+        .segments = &.{},
+        .header = undefined,
+    });
+    defer container_backing.releaseValue(.{ .closure = cl });
+
+    var scope: CapturedScope = .{ .lexical_frames = &.{}, .deps_modules = &.{}, .allocator = ctx.allocator };
+    try ctx.stampCapturedScopeForExecution(cl.instructions, &scope, cl);
+    try std.testing.expect(ctx.quotation_scope_info.get(@intFromPtr(body.ptr)) != null);
+}
+
+test "stampCapturedScopeForExecution: a carrier naming a different body does not exempt it" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const cl = try closureOwnedProbeBody(&ctx, null, null);
+    defer container_backing.releaseValue(.{ .closure = cl });
+
+    const other = try ctx.arena.allocator().alloc(Instruction, 1);
+    other[0] = .{ .op = .{ .call_word = "w" }, .line = 1 };
+
+    var scope: CapturedScope = .{ .lexical_frames = &.{}, .deps_modules = &.{}, .allocator = ctx.allocator };
+    try ctx.stampCapturedScopeForExecution(other, &scope, cl);
+    try std.testing.expect(ctx.quotation_scope_info.get(@intFromPtr(other.ptr)) != null);
 }
 
 test "captureQuotationScope: a lexical capture marks the carryable scope gate" {
@@ -13109,7 +13193,7 @@ test "stampCapturedScopeForExecution: marks the gate only for a scope with a lex
 
     const deps_body = [_]Instruction{.{ .op = .{ .call_word = "w" }, .line = 0 }};
     var empty: CapturedScope = .{ .lexical_frames = &.{}, .deps_modules = &.{}, .allocator = ctx.allocator };
-    try ctx.stampCapturedScopeForExecution(&deps_body, &empty);
+    try ctx.stampCapturedScopeForExecution(&deps_body, &empty, null);
     try std.testing.expect(!ctx.carryable_scope_gate.isMarked(@intFromPtr(&deps_body)));
 
     var frame: LocalFrame = .{};
@@ -13123,7 +13207,7 @@ test "stampCapturedScopeForExecution: marks the gate only for a scope with a lex
     var lexical: CapturedScope = .{ .lexical_frames = frames, .deps_modules = &.{}, .allocator = ctx.allocator };
 
     const lexical_body = [_]Instruction{.{ .op = .{ .call_word = "local" }, .line = 0 }};
-    try ctx.stampCapturedScopeForExecution(&lexical_body, &lexical);
+    try ctx.stampCapturedScopeForExecution(&lexical_body, &lexical, null);
     try std.testing.expect(ctx.carryable_scope_gate.isMarked(@intFromPtr(&lexical_body)));
 }
 
@@ -13624,7 +13708,7 @@ test "stampCapturedScopeForExecution: a second stamp with a different scope supe
     }
 
     const body = [_]Instruction{.{ .op = .{ .call_word = "w" }, .line = 0 }};
-    try ctx.stampCapturedScopeForExecution(&body, &scope1);
+    try ctx.stampCapturedScopeForExecution(&body, &scope1, null);
 
     const stamped = (ctx.quotation_scope_info.get(@intFromPtr(&body)) orelse return error.TestExpectedStamp).scope orelse
         return error.TestExpectedStamp;
@@ -13637,7 +13721,7 @@ test "stampCapturedScopeForExecution: a second stamp with a different scope supe
     // rather than leaving it in place: two closures sharing this key (the common case for closures
     // built by repeated executions of the same loop-nested literal, via `promoteToClosure`) must
     // each resolve against their own carried scope, not whichever was stamped first.
-    try ctx.stampCapturedScopeForExecution(&body, &scope2);
+    try ctx.stampCapturedScopeForExecution(&body, &scope2, null);
     const again = ctx.quotation_scope_info.get(@intFromPtr(&body)).?.scope.?;
     // Compare addresses only: `stamped` is superseded and released by this second call, so it
     // must not be dereferenced.
@@ -13671,7 +13755,7 @@ test "stampCapturedScopeForExecution: a retained scope survives a supersede, fre
     }
 
     const body = [_]Instruction{.{ .op = .{ .call_word = "w" }, .line = 0 }};
-    try ctx.stampCapturedScopeForExecution(&body, &scope1);
+    try ctx.stampCapturedScopeForExecution(&body, &scope1, null);
     const first: *CapturedScope = (ctx.quotation_scope_info.get(@intFromPtr(&body)) orelse return error.TestExpectedStamp).scope orelse
         return error.TestExpectedStamp;
 
@@ -13680,7 +13764,7 @@ test "stampCapturedScopeForExecution: a retained scope survives a supersede, fre
     first.retain();
     try std.testing.expectEqual(@as(u32, 2), first.refcountValue());
 
-    try ctx.stampCapturedScopeForExecution(&body, &scope2);
+    try ctx.stampCapturedScopeForExecution(&body, &scope2, null);
 
     // Superseding dropped the map's own hold, but the simulated reader's retain keeps `first` alive
     // and readable.

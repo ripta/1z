@@ -1,0 +1,90 @@
+\ Regression test: a registry that stores a quotation view for later execution keeps the closure
+\ behind it, so a `curry` product still resolves its creation-site words when the registry runs it.
+\
+\ A body its closure owns never enters the pointer-keyed resolution map, so each of these sites has
+\ to hand the closure back at the call. Without that the body sees neither its defining module nor
+\ its captured deps, and the private `secret` its creation site could reach fails to resolve.
+
+use "testing" ;
+use "os/signal" ;
+use "posix" ;
+use {
+  make-secret-validator:
+  make-secret-default:
+  make-secret-method:
+  make-secret-signal-handler:
+  make-secret-definer:
+  make-secret-caller:
+} "./closure_carrier_holder.1z" ;
+use { adopted-in-module: } "./closure_carrier_adopter.1z" ;
+
+"pragma validator" test-section
+
+"secret-pragma" make-secret-validator register-pragma
+pragma{ secret-pragma: 1 }
+"secret-pragma" pragma-get? option:some>
+"LIB-SECRET" "pragma validator resolves its module-private word" assert=
+
+"parameter default" test-section
+
+secret-param: secret-default: make-secret-default make-parameter ;
+secret-param get
+"LIB-SECRET" "parameter default resolves its module-private word" assert=
+
+"dispatch method body" test-section
+
+secret-generic: generic ( x -- y ) [ drop "no method" ] ;
+method-descriptor: M{ } ;
+method-descriptor "types" { fixnum } @set! drop
+method-descriptor "body" make-secret-method @set! drop
+secret-generic: method-descriptor { } define-method
+
+1 secret-generic
+"LIB-SECRET" "dispatch method body resolves its module-private word" assert=
+
+"definition descriptor define body" test-section
+
+define-sink: V{ } ;
+descriptor: M{ } ;
+descriptor "define" define-sink make-secret-definer @set! drop
+secret-thing: descriptor ;
+
+define-sink 0 #nth
+"LIB-SECRET" "descriptor define body resolves its module-private word" assert=
+
+"signal handler" test-section
+
+signal-sink: V{ } ;
+SIGWINCH signal-sink make-secret-signal-handler on-signal
+getpid WINCH: send-signal
+
+\ `kill` to self delivers before it returns, so the flag is already set; the handler itself runs at
+\ the next interpreter safe point, which this loop reaches.
+100 [ ] times
+SIGWINCH off-signal
+
+signal-sink 0 #nth
+"LIB-SECRET" "signal handler resolves its module-private word" assert=
+
+"closure adopted as a word body" test-section
+
+adopted-word: make-secret-caller ;
+adopted-word
+"LIB-SECRET" "a `;`-adopted closure body resolves its module-private word" assert=
+
+\ The same adoption inside a module load, which promotes the frame definition to a module word
+\ before anything calls it. The adopting module is not the one the body's private word belongs to,
+\ so its own deps frame cannot stand in for the carrier.
+adopted-in-module
+"LIB-SECRET" "a closure adopted during a module load resolves the same way" assert=
+
+"closure adopted as a module word" test-section
+
+built: "built" H{ } "adopted-module-word" make-secret-caller @set >module ;
+built import
+adopted-module-word
+"LIB-SECRET" "a `>module` closure body resolves its module-private word" assert=
+
+\ Qualified access reaches the module word through its own path rather than the imported copy.
+built.adopted-module-word
+"LIB-SECRET" "the same body resolves under qualified access" assert=

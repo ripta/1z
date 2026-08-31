@@ -60,7 +60,7 @@ fn nativeSetSignalHandler(ctx: *Context) anyerror!void {
     }
 
     const s: u6 = @intCast(signum);
-    signal_mod.setUserHandler(s, pc.quot);
+    signal_mod.setUserHandler(s, .{ .quot = pc.quot, .owner = pc.ownerClosure() });
     try pc.adoptForTeardown(ctx);
     signal_mod.installHandler(s);
 }
@@ -96,7 +96,10 @@ fn nativeGetSignalHandler(ctx: *Context) anyerror!void {
 
     const s: u6 = @intCast(signum);
     if (signal_mod.getUserHandler(s)) |handler| {
-        try ctx.stack.push(.{ .quotation = handler });
+        // The bare view, not the closure behind it. `push` retains, and this table's entry can
+        // outlive its own registration: a handler registered inside a task is parked on that
+        // task's dictionary and freed at reap, leaving a pointer only a read survives.
+        try ctx.stack.push(.{ .quotation = handler.quot });
     } else {
         try ctx.stack.push(.{ .boolean = false });
     }

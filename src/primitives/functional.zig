@@ -110,6 +110,10 @@ fn baseCapturedScope(ctx: *Context, alloc: std.mem.Allocator, val: Value) !Scope
 /// probed, this context's map first and then the shared stamp store. That probe is what covers
 /// a push-time promotion, whose own field is null because it aliases a module literal rather
 /// than allocating a body.
+///
+/// A body the base owns skips the map, which is forbidden to key its address. The store probe
+/// stays: `;` binds such a body as a compound word and parks the closure on the dictionary's
+/// teardown list, which makes it process-lifetime and lets module finalization stamp it.
 fn baseDefiningModule(ctx: *Context, val: Value) ?*const value_mod.Module {
     if (val == .closure) {
         if (val.closure.defining_module) |m| return m;
@@ -117,8 +121,11 @@ fn baseDefiningModule(ctx: *Context, val: Value) ?*const value_mod.Module {
 
     const instrs = callableInstrs(val) orelse return null;
     const key = @intFromPtr(instrs.ptr);
-    if (ctx.quotation_scope_info.get(key)) |info| {
-        if (info.defining_module) |m| return m;
+    const owned = val == .closure and val.closure.ownsBody(instrs);
+    if (!owned) {
+        if (ctx.quotation_scope_info.get(key)) |info| {
+            if (info.defining_module) |m| return m;
+        }
     }
     return ctx.quotation_stamp_store.lookup(key);
 }
@@ -174,21 +181,26 @@ fn mergeCapturedScopes(alloc: std.mem.Allocator, a: *const CapturedScope, b: *co
 /// Only called when `baseCapturedScope` carried nothing: a base with a genuine lexical scope
 /// already carries its own `deps_modules` on that scope.
 ///
-/// The base-scope probe reads this context's own map only, with no ancestor walk. `curry` runs
-/// where the base was pushed, so its deps are in this context's map; the `appendLiveDepsModules`
-/// fallback below covers a base pushed by compiled code. The one uncovered shape -- a base created
-/// in a parent under a live deps frame, passed to a child, and curried in the child where that
-/// frame is not live -- falls back to the child's live frames and can under-propagate the parent's
-/// captured deps. Its worst case is a fail-loud `UnknownWord` for that pattern, never a wrong
-/// resolution.
-fn makeDepsOnlyScope(ctx: *Context, alloc: std.mem.Allocator, bases: []const []const Instruction) !?*CapturedScope {
+/// A closure base is read off the value. Its body may be one it owns, whose address the map is
+/// forbidden to key, so a probe there could only match an unrelated later allocation.
+///
+/// A quotation base is probed in this context's own map, with no ancestor walk. `curry` runs where
+/// the base was pushed, so its deps are there; the `appendLiveDepsModules` fallback below covers a
+/// base pushed by compiled code. The one uncovered shape -- a base created in a parent under a live
+/// deps frame, passed to a child, and curried in the child where that frame is not live -- falls
+/// back to the child's live frames and can under-propagate the parent's captured deps. Its worst
+/// case is a fail-loud `UnknownWord` for that pattern, never a wrong resolution.
+fn makeDepsOnlyScope(ctx: *Context, alloc: std.mem.Allocator, bases: []const Value) !?*CapturedScope {
     var deps: std.ArrayListUnmanaged(*const value_mod.Module) = .{};
     defer deps.deinit(ctx.allocator);
     for (bases) |base| {
-        if (ctx.quotation_scope_info.get(@intFromPtr(base.ptr))) |info| {
-            if (info.scope) |s| {
-                for (s.deps_modules) |m| try deps.append(ctx.allocator, m);
-            }
+        const scope: ?*const CapturedScope = switch (base) {
+            .closure => |c| c.captured_scope,
+            .quotation => |q| if (ctx.quotation_scope_info.get(@intFromPtr(q.instructions.ptr))) |info| info.scope else null,
+            else => null,
+        };
+        if (scope) |s| {
+            for (s.deps_modules) |m| try deps.append(ctx.allocator, m);
         }
     }
 
@@ -254,15 +266,16 @@ pub fn nativeCurry(ctx: *Context) anyerror!void {
 
     // Carry the base's captured lexical scope onto the new body so a curried closure resolves its
     // bare words at its creation site wherever it later runs. A scope-less base still contributes
-    // its ambient deps as an owned deps-only scope, and the executing context's map is stamped too,
-    // so a `;`-adopted word body that runs without a pop resolves the same way.
+    // its ambient deps as an owned deps-only scope.
+    //
+    // Both ride the value alone: the fresh body is one this closure owns, so nothing keyed by its
+    // address may describe it.
     var carried = try baseCapturedScope(ctx, alloc, quot_val);
     errdefer if (!built and carried.owned) @constCast(carried.scope.?).release();
 
     if (carried.scope == null) {
-        if (try makeDepsOnlyScope(ctx, alloc, &.{base_instrs})) |scope| {
+        if (try makeDepsOnlyScope(ctx, alloc, &.{quot_val})) |scope| {
             carried = .{ .scope = scope, .owned = true };
-            try ctx.stampCapturedScopeForExecution(new_instrs, scope);
         }
     }
 
@@ -408,10 +421,9 @@ pub fn nativeCompose(ctx: *Context) anyerror!void {
     errdefer if (!built and carried_owned) @constCast(carried.?).release();
 
     if (carried == null) {
-        if (try makeDepsOnlyScope(ctx, alloc, &.{ instrs1, instrs2 })) |scope| {
+        if (try makeDepsOnlyScope(ctx, alloc, &.{ quot1_val, quot2_val })) |scope| {
             carried = scope;
             carried_owned = true;
-            try ctx.stampCapturedScopeForExecution(new_instrs, scope);
         }
     }
 
@@ -845,6 +857,71 @@ test "compose: the product carries a defining module only where both bases agree
     const neither = try ctx.stack.pop();
     defer container_backing.releaseValue(neither);
     try std.testing.expectEqual(@as(?*const value_mod.Module, null), neither.closure.defining_module);
+}
+
+test "curry: the deps-only scope rides the value and leaves the map untouched" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    // A live deps frame is what gives the scope-less base something to contribute.
+    var module: value_mod.Module = .{ .name = "m", .words = .{} };
+    try ctx.pushLocalFrame();
+    try ctx.pushModuleDepsFrame(&module);
+
+    try ctx.stack.push(.{ .fixnum = 7 });
+    try ctx.stack.push(try stampedBase(&ctx, &module));
+    try nativeCurry(&ctx);
+
+    const result = try ctx.stack.pop();
+    defer container_backing.releaseValue(result);
+
+    const carried = result.closure.captured_scope orelse return error.TestExpectedScope;
+    try std.testing.expectEqual(@as(usize, 1), carried.deps_modules.len);
+    try std.testing.expectEqual(@as(*const value_mod.Module, &module), carried.deps_modules[0]);
+
+    // The product's body is freed when the closure is released, so an entry under its address
+    // would outlive its own key.
+    try std.testing.expect(ctx.quotation_scope_info.get(@intFromPtr(result.closure.instructions.ptr)) == null);
+}
+
+test "curry: a closure base's deps come off the value, not from its body's address" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    var module: value_mod.Module = .{ .name = "m", .words = .{} };
+    var stale: value_mod.Module = .{ .name = "stale", .words = .{} };
+
+    // A scope-less closure over a body it owns, the shape whose deps `makeDepsOnlyScope` sources.
+    const body = try ctx.allocator.alloc(Instruction, 1);
+    body[0] = .{ .op = .{ .push_literal = .{ .fixnum = 0 } }, .line = 1 };
+    const base = try Closure.create(ctx.allocator, .{
+        .instructions = body,
+        .segments = &.{},
+        .header = undefined,
+        .owns_body = true,
+    });
+
+    // What a recycled address looks like: an entry left by whatever last held this pointer.
+    const deps = try ctx.allocator.alloc(*const value_mod.Module, 1);
+    deps[0] = &stale;
+    const ghost = try ctx.allocator.create(context_mod.CapturedScope);
+    ghost.* = .{ .lexical_frames = &.{}, .deps_modules = deps, .allocator = ctx.allocator };
+    try ctx.quotation_scope_info.put(ctx.allocator, @intFromPtr(body.ptr), .{ .scope = ghost });
+
+    try ctx.pushLocalFrame();
+    try ctx.pushModuleDepsFrame(&module);
+
+    try ctx.stack.push(.{ .fixnum = 7 });
+    try ctx.stack.pushMoved(.{ .closure = base });
+    try nativeCurry(&ctx);
+
+    const result = try ctx.stack.pop();
+    defer container_backing.releaseValue(result);
+
+    // The live frame's module, not the dead entry's.
+    const carried = result.closure.captured_scope orelse return error.TestExpectedScope;
+    try std.testing.expectEqual(@as(usize, 1), carried.deps_modules.len);
+    try std.testing.expectEqual(@as(*const value_mod.Module, &module), carried.deps_modules[0]);
 }
 
 test "attach-stack-effect: the derived closure inherits the base's defining module" {

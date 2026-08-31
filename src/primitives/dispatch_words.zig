@@ -7,6 +7,7 @@ const dispatch_mod = @import("../dispatch.zig");
 const DispatchKey = dispatch_mod.DispatchKey;
 const DispatchEntry = dispatch_mod.DispatchEntry;
 
+const callable_mod = @import("../callable.zig");
 const container_backing = @import("../container_backing.zig");
 const helpers = @import("helpers.zig");
 const markers_mod = @import("markers.zig");
@@ -156,6 +157,7 @@ fn nativeDefineMethod(ctx: *Context) anyerror!void {
     const entry = DispatchEntry{
         .body = .{ .quotation = .{ .instructions = body.instructions } },
         .source_module = ctx.loading_module,
+        .body_owner = callable_mod.ownerClosureOf(body_val),
     };
 
     ctx.registerDispatch(key, entry, allow_overwrite) catch |err| {

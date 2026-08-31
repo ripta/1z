@@ -6,6 +6,7 @@ const Marker = value_mod.Marker;
 const MutableMap = value_mod.MutableMap;
 const Parameter = value_mod.Parameter;
 
+const callable_mod = @import("../callable.zig");
 const dictionary_mod = @import("../dictionary.zig");
 const WordDefinition = dictionary_mod.WordDefinition;
 const container_backing = @import("../container_backing.zig");
@@ -38,6 +39,7 @@ pub fn nativeMakeParameter(ctx: *Context) anyerror!void {
     param.* = .{
         .name = alloc.dupe(u8, name.bytes) catch return error.OutOfMemory,
         .default_quotation = default_pc.quot,
+        .default_owner = default_pc.ownerClosure(),
     };
     try default_pc.adoptForTeardown(ctx);
     adopted = true;
@@ -103,6 +105,7 @@ pub fn nativeDefineParameter(ctx: *Context) anyerror!void {
     param.* = .{
         .name = name_copy,
         .default_quotation = default_quot,
+        .default_owner = callable_mod.ownerClosureOf(default_val),
     };
 
     var markers_list = std.ArrayListUnmanaged(*Marker){};
@@ -147,7 +150,7 @@ pub fn nativeGet(ctx: *Context) anyerror!void {
     if (ctx.getParameterBinding(param.name)) |bound_value| {
         try ctx.stack.push(bound_value);
     } else {
-        try ctx.executeQuotation(param.default_quotation);
+        try ctx.executeQuotationWithOwner(param.default_quotation, param.default_owner);
     }
 }
 

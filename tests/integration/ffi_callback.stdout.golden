@@ -47,3 +47,5 @@ PASS: callback error propagates
 Stack: [ ]
 PASS: toy_apply2 with a callback capturing an outer local = 107
 Stack: [ ]
+PASS: toy_apply2 with a curried callback over a module-private word = 10
+Stack: [ ]

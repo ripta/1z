@@ -1,5 +1,6 @@
 const std = @import("std");
-const Callable = @import("../callable.zig").Callable;
+const callable_mod = @import("../callable.zig");
+const Callable = callable_mod.Callable;
 const context_mod = @import("../context.zig");
 const Context = context_mod.Context;
 const PragmaRegistration = context_mod.PragmaRegistration;
@@ -42,7 +43,10 @@ fn nativeRegisterPragma(ctx: *Context) anyerror!void {
             }
             break :blk .{ .validator = null };
         },
-        .quotation, .closure => .{ .validator = (try helpers.asQuotationStamped(ctx, validator_val)).? },
+        .quotation, .closure => .{
+            .validator = (try helpers.asQuotationStamped(ctx, validator_val)).?,
+            .validator_owner = callable_mod.ownerClosureOf(validator_val),
+        },
         else => {
             helpers.setTypeMismatchError(ctx, "quotation or f", validator_val);
             return error.TypeMismatch;
@@ -163,7 +167,10 @@ fn nativePragmaDefBlock(ctx: *Context) anyerror!void {
                             try ctx.retainValueForTeardown(next);
                         }
                         const duped_name = try alloc.dupe(u8, name.bytes);
-                        try ctx.registerPragmaKey(duped_name, .{ .validator = q });
+                        try ctx.registerPragmaKey(duped_name, .{
+                            .validator = q,
+                            .validator_owner = callable_mod.ownerClosureOf(next),
+                        });
                     },
                     else => {
                         const msg = std.fmt.allocPrint(alloc, "pragma-def: '{s}' validator must be a quotation", .{name.bytes}) catch "expected quotation";
@@ -213,7 +220,7 @@ fn runValidator(ctx: *Context, alloc: std.mem.Allocator, reg: PragmaRegistration
     if (reg.native_validator) |native_fn| {
         try native_fn(ctx);
     } else if (reg.validator) |validator| {
-        try ctx.executeQuotation(validator);
+        try ctx.executeQuotationWithOwner(validator, reg.validator_owner);
     } else unreachable;
 
     const ok = try helpers.popBoolean(ctx);

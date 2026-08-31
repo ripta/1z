@@ -20,9 +20,19 @@ var signal_pending: [MAX_SIGNALS]std.atomic.Value(bool) = blk: {
     break :blk arr;
 };
 
-/// Per-signal user handler quotations. null means no user handler.
+/// A registered handler body and the closure behind it.
+///
+/// `owner` is borrowed: registration parked the owning reference on the dictionary's teardown
+/// list and kept only the view, so the pointer is what carries the body's captured scope and
+/// defining module to the dispatch below. Null for a plain quotation.
+pub const UserHandler = struct {
+    quot: Quotation,
+    owner: ?*const value_mod.Closure = null,
+};
+
+/// Per-signal user handlers. null means no user handler.
 /// Only accessed from the main interpreter thread; no synchronization needed.
-var user_handlers: [MAX_SIGNALS]?Quotation = .{null} ** MAX_SIGNALS;
+var user_handlers: [MAX_SIGNALS]?UserHandler = .{null} ** MAX_SIGNALS;
 
 /// Previous sigaction states for restoring defaults on removeHandler.
 var prev_actions: [MAX_SIGNALS]?posix.Sigaction = .{null} ** MAX_SIGNALS;
@@ -81,13 +91,13 @@ pub fn removeHandler(signum: u6) void {
     signal_pending[signum].store(false, .release);
 }
 
-/// Register a user handler quotation for a signal.
-pub fn setUserHandler(signum: u6, handler: ?Quotation) void {
+/// Register a user handler for a signal.
+pub fn setUserHandler(signum: u6, handler: ?UserHandler) void {
     user_handlers[signum] = handler;
 }
 
-/// Retrieve the user handler quotation for a signal, or null.
-pub fn getUserHandler(signum: u6) ?Quotation {
+/// Retrieve the user handler for a signal, or null.
+pub fn getUserHandler(signum: u6) ?UserHandler {
     return user_handlers[signum];
 }
 
@@ -125,7 +135,7 @@ pub fn checkPendingSignals(ctx: *Context) error{UserThrown}!void {
                 // raises next. A user throw is the exception: it propagates from here, so the
                 // state that raise wrote belongs to it and is left in place.
                 const saved_error_state = ctx.saveErrorState();
-                const handler_failed = if (ctx.executeQuotation(handler)) |_|
+                const handler_failed = if (ctx.executeQuotationWithOwner(handler.quot, handler.owner)) |_|
                     false
                 else |err| blk: {
                     if (err == error.UserThrown) return error.UserThrown;
@@ -205,7 +215,7 @@ test "a swallowed handler error gives back the state it overwrote" {
     instrs[0] = .{ .op = .{ .call_word = "nonexistent-word-for-signal-shield-test" }, .line = 1 };
 
     const signum: u6 = @intCast(SIG.TERM);
-    setUserHandler(signum, .{ .instructions = instrs });
+    setUserHandler(signum, .{ .quot = .{ .instructions = instrs } });
     defer setUserHandler(signum, null);
 
     ctx.pending_error_message = "body failed";
@@ -248,7 +258,7 @@ test "user handler storage round-trips" {
     const signum: u6 = @intCast(SIG.TERM);
     try testing.expect(getUserHandler(signum) == null);
 
-    const dummy = Quotation{ .instructions = &.{} };
+    const dummy = UserHandler{ .quot = .{ .instructions = &.{} } };
     setUserHandler(signum, dummy);
     try testing.expect(getUserHandler(signum) != null);
 

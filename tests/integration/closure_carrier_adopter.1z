@@ -1,0 +1,11 @@
+\ Second companion module for closure_carrier_sites.1z.
+\
+\ Adopts another module's closure as one of its own words, so the adoption runs during a module load
+\ and the definition is promoted to a module word before anything calls it. The body's private word
+\ belongs to the holder, not here, so this module's own deps frame cannot resolve it: only the
+\ carrier the promotion carries across can.
+
+use { make-secret-caller: } "./closure_carrier_holder.1z" ;
+
+\\ A `( -- s )` word whose body is a closure built in another module.
+adopted-in-module: ( -- s ) make-secret-caller ;

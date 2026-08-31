@@ -1,0 +1,60 @@
+=== pragma validator ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ "LIB-SECRET" ]
+PASS: pragma validator resolves its module-private word
+Stack: [ ]
+=== parameter default ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ "LIB-SECRET" ]
+PASS: parameter default resolves its module-private word
+Stack: [ ]
+=== dispatch method body ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ "LIB-SECRET" ]
+PASS: dispatch method body resolves its module-private word
+Stack: [ ]
+=== definition descriptor define body ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ "LIB-SECRET" ]
+PASS: descriptor define body resolves its module-private word
+Stack: [ ]
+=== signal handler ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ "LIB-SECRET" ]
+PASS: signal handler resolves its module-private word
+Stack: [ ]
+=== closure adopted as a word body ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ "LIB-SECRET" ]
+PASS: a `;`-adopted closure body resolves its module-private word
+Stack: [ ]
+Stack: [ "LIB-SECRET" ]
+PASS: a closure adopted during a module load resolves the same way
+Stack: [ ]
+=== closure adopted as a module word ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ "LIB-SECRET" ]
+PASS: a `>module` closure body resolves its module-private word
+Stack: [ ]
+Stack: [ "LIB-SECRET" ]
+PASS: the same body resolves under qualified access
+Stack: [ ]

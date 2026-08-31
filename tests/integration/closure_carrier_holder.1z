@@ -1,0 +1,34 @@
+\ Companion module for closure_carrier_sites.1z.
+\
+\ Every word here hands back a `curry` product whose body calls this module's private `secret`.
+\ `curry` allocates a fresh body, which the closure owns, so nothing keyed by that body's address
+\ may describe it. The module and the scope the body resolves against ride the closure value.
+\ `secret` therefore resolves only where the registry that stored the body also kept the closure
+\ and handed it back to the interpreter at the call.
+
+private{
+  secret: ( -- s ) [ "LIB-SECRET" ] ;
+}
+
+\\ A `( -- s )` closure answering with the secret, for the sites that adopt one as a word body.
+make-secret-caller: ( -- quot ) [ 0 [ drop secret ] curry ] ;
+
+\\ A `( value -- validated ok )` pragma validator answering with the secret.
+make-secret-validator: ( -- quot ) [ 0 [ drop drop secret t ] curry ] ;
+
+\\ A `( -- s )` parameter default answering with the secret.
+make-secret-default: ( -- quot ) [ 0 [ drop secret ] curry ] ;
+
+\\ A `( x -- s )` dispatch method body answering with the secret.
+make-secret-method: ( -- quot ) [ 0 [ drop drop secret ] curry ] ;
+
+\\ A `( a b -- n )` FFI callback body answering with the secret's length.
+make-secret-callback: ( -- quot ) [ 0 [ drop drop drop secret #len ] curry ] ;
+
+\\ A `( signum -- )` signal handler appending the secret to `sink`.
+make-secret-signal-handler: ( sink: vector -- quot ) [ [ swap drop secret #push! drop ] curry ] ;
+
+\\ A `( name descriptor markers -- )` definition-descriptor body appending the secret to `sink`.
+make-secret-definer: ( sink: vector -- quot ) [
+  [ [ drop drop drop ] dip secret #push! drop ] curry
+] ;

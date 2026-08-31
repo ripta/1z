@@ -597,6 +597,10 @@ pub fn popBoolean(ctx: *Context) !bool {
 /// scope into `ctx` first so its body resolves bare words at its creation site wherever `ctx`
 /// later executes it. Returns null for a non-callable value.
 ///
+/// The stamp covers a push-time promotion, whose body is a module literal the map may key. A body
+/// the closure owns is refused there and resolves off the value instead, so a caller that returns
+/// the bare view has to keep the closure reachable and hand it to the execution entry point.
+///
 /// Used by any site that extracts a callable from something other than a direct stack pop (an
 /// array element, a descriptor map field, a hash entry), where `popQuotation`'s own stack-pop
 /// isn't applicable.
@@ -607,7 +611,7 @@ pub fn asQuotationStamped(ctx: *Context, val: Value) !?Quotation {
             // Stamp the closure's carried scope into this context so its body resolves its bare
             // words at its creation site. This runs the closure in the current task, so the stamp
             // belongs here; `spawn` hands the closure to a child task instead and stamps there.
-            if (c.captured_scope) |scope| try ctx.stampCapturedScopeForExecution(c.instructions, scope);
+            if (c.captured_scope) |scope| try ctx.stampCapturedScopeForExecution(c.instructions, scope, c);
             break :blk c.asQuotation();
         },
         else => null,
@@ -664,8 +668,11 @@ pub fn popCallableWithScope(ctx: *Context) !CallableWithScope {
         .closure => |c| {
             // A closure normally carries its scope on the value. A residual null-scope closure,
             // such as one whose bases contributed no deps at all, may still have a side-map entry
-            // for its body, so fall back to the same lookup the quotation arm makes.
+            // for its body, so fall back to the same lookup the quotation arm makes. A body the
+            // closure owns is skipped: the map is forbidden to key its address, so a hit there
+            // could only belong to an unrelated later allocation.
             const scope: ?*const CapturedScope = c.captured_scope orelse blk: {
+                if (c.ownsBody(c.instructions)) break :blk null;
                 if (ctx.quotation_scope_info.count() == 0) break :blk null;
                 const info = ctx.quotation_scope_info.get(@intFromPtr(c.instructions.ptr)) orelse break :blk null;
                 break :blk info.scope;

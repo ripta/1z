@@ -78,7 +78,8 @@ pub const c_ffi = if (is_freestanding) struct {
     @cInclude("ffi.h");
 });
 
-const Callable = @import("../callable.zig").Callable;
+const callable_mod = @import("../callable.zig");
+const Callable = callable_mod.Callable;
 const Context = @import("../context.zig").Context;
 const helpers = @import("../primitives/helpers.zig");
 const error_mapping = @import("../primitives/error_mapping.zig");
@@ -1877,6 +1878,12 @@ pub const ErrorHookFn = *const fn (?*anyopaque, ?*anyopaque, [*:0]const u8) call
 const CallbackUserData = struct {
     ctx: *Context,
     quotation: Quotation,
+
+    /// The closure behind `quotation`, for a body it owns. Borrowed: registration parked the
+    /// owning reference on the dictionary's teardown list and kept only the view, so the pointer
+    /// is what carries the body's captured scope and defining module into the trampoline.
+    quotation_owner: ?*const value_mod.Closure = null,
+
     sig: *const FfiSignature,
     cif: c_ffi.ffi_cif,
     arg_types: [][*c]c_ffi.ffi_type,
@@ -2012,9 +2019,7 @@ fn callbackTrampoline(
         };
     }
 
-    // No owner: the registration parked its reference on the dictionary's teardown list and kept
-    // only the quotation view, so the callback has no value to carry here.
-    ctx.executeQuotationWithFrame(ud.quotation, null) catch |err| {
+    ctx.executeQuotationWithFrame(ud.quotation, ud.quotation_owner) catch |err| {
         return callbackFail(ud, args, ret, err, true, saved_error_state);
     };
 
@@ -2289,6 +2294,7 @@ fn nativeFfiCallback(ctx: *Context) anyerror!void {
     ud.* = .{
         .ctx = ctx,
         .quotation = quotation,
+        .quotation_owner = callable_mod.ownerClosureOf(quot_val),
         .sig = sig,
         .cif = undefined,
         .arg_types = arg_types,

@@ -874,6 +874,13 @@ pub const Resource = struct {
 pub const Parameter = struct {
     name: []const u8,
     default_quotation: Quotation, // Lazy default - evaluated on get if unbound
+
+    /// The closure behind `default_quotation`, for a body it owns. Borrowed: the definition
+    /// parked the owning reference on the dictionary's teardown list and kept only the view, so
+    /// the pointer is what carries the body's captured scope and defining module to each
+    /// evaluation. Null for a plain quotation and for an AOT-loaded parameter, whose body comes
+    /// out of bytecode with no value behind it.
+    default_owner: ?*const Closure = null,
 };
 
 /// Marker represents a named marker for attaching metadata to definitions.
@@ -1384,6 +1391,10 @@ pub const ModuleWord = struct {
     /// through to compiled dispatch when their compound body is the M1
     /// stub.
     word_id: ?u32 = null,
+    /// The closure a `.compound` body came out of, for a body it owns. `>module` sets it and
+    /// `importWord` carries it across. Borrowed on the same terms as `dictionary.WordDefinition`'s
+    /// field of the same name, which this one feeds.
+    body_owner: ?*const Closure = null,
     action: Action,
 
     pub const Action = union(enum) {
@@ -1661,6 +1672,21 @@ pub const Closure = struct {
             if (base.instructions.ptr == self.instructions.ptr and base.ownsBodyTransitively()) return true;
         }
         return false;
+    }
+
+    /// Whether `instructions` is this closure's own heap-owned body, and so carries its resolution
+    /// data on this value rather than in the pointer-keyed side map.
+    ///
+    /// The admission test for both sides of that rule: body entry reads the carrier only for a body
+    /// it answers true for, and the map writers refuse exactly those. Asking about the slice rather
+    /// than about the closure alone is what keeps a threaded carrier a hint: a splice, a tail call
+    /// into another word, and a stale value all answer false and fall through to the map.
+    ///
+    /// An empty body answers false. Every zero-length allocation shares one sentinel address, so
+    /// the pointer test cannot tell two of them apart; the map path and the stamp store exclude it
+    /// on the same terms.
+    pub fn ownsBody(self: *const Closure, instructions: []const Instruction) bool {
+        return instructions.len != 0 and self.instructions.ptr == instructions.ptr and self.ownsBodyTransitively();
     }
 
     /// Release-to-zero callback. Frees memory only; it never executes user code.

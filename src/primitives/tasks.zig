@@ -96,7 +96,10 @@ fn allocateTaskWithEntry(
     // A spawned closure carries its creation-site scope on the value. Stamp it into the child task
     // context here, before the child can be enqueued and run, so its body resolves bare words at its
     // creation site. The copy is child-owned and freed when the task is reaped.
-    if (captured_scope) |cs| try task_ctx.stampCapturedScopeForExecution(callable.quot.instructions, cs);
+    //
+    // A body the closure owns takes nothing from the stamp: it is refused there, and the task holds
+    // the closure across the run so body entry reads the scope off the value.
+    if (captured_scope) |cs| try task_ctx.stampCapturedScopeForExecution(callable.quot.instructions, cs, callable.ownerClosure());
 
     task.* = .{
         .id = scheduler.nextId(),

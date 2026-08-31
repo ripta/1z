@@ -22,6 +22,7 @@ const jit_dump = @import("../jit_dump.zig");
 const call_graph_mod = @import("../call_graph.zig");
 const ir_codegen = @import("../ir_codegen.zig");
 const stack_effect_mod = @import("../stack_effect.zig");
+const callable_mod = @import("../callable.zig");
 const container_backing = @import("../container_backing.zig");
 const dict_mod = @import("../dictionary.zig");
 const primitives_root = @import("../primitives.zig");
@@ -125,6 +126,7 @@ fn nativeToModule(ctx: *Context) anyerror!void {
         const effect = if (quot.effect) |eff| try stack_effect_mod.copyOnto(alloc, eff.*) else null;
         try module.words.put(alloc, key_copy, .{
             .stack_effect = effect,
+            .body_owner = callable_mod.ownerClosureOf(val),
             .action = .{ .compound = quot.instructions },
         });
     }
@@ -590,6 +592,7 @@ pub fn importWord(ctx: *Context, name: []const u8, mod_word: ModuleWord, module:
         // baked pre-merge dispatch table and miss merged methods, so the merged
         // case stays interpreted.
         .word_id = if (effective_dispatch_id == mod_word.dispatch_id) mod_word.word_id else null,
+        .body_owner = mod_word.body_owner,
         .action = switch (mod_word.action) {
             .compound => |instrs| .{ .compound = instrs },
             .native => |func| .{ .native = func },

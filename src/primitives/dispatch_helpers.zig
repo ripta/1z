@@ -32,9 +32,9 @@ pub fn executeDispatchBody(ctx: *Context, entry: dispatch_mod.DispatchEntry) !vo
             if (entry.source_module) |mod| {
                 try ctx.pushModuleDepsFrame(mod);
                 defer ctx.popModuleDepsFrameTraced(mod);
-                try runDispatchQuotation(ctx, q, mod);
+                try runDispatchQuotation(ctx, q, mod, entry.body_owner);
             } else {
-                try runDispatchQuotation(ctx, q, null);
+                try runDispatchQuotation(ctx, q, null, entry.body_owner);
             }
         },
         // A registered native method keeps the in-flight name. It is reached through the generic
@@ -59,11 +59,17 @@ pub fn executeDispatchBody(ctx: *Context, entry: dispatch_mod.DispatchEntry) !vo
 /// `body_module` is the method's defining module, threaded so the body resolves its module's own
 /// words under the `.module_deps` visibility filter -- the frame `executeDispatchBody` just pushed
 /// is admitted only when the body reports that module as its defining one.
-fn runDispatchQuotation(ctx: *Context, q: value_mod.Quotation, body_module: ?*const value_mod.Module) !void {
+///
+/// `owner` is the closure a `define-method` body came out of, threaded so a body that closure owns
+/// reads its captured scope and defining module off the value.
+fn runDispatchQuotation(
+    ctx: *Context,
+    q: value_mod.Quotation,
+    body_module: ?*const value_mod.Module,
+    owner: ?*const value_mod.Closure,
+) !void {
     if (q.code_ptr != null) {
-        // No owner: the entry keeps only the quotation view, so a closure-bodied method has no
-        // value to carry here.
-        try ctx.executeQuotationWithFrame(q, null);
+        try ctx.executeQuotationWithFrame(q, owner);
     } else {
         // A method body is reached as a dispatch entry rather than as a word, so nothing upstream
         // has pointed `current_source` at the file the body was written in.
@@ -71,7 +77,7 @@ fn runDispatchQuotation(ctx: *Context, q: value_mod.Quotation, body_module: ?*co
         defer ctx.current_source = saved_source;
         ctx.enterBodySource(q.instructions);
 
-        try ctx.executeQuotationWithPic(.{ .instructions = q.instructions }, null, body_module, null);
+        try ctx.executeQuotationWithPic(.{ .instructions = q.instructions }, null, body_module, owner);
     }
 }
 

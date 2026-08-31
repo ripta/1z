@@ -331,6 +331,12 @@ pub const DispatchEntry = struct {
     /// live for the whole Context. Null for native and host-callback bodies,
     /// and for methods registered outside any module load.
     source_module: ?*const value_mod.Module = null,
+    /// The closure behind a `.quotation` body, for a body it owns. Borrowed on the same terms as
+    /// `source_module`: `define-method` parked the owning reference on the dictionary's teardown
+    /// list and kept only the view, so this pointer is what carries the body's captured scope and
+    /// defining module to the call. Null for every synthesized and AOT-replayed body, whose
+    /// instructions ride an arena rather than a value.
+    body_owner: ?*const value_mod.Closure = null,
     /// Registration order within the base table, stamped by `DispatchTable.register`. An
     /// overwriting re-registration keeps the original entry's sequence, so priority is a property
     /// of the key and a replaced body does not reshuffle order-sensitive consumers.

@@ -106,6 +106,12 @@ pub const WordDefinition = struct {
     /// Precomputed per-call facts. Derived cache; see `ExecFlags`. Populated at
     /// definition finalization, defaults to the "nothing special" all-false case.
     exec_flags: ExecFlags = .{},
+    /// The closure a `.compound` body came out of, for a body it owns. Set by `;` and by
+    /// `>module`, the two ways a closure becomes a word body. Borrowed: both park the owning
+    /// reference on the dictionary's teardown list and keep only the instruction slice, so this
+    /// pointer is what carries the body's captured scope and defining module to the call. Null for
+    /// every body a module or the dictionary arena owns.
+    body_owner: ?*const value_mod.Closure = null,
     /// The action performed by this word: either a native function or a
     /// compound quotation. Unfortunate naming.
     action: Action,

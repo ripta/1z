@@ -13,6 +13,7 @@ const dictionary_mod = @import("../dictionary.zig");
 const WordProvenance = dictionary_mod.WordProvenance;
 const WordDefinition = dictionary_mod.WordDefinition;
 
+const callable_mod = @import("../callable.zig");
 const container_backing = @import("../container_backing.zig");
 const MemoryLimitAllocator = @import("../memory_limit.zig").MemoryLimitAllocator;
 
@@ -524,9 +525,14 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
                     helpers.setTypeMismatchError(ctx, "quotation for definition descriptor 'define' field", define_val);
                     return error.TypeMismatch;
                 };
-                // No owner: `define_val` is borrowed out of the descriptor whose own reference now
-                // lives in the slot this body pops, so it is not held across the execution.
-                try ctx.executeQuotation(define_quot);
+                // The descriptor's own reference now lives in the slot this body pops, and the body
+                // releases it, so `define_val` is borrowed out of a map its own execution can free.
+                //
+                // Hold a reference of our own for the call: a body the value's closure owns
+                // resolves off that closure, which has to outlive the run.
+                container_backing.retainValue(define_val);
+                defer container_backing.releaseValue(define_val);
+                try ctx.executeQuotationWithOwner(define_quot, callable_mod.ownerClosureOf(define_val));
             } else {
                 // Fall back to normal word definition
                 var stack_effect_val: ?*const StackEffect = null;
@@ -599,6 +605,10 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
 
                 const name_copy = try alloc.dupe(u8, name);
 
+                // The closure behind a closure-bodied definition, so the word body resolves off the
+                // value the way the same body would when it is invoked as one.
+                var body_owner: ?*const value_mod.Closure = null;
+
                 // Only a quotation or closure body can contain a self-call: the non-quotation
                 // branch stores the bound value directly and allocates no instructions at all,
                 // so containsNonTailSelfCall below is only ever meaningful for the
@@ -619,6 +629,7 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
                         // The dictionary adopted the popped reference here rather than at the
                         // definition, so this arm alone hands ownership over early.
                         top_owned = false;
+                        body_owner = c;
                         break :blk .{ .compound = c.instructions };
                     },
                     else => .{ .literal = top_val },
@@ -685,6 +696,7 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
                     .stack_effect = stack_effect_val,
                     .markers = markers_slice,
                     .doc = doc_val,
+                    .body_owner = body_owner,
                     .action = action,
                 });
                 // The definition now holds the popped reference. Until it does, every failure

@@ -19,16 +19,21 @@ const Value = value_mod.Value;
 /// bare `Quotation` is an exception. There are five, each with its own reason:
 ///
 /// - The owner is parked on the dictionary's teardown list, which makes the body
-///   context-lifetime: a parameter's default, a dispatch entry's method body, a pragma validator,
-///   a signal handler, an FFI callback, a deferred parse-time emission, and a closure-bodied word
-///   definition. `adoptForTeardown` is that path.
+///   context-lifetime. `adoptForTeardown` is that path.
+///
+///   A parameter's default, a dispatch entry's method body, a pragma validator, a signal handler,
+///   an FFI callback, and a closure-bodied word definition each keep a `?*const Closure` carrier
+///   beside the view, from `ownerClosureOf`, since a body its closure owns resolves off the value.
+///   A deferred parse-time emission needs none: it is spliced into the enclosing body rather than
+///   run from where it was stored.
 /// - The owner is borrowed from a live container the site does not hold: `fireScopedHooks` runs
 ///   bodies out of an array the parameter binding owns.
 /// - There is no owner at all: `PackedIter.Recognized.quotation` is reached only when `#map`'s
 ///   `owner != .closure` gate admitted it, so the body outlives the iterator on its own.
 /// - The body is not the callable's: the `make-*` builders execute sub-slices of a body they hold
 ///   a `Callable` for.
-/// - The body belongs to a module or the dictionary arena: a word body, and a dispatch body.
+/// - The body belongs to a module or the dictionary arena: a word body whose definition names no
+///   closure, and a synthesized or AOT-replayed dispatch body.
 pub const Callable = struct {
     quot: Quotation,
     owner: Value,
@@ -52,10 +57,7 @@ pub const Callable = struct {
     /// Body entry reads a closure-owned body's captured scope and defining module off this rather
     /// than out of the pointer-keyed side map, which such a body never enters.
     pub fn ownerClosure(self: Callable) ?*const Closure {
-        return switch (self.owner) {
-            .closure => |c| c,
-            else => null,
-        };
+        return ownerClosureOf(self.owner);
     }
 
     /// Run the body without a lexical frame of its own.
@@ -74,3 +76,15 @@ pub const Callable = struct {
         return ctx.executeQuotationInline(self.quot, self.ownerClosure());
     }
 };
+
+/// The carrier behind a callable value, or null for a value that owns no body.
+///
+/// A registry that keeps only the quotation view stores this beside it. The pointer is borrowed:
+/// the registration hands the owning reference to the dictionary's teardown list, which is what
+/// keeps the body and the scope it points at alive, so the registry itself never releases.
+pub fn ownerClosureOf(owner: Value) ?*const Closure {
+    return switch (owner) {
+        .closure => |c| c,
+        else => null,
+    };
+}

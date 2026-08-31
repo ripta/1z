@@ -1,5 +1,6 @@
 use "testing" ;
 use "ffi" ;
+use { make-secret-callback: } "./closure_carrier_holder.1z" ;
 
 toy-lib-ext: ( -- ext ) [
   sys-info "os" @get "macos" = [ ".dylib" ] [ ".so" ] if
@@ -95,5 +96,20 @@ recover
   [ + capture-add + ] ffi{ i32 i32 -> i32 } ffi-callback
   3 4 2 pick-n 4 pick-n ffi-call
   107 "toy_apply2 with a callback capturing an outer local = 107" assert=
+  resource-close drop resource-close
+] call
+
+\\ --- Callback body from a curried closure over another module's private word ---
+\\ The registration keeps only the quotation view while the closure's reference goes to the
+\\ dictionary's teardown list, so the trampoline resolves the body's creation-site words only if
+\\ the registration also kept the closure. `make-secret-callback` answers with the length of a
+\\ private string its own module holds.
+
+[
+  toy-lib-path lib-open
+  dup "toy_apply2" ffi{ i32 i32 ptr:ffi-callback -> i32 } bound-symbol
+  make-secret-callback ffi{ i32 i32 -> i32 } ffi-callback
+  3 4 2 pick-n 4 pick-n ffi-call
+  10 "toy_apply2 with a curried callback over a module-private word = 10" assert=
   resource-close drop resource-close
 ] call
