@@ -1,4 +1,5 @@
 \ Unit tests for the relative-path family in lib/os/path.1z.
+\ The family is relative-path, its option twin, and subpath?.
 
 use "testing" ;
 use "os/path" ;
@@ -76,4 +77,41 @@ test-relative-path-option-twin: ( -- ) [
   "/a/b/c" "/a" relative-path? option:some> "b/c" "comparable pair answers some" assert=
   "/a/b" "a" relative-path? option:none? "mixed kinds answer none" assert-true
   "../a" "b" relative-path? option:none? "leading .. answers none" assert-true
+] ;
+
+test-subpath-descends: ( -- ) [
+  "/a/b/c" "/a" subpath? option:some> "b/c" "subpath under base" assert=
+  "a/b/c" "a" subpath? option:some> "b/c" "subpath of a relative pair" assert=
+  "/a/b" "/" subpath? option:some> "a/b" "subpath of the root" assert=
+  "a/b" "." subpath? option:some> "a/b" "subpath of here" assert=
+] ;
+
+test-subpath-equal-paths: ( -- ) [
+  "/a/b" "/a/b" subpath? option:some> "." "a path is a subpath of itself" assert=
+  "." "." subpath? option:some> "." "here is a subpath of here" assert=
+  "/a/b/../b" "/a/b" subpath? option:some> "." "subpath equal after normalization" assert=
+] ;
+
+test-subpath-declines-upward: ( -- ) [
+  "/a" "/a/b" subpath? option:none? "subpath declines a path above base" assert-true
+  "/x/y" "/a/b" subpath? option:none? "subpath declines a disjoint tree" assert-true
+] ;
+
+test-subpath-compares-segments: ( -- ) [
+  "/a/bc" "/a/b" subpath? option:none? "subpath declines a shared name prefix" assert-true
+] ;
+
+test-subpath-never-raises: ( -- ) [
+  "/a/b" "a" subpath? option:none? "subpath of an absolute against a relative base" assert-true
+  "a" "/a/b" subpath? option:none? "subpath of a relative against an absolute base" assert-true
+  "../a" "b" subpath? option:none? "subpath with a leading .. on the path" assert-true
+  "a" "../b" subpath? option:none? "subpath with a leading .. on the base" assert-true
+] ;
+
+test-subpath-agrees-with-relative-path: ( -- ) [
+  "/a/b/c/d.txt" "/a/b" subpath? option:some>
+  "/a/b/c/d.txt" "/a/b" relative-path "descending pair agrees" assert=
+
+  "/a/b" "/a/b" subpath? option:some>
+  "/a/b" "/a/b" relative-path "equal pair agrees" assert=
 ] ;

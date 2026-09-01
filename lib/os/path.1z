@@ -150,6 +150,31 @@ private{
     ]
     if
   ] ;
+
+  \ The walk both public forms read. Normalize, reject the incomparable pairs, and drop the
+  \ shared prefix. Each base segment left over is one `..` the answer leads with.
+  \
+  \ Both throw branches consume the operands first, because `recover` does not restore the
+  \ stack for the callers that catch.
+  relative-segments: ( path base -- psegs bsegs ) [
+    [ normalize ] dip normalize
+    2dup [ "/" #starts-with? ] dip "/" #starts-with? xor
+    [ 2drop f "cannot relate an absolute path and a relative path" EInvalidArgument make-error throw ]
+    when
+    [ path-segments ] dip path-segments
+    2dup [ leading-updir? ] dip leading-updir? or
+    [ 2drop f "cannot relate a path that leads with .." EInvalidArgument make-error throw ]
+    when
+    drop-common
+  ] ;
+
+  \ One `..` per unmatched base segment, then the path's own remainder.
+  emit-relative: ( psegs bsegs -- rel ) [
+    #len { } swap [ ".." #suffix ] times
+    swap #append
+    "/" #join
+    dup #empty? [ drop "." ] when
+  ] ;
 }
 
 \\ Express path relative to base, comparing normalized segments. The result may lead with `..`,
@@ -161,25 +186,31 @@ private{
 \\ Raises invalid-argument when exactly one side is absolute, or when either side still leads
 \\ with `..` after normalization.
 relative-path: ( path: string base: string -- rel ) [
-  [ normalize ] dip normalize
-  2dup [ "/" #starts-with? ] dip "/" #starts-with? xor
-  [ 2drop f "cannot relate an absolute path and a relative path" EInvalidArgument make-error throw ]
-  when
-  [ path-segments ] dip path-segments
-  2dup [ leading-updir? ] dip leading-updir? or
-  [ 2drop f "cannot relate a path that leads with .." EInvalidArgument make-error throw ]
-  when
-  drop-common
-  #len { } swap [ ".." #suffix ] times
-  swap #append
-  "/" #join
-  dup #empty? [ drop "." ] when
+  relative-segments emit-relative
 ] ;
 
 \\ Express path relative to base, answering option:some rel on a comparable pair and
 \\ option:none otherwise.
 relative-path?: ( path: string base: string -- option ) [
   [ relative-path >option:some ]
+  [ drop option:none ]
+  recover
+] ;
+
+\\ Express path relative to base, but only where path sits at or under base. A path is a subpath
+\\ of itself, so an equal pair gives option:some ".".
+\\ "/a/b/c" "/a" -> option:some "b/c", "/a" "/a/b" -> option:none
+\\
+\\ option:none carries two meanings. The path is not under the base, or the pair is not
+\\ comparable at all. Call relative-path? to tell those apart: it answers option:none for the
+\\ second case only.
+subpath?: ( path: string base: string -- option ) [
+  [ relative-segments
+    dup #empty?
+    [ emit-relative >option:some ]
+    [ 2drop option:none ]
+    if
+  ]
   [ drop option:none ]
   recover
 ] ;
