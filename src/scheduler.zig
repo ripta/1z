@@ -1044,11 +1044,12 @@ pub const Scheduler = struct {
         writeVerdictHeader(&tw, threshold_ns, self.countActiveLocked(), deadlocked);
     }
 
-    /// Dump the state of all tasks to stderr for diagnostic purposes.
+    /// Dump the state of all tasks to stderr for diagnostic purposes. Used by stall detection
+    /// and hard timeout to surface what the scheduler is stuck on.
     ///
-    /// Each task is printed with its ID, name, state, top 3 stack values, and
-    /// call stack. Used by stall detection and hard timeout to surface what
-    /// the scheduler is stuck on.
+    /// Each live task is printed with its ID, name, scope token, state, top 3 stack values, and
+    /// call stack. A `.failed` task prints its stored error instead, so the report names the
+    /// task whose death left the rest blocked.
     pub fn dumpAllTasks(self: *Scheduler) void {
         var tw = trace.TraceWriter.init();
 
@@ -1056,12 +1057,12 @@ pub const Scheduler = struct {
         defer self.all_tasks_mu.unlock();
 
         const counts = self.countActiveLocked();
-        tw.print("TASK-DUMP: {d} tasks, {d} runnable\n", .{ counts.active, counts.runnable });
+        tw.print("TASK-DUMP: {d} tasks, {d} runnable, {d} failed\n", .{ counts.active, counts.runnable, counts.failed });
 
         for (self.all_tasks.items) |task| {
             switch (task.getStatus()) {
-                .completed, .failed, .cancelled => continue,
-                .pending, .running => {},
+                .completed, .cancelled => continue,
+                .failed, .pending, .running => {},
             }
             self.dumpOneTask(&tw, task);
         }
@@ -1079,10 +1080,14 @@ pub const Scheduler = struct {
         runnable,
     };
 
-    /// Live-task tallies for the diagnostic headers. Computed only on the reporting path.
+    /// Task tallies for the diagnostic headers. Computed only on the reporting path.
+    ///
+    /// `active` and `runnable` count live tasks. `failed` counts terminal `.failed` tasks
+    /// still tracked in `all_tasks`, which the dump prints with their stored error.
     pub const ActiveCounts = struct {
         active: usize = 0,
         runnable: usize = 0,
+        failed: usize = 0,
     };
 
     /// Live-task tallies for the deadlock gate.
@@ -1104,12 +1109,16 @@ pub const Scheduler = struct {
         }
     };
 
-    /// Count this scheduler's live tasks for a header. The caller holds `all_tasks_mu`.
+    /// Tally this scheduler's tasks for a header. The caller holds `all_tasks_mu`.
     fn countActiveLocked(self: *const Scheduler) ActiveCounts {
         var counts: ActiveCounts = .{};
         for (self.all_tasks.items) |task| {
             switch (task.getStatus()) {
-                .completed, .failed, .cancelled => continue,
+                .failed => {
+                    counts.failed += 1;
+                    continue;
+                },
+                .completed, .cancelled => continue,
                 .pending, .running => {},
             }
             counts.active += 1;
@@ -1164,6 +1173,32 @@ pub const Scheduler = struct {
         w.print("  task[{d}]", .{task.id}) catch return;
         if (task.name) |name| {
             w.print(" \"{s}\"", .{name}) catch return;
+        }
+
+        // The scope pointer is an opaque grouping token linking a dead task to the survivors it
+        // left blocked.
+        //
+        // It is never dereferenced, so a scope that has since gone away is still safe to print.
+        w.print(" scope=0x{x}", .{@intFromPtr(task.scope)}) catch return;
+
+        // A failed task's stack and frames are post-unwind residue, so only its stored error is
+        // printed. The type and message are truncated so a long user-thrown message cannot
+        // overflow the line buffer and drop the line.
+        //
+        // `error_obj` is live under the caller's `all_tasks_mu`: reaping runs only after
+        // `untrackTask` removes the task from `all_tasks`.
+        if (task.getStatus() == .failed) {
+            const max_error_preview = 200;
+            const error_type = if (task.error_obj) |eo| eo.error_type else "task-error";
+            const message = if (task.error_obj) |eo| eo.message else "task failed without error details";
+            w.print(" failed <error {s}{s}: {s}{s}>\n", .{
+                error_type[0..@min(error_type.len, max_error_preview)],
+                if (error_type.len > max_error_preview) "..." else "",
+                message[0..@min(message.len, max_error_preview)],
+                if (message.len > max_error_preview) "..." else "",
+            }) catch return;
+            tw.writeAll(fbs.getWritten());
+            return;
         }
 
         switch (self.taskState(task)) {
@@ -1384,14 +1419,23 @@ pub const Scheduler = struct {
         }
 
         if (task.getStatus() == .failed) {
-            // Ensure `error_obj` is non-null so the scope-exit walk in
-            // `firstFailedChildError` always has something to propagate,
-            // even when the task failed without recording details.
+            // Ensure `error_obj` is non-null so the scope-exit walk in `firstFailedChildError`
+            // always has something to propagate, even when the task failed without recording
+            // details.
+            //
+            // The store is published under `all_tasks_mu` because the task dump reads
+            // `error_obj` under that lock, possibly from another thread. The task is already
+            // `.failed`, so this is the field's only remaining writer.
             if (task.error_obj == null) {
-                task.error_obj = value_mod.boxErrorObject(task.ctx.quotationAllocator(), .{
+                const fallback = value_mod.boxErrorObject(task.ctx.quotationAllocator(), .{
                     .error_type = "task-error",
                     .message = "task failed without error details",
                 }) catch null;
+                if (fallback) |eo| {
+                    self.all_tasks_mu.lock();
+                    defer self.all_tasks_mu.unlock();
+                    task.error_obj = eo;
+                }
             }
         }
 

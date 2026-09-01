@@ -1,0 +1,6 @@
+DEADLOCK: 1.0s with no progress, 1 tasks blocked, 0 runnable
+TASK-DUMP: 1 tasks, 0 runnable, 1 failed
+  task[1] scope=<scope> blocked_channel stack=[] callstack:
+    tests/integration/deadlock_detect_failed_task.1z:14 receive
+    tests/integration/deadlock_detect_failed_task.1z:14 cleanup
+  task[2] scope=<scope> failed <error division-by-zero: />

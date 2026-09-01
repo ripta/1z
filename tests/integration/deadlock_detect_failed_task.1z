@@ -1,0 +1,15 @@
+\ A failed child appears in the deadlock dump with its stored error, linked to
+\ the blocked scope body by the shared scope token.
+\
+\ The child parks on `go` until the cleanup-protected body is running, so the
+\ handler is always registered before the failure. The failure cancels the
+\ body at its receive, the shielded cleanup handler parks on a channel with no
+\ sender, and the scope never exits, so the failed child is never reaped.
+
+use "testing" ;
+[
+  go: 1 <buffered-channel> ;
+  out: <channel> ;
+  [ go receive drop 1 0 / ] spawn drop
+  [ t go send out receive drop ] [ out receive drop ] cleanup
+] task-scope

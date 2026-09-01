@@ -1,10 +1,10 @@
 TEST-TIMEOUT: 1.0s limit reached
-TASK-DUMP: 4 tasks, 0 runnable
-  task[2] blocked_channel stack=[] callstack:
+TASK-DUMP: 4 tasks, 0 runnable, 0 failed
+  task[2] scope=<scope> blocked_channel stack=[] callstack:
     tests/integration/test_timeout_multi_worker.1z:5 receive
-  task[3] blocked_channel stack=[] callstack:
+  task[3] scope=<scope> blocked_channel stack=[] callstack:
     tests/integration/test_timeout_multi_worker.1z:5 receive
-  task[4] blocked_channel stack=[] callstack:
+  task[4] scope=<scope> blocked_channel stack=[] callstack:
     tests/integration/test_timeout_multi_worker.1z:5 receive
-  task[5] blocked_channel stack=[] callstack:
+  task[5] scope=<scope> blocked_channel stack=[] callstack:
     tests/integration/test_timeout_multi_worker.1z:5 receive

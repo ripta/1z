@@ -174,7 +174,7 @@ runtime reports that and exits 124 rather than waiting forever:
 
 ```text
 DEADLOCK: 5.0s with no progress, 2 tasks blocked, 0 runnable
-TASK-DUMP: 2 tasks, 0 runnable
+TASK-DUMP: 2 tasks, 0 runnable, 0 failed
   ...
 ```
 

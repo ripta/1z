@@ -2110,7 +2110,9 @@ fn configureIntegrationRun(
 /// The scheduler's task dump names the raw descriptor a parked task waits on. The multiplexer
 /// holds descriptors of its own, and kqueue and epoll take a different number of them, so the
 /// value differs between platforms.
-const stderr_normalize_script = "s|blocked_fd=[0-9][0-9]*|blocked_fd=<fd>|g";
+///
+/// The dump's scope grouping token is a raw pointer, so ASLR makes it differ between runs.
+const stderr_normalize_script = "s|blocked_fd=[0-9][0-9]*|blocked_fd=<fd>|g;s|scope=0x[0-9a-f][0-9a-f]*|scope=<scope>|g";
 
 /// Rewrite stderr fields a golden cannot pin. Applied on both the comparison and the
 /// update-golden path so the two agree.

@@ -564,7 +564,7 @@ pub const WorkerPool = struct {
         return false;
     }
 
-    /// Count live tasks across every worker for a header. Each task is classified by its home
+    /// Tally tasks across every worker for a header. Each task is classified by its home
     /// scheduler, so `current_task` and the sleep queue resolve against the right worker. The
     /// caller holds every `all_tasks_mu`.
     fn countActive(self: *WorkerPool) Scheduler.ActiveCounts {
@@ -573,7 +573,11 @@ pub const WorkerPool = struct {
             const sched = &w.scheduler;
             for (sched.all_tasks.items) |task| {
                 switch (task.getStatus()) {
-                    .completed, .failed, .cancelled => continue,
+                    .failed => {
+                        counts.failed += 1;
+                        continue;
+                    },
+                    .completed, .cancelled => continue,
                     .pending, .running => {},
                 }
                 counts.active += 1;
@@ -617,10 +621,9 @@ pub const WorkerPool = struct {
         scheduler_mod.writeVerdictHeader(&tw, threshold_ns, self.countActive(), deadlocked);
     }
 
-    /// Dump every active task across the pool to stderr, sorted by global
-    /// task ID for deterministic output. Each task is printed via its
-    /// home scheduler so per-state details (current_task, sleep_queue)
-    /// resolve correctly.
+    /// Dump every active and failed task across the pool to stderr, sorted by global task ID
+    /// for deterministic output. Each task is printed via its home scheduler so per-state
+    /// details (current_task, sleep_queue) resolve correctly.
     pub fn dumpAllTasks(self: *WorkerPool) void {
         var tw = trace.TraceWriter.init();
 
@@ -628,17 +631,17 @@ pub const WorkerPool = struct {
         defer self.unlockAllTasksMu();
 
         const counts = self.countActive();
-        tw.print("TASK-DUMP: {d} tasks, {d} runnable\n", .{ counts.active, counts.runnable });
+        tw.print("TASK-DUMP: {d} tasks, {d} runnable, {d} failed\n", .{ counts.active, counts.runnable, counts.failed });
 
-        // Gather all active tasks into a single slice, then sort by id so
-        // output is stable regardless of which worker hosts each task.
+        // Gather all active and failed tasks into a single slice, then sort by
+        // id so output is stable regardless of which worker hosts each task.
         var collected: std.ArrayListUnmanaged(*Task) = .{};
         defer collected.deinit(self.allocator);
         for (self.workers) |*w| {
             for (w.scheduler.all_tasks.items) |task| {
                 switch (task.getStatus()) {
-                    .completed, .failed, .cancelled => continue,
-                    .pending, .running => {},
+                    .completed, .cancelled => continue,
+                    .failed, .pending, .running => {},
                 }
                 collected.append(self.allocator, task) catch return;
             }
