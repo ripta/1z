@@ -186,6 +186,12 @@ pub const Task = struct {
     blocked_on_scope: ?*TaskScope = null,
     // *LoadLock as anyopaque, matching blocked_on_channel's import-cycle avoidance.
     blocked_on_load_lock: ?*anyopaque = null,
+    /// The task this one is suspended in `await` on.
+    ///
+    /// The reverse edge of `awaiting_task`, which the awaited task carries. Only the forward
+    /// edge is needed to deliver the wake; this one exists so a parked awaiter is visible as
+    /// blocked rather than reading as runnable.
+    blocked_on_await: ?*Task = null,
     /// Set by a sender when it delivers a value directly to this receiver's
     /// stack. The receiver checks and clears this on resume so it can
     /// distinguish a value handoff from a close-channel wake.
@@ -201,6 +207,29 @@ pub const Task = struct {
     /// detached task is tracked in its scope's `detached` list, isolated
     /// from sibling cancellation, and reaped at its own completion.
     detached: bool = false,
+
+    /// Whether this task is parked on a waitable only another task can satisfy.
+    ///
+    /// An io fd, a child process exit, and a timer are all driven from outside the scheduler,
+    /// so a pool holding one of those is waiting rather than dead. A signal is not such a
+    /// source: `checkPendingSignals` is reached from the interpreter execution loop and from
+    /// compiled safepoints, never from the idle poll.
+    ///
+    /// Reads the markers directly instead of deriving a `Scheduler.TaskState`, so it never
+    /// walks the home scheduler's sleep queue from a foreign worker. A sleeping task carries no
+    /// marker, so skipping that walk cannot change the answer. The io and process early returns
+    /// reproduce `taskState`'s precedence for a task carrying two markers at once.
+    ///
+    /// The caller still has to exclude the home scheduler's `current_task`: a sender sets
+    /// `blocked_on_channel` before it suspends, so a running task can carry a marker.
+    pub fn inProcessBlocked(self: *const Task) bool {
+        if (self.blocked_on_io_fd != null) return false;
+        if (self.blocked_on_process_pid != null) return false;
+        return self.blocked_on_channel != null or
+            self.blocked_on_scope != null or
+            self.blocked_on_load_lock != null or
+            self.blocked_on_await != null;
+    }
 
     pub inline fn getStatus(self: *const Task) TaskStatus {
         return self.status.load(.acquire);

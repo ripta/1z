@@ -32,6 +32,8 @@ const worker_ops: WorkerOps = .{
     .recordPoolProgress = recordPoolProgressCb,
     .poolLastProgressNs = poolLastProgressNsCb,
     .poolDeadlockThresholdNs = poolDeadlockThresholdNsCb,
+    .poolStallVerdictEnabled = poolStallVerdictEnabledCb,
+    .poolBlockedCounts = poolBlockedCountsCb,
     .claimStallReport = claimStallReportCb,
     .emitPoolStallDetect = emitPoolStallDetectCb,
     .dumpAllPoolTasks = dumpAllPoolTasksCb,
@@ -118,6 +120,16 @@ fn poolDeadlockThresholdNsCb(owner: *anyopaque) ?i128 {
     return w.pool.?.deadlock_threshold_ns;
 }
 
+fn poolStallVerdictEnabledCb(owner: *anyopaque) bool {
+    const w: *Worker = @ptrCast(@alignCast(owner));
+    return w.pool.?.report_stall_verdict;
+}
+
+fn poolBlockedCountsCb(owner: *anyopaque) Scheduler.BlockedCounts {
+    const w: *Worker = @ptrCast(@alignCast(owner));
+    return w.pool.?.blockedCounts();
+}
+
 fn claimStallReportCb(owner: *anyopaque) bool {
     const w: *Worker = @ptrCast(@alignCast(owner));
     // CAS-elect a single reporter so only one worker dumps and exits even
@@ -125,9 +137,9 @@ fn claimStallReportCb(owner: *anyopaque) bool {
     return w.pool.?.stall_reported.cmpxchgStrong(false, true, .acq_rel, .acquire) == null;
 }
 
-fn emitPoolStallDetectCb(owner: *anyopaque, threshold_ns: i128) void {
+fn emitPoolStallDetectCb(owner: *anyopaque, threshold_ns: i128, deadlocked: bool) void {
     const w: *Worker = @ptrCast(@alignCast(owner));
-    w.pool.?.emitStallDetect(threshold_ns);
+    w.pool.?.emitStallDetect(threshold_ns, deadlocked);
 }
 
 fn dumpAllPoolTasksCb(owner: *anyopaque) void {
@@ -393,10 +405,14 @@ pub const WorkerPool = struct {
     /// background worker correctly suppresses a stall warning on an idle
     /// primary.
     last_progress_ns: portable_atomic.WideCounter(i128) = portable_atomic.WideCounter(i128).init(0),
-    /// Stall detection threshold, propagated from `ctx.deadlock_detect_ns`
-    /// by `task-scope`. Null disables stall detection. Read by every
-    /// worker; never mutated after `task-scope` writes it.
+    /// No-progress threshold, propagated from `ctx.deadlock_detect_ns` by
+    /// `task-scope`. Null disables both verdicts. Read by every worker;
+    /// never mutated after `task-scope` writes it.
     deadlock_threshold_ns: ?i128 = null,
+    /// Whether the bare no-progress stall is reported when the deadlock
+    /// gate refuses, propagated alongside the threshold. Opt-in, because a
+    /// pool running one long non-yielding task satisfies the threshold.
+    report_stall_verdict: bool = false,
     /// CAS guard ensuring only one worker emits the stall dump and calls
     /// `std.process.exit(124)` when multiple workers simultaneously detect
     /// the threshold has been exceeded.
@@ -548,9 +564,11 @@ pub const WorkerPool = struct {
         return false;
     }
 
-    fn countActive(self: *WorkerPool) struct { active: usize, runnable: usize } {
-        var active: usize = 0;
-        var runnable: usize = 0;
+    /// Count live tasks across every worker for a header. Each task is classified by its home
+    /// scheduler, so `current_task` and the sleep queue resolve against the right worker. The
+    /// caller holds every `all_tasks_mu`.
+    fn countActive(self: *WorkerPool) Scheduler.ActiveCounts {
+        var counts: Scheduler.ActiveCounts = .{};
         for (self.workers) |*w| {
             const sched = &w.scheduler;
             for (sched.all_tasks.items) |task| {
@@ -558,26 +576,45 @@ pub const WorkerPool = struct {
                     .completed, .failed, .cancelled => continue,
                     .pending, .running => {},
                 }
-                active += 1;
+                counts.active += 1;
                 const home = task.ctx.scheduler orelse sched;
-                if (home.taskState(task) == .runnable) runnable += 1;
+                if (home.taskState(task) == .runnable) counts.runnable += 1;
             }
         }
-        return .{ .active = active, .runnable = runnable };
+        return counts;
     }
 
-    /// Emit the `STALL-DETECT: ...` header counting active and runnable
-    /// tasks across every worker. Holds all `all_tasks_mu` locks for the
-    /// duration of the count.
-    pub fn emitStallDetect(self: *WorkerPool, threshold_ns: i128) void {
+    /// Take the pool-wide snapshot the deadlock gate reads.
+    pub fn blockedCounts(self: *WorkerPool) Scheduler.BlockedCounts {
+        self.lockAllTasksMu();
+        defer self.unlockAllTasksMu();
+
+        var counts: Scheduler.BlockedCounts = .{};
+        for (self.workers) |*w| {
+            const sched = &w.scheduler;
+            for (sched.all_tasks.items) |task| {
+                switch (task.getStatus()) {
+                    .completed, .failed, .cancelled => continue,
+                    .pending, .running => {},
+                }
+                counts.active += 1;
+                const home = task.ctx.scheduler orelse sched;
+                if (home.taskInProcessBlocked(task)) counts.blocked += 1;
+            }
+        }
+        return counts;
+    }
+
+    /// Emit the verdict header counting active and runnable tasks across
+    /// every worker. Holds all `all_tasks_mu` locks for the duration of
+    /// the count.
+    pub fn emitStallDetect(self: *WorkerPool, threshold_ns: i128, deadlocked: bool) void {
         var tw = trace.TraceWriter.init();
-        const secs = @as(f64, @floatFromInt(@as(i64, @intCast(@min(threshold_ns, std.math.maxInt(i64)))))) / @as(f64, @floatFromInt(@as(i64, std.time.ns_per_s)));
 
         self.lockAllTasksMu();
         defer self.unlockAllTasksMu();
 
-        const counts = self.countActive();
-        tw.print("STALL-DETECT: {d:.1}s with no progress, {d} tasks, {d} runnable\n", .{ secs, counts.active, counts.runnable });
+        scheduler_mod.writeVerdictHeader(&tw, threshold_ns, self.countActive(), deadlocked);
     }
 
     /// Dump every active task across the pool to stderr, sorted by global

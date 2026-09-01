@@ -402,6 +402,7 @@ pragma{ import-collision: { dup: } }    \ relax the definition/import collision
 1z --trace-words file.1z        \ execution tracing
 1z --trace-modules file.1z      \ all module-trace categories
 1z --trace-modules=source f.1z  \ just embedded vs filesystem source
-1z --deadlock-detect file.1z    \ scheduler diagnostics
+1z --deadlock-detect file.1z    \ also report stalls, not just deadlocks
+1z --no-deadlock-detect f.1z    \ turn off deadlock detection
 1z --benchmark file.1z          \ performance measurement
 ```

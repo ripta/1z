@@ -39,6 +39,7 @@ const aot_image = @import("aot_image.zig");
 const aot_image_emit = @import("aot_image_emit.zig");
 const ir_codegen = @import("ir_codegen.zig");
 const bail_stats_mod = @import("bail_stats.zig");
+const scheduler_mod = @import("scheduler.zig");
 
 const signal = @import("signal.zig");
 const build_options = @import("build_options");
@@ -472,7 +473,8 @@ const ExecutionFlags = struct {
     initial_breakpoints: [16][]const u8 = undefined,
     initial_breakpoint_count: usize = 0,
     trace_config: trace_mod.TraceConfig = .{},
-    deadlock_detect_ns: ?i128 = null,
+    deadlock_detect_ns: ?i128 = scheduler_mod.startup_deadlock_detect_ns,
+    report_stall_verdict: bool = false,
     test_timeout_ns: ?u64 = null,
     allow_all_recursion: bool = false,
     compile_mode: context.CompileMode = .off,
@@ -704,8 +706,11 @@ fn parseExecutionFlag(
         state.trace_config.dump_jit_word_pattern = value;
         return .consumed;
     }
+    // The threshold is on by default, so the flag tunes it. Passing it also turns on the bare
+    // stall verdict, which stays opt-in.
     if (std.mem.eql(u8, arg, "--deadlock-detect")) {
-        state.deadlock_detect_ns = 5 * std.time.ns_per_s;
+        state.deadlock_detect_ns = scheduler_mod.default_deadlock_detect_ns;
+        state.report_stall_verdict = true;
         return .consumed;
     }
     if (std.mem.startsWith(u8, arg, "--deadlock-detect=")) {
@@ -716,6 +721,12 @@ fn parseExecutionFlag(
             return error.InvalidFlagValue;
         };
         state.deadlock_detect_ns = @as(i128, secs) * std.time.ns_per_s;
+        state.report_stall_verdict = true;
+        return .consumed;
+    }
+    if (std.mem.eql(u8, arg, "--no-deadlock-detect")) {
+        state.deadlock_detect_ns = null;
+        state.report_stall_verdict = false;
         return .consumed;
     }
     if (std.mem.eql(u8, arg, "--sample-tasks")) {
@@ -888,7 +899,8 @@ const execution_flags_help =
     \\  --dump-jit-bytes          Dump JIT native code bytes to stderr (xxd format)
     \\  --dump-jit-bin-dir=DIR    Write per-word JIT native code to DIR/ID-name.bin
     \\  --dump-jit-word=PAT       Restrict JIT dumps to comma-separated word names
-    \\  --deadlock-detect[=SECS]  Enable deadlock detection (default 5s)
+    \\  --deadlock-detect[=SECS]  Tune the detection threshold and report stalls (default 5s)
+    \\  --no-deadlock-detect      Disable deadlock and stall detection
     \\  --test-timeout=SECS       Set test timeout in seconds
     \\  -b, --benchmark           Enable benchmarking
     \\  --benchmark=verbose       Benchmark with human-readable output
@@ -1244,6 +1256,7 @@ const ExecutionContext = struct {
 
         ec.ctx.trace = exec.trace_config;
         ec.ctx.deadlock_detect_ns = exec.deadlock_detect_ns;
+        ec.ctx.report_stall_verdict = exec.report_stall_verdict;
         ec.ctx.worker_count = exec.worker_count;
         ec.ctx.mem_limit = mem_limit_ptr;
 

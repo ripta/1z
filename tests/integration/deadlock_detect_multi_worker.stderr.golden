@@ -1,4 +1,4 @@
-STALL-DETECT: 1.0s with no progress, 4 tasks, 0 runnable
+DEADLOCK: 1.0s with no progress, 4 tasks blocked, 0 runnable
 TASK-DUMP: 4 tasks, 0 runnable
   task[2] blocked_channel stack=[] callstack:
     tests/integration/deadlock_detect_multi_worker.1z:5 receive

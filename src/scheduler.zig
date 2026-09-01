@@ -22,6 +22,16 @@ const portable_atomic = @import("portable_atomic.zig");
 const is_freestanding = builtin.os.tag == .freestanding;
 const is_wasm = builtin.cpu.arch == .wasm32 and builtin.os.tag == .freestanding;
 
+/// Wall-clock no-progress threshold `--deadlock-detect` selects when given no value.
+pub const default_deadlock_detect_ns: i128 = 5 * std.time.ns_per_s;
+
+/// The threshold a freshly built `Context` starts with, before any flag.
+///
+/// Off on freestanding. There is no process to exit there, so `exitOrHang` spins forever, and
+/// `TraceWriter` compiles to nothing, so the report that justifies the spin is never written.
+/// Taking a verdict would trade an idle hang for a silent busy loop.
+pub const startup_deadlock_detect_ns: ?i128 = if (is_freestanding) null else default_deadlock_detect_ns;
+
 /// Entry in the sleep queue: a task and its absolute monotonic wake time in nanoseconds.
 pub const SleepEntry = struct {
     task: *Task,
@@ -151,17 +161,22 @@ pub const WorkerOps = struct {
     /// detection to compute elapsed-since-progress against a shared
     /// timeline rather than the per-worker `last_progress_ns`.
     poolLastProgressNs: *const fn (owner: *anyopaque) i128,
-    /// Read the pool-level stall detection threshold (nanoseconds since
-    /// last progress before a stall is declared). Null disables.
+    /// Read the pool-level no-progress threshold (nanoseconds since last
+    /// progress before a verdict is taken). Null disables both verdicts.
     poolDeadlockThresholdNs: *const fn (owner: *anyopaque) ?i128,
+    /// Read whether the pool reports the bare no-progress stall when the
+    /// deadlock gate refuses.
+    poolStallVerdictEnabled: *const fn (owner: *anyopaque) bool,
+    /// Snapshot the deadlock gate's tallies across every worker under
+    /// `lockAllTasksMu`.
+    poolBlockedCounts: *const fn (owner: *anyopaque) Scheduler.BlockedCounts,
     /// CAS-elect this worker as the unique stall reporter. Returns true
     /// when the current worker has won the race to dump and exit; false
     /// when another worker has already taken responsibility.
     claimStallReport: *const fn (owner: *anyopaque) bool,
-    /// Emit the `STALL-DETECT: ...` header with aggregated active and
-    /// runnable counts across every worker in the pool. Paired with
-    /// `dumpAllPoolTasks` on the stall path.
-    emitPoolStallDetect: *const fn (owner: *anyopaque, threshold_ns: i128) void,
+    /// Emit the verdict header with aggregated active and runnable counts
+    /// across every worker in the pool. Paired with `dumpAllPoolTasks`.
+    emitPoolStallDetect: *const fn (owner: *anyopaque, threshold_ns: i128, deadlocked: bool) void,
     /// Dump every task across every worker in the pool to stderr in
     /// task-id order, then return. Caller is responsible for
     /// `std.process.exit(124)` afterwards.
@@ -223,10 +238,19 @@ pub const Scheduler = struct {
     io_wait_map: std.AutoHashMapUnmanaged(i32, IoWaitEntry) = .{},
     /// Maps child-process wait handles to tasks suspended waiting on exit.
     process_wait_map: std.AutoHashMapUnmanaged(u64, ProcessWaitEntry) = .{},
-    /// Wall-clock stall detection threshold in nanoseconds.
+    /// Wall-clock no-progress threshold in nanoseconds. Null disables both verdicts.
     deadlock_detect_ns: ?i128 = null,
+    /// Report the bare no-progress stall when the deadlock gate refuses.
+    report_stall_verdict: bool = false,
     /// Monotonic timestamp of the last progress event (task done, sleeper woken, I/O ready).
     last_progress_ns: i128 = 0,
+    /// Monotonic deadline for this worker's next verdict evaluation, pushed forward by the
+    /// threshold at each one.
+    ///
+    /// Only a refused verdict observes it, since a reported one exits the process. An elapsed
+    /// threshold clamps the poll timeout to zero, so without this a worker whose verdict keeps
+    /// being refused spins instead of idling.
+    next_stall_check_ns: i128 = 0,
     /// Clock mode.
     clock: ClockMode = .real,
     peak_task_stack_usage: usize = 0,
@@ -602,6 +626,30 @@ pub const Scheduler = struct {
         return self.deadlock_detect_ns;
     }
 
+    /// Whether the bare stall verdict is enabled: pool-level when owned, scheduler-local
+    /// otherwise.
+    fn stallVerdictEnabled(self: *Scheduler) bool {
+        if (self.owner) |owner| {
+            if (self.ops) |ops| {
+                return ops.poolStallVerdictEnabled(owner);
+            }
+        }
+        return self.report_stall_verdict;
+    }
+
+    /// Snapshot the gate's tallies across everything this scheduler answers for: every worker
+    /// in the pool when owned, its own tasks otherwise. Takes the corresponding locks.
+    fn blockedCountsSnapshot(self: *Scheduler) BlockedCounts {
+        if (self.owner) |owner| {
+            if (self.ops) |ops| {
+                return ops.poolBlockedCounts(owner);
+            }
+        }
+        self.all_tasks_mu.lock();
+        defer self.all_tasks_mu.unlock();
+        return self.countBlockedLocked();
+    }
+
     fn shutdownObserved(self: *Scheduler) bool {
         const owner = self.owner orelse return true;
         const ops = self.ops orelse return true;
@@ -888,7 +936,8 @@ pub const Scheduler = struct {
 
             if (self.stallThresholdNs()) |threshold| {
                 const now = monotonicNowNs();
-                const stall_remaining = threshold - (now - self.lastProgressNs());
+                const due = @max(self.lastProgressNs() + threshold, self.next_stall_check_ns);
+                const stall_remaining = due - now;
                 const stall_timeout: i128 = if (stall_remaining > 0) stall_remaining else 0;
                 timeout = if (timeout) |t| @min(t, stall_timeout) else stall_timeout;
             }
@@ -936,8 +985,9 @@ pub const Scheduler = struct {
             }
 
             if (self.stallThresholdNs()) |threshold| {
-                const elapsed = monotonicNowNs() - self.lastProgressNs();
-                if (elapsed >= threshold) {
+                const now = monotonicNowNs();
+                if (now - self.lastProgressNs() >= threshold and now >= self.next_stall_check_ns) {
+                    self.next_stall_check_ns = now + threshold;
                     self.reportStall(threshold);
                 }
             }
@@ -946,21 +996,30 @@ pub const Scheduler = struct {
         }
     }
 
-    /// Emit the stall diagnostic and abort. When owned by a pool, only
-    /// one worker wins the CAS race and runs the aggregated dump across
-    /// every worker; the losers return without dumping (their progress is
-    /// moot because the winner is about to `exit(124)`). Standalone
-    /// schedulers fall back to the per-scheduler dump.
+    /// Pick a verdict for the elapsed threshold, then diagnose and abort.
+    ///
+    /// The deadlock verdict needs the pool-wide state snapshot on top of the threshold that got
+    /// us here, and reports under default flags. The bare stall verdict is opt-in, because a
+    /// pool running one long non-yielding task satisfies the threshold on its own.
+    ///
+    /// Returns without reporting when neither verdict holds.
+    ///
+    /// When owned by a pool, only one worker wins the CAS race and runs the aggregated dump
+    /// across every worker; the losers return without dumping, because the winner is about to
+    /// `exit(124)`. Standalone schedulers fall back to the per-scheduler dump.
     fn reportStall(self: *Scheduler, threshold_ns: i128) void {
+        const deadlocked = self.blockedCountsSnapshot().deadlocked();
+        if (!deadlocked and !self.stallVerdictEnabled()) return;
+
         if (self.owner) |owner| {
             if (self.ops) |ops| {
                 if (!ops.claimStallReport(owner)) return;
-                ops.emitPoolStallDetect(owner, threshold_ns);
+                ops.emitPoolStallDetect(owner, threshold_ns, deadlocked);
                 ops.dumpAllPoolTasks(owner);
                 exitOrHang(124);
             }
         }
-        self.emitStallDetect(threshold_ns);
+        self.emitStallDetect(threshold_ns, deadlocked);
         self.dumpAllTasks();
         exitOrHang(124);
     }
@@ -976,28 +1035,13 @@ pub const Scheduler = struct {
         std.process.exit(code);
     }
 
-    fn emitStallDetect(self: *Scheduler, threshold_ns: i128) void {
+    fn emitStallDetect(self: *Scheduler, threshold_ns: i128, deadlocked: bool) void {
         var tw = trace.TraceWriter.init();
-
-        const secs = @as(f64, @floatFromInt(@as(i64, @intCast(@min(threshold_ns, std.math.maxInt(i64)))))) / @as(f64, @floatFromInt(@as(i64, std.time.ns_per_s)));
 
         self.all_tasks_mu.lock();
         defer self.all_tasks_mu.unlock();
 
-        var active_count: usize = 0;
-        var runnable_count: usize = 0;
-        for (self.all_tasks.items) |task| {
-            switch (task.getStatus()) {
-                .completed, .failed, .cancelled => continue,
-                .pending, .running => {},
-            }
-            active_count += 1;
-            if (self.taskState(task) == .runnable) {
-                runnable_count += 1;
-            }
-        }
-
-        tw.print("STALL-DETECT: {d:.1}s with no progress, {d} tasks, {d} runnable\n", .{ secs, active_count, runnable_count });
+        writeVerdictHeader(&tw, threshold_ns, self.countActiveLocked(), deadlocked);
     }
 
     /// Dump the state of all tasks to stderr for diagnostic purposes.
@@ -1011,20 +1055,8 @@ pub const Scheduler = struct {
         self.all_tasks_mu.lock();
         defer self.all_tasks_mu.unlock();
 
-        var runnable_count: usize = 0;
-        var active_count: usize = 0;
-        for (self.all_tasks.items) |task| {
-            switch (task.getStatus()) {
-                .completed, .failed, .cancelled => continue,
-                .pending, .running => {},
-            }
-            active_count += 1;
-            if (self.taskState(task) == .runnable) {
-                runnable_count += 1;
-            }
-        }
-
-        tw.print("TASK-DUMP: {d} tasks, {d} runnable\n", .{ active_count, runnable_count });
+        const counts = self.countActiveLocked();
+        tw.print("TASK-DUMP: {d} tasks, {d} runnable\n", .{ counts.active, counts.runnable });
 
         for (self.all_tasks.items) |task| {
             switch (task.getStatus()) {
@@ -1042,9 +1074,73 @@ pub const Scheduler = struct {
         blocked_channel,
         blocked_scope,
         blocked_load_lock,
+        blocked_await,
         sleeping,
         runnable,
     };
+
+    /// Live-task tallies for the diagnostic headers. Computed only on the reporting path.
+    pub const ActiveCounts = struct {
+        active: usize = 0,
+        runnable: usize = 0,
+    };
+
+    /// Live-task tallies for the deadlock gate.
+    ///
+    /// Deliberately carries no `runnable`: the gate does not need to tell a runnable task from
+    /// a sleeping one, and that distinction is the only thing that forces `taskState` to walk
+    /// the home scheduler's sleep queue from a foreign worker.
+    pub const BlockedCounts = struct {
+        active: usize = 0,
+        blocked: usize = 0,
+
+        /// Every live task is parked with no wake source outside the scheduler, so no worker
+        /// can ever produce what another is waiting for.
+        ///
+        /// Nothing runnable, nothing running, and no sleepers, io waiters, or process waiters
+        /// all follow from the equality, because none of those counts as blocked.
+        pub fn deadlocked(self: BlockedCounts) bool {
+            return self.active > 0 and self.blocked == self.active;
+        }
+    };
+
+    /// Count this scheduler's live tasks for a header. The caller holds `all_tasks_mu`.
+    fn countActiveLocked(self: *const Scheduler) ActiveCounts {
+        var counts: ActiveCounts = .{};
+        for (self.all_tasks.items) |task| {
+            switch (task.getStatus()) {
+                .completed, .failed, .cancelled => continue,
+                .pending, .running => {},
+            }
+            counts.active += 1;
+            if (self.taskState(task) == .runnable) counts.runnable += 1;
+        }
+        return counts;
+    }
+
+    /// Whether `task` is parked with no wake source outside this scheduler.
+    ///
+    /// The `current_task` exclusion is what `Task.inProcessBlocked` leaves to its caller: a
+    /// sender sets `blocked_on_channel` before it suspends, so a running task carries a marker.
+    pub fn taskInProcessBlocked(self: *const Scheduler, task: *const Task) bool {
+        if (self.current_task == task) return false;
+        return task.inProcessBlocked();
+    }
+
+    /// Tally this scheduler's live tasks for the deadlock gate. The caller holds
+    /// `all_tasks_mu`.
+    fn countBlockedLocked(self: *const Scheduler) BlockedCounts {
+        var counts: BlockedCounts = .{};
+        for (self.all_tasks.items) |task| {
+            switch (task.getStatus()) {
+                .completed, .failed, .cancelled => continue,
+                .pending, .running => {},
+            }
+            counts.active += 1;
+            if (self.taskInProcessBlocked(task)) counts.blocked += 1;
+        }
+        return counts;
+    }
 
     pub fn taskState(self: *const Scheduler, task: *const Task) TaskState {
         if (self.current_task == task) return .running;
@@ -1053,6 +1149,7 @@ pub const Scheduler = struct {
         if (task.blocked_on_channel != null) return .blocked_channel;
         if (task.blocked_on_scope != null) return .blocked_scope;
         if (task.blocked_on_load_lock != null) return .blocked_load_lock;
+        if (task.blocked_on_await != null) return .blocked_await;
         for (self.sleep_queue.items[0..self.sleep_queue.count()]) |entry| {
             if (entry.task == task) return .sleeping;
         }
@@ -1076,6 +1173,7 @@ pub const Scheduler = struct {
             .blocked_channel => w.writeAll(" blocked_channel") catch return,
             .blocked_scope => w.writeAll(" blocked_scope") catch return,
             .blocked_load_lock => w.writeAll(" blocked_load_lock") catch return,
+            .blocked_await => w.print(" blocked_await={d}", .{task.blocked_on_await.?.id}) catch return,
             .sleeping => {
                 const remaining = self.sleepRemaining(task);
                 if (remaining) |ns| {
@@ -1421,6 +1519,23 @@ pub const Scheduler = struct {
     }
 };
 
+/// Write the one-line verdict header both report paths print, so the standalone and pool
+/// emitters cannot drift apart.
+pub fn writeVerdictHeader(
+    tw: *trace.TraceWriter,
+    threshold_ns: i128,
+    counts: Scheduler.ActiveCounts,
+    deadlocked: bool,
+) void {
+    const secs = @as(f64, @floatFromInt(@as(i64, @intCast(@min(threshold_ns, std.math.maxInt(i64)))))) / @as(f64, @floatFromInt(@as(i64, std.time.ns_per_s)));
+
+    if (deadlocked) {
+        tw.print("DEADLOCK: {d:.1}s with no progress, {d} tasks blocked, {d} runnable\n", .{ secs, counts.active, counts.runnable });
+    } else {
+        tw.print("STALL-DETECT: {d:.1}s with no progress, {d} tasks, {d} runnable\n", .{ secs, counts.active, counts.runnable });
+    }
+}
+
 // =============================================================================
 // Tests
 // =============================================================================
@@ -1441,6 +1556,67 @@ test "nextId increments" {
     try std.testing.expectEqual(@as(u64, 1), sched.nextId());
     try std.testing.expectEqual(@as(u64, 2), sched.nextId());
     try std.testing.expectEqual(@as(u64, 3), sched.nextId());
+}
+
+test "channel, scope, load-lock, and await waits count as in-process blocked" {
+    var task: Task = undefined;
+    const reset = struct {
+        fn f(t: *Task) void {
+            t.blocked_on_channel = null;
+            t.blocked_on_io_fd = null;
+            t.blocked_on_process_pid = null;
+            t.blocked_on_scope = null;
+            t.blocked_on_load_lock = null;
+            t.blocked_on_await = null;
+        }
+    }.f;
+
+    reset(&task);
+    try std.testing.expect(!task.inProcessBlocked());
+
+    reset(&task);
+    task.blocked_on_channel = @ptrFromInt(@alignOf(usize));
+    try std.testing.expect(task.inProcessBlocked());
+
+    reset(&task);
+    task.blocked_on_scope = @ptrFromInt(@alignOf(TaskScope));
+    try std.testing.expect(task.inProcessBlocked());
+
+    reset(&task);
+    task.blocked_on_load_lock = @ptrFromInt(@alignOf(usize));
+    try std.testing.expect(task.inProcessBlocked());
+
+    reset(&task);
+    task.blocked_on_await = @ptrFromInt(@alignOf(Task));
+    try std.testing.expect(task.inProcessBlocked());
+
+    // An io fd and a child process exit are woken from outside the scheduler, so a pool
+    // holding one is waiting rather than deadlocked. A sleeper carries no marker at all.
+    reset(&task);
+    task.blocked_on_io_fd = 3;
+    try std.testing.expect(!task.inProcessBlocked());
+
+    reset(&task);
+    task.blocked_on_process_pid = 99;
+    try std.testing.expect(!task.inProcessBlocked());
+
+    // Two markers at once resolve the way `taskState` orders them.
+    reset(&task);
+    task.blocked_on_io_fd = 3;
+    task.blocked_on_channel = @ptrFromInt(@alignOf(usize));
+    try std.testing.expect(!task.inProcessBlocked());
+}
+
+test "the deadlock gate needs every live task blocked" {
+    const Counts = Scheduler.BlockedCounts;
+
+    try std.testing.expect((Counts{ .active = 2, .blocked = 2 }).deadlocked());
+
+    // A drained pool is not deadlocked, it is finished.
+    try std.testing.expect(!(Counts{}).deadlocked());
+
+    // One externally wakeable or still-moving task is enough to refuse.
+    try std.testing.expect(!(Counts{ .active = 2, .blocked = 1 }).deadlocked());
 }
 
 test "runLoop exits immediately with empty queue and should not hang or crash" {

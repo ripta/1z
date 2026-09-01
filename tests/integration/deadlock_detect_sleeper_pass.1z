@@ -1,0 +1,13 @@
+\ A sleeping task is woken by a timer, which is outside the scheduler, so the pool is not
+\ deadlocked while it sleeps. The body sits on a channel whose only sender is that task, which
+\ on its own is the deadlock shape. The sleep outlasts the default five-second threshold, so
+\ without the timer exclusion this run would report and exit 124 before the value arrives.
+
+use "testing" ;
+use "time" ;
+
+[
+  out: 1 <buffered-channel> ;
+  [ 6000 milliseconds sleep 42 out send ] spawn drop
+  out receive 42 "a sleeper suppresses the deadlock verdict" assert=
+] task-scope

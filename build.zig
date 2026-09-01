@@ -1279,7 +1279,7 @@ fn addIntegrationTests(
 
         if (has_diff and te.stdio_expect_mode == .diff_capture) {
             addGoldenDiff(b, test_step, test_run.captureStdOut(), if (te.has_stdout_golden) te.stdout_golden_path else null, te.file_path);
-            addGoldenDiff(b, test_step, test_run.captureStdErr(), if (te.has_stderr_golden) te.stderr_golden_path else null, te.file_path);
+            addGoldenDiff(b, test_step, normalizeStderr(b, test_run.captureStdErr()), if (te.has_stderr_golden) te.stderr_golden_path else null, te.file_path);
         } else {
             if (te.has_stdout_golden) {
                 test_run.expectStdOutEqual(te.stdout_content);
@@ -1287,7 +1287,10 @@ fn addIntegrationTests(
                 test_run.expectStdOutEqual("");
             }
             if (te.has_stderr_golden) {
-                test_run.expectStdErrEqual(te.stderr_content);
+                const normalize = b.addSystemCommand(&.{ "sed", stderr_normalize_script });
+                normalize.addFileArg(test_run.captureStdErr());
+                normalize.expectStdOutEqual(te.stderr_content);
+                test_step.dependOn(&normalize.step);
             } else {
                 test_run.expectStdErrEqual("");
             }
@@ -1331,7 +1334,7 @@ fn addIntegrationTests(
                 update_run.expectExitCode(update_exit_code);
             }
             if (te.has_stderr_golden or update_exit_code != 0 or te.has_exitcode) {
-                uf_ptr.*.addCopyFileToSource(update_run.captureStdErr(), te.stderr_golden_path);
+                uf_ptr.*.addCopyFileToSource(normalizeStderr(b, update_run.captureStdErr()), te.stderr_golden_path);
             }
         }
     }
@@ -2102,6 +2105,19 @@ fn configureIntegrationRun(
     if (te.has_flags) run.addFileInput(b.path(te.flags_path));
     if (te.has_exitcode) run.addFileInput(b.path(te.exitcode_path));
     if (te.has_env) run.addFileInput(b.path(te.env_path));
+}
+
+/// The scheduler's task dump names the raw descriptor a parked task waits on. The multiplexer
+/// holds descriptors of its own, and kqueue and epoll take a different number of them, so the
+/// value differs between platforms.
+const stderr_normalize_script = "s|blocked_fd=[0-9][0-9]*|blocked_fd=<fd>|g";
+
+/// Rewrite stderr fields a golden cannot pin. Applied on both the comparison and the
+/// update-golden path so the two agree.
+fn normalizeStderr(b: *std.Build, captured: std.Build.LazyPath) std.Build.LazyPath {
+    const normalize = b.addSystemCommand(&.{ "sed", stderr_normalize_script });
+    normalize.addFileArg(captured);
+    return normalize.captureStdOut();
 }
 
 fn addGoldenDiff(

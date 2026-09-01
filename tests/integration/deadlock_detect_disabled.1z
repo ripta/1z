@@ -1,0 +1,6 @@
+\ The same all-blocked shape `deadlock_detect.1z` reports. `--no-deadlock-detect` clears the
+\ threshold the earlier flag set, so no verdict is taken and the hard timeout is what ends the
+\ run.
+
+use "testing" ;
+[ <channel> [ receive drop ] curry spawn yield ] task-scope

@@ -193,6 +193,7 @@ fn nativeTaskScope(ctx: *Context) anyerror!void {
     // threshold and timestamp so a busy background worker correctly
     // suppresses a false stall warning on an idle primary.
     pool.deadlock_threshold_ns = ctx.deadlock_detect_ns;
+    pool.report_stall_verdict = ctx.report_stall_verdict;
 
     // Point every worker's drain at the main context's buffer and give it a
     // worker id for the drained labels. Each worker folds its collection into
@@ -650,7 +651,9 @@ fn nativeAwait(ctx: *Context) anyerror!void {
     switch (task.getStatus()) {
         .pending, .running => {
             task.awaiting_task = current;
+            current.blocked_on_await = task;
             scheduler.suspendCurrentTask();
+            current.blocked_on_await = null;
         },
         .completed, .failed, .cancelled => {},
     }
@@ -686,7 +689,9 @@ fn nativeAwaitTerminal(ctx: *Context) anyerror!void {
     switch (task.getStatus()) {
         .pending, .running => {
             task.awaiting_task = current;
+            current.blocked_on_await = task;
             scheduler.suspendCurrentTask();
+            current.blocked_on_await = null;
         },
         .completed, .failed, .cancelled => {},
     }
@@ -765,7 +770,9 @@ fn nativeAwaitAll(ctx: *Context) anyerror!void {
         switch (task.getStatus()) {
             .pending, .running => {
                 task.awaiting_task = current;
+                current.blocked_on_await = task;
                 scheduler.suspendCurrentTask();
+                current.blocked_on_await = null;
             },
             .completed, .failed, .cancelled => {},
         }

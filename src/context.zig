@@ -821,8 +821,13 @@ pub const Context = struct {
     debugger: ?*debugger_mod.Debugger = null,
     /// Execution tracing configuration, parsed from CLI flags.
     trace: TraceConfig = .{},
-    /// Wall-clock stall detection threshold in nanoseconds, parsed from --deadlock-detect[=N].
-    deadlock_detect_ns: ?i128 = null,
+    /// Wall-clock no-progress threshold in nanoseconds, tuned by --deadlock-detect[=SECS] and
+    /// cleared by --no-deadlock-detect. Null disables both verdicts.
+    deadlock_detect_ns: ?i128 = scheduler_mod.startup_deadlock_detect_ns,
+    /// Report the bare no-progress stall when the deadlock gate refuses. Opt-in under
+    /// --deadlock-detect, because a pool running one long non-yielding task satisfies the
+    /// threshold on its own.
+    report_stall_verdict: bool = false,
     /// The process-wide memory-cap allocator, so the periodic sampler can read current and peak
     /// live bytes. Null when no cap allocator is active.
     mem_limit: ?*MemoryLimitAllocator = null,
@@ -1443,6 +1448,7 @@ pub const Context = struct {
 
             .trace = parent.trace,
             .deadlock_detect_ns = parent.deadlock_detect_ns,
+            .report_stall_verdict = parent.report_stall_verdict,
             .mem_limit = parent.mem_limit,
             .current_source = parent.current_source,
             .startup_source = parent.startup_source,

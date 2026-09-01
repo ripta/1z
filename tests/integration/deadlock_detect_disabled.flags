@@ -1,0 +1,4 @@
+--deadlock-detect=1
+--no-deadlock-detect
+--test-timeout=3
+--no-show-stack

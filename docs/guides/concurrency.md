@@ -165,6 +165,24 @@ use "testing" ;
 The task catches the division-by-zero error and returns 0 instead. No
 sibling tasks are affected.
 
+## Deadlock
+
+A program can still reach a state where every live task waits on something
+only another task could supply: a channel with no sender left, a scope, the
+module-load lock, or an `await` on a task that will never finish. The
+runtime reports that and exits 124 rather than waiting forever:
+
+```text
+DEADLOCK: 5.0s with no progress, 2 tasks blocked, 0 runnable
+TASK-DUMP: 2 tasks, 0 runnable
+  ...
+```
+
+A task waiting on a file descriptor, a child process, or a timer is woken
+from outside the scheduler, so a program holding one is left alone and keeps
+waiting. See `--deadlock-detect` and `--no-deadlock-detect` for the
+threshold and the off switch.
+
 ## Channels
 
 Channels are how tasks talk to each other. An unbuffered channel blocks the

@@ -1,0 +1,6 @@
+\ An awaiting task is woken only when the task it awaits reaches a terminal status, which
+\ happens entirely inside the scheduler. The awaited child is parked on a channel with no
+\ sender, so neither can move and the pool is deadlocked.
+
+use "testing" ;
+[ <channel> [ receive drop ] curry spawn await drop ] task-scope

@@ -1,0 +1,13 @@
+\ An io fd is woken from outside the scheduler, so a pool holding one is not deadlocked even
+\ when every other live task is parked on a channel with no sender. The verdict is the bare
+\ stall, which only reports because --deadlock-detect asked for it.
+
+use "testing" ;
+use "net" ;
+use "net/tcp" ;
+
+[
+  "127.0.0.1" 0 make-addr:tcp 128 listen
+  [ accept 2drop ] curry spawn drop
+  <channel> [ receive drop ] curry spawn drop
+] task-scope
