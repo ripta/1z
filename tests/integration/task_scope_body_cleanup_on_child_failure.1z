@@ -1,0 +1,26 @@
+use "testing" ;
+
+\ A cleanup handler registered in the scope body still runs when a child's
+\ failure cancels the body.
+\
+\ The body parks on receive with no other producer, so the cancellation is what
+\ unwinds it. Scope exit still propagates the child's error, not the body's
+\ task-cancelled.
+
+test-body-cleanup-on-child-failure: ( -- ) [
+  V{ }
+  dup
+  [
+    out: 1 <buffered-channel> ;
+    [ 1 0 / out send ] spawn drop
+    [ 88 #push! drop ] curry
+    [ out receive drop ]
+    swap
+    cleanup
+  ] curry
+  [ task-scope ] curry
+  division-by-zero: "child failure propagates past the cancelled body" assert-error-type
+  #len 1 "body cleanup ran when a child's failure cancelled the body" assert=
+] ;
+
+test-body-cleanup-on-child-failure

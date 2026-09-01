@@ -1318,8 +1318,9 @@ pub const Scheduler = struct {
         if ((task.getStatus() == .failed or task.scope.race_first_finisher) and
             task.scope.cancellation_requested.cmpxchgStrong(false, true, .acq_rel, .acquire) == null)
         {
-            // XXX(ripta): Be sure to skip the scope task since it's the coordinator and needs to observe
-            //             the failure via await, but it may not be in the same scope if it's a nested scope.
+            // The scope body is one of these children, so it is cancelled too. A body parked on
+            // a waitable whose only producer was the failed child would otherwise be stranded.
+            // The scope exit that propagates the child's error is never reached.
             //
             // `cancelTask` routes siblings on other workers through their
             // home worker's cancellation queue, so per-state cleanup
@@ -1328,7 +1329,6 @@ pub const Scheduler = struct {
             defer task.scope.children_mu.unlock();
             for (task.scope.children.items) |sibling| {
                 if (sibling == task) continue;
-                if (sibling == task.scope.scope_task) continue;
                 self.cancelTask(sibling);
             }
         }

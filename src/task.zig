@@ -260,9 +260,6 @@ pub const TaskScope = struct {
     /// Guards `children` against concurrent appends from spawns on other
     /// worker threads and reads from sibling-cancellation iteration.
     children_mu: std.Thread.Mutex = .{},
-    /// The coordinator task that runs the task-scope body. Excluded from
-    /// sibling cancellation so it can observe child failures via await.
-    scope_task: ?*Task = null,
     /// Task that is waiting for the entire scope to complete.
     waiting_task: ?*Task = null,
     allocator: Allocator,
@@ -298,7 +295,6 @@ pub const TaskScope = struct {
     pub fn init(allocator: Allocator) TaskScope {
         return .{
             .children = .{},
-            .scope_task = null,
             .waiting_task = null,
             .allocator = allocator,
         };

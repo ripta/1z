@@ -145,7 +145,6 @@ fn nativeTaskScope(ctx: *Context) anyerror!void {
 
         const scope_task = try allocateTask(ctx, scheduler, &scope, popped.callable, popped.scope);
         owner_transferred = true;
-        scope.scope_task = scope_task;
 
         try scope.addChild(scope_task);
         try scheduler.enqueue(scope_task);
@@ -247,7 +246,6 @@ fn nativeTaskScope(ctx: *Context) anyerror!void {
 
     const scope_task = try allocateTask(ctx, &primary.scheduler, &scope, popped.callable, popped.scope);
     owner_transferred = true;
-    scope.scope_task = scope_task;
 
     try scope.addChild(scope_task);
     try primary.scheduler.enqueue(scope_task);
@@ -530,7 +528,6 @@ fn nativeWithTimeout(ctx: *Context) anyerror!void {
     // sleeping, and the caller blocks for the full timeout duration.
     scope.race_first_finisher = true;
 
-    // NOTE(ripta): Do NOT set the task as the scope task so that sibling cancellation from the timer can reach it.
     const main_task = try allocateTask(ctx, scheduler, &scope, popped.callable, popped.scope);
     owner_transferred = true;
     try scope.addChild(main_task);

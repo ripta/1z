@@ -1,0 +1,14 @@
+\ Regression: a spawned task that raised before its send left the scope body
+\ blocked on receive forever.
+\
+\ The sibling-cancellation cascade skipped the body, so nothing woke it. Scope
+\ exit was never reached. The first-error walk that lives there never ran.
+\
+\ The body is now cancelled with its siblings, so the division-by-zero surfaces
+\ instead of a silent hang.
+
+[
+  out: 1 <buffered-channel> ;
+  [ 1 0 / out send ] spawn drop
+  out receive print-line
+] task-scope

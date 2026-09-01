@@ -1,0 +1,4 @@
+Stack: [ ]
+PASS: child failure propagates past the cancelled body
+PASS: body cleanup ran when a child's failure cancelled the body
+Stack: [ ]

@@ -883,8 +883,7 @@ pub fn checkCancellation(ctx: *Context) error{UserThrown}!void {
     // cancellation, tasks that yield can observe it without waiting for the
     // scheduler to individually cancelTask each sibling.
     if (current.getCancellationPhase() == .none and
-        current.scope.cancellation_requested.load(.acquire) and
-        current != (current.scope.scope_task orelse current))
+        current.scope.cancellation_requested.load(.acquire))
     {
         current.setCancellationPhase(.unwinding);
         ctx.thrown_error = value_mod.boxErrorObject(ctx.quotationAllocator(), .{

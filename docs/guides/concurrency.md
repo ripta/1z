@@ -134,7 +134,9 @@ let other tasks make progress.
 ## Error Propagation and Cancellation
 
 When a task throws an unhandled error, the error bubbles out of
-`task-scope` and all sibling tasks get cancelled:
+`task-scope` and all sibling tasks get cancelled. The scope body is
+cancelled with them, so work it would have done after the failure does
+not run. The error still surfaces at `task-scope`:
 
 ```
 use "testing" ;

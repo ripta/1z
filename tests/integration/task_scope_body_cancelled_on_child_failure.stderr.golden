@@ -1,0 +1,2 @@
+tests/integration/task_scope_body_cancelled_on_child_failure.1z:14: error 'division-by-zero' / at word 'task-scope'
+  stack effect: ( quot --  )
