@@ -42,6 +42,9 @@ probes=(
     ">duration drop|use \"time\" ;|42 >duration drop"
     "bignum + drop||99999999999999999999999 12345 + drop"
     "curry drop||2 [ * ] curry drop"
+    "curry call||1 [ drop ] curry call"
+    "loop||0 [ 1 + dup 10 < ] loop drop"
+    "compose call||x: 5 ; [ x ] [ drop ] compose call"
 )
 
 work="$(mktemp -d)" || { echo "mktemp -d failed" >&2; exit 1; }

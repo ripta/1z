@@ -3,14 +3,17 @@ binary=./zig-out/bin/1z   iterations=500000   mode=--compile=off
 
 probe                      tracked_MB   bytes/it       rss_MB
 ------------------------ ------------ ---------- ------------
-1 2 + drop                        0.0          0          0.2
+1 2 + drop                        0.0          0          0.1
 H{ } @set drop                    0.0          0          0.1
-{ } #append drop                  0.0          0          0.2
->string drop                      0.0          0          0.0
-string #append drop               0.0          0          0.2
+{ } #append drop                  0.0          0          0.1
+>string drop                      0.0          0          0.1
+string #append drop               0.0          0          0.1
 array #append drop                0.0          0          0.1
-#map #collect drop                0.0          0          0.2
->symbol drop                      0.0          0          0.0
+#map #collect drop                0.0          0          0.1
+>symbol drop                      0.0          0          0.1
 >duration drop                    0.0          0          0.1
 bignum + drop                     0.0          0          0.1
-curry drop                        0.0          0          0.2
+curry drop                        0.0          0          0.1
+curry call                        0.0          0          0.1
+loop                              0.0          0          0.1
+compose call                      0.5          1          0.6
