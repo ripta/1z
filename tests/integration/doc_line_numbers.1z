@@ -50,6 +50,42 @@ dup "bar" @get 2 "bar on line 2" assert=
 dup "bar" @get 1 "bar on line 1" assert=
 "foo" @get 2 "foo recorded at its real definition, not the body literal" assert=
 
+\ --- A private block does not swallow what follows it ---
+
+"definitions after a private block" test-section
+
+"a: [ 1 ] ;\nprivate{\n  helper: [ 2 ] ;\n}\nb: [ 3 ] ;\n" extract-definition-lines
+dup "a" @get 1 "definition before the block" assert=
+dup "b" @get 5 "definition after the block" assert=
+"helper" @has? f "a private-block definition is not top-level" assert=
+
+\ --- Nested and repeated blocks stay balanced ---
+
+"repeated blocks stay balanced" test-section
+
+"private{\n  h: [ ] ;\n}\nc: [ ] ;\nprivate{\n  i: [ ] ;\n}\nd: [ ] ;\n"
+extract-definition-lines
+dup "c" @get 4 "definition between two blocks" assert=
+"d" @get 8 "definition after the second block" assert=
+
+\ --- Hash-literal keys are not definitions ---
+
+"hash keys are not definitions" test-section
+
+"cfg: [ H{ kind: 1 first: 2 } ] ;\nfirst: [ 9 ] ;\n" extract-definition-lines
+dup "kind" @has? f "a hash key is not a definition" assert=
+"first" @get 2 "a later real definition is not shadowed by a hash key" assert=
+
+\ --- ffi-def entries are definitions ---
+
+"ffi-def entries are definitions" test-section
+
+"a: [ 1 ] ;\nffi-def{\n  plain: \"c_plain\" ffi{ ptr -> i32 }\n}\nb: [ 2 ] ;\n"
+extract-definition-lines
+dup "plain" @get 3 "an ffi-def entry is recorded" assert=
+dup "a" @get 1 "definition before the ffi-def block" assert=
+"b" @get 5 "definition after the ffi-def block" assert=
+
 \ --- Reading from a file ---
 
 "line extraction from a file" test-section

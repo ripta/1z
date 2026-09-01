@@ -234,6 +234,24 @@ value>> "struct{" "struct{ value" assert=
 "pragma{" (tokens)
 #first value>> "pragma{" "pragma{ value" assert=
 
+\ A brace form outside the prefix list still opens a brace, so its `}` pairs.
+
+"private{" (tokens)
+#first dup kind>> open-brace: "private{ kind" assert=
+value>> "private{" "private{ value" assert=
+
+"ffi-def{" (tokens)
+#first kind>> open-brace: "ffi-def{ kind" assert=
+
+"choose{" (tokens)
+#first kind>> open-brace: "choose{ kind" assert=
+
+"flag{" (tokens)
+#first kind>> open-brace: "flag{ kind" assert=
+
+"plain" (tokens)
+#first kind>> word: "a word without a trailing brace stays a word" assert=
+
 \ ===== Semicolons =====
 
 "semicolons" test-section

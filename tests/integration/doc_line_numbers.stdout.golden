@@ -30,6 +30,53 @@ PASS: bar on line 1
 Stack: [ M{ bar: 1 foo: 2 } ]
 PASS: foo recorded at its real definition, not the body literal
 Stack: [ ]
+=== definitions after a private block ===
+Stack: [ ]
+Stack: [ M{ b: 5 a: 1 } ]
+PASS: definition before the block
+Stack: [ M{ b: 5 a: 1 } ]
+PASS: definition after the block
+Stack: [ M{ b: 5 a: 1 } ]
+PASS: a private-block definition is not top-level
+Stack: [ ]
+=== repeated blocks stay balanced ===
+Stack: [ ]
+Stack: [ "private{
+  h: [ ] ;
+}
+c: [ ] ;
+private{
+  i: [ ] ;
+}
+d: [ ] ;
+" ]
+Stack: [ M{ c: 4 d: 8 } ]
+PASS: definition between two blocks
+Stack: [ M{ c: 4 d: 8 } ]
+PASS: definition after the second block
+Stack: [ ]
+=== hash keys are not definitions ===
+Stack: [ ]
+Stack: [ M{ first: 2 cfg: 1 } ]
+PASS: a hash key is not a definition
+Stack: [ M{ first: 2 cfg: 1 } ]
+PASS: a later real definition is not shadowed by a hash key
+Stack: [ ]
+=== ffi-def entries are definitions ===
+Stack: [ ]
+Stack: [ "a: [ 1 ] ;
+ffi-def{
+  plain: "c_plain" ffi{ ptr -> i32 }
+}
+b: [ 2 ] ;
+" ]
+Stack: [ M{ b: 5 a: 1 plain: 3 } ]
+PASS: an ffi-def entry is recorded
+Stack: [ M{ b: 5 a: 1 plain: 3 } ]
+PASS: definition before the ffi-def block
+Stack: [ M{ b: 5 a: 1 plain: 3 } ]
+PASS: definition after the ffi-def block
+Stack: [ ]
 === line extraction from a file ===
 Stack: [ ]
 PASS: line extracted from a source file on disk

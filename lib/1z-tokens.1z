@@ -353,12 +353,25 @@ BRACE-PREFIXES: ( -- array ) const [
 
 \ --- Rule 15: word (fallback, any non-whitespace) ---
 
+\ Pick the kind for a bare word, tagging one that ends in `{` as a brace
+\ opener.
+\
+\ BRACE-PREFIXES names only the forms with a dedicated first-character
+\ dispatch, so `private{`, `ffi-def{`, `choose{`, `flag{`, and the rest arrive
+\ here. Their `}` is a plain close-brace either way, so leaving them as words
+\ hands consumers a stream whose braces do not pair.
+(word-kind): ( str -- kind str ) [
+  dup #len 1 > over #last "{" = and
+  [ open-brace: ] [ word: ] if
+  swap
+] ;
+
 (1z-word-match): ( scanner -- new-scanner token | f ) [
   dup peek dup f = [ 2drop f ] [
     drop
     dup position>> swap
     [ whitespace? not ] take-while
-    <rot- [ word: swap ] dip make-token
+    <rot- [ (word-kind) ] dip make-token
   ] if
 ] ;
 

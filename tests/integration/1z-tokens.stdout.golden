@@ -247,6 +247,23 @@ Stack: [ ]
 Stack: [ { token{ kind: open-brace: value: "pragma{" pos: 0 } } ]
 PASS: pragma{ value
 Stack: [ ]
+Stack: [ { token{ kind: open-brace: value: "private{" pos: 0 } } ]
+PASS: private{ kind
+Stack: [ token{ kind: open-brace: value: "private{" pos: 0 } ]
+PASS: private{ value
+Stack: [ ]
+Stack: [ { token{ kind: open-brace: value: "ffi-def{" pos: 0 } } ]
+PASS: ffi-def{ kind
+Stack: [ ]
+Stack: [ { token{ kind: open-brace: value: "choose{" pos: 0 } } ]
+PASS: choose{ kind
+Stack: [ ]
+Stack: [ { token{ kind: open-brace: value: "flag{" pos: 0 } } ]
+PASS: flag{ kind
+Stack: [ ]
+Stack: [ { token{ kind: word: value: "plain" pos: 0 } } ]
+PASS: a word without a trailing brace stays a word
+Stack: [ ]
 === semicolons ===
 Stack: [ ]
 Stack: [ { token{ kind: semicolon: value: ";" pos: 0 } } ]

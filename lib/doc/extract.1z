@@ -98,35 +98,55 @@ extract-doc-comments: ( source -- map ) [
 \ A bracket or brace that closes a nested region.
 (closer?): ( kind -- ? ) [ dup close-bracket: = swap close-brace: = or ] ;
 
-\ Record a top-level definition's line. A `symbol:` token at depth 0 is a
-\ definition; its name is filed against the current line, first occurrence
+\ Record a definition's line. A `symbol:` token sitting at the recording depth
+\ is a definition; its name is filed against the current line, first occurrence
 \ winning so a `name:` symbol-literal inside a later body cannot overwrite the
 \ real definition's line. Any other token, or a symbol nested in a body, is
 \ dropped.
-(record-line): ( line-map line depth token -- line-map line depth ) [
-  dup kind>> symbol: = 2 pick-n 0 = and
+(record-line): ( line-map line depth rec token -- line-map line depth rec ) [
+  dup kind>> symbol: = 2 pick-n 4 pick-n = and
   [
     value>> (strip-colon)
-    3 pick-n over @has?
+    4 pick-n over @has?
     [ drop ]
-    [ 3 pick-n swap 3 pick-n @set! drop ]
+    [ 4 pick-n swap 4 pick-n @set! drop ]
     if
   ]
   [ drop ]
   if
 ] ;
 
+\ Enter a brace or bracket block, moving the recording depth inside an
+\ `ffi-def{ }` block.
+\
+\ Such a block binds its entries as words, and a library that closes it with
+\ `reexport` publishes them, so they are definitions the way top-level ones
+\ are. Every other block nests its symbols away: `H{ }` keys and `flag{ }`
+\ fields are not definitions.
+(enter-block): ( line-map line depth rec token -- line-map line depth rec ) [
+  value>> "ffi-def{" =
+  [ drop dup 1 + ] [ ] if
+  [ 1 + ] dip
+] ;
+
+\ Leave a brace or bracket block. Falling below the recording depth means the
+\ `ffi-def{ }` block just closed, so recording returns to the top level.
+(leave-block): ( line-map line depth rec -- line-map line depth rec ) [
+  [ 1 - ] dip
+  2dup < [ drop 0 ] [ ] if
+] ;
+
 \ Fold step over one token, threading the line map, the current 1-based line,
-\ and the bracket/brace nesting depth.
-(line-step): ( line-map line depth token -- line-map line depth ) [
+\ the bracket/brace nesting depth, and the depth definitions are recorded at.
+(line-step): ( line-map line depth rec token -- line-map line depth rec ) [
   dup kind>> newline: =
-  [ drop swap 1 + swap ]
+  [ drop [ 1 + ] 2dip ]
   [
     dup kind>> (opener?)
-    [ drop 1 + ]
+    [ (enter-block) ]
     [
       dup kind>> (closer?)
-      [ drop 1 - ]
+      [ drop (leave-block) ]
       [ (record-line) ]
       if
     ]
@@ -137,9 +157,9 @@ extract-doc-comments: ( source -- map ) [
 
 \ Fold a materialized token array into the definition-line map.
 (definition-lines-from-tokens): ( tokens -- map ) [
-  M{ } 1 0
-  3 pick-n [ (line-step) ] #each
-  drop drop nip
+  M{ } 1 0 0
+  4 pick-n [ (line-step) ] #each
+  drop drop drop nip
 ] ;
 
 \\ Tokenize 1z source and return a mutable map from word name to the 1-based
