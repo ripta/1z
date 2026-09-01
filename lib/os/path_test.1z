@@ -1,0 +1,79 @@
+\ Unit tests for the relative-path family in lib/os/path.1z.
+
+use "testing" ;
+use "os/path" ;
+
+\ Assert that relative-path's answer rejoins to the original path:
+\ base rel path-join normalize equals path normalize.
+assert-round-trip: ( path base msg -- ) [
+  [ 2dup relative-path path-join normalize swap normalize ] dip assert=
+] ;
+
+test-relative-path-descends: ( -- ) [
+  "/a/b/c/d.txt" "/a/b" relative-path "c/d.txt" "path under base" assert=
+  "/a/b" "/" relative-path "a/b" "base is the root" assert=
+  "a/b/c" "a" relative-path "b/c" "relative pair" assert=
+  "a/b" "." relative-path "a/b" "base is here" assert=
+] ;
+
+test-relative-path-compares-segments: ( -- ) [
+  "/a/bc" "/a/b" relative-path "../bc" "sibling with a shared name prefix" assert=
+] ;
+
+test-relative-path-walks-up: ( -- ) [
+  "/a" "/a/b/c" relative-path "../.." "path above base" assert=
+  "/x/y" "/a/b" relative-path "../../x/y" "disjoint trees" assert=
+] ;
+
+test-relative-path-equal-paths: ( -- ) [
+  "/a/b" "/a/b" relative-path "." "equal absolute paths" assert=
+  "/a/b/../b" "/a/b" relative-path "." "equal after normalization" assert=
+  "." "." relative-path "." "here against here" assert=
+] ;
+
+test-relative-path-normalizes-noise: ( -- ) [
+  "./a/./b/" "a" relative-path "b" "dot segments and trailing slash" assert=
+] ;
+
+test-relative-path-curries-against-a-root: ( -- ) [
+  "/a/b" "/a" [ relative-path ] curry call
+  "b" "base on top curries to a path-to-rel quotation" assert=
+] ;
+
+test-relative-path-round-trips: ( -- ) [
+  "/a/b/c/d.txt" "/a/b" "round trip under base" assert-round-trip
+  "/a/bc" "/a/b" "round trip sibling" assert-round-trip
+  "/a" "/a/b/c" "round trip above base" assert-round-trip
+  "/x/y" "/a/b" "round trip disjoint" assert-round-trip
+  "/a/b" "/a/b" "round trip equal" assert-round-trip
+  "a/b/c" "a" "round trip relative" assert-round-trip
+  "/a/b" "/" "round trip against root" assert-round-trip
+] ;
+
+test-relative-path-rejects-mixed-kinds: ( -- ) [
+  [ "/a/b" "a" relative-path ] invalid-argument:
+  "absolute path against relative base" assert-error-type
+
+  [ "a" "/a/b" relative-path ] invalid-argument:
+  "relative path against absolute base" assert-error-type
+] ;
+
+test-relative-path-rejects-leading-updir: ( -- ) [
+  [ "../a/x" "../a" relative-path ] invalid-argument:
+  "leading .. on both sides" assert-error-type
+
+  [ "../a" "b" relative-path ] invalid-argument:
+  "leading .. on the path" assert-error-type
+
+  [ "a" "../b" relative-path ] invalid-argument:
+  "leading .. on the base" assert-error-type
+
+  [ "a/../../x" "b" relative-path ] invalid-argument:
+  "normalization exposes the leading .." assert-error-type
+] ;
+
+test-relative-path-option-twin: ( -- ) [
+  "/a/b/c" "/a" relative-path? option:some> "b/c" "comparable pair answers some" assert=
+  "/a/b" "a" relative-path? option:none? "mixed kinds answer none" assert-true
+  "../a" "b" relative-path? option:none? "leading .. answers none" assert-true
+] ;

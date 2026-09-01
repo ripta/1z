@@ -1,4 +1,4 @@
-\ lib/path.1z - Path manipulation
+\ lib/os/path.1z - Path manipulation
 
 use "strings" ;
 use "sequences" ;
@@ -127,4 +127,59 @@ normalize: ( path -- path ) [
   [ drop [ "/" ] [ "." ] if ]
   [ swap [ "/" swap #append ] when ]
   if
+] ;
+
+private{
+  \ Split an already-normalized path into segments with normalize's own
+  \ filter, dropping empty and `.` parts.
+  path-segments: ( path -- segs ) [
+    "/" split [ dup #len 0 > swap "." /= and ] #filter #collect
+  ] ;
+
+  leading-updir?: ( segs -- ? ) [
+    dup #empty? [ drop f ] [ #first ".." = ] if
+  ] ;
+
+  \ Drop the leading segments the two arrays share.
+  drop-common: ( psegs bsegs -- psegs bsegs ) [
+    over #empty? over #empty? or
+    [ ]
+    [ 2dup [ #first ] dip #first =
+      [ [ 1 #drop ] dip 1 #drop drop-common ]
+      when
+    ]
+    if
+  ] ;
+}
+
+\\ Express path relative to base, comparing normalized segments. The result may lead with `..`,
+\\ and equal paths give ".".
+\\ "/a/b/c/d.txt" "/a/b" -> "c/d.txt", "/a" "/a/b/c" -> "../.."
+\\
+\\ Purely lexical: unlike Python's os.path.relpath, the working directory is never consulted.
+\\
+\\ Raises invalid-argument when exactly one side is absolute, or when either side still leads
+\\ with `..` after normalization.
+relative-path: ( path: string base: string -- rel ) [
+  [ normalize ] dip normalize
+  2dup [ "/" #starts-with? ] dip "/" #starts-with? xor
+  [ 2drop f "cannot relate an absolute path and a relative path" EInvalidArgument make-error throw ]
+  when
+  [ path-segments ] dip path-segments
+  2dup [ leading-updir? ] dip leading-updir? or
+  [ 2drop f "cannot relate a path that leads with .." EInvalidArgument make-error throw ]
+  when
+  drop-common
+  #len { } swap [ ".." #suffix ] times
+  swap #append
+  "/" #join
+  dup #empty? [ drop "." ] when
+] ;
+
+\\ Express path relative to base, answering option:some rel on a comparable pair and
+\\ option:none otherwise.
+relative-path?: ( path: string base: string -- option ) [
+  [ relative-path >option:some ]
+  [ drop option:none ]
+  recover
 ] ;
