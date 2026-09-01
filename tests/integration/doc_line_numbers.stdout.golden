@@ -77,6 +77,18 @@ PASS: definition before the ffi-def block
 Stack: [ M{ b: 5 a: 1 plain: 3 } ]
 PASS: definition after the ffi-def block
 Stack: [ ]
+=== parenthesized definition name ===
+Stack: [ ]
+Stack: [ M{ plain: 2 (paren): 1 } ]
+PASS: a parenthesized name is recorded
+Stack: [ M{ plain: 2 (paren): 1 } ]
+PASS: a plain name beside it is unaffected
+Stack: [ ]
+Stack: [ M{ (paren): 1 } ]
+PASS: a parenthesized name with a stack effect
+Stack: [ M{ (paren): 1 } ]
+PASS: the stack effect is not recorded as a definition
+Stack: [ ]
 === line extraction from a file ===
 Stack: [ ]
 PASS: line extracted from a source file on disk

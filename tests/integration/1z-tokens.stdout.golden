@@ -158,6 +158,20 @@ Stack: [ ]
 Stack: [ { token{ kind: symbol: value: "::" pos: 0 } } ]
 PASS: double colon is symbol
 Stack: [ ]
+Stack: [ { token{ kind: symbol: value: "(check-zlib):" pos: 0 } } ]
+PASS: paren name: one token
+Stack: [ { token{ kind: symbol: value: "(check-zlib):" pos: 0 } } ]
+PASS: paren name kind
+Stack: [ token{ kind: symbol: value: "(check-zlib):" pos: 0 } ]
+PASS: paren name value
+Stack: [ ]
+Stack: [ { token{ kind: symbol: value: "(paren):" pos: 0 } token{ kind: whitespace: value: " " pos: 8 } token{ kind: open-bracket: value: "[" pos: 9 } token{ kind: whitespace: value: " " pos: 10 } token{ kind: number: value: "1" pos: 11 } token{ kind: whitespace: value: " " pos: 12 } token{ kind: close-bracket: value: "]" pos: 13 } token{ kind: whitespace: value: " " pos: 14 } token{ kind: semicolon: value: ";" pos: 15 } } ]
+PASS: paren def: name is symbol
+Stack: [ { token{ kind: symbol: value: "(paren):" pos: 0 } token{ kind: whitespace: value: " " pos: 8 } token{ kind: open-bracket: value: "[" pos: 9 } token{ kind: whitespace: value: " " pos: 10 } token{ kind: number: value: "1" pos: 11 } token{ kind: whitespace: value: " " pos: 12 } token{ kind: close-bracket: value: "]" pos: 13 } token{ kind: whitespace: value: " " pos: 14 } token{ kind: semicolon: value: ";" pos: 15 } } ]
+PASS: paren def: name value
+Stack: [ { token{ kind: symbol: value: "(paren):" pos: 0 } token{ kind: whitespace: value: " " pos: 8 } token{ kind: open-bracket: value: "[" pos: 9 } token{ kind: whitespace: value: " " pos: 10 } token{ kind: number: value: "1" pos: 11 } token{ kind: whitespace: value: " " pos: 12 } token{ kind: close-bracket: value: "]" pos: 13 } token{ kind: whitespace: value: " " pos: 14 } token{ kind: semicolon: value: ";" pos: 15 } } ]
+PASS: paren def: open bracket
+Stack: [ ]
 === comments ===
 Stack: [ ]
 Stack: [ { token{ kind: comment: value: "\ a comment" pos: 0 } } ]

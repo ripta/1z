@@ -152,10 +152,15 @@ use "conversions" ;
 
 \ --- Rule 7: stack effect ( ... ) ---
 
+\ A `)` immediately followed by `:` closes a parenthesized word name such as
+\ `(check-zlib):`, not a stack effect. Declining here lets the run fall through
+\ to `(symbol-match)`, which accepts it. A real stack effect is always followed
+\ by whitespace or a bracket.
 (stack-effect-loop): ( scanner -- scanner found? ) [
   dup at-end? [ f ] [
     dup peek dup ")" = [
-      drop advance t
+      drop advance
+      dup peek ":" = not
     ] [
       (lf) = [
         \ newline inside parens: not a stack effect

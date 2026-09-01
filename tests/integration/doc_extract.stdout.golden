@@ -37,6 +37,18 @@ PASS: definition symbol is documented
 Stack: [ M{ run: "doc for run" } ]
 PASS: symbol literal in the body is not treated as a definition
 Stack: [ ]
+=== parenthesized definition name ===
+Stack: [ ]
+Stack: [ "\\ Doc for paren.
+(paren): [ 1 ] ;
+\\ Doc for plain.
+plain: [ 2 ] ;
+" ]
+Stack: [ M{ plain: "Doc for plain." (paren): "Doc for paren." } ]
+PASS: a parenthesized name is documented
+Stack: [ M{ plain: "Doc for plain." (paren): "Doc for paren." } ]
+PASS: a plain name beside it is unaffected
+Stack: [ ]
 === extraction from a file ===
 Stack: [ ]
 PASS: doc extracted from a source file on disk

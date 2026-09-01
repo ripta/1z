@@ -86,6 +86,20 @@ dup "plain" @get 3 "an ffi-def entry is recorded" assert=
 dup "a" @get 1 "definition before the ffi-def block" assert=
 "b" @get 5 "definition after the ffi-def block" assert=
 
+\ --- Parenthesized definition name ---
+
+"parenthesized definition name" test-section
+
+"(paren): [ 1 ] ;\nplain: [ 2 ] ;\n" extract-definition-lines
+dup "(paren)" @get 1 "a parenthesized name is recorded" assert=
+"plain" @get 2 "a plain name beside it is unaffected" assert=
+
+\ A stack effect on the same definition is still a stack effect.
+
+"(paren): ( a -- b ) [ ] ;\n" extract-definition-lines
+dup "(paren)" @get 1 "a parenthesized name with a stack effect" assert=
+#len 1 "the stack effect is not recorded as a definition" assert=
+
 \ --- Reading from a file ---
 
 "line extraction from a file" test-section

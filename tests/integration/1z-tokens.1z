@@ -149,6 +149,18 @@ value>> "foo-bar:" "foo-bar: value" assert=
 "::" (tokens)
 #first kind>> symbol: "double colon is symbol" assert=
 
+\ A parenthesized word name is a symbol, not a stack effect.
+
+"(check-zlib):" (tokens)
+dup #len 1 "paren name: one token" assert=
+#first dup kind>> symbol: "paren name kind" assert=
+value>> "(check-zlib):" "paren name value" assert=
+
+"(paren): [ 1 ] ;" (tokens)
+dup 0 #nth kind>> symbol: "paren def: name is symbol" assert=
+dup 0 #nth value>> "(paren):" "paren def: name value" assert=
+2 #nth kind>> open-bracket: "paren def: open bracket" assert=
+
 \ ===== Comments =====
 
 "comments" test-section

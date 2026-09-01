@@ -56,6 +56,15 @@ dup "qux" @has? "doc not immediately before a definition does not attach" assert
 dup "run" @get "doc for run" "definition symbol is documented" assert=
 "name" @has? "symbol literal in the body is not treated as a definition" assert-false
 
+\ --- Parenthesized definition name ---
+
+"parenthesized definition name" test-section
+
+"\\\\ Doc for paren.\n(paren): [ 1 ] ;\n\\\\ Doc for plain.\nplain: [ 2 ] ;\n"
+extract-doc-comments
+dup "(paren)" @get "Doc for paren." "a parenthesized name is documented" assert=
+"plain" @get "Doc for plain." "a plain name beside it is unaffected" assert=
+
 \ --- Reading from a file ---
 
 "extraction from a file" test-section
