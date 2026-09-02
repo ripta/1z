@@ -1,0 +1,17 @@
+Annotated-quotation-parameter per-call cost
+binary=./zig-out/bin/1z   reps=5   iterations=5000000   mode=--compile=off
+
+probe                       ns/call            (min-max)  allocs/call
+------------------------ ---------- -------------------- ------------
+settled/annotated               809            (757-829)         1.00
+settled/plain-effect            573            (567-584)         0.00
+settled/no-effect               573            (562-591)         0.00
+keep-form/annotated            1152          (1142-1184)         3.00
+keep-form/no-effect             964            (956-995)         2.00
+unbalanced/annotated           1192          (1180-1208)         2.00
+unbalanced/no-effect            848            (830-883)         0.00
+
+annotation cost (annotated - no-effect):
+  settled body      236 ns/call   1.00 allocs/call
+  keep-form         188 ns/call   1.00 allocs/call
+  unbalanced        344 ns/call   2.00 allocs/call
