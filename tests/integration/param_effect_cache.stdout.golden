@@ -1,0 +1,19 @@
+=== Repeated hits at one site ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: first quotation at the site passes
+Stack: [ ]
+PASS: one hundred hits at one site
+Stack: [ ]
+PASS: loop predicate over fifty iterations
+Stack: [ ]
+=== Closure-owned argument ===
+Stack: [ ]
+PASS: curried quotation with the right delta passes
+Stack: [ ]
+=== Empty quotation argument ===
+Stack: [ ]
+Stack: [ ]
+PASS: empty quotation with a zero-delta annotation passes
+Stack: [ ]

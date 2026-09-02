@@ -1,0 +1,22 @@
+\ Per-call-site memo of annotated quotation parameter inference: the verdicts
+\ that pass. The wrong-delta verdicts at the same sites are in
+\ param_effect_cache_mismatch.1z.
+
+use "testing" ;
+
+"Repeated hits at one site" test-section
+\ `via` holds one call site for `at-site`. The first call fills that site's
+\ entry and every later call with the same literal reads it.
+at-site: ( n quot: ( n -- n n ) -- n n ) [ call ] ;
+via: ( n q -- n n ) [ at-site ] ;
+5 [ dup ] via + 10 "first quotation at the site passes" assert=
+0 100 [ 5 [ dup ] via + + ] times 1000 "one hundred hits at one site" assert=
+0 [ 1 + dup 50 < ] loop 50 "loop predicate over fifty iterations" assert=
+
+"Closure-owned argument" test-section
+\ A curry product owns a fresh body per call, so it never enters the memo.
+5 1 [ drop dup ] curry via + 10 "curried quotation with the right delta passes" assert=
+
+"Empty quotation argument" test-section
+keep-n: ( n quot: ( n -- n ) -- n ) [ call ] ;
+5 [ ] keep-n 5 "empty quotation with a zero-delta annotation passes" assert=

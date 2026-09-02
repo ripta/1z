@@ -515,6 +515,44 @@ pub const ProtocolSatisfiesKeyContext = struct {
     }
 };
 
+/// Key for the per-context memo of an annotated quotation parameter's inferred stack delta: one
+/// entry per call site and parameter position.
+///
+/// `body` is the caller's instruction-slice pointer and `index` the call's position in it. `param`
+/// is the parameter's position among the callee's concrete inputs, so a word with two annotated
+/// quotation parameters holds two entries at one site.
+pub const ParamEffectSiteKey = struct {
+    body: usize,
+    index: usize,
+    param: usize,
+};
+
+pub const ParamEffectSiteKeyContext = struct {
+    pub fn hash(_: @This(), key: ParamEffectSiteKey) u64 {
+        var h = std.hash.Wyhash.init(0);
+        h.update(std.mem.asBytes(&key.body));
+        h.update(std.mem.asBytes(&key.index));
+        h.update(std.mem.asBytes(&key.param));
+        return h.final();
+    }
+
+    pub fn eql(_: @This(), a: ParamEffectSiteKey, b: ParamEffectSiteKey) bool {
+        return a.body == b.body and a.index == b.index and a.param == b.param;
+    }
+};
+
+/// A memoized inference, guarded by what it was derived from.
+///
+/// `arg_body` is the argument quotation's instruction-slice pointer. `effect` is the callee's boxed
+/// effect, whose inputs prefill the inference's shadow stack, so a different callee resolving at
+/// the same site cannot read a delta derived under another prefill. A read that fails either
+/// compare falls through to the walk.
+pub const ParamEffectEntry = struct {
+    arg_body: usize,
+    effect: *const StackEffect,
+    delta: i64,
+};
+
 /// ErrorDetail captures information about an error for debugging purposes.
 pub const ErrorDetail = struct {
     error_type: []const u8,
@@ -953,6 +991,19 @@ pub const Context = struct {
     /// PIC cache mapping instruction slice pointers to their PIC tables.
     /// Lazily populated on first generic dispatch through a compound word body.
     pic_cache: std.AutoHashMapUnmanaged(usize, *PicTable) = .{},
+    /// One inferred delta per annotated-quotation-parameter call site.
+    ///
+    /// Keyed on the caller's body and instruction index, and guarded by the argument body the delta
+    /// was derived from. Admits no closure-owned body on either side; `paramEffectSlot` decides.
+    ///
+    /// Every other body this context runs lives at least as long as the context, and the map dies
+    /// with it.
+    param_effect_cache: std.HashMapUnmanaged(
+        ParamEffectSiteKey,
+        ParamEffectEntry,
+        ParamEffectSiteKeyContext,
+        80,
+    ) = .{},
     /// Maps a quotation/word body instruction-slice pointer to everything resolution knows about
     /// the body: the module it was written in and the scope captured where it was created. The
     /// authoritative stamp half lives in the shared `quotation_stamp_store`; this map's stamp
@@ -1868,6 +1919,7 @@ pub const Context = struct {
             self.allocator.destroy(entry.value_ptr.*);
         }
         self.pic_cache.deinit(self.allocator);
+        self.param_effect_cache.deinit(self.allocator);
         // thrown_error, error_value boxes, null-backed bignum boxes, and task
         // error_obj boxes are all arena-allocated; they are reclaimed by
         // arena.deinit. The refcounted backing carried in an unrecovered
@@ -6355,6 +6407,43 @@ pub const Context = struct {
         return self.inferQuotationDeltaImpl(quot, 0, enclosing_effect);
     }
 
+    /// `inferQuotationDelta` through the per-call-site memo.
+    ///
+    /// A hit is an entry at `slot` whose guards match the argument body and the enclosing effect. A
+    /// miss walks, and a successful walk fills the entry, displacing whatever was there, so a site
+    /// that alternates arguments walks each time. A walk that cannot infer is never recorded: it
+    /// skips validation today, and recording that would freeze the skip at a site whose argument
+    /// may become inferable later.
+    ///
+    /// The caller has already decided admissibility. Both keys are checked against the live
+    /// closure-body registry at the write, which is the independent check on that decision.
+    fn inferQuotationDeltaAt(self: *Context, quot: Quotation, enclosing_effect: *const StackEffect, slot: ?ParamEffectSiteKey) ?i64 {
+        const arg_body = @intFromPtr(quot.instructions.ptr);
+
+        if (slot) |key| {
+            if (self.param_effect_cache.get(key)) |entry| {
+                if (entry.arg_body == arg_body and entry.effect == enclosing_effect) return entry.delta;
+            }
+        }
+
+        const delta = self.inferQuotationDelta(quot, enclosing_effect) orelse return null;
+
+        if (slot) |key| {
+            if (comptime builtin.mode == .Debug) {
+                closure_body_registry.assertNotLive(key.body);
+                closure_body_registry.assertNotLive(arg_body);
+            }
+
+            self.param_effect_cache.put(self.allocator, key, .{
+                .arg_body = arg_body,
+                .effect = enclosing_effect,
+                .delta = delta,
+            }) catch {};
+        }
+
+        return delta;
+    }
+
     fn inferQuotationDeltaImpl(self: *Context, quot: Quotation, depth: u32, enclosing_effect: ?*const StackEffect) ?i64 {
         if (depth >= MAX_INFERENCE_DEPTH) return null;
 
@@ -6702,13 +6791,15 @@ pub const Context = struct {
     ///
     /// An effect with unbalanced row variables is skipped before inferring: its expected delta
     /// could only come from the same inference, so the comparison cannot report a mismatch.
-    fn validateQuotationEffect(self: *Context, quot: Quotation, expected_effect: *const StackEffect, param_name: []const u8, enclosing_effect: ?*const StackEffect) !void {
+    ///
+    /// `slot` names the call-site memo entry the inference may read or fill, or null when the site
+    /// is not cacheable.
+    fn validateQuotationEffect(self: *Context, quot: Quotation, expected_effect: *const StackEffect, param_name: []const u8, enclosing_effect: *const StackEffect, slot: ?ParamEffectSiteKey) !void {
         if (!expected_effect.hasBalancedRowVariables()) return;
 
         const expected_delta = expected_effect.concreteDelta();
 
-        // Infer actual delta from quotation instructions
-        const inferred_delta = self.inferQuotationDelta(quot, enclosing_effect);
+        const inferred_delta = self.inferQuotationDeltaAt(quot, enclosing_effect, slot);
 
         if (inferred_delta) |actual_delta| {
             if (actual_delta != expected_delta) {
@@ -6822,11 +6913,42 @@ pub const Context = struct {
         }
     }
 
+    /// The interpreter call site a parameter-effect validation runs for: the caller's body, the
+    /// call's index in it, and the carrier for that body. A compiled call site has no body pointer
+    /// and index in hand, so it passes none and takes the walk.
+    pub const ParamEffectSite = struct {
+        instructions: []const Instruction,
+        index: usize,
+        owner: ?*const value_mod.Closure,
+    };
+
+    /// The memo key for parameter `param` of the call at `site`, or null when nothing may be
+    /// recorded there.
+    ///
+    /// A closure-owned body is refused on either side, the caller's through its carrier and the
+    /// argument's through the value itself. A push-time promotion aliases a durable body and passes.
+    /// An empty argument body is refused too: every zero-length slice shares one address, so the
+    /// guard could not tell two apart.
+    fn paramEffectSlot(site: ?ParamEffectSite, val: Value, quot: Quotation, param: usize) ?ParamEffectSiteKey {
+        const s = site orelse return null;
+
+        if (s.owner) |c| {
+            if (c.ownsBody(s.instructions)) return null;
+        }
+        if (quot.instructions.len == 0) return null;
+        if (val == .closure and val.closure.ownsBody(quot.instructions)) return null;
+
+        return .{ .body = @intFromPtr(s.instructions.ptr), .index = s.index, .param = param };
+    }
+
     /// Validate quotation parameters against their declared effects.
     /// Uses static analysis to infer the quotation's stack delta and compares
     /// against the expected effect from the parameter annotation.
     /// Also validates that row variables in quotation effects are defined in the word's effect.
-    pub fn validateParameterEffects(self: *Context, effect: *const StackEffect) !void {
+    ///
+    /// When `site` is given, each inference goes through the per-call-site memo under the key
+    /// `paramEffectSlot` admits.
+    pub fn validateParameterEffects(self: *Context, effect: *const StackEffect, site: ?ParamEffectSite) !void {
         // First, validate that all row variables in quotation effects are defined
         for (effect.inputs) |param| {
             if (param.quotation_effect) |quot_effect| {
@@ -6856,8 +6978,10 @@ pub const Context = struct {
 
                 // Get the stack value at this offset and validate if it's a callable
                 const stack_index = self.stack.depth() - 1 - offset_from_top;
-                if (callableView(self.stack.items.items[stack_index])) |quot| {
-                    try self.validateQuotationEffect(quot, expected_effect, param.name, effect);
+                const val = self.stack.items.items[stack_index];
+                if (callableView(val)) |quot| {
+                    const slot = paramEffectSlot(site, val, quot, concrete_index);
+                    try self.validateQuotationEffect(quot, expected_effect, param.name, effect, slot);
                 }
             }
 
@@ -7637,6 +7761,9 @@ pub const Context = struct {
     /// fallback path; this helper handles sandbox, parse-time-only,
     /// JIT dispatch, generic dispatch, recursion-marker check, tail-call
     /// setup, stack-limit check, and the native/host/compound call itself.
+    ///
+    /// `caller_body` is the body the call at `idx` sits in, and `caller_owner` its carrier. Together
+    /// with `idx` they name the call site for the parameter-effect memo.
     fn executeResolvedWord(
         self: *Context,
         name: []const u8,
@@ -7645,6 +7772,8 @@ pub const Context = struct {
         idx: usize,
         pic_table: ?*PicTable,
         is_last: bool,
+        caller_body: []const Instruction,
+        caller_owner: ?*const value_mod.Closure,
     ) anyerror!ResolvedWordResult {
         if (self.active_sandbox) |sandbox| {
             if (!sandbox.allows(word.capability)) {
@@ -7684,7 +7813,7 @@ pub const Context = struct {
             if (effective_word_id) |wid| {
                 if (word.stack_effect) |effect| {
                     if (word.exec_flags.has_param_effects) {
-                        self.validateParameterEffects(effect) catch |err| {
+                        self.validateParameterEffects(effect, .{ .instructions = caller_body, .index = idx, .owner = caller_owner }) catch |err| {
                             self.pushCallFrame(name, self.current_source, instr.line, instr.column, word.stack_effect);
                             return self.wordErrorCleanup(name, err);
                         };
@@ -7758,7 +7887,7 @@ pub const Context = struct {
 
         if (word.stack_effect) |effect| {
             if (word.exec_flags.has_param_effects) {
-                self.validateParameterEffects(effect) catch |err|
+                self.validateParameterEffects(effect, .{ .instructions = caller_body, .index = idx, .owner = caller_owner }) catch |err|
                     return self.wordErrorCleanup(name, err);
             }
             if (word.exec_flags.has_type_annotations and !word.exec_flags.skip_type_validation) {
@@ -8123,7 +8252,7 @@ pub const Context = struct {
 
                     if (captured_scope) |scope| {
                         if (lookupInCapturedScope(scope, name)) |word| {
-                            switch (try self.executeResolvedWord(name, word, instr, idx, pic_table, is_last)) {
+                            switch (try self.executeResolvedWord(name, word, instr, idx, pic_table, is_last, instructions, owner)) {
                                 .proceed => {},
                                 .tail_call_set => return,
                             }
@@ -8132,7 +8261,7 @@ pub const Context = struct {
                     }
 
                     if (self.lookupWordForExecutionOwnScope(name, deps_vis, own_module, own_ambient_deps)) |word| {
-                        switch (try self.executeResolvedWord(name, word, instr, idx, pic_table, is_last)) {
+                        switch (try self.executeResolvedWord(name, word, instr, idx, pic_table, is_last, instructions, owner)) {
                             .proceed => {},
                             .tail_call_set => return,
                         }
@@ -8218,7 +8347,7 @@ pub const Context = struct {
                                 // mirroring the body-entry probe's exemption.
                                 const gate_module = if (isSyntheticScopeModule(lazy_module)) null else lazy_module;
                                 if (self.lookupWordForExecutionFiltered(name, lazy_vis, gate_module)) |word| {
-                                    switch (try self.executeResolvedWord(name, word, instr, idx, pic_table, is_last)) {
+                                    switch (try self.executeResolvedWord(name, word, instr, idx, pic_table, is_last, instructions, owner)) {
                                         .proceed => {},
                                         .tail_call_set => return,
                                     }
@@ -8254,7 +8383,7 @@ pub const Context = struct {
                     if (self.profile) |p| p.recordWordStart(self.allocator);
 
                     const word = dict_mod.loadSlot(slot).*;
-                    switch (try self.executeResolvedWord(name, word, instr, idx, pic_table, is_last)) {
+                    switch (try self.executeResolvedWord(name, word, instr, idx, pic_table, is_last, instructions, owner)) {
                         .proceed => {},
                         .tail_call_set => return,
                     }
@@ -8277,7 +8406,7 @@ pub const Context = struct {
                     // quotation's creation site outranks the body's own module scope.
                     if (captured_scope) |scope| {
                         if (lookupInCapturedScope(scope, name)) |word| {
-                            switch (try self.executeResolvedWord(name, word, instr, idx, pic_table, is_last)) {
+                            switch (try self.executeResolvedWord(name, word, instr, idx, pic_table, is_last, instructions, owner)) {
                                 .proceed => {},
                                 .tail_call_set => return,
                             }
@@ -8286,7 +8415,7 @@ pub const Context = struct {
                     }
 
                     const word = dict_mod.loadSlot(slot).*;
-                    switch (try self.executeResolvedWord(name, word, instr, idx, pic_table, is_last)) {
+                    switch (try self.executeResolvedWord(name, word, instr, idx, pic_table, is_last, instructions, owner)) {
                         .proceed => {},
                         .tail_call_set => return,
                     }
@@ -9303,6 +9432,122 @@ test "ShadowStack spills past its inline buffer and keeps every slot in order" {
     try shadow.append(.unknown);
     try std.testing.expectEqual(@as(usize, 3), shadow.len());
     try std.testing.expect(shadow.constSlice()[2] == .unknown);
+}
+
+/// ( n quot: ( n -- n n ) -- n n ), boxed on `alloc`: the annotated parameter expects delta +1.
+fn testAnnotatedQuotationEffect(alloc: Allocator) !*const StackEffect {
+    const quot_effect = try stack_effect_mod.box(alloc, .{
+        .inputs = &[_]StackEffectParam{.{ .name = "n" }},
+        .outputs = &[_]StackEffectParam{ .{ .name = "n" }, .{ .name = "n" } },
+    });
+
+    const inputs = try alloc.alloc(StackEffectParam, 2);
+    inputs[0] = .{ .name = "n" };
+    inputs[1] = .{ .name = "quot", .quotation_effect = quot_effect };
+
+    return stack_effect_mod.box(alloc, .{
+        .inputs = inputs,
+        .outputs = &[_]StackEffectParam{ .{ .name = "n" }, .{ .name = "n" } },
+    });
+}
+
+test "param_effect_cache: one entry per site, guarded on the argument body" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const alloc = ctx.quotationAllocator();
+    const effect = try testAnnotatedQuotationEffect(alloc);
+
+    const caller = try alloc.alloc(Instruction, 1);
+    caller[0] = .{ .op = .{ .call_word = "annotated" }, .line = 1 };
+    const site: Context.ParamEffectSite = .{ .instructions = caller, .index = 0, .owner = null };
+    const key: ParamEffectSiteKey = .{ .body = @intFromPtr(caller.ptr), .index = 0, .param = 1 };
+
+    const one = try alloc.alloc(Instruction, 1);
+    one[0] = .{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 1 };
+    const two = try alloc.alloc(Instruction, 2);
+    two[0] = one[0];
+    two[1] = one[0];
+
+    try ctx.stack.push(.{ .fixnum = 5 });
+    try ctx.stack.push(.{ .quotation = .{ .instructions = one } });
+
+    try ctx.validateParameterEffects(effect, site);
+    try ctx.validateParameterEffects(effect, site);
+    try std.testing.expectEqual(@as(u32, 1), ctx.param_effect_cache.count());
+    const entry = ctx.param_effect_cache.get(key).?;
+    try std.testing.expectEqual(@intFromPtr(one.ptr), entry.arg_body);
+    try std.testing.expectEqual(@as(i64, 1), entry.delta);
+    try std.testing.expect(entry.effect == effect);
+
+    // A different body at the same site misses the guard, is walked, and is reported. The walk's
+    // own result displaces the entry.
+    ctx.stack.items.items[1] = .{ .quotation = .{ .instructions = two } };
+    try std.testing.expectError(primitives.InterpreterError.StackEffectMismatch, ctx.validateParameterEffects(effect, site));
+    try std.testing.expectEqual(@as(u32, 1), ctx.param_effect_cache.count());
+    try std.testing.expectEqual(@intFromPtr(two.ptr), ctx.param_effect_cache.get(key).?.arg_body);
+
+    ctx.stack.items.items[1] = .{ .quotation = .{ .instructions = one } };
+    try ctx.validateParameterEffects(effect, site);
+    try std.testing.expectEqual(@intFromPtr(one.ptr), ctx.param_effect_cache.get(key).?.arg_body);
+}
+
+test "param_effect_cache: closure-owned bodies, site-less calls, and empty arguments write nothing" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const alloc = ctx.quotationAllocator();
+    const effect = try testAnnotatedQuotationEffect(alloc);
+
+    const caller = try alloc.alloc(Instruction, 1);
+    caller[0] = .{ .op = .{ .call_word = "annotated" }, .line = 1 };
+    const site: Context.ParamEffectSite = .{ .instructions = caller, .index = 0, .owner = null };
+
+    const literal = try alloc.alloc(Instruction, 1);
+    literal[0] = .{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 1 };
+
+    // A curry product owns its body.
+    const owned_body = try std.testing.allocator.alloc(Instruction, 1);
+    owned_body[0] = literal[0];
+    const arg_closure = try value_mod.Closure.create(std.testing.allocator, .{
+        .instructions = owned_body,
+        .segments = &.{},
+        .owns_body = true,
+        .header = undefined,
+    });
+    defer container_backing.releaseValue(.{ .closure = arg_closure });
+
+    try ctx.stack.push(.{ .fixnum = 5 });
+    try ctx.stack.push(.{ .closure = arg_closure });
+    try ctx.validateParameterEffects(effect, site);
+    try std.testing.expectEqual(@as(u32, 0), ctx.param_effect_cache.count());
+    try ctx.stack.popAndRelease();
+
+    // A caller body a closure owns is not a durable site either.
+    const owned_caller = try std.testing.allocator.alloc(Instruction, 1);
+    owned_caller[0] = caller[0];
+    const caller_closure = try value_mod.Closure.create(std.testing.allocator, .{
+        .instructions = owned_caller,
+        .segments = &.{},
+        .owns_body = true,
+        .header = undefined,
+    });
+    defer container_backing.releaseValue(.{ .closure = caller_closure });
+
+    try ctx.stack.push(.{ .quotation = .{ .instructions = literal } });
+    try ctx.validateParameterEffects(effect, .{ .instructions = owned_caller, .index = 0, .owner = caller_closure });
+    try std.testing.expectEqual(@as(u32, 0), ctx.param_effect_cache.count());
+
+    // A compiled call site names no site.
+    try ctx.validateParameterEffects(effect, null);
+    try std.testing.expectEqual(@as(u32, 0), ctx.param_effect_cache.count());
+
+    // An empty body's pointer is the shared zero-length sentinel, so the verdict is reported but
+    // never recorded.
+    const empty = try alloc.alloc(Instruction, 0);
+    ctx.stack.items.items[1] = .{ .quotation = .{ .instructions = empty } };
+    try std.testing.expectError(primitives.InterpreterError.StackEffectMismatch, ctx.validateParameterEffects(effect, site));
+    try std.testing.expectEqual(@as(u32, 0), ctx.param_effect_cache.count());
 }
 
 // =============================================================================

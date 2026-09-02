@@ -1,0 +1,23 @@
+\ Wrong-delta verdicts at a memoized call site.
+\
+\ Kept out of the eager suite. A compiled forwarding word that passes a
+\ stack-borne quotation to an annotated word raises no mismatch under
+\ --compile=eager, on the build before the memo as well.
+
+use "testing" ;
+
+"Same call site, different quotations" test-section
+\ `via` holds one call site for `at-site`. The first quotation fills that
+\ site's entry. The second must still be walked and reported. The first then
+\ passes again after the miss displaced it.
+at-site: ( n quot: ( n -- n n ) -- n n ) [ call ] ;
+via: ( n q -- n n ) [ at-site ] ;
+5 [ dup ] via + 10 "first quotation at the site passes" assert=
+[ 5 [ dup dup ] via ] "a different quotation at the same site is still checked" assert-error
+5 [ dup ] via + 10 "the first quotation passes again after the miss" assert=
+
+"Closure-owned argument with the wrong delta" test-section
+\ A curry product never enters the memo, so both verdicts hold at the same
+\ hot site.
+5 1 [ drop dup ] curry via + 10 "curried quotation with the right delta passes" assert=
+[ 5 1 [ drop ] curry via ] "curried quotation with the wrong delta is reported" assert-error

@@ -14245,7 +14245,7 @@ export fn jitValidateParamEffects(ctx_raw: usize, effect_ptr_raw: usize) callcon
     if (ctx_raw == 0) return 1;
     const ctx: *Context = @ptrFromInt(ctx_raw);
     const effect: *const StackEffect = @ptrFromInt(effect_ptr_raw);
-    ctx.validateParameterEffects(effect) catch |err| {
+    ctx.validateParameterEffects(effect, null) catch |err| {
         ctx.jit_pending_error = err;
         return 2;
     };
@@ -15668,7 +15668,7 @@ export fn jitNativeWordCall(ctx_raw: usize, word_id_raw: usize, src_ptr_raw: usi
 
     if (entry.native) |leaf| {
         if (leaf.stack_effect) |effect| {
-            ctx.validateParameterEffects(effect) catch |err| {
+            ctx.validateParameterEffects(effect, null) catch |err| {
                 ctx.jit_pending_error = ctx.wordErrorCleanup(display_name, err);
                 return 2;
             };
@@ -15727,7 +15727,7 @@ export fn jitNativeWordCall(ctx_raw: usize, word_id_raw: usize, src_ptr_raw: usi
 
     const result = if (looked_up_word) |word| blk: {
         if (word.stack_effect) |effect| {
-            ctx.validateParameterEffects(effect) catch |err| {
+            ctx.validateParameterEffects(effect, null) catch |err| {
                 ctx.jit_pending_error = ctx.wordErrorCleanup(display_name, err);
                 return 2;
             };
@@ -15841,7 +15841,7 @@ export fn jitInterpretedCall(ctx_raw: usize, word_id_raw: usize, src_ptr_raw: us
 
     const result = if (looked_up_word) |word| blk: {
         if (word.stack_effect) |effect| {
-            ctx.validateParameterEffects(effect) catch |err| {
+            ctx.validateParameterEffects(effect, null) catch |err| {
                 ctx.jit_pending_error = ctx.wordErrorCleanup(display_name, err);
                 return 2;
             };

@@ -1,0 +1,16 @@
+=== Same call site, different quotations ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: first quotation at the site passes
+Stack: [ ]
+PASS: a different quotation at the same site is still checked
+Stack: [ ]
+PASS: the first quotation passes again after the miss
+Stack: [ ]
+=== Closure-owned argument with the wrong delta ===
+Stack: [ ]
+PASS: curried quotation with the right delta passes
+Stack: [ ]
+PASS: curried quotation with the wrong delta is reported
+Stack: [ ]
