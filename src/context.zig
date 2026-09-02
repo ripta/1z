@@ -6632,28 +6632,13 @@ pub const Context = struct {
 
     /// Validate a quotation against an expected effect by inferring its delta.
     /// Returns an error if the quotation doesn't match the expected effect.
-    /// When a RowVarEnv is provided, it is used to compute the expected delta
-    /// for effects with unbalanced row variables.
-    fn validateQuotationEffect(self: *Context, quot: Quotation, expected_effect: *const StackEffect, param_name: []const u8, enclosing_effect: ?*const StackEffect, row_env: ?*const RowVarEnv) !void {
-        var expected_delta: i64 = undefined;
+    ///
+    /// An effect with unbalanced row variables is skipped before inferring: its expected delta
+    /// could only come from the same inference, so the comparison cannot report a mismatch.
+    fn validateQuotationEffect(self: *Context, quot: Quotation, expected_effect: *const StackEffect, param_name: []const u8, enclosing_effect: ?*const StackEffect) !void {
+        if (!expected_effect.hasBalancedRowVariables()) return;
 
-        if (expected_effect.hasBalancedRowVariables()) {
-            expected_delta = expected_effect.concreteDelta();
-        } else if (row_env) |env| {
-            const input_rvs = expected_effect.inputRowVariableNames();
-            const output_rvs = expected_effect.outputRowVariableNames();
-            if (input_rvs.len == 1 and output_rvs.len == 1) {
-                if (env.lookup(input_rvs.items[0], output_rvs.items[0])) |rv_diff| {
-                    expected_delta = expected_effect.concreteDelta() + rv_diff;
-                } else {
-                    return;
-                }
-            } else {
-                return;
-            }
-        } else {
-            return;
-        }
+        const expected_delta = expected_effect.concreteDelta();
 
         // Infer actual delta from quotation instructions
         const inferred_delta = self.inferQuotationDelta(quot, enclosing_effect);
@@ -6786,43 +6771,6 @@ pub const Context = struct {
 
         if (concrete_params == 0 or self.stack.depth() < concrete_params) return;
 
-        // Build row variable constraints from quotation parameters that have
-        // unbalanced row variables. This lets us validate consistency between
-        // related quotation parameters like while's pred and body.
-        //
-        // XXX(ripta): Ew, so much nesting.
-        var row_env = RowVarEnv{};
-        var row_env_valid = true;
-        {
-            var ci: usize = 0;
-            for (effect.inputs) |param| {
-                if (param.is_row_variable) continue;
-                if (param.quotation_effect) |expected_effect| {
-                    if (!expected_effect.hasBalancedRowVariables()) {
-                        const offset_from_top = concrete_params - 1 - ci;
-                        const stack_index = self.stack.depth() - 1 - offset_from_top;
-                        if (callableView(self.stack.items.items[stack_index])) |quot| {
-                            if (self.inferQuotationDelta(quot, effect)) |inferred_delta| {
-                                const input_rvs = expected_effect.inputRowVariableNames();
-                                const output_rvs = expected_effect.outputRowVariableNames();
-                                if (input_rvs.len == 1 and output_rvs.len == 1) {
-                                    const diff = inferred_delta - expected_effect.concreteDelta();
-                                    if (!row_env.record(input_rvs.items[0], output_rvs.items[0], diff)) {
-                                        // Conflict means we can't determine the correct
-                                        // row var relationship, so skip validation for all
-                                        // unbalanced params. This handles valid patterns like
-                                        // `when` where one branch is intentionally a no-op.
-                                        row_env_valid = false;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                ci += 1;
-            }
-        }
-
         // Validate quotation effects on stack
         // The top concrete_params items on the stack are the parameters
         // Stack layout: [...other values] [param_0] [param_1] ... [param_n-1]
@@ -6842,9 +6790,7 @@ pub const Context = struct {
                 // Get the stack value at this offset and validate if it's a callable
                 const stack_index = self.stack.depth() - 1 - offset_from_top;
                 if (callableView(self.stack.items.items[stack_index])) |quot| {
-                    const env: ?*const RowVarEnv = if (row_env_valid and row_env.len > 0) &row_env else null;
-
-                    try self.validateQuotationEffect(quot, expected_effect, param.name, effect, env);
+                    try self.validateQuotationEffect(quot, expected_effect, param.name, effect);
                 }
             }
 

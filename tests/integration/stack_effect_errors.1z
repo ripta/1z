@@ -16,3 +16,12 @@ add-wrong: ( a b quot: ( a b -- c ) -- c ) [ call ] ;
 \ Effect says ( a b -- ) requiring delta -2, but [ drop ] only has delta -1
 consume-wrong: ( a b quot: ( a b -- ) -- ) [ call ] ;
 [ 1 2 [ drop ] consume-wrong ] "caught consume-wrong effect error" assert-error
+
+"Unbalanced quotation parameter is not enforced" test-section
+\ keep's quot: ( ..a x -- ..b ) has unbalanced row variables, so a
+\ wrong-delta quotation is accepted rather than reported
+1 [ dup dup ] keep + + + 4 "unbalanced keep accepts over-producing quotation" assert=
+
+"Balanced row variables still enforced" test-section
+\ loop's pred: ( ... -- ... ? ) requires delta +1, but [ f f ] has delta +2
+[ [ f f ] loop ] "caught wrong-delta loop predicate" assert-error

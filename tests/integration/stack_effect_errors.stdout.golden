@@ -13,3 +13,11 @@ Stack: [ ]
 Stack: [ ]
 PASS: caught consume-wrong effect error
 Stack: [ ]
+=== Unbalanced quotation parameter is not enforced ===
+Stack: [ ]
+PASS: unbalanced keep accepts over-producing quotation
+Stack: [ ]
+=== Balanced row variables still enforced ===
+Stack: [ ]
+PASS: caught wrong-delta loop predicate
+Stack: [ ]
