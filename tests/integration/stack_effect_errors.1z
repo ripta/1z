@@ -25,3 +25,11 @@ consume-wrong: ( a b quot: ( a b -- ) -- ) [ call ] ;
 "Balanced row variables still enforced" test-section
 \ loop's pred: ( ... -- ... ? ) requires delta +1, but [ f f ] has delta +2
 [ [ f f ] loop ] "caught wrong-delta loop predicate" assert-error
+
+"Deep shadow stack still validates" test-section
+\ Twenty literals push the inference's shadow stack past its inline buffer, so
+\ both verdicts below cross the heap spill. Nineteen `+` leave delta +1; eighteen
+\ leave +2.
+deep: ( n quot: ( n -- n n ) -- n n ) [ call ] ;
+5 [ 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 + + + + + + + + + + + + + + + + + + + ] deep + 215 "deep shadow with correct delta passes" assert=
+[ 5 [ 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 + + + + + + + + + + + + + + + + + + ] deep ] "caught deep-shadow wrong-delta quotation" assert-error

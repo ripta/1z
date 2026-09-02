@@ -6235,10 +6235,6 @@ pub const Context = struct {
 
     const MAX_INFERENCE_DEPTH = 8;
 
-    const RowVarBinding = struct {
-        name: []const u8,
-    };
-
     const RowVarConstraint = struct {
         row_a: []const u8,
         row_b: []const u8,
@@ -6280,8 +6276,77 @@ pub const Context = struct {
     const SlotType = union(enum) {
         known: *const StackEffect,
         inferred_delta: i64,
-        row_var: RowVarBinding,
         unknown,
+    };
+
+    // The inline shadow buffer below is sized off this. A wider slot multiplies across every
+    // inference frame on the task stack, so a variant that widens the union changes this
+    // assertion deliberately.
+    comptime {
+        if (@sizeOf(usize) == 8) {
+            std.debug.assert(@sizeOf(SlotType) == 16);
+        }
+    }
+
+    /// The inference's shadow stack.
+    ///
+    /// Slots live in a fixed inline buffer until the body's depth exceeds it, so the common walk
+    /// allocates nothing. Past that the slots spill to a heap list, which then owns every slot for
+    /// the rest of the walk.
+    ///
+    /// A shrink after the spill stays on the heap. The verdict is the same on either side.
+    const ShadowStack = struct {
+        const inline_capacity = 16;
+
+        allocator: Allocator,
+        inline_slots: [inline_capacity]SlotType = undefined,
+        inline_len: usize = 0,
+        spilled: ?std.ArrayListUnmanaged(SlotType) = null,
+
+        fn deinit(self: *ShadowStack) void {
+            if (self.spilled) |*list| list.deinit(self.allocator);
+        }
+
+        fn len(self: *const ShadowStack) usize {
+            if (self.spilled) |*list| return list.items.len;
+            return self.inline_len;
+        }
+
+        fn slice(self: *ShadowStack) []SlotType {
+            if (self.spilled) |*list| return list.items;
+            return self.inline_slots[0..self.inline_len];
+        }
+
+        fn constSlice(self: *const ShadowStack) []const SlotType {
+            if (self.spilled) |*list| return list.items;
+            return self.inline_slots[0..self.inline_len];
+        }
+
+        /// Fails only on the spill allocation itself.
+        fn append(self: *ShadowStack, slot: SlotType) Allocator.Error!void {
+            if (self.spilled) |*list| return list.append(self.allocator, slot);
+
+            if (self.inline_len < inline_capacity) {
+                self.inline_slots[self.inline_len] = slot;
+                self.inline_len += 1;
+                return;
+            }
+
+            var list = std.ArrayListUnmanaged(SlotType){};
+            try list.ensureTotalCapacity(self.allocator, inline_capacity * 2);
+            list.appendSliceAssumeCapacity(self.inline_slots[0..self.inline_len]);
+            list.appendAssumeCapacity(slot);
+            self.spilled = list;
+        }
+
+        fn shrinkTo(self: *ShadowStack, new_len: usize) void {
+            if (self.spilled) |*list| return list.shrinkRetainingCapacity(new_len);
+            self.inline_len = new_len;
+        }
+
+        fn clear(self: *ShadowStack) void {
+            self.shrinkTo(0);
+        }
     };
 
     /// Infer a quotation's stack delta by statically analyzing its instructions.
@@ -6294,8 +6359,8 @@ pub const Context = struct {
         if (depth >= MAX_INFERENCE_DEPTH) return null;
 
         var delta: i64 = 0;
-        var shadow = std.ArrayListUnmanaged(SlotType){};
-        defer shadow.deinit(self.allocator);
+        var shadow = ShadowStack{ .allocator = self.allocator };
+        defer shadow.deinit();
 
         if (enclosing_effect) |eff| {
             for (eff.inputs) |param| {
@@ -6304,7 +6369,7 @@ pub const Context = struct {
                     .{ .known = qe }
                 else
                     .unknown;
-                shadow.append(self.allocator, slot) catch {};
+                shadow.append(slot) catch {};
             }
         }
 
@@ -6325,8 +6390,8 @@ pub const Context = struct {
                         },
                         else => .unknown,
                     };
-                    shadow.append(self.allocator, slot) catch {
-                        shadow.clearRetainingCapacity();
+                    shadow.append(slot) catch {
+                        shadow.clear();
                     };
                 },
                 .call_word, .call_word_direct, .call_word_module => {
@@ -6335,12 +6400,12 @@ pub const Context = struct {
                         if (self.lookupWord(name)) |word| {
                             if (word.stack_effect) |word_effect| {
                                 const word_delta = word_effect.concreteDelta();
-                                if (applyShuffleShadow(&shadow, self.allocator, shuffle)) {
+                                if (applyShuffleShadow(&shadow, shuffle)) {
                                     delta += word_delta;
                                     continue;
                                 }
                                 delta += word_delta;
-                                self.adjustShadowStack(&shadow, word_delta);
+                                adjustShadowStack(&shadow, word_delta);
                                 continue;
                             }
                         }
@@ -6351,7 +6416,7 @@ pub const Context = struct {
                             if (self.resolveTransparentDelta(word, &shadow)) |resolved| {
                                 delta += resolved.delta;
                                 if (word.stack_effect) |word_effect| {
-                                    self.adjustShadowForTransparent(&shadow, word_effect.*, resolved.quot_delta);
+                                    adjustShadowForTransparent(&shadow, word_effect.*, resolved.quot_delta);
                                 }
                             } else {
                                 return null;
@@ -6360,14 +6425,14 @@ pub const Context = struct {
                             if (!word_effect.hasBalancedRowVariables()) {
                                 if (self.resolveUnbalancedDelta(word_effect.*, &shadow)) |resolved_delta| {
                                     delta += resolved_delta;
-                                    self.adjustShadowStack(&shadow, resolved_delta);
+                                    adjustShadowStack(&shadow, resolved_delta);
                                 } else {
                                     return null;
                                 }
                             } else {
                                 const word_delta = word_effect.concreteDelta();
                                 delta += word_delta;
-                                self.adjustShadowStack(&shadow, word_delta);
+                                adjustShadowStack(&shadow, word_delta);
                             }
                         } else {
                             return null;
@@ -6387,7 +6452,7 @@ pub const Context = struct {
         quot_delta: i64,
     };
 
-    fn resolveTransparentDelta(self: *Context, word: WordDefinition, shadow: *const std.ArrayListUnmanaged(SlotType)) ?TransparentResolution {
+    fn resolveTransparentDelta(self: *Context, word: WordDefinition, shadow: *const ShadowStack) ?TransparentResolution {
         _ = self;
         const effect = word.stack_effect orelse return null;
 
@@ -6407,14 +6472,14 @@ pub const Context = struct {
 
         const qi = quot_concrete_idx orelse return null;
 
+        const slots = shadow.constSlice();
         const offset_from_tos = concrete_inputs - 1 - qi;
-        if (offset_from_tos >= shadow.items.len) return null;
+        if (offset_from_tos >= slots.len) return null;
 
-        const slot = shadow.items[shadow.items.len - 1 - offset_from_tos];
+        const slot = slots[slots.len - 1 - offset_from_tos];
         const quot_delta: i64 = switch (slot) {
             .known => |eff| eff.concreteDelta(),
             .inferred_delta => |d| d,
-            .row_var => return null,
             .unknown => return null,
         };
 
@@ -6429,9 +6494,10 @@ pub const Context = struct {
     /// Resolve the stack delta of a word with unbalanced row variables by
     /// examining the shadow stack for known quotation arguments and computing
     /// row variable constraints from their inferred deltas.
-    fn resolveUnbalancedDelta(self: *Context, word_effect: StackEffect, shadow: *const std.ArrayListUnmanaged(SlotType)) ?i64 {
+    fn resolveUnbalancedDelta(self: *Context, word_effect: StackEffect, shadow: *const ShadowStack) ?i64 {
         _ = self;
         const concrete_inputs = word_effect.concreteInputCount();
+        const slots = shadow.constSlice();
 
         var row_env = RowVarEnv{};
 
@@ -6441,12 +6507,12 @@ pub const Context = struct {
 
             if (param.quotation_effect) |quot_effect| {
                 const offset_from_tos = concrete_inputs - 1 - concrete_idx;
-                if (offset_from_tos < shadow.items.len) {
-                    const slot = shadow.items[shadow.items.len - 1 - offset_from_tos];
+                if (offset_from_tos < slots.len) {
+                    const slot = slots[slots.len - 1 - offset_from_tos];
                     const inferred_delta: i64 = switch (slot) {
                         .known => |eff| eff.concreteDelta(),
                         .inferred_delta => |d| d,
-                        .row_var, .unknown => {
+                        .unknown => {
                             concrete_idx += 1;
                             continue;
                         },
@@ -6491,53 +6557,53 @@ pub const Context = struct {
         return null;
     }
 
-    fn adjustShadowStack(self: *Context, shadow: *std.ArrayListUnmanaged(SlotType), delta: i64) void {
+    fn adjustShadowStack(shadow: *ShadowStack, delta: i64) void {
         if (delta < 0) {
-            const to_remove: usize = @intCast(@min(-delta, @as(i64, @intCast(shadow.items.len))));
-            shadow.shrinkRetainingCapacity(shadow.items.len - to_remove);
+            const to_remove: usize = @intCast(@min(-delta, @as(i64, @intCast(shadow.len()))));
+            shadow.shrinkTo(shadow.len() - to_remove);
         } else if (delta > 0) {
             const to_add: usize = @intCast(delta);
             for (0..to_add) |_| {
-                shadow.append(self.allocator, .unknown) catch {
-                    shadow.clearRetainingCapacity();
+                shadow.append(.unknown) catch {
+                    shadow.clear();
                     return;
                 };
             }
         }
     }
 
-    fn adjustShadowForTransparent(self: *Context, shadow: *std.ArrayListUnmanaged(SlotType), effect: StackEffect, quot_delta: i64) void {
+    fn adjustShadowForTransparent(shadow: *ShadowStack, effect: StackEffect, quot_delta: i64) void {
         const concrete_inputs = effect.concreteInputCount();
         const concrete_outputs = effect.concreteOutputCount();
         const pass_throughs = stack_effect_mod.passThroughParams(effect);
 
         if (pass_throughs.len == 0) {
             const total_delta = -@as(i64, @intCast(concrete_inputs)) + @as(i64, @intCast(concrete_outputs)) + quot_delta;
-            self.adjustShadowStack(shadow, total_delta);
+            adjustShadowStack(shadow, total_delta);
             return;
         }
 
         var saved: [8]SlotType = undefined;
         for (pass_throughs.slice()) |pt| {
-            const pos = shadow.items.len -| (concrete_inputs - pt.input_concrete_idx);
-            if (pos < shadow.items.len) {
-                saved[pt.input_concrete_idx] = shadow.items[pos];
+            const pos = shadow.len() -| (concrete_inputs - pt.input_concrete_idx);
+            if (pos < shadow.len()) {
+                saved[pt.input_concrete_idx] = shadow.constSlice()[pos];
             } else {
                 saved[pt.input_concrete_idx] = .unknown;
             }
         }
 
-        const to_pop = @min(concrete_inputs, shadow.items.len);
-        shadow.shrinkRetainingCapacity(shadow.items.len - to_pop);
+        const to_pop = @min(concrete_inputs, shadow.len());
+        shadow.shrinkTo(shadow.len() - to_pop);
 
         if (quot_delta < 0) {
-            const to_remove: usize = @intCast(@min(-quot_delta, @as(i64, @intCast(shadow.items.len))));
-            shadow.shrinkRetainingCapacity(shadow.items.len - to_remove);
+            const to_remove: usize = @intCast(@min(-quot_delta, @as(i64, @intCast(shadow.len()))));
+            shadow.shrinkTo(shadow.len() - to_remove);
         } else if (quot_delta > 0) {
             const to_add: usize = @intCast(quot_delta);
             for (0..to_add) |_| {
-                shadow.append(self.allocator, .unknown) catch {
-                    shadow.clearRetainingCapacity();
+                shadow.append(.unknown) catch {
+                    shadow.clear();
                     return;
                 };
             }
@@ -6555,8 +6621,8 @@ pub const Context = struct {
                 }
             }
 
-            shadow.append(self.allocator, slot) catch {
-                shadow.clearRetainingCapacity();
+            shadow.append(slot) catch {
+                shadow.clear();
                 return;
             };
             out_idx += 1;
@@ -6587,44 +6653,45 @@ pub const Context = struct {
         return null;
     }
 
-    fn applyShuffleShadow(shadow: *std.ArrayListUnmanaged(SlotType), allocator: Allocator, op: ShuffleOp) bool {
-        const len = shadow.items.len;
+    fn applyShuffleShadow(shadow: *ShadowStack, op: ShuffleOp) bool {
+        const items = shadow.slice();
+        const len = items.len;
         switch (op) {
             .swap => {
                 if (len < 2) return false;
-                const tmp = shadow.items[len - 1];
-                shadow.items[len - 1] = shadow.items[len - 2];
-                shadow.items[len - 2] = tmp;
+                const tmp = items[len - 1];
+                items[len - 1] = items[len - 2];
+                items[len - 2] = tmp;
             },
             .dup_ => {
                 if (len < 1) return false;
-                const top = shadow.items[len - 1];
-                shadow.append(allocator, top) catch return false;
+                const top = items[len - 1];
+                shadow.append(top) catch return false;
             },
             .drop_ => {
                 if (len < 1) return false;
-                shadow.shrinkRetainingCapacity(len - 1);
+                shadow.shrinkTo(len - 1);
             },
             .over => {
                 if (len < 2) return false;
-                const second = shadow.items[len - 2];
-                shadow.append(allocator, second) catch return false;
+                const second = items[len - 2];
+                shadow.append(second) catch return false;
             },
             .rot => {
                 // a b c -- b c a
                 if (len < 3) return false;
-                const a = shadow.items[len - 3];
-                shadow.items[len - 3] = shadow.items[len - 2];
-                shadow.items[len - 2] = shadow.items[len - 1];
-                shadow.items[len - 1] = a;
+                const a = items[len - 3];
+                items[len - 3] = items[len - 2];
+                items[len - 2] = items[len - 1];
+                items[len - 1] = a;
             },
             .neg_rot => {
                 // a b c -- c a b
                 if (len < 3) return false;
-                const c = shadow.items[len - 1];
-                shadow.items[len - 1] = shadow.items[len - 2];
-                shadow.items[len - 2] = shadow.items[len - 3];
-                shadow.items[len - 3] = c;
+                const c = items[len - 1];
+                items[len - 1] = items[len - 2];
+                items[len - 2] = items[len - 3];
+                items[len - 3] = c;
             },
         }
         return true;
@@ -9207,6 +9274,35 @@ test "quotation with incorrect declared effect fails" {
 
     // Should fail with StackEffectMismatch
     try std.testing.expectError(primitives.InterpreterError.StackEffectMismatch, result);
+}
+
+test "ShadowStack spills past its inline buffer and keeps every slot in order" {
+    var shadow = Context.ShadowStack{ .allocator = std.testing.allocator };
+    defer shadow.deinit();
+
+    const capacity = Context.ShadowStack.inline_capacity;
+    for (0..capacity) |i| {
+        try shadow.append(.{ .inferred_delta = @intCast(i) });
+    }
+    try std.testing.expect(shadow.spilled == null);
+
+    const total = capacity + 3;
+    for (capacity..total) |i| {
+        try shadow.append(.{ .inferred_delta = @intCast(i) });
+    }
+    try std.testing.expect(shadow.spilled != null);
+    try std.testing.expectEqual(@as(usize, total), shadow.len());
+    for (shadow.constSlice(), 0..) |slot, i| {
+        try std.testing.expectEqual(@as(i64, @intCast(i)), slot.inferred_delta);
+    }
+
+    shadow.shrinkTo(2);
+    try std.testing.expectEqual(@as(usize, 2), shadow.len());
+    try std.testing.expectEqual(@as(i64, 1), shadow.constSlice()[1].inferred_delta);
+
+    try shadow.append(.unknown);
+    try std.testing.expectEqual(@as(usize, 3), shadow.len());
+    try std.testing.expect(shadow.constSlice()[2] == .unknown);
 }
 
 // =============================================================================

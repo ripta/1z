@@ -3,15 +3,15 @@ binary=./zig-out/bin/1z   reps=5   iterations=5000000   mode=--compile=off
 
 probe                       ns/call            (min-max)  allocs/call
 ------------------------ ---------- -------------------- ------------
-settled/annotated               784            (759-792)         1.00
-settled/plain-effect            573            (556-581)         0.00
-settled/no-effect               574            (564-580)         0.00
-keep-form/annotated             972            (933-977)         1.00
-keep-form/no-effect             751            (741-762)         0.00
-unbalanced/annotated            868            (850-895)         0.00
-unbalanced/no-effect            834            (820-852)         0.00
+settled/annotated               700            (696-716)         0.00
+settled/plain-effect            577            (571-591)         0.00
+settled/no-effect               572            (563-587)         0.00
+keep-form/annotated             935            (903-951)         0.00
+keep-form/no-effect             799            (777-807)         0.00
+unbalanced/annotated            873            (850-880)         0.00
+unbalanced/no-effect            852            (844-859)         0.00
 
 annotation cost (annotated - no-effect):
-  settled body      210 ns/call   1.00 allocs/call
-  keep-form         221 ns/call   1.00 allocs/call
-  unbalanced         34 ns/call   0.00 allocs/call
+  settled body      128 ns/call   0.00 allocs/call
+  keep-form         136 ns/call   0.00 allocs/call
+  unbalanced         21 ns/call   0.00 allocs/call

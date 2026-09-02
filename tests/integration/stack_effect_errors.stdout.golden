@@ -21,3 +21,10 @@ Stack: [ ]
 Stack: [ ]
 PASS: caught wrong-delta loop predicate
 Stack: [ ]
+=== Deep shadow stack still validates ===
+Stack: [ ]
+Stack: [ ]
+PASS: deep shadow with correct delta passes
+Stack: [ ]
+PASS: caught deep-shadow wrong-delta quotation
+Stack: [ ]
