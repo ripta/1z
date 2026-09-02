@@ -1,0 +1,16 @@
+Loop-combinator per-iteration cost
+binary=./zig-out/bin/1z   reps=5   iterations=5000000   mode=--compile=off
+
+probe                  ns/iteration            (min-max) allocs/iteration
+-------------------- -------------- -------------------- ----------------
+prelude/times                   868            (859-878)             0.00
+prelude/loop                    640            (637-650)             0.00
+prelude/while                   729            (713-733)             0.00
+prelude/until                  1312          (1286-1329)             0.00
+user/shipped                   1143          (1140-1154)             2.00
+user/settled                    639            (627-644)             0.00
+user/keep-form                  822            (820-842)             0.00
+user/1check-form                895            (878-908)             0.00
+
+delta:
+  shipped over settled          504 ns/iteration   2.00 allocs/iteration

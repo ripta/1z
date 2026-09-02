@@ -4536,7 +4536,8 @@ fn emitReachBelowConcrete(state: *CompileState, stack: []StackEntry, sp: *usize,
 ///
 /// keeps `x y`. Collapsing only the region the callee's quotation parameter actually touched (`..b`);
 /// the threaded `x y` stay as `raw_at_slot` entries pinned at the live physical top, so a combinator
-/// threading them keeps operating on real entries.
+/// threading them keeps operating on real entries. An inline shuffle that reaches the row keeps its
+/// outputs the same way.
 ///
 /// base_idx is set to `new_sp - 1 - preserve` so abstract slot 0 (i.e., the row) maps just below the
 /// preserved suffix and abstract slots `1..=preserve` map to the top `preserve` physical slots.
@@ -4606,9 +4607,13 @@ fn trailingConcreteOutputs(eff: *const StackEffect) usize {
 
 /// Route an inline stack op (`swap`/`over`/`dup`) that reached below the
 /// abstract base into the implicit caller row: resolve it as a native and emit
-/// it against the live physical stack via emitDynamicRowFallback, collapsing the
-/// abstract stack to a fresh row_region. Returns true to `continue`, false to
-/// `break`. Caller must already be in aot_mode.
+/// it against the live physical stack, collapsing the abstract stack to a fresh
+/// row_region. Returns true to `continue`, false to `break`. Caller must already
+/// be in aot_mode.
+///
+/// A shuffle leaves exactly its outputs at the physical top, so those stay concrete above the fresh
+/// row instead of folding into it. The `swap [ loop ] [ drop ] if` shape needs the pair: the `if`
+/// reads its condition from it, and the `loop` intrinsic needs a predicate slot to dispatch.
 fn emitInlineRowUnderflow(
     state: *CompileState,
     stack: []StackEntry,
@@ -4625,7 +4630,7 @@ fn emitInlineRowUnderflow(
         return IrCodegenError.NotCompilable;
     };
     // Callers are shuffle natives, so the compound arm that consults is_tail is never taken.
-    return emitDynamicRowFallback(state, stack, sp, name, resolved, line, false);
+    return emitDynamicRowFallbackPreserving(state, stack, sp, name, resolved, line, resolved.output_count, false);
 }
 
 /// Emit a runtime truthiness check for a Value at a physical stack slot.
@@ -5795,7 +5800,7 @@ fn emitIntrinsicSwap(ec: EmitCtx) IrCodegenError!ControlFlow {
         // move the row off its pinned slot 0 and desync a later live sp-relative op.
         //
         // Emit the native swap against the live physical stack and collapse to a fresh row pinned
-        // at slot 0, the same sp-relative path the indexed ops and the sp<2 swap use.
+        // at slot 0 beneath the swapped pair, the same path the sp<2 swap takes.
         if (try emitInlineRowUnderflow(state, stack, sp, ec.name, ec.line)) return .next;
         return .stop;
     }
@@ -5821,7 +5826,8 @@ fn emitIntrinsicOver(ec: EmitCtx) IrCodegenError!ControlFlow {
         // The over source or the top is the row: cloning a
         // concrete value above the row would un-pin it, so emit
         // the native over against the live stack and collapse to
-        // a fresh row pinned at slot 0.
+        // a fresh row pinned at slot 0 beneath the three values
+        // it leaves on top.
         if (try emitInlineRowUnderflow(state, stack, sp, ec.name, ec.line)) return .next;
         return .stop;
     }
@@ -6979,19 +6985,23 @@ fn emitIntrinsicIf(ec: EmitCtx) IrCodegenError!ControlFlow {
         // this the merge would rewrite a raw_at_slot over an unwritten slot.
         try materializeQuotations(state, stack, sp.*, true);
         flushToPhysicalStack(state, stack, sp.*);
-        // Persist the physical sp so a row-aware merge can reload
-        // it. A branch that collapsed to a fresh row moved base_idx
-        // and already left the runtime sp live; one that only ran
-        // abstract ops over a pre-existing row kept base_idx and
-        // must store the height. Harmless with no row, as it equals
-        // the epilogue's own store.
-        if (state.aot_mode and state.base_idx == saved_base_idx) {
+        // Persist the physical sp so a row-aware merge can reload it. Harmless with no row, as it
+        // equals the epilogue's own store.
+        //
+        // A branch that collapsed to a fresh row moved base_idx, but the entries it kept concrete
+        // above the row may have been dropped abstractly since, so the live sp is stale until this
+        // store.
+        if (state.aot_mode) {
             const sp_const = c.ir_const_addr(ctx, sp.*);
             const new_sp = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_idx, sp_const);
             c._ir_STORE(ctx, state.sp_ptr, new_sp);
         }
         end_true = c._ir_END(ctx);
     }
+
+    // The true arm's frame refs, for the paths that resume from its END.
+    const true_base_idx = state.base_idx;
+    const true_sp_val = state.sp_val;
 
     // Restore items_ptr/base_addr before the false branch so
     // it uses refs from before the IF that dominate both paths.
@@ -7052,8 +7062,11 @@ fn emitIntrinsicIf(ec: EmitCtx) IrCodegenError!ControlFlow {
         resetStackToPhysicalPreservingRows(stack, sp.*);
         state.exit_kind = saved_exit_kind;
     } else if (false_diverged) {
-        // Only true path continues. Resume from true branch's END.
+        // Only true path continues. Resume from true branch's END, with the
+        // frame refs the true arm left rather than the false arm's.
         c._ir_BEGIN(ctx, end_true);
+        state.base_idx = true_base_idx;
+        state.sp_val = true_sp_val;
         if (state.refresh_stack_fn != c.IR_UNUSED) {
             refreshCachedStackPointer(state);
         }
@@ -7063,7 +7076,7 @@ fn emitIntrinsicIf(ec: EmitCtx) IrCodegenError!ControlFlow {
         // Neither branch terminated: normal merge.
         flushToPhysicalStack(state, saved_stack, false_sp);
         const false_has_row = hasRowRegion(saved_stack, false_sp);
-        if (state.aot_mode and state.base_idx == saved_base_idx) {
+        if (state.aot_mode) {
             const sp_const = c.ir_const_addr(ctx, false_sp);
             const new_sp = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_idx, sp_const);
             c._ir_STORE(ctx, state.sp_ptr, new_sp);
@@ -7085,11 +7098,13 @@ fn emitIntrinsicIf(ec: EmitCtx) IrCodegenError!ControlFlow {
             // unequal arms are an artifact of a mis-modeled variable-arity native call.
             const declared_var_arity = declaredAlternativeOutput(state);
             if (state.aot_mode and (true_has_row or false_has_row or declared_var_arity)) {
-                // Two concrete unequal arms collapsing to a row for the first time vary the output
-                // arity. Record it so callers read this word's result as a row rather than trusting
-                // the declared concrete count. Preëxisting has-row case keeps its prior behavior of
-                // not setting the flag here, so this is gated to the new no-row collapse.
-                if (!(true_has_row or false_has_row)) state.variable_arity = true;
+                // Two unequal arms collapsing to a row vary the output arity. Record it so callers
+                // read this word's result as a row rather than trusting the declared concrete
+                // count. Same rule as the if-over-row merge: a row on either side can only add
+                // variability, never disprove one found deeper. A shuffle that reaches the row
+                // now keeps its outputs concrete above it, so a discriminating `if` in a
+                // variable-arity word lands here rather than on the if-over-row path.
+                state.variable_arity = mergedVariableArity(state.variable_arity, sp.*, false_sp, true_has_row or false_has_row);
 
                 reloadBaseAfterDynamicCall(state);
 
@@ -7101,7 +7116,20 @@ fn emitIntrinsicIf(ec: EmitCtx) IrCodegenError!ControlFlow {
             }
             return IrCodegenError.StackShapeMismatch;
         }
-        if (state.refresh_stack_fn != c.IR_UNUSED) {
+        if (state.aot_mode and (true_base_idx != saved_base_idx or state.base_idx != saved_base_idx)) {
+            // An arm rebased the frame, so its base is a ref this merge point does not dominate.
+            // Both arms stored `base + sp` for the same abstract sp, so re-derive the base from the
+            // live sp and keep the abstract stack as it is.
+            //
+            // `sp_val` follows only when a row is present. The row paths read it as the live sp,
+            // where the epilogue and the back-edges read it as the entry sp, and those two are
+            // refused once a row exists.
+            const new_sp_val = c._ir_LOAD(ctx, c.IR_ADDR, state.sp_ptr);
+            const off_const = c.ir_const_addr(ctx, sp.*);
+            state.base_idx = c.ir_fold2(ctx, c.IR_OPT(c.IR_SUB, c.IR_ADDR), new_sp_val, off_const);
+            if (hasRowRegion(stack, sp.*)) state.sp_val = new_sp_val;
+            refreshCachedStackPointer(state);
+        } else if (state.refresh_stack_fn != c.IR_UNUSED) {
             refreshCachedStackPointer(state);
         }
         resetStackToPhysicalPreservingRows(stack, sp.*);
@@ -10366,6 +10394,15 @@ fn emitWordCAotPass(
         // stack shape is determined at runtime by native callbacks.
         // Return success; the caller resolves row variables at the call
         // site and adjusts sp accordingly.
+        //
+        // The entries above the row are still the abstract model's: a scalar sits in an IR ref and
+        // an abstract drop moved nothing, so box them and store the height before handing the stack
+        // back, as the epilogue does for a concrete result.
+        try materializeQuotations(&state, stack_buf, sp, true);
+        flushToPhysicalStack(&state, stack_buf, sp);
+        const final_sp_const = c.ir_const_addr(&ctx, sp);
+        const final_sp = c.ir_fold2(&ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_idx, final_sp_const);
+        c._ir_STORE(&ctx, state.sp_ptr, final_sp);
         c._ir_RETURN(&ctx, ok_status);
     } else {
         try emitEpilogue(&state, stack_buf, sp, input_count, output_count);
@@ -22230,7 +22267,8 @@ test "swap over a row compiles in AOT mode with the row pinned at slot 0" {
     // `( a -- b ) [ swap 5 swap ]` -- the first swap reaches below the declared
     // input and collapses to a row; pushing the literal 5 and swapping it under
     // the row top now emits a native swap against the live stack and collapses to
-    // a fresh row pinned at slot 0, rather than rejecting as an abstract reorder.
+    // a fresh row pinned at slot 0 beneath the swapped pair, rather than rejecting
+    // as an abstract reorder.
     var dummy: u8 = 0;
     const resolver = WordResolver{
         .resolve = RowUnderflowResolver.resolve,
@@ -22273,6 +22311,55 @@ test "swap over a row compiles in AOT mode with the row pinned at slot 0" {
     defer testing.allocator.free(source);
     // The word body compiled to a C function rather than being rejected.
     try testing.expect(std.mem.indexOf(u8, source, "onez_w_swap_over_row") != null);
+}
+
+test "swap over a row keeps its pair concrete for a loop predicate in AOT mode" {
+    // `( -- ) [ swap loop ]` -- the swap reaches into the caller row. The pair it
+    // leaves at the physical top stays concrete above the fresh row, so the `loop`
+    // intrinsic finds a predicate slot to dispatch instead of the row itself. This
+    // is prelude `loop`'s recursion step, `swap [ loop ] [ drop ] if`, reduced to
+    // the swap and the consumer.
+    var dummy: u8 = 0;
+    const resolver = WordResolver{
+        .resolve = RowUnderflowResolver.resolve,
+        .user_data = @ptrCast(&dummy),
+        .dispatch_table_ptr = @ptrFromInt(1),
+    };
+    const instrs = makeInstructions(.{ "swap", "loop" });
+    var compiled_names: std.StringHashMapUnmanaged(u32) = .{};
+    defer compiled_names.deinit(testing.allocator);
+
+    const source = try emitWordCAot(
+        &instrs,
+        0,
+        0,
+        "swap-then-loop",
+        resolver,
+        null,
+        &compiled_names,
+        .{},
+        null,
+        null,
+        null,
+        testing.allocator,
+        null,
+        &.{},
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        false,
+        null,
+        false,
+        false,
+        false,
+    );
+    defer testing.allocator.free(source);
+    try testing.expect(std.mem.indexOf(u8, source, "onez_w_swap_then_loop") != null);
 }
 
 /// Compile `( a b -- r ) [ + ]` in AOT mode and report how many interpreter

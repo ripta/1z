@@ -1,0 +1,32 @@
+division-by-zero
+Stack: [ 10 ]
+Stack: [ ]
+division-by-zero
+Stack: [ 3 ]
+Stack: [ ]
+test-error
+Stack: [ 2 ]
+Stack: [ ]
+division-by-zero
+Stack: [ 2 ]
+Stack: [ ]
+division-by-zero
+Stack: [ 2 ]
+Stack: [ ]
+division-by-zero
+Stack: [ 2 ]
+Stack: [ ]
+division-by-zero
+Stack: [ 2 ]
+Stack: [ ]
+division-by-zero
+Stack: [ 1 2 ]
+Stack: [ ]
+3
+Stack: [ ]
+100000
+Stack: [ ]
+0
+Stack: [ ]
+0
+Stack: [ ]

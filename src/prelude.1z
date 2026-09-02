@@ -1006,7 +1006,7 @@ until: loop-combinator ( ..a pred: ( ..a -- ..b ? ) body: ( ..b -- ..a ) -- ..b 
 do: ( pred body -- pred body ) [ dup 2dip ] ;
 \\ Repeatedly call a quotation while it returns true.
 loop: loop-combinator ( ... pred: ( ... -- ... ? ) -- ... ) [
-  [ call ] keep [ loop ] curry when
+  dup [ call ] dip swap [ loop ] [ drop ] if
 ] ;
 
 \ Multi-way dispatch

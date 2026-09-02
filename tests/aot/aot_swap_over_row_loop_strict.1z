@@ -1,0 +1,9 @@
+\ Strict-mode positive case: a swap over an opaque row keeps its pair concrete. A
+\ runtime-depth `drop-at` collapses the stack into a row; pushing a predicate
+\ above it and swapping it under the row top leaves both swapped values as
+\ concrete entries above a fresh row, so the `loop` in the true arm finds a
+\ predicate slot to dispatch rather than the row. This is prelude `loop`'s
+\ recursion step, `dup [ call ] dip swap [ loop ] [ drop ] if`, isolated to the
+\ swap and the arm that consumes the pair. Under --interpreter-fallback=false the
+\ build must succeed and run correctly.
+1 2 3 0 drop-at [ 1 - dup 0 > ] swap [ loop ] [ drop ] if .

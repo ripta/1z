@@ -1,0 +1,47 @@
+\ Stack residue left by the loop combinators when the predicate or the body raises.
+\
+\ `loop` carries its predicate across the flag test, and `while` and `until` recurse
+\ through it. `recover` does not restore stack depth, and the harness prints the stack
+\ after every line, so each probe's leftover is pinned in the golden. The tail-call
+\ probes at the end complete only if the recursion step propagates through `if`;
+\ otherwise the nested frames overflow the native stack.
+
+\ loop: the predicate raises on the first iteration
+[ 10 [ 1 0 / ] loop ] [ error-type: @get >string print-line ] recover
+wipe
+
+\ loop: the predicate raises on the third iteration, after two counted rounds
+[ 0 [ 1 + dup 3 = [ 1 0 / ] when dup 5 < ] loop ] [ error-type: @get >string print-line ] recover
+wipe
+
+\ loop: a user throw in the predicate
+[ 0 [ 1 + dup 2 = [ f "boom" test-error: make-error throw ] when dup 5 < ] loop ] [ error-type: @get >string print-line ] recover
+wipe
+
+\ while: the predicate raises
+[ 0 [ dup 2 = [ 1 0 / ] when dup 5 < ] [ 1 + ] while ] [ error-type: @get >string print-line ] recover
+wipe
+
+\ while: the body raises
+[ 0 [ dup 5 < ] [ 1 + dup 2 = [ 1 0 / ] when ] while ] [ error-type: @get >string print-line ] recover
+wipe
+
+\ until: the predicate raises
+[ 0 [ dup 2 = [ 1 0 / ] when dup 5 >= ] [ 1 + ] until ] [ error-type: @get >string print-line ] recover
+wipe
+
+\ until: the body raises
+[ 0 [ dup 5 >= ] [ 1 + dup 2 = [ 1 0 / ] when ] until ] [ error-type: @get >string print-line ] recover
+wipe
+
+\ nested: an inner loop's predicate raises inside an outer loop's predicate
+[ 0 [ 1 + 0 [ 1 + dup 2 = [ 1 0 / ] when dup 3 < ] loop drop dup 5 < ] loop ] [ error-type: @get >string print-line ] recover
+wipe
+
+\ truthiness: a non-boolean predicate result continues the loop
+0 [ 1 + dup 3 < [ 0 ] [ f ] if ] loop >string print-line
+
+\ tail calls: 100000 iterations through each combinator
+0 [ 1 + dup 100000 < ] loop >string print-line
+100000 [ dup 0 > ] [ 1 - ] while >string print-line
+100000 [ dup 1 < ] [ 1 - ] until >string print-line
