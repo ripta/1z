@@ -1,0 +1,12 @@
+\ Strict-mode positive case for `(until-loop)`, the recursion step behind `until`. Its body
+\ is prelude `loop`'s with the arms swapped, so the self-call sits in the false arm of the
+\ trailing `if`.
+\
+\ The first line runs deep enough that ordinary recursion would overflow the native stack,
+\ so it completes only through the self-tail-call back-edge. The second line collapses the
+\ stack into a row with a runtime-depth `drop-at` before entering, so the swap over the row
+\ and the arm that consumes the pair are exercised under a row too.
+\
+\ Under --interpreter-fallback=false the build must succeed and run correctly.
+100000 [ 1 - dup 0 <= ] (until-loop) .
+1 2 3 0 drop-at [ 1 - dup 0 <= ] (until-loop) .

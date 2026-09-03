@@ -1,33 +1,33 @@
-Prelude compilation: 462/463 words compiled (99.8%)
+Prelude compilation: 463/464 words compiled (99.8%)
   word 'pragma-get?' cannot be compiled
       NC.13: word body underflows the abstract stack (row-variable effects)
       hint: blocked until row-variable stack regions can be modeled
 Quotation bodies compiled: 0
-Inline PIC sites: 90/273 generic call sites preseeded
-AOT interpreter fallbacks: 308 total
+Inline PIC sites: 90/274 generic call sites preseeded
+AOT interpreter fallbacks: 306 total
   native: 245
   per-op-native: 42
   compound-uncompiled: 2
-  quotation: 19
+  quotation: 17
   sites:
     native: nan? -> = (line 446)
-    quotation: run-benchmarks -> <quotation> (line 1254)
+    quotation: run-benchmarks -> <quotation> (line 1259)
     quotation: (any-loop) -> <quotation> (line 476)
     native: quotation? -> = (line 411)
     native: . -> inspect (line 725)
     native: . -> inspect (line 725)
-    native: #ends-with? -> #len (line 1316)
-    native: #ends-with? -> #len (line 1316)
-    native: #ends-with? -> #len (line 1316)
-    native: #ends-with? -> #len (line 1316)
-    native: #ends-with? -> < (line 1316)
-    native: #ends-with? -> #len (line 1318)
-    native: #ends-with? -> #len (line 1318)
-    native: #ends-with? -> #len (line 1318)
-    native: #ends-with? -> #len (line 1318)
-    per-op-native: #ends-with? -> - (line 1318)
-    ... 292 more
-  static-check: jitInterpretedCall=2/2 jitNativeWordCall=287/287 jitCallQuotation=19/19 (matches build-time inventory)
+    native: #ends-with? -> #len (line 1321)
+    native: #ends-with? -> #len (line 1321)
+    native: #ends-with? -> #len (line 1321)
+    native: #ends-with? -> #len (line 1321)
+    native: #ends-with? -> < (line 1321)
+    native: #ends-with? -> #len (line 1323)
+    native: #ends-with? -> #len (line 1323)
+    native: #ends-with? -> #len (line 1323)
+    native: #ends-with? -> #len (line 1323)
+    per-op-native: #ends-with? -> - (line 1323)
+    ... 290 more
+  static-check: jitInterpretedCall=2/2 jitNativeWordCall=287/287 jitCallQuotation=17/17 (matches build-time inventory)
 Warning: '4keep' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
 Warning: 'try' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
 Warning: 'bi' parameter 'p' has row-variable effect; quotation call falls back to interpreter
@@ -35,6 +35,7 @@ Warning: 'bi' parameter 'q' has row-variable effect; quotation call falls back t
 Warning: '3keep' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
 Warning: 'keep' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
 Warning: '2apply' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
+Warning: '(until-loop)' parameter 'pred' has row-variable effect; quotation call falls back to interpreter
 Warning: 'with-iterator' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
 Warning: 'tri' parameter 'p' has row-variable effect; quotation call falls back to interpreter
 Warning: 'tri' parameter 'q' has row-variable effect; quotation call falls back to interpreter

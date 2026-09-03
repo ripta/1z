@@ -1000,13 +1000,18 @@ while: loop-combinator ( ..a pred: ( ..a -- ..b ? ) body: ( ..b -- ..a ) -- ..b 
 ] ;
 \\ Loop until the predicate returns true, executing the body each iteration.
 until: loop-combinator ( ..a pred: ( ..a -- ..b ? ) body: ( ..b -- ..a ) -- ..b ) [
-  [ [ not ] compose ] dip while
+  swap do compose [ (until-loop) ] curry unless
 ] ;
 \\ Execute the body once before checking the predicate in a `while` loop.
 do: ( pred body -- pred body ) [ dup 2dip ] ;
 \\ Repeatedly call a quotation while it returns true.
 loop: loop-combinator ( ... pred: ( ... -- ... ? ) -- ... ) [
   dup [ call ] dip swap [ loop ] [ drop ] if
+] ;
+\\ Repeatedly call a quotation until it returns true. Recursing on the false arm inverts
+\\ `loop`'s sense without a `not` per iteration.
+(until-loop): loop-combinator ( ... pred: ( ... -- ... ? ) -- ... ) [
+  dup [ call ] dip swap [ drop ] [ (until-loop) ] if
 ] ;
 
 \ Multi-way dispatch

@@ -35,9 +35,9 @@ PASS: sort from vector returns array
 Stack: [ ]
 === #sort comparator error ===
 Stack: [ ]
-Stack: [ <result:err result-error{ error: <error type-mismatch: type-mismatch [tests/integration/sort_primitives.1z:32:+ <- tests/integration/sort_primitives.1z:32:#sort <- src/prelude.1z:1289:call <- src/prelude.1z:1289:recover]> }> ]
+Stack: [ <result:err result-error{ error: <error type-mismatch: type-mismatch [tests/integration/sort_primitives.1z:32:+ <- tests/integration/sort_primitives.1z:32:#sort <- src/prelude.1z:1294:call <- src/prelude.1z:1294:recover]> }> ]
 PASS: bad comparator is error
-Stack: [ <result:err result-error{ error: <error type-mismatch: type-mismatch [tests/integration/sort_primitives.1z:32:+ <- tests/integration/sort_primitives.1z:32:#sort <- src/prelude.1z:1289:call <- src/prelude.1z:1289:recover]> }> ]
+Stack: [ <result:err result-error{ error: <error type-mismatch: type-mismatch [tests/integration/sort_primitives.1z:32:+ <- tests/integration/sort_primitives.1z:32:#sort <- src/prelude.1z:1294:call <- src/prelude.1z:1294:recover]> }> ]
 Stack: [ type-mismatch: ]
 PASS: comparator type error
 Stack: [ ]
@@ -78,9 +78,9 @@ PASS: float key sort
 Stack: [ ]
 === #sort-by not-comparable keys ===
 Stack: [ ]
-Stack: [ <result:err result-error{ error: <error not-comparable: not-comparable [tests/integration/sort_primitives.1z:66:#sort-by <- src/prelude.1z:1289:call <- src/prelude.1z:1289:recover]> }> ]
+Stack: [ <result:err result-error{ error: <error not-comparable: not-comparable [tests/integration/sort_primitives.1z:66:#sort-by <- src/prelude.1z:1294:call <- src/prelude.1z:1294:recover]> }> ]
 PASS: not-comparable is error
-Stack: [ <result:err result-error{ error: <error not-comparable: not-comparable [tests/integration/sort_primitives.1z:66:#sort-by <- src/prelude.1z:1289:call <- src/prelude.1z:1289:recover]> }> ]
+Stack: [ <result:err result-error{ error: <error not-comparable: not-comparable [tests/integration/sort_primitives.1z:66:#sort-by <- src/prelude.1z:1294:call <- src/prelude.1z:1294:recover]> }> ]
 Stack: [ not-comparable: ]
 PASS: not-comparable error type
 Stack: [ ]

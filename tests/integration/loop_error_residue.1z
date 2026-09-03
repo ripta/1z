@@ -1,10 +1,13 @@
 \ Stack residue left by the loop combinators when the predicate or the body raises.
 \
-\ `loop` carries its predicate across the flag test, and `while` and `until` recurse
-\ through it. `recover` does not restore stack depth, and the harness prints the stack
-\ after every line, so each probe's leftover is pinned in the golden. The tail-call
-\ probes at the end complete only if the recursion step propagates through `if`;
-\ otherwise the nested frames overflow the native stack.
+\ `loop` and `(until-loop)` carry their predicate across the flag test. `while` recurses
+\ through `loop` and `until` through `(until-loop)`.
+\
+\ `recover` does not restore stack depth, and the harness prints the stack after every
+\ line, so each probe's leftover is pinned in the golden.
+\
+\ The tail-call probes at the end complete only if the recursion step propagates through
+\ `if`; otherwise the nested frames overflow the native stack.
 
 \ loop: the predicate raises on the first iteration
 [ 10 [ 1 0 / ] loop ] [ error-type: @get >string print-line ] recover
@@ -40,6 +43,9 @@ wipe
 
 \ truthiness: a non-boolean predicate result continues the loop
 0 [ 1 + dup 3 < [ 0 ] [ f ] if ] loop >string print-line
+
+\ truthiness: a non-boolean predicate result stops `until`
+0 [ 1 + dup 3 < [ f ] [ 0 ] if ] [ ] until >string print-line
 
 \ tail calls: 100000 iterations through each combinator
 0 [ 1 + dup 100000 < ] loop >string print-line
