@@ -29,7 +29,11 @@ onez="${1:-./zig-out/bin/1z}"
 iterations="${2:-500000}"
 
 # "label|preamble|body". The rows follow the retention classes: a non-allocating
-# control, scratch buffers, string results, virtual wraps, bignums, and closures.
+# control, scratch buffers, string results, virtual wraps, bignums, closures, and
+# binding names, both literal and synthesized.
+#
+# The synthesized-name row seeds a counter under the loop from its preamble, so
+# every iteration binds a name no earlier iteration used.
 probes=(
     "1 2 + drop||1 2 + drop"
     "H{ } @set drop||H{ } a: 1 @set b: 2 @set drop"
@@ -45,6 +49,8 @@ probes=(
     "curry call||1 [ drop ] curry call"
     "loop||0 [ 1 + dup 10 < ] loop drop"
     "compose call||x: 5 ; [ x ] [ drop ] compose call"
+    "43-char name||a-forty-three-character-binding-name-for-it: 5 ;"
+    "synthesized name|0|1 + dup >string \"n-\" swap #append >symbol 5 ;"
 )
 
 work="$(mktemp -d)" || { echo "mktemp -d failed" >&2; exit 1; }
