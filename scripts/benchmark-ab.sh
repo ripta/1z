@@ -2,7 +2,7 @@
 #
 # Interleaved two-binary benchmark A/B.
 #
-# Usage: scripts/benchmark-ab.sh <baseline-binary> <candidate-binary> [reps]
+# Usage: scripts/benchmark-ab.sh <baseline-binary> <candidate-binary> [reps] [workload-filter]
 #
 # Runs the interpreter-dispatch archetype suite and the task-shape benchmarks
 # against two 1z binaries and reports the ratio per workload. Both binaries run
@@ -11,6 +11,10 @@
 # it. Sequential whole-suite rounds do not have that property, and the drift
 # they admit is the same order as the deltas being measured.
 #
+# A workload filter is a substring of the workload label. It narrows the run to
+# the matching rows, which is how one workload is re-measured at a higher rep
+# count than the suite pass.
+#
 # Each binary resolves its own standard library through the `zig-out/lib`
 # symlink beside it, so the two may live in different worktrees. Build both with
 # `make release`.
@@ -18,13 +22,17 @@
 set -euo pipefail
 
 if [ "$#" -lt 2 ]; then
-    echo "usage: $0 <baseline-binary> <candidate-binary> [reps]" >&2
+    echo "usage: $0 <baseline-binary> <candidate-binary> [reps] [workload-filter]" >&2
     exit 2
 fi
 
 baseline="$1"
 candidate="$2"
 reps="${3:-7}"
+filter="${4:-}"
+
+# The user startup file would add arbitrary load work to every run.
+export ONEZ_NO_STARTUP=1
 
 for onez in "$baseline" "$candidate"; do
     if [ ! -x "$onez" ]; then
@@ -96,6 +104,10 @@ for entry in "${workloads[@]}"; do
     rest="${entry#*|}"
     file="${rest%%|*}"
     flags="${rest#*|}"
+
+    if [ -n "$filter" ] && [[ "$label" != *"$filter"* ]]; then
+        continue
+    fi
 
     base_samples=()
     cand_samples=()
