@@ -1,0 +1,26 @@
+=== a thrown error's fields outlive the task ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: three values were reported
+Stack: [ ]
+PASS: the type survives the task
+Stack: [ ]
+PASS: the message survives the task
+Stack: [ ]
+PASS: @values carries the type
+Stack: [ ]
+PASS: @values carries the message
+Stack: [ ]
+=== a caught runtime error's type outlives the task ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: the kebab-cased Zig error name survives the task
+Stack: [ ]
+=== a parse diagnostic's type outlives the task ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: the re-raised diagnostic's type survives the task
+Stack: [ ]

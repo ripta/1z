@@ -1,0 +1,20 @@
+\ Bounded-memory regression for the name of a `name: value ;` local binding.
+\
+\ `;` used to dupe the bound name onto the context arena on every binding, so retention grew by the
+\ name's length per binding, and a long name exhausted the 4 MB cap in the `.flags` sidecar partway
+\ through either loop below. The name is now interned once per distinct name, so both loops stay
+\ flat whatever the name's length.
+
+bind-long-name: ( -- n ) [
+  a-sixty-four-byte-local-binding-name-that-this-test-rebinds-here: 5 ;
+  a-sixty-four-byte-local-binding-name-that-this-test-rebinds-here
+] ;
+
+25000 [ bind-long-name drop ] times
+
+25000 [
+  a-sixty-four-byte-local-binding-name-that-this-test-rebinds-here: 5 ;
+  a-sixty-four-byte-local-binding-name-that-this-test-rebinds-here drop
+] times
+
+"flat" print-line

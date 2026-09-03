@@ -60,7 +60,9 @@ pub const ExecFlags = packed struct {
 
 /// Word definition: either a native function or compound quotation.
 pub const WordDefinition = struct {
-    /// The word itself.
+    /// The word itself. Borrowed, never owned: a native's is a static literal, a `;`-defined word's
+    /// is the interned slice the context's `BindingNameStore` keeps until the root's teardown, and a
+    /// generated word's is an arena copy.
     name: []const u8,
     /// Whether this word is a parse-time word.
     parse_time: bool = false,

@@ -434,23 +434,24 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
             defer container_backing.releaseValue(.{ .symbol = name_pay });
             const name = name_pay.bytes;
             try enforceRequireDoc(ctx, name, has_doc, false, false, true);
-            const name_copy = try alloc.dupe(u8, name);
+
+            // User-defined markers are automatically parse-time so they work
+            // correctly with parse-time constructs like struct{}.
+            const interned = try ctx.defineBinding(name, WordDefinition{
+                .name = name,
+                .parse_time = true,
+                .action = .{ .literal = top_val },
+            });
 
             // Tag the marker with its name. This is just for identification
             // purposes, and doesn't affect identity or equality checks.
             //
+            // The interned slice outlives the marker, so no copy is taken.
+            //
             // TODO(ripta): This mutates the marker in place, which is not ideal,
             //              but probably acceptable for now.
-            marker.name = name_copy;
-
-            // User-defined markers are automatically parse-time so they work
-            // correctly with parse-time constructs like struct{}.
-            try ctx.defineWord(name_copy, WordDefinition{
-                .name = name_copy,
-                .parse_time = true,
-                .action = .{ .literal = top_val },
-            });
-            fireWordDefinedHook(ctx, alloc, name_copy);
+            marker.name = interned;
+            fireWordDefinedHook(ctx, alloc, interned);
         },
 
         else => {
@@ -603,8 +604,6 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
 
                 try enforceRequireDoc(ctx, name, doc_val != null, has_parse_time or has_parse_time_only, is_named_constraint, false);
 
-                const name_copy = try alloc.dupe(u8, name);
-
                 // The closure behind a closure-bodied definition, so the word body resolves off the
                 // value the way the same body would when it is invoked as one.
                 var body_owner: ?*const value_mod.Closure = null;
@@ -672,7 +671,7 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
                     }
                 }
 
-                if (action == .compound and !ctx.allow_all_recursion and containsNonTailSelfCall(ctx, action.compound, name_copy)) {
+                if (action == .compound and !ctx.allow_all_recursion and containsNonTailSelfCall(ctx, action.compound, name)) {
                     const has_stack_recursive = for (collected_markers.items) |mk| {
                         if (markers_mod.isStackRecursiveMarker(mk)) break true;
                     } else false;
@@ -683,14 +682,14 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
                         extended[markers_slice.len] = @constCast(&markers_mod.recursive_non_tco_marker);
                         markers_slice = extended;
                     } else {
-                        helpers.setErrorContext(ctx, "word '{s}' contains a non-tail self-call", .{name_copy});
+                        helpers.setErrorContext(ctx, "word '{s}' contains a non-tail self-call", .{name});
                         helpers.setErrorHint(ctx, "add the 'stack-recursive' marker if intentional");
                         return error.NonTailRecursion;
                     }
                 }
 
-                try ctx.defineWord(name_copy, WordDefinition{
-                    .name = name_copy,
+                const interned = try ctx.defineBinding(name, WordDefinition{
+                    .name = name,
                     .parse_time = has_parse_time or has_parse_time_only or is_named_constraint,
                     .parse_time_only = has_parse_time_only,
                     .stack_effect = stack_effect_val,
@@ -705,12 +704,12 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
                 top_owned = false;
                 // For a chain-owned closure body the retained closure's destroy is the single
                 // release path for the embedded literals, so remove the generic compound
-                // registration `defineWord` just made; leaving both would double-release, and
+                // registration `defineBinding` just made; leaving both would double-release, and
                 // the destroy's body free would leave the dictionary walking a dead slice.
                 if (top_val == .closure and top_val.closure.ownsBodyTransitively()) {
                     ctx.unregisterCompoundBody(top_val.closure.instructions);
                 }
-                fireWordDefinedHook(ctx, alloc, name_copy);
+                fireWordDefinedHook(ctx, alloc, interned);
             }
         },
     }
@@ -938,6 +937,7 @@ test "semicolon marker-definition branch binds the tagged marker as .literal" {
     try std.testing.expectEqualStrings("my-marker", marker.name);
 
     const word = ctx.lookupWord("my-marker") orelse return error.TestExpectedWord;
+    try std.testing.expectEqual(word.name.ptr, marker.name.ptr);
     try std.testing.expect(word.parse_time);
     switch (word.action) {
         .literal => |v| {
@@ -991,6 +991,54 @@ test "word with a scalar-valued named local does not blow up arena memory across
     // roughly constant amount -- nowhere near a cap a real workload would hit.
     const second_batch_growth = end_bytes - mid_bytes;
     try std.testing.expect(second_batch_growth < 32 * 1024 * 1024);
+}
+
+test "rebinding a named local across many repeated calls retains the name once whatever its length" {
+    // Two contexts run the same rebind loop, one with a one-byte name and one with a 64-byte name.
+    // The name used to be duped onto the context arena on every rebind, so the long name cost 63
+    // more bytes per iteration. Interned, both loops cost the dictionary's own fixed
+    // per-redefinition amount, and the name once.
+    const short_name = "a";
+    const long_name = "a-sixty-four-byte-local-binding-name-that-this-test-rebinds-here";
+    try std.testing.expectEqual(@as(usize, 64), long_name.len);
+
+    const iterations: usize = 8_192;
+    const short_growth = try rebindSecondBatchGrowth(short_name, iterations);
+    const long_growth = try rebindSecondBatchGrowth(long_name, iterations);
+
+    const name_bytes = (long_name.len - short_name.len) * iterations;
+    try std.testing.expect(long_growth < short_growth + name_bytes / 2);
+}
+
+/// Bytes the tracked allocator grows by over a second batch of `iterations` rebind-and-call rounds
+/// of `name`, after a first batch of the same size has absorbed the one-time costs.
+fn rebindSecondBatchGrowth(name: []const u8, iterations: usize) !usize {
+    var mem_limit = MemoryLimitAllocator.init(std.testing.allocator, 0);
+    var ctx = Context.init(mem_limit.allocator());
+    defer ctx.deinit();
+
+    const call_body = [_]Instruction{.{ .op = .{ .call_word = name }, .line = 0 }};
+
+    var i: usize = 0;
+    while (i < iterations) : (i += 1) {
+        try ctx.stack.push(value_mod.symbolValue(name));
+        try ctx.stack.push(.{ .fixnum = @as(i64, @intCast(i)) });
+        try nativeSemicolon(&ctx);
+        try ctx.executeQuotation(.{ .instructions = &call_body });
+        _ = try ctx.stack.pop();
+    }
+    const mid_bytes = mem_limit.currentBytes();
+
+    while (i < 2 * iterations) : (i += 1) {
+        try ctx.stack.push(value_mod.symbolValue(name));
+        try ctx.stack.push(.{ .fixnum = @as(i64, @intCast(i)) });
+        try nativeSemicolon(&ctx);
+        try ctx.executeQuotation(.{ .instructions = &call_body });
+        _ = try ctx.stack.pop();
+    }
+
+    try std.testing.expectEqual(@as(usize, 1), ctx.binding_names.count());
+    return mem_limit.currentBytes() -| mid_bytes;
 }
 
 test "word with a container-bound named local documents the accepted residual leak across repeated calls" {

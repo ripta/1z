@@ -74,14 +74,22 @@ pub fn registerNativeDispatch(dispatch: *DispatchTable, ctx: *Context) !void {
     try dispatch.registerNative(values_did, err_tv, unary, nativeAtValuesError);
 }
 
-/// Returns an owning reference: the `data` field is retained on the way out and the stack-trace
-/// frames are freshly constructed, so callers hand the result to a slot with `pushMoved` instead
-/// of `push`.
+/// Returns an owning reference: `error-type` and `message` are copied out, the `data` field is
+/// retained on the way out, and the stack-trace frames are freshly constructed, so callers hand
+/// the result to a slot with `pushMoved` instead of `push`.
+///
+/// The type and message bytes live on the arena of the context that raised the error, which a
+/// task's arena is until the task is reaped. A value read out of the error can outlive that, so
+/// it cannot borrow them.
 fn getErrorField(ctx: *Context, err: *const ErrorObject, field_name: []const u8) !Value {
     if (std.mem.eql(u8, field_name, "error-type")) {
-        return value_mod.symbolValue(err.error_type);
+        const copy = try ctx.allocator.dupe(u8, err.error_type);
+        errdefer ctx.allocator.free(copy);
+        return try value_mod.ownedSymbolValue(ctx.allocator, copy);
     } else if (std.mem.eql(u8, field_name, "message")) {
-        return value_mod.stringValue(err.message);
+        const copy = try ctx.allocator.dupe(u8, err.message);
+        errdefer ctx.allocator.free(copy);
+        return try value_mod.ownedStringValue(ctx.allocator, copy);
     } else if (std.mem.eql(u8, field_name, "data")) {
         if (err.data) |data| {
             container_backing.retainValue(data.*);
@@ -475,19 +483,21 @@ fn nativeAtValuesError(ctx: *Context) anyerror!void {
     const obj = try ctx.stack.pop();
     defer container_backing.releaseValue(obj);
     const err = obj.error_value;
-    // Get all four error field values. Both fetched fields come back
-    // as owning references, so the array adopts them wholesale.
-    const values = ctx.allocator.alloc(Value, 4) catch return error.OutOfMemory;
-    values[0] = value_mod.symbolValue(err.error_type);
-    values[1] = value_mod.stringValue(err.message);
-    values[2] = getErrorField(ctx, err, "data") catch |e| {
+
+    // Every field comes back as an owning reference, so the array adopts them wholesale.
+    const fields = [_][]const u8{ "error-type", "message", "data", "stack-trace" };
+    const values = ctx.allocator.alloc(Value, fields.len) catch return error.OutOfMemory;
+    var built: usize = 0;
+    var adopted = false;
+    errdefer if (!adopted) {
+        container_backing.releaseValues(values[0..built]);
         ctx.allocator.free(values);
-        return e;
     };
-    values[3] = getErrorField(ctx, err, "stack-trace") catch |e| {
-        container_backing.releaseValue(values[2]);
-        ctx.allocator.free(values);
-        return e;
-    };
+    for (fields, 0..) |field, i| {
+        values[i] = try getErrorField(ctx, err, field);
+        built = i + 1;
+    }
+
+    adopted = true;
     try helpers.pushAdoptedArray(ctx, ctx.allocator, values);
 }

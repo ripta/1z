@@ -64,6 +64,7 @@ const CarryableScopeGate = @import("carryable_scope_gate.zig").CarryableScopeGat
 const closure_body_registry = @import("closure_body_registry.zig");
 const LoadLock = @import("load_lock.zig").LoadLock;
 const ReifiedDecodeCache = @import("reified_decode_cache.zig").ReifiedDecodeCache;
+const BindingNameStore = @import("binding_name_store.zig").BindingNameStore;
 
 const signal = @import("signal.zig");
 const control = @import("primitives/control.zig");
@@ -1231,6 +1232,13 @@ pub const Context = struct {
     /// The load entries hold it for a load's whole duration, across suspension, so only one
     /// load at a time writes the root state a load targets.
     load_lock: *LoadLock = undefined,
+    /// Process-shared intern table for `;` binding names. Heap-allocated by the root context and
+    /// shared by pointer to all child task contexts.
+    ///
+    /// The frame key, `WordDefinition.name`, and a defined marker's name all borrow the interned
+    /// slice, and an entry is never removed, so a borrowed key outlives every frame. Guarded by
+    /// `shared_lock` on the write side, which `defineBinding` holds for the definition anyway.
+    binding_names: *BindingNameStore = undefined,
 
     /// Returns true when the instruction sequence ends with a call to `;`,
     /// which means it is a word definition and should be executed even in
@@ -1412,6 +1420,12 @@ pub const Context = struct {
             std.debug.panic("Failed to allocate load lock: {any}", .{err});
         };
 
+        // Allocate the shared binding-name intern table on the long-lived allocator; the root
+        // context frees it in deinit.
+        ctx.binding_names = BindingNameStore.create(allocator) catch |err| {
+            std.debug.panic("Failed to allocate binding name store: {any}", .{err});
+        };
+
         // Push base parameter frame so scoped hooks can be registered at top level.
         ctx.parameter_env.append(allocator, .{}) catch |err| {
             std.debug.panic("Failed to push base parameter frame: {any}", .{err});
@@ -1589,6 +1603,10 @@ pub const Context = struct {
         // retained: the root owns it.
         ctx.load_lock = parent.load_lock;
 
+        // Share the parent's binding-name intern table so a task's `;` keys its frame with the same
+        // process-lifetime slice the root would. Aliased, never retained: the root owns it.
+        ctx.binding_names = parent.binding_names;
+
         // Inherit the parent's active sandbox, if any. Allocate a copy on the
         // task's arena so the pointer outlives the parent's stack frame.
         if (parent.active_sandbox) |sandbox| {
@@ -1648,7 +1666,8 @@ pub const Context = struct {
         //
         // A `WordDefinition` borrows its name, effect, markers, and body slice, so the entries copy
         // directly. Its bound value is the one thing it can own, and the clone outlives the frame it
-        // came from, so the clone takes references of its own.
+        // came from, so the clone takes references of its own. A `;`-defined name is the interned
+        // slice from `binding_names`, which is never freed, so the clone's key cannot dangle.
         const transient_start = if (parent.durable_frame_floor) |idx| idx + 1 else 0;
         for (parent.local_frames.items[transient_start..], transient_start..) |parent_frame, src_idx| {
             var cloned_frame = LocalFrame{};
@@ -1964,6 +1983,7 @@ pub const Context = struct {
             self.carryable_scope_gate.destroy();
             self.reified_decode_cache.destroy();
             self.load_lock.destroy();
+            self.binding_names.destroy();
             self.allocator.destroy(self.lock_order_tracker);
             self.allocator.destroy(self.shared_lock);
         }
@@ -3654,7 +3674,32 @@ pub const Context = struct {
             try self.defineWordLocked(name, definition);
         }
 
-        // NOTE(ripta): auto-compile runs after the lock is released so JIT callbacks can acquire their own locks
+        self.compileAfterDefine(name, definition);
+    }
+
+    /// Define the word `;` is building, keyed by the interned copy of `name`, and return that copy.
+    ///
+    /// `;` is the one definer that runs per call on a hot path, and its name arrives as symbol bytes
+    /// it releases on return, so neither the frame nor the definition can borrow them. The intern
+    /// probe rides the shared-write acquisition the definition takes anyway. The returned slice is
+    /// what the frame key, `WordDefinition.name`, and a defined marker's `name` carry. Every other
+    /// definer keeps `defineWord`.
+    pub fn defineBinding(self: *Context, name: []const u8, definition: WordDefinition) ![]const u8 {
+        var def = definition;
+
+        {
+            self.acquireSharedWrite();
+            defer self.releaseSharedWrite();
+            def.name = try self.binding_names.internLocked(name);
+            try self.defineWordLocked(def.name, def);
+        }
+
+        self.compileAfterDefine(def.name, def);
+        return def.name;
+    }
+
+    // NOTE(ripta): auto-compile runs after the lock is released so JIT callbacks can acquire their own locks
+    fn compileAfterDefine(self: *Context, name: []const u8, definition: WordDefinition) void {
         if (self.compile_mode == .eager) {
             self.tryAutoCompile(name, definition);
         } else if (self.compile_mode == .hybrid) {
@@ -8673,6 +8718,47 @@ test "init and deinit" {
     defer ctx.deinit();
 
     try std.testing.expectEqual(@as(usize, 0), ctx.stack.depth());
+}
+
+test "defineBinding keys every scope with the one interned copy of a name" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const first = try ctx.defineBinding("x", .{ .name = "x", .action = .{ .literal = .{ .fixnum = 1 } } });
+    const rebound = try ctx.defineBinding("x", .{ .name = "x", .action = .{ .literal = .{ .fixnum = 2 } } });
+
+    try ctx.pushLocalFrame();
+    defer ctx.popLocalFrame();
+    const inner = try ctx.defineBinding("x", .{ .name = "x", .action = .{ .literal = .{ .fixnum = 3 } } });
+
+    try std.testing.expectEqual(first.ptr, rebound.ptr);
+    try std.testing.expectEqual(first.ptr, inner.ptr);
+    try std.testing.expectEqual(@as(usize, 1), ctx.binding_names.count());
+
+    const word = ctx.lookupWord("x") orelse return error.TestExpectedWord;
+    try std.testing.expectEqual(first.ptr, word.name.ptr);
+    try std.testing.expectEqual(@as(i64, 3), word.action.literal.fixnum);
+}
+
+test "defineBinding in a task context interns into the root's table" {
+    var parent = Context.init(std.testing.allocator);
+    defer parent.deinit();
+
+    var scheduler = try std.testing.allocator.create(Scheduler);
+    defer std.testing.allocator.destroy(scheduler);
+    scheduler.* = try Scheduler.init(std.testing.allocator);
+    defer scheduler.deinit();
+
+    var task_ctx = try Context.initForTask(std.testing.allocator, &parent, scheduler);
+    defer task_ctx.deinit();
+
+    try std.testing.expectEqual(parent.binding_names, task_ctx.binding_names);
+
+    const in_parent = try parent.defineBinding("shared", .{ .name = "shared", .action = .{ .literal = .{ .fixnum = 1 } } });
+    const in_task = try task_ctx.defineBinding("shared", .{ .name = "shared", .action = .{ .literal = .{ .fixnum = 2 } } });
+
+    try std.testing.expectEqual(in_parent.ptr, in_task.ptr);
+    try std.testing.expectEqual(@as(usize, 1), parent.binding_names.count());
 }
 
 test "pragmaEnvironmentSetSite accepts a prompt and the startup file, and refuses a source file" {

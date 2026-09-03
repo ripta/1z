@@ -1,0 +1,50 @@
+\ Values read out of an error outlive the task that raised it.
+\
+\ `error-type: @get`, `message: @get`, and `@values` used to return null-backed values borrowing the
+\ error object's bytes, which live on the raising context's arena. A task that reported a recovered
+\ error's type into a shared container left a dangling symbol behind once the task was reaped.
+\ Each read-out is now an owned copy, so the main context can compare them after the scope.
+
+use "testing" ;
+
+"a thrown error's fields outlive the task" test-section
+
+thrown-fields: V{ } ;
+
+[
+  [
+    [ f "boom" custom-failure: make-error throw ]
+    [
+      dup error-type: @get thrown-fields swap #push! drop
+      dup message: @get thrown-fields swap #push! drop
+      @values thrown-fields swap #push! drop
+    ]
+    recover
+  ] spawn drop
+] task-scope
+
+thrown-fields #len 3 "three values were reported" assert=
+thrown-fields 0 #nth custom-failure: "the type survives the task" assert=
+thrown-fields 1 #nth "boom" "the message survives the task" assert=
+thrown-fields 2 #nth 0 #nth custom-failure: "@values carries the type" assert=
+thrown-fields 2 #nth 1 #nth "boom" "@values carries the message" assert=
+
+"a caught runtime error's type outlives the task" test-section
+
+caught-type: V{ } ;
+
+[
+  [ [ "1 +" eval-string ] [ error-type: @get caught-type swap #push! drop ] recover ] spawn drop
+] task-scope
+
+caught-type 0 #nth stack-underflow: "the kebab-cased Zig error name survives the task" assert=
+
+"a parse diagnostic's type outlives the task" test-section
+
+diagnosed-type: V{ } ;
+
+[
+  [ [ "[ 1" eval-string ] [ error-type: @get diagnosed-type swap #push! drop ] recover ] spawn drop
+] task-scope
+
+diagnosed-type 0 #nth unmatched-open-bracket: "the re-raised diagnostic's type survives the task" assert=
