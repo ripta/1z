@@ -56,6 +56,10 @@ start-game: ( init: quotation update: quotation draw: quotation -- ) [
 \\ frame with zero ticks simply does not advance; the snapshot stays valid until the
 \\ next tick that does run.
 \\
+\\ Each update tick also drains the mouse's event ring right before it runs
+\\ (advance-mouse-frame), so the tick's update sees every click queued since the previous
+\\ tick through mouse-events, and a catch-up burst hands each click to exactly one tick.
+\\
 \\ Zero name: swap ; locals: run-frame is called 60 times a second for as long as a game
 \\ is open, and a word with named locals leaks memory in proportion to call count. Every
 \\ intermediate value stays on the data stack, threaded through dup/swap/dip/keep.
@@ -75,6 +79,7 @@ run-frame: ( -- ) [
 
   [
     game-loop dup tick>> 1 + dup [ >>tick drop ] dip
+    advance-mouse-frame
     game-loop update>> call
     advance-keyboard-frame
   ] times

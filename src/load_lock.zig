@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 const Task = @import("task.zig").Task;
 
@@ -142,7 +143,13 @@ pub const LoadLock = struct {
                 return;
             }
             self.main_waiting = true;
-            self.main_cond.wait(&self.mu);
+            if (builtin.single_threaded) {
+                // No other thread exists to release the hold, and the single-threaded
+                // Condition stub's wait needs a nanosleep the freestanding wasm target lacks.
+                @panic("load lock contended with no other thread to release it");
+            } else {
+                self.main_cond.wait(&self.mu);
+            }
         }
     }
 

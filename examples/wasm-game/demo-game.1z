@@ -1,7 +1,7 @@
-\ examples/wasm-game/demo-game.1z - Frame-loop and keyboard-input smoke test: a square
-\ bouncing left/right, its position derived purely from the platform's own tick counter, plus
-\ a second square the player nudges with the arrow keys, plus a synthesized beep the space
-\ key triggers.
+\ examples/wasm-game/demo-game.1z - Frame-loop and input smoke test: a square bouncing
+\ left/right, its position derived purely from the platform's own tick counter, plus a second
+\ square the player nudges with the arrow keys or moves outright with a click, plus a
+\ synthesized beep the space key triggers.
 
 use "game" ;
 use "math" ;
@@ -49,6 +49,18 @@ private{
     >packed:f32 unmake-packed-f32
     1 beep-rate <sample>
   ] ;
+
+  \\ Moves the player square to a left press's position, clamped so the square stays on the
+  \\ canvas. Every other event is ignored.
+  (follow-click): ( event: mouse-event -- ) [
+    dup pressed? over button>> left: = and over inside>> and
+    [
+      dup x>> max-player-x min state swap >>player-x drop
+      y>> max-player-y min state swap >>player-y drop
+    ]
+    [ drop ]
+    if
+  ] ;
 }
 
 demo-init: ( -- ) [ (make-beep) state swap >>beep drop ] ;
@@ -56,6 +68,9 @@ demo-init: ( -- ) [ (make-beep) state swap >>beep drop ] ;
 \\ Advances the bouncing square's tick and, independently, nudges the player square with
 \\ whichever arrow keys are currently held -- proves both the tick-driven update path and
 \\ key-down? work together in the same frame.
+\\
+\\ A left click moves the player square to the click point, proving the mouse event ring
+\\ reaches update with each event's own position.
 \\
 \\ A space press plays the beep once per press, proving key-pressed? edge detection and
 \\ play-sample from a game callback.
@@ -66,6 +81,8 @@ demo-update: ( tick -- ) [
   arrow-right: key-down? [ state dup player-x>> move-step + max-player-x min >>player-x drop ] when
   arrow-up:    key-down? [ state dup player-y>> move-step - 0 max >>player-y drop ] when
   arrow-down:  key-down? [ state dup player-y>> move-step + max-player-y min >>player-y drop ] when
+
+  mouse-events [ (follow-click) ] #each
 
   space: key-pressed? [ state beep>> play-sample ] when
 ] ;

@@ -26,15 +26,19 @@ function setStatus(text, isError) {
   statusEl.className = isError ? 'error' : ''
 }
 
+// The integer factor the canvas is currently displayed at, kept so pointer coordinates can be
+// mapped back to framebuffer pixels without the wasm side ever learning the page's size.
+let displayScale = 1
+
 // Snap the canvas's on-screen CSS size to the largest integer multiple of the base
 // resolution that fits the viewport, so every source pixel maps to a whole number of
 // screen pixels (no shimmer from a fractional scale). Recomputed on resize.
 function resizeCanvas() {
   const availableWidth = Math.max(window.innerWidth - 32, canvasWidth)
   const availableHeight = Math.max(window.innerHeight - 200, canvasHeight)
-  const scale = Math.max(1, Math.floor(Math.min(availableWidth / canvasWidth, availableHeight / canvasHeight)))
-  canvas.style.width = (canvasWidth * scale) + 'px'
-  canvas.style.height = (canvasHeight * scale) + 'px'
+  displayScale = Math.max(1, Math.floor(Math.min(availableWidth / canvasWidth, availableHeight / canvasHeight)))
+  canvas.style.width = (canvasWidth * displayScale) + 'px'
+  canvas.style.height = (canvasHeight * displayScale) + 'px'
 }
 
 window.addEventListener('resize', resizeCanvas)
@@ -75,6 +79,121 @@ window.addEventListener('keyup', (event) => {
   if (setKeyState(event.code, false)) event.preventDefault()
 })
 
+// The mouse buffer's byte layout, mirroring the private table in lib/game/input.1z. Like
+// KEY_INDEX, the two are a private contract kept in sync by inspection; capi_wasm.zig only
+// sizes the buffer. Multi-byte fields are little-endian. The header holds the pointer state
+// and the ring's indices; the ring's slots hold one button event each.
+const MOUSE = {
+  X: 0, Y: 2, INSIDE: 4, BUTTONS: 5, WRITE: 6, READ: 7, DROPPED: 8,
+  RING: 16, CAPACITY: 32, SLOT: 8,
+}
+
+let mousePtr = 0
+let mouseLen = 0
+
+// The pointer's last in-canvas position, which an off-canvas event reports as its own.
+let lastInsideX = 0
+let lastInsideY = 0
+
+// Rebuilt on every access rather than cached: a memory.grow during the interpreted frames
+// detaches any cached view, and a write through a stale one silently goes nowhere.
+function mouseView() {
+  return new DataView(memory.buffer, mousePtr, mouseLen)
+}
+
+// Page coordinates to framebuffer pixels, through the integer scale resizeCanvas chose. A
+// point off the canvas keeps the last in-canvas position with inside cleared, so 1z never
+// sees a coordinate it cannot represent.
+function locatePointer(event) {
+  const rect = canvas.getBoundingClientRect()
+  const x = Math.floor((event.clientX - rect.left) / displayScale)
+  const y = Math.floor((event.clientY - rect.top) / displayScale)
+  const inside = x >= 0 && x < canvasWidth && y >= 0 && y < canvasHeight
+  if (inside) {
+    lastInsideX = x
+    lastInsideY = y
+  }
+  return { x: lastInsideX, y: lastInsideY, inside }
+}
+
+// PointerEvent.buttons orders its bits left, right, middle. The buffer orders them by button
+// id (left, middle, right), the same order PointerEvent.button numbers them, so one encoding
+// covers both the held bitmap and the slots.
+function heldButtons(event) {
+  const bits = event.buttons
+  return (bits & 1) | ((bits & 4) ? 2 : 0) | ((bits & 2) ? 4 : 0)
+}
+
+function writePointerState(pos, buttons) {
+  const view = mouseView()
+  view.setUint16(MOUSE.X, pos.x, true)
+  view.setUint16(MOUSE.Y, pos.y, true)
+  view.setUint8(MOUSE.INSIDE, pos.inside ? 1 : 0)
+  view.setUint8(MOUSE.BUTTONS, buttons)
+}
+
+// Appends one slot at the write index. Both indices are free-running bytes, so the pending
+// count is their difference modulo 256. When the ring already holds CAPACITY undrained
+// events the newest one is dropped and the dropped counter bumped, so a game can see the
+// loss instead of silently missing a click.
+function pushMouseEvent(button, pressed, pos) {
+  const view = mouseView()
+  const write = view.getUint8(MOUSE.WRITE)
+  const read = view.getUint8(MOUSE.READ)
+  if (((write - read) & 0xff) >= MOUSE.CAPACITY) {
+    view.setUint16(MOUSE.DROPPED, (view.getUint16(MOUSE.DROPPED, true) + 1) & 0xffff, true)
+    return
+  }
+  const base = MOUSE.RING + (write % MOUSE.CAPACITY) * MOUSE.SLOT
+  view.setUint8(base, button)
+  view.setUint8(base + 1, pressed ? 1 : 0)
+  view.setUint8(base + 2, pos.inside ? 1 : 0)
+  view.setUint8(base + 3, 0)
+  view.setUint16(base + 4, pos.x, true)
+  view.setUint16(base + 6, pos.y, true)
+  view.setUint8(MOUSE.WRITE, (write + 1) & 0xff)
+}
+
+// Button ids 0 through 2 are left, middle, and right. Back and forward are not tracked.
+function onPointerButton(event, pressed) {
+  if (memory === null) return
+  const pos = locatePointer(event)
+  writePointerState(pos, heldButtons(event))
+  if (event.button >= 0 && event.button <= 2) pushMouseEvent(event.button, pressed, pos)
+}
+
+canvas.addEventListener('pointerdown', (event) => {
+  // Capture the pointer so the matching release reaches the canvas even after the pointer
+  // has left it, keeping presses and releases paired.
+  canvas.setPointerCapture(event.pointerId)
+  onPointerButton(event, true)
+  // Middle-button autoscroll on Windows and Linux.
+  if (event.button === 1) event.preventDefault()
+})
+canvas.addEventListener('pointerup', (event) => onPointerButton(event, false))
+canvas.addEventListener('pointermove', (event) => {
+  if (memory === null) return
+  writePointerState(locatePointer(event), heldButtons(event))
+})
+canvas.addEventListener('pointerleave', () => {
+  if (memory === null) return
+  mouseView().setUint8(MOUSE.INSIDE, 0)
+})
+
+// A cancelled gesture (the browser took the pointer for scrolling, say) carries no button of
+// its own, so every button the buffer still shows as held gets its release here.
+canvas.addEventListener('pointercancel', (event) => {
+  if (memory === null) return
+  const pos = locatePointer(event)
+  const held = mouseView().getUint8(MOUSE.BUTTONS)
+  writePointerState(pos, 0)
+  for (let id = 0; id < 3; id++) {
+    if (held & (1 << id)) pushMouseEvent(id, false, pos)
+  }
+})
+
+canvas.addEventListener('contextmenu', (event) => event.preventDefault())
+
 // Loaded samples, indexed by the handle the load call hands back to 1z.
 const audioBuffers = []
 
@@ -90,6 +209,7 @@ function armAudio() {
 }
 
 window.addEventListener('keydown', armAudio)
+window.addEventListener('pointerdown', armAudio)
 window.addEventListener('click', armAudio)
 window.addEventListener('touchstart', armAudio)
 
@@ -167,6 +287,8 @@ export async function bootGame({ gameUrl }) {
   framebufferPtr = exports.onez_wasm_framebuffer_ptr()
   keyboardPtr = exports.onez_wasm_keyboard_ptr()
   keyboardLen = exports.onez_wasm_keyboard_len()
+  mousePtr = exports.onez_wasm_mouse_ptr()
+  mouseLen = exports.onez_wasm_mouse_len()
 
   const inputPtr = exports.onez_wasm_input_ptr()
   const inputCapacity = exports.onez_wasm_input_capacity()

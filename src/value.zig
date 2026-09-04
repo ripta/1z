@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 
 const closure_body_registry = @import("closure_body_registry.zig");
 
@@ -1640,10 +1641,16 @@ pub const Closure = struct {
     // The freestanding mirror in capi_freestanding.zig re-declares the three leading fields
     // and reads `segments` through its own layout. Both declarations pin the offsets to the
     // same constants, so a compiler reordering on either side fails the build.
+    //
+    // The wasm interpreter tier never links the mirror, and with 4-byte pointers the
+    // compiler orders these fields differently anyway, so the pins apply only where a
+    // mirror can read them.
     comptime {
-        std.debug.assert(@offsetOf(Closure, "instructions") == 0);
-        std.debug.assert(@offsetOf(Closure, "effect") == 16);
-        std.debug.assert(@offsetOf(Closure, "segments") == 24);
+        if (!builtin.cpu.arch.isWasm()) {
+            std.debug.assert(@offsetOf(Closure, "instructions") == 0);
+            std.debug.assert(@offsetOf(Closure, "effect") == 16);
+            std.debug.assert(@offsetOf(Closure, "segments") == 24);
+        }
     }
 
     /// Allocate a closure on `allocator` from a template whose `header` field

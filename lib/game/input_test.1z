@@ -5,6 +5,28 @@ use "game/input" ;
 
 private{
   (scratch-keyboard): ( -- byte-array ) [ 48 bytes-alloc ] ;
+  (scratch-mouse): ( -- byte-array ) [ 272 bytes-alloc ] ;
+
+  \\ Appends one slot to the scratch ring the way host.js does: the slot at the write index
+  \\ modulo the capacity, then the index advanced modulo 256. No overflow check; the tests
+  \\ stay under the capacity. The raw byte encoding is deliberate, so a drift between this
+  \\ file's idea of the layout and input.1z's shows up as a failure.
+  (push-mouse-event): ( button kind x y inside -- ) [
+    inside: swap ;
+    y: swap ;
+    x: swap ;
+    kind:   swap ;
+    button: swap ;
+    buf:    current-mouse get ;
+    write:  buf 6 #peek8 ;
+    base:   write 32 % 8 * 16 + ;
+    buf base button #poke8! drop
+    buf base 1 + kind #poke8! drop
+    buf base 2 + inside #poke8! drop
+    buf base 4 + x #poke16! drop
+    buf base 6 + y #poke16! drop
+    buf 6 write 1 + 256 % #poke8! drop
+  ] ;
 }
 
 test-key-down-false-when-clear: ( -- ) [
@@ -77,5 +99,139 @@ test-advance-keyboard-frame-repeated-calls-do-not-leak: ( -- ) [
   [
     2000 [ advance-keyboard-frame ] times
     t "2000 advance-keyboard-frame calls stayed in budget" assert-true
+  ] with-parameter
+] ;
+
+test-mouse-position-reads-the-header: ( -- ) [
+  (scratch-mouse) current-mouse
+  [
+    current-mouse get 0 300 #poke16! 2 200 #poke16! drop
+    mouse-position
+    200 "mouse-position pushes y on top" assert=
+    300 "mouse-position pushes x beneath y, as a 16-bit read" assert=
+  ] with-parameter
+] ;
+
+test-mouse-inside-reads-the-flag: ( -- ) [
+  (scratch-mouse) current-mouse
+  [
+    mouse-inside? f "mouse-inside? is false when the flag byte is clear" assert=
+    current-mouse get 4 1 #poke8! drop
+    mouse-inside? t "mouse-inside? is true when the flag byte is set" assert=
+  ] with-parameter
+] ;
+
+test-mouse-down-reads-each-button-bit: ( -- ) [
+  (scratch-mouse) current-mouse
+  [
+    current-mouse get 5 5 #poke8! drop
+    left:   mouse-down? t "bit 0 is the left button" assert=
+    middle: mouse-down? f "bit 1 is the middle button" assert=
+    right:  mouse-down? t "bit 2 is the right button" assert=
+  ] with-parameter
+] ;
+
+test-mouse-down-unknown-button-throws: ( -- ) [
+  (scratch-mouse) current-mouse
+  [
+    [ back: mouse-down? ] "mouse-down? throws for an unrecognized button" assert-error
+  ] with-parameter
+] ;
+
+test-mouse-dropped-events-reads-the-counter: ( -- ) [
+  (scratch-mouse) current-mouse
+  [
+    current-mouse get 8 300 #poke16! drop
+    mouse-dropped-events 300 "mouse-dropped-events is a 16-bit read of the counter" assert=
+  ] with-parameter
+] ;
+
+test-advance-mouse-frame-with-nothing-pending-yields-no-events: ( -- ) [
+  (scratch-mouse) current-mouse
+  [
+    advance-mouse-frame
+    mouse-events #len 0 "a drain over an empty ring stores an empty array" assert=
+  ] with-parameter
+] ;
+
+test-advance-mouse-frame-drains-in-order-and-catches-up: ( -- ) [
+  (scratch-mouse) current-mouse
+  [
+    0 1 10 20 1 (push-mouse-event)
+    2 1 30 40 1 (push-mouse-event)
+    0 0 11 21 1 (push-mouse-event)
+    advance-mouse-frame
+
+    mouse-events #len 3 "all three pending slots are drained" assert=
+
+    mouse-events 0 #nth
+    dup button>> left: "the first event decodes button id 0 as left:" assert=
+    dup kind>> press: "kind byte 1 decodes as press:" assert=
+    dup pressed? t "pressed? is true for a press" assert=
+    dup x>> 10 "x is a 16-bit read from the slot" assert=
+    dup y>> 20 "y is a 16-bit read from the slot" assert=
+    inside>> t "inside byte 1 decodes as true" assert=
+
+    mouse-events 1 #nth
+    dup button>> right: "button id 2 decodes as right:" assert=
+    x>> 30 "the second event keeps its own position" assert=
+
+    mouse-events 2 #nth
+    dup kind>> release: "kind byte 0 decodes as release:" assert=
+    pressed? f "pressed? is false for a release" assert=
+
+    current-mouse get 7 #peek8 3 "the read index caught up to the write index" assert=
+
+    advance-mouse-frame
+    mouse-events #len 0 "a second drain finds nothing pending" assert=
+  ] with-parameter
+] ;
+
+test-advance-mouse-frame-keeps-an-off-canvas-event: ( -- ) [
+  (scratch-mouse) current-mouse
+  [
+    0 0 12 34 0 (push-mouse-event)
+    advance-mouse-frame
+
+    mouse-events 0 #nth
+    dup inside>> f "inside byte 0 decodes as false" assert=
+    dup x>> 12 "an off-canvas event still carries its x" assert=
+    y>> 34 "an off-canvas event still carries its y" assert=
+  ] with-parameter
+] ;
+
+\\ The write and read indices are free-running bytes, so a ring that has seen more than 255
+\\ events wraps both counters while its slots wrap at the capacity. Starting both indices at
+\\ 254 and pushing four events crosses both boundaries in one drain.
+test-advance-mouse-frame-wraps-both-indices: ( -- ) [
+  (scratch-mouse) current-mouse
+  [
+    current-mouse get 6 254 #poke8! 7 254 #poke8! drop
+    0 1 1 0 1 (push-mouse-event)
+    0 1 2 0 1 (push-mouse-event)
+    0 1 3 0 1 (push-mouse-event)
+    0 1 4 0 1 (push-mouse-event)
+    advance-mouse-frame
+
+    mouse-events #len 4 "four events pending across the wrap are all drained" assert=
+    mouse-events 0 #nth x>> 1 "slot 30 (index 254) comes first" assert=
+    mouse-events 1 #nth x>> 2 "slot 31 (index 255) comes second" assert=
+    mouse-events 2 #nth x>> 3 "slot 0 (index 0) comes third" assert=
+    mouse-events 3 #nth x>> 4 "slot 1 (index 1) comes fourth" assert=
+    current-mouse get 7 #peek8 2 "the read index wrapped to 2" assert=
+  ] with-parameter
+] ;
+
+\\ Regression coverage matching test-advance-keyboard-frame-repeated-calls-do-not-leak, on the
+\\ drain path rather than the idle path: two slots are decoded on every call by resetting the
+\\ read index before each drain.
+test-advance-mouse-frame-repeated-calls-do-not-leak: ( -- ) [
+  (scratch-mouse) current-mouse
+  [
+    0 1 5 6 1 (push-mouse-event)
+    2 0 7 8 1 (push-mouse-event)
+    2000 [ current-mouse get 7 0 #poke8! drop advance-mouse-frame ] times
+    mouse-events #len 2 "every drain decoded both slots" assert=
+    t "2000 advance-mouse-frame calls stayed in budget" assert-true
   ] with-parameter
 ] ;

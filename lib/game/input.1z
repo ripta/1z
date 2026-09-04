@@ -1,4 +1,4 @@
-\ lib/game/input.1z - Keyboard input for the browser game platform
+\ lib/game/input.1z - Keyboard and mouse input for the browser game platform
 \
 \ Held-key state crosses the host boundary as a shared-memory byte array: the browser's
 \ keydown/keyup listeners write directly into wasm linear memory at a fixed key index, so
@@ -10,6 +10,14 @@
 \
 \ Keys are named as kebab-cased KeyboardEvent.code values -- the physical/positional key, not
 \ the layout-dependent character -- matching every browser game framework's convention.
+\
+\ The mouse crosses the same way, through a second shared byte array, but a click is not a key.
+\ A held key survives any number of slow frames, so sampling it at update ticks loses nothing.
+\ A click's button-down lasts tens of milliseconds and can begin and end inside one slow frame,
+\ where sampling would never see it. So the mouse buffer carries sampled state (the pointer
+\ position, an inside-canvas flag, a held-button bitmap) alongside a ring of button events that
+\ the browser appends to and advance-mouse-frame drains once per update tick, so no click is
+\ lost at any frame time.
 
 use "bytes" ;
 use "ranges" ;
@@ -23,7 +31,7 @@ current-keyboard: parameter{ [ (wasm-keyboard) ] } ;
 private{
   \\ Maps each tracked key's name to its byte offset in current-keyboard and
   \\ keyboard-previous. The index assignment is a private contract with the JS host harness
-  \\ (examples/wasm-game/demo.js's KEY_INDEX table) and with capi_wasm.zig's
+  \\ (examples/wasm-game/host.js's KEY_INDEX table) and with capi_wasm.zig's
   \\ keyboard_key_count -- all three must agree on the same 48 entries.
   key-index: H{
     arrow-up:   0 arrow-down: 1 arrow-left: 2 arrow-right: 3
@@ -86,4 +94,131 @@ advance-keyboard-frame: ( -- ) [
   [ over #peek8 keyboard-previous -rot> #poke8! drop ] curry
   key-count iota >iterator
   swap #each
+] ;
+
+\\ The byte array JS writes pointer state and button events into. Defaults to the real wasm
+\\ mouse buffer; tests (and any non-wasm caller) rebind it to a scratch buffer via
+\\ with-parameter, since (wasm-mouse) only exists under the wasm C-API root.
+current-mouse: parameter{ [ (wasm-mouse) ] } ;
+
+\\ One button press or release drained from the host's event ring. button is left:, middle:,
+\\ or right:. kind is press: or release:. x and y are framebuffer pixels, and inside is whether
+\\ the pointer was over the canvas at the event; when it was not, x and y hold the pointer's
+\\ last in-canvas position.
+mouse-event: struct{ button: symbol kind: symbol x: fixnum y: fixnum inside: boolean } ;
+
+private{
+  \ Byte layout of current-mouse. A private contract with the JS host harness
+  \ (examples/wasm-game/host.js's MOUSE table); capi_wasm.zig only sizes the buffer, at
+  \ mouse-buffer-length. Multi-byte fields are little-endian and unsigned.
+  \
+  \ Header: x at 0 and y at 2 (2 bytes each), inside at 4, the held-button bitmap at 5, the
+  \ ring's write index at 6 and read index at 7, the dropped-event counter at 8 (2 bytes).
+  \ Slots start at 16, 8 bytes each: button id, kind (1 press, 0 release), inside, a reserved
+  \ byte, then x and y (2 bytes each).
+  \
+  \ Both indices are free-running byte counters. JS advances the write index as it appends;
+  \ advance-mouse-frame advances the read index as it drains. A slot is its index modulo the
+  \ ring capacity, and the pending count is the difference modulo 256.
+  mouse-x-offset:       ( -- n ) const [ 0 ] ;
+  mouse-y-offset:       ( -- n ) const [ 2 ] ;
+  mouse-inside-offset:  ( -- n ) const [ 4 ] ;
+  mouse-buttons-offset: ( -- n ) const [ 5 ] ;
+  mouse-write-offset:   ( -- n ) const [ 6 ] ;
+  mouse-read-offset:    ( -- n ) const [ 7 ] ;
+  mouse-dropped-offset: ( -- n ) const [ 8 ] ;
+  mouse-ring-offset:    ( -- n ) const [ 16 ] ;
+  mouse-ring-capacity:  ( -- n ) const [ 32 ] ;
+  mouse-slot-length:    ( -- n ) const [ 8 ] ;
+  mouse-buffer-length:  ( -- n ) const [ mouse-ring-offset mouse-ring-capacity mouse-slot-length * + ] ;
+
+  \\ Maps each button's name to its id, the slot's button byte. Its held-bitmap bit is 1
+  \\ shifted left by the id.
+  mouse-button-index: H{ left: 0 middle: 1 right: 2 } ;
+
+  \\ The inverse of mouse-button-index, indexed by id.
+  mouse-button-name: { left: middle: right: } ;
+
+  \\ The one shared empty array a drain with nothing pending stores, so an idle tick
+  \\ allocates nothing.
+  (no-mouse-events): ( -- array ) const [ { } ] ;
+
+  mouse-state: mutable struct{ events } ;
+
+  \\ The events the most recent drain produced. A bracket-less top-level local, one instance
+  \\ per module load, mirroring keyboard-previous.
+  mouse-frame: (no-mouse-events) make-mouse-state ;
+
+  (mouse-read-index): ( buf -- n ) [ mouse-read-offset #peek8 ] ;
+  (mouse-write-index): ( buf -- n ) [ mouse-write-offset #peek8 ] ;
+
+  \\ How many slots JS has appended that have not been drained: write minus read, modulo 256.
+  (mouse-pending-count): ( buf -- n ) [
+    dup (mouse-write-index) swap (mouse-read-index) - 256 + 256 %
+  ] ;
+
+  \\ Decodes the slot at a ring position into a mouse-event.
+  (mouse-event-at): ( buf slot -- event ) [
+    mouse-slot-length * mouse-ring-offset +
+    [ #peek8 mouse-button-name swap #nth ] 2keep
+    [ 1 + #peek8 0 = [ release: ] [ press: ] if ] 2keep
+    [ 4 + #peek16 ] 2keep
+    [ 6 + #peek16 ] 2keep
+    2 + #peek8 0 = not
+    make-mouse-event
+  ] ;
+}
+
+\\ The pointer's position in framebuffer pixels. While the pointer is off the canvas
+\\ (mouse-inside? is false), this is its last in-canvas position.
+mouse-position: ( -- x y ) [
+  current-mouse get dup mouse-x-offset #peek16 swap mouse-y-offset #peek16
+] ;
+
+\\ True while the pointer is over the canvas.
+mouse-inside?: ( -- bool ) [
+  current-mouse get mouse-inside-offset #peek8 0 = not
+] ;
+
+\\ True if button (left:, middle:, or right:) is currently held. A pure local read of the
+\\ held-button bitmap; no host call. Throws if button is not one of the three names.
+mouse-down?: ( button: symbol -- bool ) [
+  mouse-button-index swap @get 1 swap shift-left
+  current-mouse get mouse-buttons-offset #peek8
+  bitand 0 = not
+] ;
+
+\\ The button events advance-mouse-frame drained at the start of the most recent update tick,
+\\ oldest first. Empty on a tick with nothing pending. Read this from a game's update
+\\ quotation; every tick of a catch-up burst after the first sees an empty array, so a click
+\\ is handled exactly once.
+mouse-events: ( -- array ) [ mouse-frame events>> ] ;
+
+\\ True for a press event, false for a release.
+pressed?: ( event: mouse-event -- bool ) [ kind>> press: = ] ;
+
+\\ How many button events the host has dropped because the ring was full, cumulative since
+\\ load and wrapping at 65536. The platform drains once per update tick, so this only grows
+\\ when more events than the ring holds arrive between two ticks.
+mouse-dropped-events: ( -- n ) [
+  current-mouse get mouse-dropped-offset #peek16
+] ;
+
+\\ Drains every pending slot of the ring into mouse-events and advances the read index to
+\\ meet the write index. Called once per update tick by game/loop's run-frame, right before
+\\ that tick's update call; not meant to be called directly by game code.
+\\
+\\ Zero name: swap ; locals, for the same reason as advance-keyboard-frame: the read index and
+\\ the buffer are curried into the slot decoder instead.
+advance-mouse-frame: ( -- ) [
+  current-mouse get dup (mouse-pending-count)
+  dup 0 = [
+    2drop mouse-frame (no-mouse-events) >>events drop
+  ] [
+    over (mouse-read-index) [ + mouse-ring-capacity % ] curry
+    pick [ swap (mouse-event-at) ] curry compose
+    swap iota >iterator swap #map #collect
+    mouse-frame swap >>events drop
+    dup (mouse-write-index) mouse-read-offset swap #poke8! drop
+  ] if
 ] ;

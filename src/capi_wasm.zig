@@ -128,6 +128,10 @@ const OnezHandle = struct {
     /// reused on every `(wasm-keyboard)` call so repeated calls don't leak one small wrapper
     /// allocation per call into the arena.
     keyboard_ba: ?*value_mod.ByteArray = null,
+
+    /// Borrowed byte-array view over `mouse_buf`, constructed once at `onez_init` and reused
+    /// on every `(wasm-mouse)` call, for the same reason as `keyboard_ba`.
+    mouse_ba: ?*value_mod.ByteArray = null,
 };
 
 // wasm32-freestanding has no OS heap, but it does have `std.heap.wasm_allocator`: a real
@@ -231,6 +235,19 @@ export fn onez_init() ?*anyopaque {
         return null;
     };
     capi_core.defineHostWord(ctx, "(wasm-keyboard)", keyboard_bytes_effect, keyboardBytesCallback, handle, null) catch {
+        onez_deinit(handle);
+        return null;
+    };
+
+    handle.mouse_ba = value_mod.makeBorrowedByteArray(ctx.quotationAllocator(), &mouse_buf) catch {
+        onez_deinit(handle);
+        return null;
+    };
+    const mouse_bytes_effect = helpers.makeBoxedEffect(ctx.quotationAllocator(), "-- byte-array") catch {
+        onez_deinit(handle);
+        return null;
+    };
+    capi_core.defineHostWord(ctx, "(wasm-mouse)", mouse_bytes_effect, mouseBytesCallback, handle, null) catch {
         onez_deinit(handle);
         return null;
     };
@@ -472,6 +489,45 @@ fn keyboardBytesCallback(handle_ptr: ?*anyopaque, _: ?*anyopaque) callconv(.c) c
     const ba = handle.keyboard_ba orelse return 1;
     handle.ctx.stack.push(.{ .byte_array = ba }) catch {
         setLastError(handle, "allocation failure pushing keyboard byte-array", .{});
+        return 1;
+    };
+    return 0;
+}
+
+// =============================================================================
+// Mouse input
+// =============================================================================
+
+// Pointer state and button events share one buffer: a fixed header holding the pointer
+// position, an inside-canvas flag, a held-button bitmap, and the ring's two indices, followed
+// by a ring of fixed-size event slots. JS's pointer listeners write the header and append to
+// the ring; 1z drains the ring once per update tick and advances the read index. As with the
+// keyboard, there is no host call in either direction, and the byte layout is not known here:
+// it is a private contract between lib/game/input.1z and the JS host harness. This file only
+// sizes the buffer.
+const mouse_header_len: usize = 16;
+const mouse_ring_capacity: usize = 32;
+const mouse_event_len: usize = 8;
+const mouse_buf_len: usize = mouse_header_len + mouse_ring_capacity * mouse_event_len;
+var mouse_buf: [mouse_buf_len]u8 = [_]u8{0} ** mouse_buf_len;
+
+export fn onez_wasm_mouse_ptr() [*]u8 {
+    return &mouse_buf;
+}
+
+export fn onez_wasm_mouse_len() usize {
+    return mouse_buf_len;
+}
+
+/// The host callback body for `(wasm-mouse)`.
+///
+/// Pushes the cached borrowed byte-array view over `mouse_buf`, so repeated calls share one
+/// underlying buffer, as `keyboardBytesCallback` does.
+fn mouseBytesCallback(handle_ptr: ?*anyopaque, _: ?*anyopaque) callconv(.c) c_int {
+    const handle = castHandle(handle_ptr) orelse return 1;
+    const ba = handle.mouse_ba orelse return 1;
+    handle.ctx.stack.push(.{ .byte_array = ba }) catch {
+        setLastError(handle, "allocation failure pushing mouse byte-array", .{});
         return 1;
     };
     return 0;
@@ -1101,6 +1157,42 @@ test "(wasm-keyboard) returns the same shared buffer across calls" {
     var out: i64 = 0;
     try std.testing.expectEqual(ONEZ_OK, onez_pop_int(handle_ptr, &out));
     try std.testing.expectEqual(@as(i64, 1), out);
+}
+
+test "mouse pointer and length are exposed" {
+    const ptr = onez_wasm_mouse_ptr();
+    const len = onez_wasm_mouse_len();
+    try std.testing.expectEqual(@as(usize, 272), len);
+    try std.testing.expect(ptr[0..len].len == len);
+}
+
+test "(wasm-mouse) exposes a mutable byte-array view over mouse_buf" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    const ptr = onez_wasm_mouse_ptr();
+    @memset(ptr[0..onez_wasm_mouse_len()], 0);
+
+    // A 16-bit poke at the header's x field, little-endian: 0x34 then 0x12.
+    const src = "(wasm-mouse) 0 0x1234 2 #poke!";
+    try std.testing.expectEqual(ONEZ_EVAL_COMPLETE, onez_wasm_eval(handle_ptr, src, src.len));
+
+    try std.testing.expectEqual(@as(u8, 0x34), ptr[0]);
+    try std.testing.expectEqual(@as(u8, 0x12), ptr[1]);
+}
+
+test "(wasm-mouse) returns the same shared buffer across calls" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    const src = "(wasm-mouse) 5 7 1 #poke! drop (wasm-mouse) 5 1 #peek";
+    try std.testing.expectEqual(ONEZ_EVAL_COMPLETE, onez_wasm_eval(handle_ptr, src, src.len));
+
+    var out: i64 = 0;
+    try std.testing.expectEqual(ONEZ_OK, onez_pop_int(handle_ptr, &out));
+    try std.testing.expectEqual(@as(i64, 7), out);
 }
 
 test "(wasm-load-sample) consumes its three inputs and pushes a handle" {
