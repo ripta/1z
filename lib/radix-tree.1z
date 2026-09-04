@@ -24,13 +24,18 @@
 \ costs a lookup nothing. The path copy also rebuilds each node's child arrays, making an
 \ insert O(k · c) in the per-node fan-out.
 \
+\ A delete path-copies the same way. Clearing an entry can leave a node with nothing to say:
+\ its parent drops it when no children are left, and folds it into its child when one is.
+\ A node already in either shape cannot exist below the root, so one delete drops at most one
+\ node and merges at most one.
+\
 \ A node's children are a first-unit index sequence beside a positionally parallel array
 \ of children, and the index is kept ascending. Those parallel arrays are the invariant
-\ every insert has to preserve. Ascending order is what makes a leftmost descent reach the
-\ lexicographically smallest entry.
+\ every insert and delete has to preserve. Ascending order is what makes a leftmost descent
+\ reach the lexicographically smallest entry.
 \
-\ `insert-node` recurses once per hop, so its depth is the number of compressed nodes on
-\ the path, bounded by the key's unit count.
+\ `insert-node` and `delete-node` recurse once per hop, so their depth is the number of
+\ compressed nodes on the path, bounded by the key's unit count.
 
 \\ One node. `label` is the edge from the parent, in the tree's key type, and the root's is
 \\ empty. `value` holds the entry that ends here, or `option:none`. `index` holds one unit
@@ -82,6 +87,15 @@ private{
 
   seq-insert: ( seq i elem -- seq' ) [ over seq-splice ] ;
   seq-set: ( seq i elem -- seq' ) [ over 1 + seq-splice ] ;
+
+  \ `seq` without the element at `i`. No derivation of `seq-splice` reaches this, since that
+  \ helper always pushes an element between the two halves.
+  seq-remove: ( seq i -- seq' ) [
+    over 0 2 pick-n #slice
+    2 pick-n 2 pick-n 1 + 1 pick-n #len #slice
+    #append
+    nip nip
+  ] ;
 
   \ The sorted slot for `unit` in an ascending index sequence. Units are distinct, so this
   \ is the first position holding a unit above it.
@@ -136,10 +150,49 @@ private{
     over index>> swap with-children
   ] ;
 
+  \ Drop slot i, index entry included. What is left keeps its order, so the index still
+  \ ascends.
+  drop-child: ( node i -- radix-node ) [
+    over index>> over seq-remove
+    2 pick-n children>> 2 pick-n seq-remove
+    [ drop ] 2dip with-children
+  ] ;
+
+  \ Fold a valueless single-child node into that child, joining their labels. The merged
+  \ label opens on the same unit, so the parent's index entry still stands.
+  merge-child: ( node i child -- radix-node ) [
+    dup children>> 0 #nth
+    over label>> over label>> #append
+    with-label
+    [ drop ] dip
+    replace-child
+  ] ;
+
+  \ Put a rebuilt child back, compressing away what a delete emptied. A childless node with
+  \ no value has nothing left to say, and a single-child one with no value is a label its
+  \ parent's edge should absorb.
+  \
+  \ The value has to be read first. A node that just lost its last child may still hold an
+  \ entry of its own.
+  prune-child: ( node i child -- radix-node ) [
+    dup value>> option:some? [
+      replace-child
+    ] [
+      dup children>> #len
+      dup 0 = [ 2drop drop-child ] [ 1 = [ merge-child ] [ replace-child ] if ] if
+    ] if
+  ] ;
+
   \ Both descent arms end the same way: the arm has built the node that replaces slot i,
   \ and the key state the insert walk carried down is spent.
   finish-insert: ( node key offset value i child -- radix-node ) [
     [ 3drop ] 2dip replace-child
+  ] ;
+
+  \ The delete counterpart. A delete that found nothing rebuilds no node at any level, so
+  \ the parent goes back untouched.
+  finish-delete: ( node i child removed? -- radix-node removed? ) [
+    [ prune-child t ] [ 2drop f ] if
   ] ;
 
   \ Add a childless node for the key's untaken units, keeping the index sorted.
@@ -212,6 +265,46 @@ private{
 }
 
 private{
+  \ Path-copying delete. `removed?` reports whether the key was there, which is what keeps
+  \ the tree's count exact.
+  \
+  \ The descent test is `insert-node`'s. `common-units` clamps its count to what is left of
+  \ the key, so a count reaching the whole label says both that the label fits and that it
+  \ matches. Reading it the same way keeps the two write paths from disagreeing about which
+  \ child a key belongs under.
+  delete-node: stack-recursive ( node key offset -- radix-node removed? ) [
+    1 pick-n #len over = [
+      \ The key ends here, so the entry is this node's own value.
+      2drop
+      dup value>> option:some? [ option:none with-value t ] [ f ] if
+    ] [
+      1 pick-n over #nth
+      3 pick-n index>> over #index-of
+      dup not [
+        \ Nothing is indexed under the key's next unit, so the key is not in the tree.
+        drop 3drop f
+      ] [
+        nip
+        \ ( node(3) key(2) offset(1) i(0) )
+        3 pick-n children>> over #nth
+        3 pick-n 3 pick-n 2 pick-n label>> common-units
+        \ ( node(5) key(4) offset(3) i(2) child(1) c(0) )
+        dup 2 pick-n label>> #len = [
+          \ The label is spent, so the key continues below this child.
+          3 pick-n +
+          over 5 pick-n 2 pick-n delete-node
+          [ 2drop 2nip ] 2dip
+          finish-delete
+        ] [
+          \ The key diverges partway along the label, so it was never in the tree.
+          3drop 2drop f
+        ] if
+      ] if
+    ] if
+  ] ;
+}
+
+private{
   \ One descent step, run in the predicate so the body gets the child it found. Leaves
   \ ( child end t ) when the child's whole label matches the key at `offset`, and f when
   \ the key is spent, no child is indexed under its next unit, or the label diverges.
@@ -274,6 +367,22 @@ radix-insert: ( tree: radix-tree key value -- radix-tree ) [
   4 pick-n count>> swap [ 1 + ] when
   4 pick-n key-type>> swap
   [ 3drop ] 3dip
+  make-radix-tree
+] ;
+
+\\ Remove `key`, returning a new tree. A key that is not present yields an equal tree rather
+\\ than raising. O(k · c), like `radix-insert`: the walk copies the nodes on its path, and a
+\\ node the delete leaves valueless with one child is folded into that child. Throws
+\\ `type-mismatch` on a key outside the tree's key type.
+\\
+\\   string <radix-tree> "/api/" 7 radix-insert "/api/" radix-delete count>>
+\\   => 0
+radix-delete: ( tree: radix-tree key -- radix-tree ) [
+  require-key
+  over root>> over 0 delete-node
+  3 pick-n count>> swap [ 1 - ] when
+  3 pick-n key-type>> swap
+  [ 2drop ] 3dip
   make-radix-tree
 ] ;
 

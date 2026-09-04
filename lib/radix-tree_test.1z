@@ -27,8 +27,49 @@ route-fixture: ( -- radix-tree ) [
   "/api/v1/" 2 radix-insert
 ] ;
 
+\ The keys the interleaved run below is left holding, inserted straight into a fresh tree.
+survivors-fixture: ( -- radix-tree ) [
+  string <radix-tree>
+  "/static/" 5 radix-insert
+  "/api/beta/" 6 radix-insert
+] ;
+
 \ The value an option carries, so an assertion reads against a plain value.
 unwrap: ( option -- value ) [ option:some> ] ;
+
+index-ascends?: stack-recursive ( index j -- ? ) [
+  dup 2 pick-n #len < [
+    2dup 1 - #nth 2 pick-n 2 pick-n #nth <
+    [ 1 + index-ascends? ] [ 2drop f ] if
+  ] [ 2drop t ] if
+] ;
+
+\ Every rule a node has to satisfy: a node with no value is the root or a genuine fork, each
+\ of its children carries a label, and its index runs parallel to those children, opening
+\ each of their labels in ascending order. A node reads its children's labels rather than
+\ its own, so the root is exempt from the label rule and every other node is covered.
+\
+\ This is checked directly rather than by comparing the tree against a rebuild, because a
+\ delete that broke the shape the same way an insert does would still match one. The label
+\ rule gates the rest, so a violation reports rather than reading past an empty label.
+node-compressed?: stack-recursive ( node root? -- ? ) [
+  over dup value>> option:some? swap children>> #len 1 > or over or
+  [ drop ] dip
+  over children>> t [ label>> #len 0 > and ] #reduce and
+  [
+    dup children>> over index>> 0 0 #slice [ label>> 0 #nth #push ] #reduce
+    over index>> =
+    over index>> 1 index-ascends? and
+    swap children>> t [ f node-compressed? and ] #reduce
+    and
+  ] [ drop f ] if
+] ;
+
+\ Threads the tree through, so a step of an interleaved run can be checked in place.
+assert-compressed: ( radix-tree -- radix-tree ) [
+  dup root>> t node-compressed?
+  "the tree stays compressed" assert-true
+] ;
 
 \ --- Character boundary ---
 
@@ -85,6 +126,137 @@ test-construct-empty: ( -- ) [
 test-construct-rejects-other-types: ( -- ) [
   [ fixnum <radix-tree> ] invalid-argument:
   "a key type outside string and byte-array is rejected" assert-error-type
+] ;
+
+\ --- Delete ---
+
+test-delete-bytes-merges: ( -- ) [
+  "delete" test-section
+  byte-array <radix-tree>
+  B{ 0x80 0x61 } 1 radix-insert
+  B{ 0x80 0x61 0x62 } 2 radix-insert
+  B{ 0x80 0x61 } radix-delete
+  assert-compressed
+  dup count>> 1 "the byte entry is gone" assert=
+  dup root>> children>> 0 #nth label>> B{ 0x80 0x61 0x62 }
+  "the merged byte label joins both edges" assert=
+  B{ 0x80 0x61 0x62 } radix-lookup? unwrap 2 "the surviving byte key reads back" assert=
+] ;
+
+test-delete-canonical-under-interleaving: ( -- ) [
+  string <radix-tree>
+  "/api/" 1 radix-insert assert-compressed
+  "/api/v1/" 2 radix-insert assert-compressed
+  "/api/v2/" 3 radix-insert assert-compressed
+  "/admin/" 4 radix-insert assert-compressed
+  "/api/v1/" radix-delete assert-compressed
+  "/static/" 5 radix-insert assert-compressed
+  "/api/v1/" 7 radix-insert assert-compressed
+  "/admin/" radix-delete assert-compressed
+  "/api/v2/" radix-delete assert-compressed
+  "/api/v1/" radix-delete assert-compressed
+  "/api/beta/" 6 radix-insert assert-compressed
+  "/api/" radix-delete assert-compressed
+  survivors-fixture
+  "interleaving insert and delete leaves the tree a fresh build produces" assert=
+] ;
+
+test-delete-cascades-drop-then-merge: ( -- ) [
+  \ A delete that fires both steps. The leaf goes, and the fork above it, now valueless with
+  \ a single child, folds into what is left.
+  string <radix-tree>
+  "abc" 1 radix-insert
+  "abd" 2 radix-insert
+  "x" 3 radix-insert
+  "abc" radix-delete
+  assert-compressed
+  dup root>> index>> "ax" "the root's index is untouched by the fold below it" assert=
+  dup root>> children>> 0 #nth
+  dup label>> "abd" "the surviving key becomes one label again" assert=
+  value>> unwrap 2 "carrying its own value" assert=
+  "abd" radix-lookup? unwrap 2 "the surviving key reads back" assert=
+] ;
+
+test-delete-empty-key: ( -- ) [
+  string <radix-tree> "" 7 radix-insert "abc" 1 radix-insert
+  "" radix-delete
+  assert-compressed
+  dup count>> 1 "the root's own entry is one entry to remove" assert=
+  dup "" radix-lookup? option:some? "the empty key is gone" assert-false
+  dup "abc" radix-lookup? unwrap 1 "the root keeps the child below it" assert=
+  "zzz" radix-longest? option:some? "nothing covers a key the root no longer does" assert-false
+] ;
+
+test-delete-keeps-fork: ( -- ) [
+  \ The arm where a valueless node legitimately survives, because it still forks two ways.
+  string <radix-tree>
+  "a" 1 radix-insert
+  "ab" 2 radix-insert
+  "ac" 3 radix-insert
+  "a" radix-delete
+  assert-compressed
+  dup count>> 2 "only the forking key goes" assert=
+  dup root>> children>> 0 #nth
+  dup value>> option:some? "the fork keeps no value of its own" assert-false
+  index>> "bc" "and keeps both children" assert=
+  dup "ab" radix-lookup? unwrap 2 "one arm reads back" assert=
+  dup "ac" radix-lookup? unwrap 3 "the other arm reads back" assert=
+  "axx" radix-longest? option:some? "and the deleted key covers nothing" assert-false
+] ;
+
+test-delete-last-entry: ( -- ) [
+  string <radix-tree> "only" 1 radix-insert "only" radix-delete
+  assert-compressed
+  dup string <radix-tree> "the last entry leaves the tree as it started" assert=
+  "only" 1 radix-insert
+  string <radix-tree> "only" 1 radix-insert
+  "and rebuilding from there gives the tree back" assert=
+  byte-array <radix-tree> B{ 0x61 } 1 radix-insert B{ 0x61 } radix-delete
+  byte-array <radix-tree>
+  "the byte twin empties its index in its own type" assert=
+] ;
+
+test-delete-leaves-prior-version: ( -- ) [
+  string <radix-tree> "a" 1 radix-insert "ab" 2 radix-insert
+  dup "ab" radix-delete
+  swap "ab" radix-lookup? unwrap 2 "the tree deleted from still answers the key" assert=
+  "ab" radix-lookup? option:some? "the returned tree does not" assert-false
+] ;
+
+test-delete-merges-into-parent: ( -- ) [
+  string <radix-tree> "a" 1 radix-insert "ab" 2 radix-insert
+  "a" radix-delete
+  assert-compressed
+  dup count>> 1 "the parent key goes" assert=
+  dup root>> children>> 0 #nth
+  dup label>> "ab" "the two edges become one label" assert=
+  value>> unwrap 2 "carrying the surviving value" assert=
+  "ab" radix-lookup? unwrap 2 "the merged key reads back" assert=
+] ;
+
+test-delete-missing-key: ( -- ) [
+  roman-fixture
+  dup dup "ro" radix-delete = "a key ending partway along a label is not there" assert-true
+  dup dup "romanx" radix-delete = "an extension of an entry is not there" assert-true
+  dup dup "zzz" radix-delete = "a first unit outside the index is not there" assert-true
+  "ro" radix-delete count>> 3 "and none of them moves the count" assert=
+  string <radix-tree> dup "q" radix-delete = "deleting from an empty tree is a no-op" assert-true
+] ;
+
+test-delete-multibyte-index: ( -- ) [
+  \ The index unit spliced out here is two bytes but one character. `#index-of` reports a
+  \ codepoint index and `#slice` takes one, so the splice cuts between characters rather
+  \ than inside one.
+  string <radix-tree>
+  "café" 1 radix-insert
+  "cafè" 2 radix-insert
+  "cafê" 3 radix-insert
+  "cafè" radix-delete
+  assert-compressed
+  dup count>> 2 "only the deleted key goes" assert=
+  dup root>> children>> 0 #nth index>> "éê" "the index keeps both survivors whole" assert=
+  dup "café" radix-lookup? unwrap 1 "one survivor reads back" assert=
+  "cafê" radix-lookup? unwrap 3 "the other reads back" assert=
 ] ;
 
 \ --- Insert and exact lookup ---
@@ -151,8 +323,15 @@ test-longest-picks-deepest: ( -- ) [
 
 \ --- Key type mismatch ---
 
-test-mismatch-insert-throws: ( -- ) [
+test-mismatch-delete-throws: ( -- ) [
   "key type mismatch" test-section
+  [ string <radix-tree> "x" >bytes radix-delete ] type-mismatch:
+  "a byte key into a string tree is rejected" assert-error-type
+  [ byte-array <radix-tree> "x" radix-delete ] type-mismatch:
+  "a string key into a byte tree is rejected" assert-error-type
+] ;
+
+test-mismatch-insert-throws: ( -- ) [
   [ string <radix-tree> "x" >bytes 1 radix-insert ] type-mismatch:
   "a byte key into a string tree is rejected" assert-error-type
   [ byte-array <radix-tree> "x" 1 radix-insert ] type-mismatch:
