@@ -29,13 +29,17 @@
 \ A node already in either shape cannot exist below the root, so one delete drops at most one
 \ node and merges at most one.
 \
+\ Enumeration is lazy. `>iterator` and `radix-under` both hand back a walk over an explicit
+\ pending stack, so a prefix query costs its descent plus whatever the caller actually draws.
+\
 \ A node's children are a first-unit index sequence beside a positionally parallel array
 \ of children, and the index is kept ascending. Those parallel arrays are the invariant
 \ every insert and delete has to preserve. Ascending order is what makes a leftmost descent
 \ reach the lexicographically smallest entry.
 \
 \ `insert-node` and `delete-node` recurse once per hop, so their depth is the number of
-\ compressed nodes on the path, bounded by the key's unit count.
+\ compressed nodes on the path, bounded by the key's unit count. The entry descents and
+\ `radix-iter-step` self-call in tail position, so they cost no depth at all.
 
 \\ One node. `label` is the edge from the parent, in the tree's key type, and the root's is
 \\ empty. `value` holds the entry that ends here, or `option:none`. `index` holds one unit
@@ -45,6 +49,11 @@ radix-node: struct{ label value index children } ;
 \\ A persistent radix tree over `key-type`, which is `string` or `byte-array`. Every key is
 \\ checked against it. `count` is the entry count, maintained by every insert.
 radix-tree: struct{ root: radix-node key-type: type count: fixnum } ;
+
+\\ One stored key and the value under it. This is what the tree's iterators, `#first`, and
+\\ `#last` yield. A key lives in the tree only as the labels along its path, so an entry is
+\\ where it is spelled out whole.
+radix-entry: struct{ key value } ;
 
 private{
   throw-key-type: never-returns ( -- * ) [
@@ -308,7 +317,10 @@ private{
   \ One descent step, run in the predicate so the body gets the child it found. Leaves
   \ ( child end t ) when the child's whole label matches the key at `offset`, and f when
   \ the key is spent, no child is indexed under its next unit, or the label diverges.
-  walk-step?: ( key key-len best node offset -- ..a ? ) [
+  \
+  \ `carried` is whatever the body accumulates down the path. The step never reads it, which is
+  \ what lets the lookup walk and the cover walk below share this one.
+  walk-step?: ( key key-len carried node offset -- ..a ? ) [
     dup 4 pick-n < [
       4 pick-n over #nth
       2 pick-n index>> over #index-of
@@ -336,6 +348,138 @@ private{
   radix-walk: ( tree key -- key key-len best node offset ) [
     swap root>> over #len swap dup value>> swap 0
     [ walk-step? ] [ walk-advance ] while
+  ] ;
+}
+
+private{
+  \\ One node still to visit, paired with the key its path spells out. A key exists in the tree
+  \\ only as the labels above a node, so an enumeration carries it down rather than recovering it.
+  radix-frame: struct{ key node } ;
+
+  \ Push every child of `node`, largest first, so the smallest comes off next. A child's key is
+  \ its parent's with the child's own label appended.
+  push-children: ( stack key node -- stack ) [
+    children>> dup #len
+    [ dup 0 > ]
+    [
+      1 -
+      2dup #nth
+      dup label>> 4 pick-n swap #append
+      swap make-radix-frame
+      4 pick-n swap #push! drop
+    ]
+    while
+    3drop
+  ] ;
+
+  \ Iterator step: state is the pending stack. A node is popped ahead of its children and the
+  \ children come off in index order, which is what makes the walk lexicographic: a node's own
+  \ key is a proper prefix of every key below it, and an ascending index orders whole subtrees.
+  \
+  \ A node with no value of its own is skipped once its children are queued, so passing a fork
+  \ costs a step rather than an element.
+  radix-iter-step: ( state -- option ) [
+    dup #empty? [
+      drop option:none
+    ] [
+      #pop! unmake-radix-frame
+      2 pick-n 2 pick-n 2 pick-n push-children drop
+      dup value>> dup option:some? [
+        option:some> nip make-radix-entry nip >option:some
+      ] [
+        drop 2drop radix-iter-step
+      ] if
+    ] if
+  ] ;
+
+  \ Entries under one node, `key` being what that node's own path spells.
+  subtree-iterator: ( key node -- iterator ) [
+    make-radix-frame
+    [ ] make-vector swap #push!
+    [ radix-iter-step ] curry
+    >iterator
+  ] ;
+}
+
+private{
+  \ Step onto the matched child, extending the key by the label just crossed.
+  cover-advance: ( prefix prefix-len key node offset child end -- prefix prefix-len key node offset ) [
+    1 pick-n label>> 5 pick-n swap #append
+    -rot> [ 3drop ] 3dip
+  ] ;
+
+  \ Descend while whole labels fit inside the prefix. What is left is the deepest node whose path
+  \ the prefix covers, and whatever the prefix still has to spend below it.
+  \
+  \ The descent condition is the lookup walk's, so `walk-step?` is shared. Only the body differs:
+  \ a lookup remembers the deepest value it passed, and this remembers the key it has spelled.
+  cover-walk: ( tree prefix -- prefix prefix-len key node offset ) [
+    swap root>> over #len swap
+    dup label>> swap 0
+    [ walk-step? ] [ cover-advance ] while
+  ] ;
+
+  \ The node whose subtree is exactly the keys extending `prefix`, paired with the key its own
+  \ path spells. `option:none` when no key in the tree starts with `prefix`.
+  cover-frame?: ( tree prefix -- option ) [
+    cover-walk
+    dup 4 pick-n = [
+      \ The prefix is spent, so the node the walk stopped on is the cover.
+      drop make-radix-frame >option:some 2nip
+    ] [
+      4 pick-n over #nth
+      2 pick-n index>> over #index-of
+      dup not [
+        \ Nothing is indexed under what the prefix has left.
+        3drop 2drop 2drop option:none
+      ] [
+        3 pick-n children>> swap #nth
+        nip
+        5 pick-n 2 pick-n 2 pick-n label>> common-units
+        dup 3 pick-n + 6 pick-n = [
+          \ The prefix runs out partway along this child's label. Every key below the child
+          \ therefore opens with the whole prefix, so the child is the cover.
+          drop
+          dup label>> 4 pick-n swap #append
+          swap make-radix-frame >option:some
+          [ 3drop 2drop ] dip
+        ] [
+          \ The two diverge inside the label.
+          3drop 2drop 2drop option:none
+        ] if
+      ] if
+    ] if
+  ] ;
+}
+
+private{
+  throw-empty: never-returns ( -- * ) [
+    f "operation on an empty radix tree" EEmptySequence make-error throw
+  ] ;
+
+  \ The lexicographically smallest entry below `node`. A node's own value beats everything under
+  \ it, since every key down there extends this one.
+  first-entry: ( key node -- radix-entry ) [
+    dup value>> dup option:some? [
+      option:some> nip make-radix-entry
+    ] [
+      drop
+      children>> 0 #nth
+      dup label>> swap [ #append ] dip
+      first-entry
+    ] if
+  ] ;
+
+  \ The lexicographically largest entry below `node`. The descent takes the last child until a
+  \ node has none, and the compression invariant leaves a childless node holding a value.
+  last-entry: ( key node -- radix-entry ) [
+    dup children>> dup #len 0 = [
+      drop value>> option:some> make-radix-entry
+    ] [
+      dup #len 1 - #nth nip
+      dup label>> swap [ #append ] dip
+      last-entry
+    ] if
   ] ;
 }
 
@@ -410,3 +554,47 @@ radix-longest?: ( tree: radix-tree key -- option ) [
   require-key radix-walk
   2drop 2nip
 ] ;
+
+\\ A lazy iterator over every entry whose key starts with `prefix`, in key order. A key equal to
+\\ `prefix` is one of them. O(k) to reach the covering node, and nothing is materialized: taking
+\\ the first entry costs the walk, not the subtree. Throws `type-mismatch` on a prefix outside
+\\ the tree's key type.
+\\
+\\   string <radix-tree> "/api/" 1 radix-insert "/api/v1/" 2 radix-insert
+\\   "/api/" radix-under #collect #len
+\\   => 2
+radix-under: ( tree: radix-tree prefix -- iterator ) [
+  require-key cover-frame?
+  dup option:some?
+  [ option:some> unmake-radix-frame subtree-iterator ]
+  [ drop { } >iterator ]
+  if
+] ;
+
+\ Iterator protocol integration: a lazy pre-order walk yielding entries in key order, O(depth)
+\ space. The whole tree is the subtree under the root, whose label is already the empty key in
+\ the tree's own type.
+>iterator: method{ radix-tree } [ root>> dup label>> swap subtree-iterator ] ;
+
+\ Cost-rule protocol conformance: #len and #empty? read the entry count every insert and delete
+\ already maintains, and #first and #last are single O(k) descents down the leftmost and
+\ rightmost edges.
+\
+\ #nth is left unimplemented. Selecting by rank would need a subtree count on every node,
+\ maintained on every path copy, to answer a question that is unusual against a trie. Iteration
+\ through >iterator stays the visible path for positional access.
+#len: method{ radix-tree } [ count>> ] ;
+#empty?: method{ radix-tree } [ count>> 0 = ] ;
+
+\ Both peeks drop the tree before throwing on empty. The prelude's #first? and #last? recover
+\ around the bare form, and recover keeps whatever the failed quotation left behind, so a method
+\ that throws with its operand still up leaks it into the caller's stack.
+#first: method{ radix-tree } [
+  dup count>> 0 = [ drop throw-empty ] [ root>> dup label>> swap first-entry ] if
+] ;
+
+#last: method{ radix-tree } [
+  dup count>> 0 = [ drop throw-empty ] [ root>> dup label>> swap last-entry ] if
+] ;
+
+>array: method{ radix-tree } [ #collect ] ;

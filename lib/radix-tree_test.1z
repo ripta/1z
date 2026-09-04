@@ -37,6 +37,11 @@ survivors-fixture: ( -- radix-tree ) [
 \ The value an option carries, so an assertion reads against a plain value.
 unwrap: ( option -- value ) [ option:some> ] ;
 
+\ One projection of a run of entries, so an assertion reads against a plain array.
+entry-keys: ( iterator -- array ) [ [ key>> ] #map #collect ] ;
+
+entry-values: ( iterator -- array ) [ [ value>> ] #map #collect ] ;
+
 index-ascends?: stack-recursive ( index j -- ? ) [
   dup 2 pick-n #len < [
     2dup 1 - #nth 2 pick-n 2 pick-n #nth <
@@ -299,6 +304,68 @@ test-insert-replaces-value: ( -- ) [
   "k" radix-lookup? unwrap 2 "the later value wins" assert=
 ] ;
 
+\ --- Iteration ---
+
+test-iter-after-a-merge: ( -- ) [
+  "iteration" test-section
+  \ A delete folds two edges into one label. A key is spelled out of the labels along its path,
+  \ so the merged one has to read back whole.
+  string <radix-tree>
+  "a" 1 radix-insert
+  "ab" 2 radix-insert
+  "a" radix-delete
+  >iterator entry-keys { "ab" } "a key spanning a merged label reads back whole" assert=
+] ;
+
+test-iter-byte-keys: ( -- ) [
+  byte-array <radix-tree>
+  B{ 0x80 0x61 } 1 radix-insert
+  B{ 0x01 } 2 radix-insert
+  >iterator entry-keys
+  { B{ 0x01 } B{ 0x80 0x61 } } "byte keys come in ascending byte order" assert=
+] ;
+
+test-iter-empty-tree: ( -- ) [
+  string <radix-tree> >iterator #collect { } "an empty tree yields no entries" assert=
+] ;
+
+test-iter-is-fresh-per-call: ( -- ) [
+  roman-fixture
+  dup >iterator 1 #take entry-keys { "rom" } "a partial take reads the smallest key" assert=
+  dup >iterator entry-keys { "rom" "roman" "romulus" } "a later iterator is fresh" assert=
+  count>> 3 "iteration leaves the tree unchanged" assert=
+] ;
+
+test-iter-orders-keys: ( -- ) [
+  route-fixture
+  dup >iterator entry-keys
+  { "/" "/api/" "/api/v1/" } "entries come in key order, a prefix ahead of what extends it" assert=
+  >iterator entry-values { 0 1 2 } "each key carries its own value" assert=
+] ;
+
+test-iter-passes-forks: ( -- ) [
+  \ "ab" forks two ways and holds no value. A node with no entry of its own costs a step
+  \ rather than an element.
+  string <radix-tree>
+  "abc" 1 radix-insert
+  "abd" 2 radix-insert
+  "" 3 radix-insert
+  >iterator entry-keys
+  { "" "abc" "abd" } "the empty key leads and the fork yields nothing of its own" assert=
+] ;
+
+test-iter-wide-fork: ( -- ) [
+  \ A fork wider than the two-way ones above. Children go onto the pending stack largest first,
+  \ so the count of them is what the push loop turns on.
+  string <radix-tree>
+  "c" 3 radix-insert
+  "a" 1 radix-insert
+  "d" 4 radix-insert
+  "b" 2 radix-insert
+  dup >iterator entry-keys { "a" "b" "c" "d" } "a four-way fork yields every branch in order" assert=
+  >iterator entry-values { 1 2 3 4 } "each branch carries its own value" assert=
+] ;
+
 \ --- Longest prefix ---
 
 test-longest-empty-key-covers-all: ( -- ) [
@@ -345,6 +412,54 @@ test-mismatch-lookup-throws: ( -- ) [
   "a longest-prefix lookup checks the key type" assert-error-type
 ] ;
 
+\ --- Protocol methods ---
+
+test-protocol-array-method: ( -- ) [
+  "protocol methods" test-section
+  string <radix-tree> >array { } ">array of an empty tree is the empty array" assert=
+  route-fixture >array [ key>> ] #map #collect
+  { "/" "/api/" "/api/v1/" } ">array materializes every entry in key order" assert=
+] ;
+
+test-protocol-empty: ( -- ) [
+  string <radix-tree> #empty? "a fresh tree is empty" assert-true
+  string <radix-tree> "" 1 radix-insert #empty?
+  "an entry under the empty key still makes a tree non-empty" assert-false
+  route-fixture #empty? "and so does any other entry" assert-false
+] ;
+
+test-protocol-first-and-last: ( -- ) [
+  roman-fixture
+  dup #first dup key>> "rom" "#first is the smallest key" assert=
+  value>> 2 "carrying the value stored under it" assert=
+  #last dup key>> "romulus" "#last is the largest key" assert=
+  value>> 3 "carrying its own value" assert=
+  [ string <radix-tree> #first ] empty-sequence: "#first on an empty tree throws" assert-error-type
+  [ string <radix-tree> #last ] empty-sequence: "#last on an empty tree throws" assert-error-type
+] ;
+
+test-protocol-first-and-last-twins: ( -- ) [
+  \ The option twins recover around the throwing form, and recover keeps whatever the failed
+  \ quotation left behind. A peek that threw with the tree still up would leak it here.
+  string <radix-tree> #first? option:none? "#first? on an empty tree is none" assert-true
+  string <radix-tree> #last? option:none? "#last? on an empty tree is none" assert-true
+  route-fixture
+  dup #first? unwrap key>> "/" "#first? wraps the smallest entry" assert=
+  #last? unwrap key>> "/api/v1/" "#last? wraps the largest" assert=
+] ;
+
+test-protocol-len: ( -- ) [
+  string <radix-tree> #len 0 "#len of a fresh tree is 0" assert=
+  route-fixture #len 3 "#len counts every entry" assert=
+  route-fixture "/api/" radix-delete #len 2 "#len follows a delete" assert=
+  route-fixture "/api/" 9 radix-insert #len 3 "replacing a key does not move it" assert=
+  route-fixture >iterator #count 3 "and a drained #count agrees with it" assert=
+] ;
+
+test-protocol-nth-is-not-registered: ( -- ) [
+  [ route-fixture 0 #nth ] "#nth on a radix tree throws" assert-error
+] ;
+
 \ --- Edge splitting ---
 
 test-split-forks-into-two-children: ( -- ) [
@@ -375,4 +490,70 @@ test-split-preserves-deeper-entries: ( -- ) [
   dup "romulus" radix-lookup? unwrap 3 "the key added below the split reads back" assert=
   dup "ro" radix-lookup? option:some? "the shared units alone are not an entry" assert-false
   "romanx" radix-longest? unwrap 1 "a deeper key falls back to the entry above it" assert=
+] ;
+
+\ --- Prefix enumeration ---
+
+test-under-byte-prefix: ( -- ) [
+  "prefix enumeration" test-section
+  byte-array <radix-tree>
+  B{ 0x80 0x61 } 1 radix-insert
+  B{ 0x80 0x62 } 2 radix-insert
+  B{ 0x01 } 3 radix-insert
+  B{ 0x80 } radix-under entry-values { 1 2 } "a byte prefix takes its own subtree" assert=
+] ;
+
+test-under-covers-a-valueless-fork: ( -- ) [
+  \ "ab" forks two ways and holds no value, so the cover contributes no entry of its own.
+  string <radix-tree>
+  "abc" 1 radix-insert
+  "abd" 2 radix-insert
+  "b" 3 radix-insert
+  "ab" radix-under entry-keys { "abc" "abd" } "a fork covers its own branch and no more" assert=
+] ;
+
+test-under-empty-prefix-takes-all: ( -- ) [
+  route-fixture "" radix-under entry-keys
+  { "/" "/api/" "/api/v1/" } "the empty prefix covers the whole tree" assert=
+] ;
+
+test-under-includes-an-exact-key: ( -- ) [
+  route-fixture "/api/" radix-under entry-keys
+  { "/api/" "/api/v1/" } "a prefix that is itself an entry is one of its own results" assert=
+] ;
+
+test-under-is-lazy: ( -- ) [
+  route-fixture
+  dup "/" radix-under type-of iterator "the result is an iterator, not a materialized array" assert=
+  dup "/" radix-under 1 #take entry-keys { "/" } "a partial take reads only what it asked for" assert=
+  "/" radix-under entry-keys { "/" "/api/" "/api/v1/" } "a later call is fresh" assert=
+] ;
+
+test-under-mismatched-key-type-throws: ( -- ) [
+  [ string <radix-tree> "x" >bytes radix-under ] type-mismatch:
+  "prefix enumeration checks the key type" assert-error-type
+] ;
+
+test-under-splits-mid-label: ( -- ) [
+  \ "/api" ends partway along the "/api/" edge, so the cover is the child below the break and
+  \ every key under it opens with the whole prefix.
+  route-fixture "/api" radix-under entry-keys
+  { "/api/" "/api/v1/" } "a prefix ending inside a label covers that whole edge" assert=
+] ;
+
+test-under-stops-at-a-character: ( -- ) [
+  string <radix-tree>
+  "café" 1 radix-insert
+  "cafét" 2 radix-insert
+  "cafè" 3 radix-insert
+  "café" radix-under entry-keys
+  { "café" "cafét" } "a prefix ending on a multibyte character takes only its own branch" assert=
+] ;
+
+test-under-without-a-match: ( -- ) [
+  route-fixture
+  dup "/other" radix-under #collect { } "a diverging prefix covers nothing" assert=
+  "/api/v2/" radix-under #collect { } "a prefix diverging below a fork covers nothing" assert=
+  string <radix-tree> dup "x" radix-under #collect { } "an empty tree covers nothing" assert=
+  "" radix-under #collect { } "not even under the empty prefix" assert=
 ] ;
