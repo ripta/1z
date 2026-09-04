@@ -1,49 +1,59 @@
 === basic prefix matching ===
 Stack: [ ]
 Stack: [ { { "/foo/bar" "bar-handler" } { "/foo" "foo-handler" } { "/" "default" } } ]
-Stack: [ <prefix-table { { "/foo/bar" "bar-handler" } { "/foo" "foo-handler" } { "/" "default" } }> ]
+Stack: [ <prefix-table radix-tree{ root: radix-node{ label: "" value: <option:none none:> index: "/" children: { radix-node{ label: "/" value: <option:some option-payload{ value: "default" }> index: "f" children: { radix-node{ label: "foo" value: <option:some option-payload{ value: "foo-handler" }> index: "/" children: { radix-node{ label: "/bar" value: <option:some option-payload{ value: "bar-handler" }> index: "" children: { } } } } } } } } key-type: <type:string> count: 3 }> ]
 PASS: longest prefix /foo/bar matches
-Stack: [ <prefix-table { { "/foo/bar" "bar-handler" } { "/foo" "foo-handler" } { "/" "default" } }> ]
+Stack: [ <prefix-table radix-tree{ root: radix-node{ label: "" value: <option:none none:> index: "/" children: { radix-node{ label: "/" value: <option:some option-payload{ value: "default" }> index: "f" children: { radix-node{ label: "foo" value: <option:some option-payload{ value: "foo-handler" }> index: "/" children: { radix-node{ label: "/bar" value: <option:some option-payload{ value: "bar-handler" }> index: "" children: { } } } } } } } } key-type: <type:string> count: 3 }> ]
 PASS: longest prefix /foo matches
-Stack: [ <prefix-table { { "/foo/bar" "bar-handler" } { "/foo" "foo-handler" } { "/" "default" } }> ]
+Stack: [ <prefix-table radix-tree{ root: radix-node{ label: "" value: <option:none none:> index: "/" children: { radix-node{ label: "/" value: <option:some option-payload{ value: "default" }> index: "f" children: { radix-node{ label: "foo" value: <option:some option-payload{ value: "foo-handler" }> index: "/" children: { radix-node{ label: "/bar" value: <option:some option-payload{ value: "bar-handler" }> index: "" children: { } } } } } } } } key-type: <type:string> count: 3 }> ]
 PASS: fallback to /
-Stack: [ <prefix-table { { "/foo/bar" "bar-handler" } { "/foo" "foo-handler" } { "/" "default" } }> ]
+Stack: [ <prefix-table radix-tree{ root: radix-node{ label: "" value: <option:none none:> index: "/" children: { radix-node{ label: "/" value: <option:some option-payload{ value: "default" }> index: "f" children: { radix-node{ label: "foo" value: <option:some option-payload{ value: "foo-handler" }> index: "/" children: { radix-node{ label: "/bar" value: <option:some option-payload{ value: "bar-handler" }> index: "" children: { } } } } } } } } key-type: <type:string> count: 3 }> ]
 PASS: exact root match
-Stack: [ <prefix-table { { "/foo/bar" "bar-handler" } { "/foo" "foo-handler" } { "/" "default" } }> ]
+Stack: [ <prefix-table radix-tree{ root: radix-node{ label: "" value: <option:none none:> index: "/" children: { radix-node{ label: "/" value: <option:some option-payload{ value: "default" }> index: "f" children: { radix-node{ label: "foo" value: <option:some option-payload{ value: "foo-handler" }> index: "/" children: { radix-node{ label: "/bar" value: <option:some option-payload{ value: "bar-handler" }> index: "" children: { } } } } } } } } key-type: <type:string> count: 3 }> ]
 PASS: exact match /foo/bar
 Stack: [ ]
 === prefix-match? returns option ===
 Stack: [ ]
-Stack: [ <prefix-table { { "/api" "api-handler" } }> ]
+Stack: [ <prefix-table radix-tree{ root: radix-node{ label: "" value: <option:none none:> index: "/" children: { radix-node{ label: "/api" value: <option:some option-payload{ value: "api-handler" }> index: "" children: { } } } } key-type: <type:string> count: 1 }> ]
 PASS: match returns some
-Stack: [ <prefix-table { { "/api" "api-handler" } }> ]
+Stack: [ <prefix-table radix-tree{ root: radix-node{ label: "" value: <option:none none:> index: "/" children: { radix-node{ label: "/api" value: <option:some option-payload{ value: "api-handler" }> index: "" children: { } } } } key-type: <type:string> count: 1 }> ]
 PASS: no match returns none
 Stack: [ ]
 === no match throws ===
 Stack: [ ]
-Stack: [ <prefix-table { { "/api" "api-handler" } }> ]
+Stack: [ <prefix-table radix-tree{ root: radix-node{ label: "" value: <option:none none:> index: "/" children: { radix-node{ label: "/api" value: <option:some option-payload{ value: "api-handler" }> index: "" children: { } } } } key-type: <type:string> count: 1 }> ]
 PASS: no match throws error
 Stack: [ ]
 === insertion order does not matter ===
 Stack: [ ]
 Stack: [ { { "/a" "short" } { "/a/b/c" "long" } { "/a/b" "medium" } } ]
-Stack: [ <prefix-table { { "/a/b/c" "long" } { "/a/b" "medium" } { "/a" "short" } }> ]
+Stack: [ <prefix-table radix-tree{ root: radix-node{ label: "" value: <option:none none:> index: "/" children: { radix-node{ label: "/a" value: <option:some option-payload{ value: "short" }> index: "/" children: { radix-node{ label: "/b" value: <option:some option-payload{ value: "medium" }> index: "/" children: { radix-node{ label: "/c" value: <option:some option-payload{ value: "long" }> index: "" children: { } } } } } } } } key-type: <type:string> count: 3 }> ]
 PASS: longest match regardless of insertion order
-Stack: [ <prefix-table { { "/a/b/c" "long" } { "/a/b" "medium" } { "/a" "short" } }> ]
+Stack: [ <prefix-table radix-tree{ root: radix-node{ label: "" value: <option:none none:> index: "/" children: { radix-node{ label: "/a" value: <option:some option-payload{ value: "short" }> index: "/" children: { radix-node{ label: "/b" value: <option:some option-payload{ value: "medium" }> index: "/" children: { radix-node{ label: "/c" value: <option:some option-payload{ value: "long" }> index: "" children: { } } } } } } } } key-type: <type:string> count: 3 }> ]
 PASS: medium match regardless of insertion order
-Stack: [ <prefix-table { { "/a/b/c" "long" } { "/a/b" "medium" } { "/a" "short" } }> ]
+Stack: [ <prefix-table radix-tree{ root: radix-node{ label: "" value: <option:none none:> index: "/" children: { radix-node{ label: "/a" value: <option:some option-payload{ value: "short" }> index: "/" children: { radix-node{ label: "/b" value: <option:some option-payload{ value: "medium" }> index: "/" children: { radix-node{ label: "/c" value: <option:some option-payload{ value: "long" }> index: "" children: { } } } } } } } } key-type: <type:string> count: 3 }> ]
 PASS: short match regardless of insertion order
 Stack: [ ]
 === empty table ===
 Stack: [ ]
-Stack: [ <prefix-table { }> ]
+Stack: [ <prefix-table radix-tree{ root: radix-node{ label: "" value: <option:none none:> index: "" children: { } } key-type: <type:string> count: 0 }> ]
 PASS: empty table throws
 Stack: [ ]
 === iterator input to constructor ===
 Stack: [ ]
 Stack: [ { { "/x" "x-val" } { "/x/y" "xy-val" } } ]
-Stack: [ <prefix-table { { "/x/y" "xy-val" } { "/x" "x-val" } }> ]
+Stack: [ <prefix-table radix-tree{ root: radix-node{ label: "" value: <option:none none:> index: "/" children: { radix-node{ label: "/x" value: <option:some option-payload{ value: "x-val" }> index: "/" children: { radix-node{ label: "/y" value: <option:some option-payload{ value: "xy-val" }> index: "" children: { } } } } } } key-type: <type:string> count: 2 }> ]
 PASS: works with iterator input
+Stack: [ ]
+=== character granularity ===
+Stack: [ ]
+Stack: [ <prefix-table radix-tree{ root: radix-node{ label: "" value: <option:none none:> index: "/" children: { radix-node{ label: "/foo" value: <option:some option-payload{ value: "foo-handler" }> index: "" children: { } } } } key-type: <type:string> count: 1 }> ]
+PASS: a prefix matches at character level, not segment level
+Stack: [ ]
+=== duplicate prefix ===
+Stack: [ ]
+Stack: [ <prefix-table radix-tree{ root: radix-node{ label: "" value: <option:none none:> index: "/" children: { radix-node{ label: "/a" value: <option:some option-payload{ value: "second" }> index: "" children: { } } } } key-type: <type:string> count: 1 }> ]
+PASS: the last registration of a prefix wins
 Stack: [ ]
 All prefix-match tests complete!
 Stack: [ ]

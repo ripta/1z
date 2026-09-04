@@ -6,39 +6,39 @@ Stack: [ ]
 Stack: [ ]
 Stack: [ router{ routes: { } } ]
 Stack: [ router{ routes: { { "/health" [ drop "ok" "text/plain" ok ] } } } ]
-Stack: [ [ [ H{ /health: [ drop "ok" "text/plain" ok ] } <prefix-table { }> <rot- find-handler ] route-dispatch ] ]
+Stack: [ [ [ H{ /health: [ drop "ok" "text/plain" ok ] } <prefix-table radix-tree{ root: radix-node{ label: "" value: <option:none none:> index: "" children: { } } key-type: <type:string> count: 0 }> <rot- find-handler ] route-dispatch ] ]
 PASS: exact hit
 Stack: [ ]
 === exact match miss ===
 Stack: [ ]
 Stack: [ router{ routes: { } } ]
 Stack: [ router{ routes: { { "/health" [ drop "ok" "text/plain" ok ] } } } ]
-Stack: [ [ [ H{ /health: [ drop "ok" "text/plain" ok ] } <prefix-table { }> <rot- find-handler ] route-dispatch ] ]
+Stack: [ [ [ H{ /health: [ drop "ok" "text/plain" ok ] } <prefix-table radix-tree{ root: radix-node{ label: "" value: <option:none none:> index: "" children: { } } key-type: <type:string> count: 0 }> <rot- find-handler ] route-dispatch ] ]
 PASS: exact miss
 Stack: [ ]
 === prefix match hit ===
 Stack: [ ]
 Stack: [ router{ routes: { } } ]
 Stack: [ router{ routes: { { "/api/" [ drop "api" "text/plain" ok ] } } } ]
-Stack: [ [ [ H{ } <prefix-table { { "/api/" [ drop "api" "text/plain" ok ] } }> <rot- find-handler ] route-dispatch ] ]
+Stack: [ [ [ H{ } <prefix-table radix-tree{ root: radix-node{ label: "" value: <option:none none:> index: "/" children: { radix-node{ label: "/api/" value: <option:some option-payload{ value: [ drop "api" "text/plain" ok ] }> index: "" children: { } } } } key-type: <type:string> count: 1 }> <rot- find-handler ] route-dispatch ] ]
 PASS: prefix sub-path
-Stack: [ [ [ H{ } <prefix-table { { "/api/" [ drop "api" "text/plain" ok ] } }> <rot- find-handler ] route-dispatch ] ]
+Stack: [ [ [ H{ } <prefix-table radix-tree{ root: radix-node{ label: "" value: <option:none none:> index: "/" children: { radix-node{ label: "/api/" value: <option:some option-payload{ value: [ drop "api" "text/plain" ok ] }> index: "" children: { } } } } key-type: <type:string> count: 1 }> <rot- find-handler ] route-dispatch ] ]
 PASS: prefix exact
 Stack: [ ]
 === prefix match miss ===
 Stack: [ ]
 Stack: [ router{ routes: { } } ]
 Stack: [ router{ routes: { { "/api/" [ drop "api" "text/plain" ok ] } } } ]
-Stack: [ [ [ H{ } <prefix-table { { "/api/" [ drop "api" "text/plain" ok ] } }> <rot- find-handler ] route-dispatch ] ]
+Stack: [ [ [ H{ } <prefix-table radix-tree{ root: radix-node{ label: "" value: <option:none none:> index: "/" children: { radix-node{ label: "/api/" value: <option:some option-payload{ value: [ drop "api" "text/plain" ok ] }> index: "" children: { } } } } key-type: <type:string> count: 1 }> <rot- find-handler ] route-dispatch ] ]
 PASS: prefix miss
 Stack: [ ]
 === catch-all with / ===
 Stack: [ ]
 Stack: [ router{ routes: { } } ]
 Stack: [ router{ routes: { { "/" [ drop "root" "text/plain" ok ] } } } ]
-Stack: [ [ [ H{ } <prefix-table { { "/" [ drop "root" "text/plain" ok ] } }> <rot- find-handler ] route-dispatch ] ]
+Stack: [ [ [ H{ } <prefix-table radix-tree{ root: radix-node{ label: "" value: <option:none none:> index: "/" children: { radix-node{ label: "/" value: <option:some option-payload{ value: [ drop "root" "text/plain" ok ] }> index: "" children: { } } } } key-type: <type:string> count: 1 }> <rot- find-handler ] route-dispatch ] ]
 PASS: catch-all
-Stack: [ [ [ H{ } <prefix-table { { "/" [ drop "root" "text/plain" ok ] } }> <rot- find-handler ] route-dispatch ] ]
+Stack: [ [ [ H{ } <prefix-table radix-tree{ root: radix-node{ label: "" value: <option:none none:> index: "/" children: { radix-node{ label: "/" value: <option:some option-payload{ value: [ drop "root" "text/plain" ok ] }> index: "" children: { } } } } key-type: <type:string> count: 1 }> <rot- find-handler ] route-dispatch ] ]
 PASS: root
 Stack: [ ]
 === longest prefix wins ===
@@ -46,9 +46,9 @@ Stack: [ ]
 Stack: [ router{ routes: { } } ]
 Stack: [ router{ routes: { { "/" [ drop 200 "OK" "text/plain" "root" <response> ] } } } ]
 Stack: [ router{ routes: { { "/" [ drop 200 "OK" "text/plain" "root" <response> ] } { "/api/" [ drop 201 "Created" "text/plain" "api" <response> ] } } } ]
-Stack: [ [ [ H{ } <prefix-table { { "/api/" [ drop 201 "Created" "text/plain" "api" <response> ] } { "/" [ drop 200 "OK" "text/plain" "root" <response> ] } }> <rot- find-handler ] route-dispatch ] ]
+Stack: [ [ [ H{ } <prefix-table radix-tree{ root: radix-node{ label: "" value: <option:none none:> index: "/" children: { radix-node{ label: "/" value: <option:some option-payload{ value: [ drop 200 "OK" "text/plain" "root" <response> ] }> index: "a" children: { radix-node{ label: "api/" value: <option:some option-payload{ value: [ drop 201 "Created" "text/plain" "api" <response> ] }> index: "" children: { } } } } } } key-type: <type:string> count: 2 }> <rot- find-handler ] route-dispatch ] ]
 PASS: api over root
-Stack: [ [ [ H{ } <prefix-table { { "/api/" [ drop 201 "Created" "text/plain" "api" <response> ] } { "/" [ drop 200 "OK" "text/plain" "root" <response> ] } }> <rot- find-handler ] route-dispatch ] ]
+Stack: [ [ [ H{ } <prefix-table radix-tree{ root: radix-node{ label: "" value: <option:none none:> index: "/" children: { radix-node{ label: "/" value: <option:some option-payload{ value: [ drop 200 "OK" "text/plain" "root" <response> ] }> index: "a" children: { radix-node{ label: "api/" value: <option:some option-payload{ value: [ drop 201 "Created" "text/plain" "api" <response> ] }> index: "" children: { } } } } } } key-type: <type:string> count: 2 }> <rot- find-handler ] route-dispatch ] ]
 PASS: root fallback
 Stack: [ ]
 === exact over prefix ===
@@ -56,16 +56,16 @@ Stack: [ ]
 Stack: [ router{ routes: { } } ]
 Stack: [ router{ routes: { { "/api/" [ drop 200 "OK" "text/plain" "api-prefix" <response> ] } } } ]
 Stack: [ router{ routes: { { "/api/" [ drop 200 "OK" "text/plain" "api-prefix" <response> ] } { "/api/special" [ drop 201 "Created" "text/plain" "api-special" <response> ] } } } ]
-Stack: [ [ [ H{ /api/special: [ drop 201 "Created" "text/plain" "api-special" <response> ] } <prefix-table { { "/api/" [ drop 200 "OK" "text/plain" "api-prefix" <response> ] } }> <rot- find-handler ] route-dispatch ] ]
+Stack: [ [ [ H{ /api/special: [ drop 201 "Created" "text/plain" "api-special" <response> ] } <prefix-table radix-tree{ root: radix-node{ label: "" value: <option:none none:> index: "/" children: { radix-node{ label: "/api/" value: <option:some option-payload{ value: [ drop 200 "OK" "text/plain" "api-prefix" <response> ] }> index: "" children: { } } } } key-type: <type:string> count: 1 }> <rot- find-handler ] route-dispatch ] ]
 PASS: exact wins
-Stack: [ [ [ H{ /api/special: [ drop 201 "Created" "text/plain" "api-special" <response> ] } <prefix-table { { "/api/" [ drop 200 "OK" "text/plain" "api-prefix" <response> ] } }> <rot- find-handler ] route-dispatch ] ]
+Stack: [ [ [ H{ /api/special: [ drop 201 "Created" "text/plain" "api-special" <response> ] } <prefix-table radix-tree{ root: radix-node{ label: "" value: <option:none none:> index: "/" children: { radix-node{ label: "/api/" value: <option:some option-payload{ value: [ drop 200 "OK" "text/plain" "api-prefix" <response> ] }> index: "" children: { } } } } key-type: <type:string> count: 1 }> <rot- find-handler ] route-dispatch ] ]
 PASS: prefix for non-exact
-Stack: [ [ [ H{ /api/special: [ drop 201 "Created" "text/plain" "api-special" <response> ] } <prefix-table { { "/api/" [ drop 200 "OK" "text/plain" "api-prefix" <response> ] } }> <rot- find-handler ] route-dispatch ] ]
+Stack: [ [ [ H{ /api/special: [ drop 201 "Created" "text/plain" "api-special" <response> ] } <prefix-table radix-tree{ root: radix-node{ label: "" value: <option:none none:> index: "/" children: { radix-node{ label: "/api/" value: <option:some option-payload{ value: [ drop 200 "OK" "text/plain" "api-prefix" <response> ] }> index: "" children: { } } } } key-type: <type:string> count: 1 }> <rot- find-handler ] route-dispatch ] ]
 PASS: prefix for sub-path
 Stack: [ ]
 === empty router ===
 Stack: [ ]
-Stack: [ [ [ H{ } <prefix-table { }> <rot- find-handler ] route-dispatch ] ]
+Stack: [ [ [ H{ } <prefix-table radix-tree{ root: radix-node{ label: "" value: <option:none none:> index: "" children: { } } key-type: <type:string> count: 0 }> <rot- find-handler ] route-dispatch ] ]
 PASS: empty router
 Stack: [ ]
 === router over TCP: exact, prefix, and 404 ===

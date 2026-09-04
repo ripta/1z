@@ -43,4 +43,12 @@ dup "/a/b/x" prefix-match "medium" "medium match regardless of insertion order" 
 >iterator <prefix-table>
 "/x/y/z" prefix-match "xy-val" "works with iterator input" assert=
 
+"character granularity" test-section
+{ { "/foo" "foo-handler" } } <prefix-table>
+"/foobar" prefix-match "foo-handler" "a prefix matches at character level, not segment level" assert=
+
+"duplicate prefix" test-section
+{ { "/a" "first" } { "/a" "second" } } <prefix-table>
+"/a/x" prefix-match "second" "the last registration of a prefix wins" assert=
+
 "All prefix-match tests complete!" print-line

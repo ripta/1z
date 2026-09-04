@@ -1,27 +1,26 @@
 \ lib/prefix-match.1z - Longest prefix matching
 
-use "sequences" ;
+use "radix-tree" ;
 
-\\ Opaque prefix table sorted by prefix length, longest first.
-prefix-table: virtual{ array } ;
+\\ A prefix table: a string-keyed radix tree, so a lookup costs the key's length rather
+\\ than the table's size. Built once by `<prefix-table>` and only queried afterwards.
+prefix-table: virtual{ radix-tree } ;
 
-\\ Build a prefix table from any sequence of { prefix value } pairs.
-\\ Sorts entries by prefix length, longest first.
+\\ Build a prefix table from any sequence of { prefix value } pairs. A prefix listed twice
+\\ takes its last value.
 <prefix-table>: ( seq -- prefix-table ) [
-  [ 0 #nth #len 0 swap - ] #sort-by
-  >prefix-table
+  string <radix-tree> [ dup 0 #nth swap 1 #nth radix-insert ] #reduce
+  make-prefix-table
 ] ;
 
-\\ Find the value for the longest matching prefix, or none.
-prefix-match?: ( prefix-table key -- option ) [
-  swap unmake-prefix-table
-  swap [ swap 0 #nth #starts-with? ] curry #filter
-  [ 1 #nth ] #map
-  #next?
+\\ The value for the longest registered prefix of `key`, or `option:none`. O(k) in the
+\\ key's character count.
+prefix-match?: ( table: prefix-table key: string -- option ) [
+  [ unmake-prefix-table ] dip radix-longest?
 ] ;
 
-\\ Find the value for the longest matching prefix, or throw.
-prefix-match: ( prefix-table key -- value ) [
+\\ The value for the longest registered prefix of `key`, or throw `key-not-found`.
+prefix-match: ( table: prefix-table key: string -- value ) [
   prefix-match?
   dup option:some?
   [ option:some> ]

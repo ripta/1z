@@ -1,37 +1,36 @@
 \ Benchmark: route-table lookup, across route count and key length.
 \
-\ `prefix-match?` (lib/prefix-match.1z:16) filters a length-sorted array and takes the first
-\ hit, so a lookup runs one `#starts-with?` per registered route until it matches. That is
-\ O(m) in the route count. `#starts-with?` is itself a prelude word (src/prelude.1z:1312):
-\ two O(1) `#len` guards, then a `#slice` and a compare only when the prefix fits. So an
-\ entry that clears the guard costs O(k) in the key length. This records both axes before
-\ the table moves onto a radix tree.
+\ `prefix-match?` (lib/prefix-match.1z:18) delegates to `radix-longest?`, which walks the key
+\ down a radix tree: one native `#index-of` on the node's first-character index per hop, then
+\ one `#slice` of the key and a compare against the child's whole label. A lookup therefore
+\ costs the hops on its path and the bytes of the labels it crosses, and the route count is
+\ not in it. The bytes are compared natively, and on a string key `#nth` and `#slice` re-walk
+\ the key's UTF-8 prefix at every hop, but neither shows at route-sized keys: what a lookup
+\ pays for is its hop count, at the interpreted cost of one `walk-step?` per hop.
 \
 \ The fixture is shaped like a real route table. m bulk routes sit under a stem of `depth`
-\ segments. One short route covers the stem's first segment, so it is the shortest entry and
-\ sorts last. One deep route sits below bulk route 0, so it is the longest and sorts first.
+\ segments. One short route covers the stem's first segment. One deep route sits below bulk
+\ route 0. In the tree, the short route is the root's only child, the rest of the stem and
+\ the `r` every bulk route opens with make one label below it, and the bulk routes fan out
+\ under that by decimal digit, so no node has more than eleven children.
 \
 \ What each row reads:
 \
-\   build        <prefix-table> sorts m+2 entries under an interpreted key quotation, so it
-\                is O(m log m) and flat in k.
-\   hit-deep     matches the entry that sorts first, so it is one comparison. Flat in m, and
-\                flat in k too: one string compare is lost in the interpreted cost of the
-\                single filter step around it.
-\   hit-shallow  diverges from every bulk route in its last segment and lands on the short
-\                route, which sorts last. It is the headline row. The key outruns every bulk
-\                prefix, so all m entries clear the length guard and compare the shared
-\                stem. It doubles with m and rises with k.
-\   miss         matches nothing. It is shorter than every entry but the short route, so the
-\                length guard short-circuits and no bytes are compared. It doubles with m and
-\                stays flat in k, which leaves it measuring the per-entry filter step alone.
-\                Read against hit-shallow at the same m, the gap is what comparing costs over
-\                short-circuiting. A miss also pays a throw and a recover, because `#next?`
-\                (src/prelude.1z:1369) recovers from an exhausted iterator.
-\
-\ So the m factor dominates today and k is a weak second, because the per-entry filter step
-\ costs more than the bytes it compares. A radix tree inverts that: m leaves the cost model
-\ entirely and k is all that is left.
+\   build        <prefix-table> runs m+2 path-copying inserts. Each is an interpreted walk
+\                that rebuilds every node on its path and counts the units its key shares
+\                with each label one at a time. It grows with m, and with k through that
+\                count. It is the cold path, and it is far dearer than the sort it replaced.
+\   hit-deep     walks to the bottom of the tree and lands on the deep route, so it crosses
+\                the most hops of any row and is the dearest lookup. Flat in both axes: the
+\                stem is two labels however long it is.
+\   hit-shallow  crosses the stem, passes the short route, and diverges inside the digit
+\                fork, so the short route is what it keeps. It is the headline row. Flat in
+\                m, where the sorted-array table doubled with it, and flat in k. It steps up
+\                once between m=50 and m=100, when the fork gains a second digit level and
+\                the walk one hop.
+\   miss         diverges in the root's only child, one label compare in. It is the cheapest
+\                row and flat in both axes. A miss pays no throw and no recover, since the
+\                walk returns `option:none` rather than draining an empty iterator.
 \
 \ `k` is the lookup key's byte length. The stem is k-10 bytes of it, and doubles across the
 \ depth steps.
