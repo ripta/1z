@@ -1,0 +1,303 @@
+\ lib/radix-tree.1z - Persistent compressed trie (radix tree) keyed by strings or bytes.
+\
+\ A node's edge label is a run of key units rather than a single one, so a chain with no
+\ branch in it collapses to one node. A lookup walks the key in place: at each node it
+\ takes the key's next unit, finds it in the node's first-unit index, and checks that the
+\ chosen child's whole label matches. Registered prefixes therefore leave the cost model
+\ entirely, and only the key's length is left.
+\
+\ A key is a string or a byte-array, fixed per tree by a constructor parameter. A unit is
+\ a character on a string key and a byte on a byte-array key. Both readings come from the
+\ same native words: `#len`, `#nth`, `#slice`, `#index-of`, and `#push` each already read
+\ both types in unit terms, so there is one code path and no per-type branch below the
+\ constructor. On a string that also makes every edge split land on a character boundary,
+\ since `#slice` is codepoint-indexed.
+\
+\ The two key types differ in cost, not in behavior. A string label is a zero-copy
+\ sub-slice, while a byte-array label is a fresh allocation. Against that, a string's
+\ `#nth` and `#slice` re-walk the key's UTF-8 prefix on every hop, so a string lookup
+\ scans O(d · k) bytes for d hops and a key of k units, where a byte-array lookup is O(k).
+\ A route table has a handful of hops.
+\
+\ The tree is persistent. An insert copies the nodes on its path and leaves prior versions
+\ valid, which is the formulation `bst` uses. Nothing writes during a read, so persistence
+\ costs a lookup nothing. The path copy also rebuilds each node's child arrays, making an
+\ insert O(k · c) in the per-node fan-out.
+\
+\ A node's children are a first-unit index sequence beside a positionally parallel array
+\ of children, and the index is kept ascending. Those parallel arrays are the invariant
+\ every insert has to preserve. Ascending order is what makes a leftmost descent reach the
+\ lexicographically smallest entry.
+\
+\ `insert-node` recurses once per hop, so its depth is the number of compressed nodes on
+\ the path, bounded by the key's unit count.
+
+\\ One node. `label` is the edge from the parent, in the tree's key type, and the root's is
+\\ empty. `value` holds the entry that ends here, or `option:none`. `index` holds one unit
+\\ per child, ascending, and `children` is the parallel array of child nodes.
+radix-node: struct{ label value index children } ;
+
+\\ A persistent radix tree over `key-type`, which is `string` or `byte-array`. Every key is
+\\ checked against it. `count` is the entry count, maintained by every insert.
+radix-tree: struct{ root: radix-node key-type: type count: fixnum } ;
+
+private{
+  throw-key-type: never-returns ( -- * ) [
+    f "radix-tree key does not match the tree's key type" ETypeMismatch make-error throw
+  ] ;
+
+  \ Key-type gate shared by every public word, so the raising behavior has one choke point.
+  require-key: ( tree key -- tree key ) [
+    2dup [ key-type>> ] dip type-of = not [ throw-key-type ] when
+  ] ;
+
+  \ A childless node holding one entry. Its empty index comes from the label, so the key
+  \ type never has to be threaded this far down.
+  leaf-node: ( label value -- radix-node ) [
+    >option:some over 0 0 #slice { } make-radix-node
+  ] ;
+
+  with-label: ( node label -- radix-node ) [
+    swap dup value>> swap dup index>> swap children>> make-radix-node
+  ] ;
+
+  with-value: ( node value-opt -- radix-node ) [
+    over label>> -rot> swap dup index>> swap children>> make-radix-node
+  ] ;
+
+  with-children: ( node index children -- radix-node ) [
+    [ dup label>> swap value>> ] 2dip make-radix-node
+  ] ;
+
+  \ `seq[0..i]` with `elem` pushed, then `seq[from..]` appended. `#slice`, `#push`, and
+  \ `#append` all read arrays and both key types, so one helper splices the children array
+  \ and the index sequence alike.
+  seq-splice: ( seq i elem from -- seq' ) [
+    3 pick-n 0 4 pick-n #slice
+    2 pick-n #push
+    4 pick-n 2 pick-n 1 pick-n #len #slice
+    #append
+    nip nip nip nip
+  ] ;
+
+  seq-insert: ( seq i elem -- seq' ) [ over seq-splice ] ;
+  seq-set: ( seq i elem -- seq' ) [ over 1 + seq-splice ] ;
+
+  \ The sorted slot for `unit` in an ascending index sequence. Units are distinct, so this
+  \ is the first position holding a unit above it.
+  index-slot: ( index unit -- i ) [
+    over #len 0
+    [ 2dup > [ 3 pick-n 1 pick-n #nth 3 pick-n < ] [ f ] if ]
+    [ 1 + ]
+    while
+    nip nip nip
+  ] ;
+
+  \ Break a label at `c` units into the head a new parent keeps and the tail the old child
+  \ keeps.
+  split-label: ( label c -- head tail ) [
+    2dup 0 swap #slice
+    -rot> over #len #slice
+  ] ;
+
+  \ The number of leading units the key from `offset` shares with `label`. At least one at
+  \ every call site, since the caller found the child by that first unit.
+  common-units: ( key offset label -- n ) [
+    2 pick-n #len 2 pick-n - over #len min 0
+    \ ( key(4) offset(3) label(2) limit(1) n(0) )
+    [ 2dup > [ 4 pick-n 4 pick-n 2 pick-n + #nth 3 pick-n 2 pick-n #nth = ] [ f ] if ]
+    [ 1 + ]
+    while
+    nip nip nip nip
+  ] ;
+
+  \ A node with exactly two children, indexed in ascending first-unit order. The two labels
+  \ start with different units, since that divergence is what forced the fork.
+  fork-node: ( label value-opt a b -- radix-node ) [
+    over label>> 0 #nth over label>> 0 #nth > [ swap ] when
+    2dup 2 array-n
+    2 pick-n label>> 0 1 #slice
+    2 pick-n label>> 0 #nth #push
+    swap [ 2drop ] 2dip
+    make-radix-node
+  ] ;
+
+  \ Splice `child` in at slot i, where the sorted index wants `unit`.
+  splice-child: ( node i unit child -- radix-node ) [
+    3 pick-n index>> 3 pick-n 3 pick-n seq-insert
+    4 pick-n children>> 4 pick-n 3 pick-n seq-insert
+    [ 3drop ] 2dip with-children
+  ] ;
+
+  \ Swap the child at slot i, leaving the index untouched.
+  replace-child: ( node i child -- radix-node ) [
+    2 pick-n children>> 2 pick-n 2 pick-n seq-set
+    [ 2drop ] dip
+    over index>> swap with-children
+  ] ;
+
+  \ Both descent arms end the same way: the arm has built the node that replaces slot i,
+  \ and the key state the insert walk carried down is spent.
+  finish-insert: ( node key offset value i child -- radix-node ) [
+    [ 3drop ] 2dip replace-child
+  ] ;
+
+  \ Add a childless node for the key's untaken units, keeping the index sorted.
+  add-leaf: ( node unit label value -- radix-node ) [
+    leaf-node
+    2 pick-n index>> 2 pick-n index-slot
+    -rot> splice-child
+  ] ;
+
+  \ Break a child's edge at `c` units. The child keeps the tail of its label. A new node
+  \ takes the head, and holds the value itself when the key ends at the break; otherwise it
+  \ gains a second child for the key's remaining units.
+  split-child: ( child c rest value -- radix-node ) [
+    [ [ dup label>> ] dip split-label ] 2dip
+    [ swap [ with-label ] dip swap ] 2dip
+    \ ( head tail-node rest value )
+    over #len 0 = [
+      nip >option:some
+      over label>> 0 1 #slice
+      2 pick-n 1array
+      [ drop ] 3dip
+      make-radix-node
+    ] [
+      leaf-node [ option:none ] 2dip fork-node
+    ] if
+  ] ;
+}
+
+private{
+  \ Path-copying insert. `added?` reports whether the entry is new, which is what keeps the
+  \ tree's count exact.
+  insert-node: stack-recursive ( node key offset value -- radix-node added? ) [
+    2 pick-n #len 2 pick-n = [
+      \ The key ends here, so the entry is this node's own value.
+      >option:some
+      3 pick-n value>> option:some? not
+      [ [ 2drop ] dip with-value ] dip
+    ] [
+      2 pick-n 2 pick-n #nth
+      4 pick-n index>> over #index-of
+      dup not [
+        \ Nothing is indexed under the key's next unit: the rest of the key is a new leaf.
+        drop
+        [ over #len #slice ] 2dip -rot> add-leaf
+        t
+      ] [
+        nip
+        \ ( node(4) key(3) offset(2) value(1) i(0) )
+        4 pick-n children>> over #nth
+        dup label>>
+        5 pick-n 5 pick-n 2 pick-n common-units
+        \ ( node(7) key(6) offset(5) value(4) i(3) child(2) label(1) c(0) )
+        over #len over = [
+          \ The label is spent, so the key continues below this child.
+          [ drop ] dip
+          1 pick-n 6 pick-n 6 pick-n 3 pick-n + 6 pick-n insert-node
+          [ 2nip finish-insert ] dip
+        ] [
+          \ The key diverges partway along the label, so the edge breaks at that point.
+          [ drop ] dip
+          5 pick-n 5 pick-n 2 pick-n + 1 pick-n #len #slice
+          2 pick-n 2 pick-n 2 pick-n 7 pick-n split-child
+          [ 3drop ] dip
+          finish-insert
+          t
+        ] if
+      ] if
+    ] if
+  ] ;
+}
+
+private{
+  \ One descent step, run in the predicate so the body gets the child it found. Leaves
+  \ ( child end t ) when the child's whole label matches the key at `offset`, and f when
+  \ the key is spent, no child is indexed under its next unit, or the label diverges.
+  walk-step?: ( key key-len best node offset -- ..a ? ) [
+    dup 4 pick-n < [
+      4 pick-n over #nth
+      2 pick-n index>> over #index-of
+      dup not [ 2drop f ] [
+        3 pick-n children>> swap #nth
+        nip
+        dup label>> #len 2 pick-n +
+        dup 6 pick-n > [ 2drop f ] [
+          6 pick-n 3 pick-n 2 pick-n #slice
+          2 pick-n label>> = [ t ] [ 2drop f ] if
+        ] if
+      ] if
+    ] [ f ] if
+  ] ;
+
+  \ Step onto the matched child, remembering its value when it holds one.
+  walk-advance: ( key key-len best node offset child end -- key key-len best node offset ) [
+    1 pick-n value>> dup option:some? [ ] [ drop 4 pick-n ] if
+    -rot> [ 3drop ] 3dip
+  ] ;
+
+  \ Descend as far as the key allows. Every node the walk enters has its whole path matched
+  \ against the key, so `best` ends as the longest registered prefix, and a walk that spends
+  \ the key ends on the node holding the exact entry.
+  radix-walk: ( tree key -- key key-len best node offset ) [
+    swap root>> over #len swap dup value>> swap 0
+    [ walk-step? ] [ walk-advance ] while
+  ] ;
+}
+
+\\ An empty tree over `key-type`, which must be `string` or `byte-array`. O(1). Throws
+\\ `invalid-argument` on any other type.
+\\
+\\   string <radix-tree> count>>
+\\   => 0
+<radix-tree>: ( key-type: type -- radix-tree ) [
+  dup string = over byte-array = or not
+  [ f "<radix-tree> requires a string or byte-array key type" EInvalidArgument make-error throw ] when
+  \ The root's empty label and index have to be in the key's own type. This is the only
+  \ place a key type is read rather than compared.
+  dup string = [ "" ] [ "" >bytes ] if
+  option:none 1 pick-n { } make-radix-node
+  swap 0 make-radix-tree
+] ;
+
+\\ Store `value` under `key`, returning a new tree. A key already present is replaced and
+\\ the count is unchanged. O(k · c) in the key's unit count and the per-node fan-out: the
+\\ walk copies the nodes on its path, and each copy rebuilds its child arrays. Throws
+\\ `type-mismatch` on a key outside the tree's key type.
+\\
+\\   string <radix-tree> "/api/" 7 radix-insert count>>
+\\   => 1
+radix-insert: ( tree: radix-tree key value -- radix-tree ) [
+  [ require-key ] dip
+  2 pick-n root>> 2 pick-n 0 3 pick-n insert-node
+  4 pick-n count>> swap [ 1 + ] when
+  4 pick-n key-type>> swap
+  [ 3drop ] 3dip
+  make-radix-tree
+] ;
+
+\\ The value stored at exactly `key`, or `option:none`. O(k). Throws `type-mismatch` on a
+\\ key outside the tree's key type.
+\\
+\\   string <radix-tree> "/api/" 7 radix-insert "/api/" radix-lookup? option:some>
+\\   => 7
+radix-lookup?: ( tree: radix-tree key -- option ) [
+  require-key radix-walk
+  dup 4 pick-n = [
+    drop value>> 2nip nip
+  ] [
+    3drop 2drop option:none
+  ] if
+] ;
+
+\\ The value of the longest registered prefix of `key`, or `option:none`. An entry stored
+\\ under the empty key is a prefix of every key. O(k). Throws `type-mismatch` on a key
+\\ outside the tree's key type.
+\\
+\\   string <radix-tree> "/api/" 7 radix-insert "/api/v1/x" radix-longest? option:some>
+\\   => 7
+radix-longest?: ( tree: radix-tree key -- option ) [
+  require-key radix-walk
+  2drop 2nip
+] ;

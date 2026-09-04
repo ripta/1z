@@ -1,0 +1,199 @@
+\ Unit tests for lib/radix-tree.1z.
+\
+\ The tree is persistent, so a fixture word can be shared: every insert returns a new tree
+\ and leaves the fixture's own version alone. The runner executes test words in
+\ alphabetical order, so each group's section banner sits on its alphabetically first word.
+
+use "radix-tree" ;
+use "testing" ;
+
+\ --- Helpers ---
+
+\ Three entries that force each insert shape in turn. "roman" lands as a bare leaf, "rom"
+\ splits its label at a point where the key ends, and "romulus" descends through the new
+\ interior node and diverges below it.
+roman-fixture: ( -- radix-tree ) [
+  string <radix-tree>
+  "roman" 1 radix-insert
+  "rom" 2 radix-insert
+  "romulus" 3 radix-insert
+] ;
+
+\ A table shaped like the router's: a catch-all, a prefix, and a deeper prefix.
+route-fixture: ( -- radix-tree ) [
+  string <radix-tree>
+  "/" 0 radix-insert
+  "/api/" 1 radix-insert
+  "/api/v1/" 2 radix-insert
+] ;
+
+\ The value an option carries, so an assertion reads against a plain value.
+unwrap: ( option -- value ) [ option:some> ] ;
+
+\ --- Character boundary ---
+
+test-boundary-splits-on-characters: ( -- ) [
+  "character boundary" test-section
+  string <radix-tree>
+  "café" 1 radix-insert
+  "cafè" 2 radix-insert
+  dup root>> children>> 0 #nth
+  dup label>> "caf" "the shared label stops at the last common character" assert=
+  index>> "èé" "both divergent characters index whole, in codepoint order" assert=
+  dup "café" radix-lookup? unwrap 1 "the first key survives the split" assert=
+  "cafè" radix-lookup? unwrap 2 "the second key survives the split" assert=
+] ;
+
+\ --- Byte-array keys ---
+
+test-bytes-keys-round-trip: ( -- ) [
+  "byte-array keys" test-section
+  byte-array <radix-tree>
+  "roman" >bytes 1 radix-insert
+  "rom" >bytes 2 radix-insert
+  dup count>> 2 "both byte keys count" assert=
+  dup "roman" >bytes radix-lookup? unwrap 1 "the longer byte key reads back" assert=
+  "rom" >bytes radix-lookup? unwrap 2 "the split point reads back" assert=
+] ;
+
+test-bytes-longest-prefix: ( -- ) [
+  byte-array <radix-tree>
+  "rom" >bytes 2 radix-insert
+  dup "romx" >bytes radix-longest? unwrap 2 "a byte key extends its prefix" assert=
+  "ro" >bytes radix-longest? option:some? "a shorter byte key matches nothing" assert-false
+] ;
+
+test-bytes-split-labels: ( -- ) [
+  byte-array <radix-tree>
+  "roman" >bytes 1 radix-insert
+  "roast" >bytes 2 radix-insert
+  root>> children>> 0 #nth
+  dup label>> "ro" >bytes "the byte label splits at the shared bytes" assert=
+  index>> "am" >bytes "the two divergent bytes index in ascending order" assert=
+] ;
+
+\ --- Construction ---
+
+test-construct-empty: ( -- ) [
+  "construction" test-section
+  string <radix-tree>
+  dup count>> 0 "a fresh tree holds no entries" assert=
+  dup key-type>> string = "the key type is the one asked for" assert-true
+  root>> label>> "" "the root's label is empty in the key's own type" assert=
+] ;
+
+test-construct-rejects-other-types: ( -- ) [
+  [ fixnum <radix-tree> ] invalid-argument:
+  "a key type outside string and byte-array is rejected" assert-error-type
+] ;
+
+\ --- Insert and exact lookup ---
+
+test-insert-adds-entry: ( -- ) [
+  "insert" test-section
+  string <radix-tree> "abc" 1 radix-insert
+  dup count>> 1 "one insert is one entry" assert=
+  dup "abc" radix-lookup? unwrap 1 "the key reads back its value" assert=
+  dup "ab" radix-lookup? option:some? "a proper prefix is not an exact hit" assert-false
+  "abcd" radix-lookup? option:some? "an extension is not an exact hit" assert-false
+] ;
+
+test-insert-empty-key: ( -- ) [
+  string <radix-tree> "" 7 radix-insert
+  dup count>> 1 "the empty key is an entry" assert=
+  "" radix-lookup? unwrap 7 "the empty key reads back from the root" assert=
+] ;
+
+test-insert-keeps-index-sorted: ( -- ) [
+  string <radix-tree>
+  "c" 3 radix-insert
+  "a" 1 radix-insert
+  "b" 2 radix-insert
+  root>> index>> "abc" "out-of-order inserts leave an ascending index" assert=
+] ;
+
+test-insert-leaves-prior-version: ( -- ) [
+  string <radix-tree> "a" 1 radix-insert
+  dup "ab" 2 radix-insert
+  swap "ab" radix-lookup? option:some? "the tree inserted into is unchanged" assert-false
+  "ab" radix-lookup? unwrap 2 "the returned tree carries the new entry" assert=
+] ;
+
+test-insert-replaces-value: ( -- ) [
+  string <radix-tree>
+  "k" 1 radix-insert
+  "k" 2 radix-insert
+  dup count>> 1 "replacing a key adds no entry" assert=
+  "k" radix-lookup? unwrap 2 "the later value wins" assert=
+] ;
+
+\ --- Longest prefix ---
+
+test-longest-empty-key-covers-all: ( -- ) [
+  "longest prefix" test-section
+  string <radix-tree> "" 7 radix-insert
+  "anything" radix-longest? unwrap 7 "an entry under the empty key is a prefix of every key" assert=
+] ;
+
+test-longest-none-without-match: ( -- ) [
+  string <radix-tree> "/api/" 1 radix-insert
+  dup "/other" radix-longest? option:some? "an unmatched key has no prefix" assert-false
+  "/api" radix-longest? option:some? "a key short of the entry has no prefix" assert-false
+] ;
+
+test-longest-picks-deepest: ( -- ) [
+  route-fixture
+  dup "/api/v1/users" radix-longest? unwrap 2 "the deepest matching prefix wins" assert=
+  dup "/api/users" radix-longest? unwrap 1 "a key short of the deeper prefix takes the shallower" assert=
+  dup "/other" radix-longest? unwrap 0 "the catch-all covers what nothing else does" assert=
+  "/api/" radix-longest? unwrap 1 "an exact key is its own longest prefix" assert=
+] ;
+
+\ --- Key type mismatch ---
+
+test-mismatch-insert-throws: ( -- ) [
+  "key type mismatch" test-section
+  [ string <radix-tree> "x" >bytes 1 radix-insert ] type-mismatch:
+  "a byte key into a string tree is rejected" assert-error-type
+  [ byte-array <radix-tree> "x" 1 radix-insert ] type-mismatch:
+  "a string key into a byte tree is rejected" assert-error-type
+] ;
+
+test-mismatch-lookup-throws: ( -- ) [
+  [ string <radix-tree> "x" >bytes radix-lookup? ] type-mismatch:
+  "an exact lookup checks the key type" assert-error-type
+  [ string <radix-tree> "x" >bytes radix-longest? ] type-mismatch:
+  "a longest-prefix lookup checks the key type" assert-error-type
+] ;
+
+\ --- Edge splitting ---
+
+test-split-forks-into-two-children: ( -- ) [
+  "edge splitting" test-section
+  string <radix-tree>
+  "roman" 1 radix-insert
+  "roast" 2 radix-insert
+  dup root>> children>> 0 #nth
+  dup label>> "ro" "the split node keeps the shared units" assert=
+  dup value>> option:some? "a fork point holds no value of its own" assert-false
+  index>> "am" "the two divergent units index in ascending order" assert=
+  dup "roman" radix-lookup? unwrap 1 "the split key still reads back" assert=
+  "roast" radix-lookup? unwrap 2 "the forked key reads back" assert=
+] ;
+
+test-split-lands-on-interior-key: ( -- ) [
+  roman-fixture
+  dup root>> children>> 0 #nth
+  dup label>> "rom" "the interior key becomes the node's own label" assert=
+  value>> unwrap 2 "the interior node carries the key that split it" assert=
+  "rom" radix-lookup? unwrap 2 "the interior key reads back exactly" assert=
+] ;
+
+test-split-preserves-deeper-entries: ( -- ) [
+  roman-fixture
+  dup count>> 3 "each distinct key counts once through the splits" assert=
+  dup "roman" radix-lookup? unwrap 1 "the key that was split reads back" assert=
+  dup "romulus" radix-lookup? unwrap 3 "the key added below the split reads back" assert=
+  dup "ro" radix-lookup? option:some? "the shared units alone are not an entry" assert-false
+  "romanx" radix-longest? unwrap 1 "a deeper key falls back to the entry above it" assert=
+] ;
