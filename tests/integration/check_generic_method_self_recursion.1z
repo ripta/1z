@@ -1,0 +1,11 @@
+\ Test that --check does not crash when a `method{ }` arm on a compound generic
+\ calls that same generic; this is the ordinary shape of a `>iterator` method.
+pragma{ suppress-undeclared: t }
+
+widget: generic ( x -- y ) [ drop 0 ] ;
+
+thing: struct{ a: array } ;
+
+widget: method{ thing } [ a>> widget ] ;
+
+probe: ( t: thing -- n ) [ widget ] ;

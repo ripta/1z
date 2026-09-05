@@ -587,6 +587,7 @@ pub const InferenceEngine = struct {
         }
 
         try self.in_progress.put(self.allocator, name, {});
+        defer _ = self.in_progress.fetchRemove(name);
         const declared_inputs: ?usize = if (word_def.stack_effect) |eff| blk: {
             if (stack_effect_mod.hasAnyRowVariable(eff.*)) break :blk null;
             break :blk eff.concreteInputCount();
@@ -600,7 +601,6 @@ pub const InferenceEngine = struct {
         var body_out_stack: std.ArrayListUnmanaged(StackEntry) = .{};
         defer body_out_stack.deinit(self.allocator);
         const inferred = try self.inferInstructions(instructions, caller_info, &body_out_stack);
-        _ = self.in_progress.fetchRemove(name);
 
         if (inferred == .known and body_out_stack.items.len > 0) {
             const cached_types = try self.allocator.alloc(StackEntry, body_out_stack.items.len);
@@ -2731,6 +2731,49 @@ test "generic word with disagreeing dispatch entries emits diagnostic" {
     try testing.expectEqual(InferenceResult{ .known = 1 }, result);
     try testing.expectEqual(@as(usize, 1), engine.diagnostics.items.len);
     try testing.expectEqual(Severity.err, engine.diagnostics.items[0].severity);
+}
+
+test "generic dispatch entry calling back into the generic does not recurse infinitely" {
+    var dict = Dictionary.init(testing.allocator);
+    defer dict.deinit();
+    var dispatch = DispatchTable.init(testing.allocator);
+    defer dispatch.deinit();
+
+    const base_body: []const Instruction = &.{
+        makeInstr(.{ .push_literal = .{ .fixnum = 1 } }),
+    };
+
+    try dict.put("widget", .{
+        .name = "widget",
+        .source_file = "test.1z",
+        .dispatch_id = 1,
+        .markers = &.{@constCast(&markers.generic_marker)},
+        .action = .{ .compound = base_body },
+    });
+
+    const dispatch_body: []const Instruction = &.{
+        makeInstr(.{ .call_word = "widget" }),
+    };
+    const thing_desc = try value_mod.createBuiltinTypeDescriptor(testing.allocator, .{});
+    defer value_mod.destroyTypeDescriptor(testing.allocator, thing_desc);
+    const other_desc = try value_mod.createBuiltinTypeDescriptor(testing.allocator, .{});
+    defer value_mod.destroyTypeDescriptor(testing.allocator, other_desc);
+
+    try dispatch.register(
+        .{
+            .dispatch_id = 1,
+            .type_a = thing_desc,
+            .type_b = other_desc,
+        },
+        .{ .body = .{ .quotation = .{ .instructions = dispatch_body } } },
+        false,
+    );
+
+    var engine = InferenceEngine.init(&dict, &dispatch, &.{}, testing.allocator, null, false, true, null, null, .off, .off, .off, .off, null);
+    defer engine.deinit();
+
+    const result = try engine.inferWord("widget");
+    try testing.expectEqual(InferenceResult{ .known = 1 }, result);
 }
 
 test "non-literal quotation args fall back to declared effect" {
