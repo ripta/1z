@@ -7,7 +7,12 @@
 \ replay a click. Every test starts with (new-game), because start-game already ran init when
 \ the sibling loaded and this file shares that module state. Tests swap scratch keyboard and
 \ mouse buffers in via with-parameter, since the (wasm-*) buffers only exist under the wasm
-\ C-API root, and bind a seeded generator via with-random so mine placement is deterministic.
+\ C-API root, and bind the audio seams for the same reason. A seeded generator goes in via
+\ with-random so mine placement is deterministic.
+\
+\ (with-game) builds the samples before it seeds the generator, and deliberately so. The
+\ detonation draws four thousand values, so a first press inside the seeded stream would shift
+\ every later mine placement, and which test paid for it would then depend on test order.
 \
 \ The drawing tests bind a scratch framebuffer and never reach clear-background, which costs
 \ about 20 seconds interpreted: they clear the repaint flag first or paint cells directly. The
@@ -48,13 +53,33 @@ private{
   (tick): ( -- ) [ advance-mouse-frame 0 minesweeper-update advance-keyboard-frame ] ;
   (ticks): ( n -- ) [ [ (tick) ] times ] ;
 
-  \\ Run quot with scratch input buffers bound, a seeded generator, and a fresh game at preset.
+  \\ The digit keys' byte offsets in the keyboard buffer, mirroring game/input's private
+  \\ key-index table the way (push-mouse-event) mirrors the mouse layout.
+  (digit-1-index): ( -- n ) [ 31 ] ;
+  (digit-2-index): ( -- n ) [ 32 ] ;
+  (digit-3-index): ( -- n ) [ 33 ] ;
+
+  \\ Hold a key for one tick, then release it, so key-pressed? fires exactly once.
+  (tap-key): ( index -- ) [
+    k: swap ;
+    current-keyboard get k 1 1 #poke! drop
+    (tick)
+    current-keyboard get k 0 1 #poke! drop
+  ] ;
+
+  \\ Run quot with scratch input buffers and audio seams bound, a seeded generator, and a fresh
+  \\ game at preset. The samples are built outside with-random; see the file header.
   (with-game): ( preset quot -- ) [
     quot: swap ;
     preset: swap ;
     (scratch-keyboard) current-keyboard [
       (scratch-mouse) current-mouse [
-        42 <random> [ preset (new-game) quot ] with-random
+        [ drop drop drop 7 ] current-sample-loader [
+          [ drop ] current-sample-player [
+            (ensure-sounds)
+            42 <random> [ preset (new-game) quot ] with-random
+          ] with-parameter
+        ] with-parameter
       ] with-parameter
     ] with-parameter
   ] ;
@@ -65,10 +90,18 @@ private{
     swap (cell-row) cell-px * (board-px-y) + 3 +
   ] ;
 
-  \\ Press a button (0 left, 2 right) at a cell's center and run one tick.
-  (press-at):    ( button col row -- ) [ (cell-center) 1 -rot> 1 (push-mouse-event) (tick) ] ;
+  \\ The framebuffer pixel at the center of the HUD's face button.
+  (face-center): ( -- x y ) [
+    (hud-face-px-x) face-px 2 div +
+    (hud-face-px-y) face-px 2 div +
+  ] ;
+
+  \\ Press a button (0 left, 2 right) at a framebuffer pixel and run one tick.
+  (press-pixel): ( button x y -- ) [ 1 -rot> 1 (push-mouse-event) (tick) ] ;
+  (press-at):    ( button col row -- ) [ (cell-center) (press-pixel) ] ;
   (left-click):  ( col row -- ) [ 0 -rot> (press-at) ] ;
   (right-click): ( col row -- ) [ 2 -rot> (press-at) ] ;
+  (click-face):  ( -- ) [ 0 (face-center) (press-pixel) ] ;
 
   \\ Tick until the cascade worklist drains, bounded so a stuck cascade fails instead of
   \\ hanging.
@@ -123,6 +156,46 @@ private{
       x i 7 % + y i 7 div + (pixel-at) p = [ 1 + ] when
     ] #each
   ] ;
+
+  \\ Count pixels of one packed color inside the HUD number panel starting at x. Counting beats
+  \\ probing a single pixel here, since which pixels a digit sets depends on the font's glyphs.
+  (panel-color-count): ( x packed -- n ) [
+    p: swap ;
+    px: swap ;
+    0
+    hud-panel-width hud-panel-height * iota >iterator [
+      i: swap ;
+      px i hud-panel-width % +
+      (hud-panel-px-y) i hud-panel-width div +
+      (pixel-at) p = [ 1 + ] when
+    ] #each
+  ] ;
+
+  \\ Paint one HUD number panel out in the page background, so a later draw's effect on it is
+  \\ unambiguous.
+  (blank-panel): ( x -- ) [
+    (hud-panel-px-y) hud-panel-width hud-panel-height page-color draw-rectangle
+  ] ;
+
+  \\ What the recording audio seams below saw, most recent last.
+  \\
+  \\ File-level vectors rather than a local per test word: a quotation pushed inside a (with-game)
+  \\ block cannot resolve the test word's locals, because (with-game) invokes the block through a
+  \\ quotation-valued local. A file-level binding resolves through the module scope instead.
+  recorded-loads: V{ } ;
+  recorded-plays: V{ } ;
+
+  (reset-recordings): ( -- ) [
+    recorded-loads 0 f #resize! drop
+    recorded-plays 0 f #resize! drop
+  ] ;
+
+  \\ Records the handle of every play. Bind over current-sample-player.
+  (recording-player): ( -- quot ) [ [ recorded-plays swap #push! drop ] ] ;
+
+  \\ Records { bytes channels rate } for every load, and hands back a fixed handle. Bind over
+  \\ current-sample-loader.
+  (recording-loader): ( -- quot ) [ [ 3 array-n recorded-loads swap #push! drop 7 ] ] ;
 }
 
 test-new-game-sizes-each-preset: ( -- ) [
@@ -275,12 +348,13 @@ test-revealing-every-safe-cell-wins: ( -- ) [
     (drain)
     state phase>> won: "uncovering all eighty safe cells wins" assert=
     state revealed-count>> 80 "every safe cell is revealed" assert=
-    state covers>> 0 #nth covered: "the mine stays covered" assert=
+    state covers>> 0 #nth flagged: "the win flags the mine that was left" assert=
+    state flag-count>> 1 "the counter reads zero mines remaining" assert=
     0 0 (left-click)
     state phase>> won: "a press after the win is ignored" assert=
-    state covers>> 0 #nth covered: "the mine stays covered after the win" assert=
+    state covers>> 0 #nth flagged: "the mine stays flagged after the win" assert=
     0 0 (right-click)
-    state covers>> 0 #nth covered: "a flag after the win is ignored" assert=
+    state covers>> 0 #nth flagged: "a flag toggle after the win is ignored" assert=
   ] (with-game)
 ] ;
 
@@ -294,8 +368,8 @@ test-releases-middle-button-and-off-board-presses-are-ignored: ( -- ) [
     state phase>> fresh: "a press off the canvas does nothing" assert=
     0 1 10 10 1 (push-mouse-event) (tick)
     state phase>> fresh: "a press off the board does nothing" assert=
-    0 1 127 70 1 (push-mouse-event) (tick)
-    state phase>> fresh: "a press in the HUD strip does nothing" assert=
+    0 1 (hud-mines-px-x) (hud-panel-px-y) 1 (push-mouse-event) (tick)
+    state phase>> fresh: "a press on the HUD's mine counter does nothing" assert=
     covered: (count-covers) 81 "nothing was revealed or flagged" assert=
   ] (with-game)
 ] ;
@@ -375,6 +449,265 @@ test-draw-board-paints-every-cell: ( -- ) [
       8 8 192 192 192 (packed) (cell-color-count) 25 "the last cell is painted" assert=
       162 158 (pixel-at) 112 112 112 (packed) "the last cell's bevel ends at the board's corner" assert=
       163 159 (pixel-at) 0 "the board's outer gutter is untouched" assert=
+    ] with-parameter
+  ] (with-game)
+] ;
+
+test-the-mine-counter-tracks-flags: ( -- ) [
+  beginner: [
+    state mine-count>> state flag-count>> - 10 "a fresh board has all ten mines outstanding" assert=
+    2 3 (right-click)
+    state flag-count>> 1 "one flag is counted" assert=
+    5 5 (right-click)
+    state flag-count>> 2 "a second flag is counted" assert=
+    2 3 (right-click)
+    state flag-count>> 1 "clearing a flag gives one back" assert=
+    5 5 (left-click)
+    state flag-count>> 1 "a blocked press on a flag leaves the count alone" assert=
+    4 4 (left-click)
+    (drain)
+    state flag-count>> 1 "revealing cells leaves the count alone" assert=
+  ] (with-game)
+] ;
+
+test-the-counter-string-is-three-characters: ( -- ) [
+  0 (hud-digits-string) "000" "zero pads to three digits" assert=
+  7 (hud-digits-string) "007" "one digit pads to three" assert=
+  40 (hud-digits-string) "040" "two digits pad to three" assert=
+  999 (hud-digits-string) "999" "three digits are unpadded" assert=
+  1200 (hud-digits-string) "999" "a longer value clamps to the field width" assert=
+  -3 (hud-digits-string) "-03" "an over-flagged counter shows a leading minus" assert=
+  -71 (hud-digits-string) "-71" "two negative digits need no pad" assert=
+  -400 (hud-digits-string) "-99" "a longer negative clamps too" assert=
+] ;
+
+test-the-timer-runs-only-while-the-board-is-live: ( -- ) [
+  beginner: [
+    (elapsed-seconds) 0 "a fresh board's timer reads zero" assert=
+    120 (ticks)
+    (elapsed-seconds) 0 "the timer does not run before the first click" assert=
+    4 4 (left-click)
+    (drain)
+    state elapsed-nanos>> 0 > "the first click starts the timer" assert-true
+    120 (ticks)
+    (elapsed-seconds) 2 "sixty ticks are worth about a second each" assert=
+    { 0 } (arm)
+    0 0 (left-click)
+    frozen: (elapsed-seconds) ;
+    120 (ticks)
+    (elapsed-seconds) frozen "the timer stops when the board freezes" assert=
+  ] (with-game)
+] ;
+
+test-the-face-carries-the-phase: ( -- ) [
+  beginner: [
+    (face-sprite-for-phase) face-normal-sprite "a fresh board shows the normal face" assert=
+    4 4 (left-click)
+    (face-sprite-for-phase) face-normal-sprite "play shows the normal face" assert=
+    { 0 } (arm)
+    0 0 (left-click)
+    (face-sprite-for-phase) face-dead-sprite "a loss shows the dead face" assert=
+  ] (with-game)
+  beginner: [
+    { 0 } (arm)
+    8 8 (left-click)
+    (drain)
+    (face-sprite-for-phase) face-win-sprite "a win shows the winning face" assert=
+  ] (with-game)
+] ;
+
+test-clicking-the-face-starts-a-new-game: ( -- ) [
+  beginner: [
+    4 4 (left-click)
+    (drain)
+    (click-face)
+    state phase>> fresh: "the face restarts a game in play" assert=
+    covered: (count-covers) 81 "every cell is covered again" assert=
+    (mines-placed) 0 "the new board has not placed its mines" assert=
+    state repaint>> "the new board asks for a full repaint" assert-true
+    state hud-mines>> f "the counter is invalidated with the board" assert=
+    state hud-seconds>> f "the timer is invalidated with the board" assert=
+    state hud-phase>> f "the face is invalidated with the board" assert=
+    { 0 } (arm)
+    0 0 (left-click)
+    state phase>> lost: "the fresh board can be lost again" assert=
+    (click-face)
+    state phase>> fresh: "the face restarts a lost game" assert=
+    state fatal-cell>> f "the fatal cell is cleared" assert=
+    state preset>> beginner: "the restart keeps the current preset" assert=
+  ] (with-game)
+] ;
+
+test-a-right-press-on-the-face-is-ignored: ( -- ) [
+  beginner: [
+    4 4 (left-click)
+    (drain)
+    before: state revealed-count>> ;
+    2 (face-center) (press-pixel)
+    state phase>> playing: "a right press on the face does not restart" assert=
+    state revealed-count>> before "the board is untouched" assert=
+  ] (with-game)
+] ;
+
+test-the-number-keys-pick-a-difficulty: ( -- ) [
+  beginner: [
+    (digit-2-index) (tap-key)
+    state preset>> intermediate: "key 2 switches to intermediate" assert=
+    state cols>> 16 "the board resizes with the preset" assert=
+    (digit-3-index) (tap-key)
+    state preset>> expert: "key 3 switches to expert" assert=
+    state mine-count>> 99 "expert hides ninety-nine mines" assert=
+    15 8 (left-click)
+    state phase>> playing: "the new preset is playable" assert=
+    (digit-1-index) (tap-key)
+    state preset>> beginner: "key 1 switches to beginner mid-game" assert=
+    state phase>> fresh: "switching preset starts a fresh board" assert=
+  ] (with-game)
+] ;
+
+test-a-loss-opens-the-whole-board: ( -- ) [
+  beginner: [
+    { 0 5 40 } (arm)
+    4 4 (right-click)  \ cell 40, a mine: a correct flag
+    8 8 (right-click)  \ cell 80, safe: a wrong flag
+    state flag-count>> 2 "two flags are down before the loss" assert=
+    0 0 (left-click)  \ cell 0, a mine
+    state phase>> lost: "clicking a mine loses" assert=
+    state fatal-cell>> 0 "the clicked mine is the fatal cell" assert=
+    0 (revealed?) "the fatal mine is revealed" assert-true
+    5 (revealed?) "the mine that was never touched is revealed too" assert-true
+    (revealed-mines) 2 "both unflagged mines are open" assert=
+    state covers>> 40 #nth flagged: "a flag that was on a mine stays a flag" assert=
+    state covers>> 80 #nth wrong-flag: "a flag that was not on a mine is marked wrong" assert=
+    state flag-count>> 2 "marking a wrong flag does not move the counter" assert=
+    80 (dirty?) "the wrongly flagged cell is repainted" assert-true
+    5 (dirty?) "the newly opened mine is repainted" assert-true
+    covered: (count-covers) 77 "every other cell keeps its cover" assert=
+  ] (with-game)
+] ;
+
+test-the-end-state-cells-paint-their-own-sprites: ( -- ) [
+  beginner: [
+    (scratch-framebuffer) current-framebuffer [
+      { 0 40 } (arm)
+      8 8 (right-click)
+      0 0 (left-click)
+      0 (draw-cell)
+      0 0 255 0 0 (packed) (cell-color-count) 36 "the fatal mine sits on a red fill" assert=
+      0 0 0 0 0 (packed) (cell-color-count) 12 "the fatal mine keeps its black body" assert=
+      4 4 (cell) (draw-cell)
+      4 4 168 168 168 (packed) (cell-color-count) 36 "the other mine sits on the revealed fill" assert=
+      8 8 (cell) (draw-cell)
+      8 8 255 0 0 (packed) (cell-color-count) 8 "the wrong flag carries eight red X pixels" assert=
+      8 8 0 0 0 (packed) (cell-color-count) 12 "the mine shows through the X" assert=
+    ] with-parameter
+  ] (with-game)
+] ;
+
+test-the-hud-paints-its-three-fields: ( -- ) [
+  beginner: [
+    (scratch-framebuffer) current-framebuffer [
+      state f >>repaint drop
+      minesweeper-draw
+      state hud-mines>> 10 "the counter is drawn from the outstanding mine count" assert=
+      state hud-seconds>> 0 "the timer is drawn at zero" assert=
+      state hud-phase>> fresh: "the face is drawn for the fresh phase" assert=
+      (hud-mines-px-x) 0 0 0 (packed) (panel-color-count) 0 >
+      "the counter sits on a black panel" assert-true
+      (hud-mines-px-x) 255 0 0 (packed) (panel-color-count) 0 >
+      "the counter's digits are red" assert-true
+      (hud-timer-px-x) 0 0 0 (packed) (panel-color-count) 0 >
+      "the timer sits on a black panel of its own" assert-true
+      (face-center) (pixel-at) 255 216 0 (packed) "the face's disc is yellow" assert=
+    ] with-parameter
+  ] (with-game)
+] ;
+
+test-the-hud-repaints-only-changed-fields: ( -- ) [
+  beginner: [
+    (scratch-framebuffer) current-framebuffer [
+      state f >>repaint drop
+      minesweeper-draw
+
+      (hud-mines-px-x) (blank-panel)
+      minesweeper-draw
+      (hud-mines-px-x) 0 0 0 (packed) (panel-color-count) 0
+      "an unchanged counter is left alone" assert=
+
+      2 3 (right-click)
+      minesweeper-draw
+      state hud-mines>> 9 "a flag drops the outstanding count" assert=
+      (hud-mines-px-x) 0 0 0 (packed) (panel-color-count) 0 >
+      "a changed counter is repainted" assert-true
+
+      \ Sixty ticks bank just under a second, so from any non-zero elapsed time they always carry
+      \ the displayed second over.
+      4 4 (left-click)
+      (drain)
+      minesweeper-draw
+      (hud-timer-px-x) (blank-panel)
+      minesweeper-draw
+      (hud-timer-px-x) 0 0 0 (packed) (panel-color-count) 0
+      "the timer holds its field while the second has not turned over" assert=
+      60 (ticks)
+      minesweeper-draw
+      (hud-timer-px-x) 0 0 0 (packed) (panel-color-count) 0 >
+      "the timer repaints when the second turns over" assert-true
+    ] with-parameter
+  ] (with-game)
+] ;
+
+test-each-sound-fires-at-its-own-moment: ( -- ) [
+  (reset-recordings)
+  beginner: [
+    (recording-player) current-sample-player [
+      2 3 (right-click)
+      recorded-plays #len 1 "placing a flag clicks" assert=
+      2 3 (right-click)
+      recorded-plays #len 2 "clearing a flag clicks too" assert=
+      4 4 (left-click)
+      recorded-plays #len 3 "a reveal blips once" assert=
+      (drain)
+      recorded-plays #len 3 "the cascade behind it stays silent" assert=
+      { 0 } (arm)
+      0 0 (left-click)
+      recorded-plays #len 4 "a mine detonates" assert=
+    ] with-parameter
+  ] (with-game)
+] ;
+
+test-the-win-chimes-after-its-blip: ( -- ) [
+  (reset-recordings)
+  beginner: [
+    (recording-player) current-sample-player [
+      { 0 } (arm)
+      8 8 (left-click)
+      (drain)
+      state phase>> won: "the board is swept" assert=
+      recorded-plays #len 2 "the winning click blips, then the win chimes" assert=
+    ] with-parameter
+  ] (with-game)
+] ;
+
+test-the-samples-are-built-once-on-the-first-press: ( -- ) [
+  (reset-recordings)
+  beginner: [
+    (recording-loader) current-sample-loader [
+      [ drop ] current-sample-player [
+        \ The samples are built once per page load by design; clear them so this test's load
+        \ count does not depend on which test ran first.
+        sounds f >>flag f >>reveal f >>boom f >>win drop
+        recorded-loads #len 0 "nothing is synthesized before the first press" assert=
+        2 3 (right-click)
+        recorded-loads #len 4 "the first press builds all four samples" assert=
+        4 4 (left-click)
+        (drain)
+        recorded-loads #len 4 "later presses reuse them" assert=
+        recorded-loads 0 #nth 1 #nth 1 "the samples are mono" assert=
+        recorded-loads 0 #nth 2 #nth sound-rate "the samples use the platform rate" assert=
+        recorded-loads 2 #nth 0 #nth #len boom-sound-frames 4 *
+        "the detonation covers its frame budget" assert=
+      ] with-parameter
     ] with-parameter
   ] (with-game)
 ] ;

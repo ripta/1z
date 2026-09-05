@@ -26,6 +26,9 @@ const BEVEL_LIGHT = [255, 255, 255]
 const BEVEL_DARK = [112, 112, 112]
 const REVEALED_COLOR = [168, 168, 168]
 const FLAG_COLOR = [255, 0, 0]
+const HUD_PANEL_COLOR = [0, 0, 0]
+const HUD_DIGIT_COLOR = [255, 0, 0]
+const FACE_COLOR = [255, 216, 0]
 
 // Board geometry, matching minesweeper.1z's constants at the Beginner preset it loads on: 9x9
 // cells of 8px, the block of HUD strip plus board centered on the canvas, so the board's
@@ -35,6 +38,18 @@ const BOARD_COLS = 9
 const BOARD_PX_X = 92
 const BOARD_PX_Y = 88
 const CANVAS_WIDTH = 256
+
+// The HUD strip is the 24 rows above the board: a 24x8 mine-counter panel at the board's left
+// edge, a 24x8 timer panel at its right, and the 13x13 face button centered between them.
+const HUD_HEIGHT = 24
+const HUD_PANEL_WIDTH = 24
+const HUD_PANEL_HEIGHT = 8
+const FACE_PX = 13
+const HUD_STRIP_PX_Y = BOARD_PX_Y - HUD_HEIGHT
+const HUD_PANEL_PX_Y = HUD_STRIP_PX_Y + (HUD_HEIGHT - HUD_PANEL_HEIGHT) / 2
+const HUD_MINES_PX_X = BOARD_PX_X
+const FACE_PX_X = BOARD_PX_X + Math.floor((BOARD_COLS * CELL_PX - FACE_PX) / 2)
+const FACE_PX_Y = HUD_STRIP_PX_Y + Math.floor((HUD_HEIGHT - FACE_PX) / 2)
 
 // The mouse buffer's byte layout, the same private contract host.js mirrors.
 const MOUSE = { WRITE: 6, READ: 7, RING: 16, CAPACITY: 32, SLOT: 8 }
@@ -135,17 +150,27 @@ async function instantiate() {
 const cellOrigin = (col, row) => ({ x: BOARD_PX_X + col * CELL_PX, y: BOARD_PX_Y + row * CELL_PX })
 const cellCenter = (col, row) => ({ x: BOARD_PX_X + col * CELL_PX + 3, y: BOARD_PX_Y + row * CELL_PX + 3 })
 
-// Count pixels matching `color` within a cell's 7x7 area.
-function cellColorCount(onez, col, row, color) {
-  const origin = cellOrigin(col, row)
+// Count pixels matching `color` within a w-by-h box at (x, y).
+function boxColorCount(onez, x, y, w, h, color) {
   let count = 0
-  for (let dy = 0; dy < 7; dy++) {
-    for (let dx = 0; dx < 7; dx++) {
-      const [r, g, b] = onez.pixelAt(origin.x + dx, origin.y + dy)
+  for (let dy = 0; dy < h; dy++) {
+    for (let dx = 0; dx < w; dx++) {
+      const [r, g, b] = onez.pixelAt(x + dx, y + dy)
       if (r === color[0] && g === color[1] && b === color[2]) count++
     }
   }
   return count
+}
+
+// Count pixels matching `color` within a cell's 7x7 area.
+function cellColorCount(onez, col, row, color) {
+  const origin = cellOrigin(col, row)
+  return boxColorCount(onez, origin.x, origin.y, 7, 7, color)
+}
+
+// Count pixels matching `color` within the mine-counter panel.
+function minePanelColorCount(onez, color) {
+  return boxColorCount(onez, HUD_MINES_PX_X, HUD_PANEL_PX_Y, HUD_PANEL_WIDTH, HUD_PANEL_HEIGHT, color)
 }
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
@@ -182,10 +207,41 @@ test('the first frame paints the covered board on the page background', async ()
   assert.deepEqual(onez.pixelAt(BOARD_PX_X + 6, BOARD_PX_Y + 6), BEVEL_DARK, 'the first cell ends in its dark bevel')
   assert.deepEqual(onez.pixelAt(BOARD_PX_X + 7, BOARD_PX_Y), PAGE_COLOR, 'the gutter keeps the page background')
   assert.deepEqual(onez.pixelAt(10, 10), PAGE_COLOR, 'the canvas outside the board is the page background')
-  assert.deepEqual(onez.pixelAt(BOARD_PX_X, BOARD_PX_Y - 10), PAGE_COLOR, 'the HUD strip is left clear')
 
   const lastOrigin = cellOrigin(BOARD_COLS - 1, BOARD_COLS - 1)
   assert.deepEqual(onez.pixelAt(lastOrigin.x + 3, lastOrigin.y + 3), COVERED_COLOR, 'the last cell is painted too')
+})
+
+test('the first frame paints the HUD above the board', async () => {
+  const onez = await instantiate()
+  await bootMinesweeper(onez)
+  await tickFrame(onez)
+
+  assert.ok(minePanelColorCount(onez, HUD_PANEL_COLOR) > 0, 'the mine counter sits on a black panel')
+  assert.ok(minePanelColorCount(onez, HUD_DIGIT_COLOR) > 0, 'the mine counter draws red digits')
+  assert.deepEqual(
+    onez.pixelAt(FACE_PX_X + 6, FACE_PX_Y + 6),
+    FACE_COLOR,
+    'the face button paints its yellow disc',
+  )
+  assert.deepEqual(onez.pixelAt(FACE_PX_X - 1, FACE_PX_Y), PAGE_COLOR, 'the strip beside the face stays clear')
+})
+
+test('clicking the face starts a new game', async () => {
+  const onez = await instantiate()
+  await bootMinesweeper(onez)
+  await tickFrame(onez)
+
+  // Open a region, so a restart has something visible to undo.
+  const clickAt = cellCenter(4, 4)
+  onez.pushPress(0, clickAt.x, clickAt.y)
+  await tickFrame(onez)
+  assert.deepEqual(onez.pixelAt(clickAt.x, clickAt.y), REVEALED_COLOR, 'the clicked cell is revealed')
+
+  onez.pushPress(0, FACE_PX_X + 6, FACE_PX_Y + 6)
+  await tickFrame(onez)
+  assert.deepEqual(onez.pixelAt(clickAt.x, clickAt.y), COVERED_COLOR, 'the restart covers the board again')
+  assert.equal(cellColorCount(onez, 4, 4, COVERED_COLOR), 25, 'the cell is a full covered cell again')
 })
 
 test('a right press flags a cell and a left press opens a region, observable in the framebuffer', async () => {
