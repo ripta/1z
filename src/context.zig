@@ -1280,16 +1280,19 @@ pub const Context = struct {
     /// `shared_lock` on the write side, which `defineBinding` holds for the definition anyway.
     binding_names: *BindingNameStore = undefined,
 
-    /// Returns true when the instruction sequence ends with a call to `;`,
-    /// which means it is a word definition and should be executed even in
-    /// check mode.
+    /// Returns true when the instruction sequence ends with a call to `;`, `(import-locals-checked)`,
+    /// or `import-locals`, which means it is a word definition or a `private{ }` / `private(shadow-ok){ }`
+    /// block install and should be executed even in check mode.
     pub fn isDefinitionStatement(instrs: []const Instruction) bool {
         if (instrs.len == 0) return false;
-        return switch (instrs[instrs.len - 1].op) {
-            .call_word => |name| std.mem.eql(u8, name, ";"),
-            .call_word_direct, .call_word_module => |slot| std.mem.eql(u8, slot.name, ";"),
-            .push_literal => false,
+        const name = switch (instrs[instrs.len - 1].op) {
+            .call_word => |name| name,
+            .call_word_direct, .call_word_module => |slot| slot.name,
+            .push_literal => return false,
         };
+        return std.mem.eql(u8, name, ";") or
+            std.mem.eql(u8, name, "(import-locals-checked)") or
+            std.mem.eql(u8, name, "import-locals");
     }
 
     fn builtinDescriptorFlags(comptime tag: std.meta.Tag(value_mod.Value)) value_mod.DescriptorFlags {

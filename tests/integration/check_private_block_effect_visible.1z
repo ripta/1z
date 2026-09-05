@@ -1,0 +1,7 @@
+\ Test that a private{ } block's word is installed for check, so its declared
+\ stack effect is visible to a caller instead of warning "unknown effect".
+private{
+  private-helper: ( n: fixnum -- n ) [ 1 + ] ;
+}
+
+calls-private: ( -- n ) [ 1 private-helper ] ;

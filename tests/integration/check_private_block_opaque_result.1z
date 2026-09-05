@@ -1,0 +1,10 @@
+\ Test that a private{ } helper's declared output type reaches a caller's
+\ result, instead of the analyzer threading the caller's opaque input type
+\ through and reporting a false type mismatch downstream.
+private{
+  seed: ( t: type -- s ) [ drop "x" ] ;
+}
+
+make-thing:   ( t: type -- s ) [ seed ] ;
+takes-string: ( s: string -- ) [ drop ] ;
+use-it:       ( -- )           [ string make-thing takes-string ] ;

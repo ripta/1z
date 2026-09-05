@@ -8,7 +8,7 @@
 \ definition is left uncalled: a word that calls its own nested definition at the body's top level
 \ is not AOT-compilable, so a call would turn these pins into a build failure. The module call is
 \ wrapped in `call` rather than `when`, since a top-level `when` whose quotation leaves a value
-\ behind fails in a binary on its own (spec/bugs/20260904-aot-top-level-when-result.md).
+\ behind fails in a binary on its own.
 
 use "ranges" ;
 use "sequences" ;

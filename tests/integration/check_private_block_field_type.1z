@@ -1,0 +1,7 @@
+\ Test that a private{ } block's type is installed for check, so a field
+\ annotation naming it resolves instead of falling back to a bare string.
+private{
+  inner-type: struct{ a b } ;
+}
+
+outer: struct{ f: inner-type } ;
