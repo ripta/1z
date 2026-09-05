@@ -1,0 +1,17 @@
+\ The runtime-image build of the dispatched-branch shape in
+\ aot_when_dispatched_branch_result.1z, which failed the same way.
+use "sequences" ;
+
+mk: ( n -- arr ) [ 1array { 1 2 } #append ] ;
+
+pick5: ( -- n ) [ t [ 5 ] when ] ;
+
+t [ 5 ] when .
+f [ 5 ] when
+"--" print-line
+t [ 5 mk ] when .
+"--" print-line
+pick5 .
+"--" print-line
+f [ 5 ] unless .
+t [ 5 ] unless

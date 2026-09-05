@@ -3,7 +3,7 @@ Prelude compilation: 463/464 words compiled (99.8%)
       NC.13: word body underflows the abstract stack (row-variable effects)
       hint: blocked until row-variable stack regions can be modeled
 Quotation bodies compiled: 0
-Inline PIC sites: 90/274 generic call sites preseeded
+Inline PIC sites: 90/273 generic call sites preseeded
 AOT interpreter fallbacks: 306 total
   native: 245
   per-op-native: 42

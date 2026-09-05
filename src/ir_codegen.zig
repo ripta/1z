@@ -4957,6 +4957,23 @@ fn emitIfBranchDispatch(
     emitReleaseSpilled(state, spill);
 }
 
+/// Settle an `if` arm whose quotation was dispatched at runtime, leaving its result as an opaque
+/// row read from the live stack pointer.
+///
+/// The arm's effect is unknowable at compile time: the quotation arrives as a value, so any
+/// caller's quotation may leave any number of results. The sibling arm's effect is not a stand-in
+/// for it. `when` is the shape that exposes this, since its body `[ ] if` pairs an empty literal
+/// arm with the caller's quotation, and `t [ 5 ] when` leaves a result the empty arm does not.
+///
+/// AOT-only, because the row model is. The arm ends by storing `base_idx + sp` as the live stack
+/// pointer. An assumed-but-wrong depth writes that pointer below what the call actually left, which
+/// orphans the values above it. The JIT emits no such store.
+fn settleDispatchedBranchAsRow(state: *CompileState, stack: []StackEntry, sp: *usize) void {
+    reloadBaseAfterDynamicCall(state);
+    sp.* = 1;
+    stack[0] = .{ .row_region = state.nextRowId() };
+}
+
 /// Compile a while/until loop: pred and body quotations with an optional
 /// condition negation for `until` semantics.
 fn compilePredBodyLoop(
@@ -6811,16 +6828,20 @@ fn emitIntrinsicIf(ec: EmitCtx) IrCodegenError!ControlFlow {
             } else {
                 // True branch is raw_at_slot: dispatch at runtime.
                 emitIfBranchDispatch(state, stack, sp, true_entry.raw_at_slot);
-                // Infer effect from the false (quotation_body) branch.
-                const eff = inferQuotationEffect(false_body.?, if (state.resolver) |r| r else null) catch {
-                    state.not_compilable_reason = .effect_inference_overflow;
-                    return IrCodegenError.NotCompilable;
-                } orelse {
-                    state.not_compilable_reason = .quotation_reification;
-                    return IrCodegenError.NotCompilable;
-                };
-                sp.* = sp.* - eff.input_count + eff.output_count;
-                resetStackToPhysical(stack, sp.*);
+                if (state.aot_mode) {
+                    settleDispatchedBranchAsRow(state, stack, sp);
+                } else {
+                    // Infer effect from the false (quotation_body) branch.
+                    const eff = inferQuotationEffect(false_body.?, if (state.resolver) |r| r else null) catch {
+                        state.not_compilable_reason = .effect_inference_overflow;
+                        return IrCodegenError.NotCompilable;
+                    } orelse {
+                        state.not_compilable_reason = .quotation_reification;
+                        return IrCodegenError.NotCompilable;
+                    };
+                    sp.* = sp.* - eff.input_count + eff.output_count;
+                    resetStackToPhysical(stack, sp.*);
+                }
             }
             return .next;
         },
@@ -6960,10 +6981,11 @@ fn emitIntrinsicIf(ec: EmitCtx) IrCodegenError!ControlFlow {
     const saved_base_idx = state.base_idx;
     const saved_sp_val = state.sp_val;
 
-    // Infer the branch effect when one branch is raw_at_slot.
-    // The raw_at_slot branch is assumed to have the same effect
-    // as the quotation_body branch.
-    const branch_effect: ?InferredEffect = if (true_body == null or false_body == null) blk: {
+    // Infer the branch effect when one branch is raw_at_slot. Only the JIT reads it: it models the
+    // raw_at_slot branch as having the same effect as the quotation_body branch, which is an
+    // assumption about a quotation it cannot see. AOT settles that arm as a row instead, so
+    // inferring here would only fail a compile the row path handles.
+    const branch_effect: ?InferredEffect = if (!state.aot_mode and (true_body == null or false_body == null)) blk: {
         const known_body = true_body orelse false_body orelse unreachable;
         break :blk inferQuotationEffect(known_body, if (state.resolver) |r| r else null) catch {
             state.not_compilable_reason = .effect_inference_overflow;
@@ -6993,9 +7015,13 @@ fn emitIntrinsicIf(ec: EmitCtx) IrCodegenError!ControlFlow {
     } else {
         // Runtime dispatch for raw_at_slot quotation
         emitIfBranchDispatch(state, stack, sp, true_entry.raw_at_slot);
-        const eff = branch_effect.?;
-        sp.* = sp.* - eff.input_count + eff.output_count;
-        resetStackToPhysical(stack, sp.*);
+        if (state.aot_mode) {
+            settleDispatchedBranchAsRow(state, stack, sp);
+        } else {
+            const eff = branch_effect.?;
+            sp.* = sp.* - eff.input_count + eff.output_count;
+            resetStackToPhysical(stack, sp.*);
+        }
     }
     if (traceFramesEnabled(state)) state.inline_trace_frame_count = saved_inline_trace_frame_count;
     const true_exit_kind = state.exit_kind;
@@ -7054,9 +7080,13 @@ fn emitIntrinsicIf(ec: EmitCtx) IrCodegenError!ControlFlow {
         try compileQuotationBodyInline(state, fb, saved_stack, &false_sp);
     } else {
         emitIfBranchDispatch(state, saved_stack, &false_sp, false_entry.raw_at_slot);
-        const eff = branch_effect.?;
-        false_sp = false_sp - eff.input_count + eff.output_count;
-        resetStackToPhysical(saved_stack, false_sp);
+        if (state.aot_mode) {
+            settleDispatchedBranchAsRow(state, saved_stack, &false_sp);
+        } else {
+            const eff = branch_effect.?;
+            false_sp = false_sp - eff.input_count + eff.output_count;
+            resetStackToPhysical(saved_stack, false_sp);
+        }
     }
     if (traceFramesEnabled(state)) state.inline_trace_frame_count = saved_inline_trace_frame_count;
     const false_exit_kind = state.exit_kind;
