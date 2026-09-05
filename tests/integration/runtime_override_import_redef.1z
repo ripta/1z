@@ -4,14 +4,13 @@
 \ restored, so the overriding definition's binding is what the redefinition finds, exactly as
 \ interpreted.
 \
-\ The bare call is the file's last statement, so the raise stays in tail position on every tier.
+\ A word body now defines in its own transient frame. The trailing `0 drop` defers this
+\ top-level definition to binary runtime, where it reaches the durable frame on every tier.
 
 use { taken: } "def_over_import_mod.1z" ;
 
 taken: override ( -- s ) [ "mine" ] ;
 
-taken print-line
+[ taken print-line ] call
 
-redefine-own: ( -- ) [ taken: ( x -- s ) [ drop "B" ] ; ] ;
-
-redefine-own
+taken: ( x -- s ) [ drop "B" ] ; 0 drop

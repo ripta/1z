@@ -24,6 +24,7 @@ const populate_core = @import("aot_image_populate_core.zig");
 const Context = @import("context.zig").Context;
 const dispatch_mod = @import("dispatch.zig");
 const dictionary_mod = @import("dictionary.zig");
+const may_define = @import("may_define.zig");
 const WordProvenance = dictionary_mod.WordProvenance;
 const markers_mod = @import("primitives/markers.zig");
 
@@ -601,6 +602,7 @@ fn populateModulesAndWords(
                 .source_column = diag.source_column,
                 .provenance = diag.provenance,
                 .word_id = word_id_opt,
+                .may_define = may_define.bodyCallsDefiningNative(body),
                 .action = .{ .compound = body },
             };
             // A `private{ }` helper row goes into `deps`, not `words`. The public by-name surface

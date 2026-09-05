@@ -1,0 +1,24 @@
+\ Fixture for word_body_local_frame.1z: a private word with locals read from its loop body, reached
+\ both from a sibling private's body and from a nested branch inside another sibling's loop.
+
+use "ranges" ;
+use "sequences" ;
+
+private{
+  offsets: { 1 2 } ;
+
+  (neighbors): ( n -- vec ) [
+    n: swap ;
+    [ ] make-vector
+    offsets [ n + #push! ] #each
+  ] ;
+
+  (count-all): ( -- arr ) [
+    { } { 30 40 } [ t [ (neighbors) >array #append ] [ drop ] if ] #each
+  ] ;
+}
+
+place: ( n -- arr ) [
+  cell: swap ;
+  cell (neighbors) >array (count-all) #append
+] ;

@@ -343,6 +343,11 @@ pub const DispatchEntry = struct {
     ///
     /// Dispatch-frame entries bypass `register`, so a frame entry carries no meaningful sequence.
     sequence: u64 = 0,
+    /// Whether a `.quotation` body calls a defining native at its top level, so dispatch runs it
+    /// in a transient lexical frame of its own. Stamped by `Context.registerDispatch`, the one
+    /// production writer. A body carrying a code pointer is stamped the same way but never read,
+    /// since the compiled body brackets itself.
+    may_define: bool = false,
 };
 
 /// Dispatch table mapping (dispatch_id, type_a, type_b) to method bodies.

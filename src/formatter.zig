@@ -319,7 +319,12 @@ pub const Formatter = struct {
                     // is part of that line and must not force a break, or the closing bracket gets orphaned.
                     // The block counts as multi-line when a newline appears anywhere within it, even if its
                     // first content shares the opening line (as in `matrix{ 1 ;` ... `}`).
-                    const ends_statement = indent_level == 0 or self.enclosingBlockIsMultiLine(i);
+                    //
+                    // At the top level a line the `;` does not end keeps its remainder, since breaking there
+                    // would split one statement into two and change what the AOT freeze runs. See
+                    // `lineEndsInSemicolon`. A row separator inside a block splits nothing, so it still breaks.
+                    const ends_statement = (indent_level == 0 and self.lineEndsInSemicolon(i)) or
+                        (indent_level > 0 and self.enclosingBlockIsMultiLine(i));
                     if (ends_statement) {
                         // After semicolon, write pending comments and newline
                         for (pending_comments.items) |comment| {
@@ -435,6 +440,31 @@ pub const Formatter = struct {
             }
         }
         return false;
+    }
+
+    /// Whether the source line holding the token at `pos` ends in `;`, ignoring trailing comments.
+    ///
+    /// Breaking after a top-level `;` turns one statement into two. The AOT freeze executes an
+    /// entry-file statement at build time only when its last instruction is the `;` call, and
+    /// collects it for binary runtime otherwise. So a break is only safe where every piece still
+    /// ends in `;`, which is exactly when the line already does. `a: 1 ; b: 2 ; c: 3 ;` splits;
+    /// `a: 1 ; 0 drop` may not, because the split would move its definition from binary runtime to
+    /// the build.
+    ///
+    /// Asked only at the top level. A `;` inside a block separates rows rather than statements, so
+    /// breaking it splits nothing the freeze can see.
+    fn lineEndsInSemicolon(self: *Formatter, pos: usize) bool {
+        var last_is_semicolon = false;
+        var i = pos;
+        while (i < self.tokens.items.len) : (i += 1) {
+            switch (self.tokens.items[i].kind) {
+                .newline => break,
+                .comment => {},
+                .semicolon => last_is_semicolon = true,
+                else => last_is_semicolon = false,
+            }
+        }
+        return last_is_semicolon;
     }
 
     /// Determine whether the block enclosing pos spans multiple lines, scanning the whole

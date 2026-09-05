@@ -4,13 +4,13 @@
 \ shows that relaxation never arrives.
 \
 \ The collision has to happen at binary runtime, not at freeze. The freeze executes the entry file's
-\ definition statements and collects the rest, so a top-level `dup:` would throw during the build
-\ instead. A word body reaches the guard the same way a top level does, because it pushes no frame
-\ of its own and its definitions land in the import frame.
+\ statements ending in `;` and collects the rest. The trailing `0 drop` keeps this definition
+\ for binary runtime in the durable entry frame, where the guard reads.
 \
 \ The call is bare rather than wrapped in `recover`, because a quotation pushes a transient frame
-\ and a definition landing there is exempt by design. So the binary aborts, and its diagnostic is
-\ the golden.
+\ and a definition landing there is exempt by design. A word body pushes one of its own the same
+\ way, so a definition made inside a called word never reaches the guard either. So the binary
+\ aborts, and its diagnostic is the golden.
 \
 \ The import is not load-bearing for the frame: every AOT binary pushes the durable entry frame at
 \ boot. The import stays so this entry covers the guard with an imported name sitting in the frame.
@@ -18,6 +18,4 @@ use { taken: } "fixtures/aot_collision_guard_mod.1z" ;
 
 taken .
 
-shadow-native: ( -- ) [ dup: ( -- x ) [ 0 ] ; ] ;
-
-shadow-native
+dup: ( -- x ) [ 0 ] ; 0 drop

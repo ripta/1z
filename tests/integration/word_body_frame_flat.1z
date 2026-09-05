@@ -1,0 +1,22 @@
+\ Bounded-memory regression for the transient lexical frame a defining word body runs in.
+\
+\ A tail-recursive definer shares one frame across the whole trampoline loop rather than opening
+\ one per iteration, and a word called in a loop opens and closes its frame on every call, so
+\ neither shape grows under the 4 MB cap in the `.flags` sidecar.
+
+count-down: ( n -- ) [
+  n: swap ;
+  n 0 > [ n 1 - count-down ] when
+] ;
+
+200000 count-down
+
+render-len: ( a b -- n ) [
+  #append
+  s: swap ;
+  s #len
+] ;
+
+20000 [ "hello, " "world" render-len drop ] times
+
+"flat" print-line

@@ -1398,6 +1398,10 @@ pub const ModuleWord = struct {
     /// `importWord` carries it across. Borrowed on the same terms as `dictionary.WordDefinition`'s
     /// field of the same name, which this one feeds.
     body_owner: ?*const Closure = null,
+    /// Whether a `.compound` body calls a defining native at its top level, the same bit
+    /// `dictionary.ExecFlags.may_define` carries. A qualified call reaches the body without a
+    /// frame `WordDefinition`, so the bit rides here for that path.
+    may_define: bool = false,
     action: Action,
 
     pub const Action = union(enum) {

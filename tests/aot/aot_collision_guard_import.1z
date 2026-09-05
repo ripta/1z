@@ -3,8 +3,7 @@
 \ `imported`, so the guard sees at binary runtime what it sees interpreted.
 use { taken: } "fixtures/aot_collision_guard_mod.1z" ;
 
-taken .
+[ taken . ] call
 
-clash-import: ( -- ) [ taken: ( -- n ) [ 1 ] ; ] ;
-
-clash-import
+\ The trailing word defers the definition to binary runtime in the durable entry frame.
+taken: ( -- n ) [ 1 ] ; 0 drop

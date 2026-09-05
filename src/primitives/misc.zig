@@ -25,6 +25,7 @@ const stack_effect_mod = @import("../stack_effect.zig");
 const callable_mod = @import("../callable.zig");
 const container_backing = @import("../container_backing.zig");
 const dict_mod = @import("../dictionary.zig");
+const may_define = @import("../may_define.zig");
 const primitives_root = @import("../primitives.zig");
 const embedded_stdlib = @import("../embedded_stdlib.zig");
 const LoadLock = @import("../load_lock.zig").LoadLock;
@@ -127,6 +128,7 @@ fn nativeToModule(ctx: *Context) anyerror!void {
         try module.words.put(alloc, key_copy, .{
             .stack_effect = effect,
             .body_owner = callable_mod.ownerClosureOf(val),
+            .may_define = may_define.bodyCallsDefiningNative(quot.instructions),
             .action = .{ .compound = quot.instructions },
         });
     }

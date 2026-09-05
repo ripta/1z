@@ -1,10 +1,10 @@
-\ A quotation-local redefinition whose declared effect mismatches the shadowed word's arity
-\ raises arity-mismatch with the framed rendering. The eager suite reuses this golden, so
-\ passing both modes is the parity check.
-
-val: ( -- s ) [ "A" ] ;
+\ A redefinition inside a word body whose declared effect mismatches the arity of the word it
+\ redefines raises arity-mismatch with the framed rendering. Both definitions land in the body's
+\ own transient frame, so the second is a same-scope redefinition of the first. The eager suite
+\ reuses this golden, so passing both modes is the parity check.
 
 make-stored: ( -- s ) [
+  val: ( -- s ) [ "A" ] ;
   val: ( x y -- s ) [ 2drop "B" ] ;
   val
 ] ;

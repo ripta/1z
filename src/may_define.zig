@@ -9,6 +9,10 @@
 //! The property is conservative in one direction only. Answering true where the truth is false
 //! costs a frame; answering false where the truth is true drops a binding into the durable frame
 //! the interpreter keeps it out of. So every construct the walk cannot see through answers true.
+//!
+//! A word body is bracketed the same way, on every tier, when it calls a defining native at its
+//! own top level; `bodyCallsDefiningNative` is that gate. It reads no callee: a compound callee
+//! that defines brackets itself, and a pushed quotation literal is a separate body.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -215,6 +219,22 @@ pub fn bodyMayDefineCached(
 ) bool {
     var walk = Walk{ .resolver = resolver, .methods = methods, .memo = memo };
     return walk.bodyMayDefine(body);
+}
+
+/// Whether `body`'s own top-level instructions call a native that defines a word.
+///
+/// The interpreter's per-word gate, computed when the word is defined and carried on its
+/// definition, so a call reads one bit. Name-based rather than resolved: a callee need not exist
+/// yet at definition time, and a user word that shadows a defining native's name only costs a
+/// frame. A qualified name matches on its bare segment, so `native.<x>` reaches the same registry
+/// row as `<x>`.
+pub fn bodyCallsDefiningNative(body: []const Instruction) bool {
+    for (body) |instr| {
+        const name = instr.op.callTargetName() orelse continue;
+        const bare = if (std.mem.lastIndexOfScalar(u8, name, '.')) |dot| name[dot + 1 ..] else name;
+        if (primitives.nativeNameDefinesWord(bare)) return true;
+    }
+    return false;
 }
 
 /// A `MethodSource` over a live dispatch table.
@@ -546,6 +566,29 @@ test "exhausting the visit budget flags" {
     for (&body) |*instr| instr.* = call("dup");
     var data = TestResolver{ .words = &.{dup} };
     try std.testing.expect(bodyMayDefine(body[0..], data.resolver(), noMethods()));
+}
+
+// --- bodyCallsDefiningNative ---
+
+test "a body calling `;` at its top level calls a defining native" {
+    const body = [_]Instruction{ call("swap"), call(";") };
+    try std.testing.expect(bodyCallsDefiningNative(&body));
+}
+
+test "a body of inert calls does not call a defining native" {
+    const body = [_]Instruction{ call("dup"), call("+") };
+    try std.testing.expect(!bodyCallsDefiningNative(&body));
+}
+
+test "a qualified registry native matches on its bare name" {
+    const body = [_]Instruction{call("native.borrow-deps")};
+    try std.testing.expect(bodyCallsDefiningNative(&body));
+}
+
+test "a definition inside a pushed quotation literal does not flag the pushing body" {
+    const inner = [_]Instruction{call(";")};
+    const body = [_]Instruction{ pushQuot(&inner), call("call") };
+    try std.testing.expect(!bodyCallsDefiningNative(&body));
 }
 
 // --- Memo ---

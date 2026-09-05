@@ -1,0 +1,391 @@
+\ Unit tests for examples/wasm-minesweeper/minesweeper.1z, run under 1z test, which borrows
+\ the sibling's private words.
+\
+\ The tests drive minesweeper-update directly rather than run-frame, so no fake clock is
+\ needed. The tick helper drains the mouse ring before each update the way run-frame does:
+\ mouse-events keeps the last drained array until the next drain, so an undrained tick would
+\ replay a click. Every test starts with (new-game), because start-game already ran init when
+\ the sibling loaded and this file shares that module state. Tests swap scratch keyboard and
+\ mouse buffers in via with-parameter, since the (wasm-*) buffers only exist under the wasm
+\ C-API root, and bind a seeded generator via with-random so mine placement is deterministic.
+\
+\ The drawing tests bind a scratch framebuffer and never reach clear-background, which costs
+\ about 20 seconds interpreted: they clear the repaint flag first or paint cells directly. The
+\ full first-frame paint is covered by tests/wasm/verify-minesweeper.mjs against real frames.
+
+use "testing" ;
+use "bytes" ;
+use "random" ;
+use "./minesweeper.1z" ;
+
+private{
+  (scratch-keyboard):    ( -- byte-array ) [ 48 bytes-alloc ] ;
+  (scratch-mouse):       ( -- byte-array ) [ 272 bytes-alloc ] ;
+  (scratch-framebuffer): ( -- byte-array ) [ framebuffer-width framebuffer-height * 4 * bytes-alloc ] ;
+
+  \\ Appends one slot to the scratch ring the way host.js does: the slot at the write index
+  \\ modulo the capacity, then the index advanced modulo 256. The raw byte encoding is
+  \\ deliberate, so a drift between this file's idea of the layout and game/input's shows up
+  \\ as a failure.
+  (push-mouse-event): ( button kind x y inside -- ) [
+    inside: swap ;
+    y: swap ;
+    x: swap ;
+    kind:   swap ;
+    button: swap ;
+    buf:    current-mouse get ;
+    write:  buf 6 #peek8 ;
+    base:   write 32 % 8 * 16 + ;
+    buf base button #poke8! drop
+    buf base 1 + kind #poke8! drop
+    buf base 2 + inside #poke8! drop
+    buf base 4 + x #poke16! drop
+    buf base 6 + y #poke16! drop
+    buf 6 write 1 + 256 % #poke8! drop
+  ] ;
+
+  \\ One update tick the way run-frame runs it: drain the ring, update, advance the keyboard.
+  (tick): ( -- ) [ advance-mouse-frame 0 minesweeper-update advance-keyboard-frame ] ;
+  (ticks): ( n -- ) [ [ (tick) ] times ] ;
+
+  \\ Run quot with scratch input buffers bound, a seeded generator, and a fresh game at preset.
+  (with-game): ( preset quot -- ) [
+    quot: swap ;
+    preset: swap ;
+    (scratch-keyboard) current-keyboard [
+      (scratch-mouse) current-mouse [
+        42 <random> [ preset (new-game) quot ] with-random
+      ] with-parameter
+    ] with-parameter
+  ] ;
+
+  \\ The framebuffer pixel at the center of a cell's 7x7 area.
+  (cell-center): ( col row -- x y ) [
+    (cell) dup (cell-col) cell-px * (board-px-x) + 3 +
+    swap (cell-row) cell-px * (board-px-y) + 3 +
+  ] ;
+
+  \\ Press a button (0 left, 2 right) at a cell's center and run one tick.
+  (press-at):    ( button col row -- ) [ (cell-center) 1 -rot> 1 (push-mouse-event) (tick) ] ;
+  (left-click):  ( col row -- ) [ 0 -rot> (press-at) ] ;
+  (right-click): ( col row -- ) [ 2 -rot> (press-at) ] ;
+
+  \\ Tick until the cascade worklist drains, bounded so a stuck cascade fails instead of
+  \\ hanging.
+  (drain): ( -- ) [ 600 [ state worklist>> #len 0 > [ (tick) ] when ] times ] ;
+
+  \\ Start play on a hand-placed board: mines at the given cells, counts derived from them, and
+  \\ the mine count matching, so the win fires on the last safe cell.
+  (arm): ( cells -- ) [
+    dup #len state swap >>mine-count drop
+    [ state mines>> swap t #nth! drop ] #each
+    (count-adjacent!)
+    state playing: >>phase drop
+  ] ;
+
+  (count-covers):   ( sym -- n ) [ state covers>> swap [ = ] curry #filter #count ] ;
+  (mines-placed):   ( -- n ) [ state mines>> [ ] #filter #count ] ;
+  (revealed?):      ( cell -- ? ) [ state covers>> swap #nth revealed: = ] ;
+  (revealed-mines): ( -- n ) [ (cell-count) iota >iterator [ dup state mines>> swap #nth swap (revealed?) and ] #filter #count ] ;
+
+  \\ A cell's mine neighbors, counted independently of the game's own bookkeeping.
+  (neighbor-mines): ( cell -- n ) [ (neighbors) [ state mines>> swap #nth ] #filter #count ] ;
+
+  \\ Cells whose stored count disagrees with (neighbor-mines).
+  (miscounted-cells): ( -- n ) [
+    (cell-count) iota >iterator [ dup (neighbor-mines) swap state counts>> swap #nth = not ] #filter #count
+  ] ;
+
+  \\ A revealed zero with a neighbor still covered, which a drained cascade must never leave.
+  (leaky-zero?): ( cell -- ? ) [
+    dup (revealed?)
+    over state counts>> swap #nth 0 = and
+    swap (neighbors) [ state covers>> swap #nth covered: = ] #filter #count 0 > and
+  ] ;
+
+  (leaky-zeros): ( -- n ) [ (cell-count) iota >iterator [ (leaky-zero?) ] #filter #count ] ;
+
+  (dirty?): ( cell -- ? ) [ state dirty>> swap #index-of f = not ] ;
+
+  \\ A color as the framebuffer's packed little-endian RGBA, opaque.
+  (packed): ( r g b -- packed ) [ 16 shift-left swap 8 shift-left bitor bitor 255 24 shift-left bitor ] ;
+
+  (pixel-at): ( x y -- packed ) [ framebuffer-width * + 4 * current-framebuffer get swap #peek32 ] ;
+
+  \\ Count pixels of one packed color inside a cell's 7x7 area.
+  (cell-color-count): ( col row packed -- n ) [
+    p: swap ;
+    (cell-center) 3 - y: swap ;
+    3 - x: swap ;
+    0
+    49 iota >iterator [
+      i: swap ;
+      x i 7 % + y i 7 div + (pixel-at) p = [ 1 + ] when
+    ] #each
+  ] ;
+}
+
+test-new-game-sizes-each-preset: ( -- ) [
+  expert: [
+    state cols>> 30 "expert is 30 columns" assert=
+    state rows>> 16 "expert is 16 rows" assert=
+    state mine-count>> 99 "expert hides 99 mines" assert=
+    state phase>> fresh: "a new game has not placed its mines" assert=
+    state covers>> #len 480 "one cover entry per cell" assert=
+    covered: (count-covers) 480 "every cell starts covered" assert=
+    (mines-placed) 0 "no mine is placed before the first click" assert=
+    state worklist>> #len 0 "the worklist starts empty" assert=
+    state dirty>> #len 0 "the dirty list starts empty" assert=
+    state repaint>> "a new game asks for a full repaint" assert-true
+  ] (with-game)
+  intermediate: [
+    state cols>> 16 "intermediate is 16 columns" assert=
+    state rows>> 16 "intermediate is 16 rows" assert=
+    state mine-count>> 40 "intermediate hides 40 mines" assert=
+  ] (with-game)
+  beginner: [
+    state cols>> 9 "beginner is 9 columns" assert=
+    state rows>> 9 "beginner is 9 rows" assert=
+    state mine-count>> 10 "beginner hides 10 mines" assert=
+  ] (with-game)
+] ;
+
+test-hit-cell-maps-board-pixels: ( -- ) [
+  beginner: [
+    (board-px-x) 92 "beginner's board starts at x 92" assert=
+    (board-px-y) 88 "beginner's board starts at y 88, under the HUD strip" assert=
+    92 88 (hit-cell) 0 "the board origin is cell 0" assert=
+    99 95 (hit-cell) 0 "the gutter pixels belong to the cell before them" assert=
+    100 96 (hit-cell) 1 1 (cell) "the next pixel is the next cell" assert=
+    163 159 (hit-cell) 8 8 (cell) "the last board pixel is the last cell" assert=
+    91 88 (hit-cell) f "one pixel left of the board misses" assert=
+    92 87 (hit-cell) f "one pixel above the board misses" assert=
+    92 70 (hit-cell) f "the HUD strip misses" assert=
+    164 159 (hit-cell) f "one pixel right of the board misses" assert=
+    92 160 (hit-cell) f "one pixel below the board misses" assert=
+  ] (with-game)
+] ;
+
+test-first-click-places-mines-clear-of-the-click: ( -- ) [
+  beginner: [
+    4 4 (left-click)
+    state phase>> playing: "the first click starts play" assert=
+    (mines-placed) 10 "beginner places ten mines" assert=
+    state mines>> 4 4 (cell) #nth f "the clicked cell is not a mine" assert=
+    4 4 (cell) (neighbor-mines) 0 "no mine touches the clicked cell" assert=
+    state counts>> 4 4 (cell) #nth 0 "the clicked cell is a zero" assert=
+    4 4 (cell) (revealed?) "the clicked cell is revealed" assert-true
+    (miscounted-cells) 0 "every count matches its mine neighbors" assert=
+  ] (with-game)
+  intermediate: [
+    8 8 (left-click)
+    (mines-placed) 40 "intermediate places forty mines" assert=
+    8 8 (cell) (neighbor-mines) 0 "intermediate's first click is clear too" assert=
+  ] (with-game)
+  expert: [
+    15 8 (left-click)
+    (mines-placed) 99 "expert places ninety-nine mines" assert=
+    15 8 (cell) (neighbor-mines) 0 "expert's first click is clear too" assert=
+  ] (with-game)
+] ;
+
+test-mine-placement-is-deterministic-under-a-seed: ( -- ) [
+  beginner: [ 4 4 (left-click) state mines>> >array ] (with-game)
+  beginner: [ 4 4 (left-click) state mines>> >array ] (with-game)
+  "the same seed places the same mines" assert=
+] ;
+
+test-cascade-reveals-one-budget-per-tick-outward: ( -- ) [
+  beginner: [
+    4 4 (left-click)
+    state revealed-count>> 5 "the click tick reveals the cell and one budget of neighbors" assert=
+    state worklist>> #len 0 > "the rest of the ring is still queued" assert-true
+    (tick)
+    state revealed-count>> 9 "the next tick finishes the ring around the click" assert=
+    4 4 (cell) (neighbors) [ (revealed?) ] #filter #count 8 "all eight neighbors are revealed after two ticks" assert=
+    (drain)
+    state worklist>> #len 0 "the cascade drains" assert=
+    (revealed-mines) 0 "no mine is revealed" assert=
+    (leaky-zeros) 0 "every revealed zero has all of its neighbors revealed" assert=
+    state revealed-count>> 9 > "the region grew past the first ring" assert-true
+    state phase>> playing: "opening one region does not end the game" assert=
+  ] (with-game)
+] ;
+
+test-right-click-toggles-a-flag: ( -- ) [
+  beginner: [
+    2 3 (right-click)
+    state covers>> 2 3 (cell) #nth flagged: "a right press flags a covered cell" assert=
+    2 3 (cell) (dirty?) "the flagged cell is marked dirty" assert-true
+    state phase>> fresh: "flagging does not place the mines" assert=
+    2 3 (right-click)
+    state covers>> 2 3 (cell) #nth covered: "a second right press clears the flag" assert=
+  ] (with-game)
+] ;
+
+test-a-flag-blocks-reveal-and-the-cascade: ( -- ) [
+  beginner: [
+    5 4 (right-click)
+    5 4 (left-click)
+    state covers>> 5 4 (cell) #nth flagged: "a left press on a flag does nothing" assert=
+    state phase>> fresh: "a blocked press does not start play" assert=
+    4 4 (left-click)
+    state phase>> playing: "the first reveal starts play" assert=
+    state covers>> 5 4 (cell) #nth flagged: "placing the mines leaves the flag in place" assert=
+    (drain)
+    state covers>> 5 4 (cell) #nth flagged: "the cascade leaves the flag in place" assert=
+    4 4 (cell) (neighbors) [ (revealed?) ] #filter #count 7 "the other seven neighbors are revealed" assert=
+  ] (with-game)
+] ;
+
+test-right-click-on-a-revealed-cell-is-ignored: ( -- ) [
+  beginner: [
+    4 4 (left-click)
+    4 4 (right-click)
+    state covers>> 4 4 (cell) #nth revealed: "a revealed cell cannot be flagged" assert=
+  ] (with-game)
+] ;
+
+test-clicking-a-mine-loses-and-freezes: ( -- ) [
+  beginner: [
+    { 0 } (arm)
+    4 4 (left-click)
+    state worklist>> #len 0 > "a cascade is in flight" assert-true
+    before: state revealed-count>> ;
+    0 0 (left-click)
+    state phase>> lost: "revealing a mine loses" assert=
+    state fatal-cell>> 0 "the fatal cell is recorded" assert=
+    0 (revealed?) "the fatal cell is revealed" assert-true
+    0 (dirty?) "the fatal cell is marked dirty" assert-true
+    state revealed-count>> before "the losing tick runs no cascade step" assert=
+    10 (ticks)
+    state revealed-count>> before "further ticks leave the cascade frozen" assert=
+    state worklist>> #len 0 > "the worklist is not drained after a loss" assert-true
+    8 8 (left-click)
+    state covers>> 8 8 (cell) #nth covered: "a left press after the loss is ignored" assert=
+    8 8 (right-click)
+    state covers>> 8 8 (cell) #nth covered: "a right press after the loss is ignored" assert=
+  ] (with-game)
+] ;
+
+test-revealing-every-safe-cell-wins: ( -- ) [
+  beginner: [
+    { 0 } (arm)
+    8 8 (left-click)
+    (drain)
+    state phase>> won: "uncovering all eighty safe cells wins" assert=
+    state revealed-count>> 80 "every safe cell is revealed" assert=
+    state covers>> 0 #nth covered: "the mine stays covered" assert=
+    0 0 (left-click)
+    state phase>> won: "a press after the win is ignored" assert=
+    state covers>> 0 #nth covered: "the mine stays covered after the win" assert=
+    0 0 (right-click)
+    state covers>> 0 #nth covered: "a flag after the win is ignored" assert=
+  ] (with-game)
+] ;
+
+test-releases-middle-button-and-off-board-presses-are-ignored: ( -- ) [
+  beginner: [
+    0 0 4 4 (cell-center) 1 (push-mouse-event) (tick)
+    state phase>> fresh: "a release does nothing" assert=
+    1 1 4 4 (cell-center) 1 (push-mouse-event) (tick)
+    state phase>> fresh: "the middle button does nothing" assert=
+    0 1 4 4 (cell-center) 0 (push-mouse-event) (tick)
+    state phase>> fresh: "a press off the canvas does nothing" assert=
+    0 1 10 10 1 (push-mouse-event) (tick)
+    state phase>> fresh: "a press off the board does nothing" assert=
+    0 1 127 70 1 (push-mouse-event) (tick)
+    state phase>> fresh: "a press in the HUD strip does nothing" assert=
+    covered: (count-covers) 81 "nothing was revealed or flagged" assert=
+  ] (with-game)
+] ;
+
+test-a-covered-cell-paints-its-bevel: ( -- ) [
+  beginner: [
+    (scratch-framebuffer) current-framebuffer [
+      0 (draw-cell)
+      92 88 (pixel-at) 255 255 255 (packed) "the top-left corner is the light bevel" assert=
+      95 88 (pixel-at) 255 255 255 (packed) "the top edge is light" assert=
+      92 91 (pixel-at) 255 255 255 (packed) "the left edge is light" assert=
+      98 94 (pixel-at) 112 112 112 (packed) "the bottom-right corner is the dark bevel" assert=
+      95 94 (pixel-at) 112 112 112 (packed) "the bottom edge is dark" assert=
+      98 91 (pixel-at) 112 112 112 (packed) "the right edge is dark" assert=
+      95 91 (pixel-at) 192 192 192 (packed) "the interior is the covered fill" assert=
+      99 91 (pixel-at) 0 "the gutter column is untouched" assert=
+      95 95 (pixel-at) 0 "the gutter row is untouched" assert=
+    ] with-parameter
+  ] (with-game)
+] ;
+
+test-revealed-cells-paint-flat-fill-and-digits: ( -- ) [
+  beginner: [
+    (scratch-framebuffer) current-framebuffer [
+      { 0 } (arm)
+      2 2 (cell) revealed: (set-cover!)
+      2 2 (cell) (draw-cell)
+      2 2 168 168 168 (packed) (cell-color-count) 49 "a revealed zero is the flat fill edge to edge" assert=
+      1 1 (cell) revealed: (set-cover!)
+      1 1 (cell) (draw-cell)
+      1 1 0 0 255 (packed) (cell-color-count) 0 > "a one draws its digit in blue" assert-true
+      1 1 168 168 168 (packed) (cell-color-count) 0 > "the digit sits on the revealed fill" assert-true
+    ] with-parameter
+  ] (with-game)
+] ;
+
+test-flag-and-mine-sprites-carry-their-icons: ( -- ) [
+  beginner: [
+    (scratch-framebuffer) current-framebuffer [
+      3 3 (cell) flagged: (set-cover!)
+      3 3 (cell) (draw-cell)
+      3 3 255 0 0 (packed) (cell-color-count) 5 "the flag cloth is five red pixels" assert=
+      3 3 0 0 0 (packed) (cell-color-count) 6 "the pole and base are six black pixels" assert=
+      3 3 255 255 255 (packed) (cell-color-count) 11 "the light bevel stays around the flag" assert=
+      3 3 112 112 112 (packed) (cell-color-count) 13 "the dark bevel stays around the flag" assert=
+      { 40 } (arm)
+      40 revealed: (set-cover!)
+      40 (draw-cell)
+      4 4 0 0 0 (packed) (cell-color-count) 12 "the mine body is black around its glint" assert=
+      4 4 255 255 255 (packed) (cell-color-count) 1 "the glint is one white pixel" assert=
+      4 4 168 168 168 (packed) (cell-color-count) 36 "the mine sits on the revealed fill" assert=
+    ] with-parameter
+  ] (with-game)
+] ;
+
+test-draw-repaints-only-dirty-cells: ( -- ) [
+  beginner: [
+    (scratch-framebuffer) current-framebuffer [
+      state f >>repaint drop
+      2 3 (right-click)
+      minesweeper-draw
+      state dirty>> #len 0 "draw consumes the dirty list" assert=
+      2 3 255 0 0 (packed) (cell-color-count) 5 "the flagged cell is painted" assert=
+      0 0 192 192 192 (packed) (cell-color-count) 0 "a cell that did not change is not painted" assert=
+      state repaint>> f "a dirty-only draw does not request a full repaint" assert=
+      minesweeper-draw
+      state dirty>> #len 0 "an idle draw has nothing to paint" assert=
+    ] with-parameter
+  ] (with-game)
+] ;
+
+test-draw-board-paints-every-cell: ( -- ) [
+  beginner: [
+    (scratch-framebuffer) current-framebuffer [
+      (draw-board)
+      0 0 192 192 192 (packed) (cell-color-count) 25 "the first cell is painted" assert=
+      8 8 192 192 192 (packed) (cell-color-count) 25 "the last cell is painted" assert=
+      162 158 (pixel-at) 112 112 112 (packed) "the last cell's bevel ends at the board's corner" assert=
+      163 159 (pixel-at) 0 "the board's outer gutter is untouched" assert=
+    ] with-parameter
+  ] (with-game)
+] ;
+
+\\ Regression coverage matching game/input_test.1z's repeated-call tests: the idle tick path
+\\ binds no locals and must stay flat over a long game.
+test-idle-ticks-do-not-leak: ( -- ) [
+  beginner: [
+    4 4 (left-click)
+    (drain)
+    2000 (ticks)
+    t "2000 idle ticks stayed in budget" assert-true
+  ] (with-game)
+] ;

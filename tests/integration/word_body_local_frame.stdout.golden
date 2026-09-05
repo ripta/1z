@@ -1,0 +1,68 @@
+=== a local read from the word's own loop body is fresh on every call ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: a file-level call after a quotation-nested call reads its own n
+Stack: [ ]
+PASS: and so does the next
+Stack: [ ]
+Stack: [ { { 31 32 } { 41 42 } } { { 31 32 } { 41 42 } } ]
+PASS: calls nested in an if branch inside a loop read their own n
+Stack: [ ]
+=== the same shape through if, when, and times bodies ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: an if branch reads the current call's local
+Stack: [ ]
+PASS: a when branch reads the current call's local
+Stack: [ ]
+PASS: a times body reads the current call's local
+Stack: [ ]
+=== a private word reached through its module and directly ===
+Stack: [ ]
+Stack: [ { 6 7 31 32 41 42 } { 6 7 31 32 41 42 } ]
+PASS: a private word called from a sibling's body and from a nested branch reads its own locals
+Stack: [ ]
+PASS: and a file-level call afterwards does too
+Stack: [ ]
+=== a word body's binding does not outlive the call ===
+Stack: [ ]
+Stack: [ ]
+PASS: the nested definition resolves inside the word
+Stack: [ ]
+PASS: and is gone once the word returns
+Stack: [ ]
+=== a nested helper stays visible to the word that tail-calls it ===
+Stack: [ ]
+Stack: [ ]
+PASS: the tail-called helper resolves itself while recursing
+Stack: [ ]
+=== a local shadowing a prelude word is scoped to the word ===
+Stack: [ ]
+Stack: [ ]
+PASS: the word's own binding wins inside the body
+Stack: [ ]
+PASS: the prelude word is untouched once the word returns
+Stack: [ ]
+=== a body stored past the call keeps the local it closed over ===
+Stack: [ ]
+Stack: [ ]
+PASS: a curried body reads the local after the word returned
+Stack: [ ]
+Stack: [ ]
+PASS: a lazy map body reads it too
+Stack: [ ]
+Stack: [ ]
+PASS: and so does one bound in a nested quotation's frame
+Stack: [ ]
+=== a computed module prefix scopes its locals and completes its tail call ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: a computed prefix returns its module through a tail call
+Stack: [ ]
+PASS: the prefix word's local is gone after the qualified call
+Stack: [ ]

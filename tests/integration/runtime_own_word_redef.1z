@@ -1,11 +1,10 @@
-\ A runtime redefinition of the entry file's own top-level word, with a mismatched declared arity.
-\ The redefinition sits inside a word body called from top level, so it fires while the file runs.
-\ Both collision guards pass it by as a same-scope redefinition, and the arity check is what
-\ reports it.
+\ A runtime redefinition of the entry file's own word with a mismatched declared arity.
+\ Both collision guards pass the same-scope redefinition; the arity check reports it.
 \
-\ The `use` gives the entry file an import. The bare call is the file's last statement, so the
-\ raise stays in tail position on every tier. No caller frame row forks the rendering. A
-\ configuration that accepts the redefinition in silence shows as exit 0 with an empty stderr.
+\ A defining word body now gets a transient frame, so this definition runs at top level.
+\ The trailing `0 drop` keeps the statement from ending in `;`: freeze collects it for
+\ binary runtime, where the definition reaches the durable entry frame on every tier.
+\ The real source location is shared by interpreted and AOT diagnostics.
 
 use { taken: } "def_over_import_mod.1z" ;
 
@@ -13,6 +12,4 @@ taken .
 
 val: ( -- s ) [ "A" ] ;
 
-redefine-own: ( -- ) [ val: ( x y -- s ) [ 2drop "B" ] ; ] ;
-
-redefine-own
+val: ( x y -- s ) [ 2drop "B" ] ; 0 drop

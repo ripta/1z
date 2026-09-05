@@ -32,9 +32,9 @@ pub fn executeDispatchBody(ctx: *Context, entry: dispatch_mod.DispatchEntry) !vo
             if (entry.source_module) |mod| {
                 try ctx.pushModuleDepsFrame(mod);
                 defer ctx.popModuleDepsFrameTraced(mod);
-                try runDispatchQuotation(ctx, q, mod, entry.body_owner);
+                try runDispatchQuotation(ctx, q, mod, entry.body_owner, entry.may_define);
             } else {
-                try runDispatchQuotation(ctx, q, null, entry.body_owner);
+                try runDispatchQuotation(ctx, q, null, entry.body_owner, entry.may_define);
             }
         },
         // A registered native method keeps the in-flight name. It is reached through the generic
@@ -62,11 +62,15 @@ pub fn executeDispatchBody(ctx: *Context, entry: dispatch_mod.DispatchEntry) !vo
 ///
 /// `owner` is the closure a `define-method` body came out of, threaded so a body that closure owns
 /// reads its captured scope and defining module off the value.
+///
+/// `may_define` is the entry's frame bit: a method body that defines runs in a transient lexical
+/// frame of its own, the way a word body does.
 fn runDispatchQuotation(
     ctx: *Context,
     q: value_mod.Quotation,
     body_module: ?*const value_mod.Module,
     owner: ?*const value_mod.Closure,
+    may_define: bool,
 ) !void {
     if (q.code_ptr != null) {
         try ctx.executeQuotationWithFrame(q, owner);
@@ -77,7 +81,7 @@ fn runDispatchQuotation(
         defer ctx.current_source = saved_source;
         ctx.enterBodySource(q.instructions);
 
-        try ctx.executeQuotationWithPic(.{ .instructions = q.instructions }, null, body_module, owner);
+        try ctx.executeQuotationWithPic(.{ .instructions = q.instructions }, null, body_module, owner, may_define);
     }
 }
 

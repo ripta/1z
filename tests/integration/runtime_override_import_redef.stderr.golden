@@ -1,2 +1,2 @@
-tests/integration/runtime_override_import_redef.1z:15: error 'arity-mismatch' arity mismatch on redefinition of 'taken' (was 0 -> 1, now 1 -> 1) at word ';'
+tests/integration/runtime_override_import_redef.1z:16: error 'arity-mismatch' arity mismatch on redefinition of 'taken' (was 0 -> 1, now 1 -> 1) at word ';'
   stack effect: ( name quot --  )

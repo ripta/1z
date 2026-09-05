@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>1z Minesweeper</title>
+<style>
+  body { font-family: ui-monospace, monospace; max-width: 60rem; margin: 2rem auto; padding: 0 1rem; }
+  #stage { display: flex; justify-content: center; margin-top: 1rem; background: #000; }
+  canvas { image-rendering: pixelated; image-rendering: crisp-edges; touch-action: none; }
+  #status { color: #888; margin-top: 0.5rem; }
+  #status.error { color: #f88; }
+</style>
+</head>
+<body>
+<h1>1z Minesweeper</h1>
+<p>Minesweeper, written in 1z on the browser game platform. Left click to reveal a cell and
+right click to flag one. The first click is always safe and opens a region. Revealing a mine
+ends the game; revealing every safe cell wins it.</p>
+<div id="stage">
+  <canvas id="canvas" width="256" height="224"></canvas>
+</div>
+<p id="status">loading...</p>
+<script type="module" src="minesweeper.js"></script>
+</body>
+</html>

@@ -3848,6 +3848,32 @@ fn materializeQuotations(state: *CompileState, stack: []StackEntry, sp: usize, e
                     const slot_byte_offset = c.ir_const_addr(ctx, qi * ValueLayout.value_size);
                     const dest_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), base_addr, slot_byte_offset);
                     emitPushValue(ctx, &qval, dest_addr);
+
+                    // Captured on every materialization, the way the interpreter's push does and
+                    // the way `jitPushQuotation` does on the AOT path. Not gated on `escape`:
+                    // that asks whether the value leaves the compiled region as a stack value,
+                    // not whether it outlives the frame, and `curry`, `compose`, `#map`, and the
+                    // lazy iterator constructors all store a body they were handed in place and
+                    // read it after the frame is gone.
+                    //
+                    // Skipped without an interpreter context, since the callback reads one. That
+                    // shape is unit-test-only: the two JIT entry points and the AOT program driver
+                    // each pass a live context.
+                    if (state.interp_ctx != null) {
+                        const ctx_val = if (state.preloaded_ctx_val != c.IR_UNUSED)
+                            state.preloaded_ctx_val
+                        else blk: {
+                            JitContextLayout.ensureInit();
+                            const ctx_off = c.ir_const_addr(ctx, JitContextLayout.ctx_offset);
+                            const ctx_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.jit_ctx_ptr, ctx_off);
+                            break :blk c._ir_LOAD(ctx, c.IR_ADDR, ctx_addr);
+                        };
+
+                        const capture_fn = c.ir_const_addr(ctx, @intFromPtr(&jitCaptureQuotation));
+                        const call_result = c._ir_CALL_2(ctx, c.IR_I32, capture_fn, ctx_val, dest_addr);
+                        emitCallbackPostCheck(state, call_result, state.error_propagate_status, null, .none);
+                    }
+
                     stack[qi] = .{ .raw_at_slot = qi };
                 }
             },
@@ -9554,9 +9580,33 @@ fn compileWordPass(
         state.trampoline_status = c.ir_const_i32(&ctx, 3);
     }
 
+    // A word body that may define brackets itself the way a flagged quotation function does, so
+    // a definition made while it runs pops with the call on this tier too. The frame opens
+    // inside any loop header above, so a self-tail-call back-edge that pops it finds it
+    // re-pushed on the next iteration.
+    const needs_lexical_frame = quotationBodyNeedsFrame(&state, instructions);
+    if (needs_lexical_frame) {
+        emitPushLexicalFrame(&state);
+        state.open_lexical_frames += 1;
+    }
+
     seedNarrowedParams(&state, stack, input_count);
 
     try compileInstructions(&state, instructions, stack, &sp);
+
+    // No pop where the body does not fall through: a back-edge pops before it jumps, and a
+    // returning path is truncated at the compiled-entry boundary.
+    //
+    // The outputs are materialized ahead of the pop, not left to the epilogue's own call: a
+    // quotation the body returns closes over this frame, and a capture emitted after the pop
+    // would find it gone. The epilogue's call then sees slots already materialized.
+    if (needs_lexical_frame) {
+        if (exitFallsThrough(state.exit_kind)) {
+            try materializeQuotations(&state, stack, sp, true);
+            emitPopLexicalFrame(&state);
+        }
+        state.open_lexical_frames -= 1;
+    }
 
     if (state.exit_kind == .loop_diverged) {
         // All paths loop back (no base case fell through).
@@ -9770,7 +9820,24 @@ pub fn emitWordC(
     defer if (state.method_index) |*mi| mi.deinit();
     defer if (state.may_define_memo) |*m| m.deinit();
 
+    // The same word-body bracket `compileWordPass` emits. Inert while this emitter threads no
+    // interpreter context, which `quotationBodyNeedsFrame` needs before it can answer at all.
+    const needs_lexical_frame = quotationBodyNeedsFrame(&state, instructions);
+    if (needs_lexical_frame) {
+        emitPushLexicalFrame(&state);
+        state.open_lexical_frames += 1;
+    }
+
     try compileInstructions(&state, instructions, stack, &sp);
+
+    // Materialized ahead of the pop for the reason `compileWordPass` gives.
+    if (needs_lexical_frame) {
+        if (exitFallsThrough(state.exit_kind)) {
+            try materializeQuotations(&state, stack, sp, true);
+            emitPopLexicalFrame(&state);
+        }
+        state.open_lexical_frames -= 1;
+    }
 
     if (state.exit_kind == .loop_diverged) {
         c._ir_RETURN(&ctx, ok_status);
@@ -9955,8 +10022,9 @@ fn emitWordCAotPass(
     /// brackets a quotation.
     ///
     /// Set for a compiled quotation body the may-define analysis flagged, so a runtime-selected
-    /// dispatch straight to its code pointer still gets the frame. A word body is bare on every
-    /// tier and never asks for it.
+    /// dispatch straight to its code pointer still gets the frame, and for a word body the
+    /// analysis flagged, so its definitions pop with the call on this tier as they do in the
+    /// interpreter.
     needs_lexical_frame: bool,
 ) (IrCodegenError || ir_mod.IrError || Allocator.Error)!EmitWordCAotPassResult {
     ValueLayout.ensureInit();
@@ -10367,8 +10435,13 @@ fn emitWordCAotPass(
 
     // No pop where the body does not fall through: a back-edge pops before it jumps, and a
     // returning path is truncated at the compiled-entry boundary.
+    //
+    // Materialized ahead of the pop for the reason `compileWordPass` gives.
     if (needs_lexical_frame) {
-        if (exitFallsThrough(state.exit_kind)) emitPopLexicalFrame(&state);
+        if (exitFallsThrough(state.exit_kind)) {
+            try materializeQuotations(&state, stack_buf, sp, true);
+            emitPopLexicalFrame(&state);
+        }
         state.open_lexical_frames -= 1;
     }
 
@@ -11120,6 +11193,34 @@ pub fn emitProgramC(
     // round once any blocking callee is marked. The resolver reads
     // `returns_row_names` through a stable pointer, so the growing set is visible
     // to each round's trial compilations.
+
+    // One method index for every body's may-define query.
+    //
+    // The grouping is structural over the live dispatch table, so one holds for the whole
+    // emission. An index built inside the emitter is rebuilt once per codegen pass instead, and a
+    // body goes through several.
+    var quotation_method_index: ?may_define.DispatchMethodIndex =
+        if (interp_ctx) |ictx| try may_define.DispatchMethodIndex.init(allocator, &ictx.dispatch) else null;
+    defer if (quotation_method_index) |*mi| mi.deinit();
+    const quotation_method_source: ?may_define.MethodSource =
+        if (quotation_method_index) |*mi| mi.source() else null;
+
+    // A word body the analysis flags brackets itself in a transient lexical frame, the same
+    // bracket a flagged quotation function gets, so a definition made while it runs pops with
+    // the call in the binary as it does in the interpreter. Answered once per word, under the
+    // callee scope every pass over that word compiles against.
+    //
+    // The entry body is never a call: its statements are the file's top level, whose definitions
+    // belong in the durable entry frame the way the interpreter's top-level statements' do, so
+    // it stays bare.
+    const word_needs_frame = try allocator.alloc(bool, words.len);
+    defer allocator.free(word_needs_frame);
+    for (words, 0..) |*w, i| {
+        resolver_data.callee_resolution.scope = scopeFor(&callee_scopes, identities[i]);
+        word_needs_frame[i] = !w.is_native and w.word_id != entry_word_id and
+            quotationFunctionNeedsFrame(w.instructions, resolver, quotation_method_source, allocator);
+    }
+
     {
         var changed = true;
         while (changed) {
@@ -11160,7 +11261,7 @@ pub fn emitProgramC(
                     meta.freestanding,
                     fallbacks_locked,
                     false,
-                    false,
+                    word_needs_frame[i],
                 ) catch continue;
                 if (discovered.body) |b| allocator.free(b);
                 if (discovered.returns_row) {
@@ -11230,7 +11331,7 @@ pub fn emitProgramC(
             strict_interpreter_free,
             meta.freestanding,
             fallbacks_locked,
-            false,
+            word_needs_frame[i],
         ) catch |err| {
             const rejected: ?NotCompilableReason = if (reason) |r|
                 r
@@ -11246,17 +11347,6 @@ pub fn emitProgramC(
         emitAotCodegenTrace(interp_ctx, "word", identities[i], null);
         try compilable_names.put(allocator, identities[i], w.word_id);
     }
-
-    // One method index for every quotation's may-define query.
-    //
-    // The grouping is structural over the live dispatch table, so one holds for the whole
-    // emission. An index built inside the emitter is rebuilt once per codegen pass instead, and a
-    // quotation body goes through several.
-    var quotation_method_index: ?may_define.DispatchMethodIndex =
-        if (interp_ctx) |ictx| try may_define.DispatchMethodIndex.init(allocator, &ictx.dispatch) else null;
-    defer if (quotation_method_index) |*mi| mi.deinit();
-    const quotation_method_source: ?may_define.MethodSource =
-        if (quotation_method_index) |*mi| mi.source() else null;
 
     // Pass 1b: trial compile quotation bodies to discover the compilable set
     var compilable_quotation_ids: std.AutoHashMapUnmanaged(u32, void) = .{};
@@ -11411,7 +11501,7 @@ pub fn emitProgramC(
             strict_interpreter_free,
             meta.freestanding,
             fallbacks_locked,
-            false,
+            word_needs_frame[i],
         ) catch |err| switch (err) {
             error.NotCompilable => continue,
             else => return err,
@@ -15092,7 +15182,37 @@ export fn jitPushQuotation(ctx_raw: usize, data_ptr: usize, data_len: usize, des
             code_ptr = fns.table[quotation_id];
         }
     }
-    dest.* = .{ .quotation = .{ .instructions = body.instructions, .effect = body.effect, .code_ptr = code_ptr } };
+
+    // Capture the lexical scope here for the same reason the interpreter's `push_literal` does: a
+    // word body runs in a transient frame of its own, and a body pushed while that frame is live
+    // must carry it or a later read falls through to a durable word of the same name. The gate
+    // inside answers no for a body that closes over nothing, which is the common case.
+    const quot: value_mod.Quotation = .{ .instructions = body.instructions, .effect = body.effect, .code_ptr = code_ptr };
+    dest.* = ctx.quotationPushValue(quot) catch |err| {
+        ctx.jit_pending_error = err;
+        return 2;
+    };
+    return 0;
+}
+
+/// Promote a quotation literal already stored at `dest` to a closure carrying its lexical scope.
+///
+/// The compiled counterpart of the interpreter's capturing `push_literal`. Compiled code stores
+/// the literal inline and calls this only where the value escapes the frame, so the two tiers
+/// agree on what a body pushed over a live lexical frame closes over. `quotationPushValue`'s own
+/// gate answers no for a body that closes over nothing, which is the common case.
+///
+/// A slot the caller already promoted, or one holding anything else, is left alone.
+export fn jitCaptureQuotation(ctx_raw: usize, dest_raw: usize) callconv(.c) i32 {
+    if (ctx_raw == 0) return 1;
+    const ctx: *Context = @ptrFromInt(ctx_raw);
+    const dest: *Value = @ptrFromInt(dest_raw);
+    if (dest.* != .quotation) return 0;
+
+    dest.* = ctx.quotationPushValue(dest.quotation) catch |err| {
+        ctx.jit_pending_error = err;
+        return 2;
+    };
     return 0;
 }
 
@@ -15660,7 +15780,12 @@ fn invokeModuleWord(ctx: *Context, hit: ModuleWordHit) !void {
             const rc = host.callback(host.handle, host.user_data);
             if (rc != 0) return error.HostCallbackFailed;
         },
-        .compound => |instrs| try ctx.executeQuotation(.{ .instructions = instrs }),
+        .compound => |instrs| {
+            const saved_source = ctx.current_source;
+            defer ctx.current_source = saved_source;
+            ctx.enterBodySource(instrs);
+            try ctx.executeQuotationWithPic(.{ .instructions = instrs }, null, null, null, hit.word.may_define);
+        },
     }
 }
 
@@ -15929,7 +16054,7 @@ export fn jitInterpretedCall(ctx_raw: usize, word_id_raw: usize, src_ptr_raw: us
                 .compound => |instrs| {
                     ctx.pushModuleDepsFrame(mod) catch |e| break :blk @as(anyerror!void, e);
                     defer ctx.popModuleDepsFrameTraced(mod);
-                    break :blk ctx.executeQuotationWithPic(.{ .instructions = instrs }, entry.pic_snapshot, mod, null);
+                    break :blk ctx.executeQuotationWithPic(.{ .instructions = instrs }, entry.pic_snapshot, mod, null, word.exec_flags.may_define);
                 },
                 .native => |func| break :blk func(ctx),
                 .host_callback => |host| break :blk host_result: {
@@ -15947,7 +16072,7 @@ export fn jitInterpretedCall(ctx_raw: usize, word_id_raw: usize, src_ptr_raw: us
                     if (rc != 0) break :host_result error.HostCallbackFailed;
                     break :host_result;
                 },
-                .compound => |instrs| ctx.executeQuotationWithPic(.{ .instructions = instrs }, entry.pic_snapshot, null, null),
+                .compound => |instrs| ctx.executeQuotationWithPic(.{ .instructions = instrs }, entry.pic_snapshot, null, null, word.exec_flags.may_define),
                 .literal => |v| ctx.stack.push(v),
             };
         }

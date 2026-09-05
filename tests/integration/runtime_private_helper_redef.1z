@@ -1,21 +1,16 @@
-\ A runtime definition of a name owned by a used module's private{ } helper stays silent on every
-\ tier. Interpreted, the helper is module-private and not in the defining scope. In an AOT binary
-\ the shadow guard's baked rung reads the freeze-time base scope, which holds the frames below
-\ the durable floor and never a module's words, so the helper's compiled-table entry cannot leak
-\ into the probe. Under eager compilation the helper sits promoted in `jit_dispatch`, and the
-\ guard stays out of that table entirely: no interpreter session registers a baked base scope.
+\ A runtime definition matching a used module's private helper stays silent on every tier.
+\ The baked base scope must not expose module-private words, and the eager guard must not
+\ mistake a promoted helper in jit_dispatch for a visible binding.
 \
-\ The definition sits inside a word body called from top level, so it fires while the file runs.
-\ The runtime-defined word is never called, since in an interpreter-free binary it has no
-\ executable body. The marker line after the call is what shows the definition was accepted in
-\ silence.
+\ A defining word body now gets a transient frame, so this definition runs at top level.
+\ The trailing `0 drop` keeps the statement from ending in `;`: freeze collects it for
+\ binary runtime, where the definition reaches the durable entry frame on every tier.
+\ The real source location is shared by interpreted and AOT diagnostics.
 
 use { via-helper: } "runtime_private_helper_mod.1z" ;
 
 via-helper .
 
-define-probe: ( -- ) [ probe-helper: ( -- fixnum ) [ 7 ] ; ] ;
-
-define-probe
+probe-helper: ( -- fixnum ) [ 7 ] ; 0 drop
 
 "defined" print-line

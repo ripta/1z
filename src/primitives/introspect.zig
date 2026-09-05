@@ -627,6 +627,11 @@ fn nativeLocalScope(ctx: *Context) anyerror!void {
         try module.words.put(alloc, entry.key_ptr.*, try ctx.moduleWordFor(alloc, entry.value_ptr.*));
     }
 
+    // The snapshot is complete here, so pre-build the frame template the way a `load` does. Every
+    // call into a `private{ }` helper pushes this module's deps frame, and without a template each
+    // push rebuilds the whole map entry by entry.
+    try Context.buildModuleDepsTemplate(module, alloc);
+
     try ctx.stack.push(.{ .module = module });
 }
 
@@ -1308,4 +1313,25 @@ test "parse-stack-effect rejects an unknown annotation type" {
 
     try ctx.stack.push(value_mod.stringValue("a: no-such-type -- r"));
     try testing.expectError(error.InvalidArgument, nativeParseStackEffect(&ctx));
+}
+
+test "local-scope leaves a deps template on the module it snapshots" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    const noop: dictionary_mod.NativeFn = struct {
+        fn f(_: *Context) anyerror!void {}
+    }.f;
+
+    try ctx.pushLocalFrame();
+    ctx.import_frame_index = 0;
+    try ctx.pushLocalFrame();
+    try ctx.local_frames.items[1].put(ctx.allocator, "helper", .{ .name = "helper", .action = .{ .native = noop } });
+
+    try nativeLocalScope(&ctx);
+
+    const val = try ctx.stack.pop();
+    try testing.expect(val == .module);
+    try testing.expect(val.module.deps_template != null);
+    try testing.expect(val.module.deps_template.?.frame.get("helper") != null);
 }

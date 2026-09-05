@@ -1,0 +1,23 @@
+\ Fixture for aot_word_body_local_frame.1z: a private word with a local read from its loop body,
+\ reached both from a sibling private's body and from a nested branch inside another sibling's
+\ loop. The public entry keeps no local of its own, since a local read at a body's top level is
+\ not AOT-compilable.
+
+use "ranges" ;
+use "sequences" ;
+
+private{
+  offsets: ( -- arr ) const [ { 1 2 } ] ;
+
+  (neighbors): ( n -- vec ) [
+    n: swap ;
+    [ ] make-vector
+    offsets [ n + #push! ] #each
+  ] ;
+
+  (count-all): ( -- arr ) [
+    { } { 30 40 } [ t [ (neighbors) >array #append ] [ drop ] if ] #each
+  ] ;
+}
+
+place: ( n -- arr ) [ (neighbors) >array (count-all) #append ] ;

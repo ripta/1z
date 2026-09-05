@@ -1,0 +1,83 @@
+\ A word body's own definitions live in a frame the call owns. A `name: swap ;` local is scoped to
+\ the call whatever frame the caller had on top, and a nested helper pops with it.
+\
+\ Each scenario mixes the context a word is reached from. The defect this pins was a binding
+\ leaking into the caller's frame, where a later call's nested quotation read it ahead of its own.
+
+use "ranges" ;
+use "sequences" ;
+use "testing" ;
+use "word_body_local_frame_mod.1z" ;
+
+"a local read from the word's own loop body is fresh on every call" test-section
+
+neighbors: ( n -- vec ) [
+  n: swap ;
+  [ ] make-vector
+  { 1 2 } [ n + #push! ] #each
+] ;
+
+[ 80 neighbors drop ] call
+5 neighbors >array { 6 7 } "a file-level call after a quotation-nested call reads its own n" assert=
+6 neighbors >array { 7 8 } "and so does the next" assert=
+{ 30 40 } [ t [ neighbors >array ] [ drop ] if ] #map #collect { { 31 32 } { 41 42 } }
+"calls nested in an if branch inside a loop read their own n" assert=
+
+"the same shape through if, when, and times bodies" test-section
+
+w-if:    ( n -- v ) [ n: swap ; t [ n 1 + ] [ 0 ] if ] ;
+w-when:  ( n -- v ) [ n: swap ; 0 t [ drop n 1 + ] when ] ;
+w-times: ( n -- v ) [ n: swap ; 0 1 [ drop n 1 + ] times ] ;
+
+[ 80 w-if drop 80 w-when drop 80 w-times drop ] call
+5 w-if 6 "an if branch reads the current call's local" assert=
+5 w-when 6 "a when branch reads the current call's local" assert=
+5 w-times 6 "a times body reads the current call's local" assert=
+
+"a private word reached through its module and directly" test-section
+
+t [ 5 place ] when { 6 7 31 32 41 42 }
+"a private word called from a sibling's body and from a nested branch reads its own locals" assert=
+9 place { 10 11 31 32 41 42 } "and a file-level call afterwards does too" assert=
+
+"a word body's binding does not outlive the call" test-section
+
+define-inside: ( -- n ) [ inside-only: ( -- n ) [ 42 ] ; inside-only ] ;
+define-inside 42 "the nested definition resolves inside the word" assert=
+"inside-only" defined? f "and is gone once the word returns" assert=
+
+"a nested helper stays visible to the word that tail-calls it" test-section
+
+count-down: ( n -- vec ) [
+  acc: ( n vec -- vec ) [ over 0 = [ nip ] [ over #push! [ 1 - ] dip acc ] if ] ;
+  [ ] make-vector acc
+] ;
+3 count-down >array { 3 2 1 } "the tail-called helper resolves itself while recursing" assert=
+
+"a local shadowing a prelude word is scoped to the word" test-section
+
+shadow-nip: ( -- n ) [ nip: ( -- n ) [ 42 ] ; nip ] ;
+shadow-nip 42 "the word's own binding wins inside the body" assert=
+1 2 nip 2 "the prelude word is untouched once the word returns" assert=
+
+"a body stored past the call keeps the local it closed over" test-section
+
+\ `curry` and the lazy sequence words store the body they are handed and read it after the word
+\ returns, so the frame it closed over is gone by then. The compiled tiers have to capture on
+\ every push, not only where the body leaves the compiled region as a stack value.
+curried: ( n -- q ) [ n: swap ; 1 [ n + ] curry ] ;
+10 curried call 11 "a curried body reads the local after the word returned" assert=
+
+mapped: ( n -- it ) [ n: swap ; { 1 2 3 } >iterator [ n + ] #map ] ;
+10 mapped #collect { 11 12 13 } "a lazy map body reads it too" assert=
+
+\ Here the binding is made in a quotation's own frame rather than the word body's.
+nested-curried: ( n -- q ) [ [ n: swap ; 1 [ n + ] curry ] call ] ;
+10 nested-curried call 11 "and so does one bound in a nested quotation's frame" assert=
+
+"a computed module prefix scopes its locals and completes its tail call" test-section
+
+math-module: "math" load ;
+make-module: ( -- module ) [ prefix-local: 42 ; math-module ] ;
+make-module.pi math-module.pi "a computed prefix returns its module through a tail call" assert=
+"prefix-local" defined? f "the prefix word's local is gone after the qualified call" assert=

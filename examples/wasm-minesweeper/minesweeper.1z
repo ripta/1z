@@ -1,0 +1,362 @@
+\ examples/wasm-minesweeper/minesweeper.1z - Minesweeper on the browser game platform: a board
+\ of 8px cells centered on the 256x224 canvas under a strip kept clear for the HUD, at one of
+\ the three classic presets. A left click reveals a cell and a right click flags one. Mines are
+\ placed on the first click, clear of it and its neighbors, so the first click always opens a
+\ region. Revealing a mine freezes the board with that mine showing; revealing every safe cell
+\ wins and freezes it too.
+\
+\ A revealed zero floods its region from a breadth-first worklist, a few cells per update tick,
+\ so a large opening never freezes a frame and clicks keep landing while it spreads. Every cell
+\ paint is one sprite blit, and draw repaints only the cells that changed since the last frame.
+
+use "game" ;
+use "bytes" ;
+use "random" ;
+use "ranges" ;
+use "sequences" ;
+
+private{
+  cell-px: ( -- n ) const [ 8 ] ;
+  hud-height: ( -- n ) const [ 24 ] ;
+  reveals-per-tick: ( -- n ) const [ 4 ] ;
+  start-preset: ( -- sym ) const [ beginner: ] ;
+
+  \\ Each preset is { cols rows mines }.
+  presets: H{ beginner: { 9 9 10 } intermediate: { 16 16 40 } expert: { 30 16 99 } } ;
+
+  page-color:     ( -- color ) const [ 8 8 24 255 <color> ] ;
+  covered-color:  ( -- color ) const [ 192 192 192 255 <color> ] ;
+  bevel-light:    ( -- color ) const [ 255 255 255 255 <color> ] ;
+  bevel-dark:     ( -- color ) const [ 112 112 112 255 <color> ] ;
+  revealed-color: ( -- color ) const [ 168 168 168 255 <color> ] ;
+  flag-color:     ( -- color ) const [ 255 0 0 255 <color> ] ;
+  icon-color:     ( -- color ) const [ 0 0 0 255 <color> ] ;
+  glint-color:    ( -- color ) const [ 255 255 255 255 <color> ] ;
+
+  \\ The canonical adjacency colors, indexed by count. Index 0 is never read: a zero draws no
+  \\ digit.
+  digit-colors: ( -- seq ) const [
+    [ ] make-vector
+    f #push!
+    0 0 255 255 <color> #push!
+    0 128 0 255 <color> #push!
+    255 0 0 255 <color> #push!
+    0 0 128 255 <color> #push!
+    128 0 0 255 <color> #push!
+    0 128 128 255 <color> #push!
+    0 0 0 255 <color> #push!
+    128 128 128 255 <color> #push!
+  ] ;
+
+  \\ A cell fills 7x7 of its 8-pixel pitch, leaving a one-pixel gutter at the right and bottom.
+  sprite-px: ( -- n ) const [ cell-px 1 - ] ;
+  sprite-bytes: ( -- n ) const [ sprite-px sprite-px * framebuffer-bytes-per-pixel * ] ;
+
+  \\ The icons, one byte per sprite row with bit 6 the leftmost column. They stay inside rows and
+  \\ columns 1 through 5, so an icon never touches a covered cell's bevel.
+  flag-cloth-rows: B{ 0b0000000 0b0001100 0b0011100 0b0000000 0b0000000 0b0000000 0b0000000 } ;
+  flag-pole-rows:  B{ 0b0000000 0b0000000 0b0000000 0b0000100 0b0000100 0b0011110 0b0000000 } ;
+  mine-body-rows:  B{ 0b0000000 0b0001000 0b0011100 0b0111110 0b0011100 0b0001000 0b0000000 } ;
+  mine-glint-rows: B{ 0b0000000 0b0000000 0b0010000 0b0000000 0b0000000 0b0000000 0b0000000 } ;
+
+  \\ Write one pixel's r, g, b, a into a sprite's byte array at pixel index i.
+  (stamp-rgba!): ( pixels i r g b a -- pixels ) [
+    ca: swap ;
+    cb: swap ;
+    cg: swap ;
+    cr: swap ;
+    framebuffer-bytes-per-pixel * off: swap ;
+    off cr #poke8!
+    off 1 + cg #poke8!
+    off 2 + cb #poke8!
+    off 3 + ca #poke8!
+  ] ;
+
+  (stamp-pixel!): ( pixels i color -- pixels ) [ unmake-color (stamp-rgba!) ] ;
+
+  \\ A flat cell in one color. The color is curried into the per-pixel quotation rather than
+  \\ bound to a local, since a local bound to a struct is retained until the program exits.
+  (flat-cell-pixels): ( color -- pixels ) [
+    [ (stamp-pixel!) ] curry
+    sprite-bytes bytes-alloc swap
+    sprite-px sprite-px * iota >iterator swap #each
+  ] ;
+
+  \\ A covered cell: the fill under a one-pixel bevel, light along the top and left edges and
+  \\ dark along the bottom and right. The dark pass runs second, so it owns the two corners
+  \\ where the edges meet.
+  (beveled-cell-pixels): ( -- pixels ) [
+    covered-color (flat-cell-pixels)
+    sprite-px iota >iterator [
+      i: swap ;
+      i bevel-light (stamp-pixel!)
+      i sprite-px * bevel-light (stamp-pixel!)
+    ] #each
+    sprite-px iota >iterator [
+      i: swap ;
+      sprite-px 1 - sprite-px * i + bevel-dark (stamp-pixel!)
+      i sprite-px * sprite-px 1 - + bevel-dark (stamp-pixel!)
+    ] #each
+  ] ;
+
+  \\ Stamp an icon's set bits over a sprite's pixels in one color.
+  (stamp-rows!): ( pixels rows color -- pixels ) [
+    unmake-color
+    ca:   swap ;
+    cb:   swap ;
+    cg:   swap ;
+    cr:   swap ;
+    rows: swap ;
+    sprite-px sprite-px * iota >iterator [
+      i: swap ;
+      rows i sprite-px div #peek8
+      sprite-px 1 - i sprite-px % - shift-right 1 bitand 0 = not
+      [ i cr cg cb ca (stamp-rgba!) ] when
+    ] #each
+  ] ;
+
+  covered-sprite: ( -- sprite ) const [ sprite-px sprite-px (beveled-cell-pixels) <sprite> ] ;
+  revealed-sprite: ( -- sprite ) const [ sprite-px sprite-px revealed-color (flat-cell-pixels) <sprite> ] ;
+
+  flag-sprite: ( -- sprite ) const [
+    sprite-px sprite-px
+    (beveled-cell-pixels)
+    flag-cloth-rows flag-color (stamp-rows!)
+    flag-pole-rows icon-color (stamp-rows!)
+    <sprite>
+  ] ;
+
+  mine-sprite: ( -- sprite ) const [
+    sprite-px sprite-px
+    revealed-color (flat-cell-pixels)
+    mine-body-rows icon-color (stamp-rows!)
+    mine-glint-rows glint-color (stamp-rows!)
+    <sprite>
+  ] ;
+
+  \\ phase is fresh: until the first click places the mines, then playing:, and won: or lost:
+  \\ once the board freezes. mines, counts, and covers hold one entry per cell, packed
+  \\ row * cols + col: whether the cell holds a mine, its adjacent-mine count, and covered:,
+  \\ flagged:, or revealed:. fatal-cell is the mine that was clicked, or f. worklist is the
+  \\ breadth-first queue of cells still to reveal in a cascade, and dirty the cells draw must
+  \\ repaint. repaint asks the next draw to clear the canvas and paint every cell.
+  game-state: mutable struct{ preset cols rows mine-count phase mines counts covers fatal-cell revealed-count worklist dirty repaint } ;
+  state: f 0 0 0 fresh: f f f f 0 f f t make-game-state ;
+
+  (cell):       ( col row -- cell ) [ state cols>> * + ] ;
+  (cell-col):   ( cell -- col ) [ state cols>> % ] ;
+  (cell-row):   ( cell -- row ) [ state cols>> div ] ;
+  (cell-count): ( -- n ) [ state cols>> state rows>> * ] ;
+
+  (in-bounds?): ( col row -- ? ) [
+    dup 0 >= swap state rows>> < and
+    swap dup 0 >= swap state cols>> < and
+    and
+  ] ;
+
+  neighbor-offsets: { { -1 -1 } { 0 -1 } { 1 -1 } { -1 0 } { 1 0 } { -1 1 } { 0 1 } { 1 1 } } ;
+
+  \\ The in-bounds neighbors of a cell, as a vector of cells.
+  (neighbors): ( cell -- seq ) [
+    dup (cell-col) c: swap ;
+    (cell-row) r: swap ;
+    [ ] make-vector
+    neighbor-offsets [
+      dup 0 #nth c + nc: swap ;
+      1 #nth r + nr: swap ;
+      nc nr (in-bounds?) [ nc nr (cell) #push! ] when
+    ] #each
+  ] ;
+
+  \\ The HUD strip and the board form one block centered on the canvas, the board below the
+  \\ strip.
+  (board-px-x): ( -- x ) [ framebuffer-width state cols>> cell-px * - 2 div ] ;
+  (board-px-y): ( -- y ) [ framebuffer-height hud-height state rows>> cell-px * + - 2 div hud-height + ] ;
+
+  \\ The cell under a framebuffer pixel, or f when the pixel is off the board. A gutter pixel
+  \\ belongs to the cell before it.
+  (hit-cell): ( x y -- cell/f ) [
+    (board-px-y) - by: swap ;
+    (board-px-x) - bx: swap ;
+    bx 0 >= by 0 >= and
+    bx state cols>> cell-px * < and
+    by state rows>> cell-px * < and
+    [ bx cell-px div by cell-px div (cell) ] [ f ] if
+  ] ;
+
+  (new-game): ( preset: symbol -- ) [
+    presets over @get
+    dup 0 #nth pc: swap ;
+    dup 1 #nth pr: swap ;
+    2 #nth pm: swap ;
+    state
+    swap >>preset
+    pc >>cols
+    pr >>rows
+    pm >>mine-count
+    fresh: >>phase
+    V{ } pc pr * f #resize! >>mines
+    V{ } pc pr * 0 #resize! >>counts
+    V{ } pc pr * covered: #resize! >>covers
+    f >>fatal-cell
+    0 >>revealed-count
+    V{ } >>worklist
+    V{ } >>dirty
+    t >>repaint
+    drop
+  ] ;
+
+  \\ Rebuild counts from mines: each mine bumps its neighbors.
+  (count-adjacent!): ( -- ) [
+    state V{ } (cell-count) 0 #resize! >>counts drop
+    (cell-count) iota >iterator [
+      dup state mines>> swap #nth
+      [ (neighbors) [ state counts>> swap 2dup #nth 1 + #nth! drop ] #each ]
+      [ drop ]
+      if
+    ] #each
+  ] ;
+
+  \\ Place the preset's mines uniformly over every cell except the clicked cell and its
+  \\ neighbors, so the first click is always a zero and opens a region. A partial Fisher-Yates
+  \\ over the candidate vector draws mine-count distinct cells.
+  (place-mines): ( cell -- ) [
+    dup (neighbors) swap #push!
+    [ ] make-vector swap
+    (cell-count) iota >iterator [
+      2dup #index-of
+      [ drop ] [ <rot- swap #push! swap ] if
+    ] #each
+    drop
+    state mine-count>> iota >iterator [
+      i: swap ;
+      dup #len i - random-below i + j: swap ;
+      dup i #nth ci: swap ;
+      dup j #nth cj: swap ;
+      i cj #nth!
+      j ci #nth!
+      state mines>> cj t #nth! drop
+    ] #each
+    drop
+    (count-adjacent!)
+  ] ;
+
+  \\ Change a cell's cover state and mark it for repainting.
+  (set-cover!): ( cell sym -- ) [
+    sym: swap ;
+    cell: swap ;
+    state covers>> cell sym #nth! drop
+    state dirty>> cell #push! drop
+  ] ;
+
+  \\ Uncover one covered cell. A zero queues its covered neighbors for the cascade, and
+  \\ uncovering the last safe cell wins.
+  (reveal!): ( cell -- ) [
+    cell: swap ;
+    cell revealed: (set-cover!)
+    state dup revealed-count>> 1 + >>revealed-count drop
+    state counts>> cell #nth 0 = [
+      cell (neighbors) [
+        dup state covers>> swap #nth covered: =
+        [ state worklist>> swap #push! drop ] [ drop ] if
+      ] #each
+    ] when
+    state revealed-count>> (cell-count) state mine-count>> - =
+    [ state won: >>phase drop ] when
+  ] ;
+
+  \\ A left press on a covered cell. The first one places the mines and starts play; a mine
+  \\ loses, and anything else uncovers.
+  (left-press): ( cell -- ) [
+    cell: swap ;
+    state covers>> cell #nth covered: = [
+      state phase>> fresh: = [ cell (place-mines) state playing: >>phase drop ] when
+      state mines>> cell #nth
+      [ state lost: >>phase cell >>fatal-cell drop cell revealed: (set-cover!) ]
+      [ cell (reveal!) ]
+      if
+    ] when
+  ] ;
+
+  \\ A right press toggles the flag on a covered cell.
+  (right-press): ( cell -- ) [
+    cell: swap ;
+    state covers>> cell #nth
+    dup covered: =
+    [ drop cell flagged: (set-cover!) ]
+    [ flagged: = [ cell covered: (set-cover!) ] when ]
+    if
+  ] ;
+
+  \\ Route a press over the board to its button's action while the board is live. Releases,
+  \\ the middle button, and presses off the canvas or off the board do nothing.
+  (handle-event): ( event: mouse-event -- ) [
+    dup pressed? over inside>> and
+    state phase>> dup fresh: = swap playing: = or and
+    [
+      dup x>> over y>> (hit-cell)
+      dup [
+        over button>> left: = [ (left-press) ] [
+          over button>> right: = [ (right-press) ] [ drop ] if
+        ] if
+      ] [ drop ] if
+    ] when
+    drop
+  ] ;
+
+  \\ Reveal up to reveals-per-tick queued cells, oldest first. A queued cell that was revealed
+  \\ or flagged since it was queued is skipped without spending the budget.
+  (cascade-step): ( -- ) [
+    reveals-per-tick
+    [
+      dup 0 > state worklist>> #len 0 > and [
+        state worklist>> #shift! nip
+        dup state covers>> swap #nth covered: =
+        [ (reveal!) 1 - ] [ drop ] if
+        t
+      ] [ f ] if
+    ] loop
+    drop
+  ] ;
+
+  \\ Repaint one cell from its state: one sprite blit, plus the adjacency digit on a revealed
+  \\ numbered cell.
+  (draw-cell): ( cell -- ) [
+    cell: swap ;
+    x: cell (cell-col) cell-px * (board-px-x) + ;
+    y: cell (cell-row) cell-px * (board-px-y) + ;
+    state covers>> cell #nth
+    dup covered: = [ drop x y covered-sprite blit-sprite ] [
+      flagged: = [ x y flag-sprite blit-sprite ] [
+        state mines>> cell #nth [ x y mine-sprite blit-sprite ] [
+          x y revealed-sprite blit-sprite
+          n: state counts>> cell #nth ;
+          n 0 > [ x y n >string digit-colors n #nth draw-text ] when
+        ] if
+      ] if
+    ] if
+  ] ;
+
+  (draw-board): ( -- ) [ (cell-count) iota >iterator [ (draw-cell) ] #each ] ;
+}
+
+minesweeper-init: ( -- ) [ start-preset (new-game) ] ;
+
+minesweeper-update: ( tick -- ) [
+  drop
+  mouse-events [ (handle-event) ] #each
+  state phase>> playing: = [ (cascade-step) ] when
+] ;
+
+minesweeper-draw: ( -- ) [
+  state repaint>> [
+    page-color clear-background
+    (draw-board)
+    state f >>repaint drop
+  ] [
+    state dirty>> [ (draw-cell) ] #each
+  ] if
+  state dirty>> 0 f #resize! drop
+] ;
+
+[ minesweeper-init ] [ minesweeper-update ] [ minesweeper-draw ] start-game

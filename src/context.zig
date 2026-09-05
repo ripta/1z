@@ -61,6 +61,7 @@ const LockOrderTracker = lock_order.LockOrderTracker;
 const QuotationStampStore = @import("quotation_stamp_store.zig").QuotationStampStore;
 const QuotationSourceStore = @import("quotation_source_store.zig").QuotationSourceStore;
 const CarryableScopeGate = @import("carryable_scope_gate.zig").CarryableScopeGate;
+const may_define = @import("may_define.zig");
 const closure_body_registry = @import("closure_body_registry.zig");
 const LoadLock = @import("load_lock.zig").LoadLock;
 const ReifiedDecodeCache = @import("reified_decode_cache.zig").ReifiedDecodeCache;
@@ -118,6 +119,29 @@ pub const ParameterFrame = std.StringHashMapUnmanaged(Value);
 /// Each frame is a mapping from word name to its definition.
 pub const LocalFrame = std.StringHashMapUnmanaged(WordDefinition);
 const WordDefinition = @import("dictionary.zig").WordDefinition;
+
+/// A `LocalFrame` key carrying a digest computed once, for a probe repeated across many frames.
+///
+/// A resolution walks the frame stack from the top down, and every frame it passes is a separate
+/// map that would otherwise rehash the same name. The digest must be the one `StringContext`
+/// produces, since these maps were filled through that context.
+const PrehashedName = struct {
+    digest: u64,
+
+    fn init(name: []const u8) PrehashedName {
+        return .{ .digest = std.hash_map.hashString(name) };
+    }
+
+    pub fn hash(self: PrehashedName, key: []const u8) u64 {
+        _ = key;
+        return self.digest;
+    }
+
+    pub fn eql(self: PrehashedName, a: []const u8, b: []const u8) bool {
+        _ = self;
+        return std.mem.eql(u8, a, b);
+    }
+};
 
 /// A module's pre-built deps-and-words map, hung off the `Module` and cloned
 /// into a fresh per-task frame by `pushModuleDepsFrame` on each module-word call.
@@ -309,6 +333,17 @@ pub const QuotationScopeInfo = struct {
 /// action. Called at definition finalization so the flags ride the by-value
 /// execution copy that `executeResolvedWord` reads on the hot path.
 fn computeExecFlags(def: WordDefinition) dict_mod.ExecFlags {
+    return computeExecFlagsWithMayDefine(def, switch (def.action) {
+        .compound => |b| may_define.bodyCallsDefiningNative(b),
+        .native, .host_callback, .literal => false,
+    });
+}
+
+/// `computeExecFlags` with the may-define answer supplied rather than walked for.
+///
+/// A `ModuleWord` already carries the bit, and a deps-frame push synthesizes a definition for
+/// every entry the module holds. Deriving it here would re-walk each of those bodies per push.
+fn computeExecFlagsWithMayDefine(def: WordDefinition, body_may_define: bool) dict_mod.ExecFlags {
     var flags: dict_mod.ExecFlags = .{};
     for (def.markers) |mk| {
         if (markers_mod.isGenericMarker(mk)) flags.is_generic = true;
@@ -319,6 +354,7 @@ fn computeExecFlags(def: WordDefinition) dict_mod.ExecFlags {
         .compound => |b| b.len == 0,
         .native, .host_callback, .literal => false,
     };
+    flags.may_define = body_may_define;
     flags.skip_type_validation = flags.is_generic and flags.empty_compound_body;
     if (def.stack_effect) |eff| {
         for (eff.inputs) |param| {
@@ -709,6 +745,10 @@ pub const Context = struct {
     /// `tail_call_instructions` from the callee's `body_owner`, so a `;`- or `>module`-adopted
     /// closure body reached in tail position resolves off its own value rather than the caller's.
     tail_call_body_owner: ?*const value_mod.Closure = null,
+    /// Whether the tail call target's body calls a defining native, so the trampoline gives it
+    /// the transient lexical frame a direct call would. Set alongside `tail_call_instructions`
+    /// from the callee's `exec_flags.may_define`.
+    tail_call_may_define: bool = false,
     /// Directory of the currently executing source file for relative path resolution
     current_source_dir: ?[]const u8 = null,
     /// User-configured load paths for search-mode module resolution
@@ -2840,6 +2880,23 @@ pub const Context = struct {
         });
     }
 
+    /// The value a quotation-literal push should place: `quot` itself, or a `.closure` carrying the
+    /// lexical scope captured at this moment.
+    ///
+    /// The one place the capture policy lives, so an interpreted `push_literal` and a compiled
+    /// `jitPushQuotation` agree on when a pushed body closes over a live frame. Without that
+    /// agreement a local bound in a compiled word body is invisible to a quotation the body
+    /// returns, and the read falls through to whatever durable word shares the name.
+    ///
+    /// A returned `.closure` carries the promotion's creation reference, so the caller owns it and
+    /// must move rather than copy it into its destination.
+    pub fn quotationPushValue(self: *Context, quot: Quotation) !Value {
+        const scope = (try self.captureQuotationScope(quot.instructions)) orelse
+            return .{ .quotation = quot };
+
+        return .{ .closure = try self.promoteToClosure(quot, scope) };
+    }
+
     /// Resolve `name` against a captured lexical scope's transient frames, most-recently-pushed
     /// frame first.
     ///
@@ -3100,6 +3157,7 @@ pub const Context = struct {
             .source_column = def.source_column,
             .provenance = def.provenance,
             .body_owner = def.body_owner,
+            .may_define = def.exec_flags.may_define,
             .action = switch (def.action) {
                 .compound => |instrs| .{ .compound = instrs },
                 .native => |func| .{ .native = func },
@@ -3145,7 +3203,7 @@ pub const Context = struct {
                 .host_callback => |host| .{ .host_callback = host },
             },
         };
-        def.exec_flags = computeExecFlags(def);
+        def.exec_flags = computeExecFlagsWithMayDefine(def, mod_word.may_define);
         return def;
     }
 
@@ -4496,6 +4554,10 @@ pub const Context = struct {
     /// foreign library's frame that merely happens to be live. Only the self walk is filtered; the
     /// ancestor walk visits durable frames below the durable floor, which are never `.module_deps`.
     fn lookupWordLocked(self: *const Context, name: []const u8, vis: ?ModuleDepsVisibility) ?WordDefinition {
+        // Deferred to the first frame actually probed. An empty frame is skipped without hashing,
+        // so a walk that touches none costs no digest at all.
+        var key: ?PrehashedName = null;
+
         var i = self.local_frames.items.len;
         while (i > 0) {
             i -= 1;
@@ -4507,7 +4569,9 @@ pub const Context = struct {
                     }
                 }
             }
-            if (self.local_frames.items[i].get(name)) |def| {
+            const frame = &self.local_frames.items[i];
+            if (frame.count() == 0) continue;
+            if (frame.getAdapted(name, prehash(&key, name))) |def| {
                 return def;
             }
         }
@@ -4520,13 +4584,23 @@ pub const Context = struct {
             var j = anc_cap;
             while (j > 0) {
                 j -= 1;
-                if (ctx.local_frames.items[j].get(name)) |def| return def;
+                const frame = &ctx.local_frames.items[j];
+                if (frame.count() == 0) continue;
+                if (frame.getAdapted(name, prehash(&key, name))) |def| return def;
             }
             if (ctx.dictionary.get(name)) |def| return def;
             ancestor = ctx.parent_context;
         }
 
         return null;
+    }
+
+    /// `name`'s digest, computing it into `slot` on the first call and reusing it after.
+    fn prehash(slot: *?PrehashedName, name: []const u8) PrehashedName {
+        if (slot.*) |k| return k;
+        const k = PrehashedName.init(name);
+        slot.* = k;
+        return k;
     }
 
     /// Scan every cached module's public `words` table for `name`.
@@ -5910,16 +5984,25 @@ pub const Context = struct {
 
     fn registerDispatchLocked(self: *Context, key: DispatchKey, entry: DispatchEntry, allow_overwrite: bool) !void {
         const target = self.stateTarget();
+
+        // The method body's frame bit is stamped here, the one production writer, so dispatch
+        // reads it the way a word call reads `exec_flags.may_define`.
+        var stamped = entry;
+        stamped.may_define = switch (entry.body) {
+            .quotation => |q| may_define.bodyCallsDefiningNative(q.instructions),
+            .native_fn, .host_callback => false,
+        };
+
         if (target.dispatch_frames.items.len > 0) {
             const top = target.dispatch_frames.items.len - 1;
             const gop = try target.dispatch_frames.items[top].entries.getOrPut(target.allocator, key);
             if (gop.found_existing and !allow_overwrite) {
                 return error.DuplicateMethod;
             }
-            gop.value_ptr.* = entry;
+            gop.value_ptr.* = stamped;
             target.dispatch.generation +%= 1;
         } else {
-            try target.dispatch.register(key, entry, allow_overwrite);
+            try target.dispatch.register(key, stamped, allow_overwrite);
         }
         // Any new method binding may flip a satisfies-check answer; clear
         // coarsely. (Reached only on a successful register.) A redirected
@@ -6138,7 +6221,18 @@ pub const Context = struct {
                     const rc = host.callback(host.handle, host.user_data);
                     if (rc != 0) return error.HostCallbackFailed;
                 },
-                .compound => |instrs| try self.executeInstructions(instrs, null, null, module_word.body_owner),
+                .compound => |instrs| {
+                    const saved_source = self.current_source;
+                    defer self.current_source = saved_source;
+                    if (module_word.source_file) |source| self.current_source = source;
+                    if (module_word.source_module) |mod| {
+                        try self.pushModuleDepsFrame(mod);
+                        defer self.popModuleDepsFrameTraced(mod);
+                        try self.executeQuotationWithPic(.{ .instructions = instrs }, null, mod, module_word.body_owner, module_word.exec_flags.may_define);
+                    } else {
+                        try self.executeQuotationWithPic(.{ .instructions = instrs }, null, null, module_word.body_owner, module_word.exec_flags.may_define);
+                    }
+                },
                 .literal => |v| try self.stack.push(v),
             }
         } else {
@@ -6236,7 +6330,7 @@ pub const Context = struct {
                     //              must have that tail call resolved here, while this module-deps frame
                     //              is still live, instead of leaking a pending tail call past the
                     //              deps-frame teardown.
-                    try self.executeQuotationWithPic(.{ .instructions = instrs }, null, module, mod_word.body_owner);
+                    try self.executeQuotationWithPic(.{ .instructions = instrs }, null, module, mod_word.body_owner, mod_word.may_define);
                 },
                 .native => |func| try func(self),
                 .host_callback => |host| {
@@ -7457,7 +7551,7 @@ pub const Context = struct {
         defer self.current_source = saved_source;
         self.enterBodySource(quotation.instructions);
 
-        return self.executeQuotationWithPic(quotation, null, null, owner);
+        return self.executeQuotationWithPic(quotation, null, null, owner, false);
     }
 
     /// Point `current_source` at the file `instructions` was parsed from, leaving it alone for a
@@ -7488,7 +7582,7 @@ pub const Context = struct {
     /// right file: a word body from the word's own `source_file`, a body reached as a value from
     /// `enterBodySource`. Probing here instead would put a lookup on every word call to recompute
     /// what the caller already knows.
-    pub fn executeQuotationWithPic(self: *Context, quotation: Quotation, pic_table: ?*PicTable, initial_module: ?*const value_mod.Module, owner: ?*const value_mod.Closure) anyerror!void {
+    pub fn executeQuotationWithPic(self: *Context, quotation: Quotation, pic_table: ?*PicTable, initial_module: ?*const value_mod.Module, owner: ?*const value_mod.Closure, body_defines: bool) anyerror!void {
         const saved_source = self.current_source;
         defer self.current_source = saved_source;
 
@@ -7498,6 +7592,14 @@ pub const Context = struct {
         var body_module: ?*const value_mod.Module = initial_module;
         var current_owner = owner;
         var owns_frame = false;
+        var body_may_define = body_defines;
+        var owns_lexical_frame = false;
+        var lexical_frame_index: usize = 0;
+
+        // Every frame this loop opens sits above this depth, so an exit unwinds to it whatever
+        // order the deps frame and the lexical frame ended up in.
+        const entry_frame_len = self.local_frames.items.len;
+        errdefer self.truncateLocalFrames(entry_frame_len);
 
         while (true) {
             // Record depth before execution for validation
@@ -7506,6 +7608,7 @@ pub const Context = struct {
             self.tail_call_module = null;
             self.tail_call_source = null;
             self.tail_call_body_owner = null;
+            self.tail_call_may_define = false;
 
             // Push module deps frame on first entry into a module context. On
             // subsequent iterations, the frame persists so that runtime-defined
@@ -7516,7 +7619,21 @@ pub const Context = struct {
                 owns_frame = true;
             }
 
+            // A body that may define runs in a transient lexical frame of its own. It is the
+            // frame `;` targets and the first frame a read walks, and its bindings pop when the
+            // call returns instead of landing in whatever frame the caller happened to have on
+            // top. The frame persists across tail calls for the same reason the deps frame does:
+            // a helper defined here and tail-called must still resolve, and a tail-recursive
+            // definer must stay flat rather than open a frame per iteration.
+            if (body_may_define and !owns_lexical_frame) {
+                try self.pushLocalFrame();
+                owns_lexical_frame = true;
+                lexical_frame_index = self.local_frames.items.len - 1;
+            }
+
             const exec_result = self.executeInstructions(current_instructions, current_pic, body_module, current_owner);
+            // The frames this loop opened are closed by the `errdefer` above, the one unwind point.
+            // Only the trace line is left, since it names the module the frame belonged to.
             exec_result catch |err| {
                 if (owns_frame) {
                     if (self.trace.trace_modules.deps) {
@@ -7525,7 +7642,6 @@ pub const Context = struct {
                             trace_mod.traceModuleDepsPop(&tw, cm.name);
                         }
                     }
-                    self.popLocalFrame();
                 }
                 return err;
             };
@@ -7550,6 +7666,11 @@ pub const Context = struct {
                 current_owner = self.tail_call_body_owner;
                 self.tail_call_body_owner = null;
 
+                // The callee opens its own lexical frame on the next iteration only when this
+                // loop holds none; otherwise it shares the one already open.
+                body_may_define = self.tail_call_may_define;
+                self.tail_call_may_define = false;
+
                 const new_module = self.tail_call_module;
                 self.tail_call_module = null;
 
@@ -7559,6 +7680,12 @@ pub const Context = struct {
 
                 if (new_module) |new_mod| {
                     if (owns_frame and current_module.? != new_mod) {
+                        // The lexical frame opened after the deps frame sits above it, so it
+                        // closes first; one opened before it stays, below the callee's deps frame.
+                        if (owns_lexical_frame and lexical_frame_index + 1 == self.local_frames.items.len) {
+                            self.popLocalFrame();
+                            owns_lexical_frame = false;
+                        }
                         if (self.trace.trace_modules.deps) {
                             var tw = trace_mod.TraceWriter.init();
                             trace_mod.traceModuleDepsPop(&tw, current_module.?.name);
@@ -7571,7 +7698,7 @@ pub const Context = struct {
                 continue;
             }
 
-            // Normal terminatio:n pop frame before validation
+            // Normal termination: close every frame this loop opened before validation.
             if (owns_frame) {
                 if (self.trace.trace_modules.deps) {
                     if (current_module) |cm| {
@@ -7579,9 +7706,10 @@ pub const Context = struct {
                         trace_mod.traceModuleDepsPop(&tw, cm.name);
                     }
                 }
-                self.popLocalFrame();
                 owns_frame = false;
             }
+            owns_lexical_frame = false;
+            self.truncateLocalFrames(entry_frame_len);
 
             // Non-tail call: validate quotation's stack effect
             if (quotation.effect) |effect| {
@@ -7779,11 +7907,18 @@ pub const Context = struct {
         const tci_owner = self.tail_call_body_owner;
         self.tail_call_body_owner = null;
 
+        const tci_may_define = self.tail_call_may_define;
+        self.tail_call_may_define = false;
+
         if (tci_module) |mod| {
             self.pushModuleDepsFrame(mod) catch |e| return self.wordErrorCleanup(name, e);
         }
 
-        self.executeQuotationWithOwner(.{ .instructions = tci }, tci_owner) catch |err| {
+        const saved_source = self.current_source;
+        defer self.current_source = saved_source;
+        self.enterBodySource(tci);
+
+        self.executeQuotationWithPic(.{ .instructions = tci }, null, null, tci_owner, tci_may_define) catch |err| {
             if (tci_module) |mod| self.popModuleDepsFrameTraced(mod);
             return self.wordErrorCleanup(name, err);
         };
@@ -7980,6 +8115,7 @@ pub const Context = struct {
                     self.tail_call_module = word.source_module;
                     self.tail_call_source = word.source_file;
                     self.tail_call_body_owner = word.body_owner;
+                    self.tail_call_may_define = word.exec_flags.may_define;
                     return .tail_call_set;
                 },
                 .native => |func| {
@@ -8058,7 +8194,7 @@ pub const Context = struct {
                         .compound => |instrs| {
                             self.pushModuleDepsFrame(mod) catch |e| break :blk @as(anyerror!void, e);
                             defer self.popModuleDepsFrameTraced(mod);
-                            break :blk self.executeQuotationWithPic(.{ .instructions = instrs }, callee_pic, mod, word.body_owner);
+                            break :blk self.executeQuotationWithPic(.{ .instructions = instrs }, callee_pic, mod, word.body_owner, word.exec_flags.may_define);
                         },
                         .native => |func| break :blk func(self),
                         .host_callback => |host| break :blk host_result: {
@@ -8079,7 +8215,7 @@ pub const Context = struct {
                             if (rc != 0) break :host_result error.HostCallbackFailed;
                             break :host_result;
                         },
-                        .compound => |instrs| self.executeQuotationWithPic(.{ .instructions = instrs }, callee_pic, null, word.body_owner),
+                        .compound => |instrs| self.executeQuotationWithPic(.{ .instructions = instrs }, callee_pic, null, word.body_owner, word.exec_flags.may_define),
                         .literal => |v| self.stack.push(v),
                     };
                 }
@@ -8265,15 +8401,15 @@ pub const Context = struct {
                     // non-null scope promotes the pushed value to a `.closure` carrying it
                     // directly; a non-capturing push (the common case) is pushed unchanged.
                     if (val == .quotation) {
-                        if (try self.captureQuotationScope(val.quotation.instructions)) |scope| {
+                        const pushed = try self.quotationPushValue(val.quotation);
+                        if (pushed == .closure) {
                             // The promotion's creation reference transfers into the slot.
-                            const promoted = try self.promoteToClosure(val.quotation, scope);
-                            self.stack.pushMoved(.{ .closure = promoted }) catch |err| {
-                                container_backing.releaseValue(.{ .closure = promoted });
+                            self.stack.pushMoved(pushed) catch |err| {
+                                container_backing.releaseValue(pushed);
                                 return err;
                             };
                         } else {
-                            try self.stack.push(val);
+                            try self.stack.push(pushed);
                         }
                     } else {
                         try self.stack.push(val);
@@ -8759,6 +8895,40 @@ test "defineBinding in a task context interns into the root's table" {
 
     try std.testing.expectEqual(in_parent.ptr, in_task.ptr);
     try std.testing.expectEqual(@as(usize, 1), parent.binding_names.count());
+}
+
+test "computeExecFlags: a compound body calling a defining native may define" {
+    const definer = [_]Instruction{ .{ .op = .{ .call_word = "swap" }, .line = 1 }, .{ .op = .{ .call_word = ";" }, .line = 1 } };
+    const def: WordDefinition = .{ .name = "w", .action = .{ .compound = &definer } };
+    try std.testing.expect(computeExecFlags(def).may_define);
+
+    const inert = [_]Instruction{.{ .op = .{ .call_word = "dup" }, .line = 1 }};
+    const plain: WordDefinition = .{ .name = "p", .action = .{ .compound = &inert } };
+    try std.testing.expect(!computeExecFlags(plain).may_define);
+}
+
+/// The frame depth `probeFrameDepth` observed on its last call.
+var probed_frame_depth: usize = 0;
+
+fn probeFrameDepth(ctx: *Context) anyerror!void {
+    probed_frame_depth = ctx.local_frames.items.len;
+}
+
+test "executeQuotationWithPic: a defining body runs one frame above its caller and pops it on return" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    try ctx.defineWord("probe-frame-depth", .{ .name = "probe-frame-depth", .action = .{ .native = probeFrameDepth } });
+    const body = [_]Instruction{.{ .op = .{ .call_word = "probe-frame-depth" }, .line = 1 }};
+    const before = ctx.local_frames.items.len;
+
+    try ctx.executeQuotationWithPic(.{ .instructions = &body }, null, null, null, false);
+    try std.testing.expectEqual(before, probed_frame_depth);
+    try std.testing.expectEqual(before, ctx.local_frames.items.len);
+
+    try ctx.executeQuotationWithPic(.{ .instructions = &body }, null, null, null, true);
+    try std.testing.expectEqual(before + 1, probed_frame_depth);
+    try std.testing.expectEqual(before, ctx.local_frames.items.len);
 }
 
 test "pragmaEnvironmentSetSite accepts a prompt and the startup file, and refuses a source file" {
@@ -12232,6 +12402,40 @@ test "computeExecFlags: recursive-non-tco plus stack-recursive with non-empty bo
     try std.testing.expect(!flags.is_generic);
     try std.testing.expect(!flags.empty_compound_body);
     try std.testing.expect(!flags.skip_type_validation);
+}
+
+test "computeExecFlagsWithMayDefine takes the supplied bit over what the body says" {
+    const definer = [_]Instruction{ .{ .op = .{ .call_word = "swap" }, .line = 1 }, .{ .op = .{ .call_word = ";" }, .line = 1 } };
+    const def: WordDefinition = .{ .name = "w", .action = .{ .compound = &definer } };
+    try std.testing.expect(computeExecFlags(def).may_define);
+    try std.testing.expect(!computeExecFlagsWithMayDefine(def, false).may_define);
+
+    const inert = [_]Instruction{.{ .op = .{ .call_word = "dup" }, .line = 1 }};
+    const plain: WordDefinition = .{ .name = "p", .action = .{ .compound = &inert } };
+    try std.testing.expect(!computeExecFlags(plain).may_define);
+    try std.testing.expect(computeExecFlagsWithMayDefine(plain, true).may_define);
+}
+
+test "moduleWordFrameDef carries the module word's may-define bit" {
+    var module = value_mod.Module{ .name = "m", .words = .{} };
+    const body = [_]Instruction{.{ .op = .{ .call_word = "dup" }, .line = 1 }};
+
+    const definer = Context.moduleWordFrameDef("definer", .{ .may_define = true, .action = .{ .compound = &body } }, &module);
+    try std.testing.expect(definer.exec_flags.may_define);
+
+    const plain = Context.moduleWordFrameDef("plain", .{ .may_define = false, .action = .{ .compound = &body } }, &module);
+    try std.testing.expect(!plain.exec_flags.may_define);
+}
+
+test "PrehashedName agrees with the context its frames were filled through" {
+    var frame: LocalFrame = .{};
+    defer frame.deinit(std.testing.allocator);
+
+    try frame.put(std.testing.allocator, "present", .{ .name = "present", .action = .{ .compound = &.{} } });
+
+    try std.testing.expectEqual(std.hash_map.hashString("present"), PrehashedName.init("present").hash("present"));
+    try std.testing.expect(frame.getAdapted("present", PrehashedName.init("present")) != null);
+    try std.testing.expect(frame.getAdapted("absent", PrehashedName.init("absent")) == null);
 }
 
 test "computeExecFlags: plain compound word has no flags set" {

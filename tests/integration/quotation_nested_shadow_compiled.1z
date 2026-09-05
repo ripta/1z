@@ -11,8 +11,9 @@ shadow-via-call: ( -- ) [ [ nip: ( -- y ) [ 1 ] ; ] call ] ;
 \ An `if` branch, which the compiler splices the same way.
 shadow-via-if: ( -- ) [ t [ over: ( -- y ) [ 2 ] ; ] [ ] if ] ;
 
-\ The definition sits in a callee's body, so the exemption is dynamic-extent rather than lexical.
-\ Calling `(definer)` outside a quotation would throw on every tier.
+\ The definition sits in a callee's body. The callee brackets itself in a frame of its own, so the
+\ exemption holds however `(definer)` is reached, and the quotation's frame around it is the
+\ compiled call site's own bracket.
 (definer): ( -- ) [ 2dup: ( -- y ) [ 3 ] ; ] ;
 shadow-via-callee: ( -- ) [ [ (definer) ] call ] ;
 

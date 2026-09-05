@@ -1,0 +1,36 @@
+\ A word body's definitions live in a frame the call owns on this tier too: a `name: swap ;` local
+\ read from the word's own loop body is fresh on every call whatever context reached it, and a
+\ definition made in a word body is gone once the word returns, without reaching the durable
+\ entry frame or the collision guards. The binary's answers must match the interpreter's for
+\ tests/integration/word_body_local_frame.1z.
+\
+\ Every local here is read only from a quotation handed to a combinator, and every nested
+\ definition is left uncalled: a word that calls its own nested definition at the body's top level
+\ is not AOT-compilable, so a call would turn these pins into a build failure. The module call is
+\ wrapped in `call` rather than `when`, since a top-level `when` whose quotation leaves a value
+\ behind fails in a binary on its own (spec/bugs/20260904-aot-top-level-when-result.md).
+
+use "ranges" ;
+use "sequences" ;
+use "fixtures/aot_word_body_local_frame_mod.1z" ;
+
+neighbors: ( n -- vec ) [
+  n: swap ;
+  [ ] make-vector
+  { 1 2 } [ n + #push! ] #each
+] ;
+
+[ 80 neighbors drop ] call
+5 neighbors >array .
+{ 30 40 } [ t [ neighbors >array ] [ drop ] if ] #map #collect .
+
+[ 5 place ] call .
+9 place .
+
+define-inside: ( -- ) [ inside-only: ( -- n ) [ 42 ] ; ] ;
+define-inside
+"inside-only" defined? .
+
+shadow-nip: ( -- ) [ nip: ( -- n ) [ 42 ] ; ] ;
+shadow-nip
+1 2 nip .

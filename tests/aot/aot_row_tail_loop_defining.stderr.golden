@@ -1,3 +1,3 @@
-tests/aot/aot_row_tail_loop_defining.1z:18: error 'import-conflict' defining 'nip' would shadow a word from "src/prelude.1z" at word ';'
+tests/aot/aot_row_tail_loop_defining.1z:23: error 'import-conflict' defining 'nip' would shadow a word from "src/prelude.1z" at word ';'
   stack effect: ( name quot --  )
   hint: add the 'override' marker if intentional

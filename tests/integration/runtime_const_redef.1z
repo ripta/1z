@@ -1,17 +1,14 @@
-\ A runtime redefinition of a const prelude binding refuses with `cannot-redefine-const` on every
-\ tier. `constraint-info` is a `struct{ }` type word the prelude defines, so its binding carries
-\ the const marker. The const guard reads the visible scope first and the baked base scope when
-\ that misses, so an interpreter-free binary, which holds the prelude in no frame, refuses with
-\ the same error instead of reporting a shadow whose `override` hint a const word cannot honor.
+\ A runtime redefinition of a const prelude binding refuses with `cannot-redefine-const`.
+\ `constraint-info` is a prelude struct type. The interpreter-free tier must also recognize
+\ its const marker through the baked base scope.
 \
-\ The redefinition sits inside a word body called from top level, so it fires while the file
-\ runs. The `use` gives the entry file an import. The bare call is the file's last statement, so
-\ the raise stays in tail position on every tier.
+\ A defining word body now gets a transient frame, so this definition runs at top level.
+\ The trailing `0 drop` keeps the statement from ending in `;`: freeze collects it for
+\ binary runtime, where the definition reaches the durable entry frame on every tier.
+\ The real source location is shared by interpreted and AOT diagnostics.
 
 use { taken: } "def_over_import_mod.1z" ;
 
 taken .
 
-redefine-const: ( -- ) [ constraint-info: ( -- n ) [ 0 ] ; ] ;
-
-redefine-const
+constraint-info: ( -- n ) [ 0 ] ; 0 drop

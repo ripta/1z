@@ -56,6 +56,9 @@ pub const ExecFlags = packed struct {
     has_param_effects: bool = false,
     /// Some input parameter carries a type annotation worth validating.
     has_type_annotations: bool = false,
+    /// A compound body that calls a defining native at its top level, so a call runs it in a
+    /// transient lexical frame of its own. See `may_define.bodyCallsDefiningNative`.
+    may_define: bool = false,
 };
 
 /// Word definition: either a native function or compound quotation.

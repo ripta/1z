@@ -4,9 +4,9 @@
 \
 \ The recursing branch defines a word, so the may-define analysis brackets it and the back-edge
 \ has an open transient frame to pop before it jumps. A frame left open would still be on the
-\ stack when `shadow-prelude` runs, and its definition would land there instead of in the entry
-\ frame, so the dictionary-shadow guard's gate would not hold and the throw below would not
-\ happen. One leaked frame is enough to lose it.
+\ stack when the definition below runs, and it would land there instead of in the entry frame, so
+\ the dictionary-shadow guard's gate would not hold and the throw below would not happen. One
+\ leaked frame is enough to lose it.
 my-times: ( n quot -- ) [
   over 0 >
   [ helper: [ 1 ] ; dup 2dip swap -- swap my-times ]
@@ -14,9 +14,10 @@ my-times: ( n quot -- ) [
   if
 ] ;
 
-\ A word body is bare on every tier, so this definition targets whatever frame is topmost.
-shadow-prelude: ( -- ) [ nip: ( -- y ) [ 0 ] ; ] ;
-
 3 [ ] my-times
 
-shadow-prelude
+\ A word body brackets itself in a frame of its own, so a definition made inside one never reaches
+\ the entry frame. The trailing `0 drop` keeps this top-level statement from ending in `;`, so
+\ freeze collects it for binary runtime. It defines in the durable entry frame unless a leaked
+\ frame sits above it.
+nip: ( -- y ) [ 0 ] ; 0 drop
