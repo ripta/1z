@@ -1,0 +1,128 @@
+\ tests/benchmark/minesweeper_reset.1z - Where a minesweeper reset spends its time.
+\
+\ A reset is (new-game) followed by the repaint frame it arms: clear-background over the whole
+\ canvas, then one blit per cell, then the HUD. This file times that whole path, then each part
+\ of it, then the inner loops that dominate the parts, so every row can be read against the row
+\ above it.
+\
+\ It also times the four sound samples. Those are built once per page load rather than per
+\ reset, but they are built on the first press after one, so they land in the same stretch of
+\ waiting.
+\
+\ The file borrows examples/wasm-minesweeper/minesweeper.1z's private words rather than going
+\ through its public three, since the parts worth timing are all private. current-framebuffer
+\ and the two audio seams are bound to scratch values, because the real ones only exist under
+\ the wasm C-API root.
+\
+\ This measures the native interpreter. tests/wasm/bench-minesweeper.mjs asks the same question
+\ of the wasm build the browser actually runs, where every row costs several times more.
+\
+\ Rows print as they finish rather than as one table at the end. The slow rows here run for
+\ minutes under a debug build, and a partial answer during the run beats a whole one after it.
+
+\ bytes-alloc is a prelude word; #poke32! arrives with the borrow, since minesweeper uses "bytes".
+borrow "../../examples/wasm-minesweeper/minesweeper.1z" ;
+
+private{
+  (scratch-framebuffer): ( -- byte-array ) [ framebuffer-width framebuffer-height * 4 * bytes-alloc ] ;
+
+  (framebuffer-pixels): ( -- n ) [ framebuffer-width framebuffer-height * ] ;
+
+  \\ Time quot n times and print one row: the label, the count, and nanoseconds per iteration.
+  \\
+  \\ n is copied into a local before quot is curried away, and quot itself is never bound to a
+  \\ local: referencing a quotation-valued local runs its body instead of pushing it.
+  (row): ( label: string n: fixnum quot: quotation -- ) [
+    over rn: swap ;
+    [ times ] curry curry benchmark
+    "elapsed_ns" @get rn div
+    swap "  n=" #append rn >string #append "  ns/iter=" #append
+    swap >string #append
+    print-line
+  ] ;
+
+  \\ A reset the way the player sees it: (new-game) and the repaint frame that follows it.
+  (reset-frame): ( preset: symbol -- ) [ (new-game) minesweeper-draw ] ;
+
+  \\ Re-arm the full-repaint branch without re-running (new-game), so the draw path can be timed
+  \\ on its own.
+  (arm-repaint): ( -- ) [ state t >>repaint f >>hud-mines f >>hud-seconds f >>hud-phase drop ] ;
+
+  \\ The floor under clear-background: drive the same iterator over the same count and do
+  \\ nothing per element. The gap up to clear-background is what a pixel write costs.
+  (iterate-only): ( -- ) [ (framebuffer-pixels) iota >iterator [ drop ] #each ] ;
+
+  \\ The other floor: write every pixel with a direct indexed poke, skipping the coordinate
+  \\ arithmetic and the clip test (set-pixel!) runs per pixel.
+  (poke-only): ( -- ) [
+    current-framebuffer get
+    (framebuffer-pixels) iota >iterator [ 4 * 0 #poke32! ] #each
+    drop
+  ] ;
+
+  \\ (set-pixel!) re-reads the framebuffer parameter on every pixel rather than once per call.
+  \\ This is that read, on its own, at the rate clear-background runs it.
+  (param-get-per-pixel): ( -- ) [
+    (framebuffer-pixels) iota >iterator [ drop current-framebuffer get drop ] #each
+  ] ;
+
+  \\ clear-background turns a flat index into a column and a row, and (set-pixel!) multiplies
+  \\ them back into an offset. This is that round trip, on its own.
+  (coords-per-pixel): ( -- ) [
+    (framebuffer-pixels) iota >iterator
+    [ dup framebuffer-width % swap framebuffer-width div drop drop ] #each
+  ] ;
+
+  \\ Rebuild the covered sprite once per cell, which is what (draw-cell) does today.
+  (rebuild-cell-sprites): ( n: fixnum -- ) [ [ covered-sprite drop ] times ] ;
+
+  \\ Blit one already-built sprite n times, which is what the same cells would cost if the
+  \\ sprite were built once.
+  (blit-hoisted): ( n: fixnum -- ) [
+    covered-sprite swap
+    [ dup [ 0 0 ] dip blit-sprite ] times
+    drop
+  ] ;
+
+  \\ Bind the audio seams away from the wasm-only host words, the way the sibling's tests do.
+  (with-audio-seams): ( quot -- ) [
+    [ drop drop drop 7 ] current-sample-loader [
+      [ drop ] current-sample-player [ call ] with-parameter
+    ] with-parameter
+  ] ;
+}
+
+(scratch-framebuffer) current-framebuffer [
+  "-- whole reset --" print-line
+  "reset beginner" 3 [ beginner: (reset-frame) ] (row)
+  "reset expert" 1 [ expert: (reset-frame) ] (row)
+
+  "-- reset, decomposed (beginner) --" print-line
+  "new-game" 100 [ beginner: (new-game) ] (row)
+  "clear-background" 3 [ page-color clear-background ] (row)
+  "draw-board" 3 [ beginner: (new-game) (draw-board) ] (row)
+  "draw-hud" 3 [ (arm-repaint) (draw-hud) ] (row)
+
+  "-- clear-background, decomposed (57344 px) --" print-line
+  "iterate, no write" 3 [ (iterate-only) ] (row)
+  "poke32 direct" 3 [ (poke-only) ] (row)
+  "parameter get per pixel" 3 [ (param-get-per-pixel) ] (row)
+  "index <-> col,row per px" 3 [ (coords-per-pixel) ] (row)
+
+  "-- draw-board, decomposed (81 cells) --" print-line
+  "covered-sprite x81" 3 [ 81 (rebuild-cell-sprites) ] (row)
+  "blit x81, sprite hoisted" 3 [ 81 (blit-hoisted) ] (row)
+
+  "-- const words, per call --" print-line
+  "page-color" 500 [ page-color drop ] (row)
+  "covered-sprite" 100 [ covered-sprite drop ] (row)
+  "digit-colors" 100 [ digit-colors drop ] (row)
+
+  "-- one-time sound synthesis --" print-line
+  [
+    "make-flag-sound" 1 [ (make-flag-sound) drop ] (row)
+    "make-reveal-sound" 1 [ (make-reveal-sound) drop ] (row)
+    "make-boom-sound" 1 [ (make-boom-sound) drop ] (row)
+    "make-win-sound" 1 [ (make-win-sound) drop ] (row)
+  ] (with-audio-seams)
+] with-parameter
