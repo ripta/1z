@@ -32,13 +32,16 @@ private{
   ramp-per-food:       ( -- n ) const [ 5000000 ] ;
   floor-move-interval: ( -- n ) const [ 60000000 ] ;
 
-  page-color:     ( -- color ) const [ 8 8 24 255 <color> ] ;
-  board-color:    ( -- color ) const [ 16 16 40 255 <color> ] ;
-  body-color:     ( -- color ) const [ 48 160 64 255 <color> ] ;
-  body-alt-color: ( -- color ) const [ 32 112 48 255 <color> ] ;
-  head-color:     ( -- color ) const [ 96 224 96 255 <color> ] ;
-  food-color:     ( -- color ) const [ 224 64 48 255 <color> ] ;
-  hud-color:      ( -- color ) const [ 255 255 255 255 <color> ] ;
+  \\ Bracket-less top-level locals rather than const words. A const word guards redefinition; it
+  \\ does not memoize, so its body runs on every reference, and each of these builds and
+  \\ validates a color struct.
+  page-color:     8 8 24 255 <color> ;
+  board-color:    16 16 40 255 <color> ;
+  body-color:     48 160 64 255 <color> ;
+  body-alt-color: 32 112 48 255 <color> ;
+  head-color:     96 224 96 255 <color> ;
+  food-color:     224 64 48 255 <color> ;
+  hud-color:      255 255 255 255 <color> ;
 
   \\ The eat sound: a rising three-note arpeggio (C5 E5 G5), 60ms per note at 8000 Hz mono,
   \\ each note fading linearly to zero so the note boundaries do not click.

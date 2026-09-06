@@ -5,12 +5,18 @@
 \ that single buffer. The native `(wasm-framebuffer)` word (src/capi_wasm.zig) is the only
 \ Zig-level piece: a borrowed, mutable byte-array view over the wasm-owned framebuffer memory.
 \
-\ Two things shape the loop bodies below. A named `name: swap ;` local bound to a struct is
-\ retained until the program exits, so the drawing words destructure a color or a sprite before
-\ binding, and the per-pixel (set-pixel!) helper uses no locals at all because it runs tens of
-\ thousands of times per call. An inner #each quotation sees a stale snapshot of an outer #each's
-\ per-iteration local, so every pixel-covering loop here is a single flat #each (row/column
-\ derived via div/%) rather than nested #eachs.
+\ A named `name: swap ;` local bound to a struct is retained until the program exits, so the
+\ drawing words destructure a color or a sprite before binding.
+\
+\ Two rules shape the fill and copy loops. Reading a module-level word costs roughly sixteen
+\ times what reading a local costs, so a loop hoists every constant it needs into a local first
+\ and the body reads only locals. And a region is clipped against the canvas once, before the
+\ loop, so the body writes without testing each pixel. The two together are worth about 30x on
+\ a full-canvas fill; tests/benchmark/minesweeper_reset.1z tracks the numbers.
+\
+\ (set-pixel!) keeps the per-pixel clip test and stays the general path. draw-pixel is one
+\ pixel, so there is nothing to hoist, and the glyph loop below relies on the test to discard
+\ unset bits when a glyph hangs off the canvas.
 
 use "ranges" ;
 use "sequences" ;
@@ -95,16 +101,20 @@ private{
 draw-pixel: ( x y color -- ) [ (color>packed) (set-pixel!) ] ;
 
 \\ Fill the entire framebuffer with one color.
+\\
+\\ The canvas is one contiguous run of pixels, so this needs no coordinate arithmetic and no
+\\ clipping: the loop walks the buffer directly.
 clear-background: ( color -- ) [
   (color>packed)
   cp: swap ;
-  framebuffer-width framebuffer-height * iota >iterator [
-    fi: swap ;
-    fi framebuffer-width % fi framebuffer-width div cp (set-pixel!)
-  ] #each
+  bpp: framebuffer-bytes-per-pixel ;
+  current-framebuffer get
+  framebuffer-width framebuffer-height * iota >iterator [ bpp * cp #poke32! ] #each
+  drop
 ] ;
 
-\\ Fill an axis-aligned rectangle. width/height must be non-negative.
+\\ Fill an axis-aligned rectangle. width/height must be non-negative. A rectangle reaching past
+\\ the canvas is clipped, the standard convention for a 2D framebuffer API.
 draw-rectangle: ( x y width height color -- ) [
   (color>packed)
   rp: swap ;
@@ -114,10 +124,22 @@ draw-rectangle: ( x y width height color -- ) [
   rx: swap ;
   rw 0 >= rh 0 >= and
   not [ f "draw-rectangle requires non-negative width and height" EInvalidArgument make-error throw ] when
-  rw rh * iota >iterator [
-    ri: swap ;
-    rx ri rw % + ry ri rw div + rp (set-pixel!)
-  ] #each
+
+  cx: rx 0 max ;
+  cy: ry 0 max ;
+  cw: rx rw + framebuffer-width min cx - ;
+  ch: ry rh + framebuffer-height min cy - ;
+
+  cw 0 > ch 0 > and [
+    fbw: framebuffer-width ;
+    bpp: framebuffer-bytes-per-pixel ;
+    current-framebuffer get
+    ch iota >iterator [
+      cy + fbw * cx + bpp * base: swap ;
+      cw iota >iterator [ bpp * base + rp #poke32! ] #each
+    ] #each
+    drop
+  ] when
 ] ;
 
 \\ Copy a sprite's RGBA8888 pixels into current-framebuffer at (x, y). An opaque copy: alpha is
@@ -132,16 +154,76 @@ blit-sprite: ( x y sprite -- ) [
   pixels>> bs: swap ;
   by: swap ;
   bx: swap ;
-  bw bh * iota >iterator [
-    bi: swap ;
-    bx bi bw % +
-    by bi bw div +
-    bs bi framebuffer-bytes-per-pixel * #peek32
-    (set-pixel!)
-  ] #each
+
+  cx: bx 0 max ;
+  cy: by 0 max ;
+  cw: bx bw + framebuffer-width min cx - ;
+  ch: by bh + framebuffer-height min cy - ;
+
+  cw 0 > ch 0 > and [
+    fbw: framebuffer-width ;
+    bpp: framebuffer-bytes-per-pixel ;
+    current-framebuffer get
+    ch iota >iterator [
+      r: swap ;
+      dbase: r cy + fbw * cx + bpp * ;
+      sbase: r cy + by - bw * cx bx - + bpp * ;
+      cw iota >iterator [
+        bpp * dup dbase + swap sbase + bs swap #peek32 #poke32!
+      ] #each
+    ] #each
+    drop
+  ] when
 ] ;
 
 private{
+  \ A glyph row's bit for column c is `(row >> c) & 1`, so column zero is the leftmost.
+
+  \\ The glyph loop for a cell that sits entirely on the canvas: constants hoisted into locals,
+  \\ one row byte read per row instead of per pixel, and a direct write per set bit with no clip
+  \\ test. This is the path all ordinary text takes.
+  (draw-glyph-whole): ( offset x y packed -- ) [
+    gp:   swap ;
+    gy:   swap ;
+    gx:   swap ;
+    goff: swap ;
+    fcs:  font-cell-size ;
+    fbw:  framebuffer-width ;
+    bpp:  framebuffer-bytes-per-pixel ;
+    current-framebuffer get
+    fcs iota >iterator [
+      gr:   swap ;
+      row:  font-glyph-bytes goff gr + #peek8 ;
+      base: gy gr + fbw * gx + bpp * ;
+      fcs iota >iterator [
+        gc: swap ;
+        row gc shift-right 1 bitand 1 =
+        [ gc bpp * base + gp #poke32! ] when
+      ] #each
+    ] #each
+    drop
+  ] ;
+
+  \\ The glyph loop for a cell hanging off an edge. An unset bit steers (set-pixel!) to (-1, -1),
+  \\ which its own bounds check clips as a no-op, so one test covers both the unset bits and the
+  \\ overhang.
+  (draw-glyph-clipped): ( offset x y packed -- ) [
+    cp2:  swap ;
+    cy2:  swap ;
+    cx2:  swap ;
+    coff: swap ;
+    font-cell-size font-cell-size * iota >iterator [
+      di: swap ;
+      font-glyph-bytes coff di font-cell-size div + #peek8
+      di font-cell-size % shift-right 1 bitand
+      bit: swap ;
+      cx2 di font-cell-size % + 1 + bit * 1 -
+      cy2 di font-cell-size div + 1 + bit * 1 -
+      cp2
+      (set-pixel!)
+    ] #each
+  ] ;
+
   \\ Draw one glyph from an already-packed color. The shared body under draw-char and
   \\ draw-text: both pack the color before any local binds it, because a named local bound
   \\ to a color struct is retained until the program exits, and text is drawn every frame.
@@ -156,21 +238,12 @@ private{
       drop
     ] [
       doff: swap ;
-      font-cell-size font-cell-size * iota >iterator [
-        di: swap ;
-        font-glyph-bytes doff di font-cell-size div + #peek8
-        di font-cell-size % shift-right 1 bitand
-        bit: swap ;
-        \ An unset bit steers (set-pixel!) to (-1, -1), which its own bounds check clips as a
-        \ no-op, rather than branching on `bit`.
-        \
-        \ An inner [ ... ] when/if quotation referencing di (or anything derived from it) here
-        \ would see a stale, first-iteration-only snapshot of di instead of the current one.
-        dx di font-cell-size % + 1 + bit * 1 -
-        dy di font-cell-size div + 1 + bit * 1 -
-        dp
-        (set-pixel!)
-      ] #each
+      dx 0 >= dy 0 >= and
+      dx font-cell-size + framebuffer-width <= and
+      dy font-cell-size + framebuffer-height <= and
+      [ doff dx dy dp (draw-glyph-whole) ]
+      [ doff dx dy dp (draw-glyph-clipped) ]
+      if
     ] if
   ] ;
 }

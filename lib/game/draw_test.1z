@@ -108,6 +108,46 @@ test-blit-sprite-copies-pixels-opaquely: ( -- ) [
   ] with-parameter
 ] ;
 
+\\ The fills clip against the canvas once before their loop rather than testing each pixel, so
+\\ the near edges need their own coverage: a region starting at a negative coordinate has to
+\\ lose exactly the columns that fall off, not shift the survivors.
+test-draw-rectangle-clips-at-the-near-edge: ( -- ) [
+  (scratch-framebuffer) current-framebuffer
+  [
+    -2 5 4 1 10 20 30 255 <color> draw-rectangle
+    current-framebuffer get 5 256 * 0 + 4 * 4 #peek 4280161290 "column 0 of a rect starting at x=-2 is filled" assert=
+    current-framebuffer get 5 256 * 1 + 4 * 4 #peek 4280161290 "column 1 is filled" assert=
+    current-framebuffer get 5 256 * 2 + 4 * 4 #peek 0 "column 2 is past the clipped width and untouched" assert=
+  ] with-parameter
+] ;
+
+\\ A sprite hanging off the left edge must advance its source offset by the amount clipped, so
+\\ the column that lands at x=0 is the sprite's second column, not its first.
+test-blit-sprite-clips-at-the-near-edge: ( -- ) [
+  (scratch-framebuffer) current-framebuffer
+  [
+    -1 60
+    2 2 B{ 0xAA 0xBB 0xCC 0xFF 0x11 0x22 0x33 0x44 0x55 0x66 0x77 0x88 0x99 0x00 0x11 0x22 } <sprite>
+    blit-sprite
+    current-framebuffer get 60 256 * 0 + 4 * 4 #peek 0x44332211 "x=0 shows the sprite's right column, not its left" assert=
+    current-framebuffer get 61 256 * 0 + 4 * 4 #peek 0x22110099 "the second row follows the same source shift" assert=
+  ] with-parameter
+] ;
+
+\\ A glyph fully on the canvas takes the fast path; one hanging off an edge takes the clipping
+\\ path. Both must light the same columns of 'A' row 0.
+test-draw-char-clips-at-both-edges: ( -- ) [
+  (scratch-framebuffer) current-framebuffer
+  [
+    252 10 "A" 255 255 255 255 <color> draw-char
+    current-framebuffer get 10 256 * 254 + 4 * 4 #peek 0xFFFFFFFF "'A' at x=252 still lights col 2 through the clipping path" assert=
+
+    -2 30 "A" 255 255 255 255 <color> draw-char
+    current-framebuffer get 30 256 * 0 + 4 * 4 #peek 0xFFFFFFFF "'A' at x=-2 lights col 2 at screen x=0" assert=
+    current-framebuffer get 30 256 * 1 + 4 * 4 #peek 0xFFFFFFFF "'A' at x=-2 lights col 3 at screen x=1" assert=
+  ] with-parameter
+] ;
+
 test-blit-sprite-clips-without-throwing: ( -- ) [
   (scratch-framebuffer) current-framebuffer
   [

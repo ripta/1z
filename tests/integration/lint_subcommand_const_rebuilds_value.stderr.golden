@@ -1,0 +1,6 @@
+tests/fixtures/lint/const-rebuilds-value.1z:41:3: info: [dead-definition] definition is not referenced by any other checked-file word
+tests/fixtures/lint/const-rebuilds-value.1z:30:31: warning: [missing-stack-effect] public word lacks a declared stack effect
+tests/fixtures/lint/const-rebuilds-value.1z:8:42: info: [complex-word-undocumented] complex word should include a doc comment example
+tests/fixtures/lint/const-rebuilds-value.1z:14:44: warning: [const-rebuilds-value] const word rebuilds its value on every call; a top-level binding evaluates once
+tests/fixtures/lint/const-rebuilds-value.1z:11:47: warning: [const-rebuilds-value] const word rebuilds its value on every call; a top-level binding evaluates once
+tests/fixtures/lint/const-rebuilds-value.1z:17:53: warning: [const-rebuilds-value] const word rebuilds its value on every call; a top-level binding evaluates once

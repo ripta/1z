@@ -32,22 +32,23 @@ private{
   \\ Each preset is { cols rows mines }.
   presets: H{ beginner: { 9 9 10 } intermediate: { 16 16 40 } expert: { 30 16 99 } } ;
 
-  page-color:      ( -- color ) const [ 8 8 24 255 <color> ] ;
-  covered-color:   ( -- color ) const [ 192 192 192 255 <color> ] ;
-  bevel-light:     ( -- color ) const [ 255 255 255 255 <color> ] ;
-  bevel-dark:      ( -- color ) const [ 112 112 112 255 <color> ] ;
-  revealed-color:  ( -- color ) const [ 168 168 168 255 <color> ] ;
-  flag-color:      ( -- color ) const [ 255 0 0 255 <color> ] ;
-  icon-color:      ( -- color ) const [ 0 0 0 255 <color> ] ;
-  glint-color:     ( -- color ) const [ 255 255 255 255 <color> ] ;
-  fatal-color:     ( -- color ) const [ 255 0 0 255 <color> ] ;
-  face-color:      ( -- color ) const [ 255 216 0 255 <color> ] ;
-  hud-panel-color: ( -- color ) const [ 0 0 0 255 <color> ] ;
-  hud-digit-color: ( -- color ) const [ 255 0 0 255 <color> ] ;
+  \ The palette, as bracket-less top-level locals rather than const words.
+  page-color:      8 8 24 255 <color> ;
+  covered-color:   192 192 192 255 <color> ;
+  bevel-light:     255 255 255 255 <color> ;
+  bevel-dark:      112 112 112 255 <color> ;
+  revealed-color:  168 168 168 255 <color> ;
+  flag-color:      255 0 0 255 <color> ;
+  icon-color:      0 0 0 255 <color> ;
+  glint-color:     255 255 255 255 <color> ;
+  fatal-color:     255 0 0 255 <color> ;
+  face-color:      255 216 0 255 <color> ;
+  hud-panel-color: 0 0 0 255 <color> ;
+  hud-digit-color: 255 0 0 255 <color> ;
 
   \\ The canonical adjacency colors, indexed by count. Index 0 is never read: a zero draws no
   \\ digit.
-  digit-colors: ( -- seq ) const [
+  digit-colors: [
     [ ] make-vector
     f #push!
     0 0 255 255 <color> #push!
@@ -58,7 +59,7 @@ private{
     0 128 128 255 <color> #push!
     0 0 0 255 <color> #push!
     128 128 128 255 <color> #push!
-  ] ;
+  ] call ;
 
   \\ A cell fills 7x7 of its 8-pixel pitch, leaving a one-pixel gutter at the right and bottom.
   sprite-px: ( -- n ) const [ cell-px 1 - ] ;
@@ -222,25 +223,26 @@ private{
   (stamp-cell-rows!):    ( pixels rows color -- pixels ) [ [ sprite-px sprite-px ] dip (stamp-rows!) ] ;
   (cell-sprite):         ( pixels -- sprite ) [ sprite-px swap (square-sprite) ] ;
 
-  covered-sprite: ( -- sprite ) const [ (beveled-cell-pixels) (cell-sprite) ] ;
-  revealed-sprite: ( -- sprite ) const [ revealed-color (flat-cell-pixels) (cell-sprite) ] ;
+  \ Every sprite below is a bracket-less top-level local, built once when this module loads.
+  covered-sprite: (beveled-cell-pixels) (cell-sprite) ;
+  revealed-sprite: revealed-color (flat-cell-pixels) (cell-sprite) ;
 
-  flag-sprite: ( -- sprite ) const [
+  flag-sprite: [
     (beveled-cell-pixels)
     flag-cloth-rows flag-color (stamp-cell-rows!)
     flag-pole-rows icon-color (stamp-cell-rows!)
     (cell-sprite)
-  ] ;
+  ] call ;
 
-  mine-sprite: ( -- sprite ) const [
+  mine-sprite: [
     revealed-color (flat-cell-pixels)
     mine-body-rows icon-color (stamp-cell-rows!)
     mine-glint-rows glint-color (stamp-cell-rows!)
     (cell-sprite)
-  ] ;
+  ] call ;
 
   \\ The mine that was clicked, on a red fill so the player can pick it out of the reveal.
-  fatal-mine-sprite: ( -- sprite ) const [
+  fatal-mine-sprite: [
     fatal-color (flat-cell-pixels)
     mine-body-rows icon-color (stamp-cell-rows!)
     mine-glint-rows glint-color (stamp-cell-rows!)
@@ -248,7 +250,7 @@ private{
   ] ;
 
   \\ A flag that was not on a mine: the mine that was not there, struck through in red.
-  wrong-flag-sprite: ( -- sprite ) const [
+  wrong-flag-sprite: [
     revealed-color (flat-cell-pixels)
     mine-body-rows icon-color (stamp-cell-rows!)
     mine-glint-rows glint-color (stamp-cell-rows!)
@@ -264,9 +266,9 @@ private{
     face-px swap (square-sprite)
   ] ;
 
-  face-normal-sprite: ( -- sprite ) const [ face-normal-rows (face-sprite) ] ;
-  face-dead-sprite:   ( -- sprite ) const [ face-dead-rows (face-sprite) ] ;
-  face-win-sprite:    ( -- sprite ) const [ face-win-rows (face-sprite) ] ;
+  face-normal-sprite: face-normal-rows (face-sprite) ;
+  face-dead-sprite:   face-dead-rows (face-sprite) ;
+  face-win-sprite:    face-win-rows (face-sprite) ;
 
   \\ Every sample is mono at this rate, and peaks at this amplitude.
   sound-rate: ( -- n ) const [ 8000 ] ;

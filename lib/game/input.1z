@@ -44,7 +44,9 @@ private{
     shift-left: 44 shift-right: 45 control-left: 46 control-right: 47
   } ;
 
-  key-count: ( -- n ) const [ key-index @keys #len ] ;
+  \\ A bracket-less top-level local, not a const word: a const body is re-evaluated on every
+  \\ call, and this one builds and counts a 48-entry key array.
+  key-count: key-index @keys #len ;
 
   \\ Previous frame's keyboard snapshot, for edge detection. A bracket-less top-level local:
   \\ its initializer runs once, when this module loads, and every later reference resolves to
@@ -140,8 +142,9 @@ private{
   mouse-button-name: { left: middle: right: } ;
 
   \\ The one shared empty array a drain with nothing pending stores, so an idle tick
-  \\ allocates nothing.
-  (no-mouse-events): ( -- array ) const [ { } ] ;
+  \\ allocates nothing. A bracket-less top-level local is what makes it one array: a const body
+  \\ would run, and allocate, on every reference.
+  (no-mouse-events): { } ;
 
   mouse-state: mutable struct{ events } ;
 

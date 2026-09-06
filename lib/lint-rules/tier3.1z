@@ -875,3 +875,63 @@ make-lint-rule register-lint-rule
 
 "borrow-in-production" warning: [ (check-borrow-in-production) ] f
 make-lint-rule register-lint-rule
+
+\ --- Helpers for const-rebuilds-value ---
+
+\ Whether a called name is a constructor, and so allocates on every call. Covers the smart
+\ constructor and raw positional forms from the naming conventions, plus the one byte-array
+\ allocator that carries neither shape.
+(constructor-name?): ( name -- ? ) [
+  dup "make-" #starts-with?
+  over "bytes-alloc" = or
+  swap dup "<" #starts-with? swap ">" #ends-with? and or
+] ;
+
+(has-const-marker?): ( word-info -- ? ) [ markers>> [ const = ] #any ] ;
+
+\ Whether a body calls a constructor. A body with no call at all, or one that only reads other
+\ constants and does arithmetic, is left alone: re-running it is cheap and the value is not
+\ rebuilt.
+\\ Each raw opcode is { opcode detail }, the same shape runtime/introspect wraps.
+(body-constructs?): ( quotation -- ? ) [
+  dup quotation? [
+    native.quotation>opcodes
+    [ dup 0 #nth call-word: = [ 1 #nth (constructor-name?) ] [ drop f ] if ] #any
+  ] [ drop f ] if
+] ;
+
+\ --- Rule: const-rebuilds-value ---
+\ The const marker guards redefinition; it does not memoize. A const word's body runs on every
+\ reference, so one that constructs a value rebuilds that value at every call site. A
+\ bracket-less top-level binding evaluates once, when the module loads.
+
+(check-const-rebuilds-value): ( path source tokens line-index semantic-context -- diagnostics ) [
+  nip nip nip
+  \ stack: path(1) sem-ctx(0)
+  dup f = [
+    2drop { }
+  ] [
+    V{ }
+    \ stack: path(2) sem-ctx(1) results(0)
+    1 pick-n semantic-word-names [
+      \ stack: path(3) sem-ctx(2) results(1) word-name(0)
+      2 pick-n swap semantic-word-info
+      dup f = [ drop ] [
+        dup (has-const-marker?) over body>> (body-constructs?) and
+        [
+          source-loc>> dup f = [ drop ] [
+            "const-rebuilds-value" warning: 5 pick-n 3 pick-n dup line>> swap column>>
+            "const word rebuilds its value on every call; a top-level binding evaluates once"
+            make-lint-diagnostic
+            nip
+            1 pick-n swap #push! drop
+          ] if
+        ] [ drop ] if
+      ] if
+    ] #each
+    nip nip
+  ] if
+] ;
+
+"const-rebuilds-value" warning: [ (check-const-rebuilds-value) ] f
+make-lint-rule register-lint-rule

@@ -1,0 +1,43 @@
+\\ A const word guards redefinition; it does not memoize. A body that constructs a value
+\\ therefore rebuilds it at every call site.
+
+\\ A point.
+point: struct{ x y } ;
+
+\\ Validate and construct a point.
+<point>: ( x y -- point ) [ make-point ] ;
+
+\\ Flagged: every reference re-runs the raw constructor.
+origin: ( -- point ) const [ 0 0 make-point ] ;
+
+\\ Flagged: every reference re-runs the smart constructor.
+corner: ( -- point ) const [ 1 1 <point> ] ;
+
+\\ Flagged: every reference re-allocates the buffer.
+scratch: ( -- byte-array ) const [ 64 bytes-alloc ] ;
+
+\\ Not flagged: no call at all, so there is nothing to rebuild.
+limit: ( -- n ) const [ 99 ] ;
+
+\\ Not flagged: reads another constant and does arithmetic. Cheap to re-run, and it constructs
+\\ nothing.
+half-limit: ( -- n ) const [ limit 2 div ] ;
+
+\\ Not flagged: constructs, but is not const, so it is a builder rather than a constant.
+fresh-scratch: ( -- byte-array ) [ 128 bytes-alloc ] ;
+
+\\ Not flagged: the top-level binding form, which is the fix the rule points at.
+shared-origin: 0 0 make-point ;
+
+\\ Reference each one so dead-definition stays quiet.
+main: ( -- ) [
+  origin drop
+  corner drop
+  scratch drop
+  limit drop
+  half-limit drop
+  fresh-scratch drop
+  shared-origin drop
+] ;
+
+main
