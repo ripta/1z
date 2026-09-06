@@ -1,5 +1,8 @@
 \ Unit tests for lib/bytes.1z.
 
+\ The multi-byte cases pin least-significant-byte-first ordering. That is the native
+\ order on every target the project builds, not a contract the words promise.
+
 use "testing" ;
 use "bytes" ;
 
@@ -25,10 +28,10 @@ test-poke8-returns-array: ( -- ) [
   B{ 0x00 0x00 } 0 9 #poke8! B{ 0x09 0x00 } "poke8 mutates and returns the byte array" assert=
 ] ;
 
-\ --- #peek16 / #poke16! (little-endian) ---
+\ --- #peek16 / #poke16! ---
 
-test-peek16-little-endian: ( -- ) [
-  B{ 0x01 0x02 0x03 0x04 } 0 #peek16 513 "peek16 reads two bytes little-endian" assert=
+test-peek16-byte-order: ( -- ) [
+  B{ 0x01 0x02 0x03 0x04 } 0 #peek16 513 "peek16 reads two bytes least-significant first" assert=
 ] ;
 
 test-peek16-offset: ( -- ) [
@@ -43,10 +46,10 @@ test-poke16-byte-order: ( -- ) [
   B{ 0x00 0x00 0x00 0x00 } 0 513 #poke16! B{ 0x01 0x02 0x00 0x00 } "poke16 writes least-significant byte first" assert=
 ] ;
 
-\ --- #peek32 / #poke32! (little-endian) ---
+\ --- #peek32 / #poke32! ---
 
-test-peek32-little-endian: ( -- ) [
-  B{ 0x01 0x02 0x03 0x04 } 0 #peek32 67305985 "peek32 reads four bytes little-endian" assert=
+test-peek32-byte-order: ( -- ) [
+  B{ 0x01 0x02 0x03 0x04 } 0 #peek32 67305985 "peek32 reads four bytes least-significant first" assert=
 ] ;
 
 test-poke32-roundtrip: ( -- ) [
@@ -57,10 +60,10 @@ test-poke32-byte-order: ( -- ) [
   B{ 0x00 0x00 0x00 0x00 } 0 67305985 #poke32! B{ 0x01 0x02 0x03 0x04 } "poke32 writes bytes least-significant first" assert=
 ] ;
 
-\ --- #peek64 / #poke64! (little-endian) ---
+\ --- #peek64 / #poke64! ---
 
-test-peek64-little-endian: ( -- ) [
-  B{ 0x01 0x02 0x03 0x04 0x05 0x06 0x07 0x08 } 0 #peek64 578437695752307201 "peek64 reads eight bytes little-endian" assert=
+test-peek64-byte-order: ( -- ) [
+  B{ 0x01 0x02 0x03 0x04 0x05 0x06 0x07 0x08 } 0 #peek64 578437695752307201 "peek64 reads eight bytes least-significant first" assert=
 ] ;
 
 test-poke64-roundtrip: ( -- ) [

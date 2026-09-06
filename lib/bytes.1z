@@ -1,25 +1,29 @@
 \ lib/bytes.1z - Width-specific byte access aliases
 
+\ Multi-byte access uses the target's native byte order, so a field reads back the
+\ way C wrote it into the same buffer. A wire format with a fixed byte order builds
+\ it from #peek8 / #poke8!, which have no byte order.
+
 \\ Read a single byte at offset (alias for #nth).
 #peek8: ( byte-array offset -- fixnum ) [ #nth ] ;
 
 \\ Write a single byte at offset (alias for #nth!).
 #poke8!: ( byte-array offset value -- byte-array ) [ #nth! ] ;
 
-\\ Read a 16-bit (2-byte) little-endian value at offset.
+\\ Read a 16-bit (2-byte) value at offset, in native byte order.
 #peek16: ( byte-array offset -- fixnum ) [ 2 #peek ] ;
 
-\\ Write a 16-bit (2-byte) little-endian value at offset.
+\\ Write a 16-bit (2-byte) value at offset, in native byte order.
 #poke16!: ( byte-array offset value -- byte-array ) [ 2 #poke! ] ;
 
-\\ Read a 32-bit (4-byte) little-endian value at offset.
+\\ Read a 32-bit (4-byte) value at offset, in native byte order.
 #peek32: ( byte-array offset -- fixnum ) [ 4 #peek ] ;
 
-\\ Write a 32-bit (4-byte) little-endian value at offset.
+\\ Write a 32-bit (4-byte) value at offset, in native byte order.
 #poke32!: ( byte-array offset value -- byte-array ) [ 4 #poke! ] ;
 
-\\ Read a 64-bit (8-byte) little-endian value at offset.
+\\ Read a 64-bit (8-byte) value at offset, in native byte order.
 #peek64: ( byte-array offset -- fixnum ) [ 8 #peek ] ;
 
-\\ Write a 64-bit (8-byte) little-endian value at offset.
+\\ Write a 64-bit (8-byte) value at offset, in native byte order.
 #poke64!: ( byte-array offset value -- byte-array ) [ 8 #poke! ] ;
