@@ -52,6 +52,18 @@ dup 2 #nth kind>> word: "a b: third kind" assert=
 "a\tb" (tokens)
 1 #nth value>> "\t" "tab value" assert=
 
+\ A CRLF source splits into a whitespace token holding the carriage return and a
+\ separate newline token, so the line break stays attributable to the `\n`.
+"a\r\nb" (tokens)
+dup #len 4 "crlf: four tokens" assert=
+dup 1 #nth kind>> whitespace: "crlf: carriage return is whitespace" assert=
+dup 1 #nth value>> "\r" "crlf: carriage return value" assert=
+dup 2 #nth kind>> newline: "crlf: newline kind" assert=
+3 #nth value>> "b" "crlf: word after the break" assert=
+
+"a\r\nb" dup (tokens) [ value>> ] #map #collect "" [ #append ] #reduce
+swap "crlf: token values rebuild the source" assert=
+
 \ ===== Newlines =====
 
 "newlines" test-section

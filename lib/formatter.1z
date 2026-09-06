@@ -1,0 +1,540 @@
+\ lib/formatter.1z - Code formatter for 1z source
+\
+\ Reformats a source string: indentation, spacing around brackets and stack
+\ effects, newline compression, and semicolon placement.
+\
+\ Usage:
+\   use "formatter" ;
+\   "double:(n--n)[2 *];" format-source print
+\
+\ The formatter works on a stream of whitespace-delimited chunks rather than on
+\ the tokens `1z-tokenize` produces. See `(chunk-tokens)` for why.
+
+use "1z-tokens" ;
+use "lexer" ;
+use "strings" ;
+
+private{
+
+  (indent-size): ( -- n ) const [ 2 ] ;
+
+  \ --- Chunking ---
+
+  \ Whether a character separates two chunks. A newline arrives as its own token,
+  \ so only horizontal whitespace reaches here. A carriage return is included
+  \ because the stack-effect rule stops at a line feed and will carry one through.
+  (chunk-break?): ( ch -- ? ) [ dup " " = over "\t" = or swap "\r" = or ] ;
+
+  \ The chunk stream under construction. `pending` is f between chunks and holds
+  \ the accumulated text of a chunk in progress otherwise.
+  chunker: mutable struct{ out pending pending-pos } ;
+
+  \ Close the chunk in progress, if there is one, and classify it.
+  (chunk-flush): ( c -- c ) [
+    dup pending>> f = not [
+      dup pending>>
+      dup (classify) swap
+      2 pick-n pending-pos>>
+      make-token
+      over out>> swap #push! drop
+      f >>pending
+    ] when
+  ] ;
+
+  \ Extend the chunk in progress with text, recording pos as its start when the
+  \ chunk is empty.
+  (chunk-add): ( c pos text -- c ) [
+    [ over pending>> f = [ >>pending-pos ] [ drop ] if ] dip
+    over pending>> dup f = [ drop "" ] when
+    swap #append >>pending
+  ] ;
+
+  \ Close the chunk in progress and emit tok as a chunk of its own. A doc comment
+  \ becomes a plain comment, since nothing downstream distinguishes them.
+  (chunk-carry): ( c tok -- c ) [
+    [ (chunk-flush) ] dip
+    dup kind>> doc-comment: = [ comment: ] [ dup kind>> ] if
+    over value>>
+    2 pick-n pos>>
+    make-token
+    nip
+    over out>> swap #push! drop
+  ] ;
+
+  (chunk-word): ( c tok -- c ) [ dup pos>> swap value>> (chunk-add) ] ;
+
+  \ A string closes its chunk when it opened one, and extends the chunk otherwise.
+  \
+  \ The host tokenizer only takes a string as a token when a token starts at the
+  \ quote, and that token stops at the closing quote. So `"a"print` is two tokens
+  \ there while `["a"]` is one run, and this reproduces both.
+  (chunk-string): ( c tok -- c ) [
+    over pending>> f = [ (chunk-word) (chunk-flush) ] [ (chunk-word) ] if
+  ] ;
+
+  (effect-char): ( c ch idx base -- c ) [
+    + swap
+    dup (chunk-break?) [ 2drop (chunk-flush) ] [ (chunk-add) ] if
+  ] ;
+
+  \ Feed a stack-effect token in as its whitespace-separated pieces.
+  \
+  \ `1z-tokenize` returns `( a -- b )` whole, but the host tokenizer this
+  \ formatter reproduces splits on whitespace, so `foo:( a -- b )` has to arrive
+  \ as `foo:(`, `a`, `--`, `b`, `)`. The rule never matches across a newline, so
+  \ only spaces and tabs can appear inside the value.
+  (chunk-effect): ( c tok -- c ) [
+    dup pos>> swap value>>
+    swap [ (effect-char) ] curry
+    [ swap ] dip
+    #reduce-index
+  ] ;
+
+  (chunk-step): ( c tok -- c ) [
+    dup kind>>
+    dup whitespace: = [ 2drop (chunk-flush) ] [
+      dup newline: = over comment: = or over doc-comment: = or
+      [ drop (chunk-carry) ] [
+        dup stack-effect: = [ drop (chunk-effect) ] [
+          string: = [ (chunk-string) ] [ (chunk-word) ] if
+        ] if
+      ] if
+    ] if
+  ] ;
+
+  \ Regroup a token stream into the whitespace-delimited chunks the host
+  \ formatter's rules are written against.
+  \
+  \ The host tokenizer splits on whitespace and nothing else, so it sees `[1` as a
+  \ single word and leaves `[1 2 +]` alone. `1z-tokenize` splits that into five
+  \ tokens. Feeding those to the rules below would both insert spaces the host
+  \ does not and treat `[1` as an opener, which shifts every following line's
+  \ indentation. Merging adjacent non-whitespace tokens restores the host's view.
+  (chunk-tokens): ( tokens: array -- array ) [
+    V{ } f 0 make-chunker
+    [ (chunk-step) ] #reduce
+    (chunk-flush)
+    out>> >array
+  ] ;
+
+  \ --- Classification ---
+
+  (ends-with?): ( text ch -- ? ) [ over #len 1 > [ swap #last = ] [ 2drop f ] if ] ;
+
+  \ The chunks the host formatter classifies by exact text.
+  \
+  \ Hoisting them out of the ordered tests below is safe because none of them can
+  \ also satisfy a prefix or suffix test. A lone `{` is the near miss, and the
+  \ brace-suffix test needs more than one character.
+  (punctuation-kinds): ( -- hash ) const [
+    H{
+      "[" open-bracket: "]" close-bracket: "{" open-brace:
+      "(" open-paren: ")" close-paren: "--" arrow: ";" semicolon:
+    }
+  ] ;
+
+  \ Assign a chunk its formatting kind. Ports the host formatter's classifier,
+  \ including its order: the first test that matches wins.
+  (classify): ( text: string -- kind ) [
+    dup (punctuation-kinds) swap f @get-or
+    dup f = [
+      drop
+      dup "{" (ends-with?) [ drop open-brace: ] [
+        dup "}" #starts-with? [ drop close-brace: ] [
+          dup "\"" #starts-with? [ drop string: ] [
+            ":" (ends-with?) [ symbol: ] [ word: ] if
+          ] if
+        ] if
+      ] if
+    ] [ nip ] if
+  ] ;
+
+  \ --- Chunk predicates ---
+
+  (kind-of): ( chunks n -- kind ) [ #nth kind>> ] ;
+
+  (opening?): ( kind -- ? ) [
+    dup open-bracket: = over open-brace: = or swap open-paren: = or
+  ] ;
+
+  (closing?): ( kind -- ? ) [
+    dup close-bracket: = over close-brace: = or swap close-paren: = or
+  ] ;
+
+  \ Index of the first chunk at or after start that is not a newline, or f when
+  \ the rest of the stream is newlines.
+  (next-non-newline): ( chunks start -- idx/f ) [
+    dup 2 pick-n #len >= [ 2drop f ] [
+      2dup (kind-of) newline: = [ 1 + (next-non-newline) ] [ nip ] if
+    ] if
+  ] ;
+
+  \ --- Block index ---
+
+  \ Positional facts the block predicates would otherwise recover by scanning
+  \ backwards from every closer, semicolon, and line break. Those scans are what
+  \ make the host formatter quadratic; here they are one forward pass instead.
+  \
+  \ `parent` holds the innermost opener still unclosed before a position, or f at
+  \ the top level. `newlines` is a prefix count, one entry longer than the chunk
+  \ array so a block reaching the last chunk can still be measured. `closer` maps
+  \ an opener to its matching closer, or to the end of the stream when it has
+  \ none. `gap` maps an opener to the line break that follows it before any
+  \ content, or f when content comes first.
+  block-index: struct{ parent newlines closer gap } ;
+
+  (top-or-f): ( vec -- val ) [ dup #empty? [ drop f ] [ #last ] if ] ;
+
+  (nl-prefix-step): ( vec chunk -- vec ) [
+    kind>> newline: = [ 1 ] [ 0 ] if
+    over #last +
+    over swap #push! drop
+  ] ;
+
+  (newline-prefix): ( chunks -- array ) [
+    V{ } 0 #push! [ (nl-prefix-step) ] #reduce >array
+  ] ;
+
+  \ The line break that follows an opener before any content, or f. A comment in
+  \ between does not count as content.
+  (gap-after): ( chunks k -- idx/f ) [
+    dup 2 pick-n #len >= [ 2drop f ] [
+      2dup (kind-of)
+      dup newline: = [ drop nip ] [
+        comment: = [ 1 + (gap-after) ] [ 2drop f ] if
+      ] if
+    ] if
+  ] ;
+
+  (index-blocks): ( chunks: array -- block-index ) [
+    ib-chunks: swap ;
+    ib-len:    ib-chunks #len ;
+    ib-parent: V{ } ib-len f #resize! ;
+    ib-closer: V{ } ib-len ib-len #resize! ;
+    ib-gap:    V{ } ib-len f #resize! ;
+    ib-open:   V{ } ;
+
+    ib-open-step: ( i -- i' ) [
+      ib-parent over ib-open (top-or-f) #nth! drop
+      ib-chunks over #nth kind>>
+      dup (opening?)
+      [ drop dup ib-open swap #push! drop ]
+      [
+        (closing?)
+        [
+          ib-open #empty? not
+          [
+            ib-open #pop! nip
+            ib-closer swap 2 pick-n #nth! drop
+          ] when
+        ] when
+      ] if
+      1 +
+    ] ;
+
+    ib-gap-step: ( i -- i' ) [
+      ib-chunks over #nth kind>> (opening?)
+      [ ib-gap over dup 1 + ib-chunks swap (gap-after) #nth! drop ] when
+      1 +
+    ] ;
+
+    0 [ dup ib-len < ] [ ib-open-step ] while drop
+    0 [ dup ib-len < ] [ ib-gap-step ] while drop
+
+    ib-parent >array
+    ib-chunks (newline-prefix)
+    ib-closer >array
+    ib-gap >array
+    make-block-index
+  ] ;
+
+  (parent-of): ( blocks pos -- idx/f ) [ swap parent>> swap #nth ] ;
+
+  \ Whether the enclosing block broke a line before any content appeared.
+  (in-multi-line-block?): ( blocks pos -- ? ) [
+    2dup (parent-of) dup f = [ 3drop f ] [
+      2 pick-n gap>> swap #nth
+      dup f = [ 3drop f ] [ swap < nip ] if
+    ] if
+  ] ;
+
+  \ Whether a line break falls anywhere between the enclosing opener and pos.
+  (multi-line-block?): ( blocks pos -- ? ) [
+    2dup (parent-of) dup f = [ 3drop f ] [
+      1 +
+      2 pick-n newlines>> swap #nth
+      2 pick-n newlines>> 2 pick-n #nth
+      < nip nip
+    ] if
+  ] ;
+
+  \ Whether the enclosing block spans lines, measured all the way to its matching
+  \ closer. A brace form whose first row shares the opening line is still
+  \ multi-line, so its row separators still break.
+  (enclosing-block-multi-line?): ( blocks pos -- ? ) [
+    2dup (parent-of) dup f = [ 3drop f ] [
+      dup 1 +
+      3 pick-n newlines>> swap #nth
+      swap
+      3 pick-n closer>> swap #nth
+      3 pick-n newlines>> swap #nth
+      < nip nip
+    ] if
+  ] ;
+
+  (semi-advance): ( chunks k flag -- ? ) [ [ 1 + ] dip (semi-scan) ] ;
+
+  (semi-scan): ( chunks k flag -- ? ) [
+    over 3 pick-n #len >= [ nip nip ] [
+      2 pick-n 2 pick-n (kind-of)
+      dup newline: = [ drop nip nip ] [
+        dup comment: = [ drop (semi-advance) ] [
+          semicolon: = [ drop t ] [ drop f ] if (semi-advance)
+        ] if
+      ] if
+    ] if
+  ] ;
+
+  \ Whether the source line holding pos ends in `;`, ignoring trailing comments.
+  \
+  \ Breaking after a top-level `;` turns one statement into two. The AOT freeze
+  \ runs an entry-file statement at build time only when its last instruction is
+  \ the `;` call, and collects it for binary runtime otherwise. A break is safe
+  \ only where every piece still ends in `;`, which is exactly when the line
+  \ already does.
+  (line-ends-in-semicolon?): ( chunks pos -- ? ) [ f (semi-scan) ] ;
+
+  \ --- Emission ---
+
+  \ Everything phase one carries. `out` is the string-builder the result
+  \ accumulates into, and `pending` holds inline comments waiting for the end of
+  \ their line.
+  fmt-state: mutable struct{
+    chunks blocks out idx indent-level
+    in-effect line-start after-comment at-start
+    newlines-written pending
+  } ;
+
+  (<fmt-state>): ( chunks stream -- state ) [
+    over (index-blocks) swap
+    0 0 f t f t 0 V{ } make-fmt-state
+  ] ;
+
+  (cur-chunk): ( s -- s chunk ) [ dup dup chunks>> swap idx>> #nth ] ;
+  (cur-kind):  ( s -- s kind ) [ (cur-chunk) kind>> ] ;
+  (cur-text):  ( s -- s text ) [ (cur-chunk) value>> ] ;
+
+  (advance): ( s -- s ) [ dup idx>> 1 + >>idx ] ;
+
+  (write): ( s text -- s ) [ over out>> swap stream-write-string drop ] ;
+
+  (write-indent): ( s -- s ) [
+    dup indent-level>> (indent-size) * " " swap repeat (write)
+  ] ;
+
+  (indent-or-space): ( s -- s ) [
+    dup line-start>> [ (write-indent) ] [ " " (write) ] if
+  ] ;
+
+  \ Emit every buffered inline comment, each behind a two-space gap. Phase two
+  \ later widens that gap to align a run of them.
+  (flush-pending): ( s -- s ) [
+    dup pending>> swap
+    [ swap "  " (write) swap (write) ] #reduce
+    V{ } >>pending
+  ] ;
+
+  (start-content): ( s -- s ) [ f >>at-start f >>after-comment ] ;
+
+  (end-inline): ( s -- s ) [ f >>line-start 0 >>newlines-written ] ;
+
+  (emit-text): ( s -- s ) [
+    (start-content) (indent-or-space) (cur-text) (write) (end-inline) (advance)
+  ] ;
+
+  (emit-open-paren): ( s -- s ) [
+    (start-content) t >>in-effect
+    dup line-start>> not [ " " (write) ] when
+    "(" (write) (end-inline) (advance)
+  ] ;
+
+  (emit-close-paren): ( s -- s ) [
+    (start-content) f >>in-effect " )" (write) (end-inline) (advance)
+  ] ;
+
+  (emit-arrow): ( s -- s ) [
+    (start-content) " --" (write) (end-inline) (advance)
+  ] ;
+
+  (emit-opener): ( s -- s ) [
+    (start-content) (indent-or-space) (cur-text) (write)
+    dup indent-level>> 1 + >>indent-level
+    (end-inline) (advance)
+  ] ;
+
+  \ A closer whose opener is on an earlier line moves to its own line at the
+  \ dedented level. One that shares its opener's line keeps a leading space, which
+  \ is what holds `[ ]` open instead of collapsing it to `[]`.
+  (emit-closer): ( s -- s ) [
+    (start-content)
+    dup indent-level>> dup 0 > [ 1 - ] [ drop 0 ] if >>indent-level
+    dup blocks>> over idx>> (multi-line-block?)
+    [
+      dup line-start>> not [ (flush-pending) "\n" (write) ] when
+      (write-indent)
+    ] [
+      dup line-start>> not [ " " (write) ] when
+    ] if
+    (cur-text) (write) (end-inline) (advance)
+  ] ;
+
+  \ A comment at the start of a line stands on its own. Anywhere else it is
+  \ buffered and re-emitted at the next line break, so it never splits the code it
+  \ trails.
+  (emit-comment): ( s -- s ) [
+    f >>at-start
+    dup line-start>>
+    [
+      (write-indent) (cur-text) (write)
+      f >>line-start t >>after-comment
+    ] [
+      (cur-text) over pending>> swap #push! drop
+    ] if
+    0 >>newlines-written (advance)
+  ] ;
+
+  (ends-statement?): ( s -- ? ) [
+    dup indent-level>> 0 =
+    [ dup chunks>> over idx>> (line-ends-in-semicolon?) nip ]
+    [ dup blocks>> over idx>> (enclosing-block-multi-line?) nip ]
+    if
+  ] ;
+
+  (emit-semicolon): ( s -- s ) [
+    (start-content) " ;" (write)
+    dup (ends-statement?)
+    [ (flush-pending) "\n" (write) t >>line-start 1 >>newlines-written ]
+    [ (end-inline) ]
+    if
+    (advance)
+  ] ;
+
+  \ Index just past the run of newline chunks starting at k.
+  (newline-run-end): ( chunks k -- idx ) [
+    dup 2 pick-n #len >= [ nip ] [
+      2dup (kind-of) newline: = [ 1 + (newline-run-end) ] [ nip ] if
+    ] if
+  ] ;
+
+  (write-newlines): ( s n -- s ) [
+    dup 0 > [ 1 - [ "\n" (write) ] dip (write-newlines) ] [ drop ] if
+  ] ;
+
+  \ Collapse a run of newlines to the number this position allows.
+  \
+  \ The host formatter picks from a twelve-priority ladder, but every arm past the
+  \ zero group yields either a literal 2 or min(count, 2), and the count is
+  \ clamped again below, so those arms collapse into one. What survives is the
+  \ zero group, the lone arm that yields 1, and the arms that outrank it.
+  (emit-newline-run): ( s -- s ) [
+    dup chunks>> nlr-chunks: swap ;
+    dup idx>> nlr-start: swap ;
+    nlr-chunks nlr-start (newline-run-end) nlr-end: swap ;
+    nlr-end nlr-start - nlr-count: swap ;
+    nlr-chunks nlr-end (next-non-newline) nlr-next: swap ;
+
+    nlr-next f = [ f ] [ nlr-chunks nlr-next (kind-of) ] if
+    nlr-next-kind: swap ;
+    nlr-start 0 = [ f ] [ nlr-chunks nlr-start 1 - (kind-of) ] if
+    nlr-prev-kind: swap ;
+
+    \ Suppressed: inside a stack effect, at end of file, before an opener that
+    \ follows a stack effect or a symbol, and before a `;`.
+    dup in-effect>>
+    nlr-next f = or
+    nlr-next-kind (opening?)
+    nlr-prev-kind close-paren: = nlr-prev-kind symbol: = or
+    and or
+    nlr-next-kind semicolon: = or
+    [ 0 ] [
+      \ Outranking the pending-comment rule below: after a standalone comment, at
+      \ the start of the file, just inside a block that has content, before the
+      \ closer of a multi-line block, and between statements.
+      dup after-comment>>
+      over at-start>> or
+      nlr-prev-kind (opening?) nlr-next-kind (closing?) not and or
+      nlr-next-kind (closing?)
+      2 pick-n blocks>> 3 pick-n idx>> (multi-line-block?) and or
+      nlr-prev-kind semicolon: = or
+      [ 2 ] [
+        dup pending>> #len 0 >
+        [
+          dup indent-level>> 0 >
+          over blocks>> 2 pick-n idx>> (in-multi-line-block?) and
+          [ 2 ] [ 1 ] if
+        ] [ 2 ] if
+      ] if
+    ] if
+
+    nlr-count min
+    over newlines-written>> - dup 0 < [ drop 0 ] when
+    dup 0 > [
+      [ (flush-pending) ] dip
+      dup [ (write-newlines) ] dip
+      over newlines-written>> + >>newlines-written
+      t >>line-start
+    ] [ drop ] if
+    nlr-end >>idx
+  ] ;
+
+  \ The arm each chunk kind is emitted through. Words, symbols, and strings fall
+  \ to the default, as they do in the host formatter, where the symbol kind
+  \ differs from a word only in that the newline ladder inspects it.
+  (emit-arms): ( -- hash ) const [
+    H{
+      newline:       [ (emit-newline-run) ]
+      comment:       [ (emit-comment) ]
+      semicolon:     [ (emit-semicolon) ]
+      open-bracket:  [ (emit-opener) ]
+      open-brace:    [ (emit-opener) ]
+      close-bracket: [ (emit-closer) ]
+      close-brace:   [ (emit-closer) ]
+      open-paren:    [ (emit-open-paren) ]
+      close-paren:   [ (emit-close-paren) ]
+      arrow: [ (emit-arrow) ]
+    }
+  ] ;
+
+  (fmt-step): ( s -- s ) [
+    (cur-kind) (emit-arms) swap [ (emit-text) ] @get-or call
+  ] ;
+
+  (fmt-run): ( s -- s ) [
+    [ dup idx>> over chunks>> #len < ] [ (fmt-step) ] while
+  ] ;
+
+  \ Emit any comment still buffered when the input runs out, then close the file
+  \ with exactly one newline.
+  (fmt-finish): ( s -- s ) [
+    dup pending>> #len 0 > [ (flush-pending) f >>line-start ] when
+    dup line-start>> not [ "\n" (write) ] when
+  ] ;
+
+  \ `curry` pushes the chunk array on top of the threaded builder, so the stream
+  \ arrives underneath.
+  (fmt-chunks): ( stream chunks -- ) [ swap (<fmt-state>) (fmt-run) (fmt-finish) drop ] ;
+}
+
+\\ Reformat 1z source and return the result.
+format-source: ( source: string -- string ) [
+  1z-tokenize #collect (chunk-tokens)
+  dup #len 0 = [ drop "" ] [
+    [ (fmt-chunks) ] curry using-string-builder
+  ] if
+] ;
+
+\\ Read a file and return its reformatted source. The file is left alone.
+format-file: ( path: string -- string ) [
+  read: stream-open dup stream-read-all swap stream-close bytes>
+  format-source
+] ;

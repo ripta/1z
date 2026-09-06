@@ -449,6 +449,70 @@ pub fn build(b: *std.Build) void {
     update_fmt_golden_step.dependOn(&update_fmt_files.step);
     if (verbose_test_reporting) addVerboseSummary(b, test_case_helper, fmt_test_step, "fmt", fmt_status_files.items);
 
+    // 1z-formatter tests
+    //
+    // Each case runs both formatters over one input from the fmt corpus and diffs their captured
+    // output, so the comparison needs no golden files of its own. `ONEZ_FMT_PHASE` holds the Zig
+    // side to the phase the 1z formatter has reached. Retired with the Zig formatter.
+    const fmt_1z_test_step = b.step("fmt-1z-test", "Compare the 1z formatter against the Zig formatter's token-level phase");
+    var fmt_1z_status_files = std.ArrayListUnmanaged(std.Build.LazyPath){};
+
+    var fmt_1z_iter = fmt_test_dir.iterate();
+    while (fmt_1z_iter.next() catch null) |entry| {
+        if (entry.kind != .file) continue;
+        if (!std.mem.endsWith(u8, entry.name, ".txt")) continue;
+
+        const name_without_ext = entry.name[0 .. entry.name.len - 4];
+        if (test_filter) |filter| {
+            if (!matchesFilter(name_without_ext, filter)) continue;
+        }
+        const input_path = b.fmt("tests/formatting/{s}", .{entry.name});
+
+        const actual_label = b.fmt("fmt-1z: {s}", .{name_without_ext});
+        const actual_run = addWrappedCommand(
+            b,
+            test_case_helper,
+            actual_label,
+            test_case_timeout_secs,
+            verbose_test_reporting,
+            slow_test_threshold_ms,
+            null,
+            &fmt_1z_status_files,
+            &.{},
+            false,
+        );
+        actual_run.addArtifactArg(exe);
+        actual_run.addArg("tools/fmt.1z");
+        actual_run.addFileArg(b.path(input_path));
+        actual_run.addFileInput(b.path("tools/fmt.1z"));
+        addCommonFileDeps(b, actual_run);
+        // The interpreter runs out of the cache directory, where the zig-out/lib symlink it
+        // normally resolves the standard library through does not exist.
+        actual_run.setEnvironmentVariable("ONEZ_STDLIB", b.fmt("{s}/lib", .{b.build_root.path orelse "."}));
+        actual_run.setEnvironmentVariable("ONEZ_NO_STARTUP", "1");
+        actual_run.expectStdErrEqual("");
+        actual_run.expectExitCode(0);
+        actual_run.setName(actual_label);
+
+        const expected_run = b.addRunArtifact(exe);
+        expected_run.setEnvironmentVariable("ONEZ_FMT_PHASE", "1");
+        expected_run.addArg("fmt");
+        expected_run.addArg("--stdout");
+        expected_run.addFileArg(b.path(input_path));
+        expected_run.setName(b.fmt("fmt-zig-phase1: {s}", .{name_without_ext}));
+
+        addCapturedDiff(
+            b,
+            fmt_1z_test_step,
+            expected_run.captureStdOut(),
+            actual_run.captureStdOut(),
+            b.fmt("zig token-level: {s}", .{input_path}),
+            b.fmt("1z formatter: {s}", .{input_path}),
+        );
+    }
+
+    if (verbose_test_reporting) addVerboseSummary(b, test_case_helper, fmt_1z_test_step, "fmt-1z", fmt_1z_status_files.items);
+
     // AOT build integration tests
     const aot_test_step = b.step("aot-test", "Run AOT build integration tests");
     aot_test_step.dependOn(b.getInstallStep());
@@ -2144,6 +2208,28 @@ fn addGoldenDiff(
         diff.addArg("/dev/null");
     }
     diff.addFileArg(captured);
+    test_step.dependOn(&diff.step);
+}
+
+/// Diff two captured outputs against each other, for a comparison that has no golden file.
+fn addCapturedDiff(
+    b: *std.Build,
+    test_step: *std.Build.Step,
+    expected: std.Build.LazyPath,
+    actual: std.Build.LazyPath,
+    expected_label: []const u8,
+    actual_label: []const u8,
+) void {
+    const diff = b.addSystemCommand(&.{
+        "sh", "-c",
+        b.fmt(
+            "diff -u -L 'expected: {s}' -L 'actual: {s}' -- \"$1\" \"$2\" >&2",
+            .{ expected_label, actual_label },
+        ),
+        "sh",
+    });
+    diff.addFileArg(expected);
+    diff.addFileArg(actual);
     test_step.dependOn(&diff.step);
 }
 

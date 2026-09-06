@@ -1,0 +1,74 @@
+\ Unit tests for lib/formatter.1z.
+\
+\ These cover the chunk fold and the classifier, the two places where the 1z
+\ formatter has to reproduce a host tokenizer that splits on whitespace alone.
+
+use "1z-tokens" ;
+use "formatter" ;
+use "lexer" ;
+use "testing" ;
+
+private{
+  (chunks-of): ( src: string -- array ) [ 1z-tokenize #collect (chunk-tokens) ] ;
+  (texts-of):  ( src: string -- array ) [ (chunks-of) [ value>> ] #map #collect ] ;
+  (kinds-of):  ( src: string -- array ) [ (chunks-of) [ kind>> ] #map #collect ] ;
+}
+
+"chunk folding" test-section
+
+test-chunk-bracket-glued-to-number: ( -- ) [
+  "[1 2 +]" (texts-of) { "[1" "2" "+]" }
+  "a bracket glued to a number stays in one chunk" assert=
+] ;
+
+test-chunk-comment-stands-alone: ( -- ) [
+  "a  \\ hi" (texts-of) { "a" "\\ hi" }
+  "a comment is its own chunk" assert=
+] ;
+
+test-chunk-newline-stands-alone: ( -- ) [
+  "a\nb" (texts-of) { "a" "\n" "b" }
+  "a newline is its own chunk" assert=
+] ;
+
+test-chunk-stack-effect-splits: ( -- ) [
+  "foo:( a -- b )" (texts-of) { "foo:(" "a" "--" "b" ")" }
+  "a stack effect splits into its whitespace-separated pieces" assert=
+] ;
+
+test-chunk-string-closes-a-chunk-it-opened: ( -- ) [
+  "\"a\"print" (texts-of) { "\"a\"" "print" }
+  "a string that opened a chunk closes it" assert=
+] ;
+
+test-chunk-string-extends-an-open-chunk: ( -- ) [
+  "[\"a\"]" (texts-of) { "[\"a\"]" }
+  "a string inside a run extends the chunk" assert=
+] ;
+
+test-chunk-string-preceded-by-a-word: ( -- ) [
+  "x\"a\"" (texts-of) { "x\"a\"" }
+  "a word running into a string stays one chunk" assert=
+] ;
+
+"classification" test-section
+
+test-classify-brace-word-opens: ( -- ) [
+  "struct{ x }" (kinds-of) 0 #nth open-brace:
+  "a word ending in a brace opens a block" assert=
+] ;
+
+test-classify-close-brace-glued-to-separator: ( -- ) [
+  "H{ a: 1 };" (kinds-of) 3 #nth close-brace:
+  "a close brace glued to its separator still closes the block" assert=
+] ;
+
+test-classify-close-bracket-glued-to-separator: ( -- ) [
+  "[ 1 ];" (kinds-of) 2 #nth word:
+  "a close bracket glued to a separator is a word, not a closer" assert=
+] ;
+
+test-classify-parenthesized-name-is-a-symbol: ( -- ) [
+  "(check-zlib): [ ]" (kinds-of) 0 #nth symbol:
+  "a parenthesized word name is a symbol" assert=
+] ;

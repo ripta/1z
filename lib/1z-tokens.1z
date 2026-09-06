@@ -16,7 +16,11 @@ use "conversions" ;
 (cr):  ( -- str ) [ 13 >char ] ;
 
 (non-newline?): ( ch -- ? ) [ (lf) = not ] ;
-(ws-not-newline?): ( ch -- ? ) [ dup " " = swap (tab) = or ] ;
+
+\ A carriage return counts here so a CRLF source tokenizes. It is horizontal
+\ whitespace rather than a line break, which leaves the newline rule as the sole
+\ producer of `newline:` tokens and keeps every position count on `\n`.
+(ws-not-newline?): ( ch -- ? ) [ dup " " = over (tab) = or swap (cr) = or ] ;
 
 \ Slice the matched text by byte offsets while keeping the codepoint start position for the token.
 \
@@ -42,7 +46,7 @@ use "conversions" ;
   ] [ drop f ] if
 ] ;
 
-\ --- Rule 2: whitespace (spaces and tabs, not newlines) ---
+\ --- Rule 2: whitespace (spaces, tabs, and carriage returns, not newlines) ---
 
 (ws-match): ( scanner -- new-scanner token | f ) [
   dup peek dup f = [ 2drop f ] [
@@ -397,7 +401,7 @@ BRACE-PREFIXES: ( -- array ) const [
     drop
     V{ }
     H{ kind: newline: first: "\n" match: [ (newline-match) ] } #push!
-    H{ kind: whitespace: first: " \t" match: [ (ws-match) ] } #push!
+    H{ kind: whitespace: first: " \t\r" match: [ (ws-match) ] } #push!
     H{ kind: doc-comment: first: "\\" match: [ (doc-comment-match) ] } #push!
     H{ kind: comment: first: "\\" match: [ (comment-match) ] } #push!
     H{ kind: comment: first: "#" match: [ (shebang-match) ] } #push!

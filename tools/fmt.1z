@@ -1,0 +1,10 @@
+\ tools/fmt.1z - Format a 1z source file with the 1z formatter and print the result
+\
+\ Usage: 1z tools/fmt.1z FILE
+\
+\ A driver for the build system while `1z fmt` still runs the Zig formatter. Once
+\ the subcommand calls `lib/formatter.1z`, this goes away.
+
+use "formatter" ;
+
+command-line-args #first format-file print

@@ -40,6 +40,27 @@ Stack: [ ]
 Stack: [ { token{ kind: word: value: "a" pos: 0 } token{ kind: whitespace: value: "	" pos: 1 } token{ kind: word: value: "b" pos: 2 } } ]
 PASS: tab value
 Stack: [ ]
+Stack: [ { token{ kind: word: value: "a" pos: 0 } token{ kind: whitespace: value: "" pos: 1 } token{ kind: newline: value: "
+" pos: 2 } token{ kind: word: value: "b" pos: 3 } } ]
+PASS: crlf: four tokens
+Stack: [ { token{ kind: word: value: "a" pos: 0 } token{ kind: whitespace: value: "" pos: 1 } token{ kind: newline: value: "
+" pos: 2 } token{ kind: word: value: "b" pos: 3 } } ]
+PASS: crlf: carriage return is whitespace
+Stack: [ { token{ kind: word: value: "a" pos: 0 } token{ kind: whitespace: value: "" pos: 1 } token{ kind: newline: value: "
+" pos: 2 } token{ kind: word: value: "b" pos: 3 } } ]
+PASS: crlf: carriage return value
+Stack: [ { token{ kind: word: value: "a" pos: 0 } token{ kind: whitespace: value: "" pos: 1 } token{ kind: newline: value: "
+" pos: 2 } token{ kind: word: value: "b" pos: 3 } } ]
+PASS: crlf: newline kind
+Stack: [ { token{ kind: word: value: "a" pos: 0 } token{ kind: whitespace: value: "" pos: 1 } token{ kind: newline: value: "
+" pos: 2 } token{ kind: word: value: "b" pos: 3 } } ]
+PASS: crlf: word after the break
+Stack: [ ]
+Stack: [ "a
+b" "a
+b" ]
+PASS: crlf: token values rebuild the source
+Stack: [ ]
 === newlines ===
 Stack: [ ]
 Stack: [ { token{ kind: word: value: "a" pos: 0 } token{ kind: newline: value: "
