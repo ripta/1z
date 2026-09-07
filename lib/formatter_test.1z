@@ -30,6 +30,19 @@ private{
   (commented): ( code: string pad: fixnum text: string -- string ) [
     (with-comment) "\n" #append
   ] ;
+
+  \\ The default config with one key replaced. `fmt-config` is immutable, so the
+  \\ round trip through its hash is the way to vary one rule.
+  (config-with): ( key: string value -- fmt-config ) [
+    [ default-fmt-config >hash ] 2dip @set >fmt-config
+  ] ;
+
+  \\ Format src under the defaults with one key replaced.
+  (formatted-with): ( key: string value src: string -- string ) [
+    [ (config-with) current-fmt-config ] dip
+    [ format-source ] curry
+    with-parameter
+  ] ;
 }
 
 "chunk folding" test-section
@@ -331,4 +344,149 @@ test-align-widens-the-stack-effect-column: ( -- ) [
 test-align-empty-text: ( -- ) [
   "" (align-symbols) ""
   "empty text stays empty" assert=
+] ;
+
+"configuration" test-section
+
+test-config-defaults-are-the-formatter-s-original-values: ( -- ) [
+  default-fmt-config >hash
+  H{
+    "indent-size" 2 "max-blank-lines" 1 "align-comments" t "align-symbols" t
+    "align-min-group" 3 "align-max-padding" 15 "trailing-newline" t
+  }
+  "the zero-config rules are the ones the formatter carried hardcoded" assert=
+] ;
+
+test-config-indent-size-widens-a-block: ( -- ) [
+  "indent-size" 4 "foo: [\n1\n] ;\n" (formatted-with)
+  "foo: [\n    1\n] ;\n"
+  "indent-size sets the spaces per nesting level" assert=
+] ;
+
+test-config-max-blank-lines-zero-removes-the-blank-line: ( -- ) [
+  "max-blank-lines" 0 "a: 1 ;\n\n\n\nb: 2 ;\n" (formatted-with)
+  "a: 1 ;\nb: 2 ;\n"
+  "zero blank lines leaves the statements adjacent" assert=
+] ;
+
+test-config-max-blank-lines-two-keeps-both: ( -- ) [
+  "max-blank-lines" 2 "a: 1 ;\n\n\n\nb: 2 ;\n" (formatted-with)
+  "a: 1 ;\n\n\nb: 2 ;\n"
+  "two blank lines survive where the default keeps one" assert=
+] ;
+
+test-config-align-comments-off-keeps-the-two-space-gap: ( -- ) [
+  ac-src: "a" 0 "one" (commented) "bbbb" 0 "two" (commented) #append ;
+  "align-comments" f ac-src (formatted-with)
+  ac-src
+  "the comments keep the gap the token pass wrote" assert=
+] ;
+
+test-config-align-symbols-off-leaves-the-columns-alone: ( -- ) [
+  "align-symbols" f "pi: 3.14 ;\ne: 2.71 ;\ntau: 6.28 ;\n" (formatted-with)
+  "pi: 3.14 ;\ne: 2.71 ;\ntau: 6.28 ;\n"
+  "a run of three definitions is left unaligned" assert=
+] ;
+
+test-config-align-min-group-two-aligns-a-pair: ( -- ) [
+  "align-min-group" 2 "pi: 3.14 ;\ntau: 6.28 ;\n" (formatted-with)
+  "pi:  3.14 ;\ntau: 6.28 ;\n"
+  "a minimum of two aligns the pair the default leaves alone" assert=
+] ;
+
+test-config-align-min-group-four-leaves-a-triple-alone: ( -- ) [
+  "align-min-group" 4 "pi: 3.14 ;\ne: 2.71 ;\ntau: 6.28 ;\n" (formatted-with)
+  "pi: 3.14 ;\ne: 2.71 ;\ntau: 6.28 ;\n"
+  "a minimum of four leaves the run of three unaligned" assert=
+] ;
+
+\ The default joins these three, since their spread equals the shortest name.
+\ A limit of zero makes every subgroup a single line, and each falls under the
+\ minimum group size.
+test-config-align-max-padding-zero-splits-every-name: ( -- ) [
+  "align-max-padding" 0 "abc: 1 ;\nabcdefg: 2 ;\nabcd: 3 ;\n" (formatted-with)
+  "abc: 1 ;\nabcdefg: 2 ;\nabcd: 3 ;\n"
+  "a divergence limit of zero splits a run the default joins" assert=
+] ;
+
+test-config-trailing-newline-on-terminates-a-definition: ( -- ) [
+  "foo: [ 1 ] ;" format-source "foo: [ 1 ] ;\n"
+  "the default terminates a file that had no final newline" assert=
+] ;
+
+test-config-trailing-newline-off-after-a-definition: ( -- ) [
+  "trailing-newline" f "foo: [ 1 ] ;\n" (formatted-with)
+  "foo: [ 1 ] ;"
+  "the newline the `;` arm wrote comes back off" assert=
+] ;
+
+test-config-trailing-newline-off-without-a-definition: ( -- ) [
+  "trailing-newline" f "a b c\n" (formatted-with)
+  "a b c"
+  "the newline `(fmt-finish)` wrote comes back off" assert=
+] ;
+
+test-config-trailing-newline-off-leaves-empty-output-empty: ( -- ) [
+  "trailing-newline" f "   \n  \n" (formatted-with)
+  ""
+  "a whitespace-only file has no newline to take off" assert=
+] ;
+
+"config file loading" test-section
+
+test-load-takes-the-keys-the-file-names: ( -- ) [
+  "tests/fixtures/fmt/valid.1z" load-fmt-config
+  dup indent-size>> 4 "the file's indent-size lands" assert=
+  align-symbols>> f "the file's align-symbols lands" assert=
+] ;
+
+test-load-defaults-the-keys-the-file-omits: ( -- ) [
+  "tests/fixtures/fmt/valid.1z" load-fmt-config
+  dup max-blank-lines>> 1 "an omitted number keeps its default" assert=
+  align-comments>> t "an omitted flag keeps its default" assert=
+] ;
+
+test-load-rejects-an-unknown-key: ( -- ) [
+  [ "tests/fixtures/fmt/unknown-key.1z" load-fmt-config ]
+  invalid-argument: "a misspelled key is rejected" assert-error-type
+] ;
+
+test-load-rejects-a-wrong-typed-number: ( -- ) [
+  [ "tests/fixtures/fmt/wrong-type.1z" load-fmt-config ]
+  invalid-argument: "a string where a number belongs is rejected" assert-error-type
+] ;
+
+test-load-rejects-a-negative-number: ( -- ) [
+  [ "tests/fixtures/fmt/negative.1z" load-fmt-config ]
+  invalid-argument: "a negative number is rejected" assert-error-type
+] ;
+
+test-load-rejects-a-wrong-typed-flag: ( -- ) [
+  [ "tests/fixtures/fmt/wrong-boolean.1z" load-fmt-config ]
+  invalid-argument: "a number where a flag belongs is rejected" assert-error-type
+] ;
+
+\ Caught one layer down, where `>config` wraps: `config` is a virtual over
+\ `hash`, so the formatter never sees anything else.
+test-load-rejects-a-file-that-is-not-a-hash: ( -- ) [
+  [ "tests/fixtures/fmt/not-a-hash.1z" load-fmt-config ]
+  "a file evaluating to something other than a hash is rejected" assert-error
+] ;
+
+"config file discovery" test-section
+
+test-discovery-climbs-to-the-config: ( -- ) [
+  "tests/fixtures/fmt/nested/deeper" fmt-config-for indent-size>> 8
+  "a `.fmt.1z` one directory up is found" assert=
+] ;
+
+test-discovery-without-a-config-gives-the-defaults: ( -- ) [
+  "tests/fixtures/fmt" fmt-config-for default-fmt-config
+  "a directory with no `.fmt.1z` above it formats with the defaults" assert=
+] ;
+
+test-format-file-applies-the-discovered-config: ( -- ) [
+  "tests/fixtures/fmt/nested/deeper/sample.txt" format-file
+  "foo: [\n        1\n] ;\n"
+  "format-file indents by what the discovered config says" assert=
 ] ;

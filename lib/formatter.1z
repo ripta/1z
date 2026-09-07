@@ -12,12 +12,45 @@
 \ the tokens `1z-tokenize` produces. See `(chunk-tokens)` for why.
 
 use "1z-tokens" ;
+use { load-config-data: config-unwrap: } "config" ;
 use "lexer" ;
+use { file-exists?: } "os/fs" ;
+use { dirname: path-join: } "os/path" ;
 use "strings" ;
+
+\\ The rules one formatting run applies. Every field names the `.fmt.1z` key it
+\\ is read from.
+fmt-config: struct{
+  indent-size:       fixnum
+  max-blank-lines:   fixnum
+  align-comments:    boolean
+  align-symbols:     boolean
+  align-min-group:   fixnum
+  align-max-padding: fixnum
+  trailing-newline:  boolean
+} ;
+
+\\ The rules applied when no `.fmt.1z` is found. These are the values the
+\\ formatter carried hardcoded before it took configuration.
+\\
+\\ A binding rather than a `const` body, so the struct is built once at load
+\\ instead of on every rule the formatter reads.
+default-fmt-config: ( -- fmt-config ) 2 1 t t 3 15 t make-fmt-config ;
+
+\\ The config the formatter reads. `format-file` binds what it discovers; bind it
+\\ yourself around `format-source` to format under rules of your own.
+current-fmt-config: parameter{ [ default-fmt-config ] } ;
 
 private{
 
-  (indent-size): ( -- n ) const [ 2 ] ;
+  \ The four numeric rules, read through the parameter at the point of use.
+  \
+  \ `(max-newlines)` is one greater than the configured blank-line count, since a
+  \ run of n blank lines is n+1 line breaks.
+  (indent-size):    ( -- n ) [ current-fmt-config get indent-size>> ] ;
+  (max-newlines):   ( -- n ) [ current-fmt-config get max-blank-lines>> 1 + ] ;
+  (min-group-size): ( -- n ) [ current-fmt-config get align-min-group>> ] ;
+  (max-divergence): ( -- n ) [ current-fmt-config get align-max-padding>> ] ;
 
   \ --- Chunking ---
 
@@ -437,6 +470,9 @@ private{
   \ zero group yields either a literal 2 or min(count, 2), and the count is
   \ clamped again below, so those arms collapse into one. What survives is the
   \ zero group, the lone arm that yields 1, and the arms that outrank it.
+  \
+  \ Those surviving 2s are where `max-blank-lines` lands. The 1 stays literal: it
+  \ means no blank line at this position rather than a budget, as does the 0.
   (emit-newline-run): ( s -- s ) [
     dup chunks>> nlr-chunks: swap ;
     dup idx>> nlr-start: swap ;
@@ -467,13 +503,13 @@ private{
       nlr-next-kind (closing?)
       2 pick-n blocks>> 3 pick-n idx>> (multi-line-block?) and or
       nlr-prev-kind semicolon: = or
-      [ 2 ] [
+      [ (max-newlines) ] [
         dup pending>> #len 0 >
         [
           dup indent-level>> 0 >
           over blocks>> 2 pick-n idx>> (in-multi-line-block?) and
-          [ 2 ] [ 1 ] if
-        ] [ 2 ] if
+          [ (max-newlines) ] [ 1 ] if
+        ] [ (max-newlines) ] if
       ] if
     ] if
 
@@ -651,11 +687,6 @@ private{
   (align-comments): ( text: string -- string ) [ [ (comment-lines) ] (line-pass) ] ;
 
   \ --- Symbol alignment ---
-
-  \ The host's two hardcoded alignment limits: the smallest run it will align,
-  \ and the widest name spread one subgroup tolerates.
-  (min-group-size): ( -- n ) const [ 3 ] ;
-  (max-divergence): ( -- n ) const [ 15 ] ;
 
   \ Right-trim spaces and tabs, where `(rtrim-spaces)` takes spaces alone. The
   \ host trims both off a line before it parses it.
@@ -918,6 +949,104 @@ private{
   \ agree on everything but a line carrying non-ASCII text in its name, its stack
   \ effect, or its code before an inline comment marker.
   (align-symbols): ( text: string -- string ) [ [ (symbol-lines) ] (line-pass) ] ;
+
+  \ --- Trailing newline ---
+
+  \ Take the file's final newline off, for `trailing-newline` turned off.
+  \
+  \ The rule sits on the finished text rather than at either emitter. Two places
+  \ write that newline: `(fmt-finish)`, and the `;` arm for a file ending in a
+  \ top-level definition. The second one writes a statement separator and cannot
+  \ tell that it is the last, so only the finished text can.
+  (drop-final-newline): ( text: string -- string ) [
+    dup "\n" #ends-with? [ dup #len 1 - #take ] when
+  ] ;
+
+  \ --- Config files ---
+
+  \ Every `.fmt.1z` key and the type its value takes. The one place the key set
+  \ is written down: the unknown-key test, the type test, and the message that
+  \ lists the alternatives all read it.
+  (config-keys): ( -- hash ) const [
+    H{
+      "indent-size" fixnum:
+      "max-blank-lines" fixnum:
+      "align-min-group" fixnum:
+      "align-max-padding" fixnum:
+      "align-comments" boolean:
+      "align-symbols" boolean:
+      "trailing-newline" boolean:
+    }
+  ] ;
+
+  \ The known keys in one sorted line, for the unknown-key message. `@keys` has
+  \ no order of its own, and a diagnostic that reshuffles between runs is worse
+  \ than useless in a golden.
+  (known-key-list): ( -- string ) [
+    (config-keys) @keys [ >string ] #map #collect [ < ] #sort ", " #join
+  ] ;
+
+  (config-error): never-returns ( message: string -- * ) [
+    f swap EInvalidArgument make-error throw
+  ] ;
+
+  \ Check one key the file names, then overlay it on the accumulating hash.
+  (merge-key): ( acc raw path: string key: string -- acc ) [
+    mk-key:  swap ;
+    mk-path: swap ;
+    mk-raw:  swap ;
+
+    (config-keys) mk-key @has? not [
+      "unknown key '" mk-key #append "' in " #append mk-path #append
+      "; known keys are " #append (known-key-list) #append (config-error)
+    ] when
+
+    mk-want: (config-keys) mk-key @get ;
+    mk-value: mk-raw mk-key @get ;
+
+    mk-want fixnum: =
+    [ mk-value fixnum? [ mk-value 0 >= ] [ f ] if ]
+    [ mk-value boolean? ]
+    if
+    not [
+      "key '" mk-key #append "' in " #append mk-path #append " must be " #append
+      mk-want fixnum: = [ "a non-negative fixnum" ] [ "t or f" ] if #append
+      ", got " #append mk-value inspect #append (config-error)
+    ] when
+
+    mk-key mk-value @set
+  ] ;
+
+  \ Turn what a `.fmt.1z` evaluated to into a config, defaults for absent keys.
+  \
+  \ The hash shape needs no test here. `config` is a virtual over `hash`, so a
+  \ file evaluating to anything else is already rejected at the wrap inside
+  \ `load-config-data`.
+  (hash>fmt-config): ( raw: hash path: string -- fmt-config ) [
+    hf-path: swap ;
+    hf-raw: swap ;
+
+    hf-raw @keys [ >string ] #map #collect
+    default-fmt-config >hash
+    [ [ hf-raw hf-path ] dip (merge-key) ] #reduce
+    >fmt-config
+  ] ;
+
+  \ The first `.fmt.1z` at or above dir, or f.
+  \
+  \ The walk stops where `dirname` stops changing, which is the filesystem root
+  \ for an absolute path and the working directory for a relative one.
+  (find-config-file): ( dir: string -- path/f ) [
+    dup ".fmt.1z" path-join
+    dup file-exists? [ nip ] [
+      drop dup dirname
+      2dup = [ 2drop f ] [ nip (find-config-file) ] if
+    ] if
+  ] ;
+
+  (read-source): ( path: string -- string ) [
+    read: stream-open dup stream-read-all swap stream-close bytes>
+  ] ;
 }
 
 \\ Reformat 1z source and return the result.
@@ -926,12 +1055,36 @@ format-source: ( source: string -- string ) [
   dup #len 0 = [ drop "" ] [
     [ (fmt-chunks) ] curry using-string-builder
   ] if
-  (align-comments)
-  (align-symbols)
+  current-fmt-config get align-comments>> [ (align-comments) ] when
+  current-fmt-config get align-symbols>> [ (align-symbols) ] when
+  current-fmt-config get trailing-newline>> not [ (drop-final-newline) ] when
+] ;
+
+\\ Read a formatter config file, taking the default for every key it omits.
+\\
+\\ Raises on a key the formatter does not know, on a value of the wrong type,
+\\ and on a negative number, each naming the key and the file.
+load-fmt-config: ( path: string -- fmt-config ) [
+  dup load-config-data config-unwrap swap (hash>fmt-config)
+] ;
+
+\\ The config that applies to files in dir: the first `.fmt.1z` at or above it,
+\\ or the defaults when there is none.
+\\
+\\ The search stops at the filesystem root for an absolute path, and at the
+\\ working directory for a relative one.
+fmt-config-for: ( dir: string -- fmt-config ) [
+  (find-config-file) dup f = [ drop default-fmt-config ] [ load-fmt-config ] if
 ] ;
 
 \\ Read a file and return its reformatted source. The file is left alone.
+\\
+\\ The rules come from the `.fmt.1z` found at or above the file's directory. To
+\\ format under rules of your own, bind `current-fmt-config` around
+\\ `format-source` instead.
 format-file: ( path: string -- string ) [
-  read: stream-open dup stream-read-all swap stream-close bytes>
-  format-source
+  dup dirname fmt-config-for
+  swap [ (read-source) format-source ] curry
+  [ current-fmt-config ] dip
+  with-parameter
 ] ;

@@ -42,6 +42,8 @@ definitions, and control flow.
     comparison for experienced stack-language programmers
 20. [Tree-sitter Grammar](tree-sitter.md) -- installing and registering the 1z
     tree-sitter parser in Neovim, Helix, and Zed
+21. [Code Formatting](formatting.md) -- the `.fmt.1z` config file, the rules it
+    sets, and how the formatter finds it
 
 All examples are runnable. Save any snippet to a `.1z` file and run it with
 `./zig-out/bin/1z file.1z`.
