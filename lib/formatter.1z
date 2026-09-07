@@ -1,8 +1,8 @@
 \ lib/formatter.1z - Code formatter for 1z source
 \
 \ Reformats a source string: indentation, spacing around brackets and stack
-\ effects, newline compression, semicolon placement, and inline comment
-\ alignment.
+\ effects, newline compression, semicolon placement, inline comment alignment,
+\ and definition column alignment.
 \
 \ Usage:
 \   use "formatter" ;
@@ -580,11 +580,23 @@ private{
     ] if
   ] ;
 
+  \ Run one line-oriented pass over text. quot has the effect ( stream lines -- )
+  \ and writes every line back, each with a trailing newline.
+  \
+  \ That leaves a text which ended without a newline one character too long. The
+  \ host pops that character, and dropping it here is the same thing.
+  (line-pass): ( text: string quot: quotation -- string ) [
+    over #empty? [ drop ] [
+      [ dup (split-lines) ] dip curry using-string-builder
+      swap "\n" #ends-with? not [ dup #len 1 - #take ] when
+    ] if
+  ] ;
+
   \ Align every run of consecutive commented lines, writing the whole text out.
   \
   \ The host finds each line's marker twice, once while measuring a group and
   \ again while rebuilding it. One pass up front costs the same and reads better.
-  (align-lines): ( stream lines: array -- ) [
+  (comment-lines): ( stream lines: array -- ) [
     al-lines: swap ;
     al-out:   swap ;
     al-pos:   al-lines [ (inline-comment-pos) ] #map #collect ;
@@ -636,16 +648,276 @@ private{
   ] ;
 
   \ Align the inline comments in already token-level-formatted source.
-  \
-  \ Every line goes out with a trailing newline, so a text that had none comes
-  \ back one character too long. The host pops that character; dropping it here
-  \ is the same thing.
-  (align-comments): ( text: string -- string ) [
+  (align-comments): ( text: string -- string ) [ [ (comment-lines) ] (line-pass) ] ;
+
+  \ --- Symbol alignment ---
+
+  \ The host's two hardcoded alignment limits: the smallest run it will align,
+  \ and the widest name spread one subgroup tolerates.
+  (min-group-size): ( -- n ) const [ 3 ] ;
+  (max-divergence): ( -- n ) const [ 15 ] ;
+
+  \ Right-trim spaces and tabs, where `(rtrim-spaces)` takes spaces alone. The
+  \ host trims both off a line before it parses it.
+  (rtrim-blanks): ( text: string -- string ) [
     dup #empty? not [
-      dup (split-lines) [ (align-lines) ] curry using-string-builder
-      swap "\n" #ends-with? not [ dup #len 1 - #take ] when
+      dup #last dup " " = swap "\t" = or
+      [ dup #len 1 - #take (rtrim-blanks) ] when
     ] when
   ] ;
+
+  \ Count of leading spaces. A tab does not count, so a tab-indented line has an
+  \ empty indent string and groups with the unindented lines around it.
+  (indent-width): ( line: string -- n ) [
+    0 [ 2dup swap #len < [ 2dup #nth " " = ] [ f ] if ] [ 1 + ] while nip
+  ] ;
+
+  (ltrim-spaces): ( text: string -- string ) [ dup (indent-width) over #len #slice ] ;
+
+  \\ One parsed definition or block entry, ready to be rebuilt at a shared
+  \\ column. `has-effect` and `effect` are set only for an unindented line, and
+  \\ `suffix` is ` ;` there and empty for a block entry. `comment` is f when the
+  \\ line carries no inline comment.
+  alignable-line: struct{ indent name has-effect effect body suffix comment } ;
+
+  \ The line's first word when it can name a definition, or f. The line must have
+  \ its indent stripped already.
+  \
+  \ Rejects a line with no space in it, and a first word shorter than two
+  \ characters or not ending in `:`.
+  (alignable-name): ( stripped: string -- name/f ) [
+    dup " " #index-of dup f = [ 2drop f ] [
+      #take
+      dup #len 2 < over ":" #ends-with? not or [ drop f ] when
+    ] if
+  ] ;
+
+  \ The text after the name, left-trimmed, or f when nothing follows it.
+  (after-name): ( text: string name: string -- rest/f ) [
+    #len over #len 2dup > [ 3drop f ] [
+      #slice (ltrim-spaces) dup #empty? [ drop f ] when
+    ] if
+  ] ;
+
+  \ The line's code, with any inline comment and its two-space gap removed.
+  (code-part): ( trimmed: string marker -- string ) [
+    dup f = [ drop ] [ (code-before) ] if
+  ] ;
+
+  \ The line's inline comment, marker included, or f when the line has none.
+  (trailing-comment): ( trimmed: string marker -- comment/f ) [
+    dup f = [ 2drop f ] [ over #len #slice ] if
+  ] ;
+
+  \ A definition whose content after the name opens a stack effect. The first
+  \ ` )` closes it and the rest is the body. f when there is no ` )`.
+  (effect-line): ( indent: string name: string after: string comment -- alignable-line/f ) [
+    ef-comment: swap ;
+    ef-after:   swap ;
+    ef-name:    swap ;
+    ef-indent:  swap ;
+    ef-close:   ef-after " )" #index-of ;
+    ef-end:     ef-close f = [ 0 ] [ ef-close 2 + ] if ;
+    ef-effect:  ef-after 0 ef-end #slice ;
+    ef-body:    ef-after ef-end ef-after #len #slice (ltrim-spaces) ;
+
+    ef-close f = ef-body #empty? or
+    [ f ]
+    [ ef-indent ef-name t ef-effect ef-body " ;" ef-comment make-alignable-line ]
+    if
+  ] ;
+
+  \ A top-level definition, or f when the line does not end in ` ;` or has no
+  \ body. `code` is the line with any inline comment already removed.
+  (definition-line): ( indent: string name: string code: string comment -- alignable-line/f ) [
+    dl-comment: swap ;
+    dl-code:    swap ;
+    dl-name:    swap ;
+    dl-indent:  swap ;
+    dl-end:     dl-code #len 2 - 0 max ;
+    dl-content: dl-code 0 dl-end #slice (rtrim-spaces) ;
+    dl-after:   dl-content dl-name (after-name) ;
+
+    dl-code " ;" #ends-with? not dl-end 0 = or dl-after f = or
+    [ f ]
+    [
+      dl-after "(" #starts-with?
+      [ dl-indent dl-name dl-after dl-comment (effect-line) ]
+      [ dl-indent dl-name f "" dl-after " ;" dl-comment make-alignable-line ]
+      if
+    ] if
+  ] ;
+
+  \ A block entry. No stack effect is parsed and no `;` is required, which is
+  \ what lets struct fields, hash entries, and `ffi-def{` rows qualify.
+  (entry-line): ( indent: string name: string code: string comment width: fixnum -- alignable-line/f ) [
+    el-width:   swap ;
+    el-comment: swap ;
+    el-code:    swap ;
+    el-name:    swap ;
+    el-indent:  swap ;
+    el-start:   el-width el-name #len + el-code #len min ;
+    el-body:    el-code el-start el-code #len #slice (ltrim-spaces) ;
+
+    el-body #empty?
+    [ f ]
+    [ el-indent el-name f "" el-body "" el-comment make-alignable-line ]
+    if
+  ] ;
+
+  \ Parse a line as an alignable definition or block entry, or f.
+  (parse-alignable): ( line: string -- alignable-line/f ) [
+    pa-line:     swap ;
+    pa-trimmed:  pa-line (rtrim-blanks) ;
+    pa-width:    pa-line (indent-width) ;
+    pa-indent:   pa-line 0 pa-width #slice ;
+    pa-stripped: pa-line pa-width pa-line #len #slice ;
+    pa-name:     pa-stripped (alignable-name) ;
+    pa-marker:   pa-trimmed (inline-comment-pos) ;
+    pa-code:     pa-trimmed pa-marker (code-part) ;
+    pa-comment:  pa-trimmed pa-marker (trailing-comment) ;
+
+    pa-name f = [ f ] [
+      pa-stripped pa-name (after-name) f = [ f ] [
+        pa-width 0 =
+        [ pa-indent pa-name pa-code pa-comment (definition-line) ]
+        [ pa-indent pa-name pa-code pa-comment pa-width (entry-line) ]
+        if
+      ] if
+    ] if
+  ] ;
+
+  \ Align every group of like-shaped definition lines, writing the whole text out.
+  (symbol-lines): ( stream lines: array -- ) [
+    sl-lines:  swap ;
+    sl-out:    swap ;
+    sl-parsed: sl-lines [ (parse-alignable) ] #map #collect ;
+    sl-len:    sl-lines #len ;
+
+    sl-write: ( text -- ) [ sl-out swap stream-write-string drop ] ;
+    sl-pad: ( n -- ) [ " " swap repeat sl-write ] ;
+
+    sl-at: ( k -- alignable-line/f ) [ sl-parsed swap #nth ] ;
+    sl-parsable?: ( k -- ? ) [ sl-at f = not ] ;
+    sl-name-len:  ( k -- n ) [ sl-at name>> #len ] ;
+    sl-slice:     ( start end -- array ) [ [ sl-parsed ] 2dip #slice ] ;
+
+    sl-emit-raw: ( start end -- ) [
+      swap [ 2dup > ] [ dup sl-lines swap #nth sl-write "\n" sl-write 1 + ] while 2drop
+    ] ;
+
+    \ Index just past the run of parsable lines sharing k's indent string.
+    sl-group-end: ( k -- idx ) [
+      dup sl-at indent>> swap
+      [ dup sl-len < [ dup sl-parsable? ] [ f ] if
+        [ 2dup sl-at indent>> = ] [ f ] if
+      ]
+      [ 1 + ] while
+      nip
+    ] ;
+
+    \ Index just past the sub-run within a group agreeing on start's stack effect.
+    sl-run-end: ( start end -- idx ) [
+      over sl-at has-effect>> -rot> swap
+      [ dup 2 pick-n <
+        [ dup sl-at has-effect>> 3 pick-n = ] [ f ] if
+      ]
+      [ 1 + ] while
+      nip nip
+    ] ;
+
+    \ The longest and shortest name once the line at k joins a subgroup whose
+    \ names already run from min to max. The three carriers stay in place, since
+    \ both the join test and the advance need them.
+    sl-widened: ( k max min -- k max min max' min' ) [
+      2 pick-n sl-name-len
+      dup 2 pick-n min
+      swap 3 pick-n max
+      swap
+    ] ;
+
+    \ Index just past the divergence-limited slice starting at start. A candidate
+    \ joins while the spread between the longest and shortest name so far is at
+    \ most min(shortest, (max-divergence)).
+    sl-subgroup-end: ( start end -- idx ) [
+      swap dup 1 + swap sl-name-len dup
+      [ 2 pick-n 4 pick-n <
+        [ sl-widened
+          2dup - over (max-divergence) min <=
+          -rot> 2drop
+        ] [ f ] if
+      ]
+      [ sl-widened [ 2drop 1 + ] 2dip ]
+      while
+      2drop nip
+    ] ;
+
+    sl-max-name: ( start end -- n ) [ sl-slice 0 [ name>> #len max ] #reduce ] ;
+    sl-max-effect: ( start end -- n ) [ sl-slice 0 [ effect>> #len max ] #reduce ] ;
+
+    \ Rebuild every line in [start, end) with its columns padded to the widest.
+    sl-emit-aligned: ( start end -- ) [
+      ea-end:        swap ;
+      ea-start:      swap ;
+      ea-name-width: ea-start ea-end sl-max-name ;
+      ea-has-effect: ea-start sl-at has-effect>> ;
+      ea-effect-width: ea-has-effect [ ea-start ea-end sl-max-effect ] [ 0 ] if ;
+
+      ea-emit: ( k -- ) [
+        sl-at
+        dup indent>> sl-write
+        dup name>> sl-write
+        ea-name-width over name>> #len - sl-pad
+        ea-has-effect [
+          " " sl-write
+          dup effect>> sl-write
+          ea-effect-width over effect>> #len - sl-pad
+        ] when
+        " " sl-write
+        dup body>> sl-write
+        dup suffix>> sl-write
+        comment>> dup f = [ drop ] [ "  " sl-write sl-write ] if
+        "\n" sl-write
+      ] ;
+
+      ea-start [ dup ea-end < ] [ dup ea-emit 1 + ] while drop
+    ] ;
+
+    sl-emit-subgroup: ( start end -- ) [
+      2dup swap - (min-group-size) < [ sl-emit-raw ] [ sl-emit-aligned ] if
+    ] ;
+
+    \ A run splits into divergence-limited subgroups. One shorter than the
+    \ minimum goes out untouched, and so does a run too short to split at all.
+    sl-emit-run: ( start end -- ) [
+      2dup swap - (min-group-size) <
+      [ sl-emit-raw ]
+      [ swap [ 2dup > ]
+        [ 2dup swap sl-subgroup-end 2dup sl-emit-subgroup nip ] while 2drop
+      ]
+      if
+    ] ;
+
+    sl-emit-group: ( start end -- ) [
+      swap [ 2dup > ] [ 2dup swap sl-run-end 2dup sl-emit-run nip ] while 2drop
+    ] ;
+
+    sl-step: ( k -- k' ) [
+      dup sl-parsable?
+      [ dup sl-group-end 2dup sl-emit-group nip ]
+      [ dup dup 1 + sl-emit-raw 1 + ]
+      if
+    ] ;
+
+    0 [ dup sl-len < ] [ sl-step ] while drop
+  ] ;
+
+  \ Align the definition and block-entry columns in comment-aligned source.
+  \
+  \ The columns are measured in codepoints, where the host counts bytes. The two
+  \ agree on everything but a line carrying non-ASCII text in its name, its stack
+  \ effect, or its code before an inline comment marker.
+  (align-symbols): ( text: string -- string ) [ [ (symbol-lines) ] (line-pass) ] ;
 }
 
 \\ Reformat 1z source and return the result.
@@ -655,6 +927,7 @@ format-source: ( source: string -- string ) [
     [ (fmt-chunks) ] curry using-string-builder
   ] if
   (align-comments)
+  (align-symbols)
 ] ;
 
 \\ Read a file and return its reformatted source. The file is left alone.

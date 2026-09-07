@@ -2,7 +2,7 @@
 \
 \ These cover the chunk fold and the classifier, the two places where the 1z
 \ formatter has to reproduce a host tokenizer that splits on whitespace alone,
-\ and the comment-alignment pass, whose marker rule is easier to pin down here
+\ and the two alignment passes, whose line rules are easier to pin down here
 \ than through a whole formatted file.
 
 use "1z-tokens" ;
@@ -16,14 +16,19 @@ private{
   (texts-of):  ( src: string -- array ) [ (chunks-of) [ value>> ] #map #collect ] ;
   (kinds-of):  ( src: string -- array ) [ (chunks-of) [ kind>> ] #map #collect ] ;
 
-  \\ One commented line: code, a two-space gap widened by pad, a comment, and a
-  \\ newline. pad is the padding the aligner is expected to add.
+  \\ One commented line: code, a two-space gap widened by pad, and a comment.
+  \\ pad is the padding the aligner is expected to add.
   \\
   \\ Assembled rather than written out. A source line holding two spaces before a
   \\ backslash is an inline comment to the aligner, so a literal would let a
   \\ `make fmt` run rewrite the data these tests assert against.
+  (with-comment): ( code: string pad: fixnum text: string -- string ) [
+    [ " " swap 2 + repeat #append "\\ " #append ] dip #append
+  ] ;
+
+  \\ The same line, terminated.
   (commented): ( code: string pad: fixnum text: string -- string ) [
-    [ " " swap 2 + repeat #append "\\ " #append ] dip #append "\n" #append
+    (with-comment) "\n" #append
   ] ;
 }
 
@@ -198,4 +203,132 @@ test-align-keeps-a-missing-final-newline: ( -- ) [
 test-rtrim-spaces-leaves-a-tab: ( -- ) [
   "a\t  " (rtrim-spaces) "a\t"
   "only spaces are trimmed, never tabs" assert=
+] ;
+
+"alignable line parsing" test-section
+
+test-rtrim-blanks-takes-a-tab: ( -- ) [
+  "a\t  " (rtrim-blanks) "a"
+  "spaces and tabs are both trimmed" assert=
+] ;
+
+test-indent-width-stops-at-a-tab: ( -- ) [
+  " \tx" (indent-width) 1
+  "a tab does not count as indentation" assert=
+] ;
+
+test-parse-definition-with-effect: ( -- ) [
+  "add: ( a b -- c ) [ + ] ;" (parse-alignable)
+  dup name>> "add:" "the name is the line's first word" assert=
+  dup effect>> "( a b -- c )" "the stack effect runs to the first ` )`" assert=
+  dup body>> "[ + ]" "the body is what follows the stack effect" assert=
+  dup suffix>> " ;" "a top-level definition carries the ` ;` suffix" assert=
+  has-effect>> "a body opening with `(` is a stack effect" assert-true
+] ;
+
+test-parse-definition-without-effect: ( -- ) [
+  "pi: 3.14159 ;" (parse-alignable)
+  dup has-effect>> "a body not opening with `(` is no stack effect" assert-false
+  dup body>> "3.14159" "the body is everything after the name" assert=
+  comment>> f "a line holding no marker has no comment" assert=
+] ;
+
+test-parse-definition-with-comment: ( -- ) [
+  "double: ( n -- n ) [ 2 * ] ;" 0 "times two" (with-comment) (parse-alignable)
+  dup body>> "[ 2 * ]" "the comment is not part of the body" assert=
+  comment>> "\\ times two" "the comment is kept whole" assert=
+] ;
+
+test-parse-block-entry: ( -- ) [
+  "  name: string" (parse-alignable)
+  dup indent>> "  " "the indent is the literal leading spaces" assert=
+  dup has-effect>> "an indented line parses no stack effect" assert-false
+  dup body>> "string" "the body is everything after the name" assert=
+  suffix>> "" "a block entry carries no suffix" assert=
+] ;
+
+test-parse-rejects-line-without-semicolon: ( -- ) [
+  "add: ( a b -- c ) [ + ]" (parse-alignable) f
+  "an unindented line not ending in ` ;` is not alignable" assert=
+] ;
+
+test-parse-rejects-unnamed-line: ( -- ) [
+  "dup drop ;" (parse-alignable) f
+  "a first word not ending in `:` is not alignable" assert=
+] ;
+
+test-parse-rejects-bodyless-definition: ( -- ) [
+  "pi: ;" (parse-alignable) f
+  "a definition with nothing but its suffix is not alignable" assert=
+] ;
+
+test-parse-rejects-unclosed-stack-effect: ( -- ) [
+  "foo: ( a b -- [ + ] ;" (parse-alignable) f
+  "a stack effect with no closing paren is not alignable" assert=
+] ;
+
+test-parse-rejects-definition-that-is-all-stack-effect: ( -- ) [
+  "foo: ( a -- b ) ;" (parse-alignable) f
+  "a definition with nothing after its stack effect is not alignable" assert=
+] ;
+
+test-parse-rejects-bodyless-block-entry: ( -- ) [
+  "  name:" 0 "note" (with-comment) (parse-alignable) f
+  "a block entry whose only content is a comment is not alignable" assert=
+] ;
+
+"symbol alignment" test-section
+
+test-align-run-shares-one-column: ( -- ) [
+  "pi: 3.14 ;\ne: 2.71 ;\ntau: 6.28 ;\n" (align-symbols)
+  "pi:  3.14 ;\ne:   2.71 ;\ntau: 6.28 ;\n"
+  "a run of three definitions shares one column" assert=
+] ;
+
+test-align-under-minimum-is-untouched: ( -- ) [
+  "pi: 3.14 ;\ntau: 6.28 ;\n" dup (align-symbols) swap
+  "a run of two definitions is left alone" assert=
+] ;
+
+test-align-divergent-name-splits-a-run: ( -- ) [
+  "x: 1 ;\ny: 2 ;\nz: 3 ;\nthis-is-a-very-long-name: 4 ;\nanother-very-long-name: 5 ;\nyet-another-long-name: 6 ;\n"
+  (align-symbols)
+  "x: 1 ;\ny: 2 ;\nz: 3 ;\nthis-is-a-very-long-name: 4 ;\nanother-very-long-name:   5 ;\nyet-another-long-name:    6 ;\n"
+  "a name further from the shortest than it is long starts a new subgroup" assert=
+] ;
+
+\ The divergence limit is inclusive. These three names spread exactly as wide as
+\ the shortest of them, so they stay one subgroup; a strict test would split them.
+test-align-joins-at-the-divergence-limit: ( -- ) [
+  "abc: 1 ;\nabcdefg: 2 ;\nabcd: 3 ;\n" (align-symbols)
+  "abc:     1 ;\nabcdefg: 2 ;\nabcd:    3 ;\n"
+  "a spread equal to the shortest name still joins" assert=
+] ;
+
+test-align-indent-change-ends-a-group: ( -- ) [
+  "a: 1 ;\nbb: 2 ;\n  ccc: 3\n  dd: 4\n  e: 5\n" (align-symbols)
+  "a: 1 ;\nbb: 2 ;\n  ccc: 3\n  dd:  4\n  e:   5\n"
+  "a change of indent ends a group" assert=
+] ;
+
+test-align-effect-change-ends-a-run: ( -- ) [
+  "aa: ( -- ) [ ] ;\nbb: ( -- ) [ ] ;\ncc: ( -- ) [ ] ;\npi: 1 ;\ne: 2 ;\ntau: 3 ;\n" (align-symbols)
+  "aa: ( -- ) [ ] ;\nbb: ( -- ) [ ] ;\ncc: ( -- ) [ ] ;\npi:  1 ;\ne:   2 ;\ntau: 3 ;\n"
+  "gaining a stack effect ends a run" assert=
+] ;
+
+test-align-unparsable-line-ends-a-group: ( -- ) [
+  "pi: 3.14 ;\ndup drop ;\ne: 2.71 ;\ntau: 6.28 ;\n" dup (align-symbols) swap
+  "a line that is not a definition ends a group" assert=
+] ;
+
+test-align-widens-the-stack-effect-column: ( -- ) [
+  "a: ( x -- ) [ ] ;\nb: ( x y -- ) [ ] ;\nc: ( x -- ) [ ] ;\n" (align-symbols)
+  "a: ( x -- )   [ ] ;\nb: ( x y -- ) [ ] ;\nc: ( x -- )   [ ] ;\n"
+  "the stack effect column is padded to the widest in the run" assert=
+] ;
+
+test-align-empty-text: ( -- ) [
+  "" (align-symbols) ""
+  "empty text stays empty" assert=
 ] ;

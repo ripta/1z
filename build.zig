@@ -455,7 +455,7 @@ pub fn build(b: *std.Build) void {
     // output, so the comparison needs no golden files of its own. `ONEZ_FMT_PHASE` holds the Zig
     // side to the phase the 1z formatter has reached, so the number below moves as it gains a phase.
     // Retired with the Zig formatter.
-    const fmt_1z_phase = "2";
+    const fmt_1z_phase = "3";
     const fmt_1z_test_step = b.step("fmt-1z-test", "Compare the 1z formatter against the phases of the Zig formatter it has reached");
     var fmt_1z_status_files = std.ArrayListUnmanaged(std.Build.LazyPath){};
 
