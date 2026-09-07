@@ -1,0 +1,57 @@
+1z formatter across execution modes
+binary=./zig-out/bin/1z   driver=tests/benchmark/fmt_bench.1z   reps=3
+files=lib/strings.1z lib/formatter.1z
+
+mode                  median_ms       min_ms       max_ms    vs interp
+------------------ ------------ ------------ ------------ ------------
+interpreted              2119.8       2115.7       2123.9        1.00x
+hybrid                   FAILED       raised           --           --
+eager                    2246.8       2238.4       2267.8        0.94x
+
+runtime-image build: REJECTED
+  Warning: 'while' parameter 'pred' has row-variable effect; quotation call falls back to interpreter
+  Warning: 'while' parameter 'body' has row-variable effect; quotation call falls back to interpreter
+  Warning: 'loop' parameter 'pred' has row-variable effect; quotation call falls back to interpreter
+  Warning: '2dip' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
+  Warning: 'bi' parameter 'p' has row-variable effect; quotation call falls back to interpreter
+  Warning: 'bi' parameter 'q' has row-variable effect; quotation call falls back to interpreter
+  Warning: 'keep' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
+  Error: 11 words could not be compiled to C
+    word 'formatter/(symbol-lines)': NC.19: defines nested helper 'sl-lines', which AOT compilation cannot discover
+        hint: move 'sl-lines' into a private{ } block at module scope
+    word 'formatter/(parse-alignable)': NC.19: defines nested helper 'pa-line', which AOT compilation cannot discover
+        hint: move 'pa-line' into a private{ } block at module scope
+    word 'formatter/(entry-line)': NC.19: defines nested helper 'el-width', which AOT compilation cannot discover
+        hint: move 'el-width' into a private{ } block at module scope
+    word 'formatter/(definition-line)': NC.19: defines nested helper 'dl-code', which AOT compilation cannot discover
+        hint: move 'dl-code' into a private{ } block at module scope
+    word 'formatter/(effect-line)': NC.19: defines nested helper 'ef-after', which AOT compilation cannot discover
+        hint: move 'ef-after' into a private{ } block at module scope
+    word 'formatter/(comment-lines)': NC.19: defines nested helper 'al-lines', which AOT compilation cannot discover
+        hint: move 'al-lines' into a private{ } block at module scope
+    word 'formatter/(emit-newline-run)': NC.19: defines nested helper 'nlr-chunks', which AOT compilation cannot discover
+        hint: move 'nlr-chunks' into a private{ } block at module scope
+    word 'formatter/(index-blocks)': NC.19: defines nested helper 'ib-chunks', which AOT compilation cannot discover
+        hint: move 'ib-chunks' into a private{ } block at module scope
+    word 'formatter/(hash>fmt-config)': NC.19: defines nested helper 'hf-raw', which AOT compilation cannot discover
+        hint: move 'hf-raw' into a private{ } block at module scope
+    word 'formatter/(merge-key)': NC.19: defines nested helper 'mk-key', which AOT compilation cannot discover
+        hint: move 'mk-key' into a private{ } block at module scope
+    word 'formatter/(find-config-file)': NC.13: word body underflows the abstract stack (row-variable effects)
+        hint: blocked until row-variable stack regions can be modeled
+  AOT interpreter fallbacks: 657 total (native=529 per-op-native=113 compound-uncompiled=8 quotation=7)
+locked build: REJECTED
+  Error: dynamic feature 'eval-string' in 'load-config-data' is not available in interpreter-free AOT; this feature requires runtime code-loading machinery that interpreter-free binaries omit. Build with --emit-runtime-image to produce a runtime-image AOT binary, or run under the interpreter, if you need 'eval-string'.
+
+hybrid: raised
+  formatter:806: error 'type-error' type-error at word '(alignable-name)'
+    called from src/prelude.1z:825: #collect
+    called from src/prelude.1z:518: call
+    called from src/prelude.1z:518: dip
+    called from src/prelude.1z:526: dip
+    called from strings:121: recover
+    called from formatter:626: using-string-builder
+    called from formatter:628: if
+    called from formatter:1096: with-parameter
+    called from tests/benchmark/fmt_bench.1z:15: format-file
+    called from tests/benchmark/fmt_bench.1z:15: #each

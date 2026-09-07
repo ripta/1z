@@ -1,0 +1,6 @@
+{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{}}}
+{"jsonrpc":"2.0","method":"initialized","params":{}}
+{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///test.1z","languageId":"1z","version":1,"text":"add:   ( a b -- c ) [ +  ] ;\nmultiply: ( a b -- c ) [ * ] ;\nnegate: ( n -- n ) [ -@ ] ;\ndouble: ( n -- n ) [ 2 * ] ;\n"}}}
+{"jsonrpc":"2.0","id":2,"method":"textDocument/formatting","params":{"textDocument":{"uri":"file:///test.1z"},"options":{"tabSize":4,"insertSpaces":true}}}
+{"jsonrpc":"2.0","id":3,"method":"shutdown"}
+{"jsonrpc":"2.0","method":"exit"}

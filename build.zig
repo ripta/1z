@@ -2273,6 +2273,9 @@ const LspTestEntry = struct {
     has_exitcode: bool,
     exitcode_path: []const u8,
     expected_exit_code: ?u8,
+    has_env: bool,
+    env_path: []const u8,
+    env_lines: ?[]const u8,
 };
 
 fn collectLspTestEntries(b: *std.Build, lsp_dir: *std.fs.Dir) ![]const LspTestEntry {
@@ -2324,6 +2327,15 @@ fn collectLspTestEntries(b: *std.Build, lsp_dir: *std.fs.Dir) ![]const LspTestEn
             }
         } else |_| {}
 
+        var has_env = false;
+        var env_lines: ?[]const u8 = null;
+        const env_path = b.fmt("tests/lsp/{s}.env", .{name_without_ext});
+        if (lsp_dir.openFile(b.fmt("{s}.env", .{name_without_ext}), .{})) |file| {
+            defer file.close();
+            env_lines = file.readToEndAlloc(b.allocator, 64 * 1024) catch null;
+            has_env = env_lines != null;
+        } else |_| {}
+
         entries.append(b.allocator, .{
             .name_without_ext = name_without_ext,
             .jsonl_path = jsonl_path,
@@ -2337,6 +2349,9 @@ fn collectLspTestEntries(b: *std.Build, lsp_dir: *std.fs.Dir) ![]const LspTestEn
             .has_exitcode = has_exitcode,
             .exitcode_path = exitcode_path,
             .expected_exit_code = expected_exit_code,
+            .has_env = has_env,
+            .env_path = env_path,
+            .env_lines = env_lines,
         }) catch return error.OutOfMemory;
     }
 
@@ -2354,6 +2369,23 @@ fn formatLspStdin(b: *std.Build, jsonl_content: []const u8) []const u8 {
         buf.appendSlice(b.allocator, trimmed) catch continue;
     }
     return buf.toOwnedSlice(b.allocator) catch "";
+}
+
+/// Point an LSP run at the working tree's standard library and apply its `.env` sidecar.
+///
+/// The server resolves a module relative to its own binary, which under `zig build` is a cache
+/// path with no `lib/` beside it. A case that reaches 1z code -- today, the one selecting the 1z
+/// formatter -- cannot load anything without this.
+fn configureLspRunEnv(b: *std.Build, run: *std.Build.Step.Run, te: LspTestEntry) void {
+    run.setEnvironmentVariable("ONEZ_STDLIB", b.fmt("{s}/lib", .{b.build_root.path orelse "."}));
+    const lines = te.env_lines orelse return;
+    var iter = std.mem.splitScalar(u8, lines, '\n');
+    while (iter.next()) |line| {
+        const trimmed = std.mem.trim(u8, line, " \t\r");
+        if (trimmed.len == 0) continue;
+        const eq = std.mem.indexOfScalar(u8, trimmed, '=') orelse continue;
+        run.setEnvironmentVariable(trimmed[0..eq], trimmed[eq + 1 ..]);
+    }
 }
 
 fn addLspTests(
@@ -2396,11 +2428,13 @@ fn addLspTests(
         test_run.addArtifactArg(lsp_artifact);
         test_run.setName(label);
         test_run.expectExitCode(expected_exit);
+        configureLspRunEnv(b, test_run, te);
 
         test_run.addFileInput(b.path(te.jsonl_path));
         if (te.has_stdout_golden) test_run.addFileInput(b.path(te.stdout_golden_path));
         if (te.has_stderr_golden) test_run.addFileInput(b.path(te.stderr_golden_path));
         if (te.has_exitcode) test_run.addFileInput(b.path(te.exitcode_path));
+        if (te.has_env) test_run.addFileInput(b.path(te.env_path));
 
         if (has_diff) {
             addGoldenDiff(b, test_step, test_run.captureStdOut(), if (te.has_stdout_golden) te.stdout_golden_path else null, te.jsonl_path);
@@ -2423,6 +2457,7 @@ fn addLspTests(
         {
             const update_run = b.addRunArtifact(lsp_artifact);
             update_run.setStdIn(.{ .bytes = te.formatted_stdin });
+            configureLspRunEnv(b, update_run, te);
 
             if (expected_exit != 0) {
                 update_run.expectExitCode(expected_exit);

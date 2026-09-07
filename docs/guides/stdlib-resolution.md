@@ -68,6 +68,16 @@ The load paths are seeded from the `ONEZ_LOAD_PATH` environment variable
 Because of the `../lib` default, a normal interpreter run in an installed or
 in-tree layout finds the standard library with no configuration.
 
+### Language Server (`1z-lsp`)
+
+The language server follows the same two steps the CLI ends with: `ONEZ_STDLIB`
+if it is set, then `../lib` relative to the `1z-lsp` executable. It takes no
+flags, since an editor launches it without any.
+
+This matters when the server is asked to run 1z code, which today means
+formatting under `ONEZ_FMT_ENGINE=1z`. A server binary sitting somewhere with no
+`lib/` beside it needs `ONEZ_STDLIB` before it can load the formatter library.
+
 ### Embedding Host (the C API)
 
 When a host program initializes a runtime through the C API, the default

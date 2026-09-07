@@ -682,13 +682,13 @@ pub const primitives = [_]Primitive{
     .{
         .name = "#len",
         .stack_effect = "seq -- n",
-        .doc = "Get length of sequence. O(1) and non-destructive; does not work on iterators (use #count instead).",
+        .doc = "Get length of sequence. Non-destructive, and does not work on iterators (use #count instead). O(1) except on a string, whose length is a codepoint count and walks the bytes; #byte-len is the O(1) one.",
         .func = nativeLen,
         .markers = &.{@constCast(&markers_mod.generic_marker)},
     },
     .{ .name = "#byte-len", .stack_effect = "str -- n", .doc = "Length of a string in bytes. O(1); returns the underlying byte-slice length.", .func = nativeByteLen },
     // Sequence element access
-    .{ .name = "#nth", .stack_effect = "seq n -- elem", .doc = "Get element at index.", .func = nativeNth, .markers = &.{@constCast(&markers_mod.generic_marker)} },
+    .{ .name = "#nth", .stack_effect = "seq n -- elem", .doc = "Get element at index. O(1) except on a string, where reaching the nth codepoint walks from the start.", .func = nativeNth, .markers = &.{@constCast(&markers_mod.generic_marker)} },
     .{ .name = "#first", .stack_effect = "seq -- elem", .doc = "Get first element of sequence.", .func = nativeFirst, .markers = &.{@constCast(&markers_mod.generic_marker)} },
     .{ .name = "#last", .stack_effect = "seq -- elem", .doc = "Get last element of sequence.", .func = nativeLast, .markers = &.{@constCast(&markers_mod.generic_marker)} },
     // Sequence transformations

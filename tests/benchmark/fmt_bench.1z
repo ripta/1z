@@ -1,0 +1,15 @@
+\ Formatter driver for benchmarking and profiling: formats the files named on
+\ the command line and prints the byte length of each result. Run with
+\ ONEZ_STDLIB pointed at the standard library so the formatter's own `use`
+\ imports resolve at runtime.
+\
+\ `format-file` rather than `run-fmt`: the profile table shares stdout with the
+\ program, so a mode that printed the formatted source would bury it, and the
+\ `check:` mode reads every file twice. This is the same work `1z fmt
+\ --engine=1z` does per file, minus the writing.
+\
+\ The lengths are what makes a mode's run comparable to another's. They catch a
+\ mode that raised or that formatted to a different size; they do not prove two
+\ modes produced the same bytes.
+use "formatter" ;
+command-line-args [ format-file #byte-len >string print-line ] #each

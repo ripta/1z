@@ -19,7 +19,7 @@ Conditional execution.
 if ( ..a ? true-quot: ( ..a -- ..b ) false-quot: ( ..a -- ..b ) -- ..b ) [<marker:branch-combinator>] \native
 
 Stack: [ ]
-Get length of sequence. O(1) and non-destructive; does not work on iterators (use #count instead).
+Get length of sequence. Non-destructive, and does not work on iterators (use #count instead). O(1) except on a string, whose length is a codepoint count and walks the bytes; #byte-len is the O(1) one.
 #len ( seq -- n ) [<marker:generic>] \native
 
   method{ array }

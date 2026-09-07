@@ -1,0 +1,44 @@
+6719
+
+=== Word Profile (top 40 by total time) ===
+  Word                   Calls    Total time     Self time   Time/call
+  if                     133,892      228.185 ms     35.906 ms    1.704 us
+  dip                    38,888       136.867 ms     12.722 ms    3.519 us
+  call                   21,450       104.350 ms     17.651 ms    4.864 us
+  at-end?                20,451        31.953 ms     12.752 ms    1.562 us
+  (try-rules)            1,103         23.748 ms    824.000 us   21.530 us
+  =                      86,178        16.210 ms     16.210 ms      188 ns
+  while                  1,426         15.658 ms    970.000 us   10.980 us
+  peek                   10,840        13.826 ms      4.100 ms    1.275 us
+  loop                   10,199        11.444 ms     11.444 ms    1.122 us
+  do                     1,426         10.355 ms    531.000 us    7.261 us
+  2dup                   35,299         9.980 ms      7.804 ms      282 ns
+  ib-open-step           794            9.780 ms      1.014 ms   12.317 us
+  (classify)             484            8.868 ms      1.397 ms   18.322 us
+  nip                    25,350         8.441 ms      7.269 ms      332 ns
+  -rot>                  10,187         8.424 ms      4.467 ms      826 ns
+  (opening?)             1,981          8.396 ms      5.199 ms    4.238 us
+  when                   6,416          7.841 ms      1.090 ms    1.222 us
+  byte-cursor>>          33,651         7.768 ms      7.768 ms      230 ns
+  str>>                  32,659         7.527 ms      7.527 ms      230 ns
+  (lf)                   4,924          6.387 ms      6.209 ms    1.297 us
+  ib-gap-step            794            5.621 ms    849.000 us    7.079 us
+  whitespace?            2,554          5.437 ms      2.866 ms    2.128 us
+  load-file              13             5.324 ms      5.021 ms  409.538 us
+  dup                    126,146        5.268 ms      5.268 ms       41 ns
+  <rot-                  8,842          5.178 ms      3.159 ms      585 ns
+  @get-or                1,259          5.020 ms    566.000 us    3.987 us
+  (closing?)             1,115          4.920 ms      3.109 ms    4.412 us
+  or                     21,639         4.734 ms      3.826 ms      218 ns
+  swap                   159,196        4.728 ms      4.728 ms       29 ns
+  using-string-builder   3              4.201 ms      5.000 us    1.400 ms
+  over                   119,604        4.132 ms      4.132 ms       34 ns
+  (bucket-for-scanner)   1,103          4.065 ms    690.000 us    3.685 us
+  advance                7,954          3.461 ms      3.461 ms      435 ns
+  >=                     21,294         3.381 ms      2.866 ms      158 ns
+  sl-step                216            3.286 ms    606.000 us   15.212 us
+  take-while             923            3.119 ms    370.000 us    3.379 us
+  #collect               31             3.002 ms    884.000 us   96.838 us
+  unmake-scanner         7,957          2.957 ms      2.957 ms      371 ns
+  #each                  88             2.814 ms    117.000 us   31.977 us
+  (top-or-f)             794            2.727 ms      2.132 ms    3.434 us

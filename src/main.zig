@@ -2128,7 +2128,7 @@ fn handleFmt(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
 
     var check_only = false;
     var stdout_mode = false;
-    var engine: ?FmtEngine = null;
+    var engine: ?formatter.Engine = null;
     var paths: std.ArrayListUnmanaged([]const u8) = .{};
     defer paths.deinit(base_allocator);
 
@@ -2144,7 +2144,7 @@ fn handleFmt(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
             continue;
         }
         if (std.mem.startsWith(u8, arg, "--engine=")) {
-            engine = parseFmtEngine(arg["--engine=".len..]) orelse {
+            engine = formatter.parseEngine(arg["--engine=".len..]) orelse {
                 err_writer.print("Error: invalid value for --engine: '{s}' (want zig or 1z)\n", .{arg["--engine=".len..]}) catch {};
                 err_writer.flush() catch {};
                 return 1;
@@ -2160,7 +2160,7 @@ fn handleFmt(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
 
     const resolved_engine = engine orelse blk: {
         const env = std.posix.getenv("ONEZ_FMT_ENGINE") orelse break :blk .zig;
-        break :blk parseFmtEngine(env) orelse {
+        break :blk formatter.parseEngine(env) orelse {
             err_writer.print("Error: invalid value for ONEZ_FMT_ENGINE: '{s}' (want zig or 1z)\n", .{env}) catch {};
             err_writer.flush() catch {};
             return 1;
@@ -2252,16 +2252,6 @@ fn handleFmt(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
     if (any_errors) return 1;
     if (check_only and any_changes) return 1;
     return 0;
-}
-
-/// Which formatter `1z fmt` runs. `zig` is `src/formatter.zig`; `one_z` is `lib/formatter.1z`,
-/// which reads `.fmt.1z` and costs roughly a thousand times as much per byte.
-const FmtEngine = enum { zig, one_z };
-
-fn parseFmtEngine(value: []const u8) ?FmtEngine {
-    if (std.mem.eql(u8, value, "zig")) return .zig;
-    if (std.mem.eql(u8, value, "1z")) return .one_z;
-    return null;
 }
 
 /// Run the 1z formatter over `files` in the `run-fmt` mode named by `mode`.

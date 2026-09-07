@@ -4,6 +4,21 @@ const tokenizer_mod = @import("tokenizer.zig");
 const Tokenizer = tokenizer_mod.Tokenizer;
 const Token = tokenizer_mod.Token;
 
+/// Which of the two shipped formatters a caller runs. `zig` is this file; `one_z` is
+/// `lib/formatter.1z`, which reads `.fmt.1z` and costs between one and ten thousand times as much
+/// per byte.
+///
+/// Both `1z fmt` and the language server select through this, so the spelling a user writes in
+/// `--engine=` and in `ONEZ_FMT_ENGINE` means the same thing in either place.
+pub const Engine = enum { zig, one_z };
+
+/// The engine `value` names, or null when it names neither.
+pub fn parseEngine(value: []const u8) ?Engine {
+    if (std.mem.eql(u8, value, "zig")) return .zig;
+    if (std.mem.eql(u8, value, "1z")) return .one_z;
+    return null;
+}
+
 /// FormatterToken extends Token with classification for formatting purposes.
 pub const FormatterToken = struct {
     kind: Kind,

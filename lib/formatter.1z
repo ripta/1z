@@ -1084,16 +1084,25 @@ fmt-config-for: ( dir: string -- fmt-config ) [
   (find-config-file) dup f = [ drop default-fmt-config ] [ load-fmt-config ] if
 ] ;
 
+\\ Reformat source already in hand and return the result.
+\\
+\\ The rules come from the `.fmt.1z` found at or above dir. This is the entry
+\\ point for a caller holding text rather than a path, such as an editor buffer
+\\ that has not been saved.
+format-buffer: ( source: string dir: string -- string ) [
+  fmt-config-for
+  swap [ format-source ] curry
+  [ current-fmt-config ] dip
+  with-parameter
+] ;
+
 \\ Read a file and return its reformatted source. The file is left alone.
 \\
 \\ The rules come from the `.fmt.1z` found at or above the file's directory. To
 \\ format under rules of your own, bind `current-fmt-config` around
 \\ `format-source` instead.
 format-file: ( path: string -- string ) [
-  dup dirname fmt-config-for
-  swap [ (read-source) format-source ] curry
-  [ current-fmt-config ] dip
-  with-parameter
+  dup (read-source) swap dirname format-buffer
 ] ;
 
 \\ Reformat a file in place, under the same rules `format-file` reads.

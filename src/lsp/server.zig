@@ -12,6 +12,8 @@ const effect_inference = @import("../effect_inference.zig");
 const call_graph = @import("../call_graph.zig");
 const parser = @import("../parser.zig");
 const formatter = @import("../formatter.zig");
+const value_mod = @import("../value.zig");
+const Instruction = value_mod.Instruction;
 
 const Allocator = std.mem.Allocator;
 
@@ -40,14 +42,22 @@ pub const Server = struct {
     ctx: *Context,
     documents: std.StringHashMap([]const u8),
     last_diagnostics: std.StringHashMap(AnalysisResult),
+    fmt_engine: formatter.Engine,
+    /// The parsed `format-buffer` call, or null when the 1z formatter is not in use or failed
+    /// to load.
+    ///
+    /// It is parsed once at startup, after the module load that makes the name resolvable, so
+    /// no request repeats that resolution.
+    fmt_call: ?[]const Instruction = null,
 
-    pub fn init(allocator: Allocator, transport: *Transport, ctx: *Context) Server {
+    pub fn init(allocator: Allocator, transport: *Transport, ctx: *Context, fmt_engine: formatter.Engine) Server {
         return .{
             .allocator = allocator,
             .transport = transport,
             .ctx = ctx,
             .documents = std.StringHashMap([]const u8).init(allocator),
             .last_diagnostics = std.StringHashMap(AnalysisResult).init(allocator),
+            .fmt_engine = fmt_engine,
         };
     }
 
@@ -72,6 +82,8 @@ pub const Server = struct {
     /// Returns the process exit code.
     pub fn run(self: *Server) u8 {
         defer self.deinit();
+
+        if (self.fmt_engine == .one_z) self.loadFormatterModule();
 
         while (true) {
             const body = self.transport.readMessage() catch |err| {
@@ -688,6 +700,68 @@ pub const Server = struct {
         try self.transport.writeResponse(id, result);
     }
 
+    /// Load `lib/formatter.1z` and parse the `format-buffer` call the formatting requests run.
+    ///
+    /// A failure is not fatal. `fmt_call` stays null, and formatting falls back to the built-in
+    /// formatter, which is what the session would have used had the engine not been asked for.
+    fn loadFormatterModule(self: *Server) void {
+        const saved_error_state = self.ctx.saveErrorState();
+        defer self.ctx.restoreErrorState(saved_error_state);
+
+        var import_tokens = Tokenizer.init("use \"formatter\" ;");
+        const import_instrs = parser.parseTopLevel(self.ctx.quotationAllocator(), &import_tokens, self.ctx) catch |err| {
+            self.log("could not load lib/formatter.1z ({any}); using the built-in formatter", .{err});
+            return;
+        };
+        self.ctx.executeQuotation(.{ .instructions = import_instrs }) catch |err| {
+            self.log("could not load lib/formatter.1z ({any}); using the built-in formatter", .{err});
+            return;
+        };
+
+        var call_tokens = Tokenizer.init("format-buffer");
+        self.fmt_call = parser.parseTopLevel(self.ctx.quotationAllocator(), &call_tokens, self.ctx) catch |err| {
+            self.log("could not resolve format-buffer ({any}); using the built-in formatter", .{err});
+            return;
+        };
+    }
+
+    /// Run `lib/formatter.1z`'s `format-buffer` over an editor buffer, under the `.fmt.1z` rules
+    /// that apply to the document's own directory. The caller owns the result.
+    ///
+    /// The context outlives every request and is shared with all of them, so the call is
+    /// bracketed on both axes a failure could leak through: a raise leaves error state behind,
+    /// and a partial run leaves operands on the stack.
+    fn formatThroughOneZ(self: *Server, call: []const Instruction, uri: []const u8, text: []const u8) ?[]u8 {
+        const path = if (std.mem.startsWith(u8, uri, "file://")) uri["file://".len..] else uri;
+        const dir = std.fs.path.dirname(path) orelse ".";
+
+        const saved_error_state = self.ctx.saveErrorState();
+        defer self.ctx.restoreErrorState(saved_error_state);
+
+        const saved_depth = self.ctx.stack.depth();
+        defer {
+            while (self.ctx.stack.depth() > saved_depth) {
+                self.ctx.stack.popAndRelease() catch break;
+            }
+        }
+
+        self.ctx.stack.push(value_mod.stringValue(text)) catch return null;
+        self.ctx.stack.push(value_mod.stringValue(dir)) catch return null;
+        self.ctx.executeQuotation(.{ .instructions = call }) catch return null;
+
+        const result = self.ctx.stack.peek() catch return null;
+        return switch (result) {
+            .string => |s| self.allocator.dupe(u8, s.bytes) catch null,
+            else => null,
+        };
+    }
+
+    /// The formatted form of a document, or null when neither engine could produce one.
+    fn formatDocument(self: *Server, uri: []const u8, text: []const u8) ?[]u8 {
+        if (self.fmt_call) |call| return self.formatThroughOneZ(call, uri, text);
+        return formatter.formatString(self.allocator, text) catch null;
+    }
+
     fn handleFormatting(self: *Server, request: types.Request) !void {
         const id = request.id orelse return;
         const params = request.params orelse {
@@ -709,7 +783,7 @@ pub const Server = struct {
             return;
         };
 
-        const formatted = formatter.formatString(self.allocator, text) catch {
+        const formatted = self.formatDocument(uri, text) orelse {
             try self.transport.writeResponse(id, @as([]const types.TextEdit, &.{}));
             return;
         };
@@ -1403,7 +1477,7 @@ fn runServerWithContext(ctx: *Context, input: []const u8, out_buf: []u8) RunResu
     var reader = IoReader.fixed(input);
     var writer = IoWriter.fixed(out_buf);
     var transport = Transport.init(std.testing.allocator, &reader, &writer);
-    var server = Server.init(std.testing.allocator, &transport, ctx);
+    var server = Server.init(std.testing.allocator, &transport, ctx, .zig);
     const exit_code = server.run();
     return .{ .exit_code = exit_code, .output = writer.buffered() };
 }
