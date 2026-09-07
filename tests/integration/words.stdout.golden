@@ -580,6 +580,7 @@ kind>> ( instance: constraint-info -- kind: symbol )
 line>> ( instance: source-loc -- line: fixnum )
 load ( filename -- module )
 local-scope ( -- module )
+local{
 loop ( ... pred: ( ... -- ... ? ) -- ... )
 make-benchmark-report ( -- report )
 make-constraint-info ( name: any kind: symbol methods: any elements: any id: any -- constraint-info: constraint-info )

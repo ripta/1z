@@ -1672,3 +1672,11 @@ descriptor-resource-kind?: ( descriptor -- option ) [
 descriptor-ffi-layout?: ( descriptor -- option ) [
   [ native.descriptor-ffi-layout-raw >option:some ] [ drop option:none ] recover
 ] ;
+
+\\ local{ a b c } binds the top three stack values to a, b, c (leftmost deepest).
+local{: parse-time [
+  "}" parse-tokens-until
+  [ ] swap
+  [ >symbol [ swap ; ] curry swap compose ] #each
+  emit-body
+] ;
