@@ -1,0 +1,35 @@
+\ Benchmark: what the `@`-family dispatch walk costs an interpreted call.
+\
+\ `@get`, `@has?`, and `@set` reach their arm through `tryDispatchContainerAtDepth`, which
+\ consults no polymorphic inline cache. Every call takes a shared read lock and then walks the
+\ dispatch frames, the base table, and the parent-context chain. A plain native pays none of it.
+\
+\ `@in?` and `#in?` isolate that difference. Both answer set membership with the same two pops,
+\ the same map probe, and the same push; only `#in?` reaches its arm through the dispatch table.
+\ The plain native additionally performs the tag switch the dispatched arm skips, so the measured
+\ gap understates the dispatch rather than flattering it.
+\
+\ Subtract the push-and-drop control from each row to read the probe work alone.
+\
+\ Distinct from bench_generic_dispatch, which measures the compiled path through the inline cache.
+
+pre-set-s: ( -- set ) const [ S{ "alpha" "beta" "gamma" } ] ;
+pre-hash-s: ( -- hash ) const [ H{ alpha: 1 beta: 2 gamma: 3 } ] ;
+
+nl "[-- Same operation, dispatched against plain --]" print-line
+
+[
+  "control    push+drop" 200000 [ pre-set-s drop ] benchmark-n
+  "plain      @in?  hit" 200000 [ pre-set-s "alpha" @in? drop ] benchmark-n
+  "dispatched #in?  hit" 200000 [ pre-set-s "alpha" #in? drop ] benchmark-n
+  "plain      @in?  miss" 200000 [ pre-set-s "zulu" @in? drop ] benchmark-n
+  "dispatched #in?  miss" 200000 [ pre-set-s "zulu" #in? drop ] benchmark-n
+] run-benchmarks
+
+nl "[-- The @-family probe itself --]" print-line
+
+[
+  "control    push+drop" 200000 [ pre-hash-s drop ] benchmark-n
+  "dispatched hash @get" 200000 [ pre-hash-s "alpha" @get drop ] benchmark-n
+  "dispatched hash @has?" 200000 [ pre-hash-s "alpha" @has? drop ] benchmark-n
+] run-benchmarks
