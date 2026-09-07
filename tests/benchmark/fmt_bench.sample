@@ -1,0 +1,25 @@
+=== tests/formatting/def-align-basic.txt (1 files, 4 lines, 114 bytes) ===
+  zig formatter                 0.01 ms/run (2000x, 0.02 s total)
+  1z formatter                 30.00 ms/run (1x, 0.03 s total)
+  1z / zig                        3000x
+  output                      identical
+=== lib/strings.1z (1 files, 216 lines, 6719 bytes) ===
+  zig formatter                 0.04 ms/run (2000x, 0.07 s total)
+  1z formatter                310.00 ms/run (1x, 0.31 s total)
+  1z / zig                        7750x
+  output                      identical
+=== lib/formatter.1z (1 files, 1177 lines, 40721 bytes) ===
+  zig formatter                 0.28 ms/run (2000x, 0.56 s total)
+  1z formatter               1950.00 ms/run (1x, 1.95 s total)
+  1z / zig                        6964x
+  output                      identical
+=== src/prelude.1z (1 files, 1682 lines, 69170 bytes) ===
+  zig formatter                 0.32 ms/run (2000x, 0.64 s total)
+  1z formatter               3270.00 ms/run (1x, 3.27 s total)
+  1z / zig                       10219x
+  output                      identical
+=== every .1z file (1769 files, 90526 lines, 3178732 bytes) ===
+  zig formatter                42.00 ms/run (5x, 0.21 s total)
+  1z formatter              51400.00 ms/run (1x, 51.40 s total)
+  1z / zig                        1224x
+  output                   not compared

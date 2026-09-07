@@ -1047,6 +1047,13 @@ private{
   (read-source): ( path: string -- string ) [
     read: stream-open dup stream-read-all swap stream-close bytes>
   ] ;
+
+  (write-source): ( path: string text: string -- ) [
+    ws-text: swap ;
+    write: stream-open
+    dup ws-text stream-write-string drop
+    stream-close
+  ] ;
 }
 
 \\ Reformat 1z source and return the result.
@@ -1087,4 +1094,84 @@ format-file: ( path: string -- string ) [
   swap [ (read-source) format-source ] curry
   [ current-fmt-config ] dip
   with-parameter
+] ;
+
+\\ Reformat a file in place, under the same rules `format-file` reads.
+format-file!: ( path: string -- ) [
+  dup format-file (write-source)
+] ;
+
+\\ True when the file's text already equals its formatted form.
+formatted?: ( path: string -- ? ) [
+  dup (read-source) swap format-file =
+] ;
+
+private{
+
+  \ Report a file that differs from its formatted form, in the wording the host
+  \ formatter's `--check` uses.
+  (fmt-report): ( path: string -- boolean ) [
+    fr-path: swap ;
+    fr-path formatted?
+    dup not [ fr-path " needs formatting" #append eprint-line ] when
+  ] ;
+
+  (mode-error): never-returns ( mode: symbol -- * ) [
+    me-mode: swap ;
+    f "unknown fmt mode " me-mode >string #append EInvalidArgument make-error throw
+  ] ;
+
+  \ A symbol nothing else in this module pushes, so a walk down to it cannot
+  \ stop early.
+  (fmt-mark): ( -- symbol ) const [ fmt-mark: ] ;
+
+  (drop-to-mark): ( ... -- ... ) [
+    dup (fmt-mark) = not [ drop (drop-to-mark) ] when
+  ] ;
+
+  \ One file under mode, answering whether it came out clean. A failure is
+  \ reported and swallowed, so the remaining files still get their turn.
+  \
+  \ `recover` does not rewind the stack, so a raise leaves behind whatever the
+  \ failing path had already pushed. The depth to unwind to is therefore marked
+  \ before the attempt.
+  \
+  \ The failure message names the file and the raised text. It does not match
+  \ the host formatter's wording, which renders a Zig error value.
+  (fmt-one): ( path: string mode: symbol -- boolean ) [
+    fo-mode: swap ;
+    fo-path: swap ;
+    (fmt-mark)
+    [
+      fo-mode {
+        { check: [ fo-path (fmt-report) ] }
+        { in-place: [ fo-path format-file! t ] }
+        { stdout: [ fo-path format-file print t ] }
+        [ (mode-error) ]
+      } case
+    ] [
+      message: @get
+      "Error formatting '" fo-path #append "': " #append swap #append
+      fo-message: swap ;
+      (drop-to-mark)
+      fo-message eprint-line
+      f
+    ] recover
+    nip
+  ] ;
+}
+
+\\ Format every file in one of three modes, for the `1z fmt` subcommand.
+\\
+\\ `check:` names each file differing from its formatted form on stderr.
+\\ `in-place:` rewrites each file. `stdout:` prints each formatted result.
+\\
+\\ Leaves t when every file was already formatted and none failed, which the
+\\ caller turns into the process exit status.
+\\
+\\   { "lib/strings.1z" } check: run-fmt
+\\   => t
+run-fmt: ( files: array mode: symbol -- boolean ) [
+  rf-mode: swap ;
+  t [ rf-mode (fmt-one) and ] #reduce
 ] ;

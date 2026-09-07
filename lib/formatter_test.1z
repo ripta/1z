@@ -8,6 +8,8 @@
 use "1z-tokens" ;
 use "formatter" ;
 use "lexer" ;
+use { using-temp-directory: } "os/fs" ;
+use { path-join: } "os/path" ;
 use "strings" ;
 use "testing" ;
 
@@ -489,4 +491,98 @@ test-format-file-applies-the-discovered-config: ( -- ) [
   "tests/fixtures/fmt/nested/deeper/sample.txt" format-file
   "foo: [\n        1\n] ;\n"
   "format-file indents by what the discovered config says" assert=
+] ;
+
+"driver" test-section
+
+private{
+  (unformatted): ( -- string ) "foo: [\n1\n] ;\n" ;
+  (formatted): ( -- string ) "foo: [\n  1\n] ;\n" ;
+
+  (write-file): ( path: string text: string -- ) [
+    wf-text: swap ;
+    write: stream-open
+    dup wf-text stream-write-string drop
+    stream-close
+  ] ;
+
+  (read-file): ( path: string -- string ) [
+    read: stream-open dup stream-read-all swap stream-close bytes>
+  ] ;
+
+  \\ Write an unformatted file into dir and answer its path.
+  (dirty-file): ( dir: string -- path: string ) [
+    "sample.1z" path-join dup (unformatted) (write-file)
+  ] ;
+
+  \\ Run `run-fmt` with its stderr captured, so a report lands in the returned
+  \\ text rather than in the test output.
+  (run-fmt-captured): ( files: array mode: symbol -- result: boolean text: string ) [
+    [ run-fmt ] curry curry
+    [ [ error-stream ] dip with-parameter ] curry
+    using-string-builder
+  ] ;
+}
+
+test-format-file-bang-rewrites-the-file: ( -- ) [
+  [
+    (dirty-file)
+    dup format-file!
+    (read-file) (formatted) "the file on disk holds the formatted text" assert=
+  ] using-temp-directory
+] ;
+
+test-formatted-answers-before-and-after-the-rewrite: ( -- ) [
+  [
+    (dirty-file)
+    dup formatted? "an unformatted file answers f" assert-false
+    dup format-file!
+    formatted? "the rewritten file answers t" assert-true
+  ] using-temp-directory
+] ;
+
+test-run-fmt-in-place-rewrites-and-answers-clean: ( -- ) [
+  [
+    (dirty-file)
+    dup 1array in-place: run-fmt "an in-place run answers t" assert-true
+    (read-file) (formatted) "the file was rewritten" assert=
+  ] using-temp-directory
+] ;
+
+test-run-fmt-check-names-the-unformatted-file: ( -- ) [
+  [
+    (dirty-file)
+    dup 1array check: (run-fmt-captured)
+    " needs formatting\n" #ends-with? "the report names the file" assert-true
+    "an unformatted file fails the check" assert-false
+    drop
+  ] using-temp-directory
+] ;
+
+test-run-fmt-check-passes-a-formatted-file: ( -- ) [
+  [
+    (dirty-file)
+    dup format-file!
+    1array check: (run-fmt-captured)
+    "" "a clean run reports nothing" assert=
+    "a formatted file passes the check" assert-true
+  ] using-temp-directory
+] ;
+
+test-run-fmt-reports-an-unreadable-file-and-keeps-going: ( -- ) [
+  [
+    (dirty-file)
+    "absent.1z" swap 2 array-n check: (run-fmt-captured)
+    dup "Error formatting" #in? "the unreadable file is named" assert-true
+    " needs formatting\n" #ends-with? "the file after it was still checked" assert-true
+    "the run fails when one file cannot be read" assert-false
+  ] using-temp-directory
+] ;
+
+test-run-fmt-rejects-an-unknown-mode: ( -- ) [
+  [
+    (dirty-file) 1array sideways: (run-fmt-captured)
+    "unknown fmt mode sideways" #in? "the mode is named" assert-true
+    "an unknown mode fails the run" assert-false
+  ] using-temp-directory
 ] ;

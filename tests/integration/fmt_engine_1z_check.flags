@@ -1,0 +1,5 @@
+@raw
+fmt
+--engine=1z
+--check
+tests/fixtures/fmt/unformatted.txt

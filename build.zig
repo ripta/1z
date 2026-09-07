@@ -484,9 +484,10 @@ pub fn build(b: *std.Build) void {
             false,
         );
         actual_run.addArtifactArg(exe);
-        actual_run.addArg("tools/fmt.1z");
+        actual_run.addArg("fmt");
+        actual_run.addArg("--engine=1z");
+        actual_run.addArg("--stdout");
         actual_run.addFileArg(b.path(input_path));
-        actual_run.addFileInput(b.path("tools/fmt.1z"));
         addCommonFileDeps(b, actual_run);
         // The interpreter runs out of the cache directory, where the zig-out/lib symlink it
         // normally resolves the standard library through does not exist.

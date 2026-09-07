@@ -1,0 +1,4 @@
+@raw
+fmt
+--engine=bogus
+tests/fixtures/fmt/unformatted.txt

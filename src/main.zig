@@ -1087,7 +1087,9 @@ fn printFmtHelp() void {
     w.writeAll("Format 1z source files in place.\n\n") catch {};
     w.writeAll("Fmt options:\n") catch {};
     w.writeAll("  --check                   Report files needing formatting; exit 1 if any do\n") catch {};
-    w.writeAll("  --stdout                  Write formatted output to stdout instead of in place\n\n") catch {};
+    w.writeAll("  --stdout                  Write formatted output to stdout instead of in place\n") catch {};
+    w.writeAll("  --engine=zig|1z           Formatter to run (default zig, or $ONEZ_FMT_ENGINE)\n") catch {};
+    w.writeAll("                            The 1z engine reads .fmt.1z and is far slower\n\n") catch {};
     w.writeAll("Global options:\n") catch {};
     w.writeAll(global_flags_help) catch {};
     w.writeAll("\n") catch {};
@@ -2126,6 +2128,7 @@ fn handleFmt(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
 
     var check_only = false;
     var stdout_mode = false;
+    var engine: ?FmtEngine = null;
     var paths: std.ArrayListUnmanaged([]const u8) = .{};
     defer paths.deinit(base_allocator);
 
@@ -2140,12 +2143,29 @@ fn handleFmt(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
             stdout_mode = true;
             continue;
         }
+        if (std.mem.startsWith(u8, arg, "--engine=")) {
+            engine = parseFmtEngine(arg["--engine=".len..]) orelse {
+                err_writer.print("Error: invalid value for --engine: '{s}' (want zig or 1z)\n", .{arg["--engine=".len..]}) catch {};
+                err_writer.flush() catch {};
+                return 1;
+            };
+            continue;
+        }
         paths.append(base_allocator, arg) catch {
             err_writer.writeAll("Error: out of memory\n") catch {};
             err_writer.flush() catch {};
             return 1;
         };
     }
+
+    const resolved_engine = engine orelse blk: {
+        const env = std.posix.getenv("ONEZ_FMT_ENGINE") orelse break :blk .zig;
+        break :blk parseFmtEngine(env) orelse {
+            err_writer.print("Error: invalid value for ONEZ_FMT_ENGINE: '{s}' (want zig or 1z)\n", .{env}) catch {};
+            err_writer.flush() catch {};
+            return 1;
+        };
+    };
 
     resolveMemoryDefault(&global, false);
 
@@ -2161,6 +2181,8 @@ fn handleFmt(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
 
     // --stdout mode: format files and print to stdout
     if (stdout_mode) {
+        if (resolved_engine == .one_z) return runFmtWithOneZ(base_allocator, &global, paths.items, "stdout:", err_writer);
+
         const stdout_file: File = .stdout();
         var stdout_buf: [4096]u8 = undefined;
         var stdout = stdout_file.writerStreaming(&stdout_buf);
@@ -2199,26 +2221,30 @@ fn handleFmt(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
         return 0;
     }
 
+    // Both engines format the same file set, so the directory expansion happens once here
+    // rather than inside either engine's loop.
+    var resolved: std.ArrayListUnmanaged([]const u8) = .{};
+    defer {
+        for (resolved.items) |p| base_allocator.free(p);
+        resolved.deinit(base_allocator);
+    }
+
+    var any_errors = !collectFmtPaths(base_allocator, paths.items, &resolved, err_writer);
+    err_writer.flush() catch {};
+
+    if (resolved_engine == .one_z) {
+        const mode: []const u8 = if (check_only) "check:" else "in-place:";
+        const code = runFmtWithOneZ(base_allocator, &global, resolved.items, mode, err_writer);
+        if (code != 0) return code;
+        return if (any_errors) 1 else 0;
+    }
+
     var any_changes = false;
-    var any_errors = false;
 
-    for (paths.items) |path| {
-        // Check if path is a directory
-        const stat = std.fs.cwd().statFile(path) catch |err| {
-            err_writer.print("Error accessing '{s}': {any}\n", .{ path, err }) catch {};
-            any_errors = true;
-            continue;
-        };
-
-        if (stat.kind == .directory) {
-            const result = formatDirectory(allocator, path, check_only, err_writer);
-            if (result.had_errors) any_errors = true;
-            if (result.had_changes) any_changes = true;
-        } else {
-            const result = formatSingleFile(allocator, path, check_only, err_writer);
-            if (result.had_errors) any_errors = true;
-            if (result.had_changes) any_changes = true;
-        }
+    for (resolved.items) |path| {
+        const result = formatSingleFile(allocator, path, check_only, err_writer);
+        if (result.had_errors) any_errors = true;
+        if (result.had_changes) any_changes = true;
     }
 
     err_writer.flush() catch {};
@@ -2226,6 +2252,141 @@ fn handleFmt(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
     if (any_errors) return 1;
     if (check_only and any_changes) return 1;
     return 0;
+}
+
+/// Which formatter `1z fmt` runs. `zig` is `src/formatter.zig`; `one_z` is `lib/formatter.1z`,
+/// which reads `.fmt.1z` and costs roughly a thousand times as much per byte.
+const FmtEngine = enum { zig, one_z };
+
+fn parseFmtEngine(value: []const u8) ?FmtEngine {
+    if (std.mem.eql(u8, value, "zig")) return .zig;
+    if (std.mem.eql(u8, value, "1z")) return .one_z;
+    return null;
+}
+
+/// Run the 1z formatter over `files` in the `run-fmt` mode named by `mode`.
+///
+/// The mode rides in the bootstrap string and the file list rides in `program_args`, the
+/// split `handleLint` uses.
+fn runFmtWithOneZ(
+    base_allocator: std.mem.Allocator,
+    global: *GlobalFlags,
+    files: []const []const u8,
+    mode: []const u8,
+    err_writer: anytype,
+) u8 {
+    var exec = ExecutionFlags{};
+    if (std.posix.getenv("ONEZ_COMPILE")) |env_val| {
+        if (std.mem.eql(u8, env_val, "eager")) {
+            exec.compile_mode = .eager;
+        } else if (std.mem.eql(u8, env_val, "hybrid")) {
+            exec.compile_mode = .hybrid;
+        }
+    }
+
+    const code = std.fmt.allocPrint(
+        base_allocator,
+        "use \"formatter\" ; command-line-args {s} run-fmt",
+        .{mode},
+    ) catch {
+        err_writer.writeAll("Error: out of memory\n") catch {};
+        err_writer.flush() catch {};
+        return 1;
+    };
+    defer base_allocator.free(code);
+
+    const ec = ExecutionContext.init(base_allocator, global, &exec, err_writer) catch return 1;
+    defer ec.deinit();
+
+    ec.ctx.program_args = files;
+
+    const result = runEval(&ec.ctx, code, false, false, err_writer);
+    ec.fireExitHooks(result);
+    return result;
+}
+
+/// Expand each argument into the files to format: a directory contributes its `.1z` entries,
+/// a file contributes itself. Answers whether every argument was reachable. An unreachable one
+/// is reported and the remaining arguments still run.
+fn collectFmtPaths(
+    allocator: std.mem.Allocator,
+    args: []const []const u8,
+    list: *std.ArrayListUnmanaged([]const u8),
+    err_writer: anytype,
+) bool {
+    var ok = true;
+
+    for (args) |path| {
+        const stat = std.fs.cwd().statFile(path) catch |err| {
+            err_writer.print("Error accessing '{s}': {any}\n", .{ path, err }) catch {};
+            ok = false;
+            continue;
+        };
+
+        if (stat.kind == .directory) {
+            if (!appendFmtDirectory(allocator, path, list, err_writer)) ok = false;
+        } else if (!appendFmtPath(allocator, path, list, err_writer)) {
+            ok = false;
+        }
+    }
+
+    return ok;
+}
+
+fn appendFmtDirectory(
+    allocator: std.mem.Allocator,
+    dir_path: []const u8,
+    list: *std.ArrayListUnmanaged([]const u8),
+    err_writer: anytype,
+) bool {
+    var dir = std.fs.cwd().openDir(dir_path, .{ .iterate = true }) catch |err| {
+        err_writer.print("Error opening directory '{s}': {any}\n", .{ dir_path, err }) catch {};
+        return false;
+    };
+    defer dir.close();
+
+    var ok = true;
+    var iter = dir.iterate();
+    while (iter.next() catch null) |entry| {
+        if (entry.kind != .file) continue;
+        if (!std.mem.endsWith(u8, entry.name, ".1z")) continue;
+
+        const full_path = if (std.mem.eql(u8, dir_path, "."))
+            allocator.dupe(u8, entry.name) catch {
+                ok = false;
+                continue;
+            }
+        else
+            std.fmt.allocPrint(allocator, "{s}/{s}", .{ dir_path, entry.name }) catch {
+                ok = false;
+                continue;
+            };
+
+        list.append(allocator, full_path) catch {
+            allocator.free(full_path);
+            ok = false;
+        };
+    }
+
+    return ok;
+}
+
+fn appendFmtPath(
+    allocator: std.mem.Allocator,
+    path: []const u8,
+    list: *std.ArrayListUnmanaged([]const u8),
+    err_writer: anytype,
+) bool {
+    const duped = allocator.dupe(u8, path) catch {
+        err_writer.writeAll("Error: out of memory\n") catch {};
+        return false;
+    };
+    list.append(allocator, duped) catch {
+        allocator.free(duped);
+        err_writer.writeAll("Error: out of memory\n") catch {};
+        return false;
+    };
+    return true;
 }
 
 const FormatResult = struct {
@@ -2251,41 +2412,6 @@ fn formatSingleFile(allocator: std.mem.Allocator, path: []const u8, check_only: 
         };
         return .{ .had_errors = false, .had_changes = false };
     }
-}
-
-fn formatDirectory(allocator: std.mem.Allocator, dir_path: []const u8, check_only: bool, err_writer: anytype) FormatResult {
-    var result = FormatResult{ .had_errors = false, .had_changes = false };
-
-    var dir = std.fs.cwd().openDir(dir_path, .{ .iterate = true }) catch |err| {
-        err_writer.print("Error opening directory '{s}': {any}\n", .{ dir_path, err }) catch {};
-        return .{ .had_errors = true, .had_changes = false };
-    };
-    defer dir.close();
-
-    var iter = dir.iterate();
-    while (iter.next() catch null) |entry| {
-        if (entry.kind != .file) continue;
-        if (!std.mem.endsWith(u8, entry.name, ".1z")) continue;
-
-        // Build full path
-        const full_path = if (std.mem.eql(u8, dir_path, "."))
-            allocator.dupe(u8, entry.name) catch {
-                result.had_errors = true;
-                continue;
-            }
-        else
-            std.fmt.allocPrint(allocator, "{s}/{s}", .{ dir_path, entry.name }) catch {
-                result.had_errors = true;
-                continue;
-            };
-        defer allocator.free(full_path);
-
-        const file_result = formatSingleFile(allocator, full_path, check_only, err_writer);
-        if (file_result.had_errors) result.had_errors = true;
-        if (file_result.had_changes) result.had_changes = true;
-    }
-
-    return result;
 }
 
 fn handleLint(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {

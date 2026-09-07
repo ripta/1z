@@ -6,6 +6,8 @@ Format 1z source files in place.
 Fmt options:
   --check                   Report files needing formatting; exit 1 if any do
   --stdout                  Write formatted output to stdout instead of in place
+  --engine=zig|1z           Formatter to run (default zig, or $ONEZ_FMT_ENGINE)
+                            The 1z engine reads .fmt.1z and is far slower
 
 Global options:
   --max-memory=SIZE         Set memory limit (e.g. 128M, 1G; default 256M)

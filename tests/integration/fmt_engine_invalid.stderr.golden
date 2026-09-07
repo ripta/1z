@@ -1,0 +1,1 @@
+Error: invalid value for --engine: 'bogus' (want zig or 1z)

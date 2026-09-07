@@ -1,0 +1,3 @@
+\ Placeholder: argv-mode test runs `1z fmt --engine=1z --check` over an
+\ unformatted fixture, so the report and the exit status come from the 1z engine.
+\ This file is not executed.

@@ -1,0 +1,4 @@
+@raw
+fmt
+--stdout
+tests/fixtures/fmt/nested/deeper/sample.txt
