@@ -1,17 +1,30 @@
 \ Unit tests for lib/formatter.1z.
 \
 \ These cover the chunk fold and the classifier, the two places where the 1z
-\ formatter has to reproduce a host tokenizer that splits on whitespace alone.
+\ formatter has to reproduce a host tokenizer that splits on whitespace alone,
+\ and the comment-alignment pass, whose marker rule is easier to pin down here
+\ than through a whole formatted file.
 
 use "1z-tokens" ;
 use "formatter" ;
 use "lexer" ;
+use "strings" ;
 use "testing" ;
 
 private{
   (chunks-of): ( src: string -- array ) [ 1z-tokenize #collect (chunk-tokens) ] ;
   (texts-of):  ( src: string -- array ) [ (chunks-of) [ value>> ] #map #collect ] ;
   (kinds-of):  ( src: string -- array ) [ (chunks-of) [ kind>> ] #map #collect ] ;
+
+  \\ One commented line: code, a two-space gap widened by pad, a comment, and a
+  \\ newline. pad is the padding the aligner is expected to add.
+  \\
+  \\ Assembled rather than written out. A source line holding two spaces before a
+  \\ backslash is an inline comment to the aligner, so a literal would let a
+  \\ `make fmt` run rewrite the data these tests assert against.
+  (commented): ( code: string pad: fixnum text: string -- string ) [
+    [ " " swap 2 + repeat #append "\\ " #append ] dip #append "\n" #append
+  ] ;
 }
 
 "chunk folding" test-section
@@ -71,4 +84,118 @@ test-classify-close-bracket-glued-to-separator: ( -- ) [
 test-classify-parenthesized-name-is-a-symbol: ( -- ) [
   "(check-zlib): [ ]" (kinds-of) 0 #nth symbol:
   "a parenthesized word name is a symbol" assert=
+] ;
+
+"line splitting" test-section
+
+test-split-lines-drops-the-empty-tail: ( -- ) [
+  "a\nb\n" (split-lines) { "a" "b" }
+  "a final newline adds no empty line" assert=
+] ;
+
+test-split-lines-keeps-an-unterminated-last-line: ( -- ) [
+  "a\nb" (split-lines) { "a" "b" }
+  "a last line without a newline is still a line" assert=
+] ;
+
+test-split-lines-keeps-a-blank-line: ( -- ) [
+  "a\n\nb\n" (split-lines) { "a" "" "b" }
+  "a blank line in the middle survives" assert=
+] ;
+
+test-split-lines-of-empty-text: ( -- ) [
+  "" (split-lines) { }
+  "empty text has no lines" assert=
+] ;
+
+"inline comment detection" test-section
+
+test-comment-pos-behind-two-spaces: ( -- ) [
+  "abc  \\ note" (inline-comment-pos) 5
+  "a marker behind two spaces is inline" assert=
+] ;
+
+test-comment-pos-behind-one-space: ( -- ) [
+  "abc \\ note" (inline-comment-pos) f
+  "a marker behind one space is not inline" assert=
+] ;
+
+test-comment-pos-indented-standalone: ( -- ) [
+  "  \\ note" (inline-comment-pos) f
+  "an indented standalone comment is not inline" assert=
+] ;
+
+test-comment-pos-at-first-character: ( -- ) [
+  "\\ note" (inline-comment-pos) f
+  "a marker at the first character is not inline" assert=
+] ;
+
+test-comment-pos-at-second-character: ( -- ) [
+  "a\\ note" (inline-comment-pos) f
+  "a marker at the second character is not inline" assert=
+] ;
+
+test-comment-pos-without-a-marker: ( -- ) [
+  "abc def" (inline-comment-pos) f
+  "a line holding no backslash has no marker" assert=
+] ;
+
+test-comment-pos-hidden-by-a-string: ( -- ) [
+  "\"a\\\\nb\" x  \\ note" (inline-comment-pos) f
+  "a backslash inside a string hides the marker after it" assert=
+] ;
+
+"comment alignment" test-section
+
+test-align-run-shares-one-column: ( -- ) [
+  "a" 0 "one" (commented)
+  "bbbb" 0 "two" (commented) #append
+  "cc" 0 "three" (commented) #append
+  (align-comments)
+  "a" 3 "one" (commented)
+  "bbbb" 0 "two" (commented) #append
+  "cc" 2 "three" (commented) #append
+  "a run of commented lines shares one column" assert=
+] ;
+
+test-align-uncommented-line-ends-a-run: ( -- ) [
+  "a" 0 "one" (commented) "plain\n" #append
+  "bbbb" 0 "two" (commented) #append
+  dup (align-comments) swap
+  "an uncommented line ends a run" assert=
+] ;
+
+test-align-blank-line-ends-a-run: ( -- ) [
+  "a" 0 "one" (commented) "\n" #append
+  "bbbb" 0 "two" (commented) #append
+  dup (align-comments) swap
+  "a blank line ends a run" assert=
+] ;
+
+test-align-standalone-comment-ends-a-run: ( -- ) [
+  "a" 0 "one" (commented) "\\ header\n" #append
+  "bbbb" 0 "two" (commented) #append
+  dup (align-comments) swap
+  "a standalone comment ends a run" assert=
+] ;
+
+test-align-without-comments: ( -- ) [
+  "one\ntwo\n" (align-comments) "one\ntwo\n"
+  "text holding no inline comments passes through" assert=
+] ;
+
+test-align-empty-text: ( -- ) [
+  "" (align-comments) ""
+  "empty text stays empty" assert=
+] ;
+
+test-align-keeps-a-missing-final-newline: ( -- ) [
+  "a  " "\\ one" #append
+  dup (align-comments) swap
+  "text without a final newline does not gain one" assert=
+] ;
+
+test-rtrim-spaces-leaves-a-tab: ( -- ) [
+  "a\t  " (rtrim-spaces) "a\t"
+  "only spaces are trimmed, never tabs" assert=
 ] ;

@@ -537,7 +537,7 @@ pub const Formatter = struct {
 /// Run only the token-level phase and return its output.
 ///
 /// Exposed on its own so the 1z formatter, which is being built one phase at a time, has an exact
-/// comparison target before the two alignment passes exist. Goes away with this formatter.
+/// comparison target at whichever phase it has reached. Goes away with this formatter.
 pub fn formatTokenLevel(allocator: Allocator, input: []const u8) ![]u8 {
     var formatter = Formatter.init(allocator);
     defer formatter.deinit();
@@ -550,6 +550,16 @@ pub fn formatTokenLevel(allocator: Allocator, input: []const u8) ![]u8 {
     try formatter.format(output.writer(allocator));
 
     return output.toOwnedSlice(allocator);
+}
+
+/// Run the token-level phase and the comment-alignment phase, stopping before symbol alignment.
+///
+/// The phase-2 counterpart of `formatTokenLevel`. Goes away with this formatter.
+pub fn formatThroughComments(allocator: Allocator, input: []const u8) ![]u8 {
+    const formatted = try formatTokenLevel(allocator, input);
+    defer allocator.free(formatted);
+
+    return alignComments(allocator, formatted);
 }
 
 /// Format a string and return the formatted result.

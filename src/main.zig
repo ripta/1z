@@ -2166,11 +2166,12 @@ fn handleFmt(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
         var stdout = stdout_file.writerStreaming(&stdout_buf);
         const out_writer = &stdout.interface;
 
-        // Undocumented, and deliberately not in `printFmtHelp`. See `formatTokenLevel`.
-        const token_level_only = if (std.posix.getenv("ONEZ_FMT_PHASE")) |v|
-            std.mem.eql(u8, v, "1")
+        // How many of the three phases to run. Undocumented, and deliberately not in
+        // `printFmtHelp`. See `formatTokenLevel`.
+        const phase_limit: ?u8 = if (std.posix.getenv("ONEZ_FMT_PHASE")) |v|
+            std.fmt.parseInt(u8, v, 10) catch null
         else
-            false;
+            null;
 
         for (paths.items) |path| {
             const content = std.fs.cwd().readFileAlloc(allocator, path, 10 * 1024 * 1024) catch |err| {
@@ -2180,10 +2181,11 @@ fn handleFmt(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
             };
             defer allocator.free(content);
 
-            const formatted = (if (token_level_only)
-                formatter.formatTokenLevel(allocator, content)
-            else
-                formatter.formatString(allocator, content)) catch |err| {
+            const formatted = (switch (phase_limit orelse 3) {
+                1 => formatter.formatTokenLevel(allocator, content),
+                2 => formatter.formatThroughComments(allocator, content),
+                else => formatter.formatString(allocator, content),
+            }) catch |err| {
                 err_writer.print("Error formatting '{s}': {any}\n", .{ path, err }) catch {};
                 err_writer.flush() catch {};
                 return 1;

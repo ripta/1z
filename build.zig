@@ -453,8 +453,10 @@ pub fn build(b: *std.Build) void {
     //
     // Each case runs both formatters over one input from the fmt corpus and diffs their captured
     // output, so the comparison needs no golden files of its own. `ONEZ_FMT_PHASE` holds the Zig
-    // side to the phase the 1z formatter has reached. Retired with the Zig formatter.
-    const fmt_1z_test_step = b.step("fmt-1z-test", "Compare the 1z formatter against the Zig formatter's token-level phase");
+    // side to the phase the 1z formatter has reached, so the number below moves as it gains a phase.
+    // Retired with the Zig formatter.
+    const fmt_1z_phase = "2";
+    const fmt_1z_test_step = b.step("fmt-1z-test", "Compare the 1z formatter against the phases of the Zig formatter it has reached");
     var fmt_1z_status_files = std.ArrayListUnmanaged(std.Build.LazyPath){};
 
     var fmt_1z_iter = fmt_test_dir.iterate();
@@ -495,18 +497,18 @@ pub fn build(b: *std.Build) void {
         actual_run.setName(actual_label);
 
         const expected_run = b.addRunArtifact(exe);
-        expected_run.setEnvironmentVariable("ONEZ_FMT_PHASE", "1");
+        expected_run.setEnvironmentVariable("ONEZ_FMT_PHASE", fmt_1z_phase);
         expected_run.addArg("fmt");
         expected_run.addArg("--stdout");
         expected_run.addFileArg(b.path(input_path));
-        expected_run.setName(b.fmt("fmt-zig-phase1: {s}", .{name_without_ext}));
+        expected_run.setName(b.fmt("fmt-zig-phase{s}: {s}", .{ fmt_1z_phase, name_without_ext }));
 
         addCapturedDiff(
             b,
             fmt_1z_test_step,
             expected_run.captureStdOut(),
             actual_run.captureStdOut(),
-            b.fmt("zig token-level: {s}", .{input_path}),
+            b.fmt("zig through phase {s}: {s}", .{ fmt_1z_phase, input_path }),
             b.fmt("1z formatter: {s}", .{input_path}),
         );
     }

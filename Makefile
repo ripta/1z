@@ -171,7 +171,7 @@ eager-test: ## Run integration tests with eager compilation
 fmt-test: ## Run formatter tests
 	timeout $(TARGET_TIMEOUT) zig build fmt-test --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) $(TEST_FILTER_ARG)
 
-fmt-1z-test: ## Compare the 1z formatter against the Zig formatter's token-level phase
+fmt-1z-test: ## Compare the 1z formatter against the phases of the Zig formatter it has reached
 	timeout $(TARGET_TIMEOUT) zig build fmt-1z-test --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) $(TEST_FILTER_ARG)
 
 aot-determinism-check: build ## Verify double-builds of the AOT corpus emit byte-identical C in both image modes

@@ -1,7 +1,8 @@
 \ lib/formatter.1z - Code formatter for 1z source
 \
 \ Reformats a source string: indentation, spacing around brackets and stack
-\ effects, newline compression, and semicolon placement.
+\ effects, newline compression, semicolon placement, and inline comment
+\ alignment.
 \
 \ Usage:
 \   use "formatter" ;
@@ -523,6 +524,128 @@ private{
   \ `curry` pushes the chunk array on top of the threaded builder, so the stream
   \ arrives underneath.
   (fmt-chunks): ( stream chunks -- ) [ swap (<fmt-state>) (fmt-run) (fmt-finish) drop ] ;
+
+  \ --- Comment alignment ---
+
+  \ Right-trim spaces. `rtrim` would also take tabs and carriage returns, where
+  \ the host trims spaces alone.
+  (rtrim-spaces): ( text: string -- string ) [
+    dup #empty? not
+    [ dup #last " " = [ dup #len 1 - #take (rtrim-spaces) ] when ] when
+  ] ;
+
+  \ Whether two spaces sit immediately before pos. Guards the read, since a
+  \ marker at the first or second character has nothing to look back at.
+  (two-spaces-before?): ( line pos -- ? ) [
+    dup 2 < [ 2drop f ] [
+      2dup 1 - #nth " " =
+      [ 2 - #nth " " = ] [ 2drop f ] if
+    ] if
+  ] ;
+
+  \ The line's code up to the two-space gap before pos, right-trimmed.
+  (code-before): ( line pos -- string ) [ 2 - 0 swap #slice (rtrim-spaces) ] ;
+
+  \ The position of a line's inline comment marker, or f when it has none.
+  \
+  \ The host takes the first backslash anywhere in the line, requires two spaces
+  \ before it, and requires the content before those spaces to be non-empty and
+  \ to not itself start with a backslash. That last test is what rejects an
+  \ indented standalone comment.
+  \
+  \ Nothing here knows about string literals, so a backslash inside one is taken
+  \ as a marker and a real marker after one is missed. Both are the host's
+  \ behavior, reproduced rather than fixed.
+  \
+  \ The position is a codepoint index, where the host counts bytes. The two agree
+  \ on everything but a line carrying non-ASCII code before its marker.
+  (inline-comment-pos): ( line: string -- idx/f ) [
+    dup "\\" #index-of
+    dup f = [ nip ] [
+      2dup (two-spaces-before?) [
+        2dup (code-before)
+        dup #empty? not swap "\\" #starts-with? not and
+        [ nip ] [ 2drop f ] if
+      ] [ 2drop f ] if
+    ] if
+  ] ;
+
+  \ Split on line feeds, with no entry for the empty tail after a final one.
+  \ Not the `text` module's `split-lines`, which drops the blank lines a run of
+  \ commented lines has to end on.
+  (split-lines): ( text: string -- array ) [
+    dup #empty? [ drop { } ] [
+      "\n" split
+      dup #last #empty? [ dup 0 swap #len 1 - #slice ] when
+    ] if
+  ] ;
+
+  \ Align every run of consecutive commented lines, writing the whole text out.
+  \
+  \ The host finds each line's marker twice, once while measuring a group and
+  \ again while rebuilding it. One pass up front costs the same and reads better.
+  (align-lines): ( stream lines: array -- ) [
+    al-lines: swap ;
+    al-out:   swap ;
+    al-pos:   al-lines [ (inline-comment-pos) ] #map #collect ;
+    al-len:   al-lines #len ;
+
+    al-write: ( text -- ) [ al-out swap stream-write-string drop ] ;
+
+    al-commented?: ( k -- ? ) [ al-pos swap #nth f = not ] ;
+
+    \ Index just past the run of commented lines starting at k.
+    al-run-end: ( k -- idx ) [
+      [ dup al-len < [ dup al-commented? ] [ f ] if ] [ 1 + ] while
+    ] ;
+
+    \ The run's shared code column. The host measures it from the marker
+    \ position, not from the trimmed code it later pads against.
+    al-run-width: ( start end -- n ) [
+      [ al-pos ] 2dip #slice 0 [ 2 - max ] #reduce
+    ] ;
+
+    \ Rebuild one line as its trimmed code, padding, two spaces, and the comment.
+    al-emit-at: ( width k -- ) [
+      dup al-lines swap #nth
+      swap al-pos swap #nth
+      2dup (code-before) dup al-write
+      #len 3 pick-n swap - dup 0 < [ drop 0 ] when
+      2 + " " swap repeat al-write
+      over #len #slice al-write
+      "\n" al-write
+      drop
+    ] ;
+
+    al-emit-run: ( start end -- ) [
+      2dup al-run-width -rot> swap
+      [ dup 2 pick-n < ] [ 2 pick-n over al-emit-at 1 + ] while
+      3drop
+    ] ;
+
+    al-step: ( k -- k' ) [
+      dup al-commented? [
+        dup al-run-end dup [ al-emit-run ] dip
+      ] [
+        al-lines over #nth al-write "\n" al-write
+        1 +
+      ] if
+    ] ;
+
+    0 [ dup al-len < ] [ al-step ] while drop
+  ] ;
+
+  \ Align the inline comments in already token-level-formatted source.
+  \
+  \ Every line goes out with a trailing newline, so a text that had none comes
+  \ back one character too long. The host pops that character; dropping it here
+  \ is the same thing.
+  (align-comments): ( text: string -- string ) [
+    dup #empty? not [
+      dup (split-lines) [ (align-lines) ] curry using-string-builder
+      swap "\n" #ends-with? not [ dup #len 1 - #take ] when
+    ] when
+  ] ;
 }
 
 \\ Reformat 1z source and return the result.
@@ -531,6 +654,7 @@ format-source: ( source: string -- string ) [
   dup #len 0 = [ drop "" ] [
     [ (fmt-chunks) ] curry using-string-builder
   ] if
+  (align-comments)
 ] ;
 
 \\ Read a file and return its reformatted source. The file is left alone.
