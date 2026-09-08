@@ -38,7 +38,8 @@ semantic-context: struct{ module word-infos } ;
 \ --- Run-scoped state shared by rules that need the full checked file set ---
 
 (lint-run-storage): ( -- mmap ) parse-time [
-  [ checked-files: { } dead-definitions: f circular-files: { } ] make-mutable-map
+  [ checked-files: { } dead-definitions: f circular-files: { } semantic-context-error: f ]
+  make-mutable-map
 ] ;
 (lint-run-state): ( -- mmap ) [ (lint-run-storage) ] ;
 
@@ -50,6 +51,13 @@ set-lint-dead-definitions: ( dead-defs -- ) [ (lint-run-state) swap dead-definit
 
 lint-circular-files: ( -- array ) [ (lint-run-state) circular-files: @get ] ;
 set-lint-circular-files: ( circular -- ) [ (lint-run-state) swap circular-files: swap @set! drop ] ;
+
+\\ The error raised by the most recent (build-semantic-context) attempt for
+\\ the file currently being linted, or f if it succeeded or was skipped.
+lint-semantic-context-error: ( -- error/f ) [ (lint-run-state) semantic-context-error: @get ] ;
+set-lint-semantic-context-error: ( error -- ) [
+  (lint-run-state) swap semantic-context-error: swap @set! drop
+] ;
 
 \\ Return the array of registered lint rules.
 lint-rules: ( -- array ) [ (lint-registry) rules: @get ] ;
@@ -226,9 +234,11 @@ definition-symbol?: ( token -- ? ) [
 (lint-load-cache): ( -- mmap ) [ (lint-load-cache-storage) ] ;
 
 \\ Build a semantic context by loading a file in check mode.
-\\ Returns a semantic-context struct, or f if loading fails.
+\\ Returns a semantic-context struct, or f if loading fails. On failure the
+\\ error is stashed via set-lint-semantic-context-error so (lint-file) can
+\\ report it instead of letting semantic rules silently see no words.
 (build-semantic-context): ( path -- semantic-context-or-f ) [
-  [ (lint-load-cache) swap native.load-check-file ] [ drop f ] recover
+  [ (lint-load-cache) swap native.load-check-file ] [ set-lint-semantic-context-error f ] recover
   dup f = [ ] [
     dup @keys
     H{ }
@@ -283,6 +293,7 @@ lint-module-exports: ( resolved-path -- array ) [
 \ --- Per-file analysis ---
 
 (lint-file): ( path rules -- diagnostics ) [
+  f set-lint-semantic-context-error
   swap dup (read-file)
   \ stack: rules path source
   dup 1z-tokenize #collect
@@ -300,8 +311,43 @@ lint-module-exports: ( resolved-path -- array ) [
 
   6 array-n
   \ stack: rules(1) ctx(0)
+  dup [ swap ] dip
+  \ stack: ctx(2) rules(1) ctx(0)
   [ (lint-rule-with-context) ] curry #map #collect
   { } [ #append ] #reduce
+  \ stack: ctx(1) diagnostics(0)
+  swap (append-semantic-context-diagnostic)
+] ;
+
+\\ Build the diagnostic reported when the semantic context could not be
+\\ built for a file. Anchored at the start of the file, since the failure
+\\ is not tied to a specific token.
+(semantic-context-error-diagnostic): ( ctx error -- diagnostic ) [
+  message: @get "semantic analysis unavailable for this file: " swap #append
+  \ stack: ctx message
+  [
+    dup 0 #nth swap 4 #nth
+    [ "semantic-context-unavailable" warning: ] 2dip
+    0
+  ] dip
+  \ stack: rule-id severity path line-index pos message
+  diag-at-pos
+] ;
+
+\\ Append a diagnostic reporting that the semantic context could not be
+\\ built for this file, unless it was skipped for being part of a detected
+\\ circular dependency, which circular-dependency already reports.
+(append-semantic-context-diagnostic): ( diagnostics ctx -- diagnostics' ) [
+  dup 5 #nth f = [
+    lint-semantic-context-error dup f = [
+      2drop
+    ] [
+      (semantic-context-error-diagnostic)
+      1array #append
+    ] if
+  ] [
+    drop
+  ] if
 ] ;
 
 \ --- Output formatting ---

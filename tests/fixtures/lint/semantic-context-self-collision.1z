@@ -1,0 +1,4 @@
+\ Shadows a base-scope word without the override marker, so check-mode
+\ loading fails with import-conflict before this file's semantic context
+\ can be built.
++: ( a b -- c ) [ 42 ] ;

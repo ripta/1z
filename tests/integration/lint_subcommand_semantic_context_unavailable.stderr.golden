@@ -1,0 +1,1 @@
+tests/fixtures/lint/semantic-context-self-collision.1z:1:1: warning: [semantic-context-unavailable] semantic analysis unavailable for this file: import-conflict
