@@ -1,0 +1,16 @@
+\ Regression test: a `use`-imported word must keep its doc comment and its `parse-time-only`
+\ restriction, not just its compiled body. `importWord` copied a hand-listed subset of
+\ ModuleWord's fields into the imported WordDefinition, silently dropping `doc` and never
+\ carrying `parse_time_only` at all.
+
+use "testing" ;
+use "./import_field_fidelity_helper.1z" ;
+
+"import field fidelity" test-section
+
+documented-word: >word-info doc>>
+"A word whose doc comment must survive a `use` import."
+"imported word keeps its doc comment" assert=
+
+[ [ pt-only-word ] call ]
+parse-error: "imported parse-time-only word cannot be called at runtime" assert-error-type

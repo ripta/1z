@@ -1382,6 +1382,9 @@ pub const ModuleWord = struct {
     markers: []const *Marker = &.{},
     source_module: ?*const Module = null,
     doc: ?[]const u8 = null,
+    /// Whether this word can only be called during parse time. Mirrors
+    /// `dictionary.WordDefinition.parse_time_only`.
+    parse_time_only: bool = false,
     source_file: ?[]const u8 = null,
     source_line: usize = 0,
     source_column: usize = 0,

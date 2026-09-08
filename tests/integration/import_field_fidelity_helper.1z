@@ -1,0 +1,10 @@
+\ Companion module for import_field_fidelity.1z.
+\
+\ Defines a documented word and a parse-time-only word, so the driver can check that both
+\ properties survive a `use` import.
+
+\\ A word whose doc comment must survive a `use` import.
+documented-word: [ 42 ] ;
+
+\\ A parse-time-only word, to check that the restriction survives a `use` import.
+pt-only-word: parse-time-only [ 42 ] ;

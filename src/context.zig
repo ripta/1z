@@ -3155,6 +3155,7 @@ pub const Context = struct {
             .source_module = def.source_module,
             .dispatch_id = def.dispatch_id,
             .doc = def.doc,
+            .parse_time_only = def.parse_time_only,
             .source_file = def.source_file,
             .source_line = def.source_line,
             .source_column = def.source_column,

@@ -1,0 +1,9 @@
+=== import field fidelity ===
+Stack: [ ]
+Stack: [ "A word whose doc comment must survive a `use` import." ]
+Stack: [ "A word whose doc comment must survive a `use` import." "A word whose doc comment must survive a `use` import." ]
+PASS: imported word keeps its doc comment
+Stack: [ ]
+Stack: [ [ [ pt-only-word ] call ] ]
+PASS: imported parse-time-only word cannot be called at runtime
+Stack: [ ]

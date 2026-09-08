@@ -570,12 +570,10 @@ pub fn importWord(ctx: *Context, name: []const u8, mod_word: ModuleWord, module:
         }
     }
 
-    try ctx.defineImportedWord(name, .{
+    var definition = dict_mod.WordDefinition{
         .name = name,
         .parse_time = has_parse_time,
         .imported = true,
-        .stack_effect = mod_word.stack_effect,
-        .markers = mod_word.markers,
         // A word the module being imported had itself imported (e.g. via
         // `reexport`) already carries its originating module, which is where
         // its body's late-bound dep references resolve. Preserve it; only a
@@ -583,24 +581,37 @@ pub fn importWord(ctx: *Context, name: []const u8, mod_word: ModuleWord, module:
         // the module now being imported. Mirrors the `orelse module` pattern
         // in pushModuleDepsFrame and wordDefFromModuleWord.
         .source_module = mod_word.source_module orelse module,
-        .source_file = mod_word.source_file,
-        .source_line = mod_word.source_line,
-        .source_column = mod_word.source_column,
-        .provenance = mod_word.provenance,
-        .capability = mod_word.capability,
         .dispatch_id = effective_dispatch_id,
         // An image-loaded module word carries its per-(module, word) compiled id.
         // After a generic dispatch-merge the compiled body would still consult its
         // baked pre-merge dispatch table and miss merged methods, so the merged
         // case stays interpreted.
         .word_id = if (effective_dispatch_id == mod_word.dispatch_id) mod_word.word_id else null,
-        .body_owner = mod_word.body_owner,
         .action = switch (mod_word.action) {
             .compound => |instrs| .{ .compound = instrs },
             .native => |func| .{ .native = func },
             .host_callback => |host| .{ .host_callback = host },
         },
-    });
+    };
+
+    // Every other field ModuleWord and WordDefinition share by name copies straight across, so a
+    // field added to both later crosses the module boundary without another hand-edit here. The
+    // fields set explicitly above need conversion (action) or merge logic (source_module,
+    // dispatch_id, word_id) beyond a plain copy.
+    const handled_above = [_][]const u8{ "source_module", "dispatch_id", "word_id", "action" };
+    inline for (std.meta.fields(ModuleWord)) |field| {
+        const needs_custom_handling = comptime blk: {
+            for (handled_above) |h| {
+                if (std.mem.eql(u8, h, field.name)) break :blk true;
+            }
+            break :blk false;
+        };
+        if (!needs_custom_handling and @hasField(dict_mod.WordDefinition, field.name)) {
+            @field(definition, field.name) = @field(mod_word, field.name);
+        }
+    }
+
+    try ctx.defineImportedWord(name, definition);
     if (ctx.trace.trace_modules.import) {
         var tw = trace_mod.TraceWriter.init();
         trace_mod.traceModuleImport(&tw, ctx.current_source, name, module.name);
