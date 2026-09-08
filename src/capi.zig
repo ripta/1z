@@ -594,6 +594,11 @@ export fn onez_eval(ptr: ?*anyopaque, code: [*]const u8, len: usize) c_int {
     ctx.clearExecutionDetails();
     clearLastError(handle);
 
+    // Scopes a `pragma{ }` in the evaluated source to this call, the same way a loaded file's
+    // pragmas are scoped to the file.
+    ctx.pushPragmaFrame() catch return ONEZ_ERR_ALLOC;
+    defer ctx.popPragmaFrame();
+
     // Label evaluated code with a distinct source name so source-location
     // features (debugger breakpoints, current-source inspection) can target
     // it, mirroring onez_eval_file labelling with the file path.
@@ -642,6 +647,11 @@ export fn onez_eval_file(ptr: ?*anyopaque, path: ?[*:0]const u8) c_int {
 
     ctx.clearExecutionDetails();
     clearLastError(handle);
+
+    // Scopes a `pragma{ }` in the evaluated file to this call, the same way a loaded file's
+    // pragmas are scoped to the file.
+    ctx.pushPragmaFrame() catch return ONEZ_ERR_ALLOC;
+    defer ctx.popPragmaFrame();
 
     if (is_freestanding) {
         setLastError(handle, "onez_eval_file is not available on this build", .{});
@@ -825,6 +835,11 @@ export fn onez_check(ptr: ?*anyopaque, code: [*]const u8, len: usize) c_int {
     ctx.clearExecutionDetails();
     clearLastError(handle);
     clearDiagnostics(handle);
+
+    // Scopes a `pragma{ }` in the checked source to this call, the same way a loaded file's
+    // pragmas are scoped to the file.
+    ctx.pushPragmaFrame() catch return ONEZ_ERR_ALLOC;
+    defer ctx.popPragmaFrame();
 
     const prev_check_mode = ctx.check_mode;
     ctx.check_mode = true;

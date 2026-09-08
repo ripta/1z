@@ -1,0 +1,8 @@
+\ A pragma set in the prelude must be scoped to the prelude, the same way a pragma set in any
+\ other loaded file is scoped to that file. The prelude fixture here sets require-doc and defines
+\ nothing else, so this file runs against a bare word set; if the prelude's pragma frame leaked
+\ into this file's environment, the definition below would fail with missing-doc-comment before
+\ the stack is ever shown.
+
+undocumented-in-user-file: ( -- n ) [ 1 ] ;
+undocumented-in-user-file

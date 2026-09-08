@@ -365,12 +365,10 @@ fn applyStartupStatement(
 /// Execute the user startup file, when the path chain resolves one and it exists.
 ///
 /// The file gets a session-long local frame above the prelude's, and that frame becomes both the
-/// import target and the durable floor. It is deliberately never popped, so a word the file defines
-/// stays visible for the whole invocation and is attributable to the startup file rather than to
-/// the prelude. `Context.deinit` reclaims it.
-///
-/// No pragma frame is pushed. A `pragma{ }` in the file lands in the base frame `loadPrelude`
-/// pushes and never pops, so the setting survives into whatever the subcommand runs next.
+/// import target and the durable floor. It also gets a session-long pragma frame of its own, above
+/// the prelude's. Neither frame is ever popped, so a word or a pragma the file sets stays in effect
+/// for the whole invocation and is attributable to the startup file rather than to the prelude.
+/// `Context.deinit` reclaims both.
 ///
 /// A fault prints one diagnostic and abandons the rest of the file. The invocation continues, so
 /// its exit code reflects the program rather than the startup file.
@@ -393,6 +391,7 @@ fn runStartupFile(ctx: *Context, global: *const GlobalFlags, err_writer: anytype
     ctx.pushLocalFrame() catch return;
     ctx.import_frame_index = ctx.local_frames.items.len - 1;
     ctx.durable_frame_floor = ctx.import_frame_index;
+    ctx.pushPragmaFrame() catch return;
 
     // The path is reported verbatim rather than made relative to the cwd, so a diagnostic names the
     // path the user configured.

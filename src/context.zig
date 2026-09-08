@@ -1835,6 +1835,7 @@ pub const Context = struct {
 
         // Push the base pragma frame for file-scoped pragmas
         try self.pushPragmaFrame();
+        errdefer self.popPragmaFrame();
 
         // Register require-doc pragma with a native validator so enforcement
         // does not depend on prelude definitions.
@@ -1917,6 +1918,8 @@ pub const Context = struct {
             .parse_error => |err| return err,
             .needs_more_input => {},
         }
+
+        self.popPragmaFrame();
     }
 
     /// Free all resources used by the context.
