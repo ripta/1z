@@ -93,7 +93,7 @@ greeting: "en-US" <locale> <locale-chain> catalog-get
   H{ greeting: "Hello!" } "en-US" <locale> catalog-set
   missing-key: "en-US" <locale> <locale-chain> catalog-get
 ]
-"missing key throws" assert-error
+key-not-found: "missing key throws" assert-error-type
 
 \ --- catalog-get-or ---
 
@@ -135,4 +135,4 @@ H{ name: "Alice" } greeting: "de-DE" <locale> "en-US" <locale> <locale-chain-wit
   H{ greeting: "Hello!" } "en-US" <locale> catalog-set
   H{ } missing-key: "en-US" <locale> <locale-chain> catalog-format
 ]
-"catalog-format missing key throws" assert-error
+key-not-found: "catalog-format missing key throws" assert-error-type

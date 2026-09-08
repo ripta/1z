@@ -127,7 +127,7 @@ catalog-get?: ( catalog key chain -- string t | f ) [
 catalog-get: ( catalog key chain -- string ) [
   (catalog-lookup)
   dup option:some? [ option:some> ] [
-    drop f "message key not found in any locale" ECatalogKeyNotFound make-error throw
+    drop f "message key not found in any locale" EKeyNotFound make-error throw
   ] if
 ] ;
 
@@ -195,6 +195,6 @@ catalog-format: ( catalog args key chain -- string ) [
     \ Stack: args template locale
     format-message
   ] [
-    drop drop f "message key not found in any locale" ECatalogKeyNotFound make-error throw
+    drop drop f "message key not found in any locale" EKeyNotFound make-error throw
   ] if
 ] ;
