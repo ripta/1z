@@ -874,17 +874,34 @@ const baremetal_verify_script =
     \\echo "PASS: linked freestanding ELF carries _start/kernel_main/onez_baremetal_main/onez_virt_uart_writer and no hosted libc imports"
 ;
 
-fn addFfiIncludePath(b: *std.Build, module: *std.Build.Module, target: std.Build.ResolvedTarget) void {
+/// The macOS SDK the build reads headers and stub libraries out of.
+///
+/// `ONEZ_MACOS_SDK` names it outright. Zig picks an SDK by matching the running OS and offers no
+/// override, and on a host whose newest SDK it cannot consume the only way through is to stop
+/// asking and name one. Unset, this falls back to whatever Zig would have chosen.
+fn macosSdk(b: *std.Build, target: std.Build.ResolvedTarget) ?[]const u8 {
+    if (b.graph.env_map.get("ONEZ_MACOS_SDK")) |pinned| {
+        if (pinned.len > 0) return pinned;
+    }
+    return std.zig.system.darwin.getSdk(b.allocator, &target.result);
+}
+
+fn addFfiPaths(b: *std.Build, module: *std.Build.Module, target: std.Build.ResolvedTarget) void {
     // @cInclude("ffi.h") needs an extra include path on macOS where the
     // SDK places ffi.h under <sysroot>/usr/include/ffi/.  On Linux the
     // header is already in the default multiarch search path.
-    if (target.result.os.tag.isDarwin()) {
-        if (std.zig.system.darwin.getSdk(b.allocator, &target.result)) |sdk| {
-            module.addSystemIncludePath(.{
-                .cwd_relative = b.fmt("{s}/usr/include/ffi", .{sdk}),
-            });
-        }
-    }
+    if (!target.result.os.tag.isDarwin()) return;
+
+    const sdk = macosSdk(b, target) orelse return;
+    module.addSystemIncludePath(.{
+        .cwd_relative = b.fmt("{s}/usr/include/ffi", .{sdk}),
+    });
+
+    // The link needs the SDK's stub directory named too. A build that pins the SDK is one where
+    // Zig found none of its own, so nothing else puts libffi on the search path.
+    module.addLibraryPath(.{
+        .cwd_relative = b.fmt("{s}/usr/lib", .{sdk}),
+    });
 }
 
 const TestEntry = struct {
@@ -2503,7 +2520,7 @@ fn createCommonModule(
         module.addCSourceFile(.{ .file = b.path("ext/minicoro/minicoro.c"), .flags = &.{} });
         module.addIncludePath(b.path("ext/minicoro"));
         module.linkSystemLibrary("ffi", .{});
-        addFfiIncludePath(b, module, target);
+        addFfiPaths(b, module, target);
         addIrSources(b, module);
     }
     module.addOptions("build_options", options);

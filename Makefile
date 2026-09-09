@@ -2,6 +2,27 @@
 
 export DEVELOPER_DIR := /Library/Developer/CommandLineTools
 SHELL := /bin/bash
+
+# The macOS SDK the toolchain reads headers and stub libraries out of.
+#
+# Zig 0.15 targets arm64-macos and picks an SDK by matching the running OS, with no override. On
+# macOS 26 that lands on an SDK whose libSystem stub declares only x86_64 and arm64e, so the link
+# resolves nothing and every libc reference comes back undefined.
+#
+# Handing zig a DEVELOPER_DIR that xcrun rejects is what stops it asking the OS. It then falls back
+# to the libSystem stub it ships, which does carry arm64-macos. MACOS_SDK names the SDK for
+# everything that still needs real headers, and build.zig reads it as ONEZ_MACOS_SDK.
+#
+# The override is scoped to zig alone. DEVELOPER_DIR above stays intact for git, cc, and every
+# other tool that resolves through xcrun.
+#
+# Set MACOS_SDK empty to hand SDK selection back to zig.
+MACOS_SDK ?= $(wildcard /Library/Developer/CommandLineTools/SDKs/MacOSX15.4.sdk)
+export ONEZ_MACOS_SDK := $(MACOS_SDK)
+#
+# `env` rather than a bare VAR=value prefix, because most call sites run under `timeout`, which
+# execs its argument directly and cannot parse an assignment.
+ZIG = $(if $(MACOS_SDK),env DEVELOPER_DIR=$(CURDIR)/.no-macos-sdk ,)zig
 TARGET_TIMEOUT ?= 60
 TEST_CASE_TIMEOUT ?= 10
 AOT_TIMEOUT ?= 10
@@ -71,13 +92,13 @@ branch-info: ## Print branch, HEAD, and describe before building/testing
 	fi
 
 build: branch-info ## Build the project (default)
-	zig build --prefix $(ZIG_PREFIX) $(ZIG_CPU_ARG)
+	$(ZIG) build --prefix $(ZIG_PREFIX) $(ZIG_CPU_ARG)
 
 build-leaks: branch-info ## Build with allocation stack traces, so leak reports name the allocation site
-	zig build -Dalloc-stack-traces --prefix $(ZIG_PREFIX) $(ZIG_CPU_ARG)
+	$(ZIG) build -Dalloc-stack-traces --prefix $(ZIG_PREFIX) $(ZIG_CPU_ARG)
 
 release: branch-info ## Build with optimizations
-	zig build --release=fast --prefix $(ZIG_PREFIX) $(ZIG_CPU_ARG)
+	$(ZIG) build --release=fast --prefix $(ZIG_PREFIX) $(ZIG_CPU_ARG)
 
 run: build ## Build and run the 1z interpreter
 	./$(ZIG_PREFIX)/bin/1z $(ARGS)
@@ -98,45 +119,45 @@ leak-goldens-check: ## Fail if any test golden has baked-in GPA leak text
 	@echo "PASS: no GPA leak text in golden files"
 
 test-threads-1: ## Run all tests with default --threads=1 for integration tests
-	timeout $(TARGET_TIMEOUT) zig build test --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT)
+	timeout $(TARGET_TIMEOUT) $(ZIG) build test --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT)
 	$(MAKE) embed-stdlib-test
-	timeout $(TARGET_TIMEOUT) zig build integration-test --prefix $(ZIG_PREFIX) $(ZIG_TEST_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) -Dtest-threads=1 $(TEST_FILTER_ARG)
-	timeout $(TARGET_TIMEOUT) zig build fmt-test --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) $(TEST_FILTER_ARG)
-	timeout $(TARGET_TIMEOUT) zig build fmt-1z-test --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) $(TEST_FILTER_ARG)
-	timeout $(TARGET_TIMEOUT) zig build eager-integration-test --prefix $(ZIG_PREFIX) $(ZIG_TEST_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) -Dtest-threads=1 $(TEST_FILTER_ARG)
-	timeout $(TARGET_TIMEOUT) zig build lsp-test --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) $(TEST_FILTER_ARG)
-	timeout $(TARGET_TIMEOUT) zig build aot-test --prefix $(ZIG_PREFIX) $(ZIG_TEST_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) -Daot-build-timeout=$(AOT_BUILD_TIMEOUT) $(TEST_FILTER_ARG)
+	timeout $(TARGET_TIMEOUT) $(ZIG) build integration-test --prefix $(ZIG_PREFIX) $(ZIG_TEST_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) -Dtest-threads=1 $(TEST_FILTER_ARG)
+	timeout $(TARGET_TIMEOUT) $(ZIG) build fmt-test --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) $(TEST_FILTER_ARG)
+	timeout $(TARGET_TIMEOUT) $(ZIG) build fmt-1z-test --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) $(TEST_FILTER_ARG)
+	timeout $(TARGET_TIMEOUT) $(ZIG) build eager-integration-test --prefix $(ZIG_PREFIX) $(ZIG_TEST_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) -Dtest-threads=1 $(TEST_FILTER_ARG)
+	timeout $(TARGET_TIMEOUT) $(ZIG) build lsp-test --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) $(TEST_FILTER_ARG)
+	timeout $(TARGET_TIMEOUT) $(ZIG) build aot-test --prefix $(ZIG_PREFIX) $(ZIG_TEST_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) -Daot-build-timeout=$(AOT_BUILD_TIMEOUT) $(TEST_FILTER_ARG)
 	$(MAKE) lib-test
 	$(MAKE) games-test
 
 test-threads-auto: ## Run all tests with default --threads=auto for integration tests
-	timeout $(TARGET_TIMEOUT) zig build test --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT)
+	timeout $(TARGET_TIMEOUT) $(ZIG) build test --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT)
 	$(MAKE) embed-stdlib-test
-	timeout $(TARGET_TIMEOUT) zig build integration-test --prefix $(ZIG_PREFIX) $(ZIG_TEST_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) -Dtest-threads=auto $(TEST_FILTER_ARG)
-	timeout $(TARGET_TIMEOUT) zig build fmt-test --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) $(TEST_FILTER_ARG)
-	timeout $(TARGET_TIMEOUT) zig build fmt-1z-test --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) $(TEST_FILTER_ARG)
-	timeout $(TARGET_TIMEOUT) zig build eager-integration-test --prefix $(ZIG_PREFIX) $(ZIG_TEST_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) -Dtest-threads=auto $(TEST_FILTER_ARG)
-	timeout $(TARGET_TIMEOUT) zig build lsp-test --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) $(TEST_FILTER_ARG)
-	timeout $(TARGET_TIMEOUT) zig build aot-test --prefix $(ZIG_PREFIX) $(ZIG_TEST_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) -Daot-build-timeout=$(AOT_BUILD_TIMEOUT) $(TEST_FILTER_ARG)
+	timeout $(TARGET_TIMEOUT) $(ZIG) build integration-test --prefix $(ZIG_PREFIX) $(ZIG_TEST_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) -Dtest-threads=auto $(TEST_FILTER_ARG)
+	timeout $(TARGET_TIMEOUT) $(ZIG) build fmt-test --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) $(TEST_FILTER_ARG)
+	timeout $(TARGET_TIMEOUT) $(ZIG) build fmt-1z-test --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) $(TEST_FILTER_ARG)
+	timeout $(TARGET_TIMEOUT) $(ZIG) build eager-integration-test --prefix $(ZIG_PREFIX) $(ZIG_TEST_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) -Dtest-threads=auto $(TEST_FILTER_ARG)
+	timeout $(TARGET_TIMEOUT) $(ZIG) build lsp-test --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) $(TEST_FILTER_ARG)
+	timeout $(TARGET_TIMEOUT) $(ZIG) build aot-test --prefix $(ZIG_PREFIX) $(ZIG_TEST_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) -Daot-build-timeout=$(AOT_BUILD_TIMEOUT) $(TEST_FILTER_ARG)
 	$(MAKE) lib-test
 	$(MAKE) games-test
 
 unit-test: ## Run unit tests
-	timeout $(TARGET_TIMEOUT) zig build test --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT)
+	timeout $(TARGET_TIMEOUT) $(ZIG) build test --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT)
 
 capi-test: ## Run hosted C-API embedding-library unit tests
-	timeout $(CAPI_TEST_TIMEOUT) zig build capi-test --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) -Dembed-stdlib=true
+	timeout $(CAPI_TEST_TIMEOUT) $(ZIG) build capi-test --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) -Dembed-stdlib=true
 
 capi-release-run: ## Build the embedding example against a ReleaseFast lib1z and run it
-	zig build --release=fast --prefix $(ZIG_PREFIX)/release $(ZIG_CPU_ARG)
+	$(ZIG) build --release=fast --prefix $(ZIG_PREFIX)/release $(ZIG_CPU_ARG)
 	zig cc -o $(ZIG_PREFIX)/release/embed examples/embed.c -Iinclude $(ZIG_PREFIX)/release/clib/lib1z.a -lffi
 	./$(ZIG_PREFIX)/release/embed
 
 embed-stdlib-test: ## Run unit tests with -Dembed-stdlib=true
-	timeout $(TARGET_TIMEOUT) zig build test --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) -Dembed-stdlib=true
+	timeout $(TARGET_TIMEOUT) $(ZIG) build test --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) -Dembed-stdlib=true
 
 unit-coverage: ## Measure unit-test coverage with kcov (report under $(COVERAGE_DIR)/unit)
-	zig build unit-test-bin --prefix $(ZIG_PREFIX) $(ZIG_CPU_ARG)
+	$(ZIG) build unit-test-bin --prefix $(ZIG_PREFIX) $(ZIG_CPU_ARG)
 	rm -rf $(COVERAGE_DIR)/unit $(COVERAGE_DIR)/combined
 	mkdir -p $(COVERAGE_DIR)/unit
 	$(KCOV) $(KCOV_ARGS) $(COVERAGE_DIR)/unit ./$(ZIG_PREFIX)/test/1z-unit-test
@@ -151,7 +172,7 @@ coverage: unit-coverage integration-coverage ## Measure combined unit + integrat
 	@pct=$$(grep -o '"percent_covered": "[0-9.]*"' $(COVERAGE_DIR)/combined/kcov-merged/coverage.json | tail -1 | grep -o '[0-9.]*'); echo "Combined coverage (union of both): $${pct:-?}%, report at $(COVERAGE_DIR)/combined/index.html"
 
 integration-test: ## Run integration tests
-	timeout $(TARGET_TIMEOUT) zig build integration-test --prefix $(ZIG_PREFIX) $(ZIG_TEST_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) $(TEST_FILTER_ARG)
+	timeout $(TARGET_TIMEOUT) $(ZIG) build integration-test --prefix $(ZIG_PREFIX) $(ZIG_TEST_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) $(TEST_FILTER_ARG)
 
 lib-test: build ## Run *_test.1z unit tests under lib/
 	find lib -name '*_test.1z' -print0 | xargs -0 -P $(TEST_JOBS) -n 1 timeout $(TARGET_TIMEOUT) ./$(ZIG_PREFIX)/bin/1z test
@@ -160,19 +181,19 @@ games-test: build ## Run *_test.1z unit tests under every examples/wasm-*/ game 
 	find examples -path 'examples/wasm-*' -name '*_test.1z' -print0 | xargs -0 -P $(TEST_JOBS) -n 1 timeout $(TARGET_TIMEOUT) ./$(ZIG_PREFIX)/bin/1z test
 
 jit-build: ## Build only the 1z-jit binary
-	timeout $(TIMEOUT) zig build jit-build --prefix $(ZIG_PREFIX)
+	timeout $(TIMEOUT) $(ZIG) build jit-build --prefix $(ZIG_PREFIX)
 
 jit-test: ## Run integration tests with JIT auto-compilation
-	timeout $(TARGET_TIMEOUT) zig build integration-test --prefix $(ZIG_PREFIX) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT)
+	timeout $(TARGET_TIMEOUT) $(ZIG) build integration-test --prefix $(ZIG_PREFIX) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT)
 
 eager-test: ## Run integration tests with eager compilation
-	timeout $(TARGET_TIMEOUT) zig build eager-integration-test --prefix $(ZIG_PREFIX) $(ZIG_TEST_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) $(TEST_FILTER_ARG)
+	timeout $(TARGET_TIMEOUT) $(ZIG) build eager-integration-test --prefix $(ZIG_PREFIX) $(ZIG_TEST_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) $(TEST_FILTER_ARG)
 
 fmt-test: ## Run formatter tests
-	timeout $(TARGET_TIMEOUT) zig build fmt-test --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) $(TEST_FILTER_ARG)
+	timeout $(TARGET_TIMEOUT) $(ZIG) build fmt-test --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) $(TEST_FILTER_ARG)
 
 fmt-1z-test: ## Compare the 1z formatter against the phases of the Zig formatter it has reached
-	timeout $(TARGET_TIMEOUT) zig build fmt-1z-test --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) $(TEST_FILTER_ARG)
+	timeout $(TARGET_TIMEOUT) $(ZIG) build fmt-1z-test --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) $(TEST_FILTER_ARG)
 
 aot-determinism-check: build ## Verify double-builds of the AOT corpus emit byte-identical C in both image modes
 	@scripts/aot-determinism-check.sh ./$(ZIG_PREFIX)/bin/1z
@@ -202,7 +223,7 @@ aot-checks-linux: ## Run aot-checks inside the project's Debian Docker image
 	    bash -c 'make build && make aot-checks'
 
 aot-test: aot-checks ## Run AOT build integration tests
-	timeout $(TARGET_TIMEOUT) zig build aot-test --prefix $(ZIG_PREFIX) $(ZIG_TEST_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) -Daot-build-timeout=$(AOT_BUILD_TIMEOUT) $(TEST_FILTER_ARG)
+	timeout $(TARGET_TIMEOUT) $(ZIG) build aot-test --prefix $(ZIG_PREFIX) $(ZIG_TEST_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) -Daot-build-timeout=$(AOT_BUILD_TIMEOUT) $(TEST_FILTER_ARG)
 
 aot-line-directives-check: build ## Verify AOT-emitted C carries `#line` directives at word and quotation function entries
 	$(eval _bin := $(call mktemp_or_die,/tmp/1z-line-directives-XXXXXX))
@@ -578,7 +599,7 @@ aot-interpreter-strip-check: build ## Verify linker GC strips the prelude loader
 	echo "PASS: 1z inspect reports linked=no for interpreter-free, linked=yes for interpreter-linked"
 
 bail-stats: ## Build with bail instrumentation and AOT-run a file (FILE=)
-	zig build --prefix $(ZIG_PREFIX) -Dbail-stats=true
+	$(ZIG) build --prefix $(ZIG_PREFIX) -Dbail-stats=true
 	$(eval _aot_tmp := $(call mktemp_or_die,/tmp/1z-bail-stats-XXXXXX))
 	@trap 'rm -f $(_aot_tmp)' EXIT; \
 	timeout $(AOT_TIMEOUT) ./$(ZIG_PREFIX)/bin/1z build $(FILE) -o $(_aot_tmp) && \
@@ -601,7 +622,7 @@ font8x8-vendor: ## Re-vendor ext/font8x8/ (set FONT8X8_COMMIT and FONT8X8_SHA256
 	./ext/font8x8/vendor.sh
 
 lsp-test: ## Run LSP server tests
-	timeout $(TARGET_TIMEOUT) zig build lsp-test --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) $(TEST_FILTER_ARG)
+	timeout $(TARGET_TIMEOUT) $(ZIG) build lsp-test --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) $(TEST_FILTER_ARG)
 
 tree-sitter-test: ## Run tree-sitter grammar tests for contrib/tree-sitter/
 	cd contrib/tree-sitter && npm test
@@ -611,16 +632,16 @@ contrib: tree-sitter-test ## Run all non-Zig contrib tooling checks (tree-sitter
 update-golden: update-integration-golden update-aot-golden update-lsp-golden update-fmt-golden ## Update all golden files
 
 update-aot-golden: ## Update AOT test golden files
-	timeout $(TARGET_TIMEOUT) zig build update-aot-golden --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) $(TEST_FILTER_ARG)
+	timeout $(TARGET_TIMEOUT) $(ZIG) build update-aot-golden --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) $(TEST_FILTER_ARG)
 
 update-lsp-golden: ## Update LSP test golden files
-	timeout $(TARGET_TIMEOUT) zig build update-lsp-golden --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) $(TEST_FILTER_ARG)
+	timeout $(TARGET_TIMEOUT) $(ZIG) build update-lsp-golden --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) $(TEST_FILTER_ARG)
 
 update-integration-golden: ## Update integration test golden files
-	timeout $(TARGET_TIMEOUT) zig build update-golden --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) $(TEST_FILTER_ARG)
+	timeout $(TARGET_TIMEOUT) $(ZIG) build update-golden --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) $(TEST_FILTER_ARG)
 
 update-fmt-golden: ## Update formatter test golden files
-	timeout $(TARGET_TIMEOUT) zig build update-fmt-golden --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) $(TEST_FILTER_ARG)
+	timeout $(TARGET_TIMEOUT) $(ZIG) build update-fmt-golden --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) $(TEST_FILTER_ARG)
 
 # The collision_*.1z build-cost drivers are AOT-built by benchmark-collision-build, never
 # interpreted as benchmarks; the tcp+tls one dials sockets and cannot run standalone.
@@ -802,7 +823,7 @@ build-example: build ## Build the C embedding example
 
 freestanding-build: ## Compile-check the freestanding capi library for riscv64
 	@echo "Building lib1z.a for riscv64-freestanding-none..."
-	zig build --prefix $(ZIG_PREFIX)/freestanding-riscv64 -Dtarget=riscv64-freestanding-none --verbose install
+	$(ZIG) build --prefix $(ZIG_PREFIX)/freestanding-riscv64 -Dtarget=riscv64-freestanding-none --verbose install
 	@if [ ! -f $(ZIG_PREFIX)/freestanding-riscv64/clib/lib1z.a ]; then \
 		echo "FAIL: lib1z.a was not produced"; \
 		exit 1; \
@@ -818,7 +839,7 @@ freestanding-build: ## Compile-check the freestanding capi library for riscv64
 
 wasm-freestanding-build: ## Compile-check the wasm capi library for wasm32-freestanding
 	@echo "Building lib1z.a for wasm32-freestanding..."
-	zig build --prefix $(ZIG_PREFIX)/wasm-freestanding -Dtarget=wasm32-freestanding -Dembed-stdlib=true --verbose install
+	$(ZIG) build --prefix $(ZIG_PREFIX)/wasm-freestanding -Dtarget=wasm32-freestanding -Dembed-stdlib=true --verbose install
 	@if [ ! -f $(ZIG_PREFIX)/wasm-freestanding/clib/lib1z.a ]; then \
 		echo "FAIL: lib1z.a was not produced"; \
 		exit 1; \
@@ -826,7 +847,7 @@ wasm-freestanding-build: ## Compile-check the wasm capi library for wasm32-frees
 	@echo "PASS: lib1z.a built for wasm32-freestanding"
 
 wasm: ## Build the wasm32-freestanding browser module and copy it into examples/wasm-repl/, examples/wasm-game/, examples/wasm-snake/, and examples/wasm-minesweeper/
-	zig build wasm --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG)
+	$(ZIG) build wasm --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG)
 	@if [ ! -f $(ZIG_PREFIX)/wasm/1z.wasm ]; then \
 		echo "FAIL: 1z.wasm was not produced"; \
 		exit 1; \
@@ -847,7 +868,7 @@ wasm-minesweeper-verify: wasm ## Headlessly verify minesweeper against the wasm 
 	node --test tests/wasm/verify-minesweeper.mjs
 
 baremetal-riscv64-test: ## Build the riscv64 virt platform and AOT freestanding ELFs, then boot them under QEMU and compare serial output
-	timeout $(TARGET_TIMEOUT) zig build baremetal-riscv64-test --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG)
+	timeout $(TARGET_TIMEOUT) $(ZIG) build baremetal-riscv64-test --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG)
 	scripts/baremetal-riscv64-test.sh $(ZIG_PREFIX)/baremetal/riscv64/1z-hello.elf tests/baremetal/riscv64/hello.serial.expected $(TARGET_TIMEOUT)
 	scripts/baremetal-riscv64-test.sh $(ZIG_PREFIX)/baremetal/riscv64/1z-dispatch.elf tests/baremetal/riscv64/dispatch.serial.expected $(TARGET_TIMEOUT)
 	scripts/baremetal-riscv64-test.sh $(ZIG_PREFIX)/baremetal/riscv64/1z-mixed-operand.elf tests/baremetal/riscv64/mixed_operand.serial.expected $(TARGET_TIMEOUT)
