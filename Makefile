@@ -13,12 +13,15 @@ SHELL := /bin/bash
 # to the libSystem stub it ships, which does carry arm64-macos. MACOS_SDK names the SDK for
 # everything that still needs real headers, and build.zig reads it as ONEZ_MACOS_SDK.
 #
-# The override is scoped to zig alone. DEVELOPER_DIR above stays intact for git, cc, and every
-# other tool that resolves through xcrun.
+# The override has to be on zig's own command line, because the build runner is linked before
+# build.zig runs. Zig then hands its environment to every compile child and every test or AOT step
+# it spawns, so build.zig puts ONEZ_HOST_DEVELOPER_DIR back as DEVELOPER_DIR for all of them. A
+# test binary shelling out to cc, and an AOT build shelling out to zig cc, both need a real SDK.
 #
 # Set MACOS_SDK empty to hand SDK selection back to zig.
 MACOS_SDK ?= $(wildcard /Library/Developer/CommandLineTools/SDKs/MacOSX15.4.sdk)
 export ONEZ_MACOS_SDK := $(MACOS_SDK)
+export ONEZ_HOST_DEVELOPER_DIR := $(if $(MACOS_SDK),$(DEVELOPER_DIR),)
 #
 # `env` rather than a bare VAR=value prefix, because most call sites run under `timeout`, which
 # execs its argument directly and cannot parse an assignment.

@@ -202,6 +202,8 @@ pub fn build(b: *std.Build) void {
     // ONEZ_TEST_FILTER) explicitly. Same comma-separated substring semantics as
     // the integration/fmt/aot/lsp filters.
     if (test_filter) |filter| run_lib_unit_tests.setEnvironmentVariable("ONEZ_TEST_FILTER", filter);
+    // Two codegen tests compile their emitted C with `cc`.
+    restoreHostDeveloperDir(b, run_lib_unit_tests);
 
     // Expose the unit-test binary at a stable path so external coverage
     // tooling such as kcov can wrap it. Installed under zig-out/test/ to keep
@@ -223,6 +225,7 @@ pub fn build(b: *std.Build) void {
     const run_freestanding_capi_unit_tests = b.addRunArtifact(freestanding_capi_unit_tests);
     run_freestanding_capi_unit_tests.setName("freestanding capi unit tests");
     run_freestanding_capi_unit_tests.setEnvironmentVariable("ONEZ_TEST_FILTER", test_filter orelse "freestanding");
+    restoreHostDeveloperDir(b, run_freestanding_capi_unit_tests);
 
     // Hosted C-API (embedding library) unit tests. Exposed under its own
     // `capi-test` step rather than `test` because several tests load stdlib
@@ -239,6 +242,7 @@ pub fn build(b: *std.Build) void {
     const run_hosted_capi_unit_tests = b.addRunArtifact(hosted_capi_unit_tests);
     run_hosted_capi_unit_tests.setName("hosted capi unit tests");
     if (test_filter) |filter| run_hosted_capi_unit_tests.setEnvironmentVariable("ONEZ_TEST_FILTER", filter);
+    restoreHostDeveloperDir(b, run_hosted_capi_unit_tests);
 
     // wasm C-API surface, host-compiled and run natively so its eval/stack/register-word logic
     // is verified by a real test run; the actual wasm32-freestanding cross-compile is checked
@@ -256,6 +260,7 @@ pub fn build(b: *std.Build) void {
     const run_wasm_capi_unit_tests = b.addRunArtifact(wasm_capi_unit_tests);
     run_wasm_capi_unit_tests.setName("wasm capi unit tests");
     if (test_filter) |filter| run_wasm_capi_unit_tests.setEnvironmentVariable("ONEZ_TEST_FILTER", filter);
+    restoreHostDeveloperDir(b, run_wasm_capi_unit_tests);
 
     const capi_test_step = b.step("capi-test", "Run hosted C-API embedding-library unit tests");
     capi_test_step.dependOn(&run_hosted_capi_unit_tests.step);
@@ -731,6 +736,7 @@ fn addBaremetalRiscv64VirtTest(
     //              plus the platform linker script.
     const aot_build = b.addRunArtifact(host_exe);
     aot_build.setName("baremetal aot build: noop");
+    restoreHostDeveloperDir(b, aot_build);
     aot_build.addArg("build");
     aot_build.addArg("--target=riscv64-freestanding-none");
     aot_build.addArg("--interpreter-fallback=false");
@@ -757,6 +763,7 @@ fn addBaremetalRiscv64VirtTest(
     //              rather than an opaque build-step failure.
     const hello_build = b.addRunArtifact(host_exe);
     hello_build.setName("baremetal aot build: hello");
+    restoreHostDeveloperDir(b, hello_build);
     hello_build.addArg("build");
     hello_build.addArg("--target=riscv64-freestanding-none");
     hello_build.addArg("--interpreter-fallback=false");
@@ -775,6 +782,7 @@ fn addBaremetalRiscv64VirtTest(
     //              dispatch replay and `aotTryDispatchGenericOrCall` bodies.
     const dispatch_build = b.addRunArtifact(host_exe);
     dispatch_build.setName("baremetal aot build: dispatch");
+    restoreHostDeveloperDir(b, dispatch_build);
     dispatch_build.addArg("build");
     dispatch_build.addArg("--target=riscv64-freestanding-none");
     dispatch_build.addArg("--interpreter-fallback=false");
@@ -798,6 +806,7 @@ fn addBaremetalRiscv64VirtTest(
     //              full-lookup dispatch and its named miss trap.
     const mixed_build = b.addRunArtifact(host_exe);
     mixed_build.setName("baremetal aot build: mixed-operand");
+    restoreHostDeveloperDir(b, mixed_build);
     mixed_build.addArg("build");
     mixed_build.addArg("--target=riscv64-freestanding-none");
     mixed_build.addArg("--interpreter-fallback=false");
@@ -873,6 +882,22 @@ const baremetal_verify_script =
     \\fi
     \\echo "PASS: linked freestanding ELF carries _start/kernel_main/onez_baremetal_main/onez_virt_uart_writer and no hosted libc imports"
 ;
+
+/// Give `run` the host's real `DEVELOPER_DIR`, for a step whose program shells out to a compiler.
+///
+/// Zig picks a macOS SDK by matching the running OS and offers no override, so the Makefile hands
+/// it a `DEVELOPER_DIR` that xcrun rejects. Zig's own compile steps need that, and it has to be on
+/// zig's command line, because the build runner links before this file ever runs.
+///
+/// Everything the build then runs inherits the same rejected path and finds no SDK at all. A unit
+/// test shelling out to `cc` gets an xcrun error, and an AOT build shelling out to `zig cc` links
+/// against nothing. `ONEZ_HOST_DEVELOPER_DIR` carries the real one past the override, for the
+/// spawned steps alone.
+fn restoreHostDeveloperDir(b: *std.Build, run: *std.Build.Step.Run) void {
+    const host = b.graph.env_map.get("ONEZ_HOST_DEVELOPER_DIR") orelse return;
+    if (host.len == 0) return;
+    run.setEnvironmentVariable("DEVELOPER_DIR", host);
+}
 
 /// The macOS SDK the build reads headers and stub libraries out of.
 ///
@@ -1268,6 +1293,7 @@ fn addWrappedCommand(
     run.addArg("--");
     for (extra_inputs) |input| run.addFileInput(input);
     run.setName(label);
+    restoreHostDeveloperDir(b, run);
     return run;
 }
 
@@ -1813,6 +1839,7 @@ fn addAotTests(
             }
 
             const update_compile_inspect = b.addSystemCommand(&.{exe_path});
+            restoreHostDeveloperDir(b, update_compile_inspect);
             update_compile_inspect.addArg("build");
             update_compile_inspect.addArg(b.fmt("--stdlib-path={s}/lib", .{b.build_root.path orelse "."}));
             update_compile_inspect.addFileArg(b.path(te.file_path));
@@ -1909,6 +1936,7 @@ fn addAotTests(
 
             {
                 const update_compile = b.addSystemCommand(&.{exe_path});
+                restoreHostDeveloperDir(b, update_compile);
                 update_compile.addArg("build");
                 update_compile.addArg(b.fmt("--stdlib-path={s}/lib", .{b.build_root.path orelse "."}));
                 update_compile.addFileArg(b.path(te.file_path));
@@ -2000,6 +2028,7 @@ fn addAotTests(
         // override-pinned redirects. The per-entry stdout golden is always this suite's.
         {
             const update_compile = b.addSystemCommand(&.{exe_path});
+            restoreHostDeveloperDir(b, update_compile);
             update_compile.addArg("build");
             update_compile.addArg(b.fmt("--stdlib-path={s}/lib", .{b.build_root.path orelse "."}));
             update_compile.addFileArg(b.path(te.file_path));
