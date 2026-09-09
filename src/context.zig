@@ -61,6 +61,7 @@ const LockOrderTracker = lock_order.LockOrderTracker;
 const QuotationStampStore = @import("quotation_stamp_store.zig").QuotationStampStore;
 const QuotationSourceStore = @import("quotation_source_store.zig").QuotationSourceStore;
 const CarryableScopeGate = @import("carryable_scope_gate.zig").CarryableScopeGate;
+const NestedNameCache = @import("nested_name_cache.zig").NestedNameCache;
 const may_define = @import("may_define.zig");
 const closure_body_registry = @import("closure_body_registry.zig");
 const LoadLock = @import("load_lock.zig").LoadLock;
@@ -1266,6 +1267,16 @@ pub const Context = struct {
     /// entry that misses can skip `findCapturedScopeForBody` rather than locking every ancestor's
     /// `captured_scope_mu` to learn the same thing.
     carryable_scope_gate: *CarryableScopeGate = undefined,
+    /// Process-shared nested bare-word names for parsed bodies, keyed by instruction-slice
+    /// pointer. Heap-allocated by the root context and shared by pointer to all child task
+    /// contexts.
+    ///
+    /// A body's nested names are fixed when it is parsed, and the capture gate needs them on every
+    /// push, so the walk over its nested quotation literals runs once here rather than per push.
+    ///
+    /// Absence does not mean "no nested names". Only a body the parser finished on the root arena
+    /// is filled, so a miss means the gate has to walk. See `NestedNameCache`.
+    nested_name_cache: *NestedNameCache = undefined,
     /// Process-wide lock serializing module loads. Heap-allocated by the root context and
     /// shared by pointer to all child task contexts.
     ///
@@ -1449,6 +1460,12 @@ pub const Context = struct {
         // frees it in deinit.
         ctx.carryable_scope_gate = CarryableScopeGate.create(allocator) catch |err| {
             std.debug.panic("Failed to allocate carryable scope gate: {any}", .{err});
+        };
+
+        // Allocate the shared nested-name cache on the long-lived allocator; the root context
+        // frees it in deinit.
+        ctx.nested_name_cache = NestedNameCache.create(allocator) catch |err| {
+            std.debug.panic("Failed to allocate nested name cache: {any}", .{err});
         };
 
         // Allocate the shared reified-quotation decode cache on the long-lived allocator; the
@@ -1636,6 +1653,10 @@ pub const Context = struct {
         // Share the parent's carryable-scope gate so a body marked anywhere is visible here.
         // Aliased, never retained: the root owns it.
         ctx.carryable_scope_gate = parent.carryable_scope_gate;
+
+        // Share the parent's nested-name cache so a body parsed there answers the capture gate off
+        // the one walk instead of a fresh one here. Aliased, never retained: the root owns it.
+        ctx.nested_name_cache = parent.nested_name_cache;
 
         // Share the parent's reified-quotation decode cache so a task's `jitPushQuotation`
         // reuses the process-wide decode instead of decoding onto its own arena. Aliased, never
@@ -2027,6 +2048,7 @@ pub const Context = struct {
             self.quotation_stamp_store.destroy();
             self.quotation_source_store.destroy();
             self.carryable_scope_gate.destroy();
+            self.nested_name_cache.destroy();
             self.reified_decode_cache.destroy();
             self.load_lock.destroy();
             self.binding_names.destroy();
@@ -2079,6 +2101,28 @@ pub const Context = struct {
     pub fn quotationBodySource(self: *const Context, instructions: []const Instruction) ?[]const u8 {
         if (instructions.len == 0) return null;
         return self.quotation_source_store.lookup(@intFromPtr(instructions.ptr));
+    }
+
+    /// Record the bare-word names `instructions`' nested quotation literals call, so the capture
+    /// gate answers from a lookup rather than walking those bodies on every push.
+    ///
+    /// The parser calls this for every body it finishes, alongside the source stamp. Bodies built
+    /// at runtime, by `curry` or an image decode, carry no record and the gate walks them.
+    ///
+    /// Entries are permanent and the recorded names alias the body, so only a body the root arena
+    /// owns may enter. A body parsed onto a task or scoped-eval arena dies with it, and its key
+    /// would then falsely match a later unrelated allocation at the same address.
+    pub fn cacheQuotationBodyNestedNames(self: *Context, instructions: []const Instruction) !void {
+        if (instructions.len == 0) return;
+        if (self.stateTarget() != self.rootContext()) return;
+        try self.nested_name_cache.fill(@intFromPtr(instructions.ptr), instructions);
+    }
+
+    /// The bare-word names `instructions`' nested quotation literals call, or null for a body that
+    /// was never cached. Null is "unknown", not "none": the caller has to walk.
+    pub fn quotationBodyNestedNames(self: *const Context, instructions: []const Instruction) ?[]const []const u8 {
+        if (instructions.len == 0) return null;
+        return self.nested_name_cache.lookup(@intFromPtr(instructions.ptr));
     }
 
     /// The file `def`'s compound body was parsed in, from the body stamps. Null when the action
@@ -11957,6 +12001,87 @@ test "initForTask: shares the parent's carryable scope gate" {
     // The task aliased the gate without retaining, so its teardown left the root's intact.
     try std.testing.expect(parent.carryable_scope_gate.isMarked(0x1000));
     try std.testing.expect(parent.carryable_scope_gate.isMarked(0x2000));
+}
+
+test "init: the root context owns an empty nested name cache" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    try std.testing.expectEqual(@as(usize, 0), ctx.nested_name_cache.count());
+    try std.testing.expect(ctx.nested_name_cache.lookup(0x1000) == null);
+}
+
+test "initForTask: shares the parent's nested name cache" {
+    var parent = Context.init(std.testing.allocator);
+    defer parent.deinit();
+
+    var scheduler = try std.testing.allocator.create(Scheduler);
+    defer std.testing.allocator.destroy(scheduler);
+    scheduler.* = try Scheduler.init(std.testing.allocator);
+    defer scheduler.deinit();
+
+    const nested = [_]Instruction{.{ .op = .{ .call_word = "from-parent" }, .line = 0 }};
+    const body = [_]Instruction{.{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = &nested } } }, .line = 0 }};
+    try parent.cacheQuotationBodyNestedNames(&body);
+
+    {
+        var task_ctx = try Context.initForTask(std.testing.allocator, &parent, scheduler);
+        defer task_ctx.deinit();
+
+        // A body parsed on the parent answers the capture gate here off the parent's one walk.
+        try std.testing.expectEqual(parent.nested_name_cache, task_ctx.nested_name_cache);
+        const names = task_ctx.quotationBodyNestedNames(&body) orelse return error.TestExpectedEntry;
+        try std.testing.expectEqual(@as(usize, 1), names.len);
+        try std.testing.expectEqualStrings("from-parent", names[0]);
+    }
+
+    // The task aliased the cache without retaining, so its teardown left the root's intact.
+    try std.testing.expect(parent.quotationBodyNestedNames(&body) != null);
+}
+
+test "cacheQuotationBodyNestedNames: records a nested name and distinguishes empty from absent" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const nested = [_]Instruction{.{ .op = .{ .call_word = "inner" }, .line = 0 }};
+    const with_nested = [_]Instruction{.{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = &nested } } }, .line = 0 }};
+    const flat = [_]Instruction{.{ .op = .{ .call_word = "outer" }, .line = 0 }};
+
+    try std.testing.expect(ctx.quotationBodyNestedNames(&with_nested) == null);
+
+    try ctx.cacheQuotationBodyNestedNames(&with_nested);
+    try ctx.cacheQuotationBodyNestedNames(&flat);
+
+    const names = ctx.quotationBodyNestedNames(&with_nested) orelse return error.TestExpectedEntry;
+    try std.testing.expectEqual(@as(usize, 1), names.len);
+    try std.testing.expectEqualStrings("inner", names[0]);
+
+    // A body with no nested literal is recorded as an empty set, not left absent: absence means
+    // the gate has to walk, and this body has nothing to find.
+    const flat_names = ctx.quotationBodyNestedNames(&flat) orelse return error.TestExpectedEntry;
+    try std.testing.expectEqual(@as(usize, 0), flat_names.len);
+}
+
+test "cacheQuotationBodyNestedNames: a body whose state target is not the root does not enter" {
+    var parent = Context.init(std.testing.allocator);
+    defer parent.deinit();
+
+    var scheduler = try std.testing.allocator.create(Scheduler);
+    defer std.testing.allocator.destroy(scheduler);
+    scheduler.* = try Scheduler.init(std.testing.allocator);
+    defer scheduler.deinit();
+
+    var task_ctx = try Context.initForTask(std.testing.allocator, &parent, scheduler);
+    defer task_ctx.deinit();
+
+    // The task's own arena owns anything it parses, so the body's address is recyclable and the
+    // permanent cache must not key on it.
+    const nested = [_]Instruction{.{ .op = .{ .call_word = "inner" }, .line = 0 }};
+    const body = [_]Instruction{.{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = &nested } } }, .line = 0 }};
+    try task_ctx.cacheQuotationBodyNestedNames(&body);
+
+    try std.testing.expect(task_ctx.quotationBodyNestedNames(&body) == null);
+    try std.testing.expectEqual(@as(usize, 0), task_ctx.nested_name_cache.count());
 }
 
 test "initForTask: shares the parent's module-load lock" {

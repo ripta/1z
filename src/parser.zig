@@ -643,6 +643,7 @@ pub fn parseTopLevel(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*Context
     if (ctx) |c| {
         c.registerQuotationContainerLiterals(instrs) catch return ParseError.OutOfMemory;
         c.stampQuotationBodySource(instrs) catch return ParseError.OutOfMemory;
+        c.cacheQuotationBodyNestedNames(instrs) catch return ParseError.OutOfMemory;
     }
     return instrs;
 }
@@ -684,6 +685,7 @@ pub fn parseQuotationUntil(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*C
             if (ctx) |c| {
                 c.registerQuotationContainerLiterals(instrs) catch return ParseError.OutOfMemory;
                 c.stampQuotationBodySource(instrs) catch return ParseError.OutOfMemory;
+                c.cacheQuotationBodyNestedNames(instrs) catch return ParseError.OutOfMemory;
             }
             return Quotation{ .instructions = instrs, .effect = quotation_effect };
         } else if (std.mem.eql(u8, token, "[")) {
@@ -1776,6 +1778,25 @@ test "parse-time word preserves call_word barrier ordering" {
     try std.testing.expectEqualStrings("some-word", instrs[1].op.call_word);
     try std.testing.expectEqualStrings("bar", instrs[2].op.push_literal.symbol.bytes);
     try std.testing.expectEqualStrings("bar", instrs[3].op.push_literal.symbol.bytes);
+}
+
+test "a finished body records the names its nested quotations call" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    var tokenizer = Tokenizer.init("[ outer-word [ inner-word ] ]");
+    const instrs = try parseTopLevel(ctx.quotationAllocator(), &tokenizer, &ctx);
+
+    const outer = instrs[0].op.push_literal.quotation.instructions;
+    const outer_names = ctx.quotationBodyNestedNames(outer) orelse return error.TestExpectedEntry;
+    try std.testing.expectEqual(@as(usize, 1), outer_names.len);
+    try std.testing.expectEqualStrings("inner-word", outer_names[0]);
+
+    // The innermost body has no nested literal of its own, and is recorded as an empty set rather
+    // than left absent.
+    const inner = outer[1].op.push_literal.quotation.instructions;
+    const inner_names = ctx.quotationBodyNestedNames(inner) orelse return error.TestExpectedEntry;
+    try std.testing.expectEqual(@as(usize, 0), inner_names.len);
 }
 
 test "doc-comment before definition emits doc_string after symbol" {
