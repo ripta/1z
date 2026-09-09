@@ -3728,6 +3728,24 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
     const cc_env = std.posix.getenv("CC");
     const cc_cmd = cc_env orelse "zig";
 
+    // On a host where the toolchain build itself needed an SDK pin (see build.zig's macosSdk),
+    // zig cc's own SDK auto-detection is just as broken: it resolves an SDK whose libSystem stub
+    // doesn't declare arm64-macos, so every libc symbol in lib1z.a comes back undefined at link
+    // time. ONEZ_MACOS_SDK is the same override build.zig already reads; it is unset on any host
+    // that doesn't need it.
+    const macos_sdk = if (std.posix.getenv("ONEZ_MACOS_SDK")) |sdk| (if (sdk.len > 0) sdk else null) else null;
+
+    // A real DEVELOPER_DIR sends zig cc looking for an SDK the same way `zig build` would without
+    // the toolchain's own pin: it matches the running OS and, on this host, lands on one whose
+    // libSystem stub declares only x86_64 and arm64e. Handing zig cc a DEVELOPER_DIR xcrun rejects
+    // is what stops that and drops it onto the arm64-macos stub it ships instead; the SDK named
+    // above supplies libffi, which that stub does not carry.
+    const developer_dir_override = if (macos_sdk != null and builtin.os.tag == .macos)
+        std.fmt.allocPrint(allocator, "{s}/1z-aot-no-macos-sdk-{d}", .{ tmpdir, pid }) catch null
+    else
+        null;
+    defer if (developer_dir_override) |d| allocator.free(d);
+
     // Runtime-formatted flags must outlive the child process; free them once
     // the commands have finished.
     var owned_flags: std.ArrayListUnmanaged([]const u8) = .{};
@@ -3798,7 +3816,7 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
             cc_argv.append(allocator, flag) catch return 1;
         }
 
-        if (runCcCommand(allocator, cc_argv.items, cc_cmd, err_writer) != 0) return 1;
+        if (runCcCommand(allocator, cc_argv.items, cc_cmd, err_writer, null) != 0) return 1;
     } else {
         // Hosted build in two stages: compile the generated C to an object at the requested -O
         // level, then link that object with the runtime archive.
@@ -3824,12 +3842,19 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
             compile_argv.append(allocator, "-ffunction-sections") catch return 1;
             compile_argv.append(allocator, "-fdata-sections") catch return 1;
         }
+        if (builtin.os.tag == .macos) {
+            if (macos_sdk) |sdk| {
+                const flag = std.fmt.allocPrint(allocator, "-isystem{s}/usr/include/ffi", .{sdk}) catch return 1;
+                owned_flags.append(allocator, flag) catch return 1;
+                compile_argv.append(allocator, flag) catch return 1;
+            }
+        }
         compile_argv.append(allocator, "-c") catch return 1;
         compile_argv.append(allocator, tmp_path) catch return 1;
         compile_argv.append(allocator, "-o") catch return 1;
         compile_argv.append(allocator, obj_path.?) catch return 1;
 
-        if (runCcCommand(allocator, compile_argv.items, cc_cmd, err_writer) != 0) return 1;
+        if (runCcCommand(allocator, compile_argv.items, cc_cmd, err_writer, developer_dir_override) != 0) return 1;
 
         var link_argv: std.ArrayListUnmanaged([]const u8) = .{};
         defer link_argv.deinit(allocator);
@@ -3851,6 +3876,13 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
             },
             else => {},
         }
+        if (builtin.os.tag == .macos) {
+            if (macos_sdk) |sdk| {
+                const flag = std.fmt.allocPrint(allocator, "-L{s}/usr/lib", .{sdk}) catch return 1;
+                owned_flags.append(allocator, flag) catch return 1;
+                link_argv.append(allocator, flag) catch return 1;
+            }
+        }
         link_argv.append(allocator, "-lffi") catch return 1;
         for (static_libs.items) |lib_name| {
             const flag = std.fmt.allocPrint(allocator, "-l{s}", .{lib_name}) catch return 1;
@@ -3861,7 +3893,7 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
             link_argv.append(allocator, obj) catch return 1;
         }
 
-        if (runCcCommand(allocator, link_argv.items, cc_cmd, err_writer) != 0) return 1;
+        if (runCcCommand(allocator, link_argv.items, cc_cmd, err_writer, developer_dir_override) != 0) return 1;
     }
 
     return 0;
@@ -3875,9 +3907,21 @@ fn runCcCommand(
     argv: []const []const u8,
     cc_cmd: []const u8,
     err_writer: anytype,
+    developer_dir_override: ?[]const u8,
 ) u8 {
     var child = std.process.Child.init(argv, allocator);
     child.stderr_behavior = .Pipe;
+
+    var env_map: std.process.EnvMap = undefined;
+    var has_env_map = false;
+    defer if (has_env_map) env_map.deinit();
+    if (developer_dir_override) |dir| {
+        env_map = std.process.getEnvMap(allocator) catch std.process.EnvMap.init(allocator);
+        has_env_map = true;
+        env_map.put("DEVELOPER_DIR", dir) catch {};
+        child.env_map = &env_map;
+    }
+
     child.spawn() catch |err| {
         err_writer.print("Error spawning C compiler '{s}': {s}\n", .{ cc_cmd, @errorName(err) }) catch {};
         err_writer.flush() catch {};
