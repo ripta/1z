@@ -1,0 +1,25 @@
+Stack: [ ]
+=== a quotation's own top level reads an enclosing local ===
+Stack: [ ]
+PASS: the flat case resolves the local
+Stack: [ ]
+=== a nested quotation reads an enclosing local ===
+Stack: [ ]
+PASS: the nested case resolves the local
+Stack: [ ]
+=== a nested quotation prefers the local over a same-named file word ===
+Stack: [ ]
+PASS: the nested read reaches the local, not the file-level word
+Stack: [ ]
+=== a nested quotation with no local reaches the file word ===
+Stack: [ ]
+PASS: a nested name bound nowhere local still resolves through the file
+Stack: [ ]
+=== a quotation nested two deep reads an enclosing local ===
+Stack: [ ]
+PASS: depth two resolves the local
+Stack: [ ]
+=== a nested quotation inside a loop body reads that iteration's local ===
+Stack: [ ]
+PASS: each iteration's nested read sees its own i
+Stack: [ ]

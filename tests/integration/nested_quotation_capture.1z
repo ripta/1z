@@ -1,0 +1,57 @@
+\ A quotation nested inside another quotation reads a local of the word that created the outer
+\ one. Every case here keeps the creating frame alive, so every one resolved correctly before the
+\ capture gate learned to descend into nested bodies too.
+\
+\ That is what they pin. The gate now captures for bodies it used to skip, so these bodies are
+\ promoted to closures where they were pushed bare, and the value read must not move.
+
+use "ranges" ;
+use "testing" ;
+
+val: ( -- s ) [ "FILE-VAL" ] ;
+
+"a quotation's own top level reads an enclosing local" test-section
+[
+  x: 42 ;
+  [ x ] call 42 "the flat case resolves the local" assert=
+] call
+
+"a nested quotation reads an enclosing local" test-section
+[
+  x: 42 ;
+  [ [ x ] call ] call 42 "the nested case resolves the local" assert=
+] call
+
+"a nested quotation prefers the local over a same-named file word" test-section
+[
+  val: "LOCAL-VAL" ;
+  [ [ val ] call ] call
+  "LOCAL-VAL"
+  "the nested read reaches the local, not the file-level word"
+  assert=
+] call
+
+"a nested quotation with no local reaches the file word" test-section
+[
+  other: 42 ;
+  [ [ val ] call ] call
+  "FILE-VAL"
+  "a nested name bound nowhere local still resolves through the file"
+  assert=
+] call
+
+"a quotation nested two deep reads an enclosing local" test-section
+[
+  x: 42 ;
+  [ [ [ x ] call ] call ] call 42 "depth two resolves the local" assert=
+] call
+
+"a nested quotation inside a loop body reads that iteration's local" test-section
+[
+  log: V{ } ;
+  3 iota >iterator [
+    i: swap ;
+    [ log i #push! drop ] call
+  ] #each
+  log >array { 0 1 2 } "each iteration's nested read sees its own i" assert=
+] call

@@ -192,6 +192,43 @@ fn addName(
     try names.append(alloc, name);
 }
 
+/// True when a quotation literal nested inside `instructions`, at any depth, calls a name `frame`
+/// binds. `instructions`' own top-level names are excluded, the same as in `collectNestedNames`.
+///
+/// The capture gate's answer for a body that has no cache entry, which is a body built at runtime
+/// or decoded from an image. It allocates nothing, so a gate holding no allocator can run it.
+///
+/// It descends by the rule `collectNestedNames` descends by, and the two have to stay in step: a
+/// cached body and an uncached one that disagree would capture differently for the same source.
+///
+/// `frame` is anything answering `contains(name) bool`. Passing a set over every live frame, rather
+/// than one frame, is what keeps this to a single walk of the body.
+pub fn nestedNamesMatchFrame(instructions: []const Instruction, frame: anytype) bool {
+    for (instructions) |instr| {
+        switch (instr.op) {
+            .push_literal => |val| if (val == .quotation and
+                bodyNamesMatchFrame(val.quotation.instructions, frame)) return true,
+            else => {},
+        }
+    }
+    return false;
+}
+
+/// Test `instructions`' own call names against `frame`, then descend into its nested quotation
+/// literals.
+fn bodyNamesMatchFrame(instructions: []const Instruction, frame: anytype) bool {
+    for (instructions) |instr| {
+        switch (instr.op) {
+            .call_word => |name| if (frame.contains(name)) return true,
+            .call_word_module => |slot| if (frame.contains(slot.name)) return true,
+            .push_literal => |val| if (val == .quotation and
+                bodyNamesMatchFrame(val.quotation.instructions, frame)) return true,
+            .call_word_direct => {},
+        }
+    }
+    return false;
+}
+
 const testing = std.testing;
 
 fn callWord(name: []const u8) Instruction {
@@ -329,4 +366,53 @@ test "NestedNameCache: growth preserves every entry" {
     // A missing key walks its collision run and falls off the end rather than looping, which is
     // what the load factor's spare slots buy.
     try testing.expect(cache.lookup(0x7fff_ffff) == null);
+}
+
+/// A `contains`-answering stand-in for the gate's live-frame set.
+const NameSet = struct {
+    names: []const []const u8,
+
+    fn contains(self: NameSet, name: []const u8) bool {
+        for (self.names) |n| if (std.mem.eql(u8, n, name)) return true;
+        return false;
+    }
+};
+
+test "nestedNamesMatchFrame: a name at depth two matches" {
+    const inner = [_]Instruction{callWord("deep")};
+    const middle = [_]Instruction{pushQuotation(&inner)};
+    const outer = [_]Instruction{pushQuotation(&middle)};
+
+    try testing.expect(nestedNamesMatchFrame(&outer, NameSet{ .names = &.{"deep"} }));
+    try testing.expect(!nestedNamesMatchFrame(&outer, NameSet{ .names = &.{"shallow"} }));
+}
+
+test "nestedNamesMatchFrame: a top-level name does not match" {
+    const body = [_]Instruction{ callWord("own"), pushQuotation(&[_]Instruction{callWord("nested")}) };
+
+    // The gate scans a body's own top level itself, off the instruction array it already holds.
+    try testing.expect(!nestedNamesMatchFrame(&body, NameSet{ .names = &.{"own"} }));
+    try testing.expect(nestedNamesMatchFrame(&body, NameSet{ .names = &.{"nested"} }));
+}
+
+test "nestedNamesMatchFrame: a call_word_direct name does not match and a call_word_module one does" {
+    const WordSlot = @import("word_slot.zig").WordSlot;
+    var module_slot: WordSlot = .{ .name = "from-module", .definition = undefined };
+    var direct_slot: WordSlot = .{ .name = "pre-resolved", .definition = undefined };
+
+    const inner = [_]Instruction{
+        .{ .op = .{ .call_word_module = &module_slot }, .line = 0 },
+        .{ .op = .{ .call_word_direct = &direct_slot }, .line = 0 },
+    };
+    const outer = [_]Instruction{pushQuotation(&inner)};
+
+    try testing.expect(!nestedNamesMatchFrame(&outer, NameSet{ .names = &.{"pre-resolved"} }));
+    try testing.expect(nestedNamesMatchFrame(&outer, NameSet{ .names = &.{"from-module"} }));
+}
+
+test "nestedNamesMatchFrame: a body with no nested literal never matches" {
+    const body = [_]Instruction{ callWord("a"), callWord("b") };
+
+    try testing.expect(!nestedNamesMatchFrame(&body, NameSet{ .names = &.{ "a", "b" } }));
+    try testing.expect(!nestedNamesMatchFrame(&.{}, NameSet{ .names = &.{"a"} }));
 }

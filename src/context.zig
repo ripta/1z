@@ -62,6 +62,7 @@ const QuotationStampStore = @import("quotation_stamp_store.zig").QuotationStampS
 const QuotationSourceStore = @import("quotation_source_store.zig").QuotationSourceStore;
 const CarryableScopeGate = @import("carryable_scope_gate.zig").CarryableScopeGate;
 const NestedNameCache = @import("nested_name_cache.zig").NestedNameCache;
+const nestedNamesMatchFrame = @import("nested_name_cache.zig").nestedNamesMatchFrame;
 const may_define = @import("may_define.zig");
 const closure_body_registry = @import("closure_body_registry.zig");
 const LoadLock = @import("load_lock.zig").LoadLock;
@@ -2588,21 +2589,25 @@ pub const Context = struct {
         return idx < self.local_frame_kinds.items.len and self.local_frame_kinds.items[idx] == .lexical;
     }
 
-    /// True when `instructions`' own top-level `call_word` names -- not recursing into a nested
-    /// quotation literal's body, which decides independently when its own `push_literal` later runs
-    /// -- match a binding in any currently-live transient lexical frame at or above `floor`.
+    /// True when `instructions`, or any quotation literal nested inside it at any depth, calls a
+    /// name bound in a currently-live transient lexical frame at or above `floor`.
     ///
-    /// Sound, not a heuristic. `preResolveCallTarget` (used by the parser to emit `call_word_direct`)
-    /// only ever pre-resolves a name it can prove is absent from every current local frame, so a
-    /// name that could possibly resolve to a lexical local always stays a plain `call_word`
-    /// instruction; `executeInstructions`'s captured-scope lookup likewise only ever consults it on
-    /// the `call_word` path, never `call_word_direct`. A quotation with no matching name therefore
-    /// cannot resolve any bare word against a captured scope, so skipping capture for it cannot
-    /// reintroduce staleness -- it only skips work that would have produced an unused scope.
+    /// A nested body counts because it does not get to decide for itself. A module-changing tail
+    /// call pops the caller's transient frame, so the frame a nested body reads can be gone before
+    /// its own `push_literal` ever runs. Capture has to happen at the enclosing push or not at all.
     ///
-    /// `call_word_module` is scanned alongside `call_word` because its arm does consult the
-    /// captured scope: an image body's build-time module resolution yields to a lexical binding,
-    /// so the name must be able to trigger capture in the first place.
+    /// Only `call_word` and `call_word_module` names count. `preResolveCallTarget` (used by the
+    /// parser to emit `call_word_direct`) only ever pre-resolves a name it can prove is absent from
+    /// every current local frame, and `executeInstructions`'s captured-scope lookup only ever
+    /// consults the scope on the `call_word` path. So a `call_word_direct` name can never resolve
+    /// to a lexical local, and can never justify a capture. `call_word_module` can: an image body's
+    /// build-time module resolution yields to a lexical binding, so that name must be able to
+    /// trigger capture in the first place.
+    ///
+    /// The two halves are checked separately because they favor opposite loop nesting. The
+    /// top-level scan walks frames outer and instructions inner, so an empty frame costs nothing;
+    /// it is unchanged and still answers first. The nested half reads its names from the parse-time
+    /// cache, which is a handful of names at most, and walks them against every live frame at once.
     fn quotationReferencesLiveFrame(self: *const Context, instructions: []const Instruction, floor: usize) bool {
         var i = floor;
         while (i < self.local_frames.items.len) : (i += 1) {
@@ -2617,8 +2622,45 @@ pub const Context = struct {
                 }
             }
         }
-        return false;
+        return self.nestedNamesReferenceLiveFrame(instructions, floor);
     }
+
+    /// The nested half of `quotationReferencesLiveFrame`.
+    ///
+    /// A body the parser finished on the root arena has its nested names precomputed, so the check
+    /// is a map probe and a walk of that list. The overwhelming majority of bodies nest no
+    /// quotation at all and are recorded as an empty list, which costs the probe and no frame walk.
+    ///
+    /// A body with no entry -- built at runtime, or decoded from an image -- is walked instead.
+    /// That is slower, but treating a miss as "no nested names" would silently decline a capture
+    /// the body needs.
+    fn nestedNamesReferenceLiveFrame(self: *const Context, instructions: []const Instruction, floor: usize) bool {
+        const live: LiveFrameSet = .{ .ctx = self, .floor = floor };
+        if (self.quotationBodyNestedNames(instructions)) |names| {
+            for (names) |name| if (live.contains(name)) return true;
+            return false;
+        }
+        return nestedNamesMatchFrame(instructions, live);
+    }
+
+    /// The names bound by any live transient lexical frame at or above `floor`, as a membership
+    /// test. Lets the nested-name walk answer for the whole frame stack in one pass over the body.
+    const LiveFrameSet = struct {
+        ctx: *const Context,
+        floor: usize,
+
+        pub fn contains(self: LiveFrameSet, name: []const u8) bool {
+            var i = self.floor;
+            while (i < self.ctx.local_frames.items.len) : (i += 1) {
+                if (i < self.ctx.local_frame_kinds.items.len and
+                    self.ctx.local_frame_kinds.items[i] != .lexical) continue;
+                const frame = &self.ctx.local_frames.items[i];
+                if (frame.count() == 0) continue;
+                if (frame.contains(name)) return true;
+            }
+            return false;
+        }
+    };
 
     /// Capture the lexical scope visible at a quotation's creation, keyed off the quotation body's
     /// instruction-slice pointer. A fresh scope is built on every call, so a quotation literal
@@ -14189,6 +14231,76 @@ test "captureQuotationScope: a second call for the same body supersedes with a f
     try std.testing.expect(first_addr != @intFromPtr(second));
     const resolved = Context.lookupInCapturedScope(second, "local") orelse return error.TestExpectedResolution;
     try std.testing.expectEqualStrings("local-site", resolved.source_file.?);
+}
+
+/// A context with one live transient lexical frame binding `local`, which is the shape the gate
+/// tests below all need. The caller owns `ctx` and must `deinit` it.
+fn seedLiveLocalFrame(ctx: *Context) !void {
+    try ctx.pushLocalFrame();
+    ctx.import_frame_index = 0;
+    ctx.durable_frame_floor = 0;
+
+    try ctx.pushLocalFrame();
+    try ctx.defineWord("local", .{ .name = "local", .source_file = "local-site", .action = .{ .compound = &.{} } });
+}
+
+fn nestedBody(inner: []const Instruction) Instruction {
+    return .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = inner } } }, .line = 0 };
+}
+
+test "captureQuotationScope: a cached nested literal naming a live local captures" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+    try seedLiveLocalFrame(&ctx);
+
+    const inner = [_]Instruction{.{ .op = .{ .call_word = "local" }, .line = 0 }};
+    const body = [_]Instruction{nestedBody(&inner)};
+    try ctx.cacheQuotationBodyNestedNames(&body);
+
+    const scope = (try ctx.captureQuotationScope(&body)) orelse return error.TestExpectedCapture;
+    const resolved = Context.lookupInCapturedScope(scope, "local") orelse return error.TestExpectedResolution;
+    try std.testing.expectEqualStrings("local-site", resolved.source_file.?);
+}
+
+test "captureQuotationScope: an uncached nested literal naming a live local captures through the walk" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+    try seedLiveLocalFrame(&ctx);
+
+    // No `cacheQuotationBodyNestedNames`, standing in for a body built at runtime or decoded from
+    // an image. The gate has to walk it rather than read a miss as "no nested names".
+    const inner = [_]Instruction{.{ .op = .{ .call_word = "local" }, .line = 0 }};
+    const body = [_]Instruction{nestedBody(&inner)};
+    try std.testing.expect(ctx.quotationBodyNestedNames(&body) == null);
+
+    const scope = (try ctx.captureQuotationScope(&body)) orelse return error.TestExpectedCapture;
+    const resolved = Context.lookupInCapturedScope(scope, "local") orelse return error.TestExpectedResolution;
+    try std.testing.expectEqualStrings("local-site", resolved.source_file.?);
+}
+
+test "captureQuotationScope: a nested literal at depth two naming a live local captures" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+    try seedLiveLocalFrame(&ctx);
+
+    const innermost = [_]Instruction{.{ .op = .{ .call_word = "local" }, .line = 0 }};
+    const middle = [_]Instruction{nestedBody(&innermost)};
+    const body = [_]Instruction{nestedBody(&middle)};
+    try ctx.cacheQuotationBodyNestedNames(&body);
+
+    _ = (try ctx.captureQuotationScope(&body)) orelse return error.TestExpectedCapture;
+}
+
+test "captureQuotationScope: a nested literal naming nothing live does not capture" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+    try seedLiveLocalFrame(&ctx);
+
+    const inner = [_]Instruction{.{ .op = .{ .call_word = "elsewhere" }, .line = 0 }};
+    const body = [_]Instruction{nestedBody(&inner)};
+    try ctx.cacheQuotationBodyNestedNames(&body);
+
+    try std.testing.expect((try ctx.captureQuotationScope(&body)) == null);
 }
 
 test "defineWordLocked: a leaf-backed binding in a transient frame is released when the frame pops" {
