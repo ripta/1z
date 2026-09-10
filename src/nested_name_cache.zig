@@ -192,41 +192,58 @@ fn addName(
     try names.append(alloc, name);
 }
 
-/// True when a quotation literal nested inside `instructions`, at any depth, calls a name `frame`
-/// binds. `instructions`' own top-level names are excluded, the same as in `collectNestedNames`.
+/// Call `visitor.visit(name)` for every bare-word name a quotation literal nested inside
+/// `instructions` calls, at any depth, stopping as soon as it returns true. `instructions`' own
+/// top-level names are excluded, the same as in `collectNestedNames`.
 ///
-/// The capture gate's answer for a body that has no cache entry, which is a body built at runtime
-/// or decoded from an image. It allocates nothing, so a gate holding no allocator can run it.
+/// The capture path's answer for a body that has no cache entry, which is a body built at runtime
+/// or decoded from an image. It allocates nothing itself, so a caller holding no allocator can run
+/// it, and a visitor that needs one carries its own.
 ///
 /// It descends by the rule `collectNestedNames` descends by, and the two have to stay in step: a
 /// cached body and an uncached one that disagree would capture differently for the same source.
 ///
-/// `frame` is anything answering `contains(name) bool`. Passing a set over every live frame, rather
-/// than one frame, is what keeps this to a single walk of the body.
-pub fn nestedNamesMatchFrame(instructions: []const Instruction, frame: anytype) bool {
+/// The visitor's return value is what makes one walk serve both readers. A membership test stops at
+/// the first hit; a collector never stops and walks the whole body.
+pub fn visitNestedNames(instructions: []const Instruction, visitor: anytype) bool {
     for (instructions) |instr| {
         switch (instr.op) {
             .push_literal => |val| if (val == .quotation and
-                bodyNamesMatchFrame(val.quotation.instructions, frame)) return true,
+                visitBodyNames(val.quotation.instructions, visitor)) return true,
             else => {},
         }
     }
     return false;
 }
 
-/// Test `instructions`' own call names against `frame`, then descend into its nested quotation
-/// literals.
-fn bodyNamesMatchFrame(instructions: []const Instruction, frame: anytype) bool {
+/// Visit `instructions`' own call names, then descend into its nested quotation literals.
+fn visitBodyNames(instructions: []const Instruction, visitor: anytype) bool {
     for (instructions) |instr| {
         switch (instr.op) {
-            .call_word => |name| if (frame.contains(name)) return true,
-            .call_word_module => |slot| if (frame.contains(slot.name)) return true,
+            .call_word => |name| if (visitor.visit(name)) return true,
+            .call_word_module => |slot| if (visitor.visit(slot.name)) return true,
             .push_literal => |val| if (val == .quotation and
-                bodyNamesMatchFrame(val.quotation.instructions, frame)) return true,
+                visitBodyNames(val.quotation.instructions, visitor)) return true,
             .call_word_direct => {},
         }
     }
     return false;
+}
+
+/// True when a quotation literal nested inside `instructions`, at any depth, calls a name `frame`
+/// binds.
+///
+/// `frame` is anything answering `contains(name) bool`. Passing a set over every live frame, rather
+/// than one frame, is what keeps this to a single walk of the body.
+pub fn nestedNamesMatchFrame(instructions: []const Instruction, frame: anytype) bool {
+    const Match = struct {
+        frame: @TypeOf(frame),
+
+        pub fn visit(self: @This(), name: []const u8) bool {
+            return self.frame.contains(name);
+        }
+    };
+    return visitNestedNames(instructions, Match{ .frame = frame });
 }
 
 const testing = std.testing;

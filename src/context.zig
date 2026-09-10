@@ -63,6 +63,7 @@ const QuotationSourceStore = @import("quotation_source_store.zig").QuotationSour
 const CarryableScopeGate = @import("carryable_scope_gate.zig").CarryableScopeGate;
 const NestedNameCache = @import("nested_name_cache.zig").NestedNameCache;
 const nestedNamesMatchFrame = @import("nested_name_cache.zig").nestedNamesMatchFrame;
+const visitNestedNames = @import("nested_name_cache.zig").visitNestedNames;
 const may_define = @import("may_define.zig");
 const closure_body_registry = @import("closure_body_registry.zig");
 const LoadLock = @import("load_lock.zig").LoadLock;
@@ -703,6 +704,20 @@ pub const Context = struct {
     /// rejects the top `.module_deps` frame would otherwise define its named locals into that
     /// frame and immediately fail to resolve them.
     active_deps_vis: ?ModuleDepsVisibility = null,
+    /// The lexical scope captured by the body currently executing, saved and restored around each
+    /// `executeInstructions` call the same way `active_deps_vis` is.
+    ///
+    /// `captureQuotationScope` seeds from it, so a quotation literal pushed inside this body
+    /// inherits what the body closed over rather than only what is live at the push. A
+    /// module-changing tail call pops the frame a nested body reads before that body's own push
+    /// runs, and this is how the binding survives the pop.
+    ///
+    /// Borrowed, never owned. A map-path scope is retained for the whole `executeInstructions`
+    /// call, and a closure-carried one is held by the caller across the execution, so the pointer
+    /// outlives every push made under it. A compiled body does not run `executeInstructions`, so
+    /// its pushes read whatever the nearest interpreted ancestor published, matching how
+    /// `active_deps_vis` already behaves.
+    active_captured_scope: ?*const CapturedScope = null,
     /// Count of live transient lexical frames (above `import_frame_index`, kind `.lexical`) that
     /// currently hold at least one definition. A fast-path gate for `captureQuotationScope`: when
     /// zero, no quotation push has anything to close over, so the capture scan is skipped.
@@ -2662,6 +2677,136 @@ pub const Context = struct {
         }
     };
 
+    /// The bindings an enclosing body's captured scope carries that no live frame answers.
+    ///
+    /// A name a live frame also binds needs nothing from here: that frame's own clone is
+    /// snapshotted anyway and shadows the inherited one. So a body the live stack fully answers
+    /// seeds nothing, and only a name the live stack has no binding for is taken.
+    ///
+    /// The frames are walked innermost-first, matching `lookupInCapturedScope`, so the binding
+    /// taken is the one that body would have resolved.
+    const InheritedOnlySet = struct {
+        frames: []const LocalFrame,
+        live: LiveFrameSet,
+
+        pub fn lookup(self: InheritedOnlySet, name: []const u8) ?LocalFrame.Entry {
+            var i = self.frames.len;
+            while (i > 0) {
+                i -= 1;
+                if (self.frames[i].getEntry(name)) |entry| {
+                    return if (self.live.contains(name)) null else entry;
+                }
+            }
+            return null;
+        }
+    };
+
+    /// Collects the seeded bindings a body's nested quotations name, for a body with no nested-name
+    /// cache entry.
+    ///
+    /// `visit` returns a bool rather than an error union, so an allocation failure has nowhere to go
+    /// but this field, and the caller re-raises it. Failing stops the walk through the same signal a
+    /// membership test stops on.
+    const SeedCollector = struct {
+        ctx: *Context,
+        frame: *LocalFrame,
+        set: InheritedOnlySet,
+        err: ?Allocator.Error = null,
+
+        pub fn visit(self: *SeedCollector, name: []const u8) bool {
+            self.ctx.takeSeedBinding(self.frame, self.set, name) catch |err| {
+                self.err = err;
+                return true;
+            };
+            return false;
+        }
+    };
+
+    /// Append the bindings `set` answers for the names `instructions` reads, as one frame.
+    ///
+    /// Only a name a body can reach is ever looked up in the scope it carries, and a quotation
+    /// nested inside it inherits this same frame, so narrowing the seed to those names cannot
+    /// change what resolves. It is what bounds the cost: an enclosing scope is routinely a module's
+    /// whole top-level frame, and carrying it wholesale put hundreds of retained bindings on every
+    /// capturing push.
+    ///
+    /// The name set is the body's own top-level names plus its nested ones, which the parse-time
+    /// cache holds transitively. A body with no entry is walked instead, the same fallback the gate
+    /// takes, so an uncached body seeds the same bindings a cached one would.
+    fn appendSeedFrame(
+        self: *Context,
+        frames: *std.ArrayListUnmanaged(LocalFrame),
+        instructions: []const Instruction,
+        set: InheritedOnlySet,
+    ) !void {
+        var frame: LocalFrame = .{};
+        errdefer frame.deinit(self.allocator);
+
+        for (instructions) |instr| {
+            switch (instr.op) {
+                .call_word => |name| try self.takeSeedBinding(&frame, set, name),
+                .call_word_module => |slot| try self.takeSeedBinding(&frame, set, slot.name),
+                else => {},
+            }
+        }
+
+        if (self.quotationBodyNestedNames(instructions)) |names| {
+            for (names) |name| try self.takeSeedBinding(&frame, set, name);
+        } else {
+            var collector: SeedCollector = .{ .ctx = self, .frame = &frame, .set = set };
+            _ = visitNestedNames(instructions, &collector);
+            if (collector.err) |err| return err;
+        }
+
+        if (frame.count() == 0) {
+            frame.deinit(self.allocator);
+            return;
+        }
+
+        retainFrameBindings(&frame);
+        errdefer releaseFrameBindings(&frame);
+
+        try frames.append(self.allocator, frame);
+    }
+
+    /// Copy `set`'s binding for `name` into `frame`, if it has one and the frame does not already.
+    ///
+    /// The key comes off the source entry rather than the instruction, so the frame holds the
+    /// interned name and not a slice of a body that may be arena-owned.
+    ///
+    /// `word_id` is dropped, so a seeded name executes the way it did before the seed existed. The
+    /// seed's job is reachability; a name already reachable through the module scope keeps
+    /// resolving to the same body by the same route. Carrying the id would route it through
+    /// compiled dispatch instead, and a tail-position compiled call raises while its caller's frame
+    /// is still live, which adds an error-chain row the interpreted run elides. That asymmetry is a
+    /// separate defect, and the id comes back once it is fixed.
+    fn takeSeedBinding(self: *Context, frame: *LocalFrame, set: InheritedOnlySet, name: []const u8) !void {
+        if (frame.contains(name)) return;
+        const entry = set.lookup(name) orelse return;
+
+        var def = entry.value_ptr.*;
+        def.word_id = null;
+        try frame.put(self.allocator, entry.key_ptr.*, def);
+    }
+
+    /// Append a clone of `src` to a capture's frame list, entry by entry, retained.
+    fn appendFrameClone(
+        self: *Context,
+        frames: *std.ArrayListUnmanaged(LocalFrame),
+        src: *const LocalFrame,
+    ) !void {
+        var clone: LocalFrame = .{};
+        errdefer clone.deinit(self.allocator);
+
+        var it = src.iterator();
+        while (it.next()) |e| try clone.put(self.allocator, e.key_ptr.*, e.value_ptr.*);
+
+        retainFrameBindings(&clone);
+        errdefer releaseFrameBindings(&clone);
+
+        try frames.append(self.allocator, clone);
+    }
+
     /// Capture the lexical scope visible at a quotation's creation, keyed off the quotation body's
     /// instruction-slice pointer. A fresh scope is built on every call, so a quotation literal
     /// re-executed inside a loop closes over the *current* iteration's locals, not a frozen first
@@ -2680,6 +2825,14 @@ pub const Context = struct {
     /// is live at creation is recorded in `deps_modules` so resolution can later admit a
     /// legitimately closed-over deps frame while rejecting a foreign one. A push with no such frame
     /// live and nothing to close over records nothing and stays on the pre-capture fast path.
+    ///
+    /// The lexical snapshot is not the live frame stack alone. It seeds from the enclosing body's
+    /// `active_captured_scope` as well, taking the bindings that scope carries for the names this
+    /// body reads and no live frame answers. A module-changing tail call pops the frame a nested
+    /// body reads before that body's own push runs, and the seed is how the binding survives the
+    /// pop. The seed is narrowed to those bindings rather than taking the enclosing frames whole,
+    /// because an enclosing scope is routinely a module's entire top-level frame; a body the live
+    /// stack fully answers seeds nothing and allocates exactly what it allocated before.
     ///
     /// The return value drives promotion only: a non-null return means the pushed quotation carries
     /// live lexical bindings and is promoted to a `.closure`; a null return means either nothing was
@@ -2711,8 +2864,8 @@ pub const Context = struct {
         if (instructions.len == 0) return null;
         const floor = if (self.import_frame_index) |idx| idx + 1 else 0;
 
-        // Lexical snapshot: gated by the fast-path counter and the per-body reference check, exactly
-        // as before. `frames` stays empty when no live lexical binding is closed over.
+        // Lexical snapshot, from two independent sources. `frames` stays empty when neither holds a
+        // binding this body reads.
         var frames: std.ArrayListUnmanaged(LocalFrame) = .{};
         errdefer {
             for (frames.items) |*f| {
@@ -2722,6 +2875,20 @@ pub const Context = struct {
             frames.deinit(self.allocator);
         }
 
+        // What the enclosing body's captured scope carries and the live frames do not, first, so the
+        // live clones below shadow it the way `lookupInCapturedScope`'s back-to-front walk expects.
+        if (self.active_captured_scope) |enclosing| {
+            if (enclosing.lexical_frames.len > 0) {
+                try self.appendSeedFrame(&frames, instructions, .{
+                    .frames = enclosing.lexical_frames,
+                    .live = .{ .ctx = self, .floor = floor },
+                });
+            }
+        }
+
+        // The live frames, gated by the fast-path counter and the per-body reference check exactly
+        // as before. A gate that answers no means no live frame binds a name this body or a nested
+        // body reads, so those frames could only contribute bindings nothing resolves against.
         if (self.nonempty_transient_lexical_frames != 0 and
             self.local_frames.items.len > floor and
             self.quotationReferencesLiveFrame(instructions, floor))
@@ -2731,13 +2898,7 @@ pub const Context = struct {
                 if (i < self.local_frame_kinds.items.len and self.local_frame_kinds.items[i] != .lexical) continue;
                 const src = &self.local_frames.items[i];
                 if (src.count() == 0) continue;
-                var clone: LocalFrame = .{};
-                errdefer clone.deinit(self.allocator);
-                var it = src.iterator();
-                while (it.next()) |e| try clone.put(self.allocator, e.key_ptr.*, e.value_ptr.*);
-                retainFrameBindings(&clone);
-                errdefer releaseFrameBindings(&clone);
-                try frames.append(self.allocator, clone);
+                try self.appendFrameClone(&frames, src);
             }
         }
 
@@ -8467,6 +8628,12 @@ pub const Context = struct {
         const saved_deps_vis = self.active_deps_vis;
         self.active_deps_vis = deps_vis;
         defer self.active_deps_vis = saved_deps_vis;
+
+        // Published for `captureQuotationScope`, so a quotation literal pushed below inherits what
+        // this body closed over. Rides the same hold the retain above takes.
+        const saved_captured_scope = self.active_captured_scope;
+        self.active_captured_scope = captured_scope;
+        defer self.active_captured_scope = saved_captured_scope;
 
         for (instructions, 0..) |instr, idx| {
             // The stepwise debugger is wired up only from capi.zig (C debugger API) and main.zig
@@ -14300,6 +14467,122 @@ test "captureQuotationScope: a nested literal naming nothing live does not captu
     const body = [_]Instruction{nestedBody(&inner)};
     try ctx.cacheQuotationBodyNestedNames(&body);
 
+    try std.testing.expect((try ctx.captureQuotationScope(&body)) == null);
+}
+
+/// The state a module-changing tail call leaves behind, which is what the seed exists for: a scope
+/// captured while a frame binding `local` and `outer-only` was live, that frame popped, and the
+/// scope published where body entry publishes it.
+///
+/// `outer` stands in for the quotation the creating word handed to the callee, so it has to name
+/// one of the two bindings or there is no capture to inherit. The caller owns it, and it must be a
+/// different array from the body under test: the two are keyed by address.
+fn seedPoppedEnclosingScope(ctx: *Context, outer: []const Instruction) !void {
+    try ctx.pushLocalFrame();
+    ctx.import_frame_index = 0;
+    ctx.durable_frame_floor = 0;
+
+    try ctx.pushLocalFrame();
+    try ctx.defineWord("local", .{ .name = "local", .source_file = "outer-site", .action = .{ .compound = &.{} } });
+    try ctx.defineWord("outer-only", .{ .name = "outer-only", .source_file = "outer-site", .action = .{ .compound = &.{} } });
+
+    ctx.active_captured_scope = (try ctx.captureQuotationScope(outer)) orelse return error.TestExpectedCapture;
+    ctx.popLocalFrame();
+}
+
+/// A live frame binding `local` again, so the shadowing and no-duplication tests have both sources
+/// answering the same name.
+fn pushLiveFrameShadowingLocal(ctx: *Context) !void {
+    try ctx.pushLocalFrame();
+    try ctx.defineWord("local", .{ .name = "local", .source_file = "live-site", .action = .{ .compound = &.{} } });
+}
+
+test "captureQuotationScope: a body naming only an enclosing scope's local captures through the seed" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const outer_inner = [_]Instruction{.{ .op = .{ .call_word = "local" }, .line = 0 }};
+    const outer = [_]Instruction{nestedBody(&outer_inner)};
+    try seedPoppedEnclosingScope(&ctx, &outer);
+
+    const body = [_]Instruction{.{ .op = .{ .call_word = "outer-only" }, .line = 0 }};
+    const scope = (try ctx.captureQuotationScope(&body)) orelse return error.TestExpectedCapture;
+    const resolved = Context.lookupInCapturedScope(scope, "outer-only") orelse return error.TestExpectedResolution;
+    try std.testing.expectEqualStrings("outer-site", resolved.source_file.?);
+
+    // The enclosing frame binds `local` too, and the seed leaves it behind. An enclosing scope is
+    // routinely a module's whole top-level frame, so taking it whole is what makes a seed expensive.
+    try std.testing.expectEqual(@as(usize, 1), scope.lexical_frames.len);
+    try std.testing.expectEqual(@as(usize, 1), scope.lexical_frames[0].count());
+    try std.testing.expect(Context.lookupInCapturedScope(scope, "local") == null);
+}
+
+test "captureQuotationScope: a nested body naming only an enclosing scope's local captures through the seed" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const outer_inner = [_]Instruction{.{ .op = .{ .call_word = "local" }, .line = 0 }};
+    const outer = [_]Instruction{nestedBody(&outer_inner)};
+    try seedPoppedEnclosingScope(&ctx, &outer);
+
+    const inner = [_]Instruction{.{ .op = .{ .call_word = "outer-only" }, .line = 0 }};
+    const body = [_]Instruction{ nestedBody(&inner), .{ .op = .{ .call_word = "call" }, .line = 0 } };
+    try ctx.cacheQuotationBodyNestedNames(&body);
+
+    const scope = (try ctx.captureQuotationScope(&body)) orelse return error.TestExpectedCapture;
+    const resolved = Context.lookupInCapturedScope(scope, "outer-only") orelse return error.TestExpectedResolution;
+    try std.testing.expectEqualStrings("outer-site", resolved.source_file.?);
+}
+
+test "captureQuotationScope: a live binding answers its own name, and seeds nothing" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const outer_inner = [_]Instruction{.{ .op = .{ .call_word = "local" }, .line = 0 }};
+    const outer = [_]Instruction{nestedBody(&outer_inner)};
+    try seedPoppedEnclosingScope(&ctx, &outer);
+    try pushLiveFrameShadowingLocal(&ctx);
+
+    const body = [_]Instruction{.{ .op = .{ .call_word = "local" }, .line = 0 }};
+    const scope = (try ctx.captureQuotationScope(&body)) orelse return error.TestExpectedCapture;
+
+    const resolved = Context.lookupInCapturedScope(scope, "local") orelse return error.TestExpectedResolution;
+    try std.testing.expectEqualStrings("live-site", resolved.source_file.?);
+    try std.testing.expectEqual(@as(usize, 1), scope.lexical_frames.len);
+}
+
+test "captureQuotationScope: a body reading both sources keeps both, with the live one on top" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const outer_inner = [_]Instruction{.{ .op = .{ .call_word = "local" }, .line = 0 }};
+    const outer = [_]Instruction{nestedBody(&outer_inner)};
+    try seedPoppedEnclosingScope(&ctx, &outer);
+    try pushLiveFrameShadowingLocal(&ctx);
+
+    const body = [_]Instruction{
+        .{ .op = .{ .call_word = "outer-only" }, .line = 0 },
+        .{ .op = .{ .call_word = "local" }, .line = 0 },
+    };
+    const scope = (try ctx.captureQuotationScope(&body)) orelse return error.TestExpectedCapture;
+    try std.testing.expectEqual(@as(usize, 2), scope.lexical_frames.len);
+
+    const inherited = Context.lookupInCapturedScope(scope, "outer-only") orelse return error.TestExpectedResolution;
+    try std.testing.expectEqualStrings("outer-site", inherited.source_file.?);
+
+    const shadowed = Context.lookupInCapturedScope(scope, "local") orelse return error.TestExpectedResolution;
+    try std.testing.expectEqualStrings("live-site", shadowed.source_file.?);
+}
+
+test "captureQuotationScope: an enclosing scope binding nothing the body reads does not capture" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const outer_inner = [_]Instruction{.{ .op = .{ .call_word = "local" }, .line = 0 }};
+    const outer = [_]Instruction{nestedBody(&outer_inner)};
+    try seedPoppedEnclosingScope(&ctx, &outer);
+
+    const body = [_]Instruction{.{ .op = .{ .call_word = "elsewhere" }, .line = 0 }};
     try std.testing.expect((try ctx.captureQuotationScope(&body)) == null);
 }
 

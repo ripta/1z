@@ -1,0 +1,25 @@
+\ A quotation nested inside another one reads a local of the word that created the outer quotation,
+\ after that word has handed the outer quotation to another module in tail position.
+\
+\ The tail call pops the frame holding the local, so the nested body's own push finds nothing live
+\ to close over. It has to inherit the scope of the body it is nested in instead.
+\
+\ Each word is reached through `[ word ] call` rather than called directly. The failure needs the
+\ creating word to run with a module-deps frame that the tail-call loop itself pushed, and a bare
+\ call from a statement that continues afterward does not produce one. A one-word quotation body
+\ tail-calls into the module, which does, and keeps that out of the hands of line layout.
+
+use "testing" ;
+use "./nested_quotation_capture_tail_call_mod.1z" ;
+
+"a nested read survives a module-changing tail call" test-section
+
+[ through-private-helper ] call 0 "a private helper's tail call keeps the local reachable" assert=
+
+[ through-public-helper ] call 0 "a public word in another file keeps it reachable too" assert=
+
+[ through-quotation-valued-local ] call 0 "a callee invoking the block out of a local keeps it reachable" assert=
+
+[ through-helper-binding-its-own-local ] call 0 "a callee's own local does not displace the inherited one" assert=
+
+[ nested-read-prefers-the-local ] call "LOCAL-LABEL" "the inherited local outranks a same-named module word" assert=

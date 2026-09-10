@@ -1,0 +1,8 @@
+\ Third module for nested_quotation_capture_tail_call.1z. A word here is in neither the driver's
+\ module nor the one that builds the quotation, so a tail call into it changes module.
+
+apply-quot: ( q -- x ) [ call ] ;
+
+\ Binds a local of its own before invoking, so the callee's own lexical frame is live at the moment
+\ the passed quotation pushes its nested body.
+apply-quot-over-local: ( q -- x ) [ bias: 0 ; call bias + ] ;

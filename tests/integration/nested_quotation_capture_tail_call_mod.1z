@@ -1,0 +1,50 @@
+\ The module whose words lose their local. Reached from the driver, so each word below runs with a
+\ live module-deps frame, which is one of the three conditions the failure needs.
+\
+\ Every word here binds a local, then hands a quotation whose *nested* body reads that local to a
+\ word in another module, in tail position. The tail call pops the frame holding the local before
+\ the nested body's own push ever runs.
+
+use "./nested_quotation_capture_tail_call_helper.1z" ;
+
+private{
+  (call-quot): ( q -- x ) [ call ] ;
+
+  \ Invokes through a quotation-valued local rather than calling the argument directly, which is the
+  \ shape the minesweeper audio tests hit.
+  (call-via-local): ( q -- x ) [ held: swap ; held ] ;
+}
+
+\ The bug report's minimized repro: a private helper is a module-changing tail call, because
+\ private{ } snapshots its block into a synthetic <local-scope> module.
+through-private-helper: ( -- n ) [
+  seen: V{ } ;
+  [ [ seen #len ] call ] (call-quot)
+] ;
+
+\ An ordinary public word in another file reaches it the same way.
+through-public-helper: ( -- n ) [
+  seen: V{ } ;
+  [ [ seen #len ] call ] apply-quot
+] ;
+
+\ The original shape, where the callee invokes the block out of a local of its own.
+through-quotation-valued-local: ( -- n ) [
+  seen: V{ } ;
+  [ [ seen #len ] call ] (call-via-local)
+] ;
+
+\ The callee binds a local of its own, so its lexical frame occupies the stack position the popped
+\ one held. The seed has to reach past that rather than be shadowed by it.
+through-helper-binding-its-own-local: ( -- n ) [
+  seen: V{ } ;
+  [ [ seen #len ] call ] apply-quot-over-local
+] ;
+
+\ A nested read of a local that a same-named module word also answers. The local must win.
+label: ( -- s ) [ "MODULE-LABEL" ] ;
+
+nested-read-prefers-the-local: ( -- s ) [
+  label: "LOCAL-LABEL" ;
+  [ [ label ] call ] apply-quot
+] ;

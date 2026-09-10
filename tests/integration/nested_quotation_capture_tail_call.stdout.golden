@@ -1,0 +1,12 @@
+=== a nested read survives a module-changing tail call ===
+Stack: [ ]
+PASS: a private helper's tail call keeps the local reachable
+Stack: [ ]
+PASS: a public word in another file keeps it reachable too
+Stack: [ ]
+PASS: a callee invoking the block out of a local keeps it reachable
+Stack: [ ]
+PASS: a callee's own local does not displace the inherited one
+Stack: [ ]
+PASS: the inherited local outranks a same-named module word
+Stack: [ ]

@@ -753,6 +753,7 @@ fn addBaremetalRiscv64VirtTest(
     //              libc references. The symbol assertions pin the bare-metal entry surface in place.
     const verify = b.addSystemCommand(&.{ "sh", "-c", baremetal_verify_script, "baremetal-verify" });
     verify.addFileArg(kernel_elf);
+    restoreHostDeveloperDir(b, verify);
     verify.setName("baremetal aot verify: symbols and no libc");
     verify.expectExitCode(0);
 
@@ -796,6 +797,7 @@ fn addBaremetalRiscv64VirtTest(
 
     const dispatch_verify = b.addSystemCommand(&.{ "sh", "-c", baremetal_verify_script, "baremetal-verify" });
     dispatch_verify.addFileArg(dispatch_elf);
+    restoreHostDeveloperDir(b, dispatch_verify);
     dispatch_verify.setName("baremetal aot verify: dispatch symbols and no libc");
     dispatch_verify.expectExitCode(0);
 
@@ -820,6 +822,7 @@ fn addBaremetalRiscv64VirtTest(
 
     const mixed_verify = b.addSystemCommand(&.{ "sh", "-c", baremetal_verify_script, "baremetal-verify" });
     mixed_verify.addFileArg(mixed_elf);
+    restoreHostDeveloperDir(b, mixed_verify);
     mixed_verify.setName("baremetal aot verify: mixed-operand symbols and no libc");
     mixed_verify.expectExitCode(0);
 
@@ -883,16 +886,16 @@ const baremetal_verify_script =
     \\echo "PASS: linked freestanding ELF carries _start/kernel_main/onez_baremetal_main/onez_virt_uart_writer and no hosted libc imports"
 ;
 
-/// Give `run` the host's real `DEVELOPER_DIR`, for a step whose program shells out to a compiler.
+/// Give `run` the host's real `DEVELOPER_DIR`, for a step whose program shells out to the toolchain.
 ///
 /// Zig picks a macOS SDK by matching the running OS and offers no override, so the Makefile hands
 /// it a `DEVELOPER_DIR` that xcrun rejects. Zig's own compile steps need that, and it has to be on
 /// zig's command line, because the build runner links before this file ever runs.
 ///
 /// Everything the build then runs inherits the same rejected path and finds no SDK at all. A unit
-/// test shelling out to `cc` gets an xcrun error, and an AOT build shelling out to `zig cc` links
-/// against nothing. `ONEZ_HOST_DEVELOPER_DIR` carries the real one past the override, for the
-/// spawned steps alone.
+/// test shelling out to `cc` gets an xcrun error, an AOT build shelling out to `zig cc` links
+/// against nothing, and a verify step running `nm` gets the same error rather than a symbol table.
+/// `ONEZ_HOST_DEVELOPER_DIR` carries the real one past the override, for the spawned steps alone.
 fn restoreHostDeveloperDir(b: *std.Build, run: *std.Build.Step.Run) void {
     const host = b.graph.env_map.get("ONEZ_HOST_DEVELOPER_DIR") orelse return;
     if (host.len == 0) return;
