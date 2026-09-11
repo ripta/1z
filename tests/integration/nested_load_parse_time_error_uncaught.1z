@@ -1,0 +1,8 @@
+\ An uncaught parse-time failure inside a module reached through `load` must report its type,
+\ message, and location, the way it does when the same module is the entry file.
+\
+\ The parse-time handler folded the chain into the context's execution details and then cleared
+\ them, so the re-raise that carries the failure out of the load had nothing left to render and
+\ the top level printed a bare `error.user-thrown`.
+
+"fixtures/parse_types_until_typo.1z" load drop

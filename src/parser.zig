@@ -185,15 +185,12 @@ fn releaseRetainedEmissionLiterals(emissions: []const DeferredEmission) void {
     }
 }
 
-/// Execute a parse-time word during parsing:
-///
-/// 1. Find trailing `push_literal` instructions after the last `call_word` barrier
-/// 2. Push trailing literals onto the data stack
-/// 3. Keep everything before the trail, including call_words and their operands, untouched
-/// 4. Run the parse-time word
 /// Handle an error from a parse-time word execution: populate diagnostics on
-/// the context, clear stale runtime error state, and return the appropriate
-/// ParseError.
+/// the context and return the appropriate ParseError.
+///
+/// The folded rows are left where they are. A caller that re-raises the failure as a runtime error
+/// has no other source for the chain, and every consumer that renders `parse_diagnostics` instead
+/// clears for itself once it is done.
 fn handleParseTimeError(c: *Context, err: anyerror) ParseError {
     if (err == error.DebuggerQuit) return ParseError.DebuggerQuit;
 
@@ -242,7 +239,6 @@ fn handleParseTimeError(c: *Context, err: anyerror) ParseError {
             .error_type = @errorName(err),
         };
     }
-    c.clearExecutionDetails();
     return ParseError.ParseTimeExecutionError;
 }
 
@@ -309,6 +305,12 @@ fn hasParseTimeMarkerInTrail(instructions: []const Instruction) bool {
     return false;
 }
 
+/// Execute a parse-time word during parsing:
+///
+/// 1. Find trailing `push_literal` instructions after the last `call_word` barrier
+/// 2. Push trailing literals onto the data stack
+/// 3. Keep everything before the trail, including call_words and their operands, untouched
+/// 4. Run the parse-time word
 fn executeParseTimeWord(
     c: *Context,
     word: WordDefinition,
