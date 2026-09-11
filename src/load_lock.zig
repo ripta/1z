@@ -238,6 +238,14 @@ pub const LoadLock = struct {
         defer self.mu.unlock();
         return self.owner != null and self.owner.?.eql(owner);
     }
+
+    /// Whether anyone holds the lock, which `isHeldBy` cannot answer without an owner to
+    /// name.
+    pub fn isHeld(self: *LoadLock) bool {
+        self.mu.lock();
+        defer self.mu.unlock();
+        return self.owner != null;
+    }
 };
 
 fn testTask() Task {

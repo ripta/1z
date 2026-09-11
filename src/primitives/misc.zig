@@ -30,8 +30,10 @@ const primitives_root = @import("../primitives.zig");
 const embedded_stdlib = @import("../embedded_stdlib.zig");
 const LoadLock = @import("../load_lock.zig").LoadLock;
 const ModuleLoadRecord = @import("../module_load_record.zig").ModuleLoadRecord;
-const Task = @import("../task.zig").Task;
-const TaskScope = @import("../task.zig").TaskScope;
+const task_mod = @import("../task.zig");
+const Task = task_mod.Task;
+const TaskScope = task_mod.TaskScope;
+const Scheduler = @import("../scheduler.zig").Scheduler;
 
 const popString = helpers.popString;
 
@@ -377,7 +379,7 @@ pub fn nativeLoadImpl(ctx: *Context, cache: *value_mod.MutableMap, filename: []c
     try ctx.module_load_record.push(.{
         .resolved = resolved,
         .filename = filename,
-        .owner = loadLockOwner(ctx),
+        .owner = loadLockOwner(),
     });
     defer ctx.module_load_record.pop(resolved);
 
@@ -1343,11 +1345,29 @@ fn propagateWordId(ctx: *Context, name: []const u8, word_id: u32) void {
 
 /// The current execution's load-lock identity: the running task, or the main sentinel for
 /// the non-task main thread.
-fn loadLockOwner(ctx: *Context) LoadLock.Owner {
-    if (ctx.scheduler) |sched| {
-        if (sched.current_task) |task| return .{ .task = task };
-    }
+///
+/// Read from the thread, never from a context. A `task-scope` points its caller's
+/// `scheduler` at the primary worker for the scope's whole duration, so the handle context
+/// an embedder loads through names the primary no matter which worker is asking. A task body
+/// runs only inside `coroResume`, so no resumed task here means this thread runs none, and
+/// any `current_task` reached through a context would be another worker's.
+///
+/// Getting it wrong is not a missed optimization. A wrong task identity takes the reentrant
+/// branch of an unrelated task's hold, so two loads run at once over the root arena, the
+/// module cache, and the in-flight record.
+fn loadLockOwner() LoadLock.Owner {
+    if (task_mod.resumed_task) |task| return .{ .task = task };
     return .main;
+}
+
+/// The scheduler driving this OS thread, or null off any worker.
+///
+/// Read from the thread for the same reason as `loadLockOwner`, and from the same source. A
+/// task is only ever resumed by its home worker, so the resumed task's home is this thread's
+/// scheduler.
+fn currentScheduler() ?*Scheduler {
+    const task = task_mod.resumed_task orelse return null;
+    return task.ctx.scheduler;
 }
 
 /// Acquire the process-wide load lock, serializing this load against every other.
@@ -1365,7 +1385,7 @@ fn loadLockOwner(ctx: *Context) LoadLock.Owner {
 /// propagates.
 fn acquireLoadLock(ctx: *Context) anyerror!void {
     const lock = ctx.load_lock;
-    switch (loadLockOwner(ctx)) {
+    switch (loadLockOwner()) {
         .main => lock.acquireMain(),
         .task => |task| try acquireLoadLockAsTask(ctx, lock, task),
     }
@@ -1397,7 +1417,7 @@ fn holderAwaitsTask(holder: LoadLock.Owner, contender: *Task) bool {
 }
 
 fn acquireLoadLockAsTask(ctx: *Context, lock: *LoadLock, task: *Task) anyerror!void {
-    const sched = ctx.scheduler.?;
+    const sched = currentScheduler().?;
     const owner: LoadLock.Owner = .{ .task = task };
     while (true) {
         const holder = lock.tryAcquireOrHolder(owner) orelse return;
@@ -1457,11 +1477,11 @@ fn acquireLoadLockAsTask(ctx: *Context, lock: *LoadLock, task: *Task) anyerror!v
 /// suspended hold when a borrow ends; a restored hold delegates onward to a queued waiter
 /// the restored owner awaits, which its own release could never serve.
 ///
-/// Panics when a waiter must be woken and the releasing context has no scheduler; a queued
-/// waiter implies a scheduler ran it.
+/// Panics when a waiter must be woken and no task is resumed on the releasing thread; a
+/// queued waiter implies a scheduler ran it.
 fn releaseLoadLock(ctx: *Context) void {
     const lock = ctx.load_lock;
-    var result = lock.release(loadLockOwner(ctx));
+    var result = lock.release(loadLockOwner());
     while (true) {
         const to_wake: *Task = switch (result) {
             .none => return,
@@ -1471,8 +1491,8 @@ fn releaseLoadLock(ctx: *Context) void {
             },
             .wake => |task| task,
         };
-        const sched = ctx.scheduler orelse
-            @panic("load-lock waiter queued with no scheduler on the releasing context");
+        const sched = currentScheduler() orelse
+            @panic("load-lock waiter queued with no task resumed on the releasing thread");
         sched.wakeTask(to_wake) catch {
             // The waiter was made owner but its wake was dropped, so it can never run. Pass
             // the hold on rather than leave a process-wide lock stranded on it.
@@ -1483,21 +1503,45 @@ fn releaseLoadLock(ctx: *Context) void {
     }
 }
 
+/// A load's hold on the load lock together with its `load_target` redirect, released as one.
+///
+/// Every entry into `nativeLoadImpl` runs under one of these. Holding the lock is what makes
+/// the shared in-flight load record safe to touch, and the redirect is what puts the load's
+/// durable state on the root rather than on whichever context happens to be executing.
+pub const LoadGuard = struct {
+    ctx: *Context,
+    saved_target: ?*Context,
+
+    /// Restore the enclosing load's target and drop one level of the hold.
+    ///
+    /// The target goes back to what it was rather than to null, which is what keeps a nested
+    /// `use` reentrant.
+    pub fn end(self: LoadGuard) void {
+        self.ctx.load_target = self.saved_target;
+        releaseLoadLock(self.ctx);
+    }
+};
+
+/// Open a load: take the lock, then redirect durable state to the root.
+///
+/// Callers must read `ctx.quotationAllocator()` only after this returns. It resolves through
+/// `stateTarget`, so an allocator taken beforehand is the executing context's arena and
+/// outlives nothing.
+pub fn beginLoad(ctx: *Context) anyerror!LoadGuard {
+    try acquireLoadLock(ctx);
+    const saved_target = ctx.load_target;
+    ctx.load_target = ctx.rootContext();
+    return .{ .ctx = ctx, .saved_target = saved_target };
+}
+
 /// load-file ( cache filename -- module )
 ///
 /// Any worker may load; loads serialize on the process-wide load lock. An already-cached
 /// resolved path returns the cached module without executing; `reload-file` is the path that
 /// re-executes.
 fn nativeLoadFile(ctx: *Context) anyerror!void {
-    try acquireLoadLock(ctx);
-    defer releaseLoadLock(ctx);
-
-    // Target root state for the load's duration, so everything the load
-    // produces outlives a loading task. Save/restore keeps a nested `use`
-    // reentrant.
-    const saved_target = ctx.load_target;
-    ctx.load_target = ctx.rootContext();
-    defer ctx.load_target = saved_target;
+    const guard = try beginLoad(ctx);
+    defer guard.end();
 
     const alloc = ctx.quotationAllocator();
 
@@ -1580,13 +1624,8 @@ fn findCachedResolvedPath(cache: *value_mod.MutableMap, filename: []const u8) ?[
 
 /// reload-file ( cache filename -- module )
 fn nativeReloadFile(ctx: *Context) anyerror!void {
-    try acquireLoadLock(ctx);
-    defer releaseLoadLock(ctx);
-
-    // Target root state for the load's duration; see `nativeLoadFile`.
-    const saved_target = ctx.load_target;
-    ctx.load_target = ctx.rootContext();
-    defer ctx.load_target = saved_target;
+    const guard = try beginLoad(ctx);
+    defer guard.end();
 
     const alloc = ctx.quotationAllocator();
 
@@ -1642,13 +1681,8 @@ fn nativeReloadFile(ctx: *Context) anyerror!void {
 fn nativeLoadCheckFile(ctx: *Context) anyerror!void {
     if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "load-check-file");
 
-    try acquireLoadLock(ctx);
-    defer releaseLoadLock(ctx);
-
-    // Target root state for the load's duration; see `nativeLoadFile`.
-    const saved_target = ctx.load_target;
-    ctx.load_target = ctx.rootContext();
-    defer ctx.load_target = saved_target;
+    const guard = try beginLoad(ctx);
+    defer guard.end();
 
     const alloc = ctx.quotationAllocator();
 
@@ -1869,6 +1903,53 @@ fn nativeModuleName(ctx: *Context) anyerror!void {
 }
 
 const build_options = @import("build_options");
+
+test "loadLockOwner: a thread running no task is main" {
+    try std.testing.expect(loadLockOwner() == .main);
+}
+
+test "loadLockOwner: the thread's resumed task names the owner" {
+    // Only identity is read, so an uninitialized task stands in for one the scheduler has
+    // resumed on this thread.
+    var task: Task = undefined;
+    task_mod.resumed_task = &task;
+    defer task_mod.resumed_task = null;
+
+    const owner = loadLockOwner();
+    try std.testing.expect(owner == .task);
+    try std.testing.expectEqual(&task, owner.task);
+}
+
+test "currentScheduler: a thread running no task drives no scheduler" {
+    try std.testing.expectEqual(@as(?*Scheduler, null), currentScheduler());
+}
+
+test "currentScheduler: the resumed task's home is the thread's scheduler" {
+    var root = Context.init(std.testing.allocator);
+    defer root.deinit();
+
+    // A `task-scope` leaves the primary on its caller, and the C embedding API then hands
+    // that context to every host callback. The task running here is homed elsewhere, and it
+    // is the one `releaseLoadLock` must name: `wakeTask` decides local append versus
+    // external queue against it, and the primary would append to another worker's queue.
+    var primary = try Scheduler.init(std.testing.allocator);
+    defer primary.deinit();
+    root.scheduler = &primary;
+    defer root.scheduler = null;
+
+    var background = try Scheduler.init(std.testing.allocator);
+    defer background.deinit();
+
+    var task_ctx = try Context.initForTask(std.testing.allocator, &root, &background);
+    defer task_ctx.deinit();
+    var task: Task = undefined;
+    task.ctx = &task_ctx;
+
+    task_mod.resumed_task = &task;
+    defer task_mod.resumed_task = null;
+
+    try std.testing.expectEqual(&background, currentScheduler().?);
+}
 
 test "classifyResolved treats non-virtual paths as file" {
     const rm = classifyResolved("/tmp/foo.1z") orelse return error.UnexpectedNull;

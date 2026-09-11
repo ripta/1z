@@ -2098,19 +2098,47 @@ export fn onez_stack_peek(ptr: ?*anyopaque, index: usize, out: *?*anyopaque) c_i
 // Module loading
 // =========================================================================
 
+/// Read the module cache under its header mutex.
+///
+/// The probe belongs inside the load's hold. A caller that waited on the lock lost the
+/// probe-to-lock window to whoever held it, and reading beforehand would re-execute a module
+/// the winner has already finished.
+fn probeModuleCache(ctx: *Context, resolved: []const u8) ?Value {
+    ctx.module_cache_value.header.lock();
+    defer ctx.module_cache_value.header.unlock();
+    return ctx.module_cache_value.map.get(resolved);
+}
+
 export fn onez_load_file(ptr: ?*anyopaque, path: [*]const u8, path_len: usize) c_int {
     const handle = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
     const ctx = handle.ctx;
-    const alloc = ctx.quotationAllocator();
     const filepath = path[0..path_len];
 
     ctx.clearExecutionDetails();
     clearLastError(handle);
 
+    const guard = misc.beginLoad(ctx) catch |err| {
+        captureError(handle, err);
+        return ONEZ_ERR_LOAD_FAILED;
+    };
+    defer guard.end();
+
+    const alloc = ctx.quotationAllocator();
+
     const resolved = misc.resolveLoadPath(ctx, filepath, alloc) orelse {
         setLastError(handle, "file not found: {s}", .{filepath});
         return ONEZ_ERR_LOAD_FAILED;
     };
+
+    if (probeModuleCache(ctx, resolved)) |cached| {
+        if (cached == .module) {
+            ctx.stack.push(cached) catch |err| {
+                captureError(handle, err);
+                return ONEZ_ERR_LOAD_FAILED;
+            };
+            return ONEZ_OK;
+        }
+    }
 
     const resolved_module = misc.classifyResolved(resolved) orelse {
         setLastError(handle, "file not found: {s}", .{filepath});
@@ -2128,22 +2156,25 @@ export fn onez_load_file(ptr: ?*anyopaque, path: [*]const u8, path_len: usize) c
 export fn onez_use_module(ptr: ?*anyopaque, name: [*]const u8, name_len: usize) c_int {
     const handle = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
     const ctx = handle.ctx;
-    const alloc = ctx.quotationAllocator();
     const mod_name = name[0..name_len];
 
     ctx.clearExecutionDetails();
     clearLastError(handle);
+
+    const guard = misc.beginLoad(ctx) catch |err| {
+        captureError(handle, err);
+        return ONEZ_ERR_LOAD_FAILED;
+    };
+    defer guard.end();
+
+    const alloc = ctx.quotationAllocator();
 
     const resolved = misc.resolveLoadPath(ctx, mod_name, alloc) orelse {
         setLastError(handle, "module not found: {s}", .{mod_name});
         return ONEZ_ERR_LOAD_FAILED;
     };
 
-    // Check cache first
-    ctx.module_cache_value.header.lock();
-    const cache_probe = ctx.module_cache_value.map.get(resolved);
-    ctx.module_cache_value.header.unlock();
-    const module = if (cache_probe) |cached| blk: {
+    const module = if (probeModuleCache(ctx, resolved)) |cached| blk: {
         switch (cached) {
             .module => |m| break :blk m,
             else => {
@@ -2704,6 +2735,45 @@ fn failingHostCallback(ctx: ?*anyopaque, _: ?*anyopaque) callconv(.c) c_int {
     const msg = "custom host error message";
     onez_set_error(ctx, msg.ptr, msg.len);
     return 1;
+}
+
+const NestedLoadProbe = struct {
+    inner_path: []const u8,
+    calls: usize = 0,
+    nested_rc: c_int = -1,
+    /// Whether someone already held the load lock when the callback fired. Without this a
+    /// scheduling shift would quietly turn a contention test into an uncontended one.
+    saw_holder: bool = false,
+};
+
+/// Re-enter the library through `onez_load_file` from inside a host word call.
+fn nestedLoadHostCallback(ctx: ?*anyopaque, user_data: ?*anyopaque) callconv(.c) c_int {
+    const probe: *NestedLoadProbe = @ptrCast(@alignCast(user_data orelse return 1));
+    probe.calls += 1;
+    if (castHandle(ctx)) |handle| {
+        probe.saw_holder = handle.ctx.load_lock.isHeld();
+    }
+    probe.nested_rc = onez_load_file(ctx, probe.inner_path.ptr, probe.inner_path.len);
+    return 0;
+}
+
+/// Drop the module a successful nested load pushed, so the 1z body that called this word can
+/// go on using the stack.
+///
+/// Gated on success: a failed `onez_load_file` pushes nothing, and popping anyway would take
+/// the caller's own top of stack.
+fn nestedLoadAndDropHostCallback(ctx: ?*anyopaque, user_data: ?*anyopaque) callconv(.c) c_int {
+    const rc = nestedLoadHostCallback(ctx, user_data);
+
+    const handle = castHandle(ctx) orelse return 1;
+    const probe: *NestedLoadProbe = @ptrCast(@alignCast(user_data orelse return 1));
+    if (probe.nested_rc == ONEZ_OK) {
+        if (handle.ctx.stack.pop()) |val| {
+            container_backing.releaseValue(val);
+        } else |_| {}
+    }
+
+    return rc;
 }
 
 // =============================================================================
@@ -3787,6 +3857,61 @@ test "load_file loads a file and pushes module" {
     try std.testing.expectEqual(depth_before + 1, onez_stack_depth(handle_ptr));
 }
 
+/// Stage a one-word module in `dir` and return its absolute path, owned by the caller.
+fn stageModuleFile(dir: std.fs.Dir, name: []const u8, source: []const u8) ![]const u8 {
+    var file = try dir.createFile(name, .{});
+    defer file.close();
+    try file.writeAll(source);
+
+    const dir_path = try dir.realpathAlloc(std.testing.allocator, ".");
+    defer std.testing.allocator.free(dir_path);
+    return std.fs.path.join(std.testing.allocator, &.{ dir_path, name });
+}
+
+test "load_file returns the cached module on a repeat call" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const path = try stageModuleFile(tmp.dir, "repeat.1z", "repeat-word: [ 5 ] ;\n");
+    defer std.testing.allocator.free(path);
+
+    const ctx = castHandle(handle_ptr).?.ctx;
+    try std.testing.expectEqual(ONEZ_OK, onez_load_file(handle_ptr, path.ptr, path.len));
+    const first = try ctx.stack.pop();
+    defer container_backing.releaseValue(first);
+    try std.testing.expectEqual(ONEZ_OK, onez_load_file(handle_ptr, path.ptr, path.len));
+    const second = try ctx.stack.pop();
+    defer container_backing.releaseValue(second);
+
+    // A second execution of the file would build a distinct module and lose it to the
+    // first-write-wins cache insert.
+    try std.testing.expect(first == .module);
+    try std.testing.expect(second == .module);
+    try std.testing.expectEqual(first.module, second.module);
+}
+
+test "load_file leaves the load lock and load_target as it found them" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const path = try stageModuleFile(tmp.dir, "balanced.1z", "balanced-word: [ 6 ] ;\n");
+    defer std.testing.allocator.free(path);
+
+    const ctx = castHandle(handle_ptr).?.ctx;
+    const target_before = ctx.load_target;
+    try std.testing.expectEqual(ONEZ_OK, onez_load_file(handle_ptr, path.ptr, path.len));
+
+    try std.testing.expectEqual(target_before, ctx.load_target);
+    try std.testing.expect(!ctx.load_lock.isHeldBy(.main));
+    try std.testing.expectEqual(@as(usize, 0), ctx.module_load_record.entries.items.len);
+}
+
 test "load_file returns error for nonexistent file" {
     const handle_ptr = onez_init();
     try std.testing.expect(handle_ptr != null);
@@ -3795,6 +3920,9 @@ test "load_file returns error for nonexistent file" {
     const bad = "/nonexistent/path/file.1z";
     try std.testing.expectEqual(ONEZ_ERR_LOAD_FAILED, onez_load_file(handle_ptr, bad.ptr, bad.len));
     try std.testing.expect(onez_last_error(handle_ptr) != null);
+
+    const ctx = castHandle(handle_ptr).?.ctx;
+    try std.testing.expect(!ctx.load_lock.isHeldBy(.main));
 }
 
 test "load_file null handle" {
@@ -3823,6 +3951,22 @@ test "use_module cached reuse" {
     try std.testing.expectEqual(ONEZ_OK, onez_use_module(handle_ptr, name.ptr, name.len));
 }
 
+test "use_module leaves the load lock and load_target as it found them" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    const ctx = castHandle(handle_ptr).?.ctx;
+    const target_before = ctx.load_target;
+
+    const name = "testing";
+    try std.testing.expectEqual(ONEZ_OK, onez_use_module(handle_ptr, name.ptr, name.len));
+
+    try std.testing.expectEqual(target_before, ctx.load_target);
+    try std.testing.expect(!ctx.load_lock.isHeldBy(.main));
+    try std.testing.expectEqual(@as(usize, 0), ctx.module_load_record.entries.items.len);
+}
+
 test "use_module returns error for nonexistent module" {
     const handle_ptr = onez_init();
     try std.testing.expect(handle_ptr != null);
@@ -3835,6 +3979,103 @@ test "use_module returns error for nonexistent module" {
 
 test "use_module null handle" {
     try std.testing.expectEqual(ONEZ_ERR_NULL_HANDLE, onez_use_module(null, "x", 1));
+}
+
+test "load_file from a host callback during a task-driven load" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const outer_path = try stageModuleFile(tmp.dir, "outer.1z", "nested-host-load\nouter-word: [ 8 ] ;\n");
+    defer std.testing.allocator.free(outer_path);
+    const inner_path = try stageModuleFile(tmp.dir, "inner.1z", "inner-word: [ 7 ] ;\n");
+    defer std.testing.allocator.free(inner_path);
+
+    var probe = NestedLoadProbe{ .inner_path = inner_path };
+    try std.testing.expectEqual(
+        ONEZ_OK,
+        onez_register_word(handle_ptr, "nested-host-load", nestedLoadHostCallback, &probe),
+    );
+
+    // The spawned task owns the load lock for `outer.1z`, and the callback re-enters the
+    // library on that task's worker thread through the handle's context. Naming that call
+    // anything but the spawned task parks the worker on a hold only the task it is running
+    // could release.
+    const code = try std.fmt.allocPrint(
+        std.testing.allocator,
+        "[ [ \"{s}\" load drop ] spawn drop ] task-scope",
+        .{outer_path},
+    );
+    defer std.testing.allocator.free(code);
+    try std.testing.expectEqual(ONEZ_OK, onez_eval(handle_ptr, code.ptr, code.len));
+
+    try std.testing.expectEqual(@as(usize, 1), probe.calls);
+    try std.testing.expectEqual(ONEZ_OK, probe.nested_rc);
+
+    const ctx = castHandle(handle_ptr).?.ctx;
+    try std.testing.expect(!ctx.load_lock.isHeldBy(.main));
+    try std.testing.expectEqual(@as(usize, 0), ctx.module_load_record.entries.items.len);
+}
+
+test "load_file from a host callback contends with a concurrent task load" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    // The holder's own top level parks it mid-load, through an inner scope whose body runs
+    // on a fresh context and so escapes the sleep gate on loads. That is what holds the lock
+    // open across a suspension for the contender to arrive in.
+    //
+    // Whether a load may park that way at all is unsettled. Deciding it cannot takes the
+    // contention away, and this test then fails at `saw_holder` rather than passing quietly.
+    const slow_path = try stageModuleFile(
+        tmp.dir,
+        "slow.1z",
+        "use \"time\" ;\n[ 50 milliseconds sleep ] task-scope\nslow-word: ( -- s ) [ \"slow\" ] ;\n",
+    );
+    defer std.testing.allocator.free(slow_path);
+    const contended_path = try stageModuleFile(tmp.dir, "contended.1z", "contended-word: [ 9 ] ;\n");
+    defer std.testing.allocator.free(contended_path);
+
+    var probe = NestedLoadProbe{ .inner_path = contended_path };
+    try std.testing.expectEqual(
+        ONEZ_OK,
+        onez_register_word(handle_ptr, "contend-host-load", nestedLoadAndDropHostCallback, &probe),
+    );
+
+    // The scope body is itself a task, and it is the contender. Spawning the holder and then
+    // sleeping hands the holder the lock first; the 5 ms head start against the holder's
+    // 50 ms park is what makes the contention ordered rather than raced. Neither task is in
+    // the other's wait chain, so the contender queues and suspends instead of borrowing the
+    // hold, and the holder's release has to wake it.
+    //
+    // `probe.saw_holder` is the guard on all of that: without it a scheduling shift turns
+    // this into an uncontended load that still passes.
+    const code = try std.fmt.allocPrint(
+        std.testing.allocator,
+        "use \"time\" ;\n" ++
+            "[ done: 1 <buffered-channel> ;" ++
+            " [ \"{s}\" load drop t done send ] spawn drop" ++
+            " 5 milliseconds sleep" ++
+            " contend-host-load" ++
+            " done receive drop ] task-scope",
+        .{slow_path},
+    );
+    defer std.testing.allocator.free(code);
+    try std.testing.expectEqual(ONEZ_OK, onez_eval(handle_ptr, code.ptr, code.len));
+
+    try std.testing.expectEqual(@as(usize, 1), probe.calls);
+    try std.testing.expectEqual(ONEZ_OK, probe.nested_rc);
+    try std.testing.expect(probe.saw_holder);
+
+    const ctx = castHandle(handle_ptr).?.ctx;
+    try std.testing.expect(!ctx.load_lock.isHeldBy(.main));
+    try std.testing.expectEqual(@as(usize, 0), ctx.module_load_record.entries.items.len);
 }
 
 test "register_word_with_effect attaches stack effect visible via introspection" {

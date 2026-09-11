@@ -66,8 +66,21 @@ const mc = if (is_freestanding) struct {
     @cInclude("minicoro.h");
 });
 
+/// The task whose coroutine this OS thread is currently resumed into, or null when the
+/// thread is running outside any task.
+///
+/// A `Context` cannot answer this. One context is reachable from several worker threads at
+/// once, since the C embedding API hands every host callback the same handle context
+/// whichever worker it fires on. Its scheduler names whatever that scheduler is running,
+/// not what this thread is. Only thread-local state can.
+pub threadlocal var resumed_task: ?*Task = null;
+
 /// Resume a task's coroutine from the calling (scheduler) context.
 pub fn coroResume(task: *Task) void {
+    const prev = resumed_task;
+    resumed_task = task;
+    defer resumed_task = prev;
+
     _ = mc.mco_resume(task.coro.?);
 }
 
