@@ -1,0 +1,18 @@
+=== module cycle detection ===
+Stack: [ ]
+Stack: [ [ "fixtures/cycle_two_a.1z" load ] ]
+PASS: a two-module cycle is rejected
+Stack: [ ]
+Stack: [ [ "fixtures/cycle_three_a.1z" load ] ]
+PASS: a three-module cycle is rejected
+Stack: [ ]
+Stack: [ [ "fixtures/cycle_self.1z" load ] ]
+PASS: a module importing itself is rejected
+Stack: [ ]
+Stack: [ [ "fixtures/cycle_spelling_a.1z" load ] ]
+PASS: a cycle spanning two spellings of one file is rejected
+Stack: [ ]
+Stack: [ "circular dependency: fixtures/cycle_three_a.1z -> ./cycle_three_b.1z -> ./cycle_three_c.1z -> ./cycle_three_a.1z" ]
+Stack: [ "circular dependency: fixtures/cycle_three_a.1z -> ./cycle_three_b.1z -> ./cycle_three_c.1z -> ./cycle_three_a.1z" "circular dependency: fixtures/cycle_three_a.1z -> ./cycle_three_b.1z -> ./cycle_three_c.1z -> ./cycle_three_a.1z" ]
+PASS: the chain names every module in import order
+Stack: [ ]

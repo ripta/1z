@@ -1,0 +1,5 @@
+\ Companion module for module_cycle.1z. Closes the two-module cycle back onto cycle_two_a.1z.
+
+use "./cycle_two_a.1z" ;
+
+two-b: ( -- n ) [ 2 ] ;

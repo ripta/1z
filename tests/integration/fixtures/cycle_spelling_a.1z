@@ -1,0 +1,6 @@
+\ Companion module for module_cycle.1z. Half of a cycle whose two members spell each other's
+\ paths differently.
+
+use "./cycle_spelling_b.1z" ;
+
+spelling-a: ( -- n ) [ 1 ] ;

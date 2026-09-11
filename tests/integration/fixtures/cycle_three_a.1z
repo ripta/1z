@@ -1,0 +1,5 @@
+\ Companion module for module_cycle.1z. First leg of a three-module import cycle.
+
+use "./cycle_three_b.1z" ;
+
+three-a: ( -- n ) [ 1 ] ;

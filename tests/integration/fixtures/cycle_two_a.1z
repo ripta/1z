@@ -1,0 +1,5 @@
+\ Companion module for module_cycle.1z. Half of a two-module import cycle.
+
+use "./cycle_two_b.1z" ;
+
+two-a: ( -- n ) [ 1 ] ;

@@ -67,6 +67,7 @@ const visitNestedNames = @import("nested_name_cache.zig").visitNestedNames;
 const may_define = @import("may_define.zig");
 const closure_body_registry = @import("closure_body_registry.zig");
 const LoadLock = @import("load_lock.zig").LoadLock;
+const ModuleLoadRecord = @import("module_load_record.zig").ModuleLoadRecord;
 const ReifiedDecodeCache = @import("reified_decode_cache.zig").ReifiedDecodeCache;
 const BindingNameStore = @import("binding_name_store.zig").BindingNameStore;
 
@@ -1299,6 +1300,13 @@ pub const Context = struct {
     /// The load entries hold it for a load's whole duration, across suspension, so only one
     /// load at a time writes the root state a load targets.
     load_lock: *LoadLock = undefined,
+    /// Process-shared record of the module loads currently in flight. Heap-allocated by the root
+    /// context and shared by pointer to all child task contexts.
+    ///
+    /// A module reaches the cache only once its body finishes, so this is the only place a load
+    /// can learn that the file it is about to read is already being read further up the chain.
+    /// Serialized by `load_lock`, which every load holds for its whole duration.
+    module_load_record: *ModuleLoadRecord = undefined,
     /// Process-shared intern table for `;` binding names. Heap-allocated by the root context and
     /// shared by pointer to all child task contexts.
     ///
@@ -1496,6 +1504,12 @@ pub const Context = struct {
             std.debug.panic("Failed to allocate load lock: {any}", .{err});
         };
 
+        // Allocate the shared in-flight load record on the long-lived allocator; the root context
+        // frees it in deinit.
+        ctx.module_load_record = ModuleLoadRecord.create(allocator) catch |err| {
+            std.debug.panic("Failed to allocate module load record: {any}", .{err});
+        };
+
         // Allocate the shared binding-name intern table on the long-lived allocator; the root
         // context frees it in deinit.
         ctx.binding_names = BindingNameStore.create(allocator) catch |err| {
@@ -1682,6 +1696,10 @@ pub const Context = struct {
         // Share the parent's module-load lock so loads serialize process-wide. Aliased, never
         // retained: the root owns it.
         ctx.load_lock = parent.load_lock;
+
+        // Share the parent's in-flight load record so a load started here sees the chain it is
+        // nested inside. Aliased, never retained: the root owns it.
+        ctx.module_load_record = parent.module_load_record;
 
         // Share the parent's binding-name intern table so a task's `;` keys its frame with the same
         // process-lifetime slice the root would. Aliased, never retained: the root owns it.
@@ -2067,6 +2085,7 @@ pub const Context = struct {
             self.nested_name_cache.destroy();
             self.reified_decode_cache.destroy();
             self.load_lock.destroy();
+            self.module_load_record.destroy();
             self.binding_names.destroy();
             self.allocator.destroy(self.lock_order_tracker);
             self.allocator.destroy(self.shared_lock);
@@ -12293,7 +12312,7 @@ test "cacheQuotationBodyNestedNames: a body whose state target is not the root d
     try std.testing.expectEqual(@as(usize, 0), task_ctx.nested_name_cache.count());
 }
 
-test "initForTask: shares the parent's module-load lock" {
+test "initForTask: shares the parent's module-load lock and in-flight record" {
     var parent = Context.init(std.testing.allocator);
     defer parent.deinit();
 
@@ -12306,6 +12325,7 @@ test "initForTask: shares the parent's module-load lock" {
     defer task_ctx.deinit();
 
     try std.testing.expectEqual(parent.load_lock, task_ctx.load_lock);
+    try std.testing.expectEqual(parent.module_load_record, task_ctx.module_load_record);
 }
 
 test "initForTask: chains root_context through a nested spawn" {

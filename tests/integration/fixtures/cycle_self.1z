@@ -1,0 +1,5 @@
+\ Companion module for module_cycle.1z. A module that imports itself.
+
+use "./cycle_self.1z" ;
+
+self-word: ( -- n ) [ 1 ] ;

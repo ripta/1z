@@ -1,0 +1,25 @@
+\ A module cycle is rejected with an error naming the chain, rather than recursing until the
+\ memory limit fires. `use` runs at parse time and cannot be caught, so each case reaches the
+\ loader through the runtime `load` word.
+
+use "testing" ;
+
+"module cycle detection" test-section
+
+[ "fixtures/cycle_two_a.1z" load ]
+circular-dependency: "a two-module cycle is rejected" assert-error-type
+
+[ "fixtures/cycle_three_a.1z" load ]
+circular-dependency: "a three-module cycle is rejected" assert-error-type
+
+[ "fixtures/cycle_self.1z" load ]
+circular-dependency: "a module importing itself is rejected" assert-error-type
+
+\ The two members spell each other's paths differently. Detection keys on the resolved path, so
+\ the differing spellings still land on one module.
+[ "fixtures/cycle_spelling_a.1z" load ]
+circular-dependency: "a cycle spanning two spellings of one file is rejected" assert-error-type
+
+[ "fixtures/cycle_three_a.1z" load ] [ message: @get ] recover
+"circular dependency: fixtures/cycle_three_a.1z -> ./cycle_three_b.1z -> ./cycle_three_c.1z -> ./cycle_three_a.1z"
+"the chain names every module in import order" assert=

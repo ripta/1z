@@ -1,0 +1,6 @@
+\ Companion module for module_cycle.1z. Reaches cycle_spelling_a.1z back through a detour, so the
+\ path string differs from the one the entry used and only the resolved path matches.
+
+use "./../fixtures/cycle_spelling_a.1z" ;
+
+spelling-b: ( -- n ) [ 2 ] ;

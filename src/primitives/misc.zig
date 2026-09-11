@@ -29,6 +29,7 @@ const may_define = @import("../may_define.zig");
 const primitives_root = @import("../primitives.zig");
 const embedded_stdlib = @import("../embedded_stdlib.zig");
 const LoadLock = @import("../load_lock.zig").LoadLock;
+const ModuleLoadRecord = @import("../module_load_record.zig").ModuleLoadRecord;
 const Task = @import("../task.zig").Task;
 const TaskScope = @import("../task.zig").TaskScope;
 
@@ -313,6 +314,41 @@ fn flushProcessor(
     }
 }
 
+/// Assemble the cycle chain in the form the `circular-dependency` lint rule already prints:
+/// every module from the one the cycle closed back onto, through to the import that closed it.
+///
+/// Each module is named as its importer wrote it, since a chain of canonical realpaths is
+/// unreadable.
+fn formatCycleChain(
+    alloc: std.mem.Allocator,
+    chain: []const ModuleLoadRecord.Entry,
+    closing: []const u8,
+) ![]const u8 {
+    var out: std.ArrayListUnmanaged(u8) = .{};
+    try out.appendSlice(alloc, "circular dependency: ");
+    for (chain) |entry| {
+        try out.appendSlice(alloc, entry.filename);
+        try out.appendSlice(alloc, " -> ");
+    }
+    try out.appendSlice(alloc, closing);
+    return out.items;
+}
+
+/// Reject a load of a module that is already loading further up the chain.
+///
+/// `start` is the in-flight entry the load would re-enter, and `closing` is the name this load
+/// was asked for.
+fn raiseCircularDependency(ctx: *Context, start: usize, closing: []const u8) anyerror {
+    const alloc = ctx.quotationAllocator();
+    const message = formatCycleChain(alloc, ctx.module_load_record.chainFrom(start), closing) catch
+        "circular dependency between modules";
+    ctx.thrown_error = try value_mod.boxErrorObject(alloc, .{
+        .error_type = "circular-dependency",
+        .message = message,
+    });
+    return error.UserThrown;
+}
+
 /// Parse, execute, and cache a resolved module source.
 ///
 /// `filename` is the user-facing string used as `ctx.current_source` for the duration of the
@@ -329,6 +365,21 @@ fn flushProcessor(
 /// This word pushes the constructed module onto the stack on success.
 pub fn nativeLoadImpl(ctx: *Context, cache: *value_mod.MutableMap, filename: []const u8, alloc: std.mem.Allocator, resolved_module: ResolvedModule) anyerror!void {
     const resolved = resolved_module.resolvedPath();
+
+    // The cache is written only once a body finishes, so a module already loading up the chain is
+    // not in it and a circular import would recurse here.
+    //
+    // This is the choke point all five load entries pass through, and it keys on the same resolved
+    // path the cache does, so a cycle spanning two spellings of one module cannot slip past.
+    if (ctx.module_load_record.find(resolved)) |start| {
+        return raiseCircularDependency(ctx, start, filename);
+    }
+    try ctx.module_load_record.push(.{
+        .resolved = resolved,
+        .filename = filename,
+        .owner = loadLockOwner(ctx),
+    });
+    defer ctx.module_load_record.pop(resolved);
 
     if (ctx.trace.trace_modules.lifecycle) {
         var tw = trace_mod.TraceWriter.init();
