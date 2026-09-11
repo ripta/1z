@@ -1,14 +1,14 @@
-src/prelude.1z:324: error 'circular-dependency' circular dependency: fixtures/cycle_two_a.1z -> ./cycle_two_b.1z -> ./cycle_two_a.1z at word 'load-file'
+src/prelude.1z:328: error 'circular-dependency' circular dependency: fixtures/cycle_two_a.1z -> ./cycle_two_b.1z -> ./cycle_two_a.1z at word 'load-file'
   stack effect: ( cache filename -- module )
-  called from src/prelude.1z:325: if
-  called from src/prelude.1z:870: dip
-  called from src/prelude.1z:874: dip
-  called from src/prelude.1z:890: if
-  called from src/prelude.1z:324: load-file
-  called from src/prelude.1z:325: if
-  called from src/prelude.1z:870: dip
-  called from src/prelude.1z:874: dip
-  called from src/prelude.1z:890: if
-  called from src/prelude.1z:324: load-file
-  called from src/prelude.1z:325: if
+  called from src/prelude.1z:329: if
+  called from src/prelude.1z:875: dip
+  called from src/prelude.1z:879: dip
+  called from src/prelude.1z:895: if
+  called from src/prelude.1z:328: load-file
+  called from src/prelude.1z:329: if
+  called from src/prelude.1z:875: dip
+  called from src/prelude.1z:879: dip
+  called from src/prelude.1z:895: if
+  called from src/prelude.1z:328: load-file
+  called from src/prelude.1z:329: if
   called from tests/integration/nested_load_cycle_uncaught.1z:8: load

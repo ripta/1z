@@ -1,0 +1,5 @@
+\ Companion module for module_load_in_flight.1z. Closes the cycle back onto reentry_scope_outer.1z.
+
+use "./reentry_scope_outer.1z" ;
+
+reentry-scope-a: ( -- n ) [ 1 ] ;

@@ -74,6 +74,11 @@ pub const ModuleLoadRecord = struct {
         std.debug.assert(std.mem.eql(u8, dropped.resolved, resolved));
     }
 
+    /// The in-flight entry at `index`, where `index` is what `find` returns.
+    pub fn entryAt(self: *const ModuleLoadRecord, index: usize) Entry {
+        return self.entries.items[index];
+    }
+
     /// The entries from `start` to the innermost, which is the cycle a `find` hit at `start`
     /// closed.
     pub fn chainFrom(self: *const ModuleLoadRecord, start: usize) []const Entry {

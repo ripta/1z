@@ -56,7 +56,7 @@ pub const LoadLock = struct {
         task: *Task,
         main,
 
-        fn eql(a: Owner, b: Owner) bool {
+        pub fn eql(a: Owner, b: Owner) bool {
             return switch (a) {
                 .task => |t| b == .task and b.task == t,
                 .main => b == .main,

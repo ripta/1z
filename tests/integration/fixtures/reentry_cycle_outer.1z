@@ -1,0 +1,8 @@
+\ Companion module for module_load_in_flight.1z. Same delegation as reentry_outer.1z, but the
+\ borrowing task loads a pair of modules that import each other, so the cycle is entirely its own.
+
+"REENTRY-CYCLE-OUTER-START" print-line
+
+[ [ "./reentry_cycle_a.1z" load drop ] spawn drop ] task-scope
+
+"REENTRY-CYCLE-OUTER-END" print-line

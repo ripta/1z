@@ -1,0 +1,5 @@
+\ Companion module for module_load_in_flight.1z. Half of a cycle loaded on the borrowing task.
+
+use "./reentry_cycle_b.1z" ;
+
+reentry-cycle-a: ( -- n ) [ 1 ] ;

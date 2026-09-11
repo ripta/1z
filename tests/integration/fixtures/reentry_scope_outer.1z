@@ -1,0 +1,9 @@
+\ Companion module for module_load_in_flight.1z. A plain two-module import cycle whose middle load
+\ sits inside a `task-scope`, with nothing spawned. The scope runs its body in a new task, so the
+\ re-entry arrives under a different owner even though the chain is an ordinary cycle.
+
+"REENTRY-SCOPE-OUTER-START" print-line
+
+[ "./reentry_scope_a.1z" load drop ] task-scope
+
+"REENTRY-SCOPE-OUTER-END" print-line

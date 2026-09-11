@@ -1,0 +1,45 @@
+\ A task that borrows the load lock from a holder awaiting it can reach the very module that
+\ holder is still loading. That is a re-entrant load, and it reports as one rather than recursing.
+\ `use` runs at parse time and cannot be caught, so each case reaches the loader through the
+\ runtime `load` word.
+
+use "testing" ;
+
+"delegated re-entry into an in-flight load" test-section
+
+\ One load, so the outer module's start marker below appears exactly once and its end marker not
+\ at all: the re-entry is rejected instead of running the top level a second time.
+[ "fixtures/reentry_outer.1z" load ] [ ] recover
+
+dup error-type: @get
+load-in-flight: "a delegated re-entry is not reported as a cycle" assert=
+
+\ Task 1 is the scope task `task-scope` runs the outer module's body in, so task 2 is the loader
+\ spawned inside it.
+message: @get
+"load in flight: ./reentry_outer.1z is loading on main, re-entered on task[2]: fixtures/reentry_outer.1z -> ./reentry_inner.1z -> ./reentry_outer.1z"
+"the message names the module, both owners, and the chain" assert=
+
+"an ordinary cycle through a task-scope" test-section
+
+\ Nothing is spawned here. The scope still runs its body in its own task, so the re-entry arrives
+\ under a different owner and reports as a re-entrant load. The chain is what a reader needs, and
+\ it is named either way.
+\
+\ Task ids count from 1 per worker pool and a top-level `task-scope` builds its own, so the scope
+\ task is task 1 again here.
+[ "fixtures/reentry_scope_outer.1z" load ] [ ] recover
+
+dup error-type: @get
+load-in-flight: "a cycle whose middle load sits in a scope reads as a re-entry" assert=
+
+message: @get
+"load in flight: ./reentry_scope_outer.1z is loading on main, re-entered on task[1]: fixtures/reentry_scope_outer.1z -> ./reentry_scope_a.1z -> ./reentry_scope_outer.1z"
+"the chain names the module the cycle passed through" assert=
+
+"a cycle on the borrowing task is still a cycle" test-section
+
+\ The borrower's own imports close a cycle, so both ends of it carry the borrower's identity and
+\ the split must not fire merely because a hold was borrowed.
+[ "fixtures/reentry_cycle_outer.1z" load ]
+circular-dependency: "the borrower's own cycle keeps the cycle diagnostic" assert-error-type

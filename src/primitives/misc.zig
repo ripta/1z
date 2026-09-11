@@ -316,11 +316,24 @@ fn flushProcessor(
     }
 }
 
-/// Assemble the cycle chain in the form the `circular-dependency` lint rule already prints:
-/// every module from the one the cycle closed back onto, through to the import that closed it.
+/// Append the chain in the form the `circular-dependency` lint rule already prints: every module
+/// from the one the chain closed back onto, through to the import that closed it.
 ///
 /// Each module is named as its importer wrote it, since a chain of canonical realpaths is
 /// unreadable.
+fn appendModuleChain(
+    alloc: std.mem.Allocator,
+    out: *std.ArrayListUnmanaged(u8),
+    chain: []const ModuleLoadRecord.Entry,
+    closing: []const u8,
+) !void {
+    for (chain) |entry| {
+        try out.appendSlice(alloc, entry.filename);
+        try out.appendSlice(alloc, " -> ");
+    }
+    try out.appendSlice(alloc, closing);
+}
+
 fn formatCycleChain(
     alloc: std.mem.Allocator,
     chain: []const ModuleLoadRecord.Entry,
@@ -328,11 +341,7 @@ fn formatCycleChain(
 ) ![]const u8 {
     var out: std.ArrayListUnmanaged(u8) = .{};
     try out.appendSlice(alloc, "circular dependency: ");
-    for (chain) |entry| {
-        try out.appendSlice(alloc, entry.filename);
-        try out.appendSlice(alloc, " -> ");
-    }
-    try out.appendSlice(alloc, closing);
+    try appendModuleChain(alloc, &out, chain, closing);
     return out.items;
 }
 
@@ -346,6 +355,63 @@ fn raiseCircularDependency(ctx: *Context, start: usize, closing: []const u8) any
         "circular dependency between modules";
     ctx.thrown_error = try value_mod.boxErrorObject(alloc, .{
         .error_type = "circular-dependency",
+        .message = message,
+    });
+    return error.UserThrown;
+}
+
+/// Append a load owner in the form the scheduler's task dump uses, so the two read alike.
+fn appendOwnerLabel(
+    alloc: std.mem.Allocator,
+    out: *std.ArrayListUnmanaged(u8),
+    owner: LoadLock.Owner,
+) !void {
+    const task = switch (owner) {
+        .main => return out.appendSlice(alloc, "main"),
+        .task => |t| t,
+    };
+
+    var buf: [32]u8 = undefined;
+    try out.appendSlice(alloc, try std.fmt.bufPrint(&buf, "task[{d}]", .{task.id}));
+    if (task.name) |name| {
+        try out.appendSlice(alloc, " \"");
+        try out.appendSlice(alloc, name);
+        try out.appendSlice(alloc, "\"");
+    }
+}
+
+/// Assemble the re-entry message: the module, the two owners in the order they reached it, and
+/// the chain that got there.
+fn formatInFlightLoad(
+    alloc: std.mem.Allocator,
+    chain: []const ModuleLoadRecord.Entry,
+    closing: []const u8,
+    reentrant: LoadLock.Owner,
+) ![]const u8 {
+    var out: std.ArrayListUnmanaged(u8) = .{};
+    try out.appendSlice(alloc, "load in flight: ");
+    try out.appendSlice(alloc, closing);
+    try out.appendSlice(alloc, " is loading on ");
+    try appendOwnerLabel(alloc, &out, chain[0].owner);
+    try out.appendSlice(alloc, ", re-entered on ");
+    try appendOwnerLabel(alloc, &out, reentrant);
+    try out.appendSlice(alloc, ": ");
+    try appendModuleChain(alloc, &out, chain, closing);
+    return out.items;
+}
+
+/// Reject a load that re-enters a module already loading on a different task.
+///
+/// It carries its own error type because the fix usually differs from an ordinary cycle's: the
+/// load has to move off the task the loader awaits, or above the scope that spawned it. The chain
+/// rides along all the same, since this shape is equally reachable as a plain import cycle whose
+/// middle load sits inside a `task-scope`.
+fn raiseLoadInFlight(ctx: *Context, start: usize, reentrant: LoadLock.Owner, closing: []const u8) anyerror {
+    const alloc = ctx.quotationAllocator();
+    const message = formatInFlightLoad(alloc, ctx.module_load_record.chainFrom(start), closing, reentrant) catch
+        "load already in flight on another task";
+    ctx.thrown_error = try value_mod.boxErrorObject(alloc, .{
+        .error_type = "load-in-flight",
         .message = message,
     });
     return error.UserThrown;
@@ -374,6 +440,15 @@ pub fn nativeLoadImpl(ctx: *Context, cache: *value_mod.MutableMap, filename: []c
     // This is the choke point all five load entries pass through, and it keys on the same resolved
     // path the cache does, so a cycle spanning two spellings of one module cannot slip past.
     if (ctx.module_load_record.find(resolved)) |start| {
+        // The lock admits one owner at a time, so a different owner here can only be a borrowed
+        // hold, reached by a task the parked holder awaits. That is worth naming on its own,
+        // since the fix for it differs. It is not the other half of a partition: a `task-scope`
+        // around a load moves it onto a new task, so a plain import cycle reaches here under a
+        // different owner too. Both diagnostics name the chain for that reason.
+        const reentrant = loadLockOwner();
+        if (!ctx.module_load_record.entryAt(start).owner.eql(reentrant)) {
+            return raiseLoadInFlight(ctx, start, reentrant, filename);
+        }
         return raiseCircularDependency(ctx, start, filename);
     }
     try ctx.module_load_record.push(.{
@@ -1949,6 +2024,61 @@ test "currentScheduler: the resumed task's home is the thread's scheduler" {
     defer task_mod.resumed_task = null;
 
     try std.testing.expectEqual(&background, currentScheduler().?);
+}
+
+fn ownerLabel(alloc: std.mem.Allocator, owner: LoadLock.Owner) ![]const u8 {
+    var out: std.ArrayListUnmanaged(u8) = .{};
+    try appendOwnerLabel(alloc, &out, owner);
+    return out.items;
+}
+
+test "appendOwnerLabel: the main thread is named, not numbered" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    try std.testing.expectEqualStrings("main", try ownerLabel(arena.allocator(), .main));
+}
+
+test "appendOwnerLabel: an unnamed task is its id alone" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var task: Task = undefined;
+    task.id = 7;
+    task.name = null;
+
+    try std.testing.expectEqualStrings("task[7]", try ownerLabel(arena.allocator(), .{ .task = &task }));
+}
+
+test "appendOwnerLabel: a named task carries its name too" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var task: Task = undefined;
+    task.id = 2;
+    task.name = "loader";
+
+    try std.testing.expectEqualStrings("task[2] \"loader\"", try ownerLabel(arena.allocator(), .{ .task = &task }));
+}
+
+test "formatInFlightLoad: the module leads, then the two owners in reach order, then the chain" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var task: Task = undefined;
+    task.id = 3;
+    task.name = null;
+
+    const chain = [_]ModuleLoadRecord.Entry{
+        .{ .resolved = "/outer.1z", .filename = "./outer.1z", .owner = .main },
+        .{ .resolved = "/a.1z", .filename = "./a.1z", .owner = .{ .task = &task } },
+    };
+
+    const message = try formatInFlightLoad(arena.allocator(), &chain, "./outer.1z", .{ .task = &task });
+    try std.testing.expectEqualStrings(
+        "load in flight: ./outer.1z is loading on main, re-entered on task[3]: ./outer.1z -> ./a.1z -> ./outer.1z",
+        message,
+    );
 }
 
 test "classifyResolved treats non-virtual paths as file" {

@@ -316,6 +316,10 @@ module-loaded-hooks: parameter{ [ { } ] } ;
 \\ execution, such as a `use` inside `eval-string`, throws `load-parse-wait`
 \\ unless the lock's holder is waiting on the calling task, in which case the
 \\ load proceeds as if nested.
+\\
+\\ Loading a module that is already loading further up the chain throws, and the message names
+\\ that chain. A load reached on the loader's own task throws `circular-dependency`. One reached
+\\ from a task the loader waits on throws `load-in-flight`, which names both tasks as well.
 load: dynamic-load ( filename -- module ) [
   dup native.resolve-load-path
   module-cache get swap native.cached-module
@@ -330,8 +334,9 @@ load: dynamic-load ( filename -- module ) [
 \\ bundle even after a filesystem stdlib becomes available mid-session. Delegates to
 \\ `reload-file`, which any worker may call.
 \\
-\\ Serializes on the same process-wide load lock as `load`, with the same
-\\ `load-parse-wait` behavior for a contended parse-time call.
+\\ Serializes on the same process-wide load lock as `load`, with the same `load-parse-wait`
+\\ behavior for a contended parse-time call and the same `circular-dependency` and
+\\ `load-in-flight` rejections.
 reload: dynamic-load ( filename -- module ) [
   module-cache get swap reload-file
 ] ;

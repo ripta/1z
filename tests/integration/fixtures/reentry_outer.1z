@@ -1,0 +1,10 @@
+\ Companion module for module_load_in_flight.1z. Its top-level scope spawns a task that loads the
+\ inner module, so the loader parks awaiting the scope and lends its hold to that task.
+
+"REENTRY-OUTER-START" print-line
+
+[ [ "./reentry_inner.1z" load drop ] spawn drop ] task-scope
+
+"REENTRY-OUTER-END" print-line
+
+reentry-outer-word: ( -- s ) [ "outer" ] ;

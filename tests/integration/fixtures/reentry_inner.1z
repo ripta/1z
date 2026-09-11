@@ -1,0 +1,6 @@
+\ Companion module for module_load_in_flight.1z, loaded by a task the outer module's loader
+\ awaits. Reaching back for the outer module re-enters a load that is still in flight.
+
+"REENTRY-INNER" print-line
+
+use "./reentry_outer.1z" ;
