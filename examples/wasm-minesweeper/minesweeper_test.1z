@@ -176,26 +176,6 @@ private{
   (blank-panel): ( x -- ) [
     (hud-panel-px-y) hud-panel-width hud-panel-height page-color draw-rectangle
   ] ;
-
-  \\ What the recording audio seams below saw, most recent last.
-  \\
-  \\ File-level vectors rather than a local per test word: a quotation pushed inside a (with-game)
-  \\ block cannot resolve the test word's locals, because (with-game) invokes the block through a
-  \\ quotation-valued local. A file-level binding resolves through the module scope instead.
-  recorded-loads: V{ } ;
-  recorded-plays: V{ } ;
-
-  (reset-recordings): ( -- ) [
-    recorded-loads 0 f #resize! drop
-    recorded-plays 0 f #resize! drop
-  ] ;
-
-  \\ Records the handle of every play. Bind over current-sample-player.
-  (recording-player): ( -- quot ) [ [ recorded-plays swap #push! drop ] ] ;
-
-  \\ Records { bytes channels rate } for every load, and hands back a fixed handle. Bind over
-  \\ current-sample-loader.
-  (recording-loader): ( -- quot ) [ [ 3 array-n recorded-loads swap #push! drop 7 ] ] ;
 }
 
 test-new-game-sizes-each-preset: ( -- ) [
@@ -658,9 +638,9 @@ test-the-hud-repaints-only-changed-fields: ( -- ) [
 ] ;
 
 test-each-sound-fires-at-its-own-moment: ( -- ) [
-  (reset-recordings)
+  recorded-plays: V{ } ;
   beginner: [
-    (recording-player) current-sample-player [
+    [ recorded-plays swap #push! drop ] current-sample-player [
       2 3 (right-click)
       recorded-plays #len 1 "placing a flag clicks" assert=
       2 3 (right-click)
@@ -677,9 +657,9 @@ test-each-sound-fires-at-its-own-moment: ( -- ) [
 ] ;
 
 test-the-win-chimes-after-its-blip: ( -- ) [
-  (reset-recordings)
+  recorded-plays: V{ } ;
   beginner: [
-    (recording-player) current-sample-player [
+    [ recorded-plays swap #push! drop ] current-sample-player [
       { 0 } (arm)
       8 8 (left-click)
       (drain)
@@ -690,9 +670,10 @@ test-the-win-chimes-after-its-blip: ( -- ) [
 ] ;
 
 test-the-samples-are-built-once-on-the-first-press: ( -- ) [
-  (reset-recordings)
+  recorded-loads: V{ } ;
   beginner: [
-    (recording-loader) current-sample-loader [
+    \ Records { bytes channels rate } per load, and hands back a fixed handle.
+    [ 3 array-n recorded-loads swap #push! drop 7 ] current-sample-loader [
       [ drop ] current-sample-player [
         \ The samples are built once per page load by design; clear them so this test's load
         \ count does not depend on which test ran first.
