@@ -7325,13 +7325,12 @@ pub const Context = struct {
         }
     }
 
-    /// The interpreter call site a parameter-effect validation runs for: the caller's body, the
-    /// call's index in it, and the carrier for that body. A compiled call site has no body pointer
+    /// The interpreter call site a parameter-effect validation runs for: the dispatch loop's
+    /// call-site context and the call's index within it. A compiled call site has no body pointer
     /// and index in hand, so it passes none and takes the walk.
     pub const ParamEffectSite = struct {
-        instructions: []const Instruction,
+        site: *const CallSite,
         index: usize,
-        owner: ?*const value_mod.Closure,
     };
 
     /// The memo key for parameter `param` of the call at `site`, or null when nothing may be
@@ -7344,13 +7343,13 @@ pub const Context = struct {
     fn paramEffectSlot(site: ?ParamEffectSite, val: Value, quot: Quotation, param: usize) ?ParamEffectSiteKey {
         const s = site orelse return null;
 
-        if (s.owner) |c| {
-            if (c.ownsBody(s.instructions)) return null;
+        if (s.site.owner) |c| {
+            if (c.ownsBody(s.site.body)) return null;
         }
         if (quot.instructions.len == 0) return null;
         if (val == .closure and val.closure.ownsBody(quot.instructions)) return null;
 
-        return .{ .body = @intFromPtr(s.instructions.ptr), .index = s.index, .param = param };
+        return .{ .body = @intFromPtr(s.site.body.ptr), .index = s.index, .param = param };
     }
 
     /// Validate quotation parameters against their declared effects.
@@ -8199,6 +8198,19 @@ pub const Context = struct {
         if (tci_module) |mod| self.popModuleDepsFrameTraced(mod);
     }
 
+    /// Everything a word call needs to know about where it sits: the body it is in, the closure
+    /// that may own that body, and the body's inline-cache table. All three are fixed for one run
+    /// of `executeInstructions`, so the loop builds this once and every call passes a pointer to
+    /// it rather than spending three argument registers.
+    ///
+    /// `body` and `owner` together with the call's index name the call site for the
+    /// parameter-effect memo. `pic_table` is indexed by that same call index.
+    pub const CallSite = struct {
+        body: []const Instruction,
+        owner: ?*const value_mod.Closure,
+        pic_table: ?*PicTable,
+    };
+
     /// Signal returned by `executeResolvedWord` to the dispatch loop.
     const ResolvedWordResult = enum {
         /// Advance to the next instruction (`continue` at the call site).
@@ -8209,25 +8221,26 @@ pub const Context = struct {
     };
 
     /// Shared body of the `call_word` and `call_word_direct` dispatch arms,
-    /// taking the resolved name and definition. Caller is responsible for the
+    /// taking the resolved definition. Caller is responsible for the
     /// signal check, profiling start, and (for `call_word`) the lookup or
     /// fallback path; this helper handles sandbox, parse-time-only,
     /// JIT dispatch, generic dispatch, recursion-marker check, tail-call
     /// setup, stack-limit check, and the native/host/compound call itself.
     ///
-    /// `caller_body` is the body the call at `idx` sits in, and `caller_owner` its carrier. Together
-    /// with `idx` they name the call site for the parameter-effect memo.
+    /// `site` is where this call sits: the body holding it, that body's carrier, and its inline
+    /// cache. Together with `idx` the first two name the call site for the parameter-effect memo.
+    ///
+    /// The call's name comes off the definition; see `callResolvedWord`, which checks that in Debug.
     fn executeResolvedWord(
         self: *Context,
-        name: []const u8,
         word: WordDefinition,
         instr: Instruction,
         idx: usize,
-        pic_table: ?*PicTable,
         is_last: bool,
-        caller_body: []const Instruction,
-        caller_owner: ?*const value_mod.Closure,
+        site: *const CallSite,
     ) anyerror!ResolvedWordResult {
+        const name = word.name;
+
         if (self.active_sandbox) |sandbox| {
             if (!sandbox.allows(word.capability)) {
                 self.pushCallFrame(name, self.current_source, instr.line, instr.column, word.stack_effect);
@@ -8266,7 +8279,7 @@ pub const Context = struct {
             if (effective_word_id) |wid| {
                 if (word.stack_effect) |effect| {
                     if (word.exec_flags.has_param_effects) {
-                        self.validateParameterEffects(effect, .{ .instructions = caller_body, .index = idx, .owner = caller_owner }) catch |err| {
+                        self.validateParameterEffects(effect, .{ .site = site, .index = idx }) catch |err| {
                             self.pushCallFrame(name, self.current_source, instr.line, instr.column, word.stack_effect);
                             return self.wordErrorCleanup(name, err);
                         };
@@ -8340,7 +8353,7 @@ pub const Context = struct {
 
         if (word.stack_effect) |effect| {
             if (word.exec_flags.has_param_effects) {
-                self.validateParameterEffects(effect, .{ .instructions = caller_body, .index = idx, .owner = caller_owner }) catch |err|
+                self.validateParameterEffects(effect, .{ .site = site, .index = idx }) catch |err|
                     return self.wordErrorCleanup(name, err);
             }
             if (word.exec_flags.has_type_annotations and !word.exec_flags.skip_type_validation) {
@@ -8351,7 +8364,7 @@ pub const Context = struct {
 
         if (word.action == .compound) {
             if (word.exec_flags.is_generic) {
-                const pic_entry = if (pic_table) |pt| pt.get(idx) else null;
+                const pic_entry = if (site.pic_table) |pt| pt.get(idx) else null;
                 const dispatched = dispatch_helpers.tryDispatchGenericById(self, word.dispatch_id, pic_entry) catch |err|
                     return self.wordErrorCleanup(name, err);
 
@@ -8393,7 +8406,7 @@ pub const Context = struct {
                 },
                 .native => |func| {
                     self.tail_call_instructions = null;
-                    self.current_pic_entry = if (pic_table) |pt| pt.get(idx) else null;
+                    self.current_pic_entry = if (site.pic_table) |pt| pt.get(idx) else null;
                     defer self.current_pic_entry = null;
                     if (func(self)) |_| {
                         try self.wordSuccessCleanup(name, word.stack_effect);
@@ -8403,7 +8416,7 @@ pub const Context = struct {
                 },
                 .host_callback => |host| {
                     self.tail_call_instructions = null;
-                    self.current_pic_entry = if (pic_table) |pt| pt.get(idx) else null;
+                    self.current_pic_entry = if (site.pic_table) |pt| pt.get(idx) else null;
                     defer self.current_pic_entry = null;
                     const result: anyerror!void = blk: {
                         const rc = host.callback(host.handle, host.user_data);
@@ -8419,7 +8432,7 @@ pub const Context = struct {
                     // No tail-call setup: a literal push has nothing further
                     // to call into, so it finishes like a native word does.
                     self.tail_call_instructions = null;
-                    self.current_pic_entry = if (pic_table) |pt| pt.get(idx) else null;
+                    self.current_pic_entry = if (site.pic_table) |pt| pt.get(idx) else null;
                     defer self.current_pic_entry = null;
                     if (self.stack.push(v)) |_| {
                         try self.wordSuccessCleanup(name, word.stack_effect);
@@ -8454,7 +8467,7 @@ pub const Context = struct {
             const callee_pic = if (word.action == .compound) self.getOrAllocPicTable(word.action.compound) else null;
 
             if (word.isNativeLike()) {
-                self.current_pic_entry = if (pic_table) |pt| pt.get(idx) else null;
+                self.current_pic_entry = if (site.pic_table) |pt| pt.get(idx) else null;
             }
             defer self.current_pic_entry = null;
 
@@ -8503,6 +8516,29 @@ pub const Context = struct {
         }
 
         return .proceed;
+    }
+
+    /// Dispatch a definition a lookup just returned for `name`.
+    ///
+    /// A lookup that returns a definition for a name returns one whose `name` is that name, so
+    /// `executeResolvedWord` reads the label off the definition rather than taking one. This is
+    /// where that rule is checked, because it is where every resolution enters execution. A path
+    /// returning a definition recorded under some other name is a defect in that path, and without
+    /// the check it would surface far away as a wrong word in an error chain or a wrong profile
+    /// key.
+    ///
+    /// Debug-only: the comparison walks the name, and this runs once per word call.
+    inline fn callResolvedWord(
+        self: *Context,
+        name: []const u8,
+        word: WordDefinition,
+        instr: Instruction,
+        idx: usize,
+        is_last: bool,
+        site: *const CallSite,
+    ) anyerror!ResolvedWordResult {
+        if (comptime builtin.mode == .Debug) std.debug.assert(std.mem.eql(u8, word.name, name));
+        return self.executeResolvedWord(word, instr, idx, is_last, site);
     }
 
     /// Execute raw instructions without stack-effect validation.
@@ -8654,6 +8690,9 @@ pub const Context = struct {
         self.active_captured_scope = captured_scope;
         defer self.active_captured_scope = saved_captured_scope;
 
+        // Fixed for the whole loop, so every call below hands one pointer to all three.
+        const site: CallSite = .{ .body = instructions, .owner = owner, .pic_table = pic_table };
+
         for (instructions, 0..) |instr, idx| {
             // The stepwise debugger is wired up only from capi.zig (C debugger API) and main.zig
             // (--debug), neither built for freestanding targets, so ctx.debugger is always null
@@ -8712,7 +8751,7 @@ pub const Context = struct {
 
                     if (captured_scope) |scope| {
                         if (lookupInCapturedScope(scope, name)) |word| {
-                            switch (try self.executeResolvedWord(name, word, instr, idx, pic_table, is_last, instructions, owner)) {
+                            switch (try self.callResolvedWord(name, word, instr, idx, is_last, &site)) {
                                 .proceed => {},
                                 .tail_call_set => return,
                             }
@@ -8721,7 +8760,7 @@ pub const Context = struct {
                     }
 
                     if (self.lookupWordForExecutionOwnScope(name, deps_vis, own_module, own_ambient_deps)) |word| {
-                        switch (try self.executeResolvedWord(name, word, instr, idx, pic_table, is_last, instructions, owner)) {
+                        switch (try self.callResolvedWord(name, word, instr, idx, is_last, &site)) {
                             .proceed => {},
                             .tail_call_set => return,
                         }
@@ -8807,7 +8846,7 @@ pub const Context = struct {
                                 // mirroring the body-entry probe's exemption.
                                 const gate_module = if (isSyntheticScopeModule(lazy_module)) null else lazy_module;
                                 if (self.lookupWordForExecutionFiltered(name, lazy_vis, gate_module)) |word| {
-                                    switch (try self.executeResolvedWord(name, word, instr, idx, pic_table, is_last, instructions, owner)) {
+                                    switch (try self.callResolvedWord(name, word, instr, idx, is_last, &site)) {
                                         .proceed => {},
                                         .tail_call_set => return,
                                     }
@@ -8843,7 +8882,7 @@ pub const Context = struct {
                     if (self.profile) |p| p.recordWordStart(self.allocator);
 
                     const word = dict_mod.loadSlot(slot).*;
-                    switch (try self.executeResolvedWord(name, word, instr, idx, pic_table, is_last, instructions, owner)) {
+                    switch (try self.callResolvedWord(name, word, instr, idx, is_last, &site)) {
                         .proceed => {},
                         .tail_call_set => return,
                     }
@@ -8866,7 +8905,7 @@ pub const Context = struct {
                     // quotation's creation site outranks the body's own module scope.
                     if (captured_scope) |scope| {
                         if (lookupInCapturedScope(scope, name)) |word| {
-                            switch (try self.executeResolvedWord(name, word, instr, idx, pic_table, is_last, instructions, owner)) {
+                            switch (try self.callResolvedWord(name, word, instr, idx, is_last, &site)) {
                                 .proceed => {},
                                 .tail_call_set => return,
                             }
@@ -8875,7 +8914,7 @@ pub const Context = struct {
                     }
 
                     const word = dict_mod.loadSlot(slot).*;
-                    switch (try self.executeResolvedWord(name, word, instr, idx, pic_table, is_last, instructions, owner)) {
+                    switch (try self.callResolvedWord(name, word, instr, idx, is_last, &site)) {
                         .proceed => {},
                         .tail_call_set => return,
                     }
@@ -9995,7 +10034,8 @@ test "param_effect_cache: one entry per site, guarded on the argument body" {
 
     const caller = try alloc.alloc(Instruction, 1);
     caller[0] = .{ .op = .{ .call_word = "annotated" }, .line = 1 };
-    const site: Context.ParamEffectSite = .{ .instructions = caller, .index = 0, .owner = null };
+    const call_site: Context.CallSite = .{ .body = caller, .owner = null, .pic_table = null };
+    const site: Context.ParamEffectSite = .{ .site = &call_site, .index = 0 };
     const key: ParamEffectSiteKey = .{ .body = @intFromPtr(caller.ptr), .index = 0, .param = 1 };
 
     const one = try alloc.alloc(Instruction, 1);
@@ -10036,7 +10076,8 @@ test "param_effect_cache: closure-owned bodies, site-less calls, and empty argum
 
     const caller = try alloc.alloc(Instruction, 1);
     caller[0] = .{ .op = .{ .call_word = "annotated" }, .line = 1 };
-    const site: Context.ParamEffectSite = .{ .instructions = caller, .index = 0, .owner = null };
+    const call_site: Context.CallSite = .{ .body = caller, .owner = null, .pic_table = null };
+    const site: Context.ParamEffectSite = .{ .site = &call_site, .index = 0 };
 
     const literal = try alloc.alloc(Instruction, 1);
     literal[0] = .{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 1 };
@@ -10069,8 +10110,9 @@ test "param_effect_cache: closure-owned bodies, site-less calls, and empty argum
     });
     defer container_backing.releaseValue(.{ .closure = caller_closure });
 
+    const owned_site: Context.CallSite = .{ .body = owned_caller, .owner = caller_closure, .pic_table = null };
     try ctx.stack.push(.{ .quotation = .{ .instructions = literal } });
-    try ctx.validateParameterEffects(effect, .{ .instructions = owned_caller, .index = 0, .owner = caller_closure });
+    try ctx.validateParameterEffects(effect, .{ .site = &owned_site, .index = 0 });
     try std.testing.expectEqual(@as(u32, 0), ctx.param_effect_cache.count());
 
     // A compiled call site names no site.
