@@ -12,14 +12,27 @@ const is_freestanding = builtin.os.tag == .freestanding;
 const SIG = posix.SIG;
 
 /// Maximum number of signals supported. POSIX signals range from 1 to 31.
+///
+/// `signal_pending` is a u32, so raising this alone would not widen the pending mask; a wider
+/// ceiling needs a wider word or several of them.
 const MAX_SIGNALS = 32;
 
-/// Per-signal atomic pending flags. Index 0 is unused.
-var signal_pending: [MAX_SIGNALS]std.atomic.Value(bool) = blk: {
-    var arr: [MAX_SIGNALS]std.atomic.Value(bool) = undefined;
-    for (&arr) |*slot| slot.* = std.atomic.Value(bool).init(false);
-    break :blk arr;
-};
+/// Pending signals, one bit per signal number. Bit 0 is unused.
+///
+/// The word is the whole of the pending state. A design that put an aggregate "any pending" flag
+/// beside a per-signal table would carry two pieces of state that have to agree, and a lost
+/// wake-up whenever they do not. One object makes that unrepresentable.
+var signal_pending: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
+
+/// The mask bit carrying one signal's pending state.
+inline fn signalBit(signum: u6) u32 {
+    return @as(u32, 1) << @as(u5, @intCast(signum));
+}
+
+/// Clear one signal's pending bit.
+fn clearPending(signum: u6) void {
+    _ = signal_pending.fetchAnd(~signalBit(signum), .release);
+}
 
 /// Per-signal user handlers. null means no user handler.
 ///
@@ -37,24 +50,26 @@ var handlers_mutex: std.Thread.Mutex = .{};
 /// Previous sigaction states for restoring defaults on removeHandler.
 var prev_actions: [MAX_SIGNALS]?posix.Sigaction = .{null} ** MAX_SIGNALS;
 
-/// Generic async-signal-safe handler. Sets the pending flag for the
+/// Generic async-signal-safe handler. Sets the pending bit for the
 /// received signal. For SIGINT, a second signal while the first is
 /// still pending force-terminates (exit 130).
+///
+/// The second-SIGINT test reads the mask `fetchOr` returns, so the test and the set are one
+/// atomic operation and a concurrent delivery cannot slip between them.
 fn handleSignal(signum: c_int) callconv(.c) void {
-    const idx: usize = if (signum >= 0 and signum < MAX_SIGNALS)
-        @intCast(signum)
-    else
-        return;
+    if (signum <= 0 or signum >= MAX_SIGNALS) return;
 
-    if (signum == SIG.INT and signal_pending[idx].load(.acquire)) {
+    const bit = signalBit(@intCast(signum));
+    const before = signal_pending.fetchOr(bit, .release);
+
+    if (signum == SIG.INT and before & bit != 0) {
         posix.exit(130);
     }
-    signal_pending[idx].store(true, .release);
 }
 
 /// Install OS signal handlers. Call once at startup.
 ///
-/// - SIGINT: sets atomic flag, checked at interpreter safe points.
+/// - SIGINT: sets its pending bit, checked at interpreter safe points.
 ///   Second SIGINT while first is pending force-terminates (exit 130).
 /// - SIGPIPE: ignored (SIG_IGN) to prevent crashes on broken pipes.
 pub fn install() void {
@@ -94,7 +109,7 @@ pub fn removeHandler(signum: u6) void {
     user_handlers[signum] = null;
     handlers_mutex.unlock();
     if (displaced) |d| d.release();
-    signal_pending[signum].store(false, .release);
+    clearPending(signum);
 }
 
 /// Register a user handler for a signal, transferring ownership of `handler` into the table.
@@ -135,7 +150,7 @@ pub fn isHandleable(signum: i64) bool {
     return true;
 }
 
-/// Check all pending signal flags and dispatch handlers.
+/// Check the pending-signal mask and dispatch handlers.
 ///
 /// Called at interpreter safe points (executeInstructions, jitSafepoint).
 /// For each pending signal:
@@ -145,49 +160,55 @@ pub fn isHandleable(signum: i64) bool {
 pub fn checkPendingSignals(ctx: *Context) error{UserThrown}!void {
     // No OS signal delivery on freestanding targets, and signal.install() (the only thing that
     // could ever mark a signal pending) is wired up only from main.zig, not built for this
-    // target -- signal_pending stays all-false forever there, so this is a no-op. Comptime-gated
-    // so posix.SIG (undefined on the non-libc posix stub) need not compile for that target.
+    // target -- the mask stays zero forever there, so this is a no-op. Comptime-gated so
+    // posix.SIG (undefined on the non-libc posix stub) need not compile for that target.
     if (comptime is_freestanding) return;
 
-    for (1..MAX_SIGNALS) |i| {
-        if (signal_pending[i].load(.acquire)) {
-            signal_pending[i].store(false, .release);
+    // The walk runs over the loaded snapshot rather than re-reading, which bounds a pass at 31
+    // iterations under a storm. A delivery arriving mid-pass keeps its bit for the next safe
+    // point.
+    //
+    // @ctz yields the lowest bit first, so signals are handled in ascending order.
+    //
+    // Only a consumed bit is cleared, so a handler that throws leaves the rest pending.
+    var mask = signal_pending.load(.acquire);
+    while (mask != 0) {
+        const signum: u5 = @intCast(@ctz(mask));
+        mask &= ~signalBit(signum);
+        clearPending(signum);
 
-            if (retainUserHandler(@intCast(i))) |handler| {
-                defer handler.release();
-                ctx.stack.push(.{ .fixnum = @intCast(i) }) catch return;
+        if (retainUserHandler(signum)) |handler| {
+            defer handler.release();
+            ctx.stack.push(.{ .fixnum = signum }) catch return;
 
-                // A dropped handler error must not bleed into whatever the interrupted program
-                // raises next. A user throw is the exception: it propagates from here, so the
-                // state that raise wrote belongs to it and is left in place.
-                const saved_error_state = ctx.saveErrorState();
-                const handler_failed = if (ctx.executeQuotationWithOwner(handler.quot, handler.ownerClosure())) |_|
-                    false
-                else |err| blk: {
-                    if (err == error.UserThrown) return error.UserThrown;
-                    break :blk true;
-                };
-                ctx.restoreErrorState(saved_error_state);
+            // A dropped handler error must not bleed into whatever the interrupted program
+            // raises next. A user throw is the exception: it propagates from here, so the
+            // state that raise wrote belongs to it and is left in place.
+            const saved_error_state = ctx.saveErrorState();
+            const handler_failed = if (ctx.executeQuotationWithOwner(handler.quot, handler.ownerClosure())) |_|
+                false
+            else |err| blk: {
+                if (err == error.UserThrown) return error.UserThrown;
+                break :blk true;
+            };
+            ctx.restoreErrorState(saved_error_state);
 
-                if (handler_failed) return;
-            } else if (i == @as(usize, @intCast(SIG.INT))) {
-                ctx.thrown_error = value_mod.boxErrorObject(ctx.quotationAllocator(), .{
-                    .error_type = "interrupted",
-                    .message = "interrupted by signal",
-                }) catch return error.UserThrown;
-                return error.UserThrown;
-            }
-            // Other signals with no handler: consume and ignore.
+            if (handler_failed) return;
+        } else if (signum == SIG.INT) {
+            ctx.thrown_error = value_mod.boxErrorObject(ctx.quotationAllocator(), .{
+                .error_type = "interrupted",
+                .message = "interrupted by signal",
+            }) catch return error.UserThrown;
+            return error.UserThrown;
         }
+        // Other signals with no handler: consume and ignore.
     }
 }
 
 /// Clear all pending signal state. Called after the REPL catches an
 /// error so the next iteration starts clean.
 pub fn reset() void {
-    for (1..MAX_SIGNALS) |i| {
-        signal_pending[i].store(false, .release);
-    }
+    signal_pending.store(0, .release);
 }
 
 // ---------------------------------------------------------------------------
@@ -208,29 +229,57 @@ test "checkPendingSignals fires for SIGINT when no user handler" {
     var ctx = testContext();
     defer ctx.deinit();
 
-    signal_pending[@intCast(SIG.INT)].store(true, .release);
-    defer signal_pending[@intCast(SIG.INT)].store(false, .release);
+    markPending(@intCast(SIG.INT));
+    defer clearPending(@intCast(SIG.INT));
 
     const result = checkPendingSignals(&ctx);
     try testing.expectError(error.UserThrown, result);
     try testing.expect(ctx.thrown_error != null);
     try testing.expectEqualStrings("interrupted", ctx.thrown_error.?.error_type);
     try testing.expectEqualStrings("interrupted by signal", ctx.thrown_error.?.message);
-    // Flag should be cleared after consumption
-    try testing.expect(!signal_pending[@intCast(SIG.INT)].load(.acquire));
+    try testing.expect(!isPending(@intCast(SIG.INT)));
 }
 
 test "checkPendingSignals ignores non-SIGINT with no user handler" {
     var ctx = testContext();
     defer ctx.deinit();
 
-    signal_pending[@intCast(SIG.TERM)].store(true, .release);
-    defer signal_pending[@intCast(SIG.TERM)].store(false, .release);
+    markPending(@intCast(SIG.TERM));
+    defer clearPending(@intCast(SIG.TERM));
 
     try checkPendingSignals(&ctx);
     try testing.expect(ctx.thrown_error == null);
-    // Flag should be cleared
-    try testing.expect(!signal_pending[@intCast(SIG.TERM)].load(.acquire));
+    try testing.expect(!isPending(@intCast(SIG.TERM)));
+}
+
+test "checkPendingSignals consumes every set bit in one pass, lowest first" {
+    var ctx = testContext();
+    defer ctx.deinit();
+
+    const low: u6 = @intCast(SIG.HUP);
+    const high: u6 = @intCast(SIG.TERM);
+    try testing.expect(low < high);
+
+    // An empty handler body leaves the signal number the dispatch pushed for it, so the stack
+    // reads back the order the two were consumed in.
+    const empty = Callable{ .quot = .{ .instructions = &.{} }, .owner = .unit };
+    setUserHandler(low, empty);
+    defer setUserHandler(low, null);
+    setUserHandler(high, empty);
+    defer setUserHandler(high, null);
+
+    markPending(low);
+    defer clearPending(low);
+    markPending(high);
+    defer clearPending(high);
+
+    try checkPendingSignals(&ctx);
+
+    try testing.expect(!isPending(low));
+    try testing.expect(!isPending(high));
+    try testing.expectEqual(@as(usize, 2), ctx.stack.depth());
+    try testing.expectEqual(@as(i64, low), (try ctx.stack.peekN(1)).fixnum);
+    try testing.expectEqual(@as(i64, high), (try ctx.stack.peekN(0)).fixnum);
 }
 
 test "a swallowed handler error gives back the state it overwrote" {
@@ -247,8 +296,8 @@ test "a swallowed handler error gives back the state it overwrote" {
     ctx.pending_error_message = "body failed";
     ctx.appendPendingSyntheticErrorFrame("boom", "<test>", 4, null);
 
-    signal_pending[signum].store(true, .release);
-    defer signal_pending[signum].store(false, .release);
+    markPending(signum);
+    defer clearPending(signum);
 
     try checkPendingSignals(&ctx);
 
@@ -257,12 +306,11 @@ test "a swallowed handler error gives back the state it overwrote" {
     try testing.expectEqualStrings("boom", ctx.jit_pending_trace_frames.items[0].word_name);
 }
 
-test "reset clears all pending flags" {
-    signal_pending[@intCast(SIG.INT)].store(true, .release);
-    signal_pending[@intCast(SIG.TERM)].store(true, .release);
+test "reset clears every pending bit" {
+    markPending(@intCast(SIG.INT));
+    markPending(@intCast(SIG.TERM));
     reset();
-    try testing.expect(!signal_pending[@intCast(SIG.INT)].load(.acquire));
-    try testing.expect(!signal_pending[@intCast(SIG.TERM)].load(.acquire));
+    try testing.expectEqual(@as(u32, 0), signal_pending.load(.acquire));
 }
 
 test "isHandleable rejects invalid signals" {
@@ -296,4 +344,13 @@ test "user handler storage round-trips" {
 
 fn testContext() Context {
     return Context.init(testing.allocator);
+}
+
+/// Stand in for a delivery, so a test need not raise a real signal to reach the dispatch path.
+fn markPending(signum: u6) void {
+    _ = signal_pending.fetchOr(signalBit(signum), .release);
+}
+
+fn isPending(signum: u6) bool {
+    return signal_pending.load(.acquire) & signalBit(signum) != 0;
 }
