@@ -1,0 +1,3 @@
+use "./circular-dep-three-c.1z" ;
+
+three-helper-b: ( -- x ) [ 2 ] ;

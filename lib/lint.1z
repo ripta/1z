@@ -38,7 +38,10 @@ semantic-context: struct{ module word-infos } ;
 \ --- Run-scoped state shared by rules that need the full checked file set ---
 
 (lint-run-storage): ( -- mmap ) parse-time [
-  [ checked-files: { } dead-definitions: f circular-files: { } semantic-context-error: f ]
+  [
+    checked-files: { } dead-definitions: f circular-files: { }
+    semantic-context-error: f corpus-index: f
+  ]
   make-mutable-map
 ] ;
 (lint-run-state): ( -- mmap ) [ (lint-run-storage) ] ;
@@ -51,6 +54,11 @@ set-lint-dead-definitions: ( dead-defs -- ) [ (lint-run-state) swap dead-definit
 
 lint-circular-files: ( -- array ) [ (lint-run-state) circular-files: @get ] ;
 set-lint-circular-files: ( circular -- ) [ (lint-run-state) swap circular-files: swap @set! drop ] ;
+
+\ Canonical path of every checked file, mapped to the spelling the caller passed, or f before
+\ (build-dep-graph) has run.
+(lint-corpus-index): ( -- mmap/f ) [ (lint-run-state) corpus-index: @get ] ;
+(set-lint-corpus-index): ( index -- ) [ (lint-run-state) swap corpus-index: swap @set! drop ] ;
 
 \\ The error raised by the most recent (build-semantic-context) attempt for
 \\ the file currently being linted, or f if it succeeded or was skipped.
@@ -382,9 +390,15 @@ format-diagnostic: ( lint-diagnostic -- string ) [
 
 \ --- Circular dependency detection (token-level, runs before preload) ---
 
-\ Does a module path refer to a relative import?
-(relative-import?): ( path -- ? ) [
-  dup "./" #starts-with? swap "../" #starts-with? or
+\ Is this import written as a path? The loader resolves those against the importing file, and
+\ everything else is a module name it looks up on the search paths. Mirrors the loader's own
+\ classification.
+(path-mode-import?): ( path -- ? ) [
+  dup "./" #starts-with? [ drop t ] [
+    dup "../" #starts-with? [ drop t ] [
+      dup "/" #starts-with? [ drop t ] [ ".1z" #ends-with? ] if
+    ] if
+  ] if
 ] ;
 
 \ Resolve a relative import path against the importing file's directory.
@@ -392,59 +406,138 @@ format-diagnostic: ( lint-diagnostic -- string ) [
   swap dirname swap path-join normalize
 ] ;
 
+\ Canonical path of a checked file or of a path-mode import, or f when it names no file. Resolved
+\ against the working directory, since a lint path comes from the command line rather than from a
+\ `use` statement.
+(canonical-file-path): ( path -- canonical/f ) [
+  [ canonical-path ] [ drop f ] recover
+] ;
+
+\ Canonical path of a module name the loader would find on its search paths, or f when nothing
+\ resolves.
+(canonical-module-path): ( name -- canonical/f ) [
+  [ native.resolve-load-path ] [ drop f ] recover
+] ;
+
+\ Record one checked file under its canonical path. A file that does not resolve contributes
+\ nothing.
+(index-corpus-file): ( index file -- index ) [
+  dup (canonical-file-path)
+  dup [ swap @set! ] [ 2drop ] if
+] ;
+
+\ Map each checked file's canonical path to the spelling the caller passed, so a resolved import
+\ can be named the way diagnostics name it.
+(build-corpus-index): ( files -- index ) [
+  M{ } [ (index-corpus-file) ] #reduce
+] ;
+
+\ The checked file an import names, or f when it names none. An import that resolves outside the
+\ checked set has no node to point at, so it yields no edge; the loader's own check covers what the
+\ corpus cannot see.
+(resolve-import-target): ( source-file import-path -- target/f ) [
+  dup (path-mode-import?)
+  [ (resolve-use-path) (canonical-file-path) ]
+  [ nip (canonical-module-path) ]
+  if
+  dup [ (lint-corpus-index) dup [ swap f @get-or ] [ 2drop f ] if ] when
+] ;
+
 \ Strip the surrounding quotes from a use-string token value.
 (strip-use-string-quotes): ( str -- str' ) [
   1 #drop dup #len 1 - #take
 ] ;
 
-\ Extract relative use targets from a file's token stream.
-\ Returns an array of { resolved-path line col } tuples.
+\ Kind of the token at i, or f past the end.
+(token-kind-at): ( tokens i -- kind/f ) [
+  2dup swap #len < [ #nth kind>> ] [ 2drop f ] if
+] ;
+
+\ Value of the word token at i, or f past the end or on another kind.
+(word-value-at): ( tokens i -- value/f ) [
+  2dup (token-kind-at) word: = [ #nth value>> ] [ 2drop f ] if
+] ;
+
+\ Index of the string naming the module in the use statement whose `use` sits at i, or f when the
+\ statement holds no string before its semicolon.
+\
+\ Scanning to the first string rather than taking the next token is what lets a selective import
+\ through: its `{ ... }` group holds symbols, never strings.
+(use-string-index): ( tokens i -- idx/f ) [
+  ++
+  [
+    2dup (token-kind-at)
+    dup f = swap dup string: = swap semicolon: = or or not
+  ] [ ++ ] while
+  2dup (token-kind-at) string: = [ nip ] [ 2drop f ] if
+] ;
+
+\ Does a `"module" load reexport` statement start at i? That is how a module republishes another
+\ one's words, and it is an import edge like any other.
+(reexport-import-at?): ( tokens i -- ? ) [
+  2dup ++ (word-value-at) "load" = [
+    2 + (word-value-at) "reexport" =
+  ] [ 2drop f ] if
+] ;
+
+\ Index of the string naming a module imported at i, or f when no import statement starts there.
+(import-string-index): ( tokens i -- idx/f ) [
+  2dup (word-value-at) "use" = [
+    (use-string-index)
+  ] [
+    2dup (reexport-import-at?) [ nip ] [ 2drop f ] if
+  ] if
+] ;
+
+\ Build the { target line col } tuple for one resolved import.
+(use-target-tuple): ( line-index token target -- tuple ) [
+  swap pos>>
+  \ stack: line-index(2) target(1) pos(0)
+  2 pick-n swap (pos>line-col)
+  \ stack: line-index(3) target(2) line(1) col(0)
+  3 array-n nip
+] ;
+
+\ Append the import named at i, if any, to the target list.
+(collect-use-target): ( path line-index tokens targets i -- ) [
+  2 pick-n swap (import-string-index)
+  \ stack: path(4) line-index(3) tokens(2) targets(1) idx/f(0)
+  dup [
+    2 pick-n swap #nth
+    \ stack: path(4) line-index(3) tokens(2) targets(1) token(0)
+    dup value>> (strip-use-string-quotes)
+    \ stack: path(5) line-index(4) tokens(3) targets(2) token(1) import(0)
+    5 pick-n swap (resolve-import-target)
+    \ stack: path(5) line-index(4) tokens(3) targets(2) token(1) target(0)
+    dup [
+      4 pick-n -rot> (use-target-tuple)
+      over swap #push! drop
+    ] [ 2drop ] if
+  ] [ drop ] if
+  2drop 2drop
+] ;
+
+\ Extract the modules a file imports, each resolved to the checked file it names. Returns an array
+\ of { target line col } tuples.
 (extract-use-targets): ( path source tokens -- path targets ) [
   swap (build-line-index) swap
-  \ stack: path(2) line-index(1) tokens(0)
-  V{ } f
-  \ stack: path(4) line-index(3) tokens(2) targets(1) saw-use?(0)
+  [ significant-token? ] #filter #collect
+  V{ } 0
+  \ Each token is visited by position rather than by value, since recognizing an import needs to
+  \ look ahead past a selective-import group.
   2 pick-n [
-    \ stack: ... targets(2) saw-use?(1) token(0)
-    dup significant-token? [
-      swap
-      \ stack: ... path(4) line-index(3) tokens(2) targets(1) token(0) saw-use?
-      \ if consumes saw-use?, leaving token on top
-      [
-        \ Previous was use: check if this is a relative string import
-        dup kind>> string: = [
-          dup value>> (strip-use-string-quotes)
-          dup (relative-import?) [
-            5 pick-n swap (resolve-use-path)
-            over pos>> 5 pick-n swap (pos>line-col)
-            3 array-n
-            2 pick-n swap #push! drop
-          ] [ drop ] if
-          drop f
-        ] [
-          drop f
-        ] if
-      ] [
-        dup kind>> word: = over value>> "use" = and [
-          drop t
-        ] [
-          drop f
-        ] if
-      ] if
-    ] [ drop ] if
+    \ stack: path(5) line-index(4) tokens(3) targets(2) i(1) token(0)
+    drop
+    4 pick-n 4 pick-n 4 pick-n 4 pick-n 4 pick-n (collect-use-target)
+    ++
   ] #each
   drop
-  [ drop drop ] dip
+  [ 2drop ] dip
 ] ;
 
-\ Read and tokenize a file, then extract relative use targets.
+\ Read and tokenize a file, then extract its import targets.
 (file-use-targets): ( path -- path targets ) [
   dup (read-file) dup 1z-tokenize #collect (extract-use-targets)
-] ;
-
-\ Read and tokenize a file, returning only its relative use targets.
-(file-use-targets-only): ( path -- targets ) [
-  (file-use-targets) nip
 ] ;
 
 \ Run one lint rule against a materialized lint-file context array:
@@ -466,13 +559,17 @@ format-diagnostic: ( lint-diagnostic -- string ) [
 
 \ Build a dependency graph from all checked files.
 \ Returns M{ source-path -> [ { target-path line col } ... ] }.
+\
+\ The corpus index every edge resolves through is built here, from the same file list, so no caller
+\ has to set it up first.
 (build-dep-graph): ( files -- graph ) [
+  dup (build-corpus-index) (set-lint-corpus-index)
   M{ } swap
   \ stack: graph(1) files(0)
   0
   \ stack: graph(2) files(1) idx(0)
   [
-    1 pick-n #len <
+    over #len over >
   ] [
     1 pick-n over #nth
     \ stack: graph(3) files(2) idx(1) file(0)
@@ -480,111 +577,93 @@ format-diagnostic: ( lint-diagnostic -- string ) [
     \ stack: graph(5) files(4) idx(3) file(2) file(1) targets(0)
     dup #len 0 > [
       5 pick-n -rot> @set! drop
-    ] [ drop ] if
+    ] [ 2drop ] if
     drop
     ++
   ] while
-  drop [ drop ] dip
+  2drop
 ] ;
 
-\ Check if target is reachable from start via BFS through the dep graph.
-\ Returns the cycle path (array of file paths) or f.
-(find-cycle-from): ( graph start -- cycle-or-f ) [
-  \ BFS: seen M{}, parent M{}, work V{}
-  M{ } over t @set! drop  \ seen
-  M{ }                    \ parent
-  V{ }                    \ work
-  \ stack: graph(4) start(3) seen(2) parent(1) work(0)
+\ Import edges leaving one node, or an empty array when it imports nothing.
+(graph-edges): ( graph node -- edges ) [
+  2dup @has? [ @get ] [ 2drop { } ] if
+] ;
 
-  \ Seed work list with start's direct neighbors
-  4 pick-n 4 pick-n @has? [
-    4 pick-n 4 pick-n @get
-    dup #len 0
-    \ stack: graph(7) start(6) seen(5) parent(4) work(3) edges(2) len(1) i(0)
-    [
-      dup 2 pick-n <
-    ] [
-      2 pick-n over #nth 0 #nth
-      \ stack: ... len(2) i(1) target(0)
-      dup 6 pick-n swap @has? not [
-        5 pick-n swap #push! drop
-        6 pick-n over t @set! drop
-        5 pick-n over 7 pick-n @set! drop
-        drop
-      ] [ drop ] if
-      ++
-    ] while
-    drop drop
+\ Record one import edge. The first visit to a target fixes the node that reached it, and every
+\ target but start joins the queue.
+\
+\ An entry under start is therefore the search's answer: something imported its way back to where
+\ the walk began.
+(visit-cycle-edge): ( start parent queue node target -- ) [
+  \ stack: start(4) parent(3) queue(2) node(1) target(0)
+  3 pick-n over @has? not [
+    3 pick-n over 3 pick-n @set! drop
+    dup 5 pick-n = not [ 2 pick-n over #push! drop ] when
   ] when
-
-  f
-  \ stack: graph(5) start(4) seen(3) parent(2) work(1) result(0)
-
-  [
-    dup f = 2 pick-n #len 0 > and
-  ] [
-    \ Pop from work
-    2 pick-n dup #len 1 - #nth
-    3 pick-n dup #len 1 - #take drop
-    \ stack: graph(6) start(5) seen(4) parent(3) work(2) result(1) node(0)
-
-    dup 5 pick-n = [
-      \ Found path back to start! Reconstruct via parent chain.
-      V{ } over #push! drop
-      \ stack: ... result(1) node(0) path-V{}
-      swap
-      \ stack: ... result(2) path(1) node(0)
-      [
-        dup 6 pick-n = not
-      ] [
-        2 pick-n over #push! drop
-        5 pick-n swap @get
-      ] while
-      2 pick-n swap #push! drop
-      \ Reverse path
-      { } swap #len 0
-      [
-        dup 2 pick-n #len <
-      ] [
-        2 pick-n over #nth
-        3 pick-n swap #suffix
-        [ drop ] dip
-        ++
-      ] while
-      drop nip
-      \ stack: ... result(1) reversed-path(0)
-      nip
-    ] [
-      \ Explore node's neighbors
-      6 pick-n over @has? [
-        6 pick-n over @get
-        dup #len 0
-        \ stack: ... result(2) node(1) edges(0) len i
-        [
-          dup 2 pick-n <
-        ] [
-          2 pick-n over #nth 0 #nth
-          \ stack: ... node(4) edges(3) len(2) i(1) target(0)
-          dup 9 pick-n swap @has? not [
-            8 pick-n swap #push! drop
-            9 pick-n over t @set! drop
-            8 pick-n over 5 pick-n @set! drop
-            drop
-          ] [ drop ] if
-          ++
-        ] while
-        drop drop
-      ] when
-      drop
-    ] if
-  ] while
-
-  [ drop drop drop drop drop ] dip
+  2drop 2drop drop
 ] ;
 
-\ Does target directly import source?
-(reciprocal-import?): ( source target -- ? ) [
-  dup (file-use-targets-only) [ 0 #nth ] #map #collect nip swap #in?
+\ Visit every import edge leaving one node.
+(visit-cycle-node): ( graph start parent queue node -- ) [
+  4 pick-n over (graph-edges)
+  \ stack: graph(5) start(4) parent(3) queue(2) node(1) edges(0)
+  [
+    \ stack: graph(5) start(4) parent(3) queue(2) node(1) edge(0)
+    0 #nth
+    4 pick-n 4 pick-n 4 pick-n 4 pick-n 4 pick-n (visit-cycle-edge)
+    drop
+  ] #each
+  2drop 2drop drop
+] ;
+
+\ The cycle chain in import order: start, then the nodes reached on the way to the import that
+\ closed back onto it, then start again.
+\
+\ `rev` holds those nodes closing-first, because a parent walk runs backwards, so popping off its
+\ end yields them in import order.
+(chain-from-reversed): ( start rev -- chain ) [
+  over 1array
+  \ stack: start(2) rev(1) chain(0)
+  [ over #len 0 > ] [
+    [ #pop! ] dip
+    swap 1array #append
+  ] while
+  2 pick-n 1array #append
+  [ 2drop ] dip
+] ;
+
+\ Rebuild the cycle the search found, walking the parent links back from the node whose import
+\ closed onto start.
+(cycle-chain): ( parent start node -- chain ) [
+  V{ }
+  \ stack: parent(3) start(2) node(1) rev(0)
+  [ over 3 pick-n = not ] [
+    over #push!
+    [ 2 pick-n swap @get ] dip
+  ] while
+  nip (chain-from-reversed) nip
+] ;
+
+\ The shortest cycle through start, as the chain of files it passes through with start repeated at
+\ the end, or f when nothing imports its way back.
+\
+\ Breadth-first, so the chain reported for a file is the shortest it sits on.
+(find-cycle-from): ( graph start -- cycle-or-f ) [
+  M{ }
+  V{ } 2 pick-n #push!
+  0
+  \ stack: graph(4) start(3) parent(2) queue(1) head(0)
+  [ 1 pick-n #len over > [ 2 pick-n 4 pick-n @has? not ] [ f ] if ] [
+    over over #nth
+    [ ++ ] dip
+    \ stack: graph(5) start(4) parent(3) queue(2) head(1) node(0)
+    5 pick-n 5 pick-n 5 pick-n 5 pick-n 4 pick-n (visit-cycle-node)
+    drop
+  ] while
+  2 pick-n 4 pick-n @has? [
+    2 pick-n 4 pick-n over over @get (cycle-chain)
+  ] [ f ] if
+  [ 2drop 2drop drop ] dip
 ] ;
 
 \ Is this file part of a detected circular dependency?
@@ -592,39 +671,50 @@ format-diagnostic: ( lint-diagnostic -- string ) [
   lint-circular-files [ 1 #nth ] #map #collect swap #in?
 ] ;
 
-\ Build a circular-dependency record { target-file file line col }.
-(make-reciprocal-cycle-record): ( file edge -- record ) [
-  dup 0 #nth
-  2 pick-n
-  2 pick-n 1 #nth
-  3 pick-n 2 #nth
-  4 array-n
-  [ drop drop ] dip
+\ Position of the import that takes file to target, as line and column. A chain always has one, so
+\ the 1:1 fallback only guards a caller passing a target the file does not import.
+(import-position): ( graph file target -- line col ) [
+  [ (graph-edges) ] dip
+  \ stack: edges(1) target(0)
+  0
+  [ 2 pick-n #len over > [ 2 pick-n over #nth 0 #nth 2 pick-n = not ] [ f ] if ] [ ++ ] while
+  \ stack: edges(2) target(1) i(0)
+  2 pick-n #len over > [
+    nip #nth dup 1 #nth swap 2 #nth
+  ] [
+    3drop 1 1
+  ] if
 ] ;
 
-\ Does this import edge participate in a direct cycle with the given file?
-(direct-cycle-edge?): ( edge file -- ? ) [
-  swap dup 0 #nth nip (reciprocal-import?)
+\ Build a circular-dependency record { chain file line col }, anchored at the import that opens the
+\ cycle.
+(cycle-record): ( graph file cycle -- record ) [
+  2 pick-n 2 pick-n 2 pick-n 1 #nth (import-position)
+  \ stack: graph(4) file(3) cycle(2) line(1) col(0)
+  2 pick-n 4 pick-n 3 pick-n 3 pick-n 4 array-n
+  [ 2drop 2drop drop ] dip
 ] ;
 
-\ Convert an import edge into a circular-dependency record for the given file.
-(edge>circular-record): ( edge file -- record ) [
-  swap (make-reciprocal-cycle-record)
-] ;
-
-\ Compute circular-dependency records contributed by one file.
-(file-circular-records): ( file -- records ) [
-  dup dup (file-use-targets-only) swap
-  [ (direct-cycle-edge?) ] curry #filter #collect
-  swap [ (edge>circular-record) ] curry #map #collect
+\ The circular-dependency record for one file, or f when it sits on no cycle.
+(file-cycle-record): ( graph file -- record/f ) [
+  2dup (find-cycle-from)
+  dup [ (cycle-record) ] [ [ 2drop ] dip ] if
 ] ;
 
 \ Compute files involved in circular dependencies.
-\ Returns an array of { target-file file line col } records for each
-\ import that participates in a direct circular dependency.
+\ Returns an array of { chain file line col } records, one for each checked file that sits on a
+\ cycle, naming the shortest chain through it.
 (compute-circular-deps): ( files -- records ) [
-  [ (file-circular-records) ] #map #collect
-  { } [ #append ] #reduce
+  dup (build-dep-graph)
+  swap V{ } swap
+  \ stack: graph(2) records(1) files(0)
+  [
+    \ stack: graph(2) records(1) file(0)
+    2 pick-n over (file-cycle-record)
+    dup [ 2 pick-n swap #push! drop ] [ drop ] if
+    drop
+  ] #each
+  nip
 ] ;
 
 \ Compute the set of file paths involved in any circular dependency.
@@ -649,6 +739,13 @@ format-diagnostic: ( lint-diagnostic -- string ) [
   { } [ #append ] #reduce
 ] ;
 
+\ Left-pad a line or column number to a fixed width, so a string comparison of two sort keys orders
+\ them numerically.
+(sort-key-number): ( n -- str ) [
+  >string
+  [ dup #len 8 < ] [ "0" swap #append ] while
+] ;
+
 \ --- Main entry point ---
 
 \\ Run all registered lint rules against the given file list.
@@ -671,13 +768,12 @@ run-lint: ( files -- bool ) [
     over (lint-files)
     nip
 
-    \ Sort by file, then line, then column.
-    \ Build a string key "file:NNNNNNNN:NNNNNNNN" with zero-padded numbers.
+    \ Sort by file, then line, then column, on a "file:NNNNNNNN:NNNNNNNN" key.
     [
       dup file>> ":" #append
-      over line>> >string dup #len 8 swap - [ "0" #append ] times swap #append
+      over line>> (sort-key-number) #append
       ":" #append
-      swap column>> >string dup #len 8 swap - [ "0" #append ] times swap #append
+      swap column>> (sort-key-number) #append
     ] #sort-by
 
     dup #len 0 = [

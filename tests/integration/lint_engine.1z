@@ -77,6 +77,42 @@ word: "dup" 0 make-token significant-token? t "word is significant" assert=
 symbol: "name:" 0 make-token definition-symbol? t "symbol is definition symbol" assert=
 word: "dup" 0 make-token definition-symbol? f "word is not definition symbol" assert=
 
+"dependency graph" test-section
+
+{
+  "tests/fixtures/lint/circular-dep-three-a.1z"
+  "tests/fixtures/lint/circular-dep-three-b.1z"
+  "tests/fixtures/lint/circular-dep-three-c.1z"
+} (build-dep-graph)
+dup "tests/fixtures/lint/circular-dep-three-a.1z" @get 0 #nth 0 #nth
+"tests/fixtures/lint/circular-dep-three-b.1z" "use names an edge" assert=
+dup "tests/fixtures/lint/circular-dep-three-c.1z" @get 0 #nth 0 #nth
+"tests/fixtures/lint/circular-dep-three-a.1z" "load reexport names an edge" assert=
+drop
+
+{ "tests/fixtures/lint/circular-dep-search-a.1z" } (build-dep-graph)
+"tests/fixtures/lint/circular-dep-search-a.1z" @has? f
+"an import outside the checked set is no edge" assert=
+
+"cycle detection" test-section
+
+M{ } "a" { { "b" 1 1 } } @set!
+dup "a" (find-cycle-from) f "an acyclic graph reports no cycle" assert=
+"b" (find-cycle-from) f "a node with no imports reports no cycle" assert=
+
+M{ } "a" { { "a" 1 1 } } @set!
+"a" (find-cycle-from) { "a" "a" } "a self-import closes on itself" assert=
+
+M{ } "a" { { "b" 1 1 } } @set! "b" { { "a" 1 1 } } @set!
+dup "a" (find-cycle-from) { "a" "b" "a" } "a two-file cycle names both" assert=
+"b" (find-cycle-from) { "b" "a" "b" } "the same cycle reads from either end" assert=
+
+M{ } "a" { { "b" 1 1 } } @set! "b" { { "c" 1 1 } } @set! "c" { { "a" 1 1 } } @set!
+"a" (find-cycle-from) { "a" "b" "c" "a" } "a three-file cycle names all three" assert=
+
+M{ } "x" { { "a" 1 1 } } @set! "a" { { "b" 1 1 } } @set! "b" { { "a" 1 1 } } @set!
+"x" (find-cycle-from) f "reaching a cycle is not sitting on one" assert=
+
 "run-lint on clean file" test-section
 
 { "tests/fixtures/lint/clean.1z" } run-lint

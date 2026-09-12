@@ -1,0 +1,4 @@
+\ Closes the three-file cycle through the aggregator form rather than `use`.
+"./circular-dep-three-a.1z" load reexport
+
+three-helper-c: ( -- x ) [ 3 ] ;

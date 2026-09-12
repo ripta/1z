@@ -1,0 +1,4 @@
+\ Names its half of the cycle through a selective import rather than a bare one.
+use { search-helper-a: } "circular-dep-search-a" ;
+
+search-helper-b: ( -- x ) [ search-helper-a ] ;

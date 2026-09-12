@@ -1,0 +1,2 @@
+tests/fixtures/lint/circular-dep-search-a.1z:1:5: warning: [circular-dependency] circular dependency: tests/fixtures/lint/circular-dep-search-a.1z -> tests/fixtures/lint/circular-dep-search-b.1z -> tests/fixtures/lint/circular-dep-search-a.1z
+tests/fixtures/lint/circular-dep-search-b.1z:2:26: warning: [circular-dependency] circular dependency: tests/fixtures/lint/circular-dep-search-b.1z -> tests/fixtures/lint/circular-dep-search-a.1z -> tests/fixtures/lint/circular-dep-search-b.1z

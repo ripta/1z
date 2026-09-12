@@ -24,6 +24,7 @@ pub const primitives = [_]Primitive{
     .{ .name = "file-info", .stack_effect = "path -- hash", .doc = "Return a hash with file metadata: size, type, modified, accessed, permissions.", .func = nativeFileInfo, .capability = .io_fs },
     .{ .name = "create-symlink", .stack_effect = "target link-path --", .doc = "Create a symbolic link at link-path pointing to target.", .func = nativeCreateSymlink, .capability = .io_fs },
     .{ .name = "read-symlink", .stack_effect = "path -- target-path", .doc = "Read the target of a symbolic link.", .func = nativeReadSymlink, .capability = .io_fs },
+    .{ .name = "canonical-path", .stack_effect = "path -- canonical", .doc = "Resolve a path to its canonical absolute form, following symlinks. A relative path is resolved against the working directory.", .func = nativeCanonicalPath, .capability = .io_fs },
     .{ .name = "set-permissions", .stack_effect = "path mode --", .doc = "Set file or directory permissions (octal mode bits).", .func = nativeSetPermissions, .capability = .io_fs },
 };
 
@@ -223,6 +224,25 @@ fn nativeReadSymlink(ctx: *Context) anyerror!void {
         return mapFileOpenError(err);
     };
     const result = alloc.dupe(u8, target) catch return error.OutOfMemory;
+    try ctx.stack.push(value_mod.stringValue(result));
+}
+
+/// canonical-path ( path -- canonical )
+///
+/// Resolves against the working directory rather than the importing file's directory, which is
+/// what a caller holding paths from a command line needs. `resolve-load-path` answers the other
+/// question, resolving an import the way the loader would.
+fn nativeCanonicalPath(ctx: *Context) anyerror!void {
+    if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "canonical-path");
+    const path = try helpers.popString(ctx);
+    defer container_backing.releaseValue(.{ .string = path });
+    const alloc = ctx.quotationAllocator();
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const canonical = std.fs.cwd().realpath(path.bytes, &buf) catch |err| {
+        helpers.setErrorContext(ctx, "canonical-path: {s}", .{@errorName(err)});
+        return mapFileOpenError(err);
+    };
+    const result = alloc.dupe(u8, canonical) catch return error.OutOfMemory;
     try ctx.stack.push(value_mod.stringValue(result));
 }
 

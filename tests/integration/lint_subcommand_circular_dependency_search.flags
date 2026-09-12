@@ -1,0 +1,6 @@
+@raw
+lint
+--stdlib-path=lib
+--load-path=tests/fixtures/lint
+tests/fixtures/lint/circular-dep-search-a.1z
+tests/fixtures/lint/circular-dep-search-b.1z

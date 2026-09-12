@@ -7,7 +7,7 @@
 use "lint" ;
 use "lint-rules/tier2" ;
 use "char" ;
-use { split: } "strings" ;
+use { split: #join: } "strings" ;
 
 \ --- Helpers for doc-example-format ---
 
@@ -726,12 +726,11 @@ make-lint-rule register-lint-rule
 (circular-record-line):   ( record -- line )   [ 2 #nth ] ;
 (circular-record-column): ( record -- column ) [ 3 #nth ] ;
 
+\ The chain names every file the cycle passes through, closed by repeating the one the record is
+\ anchored on.
 (format-circular-record-message): ( record -- message ) [
-  dup 1 #nth "circular dependency: " swap #append
-  " -> " #append
-  over 0 #nth #append
-  " -> " #append
-  swap 1 #nth #append
+  0 #nth " -> " #join
+  "circular dependency: " swap #append
 ] ;
 
 (circular-record>diagnostic): ( record -- lint-diagnostic ) [

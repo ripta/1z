@@ -1,0 +1,3 @@
+use "circular-dep-search-b" ;
+
+search-helper-a: ( -- x ) [ 1 ] ;

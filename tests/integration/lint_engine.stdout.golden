@@ -37,6 +37,18 @@ PASS: newline not significant
 PASS: word is significant
 PASS: symbol is definition symbol
 PASS: word is not definition symbol
+=== dependency graph ===
+PASS: use names an edge
+PASS: load reexport names an edge
+PASS: an import outside the checked set is no edge
+=== cycle detection ===
+PASS: an acyclic graph reports no cycle
+PASS: a node with no imports reports no cycle
+PASS: a self-import closes on itself
+PASS: a two-file cycle names both
+PASS: the same cycle reads from either end
+PASS: a three-file cycle names all three
+PASS: reaching a cycle is not sitting on one
 === run-lint on clean file ===
 PASS: clean file has no findings
 === run-lint with findings ===

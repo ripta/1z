@@ -10,4 +10,4 @@ use "lint-rules/tier3" ;
 "foo-bar" (non-kebab-core?) [ "foo-bar non-kebab" ] [ "foo-bar kebab" ] if print-line
 "foo--bar" (non-kebab-core?) [ "foo--bar non-kebab" ] [ "foo--bar kebab" ] if print-line
 
-V{ "b" "a.1z" 3 5 } (circular-record>diagnostic) inspect print-line
+{ { "a.1z" "b" "a.1z" } "a.1z" 3 5 } (circular-record>diagnostic) inspect print-line
