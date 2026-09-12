@@ -1,0 +1,34 @@
+\ Benchmark: the per-call cost of a word call itself.
+\
+\ Every loop body here is nothing but word calls with trivial targets, so what the file measures is
+\ the interpreter's call path: the safe point, the resolution, and the dispatch. Two bodies, one per
+\ call instruction a bare word can compile to:
+\
+\   local10   calls a word defined in this file. A file's top-level definitions live in a local
+\             frame, and parse-time pre-resolution declines any name a local frame holds, so each
+\             call is emitted as call_word and resolves by name.
+\
+\   dict10    calls words that live in the global dictionary, which nothing here shadows, so each
+\             call is emitted as call_word_direct and arrives with its slot already resolved. The
+\             targets are natives, so a little of the cost is their own work.
+\
+\ The third call instruction, call_word_module, needs an import and is not covered. All three reach
+\ the same safe point.
+\
+\ The loops are driven by `times` rather than `benchmark-n` on purpose. `benchmark-n` points the
+\ context's benchmark stats at its own for the whole timed region, so its rows always measure an
+\ interpreter doing per-word bookkeeping -- which lands on the very path this file exists to
+\ measure, and buries a per-call saving of a few instructions. Driven by `times`, the same file
+\ reports `timing.user_ns` under scripts/benchmark-ab.sh and runs un-instrumented under
+\ scripts/benchmark-wall-ab.sh.
+\
+\ Run with --compile=off. A compiled body does not take the interpreter's call path at all.
+
+nop: ( -- ) [ ] ;
+
+local10: ( -- ) [ nop nop nop nop nop nop nop nop nop nop ] ;
+
+dict10: ( -- ) [ 0 dup drop dup drop dup drop dup drop dup drop drop ] ;
+
+1000000 [ local10 ] times
+1000000 [ dict10 ] times

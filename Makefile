@@ -686,6 +686,10 @@ benchmark-ab: release ## Interleaved A/B of this tree against BASELINE=<path-to-
 	@test -n "$(BASELINE)" || { echo "usage: make benchmark-ab BASELINE=<path-to-1z>" >&2; exit 2; }
 	@scripts/benchmark-ab.sh $(BASELINE) ./$(ZIG_PREFIX)/bin/1z 7
 
+benchmark-wall-ab: release ## Un-instrumented interleaved A/B of this tree against BASELINE=<path-to-1z>
+	@test -n "$(BASELINE)" || { echo "usage: make benchmark-wall-ab BASELINE=<path-to-1z>" >&2; exit 2; }
+	@scripts/benchmark-wall-ab.sh $(BASELINE) ./$(ZIG_PREFIX)/bin/1z 7
+
 benchmark-param-effects: release ## Record the annotated-quotation-parameter per-call cost table
 	@scripts/benchmark-param-effects.sh ./$(ZIG_PREFIX)/bin/1z 5 > tests/benchmark/param_effects.sample
 	@cat tests/benchmark/param_effects.sample

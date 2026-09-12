@@ -150,19 +150,36 @@ pub fn isHandleable(signum: i64) bool {
     return true;
 }
 
-/// Check the pending-signal mask and dispatch handlers.
+/// Check the pending-signal mask, and dispatch handlers when it is not empty.
 ///
-/// Called at interpreter safe points (executeInstructions, jitSafepoint).
-/// For each pending signal:
-/// - If a user handler is registered: push signal number, execute handler.
-/// - If no handler and signal is SIGINT: raise "interrupted" error.
-/// - If no handler and not SIGINT: consume and ignore.
-pub fn checkPendingSignals(ctx: *Context) error{UserThrown}!void {
+/// Called at interpreter safe points (executeInstructions, jitSafepoint), which is once per word
+/// call. Inlined so that a safe point carries the load and the test alone, with no frame and no
+/// call on the common path.
+///
+/// The filter loads `.monotonic` because the bit carries no payload. A handler body is reached
+/// through `retainUserHandler`, whose visibility comes from `handlers_mutex`. An ordered load here
+/// would synchronize-with nothing and would cost an `ldapr` in place of an `ldr` on arm64.
+pub inline fn checkPendingSignals(ctx: *Context) error{UserThrown}!void {
     // No OS signal delivery on freestanding targets, and signal.install() (the only thing that
     // could ever mark a signal pending) is wired up only from main.zig, not built for this
     // target -- the mask stays zero forever there, so this is a no-op. Comptime-gated so
     // posix.SIG (undefined on the non-libc posix stub) need not compile for that target.
     if (comptime is_freestanding) return;
+
+    if (signal_pending.load(.monotonic) == 0) return;
+    return dispatchPendingSignals(ctx);
+}
+
+/// Consume every pending signal and dispatch it. For each one:
+/// - If a user handler is registered: push signal number, execute handler.
+/// - If no handler and signal is SIGINT: raise "interrupted" error.
+/// - If no handler and not SIGINT: consume and ignore.
+///
+/// Loads the mask for itself rather than taking the filter's relaxed value. This `.acquire` is
+/// what synchronizes-with the handler's `.release` store, so a payload written beside the bit
+/// would be ordered on the only path that could ever read one.
+noinline fn dispatchPendingSignals(ctx: *Context) error{UserThrown}!void {
+    @branchHint(.cold);
 
     // The walk runs over the loaded snapshot rather than re-reading, which bounds a pass at 31
     // iterations under a storm. A delivery arriving mid-pass keeps its bit for the next safe

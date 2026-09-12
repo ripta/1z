@@ -1,19 +1,24 @@
 #!/usr/bin/env bash
 #
-# Interleaved two-binary benchmark A/B.
+# Interleaved two-binary benchmark A/B, un-instrumented.
 #
-# Usage: scripts/benchmark-ab.sh <baseline-binary> <candidate-binary> [reps] [workload-filter]
+# Usage: scripts/benchmark-wall-ab.sh <baseline-binary> <candidate-binary> [reps] [workload-filter]
 #
-# Runs the interpreter-dispatch archetype suite and the task-shape benchmarks
-# against two 1z binaries and reports the ratio per workload. Both binaries run
-# the same workload back to back within every rep, so a load spike or a thermal
-# shift lands on both sides instead of on whichever side happened to run during
-# it. Sequential whole-suite rounds do not have that property, and the drift
-# they admit is the same order as the deltas being measured.
+# The companion to benchmark-ab.sh, and the same workloads, interleaving, and
+# table. What differs is the instrument. benchmark-ab.sh passes
+# `--benchmark=json`, which runs per-word bookkeeping on every word call and
+# reports `timing.user_ns`. That bookkeeping sits on the interpreter's call
+# path, so it dilutes a change measured in a few instructions per call: Phase
+# 453.2 read 0.998 there against 0.980 here, on the same pair of binaries.
+#
+# This script runs the workload bare and times the whole process instead. The
+# cost is that prelude load rides along in every sample, which both sides pay
+# equally, and that a workload printing to a terminal would be timed doing it,
+# so output is discarded.
 #
 # A workload filter is a substring of the workload label. It narrows the run to
 # the matching rows, which is how one workload is re-measured at a higher rep
-# count than the suite pass.
+# count than a suite pass.
 #
 # Each binary resolves its own standard library through the `zig-out/lib`
 # symlink beside it, so the two may live in different worktrees. Build both with
@@ -41,13 +46,8 @@ for onez in "$baseline" "$candidate"; do
     fi
 done
 
-# Format: "label|path|flags". The archetypes match
-# scripts/benchmark-interpreter-suite.sh; the task shapes match
-# scripts/benchmark-task-shape.sh, whose thread axis makes one file two rows.
-#
-# call_word_micro belongs to neither. It is here so the workload filter reaches
-# it, and it stays out of the archetype suite, whose curation and recorded
-# baseline a seventh row would change.
+# Format: "label|path|flags", mirroring scripts/benchmark-ab.sh. Keep the two
+# lists in step so a row can be taken on either instrument.
 workloads=(
     "quotation_seq.1z|tests/benchmark/quotation_seq.1z|"
     "fibonacci.1z|tests/benchmark/fibonacci.1z|"
@@ -83,21 +83,27 @@ cell() {
         "$(ns_to_ms "$(min "$@")")" "$(ns_to_ms "$(max "$@")")"
 }
 
-# Run one workload once under one binary and echo its timing.user_ns. The JSON
-# report is the last line of stdout, after whatever the file printed.
-run_user_ns() {
-    local onez="$1" file="$2" flags="$3" output json
+# Run one workload once under one binary and echo the elapsed wall time in
+# nanoseconds. python3 does the timing because macOS `date` has no %N and
+# `/usr/bin/time` resolves only to 10 ms.
+run_wall_ns() {
+    local onez="$1" file="$2" flags="$3"
     # flags is deliberately word-split: it carries zero or more whole flags.
     # shellcheck disable=SC2086
-    output=$("$onez" run --compile=off $flags --benchmark=json "$file" 2>/dev/null)
-    json=$(printf '%s\n' "$output" | tail -1)
-    printf '%s\n' "$json" | python3 -c "import sys,json; print(json.load(sys.stdin)['timing']['user_ns'])"
+    python3 -c '
+import subprocess, sys, time
+start = time.perf_counter()
+proc = subprocess.run(sys.argv[1:], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+if proc.returncode != 0:
+    sys.exit("%s exited %d" % (sys.argv[1], proc.returncode))
+print(int((time.perf_counter() - start) * 1000000000))
+' "$onez" run --compile=off $flags "$file"
 }
 
-echo "Interleaved benchmark A/B"
+echo "Interleaved benchmark A/B (un-instrumented wall clock)"
 echo "baseline=$baseline"
 echo "candidate=$candidate"
-echo "reps=$reps   mode=--compile=off"
+echo "reps=$reps   mode=--compile=off, no --benchmark"
 echo ""
 
 printf "%-36s %28s %28s %10s\n" "workload" "baseline_ms" "candidate_ms" "cand/base"
@@ -117,8 +123,8 @@ for entry in "${workloads[@]}"; do
     base_samples=()
     cand_samples=()
     for _ in $(seq 1 "$reps"); do
-        base_samples+=("$(run_user_ns "$baseline" "$file" "$flags")")
-        cand_samples+=("$(run_user_ns "$candidate" "$file" "$flags")")
+        base_samples+=("$(run_wall_ns "$baseline" "$file" "$flags")")
+        cand_samples+=("$(run_wall_ns "$candidate" "$file" "$flags")")
     done
 
     printf "%-36s %28s %28s %10s\n" \
