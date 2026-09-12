@@ -8230,7 +8230,7 @@ pub const Context = struct {
     /// `site` is where this call sits: the body holding it, that body's carrier, and its inline
     /// cache. Together with `idx` the first two name the call site for the parameter-effect memo.
     ///
-    /// The call's name comes off the definition; see `callResolvedWord`, which checks that in Debug.
+    /// The call's name comes off the definition; see `assertResolvedName`, which checks that in Debug.
     fn executeResolvedWord(
         self: *Context,
         word: WordDefinition,
@@ -8518,27 +8518,22 @@ pub const Context = struct {
         return .proceed;
     }
 
-    /// Dispatch a definition a lookup just returned for `name`.
+    /// Check that a definition a lookup returned for `name` is recorded under that name.
     ///
     /// A lookup that returns a definition for a name returns one whose `name` is that name, so
-    /// `executeResolvedWord` reads the label off the definition rather than taking one. This is
-    /// where that rule is checked, because it is where every resolution enters execution. A path
+    /// `executeResolvedWord` reads the label off the definition rather than taking one. A path
     /// returning a definition recorded under some other name is a defect in that path, and without
     /// the check it would surface far away as a wrong word in an error chain or a wrong profile
     /// key.
     ///
-    /// Debug-only: the comparison walks the name, and this runs once per word call.
-    inline fn callResolvedWord(
-        self: *Context,
-        name: []const u8,
-        word: WordDefinition,
-        instr: Instruction,
-        idx: usize,
-        is_last: bool,
-        site: *const CallSite,
-    ) anyerror!ResolvedWordResult {
-        if (comptime builtin.mode == .Debug) std.debug.assert(std.mem.eql(u8, word.name, name));
-        return self.executeResolvedWord(word, instr, idx, is_last, site);
+    /// Every call to `executeResolvedWord` pairs with a call to this one, and that pairing is the
+    /// rule's whole enforcement. A dispatch arm added later has to bring the check with it.
+    ///
+    /// The `comptime` gate belongs to each caller rather than to this body, so a release build
+    /// emits no reference at all. A wrapper that held the gate and took the call instead cost
+    /// 1 to 3 percent on call-heavy work.
+    fn assertResolvedName(word: WordDefinition, name: []const u8) void {
+        std.debug.assert(std.mem.eql(u8, word.name, name));
     }
 
     /// Execute raw instructions without stack-effect validation.
@@ -8751,7 +8746,8 @@ pub const Context = struct {
 
                     if (captured_scope) |scope| {
                         if (lookupInCapturedScope(scope, name)) |word| {
-                            switch (try self.callResolvedWord(name, word, instr, idx, is_last, &site)) {
+                            if (comptime builtin.mode == .Debug) assertResolvedName(word, name);
+                            switch (try self.executeResolvedWord(word, instr, idx, is_last, &site)) {
                                 .proceed => {},
                                 .tail_call_set => return,
                             }
@@ -8760,7 +8756,8 @@ pub const Context = struct {
                     }
 
                     if (self.lookupWordForExecutionOwnScope(name, deps_vis, own_module, own_ambient_deps)) |word| {
-                        switch (try self.callResolvedWord(name, word, instr, idx, is_last, &site)) {
+                        if (comptime builtin.mode == .Debug) assertResolvedName(word, name);
+                        switch (try self.executeResolvedWord(word, instr, idx, is_last, &site)) {
                             .proceed => {},
                             .tail_call_set => return,
                         }
@@ -8846,7 +8843,8 @@ pub const Context = struct {
                                 // mirroring the body-entry probe's exemption.
                                 const gate_module = if (isSyntheticScopeModule(lazy_module)) null else lazy_module;
                                 if (self.lookupWordForExecutionFiltered(name, lazy_vis, gate_module)) |word| {
-                                    switch (try self.callResolvedWord(name, word, instr, idx, is_last, &site)) {
+                                    if (comptime builtin.mode == .Debug) assertResolvedName(word, name);
+                                    switch (try self.executeResolvedWord(word, instr, idx, is_last, &site)) {
                                         .proceed => {},
                                         .tail_call_set => return,
                                     }
@@ -8882,7 +8880,8 @@ pub const Context = struct {
                     if (self.profile) |p| p.recordWordStart(self.allocator);
 
                     const word = dict_mod.loadSlot(slot).*;
-                    switch (try self.callResolvedWord(name, word, instr, idx, is_last, &site)) {
+                    if (comptime builtin.mode == .Debug) assertResolvedName(word, name);
+                    switch (try self.executeResolvedWord(word, instr, idx, is_last, &site)) {
                         .proceed => {},
                         .tail_call_set => return,
                     }
@@ -8905,7 +8904,8 @@ pub const Context = struct {
                     // quotation's creation site outranks the body's own module scope.
                     if (captured_scope) |scope| {
                         if (lookupInCapturedScope(scope, name)) |word| {
-                            switch (try self.callResolvedWord(name, word, instr, idx, is_last, &site)) {
+                            if (comptime builtin.mode == .Debug) assertResolvedName(word, name);
+                            switch (try self.executeResolvedWord(word, instr, idx, is_last, &site)) {
                                 .proceed => {},
                                 .tail_call_set => return,
                             }
@@ -8914,7 +8914,8 @@ pub const Context = struct {
                     }
 
                     const word = dict_mod.loadSlot(slot).*;
-                    switch (try self.callResolvedWord(name, word, instr, idx, is_last, &site)) {
+                    if (comptime builtin.mode == .Debug) assertResolvedName(word, name);
+                    switch (try self.executeResolvedWord(word, instr, idx, is_last, &site)) {
                         .proceed => {},
                         .tail_call_set => return,
                     }
