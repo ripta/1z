@@ -333,6 +333,26 @@ pub const QuotationScopeInfo = struct {
     scope: ?*CapturedScope = null,
 };
 
+/// Hash context for `quotation_scope_info`'s body-pointer keys.
+///
+/// A key is a register value whose low bits are alignment zeros, so it takes the `std.hash.int`
+/// mixer rather than `AutoContext`'s byte-slice Wyhash. That is the mixer the two `AtomicSlotMap`s
+/// probed beside this map on the same key already index with.
+///
+/// The widen to `u64` is load-bearing. `std.hash.int` returns its input's own width, and the table
+/// takes each slot's fingerprint from the hash's top seven bits. On a 32-bit target an unwidened
+/// key leaves those bits zero for every entry, so the fingerprint stops rejecting anything ahead
+/// of `eql`.
+pub const BodyKeyContext = struct {
+    pub fn hash(_: @This(), key: usize) u64 {
+        return std.hash.int(@as(u64, key));
+    }
+
+    pub fn eql(_: @This(), a: usize, b: usize) bool {
+        return a == b;
+    }
+};
+
 /// Compute the constant-per-word `ExecFlags` from a definition's markers and
 /// action. Called at definition finalization so the flags ride the by-value
 /// execution copy that `executeResolvedWord` reads on the hot path.
@@ -1072,7 +1092,12 @@ pub const Context = struct {
     /// stamp. The scope half is populated at quotation push and closure execution, and inherited
     /// from an ancestor context's map by the body-entry fill. One map, so a body entry pays a
     /// single probe for both halves.
-    quotation_scope_info: std.AutoHashMapUnmanaged(usize, QuotationScopeInfo) = .{},
+    quotation_scope_info: std.HashMapUnmanaged(
+        usize,
+        QuotationScopeInfo,
+        BodyKeyContext,
+        80,
+    ) = .{},
     /// Guards `quotation_scope_info` against the one cross-task access it has: a descendant
     /// task reading this context's map through `findCapturedScopeForBody`'s parent walk while this
     /// context's own task inserts into it. It is per-context, so a task inserting into its own map
@@ -13345,6 +13370,29 @@ test "captureQuotationScope: no live module-deps frame and no local records noth
     const body = [_]Instruction{.{ .op = .{ .call_word = "foo" }, .line = 0 }};
     try std.testing.expect((try ctx.captureQuotationScope(&body)) == null);
     try std.testing.expectEqual(@as(usize, 0), ctx.quotation_scope_info.count());
+}
+
+test "quotation_scope_info: alignment-shaped keys round-trip across a rehash" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    // A body pointer's low bits are alignment zeros, so the keys are spaced to match. Enough of
+    // them to grow the map several times, which is where a hash context that mixed badly or an
+    // `eql` that disagreed with it would surface.
+    const entries = 500;
+    var modules: [entries]value_mod.Module = undefined;
+    for (&modules, 0..) |*m, i| {
+        m.* = .{ .name = "m", .words = .{} };
+        try ctx.quotation_scope_info.put(ctx.allocator, (i + 1) * 8, .{ .defining_module = m });
+    }
+
+    for (&modules, 0..) |*m, i| {
+        const info = ctx.quotation_scope_info.get((i + 1) * 8) orelse return error.TestExpectedEntry;
+        try std.testing.expectEqual(@as(?*const value_mod.Module, m), info.defining_module);
+    }
+
+    try std.testing.expectEqual(@as(u32, entries), ctx.quotation_scope_info.count());
+    try std.testing.expect(ctx.quotation_scope_info.get(0x7fff_ffff) == null);
 }
 
 test "lookupWordLocked: visibility filter admits or skips a module-deps frame by module" {
