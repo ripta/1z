@@ -55,6 +55,7 @@ workloads=(
     "data_structures.1z|tests/benchmark/data_structures.1z|"
     "bench_generic_dispatch.1z|tests/benchmark/bench_generic_dispatch.1z|"
     "bench_tokenize_iso.1z|tests/benchmark/bench_tokenize_iso.1z|"
+    "module_less_bodies.1z|tests/benchmark/module_less_bodies.1z|"
     "task_body_entry.1z --threads=auto|tests/benchmark/task_body_entry.1z|--threads=auto"
     "task_body_entry.1z --threads=1|tests/benchmark/task_body_entry.1z|--threads=1"
     "combinator_contention.1z|tests/benchmark/combinator_contention.1z|--threads=auto"

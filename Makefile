@@ -1,4 +1,4 @@
-.PHONY: all branch-info build release run fmt test test-threads-1 test-threads-auto unit-test capi-test capi-release-run embed-stdlib-test integration-test lib-test games-test eager-test fmt-test fmt-1z-test leak-goldens-check lsp-test tree-sitter-test contrib aot-test aot-build aot-run aot-checks aot-checks-linux aot-interpreter-strip-check aot-line-directives-check aot-asm-name-check aot-string-literal-direct-check aot-symbol-literal-direct-check aot-trace-instr-check aot-trace-word-filter-check aot-param-inference-check aot-determinism-check aot-symbol-verify aot-symbol-verify-linux bail-stats ir-check ir-check-upstream ir-vendor lua-vendor font8x8-vendor update-golden update-fmt-golden update-aot-golden update-lsp-golden benchmark benchmark-ab benchmark-fib benchmark-quotation benchmark-quotation-bracket benchmark-param-effects benchmark-loop-paths benchmark-param-inference benchmark-ffi-gen-filter benchmark-word-resolution benchmark-protocol-dispatch benchmark-lint benchmark-fmt benchmark-fmt-profile benchmark-fmt-modes benchmark-collision-build benchmark-retention benchmark-task-shapes benchmark-tokenize benchmark-tokenize-alloc benchmark-data-structures benchmark-packed benchmark-route-lookup benchmark-expr benchmark-fn benchmark-stmt profiles build-example clean help docs docker-build docker-test freestanding-build wasm-freestanding-build wasm wasm-game-verify wasm-snake-verify wasm-minesweeper-verify baremetal-riscv64-test unit-coverage integration-coverage coverage
+.PHONY: all branch-info build release run fmt test test-threads-1 test-threads-auto unit-test capi-test capi-release-run embed-stdlib-test integration-test lib-test games-test eager-test fmt-test fmt-1z-test leak-goldens-check module-less-benchmark-check lsp-test tree-sitter-test contrib aot-test aot-build aot-run aot-checks aot-checks-linux aot-interpreter-strip-check aot-line-directives-check aot-asm-name-check aot-string-literal-direct-check aot-symbol-literal-direct-check aot-trace-instr-check aot-trace-word-filter-check aot-param-inference-check aot-determinism-check aot-symbol-verify aot-symbol-verify-linux bail-stats ir-check ir-check-upstream ir-vendor lua-vendor font8x8-vendor update-golden update-fmt-golden update-aot-golden update-lsp-golden benchmark benchmark-ab benchmark-fib benchmark-quotation benchmark-quotation-bracket benchmark-param-effects benchmark-loop-paths benchmark-param-inference benchmark-ffi-gen-filter benchmark-word-resolution benchmark-protocol-dispatch benchmark-lint benchmark-fmt benchmark-fmt-profile benchmark-fmt-modes benchmark-collision-build benchmark-retention benchmark-task-shapes benchmark-tokenize benchmark-tokenize-alloc benchmark-data-structures benchmark-packed benchmark-route-lookup benchmark-expr benchmark-fn benchmark-stmt profiles build-example clean help docs docker-build docker-test freestanding-build wasm-freestanding-build wasm wasm-game-verify wasm-snake-verify wasm-minesweeper-verify baremetal-riscv64-test unit-coverage integration-coverage coverage
 
 export DEVELOPER_DIR := /Library/Developer/CommandLineTools
 SHELL := /bin/bash
@@ -112,7 +112,7 @@ fmt: build ## Format zig and 1z source files
 
 # `aot-checks` runs here rather than inside the two thread-mode targets: it
 # asserts build-time compiler behavior, which has no thread-mode axis.
-test: branch-info leak-goldens-check aot-checks test-threads-1 test-threads-auto capi-test ## Run all tests under both --threads=1 and --threads=auto
+test: branch-info leak-goldens-check module-less-benchmark-check aot-checks test-threads-1 test-threads-auto capi-test ## Run all tests under both --threads=1 and --threads=auto
 
 leak-goldens-check: ## Fail if any test golden has baked-in GPA leak text
 	@if grep -rl 'error(gpa)' tests/ --include='*.golden'; then \
@@ -120,6 +120,30 @@ leak-goldens-check: ## Fail if any test golden has baked-in GPA leak text
 		exit 1; \
 	fi
 	@echo "PASS: no GPA leak text in golden files"
+
+MODULE_LESS_BENCHMARK := tests/benchmark/module_less_bodies.1z
+
+# Whole-line comments are dropped first, because the file's header discusses the
+# very words this looks for.
+#
+# Dropping from a backslash instead would be wrong. A backslash opens a comment
+# only when whitespace follows it, and never inside a string, so a string escape
+# would take an import on the same line down with it. This way a trailing comment
+# is searched too, which costs a false positive and never a false negative.
+module-less-benchmark-check: ## Fail if the pinned module-less benchmark grows an import
+	@if [ ! -f $(MODULE_LESS_BENCHMARK) ]; then \
+		echo "FAIL: $(MODULE_LESS_BENCHMARK) is missing. Three benchmark scripts name that path,"; \
+		echo "      and the grep below reports nothing when the file is gone."; \
+		exit 1; \
+	fi
+	@if grep -nv '^[[:space:]]*\\' $(MODULE_LESS_BENCHMARK) | grep -wE 'use|load|borrow|reexport|import'; then \
+		echo "FAIL: $(MODULE_LESS_BENCHMARK) imports on the line(s) above; it is the benchmark suite's"; \
+		echo "      only guaranteed module-less row, and an import takes it out of the class it measures."; \
+		echo "      An import is not the only way out: a local binding captures a lexical frame, which"; \
+		echo "      this check cannot see."; \
+		exit 1; \
+	fi
+	@echo "PASS: $(MODULE_LESS_BENCHMARK) loads no module"
 
 test-threads-1: ## Run all tests with default --threads=1 for integration tests
 	timeout $(TARGET_TIMEOUT) $(ZIG) build test --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT)

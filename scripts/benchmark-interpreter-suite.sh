@@ -25,6 +25,11 @@ reps="${2:-7}"
 
 # Curated one-per-archetype suite, all from the existing tests/benchmark/ corpus.
 # Format: "archetype|path". Order is stable so the table reads archetype-first.
+#
+# module-less is not an archetype of work. It is pinned here because a program
+# that loads no module pays for body entry differently, and the rows that used to
+# cover that by accident acquired imports. It loads nothing, and a check in the
+# Makefile keeps it that way.
 suite=(
     "combinator-heavy|tests/benchmark/quotation_seq.1z"
     "numeric/recursive|tests/benchmark/fibonacci.1z"
@@ -32,6 +37,7 @@ suite=(
     "data-structure|tests/benchmark/data_structures.1z"
     "dispatch-heavy|tests/benchmark/bench_generic_dispatch.1z"
     "macro/tokenizer|tests/benchmark/bench_tokenize_iso.1z"
+    "module-less|tests/benchmark/module_less_bodies.1z"
 )
 
 # median of the integers passed as args

@@ -1,0 +1,43 @@
+\ Benchmark: body-entry cost in a program that loads no module.
+\
+\ This file imports nothing, and that is what it is for. A program that loads no module keeps
+\ `quotation_scope_info` empty until the body-entry fill populates it. Every body entry afterwards
+\ reads that map. A program that loads one has the map populated by capture regardless, so it never
+\ had an empty map to lose.
+\
+\ The benchmark suite used to measure that class by accident. The rows that happened to be
+\ importless acquired imports. This row holds the class on purpose, and
+\ `make module-less-benchmark-check` fails if it grows an import.
+\
+\ An import is not the only way out of the class. A local binding makes a pushed quotation capture a
+\ lexical frame, which populates the map by a route the fill has nothing to do with. So there are no
+\ local bindings here either. No check sees that one.
+\
+\ Nearly all the time here is body entry. Every body is trivial and carries at least one
+\ instruction. A first entry therefore publishes an entry and every later one reads as a hit, which
+\ is the regime the class is actually in.
+\
+\ The loops are driven by `times` rather than `benchmark` or `benchmark-n`. Both of those point the
+\ context's benchmark stats at their own for the whole timed region whatever the CLI flags say, and
+\ that bookkeeping lands on the very path this file exists to measure. Driven by `times`, the same
+\ file reports `timing.user_ns` under scripts/benchmark-ab.sh and runs un-instrumented under
+\ scripts/benchmark-wall-ab.sh.
+\
+\ Run with --compile=off. A compiled body does not take the interpreter's body-entry path at all.
+
+iters: ( -- fixnum ) const [ 400000 ] ;
+
+bump: ( n: fixnum -- fixnum ) [ 1 + ] ;
+
+sink: ( n: fixnum -- ) [ drop ] ;
+
+word-chain: ( -- ) [ 0 bump bump bump bump bump sink ] ;
+
+quot-chain: ( -- ) [ 0 [ bump ] call [ bump ] call [ bump ] call sink ] ;
+
+run-words: ( -- ) [ iters [ word-chain ] times ] ;
+
+run-quots: ( -- ) [ iters [ quot-chain ] times ] ;
+
+run-words
+run-quots
