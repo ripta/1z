@@ -12,6 +12,7 @@ use { using-temp-directory: } "os/fs" ;
 use { path-join: } "os/path" ;
 use "strings" ;
 use "testing" ;
+use "time" ;
 
 private{
   (chunks-of): ( src: string -- array ) [ 1z-tokenize #collect (chunk-tokens) ] ;
@@ -515,6 +516,16 @@ private{
     "sample.1z" path-join dup (unformatted) (write-file)
   ] ;
 
+  \\ Write an already-formatted file into dir and answer its path.
+  (clean-file): ( dir: string -- path: string ) [
+    "formatted.1z" path-join dup (formatted) (write-file)
+  ] ;
+
+  \\ A file's modification time in whole seconds, which is all `file-info` carries.
+  \\
+  \\ Qualified, because `os/fs` overrides the bare name with its own type word.
+  (mtime): ( path: string -- fixnum ) [ native.file-info modified: @get ] ;
+
   \\ Run `run-fmt` with its stderr captured, so a report lands in the returned
   \\ text rather than in the test output.
   (run-fmt-captured): ( files: array mode: symbol -- result: boolean text: string ) [
@@ -529,6 +540,30 @@ test-format-file-bang-rewrites-the-file: ( -- ) [
     (dirty-file)
     dup format-file!
     (read-file) (formatted) "the file on disk holds the formatted text" assert=
+  ] using-temp-directory
+] ;
+
+\ `file-info` carries whole seconds, so the sleep is what makes a write visible at all. `sleep`
+\ raises outside a task scope, hence the wrapper.
+\
+\ The dirty file is the control. Without it, a sleep that stopped crossing a second boundary would
+\ leave the clean assertion passing for the wrong reason.
+test-format-file-bang-leaves-a-formatted-file-untouched: ( -- ) [
+  [
+    tfu-dir:       swap ;
+    tfu-clean:     tfu-dir (clean-file) ;
+    tfu-dirty:     tfu-dir (dirty-file) ;
+    tfu-clean-was: tfu-clean (mtime) ;
+    tfu-dirty-was: tfu-dirty (mtime) ;
+
+    [ 1100 milliseconds sleep ] task-scope
+    tfu-clean format-file!
+    tfu-dirty format-file!
+
+    tfu-clean (mtime) tfu-clean-was
+    "a formatted file keeps its modification time" assert=
+    tfu-dirty (mtime) tfu-dirty-was = not
+    "an unformatted file moves its modification time" assert-true
   ] using-temp-directory
 ] ;
 

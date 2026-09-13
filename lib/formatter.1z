@@ -1106,8 +1106,17 @@ format-file: ( path: string -- string ) [
 ] ;
 
 \\ Reformat a file in place, under the same rules `format-file` reads.
+\\
+\\ A file whose text already equals its formatted form is left untouched, so formatting a clean
+\\ tree writes nothing and moves no modification time.
+\\
+\\ `format-file`'s body is inlined here so the original text is still in hand for the comparison.
+\\ Composing `formatted?` in front of the write would read the file three times and format it twice.
 format-file!: ( path: string -- ) [
-  dup format-file (write-source)
+  ff-path: swap ;
+  ff-path (read-source)
+  dup ff-path dirname format-buffer
+  2dup = [ 2drop ] [ nip ff-path swap (write-source) ] if
 ] ;
 
 \\ True when the file's text already equals its formatted form.

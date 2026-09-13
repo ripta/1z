@@ -967,6 +967,9 @@ fn emitAlignedLines(
 }
 
 /// Format a file in-place.
+///
+/// A file whose text already matches its formatted form is left untouched, so no truncate
+/// window opens for it and its modification time does not move.
 pub fn formatFile(allocator: Allocator, path: []const u8) !void {
     const file = try std.fs.cwd().openFile(path, .{});
     defer file.close();
@@ -977,6 +980,8 @@ pub fn formatFile(allocator: Allocator, path: []const u8) !void {
 
     const formatted = try formatString(allocator, content);
     defer allocator.free(formatted);
+
+    if (std.mem.eql(u8, content, formatted)) return;
 
     // Write back to file
     const write_file = try std.fs.cwd().createFile(path, .{});
@@ -1011,4 +1016,60 @@ test "format empty input" {
     defer std.testing.allocator.free(result);
 
     try std.testing.expectEqualStrings("", result);
+}
+
+/// A stamp a write cannot reproduce: decades in the past, and second-aligned so that a
+/// filesystem storing whole seconds stores it exactly.
+const backdated_mtime: i128 = @as(i128, 1_000_000_000) * std.time.ns_per_s;
+
+fn backdate(dir: std.fs.Dir, sub_path: []const u8) !void {
+    const file = try dir.openFile(sub_path, .{ .mode = .read_write });
+    defer file.close();
+
+    try file.updateTimes(backdated_mtime, backdated_mtime);
+}
+
+test "formatFile leaves an already-formatted file alone" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    // Formatted by running the formatter rather than by writing out its output, so a rule
+    // change cannot leave this file merely close to formatted.
+    const formatted = try formatString(std.testing.allocator, "foo: [\n1\n] ;\n");
+    defer std.testing.allocator.free(formatted);
+
+    try tmp.dir.writeFile(.{ .sub_path = "clean.1z", .data = formatted });
+    try backdate(tmp.dir, "clean.1z");
+
+    const path = try tmp.dir.realpathAlloc(std.testing.allocator, "clean.1z");
+    defer std.testing.allocator.free(path);
+
+    try formatFile(std.testing.allocator, path);
+
+    const stat = try tmp.dir.statFile("clean.1z");
+    try std.testing.expectEqual(backdated_mtime, stat.mtime);
+}
+
+test "formatFile rewrites a file that is not formatted" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.writeFile(.{ .sub_path = "dirty.1z", .data = "foo: [\n1\n] ;\n" });
+    try backdate(tmp.dir, "dirty.1z");
+
+    const path = try tmp.dir.realpathAlloc(std.testing.allocator, "dirty.1z");
+    defer std.testing.allocator.free(path);
+
+    try formatFile(std.testing.allocator, path);
+
+    const stat = try tmp.dir.statFile("dirty.1z");
+    try std.testing.expect(stat.mtime != backdated_mtime);
+
+    const content = try tmp.dir.readFileAlloc(std.testing.allocator, "dirty.1z", 1024);
+    defer std.testing.allocator.free(content);
+
+    const formatted = try formatString(std.testing.allocator, "foo: [\n1\n] ;\n");
+    defer std.testing.allocator.free(formatted);
+
+    try std.testing.expectEqualStrings(formatted, content);
 }
