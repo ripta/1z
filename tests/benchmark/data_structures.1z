@@ -74,9 +74,14 @@ nl "[-- Mutation --]" print-line
 \ size cached on every bst branch node, so it is O(1) and should read flat; the insert row is the
 \ mutation cost that caching promises to keep flat.
 \
-\ The cons-list sweep stops at n=400: >cons-list and cons-list>array recurse once per element, and
-\ near n=600 a release build overflows the main thread's native stack, which has no overflow guard
-\ there. bst recursion depth is the tree height, so its sweep reaches n=800.
+\ The cons-list sweep stops at n=200. >cons-list and cons-list>array recurse once per element, and a
+\ release build raises stack-overflow between n=350 and n=360.
+\
+\ The cap keeps margin on purpose. That ceiling falls as the interpreter's per-level native frame
+\ grows, and an n=400 step written against a ceiling near n=600 later died where no test could see
+\ it.
+\
+\ bst recursion depth is the tree height, so its sweep reaches n=800.
 
 nl "[-- Scaling: cons-list / bst --]" print-line
 
@@ -360,7 +365,6 @@ dup [ drop 1 ] graph-kruskal drop
 50 list-sweep
 100 list-sweep
 200 list-sweep
-400 list-sweep
 
 100 bst-sweep
 200 bst-sweep
