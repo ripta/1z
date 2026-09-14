@@ -10,6 +10,7 @@ use "formatter" ;
 use "lexer" ;
 use { using-temp-directory: } "os/fs" ;
 use { path-join: } "os/path" ;
+use { <stdio-opts>: exit-code>>: run: } "process" ;
 use "strings" ;
 use "testing" ;
 use "time" ;
@@ -526,6 +527,9 @@ private{
   \\ Qualified, because `os/fs` overrides the bare name with its own type word.
   (mtime): ( path: string -- fixnum ) [ native.file-info modified: @get ] ;
 
+  \\ A file's permission bits, qualified for the same reason `(mtime)` is.
+  (permissions): ( path: string -- fixnum ) [ native.file-info permissions: @get ] ;
+
   \\ Run `run-fmt` with its stderr captured, so a report lands in the returned
   \\ text rather than in the test output.
   (run-fmt-captured): ( files: array mode: symbol -- result: boolean text: string ) [
@@ -564,6 +568,53 @@ test-format-file-bang-leaves-a-formatted-file-untouched: ( -- ) [
     "a formatted file keeps its modification time" assert=
     tfu-dirty (mtime) tfu-dirty-was = not
     "an unformatted file moves its modification time" assert-true
+  ] using-temp-directory
+] ;
+
+\ A descriptor opened before the rewrite holds the old inode open, so what it reads afterward is
+\ the proof that the formatter replaced the file rather than writing through it. Deterministic,
+\ where watching for the empty window would need a second process and a race.
+test-format-file-bang-replaces-rather-than-overwrites: ( -- ) [
+  [
+    tfr-dir:  swap ;
+    tfr-path: tfr-dir (dirty-file) ;
+    tfr-held: tfr-path read: stream-open ;
+
+    tfr-path format-file!
+
+    tfr-held stream-read-all bytes> (unformatted)
+    "a descriptor opened before the rewrite still reads the original" assert=
+    tfr-held stream-close
+
+    tfr-path (read-file) (formatted) "the path itself holds the formatted text" assert=
+  ] using-temp-directory
+] ;
+
+test-format-file-bang-refuses-a-multiply-linked-file: ( -- ) [
+  [
+    tml-dir:   swap ;
+    tml-path:  tml-dir (dirty-file) ;
+    tml-alias: tml-dir "alias.1z" path-join ;
+
+    "/bin/ln" tml-path tml-alias 3 array-n <stdio-opts> run
+    exit-code>> 0 "ln creates a second link" assert=
+
+    [ tml-path format-file! ] multiply-linked:
+    "a rename cannot carry a hard link, so the rewrite is refused" assert-error-type
+    tml-path (read-file) (unformatted) "the refused file is unchanged" assert=
+  ] using-temp-directory
+] ;
+
+test-format-file-bang-carries-permissions: ( -- ) [
+  [
+    tcp-dir: swap ;
+    tcp-path: tcp-dir (dirty-file) ;
+
+    \ Group-write is what makes this bite: the ordinary 022 umask clears it, so a replacement
+    \ that only passed the mode to the create would come back 0o640.
+    tcp-path 0o660 set-permissions
+    tcp-path format-file!
+    tcp-path (permissions) 0o660 "the rewrite carries the file's mode" assert=
   ] using-temp-directory
 ] ;
 

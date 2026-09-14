@@ -91,7 +91,14 @@ fn nativeWaitPid(ctx: *Context) anyerror!void {
                 return;
             }
 
-            try scheduler.processSuspendCurrentTask(pid);
+            // The child can exit between the no-hang reap above and the exit subscription below.
+            // A kqueue filter cannot attach to a process that is already gone, so the register
+            // reports it as missing. It is not missing: it is a zombie this loop is about to
+            // collect, so go back and collect it.
+            scheduler.processSuspendCurrentTask(pid) catch |err| switch (err) {
+                error.ProcessNotFound => continue,
+                else => return err,
+            };
             try helpers.checkCancellation(ctx);
         }
     }

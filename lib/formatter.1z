@@ -1048,9 +1048,12 @@ private{
     read: stream-open dup stream-read-all swap stream-close bytes>
   ] ;
 
+  \ `replace:` rather than `write:`, so a reader never observes the target half-written. The
+  \ rename happens in `stream-close`, which can therefore raise; `(fmt-one)` reports that the
+  \ way it reports any other per-file failure.
   (write-source): ( path: string text: string -- ) [
     ws-text: swap ;
-    write: stream-open
+    replace: stream-open
     dup ws-text stream-write-string drop
     stream-close
   ] ;

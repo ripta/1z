@@ -1,5 +1,6 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const atomic_replace = @import("atomic_replace.zig");
 const tokenizer_mod = @import("tokenizer.zig");
 const Tokenizer = tokenizer_mod.Tokenizer;
 const Token = tokenizer_mod.Token;
@@ -968,8 +969,14 @@ fn emitAlignedLines(
 
 /// Format a file in-place.
 ///
-/// A file whose text already matches its formatted form is left untouched, so no truncate
-/// window opens for it and its modification time does not move.
+/// A file whose text already matches its formatted form is left untouched, so nothing happens to
+/// it at all and its modification time does not move.
+///
+/// A file that does change is replaced rather than overwritten: the formatted text goes to a
+/// temporary beside it and a rename moves that onto the target. A concurrent reader therefore
+/// sees the old file or the new one and never a half-written one. The consequences are the
+/// replacement's, not this function's: the inode changes, the containing directory has to be
+/// writable, and a target carrying more than one hard link is refused.
 pub fn formatFile(allocator: Allocator, path: []const u8) !void {
     const file = try std.fs.cwd().openFile(path, .{});
     defer file.close();
@@ -983,11 +990,27 @@ pub fn formatFile(allocator: Allocator, path: []const u8) !void {
 
     if (std.mem.eql(u8, content, formatted)) return;
 
-    // Write back to file
-    const write_file = try std.fs.cwd().createFile(path, .{});
-    defer write_file.close();
+    var resolved_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const target = try atomic_replace.inspect(path, &resolved_buf);
+    if (target.link_count > 1) return error.MultiplyLinked;
 
-    try write_file.writeAll(formatted);
+    const temp = try atomic_replace.createTemp(allocator, target.path, target.mode, null);
+    defer allocator.free(temp.path);
+
+    // A failure leaves nothing here worth keeping. The formatted text is a pure function of a
+    // source file this never touched, so it can be produced again, and a tree-wide run would
+    // otherwise leave one temporary behind per failing file. A `replace:` stream keeps its
+    // temporary instead, because bytes a program streamed out may not be reproducible.
+    errdefer atomic_replace.discard(temp.path);
+
+    // The descriptor closes inside its own scope, so it closes exactly once whichever way this
+    // goes and the unlink above never runs against an open handle.
+    {
+        defer temp.file.close();
+        try temp.file.writeAll(formatted);
+    }
+
+    try std.fs.cwd().rename(temp.path, target.path);
 }
 
 /// Check if a file is properly formatted. Returns true if already formatted.
@@ -1069,6 +1092,112 @@ test "formatFile rewrites a file that is not formatted" {
     defer std.testing.allocator.free(content);
 
     const formatted = try formatString(std.testing.allocator, "foo: [\n1\n] ;\n");
+    defer std.testing.allocator.free(formatted);
+
+    try std.testing.expectEqualStrings(formatted, content);
+}
+
+const unformatted_source = "foo: [\n1\n] ;\n";
+
+/// Write an unformatted file into dir and answer an absolute path to it. `formatFile` resolves
+/// from the working directory, which a test's temporary directory is not.
+fn writeDirty(dir: std.fs.Dir, sub_path: []const u8) ![]u8 {
+    try dir.writeFile(.{ .sub_path = sub_path, .data = unformatted_source });
+    return dir.realpathAlloc(std.testing.allocator, sub_path);
+}
+
+test "formatFile replaces the file rather than writing through its inode" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const path = try writeDirty(tmp.dir, "dirty.1z");
+    defer std.testing.allocator.free(path);
+
+    const before = try tmp.dir.statFile("dirty.1z");
+    try formatFile(std.testing.allocator, path);
+    const after = try tmp.dir.statFile("dirty.1z");
+
+    try std.testing.expect(before.inode != after.inode);
+
+    // The file is formatted now, so the second run takes the skip. Its inode staying put is what
+    // says the skip still reaches no further than the comparison.
+    try formatFile(std.testing.allocator, path);
+    const again = try tmp.dir.statFile("dirty.1z");
+    try std.testing.expectEqual(after.inode, again.inode);
+}
+
+test "formatFile refuses a multiply-linked target" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const path = try writeDirty(tmp.dir, "linked.1z");
+    defer std.testing.allocator.free(path);
+
+    try std.posix.linkat(tmp.dir.fd, "linked.1z", tmp.dir.fd, "alias.1z", 0);
+
+    try std.testing.expectError(error.MultiplyLinked, formatFile(std.testing.allocator, path));
+
+    const content = try tmp.dir.readFileAlloc(std.testing.allocator, "linked.1z", 1024);
+    defer std.testing.allocator.free(content);
+    try std.testing.expectEqualStrings(unformatted_source, content);
+}
+
+// The replacement creates a directory entry where the truncating write did not, so a directory
+// the process can read but not write stops being formattable. `std.testing.allocator` makes this
+// the leak test for the failing create as well.
+test "formatFile refuses a read-only directory" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.makeDir("locked");
+    const path = try writeDirty(tmp.dir, "locked/inside.1z");
+    defer std.testing.allocator.free(path);
+
+    try std.posix.fchmodat(tmp.dir.fd, "locked", 0o555, 0);
+    // Restored before cleanup, which cannot remove the file otherwise.
+    defer std.posix.fchmodat(tmp.dir.fd, "locked", 0o755, 0) catch {};
+
+    try std.testing.expectError(error.AccessDenied, formatFile(std.testing.allocator, path));
+}
+
+test "formatFile carries the target's permissions" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const path = try writeDirty(tmp.dir, "perm.1z");
+    defer std.testing.allocator.free(path);
+
+    // Group-write is what makes this bite: the ordinary 022 umask clears it, so a replacement
+    // that only passed the mode to the create would come back 0o640.
+    try std.posix.fchmodat(tmp.dir.fd, "perm.1z", 0o660, 0);
+
+    try formatFile(std.testing.allocator, path);
+
+    const stat = try tmp.dir.statFile("perm.1z");
+    try std.testing.expectEqual(@as(std.fs.File.Mode, 0o660), stat.mode & 0o7777);
+}
+
+test "formatFile formats what a symlink points at, leaving the link" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const real = try writeDirty(tmp.dir, "real.1z");
+    defer std.testing.allocator.free(real);
+
+    try tmp.dir.symLink(real, "link.1z", .{});
+
+    const link = try std.fs.path.join(std.testing.allocator, &.{ std.fs.path.dirname(real).?, "link.1z" });
+    defer std.testing.allocator.free(link);
+
+    try formatFile(std.testing.allocator, link);
+
+    const link_stat = try std.posix.fstatat(tmp.dir.fd, "link.1z", std.posix.AT.SYMLINK_NOFOLLOW);
+    try std.testing.expect(std.posix.S.ISLNK(@intCast(link_stat.mode)));
+
+    const content = try tmp.dir.readFileAlloc(std.testing.allocator, "real.1z", 1024);
+    defer std.testing.allocator.free(content);
+
+    const formatted = try formatString(std.testing.allocator, unformatted_source);
     defer std.testing.allocator.free(formatted);
 
     try std.testing.expectEqualStrings(formatted, content);

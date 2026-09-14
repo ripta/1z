@@ -1,0 +1,58 @@
+\ Regression test for `wait-process` losing a child that exits while the wait is being set up.
+\
+\ The wait first reaps without hanging, and only subscribes to the child's exit when that says the
+\ child is still running. On kqueue the subscription cannot attach to a process that is already
+\ gone, so a child exiting in that gap used to come back as `process-not-found` instead of its
+\ exit status. Found by the formatter's concurrent test, which polls until the child's write lands
+\ and so waits within microseconds of the child exiting.
+\
+\ Each round spawns `mkdir`, spins on the directory appearing, then waits. `mkdir` does almost
+\ nothing between creating the directory and exiting, so the wait lands inside the gap. One round
+\ reproduced the defect about half the time, hence the rounds.
+
+use "testing" ;
+use "os/fs" ;
+use "os/path" ;
+use "process" ;
+
+(rounds): ( -- fixnum ) const [ 20 ] ;
+(spins): ( -- fixnum ) const [ 200000 ] ;
+
+\ Spin without yielding until the marker appears, so the wait lands as close to the child's exit
+\ as the interpreter can manage. The spin budget is the safety net for a child that never runs.
+(await-marker): ( path: string -- ) [
+  am-path: swap ;
+  (spins)
+  [ dup 0 > [ am-path directory-exists? not ] [ f ] if ]
+  [ 1 - ]
+  while
+  drop
+] ;
+
+(round): ( marker: string -- exit-code: fixnum ) [
+  r-marker: swap ;
+  r-marker directory-exists? [ r-marker delete-directory ] when
+
+  r-child: "/bin/mkdir" r-marker 2 array-n <stdio-opts> spawn-process ;
+  r-marker (await-marker)
+  r-child wait-process
+] ;
+
+"a child that exits while the wait subscribes" test-section
+
+\ task-scope gives the root task a context where `wait-process` can suspend without blocking a
+\ worker. Without one the wait takes the plain blocking path, which has no subscription to race.
+[
+  [
+    pw-dir: swap ;
+    pw-marker: pw-dir "marker" path-join ;
+
+    0 (rounds)
+    [ dup 0 > ]
+    [ 1 - [ pw-marker (round) + ] dip ]
+    while
+    drop
+
+    0 "every round's child reported its status" assert=
+  ] using-temp-directory
+] task-scope

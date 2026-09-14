@@ -2396,7 +2396,16 @@ fn formatSingleFile(allocator: std.mem.Allocator, path: []const u8, check_only: 
         return .{ .had_errors = false, .had_changes = false };
     } else {
         formatter.formatFile(allocator, path) catch |err| {
-            err_writer.print("Error formatting '{s}': {any}\n", .{ path, err }) catch {};
+            // A rewrite replaces the file, and a rename breaks a hard link by construction. The
+            // error name alone would not tell a reader that, nor that the file is intact.
+            if (err == error.MultiplyLinked) {
+                err_writer.print(
+                    "Error formatting '{s}': the file has more than one hard link, which a replacement cannot carry\n",
+                    .{path},
+                ) catch {};
+            } else {
+                err_writer.print("Error formatting '{s}': {any}\n", .{ path, err }) catch {};
+            }
             return .{ .had_errors = true, .had_changes = false };
         };
         return .{ .had_errors = false, .had_changes = false };
@@ -5079,6 +5088,7 @@ test {
     _ = @import("carryable_scope_gate.zig");
     _ = @import("nested_name_cache.zig");
     _ = @import("closure_body_registry.zig");
+    _ = @import("atomic_replace.zig");
     _ = @import("atomic_slot_map.zig");
     _ = @import("reified_decode_cache.zig");
     _ = @import("tokenizer.zig");

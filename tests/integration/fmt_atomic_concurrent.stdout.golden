@@ -1,0 +1,5 @@
+=== formatting is observable only as the old file or the new one ===
+PASS: the formatting run exits cleanly
+PASS: the rewrite landed while the watch was running
+PASS: the target was never observed empty
+PASS: the corpus is formatted when the run is over

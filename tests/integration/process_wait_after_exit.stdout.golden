@@ -1,0 +1,2 @@
+=== a child that exits while the wait subscribes ===
+PASS: every round's child reported its status

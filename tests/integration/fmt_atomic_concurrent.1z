@@ -1,0 +1,112 @@
+\ Watches a file while a separate `1z fmt` process rewrites it, and fails if the file is ever
+\ observed empty. That is the state a truncating write leaves behind for the length of its write,
+\ and the state a replacement can never produce.
+\
+\ The bug's own reproduction -- two formatters over one tree, counting zero-byte files afterward --
+\ no longer distinguishes anything. Its corpus is already formatted, so neither run writes, and a
+\ loser that reads an empty file now formats it to empty, finds nothing changed, and skips the
+\ write. Watching during the write is what is left.
+\
+\ The corpus is one large unformatted file rather than many small ones, because the window this
+\ looks for is as long as a single write takes. It lives in a temporary directory, and it is a
+\ `.txt` on top of that, so a leftover from a crash sits outside the repository and would be
+\ picked up neither by `make fmt`'s `find . -name '*.1z'` sweep nor by the build's own test
+\ discovery. The interpreter path arrives as the sole command-line argument via the harness
+\ @self-exe directive.
+
+use "testing" ;
+use "os/fs" ;
+use "os/path" ;
+use "process" ;
+use "strings" ;
+
+\ Roughly three megabytes, in four-kilobyte blocks. The window this test looks for is as long as
+\ one write takes, so the total size is what gives the poll below anything to land in.
+\
+\ The block is what keeps the cost down. `repeat` appends into a fresh string each time, which is
+\ affordable at four kilobytes and costs seconds at three megabytes, and this case has to fit a
+\ test budget alongside a thousand others running beside it.
+(chunk):      ( -- string ) const [ "foo: [\n1\n] ;\n\n" ] ;
+(block-reps): ( -- fixnum ) const [ 256 ] ;
+(blocks):     ( -- fixnum ) const [ 750 ] ;
+(polls):      ( -- fixnum ) const [ 20000 ] ;
+
+\\ Qualified, because `os/fs` overrides the bare `file-info` with its type word.
+(size): ( path: string -- fixnum ) [ native.file-info size: @get ] ;
+
+(block): ( -- string ) [ (chunk) (block-reps) repeat ] ;
+
+\ Write the corpus and answer the size it came out at.
+(write-corpus): ( path: string -- size: fixnum ) [
+  wc-path: swap ;
+  wc-block: (block) ;
+
+  wc-path write: stream-open
+  (blocks) [ dup wc-block stream-write-string drop ] times
+  stream-close
+  wc-path (size)
+] ;
+
+\ How many reads found the target empty, and whether the rewrite landed while this was watching.
+\ A replacement answers zero empties by construction; a truncating write answers zero only when
+\ every poll missed its window.
+\
+\ The loop stops the moment the size moves off the original, which is the child's write having
+\ landed. Polling past that would only re-read a finished file.
+\
+\ The second answer is what keeps a missed window from reading as a clean one. The poll budget is
+\ around eighteen times what the child needs, so exhausting it means the child never got as far as
+\ writing and the count below proves nothing. The caller asserts on it rather than trusting a zero.
+(watch): ( path: string original: fixnum -- empties: fixnum landed: boolean ) [
+  w-orig: swap ;
+  w-path: swap ;
+  0 (polls)
+  [ dup 0 > ]
+  [
+    1 -
+    w-path (size)
+    dup 0 =
+    [ drop [ 1 + ] dip ]
+    [ w-orig = [ ] [ drop 0 ] if ]
+    if
+  ]
+  while
+  drop
+  w-path (size) w-orig = not
+] ;
+
+(fmt-argv): ( path: string -- argv: array ) [
+  [ command-line-args 0 #nth "fmt" ] dip 3 array-n
+] ;
+
+(check-argv): ( path: string -- argv: array ) [
+  [ command-line-args 0 #nth "fmt" "--check" ] dip 4 array-n
+] ;
+
+"formatting is observable only as the old file or the new one" test-section
+
+\ task-scope gives the root task a context where `wait-process` can suspend without blocking a
+\ worker.
+[
+  [
+    fac-dir: swap ;
+    fac-path: fac-dir "corpus.txt" path-join ;
+
+    fac-orig: fac-path (write-corpus) ;
+
+    fac-child: fac-path (fmt-argv) <stdio-opts> spawn-process ;
+
+    fac-path fac-orig (watch)
+    fac-landed: swap ;
+    fac-empties: swap ;
+
+    fac-child wait-process 0 "the formatting run exits cleanly" assert=
+    fac-landed "the rewrite landed while the watch was running" assert-true
+    fac-empties 0 "the target was never observed empty" assert=
+
+    \ That the file ended formatted rather than truncated. A check run over a damaged file
+    \ would reformat it to something else and report it.
+    fac-path (check-argv) <stdio-opts> run
+    exit-code>> 0 "the corpus is formatted when the run is over" assert=
+  ] using-temp-directory
+] task-scope

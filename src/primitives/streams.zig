@@ -19,6 +19,7 @@ const Capability = types_mod.Capability;
 const helpers = @import("helpers.zig");
 const error_mapping = @import("error_mapping.zig");
 const container_backing = @import("../container_backing.zig");
+const atomic_replace = @import("../atomic_replace.zig");
 
 const popFixnum = helpers.popFixnum;
 const popSymbol = helpers.popSymbol;
@@ -516,12 +517,6 @@ pub fn nativeStderr(ctx: *Context) anyerror!void {
 // Stream open/close
 // =============================================================================
 
-/// Leading characters of the temporary a `replace:` stream writes to, followed by sixteen hex
-/// digits. It must not end in `.1z`: the formatter's own sweep is `find . -name '*.1z'`, and a
-/// temporary matching that would be handed back to the formatter as an input. The dot makes a
-/// leftover from an abandoned stream ignorable through the `.1z-replace-*` entry in `.gitignore`.
-const replace_temp_prefix = ".1z-replace-";
-
 /// Where a `replace:` stream's bytes are going. The fd is open on `temp_path`; `target_path` is
 /// what the rename at close moves it onto, with symlinks already resolved.
 ///
@@ -550,84 +545,44 @@ const OpenedReplacement = struct {
 /// carry.
 fn openReplacementTemp(ctx: *Context, path: []const u8, alloc: std.mem.Allocator) !OpenedReplacement {
     var resolved_buf: [std.fs.max_path_bytes]u8 = undefined;
-    var target = path;
-    var carried_mode: ?std.fs.File.Mode = null;
+    const target = atomic_replace.inspect(path, &resolved_buf) catch |err| {
+        helpers.setErrorContext(ctx, "stream-open replace: {s}", .{@errorName(err)});
+        return mapFileOpenError(err);
+    };
 
-    if (std.fs.cwd().realpath(path, &resolved_buf)) |resolved| {
-        // The tree's other stat sites use `statFile`, whose `File.Stat` carries no link count.
-        const stat = std.posix.fstatat(std.fs.cwd().fd, resolved, 0) catch |err| {
-            helpers.setErrorContext(ctx, "stream-open replace: {s}", .{@errorName(err)});
-            return mapFileOpenError(err);
-        };
-
-        if (std.posix.S.ISDIR(@intCast(stat.mode))) {
-            helpers.setErrorContext(ctx, "stream-open replace: '{s}' is a directory", .{path});
-            return error.IOFailed;
-        }
-        if (stat.nlink > 1) {
-            helpers.setErrorContext(
-                ctx,
-                "stream-open replace: '{s}' has {d} hard links, which a replacement cannot carry",
-                .{ path, stat.nlink },
-            );
-            return error.MultiplyLinked;
-        }
-
-        carried_mode = @intCast(stat.mode & 0o7777);
-        target = resolved;
-    } else |err| switch (err) {
-        error.FileNotFound => {},
-        else => {
-            helpers.setErrorContext(ctx, "stream-open replace: {s}", .{@errorName(err)});
-            return mapFileOpenError(err);
-        },
+    if (target.is_dir) {
+        helpers.setErrorContext(ctx, "stream-open replace: '{s}' is a directory", .{path});
+        return error.IOFailed;
+    }
+    if (target.link_count > 1) {
+        helpers.setErrorContext(
+            ctx,
+            "stream-open replace: '{s}' has {d} hard links, which a replacement cannot carry",
+            .{ path, target.link_count },
+        );
+        return error.MultiplyLinked;
     }
 
-    // `target` is borrowed either way, from the stack buffer above or from the popped path value
-    // the caller releases on return, and the state outlives both.
-    const target_path = alloc.dupe(u8, target) catch return error.OutOfMemory;
+    // `target.path` is borrowed either way, from the stack buffer above or from the popped path
+    // value the caller releases on return, and the state outlives both.
+    const target_path = alloc.dupe(u8, target.path) catch return error.OutOfMemory;
 
     // Taken ahead of the create, so no allocation can fail once the temporary exists on disk.
     const state = alloc.create(ReplaceTarget) catch return error.OutOfMemory;
 
-    const dir_path = std.fs.path.dirname(target_path);
-    const mode = carried_mode orelse std.fs.File.default_mode;
-
-    // Exclusive creation is what closes the collision between two concurrent runs. A
-    // unique-looking name does not. Retrying on a taken name mirrors `std.fs.AtomicFile.init`.
-    const file, const temp_path = while (true) {
-        var name_buf: [replace_temp_prefix.len + 16]u8 = undefined;
-        const hex = std.fmt.hex(std.crypto.random.int(u64));
-        const temp_name = std.fmt.bufPrint(&name_buf, "{s}{s}", .{ replace_temp_prefix, &hex }) catch unreachable;
-
-        const candidate = if (dir_path) |dir|
-            std.fs.path.join(alloc, &.{ dir, temp_name }) catch return error.OutOfMemory
-        else
-            alloc.dupe(u8, temp_name) catch return error.OutOfMemory;
-
-        const opened = std.fs.cwd().createFile(candidate, .{ .mode = mode, .exclusive = true }) catch |err| switch (err) {
-            error.PathAlreadyExists => continue,
-            else => {
-                helpers.setErrorContext(ctx, "stream-open replace: {s}", .{@errorName(err)});
-                return mapFileCreateError(err);
-            },
-        };
-        break .{ opened, candidate };
+    var step: atomic_replace.Step = undefined;
+    const temp = atomic_replace.createTemp(alloc, target_path, target.mode, &step) catch |err| {
+        // Exhaustion is not a file error, and mapping it would render it as a disk failure.
+        if (err == error.OutOfMemory) return error.OutOfMemory;
+        switch (step) {
+            .create => helpers.setErrorContext(ctx, "stream-open replace: {s}", .{@errorName(err)}),
+            .carry_mode => helpers.setErrorContext(ctx, "stream-open replace: carrying permissions failed: {s}", .{@errorName(err)}),
+        }
+        return mapFileCreateError(err);
     };
 
-    // `createFile` applies the umask, which would silently drop a bit the target had. A target
-    // that did not exist has nothing to carry, and there the umask is the right answer.
-    if (carried_mode) |exact| {
-        std.posix.fchmod(file.handle, exact) catch |err| {
-            file.close();
-            std.fs.cwd().deleteFile(temp_path) catch {};
-            helpers.setErrorContext(ctx, "stream-open replace: carrying permissions failed: {s}", .{@errorName(err)});
-            return mapFileCreateError(err);
-        };
-    }
-
-    state.* = .{ .target_path = target_path, .temp_path = temp_path };
-    return .{ .file = file, .target = state };
+    state.* = .{ .target_path = target_path, .temp_path = temp.path };
+    return .{ .file = temp.file, .target = state };
 }
 
 /// Move a `replace:` stream's temporary onto its target.
