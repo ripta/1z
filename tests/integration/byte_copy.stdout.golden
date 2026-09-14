@@ -1,0 +1,53 @@
+=== #copy! moves a run between two arrays ===
+Stack: [ ]
+Stack: [ B{ 0x11 0x22 0x33 0x44 } ]
+PASS: a whole-array copy
+Stack: [ ]
+Stack: [ B{ 0x00 0x33 0x44 0x00 0x00 } ]
+PASS: a sub-range copy lands at the destination offset
+Stack: [ ]
+=== #copy! returns the destination ===
+Stack: [ ]
+PASS: #copy! returns the byte-array it wrote
+Stack: [ ]
+=== #copy! leaves the source alone ===
+Stack: [ ]
+Stack: [ ]
+PASS: the source reads back unchanged
+Stack: [ ]
+=== #copy! range rule: both ranges must fit ===
+Stack: [ ]
+PASS: a run past the destination end throws
+Stack: [ ]
+PASS: a run past the source end throws
+Stack: [ ]
+=== #copy! range rule: the empty run at the end ===
+Stack: [ ]
+PASS: offset == length on both sides with count 0 is a no-op
+Stack: [ ]
+PASS: a destination offset past the end throws even at count 0
+Stack: [ ]
+PASS: a source offset past the end throws even at count 0
+Stack: [ ]
+=== #copy! error: negative offsets and count ===
+Stack: [ ]
+PASS: negative destination offset throws
+Stack: [ ]
+PASS: negative source offset throws
+Stack: [ ]
+PASS: negative count throws
+Stack: [ ]
+=== #copy! overlapping ranges copy as through a temporary ===
+Stack: [ ]
+Stack: [ B{ 0x01 0x01 0x02 0x03 0x04 } ]
+PASS: a shift toward the end reads what it has not yet overwritten
+Stack: [ ]
+Stack: [ B{ 0x02 0x03 0x04 0x05 0x05 } ]
+PASS: a shift toward the start reads what it has not yet overwritten
+Stack: [ ]
+=== #copy! error: non-byte-array operands ===
+Stack: [ ]
+PASS: #copy! rejects a string destination
+Stack: [ ]
+PASS: #copy! rejects a string source
+Stack: [ ]

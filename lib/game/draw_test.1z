@@ -1,7 +1,7 @@
 \ Unit tests for lib/game/draw.1z.
 \
-\ clear-background, draw-rectangle, and blit-sprite use zero name: swap ; locals (values are
-\ curried into the per-pixel quotation instead), so they are leak-free at any call count -- see
+\ clear-background, draw-rectangle, and blit-sprite bind no per-pixel locals, since each writes a
+\ whole run with one call, so they are leak-free at any call count -- see
 \ test-repeated-calls-do-not-leak below. draw-char and draw-text still carry their original named
 \ locals and are only exercised a handful of times here, well under the leak's manifestation
 \ threshold.

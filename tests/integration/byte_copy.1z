@@ -1,0 +1,42 @@
+\ Integration tests for #copy!
+
+use "testing" ;
+
+"#copy! moves a run between two arrays" test-section
+B{ 0x00 0x00 0x00 0x00 } 0 B{ 0x11 0x22 0x33 0x44 } 0 4 #copy!
+B{ 0x11 0x22 0x33 0x44 } "a whole-array copy" assert=
+B{ 0x00 0x00 0x00 0x00 0x00 } 1 B{ 0x11 0x22 0x33 0x44 } 2 2 #copy!
+B{ 0x00 0x33 0x44 0x00 0x00 } "a sub-range copy lands at the destination offset" assert=
+
+"#copy! returns the destination" test-section
+B{ 0x00 0x00 } 0 B{ 0xAB 0xCD } 0 2 #copy! #len 2 "#copy! returns the byte-array it wrote" assert=
+
+"#copy! leaves the source alone" test-section
+B{ 0x09 0x09 } 0 B{ 0x11 0x22 } 0 2 #copy! drop
+B{ 0x11 0x22 } B{ 0x11 0x22 } "the source reads back unchanged" assert=
+
+"#copy! range rule: both ranges must fit" test-section
+[ B{ 0x00 0x00 0x00 } 0 B{ 0x11 0x22 0x33 0x44 } 0 4 #copy! ] index-out-of-bounds: "a run past the destination end throws" assert-error-type
+[ B{ 0x00 0x00 0x00 0x00 } 0 B{ 0x11 0x22 0x33 } 0 4 #copy! ] index-out-of-bounds: "a run past the source end throws" assert-error-type
+
+"#copy! range rule: the empty run at the end" test-section
+B{ 0x01 0x02 0x03 } 3 B{ 0x09 0x09 } 2 0 #copy! B{ 0x01 0x02 0x03 } "offset == length on both sides with count 0 is a no-op" assert=
+[ B{ 0x01 0x02 0x03 } 4 B{ 0x09 0x09 } 0 0 #copy! ] index-out-of-bounds: "a destination offset past the end throws even at count 0" assert-error-type
+[ B{ 0x01 0x02 0x03 } 0 B{ 0x09 0x09 } 3 0 #copy! ] index-out-of-bounds: "a source offset past the end throws even at count 0" assert-error-type
+
+"#copy! error: negative offsets and count" test-section
+[ B{ 0x00 0x00 } -1 B{ 0x09 0x09 } 0 1 #copy! ] index-out-of-bounds: "negative destination offset throws" assert-error-type
+[ B{ 0x00 0x00 } 0 B{ 0x09 0x09 } -1 1 #copy! ] index-out-of-bounds: "negative source offset throws" assert-error-type
+[ B{ 0x00 0x00 } 0 B{ 0x09 0x09 } 0 -1 #copy! ] index-out-of-bounds: "negative count throws" assert-error-type
+
+\ Each direction is the one an element loop running the other way gets wrong, so the pair pins
+\ the copy-through-a-temporary rule rather than either loop.
+"#copy! overlapping ranges copy as through a temporary" test-section
+B{ 0x01 0x02 0x03 0x04 0x05 } dup 1 swap 0 4 #copy!
+B{ 0x01 0x01 0x02 0x03 0x04 } "a shift toward the end reads what it has not yet overwritten" assert=
+B{ 0x01 0x02 0x03 0x04 0x05 } dup 0 swap 1 4 #copy!
+B{ 0x02 0x03 0x04 0x05 0x05 } "a shift toward the start reads what it has not yet overwritten" assert=
+
+"#copy! error: non-byte-array operands" test-section
+[ "hello" 0 B{ 0x09 } 0 1 #copy! ] type-mismatch: "#copy! rejects a string destination" assert-error-type
+[ B{ 0x00 } 0 "hello" 0 1 #copy! ] type-mismatch: "#copy! rejects a string source" assert-error-type

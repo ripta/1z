@@ -672,10 +672,11 @@ pub fn registerNativeDispatch(dispatch: *DispatchTable, ctx: *Context) !void {
     try dispatch.registerNative(to_hash_did, mutable_map, unary, nativeToHashMutableMap);
     try dispatch.registerNative(to_hash_did, hash, unary, nativeToHashHash);
 
-    // #peek / #poke! / #fill! : byte-level access
+    // #peek / #poke! / #fill! / #copy! : byte-level access
     try dispatch.registerNative(ctx.nativeDispatchId(.peek), byte_array, unary, nativePeekByteArray);
     try dispatch.registerNative(ctx.nativeDispatchId(.poke_mut), byte_array, unary, nativePokeByteArray);
     try dispatch.registerNative(ctx.nativeDispatchId(.fill_mut), byte_array, unary, nativeFillByteArray);
+    try dispatch.registerNative(ctx.nativeDispatchId(.copy_mut), byte_array, unary, nativeCopyByteArray);
 }
 
 pub const primitives = [_]Primitive{
@@ -733,6 +734,7 @@ pub const primitives = [_]Primitive{
     .{ .name = "#peek", .stack_effect = "byte-array offset width -- fixnum", .doc = "Read width bytes (1/2/4/8) at offset from byte-array as unsigned fixnum.", .func = nativePeek, .markers = &.{@constCast(&markers_mod.generic_marker)} },
     .{ .name = "#poke!", .stack_effect = "byte-array offset value width -- byte-array", .doc = "Write value as width bytes (1/2/4/8) at offset in byte-array.", .func = nativePoke, .markers = &.{@constCast(&markers_mod.generic_marker)} },
     .{ .name = "#fill!", .stack_effect = "byte-array offset value width count -- byte-array", .doc = "Write count copies of value, each width bytes (1/2/4/8), end to end from offset in byte-array. A count of zero writes nothing.", .func = nativeFill, .markers = &.{@constCast(&markers_mod.generic_marker)} },
+    .{ .name = "#copy!", .stack_effect = "dst dst-offset src src-offset byte-count -- dst", .doc = "Copy byte-count bytes from src at src-offset into dst at dst-offset. Ranges overlapping within one array copy as through a temporary. A count of zero copies nothing.", .func = nativeCopy, .markers = &.{@constCast(&markers_mod.generic_marker)} },
 };
 
 /// #len ( seq -- n )
@@ -3261,6 +3263,103 @@ fn nativeFillByteArray(ctx: *Context) anyerror!void {
     return writeRunByteArray(ctx, "#fill!", count_val);
 }
 
+/// Both backings of a copy, held for its duration.
+///
+/// The two are locked in ascending pointer-address order, so two copies running concurrently with
+/// swapped operands acquire in the same sequence and cannot deadlock. An aliased pair takes one
+/// lock, since the container mutex is not reentrant and a self-copy is legal.
+const ByteArrayPair = struct {
+    first: *ByteArray,
+    second: ?*ByteArray,
+
+    fn lock(dst: *ByteArray, src: *ByteArray) ByteArrayPair {
+        const low = if (@intFromPtr(dst) <= @intFromPtr(src)) dst else src;
+        const high = if (@intFromPtr(dst) <= @intFromPtr(src)) src else dst;
+
+        low.header.lock();
+        const second: ?*ByteArray = if (low == high) null else high;
+        if (second) |s| s.header.lock();
+        return .{ .first = low, .second = second };
+    }
+
+    fn unlock(self: ByteArrayPair) void {
+        if (self.second) |s| s.header.unlock();
+        self.first.header.unlock();
+    }
+};
+
+/// #copy! ( dst dst-offset src src-offset byte-count -- dst )
+///
+/// Nothing here reads either `storage`. A borrowed buffer accepts any write that leaves `items.len`
+/// alone, whatever its size, so a bulk copy needs no more permission than a single element does.
+fn nativeCopyByteArray(ctx: *Context) anyerror!void {
+    const count_val = try popFixnum(ctx);
+    const src_offset_val = try popFixnum(ctx);
+    const src_val = try ctx.stack.pop();
+    const dst_offset_val = popFixnum(ctx) catch |err| {
+        container_backing.releaseValue(src_val);
+        return err;
+    };
+    const dst_val = ctx.stack.pop() catch |err| {
+        container_backing.releaseValue(src_val);
+        return err;
+    };
+
+    // The source is read-only here, so its reference is spent either way. The destination's is
+    // moved onto the stack only if the copy completes, so every failure below releases it.
+    defer container_backing.releaseValue(src_val);
+    errdefer container_backing.releaseValue(dst_val);
+
+    const dst = dst_val.byte_array;
+    if (src_val != .byte_array) {
+        setErrorContext(ctx, "#copy! expected byte-array source, got {s}", .{valueTypeName(src_val)});
+        return error.TypeMismatch;
+    }
+    const src = src_val.byte_array;
+
+    if (dst_offset_val < 0) {
+        setErrorContext(ctx, "negative destination offset {d}", .{dst_offset_val});
+        return error.IndexOutOfBounds;
+    }
+    if (src_offset_val < 0) {
+        setErrorContext(ctx, "negative source offset {d}", .{src_offset_val});
+        return error.IndexOutOfBounds;
+    }
+    if (count_val < 0) {
+        setErrorContext(ctx, "negative count {d}", .{count_val});
+        return error.IndexOutOfBounds;
+    }
+    const dst_offset: usize = @intCast(dst_offset_val);
+    const src_offset: usize = @intCast(src_offset_val);
+    const count: usize = @intCast(count_val);
+
+    {
+        const held = ByteArrayPair.lock(dst, src);
+        defer held.unlock();
+
+        const dst_bytes = dst.slice();
+        const src_bytes = src.slice();
+
+        // Saturating, so a range whose end overflows fails the test instead of wrapping into it.
+        //
+        // An empty run at offset == len passes on either side, and copies nothing.
+        const dst_end = dst_offset +| count;
+        if (dst_end > dst_bytes.len) {
+            setErrorContext(ctx, "destination offset {d} + {d} bytes exceeds byte-array length {d}", .{ dst_offset, count, dst_bytes.len });
+            return error.IndexOutOfBounds;
+        }
+        const src_end = src_offset +| count;
+        if (src_end > src_bytes.len) {
+            setErrorContext(ctx, "source offset {d} + {d} bytes exceeds byte-array length {d}", .{ src_offset, count, src_bytes.len });
+            return error.IndexOutOfBounds;
+        }
+
+        @memmove(dst_bytes[dst_offset..dst_end], src_bytes[src_offset..src_end]);
+    }
+
+    try ctx.stack.pushMoved(.{ .byte_array = dst });
+}
+
 /// #peek ( byte-array offset width -- fixnum )
 ///
 /// Dispatch entry point; falls back to `nativePeekByteArray` when no dispatch arm is registered.
@@ -3324,6 +3423,31 @@ fn nativeFill(ctx: *Context) anyerror!void {
     const val5 = try ctx.stack.pop();
     defer container_backing.releaseValue(val5);
     setErrorContext(ctx, "#fill! expected byte-array, got {s}", .{valueTypeName(val5)});
+    return error.TypeMismatch;
+}
+
+/// #copy! ( dst dst-offset src src-offset byte-count -- dst )
+///
+/// Dispatch entry point; falls back to `nativeCopyByteArray` when no dispatch arm is registered.
+/// Only the destination selects the arm. The source is checked there.
+fn nativeCopy(ctx: *Context) anyerror!void {
+    // dst is at stack depth 4, below dst-offset, src, src-offset, and byte-count
+    if (ctx.stack.depth() >= 5) {
+        if (try dispatch_helpers.tryDispatchContainerAtDepth(ctx, ctx.nativeDispatchId(.copy_mut), 4, true)) return;
+        if ((try ctx.stack.peekN(4)) == .byte_array) return nativeCopyByteArray(ctx);
+    }
+
+    const val = try ctx.stack.pop();
+    defer container_backing.releaseValue(val);
+    const val2 = try ctx.stack.pop();
+    defer container_backing.releaseValue(val2);
+    const val3 = try ctx.stack.pop();
+    defer container_backing.releaseValue(val3);
+    const val4 = try ctx.stack.pop();
+    defer container_backing.releaseValue(val4);
+    const val5 = try ctx.stack.pop();
+    defer container_backing.releaseValue(val5);
+    setErrorContext(ctx, "#copy! expected byte-array destination, got {s}", .{valueTypeName(val5)});
     return error.TypeMismatch;
 }
 
@@ -3425,6 +3549,101 @@ test "#fill! admits an empty run at the very end" {
     try ctx.stack.push(.{ .fixnum = 0 });
     try std.testing.expectError(error.IndexOutOfBounds, nativeFillByteArray(&ctx));
     try std.testing.expectEqual(@as(usize, 0), ctx.stack.depth());
+}
+
+test "borrowed byte-array #copy! moves a run between two arrays" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    var dst_backing = [_]u8{0x00} ** 6;
+    var src_backing = [_]u8{ 0x11, 0x22, 0x33, 0x44 };
+    const dst = try value_mod.makeBorrowedByteArray(std.testing.allocator, dst_backing[0..]);
+    defer container_backing.releaseValue(.{ .byte_array = dst });
+    const src = try value_mod.makeBorrowedByteArray(std.testing.allocator, src_backing[0..]);
+    defer container_backing.releaseValue(.{ .byte_array = src });
+
+    try ctx.stack.push(.{ .byte_array = dst });
+    try ctx.stack.push(.{ .fixnum = 2 });
+    try ctx.stack.push(.{ .byte_array = src });
+    try ctx.stack.push(.{ .fixnum = 1 });
+    try ctx.stack.push(.{ .fixnum = 3 });
+
+    try nativeCopyByteArray(&ctx);
+
+    try std.testing.expectEqualSlices(u8, &.{ 0x00, 0x00, 0x22, 0x33, 0x44, 0x00 }, dst_backing[0..]);
+    try std.testing.expectEqualSlices(u8, &.{ 0x11, 0x22, 0x33, 0x44 }, src_backing[0..]);
+    try std.testing.expectEqual(@as(usize, 1), ctx.stack.depth());
+    const result = try ctx.stack.pop();
+    defer container_backing.releaseValue(result);
+    try std.testing.expect(result == .byte_array);
+    try std.testing.expect(result.byte_array == dst);
+}
+
+test "#copy! within one array copies as through a temporary" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    var backing = [_]u8{ 1, 2, 3, 4, 5 };
+    const ba = try value_mod.makeBorrowedByteArray(std.testing.allocator, backing[0..]);
+    defer container_backing.releaseValue(.{ .byte_array = ba });
+
+    // Destination after source: a forward element loop would smear byte 1 across the run.
+    try ctx.stack.push(.{ .byte_array = ba });
+    try ctx.stack.push(.{ .fixnum = 1 });
+    try ctx.stack.push(.{ .byte_array = ba });
+    try ctx.stack.push(.{ .fixnum = 0 });
+    try ctx.stack.push(.{ .fixnum = 4 });
+
+    try nativeCopyByteArray(&ctx);
+
+    try std.testing.expectEqualSlices(u8, &.{ 1, 1, 2, 3, 4 }, backing[0..]);
+    const shifted = try ctx.stack.pop();
+    container_backing.releaseValue(shifted);
+
+    // Destination before source: a backward loop would smear the other way.
+    try ctx.stack.push(.{ .byte_array = ba });
+    try ctx.stack.push(.{ .fixnum = 0 });
+    try ctx.stack.push(.{ .byte_array = ba });
+    try ctx.stack.push(.{ .fixnum = 1 });
+    try ctx.stack.push(.{ .fixnum = 4 });
+
+    try nativeCopyByteArray(&ctx);
+
+    try std.testing.expectEqualSlices(u8, &.{ 1, 2, 3, 4, 4 }, backing[0..]);
+    const result = try ctx.stack.pop();
+    container_backing.releaseValue(result);
+}
+
+test "#copy! checks the destination range and the source range" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    var dst_backing = [_]u8{ 0, 0, 0, 0 };
+    var src_backing = [_]u8{ 9, 9, 9, 9, 9, 9 };
+    const dst = try value_mod.makeBorrowedByteArray(std.testing.allocator, dst_backing[0..]);
+    defer container_backing.releaseValue(.{ .byte_array = dst });
+    const src = try value_mod.makeBorrowedByteArray(std.testing.allocator, src_backing[0..]);
+    defer container_backing.releaseValue(.{ .byte_array = src });
+
+    // Fits the source, overruns the destination.
+    try ctx.stack.push(.{ .byte_array = dst });
+    try ctx.stack.push(.{ .fixnum = 0 });
+    try ctx.stack.push(.{ .byte_array = src });
+    try ctx.stack.push(.{ .fixnum = 0 });
+    try ctx.stack.push(.{ .fixnum = 5 });
+    try std.testing.expectError(error.IndexOutOfBounds, nativeCopyByteArray(&ctx));
+    try std.testing.expectEqual(@as(usize, 0), ctx.stack.depth());
+
+    // Fits the destination, overruns the source.
+    try ctx.stack.push(.{ .byte_array = dst });
+    try ctx.stack.push(.{ .fixnum = 0 });
+    try ctx.stack.push(.{ .byte_array = src });
+    try ctx.stack.push(.{ .fixnum = 4 });
+    try ctx.stack.push(.{ .fixnum = 3 });
+    try std.testing.expectError(error.IndexOutOfBounds, nativeCopyByteArray(&ctx));
+    try std.testing.expectEqual(@as(usize, 0), ctx.stack.depth());
+
+    try std.testing.expectEqualSlices(u8, &.{ 0, 0, 0, 0 }, dst_backing[0..]);
 }
 
 test "borrowed byte-array structural mutations are rejected" {

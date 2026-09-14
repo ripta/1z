@@ -87,15 +87,10 @@ key-released?: ( key: symbol -- bool ) [
 \\ result changes on the very next tick rather than staying true for an entire multi-tick
 \\ catch-up burst; not meant to be called directly by game code.
 \\
-\\ Zero name: swap ; locals in the per-key quotation: called key-count times per update tick,
-\\ and update ticks run at up to 60Hz (higher still during a catch-up burst), so a named
-\\ local here leaks memory in proportion to call count -- see the workaround note on
-\\ (set-pixel!) in game/draw.1z.
+\\ The two buffers share one layout, so the snapshot is one #copy! of the whole thing rather than
+\\ a walk over the key index.
 advance-keyboard-frame: ( -- ) [
-  current-keyboard get
-  [ over #peek8 keyboard-previous -rot> #poke8! drop ] curry
-  key-count iota >iterator
-  swap #each
+  keyboard-previous 0 current-keyboard get 0 key-count #copy! drop
 ] ;
 
 \\ The byte array JS writes pointer state and button events into. Defaults to the real wasm
@@ -211,8 +206,9 @@ mouse-dropped-events: ( -- n ) [
 \\ meet the write index. Called once per update tick by game/loop's run-frame, right before
 \\ that tick's update call; not meant to be called directly by game code.
 \\
-\\ Zero name: swap ; locals, for the same reason as advance-keyboard-frame: the read index and
-\\ the buffer are curried into the slot decoder instead.
+\\ Zero name: swap ; locals: the slot decoder runs once per pending event, and update ticks run
+\\ at up to 60Hz (higher still during a catch-up burst), so a named local here leaks memory in
+\\ proportion to call count. The read index and the buffer are curried into the decoder instead.
 advance-mouse-frame: ( -- ) [
   current-mouse get dup (mouse-pending-count)
   dup 0 = [

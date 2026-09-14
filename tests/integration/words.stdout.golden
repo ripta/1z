@@ -7,6 +7,7 @@ Stack: [ ]
 #byte-len ( str -- n )
 #byte-slice ( str start-byte end-byte -- str )
 #collect ( iterator -- array )
+#copy! ( dst dst-offset src src-offset byte-count -- dst )
 #count ( iterator -- n )
 #drop ( seq n -- seq' )
 #each ( seq quot: ( elem -- ) -- )

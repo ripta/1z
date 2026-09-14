@@ -8,8 +8,9 @@
 \ A named `name: swap ;` local bound to a struct is retained until the program exits, so the
 \ drawing words destructure a color or a sprite before binding.
 \
-\ A contiguous run of pixels is written with one #fill32! call rather than a loop, so
-\ clear-background covers the whole canvas in a single call and draw-rectangle takes one per row.
+\ A contiguous run of pixels moves in one call rather than a loop. clear-background covers the
+\ whole canvas with one #fill32!, draw-rectangle takes one per row, and blit-sprite copies a
+\ sprite row at a time with #copy!.
 \
 \ Two rules shape the loops that remain. Reading a module-level word costs roughly sixteen
 \ times what reading a local costs, so a loop hoists every constant it needs into a local first
@@ -142,6 +143,10 @@ draw-rectangle: ( x y width height color -- ) [
 \\ Copy a sprite's RGBA8888 pixels into current-framebuffer at (x, y). An opaque copy: alpha is
 \\ carried through as-is, with no blending against the destination.
 \\
+\\ One #copy! per row. A row is contiguous on both sides, but the two strides differ -- the
+\\ framebuffer's is the canvas width and the sprite's is its own -- so the rows cannot merge into
+\\ one call.
+\\
 \\ The sprite is destructured into its three fields before any local binds, because a local bound
 \\ to the sprite itself would be retained for the rest of the program while a local bound to its
 \\ pixel byte-array is reclaimed when this call returns.
@@ -158,16 +163,15 @@ blit-sprite: ( x y sprite -- ) [
   ch: by bh + framebuffer-height min cy - ;
 
   cw 0 > ch 0 > and [
-    fbw: framebuffer-width ;
-    bpp: framebuffer-bytes-per-pixel ;
+    fbw:  framebuffer-width ;
+    bpp:  framebuffer-bytes-per-pixel ;
+    rowb: cw bpp * ;
     current-framebuffer get
     ch iota >iterator [
       r: swap ;
       dbase: r cy + fbw * cx + bpp * ;
       sbase: r cy + by - bw * cx bx - + bpp * ;
-      cw iota >iterator [
-        bpp * dup dbase + swap sbase + bs swap #peek32 #poke32!
-      ] #each
+      dbase bs sbase rowb #copy!
     ] #each
     drop
   ] when
