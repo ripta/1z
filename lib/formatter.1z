@@ -1108,10 +1108,18 @@ format-file: ( path: string -- string ) [
   dup (read-source) swap dirname format-buffer
 ] ;
 
+\\ Raised when formatting a file that holds something produces nothing, which `format-file!`
+\\ refuses to write.
+EEmptyFormatResult: ( -- sym ) [ empty-format-result: ] ;
+
 \\ Reformat a file in place, under the same rules `format-file` reads.
 \\
 \\ A file whose text already equals its formatted form is left untouched, so formatting a clean
 \\ tree writes nothing and moves no modification time.
+\\
+\\ A formatted result of nothing over a file that holds something raises `EEmptyFormatResult`
+\\ instead of writing, since it destroys content no later run can recover. A file holding only
+\\ whitespace is the shape that reaches it.
 \\
 \\ `format-file`'s body is inlined here so the original text is still in hand for the comparison.
 \\ Composing `formatted?` in front of the write would read the file three times and format it twice.
@@ -1119,7 +1127,14 @@ format-file!: ( path: string -- ) [
   ff-path: swap ;
   ff-path (read-source)
   dup ff-path dirname format-buffer
-  2dup = [ 2drop ] [ nip ff-path swap (write-source) ] if
+  2dup = [ 2drop ] [
+    \ This is the not-equal branch, so an empty result here means the original is not empty.
+    dup #empty? [
+      f "the formatted result is empty and the file is not, so the file was left alone"
+      EEmptyFormatResult make-error throw
+    ] when
+    nip ff-path swap (write-source)
+  ] if
 ] ;
 
 \\ True when the file's text already equals its formatted form.

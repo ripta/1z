@@ -522,6 +522,13 @@ private{
     "formatted.1z" path-join dup (formatted) (write-file)
   ] ;
 
+  (whitespace-only): ( -- string ) "  \t\n\n" ;
+
+  \\ Write a file of nothing but whitespace into dir and answer its path.
+  (blank-file): ( dir: string -- path: string ) [
+    "blank.1z" path-join dup (whitespace-only) (write-file)
+  ] ;
+
   \\ A file's modification time in whole seconds, which is all `file-info` carries.
   \\
   \\ Qualified, because `os/fs` overrides the bare name with its own type word.
@@ -615,6 +622,40 @@ test-format-file-bang-carries-permissions: ( -- ) [
     tcp-path 0o660 set-permissions
     tcp-path format-file!
     tcp-path (permissions) 0o660 "the rewrite carries the file's mode" assert=
+  ] using-temp-directory
+] ;
+
+\ Every token in a whitespace-only file is dropped, so its formatted form is nothing. Writing that
+\ is the one way a single run empties a file with no second process anywhere.
+test-format-file-bang-refuses-to-empty-a-whitespace-only-file: ( -- ) [
+  [
+    ter-path: swap (blank-file) ;
+
+    [ ter-path format-file! ] empty-format-result:
+    "a result of nothing over a file holding something is refused" assert-error-type
+    ter-path (read-file) (whitespace-only) "the refused file is unchanged" assert=
+  ] using-temp-directory
+] ;
+
+\ An empty file formats to itself, so the skip answers it before the refusal is reached. Without
+\ this, a guard written to fire on an empty result alone would look correct.
+test-format-file-bang-leaves-an-already-empty-file-alone: ( -- ) [
+  [
+    tea-path: swap "empty.1z" path-join ;
+    tea-path "" (write-file)
+
+    tea-path format-file!
+    tea-path (read-file) "" "an empty file is left as it was" assert=
+  ] using-temp-directory
+] ;
+
+test-run-fmt-in-place-reports-the-refusal: ( -- ) [
+  [
+    (blank-file)
+    1array in-place: (run-fmt-captured)
+    "the formatted result is empty and the file is not" #in?
+    "the report says what the formatter would not do" assert-true
+    "a refused file fails the run" assert-false
   ] using-temp-directory
 ] ;
 

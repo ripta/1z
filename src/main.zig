@@ -2396,13 +2396,17 @@ fn formatSingleFile(allocator: std.mem.Allocator, path: []const u8, check_only: 
         return .{ .had_errors = false, .had_changes = false };
     } else {
         formatter.formatFile(allocator, path) catch |err| {
-            // A rewrite replaces the file, and a rename breaks a hard link by construction. The
-            // error name alone would not tell a reader that, nor that the file is intact.
-            if (err == error.MultiplyLinked) {
-                err_writer.print(
-                    "Error formatting '{s}': the file has more than one hard link, which a replacement cannot carry\n",
-                    .{path},
-                ) catch {};
+            // A refusal leaves the file intact, and the error name alone says neither that nor
+            // what the formatter would not do.
+            //
+            // Anything else is a real failure and renders as the error value it is.
+            const refusal: ?[]const u8 = switch (err) {
+                error.MultiplyLinked => "the file has more than one hard link, which a replacement cannot carry",
+                error.EmptyResult => "the formatted result is empty and the file is not, so the file was left alone",
+                else => null,
+            };
+            if (refusal) |reason| {
+                err_writer.print("Error formatting '{s}': {s}\n", .{ path, reason }) catch {};
             } else {
                 err_writer.print("Error formatting '{s}': {any}\n", .{ path, err }) catch {};
             }

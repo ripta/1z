@@ -1,0 +1,77 @@
+\ A file holding only whitespace formats to nothing, so a single `1z fmt` run writes zero bytes
+\ over it. That is the one way one process empties a file with no second process anywhere, and it
+\ is what this checks the formatter refuses. Both engines are covered, because the guard sits in
+\ each of them rather than in the subcommand above them.
+\
+\ The corpus is a `.txt` in a temporary directory, so a leftover from a crash sits outside the
+\ repository and would be picked up neither by `make fmt`'s `find . -name '*.1z'` sweep nor by the
+\ build's own test discovery. The interpreter path arrives as the sole command-line argument via
+\ the harness @self-exe directive.
+\
+\ The case runs @raw so the harness supplies the standard library through the environment rather
+\ than a flag. The `--engine=1z` child loads the formatter library, and a flag on this process
+\ would never reach an argv assembled here.
+
+use { using-temp-directory: } "os/fs" ;
+use { path-join: } "os/path" ;
+use "process" ;
+use "testing" ;
+
+(blank): ( -- string ) const [ "  \t\n\n" ] ;
+
+\ The sentence both engines print, which is the point of the whole case.
+(refusal): ( -- string ) const [ "the formatted result is empty and the file is not" ] ;
+
+(write-blank): ( path: string -- ) [
+  wb-text: (blank) ;
+
+  write: stream-open
+  dup wb-text stream-write-string drop
+  stream-close
+] ;
+
+(read-back): ( path: string -- string ) [
+  read: stream-open dup stream-read-all swap stream-close bytes>
+] ;
+
+\ Run one `1z fmt` invocation and assert it refused: a failing status, a report naming the file and
+\ saying what was not done, and the file still holding what it held.
+\
+\ The corpus is written here rather than up front, so nothing runs between the write and the run
+\ that reads it. Reading it back is the control: every assertion below reads as a refusal when the
+\ corpus never landed, so an unwritten file would report as four unrelated failures.
+(assert-refusal): ( argv: array path: string label: string -- ) [
+  ar-label: swap ;
+  ar-path: swap ;
+
+  ar-path (write-blank)
+  ar-path (read-back) (blank) ar-label " starts out holding whitespace" #append assert=
+
+  <stdio-opts> capture-all
+  ar-result: swap ;
+  ar-text: ar-result stderr>> bytes> ;
+
+  ar-result exit-code>> 1 ar-label " exits 1" #append assert=
+  ar-text ar-path #in? ar-label " names the file" #append assert-true
+  ar-text (refusal) #in? ar-label " says what it would not do" #append assert-true
+  ar-path (read-back) (blank) ar-label " leaves the file as it was" #append assert=
+] ;
+
+"a single run never empties a file that holds something" test-section
+
+\ task-scope gives the root task a context where `wait-process` can suspend without blocking a
+\ worker.
+[
+  [
+    fre-dir:  swap ;
+    fre-self: command-line-args 0 #nth ;
+    fre-zig:  fre-dir "built-in.txt" path-join ;
+    fre-one:  fre-dir "library.txt" path-join ;
+
+    fre-self "fmt" fre-zig 3 array-n
+    fre-zig "the built-in engine" (assert-refusal)
+
+    fre-self "fmt" "--engine=1z" fre-one 4 array-n
+    fre-one "the 1z engine" (assert-refusal)
+  ] using-temp-directory
+] task-scope

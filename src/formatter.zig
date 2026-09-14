@@ -977,6 +977,9 @@ fn emitAlignedLines(
 /// sees the old file or the new one and never a half-written one. The consequences are the
 /// replacement's, not this function's: the inode changes, the containing directory has to be
 /// writable, and a target carrying more than one hard link is refused.
+///
+/// A formatted result of nothing over a file that holds something is refused as well, since it
+/// destroys content no later run can recover.
 pub fn formatFile(allocator: Allocator, path: []const u8) !void {
     const file = try std.fs.cwd().openFile(path, .{});
     defer file.close();
@@ -989,6 +992,12 @@ pub fn formatFile(allocator: Allocator, path: []const u8) !void {
     defer allocator.free(formatted);
 
     if (std.mem.eql(u8, content, formatted)) return;
+
+    // A file holding only whitespace reaches this with no concurrency involved at all: every
+    // token is dropped, so the formatted form is nothing.
+    //
+    // Both halves are stated, so the rule stands on its own rather than on the skip above it.
+    if (formatted.len == 0 and content.len > 0) return error.EmptyResult;
 
     var resolved_buf: [std.fs.max_path_bytes]u8 = undefined;
     const target = try atomic_replace.inspect(path, &resolved_buf);
@@ -1201,4 +1210,39 @@ test "formatFile formats what a symlink points at, leaving the link" {
     defer std.testing.allocator.free(formatted);
 
     try std.testing.expectEqualStrings(formatted, content);
+}
+
+const whitespace_only_source = "  \t\n\n";
+
+test "formatFile refuses to empty a whitespace-only file" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.writeFile(.{ .sub_path = "blank.1z", .data = whitespace_only_source });
+
+    const path = try tmp.dir.realpathAlloc(std.testing.allocator, "blank.1z");
+    defer std.testing.allocator.free(path);
+
+    try std.testing.expectError(error.EmptyResult, formatFile(std.testing.allocator, path));
+
+    const content = try tmp.dir.readFileAlloc(std.testing.allocator, "blank.1z", 1024);
+    defer std.testing.allocator.free(content);
+    try std.testing.expectEqualStrings(whitespace_only_source, content);
+}
+
+// An empty file formats to itself, so the skip answers it before the refusal is reached. Without
+// this, a guard written to fire on an empty result alone would look correct.
+test "formatFile leaves an already-empty file alone" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.writeFile(.{ .sub_path = "empty.1z", .data = "" });
+
+    const path = try tmp.dir.realpathAlloc(std.testing.allocator, "empty.1z");
+    defer std.testing.allocator.free(path);
+
+    try formatFile(std.testing.allocator, path);
+
+    const stat = try tmp.dir.statFile("empty.1z");
+    try std.testing.expectEqual(@as(u64, 0), stat.size);
 }

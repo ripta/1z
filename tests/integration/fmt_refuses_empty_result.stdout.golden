@@ -1,0 +1,11 @@
+=== a single run never empties a file that holds something ===
+PASS: the built-in engine starts out holding whitespace
+PASS: the built-in engine exits 1
+PASS: the built-in engine names the file
+PASS: the built-in engine says what it would not do
+PASS: the built-in engine leaves the file as it was
+PASS: the 1z engine starts out holding whitespace
+PASS: the 1z engine exits 1
+PASS: the 1z engine names the file
+PASS: the 1z engine says what it would not do
+PASS: the 1z engine leaves the file as it was
