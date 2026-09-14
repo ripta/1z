@@ -8,11 +8,14 @@
 \ A named `name: swap ;` local bound to a struct is retained until the program exits, so the
 \ drawing words destructure a color or a sprite before binding.
 \
-\ Two rules shape the fill and copy loops. Reading a module-level word costs roughly sixteen
+\ A contiguous run of pixels is written with one #fill32! call rather than a loop, so
+\ clear-background covers the whole canvas in a single call and draw-rectangle takes one per row.
+\
+\ Two rules shape the loops that remain. Reading a module-level word costs roughly sixteen
 \ times what reading a local costs, so a loop hoists every constant it needs into a local first
 \ and the body reads only locals. And a region is clipped against the canvas once, before the
-\ loop, so the body writes without testing each pixel. The two together are worth about 30x on
-\ a full-canvas fill; tests/benchmark/minesweeper_reset.1z tracks the numbers.
+\ loop, so the body writes without testing each pixel. tests/benchmark/minesweeper_reset.1z
+\ tracks the numbers.
 \
 \ (set-pixel!) keeps the per-pixel clip test and stays the general path. draw-pixel is one
 \ pixel, so there is nothing to hoist, and the glyph loop below relies on the test to discard
@@ -103,14 +106,11 @@ draw-pixel: ( x y color -- ) [ (color>packed) (set-pixel!) ] ;
 \\ Fill the entire framebuffer with one color.
 \\
 \\ The canvas is one contiguous run of pixels, so this needs no coordinate arithmetic and no
-\\ clipping: the loop walks the buffer directly.
+\\ clipping: one fill covers the whole buffer.
 clear-background: ( color -- ) [
   (color>packed)
-  cp: swap ;
-  bpp: framebuffer-bytes-per-pixel ;
-  current-framebuffer get
-  framebuffer-width framebuffer-height * iota >iterator [ bpp * cp #poke32! ] #each
-  drop
+  [ current-framebuffer get 0 ] dip
+  framebuffer-width framebuffer-height * #fill32! drop
 ] ;
 
 \\ Fill an axis-aligned rectangle. width/height must be non-negative. A rectangle reaching past
@@ -134,10 +134,7 @@ draw-rectangle: ( x y width height color -- ) [
     fbw: framebuffer-width ;
     bpp: framebuffer-bytes-per-pixel ;
     current-framebuffer get
-    ch iota >iterator [
-      cy + fbw * cx + bpp * base: swap ;
-      cw iota >iterator [ bpp * base + rp #poke32! ] #each
-    ] #each
+    ch iota >iterator [ cy + fbw * cx + bpp * rp cw #fill32! ] #each
     drop
   ] when
 ] ;

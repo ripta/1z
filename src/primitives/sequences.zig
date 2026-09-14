@@ -672,9 +672,10 @@ pub fn registerNativeDispatch(dispatch: *DispatchTable, ctx: *Context) !void {
     try dispatch.registerNative(to_hash_did, mutable_map, unary, nativeToHashMutableMap);
     try dispatch.registerNative(to_hash_did, hash, unary, nativeToHashHash);
 
-    // #peek / #poke! : byte-level access
+    // #peek / #poke! / #fill! : byte-level access
     try dispatch.registerNative(ctx.nativeDispatchId(.peek), byte_array, unary, nativePeekByteArray);
     try dispatch.registerNative(ctx.nativeDispatchId(.poke_mut), byte_array, unary, nativePokeByteArray);
+    try dispatch.registerNative(ctx.nativeDispatchId(.fill_mut), byte_array, unary, nativeFillByteArray);
 }
 
 pub const primitives = [_]Primitive{
@@ -731,6 +732,7 @@ pub const primitives = [_]Primitive{
     // Byte-level access
     .{ .name = "#peek", .stack_effect = "byte-array offset width -- fixnum", .doc = "Read width bytes (1/2/4/8) at offset from byte-array as unsigned fixnum.", .func = nativePeek, .markers = &.{@constCast(&markers_mod.generic_marker)} },
     .{ .name = "#poke!", .stack_effect = "byte-array offset value width -- byte-array", .doc = "Write value as width bytes (1/2/4/8) at offset in byte-array.", .func = nativePoke, .markers = &.{@constCast(&markers_mod.generic_marker)} },
+    .{ .name = "#fill!", .stack_effect = "byte-array offset value width count -- byte-array", .doc = "Write count copies of value, each width bytes (1/2/4/8), end to end from offset in byte-array. A count of zero writes nothing.", .func = nativeFill, .markers = &.{@constCast(&markers_mod.generic_marker)} },
 };
 
 /// #len ( seq -- n )
@@ -3071,14 +3073,14 @@ fn nativeToHash(ctx: *Context) anyerror!void {
 
 const native_endian = builtin.target.cpu.arch.endian();
 
-fn validateWidth(ctx: *Context, width: i64) !u3 {
+fn validateWidth(ctx: *Context, word: []const u8, width: i64) !u3 {
     return switch (width) {
         1 => 0,
         2 => 1,
         4 => 2,
         8 => 3,
         else => {
-            setErrorContext(ctx, "#peek/#poke! width must be 1, 2, 4, or 8, got {d}", .{width});
+            setErrorContext(ctx, "{s} width must be 1, 2, 4, or 8, got {d}", .{ word, width });
             return error.InvalidArgument;
         },
     };
@@ -3093,7 +3095,7 @@ fn nativePeekByteArray(ctx: *Context) anyerror!void {
 
     const ba = ba_val.byte_array;
 
-    _ = try validateWidth(ctx, width_val);
+    _ = try validateWidth(ctx, "#peek", width_val);
     const width: usize = @intCast(width_val);
 
     if (offset_val < 0) {
@@ -3135,8 +3137,15 @@ fn nativePeekByteArray(ctx: *Context) anyerror!void {
     }
 }
 
-/// #poke! ( byte-array offset value width -- byte-array )
-fn nativePokeByteArray(ctx: *Context) anyerror!void {
+/// The write shared by `#poke!` and `#fill!`: pop `( byte-array offset value width )` and lay
+/// `count_val` copies of the value end to end from `offset`. `#poke!` passes one.
+///
+/// `word` names the caller in the diagnostics, since the two differ only in how many elements
+/// they write.
+///
+/// Nothing here reads `ba.storage`. A borrowed buffer accepts any write that leaves `items.len`
+/// alone, whatever its size, so a bulk run needs no more permission than a single element does.
+fn writeRunByteArray(ctx: *Context, word: []const u8, count_val: i64) anyerror!void {
     const width_val = try popFixnum(ctx);
     const value = try ctx.stack.pop();
     const offset_val = popFixnum(ctx) catch |err| {
@@ -3150,97 +3159,106 @@ fn nativePokeByteArray(ctx: *Context) anyerror!void {
 
     const ba = ba_val.byte_array;
 
-    _ = validateWidth(ctx, width_val) catch |err| {
-        container_backing.releaseValue(value);
-        container_backing.releaseValue(ba_val);
-        return err;
-    };
+    // The value is spent either way. The array's reference is moved onto the stack only if the
+    // write completes, so every failure below releases it.
+    defer container_backing.releaseValue(value);
+    errdefer container_backing.releaseValue(ba_val);
+
+    _ = try validateWidth(ctx, word, width_val);
     const width: usize = @intCast(width_val);
 
     if (offset_val < 0) {
-        container_backing.releaseValue(value);
-        container_backing.releaseValue(ba_val);
         setErrorContext(ctx, "negative offset {d}", .{offset_val});
         return error.IndexOutOfBounds;
     }
-    const offset: usize = @intCast(offset_val);
-
-    ba.header.lock();
-    const bytes = ba.slice();
-
-    if (offset + width > bytes.len) {
-        const ba_len = bytes.len;
-        ba.header.unlock();
-        container_backing.releaseValue(value);
-        container_backing.releaseValue(ba_val);
-        setErrorContext(ctx, "offset {d} + width {d} exceeds byte-array length {d}", .{ offset, width, ba_len });
+    if (count_val < 0) {
+        setErrorContext(ctx, "negative count {d}", .{count_val});
         return error.IndexOutOfBounds;
     }
+    const offset: usize = @intCast(offset_val);
+    const count: usize = @intCast(count_val);
 
-    // For width 8, any u64 is valid; for smaller widths, check range.
-    const max_val: u64 = if (width == 8) std.math.maxInt(u64) else (@as(u64, 1) << @intCast(width * 8)) - 1;
+    {
+        ba.header.lock();
+        defer ba.header.unlock();
+        const bytes = ba.slice();
 
-    const bits: u64 = switch (value) {
-        .fixnum => |i| blk: {
-            if (i < 0) {
-                ba.header.unlock();
-                container_backing.releaseValue(value);
-                container_backing.releaseValue(ba_val);
-                setErrorContext(ctx, "#poke! value must be non-negative, got {d}", .{i});
-                return error.FixnumOverflow;
-            }
-            const u: u64 = @intCast(i);
-            if (u > max_val) {
-                ba.header.unlock();
-                container_backing.releaseValue(value);
-                container_backing.releaseValue(ba_val);
-                setErrorContext(ctx, "#poke! value {d} exceeds range for width {d} (max {d})", .{ u, width, max_val });
-                return error.FixnumOverflow;
-            }
-            break :blk u;
-        },
-        .bignum => |b| blk: {
-            if (!b.big.fits(u64)) {
-                ba.header.unlock();
-                container_backing.releaseValue(value);
-                container_backing.releaseValue(ba_val);
-                setErrorContext(ctx, "#poke! value exceeds range for width {d}", .{width});
-                return error.FixnumOverflow;
-            }
-            const u = b.big.toInt(u64) catch unreachable;
-            if (u > max_val) {
-                ba.header.unlock();
-                container_backing.releaseValue(value);
-                container_backing.releaseValue(ba_val);
-                setErrorContext(ctx, "#poke! value {d} exceeds range for width {d} (max {d})", .{ u, width, max_val });
-                return error.FixnumOverflow;
-            }
-            break :blk u;
-        },
-        else => {
-            ba.header.unlock();
-            container_backing.releaseValue(value);
-            container_backing.releaseValue(ba_val);
-            setErrorContext(ctx, "#poke! expected fixnum or bignum value, got {s}", .{valueTypeName(value)});
-            return error.TypeMismatch;
-        },
-    };
+        // Saturating, so a run whose byte length overflows fails the range test instead of
+        // wrapping into it.
+        //
+        // An empty run at offset == len passes, and writes nothing.
+        const run = count *| width;
+        const end = offset +| run;
+        if (end > bytes.len) {
+            setErrorContext(ctx, "offset {d} + {d} bytes exceeds byte-array length {d}", .{ offset, run, bytes.len });
+            return error.IndexOutOfBounds;
+        }
 
-    const slice = bytes[offset..];
-    switch (width) {
-        1 => slice[0] = @intCast(bits),
-        2 => std.mem.writeInt(u16, slice[0..2], @intCast(bits), native_endian),
-        4 => std.mem.writeInt(u32, slice[0..4], @intCast(bits), native_endian),
-        8 => std.mem.writeInt(u64, slice[0..8], bits, native_endian),
-        else => unreachable,
+        // For width 8, any u64 is valid; for smaller widths, check range.
+        const max_val: u64 = if (width == 8) std.math.maxInt(u64) else (@as(u64, 1) << @intCast(width * 8)) - 1;
+
+        const bits: u64 = switch (value) {
+            .fixnum => |i| blk: {
+                if (i < 0) {
+                    setErrorContext(ctx, "{s} value must be non-negative, got {d}", .{ word, i });
+                    return error.FixnumOverflow;
+                }
+                const u: u64 = @intCast(i);
+                if (u > max_val) {
+                    setErrorContext(ctx, "{s} value {d} exceeds range for width {d} (max {d})", .{ word, u, width, max_val });
+                    return error.FixnumOverflow;
+                }
+                break :blk u;
+            },
+            .bignum => |b| blk: {
+                if (!b.big.fits(u64)) {
+                    setErrorContext(ctx, "{s} value exceeds range for width {d}", .{ word, width });
+                    return error.FixnumOverflow;
+                }
+                const u = b.big.toInt(u64) catch unreachable;
+                if (u > max_val) {
+                    setErrorContext(ctx, "{s} value {d} exceeds range for width {d} (max {d})", .{ word, u, width, max_val });
+                    return error.FixnumOverflow;
+                }
+                break :blk u;
+            },
+            else => {
+                setErrorContext(ctx, "{s} expected fixnum or bignum value, got {s}", .{ word, valueTypeName(value) });
+                return error.TypeMismatch;
+            },
+        };
+
+        const dst = bytes[offset..end];
+        switch (width) {
+            1 => @memset(dst, @intCast(bits)),
+            2 => {
+                var i: usize = 0;
+                while (i < run) : (i += 2) std.mem.writeInt(u16, dst[i..][0..2], @intCast(bits), native_endian);
+            },
+            4 => {
+                var i: usize = 0;
+                while (i < run) : (i += 4) std.mem.writeInt(u32, dst[i..][0..4], @intCast(bits), native_endian);
+            },
+            8 => {
+                var i: usize = 0;
+                while (i < run) : (i += 8) std.mem.writeInt(u64, dst[i..][0..8], bits, native_endian);
+            },
+            else => unreachable,
+        }
     }
-    ba.header.unlock();
-    container_backing.releaseValue(value);
 
-    ctx.stack.pushMoved(.{ .byte_array = ba }) catch |err| {
-        container_backing.releaseValue(.{ .byte_array = ba });
-        return err;
-    };
+    try ctx.stack.pushMoved(.{ .byte_array = ba });
+}
+
+/// #poke! ( byte-array offset value width -- byte-array )
+fn nativePokeByteArray(ctx: *Context) anyerror!void {
+    return writeRunByteArray(ctx, "#poke!", 1);
+}
+
+/// #fill! ( byte-array offset value width count -- byte-array )
+fn nativeFillByteArray(ctx: *Context) anyerror!void {
+    const count_val = try popFixnum(ctx);
+    return writeRunByteArray(ctx, "#fill!", count_val);
 }
 
 /// #peek ( byte-array offset width -- fixnum )
@@ -3282,6 +3300,30 @@ fn nativePoke(ctx: *Context) anyerror!void {
     const val4 = try ctx.stack.pop();
     defer container_backing.releaseValue(val4);
     setErrorContext(ctx, "#poke! expected byte-array, got {s}", .{valueTypeName(val4)});
+    return error.TypeMismatch;
+}
+
+/// #fill! ( byte-array offset value width count -- byte-array )
+///
+/// Dispatch entry point; falls back to `nativeFillByteArray` when no dispatch arm is registered.
+fn nativeFill(ctx: *Context) anyerror!void {
+    // byte-array is at stack depth 4, below offset, value, width, and count
+    if (ctx.stack.depth() >= 5) {
+        if (try dispatch_helpers.tryDispatchContainerAtDepth(ctx, ctx.nativeDispatchId(.fill_mut), 4, true)) return;
+        if ((try ctx.stack.peekN(4)) == .byte_array) return nativeFillByteArray(ctx);
+    }
+
+    const val = try ctx.stack.pop();
+    defer container_backing.releaseValue(val);
+    const val2 = try ctx.stack.pop();
+    defer container_backing.releaseValue(val2);
+    const val3 = try ctx.stack.pop();
+    defer container_backing.releaseValue(val3);
+    const val4 = try ctx.stack.pop();
+    defer container_backing.releaseValue(val4);
+    const val5 = try ctx.stack.pop();
+    defer container_backing.releaseValue(val5);
+    setErrorContext(ctx, "#fill! expected byte-array, got {s}", .{valueTypeName(val5)});
     return error.TypeMismatch;
 }
 
@@ -3329,6 +3371,60 @@ test "borrowed byte-array #poke! allows element writes" {
     defer container_backing.releaseValue(result);
     try std.testing.expect(result == .byte_array);
     try std.testing.expect(result.byte_array == ba);
+}
+
+test "borrowed byte-array #fill! allows a multi-element run" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    var backing = [_]u8{0x00} ** 10;
+    const ba = try value_mod.makeBorrowedByteArray(std.testing.allocator, backing[0..]);
+    defer container_backing.releaseValue(.{ .byte_array = ba });
+
+    try ctx.stack.push(.{ .byte_array = ba });
+    try ctx.stack.push(.{ .fixnum = 2 });
+    try ctx.stack.push(.{ .fixnum = 0xABCD });
+    try ctx.stack.push(.{ .fixnum = 2 });
+    try ctx.stack.push(.{ .fixnum = 3 });
+
+    try nativeFillByteArray(&ctx);
+
+    try std.testing.expectEqualSlices(u8, &.{ 0x00, 0x00, 0xCD, 0xAB, 0xCD, 0xAB, 0xCD, 0xAB, 0x00, 0x00 }, backing[0..]);
+    try std.testing.expectEqual(@as(usize, 1), ctx.stack.depth());
+    const result = try ctx.stack.pop();
+    defer container_backing.releaseValue(result);
+    try std.testing.expect(result == .byte_array);
+    try std.testing.expect(result.byte_array == ba);
+}
+
+test "#fill! admits an empty run at the very end" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    var backing = [_]u8{ 1, 2, 3 };
+    const ba = try value_mod.makeBorrowedByteArray(std.testing.allocator, backing[0..]);
+    defer container_backing.releaseValue(.{ .byte_array = ba });
+
+    try ctx.stack.push(.{ .byte_array = ba });
+    try ctx.stack.push(.{ .fixnum = 3 });
+    try ctx.stack.push(.{ .fixnum = 0xFF });
+    try ctx.stack.push(.{ .fixnum = 1 });
+    try ctx.stack.push(.{ .fixnum = 0 });
+
+    try nativeFillByteArray(&ctx);
+
+    try std.testing.expectEqualSlices(u8, &.{ 1, 2, 3 }, backing[0..]);
+    const result = try ctx.stack.pop();
+    container_backing.releaseValue(result);
+
+    // An offset past the end still fails, whatever the count.
+    try ctx.stack.push(.{ .byte_array = ba });
+    try ctx.stack.push(.{ .fixnum = 4 });
+    try ctx.stack.push(.{ .fixnum = 0xFF });
+    try ctx.stack.push(.{ .fixnum = 1 });
+    try ctx.stack.push(.{ .fixnum = 0 });
+    try std.testing.expectError(error.IndexOutOfBounds, nativeFillByteArray(&ctx));
+    try std.testing.expectEqual(@as(usize, 0), ctx.stack.depth());
 }
 
 test "borrowed byte-array structural mutations are rejected" {

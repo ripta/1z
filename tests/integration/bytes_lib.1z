@@ -27,3 +27,9 @@ B{ 0x00 0x00 0x00 0x00 } 0 0xDEADBEEF #poke32! 0 #peek32 0xDEADBEEF "#peek32 rou
 "#peek64 / #poke64!" test-section
 8 bytes-alloc 0 0x0102030405060708 #poke64! 0 #peek64 0x0102030405060708 "#peek64 round-trip at 0" assert=
 16 bytes-alloc 8 0xFFFFFFFFFFFFFFFF #poke64! 8 #peek64 0xFFFFFFFFFFFFFFFF "#peek64 round-trip at offset 8" assert=
+
+"#fill8! / #fill16! / #fill32! / #fill64!" test-section
+6 bytes-alloc 1 0xAB 4 #fill8! B{ 0x00 0xAB 0xAB 0xAB 0xAB 0x00 } "#fill8! run of 4 from offset 1" assert=
+8 bytes-alloc 2 0x1234 2 #fill16! 4 #peek16 0x1234 "#fill16! wrote its second element" assert=
+16 bytes-alloc 4 0xDEADBEEF 3 #fill32! 12 #peek32 0xDEADBEEF "#fill32! wrote its third element" assert=
+16 bytes-alloc 0 0x0102030405060708 2 #fill64! 8 #peek64 0x0102030405060708 "#fill64! wrote its second element" assert=

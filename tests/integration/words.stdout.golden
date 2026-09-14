@@ -11,6 +11,7 @@ Stack: [ ]
 #drop ( seq n -- seq' )
 #each ( seq quot: ( elem -- ) -- )
 #each-index ( seq quot: ( elem idx -- ) -- )
+#fill! ( byte-array offset value width count -- byte-array )
 #filter ( seq quot: ( elem -- ? ) -- seq' )
 #first ( seq -- elem )
 #in? ( seq elem -- ? )

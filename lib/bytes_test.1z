@@ -28,6 +28,20 @@ test-poke8-returns-array: ( -- ) [
   B{ 0x00 0x00 } 0 9 #poke8! B{ 0x09 0x00 } "poke8 mutates and returns the byte array" assert=
 ] ;
 
+test-fill8-run: ( -- ) [
+  B{ 0x00 0x00 0x00 0x00 } 1 0xFF 2 #fill8!
+  B{ 0x00 0xFF 0xFF 0x00 } "fill8 writes count bytes from offset" assert=
+] ;
+
+test-fill8-zero-count: ( -- ) [
+  B{ 0x01 0x02 } 0 0xFF 0 #fill8! B{ 0x01 0x02 } "fill8 with a count of zero writes nothing" assert=
+] ;
+
+test-fill8-overrun: ( -- ) [
+  [ B{ 0x00 0x00 } 1 0xFF 2 #fill8! ]
+  index-out-of-bounds: "fill8 rejects a run past the end" assert-error-type
+] ;
+
 \ --- #peek16 / #poke16! ---
 
 test-peek16-byte-order: ( -- ) [
@@ -46,6 +60,11 @@ test-poke16-byte-order: ( -- ) [
   B{ 0x00 0x00 0x00 0x00 } 0 513 #poke16! B{ 0x01 0x02 0x00 0x00 } "poke16 writes least-significant byte first" assert=
 ] ;
 
+test-fill16-repeats-the-pattern: ( -- ) [
+  B{ 0x00 0x00 0x00 0x00 0x00 0x00 } 1 513 2 #fill16!
+  B{ 0x00 0x01 0x02 0x01 0x02 0x00 } "fill16 repeats its two-byte pattern from an odd offset" assert=
+] ;
+
 \ --- #peek32 / #poke32! ---
 
 test-peek32-byte-order: ( -- ) [
@@ -58,6 +77,16 @@ test-poke32-roundtrip: ( -- ) [
 
 test-poke32-byte-order: ( -- ) [
   B{ 0x00 0x00 0x00 0x00 } 0 67305985 #poke32! B{ 0x01 0x02 0x03 0x04 } "poke32 writes bytes least-significant first" assert=
+] ;
+
+test-fill32-repeats-the-pattern: ( -- ) [
+  B{ 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 } 0 67305985 2 #fill32!
+  B{ 0x01 0x02 0x03 0x04 0x01 0x02 0x03 0x04 } "fill32 repeats its four-byte pattern" assert=
+] ;
+
+test-fill32-exact-fit: ( -- ) [
+  B{ 0x00 0x00 0x00 0x00 } 0 67305985 1 #fill32!
+  B{ 0x01 0x02 0x03 0x04 } "fill32 admits a run ending exactly at the array end" assert=
 ] ;
 
 \ --- #peek64 / #poke64! ---
@@ -73,6 +102,11 @@ test-poke64-roundtrip: ( -- ) [
 test-poke64-byte-order: ( -- ) [
   B{ 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 } 0 578437695752307201 #poke64!
   B{ 0x01 0x02 0x03 0x04 0x05 0x06 0x07 0x08 } "poke64 writes bytes least-significant first" assert=
+] ;
+
+test-fill64-repeats-the-pattern: ( -- ) [
+  16 bytes-alloc 0 578437695752307201 2 #fill64! 8 #peek64 578437695752307201
+  "fill64 writes the same value into the second element" assert=
 ] ;
 
 \ --- cross-width consistency ---

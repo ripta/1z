@@ -224,6 +224,7 @@ pub const NativeDispatchWord = enum {
     shift_mut,
     peek,
     poke_mut,
+    fill_mut,
 
     at_get,
     at_has,
@@ -281,6 +282,7 @@ pub const NativeDispatchWord = enum {
             .shift_mut => "#shift!",
             .peek => "#peek",
             .poke_mut => "#poke!",
+            .fill_mut => "#fill!",
 
             .at_get => "@get",
             .at_has => "@has?",

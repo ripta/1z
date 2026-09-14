@@ -1,0 +1,60 @@
+=== #fill! at each width ===
+Stack: [ ]
+PASS: #fill! width 1
+Stack: [ ]
+PASS: #fill! width 2
+Stack: [ ]
+PASS: #fill! width 4
+Stack: [ ]
+PASS: #fill! width 8
+Stack: [ ]
+=== #fill! count is in width-sized elements ===
+Stack: [ ]
+Stack: [ B{ 0x00 0xFF 0xFF 0xFF 0xFF 0x00 } ]
+PASS: count 2 at width 2 covers four bytes from the offset
+Stack: [ ]
+=== #fill! with a count of one agrees with #poke! ===
+Stack: [ ]
+Stack: [ B{ 0xEF 0xBE 0xAD 0xDE } ]
+PASS: a single-element fill matches #poke!
+Stack: [ ]
+=== #fill! returns byte-array ===
+Stack: [ ]
+PASS: #fill! returns the byte-array it wrote
+Stack: [ ]
+=== #fill! range rule: the run must fit ===
+Stack: [ ]
+PASS: a run ending exactly at the end fits
+Stack: [ ]
+PASS: one byte past the end throws
+Stack: [ ]
+PASS: a width-4 run at offset 1 in a 4-byte array throws
+Stack: [ ]
+=== #fill! range rule: the empty run at the end ===
+Stack: [ ]
+PASS: offset == length with count 0 is a no-op
+Stack: [ ]
+PASS: an offset past the end throws even at count 0
+Stack: [ ]
+=== #fill! error: negative offset and count ===
+Stack: [ ]
+PASS: negative offset throws
+Stack: [ ]
+PASS: negative count throws
+Stack: [ ]
+=== #fill! error: invalid width ===
+Stack: [ ]
+PASS: #fill! invalid width 3
+Stack: [ ]
+PASS: #fill! invalid width 0
+Stack: [ ]
+=== #fill! error: value out of range for the width ===
+Stack: [ ]
+PASS: value 256 exceeds width 1
+Stack: [ ]
+PASS: negative value throws
+Stack: [ ]
+=== #fill! error: non-byte-array target ===
+Stack: [ ]
+PASS: #fill! rejects a string target
+Stack: [ ]

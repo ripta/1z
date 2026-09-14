@@ -34,3 +34,13 @@ PASS: #peek64 round-trip at 0
 Stack: [ ]
 PASS: #peek64 round-trip at offset 8
 Stack: [ ]
+=== #fill8! / #fill16! / #fill32! / #fill64! ===
+Stack: [ ]
+PASS: #fill8! run of 4 from offset 1
+Stack: [ ]
+PASS: #fill16! wrote its second element
+Stack: [ ]
+PASS: #fill32! wrote its third element
+Stack: [ ]
+PASS: #fill64! wrote its second element
+Stack: [ ]
