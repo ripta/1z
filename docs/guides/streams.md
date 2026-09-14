@@ -35,7 +35,7 @@ described below.
 
 ## File Streams
 
-`stream-open` opens a file by path with one of four mode symbols:
+`stream-open` opens a file by path with one of five mode symbols:
 
 ```
 "notes.txt" write: stream-open
@@ -43,10 +43,56 @@ dup "hello\n" stream-write drop
 stream-close
 ```
 
-The mode symbols are `read:`, `write:`, `append:`, and `read-write:`.
-File streams support the positioning words; the buffering defaults to
-unbuffered and can be changed with `set-buffering-mode` to `line:` or
-`block:`.
+The mode symbols are `read:`, `write:`, `append:`, `read-write:`, and
+`replace:`. File streams support the positioning words; the buffering
+defaults to unbuffered and can be changed with `set-buffering-mode` to
+`line:` or `block:`.
+
+## Replacing a File
+
+`write:` truncates the target before the caller has written anything, so
+a concurrent reader can observe a zero-byte file. `replace:` closes that
+window. The bytes go to a temporary named `.1z-replace-<hex>` in the
+target's own directory, and `stream-close` renames it over the target. A
+reader sees either the old content or the new one, never a partial file.
+
+```
+"notes.txt" replace: stream-open
+dup "hello\n" stream-write drop
+stream-close
+```
+
+It composes with `with-output-stream`, so a program that redirects its
+output rather than writing a buffer gets the same guarantee.
+
+Several consequences are worth knowing before reaching for it.
+
+`stream-close` can now fail, because the rename can fail. A failure
+leaves the temporary holding the written bytes and the target untouched,
+so a caller that swallows the error keeps the temporary rather than the
+replacement. A stream abandoned without a close leaves its temporary
+behind too. The name carries a fixed prefix so a project can ignore it in
+version control, and it never ends in `.1z`, so a tree-wide format does
+not pick a leftover up as an input.
+
+The path the caller names is not the path being written until close.
+Anything watching the directory sees the temporary appear and the target
+change only at the end.
+
+The target's permissions are carried onto the replacement. Ownership and
+extended attributes are not. A target with more than one hard link raises
+`multiply-linked:`, because a rename breaks a link by construction and
+cannot carry it. A symlink target is resolved first, so the link survives
+and its pointee is what gets replaced.
+
+The replacement needs to create a directory entry, which `write:` does
+not, so a directory the process can read but not write raises
+`permission-denied:` rather than falling back to a truncating write.
+
+`write:` keeps its meaning, and callers that depend on the file's inode
+surviving the write should stay on it. An advisory lock, an open
+descriptor held elsewhere, a hard link, and a file watch all key on the
+inode rather than the name.
 
 ## Standard Streams
 

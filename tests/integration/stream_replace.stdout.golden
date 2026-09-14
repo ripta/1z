@@ -1,0 +1,23 @@
+=== replacing an existing file ===
+PASS: a replace stream renders the path the caller named
+PASS: the target holds the replacement
+=== the target is untouched until close ===
+PASS: the target keeps its old text before close
+PASS: one temporary sits beside the target
+PASS: the temporary carries the prefix .gitignore matches
+PASS: the rename lands at close
+PASS: the temporary is gone after close
+=== a target that does not exist ===
+PASS: a missing target is created
+=== permissions are carried ===
+PASS: the replacement carries the target's mode
+=== a symlink target is resolved ===
+PASS: the symlink survives the replacement
+PASS: the pointed-to file holds the replacement
+=== a multiply-linked target is refused ===
+PASS: ln creates a second link
+PASS: a rename cannot carry a hard link, so the open is refused
+PASS: the refused target is unchanged
+=== a read-only directory is refused ===
+PASS: a replacement needs to create a directory entry, so it is refused
+All replace: tests complete!

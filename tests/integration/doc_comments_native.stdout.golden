@@ -35,7 +35,7 @@ Execute try quotation; if error, run recover quotation with error on stack.
 recover ( try-quot recover-quot: ( error -- ..a ) -- ) \native
 
 Stack: [ ]
-Open a file stream with mode (read:, write:, append:, read-write:).
+Open a file stream with mode (read:, write:, append:, read-write:, replace:). A replace: stream writes to a temporary beside the target and renames it over the target at close.
 stream-open ( path mode -- stream ) \native
 
 Stack: [ ]

@@ -32,6 +32,7 @@ pub const InterpreterError = error{
     ClosedStream,
     PermissionDenied,
     NotSeekable,
+    MultiplyLinked,
     // Resource error types
     UseAfterClose,
     // FFI error types

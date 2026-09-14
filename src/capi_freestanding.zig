@@ -17,6 +17,7 @@ const StreamMode = enum {
     write,
     append,
     read_write,
+    replace,
 };
 
 const BufferingMode = enum {

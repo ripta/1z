@@ -792,6 +792,7 @@ pub const StreamMode = enum {
     write,
     append,
     read_write,
+    replace,
 
     pub fn toString(self: StreamMode) []const u8 {
         return switch (self) {
@@ -799,6 +800,7 @@ pub const StreamMode = enum {
             .write => "write",
             .append => "append",
             .read_write => "read-write",
+            .replace => "replace",
         };
     }
 };

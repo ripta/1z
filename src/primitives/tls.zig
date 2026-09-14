@@ -313,6 +313,13 @@ fn nativeTlsUpgrade(ctx: *Context) anyerror!void {
         return error.IOFailed;
     }
 
+    // Closing the wrapper closes the inner stream directly, so `stream-close` never reaches the
+    // rename a replace: stream owes its target.
+    if (stream.mode == .replace) {
+        helpers.setErrorContext(ctx, "a replace: stream cannot be upgraded to TLS", .{});
+        return error.IOFailed;
+    }
+
     const alloc = ctx.arena.allocator();
     const fd = stream.fd;
 

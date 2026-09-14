@@ -5,3 +5,4 @@
 /zig-out
 *.aot
 *.wasm
+.1z-replace-*

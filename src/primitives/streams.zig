@@ -48,8 +48,8 @@ pub const primitives = [_]Primitive{
     .{ .name = "stdin", .stack_effect = "-- stream", .doc = "Push standard input stream.", .func = nativeStdin, .capability = .io },
     .{ .name = "stdout", .stack_effect = "-- stream", .doc = "Push standard output stream.", .func = nativeStdout, .capability = .io },
     .{ .name = "stderr", .stack_effect = "-- stream", .doc = "Push standard error stream.", .func = nativeStderr, .capability = .io },
-    .{ .name = "stream-open", .stack_effect = "path mode -- stream", .doc = "Open a file stream with mode (read:, write:, append:, read-write:).", .func = nativeStreamOpen, .capability = .io_fs },
-    .{ .name = "stream-close", .stack_effect = "stream --", .doc = "Close a stream.", .func = nativeStreamClose, .capability = .io },
+    .{ .name = "stream-open", .stack_effect = "path mode -- stream", .doc = "Open a file stream with mode (read:, write:, append:, read-write:, replace:). A replace: stream writes to a temporary beside the target and renames it over the target at close.", .func = nativeStreamOpen, .capability = .io_fs },
+    .{ .name = "stream-close", .stack_effect = "stream --", .doc = "Close a stream. On a replace: stream this is also where the rename onto the target happens, so it can fail.", .func = nativeStreamClose, .capability = .io },
     .{ .name = "stream-write", .stack_effect = "stream bytes -- n", .doc = "Write bytes to stream, return count written.", .func = nativeStreamWrite, .capability = .io },
     .{ .name = "stream-flush", .stack_effect = "stream --", .doc = "Flush stream buffer.", .func = nativeStreamFlush, .capability = .io },
     .{ .name = "stream-read", .stack_effect = "stream n -- bytes", .doc = "Read up to n bytes from stream. A single call may return fewer than n bytes for reasons other than EOF (a short pipe wake, a syscall returning early); EOF is signaled by a return of zero bytes. Callers that need exactly n bytes should loop, or use stream-read(exact) which loops until n bytes or EOF.", .func = nativeStreamRead, .capability = .io },
@@ -516,6 +516,134 @@ pub fn nativeStderr(ctx: *Context) anyerror!void {
 // Stream open/close
 // =============================================================================
 
+/// Leading characters of the temporary a `replace:` stream writes to, followed by sixteen hex
+/// digits. It must not end in `.1z`: the formatter's own sweep is `find . -name '*.1z'`, and a
+/// temporary matching that would be handed back to the formatter as an input. The dot makes a
+/// leftover from an abandoned stream ignorable through the `.1z-replace-*` entry in `.gitignore`.
+const replace_temp_prefix = ".1z-replace-";
+
+/// Where a `replace:` stream's bytes are going. The fd is open on `temp_path`; `target_path` is
+/// what the rename at close moves it onto, with symlinks already resolved.
+///
+/// Both strings and this struct live on the same arena as the `Stream` itself, so a stream
+/// abandoned without a close leaks nothing. That differs from `MemBuffer` and `DuplexState`,
+/// which are GPA-backed because their vtable close frees them. This one has no such close. The
+/// rename has to be able to raise, and a vtable close returns void, so it lives in
+/// `nativeStreamClose` instead.
+const ReplaceTarget = struct {
+    target_path: []const u8,
+    temp_path: []const u8,
+};
+
+const OpenedReplacement = struct {
+    file: std.fs.File,
+    target: *ReplaceTarget,
+};
+
+/// Create the exclusive temporary a `replace:` stream writes to, beside the file the rename will
+/// replace.
+///
+/// An existing target is resolved through symlinks first, so a link survives the replacement the
+/// way it survives a `write:` through it, and the target's mode is carried onto the temporary.
+/// Two shapes are refused at the door rather than failing confusingly at the rename: a directory,
+/// and a target with more than one hard link, which a rename breaks by construction and cannot
+/// carry.
+fn openReplacementTemp(ctx: *Context, path: []const u8, alloc: std.mem.Allocator) !OpenedReplacement {
+    var resolved_buf: [std.fs.max_path_bytes]u8 = undefined;
+    var target = path;
+    var carried_mode: ?std.fs.File.Mode = null;
+
+    if (std.fs.cwd().realpath(path, &resolved_buf)) |resolved| {
+        // The tree's other stat sites use `statFile`, whose `File.Stat` carries no link count.
+        const stat = std.posix.fstatat(std.fs.cwd().fd, resolved, 0) catch |err| {
+            helpers.setErrorContext(ctx, "stream-open replace: {s}", .{@errorName(err)});
+            return mapFileOpenError(err);
+        };
+
+        if (std.posix.S.ISDIR(@intCast(stat.mode))) {
+            helpers.setErrorContext(ctx, "stream-open replace: '{s}' is a directory", .{path});
+            return error.IOFailed;
+        }
+        if (stat.nlink > 1) {
+            helpers.setErrorContext(
+                ctx,
+                "stream-open replace: '{s}' has {d} hard links, which a replacement cannot carry",
+                .{ path, stat.nlink },
+            );
+            return error.MultiplyLinked;
+        }
+
+        carried_mode = @intCast(stat.mode & 0o7777);
+        target = resolved;
+    } else |err| switch (err) {
+        error.FileNotFound => {},
+        else => {
+            helpers.setErrorContext(ctx, "stream-open replace: {s}", .{@errorName(err)});
+            return mapFileOpenError(err);
+        },
+    }
+
+    // `target` is borrowed either way, from the stack buffer above or from the popped path value
+    // the caller releases on return, and the state outlives both.
+    const target_path = alloc.dupe(u8, target) catch return error.OutOfMemory;
+
+    // Taken ahead of the create, so no allocation can fail once the temporary exists on disk.
+    const state = alloc.create(ReplaceTarget) catch return error.OutOfMemory;
+
+    const dir_path = std.fs.path.dirname(target_path);
+    const mode = carried_mode orelse std.fs.File.default_mode;
+
+    // Exclusive creation is what closes the collision between two concurrent runs. A
+    // unique-looking name does not. Retrying on a taken name mirrors `std.fs.AtomicFile.init`.
+    const file, const temp_path = while (true) {
+        var name_buf: [replace_temp_prefix.len + 16]u8 = undefined;
+        const hex = std.fmt.hex(std.crypto.random.int(u64));
+        const temp_name = std.fmt.bufPrint(&name_buf, "{s}{s}", .{ replace_temp_prefix, &hex }) catch unreachable;
+
+        const candidate = if (dir_path) |dir|
+            std.fs.path.join(alloc, &.{ dir, temp_name }) catch return error.OutOfMemory
+        else
+            alloc.dupe(u8, temp_name) catch return error.OutOfMemory;
+
+        const opened = std.fs.cwd().createFile(candidate, .{ .mode = mode, .exclusive = true }) catch |err| switch (err) {
+            error.PathAlreadyExists => continue,
+            else => {
+                helpers.setErrorContext(ctx, "stream-open replace: {s}", .{@errorName(err)});
+                return mapFileCreateError(err);
+            },
+        };
+        break .{ opened, candidate };
+    };
+
+    // `createFile` applies the umask, which would silently drop a bit the target had. A target
+    // that did not exist has nothing to carry, and there the umask is the right answer.
+    if (carried_mode) |exact| {
+        std.posix.fchmod(file.handle, exact) catch |err| {
+            file.close();
+            std.fs.cwd().deleteFile(temp_path) catch {};
+            helpers.setErrorContext(ctx, "stream-open replace: carrying permissions failed: {s}", .{@errorName(err)});
+            return mapFileCreateError(err);
+        };
+    }
+
+    state.* = .{ .target_path = target_path, .temp_path = temp_path };
+    return .{ .file = file, .target = state };
+}
+
+/// Move a `replace:` stream's temporary onto its target.
+///
+/// A failure leaves the temporary holding the bytes that were written and the target untouched,
+/// so a caller that swallows the error persists the temporary rather than the replacement.
+fn finishReplacement(ctx: *Context, stream: *Stream) !void {
+    const state: *ReplaceTarget = @ptrCast(@alignCast(stream.impl.?));
+    stream.impl = null;
+
+    std.fs.cwd().rename(state.temp_path, state.target_path) catch |err| {
+        helpers.setErrorContext(ctx, "stream-close: replacing '{s}' failed: {s}", .{ state.target_path, @errorName(err) });
+        return mapFileCreateError(err);
+    };
+}
+
 /// stream-open ( path mode -- stream )
 pub fn nativeStreamOpen(ctx: *Context) anyerror!void {
     if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "stream-open");
@@ -537,10 +665,14 @@ pub fn nativeStreamOpen(ctx: *Context) anyerror!void {
         .append
     else if (std.mem.eql(u8, mode_sym, "read-write"))
         .read_write
+    else if (std.mem.eql(u8, mode_sym, "replace"))
+        .replace
     else {
-        helpers.setErrorContext(ctx, "stream-open mode must be read:, write:, append:, or read-write:, got {s}:", .{mode_sym});
+        helpers.setErrorContext(ctx, "stream-open mode must be read:, write:, append:, read-write:, or replace:, got {s}:", .{mode_sym});
         return error.TypeMismatch;
     };
+
+    var replace_target: ?*ReplaceTarget = null;
 
     // Open file based on mode
     const file = switch (mode) {
@@ -575,12 +707,20 @@ pub fn nativeStreamOpen(ctx: *Context) anyerror!void {
                 return mapFileOpenError(err);
             };
         },
+        .replace => blk: {
+            const opened = try openReplacementTemp(ctx, path, alloc);
+            replace_target = opened.target;
+            break :blk opened.file;
+        },
     };
 
     // Create stream object
     const stream = alloc.create(Stream) catch return error.OutOfMemory;
+    // A replace: stream's name stays the path the caller asked for, so `inspect` and every error
+    // message name the target rather than the temporary its fd is actually on.
     const name_copy = alloc.dupe(u8, path) catch return error.OutOfMemory;
     stream.* = createFileStream(file.handle, mode, name_copy);
+    stream.impl = replace_target;
     try ctx.stack.push(.{ .stream = stream });
 }
 
@@ -591,6 +731,14 @@ pub fn nativeStreamClose(ctx: *Context) anyerror!void {
 
     stream.vtable.close(stream);
     stream.closed = true;
+
+    // The vtable test is not redundant with the mode test. `tls-upgrade` copies its inner
+    // stream's mode onto a wrapper whose `impl` holds TLS state, so a mode-only test would read
+    // that state as a ReplaceTarget. Only `nativeStreamOpen` builds a replace: stream, and it
+    // always builds it on `file_vtable`.
+    if (stream.mode == .replace and stream.vtable == &file_vtable) {
+        try finishReplacement(ctx, stream);
+    }
 }
 
 // =============================================================================

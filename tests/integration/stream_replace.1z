@@ -1,0 +1,130 @@
+\ Integration tests for the replace: stream mode
+
+use "testing" ;
+use "os/fs" ;
+use "os/path" ;
+use "process" ;
+
+(write-file): ( path: string text: string -- ) [
+  wf-text: swap ;
+  write: stream-open
+  dup wf-text stream-write drop
+  stream-close
+] ;
+
+(replace-file): ( path: string text: string -- ) [
+  rf-text: swap ;
+  replace: stream-open
+  dup rf-text stream-write drop
+  stream-close
+] ;
+
+(read-file): ( path: string -- string ) [
+  read: stream-open dup stream-read-all swap stream-close bytes>
+] ;
+
+\\ Qualified through the wrapper, because `os/fs` overrides the bare `file-info` with its type word.
+(permissions): ( path: string -- fixnum ) [ <file-info> unmake-file-info permissions>> ] ;
+
+"replacing an existing file" test-section
+[
+  basic-dir: swap ;
+  basic-path: basic-dir "target.txt" path-join ;
+
+  basic-path "old text" (write-file)
+  basic-path replace: stream-open
+  dup inspect "<stream " basic-path #append " replace>" #append
+  "a replace stream renders the path the caller named" assert=
+  dup "new text" stream-write drop
+  stream-close
+  basic-path (read-file) "new text" "the target holds the replacement" assert=
+] using-temp-directory
+
+"the target is untouched until close" test-section
+[
+  hold-dir: swap ;
+  hold-path: hold-dir "hold.txt" path-join ;
+  hold-path "old text" (write-file)
+  hold-stream: hold-path replace: stream-open ;
+
+  hold-stream "new text" stream-write drop
+  hold-path (read-file) "old text" "the target keeps its old text before close" assert=
+
+  hold-dir list-directory [ name>> "hold.txt" = not ] #filter #collect
+  dup #len 1 "one temporary sits beside the target" assert=
+  #first name>> ".1z-replace-" #starts-with?
+  "the temporary carries the prefix .gitignore matches" assert-true
+
+  hold-stream stream-close
+  hold-path (read-file) "new text" "the rename lands at close" assert=
+  hold-dir list-directory #len 1 "the temporary is gone after close" assert=
+] using-temp-directory
+
+"a target that does not exist" test-section
+[
+  fresh-dir: swap ;
+  fresh-path: fresh-dir "fresh.txt" path-join ;
+
+  fresh-path "written" (replace-file)
+  fresh-path (read-file) "written" "a missing target is created" assert=
+] using-temp-directory
+
+"permissions are carried" test-section
+[
+  perm-dir: swap ;
+  perm-path: perm-dir "perm.txt" path-join ;
+
+  \ Group-write is what makes this bite: the ordinary 022 umask clears it, so a replacement that
+  \ only passed the mode to the create would come back 0o640.
+  perm-path "old text" (write-file)
+  perm-path 0o660 set-permissions
+  perm-path "new text" (replace-file)
+  perm-path (permissions) 0o660 "the replacement carries the target's mode" assert=
+] using-temp-directory
+
+"a symlink target is resolved" test-section
+[
+  sym-dir:  swap ;
+  sym-real: sym-dir "real.txt" path-join ;
+  sym-link: sym-dir "link.txt" path-join ;
+
+  sym-real "old text" (write-file)
+  sym-real sym-link create-symlink
+  sym-link "new text" (replace-file)
+  sym-link symlink-exists? "the symlink survives the replacement" assert-true
+  sym-real (read-file) "new text" "the pointed-to file holds the replacement" assert=
+] using-temp-directory
+
+"a multiply-linked target is refused" test-section
+[
+  link-dir:   swap ;
+  link-path:  link-dir "linked.txt" path-join ;
+  link-alias: link-dir "alias.txt" path-join ;
+
+  link-path "old text" (write-file)
+  "/bin/ln" link-path link-alias 3 array-n <stdio-opts> run
+  exit-code>> 0 "ln creates a second link" assert=
+
+  [ link-path replace: stream-open ] multiply-linked:
+  "a rename cannot carry a hard link, so the open is refused" assert-error-type
+  link-path (read-file) "old text" "the refused target is unchanged" assert=
+] using-temp-directory
+
+"a read-only directory is refused" test-section
+[
+  ro-dir:  swap ;
+  ro-sub:  ro-dir "locked" path-join ;
+  ro-path: ro-sub "inside.txt" path-join ;
+
+  ro-sub create-directory
+  ro-path "old text" (write-file)
+  ro-sub 0o555 set-permissions
+
+  [ ro-path replace: stream-open ] permission-denied:
+  "a replacement needs to create a directory entry, so it is refused" assert-error-type
+
+  \ Restored so the temporary directory's teardown can still remove it.
+  ro-sub 0o755 set-permissions
+] using-temp-directory
+
+"All replace: tests complete!" print-line
