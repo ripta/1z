@@ -413,6 +413,7 @@ pub fn valueTypeName(val: Value) []const u8 {
         .protocol_descriptor => "constraint",
         .constraint_combinator => "constraint",
         .sandbox_spec => "sandbox-spec",
+        .once_cell => "once-cell",
         .unit => "unit",
     };
 }
@@ -491,6 +492,7 @@ pub fn formatValueBrief(allocator: Allocator, val: Value, max_len: usize) ![]con
             .{cc.combinator_id},
         ),
         .sandbox_spec => allocator.dupe(u8, "<sandbox-spec>"),
+        .once_cell => allocator.dupe(u8, "<once-cell>"),
         .unit => allocator.dupe(u8, "unit"),
     };
 }

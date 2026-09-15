@@ -1,0 +1,8 @@
+=== bracket-less binding ===
+Stack: [ ]
+Stack: [ [ eager: <marker:once> 5 ; ] ]
+PASS: once on a bracket-less binding is rejected
+Stack: [ ]
+Stack: [ [ declared-eager: (  -- string ) <marker:once> "ready" ; ] ]
+PASS: the binding is refused before the effect is read
+Stack: [ ]

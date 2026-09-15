@@ -1072,7 +1072,7 @@ pub fn deepCopyValue(val: Value, alloc: Allocator, longlived: Allocator) DeepCop
         // safe. The parse-time variants (marker, struct_type, sandbox_spec, constraint_combinator)
         // are main-context-owned in practice; `eval-string` inside a task can produce arena-owned
         // ones that this tag-based check cannot distinguish, a documented limitation.
-        .module, .marker, .struct_type, .task, .channel, .type_val, .type_descriptor, .protocol_descriptor, .constraint_combinator, .sandbox_spec => val,
+        .module, .marker, .struct_type, .task, .channel, .type_val, .type_descriptor, .protocol_descriptor, .constraint_combinator, .sandbox_spec, .once_cell => val,
 
         // Arena-owned reference types die with the sending task's arena. A new variant must be
         // classified here deliberately; never default a reference type to pass-through.

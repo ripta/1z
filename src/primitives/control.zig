@@ -18,6 +18,7 @@ const container_backing = @import("../container_backing.zig");
 const MemoryLimitAllocator = @import("../memory_limit.zig").MemoryLimitAllocator;
 
 const markers_mod = @import("markers.zig");
+const may_define = @import("../may_define.zig");
 
 const hooks = @import("hooks.zig");
 const introspect = @import("introspect.zig");
@@ -28,6 +29,55 @@ const Primitive = @import("types.zig").Primitive;
 const popQuotation = helpers.popQuotation;
 const popBoolean = helpers.popBoolean;
 const popSymbol = helpers.popSymbol;
+
+/// The shape a `once` word's declared effect must have: nothing in, one concrete value out.
+///
+/// The bottom output `( -- * )` is the one other shape the count alone admits, since it is a
+/// single output named `*`. An alternative like `( -- a | f )` stores the `|` as an output
+/// parameter of its own, so the count already rejects it; the check below catches only the
+/// degenerate `( -- | )`.
+fn isOnceEffectShape(effect: StackEffect) bool {
+    if (effect.inputs.len != 0) return false;
+    if (effect.outputs.len != 1) return false;
+    if (effect.outputs[0].is_row_variable) return false;
+    if (effect.isBottomOutput()) return false;
+    if (effect.hasAlternativeOutput()) return false;
+    return true;
+}
+
+/// Move a `once` word's source body into a cell and return the two-instruction guard that stands
+/// in for it: push the cell, call the native that forces it.
+///
+/// `alloc` is the definition's own allocator, which a module load redirects to the root, so the
+/// cell's lifetime is the root context's and a `reload` gets a fresh one.
+fn installOnceCell(
+    ctx: *Context,
+    alloc: std.mem.Allocator,
+    body: []const Instruction,
+    owner: ?*const value_mod.Closure,
+) ![]const Instruction {
+    const cell = try alloc.create(value_mod.OnceCell);
+    cell.* = .{
+        .body = .{ .instructions = body },
+        .owner = owner,
+        .may_define = may_define.bodyCallsDefiningNative(body),
+    };
+    try ctx.registerOnceCell(cell);
+
+    // The definition no longer stores the source body, so the ownership transfer
+    // `defineWordLocked` would have performed for it happens here instead. Its captured
+    // container literals are reachable only through the cell now.
+    ctx.unregisterQuotationContainerLiterals(body);
+    try ctx.registerCompoundBody(body);
+
+    const line = if (body.len > 0) body[0].line else 0;
+    const column = if (body.len > 0) body[0].column else 0;
+
+    const guard = try alloc.alloc(Instruction, 2);
+    guard[0] = .{ .op = .{ .push_literal = .{ .once_cell = cell } }, .line = line, .column = column };
+    guard[1] = .{ .op = .{ .call_word = "native.force-once" }, .line = line, .column = column };
+    return guard;
+}
 
 /// Check if a value is a definition descriptor, which is a hash or mutable-map with a `define:` quotation.
 /// Used by `;` to recognize type-defining syntaxes like `struct{ ... }` or `virtual{ ... }`.
@@ -612,7 +662,7 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
                 // branch stores the bound value directly and allocates no instructions at all,
                 // so containsNonTailSelfCall below is only ever meaningful for the
                 // .quotation/.closure case.
-                const action: WordDefinition.Action = switch (top_val) {
+                var action: WordDefinition.Action = switch (top_val) {
                     .quotation => |quot| .{ .compound = quot.instructions },
                     // A closure is a quotation literal promoted at push time because it closed over
                     // an outer local, or a curry/compose product (see `Context.captureQuotationScope`
@@ -686,6 +736,37 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
                         helpers.setErrorHint(ctx, "add the 'stack-recursive' marker if intentional");
                         return error.NonTailRecursion;
                     }
+                }
+
+                const has_once = for (collected_markers.items) |mk| {
+                    if (markers_mod.isOnceMarker(mk)) break true;
+                } else false;
+
+                if (has_once) {
+                    if (action != .compound) {
+                        helpers.setErrorContext(ctx, "'once' needs a quotation body; a bracket-less binding is already computed once at module load", .{});
+                        return error.InvalidOnceDefinition;
+                    }
+
+                    if (stack_effect_val) |eff| {
+                        if (!isOnceEffectShape(eff.*)) {
+                            var buf: [256]u8 = undefined;
+                            var fbs = std.io.fixedBufferStream(&buf);
+                            eff.write(fbs.writer()) catch {};
+                            helpers.setErrorContext(
+                                ctx,
+                                "a 'once' word must declare ( -- value ); '{s}' declares {s}",
+                                .{ name, fbs.getWritten() },
+                            );
+                            return error.InvalidOnceDefinition;
+                        }
+                    }
+
+                    action = .{ .compound = try installOnceCell(ctx, alloc, action.compound, body_owner) };
+                    // The guard did not come out of the closure the source body did, so the
+                    // definition stops naming one. The cell carries the owner to each attempt to
+                    // force, and the closure stays alive on the teardown list either way.
+                    body_owner = null;
                 }
 
                 const interned = try ctx.defineBinding(name, WordDefinition{
@@ -866,6 +947,124 @@ test "fireWordDefinedHook still builds and fires WordInfo when word-defined-hook
     try std.testing.expect(info == .array);
     try std.testing.expect(info.array.items[0] == .string);
     try std.testing.expectEqualStrings("foo", info.array.items[0].string.bytes);
+}
+
+/// Define `name` through `;` with the `once` marker, an optional declared effect, and `body`.
+fn defineOnce(
+    ctx: *Context,
+    name: []const u8,
+    effect: ?StackEffect,
+    body: []const Instruction,
+) anyerror!void {
+    try ctx.stack.push(value_mod.symbolValue(name));
+    if (effect) |eff| try ctx.stack.push(.{ .stack_effect = eff });
+    try ctx.stack.push(.{ .marker = @constCast(&markers_mod.once_marker) });
+    try ctx.stack.push(.{ .quotation = .{ .instructions = body } });
+    try nativeSemicolon(ctx);
+}
+
+fn oneOutputParam(name: []const u8) [1]stack_effect_mod.StackEffectParam {
+    return [1]stack_effect_mod.StackEffectParam{.{ .name = name }};
+}
+
+test "semicolon moves a once word's body into a cell and stores the guard in its place" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    // A `;` at the body's top level, so the cell records that forcing needs a lexical frame.
+    const source = [_]Instruction{
+        .{ .op = .{ .push_literal = value_mod.symbolValue("i") }, .line = 3 },
+        .{ .op = .{ .push_literal = .{ .fixnum = 4 } }, .line = 3 },
+        .{ .op = .{ .call_word = ";" }, .line = 3 },
+        .{ .op = .{ .call_word = "i" }, .line = 4 },
+    };
+    const outputs = oneOutputParam("v");
+    try defineOnce(&ctx, "held", .{ .inputs = &.{}, .outputs = &outputs }, &source);
+
+    const word = ctx.lookupWord("held") orelse return error.TestExpectedWord;
+    const stored = switch (word.action) {
+        .compound => |instrs| instrs,
+        else => return error.TestExpectedCompound,
+    };
+
+    try std.testing.expectEqual(@as(usize, 2), stored.len);
+    try std.testing.expect(stored[0].op == .push_literal);
+    try std.testing.expect(stored[0].op.push_literal == .once_cell);
+    try std.testing.expectEqualStrings("native.force-once", stored[1].op.call_word);
+    // The guard reports the source body's first line, so a frame it pushes names the definition.
+    try std.testing.expectEqual(@as(usize, 3), stored[0].line);
+
+    const cell = stored[0].op.push_literal.once_cell;
+    try std.testing.expectEqual(source.len, cell.body.instructions.len);
+    try std.testing.expectEqual(@as(?*const value_mod.Closure, null), cell.owner);
+    try std.testing.expect(cell.may_define);
+    try std.testing.expectEqual(value_mod.OnceCell.State.cold, cell.state);
+
+    // The declared effect stays on the definition, so help and word-info report what was written.
+    const effect = word.stack_effect orelse return error.TestExpectedEffect;
+    try std.testing.expectEqual(@as(usize, 0), effect.inputs.len);
+    try std.testing.expectEqual(@as(usize, 1), effect.outputs.len);
+}
+
+test "semicolon rejects a once word whose declared effect is not ( -- value )" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const body = [_]Instruction{.{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 0 }};
+
+    const inputs = oneOutputParam("a");
+    const outputs = oneOutputParam("b");
+    try std.testing.expectError(
+        error.InvalidOnceDefinition,
+        defineOnce(&ctx, "takes-input", .{ .inputs = &inputs, .outputs = &outputs }, &body),
+    );
+    try std.testing.expectEqualStrings(
+        "a 'once' word must declare ( -- value ); 'takes-input' declares ( a -- b )",
+        ctx.pending_error_message.?,
+    );
+    ctx.stack.clear();
+
+    try std.testing.expectError(
+        error.InvalidOnceDefinition,
+        defineOnce(&ctx, "no-output", .{ .inputs = &.{}, .outputs = &.{} }, &body),
+    );
+    ctx.stack.clear();
+
+    const bottom = [1]stack_effect_mod.StackEffectParam{.{ .name = "*" }};
+    try std.testing.expectError(
+        error.InvalidOnceDefinition,
+        defineOnce(&ctx, "bottom", .{ .inputs = &.{}, .outputs = &bottom }, &body),
+    );
+    ctx.stack.clear();
+
+    const row = [1]stack_effect_mod.StackEffectParam{.{ .name = "..a", .is_row_variable = true }};
+    try std.testing.expectError(
+        error.InvalidOnceDefinition,
+        defineOnce(&ctx, "row", .{ .inputs = &row, .outputs = &outputs }, &body),
+    );
+    ctx.stack.clear();
+
+    // The accepted shape defines, so the rejections above are the marker's rule rather than a
+    // blanket refusal.
+    const ok = oneOutputParam("v");
+    try defineOnce(&ctx, "fine", .{ .inputs = &.{}, .outputs = &ok }, &body);
+    try std.testing.expect(ctx.lookupWord("fine") != null);
+}
+
+test "semicolon rejects once on a bracket-less binding" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    try ctx.stack.push(value_mod.symbolValue("eager"));
+    try ctx.stack.push(.{ .marker = @constCast(&markers_mod.once_marker) });
+    try ctx.stack.push(.{ .fixnum = 5 });
+
+    try std.testing.expectError(error.InvalidOnceDefinition, nativeSemicolon(&ctx));
+    try std.testing.expectEqualStrings(
+        "'once' needs a quotation body; a bracket-less binding is already computed once at module load",
+        ctx.pending_error_message.?,
+    );
+    try std.testing.expect(ctx.lookupWord("eager") == null);
 }
 
 test "semicolon binds a non-refcounted plain value as .literal, with no instruction allocation" {

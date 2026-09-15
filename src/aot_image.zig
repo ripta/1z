@@ -69,6 +69,13 @@ pub const BlobReason = enum {
     /// (e.g., `module`, `stream`, `task`). Surfaces as an invariant
     /// violation in the dump output but does not panic.
     unexpected_variant,
+    /// A `once_cell` literal. The body is structural but the forced value and
+    /// the state flag beside it are runtime state.
+    ///
+    /// Appended rather than grouped with the other literal reasons: the ordinal is what the
+    /// emitted C carries, so a new reason goes on the end and leaves the existing numbering
+    /// alone. Only `none` is positional, and `worseReason` is what reads it.
+    once_cell_runtime_state,
 };
 
 /// Worst-case combine: structural is the unit, blob dominates.
@@ -164,6 +171,7 @@ pub fn classifyValue(val: Value) Classification {
         },
         .byte_array, .set => Classification.blobOf(.dynamic_container),
         .parameter => Classification.blobOf(.parameter_runtime_state),
+        .once_cell => Classification.blobOf(.once_cell_runtime_state),
         .bignum => Classification.blobOf(.bignum),
         .template => Classification.blobOf(.template),
 
@@ -502,6 +510,7 @@ fn blobReasonLabel(reason: BlobReason) []const u8 {
         .bignum => "bignum literal",
         .template => "template literal",
         .unexpected_variant => "unexpected variant",
+        .once_cell_runtime_state => "once-cell runtime state",
     };
 }
 

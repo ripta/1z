@@ -2088,6 +2088,7 @@ pub const Context = struct {
         // The process-global signal handler table owns its entries; the root releases them here,
         // before the allocators behind the handler bodies go away.
         if (self.parent_context == null) signal.releaseUserHandlers();
+        self.dictionary.releaseOnceCellValues();
         self.dictionary.releaseRetainedValues();
         self.dictionary.walkContainerReleaseList();
         self.walkContainerReleaseList();
@@ -2279,6 +2280,12 @@ pub const Context = struct {
     /// durable-state target's dictionary.
     pub fn retainValueForTeardown(self: *Context, val: Value) !void {
         try self.stateTarget().dictionary.retainValueForTeardown(val);
+    }
+
+    /// Record a `once` word's cell on the durable-state target's dictionary, so the value it
+    /// publishes is released at that context's teardown.
+    pub fn registerOnceCell(self: *Context, cell: *value_mod.OnceCell) !void {
+        try self.stateTarget().dictionary.registerOnceCell(cell);
     }
 
     /// Record a compound body's container literals on the durable-state

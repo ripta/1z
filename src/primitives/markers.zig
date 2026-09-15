@@ -36,6 +36,16 @@ pub const generic_marker: Marker = .{ .name = "generic" };
 ///             contentts and the word definition itself.
 pub const const_marker: Marker = .{ .name = "const" };
 
+/// Well-known marker for compute-once word definitions. The body runs on the first reference and
+/// every later reference reuses what it produced.
+///
+/// The guarantee is that the body *completes* at most once. A body that throws leaves the cell
+/// cold, so the next call runs it again.
+///
+/// A mutable result is shared by every reader, the same way a bracket-less top-level binding
+/// shares one.
+pub const once_marker: Marker = .{ .name = "once" };
+
 /// Well-known marker for branch combinators.
 /// Indicates the word selects between quotation arguments based on a condition.
 pub const branch_combinator_marker: Marker = .{ .name = "branch-combinator" };
@@ -261,6 +271,7 @@ pub const primitives = [_]Primitive{
     .{ .name = "mutable", .stack_effect = "-- marker", .doc = "Push the well-known mutable marker.", .func = nativeMutableMarker, .parse_time = true },
     .{ .name = "generic", .stack_effect = "-- marker", .doc = "Push the well-known generic marker.", .func = nativeGenericMarker, .parse_time = true },
     .{ .name = "const", .stack_effect = "-- marker", .doc = "Push the well-known const marker.", .func = nativeConstMarker, .parse_time = true },
+    .{ .name = "once", .stack_effect = "-- marker", .doc = "Push the well-known once marker. The word's body completes at most once and every later reference reuses its value.", .func = nativeOnceMarker, .parse_time = true },
     .{ .name = "branch-combinator", .stack_effect = "-- marker", .doc = "Push the well-known branch-combinator marker.", .func = nativeBranchCombinatorMarker, .parse_time = true },
     .{ .name = "loop-combinator", .stack_effect = "-- marker", .doc = "Push the well-known loop-combinator marker.", .func = nativeLoopCombinatorMarker, .parse_time = true },
     .{ .name = "partial-dispatch", .stack_effect = "-- marker", .doc = "Push the well-known partial-dispatch marker. Indicates open, non-exhaustive branch dispatch.", .func = nativePartialDispatchMarker, .parse_time = true },
@@ -318,6 +329,11 @@ pub fn nativeGenericMarker(ctx: *Context) anyerror!void {
 /// const ( -- marker )
 pub fn nativeConstMarker(ctx: *Context) anyerror!void {
     try ctx.stack.push(.{ .marker = @constCast(&const_marker) });
+}
+
+/// once ( -- marker )
+pub fn nativeOnceMarker(ctx: *Context) anyerror!void {
+    try ctx.stack.push(.{ .marker = @constCast(&once_marker) });
 }
 
 /// branch-combinator ( -- marker )
@@ -430,6 +446,11 @@ pub fn isConstMarker(mk: *const Marker) bool {
     return mk == &const_marker;
 }
 
+/// Check if a marker is the well-known once marker
+pub fn isOnceMarker(mk: *const Marker) bool {
+    return mk == &once_marker;
+}
+
 /// Check if a marker is the well-known branch-combinator marker
 pub fn isBranchCombinatorMarker(mk: *const Marker) bool {
     return mk == &branch_combinator_marker;
@@ -527,6 +548,7 @@ pub fn lookupWellKnownMarker(name: []const u8) ?*Marker {
     if (std.mem.eql(u8, name, "mutable")) return @constCast(&mutable_marker);
     if (std.mem.eql(u8, name, "generic")) return @constCast(&generic_marker);
     if (std.mem.eql(u8, name, "const")) return @constCast(&const_marker);
+    if (std.mem.eql(u8, name, "once")) return @constCast(&once_marker);
     if (std.mem.eql(u8, name, "branch-combinator")) return @constCast(&branch_combinator_marker);
     if (std.mem.eql(u8, name, "loop-combinator")) return @constCast(&loop_combinator_marker);
     if (std.mem.eql(u8, name, "partial-dispatch")) return @constCast(&partial_dispatch_marker);

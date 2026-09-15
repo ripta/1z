@@ -1,0 +1,30 @@
+Stack: [ ]
+Stack: [ ]
+=== compute-once ===
+Stack: [ ]
+PASS: nothing runs until the word is referenced
+Stack: [ ]
+PASS: the first reference computes
+Stack: [ ]
+PASS: the second reference reuses
+Stack: [ ]
+PASS: the third reference reuses
+Stack: [ ]
+PASS: the body ran once across three references
+Stack: [ ]
+=== refcounted result ===
+Stack: [ ]
+Stack: [ ]
+PASS: the first reference computes
+Stack: [ ]
+PASS: the second reference reuses
+Stack: [ ]
+PASS: the third reference reuses
+Stack: [ ]
+=== undeclared body ===
+Stack: [ ]
+Stack: [ ]
+PASS: an undeclared once word computes
+Stack: [ ]
+PASS: and reuses
+Stack: [ ]

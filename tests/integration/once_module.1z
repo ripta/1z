@@ -1,0 +1,20 @@
+\ A `once` body reached through a module resolves bare words the way the word it stands in for
+\ does, and one reached from the global dictionary keeps working alongside it.
+use "testing" ;
+use "once_module_lib.1z" ;
+
+"module word" test-section
+
+scaled 40 "a module-private word resolves inside the body" assert=
+scaled 40 "and the value is reused" assert=
+body-runs 1 "the body ran once" assert=
+padded "ababab" "an imported word resolves inside the body" assert=
+padded "ababab" "and the string is reused rather than re-referenced" assert=
+squared 9 "a definition inside the body lands in a frame of its own" assert=
+squared 9 "and the value is reused" assert=
+
+"global dictionary" test-section
+
+here: ( -- fixnum ) once [ 3 4 + ] ;
+here 7 "a once word defined at the top level computes" assert=
+here 7 "and reuses" assert=

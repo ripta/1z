@@ -231,6 +231,11 @@ pub const Dictionary = struct {
     /// word's compound action. Released at teardown alongside the container
     /// release list.
     retained_values: std.ArrayListUnmanaged(Value) = .{},
+    /// Cells belonging to `once`-marked words defined against this dictionary. A forced cell
+    /// holds an owning reference to the value it published, which nothing else releases: the
+    /// cell rides a word body as a `push_literal` operand, and that walk releases containers
+    /// rather than reaching inside a cell. Walked at teardown.
+    once_cells: std.ArrayListUnmanaged(*value_mod.OnceCell) = .{},
 
     pub fn init(allocator: Allocator) Dictionary {
         return .{
@@ -251,6 +256,7 @@ pub const Dictionary = struct {
         self.retired.deinit(self.allocator);
         self.container_release_list.deinit(self.allocator);
         self.retained_values.deinit(self.allocator);
+        self.once_cells.deinit(self.allocator);
     }
 
     pub fn put(self: *Dictionary, name: []const u8, definition: WordDefinition) !void {
@@ -350,6 +356,23 @@ pub const Dictionary = struct {
             container_backing.releaseValue(v);
         }
         self.retained_values.clearRetainingCapacity();
+    }
+
+    /// Record a `once` word's cell so teardown can release whatever it published. The cell
+    /// itself belongs to an arena and is not freed here.
+    pub fn registerOnceCell(self: *Dictionary, cell: *value_mod.OnceCell) !void {
+        try self.once_cells.append(self.allocator, cell);
+    }
+
+    /// Release the published value of every registered cell, then clear the list. Runs at
+    /// teardown, before the arena holding the cells goes away.
+    pub fn releaseOnceCellValues(self: *Dictionary) void {
+        for (self.once_cells.items) |cell| {
+            if (cell.value) |v| container_backing.releaseValue(v);
+            cell.value = null;
+            cell.state = .cold;
+        }
+        self.once_cells.clearRetainingCapacity();
     }
 
     /// Release captured container literals from every registered

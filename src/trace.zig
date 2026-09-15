@@ -308,6 +308,7 @@ pub fn writeValuePreview(val: Value, writer: anytype) !void {
             .{cc.combinator_id},
         ),
         .sandbox_spec => try writer.writeAll("<sandbox-spec>"),
+        .once_cell => try writer.writeAll("<once-cell>"),
         .unit => try writer.writeAll("unit"),
     }
 }

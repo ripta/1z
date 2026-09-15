@@ -43,6 +43,7 @@ pub const dynamic_vars = @import("dynamic_vars.zig");
 pub const type_predicates = @import("type_predicates.zig");
 pub const markers = @import("markers.zig");
 pub const parse_time_marker = &markers.parse_time_marker;
+pub const once = @import("once.zig");
 pub const structs = @import("structs.zig");
 pub const env = @import("env.zig");
 pub const template = @import("template.zig");
@@ -149,6 +150,7 @@ pub const extracted_registry_entries = structs.registry_entries ++
     protocols.registry_entries ++
     introspect.registry_entries ++
     markers.registry_entries ++
+    once.registry_entries ++
     builtin_types.registry_entries ++
     type_predicates.registry_entries ++
     arithmetic.registry_entries ++

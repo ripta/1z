@@ -2,10 +2,18 @@
 \
 \ Each virtual-type wrap used to allocate its inner box on the context
 \ arena, which is never reclaimed on the main task, so these loops grew
-\ by roughly 40 bytes per iteration and exhausted the 2 MB cap set in
-\ the `.flags` sidecar partway through. The box now lives in a
-\ refcounted backing on the general allocator and frees at the drop, so
-\ the loops stay flat and print the marker.
+\ by roughly 40 bytes per iteration and exhausted the cap set in the
+\ `.flags` sidecar partway through. The box now lives in a refcounted
+\ backing on the general allocator and frees at the drop, so the loops
+\ stay flat and print the marker.
+\
+\ The cap has to clear the interpreter's own startup arena as well as
+\ the loops. That arena grows in doubling chunks, so a few hundred bytes
+\ of new startup allocation can move the startup peak by hundreds of
+\ kilobytes of slack. Raise the cap when that happens rather than
+\ reading it as a leak; what this test measures is the 1.6 MB the two
+\ loops would add, and the cap keeps catching anything over roughly ten
+\ bytes per iteration.
 
 gauge: virtual{ fixnum } ;
 

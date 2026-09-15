@@ -1,0 +1,20 @@
+\ Only the force-time depth check can prove the body left exactly one value. It runs whether or
+\ not the word declared an effect, since a declaration says what the body should do rather than
+\ what it did.
+use "testing" ;
+
+"undeclared body" test-section
+
+two: once [ 1 2 ] ;
+[ two ] stack-effect-mismatch: "a body leaving two values is rejected" assert-error-type
+[ two ] stack-effect-mismatch: "and the cell stayed cold" assert-error-type
+
+none: once [ ] ;
+[ none ] stack-effect-mismatch: "a body leaving no value is rejected" assert-error-type
+
+"declared body" test-section
+
+\ The declaration passes the definition-time shape check, so the depth check is the only thing
+\ left that can catch the body disagreeing with it.
+lies: ( -- fixnum ) once [ 1 2 ] ;
+[ lies ] stack-effect-mismatch: "a declared body leaving two values is rejected" assert-error-type

@@ -1,0 +1,22 @@
+\ A throwing body leaves the cell cold, so the guarantee is that the body completes at most once
+\ rather than runs at most once.
+use "testing" ;
+
+attempts: V{ } ;
+
+\ Fails until the third attempt, the way a `once` body whose inputs are not ready yet does.
+flaky: ( -- fixnum ) once [
+  attempts 1 #push! #len
+  dup 3 <
+  [ drop f "not ready" EUserThrown make-error throw ]
+  [ 100 * ]
+  if
+] ;
+
+"failure leaves the cell cold" test-section
+
+[ flaky ] "the first attempt throws" assert-error
+[ flaky ] "the second attempt throws, so nothing was cached" assert-error
+flaky 300 "the third attempt succeeds" assert=
+flaky 300 "and is then reused" assert=
+attempts #len 3 "the body ran once per attempt, then stopped" assert=

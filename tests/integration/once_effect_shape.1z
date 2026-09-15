@@ -1,0 +1,33 @@
+\ A `once` word's declared effect must be ( -- value ). A word taking arguments would ignore them
+\ on every call after the first, and one returning other than a single value has nothing for the
+\ cell to hold.
+use "testing" ;
+
+"rejected shapes" test-section
+
+[ takes-input: ( a -- b ) once [ drop 1 ] ; ]
+invalid-once-definition: "an input is rejected" assert-error-type
+
+[ no-output: ( -- ) once [ ] ; ]
+invalid-once-definition: "no output is rejected" assert-error-type
+
+[ two-outputs: ( -- a b ) once [ 1 2 ] ; ]
+invalid-once-definition: "two outputs are rejected" assert-error-type
+
+[ bottom-output: ( -- * ) once never-returns [ 1 ] ; ]
+invalid-once-definition: "a bottom output is rejected" assert-error-type
+
+\ `|` is an output parameter of its own, so this declares three outputs rather than one.
+[ alternative-output: ( -- a | f ) once [ 1 ] ; ]
+invalid-once-definition: "an alternative output is rejected" assert-error-type
+
+[ bare-alternative: ( -- | ) once [ 1 ] ; ]
+invalid-once-definition: "a lone alternative marker is rejected" assert-error-type
+
+[ row-input: ( ..a -- v ) once [ 1 ] ; ]
+invalid-once-definition: "a row variable is rejected" assert-error-type
+
+"accepted shape" test-section
+
+declared: ( -- fixnum ) once [ 11 ] ;
+declared 11 "( -- value ) is accepted" assert=

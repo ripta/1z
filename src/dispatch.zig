@@ -48,6 +48,7 @@ pub fn dispatchTypeName(val: Value) []const u8 {
         .protocol_descriptor => "constraint",
         .constraint_combinator => "constraint",
         .sandbox_spec => "sandbox-spec",
+        .once_cell => "once-cell",
         .unit => "unit",
     };
 }
@@ -115,6 +116,7 @@ pub fn builtinTypeName(comptime tag: std.meta.Tag(Value)) []const u8 {
         .protocol_descriptor => "constraint",
         .constraint_combinator => "constraint",
         .sandbox_spec => "sandbox-spec",
+        .once_cell => "once-cell",
         .unit => "unit",
     };
 }

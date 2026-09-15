@@ -1,0 +1,21 @@
+\ `once` is a marker, so introspection reports it with no new field. It is orthogonal to `const`:
+\ either may appear without the other, and `const` keeps refusing a redefinition.
+use "testing" ;
+
+plain: ( -- fixnum ) once [ 1 ] ;
+guarded: ( -- fixnum ) const once [ 2 ] ;
+
+"introspection" test-section
+
+"plain" word-markers [ once = ] #any t "word-markers reports once" assert=
+"guarded" word-markers [ const = ] #any t "and reports const beside it" assert=
+plain: >word-info markers>> [ once = ] #any t "markers>> reports once" assert=
+
+"const is orthogonal" test-section
+
+plain 1 "a once word without const computes" assert=
+plain: ( -- fixnum ) [ 99 ] ;
+plain 99 "and may be redefined, since only const blocks that" assert=
+
+guarded 2 "a once const word computes" assert=
+[ guarded: [ 3 ] ; ] cannot-redefine-const: "const still refuses a redefinition" assert-error-type

@@ -1,0 +1,23 @@
+=== module word ===
+Stack: [ ]
+PASS: a module-private word resolves inside the body
+Stack: [ ]
+PASS: and the value is reused
+Stack: [ ]
+PASS: the body ran once
+Stack: [ ]
+PASS: an imported word resolves inside the body
+Stack: [ ]
+PASS: and the string is reused rather than re-referenced
+Stack: [ ]
+PASS: a definition inside the body lands in a frame of its own
+Stack: [ ]
+PASS: and the value is reused
+Stack: [ ]
+=== global dictionary ===
+Stack: [ ]
+Stack: [ ]
+PASS: a once word defined at the top level computes
+Stack: [ ]
+PASS: and reuses
+Stack: [ ]

@@ -1,0 +1,28 @@
+=== rejected shapes ===
+Stack: [ ]
+Stack: [ [ takes-input: <marker:once> [ drop 1 ] ; ] ]
+PASS: an input is rejected
+Stack: [ ]
+Stack: [ [ no-output: <marker:once> [ ] ; ] ]
+PASS: no output is rejected
+Stack: [ ]
+Stack: [ [ two-outputs: <marker:once> [ 1 2 ] ; ] ]
+PASS: two outputs are rejected
+Stack: [ ]
+Stack: [ [ bottom-output: <marker:once> <marker:never-returns> [ 1 ] ; ] ]
+PASS: a bottom output is rejected
+Stack: [ ]
+Stack: [ [ alternative-output: <marker:once> [ 1 ] ; ] ]
+PASS: an alternative output is rejected
+Stack: [ ]
+Stack: [ [ bare-alternative: <marker:once> [ 1 ] ; ] ]
+PASS: a lone alternative marker is rejected
+Stack: [ ]
+Stack: [ [ row-input: <marker:once> [ 1 ] ; ] ]
+PASS: a row variable is rejected
+Stack: [ ]
+=== accepted shape ===
+Stack: [ ]
+Stack: [ ]
+PASS: ( -- value ) is accepted
+Stack: [ ]

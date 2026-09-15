@@ -41,6 +41,8 @@ pub const InterpreterError = error{
     FFITypeMismatch,
     FFICallFailed,
     FFIRangeError,
+    // Definition error types
+    InvalidOnceDefinition,
     // Recursion error types
     NonTailRecursion,
     StackOverflow,

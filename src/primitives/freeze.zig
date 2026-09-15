@@ -136,6 +136,7 @@ fn freezeCopy(ctx: *Context, val: Value) anyerror!FreezeResult {
         .protocol_descriptor,
         .constraint_combinator,
         .sandbox_spec,
+        .once_cell,
         => {
             container_backing.retainValue(val);
             return .{ .value = val, .changed = false };

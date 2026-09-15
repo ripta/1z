@@ -1,0 +1,33 @@
+\ A `once` body runs on the first reference and every later reference reuses what it produced.
+use "testing" ;
+use "strings" ;
+
+\ Counts body entries. A binding rather than a `once` word, so it is built before anything reads it.
+runs: V{ } ;
+
+answer: ( -- fixnum ) once [ runs 1 #push! drop 42 ] ;
+
+"compute-once" test-section
+
+runs #len 0 "nothing runs until the word is referenced" assert=
+answer 42 "the first reference computes" assert=
+answer 42 "the second reference reuses" assert=
+answer 42 "the third reference reuses" assert=
+runs #len 1 "the body ran once across three references" assert=
+
+"refcounted result" test-section
+
+\ A reused value must not gain a reference per read. The cell holds one of its own and the
+\ reader's stack slot holds another, so a read that retained on top of the push would leak one
+\ unit per call. That shows up as `error(gpa)` on stderr, which this test's empty golden refuses.
+greeting: ( -- string ) once [ "ab" 3 repeat ] ;
+greeting "ababab" "the first reference computes" assert=
+greeting "ababab" "the second reference reuses" assert=
+greeting "ababab" "the third reference reuses" assert=
+
+"undeclared body" test-section
+
+\ The force-time depth check covers a body whose word declares no effect.
+bare: once [ 7 ] ;
+bare 7 "an undeclared once word computes" assert=
+bare 7 "and reuses" assert=

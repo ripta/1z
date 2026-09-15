@@ -1,0 +1,14 @@
+Stack: [ ]
+Stack: [ ]
+=== failure leaves the cell cold ===
+Stack: [ ]
+PASS: the first attempt throws
+Stack: [ ]
+PASS: the second attempt throws, so nothing was cached
+Stack: [ ]
+PASS: the third attempt succeeds
+Stack: [ ]
+PASS: and is then reused
+Stack: [ ]
+PASS: the body ran once per attempt, then stopped
+Stack: [ ]

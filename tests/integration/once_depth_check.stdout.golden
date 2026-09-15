@@ -1,0 +1,15 @@
+=== undeclared body ===
+Stack: [ ]
+Stack: [ ]
+PASS: a body leaving two values is rejected
+Stack: [ ]
+PASS: and the cell stayed cold
+Stack: [ ]
+Stack: [ ]
+PASS: a body leaving no value is rejected
+Stack: [ ]
+=== declared body ===
+Stack: [ ]
+Stack: [ ]
+PASS: a declared body leaving two values is rejected
+Stack: [ ]

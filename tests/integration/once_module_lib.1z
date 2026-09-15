@@ -1,0 +1,22 @@
+\ Companion module for once_module.1z. Its `once` bodies reach words that only a module word can
+\ see: a module-private helper, and an imported one.
+use "strings" ;
+
+private{
+  scale: ( -- fixnum ) [ 8 ] ;
+  runs: V{ } ;
+}
+
+\ Reaches a module-private word from inside the once body.
+scaled: ( -- fixnum ) once [ runs 1 #push! drop 5 scale * ] ;
+
+\ Reaches a word this module imported.
+padded: ( -- string ) once [ "ab" 3 repeat ] ;
+
+\ Defines into a frame of its own from inside the once body.
+squared: ( -- fixnum ) once [
+  i: 3 ;
+  i i *
+] ;
+
+body-runs: ( -- fixnum ) [ runs #len ] ;

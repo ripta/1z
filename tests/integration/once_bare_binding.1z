@@ -1,0 +1,11 @@
+\ `once` defers a computation to its first reader. A bracket-less binding has nothing to defer:
+\ its initializer already ran when the module loaded.
+use "testing" ;
+
+"bracket-less binding" test-section
+
+[ eager: once 5 ; ]
+invalid-once-definition: "once on a bracket-less binding is rejected" assert-error-type
+
+[ declared-eager: ( -- string ) once "ready" ; ]
+invalid-once-definition: "the binding is refused before the effect is read" assert-error-type

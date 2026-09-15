@@ -1,0 +1,6 @@
+\ `;` replaces a `once` word's body with a two-instruction guard, so what the checker walks is the
+\ guard rather than the source. The declared effect and the guard's inferred effect must still
+\ agree, or every `once` word would draw a delta diagnostic.
+page-color: ( -- fixnum ) once [ 8 8 24 255 + + + ] ;
+
+use-it: ( -- fixnum ) [ page-color 1 + ] ;
