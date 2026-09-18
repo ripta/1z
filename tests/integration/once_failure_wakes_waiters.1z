@@ -1,0 +1,65 @@
+\ A force that throws wakes every parked reader with the error the body raised, so a waiter raises
+\ rather than waiting for a publish that is not coming.
+\
+\ Only the first attempt gates on the channels, so the later call below can reach the body again
+\ from the main task, where nothing is there to send.
+\
+\ The waiter has to be parked before the force fails. A late waiter would find the cell cold and
+\ run the body a second time, which fails the attempt counts below rather than quietly weakening
+\ the test. `arrived` is what narrows the sleep to one resume and one word call.
+
+use "testing" ;
+use "time" ;
+
+attempts: V{ } ;
+reported: V{ } ;
+
+\ `<channel>` needs a task-scope, so the three are built inside the scope below and left here for
+\ the body and the second reader to reach.
+gates: V{ } ;
+started: ( -- ch ) [ gates 0 #nth ] ;
+go: ( -- ch ) [ gates 1 #nth ] ;
+arrived: ( -- ch ) [ gates 2 #nth ] ;
+
+boom: ( -- fixnum ) once [
+  attempts 1 #push! #len 1 =
+  [ t started send go receive drop ] when
+  f "inputs are not ready" not-ready: make-error throw
+] ;
+
+\ Reports the type and message as one entry, so two readers racing to append cannot interleave a
+\ pair.
+report-failure: ( -- ) [
+  [ boom drop ]
+  [ dup error-type: @get swap message: @get 2 array-n reported swap #push! drop ]
+  recover
+] ;
+
+"a failing force wakes its waiters" test-section
+
+[
+  <channel> gates swap #push! drop
+  <channel> gates swap #push! drop
+  <channel> gates swap #push! drop
+
+  forcer: [ report-failure ] spawn ;
+  started receive drop
+  waiter: [ t arrived send report-failure ] spawn ;
+  arrived receive drop
+  100 milliseconds sleep
+  t go send
+  forcer await drop
+  waiter await drop
+] task-scope
+
+attempts #len 1 "the body ran once for both readers" assert=
+reported #len 2 "both readers reported a failure" assert=
+reported 0 #nth 0 #nth not-ready: "the first report names the body's error type" assert=
+reported 0 #nth 1 #nth "inputs are not ready" "and carries its message" assert=
+reported 1 #nth 0 #nth not-ready: "the second report names the same type" assert=
+reported 1 #nth 1 #nth "inputs are not ready" "and the same message" assert=
+
+"the cell is cold after a failure" test-section
+
+[ boom ] "a later call runs the body again" assert-error
+attempts #len 2 "so the body ran a second time" assert=

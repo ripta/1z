@@ -1,0 +1,24 @@
+\ A task parked on a `once` cell is woken only by the task computing the value, which happens
+\ entirely inside the scheduler. That task is itself parked on a channel with no sender, so nothing
+\ can move and the pool is deadlocked.
+\
+\ The `started` channel orders the two. Its send blocks until the second task takes it, so the
+\ second task reaches the cell only once the force is open.
+
+use "testing" ;
+
+\ `<channel>` needs a task-scope, so both are built inside the scope below and left here for the
+\ body to reach.
+gates: V{ } ;
+started: ( -- ch ) [ gates 0 #nth ] ;
+blocked: ( -- ch ) [ gates 1 #nth ] ;
+
+held: ( -- fixnum ) once [ t started send blocked receive drop 1 ] ;
+
+[
+  <channel> gates swap #push! drop
+  <channel> gates swap #push! drop
+
+  [ held drop ] spawn drop
+  [ started receive drop held drop ] spawn drop
+] task-scope

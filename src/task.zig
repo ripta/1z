@@ -199,6 +199,8 @@ pub const Task = struct {
     blocked_on_scope: ?*TaskScope = null,
     // *LoadLock as anyopaque, matching blocked_on_channel's import-cycle avoidance.
     blocked_on_load_lock: ?*anyopaque = null,
+    // *OnceCell as anyopaque, for the same reason as the two above.
+    blocked_on_once_cell: ?*anyopaque = null,
     /// The task this one is suspended in `await` on.
     ///
     /// The reverse edge of `awaiting_task`, which the awaited task carries. Only the forward
@@ -241,6 +243,7 @@ pub const Task = struct {
         return self.blocked_on_channel != null or
             self.blocked_on_scope != null or
             self.blocked_on_load_lock != null or
+            self.blocked_on_once_cell != null or
             self.blocked_on_await != null;
     }
 

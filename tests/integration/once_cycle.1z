@@ -1,0 +1,30 @@
+\ A `once` body that reaches its own cell, directly or through another `once` word, is an error
+\ naming the chain. Left to the existing failure modes it would run until the stack guard fired,
+\ naming neither word.
+
+use "testing" ;
+
+"a self-cycle" test-section
+
+loop-sound: ( -- fixnum ) once [ loop-sound ] ;
+
+[ loop-sound ] once-cycle: "a body that reads itself raises once-cycle" assert-error-type
+[ loop-sound ] [
+  message: @get "once cycle: loop-sound -> loop-sound" "the message names the word twice" assert=
+] recover
+
+"a two-word cycle" test-section
+
+flag-sound: ( -- fixnum ) once [ boom-sound ] ;
+boom-sound: ( -- fixnum ) once [ flag-sound ] ;
+
+[ flag-sound ] once-cycle: "a cycle through a second word raises once-cycle" assert-error-type
+[ flag-sound ] [
+  message: @get "once cycle: flag-sound -> boom-sound -> flag-sound" "the message names the chain" assert=
+] recover
+
+\ The unwind left every cell in the cycle cold, so entering from the other end names the chain
+\ from there rather than reporting a word that is still marked as forcing.
+[ boom-sound ] [
+  message: @get "once cycle: boom-sound -> flag-sound -> boom-sound" "the chain starts where the read did" assert=
+] recover

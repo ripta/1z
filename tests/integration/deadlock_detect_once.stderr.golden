@@ -1,0 +1,9 @@
+DEADLOCK: 1.0s with no progress, 2 tasks blocked, 0 runnable
+TASK-DUMP: 2 tasks, 0 runnable, 0 failed
+  task[2] scope=<scope> blocked_channel stack=[] callstack:
+    tests/integration/deadlock_detect_once.1z:16 receive
+    tests/integration/deadlock_detect_once.1z:16 native.force-once
+    tests/integration/deadlock_detect_once.1z:22 held
+  task[3] scope=<scope> blocked_once_cell stack=[] callstack:
+    tests/integration/deadlock_detect_once.1z:16 native.force-once
+    tests/integration/deadlock_detect_once.1z:23 held

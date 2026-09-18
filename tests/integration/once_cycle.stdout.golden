@@ -1,0 +1,17 @@
+=== a self-cycle ===
+Stack: [ ]
+Stack: [ ]
+PASS: a body that reads itself raises once-cycle
+Stack: [ ]
+PASS: the message names the word twice
+Stack: [ ]
+=== a two-word cycle ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: a cycle through a second word raises once-cycle
+Stack: [ ]
+PASS: the message names the chain
+Stack: [ ]
+PASS: the chain starts where the read did
+Stack: [ ]

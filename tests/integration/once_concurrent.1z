@@ -1,0 +1,49 @@
+\ Two workers reach one cold cell. The first to arrive runs the body, the second parks on it, and
+\ the body runs once for both.
+\
+\ The three channels are what put the second reader inside the force rather than after it.
+\ `started` is unbuffered, so the body's send blocks until the scope body takes it, and from there
+\ the forcing task sits on `go` until the scope body releases it. `arrived` narrows what the sleep
+\ before that release has to cover: the second reader has already run everything ahead of the cell
+\ read, so the sleep covers one resume and one word call. Shorten it too far and the test weakens
+\ into a cache-hit test rather than failing.
+
+use "testing" ;
+use "time" ;
+
+runs: V{ } ;
+
+\ `<channel>` needs a task-scope, so the three are built inside the scope below and left here for
+\ the body and the second reader to reach.
+gates: V{ } ;
+started: ( -- ch ) [ gates 0 #nth ] ;
+go: ( -- ch ) [ gates 1 #nth ] ;
+arrived: ( -- ch ) [ gates 2 #nth ] ;
+
+slow: ( -- fixnum ) once [
+  runs 1 #push! drop
+  t started send
+  go receive drop
+  42
+] ;
+
+"concurrent first reach across workers" test-section
+
+[
+  <channel> gates swap #push! drop
+  <channel> gates swap #push! drop
+  <channel> gates swap #push! drop
+
+  forcer: [ slow ] spawn ;
+  started receive drop
+  waiter: [ t arrived send slow ] spawn ;
+  arrived receive drop
+  100 milliseconds sleep
+  t go send
+  forcer await 42 "the forcing task gets the value it computed" assert=
+  waiter await 42 "the parked task gets the same value" assert=
+] task-scope
+
+runs #len 1 "the body ran once across both readers" assert=
+slow 42 "the main task reads the published value" assert=
+runs #len 1 "and did not run the body again" assert=

@@ -5,6 +5,7 @@ const task_mod = @import("task.zig");
 const Task = task_mod.Task;
 const Channel = @import("channel.zig").Channel;
 const LoadLock = @import("load_lock.zig").LoadLock;
+const OnceCell = @import("once_cell.zig").OnceCell;
 const TaskStatus = task_mod.TaskStatus;
 const TaskScope = task_mod.TaskScope;
 const Multiplexer = @import("multiplexer.zig").Multiplexer;
@@ -1075,6 +1076,7 @@ pub const Scheduler = struct {
         blocked_channel,
         blocked_scope,
         blocked_load_lock,
+        blocked_once_cell,
         blocked_await,
         sleeping,
         runnable,
@@ -1158,6 +1160,7 @@ pub const Scheduler = struct {
         if (task.blocked_on_channel != null) return .blocked_channel;
         if (task.blocked_on_scope != null) return .blocked_scope;
         if (task.blocked_on_load_lock != null) return .blocked_load_lock;
+        if (task.blocked_on_once_cell != null) return .blocked_once_cell;
         if (task.blocked_on_await != null) return .blocked_await;
         for (self.sleep_queue.items[0..self.sleep_queue.count()]) |entry| {
             if (entry.task == task) return .sleeping;
@@ -1208,6 +1211,7 @@ pub const Scheduler = struct {
             .blocked_channel => w.writeAll(" blocked_channel") catch return,
             .blocked_scope => w.writeAll(" blocked_scope") catch return,
             .blocked_load_lock => w.writeAll(" blocked_load_lock") catch return,
+            .blocked_once_cell => w.writeAll(" blocked_once_cell") catch return,
             .blocked_await => w.print(" blocked_await={d}", .{task.blocked_on_await.?.id}) catch return,
             .sleeping => {
                 const remaining = self.sleepRemaining(task);
@@ -1333,6 +1337,11 @@ pub const Scheduler = struct {
         } else if (task.blocked_on_load_lock) |lock_ptr| {
             const lock: *LoadLock = @ptrCast(@alignCast(lock_ptr));
             if (lock.removeWaiter(task)) {
+                self.run_queue.append(self.allocator, task) catch {};
+            }
+        } else if (task.blocked_on_once_cell) |cell_ptr| {
+            const cell: *OnceCell = @ptrCast(@alignCast(cell_ptr));
+            if (cell.removeWaiter(task)) {
                 self.run_queue.append(self.allocator, task) catch {};
             }
         } else if (task.blocked_on_scope) |scope| {
@@ -1602,7 +1611,7 @@ test "nextId increments" {
     try std.testing.expectEqual(@as(u64, 3), sched.nextId());
 }
 
-test "channel, scope, load-lock, and await waits count as in-process blocked" {
+test "channel, scope, load-lock, once-cell, and await waits count as in-process blocked" {
     var task: Task = undefined;
     const reset = struct {
         fn f(t: *Task) void {
@@ -1611,6 +1620,7 @@ test "channel, scope, load-lock, and await waits count as in-process blocked" {
             t.blocked_on_process_pid = null;
             t.blocked_on_scope = null;
             t.blocked_on_load_lock = null;
+            t.blocked_on_once_cell = null;
             t.blocked_on_await = null;
         }
     }.f;
@@ -1628,6 +1638,10 @@ test "channel, scope, load-lock, and await waits count as in-process blocked" {
 
     reset(&task);
     task.blocked_on_load_lock = @ptrFromInt(@alignOf(usize));
+    try std.testing.expect(task.inProcessBlocked());
+
+    reset(&task);
+    task.blocked_on_once_cell = @ptrFromInt(@alignOf(usize));
     try std.testing.expect(task.inProcessBlocked());
 
     reset(&task);

@@ -53,6 +53,7 @@ fn isOnceEffectShape(effect: StackEffect) bool {
 fn installOnceCell(
     ctx: *Context,
     alloc: std.mem.Allocator,
+    name: []const u8,
     body: []const Instruction,
     owner: ?*const value_mod.Closure,
 ) ![]const Instruction {
@@ -61,6 +62,12 @@ fn installOnceCell(
         .body = .{ .instructions = body },
         .owner = owner,
         .may_define = may_define.bodyCallsDefiningNative(body),
+        // The name is what a cycle diagnostic prints, so the cell keeps a copy of its own: the
+        // caller's slice is parse-owned and `defineBinding` has not interned it yet.
+        .name = try alloc.dupe(u8, name),
+        // Whichever worker reads the word appends to the waiter list, so it cannot live on
+        // `alloc`. That is an arena with a single owner.
+        .allocator = ctx.allocator,
     };
     try ctx.registerOnceCell(cell);
 
@@ -762,7 +769,7 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
                         }
                     }
 
-                    action = .{ .compound = try installOnceCell(ctx, alloc, action.compound, body_owner) };
+                    action = .{ .compound = try installOnceCell(ctx, alloc, name, action.compound, body_owner) };
                     // The guard did not come out of the closure the source body did, so the
                     // definition stops naming one. The cell carries the owner to each attempt to
                     // force, and the closure stays alive on the teardown list either way.
@@ -998,7 +1005,8 @@ test "semicolon moves a once word's body into a cell and stores the guard in its
     try std.testing.expectEqual(source.len, cell.body.instructions.len);
     try std.testing.expectEqual(@as(?*const value_mod.Closure, null), cell.owner);
     try std.testing.expect(cell.may_define);
-    try std.testing.expectEqual(value_mod.OnceCell.State.cold, cell.state);
+    try std.testing.expectEqual(value_mod.OnceCell.State.cold, cell.state.load(.acquire));
+    try std.testing.expectEqualStrings("held", cell.name);
 
     // The declared effect stays on the definition, so help and word-info report what was written.
     const effect = word.stack_effect orelse return error.TestExpectedEffect;

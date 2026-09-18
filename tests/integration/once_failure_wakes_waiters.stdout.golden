@@ -1,0 +1,29 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+=== a failing force wakes its waiters ===
+Stack: [ ]
+Stack: [ ]
+PASS: the body ran once for both readers
+Stack: [ ]
+PASS: both readers reported a failure
+Stack: [ ]
+PASS: the first report names the body's error type
+Stack: [ ]
+PASS: and carries its message
+Stack: [ ]
+PASS: the second report names the same type
+Stack: [ ]
+PASS: and the same message
+Stack: [ ]
+=== the cell is cold after a failure ===
+Stack: [ ]
+PASS: a later call runs the body again
+Stack: [ ]
+PASS: so the body ran a second time
+Stack: [ ]

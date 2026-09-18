@@ -1,0 +1,17 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+=== concurrent first reach across workers ===
+Stack: [ ]
+PASS: the forcing task gets the value it computed
+PASS: the parked task gets the same value
+Stack: [ ]
+PASS: the body ran once across both readers
+Stack: [ ]
+PASS: the main task reads the published value
+Stack: [ ]
+PASS: and did not run the body again
+Stack: [ ]

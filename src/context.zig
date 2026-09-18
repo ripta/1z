@@ -739,6 +739,14 @@ pub const Context = struct {
     /// its pushes read whatever the nearest interpreted ancestor published, matching how
     /// `active_deps_vis` already behaves.
     active_captured_scope: ?*const CapturedScope = null,
+    /// The innermost `once` cell this execution is forcing, or null when it is forcing none.
+    ///
+    /// Each cell records the cell it displaced here, so a cycle walks back through those links
+    /// and names every word in the chain.
+    ///
+    /// Whether a re-entry *is* a cycle is decided by the cell's own `forcing_task`, which is
+    /// context-independent. This only shapes the message.
+    forcing_once_cell: ?*value_mod.OnceCell = null,
     /// Count of live transient lexical frames (above `import_frame_index`, kind `.lexical`) that
     /// currently hold at least one definition. A fast-path gate for `captureQuotationScope`: when
     /// zero, no quotation push has anything to close over, so the capture scan is skipped.

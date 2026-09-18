@@ -12,6 +12,7 @@ const StackEffectParam = @import("stack_effect.zig").StackEffectParam;
 const Task = @import("task.zig").Task;
 const Iterator = @import("iterator.zig").Iterator;
 const Channel = @import("channel.zig").Channel;
+pub const OnceCell = @import("once_cell.zig").OnceCell;
 
 const dictionary_mod = @import("dictionary.zig");
 const HostCallback = dictionary_mod.HostCallback;
@@ -888,35 +889,6 @@ pub const Parameter = struct {
     /// evaluation. Null for a plain quotation and for an AOT-loaded parameter, whose body comes
     /// out of bytecode with no value behind it.
     default_owner: ?*const Closure = null,
-};
-
-/// The compute-once state of a `once`-marked word, allocated alongside its definition and read
-/// by the two-instruction body `;` installs in place of the source body.
-///
-/// The cell lives on the arena a module load redirects to, so its lifetime is the root
-/// context's and a `reload` builds a new one. `value` is an owning reference the dictionary's
-/// teardown releases.
-pub const OnceCell = struct {
-    /// The source body, moved here so the stored body can be the guard instead.
-    body: Quotation,
-
-    /// The closure `body` came out of, for a body it owns. Borrowed on the same terms as
-    /// `Parameter.default_owner`: it carries the body's captured scope and defining module to
-    /// each attempt to force. Null for a plain quotation body.
-    owner: ?*const Closure = null,
-
-    /// Whether `body` calls a defining native at its top level, so forcing runs it in a
-    /// transient lexical frame. Computed from the source body, since the stored body's own
-    /// `may_define` describes the guard rather than what the guard runs.
-    may_define: bool = false,
-
-    state: State = .cold,
-
-    /// Published on a successful force, and null while the cell is cold. A body that throws or
-    /// leaves other than one value leaves the cell cold, so the next call runs it again.
-    value: ?Value = null,
-
-    pub const State = enum { cold, forced };
 };
 
 /// Marker represents a named marker for attaching metadata to definitions.
@@ -2054,7 +2026,7 @@ pub const Value = union(enum) {
             .protocol_descriptor => |desc| try writer.print("<protocol-descriptor:{s}>", .{desc.name}),
             .constraint_combinator => |cc| try writer.print("<constraint-combinator:{d}>", .{cc.combinator_id}),
             .sandbox_spec => |spec| try spec.writeGranted(writer),
-            .once_cell => |cell| try writer.print("<once-cell {s}>", .{@tagName(cell.state)}),
+            .once_cell => |cell| try writer.print("<once-cell {s}>", .{@tagName(cell.state.load(.acquire))}),
             .unit => try writer.writeAll("unit"),
         }
     }

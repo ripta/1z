@@ -364,13 +364,14 @@ pub const Dictionary = struct {
         try self.once_cells.append(self.allocator, cell);
     }
 
-    /// Release the published value of every registered cell, then clear the list. Runs at
-    /// teardown, before the arena holding the cells goes away.
+    /// Release the published value of every registered cell and free its waiter list, then
+    /// clear the list. Runs at teardown, before the arena holding the cells goes away.
     pub fn releaseOnceCellValues(self: *Dictionary) void {
         for (self.once_cells.items) |cell| {
             if (cell.value) |v| container_backing.releaseValue(v);
             cell.value = null;
-            cell.state = .cold;
+            cell.state.store(.cold, .release);
+            cell.deinit();
         }
         self.once_cells.clearRetainingCapacity();
     }
