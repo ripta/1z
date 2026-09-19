@@ -1,0 +1,17 @@
+\ Compute-once words on bare metal. The cell rides the runtime image as a slot the loader fills,
+\ and the force calls the body's compiled function: there is no interpreter here to run the
+\ stored bytecode, so a cell without a compiled body could not be computed at all.
+\
+\ Two call sites over one cell is the property under test, and the body announcing itself is how
+\ that becomes visible. A lowering that gave each site its own cell would print the first line
+\ twice; the greeting alone would look the same either way.
+\
+\ The hosted force also parks a second reader and names a cycle across several words. Neither is
+\ reachable from here: `spawn` raises `build-unsupported`, so one execution reaches a cell at a
+\ time, and reading a cycle's diagnostic needs `recover` and `@get`, which this runtime does not
+\ carry. Those stay covered by the hosted fixtures.
+
+greeting: ( -- s ) once [ "building the greeting" print-line "computed once" ] ;
+
+greeting print-line
+greeting print-line

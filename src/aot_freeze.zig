@@ -918,10 +918,12 @@ fn scanUnresolvedCallees(
 
                 try discoverCalleeWord(ctx, call_name, discovered, temp_allocator);
             },
-            .push_literal => |val| {
-                if (val == .quotation) {
-                    try scanUnresolvedCallees(ctx, val.quotation.instructions, caller_name, qual_seen, discovered, diagnostics, artifact_class, temp_allocator);
-                }
+            .push_literal => |val| switch (val) {
+                .quotation => |q| try scanUnresolvedCallees(ctx, q.instructions, caller_name, qual_seen, discovered, diagnostics, artifact_class, temp_allocator),
+                // The cell's body is what a `once` word actually runs, so a banned native inside
+                // it has to be caught here rather than in the two-instruction guard.
+                .once_cell => |cell| try scanUnresolvedCallees(ctx, cell.body.instructions, caller_name, qual_seen, discovered, diagnostics, artifact_class, temp_allocator),
+                else => {},
             },
         }
     }
@@ -1773,6 +1775,7 @@ fn seedQuotationBodyCallees(ctx: *const Context, instrs: []const Instruction, ca
         .push_literal => |v| switch (v) {
             .quotation => |q| try seedQuotationBodyCallees(ctx, q.instructions, caller, vis, module_scoped_only, worklist, seen, pending_callee_bindings, allocator),
             .parameter => |p| try seedQuotationBodyCallees(ctx, p.default_quotation.instructions, caller, vis, module_scoped_only, worklist, seen, pending_callee_bindings, allocator),
+            .once_cell => |cell| try seedQuotationBodyCallees(ctx, cell.body.instructions, caller, vis, module_scoped_only, worklist, seen, pending_callee_bindings, allocator),
             .array, .hash, .vector, .mutable_map, .struct_instance => try seedCompositeQuotationCallees(ctx, v, caller, vis, module_scoped_only, worklist, seen, pending_callee_bindings, allocator),
             else => {},
         },
@@ -1921,6 +1924,25 @@ fn collectCallWords(
                     // `get`. Seed all its callees so they compile and are runnable, without recording
                     // callsite records against this word's compiled body, which never contains them.
                     .parameter => |p| try seedQuotationBodyCallees(ctx, p.default_quotation.instructions, caller, vis, false, worklist, seen, pending_callee_bindings, allocator),
+                    // A `once` word's source body runs in the word's place on the first read, so
+                    // it is collected as a quotation of its own and the force calls the compiled
+                    // function. That is the only way it runs at all in a build with no
+                    // interpreter.
+                    //
+                    // Its callees are seeded without call-site records, as a parameter's default
+                    // is: the guard body this word compiles to contains none of them.
+                    .once_cell => |cell| {
+                        if (cell.body.instructions.len > 0) {
+                            const cell_key = @intFromPtr(cell.body.instructions.ptr);
+                            const cgop = try quotation_seen.getOrPut(allocator, cell_key);
+                            if (!cgop.found_existing) {
+                                try quotation_bodies.append(allocator, cell.body.instructions);
+                                emitFreezeQuotationTrace(ctx, caller_name, cell_key);
+                            }
+                        }
+                        try collectCellBodyQuotations(ctx, cell.body.instructions, caller_name, quotation_bodies, quotation_seen, allocator);
+                        try seedQuotationBodyCallees(ctx, cell.body.instructions, caller, vis, false, worklist, seen, pending_callee_bindings, allocator);
+                    },
                     // A quotation buried in a composite literal (an `H{ }` dispatch table, an array of
                     // quotations, ...) runs under the interpreter when the value is later extracted and
                     // called. `collectCompositeQuotations` collects its body, but leaves its callees
@@ -2301,6 +2323,44 @@ fn walkDispatchContainerValue(
     }
 }
 
+/// Collect every quotation literal nested inside a `once` word's source body, to any depth, so
+/// each earns a global id and a compiled function.
+///
+/// The cell body itself is collected by the caller. This covers what is inside it, which the main
+/// BFS never reaches: the body hangs off a `.once_cell` literal rather than off an instruction
+/// stream the walk descends.
+///
+/// No call-site records are produced. A `quotation_path` descends quotation literals by index,
+/// and these sit behind a cell instead, so a path built here would not locate anything in the
+/// guard body the word actually compiles to.
+fn collectCellBodyQuotations(
+    ctx: *const Context,
+    instrs: []const Instruction,
+    caller_name: []const u8,
+    quotation_bodies: *std.ArrayListUnmanaged([]const Instruction),
+    quotation_seen: *std.AutoHashMapUnmanaged(usize, void),
+    allocator: Allocator,
+) Allocator.Error!void {
+    for (instrs) |instr| {
+        const nested = switch (instr.op) {
+            .push_literal => |val| switch (val) {
+                .quotation => |q| q.instructions,
+                else => continue,
+            },
+            else => continue,
+        };
+        if (nested.len > 0) {
+            const key = @intFromPtr(nested.ptr);
+            const gop = try quotation_seen.getOrPut(allocator, key);
+            if (!gop.found_existing) {
+                try quotation_bodies.append(allocator, nested);
+                emitFreezeQuotationTrace(ctx, caller_name, key);
+            }
+        }
+        try collectCellBodyQuotations(ctx, nested, caller_name, quotation_bodies, quotation_seen, allocator);
+    }
+}
+
 /// Collect every quotation nested inside a body that was itself reached through a
 /// composite. Unlike `collectCompositeQuotations`, which descends into quotation
 /// literals only to find composites, this collects the quotation literals too,
@@ -2340,6 +2400,7 @@ fn detectInterpretedReach(
         switch (instr.op) {
             .push_literal => |val| switch (val) {
                 .quotation => |q| try detectInterpretedReach(ctx, q.instructions, caller_name, source_file, prelude_words, discovered_names, quotation_seen, callee_seen, violations, allocator),
+                .once_cell => |cell| try detectInterpretedReach(ctx, cell.body.instructions, caller_name, source_file, prelude_words, discovered_names, quotation_seen, callee_seen, violations, allocator),
                 .array, .hash, .vector, .mutable_map, .struct_instance => try detectReachInValue(ctx, val, caller_name, source_file, instr.line, prelude_words, discovered_names, quotation_seen, callee_seen, violations, allocator),
                 else => {},
             },

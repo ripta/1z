@@ -2289,6 +2289,7 @@ pub const AotImageSlotMaps = struct {
     mutable_map_slot_index: *const std.AutoHashMapUnmanaged(*const value_mod.MutableMap, u32),
     struct_instance_slot_index: *const std.AutoHashMapUnmanaged(*const value_mod.StructInstance, u32),
     vector_slot_index: *const std.AutoHashMapUnmanaged(*const value_mod.Vector, u32),
+    once_cell_slot_index: *const std.AutoHashMapUnmanaged(*const value_mod.OnceCell, u32),
     protocol_slot_index: *const std.AutoHashMapUnmanaged(*const value_mod.ProtocolDescriptor, u32),
     combinator_slot_index: *const std.AutoHashMapUnmanaged(*const value_mod.ConstraintCombinator, u32),
 };
@@ -2309,9 +2310,8 @@ const TypedLiteralSlot = struct {
 /// null when any of: slot-table emission is disabled, the slot maps are
 /// not populated (e.g. pure-AOT build without an interpreter context),
 /// the value variant is not a slot-tableable typed literal, or the
-/// pointer was not interned during the collection pass. All five
-/// type-carrier variants (`.type_val`, `.struct_type`, `.marker`,
-/// `.parameter`, `.tagged`) participate.
+/// pointer was not interned during the collection pass. Every variant
+/// the switch below names participates.
 fn resolveTypedLiteralSlot(state: *const CompileState, val: Value) ?TypedLiteralSlot {
     if (!state.aot_mode) return null;
     if (!state.aot_emit_slot_table_literals) return null;
@@ -2347,6 +2347,10 @@ fn resolveTypedLiteralSlot(state: *const CompileState, val: Value) ?TypedLiteral
             null,
         .vector => |v| if (maps.vector_slot_index.get(v)) |slot|
             .{ .slot = slot, .helper_name = "onez_push_vector_slot" }
+        else
+            null,
+        .once_cell => |cell| if (maps.once_cell_slot_index.get(cell)) |slot|
+            .{ .slot = slot, .helper_name = "onez_push_once_cell_slot" }
         else
             null,
         else => null,
@@ -10813,6 +10817,7 @@ pub const AotMetadata = struct {
     runtime_image_mutable_map_slot_count: u32 = 0,
     runtime_image_struct_instance_slot_count: u32 = 0,
     runtime_image_vector_slot_count: u32 = 0,
+    runtime_image_once_cell_slot_count: u32 = 0,
     runtime_image_protocoldescriptor_slot_count: u32 = 0,
     runtime_image_constraintcombinator_slot_count: u32 = 0,
     /// Count of method dispatch-entry rows serialized into the image. An
@@ -11055,7 +11060,7 @@ pub fn emitProgramC(
         \\extern int32_t onez_set_interpreter_fallback(void *rt, _Bool allowed);
         \\extern int32_t onez_set_trace_words(void *rt, const char *pattern);
         \\extern int32_t onez_set_stdlib_path_z(void *rt, const char *path);
-        \\extern int onez_load_runtime_image(void *rt, const void *header, void *typevalue_slots, void *struct_type_slots, void *marker_slots, void *parameter_slots, void *tagged_slots, void *mutable_map_slots, void *struct_instance_slots, void *vector_slots, void *protocoldescriptor_slots, void *constraintcombinator_slots);
+        \\extern int onez_load_runtime_image(void *rt, const void *header, void *typevalue_slots, void *struct_type_slots, void *marker_slots, void *parameter_slots, void *tagged_slots, void *mutable_map_slots, void *struct_instance_slots, void *vector_slots, void *once_cell_slots, void *protocoldescriptor_slots, void *constraintcombinator_slots);
         \\extern int onez_replay_method_dispatch(void *rt);
         \\
         \\
@@ -11195,6 +11200,7 @@ pub fn emitProgramC(
             .mutable_map_slot_index = &image_collection.?.effect_table.mutable_map_slot_index,
             .struct_instance_slot_index = &image_collection.?.effect_table.struct_instance_slot_index,
             .vector_slot_index = &image_collection.?.effect_table.vector_slot_index,
+            .once_cell_slot_index = &image_collection.?.effect_table.once_cell_slot_index,
             .protocol_slot_index = &image_collection.?.effect_table.protocol_slot_index,
             .combinator_slot_index = &image_collection.?.effect_table.combinator_slot_index,
         };
@@ -11726,6 +11732,7 @@ pub fn emitProgramC(
             .mutable_map_slot_index = &coll.effect_table.mutable_map_slot_index,
             .struct_instance_slot_index = &coll.effect_table.struct_instance_slot_index,
             .vector_slot_index = &coll.effect_table.vector_slot_index,
+            .once_cell_slot_index = &coll.effect_table.once_cell_slot_index,
         } else null;
         // Quotation ids reified at an *escape* position (a quotation produced as a
         // word output). An escaping body that did not compile carries a null
@@ -11999,6 +12006,8 @@ pub fn emitProgramC(
     try out.appendSlice(allocator, "static inline int32_t onez_push_struct_instance_slot(uintptr_t ctx, uintptr_t slot) { return jitPushStructInstanceSlot(ctx, slot); }\n");
     try out.appendSlice(allocator, "extern int32_t jitPushVectorSlot(uintptr_t ctx, uintptr_t slot);\n");
     try out.appendSlice(allocator, "static inline int32_t onez_push_vector_slot(uintptr_t ctx, uintptr_t slot) { return jitPushVectorSlot(ctx, slot); }\n");
+    try out.appendSlice(allocator, "extern int32_t jitPushOnceCellSlot(uintptr_t ctx, uintptr_t slot);\n");
+    try out.appendSlice(allocator, "static inline int32_t onez_push_once_cell_slot(uintptr_t ctx, uintptr_t slot) { return jitPushOnceCellSlot(ctx, slot); }\n");
     try out.appendSlice(allocator, "extern int32_t aotSatisfiesAndDispatch(uintptr_t ctx, uintptr_t dispatch_id, uintptr_t slot_idx, uintptr_t arity, const char *src, uintptr_t src_len, uintptr_t line);\n");
     try out.appendSlice(allocator, "extern int32_t aotSatisfiesAndDispatchCombinator(uintptr_t ctx, uintptr_t dispatch_id, uintptr_t slot_idx, uintptr_t arity, const char *src, uintptr_t src_len, uintptr_t line);\n");
     try out.appendSlice(allocator, "extern int32_t aotTryDispatchGenericOrCall(uintptr_t ctx, uintptr_t dispatch_id, uintptr_t word_id);\n");
@@ -12424,6 +12433,7 @@ pub fn emitProgramC(
         meta.runtime_image_mutable_map_slot_count = stats.mutable_map_slot_count;
         meta.runtime_image_struct_instance_slot_count = stats.struct_instance_slot_count;
         meta.runtime_image_vector_slot_count = stats.vector_slot_count;
+        meta.runtime_image_once_cell_slot_count = stats.once_cell_slot_count;
         meta.runtime_image_protocoldescriptor_slot_count = stats.protocoldescriptor_slot_count;
         meta.runtime_image_constraintcombinator_slot_count = stats.constraintcombinator_slot_count;
         meta.runtime_image_dispatch_entry_slot_count = stats.dispatch_entry_slot_count;
@@ -12644,6 +12654,12 @@ pub fn emitProgramC(
                 \\
             );
         }
+        if (meta.runtime_image_once_cell_slot_count > 0) {
+            try out.appendSlice(allocator,
+                \\    extern struct onez_once_cell *onez_image_once_cell_slots[];
+                \\
+            );
+        }
         if (meta.runtime_image_protocoldescriptor_slot_count > 0) {
             try out.appendSlice(allocator,
                 \\    extern struct onez_protocoldescriptor *onez_image_protocoldescriptor_slots[];
@@ -12684,6 +12700,10 @@ pub fn emitProgramC(
             "NULL, ");
         try out.appendSlice(allocator, if (meta.runtime_image_vector_slot_count > 0)
             "onez_image_vector_slots, "
+        else
+            "NULL, ");
+        try out.appendSlice(allocator, if (meta.runtime_image_once_cell_slot_count > 0)
+            "onez_image_once_cell_slots, "
         else
             "NULL, ");
         try out.appendSlice(allocator, if (meta.runtime_image_protocoldescriptor_slot_count > 0)
@@ -15133,6 +15153,22 @@ export fn jitPushVectorSlot(ctx_raw: usize, slot: usize) callconv(.c) i32 {
     if (slot >= ctx.image_vector_slot_count) return slotMiss(ctx, "vector", slot);
     const vec = table[slot] orelse return slotMiss(ctx, "vector", slot);
     ctx.stack.push(.{ .vector = vec }) catch {
+        ctx.jit_pending_error = error.OutOfMemory;
+        return 2;
+    };
+    return 0;
+}
+
+/// Push the `once` cell the loader allocated for `slot`.
+///
+/// No retain: a cell carries no refcounted header.
+export fn jitPushOnceCellSlot(ctx_raw: usize, slot: usize) callconv(.c) i32 {
+    if (ctx_raw == 0) return 1;
+    const ctx: *Context = @ptrFromInt(ctx_raw);
+    const table = ctx.image_once_cell_slots orelse return slotMiss(ctx, "once-cell", slot);
+    if (slot >= ctx.image_once_cell_slot_count) return slotMiss(ctx, "once-cell", slot);
+    const cell = table[slot] orelse return slotMiss(ctx, "once-cell", slot);
+    ctx.stack.push(.{ .once_cell = cell }) catch {
         ctx.jit_pending_error = error.OutOfMemory;
         return 2;
     };

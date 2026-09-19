@@ -49,6 +49,31 @@ const Parameter = struct {
     name: []const u8,
     default_quotation: Quotation,
 };
+
+/// The compute-once state of a `once`-marked word, allocated by this runtime's image loader
+/// and reached through `onez_image_once_cell_slots[]`.
+///
+/// Only the tag's position in `Value` is shared with the hosted `OnceCell`; the layout is
+/// not. The emitted C holds an opaque pointer and never reads a field, and nothing hands a
+/// cell across the two substrates.
+///
+/// The hosted cell's mutex, waiter list, and forcing-task identity are all absent. `spawn`
+/// raises `build-unsupported` here, so one execution reaches a cell at a time and there is
+/// nothing to park. `forcing` is still distinct from `cold`, because a body that reaches this
+/// cell again would otherwise recurse until the stack runs out.
+///
+/// There is no `forcing_parent` either, so a re-entry is detected but the chain that closed it
+/// is not recoverable. The hosted cell records the force it displaced and can name every word in
+/// the cycle; this one can only name the word re-entered.
+const OnceCell = struct {
+    body: Quotation,
+    name: []const u8 = "",
+    state: State = .cold,
+    value: ?Value = null,
+
+    const State = enum(u8) { cold, forcing, forced };
+};
+
 const Module = opaque {};
 const Marker = opaque {};
 const StructType = opaque {};
@@ -190,6 +215,7 @@ const Value = union(enum) {
     stream: *Stream,
     resource: *Resource,
     parameter: *Parameter,
+    once_cell: *OnceCell,
     module: *Module,
     marker: *Marker,
     struct_type: *StructType,
@@ -208,6 +234,33 @@ const Value = union(enum) {
     constraint_combinator: *const ConstraintCombinator,
     sandbox_spec: *SandboxSpec,
     unit: void,
+
+    comptime {
+        // AOT codegen bakes tag ordinals discovered from the hosted union into the emitted C,
+        // and this runtime reads them back through the mirror above. A variant added to one
+        // side and not the other shifts every ordinal after it, so the read lands on a
+        // neighbouring variant instead of failing.
+        //
+        // The names are compared in order rather than the count alone, because two variants
+        // added on opposite sides would agree on the count and disagree on every ordinal
+        // between them.
+        const hosted = @typeInfo(value_mod.Value).@"union".fields;
+        const mirror = @typeInfo(Value).@"union".fields;
+        if (hosted.len != mirror.len) {
+            @compileError(std.fmt.comptimePrint(
+                "freestanding Value mirror has {d} variants, hosted Value has {d}",
+                .{ mirror.len, hosted.len },
+            ));
+        }
+        for (hosted, mirror, 0..) |h, m, i| {
+            if (!std.mem.eql(u8, h.name, m.name)) {
+                @compileError(std.fmt.comptimePrint(
+                    "freestanding Value mirror variant {d} is '{s}', hosted Value has '{s}'",
+                    .{ i, m.name, h.name },
+                ));
+            }
+        }
+    }
 };
 
 pub const std_options: std.Options = .{
@@ -256,6 +309,7 @@ comptime {
         @export(&jitPushStructTypeSlot, .{ .name = "jitPushStructTypeSlot" });
         @export(&jitPushMarkerSlot, .{ .name = "jitPushMarkerSlot" });
         @export(&jitPushParameterSlot, .{ .name = "jitPushParameterSlot" });
+        @export(&jitPushOnceCellSlot, .{ .name = "jitPushOnceCellSlot" });
         @export(&jitPushTaggedSlot, .{ .name = "jitPushTaggedSlot" });
         @export(&jitPushMutableMapSlot, .{ .name = "jitPushMutableMapSlot" });
         @export(&jitCallQuotation, .{ .name = "jitCallQuotation" });
@@ -328,6 +382,7 @@ const OnezHandle = struct {
         .default_quotation = .{ .instructions = &.{} },
     },
     parameter_slots: []?*Parameter = &.{},
+    once_cell_slots: []?*OnceCell = &.{},
 
     // Slot tables retained from the runtime image, mirroring the hosted
     // Context's `image_*` caching. Struct types are reachable through the
@@ -519,7 +574,76 @@ fn callFreestandingNative(handle: *OnezHandle, name: []const u8) i32 {
         };
         return 0;
     }
+    if (std.mem.eql(u8, name, "native.force-once")) {
+        const cell_value = popValue(handle) orelse return 2;
+        const cell = switch (cell_value) {
+            .once_cell => |c| c,
+            else => {
+                setLastError(handle, "type mismatch: expected once-cell", .{});
+                return 2;
+            },
+        };
+        return forceOnce(handle, cell);
+    }
     return unsupportedName(handle, name);
+}
+
+/// Run a `once` word's compiled body once and reuse what it produced.
+///
+/// The hosted force also parks a second reader, which is unreachable here: `spawn` raises
+/// `build-unsupported`, so one execution reaches a cell at a time.
+///
+/// A cycle is detected but not spelled out. Reaching this cell while it is already forcing closes
+/// one whether the body named this word directly or came back through others, and the cell keeps
+/// no link to the force it displaced, so the message names the word re-entered and stops there.
+/// The hosted diagnostic walks the whole chain.
+///
+/// A body that raises or leaves other than one value returns the cell to cold, so the next call
+/// runs it again. That is the hosted rule too: the body completes at most once, rather than runs
+/// at most once.
+fn forceOnce(handle: *OnezHandle, cell: *OnceCell) i32 {
+    switch (cell.state) {
+        .forced => return pushValue(handle, cell.value.?),
+        .forcing => {
+            setLastError(handle, "once cycle: '{s}' is already being computed", .{cell.name});
+            return 2;
+        },
+        .cold => {},
+    }
+
+    const raw = cell.body.code_ptr orelse {
+        setLastError(handle, "'{s}' has no compiled body, so it cannot be computed on this build", .{cell.name});
+        return 2;
+    };
+
+    const depth_before = handle.stack_len;
+    cell.state = .forcing;
+
+    const func: OnezWordFn = @ptrCast(@alignCast(raw));
+    var jit_ctx = JitContext{
+        .items_ptr = handle.stack.ptr,
+        .sp_ptr = &handle.stack_len,
+        .capacity = handle.stack.len,
+        .ctx = handle,
+    };
+    const status = func(&jit_ctx);
+    if (status != 0) {
+        cell.state = .cold;
+        return status;
+    }
+
+    if (handle.stack_len != depth_before + 1) {
+        cell.state = .cold;
+        setLastError(handle, "a 'once' body must leave exactly one value, but '{s}' left {d}", .{
+            cell.name,
+            @as(i64, @intCast(handle.stack_len)) - @as(i64, @intCast(depth_before)),
+        });
+        return 2;
+    }
+
+    cell.value = handle.stack[handle.stack_len - 1];
+    cell.state = .forced;
+    return 0;
 }
 
 fn onez_init_no_prelude() callconv(.c) ?*anyopaque {
@@ -678,6 +802,7 @@ fn onez_load_runtime_image(
     mutable_map_slots_ptr: ?*anyopaque,
     struct_instance_slots_ptr: ?*anyopaque,
     vector_slots_ptr: ?*anyopaque,
+    once_cell_slots_ptr: ?*anyopaque,
     protocoldescriptor_slots_ptr: ?*anyopaque,
     constraintcombinator_slots_ptr: ?*anyopaque,
 ) callconv(.c) c_int {
@@ -756,6 +881,37 @@ fn onez_load_runtime_image(
             }
         }
         handle.parameter_slots = parameter_slots;
+    }
+
+    // The body bytecode in each row is ignored: this build has no interpreter to run it, so a
+    // cell is usable only through its compiled function. The quotation table is already
+    // registered -- the generated entry point calls `onez_runtime_register_quotations` before it
+    // calls this -- so the code pointer resolves here rather than at first force.
+    if (once_cell_slots_ptr) |slots_raw| {
+        const table: [*]?*OnceCell = @ptrCast(@alignCast(slots_raw));
+        const cells = handle.allocator.alloc(?*OnceCell, header.once_cell_slot_count) catch return ONEZ_ERR_LOAD_FAILED;
+        for (0..header.once_cell_slot_count) |i| cells[i] = table[i];
+        if (header.once_cell_descriptions) |descs| {
+            var i: u32 = 0;
+            while (i < header.once_cell_slot_count) : (i += 1) {
+                const row = descs[i];
+                if (row.slot >= header.once_cell_slot_count) return ONEZ_ERR_LOAD_FAILED;
+                var code_ptr: ?*const anyopaque = null;
+                if (row.body_quotation_id != populate_core.once_body_uncompiled_sentinel and
+                    row.body_quotation_id < handle.quotation_table.len)
+                {
+                    if (handle.quotation_table[row.body_quotation_id]) |fn_ptr| code_ptr = @ptrCast(fn_ptr);
+                }
+                const cell = handle.allocator.create(OnceCell) catch return ONEZ_ERR_LOAD_FAILED;
+                cell.* = .{
+                    .body = .{ .instructions = &.{}, .code_ptr = code_ptr },
+                    .name = row.name[0..row.name_len],
+                };
+                cells[row.slot] = cell;
+                table[row.slot] = cell;
+            }
+        }
+        handle.once_cell_slots = cells;
     }
     return ONEZ_OK;
 }
@@ -1846,6 +2002,19 @@ fn jitPushParameterSlot(ctx_raw: usize, slot: usize) callconv(.c) i32 {
     return pushValue(handle, .{ .parameter = param });
 }
 
+fn jitPushOnceCellSlot(ctx_raw: usize, slot: usize) callconv(.c) i32 {
+    const handle = handleFromContext(ctx_raw) orelse return 1;
+    if (slot >= handle.once_cell_slots.len) {
+        setLastError(handle, "runtime-image once-cell slot {d} is not available on this build", .{slot});
+        return 2;
+    }
+    const cell = handle.once_cell_slots[slot] orelse {
+        setLastError(handle, "runtime-image once-cell slot {d} is not initialized", .{slot});
+        return 2;
+    };
+    return pushValue(handle, .{ .once_cell = cell });
+}
+
 fn jitPushTaggedSlot(ctx_raw: usize, slot: usize) callconv(.c) i32 {
     _ = slot;
     return unsupportedJit(ctx_raw, "runtime-image tagged slots");
@@ -2098,6 +2267,7 @@ fn emptyTestImageHeader() populate_core.Header {
         .mutable_map_slot_count = 0,
         .struct_instance_slot_count = 0,
         .vector_slot_count = 0,
+        .once_cell_slot_count = 0,
         .protocoldescriptor_slot_count = 0,
         .constraintcombinator_slot_count = 0,
         .dispatch_entry_slot_count = 0,
@@ -2114,6 +2284,7 @@ fn emptyTestImageHeader() populate_core.Header {
         .mutable_map_descriptions = null,
         .struct_instance_descriptions = null,
         .vector_descriptions = null,
+        .once_cell_descriptions = null,
         .protocoldescriptor_descriptions = null,
         .constraintcombinator_descriptions = null,
         .dispatch_entry_descriptions = null,
@@ -2145,6 +2316,7 @@ test "freestanding loader retains typevalue slots from a synthetic image" {
         &handle,
         &header,
         @ptrCast(&tv_slots),
+        null,
         null,
         null,
         null,
@@ -2213,6 +2385,7 @@ test "freestanding loader resolves the typevalue-to-struct-type interlink" {
         null,
         null,
         null,
+        null,
     ));
 
     const tv = tv_slots[1].?;
@@ -2244,6 +2417,7 @@ test "freestanding loader retains protocol descriptor slots" {
     try std.testing.expectEqual(ONEZ_OK, onez_load_runtime_image(
         &handle,
         &header,
+        null,
         null,
         null,
         null,
@@ -2313,6 +2487,7 @@ test "freestanding loader retains constraint combinator slots" {
         null,
         null,
         null,
+        null,
         @ptrCast(&pd_slots),
         @ptrCast(&cc_slots),
     ));
@@ -2359,6 +2534,7 @@ test "freestanding loader rejects malformed synthetic images" {
         null,
         null,
         null,
+        null,
     ));
     const slot_msg = onez_last_error(&handle) orelse return error.TestExpectedError;
     try std.testing.expect(std.mem.indexOf(u8, std.mem.span(slot_msg), "BadSlotIndex") != null);
@@ -2387,6 +2563,7 @@ test "freestanding loader rejects malformed synthetic images" {
         null,
         null,
         null,
+        null,
     ));
     const struct_msg = onez_last_error(&handle) orelse return error.TestExpectedError;
     try std.testing.expect(std.mem.indexOf(u8, std.mem.span(struct_msg), "BadStructTypeIndex") != null);
@@ -2402,6 +2579,7 @@ test "freestanding loader leaves the handle untouched on a zero-count image" {
     try std.testing.expectEqual(ONEZ_OK, onez_load_runtime_image(
         &handle,
         &header,
+        null,
         null,
         null,
         null,
@@ -2504,6 +2682,7 @@ test "freestanding replay registers compiled dispatch entries at the freeze-time
         null,
         null,
         null,
+        null,
     ));
 
     const quotations = [_]?*const anyopaque{ @ptrCast(&fakeMethodBodyA), @ptrCast(&fakeMethodBodyB) };
@@ -2582,6 +2761,7 @@ test "freestanding replay fails loudly on unresolvable rows" {
             null,
             null,
             null,
+            null,
         ));
 
         const quotations = [_]?*const anyopaque{@ptrCast(&fakeMethodBodyA)};
@@ -2645,6 +2825,7 @@ test "freestanding generic dispatch runs replayed methods and falls back to the 
         &handle,
         &header,
         @ptrCast(&tv_slots),
+        null,
         null,
         null,
         null,
@@ -2727,6 +2908,7 @@ test "freestanding generic dispatch matches wildcard rows for types absent from 
         null,
         null,
         null,
+        null,
     ));
 
     var quotations = [_]?OnezWordFn{&methodBodyPush202};
@@ -2769,6 +2951,7 @@ test "freestanding generic dispatch falls back to the enum parent type" {
         &handle,
         &header,
         @ptrCast(&tv_slots),
+        null,
         null,
         null,
         null,
@@ -2832,6 +3015,7 @@ test "freestanding generic dispatch unwraps parameterized operands on the base-t
         &handle,
         &header,
         @ptrCast(&tv_slots),
+        null,
         null,
         null,
         null,
@@ -2911,6 +3095,7 @@ test "freestanding jitDispatchFull resolves a replayed method and unwraps a para
         &handle,
         &header,
         @ptrCast(&tv_slots),
+        null,
         null,
         null,
         null,
@@ -3002,6 +3187,7 @@ test "freestanding jitDispatchFull derives < from a cmp-only method" {
         null,
         null,
         null,
+        null,
     ));
 
     var quotations = [_]?OnezWordFn{&cmpBodyPushLess};
@@ -3066,6 +3252,7 @@ test "freestanding replay no-ops on a zero-entry image" {
         null,
         null,
         null,
+        null,
     ));
 
     try std.testing.expectEqual(ONEZ_OK, onez_replay_method_dispatch(&handle));
@@ -3114,6 +3301,7 @@ test "freestanding protocol-bounded dispatch checks the operand and dispatches" 
         &handle,
         &header,
         @ptrCast(&tv_slots),
+        null,
         null,
         null,
         null,
@@ -3210,6 +3398,7 @@ test "freestanding combinator-bounded dispatch enforces an intersection of proto
         &handle,
         &header,
         @ptrCast(&tv_slots),
+        null,
         null,
         null,
         null,

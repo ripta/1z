@@ -52,8 +52,8 @@ pub const OnceCell = struct {
     ///
     /// The mutex is a leaf: nothing that locks is called while it is held, and the body runs
     /// only after it is released. It sits outside the `LockOrderTracker` hierarchy on the same
-    /// terms `LoadLock.mu` and the `reified_decode_cache` mutexes do, which ADR-0094 names as a
-    /// legitimate choice for a leaf carrying a prose ordering note.
+    /// terms `LoadLock.mu` and the `reified_decode_cache` mutexes do, which is the accepted
+    /// shape for a leaf that carries a prose ordering note instead of a declared level.
     mu: std.Thread.Mutex = .{},
 
     /// Readers parked until the force publishes or fails. Each entry lives on its own reader's
@@ -66,8 +66,8 @@ pub const OnceCell = struct {
     ///
     /// A `?*Task` needs no separate main sentinel, because the one thread that runs 1z code
     /// outside a task is main. A second host thread calling in through the C embedding API
-    /// would present as that same identity, which is the exposure ADR-0091 already accepts for
-    /// `LoadLock`'s `.main`: one handle across two host threads is out of contract.
+    /// would present as that same identity, which is the exposure `LoadLock`'s `.main` already
+    /// accepts: one handle across two host threads is out of contract.
     forcing_task: ?*Task = null,
 
     /// The cell the same execution was already forcing when this force began, so a cycle can

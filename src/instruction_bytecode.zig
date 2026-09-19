@@ -81,6 +81,8 @@
 //!   resolved through `SlotResolutionTables.struct_instance_slots`, so a
 //!   freeze-time struct instance is reconstructed once and shared by every
 //!   reference.
+//! - `19 = once_cell_slot`: image-mode only. `u32 slot_index` resolved
+//!   through `SlotResolutionTables.once_cell_slots`.
 //!
 //! All multi-byte integers are little-endian.
 //!
@@ -119,6 +121,7 @@ const Marker = value_mod.Marker;
 const Parameter = value_mod.Parameter;
 const MutableMap = value_mod.MutableMap;
 const Vector = value_mod.Vector;
+const OnceCell = value_mod.OnceCell;
 
 const stack_effect_mod = @import("stack_effect.zig");
 const StackEffect = stack_effect_mod.StackEffect;
@@ -187,6 +190,7 @@ pub const SlotEncodingMaps = struct {
     mutable_map_slot_index: *const std.AutoHashMapUnmanaged(*const MutableMap, u32),
     struct_instance_slot_index: *const std.AutoHashMapUnmanaged(*const StructInstance, u32),
     vector_slot_index: *const std.AutoHashMapUnmanaged(*const Vector, u32),
+    once_cell_slot_index: *const std.AutoHashMapUnmanaged(*const OnceCell, u32),
     /// Build-time map from a quotation body's instruction pointer to its global
     /// `quotation_id`. When supplied, `serializeValueIntoForImage` stamps each
     /// nested `.quotation` with its ID so the loader can attach a compiled
@@ -236,6 +240,8 @@ pub const SlotResolutionTables = struct {
     struct_instance_slot_count: u32,
     vector_slots: ?[*]?*Vector,
     vector_slot_count: u32,
+    once_cell_slots: ?[*]?*OnceCell,
+    once_cell_slot_count: u32,
     /// Loader-owned `WordSlot`s for build-time-resolved call targets, indexed by the slot index a
     /// `call_word_module` instruction carries. Null leaves the tag undecodable, which is a
     /// malformed stream rather than a degradation: an emitter that wrote the tag must supply the
@@ -313,6 +319,13 @@ const value_tag_struct_instance_slot: u8 = 17;
 /// across an AOT freeze boundary. The loader allocates one `Vector` per slot
 /// and decodes its elements from the slot's description.
 const value_tag_vector_slot: u8 = 18;
+
+/// Slot-indexed `once_cell` literal used in image-mode bytecode. Carries a
+/// `u32 slot_index` resolved through `SlotResolutionTables.once_cell_slots`,
+/// preserving the identity of a freeze-time `once` cell across the boundary.
+/// The loader allocates one `OnceCell` per slot and decodes its source body
+/// from the slot's description.
+const value_tag_once_cell_slot: u8 = 19;
 
 /// Sentinel `quotation_id` meaning "no compiled function". Written for every
 /// serialized quotation when no build-time quotation-ID map is supplied (or the
@@ -628,6 +641,11 @@ pub fn serializeValueIntoForImage(
         .vector => |v| {
             const slot = maps.vector_slot_index.get(v) orelse return error.NotEncodable;
             try buf.append(allocator, value_tag_vector_slot);
+            try buf.appendSlice(allocator, std.mem.asBytes(&slot));
+        },
+        .once_cell => |cell| {
+            const slot = maps.once_cell_slot_index.get(cell) orelse return error.NotEncodable;
+            try buf.append(allocator, value_tag_once_cell_slot);
             try buf.appendSlice(allocator, std.mem.asBytes(&slot));
         },
         .array => |arr| {
@@ -1101,6 +1119,16 @@ const Decoder = struct {
                 v.header.retain();
                 break :blk .{ .vector = v };
             },
+            value_tag_once_cell_slot => blk: {
+                if (self.offset + 4 > self.data.len) return self.failTruncated();
+                const slot = std.mem.readInt(u32, self.data[self.offset..][0..4], .little);
+                self.offset += 4;
+                if (slot >= tables.once_cell_slot_count) return self.failUnresolvedSlot("once-cell", slot);
+                const table = tables.once_cell_slots orelse return self.failUnresolvedSlot("once-cell", slot);
+                const cell = table[slot] orelse return self.failUnresolvedSlot("once-cell", slot);
+                // No retain: a cell carries no refcounted header.
+                break :blk .{ .once_cell = cell };
+            },
             value_tag_array => blk: {
                 if (self.offset + 4 > self.data.len) return self.failTruncated();
                 const elem_count = std.mem.readInt(u32, self.data[self.offset..][0..4], .little);
@@ -1353,6 +1381,8 @@ fn emptySlotTables() SlotResolutionTables {
         .struct_instance_slot_count = 0,
         .vector_slots = null,
         .vector_slot_count = 0,
+        .once_cell_slots = null,
+        .once_cell_slot_count = 0,
     };
 }
 
@@ -1390,6 +1420,8 @@ test "call target: a resolved name bakes a slot index, an unresolved one stays a
         .struct_instance_slot_count = 0,
         .vector_slots = null,
         .vector_slot_count = 0,
+        .once_cell_slots = null,
+        .once_cell_slot_count = 0,
         .call_target_slots = &slots,
         .call_target_slot_count = 1,
     };
@@ -1860,6 +1892,8 @@ test "image roundtrip: struct_instance encodes as a slot and decodes to the same
     defer sx_idx.deinit(alloc);
     var vx_idx: std.AutoHashMapUnmanaged(*const Vector, u32) = .{};
     defer vx_idx.deinit(alloc);
+    var oc_idx: std.AutoHashMapUnmanaged(*const OnceCell, u32) = .{};
+    defer oc_idx.deinit(alloc);
     try sx_idx.put(alloc, si, 0);
 
     const enc = SlotEncodingMaps{
@@ -1871,6 +1905,7 @@ test "image roundtrip: struct_instance encodes as a slot and decodes to the same
         .mutable_map_slot_index = &mm_idx,
         .struct_instance_slot_index = &sx_idx,
         .vector_slot_index = &vx_idx,
+        .once_cell_slot_index = &oc_idx,
     };
 
     var buf: std.ArrayListUnmanaged(u8) = .{};
@@ -1896,6 +1931,8 @@ test "image roundtrip: struct_instance encodes as a slot and decodes to the same
         .struct_instance_slot_count = 1,
         .vector_slots = null,
         .vector_slot_count = 0,
+        .once_cell_slots = null,
+        .once_cell_slot_count = 0,
     };
 
     var offset: usize = 0;
@@ -1937,6 +1974,8 @@ test "image roundtrip: quotation carrying a struct_type literal slot-encodes" {
     defer sx_idx.deinit(alloc);
     var vx_idx: std.AutoHashMapUnmanaged(*const Vector, u32) = .{};
     defer vx_idx.deinit(alloc);
+    var oc_idx: std.AutoHashMapUnmanaged(*const OnceCell, u32) = .{};
+    defer oc_idx.deinit(alloc);
 
     const enc = SlotEncodingMaps{
         .typevalue_slot_index = &tv_idx,
@@ -1947,6 +1986,7 @@ test "image roundtrip: quotation carrying a struct_type literal slot-encodes" {
         .mutable_map_slot_index = &mm_idx,
         .struct_instance_slot_index = &sx_idx,
         .vector_slot_index = &vx_idx,
+        .once_cell_slot_index = &oc_idx,
     };
 
     var buf: std.ArrayListUnmanaged(u8) = .{};
@@ -1971,6 +2011,8 @@ test "image roundtrip: quotation carrying a struct_type literal slot-encodes" {
         .struct_instance_slot_count = 0,
         .vector_slots = null,
         .vector_slot_count = 0,
+        .once_cell_slots = null,
+        .once_cell_slot_count = 0,
     };
 
     var offset: usize = 0;
@@ -2013,6 +2055,8 @@ test "image roundtrip: nested quotation carries id and compiled code_ptr" {
     defer sx_idx.deinit(alloc);
     var vx_idx: std.AutoHashMapUnmanaged(*const Vector, u32) = .{};
     defer vx_idx.deinit(alloc);
+    var oc_idx: std.AutoHashMapUnmanaged(*const OnceCell, u32) = .{};
+    defer oc_idx.deinit(alloc);
 
     var qid_map = QuotationIdMap{};
     defer qid_map.deinit(alloc);
@@ -2027,6 +2071,7 @@ test "image roundtrip: nested quotation carries id and compiled code_ptr" {
         .mutable_map_slot_index = &mm_idx,
         .struct_instance_slot_index = &sx_idx,
         .vector_slot_index = &vx_idx,
+        .once_cell_slot_index = &oc_idx,
         .quotation_id_map = &qid_map,
     };
 
@@ -2057,6 +2102,8 @@ test "image roundtrip: nested quotation carries id and compiled code_ptr" {
         .struct_instance_slot_count = 0,
         .vector_slots = null,
         .vector_slot_count = 0,
+        .once_cell_slots = null,
+        .once_cell_slot_count = 0,
         .quotation_fns = &table,
     };
 
@@ -2094,6 +2141,8 @@ test "image roundtrip: nested quotation decodes null code_ptr without a map or t
     defer sx_idx.deinit(alloc);
     var vx_idx: std.AutoHashMapUnmanaged(*const Vector, u32) = .{};
     defer vx_idx.deinit(alloc);
+    var oc_idx: std.AutoHashMapUnmanaged(*const OnceCell, u32) = .{};
+    defer oc_idx.deinit(alloc);
 
     const enc = SlotEncodingMaps{
         .typevalue_slot_index = &tv_idx,
@@ -2104,6 +2153,7 @@ test "image roundtrip: nested quotation decodes null code_ptr without a map or t
         .mutable_map_slot_index = &mm_idx,
         .struct_instance_slot_index = &sx_idx,
         .vector_slot_index = &vx_idx,
+        .once_cell_slot_index = &oc_idx,
     };
 
     var buf: std.ArrayListUnmanaged(u8) = .{};
@@ -2128,6 +2178,8 @@ test "image roundtrip: nested quotation decodes null code_ptr without a map or t
         .struct_instance_slot_count = 0,
         .vector_slots = null,
         .vector_slot_count = 0,
+        .once_cell_slots = null,
+        .once_cell_slot_count = 0,
     };
 
     var offset: usize = 0;
@@ -2428,6 +2480,8 @@ test "image roundtrip: nested quotation carries its declared effect" {
     defer sx_idx.deinit(alloc);
     var vx_idx: std.AutoHashMapUnmanaged(*const Vector, u32) = .{};
     defer vx_idx.deinit(alloc);
+    var oc_idx: std.AutoHashMapUnmanaged(*const OnceCell, u32) = .{};
+    defer oc_idx.deinit(alloc);
 
     const enc = SlotEncodingMaps{
         .typevalue_slot_index = &tv_idx,
@@ -2438,6 +2492,7 @@ test "image roundtrip: nested quotation carries its declared effect" {
         .mutable_map_slot_index = &mm_idx,
         .struct_instance_slot_index = &sx_idx,
         .vector_slot_index = &vx_idx,
+        .once_cell_slot_index = &oc_idx,
     };
 
     var buf: std.ArrayListUnmanaged(u8) = .{};
@@ -2461,6 +2516,8 @@ test "image roundtrip: nested quotation carries its declared effect" {
         .struct_instance_slot_count = 0,
         .vector_slots = null,
         .vector_slot_count = 0,
+        .once_cell_slots = null,
+        .once_cell_slot_count = 0,
     };
 
     var offset: usize = 0;

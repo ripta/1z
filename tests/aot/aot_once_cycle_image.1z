@@ -1,0 +1,15 @@
+\ A `once` cycle still names the words it runs through inside an AOT binary.
+\
+\ This is the guarantee the slot table exists to preserve. A lowering that gave each word a bare
+\ value-and-flag pair would have no `forcing` state to detect re-entry with, so a cycle would run
+\ until the stack guard fired and would name neither word. One live cell per slot is what keeps
+\ the diagnostic.
+
+flag-sound: ( -- fixnum ) once [ boom-sound ] ;
+boom-sound: ( -- fixnum ) once [ flag-sound ] ;
+
+[ flag-sound ] [ message: @get print-line ] recover
+
+\ The unwind left both cells cold, so entering from the other end names the chain from there
+\ rather than reporting a word still marked as forcing.
+[ boom-sound ] [ message: @get print-line ] recover

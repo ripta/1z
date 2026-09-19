@@ -1,0 +1,43 @@
+\ A `once` word's cell survives the freeze into a runtime-image AOT binary and behaves the way
+\ the interpreter's does: the body runs on the first read, and every later read returns what it
+\ published rather than running again.
+\
+\ The run counter is what makes a second cell visible; the printed value alone would look the
+\ same either way.
+\
+\ Three shapes are exercised, because they reach the cell by different routes: a word whose body
+\ calls another word, a word read from two separate call sites, and a body that throws and so
+\ leaves the cell cold for the next call to retry.
+
+\ Counts body entries. A binding rather than a `once` word, so it is built before anything reads
+\ it and the counter itself never depends on the mechanism under test.
+runs: ( -- vec ) V{ } ;
+
+(note-run): ( -- ) [ runs 1 #push! drop ] ;
+
+answer: ( -- fixnum ) once [ (note-run) 6 7 * ] ;
+
+\ Two call sites, so a second cell would show up as a second run.
+read-once: ( -- fixnum ) [ answer ] ;
+read-twice: ( -- fixnum ) [ answer answer + ] ;
+
+runs #len .   \ 0  -- nothing runs until the word is referenced
+read-once .   \ 42 -- the first read computes
+runs #len .   \ 1
+read-twice .  \ 84 -- both reads reuse
+runs #len .   \ 1  -- still one body entry across three reads from two call sites
+\ A throwing body leaves the cell cold, so the next call runs it again. `attempts` crosses the
+\ freeze as a binding and the body reads it, which also proves a cell body reaches module state.
+attempts: ( -- vec ) V{ } ;
+
+flaky: ( -- fixnum ) once [
+  attempts 1 #push!
+  #len 3 < [ f "not ready" EUserThrown make-error throw ] when
+  99
+] ;
+
+[ flaky ] [ drop "threw" print-line ] recover
+[ flaky ] [ drop "threw" print-line ] recover
+flaky .          \ 99 -- the third attempt succeeds
+flaky .          \ 99 -- and is reused
+attempts #len .  \ 3  -- two failures left the cell cold, the third published

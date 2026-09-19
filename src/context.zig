@@ -993,6 +993,7 @@ pub const Context = struct {
     image_mutable_map_slots: ?[*]?*value_mod.MutableMap = null,
     image_struct_instance_slots: ?[*]?*value_mod.StructInstance = null,
     image_vector_slots: ?[*]?*value_mod.Vector = null,
+    image_once_cell_slots: ?[*]?*value_mod.OnceCell = null,
     image_protocoldescriptor_slots: ?[*]?*const value_mod.ProtocolDescriptor = null,
     image_constraintcombinator_slots: ?[*]?*const value_mod.ConstraintCombinator = null,
     image_typevalue_slot_count: u32 = 0,
@@ -1003,6 +1004,7 @@ pub const Context = struct {
     image_mutable_map_slot_count: u32 = 0,
     image_struct_instance_slot_count: u32 = 0,
     image_vector_slot_count: u32 = 0,
+    image_once_cell_slot_count: u32 = 0,
     image_protocoldescriptor_slot_count: u32 = 0,
     image_constraintcombinator_slot_count: u32 = 0,
     /// One loader-owned `WordSlot` per build-time-resolved call target, addressed by the slot
@@ -1682,6 +1684,7 @@ pub const Context = struct {
         ctx.image_mutable_map_slots = parent.image_mutable_map_slots;
         ctx.image_struct_instance_slots = parent.image_struct_instance_slots;
         ctx.image_vector_slots = parent.image_vector_slots;
+        ctx.image_once_cell_slots = parent.image_once_cell_slots;
         ctx.image_typevalue_slot_count = parent.image_typevalue_slot_count;
         ctx.image_struct_type_slot_count = parent.image_struct_type_slot_count;
         ctx.image_marker_slot_count = parent.image_marker_slot_count;
@@ -1690,6 +1693,7 @@ pub const Context = struct {
         ctx.image_mutable_map_slot_count = parent.image_mutable_map_slot_count;
         ctx.image_struct_instance_slot_count = parent.image_struct_instance_slot_count;
         ctx.image_vector_slot_count = parent.image_vector_slot_count;
+        ctx.image_once_cell_slot_count = parent.image_once_cell_slot_count;
         ctx.image_call_target_slots = parent.image_call_target_slots;
         ctx.image_call_target_slot_count = parent.image_call_target_slot_count;
 
@@ -3431,6 +3435,10 @@ pub const Context = struct {
                 try self.stampQuotationBodies(c.instructions, module);
             },
             .parameter => |p| try self.stampQuotationBodies(p.default_quotation.instructions, module),
+            // A `once` word's source body never reaches a push site, so the stamp is its only
+            // route to a defining module when the guard is not the thing executing -- which is
+            // every AOT build, where the guard is compiled C and carries no deps visibility.
+            .once_cell => |cell| try self.stampQuotationBodies(cell.body.instructions, module),
             .array => |a| for (a.items) |item| try self.stampValueQuotations(item, module),
             .vector => |v| for (v.list.items) |item| try self.stampValueQuotations(item, module),
             .set => |s| for (s.map.keys()) |item| try self.stampValueQuotations(item, module),

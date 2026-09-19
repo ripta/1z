@@ -234,6 +234,24 @@ typedef struct onez_image_vector_description {
     uint32_t       elements_bytecode_len;
 } onez_image_vector_description_t;
 
+/* Per-slot description for a `once` word's cell. The loader decodes     */
+/* body_bytecode into the cell's source body, attaches                   */
+/* onez_quotation_table[body_quotation_id] as its code pointer when that  */
+/* id is not the sentinel, stamps the body with module_name so an        */
+/* interpreted force resolves its bare words, and patches                */
+/* onez_image_once_cell_slots[slot].                                     */
+typedef struct onez_image_once_cell_description {
+    const char *name;
+    uint32_t    name_len;
+    uint32_t    slot;                 /* index into onez_image_once_cell_slots */
+    const uint8_t *body_bytecode;
+    uint32_t       body_bytecode_len;
+    uint32_t    body_quotation_id;    /* 0xFFFFFFFF when the freeze never reached the body */
+    uint32_t    may_define;           /* body calls a defining native at its top level */
+    const char *module_name;          /* defining module of the body, or NULL */
+    uint32_t    module_name_len;
+} onez_image_once_cell_description_t;
+
 /* One required method of a protocol. The effect index points into       */
 /* onez_image_stack_effects_storage[]; 0 means no declared effect.        */
 typedef struct onez_image_protocol_method {
@@ -349,6 +367,7 @@ typedef struct onez_image_header {
     uint32_t mutable_map_slot_count;
     uint32_t struct_instance_slot_count;
     uint32_t vector_slot_count;
+    uint32_t once_cell_slot_count;
     uint32_t protocoldescriptor_slot_count;
     uint32_t constraintcombinator_slot_count;
     uint32_t dispatch_entry_slot_count;
@@ -365,6 +384,7 @@ typedef struct onez_image_header {
     const struct onez_image_mutable_map_description *mutable_map_descriptions;
     const struct onez_image_struct_instance_description *struct_instance_descriptions;
     const struct onez_image_vector_description *vector_descriptions;
+    const struct onez_image_once_cell_description *once_cell_descriptions;
     const struct onez_image_protocoldescriptor_description *protocoldescriptor_descriptions;
     const struct onez_image_constraintcombinator_description *constraintcombinator_descriptions;
     const struct onez_image_dispatch_entry_description *dispatch_entry_descriptions;
@@ -1381,7 +1401,7 @@ static const onez_image_entry_import_t onez_image_entry_imports_storage[] = {
 };
 
 __attribute__((used)) const onez_image_header_t onez_image_v1 = {
-    .format_version = 19,
+    .format_version = 20,
     .module_count = 1,
     .word_count = 8,
     .marker_pool_count = 4,
@@ -1395,6 +1415,7 @@ __attribute__((used)) const onez_image_header_t onez_image_v1 = {
     .mutable_map_slot_count = 0,
     .struct_instance_slot_count = 0,
     .vector_slot_count = 0,
+    .once_cell_slot_count = 0,
     .protocoldescriptor_slot_count = 0,
     .constraintcombinator_slot_count = 0,
     .dispatch_entry_slot_count = 0,
@@ -1411,6 +1432,7 @@ __attribute__((used)) const onez_image_header_t onez_image_v1 = {
     .mutable_map_descriptions = NULL,
     .struct_instance_descriptions = NULL,
     .vector_descriptions = NULL,
+    .once_cell_descriptions = NULL,
     .protocoldescriptor_descriptions = NULL,
     .constraintcombinator_descriptions = NULL,
     .dispatch_entry_descriptions = NULL,

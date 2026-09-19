@@ -1,0 +1,17 @@
+\ A `once` word defined inside a module, read from an importing file.
+\
+\ This is the path the top-level fixtures leave uncovered. The cell's body resolves bare words
+\ against its own module, and the only thing carrying that module across the freeze is the stamp
+\ the image loader writes from the row's `module_name`. A force that read the executing
+\ visibility instead would resolve against *this* file and find neither the `private{ }` helper
+\ nor the module-level binding.
+\
+\ The body also contains a `;`, so the row's `may_define` bit has to survive too: without it the
+\ definition lands in whatever frame happened to be on top rather than a transient one.
+
+use "support/once_module_state.1z" ;
+
+body-runs .  \ 0  -- nothing runs until the word is referenced
+scaled .     \ 40 -- the private helper and the binding both resolved
+scaled .     \ 40 -- reused
+body-runs .  \ 1  -- one body entry across both reads

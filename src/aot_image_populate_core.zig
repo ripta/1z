@@ -260,6 +260,30 @@ pub const VectorDescription = extern struct {
     elements_bytecode_len: u32,
 };
 
+/// Zig mirror of `onez_image_once_cell_description_t`.
+///
+/// One row per slot in `onez_image_once_cell_slots[]`. The loader allocates a fresh `*OnceCell`,
+/// decodes `body_bytecode` into its source body, attaches the compiled function named by
+/// `body_quotation_id`, stamps the body with `module_name`, and patches the slot.
+pub const OnceCellDescription = extern struct {
+    name: [*]const u8,
+    name_len: u32,
+    slot: u32,
+    body_bytecode: ?[*]const u8,
+    body_bytecode_len: u32,
+    /// The body's global quotation id, or `once_body_uncompiled_sentinel` when the freeze never
+    /// reached it. The id alone does not mean the body compiled: the table entry it names is NULL
+    /// for one that did not, and that is what the loader reads.
+    body_quotation_id: u32,
+    /// Whether the body calls a defining native at its top level, so the force opens a transient
+    /// lexical frame for it.
+    may_define: u32,
+    /// Defining module of the source body, or null when the word was defined outside any module.
+    /// The body never reaches a push site, so this stamp is its only route to a module.
+    module_name: ?[*]const u8 = null,
+    module_name_len: u32 = 0,
+};
+
 /// Zig mirror of `onez_image_protocol_method_t`.
 ///
 /// One required method of a protocol. `stack_effect_idx` indexes the image's stack-effect table
@@ -320,6 +344,11 @@ pub const dispatch_type_any: u32 = 0xFFFFFFFE;
 /// Reserved `quotation_id` in a dispatch-entry row marking an interpreter-run body: the method
 /// never compiled, so the row carries `body_bytecode` instead of a quotation-table index.
 pub const dispatch_interp_quotation_id_sentinel: u32 = 0xFFFFFFFF;
+
+/// Reserved `body_quotation_id` in a once-cell row marking a body that did not compile, so only
+/// the interpreted path can run it. Mirrors `instruction_bytecode.quotation_id_sentinel`, which
+/// this module cannot name without importing the hosted decoder.
+pub const once_body_uncompiled_sentinel: u32 = 0xFFFFFFFF;
 
 /// Zig mirror of `onez_image_dispatch_entry_description_t`.
 ///
@@ -395,6 +424,7 @@ pub const Header = extern struct {
     mutable_map_slot_count: u32,
     struct_instance_slot_count: u32,
     vector_slot_count: u32,
+    once_cell_slot_count: u32,
     protocoldescriptor_slot_count: u32,
     constraintcombinator_slot_count: u32,
     dispatch_entry_slot_count: u32,
@@ -411,6 +441,7 @@ pub const Header = extern struct {
     mutable_map_descriptions: ?[*]const MutableMapDescription,
     struct_instance_descriptions: ?[*]const StructInstanceDescription,
     vector_descriptions: ?[*]const VectorDescription,
+    once_cell_descriptions: ?[*]const OnceCellDescription,
     protocoldescriptor_descriptions: ?[*]const ProtocolDescriptorDescription,
     constraintcombinator_descriptions: ?[*]const ConstraintCombinatorDescription,
     dispatch_entry_descriptions: ?[*]const DispatchEntryDescription,
@@ -488,6 +519,12 @@ pub const StructInstanceSlotTable = [*]?*value_mod.StructInstance;
 /// pushing so the cache's strong reference is preserved.
 pub const VectorSlotTable = [*]?*value_mod.Vector;
 
+/// Slot table for `.once_cell` pointers.
+///
+/// Each entry is allocated by the loader; its source body is decoded from the matching
+/// description row. A cell carries no refcounted header, so the push helper takes no reference.
+pub const OnceCellSlotTable = [*]?*value_mod.OnceCell;
+
 /// Slot table for `*ProtocolDescriptor` pointers at protocol-bounded call sites.
 ///
 /// Each slot is populated by the loader: a same-named protocol from the runtime context's
@@ -515,6 +552,7 @@ pub const SlotTables = struct {
     mutable_maps: ?MutableMapSlotTable = null,
     struct_instances: ?StructInstanceSlotTable = null,
     vectors: ?VectorSlotTable = null,
+    once_cells: ?OnceCellSlotTable = null,
     protocol_descriptors: ?ProtocolDescriptorSlotTable = null,
     constraint_combinators: ?ConstraintCombinatorSlotTable = null,
 };

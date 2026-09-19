@@ -1,0 +1,2 @@
+once cycle: flag-sound -> boom-sound -> flag-sound
+once cycle: boom-sound -> flag-sound -> boom-sound

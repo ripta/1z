@@ -1,0 +1,21 @@
+\ The `once` cell in the interpreter-free class. Same mechanism as aot_once_cell_image.1z, cut
+\ down to what compiles without a quotation-call fallback, so the only thing the run exercises is
+\ the cell itself.
+\
+\ The body reaches a module-level binding and calls another word, so it also proves the freeze
+\ walked into the cell and compiled what the body calls rather than only the guard.
+
+runs: ( -- vec ) V{ } ;
+
+(note-run): ( -- ) [ runs 1 #push! drop ] ;
+
+answer: ( -- fixnum ) once [ (note-run) 6 7 * ] ;
+
+read-once: ( -- fixnum ) [ answer ] ;
+read-twice: ( -- fixnum ) [ answer answer + ] ;
+
+runs #len .   \ 0  -- nothing runs until the word is referenced
+read-once .   \ 42 -- the first read computes
+runs #len .   \ 1
+read-twice .  \ 84 -- both reads reuse
+runs #len .   \ 1  -- one body entry across three reads from two call sites

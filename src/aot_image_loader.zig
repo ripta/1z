@@ -52,6 +52,7 @@ pub const TaggedDescription = populate_core.TaggedDescription;
 pub const MutableMapDescription = populate_core.MutableMapDescription;
 pub const StructInstanceDescription = populate_core.StructInstanceDescription;
 pub const VectorDescription = populate_core.VectorDescription;
+pub const OnceCellDescription = populate_core.OnceCellDescription;
 pub const ProtocolMethod = populate_core.ProtocolMethod;
 pub const ProtocolDescriptorDescription = populate_core.ProtocolDescriptorDescription;
 pub const CombinatorElement = populate_core.CombinatorElement;
@@ -71,6 +72,7 @@ pub const TaggedSlotTable = populate_core.TaggedSlotTable;
 pub const MutableMapSlotTable = populate_core.MutableMapSlotTable;
 pub const StructInstanceSlotTable = populate_core.StructInstanceSlotTable;
 pub const VectorSlotTable = populate_core.VectorSlotTable;
+pub const OnceCellSlotTable = populate_core.OnceCellSlotTable;
 pub const ProtocolDescriptorSlotTable = populate_core.ProtocolDescriptorSlotTable;
 pub const ConstraintCombinatorSlotTable = populate_core.ConstraintCombinatorSlotTable;
 pub const SlotTables = populate_core.SlotTables;
@@ -136,6 +138,9 @@ pub fn loadIntoContext(
     try populateTypeValueSlots(ctx, header, slots.typevalues, slots.struct_types);
     try populateMarkerSlots(ctx, header, slots.markers);
     try populateParameterSlots(ctx, header, slots.parameters);
+    // Once cells populate beside parameters, for the same reason: a cell's body is serialized by
+    // value, so it resolves against no other slot table.
+    try populateOnceCellSlots(ctx, header, slots.once_cells);
     if (pic_relocs) |relocs| {
         try resolvePicRelocations(header, slots.typevalues, relocs);
     }
@@ -160,6 +165,8 @@ pub fn loadIntoContext(
     ctx.image_struct_instance_slot_count = header.struct_instance_slot_count;
     ctx.image_vector_slots = slots.vectors;
     ctx.image_vector_slot_count = header.vector_slot_count;
+    ctx.image_once_cell_slots = slots.once_cells;
+    ctx.image_once_cell_slot_count = header.once_cell_slot_count;
     ctx.image_protocoldescriptor_slots = slots.protocol_descriptors;
     ctx.image_protocoldescriptor_slot_count = header.protocoldescriptor_slot_count;
     ctx.image_constraintcombinator_slots = slots.constraint_combinators;
@@ -272,6 +279,8 @@ fn imageSlotTables(ctx: *Context) instruction_bytecode.SlotResolutionTables {
         .struct_instance_slot_count = ctx.image_struct_instance_slot_count,
         .vector_slots = ctx.image_vector_slots,
         .vector_slot_count = ctx.image_vector_slot_count,
+        .once_cell_slots = ctx.image_once_cell_slots,
+        .once_cell_slot_count = ctx.image_once_cell_slot_count,
         .call_target_slots = ctx.image_call_target_slots,
         .call_target_slot_count = ctx.image_call_target_slot_count,
         // Compiled-quotation table (registered before image load, so available
@@ -925,6 +934,80 @@ fn populateParameterSlots(
         // The default runs standalone through `executeQuotation`, so the stamp is its only route
         // to its module's scope.
         //
+        // The module cache is live: `populateModulesAndWords` runs first.
+        if (row.module_name) |mn_ptr| {
+            const module_name = nameSlice(mn_ptr, row.module_name_len);
+            if (ctx.module_cache_value.map.get(module_name)) |cached| {
+                if (cached == .module) {
+                    ctx.stampQuotationBodies(instructions, cached.module) catch
+                        return LoaderError.OutOfMemory;
+                }
+            }
+        }
+    }
+}
+
+/// Walk the once-cell description table and patch `onez_image_once_cell_slots[]`.
+///
+/// Single pass. A cell's body can reach another `once` word, but only as a call at force time,
+/// which the cycle detector already covers. Nothing in a body names another cell's *slot*, so
+/// there is no forward reference for a second pass to resolve.
+///
+/// Each cell is registered on the dictionary's teardown list, which is what releases the value it
+/// eventually publishes. The cell itself lives on the arena and is not freed separately.
+fn populateOnceCellSlots(
+    ctx: *Context,
+    header: *const Header,
+    slots: ?OnceCellSlotTable,
+) LoaderError!void {
+    if (header.once_cell_slot_count == 0) return;
+    const descs = header.once_cell_descriptions orelse return;
+    const slot_table = slots orelse return;
+    const arena = ctx.quotationAllocator();
+    var i: u32 = 0;
+    while (i < header.once_cell_slot_count) : (i += 1) {
+        const row = descs[i];
+        if (row.slot >= header.once_cell_slot_count) return LoaderError.BadSlotIndex;
+        const name = nameSlice(row.name, row.name_len);
+        var instructions: []const value_mod.Instruction = &.{};
+        var body_effect: ?*const stack_effect_mod.StackEffect = null;
+        if (row.body_bytecode) |p| {
+            if (row.body_bytecode_len > 0) {
+                var diag: instruction_bytecode.DecodeDiagnostic = undefined;
+                const decoded = instruction_bytecode.deserializeQuotationInstructions(
+                    p[0..row.body_bytecode_len],
+                    arena,
+                    null,
+                    &diag,
+                ) catch |err| {
+                    reportDecodeFailure(ctx, &diag, err);
+                    return err;
+                };
+                instructions = decoded.instructions;
+                body_effect = decoded.effect;
+            }
+        }
+
+        // The table entry, not the id, is what says the body compiled: a body the freeze reached
+        // but could not compile holds an id whose entry is null. A compiled body is the only way
+        // a force runs at all in a build with no interpreter.
+        var code_ptr: ?*const anyopaque = null;
+        if (row.body_quotation_id != instruction_bytecode.quotation_id_sentinel) {
+            if (ctx.aot_quotation_fns) |fns| {
+                if (row.body_quotation_id < fns.size) code_ptr = fns.table[row.body_quotation_id];
+            }
+        }
+
+        const cell = arena.create(value_mod.OnceCell) catch return LoaderError.OutOfMemory;
+        cell.* = .{
+            .body = .{ .instructions = instructions, .effect = body_effect, .code_ptr = code_ptr },
+            .may_define = row.may_define != 0,
+            .name = name,
+            .allocator = ctx.allocator,
+        };
+        ctx.registerOnceCell(cell) catch return LoaderError.OutOfMemory;
+        slot_table[row.slot] = cell;
+
         // The module cache is live: `populateModulesAndWords` runs first.
         if (row.module_name) |mn_ptr| {
             const module_name = nameSlice(mn_ptr, row.module_name_len);
@@ -1640,6 +1723,8 @@ fn emptyHeader() Header {
         .struct_instance_descriptions = null,
         .vector_slot_count = 0,
         .vector_descriptions = null,
+        .once_cell_slot_count = 0,
+        .once_cell_descriptions = null,
         .protocoldescriptor_slot_count = 0,
         .protocoldescriptor_descriptions = null,
         .constraintcombinator_slot_count = 0,
@@ -2555,6 +2640,8 @@ test "populateMutableMapSlots: lower slot forward-references a higher slot" {
     defer si_index.deinit(testing.allocator);
     var vx_index: std.AutoHashMapUnmanaged(*const value_mod.Vector, u32) = .{};
     defer vx_index.deinit(testing.allocator);
+    var oc_index: std.AutoHashMapUnmanaged(*const value_mod.OnceCell, u32) = .{};
+    defer oc_index.deinit(testing.allocator);
 
     const enc_maps = instruction_bytecode.SlotEncodingMaps{
         .typevalue_slot_index = &tv_index,
@@ -2565,6 +2652,7 @@ test "populateMutableMapSlots: lower slot forward-references a higher slot" {
         .mutable_map_slot_index = &mm_index,
         .struct_instance_slot_index = &si_index,
         .vector_slot_index = &vx_index,
+        .once_cell_slot_index = &oc_index,
     };
 
     const one: u32 = 1;
@@ -2919,6 +3007,101 @@ test "populateParameterSlots: stamps a module-attributed default" {
     try testing.expectEqual(@as(usize, 0), dec_eff.inputs.len);
     try testing.expectEqual(@as(usize, 1), dec_eff.outputs.len);
     try testing.expectEqualStrings("v", dec_eff.outputs[0].name);
+}
+
+test "populateOnceCellSlots: decodes the body, attaches its compiled function, and stamps it" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    const body = [_]value_mod.Instruction{
+        .{ .op = .{ .call_word = "probe" }, .line = 0, .column = 0 },
+    };
+    var encoded: std.ArrayListUnmanaged(u8) = .{};
+    defer encoded.deinit(testing.allocator);
+    try instruction_bytecode.serializeInstructionsInto(&encoded, &body, null, testing.allocator, null, null);
+
+    // The compiled function the row names. Never called here: the test is that the loader wires
+    // the pointer through, which is what lets a force run without the interpreter.
+    var fake_fn: u8 = 0;
+    var quotation_table = [_]?*const anyopaque{@ptrCast(&fake_fn)};
+    ctx.aot_quotation_fns = .{ .table = &quotation_table, .size = quotation_table.len };
+
+    const m_name = "demo";
+    const w_name = "answer";
+    const words = [_]Word{wordRow("stub", 0, 0)};
+    const modules = [_]Module{
+        .{ .name = m_name.ptr, .name_len = m_name.len, .word_start_idx = 0, .word_count = 1 },
+    };
+    const once_rows = [_]OnceCellDescription{.{
+        .name = w_name.ptr,
+        .name_len = w_name.len,
+        .slot = 0,
+        .body_bytecode = encoded.items.ptr,
+        .body_bytecode_len = @intCast(encoded.items.len),
+        .body_quotation_id = 0,
+        .may_define = 1,
+        .module_name = m_name.ptr,
+        .module_name_len = m_name.len,
+    }};
+    var once_slots = [_]?*value_mod.OnceCell{null};
+
+    var header = emptyHeader();
+    header.module_count = 1;
+    header.word_count = 1;
+    header.modules = &modules;
+    header.words = &words;
+    header.once_cell_slot_count = 1;
+    header.once_cell_descriptions = &once_rows;
+
+    try loadIntoContext(&ctx, &header, .{ .once_cells = &once_slots }, null);
+
+    const cached = ctx.module_cache_value.map.get(m_name) orelse return error.TestExpectedModule;
+    const cell = once_slots[0] orelse return error.TestExpectedOnceCell;
+
+    try testing.expectEqualStrings("answer", cell.name);
+    try testing.expect(cell.may_define);
+    try testing.expectEqual(value_mod.OnceCell.State.cold, cell.state.load(.acquire));
+    try testing.expectEqual(@as(usize, 1), cell.body.instructions.len);
+    try testing.expectEqual(@as(?*const anyopaque, @ptrCast(&fake_fn)), cell.body.code_ptr);
+    try testing.expectEqual(
+        @as(?*const value_mod.Module, cached.module),
+        ctx.quotation_stamp_store.lookup(@intFromPtr(cell.body.instructions.ptr)),
+    );
+}
+
+test "populateOnceCellSlots: an uncompiled body leaves the code pointer null" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    const body = [_]value_mod.Instruction{
+        .{ .op = .{ .push_literal = .{ .fixnum = 7 } }, .line = 0, .column = 0 },
+    };
+    var encoded: std.ArrayListUnmanaged(u8) = .{};
+    defer encoded.deinit(testing.allocator);
+    try instruction_bytecode.serializeInstructionsInto(&encoded, &body, null, testing.allocator, null, null);
+
+    const w_name = "answer";
+    const once_rows = [_]OnceCellDescription{.{
+        .name = w_name.ptr,
+        .name_len = w_name.len,
+        .slot = 0,
+        .body_bytecode = encoded.items.ptr,
+        .body_bytecode_len = @intCast(encoded.items.len),
+        .body_quotation_id = instruction_bytecode.quotation_id_sentinel,
+        .may_define = 0,
+    }};
+    var once_slots = [_]?*value_mod.OnceCell{null};
+
+    var header = emptyHeader();
+    header.once_cell_slot_count = 1;
+    header.once_cell_descriptions = &once_rows;
+
+    try loadIntoContext(&ctx, &header, .{ .once_cells = &once_slots }, null);
+
+    const cell = once_slots[0] orelse return error.TestExpectedOnceCell;
+    try testing.expectEqual(@as(?*const anyopaque, null), cell.body.code_ptr);
+    // The decoded body is still there, so the interpreted path can run what did not compile.
+    try testing.expectEqual(@as(usize, 1), cell.body.instructions.len);
 }
 
 test "populateReifiedQuotationModules: keys rows by data pointer" {

@@ -828,6 +828,31 @@ fn addBaremetalRiscv64VirtTest(
 
     const install_mixed = b.addInstallFile(mixed_elf, "baremetal/riscv64/1z-mixed-operand.elf");
 
+    // NOTE(ripta): AOT-compile the compute-once program the same way. Its image carries once-cell
+    //              slots, so the link additionally pulls the freestanding cell loader, its slot
+    //              push, and the force that calls each body's compiled function.
+    const once_build = b.addRunArtifact(host_exe);
+    once_build.setName("baremetal aot build: once");
+    restoreHostDeveloperDir(b, once_build);
+    once_build.addArg("build");
+    once_build.addArg("--target=riscv64-freestanding-none");
+    once_build.addArg("--interpreter-fallback=false");
+    once_build.addPrefixedFileArg("--linker-script=", b.path("src/baremetal/riscv64/virt/linker.ld"));
+    once_build.addPrefixedFileArg("--link-object=", entry_lib.getEmittedBin());
+    once_build.addPrefixedFileArg("--link-object=", platform_lib.getEmittedBin());
+    once_build.addPrefixedFileArg("--link-object=", runtime_lib.getEmittedBin());
+    once_build.addArg("-o");
+    const once_elf = once_build.addOutputFileArg("1z-once.elf");
+    once_build.addFileArg(b.path("tests/baremetal/riscv64/once.1z"));
+
+    const once_verify = b.addSystemCommand(&.{ "sh", "-c", baremetal_verify_script, "baremetal-verify" });
+    once_verify.addFileArg(once_elf);
+    restoreHostDeveloperDir(b, once_verify);
+    once_verify.setName("baremetal aot verify: once symbols and no libc");
+    once_verify.expectExitCode(0);
+
+    const install_once = b.addInstallFile(once_elf, "baremetal/riscv64/1z-once.elf");
+
     const test_step = b.step("baremetal-riscv64-test", "Compile riscv64 virt platform library, stubs, and AOT freestanding ELFs");
     test_step.dependOn(&platform_lib.step);
     test_step.dependOn(&runtime_lib.step);
@@ -840,6 +865,8 @@ fn addBaremetalRiscv64VirtTest(
     test_step.dependOn(&install_dispatch.step);
     test_step.dependOn(&mixed_verify.step);
     test_step.dependOn(&install_mixed.step);
+    test_step.dependOn(&once_verify.step);
+    test_step.dependOn(&install_once.step);
 
     return test_step;
 }

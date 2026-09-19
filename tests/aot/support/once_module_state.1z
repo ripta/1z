@@ -1,0 +1,21 @@
+\ A module-private `once` word, for the AOT module path. Its body calls a `private{ }` sibling
+\ and reads a module-level binding, so a force that resolved bare words against the *caller's*
+\ module instead of this one would fail to find either.
+\
+\ The body also contains a `;`, which sets the cell's `may_define` bit: forcing runs it in a
+\ transient lexical frame of its own.
+
+private{
+
+  runs: ( -- vec ) V{ } ;
+
+  (note-run): ( -- ) [ runs 1 #push! drop ] ;
+
+  (scale): ( n -- n ) [ 4 * ] ;
+
+}
+
+\ The declared effect is the shape the marker requires, and the body leaves exactly one value.
+scaled: ( -- fixnum ) once [ (note-run) base: 10 ; base (scale) ] ;
+
+body-runs: ( -- n ) [ runs #len ] ;

@@ -903,6 +903,7 @@ baremetal-riscv64-test: ## Build the riscv64 virt platform and AOT freestanding 
 	scripts/baremetal-riscv64-test.sh $(ZIG_PREFIX)/baremetal/riscv64/1z-hello.elf tests/baremetal/riscv64/hello.serial.expected $(TARGET_TIMEOUT)
 	scripts/baremetal-riscv64-test.sh $(ZIG_PREFIX)/baremetal/riscv64/1z-dispatch.elf tests/baremetal/riscv64/dispatch.serial.expected $(TARGET_TIMEOUT)
 	scripts/baremetal-riscv64-test.sh $(ZIG_PREFIX)/baremetal/riscv64/1z-mixed-operand.elf tests/baremetal/riscv64/mixed_operand.serial.expected $(TARGET_TIMEOUT)
+	scripts/baremetal-riscv64-test.sh $(ZIG_PREFIX)/baremetal/riscv64/1z-once.elf tests/baremetal/riscv64/once.serial.expected $(TARGET_TIMEOUT)
 
 clean: ## Remove build artifacts
 	mv .zig-cache .old.zig-cache

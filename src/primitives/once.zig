@@ -86,13 +86,7 @@ fn runForce(ctx: *Context, cell: *OnceCell) anyerror!void {
     defer ctx.current_source = saved_source;
     ctx.enterBodySource(cell.body.instructions);
 
-    // The source body ran in the word's place before `;` moved it here, so it resolves bare words
-    // against the word's module the way the guard standing in for it does. The guard is executing
-    // right now, so its own visibility names that module; the source body carries no stamp of its
-    // own, because it never reached a push site that would have given it one.
-    const defining_module = if (ctx.active_deps_vis) |vis| vis.defining_module else null;
-
-    ctx.executeQuotationWithPic(cell.body, null, defining_module, cell.owner, cell.may_define) catch |err| {
+    runBody(ctx, cell) catch |err| {
         failForce(ctx, cell, err);
         return err;
     };
@@ -118,6 +112,35 @@ fn runForce(ctx: *Context, cell: *OnceCell) anyerror!void {
     var woken = cell.publish(produced);
     defer woken.deinit(cell.allocator);
     wakeAll(ctx, cell, woken.items);
+}
+
+/// Run the cell's source body, compiled when the freeze gave it a function and interpreted
+/// otherwise.
+///
+/// Gating on `code_ptr` keeps the interpreted path free of the extra local frame
+/// `executeQuotationWithFrame` pushes, which is the same split a dispatch entry's body takes. A
+/// compiled body that bails falls back to the interpreter inside that call.
+///
+/// The interpreted arm resolves bare words against the word's own module, and takes that module
+/// from the body's stamp before the executing visibility.
+///
+/// The stamp is the body's own, written by `;` for a module word and by the image loader for one
+/// that crossed a freeze. The visibility belongs to whichever body is executing, and only
+/// `executeInstructions` maintains it, so a compiled guard leaves whatever an interpreted caller
+/// last set. That is right only by coincidence, and the order here says so rather than relying on
+/// the coincidence. The visibility stays as the fallback for a cell with no stamp, which is a
+/// `once` word defined outside any module.
+fn runBody(ctx: *Context, cell: *OnceCell) anyerror!void {
+    if (cell.body.code_ptr != null) {
+        return ctx.executeQuotationWithFrame(cell.body, cell.owner);
+    }
+    const stamped = if (cell.body.instructions.len > 0)
+        ctx.quotation_stamp_store.lookup(@intFromPtr(cell.body.instructions.ptr))
+    else
+        null;
+    const defining_module = stamped orelse
+        if (ctx.active_deps_vis) |vis| vis.defining_module else null;
+    return ctx.executeQuotationWithPic(cell.body, null, defining_module, cell.owner, cell.may_define);
 }
 
 /// Return the cell to cold and give every waiter the error this force raised, so a parked reader

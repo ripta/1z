@@ -30,6 +30,7 @@ const stack_effect_mod = @import("stack_effect.zig");
 const StackEffect = stack_effect_mod.StackEffect;
 const StackEffectParam = stack_effect_mod.StackEffectParam;
 const instruction_bytecode = @import("instruction_bytecode.zig");
+const populate_core = @import("aot_image_populate_core.zig");
 
 /// Error set returned by the runtime-image emitter. `NotEncodable`
 /// surfaces when the bytecode encoder cannot serialize a literal
@@ -71,7 +72,7 @@ pub const flag_bit_image_decode: u8 = 1 << 6;
 
 /// Format version emitted into `onez_image_header.format_version`. Bumped
 /// when the on-disk layout changes in a way the loader cannot ignore.
-pub const format_version: u32 = 19;
+pub const format_version: u32 = 20;
 
 /// Counts that the metadata emitter plumbs back into `AotMetadata`. The
 /// codegen knows these as it walks the manifest, so emitting them here
@@ -129,6 +130,11 @@ pub const ImageEmissionStats = struct {
     /// freshly-allocated `*Vector` whose elements are decoded from the row's
     /// serialized element bytes.
     vector_slot_count: u32 = 0,
+    /// Number of distinct `*OnceCell` pointers reachable through the guard body a `once` word
+    /// stores. Emitted as `onez_image_once_cell_slots[]` and patched at load time with a
+    /// freshly-allocated `*OnceCell` whose source body is decoded from the row's serialized
+    /// bytes.
+    once_cell_slot_count: u32 = 0,
     /// Number of distinct `*ProtocolDescriptor` pointers from protocol-bounded
     /// call sites. Emitted as `onez_image_protocoldescriptor_slots[]` and
     /// patched at load time by name lookup in the runtime context.
@@ -321,8 +327,10 @@ pub fn emitImageCFromCollection(
     try emitMutableMapSlotTable(out, allocator, effect_table);
     try emitStructInstanceSlotTable(out, allocator, effect_table);
     try emitVectorSlotTable(out, allocator, effect_table);
+    try emitOnceCellSlotTable(out, allocator, effect_table);
     try emitMarkerDescriptionsStorage(out, allocator, effect_table);
     try emitParameterDescriptionsStorage(out, allocator, ctx, effect_table);
+    try emitOnceCellDescriptionsStorage(out, allocator, ctx, effect_table, quotation_id_map);
     try emitStructTypeSlotTable(out, allocator, struct_plans_items);
     try emitStackEffectTable(out, allocator, effect_table);
     try emitTypeValueData(out, allocator, effect_table, struct_plans_items, struct_index);
@@ -361,6 +369,7 @@ pub fn emitImageCFromCollection(
     stats.mutable_map_slot_count = effect_table.mutableMapSlotCount();
     stats.struct_instance_slot_count = effect_table.structInstanceSlotCount();
     stats.vector_slot_count = effect_table.vectorSlotCount();
+    stats.once_cell_slot_count = effect_table.onceCellSlotCount();
     stats.protocoldescriptor_slot_count = effect_table.protocolSlotCount();
     stats.constraintcombinator_slot_count = effect_table.combinatorSlotCount();
     return stats;
@@ -462,6 +471,16 @@ pub const StackEffectTable = struct {
     /// Indices are 0-based with no sentinel.
     vector_slots: std.ArrayListUnmanaged(*const value_mod.Vector) = .{},
     vector_slot_index: std.AutoHashMapUnmanaged(*const value_mod.Vector, u32) = .{},
+    /// Distinct `*OnceCell` pointers reached from the two-instruction guard body a `once` word
+    /// stores. The loader allocates one `OnceCell` per slot and decodes its source body from the
+    /// slot's description, so every freeze-time reference shares one runtime pointer.
+    ///
+    /// Sharing is the whole point rather than an incidental property: the cell *is* the word's
+    /// compute-once state, so two cells where freeze time had one would let the body run twice.
+    ///
+    /// Indices are 0-based with no sentinel.
+    once_cell_slots: std.ArrayListUnmanaged(*const value_mod.OnceCell) = .{},
+    once_cell_slot_index: std.AutoHashMapUnmanaged(*const value_mod.OnceCell, u32) = .{},
     /// Distinct `*ProtocolDescriptor` pointers reached from protocol-bounded call sites in
     /// AOT-compiled word bodies or from `.protocol` annotations in serialized stack effects.
     ///
@@ -504,6 +523,8 @@ pub const StackEffectTable = struct {
         self.struct_instance_slot_index.deinit(self.allocator);
         self.vector_slots.deinit(self.allocator);
         self.vector_slot_index.deinit(self.allocator);
+        self.once_cell_slots.deinit(self.allocator);
+        self.once_cell_slot_index.deinit(self.allocator);
         self.protocol_slots.deinit(self.allocator);
         self.protocol_slot_index.deinit(self.allocator);
         self.combinator_slots.deinit(self.allocator);
@@ -593,6 +614,16 @@ pub const StackEffectTable = struct {
         return idx;
     }
 
+    /// Intern an `*OnceCell` pointer. Returns the assigned 0-based slot
+    /// index; identical pointers collapse to the same slot.
+    fn internOnceCell(self: *StackEffectTable, cell: *const value_mod.OnceCell) Allocator.Error!u32 {
+        if (self.once_cell_slot_index.get(cell)) |idx| return idx;
+        const idx: u32 = @intCast(self.once_cell_slots.items.len);
+        try self.once_cell_slots.append(self.allocator, cell);
+        try self.once_cell_slot_index.put(self.allocator, cell, idx);
+        return idx;
+    }
+
     /// Intern a `*ProtocolDescriptor` pointer. Returns the assigned
     /// 0-based slot index; identical pointers collapse to the same slot.
     pub fn internProtocol(self: *StackEffectTable, pd: *const value_mod.ProtocolDescriptor) Allocator.Error!u32 {
@@ -657,6 +688,10 @@ pub const StackEffectTable = struct {
         return @intCast(self.vector_slots.items.len);
     }
 
+    fn onceCellSlotCount(self: *const StackEffectTable) u32 {
+        return @intCast(self.once_cell_slots.items.len);
+    }
+
     fn protocolSlotCount(self: *const StackEffectTable) u32 {
         return @intCast(self.protocol_slots.items.len);
     }
@@ -712,6 +747,12 @@ pub const StackEffectTable = struct {
     /// the pointer has not been interned.
     pub fn lookupVectorSlot(self: *const StackEffectTable, v: *const value_mod.Vector) ?u32 {
         return self.vector_slot_index.get(v);
+    }
+
+    /// Look up the 0-based once_cell slot index for `cell`. Returns null
+    /// when the pointer has not been interned.
+    pub fn lookupOnceCellSlot(self: *const StackEffectTable, cell: *const value_mod.OnceCell) ?u32 {
+        return self.once_cell_slot_index.get(cell);
     }
 
     /// Look up the 0-based protocol slot index for `pd`. Returns
@@ -918,6 +959,9 @@ fn internValueTypeLiterals(
             _ = try effect_table.internTagged(t.tag, t.inner);
         },
         .parameter => |p| _ = try effect_table.internParameter(p),
+        // The source body is serialized by value into the cell's description row, the way a
+        // parameter's default quotation is, so the literals inside it need no slot of their own.
+        .once_cell => |cell| _ = try effect_table.internOnceCell(cell),
         .marker => |m| _ = try effect_table.internMarker(m),
         .mutable_map => |m| {
             _ = try effect_table.internMutableMap(m);
@@ -1517,6 +1561,170 @@ fn emitParameterDescriptionsStorage(
     try out.appendSlice(allocator, "};\n\n");
 }
 
+fn writeOnceCellDescNameSym(
+    out: *std.ArrayListUnmanaged(u8),
+    allocator: Allocator,
+    idx: usize,
+) Allocator.Error!void {
+    var buf: [64]u8 = undefined;
+    const s = std.fmt.bufPrint(&buf, "onez_image_once_desc_{d}_name", .{idx}) catch unreachable;
+    try out.appendSlice(allocator, s);
+}
+
+fn writeOnceCellDescBodySym(
+    out: *std.ArrayListUnmanaged(u8),
+    allocator: Allocator,
+    idx: usize,
+) Allocator.Error!void {
+    var buf: [64]u8 = undefined;
+    const s = std.fmt.bufPrint(&buf, "onez_image_once_desc_{d}_body", .{idx}) catch unreachable;
+    try out.appendSlice(allocator, s);
+}
+
+fn writeOnceCellDescModuleSym(
+    out: *std.ArrayListUnmanaged(u8),
+    allocator: Allocator,
+    idx: usize,
+) Allocator.Error!void {
+    var buf: [64]u8 = undefined;
+    const s = std.fmt.bufPrint(&buf, "onez_image_once_desc_{d}_module", .{idx}) catch unreachable;
+    try out.appendSlice(allocator, s);
+}
+
+/// Defining module of a `once` word's source body, resolved through the shared stamp store the
+/// same way a parameter's default is. Null for a body written outside any module or inside a
+/// synthetic scope.
+fn onceCellBodyModule(ctx: *const Context, cell: *const value_mod.OnceCell) ?*const value_mod.Module {
+    const instrs = cell.body.instructions;
+    if (instrs.len == 0) return null;
+    const module = ctx.quotation_stamp_store.lookup(@intFromPtr(instrs.ptr)) orelse return null;
+    if (context_mod.isSyntheticScopeModule(module)) return null;
+    return module;
+}
+
+/// Emit `onez_image_once_cell_slots[]`: one NULL pointer per distinct `OnceCell` reached through
+/// a `once` word's guard body. The loader allocates the runtime cell and patches the slot.
+fn emitOnceCellSlotTable(
+    out: *std.ArrayListUnmanaged(u8),
+    allocator: Allocator,
+    table: *const StackEffectTable,
+) Allocator.Error!void {
+    if (table.onceCellSlotCount() == 0) return;
+    var num_buf: [32]u8 = undefined;
+    try out.appendSlice(allocator, "__attribute__((used)) struct onez_once_cell *onez_image_once_cell_slots[");
+    try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{table.onceCellSlotCount()}) catch unreachable);
+    try out.appendSlice(allocator, "] = {\n");
+    for (table.once_cell_slots.items, 0..) |cell, i| {
+        try out.appendSlice(allocator, "    NULL, /* slot ");
+        try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{i}) catch unreachable);
+        try out.appendSlice(allocator, ": once ");
+        try out.appendSlice(allocator, cell.name);
+        try out.appendSlice(allocator, " (filled by the loader). */\n");
+    }
+    try out.appendSlice(allocator, "};\n\n");
+}
+
+/// Emit `onez_image_once_cell_descriptions_storage[]`: one row per slot in
+/// `onez_image_once_cell_slots[]`. Each row carries the word's name, the serialized source body,
+/// that body's defining module when it has one, whether the body defines a word, and the
+/// `quotation_id` its compiled function was emitted under.
+///
+/// The body is serialized by value rather than through the slot maps, matching a parameter's
+/// default quotation: the non-image encoder lowers a type-carrier literal to a name the runtime
+/// resolves, so the body needs no slots of its own.
+///
+/// The `quotation_id` says the freeze reached the body, not that it compiled: the id map carries
+/// every collected quotation, and `onez_quotation_table` holds NULL for one that did not compile.
+/// The loader reads the table entry, so a null there leaves the interpreted path as the only way
+/// to run the body. The sentinel means the freeze never reached it at all.
+fn emitOnceCellDescriptionsStorage(
+    out: *std.ArrayListUnmanaged(u8),
+    allocator: Allocator,
+    ctx: *const Context,
+    table: *const StackEffectTable,
+    quotation_id_map: ?*const instruction_bytecode.QuotationIdMap,
+) ImageEmitError!void {
+    // The freestanding runtime reads this field against its own copy of the sentinel, since it
+    // cannot import the decoder that owns this one. A drift would make every uncompiled body
+    // look compiled there.
+    comptime std.debug.assert(instruction_bytecode.quotation_id_sentinel ==
+        populate_core.once_body_uncompiled_sentinel);
+
+    if (table.onceCellSlotCount() == 0) return;
+    var num_buf: [32]u8 = undefined;
+
+    for (table.once_cell_slots.items, 0..) |cell, i| {
+        try out.appendSlice(allocator, "static const char ");
+        try writeOnceCellDescNameSym(out, allocator, i);
+        try out.appendSlice(allocator, "[] = ");
+        try emitCStringLiteral(out, allocator, cell.name);
+        try out.appendSlice(allocator, ";\n");
+
+        // The id map is threaded in, unlike a parameter's default: a quotation nested in the body
+        // is stamped with its own id, so an interpreted force still reaches compiled code for it.
+        const bytes = instruction_bytecode.serializeQuotationInstructions(cell.body.instructions, cell.body.effect, allocator, quotation_id_map, null) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.NotEncodable => return error.NotEncodable,
+        };
+        defer allocator.free(bytes);
+
+        try out.appendSlice(allocator, "static const uint8_t ");
+        try writeOnceCellDescBodySym(out, allocator, i);
+        try out.appendSlice(allocator, "[] = {");
+        for (bytes, 0..) |byte, bi| {
+            if (bi > 0) try out.append(allocator, ',');
+            try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{byte}) catch unreachable);
+        }
+        try out.appendSlice(allocator, "};\n");
+
+        if (onceCellBodyModule(ctx, cell)) |module| {
+            try out.appendSlice(allocator, "static const char ");
+            try writeOnceCellDescModuleSym(out, allocator, i);
+            try out.appendSlice(allocator, "[] = ");
+            try emitCStringLiteral(out, allocator, module.name);
+            try out.appendSlice(allocator, ";\n");
+        }
+    }
+    try out.append(allocator, '\n');
+
+    try out.appendSlice(allocator, "static const onez_image_once_cell_description_t onez_image_once_cell_descriptions_storage[] = {\n");
+    for (table.once_cell_slots.items, 0..) |cell, i| {
+        try out.appendSlice(allocator, "    { .name = ");
+        try writeOnceCellDescNameSym(out, allocator, i);
+        try out.appendSlice(allocator, ", .name_len = ");
+        try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{cell.name.len}) catch unreachable);
+        try out.appendSlice(allocator, ", .slot = ");
+        try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{i}) catch unreachable);
+        try out.appendSlice(allocator, ", .body_bytecode = ");
+        try writeOnceCellDescBodySym(out, allocator, i);
+        try out.appendSlice(allocator, ", .body_bytecode_len = sizeof(");
+        try writeOnceCellDescBodySym(out, allocator, i);
+        try out.appendSlice(allocator, ")");
+
+        const q_id: u32 = blk: {
+            const map = quotation_id_map orelse break :blk instruction_bytecode.quotation_id_sentinel;
+            if (cell.body.instructions.len == 0) break :blk instruction_bytecode.quotation_id_sentinel;
+            break :blk map.get(@intFromPtr(cell.body.instructions.ptr)) orelse instruction_bytecode.quotation_id_sentinel;
+        };
+        try out.appendSlice(allocator, ", .body_quotation_id = ");
+        try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{q_id}) catch unreachable);
+
+        try out.appendSlice(allocator, ", .may_define = ");
+        try out.appendSlice(allocator, if (cell.may_define) "1" else "0");
+
+        if (onceCellBodyModule(ctx, cell)) |module| {
+            try out.appendSlice(allocator, ", .module_name = ");
+            try writeOnceCellDescModuleSym(out, allocator, i);
+            try out.appendSlice(allocator, ", .module_name_len = ");
+            try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{module.name.len}) catch unreachable);
+        } else {
+            try out.appendSlice(allocator, ", .module_name = NULL, .module_name_len = 0");
+        }
+        try out.appendSlice(allocator, " },\n");
+    }
+    try out.appendSlice(allocator, "};\n\n");
+}
+
 fn writeTaggedDescNameSym(
     out: *std.ArrayListUnmanaged(u8),
     allocator: Allocator,
@@ -1589,6 +1797,7 @@ fn emitTaggedDescriptionsStorage(
         .mutable_map_slot_index = &table.mutable_map_slot_index,
         .struct_instance_slot_index = &table.struct_instance_slot_index,
         .vector_slot_index = &table.vector_slot_index,
+        .once_cell_slot_index = &table.once_cell_slot_index,
         .quotation_id_map = quotation_id_map,
     };
 
@@ -1698,6 +1907,7 @@ fn emitMutableMapDescriptionsStorage(
         .mutable_map_slot_index = &table.mutable_map_slot_index,
         .struct_instance_slot_index = &table.struct_instance_slot_index,
         .vector_slot_index = &table.vector_slot_index,
+        .once_cell_slot_index = &table.once_cell_slot_index,
         .quotation_id_map = quotation_id_map,
     };
 
@@ -1802,6 +2012,7 @@ fn emitStructInstanceDescriptionsStorage(
         .mutable_map_slot_index = &table.mutable_map_slot_index,
         .struct_instance_slot_index = &table.struct_instance_slot_index,
         .vector_slot_index = &table.vector_slot_index,
+        .once_cell_slot_index = &table.once_cell_slot_index,
         .quotation_id_map = quotation_id_map,
     };
 
@@ -1907,6 +2118,7 @@ fn emitVectorDescriptionsStorage(
         .mutable_map_slot_index = &table.mutable_map_slot_index,
         .struct_instance_slot_index = &table.struct_instance_slot_index,
         .vector_slot_index = &table.vector_slot_index,
+        .once_cell_slot_index = &table.once_cell_slot_index,
         .quotation_id_map = quotation_id_map,
     };
 
@@ -2255,6 +2467,7 @@ fn emitDispatchEntryTable(
         .mutable_map_slot_index = &table.mutable_map_slot_index,
         .struct_instance_slot_index = &table.struct_instance_slot_index,
         .vector_slot_index = &table.vector_slot_index,
+        .once_cell_slot_index = &table.once_cell_slot_index,
         .quotation_id_map = quotation_id_map,
     };
 
@@ -3573,6 +3786,24 @@ fn emitTypeDeclarations(
         \\    uint32_t       elements_bytecode_len;
         \\} onez_image_vector_description_t;
         \\
+        \\/* Per-slot description for a `once` word's cell. The loader decodes     */
+        \\/* body_bytecode into the cell's source body, attaches                   */
+        \\/* onez_quotation_table[body_quotation_id] as its code pointer when that  */
+        \\/* id is not the sentinel, stamps the body with module_name so an        */
+        \\/* interpreted force resolves its bare words, and patches                */
+        \\/* onez_image_once_cell_slots[slot].                                     */
+        \\typedef struct onez_image_once_cell_description {
+        \\    const char *name;
+        \\    uint32_t    name_len;
+        \\    uint32_t    slot;                 /* index into onez_image_once_cell_slots */
+        \\    const uint8_t *body_bytecode;
+        \\    uint32_t       body_bytecode_len;
+        \\    uint32_t    body_quotation_id;    /* 0xFFFFFFFF when the freeze never reached the body */
+        \\    uint32_t    may_define;           /* body calls a defining native at its top level */
+        \\    const char *module_name;          /* defining module of the body, or NULL */
+        \\    uint32_t    module_name_len;
+        \\} onez_image_once_cell_description_t;
+        \\
         \\/* One required method of a protocol. The effect index points into       */
         \\/* onez_image_stack_effects_storage[]; 0 means no declared effect.        */
         \\typedef struct onez_image_protocol_method {
@@ -3688,6 +3919,7 @@ fn emitTypeDeclarations(
         \\    uint32_t mutable_map_slot_count;
         \\    uint32_t struct_instance_slot_count;
         \\    uint32_t vector_slot_count;
+        \\    uint32_t once_cell_slot_count;
         \\    uint32_t protocoldescriptor_slot_count;
         \\    uint32_t constraintcombinator_slot_count;
         \\    uint32_t dispatch_entry_slot_count;
@@ -3704,6 +3936,7 @@ fn emitTypeDeclarations(
         \\    const struct onez_image_mutable_map_description *mutable_map_descriptions;
         \\    const struct onez_image_struct_instance_description *struct_instance_descriptions;
         \\    const struct onez_image_vector_description *vector_descriptions;
+        \\    const struct onez_image_once_cell_description *once_cell_descriptions;
         \\    const struct onez_image_protocoldescriptor_description *protocoldescriptor_descriptions;
         \\    const struct onez_image_constraintcombinator_description *constraintcombinator_descriptions;
         \\    const struct onez_image_dispatch_entry_description *dispatch_entry_descriptions;
@@ -3867,6 +4100,7 @@ fn emitWordBodyBytecode(
         .mutable_map_slot_index = &effect_table.mutable_map_slot_index,
         .struct_instance_slot_index = &effect_table.struct_instance_slot_index,
         .vector_slot_index = &effect_table.vector_slot_index,
+        .once_cell_slot_index = &effect_table.once_cell_slot_index,
     };
 
     var emitted_any = false;
@@ -4712,6 +4946,7 @@ fn emitHeader(
     const mutable_map_slot_count: u32 = effect_table.mutableMapSlotCount();
     const struct_instance_slot_count: u32 = effect_table.structInstanceSlotCount();
     const vector_slot_count: u32 = effect_table.vectorSlotCount();
+    const once_cell_slot_count: u32 = effect_table.onceCellSlotCount();
     const protocoldescriptor_slot_count: u32 = effect_table.protocolSlotCount();
     const constraintcombinator_slot_count: u32 = effect_table.combinatorSlotCount();
 
@@ -4729,6 +4964,7 @@ fn emitHeader(
     const mutable_map_descs_ref: []const u8 = if (mutable_map_slot_count > 0) "onez_image_mutable_map_descriptions_storage" else "NULL";
     const struct_instance_descs_ref: []const u8 = if (struct_instance_slot_count > 0) "onez_image_struct_instance_descriptions_storage" else "NULL";
     const vector_descs_ref: []const u8 = if (vector_slot_count > 0) "onez_image_vector_descriptions_storage" else "NULL";
+    const once_cell_descs_ref: []const u8 = if (once_cell_slot_count > 0) "onez_image_once_cell_descriptions_storage" else "NULL";
     const protocoldescriptor_descs_ref: []const u8 = if (protocoldescriptor_slot_count > 0) "onez_image_protocoldescriptor_descriptions_storage" else "NULL";
     const constraintcombinator_descs_ref: []const u8 = if (constraintcombinator_slot_count > 0) "onez_image_constraintcombinator_descriptions_storage" else "NULL";
     const dispatch_entry_descs_ref: []const u8 = if (stats.dispatch_entry_slot_count > 0) "onez_image_dispatch_entry_descriptions_storage" else "NULL";
@@ -4764,6 +5000,8 @@ fn emitHeader(
     try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{struct_instance_slot_count}) catch unreachable);
     try out.appendSlice(allocator, ",\n    .vector_slot_count = ");
     try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{vector_slot_count}) catch unreachable);
+    try out.appendSlice(allocator, ",\n    .once_cell_slot_count = ");
+    try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{once_cell_slot_count}) catch unreachable);
     try out.appendSlice(allocator, ",\n    .protocoldescriptor_slot_count = ");
     try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{protocoldescriptor_slot_count}) catch unreachable);
     try out.appendSlice(allocator, ",\n    .constraintcombinator_slot_count = ");
@@ -4796,6 +5034,8 @@ fn emitHeader(
     try out.appendSlice(allocator, struct_instance_descs_ref);
     try out.appendSlice(allocator, ",\n    .vector_descriptions = ");
     try out.appendSlice(allocator, vector_descs_ref);
+    try out.appendSlice(allocator, ",\n    .once_cell_descriptions = ");
+    try out.appendSlice(allocator, once_cell_descs_ref);
     try out.appendSlice(allocator, ",\n    .protocoldescriptor_descriptions = ");
     try out.appendSlice(allocator, protocoldescriptor_descs_ref);
     try out.appendSlice(allocator, ",\n    .constraintcombinator_descriptions = ");
@@ -6335,6 +6575,87 @@ test "emitImageC: parameter and marker literals create slot tables" {
     try testing.expect(std.mem.indexOf(u8, out.items, "parameter current-locale") != null);
     try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_marker_slots[1]") != null);
     try testing.expect(std.mem.indexOf(u8, out.items, "marker deprecated") != null);
+}
+
+test "emitImageC: a once cell reached from two push sites takes one slot" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+    const arena = ctx.quotationAllocator();
+
+    const module = try arena.create(value_mod.Module);
+    module.* = .{ .name = "demo-module", .words = .{} };
+
+    const body = try arena.dupe(Instruction, &.{
+        .{ .op = .{ .push_literal = .{ .fixnum = 42 } }, .line = 0, .column = 0 },
+    });
+    const cell = try arena.create(value_mod.OnceCell);
+    cell.* = .{ .body = .{ .instructions = body }, .name = "answer", .allocator = testing.allocator };
+    try ctx.stampQuotationBodies(body, module);
+
+    // Two words push the same cell, the way two call sites into one `once` word do.
+    const first = try arena.dupe(Instruction, &.{
+        .{ .op = .{ .push_literal = .{ .once_cell = cell } }, .line = 0, .column = 0 },
+    });
+    const second = try arena.dupe(Instruction, &.{
+        .{ .op = .{ .push_literal = .{ .once_cell = cell } }, .line = 0, .column = 0 },
+    });
+    try putTopLevelWord(&ctx, "read-once", first);
+    try putTopLevelWord(&ctx, "read-twice", second);
+
+    const empty: ImageManifest = .{
+        .entries = &.{},
+        .structural_count = 0,
+        .blob_count = 0,
+        .total_count = 0,
+    };
+
+    var lookup: std.StringHashMapUnmanaged(u32) = .{};
+    defer lookup.deinit(testing.allocator);
+
+    var out: std.ArrayListUnmanaged(u8) = .{};
+    defer out.deinit(testing.allocator);
+
+    const stats = try emitImageC(&out, testing.allocator, &ctx, empty, &lookup, .{}, &.{});
+
+    try testing.expectEqual(@as(u32, 1), stats.once_cell_slot_count);
+    try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_once_cell_slots[1]") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, "once answer") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, ".module_name = onez_image_once_desc_0_module") != null);
+    // No quotation-id map is threaded here, so the row reports an uncompiled body and the
+    // interpreted path is the only one that could run it.
+    try testing.expect(std.mem.indexOf(u8, out.items, ".body_quotation_id = 4294967295") != null);
+}
+
+test "emitImageC: no once literal emits no once slot table" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+    const arena = ctx.quotationAllocator();
+
+    const instrs = try arena.dupe(Instruction, &.{
+        .{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 0, .column = 0 },
+    });
+    try putTopLevelWord(&ctx, "plain-word", instrs);
+
+    const empty: ImageManifest = .{
+        .entries = &.{},
+        .structural_count = 0,
+        .blob_count = 0,
+        .total_count = 0,
+    };
+
+    var lookup: std.StringHashMapUnmanaged(u32) = .{};
+    defer lookup.deinit(testing.allocator);
+
+    var out: std.ArrayListUnmanaged(u8) = .{};
+    defer out.deinit(testing.allocator);
+
+    const stats = try emitImageC(&out, testing.allocator, &ctx, empty, &lookup, .{}, &.{});
+
+    try testing.expectEqual(@as(u32, 0), stats.once_cell_slot_count);
+    // The array definition, not the bare symbol: the typedef comments name the slot table even
+    // when no array is emitted, so a plain substring search mis-triggers on those.
+    try testing.expect(std.mem.indexOf(u8, out.items, "*onez_image_once_cell_slots[") == null);
+    try testing.expect(std.mem.indexOf(u8, out.items, ".once_cell_descriptions = NULL") != null);
 }
 
 test "emitImageC: module-attributed parameter default emits module fields" {
