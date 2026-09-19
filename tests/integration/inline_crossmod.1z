@@ -1,0 +1,23 @@
+\ An `inline` word imported from another module expands only when its body survives the move.
+\
+\ A copied body's bare words stop resolving in the module that wrote them, so expansion binds each
+\ one to a dictionary slot and declines the whole copy when any name has none. Declining costs a
+\ dispatch. Expanding anyway would call whatever the importing module happens to have under that
+\ name, and say nothing.
+use "testing" ;
+use "fixtures/inline_crossmod_lib.1z" ;
+
+body-of: ( sym -- string ) [ >word-info body>> inspect ] ;
+
+calls-bump: ( n: fixnum -- n: fixnum ) [ bump ] ;
+calls-stepped: ( n: fixnum -- n: fixnum ) [ stepped ] ;
+
+"a body reaching only the dictionary crosses" test-section
+
+calls-bump: body-of "[ 1 + ]" "the native binds to its slot, so the body moves" assert=
+41 calls-bump 42 "and the word computes what it did" assert=
+
+"a body reaching its own module's private helper does not" test-section
+
+calls-stepped: body-of "[ stepped ]" "no slot names the helper, so the call stands" assert=
+41 calls-stepped 42 "and the word computes what it did" assert=

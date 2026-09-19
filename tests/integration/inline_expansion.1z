@@ -1,0 +1,78 @@
+\ A call to an `inline` word is replaced at definition time by a copy of that word's body. The
+\ marker is a hint, so every word below computes what it would have computed without it.
+use "testing" ;
+
+\ The stored body, rendered. Expansion is invisible to a program's output, so this is what a test
+\ has to look at to see that it happened at all.
+body-of: ( sym -- string ) [ >word-info body>> inspect ] ;
+
+doubled: ( n -- n ) const inline [ 2 * ] ;
+quadruple: ( n -- n ) [ doubled doubled ] ;
+
+"a marked word's body replaces the call" test-section
+
+doubled: body-of "[ 2 * ]" "the marked word keeps its own body" assert=
+quadruple: body-of "[ 2 * 2 * ]" "each call site carries a copy" assert=
+21 quadruple 84 "and the word still computes what it did" assert=
+
+"expansion runs at each definition, so a chain arrives flat" test-section
+
+add-one:  ( n -- n ) const inline [ 1 + ] ;
+add-two:  ( n -- n ) const inline [ add-one add-one ] ;
+add-four: ( n -- n ) [ add-two add-two ] ;
+
+add-two: body-of "[ 1 + 1 + ]" "the middle word is expanded when it is defined" assert=
+add-four: body-of "[ 1 + 1 + 1 + 1 + ]" "so the outer one never re-walks the chain" assert=
+10 add-four 14 "and the chain still computes what it did" assert=
+
+"a call that would re-enter an open body stays a call" test-section
+
+\ `countdown` names itself. Its own definition expands nothing, because the name resolves to
+\ nothing while the definition is still being built.
+countdown: ( n -- n ) const inline [ dup 0 > [ 1 - countdown ] when ] ;
+drive: ( n -- n ) [ countdown ] ;
+
+countdown: body-of "[ dup 0 > [ 1 - countdown ] when ]" "a self-call is left alone" assert=
+drive: body-of "[ dup 0 > [ 1 - countdown ] when ]" "a caller expands one level and stops" assert=
+3 drive 0 "and the recursion still runs to its base case" assert=
+
+"mutual recursion stops at the first re-entry" test-section
+
+ping: ( n -- n ) const inline [ pong ] ;
+pong: ( n -- n ) const inline [ 1 + ping ] ;
+both: ( n -- n ) [ pong ] ;
+
+\ `pong`'s definition reaches `ping`, whose body names `pong` itself. That is a copy naming the
+\ word being defined, so it is declined and `pong` keeps the call it was written with. `both` then
+\ expands `pong` and `ping` in turn, and meets the same name with `pong`'s body already open.
+\
+\ The pair has no base case, so none of the three is callable. What is under test is the shape of
+\ the stored body: expansion has to terminate even where the program it expands would not.
+pong: body-of "[ 1 + ping ]" "the first of the pair keeps its own call" assert=
+both: body-of "[ 1 + pong ]" "and the pair does not alternate forever" assert=
+
+"an unmarked word is left alone" test-section
+
+plain: ( n -- n ) [ 3 * ] ;
+calls-plain: ( n -- n ) [ plain ] ;
+
+calls-plain: body-of "[ plain ]" "no marker, no expansion" assert=
+2 calls-plain 6 "and it still computes what it did" assert=
+
+"a copy that would name the word being defined stays a call" test-section
+
+\ `bump` names a word that does not exist yet, and `grow` then claims that name. Copying `bump`
+\ into `grow` would leave a call to `grow` sitting inside `grow`, in non-tail position. `;` checks
+\ a body for a non-tail self-call before the copy happens, so one introduced by the copy would
+\ never be checked at all.
+bump: ( n -- n ) const inline [ grow ] ;
+grow: ( n -- n ) [ 1 + bump ] ;
+
+grow: body-of "[ 1 + bump ]" "the call stands rather than becoming a self-call" assert=
+
+\ A self-call the author wrote is part of the body `;` checked, so it is left as it stands and the
+\ marked call beside it still expands.
+twice: ( n -- n ) const inline [ 2 * ] ;
+walks: ( n -- n ) stack-recursive [ twice walks 0 + ] ;
+
+walks: body-of "[ 2 * walks 0 + ]" "an author's own self-call is untouched" assert=

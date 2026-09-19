@@ -1,0 +1,15 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+=== a body reaching only the dictionary crosses ===
+Stack: [ ]
+PASS: the native binds to its slot, so the body moves
+Stack: [ ]
+PASS: and the word computes what it did
+Stack: [ ]
+=== a body reaching its own module's private helper does not ===
+Stack: [ ]
+PASS: no slot names the helper, so the call stands
+Stack: [ ]
+PASS: and the word computes what it did
+Stack: [ ]

@@ -23,6 +23,8 @@ const DispatchKey = dispatch_mod.DispatchKey;
 const DispatchFrame = dispatch_mod.DispatchFrame;
 const DispatchTable = dispatch_mod.DispatchTable;
 
+const inline_expand = @import("inline_expand.zig");
+
 const pic_mod = @import("pic.zig");
 const PicTable = pic_mod.PicTable;
 const PolymorphicCache = pic_mod.PolymorphicCache;
@@ -725,6 +727,16 @@ pub const Context = struct {
     /// rejects the top `.module_deps` frame would otherwise define its named locals into that
     /// frame and immediately fail to resolve them.
     active_deps_vis: ?ModuleDepsVisibility = null,
+    /// Whether any `inline`-marked word has ever been defined anywhere on this context chain.
+    ///
+    /// Read off the root, so a word defined on a child is seen by every sibling.
+    ///
+    /// The flag exists to let `expandInlineCallsLocked` answer "nothing to do" in one load. The
+    /// overwhelming majority of programs carry no such word at all.
+    ///
+    /// Never cleared, so a stale value can only read `true`. That costs a scan of one body, never
+    /// a wrong answer.
+    any_inline_words: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     /// The lexical scope captured by the body currently executing, saved and restored around each
     /// `executeInstructions` call the same way `active_deps_vis` is.
     ///
@@ -4047,13 +4059,16 @@ pub const Context = struct {
     /// Define a word in the current local frame if one exists, otherwise
     /// in global dictionary.
     pub fn defineWord(self: *Context, name: []const u8, definition: WordDefinition) !void {
+        var def = definition;
+
         {
             self.acquireSharedWrite();
             defer self.releaseSharedWrite();
-            try self.defineWordLocked(name, definition);
+            try self.expandInlineCallsLocked(name, &def);
+            try self.defineWordLocked(name, def);
         }
 
-        self.compileAfterDefine(name, definition);
+        self.compileAfterDefine(name, def);
     }
 
     /// Define the word `;` is building, keyed by the interned copy of `name`, and return that copy.
@@ -4070,11 +4085,54 @@ pub const Context = struct {
             self.acquireSharedWrite();
             defer self.releaseSharedWrite();
             def.name = try self.binding_names.internLocked(name);
+            try self.expandInlineCallsLocked(def.name, &def);
             try self.defineWordLocked(def.name, def);
         }
 
         self.compileAfterDefine(def.name, def);
         return def.name;
+    }
+
+    /// Replace `def`'s body with one carrying the bodies of the `inline` words it calls.
+    ///
+    /// Runs here rather than beside the auto-compile hook below, which is where the marker's
+    /// design placed it. That hook returns void and receives a stale copy of the definition, so
+    /// installing an expanded body from there would mean writing it back across the frames, the
+    /// dictionary, and the ancestor chain. Running before the install instead makes the expanded
+    /// array the one `defineWordLocked` stores and records for teardown, and the one eager
+    /// compilation is handed.
+    fn expandInlineCallsLocked(self: *Context, name: []const u8, def: *WordDefinition) !void {
+        if (!self.rootContext().any_inline_words.load(.monotonic)) return;
+
+        const body = switch (def.action) {
+            .compound => |instrs| instrs,
+            .literal, .native, .host_callback => return,
+        };
+
+        // A closure's body has to keep its address. `ownsBody` compares it to decide whether the
+        // closure's captured scope applies to an execution, so a fresh array would silently lose
+        // the scope the body resolves its bare words against.
+        if (def.body_owner != null) return;
+
+        // The file the parser is reading, which is the file this definition belongs to. A
+        // parse-time word executing points `current_source` at its own file, and
+        // `parse_stamp_source` holds the invoking one.
+        const caller_file = self.parse_stamp_source orelse self.current_source;
+
+        const expanded = try inline_expand.expandBody(self, name, caller_file, body) orelse return;
+        def.action = .{ .compound = expanded };
+
+        // Both are keyed on the array's address, so the new one starts with neither. The source
+        // stamp is what a call frame raised inside this body reads for its file. The nested-name
+        // cache is the capture gate's fast answer; missing it only costs a walk.
+        try self.stampQuotationBodySource(expanded);
+        try self.cacheQuotationBodyNestedNames(expanded);
+    }
+
+    /// The definition a bare-word call in a body being defined here would reach, for the inline
+    /// expansion pass. Null when the name resolves to nothing, which leaves the call a call.
+    pub fn inlineCallTargetLocked(self: *const Context, name: []const u8) ?WordDefinition {
+        return self.lookupWordLocked(name, self.active_deps_vis);
     }
 
     // NOTE(ripta): auto-compile runs after the lock is released so JIT callbacks can acquire their own locks
@@ -4469,6 +4527,12 @@ pub const Context = struct {
                 }
             },
             .native, .host_callback => {},
+        }
+
+        // Arms the expansion pass for every definition that follows. Set here rather than at the
+        // marker's own validation so a word installed by any other definer arms it too.
+        if (inline_expand.shouldInline(def)) {
+            self.rootContext().any_inline_words.store(true, .monotonic);
         }
     }
 
@@ -5099,6 +5163,14 @@ pub const Context = struct {
         return def;
     }
 
+    /// `preResolveCallTargetLocked` for a caller that does not hold the lock yet.
+    pub fn preResolveCallTarget(self: *const Context, name: []const u8) ?*dict_mod.WordSlot {
+        self.acquireSharedRead();
+        defer self.releaseSharedRead();
+
+        return self.preResolveCallTargetLocked(name);
+    }
+
     /// Resolve a parse-time call reference to a stable dictionary slot
     /// when it provably matches the runtime lookup. Returns the slot only
     /// when the name lives in this context's global dictionary and can
@@ -5107,10 +5179,11 @@ pub const Context = struct {
     /// every loaded module's `words` and `deps` so that a runtime
     /// module-deps frame push cannot replace the binding. Coverage is
     /// traded for a provable parse-time == runtime guarantee.
-    pub fn preResolveCallTarget(self: *const Context, name: []const u8) ?*dict_mod.WordSlot {
-        self.acquireSharedRead();
-        defer self.releaseSharedRead();
-
+    ///
+    /// That guarantee is what lets the inline expansion pass bind a name it is copying out of
+    /// another module: a slot survives the move because no scope can reach it that could have
+    /// reached a different word.
+    pub fn preResolveCallTargetLocked(self: *const Context, name: []const u8) ?*dict_mod.WordSlot {
         const slot = self.dictionary.getSlot(name) orelse return null;
 
         for (self.local_frames.items) |frame| {

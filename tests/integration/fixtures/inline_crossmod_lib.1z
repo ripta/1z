@@ -1,0 +1,16 @@
+\ Two `inline` words for `inline_crossmod.1z` to import, differing only in what their bodies reach.
+\
+\ A body copied into another module's word no longer resolves its bare words in this module, so
+\ expansion binds each one to a dictionary slot first and declines when it cannot. `bump` reaches a
+\ native and survives the move. `stepped` reaches a helper this module keeps to itself, which no
+\ slot names, so a caller elsewhere keeps calling it.
+
+private{
+  (step): ( n: fixnum -- n: fixnum ) [ 1 + ] ;
+}
+
+\\ Add one, by way of a native this module does not own.
+bump: ( n: fixnum -- n: fixnum ) const inline [ 1 + ] ;
+
+\\ Add one, by way of a helper private to this module.
+stepped: ( n: fixnum -- n: fixnum ) const inline [ (step) ] ;

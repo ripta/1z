@@ -1,0 +1,59 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+=== a marked word's body replaces the call ===
+Stack: [ ]
+PASS: the marked word keeps its own body
+Stack: [ ]
+PASS: each call site carries a copy
+Stack: [ ]
+PASS: and the word still computes what it did
+Stack: [ ]
+=== expansion runs at each definition, so a chain arrives flat ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: the middle word is expanded when it is defined
+Stack: [ ]
+PASS: so the outer one never re-walks the chain
+Stack: [ ]
+PASS: and the chain still computes what it did
+Stack: [ ]
+=== a call that would re-enter an open body stays a call ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: a self-call is left alone
+Stack: [ ]
+PASS: a caller expands one level and stops
+Stack: [ ]
+PASS: and the recursion still runs to its base case
+Stack: [ ]
+=== mutual recursion stops at the first re-entry ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: the first of the pair keeps its own call
+Stack: [ ]
+PASS: and the pair does not alternate forever
+Stack: [ ]
+=== an unmarked word is left alone ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: no marker, no expansion
+Stack: [ ]
+PASS: and it still computes what it did
+Stack: [ ]
+=== a copy that would name the word being defined stays a call ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: the call stands rather than becoming a self-call
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: an author's own self-call is untouched
+Stack: [ ]
