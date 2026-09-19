@@ -46,6 +46,12 @@ pub const const_marker: Marker = .{ .name = "const" };
 /// shares one.
 pub const once_marker: Marker = .{ .name = "once" };
 
+/// Well-known marker asking that a word's body be expanded into its callers rather than called.
+/// A performance hint: a program behaves the same with or without it.
+///
+/// Requires `const`, and cannot appear beside any marker `inlineConflictReason` names.
+pub const inline_marker: Marker = .{ .name = "inline" };
+
 /// Well-known marker for branch combinators.
 /// Indicates the word selects between quotation arguments based on a condition.
 pub const branch_combinator_marker: Marker = .{ .name = "branch-combinator" };
@@ -229,6 +235,37 @@ pub fn isDynamicMarker(mk: *const Marker) bool {
     return false;
 }
 
+/// A marker `inline` cannot appear beside, and the clause the diagnostic gives as the reason.
+const InlineConflict = struct {
+    marker: *const Marker,
+    reason: []const u8,
+};
+
+/// Why a capability marker rules out expansion. One reason covers all five, so they share a string.
+///
+/// A diagnostic reads better not ending on a preposition, because the renderer appends its own
+/// `at word '...'` clause to whatever the reason says.
+const capability_conflict_reason = "freeze policy reads the marker through a call that expansion removes";
+
+const inline_conflicts = [_]InlineConflict{
+    .{ .marker = &generic_marker, .reason = "dispatch picks the body by argument type at the call" },
+    .{ .marker = &once_marker, .reason = "an inlined body has no boundary to check its single output at" },
+    .{ .marker = &dynamic_compile_marker, .reason = capability_conflict_reason },
+    .{ .marker = &dynamic_eval_marker, .reason = capability_conflict_reason },
+    .{ .marker = &dynamic_load_marker, .reason = capability_conflict_reason },
+    .{ .marker = &dynamic_quotation_construction_marker, .reason = capability_conflict_reason },
+    .{ .marker = &interpreter_dependent_marker, .reason = capability_conflict_reason },
+};
+
+/// The reason `inline` cannot appear beside this marker, or null when it may. Identity comparison,
+/// so a user marker that happens to be named `generic` does not satisfy it.
+pub fn inlineConflictReason(mk: *const Marker) ?[]const u8 {
+    for (inline_conflicts) |entry| {
+        if (entry.marker == mk) return entry.reason;
+    }
+    return null;
+}
+
 /// Dispatch wildcard for `method{`, not a type -- no value has type `any`.
 pub const any_marker: Marker = .{ .name = "any" };
 
@@ -272,6 +309,7 @@ pub const primitives = [_]Primitive{
     .{ .name = "generic", .stack_effect = "-- marker", .doc = "Push the well-known generic marker.", .func = nativeGenericMarker, .parse_time = true },
     .{ .name = "const", .stack_effect = "-- marker", .doc = "Push the well-known const marker.", .func = nativeConstMarker, .parse_time = true },
     .{ .name = "once", .stack_effect = "-- marker", .doc = "Push the well-known once marker. The word's body completes at most once and every later reference reuses its value.", .func = nativeOnceMarker, .parse_time = true },
+    .{ .name = "inline", .stack_effect = "-- marker", .doc = "Push the well-known inline marker. The word's body is expanded into its callers instead of called.", .func = nativeInlineMarker, .parse_time = true },
     .{ .name = "branch-combinator", .stack_effect = "-- marker", .doc = "Push the well-known branch-combinator marker.", .func = nativeBranchCombinatorMarker, .parse_time = true },
     .{ .name = "loop-combinator", .stack_effect = "-- marker", .doc = "Push the well-known loop-combinator marker.", .func = nativeLoopCombinatorMarker, .parse_time = true },
     .{ .name = "partial-dispatch", .stack_effect = "-- marker", .doc = "Push the well-known partial-dispatch marker. Indicates open, non-exhaustive branch dispatch.", .func = nativePartialDispatchMarker, .parse_time = true },
@@ -334,6 +372,11 @@ pub fn nativeConstMarker(ctx: *Context) anyerror!void {
 /// once ( -- marker )
 pub fn nativeOnceMarker(ctx: *Context) anyerror!void {
     try ctx.stack.push(.{ .marker = @constCast(&once_marker) });
+}
+
+/// inline ( -- marker )
+pub fn nativeInlineMarker(ctx: *Context) anyerror!void {
+    try ctx.stack.push(.{ .marker = @constCast(&inline_marker) });
 }
 
 /// branch-combinator ( -- marker )
@@ -451,6 +494,11 @@ pub fn isOnceMarker(mk: *const Marker) bool {
     return mk == &once_marker;
 }
 
+/// Check if a marker is the well-known inline marker
+pub fn isInlineMarker(mk: *const Marker) bool {
+    return mk == &inline_marker;
+}
+
 /// Check if a marker is the well-known branch-combinator marker
 pub fn isBranchCombinatorMarker(mk: *const Marker) bool {
     return mk == &branch_combinator_marker;
@@ -549,6 +597,7 @@ pub fn lookupWellKnownMarker(name: []const u8) ?*Marker {
     if (std.mem.eql(u8, name, "generic")) return @constCast(&generic_marker);
     if (std.mem.eql(u8, name, "const")) return @constCast(&const_marker);
     if (std.mem.eql(u8, name, "once")) return @constCast(&once_marker);
+    if (std.mem.eql(u8, name, "inline")) return @constCast(&inline_marker);
     if (std.mem.eql(u8, name, "branch-combinator")) return @constCast(&branch_combinator_marker);
     if (std.mem.eql(u8, name, "loop-combinator")) return @constCast(&loop_combinator_marker);
     if (std.mem.eql(u8, name, "partial-dispatch")) return @constCast(&partial_dispatch_marker);

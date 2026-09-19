@@ -745,6 +745,37 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
                     }
                 }
 
+                // Ahead of the `once` rules below, so `once inline` reports the combination rather
+                // than the effect shape.
+                //
+                // A conflict is reported before the missing `const`, because it is the half no
+                // added marker can repair.
+                //
+                // Read off `markers_slice` rather than what the author wrote. The blocks above add
+                // markers the definition will carry, and both rules are about the word that ends up
+                // defined. A named constraint is already const, so asking its author to restate it
+                // would reject a word for lacking a marker it has.
+                const has_inline = for (markers_slice) |mk| {
+                    if (markers_mod.isInlineMarker(mk)) break true;
+                } else false;
+
+                if (has_inline) {
+                    for (markers_slice) |mk| {
+                        const reason = markers_mod.inlineConflictReason(mk) orelse continue;
+                        helpers.setErrorContext(ctx, "cannot combine '{s}' and 'inline': {s}", .{ mk.name, reason });
+                        return error.InvalidInlineDefinition;
+                    }
+
+                    const has_const = for (markers_slice) |mk| {
+                        if (markers_mod.isConstMarker(mk)) break true;
+                    } else false;
+
+                    if (!has_const) {
+                        helpers.setErrorContext(ctx, "'inline' needs 'const'; a redefinition would strand the copies expansion made in its callers", .{});
+                        return error.InvalidInlineDefinition;
+                    }
+                }
+
                 const has_once = for (collected_markers.items) |mk| {
                     if (markers_mod.isOnceMarker(mk)) break true;
                 } else false;
@@ -1073,6 +1104,137 @@ test "semicolon rejects once on a bracket-less binding" {
         ctx.pending_error_message.?,
     );
     try std.testing.expect(ctx.lookupWord("eager") == null);
+}
+
+/// Define `name` through `;` with `marks` and `body`, a quotation body when `body` is given and a
+/// bare fixnum binding when it is not.
+fn defineMarked(
+    ctx: *Context,
+    name: []const u8,
+    marks: []const *const Marker,
+    body: ?[]const Instruction,
+) anyerror!void {
+    try ctx.stack.push(value_mod.symbolValue(name));
+    for (marks) |mk| try ctx.stack.push(.{ .marker = @constCast(mk) });
+    if (body) |instrs| {
+        try ctx.stack.push(.{ .quotation = .{ .instructions = instrs } });
+    } else {
+        try ctx.stack.push(.{ .fixnum = 7 });
+    }
+    try nativeSemicolon(ctx);
+}
+
+test "semicolon rejects inline without const" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    try std.testing.expectError(
+        error.InvalidInlineDefinition,
+        defineMarked(&ctx, "bare", &.{&markers_mod.inline_marker}, &.{}),
+    );
+    try std.testing.expectEqualStrings(
+        "'inline' needs 'const'; a redefinition would strand the copies expansion made in its callers",
+        ctx.pending_error_message.?,
+    );
+    try std.testing.expect(ctx.lookupWord("bare") == null);
+    ctx.stack.clear();
+
+    // A bare binding is an inline candidate too, so the rule reaches it rather than only a body.
+    try std.testing.expectError(
+        error.InvalidInlineDefinition,
+        defineMarked(&ctx, "bare-binding", &.{&markers_mod.inline_marker}, null),
+    );
+    try std.testing.expect(ctx.lookupWord("bare-binding") == null);
+}
+
+test "semicolon rejects inline beside a marker it cannot combine with" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const forbidden = [_]*const Marker{
+        &markers_mod.generic_marker,
+        &markers_mod.once_marker,
+        &markers_mod.dynamic_compile_marker,
+        &markers_mod.dynamic_eval_marker,
+        &markers_mod.dynamic_load_marker,
+        &markers_mod.dynamic_quotation_construction_marker,
+        &markers_mod.interpreter_dependent_marker,
+    };
+
+    for (forbidden) |mk| {
+        try std.testing.expectError(
+            error.InvalidInlineDefinition,
+            defineMarked(&ctx, "clashing", &.{ &markers_mod.const_marker, &markers_mod.inline_marker, mk }, &.{}),
+        );
+        try std.testing.expect(ctx.lookupWord("clashing") == null);
+        ctx.stack.clear();
+    }
+
+    try std.testing.expectError(
+        error.InvalidInlineDefinition,
+        defineMarked(&ctx, "held", &.{ &markers_mod.const_marker, &markers_mod.inline_marker, &markers_mod.once_marker }, &.{}),
+    );
+    try std.testing.expectEqualStrings(
+        "cannot combine 'once' and 'inline': an inlined body has no boundary to check its single output at",
+        ctx.pending_error_message.?,
+    );
+    ctx.stack.clear();
+
+    // A conflict is reported even with no `const` to add, so the combination is what the author is
+    // told about first.
+    try std.testing.expectError(
+        error.InvalidInlineDefinition,
+        defineMarked(&ctx, "both-wrong", &.{ &markers_mod.inline_marker, &markers_mod.generic_marker }, &.{}),
+    );
+    try std.testing.expectEqualStrings(
+        "cannot combine 'generic' and 'inline': dispatch picks the body by argument type at the call",
+        ctx.pending_error_message.?,
+    );
+}
+
+test "semicolon accepts const inline on a body and on a bare binding" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const marks = [_]*const Marker{ &markers_mod.const_marker, &markers_mod.inline_marker };
+
+    try defineMarked(&ctx, "doubled", &marks, &.{});
+    try std.testing.expect(ctx.lookupWord("doubled") != null);
+
+    try defineMarked(&ctx, "width", &marks, null);
+    const bound = ctx.lookupWord("width") orelse return error.TestExpectedWord;
+    switch (bound.action) {
+        .literal => |v| try std.testing.expectEqual(@as(i64, 7), v.fixnum),
+        .compound, .native, .host_callback => try std.testing.expect(false),
+    }
+
+    // A marker with no rule against it still defines, so the rejections above are the two rules
+    // rather than a blanket refusal of anything beside `inline`.
+    try defineMarked(&ctx, "flagged", &.{ &markers_mod.const_marker, &markers_mod.inline_marker, &markers_mod.deprecated_marker }, &.{});
+    try std.testing.expect(ctx.lookupWord("flagged") != null);
+}
+
+test "semicolon accepts inline on a named constraint, whose const is added for it" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const fixnum_tv = ctx.lookupBuiltinTypeValue("fixnum").?;
+    const float_tv = ctx.lookupBuiltinTypeValue("float").?;
+    const union_tv = try ctx.getOrCreateAnonymousUnionTypeValue(&.{ fixnum_tv, float_tv });
+
+    try ctx.stack.push(value_mod.symbolValue("number"));
+    try ctx.stack.push(.{ .marker = @constCast(&markers_mod.inline_marker) });
+    try ctx.stack.push(.{ .type_val = union_tv });
+    try nativeSemicolon(&ctx);
+
+    const word = ctx.lookupWord("number") orelse return error.TestExpectedWord;
+    const has_const = for (word.markers) |mk| {
+        if (markers_mod.isConstMarker(mk)) break true;
+    } else false;
+
+    // The rule asks that the definition be const, not that its author spell it. Reading the
+    // author's markers alone would reject this word for lacking the marker it is about to carry.
+    try std.testing.expect(has_const);
 }
 
 test "semicolon binds a non-refcounted plain value as .literal, with no instruction allocation" {

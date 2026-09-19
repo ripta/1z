@@ -15421,6 +15421,7 @@ export fn jitAppendNamedTraceFrame(
 ///
 /// `choose` is prelude-defined, so its lookup misses and its frame carries no effect.
 fn builtinFrameEffectString(comptime name: []const u8) ?[]const u8 {
+    @setEvalBranchQuota(8_000_000);
     inline for (primitives_specs.extracted_primitives) |p| {
         if (comptime std.mem.eql(u8, p.name, name)) return p.stack_effect;
     }

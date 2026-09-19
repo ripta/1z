@@ -1,0 +1,45 @@
+=== const is required ===
+Stack: [ ]
+Stack: [ [ bare: <marker:inline> [ 1 ] ; ] ]
+PASS: inline without const is rejected
+Stack: [ ]
+Stack: [ [ bare-binding: <marker:inline> 1 ; ] ]
+PASS: and on a bare binding too
+Stack: [ ]
+=== forbidden combinations ===
+Stack: [ ]
+Stack: [ [ dispatching: <marker:const> <marker:inline> <marker:generic> [ 1 ] ; ] ]
+PASS: generic is rejected
+Stack: [ ]
+Stack: [ [ held: <marker:const> <marker:inline> <marker:once> [ 1 ] ; ] ]
+PASS: once is rejected
+Stack: [ ]
+Stack: [ [ evaluating: <marker:const> <marker:inline> <marker:dynamic-eval> [ 1 ] ; ] ]
+PASS: dynamic-eval is rejected
+Stack: [ ]
+Stack: [ [ loading: <marker:const> <marker:inline> <marker:dynamic-load> [ 1 ] ; ] ]
+PASS: dynamic-load is rejected
+Stack: [ ]
+Stack: [ [ compiling: <marker:const> <marker:inline> <marker:dynamic-compile> [ 1 ] ; ] ]
+PASS: dynamic-compile is rejected
+Stack: [ ]
+Stack: [ [ quoting: <marker:const> <marker:inline> <marker:dynamic-quotation-construction> [ 1 ] ; ] ]
+PASS: dynamic-quotation-construction is rejected
+Stack: [ ]
+Stack: [ [ interpreting: <marker:const> <marker:inline> <marker:interpreter-dependent> [ 1 ] ; ] ]
+PASS: interpreter-dependent is rejected
+Stack: [ ]
+Stack: [ [ both-wrong: <marker:inline> <marker:generic> [ 1 ] ; ] ]
+PASS: a conflict outranks the missing const
+Stack: [ ]
+=== accepted ===
+Stack: [ ]
+Stack: [ ]
+PASS: const inline defines and runs
+Stack: [ ]
+Stack: [ ]
+PASS: a marker with no rule against it still defines
+Stack: [ ]
+Stack: [ ]
+PASS: inline on a named constraint is accepted
+Stack: [ ]

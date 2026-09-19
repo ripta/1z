@@ -1,0 +1,16 @@
+Stack: [ ]
+Stack: [ ]
+=== introspection ===
+Stack: [ ]
+PASS: word-markers reports inline
+Stack: [ ]
+PASS: markers>> reports inline
+Stack: [ ]
+PASS: a bare binding carries it too
+Stack: [ ]
+=== behaviour ===
+Stack: [ ]
+PASS: a marked word still runs
+Stack: [ ]
+PASS: a marked binding still reads
+Stack: [ ]

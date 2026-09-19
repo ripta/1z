@@ -1,0 +1,56 @@
+\ Expansion leaves a copy of the body in every caller, and both rules protect that copy.
+\
+\ A redefinition would strand every copy, which is why `const` is required.
+\
+\ Seven markers are refused beside `inline`. Each is read off the word a call names, so each loses
+\ its meaning once expansion has removed the call.
+use "testing" ;
+
+"const is required" test-section
+
+[ bare: inline [ 1 ] ; ]
+invalid-inline-definition: "inline without const is rejected" assert-error-type
+
+[ bare-binding: inline 1 ; ]
+invalid-inline-definition: "and on a bare binding too" assert-error-type
+
+"forbidden combinations" test-section
+
+[ dispatching: const inline generic [ 1 ] ; ]
+invalid-inline-definition: "generic is rejected" assert-error-type
+
+[ held: const inline once [ 1 ] ; ]
+invalid-inline-definition: "once is rejected" assert-error-type
+
+[ evaluating: const inline dynamic-eval [ 1 ] ; ]
+invalid-inline-definition: "dynamic-eval is rejected" assert-error-type
+
+[ loading: const inline dynamic-load [ 1 ] ; ]
+invalid-inline-definition: "dynamic-load is rejected" assert-error-type
+
+[ compiling: const inline dynamic-compile [ 1 ] ; ]
+invalid-inline-definition: "dynamic-compile is rejected" assert-error-type
+
+[ quoting: const inline dynamic-quotation-construction [ 1 ] ; ]
+invalid-inline-definition: "dynamic-quotation-construction is rejected" assert-error-type
+
+[ interpreting: const inline interpreter-dependent [ 1 ] ; ]
+invalid-inline-definition: "interpreter-dependent is rejected" assert-error-type
+
+\ A conflict is reported even when `const` is missing as well, so the author is told about the
+\ half no added marker can repair.
+[ both-wrong: inline generic [ 1 ] ; ]
+invalid-inline-definition: "a conflict outranks the missing const" assert-error-type
+
+"accepted" test-section
+
+sq: ( n -- n ) const inline [ dup * ] ;
+5 sq 25 "const inline defines and runs" assert=
+
+hinted: ( -- fixnum ) const inline deprecated [ 1 ] ;
+hinted 1 "a marker with no rule against it still defines" assert=
+
+\ A named constraint has `const` added for it, so the rule is satisfied without the author writing
+\ one. Asking for it here would reject the word for lacking a marker it carries.
+number: inline fixnum | float ;
+"number" word-markers [ const = ] #any t "inline on a named constraint is accepted" assert=

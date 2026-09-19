@@ -43,6 +43,7 @@ pub const InterpreterError = error{
     FFIRangeError,
     // Definition error types
     InvalidOnceDefinition,
+    InvalidInlineDefinition,
     // Recursion error types
     NonTailRecursion,
     StackOverflow,

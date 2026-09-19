@@ -1,0 +1,17 @@
+\ `inline` asks for a word's body to be expanded into its callers rather than called. It is a
+\ performance hint, so a marked word behaves exactly as an unmarked one does.
+use "testing" ;
+
+doubled: ( n -- n ) const inline [ 2 * ] ;
+width: const inline 256 ;
+
+"introspection" test-section
+
+"doubled" word-markers [ inline = ] #any t "word-markers reports inline" assert=
+doubled: >word-info markers>> [ inline = ] #any t "markers>> reports inline" assert=
+"width" word-markers [ inline = ] #any t "a bare binding carries it too" assert=
+
+"behaviour" test-section
+
+21 doubled 42 "a marked word still runs" assert=
+width 256 "a marked binding still reads" assert=
