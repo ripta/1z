@@ -1,0 +1,24 @@
+\ Every slot-table comment embeds a word or type name verbatim. A name
+\ containing `*/` used to close the C comment early and break the build; each
+\ slot table below is keyed by a name carrying that sequence.
+
+a*/once: ( -- fixnum ) once [ 7 ] ;
+a*/once .
+
+a*/param: parameter{ [ 42 ] } ;
+a*/param get .
+
+a*/point: struct{ x y } ;
+2 3 make-a*/point unmake-a*/point + .
+
+a*/dir: enum{
+  north: unit
+  south: unit
+} ;
+a*/dir:north a*/dir:north = .
+
+a*/addable: protocol{ bump-it: } ;
+bump-it:    generic ( x: a*/addable -- n ) [ drop 0 ] ;
+bump-it:    method{ fixnum } [ 1 + ] ;
+bounded-caller: ( x: a*/addable -- n ) [ bump-it ] ;
+1 bounded-caller .

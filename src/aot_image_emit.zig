@@ -1298,6 +1298,22 @@ fn emitMarkerPool(
     try out.appendSlice(allocator, "};\n\n");
 }
 
+/// Writes a name into a slot-table comment, breaking any embedded `*/` so it
+/// cannot terminate the comment early. A word name can contain `*` and `/`
+/// freely; every other place a name reaches emitted C goes through
+/// `emitCStringLiteral`, which escapes for a string literal, but a comment is
+/// not a string literal and nothing else escapes for that context.
+fn emitCommentSafeName(
+    out: *std.ArrayListUnmanaged(u8),
+    allocator: Allocator,
+    name: []const u8,
+) Allocator.Error!void {
+    for (name, 0..) |b, i| {
+        try out.append(allocator, b);
+        if (b == '*' and i + 1 < name.len and name[i + 1] == '/') try out.append(allocator, ' ');
+    }
+}
+
 /// Emit the shared TypeValue slot table. Entry 0 is the "no
 /// annotation" sentinel; real slots are NULL-initialized so the
 /// blob-path loader (run after this code is loaded) can patch them
@@ -1316,7 +1332,7 @@ fn emitTypeValueSlotTable(
         try out.appendSlice(allocator, "    NULL, /* slot ");
         try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{slot_idx}) catch unreachable);
         try out.appendSlice(allocator, ": ");
-        try out.appendSlice(allocator, tv.name);
+        try emitCommentSafeName(out, allocator, tv.name);
         try out.appendSlice(allocator, " (filled by the loader). */\n");
     }
     try out.appendSlice(allocator, "};\n\n");
@@ -1342,7 +1358,7 @@ fn emitMarkerSlotTable(
         try out.appendSlice(allocator, "    NULL, /* slot ");
         try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{i}) catch unreachable);
         try out.appendSlice(allocator, ": marker ");
-        try out.appendSlice(allocator, marker.name);
+        try emitCommentSafeName(out, allocator, marker.name);
         try out.appendSlice(allocator, " (filled by the loader). */\n");
     }
     try out.appendSlice(allocator, "};\n\n");
@@ -1369,7 +1385,7 @@ fn emitStructTypeSlotTable(
         try out.appendSlice(allocator, "    NULL, /* slot ");
         try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{i}) catch unreachable);
         try out.appendSlice(allocator, ": struct ");
-        try out.appendSlice(allocator, plan.struct_type.name);
+        try emitCommentSafeName(out, allocator, plan.struct_type.name);
         try out.appendSlice(allocator, " (filled by the loader). */\n");
     }
     try out.appendSlice(allocator, "};\n\n");
@@ -1395,7 +1411,7 @@ fn emitParameterSlotTable(
         try out.appendSlice(allocator, "    NULL, /* slot ");
         try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{i}) catch unreachable);
         try out.appendSlice(allocator, ": parameter ");
-        try out.appendSlice(allocator, param.name);
+        try emitCommentSafeName(out, allocator, param.name);
         try out.appendSlice(allocator, " (filled by the loader). */\n");
     }
     try out.appendSlice(allocator, "};\n\n");
@@ -1618,7 +1634,7 @@ fn emitOnceCellSlotTable(
         try out.appendSlice(allocator, "    NULL, /* slot ");
         try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{i}) catch unreachable);
         try out.appendSlice(allocator, ": once ");
-        try out.appendSlice(allocator, cell.name);
+        try emitCommentSafeName(out, allocator, cell.name);
         try out.appendSlice(allocator, " (filled by the loader). */\n");
     }
     try out.appendSlice(allocator, "};\n\n");
@@ -1765,7 +1781,7 @@ fn emitTaggedSlotTable(
         try out.appendSlice(allocator, "    NULL, /* slot ");
         try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{i}) catch unreachable);
         try out.appendSlice(allocator, ": tagged ");
-        try out.appendSlice(allocator, entry.tag.name);
+        try emitCommentSafeName(out, allocator, entry.tag.name);
         try out.appendSlice(allocator, " (filled by the loader). */\n");
     }
     try out.appendSlice(allocator, "};\n\n");
@@ -2179,7 +2195,7 @@ fn emitProtocolDescriptorSlotTable(
         try out.appendSlice(allocator, "    NULL, /* slot ");
         try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{i}) catch unreachable);
         try out.appendSlice(allocator, ": protocol ");
-        try out.appendSlice(allocator, pd.name);
+        try emitCommentSafeName(out, allocator, pd.name);
         try out.appendSlice(allocator, " (filled by the loader). */\n");
     }
     try out.appendSlice(allocator, "};\n\n");
