@@ -168,54 +168,48 @@ test-eating-plays-the-arpeggio-once-per-eat: ( -- ) [
       [ drop drop drop loads 1 #push! drop 7 ] current-sample-loader [
         [ plays swap #push! drop ] current-sample-player [
           (snake-reset)
-          \ The synthesized sample is cached across resets by design; clear it so this
-          \ test's load count does not depend on which test ran first.
-          state f >>eat-sound drop
           state 11 10 (cell) >>food drop
           10 (tick)
           plays #len 1 "the first eat plays the sample" assert=
           plays 0 #nth 7 "the play carries the loaded handle" assert=
+
+          \ eat-sound is a `once` word, so this reads 1 when the eat above forced it and 0 when
+          \ an earlier test already had. Either way it must not move again below.
+          synthesized: loads #len ;
 
           \ The interval is now 145ms and 16.67ms of bank carried over, so the next move
           \ (and eat) lands within another ten ticks, with no second move after it.
           state 12 10 (cell) >>food drop
           10 (tick)
           plays #len 2 "the second eat plays again" assert=
-          loads #len 1 "the sample is synthesized and loaded only once" assert=
+          loads #len synthesized "no later eat synthesizes the sample again" assert=
         ] with-parameter
       ] with-parameter
     ] with-random
   ] with-parameter
 ] ;
 
+\\ The builder is driven directly rather than through eat-sound, whose `once` cell an earlier
+\\ test may already have forced. Driving the game here would then reach the loader zero times.
 test-eat-sound-pcm-shape: ( -- ) [
   loads: V{ } ;
-  (scratch-keyboard) current-keyboard [
-    42 <random> [
-      [ 3 array-n loads swap #push! drop 7 ] current-sample-loader [
-        [ drop ] current-sample-player [
-          (snake-reset)
-          state f >>eat-sound drop
-          state 11 10 (cell) >>food drop
-          10 (tick)
+  [ 3 array-n loads swap #push! drop 7 ] current-sample-loader [
+    (make-eat-sound) drop
 
-          loads #len 1 "one sample reaches the loader" assert=
-          loads 0 #nth 1 #nth 1 "the arpeggio is mono" assert=
-          loads 0 #nth 2 #nth eat-sound-rate "the arpeggio uses the eat-sound rate" assert=
+    loads #len 1 "one sample reaches the loader" assert=
+    loads 0 #nth 1 #nth 1 "the arpeggio is mono" assert=
+    loads 0 #nth 2 #nth eat-sound-rate "the arpeggio uses the eat-sound rate" assert=
 
-          pcm: loads 0 #nth 0 #nth ;
-          pcm #len eat-sound-notes #len eat-sound-note-frames * 4 *
-          "the PCM covers every frame of every note" assert=
+    pcm: loads 0 #nth 0 #nth ;
+    pcm #len eat-sound-notes #len eat-sound-note-frames * 4 *
+    "the PCM covers every frame of every note" assert=
 
-          \ Each note opens at sin(0) scaled to zero (32-bit float +0.0 is all-zero bits)
-          \ and is off zero one frame later.
-          pcm 0 #peek32 0 "the first note starts at zero" assert=
-          pcm eat-sound-note-frames 4 * #peek32 0 "the second note starts at zero" assert=
-          pcm eat-sound-note-frames 2 * 4 * #peek32 0 "the third note starts at zero" assert=
-          pcm 4 #peek32 0 = not "the wave rises off zero" assert-true
-        ] with-parameter
-      ] with-parameter
-    ] with-random
+    \ Each note opens at sin(0) scaled to zero (32-bit float +0.0 is all-zero bits)
+    \ and is off zero one frame later.
+    pcm 0 #peek32 0 "the first note starts at zero" assert=
+    pcm eat-sound-note-frames 4 * #peek32 0 "the second note starts at zero" assert=
+    pcm eat-sound-note-frames 2 * 4 * #peek32 0 "the third note starts at zero" assert=
+    pcm 4 #peek32 0 = not "the wave rises off zero" assert-true
   ] with-parameter
 ] ;
 

@@ -54,9 +54,8 @@ private{
   \\ with the head last; food is a packed cell, or f when the board has no free cell.
   \\ pending is the latest turn request, applied at the next move; dir is the direction
   \\ actually traveled last move, which is what the neck-reversal filter judges against.
-  \\ eat-sound caches the synthesized arpeggio sample, f until the first eat.
-  snake-state: mutable struct{ alive dir pending body food move-interval move-accum eaten eat-sound } ;
-  state: t 1 1 [ ] make-vector f start-move-interval 0 0 f make-snake-state ;
+  snake-state: mutable struct{ alive dir pending body food move-interval move-accum eaten } ;
+  state: t 1 1 [ ] make-vector f start-move-interval 0 0 make-snake-state ;
 
   (dir-dx): ( d -- dx ) [ { 0 1 0 -1 } swap #nth ] ;
   (dir-dy): ( d -- dy ) [ { -1 0 1 0 } swap #nth ] ;
@@ -128,13 +127,10 @@ private{
     1 eat-sound-rate <sample>
   ] ;
 
-  \\ Play the eat arpeggio, synthesized on first use and cached across resets. It cannot be
-  \\ synthesized at init: start-game runs snake-init at module load, before a test can
-  \\ rebind the audio seams away from the wasm-only host words.
-  (eat-beep): ( -- ) [
-    state eat-sound>> not [ (make-eat-sound) state swap >>eat-sound drop ] when
-    state eat-sound>> play-sample
-  ] ;
+  \\ The arpeggio, synthesized on the first eat and reused across every later one and every
+  \\ reset. It cannot be synthesized at module load: start-game runs snake-init there, before a
+  \\ test can rebind the audio seams away from the wasm-only host words.
+  eat-sound: ( -- sample ) once [ (make-eat-sound) ] ;
 
   (snake-reset): ( -- ) [
     state
@@ -164,7 +160,7 @@ private{
         state dup eaten>> 1 + >>eaten drop
         (ramp)
         (place-food)
-        (eat-beep)
+        eat-sound play-sample
       ]
       if
     ]

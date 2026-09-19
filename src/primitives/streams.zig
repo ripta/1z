@@ -691,8 +691,15 @@ pub fn nativeStreamClose(ctx: *Context) anyerror!void {
     // stream's mode onto a wrapper whose `impl` holds TLS state, so a mode-only test would read
     // that state as a ReplaceTarget. Only `nativeStreamOpen` builds a replace: stream, and it
     // always builds it on `file_vtable`.
-    if (stream.mode == .replace and stream.vtable == &file_vtable) {
-        try finishReplacement(ctx, stream);
+    //
+    // The comptime gate keeps that vtable out of a freestanding build's reference graph. Naming
+    // it here is what would drag `fileRead` and its siblings in, and those are written against an
+    // fd a target with no OS does not have. `stream-open` refuses `replace:` there anyway, so no
+    // freestanding stream can reach this branch.
+    if (comptime !is_freestanding) {
+        if (stream.mode == .replace and stream.vtable == &file_vtable) {
+            try finishReplacement(ctx, stream);
+        }
     }
 }
 

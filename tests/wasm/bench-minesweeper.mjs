@@ -124,9 +124,10 @@ await frame(onez, 'reset frame (face press)')
 
 await frame(onez, 'steady frame (no repaint)')
 
-// The first board press builds all four sound samples before it reveals anything.
+// Each sample is synthesized by the press that first plays it, so this one builds the reveal
+// blip alone. The detonation is never built in a session that does not end on a mine.
 onez.pushPress(0, BOARD_PX_X + 3, BOARD_PX_Y + 3)
-await frame(onez, 'first board press (+ sounds)')
+await frame(onez, 'first board press (+ reveal blip)')
 
 onez.pushPress(0, BOARD_PX_X + CELL_PX * 8 + 3, BOARD_PX_Y + CELL_PX * 8 + 3)
 await frame(onez, 'later board press (no sounds)')

@@ -223,7 +223,10 @@ private{
   (stamp-cell-rows!):    ( pixels rows color -- pixels ) [ [ sprite-px sprite-px ] dip (stamp-rows!) ] ;
   (cell-sprite):         ( pixels -- sprite ) [ sprite-px swap (square-sprite) ] ;
 
-  \ Every sprite below is a bracket-less top-level local, built once when this module loads.
+  \ Every sprite below is built once. The ones a first frame draws are bracket-less top-level
+  \ locals, built when this module loads. The ones only an end state draws are `once` words,
+  \ built the first time something reads them: a session that never ends on a mine builds
+  \ neither the mines nor the dead face, and one that never ends in a win builds no winning face.
   covered-sprite: (beveled-cell-pixels) (cell-sprite) ;
   revealed-sprite: revealed-color (flat-cell-pixels) (cell-sprite) ;
 
@@ -234,15 +237,15 @@ private{
     (cell-sprite)
   ] call ;
 
-  mine-sprite: [
+  mine-sprite: ( -- sprite ) once [
     revealed-color (flat-cell-pixels)
     mine-body-rows icon-color (stamp-cell-rows!)
     mine-glint-rows glint-color (stamp-cell-rows!)
     (cell-sprite)
-  ] call ;
+  ] ;
 
   \\ The mine that was clicked, on a red fill so the player can pick it out of the reveal.
-  fatal-mine-sprite: [
+  fatal-mine-sprite: ( -- sprite ) once [
     fatal-color (flat-cell-pixels)
     mine-body-rows icon-color (stamp-cell-rows!)
     mine-glint-rows glint-color (stamp-cell-rows!)
@@ -250,7 +253,7 @@ private{
   ] ;
 
   \\ A flag that was not on a mine: the mine that was not there, struck through in red.
-  wrong-flag-sprite: [
+  wrong-flag-sprite: ( -- sprite ) once [
     revealed-color (flat-cell-pixels)
     mine-body-rows icon-color (stamp-cell-rows!)
     mine-glint-rows glint-color (stamp-cell-rows!)
@@ -267,8 +270,8 @@ private{
   ] ;
 
   face-normal-sprite: face-normal-rows (face-sprite) ;
-  face-dead-sprite:   face-dead-rows (face-sprite) ;
-  face-win-sprite:    face-win-rows (face-sprite) ;
+  face-dead-sprite:   ( -- sprite ) once [ face-dead-rows (face-sprite) ] ;
+  face-win-sprite:    ( -- sprite ) once [ face-win-rows (face-sprite) ] ;
 
   \\ Every sample is mono at this rate, and peaks at this amplitude.
   sound-rate: ( -- n ) const [ 8000 ] ;
@@ -337,27 +340,17 @@ private{
     (mono-sample)
   ] ;
 
-  sound-state: mutable struct{ flag reveal boom win } ;
-
-  \\ The four samples. A bracket-less top-level local rather than fields on game-state, so a new
-  \\ game cannot drop them and they are built at most once per page load.
-  sounds: f f f f make-sound-state ;
-
-  \\ Build all four samples if they are not built yet. Called from the press handlers, so the
-  \\ cost lands on the first board press the player makes rather than on the first loss.
-  \\
-  \\ Synthesis cannot run at init: start-game runs minesweeper-init at module load, before a test
-  \\ can rebind the audio seams away from the wasm-only host words.
-  (ensure-sounds): ( -- ) [
-    sounds flag>> not [
-      sounds
-      (make-flag-sound) >>flag
-      (make-reveal-sound) >>reveal
-      (make-boom-sound) >>boom
-      (make-win-sound) >>win
-      drop
-    ] when
-  ] ;
+  \ Each sample below is synthesized the first time something plays it and reused for the rest of
+  \ the page load. A sample a session never reaches is never built: a player who never loses never
+  \ pays for the detonation, which is much the most expensive of the four.
+  \
+  \ Synthesis cannot run at module load: start-game runs minesweeper-init there, before a test can
+  \ rebind the audio seams away from the wasm-only host words. A `once` word defers it past that,
+  \ to the press that first needs the sound.
+  flag-sound:   ( -- sample ) once [ (make-flag-sound) ] ;
+  reveal-sound: ( -- sample ) once [ (make-reveal-sound) ] ;
+  boom-sound:   ( -- sample ) once [ (make-boom-sound) ] ;
+  win-sound:    ( -- sample ) once [ (make-win-sound) ] ;
 
   \\ phase is fresh: until the first click places the mines, then playing:, and won: or lost:
   \\ once the board freezes.
@@ -531,7 +524,7 @@ private{
       over state covers>> swap #nth covered: = and
       [ flagged: (set-cover!) ] [ drop ] if
     ] #each
-    sounds win>> play-sample
+    win-sound play-sample
   ] ;
 
   \\ A mine was clicked. Open the whole board so the player can read where every mine was and
@@ -546,7 +539,7 @@ private{
       [ dup state covers>> swap #nth flagged: = [ wrong-flag: (set-cover!) ] [ drop ] if ]
       if
     ] #each
-    sounds boom>> play-sample
+    boom-sound play-sample
   ] ;
 
   \\ Uncover one covered cell. A zero queues its covered neighbors for the cascade, and
@@ -570,12 +563,11 @@ private{
   \\ which a cascade also drives, so a 200-cell opening does not machine-gun.
   (left-press): ( cell -- ) [
     cell: swap ;
-    (ensure-sounds)
     state covers>> cell #nth covered: = [
       state phase>> fresh: = [ cell (place-mines) state playing: >>phase drop ] when
       state mines>> cell #nth
       [ cell (lose!) ]
-      [ sounds reveal>> play-sample cell (reveal!) ]
+      [ reveal-sound play-sample cell (reveal!) ]
       if
     ] when
   ] ;
@@ -583,11 +575,10 @@ private{
   \\ A right press toggles the flag on a covered cell.
   (right-press): ( cell -- ) [
     cell: swap ;
-    (ensure-sounds)
     state covers>> cell #nth
     dup covered: =
-    [ drop cell flagged: (set-cover!) sounds flag>> play-sample ]
-    [ flagged: = [ cell covered: (set-cover!) sounds flag>> play-sample ] when ]
+    [ drop cell flagged: (set-cover!) flag-sound play-sample ]
+    [ flagged: = [ cell covered: (set-cover!) flag-sound play-sample ] when ]
     if
   ] ;
 

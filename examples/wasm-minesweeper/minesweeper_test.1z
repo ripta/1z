@@ -10,9 +10,10 @@
 \ C-API root, and bind the audio seams for the same reason. A seeded generator goes in via
 \ with-random so mine placement is deterministic.
 \
-\ (with-game) builds the samples before it seeds the generator, and deliberately so. The
-\ detonation draws four thousand values, so a first press inside the seeded stream would shift
-\ every later mine placement, and which test paid for it would then depend on test order.
+\ (with-game) builds the detonation before it seeds the generator, and deliberately so. That
+\ sample draws four thousand values, so building it inside the seeded stream would shift every
+\ later mine placement, and which test paid for it would then depend on test order. The other
+\ three samples draw nothing, so they are left to the presses that play them.
 \
 \ The drawing tests bind a scratch framebuffer and never reach clear-background, which costs
 \ about 20 seconds interpreted: they clear the repaint flag first or paint cells directly. The
@@ -68,7 +69,7 @@ private{
   ] ;
 
   \\ Run quot with scratch input buffers and audio seams bound, a seeded generator, and a fresh
-  \\ game at preset. The samples are built outside with-random; see the file header.
+  \\ game at preset. The detonation is built outside with-random; see the file header.
   (with-game): ( preset quot -- ) [
     quot: swap ;
     preset: swap ;
@@ -76,7 +77,7 @@ private{
       (scratch-mouse) current-mouse [
         [ drop drop drop 7 ] current-sample-loader [
           [ drop ] current-sample-player [
-            (ensure-sounds)
+            boom-sound drop
             42 <random> [ preset (new-game) quot ] with-random
           ] with-parameter
         ] with-parameter
@@ -669,28 +670,23 @@ test-the-win-chimes-after-its-blip: ( -- ) [
   ] (with-game)
 ] ;
 
-test-the-samples-are-built-once-on-the-first-press: ( -- ) [
+\\ The builders are driven directly rather than through the four `once` words, whose cells an
+\\ earlier test has very likely already forced. That each word forces its builder at most once is
+\\ the marker's guarantee, covered by tests/integration/once_runs_once.1z rather than here.
+test-sample-pcm-shape: ( -- ) [
   recorded-loads: V{ } ;
-  beginner: [
-    \ Records { bytes channels rate } per load, and hands back a fixed handle.
-    [ 3 array-n recorded-loads swap #push! drop 7 ] current-sample-loader [
-      [ drop ] current-sample-player [
-        \ The samples are built once per page load by design; clear them so this test's load
-        \ count does not depend on which test ran first.
-        sounds f >>flag f >>reveal f >>boom f >>win drop
-        recorded-loads #len 0 "nothing is synthesized before the first press" assert=
-        2 3 (right-click)
-        recorded-loads #len 4 "the first press builds all four samples" assert=
-        4 4 (left-click)
-        (drain)
-        recorded-loads #len 4 "later presses reuse them" assert=
-        recorded-loads 0 #nth 1 #nth 1 "the samples are mono" assert=
-        recorded-loads 0 #nth 2 #nth sound-rate "the samples use the platform rate" assert=
-        recorded-loads 2 #nth 0 #nth #len boom-sound-frames 4 *
-        "the detonation covers its frame budget" assert=
-      ] with-parameter
-    ] with-parameter
-  ] (with-game)
+  \ Records { bytes channels rate } per load, and hands back a fixed handle.
+  [ 3 array-n recorded-loads swap #push! drop 7 ] current-sample-loader [
+    (make-flag-sound) drop
+    (make-reveal-sound) drop
+    (make-boom-sound) drop
+    (make-win-sound) drop
+    recorded-loads #len 4 "each builder loads one sample" assert=
+    recorded-loads 0 #nth 1 #nth 1 "the samples are mono" assert=
+    recorded-loads 0 #nth 2 #nth sound-rate "the samples use the platform rate" assert=
+    recorded-loads 2 #nth 0 #nth #len boom-sound-frames 4 *
+    "the detonation covers its frame budget" assert=
+  ] with-parameter
 ] ;
 
 \\ Regression coverage matching game/input_test.1z's repeated-call tests: the idle tick path

@@ -110,9 +110,15 @@ fmt: build ## Format zig and 1z source files
 	timeout $(TARGET_TIMEOUT) zig fmt src/ build.zig
 	timeout $(TARGET_TIMEOUT) ./$(ZIG_PREFIX)/bin/1z fmt $$(find . \( -path './.zig-cache' -o -path './$(ZIG_PREFIX)' \) -prune -o -name '*.1z' -print)
 
-# `aot-checks` runs here rather than inside the two thread-mode targets: it
-# asserts build-time compiler behavior, which has no thread-mode axis.
-test: branch-info leak-goldens-check module-less-benchmark-check aot-checks test-threads-1 test-threads-auto capi-test ## Run all tests under both --threads=1 and --threads=auto
+# `aot-checks` and `wasm-freestanding-build` run here rather than inside the two
+# thread-mode targets: both assert build-time behavior, which has no thread-mode
+# axis.
+#
+# The wasm cross-compile is the only coverage the browser tier has. Nothing else
+# in the suite compiles for wasm32-freestanding, so a hosted-only declaration
+# newly named from a wasm-reachable function breaks `make wasm` and nothing says
+# so until someone builds the browser module by hand.
+test: branch-info leak-goldens-check module-less-benchmark-check aot-checks wasm-freestanding-build test-threads-1 test-threads-auto capi-test ## Run all tests under both --threads=1 and --threads=auto
 
 leak-goldens-check: ## Fail if any test golden has baked-in GPA leak text
 	@if grep -rl 'error(gpa)' tests/ --include='*.golden'; then \
