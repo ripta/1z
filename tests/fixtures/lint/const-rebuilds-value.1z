@@ -26,8 +26,12 @@ half-limit: ( -- n ) const [ limit 2 div ] ;
 \\ Not flagged: constructs, but is not const, so it is a builder rather than a constant.
 fresh-scratch: ( -- byte-array ) [ 128 bytes-alloc ] ;
 
-\\ Not flagged: the top-level binding form, which is the fix the rule points at.
+\\ Not flagged: the top-level binding form, one of the two fixes the rule points at.
 shared-origin: 0 0 make-point ;
+
+\\ Not flagged: the once marker, the other fix. The constructor sits in the cell, where the
+\\ stored guard body the rule reads cannot reach it.
+deferred-origin: ( -- point ) const once [ 0 0 make-point ] ;
 
 \\ Reference each one so dead-definition stays quiet.
 main: ( -- ) [
@@ -38,6 +42,7 @@ main: ( -- ) [
   half-limit drop
   fresh-scratch drop
   shared-origin drop
+  deferred-origin drop
 ] ;
 
 main

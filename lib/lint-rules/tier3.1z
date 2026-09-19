@@ -902,7 +902,8 @@ make-lint-rule register-lint-rule
 \ --- Rule: const-rebuilds-value ---
 \ The const marker guards redefinition; it does not memoize. A const word's body runs on every
 \ reference, so one that constructs a value rebuilds that value at every call site. A
-\ bracket-less top-level binding evaluates once, when the module loads.
+\ bracket-less top-level binding evaluates when the module loads. A once word evaluates on the
+\ first reference to it.
 
 (check-const-rebuilds-value): ( path source tokens line-index semantic-context -- diagnostics ) [
   nip nip nip
@@ -920,7 +921,7 @@ make-lint-rule register-lint-rule
         [
           source-loc>> dup f = [ drop ] [
             "const-rebuilds-value" warning: 5 pick-n 3 pick-n dup line>> swap column>>
-            "const word rebuilds its value on every call; a top-level binding evaluates once"
+            "`const` word rebuilds its value on every call; a top-level binding evaluates at load, and a `once` word on first use"
             make-lint-diagnostic
             nip
             1 pick-n swap #push! drop
