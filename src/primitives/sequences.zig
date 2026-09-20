@@ -56,6 +56,11 @@ pub fn seqToArrayIter(seq: Value, ctx: *Context) !?*Iterator {
             container_backing.retainValues(items);
             break :blk .{ .array = .{ .items = items, .index = 0 } };
         },
+        // A value-map entry is built rather than borrowed, so these two arms sit here rather than
+        // in `SequenceIterator`, whose contract is to hand back an element the container holds.
+        // `valueMapEntries` already returns owning references, hence no `retainValues`.
+        .value_map => |m| .{ .array = .{ .items = try valueMapEntries(ctx, &m.map), .index = 0 } },
+        .mutable_value_map => |m| .{ .array = .{ .items = try valueMapEntries(ctx, &m.map), .index = 0 } },
         else => return null,
     };
     return Iterator.create(ctx.allocator, kind) catch |err| {
@@ -411,6 +416,18 @@ fn nativeLenModule(ctx: *Context) anyerror!void {
     try ctx.stack.push(.{ .fixnum = @intCast(val.module.words.count()) });
 }
 
+fn nativeLenValueMap(ctx: *Context) anyerror!void {
+    const val = try ctx.stack.pop();
+    defer container_backing.releaseValue(val);
+    try ctx.stack.push(.{ .fixnum = @intCast(val.value_map.map.count()) });
+}
+
+fn nativeLenMutableValueMap(ctx: *Context) anyerror!void {
+    const val = try ctx.stack.pop();
+    defer container_backing.releaseValue(val);
+    try ctx.stack.push(.{ .fixnum = @intCast(val.mutable_value_map.map.count()) });
+}
+
 fn nativeNthString(ctx: *Context) anyerror!void {
     const b = try ctx.stack.pop();
     defer container_backing.releaseValue(b);
@@ -614,6 +631,8 @@ pub fn registerNativeDispatch(dispatch: *DispatchTable, ctx: *Context) !void {
     const mutable_map = tv(ctx, "mutable-map");
     const module = tv(ctx, "module");
     const fixnum = tv(ctx, "fixnum");
+    const value_map = tv(ctx, "value-map");
+    const mutable_value_map = tv(ctx, "mutable-value-map");
 
     // #len : unary entries
     const len_did = ctx.nativeDispatchId(.len);
@@ -625,6 +644,8 @@ pub fn registerNativeDispatch(dispatch: *DispatchTable, ctx: *Context) !void {
     try dispatch.registerNative(len_did, hash, unary, nativeLenHash);
     try dispatch.registerNative(len_did, mutable_map, unary, nativeLenMutableMap);
     try dispatch.registerNative(len_did, module, unary, nativeLenModule);
+    try dispatch.registerNative(len_did, value_map, unary, nativeLenValueMap);
+    try dispatch.registerNative(len_did, mutable_value_map, unary, nativeLenMutableValueMap);
 
     // #nth : binary entries (all with type_b = fixnum)
     const nth_did = ctx.nativeDispatchId(.nth);
@@ -667,6 +688,8 @@ pub fn registerNativeDispatch(dispatch: *DispatchTable, ctx: *Context) !void {
     try dispatch.registerNative(to_array_did, byte_array, unary, nativeToArrayByteArray);
     try dispatch.registerNative(to_array_did, set, unary, nativeToArraySet);
     try dispatch.registerNative(to_array_did, array, unary, nativeToArrayArray);
+    try dispatch.registerNative(to_array_did, value_map, unary, nativeToArrayValueMap);
+    try dispatch.registerNative(to_array_did, mutable_value_map, unary, nativeToArrayMutableValueMap);
 
     // >hash : unary entries
     const to_hash_did = ctx.nativeDispatchId(.to_hash);
@@ -728,7 +751,7 @@ pub const primitives = [_]Primitive{
     .{ .name = "#index-of-from", .stack_effect = "str needle start -- n/f", .doc = "Find index of substring starting from codepoint position.", .func = nativeIndexOfFrom },
     .{ .name = "#byte-index-of-from", .stack_effect = "str needle start-byte -- byte-n/f", .doc = "Find byte offset of substring starting from a byte offset; no codepoint accounting.", .func = nativeByteIndexOfFrom },
     // Container conversion
-    .{ .name = ">array", .stack_effect = "container -- array", .doc = "Convert vector, byte-array, set, or array to an immutable array. Copy semantics; original unchanged.", .func = nativeToArray, .markers = &.{@constCast(&markers_mod.generic_marker)} },
+    .{ .name = ">array", .stack_effect = "container -- array", .doc = "Convert vector, byte-array, set, value-map, mutable-value-map, or array to an immutable array. Either value-map half yields one two-element entry per pair. Copy semantics; original unchanged.", .func = nativeToArray, .markers = &.{@constCast(&markers_mod.generic_marker)} },
     .{ .name = ">byte-array", .stack_effect = "value -- value", .doc = "Convert a byte-array or packed value to owned byte-array storage. Owned inputs are returned unchanged; borrowed inputs are copied.", .func = nativeToByteArray, .markers = &.{@constCast(&markers_mod.generic_marker)} },
     .{ .name = ">hash", .stack_effect = "container -- hash", .doc = "Convert mutable-map or hash to an immutable hash. Mutable-map uses copy semantics; original unchanged.", .func = nativeToHash, .markers = &.{@constCast(&markers_mod.generic_marker)} },
     // Byte-level access
@@ -2950,6 +2973,54 @@ fn nativeToArraySet(ctx: *Context) anyerror!void {
     try helpers.pushAdoptedArray(ctx, ctx.allocator, items);
 }
 
+/// One freshly built two-element entry array per map entry, in the map's own order.
+///
+/// The slice and every element are owned by the caller. An entry is the value-map's one first-class
+/// element reading, so this is what `>array` collects and what `>iterator` walks.
+pub fn valueMapEntries(ctx: *Context, map: *const value_mod.ValueEntries) ![]Value {
+    const alloc = ctx.allocator;
+    const out = alloc.alloc(Value, map.count()) catch return error.OutOfMemory;
+
+    var built: usize = 0;
+    errdefer {
+        container_backing.releaseValues(out[0..built]);
+        alloc.free(out);
+    }
+
+    for (map.keys(), map.values()) |key, val| {
+        const pair = alloc.alloc(Value, 2) catch return error.OutOfMemory;
+        pair[0] = key;
+        pair[1] = val;
+        container_backing.retainValues(pair);
+
+        const entry = value_mod.Array.fromOwnedSlice(alloc, pair) catch {
+            container_backing.releaseValues(pair);
+            alloc.free(pair);
+            return error.OutOfMemory;
+        };
+        out[built] = .{ .array = entry };
+        built += 1;
+    }
+
+    return out;
+}
+
+/// >array ( value-map -- array )
+fn nativeToArrayValueMap(ctx: *Context) anyerror!void {
+    const val = try ctx.stack.pop();
+    defer container_backing.releaseValue(val);
+    const items = try valueMapEntries(ctx, &val.value_map.map);
+    try helpers.pushAdoptedArray(ctx, ctx.allocator, items);
+}
+
+/// >array ( mutable-value-map -- array )
+fn nativeToArrayMutableValueMap(ctx: *Context) anyerror!void {
+    const val = try ctx.stack.pop();
+    defer container_backing.releaseValue(val);
+    const items = try valueMapEntries(ctx, &val.mutable_value_map.map);
+    try helpers.pushAdoptedArray(ctx, ctx.allocator, items);
+}
+
 /// >array ( array -- array )
 fn nativeToArrayArray(_: *Context) anyerror!void {
     // Pop and push back, an identity (value is already on the stack)
@@ -2960,7 +3031,7 @@ fn nativeToArray(ctx: *Context) anyerror!void {
     if (try dispatch_helpers.tryDispatchUnary(ctx, ctx.nativeDispatchId(.to_array))) return;
     const val = try ctx.stack.pop();
     defer container_backing.releaseValue(val);
-    setErrorContext(ctx, ">array expected vector, byte-array, set, or array, got {s}", .{valueTypeName(val)});
+    setErrorContext(ctx, ">array expected vector, byte-array, set, value-map, mutable-value-map, or array, got {s}", .{valueTypeName(val)});
     return error.TypeMismatch;
 }
 
@@ -4459,4 +4530,28 @@ test "coerceSequenceOperand rejects a >iterator method returning a non-iterator"
     const result = coerceSequenceOperand(&ctx, .{ .fixnum = 9 }, .native_seqs);
     try std.testing.expectError(error.TypeMismatch, result);
     try std.testing.expect(std.mem.indexOf(u8, ctx.pending_error_message.?, ">iterator") != null);
+}
+
+test "a value-map entry outlives the map it was built from" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const map = try value_mod.ValueMap.create(std.testing.allocator);
+    const inner = try value_mod.Array.fromOwnedSlice(std.testing.allocator, try std.testing.allocator.alloc(Value, 0));
+    _ = try map.map.getOrPut(map.header.allocator, .{ .fixnum = 1 });
+    map.map.values()[0] = .{ .array = inner };
+
+    const entries = try valueMapEntries(&ctx, &map.map);
+    defer {
+        container_backing.releaseValues(entries);
+        std.testing.allocator.free(entries);
+    }
+
+    // The map held the only other reference, so a missing retain in the builder would leave the
+    // entry pointing at freed storage here.
+    container_backing.releaseValue(.{ .value_map = map });
+
+    try std.testing.expectEqual(@as(usize, 1), entries.len);
+    try std.testing.expectEqual(@as(i64, 1), entries[0].array.items[0].fixnum);
+    try std.testing.expectEqual(@as(usize, 0), entries[0].array.items[1].array.items.len);
 }

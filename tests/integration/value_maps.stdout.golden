@@ -5,6 +5,17 @@ Stack: [ ]
 Stack: [ ]
 Stack: [ ]
 Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
 === value-map construction ===
 PASS: immutable half is a value-map
 PASS: mutable half is a mutable-value-map
@@ -37,4 +48,82 @@ PASS: the immutable half freezes to itself
 Stack: [ ]
 === value-map task sharing ===
 PASS: awaited value-map keeps its type
+Stack: [ ]
+=== value-map fixnum keys ===
+PASS: a fixnum key reaches its value
+PASS: the mutable half takes one too
+Stack: [ ]
+=== value-map conversion ===
+PASS: entries survive the round trip
+PASS: inspect renders the conversion
+PASS: an empty entry list builds an empty map
+PASS: a repeated key keeps the last value
+Stack: [ ]
+=== value-map conversion operands ===
+PASS: a vector of entries builds a map
+PASS: an entry may itself be a vector
+PASS: an iterator source builds a map
+PASS: a value-map thaws through the conversion
+PASS: a three-element entry is refused
+PASS: an entry that is not a sequence is refused
+PASS: an operand with no sequence route is refused
+Stack: [ ]
+=== value-map reads ===
+PASS: vmap-get reads the immutable half
+PASS: vmap-get reads the mutable half
+PASS: vmap-has? answers for the immutable half
+PASS: vmap-has? answers a miss on the mutable half
+PASS: vmap-get? wraps a hit
+PASS: vmap-get? answers none on a miss
+PASS: vmap-get-or falls back
+PASS: vmap-get-or prefers the stored value
+PASS: a missing key throws
+PASS: a non-map operand is refused
+Stack: [ ]
+=== value-map writes ===
+PASS: vmap-set returns the widened map
+PASS: vmap-set left its input alone
+PASS: vmap-set replaces an existing key
+PASS: vmap-set! returns the same map
+PASS: vmap-set! mutated in place
+PASS: vmap-set! refuses the immutable half
+PASS: vmap-set refuses the mutable half
+Stack: [ ]
+=== value-map deletes ===
+PASS: vmap-delete keeps the surviving order
+PASS: vmap-delete left its input alone
+PASS: a missing key yields an equal map
+PASS: vmap-delete! moves the last entry into the hole
+PASS: vmap-delete! mutated in place
+PASS: a missing key is a no-op
+PASS: vmap-delete! refuses the immutable half
+PASS: vmap-delete refuses the mutable half
+Stack: [ ]
+=== value-map frozen keys ===
+PASS: an array finds the key a vector inserted
+PASS: the entry survives a mutation of the caller's handle
+PASS: and the map still holds one entry
+PASS: a vector key and an array key of the same contents are one entry
+PASS: a vector key reads back frozen
+Stack: [ ]
+=== value-map unfreezable keys ===
+PASS: vmap-set! refuses a byte-array newtype
+PASS: vmap-set refuses one too
+PASS: vmap-has? refuses one on the probe
+Stack: [ ]
+=== value-map numeric keys ===
+PASS: 1 and 1.0 compare equal
+PASS: but they are different keys
+PASS: which is what set already does
+Stack: [ ]
+=== value-map sequence protocol ===
+PASS: #len counts entries
+PASS: #empty? rides on #len
+PASS: an empty map reports empty
+PASS: >array collects entries
+PASS: >iterator yields entries
+PASS: #map projects the value half
+PASS: #count walks the entries
+PASS: the mutable half answers #len too
+PASS: and >array
 Stack: [ ]

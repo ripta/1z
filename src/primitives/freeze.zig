@@ -112,11 +112,13 @@ pub fn frozenKeyConsume(ctx: *Context, key: Value) anyerror!Value {
 /// Freeze a key, adding why the container wanted it frozen when the key's type refuses.
 ///
 /// The refusal itself is freeze's to explain, since it holds for a direct `freeze` call too. What
-/// the container adds is why that mattered here, which is what the hint carries.
+/// the container adds is why that mattered here, which is what the hint carries. The wording names
+/// no one container, because every caller reaches here for the same reason and the set of them
+/// grows.
 fn freezeKeyCopy(ctx: *Context, key: Value) anyerror!Value {
     const r = freezeCopy(ctx, key) catch |e| {
         if (e == error.TypeMismatch) {
-            setErrorHint(ctx, "a set member is stored frozen, so its type must be freezable");
+            setErrorHint(ctx, "a hash-keyed container stores a key by its frozen form, so its type must be freezable");
         }
         return e;
     };

@@ -195,8 +195,9 @@ For the numeric buffers and the FFI structs that is deliberate rather than a
 limitation to work around. They exist to be written through in place, and a
 frozen one would be rejected by its own field and element words.
 
-The rule reaches past `freeze` itself. A set stores every member by its frozen
-form, so a value that cannot be frozen cannot be a set member:
+The rule reaches past `freeze` itself. Every hash-keyed container stores a key
+by its frozen form, so a value that cannot be frozen cannot be a set member or a
+`value-map` key:
 
 ```
 S{ } "1.2.3.4" >ip @adjoin
@@ -206,7 +207,7 @@ Output:
 
 ```
 error 'type-mismatch' freeze: ip wraps a byte-array, and a byte-array-backed newtype has no frozen counterpart at word '@adjoin'
-  hint: a set member is stored frozen, so its type must be freezable
+  hint: a hash-keyed container stores a key by its frozen form, so its type must be freezable
 ```
 
 Reach for a purpose-built container when you need to group values of such a

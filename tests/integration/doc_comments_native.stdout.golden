@@ -27,8 +27,10 @@ Get length of sequence. Non-destructive, and does not work on iterators (use #co
   method{ hash }
   method{ module }
   method{ mutable-map }
+  method{ mutable-value-map }
   method{ set }
   method{ string }
+  method{ value-map }
   method{ vector }
 Stack: [ ]
 Execute try quotation; if error, run recover quotation with error on stack.

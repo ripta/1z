@@ -1,9 +1,9 @@
-Prelude compilation: 467/468 words compiled (99.8%)
+Prelude compilation: 469/470 words compiled (99.8%)
   word 'pragma-get?' cannot be compiled
       NC.13: word body underflows the abstract stack (row-variable effects)
       hint: blocked until row-variable stack regions can be modeled
 Quotation bodies compiled: 0
-Inline PIC sites: 90/275 generic call sites preseeded
+Inline PIC sites: 90/279 generic call sites preseeded
 AOT interpreter fallbacks: 308 total
   native: 247
   per-op-native: 42
@@ -16,16 +16,16 @@ AOT interpreter fallbacks: 308 total
     native: quotation? -> = (line 418)
     native: . -> inspect (line 734)
     native: . -> inspect (line 734)
-    native: #ends-with? -> #len (line 1330)
-    native: #ends-with? -> #len (line 1330)
-    native: #ends-with? -> #len (line 1330)
-    native: #ends-with? -> #len (line 1330)
-    native: #ends-with? -> < (line 1330)
-    native: #ends-with? -> #len (line 1332)
-    native: #ends-with? -> #len (line 1332)
-    native: #ends-with? -> #len (line 1332)
-    native: #ends-with? -> #len (line 1332)
-    per-op-native: #ends-with? -> - (line 1332)
+    native: #ends-with? -> #len (line 1342)
+    native: #ends-with? -> #len (line 1342)
+    native: #ends-with? -> #len (line 1342)
+    native: #ends-with? -> #len (line 1342)
+    native: #ends-with? -> < (line 1342)
+    native: #ends-with? -> #len (line 1344)
+    native: #ends-with? -> #len (line 1344)
+    native: #ends-with? -> #len (line 1344)
+    native: #ends-with? -> #len (line 1344)
+    per-op-native: #ends-with? -> - (line 1344)
     ... 292 more
   static-check: jitInterpretedCall=2/2 jitNativeWordCall=289/289 jitCallQuotation=17/17 (matches build-time inventory)
 Warning: '4keep' parameter 'quot' has row-variable effect; quotation call falls back to interpreter

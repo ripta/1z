@@ -1,9 +1,8 @@
 use "testing" ;
 
-\ Value-keyed maps: the two tags, their storage, and the constructors for the
-\ empty case. The word set that fills one in arrives later, so every assertion
-\ here is over an empty map. The paths that walk a populated map are covered by
-\ Zig unit tests, which can build one directly.
+\ Value-keyed maps: the two tags, their storage, and the word set over both
+\ halves. Reads are shared through one tag switch and writes split, mirroring
+\ the way hash and mutable-map share @get and split @set against @set!.
 
 test-construction-and-type: ( -- ) [
   "value-map construction" test-section
@@ -60,6 +59,145 @@ test-cross-task-sharing: ( -- ) [
   ] task-scope
 ] ;
 
+\ A fixnum key is the case M{ } cannot express at all, and it is the reason
+\ this type exists.
+test-fixnum-keys: ( -- ) [
+  "value-map fixnum keys" test-section
+  { { 1 "a" } { 2 "b" } } >value-map 2 vmap-get "b" "a fixnum key reaches its value" assert=
+  <mutable-value-map> 42 "answer" vmap-set! 42 vmap-get "answer" "the mutable half takes one too" assert=
+] ;
+
+\ The conversion and the collection are inverses: >array yields the entries
+\ >value-map consumes.
+test-conversion-round-trip: ( -- ) [
+  "value-map conversion" test-section
+  { { 1 "a" } { 2 "b" } } >value-map >array { { 1 "a" } { 2 "b" } } "entries survive the round trip" assert=
+  { { 1 "a" } { 2 "b" } } >value-map inspect "{ { 1 \"a\" } { 2 \"b\" } } >value-map" "inspect renders the conversion" assert=
+  { } >value-map <value-map> "an empty entry list builds an empty map" assert=
+  { { 1 "a" } { 1 "b" } } >value-map 1 vmap-get "b" "a repeated key keeps the last value" assert=
+] ;
+
+\ The operand is routed the way #collect routes its own, so anything the
+\ sequence protocol reaches works, and an entry may be an array or a vector.
+test-conversion-accepts-any-sequence: ( -- ) [
+  "value-map conversion operands" test-section
+  entries: V{ } ;
+  entries { 1 "a" } #push! { 2 "b" } #push! >value-map #len 2 "a vector of entries builds a map" assert=
+  V{ 7 8 } 1array >value-map 7 vmap-get 8 "an entry may itself be a vector" assert=
+  { { 1 "a" } } >iterator >value-map #len 1 "an iterator source builds a map" assert=
+  \ A value-map is itself a sequence of entries, so this is the way back from
+  \ the immutable half. freeze is the way to it.
+  { { 1 "a" } } >value-map >mutable-value-map type-of mutable-value-map "a value-map thaws through the conversion" assert=
+  [ { { 1 2 3 } } >value-map ] type-mismatch: "a three-element entry is refused" assert-error-type
+  [ { 5 } >value-map ] type-mismatch: "an entry that is not a sequence is refused" assert-error-type
+  [ 5 >value-map ] type-mismatch: "an operand with no sequence route is refused" assert-error-type
+] ;
+
+test-shared-reads: ( -- ) [
+  "value-map reads" test-section
+  imm: { { "k" 1 } } >value-map ;
+  mut: { { "k" 1 } } >mutable-value-map ;
+  imm "k" vmap-get 1 "vmap-get reads the immutable half" assert=
+  mut "k" vmap-get 1 "vmap-get reads the mutable half" assert=
+  imm "k" vmap-has? "vmap-has? answers for the immutable half" assert-true
+  mut "z" vmap-has? "vmap-has? answers a miss on the mutable half" assert-false
+  imm "k" vmap-get? option:some> 1 "vmap-get? wraps a hit" assert=
+  mut "z" vmap-get? option:none? "vmap-get? answers none on a miss" assert-true
+  imm "z" 9 vmap-get-or 9 "vmap-get-or falls back" assert=
+  mut "k" 9 vmap-get-or 1 "vmap-get-or prefers the stored value" assert=
+  [ <value-map> "z" vmap-get ] key-not-found: "a missing key throws" assert-error-type
+  [ 5 "k" vmap-get ] type-mismatch: "a non-map operand is refused" assert-error-type
+] ;
+
+\ vmap-set copies, so its input is untouched. vmap-set! mutates and hands the
+\ same map back. Each refuses the other's half.
+test-split-writes: ( -- ) [
+  "value-map writes" test-section
+  base: { { 1 "a" } } >value-map ;
+  base 2 "b" vmap-set #len 2 "vmap-set returns the widened map" assert=
+  base #len 1 "vmap-set left its input alone" assert=
+  base 1 "z" vmap-set 1 vmap-get "z" "vmap-set replaces an existing key" assert=
+
+  m: <mutable-value-map> ;
+  m 1 "a" vmap-set! m = "vmap-set! returns the same map" assert-true
+  m #len 1 "vmap-set! mutated in place" assert=
+
+  [ <value-map> 1 2 vmap-set! ] type-mismatch: "vmap-set! refuses the immutable half" assert-error-type
+  [ <mutable-value-map> 1 2 vmap-set ] type-mismatch: "vmap-set refuses the mutable half" assert-error-type
+] ;
+
+\ The immutable delete rebuilds in order. The mutable one swaps the last entry
+\ into the hole, which is O(1) and moves iteration order.
+test-split-deletes: ( -- ) [
+  "value-map deletes" test-section
+  three: { { 1 "a" } { 2 "b" } { 3 "c" } } >value-map ;
+  three 2 vmap-delete >array { { 1 "a" } { 3 "c" } } "vmap-delete keeps the surviving order" assert=
+  three #len 3 "vmap-delete left its input alone" assert=
+  three 9 vmap-delete #len 3 "a missing key yields an equal map" assert=
+
+  mthree: { { 1 "a" } { 2 "b" } { 3 "c" } } >mutable-value-map ;
+  mthree 2 vmap-delete! >array { { 1 "a" } { 3 "c" } } "vmap-delete! moves the last entry into the hole" assert=
+  mthree #len 2 "vmap-delete! mutated in place" assert=
+  mthree 9 vmap-delete! #len 2 "a missing key is a no-op" assert=
+
+  [ <value-map> 1 vmap-delete! ] type-mismatch: "vmap-delete! refuses the immutable half" assert-error-type
+  [ <mutable-value-map> 1 vmap-delete ] type-mismatch: "vmap-delete refuses the mutable half" assert-error-type
+] ;
+
+\ Both halves write through the same insert, so the frozen-form key rule reaches
+\ them through the words as well as through the storage.
+test-frozen-form-keys: ( -- ) [
+  "value-map frozen keys" test-section
+  k: V{ 1 2 } ;
+  fm: <mutable-value-map> k "v" vmap-set! ;
+  fm { 1 2 } vmap-has? "an array finds the key a vector inserted" assert-true
+  k 3 #push! drop
+  fm { 1 2 } vmap-get "v" "the entry survives a mutation of the caller's handle" assert=
+  fm #len 1 "and the map still holds one entry" assert=
+
+  one: <value-map> V{ 1 2 } "v" vmap-set { 1 2 } "w" vmap-set ;
+  one #len 1 "a vector key and an array key of the same contents are one entry" assert=
+  one >array 0 #nth 0 #nth type-of array "a vector key reads back frozen" assert=
+] ;
+
+\ Storing keys frozen means a type that cannot be frozen cannot be a key. A
+\ newtype over a byte-array is that type, and the hint that says so names no one
+\ container, since set and both value-map halves all reach it.
+key-bytes: virtual{ byte-array } ;
+
+test-an-unfreezable-key-is-refused: ( -- ) [
+  "value-map unfreezable keys" test-section
+  [ <mutable-value-map> B{ 1 2 } >key-bytes 1 vmap-set! ] type-mismatch: "vmap-set! refuses a byte-array newtype" assert-error-type
+  [ <value-map> B{ 1 2 } >key-bytes 1 vmap-set ] type-mismatch: "vmap-set refuses one too" assert-error-type
+  [ <value-map> B{ 1 2 } >key-bytes vmap-has? ] type-mismatch: "vmap-has? refuses one on the probe" assert-error-type
+] ;
+
+\ Structural identity is what Value.eql computes, so the numeric tower diverges
+\ from = here exactly as it already does for set.
+test-numeric-tower-divergence: ( -- ) [
+  "value-map numeric keys" test-section
+  1 1.0 = "1 and 1.0 compare equal" assert-true
+  { { 1 "one" } } >value-map 1.0 vmap-has? "but they are different keys" assert-false
+  S{ 1 } 1.0 @in? "which is what set already does" assert-false
+] ;
+
+\ An entry is the type's one first-class element reading, which is what the
+\ sequence protocol asks a container to have.
+test-sequence-protocol: ( -- ) [
+  "value-map sequence protocol" test-section
+  sm: { { 1 "a" } { 2 "b" } } >value-map ;
+  sm #len 2 "#len counts entries" assert=
+  sm #empty? "#empty? rides on #len" assert-false
+  <value-map> #empty? "an empty map reports empty" assert-true
+  sm >array #len 2 ">array collects entries" assert=
+  sm >iterator #collect { { 1 "a" } { 2 "b" } } ">iterator yields entries" assert=
+  sm [ 1 #nth ] #map #collect { "a" "b" } "#map projects the value half" assert=
+  sm #count 2 "#count walks the entries" assert=
+
+  { { 1 "a" } } >mutable-value-map #len 1 "the mutable half answers #len too" assert=
+  { { 1 "a" } } >mutable-value-map >array { { 1 "a" } } "and >array" assert=
+] ;
+
 test-construction-and-type
 test-predicates
 test-mutable-descriptor
@@ -67,3 +205,13 @@ test-inspect
 test-equality
 test-freeze-pairing
 test-cross-task-sharing
+test-fixnum-keys
+test-conversion-round-trip
+test-conversion-accepts-any-sequence
+test-shared-reads
+test-split-writes
+test-split-deletes
+test-frozen-form-keys
+test-an-unfreezable-key-is-refused
+test-numeric-tower-divergence
+test-sequence-protocol

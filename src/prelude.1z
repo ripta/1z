@@ -1308,6 +1308,18 @@ try: ( ..a quot: ( ..a -- x ) -- result ) [ [ call >result:ok ] [ >result:err ] 
 \\ Get value by key, or return default if missing.
 @get-or: ( assoc key default -- value ) [ -rot> 2dup @has? [ @get nip ] [ 2drop ] if ] ;
 
+\\ Look up a key in either value-map half, returning some(value) or none.
+\\
+\\   { { 1 "a" } } >value-map 1 vmap-get? option:some>
+\\   => "a"
+vmap-get?: ( vmap key -- option ) [ 2dup vmap-has? [ vmap-get >option:some ] [ 2drop option:none ] if ] ;
+
+\\ Look up a key in either value-map half, or return default if missing.
+\\
+\\   { { 1 "a" } } >value-map 2 "z" vmap-get-or
+\\   => "z"
+vmap-get-or: ( vmap key default -- value ) [ -rot> 2dup vmap-has? [ vmap-get nip ] [ 2drop ] if ] ;
+
 \\ Get the nth element of a sequence, returning some(value) or none if out of bounds.
 #nth?: ( seq n -- option ) [ [ #nth >option:some ] [ drop option:none ] recover ] ;
 
