@@ -1209,6 +1209,62 @@ fn virtualParameterizedWrapHelper(ctx: *Context) anyerror!void {
                         val = .{ .set = new_set };
                     }
                 },
+                // A value-keyed map's parameter constrains its stored values, matching the
+                // `.hash` and `.mutable_map` arms; its keys stay unconstrained.
+                .value_map => |m| {
+                    var needs_promotion = false;
+                    for (m.map.values()) |elem| {
+                        const elem_tv = dispatch_mod.dispatchTypeValue(elem, ctx);
+                        if (elem_tv == expected_tv) continue;
+                        if (tryPromoteElement(alloc, elem, expected_tv.name) == null) {
+                            helpers.setErrorContext(ctx, ">{s} value has type {s}, expected {s}", .{ vt.name, elem_tv.name, expected_tv.name });
+                            return error.TypeMismatch;
+                        }
+                        needs_promotion = true;
+                    }
+
+                    if (needs_promotion) {
+                        const new_map = try value_mod.ValueMap.create(ctx.allocator);
+                        errdefer container_backing.releaseValue(.{ .value_map = new_map });
+                        const map_alloc = new_map.header.allocator;
+
+                        for (m.map.keys(), m.map.values()) |key, elem| {
+                            const carried = dispatch_mod.dispatchTypeValue(elem, ctx) == expected_tv;
+                            const stored = if (carried) elem else tryPromoteElement(alloc, elem, expected_tv.name).?;
+                            if (carried) container_backing.retainValue(stored);
+                            container_backing.retainValue(key);
+
+                            new_map.map.put(map_alloc, key, stored) catch {
+                                container_backing.releaseValue(key);
+                                if (carried) container_backing.releaseValue(stored);
+                                return error.OutOfMemory;
+                            };
+                        }
+
+                        container_backing.releaseValue(val);
+                        val = .{ .value_map = new_map };
+                    }
+                },
+                .mutable_value_map => |m| {
+                    m.header.lock();
+                    defer m.header.unlock();
+
+                    for (m.map.values()) |elem| {
+                        const elem_tv = dispatch_mod.dispatchTypeValue(elem, ctx);
+                        if (elem_tv == expected_tv) continue;
+                        if (tryPromoteElement(alloc, elem, expected_tv.name) == null) {
+                            helpers.setErrorContext(ctx, ">{s} value has type {s}, expected {s}", .{ vt.name, elem_tv.name, expected_tv.name });
+                            return error.TypeMismatch;
+                        }
+                    }
+
+                    for (m.map.values()) |*slot| {
+                        if (dispatch_mod.dispatchTypeValue(slot.*, ctx) != expected_tv) {
+                            // Displaces only a fixnum or bignum, neither refcounted.
+                            slot.* = tryPromoteElement(alloc, slot.*, expected_tv.name).?;
+                        }
+                    }
+                },
                 .vector => |v| {
                     // The wrap keeps the same mutable backing, so promote in place; validate
                     // first so a failed wrap leaves it untouched.

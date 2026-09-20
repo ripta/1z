@@ -194,7 +194,8 @@ pub const ContainerHeader = struct {
 
 /// Per-variant retain dispatch.
 ///
-/// The header-backed variants (i.e., `array`, `vector`, `mutable_map`, `hash`, `set`, `iterator`)
+/// The header-backed variants (i.e., `array`, `vector`, `mutable_map`, `hash`, `set`, `value_map`,
+/// `mutable_value_map`, `iterator`)
 /// carry a refcounted backing and route through `header.retain()`. Their contents are accounted
 /// only at `destroy`, so we don't recurse into them here.
 ///
@@ -227,6 +228,8 @@ pub fn retainValue(v: Value) void {
         .byte_array => |ba| ba.header.retain(),
         .hash => |h| h.header.retain(),
         .set => |s| s.header.retain(),
+        .value_map => |m| m.header.retain(),
+        .mutable_value_map => |m| m.header.retain(),
         .array => |arr| arr.header.retain(),
         .tagged => |t| if (t.backing) |b| b.header.retain() else retainValue(t.inner.*),
         .struct_instance => |si| if (si.header) |h| h.retain() else retainValues(si.fields),
@@ -254,6 +257,8 @@ pub fn releaseValue(v: Value) void {
         .byte_array => |ba| ba.header.release(),
         .hash => |h| h.header.release(),
         .set => |s| s.header.release(),
+        .value_map => |m| m.header.release(),
+        .mutable_value_map => |m| m.header.release(),
         .array => |arr| arr.header.release(),
         .tagged => |t| if (t.backing) |b| b.header.release() else releaseValue(t.inner.*),
         .struct_instance => |si| if (si.header) |h| h.release() else releaseValues(si.fields),
@@ -273,7 +278,7 @@ pub fn releaseValue(v: Value) void {
 /// `.iterator` is treated conservatively as carrying a backing.
 pub fn valueCarriesBacking(v: Value) bool {
     return switch (v) {
-        .vector, .mutable_map, .byte_array, .hash, .set, .array => true,
+        .vector, .mutable_map, .byte_array, .hash, .set, .array, .value_map, .mutable_value_map => true,
         .tagged => |t| t.backing != null or valueCarriesBacking(t.inner.*),
         .struct_instance => |si| si.header != null or valuesCarryBacking(si.fields),
         .error_value => |err| if (err.data) |data| valueCarriesBacking(data.*) else false,
@@ -323,9 +328,10 @@ pub fn allocatorEql(a: std.mem.Allocator, b: std.mem.Allocator) bool {
 /// the creating task's arena. What qualifies is payload-in-`Value` scalars, the backed leaves
 /// (`string`, `symbol`, `bignum`) whose backing was created on `longlived` (the process-lifetime
 /// allocator), a backed `tagged` whose inner value recursively qualifies, and headered
-/// `array`/`hash`/`set` whose backing passes the same identity check and whose contents
+/// `array`/`hash`/`set`/`value_map` whose backing passes the same identity check and whose contents
 /// recursively qualify. Hash keys are byte slices duped onto the backing's own allocator at every
-/// insert path, so the backing identity check covers them.
+/// insert path, so the backing identity check covers them. A value-keyed map's keys are Values, so
+/// they are scanned alongside its values.
 ///
 /// A null backing is never shareable: source text parsed onto a task arena also produces one, and
 /// a `Value` records no allocator identity for it. `freeze` promotes null-backed string and
@@ -346,6 +352,7 @@ pub fn valueShareable(v: Value, longlived: std.mem.Allocator) bool {
         .array => |arr| memoShareable(&arr.header, v, longlived),
         .hash => |h| memoShareable(&h.header, v, longlived),
         .set => |s| memoShareable(&s.header, v, longlived),
+        .value_map => |m| memoShareable(&m.header, v, longlived),
         else => false,
     };
 }
@@ -375,6 +382,14 @@ fn scanShareable(v: Value, longlived: std.mem.Allocator) bool {
             if (!allocatorEql(s.header.allocator, longlived)) break :blk false;
             for (s.map.keys()) |key| {
                 if (!valueShareable(key, longlived)) break :blk false;
+            }
+            break :blk true;
+        },
+        .value_map => |m| blk: {
+            if (!allocatorEql(m.header.allocator, longlived)) break :blk false;
+            for (m.map.keys(), m.map.values()) |key, value| {
+                if (!valueShareable(key, longlived)) break :blk false;
+                if (!valueShareable(value, longlived)) break :blk false;
             }
             break :blk true;
         },
@@ -458,7 +473,7 @@ pub fn retainInstructionsContainerLiterals(instructions: []const Instruction) vo
 /// be released at teardown.
 pub fn valueHoldsRefcountedBacking(val: Value) bool {
     return switch (val) {
-        .vector, .mutable_map, .byte_array, .hash, .set, .array, .iterator, .closure => true,
+        .vector, .mutable_map, .byte_array, .hash, .set, .array, .value_map, .mutable_value_map, .iterator, .closure => true,
         .string, .symbol => |s| s.backing != null,
         .bignum => |b| b.backing != null,
         .tagged => |t| t.backing != null or valueHoldsRefcountedBacking(t.inner.*),
@@ -945,6 +960,58 @@ test "retainValue/releaseValue: set dispatch exercises the header" {
     // Final release destroys the backing; no further refcount inspection.
 }
 
+test "retainValue/releaseValue: value-map dispatch exercises the header" {
+    const m = try value_mod.ValueMap.create(testing.allocator);
+    try testing.expectEqual(@as(u32, 1), m.header.refcountValue());
+
+    retainValue(.{ .value_map = m });
+    try testing.expectEqual(@as(u32, 2), m.header.refcountValue());
+
+    releaseValue(.{ .value_map = m });
+    try testing.expectEqual(@as(u32, 1), m.header.refcountValue());
+
+    releaseValue(.{ .value_map = m });
+    // Final release destroys the backing; no further refcount inspection.
+}
+
+test "ValueMap: destroy releases both halves of every entry" {
+    // Each vector's construction reference transfers into the map; retain an
+    // observation reference so the refcounts stay inspectable across destroy.
+    const key_vec = try value_mod.Vector.create(testing.allocator);
+    key_vec.header.retain();
+    const value_vec = try value_mod.Vector.create(testing.allocator);
+    value_vec.header.retain();
+
+    const m = try value_mod.ValueMap.create(testing.allocator);
+    try m.map.put(m.header.allocator, .{ .vector = key_vec }, .{ .vector = value_vec });
+    try testing.expectEqual(@as(u32, 2), key_vec.header.refcountValue());
+    try testing.expectEqual(@as(u32, 2), value_vec.header.refcountValue());
+
+    releaseValue(.{ .value_map = m });
+    try testing.expectEqual(@as(u32, 1), key_vec.header.refcountValue());
+    try testing.expectEqual(@as(u32, 1), value_vec.header.refcountValue());
+
+    key_vec.header.release();
+    value_vec.header.release();
+}
+
+test "MutableValueMap: destroy releases both halves of every entry" {
+    const key_vec = try value_mod.Vector.create(testing.allocator);
+    key_vec.header.retain();
+    const value_vec = try value_mod.Vector.create(testing.allocator);
+    value_vec.header.retain();
+
+    const m = try value_mod.MutableValueMap.create(testing.allocator);
+    try m.map.put(m.header.allocator, .{ .vector = key_vec }, .{ .vector = value_vec });
+
+    releaseValue(.{ .mutable_value_map = m });
+    try testing.expectEqual(@as(u32, 1), key_vec.header.refcountValue());
+    try testing.expectEqual(@as(u32, 1), value_vec.header.refcountValue());
+
+    key_vec.header.release();
+    value_vec.header.release();
+}
+
 test "Set: destroy releases member values" {
     // The vector's construction reference transfers into the set slot;
     // retain an observation reference so the refcount stays inspectable
@@ -1242,6 +1309,31 @@ test "valueShareable: hash and set of scalars qualify" {
     defer releaseValue(.{ .set = s });
     try s.map.put(s.header.allocator, .{ .fixnum = 3 }, {});
     try testing.expect(valueShareable(.{ .set = s }, testing.allocator));
+}
+
+test "valueShareable: a value-map of scalars qualifies and a mutable key blocks it" {
+    const m = try value_mod.ValueMap.create(testing.allocator);
+    defer releaseValue(.{ .value_map = m });
+    try m.map.put(m.header.allocator, .{ .fixnum = 1 }, .{ .fixnum = 2 });
+    try testing.expect(valueShareable(.{ .value_map = m }, testing.allocator));
+
+    // Only the key is mutable here, which the scan has to reach: a key-blind
+    // walk would call this one shareable.
+    const vec = try value_mod.Vector.create(testing.allocator);
+    defer vec.header.release();
+
+    const blocked = try value_mod.ValueMap.create(testing.allocator);
+    defer releaseValue(.{ .value_map = blocked });
+    retainValue(.{ .vector = vec });
+    try blocked.map.put(blocked.header.allocator, .{ .vector = vec }, .{ .fixnum = 1 });
+    try testing.expect(!valueShareable(.{ .value_map = blocked }, testing.allocator));
+}
+
+test "valueShareable: the mutable value-map half never shares" {
+    const m = try value_mod.MutableValueMap.create(testing.allocator);
+    defer releaseValue(.{ .mutable_value_map = m });
+    try m.map.put(m.header.allocator, .{ .fixnum = 1 }, .{ .fixnum = 2 });
+    try testing.expect(!valueShareable(.{ .mutable_value_map = m }, testing.allocator));
 }
 
 test "valueShareable: string values and mutable elements block sharing" {

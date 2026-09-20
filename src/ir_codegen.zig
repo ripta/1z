@@ -1166,6 +1166,8 @@ fn mapTypeNameToTagConst(state: *CompileState, name: []const u8) ?c.ir_ref {
     if (std.mem.eql(u8, name, "byte-array")) return emitTagConst(ctx, .byte_array);
     if (std.mem.eql(u8, name, "set")) return emitTagConst(ctx, .set);
     if (std.mem.eql(u8, name, "mutable-map")) return emitTagConst(ctx, .mutable_map);
+    if (std.mem.eql(u8, name, "value-map")) return emitTagConst(ctx, .value_map);
+    if (std.mem.eql(u8, name, "mutable-value-map")) return emitTagConst(ctx, .mutable_value_map);
     if (std.mem.eql(u8, name, "bignum")) return emitTagConst(ctx, .bignum);
 
     return null;

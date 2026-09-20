@@ -276,6 +276,8 @@ pub fn writeValuePreview(val: Value, writer: anytype) !void {
         .set => |s| try writer.print("<set:{d}>", .{s.map.count()}),
         .hash => |h| try writer.print("<hash:{d}>", .{h.map.count()}),
         .mutable_map => |m| try writer.print("<mutable-map:{d}>", .{m.map.count()}),
+        .value_map => |m| try writer.print("<value-map:{d}>", .{m.map.count()}),
+        .mutable_value_map => |m| try writer.print("<mutable-value-map:{d}>", .{m.map.count()}),
         .bignum => try writer.writeAll("<bignum>"),
         .tagged => |t| try writer.print("<{s}>", .{t.tag.name}),
         .struct_instance => |si| try writer.print("<{s}>", .{si.struct_type.name}),

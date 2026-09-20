@@ -37,6 +37,7 @@ pub const functional = @import("functional.zig");
 pub const sequences = @import("sequences.zig");
 pub const freeze = @import("freeze.zig");
 pub const sets = @import("sets.zig");
+pub const value_maps = @import("value_maps.zig");
 pub const associative = @import("associative.zig");
 pub const streams = @import("streams.zig");
 pub const dynamic_vars = @import("dynamic_vars.zig");
@@ -115,6 +116,7 @@ pub const extracted_primitives = stack.primitives ++
     sequences.primitives ++
     freeze.primitives ++
     sets.primitives ++
+    value_maps.primitives ++
     associative.primitives ++
     streams.primitives ++
     dynamic_vars.primitives ++

@@ -4,4 +4,4 @@ Inline PIC sites: 0/2 generic call sites preseeded
 artifact: interpreter-free-aot
 interpreter: not linked (auto: all reachable code compiled)
 jitInterpretedCall: not linked
-runtime-image: words=0 stack-effects=1 typevalue-slots=63 blob-present=false
+runtime-image: words=0 stack-effects=1 typevalue-slots=65 blob-present=false

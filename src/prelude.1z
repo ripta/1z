@@ -49,7 +49,9 @@ hash:      M{ type: builtin-type: numeric: f exact: f integer: f mutable: f defi
 vector:    M{ type: builtin-type: numeric: f exact: f integer: f mutable: t define: [ define-builtin-type ] } ;
 byte-array: M{ type: builtin-type: numeric: f exact: f integer: f mutable: t define: [ define-builtin-type ] } ;
 set: M{ type: builtin-type: numeric: f exact: f integer: f mutable: f define: [ define-builtin-type ] } ;
-mutable-map: M{ type: builtin-type: numeric: f exact: f integer: f mutable: t define: [ define-builtin-type ] } ;
+mutable-map:       M{ type: builtin-type: numeric: f exact: f integer: f mutable: t define: [ define-builtin-type ] } ;
+value-map:         M{ type: builtin-type: numeric: f exact: f integer: f mutable: f define: [ define-builtin-type ] } ;
+mutable-value-map: M{ type: builtin-type: numeric: f exact: f integer: f mutable: t define: [ define-builtin-type ] } ;
 stream:      M{ type: builtin-type: numeric: f exact: f integer: f mutable: t define: [ define-builtin-type ] } ;
 resource:    M{ type: builtin-type: numeric: f exact: f integer: f mutable: f define: [ define-builtin-type ] } ;
 parameter:   M{ type: builtin-type: numeric: f exact: f integer: f mutable: f define: [ define-builtin-type ] } ;
@@ -418,14 +420,16 @@ hash?:       ( val -- ? ) [ type-of hash = ] ;
 vector?:     ( val -- ? ) [ type-of vector = ] ;
 byte-array?: ( val -- ? ) [ type-of byte-array = ] ;
 set?: ( val -- ? ) [ type-of set = ] ;
-mutable-map?: ( val -- ? ) [ type-of mutable-map = ] ;
-stream?:      ( val -- ? ) [ type-of stream = ] ;
-parameter?:   ( val -- ? ) [ type-of parameter = ] ;
-module?:      ( val -- ? ) [ type-of module = ] ;
-marker?:      ( val -- ? ) [ type-of marker = ] ;
-iterator?:    ( val -- ? ) [ type-of iterator = ] ;
-float?:       ( val -- ? ) [ type-of float = ] ;
-bignum?:      ( val -- ? ) [ type-of bignum = ] ;
+mutable-map?:       ( val -- ? ) [ type-of mutable-map = ] ;
+value-map?:         ( val -- ? ) [ type-of value-map = ] ;
+mutable-value-map?: ( val -- ? ) [ type-of mutable-value-map = ] ;
+stream?:    ( val -- ? ) [ type-of stream = ] ;
+parameter?: ( val -- ? ) [ type-of parameter = ] ;
+module?:    ( val -- ? ) [ type-of module = ] ;
+marker?:    ( val -- ? ) [ type-of marker = ] ;
+iterator?:  ( val -- ? ) [ type-of iterator = ] ;
+float?:     ( val -- ? ) [ type-of float = ] ;
+bignum?:    ( val -- ? ) [ type-of bignum = ] ;
 
 \\ True for any numeric type.
 number?: ( val -- ? ) [ "numeric" type-has-property? ] ;

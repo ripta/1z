@@ -1,0 +1,69 @@
+use "testing" ;
+
+\ Value-keyed maps: the two tags, their storage, and the constructors for the
+\ empty case. The word set that fills one in arrives later, so every assertion
+\ here is over an empty map. The paths that walk a populated map are covered by
+\ Zig unit tests, which can build one directly.
+
+test-construction-and-type: ( -- ) [
+  "value-map construction" test-section
+  <value-map> type-of value-map "immutable half is a value-map" assert=
+  <mutable-value-map> type-of mutable-value-map "mutable half is a mutable-value-map" assert=
+] ;
+
+test-predicates: ( -- ) [
+  "value-map predicates" test-section
+  <value-map> value-map? "value-map? accepts the immutable half" assert-true
+  <value-map> mutable-value-map? "value-map? does not answer for the mutable half" assert-false
+  <mutable-value-map> mutable-value-map? "mutable-value-map? accepts the mutable half" assert-true
+  <mutable-value-map> value-map? "mutable-value-map? does not answer for the immutable half" assert-false
+  S{ } value-map? "a set is not a value-map" assert-false
+] ;
+
+test-mutable-descriptor: ( -- ) [
+  "value-map mutability" test-section
+  <value-map> mutable? f "the immutable half reports immutable" assert=
+  <mutable-value-map> mutable? t "the mutable half reports mutable" assert=
+] ;
+
+\ Neither half has literal syntax, so inspect renders the conversion that
+\ rebuilds one rather than a bracket form.
+test-inspect: ( -- ) [
+  "value-map inspect" test-section
+  <value-map> inspect "{ } >value-map" "empty immutable inspect" assert=
+  <mutable-value-map> inspect "{ } >mutable-value-map" "empty mutable inspect" assert=
+  <value-map> >string "{ } >value-map" "empty immutable >string" assert=
+] ;
+
+test-equality: ( -- ) [
+  "value-map equality" test-section
+  <value-map> <value-map> = "two empty immutable maps are equal" assert-true
+  <mutable-value-map> <mutable-value-map> = "two empty mutable maps are equal" assert-true
+  <value-map> <mutable-value-map> = "the two halves are never equal" assert-false
+  <value-map> S{ } = "a value-map is not a set" assert-false
+] ;
+
+\ freeze is total, so the mutable half needs an immutable counterpart to land
+\ on; the immutable half freezes to itself.
+test-freeze-pairing: ( -- ) [
+  "value-map freeze" test-section
+  <mutable-value-map> freeze type-of value-map "the mutable half freezes to the immutable one" assert=
+  <value-map> freeze type-of value-map "the immutable half freezes to itself" assert=
+] ;
+
+\ Only an immutable container crosses a task boundary by refcount bump.
+test-cross-task-sharing: ( -- ) [
+  "value-map task sharing" test-section
+  [
+    [ <value-map> ] spawn await
+    type-of value-map "awaited value-map keeps its type" assert=
+  ] task-scope
+] ;
+
+test-construction-and-type
+test-predicates
+test-mutable-descriptor
+test-inspect
+test-equality
+test-freeze-pairing
+test-cross-task-sharing

@@ -1,0 +1,40 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+=== value-map construction ===
+PASS: immutable half is a value-map
+PASS: mutable half is a mutable-value-map
+Stack: [ ]
+=== value-map predicates ===
+PASS: value-map? accepts the immutable half
+PASS: value-map? does not answer for the mutable half
+PASS: mutable-value-map? accepts the mutable half
+PASS: mutable-value-map? does not answer for the immutable half
+PASS: a set is not a value-map
+Stack: [ ]
+=== value-map mutability ===
+PASS: the immutable half reports immutable
+PASS: the mutable half reports mutable
+Stack: [ ]
+=== value-map inspect ===
+PASS: empty immutable inspect
+PASS: empty mutable inspect
+PASS: empty immutable >string
+Stack: [ ]
+=== value-map equality ===
+PASS: two empty immutable maps are equal
+PASS: two empty mutable maps are equal
+PASS: the two halves are never equal
+PASS: a value-map is not a set
+Stack: [ ]
+=== value-map freeze ===
+PASS: the mutable half freezes to the immutable one
+PASS: the immutable half freezes to itself
+Stack: [ ]
+=== value-map task sharing ===
+PASS: awaited value-map keeps its type
+Stack: [ ]

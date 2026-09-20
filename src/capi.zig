@@ -142,6 +142,8 @@ pub const ONEZ_TYPE_ITERATOR: c_int = capi_core.ONEZ_TYPE_ITERATOR;
 pub const ONEZ_TYPE_TYPE_VAL: c_int = capi_core.ONEZ_TYPE_TYPE_VAL;
 pub const ONEZ_TYPE_UNIT: c_int = capi_core.ONEZ_TYPE_UNIT;
 pub const ONEZ_TYPE_STRUCT: c_int = capi_core.ONEZ_TYPE_STRUCT;
+pub const ONEZ_TYPE_VALUE_MAP: c_int = capi_core.ONEZ_TYPE_VALUE_MAP;
+pub const ONEZ_TYPE_MUTABLE_VALUE_MAP: c_int = capi_core.ONEZ_TYPE_MUTABLE_VALUE_MAP;
 
 // Error code constants.
 pub const ONEZ_OK: c_int = 0;

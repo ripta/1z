@@ -169,7 +169,7 @@ pub fn classifyValue(val: Value) Classification {
             }
             break :blk acc;
         },
-        .byte_array, .set => Classification.blobOf(.dynamic_container),
+        .byte_array, .set, .value_map, .mutable_value_map => Classification.blobOf(.dynamic_container),
         .parameter => Classification.blobOf(.parameter_runtime_state),
         .once_cell => Classification.blobOf(.once_cell_runtime_state),
         .bignum => Classification.blobOf(.bignum),

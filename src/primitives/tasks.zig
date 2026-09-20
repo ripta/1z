@@ -1022,6 +1022,33 @@ pub fn deepCopyValue(val: Value, alloc: Allocator, longlived: Allocator) DeepCop
             break :blk .{ .mutable_map = new_m };
         },
 
+        .value_map => |m| blk: {
+            if (container_backing.memoShareable(&m.header, val, longlived)) {
+                m.header.retain();
+                break :blk val;
+            }
+
+            const new_m = try value_mod.ValueMap.create(alloc);
+            try new_m.map.ensureTotalCapacity(alloc, @intCast(m.map.count()));
+            for (m.map.keys(), m.map.values()) |key, value| {
+                const key_copy = try deepCopyValue(key, alloc, longlived);
+                const value_copy = try deepCopyValue(value, alloc, longlived);
+                new_m.map.putAssumeCapacity(key_copy, value_copy);
+            }
+            break :blk .{ .value_map = new_m };
+        },
+
+        .mutable_value_map => |m| blk: {
+            const new_m = try value_mod.MutableValueMap.create(alloc);
+            try new_m.map.ensureTotalCapacity(alloc, @intCast(m.map.count()));
+            for (m.map.keys(), m.map.values()) |key, value| {
+                const key_copy = try deepCopyValue(key, alloc, longlived);
+                const value_copy = try deepCopyValue(value, alloc, longlived);
+                new_m.map.putAssumeCapacity(key_copy, value_copy);
+            }
+            break :blk .{ .mutable_value_map = new_m };
+        },
+
         .struct_instance => |si| blk: {
             const new_fields = try alloc.alloc(Value, si.fields.len);
             for (si.fields, 0..) |field, i| {
@@ -1580,6 +1607,40 @@ test "deepCopyValue: shares a self-contained set by refcount bump" {
 
     container_backing.releaseValue(copied);
     try testing.expectEqual(@as(u32, 1), s.header.refcountValue());
+}
+
+test "deepCopyValue: shares a self-contained value-map by refcount bump" {
+    const testing = std.testing;
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    const m = try value_mod.ValueMap.create(testing.allocator);
+    defer container_backing.releaseValue(.{ .value_map = m });
+    try m.map.put(m.header.allocator, .{ .fixnum = 1 }, .{ .fixnum = 2 });
+
+    const copied = try deepCopyValue(.{ .value_map = m }, arena.allocator(), testing.allocator);
+    try testing.expect(copied.value_map == m);
+    try testing.expectEqual(@as(u32, 2), m.header.refcountValue());
+
+    container_backing.releaseValue(copied);
+    try testing.expectEqual(@as(u32, 1), m.header.refcountValue());
+}
+
+test "deepCopyValue: copies a mutable value-map rather than sharing it" {
+    const testing = std.testing;
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    const m = try value_mod.MutableValueMap.create(testing.allocator);
+    defer container_backing.releaseValue(.{ .mutable_value_map = m });
+    try m.map.put(m.header.allocator, .{ .fixnum = 1 }, .{ .fixnum = 2 });
+
+    const copied = try deepCopyValue(.{ .mutable_value_map = m }, arena.allocator(), testing.allocator);
+    defer container_backing.releaseValue(copied);
+
+    try testing.expect(copied.mutable_value_map != m);
+    try testing.expectEqual(@as(u32, 1), m.header.refcountValue());
+    try testing.expectEqual(@as(i64, 2), copied.mutable_value_map.map.get(.{ .fixnum = 1 }).?.fixnum);
 }
 
 test "deepCopyValue: an arena-owned reference type fails with TaskArenaEscape" {

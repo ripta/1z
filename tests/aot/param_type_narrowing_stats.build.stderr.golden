@@ -5,11 +5,11 @@ AOT interpreter fallbacks: 20 total
   native: 2
   per-op-native: 18
   sites:
-    per-op-native: cmp -> < (line 211)
-    per-op-native: cmp -> > (line 213)
-    native: . -> inspect (line 730)
-    native: . -> inspect (line 730)
-    per-op-native: onez_q_1 -> > (line 213)
+    per-op-native: cmp -> < (line 213)
+    per-op-native: cmp -> > (line 215)
+    native: . -> inspect (line 734)
+    native: . -> inspect (line 734)
+    per-op-native: onez_q_1 -> > (line 215)
     per-op-native: onez_q_4 -> < (line 1)
     per-op-native: onez_q_4 -> > (line 1)
     per-op-native: onez_q_6 -> > (line 1)
@@ -26,4 +26,4 @@ AOT interpreter fallbacks: 20 total
 artifact: interpreter
 interpreter: linked (auto: compiled code calls interpreter)
 jitInterpretedCall: not linked
-runtime-image: words=0 stack-effects=1 typevalue-slots=63 blob-present=false
+runtime-image: words=0 stack-effects=1 typevalue-slots=65 blob-present=false

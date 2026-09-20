@@ -100,6 +100,12 @@ fn freezeCopy(ctx: *Context, val: Value) anyerror!FreezeResult {
         .hash => |h| return freezeHash(ctx, h, val),
         .set => |s| return freezeSet(ctx, s, val),
 
+        .value_map => |m| return freezeValueMap(ctx, m, val),
+        .mutable_value_map => |m| return .{
+            .value = .{ .value_map = try freezeMutableValueMapCopy(ctx, m) },
+            .changed = true,
+        },
+
         .struct_instance => |si| return .{ .value = try freezeStruct(ctx, si), .changed = true },
         .tagged => |t| return freezeTagged(ctx, t, val),
         .error_value => |err| return freezeErrorValue(ctx, err, val),
@@ -358,6 +364,98 @@ fn buildFrozenSet(ctx: *Context, keys: []const Value) anyerror!*value_mod.Set {
     return new_s;
 }
 
+const ValueMapEntry = struct { key: Value, value: Value };
+
+/// Freeze both halves of every entry into a scratch list the caller transfers into a fresh map.
+///
+/// On error this releases whichever half of the in-flight entry was already produced. Entries
+/// appended before the failure stay in the list, so the caller's errdefer owns releasing them.
+fn freezeValueMapEntries(
+    ctx: *Context,
+    entries: *std.ArrayListUnmanaged(ValueMapEntry),
+    keys: []const Value,
+    values: []const Value,
+) anyerror!bool {
+    const scratch = ctx.quotationAllocator();
+    var changed = false;
+    for (keys, values) |key, value| {
+        const kr = try freezeCopy(ctx, key);
+        const vr = freezeCopy(ctx, value) catch |e| {
+            container_backing.releaseValue(kr.value);
+            return e;
+        };
+        entries.append(scratch, .{ .key = kr.value, .value = vr.value }) catch |e| {
+            container_backing.releaseValue(kr.value);
+            container_backing.releaseValue(vr.value);
+            return e;
+        };
+        changed = changed or kr.changed or vr.changed;
+    }
+    return changed;
+}
+
+fn releaseValueMapEntries(entries: []const ValueMapEntry) void {
+    for (entries) |e| {
+        container_backing.releaseValue(e.key);
+        container_backing.releaseValue(e.value);
+    }
+}
+
+/// Snapshot a mutable value-keyed map into a fresh immutable one on the process-lifetime allocator.
+fn freezeMutableValueMapCopy(ctx: *Context, m: *value_mod.MutableValueMap) anyerror!*value_mod.ValueMap {
+    var entries: std.ArrayListUnmanaged(ValueMapEntry) = .{};
+    errdefer releaseValueMapEntries(entries.items);
+
+    _ = try freezeValueMapEntries(ctx, &entries, m.map.keys(), m.map.values());
+
+    const slice = entries.items;
+    entries.clearRetainingCapacity();
+    return buildFrozenValueMap(ctx, slice);
+}
+
+fn freezeValueMap(ctx: *Context, m: *value_mod.ValueMap, val: Value) anyerror!FreezeResult {
+    var entries: std.ArrayListUnmanaged(ValueMapEntry) = .{};
+    errdefer releaseValueMapEntries(entries.items);
+
+    const changed = try freezeValueMapEntries(ctx, &entries, m.map.keys(), m.map.values());
+
+    if (!changed and durableBacking(ctx, &m.header)) {
+        releaseValueMapEntries(entries.items);
+        m.header.retain();
+        return .{ .value = val, .changed = false };
+    }
+
+    const slice = entries.items;
+    entries.clearRetainingCapacity();
+    const new_m = try buildFrozenValueMap(ctx, slice);
+    return .{ .value = .{ .value_map = new_m }, .changed = true };
+}
+
+/// Build a value-keyed map from entries this function owns: on success they transfer into the map,
+/// on error the untransferred remainder is released alongside the partial map.
+///
+/// Freezing collapses `V{ 1 2 }` and `{ 1 2 }` onto one key, so two entries distinct before the
+/// freeze can collide here. The first one inserted wins, matching `buildFrozenSet`.
+fn buildFrozenValueMap(ctx: *Context, entries: []const ValueMapEntry) anyerror!*value_mod.ValueMap {
+    const new_m = try value_mod.ValueMap.create(ctx.allocator);
+    errdefer new_m.header.release();
+    var done: usize = 0;
+    errdefer releaseValueMapEntries(entries[done..]);
+
+    try new_m.map.ensureTotalCapacity(ctx.allocator, @intCast(entries.len));
+    for (entries) |e| {
+        const gop = new_m.map.getOrPutAssumeCapacity(e.key);
+        if (gop.found_existing) {
+            container_backing.releaseValue(e.key);
+            container_backing.releaseValue(e.value);
+        } else {
+            gop.value_ptr.* = e.value;
+        }
+        done += 1;
+    }
+    return new_m;
+}
+
 /// Copy a struct instance with recursively frozen fields.
 ///
 /// The copy keeps freeze's copy semantics: later mutation through the original never shows in the
@@ -593,6 +691,79 @@ test "freeze converts a mutable-map to a hash with frozen values" {
 
     // Copy semantics: the original map still holds the vector.
     try testing.expect(mm.map.get("k").? == .vector);
+}
+
+test "freeze converts a mutable-value-map to a value-map with both halves frozen" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    const mm = try value_mod.MutableValueMap.create(ctx.allocator);
+    const key_vec = try value_mod.Vector.create(ctx.allocator);
+    try key_vec.list.append(ctx.allocator, .{ .fixnum = 1 });
+    const value_vec = try value_mod.Vector.create(ctx.allocator);
+    try value_vec.list.append(ctx.allocator, .{ .fixnum = 3 });
+    try mm.map.put(ctx.allocator, .{ .vector = key_vec }, .{ .vector = value_vec });
+    const input: Value = .{ .mutable_value_map = mm };
+    defer container_backing.releaseValue(input);
+
+    const frozen = try deepFreezeCopy(&ctx, input);
+    defer container_backing.releaseValue(frozen);
+
+    try testing.expect(frozen == .value_map);
+    const frozen_key = frozen.value_map.map.keys()[0];
+    try testing.expect(frozen_key == .array);
+    try testing.expectEqual(@as(i64, 1), frozen_key.array.items[0].fixnum);
+    const got = frozen.value_map.map.values()[0];
+    try testing.expect(got == .array);
+    try testing.expectEqual(@as(i64, 3), got.array.items[0].fixnum);
+
+    // Copy semantics: the original map still holds the vectors.
+    try testing.expect(mm.map.keys()[0] == .vector);
+    try testing.expect(mm.map.values()[0] == .vector);
+}
+
+test "freeze collapses two keys that share a frozen form onto the first entry" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    // A vector key and an array key with the same contents are distinct keys
+    // before the freeze and one key after it.
+    const mm = try value_mod.MutableValueMap.create(ctx.allocator);
+    const vec_key = try value_mod.Vector.create(ctx.allocator);
+    try vec_key.list.append(ctx.allocator, .{ .fixnum = 7 });
+    const items = try ctx.allocator.alloc(Value, 1);
+    items[0] = .{ .fixnum = 7 };
+    const arr_key = try value_mod.Array.fromOwnedSlice(ctx.allocator, items);
+
+    try mm.map.put(ctx.allocator, .{ .vector = vec_key }, .{ .fixnum = 1 });
+    try mm.map.put(ctx.allocator, .{ .array = arr_key }, .{ .fixnum = 2 });
+    try testing.expectEqual(@as(usize, 2), mm.map.count());
+
+    const input: Value = .{ .mutable_value_map = mm };
+    defer container_backing.releaseValue(input);
+
+    const frozen = try deepFreezeCopy(&ctx, input);
+    defer container_backing.releaseValue(frozen);
+
+    try testing.expect(frozen == .value_map);
+    try testing.expectEqual(@as(usize, 1), frozen.value_map.map.count());
+    try testing.expectEqual(@as(i64, 1), frozen.value_map.map.values()[0].fixnum);
+}
+
+test "freeze returns an unchanged durable value-map by identity" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    const m = try value_mod.ValueMap.create(ctx.allocator);
+    try m.map.put(ctx.allocator, .{ .fixnum = 1 }, .{ .fixnum = 2 });
+    const input: Value = .{ .value_map = m };
+    defer container_backing.releaseValue(input);
+
+    const frozen = try deepFreezeCopy(&ctx, input);
+    defer container_backing.releaseValue(frozen);
+
+    try testing.expect(frozen == .value_map);
+    try testing.expectEqual(m, frozen.value_map);
 }
 
 test "freeze converts a byte-array to a string" {

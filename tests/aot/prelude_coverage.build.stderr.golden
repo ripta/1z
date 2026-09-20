@@ -1,33 +1,33 @@
-Prelude compilation: 463/464 words compiled (99.8%)
+Prelude compilation: 467/468 words compiled (99.8%)
   word 'pragma-get?' cannot be compiled
       NC.13: word body underflows the abstract stack (row-variable effects)
       hint: blocked until row-variable stack regions can be modeled
 Quotation bodies compiled: 0
-Inline PIC sites: 90/273 generic call sites preseeded
-AOT interpreter fallbacks: 306 total
-  native: 245
+Inline PIC sites: 90/275 generic call sites preseeded
+AOT interpreter fallbacks: 308 total
+  native: 247
   per-op-native: 42
   compound-uncompiled: 2
   quotation: 17
   sites:
-    native: nan? -> = (line 451)
-    quotation: run-benchmarks -> <quotation> (line 1264)
-    quotation: (any-loop) -> <quotation> (line 481)
-    native: quotation? -> = (line 416)
-    native: . -> inspect (line 730)
-    native: . -> inspect (line 730)
-    native: #ends-with? -> #len (line 1326)
-    native: #ends-with? -> #len (line 1326)
-    native: #ends-with? -> #len (line 1326)
-    native: #ends-with? -> #len (line 1326)
-    native: #ends-with? -> < (line 1326)
-    native: #ends-with? -> #len (line 1328)
-    native: #ends-with? -> #len (line 1328)
-    native: #ends-with? -> #len (line 1328)
-    native: #ends-with? -> #len (line 1328)
-    per-op-native: #ends-with? -> - (line 1328)
-    ... 290 more
-  static-check: jitInterpretedCall=2/2 jitNativeWordCall=287/287 jitCallQuotation=17/17 (matches build-time inventory)
+    native: nan? -> = (line 455)
+    quotation: run-benchmarks -> <quotation> (line 1268)
+    quotation: (any-loop) -> <quotation> (line 485)
+    native: quotation? -> = (line 418)
+    native: . -> inspect (line 734)
+    native: . -> inspect (line 734)
+    native: #ends-with? -> #len (line 1330)
+    native: #ends-with? -> #len (line 1330)
+    native: #ends-with? -> #len (line 1330)
+    native: #ends-with? -> #len (line 1330)
+    native: #ends-with? -> < (line 1330)
+    native: #ends-with? -> #len (line 1332)
+    native: #ends-with? -> #len (line 1332)
+    native: #ends-with? -> #len (line 1332)
+    native: #ends-with? -> #len (line 1332)
+    per-op-native: #ends-with? -> - (line 1332)
+    ... 292 more
+  static-check: jitInterpretedCall=2/2 jitNativeWordCall=289/289 jitCallQuotation=17/17 (matches build-time inventory)
 Warning: '4keep' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
 Warning: 'try' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
 Warning: 'bi' parameter 'p' has row-variable effect; quotation call falls back to interpreter
@@ -55,4 +55,4 @@ Warning: '1apply' parameter 'quot' has row-variable effect; quotation call falls
 artifact: interpreter
 interpreter: linked (auto: compiled code calls interpreter)
 jitInterpretedCall: linked
-runtime-image: words=0 stack-effects=1 typevalue-slots=63 blob-present=false
+runtime-image: words=0 stack-effects=1 typevalue-slots=65 blob-present=false

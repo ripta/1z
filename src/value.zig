@@ -582,6 +582,8 @@ pub fn valueContainsBorrowedBuffer(val: Value) bool {
             }
             break :blk false;
         },
+        .value_map => |m| containsBorrowedInEntries(m.map.keys(), m.map.values()),
+        .mutable_value_map => |m| containsBorrowedInEntries(m.map.keys(), m.map.values()),
         .struct_instance => |si| containsBorrowedInSlice(si.fields),
         .tagged => |t| valueContainsBorrowedBuffer(t.inner.*),
         .error_value => |err| if (err.data) |data| valueContainsBorrowedBuffer(data.*) else false,
@@ -616,6 +618,14 @@ pub fn valueContainsBorrowedBuffer(val: Value) bool {
 fn containsBorrowedInSlice(items: []const Value) bool {
     for (items) |item| {
         if (valueContainsBorrowedBuffer(item)) return true;
+    }
+    return false;
+}
+
+fn containsBorrowedInEntries(keys: []const Value, values: []const Value) bool {
+    for (keys, values) |key, value| {
+        if (valueContainsBorrowedBuffer(key)) return true;
+        if (valueContainsBorrowedBuffer(value)) return true;
     }
     return false;
 }
@@ -670,6 +680,8 @@ pub fn findTaskArenaOwned(val: Value) ?std.meta.Tag(Value) {
             }
             break :blk null;
         },
+        .value_map => |m| findArenaOwnedInEntries(m.map.keys(), m.map.values()),
+        .mutable_value_map => |m| findArenaOwnedInEntries(m.map.keys(), m.map.values()),
 
         .struct_instance => |si| findArenaOwnedInSlice(si.fields),
         .tagged => |t| findTaskArenaOwned(t.inner.*),
@@ -706,6 +718,29 @@ fn findArenaOwnedInSlice(items: []const Value) ?std.meta.Tag(Value) {
         if (findTaskArenaOwned(item)) |tag| return tag;
     }
     return null;
+}
+
+fn findArenaOwnedInEntries(keys: []const Value, values: []const Value) ?std.meta.Tag(Value) {
+    for (keys, values) |key, value| {
+        if (findTaskArenaOwned(key)) |tag| return tag;
+        if (findTaskArenaOwned(value)) |tag| return tag;
+    }
+    return null;
+}
+
+/// Order-independent hash of a value-keyed map's entries. Each entry hashes as a pair, and the
+/// pair hashes are XOR-combined, so insertion order cannot change the result.
+fn valueMapEntriesHash(keys: []const Value, values: []const Value) u64 {
+    var combined: u64 = 0;
+    for (keys, values) |key, value| {
+        var pair_hasher = std.hash.Wyhash.init(0);
+        const key_hash = key.hashValue();
+        pair_hasher.update(std.mem.asBytes(&key_hash));
+        const value_hash = value.hashValue();
+        pair_hasher.update(std.mem.asBytes(&value_hash));
+        combined ^= pair_hasher.final();
+    }
+    return combined;
 }
 
 /// Context for hashing and comparing Values in hash-based containers.
@@ -783,6 +818,73 @@ pub const MutableMap = struct {
         while (iter.next()) |entry| {
             header.allocator.free(entry.key_ptr.*);
             cb.releaseValue(entry.value_ptr.*);
+        }
+        self.map.deinit(header.allocator);
+        header.allocator.destroy(self);
+    }
+};
+
+/// Immutable associative store whose keys may be any 1z value, not only a string or a symbol.
+///
+/// Storage layout mirrors `Set`: a refcounted, mutex-guarded `ContainerHeader` at the top of the
+/// struct, followed by the `ArrayHashMapUnmanaged` that holds the entries. Both halves of an entry
+/// are Values, so destroy releases each key and each value; there are no separate key bytes to
+/// free. Create via `ValueMap.create` so the header is initialised before the value can be observed
+/// by any other thread.
+pub const ValueMap = struct {
+    header: @import("container_backing.zig").ContainerHeader,
+    map: std.ArrayHashMapUnmanaged(Value, Value, ValueContext, true) = .{},
+
+    pub fn create(allocator: std.mem.Allocator) error{OutOfMemory}!*ValueMap {
+        const self = try allocator.create(ValueMap);
+        self.* = .{
+            .header = undefined,
+            .map = .{},
+        };
+        self.header.init(allocator, destroyValueMap);
+        return self;
+    }
+
+    fn destroyValueMap(header: *@import("container_backing.zig").ContainerHeader) void {
+        const cb = @import("container_backing.zig");
+        const self: *ValueMap = @fieldParentPtr("header", header);
+        for (self.map.keys()) |key| {
+            cb.releaseValue(key);
+        }
+        for (self.map.values()) |val| {
+            cb.releaseValue(val);
+        }
+        self.map.deinit(header.allocator);
+        header.allocator.destroy(self);
+    }
+};
+
+/// Mutable counterpart to `ValueMap`, and the value `freeze` turns into one.
+///
+/// Identical storage to `ValueMap`; only the tag differs, which is what makes the pair behave the
+/// way `hash` and `mutable-map` do. Create via `MutableValueMap.create`.
+pub const MutableValueMap = struct {
+    header: @import("container_backing.zig").ContainerHeader,
+    map: std.ArrayHashMapUnmanaged(Value, Value, ValueContext, true) = .{},
+
+    pub fn create(allocator: std.mem.Allocator) error{OutOfMemory}!*MutableValueMap {
+        const self = try allocator.create(MutableValueMap);
+        self.* = .{
+            .header = undefined,
+            .map = .{},
+        };
+        self.header.init(allocator, destroyMutableValueMap);
+        return self;
+    }
+
+    fn destroyMutableValueMap(header: *@import("container_backing.zig").ContainerHeader) void {
+        const cb = @import("container_backing.zig");
+        const self: *MutableValueMap = @fieldParentPtr("header", header);
+        for (self.map.keys()) |key| {
+            cb.releaseValue(key);
+        }
+        for (self.map.values()) |val| {
+            cb.releaseValue(val);
         }
         self.map.deinit(header.allocator);
         header.allocator.destroy(self);
@@ -1817,6 +1919,8 @@ pub const Value = union(enum) {
     byte_array: *ByteArray,
     set: *Set,
     mutable_map: *MutableMap,
+    value_map: *ValueMap,
+    mutable_value_map: *MutableValueMap,
     stream: *Stream,
     resource: *Resource,
     parameter: *Parameter,
@@ -1934,6 +2038,30 @@ pub const Value = union(enum) {
                     try writer.writeAll(" ");
                 }
                 try writer.writeAll("}");
+            },
+            // Neither value-map half has literal syntax, so the round-trippable form is the
+            // conversion that rebuilds one from an array of two-element entries.
+            .value_map => |m| {
+                try writer.writeAll("{ ");
+                for (m.map.keys(), m.map.values()) |key, value| {
+                    try writer.writeAll("{ ");
+                    try key.write(writer);
+                    try writer.writeAll(" ");
+                    try value.write(writer);
+                    try writer.writeAll(" } ");
+                }
+                try writer.writeAll("} >value-map");
+            },
+            .mutable_value_map => |m| {
+                try writer.writeAll("{ ");
+                for (m.map.keys(), m.map.values()) |key, value| {
+                    try writer.writeAll("{ ");
+                    try key.write(writer);
+                    try writer.writeAll(" ");
+                    try value.write(writer);
+                    try writer.writeAll(" } ");
+                }
+                try writer.writeAll("} >mutable-value-map");
             },
             .stream => |s| {
                 if (s.closed) {
@@ -2117,6 +2245,24 @@ pub const Value = union(enum) {
                 }
                 return true;
             },
+            .value_map => |a| {
+                const b = other.value_map;
+                if (a.map.count() != b.map.count()) return false;
+                for (a.map.keys(), a.map.values()) |key, value| {
+                    const bval = b.map.get(key) orelse return false;
+                    if (!value.eql(bval)) return false;
+                }
+                return true;
+            },
+            .mutable_value_map => |a| {
+                const b = other.mutable_value_map;
+                if (a.map.count() != b.map.count()) return false;
+                for (a.map.keys(), a.map.values()) |key, value| {
+                    const bval = b.map.get(key) orelse return false;
+                    if (!value.eql(bval)) return false;
+                }
+                return true;
+            },
             // Streams are equal if they refer to the same underlying file handle
             .stream => |a| a == other.stream,
             // Resources are equal if same type name and same pointer
@@ -2284,6 +2430,12 @@ pub const Value = union(enum) {
                     combined ^= pair_hasher.final();
                 }
                 hasher.update(std.mem.asBytes(&combined));
+            },
+            .value_map => |m| {
+                hasher.update(std.mem.asBytes(&valueMapEntriesHash(m.map.keys(), m.map.values())));
+            },
+            .mutable_value_map => |m| {
+                hasher.update(std.mem.asBytes(&valueMapEntriesHash(m.map.keys(), m.map.values())));
             },
             // Streams hash by pointer identity (same as equality)
             .stream => |s| {
@@ -2900,6 +3052,74 @@ test "array equality" {
     try std.testing.expect(a.eql(b));
     try std.testing.expect(!a.eql(c));
     try std.testing.expect(!a.eql(d));
+}
+
+/// Build a two-entry value-keyed map, inserting the entries in the given order.
+fn testValueMap(swapped: bool) !*ValueMap {
+    const m = try ValueMap.create(std.testing.allocator);
+    const alloc = m.header.allocator;
+    if (swapped) {
+        try m.map.put(alloc, .{ .fixnum = 2 }, .{ .fixnum = 20 });
+        try m.map.put(alloc, .{ .fixnum = 1 }, .{ .fixnum = 10 });
+    } else {
+        try m.map.put(alloc, .{ .fixnum = 1 }, .{ .fixnum = 10 });
+        try m.map.put(alloc, .{ .fixnum = 2 }, .{ .fixnum = 20 });
+    }
+    return m;
+}
+
+test "value-map equality and hashing are independent of insertion order" {
+    const a = try testValueMap(false);
+    defer a.header.release();
+    const b = try testValueMap(true);
+    defer b.header.release();
+
+    const av = Value{ .value_map = a };
+    const bv = Value{ .value_map = b };
+    try std.testing.expect(av.eql(bv));
+    try std.testing.expectEqual(av.hashValue(), bv.hashValue());
+}
+
+test "value-map equality distinguishes a differing value, a differing key, and the mutable half" {
+    const base = try testValueMap(false);
+    defer base.header.release();
+
+    const other_value = try ValueMap.create(std.testing.allocator);
+    defer other_value.header.release();
+    try other_value.map.put(other_value.header.allocator, .{ .fixnum = 1 }, .{ .fixnum = 10 });
+    try other_value.map.put(other_value.header.allocator, .{ .fixnum = 2 }, .{ .fixnum = 99 });
+
+    const other_key = try ValueMap.create(std.testing.allocator);
+    defer other_key.header.release();
+    try other_key.map.put(other_key.header.allocator, .{ .fixnum = 1 }, .{ .fixnum = 10 });
+    try other_key.map.put(other_key.header.allocator, .{ .fixnum = 3 }, .{ .fixnum = 20 });
+
+    const mutable = try MutableValueMap.create(std.testing.allocator);
+    defer mutable.header.release();
+    try mutable.map.put(mutable.header.allocator, .{ .fixnum = 1 }, .{ .fixnum = 10 });
+    try mutable.map.put(mutable.header.allocator, .{ .fixnum = 2 }, .{ .fixnum = 20 });
+
+    const basev = Value{ .value_map = base };
+    try std.testing.expect(!basev.eql(.{ .value_map = other_value }));
+    try std.testing.expect(!basev.eql(.{ .value_map = other_key }));
+    try std.testing.expect(!basev.eql(.{ .mutable_value_map = mutable }));
+}
+
+test "value-map renders as the conversion that rebuilds it" {
+    var buf: [128]u8 = undefined;
+    var stream = std.io.fixedBufferStream(&buf);
+
+    const empty = try ValueMap.create(std.testing.allocator);
+    defer empty.header.release();
+    try (Value{ .value_map = empty }).write(stream.writer());
+    try std.testing.expectEqualStrings("{ } >value-map", stream.getWritten());
+
+    stream.reset();
+    const filled = try MutableValueMap.create(std.testing.allocator);
+    defer filled.header.release();
+    try filled.map.put(filled.header.allocator, .{ .fixnum = 1 }, .{ .boolean = true });
+    try (Value{ .mutable_value_map = filled }).write(stream.writer());
+    try std.testing.expectEqualStrings("{ { 1 t } } >mutable-value-map", stream.getWritten());
 }
 
 test "quotation equality" {

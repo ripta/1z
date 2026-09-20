@@ -1391,7 +1391,7 @@ pub const Context = struct {
         return switch (tag) {
             .fixnum, .bignum => .{ .numeric = true, .exact = true, .integer = true },
             .float => .{ .numeric = true },
-            .vector, .byte_array, .mutable_map, .stream, .channel => .{ .mutable = true },
+            .vector, .byte_array, .mutable_map, .mutable_value_map, .stream, .channel => .{ .mutable = true },
             else => .{},
         };
     }
@@ -3504,6 +3504,14 @@ pub const Context = struct {
             .array => |a| for (a.items) |item| try self.stampValueQuotations(item, module),
             .vector => |v| for (v.list.items) |item| try self.stampValueQuotations(item, module),
             .set => |s| for (s.map.keys()) |item| try self.stampValueQuotations(item, module),
+            .value_map => |m| for (m.map.keys(), m.map.values()) |key, value| {
+                try self.stampValueQuotations(key, module);
+                try self.stampValueQuotations(value, module);
+            },
+            .mutable_value_map => |m| for (m.map.keys(), m.map.values()) |key, value| {
+                try self.stampValueQuotations(key, module);
+                try self.stampValueQuotations(value, module);
+            },
             .hash => |h| {
                 var it = h.map.valueIterator();
                 while (it.next()) |vp| try self.stampValueQuotations(vp.*, module);

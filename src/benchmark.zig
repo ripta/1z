@@ -565,6 +565,8 @@ const VariantHistogramWalker = struct {
     vectors: std.AutoHashMapUnmanaged(usize, void) = .{},
     sets: std.AutoHashMapUnmanaged(usize, void) = .{},
     mutable_maps: std.AutoHashMapUnmanaged(usize, void) = .{},
+    value_maps: std.AutoHashMapUnmanaged(usize, void) = .{},
+    mutable_value_maps: std.AutoHashMapUnmanaged(usize, void) = .{},
     struct_instances: std.AutoHashMapUnmanaged(usize, void) = .{},
     value_ptrs: std.AutoHashMapUnmanaged(usize, void) = .{},
 
@@ -575,6 +577,8 @@ const VariantHistogramWalker = struct {
         self.vectors.deinit(alloc);
         self.sets.deinit(alloc);
         self.mutable_maps.deinit(alloc);
+        self.value_maps.deinit(alloc);
+        self.mutable_value_maps.deinit(alloc);
         self.struct_instances.deinit(alloc);
         self.value_ptrs.deinit(alloc);
     }
@@ -660,6 +664,24 @@ const VariantHistogramWalker = struct {
                 var iter = m.map.iterator();
                 while (iter.next()) |entry| {
                     try self.walkValue(alloc, stats, entry.value_ptr.*);
+                }
+            },
+            .value_map => |m| {
+                const ptr_key = @intFromPtr(m);
+                if (!try enterPointer(&self.value_maps, alloc, ptr_key)) return;
+                defer _ = self.value_maps.remove(ptr_key);
+                for (m.map.keys(), m.map.values()) |key, value| {
+                    try self.walkValue(alloc, stats, key);
+                    try self.walkValue(alloc, stats, value);
+                }
+            },
+            .mutable_value_map => |m| {
+                const ptr_key = @intFromPtr(m);
+                if (!try enterPointer(&self.mutable_value_maps, alloc, ptr_key)) return;
+                defer _ = self.mutable_value_maps.remove(ptr_key);
+                for (m.map.keys(), m.map.values()) |key, value| {
+                    try self.walkValue(alloc, stats, key);
+                    try self.walkValue(alloc, stats, value);
                 }
             },
             .struct_instance => |si| {

@@ -1,5 +1,5 @@
 fixtures/parse_types_until_typo.1z:2: error 'type-mismatch' 'no-such-type' is not a known type at word 'parse-types-until'
   stack effect: ( delimiter -- array )
-  called from src/prelude.1z:328: load-file
-  called from src/prelude.1z:329: if
+  called from src/prelude.1z:330: load-file
+  called from src/prelude.1z:331: if
   called from tests/integration/nested_load_parse_time_error_uncaught.1z:8: load

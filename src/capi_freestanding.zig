@@ -12,6 +12,8 @@ const Vector = opaque {};
 const ByteArray = opaque {};
 const Set = opaque {};
 const MutableMap = opaque {};
+const ValueMap = opaque {};
+const MutableValueMap = opaque {};
 const StreamMode = enum {
     read,
     write,
@@ -212,6 +214,8 @@ const Value = union(enum) {
     byte_array: *ByteArray,
     set: *Set,
     mutable_map: *MutableMap,
+    value_map: *ValueMap,
+    mutable_value_map: *MutableValueMap,
     stream: *Stream,
     resource: *Resource,
     parameter: *Parameter,

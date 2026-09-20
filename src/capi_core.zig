@@ -37,6 +37,8 @@ pub const ONEZ_TYPE_ITERATOR: c_int = 16;
 pub const ONEZ_TYPE_TYPE_VAL: c_int = 17;
 pub const ONEZ_TYPE_UNIT: c_int = 18;
 pub const ONEZ_TYPE_STRUCT: c_int = 19;
+pub const ONEZ_TYPE_VALUE_MAP: c_int = 20;
+pub const ONEZ_TYPE_MUTABLE_VALUE_MAP: c_int = 21;
 
 pub fn valueTypeToInt(val: Value) c_int {
     return switch (val) {
@@ -52,6 +54,8 @@ pub fn valueTypeToInt(val: Value) c_int {
         .byte_array => ONEZ_TYPE_BYTE_ARRAY,
         .set => ONEZ_TYPE_SET,
         .mutable_map => ONEZ_TYPE_MUTABLE_MAP,
+        .value_map => ONEZ_TYPE_VALUE_MAP,
+        .mutable_value_map => ONEZ_TYPE_MUTABLE_VALUE_MAP,
         .stream => ONEZ_TYPE_STREAM,
         .resource => ONEZ_TYPE_RESOURCE,
         .tagged => ONEZ_TYPE_TAGGED,

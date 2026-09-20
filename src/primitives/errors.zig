@@ -400,6 +400,20 @@ fn findDanglingIsolatedType(val: Value, isolation_frame: *const TypeRegistryFram
             }
             return null;
         },
+        .value_map => |m| {
+            for (m.map.keys(), m.map.values()) |key, value| {
+                if (findDanglingIsolatedType(key, isolation_frame, depth + 1)) |name| return name;
+                if (findDanglingIsolatedType(value, isolation_frame, depth + 1)) |name| return name;
+            }
+            return null;
+        },
+        .mutable_value_map => |m| {
+            for (m.map.keys(), m.map.values()) |key, value| {
+                if (findDanglingIsolatedType(key, isolation_frame, depth + 1)) |name| return name;
+                if (findDanglingIsolatedType(value, isolation_frame, depth + 1)) |name| return name;
+            }
+            return null;
+        },
         .struct_instance => |si| {
             for (si.fields) |field| {
                 if (findDanglingIsolatedType(field, isolation_frame, depth + 1)) |name| return name;

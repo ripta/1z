@@ -55,26 +55,28 @@ typedef void *onez_type_t;
 
 /* ---- Type codes, as returned by onez_stack_type ---- */
 
-#define ONEZ_TYPE_UNKNOWN     0
-#define ONEZ_TYPE_FIXNUM      1
-#define ONEZ_TYPE_FLOAT       2
-#define ONEZ_TYPE_BOOLEAN     3
-#define ONEZ_TYPE_STRING      4
-#define ONEZ_TYPE_SYMBOL      5
-#define ONEZ_TYPE_ARRAY       6
-#define ONEZ_TYPE_QUOTATION   7
-#define ONEZ_TYPE_HASH        8
-#define ONEZ_TYPE_VECTOR      9
-#define ONEZ_TYPE_BYTE_ARRAY  10
-#define ONEZ_TYPE_SET         11
-#define ONEZ_TYPE_MUTABLE_MAP 12
-#define ONEZ_TYPE_STREAM      13
-#define ONEZ_TYPE_RESOURCE    14
-#define ONEZ_TYPE_TAGGED      15
-#define ONEZ_TYPE_ITERATOR    16
-#define ONEZ_TYPE_TYPE_VAL    17
-#define ONEZ_TYPE_UNIT        18
-#define ONEZ_TYPE_STRUCT      19
+#define ONEZ_TYPE_UNKNOWN           0
+#define ONEZ_TYPE_FIXNUM            1
+#define ONEZ_TYPE_FLOAT             2
+#define ONEZ_TYPE_BOOLEAN           3
+#define ONEZ_TYPE_STRING            4
+#define ONEZ_TYPE_SYMBOL            5
+#define ONEZ_TYPE_ARRAY             6
+#define ONEZ_TYPE_QUOTATION         7
+#define ONEZ_TYPE_HASH              8
+#define ONEZ_TYPE_VECTOR            9
+#define ONEZ_TYPE_BYTE_ARRAY        10
+#define ONEZ_TYPE_SET               11
+#define ONEZ_TYPE_MUTABLE_MAP       12
+#define ONEZ_TYPE_STREAM            13
+#define ONEZ_TYPE_RESOURCE          14
+#define ONEZ_TYPE_TAGGED            15
+#define ONEZ_TYPE_ITERATOR          16
+#define ONEZ_TYPE_TYPE_VAL          17
+#define ONEZ_TYPE_UNIT              18
+#define ONEZ_TYPE_STRUCT            19
+#define ONEZ_TYPE_VALUE_MAP         20
+#define ONEZ_TYPE_MUTABLE_VALUE_MAP 21
 
 /* ---- Error codes ---- */
 
