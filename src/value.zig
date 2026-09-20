@@ -824,6 +824,10 @@ pub const MutableMap = struct {
     }
 };
 
+/// The entry storage both value-keyed map halves run on. Only the tag around it differs, which is
+/// what lets one insert and one probe routine serve both.
+pub const ValueEntries = std.ArrayHashMapUnmanaged(Value, Value, ValueContext, true);
+
 /// Immutable associative store whose keys may be any 1z value, not only a string or a symbol.
 ///
 /// Storage layout mirrors `Set`: a refcounted, mutex-guarded `ContainerHeader` at the top of the
@@ -833,7 +837,7 @@ pub const MutableMap = struct {
 /// by any other thread.
 pub const ValueMap = struct {
     header: @import("container_backing.zig").ContainerHeader,
-    map: std.ArrayHashMapUnmanaged(Value, Value, ValueContext, true) = .{},
+    map: ValueEntries = .{},
 
     pub fn create(allocator: std.mem.Allocator) error{OutOfMemory}!*ValueMap {
         const self = try allocator.create(ValueMap);
@@ -865,7 +869,7 @@ pub const ValueMap = struct {
 /// way `hash` and `mutable-map` do. Create via `MutableValueMap.create`.
 pub const MutableValueMap = struct {
     header: @import("container_backing.zig").ContainerHeader,
-    map: std.ArrayHashMapUnmanaged(Value, Value, ValueContext, true) = .{},
+    map: ValueEntries = .{},
 
     pub fn create(allocator: std.mem.Allocator) error{OutOfMemory}!*MutableValueMap {
         const self = try allocator.create(MutableValueMap);

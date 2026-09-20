@@ -5,12 +5,13 @@ const Set = value_mod.Set;
 
 const container_backing = @import("../container_backing.zig");
 const Primitive = @import("types.zig").Primitive;
+const freeze = @import("freeze.zig");
 const helpers = @import("helpers.zig");
 
 pub const primitives = [_]Primitive{
-    .{ .name = "@in?", .stack_effect = "set value -- ?", .doc = "Check if value is in the set.", .func = nativeAtIn },
-    .{ .name = "@adjoin", .stack_effect = "set value -- set'", .doc = "Add value to set, returning new set.", .func = nativeAtAdjoin },
-    .{ .name = "@remove", .stack_effect = "set value -- set'", .doc = "Remove value from set, returning new set.", .func = nativeAtRemove },
+    .{ .name = "@in?", .stack_effect = "set value -- ?", .doc = "Check if value is in the set. A value holding a mutable container matches by its frozen form, so V{ 1 2 } and { 1 2 } find the same member.", .func = nativeAtIn },
+    .{ .name = "@adjoin", .stack_effect = "set value -- set'", .doc = "Add value to set, returning new set. A member holding a mutable container is stored frozen, so a later mutation through the caller's handle does not reach it.", .func = nativeAtAdjoin },
+    .{ .name = "@remove", .stack_effect = "set value -- set'", .doc = "Remove value from set, returning new set. The value is matched by its frozen form, as in @in?.", .func = nativeAtRemove },
     .{ .name = "@union", .stack_effect = "set1 set2 -- set'", .doc = "Return union of two sets.", .func = nativeAtUnion },
     .{ .name = "@intersection", .stack_effect = "set1 set2 -- set'", .doc = "Return intersection of two sets.", .func = nativeAtIntersection },
     .{ .name = "@difference", .stack_effect = "set1 set2 -- set'", .doc = "Return elements in set1 but not in set2.", .func = nativeAtDifference },
@@ -31,7 +32,10 @@ pub fn nativeAtIn(ctx: *Context) anyerror!void {
         },
     };
 
-    try ctx.stack.push(.{ .boolean = set.map.contains(val) });
+    const probe = try freeze.frozenKey(ctx, val);
+    defer probe.release();
+
+    try ctx.stack.push(.{ .boolean = set.map.contains(probe.value) });
 }
 
 /// Copy every member of `source` into `dest`, retaining each copied value:
@@ -60,30 +64,37 @@ pub fn nativeAtAdjoin(ctx: *Context) anyerror!void {
         },
     };
 
-    if (old_set.map.contains(val)) {
+    // The set stores a member by its frozen form, so the membership check below has to run
+    // against that same form rather than against the popped value.
+    const member = freeze.frozenKeyConsume(ctx, val) catch |e| {
+        container_backing.releaseValue(val);
+        return e;
+    };
+
+    if (old_set.map.contains(member)) {
         // Value already in set; the result is the same set. `push` retains
         // the header for the result slot and the defer balances the popped
         // input, so the net effect is a plain transfer.
-        container_backing.releaseValue(val);
+        container_backing.releaseValue(member);
         try ctx.stack.push(.{ .set = old_set });
         return;
     }
 
     const new_set = Set.create(ctx.allocator) catch {
-        container_backing.releaseValue(val);
+        container_backing.releaseValue(member);
         return error.OutOfMemory;
     };
     errdefer container_backing.releaseValue(.{ .set = new_set });
 
     copyRetainedMembers(new_set, old_set) catch {
-        container_backing.releaseValue(val);
+        container_backing.releaseValue(member);
         return error.OutOfMemory;
     };
 
-    // The popped value's reference flows into its slot; membership was
+    // The frozen member's reference flows into its slot; membership was
     // ruled out above, so this insert cannot displace an existing member.
-    new_set.map.put(new_set.header.allocator, val, {}) catch {
-        container_backing.releaseValue(val);
+    new_set.map.put(new_set.header.allocator, member, {}) catch {
+        container_backing.releaseValue(member);
         return error.OutOfMemory;
     };
 
@@ -105,12 +116,15 @@ pub fn nativeAtRemove(ctx: *Context) anyerror!void {
         },
     };
 
+    const probe = try freeze.frozenKey(ctx, val);
+    defer probe.release();
+
     const new_set = Set.create(ctx.allocator) catch return error.OutOfMemory;
     errdefer container_backing.releaseValue(.{ .set = new_set });
     const alloc = new_set.header.allocator;
 
     for (old_set.map.keys()) |key| {
-        if (key.eql(val)) continue;
+        if (key.eql(probe.value)) continue;
         container_backing.retainValue(key);
         new_set.map.put(alloc, key, {}) catch {
             container_backing.releaseValue(key);

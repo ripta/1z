@@ -44,6 +44,15 @@ pub const registry_entries = [_]RegistryEntry{
 /// Defines a FFI struct layout virtual type backed by a byte array.
 ///
 /// The descriptor contains a `fields` key with a flat token list of `name: type` pairs parsed by `parse-tokens-until`.
+///
+/// The type is deliberately not freezable, which also keeps it out of sets and every other
+/// hash-keyed container. `freeze` turns a wrapped byte array into a string, and both
+/// `ffi-struct-field-get` and `ffi-struct-field-set` require a byte array. A frozen one would be a
+/// value none of its own field words accept.
+///
+/// In-place mutation is the point: the buffer exists to be written through. It also lives on the
+/// quotation allocator, so freezing would not earn the cross-task sharing that is freeze's other
+/// reason to exist.
 fn nativeDefineFfiStruct(ctx: *Context) anyerror!void {
     if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "define-ffi-struct");
 

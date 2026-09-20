@@ -1,5 +1,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const Context = @import("../context.zig").Context;
+const freeze = @import("freeze.zig");
 const value_mod = @import("../value.zig");
 const Value = value_mod.Value;
 const Vector = value_mod.Vector;
@@ -337,7 +339,8 @@ pub const SequenceBuilder = struct {
     /// Append a Value to the builder.
     /// For strings, the value must be a string (appends the bytes).
     /// For byte arrays, the value must be a fixnum 0-255.
-    pub fn append(self: *SequenceBuilder, val: Value) !void {
+    /// For sets, the member is stored by its frozen form, which is what `ctx` is for.
+    pub fn append(self: *SequenceBuilder, ctx: *Context, val: Value) !void {
         switch (self.kind) {
             .string => {
                 // Expect string value, append its bytes
@@ -356,11 +359,19 @@ pub const SequenceBuilder = struct {
                 self.state.byte_array.append(self.allocator, byte) catch return error.OutOfMemory;
             },
             .set => {
+                const member = freeze.frozenKeyConsume(ctx, val) catch |e| {
+                    container_backing.releaseValue(val);
+                    return e;
+                };
+
                 // A duplicate member keeps its existing owning reference;
                 // release the redundant one this append carried in.
-                const gop = self.state.set.map.getOrPut(self.allocator, val) catch return error.OutOfMemory;
+                const gop = self.state.set.map.getOrPut(self.allocator, member) catch {
+                    container_backing.releaseValue(member);
+                    return error.OutOfMemory;
+                };
                 if (gop.found_existing) {
-                    container_backing.releaseValue(val);
+                    container_backing.releaseValue(member);
                 }
             },
         }
@@ -500,10 +511,12 @@ test "SequenceIterator over string" {
 
 test "SequenceBuilder for array" {
     const allocator = std.testing.allocator;
+    var ctx = Context.init(allocator);
+    defer ctx.deinit();
     var builder = try SequenceBuilder.init(.array, allocator);
 
-    try builder.append(.{ .fixnum = 1 });
-    try builder.append(.{ .fixnum = 2 });
+    try builder.append(&ctx, .{ .fixnum = 1 });
+    try builder.append(&ctx, .{ .fixnum = 2 });
 
     const result = try builder.toValue();
     defer container_backing.releaseValue(result);

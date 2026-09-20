@@ -9,6 +9,7 @@ const HashTable = value_mod.HashTable;
 const types_mod = @import("types.zig");
 const Primitive = types_mod.Primitive;
 const RegistryEntry = types_mod.RegistryEntry;
+const freeze = @import("freeze.zig");
 const helpers = @import("helpers.zig");
 const dispatch_helpers = @import("dispatch_helpers.zig");
 const dispatch_mod = @import("../dispatch.zig");
@@ -2315,7 +2316,11 @@ fn nativeInSet(ctx: *Context) anyerror!void {
     const seq = try ctx.stack.pop();
     defer container_backing.releaseValue(elem);
     defer container_backing.releaseValue(seq);
-    const found = seq.set.map.contains(elem);
+
+    const probe = try freeze.frozenKey(ctx, elem);
+    defer probe.release();
+
+    const found = seq.set.map.contains(probe.value);
     try ctx.stack.push(.{ .boolean = found });
 }
 

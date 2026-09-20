@@ -29,13 +29,13 @@ test-set-through-channel-isolated: ( -- ) [
       swap send     \ --         (send the membership answer back on ack)
     ] curry curry spawn drop
     \ stack: data ack
-    swap                   \ ack data
-    S{ 7 } V{ 1 } @adjoin  \ ack data set  (parent's original, one vector member)
-    tuck                   \ ack set data set
-    swap                   \ ack set set data
-    send                   \ ack set        (sent a copy on data)
-    swap                   \ set ack
-    receive                \ set bool
+    swap                  \ ack data
+    S{ 7 } "tag" @adjoin  \ ack data set  (parent's original; the literal member blocks sharing)
+    tuck                  \ ack set data set
+    swap                  \ ack set set data
+    send                  \ ack set        (sent a copy on data)
+    swap                  \ set ack
+    receive               \ set bool
     t "child copy still contains member 7" assert=
     \ stack: set
     7 @in? t "parent set still contains member 7" assert=

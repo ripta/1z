@@ -9,6 +9,7 @@ const ByteArray = value_mod.ByteArray;
 const Set = value_mod.Set;
 const MutableMap = value_mod.MutableMap;
 
+const freeze = @import("freeze.zig");
 const helpers = @import("helpers.zig");
 const dispatch_helpers = @import("dispatch_helpers.zig");
 const Primitive = @import("types.zig").Primitive;
@@ -21,7 +22,7 @@ pub const primitives = [_]Primitive{
     .{ .name = "make-hash", .stack_effect = "quotation -- hash", .doc = "Create a hash table from key-value pairs in a quotation. Keys may be symbols (name:) or strings (\"name\").", .func = nativeMakeHash },
     .{ .name = "make-vector", .stack_effect = "quotation -- vector", .doc = "Create a mutable vector from values in a quotation.", .func = nativeMakeVector },
     .{ .name = "make-byte-array", .stack_effect = "quotation -- byte-array", .doc = "Create a byte array from fixnum values in a quotation.", .func = nativeMakeByteArray },
-    .{ .name = "make-set", .stack_effect = "quotation -- set", .doc = "Create a set from unique values in a quotation.", .func = nativeMakeSet },
+    .{ .name = "make-set", .stack_effect = "quotation -- set", .doc = "Create a set from unique values in a quotation. A member holding a mutable container is stored frozen, so a later mutation through the caller's handle does not reach it.", .func = nativeMakeSet },
     .{ .name = "make-mutable-map", .stack_effect = "quotation -- mmap", .doc = "Create a mutable map from key-value pairs in a quotation. Keys may be symbols (name:) or strings (\"name\").", .func = nativeMakeMutableMap },
     .{ .name = "@set!", .stack_effect = "mmap key value -- mmap", .doc = "Set value in mutable map, mutating in place.", .func = nativeAtSetMut },
     .{ .name = "@remove!", .stack_effect = "mmap key -- mmap", .doc = "Remove key from mutable map, mutating in place.", .func = nativeAtRemoveMut },
@@ -236,14 +237,19 @@ pub fn nativeMakeSet(ctx: *Context) anyerror!void {
             },
         };
 
+        const member = freeze.frozenKeyConsume(ctx, val) catch |e| {
+            container_backing.releaseValue(val);
+            return e;
+        };
+
         // A duplicate key already present in the set keeps its existing owning
         // reference; release the redundant one this iteration produced.
-        const gop = set.map.getOrPut(set_alloc, val) catch {
-            container_backing.releaseValue(val);
+        const gop = set.map.getOrPut(set_alloc, member) catch {
+            container_backing.releaseValue(member);
             return error.OutOfMemory;
         };
         if (gop.found_existing) {
-            container_backing.releaseValue(val);
+            container_backing.releaseValue(member);
         }
     }
 

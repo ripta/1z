@@ -1,0 +1,114 @@
+use "testing" ;
+use "net" ;
+
+\ A hash-keyed container stores a key by its frozen form. A member is frozen on the way in and a
+\ probe is frozen the same way, so a member can never be mutated out from under its own hash and
+\ left unreachable.
+
+test-mutated-handle-leaves-the-member-reachable: ( -- ) [
+  "frozen set members" test-section
+  k: V{ 1 2 } ;
+  s: S{ } k @adjoin ;
+  s k @in? "the member is found before the handle changes" assert-true
+  k 3 #push! drop
+  s V{ 1 2 } @in? "the stored member is still reachable after the handle changes" assert-true
+  s k @in? f "the mutated handle is a different key" assert=
+  s #len 1 "the set still holds one member" assert=
+] ;
+
+\ An array is immutable and a vector inside it is not, so a gate reading only a key's own tag would
+\ let this one through unfrozen.
+test-mutable-node-nested-in-an-array: ( -- ) [
+  "nested mutable key" test-section
+  nk: V{ 1 2 } ;
+  ns: S{ } nk 1array @adjoin ;
+  ns nk 1array @in? "the wrapping array is found before the handle changes" assert-true
+  nk 3 #push! drop
+  ns V{ 1 2 } 1array @in? "the stored wrapping array is still reachable" assert-true
+  ns #len 1 "the set still holds one member" assert=
+] ;
+
+\ Freezing collapses the two onto one key, which is the rule stated plainly: a member is identified
+\ by its frozen form.
+test-a-vector-and-an-array-are-one-member: ( -- ) [
+  "collapsed members" test-section
+  S{ } V{ 1 2 } @adjoin { 1 2 } @adjoin #len 1 "a vector and an array of the same contents are one member" assert=
+  S{ } V{ 1 2 } @adjoin { 1 2 } @in? "an array finds the member a vector inserted" assert-true
+  S{ } { 1 2 } @adjoin V{ 1 2 } @in? "a vector finds the member an array inserted" assert-true
+] ;
+
+\ #in? reaches set membership through the dispatch table rather than as a plain native, so it has to
+\ agree with @in? on every one of these.
+test-generic-membership-agrees: ( -- ) [
+  "generic membership" test-section
+  gk: V{ 1 2 } ;
+  gs: S{ } gk @adjoin ;
+  gs V{ 1 2 } #in? "#in? finds the stored member" assert-true
+  gk 3 #push! drop
+  gs V{ 1 2 } #in? "#in? still finds it after the handle changes" assert-true
+  gs gk #in? f "#in? agrees the mutated handle is a different key" assert=
+] ;
+
+\ The set holds an independent frozen copy, not the caller's handle.
+test-a-member-reads-back-frozen: ( -- ) [
+  "member read-back" test-section
+  S{ } V{ 1 2 } @adjoin >array 0 #nth type-of array "a vector member reads back as an array" assert=
+  rk: V{ 1 2 } ;
+  rs: S{ } rk @adjoin ;
+  rk 3 #push! drop
+  rs >array 0 #nth #len 2 "the stored copy did not follow the handle" assert=
+] ;
+
+\ @remove matches by the same frozen form the insert stored.
+test-remove-matches-the-frozen-form: ( -- ) [
+  "frozen removal" test-section
+  S{ } V{ 1 2 } @adjoin { 1 2 } @remove #len 0 "an array removes the member a vector inserted" assert=
+  dk: V{ 1 2 } ;
+  ds: S{ } dk @adjoin 9 @adjoin ;
+  dk 3 #push! drop
+  ds V{ 1 2 } @remove #len 1 "the stored member is removable after the handle changes" assert=
+] ;
+
+\ make-set is the constructor the S{ } literal runs at parse time. It reads one value per
+\ instruction, so a compound member reaches it through a word call.
+make-pair: ( -- vector ) [ V{ 1 2 } ] ;
+
+test-make-set-freezes-its-members: ( -- ) [
+  "make-set members" test-section
+  [ make-pair ] make-set >array 0 #nth type-of array "make-set stores a vector member frozen" assert=
+  [ make-pair ] make-set { 1 2 } @in? "the member answers to its frozen form" assert-true
+] ;
+
+\ A key with nothing mutable in it is stored and probed as it is, which is what keeps a string-keyed
+\ or array-keyed lookup allocation-free.
+test-an-immutable-key-is-untouched: ( -- ) [
+  "immutable keys" test-section
+  S{ "a" "b" } "b" @in? "a string member is found" assert-true
+  S{ } { 0 0 } @adjoin { 0 0 } @in? "an array of scalars is found" assert-true
+  S{ } { 0 0 } @adjoin >array 0 #nth { 0 0 } "the array member reads back unchanged" assert=
+] ;
+
+\ Storing members frozen means a type that cannot be frozen cannot be a member. A newtype over a
+\ byte-array is that type: a byte-array freezes to a string, and no parameterized string type
+\ exists to rewrap the newtype in. `ip`, the ten packed-* and simd-* types, and every ffi-struct{ }
+\ type are all shaped this way, and for the numeric buffers and the FFI structs that is deliberate
+\ rather than a gap -- they exist to be written through in place, and a frozen one would be
+\ rejected by its own accessors. The refusal is pinned here so it reads as a decision.
+tag-bytes: virtual{ byte-array } ;
+
+test-an-unfreezable-member-is-refused: ( -- ) [
+  "unfreezable members" test-section
+  [ S{ } B{ 1 2 } >tag-bytes @adjoin ] type-mismatch: "@adjoin refuses a byte-array newtype" assert-error-type
+  [ S{ } B{ 1 2 } >tag-bytes @in? ] type-mismatch: "@in? refuses one on the probe too" assert-error-type
+  [ S{ } "1.2.3.4" >ip @adjoin ] type-mismatch: "@adjoin refuses the shipped ip type" assert-error-type
+] ;
+
+test-mutated-handle-leaves-the-member-reachable
+test-mutable-node-nested-in-an-array
+test-a-vector-and-an-array-are-one-member
+test-generic-membership-agrees
+test-a-member-reads-back-frozen
+test-remove-matches-the-frozen-form
+test-make-set-freezes-its-members
+test-an-immutable-key-is-untouched
+test-an-unfreezable-member-is-refused

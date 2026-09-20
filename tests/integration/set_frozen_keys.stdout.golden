@@ -1,0 +1,54 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+=== frozen set members ===
+PASS: the member is found before the handle changes
+PASS: the stored member is still reachable after the handle changes
+PASS: the mutated handle is a different key
+PASS: the set still holds one member
+Stack: [ ]
+=== nested mutable key ===
+PASS: the wrapping array is found before the handle changes
+PASS: the stored wrapping array is still reachable
+PASS: the set still holds one member
+Stack: [ ]
+=== collapsed members ===
+PASS: a vector and an array of the same contents are one member
+PASS: an array finds the member a vector inserted
+PASS: a vector finds the member an array inserted
+Stack: [ ]
+=== generic membership ===
+PASS: #in? finds the stored member
+PASS: #in? still finds it after the handle changes
+PASS: #in? agrees the mutated handle is a different key
+Stack: [ ]
+=== member read-back ===
+PASS: a vector member reads back as an array
+PASS: the stored copy did not follow the handle
+Stack: [ ]
+=== frozen removal ===
+PASS: an array removes the member a vector inserted
+PASS: the stored member is removable after the handle changes
+Stack: [ ]
+=== make-set members ===
+PASS: make-set stores a vector member frozen
+PASS: the member answers to its frozen form
+Stack: [ ]
+=== immutable keys ===
+PASS: a string member is found
+PASS: an array of scalars is found
+PASS: the array member reads back unchanged
+Stack: [ ]
+=== unfreezable members ===
+PASS: @adjoin refuses a byte-array newtype
+PASS: @in? refuses one on the probe too
+PASS: @adjoin refuses the shipped ip type
+Stack: [ ]

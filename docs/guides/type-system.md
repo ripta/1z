@@ -151,6 +151,67 @@ ratio:   H{ numeric: t exact: t } virtual{ struct{ numer denom } } ;
 These remain virtual because the metadata is part of the type definition, not
 because anonymous struct-backed virtuals are the default for multi-field data.
 
+### Freezing a Newtype
+
+`freeze` converts a value to its immutable counterpart. A newtype follows the
+type it wraps, and the backing decides whether it can be frozen at all.
+
+A newtype over an immutable base freezes and keeps its own tag:
+
+```
+speed: virtual{ fixnum } ;
+42 >speed freeze type-name .
+```
+
+Output:
+
+```
+"speed"
+```
+
+A newtype over a mutable base is different. Freezing has to land on a value of
+some immutable type, and for a wrapper that means a partner type to rewrap into.
+The generated container pairs have one, so `vector(fixnum)` freezes to
+`array(fixnum)`. A hand-written wrapper has no partner:
+
+```
+bag: virtual{ vector } ;
+V{ 1 2 } >bag freeze
+```
+
+Output:
+
+```
+error 'type-mismatch' freeze: bag wraps a vector with no immutable counterpart type at word 'freeze'
+```
+
+`virtual{ byte-array }` is the backing with no way out. A byte-array freezes to
+a string, and there is no parameterized string type to act as the partner, so a
+byte-array-backed newtype never freezes. `ip` in `lib/net.1z`, the ten
+`packed-*` and ten `simd-*` types, and every `ffi-struct{ }` type are all shaped
+this way.
+
+For the numeric buffers and the FFI structs that is deliberate rather than a
+limitation to work around. They exist to be written through in place, and a
+frozen one would be rejected by its own field and element words.
+
+The rule reaches past `freeze` itself. A set stores every member by its frozen
+form, so a value that cannot be frozen cannot be a set member:
+
+```
+S{ } "1.2.3.4" >ip @adjoin
+```
+
+Output:
+
+```
+error 'type-mismatch' freeze: ip wraps a byte-array, and a byte-array-backed newtype has no frozen counterpart at word '@adjoin'
+  hint: a set member is stored frozen, so its type must be freezable
+```
+
+Reach for a purpose-built container when you need to group values of such a
+type.
+
 ## Choosing a Type Definition
 
 Use this decision tree when defining a new type:

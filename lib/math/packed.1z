@@ -3,6 +3,8 @@
 use "strings" ;
 
 \ Virtual type definitions: each packed type wraps a byte-array
+\ A byte-array backing is deliberately not freezable, so these are not set members or container
+\ keys. See docs/guides/type-system.md, "Freezing a Newtype".
 packed-i8:  virtual{ byte-array } ;
 packed-i16: virtual{ byte-array } ;
 packed-i32: virtual{ byte-array } ;

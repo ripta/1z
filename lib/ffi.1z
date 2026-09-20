@@ -48,6 +48,10 @@ ffi{: parse-time [
 \\ Parse-time word for FFI struct layout descriptors.
 \\ ffi-struct{ x: f32 y: f32 } produces a virtual type backed by a byte array
 \\ with field offsets computed via libffi.
+\\
+\\ The type is deliberately not freezable, so a value of it cannot be a set member either. Its
+\\ field words require the byte array that freeze would convert away, and writing through the
+\\ buffer in place is what the type is for.
 ffi-struct{: parse-time [
   M{ type: ffi-struct-descriptor: }
   fields: "}" parse-tokens-until @set!

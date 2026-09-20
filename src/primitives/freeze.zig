@@ -16,6 +16,7 @@ const container_backing = @import("../container_backing.zig");
 
 const helpers = @import("helpers.zig");
 const setErrorContext = helpers.setErrorContext;
+const setErrorHint = helpers.setErrorHint;
 const valueTypeName = helpers.valueTypeName;
 
 const TaggedPayload = std.meta.TagPayload(Value, .tagged);
@@ -74,6 +75,98 @@ pub fn deepFreezeConsume(ctx: *Context, val: Value) anyerror!Value {
     const r = try freezeConsume(ctx, val);
     _ = container_backing.valueShareable(r.value, ctx.allocator);
     return r.value;
+}
+
+/// The form a `ValueContext`-keyed container stores a key under.
+///
+/// `owned` is set only when a freeze ran. Otherwise the key is the caller's own reference,
+/// borrowed for as long as the lookup runs.
+pub const FrozenKey = struct {
+    value: Value,
+    owned: bool,
+
+    pub fn release(self: FrozenKey) void {
+        if (self.owned) container_backing.releaseValue(self.value);
+    }
+};
+
+/// Borrow `key` and answer the form its container stores it under.
+pub fn frozenKey(ctx: *Context, key: Value) anyerror!FrozenKey {
+    if (!holdsMutableNode(key)) return .{ .value = key, .owned = false };
+
+    return .{ .value = try freezeKeyCopy(ctx, key), .owned = true };
+}
+
+/// Consume `key` and answer that same form as an owning reference.
+///
+/// On error the input is not consumed and the caller must still release it, matching
+/// `deepFreezeConsume`.
+pub fn frozenKeyConsume(ctx: *Context, key: Value) anyerror!Value {
+    if (!holdsMutableNode(key)) return key;
+
+    const frozen = try freezeKeyCopy(ctx, key);
+    container_backing.releaseValue(key);
+    return frozen;
+}
+
+/// Freeze a key, adding why the container wanted it frozen when the key's type refuses.
+///
+/// The refusal itself is freeze's to explain, since it holds for a direct `freeze` call too. What
+/// the container adds is why that mattered here, which is what the hint carries.
+fn freezeKeyCopy(ctx: *Context, key: Value) anyerror!Value {
+    const r = freezeCopy(ctx, key) catch |e| {
+        if (e == error.TypeMismatch) {
+            setErrorHint(ctx, "a set member is stored frozen, so its type must be freezable");
+        }
+        return e;
+    };
+    return r.value;
+}
+
+/// Whether freezing `val` would replace a node inside it, ignoring string and symbol promotion.
+///
+/// This is the gate in front of the key freeze. A key that holds nothing mutable already has a
+/// stable hash, so freezing it would buy nothing and cost an allocation.
+///
+/// Promotion is excluded deliberately. `freezeStringLeaf` allocates for any null-backed leaf and a
+/// source literal is null-backed, but promotion preserves the bytes and so cannot move a hash.
+/// Counting it would put an allocation on every probe with a literal key, on the structure whose
+/// reason for existing is O(1) lookup.
+///
+/// The arms mirror `freezeCopy`'s recursion. An array holding a vector is an immutable container
+/// whose hash still moves, so a container-shaped key is walked rather than judged by its own tag.
+fn holdsMutableNode(val: Value) bool {
+    return switch (val) {
+        .vector, .mutable_map, .byte_array, .mutable_value_map => true,
+
+        // A struct instance's shell is setter-mutable and `hashValue` hashes the fields, which is
+        // also why `freezeCopy` copies one unconditionally.
+        .struct_instance => true,
+
+        .array => |arr| anyHoldsMutableNode(arr.items),
+        .set => |s| anyHoldsMutableNode(s.map.keys()),
+        .value_map => |m| anyHoldsMutableNode(m.map.keys()) or anyHoldsMutableNode(m.map.values()),
+
+        .hash => |h| blk: {
+            var iter = h.map.valueIterator();
+            while (iter.next()) |slot| {
+                if (holdsMutableNode(slot.*)) break :blk true;
+            }
+            break :blk false;
+        },
+
+        .tagged => |t| holdsMutableNode(t.inner.*),
+        .error_value => |err| if (err.data) |data| holdsMutableNode(data.*) else false,
+
+        else => false,
+    };
+}
+
+fn anyHoldsMutableNode(vals: []const Value) bool {
+    for (vals) |v| {
+        if (holdsMutableNode(v)) return true;
+    }
+    return false;
 }
 
 /// A frozen node plus whether it differs from the input. Unchanged already-immutable subtrees
@@ -494,7 +587,12 @@ fn freezeTagged(ctx: *Context, t: TaggedPayload, val: Value) anyerror!FreezeResu
             const new_h = try freezeMapCopy(ctx, &m.map);
             return .{ .value = try invokeWrap(ctx, .{ .hash = new_h }, "hash", elem), .changed = true };
         },
-        .byte_array => return freezeNoCounterpart(ctx, t.tag, "byte-array"),
+        // A byte-array freezes to a string, and no parameterized string type exists to rewrap the
+        // newtype in, so this backing has no counterpart to reach for at all.
+        .byte_array => {
+            setErrorContext(ctx, "freeze: {s} wraps a byte-array, and a byte-array-backed newtype has no frozen counterpart", .{t.tag.name});
+            return error.TypeMismatch;
+        },
         else => {
             const r = try freezeCopy(ctx, t.inner.*);
             if (!r.changed) {
@@ -764,6 +862,109 @@ test "freeze returns an unchanged durable value-map by identity" {
 
     try testing.expect(frozen == .value_map);
     try testing.expectEqual(m, frozen.value_map);
+}
+
+test "a scalar, a string literal, and a symbol literal are keys as they stand" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    // The gate is what keeps a literal-keyed lookup allocation-free: an ungated freeze would
+    // promote the null backing onto the heap on every probe.
+    const literal = value_mod.stringValue("k");
+    const keys = [_]Value{ .{ .fixnum = 7 }, literal, value_mod.symbolValue("k") };
+    for (keys) |key| {
+        const frozen = try frozenKey(&ctx, key);
+        defer frozen.release();
+
+        try testing.expect(!frozen.owned);
+    }
+
+    try testing.expect(literal.string.backing == null);
+}
+
+test "an immutable container key is not copied for a lookup" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    const items = try ctx.allocator.alloc(Value, 2);
+    items[0] = .{ .fixnum = 0 };
+    items[1] = .{ .fixnum = 1 };
+    const arr = try value_mod.Array.fromOwnedSlice(ctx.allocator, items);
+    const key: Value = .{ .array = arr };
+    defer container_backing.releaseValue(key);
+
+    const frozen = try frozenKey(&ctx, key);
+    defer frozen.release();
+
+    try testing.expect(!frozen.owned);
+    try testing.expectEqual(arr, frozen.value.array);
+}
+
+test "a mutable container key is frozen for a lookup, nested in an array or not" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    const vec = try value_mod.Vector.create(ctx.allocator);
+    try vec.list.append(ctx.allocator, .{ .fixnum = 1 });
+    const bare: Value = .{ .vector = vec };
+    defer container_backing.releaseValue(bare);
+
+    const frozen_bare = try frozenKey(&ctx, bare);
+    defer frozen_bare.release();
+    try testing.expect(frozen_bare.owned);
+    try testing.expect(frozen_bare.value == .array);
+
+    // An array is immutable and the vector inside it is not, so the hash of the array still moves.
+    const items = try ctx.allocator.alloc(Value, 1);
+    container_backing.retainValue(bare);
+    items[0] = bare;
+    const wrapper: Value = .{ .array = try value_mod.Array.fromOwnedSlice(ctx.allocator, items) };
+    defer container_backing.releaseValue(wrapper);
+
+    const frozen_wrapper = try frozenKey(&ctx, wrapper);
+    defer frozen_wrapper.release();
+    try testing.expect(frozen_wrapper.owned);
+    try testing.expect(frozen_wrapper.value.array.items[0] == .array);
+}
+
+test "a struct instance key is frozen for a lookup" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    // The shell is setter-mutable and `hashValue` hashes the fields, so the hash moves even with
+    // nothing mutable stored in it.
+    var st = value_mod.StructType{ .name = "box", .fields = &.{"data"} };
+    const fields = try ctx.allocator.alloc(Value, 1);
+    fields[0] = .{ .fixnum = 1 };
+    const key: Value = .{ .struct_instance = try value_mod.createStructInstance(ctx.allocator, &st, fields) };
+    defer container_backing.releaseValue(key);
+
+    const frozen = try frozenKey(&ctx, key);
+    defer frozen.release();
+
+    try testing.expect(frozen.owned);
+    try testing.expect(frozen.value.struct_instance != key.struct_instance);
+}
+
+test "frozenKeyConsume passes a stable key through and consumes the rest" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    const scalar = try frozenKeyConsume(&ctx, .{ .fixnum = 3 });
+    try testing.expectEqual(@as(i64, 3), scalar.fixnum);
+
+    const vec = try value_mod.Vector.create(ctx.allocator);
+    try vec.list.append(ctx.allocator, .{ .fixnum = 5 });
+    // A second reference stands in for the caller's own handle, so the refcount stays inspectable
+    // after the insert reference is consumed.
+    vec.header.retain();
+    defer vec.header.release();
+
+    const member = try frozenKeyConsume(&ctx, .{ .vector = vec });
+    defer container_backing.releaseValue(member);
+
+    try testing.expect(member == .array);
+    try testing.expectEqual(@as(u32, 1), vec.header.refcountValue());
 }
 
 test "freeze converts a byte-array to a string" {

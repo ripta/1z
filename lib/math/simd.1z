@@ -3,6 +3,8 @@
 use "strings" ;
 
 \ Virtual type definitions: each SIMD vector wraps a 16-byte byte-array
+\ A byte-array backing is deliberately not freezable, so these are not set members or container
+\ keys. See docs/guides/type-system.md, "Freezing a Newtype".
 simd-2xf64: virtual{ byte-array } ;
 simd-4xf32: virtual{ byte-array } ;
 simd-2xi64: virtual{ byte-array } ;
