@@ -1,0 +1,11 @@
+\ A bound value for `inline_literal.1z` to read from the other side of an import.
+\
+\ A binding is `.literal` only inside its own defining frame. Reached through an import it is
+\ already the one-instruction push body `moduleWordFor` turned it into. The two readers below and
+\ beside them in the importing file are what show that both forms expand to the same thing.
+
+\\ The value both sides read.
+gap: ( -- n: fixnum ) const inline 8 ;
+
+\\ Read the binding from the module that defined it.
+here-gap: ( -- n: fixnum ) [ gap ] ;

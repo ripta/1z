@@ -1,0 +1,46 @@
+\ A call to an `inline` bracket-less binding is replaced at definition time by a push of the bound
+\ value. A binding has no instruction array to copy, so the push is synthesized rather than copied.
+use "testing" ;
+use "fixtures/inline_literal_lib.1z" ;
+
+\ The stored body, rendered. Expansion is invisible to a program's output, so this is what a test
+\ has to look at to see that it happened at all. A binding has no body of its own, so only a
+\ caller's is worth asking about.
+body-of: ( sym -- string ) [ >word-info body>> inspect ] ;
+
+"a marked binding's value replaces the call" test-section
+
+width: ( -- n: fixnum ) const inline 256 ;
+area: ( -- n: fixnum ) [ width width * ] ;
+
+area: body-of "[ 256 256 * ]" "each call site carries a push of the value" assert=
+area 65536 "and the word still computes what it did" assert=
+width 256 "and the binding still reads on its own" assert=
+
+"both sides of an import reach the same expansion" test-section
+
+\ `gap` is bound in the fixture. Read there it is a bare value; read here it is already the
+\ one-instruction push body the module promotion turned it into. Until this expansion arm existed
+\ only the second of those expanded, so the same source line behaved differently by caller file.
+there-gap: ( -- n: fixnum ) [ gap ] ;
+
+here-gap: body-of "[ 8 ]" "the defining module's own reader expands" assert=
+there-gap: body-of "[ 8 ]" "and the importing module's reader expands to the same" assert=
+here-gap there-gap = t "and both still compute what they did" assert=
+
+"a refcounted value is expanded like any other" test-section
+
+\ Each push is an owning reference of its own, balancing the one release per occurrence the
+\ teardown walk performs over the expanded body. A missing reference reads as a use-after-free
+\ here and an extra one as a leak.
+banner: ( -- s: string ) const inline "hi" ;
+shout: ( -- s: string ) [ banner banner #append ] ;
+
+shout: body-of "[ \"hi\" \"hi\" #append ]" "a leaf backing is pushed twice" assert=
+shout "hihi" "and both copies are still readable" assert=
+
+sizes: ( -- a: array ) const inline { 1 2 3 } ;
+total: ( -- n: fixnum ) [ sizes #len sizes #len + ] ;
+
+total: body-of "[ { 1 2 3 } #len { 1 2 3 } #len + ]" "a container is pushed twice" assert=
+total 6 "and both copies are still readable" assert=

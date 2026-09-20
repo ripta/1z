@@ -1,0 +1,34 @@
+Stack: [ ]
+=== a marked binding's value replaces the call ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: each call site carries a push of the value
+Stack: [ ]
+PASS: and the word still computes what it did
+Stack: [ ]
+PASS: and the binding still reads on its own
+Stack: [ ]
+=== both sides of an import reach the same expansion ===
+Stack: [ ]
+Stack: [ ]
+PASS: the defining module's own reader expands
+Stack: [ ]
+PASS: and the importing module's reader expands to the same
+Stack: [ ]
+PASS: and both still compute what they did
+Stack: [ ]
+=== a refcounted value is expanded like any other ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: a leaf backing is pushed twice
+Stack: [ ]
+PASS: and both copies are still readable
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: a container is pushed twice
+Stack: [ ]
+PASS: and both copies are still readable
+Stack: [ ]

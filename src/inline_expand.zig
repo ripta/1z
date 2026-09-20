@@ -10,6 +10,7 @@ const Allocator = std.mem.Allocator;
 
 const value_mod = @import("value.zig");
 const Instruction = value_mod.Instruction;
+const Value = value_mod.Value;
 
 const dict_mod = @import("dictionary.zig");
 const WordDefinition = dict_mod.WordDefinition;
@@ -65,6 +66,10 @@ pub fn expandBody(
     // copied from. The array it came from keeps its own registration and releases the first; the
     // registration this one picks up at installation releases the second.
     //
+    // A push the pass inserted for a bound value is the same second reference against a different
+    // first. The binding holds that one on a ledger of its own: the frame for a transient leaf
+    // binding, the dictionary's retained-values list for a durable one.
+    //
     // Retaining uniformly rather than only for a callee's literals is what keeps a body defined
     // repeatedly from the same parsed array balanced. Each definition produces a distinct expanded
     // array with a registration of its own, and a rule that moved the original's references
@@ -77,6 +82,27 @@ pub fn expandBody(
 
     return expanded;
 }
+
+/// What the pass puts in place of a call it selects.
+const Replacement = union(enum) {
+    body: Body,
+
+    /// A bound value, pushed where the call stood. A binding and the one-instruction push body a
+    /// module import would already have turned it into are one case here, so which side of an
+    /// import a caller sits on does not decide whether it expands.
+    ///
+    /// A value calls nothing, so it opens no cycle, and it carries no name that could resolve
+    /// differently in another module.
+    value: Value,
+
+    const Body = struct {
+        instrs: []const Instruction,
+
+        /// Set when the callee belongs to another file, so its instructions have to survive the
+        /// move.
+        relocating: bool,
+    };
+};
 
 const Expander = struct {
     ctx: *Context,
@@ -102,20 +128,23 @@ const Expander = struct {
         };
     }
 
-    /// The word this pass would copy in place of a call to `op`'s target, or null when it would
-    /// copy nothing.
+    /// What this pass would put in place of a call to `op`'s target, or null when it would put
+    /// nothing.
     ///
     /// Cycle detection is deliberately not applied here, so the pre-scan sees a recursive word as
     /// expandable. It is, at its first level.
-    fn expandable(self: *const Expander, op: Instruction.Op) ?WordDefinition {
+    fn expandable(self: *const Expander, op: Instruction.Op) ?Replacement {
         if (!op.isCall()) return null;
         const callee = self.target(op) orelse return null;
         if (!shouldInline(callee)) return null;
         return switch (callee.action) {
-            .compound => callee,
-            // A bound value has no instruction array to copy, and neither a native nor a host
-            // callback has one at all.
-            .literal, .native, .host_callback => null,
+            .compound => |instrs| .{ .body = .{
+                .instrs = instrs,
+                .relocating = !self.definedInCallerFile(callee),
+            } },
+            .literal => |val| .{ .value = val },
+            // Neither a native nor a host callback has anything to put in place of the call.
+            .native, .host_callback => null,
         };
     }
 
@@ -174,15 +203,29 @@ const Expander = struct {
     fn appendOne(self: *Expander, instr: Instruction, relocating: bool) Allocator.Error!bool {
         if (self.namesDefinition(instr.op)) return false;
 
-        if (self.expandable(instr.op)) |callee| {
-            const callee_body = callee.action.compound;
-            if (!self.isOpen(callee_body)) {
-                try self.open.append(self.ctx.allocator, @intFromPtr(callee_body.ptr));
-                defer _ = self.open.pop();
+        if (self.expandable(instr.op)) |what| switch (what) {
+            .body => |b| {
+                if (!self.isOpen(b.instrs)) {
+                    try self.open.append(self.ctx.allocator, @intFromPtr(b.instrs.ptr));
+                    defer _ = self.open.pop();
 
-                if (try self.appendBody(callee_body, !self.definedInCallerFile(callee))) return true;
-            }
-        }
+                    if (try self.appendBody(b.instrs, b.relocating)) return true;
+                }
+            },
+            // This arm never declines. `namesDefinition` has already run, and a value carries no
+            // name for the relocation rule to bind.
+            //
+            // The push takes the call's own line and column. A bound value has none of its own,
+            // and the array being built is stamped with this file rather than the binding's.
+            .value => |val| {
+                try self.out.append(self.alloc, .{
+                    .op = .{ .push_literal = val },
+                    .line = instr.line,
+                    .column = instr.column,
+                });
+                return true;
+            },
+        };
 
         // An instruction the pass did not replace. It keeps its own line and column, so a location
         // inside an expanded region still points at the source that wrote it.
@@ -247,6 +290,16 @@ fn define(ctx: *Context, file: []const u8, name: []const u8, body: []const Instr
         .source_file = file,
         .markers = if (marked) &const_inline else &.{},
         .action = .{ .compound = body },
+    });
+}
+
+/// Bind `value` to `name` directly, the `.literal` shape `;` gives a bracket-less binding.
+fn bind(ctx: *Context, file: []const u8, name: []const u8, value: Value, marked: bool) !void {
+    try ctx.defineWord(name, .{
+        .name = name,
+        .source_file = file,
+        .markers = if (marked) &const_inline else &.{},
+        .action = .{ .literal = value },
     });
 }
 
@@ -510,6 +563,83 @@ test "a closure-bodied definition is left alone" {
 
     try expectOps(&ctx, "held", &.{"doubled"});
     try testing.expectEqual(@intFromPtr(&body), @intFromPtr(ctx.lookupWord("held").?.action.compound.ptr));
+}
+
+test "a call to a marked binding becomes a push of the bound value" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+    ctx.current_source = here;
+
+    try bind(&ctx, here, "width", .{ .fixnum = 256 }, true);
+
+    try define(&ctx, here, "area", &.{
+        .{ .op = .{ .call_word = "width" }, .line = 9, .column = 8 },
+        .{ .op = .{ .call_word = "width" }, .line = 9, .column = 14 },
+        .{ .op = .{ .call_word = "*" }, .line = 9, .column = 20 },
+    }, false);
+
+    try expectOps(&ctx, "area", &.{ "#", "#", "*" });
+
+    const body = ctx.lookupWord("area").?.action.compound;
+    try testing.expectEqual(@as(i64, 256), body[0].op.push_literal.fixnum);
+    try testing.expectEqual(@as(i64, 256), body[1].op.push_literal.fixnum);
+
+    // A bound value has no instruction of its own to take a location from, so each push carries
+    // the call's. That is the only pairing where the line and the body's file agree.
+    try testing.expectEqual(@as(usize, 9), body[0].line);
+    try testing.expectEqual(@as(usize, 8), body[0].column);
+    try testing.expectEqual(@as(usize, 14), body[1].column);
+}
+
+test "a bound value copied out of another file needs no slot to bind to" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+    ctx.current_source = here;
+
+    // A frame holds the binding, so no dictionary slot names it. A body reaching a frame-held
+    // word cannot leave its own file, which is what the test above this one covers.
+    try ctx.pushLocalFrame();
+    defer ctx.popLocalFrame();
+
+    try bind(&ctx, elsewhere, "(width)", .{ .fixnum = 256 }, true);
+
+    try define(&ctx, elsewhere, "sized", &.{
+        .{ .op = .{ .call_word = "(width)" }, .line = 1 },
+    }, true);
+
+    // Expansion is eager, so `sized` carries the value rather than the name by the time anything
+    // copies it. There is no name left for the move to bind.
+    try expectOps(&ctx, "sized", &.{"#"});
+
+    try define(&ctx, here, "reads-it", &.{
+        .{ .op = .{ .call_word = "sized" }, .line = 2 },
+    }, false);
+
+    const body = ctx.lookupWord("reads-it").?.action.compound;
+    try testing.expectEqual(@as(usize, 1), body.len);
+    try testing.expectEqual(@as(i64, 256), body[0].op.push_literal.fixnum);
+}
+
+test "each copy of a bound container carries a reference of its own" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+    ctx.current_source = here;
+
+    const vec = try value_mod.Vector.create(ctx.allocator);
+
+    // The binding adopts the creation reference rather than taking one, so this reads 1.
+    try bind(&ctx, here, "shared", .{ .vector = vec }, true);
+    const before = vec.header.refcountValue();
+
+    try define(&ctx, here, "twice", &.{
+        .{ .op = .{ .call_word = "shared" }, .line = 2 },
+        .{ .op = .{ .call_word = "shared" }, .line = 2 },
+    }, false);
+
+    // An inserted push is a second owning reference the same way a copied one is, and lands on
+    // the same teardown walk. The binding's own reference sits on the dictionary's retained
+    // values, so the three are released once each and the allocator sees one destroy.
+    try testing.expectEqual(before + 2, vec.header.refcountValue());
 }
 
 test "each copy of a container literal carries a reference of its own" {
