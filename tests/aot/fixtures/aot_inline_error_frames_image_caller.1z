@@ -1,0 +1,9 @@
+\ The calling half of aot_inline_error_frames_image.
+\
+\ Expansion erases the call to `inner`, so at run time nothing is left to push its frame. The only
+\ record of where that code came from is the run the expansion pass wrote over this body, and in a
+\ runtime-image binary that run has to have travelled in the image.
+
+use "aot_inline_error_frames_image_lib.1z" ;
+
+outer: ( s v -- n ) [ inner 0 + ] ;

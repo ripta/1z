@@ -38,6 +38,29 @@ typedef struct onez_image_stack_effect {
     uint32_t output_count;
 } onez_image_stack_effect_t;
 
+/* One run of a word's body that inline expansion copied out of another word. The call   */
+/* the run replaced is gone, so nothing pushes that word's frame; the loader rebuilds    */
+/* the table the error path reads these back out of, keyed by the decoded body.          */
+typedef struct onez_image_inline_region {
+    const char *word_name;    /* The word the run's code was copied out of.             */
+    const char *body_source;  /* The file that word's code was written in.              */
+    uint32_t word_name_len;
+    uint32_t body_source_len;
+    uint32_t start;           /* Half-open instruction range [start, end) in the body.  */
+    uint32_t end;
+    uint32_t call_line;       /* Where the call the run replaced sat.                   */
+    uint32_t call_column;
+} onez_image_inline_region_t;
+
+/* Every run of one word's body, plus the file that body itself belongs to, which is     */
+/* where the outermost run's own call site sits.                                         */
+typedef struct onez_image_inline_region_set {
+    const char *body_source;
+    const struct onez_image_inline_region *regions;
+    uint32_t body_source_len;
+    uint32_t region_count;
+} onez_image_inline_region_set_t;
+
 typedef struct onez_image_word {
     const char *name;
     uint32_t name_len;
@@ -71,6 +94,8 @@ typedef struct onez_image_word {
     uint32_t provenance_parent_len;
     const char *provenance_role;
     uint32_t provenance_role_len;
+    /* NULL for a body nothing was inlined into, which is nearly every body.       */
+    const struct onez_image_inline_region_set *inline_regions;
 } onez_image_word_t;
 
 /* TypeValue static C data schema. Every TypeValue reachable from any module-private word's body or
@@ -1058,6 +1083,7 @@ static const onez_image_word_t onez_image_words_storage[] = {
         .provenance_parent_len = 0,
         .provenance_role = NULL,
         .provenance_role_len = 0,
+        .inline_regions = NULL,
     },
     {
         .name = onez_image_w_1_name,
@@ -1089,6 +1115,7 @@ static const onez_image_word_t onez_image_words_storage[] = {
         .provenance_parent_len = 8,
         .provenance_role = onez_image_w_1_pr,
         .provenance_role_len = 10,
+        .inline_regions = NULL,
     },
 };
 
@@ -1107,7 +1134,7 @@ static const onez_image_entry_import_t onez_image_entry_imports_storage[] = {
 };
 
 __attribute__((used)) const onez_image_header_t onez_image_v1 = {
-    .format_version = 20,
+    .format_version = 21,
     .module_count = 1,
     .word_count = 2,
     .marker_pool_count = 2,

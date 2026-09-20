@@ -2232,18 +2232,26 @@ pub const Context = struct {
     }
 
     /// Record which runs of `instructions` were copied out of `inline`-marked words, so a raise
-    /// inside one can name the word whose call the copy replaced.
+    /// inside one can name the word whose call the copy replaced. `body_source` is the file
+    /// `instructions` belongs to, where the outermost run's own call site sits.
     ///
-    /// The expansion pass calls this for the array it just built, alongside the source stamp and
-    /// the nested-name cache. It is the only writer: a body nothing was inlined into has no entry.
+    /// Two writers call this. The expansion pass records the array it just built, alongside the
+    /// source stamp and the nested-name cache. The image loader records what it decoded, since a
+    /// body installed from an AOT image never reaches the expansion pass. A body nothing was
+    /// inlined into has no entry either way.
     ///
     /// Entries are permanent, so only a body the root arena owns may enter. A body built on a task
     /// or scoped-eval arena dies with it, and its key would then falsely match a later unrelated
     /// allocation at the same address.
-    pub fn recordInlineRegions(self: *Context, instructions: []const Instruction, regions: []const InlineRegion) !void {
+    pub fn recordInlineRegions(
+        self: *Context,
+        instructions: []const Instruction,
+        body_source: []const u8,
+        regions: []const InlineRegion,
+    ) !void {
         if (instructions.len == 0) return;
         if (self.stateTarget() != self.rootContext()) return;
-        try self.inline_regions.record(@intFromPtr(instructions.ptr), regions);
+        try self.inline_regions.record(@intFromPtr(instructions.ptr), body_source, regions);
     }
 
     /// The inlined runs of `instructions`, or null for a body nothing was inlined into.
@@ -8290,8 +8298,7 @@ pub const Context = struct {
     fn pendInlineRegionFrames(self: *Context, body: []const Instruction, idx: usize) void {
         const set = self.inlineRegionsFor(body) orelse return;
 
-        const body_file = self.quotationBodySource(body) orelse self.current_source;
-        var frames = set.framesAt(idx, body_file);
+        var frames = set.framesAt(idx);
         var innermost = true;
 
         while (frames.next()) |frame| {

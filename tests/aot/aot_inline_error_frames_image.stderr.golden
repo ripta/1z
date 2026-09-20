@@ -1,0 +1,4 @@
+aot_inline_error_frames_image_lib.1z:5: error 'type-mismatch' expected string or byte-array, got fixnum 42 at word 'stream-write'
+  stack effect: ( stream bytes -- n )
+  called from fixtures/aot_inline_error_frames_image_caller.1z:9: inner
+  called from tests/aot/aot_inline_error_frames_image.1z:14: call

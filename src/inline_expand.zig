@@ -66,7 +66,7 @@ pub fn expandBody(
 
     // Recorded here rather than by the caller, because the list is scratch that dies with the
     // expander. The table copies what it keeps.
-    try ctx.recordInlineRegions(expanded, ex.regions.items);
+    try ctx.recordInlineRegions(expanded, caller_file, ex.regions.items);
 
     // Each container literal in the new body is a second owning reference, whichever body it was
     // copied from. The array it came from keeps its own registration and releases the first; the
@@ -812,7 +812,9 @@ test "a chain records every level, innermost first" {
     // chain would name only the word `three` was written against.
     const body = ctx.lookupWord("three").?.action.compound;
     const set = ctx.inlineRegionsFor(body) orelse return error.TestExpectedRegions;
-    var frames = set.framesAt(0, here);
+    try testing.expectEqualStrings(here, set.body_source);
+
+    var frames = set.framesAt(0);
 
     const inner = frames.next() orelse return error.TestExpectedFrame;
     try testing.expectEqualStrings("one", inner.word_name);
@@ -821,6 +823,9 @@ test "a chain records every level, innermost first" {
     const outer = frames.next() orelse return error.TestExpectedFrame;
     try testing.expectEqualStrings("two", outer.word_name);
     try testing.expectEqual(@as(u32, 3), outer.call_line);
+
+    // Nothing encloses the outermost run, so its call site sits in the body the set describes.
+    try testing.expectEqualStrings(here, outer.call_source);
 
     try testing.expect(frames.next() == null);
 }

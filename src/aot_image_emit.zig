@@ -72,7 +72,7 @@ pub const flag_bit_image_decode: u8 = 1 << 6;
 
 /// Format version emitted into `onez_image_header.format_version`. Bumped
 /// when the on-disk layout changes in a way the loader cannot ignore.
-pub const format_version: u32 = 20;
+pub const format_version: u32 = 21;
 
 /// Counts that the metadata emitter plumbs back into `AotMetadata`. The
 /// codegen knows these as it walks the manifest, so emitting them here
@@ -319,6 +319,10 @@ pub fn emitImageCFromCollection(
     defer allocator.free(word_image_decode);
     @memset(word_image_decode, false);
 
+    const word_has_inline_regions = try allocator.alloc(bool, manifest.entries.len);
+    defer allocator.free(word_has_inline_regions);
+    @memset(word_has_inline_regions, false);
+
     try emitMarkerPool(out, allocator, marker_pool, &stats);
     try emitTypeValueSlotTable(out, allocator, effect_table);
     try emitMarkerSlotTable(out, allocator, effect_table);
@@ -352,8 +356,9 @@ pub fn emitImageCFromCollection(
     defer call_targets.deinit(allocator);
     if (!options.metadata_only) {
         try emitWordBodyBytecode(out, allocator, ctx, manifest, word_body_lens, word_image_decode, effect_table, struct_index, &call_targets);
+        try emitWordInlineRegions(out, allocator, ctx, manifest, word_body_lens, word_has_inline_regions);
     }
-    try emitModuleAndWordTables(out, allocator, ctx, manifest, word_id_lookup, marker_pool, effect_table, word_to_typevalue_slot, word_body_lens, word_image_decode, &stats);
+    try emitModuleAndWordTables(out, allocator, ctx, manifest, word_id_lookup, marker_pool, effect_table, word_to_typevalue_slot, word_body_lens, word_image_decode, word_has_inline_regions, &stats);
     try emitReifiedQuotationModules(out, allocator, reified_quotation_modules);
     const module_dep_count = try emitModuleDepTable(out, allocator, ctx, manifest);
     const entry_import_count = try emitEntryImportTable(out, allocator, ctx, manifest, entry_imports);
@@ -3606,6 +3611,29 @@ fn emitTypeDeclarations(
         \\    uint32_t output_count;
         \\} onez_image_stack_effect_t;
         \\
+        \\/* One run of a word's body that inline expansion copied out of another word. The call   */
+        \\/* the run replaced is gone, so nothing pushes that word's frame; the loader rebuilds    */
+        \\/* the table the error path reads these back out of, keyed by the decoded body.          */
+        \\typedef struct onez_image_inline_region {
+        \\    const char *word_name;    /* The word the run's code was copied out of.             */
+        \\    const char *body_source;  /* The file that word's code was written in.              */
+        \\    uint32_t word_name_len;
+        \\    uint32_t body_source_len;
+        \\    uint32_t start;           /* Half-open instruction range [start, end) in the body.  */
+        \\    uint32_t end;
+        \\    uint32_t call_line;       /* Where the call the run replaced sat.                   */
+        \\    uint32_t call_column;
+        \\} onez_image_inline_region_t;
+        \\
+        \\/* Every run of one word's body, plus the file that body itself belongs to, which is     */
+        \\/* where the outermost run's own call site sits.                                         */
+        \\typedef struct onez_image_inline_region_set {
+        \\    const char *body_source;
+        \\    const struct onez_image_inline_region *regions;
+        \\    uint32_t body_source_len;
+        \\    uint32_t region_count;
+        \\} onez_image_inline_region_set_t;
+        \\
         \\typedef struct onez_image_word {
         \\    const char *name;
         \\    uint32_t name_len;
@@ -3639,6 +3667,8 @@ fn emitTypeDeclarations(
         \\    uint32_t provenance_parent_len;
         \\    const char *provenance_role;
         \\    uint32_t provenance_role_len;
+        \\    /* NULL for a body nothing was inlined into, which is nearly every body.       */
+        \\    const struct onez_image_inline_region_set *inline_regions;
         \\} onez_image_word_t;
         \\
         \\/* TypeValue static C data schema. Every TypeValue reachable from any module-private word's body or
@@ -4218,6 +4248,101 @@ fn writeWordBodySym(
     try out.appendSlice(allocator, s);
 }
 
+/// Emit one region array and one set row per word whose body carries runs copied out of an
+/// `inline` word, flagging the row in `word_has_inline_regions`.
+///
+/// A runtime-image body is installed past `defineWord`, where the expansion pass records these,
+/// so its runs have to travel here and be rebuilt against the decoded body.
+///
+/// A row with no body bytecode is skipped. Its indices would name instructions in a body the image
+/// does not carry, which covers the type-publishing words whose bodies the loader rewrites.
+fn emitWordInlineRegions(
+    out: *std.ArrayListUnmanaged(u8),
+    allocator: Allocator,
+    ctx: *const Context,
+    manifest: ImageManifest,
+    word_body_lens: []const u32,
+    word_has_inline_regions: []bool,
+) Allocator.Error!void {
+    if (manifest.entries.len == 0) return;
+
+    var emitted_any = false;
+    var num_buf: [32]u8 = undefined;
+
+    for (manifest.entries, 0..) |entry, idx| {
+        if (word_body_lens[idx] == 0) continue;
+        const mw_ptr = lookupModuleWord(ctx, entry) orelse continue;
+        const body = switch (mw_ptr.action) {
+            .compound => |b| b,
+            .native, .host_callback => continue,
+        };
+        const set = ctx.inlineRegionsFor(body) orelse continue;
+
+        try out.appendSlice(allocator, "static const onez_image_inline_region_t ");
+        try writeWordInlineRegionsSym(out, allocator, idx);
+        try out.appendSlice(allocator, "[] = {\n");
+
+        for (set.regions) |region| {
+            try out.appendSlice(allocator, "    { .word_name = ");
+            try emitCStringLiteral(out, allocator, region.word_name);
+            try out.appendSlice(allocator, ", .body_source = ");
+            try emitCStringLiteral(out, allocator, region.body_source);
+            try out.appendSlice(allocator, ", .word_name_len = ");
+            try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{region.word_name.len}) catch unreachable);
+            try out.appendSlice(allocator, ", .body_source_len = ");
+            try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{region.body_source.len}) catch unreachable);
+            try out.appendSlice(allocator, ", .start = ");
+            try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}u", .{region.start}) catch unreachable);
+            try out.appendSlice(allocator, ", .end = ");
+            try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}u", .{region.end}) catch unreachable);
+            try out.appendSlice(allocator, ", .call_line = ");
+            try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}u", .{region.call_line}) catch unreachable);
+            try out.appendSlice(allocator, ", .call_column = ");
+            try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}u", .{region.call_column}) catch unreachable);
+            try out.appendSlice(allocator, " },\n");
+        }
+
+        try out.appendSlice(allocator, "};\n");
+
+        try out.appendSlice(allocator, "static const onez_image_inline_region_set_t ");
+        try writeWordInlineRegionSetSym(out, allocator, idx);
+        try out.appendSlice(allocator, " = { .body_source = ");
+        try emitCStringLiteral(out, allocator, set.body_source);
+        try out.appendSlice(allocator, ", .regions = ");
+        try writeWordInlineRegionsSym(out, allocator, idx);
+        try out.appendSlice(allocator, ", .body_source_len = ");
+        try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{set.body_source.len}) catch unreachable);
+        try out.appendSlice(allocator, ", .region_count = ");
+        try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}u", .{set.regions.len}) catch unreachable);
+        try out.appendSlice(allocator, " };\n");
+
+        word_has_inline_regions[idx] = true;
+        emitted_any = true;
+    }
+
+    if (emitted_any) try out.append(allocator, '\n');
+}
+
+fn writeWordInlineRegionsSym(
+    out: *std.ArrayListUnmanaged(u8),
+    allocator: Allocator,
+    idx: usize,
+) Allocator.Error!void {
+    var buf: [48]u8 = undefined;
+    const s = std.fmt.bufPrint(&buf, "onez_image_w_{d}_inline_regions", .{idx}) catch unreachable;
+    try out.appendSlice(allocator, s);
+}
+
+fn writeWordInlineRegionSetSym(
+    out: *std.ArrayListUnmanaged(u8),
+    allocator: Allocator,
+    idx: usize,
+) Allocator.Error!void {
+    var buf: [48]u8 = undefined;
+    const s = std.fmt.bufPrint(&buf, "onez_image_w_{d}_inline_region_set", .{idx}) catch unreachable;
+    try out.appendSlice(allocator, s);
+}
+
 /// Emit `onez_image_modules[]` and `onez_image_words[]` along with
 /// each word's marker pointer array. Word name strings are emitted
 /// up front by `emitWordNameStrings` so the typevalue table (emitted
@@ -4233,6 +4358,7 @@ fn emitModuleAndWordTables(
     word_to_typevalue_slot: []const u32,
     word_body_lens: []const u32,
     word_image_decode: []const bool,
+    word_has_inline_regions: []const bool,
     stats: *ImageEmissionStats,
 ) Allocator.Error!void {
     if (manifest.entries.len == 0) {
@@ -4437,6 +4563,13 @@ fn emitModuleAndWordTables(
                 \\        .provenance_role_len = 0,
                 \\
             );
+        }
+        if (word_has_inline_regions[idx]) {
+            try out.appendSlice(allocator, "        .inline_regions = &");
+            try writeWordInlineRegionSetSym(out, allocator, idx);
+            try out.appendSlice(allocator, ",\n");
+        } else {
+            try out.appendSlice(allocator, "        .inline_regions = NULL,\n");
         }
         try out.appendSlice(allocator,
             \\    },
@@ -6672,6 +6805,93 @@ test "emitImageC: no once literal emits no once slot table" {
     // when no array is emitted, so a plain substring search mis-triggers on those.
     try testing.expect(std.mem.indexOf(u8, out.items, "*onez_image_once_cell_slots[") == null);
     try testing.expect(std.mem.indexOf(u8, out.items, ".once_cell_descriptions = NULL") != null);
+}
+
+/// A one-module cache holding `outer` over `instrs`, for the two inline-region tests below.
+fn putInlineRegionModule(ctx: *Context, instrs: []const Instruction) !void {
+    const arena = ctx.quotationAllocator();
+
+    const demo = try arena.create(Module);
+    demo.* = .{ .name = "demo", .words = .{} };
+    try demo.words.put(arena, "outer", .{ .action = .{ .compound = instrs } });
+
+    const cache_alloc = ctx.module_cache_value.header.allocator;
+    try ctx.module_cache_value.map.put(cache_alloc, try cache_alloc.dupe(u8, "demo"), .{ .module = demo });
+}
+
+test "emitImageC: a word whose body carries inlined runs emits the set its row points at" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+    const arena = ctx.quotationAllocator();
+
+    const instrs = try arena.dupe(Instruction, &.{
+        .{ .op = .{ .call_word = "+" }, .line = 2, .column = 5 },
+        .{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 2, .column = 9 },
+    });
+    try putInlineRegionModule(&ctx, instrs);
+
+    // The shape the expansion pass records: one run over the whole body, copied out of `inner`.
+    try ctx.recordInlineRegions(instrs, "demo.1z", &.{.{
+        .start = 0,
+        .end = 2,
+        .word_name = "inner",
+        .body_source = "lib.1z",
+        .call_line = 9,
+        .call_column = 3,
+    }});
+
+    var manifest = try aot_image.buildImageManifest(&ctx, testing.allocator);
+    defer manifest.deinit(testing.allocator);
+
+    var lookup: std.StringHashMapUnmanaged(u32) = .{};
+    defer lookup.deinit(testing.allocator);
+
+    var out: std.ArrayListUnmanaged(u8) = .{};
+    defer out.deinit(testing.allocator);
+
+    _ = try emitImageC(&out, testing.allocator, &ctx, manifest, &lookup, .{}, &.{});
+
+    try testing.expect(std.mem.indexOf(u8, out.items, ".word_name = \"inner\"") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, ".body_source = \"lib.1z\"") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, ".start = 0u, .end = 2u") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, ".call_line = 9u, .call_column = 3u") != null);
+
+    // The body's own file rides the set, since it is where the outermost run's call site sits.
+    try testing.expect(std.mem.indexOf(
+        u8,
+        out.items,
+        "onez_image_w_0_inline_region_set = { .body_source = \"demo.1z\"",
+    ) != null);
+    try testing.expect(std.mem.indexOf(
+        u8,
+        out.items,
+        ".inline_regions = &onez_image_w_0_inline_region_set",
+    ) != null);
+}
+
+test "emitImageC: a body nothing was inlined into carries no region set" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+    const arena = ctx.quotationAllocator();
+
+    const instrs = try arena.dupe(Instruction, &.{
+        .{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 0, .column = 0 },
+    });
+    try putInlineRegionModule(&ctx, instrs);
+
+    var manifest = try aot_image.buildImageManifest(&ctx, testing.allocator);
+    defer manifest.deinit(testing.allocator);
+
+    var lookup: std.StringHashMapUnmanaged(u32) = .{};
+    defer lookup.deinit(testing.allocator);
+
+    var out: std.ArrayListUnmanaged(u8) = .{};
+    defer out.deinit(testing.allocator);
+
+    _ = try emitImageC(&out, testing.allocator, &ctx, manifest, &lookup, .{}, &.{});
+
+    try testing.expect(std.mem.indexOf(u8, out.items, ".inline_regions = NULL") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_w_0_inline_region_set") == null);
 }
 
 test "emitImageC: module-attributed parameter default emits module fields" {

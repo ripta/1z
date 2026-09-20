@@ -13433,12 +13433,7 @@ fn inlineRegionFrames(state: *CompileState, site: InlineSite) ?inline_region_tab
     if (site.body.len == 0) return null;
 
     const set = ictx.inlineRegionsFor(site.body) orelse return null;
-
-    // The outermost run's call site sits in `site.body` itself, whose file is its own stamp
-    // rather than `state.source_file`: a quotation body or a splice below this level has already
-    // moved that.
-    const body_file = ictx.quotationBodySource(site.body) orelse state.source_file orelse "";
-    return set.framesAt(site.index, body_file);
+    return set.framesAt(site.index);
 }
 
 /// The file the instruction being compiled was written in, when it was copied out of an `inline`

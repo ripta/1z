@@ -1,0 +1,5 @@
+\ The `inline` word half of aot_inline_error_frames_image. It lives apart from the word that calls
+\ it so the golden pins two different files: the one this code was written in, and the one the call
+\ it replaced sat in.
+
+inner: ( s v -- n ) const inline [ stream-write 0 + ] ;

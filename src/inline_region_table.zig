@@ -52,18 +52,22 @@ pub const Frame = struct {
 pub const InlineRegionSet = struct {
     regions: []const InlineRegion,
 
-    /// The rows an error at `index` needs, innermost first.
+    /// The file of the body these runs were copied into, which is where the outermost run's own
+    /// call site sits.
     ///
-    /// `body_file` is the file of the body these runs were copied into, which is where the
-    /// outermost run's own call site sits.
-    pub fn framesAt(self: InlineRegionSet, index: usize, body_file: []const u8) FrameIterator {
-        return .{ .set = self, .index = index, .body_file = body_file };
+    /// Carried here rather than derived by the reader. A body the image decoded carries no source
+    /// stamp, and the executing file is not a substitute: a tail call runs a body in place under
+    /// the caller's file.
+    body_source: []const u8,
+
+    /// The rows an error at `index` needs, innermost first.
+    pub fn framesAt(self: InlineRegionSet, index: usize) FrameIterator {
+        return .{ .set = self, .index = index };
     }
 
     pub const FrameIterator = struct {
         set: InlineRegionSet,
         index: usize,
-        body_file: []const u8,
         at: usize = 0,
 
         pub fn next(self: *FrameIterator) ?Frame {
@@ -93,7 +97,7 @@ pub const InlineRegionSet = struct {
             for (self.set.regions[self.at..]) |outer| {
                 if (outer.contains(self.index)) return outer.body_source;
             }
-            return self.body_file;
+            return self.set.body_source;
         }
     };
 };
@@ -106,7 +110,8 @@ pub const InlineRegionSet = struct {
 /// failing instruction's index, and synthesizes one frame per run covering it. Nothing reads the
 /// table while a program is running normally.
 ///
-/// Only the expansion pass fills it, so a body no `inline` word reached has no entry, and the
+/// The expansion pass fills it, and the AOT image loader refills it for the bodies it decoded,
+/// which never reach that pass. A body no `inline` word reached has no entry either way, so the
 /// overwhelming majority of programs leave the table empty.
 ///
 /// Entries are permanent, so only process-lifetime keys may enter: a body built on a task or
@@ -163,10 +168,17 @@ pub const InlineRegionTable = struct {
         return set.*;
     }
 
-    /// Record `regions` at `key`, unless the body already carries a set.
+    /// Record `regions` at `key`, unless the body already carries a set. `body_source` is the file
+    /// the body at `key` belongs to.
     ///
-    /// The regions are copied, along with the strings they point at.
-    pub fn record(self: *InlineRegionTable, key: usize, regions: []const InlineRegion) error{OutOfMemory}!void {
+    /// Everything kept is copied onto the arena, `body_source` and the regions' own strings
+    /// included.
+    pub fn record(
+        self: *InlineRegionTable,
+        key: usize,
+        body_source: []const u8,
+        regions: []const InlineRegion,
+    ) error{OutOfMemory}!void {
         std.debug.assert(key != 0);
         if (regions.len == 0) return;
 
@@ -186,7 +198,7 @@ pub const InlineRegionTable = struct {
         }
 
         const set = try alloc.create(InlineRegionSet);
-        set.* = .{ .regions = owned };
+        set.* = .{ .regions = owned, .body_source = try alloc.dupe(u8, body_source) };
         _ = try self.map.insert(key, set);
     }
 
@@ -208,7 +220,8 @@ pub const InlineRegionTable = struct {
 /// `FrameIterator` reads a list in order and takes the next covering run as the enclosing one, so
 /// a list that broke this would report a frame's call site against the wrong file. The choke point
 /// is `record`, the one place a set is published; the expander's recording order is what has to
-/// hold it, in `Expander.appendBody` and `Expander.recordRegion`.
+/// hold it, in `Expander.appendBody` and `Expander.recordRegion`. An AOT image emits that order
+/// verbatim, so a set the loader replays inherits the property rather than re-establishing it.
 fn assertNested(regions: []const InlineRegion) void {
     if (comptime builtin.mode != .Debug) return;
 
@@ -239,10 +252,11 @@ test "InlineRegionTable: a recorded body resolves and an unrecorded one misses" 
 
     try testing.expect(table.lookup(0x1000) == null);
 
-    try table.record(0x1000, &.{region(0, 2, "doubled", "a.1z", 7)});
+    try table.record(0x1000, "caller.1z", &.{region(0, 2, "doubled", "a.1z", 7)});
 
     const set = table.lookup(0x1000) orelse return error.TestExpectedEntry;
     try testing.expectEqual(@as(usize, 1), set.regions.len);
+    try testing.expectEqualStrings("caller.1z", set.body_source);
     try testing.expectEqualStrings("doubled", set.regions[0].word_name);
     try testing.expectEqualStrings("a.1z", set.regions[0].body_source);
     try testing.expectEqual(@as(u32, 7), set.regions[0].call_line);
@@ -256,7 +270,7 @@ test "InlineRegionTable: an empty region list takes no slot" {
     const table = try InlineRegionTable.create(testing.allocator);
     defer table.destroy();
 
-    try table.record(0x1000, &.{});
+    try table.record(0x1000, "caller.1z", &.{});
 
     try testing.expect(table.lookup(0x1000) == null);
     try testing.expectEqual(@as(usize, 0), table.count());
@@ -267,24 +281,27 @@ test "InlineRegionTable: the names and paths are copied, not aliased" {
     defer table.destroy();
 
     // A callee's name can belong to a local frame, and a file path to the caller of a module
-    // load. Both are overwritten here to stand in for that.
+    // load. All three are overwritten here to stand in for that.
     var name = "doubled".*;
     var source = "a.1z".*;
-    try table.record(0x1000, &.{region(0, 2, &name, &source, 7)});
+    var body = "caller.1z".*;
+    try table.record(0x1000, &body, &.{region(0, 2, &name, &source, 7)});
     @memset(&name, 'x');
     @memset(&source, 'x');
+    @memset(&body, 'x');
 
     const set = table.lookup(0x1000) orelse return error.TestExpectedEntry;
     try testing.expectEqualStrings("doubled", set.regions[0].word_name);
     try testing.expectEqualStrings("a.1z", set.regions[0].body_source);
+    try testing.expectEqualStrings("caller.1z", set.body_source);
 }
 
 test "InlineRegionTable: the first record wins" {
     const table = try InlineRegionTable.create(testing.allocator);
     defer table.destroy();
 
-    try table.record(0x1000, &.{region(0, 2, "first", "a.1z", 1)});
-    try table.record(0x1000, &.{region(0, 2, "second", "a.1z", 2)});
+    try table.record(0x1000, "caller.1z", &.{region(0, 2, "first", "a.1z", 1)});
+    try table.record(0x1000, "caller.1z", &.{region(0, 2, "second", "a.1z", 2)});
 
     const set = table.lookup(0x1000) orelse return error.TestExpectedEntry;
     try testing.expectEqualStrings("first", set.regions[0].word_name);
@@ -298,7 +315,7 @@ test "InlineRegionTable: growth preserves every entry" {
     const entries: usize = 500;
     var key: usize = 1;
     while (key <= entries) : (key += 1) {
-        try table.record(key * 8, &.{region(0, 1, if (key % 2 == 0) "even" else "odd", "a.1z", 1)});
+        try table.record(key * 8, "caller.1z", &.{region(0, 1, if (key % 2 == 0) "even" else "odd", "a.1z", 1)});
     }
 
     key = 1;
@@ -317,13 +334,13 @@ test "InlineRegionTable: growth preserves every entry" {
 }
 
 test "InlineRegionSet: framesAt yields the nested runs innermost first" {
-    const set: InlineRegionSet = .{ .regions = &.{
+    const set: InlineRegionSet = .{ .body_source = "caller.1z", .regions = &.{
         region(0, 1, "one", "one.1z", 2),
         region(0, 1, "two", "two.1z", 3),
         region(1, 3, "other", "other.1z", 4),
     } };
 
-    var at_zero = set.framesAt(0, "caller.1z");
+    var at_zero = set.framesAt(0);
 
     const inner = at_zero.next() orelse return error.TestExpectedFrame;
     try testing.expectEqualStrings("one", inner.word_name);
@@ -344,17 +361,17 @@ test "InlineRegionSet: framesAt yields the nested runs innermost first" {
 }
 
 test "InlineRegionSet: framesAt skips a run that does not cover the index" {
-    const set: InlineRegionSet = .{ .regions = &.{
+    const set: InlineRegionSet = .{ .body_source = "caller.1z", .regions = &.{
         region(0, 1, "one", "one.1z", 2),
         region(1, 3, "other", "other.1z", 4),
     } };
 
-    var at_two = set.framesAt(2, "caller.1z");
+    var at_two = set.framesAt(2);
     const only = at_two.next() orelse return error.TestExpectedFrame;
     try testing.expectEqualStrings("other", only.word_name);
     try testing.expectEqualStrings("caller.1z", only.call_source);
     try testing.expect(at_two.next() == null);
 
-    var at_nine = set.framesAt(9, "caller.1z");
+    var at_nine = set.framesAt(9);
     try testing.expect(at_nine.next() == null);
 }

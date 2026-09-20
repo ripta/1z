@@ -28,6 +28,9 @@ const may_define = @import("may_define.zig");
 const WordProvenance = dictionary_mod.WordProvenance;
 const markers_mod = @import("primitives/markers.zig");
 
+/// The runtime run record, distinct from the image row `ImageInlineRegion` mirrors.
+const InlineRegion = @import("inline_region_table.zig").InlineRegion;
+
 pub const LoaderError = populate_core.LoaderError;
 
 /// `classification` field values from `onez_image_word`.
@@ -41,6 +44,8 @@ pub const Marker = populate_core.Marker;
 pub const StackEffectParam = populate_core.StackEffectParam;
 pub const StackEffect = populate_core.StackEffect;
 pub const Word = populate_core.Word;
+pub const ImageInlineRegion = populate_core.InlineRegion;
+pub const ImageInlineRegionSet = populate_core.InlineRegionSet;
 pub const EnumVariant = populate_core.EnumVariant;
 pub const StructType = populate_core.StructType;
 pub const TypeDescriptor = populate_core.TypeDescriptor;
@@ -239,6 +244,12 @@ pub fn loadIntoContext(
     // bare words against its own module's scope instead of falling through to the module-cache
     // scan.
     try stampWordBodies(ctx, header);
+
+    // Replay the inlined runs, so a raise inside one still names the `inline` word its code came
+    // from.
+    //
+    // The table is keyed by the body's address, which only the decode above makes final.
+    try recordInlineRegions(ctx, header);
 
     // Resolve the reified-quotation module table so `jitPushQuotation` can
     // stamp each decoded escaping-quotation body with its defining module.
@@ -526,6 +537,64 @@ fn stampWordBodies(ctx: *Context, header: *const Header) LoaderError!void {
             ctx.stampQuotationBodies(mw.action.compound, module_ptr) catch
                 return LoaderError.OutOfMemory;
         }
+    }
+}
+
+/// Rebuild the inlined-run table over every decoded word body that carries runs.
+///
+/// The expansion pass fills that table from `defineWord`, which a body installed from the image
+/// never reaches, so the runs travel in the image and are replayed here.
+///
+/// Runs after `decodeWordBodies`, the first point where every body is final and its address is the
+/// one the error path will look up.
+fn recordInlineRegions(ctx: *Context, header: *const Header) LoaderError!void {
+    if (header.word_count == 0) return;
+    const words = header.words orelse return;
+    const modules = header.modules orelse return;
+
+    var scratch: std.ArrayListUnmanaged(InlineRegion) = .{};
+    defer scratch.deinit(ctx.allocator);
+
+    var wi: u32 = 0;
+    while (wi < header.word_count) : (wi += 1) {
+        const w = words[wi];
+        const set = w.inline_regions orelse continue;
+        if (w.module_idx >= header.module_count) return LoaderError.BadWordIndex;
+
+        const m = modules[w.module_idx];
+        const module_name = nameSlice(m.name, m.name_len);
+        const word_name = nameSlice(w.name, w.name_len);
+
+        const cached = ctx.module_cache_value.map.get(module_name) orelse continue;
+        if (cached != .module) continue;
+        const mw = if (w.flags & aot_image_emit.flag_bit_module_private != 0)
+            cached.module.deps.get(word_name) orelse continue
+        else
+            cached.module.words.get(word_name) orelse continue;
+        const body = switch (mw.action) {
+            .compound => |b| b,
+            .native, .host_callback => continue,
+        };
+
+        scratch.clearRetainingCapacity();
+        var ri: u32 = 0;
+        while (ri < set.region_count) : (ri += 1) {
+            const row = set.regions[ri];
+            // A run naming instructions the body does not have is a corrupt image. Failing the
+            // load beats booting a binary whose traces name the wrong word.
+            if (row.start > row.end or row.end > body.len) return LoaderError.BadInlineRegion;
+            scratch.append(ctx.allocator, .{
+                .start = row.start,
+                .end = row.end,
+                .word_name = nameSlice(row.word_name, row.word_name_len),
+                .body_source = nameSlice(row.body_source, row.body_source_len),
+                .call_line = row.call_line,
+                .call_column = row.call_column,
+            }) catch return LoaderError.OutOfMemory;
+        }
+
+        const body_source = nameSlice(set.body_source, set.body_source_len);
+        ctx.recordInlineRegions(body, body_source, scratch.items) catch return LoaderError.OutOfMemory;
     }
 }
 
@@ -1765,6 +1834,7 @@ fn wordRow(name: []const u8, word_id: u32, module_idx: u32) Word {
         .provenance_parent_len = 0,
         .provenance_role = null,
         .provenance_role_len = 0,
+        .inline_regions = null,
     };
 }
 
@@ -3102,6 +3172,133 @@ test "populateOnceCellSlots: an uncompiled body leaves the code pointer null" {
     try testing.expectEqual(@as(?*const anyopaque, null), cell.body.code_ptr);
     // The decoded body is still there, so the interpreted path can run what did not compile.
     try testing.expectEqual(@as(usize, 1), cell.body.instructions.len);
+}
+
+/// A word row carrying `body` as bytecode and `set` as its inlined runs, for the two tests below.
+fn inlineRegionWordRow(name: []const u8, encoded: []const u8, set: *const ImageInlineRegionSet) Word {
+    var w = wordRow(name, 0, 0);
+    w.body_bytecode = encoded.ptr;
+    w.body_bytecode_len = @intCast(encoded.len);
+    w.inline_regions = set;
+    return w;
+}
+
+test "recordInlineRegions: a row's runs reach the table keyed by the decoded body" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    const body = [_]value_mod.Instruction{
+        .{ .op = .{ .call_word = "stream-write" }, .line = 2, .column = 5 },
+        .{ .op = .{ .push_literal = .{ .fixnum = 0 } }, .line = 2, .column = 18 },
+    };
+    var encoded: std.ArrayListUnmanaged(u8) = .{};
+    defer encoded.deinit(testing.allocator);
+    try instruction_bytecode.serializeInstructionsInto(&encoded, &body, null, testing.allocator, null, null);
+
+    const m_name = "demo";
+    const w_name = "outer";
+    const inner_name = "inner";
+
+    // Two files, because the set's and the run's are different quantities: the run's is where the
+    // copied code was written, the set's is where the call it replaced sat. One string for both
+    // would pass on a loader that read either into the other's slot.
+    const caller_file = "demo.1z";
+    const lib = "lib.1z";
+
+    const regions = [_]ImageInlineRegion{.{
+        .word_name = inner_name.ptr,
+        .body_source = lib.ptr,
+        .word_name_len = inner_name.len,
+        .body_source_len = lib.len,
+        .start = 0,
+        .end = 2,
+        .call_line = 9,
+        .call_column = 3,
+    }};
+    const set: ImageInlineRegionSet = .{
+        .body_source = caller_file.ptr,
+        .regions = &regions,
+        .body_source_len = caller_file.len,
+        .region_count = regions.len,
+    };
+
+    const words = [_]Word{inlineRegionWordRow(w_name, encoded.items, &set)};
+    const modules = [_]Module{
+        .{ .name = m_name.ptr, .name_len = m_name.len, .word_start_idx = 0, .word_count = 1 },
+    };
+    var header = emptyHeader();
+    header.module_count = 1;
+    header.word_count = 1;
+    header.modules = &modules;
+    header.words = &words;
+
+    try loadIntoContext(&ctx, &header, .{}, null);
+
+    const cached = ctx.module_cache_value.map.get(m_name) orelse return error.TestExpectedModule;
+    const mw = cached.module.words.get(w_name) orelse return error.TestExpectedWord;
+    const recorded = ctx.inlineRegionsFor(mw.action.compound) orelse return error.TestExpectedRegions;
+
+    try testing.expectEqualStrings(caller_file, recorded.body_source);
+    try testing.expectEqual(@as(usize, 1), recorded.regions.len);
+    try testing.expectEqualStrings(inner_name, recorded.regions[0].word_name);
+    try testing.expectEqualStrings(lib, recorded.regions[0].body_source);
+    try testing.expectEqual(@as(u32, 9), recorded.regions[0].call_line);
+    try testing.expectEqual(@as(u32, 3), recorded.regions[0].call_column);
+
+    // The row an error inside the run would queue, which is what the whole round trip is for.
+    var frames = recorded.framesAt(0);
+    const frame = frames.next() orelse return error.TestExpectedFrame;
+    try testing.expectEqualStrings(inner_name, frame.word_name);
+    try testing.expectEqualStrings(lib, frame.body_source);
+    try testing.expectEqualStrings(caller_file, frame.call_source);
+    try testing.expect(frames.next() == null);
+}
+
+test "recordInlineRegions: a run reaching past the decoded body fails the load" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    const body = [_]value_mod.Instruction{
+        .{ .op = .{ .push_literal = .{ .fixnum = 0 } }, .line = 1, .column = 1 },
+    };
+    var encoded: std.ArrayListUnmanaged(u8) = .{};
+    defer encoded.deinit(testing.allocator);
+    try instruction_bytecode.serializeInstructionsInto(&encoded, &body, null, testing.allocator, null, null);
+
+    const m_name = "demo";
+    const w_name = "outer";
+    const inner_name = "inner";
+    const lib = "lib.1z";
+
+    // The body decodes to one instruction, so this run names an index it does not have.
+    const regions = [_]ImageInlineRegion{.{
+        .word_name = inner_name.ptr,
+        .body_source = lib.ptr,
+        .word_name_len = inner_name.len,
+        .body_source_len = lib.len,
+        .start = 0,
+        .end = 4,
+        .call_line = 9,
+        .call_column = 3,
+    }};
+    const set: ImageInlineRegionSet = .{
+        .body_source = lib.ptr,
+        .regions = &regions,
+        .body_source_len = lib.len,
+        .region_count = regions.len,
+    };
+
+    const words = [_]Word{inlineRegionWordRow(w_name, encoded.items, &set)};
+    const modules = [_]Module{
+        .{ .name = m_name.ptr, .name_len = m_name.len, .word_start_idx = 0, .word_count = 1 },
+    };
+    var header = emptyHeader();
+    header.module_count = 1;
+    header.word_count = 1;
+    header.modules = &modules;
+    header.words = &words;
+
+    try testing.expectError(LoaderError.BadInlineRegion, loadIntoContext(&ctx, &header, .{}, null));
 }
 
 test "populateReifiedQuotationModules: keys rows by data pointer" {

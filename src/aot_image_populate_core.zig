@@ -33,6 +33,7 @@ pub const LoaderError = error{
     TruncatedBytecode,
     UnknownTag,
     UnresolvedSlot,
+    BadInlineRegion,
     OutOfMemory,
 };
 
@@ -109,6 +110,30 @@ pub const Word = extern struct {
     provenance_parent_len: u32,
     provenance_role: ?[*]const u8,
     provenance_role_len: u32,
+    inline_regions: ?*const InlineRegionSet,
+};
+
+/// Zig mirror of the C `onez_image_inline_region_t` row, which the loader turns into an
+/// `inline_region_table.InlineRegion`. That type documents what the fields mean.
+pub const InlineRegion = extern struct {
+    word_name: [*]const u8,
+    body_source: [*]const u8,
+    word_name_len: u32,
+    body_source_len: u32,
+    start: u32,
+    end: u32,
+    call_line: u32,
+    call_column: u32,
+};
+
+/// Zig mirror of the C `onez_image_inline_region_set_t` row: every run of one word's body, plus
+/// the file that body itself belongs to. The loader turns it into an
+/// `inline_region_table.InlineRegionSet`.
+pub const InlineRegionSet = extern struct {
+    body_source: [*]const u8,
+    regions: [*]const InlineRegion,
+    body_source_len: u32,
+    region_count: u32,
 };
 
 /// Zig mirror of the C `onez_image_enum_variant_t` row.
