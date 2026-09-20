@@ -35,10 +35,6 @@ AOT_TIMEOUT ?= 10
 # measured 22.3s in a fully uncached -j14 pass against 8s standalone.
 AOT_BUILD_TIMEOUT ?= $(shell expr $(TEST_CASE_TIMEOUT) \* 4)
 
-# capi-test runs the full unit suite twice, once each for the hosted and wasm
-# C-API surfaces, under a single timeout
-CAPI_TEST_TIMEOUT ?= $(shell expr $(TARGET_TIMEOUT) \* 2)
-
 ZIG_PREFIX ?= zig-out
 DOCKER_IMAGE ?= gcr.io/$(GCP_PROJECT_ID)/zag:v0.15.2
 TEST_FILTER_ARG = $(if $(TEST_FILTER),-Dtest-filter=$(TEST_FILTER))
@@ -179,7 +175,7 @@ unit-test: ## Run unit tests
 	timeout $(TARGET_TIMEOUT) $(ZIG) build test --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT)
 
 capi-test: ## Run hosted C-API embedding-library unit tests
-	timeout $(CAPI_TEST_TIMEOUT) $(ZIG) build capi-test --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) -Dembed-stdlib=true
+	timeout $(TARGET_TIMEOUT) $(ZIG) build capi-test --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) -Dembed-stdlib=true $(TEST_FILTER_ARG)
 
 capi-release-run: ## Build the embedding example against a ReleaseFast lib1z and run it
 	$(ZIG) build --release=fast --prefix $(ZIG_PREFIX)/release $(ZIG_CPU_ARG)

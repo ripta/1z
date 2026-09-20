@@ -26,7 +26,7 @@ steps:
         mkdir -p /home/build/.cache/zig
         mkdir -p /home/build/.zig-cache
         make build
-        make test TIMEOUT=300 VERBOSE=1
+        make test TARGET_TIMEOUT=300 VERBOSE=1
         make run ARGS=./examples/showcase.1z
 
   - name: '1z-build:local'

@@ -231,6 +231,12 @@ pub fn build(b: *std.Build) void {
     // `capi-test` step rather than `test` because several tests load stdlib
     // modules and need -Dembed-stdlib=true to resolve them without a disk
     // stdlib symlink relative to the test binary.
+    //
+    // The default filter confines the run to src/capi.zig's own tests, the way the
+    // freestanding run above is confined to its own. A test binary otherwise runs every
+    // `test` block in its whole import graph, which here is the entire interpreter suite
+    // a second time. Every one of those is already reached from src/main.zig, so the
+    // `test` and `embed-stdlib-test` steps cover them under both -Dembed-stdlib settings.
     const hosted_capi_test_module = createCommonModule(b, target, optimize, options, b.path("src/capi.zig"), embedded_stdlib_path);
     const hosted_capi_unit_tests = b.addTest(.{
         .root_module = hosted_capi_test_module,
@@ -241,14 +247,15 @@ pub fn build(b: *std.Build) void {
     });
     const run_hosted_capi_unit_tests = b.addRunArtifact(hosted_capi_unit_tests);
     run_hosted_capi_unit_tests.setName("hosted capi unit tests");
-    if (test_filter) |filter| run_hosted_capi_unit_tests.setEnvironmentVariable("ONEZ_TEST_FILTER", filter);
+    run_hosted_capi_unit_tests.setEnvironmentVariable("ONEZ_TEST_FILTER", test_filter orelse "capi.test.");
     restoreHostDeveloperDir(b, run_hosted_capi_unit_tests);
 
     // wasm C-API surface, host-compiled and run natively so its eval/stack/register-word logic
     // is verified by a real test run; the actual wasm32-freestanding cross-compile is checked
     // separately (wasm-freestanding-build), since no wasm runtime exists in this test setup.
     // Needs -Dembed-stdlib=true for the same reason as the hosted capi tests above: onez_init
-    // calls ctx.loadPrelude(null), which resolves through the same stdlib-lookup path.
+    // calls ctx.loadPrelude(null), which resolves through the same stdlib-lookup path. Its
+    // default filter is confined to its own tests on the same grounds.
     const wasm_capi_test_module = createCommonModule(b, target, optimize, options, b.path("src/capi_wasm.zig"), embedded_stdlib_path);
     const wasm_capi_unit_tests = b.addTest(.{
         .root_module = wasm_capi_test_module,
@@ -259,7 +266,7 @@ pub fn build(b: *std.Build) void {
     });
     const run_wasm_capi_unit_tests = b.addRunArtifact(wasm_capi_unit_tests);
     run_wasm_capi_unit_tests.setName("wasm capi unit tests");
-    if (test_filter) |filter| run_wasm_capi_unit_tests.setEnvironmentVariable("ONEZ_TEST_FILTER", filter);
+    run_wasm_capi_unit_tests.setEnvironmentVariable("ONEZ_TEST_FILTER", test_filter orelse "capi_wasm.test.");
     restoreHostDeveloperDir(b, run_wasm_capi_unit_tests);
 
     const capi_test_step = b.step("capi-test", "Run hosted C-API embedding-library unit tests");
