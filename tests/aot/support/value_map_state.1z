@@ -1,0 +1,15 @@
+\ Module-level value-keyed map state for the runtime-image carry. The binding is bracket-less, so
+\ the map is built at module load and the word becomes a literal push the image word table has to
+\ carry.
+\
+\ One entry's value is a quotation calling a module word. The freeze-time walk has to descend into
+\ the map to collect that body and seed its callee, or the dispatched call runs against a word the
+\ build never compiled.
+
+scale: ( n: fixnum -- n: fixnum ) [ 10 * ] ;
+
+(handlers): ( -- vmap ) { { 1 [ scale ] } { { 2 3 } [ 100 + ] } } >value-map ;
+
+\ The declared output is load-bearing under the interpreter lock: it proves `.`'s parameter, which
+\ is what lets a strict build compile the print without a fallback.
+run-handler: ( key n -- n: fixnum ) [ swap (handlers) swap vmap-get call ] ;

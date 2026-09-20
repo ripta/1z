@@ -72,7 +72,7 @@ pub const flag_bit_image_decode: u8 = 1 << 6;
 
 /// Format version emitted into `onez_image_header.format_version`. Bumped
 /// when the on-disk layout changes in a way the loader cannot ignore.
-pub const format_version: u32 = 21;
+pub const format_version: u32 = 22;
 
 /// Counts that the metadata emitter plumbs back into `AotMetadata`. The
 /// codegen knows these as it walks the manifest, so emitting them here
@@ -997,6 +997,16 @@ fn internValueTypeLiterals(
             var iter = h.map.iterator();
             while (iter.next()) |entry| {
                 try internValueTypeLiterals(struct_plans, struct_index, effect_table, entry.value_ptr.*);
+            }
+        },
+        // A value-map key is a Value, so it can be a type carrier needing a slot of its own. The
+        // image serializer reports `NotEncodable` for one that was never interned.
+        .value_map => |m| {
+            for (m.map.keys()) |key| {
+                try internValueTypeLiterals(struct_plans, struct_index, effect_table, key);
+            }
+            for (m.map.values()) |value| {
+                try internValueTypeLiterals(struct_plans, struct_index, effect_table, value);
             }
         },
         .quotation => |q| try internInstructionTypeLiterals(
@@ -6724,6 +6734,43 @@ test "emitImageC: parameter and marker literals create slot tables" {
     try testing.expect(std.mem.indexOf(u8, out.items, "parameter current-locale") != null);
     try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_marker_slots[1]") != null);
     try testing.expect(std.mem.indexOf(u8, out.items, "marker deprecated") != null);
+}
+
+test "emitImageC: a type carrier buried in a value_map reaches its slot table" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+    const arena = ctx.quotationAllocator();
+
+    // A mutable map is slot-encoded, so without the intern walk reaching value-map halves the
+    // image serializer would answer NotEncodable for this body. Keys and values both, since a
+    // value-map key is a Value.
+    const key_map = try value_mod.MutableMap.create(arena);
+    const value_map_entry = try value_mod.MutableMap.create(arena);
+
+    const vm = try value_mod.ValueMap.create(arena);
+    try vm.map.put(arena, .{ .mutable_map = key_map }, .{ .mutable_map = value_map_entry });
+
+    const instrs = try arena.dupe(Instruction, &.{
+        .{ .op = .{ .push_literal = .{ .value_map = vm } }, .line = 0, .column = 0 },
+    });
+    try putTopLevelWord(&ctx, "demo-word", instrs);
+
+    const empty: ImageManifest = .{
+        .entries = &.{},
+        .structural_count = 0,
+        .blob_count = 0,
+        .total_count = 0,
+    };
+
+    var lookup: std.StringHashMapUnmanaged(u32) = .{};
+    defer lookup.deinit(testing.allocator);
+
+    var out: std.ArrayListUnmanaged(u8) = .{};
+    defer out.deinit(testing.allocator);
+
+    const stats = try emitImageC(&out, testing.allocator, &ctx, empty, &lookup, .{}, &.{});
+
+    try testing.expectEqual(@as(u32, 2), stats.mutable_map_slot_count);
 }
 
 test "emitImageC: a once cell reached from two push sites takes one slot" {

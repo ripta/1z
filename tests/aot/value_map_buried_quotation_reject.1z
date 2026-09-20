@@ -1,0 +1,11 @@
+\ The freeze-time walk descends into a value-map, so a quotation stored as one of its values is
+\ seen. Under the interpreter-free lock a metadata-only image carries empty word bodies, so the
+\ module word that quotation calls is unreachable, and the build says so instead of shipping a
+\ binary that traps on the dispatch.
+\
+\ The companion `aot_value_map_module.1z` is the same program built with `--emit-runtime-image`,
+\ which is the route the hint names: the image carries the body and the build succeeds.
+
+use "./support/value_map_state.1z" ;
+
+1 7 run-handler drop

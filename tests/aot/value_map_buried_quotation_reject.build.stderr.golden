@@ -1,0 +1,3 @@
+Error: interpreted quotations reach 1 non-prelude word the compiler did not compile
+  'scale' reached from a quotation in '(handlers)'
+      hint: the build embeds a metadata-only image whose word bodies are empty; rebuild with --emit-runtime-image

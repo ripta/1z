@@ -83,6 +83,11 @@
 //!   reference.
 //! - `19 = once_cell_slot`: image-mode only. `u32 slot_index` resolved
 //!   through `SlotResolutionTables.once_cell_slots`.
+//! - `20 = value_map`: `u32 entry_count | entries[]` where each entry is
+//!   `key | value`. A value-map key is a Value rather than a byte slice, so
+//!   it recurses through this codec instead of carrying the length-prefixed
+//!   run a hash key does. Both halves therefore reach the slot tables in
+//!   image mode.
 //!
 //! All multi-byte integers are little-endian.
 //!
@@ -91,7 +96,7 @@
 //! `push_literal` of `type_val`, `tagged`, `parameter`, or `marker` is
 //! rewritten as `call_word` carrying the value's `name`. The runtime
 //! resolves the name through the rehydrated dictionary. This keeps the
-//! encoder bounded to the ten "simple" Value variants without losing
+//! encoder bounded to the "simple" Value variants without losing
 //! reachability for type values, enum variants, parameter definitions,
 //! and markers.
 //!
@@ -122,6 +127,8 @@ const Parameter = value_mod.Parameter;
 const MutableMap = value_mod.MutableMap;
 const Vector = value_mod.Vector;
 const OnceCell = value_mod.OnceCell;
+const ValueMap = value_mod.ValueMap;
+const ValueEntries = value_mod.ValueEntries;
 
 const stack_effect_mod = @import("stack_effect.zig");
 const StackEffect = stack_effect_mod.StackEffect;
@@ -326,6 +333,9 @@ const value_tag_vector_slot: u8 = 18;
 /// The loader allocates one `OnceCell` per slot and decodes its source body
 /// from the slot's description.
 const value_tag_once_cell_slot: u8 = 19;
+
+/// Immutable value-keyed map, encoded by value.
+const value_tag_value_map: u8 = 20;
 
 /// Sentinel `quotation_id` meaning "no compiled function". Written for every
 /// serialized quotation when no build-time quotation-ID map is supplied (or the
@@ -561,6 +571,15 @@ pub fn serializeValueInto(
                 try serializeValueInto(buf, entry.value_ptr.*, allocator, qid_map, call_targets);
             }
         },
+        .value_map => |m| {
+            try buf.append(allocator, value_tag_value_map);
+            const entry_count: u32 = @intCast(m.map.count());
+            try buf.appendSlice(allocator, std.mem.asBytes(&entry_count));
+            for (m.map.keys(), m.map.values()) |key, value| {
+                try serializeValueInto(buf, key, allocator, qid_map, call_targets);
+                try serializeValueInto(buf, value, allocator, qid_map, call_targets);
+            }
+        },
         // A mutable_map is an identity-bearing, runtime-mutable object: encoding
         // it by value would deserialize to an independent copy that does not
         // share later mutations, so a word body that pushes a parse-time-folded
@@ -667,6 +686,15 @@ pub fn serializeValueIntoForImage(
                 try buf.appendSlice(allocator, std.mem.asBytes(&key_len));
                 try buf.appendSlice(allocator, key);
                 try serializeValueIntoForImage(buf, entry.value_ptr.*, allocator, slot_maps, call_targets);
+            }
+        },
+        .value_map => |m| {
+            try buf.append(allocator, value_tag_value_map);
+            const entry_count: u32 = @intCast(m.map.count());
+            try buf.appendSlice(allocator, std.mem.asBytes(&entry_count));
+            for (m.map.keys(), m.map.values()) |key, value| {
+                try serializeValueIntoForImage(buf, key, allocator, slot_maps, call_targets);
+                try serializeValueIntoForImage(buf, value, allocator, slot_maps, call_targets);
             }
         },
         .quotation => |q| {
@@ -913,6 +941,23 @@ const Decoder = struct {
         return .{ .instructions = instructions, .effect = effect };
     }
 
+    /// Install one decoded value-map entry, keeping the first of two keys that compare equal.
+    ///
+    /// A stream written from a live map holds no duplicate, so this only fires on a malformed one,
+    /// where either rule is arbitrary. First-wins is what `buildFrozenValueMap` does.
+    ///
+    /// The drop releases what a slot-resolved half was retained for. A by-value-decoded key owns a
+    /// raw allocation instead, which `freeDecodedValue` reclaims and this cannot.
+    fn putDecodedValueMapEntry(map: *ValueEntries, key: Value, value: Value) void {
+        const gop = map.getOrPutAssumeCapacity(key);
+        if (gop.found_existing) {
+            container_backing.releaseValue(key);
+            container_backing.releaseValue(value);
+            return;
+        }
+        gop.value_ptr.* = value;
+    }
+
     fn readValue(self: *Decoder) DecodeError!Value {
         if (self.offset >= self.data.len) return self.failTruncated();
         const val_tag = self.data[self.offset];
@@ -995,6 +1040,22 @@ const Decoder = struct {
                     h.map.putAssumeCapacity(key, value);
                 }
                 break :blk .{ .hash = h };
+            },
+            value_tag_value_map => blk: {
+                if (self.offset + 4 > self.data.len) return self.failTruncated();
+                const entry_count = std.mem.readInt(u32, self.data[self.offset..][0..4], .little);
+                self.offset += 4;
+                const m = ValueMap.create(self.allocator) catch return error.OutOfMemory;
+                errdefer m.header.release();
+                try m.map.ensureTotalCapacity(self.allocator, entry_count);
+                for (0..entry_count) |_| {
+                    const key = try self.readValue();
+                    // The key has no owner until the entry lands, so a truncated value strands it.
+                    errdefer container_backing.releaseValue(key);
+                    const value = try self.readValue();
+                    putDecodedValueMapEntry(&m.map, key, value);
+                }
+                break :blk .{ .value_map = m };
             },
             value_tag_mutable_map => blk: {
                 if (self.offset + 4 > self.data.len) return self.failTruncated();
@@ -1160,6 +1221,20 @@ const Decoder = struct {
                 }
                 break :blk .{ .hash = h };
             },
+            value_tag_value_map => blk: {
+                if (self.offset + 4 > self.data.len) return self.failTruncated();
+                const entry_count = std.mem.readInt(u32, self.data[self.offset..][0..4], .little);
+                self.offset += 4;
+                const m = ValueMap.create(self.allocator) catch return error.OutOfMemory;
+                errdefer m.header.release();
+                try m.map.ensureTotalCapacity(self.allocator, entry_count);
+                for (0..entry_count) |_| {
+                    const key = try self.readValueForImage();
+                    const value = try self.readValueForImage();
+                    putDecodedValueMapEntry(&m.map, key, value);
+                }
+                break :blk .{ .value_map = m };
+            },
             value_tag_quotation => blk: {
                 // Read the quotation_id and attach the compiled code_ptr from the
                 // quotation-fn table when supplied (id != sentinel, in bounds), so a
@@ -1318,6 +1393,19 @@ fn freeDecodedValue(v: Value) void {
                 entry.value_ptr.* = .unit;
             }
             h.header.release();
+        },
+        .value_map => |m| {
+            // A decoded key is a Value too, so both halves are freed here. Blanking the slots keeps
+            // the header release from re-releasing what this already freed.
+            for (m.map.keys()) |*key| {
+                freeDecodedValue(key.*);
+                key.* = .unit;
+            }
+            for (m.map.values()) |*value| {
+                freeDecodedValue(value.*);
+                value.* = .unit;
+            }
+            m.header.release();
         },
         .stack_effect => |effect| {
             freeParamTree(testing.allocator, effect.inputs);
@@ -1736,6 +1824,152 @@ test "roundtrip: hash with entries" {
     try testing.expectEqual(@as(u32, 2), dh.map.count());
     try testing.expectEqual(@as(i64, 10), dh.map.get("x").?.fixnum);
     try testing.expectEqual(false, dh.map.get("y").?.boolean);
+}
+
+test "roundtrip: empty value_map" {
+    const m_ptr = try ValueMap.create(testing.allocator);
+    defer m_ptr.header.release();
+    const instrs = [_]Instruction{
+        .{ .op = .{ .push_literal = .{ .value_map = m_ptr } }, .line = 1 },
+    };
+    const data = try serializeQuotationInstructions(&instrs, null, testing.allocator, null, null);
+    defer testing.allocator.free(data);
+    const decoded_q = try deserializeQuotationInstructions(data, testing.allocator, null, null);
+    defer freeDecodedQuotation(decoded_q);
+
+    try testing.expect(decoded_q.instructions[0].op.push_literal == .value_map);
+    try testing.expectEqual(@as(usize, 0), decoded_q.instructions[0].op.push_literal.value_map.map.count());
+}
+
+test "roundtrip: value_map keyed on a fixnum, an array, and a string" {
+    const key_elems = [_]Value{ .{ .fixnum = 1 }, .{ .fixnum = 2 } };
+    // Owned rather than static: a stored key is an owning reference, and the map's destroy
+    // releases every one of them.
+    const key_arr = try value_mod.Array.createCopyFrom(testing.allocator, &key_elems);
+
+    const m_ptr = try ValueMap.create(testing.allocator);
+    defer m_ptr.header.release();
+    try m_ptr.map.put(testing.allocator, .{ .fixnum = 42 }, .{ .fixnum = 10 });
+    try m_ptr.map.put(testing.allocator, .{ .array = key_arr }, .{ .boolean = false });
+    try m_ptr.map.put(testing.allocator, value_mod.stringValue("k"), value_mod.stringValue("v"));
+
+    const instrs = [_]Instruction{
+        .{ .op = .{ .push_literal = .{ .value_map = m_ptr } }, .line = 1 },
+    };
+    const data = try serializeQuotationInstructions(&instrs, null, testing.allocator, null, null);
+    defer testing.allocator.free(data);
+    const decoded_q = try deserializeQuotationInstructions(data, testing.allocator, null, null);
+    defer freeDecodedQuotation(decoded_q);
+
+    const dm = decoded_q.instructions[0].op.push_literal.value_map;
+    try testing.expectEqual(@as(usize, 3), dm.map.count());
+    try testing.expectEqual(@as(i64, 10), dm.map.get(.{ .fixnum = 42 }).?.fixnum);
+    try testing.expectEqual(false, dm.map.get(.{ .array = key_arr }).?.boolean);
+    try testing.expectEqualStrings("v", dm.map.get(value_mod.stringValue("k")).?.string.bytes);
+
+    // The backing is an ArrayHashMap, so `>array` and `>iterator` read entries in insertion order.
+    // Serializing in that order and decoding into a fresh map is what carries the order across.
+    try testing.expectEqual(@as(i64, 42), dm.map.keys()[0].fixnum);
+    try testing.expect(dm.map.keys()[1] == .array);
+    try testing.expectEqualStrings("k", dm.map.keys()[2].string.bytes);
+}
+
+test "roundtrip: value_map truncated mid-entry reports TruncatedBytecode" {
+    const m_ptr = try ValueMap.create(testing.allocator);
+    defer m_ptr.header.release();
+    try m_ptr.map.put(testing.allocator, .{ .fixnum = 1 }, .{ .fixnum = 2 });
+
+    var buf: std.ArrayListUnmanaged(u8) = .{};
+    defer buf.deinit(testing.allocator);
+    try serializeValueInto(&buf, .{ .value_map = m_ptr }, testing.allocator, null, null);
+
+    var offset: usize = 0;
+    var diag: DecodeDiagnostic = undefined;
+    // Drop the trailing value so the entry loop runs off the end of the stream.
+    try testing.expectError(
+        error.TruncatedBytecode,
+        deserializeValueAt(buf.items[0 .. buf.items.len - 1], &offset, testing.allocator, null, &diag),
+    );
+}
+
+test "roundtrip: value_map key and value both resolve through the image slot tables" {
+    const alloc = testing.allocator;
+
+    const inner_map = try MutableMap.create(alloc);
+    defer inner_map.header.release();
+
+    var tag_virtual = VirtualType{ .name = "tagged-key", .inner_type = "fixnum" };
+    const tagged_inner = Value{ .fixnum = 7 };
+    // The shape `populateTaggedSlots` puts in the slot: the tag and its boxed inner, not the inner
+    // alone. A key has to come back with its tag, since `hashValue` folds the tag pointer in.
+    const tagged_key = Value{ .tagged = .{ .tag = &tag_virtual, .inner = &tagged_inner } };
+
+    const m_ptr = try ValueMap.create(alloc);
+    defer m_ptr.header.release();
+    // A stored slot is an owning reference, and the map's destroy releases one, so take it here.
+    inner_map.header.retain();
+    try m_ptr.map.put(alloc, tagged_key, .{ .mutable_map = inner_map });
+
+    var tv_idx: std.AutoHashMapUnmanaged(*const TypeValue, u32) = .{};
+    defer tv_idx.deinit(alloc);
+    var st_idx: std.AutoHashMapUnmanaged(*const StructType, u32) = .{};
+    defer st_idx.deinit(alloc);
+    var mk_idx: std.AutoHashMapUnmanaged(*const Marker, u32) = .{};
+    defer mk_idx.deinit(alloc);
+    var pm_idx: std.AutoHashMapUnmanaged(*const Parameter, u32) = .{};
+    defer pm_idx.deinit(alloc);
+    var tg_idx: std.AutoHashMapUnmanaged(TaggedKey, u32) = .{};
+    defer tg_idx.deinit(alloc);
+    try tg_idx.put(alloc, .{ .tag = &tag_virtual, .inner_ptr = &tagged_inner }, 0);
+    var mm_idx: std.AutoHashMapUnmanaged(*const MutableMap, u32) = .{};
+    defer mm_idx.deinit(alloc);
+    try mm_idx.put(alloc, inner_map, 0);
+    var sx_idx: std.AutoHashMapUnmanaged(*const StructInstance, u32) = .{};
+    defer sx_idx.deinit(alloc);
+    var vx_idx: std.AutoHashMapUnmanaged(*const Vector, u32) = .{};
+    defer vx_idx.deinit(alloc);
+    var oc_idx: std.AutoHashMapUnmanaged(*const OnceCell, u32) = .{};
+    defer oc_idx.deinit(alloc);
+
+    const enc = SlotEncodingMaps{
+        .typevalue_slot_index = &tv_idx,
+        .struct_type_slot_index = &st_idx,
+        .marker_slot_index = &mk_idx,
+        .parameter_slot_index = &pm_idx,
+        .tagged_slot_index = &tg_idx,
+        .mutable_map_slot_index = &mm_idx,
+        .struct_instance_slot_index = &sx_idx,
+        .vector_slot_index = &vx_idx,
+        .once_cell_slot_index = &oc_idx,
+    };
+
+    var buf: std.ArrayListUnmanaged(u8) = .{};
+    defer buf.deinit(alloc);
+    try serializeValueIntoForImage(&buf, .{ .value_map = m_ptr }, alloc, &enc, null);
+
+    var tagged_slots = [_]?*const Value{&tagged_key};
+    var mutable_map_slots = [_]?*MutableMap{inner_map};
+    var tables = emptySlotTables();
+    tables.tagged_slots = &tagged_slots;
+    tables.tagged_slot_count = 1;
+    tables.mutable_map_slots = &mutable_map_slots;
+    tables.mutable_map_slot_count = 1;
+
+    var offset: usize = 0;
+    var diag: DecodeDiagnostic = undefined;
+    const decoded = try deserializeValueAtForImage(buf.items, &offset, alloc, &tables, &diag);
+    // The real teardown, not `freeDecodedValue`: both halves here are slot references that the
+    // decoder retained, and the map's destroy is what drops them.
+    defer container_backing.releaseValue(decoded);
+
+    const dm = decoded.value_map;
+    try testing.expectEqual(@as(usize, 1), dm.map.count());
+    try testing.expect(dm.map.keys()[0] == .tagged);
+    try testing.expectEqual(&tag_virtual, dm.map.keys()[0].tagged.tag);
+    try testing.expectEqual(@as(i64, 7), dm.map.keys()[0].tagged.inner.fixnum);
+    try testing.expectEqual(inner_map, dm.map.values()[0].mutable_map);
+    // Identity survived, so the key still finds its entry.
+    try testing.expect(dm.map.get(tagged_key) != null);
 }
 
 test "roundtrip: nested quotation" {

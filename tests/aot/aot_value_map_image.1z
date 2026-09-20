@@ -1,0 +1,16 @@
+\ A value-keyed map bound at program scope is carried into the runtime-image AOT binary by value,
+\ the way a hash literal is. The binding runs at definition time, so the word is a literal push and
+\ the map has to survive the freeze boundary with every key intact -- a fixnum and an array key are
+\ both shapes `H{ }` cannot express at all.
+\
+\ Entry order is asserted too: the backing is an ArrayHashMap, so the decoder has to rebuild the
+\ table in the order the encoder walked it.
+
+table: ( -- vmap ) { { 1 "one" } { { 2 3 } "pair" } { "k" "v" } } >value-map ;
+
+table 1 vmap-get print-line
+table { 2 3 } vmap-get print-line
+table "k" vmap-get print-line
+table 9 vmap-has? .
+table #len .
+table >array inspect print-line

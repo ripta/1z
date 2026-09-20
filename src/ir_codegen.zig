@@ -8757,8 +8757,8 @@ fn compileInstructions(
                     _ = c._ir_LOAD(ctx, c.IR_ADDR, state.sp_ptr);
                     stack[sp.*] = .{ .raw_at_slot = sp.* };
                     sp.* += 1;
-                } else if (state.aot_mode and (val == .array or val == .hash)) {
-                    // Array/hash literals: serialize to bytes, store in C
+                } else if (state.aot_mode and (val == .array or val == .hash or val == .value_map)) {
+                    // By-value container literals: serialize to bytes, store in C
                     // preamble, and emit a callback to deserialize at runtime.
                     // Pass the quotation-ID map so nested branch quotations carry
                     // their compiled global ID; jitPushArray attaches the matching
@@ -15388,9 +15388,8 @@ export fn jitCaptureQuotation(ctx_raw: usize, dest_raw: usize) callconv(.c) i32 
     return 0;
 }
 
-/// Deserialize an array or hash literal from its serialized byte representation
-/// and push it onto the stack. The val_tag in the serialized data determines
-/// whether an array or hash is constructed.
+/// Deserialize a by-value container literal from its serialized byte representation and push it
+/// onto the stack. The val_tag in the serialized data determines which container is constructed.
 export fn jitPushArray(ctx_raw: usize, data_ptr: usize, data_len: usize) callconv(.c) i32 {
     if (ctx_raw == 0) return 1;
     const ctx: *Context = @ptrFromInt(ctx_raw);

@@ -54,8 +54,8 @@ pub const BlobReason = enum {
     /// classification; the enum value is retained so diagnostic output
     /// stays stable for the hash case.
     mutable_map,
-    /// A `vector`, `byte_array`, or `set` literal -- dynamically sized
-    /// containers.
+    /// A `byte_array`, `set`, or `mutable_value_map` literal -- dynamically sized containers with
+    /// no serialized form.
     dynamic_container,
     /// A `parameter` literal. The `default_quotation` is structural but
     /// the runtime binding state is not.
@@ -169,7 +169,23 @@ pub fn classifyValue(val: Value) Classification {
             }
             break :blk acc;
         },
-        .byte_array, .set, .value_map, .mutable_value_map => Classification.blobOf(.dynamic_container),
+        // Structural, unlike `hash`, because nothing catches a value-map on the blob path:
+        // `emitWordBodies` skips every non-structural entry, so a module word bound to one would
+        // ship with an empty body. `hash` predates that and keeps its classification.
+        //
+        // The recursion is `.array`'s, over keys as well as values: a value-map key is a Value and
+        // one of them can be a blob-path variant.
+        .value_map => |m| blk: {
+            var acc = Classification.structural_unit;
+            for (m.map.keys()) |key| {
+                acc = acc.combine(classifyValue(key));
+            }
+            for (m.map.values()) |value| {
+                acc = acc.combine(classifyValue(value));
+            }
+            break :blk acc;
+        },
+        .byte_array, .set, .mutable_value_map => Classification.blobOf(.dynamic_container),
         .parameter => Classification.blobOf(.parameter_runtime_state),
         .once_cell => Classification.blobOf(.once_cell_runtime_state),
         .bignum => Classification.blobOf(.bignum),
@@ -629,6 +645,38 @@ test "classifyValue: hash is blob; mutable_map and empty vector are structural" 
     const vec = try value_mod.Vector.create(testing.allocator);
     defer vec.header.release();
     try testing.expectEqual(ImagePath.structural, classifyValue(.{ .vector = vec }).path);
+}
+
+test "classifyValue: value_map follows its entries; the mutable half stays blob" {
+    const vm = try value_mod.ValueMap.create(testing.allocator);
+    defer vm.header.release();
+    try testing.expectEqual(ImagePath.structural, classifyValue(.{ .value_map = vm }).path);
+
+    try vm.map.put(testing.allocator, .{ .fixnum = 1 }, value_mod.stringValue("a"));
+    try testing.expectEqual(ImagePath.structural, classifyValue(.{ .value_map = vm }).path);
+
+    // A set has no serialized form, so a map holding one takes the blob path with it. The map's
+    // destroy releases every half it holds, so each stored slot takes its own reference.
+    const value_side = try value_mod.Set.create(testing.allocator);
+    defer value_side.header.release();
+    value_side.header.retain();
+    try vm.map.put(testing.allocator, .{ .fixnum = 2 }, .{ .set = value_side });
+    const with_blob_value = classifyValue(.{ .value_map = vm });
+    try testing.expectEqual(ImagePath.blob, with_blob_value.path);
+    try testing.expectEqual(BlobReason.dynamic_container, with_blob_value.reason);
+
+    // A key reaches the same answer, which is what the key-side recursion is for.
+    const keyed = try value_mod.ValueMap.create(testing.allocator);
+    defer keyed.header.release();
+    const key_side = try value_mod.Set.create(testing.allocator);
+    defer key_side.header.release();
+    key_side.header.retain();
+    try keyed.map.put(testing.allocator, .{ .set = key_side }, .{ .fixnum = 3 });
+    try testing.expectEqual(ImagePath.blob, classifyValue(.{ .value_map = keyed }).path);
+
+    const mvm = try value_mod.MutableValueMap.create(testing.allocator);
+    defer mvm.header.release();
+    try testing.expectEqual(ImagePath.blob, classifyValue(.{ .mutable_value_map = mvm }).path);
 }
 
 test "classifyValue: parameter is blob" {

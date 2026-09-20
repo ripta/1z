@@ -1,0 +1,8 @@
+\ The module-word half of the value-map image carry. The binding lives in a `use`d module, so its
+\ body travels the image word table rather than the compiled literal path, which is what the
+\ structural classification of a value-map buys.
+
+use "./support/value_map_state.1z" ;
+
+1 7 run-handler .
+{ 2 3 } 7 run-handler .
