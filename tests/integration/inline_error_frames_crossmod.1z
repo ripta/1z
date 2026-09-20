@@ -1,0 +1,11 @@
+\ A copied instruction keeps the line it was written at, and that line belongs to the file it was
+\ written in rather than the file the copy landed in. The innermost row names the library, not
+\ this file, and the `write-it` row sits at the call site here.
+\
+\ No flags: one golden binds the interpreted and eager suites.
+
+use "fixtures/inline_error_frames_lib.1z" ;
+
+caller: ( s v -- ) [ write-it 0 drop ] ;
+
+stdout 42 caller

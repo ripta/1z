@@ -31,6 +31,7 @@ const aot_image_mod = @import("aot_image.zig");
 const aot_image_emit_mod = @import("aot_image_emit.zig");
 const bail_stats_mod = @import("bail_stats.zig");
 const ibc = @import("instruction_bytecode.zig");
+const inline_region_table = @import("inline_region_table.zig");
 const may_define = @import("may_define.zig");
 
 const stack_effect_mod = @import("stack_effect.zig");
@@ -2613,6 +2614,10 @@ const CompileState = struct {
     quotation_slots: QuotationSlotMap = .{},
     inline_trace_frames: [max_inline_trace_frames]InlineTraceFrame = undefined,
     inline_trace_frame_count: usize = 0,
+    /// Where in which body `compileInstructions` currently is, so an error-path frame can name
+    /// the `inline` word whose code the instruction was copied from. Saved and restored around a
+    /// nested walk, the way `source_file` is around a splice.
+    inline_site: InlineSite = .{},
     /// Transient lexical frames opened by enclosing splices and not yet closed. Read where
     /// control leaves a bracketed region by a route the epilogue pop cannot cover.
     open_lexical_frames: usize = 0,
@@ -2756,9 +2761,20 @@ const InlineTraceFrame = struct {
     /// `state.source_file`, which a compound splice swaps to the callee's file
     /// while a caller-line frame is still pending.
     source: ?[]const u8 = null,
+    /// The instruction that opened this level, captured for the same reason `source` is.
+    ///
+    /// Emission walks back out through these, and the runs covering an enclosing level's own
+    /// instruction are the rows that belong above that level's frame.
+    site: InlineSite = .{},
 };
 
 const max_inline_trace_frames = 8;
+
+/// The instruction `compileInstructions` is on, as the inline-region table keys it.
+const InlineSite = struct {
+    body: []const Instruction = &.{},
+    index: usize = 0,
+};
 
 /// Maximum instruction count for a compound body eligible for call-site splicing. Keeps the
 /// splicer on small forwarder-shaped words like `.`.
@@ -6007,7 +6023,8 @@ fn emitIntrinsicCall(ec: EmitCtx) IrCodegenError!ControlFlow {
                 state.inline_trace_frames[state.inline_trace_frame_count] = .{
                     .kind = .call,
                     .line = ec.line,
-                    .source = state.source_file,
+                    .source = traceFrameSourceHere(state),
+                    .site = state.inline_site,
                 };
                 state.inline_trace_frame_count += 1;
             }
@@ -6349,7 +6366,8 @@ fn spliceDipRetaining(ec: EmitCtx, retain_count: usize) IrCodegenError!ControlFl
         state.inline_trace_frames[state.inline_trace_frame_count] = .{
             .kind = .call,
             .line = ec.line,
-            .source = state.source_file,
+            .source = traceFrameSourceHere(state),
+            .site = state.inline_site,
         };
         state.inline_trace_frame_count += 1;
     }
@@ -6420,7 +6438,8 @@ fn emitIntrinsicChoose(ec: EmitCtx) IrCodegenError!ControlFlow {
                 state.inline_trace_frames[state.inline_trace_frame_count] = .{
                     .kind = .choose_op,
                     .line = ec.line,
-                    .source = state.source_file,
+                    .source = traceFrameSourceHere(state),
+                    .site = state.inline_site,
                 };
                 state.inline_trace_frame_count += 1;
             }
@@ -7010,7 +7029,8 @@ fn emitIntrinsicIf(ec: EmitCtx) IrCodegenError!ControlFlow {
         state.inline_trace_frames[state.inline_trace_frame_count] = .{
             .kind = .if_op,
             .line = ec.line,
-            .source = state.source_file,
+            .source = traceFrameSourceHere(state),
+            .site = state.inline_site,
         };
         state.inline_trace_frame_count += 1;
     }
@@ -7076,7 +7096,8 @@ fn emitIntrinsicIf(ec: EmitCtx) IrCodegenError!ControlFlow {
         state.inline_trace_frames[state.inline_trace_frame_count] = .{
             .kind = .if_op,
             .line = ec.line,
-            .source = state.source_file,
+            .source = traceFrameSourceHere(state),
+            .site = state.inline_site,
         };
         state.inline_trace_frame_count += 1;
     }
@@ -7627,7 +7648,8 @@ fn trySpliceCompoundBody(
         state.inline_trace_frames[state.inline_trace_frame_count] = .{
             .kind = .call,
             .line = ec.line,
-            .source = state.source_file,
+            .source = traceFrameSourceHere(state),
+            .site = state.inline_site,
         };
         state.inline_trace_frame_count += 1;
     }
@@ -8552,7 +8574,13 @@ fn compileInstructions(
 ) IrCodegenError!void {
     const ctx = state.ctx;
 
+    // A spliced body walks through here too, so the enclosing walk's position is restored on the
+    // way out and an error emitted after the splice is still attributed to the right instruction.
+    const saved_inline_site = state.inline_site;
+    defer state.inline_site = saved_inline_site;
+
     for (instructions, 0..) |instr, idx| {
+        state.inline_site = .{ .body = instructions, .index = idx };
         emitAotInstrTrace(state, instr, stack, sp.*);
         if (state.dynamic_call_emitted) {
             state.not_compilable_reason = .post_dynamic_call;
@@ -13345,6 +13373,27 @@ fn effectBodyRoundTrips(eff: StackEffect, body: []const u8) bool {
 }
 
 fn emitWordTraceFrame(state: *CompileState, word_name: []const u8, line: usize, word_id: ?u32) void {
+    // A call sitting inside an inlined run is at a line in the file that run's code was written
+    // in, which is not the file of the body it was copied into.
+    const source = inlineRegionBodySource(state) orelse state.source_file;
+    emitNamedTraceFrame(state, word_name, source, line, word_id, .own_effect);
+}
+
+/// Whether a synthesized frame carries the named word's declared effect.
+///
+/// A run's own frame takes `.no_effect`, matching what the interpreter queues. Nothing is lost:
+/// the effect renders on the innermost row only, and a run's frame always sits above the frame
+/// of the call that raised.
+const TraceFrameEffect = enum { own_effect, no_effect };
+
+fn emitNamedTraceFrame(
+    state: *CompileState,
+    word_name: []const u8,
+    source: ?[]const u8,
+    line: usize,
+    word_id: ?u32,
+    effect_mode: TraceFrameEffect,
+) void {
     if (state.append_word_trace_frame_fn == c.IR_UNUSED) return;
     const ctx_val = if (state.preloaded_ctx_val != c.IR_UNUSED)
         state.preloaded_ctx_val
@@ -13356,7 +13405,7 @@ fn emitWordTraceFrame(state: *CompileState, word_name: []const u8, line: usize, 
     };
     const name_ptr = emitStringLiteralPtr(state, word_name);
     const name_len_const = c.ir_const_addr(state.ctx, word_name.len);
-    const src = emitTraceSourceArgs(state);
+    const src = emitTraceSourceArgsFor(state, source);
     const line_const = c.ir_const_addr(state.ctx, line);
 
     // The AOT tier bakes the word_id too, which the shim prefers: it resolves the loaded
@@ -13366,19 +13415,69 @@ fn emitWordTraceFrame(state: *CompileState, word_name: []const u8, line: usize, 
         (if (word_id) |wid| @as(usize, wid) + 1 else 0)
     else
         0;
-    const eff = emitTraceEffectArgs(state, word_name);
+    const zero = c.ir_const_addr(state.ctx, 0);
+    const eff = switch (effect_mode) {
+        .own_effect => emitTraceEffectArgs(state, word_name),
+        .no_effect => TraceSourceArgs{ .ptr = zero, .len = zero },
+    };
     const wid_const = c.ir_const_addr(state.ctx, wid_plus_one);
 
     var args = [_]c.ir_ref{ ctx_val, name_ptr, name_len_const, src.ptr, src.len, line_const, eff.ptr, eff.len, wid_const };
     _ = c._ir_CALL_N(state.ctx, c.IR_I32, state.append_word_trace_frame_fn, args.len, &args);
 }
 
+/// The rows for the `inline` words whose code the instruction at `site` came from, or null when
+/// it came from its body's own source.
+fn inlineRegionFrames(state: *CompileState, site: InlineSite) ?inline_region_table.InlineRegionSet.FrameIterator {
+    const ictx = state.interp_ctx orelse return null;
+    if (site.body.len == 0) return null;
+
+    const set = ictx.inlineRegionsFor(site.body) orelse return null;
+
+    // The outermost run's call site sits in `site.body` itself, whose file is its own stamp
+    // rather than `state.source_file`: a quotation body or a splice below this level has already
+    // moved that.
+    const body_file = ictx.quotationBodySource(site.body) orelse state.source_file orelse "";
+    return set.framesAt(site.index, body_file);
+}
+
+/// The file the instruction being compiled was written in, when it was copied out of an `inline`
+/// word. Null when it was not.
+fn inlineRegionBodySource(state: *CompileState) ?[]const u8 {
+    var it = inlineRegionFrames(state, state.inline_site) orelse return null;
+    const innermost = it.next() orelse return null;
+    return innermost.body_source;
+}
+
+/// The file the instruction being compiled was written in, whatever put it there.
+fn traceFrameSourceHere(state: *CompileState) ?[]const u8 {
+    return inlineRegionBodySource(state) orelse state.source_file;
+}
+
+/// Emit one frame per `inline` word whose code the instruction at `site` came from, innermost
+/// first. Expansion erased the calls that would have pushed them, so nothing else will.
+///
+/// Emitted on the error branch only, matching what `Context.pendInlineRegionFrames` queues on the
+/// interpreted path, so one golden binds both tiers.
+fn emitInlineRegionTraceFrames(state: *CompileState, site: InlineSite) void {
+    var it = inlineRegionFrames(state, site) orelse return;
+    while (it.next()) |frame| {
+        emitNamedTraceFrame(state, frame.word_name, frame.call_source, frame.call_line, null, .no_effect);
+    }
+}
+
+/// Walk back out through the levels a combinator opened, emitting each one's frame and then the
+/// runs covering the instruction that opened it.
+///
+/// A quotation body is its own instruction array and carries no runs, so a raise inside one
+/// reaches its enclosing `inline` word only through the level that opened it.
 fn emitActiveInlineTraceFrames(state: *CompileState) void {
     var i = state.inline_trace_frame_count;
     while (i > 0) {
         i -= 1;
         const frame = state.inline_trace_frames[i];
         emitBuiltinTraceFrame(state, frame.kind, frame.line, frame.source);
+        emitInlineRegionTraceFrames(state, frame.site);
     }
 }
 
@@ -13400,6 +13499,7 @@ fn emitCallbackPostCheck(
             .named => |frame| if (frame.line != 0) emitWordTraceFrame(state, frame.name, frame.line, frame.word_id),
             .builtin => |frame| if (frame.line != 0) emitBuiltinTraceFrame(state, frame.kind, frame.line, state.source_file),
         }
+        emitInlineRegionTraceFrames(state, state.inline_site);
         emitActiveInlineTraceFrames(state);
     }
     c._ir_RETURN(ctx, return_status);
@@ -13529,6 +13629,15 @@ fn compileQuotationBodyInline(
     stack: []StackEntry,
     sp: *usize,
 ) IrCodegenError!void {
+    // A quotation body is its own instruction array, parsed in whatever file wrote it, which is
+    // not the enclosing body's once the word holding it was inlined across a module boundary.
+    // Installing the body's own stamp here is what `enterBodySource` does on the interpreted path.
+    const saved_source_file = state.source_file;
+    defer state.source_file = saved_source_file;
+    if (state.interp_ctx) |ictx| {
+        if (ictx.quotationBodySource(body)) |sf| state.source_file = sf;
+    }
+
     if (!quotationBodyNeedsFrame(state, body)) {
         return compileInstructions(state, body, stack, sp);
     }

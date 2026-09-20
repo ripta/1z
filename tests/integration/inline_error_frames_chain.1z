@@ -1,0 +1,14 @@
+\ Expansion is eager, so `two` arrives flat and `one`'s attribution is already recorded against
+\ `two`'s body rather than reachable from `three`'s source. A transitive chain names every level
+\ only if the copy carries those records forward.
+\
+\ Each row's line is the call site the copy replaced, in the body that held it: `one` at line 11
+\ inside `two`, `two` at line 12 inside `three`.
+\
+\ No flags: one golden binds the interpreted and eager suites.
+
+one:   ( s v -- n ) const inline [ stream-write 0 + ] ;
+two:   ( s v -- n ) const inline [ one 0 + ] ;
+three: ( s v -- n ) [ two 0 + ] ;
+
+stdout 42 three .

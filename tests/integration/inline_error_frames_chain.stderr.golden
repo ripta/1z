@@ -1,0 +1,5 @@
+tests/integration/inline_error_frames_chain.1z:10: error 'type-mismatch' expected string or byte-array, got fixnum 42 at word 'stream-write'
+  stack effect: ( stream bytes -- n )
+  called from tests/integration/inline_error_frames_chain.1z:11: one
+  called from tests/integration/inline_error_frames_chain.1z:12: two
+  called from tests/integration/inline_error_frames_chain.1z:14: three

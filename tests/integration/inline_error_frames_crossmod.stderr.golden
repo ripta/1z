@@ -1,0 +1,4 @@
+fixtures/inline_error_frames_lib.1z:13: error 'type-mismatch' expected string or byte-array, got fixnum 42 at word 'stream-write'
+  stack effect: ( stream bytes -- n )
+  called from fixtures/inline_error_frames_lib.1z:13: call
+  called from tests/integration/inline_error_frames_crossmod.1z:9: write-it

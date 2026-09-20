@@ -5091,6 +5091,7 @@ test {
     _ = @import("quotation_stamp_store.zig");
     _ = @import("carryable_scope_gate.zig");
     _ = @import("nested_name_cache.zig");
+    _ = @import("inline_region_table.zig");
     _ = @import("closure_body_registry.zig");
     _ = @import("atomic_replace.zig");
     _ = @import("atomic_slot_map.zig");

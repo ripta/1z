@@ -18,6 +18,7 @@ const WordDefinition = dict_mod.WordDefinition;
 const container_backing = @import("container_backing.zig");
 const markers_mod = @import("primitives/markers.zig");
 const Context = @import("context.zig").Context;
+const InlineRegion = @import("inline_region_table.zig").InlineRegion;
 
 /// Whether this pass expands calls to `def`. The trigger is the marker and nothing else.
 pub fn shouldInline(def: WordDefinition) bool {
@@ -50,6 +51,7 @@ pub fn expandBody(
         .alloc = ctx.quotationAllocator(),
     };
     defer ex.open.deinit(ctx.allocator);
+    defer ex.regions.deinit(ctx.allocator);
 
     if (!ex.anyExpandableCall(body)) return null;
 
@@ -57,10 +59,14 @@ pub fn expandBody(
     try ex.out.ensureTotalCapacity(ex.alloc, body.len);
 
     // Both decline rules apply only to a copied instruction, so nothing at this level can decline.
-    const complete = try ex.appendBody(body, false);
+    const complete = try ex.appendBody(body, .{ .file = caller_file, .relocating = false });
     std.debug.assert(complete);
 
     const expanded = try ex.out.toOwnedSlice(ex.alloc);
+
+    // Recorded here rather than by the caller, because the list is scratch that dies with the
+    // expander. The table copies what it keeps.
+    try ctx.recordInlineRegions(expanded, ex.regions.items);
 
     // Each container literal in the new body is a second owning reference, whichever body it was
     // copied from. The array it came from keeps its own registration and releases the first; the
@@ -98,10 +104,26 @@ const Replacement = union(enum) {
     const Body = struct {
         instrs: []const Instruction,
 
+        /// The callee's own name and file, which is what the region recorded over the copy
+        /// reports. The file is not the expanded array's, once a word is inlined across a module
+        /// boundary, and the copied instructions keep the lines they were written at.
+        name: []const u8,
+        file: []const u8,
+
         /// Set when the callee belongs to another file, so its instructions have to survive the
         /// move.
         relocating: bool,
     };
+};
+
+/// The body a walk is currently copying from.
+const BodyContext = struct {
+    /// The file that body's instructions were written in, which a region recorded inside it
+    /// reports as the file of its own call site.
+    file: []const u8,
+
+    /// Set when the instructions are moving to a body in another file.
+    relocating: bool,
 };
 
 const Expander = struct {
@@ -118,6 +140,15 @@ const Expander = struct {
     /// about. Two names sharing one body through a reexport are one entry here, correctly.
     open: std.ArrayListUnmanaged(usize) = .{},
 
+    /// The runs of `out` copied out of an `inline` word, recorded so a raise inside one can name
+    /// that word. Scratch: `expandBody` hands the finished list to the table, which copies it.
+    ///
+    /// Ordered so that, for any index, the runs covering it appear innermost first. `appendOne`
+    /// records a callee's own run after recursing into it, and `appendBody` translates the runs
+    /// already inside the body it is copying after its loop, so an outer run is always appended
+    /// after everything nested in it.
+    regions: std.ArrayListUnmanaged(InlineRegion) = .{},
+
     /// The definition a call instruction targets, or null when it resolves to nothing. A miss is
     /// not an error: the call stays a call and resolves at run time as it does today.
     fn target(self: *const Expander, op: Instruction.Op) ?WordDefinition {
@@ -129,17 +160,20 @@ const Expander = struct {
     }
 
     /// What this pass would put in place of a call to `op`'s target, or null when it would put
-    /// nothing.
+    /// nothing. `current_file` is the file of the body the call sits in, which stands in for a
+    /// callee that records none of its own.
     ///
     /// Cycle detection is deliberately not applied here, so the pre-scan sees a recursive word as
     /// expandable. It is, at its first level.
-    fn expandable(self: *const Expander, op: Instruction.Op) ?Replacement {
+    fn expandable(self: *const Expander, op: Instruction.Op, current_file: []const u8) ?Replacement {
         if (!op.isCall()) return null;
         const callee = self.target(op) orelse return null;
         if (!shouldInline(callee)) return null;
         return switch (callee.action) {
             .compound => |instrs| .{ .body = .{
                 .instrs = instrs,
+                .name = callee.name,
+                .file = callee.source_file orelse current_file,
                 .relocating = !self.definedInCallerFile(callee),
             } },
             .literal => |val| .{ .value = val },
@@ -150,7 +184,7 @@ const Expander = struct {
 
     fn anyExpandableCall(self: *const Expander, body: []const Instruction) bool {
         for (body) |instr| {
-            if (self.expandable(instr.op) != null) return true;
+            if (self.expandable(instr.op, self.caller_file) != null) return true;
         }
         return false;
     }
@@ -162,21 +196,50 @@ const Expander = struct {
         return false;
     }
 
-    /// Append `body`'s instructions, expanding the calls this pass selects. `relocating` is set for
-    /// a body copied out of a word defined in another file, whose instructions have to survive the
-    /// move.
+    /// Append `body`'s instructions, expanding the calls this pass selects.
     ///
-    /// Returns false when one of them would not, having left `out` exactly as it was found so the
-    /// caller can emit the original call instead. Discarding costs nothing to undo, because the
-    /// walk takes no reference: every literal in the finished array is retained in one pass at the
-    /// end.
-    fn appendBody(self: *Expander, body: []const Instruction, relocating: bool) Allocator.Error!bool {
-        const mark = self.out.items.len;
+    /// Returns false when one of them would not, having left `out` and `regions` exactly as they
+    /// were found so the caller can emit the original call instead. Discarding costs nothing to
+    /// undo, because the walk takes no reference: every literal in the finished array is retained
+    /// in one pass at the end.
+    fn appendBody(self: *Expander, body: []const Instruction, ctxt: BodyContext) Allocator.Error!bool {
+        const out_mark = self.out.items.len;
+        const region_mark = self.regions.items.len;
 
-        for (body) |instr| {
-            if (try self.appendOne(instr, relocating)) continue;
-            self.out.shrinkRetainingCapacity(mark);
+        // `body` may already carry runs of its own, because expansion is eager: a chain arrives
+        // flat, with each level's attribution recorded against the level below it. Carrying those
+        // forward is what makes a transitive chain name every word in it.
+        //
+        // The copy is not one instruction to one, since a call this body declined can expand here,
+        // so each source index is mapped to where it landed rather than shifted by a constant.
+        const source_regions = self.ctx.inlineRegionsFor(body);
+        var map: []u32 = &.{};
+        defer if (map.len != 0) self.ctx.allocator.free(map);
+        if (source_regions != null) map = try self.ctx.allocator.alloc(u32, body.len + 1);
+
+        for (body, 0..) |instr, i| {
+            if (map.len != 0) map[i] = @intCast(self.out.items.len);
+
+            if (try self.appendOne(instr, ctxt)) continue;
+
+            self.out.shrinkRetainingCapacity(out_mark);
+            self.regions.shrinkRetainingCapacity(region_mark);
             return false;
+        }
+
+        if (source_regions) |set| {
+            map[body.len] = @intCast(self.out.items.len);
+            for (set.regions) |r| {
+                var moved = r;
+                moved.start = map[r.start];
+                moved.end = map[r.end];
+
+                // An empty run has no instruction to raise from. One arises when every instruction
+                // it covered expanded to nothing, which an `inline` word with an empty body does.
+                if (moved.start == moved.end) continue;
+
+                try self.regions.append(self.ctx.allocator, moved);
+            }
         }
 
         return true;
@@ -200,16 +263,21 @@ const Expander = struct {
         return std.mem.eql(u8, name, self.defining);
     }
 
-    fn appendOne(self: *Expander, instr: Instruction, relocating: bool) Allocator.Error!bool {
+    fn appendOne(self: *Expander, instr: Instruction, ctxt: BodyContext) Allocator.Error!bool {
         if (self.namesDefinition(instr.op)) return false;
 
-        if (self.expandable(instr.op)) |what| switch (what) {
+        if (self.expandable(instr.op, ctxt.file)) |what| switch (what) {
             .body => |b| {
                 if (!self.isOpen(b.instrs)) {
+                    const start = self.out.items.len;
+
                     try self.open.append(self.ctx.allocator, @intFromPtr(b.instrs.ptr));
                     defer _ = self.open.pop();
 
-                    if (try self.appendBody(b.instrs, b.relocating)) return true;
+                    if (try self.appendBody(b.instrs, .{ .file = b.file, .relocating = b.relocating })) {
+                        try self.recordRegion(start, b, instr);
+                        return true;
+                    }
                 }
             },
             // This arm never declines. `namesDefinition` has already run, and a value carries no
@@ -228,8 +296,9 @@ const Expander = struct {
         };
 
         // An instruction the pass did not replace. It keeps its own line and column, so a location
-        // inside an expanded region still points at the source that wrote it.
-        if (!relocating) {
+        // inside an expanded region still points at the source that wrote it. The region recorded
+        // over that copy is what says which file the line belongs to.
+        if (!ctxt.relocating) {
             try self.out.append(self.alloc, instr);
             return true;
         }
@@ -237,6 +306,24 @@ const Expander = struct {
         const op = relocateOp(self.ctx, instr.op) orelse return false;
         try self.out.append(self.alloc, .{ .op = op, .line = instr.line, .column = instr.column });
         return true;
+    }
+
+    /// Record the run `[start, out.items.len)` as `b`'s code, called at `instr`.
+    ///
+    /// Recorded after the recursion, so a run nested inside this one is already in the list and a
+    /// reader walking in order meets the innermost first.
+    fn recordRegion(self: *Expander, start: usize, b: Replacement.Body, instr: Instruction) Allocator.Error!void {
+        // An `inline` word with an empty body leaves nothing to attribute.
+        if (self.out.items.len == start) return;
+
+        try self.regions.append(self.ctx.allocator, .{
+            .start = @intCast(start),
+            .end = @intCast(self.out.items.len),
+            .word_name = b.name,
+            .body_source = b.file,
+            .call_line = @intCast(instr.line),
+            .call_column = @intCast(instr.column),
+        });
     }
 
     fn definedInCallerFile(self: *const Expander, callee: WordDefinition) bool {
@@ -310,6 +397,13 @@ fn ops(ctx: *Context, name: []const u8, buf: [][]const u8) [][]const u8 {
         buf[i] = instr.op.callTargetName() orelse "#";
     }
     return buf[0..body.len];
+}
+
+/// The runs recorded over `name`'s stored body.
+fn regionsOf(ctx: *Context, name: []const u8) ?[]const InlineRegion {
+    const body = ctx.lookupWord(name).?.action.compound;
+    const set = ctx.inlineRegionsFor(body) orelse return null;
+    return set.regions;
 }
 
 fn expectOps(ctx: *Context, name: []const u8, want: []const []const u8) !void {
@@ -664,4 +758,154 @@ test "each copy of a container literal carries a reference of its own" {
     // the expanded body. Teardown itself is the other half of this assertion: the allocator checks
     // that the backing was destroyed exactly once.
     try testing.expectEqual(before + 2, vec.header.refcountValue());
+}
+
+test "an expanded call records the run it produced, the word it came from, and its call site" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+    ctx.current_source = here;
+
+    try define(&ctx, here, "doubled", &.{
+        .{ .op = .{ .push_literal = .{ .fixnum = 2 } }, .line = 1 },
+        .{ .op = .{ .call_word = "*" }, .line = 1 },
+    }, true);
+
+    try define(&ctx, here, "quadruple", &.{
+        .{ .op = .{ .call_word = "doubled" }, .line = 5, .column = 3 },
+        .{ .op = .{ .call_word = "doubled" }, .line = 5, .column = 11 },
+    }, false);
+
+    const regions = regionsOf(&ctx, "quadruple") orelse return error.TestExpectedRegions;
+    try testing.expectEqual(@as(usize, 2), regions.len);
+
+    try testing.expectEqual(@as(u32, 0), regions[0].start);
+    try testing.expectEqual(@as(u32, 2), regions[0].end);
+    try testing.expectEqualStrings("doubled", regions[0].word_name);
+    try testing.expectEqualStrings(here, regions[0].body_source);
+    try testing.expectEqual(@as(u32, 5), regions[0].call_line);
+    try testing.expectEqual(@as(u32, 3), regions[0].call_column);
+
+    // The second copy of one word is its own run, at its own call site.
+    try testing.expectEqual(@as(u32, 2), regions[1].start);
+    try testing.expectEqual(@as(u32, 4), regions[1].end);
+    try testing.expectEqual(@as(u32, 11), regions[1].call_column);
+}
+
+test "a chain records every level, innermost first" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+    ctx.current_source = here;
+
+    try define(&ctx, here, "one", &.{
+        .{ .op = .{ .call_word = "+" }, .line = 1 },
+    }, true);
+
+    try define(&ctx, here, "two", &.{
+        .{ .op = .{ .call_word = "one" }, .line = 2 },
+    }, true);
+
+    try define(&ctx, here, "three", &.{
+        .{ .op = .{ .call_word = "two" }, .line = 3 },
+    }, false);
+
+    // `two` arrives flat, so its own attribution has to travel with the copy. Without that, the
+    // chain would name only the word `three` was written against.
+    const body = ctx.lookupWord("three").?.action.compound;
+    const set = ctx.inlineRegionsFor(body) orelse return error.TestExpectedRegions;
+    var frames = set.framesAt(0, here);
+
+    const inner = frames.next() orelse return error.TestExpectedFrame;
+    try testing.expectEqualStrings("one", inner.word_name);
+    try testing.expectEqual(@as(u32, 2), inner.call_line);
+
+    const outer = frames.next() orelse return error.TestExpectedFrame;
+    try testing.expectEqualStrings("two", outer.word_name);
+    try testing.expectEqual(@as(u32, 3), outer.call_line);
+
+    try testing.expect(frames.next() == null);
+}
+
+test "a declined copy records no run, and the copy beside it keeps the callee's file" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+    ctx.current_source = here;
+
+    try ctx.pushLocalFrame();
+    defer ctx.popLocalFrame();
+
+    try define(&ctx, here, "(helper)", &.{
+        .{ .op = .{ .call_word = "+" }, .line = 1 },
+    }, false);
+
+    try define(&ctx, elsewhere, "reaches-a-frame-word", &.{
+        .{ .op = .{ .call_word = "(helper)" }, .line = 1 },
+    }, true);
+
+    try define(&ctx, elsewhere, "reaches-a-native", &.{
+        .{ .op = .{ .call_word = "+" }, .line = 4 },
+    }, true);
+
+    try define(&ctx, here, "calls-both", &.{
+        .{ .op = .{ .call_word = "reaches-a-frame-word" }, .line = 9 },
+        .{ .op = .{ .call_word = "reaches-a-native" }, .line = 10 },
+    }, false);
+
+    const regions = regionsOf(&ctx, "calls-both") orelse return error.TestExpectedRegions;
+    try testing.expectEqual(@as(usize, 1), regions.len);
+
+    // The declined copy left a call at index 0, so the one run starts at 1.
+    try testing.expectEqual(@as(u32, 1), regions[0].start);
+    try testing.expectEqual(@as(u32, 2), regions[0].end);
+    try testing.expectEqualStrings("reaches-a-native", regions[0].word_name);
+
+    // The copied instruction kept line 4, which is a line in the file that wrote it rather than
+    // in the file it now sits in.
+    try testing.expectEqualStrings(elsewhere, regions[0].body_source);
+    try testing.expectEqual(@as(u32, 10), regions[0].call_line);
+}
+
+test "a bound value opens no run" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+    ctx.current_source = here;
+
+    try bind(&ctx, here, "width", .{ .fixnum = 256 }, true);
+
+    try define(&ctx, here, "area", &.{
+        .{ .op = .{ .call_word = "width" }, .line = 9 },
+        .{ .op = .{ .call_word = "width" }, .line = 9 },
+        .{ .op = .{ .call_word = "*" }, .line = 9 },
+    }, false);
+
+    // A value has no code, so there is nothing for a raise inside it to be attributed to.
+    try testing.expectEqual(@as(?[]const InlineRegion, null), regionsOf(&ctx, "area"));
+}
+
+test "a word whose call declined mid-body records the runs that survived" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+    ctx.current_source = here;
+
+    try define(&ctx, here, "doubled", &.{
+        .{ .op = .{ .call_word = "*" }, .line = 1 },
+    }, true);
+
+    // `bump` names a word that does not exist yet; `grow` then claims that name, so copying
+    // `bump` into `grow` is declined. The marked call beside it still expands.
+    try define(&ctx, here, "bump", &.{
+        .{ .op = .{ .call_word = "grow" }, .line = 2 },
+    }, true);
+
+    try define(&ctx, here, "grow", &.{
+        .{ .op = .{ .call_word = "bump" }, .line = 3 },
+        .{ .op = .{ .call_word = "doubled" }, .line = 4 },
+    }, false);
+
+    try expectOps(&ctx, "grow", &.{ "bump", "*" });
+
+    const regions = regionsOf(&ctx, "grow") orelse return error.TestExpectedRegions;
+    try testing.expectEqual(@as(usize, 1), regions.len);
+    try testing.expectEqualStrings("doubled", regions[0].word_name);
+    try testing.expectEqual(@as(u32, 1), regions[0].start);
+    try testing.expectEqual(@as(u32, 2), regions[0].end);
 }

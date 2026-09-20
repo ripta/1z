@@ -1,0 +1,13 @@
+\ Expansion erases the call to an `inline` word, so nothing pushes that word's frame. The chain
+\ has to name it anyway, out of the side table the expansion pass records.
+\
+\ Without the marker this is error_frames_chain_direct.1z, whose golden carries the same three
+\ rows. With it, `inner` has no call left at run time and its row is synthesized instead.
+\
+\ No flags: one golden binds the interpreted and eager suites, which is the pin that the
+\ synthesized row reads the same whether the caller ran interpreted or compiled.
+
+inner: ( s v -- n ) const inline [ stream-write 0 + ] ;
+outer: ( s v -- n ) [ inner 0 + ] ;
+
+stdout 42 outer .

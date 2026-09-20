@@ -66,6 +66,9 @@ const CarryableScopeGate = @import("carryable_scope_gate.zig").CarryableScopeGat
 const NestedNameCache = @import("nested_name_cache.zig").NestedNameCache;
 const nestedNamesMatchFrame = @import("nested_name_cache.zig").nestedNamesMatchFrame;
 const visitNestedNames = @import("nested_name_cache.zig").visitNestedNames;
+const inline_region_table = @import("inline_region_table.zig");
+const InlineRegion = inline_region_table.InlineRegion;
+const InlineRegionTable = inline_region_table.InlineRegionTable;
 const may_define = @import("may_define.zig");
 const closure_body_registry = @import("closure_body_registry.zig");
 const LoadLock = @import("load_lock.zig").LoadLock;
@@ -1341,6 +1344,13 @@ pub const Context = struct {
     /// Absence does not mean "no nested names". Only a body the parser finished on the root arena
     /// is filled, so a miss means the gate has to walk. See `NestedNameCache`.
     nested_name_cache: *NestedNameCache = undefined,
+    /// Process-shared inlined runs of expanded bodies, keyed by instruction-slice pointer.
+    /// Heap-allocated by the root context and shared by pointer to all child task contexts.
+    ///
+    /// Inline expansion erases the call it replaces, so the callee's frame no longer exists to be
+    /// pushed. This is what the error path reads to put that row back. Nothing consults it while a
+    /// program runs normally. See `InlineRegionTable`.
+    inline_regions: *InlineRegionTable = undefined,
     /// Process-wide lock serializing module loads. Heap-allocated by the root context and
     /// shared by pointer to all child task contexts.
     ///
@@ -1537,6 +1547,12 @@ pub const Context = struct {
         // frees it in deinit.
         ctx.nested_name_cache = NestedNameCache.create(allocator) catch |err| {
             std.debug.panic("Failed to allocate nested name cache: {any}", .{err});
+        };
+
+        // Allocate the shared inline-region table on the long-lived allocator; the root context
+        // frees it in deinit.
+        ctx.inline_regions = InlineRegionTable.create(allocator) catch |err| {
+            std.debug.panic("Failed to allocate inline region table: {any}", .{err});
         };
 
         // Allocate the shared reified-quotation decode cache on the long-lived allocator; the
@@ -1736,6 +1752,10 @@ pub const Context = struct {
         // Share the parent's nested-name cache so a body parsed there answers the capture gate off
         // the one walk instead of a fresh one here. Aliased, never retained: the root owns it.
         ctx.nested_name_cache = parent.nested_name_cache;
+
+        // Share the parent's inline-region table so a body expanded there names its inlined words
+        // in a trace raised here. Aliased, never retained: the root owns it.
+        ctx.inline_regions = parent.inline_regions;
 
         // Share the parent's reified-quotation decode cache so a task's `jitPushQuotation`
         // reuses the process-wide decode instead of decoding onto its own arena. Aliased, never
@@ -2133,6 +2153,7 @@ pub const Context = struct {
             self.quotation_source_store.destroy();
             self.carryable_scope_gate.destroy();
             self.nested_name_cache.destroy();
+            self.inline_regions.destroy();
             self.reified_decode_cache.destroy();
             self.load_lock.destroy();
             self.module_load_record.destroy();
@@ -2208,6 +2229,27 @@ pub const Context = struct {
     pub fn quotationBodyNestedNames(self: *const Context, instructions: []const Instruction) ?[]const []const u8 {
         if (instructions.len == 0) return null;
         return self.nested_name_cache.lookup(@intFromPtr(instructions.ptr));
+    }
+
+    /// Record which runs of `instructions` were copied out of `inline`-marked words, so a raise
+    /// inside one can name the word whose call the copy replaced.
+    ///
+    /// The expansion pass calls this for the array it just built, alongside the source stamp and
+    /// the nested-name cache. It is the only writer: a body nothing was inlined into has no entry.
+    ///
+    /// Entries are permanent, so only a body the root arena owns may enter. A body built on a task
+    /// or scoped-eval arena dies with it, and its key would then falsely match a later unrelated
+    /// allocation at the same address.
+    pub fn recordInlineRegions(self: *Context, instructions: []const Instruction, regions: []const InlineRegion) !void {
+        if (instructions.len == 0) return;
+        if (self.stateTarget() != self.rootContext()) return;
+        try self.inline_regions.record(@intFromPtr(instructions.ptr), regions);
+    }
+
+    /// The inlined runs of `instructions`, or null for a body nothing was inlined into.
+    pub fn inlineRegionsFor(self: *const Context, instructions: []const Instruction) ?inline_region_table.InlineRegionSet {
+        if (instructions.len == 0) return null;
+        return self.inline_regions.lookup(@intFromPtr(instructions.ptr));
     }
 
     /// The file `def`'s compound body was parsed in, from the body stamps. Null when the action
@@ -8237,6 +8279,52 @@ pub const Context = struct {
         return err;
     }
 
+    /// Queue the error rows inline expansion erased, for a raise at `idx` in `body`.
+    ///
+    /// A copy of an `inline` word's body carries no call to push that word's frame, so its row is
+    /// missing from the chain and the row below it names the file of the body the code landed in
+    /// rather than the file it was written in. Both come out of the one table here.
+    ///
+    /// Runs only while an error unwinds. A body nothing was inlined into answers in one lock-free
+    /// probe, which is every body in a program that uses no `inline` word.
+    fn pendInlineRegionFrames(self: *Context, body: []const Instruction, idx: usize) void {
+        const set = self.inlineRegionsFor(body) orelse return;
+
+        const body_file = self.quotationBodySource(body) orelse self.current_source;
+        var frames = set.framesAt(idx, body_file);
+        var innermost = true;
+
+        while (frames.next()) |frame| {
+            if (innermost) {
+                self.correctPendedCallSource(body[idx].op, frame.body_source);
+                innermost = false;
+            }
+
+            self.appendPendingErrorFrame(.{
+                .word_name = frame.word_name,
+                .source = frame.call_source,
+                .line = frame.call_line,
+                .column = frame.call_column,
+            });
+        }
+    }
+
+    /// Point the row a call to `op` just queued at `source`, the file its line belongs to.
+    ///
+    /// The row is identified by the name it carries rather than by being last. An instruction that
+    /// pushes no frame leaves whatever an earlier unwind queued on top. Rewriting that one would
+    /// move an unrelated row's file.
+    fn correctPendedCallSource(self: *Context, op: Instruction.Op, source: []const u8) void {
+        const name = op.callTargetName() orelse return;
+
+        const frames = self.jit_pending_trace_frames.items;
+        if (frames.len == 0) return;
+
+        const last = &frames[frames.len - 1];
+        if (!std.mem.eql(u8, last.word_name, name)) return;
+        last.source = source;
+    }
+
     /// Validate the stack effect (if declared), end benchmark profiling with
     /// peak-depth update, and pop the call frame.
     pub fn wordSuccessCleanup(self: *Context, name: []const u8, stack_effect: ?*const StackEffect) !void {
@@ -8810,6 +8898,12 @@ pub const Context = struct {
         const site: CallSite = .{ .body = instructions, .owner = owner, .pic_table = pic_table };
 
         for (instructions, 0..) |instr, idx| {
+            // An error leaving this instruction puts back the rows inline expansion erased.
+            //
+            // Zig emits a deferred body at each error return in its scope and nowhere else, so the
+            // fall-through is untouched.
+            errdefer self.pendInlineRegionFrames(instructions, idx);
+
             // The stepwise debugger is wired up only from capi.zig (C debugger API) and main.zig
             // (--debug), neither built for freestanding targets, so ctx.debugger is always null
             // there. Comptime-excluded so debugger.zig's interactive-prompt machinery (which

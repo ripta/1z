@@ -1,0 +1,13 @@
+\ An `inline` word whose body raises, for inline_error_frames_crossmod.1z to import.
+\
+\ Its body reaches only natives, so the relocation rule lets the copy cross into the importing
+\ module. The copied instructions keep line 9, which is a line in this file and not in the one
+\ they end up in.
+\
+\ The raise sits inside a quotation rather than at the body's top level, because a quotation is
+\ its own instruction array with no runs recorded over it. Reaching this word's name from in
+\ there is what says the walk leaves the quotation and reads the run around the call that
+\ entered it.
+
+\\ Write a value to a stream, and drop the count.
+write-it: ( s v -- ) const inline [ [ stream-write ] call drop ] ;
