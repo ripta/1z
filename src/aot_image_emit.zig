@@ -72,7 +72,7 @@ pub const flag_bit_image_decode: u8 = 1 << 6;
 
 /// Format version emitted into `onez_image_header.format_version`. Bumped
 /// when the on-disk layout changes in a way the loader cannot ignore.
-pub const format_version: u32 = 22;
+pub const format_version: u32 = 23;
 
 /// Counts that the metadata emitter plumbs back into `AotMetadata`. The
 /// codegen knows these as it walks the manifest, so emitting them here
@@ -118,6 +118,10 @@ pub const ImageEmissionStats = struct {
     /// and patched at load time with a freshly-allocated `*MutableMap`
     /// populated from the row's serialized entry bytes.
     mutable_map_slot_count: u32 = 0,
+    /// Number of distinct `*MutableValueMap` pointers reachable through compiled word bodies.
+    /// Emitted as `onez_image_mutable_value_map_slots[]` and patched at load time with a
+    /// freshly-allocated map per slot.
+    mutable_value_map_slot_count: u32 = 0,
     /// Number of distinct `*StructInstance` pointers reachable through
     /// compiled word bodies or frozen mutable maps. Emitted as
     /// `onez_image_struct_instance_slots[]` and patched at load time with a
@@ -329,6 +333,7 @@ pub fn emitImageCFromCollection(
     try emitParameterSlotTable(out, allocator, effect_table);
     try emitTaggedSlotTable(out, allocator, effect_table);
     try emitMutableMapSlotTable(out, allocator, effect_table);
+    try emitMutableValueMapSlotTable(out, allocator, effect_table);
     try emitStructInstanceSlotTable(out, allocator, effect_table);
     try emitVectorSlotTable(out, allocator, effect_table);
     try emitOnceCellSlotTable(out, allocator, effect_table);
@@ -340,6 +345,7 @@ pub fn emitImageCFromCollection(
     try emitTypeValueData(out, allocator, effect_table, struct_plans_items, struct_index);
     try emitTaggedDescriptionsStorage(out, allocator, effect_table, struct_index, quotation_id_map);
     try emitMutableMapDescriptionsStorage(out, allocator, effect_table, struct_index, quotation_id_map);
+    try emitMutableValueMapDescriptionsStorage(out, allocator, effect_table, struct_index, quotation_id_map);
     try emitStructInstanceDescriptionsStorage(out, allocator, effect_table, struct_index, quotation_id_map);
     try emitVectorDescriptionsStorage(out, allocator, effect_table, struct_index, quotation_id_map);
     try emitProtocolDescriptorSlotTable(out, allocator, effect_table);
@@ -372,6 +378,7 @@ pub fn emitImageCFromCollection(
     stats.struct_type_slot_count = @intCast(struct_plans_items.len);
     stats.tagged_slot_count = effect_table.taggedSlotCount();
     stats.mutable_map_slot_count = effect_table.mutableMapSlotCount();
+    stats.mutable_value_map_slot_count = effect_table.mutableValueMapSlotCount();
     stats.struct_instance_slot_count = effect_table.structInstanceSlotCount();
     stats.vector_slot_count = effect_table.vectorSlotCount();
     stats.once_cell_slot_count = effect_table.onceCellSlotCount();
@@ -459,6 +466,13 @@ pub const StackEffectTable = struct {
     /// the same runtime pointer. Indices are 0-based with no sentinel.
     mutable_map_slots: std.ArrayListUnmanaged(*const value_mod.MutableMap) = .{},
     mutable_map_slot_index: std.AutoHashMapUnmanaged(*const value_mod.MutableMap, u32) = .{},
+    /// Distinct `*MutableValueMap` pointers, on the `mutable_map` model above. The keys are Values
+    /// rather than byte slices, so both halves of an entry serialize through the value codec and
+    /// reach the other slot tables.
+    ///
+    /// Indices are 0-based with no sentinel.
+    mutable_value_map_slots: std.ArrayListUnmanaged(*const value_mod.MutableValueMap) = .{},
+    mutable_value_map_slot_index: std.AutoHashMapUnmanaged(*const value_mod.MutableValueMap, u32) = .{},
     /// Distinct `*StructInstance` pointers reached from compiled word bodies and from inside frozen
     /// mutable maps. Each unique freeze-time instance gets its own slot; the loader allocates a fresh
     /// `StructInstance` per slot and populates its fields from serialized bytecode, so every freeze-
@@ -524,6 +538,8 @@ pub const StackEffectTable = struct {
         self.tagged_slot_index.deinit(self.allocator);
         self.mutable_map_slots.deinit(self.allocator);
         self.mutable_map_slot_index.deinit(self.allocator);
+        self.mutable_value_map_slots.deinit(self.allocator);
+        self.mutable_value_map_slot_index.deinit(self.allocator);
         self.struct_instance_slots.deinit(self.allocator);
         self.struct_instance_slot_index.deinit(self.allocator);
         self.vector_slots.deinit(self.allocator);
@@ -596,6 +612,16 @@ pub const StackEffectTable = struct {
         const idx: u32 = @intCast(self.mutable_map_slots.items.len);
         try self.mutable_map_slots.append(self.allocator, m);
         try self.mutable_map_slot_index.put(self.allocator, m, idx);
+        return idx;
+    }
+
+    /// Intern a `*MutableValueMap` pointer. Returns the assigned 0-based
+    /// slot index; identical pointers collapse to the same slot.
+    fn internMutableValueMap(self: *StackEffectTable, m: *const value_mod.MutableValueMap) Allocator.Error!u32 {
+        if (self.mutable_value_map_slot_index.get(m)) |idx| return idx;
+        const idx: u32 = @intCast(self.mutable_value_map_slots.items.len);
+        try self.mutable_value_map_slots.append(self.allocator, m);
+        try self.mutable_value_map_slot_index.put(self.allocator, m, idx);
         return idx;
     }
 
@@ -685,6 +711,10 @@ pub const StackEffectTable = struct {
         return @intCast(self.mutable_map_slots.items.len);
     }
 
+    fn mutableValueMapSlotCount(self: *const StackEffectTable) u32 {
+        return @intCast(self.mutable_value_map_slots.items.len);
+    }
+
     fn structInstanceSlotCount(self: *const StackEffectTable) u32 {
         return @intCast(self.struct_instance_slots.items.len);
     }
@@ -740,6 +770,12 @@ pub const StackEffectTable = struct {
     /// null when the pointer has not been interned.
     pub fn lookupMutableMapSlot(self: *const StackEffectTable, m: *const value_mod.MutableMap) ?u32 {
         return self.mutable_map_slot_index.get(m);
+    }
+
+    /// Look up the 0-based mutable_value_map slot index for `m`. Returns
+    /// null when the pointer has not been interned.
+    pub fn lookupMutableValueMapSlot(self: *const StackEffectTable, m: *const value_mod.MutableValueMap) ?u32 {
+        return self.mutable_value_map_slot_index.get(m);
     }
 
     /// Look up the 0-based struct_instance slot index for `si`. Returns
@@ -1002,6 +1038,17 @@ fn internValueTypeLiterals(
         // A value-map key is a Value, so it can be a type carrier needing a slot of its own. The
         // image serializer reports `NotEncodable` for one that was never interned.
         .value_map => |m| {
+            for (m.map.keys()) |key| {
+                try internValueTypeLiterals(struct_plans, struct_index, effect_table, key);
+            }
+            for (m.map.values()) |value| {
+                try internValueTypeLiterals(struct_plans, struct_index, effect_table, value);
+            }
+        },
+        // The mutable half needs a slot of its own for its identity, and then the same
+        // both-halves recursion for carriers buried inside it.
+        .mutable_value_map => |m| {
+            _ = try effect_table.internMutableValueMap(m);
             for (m.map.keys()) |key| {
                 try internValueTypeLiterals(struct_plans, struct_index, effect_table, key);
             }
@@ -1826,6 +1873,7 @@ fn emitTaggedDescriptionsStorage(
         .parameter_slot_index = &table.parameter_slot_index,
         .tagged_slot_index = &table.tagged_slot_index,
         .mutable_map_slot_index = &table.mutable_map_slot_index,
+        .mutable_value_map_slot_index = &table.mutable_value_map_slot_index,
         .struct_instance_slot_index = &table.struct_instance_slot_index,
         .vector_slot_index = &table.vector_slot_index,
         .once_cell_slot_index = &table.once_cell_slot_index,
@@ -1936,6 +1984,7 @@ fn emitMutableMapDescriptionsStorage(
         .parameter_slot_index = &table.parameter_slot_index,
         .tagged_slot_index = &table.tagged_slot_index,
         .mutable_map_slot_index = &table.mutable_map_slot_index,
+        .mutable_value_map_slot_index = &table.mutable_value_map_slot_index,
         .struct_instance_slot_index = &table.struct_instance_slot_index,
         .vector_slot_index = &table.vector_slot_index,
         .once_cell_slot_index = &table.once_cell_slot_index,
@@ -1979,6 +2028,111 @@ fn emitMutableMapDescriptionsStorage(
         try writeMutableMapDescBodySym(out, allocator, i);
         try out.appendSlice(allocator, ", .entries_bytecode_len = sizeof(");
         try writeMutableMapDescBodySym(out, allocator, i);
+        try out.appendSlice(allocator, ") },\n");
+    }
+    try out.appendSlice(allocator, "};\n\n");
+}
+
+fn writeMutableValueMapDescBodySym(
+    out: *std.ArrayListUnmanaged(u8),
+    allocator: Allocator,
+    idx: usize,
+) Allocator.Error!void {
+    var buf: [64]u8 = undefined;
+    const s = std.fmt.bufPrint(&buf, "onez_image_mutable_value_map_desc_{d}_data", .{idx}) catch unreachable;
+    try out.appendSlice(allocator, s);
+}
+
+/// Emit `onez_image_mutable_value_map_slots[]`: one NULL pointer per distinct
+/// `*MutableValueMap` reached through compiled word bodies. The loader allocates one map per slot
+/// and patches each entry with the runtime pointer. No-op when none have been interned.
+fn emitMutableValueMapSlotTable(
+    out: *std.ArrayListUnmanaged(u8),
+    allocator: Allocator,
+    table: *const StackEffectTable,
+) Allocator.Error!void {
+    if (table.mutableValueMapSlotCount() == 0) return;
+    var num_buf: [32]u8 = undefined;
+    try out.appendSlice(allocator, "__attribute__((used)) struct onez_mutable_value_map *onez_image_mutable_value_map_slots[");
+    try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{table.mutableValueMapSlotCount()}) catch unreachable);
+    try out.appendSlice(allocator, "] = {\n");
+    var i: u32 = 0;
+    while (i < table.mutableValueMapSlotCount()) : (i += 1) {
+        try out.appendSlice(allocator, "    NULL, /* slot ");
+        try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{i}) catch unreachable);
+        try out.appendSlice(allocator, " (filled by the loader). */\n");
+    }
+    try out.appendSlice(allocator, "};\n\n");
+}
+
+/// Emit `onez_image_mutable_value_map_descriptions_storage[]`: one row per slot in
+/// `onez_image_mutable_value_map_slots[]`. Each row carries the serialized entries in image-mode
+/// bytecode so nested type-carrier values resolve through their own slot tables. No-op when none
+/// have been interned.
+///
+/// An entry is two recursions, `key | value`, where a mutable map writes
+/// `u32 key_len | key_bytes | value`. A value-map key is a Value, so it takes the same codec its
+/// value does and reaches the slot tables the same way.
+fn emitMutableValueMapDescriptionsStorage(
+    out: *std.ArrayListUnmanaged(u8),
+    allocator: Allocator,
+    table: *const StackEffectTable,
+    struct_index: *const std.AutoHashMapUnmanaged(*const value_mod.StructType, u32),
+    quotation_id_map: ?*const std.AutoHashMapUnmanaged(usize, u32),
+) ImageEmitError!void {
+    if (table.mutableValueMapSlotCount() == 0) return;
+    var num_buf: [32]u8 = undefined;
+
+    const slot_maps: instruction_bytecode.SlotEncodingMaps = .{
+        .typevalue_slot_index = &table.type_slot_index,
+        .struct_type_slot_index = struct_index,
+        .marker_slot_index = &table.marker_slot_index,
+        .parameter_slot_index = &table.parameter_slot_index,
+        .tagged_slot_index = &table.tagged_slot_index,
+        .mutable_map_slot_index = &table.mutable_map_slot_index,
+        .mutable_value_map_slot_index = &table.mutable_value_map_slot_index,
+        .struct_instance_slot_index = &table.struct_instance_slot_index,
+        .vector_slot_index = &table.vector_slot_index,
+        .once_cell_slot_index = &table.once_cell_slot_index,
+        .quotation_id_map = quotation_id_map,
+    };
+
+    for (table.mutable_value_map_slots.items, 0..) |m, i| {
+        var entries_buf: std.ArrayListUnmanaged(u8) = .{};
+        defer entries_buf.deinit(allocator);
+
+        const entry_count: u32 = @intCast(m.map.count());
+        try entries_buf.appendSlice(allocator, std.mem.asBytes(&entry_count));
+        for (m.map.keys(), m.map.values()) |key, value| {
+            instruction_bytecode.serializeValueIntoForImage(&entries_buf, key, allocator, &slot_maps, null) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                error.NotEncodable => return error.NotEncodable,
+            };
+            instruction_bytecode.serializeValueIntoForImage(&entries_buf, value, allocator, &slot_maps, null) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                error.NotEncodable => return error.NotEncodable,
+            };
+        }
+
+        try out.appendSlice(allocator, "static const uint8_t ");
+        try writeMutableValueMapDescBodySym(out, allocator, i);
+        try out.appendSlice(allocator, "[] = {");
+        for (entries_buf.items, 0..) |byte, bi| {
+            if (bi > 0) try out.append(allocator, ',');
+            try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{byte}) catch unreachable);
+        }
+        try out.appendSlice(allocator, "};\n");
+    }
+    try out.append(allocator, '\n');
+
+    try out.appendSlice(allocator, "static const onez_image_mutable_value_map_description_t onez_image_mutable_value_map_descriptions_storage[] = {\n");
+    for (table.mutable_value_map_slots.items, 0..) |_, i| {
+        try out.appendSlice(allocator, "    { .slot = ");
+        try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{i}) catch unreachable);
+        try out.appendSlice(allocator, ", .entries_bytecode = ");
+        try writeMutableValueMapDescBodySym(out, allocator, i);
+        try out.appendSlice(allocator, ", .entries_bytecode_len = sizeof(");
+        try writeMutableValueMapDescBodySym(out, allocator, i);
         try out.appendSlice(allocator, ") },\n");
     }
     try out.appendSlice(allocator, "};\n\n");
@@ -2041,6 +2195,7 @@ fn emitStructInstanceDescriptionsStorage(
         .parameter_slot_index = &table.parameter_slot_index,
         .tagged_slot_index = &table.tagged_slot_index,
         .mutable_map_slot_index = &table.mutable_map_slot_index,
+        .mutable_value_map_slot_index = &table.mutable_value_map_slot_index,
         .struct_instance_slot_index = &table.struct_instance_slot_index,
         .vector_slot_index = &table.vector_slot_index,
         .once_cell_slot_index = &table.once_cell_slot_index,
@@ -2147,6 +2302,7 @@ fn emitVectorDescriptionsStorage(
         .parameter_slot_index = &table.parameter_slot_index,
         .tagged_slot_index = &table.tagged_slot_index,
         .mutable_map_slot_index = &table.mutable_map_slot_index,
+        .mutable_value_map_slot_index = &table.mutable_value_map_slot_index,
         .struct_instance_slot_index = &table.struct_instance_slot_index,
         .vector_slot_index = &table.vector_slot_index,
         .once_cell_slot_index = &table.once_cell_slot_index,
@@ -2496,6 +2652,7 @@ fn emitDispatchEntryTable(
         .parameter_slot_index = &table.parameter_slot_index,
         .tagged_slot_index = &table.tagged_slot_index,
         .mutable_map_slot_index = &table.mutable_map_slot_index,
+        .mutable_value_map_slot_index = &table.mutable_value_map_slot_index,
         .struct_instance_slot_index = &table.struct_instance_slot_index,
         .vector_slot_index = &table.vector_slot_index,
         .once_cell_slot_index = &table.once_cell_slot_index,
@@ -3818,6 +3975,20 @@ fn emitTypeDeclarations(
         \\    uint32_t       entries_bytecode_len;
         \\} onez_image_mutable_map_description_t;
         \\
+        \\/* Per-slot description for `.mutable_value_map` literal pushes, on the */
+        \\/* mutable_map model above: one live map allocated per row and shared   */
+        \\/* by every push site that named the same parse-time map, so a runtime  */
+        \\/* `vmap-set!` through one is visible through the others.               */
+        \\/*                                                                      */
+        \\/* An entry is `key | value`, both serialized Values, where a mutable   */
+        \\/* map writes length-prefixed key bytes. A value-map key is a Value,    */
+        \\/* so it reaches the slot tables the way its value does.                */
+        \\typedef struct onez_image_mutable_value_map_description {
+        \\    uint32_t    slot;                 /* index into onez_image_mutable_value_map_slots */
+        \\    const uint8_t *entries_bytecode;
+        \\    uint32_t       entries_bytecode_len;
+        \\} onez_image_mutable_value_map_description_t;
+        \\
         \\/* One frozen struct instance. The loader allocates a fresh             */
         \\/* StructInstance whose struct_type is onez_image_struct_type_slots     */
         \\/* [struct_type_slot], decodes the field values from fields_bytecode    */
@@ -3973,6 +4144,7 @@ fn emitTypeDeclarations(
         \\    uint32_t parameter_slot_count;
         \\    uint32_t tagged_slot_count;
         \\    uint32_t mutable_map_slot_count;
+        \\    uint32_t mutable_value_map_slot_count;
         \\    uint32_t struct_instance_slot_count;
         \\    uint32_t vector_slot_count;
         \\    uint32_t once_cell_slot_count;
@@ -3990,6 +4162,7 @@ fn emitTypeDeclarations(
         \\    const struct onez_image_parameter_description *parameter_descriptions;
         \\    const struct onez_image_tagged_description *tagged_descriptions;
         \\    const struct onez_image_mutable_map_description *mutable_map_descriptions;
+        \\    const struct onez_image_mutable_value_map_description *mutable_value_map_descriptions;
         \\    const struct onez_image_struct_instance_description *struct_instance_descriptions;
         \\    const struct onez_image_vector_description *vector_descriptions;
         \\    const struct onez_image_once_cell_description *once_cell_descriptions;
@@ -4154,6 +4327,7 @@ fn emitWordBodyBytecode(
         .parameter_slot_index = &effect_table.parameter_slot_index,
         .tagged_slot_index = &effect_table.tagged_slot_index,
         .mutable_map_slot_index = &effect_table.mutable_map_slot_index,
+        .mutable_value_map_slot_index = &effect_table.mutable_value_map_slot_index,
         .struct_instance_slot_index = &effect_table.struct_instance_slot_index,
         .vector_slot_index = &effect_table.vector_slot_index,
         .once_cell_slot_index = &effect_table.once_cell_slot_index,
@@ -5103,6 +5277,7 @@ fn emitHeader(
     const parameter_slot_count: u32 = effect_table.parameterSlotCount();
     const tagged_slot_count: u32 = effect_table.taggedSlotCount();
     const mutable_map_slot_count: u32 = effect_table.mutableMapSlotCount();
+    const mutable_value_map_slot_count: u32 = effect_table.mutableValueMapSlotCount();
     const struct_instance_slot_count: u32 = effect_table.structInstanceSlotCount();
     const vector_slot_count: u32 = effect_table.vectorSlotCount();
     const once_cell_slot_count: u32 = effect_table.onceCellSlotCount();
@@ -5121,6 +5296,7 @@ fn emitHeader(
     const parameter_descs_ref: []const u8 = if (parameter_slot_count > 0) "onez_image_parameter_descriptions_storage" else "NULL";
     const tagged_descs_ref: []const u8 = if (tagged_slot_count > 0) "onez_image_tagged_descriptions_storage" else "NULL";
     const mutable_map_descs_ref: []const u8 = if (mutable_map_slot_count > 0) "onez_image_mutable_map_descriptions_storage" else "NULL";
+    const mutable_value_map_descs_ref: []const u8 = if (mutable_value_map_slot_count > 0) "onez_image_mutable_value_map_descriptions_storage" else "NULL";
     const struct_instance_descs_ref: []const u8 = if (struct_instance_slot_count > 0) "onez_image_struct_instance_descriptions_storage" else "NULL";
     const vector_descs_ref: []const u8 = if (vector_slot_count > 0) "onez_image_vector_descriptions_storage" else "NULL";
     const once_cell_descs_ref: []const u8 = if (once_cell_slot_count > 0) "onez_image_once_cell_descriptions_storage" else "NULL";
@@ -5155,6 +5331,8 @@ fn emitHeader(
     try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{tagged_slot_count}) catch unreachable);
     try out.appendSlice(allocator, ",\n    .mutable_map_slot_count = ");
     try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{mutable_map_slot_count}) catch unreachable);
+    try out.appendSlice(allocator, ",\n    .mutable_value_map_slot_count = ");
+    try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{mutable_value_map_slot_count}) catch unreachable);
     try out.appendSlice(allocator, ",\n    .struct_instance_slot_count = ");
     try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{struct_instance_slot_count}) catch unreachable);
     try out.appendSlice(allocator, ",\n    .vector_slot_count = ");
@@ -5189,6 +5367,8 @@ fn emitHeader(
     try out.appendSlice(allocator, tagged_descs_ref);
     try out.appendSlice(allocator, ",\n    .mutable_map_descriptions = ");
     try out.appendSlice(allocator, mutable_map_descs_ref);
+    try out.appendSlice(allocator, ",\n    .mutable_value_map_descriptions = ");
+    try out.appendSlice(allocator, mutable_value_map_descs_ref);
     try out.appendSlice(allocator, ",\n    .struct_instance_descriptions = ");
     try out.appendSlice(allocator, struct_instance_descs_ref);
     try out.appendSlice(allocator, ",\n    .vector_descriptions = ");
@@ -6771,6 +6951,80 @@ test "emitImageC: a type carrier buried in a value_map reaches its slot table" {
     const stats = try emitImageC(&out, testing.allocator, &ctx, empty, &lookup, .{}, &.{});
 
     try testing.expectEqual(@as(u32, 2), stats.mutable_map_slot_count);
+}
+
+test "emitImageC: a mutable_value_map takes one slot per pointer and emits its description" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+    const arena = ctx.quotationAllocator();
+
+    const shared = try value_mod.MutableValueMap.create(arena);
+    try shared.map.put(arena, .{ .fixnum = 1 }, value_mod.stringValue("one"));
+    const other = try value_mod.MutableValueMap.create(arena);
+
+    // Two push sites naming the same map collapse to one slot; that is what preserves identity.
+    const instrs = try arena.dupe(Instruction, &.{
+        .{ .op = .{ .push_literal = .{ .mutable_value_map = shared } }, .line = 0, .column = 0 },
+        .{ .op = .{ .push_literal = .{ .mutable_value_map = shared } }, .line = 0, .column = 0 },
+        .{ .op = .{ .push_literal = .{ .mutable_value_map = other } }, .line = 0, .column = 0 },
+    });
+    try putTopLevelWord(&ctx, "demo-word", instrs);
+
+    const empty: ImageManifest = .{
+        .entries = &.{},
+        .structural_count = 0,
+        .blob_count = 0,
+        .total_count = 0,
+    };
+
+    var lookup: std.StringHashMapUnmanaged(u32) = .{};
+    defer lookup.deinit(testing.allocator);
+
+    var out: std.ArrayListUnmanaged(u8) = .{};
+    defer out.deinit(testing.allocator);
+
+    const stats = try emitImageC(&out, testing.allocator, &ctx, empty, &lookup, .{}, &.{});
+
+    try testing.expectEqual(@as(u32, 2), stats.mutable_value_map_slot_count);
+    try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_mutable_value_map_slots[2]") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_mutable_value_map_descriptions_storage") != null);
+}
+
+test "emitImageC: a type carrier buried in a mutable_value_map reaches its slot table" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+    const arena = ctx.quotationAllocator();
+
+    // Both halves, as for the immutable map: a mutable-map key and a mutable-map value each need a
+    // slot of their own or the image serializer answers NotEncodable for this body.
+    const key_map = try value_mod.MutableMap.create(arena);
+    const value_map_entry = try value_mod.MutableMap.create(arena);
+
+    const mvm = try value_mod.MutableValueMap.create(arena);
+    try mvm.map.put(arena, .{ .mutable_map = key_map }, .{ .mutable_map = value_map_entry });
+
+    const instrs = try arena.dupe(Instruction, &.{
+        .{ .op = .{ .push_literal = .{ .mutable_value_map = mvm } }, .line = 0, .column = 0 },
+    });
+    try putTopLevelWord(&ctx, "demo-word", instrs);
+
+    const empty: ImageManifest = .{
+        .entries = &.{},
+        .structural_count = 0,
+        .blob_count = 0,
+        .total_count = 0,
+    };
+
+    var lookup: std.StringHashMapUnmanaged(u32) = .{};
+    defer lookup.deinit(testing.allocator);
+
+    var out: std.ArrayListUnmanaged(u8) = .{};
+    defer out.deinit(testing.allocator);
+
+    const stats = try emitImageC(&out, testing.allocator, &ctx, empty, &lookup, .{}, &.{});
+
+    try testing.expectEqual(@as(u32, 2), stats.mutable_map_slot_count);
+    try testing.expectEqual(@as(u32, 1), stats.mutable_value_map_slot_count);
 }
 
 test "emitImageC: a once cell reached from two push sites takes one slot" {

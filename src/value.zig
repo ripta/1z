@@ -828,6 +828,20 @@ pub const MutableMap = struct {
 /// what lets one insert and one probe routine serve both.
 pub const ValueEntries = std.ArrayHashMapUnmanaged(Value, Value, ValueContext, true);
 
+/// One decoded value-map entry the AOT image loader parks until it can be installed.
+///
+/// A key cannot be hashed mid-load: a struct-instance or tagged slot reference still holds the
+/// loader's placeholder contents, which `hashValue` folds in and `eql` compares, so two distinct
+/// instances of one struct type are equal until their fields are filled.
+///
+/// `map` is borrowed, never owned. A decode failure can destroy the owning map while an entry is
+/// still parked, so the drain releases `key` and `value` and never touches `map`.
+pub const PendingValueMapEntry = struct {
+    map: *ValueEntries,
+    key: Value,
+    value: Value,
+};
+
 /// Immutable associative store whose keys may be any 1z value, not only a string or a symbol.
 ///
 /// Storage layout mirrors `Set`: a refcounted, mutex-guarded `ContainerHeader` at the top of the

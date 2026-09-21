@@ -1,0 +1,11 @@
+\ Module-private mutable value-keyed state whose values are quotations calling a module word. The
+\ freeze-time walk has to descend into both halves of every entry to discover `scale`, and the
+\ buried quotation needs its compiled code pointer reattached at load.
+
+scale: ( n: fixnum -- n: fixnum ) [ 10 * ] ;
+
+(handlers): ( -- mvmap ) { { 1 [ scale ] } { { 2 3 } [ 100 + ] } } >mutable-value-map ;
+
+run-handler: ( key n -- n: fixnum ) [ swap (handlers) swap vmap-get call ] ;
+
+register: ( key quot -- ) [ (handlers) -rot> vmap-set! drop ] ;

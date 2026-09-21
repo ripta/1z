@@ -88,6 +88,10 @@
 //!   it recurses through this codec instead of carrying the length-prefixed
 //!   run a hash key does. Both halves therefore reach the slot tables in
 //!   image mode.
+//! - `21 = mutable_value_map_slot`: image-mode only. `u32 slot_index`
+//!   resolved through `SlotResolutionTables.mutable_value_map_slots`. The
+//!   mutable half has no by-value form at all, because its identity is what a
+//!   caller mutates through.
 //!
 //! All multi-byte integers are little-endian.
 //!
@@ -128,6 +132,7 @@ const MutableMap = value_mod.MutableMap;
 const Vector = value_mod.Vector;
 const OnceCell = value_mod.OnceCell;
 const ValueMap = value_mod.ValueMap;
+const MutableValueMap = value_mod.MutableValueMap;
 const ValueEntries = value_mod.ValueEntries;
 
 const stack_effect_mod = @import("stack_effect.zig");
@@ -195,6 +200,7 @@ pub const SlotEncodingMaps = struct {
     parameter_slot_index: *const std.AutoHashMapUnmanaged(*const Parameter, u32),
     tagged_slot_index: *const std.AutoHashMapUnmanaged(TaggedKey, u32),
     mutable_map_slot_index: *const std.AutoHashMapUnmanaged(*const MutableMap, u32),
+    mutable_value_map_slot_index: *const std.AutoHashMapUnmanaged(*const MutableValueMap, u32),
     struct_instance_slot_index: *const std.AutoHashMapUnmanaged(*const StructInstance, u32),
     vector_slot_index: *const std.AutoHashMapUnmanaged(*const Vector, u32),
     once_cell_slot_index: *const std.AutoHashMapUnmanaged(*const OnceCell, u32),
@@ -243,6 +249,8 @@ pub const SlotResolutionTables = struct {
     tagged_slot_count: u32,
     mutable_map_slots: ?[*]?*MutableMap,
     mutable_map_slot_count: u32,
+    mutable_value_map_slots: ?[*]?*MutableValueMap,
+    mutable_value_map_slot_count: u32,
     struct_instance_slots: ?[*]?*StructInstance,
     struct_instance_slot_count: u32,
     vector_slots: ?[*]?*Vector,
@@ -270,6 +278,21 @@ pub const SlotResolutionTables = struct {
     /// at teardown.
     decoded_streams: ?*std.ArrayListUnmanaged([]const Instruction) = null,
     decoded_streams_allocator: ?Allocator = null,
+
+    /// When supplied, a decoded `value_map`'s entries are parked here instead of inserted, for the
+    /// loader to install once every population pass has run. `pending_value_map_allocator` must be
+    /// supplied with it; the decoder records nothing without both.
+    ///
+    /// A key cannot be hashed during the load. A struct-instance or tagged slot reference still
+    /// holds the loader's placeholder contents, `Value.hashValue` folds those contents in, and
+    /// `Value.eql` compares them, so two distinct instances of one struct type are equal until
+    /// their fields are filled. Inserting then collapses them and drops an entry.
+    ///
+    /// Entries land in decode order, which is post-order: a map nested inside another entry's key
+    /// is fully parked before the entry that holds it. Installing in list order therefore fills an
+    /// inner map before anything hashes it.
+    pending_value_map_entries: ?*std.ArrayListUnmanaged(value_mod.PendingValueMapEntry) = null,
+    pending_value_map_allocator: ?Allocator = null,
 };
 
 /// Op tags. Stored in the bytecode stream.
@@ -336,6 +359,15 @@ const value_tag_once_cell_slot: u8 = 19;
 
 /// Immutable value-keyed map, encoded by value.
 const value_tag_value_map: u8 = 20;
+
+/// Slot-indexed `mutable_value_map` literal used in image-mode bytecode. Carries a
+/// `u32 slot_index` resolved through `SlotResolutionTables.mutable_value_map_slots`,
+/// preserving the identity of a freeze-time mutable value-keyed map across the boundary.
+///
+/// The mutable half has no by-value counterpart, unlike `mutable_map`'s tag 15. Identity is
+/// the whole point of the type: two push sites that named one freeze-time map must reach one
+/// runtime object, so a `vmap-set!` through either is visible through the other.
+const value_tag_mutable_value_map_slot: u8 = 21;
 
 /// Sentinel `quotation_id` meaning "no compiled function". Written for every
 /// serialized quotation when no build-time quotation-ID map is supplied (or the
@@ -652,6 +684,11 @@ pub fn serializeValueIntoForImage(
             try buf.append(allocator, value_tag_mutable_map_slot);
             try buf.appendSlice(allocator, std.mem.asBytes(&slot));
         },
+        .mutable_value_map => |m| {
+            const slot = maps.mutable_value_map_slot_index.get(m) orelse return error.NotEncodable;
+            try buf.append(allocator, value_tag_mutable_value_map_slot);
+            try buf.appendSlice(allocator, std.mem.asBytes(&slot));
+        },
         .struct_instance => |si| {
             const slot = maps.struct_instance_slot_index.get(si) orelse return error.NotEncodable;
             try buf.append(allocator, value_tag_struct_instance_slot);
@@ -824,6 +861,29 @@ pub fn deserializeValueAtForImage(
     return d.readValueForImage();
 }
 
+/// Install one decoded value-map entry, keeping the first of two keys that compare equal.
+///
+/// A stream written from a live map holds no duplicate, so this only fires on a malformed one,
+/// where either rule is arbitrary. First-wins is what `buildFrozenValueMap` does.
+///
+/// The drop releases what a slot-resolved half was retained for. A by-value-decoded key owns a
+/// raw allocation instead, which `freeDecodedValue` reclaims and this cannot.
+///
+/// File-scope and public because the image loader installs parked entries outside any `Decoder`,
+/// and has to follow the same rule.
+///
+/// Infallible, so a caller's `errdefer` on the not-yet-owned key is the only thing that can release
+/// it. Capacity must already be reserved, by whichever site decoded the entry.
+pub fn putDecodedValueMapEntry(map: *ValueEntries, key: Value, value: Value) void {
+    const gop = map.getOrPutAssumeCapacity(key);
+    if (gop.found_existing) {
+        container_backing.releaseValue(key);
+        container_backing.releaseValue(value);
+        return;
+    }
+    gop.value_ptr.* = value;
+}
+
 /// Internal decoder state: the stream, the cursor, the decode allocator, and the mode-specific
 /// extras the public entry points used to thread by hand. One instance is shared down the
 /// recursion, so a failure anywhere lands in the same diagnostic slot.
@@ -941,21 +1001,19 @@ const Decoder = struct {
         return .{ .instructions = instructions, .effect = effect };
     }
 
-    /// Install one decoded value-map entry, keeping the first of two keys that compare equal.
+    /// Where to park a decoded value-map entry, or null to insert it immediately.
     ///
-    /// A stream written from a live map holds no duplicate, so this only fires on a malformed one,
-    /// where either rule is arbitrary. First-wins is what `buildFrozenValueMap` does.
-    ///
-    /// The drop releases what a slot-resolved half was retained for. A by-value-decoded key owns a
-    /// raw allocation instead, which `freeDecodedValue` reclaims and this cannot.
-    fn putDecodedValueMapEntry(map: *ValueEntries, key: Value, value: Value) void {
-        const gop = map.getOrPutAssumeCapacity(key);
-        if (gop.found_existing) {
-            container_backing.releaseValue(key);
-            container_backing.releaseValue(value);
-            return;
-        }
-        gop.value_ptr.* = value;
+    /// Null on every path but the image load. `replayMethodDispatch` decodes through the same slot
+    /// tables after the load has finished, where every container's contents are final and an
+    /// immediate insert hashes correctly.
+    fn pendingValueMapSink(self: *const Decoder) ?struct {
+        list: *std.ArrayListUnmanaged(value_mod.PendingValueMapEntry),
+        allocator: Allocator,
+    } {
+        const tables = self.slot_tables orelse return null;
+        const list = tables.pending_value_map_entries orelse return null;
+        const alloc = tables.pending_value_map_allocator orelse return null;
+        return .{ .list = list, .allocator = alloc };
     }
 
     fn readValue(self: *Decoder) DecodeError!Value {
@@ -1156,6 +1214,19 @@ const Decoder = struct {
                 m.header.retain();
                 break :blk .{ .mutable_map = m };
             },
+            value_tag_mutable_value_map_slot => blk: {
+                if (self.offset + 4 > self.data.len) return self.failTruncated();
+                const slot = std.mem.readInt(u32, self.data[self.offset..][0..4], .little);
+                self.offset += 4;
+                if (slot >= tables.mutable_value_map_slot_count) return self.failUnresolvedSlot("mutable_value_map", slot);
+                const table = tables.mutable_value_map_slots orelse return self.failUnresolvedSlot("mutable_value_map", slot);
+                const m = table[slot] orelse return self.failUnresolvedSlot("mutable_value_map", slot);
+                // A stored reference is an owning reference, as for every other header-backed slot
+                // arm. The slot table keeps its own donated refcount, released by the context's
+                // image-slot teardown walk.
+                m.header.retain();
+                break :blk .{ .mutable_value_map = m };
+            },
             value_tag_struct_instance_slot => blk: {
                 if (self.offset + 4 > self.data.len) return self.failTruncated();
                 const slot = std.mem.readInt(u32, self.data[self.offset..][0..4], .little);
@@ -1227,11 +1298,28 @@ const Decoder = struct {
                 self.offset += 4;
                 const m = ValueMap.create(self.allocator) catch return error.OutOfMemory;
                 errdefer m.header.release();
+                // Reserved whether or not the entries are parked, because the install pass assumes
+                // the capacity is already there.
                 try m.map.ensureTotalCapacity(self.allocator, entry_count);
+
+                // Under the image load the entries are parked rather than inserted, because a key
+                // cannot be hashed yet: a struct-instance or tagged slot reference still holds the
+                // loader's placeholder contents, and two distinct instances of one struct type
+                // compare equal while they do. Inserting there does not merely misplace an entry,
+                // it reports a duplicate and drops one.
+                const sink = self.pendingValueMapSink();
                 for (0..entry_count) |_| {
                     const key = try self.readValueForImage();
+                    // The key has no owner until the entry lands, so a truncated value strands it.
+                    // In image mode a key can be a slot reference the arm above just retained, so
+                    // what leaks here is a refcount rather than only decode-allocator bytes.
+                    errdefer container_backing.releaseValue(key);
                     const value = try self.readValueForImage();
-                    putDecodedValueMapEntry(&m.map, key, value);
+                    if (sink) |s| {
+                        try s.list.append(s.allocator, .{ .map = &m.map, .key = key, .value = value });
+                    } else {
+                        putDecodedValueMapEntry(&m.map, key, value);
+                    }
                 }
                 break :blk .{ .value_map = m };
             },
@@ -1314,8 +1402,10 @@ fn isImageOnlyValueTag(tag: u8) bool {
         value_tag_parameter_slot,
         value_tag_tagged_slot,
         value_tag_mutable_map_slot,
+        value_tag_mutable_value_map_slot,
         value_tag_struct_instance_slot,
         value_tag_vector_slot,
+        value_tag_once_cell_slot,
         => true,
         else => false,
     };
@@ -1465,6 +1555,8 @@ fn emptySlotTables() SlotResolutionTables {
         .tagged_slot_count = 0,
         .mutable_map_slots = null,
         .mutable_map_slot_count = 0,
+        .mutable_value_map_slots = null,
+        .mutable_value_map_slot_count = 0,
         .struct_instance_slots = null,
         .struct_instance_slot_count = 0,
         .vector_slots = null,
@@ -1504,6 +1596,8 @@ test "call target: a resolved name bakes a slot index, an unresolved one stays a
         .tagged_slot_count = 0,
         .mutable_map_slots = null,
         .mutable_map_slot_count = 0,
+        .mutable_value_map_slots = null,
+        .mutable_value_map_slot_count = 0,
         .struct_instance_slots = null,
         .struct_instance_slot_count = 0,
         .vector_slots = null,
@@ -1923,6 +2017,8 @@ test "roundtrip: value_map key and value both resolve through the image slot tab
     try tg_idx.put(alloc, .{ .tag = &tag_virtual, .inner_ptr = &tagged_inner }, 0);
     var mm_idx: std.AutoHashMapUnmanaged(*const MutableMap, u32) = .{};
     defer mm_idx.deinit(alloc);
+    var mvm_idx: std.AutoHashMapUnmanaged(*const MutableValueMap, u32) = .{};
+    defer mvm_idx.deinit(alloc);
     try mm_idx.put(alloc, inner_map, 0);
     var sx_idx: std.AutoHashMapUnmanaged(*const StructInstance, u32) = .{};
     defer sx_idx.deinit(alloc);
@@ -1938,6 +2034,7 @@ test "roundtrip: value_map key and value both resolve through the image slot tab
         .parameter_slot_index = &pm_idx,
         .tagged_slot_index = &tg_idx,
         .mutable_map_slot_index = &mm_idx,
+        .mutable_value_map_slot_index = &mvm_idx,
         .struct_instance_slot_index = &sx_idx,
         .vector_slot_index = &vx_idx,
         .once_cell_slot_index = &oc_idx,
@@ -1970,6 +2067,100 @@ test "roundtrip: value_map key and value both resolve through the image slot tab
     try testing.expectEqual(inner_map, dm.map.values()[0].mutable_map);
     // Identity survived, so the key still finds its entry.
     try testing.expect(dm.map.get(tagged_key) != null);
+}
+
+/// Test-only holder for the slot-index maps a family under test does not care about. Every map is
+/// empty, so any value reaching one encodes as `NotEncodable`, which is what an un-interned pointer
+/// should do. It must outlive the `SlotEncodingMaps` that `encodingMaps` hands back.
+const EmptySlotIndices = struct {
+    typevalue: std.AutoHashMapUnmanaged(*const TypeValue, u32) = .{},
+    struct_type: std.AutoHashMapUnmanaged(*const StructType, u32) = .{},
+    marker: std.AutoHashMapUnmanaged(*const Marker, u32) = .{},
+    parameter: std.AutoHashMapUnmanaged(*const Parameter, u32) = .{},
+    tagged: std.AutoHashMapUnmanaged(TaggedKey, u32) = .{},
+    mutable_map: std.AutoHashMapUnmanaged(*const MutableMap, u32) = .{},
+    struct_instance: std.AutoHashMapUnmanaged(*const StructInstance, u32) = .{},
+    vector: std.AutoHashMapUnmanaged(*const Vector, u32) = .{},
+    once_cell: std.AutoHashMapUnmanaged(*const OnceCell, u32) = .{},
+
+    fn encodingMaps(
+        self: *const EmptySlotIndices,
+        mutable_value_map: *const std.AutoHashMapUnmanaged(*const MutableValueMap, u32),
+    ) SlotEncodingMaps {
+        return .{
+            .typevalue_slot_index = &self.typevalue,
+            .struct_type_slot_index = &self.struct_type,
+            .marker_slot_index = &self.marker,
+            .parameter_slot_index = &self.parameter,
+            .tagged_slot_index = &self.tagged,
+            .mutable_map_slot_index = &self.mutable_map,
+            .mutable_value_map_slot_index = mutable_value_map,
+            .struct_instance_slot_index = &self.struct_instance,
+            .vector_slot_index = &self.vector,
+            .once_cell_slot_index = &self.once_cell,
+        };
+    }
+};
+
+test "roundtrip: mutable_value_map encodes as a slot reference and decodes to the same map" {
+    const alloc = testing.allocator;
+
+    const live = try MutableValueMap.create(alloc);
+    defer live.header.release();
+    try live.map.put(alloc, .{ .fixnum = 1 }, .{ .fixnum = 10 });
+
+    var mvm_idx: std.AutoHashMapUnmanaged(*const MutableValueMap, u32) = .{};
+    defer mvm_idx.deinit(alloc);
+    try mvm_idx.put(alloc, live, 0);
+    const others = EmptySlotIndices{};
+    const enc = others.encodingMaps(&mvm_idx);
+
+    var buf: std.ArrayListUnmanaged(u8) = .{};
+    defer buf.deinit(alloc);
+    try serializeValueIntoForImage(&buf, .{ .mutable_value_map = live }, alloc, &enc, null);
+
+    // A slot reference is the tag plus a u32 index, never the entries.
+    try testing.expectEqual(@as(usize, 5), buf.items.len);
+    try testing.expectEqual(value_tag_mutable_value_map_slot, buf.items[0]);
+
+    var mvm_slots = [_]?*MutableValueMap{live};
+    var tables = emptySlotTables();
+    tables.mutable_value_map_slots = &mvm_slots;
+    tables.mutable_value_map_slot_count = 1;
+
+    var offset: usize = 0;
+    var diag: DecodeDiagnostic = undefined;
+    const decoded = try deserializeValueAtForImage(buf.items, &offset, alloc, &tables, &diag);
+    defer container_backing.releaseValue(decoded);
+
+    // Identity, not a copy: a runtime write through one reference is visible through the other.
+    try testing.expectEqual(live, decoded.mutable_value_map);
+    try live.map.put(alloc, .{ .fixnum = 2 }, .{ .fixnum = 20 });
+    try testing.expectEqual(@as(usize, 2), decoded.mutable_value_map.map.count());
+}
+
+test "roundtrip: an un-interned mutable_value_map is NotEncodable in either mode" {
+    const alloc = testing.allocator;
+
+    const live = try MutableValueMap.create(alloc);
+    defer live.header.release();
+
+    var mvm_idx: std.AutoHashMapUnmanaged(*const MutableValueMap, u32) = .{};
+    defer mvm_idx.deinit(alloc);
+    const others = EmptySlotIndices{};
+    const enc = others.encodingMaps(&mvm_idx);
+
+    var buf: std.ArrayListUnmanaged(u8) = .{};
+    defer buf.deinit(alloc);
+    try testing.expectError(
+        error.NotEncodable,
+        serializeValueIntoForImage(&buf, .{ .mutable_value_map = live }, alloc, &enc, null),
+    );
+    // The mutable half has no by-value form at all, so the non-image encoder always refuses.
+    try testing.expectError(
+        error.NotEncodable,
+        serializeValueInto(&buf, .{ .mutable_value_map = live }, alloc, null, null),
+    );
 }
 
 test "roundtrip: nested quotation" {
@@ -2122,6 +2313,8 @@ test "image roundtrip: struct_instance encodes as a slot and decodes to the same
     defer tg_idx.deinit(alloc);
     var mm_idx: std.AutoHashMapUnmanaged(*const MutableMap, u32) = .{};
     defer mm_idx.deinit(alloc);
+    var mvm_idx: std.AutoHashMapUnmanaged(*const MutableValueMap, u32) = .{};
+    defer mvm_idx.deinit(alloc);
     var sx_idx: std.AutoHashMapUnmanaged(*const StructInstance, u32) = .{};
     defer sx_idx.deinit(alloc);
     var vx_idx: std.AutoHashMapUnmanaged(*const Vector, u32) = .{};
@@ -2137,6 +2330,7 @@ test "image roundtrip: struct_instance encodes as a slot and decodes to the same
         .parameter_slot_index = &pm_idx,
         .tagged_slot_index = &tg_idx,
         .mutable_map_slot_index = &mm_idx,
+        .mutable_value_map_slot_index = &mvm_idx,
         .struct_instance_slot_index = &sx_idx,
         .vector_slot_index = &vx_idx,
         .once_cell_slot_index = &oc_idx,
@@ -2161,6 +2355,8 @@ test "image roundtrip: struct_instance encodes as a slot and decodes to the same
         .tagged_slot_count = 0,
         .mutable_map_slots = null,
         .mutable_map_slot_count = 0,
+        .mutable_value_map_slots = null,
+        .mutable_value_map_slot_count = 0,
         .struct_instance_slots = &si_slots,
         .struct_instance_slot_count = 1,
         .vector_slots = null,
@@ -2204,6 +2400,8 @@ test "image roundtrip: quotation carrying a struct_type literal slot-encodes" {
     defer tg_idx.deinit(alloc);
     var mm_idx: std.AutoHashMapUnmanaged(*const MutableMap, u32) = .{};
     defer mm_idx.deinit(alloc);
+    var mvm_idx: std.AutoHashMapUnmanaged(*const MutableValueMap, u32) = .{};
+    defer mvm_idx.deinit(alloc);
     var sx_idx: std.AutoHashMapUnmanaged(*const StructInstance, u32) = .{};
     defer sx_idx.deinit(alloc);
     var vx_idx: std.AutoHashMapUnmanaged(*const Vector, u32) = .{};
@@ -2218,6 +2416,7 @@ test "image roundtrip: quotation carrying a struct_type literal slot-encodes" {
         .parameter_slot_index = &pm_idx,
         .tagged_slot_index = &tg_idx,
         .mutable_map_slot_index = &mm_idx,
+        .mutable_value_map_slot_index = &mvm_idx,
         .struct_instance_slot_index = &sx_idx,
         .vector_slot_index = &vx_idx,
         .once_cell_slot_index = &oc_idx,
@@ -2241,6 +2440,8 @@ test "image roundtrip: quotation carrying a struct_type literal slot-encodes" {
         .tagged_slot_count = 0,
         .mutable_map_slots = null,
         .mutable_map_slot_count = 0,
+        .mutable_value_map_slots = null,
+        .mutable_value_map_slot_count = 0,
         .struct_instance_slots = null,
         .struct_instance_slot_count = 0,
         .vector_slots = null,
@@ -2285,6 +2486,8 @@ test "image roundtrip: nested quotation carries id and compiled code_ptr" {
     defer tg_idx.deinit(alloc);
     var mm_idx: std.AutoHashMapUnmanaged(*const MutableMap, u32) = .{};
     defer mm_idx.deinit(alloc);
+    var mvm_idx: std.AutoHashMapUnmanaged(*const MutableValueMap, u32) = .{};
+    defer mvm_idx.deinit(alloc);
     var sx_idx: std.AutoHashMapUnmanaged(*const StructInstance, u32) = .{};
     defer sx_idx.deinit(alloc);
     var vx_idx: std.AutoHashMapUnmanaged(*const Vector, u32) = .{};
@@ -2303,6 +2506,7 @@ test "image roundtrip: nested quotation carries id and compiled code_ptr" {
         .parameter_slot_index = &pm_idx,
         .tagged_slot_index = &tg_idx,
         .mutable_map_slot_index = &mm_idx,
+        .mutable_value_map_slot_index = &mvm_idx,
         .struct_instance_slot_index = &sx_idx,
         .vector_slot_index = &vx_idx,
         .once_cell_slot_index = &oc_idx,
@@ -2332,6 +2536,8 @@ test "image roundtrip: nested quotation carries id and compiled code_ptr" {
         .tagged_slot_count = 0,
         .mutable_map_slots = null,
         .mutable_map_slot_count = 0,
+        .mutable_value_map_slots = null,
+        .mutable_value_map_slot_count = 0,
         .struct_instance_slots = null,
         .struct_instance_slot_count = 0,
         .vector_slots = null,
@@ -2371,6 +2577,8 @@ test "image roundtrip: nested quotation decodes null code_ptr without a map or t
     defer tg_idx.deinit(alloc);
     var mm_idx: std.AutoHashMapUnmanaged(*const MutableMap, u32) = .{};
     defer mm_idx.deinit(alloc);
+    var mvm_idx: std.AutoHashMapUnmanaged(*const MutableValueMap, u32) = .{};
+    defer mvm_idx.deinit(alloc);
     var sx_idx: std.AutoHashMapUnmanaged(*const StructInstance, u32) = .{};
     defer sx_idx.deinit(alloc);
     var vx_idx: std.AutoHashMapUnmanaged(*const Vector, u32) = .{};
@@ -2385,6 +2593,7 @@ test "image roundtrip: nested quotation decodes null code_ptr without a map or t
         .parameter_slot_index = &pm_idx,
         .tagged_slot_index = &tg_idx,
         .mutable_map_slot_index = &mm_idx,
+        .mutable_value_map_slot_index = &mvm_idx,
         .struct_instance_slot_index = &sx_idx,
         .vector_slot_index = &vx_idx,
         .once_cell_slot_index = &oc_idx,
@@ -2408,6 +2617,8 @@ test "image roundtrip: nested quotation decodes null code_ptr without a map or t
         .tagged_slot_count = 0,
         .mutable_map_slots = null,
         .mutable_map_slot_count = 0,
+        .mutable_value_map_slots = null,
+        .mutable_value_map_slot_count = 0,
         .struct_instance_slots = null,
         .struct_instance_slot_count = 0,
         .vector_slots = null,
@@ -2710,6 +2921,8 @@ test "image roundtrip: nested quotation carries its declared effect" {
     defer tg_idx.deinit(alloc);
     var mm_idx: std.AutoHashMapUnmanaged(*const MutableMap, u32) = .{};
     defer mm_idx.deinit(alloc);
+    var mvm_idx: std.AutoHashMapUnmanaged(*const MutableValueMap, u32) = .{};
+    defer mvm_idx.deinit(alloc);
     var sx_idx: std.AutoHashMapUnmanaged(*const StructInstance, u32) = .{};
     defer sx_idx.deinit(alloc);
     var vx_idx: std.AutoHashMapUnmanaged(*const Vector, u32) = .{};
@@ -2724,6 +2937,7 @@ test "image roundtrip: nested quotation carries its declared effect" {
         .parameter_slot_index = &pm_idx,
         .tagged_slot_index = &tg_idx,
         .mutable_map_slot_index = &mm_idx,
+        .mutable_value_map_slot_index = &mvm_idx,
         .struct_instance_slot_index = &sx_idx,
         .vector_slot_index = &vx_idx,
         .once_cell_slot_index = &oc_idx,
@@ -2746,6 +2960,8 @@ test "image roundtrip: nested quotation carries its declared effect" {
         .tagged_slot_count = 0,
         .mutable_map_slots = null,
         .mutable_map_slot_count = 0,
+        .mutable_value_map_slots = null,
+        .mutable_value_map_slot_count = 0,
         .struct_instance_slots = null,
         .struct_instance_slot_count = 0,
         .vector_slots = null,

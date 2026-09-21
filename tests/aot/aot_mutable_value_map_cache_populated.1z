@@ -1,0 +1,24 @@
+\ A module-private mutable value-keyed map populated at freeze time is carried into the
+\ runtime-image AOT binary with its entries and reconstructed by the loader, matching the
+\ interpreter. The parse-time-folded binding becomes a mutable_value_map_slot push whose entries
+\ serialize into the slot's description, and the loader decodes them back into the one live map it
+\ allocated for that slot. Both the freeze-time contents and a later runtime write have to survive.
+\
+\ An entry is `key | value`, both Values, so the keys here cover the three shapes that matter: a
+\ fixnum, which `hash` cannot express at all, an array, which matches by its frozen form, and a
+\ string, which is the only shape a string-keyed map could have carried.
+
+(cache): ( -- mvmap ) { { 1 "one" } { { 2 3 } "pair" } { "k" "v" } } >mutable-value-map ;
+
+remember: ( key value -- ) [ (cache) -rot> vmap-set! drop ] ;
+recall:   ( key -- value ) [ (cache) swap vmap-get ] ;
+tally:    ( -- n )         [ (cache) #len ] ;
+
+1 recall print-line        \ one  -- freeze-time entry survived
+{ 2 3 } recall print-line  \ pair -- an array key still matches after the round trip
+"k" recall print-line      \ v
+tally .                    \ 3
+4 "four" remember
+tally .              \ 4 -- runtime write persisted through the shared backing
+4 recall print-line  \ four
+(cache) >array inspect print-line

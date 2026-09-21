@@ -316,6 +316,7 @@ comptime {
         @export(&jitPushOnceCellSlot, .{ .name = "jitPushOnceCellSlot" });
         @export(&jitPushTaggedSlot, .{ .name = "jitPushTaggedSlot" });
         @export(&jitPushMutableMapSlot, .{ .name = "jitPushMutableMapSlot" });
+        @export(&jitPushMutableValueMapSlot, .{ .name = "jitPushMutableValueMapSlot" });
         @export(&jitCallQuotation, .{ .name = "jitCallQuotation" });
         @export(&jitCallQuotationValue, .{ .name = "jitCallQuotationValue" });
         @export(&jitGet, .{ .name = "jitGet" });
@@ -804,6 +805,7 @@ fn onez_load_runtime_image(
     parameter_slots_ptr: ?*anyopaque,
     tagged_slots_ptr: ?*anyopaque,
     mutable_map_slots_ptr: ?*anyopaque,
+    mutable_value_map_slots_ptr: ?*anyopaque,
     struct_instance_slots_ptr: ?*anyopaque,
     vector_slots_ptr: ?*anyopaque,
     once_cell_slots_ptr: ?*anyopaque,
@@ -813,6 +815,7 @@ fn onez_load_runtime_image(
     _ = marker_slots_ptr;
     _ = tagged_slots_ptr;
     _ = mutable_map_slots_ptr;
+    _ = mutable_value_map_slots_ptr;
     _ = struct_instance_slots_ptr;
     _ = vector_slots_ptr;
     const handle = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
@@ -2029,6 +2032,11 @@ fn jitPushMutableMapSlot(ctx_raw: usize, slot: usize) callconv(.c) i32 {
     return unsupportedJit(ctx_raw, "runtime-image mutable-map slots");
 }
 
+fn jitPushMutableValueMapSlot(ctx_raw: usize, slot: usize) callconv(.c) i32 {
+    _ = slot;
+    return unsupportedJit(ctx_raw, "runtime-image mutable-value-map slots");
+}
+
 fn jitCallQuotation(ctx_raw: usize) callconv(.c) i32 {
     return unsupportedJit(ctx_raw, "quotation calls");
 }
@@ -2269,6 +2277,7 @@ fn emptyTestImageHeader() populate_core.Header {
         .parameter_slot_count = 0,
         .tagged_slot_count = 0,
         .mutable_map_slot_count = 0,
+        .mutable_value_map_slot_count = 0,
         .struct_instance_slot_count = 0,
         .vector_slot_count = 0,
         .once_cell_slot_count = 0,
@@ -2286,6 +2295,7 @@ fn emptyTestImageHeader() populate_core.Header {
         .parameter_descriptions = null,
         .tagged_descriptions = null,
         .mutable_map_descriptions = null,
+        .mutable_value_map_descriptions = null,
         .struct_instance_descriptions = null,
         .vector_descriptions = null,
         .once_cell_descriptions = null,
@@ -2320,6 +2330,7 @@ test "freestanding loader retains typevalue slots from a synthetic image" {
         &handle,
         &header,
         @ptrCast(&tv_slots),
+        null,
         null,
         null,
         null,
@@ -2390,6 +2401,7 @@ test "freestanding loader resolves the typevalue-to-struct-type interlink" {
         null,
         null,
         null,
+        null,
     ));
 
     const tv = tv_slots[1].?;
@@ -2421,6 +2433,7 @@ test "freestanding loader retains protocol descriptor slots" {
     try std.testing.expectEqual(ONEZ_OK, onez_load_runtime_image(
         &handle,
         &header,
+        null,
         null,
         null,
         null,
@@ -2492,6 +2505,7 @@ test "freestanding loader retains constraint combinator slots" {
         null,
         null,
         null,
+        null,
         @ptrCast(&pd_slots),
         @ptrCast(&cc_slots),
     ));
@@ -2539,6 +2553,7 @@ test "freestanding loader rejects malformed synthetic images" {
         null,
         null,
         null,
+        null,
     ));
     const slot_msg = onez_last_error(&handle) orelse return error.TestExpectedError;
     try std.testing.expect(std.mem.indexOf(u8, std.mem.span(slot_msg), "BadSlotIndex") != null);
@@ -2568,6 +2583,7 @@ test "freestanding loader rejects malformed synthetic images" {
         null,
         null,
         null,
+        null,
     ));
     const struct_msg = onez_last_error(&handle) orelse return error.TestExpectedError;
     try std.testing.expect(std.mem.indexOf(u8, std.mem.span(struct_msg), "BadStructTypeIndex") != null);
@@ -2583,6 +2599,7 @@ test "freestanding loader leaves the handle untouched on a zero-count image" {
     try std.testing.expectEqual(ONEZ_OK, onez_load_runtime_image(
         &handle,
         &header,
+        null,
         null,
         null,
         null,
@@ -2687,6 +2704,7 @@ test "freestanding replay registers compiled dispatch entries at the freeze-time
         null,
         null,
         null,
+        null,
     ));
 
     const quotations = [_]?*const anyopaque{ @ptrCast(&fakeMethodBodyA), @ptrCast(&fakeMethodBodyB) };
@@ -2766,6 +2784,7 @@ test "freestanding replay fails loudly on unresolvable rows" {
             null,
             null,
             null,
+            null,
         ));
 
         const quotations = [_]?*const anyopaque{@ptrCast(&fakeMethodBodyA)};
@@ -2829,6 +2848,7 @@ test "freestanding generic dispatch runs replayed methods and falls back to the 
         &handle,
         &header,
         @ptrCast(&tv_slots),
+        null,
         null,
         null,
         null,
@@ -2913,6 +2933,7 @@ test "freestanding generic dispatch matches wildcard rows for types absent from 
         null,
         null,
         null,
+        null,
     ));
 
     var quotations = [_]?OnezWordFn{&methodBodyPush202};
@@ -2955,6 +2976,7 @@ test "freestanding generic dispatch falls back to the enum parent type" {
         &handle,
         &header,
         @ptrCast(&tv_slots),
+        null,
         null,
         null,
         null,
@@ -3019,6 +3041,7 @@ test "freestanding generic dispatch unwraps parameterized operands on the base-t
         &handle,
         &header,
         @ptrCast(&tv_slots),
+        null,
         null,
         null,
         null,
@@ -3099,6 +3122,7 @@ test "freestanding jitDispatchFull resolves a replayed method and unwraps a para
         &handle,
         &header,
         @ptrCast(&tv_slots),
+        null,
         null,
         null,
         null,
@@ -3192,6 +3216,7 @@ test "freestanding jitDispatchFull derives < from a cmp-only method" {
         null,
         null,
         null,
+        null,
     ));
 
     var quotations = [_]?OnezWordFn{&cmpBodyPushLess};
@@ -3257,6 +3282,7 @@ test "freestanding replay no-ops on a zero-entry image" {
         null,
         null,
         null,
+        null,
     ));
 
     try std.testing.expectEqual(ONEZ_OK, onez_replay_method_dispatch(&handle));
@@ -3305,6 +3331,7 @@ test "freestanding protocol-bounded dispatch checks the operand and dispatches" 
         &handle,
         &header,
         @ptrCast(&tv_slots),
+        null,
         null,
         null,
         null,
@@ -3402,6 +3429,7 @@ test "freestanding combinator-bounded dispatch enforces an intersection of proto
         &handle,
         &header,
         @ptrCast(&tv_slots),
+        null,
         null,
         null,
         null,

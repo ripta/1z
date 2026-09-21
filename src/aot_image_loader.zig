@@ -55,6 +55,7 @@ pub const MarkerDescription = populate_core.MarkerDescription;
 pub const ParameterDescription = populate_core.ParameterDescription;
 pub const TaggedDescription = populate_core.TaggedDescription;
 pub const MutableMapDescription = populate_core.MutableMapDescription;
+pub const MutableValueMapDescription = populate_core.MutableValueMapDescription;
 pub const StructInstanceDescription = populate_core.StructInstanceDescription;
 pub const VectorDescription = populate_core.VectorDescription;
 pub const OnceCellDescription = populate_core.OnceCellDescription;
@@ -75,6 +76,7 @@ pub const MarkerSlotTable = populate_core.MarkerSlotTable;
 pub const ParameterSlotTable = populate_core.ParameterSlotTable;
 pub const TaggedSlotTable = populate_core.TaggedSlotTable;
 pub const MutableMapSlotTable = populate_core.MutableMapSlotTable;
+pub const MutableValueMapSlotTable = populate_core.MutableValueMapSlotTable;
 pub const StructInstanceSlotTable = populate_core.StructInstanceSlotTable;
 pub const VectorSlotTable = populate_core.VectorSlotTable;
 pub const OnceCellSlotTable = populate_core.OnceCellSlotTable;
@@ -133,6 +135,20 @@ pub fn loadIntoContext(
     }
 
     ctx.runtime_image_loaded = true;
+
+    // Load-scoped parking lot for value-map entries the decoder produces while container contents
+    // are still placeholders. The Context only borrows it, so it has to outlive every pass below.
+    //
+    // The drain runs after `installPendingValueMapEntries` has emptied it, so on the success path it
+    // finds nothing. On a failure path it releases the halves of every entry that never landed.
+    var pending_value_map_entries: std.ArrayListUnmanaged(value_mod.PendingValueMapEntry) = .{};
+    defer {
+        drainPendingValueMapEntries(&pending_value_map_entries);
+        pending_value_map_entries.deinit(ctx.allocator);
+    }
+    ctx.image_pending_value_map_entries = &pending_value_map_entries;
+    defer ctx.image_pending_value_map_entries = null;
+
     // Protocol descriptor slots populate before word decoding so the
     // `.protocol` annotations in word stack effects resolve through the
     // patched table. The reverse dependency does not exist: protocol
@@ -166,6 +182,8 @@ pub fn loadIntoContext(
     ctx.image_tagged_slot_count = header.tagged_slot_count;
     ctx.image_mutable_map_slots = slots.mutable_maps;
     ctx.image_mutable_map_slot_count = header.mutable_map_slot_count;
+    ctx.image_mutable_value_map_slots = slots.mutable_value_maps;
+    ctx.image_mutable_value_map_slot_count = header.mutable_value_map_slot_count;
     ctx.image_struct_instance_slots = slots.struct_instances;
     ctx.image_struct_instance_slot_count = header.struct_instance_slot_count;
     ctx.image_vector_slots = slots.vectors;
@@ -203,6 +221,12 @@ pub fn loadIntoContext(
     // pointer must be live before an entry referencing it is deserialized.
     try allocateVectorSlots(ctx, header, slots.vectors);
 
+    // Mutable-value-map slots allocate here too, so any other family's content decode can
+    // reference one. Their entries decode last, after `populateTaggedSlots`, which is what lets an
+    // entry hold a tagged slot reference at all; the mutable-map loader documents that as
+    // unsupported precisely because it runs earlier.
+    try allocateMutableValueMapSlots(ctx, header, slots.mutable_value_maps);
+
     // Mutable_map slots populate before tagged slots so a tagged
     // inner value carrying a `.mutable_map` resolves correctly.
     try populateMutableMapSlots(ctx, header, slots.mutable_maps);
@@ -223,6 +247,26 @@ pub fn loadIntoContext(
     // routes through `deserializeValueAtForImage`), so those tables
     // must be patched first.
     try populateTaggedSlots(ctx, header, slots.tagged);
+
+    // Mutable-value-map entries decode once every other container is live, so an entry may hold a
+    // reference into any of them, tagged slots included. It stays ahead of
+    // `allocateCallTargetSlots` because only `emitWordBodyBytecode` supplies a `CallTargetResolver`,
+    // so a container description never carries a baked call target.
+    try populateMutableValueMapEntries(
+        ctx,
+        header,
+        slots.mutable_value_maps,
+        &pending_value_map_entries,
+    );
+
+    // Install every parked value-map entry, now that all contents are final and two keys are
+    // distinguishable. Nothing above this point may probe a value-map decoded from the image.
+    installPendingValueMapEntries(&pending_value_map_entries);
+
+    // Detach the parking lot, so everything below inserts immediately. `decodeWordBodies` is the
+    // one pass that still decodes an inline `value_map`, and its keys hash correctly because every
+    // container they can reference is already final.
+    ctx.image_pending_value_map_entries = null;
 
     // Mint the call-target slots before any body decodes, since a decoded `call_word_module`
     // instruction stores the slot address.
@@ -286,6 +330,8 @@ fn imageSlotTables(ctx: *Context) instruction_bytecode.SlotResolutionTables {
         .tagged_slot_count = ctx.image_tagged_slot_count,
         .mutable_map_slots = ctx.image_mutable_map_slots,
         .mutable_map_slot_count = ctx.image_mutable_map_slot_count,
+        .mutable_value_map_slots = ctx.image_mutable_value_map_slots,
+        .mutable_value_map_slot_count = ctx.image_mutable_value_map_slot_count,
         .struct_instance_slots = ctx.image_struct_instance_slots,
         .struct_instance_slot_count = ctx.image_struct_instance_slot_count,
         .vector_slots = ctx.image_vector_slots,
@@ -303,6 +349,11 @@ fn imageSlotTables(ctx: *Context) instruction_bytecode.SlotResolutionTables {
         // their operand references drop at teardown.
         .decoded_streams = &ctx.container_release_list,
         .decoded_streams_allocator = ctx.allocator,
+        // Parking side channel: a value-map's entries are held here until every population pass has
+        // run, since a key cannot be hashed before the containers it references are final. Null
+        // outside the population phase of the image load.
+        .pending_value_map_entries = ctx.image_pending_value_map_entries,
+        .pending_value_map_allocator = ctx.allocator,
     };
 }
 
@@ -1190,6 +1241,160 @@ fn populateMutableMapSlots(
     }
 }
 
+/// Install every parked value-map entry, in decode order, and empty the list.
+///
+/// A key cannot be hashed while the load is still filling containers. `ValueEntries` stores hashes
+/// and `Value.hashValue` is deep, so a key holding a struct-instance or tagged slot reference is
+/// hashed over the loader's placeholder contents. `Value.eql` reads the same contents, which makes
+/// two distinct instances of one struct type equal, so an insert there does not merely misplace the
+/// entry: it reports a duplicate and drops one. Recomputing the hashes afterwards cannot recover a
+/// dropped entry.
+///
+/// Decode order is post-order, so a map nested inside a later entry's key is already full by the
+/// time that entry is installed. Every installing site reserved capacity as it parked, which is what
+/// lets this be infallible.
+///
+/// Emptying the list is what distinguishes the success path from the failure path: the caller's
+/// drain releases whatever is left, so an entry installed here must not be released again.
+fn installPendingValueMapEntries(
+    pending: *std.ArrayListUnmanaged(value_mod.PendingValueMapEntry),
+) void {
+    for (pending.items) |entry| {
+        instruction_bytecode.putDecodedValueMapEntry(entry.map, entry.key, entry.value);
+    }
+    pending.clearRetainingCapacity();
+}
+
+/// Release both halves of every entry still parked, for the failure path where the load aborts
+/// before `installPendingValueMapEntries` runs.
+///
+/// The map pointer is deliberately untouched. An abort releases the enclosing `ValueMap` through the
+/// decoder's own `errdefer`, so the pointer parked beside the entry may already be freed.
+fn drainPendingValueMapEntries(
+    pending: *std.ArrayListUnmanaged(value_mod.PendingValueMapEntry),
+) void {
+    for (pending.items) |entry| {
+        container_backing.releaseValue(entry.key);
+        container_backing.releaseValue(entry.value);
+    }
+    pending.clearRetainingCapacity();
+}
+
+/// Allocate one empty `*MutableValueMap` per mutable-value-map slot and patch the slot table
+/// before any content is decoded, so a reference from any other family resolves regardless of
+/// ordering. Each map's initial refcount of 1 is donated to the slot and released by the context's
+/// image-slot teardown walk.
+///
+/// The family splits allocation from population, where `mutable_map` does both in one function. A
+/// slot reference resolves as soon as its table cell is non-null, so allocation order is what
+/// governs cross-family references, and a combined function would fix allocation and population at
+/// one point in the pass order. The two need different ones.
+fn allocateMutableValueMapSlots(
+    ctx: *Context,
+    header: *const Header,
+    slots: ?MutableValueMapSlotTable,
+) LoaderError!void {
+    if (header.mutable_value_map_slot_count == 0) return;
+    const descs = header.mutable_value_map_descriptions orelse return;
+    const slot_table = slots orelse return;
+    const arena = ctx.quotationAllocator();
+
+    var i: u32 = 0;
+    while (i < header.mutable_value_map_slot_count) : (i += 1) {
+        const row = descs[i];
+        if (row.slot >= header.mutable_value_map_slot_count) return LoaderError.BadSlotIndex;
+        const map = value_mod.MutableValueMap.create(arena) catch return LoaderError.OutOfMemory;
+        slot_table[row.slot] = map;
+    }
+}
+
+/// Second pass over the mutable-value-map description table: decode each row's entries into the map
+/// `allocateMutableValueMapSlots` allocated. The blob is a `u32` entry count followed by
+/// `key | value` per entry, both through `deserializeValueAtForImage`, so a slot-encoded half
+/// resolves against the already-live slot tables.
+///
+/// Runs after every other population pass, including `populateTaggedSlots`, so an entry may hold a
+/// reference into any other family. That lifts the "an entry referencing a tagged slot is
+/// unsupported" limit the mutable-map loader carries, which it carries only because it runs earlier.
+///
+/// The entries are parked rather than inserted, on the same terms as an inline `value_map`. Running
+/// last is not enough on its own: an inline `value_map` used as a key parks its own entries, so it is
+/// still empty at the moment this entry would hash it.
+///
+/// Both halves of an entry arrive owning their own reference, which is
+/// `deserializeValueAtForImage`'s contract, and `MutableValueMap`'s destroy releases key and value
+/// alike. So neither is duped and neither is retained here, unlike the mutable-map loader's key
+/// bytes. No `errdefer` covers a partly populated map: the slot owns the donated reference and
+/// `Context.deinit` releases it, which is why the sibling passes carry none either.
+fn populateMutableValueMapEntries(
+    ctx: *Context,
+    header: *const Header,
+    slots: ?MutableValueMapSlotTable,
+    pending: *std.ArrayListUnmanaged(value_mod.PendingValueMapEntry),
+) LoaderError!void {
+    if (header.mutable_value_map_slot_count == 0) return;
+    const descs = header.mutable_value_map_descriptions orelse return;
+    const slot_table = slots orelse return;
+    const arena = ctx.quotationAllocator();
+    const slot_tables = imageSlotTables(ctx);
+
+    var i: u32 = 0;
+    while (i < header.mutable_value_map_slot_count) : (i += 1) {
+        const row = descs[i];
+        const map = slot_table[row.slot] orelse return LoaderError.BadSlotIndex;
+
+        const bytes = if (row.entries_bytecode) |p|
+            if (row.entries_bytecode_len > 0) p[0..row.entries_bytecode_len] else &[_]u8{}
+        else
+            &[_]u8{};
+
+        if (bytes.len == 0) continue;
+        if (bytes.len < @sizeOf(u32)) return LoaderError.TruncatedBytecode;
+
+        var offset: usize = 0;
+        const entry_count = std.mem.bytesToValue(u32, bytes[offset .. offset + @sizeOf(u32)]);
+        offset += @sizeOf(u32);
+
+        var e: u32 = 0;
+        while (e < entry_count) : (e += 1) {
+            // Room for this one entry before either half is decoded, so the install pass cannot
+            // fail. One at a time rather than the whole count, which a malformed blob could inflate
+            // past what the stream backs.
+            map.map.ensureUnusedCapacity(arena, 1) catch return LoaderError.OutOfMemory;
+
+            var diag: instruction_bytecode.DecodeDiagnostic = undefined;
+            const key = instruction_bytecode.deserializeValueAtForImage(
+                bytes,
+                &offset,
+                arena,
+                &slot_tables,
+                &diag,
+            ) catch |err| {
+                reportDecodeFailure(ctx, &diag, err);
+                return err;
+            };
+            // The key has no owner until the entry lands, so a truncated value strands it.
+            errdefer container_backing.releaseValue(key);
+
+            const value = instruction_bytecode.deserializeValueAtForImage(
+                bytes,
+                &offset,
+                arena,
+                &slot_tables,
+                &diag,
+            ) catch |err| {
+                reportDecodeFailure(ctx, &diag, err);
+                return err;
+            };
+
+            pending.append(ctx.allocator, .{ .map = &map.map, .key = key, .value = value }) catch {
+                container_backing.releaseValue(value);
+                return LoaderError.OutOfMemory;
+            };
+        }
+    }
+}
+
 /// First pass over the struct-instance description table: allocate a fresh
 /// `*StructInstance` for every slot, size its field vector from the owning
 /// StructType (resolved through the already-patched struct-type slot table),
@@ -1777,6 +1982,7 @@ fn emptyHeader() Header {
         .parameter_slot_count = 0,
         .tagged_slot_count = 0,
         .mutable_map_slot_count = 0,
+        .mutable_value_map_slot_count = 0,
         .modules = null,
         .words = null,
         .markers = null,
@@ -1788,6 +1994,7 @@ fn emptyHeader() Header {
         .parameter_descriptions = null,
         .tagged_descriptions = null,
         .mutable_map_descriptions = null,
+        .mutable_value_map_descriptions = null,
         .struct_instance_slot_count = 0,
         .struct_instance_descriptions = null,
         .vector_slot_count = 0,
@@ -2696,6 +2903,9 @@ test "populateMutableMapSlots: lower slot forward-references a higher slot" {
     defer mm_index.deinit(testing.allocator);
     try mm_index.put(testing.allocator, key_map, 1);
 
+    var mvm_index: std.AutoHashMapUnmanaged(*const value_mod.MutableValueMap, u32) = .{};
+    defer mvm_index.deinit(testing.allocator);
+
     var tv_index: std.AutoHashMapUnmanaged(*const value_mod.TypeValue, u32) = .{};
     defer tv_index.deinit(testing.allocator);
     var st_index: std.AutoHashMapUnmanaged(*const value_mod.StructType, u32) = .{};
@@ -2720,6 +2930,7 @@ test "populateMutableMapSlots: lower slot forward-references a higher slot" {
         .parameter_slot_index = &pm_index,
         .tagged_slot_index = &tg_index,
         .mutable_map_slot_index = &mm_index,
+        .mutable_value_map_slot_index = &mvm_index,
         .struct_instance_slot_index = &si_index,
         .vector_slot_index = &vx_index,
         .once_cell_slot_index = &oc_index,
@@ -2772,6 +2983,520 @@ test "populateMutableMapSlots: lower slot forward-references a higher slot" {
     const v = slot1.map.get("v") orelse return error.TestUnexpectedResult;
     try testing.expect(v == .fixnum);
     try testing.expectEqual(@as(i64, 42), v.fixnum);
+}
+
+/// Test-only holder for the slot-index maps a family under test does not populate. Each map is
+/// empty unless a test fills one, so a value reaching an un-interned family encodes as
+/// `NotEncodable`. It has to outlive the `SlotEncodingMaps` `maps` returns.
+const EmptyEncodingIndices = struct {
+    typevalue: std.AutoHashMapUnmanaged(*const value_mod.TypeValue, u32) = .{},
+    struct_type: std.AutoHashMapUnmanaged(*const value_mod.StructType, u32) = .{},
+    marker: std.AutoHashMapUnmanaged(*const value_mod.Marker, u32) = .{},
+    parameter: std.AutoHashMapUnmanaged(*const value_mod.Parameter, u32) = .{},
+    tagged: std.AutoHashMapUnmanaged(instruction_bytecode.TaggedKey, u32) = .{},
+    mutable_map: std.AutoHashMapUnmanaged(*const value_mod.MutableMap, u32) = .{},
+    struct_instance: std.AutoHashMapUnmanaged(*const value_mod.StructInstance, u32) = .{},
+    vector: std.AutoHashMapUnmanaged(*const value_mod.Vector, u32) = .{},
+    once_cell: std.AutoHashMapUnmanaged(*const value_mod.OnceCell, u32) = .{},
+
+    fn deinit(self: *EmptyEncodingIndices) void {
+        self.typevalue.deinit(testing.allocator);
+        self.struct_type.deinit(testing.allocator);
+        self.marker.deinit(testing.allocator);
+        self.parameter.deinit(testing.allocator);
+        self.tagged.deinit(testing.allocator);
+        self.mutable_map.deinit(testing.allocator);
+        self.struct_instance.deinit(testing.allocator);
+        self.vector.deinit(testing.allocator);
+        self.once_cell.deinit(testing.allocator);
+    }
+
+    fn maps(
+        self: *const EmptyEncodingIndices,
+        mutable_value_map: *const std.AutoHashMapUnmanaged(*const value_mod.MutableValueMap, u32),
+    ) instruction_bytecode.SlotEncodingMaps {
+        return .{
+            .typevalue_slot_index = &self.typevalue,
+            .struct_type_slot_index = &self.struct_type,
+            .marker_slot_index = &self.marker,
+            .parameter_slot_index = &self.parameter,
+            .tagged_slot_index = &self.tagged,
+            .mutable_map_slot_index = &self.mutable_map,
+            .mutable_value_map_slot_index = mutable_value_map,
+            .struct_instance_slot_index = &self.struct_instance,
+            .vector_slot_index = &self.vector,
+            .once_cell_slot_index = &self.once_cell,
+        };
+    }
+};
+
+test "populateMutableValueMapEntries: a lower slot forward-references a higher one" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    // A dummy map used only as the encoding key for slot 1, released after encoding. The loader
+    // allocates its own maps.
+    const key_map = try value_mod.MutableValueMap.create(testing.allocator);
+    defer key_map.header.release();
+
+    var mvm_index: std.AutoHashMapUnmanaged(*const value_mod.MutableValueMap, u32) = .{};
+    defer mvm_index.deinit(testing.allocator);
+    try mvm_index.put(testing.allocator, key_map, 1);
+
+    var enc_holder = EmptyEncodingIndices{};
+    defer enc_holder.deinit();
+    const enc_maps = enc_holder.maps(&mvm_index);
+
+    const one: u32 = 1;
+
+    // Slot 0: one entry, fixnum 1 -> mutable_value_map_slot 1.
+    var enc0: std.ArrayListUnmanaged(u8) = .{};
+    defer enc0.deinit(testing.allocator);
+    try enc0.appendSlice(testing.allocator, std.mem.asBytes(&one));
+    try instruction_bytecode.serializeValueIntoForImage(&enc0, .{ .fixnum = 1 }, testing.allocator, &enc_maps, null);
+    try instruction_bytecode.serializeValueIntoForImage(&enc0, .{ .mutable_value_map = key_map }, testing.allocator, &enc_maps, null);
+
+    // Slot 1: one entry, fixnum 2 -> fixnum 42.
+    var enc1: std.ArrayListUnmanaged(u8) = .{};
+    defer enc1.deinit(testing.allocator);
+    try enc1.appendSlice(testing.allocator, std.mem.asBytes(&one));
+    try instruction_bytecode.serializeValueIntoForImage(&enc1, .{ .fixnum = 2 }, testing.allocator, &enc_maps, null);
+    try instruction_bytecode.serializeValueIntoForImage(&enc1, .{ .fixnum = 42 }, testing.allocator, &enc_maps, null);
+
+    const descs = [_]MutableValueMapDescription{
+        .{ .slot = 0, .entries_bytecode = enc0.items.ptr, .entries_bytecode_len = @intCast(enc0.items.len) },
+        .{ .slot = 1, .entries_bytecode = enc1.items.ptr, .entries_bytecode_len = @intCast(enc1.items.len) },
+    };
+
+    var storage: [2]?*value_mod.MutableValueMap = .{ null, null };
+
+    var header = emptyHeader();
+    header.mutable_value_map_slot_count = 2;
+    header.mutable_value_map_descriptions = &descs;
+
+    try loadIntoContext(&ctx, &header, .{ .mutable_value_maps = &storage }, null);
+
+    const slot0 = storage[0] orelse return error.TestUnexpectedResult;
+    const slot1 = storage[1] orelse return error.TestUnexpectedResult;
+
+    const ref = slot0.map.get(.{ .fixnum = 1 }) orelse return error.TestUnexpectedResult;
+    try testing.expect(ref == .mutable_value_map);
+    try testing.expect(ref.mutable_value_map == slot1);
+
+    const v = slot1.map.get(.{ .fixnum = 2 }) orelse return error.TestUnexpectedResult;
+    try testing.expectEqual(@as(i64, 42), v.fixnum);
+}
+
+test "populateMutableValueMapEntries: a struct-instance key stays findable after its fields fill" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    // `hashValue` on a struct instance folds in its fields, and `ValueEntries` stores the hash it
+    // computed at insert. A key inserted while the instance was still holding `.unit` placeholders
+    // would sit in the wrong bucket forever, which is what the post-population re-index repairs.
+    var struct_type = value_mod.StructType{ .name = "box", .fields = &.{"data"} };
+    const key_instance = try value_mod.createStructInstance(
+        testing.allocator,
+        &struct_type,
+        try testing.allocator.dupe(value_mod.Value, &.{.{ .fixnum = 99 }}),
+    );
+    defer container_backing.releaseValue(.{ .struct_instance = key_instance });
+
+    var mvm_index: std.AutoHashMapUnmanaged(*const value_mod.MutableValueMap, u32) = .{};
+    defer mvm_index.deinit(testing.allocator);
+
+    // The holder owns these two maps' backings, so they are filled in place rather than copied in.
+    var enc_holder = EmptyEncodingIndices{};
+    defer enc_holder.deinit();
+    try enc_holder.struct_instance.put(testing.allocator, key_instance, 0);
+    try enc_holder.struct_type.put(testing.allocator, &struct_type, 0);
+    const enc_maps = enc_holder.maps(&mvm_index);
+
+    const one: u32 = 1;
+
+    var fields_enc: std.ArrayListUnmanaged(u8) = .{};
+    defer fields_enc.deinit(testing.allocator);
+    try fields_enc.appendSlice(testing.allocator, std.mem.asBytes(&one));
+    try instruction_bytecode.serializeValueIntoForImage(&fields_enc, .{ .fixnum = 99 }, testing.allocator, &enc_maps, null);
+
+    var entries_enc: std.ArrayListUnmanaged(u8) = .{};
+    defer entries_enc.deinit(testing.allocator);
+    try entries_enc.appendSlice(testing.allocator, std.mem.asBytes(&one));
+    try instruction_bytecode.serializeValueIntoForImage(&entries_enc, .{ .struct_instance = key_instance }, testing.allocator, &enc_maps, null);
+    try instruction_bytecode.serializeValueIntoForImage(&entries_enc, .{ .fixnum = 7 }, testing.allocator, &enc_maps, null);
+
+    const st_name = "box";
+    const field_name = "data";
+    const field_names = [_][*]const u8{field_name.ptr};
+    const field_lens = [_]u32{field_name.len};
+    const struct_types = [_]StructType{.{
+        .name = st_name.ptr,
+        .name_len = st_name.len,
+        .field_names = &field_names,
+        .field_name_lens = &field_lens,
+        .field_count = 1,
+        .field_type_slots = null,
+        .field_type_count = 0,
+    }};
+
+    const si_descs = [_]StructInstanceDescription{
+        .{
+            .slot = 0,
+            .struct_type_slot = 0,
+            .fields_bytecode = fields_enc.items.ptr,
+            .fields_bytecode_len = @intCast(fields_enc.items.len),
+        },
+    };
+    const mvm_descs = [_]MutableValueMapDescription{
+        .{ .slot = 0, .entries_bytecode = entries_enc.items.ptr, .entries_bytecode_len = @intCast(entries_enc.items.len) },
+    };
+
+    var si_storage: [1]?*value_mod.StructInstance = .{null};
+    var st_storage: [1]?*value_mod.StructType = .{null};
+    var mvm_storage: [1]?*value_mod.MutableValueMap = .{null};
+
+    var header = emptyHeader();
+    header.struct_type_count = 1;
+    header.struct_types = &struct_types;
+    header.struct_instance_slot_count = 1;
+    header.struct_instance_descriptions = &si_descs;
+    header.mutable_value_map_slot_count = 1;
+    header.mutable_value_map_descriptions = &mvm_descs;
+
+    try loadIntoContext(&ctx, &header, .{
+        .struct_types = &st_storage,
+        .struct_instances = &si_storage,
+        .mutable_value_maps = &mvm_storage,
+    }, null);
+
+    const map = mvm_storage[0] orelse return error.TestUnexpectedResult;
+    const loaded_key = si_storage[0] orelse return error.TestUnexpectedResult;
+    try testing.expectEqual(@as(i64, 99), loaded_key.fields[0].fixnum);
+
+    const found = map.map.get(.{ .struct_instance = loaded_key }) orelse return error.TestUnexpectedResult;
+    try testing.expectEqual(@as(i64, 7), found.fixnum);
+}
+
+test "populateMutableValueMapEntries: an entry key reaches a tagged slot" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    // The whole point of running this pass last. `populateTaggedSlots` has already filled the slot,
+    // so the reference both resolves and holds its final inner value. The mutable-map loader
+    // documents the same shape as unsupported, because it decodes its entries before that pass.
+    var desc = zeroDescriptor();
+    desc.kind = 3; // virtual
+    desc.anon_struct_idx = anon_struct_absent;
+    const descriptors = [_]TypeDescriptor{desc};
+    const tv_name = "color:red";
+    const typevalues = [_]TypeValueRow{
+        .{
+            .name = tv_name.ptr,
+            .name_len = tv_name.len,
+            .slot = 1,
+            .descriptor = &descriptors[0],
+            .member_type_slots = null,
+            .member_type_count = 0,
+        },
+    };
+
+    var inner_enc: std.ArrayListUnmanaged(u8) = .{};
+    defer inner_enc.deinit(testing.allocator);
+    try instruction_bytecode.serializeValueInto(
+        &inner_enc,
+        value_mod.symbolValue("red"),
+        testing.allocator,
+        null,
+        null,
+    );
+
+    const tag_name = "color:red";
+    const tagged_descs = [_]TaggedDescription{
+        .{
+            .name = tag_name.ptr,
+            .name_len = tag_name.len,
+            .slot = 0,
+            .tag_typevalue_slot = 1,
+            .inner_bytecode = inner_enc.items.ptr,
+            .inner_bytecode_len = @intCast(inner_enc.items.len),
+        },
+    };
+
+    // A tagged key is interned by the pair of addresses, and the encoder reads neither target, so
+    // these two stand in for the parse-time value the freeze would have interned.
+    var encode_tag: value_mod.VirtualType = undefined;
+    const encode_inner: value_mod.Value = .{ .fixnum = 0 };
+
+    var mvm_index: std.AutoHashMapUnmanaged(*const value_mod.MutableValueMap, u32) = .{};
+    defer mvm_index.deinit(testing.allocator);
+
+    var enc_holder = EmptyEncodingIndices{};
+    defer enc_holder.deinit();
+    try enc_holder.tagged.put(
+        testing.allocator,
+        .{ .tag = &encode_tag, .inner_ptr = &encode_inner },
+        0,
+    );
+    const enc_maps = enc_holder.maps(&mvm_index);
+
+    const one: u32 = 1;
+    var entries_enc: std.ArrayListUnmanaged(u8) = .{};
+    defer entries_enc.deinit(testing.allocator);
+    try entries_enc.appendSlice(testing.allocator, std.mem.asBytes(&one));
+    try instruction_bytecode.serializeValueIntoForImage(
+        &entries_enc,
+        .{ .tagged = .{ .tag = &encode_tag, .inner = &encode_inner } },
+        testing.allocator,
+        &enc_maps,
+        null,
+    );
+    try instruction_bytecode.serializeValueIntoForImage(&entries_enc, .{ .fixnum = 8 }, testing.allocator, &enc_maps, null);
+
+    const mvm_descs = [_]MutableValueMapDescription{
+        .{ .slot = 0, .entries_bytecode = entries_enc.items.ptr, .entries_bytecode_len = @intCast(entries_enc.items.len) },
+    };
+
+    var tv_storage: [2]?*const value_mod.TypeValue = .{ null, null };
+    var tagged_storage: [1]?*const value_mod.Value = .{null};
+    var mvm_storage: [1]?*value_mod.MutableValueMap = .{null};
+
+    var header = emptyHeader();
+    header.typevalue_slot_count = 2;
+    header.typevalue_count = typevalues.len;
+    header.typevalues = &typevalues;
+    header.typedescriptors = &descriptors;
+    header.tagged_slot_count = 1;
+    header.tagged_descriptions = &tagged_descs;
+    header.mutable_value_map_slot_count = 1;
+    header.mutable_value_map_descriptions = &mvm_descs;
+
+    try loadIntoContext(&ctx, &header, .{
+        .typevalues = &tv_storage,
+        .tagged = &tagged_storage,
+        .mutable_value_maps = &mvm_storage,
+    }, null);
+
+    const map = mvm_storage[0] orelse return error.TestUnexpectedResult;
+    const tagged_ptr = tagged_storage[0] orelse return error.TestUnexpectedResult;
+    const found = map.map.get(tagged_ptr.*) orelse return error.TestUnexpectedResult;
+    try testing.expectEqual(@as(i64, 8), found.fixnum);
+}
+
+test "installPendingValueMapEntries: an inline value_map keyed on a struct instance is findable" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    // An inline `value_map` inside a mutable-map entries blob decodes during
+    // `populateMutableMapSlots`, which runs before `populateStructInstanceFields`. Inserting its
+    // struct-instance key there hashes over `.unit` placeholders, and `ValueEntries` stores that
+    // hash, so the entry would be unreachable by the very key that was inserted.
+    var struct_type = value_mod.StructType{ .name = "box", .fields = &.{"data"} };
+    const key_instance = try value_mod.createStructInstance(
+        testing.allocator,
+        &struct_type,
+        try testing.allocator.dupe(value_mod.Value, &.{.{ .fixnum = 99 }}),
+    );
+    defer container_backing.releaseValue(.{ .struct_instance = key_instance });
+
+    var mvm_index: std.AutoHashMapUnmanaged(*const value_mod.MutableValueMap, u32) = .{};
+    defer mvm_index.deinit(testing.allocator);
+
+    var enc_holder = EmptyEncodingIndices{};
+    defer enc_holder.deinit();
+    try enc_holder.struct_instance.put(testing.allocator, key_instance, 0);
+    try enc_holder.struct_type.put(testing.allocator, &struct_type, 0);
+    const enc_maps = enc_holder.maps(&mvm_index);
+
+    const one: u32 = 1;
+
+    var fields_enc: std.ArrayListUnmanaged(u8) = .{};
+    defer fields_enc.deinit(testing.allocator);
+    try fields_enc.appendSlice(testing.allocator, std.mem.asBytes(&one));
+    try instruction_bytecode.serializeValueIntoForImage(&fields_enc, .{ .fixnum = 99 }, testing.allocator, &enc_maps, null);
+
+    // The inline value-map that rides inside the mutable map's entry, keyed on the slot reference.
+    const inline_map = try value_mod.ValueMap.create(testing.allocator);
+    defer inline_map.header.release();
+    container_backing.retainValue(.{ .struct_instance = key_instance });
+    try inline_map.map.put(testing.allocator, .{ .struct_instance = key_instance }, .{ .fixnum = 5 });
+
+    var mm_enc: std.ArrayListUnmanaged(u8) = .{};
+    defer mm_enc.deinit(testing.allocator);
+    try mm_enc.appendSlice(testing.allocator, std.mem.asBytes(&one));
+    const klen: u32 = 5;
+    try mm_enc.appendSlice(testing.allocator, std.mem.asBytes(&klen));
+    try mm_enc.appendSlice(testing.allocator, "inner");
+    try instruction_bytecode.serializeValueIntoForImage(&mm_enc, .{ .value_map = inline_map }, testing.allocator, &enc_maps, null);
+
+    const st_name = "box";
+    const field_name = "data";
+    const field_names = [_][*]const u8{field_name.ptr};
+    const field_lens = [_]u32{field_name.len};
+    const struct_types = [_]StructType{.{
+        .name = st_name.ptr,
+        .name_len = st_name.len,
+        .field_names = &field_names,
+        .field_name_lens = &field_lens,
+        .field_count = 1,
+        .field_type_slots = null,
+        .field_type_count = 0,
+    }};
+
+    const si_descs = [_]StructInstanceDescription{
+        .{
+            .slot = 0,
+            .struct_type_slot = 0,
+            .fields_bytecode = fields_enc.items.ptr,
+            .fields_bytecode_len = @intCast(fields_enc.items.len),
+        },
+    };
+    const mm_descs = [_]MutableMapDescription{
+        .{ .slot = 0, .entries_bytecode = mm_enc.items.ptr, .entries_bytecode_len = @intCast(mm_enc.items.len) },
+    };
+
+    var si_storage: [1]?*value_mod.StructInstance = .{null};
+    var st_storage: [1]?*value_mod.StructType = .{null};
+    var mm_storage: [1]?*value_mod.MutableMap = .{null};
+
+    var header = emptyHeader();
+    header.struct_type_count = 1;
+    header.struct_types = &struct_types;
+    header.struct_instance_slot_count = 1;
+    header.struct_instance_descriptions = &si_descs;
+    header.mutable_map_slot_count = 1;
+    header.mutable_map_descriptions = &mm_descs;
+
+    try loadIntoContext(&ctx, &header, .{
+        .struct_types = &st_storage,
+        .struct_instances = &si_storage,
+        .mutable_maps = &mm_storage,
+    }, null);
+
+    const outer = mm_storage[0] orelse return error.TestUnexpectedResult;
+    const loaded_key = si_storage[0] orelse return error.TestUnexpectedResult;
+    try testing.expectEqual(@as(i64, 99), loaded_key.fields[0].fixnum);
+
+    const inner = outer.map.get("inner") orelse return error.TestUnexpectedResult;
+    try testing.expect(inner == .value_map);
+    const found = inner.value_map.map.get(.{ .struct_instance = loaded_key }) orelse
+        return error.TestUnexpectedResult;
+    try testing.expectEqual(@as(i64, 5), found.fixnum);
+}
+
+test "installPendingValueMapEntries: two struct-instance keys in one inline value_map both survive" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    // Two distinct instances of one struct type. During the placeholder window every instance's
+    // fields are `.unit`, and `Value.eql` compares a struct instance by descriptor plus fields, so
+    // the two keys are indistinguishable at that moment. An insert that hashes then is not merely
+    // misplaced: it reports a duplicate and drops the second entry outright, which is why the
+    // entries are parked rather than hashed and re-indexed.
+    var struct_type = value_mod.StructType{ .name = "box", .fields = &.{"data"} };
+    const key_a = try value_mod.createStructInstance(
+        testing.allocator,
+        &struct_type,
+        try testing.allocator.dupe(value_mod.Value, &.{.{ .fixnum = 1 }}),
+    );
+    defer container_backing.releaseValue(.{ .struct_instance = key_a });
+    const key_b = try value_mod.createStructInstance(
+        testing.allocator,
+        &struct_type,
+        try testing.allocator.dupe(value_mod.Value, &.{.{ .fixnum = 2 }}),
+    );
+    defer container_backing.releaseValue(.{ .struct_instance = key_b });
+
+    var mvm_index: std.AutoHashMapUnmanaged(*const value_mod.MutableValueMap, u32) = .{};
+    defer mvm_index.deinit(testing.allocator);
+
+    var enc_holder = EmptyEncodingIndices{};
+    defer enc_holder.deinit();
+    try enc_holder.struct_instance.put(testing.allocator, key_a, 0);
+    try enc_holder.struct_instance.put(testing.allocator, key_b, 1);
+    try enc_holder.struct_type.put(testing.allocator, &struct_type, 0);
+    const enc_maps = enc_holder.maps(&mvm_index);
+
+    const one: u32 = 1;
+
+    var fields_a: std.ArrayListUnmanaged(u8) = .{};
+    defer fields_a.deinit(testing.allocator);
+    try fields_a.appendSlice(testing.allocator, std.mem.asBytes(&one));
+    try instruction_bytecode.serializeValueIntoForImage(&fields_a, .{ .fixnum = 1 }, testing.allocator, &enc_maps, null);
+
+    var fields_b: std.ArrayListUnmanaged(u8) = .{};
+    defer fields_b.deinit(testing.allocator);
+    try fields_b.appendSlice(testing.allocator, std.mem.asBytes(&one));
+    try instruction_bytecode.serializeValueIntoForImage(&fields_b, .{ .fixnum = 2 }, testing.allocator, &enc_maps, null);
+
+    const inline_map = try value_mod.ValueMap.create(testing.allocator);
+    defer inline_map.header.release();
+    container_backing.retainValue(.{ .struct_instance = key_a });
+    try inline_map.map.put(testing.allocator, .{ .struct_instance = key_a }, .{ .fixnum = 10 });
+    container_backing.retainValue(.{ .struct_instance = key_b });
+    try inline_map.map.put(testing.allocator, .{ .struct_instance = key_b }, .{ .fixnum = 20 });
+
+    var mm_enc: std.ArrayListUnmanaged(u8) = .{};
+    defer mm_enc.deinit(testing.allocator);
+    try mm_enc.appendSlice(testing.allocator, std.mem.asBytes(&one));
+    const klen: u32 = 5;
+    try mm_enc.appendSlice(testing.allocator, std.mem.asBytes(&klen));
+    try mm_enc.appendSlice(testing.allocator, "inner");
+    try instruction_bytecode.serializeValueIntoForImage(&mm_enc, .{ .value_map = inline_map }, testing.allocator, &enc_maps, null);
+
+    const st_name = "box";
+    const field_name = "data";
+    const field_names = [_][*]const u8{field_name.ptr};
+    const field_lens = [_]u32{field_name.len};
+    const struct_types = [_]StructType{.{
+        .name = st_name.ptr,
+        .name_len = st_name.len,
+        .field_names = &field_names,
+        .field_name_lens = &field_lens,
+        .field_count = 1,
+        .field_type_slots = null,
+        .field_type_count = 0,
+    }};
+
+    const si_descs = [_]StructInstanceDescription{
+        .{ .slot = 0, .struct_type_slot = 0, .fields_bytecode = fields_a.items.ptr, .fields_bytecode_len = @intCast(fields_a.items.len) },
+        .{ .slot = 1, .struct_type_slot = 0, .fields_bytecode = fields_b.items.ptr, .fields_bytecode_len = @intCast(fields_b.items.len) },
+    };
+    const mm_descs = [_]MutableMapDescription{
+        .{ .slot = 0, .entries_bytecode = mm_enc.items.ptr, .entries_bytecode_len = @intCast(mm_enc.items.len) },
+    };
+
+    var si_storage: [2]?*value_mod.StructInstance = .{ null, null };
+    var st_storage: [1]?*value_mod.StructType = .{null};
+    var mm_storage: [1]?*value_mod.MutableMap = .{null};
+
+    var header = emptyHeader();
+    header.struct_type_count = 1;
+    header.struct_types = &struct_types;
+    header.struct_instance_slot_count = 2;
+    header.struct_instance_descriptions = &si_descs;
+    header.mutable_map_slot_count = 1;
+    header.mutable_map_descriptions = &mm_descs;
+
+    try loadIntoContext(&ctx, &header, .{
+        .struct_types = &st_storage,
+        .struct_instances = &si_storage,
+        .mutable_maps = &mm_storage,
+    }, null);
+
+    const outer = mm_storage[0] orelse return error.TestUnexpectedResult;
+    const loaded_a = si_storage[0] orelse return error.TestUnexpectedResult;
+    const loaded_b = si_storage[1] orelse return error.TestUnexpectedResult;
+
+    const inner = outer.map.get("inner") orelse return error.TestUnexpectedResult;
+    try testing.expect(inner == .value_map);
+    try testing.expectEqual(@as(usize, 2), inner.value_map.map.count());
+
+    const found_a = inner.value_map.map.get(.{ .struct_instance = loaded_a }) orelse
+        return error.TestUnexpectedResult;
+    try testing.expectEqual(@as(i64, 10), found_a.fixnum);
+    const found_b = inner.value_map.map.get(.{ .struct_instance = loaded_b }) orelse
+        return error.TestUnexpectedResult;
+    try testing.expectEqual(@as(i64, 20), found_b.fixnum);
 }
 
 test "loadIntoContext: bytecode body decodes into compound action" {

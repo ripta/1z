@@ -1006,6 +1006,7 @@ pub const Context = struct {
     image_parameter_slots: ?[*]?*value_mod.Parameter = null,
     image_tagged_slots: ?[*]?*const value_mod.Value = null,
     image_mutable_map_slots: ?[*]?*value_mod.MutableMap = null,
+    image_mutable_value_map_slots: ?[*]?*value_mod.MutableValueMap = null,
     image_struct_instance_slots: ?[*]?*value_mod.StructInstance = null,
     image_vector_slots: ?[*]?*value_mod.Vector = null,
     image_once_cell_slots: ?[*]?*value_mod.OnceCell = null,
@@ -1017,6 +1018,7 @@ pub const Context = struct {
     image_parameter_slot_count: u32 = 0,
     image_tagged_slot_count: u32 = 0,
     image_mutable_map_slot_count: u32 = 0,
+    image_mutable_value_map_slot_count: u32 = 0,
     image_struct_instance_slot_count: u32 = 0,
     image_vector_slot_count: u32 = 0,
     image_once_cell_slot_count: u32 = 0,
@@ -1037,6 +1039,13 @@ pub const Context = struct {
     /// image loader on process-lifetime storage and shared by pointer with
     /// spawned task contexts.
     image_reified_quotation_modules: ?*const std.AutoHashMapUnmanaged(usize, *const value_mod.Module) = null,
+    /// Side channel for the image load: every decoded value-map entry, parked until the loader can
+    /// install it. The storage is owned by `loadIntoContext` for the duration of the load, and this
+    /// is null everywhere else.
+    ///
+    /// A key cannot be hashed mid-load, because a struct-instance or tagged slot reference still
+    /// holds placeholder contents that `hashValue` folds in and `eql` compares.
+    image_pending_value_map_entries: ?*std.ArrayListUnmanaged(value_mod.PendingValueMapEntry) = null,
     /// Index of the durable entry frame `onez_push_entry_frame` pushed at AOT boot, which holds
     /// the entry file's restored `use` imports. Null on interpreter drivers and embedders, whose
     /// boot never calls the push. Guards the entry-import restore and the replay dispatch_id
@@ -1710,6 +1719,7 @@ pub const Context = struct {
         ctx.image_parameter_slots = parent.image_parameter_slots;
         ctx.image_tagged_slots = parent.image_tagged_slots;
         ctx.image_mutable_map_slots = parent.image_mutable_map_slots;
+        ctx.image_mutable_value_map_slots = parent.image_mutable_value_map_slots;
         ctx.image_struct_instance_slots = parent.image_struct_instance_slots;
         ctx.image_vector_slots = parent.image_vector_slots;
         ctx.image_once_cell_slots = parent.image_once_cell_slots;
@@ -1719,6 +1729,7 @@ pub const Context = struct {
         ctx.image_parameter_slot_count = parent.image_parameter_slot_count;
         ctx.image_tagged_slot_count = parent.image_tagged_slot_count;
         ctx.image_mutable_map_slot_count = parent.image_mutable_map_slot_count;
+        ctx.image_mutable_value_map_slot_count = parent.image_mutable_value_map_slot_count;
         ctx.image_struct_instance_slot_count = parent.image_struct_instance_slot_count;
         ctx.image_vector_slot_count = parent.image_vector_slot_count;
         ctx.image_once_cell_slot_count = parent.image_once_cell_slot_count;
@@ -2299,9 +2310,10 @@ pub const Context = struct {
     /// Release the owning references the image loader donated to the slot
     /// tables, before the arena that owns the container structs is torn
     /// down. Tagged inner values release once each; struct-instance,
-    /// mutable-map, and vector slots drop their donated header reference,
-    /// so the destroy that runs on last drop releases the elements runtime
-    /// code stored into them.
+    /// mutable-map, mutable-value-map, and vector slots drop their donated
+    /// header reference, so the destroy that runs on last drop releases the
+    /// elements runtime code stored into them. A value map's destroy releases
+    /// each key as well, which no other slot family has to do.
     fn releaseImageSlotReferences(self: *Context) void {
         if (self.image_struct_instance_slots) |table| {
             var i: u32 = 0;
@@ -2320,6 +2332,13 @@ pub const Context = struct {
         if (self.image_mutable_map_slots) |table| {
             var i: u32 = 0;
             while (i < self.image_mutable_map_slot_count) : (i += 1) {
+                const m = table[i] orelse continue;
+                m.header.release();
+            }
+        }
+        if (self.image_mutable_value_map_slots) |table| {
+            var i: u32 = 0;
+            while (i < self.image_mutable_value_map_slot_count) : (i += 1) {
                 const m = table[i] orelse continue;
                 m.header.release();
             }

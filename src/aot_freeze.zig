@@ -1742,6 +1742,10 @@ fn seedCompositeQuotationCallees(ctx: *const Context, val: Value, caller: WordId
             for (m.map.keys()) |key| try seedCompositeQuotationCallees(ctx, key, caller, vis, module_scoped_only, worklist, seen, pending_callee_bindings, allocator);
             for (m.map.values()) |elem| try seedCompositeQuotationCallees(ctx, elem, caller, vis, module_scoped_only, worklist, seen, pending_callee_bindings, allocator);
         },
+        .mutable_value_map => |m| {
+            for (m.map.keys()) |key| try seedCompositeQuotationCallees(ctx, key, caller, vis, module_scoped_only, worklist, seen, pending_callee_bindings, allocator);
+            for (m.map.values()) |elem| try seedCompositeQuotationCallees(ctx, elem, caller, vis, module_scoped_only, worklist, seen, pending_callee_bindings, allocator);
+        },
         .struct_instance => |si| for (si.fields) |field| try seedCompositeQuotationCallees(ctx, field, caller, vis, module_scoped_only, worklist, seen, pending_callee_bindings, allocator),
         else => {},
     }
@@ -1782,7 +1786,7 @@ fn seedQuotationBodyCallees(ctx: *const Context, instrs: []const Instruction, ca
             .quotation => |q| try seedQuotationBodyCallees(ctx, q.instructions, caller, vis, module_scoped_only, worklist, seen, pending_callee_bindings, allocator),
             .parameter => |p| try seedQuotationBodyCallees(ctx, p.default_quotation.instructions, caller, vis, module_scoped_only, worklist, seen, pending_callee_bindings, allocator),
             .once_cell => |cell| try seedQuotationBodyCallees(ctx, cell.body.instructions, caller, vis, module_scoped_only, worklist, seen, pending_callee_bindings, allocator),
-            .array, .hash, .vector, .mutable_map, .value_map, .struct_instance => try seedCompositeQuotationCallees(ctx, v, caller, vis, module_scoped_only, worklist, seen, pending_callee_bindings, allocator),
+            .array, .hash, .vector, .mutable_map, .value_map, .mutable_value_map, .struct_instance => try seedCompositeQuotationCallees(ctx, v, caller, vis, module_scoped_only, worklist, seen, pending_callee_bindings, allocator),
             else => {},
         },
     };
@@ -1959,7 +1963,7 @@ fn collectCallWords(
                     // quotations otherwise call ordinary prelude combinators the runtime already
                     // provides. Skipped for strict interpreter-free builds, whose must-compile
                     // invariant handles buried quotations through the keyed promoting passes instead.
-                    .array, .hash, .vector, .mutable_map, .value_map, .struct_instance => if (artifact_class != .interpreter_free_aot)
+                    .array, .hash, .vector, .mutable_map, .value_map, .mutable_value_map, .struct_instance => if (artifact_class != .interpreter_free_aot)
                         try seedCompositeQuotationCallees(ctx, val, caller, vis, true, worklist, seen, pending_callee_bindings, allocator),
                     else => {},
                 }
@@ -1987,7 +1991,7 @@ fn collectCompositeQuotations(instrs: []const Instruction, quotation_bodies: *st
         switch (instr.op) {
             .push_literal => |val| switch (val) {
                 .quotation => |q| try collectCompositeQuotations(q.instructions, quotation_bodies, quotation_seen, composite_body_ptrs, allocator),
-                .array, .hash, .vector, .mutable_map, .value_map, .struct_instance => try collectQuotationsInValue(val, quotation_bodies, quotation_seen, composite_body_ptrs, allocator),
+                .array, .hash, .vector, .mutable_map, .value_map, .mutable_value_map, .struct_instance => try collectQuotationsInValue(val, quotation_bodies, quotation_seen, composite_body_ptrs, allocator),
                 else => {},
             },
             else => {},
@@ -2042,6 +2046,10 @@ fn collectQuotationsInValue(val: Value, quotation_bodies: *std.ArrayListUnmanage
             for (m.map.keys()) |key| try collectQuotationsInValue(key, quotation_bodies, quotation_seen, composite_body_ptrs, allocator);
             for (m.map.values()) |elem| try collectQuotationsInValue(elem, quotation_bodies, quotation_seen, composite_body_ptrs, allocator);
         },
+        .mutable_value_map => |m| {
+            for (m.map.keys()) |key| try collectQuotationsInValue(key, quotation_bodies, quotation_seen, composite_body_ptrs, allocator);
+            for (m.map.values()) |elem| try collectQuotationsInValue(elem, quotation_bodies, quotation_seen, composite_body_ptrs, allocator);
+        },
         .struct_instance => |si| {
             for (si.fields) |field| try collectQuotationsInValue(field, quotation_bodies, quotation_seen, composite_body_ptrs, allocator);
         },
@@ -2086,7 +2094,7 @@ fn collectCompositeQuotationsPromoting(
         switch (instr.op) {
             .push_literal => |val| switch (val) {
                 .quotation => |q| try collectCompositeQuotationsPromoting(ctx, q.instructions, caller, worklist, seen, quotation_bodies, quotation_seen, composite_body_ptrs, pending_call_targets, pending_callee_bindings, quotation_path, diagnostics, artifact_class, allocator, path_allocator),
-                .array, .hash, .vector, .value_map => try collectQuotationsInValuePromoting(ctx, val, caller, worklist, seen, quotation_bodies, quotation_seen, composite_body_ptrs, pending_call_targets, pending_callee_bindings, quotation_path, diagnostics, artifact_class, allocator, path_allocator),
+                .array, .hash, .vector, .value_map, .mutable_value_map => try collectQuotationsInValuePromoting(ctx, val, caller, worklist, seen, quotation_bodies, quotation_seen, composite_body_ptrs, pending_call_targets, pending_callee_bindings, quotation_path, diagnostics, artifact_class, allocator, path_allocator),
                 else => {},
             },
             else => {},
@@ -2128,6 +2136,10 @@ fn collectQuotationsInValuePromoting(
             for (v.list.items) |elem| try collectQuotationsInValuePromoting(ctx, elem, caller, worklist, seen, quotation_bodies, quotation_seen, composite_body_ptrs, pending_call_targets, pending_callee_bindings, quotation_path, diagnostics, artifact_class, allocator, path_allocator);
         },
         .value_map => |m| {
+            for (m.map.keys()) |key| try collectQuotationsInValuePromoting(ctx, key, caller, worklist, seen, quotation_bodies, quotation_seen, composite_body_ptrs, pending_call_targets, pending_callee_bindings, quotation_path, diagnostics, artifact_class, allocator, path_allocator);
+            for (m.map.values()) |elem| try collectQuotationsInValuePromoting(ctx, elem, caller, worklist, seen, quotation_bodies, quotation_seen, composite_body_ptrs, pending_call_targets, pending_callee_bindings, quotation_path, diagnostics, artifact_class, allocator, path_allocator);
+        },
+        .mutable_value_map => |m| {
             for (m.map.keys()) |key| try collectQuotationsInValuePromoting(ctx, key, caller, worklist, seen, quotation_bodies, quotation_seen, composite_body_ptrs, pending_call_targets, pending_callee_bindings, quotation_path, diagnostics, artifact_class, allocator, path_allocator);
             for (m.map.values()) |elem| try collectQuotationsInValuePromoting(ctx, elem, caller, worklist, seen, quotation_bodies, quotation_seen, composite_body_ptrs, pending_call_targets, pending_callee_bindings, quotation_path, diagnostics, artifact_class, allocator, path_allocator);
         },
@@ -2416,7 +2428,7 @@ fn detectInterpretedReach(
             .push_literal => |val| switch (val) {
                 .quotation => |q| try detectInterpretedReach(ctx, q.instructions, caller_name, source_file, prelude_words, discovered_names, quotation_seen, callee_seen, violations, allocator),
                 .once_cell => |cell| try detectInterpretedReach(ctx, cell.body.instructions, caller_name, source_file, prelude_words, discovered_names, quotation_seen, callee_seen, violations, allocator),
-                .array, .hash, .vector, .mutable_map, .value_map, .struct_instance => try detectReachInValue(ctx, val, caller_name, source_file, instr.line, prelude_words, discovered_names, quotation_seen, callee_seen, violations, allocator),
+                .array, .hash, .vector, .mutable_map, .value_map, .mutable_value_map, .struct_instance => try detectReachInValue(ctx, val, caller_name, source_file, instr.line, prelude_words, discovered_names, quotation_seen, callee_seen, violations, allocator),
                 else => {},
             },
             else => {},
@@ -2462,6 +2474,10 @@ fn detectReachInValue(
             while (it.next()) |entry| try detectReachInValue(ctx, entry.value_ptr.*, caller_name, source_file, line, prelude_words, discovered_names, quotation_seen, callee_seen, violations, allocator);
         },
         .value_map => |m| {
+            for (m.map.keys()) |key| try detectReachInValue(ctx, key, caller_name, source_file, line, prelude_words, discovered_names, quotation_seen, callee_seen, violations, allocator);
+            for (m.map.values()) |elem| try detectReachInValue(ctx, elem, caller_name, source_file, line, prelude_words, discovered_names, quotation_seen, callee_seen, violations, allocator);
+        },
+        .mutable_value_map => |m| {
             for (m.map.keys()) |key| try detectReachInValue(ctx, key, caller_name, source_file, line, prelude_words, discovered_names, quotation_seen, callee_seen, violations, allocator);
             for (m.map.values()) |elem| try detectReachInValue(ctx, elem, caller_name, source_file, line, prelude_words, discovered_names, quotation_seen, callee_seen, violations, allocator);
         },
@@ -2522,7 +2538,7 @@ fn detectBuriedCallees(
                         try detectBuriedCallees(ctx, q.instructions, caller_name, source_file, line, prelude_words, discovered_names, quotation_seen, callee_seen, violations, allocator);
                     }
                 },
-                .array, .hash, .vector, .mutable_map, .value_map, .struct_instance => try detectReachInValue(ctx, val, caller_name, source_file, line, prelude_words, discovered_names, quotation_seen, callee_seen, violations, allocator),
+                .array, .hash, .vector, .mutable_map, .value_map, .mutable_value_map, .struct_instance => try detectReachInValue(ctx, val, caller_name, source_file, line, prelude_words, discovered_names, quotation_seen, callee_seen, violations, allocator),
                 else => {},
             },
         }
@@ -3262,6 +3278,10 @@ fn mapQuotationSourcesInValue(
             while (it.next()) |vp| try mapQuotationSourcesInValue(vp.*, source_file, defining_word, 0, 0, true, map, allocator);
         },
         .value_map => |m| {
+            for (m.map.keys()) |key| try mapQuotationSourcesInValue(key, source_file, defining_word, 0, 0, true, map, allocator);
+            for (m.map.values()) |elem| try mapQuotationSourcesInValue(elem, source_file, defining_word, 0, 0, true, map, allocator);
+        },
+        .mutable_value_map => |m| {
             for (m.map.keys()) |key| try mapQuotationSourcesInValue(key, source_file, defining_word, 0, 0, true, map, allocator);
             for (m.map.values()) |elem| try mapQuotationSourcesInValue(elem, source_file, defining_word, 0, 0, true, map, allocator);
         },

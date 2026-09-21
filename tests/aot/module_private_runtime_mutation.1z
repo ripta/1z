@@ -10,3 +10,4 @@ populate-state
 cache-value inspect print-line
 registry-runtime inspect print-line
 registry-pinned-tag inspect print-line
+vregistry-value inspect print-line

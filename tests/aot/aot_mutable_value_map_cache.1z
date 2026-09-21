@@ -1,0 +1,22 @@
+\ A module-private mutable value-keyed map reachable at freeze time is carried into the
+\ runtime-image AOT binary and reconstructed by the loader, matching the interpreter. The cache is
+\ empty at freeze and routes through the mutable-value-map slot table: the parse-time-folded
+\ binding becomes a mutable_value_map_slot push, and the loader allocates one live map per slot so
+\ every call to `(cache)` shares the same backing. Runtime mutation through that shared backing
+\ must persist across calls -- the persistence is what requires a slot, not a fresh value per push.
+\
+\ A fixnum key is the case `hash` and `mutable-map` cannot express at all.
+
+(cache): ( -- mvmap ) <mutable-value-map> ;
+
+remember: ( key value -- ) [ (cache) -rot> vmap-set! drop ] ;
+recall:   ( key -- value ) [ (cache) swap vmap-get ] ;
+known?:   ( key -- ? )     [ (cache) swap vmap-has? ] ;
+tally:    ( -- n )         [ (cache) #len ] ;
+
+1 known? .  \ f  -- empty at freeze
+1 "one" remember
+1 recall print-line  \ one -- runtime mutation persisted through the shared backing
+{ 2 3 } "pair" remember
+{ 2 3 } recall print-line  \ pair -- an array key matches by its frozen form
+tally .                    \ 2

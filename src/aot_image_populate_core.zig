@@ -261,6 +261,18 @@ pub const MutableMapDescription = extern struct {
     entries_bytecode_len: u32,
 };
 
+/// Zig mirror of `onez_image_mutable_value_map_description_t`.
+///
+/// One row per slot in `onez_image_mutable_value_map_slots[]`. The loader allocates a fresh
+/// `*MutableValueMap`, decodes the entries via `instruction_bytecode.deserializeValueAtForImage`,
+/// populates the map, and patches the slot. An entry is `key | value`, both Values, rather than
+/// the length-prefixed key bytes a mutable map carries.
+pub const MutableValueMapDescription = extern struct {
+    slot: u32,
+    entries_bytecode: ?[*]const u8,
+    entries_bytecode_len: u32,
+};
+
 /// Zig mirror of `onez_image_struct_instance_description_t`.
 ///
 /// One row per slot in `onez_image_struct_instance_slots[]`. The loader allocates a fresh
@@ -447,6 +459,7 @@ pub const Header = extern struct {
     parameter_slot_count: u32,
     tagged_slot_count: u32,
     mutable_map_slot_count: u32,
+    mutable_value_map_slot_count: u32,
     struct_instance_slot_count: u32,
     vector_slot_count: u32,
     once_cell_slot_count: u32,
@@ -464,6 +477,7 @@ pub const Header = extern struct {
     parameter_descriptions: ?[*]const ParameterDescription,
     tagged_descriptions: ?[*]const TaggedDescription,
     mutable_map_descriptions: ?[*]const MutableMapDescription,
+    mutable_value_map_descriptions: ?[*]const MutableValueMapDescription,
     struct_instance_descriptions: ?[*]const StructInstanceDescription,
     vector_descriptions: ?[*]const VectorDescription,
     once_cell_descriptions: ?[*]const OnceCellDescription,
@@ -529,6 +543,13 @@ pub const TaggedSlotTable = [*]?*const value_mod.Value;
 /// pushing so the cache's strong reference is preserved.
 pub const MutableMapSlotTable = [*]?*value_mod.MutableMap;
 
+/// Slot table for `.mutable_value_map` pointers.
+///
+/// Each entry is allocated by the loader via `MutableValueMap.create`; the entries are populated
+/// from the matching description row's bytecode. The compiled-code helper retains the pointer
+/// before pushing so the slot's own strong reference is preserved.
+pub const MutableValueMapSlotTable = [*]?*value_mod.MutableValueMap;
+
 /// Slot table for `.struct_instance` pointers.
 ///
 /// Each entry is allocated by the loader via `createStructInstance` with its field vector sized
@@ -575,6 +596,7 @@ pub const SlotTables = struct {
     parameters: ?ParameterSlotTable = null,
     tagged: ?TaggedSlotTable = null,
     mutable_maps: ?MutableMapSlotTable = null,
+    mutable_value_maps: ?MutableValueMapSlotTable = null,
     struct_instances: ?StructInstanceSlotTable = null,
     vectors: ?VectorSlotTable = null,
     once_cells: ?OnceCellSlotTable = null,

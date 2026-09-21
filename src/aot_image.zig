@@ -54,8 +54,7 @@ pub const BlobReason = enum {
     /// classification; the enum value is retained so diagnostic output
     /// stays stable for the hash case.
     mutable_map,
-    /// A `byte_array`, `set`, or `mutable_value_map` literal -- dynamically sized containers with
-    /// no serialized form.
+    /// A `byte_array` or `set` literal -- dynamically sized containers with no serialized form.
     dynamic_container,
     /// A `parameter` literal. The `default_quotation` is structural but
     /// the runtime binding state is not.
@@ -185,7 +184,24 @@ pub fn classifyValue(val: Value) Classification {
             }
             break :blk acc;
         },
-        .byte_array, .set, .mutable_value_map => Classification.blobOf(.dynamic_container),
+        // Structural via the runtime image's mutable-value-map slot table: one live map is
+        // allocated per slot at load and shared by every push site that named it, so identity and
+        // runtime mutation match the in-process AOT behaviour.
+        //
+        // The recursion follows `.vector`'s rather than `.mutable_map`'s unconditional answer, and
+        // takes keys as well as values: a member with no serialized form has to take the whole map
+        // to blob so the build falls back instead of reaching an emitter that cannot encode it.
+        .mutable_value_map => |m| blk: {
+            var acc = Classification.structural_unit;
+            for (m.map.keys()) |key| {
+                acc = acc.combine(classifyValue(key));
+            }
+            for (m.map.values()) |value| {
+                acc = acc.combine(classifyValue(value));
+            }
+            break :blk acc;
+        },
+        .byte_array, .set => Classification.blobOf(.dynamic_container),
         .parameter => Classification.blobOf(.parameter_runtime_state),
         .once_cell => Classification.blobOf(.once_cell_runtime_state),
         .bignum => Classification.blobOf(.bignum),
@@ -647,7 +663,7 @@ test "classifyValue: hash is blob; mutable_map and empty vector are structural" 
     try testing.expectEqual(ImagePath.structural, classifyValue(.{ .vector = vec }).path);
 }
 
-test "classifyValue: value_map follows its entries; the mutable half stays blob" {
+test "classifyValue: both value-map halves follow their entries" {
     const vm = try value_mod.ValueMap.create(testing.allocator);
     defer vm.header.release();
     try testing.expectEqual(ImagePath.structural, classifyValue(.{ .value_map = vm }).path);
@@ -674,9 +690,21 @@ test "classifyValue: value_map follows its entries; the mutable half stays blob"
     try keyed.map.put(testing.allocator, .{ .set = key_side }, .{ .fixnum = 3 });
     try testing.expectEqual(ImagePath.blob, classifyValue(.{ .value_map = keyed }).path);
 
+    // The mutable half takes the same recursion, because it rides a slot table of its own.
     const mvm = try value_mod.MutableValueMap.create(testing.allocator);
     defer mvm.header.release();
-    try testing.expectEqual(ImagePath.blob, classifyValue(.{ .mutable_value_map = mvm }).path);
+    try testing.expectEqual(ImagePath.structural, classifyValue(.{ .mutable_value_map = mvm }).path);
+
+    try mvm.map.put(testing.allocator, .{ .fixnum = 1 }, value_mod.stringValue("a"));
+    try testing.expectEqual(ImagePath.structural, classifyValue(.{ .mutable_value_map = mvm }).path);
+
+    const mut_side = try value_mod.Set.create(testing.allocator);
+    defer mut_side.header.release();
+    mut_side.header.retain();
+    try mvm.map.put(testing.allocator, .{ .fixnum = 2 }, .{ .set = mut_side });
+    const mut_with_blob = classifyValue(.{ .mutable_value_map = mvm });
+    try testing.expectEqual(ImagePath.blob, mut_with_blob.path);
+    try testing.expectEqual(BlobReason.dynamic_container, mut_with_blob.reason);
 }
 
 test "classifyValue: parameter is blob" {

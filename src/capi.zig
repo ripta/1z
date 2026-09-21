@@ -514,6 +514,7 @@ export fn onez_load_runtime_image(
     parameter_slots_ptr: ?*anyopaque,
     tagged_slots_ptr: ?*anyopaque,
     mutable_map_slots_ptr: ?*anyopaque,
+    mutable_value_map_slots_ptr: ?*anyopaque,
     struct_instance_slots_ptr: ?*anyopaque,
     vector_slots_ptr: ?*anyopaque,
     once_cell_slots_ptr: ?*anyopaque,
@@ -553,6 +554,10 @@ export fn onez_load_runtime_image(
         @ptrCast(@alignCast(sp))
     else
         null;
+    const mutable_value_map_slots: ?aot_image_loader.MutableValueMapSlotTable = if (mutable_value_map_slots_ptr) |sp|
+        @ptrCast(@alignCast(sp))
+    else
+        null;
     const struct_instance_slots: ?aot_image_loader.StructInstanceSlotTable = if (struct_instance_slots_ptr) |sp|
         @ptrCast(@alignCast(sp))
     else
@@ -581,6 +586,7 @@ export fn onez_load_runtime_image(
         .parameters = parameter_slots,
         .tagged = tagged_slots,
         .mutable_maps = mutable_map_slots,
+        .mutable_value_maps = mutable_value_map_slots,
         .struct_instances = struct_instance_slots,
         .vectors = vector_slots,
         .once_cells = once_cell_slots,

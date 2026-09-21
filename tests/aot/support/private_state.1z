@@ -4,11 +4,16 @@
 \ image as a struct-instance slot. `populate-state` runs at binary
 \ runtime, so its entries are refcounted allocations that context
 \ teardown must release.
+\
+\ The mutable value-keyed map is the one container here whose keys are
+\ refcounted values too, so teardown has to release both halves of an
+\ entry rather than freeing key bytes.
 
 rec: struct{ tag payload } ;
 
-(cache): ( -- vec ) V{ } ;
-(registry): ( -- mmap ) M{ } ;
+(cache):     ( -- vec )   V{ } ;
+(registry):  ( -- mmap )  M{ } ;
+(vregistry): ( -- mvmap ) <mutable-value-map> ;
 
 (pin-frozen): ( -- ) [ (registry) pinned: 7 { 1 2 } make-rec @set! drop ] ;
 (pin-frozen)
@@ -16,8 +21,10 @@ rec: struct{ tag payload } ;
 populate-state: ( -- ) [
   H{ } "k" 42 @set (cache) over #push! 2drop
   (registry) runtime: { 4 5 6 } @set! drop
+  (vregistry) { 7 8 } H{ } "in" 9 @set vmap-set! drop
 ] ;
 
 cache-value:         ( -- n )   [ (cache) 0 #nth "k" @get ] ;
 registry-runtime:    ( -- arr ) [ (registry) runtime: @get ] ;
 registry-pinned-tag: ( -- n )   [ (registry) pinned: @get tag>> ] ;
+vregistry-value:     ( -- n )   [ (vregistry) { 7 8 } vmap-get "in" @get ] ;

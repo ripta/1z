@@ -428,6 +428,10 @@ const Inference = struct {
                 for (m.map.keys()) |key| try self.noteBuriedBodies(key, depth + 1);
                 for (m.map.values()) |value| try self.noteBuriedBodies(value, depth + 1);
             },
+            .mutable_value_map => |m| {
+                for (m.map.keys()) |key| try self.noteBuriedBodies(key, depth + 1);
+                for (m.map.values()) |value| try self.noteBuriedBodies(value, depth + 1);
+            },
             .struct_instance => |si| for (si.fields) |field| try self.noteBuriedBodies(field, depth + 1),
             else => {},
         }

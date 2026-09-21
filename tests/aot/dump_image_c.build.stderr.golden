@@ -235,6 +235,20 @@ typedef struct onez_image_mutable_map_description {
     uint32_t       entries_bytecode_len;
 } onez_image_mutable_map_description_t;
 
+/* Per-slot description for `.mutable_value_map` literal pushes, on the */
+/* mutable_map model above: one live map allocated per row and shared   */
+/* by every push site that named the same parse-time map, so a runtime  */
+/* `vmap-set!` through one is visible through the others.               */
+/*                                                                      */
+/* An entry is `key | value`, both serialized Values, where a mutable   */
+/* map writes length-prefixed key bytes. A value-map key is a Value,    */
+/* so it reaches the slot tables the way its value does.                */
+typedef struct onez_image_mutable_value_map_description {
+    uint32_t    slot;                 /* index into onez_image_mutable_value_map_slots */
+    const uint8_t *entries_bytecode;
+    uint32_t       entries_bytecode_len;
+} onez_image_mutable_value_map_description_t;
+
 /* One frozen struct instance. The loader allocates a fresh             */
 /* StructInstance whose struct_type is onez_image_struct_type_slots     */
 /* [struct_type_slot], decodes the field values from fields_bytecode    */
@@ -390,6 +404,7 @@ typedef struct onez_image_header {
     uint32_t parameter_slot_count;
     uint32_t tagged_slot_count;
     uint32_t mutable_map_slot_count;
+    uint32_t mutable_value_map_slot_count;
     uint32_t struct_instance_slot_count;
     uint32_t vector_slot_count;
     uint32_t once_cell_slot_count;
@@ -407,6 +422,7 @@ typedef struct onez_image_header {
     const struct onez_image_parameter_description *parameter_descriptions;
     const struct onez_image_tagged_description *tagged_descriptions;
     const struct onez_image_mutable_map_description *mutable_map_descriptions;
+    const struct onez_image_mutable_value_map_description *mutable_value_map_descriptions;
     const struct onez_image_struct_instance_description *struct_instance_descriptions;
     const struct onez_image_vector_description *vector_descriptions;
     const struct onez_image_once_cell_description *once_cell_descriptions;
@@ -1442,7 +1458,7 @@ static const onez_image_entry_import_t onez_image_entry_imports_storage[] = {
 };
 
 __attribute__((used)) const onez_image_header_t onez_image_v1 = {
-    .format_version = 22,
+    .format_version = 23,
     .module_count = 1,
     .word_count = 8,
     .marker_pool_count = 4,
@@ -1454,6 +1470,7 @@ __attribute__((used)) const onez_image_header_t onez_image_v1 = {
     .parameter_slot_count = 6,
     .tagged_slot_count = 10,
     .mutable_map_slot_count = 0,
+    .mutable_value_map_slot_count = 0,
     .struct_instance_slot_count = 0,
     .vector_slot_count = 0,
     .once_cell_slot_count = 0,
@@ -1471,6 +1488,7 @@ __attribute__((used)) const onez_image_header_t onez_image_v1 = {
     .parameter_descriptions = onez_image_parameter_descriptions_storage,
     .tagged_descriptions = onez_image_tagged_descriptions_storage,
     .mutable_map_descriptions = NULL,
+    .mutable_value_map_descriptions = NULL,
     .struct_instance_descriptions = NULL,
     .vector_descriptions = NULL,
     .once_cell_descriptions = NULL,
