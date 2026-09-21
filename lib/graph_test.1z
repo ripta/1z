@@ -55,6 +55,10 @@ weighted-ring: ( g n -- g ) [ dup [ weighted-path ] dip 0 1 graph-add-edge-with-
 \ edge's weight.
 spanning-weight: ( edges -- n ) [ [ payload>> ] #map 0 [ + ] #reduce ] ;
 
+\ A byte-array freezes to a string, and no parameterized string type exists to rewrap the
+\ newtype in, so a vertex of this shape has no frozen counterpart at all.
+vertex-bytes: virtual{ byte-array } ;
+
 \ --- Add edge ---
 
 test-add-edge-creates-endpoints: ( -- ) [
@@ -751,6 +755,12 @@ test-projection-scale: ( -- ) [
 test-projection-self-loop: ( -- ) [
   [ cmp ] <graph> 1 1 graph-add-edge project
   0 dense-targets { 0 } "a self-loop points at its own index, once" assert=
+] ;
+
+test-projection-unfreezable-vertex: ( -- ) [
+  [ cmp ] <graph> B{ 1 2 } >vertex-bytes graph-add-vertex
+  [ project ] curry type-mismatch:
+  "a vertex whose type cannot be frozen has no dense numbering" assert-error-type
 ] ;
 
 test-projection-unknown-vertex: ( -- ) [

@@ -30,6 +30,10 @@ iteration-fixture: ( -- uf ) [
   dup 1 2 union-find-merge drop
 ] ;
 
+\ A byte-array freezes to a string, and no parameterized string type exists to rewrap the
+\ newtype in, so a type shaped like this has no frozen counterpart at all.
+elem-bytes: virtual{ byte-array } ;
+
 \ --- Add ---
 
 test-add-appends-singletons: ( -- ) [
@@ -193,7 +197,7 @@ test-iter-snapshot-survives-merge: ( -- ) [
 
 test-map-add-and-root: ( -- ) [
   "union-find-map" test-section
-  [ cmp ] <union-find-map>
+  <union-find-map>
   dup 10 union-find-map-add
   dup 20 union-find-map-add
   dup 30 union-find-map-add
@@ -205,25 +209,37 @@ test-map-add-and-root: ( -- ) [
 ] ;
 
 test-map-domains: ( -- ) [
-  [ cmp ] <union-find-map>
+  <union-find-map>
   dup 7 union-find-map-add
   dup 9 union-find-map-add
   dup 7 9 union-find-map-merge drop
   9 union-find-map-root 7 "fixnum elements resolve" assert=
-  [ cmp ] <union-find-map>
+  <union-find-map>
   dup "left" union-find-map-add
   dup "right" union-find-map-add
   dup "left" "right" union-find-map-merge drop
   "right" union-find-map-root "left" "string elements resolve" assert=
-  [ [ >string ] dip >string cmp ] <union-find-map>
+  <union-find-map>
   dup left: union-find-map-add
   dup right: union-find-map-add
   dup left: right: union-find-map-merge drop
   right: union-find-map-root left: "symbol elements resolve" assert=
 ] ;
 
+test-map-frozen-elements: ( -- ) [
+  <union-find-map>
+  dup V{ 1 2 } union-find-map-add
+  dup { 1 2 } union-find-map-add
+  dup #len 1 "a vector element and its array form are one element" assert=
+  dup { 1 2 } union-find-map-root V{ 1 2 }
+  "a query answers with the element as first interned" assert=
+  { 1 2 } union-find-map-size 1 "and the pair is one singleton" assert=
+  <union-find-map> [ B{ 1 2 } >elem-bytes union-find-map-add ] curry type-mismatch:
+  "an element whose type cannot be frozen is refused" assert-error-type
+] ;
+
 test-map-duplicate-add: ( -- ) [
-  [ cmp ] <union-find-map>
+  <union-find-map>
   dup "a" union-find-map-add
   dup "a" union-find-map-add
   dup #len 1 "a repeated add is a no-op" assert=
@@ -232,7 +248,7 @@ test-map-duplicate-add: ( -- ) [
 ] ;
 
 test-map-iteration: ( -- ) [
-  [ cmp ] <union-find-map>
+  <union-find-map>
   dup "a" union-find-map-add
   dup "b" union-find-map-add
   dup "c" union-find-map-add
@@ -245,7 +261,7 @@ test-map-iteration: ( -- ) [
 ] ;
 
 test-map-protocol: ( -- ) [
-  [ cmp ] <union-find-map>
+  <union-find-map>
   dup #empty? "an empty map is #empty?" assert-true
   dup #len 0 "an empty map has zero components" assert=
   dup "a" union-find-map-add
@@ -255,11 +271,11 @@ test-map-protocol: ( -- ) [
   dup "a" "b" union-find-map-merge drop
   dup #len 1 "a join drops #len by one" assert=
   [ 0 #nth ] curry "#nth on a union-find-map throws" assert-error
-  [ cmp ] <union-find-map> [ #first ] curry "#first on a union-find-map throws" assert-error
+  <union-find-map> [ #first ] curry "#first on a union-find-map throws" assert-error
 ] ;
 
 test-map-root-option: ( -- ) [
-  [ cmp ] <union-find-map>
+  <union-find-map>
   dup "a" union-find-map-add
   dup "a" union-find-map-root? option:some> "a" "root? unwraps to the representative" assert=
   dup "z" union-find-map-root? option:some? "root? on an unknown element is none" assert-false
@@ -267,7 +283,7 @@ test-map-root-option: ( -- ) [
 ] ;
 
 test-map-unknown-raises: ( -- ) [
-  [ cmp ] <union-find-map>
+  <union-find-map>
   dup "a" union-find-map-add
   dup [ "z" union-find-map-root ] curry index-out-of-bounds:
   "root on an unknown element throws" assert-error-type

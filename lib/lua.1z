@@ -308,17 +308,39 @@ eval>boolean: ( lua: lua-state src: string -- boolean ) [ [ (raw-state) ] dip 1 
   swap [ <rot- over swap (push-value) swap 1 + -2 swap (set-i) ] curry #each-index
 ] ;
 
+\\ Store one value-map entry in the Lua table on top of the stack: the key and
+\\ the value both go through (push-value), then lua_settable takes the pair.
+\\
+\\ lua_settable rather than lua_setfield or lua_seti, because it reads the key
+\\ off the Lua stack and so carries whatever type (push-value) left there.
+(push-entry): ( state entry -- ) [
+  [ 0 #nth ] [ 1 #nth ] bi
+  [ over swap (push-value) ] dip
+  over swap (push-value)
+  -3 (set-table)
+] ;
+
+\\ Push value-map as a fresh Lua table: each key lands as its own Lua type, so
+\\ a fixnum key becomes a Lua integer rather than the string it renders as.
+\\ Values go through (push-value), so nested maps and arrays build nested tables.
+(push-value-map): ( state vmap -- ) [
+  over (check-lua-stack)
+  over 0 0 (create-table)
+  >array swap [ swap (push-entry) ] curry #each
+] ;
+
 \\ Push a 1z value onto the Lua stack, dispatching on its type: scalars push
-\\ directly; a hash or array builds a Lua table recursively.
+\\ directly; a value-map, hash or array builds a Lua table recursively.
 (push-value): ( state value -- ) [
   dup type-name {
     { "fixnum" [ (push-integer) ] }
     { "float" [ (push-number) ] }
     { "string" [ (push-string) drop ] }
     { "boolean" [ (to-lua-bool) (push-boolean) ] }
+    { "value-map" [ (push-value-map) ] }
     { "hash" [ (push-hash) ] }
     { "array" [ (push-array) ] }
-    [ "fixnum, float, string, boolean, hash, or array" throw-type-error ]
+    [ "fixnum, float, string, boolean, value-map, hash, or array" throw-type-error ]
   } case
 ] ;
 
@@ -331,8 +353,8 @@ eval>boolean: ( lua: lua-state src: string -- boolean ) [ [ (raw-state) ] dip 1 
 \\ Push the named Lua global, read it with reader, then pop it.
 (with-global): ( state name reader: ( state idx -- value ) -- value ) [ [ (push-global) ] dip (read-pop) ] ;
 
-\\ Set a Lua global from a 1z value: a scalar pushes directly; a hash or array
-\\ builds a Lua table recursively.
+\\ Set a Lua global from a 1z value: a scalar pushes directly; a value-map, hash
+\\ or array builds a Lua table recursively.
 set-global: ( lua: lua-state name: string value -- ) [ [ (raw-state) ] 2dip (do-set-global) ] ;
 
 \\ Read a Lua global as a fixnum, through Lua's number coercion; raises
@@ -358,13 +380,13 @@ get-global>boolean: ( lua: lua-state name: string -- boolean ) [ [ (raw-state) ]
 
 \\ Read a Lua global as its natural 1z scalar type: boolean, fixnum for an
 \\ integer number, float for any other number, or string. A table global
-\\ raises; read it with get-global-hash or get-global-array instead.
+\\ raises; read it with get-global-value-map or get-global-array instead.
 get-global: ( lua: lua-state name: string -- value ) [
   [ (raw-state) ] dip
   over [
     2dup (get-global) LUA_TTABLE = [
       over 1 (pop) nip
-      dup "global " swap #append " is a table; use get-global-hash or get-global-array" #append
+      dup "global " swap #append " is a table; use get-global-value-map or get-global-array" #append
       ELuaError make-error throw
     ] [
       drop [ (to-value) ] (read-pop)
@@ -545,9 +567,12 @@ table-each: ( lua: lua-state name: string quot: ( key value -- ) -- ) [
 \ Whole-table conversion from Lua tables to 1z values: an eager immutable
 \ snapshot, never a live view. The walk auto-detects nested shapes: a nested
 \ table that is a Lua sequence becomes a 0-based array, any other nested table
-\ a hash; the caller-directed shape demand applies only to the top-level
+\ a value-map; the caller-directed shape demand applies only to the top-level
 \ table. Cycles are refused by tracking the ancestor path of lua_topointer
 \ identities; shared non-cyclic subtables convert normally.
+\
+\ A value-map is what carries a Lua key back verbatim: a hash is string-keyed,
+\ so it cannot hold the Lua integer 1 and the Lua string "1" as two keys.
 
 \\ One lua_next step of the sequence check: count entries whose key is an
 \\ integer in 1..n; any other key ends the check early. True iff the table
@@ -582,46 +607,29 @@ table-each: ( lua: lua-state name: string quot: ( key value -- ) -- ) [
   0 (seq-loop)
 ] ;
 
-\\ The lua_next key at Lua stack index -2 as a 1z hash key: a string key is
-\\ taken verbatim; an integer key is stringified, as is a non-integral float
-\\ key (Lua normalizes an integral float key to an integer key). Any other
-\\ key type raises.
+\\ One lua_next step of the value-map walk: read the key in its natural 1z type,
+\\ convert the value, and store the pair in the staging map m.
 \\
-\\ Number keys go through the numeric readers, never lua_tolstring, which
-\\ would convert the key in place and corrupt the traversal.
-(key-string): ( state -- str ) [
-  dup -2 (type) {
-    { 3 [ dup -2 (is-integer) 1 = [ -2 (to-integer) ] [ -2 (to-number) ] if >string ] }
-    { 4 [ -2 (to-lstring) ] }
-    [ [ drop ] dip "unsupported Lua table key type for a hash" ELuaError make-error throw ]
-  } case
-] ;
-
-\\ One lua_next step of the hash walk: stringify the key, refuse a
-\\ stringification collision, convert the value, and store it in the staging
-\\ map m.
-(hash-loop): ( state tidx path m -- hash ) [
+\\ The key goes through the same (to-value) the value side uses, which is where
+\\ the warning against reading a key with lua_tolstring lives.
+(value-map-loop): ( state tidx path m -- value-map ) [
   3 pick-n 3 pick-n (next) 0 = [
-    >hash [ drop 2drop ] dip
+    freeze [ drop 2drop ] dip
   ] [
-    3 pick-n (key-string)
-    2dup @has? [
-      dup "Lua keys collide after stringification: " swap #append
-      ELuaError make-error throw
-    ] when
+    3 pick-n -2 (to-value)
     4 pick-n dup (gettop) 4 pick-n (table-to-value)
-    @set!
+    vmap-set!
     3 pick-n 1 (pop)
-    (hash-loop)
+    (value-map-loop)
   ] if
 ] ;
 
-\\ Convert the table at absolute Lua stack index tidx to a hash, walking its
-\\ entries with lua_next into a staging mutable map.
-(table-to-hash): stack-recursive ( state tidx path -- hash ) [
-  M{ }
+\\ Convert the table at absolute Lua stack index tidx to a value-map, walking
+\\ its entries with lua_next into a staging mutable map.
+(table-to-value-map): stack-recursive ( state tidx path -- value-map ) [
+  <mutable-value-map>
   3 pick-n (push-nil)
-  (hash-loop)
+  (value-map-loop)
 ] ;
 
 \\ One step of the array walk: read t[i], convert it, and push it onto the
@@ -648,7 +656,7 @@ table-each: ( lua: lua-state name: string quot: ( key value -- ) -- ) [
 
 \\ Enter the table at absolute Lua stack index idx: reserve C-stack headroom,
 \\ refuse a table already on its own ancestor path, then convert as an array
-\\ when it is a sequence and as a hash otherwise.
+\\ when it is a sequence and as a value-map otherwise.
 (table-descend): ( state idx path -- value ) [
   2 pick-n (check-lua-stack)
   2 pick-n 2 pick-n (to-pointer)
@@ -657,7 +665,7 @@ table-each: ( lua: lua-state name: string quot: ( key value -- ) -- ) [
   ] when
   #push
   2 pick-n 2 pick-n (sequence?)
-  [ (table-to-array) ] [ (table-to-hash) ] if
+  [ (table-to-array) ] [ (table-to-value-map) ] if
 ] ;
 
 \\ Convert the Lua value at absolute Lua stack index idx to a 1z value: a
@@ -686,12 +694,13 @@ table-each: ( lua: lua-state name: string quot: ( key value -- ) -- ) [
   ] (lua-guard)
 ] ;
 
-\\ Read the table global named name as a hash: string keys verbatim, number
-\\ keys stringified, values converted recursively with nested auto-detection.
-\\ Raises ELuaError when the global is not a table, on an unsupported or
-\\ colliding key, and on a cyclic table.
-get-global-hash: ( lua: lua-state name: string -- hash ) [
-  [ (table-to-hash) ] (read-table)
+\\ Read the table global named name as a value-map: every key keeps its own 1z
+\\ type, so the Lua integer 1 and the Lua string "1" are two entries. Values
+\\ convert recursively with nested auto-detection. Raises ELuaError when the
+\\ global is not a table, on a key that is not a boolean, a number, or a
+\\ string, and on a cyclic table.
+get-global-value-map: ( lua: lua-state name: string -- value-map ) [
+  [ (table-to-value-map) ] (read-table)
 ] ;
 
 \\ Read the table global named name as a 0-based array, demanding the table

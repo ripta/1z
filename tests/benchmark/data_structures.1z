@@ -234,14 +234,17 @@ union-find-sweep: ( n -- ) [
   2drop
 ] ;
 
-\ The union-find-map rows carry the side table: every operation consults a bst-map of
-\ interned elements, so unlike the core's flat rows the per-element cost may grow
-\ logarithmically across the 2x steps. fill is n adds, the layer's add-cost row. root
-\ rides the same star shape as the core's root row, plus one side-table lookup and one
-\ back-translation read.
+\ The union-find-map rows carry the side table: every operation consults a value-keyed map
+\ of interned elements, which is one O(1) probe, so these rows read as flat as the core's.
+\ fill is n adds, the layer's add-cost row. root rides the same star shape as the core's
+\ root row, plus one side-table probe and one back-translation read.
+\
+\ What is left over the core is the constant factor of those two reads, plus whatever the
+\ probe loses to cache as the table grows. That residual must stay small: a gap widening
+\ with n the way a comparison count would is the regression to watch for.
 
 union-find-map-fill: ( n -- ufm ) [
-  [ cmp ] <union-find-map> swap
+  <union-find-map> swap
   0 swap <range> [ over swap union-find-map-add ] #each
 ] ;
 
@@ -272,29 +275,28 @@ union-find-map-sweep: ( n -- ) [
 \ neighbors, so it is flat too. vertex-count and edge-count are field reads.
 \
 \ vertices and edges are O(V) and O(V+E), so they run at one iteration and their
-\ per-element costs read flat. project is O((V + E) log V) and runs at one iteration too,
-\ so its per-element cost may grow logarithmically and no faster. The digraph
-\ remove-vertex row is the other half of the removal: a digraph's in-edges are not
-\ locatable from the vertex, so every adjacency list is swept and the row is
-\ O(V log V + E), the other row here expected to grow.
+\ per-element costs read flat. project numbers the vertices into a value-keyed map, so it is
+\ O(V + E) and reads flat too. The digraph remove-vertex row is the other half of the
+\ removal: a digraph's in-edges are not locatable from the vertex, so every adjacency list
+\ is swept and the row is O(V log V + E), the one row here expected to grow.
 \
-\ The algorithm rows are all O(V + E) behind that same projection, so each one may grow
-\ logarithmically and no faster; a frontier that shifted or a walk that re-enqueued would
-\ show up as a row growing faster than project does beside it. breadth-first and
-\ depth-first additionally build two result maps, which is another O(V log V) of bst
-\ inserts, so they sit well above connected-components even though all three walk the same
-\ edges. topological-sort rides the digraph fixture, whose star shape is a DAG.
+\ The algorithm rows are all O(V + E) behind that same projection, so each one reads flat; a
+\ frontier that shifted or a walk that re-enqueued would show up as a row growing where
+\ project beside it does not. breadth-first and depth-first additionally build two result
+\ maps, which is another O(V) of value-keyed inserts, so they sit above
+\ connected-components by a constant even though all three walk the same edges.
+\ topological-sort rides the digraph fixture, whose star shape is a DAG.
 \
 \ dijkstra and prim are the two algorithm rows that are not O(V + E): each is O(E log V),
 \ because every edge is a heap push and every push is popped. Both run on the path fixture
 \ the other rows use, under a constant weight, so they are read against breadth-first over
 \ the same edges and the difference is the queue. Their per-element costs may therefore grow
-\ by two log factors, the projection's and the heap's, and no more. prim sits below dijkstra
-\ because it builds one array where dijkstra builds two bst-maps.
+\ by the heap's log factor and no more. prim sits below dijkstra because it builds one array
+\ where dijkstra builds two result maps.
 \
 \ kruskal spans what prim spans, over the same fixture and the same constant weight, so the
 \ pair is where the two cost profiles are read against each other. It is O(E log E) for the
-\ sort rather than O(E log V) for the heap, so it too may grow by two log factors and no
+\ sort rather than O(E log V) for the heap, so it too may grow by one log factor and no
 \ more, and on this fixture E tracks V so the two factors are within a constant of each
 \ other. What is left is the union-find pass, effectively linear.
 

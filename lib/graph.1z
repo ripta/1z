@@ -438,7 +438,10 @@ private{
   \\ A graph in dense form. `vertices` translates an index back to its vertex and
   \\ `indices` translates the other way, both over `[0, V)`. `adjacency` holds each
   \\ vertex's dense entries at that vertex's own index.
-  dense-graph: struct{ vertices: vector indices: bst-map adjacency: vector } ;
+  \\
+  \\ `indices` keys on the vertex's frozen form rather than on the comparator, so a vertex
+  \\ whose type cannot be frozen cannot be projected.
+  dense-graph: struct{ vertices: vector indices: mutable-value-map adjacency: vector } ;
 
   \\ A traversal in progress, in dense indices where `graph-traversal` holds vertices.
   \\ `visits` is the visit order, `depths` holds each vertex's distance and `origins` its
@@ -456,27 +459,27 @@ private{
   ] ;
 
   \ Pass one: number the vertices in entry order, which is ascending under the comparator.
-  \ Both translations fall out of the same walk. O(V log V), the map inserts.
-  index-vertices: ( comparator: quotation entries: vector -- vertices indices ) [
+  \ Both translations fall out of the same walk. O(V), the map inserts.
+  index-vertices: ( entries: vector -- vertices indices ) [
     [ key>> ] #map seq>vector
-    swap <bst-map>
+    <mutable-value-map>
     0 swap
     [ 1 pick-n 3 pick-n #len < ]
-    [ 2 pick-n 2 pick-n #nth 2 pick-n map-insert swap 1 + swap ]
+    [ 2 pick-n 2 pick-n #nth 2 pick-n vmap-set! swap 1 + swap ]
     while
     swap drop
   ] ;
 
   \ One vertex's edge list as dense records, head first, so the newest entry leads as
-  \ graph-neighbors does. O(deg log V), one index lookup per entry.
+  \ graph-neighbors does. O(deg), one index lookup per entry.
   \
   \ The lookup cannot miss: both endpoints of an edge are stored as vertices when it is
   \ added, and removing a vertex strips the entries that name it.
-  entries>dense: ( indices: bst-map list -- vector ) [
+  entries>dense: ( indices: mutable-value-map list -- vector ) [
     [ ] make-vector swap
     [ dup cons? ] [
       dup head
-      dup target>> 4 pick-n swap map-lookup option:some>
+      dup target>> 4 pick-n swap vmap-get
       swap make-dense-edge
       2 pick-n swap #push! drop
       tail
@@ -486,8 +489,8 @@ private{
 
   \ Pass two: each vertex's entries, at that vertex's own index. It cannot share pass one's
   \ walk, since an edge leaving the first vertex may target the last and the map has to be
-  \ complete before any target is translated. O(E log V).
-  dense-adjacency: ( indices: bst-map entries: vector -- adjacency ) [
+  \ complete before any target is translated. O(E).
+  dense-adjacency: ( indices: mutable-value-map entries: vector -- adjacency ) [
     0 [ ] make-vector
     [ 1 pick-n 3 pick-n #len < ]
     [
@@ -500,15 +503,14 @@ private{
     swap drop nip nip
   ] ;
 
-  \ Project the graph to dense form, O((V + E) log V): one walk of the vertices to build
-  \ the numbering, and one of the stored entries to translate their targets against it.
-  \ Both terms carry the map's log factor, the first from its inserts and the second from
-  \ its lookups.
+  \ Project the graph to dense form, O(V + E): one walk of the vertices to build the
+  \ numbering, and one of the stored entries to translate their targets against it. The
+  \ numbering is value-keyed, so neither term carries a log factor.
   \
   \ The result is a snapshot. Every algorithm builds its own, so a graph run from many
   \ sources pays one projection per run.
   project: ( g: graph -- dense-graph ) [
-    dup comparator>> swap adjacency>> map-entries
+    adjacency>> map-entries
     dup [ index-vertices ] dip
     over swap dense-adjacency
     make-dense-graph
@@ -517,7 +519,7 @@ private{
   \ The dense index of a vertex an algorithm was handed. Throws `key-not-found` for a
   \ vertex the graph does not have, as the public lookups do.
   dense-index: ( dg: dense-graph v -- i ) [
-    [ indices>> ] dip map-lookup
+    [ indices>> ] dip vmap-get?
     dup option:some? [ option:some> ] [ drop throw-unknown-vertex ] if
   ] ;
 
@@ -547,22 +549,26 @@ private{
 \\
 \\ Only reached vertices appear. The source has distance 0 and no parent entry, since it
 \\ was reached from nowhere.
-graph-traversal: struct{ order: array distances: bst-map parents: bst-map } ;
+\\
+\\ Both maps key on the vertex's frozen form rather than on the graph's comparator, so a
+\\ lookup matches structurally. A vertex whose type cannot be frozen never reaches one,
+\\ since the dense projection the walk runs on refuses it first.
+graph-traversal: struct{ order: array distances: value-map parents: value-map } ;
 
 \\ The distance from the traversal's source to v, or `option:none` when the traversal did
-\\ not reach v. O(log V).
+\\ not reach v. O(1).
 \\
 \\   [ cmp ] <graph> 1 2 graph-add-edge 1 graph-breadth-first 2 graph-traversal-distance? option:some>
 \\   => 1
-graph-traversal-distance?: ( t: graph-traversal v -- option ) [ [ distances>> ] dip map-lookup ] ;
+graph-traversal-distance?: ( t: graph-traversal v -- option ) [ [ distances>> ] dip vmap-get? ] ;
 
 \\ The vertex v was reached from, or `option:none` when the traversal did not reach v or
 \\ when v is the source it started from. `graph-traversal-distance?` is what tells those two
-\\ apart. O(log V).
+\\ apart. O(1).
 \\
 \\   [ cmp ] <graph> 1 2 graph-add-edge 1 graph-breadth-first 2 graph-traversal-parent? option:some>
 \\   => 1
-graph-traversal-parent?: ( t: graph-traversal v -- option ) [ [ parents>> ] dip map-lookup ] ;
+graph-traversal-parent?: ( t: graph-traversal v -- option ) [ [ parents>> ] dip vmap-get? ] ;
 
 private{
   \ Fresh scratch for a walk over n vertices.
@@ -588,26 +594,31 @@ private{
     visits>> swap [ index-vertex ] curry #map #collect
   ] ;
 
-  \ Map every visited vertex to its depth. O(V log V).
-  depth-map: ( g: graph dg: dense-graph walk: dense-walk -- map: bst-map ) [
-    0 3 pick-n comparator>> <bst-map>
+  \ Map every visited vertex to its depth. O(V).
+  \
+  \ Built mutable and frozen on the way out. vmap-set copies the whole table per insert, so
+  \ filling the map through the immutable half would be O(V^2).
+  depth-map: ( dg: dense-graph walk: dense-walk -- map: value-map ) [
+    0 <mutable-value-map>
     [ over 3 pick-n visits>> #len < ]
     [
       2 pick-n visits>> 2 pick-n #nth
       dup 5 pick-n index-vertex
       4 pick-n depths>> 2 pick-n #nth
       [ drop ] 2dip
-      map-insert
+      vmap-set!
       [ 1 + ] dip
     ]
     while
-    [ 2drop 2drop ] dip
+    [ 3drop ] dip
+    freeze
   ] ;
 
   \ Map every visited vertex to the vertex it was reached from. A slot holding f means the
-  \ vertex started the walk, so it gets no entry. O(V log V).
-  origin-map: ( g: graph dg: dense-graph walk: dense-walk -- map: bst-map ) [
-    0 3 pick-n comparator>> <bst-map>
+  \ vertex started the walk, so it gets no entry. O(V). Frozen on the way out, for
+  \ depth-map's reason.
+  origin-map: ( dg: dense-graph walk: dense-walk -- map: value-map ) [
+    0 <mutable-value-map>
     [ over 3 pick-n visits>> #len < ]
     [
       2 pick-n visits>> 2 pick-n #nth
@@ -618,20 +629,21 @@ private{
         5 pick-n index-vertex
         [ dup 5 pick-n index-vertex ] dip
         [ drop ] 2dip
-        map-insert
+        vmap-set!
       ]
       if
       [ 1 + ] dip
     ]
     while
-    [ 2drop 2drop ] dip
+    [ 3drop ] dip
+    freeze
   ] ;
 
   \ Translate a finished walk to vertex values.
-  walk>traversal: ( g: graph dg: dense-graph walk: dense-walk -- traversal: graph-traversal ) [
-    3dup depth-map
-    [ 3dup origin-map ] dip
-    [ [ drop ] 2dip visit-order ] 2dip
+  walk>traversal: ( dg: dense-graph walk: dense-walk -- traversal: graph-traversal ) [
+    2dup depth-map
+    [ 2dup origin-map ] dip
+    [ visit-order ] 2dip
     swap make-graph-traversal
   ] ;
 
@@ -721,8 +733,8 @@ private{
 
 \\ Breadth-first search from the source, reaching every vertex a path leads to. `distances`
 \\ is the number of edges on a shortest path from the source, since a breadth-first frontier
-\\ reaches every vertex at its shortest depth. O((V + E) log V), the projection's cost, with
-\\ the search itself O(V + E). Throws `key-not-found` when the source is not a vertex.
+\\ reaches every vertex at its shortest depth. O(V + E), the projection and the search
+\\ alike. Throws `key-not-found` when the source is not a vertex.
 \\
 \\   [ cmp ] <graph> 1 2 graph-add-edge 2 3 graph-add-edge 1 graph-breadth-first order>>
 \\   => { 1 2 3 }
@@ -730,7 +742,7 @@ graph-breadth-first: ( g: graph source -- traversal: graph-traversal ) [
   over project
   tuck swap dense-index
   over swap bfs-walk
-  walk>traversal
+  [ drop ] 2dip walk>traversal
 ] ;
 
 \\ Alias of `graph-breadth-first`.
@@ -739,8 +751,8 @@ graph-bfs: ( g: graph source -- traversal: graph-traversal ) [ graph-breadth-fir
 \\ Depth-first search from the source, reaching every vertex a path leads to. Neighbors are
 \\ followed in `graph-neighbors` order. `distances` is depth in the depth-first tree, which
 \\ is not a shortest-path distance: a vertex reached down a long branch records that
-\\ branch's depth. O((V + E) log V), the projection's cost, with the search itself O(V + E).
-\\ Throws `key-not-found` when the source is not a vertex.
+\\ branch's depth. O(V + E), the projection and the search alike. Throws `key-not-found`
+\\ when the source is not a vertex.
 \\
 \\   [ cmp ] <graph> 1 2 graph-add-edge 2 3 graph-add-edge 1 graph-depth-first order>>
 \\   => { 1 2 3 }
@@ -748,7 +760,7 @@ graph-depth-first: ( g: graph source -- traversal: graph-traversal ) [
   over project
   tuck swap dense-index
   over swap dfs-walk
-  walk>traversal
+  [ drop ] 2dip walk>traversal
 ] ;
 
 \\ Alias of `graph-depth-first`.
@@ -818,8 +830,8 @@ private{
   ] ;
 }
 
-\\ The vertices in an order that puts every edge's source before its target.
-\\ O((V + E) log V), the projection's cost, with the sort itself O(V + E).
+\\ The vertices in an order that puts every edge's source before its target. O(V + E), the
+\\ projection and the sort alike.
 \\
 \\ The order is deterministic for a given graph but is not the lexicographically smallest
 \\ topological order. The vertices with no incoming edge lead, ascending under the
@@ -936,8 +948,7 @@ private{
 
 \\ The connected components, each an array of its vertices. Components come ordered by
 \\ smallest member with members ascending, both under the graph's comparator. An isolated
-\\ vertex is a component of its own. O((V + E) log V), the projection's cost, with the sweep
-\\ itself O(V + E).
+\\ vertex is a component of its own. O(V + E), the projection and the sweep alike.
 \\
 \\ The components are those of the underlying undirected graph, which on a digraph makes
 \\ them the weakly connected components rather than the strongly connected ones.
@@ -1069,7 +1080,7 @@ private{
 \\ graph. Weights are compared with `cmp` and added with `+`, and the source starts at 0. A
 \\ digraph is followed along its out-edges.
 \\
-\\ O((V + E) log V), the projection's cost, with the search itself O(E log V). Throws
+\\ O(E log V), the search's own cost; the projection below it is O(V + E). Throws
 \\ `key-not-found` when the source is not a vertex. Throws `invalid-argument` on a negative
 \\ weight; only the edges the walk examines are priced, so only those can raise.
 \\
@@ -1081,7 +1092,7 @@ graph-dijkstra: ( g: graph source weight: quotation -- traversal: graph-traversa
   [ over project tuck swap dense-index ] dip
   [ over swap ] dip
   dijkstra-walk
-  walk>traversal
+  [ drop ] 2dip walk>traversal
 ] ;
 
 \ Prim runs on the same dense form Dijkstra does, over the same heap and the same lazy
@@ -1207,7 +1218,7 @@ private{
 \\ cheapest path rejects it. An edge is priced only when it is offered as a way in, so the
 \\ projection runs at most once per stored entry.
 \\
-\\ O((V + E) log V), the projection's cost, with the walk itself O(V + E log V). The V term is
+\\ O(V + E log V), the walk's own cost; the projection below it is O(V + E). The V term is
 \\ the sweep that finds each component's root, which `graph-dijkstra` has no counterpart to.
 \\ Throws `invalid-argument` on a digraph, whose spanning problem is a different one.
 \\
@@ -1316,8 +1327,8 @@ private{
 \\ logical edge but a self-loop is priced exactly once, where `graph-prim` skips an edge whose
 \\ target has already joined the tree.
 \\
-\\ O((V + E) log V + E log E), the projection and then the sort, with the union-find pass
-\\ O(E · α(V)) over them. That second term is what separates the two words: `graph-prim` pays
+\\ O(E log E), the sort, over an O(V + E) projection, with the union-find pass
+\\ O(E · α(V)) over them. That sort term is what separates the two words: `graph-prim` pays
 \\ O(E log V) through the heap and suits a dense graph, and this pays O(E log E) through the
 \\ sort and suits a sparse one. Throws `invalid-argument` on a digraph, whose spanning problem
 \\ is a different one.

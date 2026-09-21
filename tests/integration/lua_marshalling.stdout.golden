@@ -32,24 +32,28 @@ PASS: get-global on a table points at the structured readers
 PASS: get-global on an undefined global raises
 PASS: Lua stack balanced after the error paths
 Stack: [ ]
-=== lua get-global-hash ===
+=== lua get-global-value-map ===
 Stack: [ ]
 PASS: string value
 PASS: fixnum value
 PASS: float value
 PASS: boolean false value reads back, not missing
 PASS: entry count
-PASS: integer key stringifies
-PASS: non-integral float key stringifies
+PASS: an integer key is a fixnum key
+PASS: a non-integral float key is a float key
 PASS: string key verbatim
+PASS: a boolean key is a boolean key
+PASS: and the integer key is not reachable as a string
+PASS: the integer key keeps its own entry
+PASS: and the string key its own
+PASS: two Lua keys are two entries
 PASS: nested sequence becomes a 0-based array
 PASS: nested sequence is an immutable array
-PASS: nested non-sequence is an immutable hash
-PASS: nested hash value
+PASS: nested non-sequence is an immutable value-map
+PASS: nested value-map value
 PASS: nested empty table passes the sequence check vacuously
-PASS: empty table reads as an empty hash
-PASS: stringify collision raises
-PASS: boolean key raises
+PASS: empty table reads as an empty value-map
+PASS: a table key has no 1z counterpart
 PASS: function value raises
 PASS: non-table global raises
 PASS: undefined global raises
@@ -58,8 +62,8 @@ Stack: [ ]
 === lua get-global-array ===
 Stack: [ ]
 PASS: sequence re-bases to a 0-based array
-PASS: the same table as a hash keeps 1-based stringified keys
-PASS: hash of a sequence has n entries
+PASS: the same table as a value-map keeps its 1-based fixnum keys
+PASS: value-map of a sequence has n entries
 PASS: nested object in a sequence
 PASS: array length
 PASS: empty table is a valid empty sequence
@@ -80,9 +84,15 @@ PASS: array length in Lua
 PASS: nested hash builds a nested table
 PASS: array round-trips
 PASS: nested hash round-trips
+PASS: a fixnum key lands as a Lua integer
+PASS: a float key lands as a Lua float
+PASS: a string key lands as a Lua string
+PASS: a boolean key lands as a Lua boolean
+PASS: every key survives the round trip
 PASS: table-set stores a nested table
 PASS: a vector value raises
 PASS: a mutable map value raises
+PASS: a mutable value-map value raises
 PASS: Lua stack balanced
 PASS: state usable after the error paths
 Stack: [ ]

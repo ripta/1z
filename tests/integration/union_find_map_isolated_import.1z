@@ -1,14 +1,13 @@
-\ The union-find-map layer in isolation: nothing here imports "bst", so `<bst-map>`,
-\ `map-insert`, and `map-lookup` must resolve from lib/union-find.1z's own selective
-\ import. The benchmark imports "bst" for its own sweep, which would mask a missing
-\ module import the way the core's isolated-import pin describes for "ranges".
+\ The union-find-map layer in isolation. The side table is a mutable-value-map, so the layer
+\ reaches nothing beyond the prelude and the module's own "ranges" import, and the golden
+\ below is what pins the layer's representation against drift.
 
 use "testing" ;
 use "union-find" ;
 
 "union-find-map isolated import" test-section
 
-[ cmp ] <union-find-map>
+<union-find-map>
 dup #len 0 "an empty map has no components" assert=
 dup "a" union-find-map-add
 dup "b" union-find-map-add

@@ -67,7 +67,7 @@ use "lua" ;
   dup "b = false" eval drop
   dup "b" get-global "get-global boolean false" assert-false
   dup "nan" [ get-global ] curry curry (caught-message)
-  "global nan is a table; use get-global-hash or get-global-array"
+  "global nan is a table; use get-global-value-map or get-global-array"
   "get-global on a table points at the structured readers" assert=
   dup "undefg" [ get-global ] curry curry
   lua-error: "get-global on an undefined global raises" assert-error-type
@@ -76,51 +76,57 @@ use "lua" ;
   drop
 ] using-lua
 
-"lua get-global-hash" test-section
+"lua get-global-value-map" test-section
 
 [
   dup "cfg = { host = 'localhost', port = 8080, ratio = 1.5, debug = false }" eval drop
-  dup "cfg" get-global-hash
-  dup "host" @get "localhost" "string value" assert=
-  dup "port" @get 8080 "fixnum value" assert=
-  dup "ratio" @get 1.5 "float value" assert=
-  dup "debug" @get "boolean false value reads back, not missing" assert-false
+  dup "cfg" get-global-value-map
+  dup "host" vmap-get "localhost" "string value" assert=
+  dup "port" vmap-get 8080 "fixnum value" assert=
+  dup "ratio" vmap-get 1.5 "float value" assert=
+  dup "debug" vmap-get "boolean false value reads back, not missing" assert-false
   #len 4 "entry count" assert=
 
-  \ integer and non-integral float keys stringify; string keys stay verbatim
-  dup "mixed = { [1] = 'one', [2.5] = 'half', name = 'x' }" eval drop
-  dup "mixed" get-global-hash
-  dup "1" @get "one" "integer key stringifies" assert=
-  dup "2.5" @get "half" "non-integral float key stringifies" assert=
-  "name" @get "x" "string key verbatim" assert=
+  \ every key keeps its own 1z type
+  dup "mixed = { [1] = 'one', [2.5] = 'half', name = 'x', [true] = 'yes' }" eval drop
+  dup "mixed" get-global-value-map
+  dup 1 vmap-get "one" "an integer key is a fixnum key" assert=
+  dup 2.5 vmap-get "half" "a non-integral float key is a float key" assert=
+  dup "name" vmap-get "x" "string key verbatim" assert=
+  dup t vmap-get "yes" "a boolean key is a boolean key" assert=
+  "1" vmap-has? "and the integer key is not reachable as a string" assert-false
+
+  \ what the string-keyed reader could not express: the two keys that rendered alike
+  dup "coll = { [1] = 'a', ['1'] = 'b' }" eval drop
+  dup "coll" get-global-value-map
+  dup 1 vmap-get "a" "the integer key keeps its own entry" assert=
+  dup "1" vmap-get "b" "and the string key its own" assert=
+  #len 2 "two Lua keys are two entries" assert=
 
   \ nested tables auto-detect their shape
   dup "nest = { tags = { 'fast', 'edge' }, limits = { cpu = 1.5 }, empty = {} }" eval drop
-  dup "nest" get-global-hash
-  dup "tags" @get { "fast" "edge" } "nested sequence becomes a 0-based array" assert=
-  dup "tags" @get array? "nested sequence is an immutable array" assert-true
-  dup "limits" @get hash? "nested non-sequence is an immutable hash" assert-true
-  dup "limits" @get "cpu" @get 1.5 "nested hash value" assert=
-  "empty" @get { } "nested empty table passes the sequence check vacuously" assert=
+  dup "nest" get-global-value-map
+  dup "tags" vmap-get { "fast" "edge" } "nested sequence becomes a 0-based array" assert=
+  dup "tags" vmap-get array? "nested sequence is an immutable array" assert-true
+  dup "limits" vmap-get value-map? "nested non-sequence is an immutable value-map" assert-true
+  dup "limits" vmap-get "cpu" vmap-get 1.5 "nested value-map value" assert=
+  "empty" vmap-get { } "nested empty table passes the sequence check vacuously" assert=
 
-  \ the top-level shape is caller-directed: an empty table is an empty hash here
+  \ the top-level shape is caller-directed: an empty table is an empty value-map here
   dup "e = {}" eval drop
-  dup "e" get-global-hash #len 0 "empty table reads as an empty hash" assert=
+  dup "e" get-global-value-map #len 0 "empty table reads as an empty value-map" assert=
 
   \ error paths
-  dup "coll = { [1] = 'a', ['1'] = 'b' }" eval drop
-  dup "coll" [ get-global-hash ] curry curry (caught-message)
-  "Lua keys collide after stringification: 1" "stringify collision raises" assert=
-  dup "bk = { [true] = 1 }" eval drop
-  dup "bk" [ get-global-hash ] curry curry
-  lua-error: "boolean key raises" assert-error-type
+  dup "tk = { [{}] = 1 }" eval drop
+  dup "tk" [ get-global-value-map ] curry curry
+  lua-error: "a table key has no 1z counterpart" assert-error-type
   dup "fv = { f = print }" eval drop
-  dup "fv" [ get-global-hash ] curry curry
+  dup "fv" [ get-global-value-map ] curry curry
   lua-error: "function value raises" assert-error-type
   dup "scalarg = 5" eval drop
-  dup "scalarg" [ get-global-hash ] curry curry
+  dup "scalarg" [ get-global-value-map ] curry curry
   lua-error: "non-table global raises" assert-error-type
-  dup "undefg" [ get-global-hash ] curry curry
+  dup "undefg" [ get-global-value-map ] curry curry
   lua-error: "undefined global raises" assert-error-type
 
   dup unmake-lua-state state>> (gettop) 0 "Lua stack balanced after the error paths" assert=
@@ -132,14 +138,14 @@ use "lua" ;
 [
   dup "nums = { 10, 20, 30 }" eval drop
   dup "nums" get-global-array { 10 20 30 } "sequence re-bases to a 0-based array" assert=
-  dup "nums" get-global-hash
-  dup "1" @get 10 "the same table as a hash keeps 1-based stringified keys" assert=
-  #len 3 "hash of a sequence has n entries" assert=
+  dup "nums" get-global-value-map
+  dup 1 vmap-get 10 "the same table as a value-map keeps its 1-based fixnum keys" assert=
+  #len 3 "value-map of a sequence has n entries" assert=
 
   \ nested shapes inside a sequence auto-detect
   dup "objs = { { id = 1 }, { id = 2 } }" eval drop
   dup "objs" get-global-array
-  dup 0 #nth "id" @get 1 "nested object in a sequence" assert=
+  dup 0 #nth "id" vmap-get 1 "nested object in a sequence" assert=
   #len 2 "array length" assert=
 
   dup "ee = {}" eval drop
@@ -150,9 +156,9 @@ use "lua" ;
 
   \ a shared subtable is a DAG, not a cycle; it converts once per reference
   dup "shared = { 1 } dag = { a = shared, b = shared }" eval drop
-  dup "dag" get-global-hash
-  dup "a" @get { 1 } "first reference to the shared subtable" assert=
-  "b" @get { 1 } "second reference to the shared subtable" assert=
+  dup "dag" get-global-value-map
+  dup "a" vmap-get { 1 } "first reference to the shared subtable" assert=
+  "b" vmap-get { 1 } "second reference to the shared subtable" assert=
 
   \ non-sequences and cycles raise
   dup "holes = { [1] = 'a', [3] = 'c' }" eval drop
@@ -162,10 +168,10 @@ use "lua" ;
   dup "strkeys" [ get-global-array ] curry curry
   lua-error: "string-keyed table raises" assert-error-type
   dup "cy = {} cy.self = cy" eval drop
-  dup "cy" [ get-global-hash ] curry curry (caught-message)
+  dup "cy" [ get-global-value-map ] curry curry (caught-message)
   "cannot marshal a cyclic Lua table" "self-cycle raises" assert=
   dup "ca = {} cb = { a = ca } ca.b = cb" eval drop
-  dup "ca" [ get-global-hash ] curry curry
+  dup "ca" [ get-global-value-map ] curry curry
   lua-error: "two-table cycle raises" assert-error-type
 
   dup unmake-lua-state state>> (gettop) 0 "Lua stack balanced after the error paths" assert=
@@ -182,9 +188,20 @@ use "lua" ;
   dup "return srv.limits.cpu" eval option:some> 1.5 "nested hash builds a nested table" assert=
 
   \ round-trip back to 1z
-  dup "srv" get-global-hash
-  dup "ports" @get { 80 443 } "array round-trips" assert=
-  "limits" @get "cpu" @get 1.5 "nested hash round-trips" assert=
+  dup "srv" get-global-value-map
+  dup "ports" vmap-get { 80 443 } "array round-trips" assert=
+  "limits" vmap-get "cpu" vmap-get 1.5 "nested hash round-trips" assert=
+
+  \ a value-map writes each key as its own Lua type, so a read after the write
+  \ finds every key it started with. The fixture is built rather than written as a
+  \ literal, since t is a word and an array literal holds only literal values.
+  keyed: <value-map> 1 "one" vmap-set 2.5 "half" vmap-set "name" "x" vmap-set t "yes" vmap-set ;
+  dup "keyed" keyed set-global
+  dup "return keyed[1]" eval option:some> "one" "a fixnum key lands as a Lua integer" assert=
+  dup "return keyed[2.5]" eval option:some> "half" "a float key lands as a Lua float" assert=
+  dup "return keyed.name" eval option:some> "x" "a string key lands as a Lua string" assert=
+  dup "return keyed[true]" eval option:some> "yes" "a boolean key lands as a Lua boolean" assert=
+  dup "keyed" get-global-value-map keyed "every key survives the round trip" assert=
 
   \ table-set with a structured value nests a table
   dup "t" new-table
@@ -196,6 +213,8 @@ use "lua" ;
   "a vector value raises" assert-error
   dup "m" M{ } [ set-global ] curry curry curry
   "a mutable map value raises" assert-error
+  dup "mv" <mutable-value-map> [ set-global ] curry curry curry
+  "a mutable value-map value raises" assert-error
 
   dup unmake-lua-state state>> (gettop) 0 "Lua stack balanced" assert=
   dup "return srv.name" eval option:some> "edge" "state usable after the error paths" assert=
