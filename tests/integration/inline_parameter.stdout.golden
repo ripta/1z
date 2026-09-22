@@ -1,0 +1,35 @@
+Stack: [ ]
+=== a marked parameter's handle replaces the call ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: the parameter word is the one-push body the arm reads
+Stack: [ ]
+PASS: and the reader carries that push in place of the call
+Stack: [ ]
+PASS: an unbound read still runs the default quotation
+Stack: [ ]
+=== the copy is the handle, never the binding ===
+Stack: [ ]
+PASS: a binding still reaches the expanded site
+Stack: [ ]
+PASS: and reverts once the binding is popped
+Stack: [ ]
+=== both sides of an import reach the same expansion ===
+Stack: [ ]
+Stack: [ ]
+PASS: the defining module's own reader expands
+Stack: [ ]
+PASS: and the importing module's reader expands to the same
+Stack: [ ]
+PASS: and the imported parameter still reads
+Stack: [ ]
+=== three shapes reach one call site ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: every shape expanded in one body
+Stack: [ ]
+PASS: and the word still computes what it did
+Stack: [ ]

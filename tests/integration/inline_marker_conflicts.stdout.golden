@@ -32,6 +32,20 @@ Stack: [ ]
 Stack: [ [ both-wrong: <marker:inline> <marker:generic> [ 1 ] ; ] ]
 PASS: a conflict outranks the missing const
 Stack: [ ]
+=== a definition descriptor is held to the same rules ===
+Stack: [ ]
+Stack: [ [ bare-parameter: <marker:inline> M{ define: [ define-parameter ] default: [ 1 ] } ; ] ]
+PASS: a parameter without const is rejected
+Stack: [ ]
+Stack: [ [ dispatching-parameter: <marker:const> <marker:inline> <marker:generic> M{ define: [ define-parameter ] default: [ 1 ] } ; ] ]
+PASS: and a conflict on one is rejected too
+Stack: [ ]
+Stack: [ [ wrapped: <marker:const> <marker:inline> M{ define: [ define-virtual ] inner-type: { <type:fixnum> } type: virtual: src-loc: { "tests/integration/inline_marker_conflicts.1z" 61 25 } } ; ] ]
+PASS: a generated generic word is checked like any other
+Stack: [ ]
+Stack: [ [ shaped: <marker:const> <marker:inline> M{ define: [ define-struct ] fields: { a: <type:fixnum> } type: struct-descriptor: src-loc: { "tests/integration/inline_marker_conflicts.1z" 64 24 } } ; ] ]
+PASS: and a struct's wrap word the same way
+Stack: [ ]
 === accepted ===
 Stack: [ ]
 Stack: [ ]

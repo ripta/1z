@@ -4283,6 +4283,22 @@ pub const Context = struct {
     fn defineWordLocked(self: *Context, name: []const u8, definition: WordDefinition) !void {
         self.assertDefiningNativeDeclared();
 
+        // Every definer in the tree reaches this function, so the `inline` marker rules are read
+        // here rather than at any one syntax. `;` checks them again earlier for its own ordering,
+        // but a descriptor definer such as `define-parameter` never runs that code, and the rules
+        // are what keep a redefinition from stranding the copies expansion made.
+        //
+        // The markers reaching here are not always ones an author wrote. `define-virtual` carries
+        // them onto the generic wrap word it generates, so the hint names the word they are on.
+        if (markers_mod.inlineViolation(definition.markers)) |violation| {
+            self.pending_error_hint = std.fmt.allocPrint(
+                self.arena.allocator(),
+                "the markers are on the definition of '{s}'",
+                .{name},
+            ) catch null;
+            return violation.raise(self);
+        }
+
         // The const guard looks through an empty visibility, which admits no module and so skips
         // every `module_deps` frame. A deps frame is execution context for a module's bodies, not
         // a scope definitions land in. A const word visible only through such a frame, e.g.,
@@ -10777,6 +10793,45 @@ test "protocol satisfies cache invalidated by redefinition" {
     // mints a new one, so the answer it holds no longer describes the word named `cmp`.
     try ctx.defineWord("cmp", .{ .name = "cmp", .action = .{ .literal = .{ .fixnum = 2 } } });
     try std.testing.expectEqual(@as(?bool, null), ctx.lookupProtocolSatisfies(key));
+}
+
+test "defineWordLocked: the inline marker rules reach a definer that never runs `;`" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    // `;` reports these before it reaches here, so what this covers is every other definer:
+    // `define-parameter`, `define-virtual`, and the natives that install words of their own.
+    try std.testing.expectError(error.InvalidInlineDefinition, ctx.defineWord("bare", .{
+        .name = "bare",
+        .markers = &.{@constCast(&markers_mod.inline_marker)},
+        .action = .{ .literal = .{ .fixnum = 1 } },
+    }));
+    try std.testing.expect(ctx.lookupWord("bare") == null);
+    try std.testing.expectEqualStrings(
+        "the markers are on the definition of 'bare'",
+        ctx.pending_error_hint.?,
+    );
+
+    try std.testing.expectError(error.InvalidInlineDefinition, ctx.defineWord("clashing", .{
+        .name = "clashing",
+        .markers = &.{
+            @constCast(&markers_mod.const_marker),
+            @constCast(&markers_mod.inline_marker),
+            @constCast(&markers_mod.generic_marker),
+        },
+        .action = .{ .literal = .{ .fixnum = 1 } },
+    }));
+    try std.testing.expect(ctx.lookupWord("clashing") == null);
+
+    try ctx.defineWord("fine", .{
+        .name = "fine",
+        .markers = &.{
+            @constCast(&markers_mod.const_marker),
+            @constCast(&markers_mod.inline_marker),
+        },
+        .action = .{ .literal = .{ .fixnum = 1 } },
+    });
+    try std.testing.expect(ctx.lookupWord("fine") != null);
 }
 
 test "defineWordLocked: the dispatch generation moves only when the name already named a word" {

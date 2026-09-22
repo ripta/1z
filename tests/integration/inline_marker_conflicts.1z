@@ -42,6 +42,28 @@ invalid-inline-definition: "interpreter-dependent is rejected" assert-error-type
 [ both-wrong: inline generic [ 1 ] ; ]
 invalid-inline-definition: "a conflict outranks the missing const" assert-error-type
 
+"a definition descriptor is held to the same rules" test-section
+
+\ `parameter{ }` and its sibling syntaxes hand their markers to a definer of their own rather than
+\ to the branch of `;` the rules above run in. Both rules are read again where every definer
+\ installs its word, so which syntax wrote a definition does not decide whether they apply.
+
+[ bare-parameter: inline parameter{ [ 1 ] } ; ]
+invalid-inline-definition: "a parameter without const is rejected" assert-error-type
+
+[ dispatching-parameter: const inline generic parameter{ [ 1 ] } ; ]
+invalid-inline-definition: "and a conflict on one is rejected too" assert-error-type
+
+\ `virtual{ }` and `struct{ }` each replace the markers on the type word alone and hand the
+\ author's own slice to every other word they generate, `generic` included on the wrap word. So an
+\ author's `inline` arrives beside a `generic` nobody wrote. Expanding that word's callers would
+\ copy a dispatch body in place of the dispatch, which is what the rule exists to stop.
+[ wrapped: const inline virtual{ fixnum } ; ]
+invalid-inline-definition: "a generated generic word is checked like any other" assert-error-type
+
+[ shaped: const inline struct{ a: fixnum } ; ]
+invalid-inline-definition: "and a struct's wrap word the same way" assert-error-type
+
 "accepted" test-section
 
 sq: ( n -- n ) const inline [ dup * ] ;

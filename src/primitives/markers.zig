@@ -266,6 +266,56 @@ pub fn inlineConflictReason(mk: *const Marker) ?[]const u8 {
     return null;
 }
 
+/// A rule an `inline` definition breaks, carrying what its diagnostic needs.
+pub const InlineViolation = union(enum) {
+    conflict: struct { marker: *const Marker, reason: []const u8 },
+    missing_const,
+
+    /// Report this violation on `ctx` and hand back the error every definer raises for it.
+    pub fn raise(self: InlineViolation, ctx: *Context) error{InvalidInlineDefinition} {
+        switch (self) {
+            .conflict => |c| helpers.setErrorContext(
+                ctx,
+                "cannot combine '{s}' and 'inline': {s}",
+                .{ c.marker.name, c.reason },
+            ),
+            .missing_const => helpers.setErrorContext(
+                ctx,
+                "'inline' needs 'const'; a redefinition would strand the copies expansion made in its callers",
+                .{},
+            ),
+        }
+        return error.InvalidInlineDefinition;
+    }
+};
+
+/// The rule `markers` breaks, or null when it breaks none.
+///
+/// Read this off the markers a definition will carry rather than the ones its author wrote. `;`
+/// adds `const` to a named constraint, so asking its author to restate it would reject a word for
+/// lacking a marker it has.
+///
+/// A conflict is reported ahead of the missing `const`, because it is the half no added marker can
+/// repair.
+pub fn inlineViolation(markers: []const *Marker) ?InlineViolation {
+    const has_inline = for (markers) |mk| {
+        if (isInlineMarker(mk)) break true;
+    } else false;
+    if (!has_inline) return null;
+
+    for (markers) |mk| {
+        if (inlineConflictReason(mk)) |reason| {
+            return .{ .conflict = .{ .marker = mk, .reason = reason } };
+        }
+    }
+
+    for (markers) |mk| {
+        if (isConstMarker(mk)) return null;
+    }
+
+    return .missing_const;
+}
+
 /// Dispatch wildcard for `method{`, not a type -- no value has type `any`.
 pub const any_marker: Marker = .{ .name = "any" };
 

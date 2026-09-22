@@ -1,0 +1,47 @@
+\ A `parameter{ }` word is a one-instruction push of its handle, so the expansion engine reaches it
+\ through the same `.compound` arm an ordinary body takes. What the copy carries is the handle. The
+\ binding is whatever the reader's dynamic extent says it is, so `get` still runs at every expanded
+\ call site and `with-parameter` keeps its full effect.
+use "testing" ;
+use "fixtures/inline_parameter_lib.1z" ;
+
+\ The stored body, rendered. Expansion is invisible to a program's output, so this is what a test
+\ has to look at to see that it happened at all.
+body-of: ( sym -- string ) [ >word-info body>> inspect ] ;
+
+"a marked parameter's handle replaces the call" test-section
+
+\ A descriptor definition takes no stack effect annotation; `define-parameter` declares its own.
+slot: const inline parameter{ [ 7 ] } ;
+read-slot: ( -- n: fixnum ) [ slot get ] ;
+
+slot: body-of "[ <parameter:slot> ]" "the parameter word is the one-push body the arm reads" assert=
+read-slot: body-of "[ <parameter:slot> get ]" "and the reader carries that push in place of the call" assert=
+read-slot 7 "an unbound read still runs the default quotation" assert=
+
+"the copy is the handle, never the binding" test-section
+
+\ The whole of the marker's effect here is that the reader stopped dispatching a word to get the
+\ handle. Everything `get` does is still done, at every site the copy landed in.
+20 slot [ read-slot ] with-parameter 20 "a binding still reaches the expanded site" assert=
+read-slot 7 "and reverts once the binding is popped" assert=
+
+"both sides of an import reach the same expansion" test-section
+
+there-theme: ( -- s: string ) [ theme get ] ;
+
+here-theme: body-of "[ <parameter:theme> get ]" "the defining module's own reader expands" assert=
+there-theme: body-of "[ <parameter:theme> get ]" "and the importing module's reader expands to the same" assert=
+there-theme "dark" "and the imported parameter still reads" assert=
+
+"three shapes reach one call site" test-section
+
+\ A binding takes the `.literal` arm, a parameter and an ordinary body take the `.compound` one.
+\ One caller reading all three is what says the engine covers the shapes together rather than only
+\ one at a time.
+gain:    ( -- n: fixnum )   const inline 4 ;
+tripled: ( n -- n: fixnum ) const inline [ 3 * ] ;
+level:   ( -- n: fixnum )   [ slot get gain + tripled ] ;
+
+level: body-of "[ <parameter:slot> get 4 + 3 * ]" "every shape expanded in one body" assert=
+level 33 "and the word still computes what it did" assert=

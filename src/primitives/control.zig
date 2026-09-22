@@ -745,36 +745,11 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
                     }
                 }
 
-                // Ahead of the `once` rules below, so `once inline` reports the combination rather
-                // than the effect shape.
-                //
-                // A conflict is reported before the missing `const`, because it is the half no
-                // added marker can repair.
-                //
-                // Read off `markers_slice` rather than what the author wrote. The blocks above add
-                // markers the definition will carry, and both rules are about the word that ends up
-                // defined. A named constraint is already const, so asking its author to restate it
-                // would reject a word for lacking a marker it has.
-                const has_inline = for (markers_slice) |mk| {
-                    if (markers_mod.isInlineMarker(mk)) break true;
-                } else false;
-
-                if (has_inline) {
-                    for (markers_slice) |mk| {
-                        const reason = markers_mod.inlineConflictReason(mk) orelse continue;
-                        helpers.setErrorContext(ctx, "cannot combine '{s}' and 'inline': {s}", .{ mk.name, reason });
-                        return error.InvalidInlineDefinition;
-                    }
-
-                    const has_const = for (markers_slice) |mk| {
-                        if (markers_mod.isConstMarker(mk)) break true;
-                    } else false;
-
-                    if (!has_const) {
-                        helpers.setErrorContext(ctx, "'inline' needs 'const'; a redefinition would strand the copies expansion made in its callers", .{});
-                        return error.InvalidInlineDefinition;
-                    }
-                }
+                // `defineWordLocked` applies the same rules to every definer, this one included, so
+                // the check here is about order rather than reach. It runs ahead of the `once`
+                // rules below so `once inline` reports the combination rather than the effect
+                // shape, and so a rejected definition never installs a once cell on its way out.
+                if (markers_mod.inlineViolation(markers_slice)) |violation| return violation.raise(ctx);
 
                 const has_once = for (collected_markers.items) |mk| {
                     if (markers_mod.isOnceMarker(mk)) break true;

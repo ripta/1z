@@ -1,0 +1,12 @@
+\ A parameter for `inline_parameter.1z` to read from the other side of an import.
+\
+\ A parameter word is a one-instruction push of its handle whichever side reads it, so unlike a
+\ bare binding it has no second storage shape for the import to normalize. The readers below and
+\ beside them in the importing file are what show the copy survives the move: a push of a handle
+\ carries no name, so the relocation rule has nothing to bind and nothing to decline.
+
+\\ The dynamic variable both sides read.
+theme: const inline parameter{ [ "dark" ] } ;
+
+\\ Read the parameter from the module that defined it.
+here-theme: ( -- s: string ) [ theme get ] ;
