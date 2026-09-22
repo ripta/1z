@@ -1,0 +1,15 @@
+\ A quotation nested in a word body the runtime image carries as bytecode names the `inline` word
+\ expansion erased, the way an interpreted or a compiled one does.
+\
+\ Reaching `outer` by name at run time is what puts it on the tier this test exists for. Every word
+\ the freeze discovers has to compile, and a compiled body bakes its rows at codegen; only a word
+\ nothing calls statically is left running the bytecode the image decoded. `>quotation` builds that
+\ call out of a string, so the freeze never sees it.
+\
+\ The `outer` row itself is absent from the chain because the quotation `>quotation` builds calls it
+\ in tail position. And the inner `call` row reads `<aot>` rather than a file, because the image
+\ carries a decoded body's module but not the file it was parsed from. Both predate this test.
+
+use "fixtures/aot_inline_error_frames_nested_image_caller.1z" ;
+
+stdout 42 "outer" >quotation call drop

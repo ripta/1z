@@ -1,0 +1,10 @@
+\ The calling half of aot_inline_error_frames_nested_image.
+\
+\ The call to `leaf` sits inside a quotation literal, so the run expansion writes covers that
+\ quotation's own rebuilt body rather than this word's array. In a runtime-image binary the body is
+\ bytecode the loader decoded, which has no name and no row of its own, so the run reaches it only
+\ through the instruction path the image carries alongside it.
+
+use "aot_inline_error_frames_nested_image_lib.1z" ;
+
+outer: ( s v -- n ) [ [ leaf ] call 0 + ] ;

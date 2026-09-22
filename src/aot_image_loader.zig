@@ -27,6 +27,7 @@ const dictionary_mod = @import("dictionary.zig");
 const may_define = @import("may_define.zig");
 const WordProvenance = dictionary_mod.WordProvenance;
 const markers_mod = @import("primitives/markers.zig");
+const inline_expand = @import("inline_expand.zig");
 
 /// The runtime run record, distinct from the image row `ImageInlineRegion` mirrors.
 const InlineRegion = @import("inline_region_table.zig").InlineRegion;
@@ -46,6 +47,7 @@ pub const StackEffect = populate_core.StackEffect;
 pub const Word = populate_core.Word;
 pub const ImageInlineRegion = populate_core.InlineRegion;
 pub const ImageInlineRegionSet = populate_core.InlineRegionSet;
+pub const ImageNestedInlineRegionSet = populate_core.NestedInlineRegionSet;
 pub const EnumVariant = populate_core.EnumVariant;
 pub const StructType = populate_core.StructType;
 pub const TypeDescriptor = populate_core.TypeDescriptor;
@@ -609,7 +611,7 @@ fn recordInlineRegions(ctx: *Context, header: *const Header) LoaderError!void {
     var wi: u32 = 0;
     while (wi < header.word_count) : (wi += 1) {
         const w = words[wi];
-        const set = w.inline_regions orelse continue;
+        if (w.inline_regions == null and w.nested_inline_region_count == 0) continue;
         if (w.module_idx >= header.module_count) return LoaderError.BadWordIndex;
 
         const m = modules[w.module_idx];
@@ -627,26 +629,63 @@ fn recordInlineRegions(ctx: *Context, header: *const Header) LoaderError!void {
             .native, .host_callback => continue,
         };
 
-        scratch.clearRetainingCapacity();
-        var ri: u32 = 0;
-        while (ri < set.region_count) : (ri += 1) {
-            const row = set.regions[ri];
-            // A run naming instructions the body does not have is a corrupt image. Failing the
-            // load beats booting a binary whose traces name the wrong word.
-            if (row.start > row.end or row.end > body.len) return LoaderError.BadInlineRegion;
-            scratch.append(ctx.allocator, .{
-                .start = row.start,
-                .end = row.end,
-                .word_name = nameSlice(row.word_name, row.word_name_len),
-                .body_source = nameSlice(row.body_source, row.body_source_len),
-                .call_line = row.call_line,
-                .call_column = row.call_column,
-            }) catch return LoaderError.OutOfMemory;
-        }
+        if (w.inline_regions) |set| try replayRegionSet(ctx, &scratch, set.*, body);
 
-        const body_source = nameSlice(set.body_source, set.body_source_len);
-        ctx.recordInlineRegions(body, body_source, scratch.items) catch return LoaderError.OutOfMemory;
+        const nested = w.nested_inline_regions orelse continue;
+        var ni: u32 = 0;
+        while (ni < w.nested_inline_region_count) : (ni += 1) {
+            const row = nested[ni];
+            const path = row.path[0..row.path_len];
+            const nested_body = nestedBodyAt(body, path) orelse return LoaderError.BadInlineRegion;
+            try replayRegionSet(ctx, &scratch, row.set, nested_body);
+        }
     }
+}
+
+/// The body `path` names inside `body`, or null when a step does not land on a quotation literal.
+///
+/// A path that misses is a corrupt image rather than a body the emitter chose not to describe, so
+/// the caller fails the load on null.
+fn nestedBodyAt(
+    body: []const value_mod.Instruction,
+    path: []const u32,
+) ?[]const value_mod.Instruction {
+    var at = body;
+    for (path) |i| {
+        if (i >= at.len) return null;
+        const q = inline_expand.nestedQuotation(at[i].op) orelse return null;
+        at = q.instructions;
+    }
+    return at;
+}
+
+/// Copy one image region set into the runtime table, keyed by the decoded body it describes.
+fn replayRegionSet(
+    ctx: *Context,
+    scratch: *std.ArrayListUnmanaged(InlineRegion),
+    set: ImageInlineRegionSet,
+    body: []const value_mod.Instruction,
+) LoaderError!void {
+    scratch.clearRetainingCapacity();
+
+    var ri: u32 = 0;
+    while (ri < set.region_count) : (ri += 1) {
+        const row = set.regions[ri];
+        // A run naming instructions the body does not have is a corrupt image. Failing the load
+        // beats booting a binary whose traces name the wrong word.
+        if (row.start > row.end or row.end > body.len) return LoaderError.BadInlineRegion;
+        scratch.append(ctx.allocator, .{
+            .start = row.start,
+            .end = row.end,
+            .word_name = nameSlice(row.word_name, row.word_name_len),
+            .body_source = nameSlice(row.body_source, row.body_source_len),
+            .call_line = row.call_line,
+            .call_column = row.call_column,
+        }) catch return LoaderError.OutOfMemory;
+    }
+
+    const body_source = nameSlice(set.body_source, set.body_source_len);
+    ctx.recordInlineRegions(body, body_source, scratch.items) catch return LoaderError.OutOfMemory;
 }
 
 /// Decode a word body through the by-value decoder during the initial population pass.
@@ -2042,6 +2081,8 @@ fn wordRow(name: []const u8, word_id: u32, module_idx: u32) Word {
         .provenance_role = null,
         .provenance_role_len = 0,
         .inline_regions = null,
+        .nested_inline_regions = null,
+        .nested_inline_region_count = 0,
     };
 }
 
@@ -4014,6 +4055,150 @@ test "recordInlineRegions: a run reaching past the decoded body fails the load" 
     };
 
     const words = [_]Word{inlineRegionWordRow(w_name, encoded.items, &set)};
+    const modules = [_]Module{
+        .{ .name = m_name.ptr, .name_len = m_name.len, .word_start_idx = 0, .word_count = 1 },
+    };
+    var header = emptyHeader();
+    header.module_count = 1;
+    header.word_count = 1;
+    header.modules = &modules;
+    header.words = &words;
+
+    try testing.expectError(LoaderError.BadInlineRegion, loadIntoContext(&ctx, &header, .{}, null));
+}
+
+test "recordInlineRegions: a nested row's runs reach the body its path names" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    // Two levels, so the walk iterates rather than taking one step.
+    const inner = [_]value_mod.Instruction{
+        .{ .op = .{ .call_word = "stream-write" }, .line = 5, .column = 7 },
+    };
+    const middle = [_]value_mod.Instruction{
+        .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = &inner } } }, .line = 4, .column = 3 },
+        .{ .op = .{ .call_word = "call" }, .line = 4, .column = 9 },
+    };
+    const body = [_]value_mod.Instruction{
+        .{ .op = .{ .push_literal = .{ .fixnum = 0 } }, .line = 2, .column = 1 },
+        .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = &middle } } }, .line = 2, .column = 5 },
+    };
+    var encoded: std.ArrayListUnmanaged(u8) = .{};
+    defer encoded.deinit(testing.allocator);
+    try instruction_bytecode.serializeInstructionsInto(&encoded, &body, null, testing.allocator, null, null);
+
+    const m_name = "demo";
+    const w_name = "outer";
+    const inner_name = "inner";
+    const caller_file = "demo.1z";
+    const lib = "lib.1z";
+
+    const regions = [_]ImageInlineRegion{.{
+        .word_name = inner_name.ptr,
+        .body_source = lib.ptr,
+        .word_name_len = inner_name.len,
+        .body_source_len = lib.len,
+        .start = 0,
+        .end = 1,
+        .call_line = 5,
+        .call_column = 7,
+    }};
+    const path = [_]u32{ 1, 0 };
+    const nested_rows = [_]ImageNestedInlineRegionSet{.{
+        .path = &path,
+        .path_len = path.len,
+        .set = .{
+            .body_source = caller_file.ptr,
+            .regions = &regions,
+            .body_source_len = caller_file.len,
+            .region_count = regions.len,
+        },
+    }};
+
+    var w = wordRow(w_name, 0, 0);
+    w.body_bytecode = encoded.items.ptr;
+    w.body_bytecode_len = @intCast(encoded.items.len);
+    w.nested_inline_regions = &nested_rows;
+    w.nested_inline_region_count = nested_rows.len;
+
+    const words = [_]Word{w};
+    const modules = [_]Module{
+        .{ .name = m_name.ptr, .name_len = m_name.len, .word_start_idx = 0, .word_count = 1 },
+    };
+    var header = emptyHeader();
+    header.module_count = 1;
+    header.word_count = 1;
+    header.modules = &modules;
+    header.words = &words;
+
+    try loadIntoContext(&ctx, &header, .{}, null);
+
+    const cached = ctx.module_cache_value.map.get(m_name) orelse return error.TestExpectedModule;
+    const mw = cached.module.words.get(w_name) orelse return error.TestExpectedWord;
+
+    // The word's own body carries nothing, and neither does the level between. Only the innermost
+    // does, which is what the path is for: a decoded nested body has no name and no row of its own.
+    try testing.expect(ctx.inlineRegionsFor(mw.action.compound) == null);
+
+    const decoded_middle = mw.action.compound[1].op.push_literal.quotation.instructions;
+    try testing.expect(ctx.inlineRegionsFor(decoded_middle) == null);
+
+    const decoded_inner = decoded_middle[0].op.push_literal.quotation.instructions;
+    const recorded = ctx.inlineRegionsFor(decoded_inner) orelse return error.TestExpectedRegions;
+    try testing.expectEqualStrings(caller_file, recorded.body_source);
+    try testing.expectEqual(@as(usize, 1), recorded.regions.len);
+    try testing.expectEqualStrings(inner_name, recorded.regions[0].word_name);
+    try testing.expectEqualStrings(lib, recorded.regions[0].body_source);
+    try testing.expectEqual(@as(u32, 5), recorded.regions[0].call_line);
+}
+
+test "recordInlineRegions: a path not landing on a quotation fails the load" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    const body = [_]value_mod.Instruction{
+        .{ .op = .{ .push_literal = .{ .fixnum = 0 } }, .line = 1, .column = 1 },
+    };
+    var encoded: std.ArrayListUnmanaged(u8) = .{};
+    defer encoded.deinit(testing.allocator);
+    try instruction_bytecode.serializeInstructionsInto(&encoded, &body, null, testing.allocator, null, null);
+
+    const m_name = "demo";
+    const w_name = "outer";
+    const inner_name = "inner";
+    const lib = "lib.1z";
+
+    const regions = [_]ImageInlineRegion{.{
+        .word_name = inner_name.ptr,
+        .body_source = lib.ptr,
+        .word_name_len = inner_name.len,
+        .body_source_len = lib.len,
+        .start = 0,
+        .end = 1,
+        .call_line = 9,
+        .call_column = 3,
+    }};
+
+    // Instruction 0 pushes a fixnum, so the walk has nothing to step into.
+    const path = [_]u32{0};
+    const nested_rows = [_]ImageNestedInlineRegionSet{.{
+        .path = &path,
+        .path_len = path.len,
+        .set = .{
+            .body_source = lib.ptr,
+            .regions = &regions,
+            .body_source_len = lib.len,
+            .region_count = regions.len,
+        },
+    }};
+
+    var w = wordRow(w_name, 0, 0);
+    w.body_bytecode = encoded.items.ptr;
+    w.body_bytecode_len = @intCast(encoded.items.len);
+    w.nested_inline_regions = &nested_rows;
+    w.nested_inline_region_count = nested_rows.len;
+
+    const words = [_]Word{w};
     const modules = [_]Module{
         .{ .name = m_name.ptr, .name_len = m_name.len, .word_start_idx = 0, .word_count = 1 },
     };

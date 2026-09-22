@@ -1,0 +1,5 @@
+aot_inline_error_frames_nested_image_lib.1z:5: error 'type-mismatch' expected string or byte-array, got fixnum 42 at word 'stream-write'
+  stack effect: ( stream bytes -- n )
+  called from fixtures/aot_inline_error_frames_nested_image_caller.1z:10: leaf
+  called from <aot>:10: call
+  called from tests/aot/aot_inline_error_frames_nested_image.1z:15: call

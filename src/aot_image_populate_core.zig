@@ -111,6 +111,8 @@ pub const Word = extern struct {
     provenance_role: ?[*]const u8,
     provenance_role_len: u32,
     inline_regions: ?*const InlineRegionSet,
+    nested_inline_regions: ?[*]const NestedInlineRegionSet,
+    nested_inline_region_count: u32,
 };
 
 /// Zig mirror of the C `onez_image_inline_region_t` row, which the loader turns into an
@@ -134,6 +136,19 @@ pub const InlineRegionSet = extern struct {
     regions: [*]const InlineRegion,
     body_source_len: u32,
     region_count: u32,
+};
+
+/// Zig mirror of the C `onez_image_nested_inline_region_set_t` row: the runs of one quotation
+/// literal nested inside a word's body, plus the instruction indices to walk from that body to
+/// reach it.
+///
+/// A nested body has no name and no row of its own anywhere else in the format. The bytecode
+/// carries it as a sub-stream, and its runtime address is minted several frames inside the decode,
+/// so the path is what lets the loader find it again.
+pub const NestedInlineRegionSet = extern struct {
+    path: [*]const u32,
+    path_len: u32,
+    set: InlineRegionSet,
 };
 
 /// Zig mirror of the C `onez_image_enum_variant_t` row.

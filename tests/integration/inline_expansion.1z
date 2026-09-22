@@ -76,3 +76,25 @@ twice: ( n -- n ) const inline [ 2 * ] ;
 walks: ( n -- n ) stack-recursive [ twice walks 0 + ] ;
 
 walks: body-of "[ 2 * walks 0 + ]" "an author's own self-call is untouched" assert=
+
+"a call inside a quotation literal expands too" test-section
+
+\ Where the marker is most wanted. A constant read in a loop or conditional body sits inside a
+\ quotation, and reach that stopped at a word's own top level would leave every one of them a call.
+width: const inline 256 ;
+area: ( -- n ) [ [ width width * ] call ] ;
+
+area: body-of "[ [ 256 256 * ] call ]" "a read one level down is a push" assert=
+area 65536 "and it still computes what it did" assert=
+
+\ Two levels, so the descent is not a single step.
+volume: ( -- n ) [ [ [ width ] call width * ] call width * ] ;
+
+volume: body-of "[ [ [ 256 ] call 256 * ] call 256 * ]" "and so is a read two levels down" assert=
+volume 16777216 "and that still computes too" assert=
+
+\ A quotation holding nothing this pass selects is copied as it stands.
+untouched: ( n -- n ) [ [ plain ] call twice ] ;
+
+untouched: body-of "[ [ plain ] call 2 * ]" "a body with nothing to expand is left alone" assert=
+2 untouched 12 "and it still computes what it did" assert=

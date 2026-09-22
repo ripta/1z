@@ -13487,8 +13487,9 @@ fn emitInlineRegionTraceFrames(state: *CompileState, site: InlineSite) void {
 /// Walk back out through the levels a combinator opened, emitting each one's frame and then the
 /// runs covering the instruction that opened it.
 ///
-/// A quotation body is its own instruction array and carries no runs, so a raise inside one
-/// reaches its enclosing `inline` word only through the level that opened it.
+/// A quotation body is its own instruction array. Its own runs are emitted where the raise sits,
+/// against the site retargeted to that array, so what a level reaches back out for is the
+/// `inline` word enclosing it.
 fn emitActiveInlineTraceFrames(state: *CompileState) void {
     var i = state.inline_trace_frame_count;
     while (i > 0) {

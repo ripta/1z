@@ -31,6 +31,8 @@ const StackEffect = stack_effect_mod.StackEffect;
 const StackEffectParam = stack_effect_mod.StackEffectParam;
 const instruction_bytecode = @import("instruction_bytecode.zig");
 const populate_core = @import("aot_image_populate_core.zig");
+const inline_expand = @import("inline_expand.zig");
+const inline_region_table = @import("inline_region_table.zig");
 
 /// Error set returned by the runtime-image emitter. `NotEncodable`
 /// surfaces when the bytecode encoder cannot serialize a literal
@@ -72,7 +74,7 @@ pub const flag_bit_image_decode: u8 = 1 << 6;
 
 /// Format version emitted into `onez_image_header.format_version`. Bumped
 /// when the on-disk layout changes in a way the loader cannot ignore.
-pub const format_version: u32 = 23;
+pub const format_version: u32 = 24;
 
 /// Counts that the metadata emitter plumbs back into `AotMetadata`. The
 /// codegen knows these as it walks the manifest, so emitting them here
@@ -323,9 +325,9 @@ pub fn emitImageCFromCollection(
     defer allocator.free(word_image_decode);
     @memset(word_image_decode, false);
 
-    const word_has_inline_regions = try allocator.alloc(bool, manifest.entries.len);
-    defer allocator.free(word_has_inline_regions);
-    @memset(word_has_inline_regions, false);
+    const word_regions = try allocator.alloc(WordInlineRegions, manifest.entries.len);
+    defer allocator.free(word_regions);
+    @memset(word_regions, .{});
 
     try emitMarkerPool(out, allocator, marker_pool, &stats);
     try emitTypeValueSlotTable(out, allocator, effect_table);
@@ -362,9 +364,9 @@ pub fn emitImageCFromCollection(
     defer call_targets.deinit(allocator);
     if (!options.metadata_only) {
         try emitWordBodyBytecode(out, allocator, ctx, manifest, word_body_lens, word_image_decode, effect_table, struct_index, &call_targets);
-        try emitWordInlineRegions(out, allocator, ctx, manifest, word_body_lens, word_has_inline_regions);
+        try emitWordInlineRegions(out, allocator, ctx, manifest, word_body_lens, word_regions);
     }
-    try emitModuleAndWordTables(out, allocator, ctx, manifest, word_id_lookup, marker_pool, effect_table, word_to_typevalue_slot, word_body_lens, word_image_decode, word_has_inline_regions, &stats);
+    try emitModuleAndWordTables(out, allocator, ctx, manifest, word_id_lookup, marker_pool, effect_table, word_to_typevalue_slot, word_body_lens, word_image_decode, word_regions, &stats);
     try emitReifiedQuotationModules(out, allocator, reified_quotation_modules);
     const module_dep_count = try emitModuleDepTable(out, allocator, ctx, manifest);
     const entry_import_count = try emitEntryImportTable(out, allocator, ctx, manifest, entry_imports);
@@ -3801,6 +3803,16 @@ fn emitTypeDeclarations(
         \\    uint32_t region_count;
         \\} onez_image_inline_region_set_t;
         \\
+        \\/* The runs of one quotation literal nested inside a word's body, which expansion        */
+        \\/* rebuilds into an array of its own. `path` is the instruction indices to walk from the */
+        \\/* word's body to reach it: at each one the instruction pushes a quotation, and the walk */
+        \\/* steps into that quotation's body.                                                     */
+        \\typedef struct onez_image_nested_inline_region_set {
+        \\    const uint32_t *path;
+        \\    uint32_t path_len;
+        \\    struct onez_image_inline_region_set set;
+        \\} onez_image_nested_inline_region_set_t;
+        \\
         \\typedef struct onez_image_word {
         \\    const char *name;
         \\    uint32_t name_len;
@@ -3836,6 +3848,9 @@ fn emitTypeDeclarations(
         \\    uint32_t provenance_role_len;
         \\    /* NULL for a body nothing was inlined into, which is nearly every body.       */
         \\    const struct onez_image_inline_region_set *inline_regions;
+        \\    /* NULL when no quotation nested in this body carries runs of its own.         */
+        \\    const struct onez_image_nested_inline_region_set *nested_inline_regions;
+        \\    uint32_t nested_inline_region_count;
         \\} onez_image_word_t;
         \\
         \\/* TypeValue static C data schema. Every TypeValue reachable from any module-private word's body or
@@ -4432,8 +4447,96 @@ fn writeWordBodySym(
     try out.appendSlice(allocator, s);
 }
 
-/// Emit one region array and one set row per word whose body carries runs copied out of an
-/// `inline` word, flagging the row in `word_has_inline_regions`.
+/// What `emitWordInlineRegions` emitted for one word row, so the row points at the symbols that
+/// exist.
+const WordInlineRegions = struct {
+    /// The word's own body carries runs, so the row names its set.
+    own: bool = false,
+
+    /// How many quotations nested inside that body carry runs of their own.
+    nested: u32 = 0,
+};
+
+/// One quotation body nested inside a word's body, and the instruction indices walked to reach it.
+const NestedRegionSet = struct {
+    path: []const u32,
+    set: inline_region_table.InlineRegionSet,
+};
+
+/// Collect every quotation nested in `body` that carries runs, depth-first, recording the
+/// instruction indices walked to reach each one.
+///
+/// Depth-first order is not what the loader relies on; it follows each row's own path. What the
+/// order does buy is a stable emission, which the deterministic-output check wants.
+fn collectNestedInlineRegions(
+    ctx: *const Context,
+    allocator: Allocator,
+    body: []const value_mod.Instruction,
+    path: *std.ArrayListUnmanaged(u32),
+    found: *std.ArrayListUnmanaged(NestedRegionSet),
+) Allocator.Error!void {
+    for (body, 0..) |instr, i| {
+        const nested = inline_expand.nestedQuotation(instr.op) orelse continue;
+
+        try path.append(allocator, @intCast(i));
+        defer _ = path.pop();
+
+        if (ctx.inlineRegionsFor(nested.instructions)) |set| {
+            // The caller frees what reached the list, so this one is the pass's to free until the
+            // append takes it.
+            const owned = try allocator.dupe(u32, path.items);
+            errdefer allocator.free(owned);
+            try found.append(allocator, .{ .path = owned, .set = set });
+        }
+
+        try collectNestedInlineRegions(ctx, allocator, nested.instructions, path, found);
+    }
+}
+
+fn emitInlineRegionRows(
+    out: *std.ArrayListUnmanaged(u8),
+    allocator: Allocator,
+    regions: []const inline_region_table.InlineRegion,
+) Allocator.Error!void {
+    var num_buf: [32]u8 = undefined;
+    for (regions) |region| {
+        try out.appendSlice(allocator, "    { .word_name = ");
+        try emitCStringLiteral(out, allocator, region.word_name);
+        try out.appendSlice(allocator, ", .body_source = ");
+        try emitCStringLiteral(out, allocator, region.body_source);
+        try out.appendSlice(allocator, ", .word_name_len = ");
+        try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{region.word_name.len}) catch unreachable);
+        try out.appendSlice(allocator, ", .body_source_len = ");
+        try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{region.body_source.len}) catch unreachable);
+        try out.appendSlice(allocator, ", .start = ");
+        try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}u", .{region.start}) catch unreachable);
+        try out.appendSlice(allocator, ", .end = ");
+        try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}u", .{region.end}) catch unreachable);
+        try out.appendSlice(allocator, ", .call_line = ");
+        try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}u", .{region.call_line}) catch unreachable);
+        try out.appendSlice(allocator, ", .call_column = ");
+        try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}u", .{region.call_column}) catch unreachable);
+        try out.appendSlice(allocator, " },\n");
+    }
+}
+
+/// Emit a set's two length fields. The caller writes the pointers on either side of them, since a
+/// word's own set and a nested one name different symbols.
+fn emitInlineRegionSetFields(
+    out: *std.ArrayListUnmanaged(u8),
+    allocator: Allocator,
+    set: inline_region_table.InlineRegionSet,
+) Allocator.Error!void {
+    var num_buf: [32]u8 = undefined;
+    try out.appendSlice(allocator, ".body_source_len = ");
+    try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{set.body_source.len}) catch unreachable);
+    try out.appendSlice(allocator, ", .region_count = ");
+    try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}u", .{set.regions.len}) catch unreachable);
+}
+
+/// Emit one region array and one set row per body carrying runs copied out of an `inline` word:
+/// the word's own instruction array, and every quotation nested inside it that expansion rebuilt.
+/// What each row got is recorded in `word_regions`.
 ///
 /// A runtime-image body is installed past `defineWord`, where the expansion pass records these,
 /// so its runs have to travel here and be rebuilt against the decoded body.
@@ -4446,12 +4549,21 @@ fn emitWordInlineRegions(
     ctx: *const Context,
     manifest: ImageManifest,
     word_body_lens: []const u32,
-    word_has_inline_regions: []bool,
+    word_regions: []WordInlineRegions,
 ) Allocator.Error!void {
     if (manifest.entries.len == 0) return;
 
     var emitted_any = false;
     var num_buf: [32]u8 = undefined;
+
+    var path: std.ArrayListUnmanaged(u32) = .{};
+    defer path.deinit(allocator);
+
+    var nested: std.ArrayListUnmanaged(NestedRegionSet) = .{};
+    defer {
+        for (nested.items) |row| allocator.free(row.path);
+        nested.deinit(allocator);
+    }
 
     for (manifest.entries, 0..) |entry, idx| {
         if (word_body_lens[idx] == 0) continue;
@@ -4460,47 +4572,75 @@ fn emitWordInlineRegions(
             .compound => |b| b,
             .native, .host_callback => continue,
         };
-        const set = ctx.inlineRegionsFor(body) orelse continue;
 
-        try out.appendSlice(allocator, "static const onez_image_inline_region_t ");
-        try writeWordInlineRegionsSym(out, allocator, idx);
-        try out.appendSlice(allocator, "[] = {\n");
+        for (nested.items) |row| allocator.free(row.path);
+        nested.clearRetainingCapacity();
+        path.clearRetainingCapacity();
+        try collectNestedInlineRegions(ctx, allocator, body, &path, &nested);
 
-        for (set.regions) |region| {
-            try out.appendSlice(allocator, "    { .word_name = ");
-            try emitCStringLiteral(out, allocator, region.word_name);
-            try out.appendSlice(allocator, ", .body_source = ");
-            try emitCStringLiteral(out, allocator, region.body_source);
-            try out.appendSlice(allocator, ", .word_name_len = ");
-            try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{region.word_name.len}) catch unreachable);
-            try out.appendSlice(allocator, ", .body_source_len = ");
-            try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{region.body_source.len}) catch unreachable);
-            try out.appendSlice(allocator, ", .start = ");
-            try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}u", .{region.start}) catch unreachable);
-            try out.appendSlice(allocator, ", .end = ");
-            try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}u", .{region.end}) catch unreachable);
-            try out.appendSlice(allocator, ", .call_line = ");
-            try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}u", .{region.call_line}) catch unreachable);
-            try out.appendSlice(allocator, ", .call_column = ");
-            try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}u", .{region.call_column}) catch unreachable);
-            try out.appendSlice(allocator, " },\n");
+        const own = ctx.inlineRegionsFor(body);
+        if (own == null and nested.items.len == 0) continue;
+
+        if (own) |set| {
+            try out.appendSlice(allocator, "static const onez_image_inline_region_t ");
+            try writeWordInlineRegionsSym(out, allocator, idx);
+            try out.appendSlice(allocator, "[] = {\n");
+            try emitInlineRegionRows(out, allocator, set.regions);
+            try out.appendSlice(allocator, "};\n");
+
+            try out.appendSlice(allocator, "static const onez_image_inline_region_set_t ");
+            try writeWordInlineRegionSetSym(out, allocator, idx);
+            try out.appendSlice(allocator, " = { .body_source = ");
+            try emitCStringLiteral(out, allocator, set.body_source);
+            try out.appendSlice(allocator, ", .regions = ");
+            try writeWordInlineRegionsSym(out, allocator, idx);
+            try out.appendSlice(allocator, ", ");
+            try emitInlineRegionSetFields(out, allocator, set);
+            try out.appendSlice(allocator, " };\n");
+
+            word_regions[idx].own = true;
         }
 
-        try out.appendSlice(allocator, "};\n");
+        for (nested.items, 0..) |row, n| {
+            try out.appendSlice(allocator, "static const onez_image_inline_region_t ");
+            try writeNestedInlineRegionsSym(out, allocator, idx, n);
+            try out.appendSlice(allocator, "[] = {\n");
+            try emitInlineRegionRows(out, allocator, row.set.regions);
+            try out.appendSlice(allocator, "};\n");
 
-        try out.appendSlice(allocator, "static const onez_image_inline_region_set_t ");
-        try writeWordInlineRegionSetSym(out, allocator, idx);
-        try out.appendSlice(allocator, " = { .body_source = ");
-        try emitCStringLiteral(out, allocator, set.body_source);
-        try out.appendSlice(allocator, ", .regions = ");
-        try writeWordInlineRegionsSym(out, allocator, idx);
-        try out.appendSlice(allocator, ", .body_source_len = ");
-        try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{set.body_source.len}) catch unreachable);
-        try out.appendSlice(allocator, ", .region_count = ");
-        try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}u", .{set.regions.len}) catch unreachable);
-        try out.appendSlice(allocator, " };\n");
+            try out.appendSlice(allocator, "static const uint32_t ");
+            try writeNestedInlineRegionPathSym(out, allocator, idx, n);
+            try out.appendSlice(allocator, "[] = {");
+            for (row.path, 0..) |step, s| {
+                if (s > 0) try out.appendSlice(allocator, ", ");
+                try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}u", .{step}) catch unreachable);
+            }
+            try out.appendSlice(allocator, "};\n");
+        }
 
-        word_has_inline_regions[idx] = true;
+        if (nested.items.len != 0) {
+            try out.appendSlice(allocator, "static const onez_image_nested_inline_region_set_t ");
+            try writeWordNestedInlineRegionsSym(out, allocator, idx);
+            try out.appendSlice(allocator, "[] = {\n");
+
+            for (nested.items, 0..) |row, n| {
+                try out.appendSlice(allocator, "    { .path = ");
+                try writeNestedInlineRegionPathSym(out, allocator, idx, n);
+                try out.appendSlice(allocator, ", .path_len = ");
+                try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}u", .{row.path.len}) catch unreachable);
+                try out.appendSlice(allocator, ", .set = { .body_source = ");
+                try emitCStringLiteral(out, allocator, row.set.body_source);
+                try out.appendSlice(allocator, ", .regions = ");
+                try writeNestedInlineRegionsSym(out, allocator, idx, n);
+                try out.appendSlice(allocator, ", ");
+                try emitInlineRegionSetFields(out, allocator, row.set);
+                try out.appendSlice(allocator, " } },\n");
+            }
+
+            try out.appendSlice(allocator, "};\n");
+            word_regions[idx].nested = @intCast(nested.items.len);
+        }
+
         emitted_any = true;
     }
 
@@ -4527,6 +4667,38 @@ fn writeWordInlineRegionSetSym(
     try out.appendSlice(allocator, s);
 }
 
+fn writeWordNestedInlineRegionsSym(
+    out: *std.ArrayListUnmanaged(u8),
+    allocator: Allocator,
+    idx: usize,
+) Allocator.Error!void {
+    var buf: [64]u8 = undefined;
+    const s = std.fmt.bufPrint(&buf, "onez_image_w_{d}_nested_inline_regions", .{idx}) catch unreachable;
+    try out.appendSlice(allocator, s);
+}
+
+fn writeNestedInlineRegionsSym(
+    out: *std.ArrayListUnmanaged(u8),
+    allocator: Allocator,
+    idx: usize,
+    nested: usize,
+) Allocator.Error!void {
+    var buf: [64]u8 = undefined;
+    const s = std.fmt.bufPrint(&buf, "onez_image_w_{d}_nested_{d}_inline_regions", .{ idx, nested }) catch unreachable;
+    try out.appendSlice(allocator, s);
+}
+
+fn writeNestedInlineRegionPathSym(
+    out: *std.ArrayListUnmanaged(u8),
+    allocator: Allocator,
+    idx: usize,
+    nested: usize,
+) Allocator.Error!void {
+    var buf: [64]u8 = undefined;
+    const s = std.fmt.bufPrint(&buf, "onez_image_w_{d}_nested_{d}_path", .{ idx, nested }) catch unreachable;
+    try out.appendSlice(allocator, s);
+}
+
 /// Emit `onez_image_modules[]` and `onez_image_words[]` along with
 /// each word's marker pointer array. Word name strings are emitted
 /// up front by `emitWordNameStrings` so the typevalue table (emitted
@@ -4542,7 +4714,7 @@ fn emitModuleAndWordTables(
     word_to_typevalue_slot: []const u32,
     word_body_lens: []const u32,
     word_image_decode: []const bool,
-    word_has_inline_regions: []const bool,
+    word_regions: []const WordInlineRegions,
     stats: *ImageEmissionStats,
 ) Allocator.Error!void {
     if (manifest.entries.len == 0) {
@@ -4748,12 +4920,23 @@ fn emitModuleAndWordTables(
                 \\
             );
         }
-        if (word_has_inline_regions[idx]) {
+        if (word_regions[idx].own) {
             try out.appendSlice(allocator, "        .inline_regions = &");
             try writeWordInlineRegionSetSym(out, allocator, idx);
             try out.appendSlice(allocator, ",\n");
         } else {
             try out.appendSlice(allocator, "        .inline_regions = NULL,\n");
+        }
+        if (word_regions[idx].nested != 0) {
+            try out.appendSlice(allocator, "        .nested_inline_regions = ");
+            try writeWordNestedInlineRegionsSym(out, allocator, idx);
+            try out.appendSlice(allocator, ",\n        .nested_inline_region_count = ");
+            var nested_buf: [16]u8 = undefined;
+            try out.appendSlice(allocator, std.fmt.bufPrint(&nested_buf, "{d}u", .{word_regions[idx].nested}) catch unreachable);
+            try out.appendSlice(allocator, ",\n");
+        } else {
+            try out.appendSlice(allocator, "        .nested_inline_regions = NULL,\n");
+            try out.appendSlice(allocator, "        .nested_inline_region_count = 0u,\n");
         }
         try out.appendSlice(allocator,
             \\    },
@@ -7170,6 +7353,65 @@ test "emitImageC: a word whose body carries inlined runs emits the set its row p
     ) != null);
 }
 
+test "emitImageC: a quotation nested in a body emits a set the path addresses" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+    const arena = ctx.quotationAllocator();
+
+    const nested = try arena.dupe(Instruction, &.{
+        .{ .op = .{ .call_word = "+" }, .line = 4, .column = 7 },
+    });
+    const instrs = try arena.dupe(Instruction, &.{
+        .{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 2, .column = 5 },
+        .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = nested } } }, .line = 2, .column = 9 },
+    });
+    try putInlineRegionModule(&ctx, instrs);
+
+    // The shape the expansion pass records when the call it replaced sat inside a loop body: the
+    // word's own array carries nothing, and the quotation one instruction down carries the run.
+    try ctx.recordInlineRegions(nested, "demo.1z", &.{.{
+        .start = 0,
+        .end = 1,
+        .word_name = "inner",
+        .body_source = "lib.1z",
+        .call_line = 4,
+        .call_column = 7,
+    }});
+
+    var manifest = try aot_image.buildImageManifest(&ctx, testing.allocator);
+    defer manifest.deinit(testing.allocator);
+
+    var lookup: std.StringHashMapUnmanaged(u32) = .{};
+    defer lookup.deinit(testing.allocator);
+
+    var out: std.ArrayListUnmanaged(u8) = .{};
+    defer out.deinit(testing.allocator);
+
+    _ = try emitImageC(&out, testing.allocator, &ctx, manifest, &lookup, .{}, &.{});
+
+    try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_w_0_nested_0_path[] = {1u}") != null);
+    try testing.expect(std.mem.indexOf(
+        u8,
+        out.items,
+        ".path = onez_image_w_0_nested_0_path, .path_len = 1u",
+    ) != null);
+    try testing.expect(std.mem.indexOf(
+        u8,
+        out.items,
+        ".regions = onez_image_w_0_nested_0_inline_regions, .body_source_len = 7, .region_count = 1u",
+    ) != null);
+    try testing.expect(std.mem.indexOf(
+        u8,
+        out.items,
+        ".nested_inline_regions = onez_image_w_0_nested_inline_regions",
+    ) != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, ".nested_inline_region_count = 1u") != null);
+
+    // The word's own array has none, so its row names no set of its own.
+    try testing.expect(std.mem.indexOf(u8, out.items, ".inline_regions = NULL") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_w_0_inline_region_set") == null);
+}
+
 test "emitImageC: a body nothing was inlined into carries no region set" {
     var ctx = Context.init(testing.allocator);
     defer ctx.deinit();
@@ -7193,6 +7435,7 @@ test "emitImageC: a body nothing was inlined into carries no region set" {
 
     try testing.expect(std.mem.indexOf(u8, out.items, ".inline_regions = NULL") != null);
     try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_w_0_inline_region_set") == null);
+    try testing.expect(std.mem.indexOf(u8, out.items, ".nested_inline_regions = NULL") != null);
 }
 
 test "emitImageC: module-attributed parameter default emits module fields" {

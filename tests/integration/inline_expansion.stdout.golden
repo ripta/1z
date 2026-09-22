@@ -57,3 +57,21 @@ Stack: [ ]
 Stack: [ ]
 PASS: an author's own self-call is untouched
 Stack: [ ]
+=== a call inside a quotation literal expands too ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: a read one level down is a push
+Stack: [ ]
+PASS: and it still computes what it did
+Stack: [ ]
+Stack: [ ]
+PASS: and so is a read two levels down
+Stack: [ ]
+PASS: and that still computes too
+Stack: [ ]
+Stack: [ ]
+PASS: a body with nothing to expand is left alone
+Stack: [ ]
+PASS: and it still computes what it did
+Stack: [ ]

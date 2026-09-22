@@ -61,6 +61,16 @@ typedef struct onez_image_inline_region_set {
     uint32_t region_count;
 } onez_image_inline_region_set_t;
 
+/* The runs of one quotation literal nested inside a word's body, which expansion        */
+/* rebuilds into an array of its own. `path` is the instruction indices to walk from the */
+/* word's body to reach it: at each one the instruction pushes a quotation, and the walk */
+/* steps into that quotation's body.                                                     */
+typedef struct onez_image_nested_inline_region_set {
+    const uint32_t *path;
+    uint32_t path_len;
+    struct onez_image_inline_region_set set;
+} onez_image_nested_inline_region_set_t;
+
 typedef struct onez_image_word {
     const char *name;
     uint32_t name_len;
@@ -96,6 +106,9 @@ typedef struct onez_image_word {
     uint32_t provenance_role_len;
     /* NULL for a body nothing was inlined into, which is nearly every body.       */
     const struct onez_image_inline_region_set *inline_regions;
+    /* NULL when no quotation nested in this body carries runs of its own.         */
+    const struct onez_image_nested_inline_region_set *nested_inline_regions;
+    uint32_t nested_inline_region_count;
 } onez_image_word_t;
 
 /* TypeValue static C data schema. Every TypeValue reachable from any module-private word's body or
@@ -1198,6 +1211,8 @@ static const onez_image_word_t onez_image_words_storage[] = {
         .provenance_role = onez_image_w_0_pr,
         .provenance_role_len = 10,
         .inline_regions = NULL,
+        .nested_inline_regions = NULL,
+        .nested_inline_region_count = 0u,
     },
     {
         .name = onez_image_w_1_name,
@@ -1230,6 +1245,8 @@ static const onez_image_word_t onez_image_words_storage[] = {
         .provenance_role = onez_image_w_1_pr,
         .provenance_role_len = 4,
         .inline_regions = NULL,
+        .nested_inline_regions = NULL,
+        .nested_inline_region_count = 0u,
     },
     {
         .name = onez_image_w_2_name,
@@ -1262,6 +1279,8 @@ static const onez_image_word_t onez_image_words_storage[] = {
         .provenance_role = onez_image_w_2_pr,
         .provenance_role_len = 19,
         .inline_regions = NULL,
+        .nested_inline_regions = NULL,
+        .nested_inline_region_count = 0u,
     },
     {
         .name = onez_image_w_3_name,
@@ -1294,6 +1313,8 @@ static const onez_image_word_t onez_image_words_storage[] = {
         .provenance_role = onez_image_w_3_pr,
         .provenance_role_len = 9,
         .inline_regions = NULL,
+        .nested_inline_regions = NULL,
+        .nested_inline_region_count = 0u,
     },
     {
         .name = onez_image_w_4_name,
@@ -1326,6 +1347,8 @@ static const onez_image_word_t onez_image_words_storage[] = {
         .provenance_role = onez_image_w_4_pr,
         .provenance_role_len = 19,
         .inline_regions = NULL,
+        .nested_inline_regions = NULL,
+        .nested_inline_region_count = 0u,
     },
     {
         .name = onez_image_w_5_name,
@@ -1358,6 +1381,8 @@ static const onez_image_word_t onez_image_words_storage[] = {
         .provenance_role = onez_image_w_5_pr,
         .provenance_role_len = 9,
         .inline_regions = NULL,
+        .nested_inline_regions = NULL,
+        .nested_inline_region_count = 0u,
     },
     {
         .name = onez_image_w_6_name,
@@ -1390,6 +1415,8 @@ static const onez_image_word_t onez_image_words_storage[] = {
         .provenance_role = onez_image_w_6_pr,
         .provenance_role_len = 9,
         .inline_regions = NULL,
+        .nested_inline_regions = NULL,
+        .nested_inline_region_count = 0u,
     },
     {
         .name = onez_image_w_7_name,
@@ -1422,6 +1449,8 @@ static const onez_image_word_t onez_image_words_storage[] = {
         .provenance_role = NULL,
         .provenance_role_len = 0,
         .inline_regions = NULL,
+        .nested_inline_regions = NULL,
+        .nested_inline_region_count = 0u,
     },
 };
 
@@ -1458,7 +1487,7 @@ static const onez_image_entry_import_t onez_image_entry_imports_storage[] = {
 };
 
 __attribute__((used)) const onez_image_header_t onez_image_v1 = {
-    .format_version = 23,
+    .format_version = 24,
     .module_count = 1,
     .word_count = 8,
     .marker_pool_count = 4,

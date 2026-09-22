@@ -28,6 +28,29 @@ pub fn shouldInline(def: WordDefinition) bool {
     return false;
 }
 
+/// The quotation literal `op` pushes, or null when it pushes anything else.
+///
+/// The one definition of which nested bodies this pass reaches, so the AOT emitter and the image
+/// loader agree with it on which ones are addressable.
+///
+/// A `.closure` is not one. `Closure.ownsBody` compares a body's address to decide whether the
+/// closure's captured scope applies to the execution, so a fresh array would drop that scope.
+///
+/// Neither is a quotation reached through a container literal, a `parameter{ }` default, or a
+/// `once` cell. Replacing a body inside one means copying the value it sits in, and for the three
+/// mutable containers, the parameter handle, and the cell, that copy moves an identity the program
+/// can observe.
+pub fn nestedQuotation(op: Instruction.Op) ?value_mod.Quotation {
+    const val = switch (op) {
+        .push_literal => |v| v,
+        .call_word, .call_word_direct, .call_word_module => return null,
+    };
+    return switch (val) {
+        .quotation => |q| q,
+        else => null,
+    };
+}
+
 /// The body `body` becomes once every call this pass selects is replaced by the callee's own
 /// instructions, or null when it selects none. Null is the overwhelmingly common answer, and
 /// reaching it costs no allocation.
@@ -59,6 +82,7 @@ pub fn expandBody(
     try ex.out.ensureTotalCapacity(ex.alloc, body.len);
 
     // Both decline rules apply only to a copied instruction, so nothing at this level can decline.
+    // A nested body declines to its own caller rather than out through this one.
     const complete = try ex.appendBody(body, .{ .file = caller_file, .relocating = false });
     std.debug.assert(complete);
 
@@ -182,9 +206,20 @@ const Expander = struct {
         };
     }
 
+    /// Whether anything in `body` expands, at any depth.
+    ///
+    /// Asked twice, for two reasons. `expandBody` asks so a definition with nothing to expand
+    /// allocates nothing, and `rebuiltQuotation` asks per nested body so one with nothing to
+    /// expand keeps its address.
+    ///
+    /// So a definition costs one walk of every instruction it holds transitively, and a body
+    /// nested n levels down is walked once more per level above it.
     fn anyExpandableCall(self: *const Expander, body: []const Instruction) bool {
         for (body) |instr| {
             if (self.expandable(instr.op, self.caller_file) != null) return true;
+            if (nestedQuotation(instr.op)) |nested| {
+                if (self.anyExpandableCall(nested.instructions)) return true;
+            }
         }
         return false;
     }
@@ -199,9 +234,14 @@ const Expander = struct {
     /// Append `body`'s instructions, expanding the calls this pass selects.
     ///
     /// Returns false when one of them would not, having left `out` and `regions` exactly as they
-    /// were found so the caller can emit the original call instead. Discarding costs nothing to
-    /// undo, because the walk takes no reference: every literal in the finished array is retained
-    /// in one pass at the end.
+    /// were found so the caller can emit the original call instead. Discarding the instructions
+    /// costs nothing to undo, because the walk takes no reference: every literal in the finished
+    /// array is retained in one pass at the end.
+    ///
+    /// A nested body rebuilt inside the discarded range is the exception. It already holds its own
+    /// references and the registration that balances them, so nothing leaks and nothing is
+    /// released twice. What is left is a permanent table entry for an array nothing will run, the
+    /// same residue a rebuild leaves on the body it supersedes.
     fn appendBody(self: *Expander, body: []const Instruction, ctxt: BodyContext) Allocator.Error!bool {
         const out_mark = self.out.items.len;
         const region_mark = self.regions.items.len;
@@ -295,6 +335,16 @@ const Expander = struct {
             },
         };
 
+        // A quotation literal this pass rebuilt. A body it left alone falls through below.
+        if (try self.rebuiltQuotation(instr, ctxt)) |val| {
+            try self.out.append(self.alloc, .{
+                .op = .{ .push_literal = val },
+                .line = instr.line,
+                .column = instr.column,
+            });
+            return true;
+        }
+
         // An instruction the pass did not replace. It keeps its own line and column, so a location
         // inside an expanded region still points at the source that wrote it. The region recorded
         // over that copy is what says which file the line belongs to.
@@ -324,6 +374,79 @@ const Expander = struct {
             .call_line = @intCast(instr.line),
             .call_column = @intCast(instr.column),
         });
+    }
+
+    /// The quotation to push in place of `instr`, when it pushes a quotation literal whose body
+    /// holds a call this pass selects. Null when it pushes anything else, when that body holds
+    /// nothing to expand, or when a copy inside it declined.
+    ///
+    /// `code_ptr` is not carried over. It names code compiled from the array being replaced.
+    fn rebuiltQuotation(self: *Expander, instr: Instruction, ctxt: BodyContext) Allocator.Error!?Value {
+        const q = nestedQuotation(instr.op) orelse return null;
+        if (!self.anyExpandableCall(q.instructions)) return null;
+
+        const rebuilt = (try self.rebuildNested(q.instructions, ctxt)) orelse return null;
+        return .{ .quotation = .{ .instructions = rebuilt, .effect = q.effect } };
+    }
+
+    /// The array `body` becomes as a nested quotation's own, or null when a copy inside it
+    /// declined.
+    ///
+    /// The nested array is a body in its own right: its own output buffer, its own runs, and its
+    /// own entry in each table keyed on a body address. The cycle set stays shared, so a call
+    /// re-entering an open body declines wherever it sits.
+    ///
+    /// `ctxt` carries through unchanged, so the relocation rule reaches this depth. It has to. The
+    /// new address is unstamped, and module finalization would then stamp it with the caller's
+    /// module, moving where the body's own bare words resolve.
+    ///
+    /// Declining is local. The caller emits the quotation it was handed, whose array keeps the
+    /// address its module stamp is on, so the fallback is what that instruction meant before this
+    /// pass reached it.
+    fn rebuildNested(self: *Expander, body: []const Instruction, ctxt: BodyContext) Allocator.Error!?[]const Instruction {
+        const outer_out = self.out;
+        const outer_regions = self.regions;
+        self.out = .{};
+        self.regions = .{};
+        defer {
+            self.out.deinit(self.alloc);
+            self.regions.deinit(self.ctx.allocator);
+            self.out = outer_out;
+            self.regions = outer_regions;
+        }
+
+        try self.out.ensureTotalCapacity(self.alloc, body.len);
+        if (!try self.appendBody(body, ctxt)) return null;
+
+        const rebuilt = try self.out.toOwnedSlice(self.alloc);
+        try self.publishNested(rebuilt, body, ctxt);
+        return rebuilt;
+    }
+
+    /// Give `rebuilt` what every table keyed on a body address held for `source`: the file that
+    /// code was written in, the nested names the capture gate asks for, its own runs, and a
+    /// release-list registration when it carries a refcounted literal.
+    ///
+    /// Called from inside the nested walk, so `regions` is still that body's own list.
+    ///
+    /// The file is the one `source` was stamped with. `ctxt.file` stands in for a body built at
+    /// run time and never stamped.
+    fn publishNested(
+        self: *Expander,
+        rebuilt: []const Instruction,
+        source: []const Instruction,
+        ctxt: BodyContext,
+    ) Allocator.Error!void {
+        const file = self.ctx.quotationBodySource(source) orelse ctxt.file;
+
+        try self.ctx.stampQuotationBodySourceAs(rebuilt, file);
+        try self.ctx.cacheQuotationBodyNestedNames(rebuilt);
+        try self.ctx.recordInlineRegions(rebuilt, file, self.regions.items);
+
+        // The outer array's own uniform retain does not reach here, because a quotation carries no
+        // refcount of its own, so this array takes its references and its registration itself.
+        try self.ctx.registerQuotationContainerLiterals(rebuilt);
+        container_backing.retainInstructionsContainerLiterals(rebuilt);
     }
 
     fn definedInCallerFile(self: *const Expander, callee: WordDefinition) bool {
@@ -361,6 +484,7 @@ fn relocateOp(ctx: *const Context, op: Instruction.Op) ?Instruction.Op {
 
 const testing = std.testing;
 const Marker = value_mod.Marker;
+const StackEffect = @import("stack_effect.zig").StackEffect;
 
 const here = "inline_expand_test.1z";
 const elsewhere = "other.1z";
@@ -397,6 +521,17 @@ fn ops(ctx: *Context, name: []const u8, buf: [][]const u8) [][]const u8 {
         buf[i] = instr.op.callTargetName() orelse "#";
     }
     return buf[0..body.len];
+}
+
+/// A push of a quotation over `body`, the shape the parser emits for `[ ... ]`.
+fn quot(body: []const Instruction, line: usize) Instruction {
+    return .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = body } } }, .line = line };
+}
+
+/// The body of the quotation pushed by instruction `index` of `name`'s stored body.
+fn nestedOf(ctx: *Context, name: []const u8, index: usize) []const Instruction {
+    const body = ctx.lookupWord(name).?.action.compound;
+    return body[index].op.push_literal.quotation.instructions;
 }
 
 /// The runs recorded over `name`'s stored body.
@@ -913,4 +1048,335 @@ test "a word whose call declined mid-body records the runs that survived" {
     try testing.expectEqualStrings("doubled", regions[0].word_name);
     try testing.expectEqual(@as(u32, 1), regions[0].start);
     try testing.expectEqual(@as(u32, 2), regions[0].end);
+}
+
+test "a call inside a quotation literal expands, and that body takes a new address" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+    ctx.current_source = here;
+
+    try bind(&ctx, here, "width", .{ .fixnum = 256 }, true);
+
+    const nested = [_]Instruction{
+        .{ .op = .{ .call_word = "width" }, .line = 3 },
+        .{ .op = .{ .call_word = "*" }, .line = 3 },
+    };
+
+    try define(&ctx, here, "area", &.{
+        quot(&nested, 3),
+        .{ .op = .{ .call_word = "call" }, .line = 3 },
+    }, false);
+
+    const rebuilt = nestedOf(&ctx, "area", 0);
+    try testing.expect(@intFromPtr(rebuilt.ptr) != @intFromPtr(&nested));
+    try testing.expectEqual(@as(i64, 256), rebuilt[0].op.push_literal.fixnum);
+    try testing.expectEqualStrings("*", rebuilt[1].op.callTargetName().?);
+}
+
+test "a quotation literal with nothing to expand keeps its address" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+    ctx.current_source = here;
+
+    try define(&ctx, here, "doubled", &.{
+        .{ .op = .{ .call_word = "*" }, .line = 1 },
+    }, true);
+
+    const nested = [_]Instruction{
+        .{ .op = .{ .call_word = "+" }, .line = 2 },
+    };
+
+    // The call beside it is what rebuilds the word's own array, so the quotation is reached and
+    // walked. Nothing in it expands, so it is copied as it stands.
+    try define(&ctx, here, "holder", &.{
+        quot(&nested, 2),
+        .{ .op = .{ .call_word = "doubled" }, .line = 2 },
+    }, false);
+
+    try expectOps(&ctx, "holder", &.{ "#", "*" });
+    try testing.expectEqual(@intFromPtr(&nested), @intFromPtr(nestedOf(&ctx, "holder", 0).ptr));
+}
+
+test "a rebuilt quotation keeps its declared effect and carries no compiled code" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+    ctx.current_source = here;
+
+    try bind(&ctx, here, "width", .{ .fixnum = 256 }, true);
+
+    const effect: StackEffect = .{ .inputs = &.{}, .outputs = &.{} };
+    const nested = [_]Instruction{
+        .{ .op = .{ .call_word = "width" }, .line = 2 },
+    };
+
+    // A stale `code_ptr` would run the un-expanded body under a marker promising the opposite.
+    const literal = Value{ .quotation = .{
+        .instructions = &nested,
+        .effect = &effect,
+        .code_ptr = @ptrFromInt(0x1000),
+    } };
+
+    try define(&ctx, here, "holder", &.{
+        .{ .op = .{ .push_literal = literal }, .line = 2 },
+        .{ .op = .{ .call_word = "call" }, .line = 2 },
+    }, false);
+
+    const body = ctx.lookupWord("holder").?.action.compound;
+    const rebuilt = body[0].op.push_literal.quotation;
+    try testing.expect(@intFromPtr(rebuilt.instructions.ptr) != @intFromPtr(&nested));
+    try testing.expectEqual(@as(?*const StackEffect, &effect), rebuilt.effect);
+    try testing.expectEqual(@as(?*const anyopaque, null), rebuilt.code_ptr);
+}
+
+test "a rebuilt quotation body carries the run naming the word it copied" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+    ctx.current_source = here;
+
+    try define(&ctx, here, "doubled", &.{
+        .{ .op = .{ .push_literal = .{ .fixnum = 2 } }, .line = 1 },
+        .{ .op = .{ .call_word = "*" }, .line = 1 },
+    }, true);
+
+    const nested = [_]Instruction{
+        .{ .op = .{ .call_word = "doubled" }, .line = 6, .column = 5 },
+    };
+
+    try define(&ctx, here, "holder", &.{
+        quot(&nested, 6),
+        .{ .op = .{ .call_word = "call" }, .line = 6 },
+    }, false);
+
+    // The word's own array records nothing. The call that expanded sat one level down, and the
+    // error path reads the table for whichever body raised.
+    try testing.expectEqual(@as(?[]const InlineRegion, null), regionsOf(&ctx, "holder"));
+
+    const set = ctx.inlineRegionsFor(nestedOf(&ctx, "holder", 0)) orelse return error.TestExpectedRegions;
+    try testing.expectEqual(@as(usize, 1), set.regions.len);
+    try testing.expectEqualStrings("doubled", set.regions[0].word_name);
+    try testing.expectEqual(@as(u32, 0), set.regions[0].start);
+    try testing.expectEqual(@as(u32, 2), set.regions[0].end);
+    try testing.expectEqual(@as(u32, 6), set.regions[0].call_line);
+    try testing.expectEqual(@as(u32, 5), set.regions[0].call_column);
+
+    // The body was never stamped, so it takes the file of the body holding it.
+    try testing.expectEqualStrings(here, set.body_source);
+}
+
+test "a rebuilt quotation body keeps the file the old one was stamped with" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+    ctx.current_source = here;
+
+    try bind(&ctx, here, "width", .{ .fixnum = 256 }, true);
+
+    const nested = [_]Instruction{
+        .{ .op = .{ .call_word = "width" }, .line = 4 },
+    };
+
+    // The shape a cross-module inline leaves: a quotation written in one file, pushed from a body
+    // being built in another.
+    try ctx.stampQuotationBodySourceAs(&nested, elsewhere);
+
+    try define(&ctx, here, "holder", &.{
+        quot(&nested, 4),
+        .{ .op = .{ .call_word = "call" }, .line = 4 },
+    }, false);
+
+    try testing.expectEqualStrings(elsewhere, ctx.quotationBodySource(nestedOf(&ctx, "holder", 0)).?);
+}
+
+test "a call two levels of nesting down expands" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+    ctx.current_source = here;
+
+    try bind(&ctx, here, "width", .{ .fixnum = 256 }, true);
+
+    const deep = [_]Instruction{
+        .{ .op = .{ .call_word = "width" }, .line = 5 },
+    };
+    const middle = [_]Instruction{
+        quot(&deep, 5),
+        .{ .op = .{ .call_word = "call" }, .line = 5 },
+    };
+
+    try define(&ctx, here, "holder", &.{
+        quot(&middle, 5),
+        .{ .op = .{ .call_word = "call" }, .line = 5 },
+    }, false);
+
+    const rebuilt_middle = nestedOf(&ctx, "holder", 0);
+    try testing.expect(@intFromPtr(rebuilt_middle.ptr) != @intFromPtr(&middle));
+
+    const rebuilt_deep = rebuilt_middle[0].op.push_literal.quotation.instructions;
+    try testing.expect(@intFromPtr(rebuilt_deep.ptr) != @intFromPtr(&deep));
+    try testing.expectEqual(@as(i64, 256), rebuilt_deep[0].op.push_literal.fixnum);
+}
+
+test "each container literal in a rebuilt nested body carries a reference of its own" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+    ctx.current_source = here;
+
+    try bind(&ctx, here, "width", .{ .fixnum = 256 }, true);
+
+    const vec = try value_mod.Vector.create(ctx.allocator);
+    const before = vec.header.refcountValue();
+
+    const nested = [_]Instruction{
+        .{ .op = .{ .push_literal = .{ .vector = vec } }, .line = 2 },
+        .{ .op = .{ .call_word = "width" }, .line = 2 },
+    };
+
+    try define(&ctx, here, "holder", &.{
+        quot(&nested, 2),
+        .{ .op = .{ .call_word = "call" }, .line = 2 },
+    }, false);
+
+    try testing.expectEqual(before + 1, vec.header.refcountValue());
+
+    // The array the test built by hand carries no registration, so it holds the creation reference
+    // itself. Dropping it here leaves the rebuilt body's own registration to release the second at
+    // teardown, and the allocator checks the backing was destroyed exactly once.
+    container_backing.releaseValue(.{ .vector = vec });
+}
+
+test "a nested body whose call cannot be bound keeps the quotation it was handed" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+    ctx.current_source = here;
+
+    try ctx.pushLocalFrame();
+    defer ctx.popLocalFrame();
+
+    // A frame holds this one, so no dictionary slot names it. That is the shape a module-private
+    // helper has, and the reason a body reaching one cannot leave its own module.
+    try define(&ctx, here, "(helper)", &.{
+        .{ .op = .{ .call_word = "+" }, .line = 1 },
+    }, false);
+
+    const nested = [_]Instruction{
+        .{ .op = .{ .call_word = "later" }, .line = 1 },
+        .{ .op = .{ .call_word = "(helper)" }, .line = 1 },
+    };
+
+    // `later` does not exist yet, so nothing in the quotation expands at this definition.
+    try define(&ctx, elsewhere, "reaches-a-frame-word", &.{
+        quot(&nested, 1),
+        .{ .op = .{ .call_word = "call" }, .line = 1 },
+    }, true);
+
+    try bind(&ctx, here, "later", .{ .fixnum = 256 }, true);
+
+    try define(&ctx, here, "calls-it", &.{
+        .{ .op = .{ .call_word = "reaches-a-frame-word" }, .line = 2 },
+    }, false);
+
+    // The rebuild declined on `(helper)`, so the quotation is emitted as it stands. The expansion
+    // around it stands too: the call to the marked word is gone.
+    const body = ctx.lookupWord("calls-it").?.action.compound;
+    try testing.expectEqual(@as(usize, 2), body.len);
+    try testing.expectEqual(@intFromPtr(&nested), @intFromPtr(body[0].op.push_literal.quotation.instructions.ptr));
+    try testing.expectEqualStrings("call", body[1].op.callTargetName().?);
+}
+
+test "a nested body rebuilt inside a discarded copy keeps its references balanced" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+    ctx.current_source = here;
+
+    try ctx.pushLocalFrame();
+    defer ctx.popLocalFrame();
+
+    try define(&ctx, here, "(helper)", &.{
+        .{ .op = .{ .call_word = "+" }, .line = 1 },
+    }, false);
+
+    const vec = try value_mod.Vector.create(ctx.allocator);
+    const before = vec.header.refcountValue();
+
+    const nested = [_]Instruction{
+        .{ .op = .{ .push_literal = .{ .vector = vec } }, .line = 1 },
+        .{ .op = .{ .call_word = "later" }, .line = 1 },
+    };
+
+    // The quotation rebuilds, and then the instruction beside it declines on a frame-held name,
+    // so the whole copy of this body is discarded.
+    try define(&ctx, elsewhere, "reaches-a-frame-word", &.{
+        quot(&nested, 1),
+        .{ .op = .{ .call_word = "(helper)" }, .line = 1 },
+    }, true);
+
+    try bind(&ctx, here, "later", .{ .fixnum = 256 }, true);
+
+    try define(&ctx, here, "calls-it", &.{
+        .{ .op = .{ .call_word = "reaches-a-frame-word" }, .line = 2 },
+    }, false);
+
+    try expectOps(&ctx, "calls-it", &.{"reaches-a-frame-word"});
+
+    // The discarded array is unreachable and its entries are permanent, but the reference it took
+    // is still paired with the registration that releases it. Dropping the test's own leaves the
+    // allocator to check the backing was destroyed exactly once.
+    try testing.expectEqual(before + 1, vec.header.refcountValue());
+    container_backing.releaseValue(.{ .vector = vec });
+}
+
+test "a nested body naming the word being defined keeps the quotation it was handed" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+    ctx.current_source = here;
+
+    const nested = [_]Instruction{
+        .{ .op = .{ .call_word = "later" }, .line = 1 },
+        .{ .op = .{ .call_word = "grow" }, .line = 1 },
+    };
+
+    // Neither name exists yet, so this body is stored as written.
+    try define(&ctx, here, "bump", &.{
+        quot(&nested, 1),
+        .{ .op = .{ .call_word = "call" }, .line = 1 },
+    }, true);
+
+    try bind(&ctx, here, "later", .{ .fixnum = 256 }, true);
+
+    // `grow` now claims the name the quotation calls. Rebuilding that body would put a self-call
+    // inside it that `;` never checked for, so the rebuild declines and the quotation stands.
+    try define(&ctx, here, "grow", &.{
+        .{ .op = .{ .call_word = "bump" }, .line = 2 },
+    }, false);
+
+    const body = ctx.lookupWord("grow").?.action.compound;
+    try testing.expectEqual(@as(usize, 2), body.len);
+    try testing.expectEqual(@intFromPtr(&nested), @intFromPtr(body[0].op.push_literal.quotation.instructions.ptr));
+}
+
+test "a nested body rebuilt inside a relocating copy has its own calls bound" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+    ctx.current_source = here;
+
+    const nested = [_]Instruction{
+        .{ .op = .{ .call_word = "later" }, .line = 1 },
+        .{ .op = .{ .call_word = "+" }, .line = 1 },
+    };
+
+    try define(&ctx, elsewhere, "adds", &.{
+        quot(&nested, 1),
+        .{ .op = .{ .call_word = "call" }, .line = 1 },
+    }, true);
+
+    try bind(&ctx, here, "later", .{ .fixnum = 256 }, true);
+
+    try define(&ctx, here, "reads-it", &.{
+        .{ .op = .{ .call_word = "adds" }, .line = 2 },
+    }, false);
+
+    // Module finalization stamps the rebuilt array with this file's module, so its own names have
+    // to stop being names the way the enclosing copy's do.
+    const rebuilt = nestedOf(&ctx, "reads-it", 0);
+    try testing.expect(@intFromPtr(rebuilt.ptr) != @intFromPtr(&nested));
+    try testing.expectEqual(@as(i64, 256), rebuilt[0].op.push_literal.fixnum);
+    try testing.expect(rebuilt[1].op == .call_word_direct);
 }

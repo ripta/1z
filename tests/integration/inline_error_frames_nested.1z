@@ -1,0 +1,13 @@
+\ Expansion reaches a call inside a quotation literal, and the row it erases has to come back the
+\ same way a row erased at a body's top level does.
+\
+\ The run here is recorded over the quotation's own rebuilt body rather than over `holder`'s array,
+\ so the chain reads it from a second entry in the side table. Without that entry the `leaf` row is
+\ missing and the `call` row below it names the wrong line.
+\
+\ No flags: one golden binds the interpreted and eager suites.
+
+leaf: ( s v -- n ) const inline [ stream-write 0 + ] ;
+holder: ( s v -- n ) [ [ leaf ] call 0 + ] ;
+
+stdout 42 holder .

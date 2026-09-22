@@ -2203,14 +2203,27 @@ pub const Context = struct {
     /// word's own file, and `parse_stamp_source` holds the invoking file the parser is still
     /// reading. Bodies built at runtime, by `curry` or an image decode, carry no record and fall
     /// back to `current_source`.
+    pub fn stampQuotationBodySource(self: *Context, instructions: []const Instruction) !void {
+        const source = self.parse_stamp_source orelse self.current_source;
+        try self.stampQuotationBodySourceAs(instructions, source);
+    }
+
+    /// Record `source` as the file `instructions` belongs to, for a body no parse read.
+    ///
+    /// The derivation above is what the parser needs and what a word's own expanded array needs.
+    /// A nested body the expansion pass rebuilt belongs to whichever file wrote the quotation,
+    /// which after a cross-module inline is not the file being read.
     ///
     /// Stamps are permanent, so only a body the root arena owns may enter: a body parsed onto a
     /// task or scoped-eval arena dies with it, and its key would then falsely match a later
     /// unrelated allocation at the same address.
-    pub fn stampQuotationBodySource(self: *Context, instructions: []const Instruction) !void {
+    pub fn stampQuotationBodySourceAs(
+        self: *Context,
+        instructions: []const Instruction,
+        source: []const u8,
+    ) !void {
         if (instructions.len == 0) return;
         if (self.stateTarget() != self.rootContext()) return;
-        const source = self.parse_stamp_source orelse self.current_source;
         try self.quotation_source_store.stamp(@intFromPtr(instructions.ptr), source);
     }
 
@@ -4202,6 +4215,9 @@ pub const Context = struct {
         // Both are keyed on the array's address, so the new one starts with neither. The source
         // stamp is what a call frame raised inside this body reads for its file. The nested-name
         // cache is the capture gate's fast answer; missing it only costs a walk.
+        //
+        // Only this array is handled here. A nested body the pass rebuilt is a second new address,
+        // and the pass establishes its entries where it builds it.
         try self.stampQuotationBodySource(expanded);
         try self.cacheQuotationBodyNestedNames(expanded);
     }
