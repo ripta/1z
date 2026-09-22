@@ -1,0 +1,59 @@
+\ tests/benchmark/game_draw.1z - What the drawing library's fill, pixel, and glyph paths cost.
+\
+\ Four rows, one per path a caller can reach. clear-background is the whole canvas in one fill.
+\ draw-pixel is the general per-pixel path. draw-text is timed twice, once fully on the canvas and
+\ once hanging off the top edge, because those are two different glyph loops with two different
+\ costs.
+\
+\ current-framebuffer is bound to a scratch buffer, because the real one only exists under the
+\ wasm C-API root.
+\
+\ Every row reads one module-level binding for its color inside the timed quotation. That read is
+\ a word dispatch the drawing word does not owe, and it is the same dispatch in every run, so a
+\ before-and-after reading is unaffected by it.
+\
+\ The two text counts are small because --profile keeps one sample per word call, and a glyph loop
+\ makes hundreds of calls per glyph. They are still worth hundreds of thousands of calls, which is
+\ what a per-word table needs to rank anything.
+\
+\ tests/benchmark/minesweeper_reset.1z asks where a whole frame goes; this file asks what each
+\ drawing word costs on its own.
+
+use "game/draw" ;
+
+ink: 200 200 200 255 <color> ;
+background: 16 24 40 255 <color> ;
+
+private{
+  (scratch-framebuffer): ( -- byte-array ) [
+    framebuffer-width framebuffer-height * framebuffer-bytes-per-pixel * bytes-alloc
+  ] ;
+
+  \\ Time quot n times and print one row: the label, the count, and nanoseconds per iteration.
+  \\
+  \\ n is copied into a local before quot is curried away, and quot itself is never bound to a
+  \\ local: referencing a quotation-valued local runs its body instead of pushing it.
+  (row): ( label: string n: fixnum quot: quotation -- ) [
+    over rn: swap ;
+    [ times ] curry curry benchmark
+    "elapsed_ns" @get rn div
+    swap "  n=" #append rn >string #append "  ns/iter=" #append
+    swap >string #append
+    print-line
+  ] ;
+}
+
+(scratch-framebuffer) current-framebuffer [
+  "-- fill --" print-line
+  "clear-background (57344 px)" 500 [ background clear-background ] (row)
+
+  "-- one pixel --" print-line
+  "draw-pixel" 5000 [ 10 20 ink draw-pixel ] (row)
+
+  "-- text, 11 glyphs --" print-line
+  \ Every glyph sits inside the canvas, so each one takes the whole-cell loop.
+  "draw-text on canvas" 50 [ 8 8 "HELLO WORLD" ink draw-text ] (row)
+
+  \ y = -1 puts the top row of every cell off the canvas, so every glyph takes the clipped loop.
+  "draw-text clipped" 25 [ 8 -1 "HELLO WORLD" ink draw-text ] (row)
+] with-parameter

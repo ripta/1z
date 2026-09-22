@@ -7,15 +7,19 @@
 \ (0=leftmost..7=rightmost) is set iff that pixel is on. Bit 7 is always unset -- it's the
 \ font's built-in one-pixel inter-character gutter. Confirmed against ext/font8x8/render.c's
 \ reference renderer.
+\
+\ font-cell-size and font-glyph-bytes carry `const inline`, so a read becomes a push of the value
+\ in the reading body. game/draw reads both inside its per-pixel glyph loops. The two codepoint
+\ bounds are read once per character, so they stay plain.
 
 font-glyph-first: 32 ;
 \ 0x20, space -- first covered codepoint
 font-glyph-last: 126 ;
 \ 0x7E, ~ -- last covered codepoint
-font-cell-size: 8 ;
+font-cell-size: const inline 8 ;
 \ pixels per glyph row/column, and bytes per glyph
 
-font-glyph-bytes: B{
+font-glyph-bytes: const inline B{
   0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00  \ U+0020 (space)
   0x18 0x3C 0x3C 0x18 0x18 0x00 0x18 0x00  \ U+0021 (!)
   0x36 0x36 0x00 0x00 0x00 0x00 0x00 0x00  \ U+0022 (")

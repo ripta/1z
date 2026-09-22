@@ -1,0 +1,19 @@
+Stack: [ ]
+=== a library's own constants read as pushes ===
+Stack: [ ]
+Stack: [ "[ (color>packed) [ <parameter:current-framebuffer> get 0 ] dip 256 224 * #fill32! drop ]" ]
+Stack: [ "[ (color>packed) [ <parameter:current-framebuffer> get 0 ] dip 256 224 * #fill32! drop ]" "[ (color>packed) [ <parameter:current-framebuffer> get 0 ] dip 256 224 * #fill32! drop ]" ]
+PASS: the canvas dimensions and the framebuffer handle are all pushes
+Stack: [ ]
+Stack: [ f ]
+PASS: draw-rectangle pushes the bytes-per-pixel value
+Stack: [ ]
+Stack: [ f ]
+PASS: draw-text pushes the cell size, across the import from game/font
+Stack: [ ]
+Stack: [ f ]
+PASS: draw-rectangle binds no width local
+Stack: [ ]
+Stack: [ f ]
+PASS: draw-rectangle binds no bytes-per-pixel local
+Stack: [ ]

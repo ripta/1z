@@ -12,29 +12,32 @@
 \ whole canvas with one #fill32!, draw-rectangle takes one per row, and blit-sprite copies a
 \ sprite row at a time with #copy!.
 \
-\ Two rules shape the loops that remain. Reading a module-level word costs roughly sixteen
-\ times what reading a local costs, so a loop hoists every constant it needs into a local first
-\ and the body reads only locals. And a region is clipped against the canvas once, before the
-\ loop, so the body writes without testing each pixel. tests/benchmark/minesweeper_reset.1z
-\ tracks the numbers.
+\ The constants below carry `const inline`, so a read is a push of the value in the reading body
+\ rather than a word dispatch. A loop body reads them where it needs them.
 \
-\ (set-pixel!) keeps the per-pixel clip test and stays the general path. draw-pixel is one
-\ pixel, so there is nothing to hoist, and the glyph loop below relies on the test to discard
-\ unset bits when a glyph hangs off the canvas.
+\ A region is clipped against the canvas once, before the loop, so the body writes without
+\ testing each pixel. tests/benchmark/game_draw.1z and tests/benchmark/minesweeper_reset.1z
+\ track the numbers.
+\
+\ (set-pixel!) keeps the per-pixel clip test and stays the general path. The glyph loop below relies
+\ on that test to discard unset bits when a glyph hangs off the canvas.
 
 use "ranges" ;
 use "sequences" ;
 use "bytes" ;
 use "game/font" ;
 
-framebuffer-width:           256 ;
-framebuffer-height:          224 ;
-framebuffer-bytes-per-pixel: 4 ;
+framebuffer-width:           const inline 256 ;
+framebuffer-height:          const inline 224 ;
+framebuffer-bytes-per-pixel: const inline 4 ;
 
 \\ The byte-array every drawing word writes into. Defaults to the real wasm framebuffer; tests
 \\ (and any non-wasm caller) rebind it to a scratch buffer via with-parameter, since
 \\ (wasm-framebuffer) only exists under the wasm C-API root.
-current-framebuffer: parameter{ [ (wasm-framebuffer) ] } ;
+\\
+\\ `inline` copies the push of the handle, never the binding. A reader still runs the whole of
+\\ `get`, so with-parameter keeps its full effect.
+current-framebuffer: const inline parameter{ [ (wasm-framebuffer) ] } ;
 
 color: struct{ r: fixnum g: fixnum b: fixnum a: fixnum } ;
 sprite: struct{ width: fixnum height: fixnum pixels: byte-array } ;
@@ -132,10 +135,10 @@ draw-rectangle: ( x y width height color -- ) [
   ch: ry rh + framebuffer-height min cy - ;
 
   cw 0 > ch 0 > and [
-    fbw: framebuffer-width ;
-    bpp: framebuffer-bytes-per-pixel ;
     current-framebuffer get
-    ch iota >iterator [ cy + fbw * cx + bpp * rp cw #fill32! ] #each
+    ch iota >iterator [
+      cy + framebuffer-width * cx + framebuffer-bytes-per-pixel * rp cw #fill32!
+    ] #each
     drop
   ] when
 ] ;
@@ -163,14 +166,12 @@ blit-sprite: ( x y sprite -- ) [
   ch: by bh + framebuffer-height min cy - ;
 
   cw 0 > ch 0 > and [
-    fbw:  framebuffer-width ;
-    bpp:  framebuffer-bytes-per-pixel ;
-    rowb: cw bpp * ;
+    rowb: cw framebuffer-bytes-per-pixel * ;
     current-framebuffer get
     ch iota >iterator [
       r: swap ;
-      dbase: r cy + fbw * cx + bpp * ;
-      sbase: r cy + by - bw * cx bx - + bpp * ;
+      dbase: r cy + framebuffer-width * cx + framebuffer-bytes-per-pixel * ;
+      sbase: r cy + by - bw * cx bx - + framebuffer-bytes-per-pixel * ;
       dbase bs sbase rowb #copy!
     ] #each
     drop
@@ -180,26 +181,23 @@ blit-sprite: ( x y sprite -- ) [
 private{
   \ A glyph row's bit for column c is `(row >> c) & 1`, so column zero is the leftmost.
 
-  \\ The glyph loop for a cell that sits entirely on the canvas: constants hoisted into locals,
-  \\ one row byte read per row instead of per pixel, and a direct write per set bit with no clip
-  \\ test. This is the path all ordinary text takes.
+  \\ The glyph loop for a cell that sits entirely on the canvas: one row byte read per row instead
+  \\ of per pixel, and a direct write per set bit with no clip test. This is the path all ordinary
+  \\ text takes.
   (draw-glyph-whole): ( offset x y packed -- ) [
     gp:   swap ;
     gy:   swap ;
     gx:   swap ;
     goff: swap ;
-    fcs:  font-cell-size ;
-    fbw:  framebuffer-width ;
-    bpp:  framebuffer-bytes-per-pixel ;
     current-framebuffer get
-    fcs iota >iterator [
+    font-cell-size iota >iterator [
       gr:   swap ;
       row:  font-glyph-bytes goff gr + #peek8 ;
-      base: gy gr + fbw * gx + bpp * ;
-      fcs iota >iterator [
+      base: gy gr + framebuffer-width * gx + framebuffer-bytes-per-pixel * ;
+      font-cell-size iota >iterator [
         gc: swap ;
         row gc shift-right 1 bitand 1 =
-        [ gc bpp * base + gp #poke32! ] when
+        [ gc framebuffer-bytes-per-pixel * base + gp #poke32! ] when
       ] #each
     ] #each
     drop

@@ -1,0 +1,33 @@
+\ The marker's first use outside this suite. lib/game/draw.1z and lib/game/font.1z mark the six
+\ constants their per-pixel loops read, so a read is a push of the value in the reading body.
+\
+\ A program computes the same thing with or without the marker, so the stored body is the only
+\ place the difference shows. That is what this file looks at. A reach the engine lost would leave
+\ every one of these calls standing and nothing else in the tree would say so.
+use "game/draw" ;
+use "testing" ;
+
+body-of: ( sym -- string ) [ >word-info body>> inspect ] ;
+
+"a library's own constants read as pushes" test-section
+
+\ Short enough to pin whole, and it covers three of the six at once. The parameter is the subtle
+\ one: what the copy carries is the handle, so `get` is still there.
+clear-background: body-of
+"[ (color>packed) [ <parameter:current-framebuffer> get 0 ] dip 256 224 * #fill32! drop ]"
+"the canvas dimensions and the framebuffer handle are all pushes" assert=
+
+\ #byte-index-of-from answers f when the name does not occur, and every other answer is truthy.
+draw-rectangle: body-of "framebuffer-bytes-per-pixel" 0 #byte-index-of-from
+"draw-rectangle pushes the bytes-per-pixel value" assert-false
+
+draw-text: body-of "font-cell-size" 0 #byte-index-of-from
+"draw-text pushes the cell size, across the import from game/font" assert-false
+
+\ The hoists the marker replaced. A local read is a call that resolves a name, probes the inline
+\ cache, pushes, and then checks the effect, so there is no shape where it beats a bare push.
+draw-rectangle: body-of "fbw" 0 #byte-index-of-from
+"draw-rectangle binds no width local" assert-false
+
+draw-rectangle: body-of "bpp" 0 #byte-index-of-from
+"draw-rectangle binds no bytes-per-pixel local" assert-false
