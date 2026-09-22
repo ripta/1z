@@ -60,8 +60,9 @@ private{
     drop
   ] ;
 
-  \\ (set-pixel!) re-reads the framebuffer parameter on every pixel rather than once per call.
-  \\ This is that read, on its own, at the rate clear-background runs it.
+  \\ One framebuffer parameter read per pixel, on its own, across the whole canvas. This is the
+  \\ floor a drawing word pays when it reads the parameter inside its pixel loop instead of
+  \\ hoisting the read out of it.
   (param-get-per-pixel): ( -- ) [
     (framebuffer-pixels) iota >iterator [ drop current-framebuffer get drop ] #each
   ] ;

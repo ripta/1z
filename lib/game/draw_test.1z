@@ -148,6 +148,17 @@ test-draw-char-clips-at-both-edges: ( -- ) [
   ] with-parameter
 ] ;
 
+\\ A glyph with no pixel on the canvas at all, so every one of its 64 (set-pixel!) calls takes
+\\ the clipped branch and none takes the write branch.
+test-draw-char-entirely-off-canvas-does-not-throw: ( -- ) [
+  (scratch-framebuffer) current-framebuffer
+  [
+    -100 -100 "A" 255 255 255 255 <color> draw-char
+    400 400 "A" 255 255 255 255 <color> draw-char
+    current-framebuffer get 0 4 #peek 0 "nothing was written to the canvas" assert=
+  ] with-parameter
+] ;
+
 test-blit-sprite-clips-without-throwing: ( -- ) [
   (scratch-framebuffer) current-framebuffer
   [

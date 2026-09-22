@@ -80,13 +80,16 @@ private{
     cr cg 8 shift-left bitor cb 16 shift-left bitor ca 24 shift-left bitor
   ] ;
 
-  \\ Write one packed RGBA8888 pixel into current-framebuffer at (x, y), silently clipped if
-  \\ outside the canvas -- the standard convention for a 2D framebuffer API.
+  \\ Write one packed RGBA8888 pixel into fb at (x, y), silently clipped if outside the canvas
+  \\ -- the standard convention for a 2D framebuffer API.
   \\
-  \\ No name: swap ; locals at all: x and y are threaded through via dup/over/swap under dip,
-  \\ and the offset-or-invalid result is rearranged with rot-n> instead of naming it. This word
-  \\ is called once per pixel, up to tens of thousands of times per draw call.
-  (set-pixel!): ( x y packed -- ) [
+  \\ The framebuffer arrives as an argument and leaves as the result, the way #poke32! threads
+  \\ it, so a caller reads current-framebuffer once and keeps the buffer on the stack across a
+  \\ whole pixel loop.
+  \\
+  \\ No name: swap ; locals at all: x and y are threaded through via dup/over/swap under dip.
+  \\ This word is called once per pixel, up to tens of thousands of times per draw call.
+  (set-pixel!): ( fb x y packed -- fb ) [
     [
       dup 0 >= over framebuffer-height < and
       [
@@ -97,15 +100,15 @@ private{
       ] [ drop drop -1 ] if
     ] dip
     over 0 >=
-    [
-      current-framebuffer get
-      2 rot-n>
-      #poke32! drop
-    ] [ drop drop ] if
+    [ #poke32! ] [ drop drop ] if
   ] ;
 }
 
-draw-pixel: ( x y color -- ) [ (color>packed) (set-pixel!) ] ;
+\\ Draw one pixel at (x, y). A pixel outside the canvas is silently skipped.
+\\
+\\ 3 rot-n> buries the framebuffer under the coordinates, because (set-pixel!) takes it first so
+\\ that a glyph loop can thread it.
+draw-pixel: ( x y color -- ) [ (color>packed) current-framebuffer get 3 rot-n> (set-pixel!) drop ] ;
 
 \\ Fill the entire framebuffer with one color.
 \\
@@ -206,11 +209,14 @@ private{
   \\ The glyph loop for a cell hanging off an edge. An unset bit steers (set-pixel!) to (-1, -1),
   \\ which its own bounds check clips as a no-op, so one test covers both the unset bits and the
   \\ overhang.
+  \\
+  \\ The framebuffer is read once and threaded through the loop, the way (draw-glyph-whole) does.
   (draw-glyph-clipped): ( offset x y packed -- ) [
     cp2:  swap ;
     cy2:  swap ;
     cx2:  swap ;
     coff: swap ;
+    current-framebuffer get
     font-cell-size font-cell-size * iota >iterator [
       di: swap ;
       font-glyph-bytes coff di font-cell-size div + #peek8
@@ -221,6 +227,7 @@ private{
       cp2
       (set-pixel!)
     ] #each
+    drop
   ] ;
 
   \\ Draw one glyph from an already-packed color. The shared body under draw-char and

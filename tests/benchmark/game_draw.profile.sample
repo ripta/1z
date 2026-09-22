@@ -1,50 +1,50 @@
 -- fill --
-clear-background (57344 px)  n=500  ns/iter=9984
+clear-background (57344 px)  n=500  ns/iter=9380
 -- one pixel --
-draw-pixel  n=5000  ns/iter=13285
+draw-pixel  n=5000  ns/iter=13679
 -- text, 11 glyphs --
-draw-text on canvas  n=50  ns/iter=3725980
-draw-text clipped  n=25  ns/iter=6082080
+draw-text on canvas  n=50  ns/iter=3752700
+draw-text clipped  n=25  ns/iter=6093880
 
 === Word Profile (top 40 by total time) ===
   Word                   Calls    Total time     Self time   Time/call
-  #each                  5,314        315.460 ms    104.768 ms   59.363 us
-  if                     201,299      223.794 ms     64.984 ms    1.111 us
-  dip                    34,287       210.393 ms     16.788 ms    6.136 us
-  2dip                   5,575         88.616 ms      2.250 ms   15.895 us
-  >=                     57,758        48.628 ms     17.114 ms      841 ns
-  ;                      114,932       22.670 ms     22.493 ms      197 ns
-  2dup                   64,797        12.905 ms      9.662 ms      199 ns
-  +                      128,575       11.080 ms     11.080 ms       86 ns
-  (color>packed)         5,575         10.559 ms      5.149 ms    1.893 us
-  and                    35,989         9.943 ms      7.452 ms      276 ns
-  *                      82,227         7.587 ms      7.587 ms       92 ns
-  2drop                  35,009         7.569 ms      5.803 ms      216 ns
-  #peek8                 22,000         7.049 ms      5.734 ms      320 ns
-  =                      60,665         6.113 ms      6.113 ms      100 ns
-  #poke32!               24,900         6.080 ms      4.972 ms      244 ns
-  shift-right            52,800         5.371 ms      5.371 ms      101 ns
-  when                   35,207         5.122 ms      5.105 ms      145 ns
-  over                   192,288        5.083 ms      5.083 ms       26 ns
-  di                     70,400         5.053 ms      5.053 ms       71 ns
-  <                      41,283         4.906 ms      4.906 ms      118 ns
-  bitand                 52,800         4.556 ms      4.556 ms       86 ns
-  >iterator              5,310          4.223 ms      1.972 ms      795 ns
-  swap                   139,460        3.595 ms      3.595 ms       25 ns
-  gc                     49,200         3.384 ms      3.384 ms       68 ns
-  -                      41,600         3.374 ms      3.374 ms       81 ns
-  drop                   129,433        3.327 ms      3.327 ms       25 ns
-  %                      35,200         3.278 ms      3.278 ms       93 ns
-  >                      64,162         3.215 ms      3.215 ms       50 ns
-  iota                   5,300          2.572 ms      2.572 ms      485 ns
-  #poke!                 24,900         2.416 ms      2.416 ms       97 ns
-  benchmark              4              2.325 ms      7.000 us  581.250 us
-  bit                    35,200         2.322 ms      2.322 ms       65 ns
-  with-parameter         1              2.194 ms     15.000 us    2.194 ms
-  unmake-range           5,300          1.960 ms      1.960 ms      369 ns
-  dup                    57,811         1.941 ms      1.941 ms       33 ns
-  (benchmark-n)          4              1.787 ms     11.000 us  446.750 us
-  shift-left             16,725         1.697 ms      1.697 ms      101 ns
-  (set-pixel!)           22,600         1.542 ms      1.542 ms       68 ns
-  <=                     1,658          1.539 ms    519.000 us      928 ns
-  (font-glyph-offset)    825            1.520 ms    438.000 us    1.842 us
+  #each                  5,314        315.831 ms    107.167 ms   59.433 us
+  if                     201,299      224.313 ms     64.536 ms    1.114 us
+  dip                    34,287       211.492 ms     16.547 ms    6.168 us
+  2dip                   5,575         89.572 ms      2.433 ms   16.066 us
+  >=                     57,758        47.206 ms     16.552 ms      817 ns
+  ;                      114,932       23.140 ms     22.980 ms      201 ns
+  2dup                   64,797        12.133 ms      8.808 ms      187 ns
+  and                    35,989        11.218 ms      8.661 ms      311 ns
+  +                      128,575       11.081 ms     11.081 ms       86 ns
+  (color>packed)         5,575         11.065 ms      5.552 ms    1.984 us
+  *                      82,227         7.808 ms      7.808 ms       94 ns
+  2drop                  35,009         7.681 ms      5.884 ms      219 ns
+  #peek8                 22,000         7.126 ms      5.987 ms      323 ns
+  #poke32!               24,900         6.598 ms      5.608 ms      264 ns
+  =                      60,665         6.091 ms      6.091 ms      100 ns
+  shift-right            52,800         5.413 ms      5.413 ms      102 ns
+  when                   35,207         5.256 ms      5.240 ms      149 ns
+  over                   192,288        5.185 ms      5.185 ms       26 ns
+  di                     70,400         4.835 ms      4.835 ms       68 ns
+  bitand                 52,800         4.788 ms      4.788 ms       90 ns
+  >iterator              5,310          4.217 ms      1.959 ms      794 ns
+  <                      41,283         3.817 ms      3.817 ms       92 ns
+  swap                   139,460        3.661 ms      3.661 ms       26 ns
+  gc                     49,200         3.380 ms      3.380 ms       68 ns
+  -                      41,600         3.365 ms      3.365 ms       80 ns
+  drop                   129,433        3.318 ms      3.318 ms       25 ns
+  %                      35,200         3.165 ms      3.165 ms       89 ns
+  >                      64,162         3.130 ms      3.130 ms       48 ns
+  iota                   5,300          2.565 ms      2.565 ms      483 ns
+  #poke!                 24,900         2.242 ms      2.242 ms       90 ns
+  bit                    35,200         2.217 ms      2.217 ms       62 ns
+  benchmark              4              2.160 ms      6.000 us  540.000 us
+  with-parameter         1              2.027 ms      6.000 us    2.027 ms
+  unmake-range           5,300          1.971 ms      1.971 ms      371 ns
+  dup                    57,811         1.844 ms      1.844 ms       31 ns
+  (font-glyph-offset)    825            1.761 ms    524.000 us    2.134 us
+  shift-left             16,725         1.686 ms      1.686 ms      100 ns
+  (benchmark-n)          4              1.663 ms     15.000 us  415.750 us
+  (set-pixel!)           22,600         1.604 ms      1.604 ms       70 ns
+  <=                     1,658          1.520 ms    494.000 us      916 ns
