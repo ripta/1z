@@ -1,0 +1,9 @@
+pragma{ lint-suppress: { non-kebab-case: missing-stack-effect: } }
+
+\\ The first definition after a brace-terminated statement, which non-kebab-case never examines.
+first-word: ( -- fixnum ) [ 1 ] ;
+
+\\ A non-kebab name with no stack effect, both of which the pragma suppresses.
+otherBadName: [ 2 ] ;
+
+undocumented-word: ( -- fixnum ) [ 3 ] ;

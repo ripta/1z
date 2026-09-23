@@ -1,0 +1,37 @@
+Stack: [ ]
+=== lint-suppress collection ===
+Stack: [ ]
+Stack: [ { "non-kebab-case" } ]
+PASS: one rule
+Stack: [ ]
+Stack: [ { "non-kebab-case" "dead-definition" } ]
+PASS: several rules
+Stack: [ ]
+Stack: [ { } ]
+PASS: an empty list is present but names nothing
+Stack: [ ]
+Stack: [ { "non-kebab-case" } ]
+PASS: a definition after the pragma
+Stack: [ ]
+Stack: [ f ]
+PASS: no pragma
+Stack: [ ]
+Stack: [ f ]
+PASS: an unrelated pragma
+Stack: [ ]
+=== key position ===
+Stack: [ ]
+Stack: [ { "non-kebab-case" } ]
+PASS: the key after another key
+Stack: [ ]
+Stack: [ { "dead-definition" } ]
+PASS: a symbol inside another key's value is not a key
+Stack: [ ]
+Stack: [ f ]
+PASS: the key outside a pragma block
+Stack: [ ]
+=== repeated entries ===
+Stack: [ ]
+Stack: [ { "non-kebab-case" "dead-definition" } ]
+PASS: two blocks give the union
+Stack: [ ]

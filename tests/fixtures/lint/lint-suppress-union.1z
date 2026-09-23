@@ -1,0 +1,11 @@
+pragma{ suppress-undeclared: t lint-suppress: { non-kebab-case: } }
+
+\\ The first definition after a brace-terminated statement, which non-kebab-case never examines.
+first-word: ( -- fixnum ) [ 1 ] ;
+
+\\ A non-kebab name, suppressed by the first pragma's second key.
+otherBadName: ( -- fixnum ) [ 2 ] ;
+
+pragma{ lint-suppress: { missing-doc-comment: } }
+
+undocumented-word: ( -- fixnum ) [ 3 ] ;

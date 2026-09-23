@@ -1,0 +1,25 @@
+use "testing" ;
+
+pragma{ lint-suppress: { non-kebab-case: dead-definition: } }
+
+"lint-suppress pragma" test-section
+
+t "a file carrying the pragma loads and runs" assert-true
+
+\ The message a pragma raises when set to source, or f when it is accepted.
+(pragma-message): ( source -- message/f ) [
+  [ eval-string f ] [ message: @get ] recover
+] ;
+
+"pragma{ lint-suppress: { } }" (pragma-message) f "an empty list is accepted" assert=
+
+"lint-suppress: expected an array of rule-id symbols, such as { non-kebab-case: }"
+(expected-message): swap ;
+
+[ "pragma{ lint-suppress: 5 }" eval-string ] pragma-error: "a fixnum is refused" assert-error-type
+"pragma{ lint-suppress: 5 }" (pragma-message) (expected-message) "a fixnum names the expected shape" assert=
+
+[ "pragma{ lint-suppress: t }" eval-string ] pragma-error: "a boolean is refused" assert-error-type
+
+[ "pragma{ lint-suppress: { \"non-kebab-case\" } }" eval-string ] pragma-error: "a string rule id is refused" assert-error-type
+"pragma{ lint-suppress: { \"non-kebab-case\" } }" (pragma-message) (expected-message) "a string rule id names the expected shape" assert=

@@ -387,6 +387,7 @@ parse-literal                   \ read and resolve next literal
 ```
 pragma{ require-doc: "relaxed" }  \ file-scoped directive
 "require-doc" pragma?             \ query at parse time
+pragma{ lint-suppress: { non-kebab-case: } }  \ opt this file out of lint rules
 
 \ these two are settable only from a startup file or a REPL prompt
 pragma{ dictionary-shadow: "warning" }  \ relax the prelude/native shadow guard

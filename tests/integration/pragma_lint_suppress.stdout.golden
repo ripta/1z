@@ -1,0 +1,19 @@
+=== lint-suppress pragma ===
+Stack: [ ]
+PASS: a file carrying the pragma loads and runs
+Stack: [ ]
+Stack: [ ]
+PASS: an empty list is accepted
+Stack: [ ]
+Stack: [ "lint-suppress: expected an array of rule-id symbols, such as { non-kebab-case: }" ]
+Stack: [ ]
+PASS: a fixnum is refused
+Stack: [ ]
+PASS: a fixnum names the expected shape
+Stack: [ ]
+PASS: a boolean is refused
+Stack: [ ]
+PASS: a string rule id is refused
+Stack: [ ]
+PASS: a string rule id names the expected shape
+Stack: [ ]

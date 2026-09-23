@@ -1,0 +1,7 @@
+pragma{ lint-suppress: { non-kebab-case: no-such-rule: } }
+
+\\ The first definition after a brace-terminated statement, which non-kebab-case never examines.
+first-word: ( -- fixnum ) [ 1 ] ;
+
+\\ A non-kebab name, still suppressed beside the unknown id.
+otherBadName: ( -- fixnum ) [ 2 ] ;

@@ -1,0 +1,4 @@
+tests/fixtures/lint/lint-suppress.1z:4:33: info: [dead-definition] definition is not referenced by any other checked-file word
+tests/fixtures/lint/lint-suppress.1z:7:21: info: [dead-definition] definition is not referenced by any other checked-file word
+tests/fixtures/lint/lint-suppress.1z:9:40: info: [missing-doc-comment] public word lacks a doc comment
+tests/fixtures/lint/lint-suppress.1z:9:40: info: [dead-definition] definition is not referenced by any other checked-file word

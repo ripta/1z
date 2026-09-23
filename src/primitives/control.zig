@@ -365,6 +365,32 @@ fn collisionGuardValueOk(val: Value) bool {
     }
 }
 
+/// Native validator for the lint-suppress pragma, which names the linter rules a file opts out of.
+///
+/// Nothing at runtime reads the value back. The linter finds it by scanning the file's tokens, so
+/// this only keeps a file carrying the pragma loadable, and holds the value to the shape that scan
+/// understands. Rule ids are not checked here, because only the linter knows which rules exist.
+pub fn nativeLintSuppressValidator(ctx: *Context) anyerror!void {
+    const val = try ctx.stack.pop();
+    defer container_backing.releaseValue(val);
+
+    const ok = switch (val) {
+        .array => |a| for (a.items) |item| {
+            if (item != .symbol) break false;
+        } else true,
+        else => false,
+    };
+
+    if (ok) {
+        try ctx.stack.push(val);
+        try ctx.stack.push(.{ .boolean = true });
+        return;
+    }
+
+    try ctx.stack.push(value_mod.stringValue("lint-suppress: expected an array of rule-id symbols, such as { non-kebab-case: }"));
+    try ctx.stack.push(.{ .boolean = false });
+}
+
 /// Native validator for the require-doc pragma. Maps level names to the bitmask
 /// consumed by enforceRequireDoc. Follows the same push-value/t or push-error/f
 /// protocol as the other pragma validators.

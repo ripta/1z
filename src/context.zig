@@ -2043,6 +2043,10 @@ pub const Context = struct {
 
         try self.pragma_registry.put(self.allocator, "allow-uninhabited-constraint", .{});
 
+        try self.pragma_registry.put(self.allocator, "lint-suppress", .{
+            .native_validator = &control.nativeLintSuppressValidator,
+        });
+
         // Split prelude into lines and process incrementally
         const source = external_source orelse prelude_source;
         var lines = std.mem.splitScalar(u8, source, '\n');

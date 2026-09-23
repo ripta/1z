@@ -165,15 +165,12 @@ definition-symbol?: ( token -- ? ) [
 
 \ --- Pragma suppression parsing ---
 
-\ Scan a materialized token array for pragma{ lint-suppress: { rule1 rule2 ... } }.
-\ Returns an array of suppressed rule ID strings, or f if no suppression found.
+\ A file opts out of rules with pragma{ lint-suppress: { non-kebab-case: dead-definition: } }.
 \
-\ Looks for the three-token prefix pragma{ lint-suppress: { in the
-\ significant (non-whitespace, non-newline) tokens, then collects
-\ word values until the first close-brace.
-(parse-suppressions): ( tokens -- suppressions-or-f ) [
-  drop f
-] ;
+\ The key may sit anywhere among a pragma block's keys, and every entry in the file counts.
+\
+\ The suppression list is the entries' rule-id symbol tokens, kept as tokens so a diagnostic about
+\ an unknown id can point at it.
 
 \ Check if a token matches kind and value.
 (tok-match?): ( token kind value -- bool ) [
@@ -183,48 +180,104 @@ definition-symbol?: ( token -- ? ) [
   [ swap value>> = ] dip and
 ] ;
 
-\ Find the lint-suppress pragma prefix in a significant-token array.
-\ Scans for pragma{ lint-suppress: { anywhere in the token stream,
-\ then collects word values until close-brace.
-(find-suppress-prefix): ( sig-tokens -- suppressions-or-f ) [
-  dup #len 4 < [ drop f ] [
-    \ Find index of pragma{ token with value "pragma{"
-    f  \ result
-    over #len 2 - 0 swap <range> >iterator [
-      \ stack: sig-tokens result i
-      over f = [
-        \ result is still f: check this position
-        2 pick-n over #nth open-brace: "pragma{" (tok-match?)
-        [
-          2 pick-n over ++ #nth symbol: "lint-suppress:" (tok-match?)
-          [
-            2 pick-n over 2 + #nth open-brace: "{" (tok-match?)
-            [
-              \ Found: collect from i+3 until close-brace
-              2 pick-n swap 3 + #drop
-              \ stack: sig-tokens result remaining-sig-tokens
-              { } swap
-              [
-                dup #len 0 > [
-                  dup 0 #nth kind>> close-brace: = [
-                    drop f
-                  ] [
-                    dup 0 #nth value>> [ 1array #append ] dip
-                    1 #drop t
-                  ] if
-                ] [ f ] if
-              ] loop
-              drop
-              \ stack: sig-tokens old-result collected-rules
-              nip
-            ] when
-          ] when
-        ] when
-        drop
-      ] [ drop ] if
-    ] #each
-    nip
+\ Whether index i is inside sig-tokens and the token there matches kind and value.
+(tok-at?): ( sig-tokens i kind value -- bool ) [
+  2over swap #len < [
+    [ #nth ] 2dip (tok-match?)
+  ] [
+    2drop 2drop f
   ] if
+] ;
+
+\ Collect the symbol tokens from index i up to the close-brace ending a lint-suppress array, and
+\ return them with the index just past that close-brace.
+(collect-rule-symbols): ( sig-tokens i -- symbols next ) [
+  { } swap
+  \ stack: sig-tokens symbols i
+  [
+    2 pick-n #len over > [
+      2 pick-n over #nth
+      dup close-brace: token-kind? [
+        drop ++ f
+      ] [
+        dup symbol: token-kind? [
+          1array swap [ #append ] dip
+        ] [
+          drop
+        ] if
+        ++ t
+      ] if
+    ] [ f ] if
+  ] loop
+  <rot- drop
+] ;
+
+\ Add the rule symbols of the lint-suppress entry whose key is at index i to suppressions, and
+\ return the index just past the entry's array.
+(take-suppress-entry): ( sig-tokens suppressions i depth -- sig-tokens suppressions' next depth ) [
+  [
+    2 + 2 pick-n swap (collect-rule-symbols)
+    \ stack: sig-tokens suppressions symbols next
+    [ over f = [ nip ] [ #append ] if ] dip
+  ] dip
+] ;
+
+\ Add the rule symbols of every lint-suppress entry in one pragma block to suppressions, which is f
+\ until the first entry is found. The block's contents start at index i.
+\
+\ Only the block's own keys sit at depth 1, so counting brace depth keeps a symbol inside another
+\ key's value from being read as the key.
+(scan-pragma-block): ( sig-tokens i suppressions -- suppressions' ) [
+  swap 1
+  \ stack: sig-tokens suppressions i depth
+  [
+    over 4 pick-n #len < over 0 > and [
+      dup 1 = [
+        3 pick-n 2 pick-n symbol: "lint-suppress:" (tok-at?) [
+          3 pick-n 2 pick-n ++ open-brace: "{" (tok-at?)
+        ] [ f ] if
+      ] [ f ] if
+      [
+        (take-suppress-entry)
+      ] [
+        3 pick-n 2 pick-n #nth kind>>
+        dup open-brace: = [
+          drop ++
+        ] [
+          close-brace: = [ 1 - ] [ ] if
+        ] if
+        [ ++ ] dip
+      ] if
+      t
+    ] [ f ] if
+  ] loop
+  2drop nip
+] ;
+
+\ The suppression list for a significant-token array, or f when the file has no lint-suppress entry.
+(collect-suppressions): ( sig-tokens -- suppressions-or-f ) [
+  f 0
+  \ stack: sig-tokens suppressions i
+  [
+    2 pick-n #len over > [
+      2 pick-n over open-brace: "pragma{" (tok-at?) [
+        2 pick-n over ++ 3 pick-n (scan-pragma-block)
+        swap [ nip ] dip
+      ] [ ] if
+      ++ t
+    ] [ f ] if
+  ] loop
+  drop nip
+] ;
+
+\ The suppression list for a file's full token array, or f when it has no lint-suppress entry.
+(parse-suppressions): ( tokens -- suppressions-or-f ) [
+  [ significant-token? ] #filter #collect (collect-suppressions)
+] ;
+
+\ The rule id a suppression token names, which is the symbol without its colon.
+(suppression-rule-id): ( token -- string ) [
+  value>> dup #len 1 - #take
 ] ;
 
 \\ Check whether a rule ID is in the suppression list.
@@ -232,7 +285,31 @@ definition-symbol?: ( token -- ? ) [
   dup f = [
     2drop f
   ] [
-    swap [ = ] curry #any
+    swap [ swap (suppression-rule-id) = ] curry #any
+  ] if
+] ;
+
+\ Report a suppression token whose rule id names none of the rules being run. A misspelled id would
+\ otherwise suppress nothing and say nothing.
+(unknown-suppression-diagnostic): ( token ctx -- diagnostic ) [
+  "unknown-suppressed-rule" warning:
+  2 pick-n 0 #nth
+  3 pick-n 4 #nth
+  5 pick-n
+  dup (suppression-rule-id) "lint-suppress names no lint rule: " swap #append
+  diag-at-token
+  2nip
+] ;
+
+\ The unknown-suppressed-rule diagnostics for one file's lint context.
+(unknown-suppression-diagnostics): ( rules ctx -- diagnostics ) [
+  dup 3 #nth dup f = [
+    3drop { }
+  ] [
+    <rot- [ id>> ] #map #collect
+    \ stack: ctx suppressions rule-ids
+    [ swap (suppression-rule-id) #in? not ] curry #filter #collect
+    swap [ (unknown-suppression-diagnostic) ] curry #map #collect
   ] if
 ] ;
 
@@ -319,12 +396,16 @@ lint-module-exports: ( resolved-path -- array ) [
 
   6 array-n
   \ stack: rules(1) ctx(0)
-  dup [ swap ] dip
-  \ stack: ctx(2) rules(1) ctx(0)
-  [ (lint-rule-with-context) ] curry #map #collect
-  { } [ #append ] #reduce
-  \ stack: ctx(1) diagnostics(0)
-  swap (append-semantic-context-diagnostic)
+  2dup (unknown-suppression-diagnostics)
+  [
+    dup [ swap ] dip
+    \ stack: ctx(2) rules(1) ctx(0)
+    [ (lint-rule-with-context) ] curry #map #collect
+    { } [ #append ] #reduce
+    \ stack: ctx(1) diagnostics(0)
+    swap (append-semantic-context-diagnostic)
+  ] dip
+  #append
 ] ;
 
 \\ Build the diagnostic reported when the semantic context could not be

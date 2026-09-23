@@ -1,0 +1,45 @@
+use "testing" ;
+use "1z-tokens" ;
+borrow "lint" ;
+
+\ The rule ids a source's lint-suppress entries name, or f when it has none.
+(suppressed-ids): ( source -- ids/f ) [
+  1z-tokenize #collect (parse-suppressions)
+  dup f = [ ] [ [ (suppression-rule-id) ] #map #collect ] if
+] ;
+
+"lint-suppress collection" test-section
+
+"pragma{ lint-suppress: { non-kebab-case: } }" (suppressed-ids)
+{ "non-kebab-case" } "one rule" assert=
+
+"pragma{ lint-suppress: { non-kebab-case: dead-definition: } }" (suppressed-ids)
+{ "non-kebab-case" "dead-definition" } "several rules" assert=
+
+"pragma{ lint-suppress: { } }" (suppressed-ids)
+{ } "an empty list is present but names nothing" assert=
+
+"pragma{ lint-suppress: { non-kebab-case: } } badName: [ 1 ] ;" (suppressed-ids)
+{ "non-kebab-case" } "a definition after the pragma" assert=
+
+"foo: ( -- fixnum ) [ 1 ] ;" (suppressed-ids)
+f "no pragma" assert=
+
+"pragma{ type-check: \"off\" }" (suppressed-ids)
+f "an unrelated pragma" assert=
+
+"key position" test-section
+
+"pragma{ suppress-undeclared: t lint-suppress: { non-kebab-case: } }" (suppressed-ids)
+{ "non-kebab-case" } "the key after another key" assert=
+
+"pragma{ import-collision: { lint-suppress: { non-kebab-case: } } lint-suppress: { dead-definition: } }" (suppressed-ids)
+{ "dead-definition" } "a symbol inside another key's value is not a key" assert=
+
+"lint-suppress: { non-kebab-case: } drop" (suppressed-ids)
+f "the key outside a pragma block" assert=
+
+"repeated entries" test-section
+
+"pragma{ lint-suppress: { non-kebab-case: } } pragma{ lint-suppress: { dead-definition: } }" (suppressed-ids)
+{ "non-kebab-case" "dead-definition" } "two blocks give the union" assert=
