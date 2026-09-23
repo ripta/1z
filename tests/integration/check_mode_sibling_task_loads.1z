@@ -1,0 +1,19 @@
+\ Two tasks each check-load a file that registers an `#in?` arm the prelude already fills. The loads
+\ are independent, so neither may see the other's arm as its own. A task starts from a fresh context,
+\ so this pins that the two loads draw distinct identities rather than both starting from one.
+
+use "testing" ;
+
+"sibling check-mode loads each replace the base arm" test-section
+
+check-load: ( -- ) [ M{ } "tests/fixtures/check_mode/method_on_native.1z" native.load-check-file drop ] ;
+
+[
+  done: 2 <buffered-channel> ;
+  [ check-load t done send ] spawn drop
+  [ check-load t done send ] spawn drop
+  done receive drop
+  done receive drop
+] task-scope
+
+{ 1 2 } 2 #in? "the prelude's #in? arm still answers" assert-true

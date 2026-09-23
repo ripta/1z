@@ -1,0 +1,9 @@
+\ Registers an `#in?` arm for arrays, the key the prelude already fills. Running this file raises
+\ duplicate-method on that arm. Checking or linting it reports the diagnostics below the arm instead
+\ of aborting on it.
+
+#in?: method{ array any } [ [ = ] curry #any ] ;
+
+bad-decl: ( -- x ) [ 1 2 ] ;
+
+no-effect: [ 1 ] ;

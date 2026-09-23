@@ -1,0 +1,7 @@
+\ Registers the same `#in?` arm twice. The first replaces the prelude's arm, so checking gets past
+\ it. The second collides with an arm this file registered, so checking still aborts with
+\ duplicate-method.
+
+#in?: method{ array any } [ [ = ] curry #any ] ;
+
+#in?: method{ array any } [ 2drop f ] ;

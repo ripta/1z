@@ -1,0 +1,6 @@
+=== sibling check-mode loads each replace the base arm ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: the prelude's #in? arm still answers
+Stack: [ ]

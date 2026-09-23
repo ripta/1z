@@ -856,7 +856,7 @@ export fn onez_check(ptr: ?*anyopaque, code: [*]const u8, len: usize) c_int {
     defer ctx.popPragmaFrame();
 
     const prev_check_mode = ctx.check_mode;
-    ctx.check_mode = true;
+    ctx.enterCheckMode();
     defer ctx.check_mode = prev_check_mode;
 
     var processor: StatementProcessor = .{};

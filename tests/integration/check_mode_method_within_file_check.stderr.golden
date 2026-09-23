@@ -1,0 +1,3 @@
+src/prelude.1z:254: error 'duplicate-method' method for '#in?' with types (array, *) already registered (use `mutable` to overwrite) at word 'define-method'
+  stack effect: ( name descriptor markers --  )
+  called from tests/fixtures/check_mode/method_within_file.1z:7: ;

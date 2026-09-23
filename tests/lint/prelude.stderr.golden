@@ -1,0 +1,419 @@
+src/prelude.1z:4:1: warning: [orphaned-doc-comment] doc comment not followed by a definition
+src/prelude.1z:5:30: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:13:1: warning: [orphaned-doc-comment] doc comment not followed by a definition
+src/prelude.1z:15:46: warning: [missing-stack-effect] public word lacks a declared stack effect
+src/prelude.1z:15:46: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:17:1: warning: [orphaned-doc-comment] doc comment not followed by a definition
+src/prelude.1z:19:59: warning: [missing-stack-effect] public word lacks a declared stack effect
+src/prelude.1z:19:59: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:23:63: warning: [missing-stack-effect] public word lacks a declared stack effect
+src/prelude.1z:23:63: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:27:45: warning: [missing-stack-effect] public word lacks a declared stack effect
+src/prelude.1z:27:45: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:29:1: warning: [orphaned-doc-comment] doc comment not followed by a definition
+src/prelude.1z:31:64: warning: [missing-stack-effect] public word lacks a declared stack effect
+src/prelude.1z:31:64: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:37:38: warning: [missing-stack-effect] public word lacks a declared stack effect
+src/prelude.1z:37:38: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:77:43: warning: [missing-stack-effect] public word lacks a declared stack effect
+src/prelude.1z:77:43: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:79:1: warning: [orphaned-doc-comment] doc comment not followed by a definition
+src/prelude.1z:86:3: warning: [missing-stack-effect] public word lacks a declared stack effect
+src/prelude.1z:86:3: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:88:1: warning: [orphaned-doc-comment] doc comment not followed by a definition
+src/prelude.1z:102:3: warning: [missing-stack-effect] public word lacks a declared stack effect
+src/prelude.1z:102:3: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:104:1: warning: [orphaned-doc-comment] doc comment not followed by a definition
+src/prelude.1z:111:3: warning: [missing-stack-effect] public word lacks a declared stack effect
+src/prelude.1z:111:3: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:113:1: warning: [orphaned-doc-comment] doc comment not followed by a definition
+src/prelude.1z:117:3: warning: [missing-stack-effect] public word lacks a declared stack effect
+src/prelude.1z:117:3: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:191:3: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:218:3: info: [complex-word-undocumented] complex word should include a doc comment example
+src/prelude.1z:218:3: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:246:3: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:248:1: warning: [orphaned-doc-comment] doc comment not followed by a definition
+src/prelude.1z:255:3: warning: [missing-stack-effect] public word lacks a declared stack effect
+src/prelude.1z:255:3: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:267:3: warning: [missing-stack-effect] public word lacks a declared stack effect
+src/prelude.1z:267:3: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:298:3: warning: [missing-stack-effect] public word lacks a declared stack effect
+src/prelude.1z:298:3: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:354:49: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:356:42: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:359:68: info: [complex-word-undocumented] complex word should include a doc comment example
+src/prelude.1z:359:68: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:362:1: warning: [non-kebab-case] definition name is not kebab-case
+src/prelude.1z:362:55: info: [missing-doc-comment] public word lacks a doc comment
+src/prelude.1z:362:55: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:363:1: warning: [non-kebab-case] definition name is not kebab-case
+src/prelude.1z:363:53: info: [missing-doc-comment] public word lacks a doc comment
+src/prelude.1z:364:1: warning: [non-kebab-case] definition name is not kebab-case
+src/prelude.1z:364:56: info: [missing-doc-comment] public word lacks a doc comment
+src/prelude.1z:364:56: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:365:1: warning: [non-kebab-case] definition name is not kebab-case
+src/prelude.1z:365:55: info: [missing-doc-comment] public word lacks a doc comment
+src/prelude.1z:365:55: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:366:1: warning: [non-kebab-case] definition name is not kebab-case
+src/prelude.1z:366:61: info: [missing-doc-comment] public word lacks a doc comment
+src/prelude.1z:366:61: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:367:1: warning: [non-kebab-case] definition name is not kebab-case
+src/prelude.1z:367:52: info: [missing-doc-comment] public word lacks a doc comment
+src/prelude.1z:367:52: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:368:1: warning: [non-kebab-case] definition name is not kebab-case
+src/prelude.1z:368:54: info: [missing-doc-comment] public word lacks a doc comment
+src/prelude.1z:368:54: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:369:1: warning: [non-kebab-case] definition name is not kebab-case
+src/prelude.1z:369:56: info: [missing-doc-comment] public word lacks a doc comment
+src/prelude.1z:369:56: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:370:1: warning: [non-kebab-case] definition name is not kebab-case
+src/prelude.1z:370:53: info: [missing-doc-comment] public word lacks a doc comment
+src/prelude.1z:370:53: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:371:1: warning: [non-kebab-case] definition name is not kebab-case
+src/prelude.1z:371:51: info: [missing-doc-comment] public word lacks a doc comment
+src/prelude.1z:371:51: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:372:1: warning: [non-kebab-case] definition name is not kebab-case
+src/prelude.1z:372:53: info: [missing-doc-comment] public word lacks a doc comment
+src/prelude.1z:373:1: warning: [non-kebab-case] definition name is not kebab-case
+src/prelude.1z:373:54: info: [missing-doc-comment] public word lacks a doc comment
+src/prelude.1z:373:54: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:374:1: warning: [non-kebab-case] definition name is not kebab-case
+src/prelude.1z:374:38: info: [missing-doc-comment] public word lacks a doc comment
+src/prelude.1z:374:38: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:375:1: warning: [non-kebab-case] definition name is not kebab-case
+src/prelude.1z:375:55: info: [missing-doc-comment] public word lacks a doc comment
+src/prelude.1z:376:1: warning: [non-kebab-case] definition name is not kebab-case
+src/prelude.1z:376:61: info: [missing-doc-comment] public word lacks a doc comment
+src/prelude.1z:376:61: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:377:1: warning: [non-kebab-case] definition name is not kebab-case
+src/prelude.1z:377:54: info: [missing-doc-comment] public word lacks a doc comment
+src/prelude.1z:377:54: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:378:1: warning: [non-kebab-case] definition name is not kebab-case
+src/prelude.1z:378:54: info: [missing-doc-comment] public word lacks a doc comment
+src/prelude.1z:378:54: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:379:1: warning: [non-kebab-case] definition name is not kebab-case
+src/prelude.1z:379:59: info: [missing-doc-comment] public word lacks a doc comment
+src/prelude.1z:379:59: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:380:1: warning: [non-kebab-case] definition name is not kebab-case
+src/prelude.1z:380:56: info: [missing-doc-comment] public word lacks a doc comment
+src/prelude.1z:381:1: warning: [non-kebab-case] definition name is not kebab-case
+src/prelude.1z:381:55: info: [missing-doc-comment] public word lacks a doc comment
+src/prelude.1z:381:55: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:382:1: warning: [non-kebab-case] definition name is not kebab-case
+src/prelude.1z:382:59: info: [missing-doc-comment] public word lacks a doc comment
+src/prelude.1z:382:59: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:383:1: warning: [non-kebab-case] definition name is not kebab-case
+src/prelude.1z:383:58: info: [missing-doc-comment] public word lacks a doc comment
+src/prelude.1z:383:58: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:384:1: warning: [non-kebab-case] definition name is not kebab-case
+src/prelude.1z:384:54: info: [missing-doc-comment] public word lacks a doc comment
+src/prelude.1z:384:54: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:385:1: warning: [non-kebab-case] definition name is not kebab-case
+src/prelude.1z:385:57: info: [missing-doc-comment] public word lacks a doc comment
+src/prelude.1z:385:57: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:386:1: warning: [non-kebab-case] definition name is not kebab-case
+src/prelude.1z:386:56: info: [missing-doc-comment] public word lacks a doc comment
+src/prelude.1z:386:56: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:387:1: warning: [non-kebab-case] definition name is not kebab-case
+src/prelude.1z:387:54: info: [missing-doc-comment] public word lacks a doc comment
+src/prelude.1z:387:54: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:397:91: info: [complex-word-undocumented] complex word should include a doc comment example
+src/prelude.1z:401:53: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:410:3: info: [complex-word-undocumented] complex word should include a doc comment example
+src/prelude.1z:413:48: info: [missing-doc-comment] public word lacks a doc comment
+src/prelude.1z:413:48: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:414:49: info: [missing-doc-comment] public word lacks a doc comment
+src/prelude.1z:414:49: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:415:48: info: [missing-doc-comment] public word lacks a doc comment
+src/prelude.1z:416:48: info: [missing-doc-comment] public word lacks a doc comment
+src/prelude.1z:417:47: info: [missing-doc-comment] public word lacks a doc comment
+src/prelude.1z:417:47: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:418:51: info: [missing-doc-comment] public word lacks a doc comment
+src/prelude.1z:419:46: info: [missing-doc-comment] public word lacks a doc comment
+src/prelude.1z:419:46: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:420:48: info: [missing-doc-comment] public word lacks a doc comment
+src/prelude.1z:420:48: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:421:52: info: [missing-doc-comment] public word lacks a doc comment
+src/prelude.1z:421:52: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:422:38: info: [missing-doc-comment] public word lacks a doc comment
+src/prelude.1z:422:38: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:423:60: info: [missing-doc-comment] public word lacks a doc comment
+src/prelude.1z:423:60: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:424:58: info: [missing-doc-comment] public word lacks a doc comment
+src/prelude.1z:424:58: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:425:66: info: [missing-doc-comment] public word lacks a doc comment
+src/prelude.1z:425:66: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:426:47: info: [missing-doc-comment] public word lacks a doc comment
+src/prelude.1z:426:47: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:427:50: info: [missing-doc-comment] public word lacks a doc comment
+src/prelude.1z:427:50: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:428:47: info: [missing-doc-comment] public word lacks a doc comment
+src/prelude.1z:428:47: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:429:47: info: [missing-doc-comment] public word lacks a doc comment
+src/prelude.1z:429:47: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:430:49: info: [missing-doc-comment] public word lacks a doc comment
+src/prelude.1z:430:49: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:431:46: info: [missing-doc-comment] public word lacks a doc comment
+src/prelude.1z:432:47: info: [missing-doc-comment] public word lacks a doc comment
+src/prelude.1z:432:47: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:439:69: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:443:57: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:445:46: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:448:29: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:452:1: warning: [non-kebab-case] definition name is not kebab-case
+src/prelude.1z:459:90: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:463:74: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:465:69: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:471:57: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:473:114: info: [complex-word-undocumented] complex word should include a doc comment example
+src/prelude.1z:473:114: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:475:137: info: [complex-word-undocumented] complex word should include a doc comment example
+src/prelude.1z:475:137: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:475:137: warning: [mutation-suffix-misuse] word with ! suffix does not appear to perform mutation
+src/prelude.1z:499:60: info: [complex-word-undocumented] complex word should include a doc comment example
+src/prelude.1z:503:39: info: [complex-word-undocumented] complex word should include a doc comment example
+src/prelude.1z:503:39: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:507:60: info: [complex-word-undocumented] complex word should include a doc comment example
+src/prelude.1z:507:60: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:513:43: info: [complex-word-undocumented] complex word should include a doc comment example
+src/prelude.1z:513:43: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:515:33: info: [complex-word-undocumented] complex word should include a doc comment example
+src/prelude.1z:516:1: warning: [orphaned-doc-comment] doc comment not followed by a definition
+src/prelude.1z:517:46: info: [complex-word-undocumented] complex word should include a doc comment example
+src/prelude.1z:517:46: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:518:1: warning: [orphaned-doc-comment] doc comment not followed by a definition
+src/prelude.1z:519:36: info: [complex-word-undocumented] complex word should include a doc comment example
+src/prelude.1z:519:36: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:520:1: warning: [orphaned-doc-comment] doc comment not followed by a definition
+src/prelude.1z:521:38: info: [complex-word-undocumented] complex word should include a doc comment example
+src/prelude.1z:521:38: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:522:1: warning: [orphaned-doc-comment] doc comment not followed by a definition
+src/prelude.1z:523:40: info: [complex-word-undocumented] complex word should include a doc comment example
+src/prelude.1z:523:40: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:524:1: warning: [orphaned-doc-comment] doc comment not followed by a definition
+src/prelude.1z:525:42: info: [complex-word-undocumented] complex word should include a doc comment example
+src/prelude.1z:525:42: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:527:71: info: [complex-word-undocumented] complex word should include a doc comment example
+src/prelude.1z:528:1: warning: [orphaned-doc-comment] doc comment not followed by a definition
+src/prelude.1z:529:78: info: [complex-word-undocumented] complex word should include a doc comment example
+src/prelude.1z:530:1: warning: [orphaned-doc-comment] doc comment not followed by a definition
+src/prelude.1z:531:84: info: [complex-word-undocumented] complex word should include a doc comment example
+src/prelude.1z:531:84: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:532:1: warning: [orphaned-doc-comment] doc comment not followed by a definition
+src/prelude.1z:533:90: info: [complex-word-undocumented] complex word should include a doc comment example
+src/prelude.1z:533:90: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:535:88: info: [complex-word-undocumented] complex word should include a doc comment example
+src/prelude.1z:535:88: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:537:126: info: [complex-word-undocumented] complex word should include a doc comment example
+src/prelude.1z:537:126: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:539:48: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:540:1: warning: [orphaned-doc-comment] doc comment not followed by a definition
+src/prelude.1z:541:40: info: [complex-word-undocumented] complex word should include a doc comment example
+src/prelude.1z:542:1: warning: [orphaned-doc-comment] doc comment not followed by a definition
+src/prelude.1z:543:63: info: [complex-word-undocumented] complex word should include a doc comment example
+src/prelude.1z:544:1: warning: [orphaned-doc-comment] doc comment not followed by a definition
+src/prelude.1z:545:66: info: [complex-word-undocumented] complex word should include a doc comment example
+src/prelude.1z:547:38: info: [complex-word-undocumented] complex word should include a doc comment example
+src/prelude.1z:547:38: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:548:1: warning: [orphaned-doc-comment] doc comment not followed by a definition
+src/prelude.1z:550:1: warning: [orphaned-doc-comment] doc comment not followed by a definition
+src/prelude.1z:551:36: info: [complex-word-undocumented] complex word should include a doc comment example
+src/prelude.1z:551:36: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:552:1: warning: [orphaned-doc-comment] doc comment not followed by a definition
+src/prelude.1z:553:72: info: [complex-word-undocumented] complex word should include a doc comment example
+src/prelude.1z:554:1: warning: [orphaned-doc-comment] doc comment not followed by a definition
+src/prelude.1z:555:77: info: [complex-word-undocumented] complex word should include a doc comment example
+src/prelude.1z:556:1: warning: [orphaned-doc-comment] doc comment not followed by a definition
+src/prelude.1z:557:81: info: [complex-word-undocumented] complex word should include a doc comment example
+src/prelude.1z:559:1: warning: [non-kebab-case] definition name is not kebab-case
+src/prelude.1z:559:49: info: [complex-word-undocumented] complex word should include a doc comment example
+src/prelude.1z:561:49: info: [complex-word-undocumented] complex word should include a doc comment example
+src/prelude.1z:563:38: info: [complex-word-undocumented] complex word should include a doc comment example
+src/prelude.1z:563:38: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:566:76: info: [complex-word-undocumented] complex word should include a doc comment example
+src/prelude.1z:568:50: info: [complex-word-undocumented] complex word should include a doc comment example
+src/prelude.1z:568:50: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:569:1: warning: [orphaned-doc-comment] doc comment not followed by a definition
+src/prelude.1z:570:39: info: [complex-word-undocumented] complex word should include a doc comment example
+src/prelude.1z:570:39: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:571:1: warning: [orphaned-doc-comment] doc comment not followed by a definition
+src/prelude.1z:572:53: info: [complex-word-undocumented] complex word should include a doc comment example
+src/prelude.1z:572:53: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:573:1: warning: [orphaned-doc-comment] doc comment not followed by a definition
+src/prelude.1z:574:57: info: [complex-word-undocumented] complex word should include a doc comment example
+src/prelude.1z:575:1: warning: [orphaned-doc-comment] doc comment not followed by a definition
+src/prelude.1z:576:58: info: [complex-word-undocumented] complex word should include a doc comment example
+src/prelude.1z:576:58: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:577:1: warning: [orphaned-doc-comment] doc comment not followed by a definition
+src/prelude.1z:578:65: info: [complex-word-undocumented] complex word should include a doc comment example
+src/prelude.1z:578:65: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:579:1: warning: [orphaned-doc-comment] doc comment not followed by a definition
+src/prelude.1z:580:67: info: [complex-word-undocumented] complex word should include a doc comment example
+src/prelude.1z:580:67: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:584:30: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:586:38: info: [complex-word-undocumented] complex word should include a doc comment example
+src/prelude.1z:586:38: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:588:38: info: [complex-word-undocumented] complex word should include a doc comment example
+src/prelude.1z:588:38: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:592:26: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:593:1: warning: [orphaned-doc-comment] doc comment not followed by a definition
+src/prelude.1z:594:24: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:596:27: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:596:27: warning: [duplicate-definition] definition body is identical to 0?
+src/prelude.1z:598:31: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:600:31: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:602:82: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:604:85: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:607:50: info: [complex-word-undocumented] complex word should include a doc comment example
+src/prelude.1z:607:50: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:609:50: warning: [conversion-naming] conversion word should have ( x -- y ) stack effect shape
+src/prelude.1z:609:50: info: [complex-word-undocumented] complex word should include a doc comment example
+src/prelude.1z:609:50: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:611:28: info: [complex-word-undocumented] complex word should include a doc comment example
+src/prelude.1z:611:28: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:617:41: info: [complex-word-undocumented] complex word should include a doc comment example
+src/prelude.1z:619:40: info: [complex-word-undocumented] complex word should include a doc comment example
+src/prelude.1z:621:49: info: [complex-word-undocumented] complex word should include a doc comment example
+src/prelude.1z:621:49: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:624:59: info: [complex-word-undocumented] complex word should include a doc comment example
+src/prelude.1z:629:85: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:629:85: warning: [mutation-suffix-misuse] word with ! suffix does not appear to perform mutation
+src/prelude.1z:635:86: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:635:86: warning: [duplicate-definition] definition body is identical to >string!
+src/prelude.1z:635:86: warning: [mutation-suffix-misuse] word with ! suffix does not appear to perform mutation
+src/prelude.1z:663:82: info: [complex-word-undocumented] complex word should include a doc comment example
+src/prelude.1z:663:82: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:692:3: info: [complex-word-undocumented] complex word should include a doc comment example
+src/prelude.1z:692:3: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:696:78: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:698:76: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:714:3: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:719:3: info: [complex-word-undocumented] complex word should include a doc comment example
+src/prelude.1z:719:3: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:722:40: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:724:27: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:726:26: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:731:63: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:734:36: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:744:1: warning: [non-kebab-case] definition name is not kebab-case
+src/prelude.1z:744:50: info: [missing-doc-comment] public word lacks a doc comment
+src/prelude.1z:744:50: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:846:3: info: [complex-word-undocumented] complex word should include a doc comment example
+src/prelude.1z:900:3: warning: [missing-stack-effect] public word lacks a declared stack effect
+src/prelude.1z:900:3: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:975:3: warning: [missing-stack-effect] public word lacks a declared stack effect
+src/prelude.1z:975:3: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:992:3: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:1005:3: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:1009:3: info: [complex-word-undocumented] complex word should include a doc comment example
+src/prelude.1z:1009:3: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:1013:3: info: [complex-word-undocumented] complex word should include a doc comment example
+src/prelude.1z:1013:3: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:1015:45: info: [complex-word-undocumented] complex word should include a doc comment example
+src/prelude.1z:1019:3: info: [complex-word-undocumented] complex word should include a doc comment example
+src/prelude.1z:1045:3: info: [complex-word-undocumented] complex word should include a doc comment example
+src/prelude.1z:1045:3: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:1064:3: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:1069:60: info: [complex-word-undocumented] complex word should include a doc comment example
+src/prelude.1z:1072:51: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:1082:64: warning: [constructor-consistency] make- constructor has no corresponding unmake- destructor
+src/prelude.1z:1253:54: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:1256:116: info: [complex-word-undocumented] complex word should include a doc comment example
+src/prelude.1z:1256:116: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:1259:109: info: [complex-word-undocumented] complex word should include a doc comment example
+src/prelude.1z:1259:109: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:1262:121: info: [complex-word-undocumented] complex word should include a doc comment example
+src/prelude.1z:1262:121: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:1268:88: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:1273:94: info: [complex-word-undocumented] complex word should include a doc comment example
+src/prelude.1z:1273:94: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:1278:87: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:1283:88: info: [complex-word-undocumented] complex word should include a doc comment example
+src/prelude.1z:1283:88: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:1283:88: warning: [duplicate-definition] definition body is identical to unwrap-or
+src/prelude.1z:1288:93: info: [complex-word-undocumented] complex word should include a doc comment example
+src/prelude.1z:1288:93: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:1288:93: warning: [duplicate-definition] definition body is identical to ?map
+src/prelude.1z:1293:92: info: [complex-word-undocumented] complex word should include a doc comment example
+src/prelude.1z:1293:92: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:1293:92: warning: [duplicate-definition] definition body is identical to ?and-then
+src/prelude.1z:1298:81: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:1298:81: warning: [duplicate-definition] definition body is identical to unwrap-or-throw
+src/prelude.1z:1303:91: info: [complex-word-undocumented] complex word should include a doc comment example
+src/prelude.1z:1303:91: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:1306:94: warning: [predicate-naming] predicate word output does not indicate a boolean return type
+src/prelude.1z:1306:94: info: [complex-word-undocumented] complex word should include a doc comment example
+src/prelude.1z:1306:94: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:1309:88: info: [complex-word-undocumented] complex word should include a doc comment example
+src/prelude.1z:1309:88: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:1315:105: warning: [predicate-naming] predicate word output does not indicate a boolean return type
+src/prelude.1z:1315:105: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:1321:99: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:1324:83: warning: [predicate-naming] predicate word output does not indicate a boolean return type
+src/prelude.1z:1324:83: info: [complex-word-undocumented] complex word should include a doc comment example
+src/prelude.1z:1324:83: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:1327:85: warning: [predicate-naming] predicate word output does not indicate a boolean return type
+src/prelude.1z:1327:85: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:1330:83: warning: [predicate-naming] predicate word output does not indicate a boolean return type
+src/prelude.1z:1330:83: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:1338:3: info: [complex-word-undocumented] complex word should include a doc comment example
+src/prelude.1z:1338:3: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:1346:3: info: [complex-word-undocumented] complex word should include a doc comment example
+src/prelude.1z:1346:3: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:1365:86: warning: [predicate-naming] predicate word output does not indicate a boolean return type
+src/prelude.1z:1365:86: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:1387:3: warning: [conversion-naming] conversion word should have ( x -- y ) stack effect shape
+src/prelude.1z:1387:3: info: [complex-word-undocumented] complex word should include a doc comment example
+src/prelude.1z:1387:3: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:1390:84: warning: [predicate-naming] predicate word output does not indicate a boolean return type
+src/prelude.1z:1390:84: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:1398:121: info: [complex-word-undocumented] complex word should include a doc comment example
+src/prelude.1z:1401:108: info: [complex-word-undocumented] complex word should include a doc comment example
+src/prelude.1z:1401:108: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:1404:40: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:1408:78: info: [complex-word-undocumented] complex word should include a doc comment example
+src/prelude.1z:1408:78: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:1413:77: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:1417:88: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:1417:88: warning: [duplicate-definition] definition body is identical to acquire
+src/prelude.1z:1504:3: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:1510:79: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:1519:3: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:1569:80: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:1592:73: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:1606:78: warning: [missing-stack-effect] public word lacks a declared stack effect
+src/prelude.1z:1606:78: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:1621:77: warning: [missing-stack-effect] public word lacks a declared stack effect
+src/prelude.1z:1621:77: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:1624:96: warning: [predicate-naming] predicate word output does not indicate a boolean return type
+src/prelude.1z:1624:96: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:1627:95: warning: [predicate-naming] predicate word output does not indicate a boolean return type
+src/prelude.1z:1636:3: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:1640:78: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:1641:76: info: [missing-doc-comment] public word lacks a doc comment
+src/prelude.1z:1641:76: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:1642:78: info: [missing-doc-comment] public word lacks a doc comment
+src/prelude.1z:1642:78: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:1643:78: info: [missing-doc-comment] public word lacks a doc comment
+src/prelude.1z:1643:78: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:1644:74: info: [missing-doc-comment] public word lacks a doc comment
+src/prelude.1z:1644:74: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:1650:3: warning: [predicate-naming] predicate word output does not indicate a boolean return type
+src/prelude.1z:1650:3: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:1656:3: warning: [predicate-naming] predicate word output does not indicate a boolean return type
+src/prelude.1z:1656:3: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:1661:3: warning: [predicate-naming] predicate word output does not indicate a boolean return type
+src/prelude.1z:1661:3: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:1666:3: warning: [predicate-naming] predicate word output does not indicate a boolean return type
+src/prelude.1z:1666:3: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:1675:3: warning: [predicate-naming] predicate word output does not indicate a boolean return type
+src/prelude.1z:1675:3: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:1685:3: warning: [predicate-naming] predicate word output does not indicate a boolean return type
+src/prelude.1z:1685:3: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:1690:3: warning: [predicate-naming] predicate word output does not indicate a boolean return type
+src/prelude.1z:1690:3: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:1695:3: warning: [predicate-naming] predicate word output does not indicate a boolean return type
+src/prelude.1z:1695:3: info: [dead-definition] definition is not referenced by any other checked-file word
+src/prelude.1z:1703:3: warning: [missing-stack-effect] public word lacks a declared stack effect
+src/prelude.1z:1703:3: info: [dead-definition] definition is not referenced by any other checked-file word

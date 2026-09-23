@@ -1,0 +1,2 @@
+tests/fixtures/check_mode/method_on_native.1z:7: err: bad-decl: declared stack effect delta is 1, but inferred delta is 2
+tests/fixtures/check_mode/method_on_native.1z:9: warning: no-effect: word has no declared stack effect

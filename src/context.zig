@@ -987,6 +987,9 @@ pub const Context = struct {
     /// Monotonic counter for assigning unique IDs to constraint combinators.
     /// Atomic for future thread-safety requirements (M:N scheduler).
     next_combinator_id: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+    /// Source of `check_load_epoch` values, read only on the root context. A task context starts
+    /// from a fresh `Context`, so a counter of its own would hand sibling tasks the same number.
+    next_check_load_epoch: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
     /// Dispatch table for user-defined operator/method dispatch.
     dispatch: DispatchTable,
     /// JIT dispatch table mapping word IDs to compiled code pointers.
@@ -1265,6 +1268,10 @@ pub const Context = struct {
     /// at the top level. All other runtime statements are skipped. Parse-time
     /// words still execute during parsing.
     check_mode: bool = false,
+    /// Identifies the current check-mode load, so a dispatch entry can record which load registered
+    /// it. `enterCheckMode` draws a fresh value from the root's counter on each transition into
+    /// check mode, so no two loads in the process share one. Zero means no check-mode load has run.
+    check_load_epoch: u32 = 0,
     /// When true, disables both definition-time non-tail-recursion analysis
     /// and the runtime marker consistency check.
     allow_all_recursion: bool = false,
@@ -1380,6 +1387,16 @@ pub const Context = struct {
     /// slice, and an entry is never removed, so a borrowed key outlives every frame. Guarded by
     /// `shared_lock` on the write side, which `defineBinding` holds for the definition anyway.
     binding_names: *BindingNameStore = undefined,
+
+    /// Turn check mode on, starting a new check-mode load when it was off. A caller already in check
+    /// mode keeps its epoch, so a nested load shares the outer load's identity. The caller restores
+    /// `check_mode` itself.
+    pub fn enterCheckMode(self: *Context) void {
+        if (!self.check_mode) {
+            self.check_load_epoch = self.rootContext().next_check_load_epoch.fetchAdd(1, .monotonic) + 1;
+        }
+        self.check_mode = true;
+    }
 
     /// Returns true when the instruction sequence ends with a call to `;`, `(import-locals-checked)`,
     /// or `import-locals`, which means it is a word definition or a `private{ }` / `private(shadow-ok){ }`
@@ -6541,6 +6558,7 @@ pub const Context = struct {
             .quotation => |q| may_define.bodyCallsDefiningNative(q.instructions),
             .native_fn, .host_callback => false,
         };
+        stamped.check_epoch = if (self.check_mode) self.check_load_epoch else 0;
 
         if (target.dispatch_frames.items.len > 0) {
             const top = target.dispatch_frames.items.len - 1;
@@ -11168,6 +11186,37 @@ test "defineWordLocked: a check-mode load redefines a const-marked baked row" {
         .name = "baked-prelude-word",
         .action = .{ .literal = .{ .fixnum = 1 } },
     });
+}
+
+test "registerDispatch: an entry records the check-mode load that registered it" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const fixnum_tv = ctx.lookupBuiltinTypeValue("fixnum").?;
+    const unary = ctx.getDispatchUnarySentinel().descriptor.?;
+    const body = [_]Instruction{.{ .op = .{ .push_literal = .{ .fixnum = 0 } }, .line = 0 }};
+
+    const outside: DispatchKey = .{ .dispatch_id = 960, .type_a = fixnum_tv.descriptor.?, .type_b = unary };
+    try ctx.registerDispatch(outside, .{ .body = .{ .quotation = .{ .instructions = &body } } }, false);
+    try std.testing.expectEqual(@as(u32, 0), ctx.getDispatchEntry(outside).?.check_epoch);
+
+    ctx.enterCheckMode();
+    const first: DispatchKey = .{ .dispatch_id = 961, .type_a = fixnum_tv.descriptor.?, .type_b = unary };
+    try ctx.registerDispatch(first, .{ .body = .{ .quotation = .{ .instructions = &body } } }, false);
+    const first_epoch = ctx.getDispatchEntry(first).?.check_epoch;
+    try std.testing.expect(first_epoch != 0);
+
+    // A nested entry into check mode keeps the outer load's identity.
+    ctx.enterCheckMode();
+    try std.testing.expectEqual(first_epoch, ctx.check_load_epoch);
+
+    ctx.check_mode = false;
+    ctx.enterCheckMode();
+    const second: DispatchKey = .{ .dispatch_id = 962, .type_a = fixnum_tv.descriptor.?, .type_b = unary };
+    try ctx.registerDispatch(second, .{ .body = .{ .quotation = .{ .instructions = &body } } }, false);
+    const second_epoch = ctx.getDispatchEntry(second).?.check_epoch;
+    try std.testing.expect(second_epoch != 0);
+    try std.testing.expect(second_epoch != first_epoch);
 }
 
 test "seedEntryWord: the baked dispatch id keeps another word's replayed methods out of the guard" {

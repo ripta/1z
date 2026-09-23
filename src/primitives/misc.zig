@@ -1798,7 +1798,7 @@ fn nativeLoadCheckFile(ctx: *Context) anyerror!void {
     }
 
     const prev_check_mode = ctx.check_mode;
-    ctx.check_mode = true;
+    ctx.enterCheckMode();
     defer ctx.check_mode = prev_check_mode;
     return nativeLoadImpl(ctx, cache, filename, alloc, .{ .file = .{ .path = resolved } });
 }

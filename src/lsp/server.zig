@@ -335,7 +335,7 @@ pub const Server = struct {
         self.ctx.pushPragmaFrame() catch return;
         defer self.ctx.popPragmaFrame();
 
-        self.ctx.check_mode = true;
+        self.ctx.enterCheckMode();
         self.ctx.current_source = uri;
         self.ctx.import_frame_index = self.ctx.local_frames.items.len - 1;
         self.ctx.durable_frame_floor = self.ctx.import_frame_index;
@@ -860,7 +860,7 @@ pub const Server = struct {
         };
         defer self.ctx.popPragmaFrame();
 
-        self.ctx.check_mode = true;
+        self.ctx.enterCheckMode();
         self.ctx.current_source = uri;
         self.ctx.import_frame_index = self.ctx.local_frames.items.len - 1;
         self.ctx.durable_frame_floor = self.ctx.import_frame_index;
@@ -1060,7 +1060,7 @@ pub const Server = struct {
         };
         defer self.ctx.popPragmaFrame();
 
-        self.ctx.check_mode = true;
+        self.ctx.enterCheckMode();
         self.ctx.current_source = uri;
         self.ctx.import_frame_index = self.ctx.local_frames.items.len - 1;
         self.ctx.durable_frame_floor = self.ctx.import_frame_index;

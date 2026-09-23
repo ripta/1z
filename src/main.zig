@@ -1675,7 +1675,7 @@ fn handleCheck(gpa: std.mem.Allocator, args: []const []const u8) u8 {
     // program. The startup file is the user's environment rather than the program.
     runStartupFile(&ec.ctx, &global, err_writer);
 
-    ec.ctx.check_mode = true;
+    ec.ctx.enterCheckMode();
 
     const result = batch(&ec.ctx, path, exec.show_stack);
     ec.fireExitHooks(result);

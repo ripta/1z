@@ -358,6 +358,10 @@ pub const DispatchEntry = struct {
     /// production writer. A body carrying a code pointer is stamped the same way but never read,
     /// since the compiled body brackets itself.
     may_define: bool = false,
+    /// The check-mode load that registered this entry, or 0 for one registered outside check mode.
+    /// Stamped by `Context.registerDispatch`. `define-method` reads it to tell a collision with the
+    /// analyzer's own base scope from a duplicate inside the file being checked.
+    check_epoch: u32 = 0,
 };
 
 /// Dispatch table mapping (dispatch_id, type_a, type_b) to method bodies.

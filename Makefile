@@ -1,4 +1,4 @@
-.PHONY: all branch-info build release run fmt test test-threads-1 test-threads-auto unit-test capi-test capi-release-run embed-stdlib-test integration-test lib-test games-test eager-test fmt-test fmt-1z-test leak-goldens-check module-less-benchmark-check lsp-test tree-sitter-test contrib aot-test aot-build aot-run aot-checks aot-checks-linux aot-interpreter-strip-check aot-line-directives-check aot-asm-name-check aot-string-literal-direct-check aot-symbol-literal-direct-check aot-trace-instr-check aot-trace-word-filter-check aot-param-inference-check aot-determinism-check aot-symbol-verify aot-symbol-verify-linux bail-stats ir-check ir-check-upstream ir-vendor lua-vendor font8x8-vendor update-golden update-fmt-golden update-aot-golden update-lsp-golden benchmark benchmark-ab benchmark-fib benchmark-quotation benchmark-quotation-bracket benchmark-param-effects benchmark-loop-paths benchmark-param-inference benchmark-ffi-gen-filter benchmark-word-resolution benchmark-protocol-dispatch benchmark-lint benchmark-fmt benchmark-fmt-profile benchmark-fmt-modes benchmark-collision-build benchmark-retention benchmark-task-shapes benchmark-tokenize benchmark-tokenize-alloc benchmark-data-structures benchmark-packed benchmark-game-draw benchmark-route-lookup benchmark-expr benchmark-fn benchmark-stmt profiles build-example clean help docs docker-build docker-test freestanding-build wasm-freestanding-build wasm wasm-game-verify wasm-snake-verify wasm-minesweeper-verify baremetal-riscv64-test unit-coverage integration-coverage coverage
+.PHONY: all branch-info build release run fmt test test-threads-1 test-threads-auto unit-test capi-test capi-release-run embed-stdlib-test integration-test lib-test games-test prelude-lint-check update-prelude-lint-golden eager-test fmt-test fmt-1z-test leak-goldens-check module-less-benchmark-check lsp-test tree-sitter-test contrib aot-test aot-build aot-run aot-checks aot-checks-linux aot-interpreter-strip-check aot-line-directives-check aot-asm-name-check aot-string-literal-direct-check aot-symbol-literal-direct-check aot-trace-instr-check aot-trace-word-filter-check aot-param-inference-check aot-determinism-check aot-symbol-verify aot-symbol-verify-linux bail-stats ir-check ir-check-upstream ir-vendor lua-vendor font8x8-vendor update-golden update-fmt-golden update-aot-golden update-lsp-golden benchmark benchmark-ab benchmark-fib benchmark-quotation benchmark-quotation-bracket benchmark-param-effects benchmark-loop-paths benchmark-param-inference benchmark-ffi-gen-filter benchmark-word-resolution benchmark-protocol-dispatch benchmark-lint benchmark-fmt benchmark-fmt-profile benchmark-fmt-modes benchmark-collision-build benchmark-retention benchmark-task-shapes benchmark-tokenize benchmark-tokenize-alloc benchmark-data-structures benchmark-packed benchmark-game-draw benchmark-route-lookup benchmark-expr benchmark-fn benchmark-stmt profiles build-example clean help docs docker-build docker-test freestanding-build wasm-freestanding-build wasm wasm-game-verify wasm-snake-verify wasm-minesweeper-verify baremetal-riscv64-test unit-coverage integration-coverage coverage
 
 export DEVELOPER_DIR := /Library/Developer/CommandLineTools
 SHELL := /bin/bash
@@ -78,7 +78,7 @@ mktemp_or_die = $(or $(shell mktemp $(1)),$(error mktemp failed for $(1)))
 #
 # The pattern and the explicit list are separate lines because make rejects a rule mixing pattern
 # and normal targets.
-lib-test games-test docs profiles benchmark: export ONEZ_NO_STARTUP := 1
+lib-test games-test docs profiles benchmark prelude-lint-check update-prelude-lint-golden: export ONEZ_NO_STARTUP := 1
 benchmark-%: export ONEZ_NO_STARTUP := 1
 
 all: build test
@@ -208,6 +208,25 @@ lib-test: build ## Run *_test.1z unit tests under lib/
 
 games-test: build ## Run *_test.1z unit tests under every examples/wasm-*/ game directory
 	find examples -path 'examples/wasm-*' -name '*_test.1z' -print0 | xargs -0 -P $(TEST_JOBS) -n 1 timeout $(TARGET_TIMEOUT) ./$(ZIG_PREFIX)/bin/1z test
+
+PRELUDE_LINT_GOLDEN := tests/lint/prelude.stderr.golden
+
+# Kept out of `make test`, because linting the prelude takes over a minute on the Debug binary the
+# suite runs. The linter exits 1 whenever it reports anything, so the diff decides the result and
+# only an exit above 1 fails the run on its own.
+prelude-lint-check: release ## Diff `1z lint src/prelude.1z` against its golden (not part of make test)
+	@timeout $(TARGET_TIMEOUT) ./$(ZIG_PREFIX)/bin/1z lint --stdlib-path=lib src/prelude.1z 2> $(ZIG_PREFIX)/prelude-lint.stderr; \
+		status=$$?; \
+		if [ $$status -gt 1 ]; then echo "FAIL: 1z lint src/prelude.1z exited $$status"; exit 1; fi
+	@diff -u $(PRELUDE_LINT_GOLDEN) $(ZIG_PREFIX)/prelude-lint.stderr
+	@echo "PASS: 1z lint src/prelude.1z matches $(PRELUDE_LINT_GOLDEN)"
+
+update-prelude-lint-golden: release ## Regenerate the `1z lint src/prelude.1z` golden
+	@mkdir -p $(dir $(PRELUDE_LINT_GOLDEN))
+	@timeout $(TARGET_TIMEOUT) ./$(ZIG_PREFIX)/bin/1z lint --stdlib-path=lib src/prelude.1z 2> $(PRELUDE_LINT_GOLDEN); \
+		status=$$?; \
+		if [ $$status -gt 1 ]; then echo "FAIL: 1z lint src/prelude.1z exited $$status"; exit 1; fi
+	@echo "Updated $(PRELUDE_LINT_GOLDEN)"
 
 jit-build: ## Build only the 1z-jit binary
 	timeout $(TIMEOUT) $(ZIG) build jit-build --prefix $(ZIG_PREFIX)

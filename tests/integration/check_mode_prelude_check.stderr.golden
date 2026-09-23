@@ -1,0 +1,35 @@
+src/prelude.1z:1627: err: pragma-get?: branch quotations have mismatched row variable adjustments
+src/prelude.1z:975: warning: borrow: word has no declared stack effect
+src/prelude.1z:289: warning: associative: word has no declared stack effect
+src/prelude.1z:1324: err: #nth?: declared stack effect delta is -1, but inferred delta is 0
+src/prelude.1z:298: warning: parameter{: word has no declared stack effect
+src/prelude.1z:23: warning: B{: word has no declared stack effect
+src/prelude.1z:102: err: virtual{: branch quotations have mismatched row variable adjustments
+src/prelude.1z:102: warning: virtual{: word has no declared stack effect
+src/prelude.1z:255: warning: method{: word has no declared stack effect
+src/prelude.1z:1544: err: (>provenance): type mismatch: make-provenance expects string for parameter 'role', but got fixnum
+src/prelude.1z:900: warning: use: word has no declared stack effect
+src/prelude.1z:31: warning: M{: word has no declared stack effect
+src/prelude.1z:1563: err: (raw>word-info): type mismatch: make-word-info expects array for parameter 'markers', but got fixnum
+src/prelude.1z:1563: err: (raw>word-info): type mismatch: make-word-info expects boolean for parameter 'native?', but got fixnum
+src/prelude.1z:1563: err: (raw>word-info): type mismatch: make-word-info expects array for parameter 'methods', but got fixnum
+src/prelude.1z:1563: err: (raw>word-info): type mismatch: make-word-info expects boolean for parameter 'compiled?', but got fixnum
+src/prelude.1z:117: warning: match{: word has no declared stack effect
+src/prelude.1z:77: warning: W{: word has no declared stack effect
+src/prelude.1z:714: warning: trace-stack: cannot verify trace-stack: callee native.stack-snapshot has unknown effect
+src/prelude.1z:1298: note: ?flatten: callee native.virtual-struct-unwrap is polymorphic; effect trusted from declaration
+src/prelude.1z:270: warning: comparable: word has no declared stack effect
+src/prelude.1z:286: warning: stringable: word has no declared stack effect
+src/prelude.1z:1545: err: (>dispatch-prov): type mismatch: make-dispatch-provenance expects string for parameter 'role', but got fixnum
+src/prelude.1z:1545: err: (>dispatch-prov): type mismatch: make-dispatch-provenance expects string for parameter 'field', but got fixnum
+src/prelude.1z:111: warning: enum{: word has no declared stack effect
+src/prelude.1z:37: warning: bind{: word has no declared stack effect
+src/prelude.1z:283: warning: inspectable: word has no declared stack effect
+src/prelude.1z:15: warning: H{: word has no declared stack effect
+src/prelude.1z:1606: warning: private(shadow-ok){: word has no declared stack effect
+src/prelude.1z:1703: warning: local{: word has no declared stack effect
+src/prelude.1z:1621: warning: private{: word has no declared stack effect
+src/prelude.1z:19: warning: V{: word has no declared stack effect
+src/prelude.1z:86: warning: struct{: word has no declared stack effect
+src/prelude.1z:27: warning: S{: word has no declared stack effect
+src/prelude.1z:267: warning: protocol{: word has no declared stack effect

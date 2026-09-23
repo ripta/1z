@@ -173,6 +173,17 @@ fn nativeDefineMethod(ctx: *Context) anyerror!void {
                         return;
                     }
                 }
+
+                // A check-mode load treats the analyzer's own base scope as empty, so an arm the
+                // base scope registered is not a collision. The file's arm replaces it, so the
+                // analyzers read the body the file wrote.
+                //
+                // This is how the prelude checks itself: its arms on natives land on the keys the
+                // booted prelude already filled.
+                if (ctx.check_mode and existing.check_epoch != ctx.check_load_epoch) {
+                    try ctx.registerDispatch(key, entry, true);
+                    return;
+                }
             }
             helpers.setErrorContext(ctx, "method for '{s}' with types ({s}, {s}) already registered (use `mutable` to overwrite)", .{ word_name, type_a.name, type_b.name });
             return error.DuplicateMethod;
