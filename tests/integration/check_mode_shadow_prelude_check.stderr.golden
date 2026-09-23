@@ -1,0 +1,2 @@
+tests/fixtures/check_mode/shadow_prelude.1z:6: err: bad-decl: declared stack effect delta is 1, but inferred delta is 2
+tests/fixtures/check_mode/shadow_prelude.1z:8: warning: no-effect: word has no declared stack effect

@@ -1,0 +1,6 @@
+\ Redefines one of its own words with a different arity. The collision is inside the file's own
+\ frame, so checking or linting it still aborts with arity-mismatch.
+
+a: ( x -- y ) [ ] ;
+
+a: ( x y -- z ) [ drop ] ;

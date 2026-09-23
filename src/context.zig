@@ -4408,7 +4408,11 @@ pub const Context = struct {
         // context has a null floor and an empty dictionary: a load inside a spawned task reaches
         // the prelude and the natives only through its ancestors, and its module is
         // process-lifetime, so the shadow is as durable as one made on the main task.
-        if (same_scope_existing == null and !claims_override) {
+        //
+        // A check-mode load skips the probe. Its definitions never execute, so the base scope it
+        // would collide with is the analyzer's own rather than the program's, and checking the
+        // prelude would otherwise collide with itself on its first definition.
+        if (same_scope_existing == null and !claims_override and !self.check_mode) {
             if (target_frame_index) |ti| {
                 if (self.import_frame_index) |ifi| {
                     if (ti == ifi) {

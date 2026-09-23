@@ -1,0 +1,2 @@
+tests/fixtures/check_mode/redefine_within_file.1z:6: error 'arity-mismatch' arity mismatch on redefinition of 'a' (was 1 -> 1, now 2 -> 1) at word ';'
+  stack effect: ( name quot --  )

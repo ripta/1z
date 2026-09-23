@@ -1,0 +1,8 @@
+\ Shadows the native `dup`. Running this file raises import-conflict on that definition. Checking
+\ or linting it reports the diagnostics below the shadow instead of aborting on it.
+
+dup: ( -- x ) [ 0 ] ;
+
+bad-decl: ( -- x ) [ 1 2 ] ;
+
+no-effect: [ 1 ] ;

@@ -115,6 +115,11 @@ The guard applies to definitions that land in the durable top-level scope:
 a file's top level, a module's top level, and definitions made inside a
 word body, which persist after the word returns.
 
+`1z check`, `1z lint`, and the language server do not report this shadow.
+Their loads define a file's words without running them, so there is no
+running program for the guard to protect. `1z run` and `1z build` still
+report it.
+
 ### What Stays Legal
 
 A binding in a transient frame is a new binding, not a collision. A

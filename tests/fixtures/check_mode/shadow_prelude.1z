@@ -1,0 +1,8 @@
+\ Shadows the prelude's `nip`. Running this file raises import-conflict on that definition. Checking
+\ or linting it reports the diagnostics below the shadow instead of aborting on it.
+
+nip: ( x y -- y ) [ swap drop ] ;
+
+bad-decl: ( -- x ) [ 1 2 ] ;
+
+no-effect: [ 1 ] ;
