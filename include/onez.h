@@ -512,8 +512,12 @@ void onez_print_error(onez_t ctx);
  * - The source is parsed line-by-line using the same statement processor
  *   that onez_eval() uses.
  * - Statements ending in `;` are treated as definitions: they are
- *   registered into the current local frame. All other statements are
+ *   registered into a frame of the call's own. All other statements are
  *   parsed and dropped; they are NOT executed.
+ * - A definition that shadows or redefines a word the host context
+ *   already holds, a const included, is analyzed rather than rejected.
+ *   The checked source never runs, so the host's words are not what it
+ *   would collide with at run time.
  * - After parsing, the inference engine analyzes every compound word
  *   whose `source_file` matches `ctx.current_source` at the time of the
  *   call.
@@ -523,16 +527,16 @@ void onez_print_error(onez_t ctx);
  *
  * Persistence
  * -----------
- * onez_check() is persistent by default: definitions added by the call
- * remain in the dictionary after it returns. This matches onez_eval().
- * Repeated onez_check() calls against different source names accumulate;
- * calls against the same source name redefine those words.
+ * Definitions added by onez_check() do not survive the call, so a checked
+ * word cannot be called afterwards. Use onez_eval() to define words the
+ * host means to run. A `method{` arm the source writes to the shared
+ * dispatch table is undone when the call returns.
  *
- * To run an ephemeral check, wrap the call in an isolation bracket. This
- * is the composable way to opt into ephemeral semantics, and it lets the
- * caller read diagnostics BEFORE the isolation frame is popped:
+ * Types the source registers do survive. To discard those too, wrap the
+ * call in an isolation bracket, which also lets the caller read
+ * diagnostics BEFORE the isolation frame is popped:
  *
- *   // Check a snippet without leaking definitions into the host context.
+ *   // Check a snippet without leaking types into the host context.
  *   onez_isolation_begin(ctx);
  *   int rc = onez_check(ctx, src, len);
  *   for (size_t i = 0; i < onez_diag_count(ctx); i++) {

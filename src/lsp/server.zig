@@ -14,6 +14,7 @@ const parser = @import("../parser.zig");
 const formatter = @import("../formatter.zig");
 const value_mod = @import("../value.zig");
 const Instruction = value_mod.Instruction;
+const DispatchKey = @import("../dispatch.zig").DispatchKey;
 
 const Allocator = std.mem.Allocator;
 
@@ -336,6 +337,8 @@ pub const Server = struct {
         defer self.ctx.popPragmaFrame();
 
         self.ctx.enterCheckMode();
+        const dispatch_log_mark = self.ctx.beginCheckDispatchLog();
+        defer self.ctx.endCheckDispatchLog(dispatch_log_mark);
         self.ctx.current_source = uri;
         self.ctx.import_frame_index = self.ctx.local_frames.items.len - 1;
         self.ctx.durable_frame_floor = self.ctx.import_frame_index;
@@ -861,6 +864,8 @@ pub const Server = struct {
         defer self.ctx.popPragmaFrame();
 
         self.ctx.enterCheckMode();
+        const dispatch_log_mark = self.ctx.beginCheckDispatchLog();
+        defer self.ctx.endCheckDispatchLog(dispatch_log_mark);
         self.ctx.current_source = uri;
         self.ctx.import_frame_index = self.ctx.local_frames.items.len - 1;
         self.ctx.durable_frame_floor = self.ctx.import_frame_index;
@@ -1061,6 +1066,8 @@ pub const Server = struct {
         defer self.ctx.popPragmaFrame();
 
         self.ctx.enterCheckMode();
+        const dispatch_log_mark = self.ctx.beginCheckDispatchLog();
+        defer self.ctx.endCheckDispatchLog(dispatch_log_mark);
         self.ctx.current_source = uri;
         self.ctx.import_frame_index = self.ctx.local_frames.items.len - 1;
         self.ctx.durable_frame_floor = self.ctx.import_frame_index;
@@ -2111,6 +2118,88 @@ test "definition analysis gives back the error state a failed definition overwro
     try std.testing.expectEqual(@as(u8, 0), result.exit_code);
 
     try expectSeededErrorState(&ctx);
+}
+
+// Analysis replaces the booted prelude's `#in?` arm with the document's, which the prelude's own
+// `use` machinery calls. Each handler has to put the base arm back before the next request.
+test "analysis restores a base dispatch arm the document replaced" {
+    const allocator = std.testing.allocator;
+    const input = try buildInput(allocator, &.{
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{}}}
+        ,
+        \\{"jsonrpc":"2.0","method":"initialized","params":{}}
+        ,
+        \\{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///test.1z","languageId":"1z","version":1,"text":"#in?: method{ array any } [ 2drop f ] ;\nmy-arm: generic [ drop f ] ;\n#in?: method{ fixnum any } [ 2drop f ] ;"}}}
+        ,
+        \\{"jsonrpc":"2.0","id":2,"method":"textDocument/documentSymbol","params":{"textDocument":{"uri":"file:///test.1z"}}}
+        ,
+        \\{"jsonrpc":"2.0","id":3,"method":"textDocument/definition","params":{"textDocument":{"uri":"file:///test.1z"},"position":{"line":0,"character":0}}}
+        ,
+        \\{"jsonrpc":"2.0","id":4,"method":"shutdown"}
+        ,
+        \\{"jsonrpc":"2.0","method":"exit"}
+        ,
+    });
+    defer allocator.free(input);
+
+    var ctx = Context.init(allocator);
+    defer ctx.deinit();
+    try ctx.loadPrelude(null);
+
+    const in_id = ctx.resolveDispatchId("#in?").?;
+    const any = ctx.getDispatchAnySentinel().descriptor.?;
+    const array_key: DispatchKey = .{ .dispatch_id = in_id, .type_a = ctx.lookupBuiltinTypeValue("array").?.descriptor.?, .type_b = any };
+    const fixnum_key: DispatchKey = .{ .dispatch_id = in_id, .type_a = ctx.lookupBuiltinTypeValue("fixnum").?.descriptor.?, .type_b = any };
+
+    const base_arm = ctx.getDispatchEntry(array_key).?;
+    try std.testing.expect(ctx.getDispatchEntry(fixnum_key) == null);
+
+    var out_buf: [65536]u8 = undefined;
+    const result = runServerWithContext(&ctx, input, &out_buf);
+    try std.testing.expectEqual(@as(u8, 0), result.exit_code);
+
+    const after = ctx.getDispatchEntry(array_key).?;
+    try std.testing.expectEqual(base_arm.body.quotation.instructions.ptr, after.body.quotation.instructions.ptr);
+    try std.testing.expect(ctx.getDispatchEntry(fixnum_key) == null);
+}
+
+// The document shadows a prelude word, a native, and a const. Each used to raise from `;` and
+// drop out of the analysis silently, taking the document's own definition with it.
+test "analysis keeps definitions that shadow the base scope" {
+    const allocator = std.testing.allocator;
+    const input = try buildInput(allocator, &.{
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{}}}
+        ,
+        \\{"jsonrpc":"2.0","method":"initialized","params":{}}
+        ,
+        \\{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///test.1z","languageId":"1z","version":1,"text":"nip: ( x y -- y ) [ swap drop ] ;\n+: ( a b -- c ) [ 2drop 42 ] ;\nfixnum: [ 1 ] ;\nbad-decl: ( -- x ) [ 1 2 ] ;"}}}
+        ,
+        \\{"jsonrpc":"2.0","id":2,"method":"textDocument/documentSymbol","params":{"textDocument":{"uri":"file:///test.1z"}}}
+        ,
+        \\{"jsonrpc":"2.0","id":3,"method":"textDocument/definition","params":{"textDocument":{"uri":"file:///test.1z"},"position":{"line":0,"character":0}}}
+        ,
+        \\{"jsonrpc":"2.0","id":4,"method":"shutdown"}
+        ,
+        \\{"jsonrpc":"2.0","method":"exit"}
+        ,
+    });
+    defer allocator.free(input);
+
+    var out_buf: [65536]u8 = undefined;
+    const result = runServer(input, &out_buf);
+    try std.testing.expectEqual(@as(u8, 0), result.exit_code);
+
+    // response 0 = initialize, 1 = publishDiagnostics, 2 = documentSymbol, 3 = definition
+    const diag = extractResponse(result.output, 1).?;
+    try std.testing.expect(std.mem.indexOf(u8, diag, "bad-decl") != null);
+
+    const symbols = extractResponse(result.output, 2).?;
+    for ([_][]const u8{ "\"nip\"", "\"+\"", "\"fixnum\"", "\"bad-decl\"" }) |name| {
+        try std.testing.expect(std.mem.indexOf(u8, symbols, name) != null);
+    }
+
+    const location = extractResponse(result.output, 3).?;
+    try std.testing.expect(std.mem.indexOf(u8, location, "file:///test.1z") != null);
 }
 
 test "findWordBeforePosition" {

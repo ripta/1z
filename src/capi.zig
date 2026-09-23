@@ -825,15 +825,16 @@ export fn onez_eval_isolated(ptr: ?*anyopaque, code: [*]const u8, len: usize) c_
 ///
 /// Parses the buffer line-by-line using the same statement processor as
 /// `onez_eval`. Definition statements (those ending in `;`) are registered
-/// into the current local frame; non-definition statements are parsed and
-/// dropped. After parsing, stack-effect inference, type checking, and arity
+/// into a frame the call pushes and pops; non-definition statements are parsed
+/// and dropped. After parsing, stack-effect inference, type checking, and arity
 /// validation run over every compound word whose `source_file` matches
 /// `ctx.current_source`. Diagnostics are copied onto the handle and can be
 /// iterated with the `onez_diag_*` accessors.
 ///
-/// Definitions persist in the dictionary after the call, matching
-/// `onez_eval` semantics. Hosts that want ephemeral checking wrap the call
-/// in `onez_isolation_begin` / `onez_isolation_end`.
+/// Checked definitions do not survive the call, and a `method{` arm it wrote
+/// to the shared dispatch table is undone. A type the source registers does
+/// survive, so a host that wants none of it kept wraps the call in
+/// `onez_isolation_begin` / `onez_isolation_end`.
 ///
 /// Returns `ONEZ_OK` (0) when no error-severity diagnostics were produced
 /// and parsing succeeded; returns `1` if any error diagnostic was produced
@@ -855,9 +856,30 @@ export fn onez_check(ptr: ?*anyopaque, code: [*]const u8, len: usize) c_int {
     ctx.pushPragmaFrame() catch return ONEZ_ERR_ALLOC;
     defer ctx.popPragmaFrame();
 
+    // The checked source defines into a frame of its own, which is popped on the way out. The
+    // collision guards treat everything below that frame as the analyzer's base scope, so a
+    // checked definition would otherwise land in the host's live scope having skipped them, and
+    // the host's next `onez_eval` would run it.
+    //
+    // On a plain `onez_init` handle the host's scope is the prelude frame itself, so without this
+    // frame the checked source would redefine prelude words in place.
+    const saved_import_frame = ctx.import_frame_index;
+    const saved_durable_floor = ctx.durable_frame_floor;
+    ctx.pushLocalFrame() catch return ONEZ_ERR_ALLOC;
+    defer {
+        ctx.popLocalFrame();
+        ctx.import_frame_index = saved_import_frame;
+        ctx.durable_frame_floor = saved_durable_floor;
+    }
+    ctx.import_frame_index = ctx.local_frames.items.len - 1;
+    ctx.durable_frame_floor = ctx.import_frame_index;
+
     const prev_check_mode = ctx.check_mode;
     ctx.enterCheckMode();
     defer ctx.check_mode = prev_check_mode;
+
+    const dispatch_log_mark = ctx.beginCheckDispatchLog();
+    defer ctx.endCheckDispatchLog(dispatch_log_mark);
 
     var processor: StatementProcessor = .{};
     defer processor.deinit();
@@ -4870,6 +4892,112 @@ test "check diagnostics survive intervening eval" {
     // Drain the stack so deinit sees a clean slate.
     var out: i64 = 0;
     try std.testing.expectEqual(ONEZ_OK, onez_pop_int(handle_ptr, &out));
+}
+
+test "check analyzes past a native shadow and leaves the native in place" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    const tag = "check-shadow-native";
+    try std.testing.expectEqual(ONEZ_OK, onez_set_source(handle_ptr, tag, tag.len));
+
+    const src = "+: ( a b -- c ) [ 2drop 42 ] ;\nbad: ( -- n ) [ ] ;";
+    try std.testing.expectEqual(@as(c_int, 1), onez_check(handle_ptr, src, src.len));
+
+    // The failure is the diagnostic on `bad`, not a collision raised from `;`.
+    try std.testing.expect(onez_last_error(handle_ptr) == null);
+    try std.testing.expectEqual(@as(usize, 1), onez_diag_count(handle_ptr));
+    try std.testing.expectEqualStrings("bad", std.mem.span(onez_diag_word(handle_ptr, 0).?));
+
+    try std.testing.expectEqual(ONEZ_OK, onez_eval(handle_ptr, "1 2 +", 5));
+    var out: i64 = 0;
+    try std.testing.expectEqual(ONEZ_OK, onez_pop_int(handle_ptr, &out));
+    try std.testing.expectEqual(@as(i64, 3), out);
+}
+
+test "check redefines a prelude const and a prelude word at another arity without a collision" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    const tag = "check-redefine-prelude";
+    try std.testing.expectEqual(ONEZ_OK, onez_set_source(handle_ptr, tag, tag.len));
+
+    const src = "fixnum: ( -- n ) [ 1 ] ;\nnip: ( a -- a ) [ ] ;";
+    try std.testing.expectEqual(ONEZ_OK, onez_check(handle_ptr, src, src.len));
+    try std.testing.expectEqual(@as(usize, 0), onez_diag_count(handle_ptr));
+
+    const use = "1 2 nip";
+    try std.testing.expectEqual(ONEZ_OK, onez_eval(handle_ptr, use, use.len));
+    var out: i64 = 0;
+    try std.testing.expectEqual(ONEZ_OK, onez_pop_int(handle_ptr, &out));
+    try std.testing.expectEqual(@as(i64, 2), out);
+    try std.testing.expect(onez_pop_int(handle_ptr, &out) != ONEZ_OK);
+}
+
+test "check still rejects an arity-mismatched redefinition within the checked source" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    const tag = "check-redefine-within";
+    try std.testing.expectEqual(ONEZ_OK, onez_set_source(handle_ptr, tag, tag.len));
+
+    const src = "foo: ( -- ) [ ] ;\nfoo: ( a -- ) [ drop ] ;";
+    try std.testing.expectEqual(@as(c_int, 1), onez_check(handle_ptr, src, src.len));
+    try std.testing.expect(onez_last_error(handle_ptr) != null);
+}
+
+test "check leaves no checked word callable afterwards" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    const tag = "check-transient";
+    try std.testing.expectEqual(ONEZ_OK, onez_set_source(handle_ptr, tag, tag.len));
+
+    const src = "dbl: ( n -- n ) [ 2 * ] ;";
+    try std.testing.expectEqual(ONEZ_OK, onez_check(handle_ptr, src, src.len));
+
+    const use = "3 dbl";
+    try std.testing.expect(onez_eval(handle_ptr, use, use.len) != ONEZ_OK);
+}
+
+test "check analyzes past a native shadow on a handle with an entry frame" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+    try std.testing.expectEqual(ONEZ_OK, onez_push_entry_frame(handle_ptr));
+
+    const tag = "check-entry-frame";
+    try std.testing.expectEqual(ONEZ_OK, onez_set_source(handle_ptr, tag, tag.len));
+
+    const src = "+: ( a b -- c ) [ 2drop 42 ] ;\nnip: ( x y -- y ) [ swap drop ] ;";
+    try std.testing.expectEqual(ONEZ_OK, onez_check(handle_ptr, src, src.len));
+    try std.testing.expect(onez_last_error(handle_ptr) == null);
+}
+
+test "check undoes the method arms the checked source wrote" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    const tag = "check-method-arm";
+    try std.testing.expectEqual(ONEZ_OK, onez_set_source(handle_ptr, tag, tag.len));
+
+    // The first arm replaces the prelude's, and the second fills a key nothing held.
+    const src = "#in?: method{ array any } [ 2drop f ] ;\n#in?: method{ fixnum any } [ 2drop t ] ;";
+    try std.testing.expectEqual(ONEZ_OK, onez_check(handle_ptr, src, src.len));
+
+    var found = false;
+    const probe = "{ 1 2 } 1 #in?";
+    try std.testing.expectEqual(ONEZ_OK, onez_eval(handle_ptr, probe, probe.len));
+    try std.testing.expectEqual(ONEZ_OK, onez_pop_bool(handle_ptr, &found));
+    try std.testing.expect(found);
+
+    const unfilled = "5 1 #in?";
+    try std.testing.expect(onez_eval(handle_ptr, unfilled, unfilled.len) != ONEZ_OK);
 }
 
 // =========================================================================

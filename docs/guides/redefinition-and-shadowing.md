@@ -115,10 +115,14 @@ The guard applies to definitions that land in the durable top-level scope:
 a file's top level, a module's top level, and definitions made inside a
 word body, which persist after the word returns.
 
-`1z check`, `1z lint`, and the language server do not report this shadow.
-Their loads define a file's words without running them, so there is no
-running program for the guard to protect. `1z run` and `1z build` still
-report it.
+`1z check`, `1z lint`, the language server, and the embedding API's
+`onez_check` do not report this shadow. Their loads define a file's words
+without running them, so there is no running program for the guard to
+protect. `1z run` and `1z build` still report it.
+
+`onez_check` keeps that true by defining the checked source in a frame it
+discards when it returns. A checked word never reaches the host's scope, so
+it cannot run there later under a guard it skipped.
 
 ### What Stays Legal
 
@@ -394,9 +398,10 @@ orphaned-method row has no key at all.
 marker travels into the importing scope and keeps blocking there, so an
 imported `const` consumes that name permanently.
 
-`1z check`, `1z lint`, and the language server do not refuse a file that
-redefines a prelude `const` such as `fixnum`, for the same reason they do
-not report a shadow. A `const` the file defines itself still blocks there.
+`1z check`, `1z lint`, the language server, and `onez_check` do not refuse
+a file that redefines a prelude `const` such as `fixnum`, for the same
+reason they do not report a shadow. A `const` the file defines itself still
+blocks there.
 
 The escape is structural rather than a marker: a selective import leaves
 the name free.

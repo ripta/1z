@@ -23,6 +23,13 @@ const DispatchKey = dispatch_mod.DispatchKey;
 const DispatchFrame = dispatch_mod.DispatchFrame;
 const DispatchTable = dispatch_mod.DispatchTable;
 
+/// One base-table dispatch write made inside a check-mode analysis bracket. A null `previous`
+/// means the key was absent, so restoring removes it.
+const CheckDispatchWrite = struct {
+    key: DispatchKey,
+    previous: ?DispatchEntry,
+};
+
 const inline_expand = @import("inline_expand.zig");
 
 const pic_mod = @import("pic.zig");
@@ -1168,6 +1175,11 @@ pub const Context = struct {
     /// Stack of dispatch frames layered on top of `dispatch.entries`.
     /// Pushed by `with-isolation` for scoped method registrations.
     dispatch_frames: std.ArrayListUnmanaged(DispatchFrame) = .{},
+    /// What each base-table dispatch write replaced while a check-mode analysis bracket is open,
+    /// so the bracket can put the table back. See `beginCheckDispatchLog`.
+    check_dispatch_log: std.ArrayListUnmanaged(CheckDispatchWrite) = .{},
+    /// Open `beginCheckDispatchLog` brackets. Writes are logged only while this is nonzero.
+    check_dispatch_log_depth: u32 = 0,
     /// Mapping from type name to registered TypeValue for built-in types.
     /// Populated by `define-builtin-type`; used by `type-of` for lookup.
     builtin_type_values: std.StringHashMapUnmanaged(*value_mod.TypeValue) = .{},
@@ -2117,6 +2129,7 @@ pub const Context = struct {
             frame.deinit(self.allocator);
         }
         self.dispatch_frames.deinit(self.allocator);
+        self.check_dispatch_log.deinit(self.allocator);
         self.builtin_type_values.deinit(self.allocator);
         self.resource_type_values.deinit(self.allocator);
         self.struct_types_by_name.deinit(self.allocator);
@@ -6540,6 +6553,53 @@ pub const Context = struct {
         }
     }
 
+    /// Start recording what each base-table dispatch write replaces, so `endCheckDispatchLog` can
+    /// put the table back. Returns the mark to hand to it.
+    ///
+    /// A check-mode analysis in a long-lived context needs this. Its definitions sit in a frame
+    /// it pops, but a `method{` arm on a native or a prelude generic lands in the shared table,
+    /// and under check mode it replaces the base arm rather than raising. Left in place, the
+    /// analyzed document's body answers every later dispatch on that key.
+    pub fn beginCheckDispatchLog(self: *Context) usize {
+        self.acquireSharedWrite();
+        defer self.releaseSharedWrite();
+        const target = self.stateTarget();
+        target.check_dispatch_log_depth += 1;
+        return target.check_dispatch_log.items.len;
+    }
+
+    /// Undo every base-table dispatch write recorded since `mark`, newest first, so a key written
+    /// twice ends at the entry it held before the first write. A restored entry keeps its own
+    /// sequence and check epoch.
+    pub fn endCheckDispatchLog(self: *Context, mark: usize) void {
+        self.acquireSharedWrite();
+        defer self.releaseSharedWrite();
+        const target = self.stateTarget();
+
+        var i = target.check_dispatch_log.items.len;
+        while (i > mark) {
+            i -= 1;
+            const write = target.check_dispatch_log.items[i];
+            if (write.previous) |prev| {
+                // The key is present, since the write that displaced it put it there.
+                target.dispatch.entries.getPtr(write.key).?.* = prev;
+            } else {
+                _ = target.dispatch.entries.remove(write.key);
+            }
+        }
+
+        if (target.check_dispatch_log.items.len > mark) {
+            target.check_dispatch_log.shrinkRetainingCapacity(mark);
+            target.dispatch.generation +%= 1;
+            target.protocol_satisfies_cache.clearRetainingCapacity();
+            if (target != self) {
+                self.dispatch.generation +%= 1;
+                self.protocol_satisfies_cache.clearRetainingCapacity();
+            }
+        }
+        target.check_dispatch_log_depth -= 1;
+    }
+
     /// Register a dispatch entry into the topmost dispatch frame, or the
     /// base `dispatch.entries` if no frames are pushed.
     pub fn registerDispatch(self: *Context, key: DispatchKey, entry: DispatchEntry, allow_overwrite: bool) !void {
@@ -6569,7 +6629,18 @@ pub const Context = struct {
             gop.value_ptr.* = stamped;
             target.dispatch.generation +%= 1;
         } else {
-            try target.dispatch.register(key, stamped, allow_overwrite);
+            // A write into a dispatch frame goes away with the frame, so only a base-table write
+            // needs a record to be undone.
+            if (target.check_dispatch_log_depth > 0) {
+                try target.check_dispatch_log.append(target.allocator, .{
+                    .key = key,
+                    .previous = target.dispatch.entries.get(key),
+                });
+            }
+            target.dispatch.register(key, stamped, allow_overwrite) catch |err| {
+                if (target.check_dispatch_log_depth > 0) _ = target.check_dispatch_log.pop();
+                return err;
+            };
         }
         // Any new method binding may flip a satisfies-check answer; clear
         // coarsely. (Reached only on a successful register.) A redirected
@@ -11217,6 +11288,81 @@ test "registerDispatch: an entry records the check-mode load that registered it"
     const second_epoch = ctx.getDispatchEntry(second).?.check_epoch;
     try std.testing.expect(second_epoch != 0);
     try std.testing.expect(second_epoch != first_epoch);
+}
+
+test "endCheckDispatchLog: puts back a replaced entry and removes an added one" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const fixnum_tv = ctx.lookupBuiltinTypeValue("fixnum").?;
+    const unary = ctx.getDispatchUnarySentinel().descriptor.?;
+    const base_body = [_]Instruction{.{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 0 }};
+    const check_body = [_]Instruction{.{ .op = .{ .push_literal = .{ .fixnum = 2 } }, .line = 0 }};
+
+    const replaced: DispatchKey = .{ .dispatch_id = 970, .type_a = fixnum_tv.descriptor.?, .type_b = unary };
+    const added: DispatchKey = .{ .dispatch_id = 971, .type_a = fixnum_tv.descriptor.?, .type_b = unary };
+    try ctx.registerDispatch(replaced, .{ .body = .{ .quotation = .{ .instructions = &base_body } } }, false);
+    const base_sequence = ctx.getDispatchEntry(replaced).?.sequence;
+
+    ctx.enterCheckMode();
+    const mark = ctx.beginCheckDispatchLog();
+
+    // Written twice, so the restore has to land on the entry from before the first write.
+    try ctx.registerDispatch(replaced, .{ .body = .{ .quotation = .{ .instructions = &check_body } } }, true);
+    try ctx.registerDispatch(replaced, .{ .body = .{ .quotation = .{ .instructions = &check_body } } }, true);
+    try ctx.registerDispatch(added, .{ .body = .{ .quotation = .{ .instructions = &check_body } } }, false);
+
+    const generation = ctx.dispatch.generation;
+    ctx.endCheckDispatchLog(mark);
+    ctx.check_mode = false;
+
+    const restored = ctx.getDispatchEntry(replaced).?;
+    try std.testing.expectEqual(@as([*]const Instruction, &base_body), restored.body.quotation.instructions.ptr);
+    try std.testing.expectEqual(base_sequence, restored.sequence);
+    try std.testing.expectEqual(@as(u32, 0), restored.check_epoch);
+    try std.testing.expect(ctx.getDispatchEntry(added) == null);
+    try std.testing.expect(ctx.dispatch.generation != generation);
+    try std.testing.expectEqual(@as(usize, 0), ctx.check_dispatch_log.items.len);
+    try std.testing.expectEqual(@as(u32, 0), ctx.check_dispatch_log_depth);
+}
+
+test "endCheckDispatchLog: an inner bracket undoes only its own writes" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const fixnum_tv = ctx.lookupBuiltinTypeValue("fixnum").?;
+    const unary = ctx.getDispatchUnarySentinel().descriptor.?;
+    const body = [_]Instruction{.{ .op = .{ .push_literal = .{ .fixnum = 0 } }, .line = 0 }};
+
+    const outer_key: DispatchKey = .{ .dispatch_id = 972, .type_a = fixnum_tv.descriptor.?, .type_b = unary };
+    const inner_key: DispatchKey = .{ .dispatch_id = 973, .type_a = fixnum_tv.descriptor.?, .type_b = unary };
+
+    const outer = ctx.beginCheckDispatchLog();
+    try ctx.registerDispatch(outer_key, .{ .body = .{ .quotation = .{ .instructions = &body } } }, false);
+
+    const inner = ctx.beginCheckDispatchLog();
+    try ctx.registerDispatch(inner_key, .{ .body = .{ .quotation = .{ .instructions = &body } } }, false);
+    ctx.endCheckDispatchLog(inner);
+
+    try std.testing.expect(ctx.getDispatchEntry(outer_key) != null);
+    try std.testing.expect(ctx.getDispatchEntry(inner_key) == null);
+
+    ctx.endCheckDispatchLog(outer);
+    try std.testing.expect(ctx.getDispatchEntry(outer_key) == null);
+}
+
+test "registerDispatch: records nothing outside a check dispatch bracket" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const fixnum_tv = ctx.lookupBuiltinTypeValue("fixnum").?;
+    const unary = ctx.getDispatchUnarySentinel().descriptor.?;
+    const body = [_]Instruction{.{ .op = .{ .push_literal = .{ .fixnum = 0 } }, .line = 0 }};
+
+    ctx.enterCheckMode();
+    const key: DispatchKey = .{ .dispatch_id = 974, .type_a = fixnum_tv.descriptor.?, .type_b = unary };
+    try ctx.registerDispatch(key, .{ .body = .{ .quotation = .{ .instructions = &body } } }, false);
+    try std.testing.expectEqual(@as(usize, 0), ctx.check_dispatch_log.items.len);
 }
 
 test "seedEntryWord: the baked dispatch id keeps another word's replayed methods out of the guard" {
