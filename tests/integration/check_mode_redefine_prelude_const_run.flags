@@ -1,0 +1,3 @@
+@raw
+run
+tests/fixtures/check_mode/redefine_prelude_const.1z

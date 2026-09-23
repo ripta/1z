@@ -394,6 +394,10 @@ orphaned-method row has no key at all.
 marker travels into the importing scope and keeps blocking there, so an
 imported `const` consumes that name permanently.
 
+`1z check`, `1z lint`, and the language server do not refuse a file that
+redefines a prelude `const` such as `fixnum`, for the same reason they do
+not report a shadow. A `const` the file defines itself still blocks there.
+
 The escape is structural rather than a marker: a selective import leaves
 the name free.
 

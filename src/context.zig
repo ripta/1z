@@ -4296,6 +4296,39 @@ pub const Context = struct {
         return false;
     }
 
+    /// `lookupWordLocked` with the base scope left out: the frames below the durable floor, the
+    /// native dictionary, and each ancestor's frames below its floor. Those are the rungs the
+    /// dictionary-shadow probe treats as base scope, so the const guard and that probe agree on
+    /// what a check-mode load may redefine.
+    fn lookupAboveBaseScopeLocked(self: *const Context, name: []const u8, vis: ModuleDepsVisibility) ?WordDefinition {
+        var key: ?PrehashedName = null;
+
+        const floor = self.durable_frame_floor orelse 0;
+        var i = self.local_frames.items.len;
+        while (i > floor) {
+            i -= 1;
+            if (i < self.local_frame_kinds.items.len and self.local_frame_kinds.items[i] == .module_deps) {
+                const m = if (i < self.local_frame_modules.items.len) self.local_frame_modules.items[i] else null;
+                if (m) |module| {
+                    if (!vis.admits(module)) continue;
+                }
+            }
+            const frame = &self.local_frames.items[i];
+            if (frame.count() == 0) continue;
+            if (frame.getAdapted(name, prehash(&key, name))) |def| return def;
+        }
+
+        var ancestor = self.parent_context;
+        while (ancestor) |ctx| : (ancestor = ctx.parent_context) {
+            const anc_floor = ctx.durable_frame_floor orelse continue;
+            const frame = &ctx.local_frames.items[anc_floor];
+            if (frame.count() == 0) continue;
+            if (frame.getAdapted(name, prehash(&key, name))) |def| return def;
+        }
+
+        return null;
+    }
+
     fn defineWordLocked(self: *Context, name: []const u8, definition: WordDefinition) !void {
         self.assertDefiningNativeDeclared();
 
@@ -4320,8 +4353,16 @@ pub const Context = struct {
         // a scope definitions land in. A const word visible only through such a frame, e.g.,
         // while a check-mode load runs from inside a module word whose module imports that const,
         // must not block the loaded file's own definitions.
+        //
+        // A check-mode load leaves the base scope out of the lookup, as the dictionary-shadow probe
+        // below does. Its definitions never execute, so a const it would collide with there is the
+        // analyzer's own, and checking the prelude would otherwise stop at its first type word. A
+        // const bound by the loaded file itself still blocks.
         const const_guard_vis: ModuleDepsVisibility = .{ .deps_modules = &.{}, .defining_module = null };
-        const visible_existing = self.lookupWordLocked(name, const_guard_vis);
+        const visible_existing = if (self.check_mode)
+            self.lookupAboveBaseScopeLocked(name, const_guard_vis)
+        else
+            self.lookupWordLocked(name, const_guard_vis);
         const existing_is_const = blk: {
             if (visible_existing) |existing| {
                 for (existing.markers) |mk| {
@@ -4331,8 +4372,9 @@ pub const Context = struct {
             }
             // In an AOT binary a const prelude binding lives in no frame and no dictionary, so
             // the baked base scope completes this guard's storage. A visible non-const binding
-            // above it shadows it here as interpreted, since the lookup answered first.
-            break :blk self.bakedBaseScopeConstLocked(name);
+            // above it shadows it here as interpreted, since the lookup answered first. The baked
+            // scope is base scope, so a check-mode load skips it along with the rest.
+            break :blk !self.check_mode and self.bakedBaseScopeConstLocked(name);
         };
         if (existing_is_const) {
             self.pending_error_message = std.fmt.allocPrint(
@@ -11108,6 +11150,24 @@ test "defineWordLocked: a const-marked baked row refuses through the const guard
         "cannot redefine const word 'baked-prelude-word'",
         ctx.pending_error_message.?,
     );
+}
+
+test "defineWordLocked: a check-mode load redefines a const-marked baked row" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    try setupBakedScopeProbe(&ctx, .{
+        .names = &baked_scope_names,
+        .sources = &baked_scope_sources,
+        .flags = &baked_scope_const_flags,
+        .count = 1,
+    });
+    ctx.check_mode = true;
+
+    try ctx.defineWord("baked-prelude-word", .{
+        .name = "baked-prelude-word",
+        .action = .{ .literal = .{ .fixnum = 1 } },
+    });
 }
 
 test "seedEntryWord: the baked dispatch id keeps another word's replayed methods out of the guard" {

@@ -1,0 +1,2 @@
+tests/fixtures/check_mode/redefine_prelude_const.1z:5: error 'cannot-redefine-const' cannot redefine const word 'fixnum' at word ';'
+  stack effect: ( name quot --  )

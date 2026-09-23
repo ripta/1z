@@ -1,0 +1,9 @@
+\ Redefines the prelude's const `fixnum`. Running this file raises cannot-redefine-const on that
+\ definition. Checking or linting it reports the diagnostics below the redefinition instead of
+\ aborting on it.
+
+fixnum: ( -- x ) [ 0 ] ;
+
+bad-decl: ( -- x ) [ 1 2 ] ;
+
+no-effect: [ 1 ] ;

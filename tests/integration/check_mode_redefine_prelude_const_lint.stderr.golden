@@ -1,0 +1,7 @@
+tests/fixtures/check_mode/redefine_prelude_const.1z:5:24: info: [missing-doc-comment] public word lacks a doc comment
+tests/fixtures/check_mode/redefine_prelude_const.1z:5:24: info: [dead-definition] definition is not referenced by any other checked-file word
+tests/fixtures/check_mode/redefine_prelude_const.1z:7:28: info: [missing-doc-comment] public word lacks a doc comment
+tests/fixtures/check_mode/redefine_prelude_const.1z:7:28: info: [dead-definition] definition is not referenced by any other checked-file word
+tests/fixtures/check_mode/redefine_prelude_const.1z:9:18: warning: [missing-stack-effect] public word lacks a declared stack effect
+tests/fixtures/check_mode/redefine_prelude_const.1z:9:18: info: [missing-doc-comment] public word lacks a doc comment
+tests/fixtures/check_mode/redefine_prelude_const.1z:9:18: info: [dead-definition] definition is not referenced by any other checked-file word

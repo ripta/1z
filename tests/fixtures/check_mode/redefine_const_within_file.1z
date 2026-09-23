@@ -1,0 +1,6 @@
+\ Redefines one of its own const words. The const is bound in the file's own frame, so checking or
+\ linting it still aborts with cannot-redefine-const.
+
+k: const [ 1 ] ;
+
+k: [ 2 ] ;

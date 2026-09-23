@@ -1,0 +1,2 @@
+tests/fixtures/check_mode/redefine_const_within_file.1z:6: error 'cannot-redefine-const' cannot redefine const word 'k' at word ';'
+  stack effect: ( name quot --  )
