@@ -1,7 +1,7 @@
 -- fill --
-clear-background (57344 px)  n=500  ns/iter=7964
+clear-background (57344 px)  n=500  ns/iter=8096
 -- one pixel --
-draw-pixel  n=5000  ns/iter=9829
+draw-pixel  n=5000  ns/iter=9869
 -- text, 11 glyphs --
-draw-text on canvas  n=50  ns/iter=3297460
-draw-text clipped  n=25  ns/iter=4609280
+draw-text on canvas  n=50  ns/iter=3259540
+draw-text clipped  n=25  ns/iter=4627840
