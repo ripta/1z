@@ -1,0 +1,8 @@
+Stack: [ <stream string-stream write> ]
+Stack: [ { "local-frame[3]: 1 words" "local-frame[2]: 0 words" "local-frame[1]: 25 words (import-frame)" "local-frame[0]: 499 words" "global-dict: 300 words" } ]
+PASS: exactly one frame is marked as the import frame
+Stack: [ { "local-frame[3]: 1 words" "local-frame[2]: 0 words" "local-frame[1]: 25 words (import-frame)" "local-frame[0]: 499 words" "global-dict: 300 words" } ]
+PASS: the bottom frame is labelled with its index
+Stack: [ { "local-frame[3]: 1 words" "local-frame[2]: 0 words" "local-frame[1]: 25 words (import-frame)" "local-frame[0]: 499 words" "global-dict: 300 words" } ]
+PASS: the native dictionary comes last and carries no index
+Stack: [ ]

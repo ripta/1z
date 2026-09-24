@@ -935,3 +935,99 @@ make-lint-rule register-lint-rule
 
 "const-rebuilds-value" warning: [ (check-const-rebuilds-value) ] f
 make-lint-rule register-lint-rule
+
+\ --- Helpers for base-scope-shadow ---
+
+\ Index of the frame imports land in, or -1 when no frame is marked.
+(import-frame-index): ( frames -- index ) [
+  -1 swap [ dup "import-frame?" @get [ "index" @get nip ] [ drop ] if ] #each
+] ;
+
+\ Record each name against whether it is native.
+\
+\ A name already recorded keeps its entry, since the frames come before the dictionary and the
+\ guard's probe answers from the first rung that has it.
+(add-base-names): ( mmap words native? -- mmap ) [
+  swap [
+    \ stack: mmap native? name
+    2 pick-n over @has? [ drop ] [ 2 pick-n swap 2 pick-n @set! drop ] if
+  ] #each
+  drop
+] ;
+
+\ The base scope the definition guard probes, as a map from each name to whether it is native: the
+\ frames below the import frame, then the native dictionary.
+\
+\ The import frame and everything above it hold the linter's own imports, which a checked file may
+\ reuse freely. `all-words` would count those, and so would its native entries, because a
+\ `struct{` accessor is native.
+(base-scope-names): ( -- mmap ) [
+  native.scope-frames
+  dup (import-frame-index) M{ } <rot-
+  \ stack: import-index mmap frames
+  [
+    dup "type" @get "global-dict" = [
+      "words" @get t (add-base-names)
+    ] [
+      dup "type" @get "local-frame" = over "index" @get 4 pick-n < and
+      [ "words" @get f (add-base-names) ] [ drop ] if
+    ] if
+  ] #each
+  nip
+] ;
+
+\ Whether the run-time guards let this definition stand.
+\
+\ `override` claims the shadow deliberate, and a generic meeting a generic is one extension point.
+\ Neither lifts the const guard, which raises before either is read.
+(shadow-exempt?): ( word-info -- ? ) [
+  dup name>> word-markers [ const = ] #any [ drop f ] [
+    dup markers>> [ override = ] #any [ drop t ] [
+      dup markers>> [ generic = ] #any [
+        name>> word-markers [ generic = ] #any
+      ] [ drop f ] if
+    ] if
+  ] if
+] ;
+
+(base-scope-shadow-diagnostic): ( path base word-info -- diagnostic ) [
+  dup name>> >string <rot- swap @get [ "a native word" ] [ "a base-scope word" ] if
+  over name>> >string "defining '" swap #append "' would shadow " #append swap #append
+  \ stack: path word-info message
+  [
+    source-loc>> "base-scope-shadow" warning: 3 pick-n 3 pick-n dup line>> swap column>>
+  ] dip
+  make-lint-diagnostic nip nip
+] ;
+
+\ --- Rule: base-scope-shadow ---
+\ Running a file whose top-level definition takes a name from the base scope raises
+\ import-conflict. Checking and linting it do not, because a check-mode load treats the base scope
+\ as empty, so this rule reports it instead.
+
+(check-base-scope-shadow): ( path source tokens line-index semantic-context -- diagnostics ) [
+  nip nip nip
+  \ stack: path(1) sem-ctx(0)
+  dup f = [
+    2drop { }
+  ] [
+    (base-scope-names) V{ }
+    \ stack: path(3) sem-ctx(2) base(1) results(0)
+    2 pick-n semantic-word-names [
+      \ stack: path(4) sem-ctx(3) base(2) results(1) word-name(0)
+      2 pick-n over >string @has? [
+        3 pick-n swap semantic-word-info
+        dup f = [ drop ] [
+          dup (shadow-exempt?) over source-loc>> f = or [ drop ] [
+            4 pick-n 3 pick-n <rot- (base-scope-shadow-diagnostic)
+            over swap #push! drop
+          ] if
+        ] if
+      ] [ drop ] if
+    ] #each
+    [ 3drop ] dip
+  ] if
+] ;
+
+"base-scope-shadow" warning: [ (check-base-scope-shadow) ] f
+make-lint-rule register-lint-rule

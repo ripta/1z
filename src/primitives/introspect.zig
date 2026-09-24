@@ -44,7 +44,7 @@ pub const registry_entries = [_]RegistryEntry{
     .{ .name = "defined?", .func = nativeDefined, .stack_effect = "module name -- ?" },
     .{ .name = "local-word-source", .func = nativeLocalWordSource, .stack_effect = "name -- module/f" },
     .{ .name = "locally-defined?", .func = nativeLocallyDefined, .stack_effect = "name -- ?" },
-    .{ .name = "scope-frames", .func = nativeScopeFrames },
+    .{ .name = "scope-frames", .func = nativeScopeFrames, .stack_effect = "-- array" },
     .{ .name = "stack-snapshot", .func = nativeStackSnapshot },
     .{ .name = "type-descriptor", .func = nativeTypeDescriptor },
     .{ .name = "type-generated-words", .func = nativeTypeGeneratedWords },

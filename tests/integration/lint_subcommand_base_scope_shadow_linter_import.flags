@@ -1,0 +1,4 @@
+@raw
+lint
+--stdlib-path=lib
+tests/fixtures/lint/base-scope-shadow-linter-import.1z

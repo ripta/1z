@@ -1,0 +1,9 @@
+\ Both names are words the linter imports, and neither is in the base scope, so running this file
+\ raises nothing and linting it reports no shadow. `all-words` would report both. So would its
+\ native entries alone, which still hold `make-lint-rule`, a native `struct{` constructor.
+
+\\ Named like the linter's own constructor.
+make-lint-rule: ( a b c d -- r ) [ 3drop ] ;
+
+\\ Named like a linter word.
+format-diagnostic: ( d -- s ) [ drop "" ] ;

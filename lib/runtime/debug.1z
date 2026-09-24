@@ -6,7 +6,7 @@ scope-trace: ( -- ) [
     dup "type" @get
     over "index" @get dup -1 =
     [ drop ]
-    [ swap "[" swap >string #append "]" #append #append ]
+    [ >string "[" swap #append "]" #append #append ]
     if
     ": " #append
     over "count" @get >string #append " words" #append

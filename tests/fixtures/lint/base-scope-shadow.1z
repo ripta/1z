@@ -1,0 +1,19 @@
+\ Running this file raises import-conflict on `nip` and `dup`, so linting it reports both.
+
+\\ Shadows the prelude's `nip`.
+nip: ( x y -- y ) [ swap drop ] ;
+
+\\ Shadows the native `dup`.
+dup: ( x -- x x ) [ 0 ] ;
+
+\\ Shadows the prelude's `tuck`, but claims the shadow deliberate.
+tuck: override ( x y -- y x y ) [ swap over ] ;
+
+\\ Its generated `name>>` is generic, and so is the prelude's, so the two are one extension point.
+labelled: struct{ name } ;
+
+\\ Takes no name from the base scope.
+own-word: ( x -- x ) [ ] ;
+
+\\ Redefines the prelude's const `fixnum`. `override` does not lift the const guard, so this reports.
+fixnum: override ( -- x ) [ 1 ] ;

@@ -1701,3 +1701,7 @@ local{: parse-time [
   [ >symbol [ swap ; ] curry swap compose ] #each
   emit-body
 ] ;
+
+\ Linting this file reads its definitions against the base scope this same file booted, so every
+\ one of them would report as a shadow.
+pragma{ lint-suppress: { base-scope-shadow: } }

@@ -1,0 +1,12 @@
+use "testing" ;
+use "runtime/debug" ;
+use { <string-builder>: split: } "strings" ;
+
+\ The frames' word counts move whenever the prelude does, and transient frames sit above the import
+\ frame, so the lines are checked by shape rather than by position.
+<string-builder> dup error-stream [ scope-trace ] with-parameter
+>string! "\n" split [ #len 0 > ] #filter #collect
+
+dup [ " (import-frame)" #ends-with? ] #filter #collect #len 1 "exactly one frame is marked as the import frame" assert=
+dup [ "local-frame[0]: " #starts-with? ] #any "the bottom frame is labelled with its index" assert-true
+#last "global-dict: " #starts-with? "the native dictionary comes last and carries no index" assert-true
