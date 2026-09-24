@@ -424,8 +424,9 @@ const Expander = struct {
     }
 
     /// Give `rebuilt` what every table keyed on a body address held for `source`: the file that
-    /// code was written in, the nested names the capture gate asks for, its own runs, and a
-    /// release-list registration when it carries a refcounted literal.
+    /// code was written in, the nested names the capture gate asks for, `source`'s place in the
+    /// lexical nesting, its own runs, and a release-list registration when it carries a refcounted
+    /// literal.
     ///
     /// Called from inside the nested walk, so `regions` is still that body's own list.
     ///
@@ -441,6 +442,7 @@ const Expander = struct {
 
         try self.ctx.stampQuotationBodySourceAs(rebuilt, file);
         try self.ctx.cacheQuotationBodyNestedNames(rebuilt);
+        try self.ctx.recordLexicalAlias(rebuilt, source);
         try self.ctx.recordInlineRegions(rebuilt, file, self.regions.items);
 
         // The outer array's own uniform retain does not reach here, because a quotation carries no

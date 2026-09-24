@@ -646,6 +646,8 @@ pub fn parseTopLevel(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*Context
         c.registerQuotationContainerLiterals(instrs) catch return ParseError.OutOfMemory;
         c.stampQuotationBodySource(instrs) catch return ParseError.OutOfMemory;
         c.cacheQuotationBodyNestedNames(instrs) catch return ParseError.OutOfMemory;
+        c.recordLexicalChildren(instrs) catch return ParseError.OutOfMemory;
+        c.recordLexicalRoot(instrs) catch return ParseError.OutOfMemory;
     }
     return instrs;
 }
@@ -688,6 +690,7 @@ pub fn parseQuotationUntil(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*C
                 c.registerQuotationContainerLiterals(instrs) catch return ParseError.OutOfMemory;
                 c.stampQuotationBodySource(instrs) catch return ParseError.OutOfMemory;
                 c.cacheQuotationBodyNestedNames(instrs) catch return ParseError.OutOfMemory;
+                c.recordLexicalChildren(instrs) catch return ParseError.OutOfMemory;
             }
             return Quotation{ .instructions = instrs, .effect = quotation_effect };
         } else if (std.mem.eql(u8, token, "[")) {
@@ -1799,6 +1802,39 @@ test "a finished body records the names its nested quotations call" {
     const inner = outer[1].op.push_literal.quotation.instructions;
     const inner_names = ctx.quotationBodyNestedNames(inner) orelse return error.TestExpectedEntry;
     try std.testing.expectEqual(@as(usize, 0), inner_names.len);
+}
+
+test "a finished body is recorded as the lexical parent of the quotations it pushes" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    var tokenizer = Tokenizer.init("[ outer-word [ inner-word ] ]");
+    const instrs = try parseTopLevel(ctx.quotationAllocator(), &tokenizer, &ctx);
+
+    const outer = instrs[0].op.push_literal.quotation.instructions;
+    const inner = outer[1].op.push_literal.quotation.instructions;
+
+    try std.testing.expectEqual(@as(?usize, @intFromPtr(outer.ptr)), ctx.lexical_parents.parentOf(@intFromPtr(inner.ptr)));
+    try std.testing.expectEqual(@as(?usize, @intFromPtr(instrs.ptr)), ctx.lexical_parents.parentOf(@intFromPtr(outer.ptr)));
+
+    // The statement itself is never a child, so it stays unknown.
+    try std.testing.expectEqual(@as(?usize, null), ctx.lexical_parents.parentOf(@intFromPtr(instrs.ptr)));
+}
+
+test "code parsed to run in its caller's scope records no lexical parents" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    ctx.parse_dynamic_scope = true;
+
+    var tokenizer = Tokenizer.init("[ outer-word [ inner-word ] ]");
+    const instrs = try parseTopLevel(ctx.quotationAllocator(), &tokenizer, &ctx);
+
+    const outer = instrs[0].op.push_literal.quotation.instructions;
+    const inner = outer[1].op.push_literal.quotation.instructions;
+
+    try std.testing.expectEqual(@as(?usize, null), ctx.lexical_parents.parentOf(@intFromPtr(inner.ptr)));
+    try std.testing.expectEqual(@as(?usize, null), ctx.lexical_parents.parentOf(@intFromPtr(outer.ptr)));
 }
 
 test "doc-comment before definition emits doc_string after symbol" {

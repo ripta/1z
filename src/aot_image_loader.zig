@@ -4808,13 +4808,13 @@ test "populateModulesAndWords: private-flagged rows land in deps, coexisting wit
     // `dup`, while resolution without the owning module never sees the helper -- the module-cache
     // scan reads `words` only.
     ctx.runtime_image_loaded = true;
-    const probed = ctx.lookupWordForExecutionOwnScope("helper", null, module_ptr, &.{}) orelse
+    const probed = ctx.lookupWordForExecutionOwnScope("helper", null, module_ptr, &.{}, 0) orelse
         return error.TestExpectedProbeHit;
     try testing.expectEqual(@as(i64, 3), probed.action.compound[0].op.push_literal.fixnum);
-    const probed_dup = ctx.lookupWordForExecutionOwnScope("dup", null, module_ptr, &.{}) orelse
+    const probed_dup = ctx.lookupWordForExecutionOwnScope("dup", null, module_ptr, &.{}, 0) orelse
         return error.TestExpectedProbeHit;
     try testing.expectEqual(@as(i64, 1), probed_dup.action.compound[0].op.push_literal.fixnum);
-    try testing.expect(ctx.lookupWordForExecutionOwnScope("helper", null, null, &.{}) == null);
+    try testing.expect(ctx.lookupWordForExecutionOwnScope("helper", null, null, &.{}, 0) == null);
 }
 
 test "loadIntoContext: stamps a private helper's decoded body with the owning module" {

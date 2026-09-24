@@ -1,0 +1,80 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+=== a callee does not see its caller's local ===
+Stack: [ ]
+Stack: [ ]
+PASS: a quotation pushed by a callee, called by the caller
+Stack: [ ]
+Stack: [ ]
+PASS: a quotation called inside a word binding the same name
+Stack: [ ]
+Stack: [ ]
+PASS: a quotation a tail-called callee pushed, called after the caller returns
+Stack: [ ]
+Stack: [ ]
+PASS: a tail-called word reading the name directly
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: a quotation an inlined callee pushes
+Stack: [ ]
+=== a body sees its own locals ===
+Stack: [ ]
+Stack: [ ]
+PASS: read directly
+Stack: [ ]
+Stack: [ ]
+PASS: read through call
+Stack: [ ]
+Stack: [ ]
+PASS: read through an if arm
+Stack: [ ]
+Stack: [ ]
+PASS: read through a #map body
+Stack: [ ]
+Stack: [ ]
+PASS: read two quotations deep
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: read from a quotation inline expansion rebuilt
+Stack: [ ]
+=== local helpers ===
+Stack: [ ]
+Stack: [ ]
+PASS: a recursive local helper tail-called by its definer
+Stack: [ ]
+Stack: [ ]
+PASS: a recursive local helper called non-tail
+Stack: [ ]
+=== a defining tail-callee ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: captures its own local, not its caller's
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: reads its own local
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: mutual tail recursion between defining words stays flat
+Stack: [ ]
+=== a quotation a parse-time literal holds ===
+Stack: [ ]
+Stack: [ ]
+PASS: a quotation inside an H{ } literal reads the enclosing local
+Stack: [ ]
+=== code that runs in its caller's scope ===
+Stack: [ ]
+Stack: [ ]
+PASS: eval-string reads the caller's local
+Stack: [ ]
+Stack: [ ]
+PASS: eval-string defines into the caller's frame
+Stack: [ ]
+Stack: [ ]
+PASS: a private{ } sibling reference
+Stack: [ ]

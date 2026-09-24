@@ -505,6 +505,11 @@ pub fn nativeLoadImpl(ctx: *Context, cache: *value_mod.MutableMap, filename: []c
     ctx.parse_stamp_source = null;
     defer ctx.parse_stamp_source = old_stamp_source;
 
+    // A file's bodies are lexical even when an `eval-string` string started the load.
+    const old_dynamic_scope = ctx.parse_dynamic_scope;
+    ctx.parse_dynamic_scope = false;
+    defer ctx.parse_dynamic_scope = old_dynamic_scope;
+
     const old_load_file_source = ctx.load_file_source;
     ctx.load_file_source = filename;
     defer ctx.load_file_source = old_load_file_source;
@@ -1851,6 +1856,11 @@ fn nativeEvalString(ctx: *Context) anyerror!void {
     const old_stamp_source = ctx.parse_stamp_source;
     ctx.parse_stamp_source = null;
     defer ctx.parse_stamp_source = old_stamp_source;
+
+    // The string runs in its caller's scope, reading and defining into whatever frames are live.
+    const old_dynamic_scope = ctx.parse_dynamic_scope;
+    ctx.parse_dynamic_scope = true;
+    defer ctx.parse_dynamic_scope = old_dynamic_scope;
 
     var processor: StatementProcessor = .{};
     defer processor.deinit();

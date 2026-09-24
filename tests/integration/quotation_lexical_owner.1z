@@ -1,0 +1,134 @@
+use "testing" ;
+
+label: ( -- s ) [ "MODULE-LABEL" ] ;
+
+reader: ( -- quot ) [ [ label ] ] ;
+
+label-word: ( -- s ) [ label ] ;
+
+"a callee does not see its caller's local" test-section
+
+direct-call: ( -- s ) [
+  label: "CALLER-LABEL" ;
+  reader call
+] ;
+
+direct-call "MODULE-LABEL" "a quotation pushed by a callee, called by the caller" assert=
+
+runner: ( quot -- s ) [
+  label: "CALLER-LABEL" ;
+  call
+] ;
+
+reader runner "MODULE-LABEL" "a quotation called inside a word binding the same name" assert=
+
+escaping: ( -- quot ) [
+  label: "CALLER-LABEL" ;
+  reader
+] ;
+
+escaping call "MODULE-LABEL" "a quotation a tail-called callee pushed, called after the caller returns" assert=
+
+tail-reader: ( -- s ) [
+  label: "CALLER-LABEL" ;
+  label-word
+] ;
+
+tail-reader "MODULE-LABEL" "a tail-called word reading the name directly" assert=
+
+inline-reader: ( -- quot ) const inline [ [ label ] ] ;
+
+inline-caller: ( -- s ) [
+  label: "CALLER-LABEL" ;
+  inline-reader call
+] ;
+
+inline-caller "MODULE-LABEL" "a quotation an inlined callee pushes" assert=
+
+"a body sees its own locals" test-section
+
+own-direct: ( -- n ) [ n: 41 ; n 1 + ] ;
+
+own-direct 42 "read directly" assert=
+
+own-call: ( -- n ) [ n: 41 ; [ n 1 + ] call ] ;
+
+own-call 42 "read through call" assert=
+
+own-if: ( -- n ) [ n: 41 ; t [ n 1 + ] [ 0 ] if ] ;
+
+own-if 42 "read through an if arm" assert=
+
+own-map: ( -- arr ) [ n: 40 ; { 1 2 } [ n + ] #map #collect ] ;
+
+own-map { 41 42 } "read through a #map body" assert=
+
+own-nested: ( -- n ) [ n: 40 ; [ [ n 2 + ] call ] call ] ;
+
+own-nested 42 "read two quotations deep" assert=
+
+plus-one: ( n -- n ) const inline [ 1 + ] ;
+
+own-inline: ( -- n ) [ n: 41 ; [ n plus-one ] call ] ;
+
+own-inline 42 "read from a quotation inline expansion rebuilt" assert=
+
+"local helpers" test-section
+
+countdown: ( n -- n ) [
+  loop: [ dup 0 > [ 1 - loop ] when ] ;
+  loop
+] ;
+
+5 countdown 0 "a recursive local helper tail-called by its definer" assert=
+
+countdown-inner: ( n -- n ) [
+  loop: [ dup 0 > [ 1 - loop ] when ] ;
+  loop 100 +
+] ;
+
+5 countdown-inner 100 "a recursive local helper called non-tail" assert=
+
+"a defining tail-callee" test-section
+
+inner-def: ( -- quot ) [ label: "INNER" ; [ label ] ] ;
+
+outer-def: ( -- quot ) [ label: "OUTER" ; inner-def ] ;
+
+outer-def call "INNER" "captures its own local, not its caller's" assert=
+
+inner-read: ( -- n ) [ v: 7 ; v ] ;
+
+outer-read: ( -- n ) [ v: 1 ; inner-read ] ;
+
+outer-read 7 "reads its own local" assert=
+
+ping: ( n -- n ) [ k: swap ; k 0 = [ 0 ] [ k 1 - pong ] if ] ;
+
+pong: ( n -- n ) [ k: swap ; k 0 = [ 0 ] [ k 1 - ping ] if ] ;
+
+20000 ping 0 "mutual tail recursion between defining words stays flat" assert=
+
+"a quotation a parse-time literal holds" test-section
+
+hash-held: ( -- n ) [ held: 22 ; H{ get: [ held ] } get: @get call ] ;
+
+hash-held 22 "a quotation inside an H{ } literal reads the enclosing local" assert=
+
+"code that runs in its caller's scope" test-section
+
+eval-reads: ( -- n ) [ x: 5 ; "x 1 +" eval-string ] ;
+
+eval-reads 6 "eval-string reads the caller's local" assert=
+
+eval-defines: ( -- n ) [ "y: 9 ;" eval-string y ] ;
+
+eval-defines 9 "eval-string defines into the caller's frame" assert=
+
+private{
+  (twice): ( n -- n ) [ 2 * ] ;
+
+  (quad): ( n -- n ) [ (twice) (twice) ] ;
+}
+
+3 (quad) 12 "a private{ } sibling reference" assert=

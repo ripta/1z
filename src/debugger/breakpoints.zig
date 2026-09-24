@@ -161,6 +161,11 @@ pub const BreakpointManager = struct {
         const saved_error_state = ctx.saveErrorState();
         defer ctx.restoreErrorState(saved_error_state);
 
+        // The condition runs in the paused program's scope, not a lexical one of its own.
+        const saved_dynamic_scope = ctx.parse_dynamic_scope;
+        ctx.parse_dynamic_scope = true;
+        defer ctx.parse_dynamic_scope = saved_dynamic_scope;
+
         // Parse and execute the condition
         var processor: StatementProcessor = .{};
         const result = processor.feedLine(ctx.quotationAllocator(), condition, ctx);

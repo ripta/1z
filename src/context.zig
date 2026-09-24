@@ -73,6 +73,7 @@ const CarryableScopeGate = @import("carryable_scope_gate.zig").CarryableScopeGat
 const NestedNameCache = @import("nested_name_cache.zig").NestedNameCache;
 const nestedNamesMatchFrame = @import("nested_name_cache.zig").nestedNamesMatchFrame;
 const visitNestedNames = @import("nested_name_cache.zig").visitNestedNames;
+const LexicalParentMap = @import("lexical_parent_map.zig").LexicalParentMap;
 const inline_region_table = @import("inline_region_table.zig");
 const InlineRegion = inline_region_table.InlineRegion;
 const InlineRegionTable = inline_region_table.InlineRegionTable;
@@ -888,6 +889,12 @@ pub const Context = struct {
     /// session reading a different source -- a module load, an eval string -- saves and clears it
     /// so its own `current_source` governs. Null outside parse-time invocations.
     parse_stamp_source: ?[]const u8 = null,
+    /// Set while parsing code that runs in its caller's scope rather than a lexical one of its
+    /// own: an `eval-string` string, or a debugger expression or breakpoint condition. Such code
+    /// reads and defines into whatever frames are live, so its bodies are left out of
+    /// `lexical_parents` and stay unknown to the owner check. A module load saves and clears it,
+    /// since a module's bodies are lexical wherever the load was started.
+    parse_dynamic_scope: bool = false,
     /// Source line of the current parse-time word invocation (file-relative).
     /// Set by executeParseTimeWord with save/restore for nesting.
     parse_time_source_line: usize = 0,
@@ -1378,6 +1385,13 @@ pub const Context = struct {
     /// Absence does not mean "no nested names". Only a body the parser finished on the root arena
     /// is filled, so a miss means the gate has to walk. See `NestedNameCache`.
     nested_name_cache: *NestedNameCache = undefined,
+    /// Process-shared record of the body that syntactically encloses each parsed quotation
+    /// literal, keyed by instruction-slice pointer. Heap-allocated by the root context and shared
+    /// by pointer to all child task contexts.
+    ///
+    /// Resolution and capture admit a lexical frame by whether its owner encloses the body asking.
+    /// See `LexicalParentMap`.
+    lexical_parents: *LexicalParentMap = undefined,
     /// Process-shared inlined runs of expanded bodies, keyed by instruction-slice pointer.
     /// Heap-allocated by the root context and shared by pointer to all child task contexts.
     ///
@@ -1593,6 +1607,12 @@ pub const Context = struct {
             std.debug.panic("Failed to allocate nested name cache: {any}", .{err});
         };
 
+        // Allocate the shared lexical parent map on the long-lived allocator; the root context
+        // frees it in deinit.
+        ctx.lexical_parents = LexicalParentMap.create(allocator) catch |err| {
+            std.debug.panic("Failed to allocate lexical parent map: {any}", .{err});
+        };
+
         // Allocate the shared inline-region table on the long-lived allocator; the root context
         // frees it in deinit.
         ctx.inline_regions = InlineRegionTable.create(allocator) catch |err| {
@@ -1798,6 +1818,10 @@ pub const Context = struct {
         // Share the parent's nested-name cache so a body parsed there answers the capture gate off
         // the one walk instead of a fresh one here. Aliased, never retained: the root owns it.
         ctx.nested_name_cache = parent.nested_name_cache;
+
+        // Share the parent's lexical parent map, since frames cloned here keep the owner tags it is
+        // read against. Aliased, never retained: the root owns it.
+        ctx.lexical_parents = parent.lexical_parents;
 
         // Share the parent's inline-region table so a body expanded there names its inlined words
         // in a trace raised here. Aliased, never retained: the root owns it.
@@ -2211,6 +2235,7 @@ pub const Context = struct {
             self.quotation_source_store.destroy();
             self.carryable_scope_gate.destroy();
             self.nested_name_cache.destroy();
+            self.lexical_parents.destroy();
             self.inline_regions.destroy();
             self.reified_decode_cache.destroy();
             self.load_lock.destroy();
@@ -2293,6 +2318,39 @@ pub const Context = struct {
         if (instructions.len == 0) return;
         if (self.stateTarget() != self.rootContext()) return;
         try self.nested_name_cache.fill(@intFromPtr(instructions.ptr), instructions);
+    }
+
+    /// Record `instructions` as the enclosing body of each quotation literal it pushes directly.
+    ///
+    /// The parser calls this for every body it finishes, beside the nested-name cache, and under
+    /// the same root-arena gate. Code parsed to run in its caller's scope is skipped; see
+    /// `parse_dynamic_scope`.
+    pub fn recordLexicalChildren(self: *Context, instructions: []const Instruction) !void {
+        if (instructions.len == 0 or self.parse_dynamic_scope) return;
+        if (self.stateTarget() != self.rootContext()) return;
+        try self.lexical_parents.recordChildren(instructions);
+    }
+
+    /// Record `statement` as a root of the lexical nesting: a top-level statement the parser read
+    /// from a file. Gated as `recordLexicalChildren` is.
+    pub fn recordLexicalRoot(self: *Context, statement: []const Instruction) !void {
+        if (statement.len == 0 or self.parse_dynamic_scope) return;
+        if (self.stateTarget() != self.rootContext()) return;
+        try self.lexical_parents.recordRoot(statement);
+    }
+
+    /// Record that `rebuilt` stands in for `source` in the owner check, for a body the inline
+    /// expansion pass built in `source`'s place.
+    pub fn recordLexicalAlias(self: *Context, rebuilt: []const Instruction, source: []const Instruction) !void {
+        if (self.stateTarget() != self.rootContext()) return;
+        try self.lexical_parents.recordAlias(rebuilt, source);
+    }
+
+    /// Whether frame `idx` may answer a bare word for `body`, by its owner's lexical relation to
+    /// `body`. A `body` of `0` asks for no filtering. See `LexicalParentMap.admits`.
+    fn frameAdmits(self: *const Context, idx: usize, body: usize) bool {
+        if (body == 0 or idx >= self.local_frame_owners.items.len) return true;
+        return self.lexical_parents.admits(body, self.local_frame_owners.items[idx]);
     }
 
     /// The bare-word names `instructions`' nested quotation literals call, or null for a body that
@@ -2841,17 +2899,21 @@ pub const Context = struct {
     /// it is unchanged and still answers first. The nested half reads its names from the parse-time
     /// cache, which is a handful of names at most, and walks them against every live frame at once.
     fn quotationReferencesLiveFrame(self: *const Context, instructions: []const Instruction, floor: usize) bool {
+        const body = @intFromPtr(instructions.ptr);
         var i = floor;
         while (i < self.local_frames.items.len) : (i += 1) {
             if (i < self.local_frame_kinds.items.len and self.local_frame_kinds.items[i] != .lexical) continue;
             const frame = &self.local_frames.items[i];
             if (frame.count() == 0) continue;
             for (instructions) |instr| {
-                switch (instr.op) {
-                    .call_word => |name| if (frame.contains(name)) return true,
-                    .call_word_module => |slot| if (frame.contains(slot.name)) return true,
-                    else => {},
-                }
+                const name = switch (instr.op) {
+                    .call_word => |n| n,
+                    .call_word_module => |slot| slot.name,
+                    else => continue,
+                };
+                if (!frame.contains(name)) continue;
+                if (self.frameAdmits(i, body)) return true;
+                break;
             }
         }
         return self.nestedNamesReferenceLiveFrame(instructions, floor);
@@ -2867,7 +2929,7 @@ pub const Context = struct {
     /// That is slower, but treating a miss as "no nested names" would silently decline a capture
     /// the body needs.
     fn nestedNamesReferenceLiveFrame(self: *const Context, instructions: []const Instruction, floor: usize) bool {
-        const live: LiveFrameSet = .{ .ctx = self, .floor = floor };
+        const live: LiveFrameSet = .{ .ctx = self, .floor = floor, .body = @intFromPtr(instructions.ptr) };
         if (self.quotationBodyNestedNames(instructions)) |names| {
             for (names) |name| if (live.contains(name)) return true;
             return false;
@@ -2875,11 +2937,14 @@ pub const Context = struct {
         return nestedNamesMatchFrame(instructions, live);
     }
 
-    /// The names bound by any live transient lexical frame at or above `floor`, as a membership
-    /// test. Lets the nested-name walk answer for the whole frame stack in one pass over the body.
+    /// The names bound by any live transient lexical frame at or above `floor` that `body` may
+    /// capture, as a membership test. Lets the nested-name walk answer for the whole frame stack in
+    /// one pass over the body.
     const LiveFrameSet = struct {
         ctx: *const Context,
         floor: usize,
+        /// The quotation literal being pushed. See `frameAdmits`.
+        body: usize,
 
         pub fn contains(self: LiveFrameSet, name: []const u8) bool {
             var i = self.floor;
@@ -2888,7 +2953,7 @@ pub const Context = struct {
                     self.ctx.local_frame_kinds.items[i] != .lexical) continue;
                 const frame = &self.ctx.local_frames.items[i];
                 if (frame.count() == 0) continue;
-                if (frame.contains(name)) return true;
+                if (frame.contains(name) and self.ctx.frameAdmits(i, self.body)) return true;
             }
             return false;
         }
@@ -3081,6 +3146,11 @@ pub const Context = struct {
         if (instructions.len == 0) return null;
         const floor = if (self.import_frame_index) |idx| idx + 1 else 0;
 
+        // A live frame is taken only when its owner lexically encloses this literal, which is the
+        // literal's recorded parent rather than whichever body happens to be pushing it. The two
+        // differ after inline expansion copies a callee's push into its caller.
+        const body = @intFromPtr(instructions.ptr);
+
         // Lexical snapshot, from two independent sources. `frames` stays empty when neither holds a
         // binding this body reads.
         var frames: std.ArrayListUnmanaged(LocalFrame) = .{};
@@ -3098,7 +3168,7 @@ pub const Context = struct {
             if (enclosing.lexical_frames.len > 0) {
                 try self.appendSeedFrame(&frames, instructions, .{
                     .frames = enclosing.lexical_frames,
-                    .live = .{ .ctx = self, .floor = floor },
+                    .live = .{ .ctx = self, .floor = floor, .body = body },
                 });
             }
         }
@@ -3115,6 +3185,7 @@ pub const Context = struct {
                 if (i < self.local_frame_kinds.items.len and self.local_frame_kinds.items[i] != .lexical) continue;
                 const src = &self.local_frames.items[i];
                 if (src.count() == 0) continue;
+                if (!self.frameAdmits(i, body)) continue;
                 try self.appendFrameClone(&frames, src);
             }
         }
@@ -4274,14 +4345,16 @@ pub const Context = struct {
         const expanded = try inline_expand.expandBody(self, name, caller_file, body) orelse return;
         def.action = .{ .compound = expanded };
 
-        // Both are keyed on the array's address, so the new one starts with neither. The source
+        // All three are keyed on the array's address, so the new one starts with none. The source
         // stamp is what a call frame raised inside this body reads for its file. The nested-name
-        // cache is the capture gate's fast answer; missing it only costs a walk.
+        // cache is the capture gate's fast answer; missing it only costs a walk. The alias lets a
+        // frame this array opens match the literals inside it, which name the original as parent.
         //
         // Only this array is handled here. A nested body the pass rebuilt is a second new address,
         // and the pass establishes its entries where it builds it.
         try self.stampQuotationBodySource(expanded);
         try self.cacheQuotationBodyNestedNames(expanded);
+        try self.recordLexicalAlias(expanded, body);
     }
 
     /// The definition a bare-word call in a body being defined here would reach, for the inline
@@ -5010,12 +5083,13 @@ pub const Context = struct {
     /// Definition- and parse-time callers must stick to `lookupWord` so they never see
     /// sibling modules' words.
     pub fn lookupWordForExecution(self: *const Context, name: []const u8) ?WordDefinition {
-        return self.lookupWordForExecutionFiltered(name, null, null);
+        return self.lookupWordForExecutionFiltered(name, null, null, 0);
     }
 
     /// Like `lookupWordForExecution`, but `vis` filters the executing body's view of transient
     /// `.module_deps` frames (see `ModuleDepsVisibility`), and `defining_module` is the executing
-    /// body's defining module when it has one.
+    /// body's defining module when it has one. `body` is the executing body's address, for the
+    /// lexical owner check in `lookupWordLockedFor`, or `0` to skip it.
     ///
     /// The runtime-image fallback is scoped by `defining_module`. A module-less body takes the
     /// module-cache scan as its by-name last resort. A body with a defining module skips it and
@@ -5025,10 +5099,11 @@ pub const Context = struct {
         name: []const u8,
         vis: ?ModuleDepsVisibility,
         defining_module: ?*const value_mod.Module,
+        body: usize,
     ) ?WordDefinition {
         self.acquireSharedRead();
         defer self.releaseSharedRead();
-        if (self.lookupWordLocked(name, vis)) |def| return def;
+        if (self.lookupWordLockedFor(name, vis, body)) |def| return def;
         if (!self.runtime_image_loaded) return null;
         if (defining_module == null) {
             if (self.lookupModuleCacheWordLocked(name)) |def| return def;
@@ -5051,18 +5126,20 @@ pub const Context = struct {
     /// one addition, source attribution.
     ///
     /// A body with an `own_module` skips the module-cache scan and misses on any module-owned
-    /// name outside its scope; see `moduleCacheContainsWordLocked`.
+    /// name outside its scope; see `moduleCacheContainsWordLocked`. `body` is as in
+    /// `lookupWordForExecutionFiltered`.
     pub fn lookupWordForExecutionOwnScope(
         self: *const Context,
         name: []const u8,
         vis: ?ModuleDepsVisibility,
         own_module: ?*const value_mod.Module,
         ambient_deps: []const *const value_mod.Module,
+        body: usize,
     ) ?WordDefinition {
         self.acquireSharedRead();
         defer self.releaseSharedRead();
         if (lookupOwnScopeLocked(name, own_module, ambient_deps)) |def| return def;
-        if (self.lookupWordLocked(name, vis)) |def| return def;
+        if (self.lookupWordLockedFor(name, vis, body)) |def| return def;
         if (!self.runtime_image_loaded) return null;
         if (own_module == null) {
             if (self.lookupModuleCacheWordLocked(name)) |def| return def;
@@ -5156,6 +5233,13 @@ pub const Context = struct {
     /// foreign library's frame that merely happens to be live. Only the self walk is filtered; the
     /// ancestor walk visits durable frames below the durable floor, which are never `.module_deps`.
     fn lookupWordLocked(self: *const Context, name: []const u8, vis: ?ModuleDepsVisibility) ?WordDefinition {
+        return self.lookupWordLockedFor(name, vis, 0);
+    }
+
+    /// `lookupWordLocked` for a bare word `body` is executing. A local frame answers only when
+    /// `frameAdmits` does, so a frame opened by a body that does not lexically enclose `body` is
+    /// passed over rather than read as dynamic scope. A `body` of `0` filters nothing.
+    fn lookupWordLockedFor(self: *const Context, name: []const u8, vis: ?ModuleDepsVisibility, body: usize) ?WordDefinition {
         // Deferred to the first frame actually probed. An empty frame is skipped without hashing,
         // so a walk that touches none costs no digest at all.
         var key: ?PrehashedName = null;
@@ -5174,6 +5258,7 @@ pub const Context = struct {
             const frame = &self.local_frames.items[i];
             if (frame.count() == 0) continue;
             if (frame.getAdapted(name, prehash(&key, name))) |def| {
+                if (!self.frameAdmits(i, body)) continue;
                 return def;
             }
         }
@@ -8340,6 +8425,18 @@ pub const Context = struct {
                 body_may_define = self.tail_call_may_define;
                 self.tail_call_may_define = false;
 
+                // A callee the frame's opener does not lexically enclose cannot read that frame, so
+                // it must not define into it either: its own locals would land where it cannot see
+                // them. The frame is closed instead, and a defining callee opens its own on the next
+                // iteration. Tags never move, and a mutual tail recursion still stays flat, because
+                // each hop closes one frame before it opens the next.
+                if (owns_lexical_frame and lexical_frame_index + 1 == self.local_frames.items.len and
+                    !self.frameAdmits(lexical_frame_index, @intFromPtr(current_instructions.ptr)))
+                {
+                    self.popLocalFrame();
+                    owns_lexical_frame = false;
+                }
+
                 const new_module = self.tail_call_module;
                 self.tail_call_module = null;
 
@@ -9130,6 +9227,10 @@ pub const Context = struct {
         // Fixed for the whole loop, so every call below hands one pointer to all three.
         const site: CallSite = .{ .body = instructions, .owner = owner, .pic_table = pic_table };
 
+        // The identity a bare-word lookup here asks the owner check with. A local frame opened by
+        // a body that does not enclose this one is not this body's scope.
+        const lexical_body: usize = if (instructions.len > 0) @intFromPtr(instructions.ptr) else 0;
+
         for (instructions, 0..) |instr, idx| {
             // An error leaving this instruction puts back the rows inline expansion erased.
             //
@@ -9203,7 +9304,7 @@ pub const Context = struct {
                         }
                     }
 
-                    if (self.lookupWordForExecutionOwnScope(name, deps_vis, own_module, own_ambient_deps)) |word| {
+                    if (self.lookupWordForExecutionOwnScope(name, deps_vis, own_module, own_ambient_deps, lexical_body)) |word| {
                         if (comptime builtin.mode == .Debug) assertResolvedName(word, name);
                         switch (try self.executeResolvedWord(word, instr, idx, is_last, &site)) {
                             .proceed => {},
@@ -9290,7 +9391,7 @@ pub const Context = struct {
                                 // A synthetic-scope stamp counts as module-less for the scan gate,
                                 // mirroring the body-entry probe's exemption.
                                 const gate_module = if (isSyntheticScopeModule(lazy_module)) null else lazy_module;
-                                if (self.lookupWordForExecutionFiltered(name, lazy_vis, gate_module)) |word| {
+                                if (self.lookupWordForExecutionFiltered(name, lazy_vis, gate_module, lexical_body)) |word| {
                                     if (comptime builtin.mode == .Debug) assertResolvedName(word, name);
                                     switch (try self.executeResolvedWord(word, instr, idx, is_last, &site)) {
                                         .proceed => {},
@@ -12665,26 +12766,26 @@ test "module-cache scan is skipped for a body with a defining module" {
     // module's export nor its compiled function may resolve.
     try std.testing.expectEqual(
         @as(?WordDefinition, null),
-        ctx.lookupWordForExecutionOwnScope("probe", null, own, &.{}),
+        ctx.lookupWordForExecutionOwnScope("probe", null, own, &.{}, 0),
     );
     try std.testing.expectEqual(
         @as(?WordDefinition, null),
-        ctx.lookupWordForExecutionFiltered("probe", null, own),
+        ctx.lookupWordForExecutionFiltered("probe", null, own, 0),
     );
 
     // A compiled name owned by no module (an entry-file top-level word) still
     // reaches the stamped body through the sweep.
     const top_wid = try ctx.jit_dispatch.assignId("top-level");
     ctx.jit_dispatch.setCodePtr(top_wid, fake_code);
-    const swept = ctx.lookupWordForExecutionOwnScope("top-level", null, own, &.{}) orelse
+    const swept = ctx.lookupWordForExecutionOwnScope("top-level", null, own, &.{}, 0) orelse
         return error.TestExpectedLookup;
     try std.testing.expectEqual(@as(?u32, top_wid), swept.word_id);
 
     // A module-less body keeps the scan as its by-name last resort.
-    const scanned = ctx.lookupWordForExecutionOwnScope("probe", null, null, &.{}) orelse
+    const scanned = ctx.lookupWordForExecutionOwnScope("probe", null, null, &.{}, 0) orelse
         return error.TestExpectedLookup;
     try std.testing.expectEqual(@as(?*const value_mod.Module, foreign), scanned.source_module);
-    const filtered = ctx.lookupWordForExecutionFiltered("probe", null, null) orelse
+    const filtered = ctx.lookupWordForExecutionFiltered("probe", null, null, 0) orelse
         return error.TestExpectedLookup;
     try std.testing.expectEqual(@as(?*const value_mod.Module, foreign), filtered.source_module);
 }
@@ -14137,27 +14238,27 @@ test "lookupWordForExecutionOwnScope: words beat deps, defining module beats amb
 
     // The defining module's `words` wins over its own `deps`, every ambient module, and the
     // durable frame; the synthesized definition matches what the module's deps frame would hold.
-    const shared = ctx.lookupWordForExecutionOwnScope("shared", null, &mod_a, &ambient) orelse return error.TestExpectedResolution;
+    const shared = ctx.lookupWordForExecutionOwnScope("shared", null, &mod_a, &ambient, 0) orelse return error.TestExpectedResolution;
     try std.testing.expectEqual(@as(u32, 20), shared.dispatch_id);
     try std.testing.expectEqual(@as(?*const value_mod.Module, &mod_a), shared.source_module);
     try std.testing.expectEqual(@as(?[]const u8, null), shared.source_file);
 
     // The defining module's `deps` is probed when `words` misses.
-    const dep_only = ctx.lookupWordForExecutionOwnScope("dep-only", null, &mod_a, &ambient) orelse return error.TestExpectedResolution;
+    const dep_only = ctx.lookupWordForExecutionOwnScope("dep-only", null, &mod_a, &ambient, 0) orelse return error.TestExpectedResolution;
     try std.testing.expectEqual(@as(u32, 11), dep_only.dispatch_id);
 
     // With no defining module, an ambient-deps module's binding still outranks the durable frame.
-    const ambient_shared = ctx.lookupWordForExecutionOwnScope("shared", null, null, &ambient) orelse return error.TestExpectedResolution;
+    const ambient_shared = ctx.lookupWordForExecutionOwnScope("shared", null, null, &ambient, 0) orelse return error.TestExpectedResolution;
     try std.testing.expectEqual(@as(u32, 30), ambient_shared.dispatch_id);
 
     // An ambient module is reached for names the defining module lacks, its `deps` included.
-    const b_only = ctx.lookupWordForExecutionOwnScope("b-only", null, &mod_a, &ambient) orelse return error.TestExpectedResolution;
+    const b_only = ctx.lookupWordForExecutionOwnScope("b-only", null, &mod_a, &ambient, 0) orelse return error.TestExpectedResolution;
     try std.testing.expectEqual(@as(u32, 31), b_only.dispatch_id);
-    const b_dep_only = ctx.lookupWordForExecutionOwnScope("b-dep-only", null, &mod_a, &ambient) orelse return error.TestExpectedResolution;
+    const b_dep_only = ctx.lookupWordForExecutionOwnScope("b-dep-only", null, &mod_a, &ambient, 0) orelse return error.TestExpectedResolution;
     try std.testing.expectEqual(@as(u32, 32), b_dep_only.dispatch_id);
 
     // A probe miss falls through to the ordinary ladder.
-    const frame_only = ctx.lookupWordForExecutionOwnScope("frame-only", null, null, &.{}) orelse return error.TestExpectedResolution;
+    const frame_only = ctx.lookupWordForExecutionOwnScope("frame-only", null, null, &.{}, 0) orelse return error.TestExpectedResolution;
     try std.testing.expectEqualStrings("durable", frame_only.source_file.?);
 }
 
