@@ -723,6 +723,12 @@ pub const Context = struct {
     /// quotation runs. Module pointers are process-lifetime stable, so a cloned entry stays valid
     /// across a spawn boundary.
     local_frame_modules: std.ArrayListUnmanaged(?*const value_mod.Module) = .{},
+    /// The body that opened each frame, kept index-parallel with `local_frames`. The tag is the
+    /// body's instruction address, the same key `quotation_scope_info` uses, and `0` marks a frame
+    /// no body opened: an entry frame, a load frame, or a `.module_deps` frame.
+    ///
+    /// A tag is compared, never dereferenced, so one that outlives its body is harmless.
+    local_frame_owners: std.ArrayListUnmanaged(usize) = .{},
     /// Count of live `.module_deps` frames on the stack. A fast-path gate for
     /// `captureQuotationScope`: when zero, a pushed quotation has no ambient deps frame to snapshot,
     /// so a quotation that also closes over no lexical binding needs no capture at all and the push
@@ -1898,6 +1904,12 @@ pub const Context = struct {
                 null;
             try ctx.local_frame_modules.append(allocator, frame_module);
 
+            const frame_owner: usize = if (src_idx < parent.local_frame_owners.items.len)
+                parent.local_frame_owners.items[src_idx]
+            else
+                0;
+            try ctx.local_frame_owners.append(allocator, frame_owner);
+
             if (kind == .module_deps) ctx.live_module_deps_frames += 1;
 
             const new_idx = ctx.local_frames.items.len - 1;
@@ -2111,6 +2123,7 @@ pub const Context = struct {
         self.local_frames.deinit(self.allocator);
         self.local_frame_kinds.deinit(self.allocator);
         self.local_frame_modules.deinit(self.allocator);
+        self.local_frame_owners.deinit(self.allocator);
         self.deinitCapturedScopes();
         self.call_stack.deinit(self.allocator);
         self.error_details.deinit(self.allocator);
@@ -2699,7 +2712,7 @@ pub const Context = struct {
     // Local frame methods (lexical scoping for quotation-local definitions)
     // =========================================================================
 
-    /// Grow the three parallel frame arrays under the shared write lock when the next push
+    /// Grow the four parallel frame arrays under the shared write lock when the next push
     /// would move their backing.
     ///
     /// A push itself is task-private, but the backing array is shared storage: a descendant's
@@ -2711,7 +2724,8 @@ pub const Context = struct {
         const needs_growth =
             self.local_frames.items.len == self.local_frames.capacity or
             self.local_frame_kinds.items.len == self.local_frame_kinds.capacity or
-            self.local_frame_modules.items.len == self.local_frame_modules.capacity;
+            self.local_frame_modules.items.len == self.local_frame_modules.capacity or
+            self.local_frame_owners.items.len == self.local_frame_owners.capacity;
         if (!needs_growth) return;
 
         self.acquireSharedWrite();
@@ -2719,20 +2733,27 @@ pub const Context = struct {
         try self.local_frames.ensureUnusedCapacity(self.allocator, 1);
         try self.local_frame_kinds.ensureUnusedCapacity(self.allocator, 1);
         try self.local_frame_modules.ensureUnusedCapacity(self.allocator, 1);
+        try self.local_frame_owners.ensureUnusedCapacity(self.allocator, 1);
     }
 
-    /// Push a new empty local frame onto the frame stack.
+    /// Push a new empty local frame that no body opened. See `pushOwnedLocalFrame`.
+    pub fn pushLocalFrame(self: *Context) !void {
+        return self.pushOwnedLocalFrame(0);
+    }
+
+    /// Push a new empty local frame tagged with the body that opened it, or `0` for none.
     ///
     /// No lock on the push itself: a context's frames above `durable_frame_floor` are
     /// task-private, including a runtime load's import frame. Only the owning task ever mutates
     /// them, and cross-task resolution reads only an ancestor's stable scope, capped at the
     /// floor, never its live frames above it. Growth of the shared backing is the one locked
     /// step; see `ensureFrameCapacityForPush`.
-    pub fn pushLocalFrame(self: *Context) !void {
+    pub fn pushOwnedLocalFrame(self: *Context, owner: usize) !void {
         try self.ensureFrameCapacityForPush();
         self.local_frames.appendAssumeCapacity(LocalFrame{});
         self.local_frame_kinds.appendAssumeCapacity(.lexical);
         self.local_frame_modules.appendAssumeCapacity(null);
+        self.local_frame_owners.appendAssumeCapacity(owner);
         self.assertFrameKindsParity();
     }
 
@@ -2763,6 +2784,9 @@ pub const Context = struct {
             if (self.local_frame_modules.items.len > 0) {
                 self.local_frame_modules.items.len -= 1;
             }
+            if (self.local_frame_owners.items.len > 0) {
+                self.local_frame_owners.items.len -= 1;
+            }
             self.assertFrameKindsParity();
         }
     }
@@ -2779,12 +2803,14 @@ pub const Context = struct {
         }
     }
 
-    /// Debug-only invariant: the kind tag array stays index-parallel with the frame array.
+    /// Debug-only invariant: the kind, module, and owner arrays stay index-parallel with the frame
+    /// array.
     ///
-    /// A desync means a push or pop touched one without the other.
+    /// A desync means a push or pop touched one without the others.
     fn assertFrameKindsParity(self: *const Context) void {
         std.debug.assert(self.local_frame_kinds.items.len == self.local_frames.items.len);
         std.debug.assert(self.local_frame_modules.items.len == self.local_frames.items.len);
+        std.debug.assert(self.local_frame_owners.items.len == self.local_frames.items.len);
     }
 
     /// True when frame `idx` is a transient lexical frame: strictly above the durable import frame
@@ -3937,6 +3963,8 @@ pub const Context = struct {
         errdefer self.local_frame_kinds.items.len -= 1;
         self.local_frame_modules.appendAssumeCapacity(module);
         errdefer self.local_frame_modules.items.len -= 1;
+        self.local_frame_owners.appendAssumeCapacity(0);
+        errdefer self.local_frame_owners.items.len -= 1;
         self.live_module_deps_frames += 1;
         errdefer self.live_module_deps_frames -= 1;
         self.assertFrameKindsParity();
@@ -8267,7 +8295,7 @@ pub const Context = struct {
             // a helper defined here and tail-called must still resolve, and a tail-recursive
             // definer must stay flat rather than open a frame per iteration.
             if (body_may_define and !owns_lexical_frame) {
-                try self.pushLocalFrame();
+                try self.pushOwnedLocalFrame(@intFromPtr(current_instructions.ptr));
                 owns_lexical_frame = true;
                 lexical_frame_index = self.local_frames.items.len - 1;
             }
@@ -8374,7 +8402,7 @@ pub const Context = struct {
     /// `owner` is the closure `quotation` came out of, when the body may be one that closure
     /// owns. See `executeQuotationWithOwner`.
     pub fn executeQuotationWithFrame(self: *Context, quotation: Quotation, owner: ?*const value_mod.Closure) anyerror!void {
-        try self.pushLocalFrame();
+        try self.pushOwnedLocalFrame(@intFromPtr(quotation.instructions.ptr));
         // Truncation before the pop, not instead of it: a spliced quotation body inside the
         // compiled arm can leave its own transient frame open on an error return, and
         // `popLocalFrame` pops the top.
@@ -8439,7 +8467,7 @@ pub const Context = struct {
     /// `owner` is the closure `quotation` came out of, when the body may be one that closure
     /// owns. See `executeQuotationWithOwner`.
     pub fn executeQuotationInline(self: *Context, quotation: Quotation, owner: ?*const value_mod.Closure) anyerror!void {
-        try self.pushLocalFrame();
+        try self.pushOwnedLocalFrame(@intFromPtr(quotation.instructions.ptr));
         defer self.popLocalFrame();
 
         // Restoring before a pending tail call is replayed is correct: the enclosing
@@ -9668,6 +9696,69 @@ test "executeQuotationWithPic: a defining body runs one frame above its caller a
     try ctx.executeQuotationWithPic(.{ .instructions = &body }, null, null, null, true);
     try std.testing.expectEqual(before + 1, probed_frame_depth);
     try std.testing.expectEqual(before, ctx.local_frames.items.len);
+}
+
+/// The owner tag of the top frame `probeFrameOwner` observed on its last call.
+var probed_frame_owner: usize = 0;
+
+fn probeFrameOwner(ctx: *Context) anyerror!void {
+    probed_frame_owner = ctx.local_frame_owners.items[ctx.local_frame_owners.items.len - 1];
+}
+
+test "body-entry frames are tagged with the body that opened them" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    try ctx.defineWord("probe-frame-owner", .{ .name = "probe-frame-owner", .action = .{ .native = probeFrameOwner } });
+    const body = [_]Instruction{.{ .op = .{ .call_word = "probe-frame-owner" }, .line = 1 }};
+    const tag = @intFromPtr(&body);
+
+    probed_frame_owner = 0;
+    try ctx.executeQuotationWithPic(.{ .instructions = &body }, null, null, null, true);
+    try std.testing.expectEqual(tag, probed_frame_owner);
+
+    probed_frame_owner = 0;
+    try ctx.executeQuotationWithFrame(.{ .instructions = &body }, null);
+    try std.testing.expectEqual(tag, probed_frame_owner);
+
+    probed_frame_owner = 0;
+    try ctx.executeQuotationInline(.{ .instructions = &body }, null);
+    try std.testing.expectEqual(tag, probed_frame_owner);
+}
+
+test "pushOwnedLocalFrame: records its tag, and pop removes it" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    try ctx.pushLocalFrame();
+    try ctx.pushOwnedLocalFrame(0x1234);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 0x1234 }, ctx.local_frame_owners.items);
+
+    ctx.popLocalFrame();
+    try std.testing.expectEqualSlices(usize, &.{0}, ctx.local_frame_owners.items);
+    ctx.popLocalFrame();
+    try std.testing.expectEqual(@as(usize, 0), ctx.local_frame_owners.items.len);
+}
+
+test "initForTask: a cloned frame keeps its owner tag" {
+    var parent = Context.init(std.testing.allocator);
+    defer parent.deinit();
+
+    try parent.pushLocalFrame();
+    parent.durable_frame_floor = 0;
+    try parent.pushOwnedLocalFrame(0x1234);
+
+    var scheduler = try std.testing.allocator.create(Scheduler);
+    defer std.testing.allocator.destroy(scheduler);
+    scheduler.* = try Scheduler.init(std.testing.allocator);
+    defer scheduler.deinit();
+
+    var task_ctx = try Context.initForTask(std.testing.allocator, &parent, scheduler);
+    defer task_ctx.deinit();
+
+    const owners = task_ctx.local_frame_owners.items;
+    try std.testing.expectEqual(task_ctx.local_frames.items.len, owners.len);
+    try std.testing.expectEqual(@as(usize, 0x1234), owners[owners.len - 1]);
 }
 
 test "pragmaEnvironmentSetSite accepts a prompt and the startup file, and refuses a source file" {
@@ -12057,7 +12148,7 @@ test "lookupWordStackEffectPtrLocked: descendant skips ancestor transient frames
     try std.testing.expect(child.lookupWordStackEffectPtrLocked("transient-eff") == null);
 }
 
-test "pushLocalFrame: growth keeps the three frame arrays in parity" {
+test "pushLocalFrame: growth keeps the four frame arrays in parity" {
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
 
@@ -12066,6 +12157,7 @@ test "pushLocalFrame: growth keeps the three frame arrays in parity" {
         try ctx.pushLocalFrame();
         try std.testing.expectEqual(ctx.local_frames.items.len, ctx.local_frame_kinds.items.len);
         try std.testing.expectEqual(ctx.local_frames.items.len, ctx.local_frame_modules.items.len);
+        try std.testing.expectEqual(ctx.local_frames.items.len, ctx.local_frame_owners.items.len);
     }
 
     while (i > 0) : (i -= 1) ctx.popLocalFrame();
@@ -13640,14 +13732,18 @@ test "frame-kind tag: pushLocalFrame is lexical, pushModuleDepsFrame is module_d
     try std.testing.expectEqual(@as(?*const value_mod.Module, &module), ctx.local_frame_modules.items[1]);
     try std.testing.expect(ctx.local_frame_modules.items[2] == null);
 
+    // No body opened any of the three.
+    try std.testing.expectEqualSlices(usize, &.{ 0, 0, 0 }, ctx.local_frame_owners.items);
+
     // The single module-deps frame is counted; the two lexical frames are not.
     try std.testing.expectEqual(@as(usize, 1), ctx.live_module_deps_frames);
 
-    // Popping keeps all three arrays index-parallel.
+    // Popping keeps all four arrays index-parallel.
     ctx.popLocalFrame();
     try std.testing.expectEqual(@as(usize, 2), ctx.local_frames.items.len);
     try std.testing.expectEqual(@as(usize, 2), ctx.local_frame_kinds.items.len);
     try std.testing.expectEqual(@as(usize, 2), ctx.local_frame_modules.items.len);
+    try std.testing.expectEqual(@as(usize, 2), ctx.local_frame_owners.items.len);
 
     // Popping the top lexical frame leaves the module-deps count untouched.
     try std.testing.expectEqual(@as(usize, 1), ctx.live_module_deps_frames);
