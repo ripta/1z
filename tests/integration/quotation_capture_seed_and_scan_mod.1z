@@ -1,0 +1,27 @@
+\ The module whose words lose their local to a tail call. Reached from the driver, so each word below
+\ runs with a live module-deps frame, as the seed's own tests do.
+\
+\ `label` is the module answer the nested body must reach once the callee's same-named local is
+\ refused.
+
+use "./quotation_capture_seed_and_scan_helper.1z" ;
+
+label: ( -- s ) [ "MODULE-LABEL" ] ;
+
+private{
+  \ A private helper is a module-changing tail call, because private{ } snapshots its block into a
+  \ synthetic <local-scope> module.
+  (run-bound): ( q -- x ) [ label: "CALLER-LABEL" ; call ] ;
+}
+
+\ `outer` is popped by the tail call and arrives through the seed. `inner` is live in the outer
+\ quotation's own frame and arrives through the scan. `label` must resolve past the callee's binding.
+through-public-helper: ( -- arr ) [
+  outer: "A" ;
+  [ inner: "B" ; [ outer inner label 3 array-n ] call ] run-bound
+] ;
+
+through-private-helper: ( -- arr ) [
+  outer: "A" ;
+  [ inner: "B" ; [ outer inner label 3 array-n ] call ] (run-bound)
+] ;

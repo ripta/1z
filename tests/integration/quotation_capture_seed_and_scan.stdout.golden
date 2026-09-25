@@ -1,0 +1,6 @@
+=== a nested quotation draws on the seed and the scan at once ===
+Stack: [ ]
+PASS: the seeded local, the scanned local, and the module label through a public helper in another file
+Stack: [ ]
+PASS: the seeded local, the scanned local, and the module label through a private helper
+Stack: [ ]

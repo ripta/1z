@@ -1,0 +1,22 @@
+\ A nested quotation drawing on the seed and the live-frame scan at once.
+\
+\ `outer` is bound by the word that created the outer quotation. The tail call closes that word's
+\ frame before the nested body is pushed, so the binding can only arrive through the enclosing
+\ body's captured scope.
+\
+\ `inner` is bound by the outer quotation itself. Its frame is live and lexically encloses the
+\ nested body, so the scan carries it.
+\
+\ `label` is bound by the callee whose frame sits live below both. The nested body must resolve it
+\ to the module word instead.
+\
+\ Each word is reached through `[ word ] call`, the shape the seed's own tests use.
+
+use "testing" ;
+use "./quotation_capture_seed_and_scan_mod.1z" ;
+
+"a nested quotation draws on the seed and the scan at once" test-section
+
+[ through-public-helper ] call { "A" "B" "MODULE-LABEL" } "the seeded local, the scanned local, and the module label through a public helper in another file" assert=
+
+[ through-private-helper ] call { "A" "B" "MODULE-LABEL" } "the seeded local, the scanned local, and the module label through a private helper" assert=

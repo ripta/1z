@@ -1,0 +1,5 @@
+\ Third module for quotation_capture_seed_and_scan.1z. A tail call into it changes module, and it
+\ binds `label` in its own frame before invoking, so that frame is live below the nested body's push
+\ and its call alike.
+
+run-bound: ( q -- x ) [ label: "CALLER-LABEL" ; call ] ;

@@ -1,0 +1,5 @@
+\ Companion module for `quotation_capture_seed_and_scan.1z` and its runtime-image twin. Binds `label`
+\ in its own frame and then calls a quotation written in another file, which must not see that
+\ binding.
+
+run-bound: ( q -- x ) [ label: "CALLER-LABEL" ; call ] ;

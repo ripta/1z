@@ -1,0 +1,34 @@
+\ A nested quotation drawing on the seed and the live-frame scan at once, compiled. Each line must
+\ print { "A" "B" "MODULE-LABEL" }.
+\
+\ `outer` is bound by the word that created the outer quotation, and the tail call pops that frame,
+\ so it arrives through the enclosing body's captured scope.
+\
+\ `inner` is bound by the outer quotation itself, whose live frame encloses the nested body, so the
+\ scan carries it.
+\
+\ `label` is bound by the callee live below, which the nested body must not see.
+\
+\ `quotation_capture_seed_and_scan_runtime_image.1z` is the same program in the runtime-image
+\ class, whose decode path differs.
+use { run-bound: } "./support/quotation_capture_seed_and_scan_runner.1z" ;
+
+label: ( -- s ) [ "MODULE-LABEL" ] ;
+
+private{
+  (run-bound): ( q -- x ) [ label: "CALLER-LABEL" ; call ] ;
+}
+
+through-public-helper: ( -- arr ) [
+  outer: "A" ;
+  [ inner: "B" ; [ outer inner label 3 array-n ] call ] run-bound
+] ;
+
+through-public-helper inspect print-line
+
+through-private-helper: ( -- arr ) [
+  outer: "A" ;
+  [ inner: "B" ; [ outer inner label 3 array-n ] call ] (run-bound)
+] ;
+
+through-private-helper inspect print-line

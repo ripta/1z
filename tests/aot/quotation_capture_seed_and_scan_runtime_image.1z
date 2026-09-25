@@ -1,0 +1,24 @@
+\ `quotation_capture_seed_and_scan.1z` in the runtime-image class, where a pushed quotation's decode
+\ is the one the image's reified-quotation path caches. Each line must print
+\ { "A" "B" "MODULE-LABEL" }.
+use { run-bound: } "./support/quotation_capture_seed_and_scan_runner.1z" ;
+
+label: ( -- s ) [ "MODULE-LABEL" ] ;
+
+private{
+  (run-bound): ( q -- x ) [ label: "CALLER-LABEL" ; call ] ;
+}
+
+through-public-helper: ( -- arr ) [
+  outer: "A" ;
+  [ inner: "B" ; [ outer inner label 3 array-n ] call ] run-bound
+] ;
+
+through-public-helper inspect print-line
+
+through-private-helper: ( -- arr ) [
+  outer: "A" ;
+  [ inner: "B" ; [ outer inner label 3 array-n ] call ] (run-bound)
+] ;
+
+through-private-helper inspect print-line
