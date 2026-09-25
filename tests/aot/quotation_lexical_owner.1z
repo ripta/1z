@@ -1,0 +1,63 @@
+\ A quotation a callee pushes resolves `label` against its own scope, never against a local its
+\ caller bound under the same name. Each of the first six lines must print MODULE-LABEL.
+\
+\ The callers here are compiled, so their frames are opened by emitted code, and each pushed
+\ quotation is a copy decoded at run time. `quotation_lexical_owner_runtime_image.1z` is the same
+\ program in the runtime-image class, whose decode path differs.
+label: ( -- s ) [ "MODULE-LABEL" ] ;
+
+reader: ( -- quot ) [ [ label ] ] ;
+
+direct-call: ( -- s ) [
+  label: "CALLER-LABEL" ;
+  reader call
+] ;
+
+direct-call print-line
+
+runner: ( quot -- s ) [
+  label: "CALLER-LABEL" ;
+  call
+] ;
+
+reader runner print-line
+
+escaping: ( -- quot ) [
+  label: "CALLER-LABEL" ;
+  reader
+] ;
+
+escaping call print-line
+
+spliced: ( -- s ) [ [ label: "CALLER-LABEL" ; reader call ] call ] ;
+
+spliced print-line
+
+defining-reader: ( -- quot ) [
+  other: "OTHER" ;
+  [ label ]
+] ;
+
+defining-caller: ( -- s ) [
+  label: "CALLER-LABEL" ;
+  defining-reader call
+] ;
+
+defining-caller print-line
+
+inline-reader: ( -- quot ) const inline [ [ label ] ] ;
+
+inline-caller: ( -- s ) [
+  label: "CALLER-LABEL" ;
+  inline-reader call
+] ;
+
+inline-caller print-line
+
+\ The narrowing must not reach a quotation's own enclosing body. Must print OWN-LABEL.
+own-reader: ( -- s ) [
+  label: "OWN-LABEL" ;
+  [ label ] runner
+] ;
+
+own-reader print-line

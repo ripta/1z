@@ -45,6 +45,22 @@ inline-caller: ( -- s ) [
 
 inline-caller "MODULE-LABEL" "a quotation an inlined callee pushes" assert=
 
+spliced-caller: ( -- s ) [ [ label: "CALLER-LABEL" ; reader call ] call ] ;
+
+spliced-caller "MODULE-LABEL" "a local bound inside a quotation the caller calls" assert=
+
+defining-reader: ( -- quot ) [
+  other: "OTHER" ;
+  [ label ]
+] ;
+
+defining-caller: ( -- s ) [
+  label: "CALLER-LABEL" ;
+  defining-reader call
+] ;
+
+defining-caller "MODULE-LABEL" "a callee that opens a frame of its own" assert=
+
 "a body sees its own locals" test-section
 
 own-direct: ( -- n ) [ n: 41 ; n 1 + ] ;

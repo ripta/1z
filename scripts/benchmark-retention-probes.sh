@@ -25,7 +25,7 @@
 
 set -euo pipefail
 
-onez="${1:-./zig-out/bin/1z}"
+onez="${1:-./zig-out/release/bin/1z}"
 iterations="${2:-500000}"
 
 # "label|preamble|body". The rows follow the retention classes: a non-allocating

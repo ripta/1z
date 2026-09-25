@@ -1,0 +1,7 @@
+\ A quotation this file writes, called by a module word that binds `label` in its own frame, resolves
+\ `label` against this file's word. Must print MODULE-LABEL.
+use { run-bound: } "./support/lexical_owner_runner.1z" ;
+
+label: ( -- s ) [ "MODULE-LABEL" ] ;
+
+[ label ] run-bound print-line

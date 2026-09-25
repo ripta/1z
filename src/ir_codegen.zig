@@ -33,6 +33,7 @@ const bail_stats_mod = @import("bail_stats.zig");
 const ibc = @import("instruction_bytecode.zig");
 const inline_region_table = @import("inline_region_table.zig");
 const may_define = @import("may_define.zig");
+const AotLexicalSiteTable = @import("aot_lexical_sites.zig").AotLexicalSiteTable;
 
 const stack_effect_mod = @import("stack_effect.zig");
 const StackEffect = stack_effect_mod.StackEffect;
@@ -2412,11 +2413,14 @@ const CompileState = struct {
     recover_fn: c.ir_ref = c.IR_UNUSED,
     cleanup_fn: c.ir_ref = c.IR_UNUSED,
     get_fn: c.ir_ref = c.IR_UNUSED,
-    /// References to jitPushLexicalFrame / jitPopLexicalFrame: open and close the transient
-    /// lexical frame a spliced quotation body runs in. Bound unconditionally, because whether a
+    /// References to the frame push and pop: open and close the transient lexical frame a spliced
+    /// quotation body or a word body runs in. The push is `jitPushLexicalFrame`, or its
+    /// `onez_push_lexical_frame` wrapper in an AOT program. Bound unconditionally, because whether a
     /// body needs the frame is decided during emission, after the pre-scan has run.
     push_lexical_frame_fn: c.ir_ref = c.IR_UNUSED,
     pop_lexical_frame_fn: c.ir_ref = c.IR_UNUSED,
+    /// How a frame this function pushes names the body that opened it. See `lexicalOwnerRef`.
+    lexical_owners: LexicalOwnerSource = .none,
     with_parameter_fn: c.ir_ref = c.IR_UNUSED,
     iterator_fn: c.ir_ref = c.IR_UNUSED,
     native_call_fn: c.ir_ref = c.IR_UNUSED,
@@ -3838,12 +3842,14 @@ fn materializeQuotations(state: *CompileState, stack: []StackEntry, sp: usize, e
                         };
                     }
 
-                    // Emit callback: jitPushQuotation(ctx, data_ptr, data_len, dest_addr, quotation_id)
+                    // Emit callback: jitPushQuotation(ctx, data_ptr, data_len, dest_addr, quotation_id, site)
                     //
                     // Writes the quotation Value directly to the slot address rather than pushing to
                     // the stack top. The quotation_id allows jitPushQuotation to attach the compiled code_ptr.
-                    const proto_5arg = c.ir_proto_5(ctx, 0, c.IR_I32, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR);
-                    const push_fn = c.ir_const_func(ctx, c.ir_str(ctx, "onez_push_quotation"), proto_5arg);
+                    // The site is where the decoded copy sits in the lexical nesting.
+                    var push_params = [_]u8{c.IR_ADDR} ** 6;
+                    const proto_6arg = c.ir_proto(ctx, 0, c.IR_I32, push_params.len, &push_params);
+                    const push_fn = c.ir_const_func(ctx, c.ir_str(ctx, "onez_push_quotation"), proto_6arg);
 
                     const ctx_val = if (state.preloaded_ctx_val != c.IR_UNUSED)
                         state.preloaded_ctx_val
@@ -3865,8 +3871,9 @@ fn materializeQuotations(state: *CompileState, stack: []StackEntry, sp: usize, e
                     const dest_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), base_addr, slot_byte_offset);
 
                     const q_id_const = c.ir_const_addr(ctx, q_id);
+                    const site_ref = try lexicalOwnerRef(state, body);
 
-                    const call_result = c._ir_CALL_5(ctx, c.IR_I32, push_fn, ctx_val, sym_ref, data_len_const, dest_addr, q_id_const);
+                    const call_result = c._ir_CALL_6(ctx, c.IR_I32, push_fn, ctx_val, sym_ref, data_len_const, dest_addr, q_id_const, site_ref);
                     emitCallbackPostCheck(state, call_result, state.error_propagate_status, null, .none);
 
                     stack[qi] = .{ .raw_at_slot = qi };
@@ -9589,6 +9596,7 @@ fn compileWordPass(
         .get_fn = get_fn,
         .push_lexical_frame_fn = push_lexical_frame_fn,
         .pop_lexical_frame_fn = pop_lexical_frame_fn,
+        .lexical_owners = .address,
         .with_parameter_fn = with_parameter_fn,
         .iterator_fn = iterator_fn,
         .native_call_fn = native_call_fn,
@@ -9655,7 +9663,7 @@ fn compileWordPass(
     // re-pushed on the next iteration.
     const needs_lexical_frame = quotationBodyNeedsFrame(&state, instructions);
     if (needs_lexical_frame) {
-        emitPushLexicalFrame(&state);
+        try emitPushLexicalFrame(&state, instructions);
         state.open_lexical_frames += 1;
     }
 
@@ -9806,6 +9814,7 @@ pub fn emitWordC(
     const error_propagate_status = c.ir_const_i32(&ctx, 2);
 
     const proto_1arg = c.ir_proto_1(&ctx, 0, c.IR_I32, c.IR_ADDR);
+    const proto_2arg = c.ir_proto_2(&ctx, 0, c.IR_I32, c.IR_ADDR, c.IR_ADDR);
     const proto_5arg = c.ir_proto_5(&ctx, 0, c.IR_I32, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR);
     var proto_9arg_params = [_]u8{ c.IR_ADDR, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR };
     const proto_9arg = c.ir_proto(&ctx, 0, c.IR_I32, proto_9arg_params.len, &proto_9arg_params);
@@ -9817,7 +9826,7 @@ pub fn emitWordC(
     const null_code_ptr_error_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "jitNullCodePtrError"), proto_1arg);
     const append_word_trace_frame_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "onez_append_named_trace_frame"), proto_9arg);
     const append_builtin_trace_frame_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "onez_append_builtin_trace_frame"), proto_5arg);
-    const push_lexical_frame_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "jitPushLexicalFrame"), proto_1arg);
+    const push_lexical_frame_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "jitPushLexicalFrame"), proto_2arg);
     const pop_lexical_frame_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "jitPopLexicalFrame"), proto_1arg);
 
     const sp_val = c._ir_LOAD(&ctx, c.IR_ADDR, sp_ptr);
@@ -9893,7 +9902,7 @@ pub fn emitWordC(
     // interpreter context, which `quotationBodyNeedsFrame` needs before it can answer at all.
     const needs_lexical_frame = quotationBodyNeedsFrame(&state, instructions);
     if (needs_lexical_frame) {
-        emitPushLexicalFrame(&state);
+        try emitPushLexicalFrame(&state, instructions);
         state.open_lexical_frames += 1;
     }
 
@@ -9986,7 +9995,7 @@ pub fn emitWordCAot(
     freestanding: bool,
     fallbacks_locked: bool,
 ) (IrCodegenError || ir_mod.IrError || Allocator.Error)![]u8 {
-    return emitWordCAotWithCName(instructions, input_count, output_count, name, null, resolver, self_name, aot_compiled_names, callee_resolution, string_literals, quotation_literals, array_literals, allocator, stack_effect, inferred_param_types, reason_out, quotation_id_map, pic_table, interp_ctx, pic_stats_out, aot_fallback_emit_count_out, aot_fallback_report_out, slot_maps, emit_slot_table_literals, source_file, interpreter_free, freestanding, fallbacks_locked, false);
+    return emitWordCAotWithCName(instructions, input_count, output_count, name, null, resolver, self_name, aot_compiled_names, callee_resolution, string_literals, quotation_literals, array_literals, allocator, stack_effect, inferred_param_types, reason_out, quotation_id_map, pic_table, interp_ctx, pic_stats_out, aot_fallback_emit_count_out, aot_fallback_report_out, slot_maps, emit_slot_table_literals, source_file, interpreter_free, freestanding, fallbacks_locked, false, null);
 }
 
 /// Like emitWordCAot but with a pre-mangled C function name override.
@@ -10022,15 +10031,16 @@ fn emitWordCAotWithCName(
     freestanding: bool,
     fallbacks_locked: bool,
     needs_lexical_frame: bool,
+    lexical_sites: ?*AotLexicalSiteTable,
 ) (IrCodegenError || ir_mod.IrError || Allocator.Error)![]u8 {
     var reason: ?NotCompilableReason = null;
-    const discovered = emitWordCAotPass(instructions, input_count, output_count, name, c_name_override, resolver, self_name, aot_compiled_names, callee_resolution, string_literals, quotation_literals, array_literals, allocator, stack_effect, inferred_param_types, null, &reason, quotation_id_map, pic_table, interp_ctx, null, null, null, slot_maps, emit_slot_table_literals, source_file, interpreter_free, freestanding, fallbacks_locked, false, needs_lexical_frame) catch |err| {
+    const discovered = emitWordCAotPass(instructions, input_count, output_count, name, c_name_override, resolver, self_name, aot_compiled_names, callee_resolution, string_literals, quotation_literals, array_literals, allocator, stack_effect, inferred_param_types, null, &reason, quotation_id_map, pic_table, interp_ctx, null, null, null, slot_maps, emit_slot_table_literals, source_file, interpreter_free, freestanding, fallbacks_locked, false, needs_lexical_frame, null) catch |err| {
         if (reason_out) |ro| ro.* = reason;
         return err;
     };
     if (discovered.body) |b| allocator.free(b);
     reason = null;
-    const result = emitWordCAotPass(instructions, input_count, output_count, name, c_name_override, resolver, self_name, aot_compiled_names, callee_resolution, string_literals, quotation_literals, array_literals, allocator, stack_effect, inferred_param_types, discovered.peak_stack_depth, &reason, quotation_id_map, pic_table, interp_ctx, pic_stats_out, aot_fallback_emit_count_out, aot_fallback_report_out, slot_maps, emit_slot_table_literals, source_file, interpreter_free, freestanding, fallbacks_locked, discovered.row_aware_self_loop, needs_lexical_frame) catch |err| {
+    const result = emitWordCAotPass(instructions, input_count, output_count, name, c_name_override, resolver, self_name, aot_compiled_names, callee_resolution, string_literals, quotation_literals, array_literals, allocator, stack_effect, inferred_param_types, discovered.peak_stack_depth, &reason, quotation_id_map, pic_table, interp_ctx, pic_stats_out, aot_fallback_emit_count_out, aot_fallback_report_out, slot_maps, emit_slot_table_literals, source_file, interpreter_free, freestanding, fallbacks_locked, discovered.row_aware_self_loop, needs_lexical_frame, lexical_sites) catch |err| {
         if (reason_out) |ro| ro.* = reason;
         return err;
     };
@@ -10095,6 +10105,9 @@ fn emitWordCAotPass(
     /// analysis flagged, so its definitions pop with the call on this tier as they do in the
     /// interpreter.
     needs_lexical_frame: bool,
+    /// The program's site table, which the frames and literals this function tags are added to.
+    /// Null for a pass whose output is discarded, which then tags everything `0`.
+    lexical_sites: ?*AotLexicalSiteTable,
 ) (IrCodegenError || ir_mod.IrError || Allocator.Error)!EmitWordCAotPassResult {
     ValueLayout.ensureInit();
 
@@ -10172,7 +10185,7 @@ fn emitWordCAotPass(
     else
         c.IR_UNUSED;
 
-    const push_lexical_frame_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "jitPushLexicalFrame"), proto_1arg);
+    const push_lexical_frame_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "onez_push_lexical_frame"), proto_2arg);
     const pop_lexical_frame_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "jitPopLexicalFrame"), proto_1arg);
 
     const iterator_fn = if (scan_flags.needs_iterators)
@@ -10416,6 +10429,7 @@ fn emitWordCAotPass(
         .append_word_trace_frame_fn = append_word_trace_frame_fn,
         .append_builtin_trace_frame_fn = append_builtin_trace_frame_fn,
         .aot_mode = true,
+        .lexical_owners = if (lexical_sites) |sites| .{ .sites = sites } else .none,
         .interpreter_free = interpreter_free,
         .freestanding = freestanding,
         .fallbacks_locked = fallbacks_locked,
@@ -10479,7 +10493,7 @@ fn emitWordCAotPass(
     // The frame opens inside any loop header above, so a back-edge that pops it through
     // `emitOpenLexicalFramePops` finds it re-pushed on the next iteration.
     if (needs_lexical_frame) {
-        emitPushLexicalFrame(&state);
+        try emitPushLexicalFrame(&state, instructions);
         state.open_lexical_frames += 1;
     }
 
@@ -11049,6 +11063,10 @@ pub fn emitProgramC(
         try compiled_names.put(allocator, identities[i], w.word_id);
     }
 
+    // Filled by the final emit passes, then written out with the literal constants.
+    var lexical_sites = AotLexicalSiteTable.init(allocator);
+    defer lexical_sites.deinit();
+
     // 1. Preamble
     //
     // Freestanding mode targets `os.tag == .freestanding`: no libc, so the
@@ -11088,6 +11106,7 @@ pub fn emitProgramC(
         \\extern int onez_set_source(void *ctx, const char *data, unsigned long len);
         \\extern int32_t onez_runtime_register_compiled(void *rt, int32_t (**table)(uintptr_t), const char **names, const char **modules, uint32_t size);
         \\extern int32_t onez_runtime_register_quotations(void *rt, int32_t (**table)(uintptr_t), uint32_t size);
+        \\extern int32_t onez_runtime_register_lexical_sites(void *rt, const uint64_t *rows, uint32_t count);
         \\extern int32_t onez_runtime_run(void *rt, uint32_t entry_word_id);
         \\extern void onez_fire_exit_hooks(void *rt, int32_t code);
         \\extern void onez_print_error(void *rt);
@@ -11335,6 +11354,7 @@ pub fn emitProgramC(
                     fallbacks_locked,
                     false,
                     word_needs_frame[i],
+                    null,
                 ) catch continue;
                 if (discovered.body) |b| allocator.free(b);
                 if (discovered.returns_row) {
@@ -11405,6 +11425,7 @@ pub fn emitProgramC(
             meta.freestanding,
             fallbacks_locked,
             word_needs_frame[i],
+            null,
         ) catch |err| {
             const rejected: ?NotCompilableReason = if (reason) |r|
                 r
@@ -11454,7 +11475,7 @@ pub fn emitProgramC(
                 var dreason: ?NotCompilableReason = null;
                 // No inferred types: the freeze-time pass sizes a quotation's table by its
                 // `inferred_effect`, and this branch runs precisely when it has none.
-                const dres = emitWordCAotPass(q.instructions, ic, 0, q.c_name, q.c_name, resolver, null, &compiled_names, resolver_data.callee_resolution, null, null, null, allocator, null, &.{}, null, &dreason, null, null, interp_ctx, null, null, null, slot_maps_ptr, emit_slot_table_literals, q.source_file, strict_interpreter_free, meta.freestanding, fallbacks_locked, false, bracketed_quotation_ids.contains(q.quotation_id)) catch {
+                const dres = emitWordCAotPass(q.instructions, ic, 0, q.c_name, q.c_name, resolver, null, &compiled_names, resolver_data.callee_resolution, null, null, null, allocator, null, &.{}, null, &dreason, null, null, interp_ctx, null, null, null, slot_maps_ptr, emit_slot_table_literals, q.source_file, strict_interpreter_free, meta.freestanding, fallbacks_locked, false, bracketed_quotation_ids.contains(q.quotation_id), null) catch {
                     emitAotEffectTrace(interp_ctx, q.c_name, ic, null, dreason);
                     continue;
                 };
@@ -11498,6 +11519,7 @@ pub fn emitProgramC(
             meta.freestanding,
             fallbacks_locked,
             bracketed_quotation_ids.contains(q.quotation_id),
+            null,
         ) catch {
             emitAotCodegenTrace(interp_ctx, "quot", q.c_name, qreason orelse .unknown_reason);
             continue;
@@ -11575,6 +11597,7 @@ pub fn emitProgramC(
             meta.freestanding,
             fallbacks_locked,
             word_needs_frame[i],
+            &lexical_sites,
         ) catch |err| switch (err) {
             error.NotCompilable => continue,
             else => return err,
@@ -11625,6 +11648,7 @@ pub fn emitProgramC(
             meta.freestanding,
             fallbacks_locked,
             bracketed_quotation_ids.contains(q.quotation_id),
+            &lexical_sites,
         ) catch |err| switch (err) {
             error.NotCompilable => continue,
             else => return err,
@@ -11949,6 +11973,9 @@ pub fn emitProgramC(
         try out.appendSlice(allocator, "\n");
     }
 
+    // 3.6b. Lexical sites, which the compiled frames and quotation literals above are tagged with.
+    try lexical_sites.emitC(allocator, &out);
+
     // 3.7. Array/hash literal constants
     for (array_literals.items, 0..) |lit, lit_idx| {
         var idx_buf: [20]u8 = undefined;
@@ -11981,7 +12008,10 @@ pub fn emitProgramC(
     try out.appendSlice(allocator, "extern int32_t jitRecover(uintptr_t ctx);\n");
     try out.appendSlice(allocator, "extern int32_t jitCleanup(uintptr_t ctx);\n");
     try out.appendSlice(allocator, "extern int32_t jitGet(uintptr_t ctx);\n");
-    try out.appendSlice(allocator, "extern int32_t jitPushLexicalFrame(uintptr_t ctx);\n");
+    try out.appendSlice(allocator, "extern int32_t jitPushLexicalFrame(uintptr_t ctx, uintptr_t owner);\n");
+    try out.appendSlice(allocator, "extern const uint64_t onez_lexical_sites[];\n");
+    try out.appendSlice(allocator, "static inline uintptr_t onez_lexical_site_tag(uintptr_t site) { return site ? (uintptr_t)&onez_lexical_sites[site - 1] : 0; }\n");
+    try out.appendSlice(allocator, "static int32_t onez_push_lexical_frame(uintptr_t ctx, uintptr_t site) { return jitPushLexicalFrame(ctx, onez_lexical_site_tag(site)); }\n");
     try out.appendSlice(allocator, "extern int32_t jitPopLexicalFrame(uintptr_t ctx);\n");
     try out.appendSlice(allocator, "extern int32_t jitWithParameter(uintptr_t ctx);\n");
     try out.appendSlice(allocator, "extern int32_t jitIteratorOp(uintptr_t ctx, uintptr_t opcode);\n");
@@ -12015,10 +12045,10 @@ pub fn emitProgramC(
     try out.appendSlice(allocator, "static int32_t onez_append_builtin_trace_frame(uintptr_t ctx, uintptr_t frame_kind, const char *src, uintptr_t src_len, uintptr_t line) { return jitAppendBuiltinTraceFrame(ctx, frame_kind, (uintptr_t)src, src_len, line); }\n");
     try out.appendSlice(allocator, "extern int32_t jitPushString(uintptr_t ctx, uintptr_t str_ptr, uintptr_t str_len);\n");
     try out.appendSlice(allocator, "extern int32_t jitPushSymbol(uintptr_t ctx, uintptr_t str_ptr, uintptr_t str_len);\n");
-    try out.appendSlice(allocator, "extern int32_t jitPushQuotation(uintptr_t ctx, uintptr_t data, uintptr_t len, uintptr_t dest, uintptr_t quotation_id);\n");
+    try out.appendSlice(allocator, "extern int32_t jitPushQuotation(uintptr_t ctx, uintptr_t data, uintptr_t len, uintptr_t dest, uintptr_t quotation_id, uintptr_t site);\n");
     try out.appendSlice(allocator, "static int32_t onez_push_string(uintptr_t ctx, const char *str, uintptr_t len) { return jitPushString(ctx, (uintptr_t)str, len); }\n");
     try out.appendSlice(allocator, "static int32_t onez_push_symbol(uintptr_t ctx, const char *str, uintptr_t len) { return jitPushSymbol(ctx, (uintptr_t)str, len); }\n");
-    try out.appendSlice(allocator, "static int32_t onez_push_quotation(uintptr_t ctx, const unsigned char *data, uintptr_t len, uintptr_t dest, uintptr_t quotation_id) { return jitPushQuotation(ctx, (uintptr_t)data, len, dest, quotation_id); }\n");
+    try out.appendSlice(allocator, "static int32_t onez_push_quotation(uintptr_t ctx, const unsigned char *data, uintptr_t len, uintptr_t dest, uintptr_t quotation_id, uintptr_t site) { return jitPushQuotation(ctx, (uintptr_t)data, len, dest, quotation_id, onez_lexical_site_tag(site)); }\n");
     try out.appendSlice(allocator, "extern int32_t jitPushArray(uintptr_t ctx, uintptr_t data_ptr, uintptr_t data_len);\n");
     try out.appendSlice(allocator, "static int32_t onez_push_array(uintptr_t ctx, const unsigned char *data, uintptr_t len) { return jitPushArray(ctx, (uintptr_t)data, len); }\n");
     // Slot-table-indexed typed-literal helpers. The runtime caches
@@ -12639,6 +12669,14 @@ pub fn emitProgramC(
         try out.appendSlice(allocator, "    onez_runtime_register_quotations(rt, onez_quotation_table, ");
         try out.appendSlice(allocator, q_size_str_pre);
         try out.appendSlice(allocator, ");\n");
+    }
+
+    // Ahead of the image load and of any compiled code, since a decoded literal is placed in the
+    // lexical nesting through these rows on its first push.
+    if (lexical_sites.count() > 0) {
+        var sites_buf: [96]u8 = undefined;
+        const sites_line = std.fmt.bufPrint(&sites_buf, "    onez_runtime_register_lexical_sites(rt, onez_lexical_sites, {d});\n", .{lexical_sites.count()}) catch unreachable;
+        try out.appendSlice(allocator, sites_line);
     }
 
     // Image hookup: rehydrate module-private dictionary entries (and,
@@ -13606,12 +13644,52 @@ fn ctxValRef(state: *CompileState) c.ir_ref {
     return c._ir_LOAD(state.ctx, c.IR_ADDR, ctx_addr);
 }
 
-/// Open the transient lexical frame a spliced quotation body runs in.
+/// Where compiled code gets the tag that names a body in the lexical nesting.
+///
+/// The interpreter tags a frame with the address of the body that opened it, and the admission
+/// rule reads that tag against the lexical parent map. A compiled frame push and a compiled
+/// quotation push both carry the equivalent tag.
+const LexicalOwnerSource = union(enum) {
+    /// Tag `0`, a frame no body opened. For an emitter with no runtime to compare against.
+    none,
+    /// The body's own address, baked in. Valid only where compiled code runs in the process that
+    /// parsed it, which is the JIT.
+    address,
+    /// The body's site number in the program's static site table, which the emitted C wrappers turn
+    /// into the row's address. See `AotLexicalSiteTable`.
+    sites: *AotLexicalSiteTable,
+};
+
+/// The tag naming `body` in the lexical nesting, as an IR operand. A frame opened around `body`
+/// carries it as its owner, and a push of `body` as a literal carries it as the literal's site.
+///
+/// On the AOT source the operand is a site number, the row index plus one, and the emitted wrapper
+/// passes the row's address on. The IR has no pointer-to-integer cast to take that address in place.
+///
+/// A body the build-time map does not know gets `0` on every source. An unknown owner admits every
+/// body, which is also what the interpreter's own frames answer for such a body.
+fn lexicalOwnerRef(state: *CompileState, body: []const Instruction) IrCodegenError!c.ir_ref {
+    const ictx = state.interp_ctx orelse return c.ir_const_addr(state.ctx, 0);
+    if (body.len == 0) return c.ir_const_addr(state.ctx, 0);
+
+    switch (state.lexical_owners) {
+        .none => return c.ir_const_addr(state.ctx, 0),
+        .address => return c.ir_const_addr(state.ctx, @intFromPtr(body.ptr)),
+        .sites => |sites| {
+            const index = sites.siteFor(ictx.lexical_parents, @intFromPtr(body.ptr)) catch
+                return IrCodegenError.CompilationFailed;
+            return c.ir_const_addr(state.ctx, if (index) |i| @as(usize, i) + 1 else 0);
+        },
+    }
+}
+
+/// Open the transient lexical frame a quotation or word body runs in, tagged with `body`.
 ///
 /// The only failure is an allocation failure inside the frame stack, which propagates like any
 /// other callback failure. No stack pointer is stored first: the helper reads no operands.
-fn emitPushLexicalFrame(state: *CompileState) void {
-    const call_result = c._ir_CALL_1(state.ctx, c.IR_I32, state.push_lexical_frame_fn, ctxValRef(state));
+fn emitPushLexicalFrame(state: *CompileState, body: []const Instruction) IrCodegenError!void {
+    const owner = try lexicalOwnerRef(state, body);
+    const call_result = c._ir_CALL_2(state.ctx, c.IR_I32, state.push_lexical_frame_fn, ctxValRef(state), owner);
     emitCallbackPostCheck(state, call_result, state.error_propagate_status, null, .none);
 }
 
@@ -13661,7 +13739,7 @@ fn compileQuotationBodyInline(
         return compileInstructions(state, body, stack, sp);
     }
 
-    emitPushLexicalFrame(state);
+    try emitPushLexicalFrame(state, body);
     state.open_lexical_frames += 1;
     defer state.open_lexical_frames -= 1;
 
@@ -14492,15 +14570,19 @@ export fn jitGet(ctx_raw: usize) callconv(.c) i32 {
     return 0;
 }
 
-/// Open the transient lexical frame a spliced quotation body runs in.
+/// Open the transient lexical frame a spliced quotation body or a word body runs in.
 ///
 /// The interpreter brackets every quotation execution this way, so a definition made during the
-/// execution lands above the import target and pops with the frame. A compiled splice emits this
-/// pair around a body the may-define analysis flagged.
-export fn jitPushLexicalFrame(ctx_raw: usize) callconv(.c) i32 {
+/// execution lands above the import target and pops with the frame. Compiled code emits this pair
+/// around a splice or a word body the may-define analysis flagged.
+///
+/// `owner` is the tag of the body that opened the frame, as the interpreter's own body-entry push
+/// records it: the body's address in the JIT, its site row in an AOT program, and `0` where the
+/// emitter has neither.
+export fn jitPushLexicalFrame(ctx_raw: usize, owner: usize) callconv(.c) i32 {
     if (ctx_raw == 0) return 1;
     const ctx: *Context = @ptrFromInt(ctx_raw);
-    ctx.pushLocalFrame() catch |err| {
+    ctx.pushOwnedLocalFrame(owner) catch |err| {
         ctx.jit_pending_error = err;
         return 2;
     };
@@ -15326,61 +15408,62 @@ export fn jitPushOnceCellSlot(ctx_raw: usize, slot: usize) callconv(.c) i32 {
 /// `dest_ptr`. Unlike jitPushString which appends to the stack, this writes
 /// to an existing slot position used by materializeQuotations.
 ///
-/// In a runtime-image binary the decode is cached per data pointer in the process-shared
-/// `ReifiedDecodeCache`, so every push of the same literal in every context shares one
-/// instruction slice.
+/// The decode is cached per data pointer in the process-shared `ReifiedDecodeCache`, so every push
+/// of the same literal in every context shares one instruction slice.
 ///
 /// That matches the interpreter, where a literal push reuses the parsed slice and module bodies
 /// are process-shared through the module cache.
 ///
+/// Keys in the lexical parent map must live for the whole process, and a cached decode does. The
+/// decode is aliased to `site`, the literal's row in the program's site table. The literals nested
+/// inside it are recorded under it.
+///
 /// The defining-module stamp from the image's reified-quotation table is written into the shared
 /// stamp store before the slice is published, under the cache's decode mutex, so no context can
 /// obtain a body the store cannot resolve.
-export fn jitPushQuotation(ctx_raw: usize, data_ptr: usize, data_len: usize, dest_raw: usize, quotation_id: usize) callconv(.c) i32 {
+export fn jitPushQuotation(ctx_raw: usize, data_ptr: usize, data_len: usize, dest_raw: usize, quotation_id: usize, site: usize) callconv(.c) i32 {
     if (ctx_raw == 0) return 1;
     const ctx: *Context = @ptrFromInt(ctx_raw);
     const src: [*]const u8 = @ptrFromInt(data_ptr);
 
     const body: struct { instructions: []const Instruction, effect: ?*const StackEffect } = blk: {
-        if (ctx.runtime_image_loaded) {
-            const cache = ctx.reified_decode_cache;
-            if (cache.lookup(data_ptr)) |cached| break :blk .{ .instructions = cached.instructions, .effect = cached.effect };
+        const cache = ctx.reified_decode_cache;
+        if (cache.lookup(data_ptr)) |cached| break :blk .{ .instructions = cached.instructions, .effect = cached.effect };
 
-            cache.decode_mu.lock();
-            defer cache.decode_mu.unlock();
+        cache.decode_mu.lock();
+        defer cache.decode_mu.unlock();
 
-            // Re-check under the mutex: another context may have decoded this site between the
-            // lock-free probe above and the acquisition.
-            if (cache.lookup(data_ptr)) |cached| break :blk .{ .instructions = cached.instructions, .effect = cached.effect };
+        // Re-check under the mutex: another context may have decoded this site between the
+        // lock-free probe above and the acquisition.
+        if (cache.lookup(data_ptr)) |cached| break :blk .{ .instructions = cached.instructions, .effect = cached.effect };
 
-            // A failure below strands the partial decode on the shared arena, which cannot free
-            // it individually. A failed decode is never cached, so a recovered-and-retried push
-            // site strands another copy per attempt. Accepted: the failure needs a corrupt
-            // stream or an exhausted allocator, neither of which retrying can outrun.
-            var diag: ibc.DecodeDiagnostic = undefined;
-            const decoded = deserializeQuotationInstructions(src[0..data_len], cache.decodeAllocator(), null, &diag) catch |err| {
-                setDecodeFailureMessage(ctx, &diag, err);
-                ctx.jit_pending_error = err;
-                return 2;
-            };
-            if (ctx.image_reified_quotation_modules) |modules| {
-                if (modules.get(data_ptr)) |module| {
-                    ctx.stampQuotationBodies(decoded.instructions, module) catch {
-                        ctx.jit_pending_error = error.OutOfMemory;
-                        return 2;
-                    };
-                }
-            }
-            cache.insertAssumeLocked(data_ptr, decoded.instructions, decoded.effect) catch {
-                ctx.jit_pending_error = error.OutOfMemory;
-                return 2;
-            };
-            break :blk .{ .instructions = decoded.instructions, .effect = decoded.effect };
-        }
+        // A failure below strands the partial decode on the shared arena, which cannot free
+        // it individually. A failed decode is never cached, so a recovered-and-retried push
+        // site strands another copy per attempt. Accepted: the failure needs a corrupt
+        // stream or an exhausted allocator, neither of which retrying can outrun.
         var diag: ibc.DecodeDiagnostic = undefined;
-        const decoded = deserializeQuotationInstructions(src[0..data_len], ctx.quotationAllocator(), null, &diag) catch |err| {
+        const decoded = deserializeQuotationInstructions(src[0..data_len], cache.decodeAllocator(), null, &diag) catch |err| {
             setDecodeFailureMessage(ctx, &diag, err);
             ctx.jit_pending_error = err;
+            return 2;
+        };
+        if (ctx.image_reified_quotation_modules) |modules| {
+            if (modules.get(data_ptr)) |module| {
+                ctx.stampQuotationBodies(decoded.instructions, module) catch {
+                    ctx.jit_pending_error = error.OutOfMemory;
+                    return 2;
+                };
+            }
+        }
+
+        // Published before the slice is, under the same mutex, so no context can push this
+        // literal and find it outside the nesting.
+        ctx.lexical_parents.recordDecodedBody(decoded.instructions, site) catch {
+            ctx.jit_pending_error = error.OutOfMemory;
+            return 2;
+        };
+        cache.insertAssumeLocked(data_ptr, decoded.instructions, decoded.effect) catch {
+            ctx.jit_pending_error = error.OutOfMemory;
             return 2;
         };
         break :blk .{ .instructions = decoded.instructions, .effect = decoded.effect };
@@ -16499,7 +16582,7 @@ test "jitPushQuotation: runtime-image push caches the decode and stamps the defi
     {
         var task_ctx = try Context.initForTask(testing.allocator, &ctx, &scheduler);
         defer task_ctx.deinit();
-        const rc1 = jitPushQuotation(@intFromPtr(&task_ctx), @intFromPtr(encoded.items.ptr), encoded.items.len, @intFromPtr(&first), std.math.maxInt(usize));
+        const rc1 = jitPushQuotation(@intFromPtr(&task_ctx), @intFromPtr(encoded.items.ptr), encoded.items.len, @intFromPtr(&first), std.math.maxInt(usize), 0);
         try testing.expectEqual(@as(i32, 0), rc1);
     }
 
@@ -16525,7 +16608,7 @@ test "jitPushQuotation: runtime-image push caches the decode and stamps the defi
     // second stamp entry.
     const stamp_count = ctx.quotation_stamp_store.count();
     var second: Value = undefined;
-    const rc2 = jitPushQuotation(@intFromPtr(&ctx), @intFromPtr(encoded.items.ptr), encoded.items.len, @intFromPtr(&second), std.math.maxInt(usize));
+    const rc2 = jitPushQuotation(@intFromPtr(&ctx), @intFromPtr(encoded.items.ptr), encoded.items.len, @intFromPtr(&second), std.math.maxInt(usize), 0);
     try testing.expectEqual(@as(i32, 0), rc2);
     try testing.expectEqual(decoded.ptr, second.quotation.instructions.ptr);
     try testing.expectEqual(stamp_count, ctx.quotation_stamp_store.count());
@@ -16541,7 +16624,7 @@ test "jitPushQuotation: a truncated stream propagates TruncatedBytecode" {
     // No-effect marker, then the stream ends before the u32 instruction count.
     const truncated = [_]u8{0};
     var dest: Value = undefined;
-    const rc = jitPushQuotation(@intFromPtr(&ctx), @intFromPtr(&truncated), truncated.len, @intFromPtr(&dest), std.math.maxInt(usize));
+    const rc = jitPushQuotation(@intFromPtr(&ctx), @intFromPtr(&truncated), truncated.len, @intFromPtr(&dest), std.math.maxInt(usize), 0);
     try testing.expectEqual(@as(i32, 2), rc);
     try testing.expectEqual(error.TruncatedBytecode, ctx.jit_pending_error.?);
     try testing.expectEqualStrings("truncated bytecode at offset 1", ctx.pending_error_message.?);
@@ -16755,6 +16838,18 @@ test "executeCompiled: an error return reclaims a transient frame the body left 
     const before = ctx.local_frames.items.len;
     try testing.expectEqual(ExecResult.error_propagate, executeCompiled(&ctx, word_id));
     try testing.expectEqual(before, ctx.local_frames.items.len);
+}
+
+test "jitPushLexicalFrame: the frame is tagged with the owner compiled code names" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    const body = [_]Instruction{.{ .op = .{ .call_word = "label" }, .line = 1 }};
+    try testing.expectEqual(@as(i32, 0), jitPushLexicalFrame(@intFromPtr(&ctx), @intFromPtr(&body)));
+    defer ctx.popLocalFrame();
+
+    const owners = ctx.local_frame_owners.items;
+    try testing.expectEqual(@intFromPtr(&body), owners[owners.len - 1]);
 }
 
 /// Define a generic word so it has a resolvable dispatch id, and assign it a compiled-call word id.
@@ -19968,7 +20063,7 @@ test "emitWordCAotPass reports discovered_output as the body's final depth" {
     const dup_instrs = [_]Instruction{
         .{ .op = .{ .call_word = "dup" }, .line = 1 },
     };
-    const dup_res = try emitWordCAotPass(&dup_instrs, 1, 2, "q", "q", null, null, &compiled_names, .{}, null, null, null, testing.allocator, null, &.{}, null, &reason, null, null, null, null, null, null, null, false, null, false, false, false, false, false);
+    const dup_res = try emitWordCAotPass(&dup_instrs, 1, 2, "q", "q", null, null, &compiled_names, .{}, null, null, null, testing.allocator, null, &.{}, null, &reason, null, null, null, null, null, null, null, false, null, false, false, false, false, false, null);
     if (dup_res.body) |b| testing.allocator.free(b);
     try testing.expectEqual(@as(u8, 2), dup_res.discovered_output);
 
@@ -19976,7 +20071,7 @@ test "emitWordCAotPass reports discovered_output as the body's final depth" {
     const drop_instrs = [_]Instruction{
         .{ .op = .{ .call_word = "drop" }, .line = 1 },
     };
-    const drop_res = try emitWordCAotPass(&drop_instrs, 1, 0, "q", "q", null, null, &compiled_names, .{}, null, null, null, testing.allocator, null, &.{}, null, &reason, null, null, null, null, null, null, null, false, null, false, false, false, false, false);
+    const drop_res = try emitWordCAotPass(&drop_instrs, 1, 0, "q", "q", null, null, &compiled_names, .{}, null, null, null, testing.allocator, null, &.{}, null, &reason, null, null, null, null, null, null, null, false, null, false, false, false, false, false, null);
     if (drop_res.body) |b| testing.allocator.free(b);
     try testing.expectEqual(@as(u8, 0), drop_res.discovered_output);
 }
@@ -20422,7 +20517,7 @@ test "a spliced body that cannot define keeps its bare call" {
     const source = try emitCallOverQuotationForTest(&ctx, &body);
     defer testing.allocator.free(source);
 
-    try testing.expect(std.mem.indexOf(u8, source, "jitPushLexicalFrame(") == null);
+    try testing.expect(std.mem.indexOf(u8, source, "onez_push_lexical_frame(") == null);
 }
 
 test "a spliced body that may define is bracketed in a transient lexical frame" {
@@ -20437,7 +20532,7 @@ test "a spliced body that may define is bracketed in a transient lexical frame" 
     const source = try emitCallOverQuotationForTest(&ctx, &body);
     defer testing.allocator.free(source);
 
-    const push_at = std.mem.indexOf(u8, source, "jitPushLexicalFrame(") orelse return error.NoBracket;
+    const push_at = std.mem.indexOf(u8, source, "onez_push_lexical_frame(") orelse return error.NoBracket;
     const pop_at = std.mem.indexOf(u8, source, "jitPopLexicalFrame(") orelse return error.NoBracket;
     try testing.expect(push_at < pop_at);
 }
@@ -20491,6 +20586,7 @@ fn emitQuotationBodyForTest(ctx: *const Context, body: []const Instruction) ![]u
         false,
         false,
         needs_frame,
+        null,
     );
 }
 
@@ -20502,7 +20598,7 @@ test "a compiled quotation body that cannot define keeps its bare body" {
     const source = try emitQuotationBodyForTest(&ctx, &body);
     defer testing.allocator.free(source);
 
-    try testing.expect(std.mem.indexOf(u8, source, "jitPushLexicalFrame(") == null);
+    try testing.expect(std.mem.indexOf(u8, source, "onez_push_lexical_frame(") == null);
 }
 
 test "a compiled quotation body that may define opens its own lexical frame" {
@@ -20517,7 +20613,7 @@ test "a compiled quotation body that may define opens its own lexical frame" {
     const source = try emitQuotationBodyForTest(&ctx, &body);
     defer testing.allocator.free(source);
 
-    const push_at = std.mem.indexOf(u8, source, "jitPushLexicalFrame(") orelse return error.NoBracket;
+    const push_at = std.mem.indexOf(u8, source, "onez_push_lexical_frame(") orelse return error.NoBracket;
     const pop_at = std.mem.indexOf(u8, source, "jitPopLexicalFrame(") orelse return error.NoBracket;
     try testing.expect(push_at < pop_at);
 }

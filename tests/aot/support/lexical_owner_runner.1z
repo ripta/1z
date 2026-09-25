@@ -1,0 +1,7 @@
+\ Companion module for `quotation_lexical_owner_module.1z`. Binds `label` in its own frame and then
+\ calls a quotation written in another file, which must not see that binding.
+
+run-bound: ( quot -- s ) [
+  label: "LIB-LABEL" ;
+  call
+] ;

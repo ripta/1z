@@ -7,17 +7,19 @@ const AtomicSlotMap = @import("atomic_slot_map.zig").AtomicSlotMap;
 /// Process-shared cache of decoded reified-quotation bodies, keyed by the static bytecode
 /// pointer compiled code hands to `jitPushQuotation`.
 ///
-/// The decoded body of a static image literal is process-lifetime data. Per-context decodes put
-/// it on the executing context's arena, where a task's copy died at task teardown -- and a
-/// defining-module stamp for such a slice would outlive the memory it names, since
-/// `QuotationStampStore` entries are permanent. Slices here live on the cache's own arena, owned
-/// by the root context, so every key the decode path hands the stamp store is process-lifetime,
+/// The decoded body of a static literal is process-lifetime data, in every AOT class. A
+/// per-context decode would put it on the executing context's arena, where a task's copy dies at
+/// task teardown. The stamp store and the lexical parent map both key permanent entries on the
+/// slice, and either would then outlive the memory it names. Slices here live on the cache's own
+/// arena, owned by the root context, so every key the decode path hands out is process-lifetime,
 /// and one decode per push site serves every context.
 ///
 /// Reads take no lock. `decode_mu` serializes decodes and map inserts, and is held across the
-/// whole miss path so the defining-module stamp is written before the slice is published: no
-/// reader can obtain a body the store cannot resolve. `decode_mu` may acquire the stamp store's
-/// `write_mu` through that stamp; never the reverse. Both sit outside `LockOrderTracker`.
+/// whole miss path so the defining-module stamp and the lexical records are written before the
+/// slice is published: no reader can obtain a body that either store cannot resolve.
+///
+/// `decode_mu` may acquire the stamp store's `write_mu` and the lexical parent map's `write_mu`;
+/// never the reverse. All three sit outside `LockOrderTracker`.
 ///
 /// The cache is allocated by the root context, aliased by pointer into every child, and freed
 /// only by the root, after all release traffic: pushed literals retain container backings that

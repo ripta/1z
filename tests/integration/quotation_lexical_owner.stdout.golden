@@ -19,6 +19,13 @@ Stack: [ ]
 Stack: [ ]
 PASS: a quotation an inlined callee pushes
 Stack: [ ]
+Stack: [ ]
+PASS: a local bound inside a quotation the caller calls
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: a callee that opens a frame of its own
+Stack: [ ]
 === a body sees its own locals ===
 Stack: [ ]
 Stack: [ ]

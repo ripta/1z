@@ -23,7 +23,7 @@
 set -euo pipefail
 shopt -s inherit_errexit
 
-onez="${1:-./zig-out/bin/1z}"
+onez="${1:-./zig-out/release/bin/1z}"
 reps="${2:-5}"
 iterations="${3:-5000000}"
 filter="${4:-}"

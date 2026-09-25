@@ -5,7 +5,7 @@ const Instruction = value_mod.Instruction;
 const AtomicSlotMap = @import("atomic_slot_map.zig").AtomicSlotMap;
 
 /// Process-shared record of which body syntactically encloses each parsed quotation literal, keyed
-/// by instruction-slice address.
+/// by instruction-slice address or, for an AOT program, by site tag.
 ///
 /// A lexical frame is tagged with the body that opened it. Resolution and capture admit a frame
 /// only when its owner is the body asking or one of that body's lexical ancestors, and this map is
@@ -14,8 +14,13 @@ const AtomicSlotMap = @import("atomic_slot_map.zig").AtomicSlotMap;
 ///
 /// A body is *known* when its chain of parents ends at a root, a top-level statement the parser
 /// read from a file. Every other body is unknown, and the admission rule treats an unknown body on
-/// either side as it was before the rule existed. That covers a body built at run time, decoded
-/// from an image, parsed onto a task arena, or parsed by `eval-string`, none of which has an entry.
+/// either side as it was before the rule existed. That covers a body built at run time, parsed onto
+/// a task arena, or parsed by `eval-string`, none of which has an entry.
+///
+/// An AOT program carries no instruction addresses from its build, so its entries are keyed by site
+/// tags instead: the address of a row in the program's static site table. Its rows are registered
+/// at startup, and a body it decodes is aliased to the row it stands for. A decoded body with no
+/// row is unknown. See `aot_lexical_sites.zig`.
 ///
 /// It also covers a literal inside a body that `parse-until` returned and a parse-time word then
 /// consumed as data, such as the contents of `H{ }`. The literal outlives that body as a value
@@ -31,10 +36,10 @@ const AtomicSlotMap = @import("atomic_slot_map.zig").AtomicSlotMap;
 /// context, aliased by pointer into every child, and freed only by the root. Reads take no lock.
 /// Writers serialize on `write_mu`, and the first write for a key wins.
 pub const LexicalParentMap = struct {
-    parents: AtomicSlotMap(?*const Instruction),
-    aliases: AtomicSlotMap(?*const Instruction),
+    parents: AtomicSlotMap(?*const anyopaque),
+    aliases: AtomicSlotMap(?*const anyopaque),
     /// Statements read from a file. The value is the key itself; only presence is read.
-    roots: AtomicSlotMap(?*const Instruction),
+    roots: AtomicSlotMap(?*const anyopaque),
 
     write_mu: std.Thread.Mutex = .{},
 
@@ -43,13 +48,13 @@ pub const LexicalParentMap = struct {
     const initial_capacity: usize = 4096;
 
     pub fn create(allocator: std.mem.Allocator) error{OutOfMemory}!*LexicalParentMap {
-        var parents = try AtomicSlotMap(?*const Instruction).init(allocator, initial_capacity);
+        var parents = try AtomicSlotMap(?*const anyopaque).init(allocator, initial_capacity);
         errdefer parents.deinit();
 
-        var aliases = try AtomicSlotMap(?*const Instruction).init(allocator, 64);
+        var aliases = try AtomicSlotMap(?*const anyopaque).init(allocator, 64);
         errdefer aliases.deinit();
 
-        var roots = try AtomicSlotMap(?*const Instruction).init(allocator, initial_capacity);
+        var roots = try AtomicSlotMap(?*const anyopaque).init(allocator, initial_capacity);
         errdefer roots.deinit();
 
         const self = try allocator.create(LexicalParentMap);
@@ -106,6 +111,53 @@ pub const LexicalParentMap = struct {
         const target = self.canonical(@intFromPtr(source.ptr));
         if (target == @intFromPtr(rebuilt.ptr)) return;
         _ = try self.aliases.insert(@intFromPtr(rebuilt.ptr), @ptrFromInt(target));
+    }
+
+    /// Record site `tag` as a root. The AOT counterpart of `recordRoot`.
+    pub fn recordRootTag(self: *LexicalParentMap, tag: usize) error{OutOfMemory}!void {
+        self.write_mu.lock();
+        defer self.write_mu.unlock();
+
+        _ = try self.roots.insert(tag, @ptrFromInt(tag));
+    }
+
+    /// Record site `parent` as the parent of site `child`. The AOT counterpart of `recordChildren`.
+    pub fn recordParentTag(self: *LexicalParentMap, child: usize, parent: usize) error{OutOfMemory}!void {
+        self.write_mu.lock();
+        defer self.write_mu.unlock();
+
+        _ = try self.parents.insert(child, @ptrFromInt(parent));
+    }
+
+    /// Place a body decoded at run time in the nesting: alias it to site `tag`, and record each
+    /// quotation literal inside it, at any depth, under its enclosing body.
+    ///
+    /// A `tag` of `0` is a literal its build did not know. Nothing is recorded then, so the body and
+    /// everything inside it stay unknown, as the build-time body was. `body` must live for the whole
+    /// process, as every key here must.
+    ///
+    /// A direct child names the tag rather than `body` as its parent, since comparisons run on the
+    /// canonical address and a parent recorded under its alias would never match.
+    pub fn recordDecodedBody(self: *LexicalParentMap, body: []const Instruction, tag: usize) error{OutOfMemory}!void {
+        if (tag == 0 or body.len == 0) return;
+
+        self.write_mu.lock();
+        defer self.write_mu.unlock();
+
+        if (tag != @intFromPtr(body.ptr)) _ = try self.aliases.insert(@intFromPtr(body.ptr), @ptrFromInt(tag));
+        try self.recordDecodedChildrenLocked(body, tag);
+    }
+
+    fn recordDecodedChildrenLocked(self: *LexicalParentMap, body: []const Instruction, parent: usize) error{OutOfMemory}!void {
+        for (body) |instr| {
+            const child = switch (instr.op) {
+                .push_literal => |val| if (val == .quotation) val.quotation.instructions else continue,
+                else => continue,
+            };
+            if (child.len == 0) continue;
+            _ = try self.parents.insert(@intFromPtr(child.ptr), @ptrFromInt(parent));
+            try self.recordDecodedChildrenLocked(child, @intFromPtr(child.ptr));
+        }
     }
 
     /// The address `body` is compared under: its alias target when it was rebuilt, itself
@@ -239,6 +291,36 @@ test "LexicalParentMap: a chain that ends short of a root is unknown" {
     try testing.expect(!map.isKnown(@intFromPtr(&buried)));
     try testing.expect(map.isKnown(@intFromPtr(&block)));
     try testing.expect(map.admits(@intFromPtr(&buried), @intFromPtr(&block)));
+}
+
+test "LexicalParentMap: a decoded body stands for its site, and its nested literals follow it" {
+    var map = try LexicalParentMap.create(testing.allocator);
+    defer map.destroy();
+
+    // Two site rows: a caller's body and, beside it, a reader whose literal was decoded.
+    const rows = [_]u64{ 0, 0, 1 };
+    const root_tag = @intFromPtr(&rows[0]);
+    const caller_tag = @intFromPtr(&rows[1]);
+    const reader_tag = @intFromPtr(&rows[2]);
+    try map.recordRootTag(root_tag);
+    try map.recordParentTag(caller_tag, root_tag);
+    try map.recordParentTag(reader_tag, root_tag);
+
+    const inner = [_]Instruction{.{ .op = .{ .call_word = "label" }, .line = 5 }};
+    const decoded = [_]Instruction{quotationPushAt(&inner, 5)};
+    try map.recordDecodedBody(&decoded, reader_tag);
+
+    try testing.expectEqual(reader_tag, map.canonical(@intFromPtr(&decoded)));
+    try testing.expect(map.isKnown(@intFromPtr(&inner)));
+    try testing.expect(map.admits(@intFromPtr(&inner), @intFromPtr(&decoded)));
+    try testing.expect(map.admits(@intFromPtr(&inner), reader_tag));
+    try testing.expect(!map.admits(@intFromPtr(&inner), caller_tag));
+
+    // A literal its build did not know stays unknown, and so admits every frame.
+    const unsited = [_]Instruction{.{ .op = .{ .call_word = "label" }, .line = 6 }};
+    try map.recordDecodedBody(&unsited, 0);
+    try testing.expect(!map.isKnown(@intFromPtr(&unsited)));
+    try testing.expect(map.admits(@intFromPtr(&unsited), caller_tag));
 }
 
 test "LexicalParentMap: a rebuilt body compares as its source" {

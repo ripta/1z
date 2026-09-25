@@ -292,6 +292,7 @@ comptime {
         @export(&onez_load_runtime_image, .{ .name = "onez_load_runtime_image" });
         @export(&onez_runtime_register_compiled, .{ .name = "onez_runtime_register_compiled" });
         @export(&onez_runtime_register_quotations, .{ .name = "onez_runtime_register_quotations" });
+        @export(&onez_runtime_register_lexical_sites, .{ .name = "onez_runtime_register_lexical_sites" });
         @export(&onez_replay_method_dispatch, .{ .name = "onez_replay_method_dispatch" });
         @export(&onez_runtime_run, .{ .name = "onez_runtime_run" });
         @export(&onez_set_interpreter_fallback, .{ .name = "onez_set_interpreter_fallback" });
@@ -939,6 +940,14 @@ fn onez_runtime_register_compiled(ptr: ?*anyopaque, table: [*]const ?*const anyo
 
     handle.dispatch_table = dispatch;
     handle.word_names = word_names;
+    return ONEZ_OK;
+}
+
+/// Nothing here resolves a bare word against a frame, so the nesting has no reader.
+fn onez_runtime_register_lexical_sites(ptr: ?*anyopaque, rows: [*]const u64, count: u32) callconv(.c) i32 {
+    _ = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
+    _ = rows;
+    _ = count;
     return ONEZ_OK;
 }
 
@@ -1967,7 +1976,8 @@ fn jitPushSymbol(ctx_raw: usize, str_ptr: usize, str_len: usize) callconv(.c) i3
     return pushValue(handle, .{ .symbol = .{ .bytes = copy } });
 }
 
-fn jitPushQuotation(ctx_raw: usize, data_ptr: usize, data_len: usize, dest_raw: usize, quotation_id: usize) callconv(.c) i32 {
+fn jitPushQuotation(ctx_raw: usize, data_ptr: usize, data_len: usize, dest_raw: usize, quotation_id: usize, site: usize) callconv(.c) i32 {
+    _ = site;
     _ = data_ptr;
     _ = data_len;
     _ = dest_raw;
@@ -2056,8 +2066,9 @@ fn jitGet(ctx_raw: usize) callconv(.c) i32 {
     return 2;
 }
 
-fn jitPushLexicalFrame(ctx_raw: usize) callconv(.c) i32 {
+fn jitPushLexicalFrame(ctx_raw: usize, owner: usize) callconv(.c) i32 {
     _ = ctx_raw;
+    _ = owner;
     return 0;
 }
 

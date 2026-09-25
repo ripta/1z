@@ -1,4 +1,4 @@
-.PHONY: all branch-info build release run fmt test test-threads-1 test-threads-auto unit-test capi-test capi-release-run embed-stdlib-test integration-test lib-test games-test prelude-lint-check update-prelude-lint-golden eager-test fmt-test fmt-1z-test leak-goldens-check module-less-benchmark-check lsp-test tree-sitter-test contrib aot-test aot-build aot-run aot-checks aot-checks-linux aot-interpreter-strip-check aot-line-directives-check aot-asm-name-check aot-string-literal-direct-check aot-symbol-literal-direct-check aot-trace-instr-check aot-trace-word-filter-check aot-param-inference-check aot-determinism-check aot-symbol-verify aot-symbol-verify-linux bail-stats ir-check ir-check-upstream ir-vendor lua-vendor font8x8-vendor update-golden update-fmt-golden update-aot-golden update-lsp-golden benchmark benchmark-ab benchmark-fib benchmark-quotation benchmark-quotation-bracket benchmark-param-effects benchmark-loop-paths benchmark-param-inference benchmark-ffi-gen-filter benchmark-word-resolution benchmark-protocol-dispatch benchmark-lint benchmark-fmt benchmark-fmt-profile benchmark-fmt-modes benchmark-collision-build benchmark-retention benchmark-task-shapes benchmark-tokenize benchmark-tokenize-alloc benchmark-data-structures benchmark-packed benchmark-game-draw benchmark-route-lookup benchmark-expr benchmark-fn benchmark-stmt profiles build-example clean help docs docker-build docker-test freestanding-build wasm-freestanding-build wasm wasm-game-verify wasm-snake-verify wasm-minesweeper-verify baremetal-riscv64-test unit-coverage integration-coverage coverage
+.PHONY: all branch-info build release release-prefix-check run fmt test test-threads-1 test-threads-auto unit-test capi-test capi-release-run embed-stdlib-test integration-test lib-test games-test prelude-lint-check update-prelude-lint-golden eager-test fmt-test fmt-1z-test leak-goldens-check module-less-benchmark-check lsp-test tree-sitter-test contrib aot-test aot-build aot-run aot-checks aot-checks-linux aot-interpreter-strip-check aot-line-directives-check aot-asm-name-check aot-string-literal-direct-check aot-symbol-literal-direct-check aot-trace-instr-check aot-trace-word-filter-check aot-param-inference-check aot-determinism-check aot-symbol-verify aot-symbol-verify-linux bail-stats ir-check ir-check-upstream ir-vendor lua-vendor font8x8-vendor update-golden update-fmt-golden update-aot-golden update-lsp-golden benchmark benchmark-ab benchmark-fib benchmark-quotation benchmark-quotation-bracket benchmark-param-effects benchmark-loop-paths benchmark-param-inference benchmark-ffi-gen-filter benchmark-word-resolution benchmark-protocol-dispatch benchmark-lint benchmark-fmt benchmark-fmt-profile benchmark-fmt-modes benchmark-collision-build benchmark-retention benchmark-task-shapes benchmark-tokenize benchmark-tokenize-alloc benchmark-data-structures benchmark-packed benchmark-game-draw benchmark-route-lookup benchmark-expr benchmark-fn benchmark-stmt profiles build-example clean help docs docker-build docker-test freestanding-build wasm-freestanding-build wasm wasm-game-verify wasm-snake-verify wasm-minesweeper-verify baremetal-riscv64-test unit-coverage integration-coverage coverage
 
 export DEVELOPER_DIR := /Library/Developer/CommandLineTools
 SHELL := /bin/bash
@@ -36,6 +36,13 @@ AOT_TIMEOUT ?= 10
 AOT_BUILD_TIMEOUT ?= $(shell expr $(TEST_CASE_TIMEOUT) \* 4)
 
 ZIG_PREFIX ?= zig-out
+
+# `build` and `release` install into separate prefixes so neither can silently
+# overwrite the other's binary. Every target that wants a ReleaseFast binary
+# depends on `release` and reads $(RELEASE_PREFIX), never $(ZIG_PREFIX), whose
+# `bin/1z` is always the Debug build `build` last installed.
+RELEASE_PREFIX ?= $(ZIG_PREFIX)/release
+
 DOCKER_IMAGE ?= gcr.io/$(GCP_PROJECT_ID)/zag:v0.15.2
 TEST_FILTER_ARG = $(if $(TEST_FILTER),-Dtest-filter=$(TEST_FILTER))
 
@@ -96,8 +103,33 @@ build: branch-info ## Build the project (default)
 build-leaks: branch-info ## Build with allocation stack traces, so leak reports name the allocation site
 	$(ZIG) build -Dalloc-stack-traces --prefix $(ZIG_PREFIX) $(ZIG_CPU_ARG)
 
-release: branch-info ## Build with optimizations
-	$(ZIG) build --release=fast --prefix $(ZIG_PREFIX) $(ZIG_CPU_ARG)
+release: branch-info ## Build with optimizations, installed to $(RELEASE_PREFIX) so it never overwrites the Debug binary
+	$(ZIG) build --release=fast --prefix $(RELEASE_PREFIX) $(ZIG_CPU_ARG)
+
+# `release` is not a prerequisite here: the recipe needs to snapshot the Debug binary
+# before `release` runs and again afterward, which a prerequisite (which would run
+# before this recipe starts) cannot straddle. Kept out of `make test`, because a full
+# `make release` costs about as much as the Debug build itself.
+release-prefix-check: build ## Verify build and release install to separate prefixes without clobbering each other (not part of make test)
+	@debug_size=$$(stat -c %s $(ZIG_PREFIX)/bin/1z 2>/dev/null || stat -f %z $(ZIG_PREFIX)/bin/1z); \
+	$(MAKE) release; \
+	release_size=$$(stat -c %s $(RELEASE_PREFIX)/bin/1z 2>/dev/null || stat -f %z $(RELEASE_PREFIX)/bin/1z); \
+	debug_size_after_release=$$(stat -c %s $(ZIG_PREFIX)/bin/1z 2>/dev/null || stat -f %z $(ZIG_PREFIX)/bin/1z); \
+	if [ "$$debug_size" != "$$debug_size_after_release" ]; then \
+		echo "FAIL: make release changed $(ZIG_PREFIX)/bin/1z (was $$debug_size bytes, now $$debug_size_after_release)"; \
+		exit 1; \
+	fi; \
+	if [ "$$release_size" = "$$debug_size_after_release" ]; then \
+		echo "FAIL: $(RELEASE_PREFIX)/bin/1z matches the Debug binary's size ($$release_size bytes); release build did not take effect"; \
+		exit 1; \
+	fi; \
+	$(MAKE) build; \
+	release_size_after_build=$$(stat -c %s $(RELEASE_PREFIX)/bin/1z 2>/dev/null || stat -f %z $(RELEASE_PREFIX)/bin/1z); \
+	if [ "$$release_size" != "$$release_size_after_build" ]; then \
+		echo "FAIL: make build changed $(RELEASE_PREFIX)/bin/1z (was $$release_size bytes, now $$release_size_after_build)"; \
+		exit 1; \
+	fi; \
+	echo "PASS: build and release install to separate prefixes and do not overwrite each other"
 
 run: build ## Build and run the 1z interpreter
 	./$(ZIG_PREFIX)/bin/1z $(ARGS)
@@ -178,9 +210,9 @@ capi-test: ## Run hosted C-API embedding-library unit tests
 	timeout $(TARGET_TIMEOUT) $(ZIG) build capi-test --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) -Dembed-stdlib=true $(TEST_FILTER_ARG)
 
 capi-release-run: ## Build the embedding example against a ReleaseFast lib1z and run it
-	$(ZIG) build --release=fast --prefix $(ZIG_PREFIX)/release $(ZIG_CPU_ARG)
-	zig cc -o $(ZIG_PREFIX)/release/embed examples/embed.c -Iinclude $(ZIG_PREFIX)/release/clib/lib1z.a -lffi
-	./$(ZIG_PREFIX)/release/embed
+	$(ZIG) build --release=fast --prefix $(RELEASE_PREFIX) $(ZIG_CPU_ARG)
+	zig cc -o $(RELEASE_PREFIX)/embed examples/embed.c -Iinclude $(RELEASE_PREFIX)/clib/lib1z.a -lffi
+	./$(RELEASE_PREFIX)/embed
 
 embed-stdlib-test: ## Run unit tests with -Dembed-stdlib=true
 	timeout $(TARGET_TIMEOUT) $(ZIG) build test --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) -Dembed-stdlib=true
@@ -215,7 +247,7 @@ PRELUDE_LINT_GOLDEN := tests/lint/prelude.stderr.golden
 # suite runs. The linter exits 1 whenever it reports anything, so the diff decides the result and
 # only an exit above 1 fails the run on its own.
 prelude-lint-check: release ## Diff `1z lint src/prelude.1z` against its golden (not part of make test)
-	@timeout $(TARGET_TIMEOUT) ./$(ZIG_PREFIX)/bin/1z lint --stdlib-path=lib src/prelude.1z 2> $(ZIG_PREFIX)/prelude-lint.stderr; \
+	@timeout $(TARGET_TIMEOUT) ./$(RELEASE_PREFIX)/bin/1z lint --stdlib-path=lib src/prelude.1z 2> $(ZIG_PREFIX)/prelude-lint.stderr; \
 		status=$$?; \
 		if [ $$status -gt 1 ]; then echo "FAIL: 1z lint src/prelude.1z exited $$status"; exit 1; fi
 	@diff -u $(PRELUDE_LINT_GOLDEN) $(ZIG_PREFIX)/prelude-lint.stderr
@@ -223,7 +255,7 @@ prelude-lint-check: release ## Diff `1z lint src/prelude.1z` against its golden 
 
 update-prelude-lint-golden: release ## Regenerate the `1z lint src/prelude.1z` golden
 	@mkdir -p $(dir $(PRELUDE_LINT_GOLDEN))
-	@timeout $(TARGET_TIMEOUT) ./$(ZIG_PREFIX)/bin/1z lint --stdlib-path=lib src/prelude.1z 2> $(PRELUDE_LINT_GOLDEN); \
+	@timeout $(TARGET_TIMEOUT) ./$(RELEASE_PREFIX)/bin/1z lint --stdlib-path=lib src/prelude.1z 2> $(PRELUDE_LINT_GOLDEN); \
 		status=$$?; \
 		if [ $$status -gt 1 ]; then echo "FAIL: 1z lint src/prelude.1z exited $$status"; exit 1; fi
 	@echo "Updated $(PRELUDE_LINT_GOLDEN)"
@@ -723,28 +755,28 @@ benchmark-word-resolution: build ## Run word-resolution benchmark across interpr
 	@cat tests/benchmark/word_resolution.sample
 
 benchmark-interpreter-suite: release ## Record the interpreter-dispatch representative-suite baseline
-	@scripts/benchmark-interpreter-suite.sh ./$(ZIG_PREFIX)/bin/1z 7
+	@scripts/benchmark-interpreter-suite.sh ./$(RELEASE_PREFIX)/bin/1z 7
 
 # BASELINE is a 1z binary from another tree, usually a `git worktree` at the
 # commit a change is being attributed against, built there with `make release`.
 benchmark-ab: release ## Interleaved A/B of this tree against BASELINE=<path-to-1z>
 	@test -n "$(BASELINE)" || { echo "usage: make benchmark-ab BASELINE=<path-to-1z>" >&2; exit 2; }
-	@scripts/benchmark-ab.sh $(BASELINE) ./$(ZIG_PREFIX)/bin/1z 7
+	@scripts/benchmark-ab.sh $(BASELINE) ./$(RELEASE_PREFIX)/bin/1z 7
 
 benchmark-wall-ab: release ## Un-instrumented interleaved A/B of this tree against BASELINE=<path-to-1z>
 	@test -n "$(BASELINE)" || { echo "usage: make benchmark-wall-ab BASELINE=<path-to-1z>" >&2; exit 2; }
-	@scripts/benchmark-wall-ab.sh $(BASELINE) ./$(ZIG_PREFIX)/bin/1z 7
+	@scripts/benchmark-wall-ab.sh $(BASELINE) ./$(RELEASE_PREFIX)/bin/1z 7
 
 benchmark-param-effects: release ## Record the annotated-quotation-parameter per-call cost table
-	@scripts/benchmark-param-effects.sh ./$(ZIG_PREFIX)/bin/1z 5 > tests/benchmark/param_effects.sample
+	@scripts/benchmark-param-effects.sh ./$(RELEASE_PREFIX)/bin/1z 5 > tests/benchmark/param_effects.sample
 	@cat tests/benchmark/param_effects.sample
 
 benchmark-loop-paths: release ## Record the loop-combinator per-iteration cost table
-	@scripts/benchmark-loop-paths.sh ./$(ZIG_PREFIX)/bin/1z 5 > tests/benchmark/loop_paths.sample
+	@scripts/benchmark-loop-paths.sh ./$(RELEASE_PREFIX)/bin/1z 5 > tests/benchmark/loop_paths.sample
 	@cat tests/benchmark/loop_paths.sample
 
 benchmark-param-inference: release ## Record the AOT freeze-time parameter-narrowing A/B on the Fibonacci repro
-	@scripts/benchmark-param-inference.sh ./$(ZIG_PREFIX)/bin/1z \
+	@scripts/benchmark-param-inference.sh ./$(RELEASE_PREFIX)/bin/1z \
 		tests/benchmark/param_inference_fib.1z tests/benchmark/param_inference_fib_startup.1z \
 		$(ZIG_PREFIX) 7 > tests/benchmark/param_inference_fib.sample
 	@cat tests/benchmark/param_inference_fib.sample
@@ -754,78 +786,78 @@ benchmark-protocol-dispatch: build ## Build and run the protocol-bounded dispatc
 	./tests/benchmark/protocol_dispatch_aot.aot > tests/benchmark/protocol_dispatch_aot.aot.sample
 
 benchmark-lint: release ## Build the runtime-image AOT lint driver and time it against interpreted `1z lint`
-	./$(ZIG_PREFIX)/bin/1z build --emit-runtime-image tests/benchmark/lint_bench.1z -o tests/benchmark/lint_bench.aot
-	@scripts/benchmark-lint.sh ./$(ZIG_PREFIX)/bin/1z tests/benchmark/lint_bench.aot \
+	./$(RELEASE_PREFIX)/bin/1z build --emit-runtime-image tests/benchmark/lint_bench.1z -o tests/benchmark/lint_bench.aot
+	@scripts/benchmark-lint.sh ./$(RELEASE_PREFIX)/bin/1z tests/benchmark/lint_bench.aot \
 		tests/integration/combinators.1z lib/data/json.1z > tests/benchmark/lint_bench.sample
 	@cat tests/benchmark/lint_bench.sample
 
 benchmark-fmt: release ## Time the 1z formatter against the Zig formatter and record the sample
-	@scripts/benchmark-fmt.sh ./$(ZIG_PREFIX)/bin/1z \
+	@scripts/benchmark-fmt.sh ./$(RELEASE_PREFIX)/bin/1z \
 		tests/formatting/def-align-basic.txt lib/strings.1z lib/formatter.1z src/prelude.1z @tree \
 		> tests/benchmark/fmt_bench.sample
 	@cat tests/benchmark/fmt_bench.sample
 
 benchmark-fmt-profile: release ## Record the 1z formatter per-word time-attribution profile
-	ONEZ_STDLIB=lib ./$(ZIG_PREFIX)/bin/1z run --max-memory=4G --profile --profile-top=40 \
+	ONEZ_STDLIB=lib ./$(RELEASE_PREFIX)/bin/1z run --max-memory=4G --profile --profile-top=40 \
 		tests/benchmark/fmt_bench.1z lib/strings.1z > tests/benchmark/fmt_bench.profile.sample
 	@cat tests/benchmark/fmt_bench.profile.sample
 
 benchmark-fmt-modes: release ## Time the 1z formatter interpreted, under both JIT modes, and out of both AOT classes
-	@scripts/benchmark-fmt-modes.sh ./$(ZIG_PREFIX)/bin/1z tests/benchmark/fmt_bench.1z \
+	@scripts/benchmark-fmt-modes.sh ./$(RELEASE_PREFIX)/bin/1z tests/benchmark/fmt_bench.1z \
 		$(ZIG_PREFIX)/fmt_bench.aot lib/strings.1z lib/formatter.1z \
 		> tests/benchmark/fmt_bench.modes.sample
 	@cat tests/benchmark/fmt_bench.modes.sample
 
 benchmark-collision-build: release ## Record AOT build cost of the shipped stdlib collision pairs
-	@scripts/benchmark-collision-build.sh ./$(ZIG_PREFIX)/bin/1z > tests/benchmark/collision_build.sample
+	@scripts/benchmark-collision-build.sh ./$(RELEASE_PREFIX)/bin/1z > tests/benchmark/collision_build.sample
 	@cat tests/benchmark/collision_build.sample
 
 benchmark-retention: release ## Record the transient-value retention probe table
-	@scripts/benchmark-retention-probes.sh ./$(ZIG_PREFIX)/bin/1z 500000 > tests/benchmark/retention_probes.sample
+	@scripts/benchmark-retention-probes.sh ./$(RELEASE_PREFIX)/bin/1z 500000 > tests/benchmark/retention_probes.sample
 	@cat tests/benchmark/retention_probes.sample
 
 benchmark-task-shapes: release ## Record the task-shape body-entry samples: first-visit cost and its steady-state control
-	@scripts/benchmark-task-shape.sh ./$(ZIG_PREFIX)/bin/1z 7 \
+	@scripts/benchmark-task-shape.sh ./$(RELEASE_PREFIX)/bin/1z 7 \
 		tests/benchmark/task_body_entry.1z auto 1 > tests/benchmark/task_body_entry.sample
-	@scripts/benchmark-task-shape.sh ./$(ZIG_PREFIX)/bin/1z 7 \
+	@scripts/benchmark-task-shape.sh ./$(RELEASE_PREFIX)/bin/1z 7 \
 		tests/benchmark/combinator_contention.1z auto > tests/benchmark/combinator_contention.sample
 	@cat tests/benchmark/task_body_entry.sample
 	@cat tests/benchmark/combinator_contention.sample
 
 benchmark-tokenize: release ## Run the tokenizer scaling benchmark and record the linearity sample
-	./$(ZIG_PREFIX)/bin/1z run --max-memory=2G tests/benchmark/bench_tokenize_scaling.1z > tests/benchmark/bench_tokenize_scaling.sample
+	./$(RELEASE_PREFIX)/bin/1z run --max-memory=2G tests/benchmark/bench_tokenize_scaling.1z > tests/benchmark/bench_tokenize_scaling.sample
 	@cat tests/benchmark/bench_tokenize_scaling.sample
 
 benchmark-data-structures: release ## Run the data-structure benchmark, including the cons-list/bst scaling sweep, and record the sample
-	./$(ZIG_PREFIX)/bin/1z run tests/benchmark/data_structures.1z > tests/benchmark/data_structures.sample
+	./$(RELEASE_PREFIX)/bin/1z run tests/benchmark/data_structures.1z > tests/benchmark/data_structures.sample
 	@cat tests/benchmark/data_structures.sample
 
 benchmark-route-lookup: release ## Run the route-table lookup sweep against prefix-match and record the sample
-	./$(ZIG_PREFIX)/bin/1z run tests/benchmark/route_lookup.1z > tests/benchmark/route_lookup.sample
+	./$(RELEASE_PREFIX)/bin/1z run tests/benchmark/route_lookup.1z > tests/benchmark/route_lookup.sample
 	@cat tests/benchmark/route_lookup.sample
 
 benchmark-packed: release ## Run the packed-array iterator/#map scaling benchmark and record the sample
-	./$(ZIG_PREFIX)/bin/1z run tests/benchmark/packed_map.1z > tests/benchmark/packed_map.sample
+	./$(RELEASE_PREFIX)/bin/1z run tests/benchmark/packed_map.1z > tests/benchmark/packed_map.sample
 	@cat tests/benchmark/packed_map.sample
 
 # --compile=off matches the wasm tier, which is the only path the browser game platform runs on.
 benchmark-game-draw: release ## Run the game drawing path benchmark and record its sample and per-word profile
-	./$(ZIG_PREFIX)/bin/1z run --compile=off tests/benchmark/game_draw.1z > tests/benchmark/game_draw.sample
-	./$(ZIG_PREFIX)/bin/1z run --compile=off --max-memory=2G --profile --profile-top=40 tests/benchmark/game_draw.1z > tests/benchmark/game_draw.profile.sample
+	./$(RELEASE_PREFIX)/bin/1z run --compile=off tests/benchmark/game_draw.1z > tests/benchmark/game_draw.sample
+	./$(RELEASE_PREFIX)/bin/1z run --compile=off --max-memory=2G --profile --profile-top=40 tests/benchmark/game_draw.1z > tests/benchmark/game_draw.profile.sample
 	@cat tests/benchmark/game_draw.sample
 	@cat tests/benchmark/game_draw.profile.sample
 
 benchmark-tokenize-alloc: release ## Record the tokenizer per-token cost and allocation-attribution baseline
-	./$(ZIG_PREFIX)/bin/1z run --benchmark --compile=off tests/benchmark/bench_tokenize_alloc.1z > tests/benchmark/bench_tokenize_alloc.sample
-	./$(ZIG_PREFIX)/bin/1z run --benchmark=verbose --compile=off tests/benchmark/bench_tokenize_alloc.1z > tests/benchmark/bench_tokenize_alloc.benchmark.sample
+	./$(RELEASE_PREFIX)/bin/1z run --benchmark --compile=off tests/benchmark/bench_tokenize_alloc.1z > tests/benchmark/bench_tokenize_alloc.sample
+	./$(RELEASE_PREFIX)/bin/1z run --benchmark=verbose --compile=off tests/benchmark/bench_tokenize_alloc.1z > tests/benchmark/bench_tokenize_alloc.benchmark.sample
 	@cat tests/benchmark/bench_tokenize_alloc.sample
 
 benchmark-char-interning: release ## Record the single-character string interning allocation comparison
-	./$(ZIG_PREFIX)/bin/1z run --benchmark --compile=off tests/benchmark/bench_char_interning.1z > tests/benchmark/bench_char_interning.sample
+	./$(RELEASE_PREFIX)/bin/1z run --benchmark --compile=off tests/benchmark/bench_char_interning.1z > tests/benchmark/bench_char_interning.sample
 	@cat tests/benchmark/bench_char_interning.sample
 
 benchmark-tokenize-profile: release ## Record the tokenizer per-word time-attribution profile
-	./$(ZIG_PREFIX)/bin/1z run --max-memory=2G --profile tests/benchmark/bench_tokenize_profile.1z > tests/benchmark/bench_tokenize_profile.profile.sample
+	./$(RELEASE_PREFIX)/bin/1z run --max-memory=2G --profile tests/benchmark/bench_tokenize_profile.1z > tests/benchmark/bench_tokenize_profile.profile.sample
 	@cat tests/benchmark/bench_tokenize_profile.profile.sample
 
 benchmark-expr: build ## Run the hosted expression pipeline benchmark and record the sample

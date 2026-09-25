@@ -47,6 +47,7 @@ const container_backing = @import("container_backing.zig");
 const debugger_mod = @import("debugger/mod.zig");
 
 const aot_image_loader = @import("aot_image_loader.zig");
+const aot_lexical_sites = @import("aot_lexical_sites.zig");
 
 const HostWordRegistration = struct {
     name: []const u8,
@@ -2550,6 +2551,17 @@ test "registerNativeLeaf: binds a cached module's own native through the segment
 export fn onez_runtime_register_quotations(ptr: ?*anyopaque, table: [*]const ?*const anyopaque, size: u32) i32 {
     const handle = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
     handle.ctx.aot_quotation_fns = context_mod.AotQuotationFnTable{ .table = table, .size = size };
+    return ONEZ_OK;
+}
+
+/// Install the program's lexical site table, so its compiled frames and decoded literals are
+/// placed in the nesting their build recorded. Must run before any compiled code.
+export fn onez_runtime_register_lexical_sites(ptr: ?*anyopaque, rows: [*]const u64, count: u32) i32 {
+    const handle = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
+    aot_lexical_sites.registerSites(handle.ctx.lexical_parents, rows[0..count]) catch |err| {
+        captureError(handle, err);
+        return ONEZ_ERR_LOAD_FAILED;
+    };
     return ONEZ_OK;
 }
 

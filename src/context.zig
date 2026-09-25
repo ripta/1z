@@ -1076,8 +1076,9 @@ pub const Context = struct {
     image_entry_import_frame: ?usize = null,
     /// Decoded-instruction cache for reified quotation pushes, keyed by the same static data
     /// pointer. Root-owned and process-shared; slices live on the cache's own arena, so the keys
-    /// the decode path stamps into `quotation_stamp_store` are process-lifetime. One decode and
-    /// one defining-module stamp per push site serve every context. See `ReifiedDecodeCache`.
+    /// the decode path stamps into `quotation_stamp_store` and records in `lexical_parents` are
+    /// process-lifetime. One decode per push site serves every context, in every AOT class. See
+    /// `ReifiedDecodeCache`.
     reified_decode_cache: *ReifiedDecodeCache = undefined,
     /// name -> dispatch_id for user generic words, replayed from the AOT image
     /// dispatch-entry table at startup. The AOT runtime keeps user generics

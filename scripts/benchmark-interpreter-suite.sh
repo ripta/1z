@@ -20,7 +20,7 @@
 
 set -euo pipefail
 
-onez="${1:-./zig-out/bin/1z}"
+onez="${1:-./zig-out/release/bin/1z}"
 reps="${2:-7}"
 
 # Curated one-per-archetype suite, all from the existing tests/benchmark/ corpus.
