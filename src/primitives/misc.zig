@@ -525,10 +525,6 @@ pub fn nativeLoadImpl(ctx: *Context, cache: *value_mod.MutableMap, filename: []c
     defer ctx.current_source_dir = old_source_dir;
 
     try ctx.pushLocalFrame();
-    errdefer ctx.popLocalFrame();
-
-    try ctx.pushPragmaFrame();
-    errdefer ctx.popPragmaFrame();
 
     // XXX(ripta): Hack to set import target frame, which may execute inside
     //             combinator frames like `if`, instead of global or ephemeral
@@ -539,6 +535,16 @@ pub fn nativeLoadImpl(ctx: *Context, cache: *value_mod.MutableMap, filename: []c
     const old_import_frame = ctx.import_frame_index;
     ctx.import_frame_index = ctx.local_frames.items.len - 1;
     defer ctx.import_frame_index = old_import_frame;
+
+    // Declared after the floor's restore so an error pops this frame under the floor its
+    // definitions were made against, as the success path does.
+    //
+    // Popped under the old floor, it reads as transient and decrements the non-empty frame count
+    // for a frame never counted.
+    errdefer ctx.popLocalFrame();
+
+    try ctx.pushPragmaFrame();
+    errdefer ctx.popPragmaFrame();
 
     const was_in_module_load = ctx.in_module_load;
     ctx.in_module_load = true;

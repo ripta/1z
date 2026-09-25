@@ -1,0 +1,4 @@
+\ Defines a word and then raises, so a recovered load of this file leaves a non-empty load frame.
+placeholder: ( -- n ) [ 1 ] ;
+
+f "runtime boom" EUserThrown make-error throw

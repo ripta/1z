@@ -1,0 +1,54 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+=== one body, one local ===
+Stack: [ ]
+Stack: [ "strings" "strings" "strings" ]
+PASS: after, load succeeds
+Stack: [ "strings" "strings" ]
+PASS: top, load succeeds
+Stack: [ "strings" ]
+PASS: before, load succeeds
+Stack: [ ]
+Stack: [ "fixtures/load_raises_after_define.1z" "fixtures/load_raises_after_define.1z" "fixtures/load_raises_after_define.1z" ]
+PASS: after, load raises
+Stack: [ "fixtures/load_raises_after_define.1z" "fixtures/load_raises_after_define.1z" ]
+PASS: top, load raises
+Stack: [ "fixtures/load_raises_after_define.1z" ]
+PASS: before, load raises
+Stack: [ ]
+Stack: [ "char" "char" "char" ]
+PASS: after, next call
+Stack: [ "char" "char" ]
+PASS: top, next call
+Stack: [ "char" ]
+PASS: before, next call
+Stack: [ ]
+Stack: [ ]
+=== one body, two locals ===
+Stack: [ ]
+Stack: [ "strings" "strings" ]
+PASS: second, load succeeds
+Stack: [ "strings" ]
+PASS: first, load succeeds
+Stack: [ ]
+Stack: [ "fixtures/load_raises_after_define.1z" "fixtures/load_raises_after_define.1z" ]
+PASS: second, load raises
+Stack: [ "fixtures/load_raises_after_define.1z" ]
+PASS: first, load raises
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+=== local bound outer, failing load inner ===
+Stack: [ ]
+PASS: load succeeds
+Stack: [ ]
+PASS: load raises
+Stack: [ ]
+Stack: [ ]
+=== enclosing word holds a live local ===
+Stack: [ ]
+PASS: load succeeds
+Stack: [ ]
+PASS: load raises
+Stack: [ ]

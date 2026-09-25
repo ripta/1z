@@ -1,0 +1,76 @@
+\ A quotation pushed after a recovered `load` must read the current call's locals, even when the
+\ load raised with a definition already in its frame.
+\
+\ Each body is called once with a load that succeeds first, so an earlier call has published a
+\ scope the failing call could read instead.
+use "testing" ;
+
+FAILING: "fixtures/load_raises_after_define.1z" ;
+
+(do-load): ( name -- ) [ [ load ] [ drop f ] recover drop ] ;
+
+(one-local): ( name -- before top after ) [
+  m: swap ;
+  [ m ] call
+  m (do-load)
+  m
+  [ m ] call
+] ;
+
+"one body, one local" test-section
+"strings" (one-local)
+"strings" "after, load succeeds" assert=
+"strings" "top, load succeeds" assert=
+"strings" "before, load succeeds" assert=
+FAILING (one-local)
+FAILING "after, load raises" assert=
+FAILING "top, load raises" assert=
+FAILING "before, load raises" assert=
+"char" (one-local)
+"char" "after, next call" assert=
+"char" "top, next call" assert=
+"char" "before, next call" assert=
+
+(two-locals): ( name -- first second ) [
+  a: swap ;
+  b: a ;
+  a (do-load)
+  [ a b ] call
+] ;
+
+"one body, two locals" test-section
+"strings" (two-locals)
+"strings" "second, load succeeds" assert=
+"strings" "first, load succeeds" assert=
+FAILING (two-locals)
+FAILING "second, load raises" assert=
+FAILING "first, load raises" assert=
+
+(inner-load): ( name -- ) [
+  n: swap ;
+  n (do-load)
+] ;
+
+(outer-read): ( name -- after ) [
+  m: swap ;
+  m (inner-load)
+  [ m ] call
+] ;
+
+"local bound outer, failing load inner" test-section
+"strings" (outer-read) "strings" "load succeeds" assert=
+FAILING (outer-read) FAILING "load raises" assert=
+
+\ The enclosing frame stays live and non-empty across the failing load.
+\
+\ This shape read correctly before the fix too, because that frame's count kept the capture gate
+\ open.
+(holder): ( name -- after ) [
+  h: swap ;
+  h (one-local)
+  [ drop drop ] dip
+] ;
+
+"enclosing word holds a live local" test-section
+"strings" (holder) "strings" "load succeeds" assert=
+FAILING (holder) FAILING "load raises" assert=
