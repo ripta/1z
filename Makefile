@@ -1,4 +1,6 @@
-.PHONY: all branch-info build release release-prefix-check run fmt test test-threads-1 test-threads-auto unit-test capi-test capi-release-run embed-stdlib-test integration-test lib-test games-test prelude-lint-check update-prelude-lint-golden eager-test fmt-test fmt-1z-test leak-goldens-check module-less-benchmark-check lsp-test tree-sitter-test contrib aot-test aot-build aot-run aot-checks aot-checks-linux aot-interpreter-strip-check aot-line-directives-check aot-asm-name-check aot-string-literal-direct-check aot-symbol-literal-direct-check aot-trace-instr-check aot-trace-word-filter-check aot-param-inference-check aot-determinism-check aot-symbol-verify aot-symbol-verify-linux bail-stats ir-check ir-check-upstream ir-vendor lua-vendor font8x8-vendor update-golden update-fmt-golden update-aot-golden update-lsp-golden benchmark benchmark-ab benchmark-fib benchmark-quotation benchmark-quotation-bracket benchmark-param-effects benchmark-loop-paths benchmark-param-inference benchmark-ffi-gen-filter benchmark-word-resolution benchmark-protocol-dispatch benchmark-lint benchmark-fmt benchmark-fmt-profile benchmark-fmt-modes benchmark-collision-build benchmark-retention benchmark-task-shapes benchmark-tokenize benchmark-tokenize-alloc benchmark-data-structures benchmark-packed benchmark-game-draw benchmark-route-lookup benchmark-expr benchmark-fn benchmark-stmt profiles build-example clean help docs docker-build docker-test freestanding-build wasm-freestanding-build wasm wasm-game-verify wasm-snake-verify wasm-minesweeper-verify baremetal-riscv64-test unit-coverage integration-coverage coverage
+# Every target here is a command, not a file. A target is phony as soon as it carries the
+# `## description` comment that `help` reads, so documenting a target is what declares it.
+.PHONY: $(shell grep -oE '^[a-zA-Z0-9_-]+:.*## ' $(MAKEFILE_LIST) | cut -d: -f1)
 
 export DEVELOPER_DIR := /Library/Developer/CommandLineTools
 SHELL := /bin/bash
@@ -88,7 +90,7 @@ mktemp_or_die = $(or $(shell mktemp $(1)),$(error mktemp failed for $(1)))
 lib-test games-test docs profiles benchmark prelude-lint-check update-prelude-lint-golden: export ONEZ_NO_STARTUP := 1
 benchmark-%: export ONEZ_NO_STARTUP := 1
 
-all: build test
+all: build test ## Build and run all tests
 
 branch-info: ## Print branch, HEAD, and describe before building/testing
 	@if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then \
