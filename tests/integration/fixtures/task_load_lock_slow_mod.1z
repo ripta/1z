@@ -1,0 +1,16 @@
+\ Companion module for task_load_lock_contention.1z. Its top level parks the
+\ loading task mid-load with a bare sleep, which a load run from a task may do.
+\ The two markers bracket the suspension window.
+\
+\ It lives under fixtures/ because it cannot run as a program of its own: with
+\ no scheduler, the sleep raises.
+
+use "time" ;
+
+"SLOW-MOD-START" print-line
+
+5 milliseconds sleep
+
+"SLOW-MOD-END" print-line
+
+slow-word: ( -- s ) [ "slow" ] ;

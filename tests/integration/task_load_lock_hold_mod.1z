@@ -1,6 +1,9 @@
 \ Companion module for task_load_lock_cancel.1z. The inner task-scope keeps the
 \ loading task suspended, and the load lock held, long enough for the entry to
 \ cancel the waiting task.
+\
+\ The nesting is deliberate. It pins a load parking through a scope body, while
+\ fixtures/task_load_lock_slow_mod.1z pins the direct park at a module's top level.
 
 use "time" ;
 

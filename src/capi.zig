@@ -4075,12 +4075,11 @@ test "load_file from a host callback contends with a concurrent task load" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    // The holder's own top level parks it mid-load, through an inner scope whose body runs
-    // on a fresh context and so escapes the sleep gate on loads. That is what holds the lock
-    // open across a suspension for the contender to arrive in.
+    // The holder's own top level parks it mid-load, through an inner scope. That is what holds
+    // the lock open across a suspension for the contender to arrive in.
     //
-    // Whether a load may park that way at all is unsettled. Deciding it cannot takes the
-    // contention away, and this test then fails at `saw_holder` rather than passing quietly.
+    // A load may park directly too. The nested route is kept on purpose, because
+    // `tests/integration/fixtures/task_load_lock_slow_mod.1z` already covers the direct park.
     const slow_path = try stageModuleFile(
         tmp.dir,
         "slow.1z",
