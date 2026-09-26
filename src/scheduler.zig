@@ -1456,7 +1456,7 @@ pub const Scheduler = struct {
 
         _ = task.scope.active_children.fetchSub(1, .acq_rel);
 
-        if (task.awaiting_task) |awaiter| {
+        if (task.awaiting_slot.claim()) |awaiter| {
             self.wakeTask(awaiter) catch {};
         }
 
@@ -1589,17 +1589,16 @@ pub const Scheduler = struct {
     }
 
     /// Wake the scope waiter once both tracked and detached tasks have
-    /// drained. The `waiter_woken` claim guarantees a single wake even when
-    /// the last tracked child and the last detached task complete
-    /// concurrently on different workers. Top-level scopes have no
-    /// `waiting_task`; they terminate via the pool's `active_tasks` /
-    /// `poolHasAliveTasks` path, so this is a no-op for them.
+    /// drained. `waiting_slot.claim` guarantees a single wake even when the
+    /// last tracked child and the last detached task complete concurrently
+    /// on different workers, and even when a child drains the scope before
+    /// the waiter has registered. Top-level scopes have no waiter; they
+    /// terminate via the pool's `active_tasks` / `poolHasAliveTasks` path,
+    /// so this is a no-op for them.
     fn maybeWakeScopeWaiter(self: *Scheduler, scope: *TaskScope) void {
         if (scope.active_children.load(.acquire) != 0) return;
         if (scope.detached_active.load(.acquire) != 0) return;
-        if (scope.waiter_woken.cmpxchgStrong(false, true, .acq_rel, .acquire) != null) return;
-        if (scope.waiting_task) |scope_waiter| {
-            scope.waiting_task = null;
+        if (scope.waiting_slot.claim()) |scope_waiter| {
             self.wakeTask(scope_waiter) catch {};
         }
     }

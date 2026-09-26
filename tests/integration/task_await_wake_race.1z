@@ -1,0 +1,33 @@
+use "testing" ;
+use "task" ;
+use "time" ;
+
+\ `await`, `await-all`, `task-scope`, and `with-timeout` each register a waiter and read a
+\ completion status as two unsynchronized steps. A child (or scope) that finishes on another
+\ worker in the gap between those steps used to leave the waiter parked forever, since the
+\ completing side saw no registered waiter yet and woke nobody. Each word below repeats a
+\ shape that raced under `--threads=auto` on an unfixed tree; a fresh top-level `task-scope`
+\ per call is what raced, so each is driven from a top-level loop rather than a nested one.
+
+test-await-all-race: ( -- ) [
+  [
+    { [ 1 ] [ 2 ] [ 3 ] } concurrent { 1 2 3 } "concurrent survives repeated racing" assert=
+  ] task-scope
+] ;
+
+50 [ test-await-all-race ] times
+
+test-nested-scope-race: ( -- ) [
+  [ [ 1 ] spawn drop ] task-scope
+  t "task-scope survives repeated racing" assert-true
+] ;
+
+50 [ test-nested-scope-race ] times
+
+test-with-timeout-race: ( -- ) [
+  [
+    [ 42 ] 100 milliseconds with-timeout 42 "with-timeout survives repeated racing" assert=
+  ] task-scope
+] ;
+
+50 [ test-with-timeout-race ] times

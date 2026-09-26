@@ -193,6 +193,48 @@ pub const CancellationPhase = enum(u8) {
     shielded,
 };
 
+/// A one-shot handshake between a waiter that suspends on some completion and the worker
+/// (possibly a different one) that observes and delivers that completion.
+///
+/// Registering and completing are a check-then-store on both sides, run from different workers
+/// with nothing else serializing them: a waiter checks a status, then stores itself so it can be
+/// found and woken; the completer stores the terminal status, then reads the same slot to find
+/// who to wake. Either order is possible, so one plain field cannot tell "nobody has registered
+/// yet" apart from "someone already completed and there was nothing to wake." This type folds
+/// both cases into one atomic word so a single CAS settles, for whichever side asks first,
+/// whether it beat the other.
+pub const WaiterSlot = struct {
+    const empty: usize = 0;
+    const done: usize = 1;
+
+    state: std.atomic.Value(usize) = std.atomic.Value(usize).init(empty),
+
+    /// Try to register `waiter` to be woken on completion. Returns `false` when completion has
+    /// already been claimed, in which case the caller must not suspend: there is nothing left to
+    /// wake it.
+    pub fn tryRegister(self: *WaiterSlot, waiter: *Task) bool {
+        return self.state.cmpxchgStrong(empty, @intFromPtr(waiter), .acq_rel, .acquire) == null;
+    }
+
+    /// Claim completion, returning the registered waiter if one beat completion to the slot.
+    /// Idempotent: a second claim (from a racing completion source) always reads back `done`
+    /// and returns null, so at most one caller ever receives the waiter.
+    pub fn claim(self: *WaiterSlot) ?*Task {
+        const prev = self.state.swap(done, .acq_rel);
+        if (prev == empty or prev == done) return null;
+        return @ptrFromInt(prev);
+    }
+
+    /// Read the currently registered waiter without claiming completion. For introspection only
+    /// (deadlock-chain walks); a caller that intends to wake the waiter must use `claim` instead,
+    /// since two readers of `peek` could otherwise both act on the same waiter.
+    pub fn peek(self: *const WaiterSlot) ?*Task {
+        const v = self.state.load(.acquire);
+        if (v == empty or v == done) return null;
+        return @ptrFromInt(v);
+    }
+};
+
 /// Task represents a green thread with its own execution context.
 pub const Task = struct {
     id: u64,
@@ -216,7 +258,7 @@ pub const Task = struct {
     blocked_on_once_cell: ?*anyopaque = null,
     /// The task this one is suspended in `await` on.
     ///
-    /// The reverse edge of `awaiting_task`, which the awaited task carries. Only the forward
+    /// The reverse edge of `awaiting_slot`, which the awaited task carries. Only the forward
     /// edge is needed to deliver the wake; this one exists so a parked awaiter is visible as
     /// blocked rather than reading as runnable.
     blocked_on_await: ?*Task = null,
@@ -229,8 +271,9 @@ pub const Task = struct {
     /// outlive the task that runs it.
     callable: Callable,
     peak_stack_usage: usize = 0,
-    /// Task that is waiting for this task to complete (via await).
-    awaiting_task: ?*Task = null,
+    /// Task that is waiting for this task to complete (via await), registered through the
+    /// register-vs-complete handshake described on `WaiterSlot`.
+    awaiting_slot: WaiterSlot = .{},
     /// Set for a fire-and-forget task spawned with `spawn-detached`. A
     /// detached task is tracked in its scope's `detached` list, isolated
     /// from sibling cancellation, and reaped at its own completion.
@@ -318,8 +361,9 @@ pub const TaskScope = struct {
     /// Guards `children` against concurrent appends from spawns on other
     /// worker threads and reads from sibling-cancellation iteration.
     children_mu: std.Thread.Mutex = .{},
-    /// Task that is waiting for the entire scope to complete.
-    waiting_task: ?*Task = null,
+    /// Task that is waiting for the entire scope to complete, registered through the
+    /// register-vs-complete handshake described on `WaiterSlot`.
+    waiting_slot: WaiterSlot = .{},
     allocator: Allocator,
     /// Atomic count of children that have not yet finished.
     active_children: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
@@ -343,17 +387,10 @@ pub const TaskScope = struct {
     /// Atomic count of detached tasks that have not yet finished. Drives
     /// scope-exit waiting alongside `active_children`.
     detached_active: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
-    /// One-shot claim so exactly one worker wakes the scope waiter when both
-    /// `active_children` and `detached_active` reach zero. Without it the
-    /// last tracked child and the last detached task completing concurrently
-    /// on different workers could both observe the drained state and
-    /// double-wake the waiter.
-    waiter_woken: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
 
     pub fn init(allocator: Allocator) TaskScope {
         return .{
             .children = .{},
-            .waiting_task = null,
             .allocator = allocator,
         };
     }

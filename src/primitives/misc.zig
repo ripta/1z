@@ -1495,7 +1495,7 @@ fn holderAwaitsTask(holder: LoadLock.Owner, contender: *Task) bool {
     };
     var scope: ?*TaskScope = contender.scope;
     while (scope) |s| {
-        const waiter = s.waiting_task orelse return false;
+        const waiter = s.waiting_slot.peek() orelse return false;
         if (waiter == holder_task) return true;
         scope = waiter.scope;
     }

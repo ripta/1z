@@ -157,10 +157,11 @@ fn nativeTaskScope(ctx: *Context) anyerror!void {
         scheduler.notifyOwnerTaskSpawned();
 
         const current = scheduler.current_task.?;
-        scope.waiting_task = current;
-        current.blocked_on_scope = &scope;
-        try scheduler.suspendCurrentTask();
-        current.blocked_on_scope = null;
+        if (scope.waiting_slot.tryRegister(current)) {
+            current.blocked_on_scope = &scope;
+            try scheduler.suspendCurrentTask();
+            current.blocked_on_scope = null;
+        }
 
         try helpers.checkCancellation(ctx);
 
@@ -545,10 +546,11 @@ fn nativeWithTimeout(ctx: *Context) anyerror!void {
     scheduler.notifyOwnerTaskSpawned();
 
     // suspend the current task until the scope drains
-    scope.waiting_task = current;
-    current.blocked_on_scope = &scope;
-    try scheduler.suspendCurrentTask();
-    current.blocked_on_scope = null;
+    if (scope.waiting_slot.tryRegister(current)) {
+        current.blocked_on_scope = &scope;
+        try scheduler.suspendCurrentTask();
+        current.blocked_on_scope = null;
+    }
 
     try helpers.checkCancellation(ctx);
 
@@ -642,10 +644,11 @@ fn nativeAwait(ctx: *Context) anyerror!void {
     switch (task.getStatus()) {
         .pending, .running => {
             try scheduler.ensureCanPark();
-            task.awaiting_task = current;
-            current.blocked_on_await = task;
-            try scheduler.suspendCurrentTask();
-            current.blocked_on_await = null;
+            if (task.awaiting_slot.tryRegister(current)) {
+                current.blocked_on_await = task;
+                try scheduler.suspendCurrentTask();
+                current.blocked_on_await = null;
+            }
         },
         .completed, .failed, .cancelled => {},
     }
@@ -676,10 +679,11 @@ fn nativeAwaitTerminal(ctx: *Context) anyerror!void {
     switch (task.getStatus()) {
         .pending, .running => {
             try scheduler.ensureCanPark();
-            task.awaiting_task = current;
-            current.blocked_on_await = task;
-            try scheduler.suspendCurrentTask();
-            current.blocked_on_await = null;
+            if (task.awaiting_slot.tryRegister(current)) {
+                current.blocked_on_await = task;
+                try scheduler.suspendCurrentTask();
+                current.blocked_on_await = null;
+            }
         },
         .completed, .failed, .cancelled => {},
     }
@@ -753,10 +757,11 @@ fn nativeAwaitAll(ctx: *Context) anyerror!void {
         switch (task.getStatus()) {
             .pending, .running => {
                 try scheduler.ensureCanPark();
-                task.awaiting_task = current;
-                current.blocked_on_await = task;
-                try scheduler.suspendCurrentTask();
-                current.blocked_on_await = null;
+                if (task.awaiting_slot.tryRegister(current)) {
+                    current.blocked_on_await = task;
+                    try scheduler.suspendCurrentTask();
+                    current.blocked_on_await = null;
+                }
             },
             .completed, .failed, .cancelled => {},
         }
