@@ -1,0 +1,16 @@
+\ Raises reached through a tail call out of a compiled body into an interpreted one. `boom` carries
+\ no stack effect, so under eager only the `go` words compile, and each reaches `when` through its
+\ interpreter fallback boundary. Both runs check this file against one golden.
+\
+\ The interpreter tail-calls `when` and pops its frame before the body runs, so the raise carries
+\ no `when` row. A tail-position `if` hands the tail call back the same way, so `go-tail-if` shows
+\ no `if` row either. `go-nontail-if` runs its `if` before `1 drop`, so that `if` keeps its row.
+
+boom: [ f "kaboom" EUserThrown make-error throw ] ;
+go: ( ? -- ) [ [ boom ] when ] ;
+go-tail-if: ( ? ? -- ) [ [ [ boom ] when ] [ [ boom ] when ] if ] ;
+go-nontail-if: ( ? ? -- ) [ [ [ boom ] when ] [ [ boom ] when ] if 1 drop ] ;
+
+[ t go ] [ inspect print-line ] recover
+[ t t go-tail-if ] [ inspect print-line ] recover
+[ t t go-nontail-if ] [ inspect print-line ] recover

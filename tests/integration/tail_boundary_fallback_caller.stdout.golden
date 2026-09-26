@@ -1,0 +1,10 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+<error user-thrown: kaboom [tests/integration/tail_boundary_fallback_caller.1z:9:throw <- tests/integration/tail_boundary_fallback_caller.1z:14:recover]>
+Stack: [ ]
+<error user-thrown: kaboom [tests/integration/tail_boundary_fallback_caller.1z:9:throw <- tests/integration/tail_boundary_fallback_caller.1z:15:recover]>
+Stack: [ ]
+<error user-thrown: kaboom [tests/integration/tail_boundary_fallback_caller.1z:9:throw <- tests/integration/tail_boundary_fallback_caller.1z:12:if <- tests/integration/tail_boundary_fallback_caller.1z:16:recover]>
+Stack: [ ]

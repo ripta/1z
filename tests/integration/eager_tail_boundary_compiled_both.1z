@@ -1,10 +1,11 @@
-\ The raise from eager_tail_boundary_compiled_caller.1z with `boom`'s effect declared, pinned
-\ eager. Both sides of the boundary now compile, and each adds a row the interpreted chain in
-\ tail_boundary_compiled_caller.1z does not carry.
+\ The raise from tail_boundary_fallback_caller.1z with `boom`'s effect declared, pinned eager. Both
+\ sides of the boundary now compile. The chain carries a row the interpreted chain in
+\ tail_boundary_compiled_caller.1z does not.
 \
-\ The compiled `go` reaches `when` through its fallback boundary, which pends the `when` row. The
-\ `if` inside `when` runs the arm inline, and the compiled `boom` there raises rather than being
-\ tail-called, so the `if` frame is pended too. The interpreted chain is the target.
+\ The compiled `go` tail-calls `when` through its fallback boundary, which drops the `when` row as
+\ the interpreter does. The `if` inside `when` runs the arm inline, and the compiled `boom` there
+\ raises rather than being tail-called, so the `if` frame is pended. The interpreted chain is the
+\ target.
 
 boom: ( -- ) [ f "kaboom" EUserThrown make-error throw ] ;
 go: ( ? -- ) [ [ boom ] when ] ;

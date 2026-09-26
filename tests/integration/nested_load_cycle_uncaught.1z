@@ -2,7 +2,7 @@
 \ The rejection is raised while the loaded module's `use` runs, so it leaves through the parse-time
 \ path too. Caught, it has always reported in full; uncaught, it took the bare fallback.
 \
-\ Interpreter-only. The compiled tier records two further `load` frames on this recursive chain,
-\ so the two tiers render different caller lists for the one error.
+\ Both tiers render one caller list. `(use-load)` compiles under eager, and its tail calls out of
+\ that compiled body add no row the interpreted run does not.
 
 "fixtures/cycle_two_a.1z" load drop

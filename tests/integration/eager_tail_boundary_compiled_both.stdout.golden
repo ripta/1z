@@ -1,4 +1,4 @@
 Stack: [ ]
 Stack: [ ]
-<error user-thrown: kaboom [tests/integration/eager_tail_boundary_compiled_both.1z:9:throw <- src/prelude.1z:348:if <- tests/integration/eager_tail_boundary_compiled_both.1z:10:when <- tests/integration/eager_tail_boundary_compiled_both.1z:12:recover]>
+<error user-thrown: kaboom [tests/integration/eager_tail_boundary_compiled_both.1z:10:throw <- src/prelude.1z:348:if <- tests/integration/eager_tail_boundary_compiled_both.1z:13:recover]>
 Stack: [ ]

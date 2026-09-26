@@ -1552,7 +1552,7 @@ fn emitPerOperationFallback(
         const src = emitTraceSourceArgs(state);
         const line_const = c.ir_const_addr(ctx, line);
         state.noteAotFallbackEmission(.per_op_native, op_name, resolved.word_id, line);
-        const call_result = c._ir_CALL_5(ctx, c.IR_I32, state.native_word_call_fn, ctx_val, word_id_const, src.ptr, src.len, line_const);
+        const call_result = c._ir_CALL_6(ctx, c.IR_I32, state.native_word_call_fn, ctx_val, word_id_const, src.ptr, src.len, line_const, c.ir_const_addr(ctx, 0));
         emitCallbackPostCheck(state, call_result, state.error_propagate_status, null, .none);
     }
 
@@ -2625,6 +2625,12 @@ const CompileState = struct {
     quotation_slots: QuotationSlotMap = .{},
     inline_trace_frames: [max_inline_trace_frames]InlineTraceFrame = undefined,
     inline_trace_frame_count: usize = 0,
+    /// How many `compileInstructions` walks are open, one per inlined body plus the word's own.
+    ///
+    /// A tail call leaves out a tail-position `if` row only when the call sits directly in that
+    /// `if`'s arm. A loop or splice inlines its body with no trace level of its own, and the depth
+    /// is what tells such a body apart from the arm around it.
+    body_depth: u32 = 0,
     /// Where in which body `compileInstructions` currently is, so an error-path frame can name
     /// the `inline` word whose code the instruction was copied from. Saved and restored around a
     /// nested walk, the way `source_file` is around a splice.
@@ -2777,6 +2783,14 @@ const InlineTraceFrame = struct {
     /// Emission walks back out through these, and the runs covering an enclosing level's own
     /// instruction are the rows that belong above that level's frame.
     site: InlineSite = .{},
+    /// Set on an `if` level whose `if` is the last instruction of its body.
+    ///
+    /// The interpreter's `if` hands a tail call in its arm back to the enclosing trampoline. The
+    /// trampoline pops the `if` frame before the call runs. A raise from that call therefore
+    /// carries no row for this level.
+    tail_if: bool = false,
+    /// `body_depth` of the body holding the `if`, so its arm runs one deeper.
+    depth: u32 = 0,
 };
 
 const max_inline_trace_frames = 8;
@@ -4519,7 +4533,7 @@ fn emitResolvedNativeCallback(
             emitParamValidation(state, eff_ptr);
         }
 
-        emitNativeWordCall(state, ctx_val, name, resolved, line);
+        emitNativeWordCall(state, ctx_val, name, resolved, line, false);
 
         if (exitFallsThrough(state.exit_kind)) {
             settleRowAwareStack(state, stack, sp, resolved.input_count, resolved.output_count);
@@ -4555,7 +4569,7 @@ fn emitReachBelowConcrete(state: *CompileState, stack: []StackEntry, sp: *usize,
 
     const ctx_val = emitCallbackPreamble(state, sp.*);
     if (resolved.is_native) {
-        emitNativeWordCall(state, ctx_val, name, resolved, line);
+        emitNativeWordCall(state, ctx_val, name, resolved, line, is_tail);
     } else if (resolved.is_generic) {
         emitAotGenericDispatch(state, resolved.dispatch_id, resolved.word_id, name, line);
     } else {
@@ -4608,7 +4622,7 @@ fn emitDynamicRowFallbackPreserving(state: *CompileState, stack: []StackEntry, s
 
     const ctx_val = emitCallbackPreamble(state, sp.*);
     if (resolved.is_native) {
-        emitNativeWordCall(state, ctx_val, name, resolved, line);
+        emitNativeWordCall(state, ctx_val, name, resolved, line, is_tail);
     } else if (resolved.is_generic) {
         emitAotGenericDispatch(state, resolved.dispatch_id, resolved.word_id, name, line);
     } else {
@@ -5980,7 +5994,7 @@ fn emitStructNativeTail(ec: EmitCtx, effective_in: u8, effective_out: u8) IrCode
         return IrCodegenError.NotCompilable;
     };
 
-    emitNativeWordCall(state, ctx_val, ec.name, resolved, ec.line);
+    emitNativeWordCall(state, ctx_val, ec.name, resolved, ec.line, ec.idx == ec.instructions.len - 1);
 
     if (exitFallsThrough(state.exit_kind)) {
         settleRowAwareStack(state, stack, sp, effective_in, effective_out);
@@ -7045,6 +7059,8 @@ fn emitIntrinsicIf(ec: EmitCtx) IrCodegenError!ControlFlow {
             .line = ec.line,
             .source = traceFrameSourceHere(state),
             .site = state.inline_site,
+            .tail_if = ec.idx == ec.instructions.len - 1,
+            .depth = state.body_depth,
         };
         state.inline_trace_frame_count += 1;
     }
@@ -7112,6 +7128,8 @@ fn emitIntrinsicIf(ec: EmitCtx) IrCodegenError!ControlFlow {
             .line = ec.line,
             .source = traceFrameSourceHere(state),
             .site = state.inline_site,
+            .tail_if = ec.idx == ec.instructions.len - 1,
+            .depth = state.body_depth,
         };
         state.inline_trace_frame_count += 1;
     }
@@ -7802,7 +7820,7 @@ fn emitGenericResolvedNativeCall(ec: EmitCtx, resolved: ResolvedWord) IrCodegenE
             !emitInlinePicCheckUnary(state, idx, ctx_val, name, resolved, effective_in, line) and
             !emitInlineDispatchTableCheckUnary(state, ctx_val, name, resolved, effective_in, line))
         {
-            emitNativeWordCall(state, ctx_val, name, resolved, line);
+            emitNativeWordCall(state, ctx_val, name, resolved, line, is_tail);
         }
 
         if (exitFallsThrough(state.exit_kind)) {
@@ -7949,8 +7967,9 @@ fn emitGenericResolvedNativeCall(ec: EmitCtx, resolved: ResolvedWord) IrCodegenE
             const src = emitTraceSourceArgs(state);
             const line_const = c.ir_const_addr(ctx, line);
             state.noteAotFallbackEmission(.compound_uncompiled, name, resolved.word_id, line);
-            const fb_result = c._ir_CALL_5(ctx, c.IR_I32, state.interpreted_call_fn, ctx_val2, word_id_const, src.ptr, src.len, line_const);
-            emitCallbackPostCheck(state, fb_result, state.error_propagate_status, if (resolved.never_returns) state.error_propagate_status else null, .none);
+            const fb_result = c._ir_CALL_6(ctx, c.IR_I32, state.interpreted_call_fn, ctx_val2, word_id_const, src.ptr, src.len, line_const, c.ir_const_addr(ctx, @intFromBool(is_tail)));
+            const fb_trace: CurrentTraceFrame = if (is_tail) .{ .tail_call = .{ .fallback = true } } else .none;
+            emitCallbackPostCheck(state, fb_result, state.error_propagate_status, if (resolved.never_returns) state.error_propagate_status else null, fb_trace);
         }
         const end_fallback = if (resolved.never_returns) c.IR_UNUSED else c._ir_END(ctx);
 
@@ -7960,7 +7979,7 @@ fn emitGenericResolvedNativeCall(ec: EmitCtx, resolved: ResolvedWord) IrCodegenE
         c._ir_IF_FALSE(ctx, if_null);
         {
             const call_result = c._ir_CALL_1(ctx, c.IR_I32, callee_code_ptr, state.jit_ctx_ptr);
-            const trace: CurrentTraceFrame = if (is_tail) .none else .{ .named = .{ .name = name, .line = line } };
+            const trace: CurrentTraceFrame = if (is_tail) .{ .tail_call = .{ .fallback = false } } else .{ .named = .{ .name = name, .line = line } };
             emitCallbackPostCheck(state, call_result, call_result, if (resolved.never_returns) state.error_propagate_status else null, trace);
         }
         if (resolved.never_returns) {
@@ -8135,7 +8154,7 @@ fn emitLiteralCountConsumingOp(ec: EmitCtx, produced: usize, escapes: bool) IrCo
     flushToPhysicalStack(state, stack, sp.*);
     const ctx_val = emitCallbackPreamble(state, sp.*);
     if (resolved.stack_effect_ptr) |eff_ptr| emitParamValidation(state, eff_ptr);
-    emitNativeWordCall(state, ctx_val, name, resolved, ec.line);
+    emitNativeWordCall(state, ctx_val, name, resolved, ec.line, ec.idx == ec.instructions.len - 1);
     if (exitFallsThrough(state.exit_kind)) {
         settleRowAwareStack(state, stack, sp, consumed, produced);
     }
@@ -8593,6 +8612,9 @@ fn compileInstructions(
     const saved_inline_site = state.inline_site;
     defer state.inline_site = saved_inline_site;
 
+    state.body_depth += 1;
+    defer state.body_depth -= 1;
+
     for (instructions, 0..) |instr, idx| {
         state.inline_site = .{ .body = instructions, .index = idx };
         emitAotInstrTrace(state, instr, stack, sp.*);
@@ -9038,7 +9060,7 @@ fn compileInstructions(
                             try materializeQuotations(state, stack, sp.*, false);
                             flushToPhysicalStack(state, stack, sp.*);
                             const ctx_val = emitCallbackPreamble(state, sp.*);
-                            emitNativeWordCall(state, ctx_val, name, resolved, instr.line);
+                            emitNativeWordCall(state, ctx_val, name, resolved, instr.line, idx == instructions.len - 1);
                             if (exitFallsThrough(state.exit_kind)) {
                                 settleRowAwareStack(state, stack, sp, effective_in, 1);
                             }
@@ -10158,6 +10180,8 @@ fn emitWordCAotPass(
     const proto_3arg = c.ir_proto_3(&ctx, 0, c.IR_I32, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR);
     const proto_4arg = c.ir_proto_4(&ctx, 0, c.IR_I32, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR);
     const proto_5arg = c.ir_proto_5(&ctx, 0, c.IR_I32, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR);
+    var proto_6arg_params = [_]u8{ c.IR_ADDR, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR };
+    const proto_6arg = c.ir_proto(&ctx, 0, c.IR_I32, proto_6arg_params.len, &proto_6arg_params);
     var proto_7arg_params = [_]u8{ c.IR_ADDR, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR };
     const proto_7arg = c.ir_proto(&ctx, 0, c.IR_I32, proto_7arg_params.len, &proto_7arg_params);
 
@@ -10199,7 +10223,7 @@ fn emitWordCAotPass(
         c.IR_UNUSED;
 
     const interpreted_call_fn = if (scan_flags.needs_dispatch or scan_flags.needs_native_call or scan_flags.needs_poly_fallback)
-        c.ir_const_func(&ctx, c.ir_str(&ctx, "jitInterpretedCall"), proto_5arg)
+        c.ir_const_func(&ctx, c.ir_str(&ctx, "jitInterpretedCall"), proto_6arg)
     else
         c.IR_UNUSED;
 
@@ -10207,7 +10231,7 @@ fn emitWordCAotPass(
     // two-pass codegen may introduce native call sites that the pre-scan
     // didn't predict, and an unset reference would let ir_emit_c emit a
     // phantom LOAD that collides with vreg 0.
-    const native_word_call_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "jitNativeWordCall"), proto_5arg);
+    const native_word_call_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "jitNativeWordCall"), proto_6arg);
 
     const aot_satisfies_dispatch_fn = if (scan_flags.needs_satisfies_dispatch)
         c.ir_const_func(&ctx, c.ir_str(&ctx, "aotSatisfiesAndDispatch"), proto_7arg)
@@ -12002,7 +12026,7 @@ pub fn emitProgramC(
     // unconditional because compiled bodies may legitimately reference
     // them in all artifact classes.
     if (jit_interpreted_call_linked) {
-        try out.appendSlice(allocator, "extern int32_t jitInterpretedCall(uintptr_t ctx, uintptr_t word_id, const char *src, uintptr_t src_len, uintptr_t line);\n");
+        try out.appendSlice(allocator, "extern int32_t jitInterpretedCall(uintptr_t ctx, uintptr_t word_id, const char *src, uintptr_t src_len, uintptr_t line, uintptr_t is_tail);\n");
     }
     try out.appendSlice(allocator, "extern int32_t jitSafepoint(uintptr_t ctx);\n");
     try out.appendSlice(allocator, "extern int32_t jitRecover(uintptr_t ctx);\n");
@@ -12020,7 +12044,7 @@ pub fn emitProgramC(
     try out.appendSlice(allocator, "extern int32_t jitPicDispatch(uintptr_t ctx, uintptr_t word_id, uintptr_t tag_a, uintptr_t tag_b);\n");
     try out.appendSlice(allocator, "extern int32_t jitPicTopTagMatch(uintptr_t ctx, uintptr_t tag_a);\n");
     try out.appendSlice(allocator, "extern int32_t jitPicDispatchUnary(uintptr_t ctx, uintptr_t word_id, uintptr_t tag_a);\n");
-    try out.appendSlice(allocator, "extern int32_t jitNativeWordCall(uintptr_t ctx, uintptr_t word_id, const char *src, uintptr_t src_len, uintptr_t line);\n");
+    try out.appendSlice(allocator, "extern int32_t jitNativeWordCall(uintptr_t ctx, uintptr_t word_id, const char *src, uintptr_t src_len, uintptr_t line, uintptr_t is_tail);\n");
     try out.appendSlice(allocator, aot_wrappers.registry_wrapper_externs);
     try out.appendSlice(allocator, "extern int32_t jitRefreshStack(uintptr_t jit_ctx);\n");
     try out.appendSlice(allocator, "extern int32_t jitRetainSlot(uintptr_t value_ptr);\n");
@@ -13306,6 +13330,16 @@ const CurrentTraceFrame = union(enum) {
         kind: BuiltinTraceFrameKind,
         line: usize,
     },
+    /// A call in tail position, whose error branch emits no row for the callee. A fallback helper
+    /// keeps or drops the callee's frame itself.
+    ///
+    /// A raise past the point where the interpreter would have dropped the callee's frame also
+    /// drops the rows of the tail-position `if` levels the call was reached through. A compiled
+    /// callee always raises past that point. A fallback helper says so by returning
+    /// `tail_raise_status`.
+    tail_call: struct {
+        fallback: bool,
+    },
 };
 
 /// A pointer and length argument pair for a trace-frame append call, serving both the source
@@ -13528,14 +13562,56 @@ fn emitInlineRegionTraceFrames(state: *CompileState, site: InlineSite) void {
 /// A quotation body is its own instruction array. Its own runs are emitted where the raise sits,
 /// against the site retargeted to that array, so what a level reaches back out for is the
 /// `inline` word enclosing it.
-fn emitActiveInlineTraceFrames(state: *CompileState) void {
+///
+/// `skip_tail_ifs` leaves out the frames of the innermost unbroken run of tail-position `if`
+/// levels, which the interpreter pops before a tail call in their arms runs.
+fn emitActiveInlineTraceFrames(state: *CompileState, skip_tail_ifs: bool) void {
     var i = state.inline_trace_frame_count;
+    var skipping = skip_tail_ifs;
+    var arm_depth = state.body_depth;
     while (i > 0) {
         i -= 1;
         const frame = state.inline_trace_frames[i];
-        emitBuiltinTraceFrame(state, frame.kind, frame.line, frame.source);
+
+        skipping = skipping and isTailIfArm(frame, arm_depth);
+        if (skipping) {
+            arm_depth = frame.depth;
+        } else {
+            emitBuiltinTraceFrame(state, frame.kind, frame.line, frame.source);
+        }
+
         emitInlineRegionTraceFrames(state, frame.site);
     }
+}
+
+/// Whether a body at `arm_depth` is the arm of `frame`'s tail-position `if` itself, rather than a
+/// loop body or splice inlined somewhere inside that arm.
+fn isTailIfArm(frame: InlineTraceFrame, arm_depth: u32) bool {
+    return frame.tail_if and frame.depth + 1 == arm_depth;
+}
+
+/// The inline levels' frames for the error branch of a tail call.
+///
+/// A fallback call leaves them out only when its helper reports a raise past the dropped frame.
+/// The choice is therefore made at runtime on the call's status.
+fn emitTailCallInlineTraceFrames(state: *CompileState, call_result: c.ir_ref, fallback: bool) void {
+    const count = state.inline_trace_frame_count;
+    if (count == 0 or !isTailIfArm(state.inline_trace_frames[count - 1], state.body_depth)) return emitActiveInlineTraceFrames(state, false);
+    if (!fallback) return emitActiveInlineTraceFrames(state, true);
+
+    const ctx = state.ctx;
+    const tail_raise = c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), call_result, c.ir_const_i32(ctx, tail_raise_status));
+    const if_ref = c._ir_IF(ctx, tail_raise);
+
+    c._ir_IF_TRUE(ctx, if_ref);
+    emitActiveInlineTraceFrames(state, true);
+    const end_skip = c._ir_END(ctx);
+
+    c._ir_IF_FALSE(ctx, if_ref);
+    emitActiveInlineTraceFrames(state, false);
+    const end_keep = c._ir_END(ctx);
+
+    c._ir_MERGE_2(ctx, end_skip, end_keep);
 }
 
 fn emitCallbackPostCheck(
@@ -13552,12 +13628,15 @@ fn emitCallbackPostCheck(
     c._ir_IF_TRUE_cold(ctx, if_bail);
     if (traceFramesEnabled(state)) {
         switch (current_trace_frame) {
-            .none => {},
+            .none, .tail_call => {},
             .named => |frame| if (frame.line != 0) emitWordTraceFrame(state, frame.name, frame.line, frame.word_id),
             .builtin => |frame| if (frame.line != 0) emitBuiltinTraceFrame(state, frame.kind, frame.line, state.source_file),
         }
         emitInlineRegionTraceFrames(state, state.inline_site);
-        emitActiveInlineTraceFrames(state);
+        switch (current_trace_frame) {
+            .tail_call => |frame| emitTailCallInlineTraceFrames(state, call_result, frame.fallback),
+            else => emitActiveInlineTraceFrames(state, false),
+        }
     }
     c._ir_RETURN(ctx, return_status);
     c._ir_IF_FALSE(ctx, if_bail);
@@ -13846,7 +13925,7 @@ fn emitInlinePicEntries(
     // --- Cold path: generation mismatch → slow dispatch ---
     c._ir_IF_FALSE_cold(ictx, if_gen);
     {
-        emitNativeWordCall(state, ctx_val, name, resolved, line);
+        emitNativeWordCall(state, ctx_val, name, resolved, line, false);
     }
     const end_gen_miss = c._ir_END(ictx);
 
@@ -13916,7 +13995,7 @@ fn emitInlinePicEntries(
 
     // Innermost miss: slow path, call the generic native function
     {
-        emitNativeWordCall(state, ctx_val, name, resolved, line);
+        emitNativeWordCall(state, ctx_val, name, resolved, line, false);
         state.items_ptr = saved_items_ptr;
         state.base_addr = saved_base_addr;
     }
@@ -14278,7 +14357,10 @@ fn emitMonomorphizedDispatch(
 /// the baked function pointer. In AOT mode, calls through jitNativeWordCall
 /// with the word ID since native function pointers are not available at C
 /// compile time.
-fn emitNativeWordCall(state: *CompileState, ctx_val: c.ir_ref, name: []const u8, resolved: ResolvedWord, line: usize) void {
+///
+/// `is_tail` reaches `jitNativeWordCall`, where it matters only for a native that propagates a tail
+/// call. A caller whose natives never do may pass false.
+fn emitNativeWordCall(state: *CompileState, ctx_val: c.ir_ref, name: []const u8, resolved: ResolvedWord, line: usize, is_tail: bool) void {
     const ictx = state.ctx;
     if (state.aot_mode) {
         // Non-generic natives compile to a direct call into their generated wrapper
@@ -14307,8 +14389,9 @@ fn emitNativeWordCall(state: *CompileState, ctx_val: c.ir_ref, name: []const u8,
         const src = emitTraceSourceArgs(state);
         const line_const = c.ir_const_addr(ictx, line);
         state.noteAotFallbackEmission(.native, name, resolved.word_id, line);
-        const call_result = c._ir_CALL_5(ictx, c.IR_I32, state.native_word_call_fn, ctx_val, word_id_const, src.ptr, src.len, line_const);
-        emitCallbackPostCheck(state, call_result, state.error_propagate_status, if (resolved.never_returns) state.error_propagate_status else null, .none);
+        const call_result = c._ir_CALL_6(ictx, c.IR_I32, state.native_word_call_fn, ctx_val, word_id_const, src.ptr, src.len, line_const, c.ir_const_addr(ictx, @intFromBool(is_tail)));
+        const trace: CurrentTraceFrame = if (is_tail) .{ .tail_call = .{ .fallback = true } } else .none;
+        emitCallbackPostCheck(state, call_result, state.error_propagate_status, if (resolved.never_returns) state.error_propagate_status else null, trace);
     } else {
         const fn_ptr_const = c.ir_const_addr(ictx, resolved.native_fn_ptr.?);
         const call_result = c._ir_CALL_2(ictx, c.IR_I32, jitNativeCallFn(state), ctx_val, fn_ptr_const);
@@ -14334,7 +14417,7 @@ fn emitAotWordCall(state: *CompileState, ctx_val: c.ir_ref, name: []const u8, re
             defer std.heap.page_allocator.free(mangled);
             const callee_fn = c.ir_const_func(ictx, c.ir_str(ictx, mangled.ptr), state.aot_proto_1arg);
             const call_result = c._ir_CALL_1(ictx, c.IR_I32, callee_fn, state.jit_ctx_ptr);
-            const trace: CurrentTraceFrame = if (is_tail) .none else .{ .named = .{ .name = name, .line = line, .word_id = resolved.word_id } };
+            const trace: CurrentTraceFrame = if (is_tail) .{ .tail_call = .{ .fallback = false } } else .{ .named = .{ .name = name, .line = line, .word_id = resolved.word_id } };
             emitCallbackPostCheck(state, call_result, call_result, if (resolved.never_returns) state.error_propagate_status else null, trace);
             return;
         }
@@ -14344,8 +14427,9 @@ fn emitAotWordCall(state: *CompileState, ctx_val: c.ir_ref, name: []const u8, re
     const src = emitTraceSourceArgs(state);
     const line_const = c.ir_const_addr(ictx, line);
     state.noteAotFallbackEmission(.compound_uncompiled, target, resolved.word_id, line);
-    const call_result = c._ir_CALL_5(ictx, c.IR_I32, state.interpreted_call_fn, ctx_val, word_id_const, src.ptr, src.len, line_const);
-    emitCallbackPostCheck(state, call_result, state.error_propagate_status, if (resolved.never_returns) state.error_propagate_status else null, .none);
+    const call_result = c._ir_CALL_6(ictx, c.IR_I32, state.interpreted_call_fn, ctx_val, word_id_const, src.ptr, src.len, line_const, c.ir_const_addr(ictx, @intFromBool(is_tail)));
+    const trace: CurrentTraceFrame = if (is_tail) .{ .tail_call = .{ .fallback = true } } else .none;
+    emitCallbackPostCheck(state, call_result, state.error_propagate_status, if (resolved.never_returns) state.error_propagate_status else null, trace);
 }
 
 /// Emit a parameter effect validation call at the current IR position.
@@ -16048,7 +16132,10 @@ fn resolveEntryWord(ctx: *Context, entry: jit_dispatch_mod.JitEntry, word_name: 
 /// Run a module-private word resolved via `lookupAnyModuleWord`. Pushes
 /// the owning module's deps frame so any references inside the word's
 /// body (other module-private helpers, struct types, etc.) resolve.
-fn invokeModuleWord(ctx: *Context, hit: ModuleWordHit) !void {
+///
+/// A compound body called in tail position runs without the call frame, as `elideTailFrame`
+/// describes. `elided` reports that, so the caller skips its own cleanup of that frame.
+fn invokeModuleWord(ctx: *Context, hit: ModuleWordHit, name: []const u8, is_tail: bool, elided: *bool) !void {
     try ctx.pushModuleDepsFrame(hit.module);
     defer ctx.popModuleDepsFrameTraced(hit.module);
 
@@ -16082,12 +16169,29 @@ fn invokeModuleWord(ctx: *Context, hit: ModuleWordHit) !void {
             if (rc != 0) return error.HostCallbackFailed;
         },
         .compound => |instrs| {
+            if (is_tail) {
+                elideTailFrame(ctx, name);
+                elided.* = true;
+            }
+
             const saved_source = ctx.current_source;
             defer ctx.current_source = saved_source;
             ctx.enterBodySource(instrs);
             try ctx.executeQuotationWithPic(.{ .instructions = instrs }, null, null, null, hit.word.may_define);
         },
     }
+}
+
+/// Drop the frame of a compound word a compiled body called in tail position, before its body
+/// runs.
+///
+/// The interpreter pushes that frame, so a validation or dispatch error still pends it. Its
+/// trampoline then pops the frame before the body runs. A raise inside the body carries no row for
+/// the word, and no output effect is checked.
+fn elideTailFrame(ctx: *Context, name: []const u8) void {
+    if (ctx.benchmark) |b| b.endWordProfile(ctx.allocator, name);
+    if (ctx.profile) |p| p.recordWordEnd(ctx.allocator, name);
+    ctx.popCallFrame();
 }
 
 /// Compiled-code entry point for native words in hosted AOT builds.
@@ -16109,10 +16213,16 @@ fn invokeModuleWord(ctx: *Context, hit: ModuleWordHit) !void {
 ///
 /// The C ABI mirrors `jitInterpretedCall` so callers can swap one for the
 /// other in generated code.
-export fn jitNativeWordCall(ctx_raw: usize, word_id_raw: usize, src_ptr_raw: usize, src_len_raw: usize, line_raw: usize) callconv(.c) i32 {
+///
+/// `is_tail_raw` is nonzero when the call is the last instruction of its compiled body. A native
+/// keeps its frame in tail position, as in the interpreter. Only a tail call it propagates runs
+/// without that frame.
+export fn jitNativeWordCall(ctx_raw: usize, word_id_raw: usize, src_ptr_raw: usize, src_len_raw: usize, line_raw: usize, is_tail_raw: usize) callconv(.c) i32 {
     if (ctx_raw == 0) return 1;
     const ctx: *Context = @ptrFromInt(ctx_raw);
     const word_id: u32 = @intCast(word_id_raw);
+    const is_tail = is_tail_raw != 0;
+    var elided = false;
     const entry = ctx.jit_dispatch.get(word_id) orelse blk: {
         var parent = ctx.parent_context;
         while (parent) |p| : (parent = p.parent_context) {
@@ -16162,22 +16272,7 @@ export fn jitNativeWordCall(ctx_raw: usize, word_id_raw: usize, src_ptr_raw: usi
         }
 
         if (leaf.source_file) |sf| ctx.current_source = sf;
-        const result = leaf.fn_ptr(ctx);
-
-        if (result) |_| {
-            ctx.consumePropagatedTailCall(display_name) catch |err| {
-                ctx.jit_pending_error = err;
-                return 2;
-            };
-            ctx.wordSuccessCleanup(display_name, leaf.stack_effect) catch |err| {
-                ctx.jit_pending_error = err;
-                return 2;
-            };
-            return 0;
-        } else |err| {
-            ctx.jit_pending_error = ctx.wordErrorCleanup(display_name, err);
-            return 2;
-        }
+        return finishFallbackCall(ctx, display_name, leaf.fn_ptr(ctx), false, is_tail, leaf.stack_effect);
     }
 
     const looked_up_word = resolveEntryWord(ctx, entry, word_name);
@@ -16246,32 +16341,76 @@ export fn jitNativeWordCall(ctx_raw: usize, word_id_raw: usize, src_ptr_raw: usi
             },
         }
     } else if (module_hit) |hit| blk: {
-        break :blk invokeModuleWord(ctx, hit);
+        break :blk invokeModuleWord(ctx, hit, display_name, is_tail, &elided);
     } else {
         return 1;
     };
 
+    return finishFallbackCall(ctx, display_name, result, elided, is_tail, if (looked_up_word) |word| word.stack_effect else if (module_hit) |hit| hit.word.stack_effect else null);
+}
+
+/// The status a fallback helper returns for an error raised after the call's frame was dropped
+/// as a tail call.
+///
+/// The interpreter drops the frame of every tail-position `if` the call was reached through as
+/// well, so the caller's error branch leaves out those rows on this status. Any other error keeps
+/// them, and so returns the ordinary error status.
+pub const tail_raise_status: i32 = 4;
+
+/// The shared exit of the two fallback helpers once the callee has run.
+///
+/// An elided frame is already gone, so neither cleanup touches the call stack for it. An error
+/// passes through unpended. Success needs nothing further, because the body's own trampoline
+/// consumed any tail call it set.
+///
+/// A native called in tail position that propagated a tail call leaves two frames: the dangling
+/// one the tail callee pushed, and its own. The interpreter's tail arm pops the first in its
+/// success cleanup. The trampoline pops the second before running the deferred body. An error
+/// raised there pends neither.
+fn finishFallbackCall(ctx: *Context, display_name: []const u8, result: anyerror!void, elided: bool, is_tail: bool, cleanup_effect: ?*const StackEffect) i32 {
     if (result) |_| {
-        ctx.consumePropagatedTailCall(display_name) catch |err| {
-            ctx.jit_pending_error = err;
-            return 2;
-        };
-        const cleanup_effect = if (looked_up_word) |word| word.stack_effect else if (module_hit) |hit| hit.word.stack_effect else null;
+        if (elided) return 0;
+
+        if (!is_tail) {
+            ctx.consumePropagatedTailCall(display_name) catch |err| {
+                ctx.jit_pending_error = err;
+                return 2;
+            };
+        }
+
         ctx.wordSuccessCleanup(display_name, cleanup_effect) catch |err| {
             ctx.jit_pending_error = err;
             return 2;
         };
+
+        if (!is_tail or ctx.tail_call_instructions == null) return 0;
+
+        ctx.popCallFrame();
+        ctx.runPropagatedTailBody() catch |err| {
+            ctx.jit_pending_error = err;
+            return tail_raise_status;
+        };
         return 0;
     } else |err| {
+        if (elided) {
+            ctx.jit_pending_error = err;
+            return tail_raise_status;
+        }
+
         ctx.jit_pending_error = ctx.wordErrorCleanup(display_name, err);
         return 2;
     }
 }
 
-export fn jitInterpretedCall(ctx_raw: usize, word_id_raw: usize, src_ptr_raw: usize, src_len_raw: usize, line_raw: usize) callconv(.c) i32 {
+/// `is_tail_raw` is nonzero when the call is the last instruction of its compiled body. A compound
+/// callee then runs its body without its frame, as `elideTailFrame` describes; any other callee
+/// keeps it, as in the interpreter.
+export fn jitInterpretedCall(ctx_raw: usize, word_id_raw: usize, src_ptr_raw: usize, src_len_raw: usize, line_raw: usize, is_tail_raw: usize) callconv(.c) i32 {
     if (ctx_raw == 0) return 1;
     const ctx: *Context = @ptrFromInt(ctx_raw);
     const word_id: u32 = @intCast(word_id_raw);
+    const is_tail = is_tail_raw != 0;
+    var elided = false;
     const entry = ctx.jit_dispatch.get(word_id) orelse blk: {
         var parent = ctx.parent_context;
         while (parent) |p| : (parent = p.parent_context) {
@@ -16349,6 +16488,11 @@ export fn jitInterpretedCall(ctx_raw: usize, word_id_raw: usize, src_ptr_raw: us
             }
         }
 
+        if (word.action == .compound and is_tail) {
+            elideTailFrame(ctx, display_name);
+            elided = true;
+        }
+
         if (word.source_file) |sf| ctx.current_source = sf;
         if (word.source_module) |mod| {
             switch (word.action) {
@@ -16378,26 +16522,12 @@ export fn jitInterpretedCall(ctx_raw: usize, word_id_raw: usize, src_ptr_raw: us
             };
         }
     } else if (module_hit) |hit| blk: {
-        break :blk invokeModuleWord(ctx, hit);
+        break :blk invokeModuleWord(ctx, hit, display_name, is_tail, &elided);
     } else {
         return 1;
     };
 
-    if (result) |_| {
-        ctx.consumePropagatedTailCall(display_name) catch |err| {
-            ctx.jit_pending_error = err;
-            return 2;
-        };
-        const cleanup_effect = if (looked_up_word) |word| word.stack_effect else if (module_hit) |hit| hit.word.stack_effect else null;
-        ctx.wordSuccessCleanup(display_name, cleanup_effect) catch |err| {
-            ctx.jit_pending_error = err;
-            return 2;
-        };
-        return 0;
-    } else |err| {
-        ctx.jit_pending_error = ctx.wordErrorCleanup(display_name, err);
-        return 2;
-    }
+    return finishFallbackCall(ctx, display_name, result, elided, is_tail, if (looked_up_word) |word| word.stack_effect else if (module_hit) |hit| hit.word.stack_effect else null);
 }
 
 /// Result of attempting compiled execution.
@@ -16755,7 +16885,7 @@ test "jitNativeWordCall: dispatch hit runs the registered override, not the nati
     try ctx.stack.push(.{ .fixnum = 1 });
     try ctx.stack.push(.{ .fixnum = 2 });
 
-    const rc = jitNativeWordCall(@intFromPtr(&ctx), word_id, 0, 0, 1);
+    const rc = jitNativeWordCall(@intFromPtr(&ctx), word_id, 0, 0, 1, 0);
     try testing.expectEqual(@as(i32, 0), rc);
 
     const result = try ctx.stack.pop();
@@ -16777,7 +16907,7 @@ test "jitNativeWordCall: dispatch miss falls through to the cached native functi
     try ctx.stack.push(value_mod.stringValue("a"));
     try ctx.stack.push(value_mod.stringValue("b"));
 
-    const rc = jitNativeWordCall(@intFromPtr(&ctx), word_id, 0, 0, 1);
+    const rc = jitNativeWordCall(@intFromPtr(&ctx), word_id, 0, 0, 1, 0);
     try testing.expectEqual(@as(i32, 2), rc);
     try testing.expectEqual(error.TypeMismatch, ctx.jit_pending_error.?);
 }
@@ -16787,7 +16917,7 @@ test "jitNativeWordCall: unrecognized word_id with no cached native leaf returns
     defer ctx.deinit();
 
     const word_id = try ctx.jit_dispatch.assignId("some-compound-word");
-    const rc = jitNativeWordCall(@intFromPtr(&ctx), word_id, 0, 0, 1);
+    const rc = jitNativeWordCall(@intFromPtr(&ctx), word_id, 0, 0, 1, 0);
     try testing.expectEqual(@as(i32, 1), rc);
 }
 
@@ -17192,11 +17322,82 @@ test "jitInterpretedCall: entry module resolves that module's word, not the cach
     const word_id = try ctx.jit_dispatch.assignId("probe");
     ctx.jit_dispatch.getMut(word_id).?.module = "zeta-mod";
 
-    const rc = jitInterpretedCall(@intFromPtr(&ctx), word_id, 0, 0, 1);
+    const rc = jitInterpretedCall(@intFromPtr(&ctx), word_id, 0, 0, 1, 0);
     try testing.expectEqual(@as(i32, 0), rc);
 
     const result = try ctx.stack.pop();
     try testing.expectEqual(@as(i64, 11), result.fixnum);
+}
+
+/// A context whose `probe` resolves to a compound word in `zeta-mod` that calls `fail`, a native
+/// in the same module that always raises.
+fn setUpRaisingProbe(ctx: *Context, body: []const Instruction) !u32 {
+    const fail_fn = struct {
+        fn f(_: *Context) anyerror!void {
+            return error.TypeError;
+        }
+    }.f;
+
+    const arena_alloc = ctx.arena.allocator();
+    const zeta = try arena_alloc.create(value_mod.Module);
+    zeta.* = .{ .name = "zeta-mod", .words = .{} };
+    try zeta.words.put(arena_alloc, "probe", .{
+        .source_module = zeta,
+        .action = .{ .compound = body },
+    });
+    try zeta.words.put(arena_alloc, "fail", .{
+        .source_module = zeta,
+        .action = .{ .native = fail_fn },
+    });
+
+    const cache_alloc = ctx.module_cache_value.header.allocator;
+    try ctx.module_cache_value.map.put(
+        cache_alloc,
+        try cache_alloc.dupe(u8, "zeta-mod"),
+        .{ .module = zeta },
+    );
+
+    const word_id = try ctx.jit_dispatch.assignId("probe");
+    ctx.jit_dispatch.getMut(word_id).?.module = "zeta-mod";
+    return word_id;
+}
+
+fn pendsFrameNamed(ctx: *Context, name: []const u8) bool {
+    for (ctx.jit_pending_trace_frames.items) |frame| {
+        if (std.mem.eql(u8, frame.word_name, name)) return true;
+    }
+    return false;
+}
+
+test "jitInterpretedCall: a tail call drops the compound callee's frame before its body raises" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    const body = makeInstructions(.{"fail"});
+    const word_id = try setUpRaisingProbe(&ctx, &body);
+
+    const rc = jitInterpretedCall(@intFromPtr(&ctx), word_id, 0, 0, 1, 1);
+    try testing.expectEqual(tail_raise_status, rc);
+    try testing.expectEqual(@as(?anyerror, error.TypeError), ctx.jit_pending_error);
+
+    try testing.expect(pendsFrameNamed(&ctx, "fail"));
+    try testing.expect(!pendsFrameNamed(&ctx, "probe"));
+    try testing.expectEqual(@as(usize, 0), ctx.call_stack.items.len);
+}
+
+test "jitInterpretedCall: a non-tail call pends the compound callee's frame" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    const body = makeInstructions(.{"fail"});
+    const word_id = try setUpRaisingProbe(&ctx, &body);
+
+    const rc = jitInterpretedCall(@intFromPtr(&ctx), word_id, 0, 0, 1, 0);
+    try testing.expectEqual(@as(i32, 2), rc);
+
+    try testing.expect(pendsFrameNamed(&ctx, "fail"));
+    try testing.expect(pendsFrameNamed(&ctx, "probe"));
+    try testing.expectEqual(@as(usize, 0), ctx.call_stack.items.len);
 }
 
 test "jitInterpretedCall: the qualified display name reaches the call frame" {
@@ -17230,7 +17431,7 @@ test "jitInterpretedCall: the qualified display name reaches the call frame" {
     entry.module = "zeta-mod";
     entry.qualified_name = try testing.allocator.dupe(u8, "zeta-mod/probe");
 
-    const rc = jitInterpretedCall(@intFromPtr(&ctx), word_id, 0, 0, 1);
+    const rc = jitInterpretedCall(@intFromPtr(&ctx), word_id, 0, 0, 1, 0);
     try testing.expectEqual(@as(i32, 0), rc);
 }
 

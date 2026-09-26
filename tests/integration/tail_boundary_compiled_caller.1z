@@ -2,10 +2,10 @@
 \ `when` and pops its frame, so the chain carries no combinator row. That chain is the target
 \ every tier converges on.
 \
-\ The eager twins are eager_tail_boundary_compiled_caller.1z, where only `go` compiles, and
-\ eager_tail_boundary_compiled_both.1z, where `boom` compiles too. `boom` declares its effect here
-\ because every AOT build requires one; the interpreted chain is the same without it. The AOT
-\ suite builds this file through `.source` redirects with their own goldens.
+\ tail_boundary_fallback_caller.1z, where only `go` compiles, matches this chain under eager. The
+\ eager twin is eager_tail_boundary_compiled_both.1z, where `boom` compiles too. `boom` declares its
+\ effect here because every AOT build requires one; the interpreted chain is the same without it.
+\ The AOT suite builds this file through `.source` redirects with their own goldens.
 
 boom: ( -- ) [ f "kaboom" EUserThrown make-error throw ] ;
 go: ( ? -- ) [ [ boom ] when ] ;

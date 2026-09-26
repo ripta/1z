@@ -2081,18 +2081,20 @@ fn jitWithParameter(ctx_raw: usize) callconv(.c) i32 {
     return unsupportedJit(ctx_raw, "dynamic parameter scopes");
 }
 
-fn jitInterpretedCall(ctx_raw: usize, word_id_raw: usize, src_ptr_raw: usize, src_len_raw: usize, line_raw: usize) callconv(.c) i32 {
+fn jitInterpretedCall(ctx_raw: usize, word_id_raw: usize, src_ptr_raw: usize, src_len_raw: usize, line_raw: usize, is_tail_raw: usize) callconv(.c) i32 {
     _ = word_id_raw;
     _ = src_ptr_raw;
     _ = src_len_raw;
     _ = line_raw;
+    _ = is_tail_raw;
     return unsupportedJit(ctx_raw, "interpreter fallback");
 }
 
-fn jitNativeWordCall(ctx_raw: usize, word_id_raw: usize, src_ptr_raw: usize, src_len_raw: usize, line_raw: usize) callconv(.c) i32 {
+fn jitNativeWordCall(ctx_raw: usize, word_id_raw: usize, src_ptr_raw: usize, src_len_raw: usize, line_raw: usize, is_tail_raw: usize) callconv(.c) i32 {
     _ = src_ptr_raw;
     _ = src_len_raw;
     _ = line_raw;
+    _ = is_tail_raw;
     const handle = handleFromContext(ctx_raw) orelse return 1;
     if (word_id_raw >= handle.word_names.len) return unsupportedJit(ctx_raw, "native helper calls");
     const name_ptr = handle.word_names[word_id_raw] orelse return unsupportedJit(ctx_raw, "native helper calls");
@@ -2185,7 +2187,7 @@ test "freestanding unsupported native helper records clear last_error" {
     };
     defer clearLastError(&handle);
 
-    try std.testing.expectEqual(@as(i32, 2), jitNativeWordCall(@intFromPtr(&handle), 7, 0, 0, 1));
+    try std.testing.expectEqual(@as(i32, 2), jitNativeWordCall(@intFromPtr(&handle), 7, 0, 0, 1, 0));
     const msg = onez_last_error(&handle) orelse return error.TestExpectedError;
     try std.testing.expect(std.mem.indexOf(u8, std.mem.span(msg), "native helper calls is not available on this build") != null);
 }
@@ -2268,7 +2270,7 @@ test "freestanding output parameter binding writes through stream native" {
     try std.testing.expectEqual(@as(i32, 0), pushValue(&handle, .{ .parameter = &handle.output_parameter }));
     try std.testing.expectEqual(@as(i32, 0), jitGet(@intFromPtr(&handle)));
     try std.testing.expectEqual(@as(i32, 0), pushValue(&handle, .{ .string = .{ .bytes = "hello" } }));
-    try std.testing.expectEqual(@as(i32, 0), jitNativeWordCall(@intFromPtr(&handle), 0, 0, 0, 1));
+    try std.testing.expectEqual(@as(i32, 0), jitNativeWordCall(@intFromPtr(&handle), 0, 0, 0, 1, 0));
     try std.testing.expectEqual(@as(usize, 1), handle.stack_len);
     try std.testing.expectEqual(@as(i64, 5), handle.stack[0].fixnum);
     try std.testing.expectEqualStrings("hello", written.items);

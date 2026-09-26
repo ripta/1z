@@ -8733,8 +8733,16 @@ pub const Context = struct {
     /// and execute the deferred instructions normally. This prevents invalid
     /// call stack frames from accumulating without bound.
     pub fn consumePropagatedTailCall(self: *Context, name: []const u8) anyerror!void {
-        const tci = self.tail_call_instructions orelse return;
+        if (self.tail_call_instructions == null) return;
         self.popCallFrame();
+        self.runPropagatedTailBody() catch |err| return self.wordErrorCleanup(name, err);
+    }
+
+    /// Run the body a native propagated as a tail call, clearing the tail-call slots.
+    ///
+    /// Pops and pends no call frame. The caller decides which frames the run leaves in place.
+    pub fn runPropagatedTailBody(self: *Context) anyerror!void {
+        const tci = self.tail_call_instructions orelse return;
         self.tail_call_instructions = null;
 
         const tci_module = self.tail_call_module;
@@ -8746,20 +8754,14 @@ pub const Context = struct {
         const tci_may_define = self.tail_call_may_define;
         self.tail_call_may_define = false;
 
-        if (tci_module) |mod| {
-            self.pushModuleDepsFrame(mod) catch |e| return self.wordErrorCleanup(name, e);
-        }
+        if (tci_module) |mod| try self.pushModuleDepsFrame(mod);
+        defer if (tci_module) |mod| self.popModuleDepsFrameTraced(mod);
 
         const saved_source = self.current_source;
         defer self.current_source = saved_source;
         self.enterBodySource(tci);
 
-        self.executeQuotationWithPic(.{ .instructions = tci }, null, null, tci_owner, tci_may_define) catch |err| {
-            if (tci_module) |mod| self.popModuleDepsFrameTraced(mod);
-            return self.wordErrorCleanup(name, err);
-        };
-
-        if (tci_module) |mod| self.popModuleDepsFrameTraced(mod);
+        try self.executeQuotationWithPic(.{ .instructions = tci }, null, null, tci_owner, tci_may_define);
     }
 
     /// Everything a word call needs to know about where it sits: the body it is in, the closure
