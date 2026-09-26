@@ -1,0 +1,6 @@
+\ The uncaught cycle rejection from nested_load_cycle_uncaught.1z, pinned eager. `(use-load)` is
+\ the one word in the chain that compiles, and it leaves its body through the interpreter fallback
+\ boundary. That boundary pends a `load` row at every recursion level and an `if` row at the level
+\ that raised, none of which the interpreted chain carries. The interpreted chain is the target.
+
+"fixtures/cycle_two_a.1z" load drop

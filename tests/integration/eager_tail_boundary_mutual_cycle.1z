@@ -1,0 +1,13 @@
+\ The cycle from tail_boundary_mutual_cycle.1z, pinned eager. `pong` is defined before `ping`
+\ exists, so only `ping` compiles. Both edges of the cycle nest. The compiled `ping` calls the
+\ interpreted `pong` through a synchronous call out of compiled code, and `pong` dispatches the
+\ compiled `ping` below itself rather than tail-calling it. So the native stack grows until the
+\ guard raises `stack-overflow`.
+\
+\ Only the error type is printed, and the counter the unwound iterations leave behind is wiped,
+\ since both depths move with the build. Running flat is the target.
+
+pong: ( n -- ) [ 1 - ping ] ;
+ping: ( n -- ) [ dup 0 > [ pong ] [ drop "done" print-line ] if ] ;
+
+[ 2000000 ping ] [ error-type: @get . wipe ] recover

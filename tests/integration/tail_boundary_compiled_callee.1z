@@ -1,0 +1,24 @@
+\ A raise from `(expected-close-paren)`, which `lib/pratt/arith.1z`'s `(parse-group)` calls in
+\ tail position inside a `when` arm. The chain carries no `if` row for the `if` inside `when`.
+\ That chain is the target every tier converges on.
+\
+\ Every tier renders it today only because the nested quotation's call resolves through the module
+\ snapshot and stays interpreted. Routed through the captured-scope binding instead, the call
+\ dispatches compiled and the chain gains the `if` row.
+\
+\ No flags: one golden binds the interpreted and eager suites. No AOT class builds
+\ `lib/pratt/arith.1z` yet, so this file has no AOT twin. eager_tail_boundary_compiled_both.1z
+\ reaches the same compiled-callee row without the library.
+
+use "lexer" ;
+use "pratt/arith" ;
+
+TEST-LEXER: const ( -- lexer ) [
+  V{ }
+  skip-whitespace-rule #push!
+  number-rule #push!
+  { "+" "-" "*" "/" "(" ")" } symbols-rule #push!
+  >array <lexer>
+] ;
+
+[ "(1 + 2" TEST-LEXER tokenize <arithmetic-pratt> parse-expr ] [ inspect print-line ] recover

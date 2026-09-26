@@ -1,0 +1,4 @@
+Stack: [ ]
+Stack: [ ]
+<error user-thrown: kaboom [tests/integration/eager_tail_boundary_compiled_caller.1z:9:throw <- tests/integration/eager_tail_boundary_compiled_caller.1z:10:when <- tests/integration/eager_tail_boundary_compiled_caller.1z:12:recover]>
+Stack: [ ]

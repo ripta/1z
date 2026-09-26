@@ -1,0 +1,9 @@
+\ The raise from tests/integration/tail_boundary_compiled_caller.1z, built interpreter-free. The
+\ locked class refuses the build: the quotation `go` hands to `when` falls back to the
+\ interpreter, so no chain renders in this class at all. The raise is left uncaught so the
+\ refusal names that one site rather than the `inspect` a `recover` handler would add.
+
+boom: ( -- ) [ f "kaboom" EUserThrown make-error throw ] ;
+go: ( ? -- ) [ [ boom ] when ] ;
+
+t go

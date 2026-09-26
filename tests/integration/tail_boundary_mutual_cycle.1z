@@ -1,0 +1,12 @@
+\ A mutual tail-recursive cycle through an `if` arm, pinned interpreted. Every edge is a tail
+\ call, so the interpreter runs two million iterations in constant native stack. Running flat is
+\ the target every tier converges on.
+\
+\ The eager twin is eager_tail_boundary_mutual_cycle.1z. No hybrid twin exists, because under
+\ `--compile=hybrid` the two words compile, call each other natively below any stack guard, and
+\ the process dies on a signal the harness cannot pin.
+
+pong: ( n -- ) [ 1 - ping ] ;
+ping: ( n -- ) [ dup 0 > [ pong ] [ drop "done" print-line ] if ] ;
+
+[ 2000000 ping ] [ error-type: @get . wipe ] recover
