@@ -1,0 +1,13 @@
+\ A word called in tail position from an interpreted body, before and after hybrid mode compiles
+\ it. The calls before the threshold run interpreted and count toward it; the ones after dispatch
+\ compiled. The raise must carry the same chain either way, which is the interpreted one.
+
+use "testing" ;
+
+maybe-boom: ( ? -- ) [ [ f "kaboom" EUserThrown make-error throw ] when ] ;
+go: [ maybe-boom ] ;
+
+[ t go ] [ inspect print-line ] recover
+110 [ f go ] times
+t maybe-boom: >word-info compiled?>> "maybe-boom compiles through tail calls" assert=
+[ t go ] [ inspect print-line ] recover

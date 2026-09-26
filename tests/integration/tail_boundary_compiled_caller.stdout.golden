@@ -1,4 +1,4 @@
 Stack: [ ]
 Stack: [ ]
-<error user-thrown: kaboom [tests/integration/tail_boundary_compiled_caller.1z:10:throw <- tests/integration/tail_boundary_compiled_caller.1z:13:recover]>
+<error user-thrown: kaboom [tests/integration/tail_boundary_compiled_caller.1z:9:throw <- tests/integration/tail_boundary_compiled_caller.1z:12:recover]>
 Stack: [ ]

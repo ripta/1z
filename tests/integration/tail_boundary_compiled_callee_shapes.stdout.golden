@@ -1,0 +1,26 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+<error user-thrown: kaboom [tests/integration/tail_boundary_compiled_callee_shapes.1z:16:throw <- tests/integration/tail_boundary_compiled_callee_shapes.1z:29:recover]>
+Stack: [ ]
+<error user-thrown: kaboom [tests/integration/tail_boundary_compiled_callee_shapes.1z:16:throw <- tests/integration/tail_boundary_compiled_callee_shapes.1z:30:recover]>
+Stack: [ ]
+<error user-thrown: kaboom [tests/integration/tail_boundary_compiled_callee_shapes.1z:16:throw <- tests/integration/tail_boundary_compiled_callee_shapes.1z:25:if <- tests/integration/tail_boundary_compiled_callee_shapes.1z:31:recover]>
+Stack: [ ]
+=== a compiled tail callee ===
+Stack: [ ]
+PASS: returns its result
+Stack: [ ]
+PASS: returns to a caller that continues
+Stack: [ ]
+PASS: bails to its interpreted body
+Stack: [ ]
+PASS: a tail-called generic accessor dispatches
+Stack: [ ]

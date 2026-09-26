@@ -832,6 +832,12 @@ pub const Context = struct {
     /// the transient lexical frame a direct call would. Set alongside `tail_call_instructions`
     /// from the callee's `exec_flags.may_define`.
     tail_call_may_define: bool = false,
+    /// The tail call target's compiled code, when it has a word id. Set alongside
+    /// `tail_call_instructions`, and null for a callee with none.
+    ///
+    /// The trampoline tries it after popping the caller's frame, so a compiled callee runs where an
+    /// interpreted one would. `tail_call_instructions` runs only if it bails.
+    tail_call_compiled: ?TailCompiledCall = null,
     /// Directory of the currently executing source file for relative path resolution
     current_source_dir: ?[]const u8 = null,
     /// User-configured load paths for search-mode module resolution
@@ -3074,19 +3080,13 @@ pub const Context = struct {
     /// The key comes off the source entry rather than the instruction, so the frame holds the
     /// interned name and not a slice of a body that may be arena-owned.
     ///
-    /// `word_id` is dropped, so a seeded name executes the way it did before the seed existed. The
-    /// seed's job is reachability; a name already reachable through the module scope keeps
-    /// resolving to the same body by the same route. Carrying the id would route it through
-    /// compiled dispatch instead, and a tail-position compiled call raises while its caller's frame
-    /// is still live, which adds an error-chain row the interpreted run elides. That asymmetry is a
-    /// separate defect, and the id comes back once it is fixed.
+    /// The binding is copied whole, `word_id` included, so a seeded name dispatches compiled
+    /// wherever the binding it came from would.
     fn takeSeedBinding(self: *Context, frame: *LocalFrame, set: InheritedOnlySet, name: []const u8) !void {
         if (frame.contains(name)) return;
         const entry = set.lookup(name) orelse return;
 
-        var def = entry.value_ptr.*;
-        def.word_id = null;
-        try frame.put(self.allocator, entry.key_ptr.*, def);
+        try frame.put(self.allocator, entry.key_ptr.*, entry.value_ptr.*);
     }
 
     /// Append a clone of `src` to a capture's frame list, entry by entry, retained.
@@ -8361,7 +8361,13 @@ pub const Context = struct {
     /// right file: a word body from the word's own `source_file`, a body reached as a value from
     /// `enterBodySource`. Probing here instead would put a lookup on every word call to recompute
     /// what the caller already knows.
-    pub fn executeQuotationWithPic(self: *Context, quotation: Quotation, pic_table: ?*PicTable, initial_module: ?*const value_mod.Module, owner: ?*const value_mod.Closure, body_defines: bool) anyerror!void {
+    pub inline fn executeQuotationWithPic(self: *Context, quotation: Quotation, pic_table: ?*PicTable, initial_module: ?*const value_mod.Module, owner: ?*const value_mod.Closure, body_defines: bool) anyerror!void {
+        return self.runTrampoline(quotation, pic_table, initial_module, owner, body_defines, null);
+    }
+
+    /// The body of `executeQuotationWithPic`, entered with `first_compiled` when the body it runs
+    /// is a tail call's whose compiled code is tried first.
+    fn runTrampoline(self: *Context, quotation: Quotation, pic_table: ?*PicTable, initial_module: ?*const value_mod.Module, owner: ?*const value_mod.Closure, body_defines: bool, first_compiled: ?TailCompiledCall) anyerror!void {
         const saved_source = self.current_source;
         defer self.current_source = saved_source;
 
@@ -8374,6 +8380,7 @@ pub const Context = struct {
         var body_may_define = body_defines;
         var owns_lexical_frame = false;
         var lexical_frame_index: usize = 0;
+        var pending_compiled = first_compiled;
 
         // Every frame this loop opens sits above this depth, so an exit unwinds to it whatever
         // order the deps frame and the lexical frame ended up in.
@@ -8388,6 +8395,7 @@ pub const Context = struct {
             self.tail_call_source = null;
             self.tail_call_body_owner = null;
             self.tail_call_may_define = false;
+            self.tail_call_compiled = null;
 
             // Push module deps frame on first entry into a module context. On
             // subsequent iterations, the frame persists so that runtime-defined
@@ -8398,32 +8406,39 @@ pub const Context = struct {
                 owns_frame = true;
             }
 
-            // A body that may define runs in a transient lexical frame of its own. It is the
-            // frame `;` targets and the first frame a read walks, and its bindings pop when the
-            // call returns instead of landing in whatever frame the caller happened to have on
-            // top. The frame persists across tail calls for the same reason the deps frame does:
-            // a helper defined here and tail-called must still resolve, and a tail-recursive
-            // definer must stay flat rather than open a frame per iteration.
-            if (body_may_define and !owns_lexical_frame) {
-                try self.pushOwnedLocalFrame(@intFromPtr(current_instructions.ptr));
-                owns_lexical_frame = true;
-                lexical_frame_index = self.local_frames.items.len - 1;
+            // The frames this loop opened are closed by the `errdefer` above, the one unwind point.
+            // Only the trace line is left for either error path below, since it names the module
+            // the frame belonged to.
+            //
+            // A tail callee with compiled code runs it here, where its body would have run. A bail
+            // leaves the stack as it found it, and the body runs instead.
+            var ran_compiled = false;
+            if (pending_compiled) |pc| {
+                pending_compiled = null;
+                ran_compiled = self.dispatchTailCompiled(pc) catch |err| {
+                    if (owns_frame) self.traceDepsFrameUnwind(current_module);
+                    return err;
+                };
             }
 
-            const exec_result = self.executeInstructions(current_instructions, current_pic, body_module, current_owner);
-            // The frames this loop opened are closed by the `errdefer` above, the one unwind point.
-            // Only the trace line is left, since it names the module the frame belonged to.
-            exec_result catch |err| {
-                if (owns_frame) {
-                    if (self.trace.trace_modules.deps) {
-                        if (current_module) |cm| {
-                            var tw = trace_mod.TraceWriter.init();
-                            trace_mod.traceModuleDepsPop(&tw, cm.name);
-                        }
-                    }
+            if (!ran_compiled) {
+                // A body that may define runs in a transient lexical frame of its own. It is the
+                // frame `;` targets and the first frame a read walks, and its bindings pop when the
+                // call returns instead of landing in whatever frame the caller happened to have on
+                // top. The frame persists across tail calls for the same reason the deps frame
+                // does: a helper defined here and tail-called must still resolve, and a
+                // tail-recursive definer must stay flat rather than open a frame per iteration.
+                if (body_may_define and !owns_lexical_frame) {
+                    try self.pushOwnedLocalFrame(@intFromPtr(current_instructions.ptr));
+                    owns_lexical_frame = true;
+                    lexical_frame_index = self.local_frames.items.len - 1;
                 }
-                return err;
-            };
+
+                self.executeInstructions(current_instructions, current_pic, body_module, current_owner) catch |err| {
+                    if (owns_frame) self.traceDepsFrameUnwind(current_module);
+                    return err;
+                };
+            }
 
             // Tail call case: pop the call frame that was pushed by the tail-calling
             // `executeInstructions`, then loop around
@@ -8431,6 +8446,11 @@ pub const Context = struct {
                 self.popCallFrame();
                 current_instructions = tci;
                 self.tail_call_instructions = null;
+
+                // Taken now, while the caller's frame is already gone, so a raise from the compiled
+                // code pends no row for it. That is what an interpreted tail callee does.
+                pending_compiled = self.tail_call_compiled;
+                self.tail_call_compiled = null;
                 // PIC table is per-word-body; on tail call to a different word,
                 // the PIC table no longer applies.
                 current_pic = null;
@@ -8754,6 +8774,9 @@ pub const Context = struct {
         const tci_may_define = self.tail_call_may_define;
         self.tail_call_may_define = false;
 
+        const tci_compiled = self.tail_call_compiled;
+        self.tail_call_compiled = null;
+
         if (tci_module) |mod| try self.pushModuleDepsFrame(mod);
         defer if (tci_module) |mod| self.popModuleDepsFrameTraced(mod);
 
@@ -8761,7 +8784,80 @@ pub const Context = struct {
         defer self.current_source = saved_source;
         self.enterBodySource(tci);
 
-        try self.executeQuotationWithPic(.{ .instructions = tci }, null, null, tci_owner, tci_may_define);
+        try self.runTrampoline(.{ .instructions = tci }, null, null, tci_owner, tci_may_define, tci_compiled);
+    }
+
+    /// Run a tail call's compiled code at the trampoline, after the caller's frame is gone.
+    ///
+    /// Returns true when the code ran to completion. A bail returns false with the stack as it
+    /// was, and the trampoline interprets the body instead.
+    fn dispatchTailCompiled(self: *Context, call: TailCompiledCall) anyerror!bool {
+        if (comptime is_freestanding) return false;
+
+        const name = call.word.name;
+        const result = ir_codegen.executeCompiled(self, call.word_id);
+
+        if (self.trace.trace_jit) {
+            var tw = trace_mod.TraceWriter.init();
+            trace_mod.traceJitDispatch(&tw, name, call.word_id, result != .bail);
+        }
+
+        switch (result) {
+            .ok => return true,
+            .error_propagate => {
+                const err = self.jit_pending_error orelse error.UserThrown;
+                self.jit_pending_error = null;
+
+                // A tail call contributes no row of its own, so the callee's row pends only when
+                // nothing else would carry the pending message.
+                if (self.jit_pending_trace_frames.items.len == 0 and self.call_stack.items.len == 0) {
+                    self.appendPendingErrorFrame(.{
+                        .word_name = name,
+                        .source = call.source,
+                        .line = call.instr.line,
+                        .column = call.instr.column,
+                        .stack_effect = call.word.stack_effect,
+                    });
+                }
+                return err;
+            },
+            .bail => {
+                if (self.compile_mode == .hybrid) self.tryHybridCompile(call.word_id, name, call.word);
+                try self.replayTailBailChecks(call);
+                return false;
+            },
+        }
+    }
+
+    /// Run what `executeResolvedWord` runs between a bailed compiled call and its tail call, which
+    /// the call skipped when it handed its compiled code to the trampoline.
+    ///
+    /// The trace line names the call site's file, not the callee's. The recursion-marker error
+    /// pends the callee's row, as the interpreted call does, so its frame is pushed back for it.
+    fn replayTailBailChecks(self: *Context, call: TailCompiledCall) anyerror!void {
+        const name = call.word.name;
+
+        const callee_source = self.current_source;
+        self.current_source = call.source;
+        self.traceWordExecution(name, call.instr);
+        self.current_source = callee_source;
+
+        if (self.allow_all_recursion) return;
+        if (!call.word.exec_flags.recursive_non_tco or call.word.exec_flags.stack_recursive) return;
+
+        self.pushCallFrame(name, call.source, call.instr.line, call.instr.column, call.word.stack_effect);
+        self.pending_error_message = "word has recursive-non-tco marker but lacks stack-recursive marker";
+        return self.wordErrorCleanup(name, error.NonTailRecursion);
+    }
+
+    /// Trace the pop of `module`'s deps frame for an error leaving the trampoline. The frame
+    /// itself is closed by the trampoline's `errdefer`.
+    fn traceDepsFrameUnwind(self: *Context, module: ?*const value_mod.Module) void {
+        if (!self.trace.trace_modules.deps) return;
+        const cm = module orelse return;
+
+        var tw = trace_mod.TraceWriter.init();
+        trace_mod.traceModuleDepsPop(&tw, cm.name);
     }
 
     /// Everything a word call needs to know about where it sits: the body it is in, the closure
@@ -8775,6 +8871,17 @@ pub const Context = struct {
         body: []const Instruction,
         owner: ?*const value_mod.Closure,
         pic_table: ?*PicTable,
+    };
+
+    /// A tail call whose callee has compiled code, carried to the trampoline that runs it.
+    ///
+    /// The definition rides along because a bail in hybrid mode counts the call against it, and a
+    /// raise with nothing above it pends the callee's row from its name, effect, and call site.
+    pub const TailCompiledCall = struct {
+        word_id: u32,
+        word: WordDefinition,
+        source: []const u8,
+        instr: Instruction,
     };
 
     /// Signal returned by `executeResolvedWord` to the dispatch loop.
@@ -8843,6 +8950,16 @@ pub const Context = struct {
                 break :blk null;
             };
             if (effective_word_id) |wid| {
+                // A tail call hands its compiled code to the trampoline, which runs it once the
+                // caller's frame is gone, as it would the body. Running it here instead would raise
+                // under that frame and pend a row the interpreted run never shows.
+                //
+                // A generic word stays on this path. Its bail has to reach generic dispatch below,
+                // which the trampoline does not run.
+                if (is_last and word.action == .compound and !word.exec_flags.is_generic) {
+                    return self.setCompiledTailCall(word, wid, instr, idx, site);
+                }
+
                 if (word.stack_effect) |effect| {
                     if (word.exec_flags.has_param_effects) {
                         self.validateParameterEffects(effect, .{ .site = site, .index = idx }) catch |err| {
@@ -8968,10 +9085,12 @@ pub const Context = struct {
                     self.tail_call_source = word.source_file;
                     self.tail_call_body_owner = word.body_owner;
                     self.tail_call_may_define = word.exec_flags.may_define;
+                    self.tail_call_compiled = null;
                     return .tail_call_set;
                 },
                 .native => |func| {
                     self.tail_call_instructions = null;
+                    self.tail_call_compiled = null;
                     self.current_pic_entry = if (site.pic_table) |pt| pt.get(idx) else null;
                     defer self.current_pic_entry = null;
                     if (func(self)) |_| {
@@ -8982,6 +9101,7 @@ pub const Context = struct {
                 },
                 .host_callback => |host| {
                     self.tail_call_instructions = null;
+                    self.tail_call_compiled = null;
                     self.current_pic_entry = if (site.pic_table) |pt| pt.get(idx) else null;
                     defer self.current_pic_entry = null;
                     const result: anyerror!void = blk: {
@@ -8998,6 +9118,7 @@ pub const Context = struct {
                     // No tail-call setup: a literal push has nothing further
                     // to call into, so it finishes like a native word does.
                     self.tail_call_instructions = null;
+                    self.tail_call_compiled = null;
                     self.current_pic_entry = if (site.pic_table) |pt| pt.get(idx) else null;
                     defer self.current_pic_entry = null;
                     if (self.stack.push(v)) |_| {
@@ -9082,6 +9203,49 @@ pub const Context = struct {
         }
 
         return .proceed;
+    }
+
+    /// Set up a tail call to a word with compiled code, leaving the code for the trampoline to run.
+    ///
+    /// Everything ahead of the body matches the non-tail compiled path. The frame pushed here is the
+    /// one the trampoline pops, so a validation error pends it as an interpreted call's would.
+    fn setCompiledTailCall(
+        self: *Context,
+        word: WordDefinition,
+        wid: u32,
+        instr: Instruction,
+        idx: usize,
+        site: *const CallSite,
+    ) anyerror!ResolvedWordResult {
+        const name = word.name;
+        self.pushCallFrame(name, self.current_source, instr.line, instr.column, word.stack_effect);
+
+        if (word.stack_effect) |effect| {
+            if (word.exec_flags.has_param_effects) {
+                self.validateParameterEffects(effect, .{ .site = site, .index = idx }) catch |err|
+                    return self.wordErrorCleanup(name, err);
+            }
+            if (word.exec_flags.has_type_annotations and !word.exec_flags.skip_type_validation) {
+                self.validateTypeAnnotations(effect) catch |err|
+                    return self.wordErrorCleanup(name, err);
+            }
+        }
+
+        if (self.benchmark) |b| b.endWordProfile(self.allocator, name);
+        if (self.profile) |p| p.recordWordEnd(self.allocator, name);
+
+        self.tail_call_instructions = word.action.compound;
+        self.tail_call_module = word.source_module;
+        self.tail_call_source = word.source_file;
+        self.tail_call_body_owner = word.body_owner;
+        self.tail_call_may_define = word.exec_flags.may_define;
+        self.tail_call_compiled = .{
+            .word_id = wid,
+            .word = word,
+            .source = self.current_source,
+            .instr = instr,
+        };
+        return .tail_call_set;
     }
 
     /// Check that a definition a lookup returned for `name` is recorded under that name.

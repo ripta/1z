@@ -1,0 +1,37 @@
+\ A compiled word called in tail position from an interpreted body, in each shape that reaches it.
+\ `boom` and `add3` declare their effects, so they compile under eager. The callers declare none, so
+\ they stay interpreted. Both runs check this file against one golden.
+\
+\ A tail call raises after its caller's frame is gone, so `direct` and `via-when` carry no row of
+\ their own and no `when` or `if` row. `nontail-if` runs its `if` before `1 drop`, so that `if`
+\ keeps its row.
+\
+\ `add3` fed a float bails out of its compiled code, and the body runs interpreted instead.
+\
+\ Compiling `kind-of` gives the generic `kind>>` a word id with no code behind it. A tail call to
+\ `kind>>` must still reach generic dispatch rather than run the generic's own body.
+
+use "testing" ;
+
+boom: ( -- ) [ f "kaboom" EUserThrown make-error throw ] ;
+add3: ( n -- n ) [ 3 + ] ;
+
+tok: struct{ kind value } ;
+kind-of: ( t -- k ) [ kind>> ] ;
+tail-kind: [ kind>> ] ;
+
+direct:     [ boom ] ;
+via-when:   [ [ boom ] when ] ;
+nontail-if: [ [ boom ] [ ] if 1 drop ] ;
+tail-add3:  [ add3 ] ;
+twice-add3: [ tail-add3 tail-add3 ] ;
+
+[ direct ] [ inspect print-line ] recover
+[ t via-when ] [ inspect print-line ] recover
+[ t nontail-if ] [ inspect print-line ] recover
+
+"a compiled tail callee" test-section
+4 tail-add3 7 "returns its result" assert=
+4 twice-add3 10 "returns to a caller that continues" assert=
+1.5 tail-add3 4.5 "bails to its interpreted body" assert=
+"x" "hello" make-tok tail-kind "x" "a tail-called generic accessor dispatches" assert=
