@@ -14541,7 +14541,11 @@ export fn jitSafepoint(ctx_raw: usize) callconv(.c) i32 {
     };
 
     const scheduler: *Scheduler = ctx.scheduler orelse return 0;
-    const should_yield = scheduler.run_queue.items.len > 0 or scheduler.sleep_queue.count() > 0;
+    // An automatic safepoint never promised a switch, so off the task's own stack it skips the
+    // yield rather than raising the refusal an explicit `yield` gets. The interpreter has no
+    // safepoint at all, and skipping keeps the two tiers agreeing.
+    const others_waiting = scheduler.run_queue.items.len > 0 or scheduler.sleep_queue.count() > 0;
+    const should_yield = others_waiting and scheduler.canPark();
     if (should_yield) {
         scheduler.yieldCurrentTask() catch |err| {
             ctx.jit_pending_error = err;

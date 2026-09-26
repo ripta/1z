@@ -1,0 +1,5 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: a parse-time compiled loop completes while another task sleeps
+Stack: [ ]

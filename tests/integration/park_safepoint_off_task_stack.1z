@@ -1,0 +1,21 @@
+\ A compiled loop runs its automatic safepoint on every iteration. When that loop runs at
+\ parse time inside a task, the safepoint is on the parser coroutine's stack and cannot switch,
+\ so it skips the yield. The loop completes as it would under the interpreter, even while
+\ another task is sleeping and would otherwise be yielded to.
+
+use "testing" ;
+use "time" ;
+
+spin: ( n -- n ) [ 0 swap [ 1 + ] times ] ;
+
+outcomes: V{ } ;
+
+[
+  [ 50 milliseconds sleep ] spawn drop
+  [
+    [ "(p): parse-time [ 2000 spin ] ;
+(p)" eval-string ] [ error-type: @get ] recover outcomes swap #push! drop
+  ] spawn drop
+] task-scope
+
+outcomes 0 #nth 2000 "a parse-time compiled loop completes while another task sleeps" assert=

@@ -682,6 +682,13 @@ pub const Scheduler = struct {
         ops.onDetachedTaskDone(owner);
     }
 
+    /// Whether a park from here would actually suspend the current task. No current task answers
+    /// true, since every park function is a no-op then.
+    pub fn canPark(self: *Scheduler) bool {
+        const task = self.current_task orelse return true;
+        return task_mod.runningOnOwnStack(task);
+    }
+
     /// Raise `not-on-task-stack` when the current task cannot park from where the caller is
     /// running, which is any stack other than the task's own coroutine stack.
     ///
@@ -694,9 +701,9 @@ pub const Scheduler = struct {
     /// callback on another worker can reach a scheduler whose current task runs elsewhere, and
     /// writing into that task's context would race it.
     pub fn ensureCanPark(self: *Scheduler) error{NotOnTaskStack}!void {
-        const task = self.current_task orelse return;
-        if (task_mod.runningOnOwnStack(task)) return;
+        if (self.canPark()) return;
 
+        const task = self.current_task.?;
         if (task_mod.resumed_task == task) {
             task.ctx.pending_error_message = "cannot park the task here: the running stack is not the task's own, such as during parse-time execution";
         }
