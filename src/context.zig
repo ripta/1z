@@ -730,6 +730,13 @@ pub const Context = struct {
     ///
     /// A tag is compared, never dereferenced, so one that outlives its body is harmless.
     local_frame_owners: std.ArrayListUnmanaged(usize) = .{},
+    /// Whether each frame is counted in `nonempty_transient_lexical_frames`, kept index-parallel
+    /// with `local_frames`.
+    ///
+    /// The increment decides transience against `import_frame_index` and records the answer here.
+    /// The decrement reads the record rather than re-deriving it, because the floor can move
+    /// between the two.
+    local_frame_counted: std.ArrayListUnmanaged(bool) = .{},
     /// Count of live `.module_deps` frames on the stack. A fast-path gate for
     /// `captureQuotationScope`: when zero, a pushed quotation has no ambient deps frame to snapshot,
     /// so a quotation that also closes over no lexical binding needs no capture at all and the push
@@ -781,8 +788,9 @@ pub const Context = struct {
     /// zero, no quotation push has anything to close over, so the capture scan is skipped.
     ///
     /// Maintained task-privately at the define, remove, pop, and spawn-clone sites, so no atomic is
-    /// needed. A wrong-high count only falls through to the existing scan, so the sole correctness
-    /// duty is to never undercount.
+    /// needed. Each frame's contribution is recorded in `local_frame_counted`, so a decrement
+    /// always pairs with the increment it undoes. An undercount would decline a capture a quotation
+    /// needs, and a wrong-high count only falls through to the scan.
     nonempty_transient_lexical_frames: usize = 0,
     /// Tokenizer for parse-time word access (set during parsing, null otherwise)
     parse_tokenizer: ?*Tokenizer = null,
@@ -1935,12 +1943,14 @@ pub const Context = struct {
                 0;
             try ctx.local_frame_owners.append(allocator, frame_owner);
 
-            if (kind == .module_deps) ctx.live_module_deps_frames += 1;
+            // Copied rather than re-derived: the child's floor is not the one the parent counted
+            // under, so a load frame the parent left uncounted stays uncounted here.
+            const counted = src_idx < parent.local_frame_counted.items.len and
+                parent.local_frame_counted.items[src_idx];
+            try ctx.local_frame_counted.append(allocator, counted);
 
-            const new_idx = ctx.local_frames.items.len - 1;
-            if (ctx.isTransientLexicalFrame(new_idx) and ctx.local_frames.items[new_idx].count() > 0) {
-                ctx.nonempty_transient_lexical_frames += 1;
-            }
+            if (kind == .module_deps) ctx.live_module_deps_frames += 1;
+            if (counted) ctx.nonempty_transient_lexical_frames += 1;
         }
 
         // Propagate the profile-enabled state without sharing the parent's buffer. Each task
@@ -2149,6 +2159,7 @@ pub const Context = struct {
         self.local_frame_kinds.deinit(self.allocator);
         self.local_frame_modules.deinit(self.allocator);
         self.local_frame_owners.deinit(self.allocator);
+        self.local_frame_counted.deinit(self.allocator);
         self.deinitCapturedScopes();
         self.call_stack.deinit(self.allocator);
         self.error_details.deinit(self.allocator);
@@ -2771,7 +2782,7 @@ pub const Context = struct {
     // Local frame methods (lexical scoping for quotation-local definitions)
     // =========================================================================
 
-    /// Grow the four parallel frame arrays under the shared write lock when the next push
+    /// Grow the five parallel frame arrays under the shared write lock when the next push
     /// would move their backing.
     ///
     /// A push itself is task-private, but the backing array is shared storage: a descendant's
@@ -2784,7 +2795,8 @@ pub const Context = struct {
             self.local_frames.items.len == self.local_frames.capacity or
             self.local_frame_kinds.items.len == self.local_frame_kinds.capacity or
             self.local_frame_modules.items.len == self.local_frame_modules.capacity or
-            self.local_frame_owners.items.len == self.local_frame_owners.capacity;
+            self.local_frame_owners.items.len == self.local_frame_owners.capacity or
+            self.local_frame_counted.items.len == self.local_frame_counted.capacity;
         if (!needs_growth) return;
 
         self.acquireSharedWrite();
@@ -2793,6 +2805,7 @@ pub const Context = struct {
         try self.local_frame_kinds.ensureUnusedCapacity(self.allocator, 1);
         try self.local_frame_modules.ensureUnusedCapacity(self.allocator, 1);
         try self.local_frame_owners.ensureUnusedCapacity(self.allocator, 1);
+        try self.local_frame_counted.ensureUnusedCapacity(self.allocator, 1);
     }
 
     /// Push a new empty local frame that no body opened. See `pushOwnedLocalFrame`.
@@ -2813,6 +2826,7 @@ pub const Context = struct {
         self.local_frame_kinds.appendAssumeCapacity(.lexical);
         self.local_frame_modules.appendAssumeCapacity(null);
         self.local_frame_owners.appendAssumeCapacity(owner);
+        self.local_frame_counted.appendAssumeCapacity(false);
         self.assertFrameKindsParity();
     }
 
@@ -2821,11 +2835,8 @@ pub const Context = struct {
     pub fn popLocalFrame(self: *Context) void {
         if (self.local_frames.items.len > 0) {
             const last_idx = self.local_frames.items.len - 1;
-            if (self.local_frames.items[last_idx].count() > 0 and self.isTransientLexicalFrame(last_idx) and
-                self.nonempty_transient_lexical_frames > 0)
-            {
-                // Production stays balanced by construction. The guard tolerates test code that
-                // hand-builds a non-empty frame without going through `defineWordLocked`.
+            if (self.local_frame_counted.items[last_idx]) {
+                std.debug.assert(self.nonempty_transient_lexical_frames > 0);
                 self.nonempty_transient_lexical_frames -= 1;
             }
             if (last_idx < self.local_frame_kinds.items.len and
@@ -2846,6 +2857,9 @@ pub const Context = struct {
             if (self.local_frame_owners.items.len > 0) {
                 self.local_frame_owners.items.len -= 1;
             }
+            if (self.local_frame_counted.items.len > 0) {
+                self.local_frame_counted.items.len -= 1;
+            }
             self.assertFrameKindsParity();
         }
     }
@@ -2862,14 +2876,15 @@ pub const Context = struct {
         }
     }
 
-    /// Debug-only invariant: the kind, module, and owner arrays stay index-parallel with the frame
-    /// array.
+    /// Debug-only invariant: the kind, module, owner, and counted arrays stay index-parallel with
+    /// the frame array.
     ///
     /// A desync means a push or pop touched one without the others.
     fn assertFrameKindsParity(self: *const Context) void {
         std.debug.assert(self.local_frame_kinds.items.len == self.local_frames.items.len);
         std.debug.assert(self.local_frame_modules.items.len == self.local_frames.items.len);
         std.debug.assert(self.local_frame_owners.items.len == self.local_frames.items.len);
+        std.debug.assert(self.local_frame_counted.items.len == self.local_frames.items.len);
     }
 
     /// True when frame `idx` is a transient lexical frame: strictly above the durable import frame
@@ -4037,6 +4052,8 @@ pub const Context = struct {
         errdefer self.local_frame_modules.items.len -= 1;
         self.local_frame_owners.appendAssumeCapacity(0);
         errdefer self.local_frame_owners.items.len -= 1;
+        self.local_frame_counted.appendAssumeCapacity(false);
+        errdefer self.local_frame_counted.items.len -= 1;
         self.live_module_deps_frames += 1;
         errdefer self.live_module_deps_frames -= 1;
         self.assertFrameKindsParity();
@@ -4405,12 +4422,14 @@ pub const Context = struct {
                 if (e.value.owns_literal) container_backing.releaseValue(e.value.action.literal);
             }
             const removed = entry != null;
+            // The flag is cleared along with the count, so the next definition into this frame
+            // counts it again.
             if (removed and self.local_frames.items[top_index].count() == 0 and
-                self.isTransientLexicalFrame(top_index) and self.nonempty_transient_lexical_frames > 0)
+                self.local_frame_counted.items[top_index])
             {
-                // Saturating: hand-built test frames may empty a frame the increment path never
-                // counted. Production stays balanced by construction.
+                std.debug.assert(self.nonempty_transient_lexical_frames > 0);
                 self.nonempty_transient_lexical_frames -= 1;
+                self.local_frame_counted.items[top_index] = false;
             }
             return removed;
         }
@@ -4776,6 +4795,9 @@ pub const Context = struct {
                 if (displaced.owns_literal) container_backing.releaseValue(displaced.action.literal);
             }
             if (was_empty and self.isTransientLexicalFrame(top_index)) {
+                // `removeWord` clears the flag whenever it empties a frame.
+                std.debug.assert(!self.local_frame_counted.items[top_index]);
+                self.local_frame_counted.items[top_index] = true;
                 self.nonempty_transient_lexical_frames += 1;
             }
         } else {
@@ -12250,7 +12272,7 @@ test "lookupWordStackEffectPtrLocked: descendant skips ancestor transient frames
     try std.testing.expect(child.lookupWordStackEffectPtrLocked("transient-eff") == null);
 }
 
-test "pushLocalFrame: growth keeps the four frame arrays in parity" {
+test "pushLocalFrame: growth keeps the five frame arrays in parity" {
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
 
@@ -12260,6 +12282,7 @@ test "pushLocalFrame: growth keeps the four frame arrays in parity" {
         try std.testing.expectEqual(ctx.local_frames.items.len, ctx.local_frame_kinds.items.len);
         try std.testing.expectEqual(ctx.local_frames.items.len, ctx.local_frame_modules.items.len);
         try std.testing.expectEqual(ctx.local_frames.items.len, ctx.local_frame_owners.items.len);
+        try std.testing.expectEqual(ctx.local_frames.items.len, ctx.local_frame_counted.items.len);
     }
 
     while (i > 0) : (i -= 1) ctx.popLocalFrame();
@@ -13537,10 +13560,7 @@ test "initForTask: seeds the gate counter from cloned non-empty transient frames
     parent.import_frame_index = 0;
     parent.durable_frame_floor = 0;
     try parent.pushLocalFrame();
-    try parent.local_frames.items[1].put(std.testing.allocator, "transient-w", .{
-        .name = "transient-w",
-        .action = .{ .compound = &.{} },
-    });
+    try parent.defineWord("transient-w", .{ .name = "transient-w", .action = .{ .compound = &.{} } });
 
     var scheduler = try std.testing.allocator.create(Scheduler);
     defer std.testing.allocator.destroy(scheduler);
@@ -13551,6 +13571,37 @@ test "initForTask: seeds the gate counter from cloned non-empty transient frames
     defer task_ctx.deinit();
 
     try std.testing.expectEqual(@as(usize, 1), task_ctx.nonempty_transient_lexical_frames);
+}
+
+test "initForTask: copies the parent's counted flags rather than re-deriving under its own floor" {
+    var parent = Context.init(std.testing.allocator);
+    defer parent.deinit();
+
+    // Mid-load: the floor sits on the load frame at index 1, so the definition there is not
+    // counted. The child has no import frame of its own, so re-deriving under its floor would
+    // count the cloned load frame as transient.
+    try parent.pushLocalFrame();
+    parent.import_frame_index = 0;
+    parent.durable_frame_floor = 0;
+    try parent.pushLocalFrame();
+    parent.import_frame_index = 1;
+    try parent.defineWord("load-w", .{ .name = "load-w", .action = .{ .compound = &.{} } });
+    try std.testing.expectEqual(@as(usize, 0), parent.nonempty_transient_lexical_frames);
+
+    try parent.pushLocalFrame();
+    try parent.defineWord("local-w", .{ .name = "local-w", .action = .{ .compound = &.{} } });
+    try std.testing.expectEqual(@as(usize, 1), parent.nonempty_transient_lexical_frames);
+
+    var scheduler = try std.testing.allocator.create(Scheduler);
+    defer std.testing.allocator.destroy(scheduler);
+    scheduler.* = try Scheduler.init(std.testing.allocator);
+    defer scheduler.deinit();
+
+    var task_ctx = try Context.initForTask(std.testing.allocator, &parent, scheduler);
+    defer task_ctx.deinit();
+
+    try std.testing.expectEqual(@as(usize, 1), task_ctx.nonempty_transient_lexical_frames);
+    try std.testing.expectEqualSlices(bool, &.{ false, true }, task_ctx.local_frame_counted.items);
 }
 
 test "computeExecFlags: generic word with empty compound body" {
@@ -15205,6 +15256,72 @@ test "nonempty_transient_lexical_frames: define, remove, and pop stay balanced" 
     // A definition followed by a pop of the whole frame nets back to zero.
     try ctx.defineWord("c", .{ .name = "c", .action = .{ .compound = &.{} } });
     try std.testing.expectEqual(@as(usize, 1), ctx.nonempty_transient_lexical_frames);
+    ctx.popLocalFrame();
+    try std.testing.expectEqual(@as(usize, 0), ctx.nonempty_transient_lexical_frames);
+}
+
+test "nonempty_transient_lexical_frames: a pop under a raised floor still undoes its count" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    try ctx.pushLocalFrame();
+    ctx.import_frame_index = 0;
+    ctx.durable_frame_floor = 0;
+
+    try ctx.pushLocalFrame();
+    try ctx.defineWord("a", .{ .name = "a", .action = .{ .compound = &.{} } });
+    try std.testing.expectEqual(@as(usize, 1), ctx.nonempty_transient_lexical_frames);
+
+    // With the floor on the frame, re-deriving at pop time would read it as non-transient.
+    ctx.import_frame_index = 1;
+    ctx.popLocalFrame();
+    try std.testing.expectEqual(@as(usize, 0), ctx.nonempty_transient_lexical_frames);
+}
+
+test "nonempty_transient_lexical_frames: a pop under a lowered floor leaves a live count alone" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    try ctx.pushLocalFrame();
+    ctx.import_frame_index = 0;
+    ctx.durable_frame_floor = 0;
+
+    try ctx.pushLocalFrame();
+    try ctx.defineWord("live", .{ .name = "live", .action = .{ .compound = &.{} } });
+    try std.testing.expectEqual(@as(usize, 1), ctx.nonempty_transient_lexical_frames);
+
+    // A load frame filled while the floor sits on it, then popped after the floor drops back:
+    // the order a failed load's teardown used to run in.
+    try ctx.pushLocalFrame();
+    ctx.import_frame_index = 2;
+    try ctx.defineWord("loaded", .{ .name = "loaded", .action = .{ .compound = &.{} } });
+    try std.testing.expectEqual(@as(usize, 1), ctx.nonempty_transient_lexical_frames);
+
+    ctx.import_frame_index = 0;
+    ctx.popLocalFrame();
+    try std.testing.expectEqual(@as(usize, 1), ctx.nonempty_transient_lexical_frames);
+}
+
+test "nonempty_transient_lexical_frames: a remove under a moved floor pairs, and the frame recounts" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    try ctx.pushLocalFrame();
+    ctx.import_frame_index = 0;
+    ctx.durable_frame_floor = 0;
+
+    try ctx.pushLocalFrame();
+    try ctx.defineWord("a", .{ .name = "a", .action = .{ .compound = &.{} } });
+    try std.testing.expectEqual(@as(usize, 1), ctx.nonempty_transient_lexical_frames);
+
+    ctx.import_frame_index = 1;
+    try std.testing.expect(ctx.removeWord("a"));
+    try std.testing.expectEqual(@as(usize, 0), ctx.nonempty_transient_lexical_frames);
+
+    ctx.import_frame_index = 0;
+    try ctx.defineWord("b", .{ .name = "b", .action = .{ .compound = &.{} } });
+    try std.testing.expectEqual(@as(usize, 1), ctx.nonempty_transient_lexical_frames);
+
     ctx.popLocalFrame();
     try std.testing.expectEqual(@as(usize, 0), ctx.nonempty_transient_lexical_frames);
 }
