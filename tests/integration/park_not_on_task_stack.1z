@@ -1,0 +1,85 @@
+\ A park reached from parse-time execution runs on the parser coroutine's stack, which the
+\ scheduler cannot switch away from. Each route raises not-on-task-stack instead of writing a
+\ queue entry for a task that never suspends.
+\
+\ Each source string defines a parse-time word on one line and calls it on the next, since
+\ eval-string parses a whole line before running any of it.
+
+use "testing" ;
+use "time" ;
+
+outcome-of: ( src -- sym ) [
+  outcomes: V{ } ;
+  [
+    [ [ eval-string ok: ] [ error-type: @get ] recover outcomes swap #push! drop ] curry spawn drop
+  ] curry task-scope
+  outcomes 0 #nth
+] ;
+
+"yield and sleep" test-section
+
+"(p): parse-time [ yield ] ;
+(p)" outcome-of
+ENotOnTaskStack "a parse-time yield raises" assert=
+
+"(p): parse-time [ 1 milliseconds sleep ] ;
+(p)" outcome-of
+ENotOnTaskStack "a parse-time sleep raises" assert=
+
+"suspend: channels, scopes, and awaits" test-section
+
+"ch: <channel> ;
+(p): parse-time [ ch receive ] ;
+(p)" outcome-of
+ENotOnTaskStack "a parse-time receive on an empty channel raises" assert=
+
+"ch: <channel> ;
+(p): parse-time [ 1 ch send ] ;
+(p)" outcome-of
+ENotOnTaskStack "a parse-time send with no receiver raises" assert=
+
+"ch: <channel> ;
+(p): parse-time [ { } ch #push select ] ;
+(p)" outcome-of
+ENotOnTaskStack "a parse-time select with nothing ready raises" assert=
+
+"(p): parse-time [ [ ] task-scope ] ;
+(p)" outcome-of
+ENotOnTaskStack "a parse-time nested task-scope raises" assert=
+
+"(p): parse-time [ [ 1 ] 50 milliseconds with-timeout ] ;
+(p)" outcome-of
+ENotOnTaskStack "a parse-time with-timeout raises" assert=
+
+"t: [ 20 milliseconds sleep ] spawn ;
+(p): parse-time [ t await ] ;
+(p)" outcome-of
+ENotOnTaskStack "a parse-time await on a running task raises" assert=
+
+"io and process waits" test-section
+
+"{ \"/bin/sh\" \"-c\" \"sleep 0.2\" } f f inherit: pipe: inherit: native.spawn-process
+drop out: swap ; drop drop
+(p): parse-time [ out 1 stream-read ] ;
+(p)" outcome-of
+ENotOnTaskStack "a parse-time read that would block raises" assert=
+
+"{ \"/bin/sh\" \"-c\" \"sleep 0.2\" } f f inherit: inherit: inherit: native.spawn-process
+drop drop drop pid: swap ;
+(p): parse-time [ pid native.wait-pid ] ;
+(p)" outcome-of
+ENotOnTaskStack "a parse-time wait on a running child raises" assert=
+
+"parks that need not suspend still succeed" test-section
+
+"ch: 1 <buffered-channel> ;
+(p): parse-time [ 1 ch send ] ;
+(p)
+ch receive drop" outcome-of
+ok: "a parse-time send into a buffered channel with room succeeds" assert=
+
+"t: [ 1 ] spawn ;
+t await-terminal
+(p): parse-time [ t await-terminal ] ;
+(p)" outcome-of
+ok: "a parse-time await-terminal on a finished task succeeds" assert=

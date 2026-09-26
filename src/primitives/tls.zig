@@ -66,7 +66,7 @@ fn tlsRead(stream: *Stream, buffer: []u8, ctx: *Context) anyerror!usize {
     while (true) {
         return tls_state.client.reader.readSliceShort(buffer) catch {
             if (ctx.scheduler) |sched| {
-                sched.ioSuspendCurrentTask(tls_state.fd, .read);
+                try sched.ioSuspendCurrentTask(tls_state.fd, .read);
                 try helpers.checkCancellation(ctx);
                 continue;
             }
@@ -81,7 +81,7 @@ fn tlsWrite(stream: *Stream, bytes: []const u8, ctx: *Context) anyerror!usize {
         const n = tls_state.client.writer.write(bytes) catch |err| switch (err) {
             error.WriteFailed => {
                 if (ctx.scheduler) |sched| {
-                    sched.ioSuspendCurrentTask(tls_state.fd, .write);
+                    try sched.ioSuspendCurrentTask(tls_state.fd, .write);
                     try helpers.checkCancellation(ctx);
                     continue;
                 }
@@ -91,7 +91,7 @@ fn tlsWrite(stream: *Stream, bytes: []const u8, ctx: *Context) anyerror!usize {
         tls_state.client.writer.flush() catch |err| switch (err) {
             error.WriteFailed => {
                 if (ctx.scheduler) |sched| {
-                    sched.ioSuspendCurrentTask(tls_state.fd, .write);
+                    try sched.ioSuspendCurrentTask(tls_state.fd, .write);
                     try helpers.checkCancellation(ctx);
                     continue;
                 }
@@ -101,7 +101,7 @@ fn tlsWrite(stream: *Stream, bytes: []const u8, ctx: *Context) anyerror!usize {
         tls_state.transport_writer.interface.flush() catch |err| switch (err) {
             error.WriteFailed => {
                 if (ctx.scheduler) |sched| {
-                    sched.ioSuspendCurrentTask(tls_state.fd, .write);
+                    try sched.ioSuspendCurrentTask(tls_state.fd, .write);
                     try helpers.checkCancellation(ctx);
                     continue;
                 }

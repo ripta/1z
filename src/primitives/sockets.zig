@@ -377,7 +377,7 @@ fn nativeAccept(ctx: *Context) anyerror!void {
         const client_fd = std.posix.accept(fd, @ptrCast(&peer_addr), &addr_len, std.posix.SOCK.CLOEXEC) catch |err| {
             if (err == error.WouldBlock) {
                 if (ctx.scheduler) |sched| {
-                    sched.ioSuspendCurrentTask(fd, .read);
+                    try sched.ioSuspendCurrentTask(fd, .read);
                     try helpers.checkCancellation(ctx);
                     continue;
                 }
@@ -418,7 +418,7 @@ fn nativeConnect(ctx: *Context) anyerror!void {
     std.posix.connect(fd, &sock_addr.any, sock_addr.getOsSockLen()) catch |err| {
         if (err == error.WouldBlock) {
             if (ctx.scheduler) |sched| {
-                sched.ioSuspendCurrentTask(fd, .write);
+                try sched.ioSuspendCurrentTask(fd, .write);
                 try helpers.checkCancellation(ctx);
                 var err_buf: [4]u8 = undefined;
                 std.posix.getsockopt(fd, std.posix.SOL.SOCKET, std.posix.SO.ERROR, &err_buf) catch {
@@ -520,7 +520,7 @@ fn nativeUdpSendto(ctx: *Context) anyerror!void {
         const n = std.posix.sendto(fd, bytes, 0, &sock_addr.any, sock_addr.getOsSockLen()) catch |err| {
             if (err == error.WouldBlock) {
                 if (ctx.scheduler) |sched| {
-                    sched.ioSuspendCurrentTask(fd, .write);
+                    try sched.ioSuspendCurrentTask(fd, .write);
                     try helpers.checkCancellation(ctx);
                     continue;
                 }
@@ -559,7 +559,7 @@ fn nativeUdpRecvfrom(ctx: *Context) anyerror!void {
         const n = std.posix.recvfrom(fd, buffer, 0, @ptrCast(&peer_addr), &addr_len) catch |err| {
             if (err == error.WouldBlock) {
                 if (ctx.scheduler) |sched| {
-                    sched.ioSuspendCurrentTask(fd, .read);
+                    try sched.ioSuspendCurrentTask(fd, .read);
                     try helpers.checkCancellation(ctx);
                     continue;
                 }
@@ -602,7 +602,7 @@ fn nativeUdpSend(ctx: *Context) anyerror!void {
         const n = std.posix.sendto(fd, bytes, 0, null, 0) catch |err| {
             if (err == error.WouldBlock) {
                 if (ctx.scheduler) |sched| {
-                    sched.ioSuspendCurrentTask(fd, .write);
+                    try sched.ioSuspendCurrentTask(fd, .write);
                     try helpers.checkCancellation(ctx);
                     continue;
                 }
@@ -638,7 +638,7 @@ fn nativeUdpRecv(ctx: *Context) anyerror!void {
         const n = std.posix.recvfrom(fd, buffer, 0, null, null) catch |err| {
             if (err == error.WouldBlock) {
                 if (ctx.scheduler) |sched| {
-                    sched.ioSuspendCurrentTask(fd, .read);
+                    try sched.ioSuspendCurrentTask(fd, .read);
                     try helpers.checkCancellation(ctx);
                     continue;
                 }

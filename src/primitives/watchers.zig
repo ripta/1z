@@ -195,7 +195,7 @@ const NativeWatcher = struct {
 
             if (scheduler) |sched| {
                 if (is_macos) streams.setNonBlockingFd(self.backend_fd);
-                sched.ioSuspendCurrentTask(self.backend_fd, .read);
+                try sched.ioSuspendCurrentTask(self.backend_fd, .read);
                 return error.WouldBlock;
             } else {
                 try self.drainBackend(true);
@@ -474,7 +474,7 @@ const PollingWatcher = struct {
             }
 
             if (scheduler) |sched| {
-                sched.sleepCurrentTask(@intCast(self.interval_ns));
+                try sched.sleepCurrentTask(@intCast(self.interval_ns));
                 return error.WouldBlock;
             }
 
@@ -590,6 +590,7 @@ fn nativeWatcherRead(ctx: *Context) anyerror!void {
                 }
                 continue;
             }
+            if (err == error.NotOnTaskStack) return err;
 
             helpers.setErrorContext(ctx, "watcher-read: {s}", .{@errorName(err)});
             return error.IOFailed;

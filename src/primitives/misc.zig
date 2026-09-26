@@ -1517,18 +1517,8 @@ fn acquireLoadLockAsTask(ctx: *Context, lock: *LoadLock, task: *Task) anyerror!v
         }
 
         // A contended parse-time acquire runs on the parser coroutine's own stack, where the
-        // scheduler cannot suspend this task: minicoro refuses a yield whose stack pointer is
-        // outside the task's coroutine stack.
-        //
-        // The test uses the coro's bounds directly, since the context's stack fields describe
-        // the parser stack during a parse. Raising beats spinning on a wait that can never
-        // park.
-        const sp = @frameAddress();
-        const on_task_stack = if (task.coro) |co| blk: {
-            const base = @intFromPtr(co.stack_base);
-            break :blk sp >= base and sp < base + co.stack_size;
-        } else false;
-        if (!on_task_stack) {
+        // scheduler cannot suspend this task. Raising beats spinning on a wait that can never park.
+        if (!task_mod.runningOnOwnStack(task)) {
             ctx.thrown_error = try value_mod.boxErrorObject(ctx.quotationAllocator(), .{
                 .error_type = "load-parse-wait",
                 .message = "cannot wait for the load lock during parse-time execution",
@@ -1540,7 +1530,7 @@ fn acquireLoadLockAsTask(ctx: *Context, lock: *LoadLock, task: *Task) anyerror!v
 
         task.blocked_on_load_lock = @ptrCast(lock);
         while (true) {
-            sched.suspendCurrentTask();
+            try sched.suspendCurrentTask();
             helpers.checkCancellation(ctx) catch |err| {
                 task.blocked_on_load_lock = null;
                 if (lock.isHeldBy(owner)) {

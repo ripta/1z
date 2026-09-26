@@ -1,4 +1,4 @@
-Prelude compilation: 469/470 words compiled (99.8%)
+Prelude compilation: 470/471 words compiled (99.8%)
   word 'pragma-get?' cannot be compiled
       NC.13: word body underflows the abstract stack (row-variable effects)
       hint: blocked until row-variable stack regions can be modeled
@@ -10,22 +10,22 @@ AOT interpreter fallbacks: 308 total
   compound-uncompiled: 2
   quotation: 17
   sites:
-    native: nan? -> = (line 455)
-    quotation: run-benchmarks -> <quotation> (line 1268)
-    quotation: (any-loop) -> <quotation> (line 485)
-    native: quotation? -> = (line 418)
-    native: . -> inspect (line 734)
-    native: . -> inspect (line 734)
-    native: #ends-with? -> #len (line 1342)
-    native: #ends-with? -> #len (line 1342)
-    native: #ends-with? -> #len (line 1342)
-    native: #ends-with? -> #len (line 1342)
-    native: #ends-with? -> < (line 1342)
-    native: #ends-with? -> #len (line 1344)
-    native: #ends-with? -> #len (line 1344)
-    native: #ends-with? -> #len (line 1344)
-    native: #ends-with? -> #len (line 1344)
-    per-op-native: #ends-with? -> - (line 1344)
+    native: nan? -> = (line 456)
+    quotation: run-benchmarks -> <quotation> (line 1269)
+    quotation: (any-loop) -> <quotation> (line 486)
+    native: quotation? -> = (line 419)
+    native: . -> inspect (line 735)
+    native: . -> inspect (line 735)
+    native: #ends-with? -> #len (line 1343)
+    native: #ends-with? -> #len (line 1343)
+    native: #ends-with? -> #len (line 1343)
+    native: #ends-with? -> #len (line 1343)
+    native: #ends-with? -> < (line 1343)
+    native: #ends-with? -> #len (line 1345)
+    native: #ends-with? -> #len (line 1345)
+    native: #ends-with? -> #len (line 1345)
+    native: #ends-with? -> #len (line 1345)
+    per-op-native: #ends-with? -> - (line 1345)
     ... 292 more
   static-check: jitInterpretedCall=2/2 jitNativeWordCall=289/289 jitCallQuotation=17/17 (matches build-time inventory)
 Warning: '4keep' parameter 'quot' has row-variable effect; quotation call falls back to interpreter

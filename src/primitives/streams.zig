@@ -36,12 +36,12 @@ const mapGetPosError = error_mapping.mapGetPosError;
 const ensureStreamOpen = error_mapping.ensureStreamOpen;
 
 fn mapStreamReadError(err: anyerror) anyerror {
-    if (err == error.UserThrown) return err;
+    if (err == error.UserThrown or err == error.NotOnTaskStack) return err;
     return mapFileReadError(err);
 }
 
 fn mapStreamWriteError(err: anyerror) anyerror {
-    if (err == error.UserThrown) return err;
+    if (err == error.UserThrown or err == error.NotOnTaskStack) return err;
     return mapFileWriteError(err);
 }
 
@@ -99,7 +99,7 @@ fn fileRead(stream: *Stream, buffer: []u8, ctx: *Context) anyerror!usize {
         return file.read(buffer) catch |err| {
             if (err == error.WouldBlock) {
                 if (ctx.scheduler) |sched| {
-                    sched.ioSuspendCurrentTask(stream.fd, .read);
+                    try sched.ioSuspendCurrentTask(stream.fd, .read);
                     try helpers.checkCancellation(ctx);
                     continue;
                 }
@@ -122,7 +122,7 @@ fn fileWrite(stream: *Stream, bytes: []const u8, ctx: *Context) anyerror!usize {
         return file.write(bytes) catch |err| {
             if (err == error.WouldBlock) {
                 if (ctx.scheduler) |sched| {
-                    sched.ioSuspendCurrentTask(stream.fd, .write);
+                    try sched.ioSuspendCurrentTask(stream.fd, .write);
                     try helpers.checkCancellation(ctx);
                     continue;
                 }
@@ -344,7 +344,7 @@ fn duplexRead(stream: *Stream, buffer: []u8, ctx: *Context) anyerror!usize {
         return file.read(buffer) catch |err| {
             if (err == error.WouldBlock) {
                 if (ctx.scheduler) |sched| {
-                    sched.ioSuspendCurrentTask(state.read_fd, .read);
+                    try sched.ioSuspendCurrentTask(state.read_fd, .read);
                     try helpers.checkCancellation(ctx);
                     continue;
                 }
@@ -373,7 +373,7 @@ fn duplexWrite(stream: *Stream, bytes: []const u8, ctx: *Context) anyerror!usize
         return file.write(bytes) catch |err| {
             if (err == error.WouldBlock) {
                 if (ctx.scheduler) |sched| {
-                    sched.ioSuspendCurrentTask(state.write_fd, .write);
+                    try sched.ioSuspendCurrentTask(state.write_fd, .write);
                     try helpers.checkCancellation(ctx);
                     continue;
                 }

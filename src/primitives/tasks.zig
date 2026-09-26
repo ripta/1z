@@ -139,6 +139,10 @@ fn nativeTaskScope(ctx: *Context) anyerror!void {
 
     // Case: nested
     if (ctx.scheduler) |scheduler| {
+        // The scope lives on this frame, so the park must be known possible before a child that
+        // points at it is enqueued.
+        try scheduler.ensureCanPark();
+
         var scope = TaskScope.init(ctx.allocator);
         defer scope.deinit();
         defer scheduler.reapScopeAtExit(&scope);
@@ -155,7 +159,7 @@ fn nativeTaskScope(ctx: *Context) anyerror!void {
         const current = scheduler.current_task.?;
         scope.waiting_task = current;
         current.blocked_on_scope = &scope;
-        scheduler.suspendCurrentTask();
+        try scheduler.suspendCurrentTask();
         current.blocked_on_scope = null;
 
         try helpers.checkCancellation(ctx);
@@ -452,7 +456,7 @@ fn nativeYield(ctx: *Context) anyerror!void {
         return error.InvalidState;
     };
 
-    scheduler.yieldCurrentTask();
+    try scheduler.yieldCurrentTask();
 
     try helpers.checkCancellation(ctx);
 }
@@ -477,7 +481,7 @@ fn nativeSleep(ctx: *Context) anyerror!void {
         return error.InvalidState;
     };
 
-    scheduler.sleepCurrentTask(dur.ns);
+    try scheduler.sleepCurrentTask(dur.ns);
 
     try helpers.checkCancellation(ctx);
 }
@@ -510,6 +514,8 @@ fn nativeWithTimeout(ctx: *Context) anyerror!void {
         ctx.pending_error_message = "with-timeout must be called from a running task";
         return error.InvalidState;
     };
+
+    try scheduler.ensureCanPark();
 
     // NOTE(ripta): Nest a hidden scope so the timer's sibling cancellation doesn't affect
     //              the caller's other tasks. Spawn the main task with the user's quotation.
@@ -551,7 +557,7 @@ fn nativeWithTimeout(ctx: *Context) anyerror!void {
     // suspend the current task until the scope drains
     scope.waiting_task = current;
     current.blocked_on_scope = &scope;
-    scheduler.suspendCurrentTask();
+    try scheduler.suspendCurrentTask();
     current.blocked_on_scope = null;
 
     try helpers.checkCancellation(ctx);
@@ -650,9 +656,10 @@ fn nativeAwait(ctx: *Context) anyerror!void {
 
     switch (task.getStatus()) {
         .pending, .running => {
+            try scheduler.ensureCanPark();
             task.awaiting_task = current;
             current.blocked_on_await = task;
-            scheduler.suspendCurrentTask();
+            try scheduler.suspendCurrentTask();
             current.blocked_on_await = null;
         },
         .completed, .failed, .cancelled => {},
@@ -688,9 +695,10 @@ fn nativeAwaitTerminal(ctx: *Context) anyerror!void {
 
     switch (task.getStatus()) {
         .pending, .running => {
+            try scheduler.ensureCanPark();
             task.awaiting_task = current;
             current.blocked_on_await = task;
-            scheduler.suspendCurrentTask();
+            try scheduler.suspendCurrentTask();
             current.blocked_on_await = null;
         },
         .completed, .failed, .cancelled => {},
@@ -769,9 +777,10 @@ fn nativeAwaitAll(ctx: *Context) anyerror!void {
         const task = item.task;
         switch (task.getStatus()) {
             .pending, .running => {
+                try scheduler.ensureCanPark();
                 task.awaiting_task = current;
                 current.blocked_on_await = task;
-                scheduler.suspendCurrentTask();
+                try scheduler.suspendCurrentTask();
                 current.blocked_on_await = null;
             },
             .completed, .failed, .cancelled => {},

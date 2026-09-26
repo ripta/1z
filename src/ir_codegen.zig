@@ -14543,7 +14543,10 @@ export fn jitSafepoint(ctx_raw: usize) callconv(.c) i32 {
     const scheduler: *Scheduler = ctx.scheduler orelse return 0;
     const should_yield = scheduler.run_queue.items.len > 0 or scheduler.sleep_queue.count() > 0;
     if (should_yield) {
-        scheduler.yieldCurrentTask();
+        scheduler.yieldCurrentTask() catch |err| {
+            ctx.jit_pending_error = err;
+            return 2;
+        };
     }
     helpers.checkCancellation(ctx) catch |err| {
         if (ctx.trace.trace_jit) {

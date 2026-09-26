@@ -190,15 +190,10 @@ fn wakeScheduler(ctx: *Context) ?*Scheduler {
 /// The scheduler this execution can park in, or null when it cannot park at all.
 ///
 /// Null covers the non-task main thread, which has no scheduler to suspend into, and a task
-/// running on the parser coroutine's stack. `mco_yield` refuses a yield whose stack pointer lies
-/// outside the running coroutine's bounds, and the refusal is silent, so the test comes before
-/// any scheduler state is written.
+/// running off its own coroutine stack, such as on the parser coroutine's.
 fn parkableScheduler(running: ?*Task) ?*Scheduler {
     const task = running orelse return null;
-    const co = task.coro orelse return null;
-    const sp = @frameAddress();
-    const base = @intFromPtr(co.stack_base);
-    if (sp < base or sp >= base + co.stack_size) return null;
+    if (!task_mod.runningOnOwnStack(task)) return null;
     return task.ctx.scheduler;
 }
 
@@ -212,7 +207,7 @@ fn parkOnForce(ctx: *Context, cell: *OnceCell, task: *Task, sched: *Scheduler) a
 
     task.blocked_on_once_cell = @ptrCast(cell);
     while (true) {
-        sched.suspendCurrentTask();
+        try sched.suspendCurrentTask();
 
         helpers.checkCancellation(ctx) catch |err| {
             _ = cell.removeWaiter(task);

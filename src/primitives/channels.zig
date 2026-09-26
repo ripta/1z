@@ -219,6 +219,12 @@ fn nativeSend(ctx: *Context) anyerror!void {
         return;
     }
 
+    scheduler.ensureCanPark() catch |err| {
+        releaseChannel(ctx, ch);
+        container_backing.releaseValue(value);
+        return err;
+    };
+
     // blocking send: add to waiting list, release lock, then suspend.
     // The entry holds the sender's owning reference while suspended.
     try ch.waiting_senders.append(ch.allocator, .{
@@ -227,7 +233,7 @@ fn nativeSend(ctx: *Context) anyerror!void {
     });
     current.blocked_on_channel = @ptrCast(ch);
     releaseChannel(ctx, ch);
-    scheduler.suspendCurrentTask();
+    try scheduler.suspendCurrentTask();
 
     // coming back from blocking
     acquireChannel(ctx, ch);
@@ -344,13 +350,18 @@ fn nativeReceive(ctx: *Context) anyerror!void {
         return throwChannelClosed(ctx, "channel is closed");
     }
 
+    scheduler.ensureCanPark() catch |err| {
+        releaseChannel(ctx, ch);
+        return err;
+    };
+
     // blocking receive: add to waiting list, release lock, then suspend
     try ch.waiting_receivers.append(ch.allocator, .{
         .task = current,
     });
     current.blocked_on_channel = @ptrCast(ch);
     releaseChannel(ctx, ch);
-    scheduler.suspendCurrentTask();
+    try scheduler.suspendCurrentTask();
 
     // resume from blocking
     acquireChannel(ctx, ch);
@@ -608,6 +619,11 @@ fn nativeSelect(ctx: *Context) anyerror!void {
         return throwChannelClosed(ctx, "all channels in select are closed");
     }
 
+    scheduler.ensureCanPark() catch |err| {
+        unlockChannelsOrdered(ctx, channels);
+        return err;
+    };
+
     // NOTE(ripta): no immediate data, register on all non-closed channels and suspend
     var sel_ctx = channel_mod.SelectContext{
         .task = current,
@@ -623,7 +639,7 @@ fn nativeSelect(ctx: *Context) anyerror!void {
 
     current.blocked_on_channel = @ptrCast(channels[0]);
     unlockChannelsOrdered(ctx, channels);
-    scheduler.suspendCurrentTask();
+    try scheduler.suspendCurrentTask();
 
     lockChannelsOrdered(ctx, channels);
     current.blocked_on_channel = null;

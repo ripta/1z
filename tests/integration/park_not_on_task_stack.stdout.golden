@@ -1,0 +1,45 @@
+Stack: [ ]
+=== yield and sleep ===
+Stack: [ ]
+Stack: [ not-on-task-stack: ]
+PASS: a parse-time yield raises
+Stack: [ ]
+Stack: [ not-on-task-stack: ]
+PASS: a parse-time sleep raises
+Stack: [ ]
+=== suspend: channels, scopes, and awaits ===
+Stack: [ ]
+Stack: [ not-on-task-stack: ]
+PASS: a parse-time receive on an empty channel raises
+Stack: [ ]
+Stack: [ not-on-task-stack: ]
+PASS: a parse-time send with no receiver raises
+Stack: [ ]
+Stack: [ not-on-task-stack: ]
+PASS: a parse-time select with nothing ready raises
+Stack: [ ]
+Stack: [ not-on-task-stack: ]
+PASS: a parse-time nested task-scope raises
+Stack: [ ]
+Stack: [ not-on-task-stack: ]
+PASS: a parse-time with-timeout raises
+Stack: [ ]
+Stack: [ not-on-task-stack: ]
+PASS: a parse-time await on a running task raises
+Stack: [ ]
+=== io and process waits ===
+Stack: [ ]
+Stack: [ not-on-task-stack: ]
+PASS: a parse-time read that would block raises
+Stack: [ ]
+Stack: [ not-on-task-stack: ]
+PASS: a parse-time wait on a running child raises
+Stack: [ ]
+=== parks that need not suspend still succeed ===
+Stack: [ ]
+Stack: [ ok: ]
+PASS: a parse-time send into a buffered channel with room succeeds
+Stack: [ ]
+Stack: [ ok: ]
+PASS: a parse-time await-terminal on a finished task succeeds
+Stack: [ ]

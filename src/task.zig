@@ -90,6 +90,19 @@ pub fn coroYield() void {
     _ = mc.mco_yield(mc.mco_running());
 }
 
+/// Whether the calling code is running on `task`'s own coroutine stack, so a yield from here
+/// actually switches.
+///
+/// `mco_yield` refuses a yield whose stack pointer lies outside the running coroutine's bounds,
+/// and `coroYield` discards the refusal. The parser coroutine is the stack that trips this today:
+/// parse-time execution inside a task runs on it. A task with no coroutine answers false.
+pub fn runningOnOwnStack(task: *const Task) bool {
+    const co = task.coro orelse return false;
+    const sp = @frameAddress();
+    const base = @intFromPtr(co.stack_base);
+    return sp >= base and sp < base + co.stack_size;
+}
+
 /// Destroy a task's coroutine and clear the pointer.
 pub fn coroDestroy(task: *Task) void {
     if (task.coro) |co| {

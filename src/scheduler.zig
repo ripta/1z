@@ -682,9 +682,31 @@ pub const Scheduler = struct {
         ops.onDetachedTaskDone(owner);
     }
 
+    /// Raise `not-on-task-stack` when the current task cannot park from where the caller is
+    /// running, which is any stack other than the task's own coroutine stack.
+    ///
+    /// A refused yield returns as if it had parked, so every park function tests this before it
+    /// writes any scheduler state: a queue entry written first would describe a task that never
+    /// suspended. A caller that registers waiter state of its own ahead of the park, such as a
+    /// channel waiter or a scope child, runs this test before registering, for the same reason.
+    ///
+    /// The message goes on the task's context only when this thread is running that task. A host
+    /// callback on another worker can reach a scheduler whose current task runs elsewhere, and
+    /// writing into that task's context would race it.
+    pub fn ensureCanPark(self: *Scheduler) error{NotOnTaskStack}!void {
+        const task = self.current_task orelse return;
+        if (task_mod.runningOnOwnStack(task)) return;
+
+        if (task_mod.resumed_task == task) {
+            task.ctx.pending_error_message = "cannot park the task here: the running stack is not the task's own, such as during parse-time execution";
+        }
+        return error.NotOnTaskStack;
+    }
+
     /// Re-enqueue the current task and yield back to the scheduler loop.
     /// Called from within a running task by the `yield` primitive.
-    pub fn yieldCurrentTask(self: *Scheduler) void {
+    pub fn yieldCurrentTask(self: *Scheduler) !void {
+        try self.ensureCanPark();
         if (self.current_task) |task| {
             self.run_queue.append(self.allocator, task) catch {};
             task_mod.coroYield();
@@ -693,7 +715,8 @@ pub const Scheduler = struct {
 
     /// Yield back to the scheduler without reënqueuing the current task.
     /// Used by nested `task-scope` to block the calling task until its scope completes.
-    pub fn suspendCurrentTask(self: *Scheduler) void {
+    pub fn suspendCurrentTask(self: *Scheduler) !void {
+        try self.ensureCanPark();
         if (self.current_task != null) {
             task_mod.coroYield();
         }
@@ -701,7 +724,8 @@ pub const Scheduler = struct {
 
     /// Suspend the current task until `duration_ns` nanoseconds have elapsed.
     /// Inserts the task into the sleep queue and yields back to the scheduler.
-    pub fn sleepCurrentTask(self: *Scheduler, duration_ns: i128) void {
+    pub fn sleepCurrentTask(self: *Scheduler, duration_ns: i128) !void {
+        try self.ensureCanPark();
         if (self.current_task) |task| {
             const wake_time = self.nowNs() + duration_ns;
 
@@ -745,7 +769,8 @@ pub const Scheduler = struct {
 
     /// Register the current task's interest in an fd and suspend it until readiness.
     /// Called from stream primitives when an I/O operation would block.
-    pub fn ioSuspendCurrentTask(self: *Scheduler, fd: i32, event: IoEvent) void {
+    pub fn ioSuspendCurrentTask(self: *Scheduler, fd: i32, event: IoEvent) !void {
+        try self.ensureCanPark();
         if (self.current_task) |task| {
             self.multiplexer.register(fd, event) catch {};
             self.io_wait_map.put(self.allocator, fd, .{ .task = task, .event = event }) catch {};
@@ -756,6 +781,7 @@ pub const Scheduler = struct {
 
     /// Suspend the current task until the child process exits.
     pub fn processSuspendCurrentTask(self: *Scheduler, pid: i32) !void {
+        try self.ensureCanPark();
         const task = self.current_task orelse return;
         const handle = try self.multiplexer.registerProcessExit(pid);
         errdefer self.multiplexer.unregisterProcessExit(handle) catch {};
@@ -1663,6 +1689,42 @@ test "channel, scope, load-lock, once-cell, and await waits count as in-process 
     task.blocked_on_io_fd = 3;
     task.blocked_on_channel = @ptrFromInt(@alignOf(usize));
     try std.testing.expect(!task.inProcessBlocked());
+}
+
+test "ensureCanPark passes with no current task" {
+    var sched = try Scheduler.init(std.testing.allocator);
+    defer sched.deinit();
+
+    try sched.ensureCanPark();
+}
+
+test "a park off the task's own stack raises before writing scheduler state" {
+    var sched = try Scheduler.init(std.testing.allocator);
+    defer sched.deinit();
+
+    // A task with no coroutine stands in for a caller running off the task's stack, which the
+    // predicate answers the same way.
+    var ctx: @import("context.zig").Context = undefined;
+    ctx.pending_error_message = null;
+    var task: Task = undefined;
+    task.coro = null;
+    task.ctx = &ctx;
+    sched.current_task = &task;
+    defer sched.current_task = null;
+    task_mod.resumed_task = &task;
+    defer task_mod.resumed_task = null;
+
+    try std.testing.expectError(error.NotOnTaskStack, sched.yieldCurrentTask());
+    try std.testing.expectError(error.NotOnTaskStack, sched.suspendCurrentTask());
+    try std.testing.expectError(error.NotOnTaskStack, sched.sleepCurrentTask(1));
+    try std.testing.expectError(error.NotOnTaskStack, sched.ioSuspendCurrentTask(0, .read));
+    try std.testing.expectError(error.NotOnTaskStack, sched.processSuspendCurrentTask(1));
+
+    try std.testing.expectEqual(@as(usize, 0), sched.run_queue.items.len);
+    try std.testing.expectEqual(@as(usize, 0), sched.sleep_queue.count());
+    try std.testing.expectEqual(@as(usize, 0), sched.io_wait_map.count());
+    try std.testing.expectEqual(@as(usize, 0), sched.process_wait_map.count());
+    try std.testing.expect(ctx.pending_error_message != null);
 }
 
 test "the deadlock gate needs every live task blocked" {
