@@ -1,0 +1,5 @@
+\ Reached by `use` from load_parks.1z, so its top level runs on the parser's stack.
+
+use "time" ;
+
+1 milliseconds sleep

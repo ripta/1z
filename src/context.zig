@@ -869,10 +869,12 @@ pub const Context = struct {
     ///
     /// The field is present in every build, but only a Debug build writes or reads it.
     current_native: ?[]const u8 = null,
-    /// True while a `load` call is executing. Blocking primitives (yield, sleep, await,
-    /// await-all, send, receive, select) check this flag and throw an error to prevent yielding
-    /// mid-load, which would park the loader with the module's globally visible registry writes
-    /// half-done.
+    /// True while a `load` body runs on this context. Protocol validation defers its obligations
+    /// to load end under it. Constraint analysis leaves a protocol element unknown under it. In
+    /// both cases a method the module registers on a later line may still satisfy the check.
+    ///
+    /// A task context starts with it clear rather than inheriting it. The loader drains only its
+    /// own obligation list, so a child that deferred would append to one nobody validates.
     in_module_load: bool = false,
     /// Re-entrancy guard for scoped hooks (e.g., word-defined).
     firing_scoped_hooks: bool = false,

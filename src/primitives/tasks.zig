@@ -446,11 +446,6 @@ fn nativeTaskSelf(ctx: *Context) anyerror!void {
 
 /// yield ( -- )
 fn nativeYield(ctx: *Context) anyerror!void {
-    if (ctx.in_module_load) {
-        ctx.pending_error_message = "yield cannot be called during module loading";
-        return error.InvalidState;
-    }
-
     const scheduler = ctx.scheduler orelse {
         ctx.pending_error_message = "yield must be called within a task-scope";
         return error.InvalidState;
@@ -463,11 +458,6 @@ fn nativeYield(ctx: *Context) anyerror!void {
 
 /// sleep ( duration -- )
 fn nativeSleep(ctx: *Context) anyerror!void {
-    if (ctx.in_module_load) {
-        ctx.pending_error_message = "sleep cannot be called during module loading";
-        return error.InvalidState;
-    }
-
     const dur = try helpers.popDuration(ctx);
     container_backing.releaseValue(dur.val);
 
@@ -637,11 +627,6 @@ fn nativeCancelTask(ctx: *Context) anyerror!void {
 
 /// await ( task -- value )
 fn nativeAwait(ctx: *Context) anyerror!void {
-    if (ctx.in_module_load) {
-        ctx.pending_error_message = "await cannot be called during module loading";
-        return error.InvalidState;
-    }
-
     const task = try helpers.popTask(ctx);
 
     const scheduler = ctx.scheduler orelse {
@@ -676,11 +661,6 @@ fn nativeAwait(ctx: *Context) anyerror!void {
 ///
 ///     dup cancel-task await-terminal
 fn nativeAwaitTerminal(ctx: *Context) anyerror!void {
-    if (ctx.in_module_load) {
-        ctx.pending_error_message = "await-terminal cannot be called during module loading";
-        return error.InvalidState;
-    }
-
     const task = try helpers.popTask(ctx);
 
     const scheduler = ctx.scheduler orelse {
@@ -728,11 +708,6 @@ fn nativeAwaitTerminal(ctx: *Context) anyerror!void {
 /// Results preserve array order. If multiple tasks failed or were cancelled, the first error in
 /// array order is thrown only after every task has reached a terminal status.
 fn nativeAwaitAll(ctx: *Context) anyerror!void {
-    if (ctx.in_module_load) {
-        ctx.pending_error_message = "await-all cannot be called during module loading";
-        return error.InvalidState;
-    }
-
     const val = try ctx.stack.pop();
     // The popped array must stay alive across the suspensions below, since
     // `tasks` borrows its backing; the deferred release runs at return.

@@ -1,0 +1,31 @@
+\ A module load may park. Each fixture's top level parks directly through one word while a
+\ task-scope provides the scheduler. Under one worker a spawned child cannot run until the
+\ loader suspends, so each fixture's markers show the park really happened.
+
+use "testing" ;
+
+"a runtime load inside a scope parks" test-section
+
+[ "fixtures/load_park_yield.1z" load drop ] task-scope
+[ "fixtures/load_park_sleep.1z" load drop ] task-scope
+[ "fixtures/load_park_await.1z" load drop ] task-scope
+[ "fixtures/load_park_await_terminal.1z" load drop ] task-scope
+[ "fixtures/load_park_await_all.1z" load drop ] task-scope
+[ "fixtures/load_park_send.1z" load drop ] task-scope
+[ "fixtures/load_park_receive.1z" load drop ] task-scope
+[ "fixtures/load_park_select.1z" load drop ] task-scope
+
+"a load with no scheduler still refuses" test-section
+
+[ "fixtures/load_park_no_scheduler.1z" load ] invalid-state: "a sleep with no scheduler" assert-error-type
+
+"a use cannot park the parser" test-section
+
+outcomes: V{ } ;
+[
+  [
+    [ "use \"./fixtures/load_park_use.1z\" ;" eval-string ok: ] [ error-type: @get ] recover
+    outcomes swap #push! drop
+  ] spawn drop
+] task-scope
+outcomes 0 #nth ENotOnTaskStack "a used module's top-level sleep raises" assert=

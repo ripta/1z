@@ -1,0 +1,5 @@
+\ Loaded by load_parks.1z from outside any scope, where there is no scheduler to park on.
+
+use "time" ;
+
+1 milliseconds sleep

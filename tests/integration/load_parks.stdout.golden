@@ -1,0 +1,32 @@
+=== a runtime load inside a scope parks ===
+Stack: [ ]
+PARK-YIELD sibling
+PARK-YIELD resumed
+Stack: [ ]
+PARK-SLEEP sibling
+PARK-SLEEP resumed
+Stack: [ ]
+PARK-AWAIT got 42
+Stack: [ ]
+PARK-AWAIT-TERMINAL child
+PARK-AWAIT-TERMINAL resumed
+Stack: [ ]
+PARK-AWAIT-ALL got { 1 2 }
+Stack: [ ]
+PARK-SEND child got 7
+PARK-SEND resumed
+Stack: [ ]
+PARK-RECEIVE got 9
+Stack: [ ]
+PARK-SELECT got 5
+Stack: [ ]
+=== a load with no scheduler still refuses ===
+Stack: [ ]
+PASS: a sleep with no scheduler
+Stack: [ ]
+=== a use cannot park the parser ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: a used module's top-level sleep raises
+Stack: [ ]

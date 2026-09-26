@@ -1,0 +1,7 @@
+\ Loaded by load_parks.1z. An unbuffered send blocks the loader until the receiver runs.
+
+ch: <channel> ;
+
+[ ch receive inspect "PARK-SEND child got " swap #append print-line ] spawn drop
+7 ch send
+"PARK-SEND resumed" print-line

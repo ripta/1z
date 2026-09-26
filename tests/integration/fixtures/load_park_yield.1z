@@ -1,0 +1,6 @@
+\ Loaded by load_parks.1z. The sibling can only print before the second marker if the loader
+\ really yielded mid-load.
+
+[ "PARK-YIELD sibling" print-line ] spawn drop
+yield
+"PARK-YIELD resumed" print-line

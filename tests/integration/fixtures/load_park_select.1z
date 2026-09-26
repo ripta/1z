@@ -1,0 +1,6 @@
+\ Loaded by load_parks.1z. The loader selects before the sender has run.
+
+ch: <channel> ;
+
+[ 5 ch send ] spawn drop
+{ } ch #push select drop inspect "PARK-SELECT got " swap #append print-line

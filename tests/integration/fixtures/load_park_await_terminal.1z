@@ -1,0 +1,4 @@
+\ Loaded by load_parks.1z. The loader waits out a child that has not run yet.
+
+[ "PARK-AWAIT-TERMINAL child" print-line ] spawn await-terminal
+"PARK-AWAIT-TERMINAL resumed" print-line

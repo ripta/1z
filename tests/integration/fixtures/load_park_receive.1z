@@ -1,0 +1,6 @@
+\ Loaded by load_parks.1z. The loader receives before the sender has run.
+
+ch: <channel> ;
+
+[ 9 ch send ] spawn drop
+ch receive inspect "PARK-RECEIVE got " swap #append print-line

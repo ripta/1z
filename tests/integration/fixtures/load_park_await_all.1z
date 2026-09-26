@@ -1,0 +1,4 @@
+\ Loaded by load_parks.1z. The loader awaits two children that have not run yet.
+
+{ } [ 1 ] spawn #push [ 2 ] spawn #push await-all
+inspect "PARK-AWAIT-ALL got " swap #append print-line

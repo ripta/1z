@@ -1,0 +1,8 @@
+\ Loaded by load_parks.1z. The sibling can only print before the second marker if the loader
+\ really slept mid-load.
+
+use "time" ;
+
+[ "PARK-SLEEP sibling" print-line ] spawn drop
+1 milliseconds sleep
+"PARK-SLEEP resumed" print-line

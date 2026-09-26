@@ -135,11 +135,6 @@ fn nativeCreateBufferedChannel(ctx: *Context) anyerror!void {
 /// Direct handoff to a waiting receiver, else a buffer push if there's room, else blocks until a
 /// receiver frees a slot.
 fn nativeSend(ctx: *Context) anyerror!void {
-    if (ctx.in_module_load) {
-        ctx.pending_error_message = "send cannot be called during module loading";
-        return error.InvalidState;
-    }
-
     const ch = try helpers.popChannel(ctx);
     const value = try ctx.stack.pop();
     ensureSendValueEscapable(ctx, value) catch |err| {
@@ -266,11 +261,6 @@ fn nativeSend(ctx: *Context) anyerror!void {
 
 /// receive ( ch -- val )
 fn nativeReceive(ctx: *Context) anyerror!void {
-    if (ctx.in_module_load) {
-        ctx.pending_error_message = "receive cannot be called during module loading";
-        return error.InvalidState;
-    }
-
     const ch = try helpers.popChannel(ctx);
 
     acquireChannel(ctx, ch);
@@ -506,11 +496,6 @@ fn nativeCloseChannel(ctx: *Context) anyerror!void {
 /// `SelectContext`, then suspends; stale receiver entries on the other channels are cleaned up
 /// once one delivers or all are closed.
 fn nativeSelect(ctx: *Context) anyerror!void {
-    if (ctx.in_module_load) {
-        ctx.pending_error_message = "select cannot be called during module loading";
-        return error.InvalidState;
-    }
-
     const val = try ctx.stack.pop();
     // The popped array must stay alive across the suspension below, since
     // `items` borrows its backing; the deferred release runs at return.

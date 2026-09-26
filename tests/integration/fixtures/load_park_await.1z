@@ -1,0 +1,3 @@
+\ Loaded by load_parks.1z. The loader awaits a child that has not run yet.
+
+[ 42 ] spawn await inspect "PARK-AWAIT got " swap #append print-line
