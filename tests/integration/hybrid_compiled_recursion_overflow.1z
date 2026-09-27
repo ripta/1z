@@ -1,0 +1,16 @@
+use "testing" ;
+
+\ A deep non-tail recursion that hybrid compiles partway down. From there every level is a direct
+\ compiled-to-compiled call that never reaches the interpreter's stack guard, so the compiled entry
+\ check has to raise a catchable stack-overflow instead of letting the recursion run into the OS
+\ guard page. The raising quotation leaves depth-dependent residue, so this runs with
+\ --no-show-stack.
+
+deep: stack-recursive ( n -- n ) [ dup 0 > [ 1 - deep 1 + ] [ ] if ] ;
+
+test-compiled-overflow: ( -- ) [
+  [ 1000000 deep drop ] [ error-type: @get ] recover
+  stack-overflow: "compiled deep recursion raises catchable stack-overflow" assert=
+] ;
+
+test-compiled-overflow

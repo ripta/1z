@@ -128,6 +128,23 @@ pub const CallFrame = struct {
     stack_effect: ?*const StackEffect = null,
 };
 
+/// A raw effect string by address and length. Both kinds of string a trace frame carries, a
+/// primitive's spec string and an AOT-baked literal, live for the whole process.
+pub const TraceEffectKey = struct { ptr: usize, len: usize };
+
+// Both caps sit above the longest chain the interpreter reaches on its own before its stack guard
+// trips, so only a compiled recursion is ever cut.
+
+/// How many innermost pended frames an error chain keeps.
+///
+/// The cap counts from the start of the list, not from a consumer's mark. A nested unwind that
+/// begins past it, under an enclosing unwind already holding more frames than the cap, can lose
+/// its own innermost frames to a drop. That needs two deep unwinds in flight at once.
+pub const pending_frame_head_cap: usize = 1024;
+
+/// How many outermost pended frames an error chain keeps.
+pub const pending_frame_tail_cap: usize = 1024;
+
 /// ParameterFrame holds parameter bindings for dynamic scoping.
 /// Each frame is a mapping from parameter name to its bound value.
 pub const ParameterFrame = std.StringHashMapUnmanaged(Value);
@@ -638,6 +655,9 @@ pub const ErrorDetail = struct {
     hint: ?[]const u8 = null,
     dispatch_actual_types: ?[]const u8 = null,
     dispatch_available_methods: ?[]const u8 = null,
+    /// Nonzero on the one row standing in for frames the bounded pending list dropped. Such a row
+    /// names no word or source, and a renderer prints the count in place of a caller.
+    elided_frames: usize = 0,
 };
 
 /// Structured context for parse-time errors, populated by the parser's catch
@@ -1147,7 +1167,21 @@ pub const Context = struct {
     ///
     /// finalizeErrorDetails folds the list into error_details at the consumption point
     /// that owns the error.
+    ///
+    /// The list is bounded. It keeps the innermost `pending_frame_head_cap` frames and the
+    /// outermost `pending_frame_tail_cap`, and counts what it drops between them. A compiled
+    /// recursion unwinds hundreds of thousands of levels, and holding a frame for each would
+    /// exhaust memory before the error could be caught.
     jit_pending_trace_frames: std.ArrayListUnmanaged(CallFrame) = .{},
+    /// How many frames were dropped from `jit_pending_trace_frames`. A mark into the list counts
+    /// them, so it stays valid across a drop.
+    jit_pending_trace_elided: usize = 0,
+    /// The index in `jit_pending_trace_frames` the dropped frames sat at. Meaningful only while
+    /// `jit_pending_trace_elided` is nonzero.
+    jit_pending_trace_elided_at: usize = 0,
+    /// Stack effects parsed for pended frames, keyed by the raw effect string they came from.
+    /// The effects live on the arena.
+    trace_effect_cache: std.AutoHashMapUnmanaged(TraceEffectKey, *const StackEffect) = .{},
     /// PIC cache mapping instruction slice pointers to their PIC tables.
     /// Lazily populated on first generic dispatch through a compound word body.
     pic_cache: std.AutoHashMapUnmanaged(usize, *PicTable) = .{},
@@ -1728,6 +1762,18 @@ pub const Context = struct {
         self.stack_limit = bounds.low + (bounds.high - bounds.low) / 8;
     }
 
+    /// The message a native stack overflow raises with, for a frame at `sp`: the bytes in use
+    /// against the stack's size.
+    pub fn stackOverflowMessage(self: *Context, sp: usize) []const u8 {
+        const used = self.stack_high -| sp;
+        const total = self.stack_high -| self.stack_limit +| (32 * 1024);
+        return std.fmt.allocPrint(
+            self.arena.allocator(),
+            "stack overflow: {} of {} bytes used",
+            .{ used, total },
+        ) catch "stack overflow";
+    }
+
     /// Create a lightweight Context for a spawned task. Primitives and the prelude are not
     /// registered here. They are resolved at lookup time by walking up the parent_context chain.
     /// Per-task state like the stack, dictionary, and arena are freshly allocated.
@@ -2250,6 +2296,7 @@ pub const Context = struct {
         self.container_release_list.deinit(self.allocator);
         if (self.parent_context == null) self.releaseImageSlotReferences();
 
+        self.trace_effect_cache.deinit(self.allocator);
         self.arena.deinit();
         self.allocator.destroy(self.arena);
         self.dictionary.deinit();
@@ -2565,6 +2612,20 @@ pub const Context = struct {
         return self.jit_trace_source orelse self.current_source;
     }
 
+    /// The boxed effect for a pended frame's raw effect string, parsed once per context.
+    ///
+    /// An unwind pends a frame per level, and a compiled recursion unwinds hundreds of thousands
+    /// of them. Parsing per frame would put a fresh effect on the arena at every level, which is
+    /// enough to exhaust the memory limit before the error could be caught.
+    pub fn cachedTraceEffect(self: *Context, raw: []const u8) ?*const StackEffect {
+        const key: TraceEffectKey = .{ .ptr = @intFromPtr(raw.ptr), .len = raw.len };
+        if (self.trace_effect_cache.get(key)) |effect| return effect;
+
+        const effect = helpers.makeBoxedEffect(self.arena.allocator(), raw) catch return null;
+        self.trace_effect_cache.put(self.allocator, key, effect) catch {};
+        return effect;
+    }
+
     /// Queue a synthetic frame built from parts, for raise sites that never pushed a
     /// live `CallFrame` to convert.
     pub fn appendPendingSyntheticErrorFrame(self: *Context, word_name: []const u8, source: []const u8, line: usize, effect: ?*const StackEffect) void {
@@ -2579,21 +2640,77 @@ pub const Context = struct {
 
     /// Queue an already-built frame, preserving every field, including the
     /// definition-located mark the fold's dedupe reads.
+    ///
+    /// Once the frames past the gap reach twice the tail cap, the older half of them is dropped
+    /// in one move and counted. The list therefore never holds more than the head cap plus twice
+    /// the tail cap, and a drop costs one move per tail-cap appends.
     pub fn appendPendingErrorFrame(self: *Context, frame: CallFrame) void {
-        self.jit_pending_trace_frames.append(self.allocator, frame) catch {};
+        const list = &self.jit_pending_trace_frames;
+        const gap = self.pendingFrameGap();
+        if (list.items.len >= gap + 2 * pending_frame_tail_cap) {
+            self.elidePendingFrames(pending_frame_tail_cap);
+        }
+
+        list.append(self.allocator, frame) catch {};
     }
 
     pub fn clearPendingSyntheticErrorFrames(self: *Context) void {
         self.jit_pending_trace_frames.clearRetainingCapacity();
+        self.jit_pending_trace_elided = 0;
+    }
+
+    /// The number of frames pended, dropped ones included. A mark is taken in these units.
+    pub fn pendingErrorFrameCount(self: *const Context) usize {
+        return self.jit_pending_trace_frames.items.len + self.jit_pending_trace_elided;
+    }
+
+    /// Where dropped frames sit, or would sit once the first drop happens.
+    fn pendingFrameGap(self: *const Context) usize {
+        return if (self.jit_pending_trace_elided > 0) self.jit_pending_trace_elided_at else pending_frame_head_cap;
+    }
+
+    /// The list index a mark lands on. A mark inside the dropped run lands on the gap.
+    fn pendingFrameIndex(self: *const Context, mark: usize) usize {
+        if (self.jit_pending_trace_elided == 0) return mark;
+
+        const gap = self.jit_pending_trace_elided_at;
+        if (mark <= gap) return mark;
+        if (mark < gap + self.jit_pending_trace_elided) return gap;
+        return mark - self.jit_pending_trace_elided;
+    }
+
+    /// How many dropped frames lie at or above `mark`.
+    fn pendingFramesElidedAbove(self: *const Context, mark: usize) usize {
+        if (self.jit_pending_trace_elided == 0) return 0;
+
+        const gap = self.jit_pending_trace_elided_at;
+        const end = gap + self.jit_pending_trace_elided;
+        if (mark >= end) return 0;
+        return end - @max(mark, gap);
+    }
+
+    /// Drop `count` frames from just past the gap and add them to the dropped run.
+    fn elidePendingFrames(self: *Context, count: usize) void {
+        const list = &self.jit_pending_trace_frames;
+        const gap = self.pendingFrameGap();
+        if (count == 0 or list.items.len < gap + count) return;
+
+        std.mem.copyForwards(CallFrame, list.items[gap..], list.items[gap + count ..]);
+        list.shrinkRetainingCapacity(list.items.len - count);
+        self.jit_pending_trace_elided_at = gap;
+        self.jit_pending_trace_elided += count;
     }
 
     /// Drop pending unwind frames above `mark`, keeping any an enclosing unwind owns.
     ///
-    /// The guard covers a nested consumer having already cleared the whole list.
+    /// The guard covers a nested consumer having already cleared the whole list. A mark inside
+    /// the dropped run keeps only the dropped frames below it, which are all still counted.
     pub fn truncatePendingErrorFrames(self: *Context, mark: usize) void {
-        if (self.jit_pending_trace_frames.items.len > mark) {
-            self.jit_pending_trace_frames.shrinkRetainingCapacity(mark);
-        }
+        if (self.pendingErrorFrameCount() <= mark) return;
+
+        const kept_elided = self.jit_pending_trace_elided -| self.pendingFramesElidedAbove(mark);
+        self.jit_pending_trace_frames.shrinkRetainingCapacity(self.pendingFrameIndex(mark));
+        self.jit_pending_trace_elided = kept_elided;
     }
 
     /// The in-flight error channels as they stood before an execution whose failure the
@@ -2620,7 +2737,7 @@ pub const Context = struct {
             .dispatch_actual_types = self.pending_dispatch_actual_types,
             .dispatch_available_methods = self.pending_dispatch_available_methods,
             .thrown = self.thrown_error,
-            .pending_frame_mark = self.jit_pending_trace_frames.items.len,
+            .pending_frame_mark = self.pendingErrorFrameCount(),
             .detail_mark = self.error_details.items.len,
         };
     }
@@ -2673,6 +2790,10 @@ pub const Context = struct {
         thrown: ?*value_mod.ErrorObject,
         frames: []CallFrame,
         details: []ErrorDetail,
+        /// Frames the bounded list dropped from this contribution, and the index into `frames`
+        /// they were dropped from.
+        elided: usize = 0,
+        elided_at: usize = 0,
     };
 
     /// Lift the callback's own contribution off the live channels and restore `saved`.
@@ -2685,8 +2806,10 @@ pub const Context = struct {
     pub fn detachErrorStateForCallback(self: *Context, saved: ErrorStateSnapshot) void {
         self.dropCallbackErrorState();
 
-        const pending = self.jit_pending_trace_frames.items[saved.pending_frame_mark..];
+        const start = self.pendingFrameIndex(saved.pending_frame_mark);
+        const pending = self.jit_pending_trace_frames.items[start..];
         const rows = self.error_details.items[saved.detail_mark..];
+        const elided = self.pendingFramesElidedAbove(saved.pending_frame_mark);
 
         const frames = self.allocator.dupe(CallFrame, pending) catch return;
         const details = self.allocator.dupe(ErrorDetail, rows) catch {
@@ -2702,6 +2825,8 @@ pub const Context = struct {
             .thrown = self.thrown_error,
             .frames = frames,
             .details = details,
+            .elided = elided,
+            .elided_at = if (elided > 0) self.jit_pending_trace_elided_at - start else 0,
         };
 
         // The stash moves into the detached state, so its payload must not be released here.
@@ -2719,7 +2844,18 @@ pub const Context = struct {
         self.pending_dispatch_actual_types = detached.dispatch_actual_types;
         self.pending_dispatch_available_methods = detached.dispatch_available_methods;
         self.thrown_error = detached.thrown;
-        self.jit_pending_trace_frames.appendSlice(self.allocator, detached.frames) catch {};
+        self.jit_pending_trace_frames.appendSlice(self.allocator, detached.frames[0..detached.elided_at]) catch {};
+        if (detached.elided > 0) {
+            // The list holds one dropped run. A run already below keeps its place, and every frame
+            // between it and this one's gap joins it, so the kept frames stay in order around it.
+            if (self.jit_pending_trace_elided == 0) {
+                self.jit_pending_trace_elided_at = self.jit_pending_trace_frames.items.len;
+            } else {
+                self.elidePendingFrames(self.jit_pending_trace_frames.items.len - self.jit_pending_trace_elided_at);
+            }
+            self.jit_pending_trace_elided += detached.elided;
+        }
+        self.jit_pending_trace_frames.appendSlice(self.allocator, detached.frames[detached.elided_at..]) catch {};
         self.error_details.appendSlice(self.allocator, detached.details) catch {};
 
         self.allocator.free(detached.frames);
@@ -4920,7 +5056,7 @@ pub const Context = struct {
 
         const compiled = ir_codegen.compileWordWithPicSnapshot(instrs, input_count, output_count, resolver, name, pic_snapshot, self, null, effect, def.source_file) catch return;
 
-        const final_id = if (def.word_id) |existing_id| blk: {
+        const final_id = if (def.word_id orelse self.mintedWordIdForBody(name, instrs)) |existing_id| blk: {
             if (self.jit_dispatch.get(existing_id) != null) {
                 self.jit_dispatch.update(existing_id, compiled.code_ptr, compiled.jit_buf, compiled.peak_stack_depth);
                 break :blk existing_id;
@@ -4954,6 +5090,20 @@ pub const Context = struct {
         const dump_cfg = jit_dump.DumpConfig{ .dump_bytes = self.trace.dump_jit_bytes, .bin_dir = self.trace.dump_jit_bin_dir };
         if (dump_cfg.enabled() and trace_mod.matchesPattern(name, self.trace.dump_jit_word_pattern))
             jit_dump.dumpJitCode(dump_cfg, name, final_id, compiled.code_ptr, compiled.jit_buf.size);
+    }
+
+    /// The id a compile minted for the definition it was compiling, if any.
+    ///
+    /// A self-call resolved during the compile assigns the live definition's id and bakes it into
+    /// the code. The body pointer confirms the name still resolves to the body that was compiled.
+    fn mintedWordIdForBody(self: *Context, name: []const u8, instrs: []const Instruction) ?u32 {
+        const live = self.lookupWord(name) orelse return null;
+        const body = switch (live.action) {
+            .compound => |b| b,
+            .native, .host_callback, .literal => return null,
+        };
+        if (body.ptr != instrs.ptr) return null;
+        return live.word_id;
     }
 
     /// Assign a word_id without compiling. Used in hybrid mode so the dispatch
@@ -8049,6 +8199,19 @@ pub const Context = struct {
         self.finalizeErrorDetailsAbove(err, 0, 0);
     }
 
+    /// Append the row standing in for `count` frames the bounded pending list dropped.
+    fn appendElisionRow(self: *Context, error_type: []const u8, count: usize) void {
+        const message = std.fmt.allocPrint(self.arena.allocator(), "{d} frames elided", .{count}) catch "frames elided";
+        self.error_details.append(self.allocator, .{
+            .error_type = error_type,
+            .message = message,
+            .source = "",
+            .line = 0,
+            .word_name = null,
+            .elided_frames = count,
+        }) catch {};
+    }
+
     /// Fold the pending compiled frames and the live call stack into error_details, attaching
     /// the pending message, hint, and dispatch diagnostics to the innermost row.
     ///
@@ -8071,7 +8234,7 @@ pub const Context = struct {
             return;
         }
 
-        if (self.jit_pending_trace_frames.items.len <= pending_frame_mark and self.call_stack.items.len == 0) {
+        if (self.pendingErrorFrameCount() <= pending_frame_mark and self.call_stack.items.len == 0) {
             return;
         }
 
@@ -8113,14 +8276,32 @@ pub const Context = struct {
 
         var is_innermost = true;
 
-        var pending_i: usize = pending_frame_mark;
+        // The kept tail may run up to twice its cap between drops. Trim it to the cap, so the
+        // chain shows exactly the outermost frames the cap promises.
+        if (self.jit_pending_trace_elided > 0) {
+            const gap = self.jit_pending_trace_elided_at;
+            const tail_len = self.jit_pending_trace_frames.items.len -| gap;
+            if (tail_len > pending_frame_tail_cap) self.elidePendingFrames(tail_len - pending_frame_tail_cap);
+        }
+
+        const elided_here = self.pendingFramesElidedAbove(pending_frame_mark);
+        const elision_index = self.jit_pending_trace_elided_at;
+
+        var pending_i: usize = self.pendingFrameIndex(pending_frame_mark);
         while (pending_i < self.jit_pending_trace_frames.items.len) : (pending_i += 1) {
+            if (elided_here > 0 and pending_i == elision_index) {
+                self.appendElisionRow(error_type, elided_here);
+                is_innermost = false;
+            }
+
             const frame = self.jit_pending_trace_frames.items[pending_i];
 
             // A definition-located frame whose call site queued its own frame for the same word
             // would render that word twice. Drop it and let the call-site row take the message,
-            // carrying the effect along when the surviving row has none of its own.
-            if (frame.definition_located and pending_i + 1 < self.jit_pending_trace_frames.items.len and
+            // carrying the effect along when the surviving row has none of its own. Frames on either
+            // side of the dropped run are not neighbours, so they never pair.
+            const next_is_across_gap = elided_here > 0 and pending_i + 1 == elision_index;
+            if (frame.definition_located and !next_is_across_gap and pending_i + 1 < self.jit_pending_trace_frames.items.len and
                 std.mem.eql(u8, self.jit_pending_trace_frames.items[pending_i + 1].word_name, frame.word_name))
             {
                 if (self.jit_pending_trace_frames.items[pending_i + 1].stack_effect == null) {
@@ -8149,6 +8330,12 @@ pub const Context = struct {
                 .dispatch_actual_types = if (is_innermost) pending_dispatch_actual_types else null,
                 .dispatch_available_methods = if (is_innermost) pending_dispatch_available_methods else null,
             }) catch {};
+            is_innermost = false;
+        }
+
+        // A truncation can leave the dropped run with nothing kept after it.
+        if (elided_here > 0 and elision_index >= self.jit_pending_trace_frames.items.len) {
+            self.appendElisionRow(error_type, elided_here);
             is_innermost = false;
         }
 
@@ -8571,6 +8758,7 @@ pub const Context = struct {
                     .sp_ptr = &self.stack.items.items.len,
                     .capacity = self.stack.items.capacity,
                     .ctx = self,
+                    .stack_limit = self.stack_limit,
                 };
                 const saved_native = self.withCurrentNative(null);
                 defer self.restoreCurrentNative(saved_native);
@@ -9152,13 +9340,7 @@ pub const Context = struct {
                     }
                 }
                 if (sp <= self.stack_limit) {
-                    const used = self.stack_high -| sp;
-                    const total = self.stack_high -| self.stack_limit +| (32 * 1024);
-                    self.pending_error_message = std.fmt.allocPrint(
-                        self.arena.allocator(),
-                        "stack overflow: {} of {} bytes used",
-                        .{ used, total },
-                    ) catch "stack overflow";
+                    self.pending_error_message = self.stackOverflowMessage(sp);
                     return self.wordErrorCleanup(name, error.StackOverflow);
                 }
             }
@@ -9527,9 +9709,9 @@ pub const Context = struct {
                         // which is resolution failing before any frame was armed: the module
                         // binding missing, the binding not yielding a module, or the name not
                         // in the module. A raise past resolution pends the qualified row itself.
-                        const pend_mark = self.jit_pending_trace_frames.items.len;
+                        const pend_mark = self.pendingErrorFrameCount();
                         self.executeQualifiedName(name, instr.line, instr.column) catch |err| {
-                            if (self.jit_pending_trace_frames.items.len == pend_mark) {
+                            if (self.pendingErrorFrameCount() == pend_mark) {
                                 self.appendPendingErrorFrame(.{
                                     .word_name = name,
                                     .source = self.current_source,
@@ -10357,6 +10539,115 @@ test "finalizeErrorDetailsAbove folds only the frames above the mark" {
 
     try std.testing.expectEqual(@as(usize, 1), ctx.jit_pending_trace_frames.items.len);
     try std.testing.expectEqualStrings("enclosing", ctx.jit_pending_trace_frames.items[0].word_name);
+}
+
+test "appendPendingErrorFrame: an overlong unwind keeps a bounded head and tail and counts the rest" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const total: usize = 10_000;
+    var i: usize = 0;
+    while (i < total) : (i += 1) ctx.appendPendingSyntheticErrorFrame("level", "<test>", i, null);
+
+    try std.testing.expectEqual(total, ctx.pendingErrorFrameCount());
+    try std.testing.expect(ctx.jit_pending_trace_frames.items.len <= pending_frame_head_cap + 2 * pending_frame_tail_cap);
+    try std.testing.expectEqual(@as(usize, 0), ctx.jit_pending_trace_frames.items[0].line);
+    try std.testing.expectEqual(total - 1, ctx.jit_pending_trace_frames.items[ctx.jit_pending_trace_frames.items.len - 1].line);
+
+    ctx.finalizeErrorDetailsAbove(error.StackOverflow, 0, 0);
+
+    const rows = ctx.error_details.items;
+    try std.testing.expectEqual(pending_frame_head_cap + 1 + pending_frame_tail_cap, rows.len);
+    try std.testing.expectEqual(pending_frame_head_cap - 1, rows[pending_frame_head_cap - 1].line);
+    try std.testing.expectEqual(total - pending_frame_head_cap - pending_frame_tail_cap, rows[pending_frame_head_cap].elided_frames);
+    try std.testing.expectEqual(total - pending_frame_tail_cap, rows[pending_frame_head_cap + 1].line);
+    try std.testing.expectEqual(total - 1, rows[rows.len - 1].line);
+    try std.testing.expectEqual(@as(usize, 0), ctx.pendingErrorFrameCount());
+}
+
+test "truncatePendingErrorFrames: a mark inside the dropped run keeps the dropped frames below it" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    var i: usize = 0;
+    while (i < 10_000) : (i += 1) ctx.appendPendingSyntheticErrorFrame("level", "<test>", i, null);
+    const elided = ctx.jit_pending_trace_elided;
+    try std.testing.expect(elided > 0);
+
+    const mark = pending_frame_head_cap + elided / 2;
+    ctx.truncatePendingErrorFrames(mark);
+
+    try std.testing.expectEqual(mark, ctx.pendingErrorFrameCount());
+    try std.testing.expectEqual(pending_frame_head_cap, ctx.jit_pending_trace_frames.items.len);
+
+    // Frames pended after the truncation land after the gap and fold behind the elision row.
+    ctx.appendPendingSyntheticErrorFrame("after", "<test>", 99_999, null);
+    ctx.finalizeErrorDetailsAbove(error.StackOverflow, 0, 0);
+
+    const rows = ctx.error_details.items;
+    try std.testing.expectEqual(pending_frame_head_cap + 2, rows.len);
+    try std.testing.expectEqual(elided / 2, rows[pending_frame_head_cap].elided_frames);
+    try std.testing.expectEqualStrings("after", rows[pending_frame_head_cap + 1].word_name.?);
+}
+
+test "truncatePendingErrorFrames: a mark in the head clears the dropped run" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    var i: usize = 0;
+    while (i < 10_000) : (i += 1) ctx.appendPendingSyntheticErrorFrame("level", "<test>", i, null);
+
+    ctx.truncatePendingErrorFrames(10);
+
+    try std.testing.expectEqual(@as(usize, 10), ctx.pendingErrorFrameCount());
+    try std.testing.expectEqual(@as(usize, 0), ctx.jit_pending_trace_elided);
+}
+
+test "reattachCallbackErrorState: a contribution with its own drops keeps the count and the order" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    var i: usize = 0;
+    while (i < 5_000) : (i += 1) ctx.appendPendingSyntheticErrorFrame("enclosing", "<test>", i, null);
+    const saved = ctx.saveErrorState();
+    while (i < 10_000) : (i += 1) ctx.appendPendingSyntheticErrorFrame("callback", "<test>", i, null);
+
+    ctx.detachErrorStateForCallback(saved);
+    try std.testing.expectEqual(saved.pending_frame_mark, ctx.pendingErrorFrameCount());
+
+    ctx.reattachCallbackErrorState();
+    try std.testing.expectEqual(@as(usize, 10_000), ctx.pendingErrorFrameCount());
+
+    ctx.finalizeErrorDetailsAbove(error.StackOverflow, 0, 0);
+
+    const rows = ctx.error_details.items;
+    var elision_rows: usize = 0;
+    var elided_total: usize = 0;
+    var last_line: usize = 0;
+    for (rows) |row| {
+        if (row.elided_frames > 0) {
+            elision_rows += 1;
+            elided_total += row.elided_frames;
+            continue;
+        }
+        try std.testing.expect(row.line >= last_line);
+        last_line = row.line;
+    }
+    try std.testing.expectEqual(@as(usize, 1), elision_rows);
+    try std.testing.expectEqual(@as(usize, 10_000), rows.len - 1 + elided_total);
+    try std.testing.expectEqual(@as(usize, 9_999), last_line);
+}
+
+test "cachedTraceEffect: one raw string parses once" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const raw: []const u8 = "a b -- b a";
+    const first = ctx.cachedTraceEffect(raw) orelse return error.TestExpectedEffect;
+    const second = ctx.cachedTraceEffect(raw) orelse return error.TestExpectedEffect;
+
+    try std.testing.expectEqual(first, second);
+    try std.testing.expectEqual(@as(usize, 2), first.inputs.len);
 }
 
 test "finalizeErrorDetailsAbove reads the first-error gate against its own mark" {

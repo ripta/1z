@@ -1,0 +1,2 @@
+PASS: one row stands in for the dropped frames
+PASS: the chain keeps a bounded number of frames

@@ -100,6 +100,7 @@ fn printErrorDetails(ctx: *Context, writer: anytype, err: anyerror) void {
                         .word_name = detail.word_name orelse detail.message,
                         .source = detail.source,
                         .line = detail.line,
+                        .elided = detail.elided_frames,
                     };
                 }
                 stack_trace = f;
@@ -164,6 +165,10 @@ fn printErrorDetailRows(ctx: *Context, writer: anytype, err: anyerror) void {
         // print remaining caller chain
         if (details.len > 1) {
             for (details[1..]) |frame| {
+                if (frame.elided_frames > 0) {
+                    writer.print("  ... {d} frames elided\n", .{frame.elided_frames}) catch return;
+                    continue;
+                }
                 writer.print("  called from {s}:{d}: {s}\n", .{
                     frame.source,
                     frame.line,

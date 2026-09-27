@@ -1,0 +1,12 @@
+\ The cycle from tail_boundary_mutual_cycle.1z, pinned hybrid. Hybrid compiles both `ping` and
+\ `pong` after about a hundred calls, and from there they call each other directly, so no
+\ interpreter frame ever checks the stack. The compiled entry check raises a catchable
+\ `stack-overflow` where the process used to die on a signal.
+\
+\ Only the error type is printed, and the counter the unwound iterations leave behind is wiped,
+\ since both depths move with the build. Running flat is the target.
+
+pong: ( n -- ) [ 1 - ping ] ;
+ping: ( n -- ) [ dup 0 > [ pong ] [ drop "done" print-line ] if ] ;
+
+[ 2000000 ping ] [ error-type: @get . wipe ] recover

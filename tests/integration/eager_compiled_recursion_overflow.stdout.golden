@@ -1,0 +1,1 @@
+PASS: compiled deep recursion raises catchable stack-overflow

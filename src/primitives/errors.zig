@@ -123,6 +123,7 @@ fn traceFromDetails(ctx: *Context, detail_mark: usize) ?[]const StackFrame {
             .word_name = detail.word_name orelse detail.message,
             .source = detail.source,
             .line = detail.line,
+            .elided = detail.elided_frames,
         };
     }
     return frames;
@@ -246,6 +247,7 @@ pub fn nativeRethrow(ctx: *Context) anyerror!void {
                         .source = frame.source,
                         .line = frame.line,
                         .word_name = frame.word_name,
+                        .elided_frames = frame.elided,
                     }) catch {};
                 }
             }

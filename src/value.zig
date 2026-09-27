@@ -1579,6 +1579,8 @@ pub const StackFrame = struct {
     word_name: []const u8,
     source: []const u8,
     line: usize,
+    /// Nonzero on the one entry standing in for frames an overlong chain dropped.
+    elided: usize = 0,
 };
 
 /// ErrorObject represents a structured error with type, message, optional data, and optional stack trace.
@@ -1599,7 +1601,11 @@ pub const ErrorObject = struct {
             try writer.writeAll(" [");
             for (trace, 0..) |frame, i| {
                 if (i > 0) try writer.writeAll(" <- ");
-                try writer.print("{s}:{d}:{s}", .{ frame.source, frame.line, frame.word_name });
+                if (frame.elided > 0) {
+                    try writer.print("... {d} frames elided", .{frame.elided});
+                } else {
+                    try writer.print("{s}:{d}:{s}", .{ frame.source, frame.line, frame.word_name });
+                }
             }
             try writer.writeAll("]");
         }
@@ -1629,6 +1635,7 @@ pub const ErrorObject = struct {
         for (a, b) |fa, fb| {
             if (!std.mem.eql(u8, fa.word_name, fb.word_name)) return false;
             if (fa.line != fb.line) return false;
+            if (fa.elided != fb.elided) return false;
         }
         return true;
     }

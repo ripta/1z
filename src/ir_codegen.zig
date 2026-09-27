@@ -9101,6 +9101,11 @@ pub const JitContext = extern struct {
     capacity: usize,
     ctx: *anyopaque,
     trampoline_target: u32 = 0,
+    /// The lowest native stack address compiled code may enter a word at, copied from the
+    /// executing context's guard. `jitEntryCheck` raises `stack-overflow` below it, and `0`
+    /// disarms the check. It has no default, so no construction site can leave it unarmed by
+    /// omission.
+    stack_limit: usize,
 };
 
 /// Layout offsets for JitContext fields, discovered at runtime.
@@ -9495,11 +9500,9 @@ fn compileWordPass(
     const release_slot_fn = c.ir_const_addr(&ctx, @intFromPtr(&jitReleaseSlot));
     const unwrap_tagged_slot_fn = c.ir_const_addr(&ctx, @intFromPtr(&jitUnwrapTaggedSlot));
 
-    // jitEnsureStackCapacity grows ctx.stack to cover the word's peak depth
-    // when the capacity reserved by executeCompiled is insufficient. Needed
-    // because compiled-to-compiled recursion bypasses executeCompiled's
-    // capacity check, so each compiled entry re-validates.
-    const ensure_cap_fn = c.ir_const_addr(&ctx, @intFromPtr(&jitEnsureStackCapacity));
+    // Compiled-to-compiled recursion bypasses both the interpreter's stack guard and
+    // executeCompiled's capacity check, so each compiled entry re-validates through jitEntryCheck.
+    const ensure_cap_fn = c.ir_const_addr(&ctx, @intFromPtr(&jitEntryCheck));
 
     const validate_params_fn = if (scan_flags.needs_param_validation)
         c.ir_const_addr(&ctx, @intFromPtr(&jitValidateParamEffects))
@@ -9523,28 +9526,24 @@ fn compileWordPass(
     // Load current stack depth
     const sp_val = c._ir_LOAD(&ctx, c.IR_ADDR, sp_ptr);
 
-    // Prologue capacity check: unconditionally call jitEnsureStackCapacity to
-    // grow the stack if sp + peak_stack_depth exceeds the current capacity.
-    // The helper is a fast no-op when capacity already suffices. An
-    // unconditional call avoids the PHI / diamond control flow that can
-    // interact badly with the register allocator. known_peak is null on the
-    // discovery pass and non-null on the emission pass.
+    // The entry check is called unconditionally, even at a peak of zero, since a word that pushes
+    // nothing can still recurse. An unconditional call also avoids the PHI / diamond control flow
+    // that can interact badly with the register allocator. known_peak is null on the discovery
+    // pass and non-null on the emission pass.
     var items_ptr_after_check = items_ptr;
     if (known_peak) |peak| {
-        if (peak > 0) {
-            const peak_const = c.ir_const_addr(&ctx, peak);
-            const needed = c.ir_fold2(&ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), sp_val, peak_const);
-            const ensure_status = c._ir_CALL_2(&ctx, c.IR_I32, ensure_cap_fn, jit_ctx_ptr, needed);
-            const ensure_failed = c.ir_fold2(&ctx, c.IR_OPT(c.IR_NE, c.IR_BOOL), ensure_status, ok_status);
-            const if_oom = c._ir_IF(&ctx, ensure_failed);
-            c._ir_IF_TRUE_cold(&ctx, if_oom);
-            // jitEnsureStackCapacity returns 2 (error_propagate) on OOM.
-            c._ir_RETURN(&ctx, ensure_status);
-            c._ir_IF_FALSE(&ctx, if_oom);
-            // Re-LOAD items_ptr after the call. IR treats calls as memory
-            // clobbers, so this LOAD is not CSE'd against the original.
-            items_ptr_after_check = c._ir_LOAD(&ctx, c.IR_ADDR, jit_ctx_ptr);
-        }
+        const peak_const = c.ir_const_addr(&ctx, peak);
+        const needed = c.ir_fold2(&ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), sp_val, peak_const);
+        const ensure_status = c._ir_CALL_2(&ctx, c.IR_I32, ensure_cap_fn, jit_ctx_ptr, needed);
+        const ensure_failed = c.ir_fold2(&ctx, c.IR_OPT(c.IR_NE, c.IR_BOOL), ensure_status, ok_status);
+        const if_failed = c._ir_IF(&ctx, ensure_failed);
+        c._ir_IF_TRUE_cold(&ctx, if_failed);
+        // jitEntryCheck returns 2 (error_propagate) on overflow or OOM.
+        c._ir_RETURN(&ctx, ensure_status);
+        c._ir_IF_FALSE(&ctx, if_failed);
+        // Re-LOAD items_ptr after the call. IR treats calls as memory
+        // clobbers, so this LOAD is not CSE'd against the original.
+        items_ptr_after_check = c._ir_LOAD(&ctx, c.IR_ADDR, jit_ctx_ptr);
     }
 
     // Check stack has enough values (sp >= input_count)
@@ -10280,13 +10279,10 @@ fn emitWordCAotPass(
     const release_slot_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "jitReleaseSlot"), proto_1arg);
     const unwrap_tagged_slot_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "jitUnwrapTaggedSlot"), proto_1arg);
 
-    // jitEnsureStackCapacity is called unconditionally in the AOT prologue to
-    // grow ctx.stack when the capacity reserved by executeCompiled is
-    // insufficient. Unconditional (rather than branching as the JIT path does)
-    // sidesteps the ir_emit_c vreg-0 bug documented at the capacity_param
-    // load above. Cheap: one call per compiled-word entry, no-op when
-    // capacity already suffices.
-    const ensure_cap_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "jitEnsureStackCapacity"), proto_2arg);
+    // jitEntryCheck is called unconditionally in the AOT prologue. Doing its compares inside the
+    // helper rather than inline sidesteps the ir_emit_c vreg-0 bug documented at the
+    // capacity_param load above.
+    const ensure_cap_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "jitEntryCheck"), proto_2arg);
 
     const validate_params_fn = if (scan_flags.needs_param_validation)
         c.ir_const_func(&ctx, c.ir_str(&ctx, "jitValidateParamEffects"), proto_2arg)
@@ -10336,24 +10332,22 @@ fn emitWordCAotPass(
     const ctx_addr = c.ir_fold2(&ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), jit_ctx_ptr, ctx_off);
     const preloaded_ctx_val = c._ir_LOAD(&ctx, c.IR_ADDR, ctx_addr);
 
-    // Prologue capacity growth (unconditional). known_peak is null on the
-    // discovery pass and non-null on the emission pass.
+    // The entry check runs even at a peak of zero, since a word that pushes nothing can still
+    // recurse. known_peak is null on the discovery pass and non-null on the emission pass.
     var items_ptr_after_check = items_ptr;
     if (known_peak) |peak| {
-        if (peak > 0) {
-            const peak_const = c.ir_const_addr(&ctx, peak);
-            const needed = c.ir_fold2(&ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), sp_val, peak_const);
-            const ensure_status = c._ir_CALL_2(&ctx, c.IR_I32, ensure_cap_fn, jit_ctx_ptr, needed);
-            const ensure_failed = c.ir_fold2(&ctx, c.IR_OPT(c.IR_NE, c.IR_BOOL), ensure_status, ok_status);
-            const if_oom = c._ir_IF(&ctx, ensure_failed);
-            c._ir_IF_TRUE_cold(&ctx, if_oom);
-            // jitEnsureStackCapacity returns 2 (error_propagate) on OOM.
-            c._ir_RETURN(&ctx, ensure_status);
-            c._ir_IF_FALSE(&ctx, if_oom);
-            // Re-load items_ptr from the JitContext since ensureStackCapacity
-            // may have grown the backing slice and moved the pointer.
-            items_ptr_after_check = c._ir_LOAD(&ctx, c.IR_ADDR, jit_ctx_ptr);
-        }
+        const peak_const = c.ir_const_addr(&ctx, peak);
+        const needed = c.ir_fold2(&ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), sp_val, peak_const);
+        const ensure_status = c._ir_CALL_2(&ctx, c.IR_I32, ensure_cap_fn, jit_ctx_ptr, needed);
+        const ensure_failed = c.ir_fold2(&ctx, c.IR_OPT(c.IR_NE, c.IR_BOOL), ensure_status, ok_status);
+        const if_failed = c._ir_IF(&ctx, ensure_failed);
+        c._ir_IF_TRUE_cold(&ctx, if_failed);
+        // jitEntryCheck returns 2 (error_propagate) on overflow or OOM.
+        c._ir_RETURN(&ctx, ensure_status);
+        c._ir_IF_FALSE(&ctx, if_failed);
+        // Re-load items_ptr from the JitContext since jitEntryCheck may have
+        // grown the backing slice and moved the pointer.
+        items_ptr_after_check = c._ir_LOAD(&ctx, c.IR_ADDR, jit_ctx_ptr);
     }
 
     if (input_count > 0) {
@@ -12050,7 +12044,7 @@ pub fn emitProgramC(
     try out.appendSlice(allocator, "extern int32_t jitRetainSlot(uintptr_t value_ptr);\n");
     try out.appendSlice(allocator, "extern int32_t jitReleaseSlot(uintptr_t value_ptr);\n");
     try out.appendSlice(allocator, "extern int32_t jitUnwrapTaggedSlot(uintptr_t value_ptr);\n");
-    try out.appendSlice(allocator, "extern int32_t jitEnsureStackCapacity(uintptr_t jit_ctx, uintptr_t needed);\n");
+    try out.appendSlice(allocator, "extern int32_t jitEntryCheck(uintptr_t jit_ctx, uintptr_t needed);\n");
     try out.appendSlice(allocator, "extern int32_t jitValidateParamEffects(uintptr_t ctx, uintptr_t effect_ptr);\n");
     try out.appendSlice(allocator, "extern int32_t jitCallQuotation(uintptr_t ctx);\n");
     try out.appendSlice(allocator, "extern int32_t jitCallQuotationValue(uintptr_t ctx, uintptr_t value_ptr);\n");
@@ -13696,7 +13690,7 @@ fn liveSlotAddr(state: *CompileState, slot: usize) c.ir_ref {
 /// Re-LOAD items_ptr from the JitContext struct and recompute base_addr,
 /// updating state.items_ptr and state.base_addr so subsequent emissions use
 /// the fresh refs. Call this immediately after any IR call that may have
-/// moved ctx.stack.items (jitRefreshStack or jitEnsureStackCapacity).
+/// moved ctx.stack.items (jitRefreshStack or jitEntryCheck).
 fn refreshCachedStackPointer(state: *CompileState) void {
     const live = liveBaseAddr(state);
     state.items_ptr = live.items_ptr;
@@ -14801,6 +14795,7 @@ export fn aotTryDispatchGenericOrCall(
         .sp_ptr = &ctx.stack.items.items.len,
         .capacity = ctx.stack.items.capacity,
         .ctx = ctx,
+        .stack_limit = ctx.stack_limit,
     };
     return func(&jit_ctx);
 }
@@ -15648,16 +15643,32 @@ export fn jitRefreshStack(jit_ctx_raw: usize) callconv(.c) i32 {
     return 0;
 }
 
-/// Grow ctx.stack capacity to at least `needed` slots and refresh the
-/// JitContext fields. Called from the compiled prologue when
-/// `sp + peak_stack_depth` exceeds the capacity captured when
-/// `executeCompiled` entered the initial frame. Recursive
-/// compiled-to-compiled calls bypass `executeCompiled`'s capacity
-/// reservation, so each compiled entry must re-check and grow the stack
-/// itself. Returns 0 on success, 2 (error_propagate) on OOM.
-export fn jitEnsureStackCapacity(jit_ctx_raw: usize, needed: usize) callconv(.c) i32 {
+fn raiseJitStackOverflow(jc: *JitContext, sp: usize) i32 {
+    @branchHint(.cold);
+    const ctx_raw: usize = @intFromPtr(jc.ctx);
+    if (ctx_raw == 0 or ctx_raw % @alignOf(Context) != 0) return 2;
+    const ctx: *Context = @ptrCast(@alignCast(jc.ctx));
+    ctx.pending_error_message = ctx.stackOverflowMessage(sp);
+    ctx.jit_pending_error = error.StackOverflow;
+    return 2;
+}
+
+/// The check every compiled word and compiled quotation makes on entry, from its prologue.
+///
+/// It raises `stack-overflow` when the native stack is below `jc.stack_limit`. A compiled word
+/// calling a compiled word never passes through the interpreter's guard, so without this a
+/// compiled recursion runs into the OS guard page. The frame measured is this helper's own, one
+/// call below the word's, which errs on the early side.
+///
+/// It then grows ctx.stack to at least `needed` slots and refreshes the JitContext fields. A
+/// compiled-to-compiled call bypasses `executeCompiled`'s capacity reservation, so each entry
+/// re-checks. Returns 0 on success, 2 (error_propagate) on overflow or OOM.
+export fn jitEntryCheck(jit_ctx_raw: usize, needed: usize) callconv(.c) i32 {
     if (jit_ctx_raw == 0) return 2;
     const jc: *JitContext = @ptrFromInt(jit_ctx_raw);
+    const sp = @frameAddress();
+    if (sp <= jc.stack_limit) return raiseJitStackOverflow(jc, sp);
+
     // Fast path: capacity already suffices, so there is nothing to do and
     // ctx does not need to be dereferenced. This keeps unit tests that pass
     // a sentinel ctx working.
@@ -15688,12 +15699,12 @@ fn setJitError(ctx_raw: usize, err: anyerror) i32 {
 ///
 /// The JIT bakes the definition's boxed effect pointer with a zero length. AOT cannot bake a
 /// process pointer, so it bakes the rendered effect body as a literal, parsed here on the cold
-/// path onto the context arena.
+/// path, once per literal.
 fn resolveBakedTraceEffect(ctx: *Context, effect_ptr_raw: usize, effect_len_raw: usize) ?*const StackEffect {
     if (effect_ptr_raw == 0) return null;
     if (effect_len_raw == 0) return @ptrFromInt(effect_ptr_raw);
     const bytes: [*]const u8 = @ptrFromInt(effect_ptr_raw);
-    return helpers.makeBoxedEffect(ctx.arena.allocator(), bytes[0..effect_len_raw]) catch null;
+    return ctx.cachedTraceEffect(bytes[0..effect_len_raw]);
 }
 
 export fn jitAppendNamedTraceFrame(
@@ -15770,10 +15781,7 @@ export fn jitAppendBuiltinTraceFrame(
         .cleanup => comptime builtinFrameEffectString("cleanup"),
         .choose_op => comptime builtinFrameEffectString("choose"),
     };
-    const effect: ?*const StackEffect = if (effect_str) |raw|
-        helpers.makeBoxedEffect(ctx.arena.allocator(), raw) catch null
-    else
-        null;
+    const effect: ?*const StackEffect = if (effect_str) |raw| ctx.cachedTraceEffect(raw) else null;
     const source = ctx.traceFrameSource(src_ptr_raw, src_len_raw);
     ctx.appendPendingSyntheticErrorFrame(word_name, source, @intCast(line_raw), effect);
     return 0;
@@ -15923,6 +15931,7 @@ fn runCompiledQuotationBody(ctx: *Context, q: value_mod.Quotation) !void {
         .sp_ptr = &ctx.stack.items.items.len,
         .capacity = ctx.stack.items.capacity,
         .ctx = ctx,
+        .stack_limit = ctx.stack_limit,
     };
     const saved_native = ctx.withCurrentNative(null);
     defer ctx.restoreCurrentNative(saved_native);
@@ -16556,7 +16565,7 @@ pub const ExecResult = enum {
 pub fn executeCompiled(ctx: *Context, word_id: u32) ExecResult {
     // Frames already pending belong to an enclosing unwind whose cleanup quotation reached
     // this call. Leave them; discard only what this execution appends and abandons.
-    const pending_mark = ctx.jit_pending_trace_frames.items.len;
+    const pending_mark = ctx.pendingErrorFrameCount();
     const saved_trace_source = ctx.jit_trace_source;
     defer ctx.jit_trace_source = saved_trace_source;
 
@@ -16600,6 +16609,7 @@ pub fn executeCompiled(ctx: *Context, word_id: u32) ExecResult {
         .sp_ptr = &ctx.stack.items.items.len,
         .capacity = ctx.stack.items.capacity,
         .ctx = ctx,
+        .stack_limit = ctx.stack_limit,
     };
     var func: CompiledFn = @ptrCast(@alignCast(code_ptr));
     var status = func(&jit_ctx);
@@ -16752,6 +16762,40 @@ test "jitPushQuotation: runtime-image push caches the decode and stamps the defi
 
     // The cached second push preserves the effect the first decode recovered.
     try testing.expectEqual(first.quotation.effect, second.quotation.effect);
+}
+
+test "jitEntryCheck: a frame at or below the stack limit raises stack-overflow" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    ctx.stack_high = @frameAddress() + 4096;
+    var jit_ctx = JitContext{
+        .items_ptr = ctx.stack.items.items.ptr,
+        .sp_ptr = &ctx.stack.items.items.len,
+        .capacity = ctx.stack.items.capacity,
+        .ctx = &ctx,
+        .stack_limit = std.math.maxInt(usize),
+    };
+
+    try testing.expectEqual(@as(i32, 2), jitEntryCheck(@intFromPtr(&jit_ctx), 0));
+    try testing.expectEqual(error.StackOverflow, ctx.jit_pending_error.?);
+    try testing.expect(std.mem.startsWith(u8, ctx.pending_error_message.?, "stack overflow: "));
+}
+
+test "jitEntryCheck: a zero stack limit disarms the check" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    var jit_ctx = JitContext{
+        .items_ptr = ctx.stack.items.items.ptr,
+        .sp_ptr = &ctx.stack.items.items.len,
+        .capacity = ctx.stack.items.capacity,
+        .ctx = &ctx,
+        .stack_limit = 0,
+    };
+
+    try testing.expectEqual(@as(i32, 0), jitEntryCheck(@intFromPtr(&jit_ctx), 0));
+    try testing.expectEqual(@as(?anyerror, null), ctx.jit_pending_error);
 }
 
 test "jitPushQuotation: a truncated stream propagates TruncatedBytecode" {
@@ -17666,6 +17710,7 @@ fn callCompiled(func: CompiledFn, inputs: []const i64, result: *i64) i32 {
         .sp_ptr = &sp,
         .capacity = values.len,
         .ctx = @ptrFromInt(@as(usize, 1)),
+        .stack_limit = 0,
     };
     const status = func(&jit_ctx);
     if (status == 0 and sp > 0) {
@@ -17685,6 +17730,7 @@ fn callCompiledValues(func: CompiledFn, values: []Value, sp: *usize) i32 {
         .sp_ptr = sp,
         .capacity = buf.len,
         .ctx = @ptrFromInt(@as(usize, 1)),
+        .stack_limit = 0,
     };
     const status = func(&jit_ctx);
     @memcpy(values, buf[0..values.len]);
@@ -18527,7 +18573,7 @@ test "compiled direct call preserves aliased lower stack values" {
 
 /// Run a compiled function against a real interpreter Context whose value
 /// stack can actually relocate. Inputs must already be pushed onto ctx.stack;
-/// the JitContext points at the live stack pointers so jitEnsureStackCapacity
+/// the JitContext points at the live stack pointers so jitEntryCheck
 /// reallocation during execution is observed through the same JitContext the
 /// generated code reads. Returns the status and, on success, the top-of-stack
 /// fixnum read back from the (possibly relocated) buffer.
@@ -18537,6 +18583,7 @@ fn runOnContext(func: CompiledFn, ctx: *Context, result: *i64) i32 {
         .sp_ptr = &ctx.stack.items.items.len,
         .capacity = ctx.stack.items.capacity,
         .ctx = @ptrCast(ctx),
+        .stack_limit = ctx.stack_limit,
     };
     const status = func(&jit_ctx);
     const len = ctx.stack.items.items.len;
@@ -18549,7 +18596,7 @@ fn runOnContext(func: CompiledFn, ctx: *Context, result: *i64) i32 {
 test "relocation across a direct compiled call preserves a lower-stack alias" {
     // The `1 - over swap (callee) *` shape keeps `base` aliased at slot 0 while
     // the callee runs. Here the callee forces a real stack reallocation in its
-    // prologue (jitEnsureStackCapacity), so the value buffer moves mid-call. The
+    // prologue (jitEntryCheck), so the value buffer moves mid-call. The
     // caller must read its preserved slot-0 alias from the relocated buffer
     // after the call boundary, which only holds if the base address is
     // re-derived from the live JitContext rather than a stale cached pointer.
@@ -20559,6 +20606,47 @@ test "emitted C compiles with cc" {
     try child.spawn();
     const result = try child.wait();
     try testing.expectEqual(std.process.Child.Term{ .Exited = 0 }, result);
+}
+
+test "emitWordCAot emits the entry check for a word that pushes nothing" {
+    // A word with no stack growth can still recurse, so the native stack check has to run on
+    // its entry even though no value-stack capacity needs reserving.
+    const instrs = makeInstructions(.{});
+    var compiled_names: std.StringHashMapUnmanaged(u32) = .{};
+    defer compiled_names.deinit(testing.allocator);
+
+    const source = try emitWordCAot(
+        &instrs,
+        0,
+        0,
+        "idle",
+        null,
+        null,
+        &compiled_names,
+        .{},
+        null,
+        null,
+        null,
+        testing.allocator,
+        null,
+        &.{},
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        false,
+        null,
+        false,
+        false,
+        false,
+    );
+    defer testing.allocator.free(source);
+
+    try testing.expect(std.mem.indexOf(u8, source, "jitEntryCheck(") != null);
 }
 
 test "emitWordCAot emits named callback for safepoint" {

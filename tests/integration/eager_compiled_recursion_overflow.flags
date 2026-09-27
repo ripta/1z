@@ -1,0 +1,2 @@
+--compile=eager
+--no-show-stack

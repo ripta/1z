@@ -1,0 +1,13 @@
+\ The mutual cycle from tests/integration/tail_boundary_mutual_cycle.1z, compiled into the binary.
+\ Both words compile, and they call each other directly, so the compiled entry check is the only
+\ guard on the native stack. It raises a catchable error where the binary used to die on a signal.
+\ Running flat is the target.
+\
+\ The handler wipes the counter the unwound iterations leave behind along with the error. It
+\ reports only that it ran, since reading the error type needs a native the interpreter-free class
+\ cannot compile. The integration twins pin the type.
+
+pong: ( n -- ) [ 1 - ping ] ;
+ping: ( n -- ) [ dup 0 > [ pong ] [ drop "done" print-line ] if ] ;
+
+[ 2000000 ping ] [ wipe "caught the overflow" print-line ] recover

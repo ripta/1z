@@ -14,7 +14,7 @@ use "strings" ;
 use "sequences" ;
 
 \ Pushes thirty values and drops them: its peak stack usage forces
-\ jitEnsureStackCapacity to grow (and relocate) the value buffer when called at
+\ jitEntryCheck to grow (and relocate) the value buffer when called at
 \ depth, which is what leaves the loop's entry-time base pointer dangling.
 grow: ( -- ) [ 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 30 drop-n ] ;
 

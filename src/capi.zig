@@ -2591,6 +2591,21 @@ export fn onez_runtime_run(ptr: ?*anyopaque, entry_word_id: u32) i32 {
     const frame_mark = ctx.local_frames.items.len;
     defer ctx.truncateLocalFrames(frame_mark);
 
+    // Nothing else arms the native stack guard for a binary's main thread, so without this a deep
+    // recursion runs into the OS guard page rather than raising `stack-overflow`.
+    //
+    // The bounds are the calling thread's. They are restored for a host that later runs the same
+    // context on another thread.
+    const saved_stack_high = ctx.stack_high;
+    const saved_stack_limit = ctx.stack_limit;
+    defer {
+        ctx.stack_high = saved_stack_high;
+        ctx.stack_limit = saved_stack_limit;
+    }
+    if (comptime !is_freestanding) {
+        if (ctx.stack_limit == 0) ctx.setStackBoundsFromCurrentThread();
+    }
+
     const entry = ctx.jit_dispatch.get(entry_word_id) orelse return 1;
     var code_ptr = entry.code_ptr orelse return 1;
 
@@ -2599,6 +2614,7 @@ export fn onez_runtime_run(ptr: ?*anyopaque, entry_word_id: u32) i32 {
         .sp_ptr = &ctx.stack.items.items.len,
         .capacity = ctx.stack.items.capacity,
         .ctx = ctx,
+        .stack_limit = ctx.stack_limit,
     };
     var func: *const fn (*JitContext) callconv(.c) i32 = @ptrCast(@alignCast(code_ptr));
     var status = func(&jit_ctx);
@@ -2687,6 +2703,10 @@ export fn onez_print_error(ptr: ?*anyopaque) void {
 
         if (details.len > 1) {
             for (details[1..]) |frame| {
+                if (frame.elided_frames > 0) {
+                    stderr.interface.print("  ... {d} frames elided\n", .{frame.elided_frames}) catch {};
+                    continue;
+                }
                 stderr.interface.print("  called from {s}:{d}: {s}\n", .{
                     frame.source,
                     frame.line,

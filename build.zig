@@ -860,6 +860,31 @@ fn addBaremetalRiscv64VirtTest(
 
     const install_once = b.addInstallFile(once_elf, "baremetal/riscv64/1z-once.elf");
 
+    // NOTE(ripta): AOT-compile a recursion deep enough to exhaust the 64K boot stack. The compiled
+    //              entry check reads its limit from the linker script's stack symbols, so the run
+    //              fails cleanly instead of writing past the stack into whatever sits below it.
+    const deep_build = b.addRunArtifact(host_exe);
+    deep_build.setName("baremetal aot build: deep");
+    restoreHostDeveloperDir(b, deep_build);
+    deep_build.addArg("build");
+    deep_build.addArg("--target=riscv64-freestanding-none");
+    deep_build.addArg("--interpreter-fallback=false");
+    deep_build.addPrefixedFileArg("--linker-script=", b.path("src/baremetal/riscv64/virt/linker.ld"));
+    deep_build.addPrefixedFileArg("--link-object=", entry_lib.getEmittedBin());
+    deep_build.addPrefixedFileArg("--link-object=", platform_lib.getEmittedBin());
+    deep_build.addPrefixedFileArg("--link-object=", runtime_lib.getEmittedBin());
+    deep_build.addArg("-o");
+    const deep_elf = deep_build.addOutputFileArg("1z-deep.elf");
+    deep_build.addFileArg(b.path("tests/baremetal/riscv64/deep.1z"));
+
+    const deep_verify = b.addSystemCommand(&.{ "sh", "-c", baremetal_verify_script, "baremetal-verify" });
+    deep_verify.addFileArg(deep_elf);
+    restoreHostDeveloperDir(b, deep_verify);
+    deep_verify.setName("baremetal aot verify: deep symbols and no libc");
+    deep_verify.expectExitCode(0);
+
+    const install_deep = b.addInstallFile(deep_elf, "baremetal/riscv64/1z-deep.elf");
+
     const test_step = b.step("baremetal-riscv64-test", "Compile riscv64 virt platform library, stubs, and AOT freestanding ELFs");
     test_step.dependOn(&platform_lib.step);
     test_step.dependOn(&runtime_lib.step);
@@ -874,6 +899,8 @@ fn addBaremetalRiscv64VirtTest(
     test_step.dependOn(&install_mixed.step);
     test_step.dependOn(&once_verify.step);
     test_step.dependOn(&install_once.step);
+    test_step.dependOn(&deep_verify.step);
+    test_step.dependOn(&install_deep.step);
 
     return test_step;
 }

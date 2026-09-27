@@ -302,7 +302,7 @@ comptime {
         @export(&jitCallCodePtr, .{ .name = "jitCallCodePtr" });
         @export(&jitCallValue, .{ .name = "jitCallValue" });
         @export(&jitRefreshStack, .{ .name = "jitRefreshStack" });
-        @export(&jitEnsureStackCapacity, .{ .name = "jitEnsureStackCapacity" });
+        @export(&jitEntryCheck, .{ .name = "jitEntryCheck" });
         @export(&jitRetainSlot, .{ .name = "jitRetainSlot" });
         @export(&jitReleaseSlot, .{ .name = "jitReleaseSlot" });
         @export(&jitUnwrapTaggedSlot, .{ .name = "jitUnwrapTaggedSlot" });
@@ -424,7 +424,24 @@ pub const JitContext = extern struct {
     capacity: usize,
     ctx: *anyopaque,
     trampoline_target: u32 = 0,
+    stack_limit: usize,
 };
+
+/// The native stack guard for compiled code: an eighth of the stack region above its bottom,
+/// the reserve every hosted tier keeps. This runtime has no `Context` to carry it, so the bounds
+/// come from the linker script's `__stack_start` and `__stack_top`.
+///
+/// A linker script has to define both, and a link without them fails. A host build of this file,
+/// which is how its unit tests run, never references them.
+fn freestandingStackLimit() usize {
+    if (comptime builtin.os.tag != .freestanding) return 0;
+
+    const low = @intFromPtr(@extern(*const u8, .{ .name = "__stack_start" }));
+    const high = @intFromPtr(@extern(*const u8, .{ .name = "__stack_top" }));
+    if (high <= low) return 0;
+
+    return low + (high - low) / 8;
+}
 
 fn allocator() std.mem.Allocator {
     return freestanding_fba.allocator();
@@ -631,6 +648,7 @@ fn forceOnce(handle: *OnezHandle, cell: *OnceCell) i32 {
         .sp_ptr = &handle.stack_len,
         .capacity = handle.stack.len,
         .ctx = handle,
+        .stack_limit = freestandingStackLimit(),
     };
     const status = func(&jit_ctx);
     if (status != 0) {
@@ -1254,6 +1272,7 @@ fn runFreestandingDispatchBody(handle: *OnezHandle, entry: dispatch_mod.Dispatch
                 .sp_ptr = &handle.stack_len,
                 .capacity = handle.stack.len,
                 .ctx = handle,
+                .stack_limit = freestandingStackLimit(),
             };
             return func(&jit_ctx);
         },
@@ -1305,6 +1324,7 @@ fn aotTryDispatchGenericOrCall(ctx_raw: usize, dispatch_id_raw: usize, word_id_r
         .sp_ptr = &handle.stack_len,
         .capacity = handle.stack.len,
         .ctx = handle,
+        .stack_limit = freestandingStackLimit(),
     };
     return code_ptr(&jit_ctx);
 }
@@ -1774,6 +1794,7 @@ fn onez_runtime_run(ptr: ?*anyopaque, entry_word_id: u32) callconv(.c) i32 {
         .sp_ptr = &handle.stack_len,
         .capacity = handle.stack.len,
         .ctx = handle,
+        .stack_limit = freestandingStackLimit(),
     };
     var status = code_ptr(&jit_ctx);
 
@@ -1927,8 +1948,14 @@ fn jitRefreshStack(jit_ctx_raw: usize) callconv(.c) i32 {
     return 0;
 }
 
-fn jitEnsureStackCapacity(jit_ctx_raw: usize, needed: usize) callconv(.c) i32 {
+fn jitEntryCheck(jit_ctx_raw: usize, needed: usize) callconv(.c) i32 {
     const jc = contextFromJit(jit_ctx_raw) orelse return 2;
+    if (@frameAddress() <= jc.stack_limit) {
+        const handle: *OnezHandle = @ptrCast(@alignCast(jc.ctx));
+        setLastError(handle, "stack overflow", .{});
+        return 2;
+    }
+
     if (needed <= jc.capacity) return 0;
     const handle: *OnezHandle = @ptrCast(@alignCast(jc.ctx));
     setLastError(handle, "value stack capacity exceeded", .{});
@@ -2206,12 +2233,13 @@ test "freestanding stack capacity helper refreshes or reports overflow" {
         .sp_ptr = &sp,
         .capacity = 1,
         .ctx = &handle,
+        .stack_limit = 0,
     };
 
     try std.testing.expectEqual(@as(i32, 0), jitRefreshStack(@intFromPtr(&jit_ctx)));
     try std.testing.expectEqual(stack[0..].ptr, jit_ctx.items_ptr);
     try std.testing.expectEqual(@as(usize, 2), jit_ctx.capacity);
-    try std.testing.expectEqual(@as(i32, 2), jitEnsureStackCapacity(@intFromPtr(&jit_ctx), 3));
+    try std.testing.expectEqual(@as(i32, 2), jitEntryCheck(@intFromPtr(&jit_ctx), 3));
     const msg = onez_last_error(&handle) orelse return error.TestExpectedError;
     try std.testing.expect(std.mem.indexOf(u8, std.mem.span(msg), "value stack capacity exceeded") != null);
 }

@@ -1,0 +1,9 @@
+\ A self-recursive word compiled at definition time. The self-call resolves while the body is
+\ compiling, which mints the word's id and bakes it into the code. The code has to be installed
+\ under that same id, or every other level of the recursion finds no code and falls back through
+\ the interpreter. The trace shows one compile and a dispatch hit only at the outer call, since
+\ every level below it is a direct compiled call.
+
+deep: stack-recursive ( n -- n ) [ dup 0 > [ 1 - deep 1 + ] [ ] if ] ;
+
+10 deep .

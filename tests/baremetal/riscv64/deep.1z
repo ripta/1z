@@ -1,0 +1,14 @@
+\ A recursion far deeper than the 64K boot stack. There is no guard page on bare metal, so running
+\ past the stack writes over whatever the linker placed below it. The compiled entry check raises
+\ instead, and the run ends through the failure exit.
+\
+\ A shallow run of the same word goes first, so the serial output shows the recursion itself works
+\ and it is the depth that fails. Nothing after the deep run executes. This runtime carries no
+\ `recover`, so the raise ends the program.
+
+deep: stack-recursive ( n -- n ) [ dup 0 > [ 1 - deep 1 + ] [ ] if ] ;
+
+10 deep drop
+"shallow recursion returned" print-line
+1000000 deep drop
+"unreachable" print-line

@@ -1225,6 +1225,7 @@ fn deepCopyErrorObjectValue(err: ErrorObject, alloc: Allocator, longlived: Alloc
                 .word_name = try alloc.dupe(u8, frame.word_name),
                 .source = try alloc.dupe(u8, frame.source),
                 .line = frame.line,
+                .elided = frame.elided,
             };
         }
         break :blk new_frames;
