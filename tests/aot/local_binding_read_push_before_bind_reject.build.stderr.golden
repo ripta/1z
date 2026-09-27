@@ -1,0 +1,4 @@
+Error: 1 word could not be compiled to C
+  word 'late': NC.19: defines a helper word inside its body that AOT compilation cannot discover
+      hint: move the helper into a private{ } block at module scope
+AOT interpreter fallbacks: 3 total (native=2 compound-uncompiled=1)

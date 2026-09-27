@@ -1,0 +1,11 @@
+\ A quotation pushed before a name is bound, whose body reads that name. Nothing captures the
+\ binding at push time, so the interpreter finds it through the live frame chain when the
+\ quotation runs, and compiled code cannot. The build refuses the word.
+
+late: ( a: fixnum -- n ) [
+  [ pb 1 + ] swap
+  pb: swap ;
+  call
+] ;
+
+9 late .

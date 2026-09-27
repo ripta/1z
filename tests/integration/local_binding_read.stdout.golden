@@ -1,0 +1,59 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+=== value reads ===
+Stack: [ ]
+PASS: two fixnum inputs read back
+Stack: [ ]
+PASS: a string literal binding reads back
+Stack: [ ]
+PASS: a string input read twice
+Stack: [ ]
+PASS: a rebind reads the latest value
+Stack: [ ]
+PASS: a binding of a binding reads the value
+Stack: [ ]
+=== shadowing ===
+Stack: [ ]
+PASS: the read after the bind is the local
+PASS: the read before the bind is the global word
+Stack: [ ]
+=== inlined reads ===
+Stack: [ ]
+PASS: an if arm reads the binding
+Stack: [ ]
+PASS: the other arm runs
+Stack: [ ]
+PASS: a times body reads the binding
+Stack: [ ]
+PASS: a binding made in an arm ends with the arm
+Stack: [ ]
+=== reads that stay interpreted ===
+Stack: [ ]
+PASS: a quotation-valued binding is called
+Stack: [ ]
+PASS: a value-valued binding is pushed
+Stack: [ ]
+PASS: a quotation pushed before the bind reads it
+Stack: [ ]
+PASS: a name computed at runtime rebinds the local
+Stack: [ ]
+PASS: a local named like a native leaves the native call alone
+PASS: the value under it
+Stack: [ ]
+=== exits after a read ===
+Stack: [ ]
+PASS: a raise after a read propagates
+Stack: [ ]

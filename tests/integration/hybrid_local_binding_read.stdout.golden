@@ -1,0 +1,15 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+=== reads after the threshold ===
+Stack: [ ]
+PASS: two fixnum inputs read back
+Stack: [ ]
+PASS: a string input read twice
+Stack: [ ]
+PASS: an if arm reads the binding
+Stack: [ ]
+PASS: a quotation-valued binding is still called
+Stack: [ ]

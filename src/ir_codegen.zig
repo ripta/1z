@@ -2366,10 +2366,22 @@ fn resolveTypedLiteralSlot(state: *const CompileState, val: Value) ?TypedLiteral
     };
 }
 
-/// A name a top-level `;` bound, and the park cell holding its value's copy.
-const ParkedBinding = struct {
+/// A name a `;` in a lexical body bound, as the body's later reads see it.
+///
+/// `park` is the cell a read copies from. It is set only when the value is proven to read back as
+/// one push. A value that might be a quotation reads as a call of unknown effect, and no compiled
+/// continuation can be written against that, so a null park means a read refuses the word.
+///
+/// Entries are appended in emission order and the latest for a name wins. `body` is the
+/// instruction array holding the `;` and `site` is its index there.
+const BoundName = struct {
     name: []const u8,
-    index: usize,
+    park: ?usize,
+    body: usize,
+    site: usize,
+    /// Values the `;` popped: the bound value, any stack effect, doc string, or marker under it,
+    /// and the name.
+    consumed: usize,
 };
 
 /// Shared compilation state threaded through instruction compilation.
@@ -2674,8 +2686,23 @@ const CompileState = struct {
     /// Parks created so far in emission order. At a top-level `;` emission order is execution
     /// order, so every exit emitted after a park's creation releases exactly the parks it holds.
     park_count: usize = 0,
-    /// Name to park cell, appended per bind. A rebind appends again and the latest entry wins.
-    parked_bindings: std.ArrayListUnmanaged(ParkedBinding) = .{},
+    /// Inputs of the word whose own body is being compiled, or null when the body is not a word's.
+    word_input_count: ?u8 = null,
+    /// Inputs, by index from the bottom, whose declared type the entry checks enforced.
+    value_binding_inputs_checked: u64 = 0,
+    /// Whether a `;` in the compiled body binds into a frame the body opened itself. A word body
+    /// that opens none, such as the entry body, defines into an enclosing durable frame, which the
+    /// push-before-bind guard does not describe.
+    binds_into_own_frame: bool = true,
+    /// Every name a `;` in a lexical body bound so far, whether or not it parked. An inlined body's
+    /// entries go when it ends, as the frame the interpreter gives that body does.
+    bound_names: std.ArrayListUnmanaged(BoundName) = .{},
+    /// Addresses of the compiled body's own instruction array and every quotation literal nested
+    /// in it. A local answers a bare word only in a body its frame's owner lexically encloses, so
+    /// a spliced callee body never sees this body's bindings.
+    lexical_bodies: std.AutoHashMapUnmanaged(usize, void) = .{},
+    /// The lexical bodies `compileInstructions` currently has open, outermost first.
+    open_lexical_bodies: std.ArrayListUnmanaged([]const Instruction) = .{},
     /// Method bodies registered against a dispatch id, for the may-define analysis. Built on
     /// first use, since a word with no quotation splice never asks.
     method_index: ?may_define.DispatchMethodIndex = null,
@@ -2718,6 +2745,18 @@ const CompileState = struct {
     /// The identity of the word `name` resolves to from the body being compiled.
     fn calleeIdentity(state: *const CompileState, name: []const u8) []const u8 {
         return state.aot_callee_resolution.identityOf(name);
+    }
+
+    /// Free the local-binding bookkeeping. Every site that builds a state defers this.
+    fn deinitBindings(state: *CompileState) void {
+        state.bound_names.deinit(state.allocator);
+        state.lexical_bodies.deinit(state.allocator);
+        state.open_lexical_bodies.deinit(state.allocator);
+    }
+
+    /// The binding a bare word read in a lexical body reaches, or null when no `;` bound it yet.
+    fn boundName(state: *const CompileState, name: []const u8) ?BoundName {
+        return latestBinding(state.bound_names.items, name);
     }
 
     /// Allocate a fresh RowId, unique within this compilation.
@@ -3867,6 +3906,14 @@ fn materializeQuotations(state: *CompileState, stack: []StackEntry, sp: usize, e
             .quotation_body => |q| {
                 const body = q.body;
                 if (state.aot_mode) {
+                    // With no interpreter to run the captured closure, the reified body's compiled
+                    // code runs instead. It resolves names without the scope the interpreter
+                    // captures here, so a read of a local would reach a global.
+                    if (state.interpreter_free and quotationReadsShadowedBinding(state, body)) {
+                        state.not_compilable_reason = .nested_definition;
+                        return IrCodegenError.NotCompilable;
+                    }
+
                     // Serialize the instruction body and record it for C emission.
                     const serialized = serializeQuotationInstructions(body, q.effect, std.heap.page_allocator, null, null) catch {
                         state.not_compilable_reason = .non_serializable_literal;
@@ -8671,6 +8718,19 @@ fn compileInstructions(
     state.body_depth += 1;
     defer state.body_depth -= 1;
 
+    if (state.body_depth == 1 and state.lexical_bodies.count() == 0) try collectLexicalBodies(state, instructions, @intFromPtr(instructions.ptr));
+
+    // Only a body this word's own source wrote sees the names it binds.
+    const lexical = state.lexical_bodies.contains(@intFromPtr(instructions.ptr));
+    const bound_floor = state.bound_names.items.len;
+    if (lexical) try state.open_lexical_bodies.append(state.allocator, instructions);
+    defer {
+        if (lexical) {
+            _ = state.open_lexical_bodies.pop();
+            state.bound_names.shrinkRetainingCapacity(bound_floor);
+        }
+    }
+
     for (instructions, 0..) |instr, idx| {
         state.inline_site = .{ .body = instructions, .index = idx };
         emitAotInstrTrace(state, instr, stack, sp.*);
@@ -8689,6 +8749,11 @@ fn compileInstructions(
                     stack[sp.*] = .{ .i64_ref = c.ir_const_i64(ctx, val.fixnum) };
                     sp.* += 1;
                 } else if (val == .quotation) {
+                    if (lexical and state.binds_into_own_frame and quotationReadsLaterBinding(state, val.quotation.instructions)) {
+                        state.not_compilable_reason = .nested_definition;
+                        return IrCodegenError.NotCompilable;
+                    }
+
                     stack[sp.*] = .{ .quotation_body = .{
                         .body = val.quotation.instructions,
                         .effect = val.quotation.effect,
@@ -8917,10 +8982,32 @@ fn compileInstructions(
             },
             .call_word, .call_word_direct, .call_word_module => {
                 const name = instr.op.callTargetName().?;
-                if (std.mem.eql(u8, name, ";")) try emitParkBinding(state, instructions, idx, stack, sp.*);
 
+                // A `call_word` naming a local this body bound reads the local ahead of any
+                // intrinsic or global. It pushes the park, or refuses the word when no park is
+                // proven to hold what the read pushes. A captured-scope call to one may or may not
+                // see it, so it refuses too.
                 var intrinsic_handled = false;
-                if (intrinsic_table.get(name)) |entry| {
+                if (lexical) {
+                    if (std.mem.eql(u8, name, ";")) {
+                        try recordBinding(state, instructions, idx, stack, sp.*);
+                    } else if (localReach(instr.op) != .none) {
+                        if (state.boundName(name)) |bound| {
+                            const park = bound.park orelse {
+                                state.not_compilable_reason = .nested_definition;
+                                return IrCodegenError.NotCompilable;
+                            };
+                            if (localReach(instr.op) == .captured) {
+                                state.not_compilable_reason = .nested_definition;
+                                return IrCodegenError.NotCompilable;
+                            }
+                            emitParkRead(state, park, stack, sp);
+                            intrinsic_handled = true;
+                        }
+                    }
+                }
+
+                if (if (intrinsic_handled) null else intrinsic_table.get(name)) |entry| {
                     switch (try entry.handler(.{
                         .state = state,
                         .instructions = instructions,
@@ -9336,10 +9423,10 @@ fn preScanInstructions(
                                     try preScanInstructions(body, resolver, flags, true, splice_scan, splice_depth + 1);
                                 }
                             }
-                        } else if (!in_quotation) {
+                        } else if (!in_quotation and !isBindCandidate(instructions, name)) {
                             return IrCodegenError.NotCompilable;
                         }
-                    } else if (!in_quotation) {
+                    } else if (!in_quotation and !isBindCandidate(instructions, name)) {
                         return IrCodegenError.NotCompilable;
                     }
                 }
@@ -9376,28 +9463,105 @@ fn isNestedDefinedName(instructions: []const Instruction, target: []const u8) bo
     return false;
 }
 
-/// The name a `;` at `semicolon_idx` binds, when it provably comes from a symbol literal in this
-/// body. Null when the proof fails, which costs only the park.
+/// The latest binding of `name` among `bound`, which is in emission order.
+fn latestBinding(bound: []const BoundName, name: []const u8) ?BoundName {
+    return latestBindingBefore(bound, name, 0, std.math.maxInt(usize));
+}
+
+/// The latest binding of `name` an instruction ahead of index `limit` in `body` reads. A `;` at or
+/// after `limit` in that body had not run yet.
+fn latestBindingBefore(bound: []const BoundName, name: []const u8, body: usize, limit: usize) ?BoundName {
+    var i = bound.len;
+    while (i > 0) {
+        i -= 1;
+        const entry = bound[i];
+        if (entry.body == body and entry.site >= limit) continue;
+        if (std.mem.eql(u8, entry.name, name)) return entry;
+    }
+    return null;
+}
+
+/// How many values the `;` at `site` in `body` consumed, or null when it was not recorded.
+fn consumedAt(bound: []const BoundName, body: usize, site: usize) ?usize {
+    for (bound) |entry| {
+        if (entry.body == body and entry.site == site) return entry.consumed;
+    }
+    return null;
+}
+
+/// Whether `op` resolves through the local frames, and so may read a name a `;` bound.
 ///
-/// `;` takes the name one below the top, so the walk tracks that operand's depth backwards. Each
-/// instruction's declared effect maps a depth after it to the depth before it. A depth the
-/// instruction produced is the answer when the instruction is a symbol push, and unprovable
-/// otherwise; `swap` is the one reordering the walk follows, since `name: swap ;` is the idiom.
-/// An unresolved call or a row effect ends the walk, because the depth below it is unknown.
-fn bindingNameAt(instructions: []const Instruction, semicolon_idx: usize, resolver: WordResolver) ?[]const u8 {
-    var depth: usize = 1;
-    var i = semicolon_idx;
+/// `call_word_direct` calls the slot the parser resolved and never looks at a frame.
+/// `call_word_module` looks only at a quotation's captured scope, which codegen does not model.
+const LocalReach = enum { none, frame, captured };
+
+fn localReach(op: anytype) LocalReach {
+    return switch (op) {
+        .call_word => .frame,
+        .call_word_module => .captured,
+        .call_word_direct, .push_literal => .none,
+    };
+}
+
+/// Where an operand came from, as far as the body's own instructions prove it.
+const OperandOrigin = union(enum) {
+    literal: Value,
+    /// Already on the stack when the body began, this many below the top.
+    input: usize,
+    /// Pushed by a read of this park.
+    park: usize,
+};
+
+/// The origin of the operand `start_depth` below the top just before `instructions[idx]`.
+///
+/// The walk tracks the operand's depth backwards. Each instruction's declared effect maps a depth
+/// after it to the depth before it, until the instruction that produced it. `swap` is the one
+/// reordering the walk follows, since `name: swap ;` is the idiom, and a read of a parked binding
+/// is one push.
+///
+/// An earlier recorded `;` is stepped over as consuming what it consumed. The reads ahead of it do
+/// not see what it bound.
+///
+/// An unresolved call, a row effect, a read of a binding with no park, a captured-scope call to a
+/// bound name, or an unrecorded `;` ends the walk, because the depth below it is unknown.
+fn operandOrigin(
+    bound: []const BoundName,
+    instructions: []const Instruction,
+    idx: usize,
+    start_depth: usize,
+    resolver: WordResolver,
+) ?OperandOrigin {
+    const body = @intFromPtr(instructions.ptr);
+    var limit = idx;
+    var depth = start_depth;
+    var i = idx;
     while (i > 0) {
         i -= 1;
         switch (instructions[i].op) {
             .push_literal => |val| {
-                if (depth == 0) return if (val == .symbol) val.symbol.bytes else null;
+                if (depth == 0) return .{ .literal = val };
                 depth -= 1;
             },
             .call_word, .call_word_direct, .call_word_module => {
                 const name = instructions[i].op.callTargetName() orelse return null;
-                if (std.mem.eql(u8, name, "swap") and depth < 2) {
-                    depth = 1 - depth;
+                if (std.mem.eql(u8, name, ";")) {
+                    depth += consumedAt(bound, body, i) orelse return null;
+                    limit = i;
+                    continue;
+                }
+
+                if (localReach(instructions[i].op) != .none) {
+                    if (latestBindingBefore(bound, name, body, limit)) |binding| {
+                        if (localReach(instructions[i].op) == .captured) return null;
+                        const park = binding.park orelse return null;
+                        if (depth == 0) return .{ .park = park };
+                        depth -= 1;
+                        continue;
+                    }
+                }
+
+                if (std.mem.eql(u8, name, "swap")) {
+                    if (depth < 2) depth = 1 - depth;
                     continue;
                 }
 
@@ -9408,7 +9572,131 @@ fn bindingNameAt(instructions: []const Instruction, semicolon_idx: usize, resolv
             },
         }
     }
-    return null;
+    return .{ .input = depth };
+}
+
+/// What a `;` binds: the name, and how many values it pops.
+const BindingSite = struct {
+    name: []const u8,
+    consumed: usize,
+};
+
+/// The name a `;` at `semicolon_idx` binds, when it provably comes from a symbol literal in this
+/// body.
+///
+/// `;` pops the value, then any stack effect, doc string, or marker literal, then the name. The
+/// walk follows the same order, one depth at a time.
+fn bindingNameAt(
+    bound: []const BoundName,
+    instructions: []const Instruction,
+    semicolon_idx: usize,
+    resolver: WordResolver,
+) ?BindingSite {
+    var depth: usize = 1;
+    while (true) : (depth += 1) {
+        const origin = operandOrigin(bound, instructions, semicolon_idx, depth, resolver) orelse return null;
+        const val = switch (origin) {
+            .literal => |v| v,
+            .input, .park => return null,
+        };
+        switch (val) {
+            .symbol => |s| return .{ .name = s.bytes, .consumed = depth + 1 },
+            .stack_effect, .doc_string, .marker => {},
+            else => return null,
+        }
+    }
+}
+
+/// Whether a `;` in `body` may bind `name`: a symbol literal equal to it is pushed in a statement
+/// a `;` ends. A superset of the names a compiled body binds, since a `;` whose name is not a
+/// proven literal refuses the word.
+fn isBindCandidate(body: []const Instruction, name: []const u8) bool {
+    var pending = false;
+    for (body) |instr| {
+        switch (instr.op) {
+            .push_literal => |val| {
+                if (val == .symbol and std.mem.eql(u8, val.symbol.bytes, name)) pending = true;
+            },
+            .call_word, .call_word_direct, .call_word_module => {
+                const callee = instr.op.callTargetName() orelse continue;
+                if (pending and std.mem.eql(u8, callee, ";")) return true;
+            },
+        }
+    }
+    return false;
+}
+
+/// Record the body and the quotation literals nested in it that the body lexically encloses.
+///
+/// A literal an `inline` expansion copied in sits in the array without being enclosed by it: its
+/// lexical parent is the inlined word's body, so the interpreter's frame for this body does not
+/// answer for it. The parent map decides, as `frameAdmits` does at runtime.
+fn collectLexicalBodies(state: *CompileState, body: []const Instruction, owner: usize) IrCodegenError!void {
+    try state.lexical_bodies.put(state.allocator, @intFromPtr(body.ptr), {});
+    for (body) |instr| {
+        switch (instr.op) {
+            .push_literal => |val| {
+                if (val != .quotation) continue;
+
+                const nested = val.quotation.instructions;
+                if (state.interp_ctx) |ictx| {
+                    if (!ictx.lexical_parents.admits(@intFromPtr(nested.ptr), owner)) continue;
+                }
+                try collectLexicalBodies(state, nested, owner);
+            },
+            .call_word, .call_word_direct, .call_word_module => {},
+        }
+    }
+}
+
+/// Whether a quotation body, at any depth, reads a name a `;` in an open lexical body bound, where
+/// that name also resolves to a word outside the body.
+///
+/// A name with no such word leaves the reified body uncompilable, so it runs interpreted with the
+/// scope it captured. A name that has one compiles to a call of that word.
+fn quotationReadsShadowedBinding(state: *const CompileState, body: []const Instruction) bool {
+    for (body) |instr| {
+        switch (instr.op) {
+            .push_literal => |val| {
+                if (val == .quotation and quotationReadsShadowedBinding(state, val.quotation.instructions)) return true;
+            },
+            .call_word, .call_word_direct, .call_word_module => {
+                if (localReach(instr.op) == .none) continue;
+                const name = instr.op.callTargetName() orelse continue;
+                if (state.boundName(name) == null) continue;
+
+                const res = state.resolver orelse return true;
+                if (res.resolve(name, res.user_data) != null) return true;
+            },
+        }
+    }
+    return false;
+}
+
+/// Whether a quotation literal reads a name no `;` has bound yet, which an open lexical body may
+/// bind later.
+///
+/// Nothing captures that binding when the quotation is pushed. Called after the bind, the
+/// interpreter finds it through the live frame chain, while compiled code resolves the name
+/// without it. So the word is refused rather than left to diverge.
+fn quotationReadsLaterBinding(state: *const CompileState, body: []const Instruction) bool {
+    for (body) |instr| {
+        switch (instr.op) {
+            .push_literal => |val| {
+                if (val == .quotation and quotationReadsLaterBinding(state, val.quotation.instructions)) return true;
+            },
+            .call_word, .call_word_direct, .call_word_module => {
+                if (localReach(instr.op) == .none) continue;
+                const name = instr.op.callTargetName() orelse continue;
+                if (state.boundName(name) != null) continue;
+
+                for (state.open_lexical_bodies.items) |open| {
+                    if (isBindCandidate(open, name)) return true;
+                }
+            },
+        }
+    }
+    return false;
 }
 
 /// Find a callee in `instructions` that is defined by a nested `;` statement in
@@ -9749,10 +10037,12 @@ fn compileWordPass(
     };
     defer if (state.method_index) |*mi| mi.deinit();
     defer if (state.may_define_memo) |*m| m.deinit();
-    defer state.parked_bindings.deinit(stack_alloc);
+    defer state.deinitBindings();
 
     const needs_lexical_frame = quotationBodyNeedsFrame(&state, instructions);
     emitParkReservation(&state, instructions, needs_lexical_frame);
+    state.word_input_count = input_count;
+    state.binds_into_own_frame = needs_lexical_frame;
 
     // If this word contains a self-tail-call, wrap the body in a LOOP_BEGIN
     // so the self-call becomes a back-edge instead of a recursive native call.
@@ -9795,6 +10085,7 @@ fn compileWordPass(
     }
 
     seedNarrowedParams(&state, stack, input_count);
+    emitValueBindingEntryChecks(&state, stack);
 
     try compileInstructions(&state, instructions, stack, &sp);
 
@@ -10026,6 +10317,7 @@ pub fn emitWordC(
     };
     defer if (state.method_index) |*mi| mi.deinit();
     defer if (state.may_define_memo) |*m| m.deinit();
+    defer state.deinitBindings();
 
     // The same word-body bracket `compileWordPass` emits. Inert while this emitter threads no
     // interpreter context, which `quotationBodyNeedsFrame` needs before it can answer at all.
@@ -10590,9 +10882,11 @@ fn emitWordCAotPass(
     }
     defer if (state.method_index) |*mi| mi.deinit();
     defer if (state.may_define_memo) |*m| m.deinit();
-    defer state.parked_bindings.deinit(allocator);
+    defer state.deinitBindings();
 
     emitParkReservation(&state, instructions, needs_lexical_frame);
+    state.word_input_count = input_count;
+    state.binds_into_own_frame = needs_lexical_frame;
 
     // Self-tail-call detection for AOT
     if (self_name) |sn| {
@@ -10636,6 +10930,7 @@ fn emitWordCAotPass(
         };
     } else {
         seedNarrowedParams(&state, stack_buf, input_count);
+        emitValueBindingEntryChecks(&state, stack_buf);
 
         compileInstructions(&state, instructions, stack_buf, &sp) catch |err| {
             if (err == IrCodegenError.NotCompilable) {
@@ -11519,17 +11814,6 @@ pub fn emitProgramC(
     defer failure_reasons.deinit(allocator);
     for (words, 0..) |*w, i| {
         if (w.is_native) continue;
-        // A word that calls a helper it defines via a nested `name: [ ... ] ;`
-        // statement in its own body cannot be compiled correctly: codegen
-        // resolves the call through the global-only resolver, which cannot see
-        // the nested-local, so a name that also exists globally (e.g. a
-        // generated struct converter) mis-binds to the global. Run such a word
-        // interpreted, where nested-scope shadowing is honored.
-        if (findUndiscoverableNestedDef(w.instructions) != null) {
-            try failure_reasons.put(allocator, identities[i], .nested_definition);
-            emitAotCodegenTrace(interp_ctx, "word", identities[i], .nested_definition);
-            continue;
-        }
         resolver_data.callee_resolution.scope = scopeFor(&callee_scopes, identities[i]);
         var reason: ?NotCompilableReason = null;
         const trial = emitWordCAotWithCName(
@@ -11865,16 +12149,12 @@ pub fn emitProgramC(
         var uncompiled: std.ArrayListUnmanaged(UncompiledWord) = .{};
         for (words, 0..) |w, i| {
             if (!w.is_prelude and !actually_compiled.contains(w.word_id)) {
-                if (findUndiscoverableNestedDef(w.instructions)) |nested| {
-                    try uncompiled.append(allocator, .{
-                        .name = identities[i],
-                        .reason = .nested_definition,
-                        .nested_definition = nested,
-                    });
-                } else {
-                    const reason = failure_reasons.get(identities[i]) orelse .unknown_reason;
-                    try uncompiled.append(allocator, .{ .name = identities[i], .reason = reason });
-                }
+                const reason = failure_reasons.get(identities[i]) orelse .unknown_reason;
+                try uncompiled.append(allocator, .{
+                    .name = identities[i],
+                    .reason = reason,
+                    .nested_definition = if (reason == .nested_definition) findUndiscoverableNestedDef(w.instructions) else null,
+                });
             }
         }
         if (uncompiled.items.len > 0) {
@@ -13982,32 +14262,64 @@ fn emitAbnormalReturn(state: *CompileState, status: c.ir_ref) void {
     c._ir_RETURN(state.ctx, status);
 }
 
-/// Park a retained copy of the value a top-level `;` is about to bind, when the body parks and the
-/// binding's name can be proven.
+/// Record what a `;` in a lexical body binds, for the reads after it.
 ///
-/// A quotation value is left alone: it defines a helper word, not a value binding. A row has no
-/// single value to copy. A binding that does not park is not an error here; it is left to the
-/// frame, where the interpreter finds it.
-fn emitParkBinding(
+/// A `;` whose name is not a proven literal refuses the word. It may bind any name, computed at
+/// runtime, and every later read would then have to be assumed to reach it.
+fn recordBinding(
     state: *CompileState,
     instructions: []const Instruction,
     idx: usize,
     stack: []StackEntry,
     sp: usize,
 ) IrCodegenError!void {
-    if (state.park_base == c.IR_UNUSED or state.body_depth != 1) return;
-    if (sp < 2) return;
+    const res = state.resolver orelse {
+        state.not_compilable_reason = .nested_definition;
+        return IrCodegenError.NotCompilable;
+    };
+    const site = bindingNameAt(state.bound_names.items, instructions, idx, res) orelse {
+        state.not_compilable_reason = .nested_definition;
+        return IrCodegenError.NotCompilable;
+    };
 
-    const res = state.resolver orelse return;
-    const semicolon = res.resolve(";", res.user_data) orelse return;
-    if (!semicolon.is_native or !semicolon.defines_word) return;
+    const park = try emitParkBinding(state, instructions, idx, stack, sp, site.consumed == 2);
+    try state.bound_names.append(state.allocator, .{
+        .name = site.name,
+        .park = park,
+        .body = @intFromPtr(instructions.ptr),
+        .site = idx,
+        .consumed = site.consumed,
+    });
+}
+
+/// Park a retained copy of the value a top-level `;` is about to bind, when the body parks and the
+/// binding's name is proven. Returns the park's index when a read may copy from it.
+///
+/// A quotation value is left alone: it defines a helper word, not a value binding. A row has no
+/// single value to copy, and a `;` popping metadata under the value is a definition, not a
+/// binding. A value that parks without a proof still parks, so each exit releases one park per
+/// `;`, but no read uses it.
+fn emitParkBinding(
+    state: *CompileState,
+    instructions: []const Instruction,
+    idx: usize,
+    stack: []StackEntry,
+    sp: usize,
+    plain: bool,
+) IrCodegenError!?usize {
+    if (state.park_base == c.IR_UNUSED or state.body_depth != 1) return null;
+    if (sp < 2 or !plain) return null;
+
+    const res = state.resolver orelse return null;
+    const semicolon = res.resolve(";", res.user_data) orelse return null;
+    if (!semicolon.is_native or !semicolon.defines_word) return null;
 
     switch (stack[sp - 1]) {
-        .quotation_body, .row_region => return,
+        .quotation_body, .row_region => return null,
         .i64_ref, .f64_ref, .bool_ref, .raw_at_slot => {},
     }
 
-    const name = bindingNameAt(instructions, idx, res) orelse return;
+    const proven = parkProven(state, instructions, idx, stack[sp - 1]);
 
     std.debug.assert(state.park_count < state.park_capacity);
 
@@ -14018,8 +14330,157 @@ fn emitParkBinding(
     emitCopyToPtr(state.ctx, state.base_addr, sp - 1, cell);
     _ = c._ir_CALL_1(state.ctx, c.IR_I32, state.retain_slot_fn, cell);
 
-    try state.parked_bindings.append(state.allocator, .{ .name = name, .index = state.park_count });
+    const index = state.park_count;
     state.park_count += 1;
+    return if (proven) index else null;
+}
+
+/// Whether the value a `;` at `idx` binds provably reads back as one push.
+///
+/// `;` defines a word from a quotation or a closure, and a hash or a mutable map carrying a
+/// `define` quotation runs that instead. It stores every other value as a literal whose read
+/// pushes it. So the proof has to rule those four tags out: from a compile-time-known number, a
+/// literal, an earlier proven park, or an input whose declared type none of them satisfies.
+fn parkProven(state: *const CompileState, instructions: []const Instruction, idx: usize, entry: StackEntry) bool {
+    switch (entry) {
+        .i64_ref, .f64_ref, .bool_ref => return true,
+        .quotation_body, .row_region => return false,
+        .raw_at_slot => {},
+    }
+
+    const res = state.resolver orelse return false;
+    const origin = operandOrigin(state.bound_names.items, instructions, idx, 0, res) orelse return false;
+    return switch (origin) {
+        .literal => |val| bindsAsValue(val),
+        .park => true,
+        .input => |depth| inputProven(state, depth),
+    };
+}
+
+fn bindsAsValue(val: Value) bool {
+    return switch (val) {
+        .quotation, .closure, .hash, .mutable_map => false,
+        else => true,
+    };
+}
+
+/// Builtin types no value of which, nor of a newtype over it, `;` defines a word from.
+const value_binding_type_names = [_][]const u8{
+    "fixnum",
+    "float",
+    "boolean",
+    "string",
+    "symbol",
+    "array",
+    "vector",
+    "byte-array",
+    "set",
+    "value-map",
+    "mutable-value-map",
+    "bignum",
+};
+
+/// The declared inputs of the word being compiled, when a declaration can prove anything about them.
+fn provableInputs(state: *const CompileState) ?[]const stack_effect_mod.StackEffectParam {
+    const effect = state.stack_effect orelse return null;
+    const ictx = state.interp_ctx orelse return null;
+    if (typeCheckRelaxed(ictx)) return null;
+
+    const input_count = state.word_input_count orelse return null;
+    if (effect.inputs.len != input_count or input_count > 64) return null;
+    for (effect.inputs) |param| {
+        if (param.is_row_variable) return null;
+    }
+    return effect.inputs;
+}
+
+/// Whether `param` is declared with a builtin type whose values `;` binds as values.
+fn declaresValueBinding(ictx: *const Context, param: stack_effect_mod.StackEffectParam) bool {
+    const ann = param.type_annotation orelse return false;
+    const tv = switch (ann) {
+        .type => |t| t,
+        .protocol, .combination => return false,
+    };
+
+    for (value_binding_type_names) |type_name| {
+        const builtin = ictx.lookupBuiltinTypeValue(type_name) orelse continue;
+        if (@intFromPtr(tv) == @intFromPtr(builtin)) return true;
+    }
+    return false;
+}
+
+/// Whether nothing ahead of the compiled body enforces its declared input types.
+///
+/// AOT calls a body with no annotation check in front of it. A self-tail loop rewrites the inputs
+/// and jumps to its header, and a mutual-group hop enters a member directly, so neither
+/// re-checks. Elsewhere interpreter and JIT dispatch validate at entry.
+fn inputDeclarationsUnenforced(state: *const CompileState) bool {
+    return state.aot_mode or state.loop_begin_ref != c.IR_UNUSED or state.mutual_group != null;
+}
+
+/// Whether input `depth` below the top at body entry is proven to bind as a value.
+fn inputProven(state: *const CompileState, depth: usize) bool {
+    const inputs = provableInputs(state) orelse return false;
+    if (depth >= inputs.len) return false;
+
+    const k = inputs.len - 1 - depth;
+    if (inputDeclarationsUnenforced(state)) return (state.value_binding_inputs_checked >> @intCast(k)) & 1 == 1;
+    return declaresValueBinding(state.interp_ctx.?, inputs[k]);
+}
+
+/// Tag-check at entry each input whose declaration a park may rely on, where nothing ahead of the
+/// body enforces it. The check runs where the interpreter would reject the argument, before any of
+/// the body runs.
+///
+/// An input the seeders already narrowed to a number is proven by that and is not checked again.
+fn emitValueBindingEntryChecks(state: *CompileState, stack: []const StackEntry) void {
+    if (state.park_base == c.IR_UNUSED or !inputDeclarationsUnenforced(state)) return;
+    if (state.type_mismatch_error_fn == c.IR_UNUSED) return;
+    const inputs = provableInputs(state) orelse return;
+
+    for (inputs, 0..) |param, i| {
+        const bit = @as(u64, 1) << @intCast(i);
+        switch (stack[i]) {
+            .i64_ref, .f64_ref => state.value_binding_inputs_checked |= bit,
+            .raw_at_slot => |s| {
+                if (s != i or !declaresValueBinding(state.interp_ctx.?, param)) continue;
+                emitValueBindingCheck(state, liveSlotAddr(state, i));
+                state.value_binding_inputs_checked |= bit;
+            },
+            .bool_ref, .quotation_body, .row_region => {},
+        }
+    }
+}
+
+/// Raise a type mismatch when the value at `elem_addr` has a tag `;` would define a word from.
+///
+/// Only an input whose declared type rules those tags out is checked, so the interpreter would have
+/// rejected the same argument at entry.
+fn emitValueBindingCheck(state: *CompileState, elem_addr: c.ir_ref) void {
+    const ctx = state.ctx;
+    const tag_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), elem_addr, state.tag_offset_const);
+    const tag_val = c._ir_LOAD(ctx, ValueLayout.ir_tag_type, tag_addr);
+
+    var defines: c.ir_ref = c.IR_UNUSED;
+    for ([_]ValueLayout.TagType{ .quotation, .closure, .hash, .mutable_map }) |tag| {
+        const is_tag = c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), tag_val, emitTagConst(ctx, tag));
+        defines = if (defines == c.IR_UNUSED) is_tag else c.ir_fold2(ctx, c.IR_OPT(c.IR_OR, c.IR_BOOL), defines, is_tag);
+    }
+
+    const if_defines = c._ir_IF(ctx, defines);
+    c._ir_IF_TRUE_cold(ctx, if_defines);
+    emitErrorReturn(state, state.type_mismatch_error_fn);
+    c._ir_IF_FALSE(ctx, if_defines);
+}
+
+/// Push a copy of park `index`, which is what reading its binding pushes.
+fn emitParkRead(state: *CompileState, index: usize, stack: []StackEntry, sp: *usize) void {
+    const cell = parkCellAddr(state, index);
+    _ = c._ir_CALL_1(state.ctx, c.IR_I32, state.retain_slot_fn, cell);
+    emitCopyFromPtr(state.ctx, liveBaseAddr(state).base_addr, cell, sp.*);
+
+    stack[sp.*] = .{ .raw_at_slot = sp.* };
+    sp.* += 1;
 }
 
 /// Reserve the C-stack block for a body's parks, one cell per top-level `;`.
@@ -21195,7 +21656,7 @@ test "a spliced body that may define is bracketed in a transient lexical frame" 
     defer ctx.deinit();
 
     const body = [_]Instruction{
-        .{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 1 },
+        .{ .op = .{ .push_literal = .{ .symbol = .{ .bytes = "bound" } } }, .line = 1 },
         .{ .op = .{ .push_literal = .{ .fixnum = 2 } }, .line = 1 },
         .{ .op = .{ .call_word = ";" }, .line = 1 },
     };
@@ -21293,32 +21754,32 @@ fn fixnumInstr(n: i64) Instruction {
 
 test "bindingNameAt: the swap idiom binds the symbol pushed before the swap" {
     const body = [_]Instruction{ symbolInstr("held"), callInstr("swap"), callInstr(";") };
-    try testing.expectEqualStrings("held", bindingNameAt(&body, 2, binding_walk_resolver).?);
+    try testing.expectEqualStrings("held", bindingNameAt(&.{}, &body, 2, binding_walk_resolver).?.name);
 }
 
 test "bindingNameAt: an expression leaving one value binds the symbol under it" {
     const body = [_]Instruction{ symbolInstr("total"), fixnumInstr(1), fixnumInstr(2), callInstr("+"), callInstr(";") };
-    try testing.expectEqualStrings("total", bindingNameAt(&body, 4, binding_walk_resolver).?);
+    try testing.expectEqualStrings("total", bindingNameAt(&.{}, &body, 4, binding_walk_resolver).?.name);
 }
 
 test "bindingNameAt: a symbol consumed inside the expression is not the name" {
     const body = [_]Instruction{ symbolInstr("outer"), symbolInstr("inner"), callInstr("drop"), fixnumInstr(1), callInstr(";") };
-    try testing.expectEqualStrings("outer", bindingNameAt(&body, 4, binding_walk_resolver).?);
+    try testing.expectEqualStrings("outer", bindingNameAt(&.{}, &body, 4, binding_walk_resolver).?.name);
 }
 
 test "bindingNameAt: a row effect in the expression leaves the name unproven" {
     const body = [_]Instruction{ symbolInstr("x"), fixnumInstr(1), fixnumInstr(2), fixnumInstr(3), callInstr("each"), callInstr(";") };
-    try testing.expect(bindingNameAt(&body, 5, binding_walk_resolver) == null);
+    try testing.expect(bindingNameAt(&.{}, &body, 5, binding_walk_resolver) == null);
 }
 
 test "bindingNameAt: an unresolved call leaves the name unproven" {
     const body = [_]Instruction{ symbolInstr("x"), callInstr("mystery"), callInstr(";") };
-    try testing.expect(bindingNameAt(&body, 2, binding_walk_resolver) == null);
+    try testing.expect(bindingNameAt(&.{}, &body, 2, binding_walk_resolver) == null);
 }
 
 test "bindingNameAt: a non-symbol at the name's depth is not a binding" {
     const body = [_]Instruction{ fixnumInstr(7), fixnumInstr(1), callInstr(";") };
-    try testing.expect(bindingNameAt(&body, 2, binding_walk_resolver) == null);
+    try testing.expect(bindingNameAt(&.{}, &body, 2, binding_walk_resolver) == null);
 }
 
 /// Emit AOT C for a one-input word body, framed or not, under the define-family resolver.
@@ -21398,6 +21859,91 @@ test "a nested helper definition parks nothing" {
     try testing.expect(std.mem.indexOf(u8, source, "jitRetainSlot(") == null);
 }
 
+test "operandOrigin: a swapped value comes from the input under the name" {
+    const body = [_]Instruction{ symbolInstr("held"), callInstr("swap"), callInstr(";") };
+    try testing.expectEqual(OperandOrigin{ .input = 0 }, operandOrigin(&.{}, &body, 2, 0, binding_walk_resolver).?);
+}
+
+test "operandOrigin: an exactly bound statement is stepped over as consuming two" {
+    const body = [_]Instruction{
+        symbolInstr("b"), callInstr("swap"), callInstr(";"),
+        symbolInstr("a"), callInstr("swap"), callInstr(";"),
+    };
+    const bound = [_]BoundName{.{ .name = "b", .park = 0, .body = @intFromPtr(&body), .site = 2, .consumed = 2 }};
+    try testing.expectEqual(OperandOrigin{ .input = 1 }, operandOrigin(&bound, &body, 5, 0, binding_walk_resolver).?);
+}
+
+test "operandOrigin: an unrecorded statement ends the walk" {
+    const body = [_]Instruction{
+        symbolInstr("b"), callInstr("swap"), callInstr(";"),
+        symbolInstr("a"), callInstr("swap"), callInstr(";"),
+    };
+    try testing.expect(operandOrigin(&.{}, &body, 5, 0, binding_walk_resolver) == null);
+}
+
+test "bindingNameAt: a definition's stack effect under the body is popped with the name" {
+    const helper = [_]Instruction{fixnumInstr(1)};
+    const effect: StackEffect = .{ .inputs = &.{}, .outputs = &.{} };
+    const body = [_]Instruction{
+        symbolInstr("helper"),
+        .{ .op = .{ .push_literal = .{ .stack_effect = effect } }, .line = 1 },
+        .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = &helper } } }, .line = 1 },
+        callInstr(";"),
+    };
+    const site = bindingNameAt(&.{}, &body, 3, binding_walk_resolver).?;
+    try testing.expectEqualStrings("helper", site.name);
+    try testing.expectEqual(@as(usize, 3), site.consumed);
+}
+
+test "operandOrigin: a read of a parked binding is its park" {
+    const outer = [_]Instruction{callInstr(";")};
+    const body = [_]Instruction{ symbolInstr("copy"), callInstr("orig"), callInstr(";") };
+    const bound = [_]BoundName{.{ .name = "orig", .park = 3, .body = @intFromPtr(&outer), .site = 0, .consumed = 2 }};
+    try testing.expectEqual(OperandOrigin{ .park = 3 }, operandOrigin(&bound, &body, 2, 0, binding_walk_resolver).?);
+}
+
+test "operandOrigin: a read of a binding with no park ends the walk" {
+    const outer = [_]Instruction{callInstr(";")};
+    const body = [_]Instruction{ symbolInstr("copy"), callInstr("orig"), callInstr(";") };
+    const bound = [_]BoundName{.{ .name = "orig", .park = null, .body = @intFromPtr(&outer), .site = 0, .consumed = 2 }};
+    try testing.expect(operandOrigin(&bound, &body, 2, 0, binding_walk_resolver) == null);
+}
+
+test "a read of a literal binding copies its park and makes no call" {
+    const body = [_]Instruction{
+        callInstr("drop"),
+        symbolInstr("held"),
+        .{ .op = .{ .push_literal = .{ .string = .{ .bytes = "kept" } } }, .line = 1 },
+        callInstr(";"),
+        callInstr("held"),
+        callInstr("drop"),
+    };
+    const source = try emitParkWordForTest(&body, true);
+    defer testing.allocator.free(source);
+
+    // One retain parks the copy and one more pushes it for the read.
+    try testing.expectEqual(@as(usize, 2), countOccurrences(source, "jitRetainSlot("));
+    try testing.expect(std.mem.indexOf(u8, source, "held") == null);
+}
+
+test "a read of a binding whose value is not proven refuses the word" {
+    const body = [_]Instruction{ symbolInstr("held"), callInstr("swap"), callInstr(";"), callInstr("held") };
+    try testing.expectError(IrCodegenError.NotCompilable, emitParkWordForTest(&body, true));
+}
+
+test "a quotation pushed before its name is bound refuses the word" {
+    const read = [_]Instruction{callInstr("late")};
+    const body = [_]Instruction{
+        callInstr("drop"),
+        .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = &read } } }, .line = 1 },
+        symbolInstr("late"),
+        fixnumInstr(1),
+        callInstr(";"),
+        callInstr("drop"),
+    };
+    try testing.expectError(IrCodegenError.NotCompilable, emitParkWordForTest(&body, true));
+}
+
 test "a compiled quotation body that cannot define keeps its bare body" {
     var ctx = Context.init(testing.allocator);
     defer ctx.deinit();
@@ -21414,7 +21960,7 @@ test "a compiled quotation body that may define opens its own lexical frame" {
     defer ctx.deinit();
 
     const body = [_]Instruction{
-        .{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 1 },
+        .{ .op = .{ .push_literal = .{ .symbol = .{ .bytes = "bound" } } }, .line = 1 },
         .{ .op = .{ .push_literal = .{ .fixnum = 2 } }, .line = 1 },
         .{ .op = .{ .call_word = ";" }, .line = 1 },
     };

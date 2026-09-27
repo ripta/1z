@@ -1,0 +1,39 @@
+use "testing" ;
+
+\ Reads of named locals from local_binding_read.1z, called past the hybrid threshold so each word
+\ that can compile has code by the time the checks run.
+
+scalar: ( a: fixnum b: fixnum -- n ) [
+  zb: swap ;
+  za: swap ;
+  za zb + za *
+] ;
+
+typed-string: ( s: string -- s ) [
+  held: swap ;
+  held held #append
+] ;
+
+arm-read: ( n: fixnum s: string -- s ) [
+  s: swap ;
+  n: swap ;
+  n 0 > [ s ] [ "none" ] if
+] ;
+
+untyped: ( a -- x ) [
+  q: swap ;
+  q
+] ;
+
+300 [
+  3 4 scalar drop
+  "ab" typed-string drop
+  1 "yes" arm-read drop
+  7 untyped drop
+] times
+
+"reads after the threshold" test-section
+3 4 scalar 21 "two fixnum inputs read back" assert=
+"ab" typed-string "abab" "a string input read twice" assert=
+0 "yes" arm-read "none" "an if arm reads the binding" assert=
+[ 42 ] untyped 42 "a quotation-valued binding is still called" assert=

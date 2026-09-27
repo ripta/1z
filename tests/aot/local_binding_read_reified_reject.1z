@@ -1,0 +1,15 @@
+\ A quotation literal reading a local, handed to a word rather than inlined, in a binary with no
+\ interpreter. Its compiled body runs in place of the captured closure and resolves `label`
+\ without the captured scope, so it would reach the module word. The build refuses the word
+\ rather than print the wrong label.
+
+label: ( -- s ) [ "MODULE" ] ;
+runner: ( q -- s ) [ call ] ;
+
+reified: ( -- s ) [
+  label: "OWN" ;
+  label drop
+  [ label ] runner
+] ;
+
+reified print-line

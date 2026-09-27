@@ -1,0 +1,12 @@
+\ A read of a binding whose value is not proven to read back as one push. The input is untyped, and
+\ its callers pass both a number and a quotation, so nothing narrows it to a number either. A
+\ quotation would be called on read with an effect nothing states, so the build refuses the word
+\ rather than compile a read that might diverge from the interpreter.
+
+pass-through: ( a -- a ) [
+  kept: swap ;
+  kept
+] ;
+
+7 pass-through .
+[ 8 ] pass-through .

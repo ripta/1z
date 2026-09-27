@@ -1,0 +1,47 @@
+\ Words that read a named local they bound, built with no interpreter to fall back to. The build
+\ succeeds only when every read compiles to a copy of its parked value. The empty stderr golden is
+\ the debug allocator's leak check on those copies.
+
+held: ( -- s ) [ "global" ] ;
+
+scalar: ( a: fixnum b: fixnum -- n ) [
+  zb: swap ;
+  za: swap ;
+  za zb + za *
+] ;
+
+literal-string: ( -- s ) [
+  label: "parked" ;
+  label " string" #append
+] ;
+
+typed-string: ( s: string -- s ) [
+  held: swap ;
+  held held #append
+] ;
+
+chained: ( n: fixnum -- n ) [
+  x: swap ;
+  y: x ;
+  y y +
+] ;
+
+before-bind: ( s: string -- a b ) [
+  held swap
+  held: swap ;
+  held
+] ;
+
+arm-read: ( n: fixnum s: string -- s ) [
+  s: swap ;
+  n: swap ;
+  n 0 > [ s ] [ "none" ] if
+] ;
+
+3 4 scalar .
+literal-string print-line
+"ab" typed-string print-line
+5 chained .
+"local" before-bind print-line print-line
+1 "yes" arm-read print-line
+0 "yes" arm-read print-line
