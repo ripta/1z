@@ -2370,18 +2370,33 @@ fn resolveTypedLiteralSlot(state: *const CompileState, val: Value) ?TypedLiteral
 ///
 /// `park` is the cell a read copies from. It is set only when the value is proven to read back as
 /// one push. A value that might be a quotation reads as a call of unknown effect, and no compiled
-/// continuation can be written against that, so a null park means a read refuses the word.
+/// continuation can be written against that.
+///
+/// `helper` is set when the value is a quotation literal codegen can see, so the read runs a body
+/// of known shape. A read with neither refuses the word.
 ///
 /// Entries are appended in emission order and the latest for a name wins. `body` is the
 /// instruction array holding the `;` and `site` is its index there.
 const BoundName = struct {
     name: []const u8,
     park: ?usize,
+    helper: ?LocalHelper = null,
     body: usize,
     site: usize,
     /// Values the `;` popped: the bound value, any stack effect, doc string, or marker under it,
     /// and the name.
     consumed: usize,
+};
+
+/// A nested helper word a `;` defined from a quotation literal, which a read compiles inline.
+///
+/// The interpreter runs the helper through the scope its literal captured when it was pushed, so
+/// the body sees the bindings made before its own `;` and none made after. `horizon` is the count
+/// of entries in `bound_names` at that `;`, which is the same set.
+const LocalHelper = struct {
+    body: []const Instruction,
+    effect: ?*const StackEffect,
+    horizon: usize,
 };
 
 /// Shared compilation state threaded through instruction compilation.
@@ -2850,6 +2865,15 @@ const BuiltinTraceFrameKind = enum(usize) {
 
 const InlineTraceFrame = struct {
     kind: BuiltinTraceFrameKind,
+    /// The nested helper whose body was inlined at a read of its name. Its row names the helper,
+    /// as the interpreter's call of the helper word does, in place of the builtin `kind`.
+    word_name: ?[]const u8 = null,
+    /// Set on a helper level whose read is the last instruction of its body.
+    ///
+    /// The interpreter tail-calls such a helper. It drops the helper's frame once the body starts,
+    /// and pops the tail-position `if` levels the read was reached through. A raise inside the
+    /// body therefore carries no row for any of them.
+    tail_read: bool = false,
     line: usize,
     /// Source file captured when the frame was queued. Emission must not read
     /// `state.source_file`, which a compound splice swaps to the callee's file
@@ -8984,24 +9008,25 @@ fn compileInstructions(
                 const name = instr.op.callTargetName().?;
 
                 // A `call_word` naming a local this body bound reads the local ahead of any
-                // intrinsic or global. It pushes the park, or refuses the word when no park is
-                // proven to hold what the read pushes. A captured-scope call to one may or may not
-                // see it, so it refuses too.
+                // intrinsic or global. It pushes the park, or runs a nested helper's body inline,
+                // or refuses the word when neither is proven to do what the read does. A
+                // captured-scope call to one may or may not see it, so it refuses too.
                 var intrinsic_handled = false;
                 if (lexical) {
                     if (std.mem.eql(u8, name, ";")) {
                         try recordBinding(state, instructions, idx, stack, sp.*);
                     } else if (localReach(instr.op) != .none) {
                         if (state.boundName(name)) |bound| {
-                            const park = bound.park orelse {
-                                state.not_compilable_reason = .nested_definition;
-                                return IrCodegenError.NotCompilable;
-                            };
-                            if (localReach(instr.op) == .captured) {
+                            if (localReach(instr.op) == .captured or (bound.park == null and bound.helper == null)) {
                                 state.not_compilable_reason = .nested_definition;
                                 return IrCodegenError.NotCompilable;
                             }
-                            emitParkRead(state, park, stack, sp);
+
+                            if (bound.park) |park| {
+                                emitParkRead(state, park, stack, sp);
+                            } else {
+                                try emitHelperRead(state, bound.helper.?, name, instr.line, idx == instructions.len - 1, stack, sp);
+                            }
                             intrinsic_handled = true;
                         }
                     }
@@ -9382,6 +9407,11 @@ fn preScanInstructions(
         switch (instr.op) {
             .push_literal => |val| {
                 if (val == .quotation) {
+                    // A read of a nested helper defined from this literal runs the interpreter's
+                    // entry check against its effect.
+                    if (val.quotation.effect) |eff| {
+                        if (effectHasCheckedInputs(eff)) flags.needs_param_validation = true;
+                    }
                     try preScanInstructions(val.quotation.instructions, resolver, flags, true, splice_scan, splice_depth);
                 }
             },
@@ -13973,9 +14003,18 @@ fn emitActiveInlineTraceFrames(state: *CompileState, skip_tail_ifs: bool) void {
         i -= 1;
         const frame = state.inline_trace_frames[i];
 
+        if (frame.tail_read) {
+            skipping = true;
+            arm_depth = frame.depth;
+            emitInlineRegionTraceFrames(state, frame.site);
+            continue;
+        }
+
         skipping = skipping and isTailIfArm(frame, arm_depth);
         if (skipping) {
             arm_depth = frame.depth;
+        } else if (frame.word_name) |word_name| {
+            emitNamedTraceFrame(state, word_name, frame.source, frame.line, null, .no_effect);
         } else {
             emitBuiltinTraceFrame(state, frame.kind, frame.line, frame.source);
         }
@@ -14282,10 +14321,25 @@ fn recordBinding(
         return IrCodegenError.NotCompilable;
     };
 
+    // A `;` popping only the quotation and the name defines a plain helper. Any marker under the
+    // body changes what a call of it does, so a read of such a helper refuses.
+    //
+    // A helper is recorded only in the word's own body, as a park is. A nested body the interpreter
+    // captured answers a read from that capture first, so its own rebinding of an enclosing name is
+    // not what the read reaches.
+    const plain_helper = state.body_depth == 1 and site.consumed == 2 and sp >= 2 and
+        stack[sp - 1] == .quotation_body and semicolonDefines(res);
+    const helper: ?LocalHelper = if (plain_helper) .{
+        .body = stack[sp - 1].quotation_body.body,
+        .effect = stack[sp - 1].quotation_body.effect,
+        .horizon = state.bound_names.items.len,
+    } else null;
+
     const park = try emitParkBinding(state, instructions, idx, stack, sp, site.consumed == 2);
     try state.bound_names.append(state.allocator, .{
         .name = site.name,
         .park = park,
+        .helper = helper,
         .body = @intFromPtr(instructions.ptr),
         .site = idx,
         .consumed = site.consumed,
@@ -14311,8 +14365,7 @@ fn emitParkBinding(
     if (sp < 2 or !plain) return null;
 
     const res = state.resolver orelse return null;
-    const semicolon = res.resolve(";", res.user_data) orelse return null;
-    if (!semicolon.is_native or !semicolon.defines_word) return null;
+    if (!semicolonDefines(res)) return null;
 
     switch (stack[sp - 1]) {
         .quotation_body, .row_region => return null,
@@ -14333,6 +14386,13 @@ fn emitParkBinding(
     const index = state.park_count;
     state.park_count += 1;
     return if (proven) index else null;
+}
+
+/// Whether `;` is the defining native, whose classification of the popped value a park or a helper
+/// read relies on.
+fn semicolonDefines(res: WordResolver) bool {
+    const semicolon = res.resolve(";", res.user_data) orelse return false;
+    return semicolon.is_native and semicolon.defines_word;
 }
 
 /// Whether the value a `;` at `idx` binds provably reads back as one push.
@@ -14481,6 +14541,80 @@ fn emitParkRead(state: *CompileState, index: usize, stack: []StackEntry, sp: *us
 
     stack[sp.*] = .{ .raw_at_slot = sp.* };
     sp.* += 1;
+}
+
+/// Run a nested helper's body at a read of its name.
+///
+/// The body compiles inline against the caller's stack, as a known quotation does at a `call`. So
+/// a decline anywhere inside it refuses the enclosing word at build time rather than trapping at
+/// runtime.
+///
+/// The body sees the bindings as of the helper's own `;`. The entries recorded after it are set
+/// aside while it compiles and put back afterwards. That also hides the helper's own entry, so a
+/// read of its name inside reaches an earlier binding and the inlining always ends.
+///
+/// The interpreter checks a helper's annotated inputs on entry, and the JIT runs that same check
+/// here. An AOT quotation loses its annotations when it is serialized, so the check cannot be
+/// reproduced there and the read refuses.
+fn emitHelperRead(
+    state: *CompileState,
+    helper: LocalHelper,
+    name: []const u8,
+    line: usize,
+    is_tail: bool,
+    stack: []StackEntry,
+    sp: *usize,
+) IrCodegenError!void {
+    const checked = if (helper.effect) |eff| effectHasCheckedInputs(eff) else false;
+    if (checked and state.aot_mode) {
+        state.not_compilable_reason = .nested_definition;
+        return IrCodegenError.NotCompilable;
+    }
+
+    const saved_inline_trace_frame_count = state.inline_trace_frame_count;
+    defer state.inline_trace_frame_count = saved_inline_trace_frame_count;
+    var level: ?*InlineTraceFrame = null;
+    if (traceFramesEnabled(state) and state.inline_trace_frame_count < max_inline_trace_frames) {
+        level = &state.inline_trace_frames[state.inline_trace_frame_count];
+        level.?.* = .{
+            .kind = .call,
+            .word_name = name,
+            .line = line,
+            .source = traceFrameSourceHere(state),
+            .site = state.inline_site,
+            .depth = state.body_depth,
+        };
+        state.inline_trace_frame_count += 1;
+    }
+
+    // The interpreter pushes the helper's frame before it checks the arguments, so a failed check
+    // keeps the helper's row even where a raise from the body would not.
+    if (checked) {
+        try materializeQuotations(state, stack, sp.*, false);
+        flushToPhysicalStack(state, stack, sp.*);
+        _ = emitCallbackPreamble(state, sp.*);
+        emitParamValidation(state, @intFromPtr(helper.effect.?));
+    }
+    if (level) |frame| frame.tail_read = is_tail;
+
+    std.debug.assert(helper.horizon < state.bound_names.items.len);
+    const hidden = try state.allocator.dupe(BoundName, state.bound_names.items[helper.horizon..]);
+    defer state.allocator.free(hidden);
+    state.bound_names.shrinkRetainingCapacity(helper.horizon);
+    defer {
+        std.debug.assert(state.bound_names.items.len == helper.horizon);
+        state.bound_names.appendSliceAssumeCapacity(hidden);
+    }
+
+    try compileQuotationBodyInline(state, helper.body, stack, sp);
+}
+
+/// Whether the interpreter checks anything about the arguments of a word declared with `eff`.
+fn effectHasCheckedInputs(eff: *const StackEffect) bool {
+    for (eff.inputs) |param| {
+        if (param.type_annotation != null or param.quotation_effect != null) return true;
+    }
+    return false;
 }
 
 /// Reserve the C-stack block for a body's parks, one cell per top-level `;`.
@@ -21940,6 +22074,50 @@ test "a quotation pushed before its name is bound refuses the word" {
         fixnumInstr(1),
         callInstr(";"),
         callInstr("drop"),
+    };
+    try testing.expectError(IrCodegenError.NotCompilable, emitParkWordForTest(&body, true));
+}
+
+test "a read of a nested helper compiles its body inline" {
+    const helper = [_]Instruction{fixnumInstr(7)};
+    const body = [_]Instruction{
+        callInstr("drop"),
+        symbolInstr("zz-helper"),
+        .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = &helper } } }, .line = 1 },
+        callInstr(";"),
+        callInstr("zz-helper"),
+        callInstr("zz-helper"),
+        callInstr("drop"),
+        callInstr("drop"),
+    };
+    const source = try emitParkWordForTest(&body, true);
+    defer testing.allocator.free(source);
+
+    try testing.expect(std.mem.indexOf(u8, source, "zz_helper") == null);
+}
+
+test "a self-recursive helper refuses the word" {
+    const helper = [_]Instruction{callInstr("down")};
+    const body = [_]Instruction{
+        callInstr("drop"),
+        symbolInstr("down"),
+        .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = &helper } } }, .line = 1 },
+        callInstr(";"),
+        callInstr("down"),
+    };
+    try testing.expectError(IrCodegenError.NotCompilable, emitParkWordForTest(&body, true));
+}
+
+test "a helper with a checked input refuses the word under AOT" {
+    const inner: StackEffect = .{ .inputs = &.{}, .outputs = &.{} };
+    const params = [_]stack_effect_mod.StackEffectParam{.{ .name = "q", .quotation_effect = &inner }};
+    const effect: StackEffect = .{ .inputs = &params, .outputs = &.{} };
+    const helper = [_]Instruction{callInstr("drop")};
+    const body = [_]Instruction{
+        symbolInstr("run"),
+        .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = &helper, .effect = &effect } } }, .line = 1 },
+        callInstr(";"),
+        callInstr("run"),
     };
     try testing.expectError(IrCodegenError.NotCompilable, emitParkWordForTest(&body, true));
 }

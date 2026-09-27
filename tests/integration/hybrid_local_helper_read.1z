@@ -1,0 +1,42 @@
+use "testing" ;
+
+\ Nested helper reads from local_helper_read.1z, called past the hybrid threshold so each word that
+\ can compile has code by the time the checks run.
+
+reads-local: ( n: fixnum k: fixnum -- n ) [
+  k: swap ;
+  add-k: [ k + ] ;
+  add-k
+] ;
+
+calls-sibling: ( n: fixnum -- n ) [
+  inc: [ 1 + ] ;
+  inc-twice: [ inc inc ] ;
+  inc-twice
+] ;
+
+snapshot: ( n: fixnum -- n ) [
+  k: 10 ;
+  add-k: [ k + ] ;
+  k: 100 ;
+  add-k k +
+] ;
+
+typed-helper: ( x -- n ) [
+  inc: ( n: fixnum -- n ) [ 1 + ] ;
+  inc
+] ;
+
+300 [
+  1 5 reads-local drop
+  1 calls-sibling drop
+  1 snapshot drop
+  1 typed-helper drop
+] times
+
+"reads after the threshold" test-section
+1 5 reads-local 6 "a helper reads an enclosing binding" assert=
+1 calls-sibling 3 "a helper calls a sibling helper" assert=
+1 snapshot 111 "a helper reads the binding as of its definition" assert=
+4 typed-helper 5 "a typed helper with a matching argument" assert=
+[ "s" typed-helper ] "a typed helper rejects a mismatched argument" assert-error

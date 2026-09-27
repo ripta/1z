@@ -1,0 +1,10 @@
+\ A helper that calls itself reads its own name, which is bound only after its literal is pushed.
+\ Nothing captured that binding, so the interpreter finds it through the live frame chain, and
+\ compiled code would not. The build refuses the word rather than let the two diverge.
+
+self-recursive: ( n: fixnum -- n ) [
+  down: [ dup 0 > [ 1 - down ] when ] ;
+  down
+] ;
+
+3 self-recursive .

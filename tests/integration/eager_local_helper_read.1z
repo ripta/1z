@@ -1,0 +1,24 @@
+\ Nested helper reads compiled at definition time. A plain helper's read compiles to its body, so
+\ the trace shows the enclosing word compiled and dispatched. A self-recursive helper reads a name
+\ bound after its literal was pushed, so its enclosing word is refused and never compiles.
+
+reads-local: ( n: fixnum k: fixnum -- n ) [
+  k: swap ;
+  add-k: [ k + ] ;
+  add-k
+] ;
+
+calls-sibling: ( n: fixnum -- n ) [
+  inc: [ 1 + ] ;
+  inc-twice: [ inc inc ] ;
+  inc-twice
+] ;
+
+self-recursive: ( n: fixnum -- n ) [
+  down: [ dup 0 > [ 1 - down ] when ] ;
+  down
+] ;
+
+1 5 reads-local .
+1 calls-sibling .
+3 self-recursive .

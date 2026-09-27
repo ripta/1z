@@ -1,0 +1,47 @@
+\ Words that call a nested helper they defined, built with no interpreter to fall back to. The
+\ build succeeds only when every helper read compiles to the helper's body inline.
+
+inc: ( n -- n ) [ 1000 + ] ;
+
+called-twice: ( n: fixnum -- n ) [
+  inc: [ 1 + ] ;
+  inc inc
+] ;
+
+reads-local: ( n: fixnum k: fixnum -- n ) [
+  k: swap ;
+  add-k: [ k + ] ;
+  add-k
+] ;
+
+calls-sibling: ( n: fixnum -- n ) [
+  bump: [ 1 + ] ;
+  bump-twice: [ bump bump ] ;
+  bump-twice
+] ;
+
+snapshot: ( n: fixnum -- n ) [
+  k: 10 ;
+  add-k: [ k + ] ;
+  k: 100 ;
+  add-k k +
+] ;
+
+rebound-helper: ( n: fixnum -- n ) [
+  step: [ 1 + ] ;
+  step: [ 10 * step ] ;
+  step
+] ;
+
+in-times: ( n: fixnum -- n ) [
+  inc: [ 1 + ] ;
+  3 [ inc ] times
+] ;
+
+1 called-twice .
+1 inc .
+1 5 reads-local .
+1 calls-sibling .
+1 snapshot .
+1 rebound-helper .
+1 in-times .

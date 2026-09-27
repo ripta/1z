@@ -1,0 +1,65 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+=== helper reads ===
+Stack: [ ]
+PASS: a helper called once
+Stack: [ ]
+PASS: a helper called twice
+Stack: [ ]
+PASS: a helper with a declared effect
+Stack: [ ]
+PASS: the global word is untouched
+Stack: [ ]
+=== helpers and bindings ===
+Stack: [ ]
+PASS: a helper reads an enclosing binding
+Stack: [ ]
+PASS: a helper calls a sibling helper
+Stack: [ ]
+PASS: a helper reads the binding as of its definition
+Stack: [ ]
+PASS: a rebound helper calls the helper it replaced
+Stack: [ ]
+=== inlined reads ===
+Stack: [ ]
+PASS: an if arm calls the helper
+Stack: [ ]
+PASS: the other arm runs
+Stack: [ ]
+PASS: a times body calls the helper
+Stack: [ ]
+=== typed helpers ===
+Stack: [ ]
+PASS: a typed helper with a matching argument
+Stack: [ ]
+PASS: a typed helper rejects a mismatched argument
+Stack: [ ]
+=== reads that stay interpreted ===
+Stack: [ ]
+PASS: a helper binding its own local
+Stack: [ ]
+PASS: a self-recursive helper
+Stack: [ ]
+PASS: a helper carrying a marker
+Stack: [ ]
+PASS: an arm's own helper does not shadow the one its capture holds
+Stack: [ ]
+PASS: a loop body's own helper does not shadow the one its capture holds
+Stack: [ ]
+PASS: an arm's own helper does not shadow a captured value
+Stack: [ ]

@@ -1,0 +1,51 @@
+\ A raise inside a nested helper. A read with code after it keeps the helper's row, as the
+\ interpreter's call of the helper word does. A read last in its body is a tail call, so the row
+\ goes, along with the row of a tail-position `if` it was reached through. A failed entry check on
+\ a typed helper keeps the row either way.
+\
+\ No flags, so the eager run checks the same golden against words whose reads compiled to the
+\ helper's body.
+
+raise-mid: ( n: fixnum -- n ) [
+  boom: [ f "boom" EUserThrown make-error throw ] ;
+  boom 1 +
+] ;
+
+raise-last: ( n: fixnum -- ) [
+  boom: [ f "boom" EUserThrown make-error throw ] ;
+  boom
+] ;
+
+raise-in-arm: ( n: fixnum -- n ) [
+  boom: [ dup 0 > [ f "boom" EUserThrown make-error throw ] when ] ;
+  boom 1 +
+] ;
+
+raise-nested: ( n: fixnum -- n ) [
+  boom: [ f "boom" EUserThrown make-error throw ] ;
+  outer: [ boom 2 * ] ;
+  outer 1 +
+] ;
+
+raise-tail-arm: ( n: fixnum -- n ) [
+  boom: [ dup 0 > [ f "boom" EUserThrown make-error throw ] when ] ;
+  dup 0 >= [ boom ] [ ] if
+] ;
+
+raise-arm-then: ( n: fixnum -- n ) [
+  boom: [ dup 0 > [ f "boom" EUserThrown make-error throw ] when ] ;
+  dup 0 >= [ boom ] [ ] if 1 +
+] ;
+
+typed-mismatch: ( x -- n ) [
+  inc: ( n: fixnum -- n ) [ 1 + ] ;
+  inc 1 +
+] ;
+
+[ 1 raise-mid ] [ inspect print-line ] recover
+[ 1 raise-last ] [ inspect print-line ] recover
+[ 1 raise-in-arm ] [ inspect print-line ] recover
+[ 1 raise-nested ] [ inspect print-line ] recover
+[ 1 raise-tail-arm ] [ inspect print-line ] recover
+[ 1 raise-arm-then ] [ inspect print-line ] recover
+[ "s" typed-mismatch ] [ inspect print-line ] recover

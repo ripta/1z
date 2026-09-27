@@ -1,0 +1,10 @@
+\ A helper whose declared effect types its input. The interpreter checks that type when the helper
+\ is called, and an AOT quotation loses its annotations when it is serialized, so no compiled read
+\ can run the same check. The build refuses the word.
+
+typed-helper: ( n: fixnum -- n ) [
+  inc: ( n: fixnum -- n ) [ 1 + ] ;
+  inc
+] ;
+
+4 typed-helper .

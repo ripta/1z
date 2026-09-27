@@ -1,0 +1,4 @@
+Error: 1 word could not be compiled to C
+  word 'self-recursive': NC.19: defines nested helper 'down', which AOT compilation cannot discover
+      hint: move 'down' into a private{ } block at module scope
+AOT interpreter fallbacks: 23 total (native=2 per-op-native=19 compound-uncompiled=1 quotation=1)

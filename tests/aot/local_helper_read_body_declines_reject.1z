@@ -1,0 +1,12 @@
+\ A helper whose own body cannot compile. It reads a binding of an untyped input, and the callers
+\ pass both a number and a quotation, so nothing proves the read pushes one value. The helper's
+\ read compiles to that body, so the build refuses the enclosing word instead of trapping at runtime.
+
+pass-through: ( a -- a ) [
+  kept: swap ;
+  get-kept: [ kept ] ;
+  get-kept
+] ;
+
+7 pass-through .
+[ 8 ] pass-through .

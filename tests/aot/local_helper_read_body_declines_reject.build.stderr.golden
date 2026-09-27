@@ -1,0 +1,4 @@
+Error: 1 word could not be compiled to C
+  word 'pass-through': NC.19: defines nested helper 'get-kept', which AOT compilation cannot discover
+      hint: move 'get-kept' into a private{ } block at module scope
+AOT interpreter fallbacks: 4 total (native=2 compound-uncompiled=2)

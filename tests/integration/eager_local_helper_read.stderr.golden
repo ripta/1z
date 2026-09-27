@@ -1,0 +1,8 @@
+JIT compile reads-local (wid=0)
+JIT compile calls-sibling (wid=1)
+JIT dispatch reads-local (wid=0) -> hit
+JIT dispatch calls-sibling (wid=1) -> hit
+JIT dispatch when (wid=2) -> miss
+JIT dispatch when (wid=2) -> miss
+JIT dispatch when (wid=2) -> miss
+JIT dispatch when (wid=2) -> miss

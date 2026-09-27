@@ -1,0 +1,17 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+=== reads after the threshold ===
+Stack: [ ]
+PASS: a helper reads an enclosing binding
+Stack: [ ]
+PASS: a helper calls a sibling helper
+Stack: [ ]
+PASS: a helper reads the binding as of its definition
+Stack: [ ]
+PASS: a typed helper with a matching argument
+Stack: [ ]
+PASS: a typed helper rejects a mismatched argument
+Stack: [ ]
