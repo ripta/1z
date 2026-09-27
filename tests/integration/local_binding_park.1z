@@ -1,0 +1,49 @@
+\ Words that bind a named local and never read it. Under a compile flag each binding parks a
+\ retained copy of its value, and every exit from the word must release that copy.
+\
+\ A missed release shows as the debug allocator's leak report on stderr. The harness expects an
+\ empty stderr for this test, so the report fails it.
+
+use "testing" ;
+
+keep-swap: ( a b -- a ) [
+  held: swap ;
+] ;
+
+keep-expression: ( a -- a ) [
+  total: V{ 1 2 3 } ;
+] ;
+
+keep-string: ( a -- a ) [
+  label: "parked" " string" #append ;
+] ;
+
+keep-rebind: ( a b c -- a ) [
+  held: swap ;
+  held: swap ;
+] ;
+
+keep-then-throw: ( a -- ) [
+  held: swap ;
+  f "boom" EUserThrown make-error throw
+] ;
+
+keep-then-divide: ( n a -- n ) [
+  held: swap ;
+  1 swap div
+] ;
+
+"swap shape" test-section
+"kept" V{ 1 2 } keep-swap "kept" "the value below the binding survives" assert=
+
+"expression shape" test-section
+"kept" keep-expression "kept" "an expression binding leaves its input alone" assert=
+"kept" keep-string "kept" "a string binding leaves its input alone" assert=
+
+"rebind" test-section
+"kept" V{ 1 } V{ 2 } keep-rebind "kept" "a rebound name leaves the lowest value" assert=
+
+"exits after a bind" test-section
+[ V{ 1 } keep-then-throw ] "a raise after a bind propagates" assert-error
+[ 0 V{ 1 } keep-then-divide ] "a division bail after a bind still raises" assert-error
+4 V{ 1 } keep-then-divide 0 "a division after a bind computes" assert=

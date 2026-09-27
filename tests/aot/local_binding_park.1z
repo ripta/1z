@@ -1,0 +1,22 @@
+\ Words that bind a named local and never read it, built with no interpreter to fall back to. Each
+\ binding parks a retained copy of its value, and the copy must be released on the raising exit as
+\ well as the returning one. The empty stderr golden is the debug allocator's leak check, so the
+\ program has to fall off the end rather than exit early.
+
+keep-swap: ( a b -- a ) [
+  held: swap ;
+] ;
+
+keep-rebind: ( a b c -- a ) [
+  held: swap ;
+  held: swap ;
+] ;
+
+keep-then-throw: ( a -- ) [
+  held: swap ;
+  f "boom" EUserThrown make-error throw
+] ;
+
+"kept" { 1 2 } keep-swap print-line
+"kept" { 1 } { 2 } keep-rebind print-line
+[ { 1 } keep-then-throw ] [ drop "caught" print-line ] recover

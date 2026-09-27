@@ -1176,18 +1176,18 @@ fn mapTypeNameToTagConst(state: *CompileState, name: []const u8) ?c.ir_ref {
 
 /// Check the tag of a Value at elem_addr; bail if it doesn't match expected_tag.
 fn emitTagCheck(
-    ctx: *c.ir_ctx,
+    state: *CompileState,
     elem_addr: c.ir_ref,
     expected_tag: c.ir_ref,
-    tag_offset_const: c.ir_ref,
     bail_status: c.ir_ref,
 ) void {
-    const tag_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), elem_addr, tag_offset_const);
+    const ctx = state.ctx;
+    const tag_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), elem_addr, state.tag_offset_const);
     const tag_val = c._ir_LOAD(ctx, ValueLayout.ir_tag_type, tag_addr);
     const tag_mismatch = c.ir_fold2(ctx, c.IR_OPT(c.IR_NE, c.IR_BOOL), tag_val, expected_tag);
     const if_mismatch = c._ir_IF(ctx, tag_mismatch);
     c._ir_IF_TRUE_cold(ctx, if_mismatch);
-    c._ir_RETURN(ctx, bail_status);
+    emitAbnormalReturn(state, bail_status);
     c._ir_IF_FALSE(ctx, if_mismatch);
 }
 
@@ -1206,7 +1206,7 @@ fn emitErrorReturn(state: *CompileState, error_fn: c.ir_ref) void {
         break :blk c._ir_LOAD(ctx, c.IR_ADDR, ctx_addr2);
     };
     const call_result = c._ir_CALL_1(ctx, c.IR_I32, error_fn, ctx_val);
-    c._ir_RETURN(ctx, call_result);
+    emitAbnormalReturn(state, call_result);
 }
 
 /// Check the tag of a Value at elem_addr; on mismatch, call an error
@@ -1304,7 +1304,7 @@ fn emitParamTagCheckOrError(
             c.ir_const_addr(ctx, expected_tag_int),
             elem_addr,
         );
-        c._ir_RETURN(ctx, call_result);
+        emitAbnormalReturn(state, call_result);
     }
     c._ir_IF_FALSE(ctx, if_mismatch);
 }
@@ -1651,7 +1651,7 @@ fn emitPerOperationDispatch(
                 trap_src.len,
                 c.ir_const_addr(ctx, line),
             );
-            c._ir_RETURN(ctx, trap_result);
+            emitAbnormalReturn(state, trap_result);
             c._ir_IF_FALSE(ctx, if_miss);
 
             emitCallbackPostCheck(state, call_result, state.error_propagate_status, null, .{ .named = .{ .name = op_name, .line = line, .word_id = resolved.word_id } });
@@ -2366,6 +2366,12 @@ fn resolveTypedLiteralSlot(state: *const CompileState, val: Value) ?TypedLiteral
     };
 }
 
+/// A name a top-level `;` bound, and the park cell holding its value's copy.
+const ParkedBinding = struct {
+    name: []const u8,
+    index: usize,
+};
+
 /// Shared compilation state threaded through instruction compilation.
 const CompileState = struct {
     /// Allocator for temporary heap allocations during compilation (branch
@@ -2655,6 +2661,21 @@ const CompileState = struct {
     /// Transient lexical frames opened by enclosing splices and not yet closed. Read where
     /// control leaves a bracketed region by a route the epilogue pop cannot cover.
     open_lexical_frames: usize = 0,
+    /// Base address of the C-stack block holding this body's parked bindings, or `IR_UNUSED` when
+    /// the body parks nothing.
+    ///
+    /// A park is a retained copy of a value a top-level `;` binds into the body's own frame. The
+    /// frame stays authoritative; the park lets compiled code reach the value without a frame
+    /// walk. It lives on the C stack because the operand stack has no position a live value
+    /// cannot be popped over.
+    park_base: c.ir_ref = c.IR_UNUSED,
+    /// Park cells the prologue reserved: one per top-level `;`, so a bind can never outrun it.
+    park_capacity: usize = 0,
+    /// Parks created so far in emission order. At a top-level `;` emission order is execution
+    /// order, so every exit emitted after a park's creation releases exactly the parks it holds.
+    park_count: usize = 0,
+    /// Name to park cell, appended per bind. A rebind appends again and the latest entry wins.
+    parked_bindings: std.ArrayListUnmanaged(ParkedBinding) = .{},
     /// Method bodies registered against a dispatch id, for the may-define analysis. Built on
     /// first use, since a word with no quotation splice never asks.
     method_index: ?may_define.DispatchMethodIndex = null,
@@ -3486,7 +3507,7 @@ fn requireI64(entry: StackEntry, state: *CompileState) IrCodegenError!c.ir_ref {
         .raw_at_slot => |s| {
             const ctx = state.ctx;
             const elem_addr = liveSlotAddr(state, s);
-            emitTagCheck(ctx, elem_addr, state.fixnum_tag_const, state.tag_offset_const, state.bail_status);
+            emitTagCheck(state, elem_addr, state.fixnum_tag_const, state.bail_status);
             return emitUnboxI64(ctx, elem_addr, state.payload_offset_const);
         },
         else => {
@@ -3504,7 +3525,7 @@ fn requireF64(entry: StackEntry, state: *CompileState) IrCodegenError!c.ir_ref {
         .raw_at_slot => |s| {
             const ctx = state.ctx;
             const elem_addr = liveSlotAddr(state, s);
-            emitTagCheck(ctx, elem_addr, state.float_tag_const, state.tag_offset_const, state.bail_status);
+            emitTagCheck(state, elem_addr, state.float_tag_const, state.bail_status);
             return emitUnboxF64(ctx, elem_addr, state.payload_offset_const);
         },
         else => {
@@ -4125,6 +4146,9 @@ fn emitRowAwareSelfTailCall(state: *CompileState, stack: []StackEntry, sp: *usiz
     emitOpenLexicalFramePops(state);
 
     emitSafepointCall(state);
+
+    // After the safepoint, whose own error return already releases the parks.
+    emitParkReleases(state);
 
     const loop_end = c._ir_LOOP_END(ctx);
     c.ir_set_op2(ctx, state.loop_begin_ref, loop_end);
@@ -5210,7 +5234,7 @@ fn tryEmitInlineVirtualUnwrap(
     if (state.type_mismatch_error_fn != c.IR_UNUSED) {
         emitTagCheckOrError(state, elem_addr, state.tagged_tag_const, state.type_mismatch_error_fn);
     } else {
-        emitTagCheck(ctx, elem_addr, state.tagged_tag_const, state.tag_offset_const, state.bail_status);
+        emitTagCheck(state, elem_addr, state.tagged_tag_const, state.bail_status);
     }
 
     const tag_ptr_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), elem_addr, c.ir_const_addr(ctx, ValueLayout.tagged_tag_ptr_offset));
@@ -5222,7 +5246,7 @@ fn tryEmitInlineVirtualUnwrap(
     if (state.type_mismatch_error_fn != c.IR_UNUSED) {
         emitErrorReturn(state, state.type_mismatch_error_fn);
     } else {
-        c._ir_RETURN(ctx, state.bail_status);
+        emitAbnormalReturn(state, state.bail_status);
     }
     c._ir_IF_FALSE(ctx, if_mismatch);
 
@@ -5336,7 +5360,7 @@ fn tryEmitInlineTypedValidateAndPromote(
     if (state.type_mismatch_error_fn != c.IR_UNUSED) {
         emitTagCheckOrError(state, elem_addr, expected_tag_const, state.type_mismatch_error_fn);
     } else {
-        emitTagCheck(ctx, elem_addr, expected_tag_const, state.tag_offset_const, state.bail_status);
+        emitTagCheck(state, elem_addr, expected_tag_const, state.bail_status);
     }
 
     stack[sp.*] = .{ .raw_at_slot = value_slot };
@@ -5397,7 +5421,7 @@ fn tryEmitInlineStructFieldGet(
     if (state.type_mismatch_error_fn != c.IR_UNUSED) {
         emitTagCheckOrError(state, elem_addr, state.struct_instance_tag_const, state.type_mismatch_error_fn);
     } else {
-        emitTagCheck(ctx, elem_addr, state.struct_instance_tag_const, state.tag_offset_const, state.bail_status);
+        emitTagCheck(state, elem_addr, state.struct_instance_tag_const, state.bail_status);
     }
 
     // load *StructInstance from Value
@@ -5413,7 +5437,7 @@ fn tryEmitInlineStructFieldGet(
     if (state.type_mismatch_error_fn != c.IR_UNUSED) {
         emitErrorReturn(state, state.type_mismatch_error_fn);
     } else {
-        c._ir_RETURN(ctx, state.bail_status);
+        emitAbnormalReturn(state, state.bail_status);
     }
     c._ir_IF_FALSE(ctx, if_mismatch);
 
@@ -5499,7 +5523,7 @@ fn tryEmitInlineStructFieldSet(
     if (state.type_mismatch_error_fn != c.IR_UNUSED) {
         emitTagCheckOrError(state, elem_addr, state.struct_instance_tag_const, state.type_mismatch_error_fn);
     } else {
-        emitTagCheck(ctx, elem_addr, state.struct_instance_tag_const, state.tag_offset_const, state.bail_status);
+        emitTagCheck(state, elem_addr, state.struct_instance_tag_const, state.bail_status);
     }
 
     // load *StructInstance from Value
@@ -5515,7 +5539,7 @@ fn tryEmitInlineStructFieldSet(
     if (state.type_mismatch_error_fn != c.IR_UNUSED) {
         emitErrorReturn(state, state.type_mismatch_error_fn);
     } else {
-        c._ir_RETURN(ctx, state.bail_status);
+        emitAbnormalReturn(state, state.bail_status);
     }
     c._ir_IF_FALSE(ctx, if_mismatch);
 
@@ -5555,7 +5579,7 @@ fn emitChooseBuiltin(
     const quot_byte_offset = c.ir_const_addr(ctx, quot_slot * ValueLayout.value_size);
     const quot_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), base_addr, quot_byte_offset);
     const quotation_tag_const = emitTagConst(ctx, .quotation);
-    emitTagCheck(ctx, quot_addr, quotation_tag_const, state.tag_offset_const, state.bail_status);
+    emitTagCheck(state, quot_addr, quotation_tag_const, state.bail_status);
     const code_ptr_off = c.ir_const_addr(ctx, ValueLayout.quotation_code_ptr_offset);
     const code_ptr_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), quot_addr, code_ptr_off);
     const code_ptr_val = c._ir_LOAD(ctx, c.IR_ADDR, code_ptr_addr);
@@ -5819,7 +5843,7 @@ fn emitIntrinsicAbs(ec: EmitCtx) IrCodegenError!ControlFlow {
         if (state.overflow_error_fn != c.IR_UNUSED) {
             emitErrorReturn(state, state.overflow_error_fn);
         } else {
-            c._ir_RETURN(ctx, bail_status);
+            emitAbnormalReturn(state, bail_status);
         }
         c._ir_IF_FALSE(ctx, if_min);
 
@@ -6527,7 +6551,7 @@ fn emitIntrinsicChoose(ec: EmitCtx) IrCodegenError!ControlFlow {
 
             // Tag-check: must be a quotation.
             const quotation_tag_const = emitTagConst(ctx, .quotation);
-            emitTagCheck(ctx, quot_addr, quotation_tag_const, state.tag_offset_const, bail_status);
+            emitTagCheck(state, quot_addr, quotation_tag_const, bail_status);
 
             // Load code_ptr from the quotation payload.
             const code_ptr_off = c.ir_const_addr(ctx, ValueLayout.quotation_code_ptr_offset);
@@ -7498,7 +7522,7 @@ fn emitOverflowArith(ec: EmitCtx, poly_op: PolyArithOp, comptime ov_op: comptime
 
     const resolved = try resolveOperandPair(stack[sp.*], stack[sp.* + 1], state);
     switch (resolved) {
-        .i64_pair => |p| stack[sp.*] = .{ .i64_ref = emitOverflowCheckedBinary(ctx, ov_op, p.a, p.b, state.bail_status) },
+        .i64_pair => |p| stack[sp.*] = .{ .i64_ref = emitOverflowCheckedBinary(state, ov_op, p.a, p.b, state.bail_status) },
         .f64_pair => |p| stack[sp.*] = .{ .f64_ref = c.ir_fold2(ctx, c.IR_OPT(f64_op, c.IR_DOUBLE), p.a, p.b) },
     }
     sp.* += 1;
@@ -7532,7 +7556,7 @@ fn emitIntrinsicDiv(ec: EmitCtx) IrCodegenError!ControlFlow {
 
     const resolved = try resolveOperandPair(stack[sp.*], stack[sp.* + 1], state);
     switch (resolved) {
-        .i64_pair => |p| stack[sp.*] = .{ .i64_ref = emitDivision(ctx, p.a, p.b, state.bail_status) },
+        .i64_pair => |p| stack[sp.*] = .{ .i64_ref = emitDivision(state, p.a, p.b, state.bail_status) },
         .f64_pair => |p| stack[sp.*] = .{ .f64_ref = c.ir_fold2(ctx, c.IR_OPT(c.IR_DIV, c.IR_DOUBLE), p.a, p.b) },
     }
     sp.* += 1;
@@ -7543,7 +7567,6 @@ fn emitIntrinsicDiv(ec: EmitCtx) IrCodegenError!ControlFlow {
 /// guarded modulo.
 fn emitIntrinsicMod(ec: EmitCtx) IrCodegenError!ControlFlow {
     const state = ec.state;
-    const ctx = state.ctx;
     const stack = ec.stack;
     const sp = ec.sp;
 
@@ -7554,7 +7577,7 @@ fn emitIntrinsicMod(ec: EmitCtx) IrCodegenError!ControlFlow {
 
     const a = try requireI64(stack[sp.*], state);
     const b = try requireI64(stack[sp.* + 1], state);
-    stack[sp.*] = .{ .i64_ref = emitEuclideanMod(ctx, a, b, state.bail_status) };
+    stack[sp.*] = .{ .i64_ref = emitEuclideanMod(state, a, b, state.bail_status) };
     sp.* += 1;
     return .next;
 }
@@ -7562,7 +7585,6 @@ fn emitIntrinsicMod(ec: EmitCtx) IrCodegenError!ControlFlow {
 /// `div`: integer-only guarded division. No polymorphic float path.
 fn emitIntrinsicIntDiv(ec: EmitCtx) IrCodegenError!ControlFlow {
     const state = ec.state;
-    const ctx = state.ctx;
     const stack = ec.stack;
     const sp = ec.sp;
 
@@ -7571,7 +7593,7 @@ fn emitIntrinsicIntDiv(ec: EmitCtx) IrCodegenError!ControlFlow {
 
     const a = try requireI64(stack[sp.*], state);
     const b = try requireI64(stack[sp.* + 1], state);
-    stack[sp.*] = .{ .i64_ref = emitDivision(ctx, a, b, state.bail_status) };
+    stack[sp.*] = .{ .i64_ref = emitDivision(state, a, b, state.bail_status) };
     sp.* += 1;
     return .next;
 }
@@ -7579,7 +7601,6 @@ fn emitIntrinsicIntDiv(ec: EmitCtx) IrCodegenError!ControlFlow {
 /// `rem`: integer-only guarded remainder. No polymorphic float path.
 fn emitIntrinsicRem(ec: EmitCtx) IrCodegenError!ControlFlow {
     const state = ec.state;
-    const ctx = state.ctx;
     const stack = ec.stack;
     const sp = ec.sp;
 
@@ -7588,7 +7609,7 @@ fn emitIntrinsicRem(ec: EmitCtx) IrCodegenError!ControlFlow {
 
     const a = try requireI64(stack[sp.*], state);
     const b = try requireI64(stack[sp.* + 1], state);
-    stack[sp.*] = .{ .i64_ref = emitRemainder(ctx, a, b, state.bail_status) };
+    stack[sp.*] = .{ .i64_ref = emitRemainder(state, a, b, state.bail_status) };
     sp.* += 1;
     return .next;
 }
@@ -8896,6 +8917,8 @@ fn compileInstructions(
             },
             .call_word, .call_word_direct, .call_word_module => {
                 const name = instr.op.callTargetName().?;
+                if (std.mem.eql(u8, name, ";")) try emitParkBinding(state, instructions, idx, stack, sp.*);
+
                 var intrinsic_handled = false;
                 if (intrinsic_table.get(name)) |entry| {
                     switch (try entry.handler(.{
@@ -9013,6 +9036,9 @@ fn compileInstructions(
                     // Safepoint before looping back
                     emitSafepointCall(state);
 
+                    // After the safepoint, whose own error return already releases the parks.
+                    emitParkReleases(state);
+
                     // Emit back-edge
                     const loop_end = c._ir_LOOP_END(ctx);
                     c.ir_set_op2(ctx, state.loop_begin_ref, loop_end);
@@ -9066,7 +9092,7 @@ fn compileInstructions(
                     // would accumulate one frame per hop.
                     emitOpenLexicalFramePops(state);
 
-                    c._ir_RETURN(ctx, state.trampoline_status);
+                    emitAbnormalReturn(state, state.trampoline_status);
                     state.exit_kind = .terminal_return;
 
                     sp.* = state.group_output_count;
@@ -9348,6 +9374,41 @@ fn isNestedDefinedName(instructions: []const Instruction, target: []const u8) bo
         }
     }
     return false;
+}
+
+/// The name a `;` at `semicolon_idx` binds, when it provably comes from a symbol literal in this
+/// body. Null when the proof fails, which costs only the park.
+///
+/// `;` takes the name one below the top, so the walk tracks that operand's depth backwards. Each
+/// instruction's declared effect maps a depth after it to the depth before it. A depth the
+/// instruction produced is the answer when the instruction is a symbol push, and unprovable
+/// otherwise; `swap` is the one reordering the walk follows, since `name: swap ;` is the idiom.
+/// An unresolved call or a row effect ends the walk, because the depth below it is unknown.
+fn bindingNameAt(instructions: []const Instruction, semicolon_idx: usize, resolver: WordResolver) ?[]const u8 {
+    var depth: usize = 1;
+    var i = semicolon_idx;
+    while (i > 0) {
+        i -= 1;
+        switch (instructions[i].op) {
+            .push_literal => |val| {
+                if (depth == 0) return if (val == .symbol) val.symbol.bytes else null;
+                depth -= 1;
+            },
+            .call_word, .call_word_direct, .call_word_module => {
+                const name = instructions[i].op.callTargetName() orelse return null;
+                if (std.mem.eql(u8, name, "swap") and depth < 2) {
+                    depth = 1 - depth;
+                    continue;
+                }
+
+                const resolved = resolver.resolve(name, resolver.user_data) orelse return null;
+                if (resolved.callee_effect != null) return null;
+                if (depth < resolved.output_count) return null;
+                depth = depth - resolved.output_count + resolved.input_count;
+            },
+        }
+    }
+    return null;
 }
 
 /// Find a callee in `instructions` that is defined by a nested `;` statement in
@@ -9688,6 +9749,10 @@ fn compileWordPass(
     };
     defer if (state.method_index) |*mi| mi.deinit();
     defer if (state.may_define_memo) |*m| m.deinit();
+    defer state.parked_bindings.deinit(stack_alloc);
+
+    const needs_lexical_frame = quotationBodyNeedsFrame(&state, instructions);
+    emitParkReservation(&state, instructions, needs_lexical_frame);
 
     // If this word contains a self-tail-call, wrap the body in a LOOP_BEGIN
     // so the self-call becomes a back-edge instead of a recursive native call.
@@ -9724,7 +9789,6 @@ fn compileWordPass(
     // a definition made while it runs pops with the call on this tier too. The frame opens
     // inside any loop header above, so a self-tail-call back-edge that pops it finds it
     // re-pushed on the next iteration.
-    const needs_lexical_frame = quotationBodyNeedsFrame(&state, instructions);
     if (needs_lexical_frame) {
         try emitPushLexicalFrame(&state, instructions);
         state.open_lexical_frames += 1;
@@ -9747,6 +9811,8 @@ fn compileWordPass(
         }
         state.open_lexical_frames -= 1;
     }
+
+    if (exitFallsThrough(state.exit_kind)) emitFallThroughParkReleases(&state);
 
     if (state.exit_kind == .loop_diverged) {
         // All paths loop back (no base case fell through).
@@ -10524,6 +10590,9 @@ fn emitWordCAotPass(
     }
     defer if (state.method_index) |*mi| mi.deinit();
     defer if (state.may_define_memo) |*m| m.deinit();
+    defer state.parked_bindings.deinit(allocator);
+
+    emitParkReservation(&state, instructions, needs_lexical_frame);
 
     // Self-tail-call detection for AOT
     if (self_name) |sn| {
@@ -10587,6 +10656,8 @@ fn emitWordCAotPass(
         }
         state.open_lexical_frames -= 1;
     }
+
+    if (exitFallsThrough(state.exit_kind)) emitFallThroughParkReleases(&state);
 
     if (state.exit_kind == .loop_diverged) {
         // Every path loops back. In this case, the word is an infinite loop with no return, e.g.,
@@ -11132,11 +11203,17 @@ pub fn emitProgramC(
     // Freestanding mode targets `os.tag == .freestanding`: no libc, so the
     // stdio, stdlib, and string headers are dropped. Only the headers providing
     // fixed-width integers, bool, and size_t/NULL stay.
+    //
+    // The C backend prints a C-stack block as a bare `alloca(`, which the hosted preamble gets from
+    // stdlib.h. With no libc the compiler builtin stands in.
     if (meta.freestanding) {
         try out.appendSlice(allocator,
             \\#include <stdint.h>
             \\#include <stdbool.h>
             \\#include <stddef.h>
+            \\#ifndef alloca
+            \\#define alloca __builtin_alloca
+            \\#endif
             \\
             \\
         );
@@ -13220,34 +13297,36 @@ fn emitAotMetadata(
 /// Emit an overflow-checked binary operation (add/sub/mul).
 /// On overflow, returns bail_status. On success, returns the result ref.
 fn emitOverflowCheckedBinary(
-    ctx: *c.ir_ctx,
+    state: *CompileState,
     comptime op: comptime_int,
     a: c.ir_ref,
     b: c.ir_ref,
     bail_status: c.ir_ref,
 ) c.ir_ref {
+    const ctx = state.ctx;
     const result = c.ir_fold2(ctx, c.IR_OPT(op, c.IR_I64), a, b);
     const ovf = c.ir_fold1(ctx, c.IR_OPT(c.IR_OVERFLOW, c.IR_BOOL), result);
     const if_ovf = c._ir_IF(ctx, ovf);
     c._ir_IF_TRUE_cold(ctx, if_ovf);
-    c._ir_RETURN(ctx, bail_status);
+    emitAbnormalReturn(state, bail_status);
     c._ir_IF_FALSE(ctx, if_ovf);
     return result;
 }
 
 /// Emit division with div-by-zero and minInt/-1 overflow guards.
 fn emitDivision(
-    ctx: *c.ir_ctx,
+    state: *CompileState,
     a: c.ir_ref,
     b: c.ir_ref,
     bail_status: c.ir_ref,
 ) c.ir_ref {
+    const ctx = state.ctx;
     // Guard: b == 0 -> bail
     const zero = c.ir_const_i64(ctx, 0);
     const is_zero = c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), b, zero);
     const if_zero = c._ir_IF(ctx, is_zero);
     c._ir_IF_TRUE_cold(ctx, if_zero);
-    c._ir_RETURN(ctx, bail_status);
+    emitAbnormalReturn(state, bail_status);
     c._ir_IF_FALSE(ctx, if_zero);
 
     // Guard: a == minInt and b == -1 -> bail (overflow)
@@ -13258,7 +13337,7 @@ fn emitDivision(
     const is_overflow = c.ir_fold2(ctx, c.IR_OPT(c.IR_AND, c.IR_BOOL), is_min, is_neg_one);
     const if_ov = c._ir_IF(ctx, is_overflow);
     c._ir_IF_TRUE_cold(ctx, if_ov);
-    c._ir_RETURN(ctx, bail_status);
+    emitAbnormalReturn(state, bail_status);
     c._ir_IF_FALSE(ctx, if_ov);
 
     return c.ir_fold2(ctx, c.IR_OPT(c.IR_DIV, c.IR_I64), a, b);
@@ -13266,17 +13345,18 @@ fn emitDivision(
 
 /// Emit truncating remainder with div-by-zero guard.
 fn emitRemainder(
-    ctx: *c.ir_ctx,
+    state: *CompileState,
     a: c.ir_ref,
     b: c.ir_ref,
     bail_status: c.ir_ref,
 ) c.ir_ref {
+    const ctx = state.ctx;
     // Guard: b == 0 -> bail
     const zero = c.ir_const_i64(ctx, 0);
     const is_zero = c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), b, zero);
     const if_zero = c._ir_IF(ctx, is_zero);
     c._ir_IF_TRUE_cold(ctx, if_zero);
-    c._ir_RETURN(ctx, bail_status);
+    emitAbnormalReturn(state, bail_status);
     c._ir_IF_FALSE(ctx, if_zero);
 
     return c.ir_fold2(ctx, c.IR_OPT(c.IR_MOD, c.IR_I64), a, b);
@@ -13285,17 +13365,18 @@ fn emitRemainder(
 /// Emit Euclidean modulo with div-by-zero guard.
 /// Matches Zig's @mod semantics: r = @rem(a,b); if r != 0 and signs differ, r += b.
 fn emitEuclideanMod(
-    ctx: *c.ir_ctx,
+    state: *CompileState,
     a: c.ir_ref,
     b: c.ir_ref,
     bail_status: c.ir_ref,
 ) c.ir_ref {
+    const ctx = state.ctx;
     // Guard: b == 0 -> bail
     const zero = c.ir_const_i64(ctx, 0);
     const is_zero = c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), b, zero);
     const if_zero = c._ir_IF(ctx, is_zero);
     c._ir_IF_TRUE_cold(ctx, if_zero);
-    c._ir_RETURN(ctx, bail_status);
+    emitAbnormalReturn(state, bail_status);
     c._ir_IF_FALSE(ctx, if_zero);
 
     // Compute truncating remainder (C semantics)
@@ -13703,7 +13784,7 @@ fn emitCallbackPostCheck(
 
         c._ir_IF_TRUE(ctx, if_pending);
         emitOpenLexicalFramePops(state);
-        c._ir_RETURN(ctx, call_result);
+        emitAbnormalReturn(state, call_result);
 
         c._ir_IF_FALSE(ctx, if_pending);
     }
@@ -13720,11 +13801,11 @@ fn emitCallbackPostCheck(
             else => emitActiveInlineTraceFrames(state, false),
         }
     }
-    c._ir_RETURN(ctx, return_status);
+    emitAbnormalReturn(state, return_status);
     c._ir_IF_FALSE(ctx, if_bail);
 
     if (terminal_success_status) |status| {
-        c._ir_RETURN(ctx, status);
+        emitAbnormalReturn(state, status);
         state.exit_kind = .terminal_return;
         return;
     }
@@ -13868,6 +13949,96 @@ fn emitPopLexicalFrame(state: *CompileState) void {
 /// nothing here, since it leaves compiled code and the boundary truncates on the way out.
 fn emitOpenLexicalFramePops(state: *CompileState) void {
     for (0..state.open_lexical_frames) |_| emitPopLexicalFrame(state);
+}
+
+/// Address of park cell `index` in the block the prologue reserved.
+fn parkCellAddr(state: *CompileState, index: usize) c.ir_ref {
+    const off = c.ir_const_addr(state.ctx, index * ValueLayout.value_size);
+    return c.ir_fold2(state.ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.park_base, off);
+}
+
+/// Release the reference every park created so far holds.
+///
+/// Emitted wherever control leaves the body: the fall-through exit, every non-ok return, and each
+/// hop or back-edge. The C-stack block dies with the call, so a reference left in it is leaked.
+fn emitParkReleases(state: *CompileState) void {
+    for (0..state.park_count) |i| {
+        _ = c._ir_CALL_1(state.ctx, c.IR_I32, state.release_slot_fn, parkCellAddr(state, i));
+    }
+}
+
+/// Release the parks on the body's fall-through exit.
+///
+/// Nothing is emitted on this path afterwards but the epilogue, so the count drops to zero: a
+/// callback there whose error return released again would release a reference twice.
+fn emitFallThroughParkReleases(state: *CompileState) void {
+    emitParkReleases(state);
+    state.park_count = 0;
+}
+
+/// Leave the body with a status other than success, releasing the parks first.
+fn emitAbnormalReturn(state: *CompileState, status: c.ir_ref) void {
+    emitParkReleases(state);
+    c._ir_RETURN(state.ctx, status);
+}
+
+/// Park a retained copy of the value a top-level `;` is about to bind, when the body parks and the
+/// binding's name can be proven.
+///
+/// A quotation value is left alone: it defines a helper word, not a value binding. A row has no
+/// single value to copy. A binding that does not park is not an error here; it is left to the
+/// frame, where the interpreter finds it.
+fn emitParkBinding(
+    state: *CompileState,
+    instructions: []const Instruction,
+    idx: usize,
+    stack: []StackEntry,
+    sp: usize,
+) IrCodegenError!void {
+    if (state.park_base == c.IR_UNUSED or state.body_depth != 1) return;
+    if (sp < 2) return;
+
+    const res = state.resolver orelse return;
+    const semicolon = res.resolve(";", res.user_data) orelse return;
+    if (!semicolon.is_native or !semicolon.defines_word) return;
+
+    switch (stack[sp - 1]) {
+        .quotation_body, .row_region => return,
+        .i64_ref, .f64_ref, .bool_ref, .raw_at_slot => {},
+    }
+
+    const name = bindingNameAt(instructions, idx, res) orelse return;
+
+    std.debug.assert(state.park_count < state.park_capacity);
+
+    try materializeQuotations(state, stack, sp, false);
+    flushToPhysicalStack(state, stack, sp);
+
+    const cell = parkCellAddr(state, state.park_count);
+    emitCopyToPtr(state.ctx, state.base_addr, sp - 1, cell);
+    _ = c._ir_CALL_1(state.ctx, c.IR_I32, state.retain_slot_fn, cell);
+
+    try state.parked_bindings.append(state.allocator, .{ .name = name, .index = state.park_count });
+    state.park_count += 1;
+}
+
+/// Reserve the C-stack block for a body's parks, one cell per top-level `;`.
+///
+/// Emitted in the prologue ahead of any self-tail loop header: the C backend renders the block as
+/// `alloca()`, which inside the loop would grow the stack on every iteration. A body that opens no
+/// frame of its own parks nothing, since the frame its binds reach is not one this body owns.
+fn emitParkReservation(state: *CompileState, instructions: []const Instruction, framed: bool) void {
+    if (!framed) return;
+
+    var count: usize = 0;
+    for (instructions) |instr| {
+        const name = instr.op.callTargetName() orelse continue;
+        if (std.mem.eql(u8, name, ";")) count += 1;
+    }
+    if (count == 0) return;
+
+    state.park_capacity = count;
+    state.park_base = c._ir_ALLOCA(state.ctx, c.ir_const_addr(state.ctx, count * ValueLayout.value_size));
 }
 
 /// Compile a quotation body inline at its call site, in the transient lexical frame the
@@ -21087,6 +21258,144 @@ fn emitQuotationBodyForTest(ctx: *const Context, body: []const Instruction) ![]u
         needs_frame,
         null,
     );
+}
+
+var binding_walk_row_effect: StackEffect = undefined;
+
+/// Resolve the words the binding-name walk steps through: `+` and `drop` with concrete effects,
+/// `;` as the definer, and `each` as a call whose effect carries a row.
+fn resolveBindingWalkForTest(name: []const u8, user_data: *anyopaque) ?ResolvedWord {
+    _ = user_data;
+    if (std.mem.eql(u8, name, "+")) return .{ .word_id = 0, .input_count = 2, .output_count = 1, .is_native = true };
+    if (std.mem.eql(u8, name, "drop")) return .{ .word_id = 0, .input_count = 1, .output_count = 0, .is_native = true };
+    if (std.mem.eql(u8, name, ";")) return .{ .word_id = 1, .input_count = 2, .output_count = 0, .is_native = true, .defines_word = true };
+    if (std.mem.eql(u8, name, "each")) return .{ .word_id = 2, .input_count = 2, .output_count = 0, .is_native = true, .callee_effect = &binding_walk_row_effect };
+    return null;
+}
+
+const binding_walk_resolver = WordResolver{
+    .resolve = &resolveBindingWalkForTest,
+    .user_data = @ptrCast(&define_family_resolver_dummy),
+    .dispatch_table_ptr = @ptrCast(&define_family_resolver_dummy),
+};
+
+fn symbolInstr(name: []const u8) Instruction {
+    return .{ .op = .{ .push_literal = .{ .symbol = .{ .bytes = name } } }, .line = 1 };
+}
+
+fn callInstr(name: []const u8) Instruction {
+    return .{ .op = .{ .call_word = name }, .line = 1 };
+}
+
+fn fixnumInstr(n: i64) Instruction {
+    return .{ .op = .{ .push_literal = .{ .fixnum = n } }, .line = 1 };
+}
+
+test "bindingNameAt: the swap idiom binds the symbol pushed before the swap" {
+    const body = [_]Instruction{ symbolInstr("held"), callInstr("swap"), callInstr(";") };
+    try testing.expectEqualStrings("held", bindingNameAt(&body, 2, binding_walk_resolver).?);
+}
+
+test "bindingNameAt: an expression leaving one value binds the symbol under it" {
+    const body = [_]Instruction{ symbolInstr("total"), fixnumInstr(1), fixnumInstr(2), callInstr("+"), callInstr(";") };
+    try testing.expectEqualStrings("total", bindingNameAt(&body, 4, binding_walk_resolver).?);
+}
+
+test "bindingNameAt: a symbol consumed inside the expression is not the name" {
+    const body = [_]Instruction{ symbolInstr("outer"), symbolInstr("inner"), callInstr("drop"), fixnumInstr(1), callInstr(";") };
+    try testing.expectEqualStrings("outer", bindingNameAt(&body, 4, binding_walk_resolver).?);
+}
+
+test "bindingNameAt: a row effect in the expression leaves the name unproven" {
+    const body = [_]Instruction{ symbolInstr("x"), fixnumInstr(1), fixnumInstr(2), fixnumInstr(3), callInstr("each"), callInstr(";") };
+    try testing.expect(bindingNameAt(&body, 5, binding_walk_resolver) == null);
+}
+
+test "bindingNameAt: an unresolved call leaves the name unproven" {
+    const body = [_]Instruction{ symbolInstr("x"), callInstr("mystery"), callInstr(";") };
+    try testing.expect(bindingNameAt(&body, 2, binding_walk_resolver) == null);
+}
+
+test "bindingNameAt: a non-symbol at the name's depth is not a binding" {
+    const body = [_]Instruction{ fixnumInstr(7), fixnumInstr(1), callInstr(";") };
+    try testing.expect(bindingNameAt(&body, 2, binding_walk_resolver) == null);
+}
+
+/// Emit AOT C for a one-input word body, framed or not, under the define-family resolver.
+fn emitParkWordForTest(body: []const Instruction, framed: bool) ![]u8 {
+    var compiled_names: std.StringHashMapUnmanaged(u32) = .{};
+    defer compiled_names.deinit(testing.allocator);
+
+    return emitWordCAotWithCName(
+        body,
+        1,
+        0,
+        "parks",
+        null,
+        define_family_resolver,
+        null,
+        &compiled_names,
+        .{},
+        null,
+        null,
+        null,
+        testing.allocator,
+        null,
+        &.{},
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        false,
+        null,
+        false,
+        false,
+        false,
+        framed,
+        null,
+    );
+}
+
+test "a framed bind parks a retained copy and releases it on the error and fall-through exits" {
+    const body = [_]Instruction{ symbolInstr("held"), callInstr("swap"), callInstr(";") };
+    const source = try emitParkWordForTest(&body, true);
+    defer testing.allocator.free(source);
+
+    try testing.expect(std.mem.indexOf(u8, source, "alloca(") != null);
+
+    const retain_at = std.mem.indexOf(u8, source, "jitRetainSlot(") orelse return error.NoPark;
+    const pop_at = std.mem.indexOf(u8, source, "jitPopLexicalFrame(") orelse return error.NoBracket;
+    try testing.expect(retain_at < pop_at);
+
+    // One release where the `;` call fails and one on the way out.
+    try testing.expect(countOccurrences(source, "jitReleaseSlot(") >= 2);
+}
+
+test "a body that opens no frame of its own parks nothing" {
+    const body = [_]Instruction{ symbolInstr("held"), callInstr("swap"), callInstr(";") };
+    const source = try emitParkWordForTest(&body, false);
+    defer testing.allocator.free(source);
+
+    try testing.expect(std.mem.indexOf(u8, source, "alloca(") == null);
+    try testing.expect(std.mem.indexOf(u8, source, "jitRetainSlot(") == null);
+}
+
+test "a nested helper definition parks nothing" {
+    const helper = [_]Instruction{fixnumInstr(1)};
+    const body = [_]Instruction{
+        callInstr("drop"),
+        symbolInstr("helper"),
+        .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = &helper } } }, .line = 1 },
+        callInstr(";"),
+    };
+    const source = try emitParkWordForTest(&body, true);
+    defer testing.allocator.free(source);
+
+    try testing.expect(std.mem.indexOf(u8, source, "jitRetainSlot(") == null);
 }
 
 test "a compiled quotation body that cannot define keeps its bare body" {

@@ -1,0 +1,28 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+=== swap shape ===
+Stack: [ ]
+PASS: the value below the binding survives
+Stack: [ ]
+=== expression shape ===
+Stack: [ ]
+PASS: an expression binding leaves its input alone
+Stack: [ ]
+PASS: a string binding leaves its input alone
+Stack: [ ]
+=== rebind ===
+Stack: [ ]
+PASS: a rebound name leaves the lowest value
+Stack: [ ]
+=== exits after a bind ===
+Stack: [ ]
+PASS: a raise after a bind propagates
+Stack: [ ]
+PASS: a division bail after a bind still raises
+Stack: [ ]
+PASS: a division after a bind computes
+Stack: [ ]
