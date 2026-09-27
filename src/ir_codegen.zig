@@ -2512,6 +2512,10 @@ const CompileState = struct {
     /// word had returned. It therefore takes this shape rather than the one it hands the target.
     group_output_count: u8 = 0,
     trampoline_status: c.ir_ref = c.IR_UNUSED,
+    /// When true, a whole-word tail call into an interpreted body hands that body back as
+    /// `pending_tail_status` instead of running it nested. Only a JIT word body sets it; the
+    /// status's doc says why.
+    pending_tail_handoff: bool = false,
     /// When true, callback references use named extern symbols (ir_const_func)
     /// instead of baked function pointer addresses (ir_const_addr). This is
     /// required for AOT C emission where addresses are not known at compile time.
@@ -7977,6 +7981,10 @@ fn emitGenericResolvedNativeCall(ec: EmitCtx, resolved: ResolvedWord) IrCodegenE
         const code_ptr_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), entries_ptr, entry_byte_off);
         const callee_code_ptr = c._ir_LOAD(ctx, c.IR_ADDR, code_ptr_addr);
 
+        // The whole word's last action hands an interpreted body back to the word's receiver. It
+        // also passes on a body that a compiled callee handed back.
+        const pending_tail = state.pending_tail_handoff and isWholeWordTail(state, idx, ec.instructions.len);
+
         // Null-check code_ptr: fallback to interpreter if callee not compiled
         const null_addr = c.ir_const_addr(ctx, 0);
         const is_null = c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), callee_code_ptr, null_addr);
@@ -7993,8 +8001,9 @@ fn emitGenericResolvedNativeCall(ec: EmitCtx, resolved: ResolvedWord) IrCodegenE
             const src = emitTraceSourceArgs(state);
             const line_const = c.ir_const_addr(ctx, line);
             state.noteAotFallbackEmission(.compound_uncompiled, name, resolved.word_id, line);
-            const fb_result = c._ir_CALL_6(ctx, c.IR_I32, state.interpreted_call_fn, ctx_val2, word_id_const, src.ptr, src.len, line_const, c.ir_const_addr(ctx, @intFromBool(is_tail)));
-            const fb_trace: CurrentTraceFrame = if (is_tail) .{ .tail_call = .{ .fallback = true } } else .none;
+            const tail_mode: FallbackTail = if (pending_tail) .handoff else if (is_tail) .tail else .not_tail;
+            const fb_result = c._ir_CALL_6(ctx, c.IR_I32, state.interpreted_call_fn, ctx_val2, word_id_const, src.ptr, src.len, line_const, c.ir_const_addr(ctx, @intFromEnum(tail_mode)));
+            const fb_trace: CurrentTraceFrame = if (is_tail) .{ .tail_call = .{ .fallback = true, .pending = pending_tail } } else .none;
             emitCallbackPostCheck(state, fb_result, state.error_propagate_status, if (resolved.never_returns) state.error_propagate_status else null, fb_trace);
         }
         const end_fallback = if (resolved.never_returns) c.IR_UNUSED else c._ir_END(ctx);
@@ -8004,8 +8013,8 @@ fn emitGenericResolvedNativeCall(ec: EmitCtx, resolved: ResolvedWord) IrCodegenE
         // interpreted run.
         c._ir_IF_FALSE(ctx, if_null);
         {
-            const call_result = emitFinishTrampolineHops(state, c._ir_CALL_1(ctx, c.IR_I32, callee_code_ptr, state.jit_ctx_ptr));
-            const trace: CurrentTraceFrame = if (is_tail) .{ .tail_call = .{ .fallback = false } } else .{ .named = .{ .name = name, .line = line } };
+            const call_result = emitFinishTrampolineHops(state, c._ir_CALL_1(ctx, c.IR_I32, callee_code_ptr, state.jit_ctx_ptr), pending_tail);
+            const trace: CurrentTraceFrame = if (is_tail) .{ .tail_call = .{ .fallback = false, .pending = pending_tail } } else .{ .named = .{ .name = name, .line = line } };
             emitCallbackPostCheck(state, call_result, call_result, if (resolved.never_returns) state.error_propagate_status else null, trace);
         }
         if (resolved.never_returns) {
@@ -9633,6 +9642,7 @@ fn compileWordPass(
         .struct_instance_tag_const = struct_instance_tag_const,
         .bail_status = bail_status,
         .ok_status = ok_status,
+        .pending_tail_handoff = true,
         .items_ptr = items_ptr_after_check,
         .sp_ptr = sp_ptr,
         .capacity_param = capacity_param,
@@ -13365,6 +13375,9 @@ const CurrentTraceFrame = union(enum) {
     /// `tail_raise_status`.
     tail_call: struct {
         fallback: bool,
+        /// The call is the whole word's last action and may hand back `pending_tail_status`. That
+        /// status leaves the word as it came, with no rows, since the body it names has not run.
+        pending: bool = false,
     },
 };
 
@@ -13643,19 +13656,23 @@ fn emitTailCallInlineTraceFrames(state: *CompileState, call_result: c.ir_ref, fa
 /// Run the hops a mutual group member handed back, so the calling code resumes with the status of
 /// the last one.
 ///
+/// `jitRunTrampoline` also runs a body a callee handed back. With `pass_through` set, the call is
+/// the caller's own last action, and the caller hands the body on instead.
+///
 /// The callee's code pointer is read at runtime, and a group can form after this caller compiled.
 /// So any compiled callee may be a member, and the check cannot be decided here. An AOT build
-/// never forms a group, so it emits no check.
-fn emitFinishTrampolineHops(state: *CompileState, call_result: c.ir_ref) c.ir_ref {
+/// never forms a group or hands a body back, so it emits no check.
+fn emitFinishTrampolineHops(state: *CompileState, call_result: c.ir_ref, pass_through: bool) c.ir_ref {
     if (state.aot_mode) return call_result;
 
+    // Both statuses sit above the error status, so one compare finds either.
     const ctx = state.ctx;
-    const is_hop = c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), call_result, c.ir_const_i32(ctx, 3));
+    const is_hop = c.ir_fold2(ctx, c.IR_OPT(c.IR_GT, c.IR_BOOL), call_result, c.ir_const_i32(ctx, 2));
     const if_hop = c._ir_IF(ctx, is_hop);
 
     c._ir_IF_TRUE_cold(ctx, if_hop);
     const run_fn = c.ir_const_addr(ctx, @intFromPtr(&jitRunTrampoline));
-    const hop_result = c._ir_CALL_1(ctx, c.IR_I32, run_fn, state.jit_ctx_ptr);
+    const hop_result = c._ir_CALL_3(ctx, c.IR_I32, run_fn, state.jit_ctx_ptr, call_result, c.ir_const_addr(ctx, @intFromBool(pass_through)));
     const end_hop = c._ir_END(ctx);
 
     c._ir_IF_FALSE(ctx, if_hop);
@@ -13677,6 +13694,20 @@ fn emitCallbackPostCheck(
     const call_failed = c.ir_fold2(ctx, c.IR_OPT(c.IR_NE, c.IR_BOOL), call_result, zero_status);
     const if_bail = c._ir_IF(ctx, call_failed);
     c._ir_IF_TRUE_cold(ctx, if_bail);
+
+    // A handed-back body leaves this word the way a hop does. The error path's rows and status do
+    // not apply, because nothing has raised.
+    if (current_trace_frame == .tail_call and current_trace_frame.tail_call.pending) {
+        const is_pending = c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), call_result, c.ir_const_i32(ctx, pending_tail_status));
+        const if_pending = c._ir_IF(ctx, is_pending);
+
+        c._ir_IF_TRUE(ctx, if_pending);
+        emitOpenLexicalFramePops(state);
+        c._ir_RETURN(ctx, call_result);
+
+        c._ir_IF_FALSE(ctx, if_pending);
+    }
+
     if (traceFramesEnabled(state)) {
         switch (current_trace_frame) {
             .none, .tail_call => {},
@@ -16001,6 +16032,7 @@ fn runCompiledQuotationBody(ctx: *Context, q: value_mod.Quotation) !void {
             return err;
         },
         .bail => return error.NullCodePtr,
+        .tail_call => unreachable,
     }
 }
 
@@ -16255,9 +16287,15 @@ fn invokeModuleWord(ctx: *Context, hit: ModuleWordHit, name: []const u8, is_tail
 /// trampoline then pops the frame before the body runs. A raise inside the body carries no row for
 /// the word, and no output effect is checked.
 fn elideTailFrame(ctx: *Context, name: []const u8) void {
+    endTailCallProfile(ctx, name);
+    ctx.popCallFrame();
+}
+
+/// Close a tail-called word's profile sample before its body runs, as the interpreter's tail arm
+/// does.
+fn endTailCallProfile(ctx: *Context, name: []const u8) void {
     if (ctx.benchmark) |b| b.endWordProfile(ctx.allocator, name);
     if (ctx.profile) |p| p.recordWordEnd(ctx.allocator, name);
-    ctx.popCallFrame();
 }
 
 /// Compiled-code entry point for native words in hosted AOT builds.
@@ -16423,6 +16461,28 @@ export fn jitNativeWordCall(ctx_raw: usize, word_id_raw: usize, src_ptr_raw: usi
 /// them, and so returns the ordinary error status.
 pub const tail_raise_status: i32 = 4;
 
+/// The status a compiled word returns when its last action handed an interpreted body back rather
+/// than running it.
+///
+/// The body waits in the context's tail-call slots, with the callee's frame still pushed, which is
+/// the state an interpreted tail call leaves. The receiver pops that frame and runs the body. A
+/// trampoline receiver loops into it, so a cycle through a body that cannot compile stays flat.
+///
+/// Only a JIT word body returns it, because only `executeCompiled` and `jitRunTrampoline` run one
+/// and receive it. A compiled quotation body and every AOT function are run by callers that do not.
+pub const pending_tail_status: i32 = 5;
+
+/// How a fallback helper treats its call, decoded from the helper's last argument.
+const FallbackTail = enum(usize) {
+    /// A call with code after it in its body.
+    not_tail = 0,
+    /// The last instruction of its compiled body.
+    tail = 1,
+    /// The whole word's last action. A compound callee's body is handed back as
+    /// `pending_tail_status` instead of running.
+    handoff = 2,
+};
+
 /// The shared exit of the two fallback helpers once the callee has run.
 ///
 /// An elided frame is already gone, so neither cleanup touches the call stack for it. An error
@@ -16468,14 +16528,19 @@ fn finishFallbackCall(ctx: *Context, display_name: []const u8, result: anyerror!
     }
 }
 
-/// `is_tail_raw` is nonzero when the call is the last instruction of its compiled body. A compound
-/// callee then runs its body without its frame, as `elideTailFrame` describes; any other callee
-/// keeps it, as in the interpreter.
-export fn jitInterpretedCall(ctx_raw: usize, word_id_raw: usize, src_ptr_raw: usize, src_len_raw: usize, line_raw: usize, is_tail_raw: usize) callconv(.c) i32 {
+/// `tail_mode_raw` is a `FallbackTail`. In tail position a compound callee runs its body without
+/// its frame, as `elideTailFrame` describes; any other callee keeps it, as in the interpreter.
+///
+/// Under `.handoff` a compound callee resolved through the dictionary does not run at all. Its body
+/// is left in the tail-call slots for the compiled word's receiver, which runs it at constant native
+/// depth. A module-private word reached through `invokeModuleWord` still runs here, because that
+/// path runs the body with no body module, which the slots cannot carry.
+export fn jitInterpretedCall(ctx_raw: usize, word_id_raw: usize, src_ptr_raw: usize, src_len_raw: usize, line_raw: usize, tail_mode_raw: usize) callconv(.c) i32 {
     if (ctx_raw == 0) return 1;
     const ctx: *Context = @ptrFromInt(ctx_raw);
     const word_id: u32 = @intCast(word_id_raw);
-    const is_tail = is_tail_raw != 0;
+    const tail_mode: FallbackTail = @enumFromInt(tail_mode_raw);
+    const is_tail = tail_mode != .not_tail;
     var elided = false;
     const entry = ctx.jit_dispatch.get(word_id) orelse blk: {
         var parent = ctx.parent_context;
@@ -16554,6 +16619,17 @@ export fn jitInterpretedCall(ctx_raw: usize, word_id_raw: usize, src_ptr_raw: us
             }
         }
 
+        if (word.action == .compound and tail_mode == .handoff) {
+            endTailCallProfile(ctx, display_name);
+            ctx.tail_call_instructions = word.action.compound;
+            ctx.tail_call_module = word.source_module;
+            ctx.tail_call_source = word.source_file;
+            ctx.tail_call_body_owner = null;
+            ctx.tail_call_may_define = word.exec_flags.may_define;
+            ctx.tail_call_compiled = false;
+            return pending_tail_status;
+        }
+
         if (word.action == .compound and is_tail) {
             elideTailFrame(ctx, display_name);
             elided = true;
@@ -16601,11 +16677,17 @@ pub const ExecResult = enum {
     ok,
     bail,
     error_propagate,
+    /// The word returned `pending_tail_status`.
+    tail_call,
 
     /// Convert a compiled function's raw i32 return status to an ExecResult.
     /// Status 0 = ok, 2 = error_propagate, anything else = bail.
     /// Status 3 (trampoline) must be handled by the caller before calling this.
+    ///
+    /// `pending_tail_status` never reaches here. Read as a bail, it would rewind the stack under a
+    /// body left waiting to run, and strand the frame left pushed for it.
     pub fn fromStatus(status: i32) ExecResult {
+        std.debug.assert(status != pending_tail_status);
         return switch (status) {
             0 => .ok,
             2 => .error_propagate,
@@ -16674,6 +16756,11 @@ pub fn executeCompiled(ctx: *Context, word_id: u32) ExecResult {
         return .bail;
     };
 
+    if (status == pending_tail_status) {
+        ctx.truncatePendingErrorFrames(pending_mark);
+        return .tail_call;
+    }
+
     const result = ExecResult.fromStatus(status);
     if (result == .bail) {
         if (bail_stats_mod.enabled) {
@@ -16696,14 +16783,15 @@ pub fn executeCompiled(ctx: *Context, word_id: u32) ExecResult {
 ///
 /// A target that lost its code, as a redefinition invalidates it, runs interpreted. Its operands
 /// are already in place and the hop has already rewritten the caller's, so bailing to re-run the
-/// word that started the chain would run it on the wrong values.
+/// word that started the chain would run it on the wrong values. The hop is the word's last action,
+/// so that body is handed back rather than run here.
 fn runTrampolineHops(ctx: *Context, jit_ctx: *JitContext, first_status: i32) ?i32 {
     var status = first_status;
     while (status == 3) {
         const target_id = jit_ctx.trampoline_target;
         const target_entry = jitWordEntryFor(ctx, target_id) orelse return null;
         const code_ptr = target_entry.code_ptr orelse {
-            const interpreted = jitInterpretedCall(@intFromPtr(ctx), target_id, 0, 0, 0, 1);
+            const interpreted = jitInterpretedCall(@intFromPtr(ctx), target_id, 0, 0, 0, @intFromEnum(FallbackTail.handoff));
             return if (interpreted == tail_raise_status) 2 else interpreted;
         };
         if (resolveEntryWord(ctx, target_entry, target_entry.word_name)) |word| {
@@ -16722,17 +16810,28 @@ fn runTrampolineHops(ctx: *Context, jit_ctx: *JitContext, first_status: i32) ?i3
     return status;
 }
 
-/// Finish a direct compiled call whose callee handed back a group hop.
+/// Finish a direct compiled call whose callee handed back a group hop or an interpreted body.
 ///
 /// A caller outside the group, or a member calling another member from a non-tail position, has
 /// code of its own still to run. So the hops finish here, and the caller resumes with the status
 /// the last hop returned.
-export fn jitRunTrampoline(jit_ctx: *JitContext) callconv(.c) i32 {
+///
+/// A handed-back body runs here as well, unless `pass_through` is nonzero. The call is then the
+/// caller's own last action, and the caller hands the body on to its receiver.
+export fn jitRunTrampoline(jit_ctx: *JitContext, status: i32, pass_through: usize) callconv(.c) i32 {
     const ctx: *Context = @ptrCast(@alignCast(jit_ctx.ctx));
     const saved_trace_source = ctx.jit_trace_source;
     defer ctx.jit_trace_source = saved_trace_source;
 
-    return runTrampolineHops(ctx, jit_ctx, 3) orelse 1;
+    const last = runTrampolineHops(ctx, jit_ctx, status) orelse return 1;
+    if (last != pending_tail_status or pass_through != 0) return last;
+
+    ctx.popCallFrame();
+    ctx.runPropagatedTailBody() catch |err| {
+        ctx.jit_pending_error = err;
+        return 2;
+    };
+    return 0;
 }
 
 // =============================================================================
@@ -17521,6 +17620,31 @@ test "jitInterpretedCall: a non-tail call pends the compound callee's frame" {
     try testing.expect(pendsFrameNamed(&ctx, "fail"));
     try testing.expect(pendsFrameNamed(&ctx, "probe"));
     try testing.expectEqual(@as(usize, 0), ctx.call_stack.items.len);
+}
+
+test "jitInterpretedCall: a handoff leaves the compound callee's body for the receiver" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    const body = [_]Instruction{.{ .op = .{ .push_literal = .{ .fixnum = 7 } }, .line = 0 }};
+    try ctx.defineWord("probe", .{
+        .name = "probe",
+        .action = .{ .compound = &body },
+    });
+    const word_id = try ctx.jit_dispatch.assignId("probe");
+
+    const rc = jitInterpretedCall(@intFromPtr(&ctx), word_id, 0, 0, 1, @intFromEnum(FallbackTail.handoff));
+    try testing.expectEqual(pending_tail_status, rc);
+    try testing.expectEqual(@as(usize, 0), ctx.stack.depth());
+    try testing.expectEqual(@as(usize, 1), ctx.call_stack.items.len);
+
+    const pending = ctx.tail_call_instructions orelse return error.TestExpectedPendingBody;
+    try testing.expectEqual(@as([*]const Instruction, &body), pending.ptr);
+
+    ctx.popCallFrame();
+    try ctx.runPropagatedTailBody();
+    try testing.expectEqual(@as(usize, 1), ctx.stack.depth());
+    try testing.expectEqual(@as(i64, 7), (try ctx.stack.pop()).fixnum);
 }
 
 test "jitInterpretedCall: the qualified display name reaches the call frame" {

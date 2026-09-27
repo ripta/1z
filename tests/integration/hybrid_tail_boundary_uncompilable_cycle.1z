@@ -1,0 +1,13 @@
+use "testing" ;
+
+\ The cycle from tail_boundary_uncompilable_cycle.1z, called past the hybrid threshold so the
+\ compilable member has code by the time the long run starts.
+
+step-b: no-compile ( n acc -- r ) [ 10 + step-a ] ;
+step-a: ( n acc -- r ) [ over 0 > [ swap 1 - swap 1 + step-b ] [ nip ] if ] ;
+
+300 [ 5 0 step-a drop ] times
+
+"a cycle through a member that cannot compile" test-section
+50000 0 step-a 550000 "entering at the compiled member" assert=
+50000 0 step-b 550010 "entering at the member that cannot compile" assert=

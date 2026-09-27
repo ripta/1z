@@ -1,0 +1,27 @@
+\ A raise inside the member that cannot compile, partway through a cycle with a compiled member.
+\ The compiled member hands that body back to the trampoline as a tail call. So the chain carries
+\ no row for either member and no row for the compiled member's `if`, as in the interpreter.
+\
+\ No flags, so the eager run checks the same golden.
+
+err-b: no-compile ( n -- ) [ dup 3 = [ f "boom" EUserThrown make-error throw ] when err-a ] ;
+err-a: ( n -- ) [ dup 0 > [ 1 - err-b ] [ drop ] if ] ;
+
+[ 10 err-a ] [ inspect print-line ] recover
+[ 10 err-b ] [ inspect print-line ] recover
+
+\ A call with code after it runs the handed-back body where the call is, so the chain gains the
+\ called word's row, as the interpreted call's own frame gives it.
+[ 10 err-a 0 drop ] [ inspect print-line ] recover
+
+err-caller: ( n -- ) [ err-a 0 drop ] ;
+
+[ 10 err-caller ] [ inspect print-line ] recover
+
+\ A compiled member between the two passes the body on rather than running it, so a raise inside
+\ it carries no row for the middle member either.
+pass-b: no-compile ( n -- ) [ dup 3 = [ f "boom" EUserThrown make-error throw ] when pass-a ] ;
+pass-c: ( n -- ) [ 1 - pass-b ] ;
+pass-a: ( n -- ) [ dup 0 > [ pass-c ] [ drop ] if ] ;
+
+[ 10 pass-a ] [ inspect print-line ] recover

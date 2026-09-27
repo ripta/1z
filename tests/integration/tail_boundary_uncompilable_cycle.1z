@@ -1,0 +1,35 @@
+use "testing" ;
+
+\ A mutual tail-recursive cycle with a member that cannot compile. No group can form, so the
+\ compiled member reaches the other through the interpreter fallback. That tail call hands the body
+\ back to the trampoline rather than running it nested, so the cycle stays flat in every mode.
+\
+\ Each uncompilable member is defined first, so its partner resolves it and compiles alone under
+\ eager. No flags, so the eager run checks the same golden. The hybrid twin is
+\ hybrid_tail_boundary_uncompilable_cycle.1z.
+
+step-b: no-compile ( n acc -- r ) [ 10 + step-a ] ;
+step-a: ( n acc -- r ) [ over 0 > [ swap 1 - swap 1 + step-b ] [ nip ] if ] ;
+
+"a cycle through a member that cannot compile" test-section
+50000 0 step-a 550000 "entering at the compiled member" assert=
+50000 0 step-b 550010 "entering at the member that cannot compile" assert=
+
+non-tail-caller: ( n -- r ) [ 0 step-a 1 + ] ;
+
+50000 non-tail-caller 550001 "a compiled caller that continues after the cycle" assert=
+
+"a compiled member between the two" test-section
+
+cycle-b: no-compile ( n -- r ) [ cycle-a ] ;
+cycle-c: ( n -- r ) [ 1 - cycle-b ] ;
+cycle-a: ( n -- r ) [ dup 0 > [ cycle-c ] [ ] if ] ;
+
+50000 cycle-a 0 "the tail call through the compiled middle member" assert=
+
+"a member that binds a named local" test-section
+
+local-b: ( n acc -- r ) [ k: swap ; k 10 + local-a ] ;
+local-a: ( n acc -- r ) [ over 0 > [ swap 1 - swap 1 + local-b ] [ nip ] if ] ;
+
+50000 0 local-a 550000 "entering at the compiled member" assert=

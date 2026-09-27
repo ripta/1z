@@ -5032,6 +5032,7 @@ pub const Context = struct {
             if (markers_mod.isParseTimeOnlyMarker(mk)) return;
             if (markers_mod.isParseTimeMarker(mk)) return;
             if (markers_mod.isGenericMarker(mk)) return;
+            if (markers_mod.isNoCompileMarker(mk)) return;
         }
 
         if (stack_effect_mod.hasAnyRowVariable(effect.*)) return;
@@ -8885,6 +8886,7 @@ pub const Context = struct {
                         // deferred truncation would keep it live for the whole re-run.
                         self.truncateLocalFrames(frame_mark);
                     },
+                    .tail_call => unreachable,
                 }
             }
         }
@@ -9098,6 +9100,9 @@ pub const Context = struct {
 
         switch (result) {
             .ok => return true,
+            // The body the compiled word handed back waits in the tail-call slots, so this
+            // trampoline loops into it rather than running it a level down.
+            .tail_call => return true,
             .error_propagate => {
                 const err = self.jit_pending_error orelse error.UserThrown;
                 self.jit_pending_error = null;
@@ -9270,6 +9275,7 @@ pub const Context = struct {
                 }
                 const saved_source = self.current_source;
                 if (word.source_file) |sf| self.current_source = sf;
+                var tail_body: anyerror!void = {};
                 const jit_result = if (word.source_module) |mod| blk: {
                     self.pushModuleDepsFrame(mod) catch |err| {
                         self.current_source = saved_source;
@@ -9277,8 +9283,8 @@ pub const Context = struct {
                         return self.wordErrorCleanup(name, err);
                     };
                     defer self.popModuleDepsFrameTraced(mod);
-                    break :blk ir_codegen.executeCompiled(self, wid);
-                } else ir_codegen.executeCompiled(self, wid);
+                    break :blk self.executeCompiledRunningHandoff(wid, &tail_body);
+                } else self.executeCompiledRunningHandoff(wid, &tail_body);
                 self.current_source = saved_source;
                 if (self.trace.trace_jit) {
                     var tw = trace_mod.TraceWriter.init();
@@ -9290,31 +9296,17 @@ pub const Context = struct {
                         if (self.profile) |p| p.recordWordEnd(self.allocator, name);
                         return .proceed;
                     },
+                    .tail_call => {
+                        tail_body catch |err| return self.compiledCallFailed(word, instr, is_last, err);
+
+                        if (self.benchmark) |bm| bm.endWordProfile(self.allocator, name);
+                        if (self.profile) |p| p.recordWordEnd(self.allocator, name);
+                        return .proceed;
+                    },
                     .error_propagate => {
                         const err = self.jit_pending_error orelse error.UserThrown;
                         self.jit_pending_error = null;
-
-                        if (self.benchmark) |b| b.endWordProfile(self.allocator, name);
-                        if (self.profile) |p| p.recordWordEnd(self.allocator, name);
-
-                        // A non-tail call always pends this word's frame: the interpreted run
-                        // of the same call shows the row whether or not interpreted callers
-                        // sit above.
-                        //
-                        // The interpreter elides tail-call frames, so a tail call pends only
-                        // when nothing else carries the pending message.
-                        const pend = !is_last or
-                            (self.jit_pending_trace_frames.items.len == 0 and self.call_stack.items.len == 0);
-                        if (pend) {
-                            self.appendPendingErrorFrame(.{
-                                .word_name = name,
-                                .source = self.current_source,
-                                .line = instr.line,
-                                .column = instr.column,
-                                .stack_effect = word.stack_effect,
-                            });
-                        }
-                        return err;
+                        return self.compiledCallFailed(word, instr, is_last, err);
                     },
                     .bail => {
                         if (self.compile_mode == .hybrid) {
@@ -9491,6 +9483,46 @@ pub const Context = struct {
         }
 
         return .proceed;
+    }
+
+    /// Run a word's compiled code for `executeResolvedWord`, and then any body it handed back.
+    ///
+    /// No trampoline sits above this call to loop into that body, so it runs here. The caller keeps
+    /// the word's module-deps frame open around this call, as the interpreter keeps it open while
+    /// the word's tail callee runs. The body's own outcome lands in `tail_body`.
+    fn executeCompiledRunningHandoff(self: *Context, wid: u32, tail_body: *anyerror!void) ir_codegen.ExecResult {
+        const result = ir_codegen.executeCompiled(self, wid);
+        if (result == .tail_call) {
+            self.popCallFrame();
+            tail_body.* = self.runPropagatedTailBody();
+        }
+        return result;
+    }
+
+    /// Close out a compiled call `executeResolvedWord` ran that raised, returning the error.
+    ///
+    /// A non-tail call always pends this word's frame: the interpreted run of the same call shows
+    /// the row whether or not interpreted callers sit above.
+    ///
+    /// The interpreter elides tail-call frames, so a tail call pends only when nothing else carries
+    /// the pending message.
+    fn compiledCallFailed(self: *Context, word: WordDefinition, instr: Instruction, is_last: bool, err: anyerror) anyerror {
+        const name = word.name;
+        if (self.benchmark) |b| b.endWordProfile(self.allocator, name);
+        if (self.profile) |p| p.recordWordEnd(self.allocator, name);
+
+        const pend = !is_last or
+            (self.jit_pending_trace_frames.items.len == 0 and self.call_stack.items.len == 0);
+        if (pend) {
+            self.appendPendingErrorFrame(.{
+                .word_name = name,
+                .source = self.current_source,
+                .line = instr.line,
+                .column = instr.column,
+                .stack_effect = word.stack_effect,
+            });
+        }
+        return err;
     }
 
     /// Set up a tail call to a word with compiled code, leaving the code for the trampoline to run.
@@ -14359,6 +14391,41 @@ test "defineWord: exec_flags populated and recomputed on redefinition" {
     try std.testing.expect(second.exec_flags.is_generic);
     try std.testing.expect(second.exec_flags.empty_compound_body);
     try std.testing.expect(second.exec_flags.skip_type_validation);
+}
+
+test "tryAutoCompile: eager compilation leaves a no-compile word to the interpreter" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+    ctx.compile_mode = .eager;
+
+    const effect = StackEffect{
+        .inputs = &.{},
+        .outputs = &[_]StackEffectParam{.{ .name = "n" }},
+    };
+    const body = [_]Instruction{.{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 0 }};
+
+    try ctx.defineWord("compiled", .{
+        .name = "compiled",
+        .stack_effect = &effect,
+        .action = .{ .compound = &body },
+    });
+    try ctx.defineWord("opted-out", .{
+        .name = "opted-out",
+        .stack_effect = &effect,
+        .markers = &.{@constCast(&markers_mod.no_compile_marker)},
+        .action = .{ .compound = &body },
+    });
+
+    const compiled = ctx.lookupWordForExecution("compiled") orelse return error.TestExpectedLookup;
+    const compiled_entry = ctx.jit_dispatch.get(compiled.word_id orelse return error.TestExpectedWordId) orelse
+        return error.TestExpectedEntry;
+    try std.testing.expect(compiled_entry.code_ptr != null);
+
+    const opted_out = ctx.lookupWordForExecution("opted-out") orelse return error.TestExpectedLookup;
+    if (opted_out.word_id) |wid| {
+        const entry = ctx.jit_dispatch.get(wid) orelse return error.TestExpectedEntry;
+        try std.testing.expect(entry.code_ptr == null);
+    }
 }
 
 test "defineWord: a stamped body's parse file outranks the ambient current_source" {

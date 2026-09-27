@@ -1,0 +1,24 @@
+Stack: [ ]
+Stack: [ ]
+=== a cycle through a member that cannot compile ===
+Stack: [ ]
+PASS: entering at the compiled member
+Stack: [ ]
+PASS: entering at the member that cannot compile
+Stack: [ ]
+Stack: [ ]
+PASS: a compiled caller that continues after the cycle
+Stack: [ ]
+=== a compiled member between the two ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: the tail call through the compiled middle member
+Stack: [ ]
+=== a member that binds a named local ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: entering at the compiled member
+Stack: [ ]

@@ -1,0 +1,9 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+=== a cycle through a member that cannot compile ===
+Stack: [ ]
+PASS: entering at the compiled member
+Stack: [ ]
+PASS: entering at the member that cannot compile
+Stack: [ ]
