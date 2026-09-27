@@ -2,7 +2,7 @@
 #
 # Interleaved two-binary benchmark A/B, un-instrumented.
 #
-# Usage: scripts/benchmark-wall-ab.sh <baseline-binary> <candidate-binary> [reps] [workload-filter]
+# Usage: scripts/benchmark-wall-ab.sh <baseline-binary> <candidate-binary> [reps] [workload-filter] [compile-mode]
 #
 # The companion to benchmark-ab.sh, and the same workloads, interleaving, and
 # table. What differs is the instrument. benchmark-ab.sh passes
@@ -20,6 +20,9 @@
 # the matching rows, which is how one workload is re-measured at a higher rep
 # count than a suite pass.
 #
+# A compile mode is `off`, `eager`, or `hybrid`, and defaults to `off`, as in
+# benchmark-ab.sh.
+#
 # Each binary resolves its own standard library through the `zig-out/lib`
 # symlink beside it, so the two may live in different worktrees. Build both with
 # `make release`.
@@ -27,7 +30,7 @@
 set -euo pipefail
 
 if [ "$#" -lt 2 ]; then
-    echo "usage: $0 <baseline-binary> <candidate-binary> [reps] [workload-filter]" >&2
+    echo "usage: $0 <baseline-binary> <candidate-binary> [reps] [workload-filter] [compile-mode]" >&2
     exit 2
 fi
 
@@ -35,6 +38,15 @@ baseline="$1"
 candidate="$2"
 reps="${3:-7}"
 filter="${4:-}"
+compile_mode="${5:-off}"
+
+case "$compile_mode" in
+    off | eager | hybrid) ;;
+    *)
+        echo "$0: compile mode must be off, eager, or hybrid: $compile_mode" >&2
+        exit 2
+        ;;
+esac
 
 # The user startup file would add arbitrary load work to every run.
 export ONEZ_NO_STARTUP=1
@@ -98,13 +110,13 @@ proc = subprocess.run(sys.argv[1:], stdout=subprocess.DEVNULL, stderr=subprocess
 if proc.returncode != 0:
     sys.exit("%s exited %d" % (sys.argv[1], proc.returncode))
 print(int((time.perf_counter() - start) * 1000000000))
-' "$onez" run --compile=off $flags "$file"
+' "$onez" run --compile="$compile_mode" $flags "$file"
 }
 
 echo "Interleaved benchmark A/B (un-instrumented wall clock)"
 echo "baseline=$baseline"
 echo "candidate=$candidate"
-echo "reps=$reps   mode=--compile=off, no --benchmark"
+echo "reps=$reps   mode=--compile=$compile_mode, no --benchmark"
 echo ""
 
 printf "%-36s %28s %28s %10s\n" "workload" "baseline_ms" "candidate_ms" "cand/base"

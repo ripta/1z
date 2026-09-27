@@ -2,7 +2,7 @@
 #
 # Interleaved two-binary benchmark A/B.
 #
-# Usage: scripts/benchmark-ab.sh <baseline-binary> <candidate-binary> [reps] [workload-filter]
+# Usage: scripts/benchmark-ab.sh <baseline-binary> <candidate-binary> [reps] [workload-filter] [compile-mode]
 #
 # Runs the interpreter-dispatch archetype suite and the task-shape benchmarks
 # against two 1z binaries and reports the ratio per workload. Both binaries run
@@ -15,6 +15,10 @@
 # the matching rows, which is how one workload is re-measured at a higher rep
 # count than the suite pass.
 #
+# A compile mode is `off`, `eager`, or `hybrid`, and defaults to `off`. A change
+# on the compiled dispatch path does not run under `off` at all, so it is
+# measured by naming the mode it runs under.
+#
 # Each binary resolves its own standard library through the `zig-out/lib`
 # symlink beside it, so the two may live in different worktrees. Build both with
 # `make release`.
@@ -22,7 +26,7 @@
 set -euo pipefail
 
 if [ "$#" -lt 2 ]; then
-    echo "usage: $0 <baseline-binary> <candidate-binary> [reps] [workload-filter]" >&2
+    echo "usage: $0 <baseline-binary> <candidate-binary> [reps] [workload-filter] [compile-mode]" >&2
     exit 2
 fi
 
@@ -30,6 +34,15 @@ baseline="$1"
 candidate="$2"
 reps="${3:-7}"
 filter="${4:-}"
+compile_mode="${5:-off}"
+
+case "$compile_mode" in
+    off | eager | hybrid) ;;
+    *)
+        echo "$0: compile mode must be off, eager, or hybrid: $compile_mode" >&2
+        exit 2
+        ;;
+esac
 
 # The user startup file would add arbitrary load work to every run.
 export ONEZ_NO_STARTUP=1
@@ -90,7 +103,7 @@ run_user_ns() {
     local onez="$1" file="$2" flags="$3" output json
     # flags is deliberately word-split: it carries zero or more whole flags.
     # shellcheck disable=SC2086
-    output=$("$onez" run --compile=off $flags --benchmark=json "$file" 2>/dev/null)
+    output=$("$onez" run --compile="$compile_mode" $flags --benchmark=json "$file" 2>/dev/null)
     json=$(printf '%s\n' "$output" | tail -1)
     printf '%s\n' "$json" | python3 -c "import sys,json; print(json.load(sys.stdin)['timing']['user_ns'])"
 }
@@ -98,7 +111,7 @@ run_user_ns() {
 echo "Interleaved benchmark A/B"
 echo "baseline=$baseline"
 echo "candidate=$candidate"
-echo "reps=$reps   mode=--compile=off"
+echo "reps=$reps   mode=--compile=$compile_mode"
 echo ""
 
 printf "%-36s %28s %28s %10s\n" "workload" "baseline_ms" "candidate_ms" "cand/base"

@@ -832,12 +832,19 @@ pub const Context = struct {
     /// the transient lexical frame a direct call would. Set alongside `tail_call_instructions`
     /// from the callee's `exec_flags.may_define`.
     tail_call_may_define: bool = false,
-    /// The tail call target's compiled code, when it has a word id. Set alongside
-    /// `tail_call_instructions`, and null for a callee with none.
+    /// Whether `tail_compiled_slot` holds the tail call target's compiled code. Set alongside
+    /// `tail_call_instructions`, and false for a callee with none.
     ///
     /// The trampoline tries it after popping the caller's frame, so a compiled callee runs where an
     /// interpreted one would. `tail_call_instructions` runs only if it bails.
-    tail_call_compiled: ?TailCompiledCall = null,
+    tail_call_compiled: bool = false,
+    /// Where a compiled tail call waits for the trampoline, allocated on the first one and owned
+    /// by this context.
+    ///
+    /// It lives out of line because the call carries a whole definition. Held inline, it moved the
+    /// fields the dispatch loop reads on every call, which slowed programs that never compile
+    /// anything.
+    tail_compiled_slot: ?*TailCompiledCall = null,
     /// Directory of the currently executing source file for relative path resolution
     current_source_dir: ?[]const u8 = null,
     /// User-configured load paths for search-mode module resolution
@@ -2147,6 +2154,8 @@ pub const Context = struct {
 
     /// Free all resources used by the context.
     pub fn deinit(self: *Context) void {
+        if (self.tail_compiled_slot) |slot| self.allocator.destroy(slot);
+
         if (self.profile_owned) {
             if (self.profile) |p| {
                 p.deinit(self.allocator);
@@ -8362,12 +8371,12 @@ pub const Context = struct {
     /// `enterBodySource`. Probing here instead would put a lookup on every word call to recompute
     /// what the caller already knows.
     pub inline fn executeQuotationWithPic(self: *Context, quotation: Quotation, pic_table: ?*PicTable, initial_module: ?*const value_mod.Module, owner: ?*const value_mod.Closure, body_defines: bool) anyerror!void {
-        return self.runTrampoline(quotation, pic_table, initial_module, owner, body_defines, null);
+        return self.runTrampoline(quotation, pic_table, initial_module, owner, body_defines, false);
     }
 
     /// The body of `executeQuotationWithPic`, entered with `first_compiled` when the body it runs
     /// is a tail call's whose compiled code is tried first.
-    fn runTrampoline(self: *Context, quotation: Quotation, pic_table: ?*PicTable, initial_module: ?*const value_mod.Module, owner: ?*const value_mod.Closure, body_defines: bool, first_compiled: ?TailCompiledCall) anyerror!void {
+    fn runTrampoline(self: *Context, quotation: Quotation, pic_table: ?*PicTable, initial_module: ?*const value_mod.Module, owner: ?*const value_mod.Closure, body_defines: bool, first_compiled: bool) anyerror!void {
         const saved_source = self.current_source;
         defer self.current_source = saved_source;
 
@@ -8395,7 +8404,7 @@ pub const Context = struct {
             self.tail_call_source = null;
             self.tail_call_body_owner = null;
             self.tail_call_may_define = false;
-            self.tail_call_compiled = null;
+            if (!pending_compiled) self.tail_call_compiled = false;
 
             // Push module deps frame on first entry into a module context. On
             // subsequent iterations, the frame persists so that runtime-defined
@@ -8413,8 +8422,10 @@ pub const Context = struct {
             // A tail callee with compiled code runs it here, where its body would have run. A bail
             // leaves the stack as it found it, and the body runs instead.
             var ran_compiled = false;
-            if (pending_compiled) |pc| {
-                pending_compiled = null;
+            if (pending_compiled) {
+                pending_compiled = false;
+                const pc = self.tail_compiled_slot.?.*;
+                self.tail_call_compiled = false;
                 ran_compiled = self.dispatchTailCompiled(pc) catch |err| {
                     if (owns_frame) self.traceDepsFrameUnwind(current_module);
                     return err;
@@ -8450,7 +8461,6 @@ pub const Context = struct {
                 // Taken now, while the caller's frame is already gone, so a raise from the compiled
                 // code pends no row for it. That is what an interpreted tail callee does.
                 pending_compiled = self.tail_call_compiled;
-                self.tail_call_compiled = null;
                 // PIC table is per-word-body; on tail call to a different word,
                 // the PIC table no longer applies.
                 current_pic = null;
@@ -8732,7 +8742,10 @@ pub const Context = struct {
     }
 
     /// Emit trace output for word execution, resolve source, and scope dump.
-    fn traceWordExecution(self: *Context, name: []const u8, instr: Instruction) void {
+    ///
+    /// Inline so every word call tests the trace flags in place. With a second caller the compiler
+    /// stopped inlining it, and the call it left on the dispatch path cost about 4 percent.
+    inline fn traceWordExecution(self: *Context, name: []const u8, instr: Instruction) void {
         if (self.trace.trace_words and trace_mod.matchesPattern(name, self.trace.trace_words_pattern)) {
             var tw = trace_mod.TraceWriter.init();
             trace_mod.traceWord(&tw, name, self.current_source, instr.line, &self.stack);
@@ -8775,7 +8788,6 @@ pub const Context = struct {
         self.tail_call_may_define = false;
 
         const tci_compiled = self.tail_call_compiled;
-        self.tail_call_compiled = null;
 
         if (tci_module) |mod| try self.pushModuleDepsFrame(mod);
         defer if (tci_module) |mod| self.popModuleDepsFrameTraced(mod);
@@ -9085,12 +9097,12 @@ pub const Context = struct {
                     self.tail_call_source = word.source_file;
                     self.tail_call_body_owner = word.body_owner;
                     self.tail_call_may_define = word.exec_flags.may_define;
-                    self.tail_call_compiled = null;
+                    self.tail_call_compiled = false;
                     return .tail_call_set;
                 },
                 .native => |func| {
                     self.tail_call_instructions = null;
-                    self.tail_call_compiled = null;
+                    self.tail_call_compiled = false;
                     self.current_pic_entry = if (site.pic_table) |pt| pt.get(idx) else null;
                     defer self.current_pic_entry = null;
                     if (func(self)) |_| {
@@ -9101,7 +9113,7 @@ pub const Context = struct {
                 },
                 .host_callback => |host| {
                     self.tail_call_instructions = null;
-                    self.tail_call_compiled = null;
+                    self.tail_call_compiled = false;
                     self.current_pic_entry = if (site.pic_table) |pt| pt.get(idx) else null;
                     defer self.current_pic_entry = null;
                     const result: anyerror!void = blk: {
@@ -9118,7 +9130,7 @@ pub const Context = struct {
                     // No tail-call setup: a literal push has nothing further
                     // to call into, so it finishes like a native word does.
                     self.tail_call_instructions = null;
-                    self.tail_call_compiled = null;
+                    self.tail_call_compiled = false;
                     self.current_pic_entry = if (site.pic_table) |pt| pt.get(idx) else null;
                     defer self.current_pic_entry = null;
                     if (self.stack.push(v)) |_| {
@@ -9234,17 +9246,26 @@ pub const Context = struct {
         if (self.benchmark) |b| b.endWordProfile(self.allocator, name);
         if (self.profile) |p| p.recordWordEnd(self.allocator, name);
 
-        self.tail_call_instructions = word.action.compound;
-        self.tail_call_module = word.source_module;
-        self.tail_call_source = word.source_file;
-        self.tail_call_body_owner = word.body_owner;
-        self.tail_call_may_define = word.exec_flags.may_define;
-        self.tail_call_compiled = .{
+        const slot = self.tail_compiled_slot orelse blk: {
+            const created = self.allocator.create(TailCompiledCall) catch |err|
+                return self.wordErrorCleanup(name, err);
+            self.tail_compiled_slot = created;
+            break :blk created;
+        };
+
+        slot.* = .{
             .word_id = wid,
             .word = word,
             .source = self.current_source,
             .instr = instr,
         };
+
+        self.tail_call_instructions = word.action.compound;
+        self.tail_call_module = word.source_module;
+        self.tail_call_source = word.source_file;
+        self.tail_call_body_owner = word.body_owner;
+        self.tail_call_may_define = word.exec_flags.may_define;
+        self.tail_call_compiled = true;
         return .tail_call_set;
     }
 
