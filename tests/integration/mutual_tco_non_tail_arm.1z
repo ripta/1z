@@ -1,0 +1,21 @@
+use "testing" ;
+
+\ A call that ends an arm of an `if` is a tail call of the word only when that `if` is itself the
+\ word's last action. Otherwise the code after the `if` still has to run, so the call stays an
+\ ordinary call rather than becoming a trampoline hop or a loop back-edge. The hybrid twin is
+\ hybrid_mutual_tco_non_tail_arm.1z.
+
+a: ( n -- n ) [ dup 10 > [ 1 - b ] [ dup 5 > [ 1 - b ] [ ] if 100 + ] if ] ;
+b: ( n -- n ) [ dup 0 > [ 1 - a ] [ ] if ] ;
+a: compile!
+
+"a group member call in a non-tail arm" test-section
+7 a 205 "the code after the inner if runs once" assert=
+12 a 404 "the code after the inner if runs at every level" assert=
+
+countdown: stack-recursive ( n -- n ) [ dup 10 > [ 1 - countdown ] [ dup 0 > [ 1 - countdown ] [ ] if 1 + ] if ] ;
+countdown: compile!
+
+"a self call in a non-tail arm" test-section
+3 countdown 4 "the code after the inner if runs at every level" assert=
+13 countdown 11 "the tail self call and the non-tail one mix" assert=

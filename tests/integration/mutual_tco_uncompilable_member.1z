@@ -1,0 +1,12 @@
+use "testing" ;
+
+\ A mutual cycle whose second member binds a named local, which does not compile. The group is
+\ compiled whole or not at all, so the first member is never left hopping to a partner with no
+\ code. The hybrid twin is hybrid_mutual_tco_uncompilable_member.1z.
+
+step-a: ( n acc -- r ) [ over 0 > [ swap 1 - swap 1 + step-b ] [ nip ] if ] ;
+step-b: ( n acc -- r ) [ k: swap ; k 10 + step-a ] ;
+
+"a group with a member that cannot compile" test-section
+50 0 step-a 550 "entering at the compilable member" assert=
+50 0 step-b 560 "entering at the member that cannot compile" assert=

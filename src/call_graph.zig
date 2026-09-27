@@ -318,8 +318,144 @@ fn isCompilable(word_def: *const WordDefinition) bool {
         if (markers.isParseTimeOnlyMarker(mk)) return false;
         if (markers.isParseTimeMarker(mk)) return false;
         if (markers.isGenericMarker(mk)) return false;
+        if (markers.isNoCompileMarker(mk)) return false;
     }
     if (stack_effect_mod.hasAnyRowVariable(effect.*)) return false;
+    return true;
+}
+
+/// Whether `instructions` end in a tail call to a compilable word other than `self_name` whose
+/// effect has the given arity.
+///
+/// Every member of an eligible group makes such a call, so a word without one belongs to no group.
+/// This is the cheap test run ahead of `detectMutualGroup` on every automatic compile.
+pub fn hasTailCallToGroupCandidate(ctx: *Context, instructions: []const Instruction, self_name: []const u8, inputs: usize, outputs: usize) bool {
+    if (instructions.len == 0) return false;
+    const last = instructions[instructions.len - 1];
+    const name = last.op.callTargetName() orelse return false;
+
+    if (std.mem.eql(u8, name, "if")) {
+        if (instructions.len < 3) return false;
+        const true_body = quotationLiteralBody(instructions[instructions.len - 3]) orelse return false;
+        const false_body = quotationLiteralBody(instructions[instructions.len - 2]) orelse return false;
+        return hasTailCallToGroupCandidate(ctx, true_body, self_name, inputs, outputs) or
+            hasTailCallToGroupCandidate(ctx, false_body, self_name, inputs, outputs);
+    }
+
+    if (std.mem.eql(u8, name, self_name)) return false;
+    const callee = ctx.lookupWord(name) orelse return false;
+    if (!isCompilable(&callee)) return false;
+    const effect = callee.stack_effect.?;
+    return effect.inputs.len == inputs and effect.outputs.len == outputs;
+}
+
+fn quotationLiteralBody(instr: Instruction) ?[]const Instruction {
+    return switch (instr.op) {
+        .push_literal => |v| if (v == .quotation) v.quotation.instructions else null,
+        else => null,
+    };
+}
+
+/// The eligible mutual tail-call group `sym` belongs to, resolving names the way a call from the
+/// current scope would. The caller owns the returned slice.
+///
+/// Only the words reachable from `sym` are walked. A group is a cycle through `sym`, so nothing
+/// outside that reach can be a member.
+pub fn detectMutualGroup(ctx: *Context, sym: []const u8) ?[]const []const u8 {
+    const allocator = ctx.allocator;
+
+    var graph: CallGraph = .{};
+    defer {
+        var iter = graph.iterator();
+        while (iter.next()) |entry| {
+            const callees = entry.value_ptr.callees;
+            if (callees.len > 0) allocator.free(callees);
+        }
+        graph.deinit(allocator);
+    }
+
+    var queue = std.ArrayListUnmanaged([]const u8){};
+    defer queue.deinit(allocator);
+    queue.append(allocator, sym) catch return null;
+
+    while (queue.items.len > 0) {
+        const name = queue.orderedRemove(0);
+        if (graph.contains(name)) continue;
+
+        const word_def = ctx.lookupWord(name) orelse continue;
+        const instrs = switch (word_def.action) {
+            .compound => |i| i,
+            .native, .host_callback, .literal => {
+                graph.put(allocator, name, .{ .callees = &.{}, .has_opaque = false }) catch return null;
+                continue;
+            },
+        };
+
+        var callee_set: std.StringHashMapUnmanaged(void) = .{};
+        defer callee_set.deinit(allocator);
+        var has_opaque = false;
+        collectCallees(instrs, &callee_set, &has_opaque, allocator) catch return null;
+
+        const callees = sortedKeys(callee_set, allocator) catch return null;
+        graph.put(allocator, name, .{ .callees = callees, .has_opaque = has_opaque }) catch {
+            if (callees.len > 0) allocator.free(callees);
+            return null;
+        };
+
+        for (callees) |callee| {
+            if (!graph.contains(callee)) queue.append(allocator, callee) catch return null;
+        }
+    }
+
+    const sccs = findSCCs(&graph, allocator) catch return null;
+    defer {
+        for (sccs) |members| allocator.free(members);
+        allocator.free(sccs);
+    }
+
+    for (sccs) |scc| {
+        for (scc) |member| {
+            if (!std.mem.eql(u8, member, sym)) continue;
+            if (!isSccEligibleViaLookup(ctx, scc, &graph)) return null;
+            return allocator.dupe([]const u8, scc) catch null;
+        }
+    }
+    return null;
+}
+
+/// `isSccEligible` with names resolved through the context's scope rather than one dictionary,
+/// so a member defined in a local frame is found.
+fn isSccEligibleViaLookup(ctx: *Context, scc: []const []const u8, graph: *const CallGraph) bool {
+    var member_set: std.StringHashMapUnmanaged(void) = .{};
+    defer member_set.deinit(ctx.allocator);
+    for (scc) |name| {
+        member_set.put(ctx.allocator, name, {}) catch return false;
+    }
+
+    var ref_inputs: ?usize = null;
+    var ref_outputs: ?usize = null;
+
+    for (scc) |name| {
+        const word_def = ctx.lookupWord(name) orelse return false;
+        if (!isCompilable(&word_def)) return false;
+
+        const effect = word_def.stack_effect.?;
+        if (ref_inputs) |ri| {
+            if (effect.inputs.len != ri or effect.outputs.len != ref_outputs.?) return false;
+        } else {
+            ref_inputs = effect.inputs.len;
+            ref_outputs = effect.outputs.len;
+        }
+
+        const graph_entry = graph.get(name) orelse return false;
+        if (graph_entry.has_opaque) return false;
+
+        const instructions = word_def.action.compound;
+        for (graph_entry.callees) |callee| {
+            if (member_set.contains(callee) and !hasTailCallTo(instructions, callee)) return false;
+        }
+    }
+
     return true;
 }
 

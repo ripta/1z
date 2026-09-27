@@ -1,0 +1,8 @@
+Stack: [ ]
+Stack: [ ]
+=== a group with a member that cannot compile ===
+Stack: [ ]
+PASS: entering at the compilable member
+Stack: [ ]
+PASS: entering at the member that cannot compile
+Stack: [ ]

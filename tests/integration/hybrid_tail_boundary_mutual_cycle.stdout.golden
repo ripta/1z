@@ -1,4 +1,8 @@
 Stack: [ ]
 Stack: [ ]
-stack-overflow:
+done
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+<error user-thrown: bottom [tests/integration/hybrid_tail_boundary_mutual_cycle.1z:14:throw <- tests/integration/hybrid_tail_boundary_mutual_cycle.1z:14:if <- tests/integration/hybrid_tail_boundary_mutual_cycle.1z:16:recover]>
 Stack: [ ]

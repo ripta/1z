@@ -1,0 +1,15 @@
+use "testing" ;
+
+\ The shape from mutual_tco_non_member_caller.1z with no `compile!`. Hybrid forms the group and
+\ compiles the caller on its own once each passes the call threshold.
+
+is-even?: ( n -- b ) [ dup 0 = [ drop t ] [ 1 - is-odd? ] if ] ;
+is-odd?:  ( n -- b ) [ dup 0 = [ drop f ] [ 1 - is-even? ] if ] ;
+parity:   ( n -- s ) [ is-even? [ "even" ] [ "odd" ] if "!" #append ] ;
+
+300 [ 7 parity drop ] times
+
+"a compiled caller outside the group" test-section
+10 parity "even!" "an even count returns to the caller" assert=
+7 parity "odd!" "an odd count returns to the caller" assert=
+100001 parity "odd!" "a deep cycle returns to the caller" assert=

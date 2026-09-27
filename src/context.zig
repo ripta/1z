@@ -37,6 +37,7 @@ const PicTable = pic_mod.PicTable;
 const PolymorphicCache = pic_mod.PolymorphicCache;
 const JitDispatchTable = @import("jit_dispatch.zig").JitDispatchTable;
 const ir_codegen = @import("ir_codegen.zig");
+const call_graph_mod = @import("call_graph.zig");
 const bail_stats_mod = @import("bail_stats.zig");
 const scheduler_mod = @import("scheduler.zig");
 const Scheduler = scheduler_mod.Scheduler;
@@ -5035,6 +5036,103 @@ pub const Context = struct {
 
         if (stack_effect_mod.hasAnyRowVariable(effect.*)) return;
 
+        // A member compiled alone calls its partner natively, so the cycle nests one native frame
+        // per hop. The whole group is compiled together so each member's tail call is a hop.
+        //
+        // A partner that already has code is left alone. Its frames may be live below this compile,
+        // and replacing its code unmaps the buffer they would return into.
+        if (call_graph_mod.hasTailCallToGroupCandidate(self, instrs, name, effect.inputs.len, effect.outputs.len)) {
+            if (call_graph_mod.detectMutualGroup(self, name)) |members| {
+                defer self.allocator.free(members);
+                if (!self.groupPartnerHasCode(name, members) and self.compileMutualGroup(members)) return;
+            }
+        }
+
+        const body = self.compileBody(name, def, instrs, effect, null) orelse return;
+        self.installCompiledBody(name, def, instrs, body);
+    }
+
+    fn groupPartnerHasCode(self: *Context, name: []const u8, members: []const []const u8) bool {
+        for (members) |member| {
+            if (std.mem.eql(u8, member, name)) continue;
+
+            const member_def = self.lookupWord(member) orelse continue;
+            const id = member_def.word_id orelse continue;
+            const entry = self.jit_dispatch.get(id) orelse continue;
+            if (entry.code_ptr != null) return true;
+        }
+        return false;
+    }
+
+    /// Compile every member of a mutual tail-call group so each tail call to another member is a
+    /// trampoline hop. False when a member does not compile.
+    ///
+    /// Nothing is installed until every member has compiled. A member installed alone would hop to
+    /// a partner with no code, which then runs interpreted on every hop.
+    pub fn compileMutualGroup(self: *Context, members: []const []const u8) bool {
+        // Every member's code bakes its partners' ids, so all of them exist before any compiles.
+        for (members) |member| {
+            const member_def = self.lookupWord(member) orelse continue;
+            if (member_def.word_id != null) continue;
+
+            const id = self.jit_dispatch.assignId(member) catch return false;
+            if (self.jit_dispatch.getMut(id)) |em| em.stack_effect = member_def.stack_effect;
+            propagateWordId(self, member, id);
+        }
+
+        const bodies = self.allocator.alloc(?CompiledBody, members.len) catch return false;
+        defer self.allocator.free(bodies);
+        @memset(bodies, null);
+
+        var installed = false;
+        defer if (!installed) {
+            for (bodies) |maybe_body| {
+                if (maybe_body) |body| body.discard(self);
+            }
+        };
+
+        for (members, bodies) |member, *slot| {
+            const member_def = self.lookupWord(member) orelse return false;
+            const effect = member_def.stack_effect orelse return false;
+            const instrs = switch (member_def.action) {
+                .compound => |i| i,
+                .native, .host_callback, .literal => return false,
+            };
+            slot.* = self.compileBody(member, member_def, instrs, effect, members) orelse return false;
+        }
+
+        installed = true;
+        for (members, bodies) |member, body| {
+            const member_def = self.lookupWord(member).?;
+            self.installCompiledBody(member, member_def, member_def.action.compound, body.?);
+        }
+        return true;
+    }
+
+    /// Code compiled for a word and not yet installed, with the PIC snapshot it was compiled
+    /// against.
+    pub const CompiledBody = struct {
+        word: ir_codegen.CompiledWord,
+        pic_snapshot: ?*PicTable,
+
+        fn discard(self: CompiledBody, ctx: *Context) void {
+            self.word.jit_buf.deinit();
+            if (self.pic_snapshot) |ps| {
+                ps.deinit();
+                ctx.allocator.destroy(ps);
+            }
+        }
+    };
+
+    /// Compile a word's body without installing it. Null when the body does not compile.
+    pub fn compileBody(
+        self: *Context,
+        name: []const u8,
+        def: WordDefinition,
+        instrs: []const Instruction,
+        effect: *const StackEffect,
+        mutual_group: ?[]const []const u8,
+    ) ?CompiledBody {
         const input_count: u8 = @intCast(effect.inputs.len);
         const output_count: u8 = @intCast(effect.outputs.len);
 
@@ -5046,40 +5144,36 @@ pub const Context = struct {
         };
 
         const pic_snapshot = self.clonePicSnapshotForInstructions(instrs);
-        var pic_snapshot_owned = true;
-        defer if (pic_snapshot_owned) {
+        const word = ir_codegen.compileWordWithPicSnapshot(instrs, input_count, output_count, resolver, name, pic_snapshot, self, mutual_group, effect, def.source_file) catch {
             if (pic_snapshot) |ps| {
                 ps.deinit();
                 self.allocator.destroy(ps);
             }
+            return null;
         };
+        return .{ .word = word, .pic_snapshot = pic_snapshot };
+    }
 
-        const compiled = ir_codegen.compileWordWithPicSnapshot(instrs, input_count, output_count, resolver, name, pic_snapshot, self, null, effect, def.source_file) catch return;
-
+    /// Install compiled code under the word's id, minting one when it has none.
+    pub fn installCompiledBody(self: *Context, name: []const u8, def: WordDefinition, instrs: []const Instruction, body: CompiledBody) void {
+        const compiled = body.word;
         const final_id = if (def.word_id orelse self.mintedWordIdForBody(name, instrs)) |existing_id| blk: {
             if (self.jit_dispatch.get(existing_id) != null) {
                 self.jit_dispatch.update(existing_id, compiled.code_ptr, compiled.jit_buf, compiled.peak_stack_depth);
                 break :blk existing_id;
             }
-            const new_id = self.jit_dispatch.assignId(name) catch {
-                compiled.jit_buf.deinit();
-                return;
-            };
+            const new_id = self.jit_dispatch.assignId(name) catch return body.discard(self);
             self.jit_dispatch.update(new_id, compiled.code_ptr, compiled.jit_buf, compiled.peak_stack_depth);
             propagateWordId(self, name, new_id);
             break :blk new_id;
         } else blk: {
-            const new_id = self.jit_dispatch.assignId(name) catch {
-                compiled.jit_buf.deinit();
-                return;
-            };
+            const new_id = self.jit_dispatch.assignId(name) catch return body.discard(self);
             self.jit_dispatch.update(new_id, compiled.code_ptr, compiled.jit_buf, compiled.peak_stack_depth);
             propagateWordId(self, name, new_id);
             break :blk new_id;
         };
 
-        self.jit_dispatch.replacePicSnapshot(final_id, pic_snapshot);
-        pic_snapshot_owned = false;
+        self.jit_dispatch.replacePicSnapshot(final_id, body.pic_snapshot);
         if (self.jit_dispatch.getMut(final_id)) |em| em.stack_effect = def.stack_effect;
 
         if (self.trace.trace_jit) {

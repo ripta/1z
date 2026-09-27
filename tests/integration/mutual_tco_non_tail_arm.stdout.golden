@@ -1,0 +1,17 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+=== a group member call in a non-tail arm ===
+Stack: [ ]
+PASS: the code after the inner if runs once
+Stack: [ ]
+PASS: the code after the inner if runs at every level
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+=== a self call in a non-tail arm ===
+Stack: [ ]
+PASS: the code after the inner if runs at every level
+Stack: [ ]
+PASS: the tail self call and the non-tail one mix
+Stack: [ ]

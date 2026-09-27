@@ -1,0 +1,13 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+=== a compiled caller outside the group ===
+Stack: [ ]
+PASS: an even count returns to the caller
+Stack: [ ]
+PASS: an odd count returns to the caller
+Stack: [ ]
+PASS: a deep cycle returns to the caller
+Stack: [ ]

@@ -2506,6 +2506,11 @@ const CompileState = struct {
     /// `row_aware_loop` input.
     row_aware_loop_detected: bool = false,
     mutual_group: ?[]const []const u8 = null,
+    /// The declared output count every group member shares.
+    ///
+    /// A hop is the word's last action, so an arm ending in one merges with its sibling as if the
+    /// word had returned. It therefore takes this shape rather than the one it hands the target.
+    group_output_count: u8 = 0,
     trampoline_status: c.ir_ref = c.IR_UNUSED,
     /// When true, callback references use named extern symbols (ir_const_func)
     /// instead of baked function pointer addresses (ir_const_addr). This is
@@ -2631,6 +2636,14 @@ const CompileState = struct {
     /// `if`'s arm. A loop or splice inlines its body with no trace level of its own, and the depth
     /// is what tells such a body apart from the arm around it.
     body_depth: u32 = 0,
+    /// The `body_depth` of the body whose last instruction is the whole word's last action.
+    ///
+    /// The word's own body runs at depth 1. A tail-position `if` hands its arms the next depth
+    /// while they compile, and every other inlined body runs deeper than this. A call is a tail
+    /// call of the word, and so may become a back-edge or a trampoline hop, only when it is last
+    /// in a body at this depth. Being last in an inner body is not enough: the code after that
+    /// body's `if` or loop still has to run.
+    tail_body_depth: u32 = 1,
     /// Where in which body `compileInstructions` currently is, so an error-path frame can name
     /// the `inline` word whose code the instruction was copied from. Saved and restored around a
     /// nested walk, the way `source_file` is around a splice.
@@ -6849,6 +6862,12 @@ fn emitIntrinsicIf(ec: EmitCtx) IrCodegenError!ControlFlow {
         .i64_ref, .f64_ref, .quotation_body => {
             // Non-boolean values and quotations are always truthy
             // Only the true branch executes; compile both to validate stack effects match
+            //
+            // The true arm is the one that runs, so it inherits the `if`'s tail position.
+            const saved_tail_body_depth = state.tail_body_depth;
+            const true_tail_body_depth = if (isWholeWordTail(state, ec.idx, ec.instructions.len)) state.body_depth + 1 else saved_tail_body_depth;
+            defer state.tail_body_depth = saved_tail_body_depth;
+
             if (true_body) |tb| {
                 if (false_body) |fb| {
                     const false_stack = state.allocator.dupe(StackEntry, stack) catch return IrCodegenError.OutOfMemory;
@@ -6861,6 +6880,7 @@ fn emitIntrinsicIf(ec: EmitCtx) IrCodegenError!ControlFlow {
                     const false_exit_kind = state.exit_kind;
                     state.exit_kind = .falls_through;
                     state.loop_end_set = saved_loop_end_set;
+                    state.tail_body_depth = true_tail_body_depth;
                     try compileQuotationBodyInline(state, tb, stack, sp);
                     if (exitFallsThrough(false_exit_kind) and !symbolicShapeMatches(stack, sp.*, false_stack, false_sp)) return IrCodegenError.StackShapeMismatch;
                     if (!exitFallsThrough(false_exit_kind) and exitFallsThrough(state.exit_kind)) {
@@ -6874,6 +6894,7 @@ fn emitIntrinsicIf(ec: EmitCtx) IrCodegenError!ControlFlow {
                         state.exit_kind = saved_exit_kind;
                     }
                 } else {
+                    state.tail_body_depth = true_tail_body_depth;
                     try compileQuotationBodyInline(state, tb, stack, sp);
                 }
             } else {
@@ -7064,6 +7085,11 @@ fn emitIntrinsicIf(ec: EmitCtx) IrCodegenError!ControlFlow {
         };
         state.inline_trace_frame_count += 1;
     }
+    const saved_tail_body_depth = state.tail_body_depth;
+    const arms_tail_body_depth = if (isWholeWordTail(state, ec.idx, ec.instructions.len)) state.body_depth + 1 else saved_tail_body_depth;
+    defer state.tail_body_depth = saved_tail_body_depth;
+
+    state.tail_body_depth = arms_tail_body_depth;
     if (true_body) |tb| {
         try compileQuotationBodyInline(state, tb, stack, sp);
     } else {
@@ -7978,7 +8004,7 @@ fn emitGenericResolvedNativeCall(ec: EmitCtx, resolved: ResolvedWord) IrCodegenE
         // interpreted run.
         c._ir_IF_FALSE(ctx, if_null);
         {
-            const call_result = c._ir_CALL_1(ctx, c.IR_I32, callee_code_ptr, state.jit_ctx_ptr);
+            const call_result = emitFinishTrampolineHops(state, c._ir_CALL_1(ctx, c.IR_I32, callee_code_ptr, state.jit_ctx_ptr));
             const trace: CurrentTraceFrame = if (is_tail) .{ .tail_call = .{ .fallback = false } } else .{ .named = .{ .name = name, .line = line } };
             emitCallbackPostCheck(state, call_result, call_result, if (resolved.never_returns) state.error_propagate_status else null, trace);
         }
@@ -8886,7 +8912,7 @@ fn compileInstructions(
                 // oh, yuck
                 state.self_name != null and
                     state.loop_begin_ref != c.IR_UNUSED and
-                    idx == instructions.len - 1 and
+                    isWholeWordTail(state, idx, instructions.len) and
                     std.mem.eql(u8, state.calleeIdentity(name), state.self_name.?))
                 {
                     // Self-recursive tail call: emit back-edge to LOOP_BEGIN
@@ -8989,7 +9015,7 @@ fn compileInstructions(
                     sp.* = ic;
                     resetStackToPhysical(stack, sp.*);
                 } else if (state.mutual_group != null and
-                    idx == instructions.len - 1 and
+                    isWholeWordTail(state, idx, instructions.len) and
                     isMutualGroupMember(state.mutual_group.?, name) and
                     (state.self_name == null or !std.mem.eql(u8, state.calleeIdentity(name), state.self_name.?)))
                 {
@@ -9034,7 +9060,7 @@ fn compileInstructions(
                     c._ir_RETURN(ctx, state.trampoline_status);
                     state.exit_kind = .terminal_return;
 
-                    sp.* = ic;
+                    sp.* = state.group_output_count;
                     resetStackToPhysical(stack, sp.*);
                 } else {
                     // Unrecognized word: try dispatch table call if a resolver is available
@@ -9131,6 +9157,11 @@ const JitContextLayout = struct {
 
 /// The compiled function signature: takes a single JitContext pointer.
 pub const CompiledFn = *const fn (*JitContext) callconv(.c) i32;
+
+/// Whether the instruction at `idx` of a `len`-long body is the whole word's last action.
+fn isWholeWordTail(state: *const CompileState, idx: usize, len: usize) bool {
+    return idx == len - 1 and state.body_depth == state.tail_body_depth;
+}
 
 fn isMutualGroupMember(group: []const []const u8, name: []const u8) bool {
     for (group) |member| {
@@ -9675,6 +9706,7 @@ fn compileWordPass(
     if (mutual_group) |group| {
         state.mutual_group = group;
         state.input_count = input_count;
+        state.group_output_count = output_count;
         state.trampoline_status = c.ir_const_i32(&ctx, 3);
     }
 
@@ -13608,6 +13640,31 @@ fn emitTailCallInlineTraceFrames(state: *CompileState, call_result: c.ir_ref, fa
     c._ir_MERGE_2(ctx, end_skip, end_keep);
 }
 
+/// Run the hops a mutual group member handed back, so the calling code resumes with the status of
+/// the last one.
+///
+/// The callee's code pointer is read at runtime, and a group can form after this caller compiled.
+/// So any compiled callee may be a member, and the check cannot be decided here. An AOT build
+/// never forms a group, so it emits no check.
+fn emitFinishTrampolineHops(state: *CompileState, call_result: c.ir_ref) c.ir_ref {
+    if (state.aot_mode) return call_result;
+
+    const ctx = state.ctx;
+    const is_hop = c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), call_result, c.ir_const_i32(ctx, 3));
+    const if_hop = c._ir_IF(ctx, is_hop);
+
+    c._ir_IF_TRUE_cold(ctx, if_hop);
+    const run_fn = c.ir_const_addr(ctx, @intFromPtr(&jitRunTrampoline));
+    const hop_result = c._ir_CALL_1(ctx, c.IR_I32, run_fn, state.jit_ctx_ptr);
+    const end_hop = c._ir_END(ctx);
+
+    c._ir_IF_FALSE(ctx, if_hop);
+    const end_direct = c._ir_END(ctx);
+
+    c._ir_MERGE_2(ctx, end_hop, end_direct);
+    return c._ir_PHI_2(ctx, c.IR_I32, hop_result, call_result);
+}
+
 fn emitCallbackPostCheck(
     state: *CompileState,
     call_result: c.ir_ref,
@@ -16587,7 +16644,7 @@ pub fn executeCompiled(ctx: *Context, word_id: u32) ExecResult {
         }
         return .bail;
     };
-    var code_ptr = entry.code_ptr orelse return .bail;
+    const code_ptr = entry.code_ptr orelse return .bail;
     if (resolveEntryWord(ctx, entry, entry.word_name)) |word| {
         ctx.jit_trace_source = word.source_file orelse ctx.current_source;
     } else {
@@ -16611,36 +16668,11 @@ pub fn executeCompiled(ctx: *Context, word_id: u32) ExecResult {
         .ctx = ctx,
         .stack_limit = ctx.stack_limit,
     };
-    var func: CompiledFn = @ptrCast(@alignCast(code_ptr));
-    var status = func(&jit_ctx);
-
-    // Trampoline loop: re-dispatch while compiled functions request it.
-    // Status 3 means "tail-call to trampoline_target instead of returning".
-    while (status == 3) {
-        const target_id = jit_ctx.trampoline_target;
-        const target_entry = ctx.jit_dispatch.get(target_id) orelse blk: {
-            var parent = ctx.parent_context;
-            while (parent) |p| : (parent = p.parent_context) {
-                if (p.jit_dispatch.get(target_id)) |e| break :blk e;
-            }
-            ctx.stack.items.items.len = saved_sp;
-            return .bail;
-        };
-        code_ptr = target_entry.code_ptr orelse {
-            ctx.stack.items.items.len = saved_sp;
-            return .bail;
-        };
-        if (resolveEntryWord(ctx, target_entry, target_entry.word_name)) |word| {
-            ctx.jit_trace_source = word.source_file orelse ctx.current_source;
-        } else {
-            ctx.jit_trace_source = ctx.current_source;
-        }
-        // Re-read items_ptr/capacity in case stack was reallocated
-        jit_ctx.items_ptr = ctx.stack.items.items.ptr;
-        jit_ctx.capacity = ctx.stack.items.capacity;
-        func = @ptrCast(@alignCast(code_ptr));
-        status = func(&jit_ctx);
-    }
+    const func: CompiledFn = @ptrCast(@alignCast(code_ptr));
+    const status = runTrampolineHops(ctx, &jit_ctx, func(&jit_ctx)) orelse {
+        ctx.stack.items.items.len = saved_sp;
+        return .bail;
+    };
 
     const result = ExecResult.fromStatus(status);
     if (result == .bail) {
@@ -16654,6 +16686,53 @@ pub fn executeCompiled(ctx: *Context, word_id: u32) ExecResult {
         ctx.truncatePendingErrorFrames(pending_mark);
     }
     return result;
+}
+
+/// Follow a mutual group's tail calls until a word returns something other than a hop.
+///
+/// A group member ends in a tail call to another member by storing the target's id and returning
+/// status 3, so the cycle runs in this loop at constant native depth. Null means the id names no
+/// word at all.
+///
+/// A target that lost its code, as a redefinition invalidates it, runs interpreted. Its operands
+/// are already in place and the hop has already rewritten the caller's, so bailing to re-run the
+/// word that started the chain would run it on the wrong values.
+fn runTrampolineHops(ctx: *Context, jit_ctx: *JitContext, first_status: i32) ?i32 {
+    var status = first_status;
+    while (status == 3) {
+        const target_id = jit_ctx.trampoline_target;
+        const target_entry = jitWordEntryFor(ctx, target_id) orelse return null;
+        const code_ptr = target_entry.code_ptr orelse {
+            const interpreted = jitInterpretedCall(@intFromPtr(ctx), target_id, 0, 0, 0, 1);
+            return if (interpreted == tail_raise_status) 2 else interpreted;
+        };
+        if (resolveEntryWord(ctx, target_entry, target_entry.word_name)) |word| {
+            ctx.jit_trace_source = word.source_file orelse ctx.current_source;
+        } else {
+            ctx.jit_trace_source = ctx.current_source;
+        }
+
+        // A hop may have grown the stack, which moves the buffer.
+        jit_ctx.items_ptr = ctx.stack.items.items.ptr;
+        jit_ctx.capacity = ctx.stack.items.capacity;
+
+        const func: CompiledFn = @ptrCast(@alignCast(code_ptr));
+        status = func(jit_ctx);
+    }
+    return status;
+}
+
+/// Finish a direct compiled call whose callee handed back a group hop.
+///
+/// A caller outside the group, or a member calling another member from a non-tail position, has
+/// code of its own still to run. So the hops finish here, and the caller resumes with the status
+/// the last hop returned.
+export fn jitRunTrampoline(jit_ctx: *JitContext) callconv(.c) i32 {
+    const ctx: *Context = @ptrCast(@alignCast(jit_ctx.ctx));
+    const saved_trace_source = ctx.jit_trace_source;
+    defer ctx.jit_trace_source = saved_trace_source;
+
+    return runTrampolineHops(ctx, jit_ctx, 3) orelse 1;
 }
 
 // =============================================================================

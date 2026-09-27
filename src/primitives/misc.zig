@@ -1130,198 +1130,24 @@ fn nativeCompile(ctx: *Context) anyerror!void {
         return error.TypeMismatch;
     }
 
-    // Check for mutual recursion group membership
-    const mutual_group = detectMutualGroup(ctx, sym, call_graph_mod);
-    if (mutual_group) |members| {
+    if (call_graph_mod.detectMutualGroup(ctx, sym)) |members| {
         defer ctx.allocator.free(members);
 
-        // Pre-assign word_ids for all group members so they are stable
-        for (members) |member_name| {
-            const member_word = ctx.lookupWord(member_name) orelse continue;
-            if (member_word.word_id == null) {
-                const id = ctx.jit_dispatch.assignId(member_name) catch continue;
-                if (ctx.jit_dispatch.getMut(id)) |em| em.stack_effect = member_word.stack_effect;
-                propagateWordId(ctx, member_name, id);
-            }
-        }
+        const before_ns = if (ctx.benchmark != null) std.time.nanoTimestamp() else 0;
+        const all_ok = ctx.compileMutualGroup(members);
+        if (ctx.benchmark) |bm| bm.recordJitCompile(std.time.nanoTimestamp() - before_ns);
 
-        // Compile all group members with trampoline support
-        var all_ok = true;
-        for (members) |member_name| {
-            compileSingleWord(ctx, member_name, members) catch {
-                all_ok = false;
-                break;
-            };
-        }
-
+        // A member that did not compile leaves the requested word to compile alone.
         if (all_ok) return;
-
-        // If any member failed, fall back to compiling just the requested word
-        // without trampoline support
     }
 
-    compileSingleWord(ctx, sym, null) catch {
+    compileSingleWord(ctx, sym) catch {
         ctx.pending_error_message = "compile!: word is not compilable (must use only fixnum literals and integer arithmetic)";
         return error.TypeMismatch;
     };
 }
 
-/// Detect mutual recursion groups by scanning word bodies via lookupWord.
-/// Builds a local call graph over all reachable words from `sym`, then
-/// runs SCC detection and eligibility filtering.
-fn detectMutualGroup(ctx: *Context, sym: []const u8, call_graph_ns: anytype) ?[]const []const u8 {
-    // Build a mini call graph by walking reachable words from `sym`.
-    // Use lookupWord so we find words in local frames, not just the dictionary.
-    var graph: call_graph_ns.CallGraph = .{};
-    defer {
-        var iter = graph.iterator();
-        while (iter.next()) |entry| {
-            const callees = entry.value_ptr.callees;
-            if (callees.len > 0) ctx.allocator.free(callees);
-        }
-        graph.deinit(ctx.allocator);
-    }
-
-    // BFS from sym to discover reachable words
-    var queue = std.ArrayListUnmanaged([]const u8){};
-    defer queue.deinit(ctx.allocator);
-    queue.append(ctx.allocator, sym) catch return null;
-
-    while (queue.items.len > 0) {
-        const name = queue.orderedRemove(0);
-        if (graph.contains(name)) continue;
-
-        const word_def = ctx.lookupWord(name) orelse continue;
-        const instrs = switch (word_def.action) {
-            .compound => |i| i,
-            .native, .host_callback, .literal => {
-                graph.put(ctx.allocator, name, .{ .callees = &.{}, .has_opaque = false }) catch return null;
-                continue;
-            },
-        };
-
-        var callee_set: std.StringHashMapUnmanaged(void) = .{};
-        defer callee_set.deinit(ctx.allocator);
-        var has_opaque = false;
-        call_graph_ns.collectCalleesPublic(instrs, &callee_set, &has_opaque, ctx.allocator) catch return null;
-
-        const callees = sortedKeysFromSet(callee_set, ctx.allocator) catch return null;
-        graph.put(ctx.allocator, name, .{ .callees = callees, .has_opaque = has_opaque }) catch return null;
-
-        for (callees) |callee| {
-            if (!graph.contains(callee)) {
-                queue.append(ctx.allocator, callee) catch return null;
-            }
-        }
-    }
-
-    // Find SCCs and eligible mutual TCO groups
-    const sccs = call_graph_ns.findSCCs(&graph, ctx.allocator) catch return null;
-    defer {
-        for (sccs) |members| ctx.allocator.free(members);
-        ctx.allocator.free(sccs);
-    }
-
-    for (sccs) |scc| {
-        // Check if sym is in this SCC
-        var has_sym = false;
-        for (scc) |member| {
-            if (std.mem.eql(u8, member, sym)) {
-                has_sym = true;
-                break;
-            }
-        }
-        if (!has_sym) continue;
-
-        // Verify eligibility using lookupWord
-        if (isSccEligibleViaLookup(ctx, scc, &graph, call_graph_ns, stack_effect_mod)) {
-            return ctx.allocator.dupe([]const u8, scc) catch return null;
-        }
-    }
-
-    return null;
-}
-
-fn sortedKeysFromSet(set: std.StringHashMapUnmanaged(void), allocator: std.mem.Allocator) ![]const []const u8 {
-    const count = set.count();
-    if (count == 0) return &.{};
-    const result = try allocator.alloc([]const u8, count);
-    var i: usize = 0;
-    var iter = set.iterator();
-    while (iter.next()) |entry| {
-        result[i] = entry.key_ptr.*;
-        i += 1;
-    }
-    std.mem.sort([]const u8, result, {}, struct {
-        fn lessThan(_: void, a: []const u8, b: []const u8) bool {
-            return std.mem.order(u8, a, b) == .lt;
-        }
-    }.lessThan);
-    return result;
-}
-
-fn isSccEligibleViaLookup(
-    ctx: *Context,
-    scc: []const []const u8,
-    graph: *const call_graph_mod.CallGraph,
-    call_graph_ns: anytype,
-    stack_effect_ns: anytype,
-) bool {
-    var member_set: std.StringHashMapUnmanaged(void) = .{};
-    defer member_set.deinit(ctx.allocator);
-    for (scc) |name| {
-        member_set.put(ctx.allocator, name, {}) catch return false;
-    }
-
-    var ref_inputs: ?usize = null;
-    var ref_outputs: ?usize = null;
-
-    for (scc) |name| {
-        const word_def = ctx.lookupWord(name) orelse return false;
-
-        // Must be compilable
-        const instrs = switch (word_def.action) {
-            .compound => |i| i,
-            .native, .host_callback, .literal => return false,
-        };
-        _ = instrs;
-
-        const effect = word_def.stack_effect orelse return false;
-        for (word_def.markers) |mk| {
-            if (markers_mod.isParseTimeOnlyMarker(mk)) return false;
-            if (markers_mod.isParseTimeMarker(mk)) return false;
-            if (markers_mod.isGenericMarker(mk)) return false;
-        }
-        if (stack_effect_ns.hasAnyRowVariable(effect.*)) return false;
-
-        // Arity uniformity
-        if (ref_inputs) |ri| {
-            if (effect.inputs.len != ri or effect.outputs.len != ref_outputs.?) return false;
-        } else {
-            ref_inputs = effect.inputs.len;
-            ref_outputs = effect.outputs.len;
-        }
-
-        // No opaque calls
-        const graph_entry = graph.get(name) orelse return false;
-        if (graph_entry.has_opaque) return false;
-
-        // Every inter-member edge must be a tail call
-        const word_instrs = switch (word_def.action) {
-            .compound => |i| i,
-            .native, .host_callback, .literal => return false,
-        };
-        for (graph_entry.callees) |callee| {
-            if (member_set.contains(callee)) {
-                if (!call_graph_ns.hasTailCallTo(word_instrs, callee)) return false;
-            }
-        }
-    }
-
-    return true;
-}
-
-fn compileSingleWord(ctx: *Context, sym: []const u8, mutual_group: ?[]const []const u8) !void {
+fn compileSingleWord(ctx: *Context, sym: []const u8) !void {
     const word = ctx.lookupWord(sym) orelse return error.UnknownWord;
 
     const instrs = switch (word.action) {
@@ -1331,64 +1157,11 @@ fn compileSingleWord(ctx: *Context, sym: []const u8, mutual_group: ?[]const []co
 
     const effect = word.stack_effect orelse return error.TypeMismatch;
 
-    const input_count: u8 = @intCast(effect.inputs.len);
-    const output_count: u8 = @intCast(effect.outputs.len);
-
     const before_ns = if (ctx.benchmark != null) std.time.nanoTimestamp() else 0;
+    const body = ctx.compileBody(sym, word, instrs, effect, null) orelse return error.TypeMismatch;
+    if (ctx.benchmark) |bm| bm.recordJitCompile(std.time.nanoTimestamp() - before_ns);
 
-    var resolver_ctx = ResolverState{ .context = ctx };
-    const resolver = ir_codegen.WordResolver{
-        .resolve = &resolveWordForDispatch,
-        .user_data = @ptrCast(&resolver_ctx),
-        .dispatch_table_ptr = @ptrCast(&ctx.jit_dispatch),
-    };
-
-    const pic_snapshot = ctx.clonePicSnapshotForInstructions(instrs);
-    errdefer if (pic_snapshot) |ps| {
-        ps.deinit();
-        ctx.allocator.destroy(ps);
-    };
-
-    const compiled = ir_codegen.compileWordWithPicSnapshot(instrs, input_count, output_count, resolver, sym, pic_snapshot, ctx, mutual_group, effect, word.source_file) catch {
-        return error.TypeMismatch;
-    };
-
-    if (ctx.benchmark) |bm| {
-        const after_ns = std.time.nanoTimestamp();
-        bm.recordJitCompile(after_ns - before_ns);
-    }
-
-    const final_id = if (word.word_id) |existing_id| blk: {
-        if (ctx.jit_dispatch.get(existing_id) != null) {
-            ctx.jit_dispatch.update(existing_id, compiled.code_ptr, compiled.jit_buf, compiled.peak_stack_depth);
-            break :blk existing_id;
-        }
-        const new_id = ctx.jit_dispatch.assignId(sym) catch {
-            compiled.jit_buf.deinit();
-            return error.OutOfMemory;
-        };
-        ctx.jit_dispatch.update(new_id, compiled.code_ptr, compiled.jit_buf, compiled.peak_stack_depth);
-        propagateWordId(ctx, sym, new_id);
-        break :blk new_id;
-    } else blk: {
-        const new_id = ctx.jit_dispatch.assignId(sym) catch {
-            compiled.jit_buf.deinit();
-            return error.OutOfMemory;
-        };
-        ctx.jit_dispatch.update(new_id, compiled.code_ptr, compiled.jit_buf, compiled.peak_stack_depth);
-        propagateWordId(ctx, sym, new_id);
-        break :blk new_id;
-    };
-    ctx.jit_dispatch.replacePicSnapshot(final_id, pic_snapshot);
-    if (ctx.jit_dispatch.getMut(final_id)) |em| em.stack_effect = word.stack_effect;
-    if (ctx.trace.trace_jit) {
-        var tw = trace_mod.TraceWriter.init();
-        trace_mod.traceJitCompile(&tw, sym, final_id);
-    }
-
-    const dump_cfg = jit_dump.DumpConfig{ .dump_bytes = ctx.trace.dump_jit_bytes, .bin_dir = ctx.trace.dump_jit_bin_dir };
-    if (dump_cfg.enabled() and trace_mod.matchesPattern(sym, ctx.trace.dump_jit_word_pattern))
-        jit_dump.dumpJitCode(dump_cfg, sym, final_id, compiled.code_ptr, compiled.jit_buf.size);
+    ctx.installCompiledBody(sym, word, instrs, body);
 }
 
 /// Write word_id to whichever scope lookupWord would find the word in:

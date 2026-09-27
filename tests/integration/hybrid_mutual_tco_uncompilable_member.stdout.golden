@@ -1,0 +1,18 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+=== a group with a member that cannot compile ===
+Stack: [ ]
+PASS: entering at the compilable member
+Stack: [ ]
+PASS: entering at the member that cannot compile
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+=== a group compile reached while a member is running ===
+Stack: [ ]
+PASS: the running member's code survives
+Stack: [ ]

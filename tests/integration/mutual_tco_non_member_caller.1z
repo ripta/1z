@@ -1,0 +1,17 @@
+use "testing" ;
+
+\ A compiled word outside a mutual group calls a member and still runs the rest of its own body.
+\ The member hands back a trampoline hop rather than a result, so the hops have to finish at the
+\ call before the caller resumes. The hybrid twin is hybrid_mutual_tco_non_member_caller.1z.
+
+is-even?: ( n -- b ) [ dup 0 = [ drop t ] [ 1 - is-odd? ] if ] ;
+is-odd?: ( n -- b ) [ dup 0 = [ drop f ] [ 1 - is-even? ] if ] ;
+is-even?: compile!
+
+parity: ( n -- s ) [ is-even? [ "even" ] [ "odd" ] if "!" #append ] ;
+parity: compile!
+
+"a compiled caller outside the group" test-section
+10 parity "even!" "an even count returns to the caller" assert=
+7 parity "odd!" "an odd count returns to the caller" assert=
+100001 parity "odd!" "a deep cycle returns to the caller" assert=

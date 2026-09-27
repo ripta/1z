@@ -1,0 +1,25 @@
+use "testing" ;
+
+\ The shape from mutual_tco_uncompilable_member.1z, called past the hybrid threshold.
+\
+\ `step-c` re-enters `step-d` mid-cycle while compiled `step-c` frames are live below. A group
+\ compile triggered there must not replace the code those frames return into.
+
+step-a: ( n acc -- r ) [ over 0 > [ swap 1 - swap 1 + step-b ] [ nip ] if ] ;
+step-b: ( n acc -- r ) [ k: swap ; k 10 + step-a ] ;
+
+300 [ 5 0 step-a drop ] times
+300 [ 5 0 step-b drop ] times
+
+"a group with a member that cannot compile" test-section
+50 0 step-a 550 "entering at the compilable member" assert=
+50 0 step-b 560 "entering at the member that cannot compile" assert=
+
+reenter: ( n -- )       [ 3 = [ "0 0 step-d drop" eval-string ] when ] ;
+step-c:  ( n acc -- r ) [ over reenter over 0 > [ swap 1 - swap 1 + step-d ] [ nip ] if ] ;
+step-d:  ( n acc -- r ) [ k: swap ; k step-c ] ;
+
+300 [ 5 0 step-c drop ] times
+
+"a group compile reached while a member is running" test-section
+50 0 step-c 50 "the running member's code survives" assert=
