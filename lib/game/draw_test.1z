@@ -22,6 +22,11 @@ test-color-rejects-out-of-range-component: ( -- ) [
   [ 0 -1 0 255 <color> ] invalid-argument: "<color> rejects negative g" assert-error-type
 ] ;
 
+test-color-rejects-non-fixnum-component: ( -- ) [
+  [ 1.5 0 0 255 <color> ] type-error: "<color> rejects a float r" assert-error-type
+  [ 0 0 0 "255" <color> ] type-error: "<color> rejects a string a" assert-error-type
+] ;
+
 test-sprite-valid: ( -- ) [
   2 2 B{ 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 } <sprite>
   width>> 2 "<sprite> stores width" assert=
@@ -29,6 +34,11 @@ test-sprite-valid: ( -- ) [
 
 test-sprite-rejects-wrong-pixel-length: ( -- ) [
   [ 2 2 B{ 0x01 } <sprite> ] invalid-argument: "<sprite> rejects a too-short pixels array" assert-error-type
+] ;
+
+test-sprite-rejects-mistyped-argument: ( -- ) [
+  [ 2.0 2 B{ 0x00 } <sprite> ] type-error: "<sprite> rejects a float width" assert-error-type
+  [ 1 1 { 0 0 0 0 } <sprite> ] type-error: "<sprite> rejects an array of pixels" assert-error-type
 ] ;
 
 test-sprite-rejects-negative-dimensions: ( -- ) [

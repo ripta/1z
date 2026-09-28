@@ -1,0 +1,25 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+=== a colliding arm with a guard after the call ===
+Stack: [ ]
+PASS: returns its input
+Stack: [ ]
+PASS: returns its other input
+Stack: [ ]
+=== a colliding arm with nothing to notice the wrong call ===
+Stack: [ ]
+PASS: returns its input, not 0
+Stack: [ ]
+PASS: returns its other input
+Stack: [ ]
+=== an arm whose indices do not collide ===
+Stack: [ ]
+PASS: takes up to the space
+Stack: [ ]
+PASS: takes up to the other space
+Stack: [ ]

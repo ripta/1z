@@ -1,0 +1,10 @@
+\ Three words that push one value and declare no effect. A module snapshot turns the two
+\ bracket-less bindings into the same one-push body the bracketed word has.
+
+cell-count: 32 ;
+
+cell-size: const inline 8 ;
+
+greeting: [ "hello" ] ;
+
+area: ( -- n ) [ cell-count cell-size * ] ;

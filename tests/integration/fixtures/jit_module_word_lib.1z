@@ -1,0 +1,5 @@
+\ A module word that compiles under eager, and a second one that calls it after the module loads.
+
+double: ( n: fixnum -- n ) [ 2 * ] ;
+
+quadruple: ( n: fixnum -- n ) [ double double ] ;

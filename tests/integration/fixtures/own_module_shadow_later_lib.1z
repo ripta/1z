@@ -1,0 +1,8 @@
+\ A word that binds a local named like a word this module defines further down. Own-module
+\ precedence resolves the read to the module's word, whichever order the two are defined in.
+
+shadow-first: ( -- s ) [ "LOCAL" probe: swap ; probe ] ;
+
+probe: ( -- s ) [ "MODULE" ] ;
+
+shadow-after: ( -- s ) [ "LOCAL" probe: swap ; probe ] ;

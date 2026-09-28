@@ -655,6 +655,9 @@ pub fn nativeLoadImpl(ctx: *Context, cache: *value_mod.MutableMap, filename: []c
         }
     }
 
+    ctx.stampModuleJitIdentities(module);
+    ctx.revokeModuleShadowedLocalReads(module);
+
     if (ctx.trace.trace_modules.lifecycle) {
         var tw = trace_mod.TraceWriter.init();
         trace_mod.traceModuleLoadEnd(&tw, filename, module.words.count());

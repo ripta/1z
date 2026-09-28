@@ -52,12 +52,17 @@ pub const PicTable = struct {
     entries: []PolymorphicCache,
     allocator: Allocator,
 
-    pub fn init(allocator: Allocator, num_instructions: usize) !PicTable {
-        const entries = try allocator.alloc(PolymorphicCache, num_instructions);
+    /// Address of the instruction array the table was allocated for. An index is only meaningful
+    /// against that array, so a reader walking any other array must not consult the table.
+    body: usize,
+
+    pub fn init(allocator: Allocator, body: []const value_mod.Instruction) !PicTable {
+        const entries = try allocator.alloc(PolymorphicCache, body.len);
         @memset(entries, PolymorphicCache{});
         return .{
             .entries = entries,
             .allocator = allocator,
+            .body = @intFromPtr(body.ptr),
         };
     }
 
@@ -75,7 +80,7 @@ pub const PicTable = struct {
     pub fn clone(self: *const PicTable, allocator: Allocator) !PicTable {
         const entries = try allocator.alloc(PolymorphicCache, self.entries.len);
         @memcpy(entries, self.entries);
-        return .{ .entries = entries, .allocator = allocator };
+        return .{ .entries = entries, .allocator = allocator, .body = self.body };
     }
 };
 
@@ -157,7 +162,8 @@ test "PolymorphicCache becomes megamorphic on overflow" {
 
 test "PicTable init creates entries with correct count" {
     const allocator = std.testing.allocator;
-    var table = try PicTable.init(allocator, 5);
+    const body: [5]value_mod.Instruction = undefined;
+    var table = try PicTable.init(allocator, &body);
     defer table.deinit();
 
     try std.testing.expectEqual(@as(usize, 5), table.entries.len);
@@ -168,7 +174,8 @@ test "PicTable init creates entries with correct count" {
 
 test "PicTable get returns mutable pointer to entry" {
     const allocator = std.testing.allocator;
-    var table = try PicTable.init(allocator, 3);
+    const body: [3]value_mod.Instruction = undefined;
+    var table = try PicTable.init(allocator, &body);
     defer table.deinit();
 
     const entry = table.get(1);
@@ -185,7 +192,7 @@ test "PicTable get returns mutable pointer to entry" {
 
 test "PicTable zero-length allocation" {
     const allocator = std.testing.allocator;
-    var table = try PicTable.init(allocator, 0);
+    var table = try PicTable.init(allocator, &.{});
     defer table.deinit();
 
     try std.testing.expectEqual(@as(usize, 0), table.entries.len);
@@ -193,7 +200,8 @@ test "PicTable zero-length allocation" {
 
 test "PicTable clone produces independent copy" {
     const allocator = std.testing.allocator;
-    var original = try PicTable.init(allocator, 3);
+    const body: [3]value_mod.Instruction = undefined;
+    var original = try PicTable.init(allocator, &body);
     defer original.deinit();
 
     const desc = try value_mod.createBuiltinTypeDescriptor(allocator, .{});
@@ -213,4 +221,18 @@ test "PicTable clone produces independent copy" {
     // Mutating clone does not affect original
     cloned.get(1).generation = 99;
     try std.testing.expectEqual(@as(u32, 42), original.entries[1].generation);
+}
+
+test "PicTable records and clones the body it indexes" {
+    const allocator = std.testing.allocator;
+    const body: [2]value_mod.Instruction = undefined;
+    var original = try PicTable.init(allocator, &body);
+    defer original.deinit();
+
+    try std.testing.expectEqual(@intFromPtr(&body), original.body);
+
+    var cloned = try original.clone(allocator);
+    defer cloned.deinit();
+
+    try std.testing.expectEqual(original.body, cloned.body);
 }

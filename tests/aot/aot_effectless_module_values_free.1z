@@ -1,0 +1,9 @@
+\ The interpreter-free twin of aot_effectless_module_values.1z. The same words compile rather
+\ than falling back, so nothing is left for a missing interpreter to run.
+
+use "./support/effectless_values.1z" ;
+
+cell-count .
+cell-size .
+greeting print-line
+area .

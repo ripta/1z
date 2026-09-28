@@ -292,6 +292,7 @@ comptime {
         @export(&onez_load_runtime_image, .{ .name = "onez_load_runtime_image" });
         @export(&onez_runtime_register_compiled, .{ .name = "onez_runtime_register_compiled" });
         @export(&onez_runtime_register_quotations, .{ .name = "onez_runtime_register_quotations" });
+        @export(&onez_runtime_register_quotation_input_counts, .{ .name = "onez_runtime_register_quotation_input_counts" });
         @export(&onez_runtime_register_lexical_sites, .{ .name = "onez_runtime_register_lexical_sites" });
         @export(&onez_replay_method_dispatch, .{ .name = "onez_replay_method_dispatch" });
         @export(&onez_runtime_run, .{ .name = "onez_runtime_run" });
@@ -966,6 +967,16 @@ fn onez_runtime_register_lexical_sites(ptr: ?*anyopaque, rows: [*]const u64, cou
     _ = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
     _ = rows;
     _ = count;
+    return ONEZ_OK;
+}
+
+/// Accepted and ignored. The input counts let a bail put a quotation's operands back before the
+/// interpreter re-runs it, and a freestanding binary has no interpreter to re-run anything.
+fn onez_runtime_register_quotation_input_counts(ptr: ?*anyopaque, table: [*]const ?*const anyopaque, counts: [*]const u8, size: u32) callconv(.c) i32 {
+    _ = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
+    _ = table;
+    _ = counts;
+    _ = size;
     return ONEZ_OK;
 }
 

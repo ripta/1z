@@ -1,0 +1,9 @@
+\ <color> binds its four inputs as named locals. Declared as fixnums, every read is proven to push
+\ one value, so the word compiles. eager_game_color_bindings_trace pins that it does.
+
+use "game/draw" ;
+use "testing" ;
+
+10 20 30 255 <color>
+dup r>> 10 "<color> stores r" assert=
+a>> 255 "<color> stores a" assert=

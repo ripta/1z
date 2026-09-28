@@ -2554,6 +2554,30 @@ export fn onez_runtime_register_quotations(ptr: ?*anyopaque, table: [*]const ?*c
     return ONEZ_OK;
 }
 
+/// Record how many inputs each compiled quotation function takes, so a bail out of one called
+/// from native code can put its operands back. `counts` runs parallel to `table`; a slot with no
+/// function is skipped. Called once, after onez_runtime_register_quotations.
+export fn onez_runtime_register_quotation_input_counts(ptr: ?*anyopaque, table: [*]const ?*const anyopaque, counts: [*]const u8, size: u32) i32 {
+    const handle = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
+    const ctx = handle.ctx;
+
+    const states = ctx.allocator.create(context_mod.AotQuotationFnStates) catch return ONEZ_ERR_ALLOC;
+    states.* = .{};
+
+    for (0..size) |i| {
+        const fn_ptr = table[i] orelse continue;
+        if (counts[i] == ir_codegen.aot_quotation_no_input_count) continue;
+        states.put(ctx.allocator, @intFromPtr(fn_ptr), .{ .input_count = counts[i] }) catch {
+            states.deinit(ctx.allocator);
+            ctx.allocator.destroy(states);
+            return ONEZ_ERR_ALLOC;
+        };
+    }
+
+    ctx.aot_quotation_fn_states = states;
+    return ONEZ_OK;
+}
+
 /// Install the program's lexical site table, so its compiled frames and decoded literals are
 /// placed in the nesting their build recorded. Must run before any compiled code.
 export fn onez_runtime_register_lexical_sites(ptr: ?*anyopaque, rows: [*]const u64, count: u32) i32 {

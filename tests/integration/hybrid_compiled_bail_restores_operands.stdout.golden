@@ -1,0 +1,18 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+=== a bail after the body stored below its entry ===
+Stack: [ ]
+Stack: [ 99999999999999999999 49999999999999999999 1 ]
+PASS: the bottom output is the untouched a
+Stack: [ 99999999999999999999 49999999999999999999 ]
+PASS: the halved b
+Stack: [ 99999999999999999999 ]
+PASS: the tucked b
+Stack: [ ]
+=== a bail after the body released an input ===
+Stack: [ ]
+Stack: [ 50000000000000000004 ]
+PASS: the string survives the bail and the re-run counts it
+Stack: [ ]

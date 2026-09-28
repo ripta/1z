@@ -6,6 +6,7 @@ const PicTable = pic_mod.PicTable;
 const PolymorphicCache = pic_mod.PolymorphicCache;
 const dictionary_mod = @import("dictionary.zig");
 const StackEffect = @import("stack_effect.zig").StackEffect;
+const Module = @import("value.zig").Module;
 
 /// Cached per-word data letting `jitNativeWordCall` dispatch a hosted-AOT
 /// native word with zero dictionary lookups. Populated exactly once, at
@@ -36,6 +37,13 @@ pub const JitEntry = struct {
     /// no module. Composed once at AOT registration and owned by the table;
     /// `deinit` frees it.
     qualified_name: ?[]const u8 = null,
+    /// The module whose word this JIT id names, or null for a word with no module.
+    ///
+    /// Compiled identity is the module and the word, not the bare name. A fallback call out of
+    /// compiled code resolves through this module first, so a module's code reaches its own
+    /// private words even when it was entered from outside the module. `module` plays the same
+    /// part for an AOT entry.
+    defining_module: ?*const Module = null,
     call_count: u32 = 0,
     uncompilable: bool = false,
     /// Peak stack slots used above the current stack pointer during
@@ -61,6 +69,16 @@ pub const JitEntry = struct {
     /// Set with the definition in hand: at compile time on the JIT tier, at startup
     /// registration on the AOT tier.
     stack_effect: ?*const StackEffect = null,
+    /// Names the compiled code reads from a park or an inlined helper rather than resolving,
+    /// owned by the table. The strings borrow from the word's instruction stream.
+    ///
+    /// Module finalization reads them: a word compiled before its module was final revokes its
+    /// code when one names a word the module defines, which outranks the local.
+    local_read_names: []const []const u8 = &.{},
+    /// Inputs the compiled code takes from the stack, recorded where JIT code is installed. A
+    /// bail restores this many slots under the entry stack pointer. Null where no bail re-runs
+    /// the body, as on an AOT entry.
+    input_count: ?u8 = null,
 
     /// The name traces, profiles, and error frames display for this word.
     pub fn displayName(self: JitEntry) []const u8 {
@@ -97,6 +115,7 @@ pub const JitDispatchTable = struct {
             if (entry.qualified_name) |q| {
                 self.allocator.free(q);
             }
+            self.allocator.free(entry.local_read_names);
         }
         self.entries.deinit(self.allocator);
     }
@@ -162,6 +181,32 @@ pub const JitDispatchTable = struct {
         self.entries.items[word_id].uncompilable = false;
         self.entries.items[word_id].pic_snapshot = null;
         self.entries.items[word_id].dispatch_pic = null;
+        self.allocator.free(self.entries.items[word_id].local_read_names);
+        self.entries.items[word_id].local_read_names = &.{};
+
+        // A redefinition invalidates the id its callers hold, and those callers then reach the
+        // new definition by name. Left in place, the module would answer with the word replaced.
+        self.entries.items[word_id].defining_module = null;
+    }
+
+    /// Stop dispatching to a word's compiled code without freeing it, and keep it from being
+    /// compiled again automatically.
+    ///
+    /// A bail leaves references the abandoned body held that nothing can release soundly, so a
+    /// word that bails runs interpreted from then on rather than leaking on every call. The buffer
+    /// stays alive until teardown: a compiled frame that reached the code before the bail may
+    /// still be returning through it. `compile!` replaces the code on request.
+    pub fn disable(self: *JitDispatchTable, word_id: u32) void {
+        const entry = &self.entries.items[word_id];
+        entry.code_ptr = null;
+        entry.uncompilable = true;
+    }
+
+    /// Replace the entry's local-read names with a copy of `names`.
+    pub fn replaceLocalReadNames(self: *JitDispatchTable, word_id: u32, names: []const []const u8) Allocator.Error!void {
+        const copy = try self.allocator.dupe([]const u8, names);
+        self.allocator.free(self.entries.items[word_id].local_read_names);
+        self.entries.items[word_id].local_read_names = copy;
     }
 
     pub fn replacePicSnapshot(self: *JitDispatchTable, word_id: u32, pic_snapshot: ?*PicTable) void {
@@ -265,6 +310,25 @@ test "invalidate clears code_ptr and jit_buf" {
     try std.testing.expectEqual(null, entry.jit_buf);
 }
 
+test "disable stops dispatch, blocks recompilation, and keeps the buffer" {
+    var table = JitDispatchTable.init(std.testing.allocator);
+    defer table.deinit();
+
+    const id = try table.assignId("foo");
+
+    var dummy: u8 = 0;
+    const fake_ptr: *const anyopaque = &dummy;
+    const fake_buf = JitBuffer{ .code = @constCast(fake_ptr), .size = 0 };
+
+    table.update(id, fake_ptr, fake_buf, 0);
+    table.disable(id);
+
+    const entry = table.get(id).?;
+    try std.testing.expectEqual(null, entry.code_ptr);
+    try std.testing.expect(entry.uncompilable);
+    try std.testing.expect(entry.jit_buf != null);
+}
+
 test "getMut returns mutable pointer" {
     var table = JitDispatchTable.init(std.testing.allocator);
     defer table.deinit();
@@ -335,8 +399,9 @@ test "invalidate frees and nulls pic_snapshot" {
     table.update(id, fake_ptr, fake_buf, 0);
 
     // Attach a real PicTable snapshot
+    const body: [3]@import("value.zig").Instruction = undefined;
     const ps = try std.testing.allocator.create(PicTable);
-    ps.* = try PicTable.init(std.testing.allocator, 3);
+    ps.* = try PicTable.init(std.testing.allocator, &body);
     table.getMut(id).?.pic_snapshot = ps;
 
     table.invalidate(id);

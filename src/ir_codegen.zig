@@ -26,6 +26,7 @@ const Context = context_module.Context;
 
 const Callable = @import("callable.zig").Callable;
 const container_backing = @import("container_backing.zig");
+const StackSnapshot = @import("stack_snapshot.zig").StackSnapshot;
 
 const aot_image_mod = @import("aot_image.zig");
 const aot_image_emit_mod = @import("aot_image_emit.zig");
@@ -115,6 +116,7 @@ pub const NotCompilableReason = enum {
     computed_binding_name,
     typed_helper_in_aot,
     reified_local_read,
+    own_module_read,
     unknown_reason,
 
     pub fn code(self: NotCompilableReason) []const u8 {
@@ -143,6 +145,7 @@ pub const NotCompilableReason = enum {
             .computed_binding_name => "NC.23",
             .typed_helper_in_aot => "NC.24",
             .reified_local_read => "NC.25",
+            .own_module_read => "NC.26",
         };
     }
 
@@ -172,6 +175,7 @@ pub const NotCompilableReason = enum {
             .computed_binding_name => "binds a local under a name not proven to be a symbol literal",
             .typed_helper_in_aot => "calls a nested helper with typed inputs, which an AOT quotation cannot check",
             .reified_local_read => "hands off a quotation reading a local that also names a word outside the body",
+            .own_module_read => "reads a local its own module also defines as a word, which the module's word outranks",
         };
     }
 
@@ -184,6 +188,7 @@ pub const NotCompilableReason = enum {
             .read_before_bind => "pushes a quotation that reads '{s}' before that name is bound",
             .typed_helper_in_aot => "calls nested helper '{s}', whose typed inputs an AOT quotation cannot check",
             .reified_local_read => "hands off a quotation reading local '{s}', which also names a word outside the body",
+            .own_module_read => "reads local '{s}', which its own module also defines as a word, and the module's word outranks it",
             else => null,
         };
     }
@@ -214,6 +219,7 @@ pub const NotCompilableReason = enum {
             .computed_binding_name => "compute the value first, then bind it with a symbol literal, as in `name: swap ;`",
             .typed_helper_in_aot => "blocked until AOT quotations keep their type annotations",
             .reified_local_read => "rename the local so it names no outside word, or build with the interpreter linked",
+            .own_module_read => "rename the local so it names no word of its own module",
         };
     }
 };
@@ -601,6 +607,16 @@ pub const CompiledWord = struct {
     /// `IR_COND` select instead of the boxed flush/`MERGE_2` path. Observable
     /// so tests can confirm a qualifying merge took the fast path.
     cond_select_count: u32 = 0,
+    /// Names the code read from a park or an inlined helper, owned by `local_read_allocator`. The
+    /// strings borrow from the word's instruction stream.
+    local_read_names: []const []const u8 = &.{},
+    local_read_allocator: ?std.mem.Allocator = null,
+
+    pub fn freeLocalReadNames(self: *CompiledWord) void {
+        if (self.local_read_allocator) |a| a.free(self.local_read_names);
+        self.local_read_names = &.{};
+        self.local_read_allocator = null;
+    }
 };
 
 fn shouldSkipTypeAnnotationValidation(word: WordDefinition) bool {
@@ -2578,7 +2594,8 @@ const CompileState = struct {
     interp_ctx: ?*const Context = null,
     /// Interpreter PIC table for the word being compiled. Each instruction
     /// index maps to a PolymorphicCache recording observed type pairs.
-    /// Read at compile time to emit inline type-check-and-branch IR.
+    /// Read at compile time to emit inline type-check-and-branch IR, and only
+    /// through `picTableFor`, which declines it inside an inlined body.
     pic_table: ?*pic_mod.PicTable = null,
     pic_dispatch_fn: c.ir_ref = c.IR_UNUSED,
     pic_native_call_fn: c.ir_ref = c.IR_UNUSED,
@@ -2788,6 +2805,12 @@ const CompileState = struct {
     /// Every name a `;` in a lexical body bound so far, whether or not it parked. An inlined body's
     /// entries go when it ends, as the frame the interpreter gives that body does.
     bound_names: std.ArrayListUnmanaged(BoundName) = .{},
+    /// Every name a compiled read took from a park or an inlined helper instead of resolving it.
+    ///
+    /// Own-module precedence ranks a module's word above any local of the same name. A word
+    /// compiled before its module is final cannot see every word the module will define, so the
+    /// names travel with the code and module finalization revokes it on a match.
+    local_read_names: std.ArrayListUnmanaged([]const u8) = .{},
     /// Addresses of the compiled body's own instruction array and every quotation literal nested
     /// in it. A local answers a bare word only in a body its frame's owner lexically encloses, so
     /// a spliced callee body never sees this body's bindings.
@@ -2841,6 +2864,7 @@ const CompileState = struct {
     /// Free the local-binding bookkeeping. Every site that builds a state defers this.
     fn deinitBindings(state: *CompileState) void {
         state.bound_names.deinit(state.allocator);
+        state.local_read_names.deinit(state.allocator);
         state.lexical_bodies.deinit(state.allocator);
         state.open_lexical_bodies.deinit(state.allocator);
     }
@@ -3088,6 +3112,9 @@ fn collectQuotationFallbacks(
 }
 
 /// Result of inferring a quotation body's stack effect by abstract simulation.
+/// The `onez_quotation_input_counts` entry for a slot with no compiled function.
+pub const aot_quotation_no_input_count: u8 = 255;
+
 pub const InferredEffect = struct {
     input_count: u8,
     output_count: u8,
@@ -4003,6 +4030,23 @@ fn reifiedBodyModuleName(state: *const CompileState, body: []const Instruction) 
     const module = interp_ctx.quotation_stamp_store.lookup(@intFromPtr(body.ptr)) orelse return null;
     if (context_module.isSyntheticScopeModule(module)) return null;
     return module.name;
+}
+
+/// Whether the module the compiled word belongs to defines `name`, so the interpreter resolves a
+/// read of it to that word rather than to a local of the same name.
+///
+/// The answer comes from the stamp store, which holds a body only once its module is final. A word
+/// compiled before that answers false here, and module finalization re-checks the names it read.
+fn ownModuleDefines(state: *const CompileState, name: []const u8) bool {
+    if (state.open_lexical_bodies.items.len == 0) return false;
+    const interp_ctx = state.interp_ctx orelse return false;
+
+    const body = state.open_lexical_bodies.items[0];
+    if (body.len == 0) return false;
+
+    const module = interp_ctx.quotation_stamp_store.lookup(@intFromPtr(body.ptr)) orelse return false;
+    if (context_module.isSyntheticScopeModule(module)) return false;
+    return module.words.contains(name) or module.deps.contains(name);
 }
 
 /// Materialize any quotation_body entries as raw Values on the physical stack.
@@ -8026,9 +8070,9 @@ fn emitGenericResolvedNativeCall(ec: EmitCtx, resolved: ResolvedWord) IrCodegenE
         // slow-path fallback internally, so when any one succeeds no separate call is needed.
         if (mono) |m| {
             emitMonomorphizedDispatch(state, ctx_val, name, resolved, m, line);
-        } else if (!emitInlinePicCheck(state, idx, ctx_val, name, resolved, effective_in, line) and
+        } else if (!emitInlinePicCheck(state, ec.instructions, idx, ctx_val, name, resolved, effective_in, line) and
             !emitInlineDispatchTableCheck(state, ctx_val, name, resolved, effective_in, line) and
-            !emitInlinePicCheckUnary(state, idx, ctx_val, name, resolved, effective_in, line) and
+            !emitInlinePicCheckUnary(state, ec.instructions, idx, ctx_val, name, resolved, effective_in, line) and
             !emitInlineDispatchTableCheckUnary(state, ctx_val, name, resolved, effective_in, line))
         {
             emitNativeWordCall(state, ctx_val, name, resolved, line, is_tail);
@@ -9106,9 +9150,12 @@ fn compileInstructions(
                     } else if (localReach(instr.op) != .none) {
                         if (state.boundName(name)) |bound| {
                             if (localReach(instr.op) == .captured) return state.refuse(.unproven_local_read, name);
+                            if (ownModuleDefines(state, name)) return state.refuse(.own_module_read, name);
                             if (bound.park == null and bound.helper == null) {
                                 return state.refuse(if (bound.quotation_value) .uninlinable_helper else .unproven_local_read, name);
                             }
+
+                            try state.local_read_names.append(state.allocator, name);
 
                             if (bound.park) |park| {
                                 emitParkRead(state, park, stack, sp);
@@ -10200,12 +10247,20 @@ fn compileWordPass(
     var size: usize = 0;
     const code: ?*anyopaque = c.ir_jit_compile(&ctx, 2, &size);
     if (code) |ptr| {
+        const names_allocator: ?std.mem.Allocator = if (interp_ctx) |ic| ic.allocator else null;
+        const names: []const []const u8 = if (names_allocator) |a|
+            a.dupe([]const u8, state.local_read_names.items) catch return IrCodegenError.CompilationFailed
+        else
+            &.{};
+
         return .{
             .compiled = .{
                 .code_ptr = ptr,
                 .jit_buf = .{ .code = ptr, .size = size },
                 .peak_stack_depth = state.peak_sp,
                 .cond_select_count = state.cond_select_count,
+                .local_read_names = names,
+                .local_read_allocator = names_allocator,
             },
             .peak_stack_depth = state.peak_sp,
             .row_aware_self_loop = state.row_aware_loop_detected,
@@ -11604,6 +11659,7 @@ pub fn emitProgramC(
         \\extern int onez_set_source(void *ctx, const char *data, unsigned long len);
         \\extern int32_t onez_runtime_register_compiled(void *rt, int32_t (**table)(uintptr_t), const char **names, const char **modules, uint32_t size);
         \\extern int32_t onez_runtime_register_quotations(void *rt, int32_t (**table)(uintptr_t), uint32_t size);
+        \\extern int32_t onez_runtime_register_quotation_input_counts(void *rt, int32_t (**table)(uintptr_t), const uint8_t *counts, uint32_t size);
         \\extern int32_t onez_runtime_register_lexical_sites(void *rt, const uint64_t *rows, uint32_t count);
         \\extern int32_t onez_runtime_run(void *rt, uint32_t entry_word_id);
         \\extern void onez_fire_exit_hooks(void *rt, int32_t code);
@@ -12887,6 +12943,23 @@ pub fn emitProgramC(
             }
         }
         try out.appendSlice(allocator, "};\n\n");
+
+        // The inputs each compiled quotation takes, parallel to the table above, so a bail can put
+        // them back. The count is the one the function was compiled with, which is inferred from the
+        // body rather than read from its declaration. An uncompiled slot holds the sentinel.
+        try out.appendSlice(allocator, "static const uint8_t onez_quotation_input_counts[] = {\n");
+        for (0..q_table_size) |id| {
+            var count: u8 = aot_quotation_no_input_count;
+            for (quotations) |q| {
+                if (q.quotation_id == id and q.compiled) {
+                    if (q.inferred_effect) |eff| count = eff.input_count;
+                    break;
+                }
+            }
+            var count_buf: [16]u8 = undefined;
+            try out.appendSlice(allocator, std.fmt.bufPrint(&count_buf, "    {d},\n", .{count}) catch unreachable);
+        }
+        try out.appendSlice(allocator, "};\n\n");
     }
 
     // Image emission. Two paths produce distinct image shapes:
@@ -13156,6 +13229,9 @@ pub fn emitProgramC(
         const q_size_str_pre = std.fmt.bufPrint(&q_size_buf_pre, "{d}", .{max_q_id_pre + 1}) catch unreachable;
 
         try out.appendSlice(allocator, "    onez_runtime_register_quotations(rt, onez_quotation_table, ");
+        try out.appendSlice(allocator, q_size_str_pre);
+        try out.appendSlice(allocator, ");\n");
+        try out.appendSlice(allocator, "    onez_runtime_register_quotation_input_counts(rt, onez_quotation_table, onez_quotation_input_counts, ");
         try out.appendSlice(allocator, q_size_str_pre);
         try out.appendSlice(allocator, ");\n");
     }
@@ -14918,6 +14994,15 @@ fn emitInlinePicEntries(
     return true;
 }
 
+/// The word's PIC table, if it indexes `instructions`. An inlined quotation body restarts its
+/// indices at zero, so reading the enclosing word's table from it would consult another call site's
+/// entry and bake that site's native into the fast path.
+fn picTableFor(state: *const CompileState, instructions: []const Instruction) ?*pic_mod.PicTable {
+    const pic_table = state.pic_table orelse return null;
+    if (pic_table.body != @intFromPtr(instructions.ptr)) return null;
+    return pic_table;
+}
+
 /// Try to emit inline PIC type checks at a generic call site. Reads the
 /// interpreter PIC data for instruction `idx` and emits tag-check-and-branch
 /// IR for entries that can be inlined (builtin types, native_fn bodies, no
@@ -14929,6 +15014,7 @@ fn emitInlinePicEntries(
 /// standard emitNativeWordCall path.
 fn emitInlinePicCheck(
     state: *CompileState,
+    instructions: []const Instruction,
     idx: usize,
     ctx_val: c.ir_ref,
     name: []const u8,
@@ -14936,7 +15022,7 @@ fn emitInlinePicCheck(
     effective_in: u8,
     line: usize,
 ) bool {
-    const pic_table = state.pic_table orelse return false;
+    const pic_table = picTableFor(state, instructions) orelse return false;
     const interp_ctx = state.interp_ctx orelse return false;
     if (idx >= pic_table.entries.len) return false;
     if (resolved.never_returns) return false;
@@ -15040,6 +15126,7 @@ fn emitInlineDispatchTableCheck(
 /// builtin tag.
 fn emitInlinePicCheckUnary(
     state: *CompileState,
+    instructions: []const Instruction,
     idx: usize,
     ctx_val: c.ir_ref,
     name: []const u8,
@@ -15047,7 +15134,7 @@ fn emitInlinePicCheckUnary(
     effective_in: u8,
     line: usize,
 ) bool {
-    const pic_table = state.pic_table orelse return false;
+    const pic_table = picTableFor(state, instructions) orelse return false;
     const interp_ctx = state.interp_ctx orelse return false;
     if (idx >= pic_table.entries.len) return false;
     if (resolved.never_returns) return false;
@@ -17035,7 +17122,20 @@ fn resolveEntryWord(ctx: *Context, entry: jit_dispatch_mod.JitEntry, word_name: 
     if (entry.module) |segment| {
         if (ctx.lookupWordViaModuleSegment(segment, word_name)) |def| return def;
     }
+    if (entry.defining_module) |module| {
+        if (ctx.lookupWordViaModule(module, word_name)) |def| return def;
+    }
     return ctx.lookupWord(word_name);
+}
+
+/// Dispatch a generic word `resolveEntryWord` found, on the definition's own dispatch id.
+///
+/// The definition may have come from its module's scope, where its name does not resolve from the
+/// caller's. Dispatching by name would then find no methods. A definition with no id falls back to
+/// its name.
+fn dispatchResolvedGeneric(ctx: *Context, word: WordDefinition, word_name: []const u8, pic: ?*pic_mod.PolymorphicCache) !bool {
+    if (word.dispatch_id != 0) return dispatch_helpers.tryDispatchGenericById(ctx, word.dispatch_id, pic);
+    return dispatch_helpers.tryDispatchGenericWithPic(ctx, word_name, pic);
 }
 
 /// Run a module-private word resolved via `lookupAnyModuleWord`. Pushes
@@ -17086,7 +17186,7 @@ fn invokeModuleWord(ctx: *Context, hit: ModuleWordHit, name: []const u8, is_tail
             const saved_source = ctx.current_source;
             defer ctx.current_source = saved_source;
             ctx.enterBodySource(instrs);
-            try ctx.executeQuotationWithPic(.{ .instructions = instrs }, null, null, null, hit.word.may_define);
+            try ctx.executeQuotationWithPic(.{ .instructions = instrs }, null, null, hit.word.body_owner, hit.word.may_define);
         },
     }
 }
@@ -17225,7 +17325,7 @@ export fn jitNativeWordCall(ctx_raw: usize, word_id_raw: usize, src_ptr_raw: usi
                 em.dispatch_pic = p;
                 break :blk2 p;
             };
-            const dispatched = dispatch_helpers.tryDispatchGenericWithPic(ctx, word_name, dispatch_pic) catch |err| {
+            const dispatched = dispatchResolvedGeneric(ctx, word, word_name, dispatch_pic) catch |err| {
                 ctx.jit_pending_error = ctx.wordErrorCleanup(display_name, err);
                 return 2;
             };
@@ -17258,7 +17358,10 @@ export fn jitNativeWordCall(ctx_raw: usize, word_id_raw: usize, src_ptr_raw: usi
     } else if (module_hit) |hit| blk: {
         break :blk invokeModuleWord(ctx, hit, display_name, is_tail, &elided);
     } else {
-        return 1;
+        // A fallback site reads any nonzero status as a raised error, so an unresolved callee
+        // reports itself rather than surfacing as an error with nothing recorded.
+        ctx.jit_pending_error = ctx.wordErrorCleanup(display_name, error.UnknownWord);
+        return 2;
     };
 
     return finishFallbackCall(ctx, display_name, result, elided, is_tail, if (looked_up_word) |word| word.stack_effect else if (module_hit) |hit| hit.word.stack_effect else null);
@@ -17411,7 +17514,7 @@ export fn jitInterpretedCall(ctx_raw: usize, word_id_raw: usize, src_ptr_raw: us
                     em.dispatch_pic = p;
                     break :blk2 p;
                 };
-                const dispatched = dispatch_helpers.tryDispatchGenericWithPic(ctx, word_name, dispatch_pic) catch |err| {
+                const dispatched = dispatchResolvedGeneric(ctx, word, word_name, dispatch_pic) catch |err| {
                     ctx.jit_pending_error = ctx.wordErrorCleanup(display_name, err);
                     return 2;
                 };
@@ -17435,7 +17538,7 @@ export fn jitInterpretedCall(ctx_raw: usize, word_id_raw: usize, src_ptr_raw: us
             ctx.tail_call_instructions = word.action.compound;
             ctx.tail_call_module = word.source_module;
             ctx.tail_call_source = word.source_file;
-            ctx.tail_call_body_owner = null;
+            ctx.tail_call_body_owner = word.body_owner;
             ctx.tail_call_may_define = word.exec_flags.may_define;
             ctx.tail_call_compiled = false;
             return pending_tail_status;
@@ -17452,7 +17555,7 @@ export fn jitInterpretedCall(ctx_raw: usize, word_id_raw: usize, src_ptr_raw: us
                 .compound => |instrs| {
                     ctx.pushModuleDepsFrame(mod) catch |e| break :blk @as(anyerror!void, e);
                     defer ctx.popModuleDepsFrameTraced(mod);
-                    break :blk ctx.executeQuotationWithPic(.{ .instructions = instrs }, entry.pic_snapshot, mod, null, word.exec_flags.may_define);
+                    break :blk ctx.executeQuotationWithPic(.{ .instructions = instrs }, entry.pic_snapshot, mod, word.body_owner, word.exec_flags.may_define);
                 },
                 .native => |func| break :blk func(ctx),
                 .host_callback => |host| break :blk host_result: {
@@ -17470,14 +17573,17 @@ export fn jitInterpretedCall(ctx_raw: usize, word_id_raw: usize, src_ptr_raw: us
                     if (rc != 0) break :host_result error.HostCallbackFailed;
                     break :host_result;
                 },
-                .compound => |instrs| ctx.executeQuotationWithPic(.{ .instructions = instrs }, entry.pic_snapshot, null, null, word.exec_flags.may_define),
+                .compound => |instrs| ctx.executeQuotationWithPic(.{ .instructions = instrs }, entry.pic_snapshot, null, word.body_owner, word.exec_flags.may_define),
                 .literal => |v| ctx.stack.push(v),
             };
         }
     } else if (module_hit) |hit| blk: {
         break :blk invokeModuleWord(ctx, hit, display_name, is_tail, &elided);
     } else {
-        return 1;
+        // A fallback site reads any nonzero status as a raised error, so an unresolved callee
+        // reports itself rather than surfacing as an error with nothing recorded.
+        ctx.jit_pending_error = ctx.wordErrorCleanup(display_name, error.UnknownWord);
+        return 2;
     };
 
     return finishFallbackCall(ctx, display_name, result, elided, is_tail, if (looked_up_word) |word| word.stack_effect else if (module_hit) |hit| hit.word.stack_effect else null);
@@ -17509,9 +17615,11 @@ pub const ExecResult = enum {
 
 /// Execute a JIT-compiled word. The compiled function operates directly on
 /// the per-task Value stack: it reads inputs, checks fixnum tags, performs
-/// arithmetic, writes the result, and adjusts the stack pointer. Returns
-/// .bail if the compiled function signals a type mismatch or overflow, in
-/// which case the stack is unchanged.
+/// arithmetic, writes the result, and adjusts the stack pointer.
+///
+/// Returns .bail if the compiled function signals a type mismatch or overflow. The stack then
+/// holds the operands the word was called with, as though it never ran, and the word's code is
+/// disabled so later calls run its interpreted body.
 pub fn executeCompiled(ctx: *Context, word_id: u32) ExecResult {
     // Frames already pending belong to an enclosing unwind whose cleanup quotation reached
     // this call. Leave them; discard only what this execution appends and abandons.
@@ -17530,6 +17638,9 @@ pub fn executeCompiled(ctx: *Context, word_id: u32) ExecResult {
     // native was in flight when compiled code was entered.
     const saved_native = ctx.withCurrentNative(null);
     defer ctx.restoreCurrentNative(saved_native);
+    // A task reads an entry it did not compile from its ancestors' tables, which it may not write.
+    // Only an entry in this context's own table is disabled on a bail.
+    const own_table: ?*JitDispatchTable = if (ctx.jit_dispatch.get(word_id) != null) &ctx.jit_dispatch else null;
     const entry = ctx.jit_dispatch.get(word_id) orelse blk: {
         var parent = ctx.parent_context;
         while (parent) |p| : (parent = p.parent_context) {
@@ -17554,6 +17665,14 @@ pub fn executeCompiled(ctx: *Context, word_id: u32) ExecResult {
     }
 
     const saved_sp = ctx.stack.items.items.len;
+
+    // An entry with no count is one whose bail re-runs nothing, such as an AOT word, whose
+    // interpreted stand-in raises instead.
+    var operands: StackSnapshot = .{};
+    if (entry.input_count) |n| {
+        if (!operands.take(&ctx.stack, n)) return .bail;
+    }
+
     var jit_ctx = JitContext{
         .items_ptr = ctx.stack.items.items.ptr,
         .sp_ptr = &ctx.stack.items.items.len,
@@ -17563,11 +17682,12 @@ pub fn executeCompiled(ctx: *Context, word_id: u32) ExecResult {
     };
     const func: CompiledFn = @ptrCast(@alignCast(code_ptr));
     const status = runTrampolineHops(ctx, &jit_ctx, func(&jit_ctx)) orelse {
-        ctx.stack.items.items.len = saved_sp;
+        bailFromEntry(ctx, own_table, word_id, &operands, saved_sp);
         return .bail;
     };
 
     if (status == pending_tail_status) {
+        operands.release(&ctx.stack);
         ctx.truncatePendingErrorFrames(pending_mark);
         return .tail_call;
     }
@@ -17575,15 +17695,37 @@ pub fn executeCompiled(ctx: *Context, word_id: u32) ExecResult {
     const result = ExecResult.fromStatus(status);
     if (result == .bail) {
         if (bail_stats_mod.enabled) {
-            const entry_name = if (ctx.jit_dispatch.get(word_id)) |e| e.displayName() else "?";
-            bail_stats_mod.global.recordBail(word_id, entry_name);
+            bail_stats_mod.global.recordBail(word_id, entry.displayName());
         }
-        ctx.stack.items.items.len = saved_sp;
+        bailFromEntry(ctx, own_table, word_id, &operands, saved_sp);
+    } else {
+        operands.release(&ctx.stack);
     }
     if (result != .error_propagate) {
         ctx.truncatePendingErrorFrames(pending_mark);
     }
     return result;
+}
+
+/// Undo a bailed compiled call and keep the word off its compiled code from then on.
+///
+/// Compiled code writes below its entry stack pointer by construction, and a bail can fire after
+/// any such store. The interpreter then re-runs the body from the top, so a bail has to look as if
+/// the code never ran. The operands held at entry go back. What the body left in those slots is not
+/// released: any of it may be a moved or already-released copy.
+///
+/// An entry with no held operands only resets the depth, as there is nothing to put back. Code
+/// with no JIT buffer is an AOT word's, which a bail does not disable: its interpreted stand-in
+/// raises rather than re-running, so a later call has no better path than the code.
+fn bailFromEntry(ctx: *Context, table: ?*JitDispatchTable, word_id: u32, operands: *StackSnapshot, entry_sp: usize) void {
+    if (operands.count > 0) {
+        operands.restore(&ctx.stack, entry_sp);
+    } else {
+        ctx.stack.items.items.len = entry_sp;
+    }
+
+    const entry = (table orelse return).getMut(word_id) orelse return;
+    if (entry.jit_buf != null) table.?.disable(word_id);
 }
 
 /// Follow a mutual group's tail calls until a word returns something other than a hop.
@@ -22507,6 +22649,10 @@ test "emitProgramC quotation table with all compiled entries" {
     // Registration call in main
     try testing.expect(std.mem.indexOf(u8, source, "onez_runtime_register_quotations(rt, onez_quotation_table, 3)") != null);
 
+    // The input counts a bail restores ride beside the table, registered once it is in place.
+    try testing.expect(std.mem.indexOf(u8, source, "static const uint8_t onez_quotation_input_counts[]") != null);
+    try testing.expect(std.mem.indexOf(u8, source, "onez_runtime_register_quotation_input_counts(rt, onez_quotation_table, onez_quotation_input_counts, 3)") != null);
+
     // The quotation table must be registered before the dispatch table so that,
     // when a runtime image follows, container-slot quotation values decode with
     // their code_ptr already attached. register_quotations now precedes
@@ -25167,6 +25313,22 @@ fn makeTestState() CompileState {
         .base_idx = c.IR_UNUSED,
         .value_size_const = c.IR_UNUSED,
     };
+}
+
+test "picTableFor declines a table allocated for another body" {
+    const bodies: [6]Instruction = undefined;
+    const word_body = bodies[0..3];
+    const arm_body = bodies[3..6];
+
+    var table = try pic_mod.PicTable.init(testing.allocator, word_body);
+    defer table.deinit();
+
+    var state = makeTestState();
+    state.pic_table = &table;
+
+    try testing.expectEqual(&table, picTableFor(&state, word_body).?);
+    try testing.expectEqual(null, picTableFor(&state, arm_body));
+    try testing.expectEqual(null, picTableFor(&state, word_body[1..]));
 }
 
 test "rewriteIndexedStackOp: pick-n duplicates entry at depth" {

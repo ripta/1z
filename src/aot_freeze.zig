@@ -638,17 +638,16 @@ pub fn freezeModuleGraphOpts(
             if (seen.contains(name)) continue;
             const word = ctx.lookupWord(name) orelse continue;
             if (word.parse_time_only) continue;
-            if (word.stack_effect == null) continue;
             // Prelude words are appended module-less, so they keep bare-name identities and cannot
             // collide with each other.
             switch (word.action) {
-                .compound => {
-                    try discovered.words.append(temp_allocator, moduleLessWord(name, word));
-                },
-                .literal => |v| {
-                    try discovered.words.append(temp_allocator, moduleLessWord(name, try literalWordAsCompound(temp_allocator, word, v)));
+                .compound, .literal => {
+                    const form = try discoveryForm(temp_allocator, word);
+                    if (form.stack_effect == null) continue;
+                    try discovered.words.append(temp_allocator, moduleLessWord(name, form));
                 },
                 .native, .host_callback => {
+                    if (word.stack_effect == null) continue;
                     try discovered.natives.append(temp_allocator, moduleLessWord(name, word));
                 },
             }
@@ -1649,10 +1648,7 @@ fn drainWorklist(
         // existed, so the rest of discovery (and everything downstream of
         // it) keeps seeing only the .compound/.native shapes it already
         // supports.
-        const store_word = if (word.action == .literal)
-            try literalWordAsCompound(allocator, word, word.action.literal)
-        else
-            word;
+        const store_word = try discoveryForm(allocator, word);
         const instrs = store_word.action.compound;
 
         try result.words.append(allocator, .{
@@ -2696,6 +2692,36 @@ fn literalWordAsCompound(allocator: Allocator, word: WordDefinition, value: Valu
     return compound_word;
 }
 
+/// The form a word takes in the discovered set: a `.literal` word normalized to its one-push
+/// body, and a one-push body with no declared effect given `( -- value )`.
+///
+/// A bracket-less binding rarely declares an effect, and by the time a module has snapshotted it,
+/// it is indistinguishable from a `name: [ value ] ;` body. Both push exactly one value, so that
+/// is their effect whether or not the author wrote it. Without one, every build reaching such a
+/// word fails with a missing stack effect.
+fn discoveryForm(allocator: Allocator, word: WordDefinition) Allocator.Error!WordDefinition {
+    var form = switch (word.action) {
+        .literal => |v| try literalWordAsCompound(allocator, word, v),
+        else => word,
+    };
+
+    if (form.stack_effect == null and isOnePushBody(form)) form.stack_effect = &one_push_effect;
+    return form;
+}
+
+fn isOnePushBody(word: WordDefinition) bool {
+    const instrs = switch (word.action) {
+        .compound => |c| c,
+        else => return false,
+    };
+    return instrs.len == 1 and instrs[0].op == .push_literal;
+}
+
+const one_push_effect: StackEffect = .{
+    .inputs = &.{},
+    .outputs = &.{.{ .name = "value" }},
+};
+
 /// Convert a ModuleWord to a WordDefinition, using the given qualified
 /// name (e.g., "native.struct-field-get") as the word name.
 fn wordDefFromModuleWord(name: []const u8, mod_word: value_mod.ModuleWord) WordDefinition {
@@ -2748,16 +2774,13 @@ fn discoverCalleeWord(ctx: *const Context, call_name: []const u8, discovered: *D
         .native, .host_callback => {
             try discovered.natives.append(allocator, moduleLessWord(call_name, word));
         },
-        .compound => {
+        .compound, .literal => {
             // Compound words without a stack effect cannot be assigned
             // input/output counts; let `buildAotDescs` route them to
             // the missing-stack-effects error path.
-            if (word.stack_effect == null) return;
-            try discovered.words.append(allocator, moduleLessWord(call_name, word));
-        },
-        .literal => |v| {
-            if (word.stack_effect == null) return;
-            try discovered.words.append(allocator, moduleLessWord(call_name, try literalWordAsCompound(allocator, word, v)));
+            const form = try discoveryForm(allocator, word);
+            if (form.stack_effect == null) return;
+            try discovered.words.append(allocator, moduleLessWord(call_name, form));
         },
     }
 }
@@ -4059,7 +4082,7 @@ test "freezeModuleGraphOpts cleanup releases pic snapshots when stack effects ar
     // Populate ctx.pic_cache so buildAotDescs clones a snapshot for the
     // compound word with a stack effect. ctx.deinit handles the table.
     const pt = try allocator.create(pic_mod.PicTable);
-    pt.* = try pic_mod.PicTable.init(allocator, compound_instrs.len);
+    pt.* = try pic_mod.PicTable.init(allocator, compound_instrs);
     try ctx.pic_cache.put(allocator, @intFromPtr(compound_instrs.ptr), pt);
 
     const entry_instrs = try allocator.dupe(Instruction, &[_]Instruction{

@@ -1,0 +1,6 @@
+Stack: [ ]
+PASS: a module word defined after the read still outranks the local
+Stack: [ ]
+Stack: [ ]
+PASS: a module word defined before the read outranks the local
+Stack: [ ]

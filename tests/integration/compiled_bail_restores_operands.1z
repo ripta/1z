@@ -1,0 +1,29 @@
+\ A compiled word that bails hands the interpreter the operands it was called with, so the
+\ interpreted re-run computes what a word that never compiled would have.
+\
+\ Each word below writes its input slots before a fixnum guard meets a bignum and bails. Without
+\ the restore, the re-run reads operands the abandoned attempt had already moved.
+
+use "testing" ;
+
+\ `tuck` rewrites both input slots, then `2 div` bails on a bignum.
+tuck-halve: ( a b -- x y z ) [ tuck 2 div swap ] ;
+
+\ `#len` consumes the string input before the guard bails, so the restored string has to be one
+\ the entry kept alive, not the stack's released copy.
+len-plus-half: ( s n -- m ) [ swap #len swap 2 div + ] ;
+
+"a bail after the body stored below its entry" test-section
+1 99999999999999999999 tuck-halve
+1 "the bottom output is the untouched a" assert=
+49999999999999999999 "the halved b" assert=
+99999999999999999999 "the tucked b" assert=
+
+"a bail after the body released an input" test-section
+"hel" "lo" #append 99999999999999999999 len-plus-half
+50000000000000000004 "the string survives the bail and the re-run counts it" assert=
+
+"a word that bails keeps answering after it bails" test-section
+0 1000 [ "hel" "lo" #append 99999999999999999999 len-plus-half drop 1 + ] times
+1000 "a thousand calls after the first bail" assert=
+"hel" "lo" #append 8 len-plus-half 9 "a fixnum call after the bail still computes" assert=

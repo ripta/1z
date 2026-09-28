@@ -1,0 +1,43 @@
+\ tests/benchmark/local_binding.1z - What a word that binds named locals costs, in each mode.
+\
+\ A compiled word reads a named local from a copy parked in its C frame, but it still binds the
+\ local in the runtime frame first, so every bind keeps its hash insert. This file puts a number
+\ on both halves. `bound-reads` binds two inputs and reads them six times. `shuffled` does the
+\ same arithmetic with stack words and binds nothing, so the gap between the two rows is what
+\ the bindings cost in that mode.
+\
+\ `<color>` is the one library word that binds only its inputs and compiles once they are
+\ declared. It validates four components before it builds the struct.
+\
+\ scripts/benchmark-local-binding.sh runs this file interpreted, under both JIT modes, and as an
+\ AOT binary.
+
+use "game/draw" ;
+
+bound-reads: ( a: fixnum b: fixnum -- n ) [
+  lb-b: swap ;
+  lb-a: swap ;
+  lb-a lb-b + lb-a * lb-b - lb-a + lb-b *
+] ;
+
+shuffled: ( a: fixnum b: fixnum -- n ) [
+  2dup + 2 pick-n * over - 2 pick-n + * nip
+] ;
+
+private{
+  \\ Time quot n times and print one row: the label, the count, and nanoseconds per iteration.
+  (row): ( label: string n: fixnum quot: quotation -- ) [
+    over rn: swap ;
+    [ times ] curry curry benchmark
+    "elapsed_ns" @get rn div
+    swap "  n=" #append rn >string #append "  ns/iter=" #append
+    swap >string #append
+    print-line
+  ] ;
+}
+
+3 4 bound-reads 3 4 shuffled = not [ "bound-reads and shuffled disagree" print-line ] when
+
+"bound-reads" 1000000 [ 3 4 bound-reads drop ] (row)
+"shuffled" 1000000 [ 3 4 shuffled drop ] (row)
+"<color>" 200000 [ 200 200 200 255 <color> drop ] (row)

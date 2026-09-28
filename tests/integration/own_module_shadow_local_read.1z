@@ -1,0 +1,12 @@
+\ A read of a local that its own module also defines as a word resolves the module's word, on
+\ every tier. Eager compiles both words while the module is still loading, so module finalization
+\ revokes them. Hybrid compiles them after, so codegen refuses the read.
+
+use "testing" ;
+use "./fixtures/own_module_shadow_later_lib.1z" ;
+
+200 [ shadow-first drop ] times
+shadow-first "MODULE" "a module word defined after the read still outranks the local" assert=
+
+200 [ shadow-after drop ] times
+shadow-after "MODULE" "a module word defined before the read outranks the local" assert=

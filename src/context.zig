@@ -36,6 +36,7 @@ const pic_mod = @import("pic.zig");
 const PicTable = pic_mod.PicTable;
 const PolymorphicCache = pic_mod.PolymorphicCache;
 const JitDispatchTable = @import("jit_dispatch.zig").JitDispatchTable;
+const StackSnapshot = @import("stack_snapshot.zig").StackSnapshot;
 const ir_codegen = @import("ir_codegen.zig");
 const call_graph_mod = @import("call_graph.zig");
 const bail_stats_mod = @import("bail_stats.zig");
@@ -675,6 +676,17 @@ pub const AotQuotationFnTable = struct {
     size: u32,
 };
 
+/// What a bail needs to know about one AOT-compiled quotation function, keyed by its code pointer.
+///
+/// A quotation value is copied freely, so the state lives with the function rather than with any
+/// one copy. `disabled` is shared by every context the map is handed to, so it is atomic.
+pub const AotQuotationFnState = struct {
+    input_count: u8,
+    disabled: std.atomic.Value(bool) = .init(false),
+};
+
+pub const AotQuotationFnStates = std.AutoHashMapUnmanaged(usize, AotQuotationFnState);
+
 /// A deferred parse-time emission requested by a parse-time word, drained in
 /// order by `executeParseTimeWord` after the word runs. `emit-call` records a
 /// `.call`; `emit-body` records a `.body`. A single ordered queue keeps
@@ -1061,6 +1073,10 @@ pub const Context = struct {
     /// AOT quotation function pointers, indexed by quotation_id.
     /// Registered at startup by onez_runtime_register_quotations.
     aot_quotation_fns: ?AotQuotationFnTable = null,
+    /// Input counts and disabled flags for those functions, keyed by code pointer. Registered by
+    /// onez_runtime_register_quotation_input_counts and owned by the root context; a task context
+    /// borrows its parent's.
+    aot_quotation_fn_states: ?*AotQuotationFnStates = null,
     /// Runtime-image slot tables, cached at load time so the
     /// compiled-code helpers (`jitPushTypeValueSlot`,
     /// `jitPushStructTypeSlot`, etc.) can resolve typed-literal
@@ -1866,6 +1882,7 @@ pub const Context = struct {
         // literals constructed in the task ctx via `jitPushQuotation`
         // pick up their compiled bodies, matching the parent.
         ctx.aot_quotation_fns = parent.aot_quotation_fns;
+        ctx.aot_quotation_fn_states = parent.aot_quotation_fn_states;
 
         // Share the loader-built reified-quotation module table so a task's
         // `jitPushQuotation` stamps decoded bodies the same way the root does.
@@ -2260,6 +2277,12 @@ pub const Context = struct {
         self.bounded_dispatch_combinator_trace_names.deinit(self.allocator);
         self.dispatch.deinit();
         self.jit_dispatch.deinit();
+        if (self.parent_context == null) {
+            if (self.aot_quotation_fn_states) |states| {
+                states.deinit(self.allocator);
+                self.allocator.destroy(states);
+            }
+        }
         var pic_iter = self.pic_cache.iterator();
         while (pic_iter.next()) |entry| {
             entry.value_ptr.*.deinit();
@@ -3853,6 +3876,30 @@ pub const Context = struct {
         }
     }
 
+    /// Revoke the compiled code of every word in `module` that reads a local the module also
+    /// defines as a word.
+    ///
+    /// Own-module precedence resolves such a read to the module's word, while the compiled code
+    /// reads the local. Codegen refuses the read once the module is final. A word compiled while
+    /// its file was still loading could not see a word defined later in the same file, so the
+    /// check runs again here, when the module's contents are complete. A revoked word runs
+    /// interpreted, and a later compile of it meets the codegen refusal.
+    pub fn revokeModuleShadowedLocalReads(self: *Context, module: *value_mod.Module) void {
+        var it = module.words.iterator();
+        while (it.next()) |entry| {
+            const wid = entry.value_ptr.word_id orelse continue;
+            const jit_entry = self.jit_dispatch.get(wid) orelse continue;
+
+            const shadowed = for (jit_entry.local_read_names) |name| {
+                if (module.words.contains(name) or module.deps.contains(name)) break true;
+            } else false;
+            if (!shadowed) continue;
+
+            self.jit_dispatch.invalidate(wid);
+            entry.value_ptr.word_id = null;
+        }
+    }
+
     /// Build the module entry for a frame definition, the direction opposite `moduleWordFrameDef`.
     ///
     /// `ModuleWord` has no `.literal` counterpart, so a directly-bound value becomes the
@@ -3868,6 +3915,9 @@ pub const Context = struct {
             .markers = def.markers,
             .source_module = def.source_module,
             .dispatch_id = def.dispatch_id,
+            // A word compiled while its file loaded carries its compiled id here. Dropping it
+            // leaves every later call, from an importer or from the module itself, interpreted.
+            .word_id = def.word_id,
             .doc = def.doc,
             .parse_time_only = def.parse_time_only,
             .source_file = def.source_file,
@@ -3908,6 +3958,11 @@ pub const Context = struct {
             .name = name,
             .stack_effect = mod_word.stack_effect,
             .markers = mod_word.markers,
+            // A caller reaching this entry from compiled code has not set the file its body lives
+            // in, so the entry carries it rather than inheriting the caller's.
+            .source_file = mod_word.source_file,
+            .source_line = mod_word.source_line,
+            .source_column = mod_word.source_column,
             .source_module = mod_word.source_module orelse module,
             .capability = mod_word.capability,
             .dispatch_id = mod_word.dispatch_id,
@@ -5076,7 +5131,7 @@ pub const Context = struct {
             const member_def = self.lookupWord(member) orelse continue;
             if (member_def.word_id != null) continue;
 
-            const id = self.jit_dispatch.assignId(member) catch return false;
+            const id = self.mintJitId(member, member_def) catch return false;
             if (self.jit_dispatch.getMut(id)) |em| em.stack_effect = member_def.stack_effect;
             propagateWordId(self, member, id);
         }
@@ -5118,6 +5173,8 @@ pub const Context = struct {
 
         fn discard(self: CompiledBody, ctx: *Context) void {
             self.word.jit_buf.deinit();
+            var word = self.word;
+            word.freeLocalReadNames();
             if (self.pic_snapshot) |ps| {
                 ps.deinit();
                 ctx.allocator.destroy(ps);
@@ -5163,19 +5220,31 @@ pub const Context = struct {
                 self.jit_dispatch.update(existing_id, compiled.code_ptr, compiled.jit_buf, compiled.peak_stack_depth);
                 break :blk existing_id;
             }
-            const new_id = self.jit_dispatch.assignId(name) catch return body.discard(self);
+            const new_id = self.mintJitId(name, def) catch return body.discard(self);
             self.jit_dispatch.update(new_id, compiled.code_ptr, compiled.jit_buf, compiled.peak_stack_depth);
             propagateWordId(self, name, new_id);
             break :blk new_id;
         } else blk: {
-            const new_id = self.jit_dispatch.assignId(name) catch return body.discard(self);
+            const new_id = self.mintJitId(name, def) catch return body.discard(self);
             self.jit_dispatch.update(new_id, compiled.code_ptr, compiled.jit_buf, compiled.peak_stack_depth);
             propagateWordId(self, name, new_id);
             break :blk new_id;
         };
 
         self.jit_dispatch.replacePicSnapshot(final_id, body.pic_snapshot);
-        if (self.jit_dispatch.getMut(final_id)) |em| em.stack_effect = def.stack_effect;
+        if (self.jit_dispatch.getMut(final_id)) |em| {
+            em.stack_effect = def.stack_effect;
+            em.input_count = @intCast(def.stack_effect.?.inputs.len);
+        }
+
+        // A failed copy leaves the entry with no names, which finalization reads as nothing to
+        // revoke. Dropping the code instead keeps a local read from outranking a module word.
+        var compiled_word = compiled;
+        defer compiled_word.freeLocalReadNames();
+        self.jit_dispatch.replaceLocalReadNames(final_id, compiled_word.local_read_names) catch {
+            self.jit_dispatch.invalidate(final_id);
+            return;
+        };
 
         if (self.trace.trace_jit) {
             var tw = trace_mod.TraceWriter.init();
@@ -5223,7 +5292,7 @@ pub const Context = struct {
 
         if (def.word_id != null) return;
 
-        const new_id = self.jit_dispatch.assignId(name) catch return;
+        const new_id = self.mintJitId(name, def) catch return;
         if (self.jit_dispatch.getMut(new_id)) |em| em.stack_effect = def.stack_effect;
         propagateWordId(self, name, new_id);
     }
@@ -5702,6 +5771,41 @@ pub const Context = struct {
         return lookupModuleScopeWord(name, module);
     }
 
+    /// Resolve `name` through `module`'s own scope, under one shared-read acquisition. The JIT
+    /// counterpart of `lookupWordViaModuleSegment`, for an entry that holds its module directly.
+    pub fn lookupWordViaModule(self: *const Context, module: *const value_mod.Module, name: []const u8) ?WordDefinition {
+        self.acquireSharedRead();
+        defer self.releaseSharedRead();
+        return lookupModuleScopeWord(name, module);
+    }
+
+    /// Mint a JIT id for `def`, found under `name`, recording the module it already names.
+    ///
+    /// A word the loading file defines, a `private{ }` helper included, names no module until its
+    /// module is final. `stampModuleJitIdentities` records it then.
+    pub fn mintJitId(self: *Context, name: []const u8, def: WordDefinition) !u32 {
+        const id = try self.jit_dispatch.assignId(name);
+        if (self.jit_dispatch.getMut(id)) |em| em.defining_module = def.source_module;
+        return id;
+    }
+
+    /// Record, on the JIT entry of every word and dep of a module just finalized, the module the
+    /// word resolves through.
+    ///
+    /// Compiled identity is the module and the word. A fallback call out of a module's compiled
+    /// code resolves its callee through this module, so the call reaches the module's own private
+    /// words even when the code was entered from outside the module, where no deps frame is open.
+    pub fn stampModuleJitIdentities(self: *Context, module: *const value_mod.Module) void {
+        inline for (.{ &module.words, &module.deps }) |map| {
+            var it = map.iterator();
+            while (it.next()) |entry| {
+                const wid = entry.value_ptr.word_id orelse continue;
+                const em = self.jit_dispatch.getMut(wid) orelse continue;
+                em.defining_module = entry.value_ptr.source_module orelse module;
+            }
+        }
+    }
+
     /// Sentinel `.native` action for AOT-compiled-only words synthesized
     /// by `lookupAotCompiledWordLocked`. The intended dispatch path is
     /// the JIT one in `executeResolvedWord`, driven by the word's
@@ -5815,7 +5919,7 @@ pub const Context = struct {
         if (self.pic_cache.get(key)) |pt| return pt;
 
         const pt = self.allocator.create(PicTable) catch return null;
-        pt.* = PicTable.init(self.allocator, instrs.len) catch {
+        pt.* = PicTable.init(self.allocator, instrs) catch {
             self.allocator.destroy(pt);
             return null;
         };
@@ -8845,9 +8949,24 @@ pub const Context = struct {
         defer self.truncateLocalFrames(frame_mark);
 
         // quotation.code_ptr is never set on freestanding targets.
-        if (comptime !is_freestanding) {
+        if (comptime !is_freestanding) compiled: {
             if (quotation.code_ptr) |ptr| {
+                // A function with no recorded count predates the count table or was never
+                // compiled with one, so a bail there resets only the depth, as it always has.
+                const fn_state: ?*AotQuotationFnState = if (self.aot_quotation_fn_states) |states|
+                    states.getPtr(@intFromPtr(ptr))
+                else
+                    null;
+                if (fn_state) |st| {
+                    if (st.disabled.load(.acquire)) break :compiled;
+                }
+
                 const saved_sp = self.stack.items.items.len;
+                var operands: StackSnapshot = .{};
+                if (fn_state) |st| {
+                    if (!operands.take(&self.stack, st.input_count)) break :compiled;
+                }
+
                 var jit_ctx = ir_codegen.JitContext{
                     .items_ptr = self.stack.items.items.ptr,
                     .sp_ptr = &self.stack.items.items.len,
@@ -8858,7 +8977,9 @@ pub const Context = struct {
                 const saved_native = self.withCurrentNative(null);
                 defer self.restoreCurrentNative(saved_native);
                 const func: ir_codegen.CompiledFn = @ptrCast(@alignCast(ptr));
-                switch (ir_codegen.ExecResult.fromStatus(func(&jit_ctx))) {
+                const result = ir_codegen.ExecResult.fromStatus(func(&jit_ctx));
+                if (result != .bail) operands.release(&self.stack);
+                switch (result) {
                     .ok => return,
                     .error_propagate => {
                         const err = self.jit_pending_error orelse error.UserThrown;
@@ -8880,7 +9001,16 @@ pub const Context = struct {
                         if (bail_stats_mod.enabled) {
                             bail_stats_mod.global.recordQuotationBail();
                         }
-                        self.stack.items.items.len = saved_sp;
+                        if (operands.count > 0) {
+                            operands.restore(&self.stack, saved_sp);
+                        } else {
+                            self.stack.items.items.len = saved_sp;
+                        }
+
+                        // What the abandoned attempt held cannot be released soundly, so the
+                        // function stops being called rather than leaking on every call.
+                        if (fn_state) |st| st.disabled.store(true, .release);
+
                         // The re-run below repeats the attempt from where it began, so a transient
                         // frame the bailed body opened is discarded here. Leaving it to the
                         // deferred truncation would keep it live for the whole re-run.
@@ -10131,7 +10261,7 @@ fn resolveWordForDispatch(name: []const u8, user_data: *anyopaque) ?ir_codegen.R
     const effect = callee.stack_effect orelse return null;
 
     const word_id = if (callee.word_id) |id| id else blk: {
-        const id = ctx.jit_dispatch.assignId(name) catch return null;
+        const id = ctx.mintJitId(name, callee) catch return null;
         propagateWordId(ctx, name, id);
         break :blk id;
     };
@@ -10317,6 +10447,46 @@ test "executeQuotationWithPic: a defining body runs one frame above its caller a
     try ctx.executeQuotationWithPic(.{ .instructions = &body }, null, null, null, true);
     try std.testing.expectEqual(before + 1, probed_frame_depth);
     try std.testing.expectEqual(before, ctx.local_frames.items.len);
+}
+
+/// The fixnum `recordPoppedFixnum` last popped.
+var recorded_fixnum: i64 = 0;
+
+fn recordPoppedFixnum(ctx: *Context) anyerror!void {
+    recorded_fixnum = (try ctx.stack.pop()).fixnum;
+}
+
+/// Stands in for a compiled quotation that overwrites its input slot and then bails.
+fn clobberInputAndBail(jc: *ir_codegen.JitContext) callconv(.c) i32 {
+    jc.items_ptr[jc.sp_ptr.* - 1] = .{ .fixnum = 1 };
+    return 1;
+}
+
+test "executeQuotationWithFrame: a bail re-runs on the entry operand and disables the function" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    // The root context owns the registered map and frees it at teardown.
+    const states = try std.testing.allocator.create(AotQuotationFnStates);
+    states.* = .{};
+    try states.put(std.testing.allocator, @intFromPtr(&clobberInputAndBail), .{ .input_count = 1 });
+    ctx.aot_quotation_fn_states = states;
+
+    try ctx.defineWord("record-popped", .{ .name = "record-popped", .action = .{ .native = recordPoppedFixnum } });
+    const body = [_]Instruction{.{ .op = .{ .call_word = "record-popped" }, .line = 1 }};
+    const quotation: Quotation = .{ .instructions = &body, .code_ptr = @ptrCast(&clobberInputAndBail) };
+
+    recorded_fixnum = 0;
+    try ctx.stack.push(.{ .fixnum = 7 });
+    try ctx.executeQuotationWithFrame(quotation, null);
+    try std.testing.expectEqual(@as(i64, 7), recorded_fixnum);
+    try std.testing.expectEqual(@as(usize, 0), ctx.stack.depth());
+    try std.testing.expect(states.getPtr(@intFromPtr(&clobberInputAndBail)).?.disabled.load(.acquire));
+
+    // Disabled, the function is not called again: the body runs interpreted on the operand as is.
+    try ctx.stack.push(.{ .fixnum = 9 });
+    try ctx.executeQuotationWithFrame(quotation, null);
+    try std.testing.expectEqual(@as(i64, 9), recorded_fixnum);
 }
 
 /// The owner tag of the top frame `probeFrameOwner` observed on its last call.

@@ -1,0 +1,63 @@
+Named-local binding words across lib/
+binary=./zig-out/bin/1z
+
+formatter
+  word                                  sites  runtime-image  interpreter-free
+  (comment-lines)                           6  NC.20          unreached       
+  (definition-line)                         7  NC.20          unreached       
+  (effect-line)                             8  NC.20          unreached       
+  (emit-newline-run)                        7  NC.20          unreached       
+  (entry-line)                              7  NC.20          unreached       
+  (fmt-one)                                 3  ok             unreached       
+  (fmt-report)                              1  ok             unreached       
+  (hash>fmt-config)                         2  NC.20          unreached       
+  (index-blocks)                            6  NC.20          unreached       
+  (merge-key)                               5  NC.20          unreached       
+  (mode-error)                              1  ok             unreached       
+  (parse-alignable)                         9  NC.20          unreached       
+  (symbol-lines)                           17  NC.20          unreached       
+  (write-source)                            1  ok             unreached       
+  format-file!                              1  NC.13          unreached       
+  run-fmt                                   1  ok             unreached       
+  free build stopped before codegen:
+    Error: dynamic feature 'eval-string' in 'load-config-data' is not available in interpreter-free AOT; this feature requires runtime code-loading machinery that interpreter-free binaries omit. Build with --emit-runtime-image to produce a runtime-image AOT binary, or run under the interpreter, if you need 'eval-string'.
+
+game/audio
+  word                                  sites  runtime-image  interpreter-free
+  <sample>                                  3  ok             ok              
+
+game/draw
+  word                                  sites  runtime-image  interpreter-free
+  (color>packed)                            4  NC.20          ok              
+  (draw-glyph-clipped)                      7  NC.4           NC.4            
+  (draw-glyph-packed)                       5  NC.20          NC.20           
+  (draw-glyph-whole)                        8  NC.4           NC.4            
+  <color>                                   4  ok             ok              
+  <sprite>                                  3  ok             ok              
+  blit-sprite                              13  NC.20          NC.20           
+  draw-rectangle                            9  NC.20          NC.20           
+  draw-text                                 5  NC.20          NC.20           
+
+math/grid
+  word                                  sites  runtime-image  interpreter-free
+  grid>string                               1  ok             ok              
+  row>string                                3  NC.20          NC.20           
+  with-chars                                3  NC.20          NC.20           
+
+testing
+  word                                  sites  runtime-image  interpreter-free
+  assert-error                              1  NC.22          NC.22           
+  assert-error-type                         2  NC.22          NC.22           
+
+binding sites: 153
+binding words by outcome:
+  interpreter-free   NC.20         6
+  interpreter-free   NC.22         2
+  interpreter-free   NC.4          2
+  interpreter-free   ok            5
+  interpreter-free   unreached    16
+  runtime-image      NC.13         1
+  runtime-image      NC.20        17
+  runtime-image      NC.22         2
+  runtime-image      NC.4          2
+  runtime-image      ok            9

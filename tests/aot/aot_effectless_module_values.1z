@@ -1,0 +1,9 @@
+\ A module word that pushes one value builds with no declared effect. The freeze gives it
+\ ( -- value ), which is what its one-push body already is.
+
+use "./support/effectless_values.1z" ;
+
+cell-count .
+cell-size .
+greeting print-line
+area .

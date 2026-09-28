@@ -810,6 +810,11 @@ benchmark-fmt-modes: release ## Time the 1z formatter interpreted, under both JI
 		> tests/benchmark/fmt_bench.modes.sample
 	@cat tests/benchmark/fmt_bench.modes.sample
 
+benchmark-local-binding-sweep: build ## Record which lib/ words binding a named local compile to C, per AOT class
+	@scripts/benchmark-local-binding-sweep.sh ./$(ZIG_PREFIX)/bin/1z $(ZIG_PREFIX)/local-binding-sweep \
+		> tests/benchmark/local_binding_sweep.sample
+	@cat tests/benchmark/local_binding_sweep.sample
+
 benchmark-collision-build: release ## Record AOT build cost of the shipped stdlib collision pairs
 	@scripts/benchmark-collision-build.sh ./$(RELEASE_PREFIX)/bin/1z > tests/benchmark/collision_build.sample
 	@cat tests/benchmark/collision_build.sample

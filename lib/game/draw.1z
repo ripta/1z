@@ -47,7 +47,7 @@ private{
 }
 
 \\ Validate r/g/b/a are each in [0, 255] and construct a color.
-<color>: ( r g b a -- color ) [
+<color>: ( r: fixnum g: fixnum b: fixnum a: fixnum -- color ) [
   ca: swap ;
   cb: swap ;
   cg: swap ;
@@ -59,7 +59,7 @@ private{
 
 \\ Validate width/height are non-negative and pixels' length matches width * height * 4
 \\ (RGBA8888, the same layout the framebuffer uses), then construct a sprite.
-<sprite>: ( width height pixels -- sprite ) [
+<sprite>: ( width: fixnum height: fixnum pixels: byte-array -- sprite ) [
   sp: swap ;
   sh: swap ;
   sw: swap ;

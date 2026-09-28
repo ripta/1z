@@ -1,0 +1,36 @@
+use "testing" ;
+
+\ Each word calls `#index-of` at body index 2. The colliding arms call `#len` at arm index 2 too,
+\ so a compiled arm that read the enclosing body's PIC entry would call `#index-of`'s native.
+
+(an-guarded): ( stripped: string -- name/f ) [
+  dup " " #index-of dup f = [ 2drop f ] [ drop dup #len 2 < drop ] if
+] ;
+
+(an-unguarded): ( stripped: string -- name/f ) [
+  dup " " #index-of dup f = [ 2drop f ] [ drop dup #len drop ] if
+] ;
+
+(an-control): ( stripped: string -- name/f ) [
+  dup " " #index-of dup f = [ 2drop f ] [ #take ] if
+] ;
+
+drive: ( q -- ) [
+  200 [ { "hello: world" "no-colon here" } over #each ] times drop
+] ;
+
+[ (an-guarded) drop ] drive
+[ (an-unguarded) drop ] drive
+[ (an-control) drop ] drive
+
+"a colliding arm with a guard after the call" test-section
+"hello: world" (an-guarded) "hello: world" "returns its input" assert=
+"no-colon here" (an-guarded) "no-colon here" "returns its other input" assert=
+
+"a colliding arm with nothing to notice the wrong call" test-section
+"hello: world" (an-unguarded) "hello: world" "returns its input, not 0" assert=
+"no-colon here" (an-unguarded) "no-colon here" "returns its other input" assert=
+
+"an arm whose indices do not collide" test-section
+"hello: world" (an-control) "hello:" "takes up to the space" assert=
+"no-colon here" (an-control) "no-colon" "takes up to the other space" assert=

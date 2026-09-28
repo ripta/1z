@@ -1,0 +1,5 @@
+Stack: [ color{ r: 10 g: 20 b: 30 a: 255 } ]
+PASS: <color> stores r
+Stack: [ color{ r: 10 g: 20 b: 30 a: 255 } ]
+PASS: <color> stores a
+Stack: [ ]

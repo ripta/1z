@@ -1,0 +1,11 @@
+use "testing" ;
+use "./fixtures/own_module_shadow_later_lib.1z" ;
+
+\ The reads from own_module_shadow_local_read.1z, called past the hybrid threshold. Hybrid compiles
+\ both words after their module is final, so codegen sees `probe` and refuses each read.
+
+200 [ shadow-first drop ] times
+shadow-first "MODULE" "a module word defined after the read still outranks the local" assert=
+
+200 [ shadow-after drop ] times
+shadow-after "MODULE" "a module word defined before the read outranks the local" assert=

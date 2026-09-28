@@ -1,0 +1,5 @@
+@raw
+run
+--compile=eager
+--trace-jit
+tests/integration/game_color_bindings.1z

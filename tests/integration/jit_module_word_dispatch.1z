@@ -1,0 +1,7 @@
+\ A word compiled while its module loaded is still compiled when an importer calls it.
+\ eager_jit_module_word_dispatch_trace pins that both calls dispatch to the compiled code.
+
+use "./fixtures/jit_module_word_lib.1z" ;
+
+3 double .
+3 quadruple .

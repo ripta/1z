@@ -1,0 +1,5 @@
+@raw
+run
+--compile=eager
+--trace-jit
+tests/integration/jit_module_word_dispatch.1z
