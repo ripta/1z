@@ -1,0 +1,9 @@
+\ A helper whose body leaves a different depth on each arm of its `if`. The body cannot compile,
+\ and the build names the helper beside the body's own reason rather than blaming the word alone.
+
+uneven: ( n: fixnum -- n ) [
+  maybe-extra: [ dup 0 > [ 1 ] [ ] if ] ;
+  maybe-extra
+] ;
+
+3 uneven .

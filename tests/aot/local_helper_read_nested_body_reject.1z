@@ -1,0 +1,9 @@
+\ A helper defined inside an `if` arm and read there. The arm was captured when it was pushed, and
+\ the interpreter answers a read inside it from that capture before the arm's own definition. So
+\ the read is not compiled to the helper's body, and the build refuses the word.
+
+arm-helper: ( n: fixnum -- n ) [
+  dup 0 > [ bump: [ 1 + ] ; bump ] [ ] if
+] ;
+
+3 arm-helper .

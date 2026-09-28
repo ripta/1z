@@ -1,4 +1,4 @@
 Error: 1 word could not be compiled to C
-  word 'typed-helper': NC.19: defines nested helper 'inc', which AOT compilation cannot discover
-      hint: move 'inc' into a private{ } block at module scope
+  word 'typed-helper': NC.24: calls nested helper 'inc', whose typed inputs an AOT quotation cannot check
+      hint: blocked until AOT quotations keep their type annotations
 AOT interpreter fallbacks: 4 total (native=2 per-op-native=1 compound-uncompiled=1)

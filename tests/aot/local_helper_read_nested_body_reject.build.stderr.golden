@@ -1,0 +1,4 @@
+Error: 1 word could not be compiled to C
+  word 'arm-helper': NC.21: calls nested helper 'bump', which carries a marker or is defined inside a nested quotation body
+      hint: define the helper with a plain `;` in the word's own body
+AOT interpreter fallbacks: 22 total (native=2 per-op-native=19 compound-uncompiled=1)

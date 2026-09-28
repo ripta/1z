@@ -1,4 +1,4 @@
 Error: 1 word could not be compiled to C
-  word 'outer': NC.19: defines nested helper 'helper', which AOT compilation cannot discover
-      hint: move 'helper' into a private{ } block at module scope
+  word 'outer': NC.21: calls nested helper 'helper', which carries a marker or is defined inside a nested quotation body
+      hint: define the helper with a plain `;` in the word's own body
 AOT interpreter fallbacks: 1 total (compound-uncompiled=1)

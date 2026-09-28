@@ -1,4 +1,4 @@
 Error: 1 word could not be compiled to C
-  word 'reified': NC.19: defines nested helper 'label', which AOT compilation cannot discover
-      hint: move 'label' into a private{ } block at module scope
+  word 'reified': NC.25: hands off a quotation reading local 'label', which also names a word outside the body
+      hint: rename the local so it names no outside word, or build with the interpreter linked
 AOT interpreter fallbacks: 1 total (compound-uncompiled=1)

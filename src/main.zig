@@ -2591,7 +2591,9 @@ fn printPreludeStats(
     }) catch {};
     for (stats.uncompiled) |entry| {
         err_writer.print("  word '{s}' cannot be compiled\n", .{entry.name}) catch {};
-        err_writer.print("      {s}: {s}\n", .{ entry.reason.code(), entry.reason.message() }) catch {};
+        err_writer.print("      {s}: ", .{entry.reason.code()}) catch {};
+        entry.cause().writeMessage(err_writer) catch {};
+        err_writer.writeAll("\n") catch {};
         if (entry.reason.hint()) |h| {
             err_writer.print("      hint: {s}\n", .{h}) catch {};
         }
@@ -2868,12 +2870,11 @@ fn printCompoundFallbackRequiredError(
             site.callee_word,
             site.line,
         }) catch {};
-        if (site.callee_reason) |reason| {
-            err_writer.print("      callee uncompiled: {s}: {s}\n", .{
-                reason.code(),
-                reason.message(),
-            }) catch {};
-            if (reason.hint()) |h| {
+        if (site.callee_reason) |cause| {
+            err_writer.print("      callee uncompiled: {s}: ", .{cause.reason.code()}) catch {};
+            cause.writeMessage(err_writer) catch {};
+            err_writer.writeAll("\n") catch {};
+            if (cause.reason.hint()) |h| {
                 err_writer.print("      hint: {s}\n", .{h}) catch {};
             }
         } else if (site.callee_is_native) {
@@ -3559,22 +3560,9 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
                 .{ items.len, if (items.len == 1) @as([]const u8, "") else "s" },
             ) catch {};
             for (items) |entry| {
-                if (entry.nested_definition) |helper| {
-                    err_writer.print(
-                        "  word '{s}': {s}: defines nested helper '{s}', which AOT compilation cannot discover\n",
-                        .{ entry.name, entry.reason.code(), helper },
-                    ) catch {};
-                    err_writer.print(
-                        "      hint: move '{s}' into a private{{ }} block at module scope\n",
-                        .{helper},
-                    ) catch {};
-                    continue;
-                }
-                err_writer.print("  word '{s}': {s}: {s}\n", .{
-                    entry.name,
-                    entry.reason.code(),
-                    entry.reason.message(),
-                }) catch {};
+                err_writer.print("  word '{s}': {s}: ", .{ entry.name, entry.reason.code() }) catch {};
+                entry.cause().writeMessage(err_writer) catch {};
+                err_writer.writeAll("\n") catch {};
                 if (entry.reason.hint()) |h| {
                     err_writer.print("      hint: {s}\n", .{h}) catch {};
                 }
@@ -3671,12 +3659,9 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
                     entry.name[0..dot_idx]
                 else
                     "prelude";
-                err_writer.print("  word '{s}' ({s}): {s}: {s}\n", .{
-                    entry.name,
-                    module,
-                    entry.reason.code(),
-                    entry.reason.message(),
-                }) catch {};
+                err_writer.print("  word '{s}' ({s}): {s}: ", .{ entry.name, module, entry.reason.code() }) catch {};
+                entry.cause().writeMessage(err_writer) catch {};
+                err_writer.writeAll("\n") catch {};
                 if (entry.reason.hint()) |h| {
                     err_writer.print("      hint: {s}\n", .{h}) catch {};
                 }

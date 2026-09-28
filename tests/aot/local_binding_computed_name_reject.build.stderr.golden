@@ -1,0 +1,4 @@
+Error: 1 word could not be compiled to C
+  word 'computed': NC.23: binds a local under a name not proven to be a symbol literal
+      hint: compute the value first, then bind it with a symbol literal, as in `name: swap ;`
+AOT interpreter fallbacks: 3 total (native=2 compound-uncompiled=1)

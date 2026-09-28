@@ -1,4 +1,4 @@
 Error: 1 word could not be compiled to C
-  word 'pass-through': NC.19: defines nested helper 'kept', which AOT compilation cannot discover
-      hint: move 'kept' into a private{ } block at module scope
+  word 'pass-through': NC.20: reads local 'kept', whose value is not proven to push one value
+      hint: bind a literal, or an input declared with a value type such as fixnum or string
 AOT interpreter fallbacks: 4 total (native=2 compound-uncompiled=2)

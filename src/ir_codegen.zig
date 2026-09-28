@@ -109,7 +109,12 @@ pub const NotCompilableReason = enum {
     row_binding_overflow,
     quotation_slot_overflow,
     indexed_access_into_row,
-    nested_definition,
+    unproven_local_read,
+    uninlinable_helper,
+    read_before_bind,
+    computed_binding_name,
+    typed_helper_in_aot,
+    reified_local_read,
     unknown_reason,
 
     pub fn code(self: NotCompilableReason) []const u8 {
@@ -132,7 +137,12 @@ pub const NotCompilableReason = enum {
             .quotation_slot_overflow => "NC.16",
             .indexed_access_into_row => "NC.17",
             .unknown_reason => "NC.18",
-            .nested_definition => "NC.19",
+            .unproven_local_read => "NC.20",
+            .uninlinable_helper => "NC.21",
+            .read_before_bind => "NC.22",
+            .computed_binding_name => "NC.23",
+            .typed_helper_in_aot => "NC.24",
+            .reified_local_read => "NC.25",
         };
     }
 
@@ -156,7 +166,25 @@ pub const NotCompilableReason = enum {
             .quotation_slot_overflow => std.fmt.comptimePrint("word has more quotation parameters with concrete effects than the compiler can track ({d})", .{max_quotation_slots}),
             .indexed_access_into_row => "indexed stack access targets the symbolic row region",
             .unknown_reason => "compilation failed without a categorized reason",
-            .nested_definition => "defines a helper word inside its body that AOT compilation cannot discover",
+            .unproven_local_read => "reads a local binding whose value is not proven to push one value",
+            .uninlinable_helper => "calls a nested helper that cannot be inlined",
+            .read_before_bind => "pushes a quotation that reads a local bound after the push",
+            .computed_binding_name => "binds a local under a name not proven to be a symbol literal",
+            .typed_helper_in_aot => "calls a nested helper with typed inputs, which an AOT quotation cannot check",
+            .reified_local_read => "hands off a quotation reading a local that also names a word outside the body",
+        };
+    }
+
+    /// The message naming `subject`, the binding or helper the refusal is about. Null for a reason
+    /// that has no such name.
+    fn subjectMessage(self: NotCompilableReason) ?[]const u8 {
+        return switch (self) {
+            .unproven_local_read => "reads local '{s}', whose value is not proven to push one value",
+            .uninlinable_helper => "calls nested helper '{s}', which carries a marker or is defined inside a nested quotation body",
+            .read_before_bind => "pushes a quotation that reads '{s}' before that name is bound",
+            .typed_helper_in_aot => "calls nested helper '{s}', whose typed inputs an AOT quotation cannot check",
+            .reified_local_read => "hands off a quotation reading local '{s}', which also names a word outside the body",
+            else => null,
         };
     }
 
@@ -180,8 +208,45 @@ pub const NotCompilableReason = enum {
             .quotation_slot_overflow => "simplify the word to use fewer quotation parameters",
             .indexed_access_into_row => "only literal depths into known stack slots above the row are supported",
             .unknown_reason => "diagnostic gap; please report",
-            .nested_definition => "move the helper into a private{ } block at module scope",
+            .unproven_local_read => "bind a literal, or an input declared with a value type such as fixnum or string",
+            .uninlinable_helper => "define the helper with a plain `;` in the word's own body",
+            .read_before_bind => "bind the name before pushing the quotation that reads it, or move a self-recursive helper into a private{ } block",
+            .computed_binding_name => "compute the value first, then bind it with a symbol literal, as in `name: swap ;`",
+            .typed_helper_in_aot => "blocked until AOT quotations keep their type annotations",
+            .reified_local_read => "rename the local so it names no outside word, or build with the interpreter linked",
         };
+    }
+};
+
+/// Why a word returned NotCompilable, with the names the diagnostic reports.
+///
+/// Both names borrow from the word's instruction stream.
+pub const NotCompilable = struct {
+    reason: NotCompilableReason,
+    /// The local binding or nested helper the refusal is about.
+    subject: ?[]const u8 = null,
+    /// The nested helper whose inlined body refused, when the refusal came from inside one.
+    in_helper: ?[]const u8 = null,
+
+    pub fn writeMessage(self: NotCompilable, writer: anytype) !void {
+        if (self.subject) |subject| {
+            if (self.reason.subjectMessage()) |template| {
+                try writeSubjectMessage(writer, template, subject);
+            } else {
+                try writer.writeAll(self.reason.message());
+            }
+        } else {
+            try writer.writeAll(self.reason.message());
+        }
+
+        if (self.in_helper) |helper| try writer.print(" (in nested helper '{s}')", .{helper});
+    }
+
+    fn writeSubjectMessage(writer: anytype, template: []const u8, subject: []const u8) !void {
+        const at = std.mem.indexOf(u8, template, "{s}").?;
+        try writer.writeAll(template[0..at]);
+        try writer.writeAll(subject);
+        try writer.writeAll(template[at + 3 ..]);
     }
 };
 
@@ -199,11 +264,15 @@ pub const QuotationFallbackWarning = struct {
 pub const UncompiledWord = struct {
     name: []const u8,
     reason: NotCompilableReason,
-    /// Set when the word fails because it defines a helper word inside its own
-    /// body that AOT compilation cannot discover. Names that helper so the
-    /// build diagnostic can point at it and recommend a `private{ }` block.
-    /// Borrows from the word's instruction stream.
-    nested_definition: ?[]const u8 = null,
+    /// The local binding or nested helper the refusal is about. Borrows from the word's
+    /// instruction stream.
+    subject: ?[]const u8 = null,
+    /// The nested helper whose inlined body refused. Borrows from the word's instruction stream.
+    in_helper: ?[]const u8 = null,
+
+    pub fn cause(self: UncompiledWord) NotCompilable {
+        return .{ .reason = self.reason, .subject = self.subject, .in_helper = self.in_helper };
+    }
 };
 
 pub const PreludeStats = struct {
@@ -344,7 +413,7 @@ pub const AotFallbackSite = struct {
     callee_word: []const u8,
     callee_word_id: u32,
     line: u32,
-    callee_reason: ?NotCompilableReason = null,
+    callee_reason: ?NotCompilable = null,
     callee_is_native: bool = false,
 };
 
@@ -2381,6 +2450,9 @@ const BoundName = struct {
     name: []const u8,
     park: ?usize,
     helper: ?LocalHelper = null,
+    /// The bound value was a quotation literal, so a read that neither parks nor inlines is a
+    /// helper that cannot be inlined rather than an unproven value.
+    quotation_value: bool = false,
     body: usize,
     site: usize,
     /// Values the `;` popped: the bound value, any stack effect, doc string, or marker under it,
@@ -2439,6 +2511,10 @@ const CompileState = struct {
     cond_select_count: u32 = 0,
     error_handler_terminal: bool = false,
     not_compilable_reason: ?NotCompilableReason = null,
+    /// The binding or helper `not_compilable_reason` is about, set with it by `refuse`.
+    not_compilable_subject: ?[]const u8 = null,
+    /// The innermost nested helper whose inlined body refused.
+    not_compilable_helper: ?[]const u8 = null,
     dispatch_ptr: c.ir_ref = c.IR_UNUSED,
     resolver: ?WordResolver = null,
     jit_ctx_ptr: c.ir_ref = c.IR_UNUSED,
@@ -2772,6 +2848,20 @@ const CompileState = struct {
     /// The binding a bare word read in a lexical body reaches, or null when no `;` bound it yet.
     fn boundName(state: *const CompileState, name: []const u8) ?BoundName {
         return latestBinding(state.bound_names.items, name);
+    }
+
+    /// Refuse the word for `reason`, naming `subject` in the diagnostic. The two are set together
+    /// so a reason never reports a name left over from an earlier one.
+    fn refuse(state: *CompileState, reason: NotCompilableReason, subject: ?[]const u8) IrCodegenError {
+        state.not_compilable_reason = reason;
+        state.not_compilable_subject = subject;
+        return IrCodegenError.NotCompilable;
+    }
+
+    /// The reason the word was refused, with the names the diagnostic reports.
+    fn notCompilable(state: *const CompileState) ?NotCompilable {
+        const reason = state.not_compilable_reason orelse return null;
+        return .{ .reason = reason, .subject = state.not_compilable_subject, .in_helper = state.not_compilable_helper };
     }
 
     /// Allocate a fresh RowId, unique within this compilation.
@@ -3933,9 +4023,8 @@ fn materializeQuotations(state: *CompileState, stack: []StackEntry, sp: usize, e
                     // With no interpreter to run the captured closure, the reified body's compiled
                     // code runs instead. It resolves names without the scope the interpreter
                     // captures here, so a read of a local would reach a global.
-                    if (state.interpreter_free and quotationReadsShadowedBinding(state, body)) {
-                        state.not_compilable_reason = .nested_definition;
-                        return IrCodegenError.NotCompilable;
+                    if (state.interpreter_free) {
+                        if (quotationReadsShadowedBinding(state, body)) |name| return state.refuse(.reified_local_read, name);
                     }
 
                     // Serialize the instruction body and record it for C emission.
@@ -8773,9 +8862,8 @@ fn compileInstructions(
                     stack[sp.*] = .{ .i64_ref = c.ir_const_i64(ctx, val.fixnum) };
                     sp.* += 1;
                 } else if (val == .quotation) {
-                    if (lexical and state.binds_into_own_frame and quotationReadsLaterBinding(state, val.quotation.instructions)) {
-                        state.not_compilable_reason = .nested_definition;
-                        return IrCodegenError.NotCompilable;
+                    if (lexical and state.binds_into_own_frame) {
+                        if (quotationReadsLaterBinding(state, val.quotation.instructions)) |name| return state.refuse(.read_before_bind, name);
                     }
 
                     stack[sp.*] = .{ .quotation_body = .{
@@ -9017,9 +9105,9 @@ fn compileInstructions(
                         try recordBinding(state, instructions, idx, stack, sp.*);
                     } else if (localReach(instr.op) != .none) {
                         if (state.boundName(name)) |bound| {
-                            if (localReach(instr.op) == .captured or (bound.park == null and bound.helper == null)) {
-                                state.not_compilable_reason = .nested_definition;
-                                return IrCodegenError.NotCompilable;
+                            if (localReach(instr.op) == .captured) return state.refuse(.unproven_local_read, name);
+                            if (bound.park == null and bound.helper == null) {
+                                return state.refuse(if (bound.quotation_value) .uninlinable_helper else .unproven_local_read, name);
                             }
 
                             if (bound.park) |park| {
@@ -9465,34 +9553,6 @@ fn preScanInstructions(
     }
 }
 
-/// Whether `target` is defined by a nested `name: [ ... ] ;` statement inside
-/// this flat body. `nativeSemicolon` pops the body quotation then the name
-/// symbol, so a nested definition reads as `push_literal symbol(name)` ...
-/// `push_literal quotation(body)` ... `call_word ";"`; the defined name is the
-/// most recent symbol literal before that `;`, since the quotation, marker, and
-/// doc pushes in between are not symbols. The pending name resets at each `;` so
-/// it never leaks across definition statements.
-fn isNestedDefinedName(instructions: []const Instruction, target: []const u8) bool {
-    var pending_name: ?[]const u8 = null;
-    for (instructions) |instr| {
-        switch (instr.op) {
-            .push_literal => |val| {
-                if (val == .symbol) pending_name = val.symbol.bytes;
-            },
-            .call_word, .call_word_direct, .call_word_module => {
-                const cname = instr.op.callTargetName() orelse continue;
-                if (std.mem.eql(u8, cname, ";")) {
-                    if (pending_name) |pn| {
-                        if (std.mem.eql(u8, pn, target)) return true;
-                    }
-                    pending_name = null;
-                }
-            },
-        }
-    }
-    return false;
-}
-
 /// The latest binding of `name` among `bound`, which is in emission order.
 fn latestBinding(bound: []const BoundName, name: []const u8) ?BoundName {
     return latestBindingBefore(bound, name, 0, std.math.maxInt(usize));
@@ -9679,41 +9739,43 @@ fn collectLexicalBodies(state: *CompileState, body: []const Instruction, owner: 
     }
 }
 
-/// Whether a quotation body, at any depth, reads a name a `;` in an open lexical body bound, where
-/// that name also resolves to a word outside the body.
+/// The name a quotation body, at any depth, reads that a `;` in an open lexical body bound, where
+/// that name also resolves to a word outside the body. Null when it reads none.
 ///
 /// A name with no such word leaves the reified body uncompilable, so it runs interpreted with the
 /// scope it captured. A name that has one compiles to a call of that word.
-fn quotationReadsShadowedBinding(state: *const CompileState, body: []const Instruction) bool {
+fn quotationReadsShadowedBinding(state: *const CompileState, body: []const Instruction) ?[]const u8 {
     for (body) |instr| {
         switch (instr.op) {
             .push_literal => |val| {
-                if (val == .quotation and quotationReadsShadowedBinding(state, val.quotation.instructions)) return true;
+                if (val != .quotation) continue;
+                if (quotationReadsShadowedBinding(state, val.quotation.instructions)) |name| return name;
             },
             .call_word, .call_word_direct, .call_word_module => {
                 if (localReach(instr.op) == .none) continue;
                 const name = instr.op.callTargetName() orelse continue;
                 if (state.boundName(name) == null) continue;
 
-                const res = state.resolver orelse return true;
-                if (res.resolve(name, res.user_data) != null) return true;
+                const res = state.resolver orelse return name;
+                if (res.resolve(name, res.user_data) != null) return name;
             },
         }
     }
-    return false;
+    return null;
 }
 
-/// Whether a quotation literal reads a name no `;` has bound yet, which an open lexical body may
-/// bind later.
+/// The name a quotation literal reads that no `;` has bound yet, which an open lexical body may bind
+/// later. Null when it reads none.
 ///
 /// Nothing captures that binding when the quotation is pushed. Called after the bind, the
 /// interpreter finds it through the live frame chain, while compiled code resolves the name
 /// without it. So the word is refused rather than left to diverge.
-fn quotationReadsLaterBinding(state: *const CompileState, body: []const Instruction) bool {
+fn quotationReadsLaterBinding(state: *const CompileState, body: []const Instruction) ?[]const u8 {
     for (body) |instr| {
         switch (instr.op) {
             .push_literal => |val| {
-                if (val == .quotation and quotationReadsLaterBinding(state, val.quotation.instructions)) return true;
+                if (val != .quotation) continue;
+                if (quotationReadsLaterBinding(state, val.quotation.instructions)) |name| return name;
             },
             .call_word, .call_word_direct, .call_word_module => {
                 if (localReach(instr.op) == .none) continue;
@@ -9721,38 +9783,9 @@ fn quotationReadsLaterBinding(state: *const CompileState, body: []const Instruct
                 if (state.boundName(name) != null) continue;
 
                 for (state.open_lexical_bodies.items) |open| {
-                    if (isBindCandidate(open, name)) return true;
+                    if (isBindCandidate(open, name)) return name;
                 }
             },
-        }
-    }
-    return false;
-}
-
-/// Find a callee in `instructions` that is defined by a nested `;` statement in
-/// the same body. Returns the helper's name, or null when the body calls no
-/// such helper. Drives both the per-word compile gate (the word must run
-/// interpreted) and the build diagnostic that names the helper and recommends a
-/// `private{ }` block. The returned slice borrows from the instruction stream.
-///
-/// A nested helper shadows any global word of the same name within the body, but
-/// compiled codegen resolves calls through the global-only resolver and cannot
-/// bind to the nested local; a same-named global (e.g. a generated struct
-/// converter) would otherwise be mis-bound, silently changing behavior. So a
-/// nested-defined callee is flagged even when a global namesake resolves, not
-/// only when the name is otherwise unresolvable.
-fn findUndiscoverableNestedDef(
-    instructions: []const Instruction,
-) ?[]const u8 {
-    for (instructions) |instr| {
-        switch (instr.op) {
-            .call_word, .call_word_direct, .call_word_module => {
-                const name = instr.op.callTargetName() orelse continue;
-                if (std.mem.eql(u8, name, ";")) continue;
-                if (intrinsic_table.has(name) and !isIndexedStackOp(name)) continue;
-                if (isNestedDefinedName(instructions, name)) return name;
-            },
-            .push_literal => {},
         }
     }
     return null;
@@ -10432,7 +10465,7 @@ pub fn emitWordCAot(
     allocator: Allocator,
     stack_effect: ?*const StackEffect,
     inferred_param_types: []const InferredParamType,
-    reason_out: ?*?NotCompilableReason,
+    reason_out: ?*?NotCompilable,
     quotation_id_map: ?*const std.AutoHashMapUnmanaged(usize, u32),
     pic_table: ?*pic_mod.PicTable,
     interp_ctx: ?*const Context,
@@ -10468,7 +10501,7 @@ fn emitWordCAotWithCName(
     allocator: Allocator,
     stack_effect: ?*const StackEffect,
     inferred_param_types: []const InferredParamType,
-    reason_out: ?*?NotCompilableReason,
+    reason_out: ?*?NotCompilable,
     quotation_id_map: ?*const std.AutoHashMapUnmanaged(usize, u32),
     pic_table: ?*pic_mod.PicTable,
     interp_ctx: ?*const Context,
@@ -10484,7 +10517,7 @@ fn emitWordCAotWithCName(
     needs_lexical_frame: bool,
     lexical_sites: ?*AotLexicalSiteTable,
 ) (IrCodegenError || ir_mod.IrError || Allocator.Error)![]u8 {
-    var reason: ?NotCompilableReason = null;
+    var reason: ?NotCompilable = null;
     const discovered = emitWordCAotPass(instructions, input_count, output_count, name, c_name_override, resolver, self_name, aot_compiled_names, callee_resolution, string_literals, quotation_literals, array_literals, allocator, stack_effect, inferred_param_types, null, &reason, quotation_id_map, pic_table, interp_ctx, null, null, null, slot_maps, emit_slot_table_literals, source_file, interpreter_free, freestanding, fallbacks_locked, false, needs_lexical_frame, null) catch |err| {
         if (reason_out) |ro| ro.* = reason;
         return err;
@@ -10534,7 +10567,7 @@ fn emitWordCAotPass(
     stack_effect: ?*const StackEffect,
     inferred_param_types: []const InferredParamType,
     known_peak: ?u32,
-    nc_reason_out: ?*?NotCompilableReason,
+    nc_reason_out: ?*?NotCompilable,
     quotation_id_map: ?*const std.AutoHashMapUnmanaged(usize, u32),
     pic_table: ?*pic_mod.PicTable,
     interp_ctx_param: ?*const Context,
@@ -10599,7 +10632,7 @@ fn emitWordCAotPass(
     // only for the interpreter-free build class, the only one that splices.
     var scan_flags = PreScanFlags{};
     preScanInstructions(instructions, resolver, &scan_flags, false, interpreter_free, 0) catch {
-        if (nc_reason_out) |ro| ro.* = .pre_scan_failure;
+        if (nc_reason_out) |ro| ro.* = .{ .reason = .pre_scan_failure };
         return IrCodegenError.NotCompilable;
     };
 
@@ -10901,7 +10934,7 @@ fn emitWordCAotPass(
         .inferred_param_types = inferred_param_types,
         .source_file = source_file,
         .quotation_slots = buildQuotationSlotMap(stack_effect) orelse {
-            if (nc_reason_out) |ro| ro.* = .quotation_slot_overflow;
+            if (nc_reason_out) |ro| ro.* = .{ .reason = .quotation_slot_overflow };
             return IrCodegenError.NotCompilable;
         },
     };
@@ -10954,7 +10987,7 @@ fn emitWordCAotPass(
     if (std.mem.eql(u8, name, "choose")) {
         emitChooseBuiltin(&state, stack_buf, &sp) catch |err| {
             if (err == IrCodegenError.NotCompilable) {
-                if (nc_reason_out) |ro| ro.* = state.not_compilable_reason;
+                if (nc_reason_out) |ro| ro.* = state.notCompilable();
             }
             return err;
         };
@@ -10964,7 +10997,10 @@ fn emitWordCAotPass(
 
         compileInstructions(&state, instructions, stack_buf, &sp) catch |err| {
             if (err == IrCodegenError.NotCompilable) {
-                if (nc_reason_out) |ro| ro.* = state.not_compilable_reason;
+                if (nc_reason_out) |ro| ro.* = state.notCompilable();
+            } else if (isStackShapeError(err) and state.not_compilable_helper != null) {
+                // Recorded only when a helper declined, so the underflow report can name it.
+                if (nc_reason_out) |ro| ro.* = .{ .reason = .abstract_stack_underflow, .in_helper = state.not_compilable_helper };
             }
             return err;
         };
@@ -11366,13 +11402,13 @@ fn matchesAotWordPattern(ctx: *const Context, name: []const u8) bool {
 /// `kind` is `"word"` or `"quot"`. A null `reason` is a success; otherwise the
 /// reason's code and message name the rejection. No-op unless `interp_ctx`
 /// carries the codegen axis.
-fn emitAotCodegenTrace(interp_ctx: ?*const Context, kind: []const u8, name: []const u8, reason: ?NotCompilableReason) void {
+fn emitAotCodegenTrace(interp_ctx: ?*const Context, kind: []const u8, name: []const u8, rejected: ?NotCompilable) void {
     const ctx = interp_ctx orelse return;
     if (!ctx.trace.trace_aot.codegen) return;
     if (!matchesAotWordPattern(ctx, name)) return;
     var tw = trace_mod.TraceWriter.init();
-    if (reason) |r| {
-        trace_mod.traceAotCodegen(&tw, kind, name, r.code(), r.message());
+    if (rejected) |nc| {
+        trace_mod.traceAotCodegen(&tw, kind, name, nc.reason.code(), nc.reason.message());
     } else {
         trace_mod.traceAotCodegen(&tw, kind, name, null, "");
     }
@@ -11402,15 +11438,15 @@ fn emitAotInstrTrace(state: *const CompileState, instr: Instruction, stack: []co
 /// arity `in_arity`. A non-null `out_arity` is a success; otherwise `reason`
 /// names the rejection for that attempt. No-op unless `interp_ctx` carries the
 /// effect axis.
-fn emitAotEffectTrace(interp_ctx: ?*const Context, name: []const u8, in_arity: u8, out_arity: ?u8, reason: ?NotCompilableReason) void {
+fn emitAotEffectTrace(interp_ctx: ?*const Context, name: []const u8, in_arity: u8, out_arity: ?u8, rejected: ?NotCompilable) void {
     const ctx = interp_ctx orelse return;
     if (!ctx.trace.trace_aot.effect) return;
     if (!matchesAotWordPattern(ctx, name)) return;
     var tw = trace_mod.TraceWriter.init();
     if (out_arity) |out| {
         trace_mod.traceAotEffectAttempt(&tw, name, in_arity, out, null, "");
-    } else if (reason) |r| {
-        trace_mod.traceAotEffectAttempt(&tw, name, in_arity, null, r.code(), r.message());
+    } else if (rejected) |nc| {
+        trace_mod.traceAotEffectAttempt(&tw, name, in_arity, null, nc.reason.code(), nc.reason.message());
     } else {
         trace_mod.traceAotEffectAttempt(&tw, name, in_arity, null, null, "");
     }
@@ -11783,7 +11819,7 @@ pub fn emitProgramC(
                 if (w.is_native) continue;
                 if (returns_row_names.contains(identities[i])) continue;
                 resolver_data.callee_resolution.scope = scopeFor(&callee_scopes, identities[i]);
-                var reason: ?NotCompilableReason = null;
+                var reason: ?NotCompilable = null;
                 const discovered = emitWordCAotPass(
                     w.instructions,
                     w.input_count,
@@ -11840,12 +11876,12 @@ pub fn emitProgramC(
     // Pass 1a: trial compile to discover the compilable set
     var compilable_names: std.StringHashMapUnmanaged(u32) = .{};
     defer compilable_names.deinit(allocator);
-    var failure_reasons: std.StringHashMapUnmanaged(NotCompilableReason) = .{};
+    var failure_reasons: std.StringHashMapUnmanaged(NotCompilable) = .{};
     defer failure_reasons.deinit(allocator);
     for (words, 0..) |*w, i| {
         if (w.is_native) continue;
         resolver_data.callee_resolution.scope = scopeFor(&callee_scopes, identities[i]);
-        var reason: ?NotCompilableReason = null;
+        var reason: ?NotCompilable = null;
         const trial = emitWordCAotWithCName(
             w.instructions,
             w.input_count,
@@ -11878,14 +11914,14 @@ pub fn emitProgramC(
             word_needs_frame[i],
             null,
         ) catch |err| {
-            const rejected: ?NotCompilableReason = if (reason) |r|
+            const rejected: ?NotCompilable = if (reason) |r|
                 r
             else if (err == IrCodegenError.StackUnderflow or err == IrCodegenError.StackShapeMismatch)
-                .abstract_stack_underflow
+                .{ .reason = .abstract_stack_underflow }
             else
                 null;
             if (rejected) |r| try failure_reasons.put(allocator, identities[i], r);
-            emitAotCodegenTrace(interp_ctx, "word", identities[i], rejected orelse .unknown_reason);
+            emitAotCodegenTrace(interp_ctx, "word", identities[i], rejected orelse .{ .reason = .unknown_reason });
             continue;
         };
         allocator.free(trial);
@@ -11923,7 +11959,7 @@ pub fn emitProgramC(
             var found: ?InferredEffect = null;
             var ic: u8 = 0;
             while (ic <= max_discovered_quotation_arity) : (ic += 1) {
-                var dreason: ?NotCompilableReason = null;
+                var dreason: ?NotCompilable = null;
                 // No inferred types: the freeze-time pass sizes a quotation's table by its
                 // `inferred_effect`, and this branch runs precisely when it has none.
                 const dres = emitWordCAotPass(q.instructions, ic, 0, q.c_name, q.c_name, resolver, null, &compiled_names, resolver_data.callee_resolution, null, null, null, allocator, null, &.{}, null, &dreason, null, null, interp_ctx, null, null, null, slot_maps_ptr, emit_slot_table_literals, q.source_file, strict_interpreter_free, meta.freestanding, fallbacks_locked, false, bracketed_quotation_ids.contains(q.quotation_id), null) catch {
@@ -11939,7 +11975,7 @@ pub fn emitProgramC(
             q.inferred_effect = e;
             break :blk e;
         };
-        var qreason: ?NotCompilableReason = null;
+        var qreason: ?NotCompilable = null;
         const trial = emitWordCAotWithCName(
             q.instructions,
             effect.input_count,
@@ -11972,7 +12008,7 @@ pub fn emitProgramC(
             bracketed_quotation_ids.contains(q.quotation_id),
             null,
         ) catch {
-            emitAotCodegenTrace(interp_ctx, "quot", q.c_name, qreason orelse .unknown_reason);
+            emitAotCodegenTrace(interp_ctx, "quot", q.c_name, qreason orelse .{ .reason = .unknown_reason });
             continue;
         };
         allocator.free(trial);
@@ -12179,11 +12215,12 @@ pub fn emitProgramC(
         var uncompiled: std.ArrayListUnmanaged(UncompiledWord) = .{};
         for (words, 0..) |w, i| {
             if (!w.is_prelude and !actually_compiled.contains(w.word_id)) {
-                const reason = failure_reasons.get(identities[i]) orelse .unknown_reason;
+                const nc = failure_reasons.get(identities[i]) orelse NotCompilable{ .reason = .unknown_reason };
                 try uncompiled.append(allocator, .{
                     .name = identities[i],
-                    .reason = reason,
-                    .nested_definition = if (reason == .nested_definition) findUndiscoverableNestedDef(w.instructions) else null,
+                    .reason = nc.reason,
+                    .subject = nc.subject,
+                    .in_helper = nc.in_helper,
                 });
             }
         }
@@ -12359,8 +12396,13 @@ pub fn emitProgramC(
             if (actually_compiled.contains(w.word_id)) {
                 compiled += 1;
             } else {
-                const reason = failure_reasons.get(identities[i]) orelse .unknown_reason;
-                try uncompiled_list.append(allocator, .{ .name = identities[i], .reason = reason });
+                const nc = failure_reasons.get(identities[i]) orelse NotCompilable{ .reason = .unknown_reason };
+                try uncompiled_list.append(allocator, .{
+                    .name = identities[i],
+                    .reason = nc.reason,
+                    .subject = nc.subject,
+                    .in_helper = nc.in_helper,
+                });
             }
         }
         diagnostics.prelude_stats = .{
@@ -14312,14 +14354,9 @@ fn recordBinding(
     stack: []StackEntry,
     sp: usize,
 ) IrCodegenError!void {
-    const res = state.resolver orelse {
-        state.not_compilable_reason = .nested_definition;
-        return IrCodegenError.NotCompilable;
-    };
-    const site = bindingNameAt(state.bound_names.items, instructions, idx, res) orelse {
-        state.not_compilable_reason = .nested_definition;
-        return IrCodegenError.NotCompilable;
-    };
+    const res = state.resolver orelse return state.refuse(.computed_binding_name, null);
+    const site = bindingNameAt(state.bound_names.items, instructions, idx, res) orelse
+        return state.refuse(.computed_binding_name, null);
 
     // A `;` popping only the quotation and the name defines a plain helper. Any marker under the
     // body changes what a call of it does, so a read of such a helper refuses.
@@ -14340,6 +14377,7 @@ fn recordBinding(
         .name = site.name,
         .park = park,
         .helper = helper,
+        .quotation_value = sp >= 1 and stack[sp - 1] == .quotation_body,
         .body = @intFromPtr(instructions.ptr),
         .site = idx,
         .consumed = site.consumed,
@@ -14566,10 +14604,7 @@ fn emitHelperRead(
     sp: *usize,
 ) IrCodegenError!void {
     const checked = if (helper.effect) |eff| effectHasCheckedInputs(eff) else false;
-    if (checked and state.aot_mode) {
-        state.not_compilable_reason = .nested_definition;
-        return IrCodegenError.NotCompilable;
-    }
+    if (checked and state.aot_mode) return state.refuse(.typed_helper_in_aot, name);
 
     const saved_inline_trace_frame_count = state.inline_trace_frame_count;
     defer state.inline_trace_frame_count = saved_inline_trace_frame_count;
@@ -14606,7 +14641,17 @@ fn emitHelperRead(
         state.bound_names.appendSliceAssumeCapacity(hidden);
     }
 
-    try compileQuotationBodyInline(state, helper.body, stack, sp);
+    compileQuotationBodyInline(state, helper.body, stack, sp) catch |err| {
+        const declined = err == IrCodegenError.NotCompilable or isStackShapeError(err);
+        if (declined and state.not_compilable_helper == null) state.not_compilable_helper = name;
+        return err;
+    };
+}
+
+/// Whether `err` is a body leaving the abstract stack short or uneven, which the build reports as
+/// an underflow rather than through a recorded reason.
+fn isStackShapeError(err: anyerror) bool {
+    return err == IrCodegenError.StackUnderflow or err == IrCodegenError.StackShapeMismatch;
 }
 
 /// Whether the interpreter checks anything about the arguments of a word declared with `eff`.
@@ -21281,7 +21326,7 @@ test "emitWordCAotPass reports discovered_output as the body's final depth" {
     // final abstract stack depth for a couple of fixed-depth intrinsic bodies.
     var compiled_names: std.StringHashMapUnmanaged(u32) = .{};
     defer compiled_names.deinit(testing.allocator);
-    var reason: ?NotCompilableReason = null;
+    var reason: ?NotCompilable = null;
 
     // [ dup ]: input 1 -> output 2
     const dup_instrs = [_]Instruction{
@@ -23568,6 +23613,44 @@ test "NotCompilableReason: pre_scan_failure now has a hint" {
         "blocked until the called word is in the AOT compilation set",
         r.hint().?,
     );
+}
+
+test "NotCompilable: a reason with a subject names it in the message" {
+    var buf: [256]u8 = undefined;
+    var w = std.Io.Writer.fixed(&buf);
+    try (NotCompilable{ .reason = .read_before_bind, .subject = "pb" }).writeMessage(&w);
+    try testing.expectEqualStrings("pushes a quotation that reads 'pb' before that name is bound", w.buffered());
+}
+
+test "NotCompilable: a reason without a subject writes its fixed message" {
+    var buf: [256]u8 = undefined;
+    var w = std.Io.Writer.fixed(&buf);
+    try (NotCompilable{ .reason = .unproven_local_read }).writeMessage(&w);
+    try testing.expectEqualStrings("reads a local binding whose value is not proven to push one value", w.buffered());
+}
+
+test "NotCompilable: a subject on a reason that names none is ignored" {
+    var buf: [256]u8 = undefined;
+    var w = std.Io.Writer.fixed(&buf);
+    try (NotCompilable{ .reason = .computed_binding_name, .subject = "x" }).writeMessage(&w);
+    try testing.expectEqualStrings("binds a local under a name not proven to be a symbol literal", w.buffered());
+}
+
+test "NotCompilable: a refusal inside a nested helper names the helper" {
+    var buf: [256]u8 = undefined;
+    var w = std.Io.Writer.fixed(&buf);
+    try (NotCompilable{ .reason = .unproven_local_read, .subject = "kept", .in_helper = "get-kept" }).writeMessage(&w);
+    try testing.expectEqualStrings(
+        "reads local 'kept', whose value is not proven to push one value (in nested helper 'get-kept')",
+        w.buffered(),
+    );
+}
+
+test "NotCompilableReason: every subject message carries exactly one placeholder" {
+    for (std.enums.values(NotCompilableReason)) |r| {
+        const template = r.subjectMessage() orelse continue;
+        try testing.expectEqual(@as(usize, 1), std.mem.count(u8, template, "{s}"));
+    }
 }
 
 test "add above row_region compiles" {

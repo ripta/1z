@@ -1,0 +1,4 @@
+Error: 1 word could not be compiled to C
+  word 'uneven': NC.13: word body underflows the abstract stack (row-variable effects) (in nested helper 'maybe-extra')
+      hint: blocked until row-variable stack regions can be modeled
+AOT interpreter fallbacks: 21 total (native=2 per-op-native=18 compound-uncompiled=1)

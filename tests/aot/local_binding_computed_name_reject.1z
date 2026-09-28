@@ -1,0 +1,9 @@
+\ A `;` whose name is computed at runtime. It may bind any name, so every later read would have to
+\ be assumed to reach it. The build refuses the word rather than guess which name it bound.
+
+computed: ( -- n ) [
+  "x" >symbol 99 ;
+  1
+] ;
+
+computed .
