@@ -1,0 +1,17 @@
+== read after the bind
+after
+arm
+none
+ababab
+== read before the bind
+GLOBAL
+before
+== quotation pushed after the bind
+call
+runner
+escaped
+captured
+rebound
+== quotation pushed before the bind
+live
+rebound

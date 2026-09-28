@@ -1,0 +1,51 @@
+\ The cases of tests/integration/local_binding_shapes.1z that compile with no interpreter to fall
+\ back to. Each prints the line the shared golden prints for it, so the two outputs compare line
+\ for line.
+\
+\ A quotation pushed before a name is bound is refused in every AOT class, which
+\ local_binding_read_push_before_bind_reject pins. This class also refuses a quotation pushed after
+\ the bind that is not inlined at its push: one handed to a word, one returned, and one left under a
+\ later rebind. Each is reified and reads a bound name that also names the global word, which
+\ local_binding_read_reified_reject pins.
+
+label: ( -- s ) [ "GLOBAL" ] ;
+
+read-after: ( s: string -- s ) [
+  label: swap ;
+  label
+] ;
+
+read-after-arm: ( n: fixnum s: string -- s ) [
+  label: swap ;
+  n: swap ;
+  n 0 > [ label ] [ "none" ] if
+] ;
+
+read-after-loop: ( n: fixnum s: string -- s ) [
+  label: swap ;
+  n: swap ;
+  "" n [ label #append ] times
+] ;
+
+read-before: ( s: string -- a b ) [
+  label swap
+  label: swap ;
+  label
+] ;
+
+pushed-after-call: ( s: string -- s ) [
+  label: swap ;
+  [ label ] call
+] ;
+
+"== read after the bind" print-line
+"after" read-after print-line
+1 "arm" read-after-arm print-line
+0 "arm" read-after-arm print-line
+3 "ab" read-after-loop print-line
+
+"== read before the bind" print-line
+"before" read-before swap print-line print-line
+
+"== quotation pushed after the bind" print-line
+"call" pushed-after-call print-line

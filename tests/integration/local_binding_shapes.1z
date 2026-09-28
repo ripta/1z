@@ -1,0 +1,105 @@
+\ The four orderings of a named local against a quotation that reads it, each shadowing a global
+\ word of the same name. A read that bound the global instead of the local would print GLOBAL, so
+\ the output is the comparison. The interpreted and eager suites check this golden, and a hybrid run
+\ of this same file checks a copy of it. No AOT class builds the two words that push a quotation
+\ before the bind, so tests/aot/local_binding_shapes.1z carries the rest and prints the same lines.
+\
+\ The warm-up calls every word past the hybrid threshold before the report runs. Under eager it is
+\ one compiled word, so the trace twin shows each call once.
+
+label: ( -- s ) [ "GLOBAL" ] ;
+runner: ( q -- s ) [ call ] ;
+
+read-after: ( s: string -- s ) [
+  label: swap ;
+  label
+] ;
+
+read-after-arm: ( n: fixnum s: string -- s ) [
+  label: swap ;
+  n: swap ;
+  n 0 > [ label ] [ "none" ] if
+] ;
+
+read-after-loop: ( n: fixnum s: string -- s ) [
+  label: swap ;
+  n: swap ;
+  "" n [ label #append ] times
+] ;
+
+read-before: ( s: string -- a b ) [
+  label swap
+  label: swap ;
+  label
+] ;
+
+pushed-after-call: ( s: string -- s ) [
+  label: swap ;
+  [ label ] call
+] ;
+
+pushed-after-runner: ( s: string -- s ) [
+  label: swap ;
+  [ label ] runner
+] ;
+
+pushed-after-escape: ( s: string -- q ) [
+  label: swap ;
+  [ label ]
+] ;
+
+pushed-after-rebind: ( s: string -- a b ) [
+  label: swap ;
+  [ label ]
+  label: "rebound" ;
+  call label
+] ;
+
+pushed-before: ( s: string -- s ) [
+  [ label ] swap
+  label: swap ;
+  call
+] ;
+
+pushed-before-rebind: ( s: string -- s ) [
+  [ label ] swap
+  label: swap ;
+  label: "rebound" ;
+  call
+] ;
+
+warm-up: ( -- ) [
+  150 [
+    "w" read-after drop
+    1 "w" read-after-arm drop
+    2 "w" read-after-loop drop
+    "w" read-before drop drop
+    "w" pushed-after-call drop
+    "w" pushed-after-runner drop
+    "w" pushed-after-escape drop
+    "w" pushed-after-rebind drop drop
+    "w" pushed-before drop
+    "w" pushed-before-rebind drop
+  ] times
+] ;
+
+warm-up
+
+"== read after the bind" print-line
+"after" read-after print-line
+1 "arm" read-after-arm print-line
+0 "arm" read-after-arm print-line
+3 "ab" read-after-loop print-line
+
+"== read before the bind" print-line
+"before" read-before swap print-line print-line
+
+"== quotation pushed after the bind" print-line
+"call" pushed-after-call print-line
+"runner" pushed-after-runner print-line
+"escaped" pushed-after-escape call print-line
+"captured" pushed-after-rebind swap print-line print-line
+
+"== quotation pushed before the bind" print-line
+"live" pushed-before print-line
+"live" pushed-before-rebind print-line

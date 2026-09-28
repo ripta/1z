@@ -1,0 +1,10 @@
+== read after the bind
+after
+arm
+none
+ababab
+== read before the bind
+GLOBAL
+before
+== quotation pushed after the bind
+call

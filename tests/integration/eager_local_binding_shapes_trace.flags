@@ -1,0 +1,5 @@
+@raw
+run
+--compile=eager
+--trace-jit
+tests/integration/local_binding_shapes.1z

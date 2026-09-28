@@ -1,0 +1,68 @@
+\ The cases of tests/integration/local_binding_shapes.1z that an AOT build accepts. Each prints the
+\ line the shared golden prints for it, so the two outputs compare line for line.
+\
+\ A quotation pushed before a name is bound is left out. Every AOT class refuses that word at build
+\ time, and local_binding_read_push_before_bind_reject pins the refusal.
+
+label: ( -- s ) [ "GLOBAL" ] ;
+runner: ( q -- s ) [ call ] ;
+
+read-after: ( s: string -- s ) [
+  label: swap ;
+  label
+] ;
+
+read-after-arm: ( n: fixnum s: string -- s ) [
+  label: swap ;
+  n: swap ;
+  n 0 > [ label ] [ "none" ] if
+] ;
+
+read-after-loop: ( n: fixnum s: string -- s ) [
+  label: swap ;
+  n: swap ;
+  "" n [ label #append ] times
+] ;
+
+read-before: ( s: string -- a b ) [
+  label swap
+  label: swap ;
+  label
+] ;
+
+pushed-after-call: ( s: string -- s ) [
+  label: swap ;
+  [ label ] call
+] ;
+
+pushed-after-runner: ( s: string -- s ) [
+  label: swap ;
+  [ label ] runner
+] ;
+
+pushed-after-escape: ( s: string -- q ) [
+  label: swap ;
+  [ label ]
+] ;
+
+pushed-after-rebind: ( s: string -- a b ) [
+  label: swap ;
+  [ label ]
+  label: "rebound" ;
+  call label
+] ;
+
+"== read after the bind" print-line
+"after" read-after print-line
+1 "arm" read-after-arm print-line
+0 "arm" read-after-arm print-line
+3 "ab" read-after-loop print-line
+
+"== read before the bind" print-line
+"before" read-before swap print-line print-line
+
+"== quotation pushed after the bind" print-line
+"call" pushed-after-call print-line
+"runner" pushed-after-runner print-line
+"escaped" pushed-after-escape call print-line
+"captured" pushed-after-rebind swap print-line print-line

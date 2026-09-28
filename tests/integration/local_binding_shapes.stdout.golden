@@ -1,0 +1,46 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+== read after the bind
+Stack: [ ]
+after
+Stack: [ ]
+arm
+Stack: [ ]
+none
+Stack: [ ]
+ababab
+Stack: [ ]
+== read before the bind
+Stack: [ ]
+GLOBAL
+before
+Stack: [ ]
+== quotation pushed after the bind
+Stack: [ ]
+call
+Stack: [ ]
+runner
+Stack: [ ]
+escaped
+Stack: [ ]
+captured
+rebound
+Stack: [ ]
+== quotation pushed before the bind
+Stack: [ ]
+live
+Stack: [ ]
+rebound
+Stack: [ ]

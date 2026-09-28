@@ -1,0 +1,4 @@
+@raw
+run
+--compile=hybrid
+tests/integration/local_binding_shapes.1z
