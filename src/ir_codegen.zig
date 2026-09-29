@@ -18087,13 +18087,14 @@ test "jitNativeWordCall: dispatch miss falls through to the cached native functi
     try testing.expectEqual(error.TypeMismatch, ctx.jit_pending_error.?);
 }
 
-test "jitNativeWordCall: unrecognized word_id with no cached native leaf returns 1" {
+test "jitNativeWordCall: unrecognized word_id with no cached native leaf raises UnknownWord" {
     var ctx = Context.init(testing.allocator);
     defer ctx.deinit();
 
     const word_id = try ctx.jit_dispatch.assignId("some-compound-word");
     const rc = jitNativeWordCall(@intFromPtr(&ctx), word_id, 0, 0, 1, 0);
-    try testing.expectEqual(@as(i32, 1), rc);
+    try testing.expectEqual(@as(i32, 2), rc);
+    try testing.expectEqual(error.UnknownWord, ctx.jit_pending_error.?);
 }
 
 /// A compiled dispatch body: consumes two operands and pushes a marker, the shape an AOT-replayed
