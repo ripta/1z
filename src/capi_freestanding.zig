@@ -332,7 +332,6 @@ comptime {
         @export(&jitDispatchMissError, .{ .name = "jitDispatchMissError" });
         @export(&aotSatisfiesAndDispatch, .{ .name = "aotSatisfiesAndDispatch" });
         @export(&aotSatisfiesAndDispatchCombinator, .{ .name = "aotSatisfiesAndDispatchCombinator" });
-        @export(&jitOverflowError, .{ .name = "jitOverflowError" });
         @export(&jitDivisionByZeroError, .{ .name = "jitDivisionByZeroError" });
         @export(&jitStackUnderflowError, .{ .name = "jitStackUnderflowError" });
         @export(&jitTypeMismatchError, .{ .name = "jitTypeMismatchError" });
@@ -2137,11 +2136,6 @@ fn jitNativeWordCall(ctx_raw: usize, word_id_raw: usize, src_ptr_raw: usize, src
     if (word_id_raw >= handle.word_names.len) return unsupportedJit(ctx_raw, "native helper calls");
     const name_ptr = handle.word_names[word_id_raw] orelse return unsupportedJit(ctx_raw, "native helper calls");
     return callFreestandingNative(handle, std.mem.span(name_ptr));
-}
-
-fn jitOverflowError(ctx_raw: usize) callconv(.c) i32 {
-    _ = ctx_raw;
-    return 2;
 }
 
 fn jitDivisionByZeroError(ctx_raw: usize) callconv(.c) i32 {

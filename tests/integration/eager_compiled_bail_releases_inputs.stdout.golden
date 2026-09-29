@@ -1,0 +1,46 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+=== a bail before the operands are consumed ===
+Stack: [ ]
+PASS: fixnum call compiled
+Stack: [ ]
+PASS: runtime bignum re-runs interpreted
+Stack: [ ]
+=== a bail after a dup of a heap string ===
+Stack: [ ]
+PASS: quotient
+Stack: [ "hello" "hello" ]
+PASS: copy
+Stack: [ "hello" ]
+PASS: original
+Stack: [ ]
+=== a bail after a swap ===
+Stack: [ ]
+PASS: quotient
+Stack: [ "hello" ]
+PASS: string
+Stack: [ ]
+=== a bail inside an inlined if arm ===
+Stack: [ ]
+PASS: quotient
+Stack: [ "hello" ]
+PASS: string below the arm
+Stack: [ ]
+=== a callee's bail passed up through a direct compiled call ===
+Stack: [ ]
+PASS: quotient
+Stack: [ "hello" ]
+PASS: string below the callee
+Stack: [ ]
+=== a bail with a quotation literal in the entry model ===
+Stack: [ ]
+Stack: [ ]
+PASS: non-fixnum count re-runs interpreted and raises there
+Stack: [ "hello" [ ] ]

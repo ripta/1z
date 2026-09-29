@@ -1272,7 +1272,7 @@ fn emitTagCheck(
     const tag_mismatch = c.ir_fold2(ctx, c.IR_OPT(c.IR_NE, c.IR_BOOL), tag_val, expected_tag);
     const if_mismatch = c._ir_IF(ctx, tag_mismatch);
     c._ir_IF_TRUE_cold(ctx, if_mismatch);
-    emitAbnormalReturn(state, bail_status);
+    emitSettledExit(state, bail_status, .bail);
     c._ir_IF_FALSE(ctx, if_mismatch);
 }
 
@@ -1291,7 +1291,7 @@ fn emitErrorReturn(state: *CompileState, error_fn: c.ir_ref) void {
         break :blk c._ir_LOAD(ctx, c.IR_ADDR, ctx_addr2);
     };
     const call_result = c._ir_CALL_1(ctx, c.IR_I32, error_fn, ctx_val);
-    emitAbnormalReturn(state, call_result);
+    emitSettledExit(state, call_result, .raise);
 }
 
 /// Check the tag of a Value at elem_addr; on mismatch, call an error
@@ -1389,7 +1389,7 @@ fn emitParamTagCheckOrError(
             c.ir_const_addr(ctx, expected_tag_int),
             elem_addr,
         );
-        emitAbnormalReturn(state, call_result);
+        emitSettledExit(state, call_result, .raise);
     }
     c._ir_IF_FALSE(ctx, if_mismatch);
 }
@@ -2663,7 +2663,8 @@ const CompileState = struct {
     /// True while `emitIf` trial-compiles the arms of a candidate branchless
     /// `IR_COND` select. The trial relies on the backend folding away pure
     /// discarded code, so any path that would emit a native call or
-    /// physical-stack stores must raise `BranchlessTrialImpure` instead.
+    /// physical-stack stores on the hot path must raise `BranchlessTrialImpure`
+    /// instead. A guard's cold exit may store, since it runs only as the body leaves.
     in_branchless_trial: bool = false,
     /// Set of compiled word identities available in AOT mode. Used to decide whether
     /// a compound word call can be a direct function call or must fall through
@@ -2697,7 +2698,6 @@ const CompileState = struct {
     /// Error-reporting callbacks that set jit_pending_error and return 2.
     /// Used to replace bail_status returns with proper error propagation.
     type_mismatch_error_fn: c.ir_ref = c.IR_UNUSED,
-    overflow_error_fn: c.ir_ref = c.IR_UNUSED,
     div_zero_error_fn: c.ir_ref = c.IR_UNUSED,
     underflow_error_fn: c.ir_ref = c.IR_UNUSED,
     /// Function ref for `jitParamTypeMismatchError`, the entry check on a parameter the
@@ -2778,6 +2778,16 @@ const CompileState = struct {
     /// the `inline` word whose code the instruction was copied from. Saved and restored around a
     /// nested walk, the way `source_file` is around a splice.
     inline_site: InlineSite = .{},
+    /// The abstract stack of the instruction `compileInstructions` is emitting, which an inline
+    /// guard settles before it leaves the body. Null outside a walk, where the physical stack is
+    /// the entry stack and there is nothing to settle.
+    ///
+    /// `exit_instr_sp` is the depth before the instruction popped anything. A guard fires after
+    /// its instruction lowered `sp` over its operands and before it overwrote them, so the entries
+    /// between the live depth and this one are the operands, still owned in their slots.
+    exit_stack: ?[]StackEntry = null,
+    exit_sp: ?*usize = null,
+    exit_instr_sp: usize = 0,
     /// Transient lexical frames opened by enclosing splices and not yet closed. Read where
     /// control leaves a bracketed region by a route the epilogue pop cannot cover.
     open_lexical_frames: usize = 0,
@@ -3941,6 +3951,18 @@ fn narrowAnnotatedOutputs(
     for (outputs) |param| {
         if (param.is_row_variable) return;
     }
+
+    // A failed check raises over the stack the call settled. A quotation literal under it would
+    // have to be built on the error path, so that shape keeps its outputs boxed instead.
+    for (stack[0..sp]) |entry| {
+        if (entry == .quotation_body) return;
+    }
+
+    // The call already consumed its inputs, so a raise here has no popped operand of its own to
+    // release. The depth the instruction started at would name slots the callee released.
+    const saved_instr_sp = state.exit_instr_sp;
+    defer state.exit_instr_sp = saved_instr_sp;
+    state.exit_instr_sp = sp;
 
     for (outputs, 0..) |param, j| {
         const i = sp - effective_out + j;
@@ -5401,6 +5423,21 @@ fn compilePredBodyLoop(
     resetStackToPhysicalPreservingRows(stack, sp.*);
 }
 
+/// Materialize the quotation literals under a raising guard's `operand_count` operands.
+///
+/// A raise leaves the stack below the operands in place, so a literal there has to be a real
+/// quotation by the time the guard can fire. False when the literal cannot be built, which sends
+/// the caller to its native callback.
+fn materializeUnderRaiseGuard(state: *CompileState, stack: []StackEntry, sp: usize, operand_count: usize) bool {
+    const below = sp - operand_count;
+    for (stack[0..below]) |entry| {
+        if (entry == .quotation_body) break;
+    } else return true;
+
+    materializeQuotations(state, stack, below, false) catch return false;
+    return true;
+}
+
 /// Try to emit inline IR for virtual type unwrapping.
 /// Recognizes the pattern: push_literal(type_val=tv) + call_word("native.virtual-unwrap").
 /// Returns true if inlined; false to fall back to runtime callback.
@@ -5429,6 +5466,7 @@ fn tryEmitInlineVirtualUnwrap(
         else => return false,
     };
 
+    if (!materializeUnderRaiseGuard(state, stack, sp.*, 2)) return false;
     sp.* -= 2;
 
     const ctx = state.ctx;
@@ -5450,7 +5488,7 @@ fn tryEmitInlineVirtualUnwrap(
     if (state.type_mismatch_error_fn != c.IR_UNUSED) {
         emitErrorReturn(state, state.type_mismatch_error_fn);
     } else {
-        emitAbnormalReturn(state, state.bail_status);
+        emitSettledExit(state, state.bail_status, .bail);
     }
     c._ir_IF_FALSE(ctx, if_mismatch);
 
@@ -5555,6 +5593,7 @@ fn tryEmitInlineTypedValidateAndPromote(
 
     const value_slot: usize = value_entry.slotIndex().?;
 
+    if (!materializeUnderRaiseGuard(state, stack, sp.*, 2)) return false;
     sp.* -= 2;
 
     const ctx = state.ctx;
@@ -5613,6 +5652,7 @@ fn tryEmitInlineStructFieldGet(
         else => return false,
     };
 
+    if (!materializeUnderRaiseGuard(state, stack, sp.*, 3)) return false;
     sp.* -= 3;
 
     StructInstanceLayout.ensureInit();
@@ -5641,7 +5681,7 @@ fn tryEmitInlineStructFieldGet(
     if (state.type_mismatch_error_fn != c.IR_UNUSED) {
         emitErrorReturn(state, state.type_mismatch_error_fn);
     } else {
-        emitAbnormalReturn(state, state.bail_status);
+        emitSettledExit(state, state.bail_status, .bail);
     }
     c._ir_IF_FALSE(ctx, if_mismatch);
 
@@ -5743,7 +5783,7 @@ fn tryEmitInlineStructFieldSet(
     if (state.type_mismatch_error_fn != c.IR_UNUSED) {
         emitErrorReturn(state, state.type_mismatch_error_fn);
     } else {
-        emitAbnormalReturn(state, state.bail_status);
+        emitSettledExit(state, state.bail_status, .bail);
     }
     c._ir_IF_FALSE(ctx, if_mismatch);
 
@@ -6037,34 +6077,92 @@ fn emitIntrinsicAbs(ec: EmitCtx) IrCodegenError!ControlFlow {
         c._ir_MERGE_2(ctx, end_true, end_false);
         const result = c._ir_PHI_2(ctx, c.IR_DOUBLE, neg_a, a);
         stack[sp.*] = .{ .f64_ref = result };
-    } else {
+    } else if (!state.aot_mode) {
+        // The absolute value of minInt is a bignum. A bail re-runs the word interpreted, where
+        // the native promotes.
         const a = try requireI64(entry, state);
 
         const min_val = c.ir_const_i64(ctx, std.math.minInt(i64));
         const is_min = c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), a, min_val);
         const if_min = c._ir_IF(ctx, is_min);
         c._ir_IF_TRUE_cold(ctx, if_min);
-        if (state.overflow_error_fn != c.IR_UNUSED) {
-            emitErrorReturn(state, state.overflow_error_fn);
-        } else {
-            emitAbnormalReturn(state, bail_status);
-        }
+        emitSettledExit(state, bail_status, .bail);
         c._ir_IF_FALSE(ctx, if_min);
 
-        const zero = c.ir_const_i64(ctx, 0);
-        const is_neg = c.ir_fold2(ctx, c.IR_OPT(c.IR_LT, c.IR_BOOL), a, zero);
-        const neg_a = c.ir_fold1(ctx, c.IR_OPT(c.IR_NEG, c.IR_I64), a);
-        const if_neg = c._ir_IF(ctx, is_neg);
-        c._ir_IF_TRUE(ctx, if_neg);
-        const end_true = c._ir_END(ctx);
-        c._ir_IF_FALSE(ctx, if_neg);
-        const end_false = c._ir_END(ctx);
-        c._ir_MERGE_2(ctx, end_true, end_false);
-        const result = c._ir_PHI_2(ctx, c.IR_I64, neg_a, a);
-        stack[sp.*] = .{ .i64_ref = result };
+        stack[sp.*] = .{ .i64_ref = emitAbsI64(ctx, a) };
+    } else {
+        try emitAotFixnumAbs(ec, entry);
     }
     sp.* += 1;
     return .next;
+}
+
+/// |a| for an `a` known not to be minInt.
+fn emitAbsI64(ctx: *c.ir_ctx, a: c.ir_ref) c.ir_ref {
+    const zero = c.ir_const_i64(ctx, 0);
+    const is_neg = c.ir_fold2(ctx, c.IR_OPT(c.IR_LT, c.IR_BOOL), a, zero);
+    const neg_a = c.ir_fold1(ctx, c.IR_OPT(c.IR_NEG, c.IR_I64), a);
+    const if_neg = c._ir_IF(ctx, is_neg);
+    c._ir_IF_TRUE(ctx, if_neg);
+    const end_true = c._ir_END(ctx);
+    c._ir_IF_FALSE(ctx, if_neg);
+    const end_false = c._ir_END(ctx);
+    c._ir_MERGE_2(ctx, end_true, end_false);
+    return c._ir_PHI_2(ctx, c.IR_I64, neg_a, a);
+}
+
+/// `abs` on a fixnum in AOT code, where a bail has no interpreter to resume into.
+///
+/// minInt's absolute value is a bignum, so that one input goes to the native, which promotes. The
+/// operand is boxed in its slot first, where the native pops it. The fixnum path boxes its result
+/// into the same slot. Both paths therefore leave a boxed value there.
+fn emitAotFixnumAbs(ec: EmitCtx, entry: StackEntry) IrCodegenError!void {
+    const state = ec.state;
+    const ctx = state.ctx;
+    const stack = ec.stack;
+    const slot = ec.sp.*;
+
+    const a = try requireI64(entry, state);
+
+    try materializeQuotations(state, stack, slot + 1, false);
+    flushToPhysicalStack(state, stack, slot + 1);
+
+    const min_val = c.ir_const_i64(ctx, std.math.minInt(i64));
+    const is_min = c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), a, min_val);
+    const if_min = c._ir_IF(ctx, is_min);
+
+    c._ir_IF_TRUE_cold(ctx, if_min);
+    {
+        const saved_items_ptr = state.items_ptr;
+        const saved_base_addr = state.base_addr;
+        if (state.fallbacks_locked or state.freestanding) {
+            // The per-operation dispatch reads an operand pair, so the one-operand word goes
+            // through the generic dispatch, which falls to a unary lookup.
+            const res = state.resolver orelse return state.refuse(.unresolvable_word, null);
+            const resolved = res.resolve("abs", res.user_data) orelse return state.refuse(.unresolvable_word, null);
+            if (resolved.dispatch_id == 0) return state.refuse(.unresolvable_word, null);
+
+            const sp_for_call = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_idx, c.ir_const_addr(ctx, slot + 1));
+            c._ir_STORE(ctx, state.sp_ptr, sp_for_call);
+            emitAotGenericDispatch(state, resolved.dispatch_id, resolved.word_id, "abs", ec.line);
+        } else {
+            try emitPerOperationFallback(state, "abs", slot, slot, ec.line);
+        }
+        state.items_ptr = saved_items_ptr;
+        state.base_addr = saved_base_addr;
+    }
+    const end_promote = c._ir_END(ctx);
+
+    c._ir_IF_FALSE(ctx, if_min);
+    const result = emitAbsI64(ctx, a);
+    emitBoxPayload(ctx, liveSlotAddr(state, slot), state.tag_offset_const, state.payload_offset_const, state.fixnum_tag_const, result);
+    const end_fixnum = c._ir_END(ctx);
+
+    c._ir_MERGE_2(ctx, end_promote, end_fixnum);
+
+    // The native call may have moved the stack buffer.
+    refreshCachedStackPointer(state);
+    stack[slot] = .{ .raw_at_slot = slot };
 }
 
 fn emitIntrinsicDup(ec: EmitCtx) IrCodegenError!ControlFlow {
@@ -7202,7 +7300,8 @@ fn emitIntrinsicIf(ec: EmitCtx) IrCodegenError!ControlFlow {
                 // the trial is abandoned and the boxed path below compiles the
                 // arms inside real branches, where the emission is safe. The
                 // impure op raises before emitting, so the abandoned trial leaves
-                // only foldable pure code behind.
+                // only foldable pure code and guard exits behind. A guard exit's
+                // settling stores sit on its cold path and run only as the body leaves.
                 //
                 // The arms compile bare, without the transient-lexical-frame bracket the other
                 // splice sites emit. `armBodyBranchlessEligible` admits no defining call, so no
@@ -7724,9 +7823,14 @@ fn emitOverflowArith(ec: EmitCtx, poly_op: PolyArithOp, comptime ov_op: comptime
 
     if (try emitPolyArithFastPath(ec, poly_op)) return .next;
 
+    // The guarded result goes through a local. Written straight into `stack[sp]`, the union's tag
+    // would land before the guard emits, and a bail settles the operand that slot still holds.
     const resolved = try resolveOperandPair(stack[sp.*], stack[sp.* + 1], state);
     switch (resolved) {
-        .i64_pair => |p| stack[sp.*] = .{ .i64_ref = emitOverflowCheckedBinary(state, ov_op, p.a, p.b, state.bail_status) },
+        .i64_pair => |p| {
+            const result = emitOverflowCheckedBinary(state, ov_op, p.a, p.b, state.bail_status);
+            stack[sp.*] = .{ .i64_ref = result };
+        },
         .f64_pair => |p| stack[sp.*] = .{ .f64_ref = c.ir_fold2(ctx, c.IR_OPT(f64_op, c.IR_DOUBLE), p.a, p.b) },
     }
     sp.* += 1;
@@ -7760,7 +7864,10 @@ fn emitIntrinsicDiv(ec: EmitCtx) IrCodegenError!ControlFlow {
 
     const resolved = try resolveOperandPair(stack[sp.*], stack[sp.* + 1], state);
     switch (resolved) {
-        .i64_pair => |p| stack[sp.*] = .{ .i64_ref = emitDivision(state, p.a, p.b, state.bail_status) },
+        .i64_pair => |p| {
+            const quotient = emitDivision(state, p.a, p.b, state.bail_status);
+            stack[sp.*] = .{ .i64_ref = quotient };
+        },
         .f64_pair => |p| stack[sp.*] = .{ .f64_ref = c.ir_fold2(ctx, c.IR_OPT(c.IR_DIV, c.IR_DOUBLE), p.a, p.b) },
     }
     sp.* += 1;
@@ -7781,7 +7888,8 @@ fn emitIntrinsicMod(ec: EmitCtx) IrCodegenError!ControlFlow {
 
     const a = try requireI64(stack[sp.*], state);
     const b = try requireI64(stack[sp.* + 1], state);
-    stack[sp.*] = .{ .i64_ref = emitEuclideanMod(state, a, b, state.bail_status) };
+    const modulus = emitEuclideanMod(state, a, b, state.bail_status);
+    stack[sp.*] = .{ .i64_ref = modulus };
     sp.* += 1;
     return .next;
 }
@@ -7797,7 +7905,8 @@ fn emitIntrinsicIntDiv(ec: EmitCtx) IrCodegenError!ControlFlow {
 
     const a = try requireI64(stack[sp.*], state);
     const b = try requireI64(stack[sp.* + 1], state);
-    stack[sp.*] = .{ .i64_ref = emitDivision(state, a, b, state.bail_status) };
+    const quotient = emitDivision(state, a, b, state.bail_status);
+    stack[sp.*] = .{ .i64_ref = quotient };
     sp.* += 1;
     return .next;
 }
@@ -7813,7 +7922,8 @@ fn emitIntrinsicRem(ec: EmitCtx) IrCodegenError!ControlFlow {
 
     const a = try requireI64(stack[sp.*], state);
     const b = try requireI64(stack[sp.* + 1], state);
-    stack[sp.*] = .{ .i64_ref = emitRemainder(state, a, b, state.bail_status) };
+    const remainder = emitRemainder(state, a, b, state.bail_status);
+    stack[sp.*] = .{ .i64_ref = remainder };
     sp.* += 1;
     return .next;
 }
@@ -8872,6 +8982,17 @@ fn compileInstructions(
     const saved_inline_site = state.inline_site;
     defer state.inline_site = saved_inline_site;
 
+    const saved_exit_stack = state.exit_stack;
+    const saved_exit_sp = state.exit_sp;
+    const saved_exit_instr_sp = state.exit_instr_sp;
+    defer {
+        state.exit_stack = saved_exit_stack;
+        state.exit_sp = saved_exit_sp;
+        state.exit_instr_sp = saved_exit_instr_sp;
+    }
+    state.exit_stack = stack;
+    state.exit_sp = sp;
+
     state.body_depth += 1;
     defer state.body_depth -= 1;
 
@@ -8890,6 +9011,7 @@ fn compileInstructions(
 
     for (instructions, 0..) |instr, idx| {
         state.inline_site = .{ .body = instructions, .index = idx };
+        state.exit_instr_sp = sp.*;
         emitAotInstrTrace(state, instr, stack, sp.*);
         if (state.dynamic_call_emitted) {
             state.not_compilable_reason = .post_dynamic_call;
@@ -9981,7 +10103,6 @@ fn compileWordPass(
     // Error-reporting callbacks: set jit_pending_error and return 2.
     const type_mismatch_error_fn = c.ir_const_addr(&ctx, @intFromPtr(&jitTypeMismatchError));
     const param_type_mismatch_error_fn = c.ir_const_addr(&ctx, @intFromPtr(&jitParamTypeMismatchError));
-    const overflow_error_fn = c.ir_const_addr(&ctx, @intFromPtr(&jitOverflowError));
     const div_zero_error_fn = c.ir_const_addr(&ctx, @intFromPtr(&jitDivisionByZeroError));
     const underflow_error_fn = c.ir_const_addr(&ctx, @intFromPtr(&jitStackUnderflowError));
     const append_word_trace_frame_fn = c.ir_const_addr(&ctx, @intFromPtr(&jitAppendNamedTraceFrame));
@@ -10135,7 +10256,6 @@ fn compileWordPass(
         .error_propagate_status = error_propagate_status,
         .type_mismatch_error_fn = type_mismatch_error_fn,
         .param_type_mismatch_error_fn = param_type_mismatch_error_fn,
-        .overflow_error_fn = overflow_error_fn,
         .div_zero_error_fn = div_zero_error_fn,
         .underflow_error_fn = underflow_error_fn,
         .append_word_trace_frame_fn = append_word_trace_frame_fn,
@@ -10358,7 +10478,6 @@ pub fn emitWordC(
     const proto_9arg = c.ir_proto(&ctx, 0, c.IR_I32, proto_9arg_params.len, &proto_9arg_params);
     const type_mismatch_error_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "jitTypeMismatchError"), proto_1arg);
     const param_type_mismatch_error_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "onez_param_type_mismatch"), proto_5arg);
-    const overflow_error_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "jitOverflowError"), proto_1arg);
     const div_zero_error_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "jitDivisionByZeroError"), proto_1arg);
     const underflow_error_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "jitStackUnderflowError"), proto_1arg);
     const null_code_ptr_error_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "jitNullCodePtrError"), proto_1arg);
@@ -10424,7 +10543,6 @@ pub fn emitWordC(
         .error_propagate_status = error_propagate_status,
         .type_mismatch_error_fn = type_mismatch_error_fn,
         .param_type_mismatch_error_fn = param_type_mismatch_error_fn,
-        .overflow_error_fn = overflow_error_fn,
         .div_zero_error_fn = div_zero_error_fn,
         .underflow_error_fn = underflow_error_fn,
         .null_code_ptr_error_fn = null_code_ptr_error_fn,
@@ -10484,7 +10602,6 @@ pub fn emitWordC(
         "extern int32_t jitTypeMismatchError(uintptr_t ctx);\n" ++
         "extern int32_t jitParamTypeMismatchError(uintptr_t ctx, uintptr_t name_ptr, uintptr_t name_len, uintptr_t expected, uintptr_t value_ptr);\n" ++
         "static int32_t onez_param_type_mismatch(uintptr_t ctx, const char *name, uintptr_t len, uintptr_t expected, uintptr_t value_ptr) { return jitParamTypeMismatchError(ctx, (uintptr_t)name, len, expected, value_ptr); }\n" ++
-        "extern int32_t jitOverflowError(uintptr_t ctx);\n" ++
         "extern int32_t jitDivisionByZeroError(uintptr_t ctx);\n" ++
         "extern int32_t jitStackUnderflowError(uintptr_t ctx);\n" ++
         "extern int32_t jitNullCodePtrError(uintptr_t ctx);\n" ++
@@ -10815,7 +10932,6 @@ fn emitWordCAotPass(
     // Error-reporting callbacks: set jit_pending_error and return 2.
     const type_mismatch_error_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "jitTypeMismatchError"), proto_1arg);
     const param_type_mismatch_error_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "onez_param_type_mismatch"), proto_5arg);
-    const overflow_error_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "jitOverflowError"), proto_1arg);
     const div_zero_error_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "jitDivisionByZeroError"), proto_1arg);
     const underflow_error_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "jitStackUnderflowError"), proto_1arg);
     const null_code_ptr_error_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "jitNullCodePtrError"), proto_1arg);
@@ -10958,7 +11074,6 @@ fn emitWordCAotPass(
         .error_propagate_status = error_propagate_status,
         .type_mismatch_error_fn = type_mismatch_error_fn,
         .param_type_mismatch_error_fn = param_type_mismatch_error_fn,
-        .overflow_error_fn = overflow_error_fn,
         .div_zero_error_fn = div_zero_error_fn,
         .underflow_error_fn = underflow_error_fn,
         .null_code_ptr_error_fn = null_code_ptr_error_fn,
@@ -12580,7 +12695,6 @@ pub fn emitProgramC(
     try out.appendSlice(allocator, "extern int32_t jitTypeMismatchError(uintptr_t ctx);\n");
     try out.appendSlice(allocator, "extern int32_t jitParamTypeMismatchError(uintptr_t ctx, uintptr_t name_ptr, uintptr_t name_len, uintptr_t expected, uintptr_t value_ptr);\n");
     try out.appendSlice(allocator, "static int32_t onez_param_type_mismatch(uintptr_t ctx, const char *name, uintptr_t len, uintptr_t expected, uintptr_t value_ptr) { return jitParamTypeMismatchError(ctx, (uintptr_t)name, len, expected, value_ptr); }\n");
-    try out.appendSlice(allocator, "extern int32_t jitOverflowError(uintptr_t ctx);\n");
     try out.appendSlice(allocator, "extern int32_t jitDivisionByZeroError(uintptr_t ctx);\n");
     try out.appendSlice(allocator, "extern int32_t jitStackUnderflowError(uintptr_t ctx);\n");
     try out.appendSlice(allocator, "extern int32_t jitNullCodePtrError(uintptr_t ctx);\n");
@@ -13736,7 +13850,7 @@ fn emitOverflowCheckedBinary(
     const ovf = c.ir_fold1(ctx, c.IR_OPT(c.IR_OVERFLOW, c.IR_BOOL), result);
     const if_ovf = c._ir_IF(ctx, ovf);
     c._ir_IF_TRUE_cold(ctx, if_ovf);
-    emitAbnormalReturn(state, bail_status);
+    emitSettledExit(state, bail_status, .bail);
     c._ir_IF_FALSE(ctx, if_ovf);
     return result;
 }
@@ -13754,7 +13868,7 @@ fn emitDivision(
     const is_zero = c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), b, zero);
     const if_zero = c._ir_IF(ctx, is_zero);
     c._ir_IF_TRUE_cold(ctx, if_zero);
-    emitAbnormalReturn(state, bail_status);
+    emitSettledExit(state, bail_status, .bail);
     c._ir_IF_FALSE(ctx, if_zero);
 
     // Guard: a == minInt and b == -1 -> bail (overflow)
@@ -13765,7 +13879,7 @@ fn emitDivision(
     const is_overflow = c.ir_fold2(ctx, c.IR_OPT(c.IR_AND, c.IR_BOOL), is_min, is_neg_one);
     const if_ov = c._ir_IF(ctx, is_overflow);
     c._ir_IF_TRUE_cold(ctx, if_ov);
-    emitAbnormalReturn(state, bail_status);
+    emitSettledExit(state, bail_status, .bail);
     c._ir_IF_FALSE(ctx, if_ov);
 
     return c.ir_fold2(ctx, c.IR_OPT(c.IR_DIV, c.IR_I64), a, b);
@@ -13784,7 +13898,7 @@ fn emitRemainder(
     const is_zero = c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), b, zero);
     const if_zero = c._ir_IF(ctx, is_zero);
     c._ir_IF_TRUE_cold(ctx, if_zero);
-    emitAbnormalReturn(state, bail_status);
+    emitSettledExit(state, bail_status, .bail);
     c._ir_IF_FALSE(ctx, if_zero);
 
     return c.ir_fold2(ctx, c.IR_OPT(c.IR_MOD, c.IR_I64), a, b);
@@ -13804,7 +13918,7 @@ fn emitEuclideanMod(
     const is_zero = c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), b, zero);
     const if_zero = c._ir_IF(ctx, is_zero);
     c._ir_IF_TRUE_cold(ctx, if_zero);
-    emitAbnormalReturn(state, bail_status);
+    emitSettledExit(state, bail_status, .bail);
     c._ir_IF_FALSE(ctx, if_zero);
 
     // Compute truncating remainder (C semantics)
@@ -14414,9 +14528,94 @@ fn emitFallThroughParkReleases(state: *CompileState) void {
 }
 
 /// Leave the body with a status other than success, releasing the parks first.
+///
+/// The physical stack is left as it is. That is right only where something already owns it: after
+/// a callback, whose preamble stored `sp` and whose callee then ran on it, or on a status that is
+/// not a failure. An inline guard leaves through `emitSettledExit` instead.
 fn emitAbnormalReturn(state: *CompileState, status: c.ir_ref) void {
     emitParkReleases(state);
     c._ir_RETURN(state.ctx, status);
+}
+
+/// How an inline guard leaves the body, which decides what it leaves on the stack.
+const InlineExit = enum {
+    /// Abandon the attempt. The caller releases what the stack holds and puts the entry operands
+    /// back, so the guarded instruction's operands stay on the stack for it to release.
+    bail,
+    /// Raise, leaving what the interpreter leaves: the guarded instruction's operands popped and
+    /// released, as its native does before it raises.
+    raise,
+};
+
+/// Leave the body from an inline guard with every slot in `[0, sp)` owned by the stack.
+///
+/// Compiled code writes `sp` back only at the epilogue, a callback preamble, a loop header, or a
+/// merge. Between those, a slot inside the stored depth may hold a value a `drop` released, a bit
+/// copy a flush made without retaining, or the box of a value now held unboxed. Whatever runs after
+/// the exit reads the whole stack, so the exit settles it as the epilogue would: it boxes the typed
+/// entries, runs the flush plan, and stores the depth.
+///
+/// A bail writes `f` where a quotation literal was never materialized. The caller discards that
+/// slot, so building the quotation only to release it would buy nothing. A raise keeps its stack,
+/// so the guard sites that raise materialize a quotation literal before their check.
+///
+/// A guard inside a branchless trial arm settles too. Its stores sit on the cold path, which runs
+/// only when the function is leaving, so a spurious guard in a discarded arm stays a spurious exit.
+fn emitSettledExit(state: *CompileState, status: c.ir_ref, kind: InlineExit) void {
+    const stack = state.exit_stack orelse {
+        emitAbnormalReturn(state, status);
+        return;
+    };
+    const live_sp = state.exit_sp.?.*;
+    const instr_sp = state.exit_instr_sp;
+
+    // A bail guard past the point its instruction pushed would settle a model that no longer
+    // describes the slots. A raise can follow a push, as a call's output check does, and then
+    // settles the live model with nothing popped to release.
+    std.debug.assert(kind == .raise or live_sp <= instr_sp);
+
+    const depth = switch (kind) {
+        .bail => instr_sp,
+        .raise => live_sp,
+    };
+    const popped_end = @max(live_sp, instr_sp);
+    std.debug.assert(depth <= max_abstract_stack_depth);
+
+    var settled: [max_abstract_stack_depth]StackEntry = undefined;
+    @memcpy(settled[0..depth], stack[0..depth]);
+    for (settled[0..depth]) |*entry| {
+        if (entry.* != .quotation_body) continue;
+        std.debug.assert(kind == .bail);
+        entry.* = .{ .bool_ref = c.ir_const_bool(state.ctx, false) };
+    }
+
+    // `stack[sp] = .{ .i64_ref = guarded() }` stores the tag before `guarded` emits its exit, so the
+    // exit would settle a result that does not exist yet. The old payload survives the tag write,
+    // so this catches the hazard only when that payload was zero, as a `raw_at_slot` of slot 0 is.
+    for (settled[0..depth]) |entry| {
+        switch (entry) {
+            .i64_ref, .f64_ref, .bool_ref => |r| std.debug.assert(r != c.IR_UNUSED),
+            else => {},
+        }
+    }
+
+    var plan: [max_abstract_stack_depth]MoveOp = undefined;
+    const n = planFlushMoves(settled[0..depth], depth, &plan);
+
+    // A popped operand's slot can be the destination of a move, so it is released first.
+    if (kind == .raise) {
+        for (stack[live_sp..popped_end]) |entry| {
+            if (entry == .raw_at_slot) emitReleaseSlot(state, entry.raw_at_slot);
+        }
+    }
+
+    for (plan[0..n]) |m| emitMoveOp(state, state.base_addr, m);
+
+    const depth_const = c.ir_const_addr(state.ctx, depth);
+    const new_sp = c.ir_fold2(state.ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_idx, depth_const);
+    c._ir_STORE(state.ctx, state.sp_ptr, new_sp);
+
+    emitAbnormalReturn(state, status);
 }
 
 /// Record what a `;` in a lexical body binds, for the reads after it.
@@ -16773,10 +16972,6 @@ export fn jitAppendBuiltinTraceFrame(
     return 0;
 }
 
-export fn jitOverflowError(ctx_raw: usize) callconv(.c) i32 {
-    return setJitError(ctx_raw, error.Overflow);
-}
-
 export fn jitDivisionByZeroError(ctx_raw: usize) callconv(.c) i32 {
     return setJitError(ctx_raw, error.DivisionByZero);
 }
@@ -17711,18 +17906,13 @@ pub fn executeCompiled(ctx: *Context, word_id: u32) ExecResult {
 ///
 /// Compiled code writes below its entry stack pointer by construction, and a bail can fire after
 /// any such store. The interpreter then re-runs the body from the top, so a bail has to look as if
-/// the code never ran. The operands held at entry go back. What the body left in those slots is not
-/// released: any of it may be a moved or already-released copy.
+/// the code never ran. The body settles the stack on its way out, so every slot it leaves is owned;
+/// those are released and the operands held at entry go back in their place.
 ///
-/// An entry with no held operands only resets the depth, as there is nothing to put back. Code
-/// with no JIT buffer is an AOT word's, which a bail does not disable: its interpreted stand-in
-/// raises rather than re-running, so a later call has no better path than the code.
+/// Code with no JIT buffer is an AOT word's, which a bail does not disable: its interpreted
+/// stand-in raises rather than re-running, so a later call has no better path than the code.
 fn bailFromEntry(ctx: *Context, table: ?*JitDispatchTable, word_id: u32, operands: *StackSnapshot, entry_sp: usize) void {
-    if (operands.count > 0) {
-        operands.restore(&ctx.stack, entry_sp);
-    } else {
-        ctx.stack.items.items.len = entry_sp;
-    }
+    operands.restore(&ctx.stack, entry_sp);
 
     const entry = (table orelse return).getMut(word_id) orelse return;
     if (entry.jit_buf != null) table.?.disable(word_id);
@@ -19901,17 +20091,19 @@ test "overflow bails out on non-polymorphic path" {
     try testing.expectEqual(std.math.maxInt(i64), out);
 }
 
-test "overflow preserves sp on non-polymorphic path" {
+test "overflow bail on the non-polymorphic path settles both operands" {
     const instrs = makeInstructions(.{ std.math.maxInt(i64), "+" });
     const result = try compileWord(&instrs, 1, 1, null, null, null, null, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
-    var values = [_]Value{.{ .fixnum = 1 }};
+    var values = [_]Value{ .{ .fixnum = 1 }, .{ .fixnum = 0 } };
     var sp: usize = 1;
     const status = callCompiledValues(func, &values, &sp);
     try testing.expectEqual(@as(i32, 1), status);
-    try testing.expectEqual(@as(usize, 1), sp);
+    try testing.expectEqual(@as(usize, 2), sp);
+    try testing.expectEqual(@as(i64, 1), values[0].fixnum);
+    try testing.expectEqual(@as(i64, std.math.maxInt(i64)), values[1].fixnum);
 }
 
 test "polymorphic division without a resolver is not compilable" {
@@ -19927,13 +20119,14 @@ test "bail on non-fixnum input" {
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
-    var values = [_]Value{value_mod.stringValue("hello")};
+    var values = [_]Value{ value_mod.stringValue("hello"), .{ .fixnum = 0 } };
     var sp: usize = 1;
     const status = callCompiledValues(func, &values, &sp);
     // requireI64 tag check still bails (will be converted when comparisons
     // get polymorphic support).
     try testing.expectEqual(@as(i32, 1), status);
-    try testing.expectEqual(@as(usize, 1), sp);
+    try testing.expectEqual(@as(usize, 2), sp);
+    try testing.expectEqual(@as(i64, 1), values[1].fixnum);
 }
 
 test "bail on stack underflow" {
@@ -20049,11 +20242,12 @@ test "bail on float input to arithmetic" {
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
-    var values = [_]Value{.{ .float = 2.5 }};
+    var values = [_]Value{ .{ .float = 2.5 }, .{ .fixnum = 0 } };
     var sp: usize = 1;
     const status = callCompiledValues(func, &values, &sp);
     try testing.expectEqual(@as(i32, 1), status);
-    try testing.expectEqual(@as(usize, 1), sp);
+    try testing.expectEqual(@as(usize, 2), sp);
+    try testing.expectEqual(@as(i64, 1), values[1].fixnum);
 }
 
 test "bail on boolean input to arithmetic" {
@@ -20062,11 +20256,12 @@ test "bail on boolean input to arithmetic" {
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
-    var values = [_]Value{.{ .boolean = true }};
+    var values = [_]Value{ .{ .boolean = true }, .{ .fixnum = 0 } };
     var sp: usize = 1;
     const status = callCompiledValues(func, &values, &sp);
     try testing.expectEqual(@as(i32, 1), status);
-    try testing.expectEqual(@as(usize, 1), sp);
+    try testing.expectEqual(@as(usize, 2), sp);
+    try testing.expectEqual(@as(i64, 1), values[1].fixnum);
 }
 
 test "fixnum literal still works after refactor" {

@@ -46,16 +46,41 @@ pub const StackSnapshot = struct {
 
     /// Put the held values back as the slots just under `entry_sp`, and make `entry_sp` the depth.
     ///
-    /// The slots are overwritten without being released. The caller settles whatever they held.
+    /// Every slot from the snapshot's base up to the attempt's depth is released first, so the
+    /// attempt must have left each of those slots owned. The attempt cannot reach below the base,
+    /// which is the depth the snapshot was taken over.
+    ///
+    /// An empty snapshot holds nothing to put back. Its attempt may have consumed values under
+    /// `entry_sp` that no one recorded, so what it left there stays, and only what it pushed above
+    /// the entry is released.
     pub fn restore(self: *StackSnapshot, stack: *Stack, entry_sp: usize) void {
         const held = self.values();
+        if (held.len == 0) {
+            releaseAbove(stack, @min(entry_sp, stack.items.items.len));
+            self.free(stack);
+            return;
+        }
+
+        // Compiled code never writes below its base. The clamp keeps a breach from slicing
+        // backwards in a release build.
         const base = entry_sp - held.len;
+        std.debug.assert(stack.items.items.len >= base);
+        releaseAbove(stack, @min(base, stack.items.items.len));
 
         // The attempt may have left a depth below its entry. The slots up to the entry depth were
         // live when it began, so the capacity already covers them.
         stack.items.items.len = entry_sp;
         @memcpy(stack.items.items[base..entry_sp], held);
         self.free(stack);
+    }
+
+    /// Release every slot from `floor` up to the stack's depth, and make `floor` the depth.
+    pub fn releaseAbove(stack: *Stack, floor: usize) void {
+        const len = stack.items.items.len;
+        std.debug.assert(len >= floor);
+
+        for (stack.items.items[floor..len]) |v| container_backing.releaseValue(v);
+        stack.items.items.len = floor;
     }
 
     fn free(self: *StackSnapshot, stack: *Stack) void {
@@ -82,6 +107,54 @@ test "restore puts back values the attempt overwrote and dropped" {
     try std.testing.expectEqual(@as(usize, 2), stack.depth());
     try std.testing.expectEqual(@as(i64, 1), stack.items.items[0].fixnum);
     try std.testing.expectEqual(@as(i64, 2), stack.items.items[1].fixnum);
+}
+
+test "restore releases what the attempt left and hands back the snapshot's references" {
+    const Vector = @import("value.zig").Vector;
+
+    var stack = Stack.init(std.testing.allocator);
+    defer stack.deinit();
+    defer stack.clear();
+
+    // A push retains, so each creator's own reference is dropped once the stack holds one.
+    const operand = try Vector.create(std.testing.allocator);
+    try stack.push(.{ .vector = operand });
+    operand.header.release();
+    try stack.push(.{ .fixnum = 2 });
+
+    var snapshot: StackSnapshot = .{};
+    try std.testing.expect(snapshot.take(&stack, 2));
+    try std.testing.expectEqual(@as(u32, 2), operand.header.refcountValue());
+
+    // The attempt left the operand unconsumed and pushed a value of its own.
+    const pushed = try Vector.create(std.testing.allocator);
+    try stack.push(.{ .vector = pushed });
+    pushed.header.release();
+
+    snapshot.restore(&stack, 2);
+    try std.testing.expectEqual(@as(usize, 2), stack.depth());
+    try std.testing.expectEqual(@as(u32, 1), operand.header.refcountValue());
+    try std.testing.expectEqual(@as(i64, 2), stack.items.items[1].fixnum);
+}
+
+test "an empty snapshot releases only what the attempt pushed above the entry" {
+    const Vector = @import("value.zig").Vector;
+
+    var stack = Stack.init(std.testing.allocator);
+    defer stack.deinit();
+
+    try stack.push(.{ .fixnum = 1 });
+
+    var snapshot: StackSnapshot = .{};
+    try std.testing.expect(snapshot.take(&stack, 0));
+
+    const pushed = try Vector.create(std.testing.allocator);
+    try stack.push(.{ .vector = pushed });
+    pushed.header.release();
+
+    snapshot.restore(&stack, 1);
+    try std.testing.expectEqual(@as(usize, 1), stack.depth());
+    try std.testing.expectEqual(@as(i64, 1), stack.items.items[0].fixnum);
 }
 
 test "a snapshot wider than the inline buffer uses the heap and frees it" {

@@ -1,0 +1,16 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+=== a bail after warming ===
+Stack: [ ]
+PASS: runtime bignum re-runs interpreted
+Stack: [ ]
+PASS: quotient
+Stack: [ "hello" "hello" ]
+PASS: copy
+Stack: [ "hello" ]
+PASS: original
+Stack: [ ]

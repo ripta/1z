@@ -220,9 +220,10 @@ static void ir_emit_copy(ir_ctx *ctx, FILE *f, int def, ir_insn *insn)
 static void ir_emit_unary_op(ir_ctx *ctx, FILE *f, int def, ir_insn *insn, const char *op)
 {
 	ir_emit_def_ref(ctx, f, def);
-	fprintf(f, "%s", op);
+	/* The operand is parenthesized: a negative constant after `-` would otherwise read as `--`. */
+	fprintf(f, "%s(", op);
 	ir_emit_ref(ctx, f, insn->op1);
-	fprintf(f, ";\n");
+	fprintf(f, ");\n");
 }
 
 static void ir_emit_binary_op(ir_ctx *ctx, FILE *f, int def, ir_insn *insn, const char *op)

@@ -1,0 +1,9 @@
+\ The locked twin of abs_min_int_promotes: a build that rejects every fallback emission reaches the
+\ promoting method through the generic dispatch instead of the per-operation native call.
+\
+\ `inspect` is a fallback, so each result is reported by comparing it with maxInt.
+absolute: ( n -- m ) [ abs ] ;
+report: ( m -- ) [ 9223372036854775807 > [ "above maxInt" ] [ "within fixnum" ] if print-line ] ;
+
+-5 absolute report
+-9223372036854775808 absolute report

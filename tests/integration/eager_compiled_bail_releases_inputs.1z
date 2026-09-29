@@ -1,0 +1,41 @@
+\ A compiled word that bails hands its operands back to the interpreted re-run. What the body left
+\ on the stack is released on the way, so nothing leaks and nothing is released twice. The empty
+\ stderr golden is the leak check: a Debug build reports a leaked allocation there at exit.
+
+use "testing" ;
+
+big: ( -- n ) [ 99999999999999999999 2 * ] ;
+heap: ( -- s ) [ "hel" "lo" #append ] ;
+
+halve: ( a b -- c ) [ div ] ;
+dup-then-halve:       ( s n -- s s q )    [ over swap 2 div ] ;
+swap-then-halve:      ( n s -- s q )      [ swap 2 div ] ;
+halve-in-arm:         ( s n flag -- s q ) [ [ 2 div ] [ drop 0 ] if ] ;
+halve-callee:         ( n -- q )          [ 2 div ] ;
+halve-through-callee: ( s n -- s q )      [ halve-callee ] ;
+count-times:          ( n -- )            [ [ ] times ] ;
+
+"a bail before the operands are consumed" test-section
+7 2 halve 3 "fixnum call compiled" assert=
+big 2 halve inspect "99999999999999999999" "runtime bignum re-runs interpreted" assert=
+
+"a bail after a dup of a heap string" test-section
+heap big dup-then-halve inspect "99999999999999999999" "quotient" assert=
+"hello" "copy" assert=
+"hello" "original" assert=
+
+"a bail after a swap" test-section
+big heap swap-then-halve inspect "99999999999999999999" "quotient" assert=
+"hello" "string" assert=
+
+"a bail inside an inlined if arm" test-section
+heap big t halve-in-arm inspect "99999999999999999999" "quotient" assert=
+"hello" "string below the arm" assert=
+
+"a callee's bail passed up through a direct compiled call" test-section
+heap big halve-through-callee inspect "99999999999999999999" "quotient" assert=
+"hello" "string below the callee" assert=
+
+"a bail with a quotation literal in the entry model" test-section
+3 count-times
+[ heap count-times ] [ drop "raised" ] recover "raised" "non-fixnum count re-runs interpreted and raises there" assert=

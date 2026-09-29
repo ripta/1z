@@ -9001,14 +9001,10 @@ pub const Context = struct {
                         if (bail_stats_mod.enabled) {
                             bail_stats_mod.global.recordQuotationBail();
                         }
-                        if (operands.count > 0) {
-                            operands.restore(&self.stack, saved_sp);
-                        } else {
-                            self.stack.items.items.len = saved_sp;
-                        }
+                        operands.restore(&self.stack, saved_sp);
 
-                        // What the abandoned attempt held cannot be released soundly, so the
-                        // function stops being called rather than leaking on every call.
+                        // A function that bailed once is likely to bail again, and each attempt
+                        // repeats the snapshot and the settle for nothing.
                         if (fn_state) |st| st.disabled.store(true, .release);
 
                         // The re-run below repeats the attempt from where it began, so a transient

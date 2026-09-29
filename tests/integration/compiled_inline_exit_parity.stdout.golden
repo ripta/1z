@@ -1,0 +1,35 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+=== abs of minInt promotes ===
+Stack: [ ]
+PASS: fixnum
+Stack: [ ]
+PASS: minInt
+Stack: [ ]
+PASS: after dropping a heap string
+Stack: [ ]
+=== a type mismatch raised by an inline unwrap ===
+Stack: [ ]
+PASS: handler ran
+Stack: [ "hello" ]
+PASS: string below the raise
+Stack: [ ]
+=== a struct field read on the wrong operand ===
+Stack: [ ]
+Stack: [ ]
+PASS: another struct with the field
+Stack: [ "hello" ]
+PASS: string below the read
+Stack: [ ]
+PASS: handler ran
+Stack: [ "hello" "hello" ]
+PASS: operand left by the failed dispatch
+Stack: [ "hello" ]
+PASS: string below the raise
+Stack: [ ]

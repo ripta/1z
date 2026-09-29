@@ -1,0 +1,20 @@
+\ The hybrid twin of eager_compiled_bail_releases_inputs: a word compiled after warming bails on
+\ a runtime bignum it has not consumed yet. The empty stderr golden is the leak check.
+
+use "testing" ;
+
+big: ( -- n ) [ 99999999999999999999 2 * ] ;
+heap: ( -- s ) [ "hel" "lo" #append ] ;
+
+halve: ( a b -- c ) [ div ] ;
+over-then-halve: ( s n -- s s q ) [ over swap 2 div ] ;
+
+warm: ( n: fixnum -- ) [ [ 7 2 halve drop "s" 4 over-then-halve 3drop ] times ] ;
+
+200 warm
+
+"a bail after warming" test-section
+big 2 halve inspect "99999999999999999999" "runtime bignum re-runs interpreted" assert=
+heap big over-then-halve inspect "99999999999999999999" "quotient" assert=
+"hello" "copy" assert=
+"hello" "original" assert=

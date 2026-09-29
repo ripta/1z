@@ -1,0 +1,11 @@
+\ AOT `abs` on a fixnum. minInt's absolute value is a bignum, and an AOT bail has no interpreter to
+\ resume into, so that input goes to the native, which promotes. Output must match the interpreter.
+\
+\ minInt is read out of an array so that it reaches `abs` as a runtime value.
+absolute: ( n -- m ) [ abs ] ;
+negated-abs: ( n -- m ) [ 0 swap - abs ] ;
+
+-5 absolute inspect print-line
+7 absolute inspect print-line
+{ -9223372036854775808 } 0 #nth absolute inspect print-line
+{ 9223372036854775807 } 0 #nth negated-abs inspect print-line
