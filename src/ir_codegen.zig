@@ -5272,6 +5272,15 @@ fn emitIfBranchDispatch(
     emitReleaseSpilled(state, spill);
 }
 
+/// Release the quotation an `if` arm did not take, when it arrived as a runtime value.
+///
+/// The taken arm's quotation is released by its dispatch. The untaken one still owns its slot,
+/// which sits above the popped operands, so this runs before the taken arm's body can push over
+/// it. A literal arm has nothing on the physical stack to release.
+fn emitReleaseUntakenArm(state: *CompileState, untaken: StackEntry) void {
+    if (untaken == .raw_at_slot) emitReleaseSlot(state, untaken.raw_at_slot);
+}
+
 /// Settle an `if` arm whose quotation was dispatched at runtime, leaving its result as an opaque
 /// row read from the live stack pointer.
 ///
@@ -5280,13 +5289,17 @@ fn emitIfBranchDispatch(
 /// for it. `when` is the shape that exposes this, since its body `[ ] if` pairs an empty literal
 /// arm with the caller's quotation, and `t [ 5 ] when` leaves a result the empty arm does not.
 ///
-/// AOT-only, because the row model is. The arm ends by storing `base_idx + sp` as the live stack
-/// pointer. An assumed-but-wrong depth writes that pointer below what the call actually left, which
-/// orphans the values above it. The JIT emits no such store.
+/// Both tiers settle the arm this way. Every exit stores `base_idx + sp` as the live stack
+/// pointer, so an assumed-but-wrong depth would move that pointer away from what the call actually
+/// left, orphaning values above it or exposing released slots below it.
+///
+/// The word's output depth now depends on the caller's quotation, so it is variable-arity even
+/// when the sibling arm happens to end at the same abstract depth as the row.
 fn settleDispatchedBranchAsRow(state: *CompileState, stack: []StackEntry, sp: *usize) void {
     reloadBaseAfterDynamicCall(state);
     sp.* = 1;
     stack[0] = .{ .row_region = state.nextRowId() };
+    state.variable_arity = true;
 }
 
 /// Compile a while/until loop: pred and body quotations with an optional
@@ -6229,6 +6242,12 @@ fn emitIntrinsicSwap(ec: EmitCtx) IrCodegenError!ControlFlow {
     }
     const top = stack[sp.* - 1];
     const second = stack[sp.* - 2];
+    if (!state.aot_mode and (top == .row_region or second == .row_region)) {
+        // The JIT has no inline row underflow to swap against the live stack, and an abstract
+        // reorder would let a later flush write over the row's top value.
+        state.not_compilable_reason = .abstract_stack_underflow;
+        return IrCodegenError.NotCompilable;
+    }
     if (state.aot_mode and (top == .row_region or second == .row_region)) {
         // A swap whose pair touches the row cannot be tracked as an abstract reorder. That would
         // move the row off its pinned slot 0 and desync a later live sp-relative op.
@@ -7198,6 +7217,8 @@ fn emitIntrinsicIf(ec: EmitCtx) IrCodegenError!ControlFlow {
             const true_tail_body_depth = if (isWholeWordTail(state, ec.idx, ec.instructions.len)) state.body_depth + 1 else saved_tail_body_depth;
             defer state.tail_body_depth = saved_tail_body_depth;
 
+            emitReleaseUntakenArm(state, false_entry);
+
             if (true_body) |tb| {
                 if (false_body) |fb| {
                     const false_stack = state.allocator.dupe(StackEntry, stack) catch return IrCodegenError.OutOfMemory;
@@ -7230,20 +7251,7 @@ fn emitIntrinsicIf(ec: EmitCtx) IrCodegenError!ControlFlow {
             } else {
                 // True branch is raw_at_slot: dispatch at runtime.
                 emitIfBranchDispatch(state, stack, sp, true_entry.raw_at_slot);
-                if (state.aot_mode) {
-                    settleDispatchedBranchAsRow(state, stack, sp);
-                } else {
-                    // Infer effect from the false (quotation_body) branch.
-                    const eff = inferQuotationEffect(false_body.?, if (state.resolver) |r| r else null) catch {
-                        state.not_compilable_reason = .effect_inference_overflow;
-                        return IrCodegenError.NotCompilable;
-                    } orelse {
-                        state.not_compilable_reason = .quotation_reification;
-                        return IrCodegenError.NotCompilable;
-                    };
-                    sp.* = sp.* - eff.input_count + eff.output_count;
-                    resetStackToPhysical(stack, sp.*);
-                }
+                settleDispatchedBranchAsRow(state, stack, sp);
             }
             return .next;
         },
@@ -7384,20 +7392,11 @@ fn emitIntrinsicIf(ec: EmitCtx) IrCodegenError!ControlFlow {
     const saved_base_idx = state.base_idx;
     const saved_sp_val = state.sp_val;
 
-    // Infer the branch effect when one branch is raw_at_slot. Only the JIT reads it: it models the
-    // raw_at_slot branch as having the same effect as the quotation_body branch, which is an
-    // assumption about a quotation it cannot see. AOT settles that arm as a row instead, so
-    // inferring here would only fail a compile the row path handles.
-    const branch_effect: ?InferredEffect = if (!state.aot_mode and (true_body == null or false_body == null)) blk: {
-        const known_body = true_body orelse false_body orelse unreachable;
-        break :blk inferQuotationEffect(known_body, if (state.resolver) |r| r else null) catch {
-            state.not_compilable_reason = .effect_inference_overflow;
-            return IrCodegenError.NotCompilable;
-        } orelse {
-            state.not_compilable_reason = .quotation_reification;
-            return IrCodegenError.NotCompilable;
-        };
-    } else null;
+    // A row rejoin at the merge reloads the live stack pointer, so every arm reaching the merge must
+    // have stored it. AOT stores on every arm. The JIT's epilogue derives its depth from the entry
+    // pointer instead, so it stores only where a row can reach the merge, keeping the common `if`
+    // free of the store.
+    const dispatched_arm = true_body == null or false_body == null;
 
     // Emit true branch
     const if_ref = c._ir_IF(ctx, cond_ref);
@@ -7421,22 +7420,20 @@ fn emitIntrinsicIf(ec: EmitCtx) IrCodegenError!ControlFlow {
     defer state.tail_body_depth = saved_tail_body_depth;
 
     state.tail_body_depth = arms_tail_body_depth;
+    emitReleaseUntakenArm(state, false_entry);
     if (true_body) |tb| {
         try compileQuotationBodyInline(state, tb, stack, sp);
     } else {
         // Runtime dispatch for raw_at_slot quotation
         emitIfBranchDispatch(state, stack, sp, true_entry.raw_at_slot);
-        if (state.aot_mode) {
-            settleDispatchedBranchAsRow(state, stack, sp);
-        } else {
-            const eff = branch_effect.?;
-            sp.* = sp.* - eff.input_count + eff.output_count;
-            resetStackToPhysical(stack, sp.*);
-        }
+        settleDispatchedBranchAsRow(state, stack, sp);
     }
     if (traceFramesEnabled(state)) state.inline_trace_frame_count = saved_inline_trace_frame_count;
     const true_exit_kind = state.exit_kind;
     var end_true: c.ir_ref = c.IR_UNUSED;
+
+    // A diverged arm never reaches the merge, so it counts as having stored.
+    var true_stored = !exitFallsThrough(true_exit_kind);
     // In AOT mode (ir_emit_c), skip END after terminal_return
     // because ir_emit_c hangs on dead code after RETURN.
     // In JIT mode (ir_emit), terminal_return branches still
@@ -7454,10 +7451,11 @@ fn emitIntrinsicIf(ec: EmitCtx) IrCodegenError!ControlFlow {
         // A branch that collapsed to a fresh row moved base_idx, but the entries it kept concrete
         // above the row may have been dropped abstractly since, so the live sp is stale until this
         // store.
-        if (state.aot_mode) {
+        if (exitFallsThrough(true_exit_kind) and (state.aot_mode or dispatched_arm or hasRowRegion(stack, sp.*))) {
             const sp_const = c.ir_const_addr(ctx, sp.*);
             const new_sp = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_idx, sp_const);
             c._ir_STORE(ctx, state.sp_ptr, new_sp);
+            true_stored = true;
         }
         end_true = c._ir_END(ctx);
     }
@@ -7490,17 +7488,12 @@ fn emitIntrinsicIf(ec: EmitCtx) IrCodegenError!ControlFlow {
         };
         state.inline_trace_frame_count += 1;
     }
+    emitReleaseUntakenArm(state, true_entry);
     if (false_body) |fb| {
         try compileQuotationBodyInline(state, fb, saved_stack, &false_sp);
     } else {
         emitIfBranchDispatch(state, saved_stack, &false_sp, false_entry.raw_at_slot);
-        if (state.aot_mode) {
-            settleDispatchedBranchAsRow(state, saved_stack, &false_sp);
-        } else {
-            const eff = branch_effect.?;
-            false_sp = false_sp - eff.input_count + eff.output_count;
-            resetStackToPhysical(saved_stack, false_sp);
-        }
+        settleDispatchedBranchAsRow(state, saved_stack, &false_sp);
     }
     if (traceFramesEnabled(state)) state.inline_trace_frame_count = saved_inline_trace_frame_count;
     const false_exit_kind = state.exit_kind;
@@ -7546,11 +7539,16 @@ fn emitIntrinsicIf(ec: EmitCtx) IrCodegenError!ControlFlow {
         // Neither branch terminated: normal merge.
         flushToPhysicalStack(state, saved_stack, false_sp);
         const false_has_row = hasRowRegion(saved_stack, false_sp);
-        if (state.aot_mode) {
+        var false_stored = !exitFallsThrough(false_exit_kind);
+        if (exitFallsThrough(false_exit_kind) and (state.aot_mode or dispatched_arm or false_has_row)) {
             const sp_const = c.ir_const_addr(ctx, false_sp);
             const new_sp = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_idx, sp_const);
             c._ir_STORE(ctx, state.sp_ptr, new_sp);
+            false_stored = true;
         }
+
+        // Every arm reaching the merge stored the live stack pointer, so the merge can read it.
+        const both_stored = true_stored and false_stored;
         const end_false = c._ir_END(ctx);
         c._ir_MERGE_2(ctx, end_true, end_false);
         state.recordBlockStart(ctx.unnamed_0.control);
@@ -7566,8 +7564,15 @@ fn emitIntrinsicIf(ec: EmitCtx) IrCodegenError!ControlFlow {
             //
             // The declared output is the only thing that distinguishes this case from a word whose
             // unequal arms are an artifact of a mis-modeled variable-arity native call.
+            //
+            // The JIT takes the row rejoin only, and only once both arms stored. A declared
+            // variable-arity output is an AOT concept, since only AOT carries it to callers.
             const declared_var_arity = declaredAlternativeOutput(state);
-            if (state.aot_mode and (true_has_row or false_has_row or declared_var_arity)) {
+            const row_rejoin = if (state.aot_mode)
+                true_has_row or false_has_row or declared_var_arity
+            else
+                (true_has_row or false_has_row) and both_stored;
+            if (row_rejoin) {
                 // Two unequal arms collapsing to a row vary the output arity. Record it so callers
                 // read this word's result as a row rather than trusting the declared concrete
                 // count. Same rule as the if-over-row merge: a row on either side can only add
@@ -7586,7 +7591,7 @@ fn emitIntrinsicIf(ec: EmitCtx) IrCodegenError!ControlFlow {
             }
             return IrCodegenError.StackShapeMismatch;
         }
-        if (state.aot_mode and (true_base_idx != saved_base_idx or state.base_idx != saved_base_idx)) {
+        if ((state.aot_mode or both_stored) and (true_base_idx != saved_base_idx or state.base_idx != saved_base_idx)) {
             // An arm rebased the frame, so its base is a ref this merge point does not dominate.
             // Both arms stored `base + sp` for the same abstract sp, so re-derive the base from the
             // live sp and keep the abstract stack as it is.
@@ -9370,6 +9375,13 @@ fn compileInstructions(
 
                     if (sp.* < ic) return IrCodegenError.StackUnderflow;
 
+                    // The argument copy is laid out relative to the entry base, which a row's
+                    // reload has already moved. The JIT has no row-aware back-edge, so it refuses.
+                    if (hasRowRegion(stack, sp.*)) {
+                        state.not_compilable_reason = .abstract_stack_underflow;
+                        return IrCodegenError.NotCompilable;
+                    }
+
                     // Bail if both if-branches already set a loop end
                     if (state.loop_end_set) {
                         state.not_compilable_reason = .nested_loop_conflict;
@@ -9426,6 +9438,13 @@ fn compileInstructions(
                     // Mutual recursion trampoline: flush stack, set target, return 3
                     const ic = state.input_count;
                     if (sp.* < ic) return IrCodegenError.StackUnderflow;
+
+                    // The hop copies arguments against the entry base, which a row's reload has
+                    // already moved.
+                    if (hasRowRegion(stack, sp.*)) {
+                        state.not_compilable_reason = .abstract_stack_underflow;
+                        return IrCodegenError.NotCompilable;
+                    }
 
                     flushToPhysicalStack(state, stack, sp.*);
 
@@ -10347,7 +10366,9 @@ fn compileWordPass(
         c._ir_RETURN(&ctx, ok_status);
     } else if (hasRowRegion(stack, sp)) {
         // Row region present: flush any entries above it to physical memory,
-        // update sp_ptr, and return success.
+        // update sp_ptr, and return success. A quotation literal above the row is written first,
+        // since the flush skips an unwritten quotation.
+        try materializeQuotations(&state, stack, sp, true);
         flushToPhysicalStack(&state, stack, sp);
         const final_sp_const = c.ir_const_addr(&ctx, sp);
         const final_sp = c.ir_fold2(&ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_idx, final_sp_const);
@@ -10581,6 +10602,7 @@ pub fn emitWordC(
     } else if (state.dynamic_call_emitted) {
         c._ir_RETURN(&ctx, ok_status);
     } else if (hasRowRegion(stack, sp)) {
+        try materializeQuotations(&state, stack, sp, true);
         flushToPhysicalStack(&state, stack, sp);
         const final_sp_const = c.ir_const_addr(&ctx, sp);
         const final_sp = c.ir_fold2(&ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_idx, final_sp_const);

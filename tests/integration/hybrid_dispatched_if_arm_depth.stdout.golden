@@ -1,0 +1,49 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+=== a loop quotation that consumes the predicate's extra output ===
+Stack: [ ]
+Stack: [ 100 0 ]
+PASS: the loop ends at zero
+Stack: [ 100 ]
+PASS: the value below the loop is untouched
+Stack: [ ]
+=== an arm that leaves more than the empty arm ===
+Stack: [ ]
+Stack: [ 100 5 6 ]
+PASS: the top pushed value
+Stack: [ 100 5 ]
+PASS: the next pushed value
+Stack: [ 100 ]
+PASS: the value below is untouched
+Stack: [ ]
+Stack: [ 100 7 ]
+PASS: unless leaves its pushed value
+Stack: [ 100 ]
+PASS: the value below unless is untouched
+Stack: [ ]
+=== an arm that consumes below it ===
+Stack: [ ]
+Stack: [ 100 3 ]
+PASS: when consumed two and pushed their sum
+Stack: [ 100 ]
+PASS: the value below the sum is untouched
+Stack: [ ]
+=== an untaken arm's quotation is released ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ 100 ]
+PASS: a false condition leaves the stack as it was
+Stack: [ ]
+=== a radix lookup after its walk loop compiled ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ radix-tree{ root: radix-node{ label: "" value: <option:none none:> index: "r" children: { radix-node{ label: "ro" value: <option:none none:> index: "am" children: { radix-node{ label: "ast" value: <option:some option-payload{ value: 2 }> index: "" children: { } } radix-node{ label: "man" value: <option:some option-payload{ value: 1 }> index: "" children: { } } } } } } key-type: <type:string> count: 2 } ]
+PASS: the split key reads back
+Stack: [ radix-tree{ root: radix-node{ label: "" value: <option:none none:> index: "r" children: { radix-node{ label: "ro" value: <option:none none:> index: "am" children: { radix-node{ label: "ast" value: <option:some option-payload{ value: 2 }> index: "" children: { } } radix-node{ label: "man" value: <option:some option-payload{ value: 1 }> index: "" children: { } } } } } } key-type: <type:string> count: 2 } ]
+PASS: the forked key reads back
+Stack: [ ]

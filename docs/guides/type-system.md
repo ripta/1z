@@ -459,6 +459,19 @@ Output:
 "hello world"
 ```
 
+### Methods on Built-In Words
+
+Some built-in words already branch on their operand types, such as `+`, `#len`, and `>string`.
+These take a `method{` arm without the `generic` marker. Every other built-in word is called
+directly and never consults the dispatch table. So `method{` refuses an arm on it with a
+`type-mismatch` error, rather than accepting an arm that would never run:
+
+```
+duration: virtual{ fixnum } ;
++: method{ duration duration } [ unmake-duration swap unmake-duration + >duration ] ;
+div: method{ fixnum fixnum } [ 2drop 0 ] ;    \ error: div never dispatches
+```
+
 ## Interface Contracts with `protocol{`
 
 A protocol pins down a set of methods that a type must implement. A

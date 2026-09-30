@@ -1,0 +1,47 @@
+use "testing" ;
+use "strings" ;
+use "os/path" ;
+use "formatter" ;
+
+\ The library words whose inlined arms call a unary native at the same index as a unary call in
+\ the enclosing body. A compiled arm that read the enclosing body's PIC entry would call that
+\ other word's native, so each word is warmed past the hybrid threshold on both arms and then
+\ checked by the value it computes.
+
+200 [ "a,b" "," split drop "abc" "" split drop ] times
+
+"split" test-section
+"a,b,c" "," split { "a" "b" "c" } "a delimiter splits the string" assert=
+"abc" "" split { "abc" } "an empty delimiter wraps the whole string" assert=
+"" "," split { "" } "an empty string splits to one empty piece" assert=
+
+200 [ { "a" "b" } ", " #join drop { "only" } ", " #join drop ] times
+
+"#join" test-section
+{ "a" "b" "c" } ", " #join "a, b, c" "several elements join with the separator" assert=
+{ "only" } ", " #join "only" "one element is its own string" assert=
+{ 7 } "-" #join "7" "one non-string element is converted" assert=
+
+200 [ "/foo/bar/" strip-trailing-slashes drop "/foo" strip-trailing-slashes drop ] times
+
+"strip-trailing-slashes" test-section
+"/foo/bar//" strip-trailing-slashes "/foo/bar" "every trailing slash is stripped" assert=
+"/foo" strip-trailing-slashes "/foo" "a path with none is unchanged" assert=
+
+200 [ "/foo/bar/" basename drop "/foo/bar" basename drop ] times
+
+"basename" test-section
+"/foo/bar/" basename "bar" "trailing slashes are stripped" assert=
+"/foo/bar//" basename "bar" "every trailing slash is stripped" assert=
+"/foo/bar.txt" basename "bar.txt" "a plain path keeps its last component" assert=
+
+200 [
+  "pi: 3.14 ;\ne: 2.71 ;\ntau: 6.28 ;\n" format-source drop
+  "h: H{\n  a: 1\n}\n" format-source drop
+] times
+
+"format-source" test-section
+"pi: 3.14 ;\ne: 2.71 ;\ntau: 6.28 ;\n" format-source
+"pi:  3.14 ;\ne:   2.71 ;\ntau: 6.28 ;\n" "a run of definitions aligns on one column" assert=
+"h: H{\n  a: 1\n}\n" format-source
+"h: H{\n  a: 1\n}\n" "a line ending in an open brace indents the next" assert=

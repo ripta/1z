@@ -29,4 +29,37 @@ recover
 ] [ error-type: @get duplicate-method: = t "error on duplicate without mutable" assert= ]
 recover
 
+\ Test 4: Error when registering on a native that never dispatches
+[
+  div: method{ fixnum fixnum } [ 2drop 7 ] ;
+] [ error-type: @get type-mismatch: = t "error on non-dispatching native div" assert= ]
+recover
+
+[
+  rem: method{ fixnum fixnum } [ 2drop 7 ] ;
+] [ error-type: @get type-mismatch: = t "error on non-dispatching native rem" assert= ]
+recover
+
+[
+  +%: method{ fixnum fixnum } [ 2drop 7 ] ;
+] [ error-type: @get type-mismatch: = t "error on non-dispatching native +%" assert= ]
+recover
+
+[
+  dup: method{ fixnum } [ drop 99 ] ;
+] [ error-type: @get type-mismatch: = t "error on non-dispatching native dup" assert= ]
+recover
+
+[
+  native.sin: method{ duration } [ drop 0.0 ] ;
+] [ error-type: @get type-mismatch: = t "error on non-dispatching registry entry native.sin" assert= ]
+recover
+
+9 2 div 4 "div keeps its builtin answer" assert=
+5 dup + 10 "dup keeps its builtin answer" assert=
+
+\ Test 5: A native that dispatches still takes an arm
+/: method{ duration duration } [ 2drop 42 ] ;
+3 >duration 4 >duration / 42 "arm on dispatching native / runs" assert=
+
 "all error tests passed" test-section

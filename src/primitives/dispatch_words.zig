@@ -102,28 +102,26 @@ fn nativeDefineMethod(ctx: *Context) anyerror!void {
         return error.WordNotFound;
     };
 
-    // For user-defined words, require the `generic` marker.
+    // A user-defined word takes an arm only when it carries the `generic` marker.
     //
-    // XXX(ripta): Native words accept method registrations without a marker,
-    // but only ones that manually call tryDispatchBinary/tryDispatchUnary
-    // actually check the dispatch table at runtime. Registering a method on
-    // a native that never calls those helpers silently does nothing.
+    // A native takes one only when it is a `NativeDispatchWord`, since those are the natives that
+    // consult the table on their own identity. Any other native, and every host callback, is
+    // called directly, so an arm on it would be accepted and never run.
     //
-    // NOTE(ripta): Not every native should dispatch. Type-agnostic natives
-    // (e.g., dup, drop, swap, etc.) operate on values regardless of type;
-    // auto-dispatching them would silently replace structural stack operations,
-    // which is dangerous and surprising. Type-switching natives, i.e., those
-    // that branch on operand types (like +, inspect, #len), are safe candidates
-    // because they already do type-based branching and user types need to plug
-    // into that branching.
-    //
-    // A future `dispatchable` flag on Primitive could move the dispatch
-    // check from inside each native to the interpreter call site, removing
-    // the manual boilerplate and ensuring the flag and behavior stay in
-    // sync. Until then, each type-switching native is responsible for
-    // calling tryDispatchBinary or tryDispatchUnary itself.
+    // NOTE(ripta): Not every native should dispatch. Type-agnostic natives (e.g., dup, drop, swap,
+    // etc.) operate on values regardless of type; auto-dispatching them would silently replace
+    // structural stack operations, which is dangerous and surprising.
     switch (resolved.action) {
-        .native, .host_callback => {},
+        .native => {
+            if (!ctx.isNativeDispatchId(resolved.dispatch_id)) {
+                helpers.setErrorContext(ctx, "cannot register method for native word '{s}', which never dispatches on its operand types", .{word_name});
+                return error.TypeMismatch;
+            }
+        },
+        .host_callback => {
+            helpers.setErrorContext(ctx, "cannot register method for host callback '{s}', which never dispatches on its operand types", .{word_name});
+            return error.TypeMismatch;
+        },
         .compound => {
             var has_generic = false;
             for (resolved.markers) |mk| {
@@ -287,20 +285,18 @@ const testing = std.testing;
 const Value = value_mod.Value;
 const Instruction = value_mod.Instruction;
 
-fn noopNative(_: *Context) anyerror!void {}
+const test_generic_markers = [_]*value_mod.Marker{@constCast(&markers_mod.generic_marker)};
 
-/// Drive `nativeDefineMethod` for a unary method on a freshly-defined native
-/// generic word keyed by `tv`, with `ctx.loading_module` set to `loading` for
-/// the duration of the registration. Returns the registered entry.
+/// Drive `nativeDefineMethod` for a unary method on a freshly-defined generic word keyed by `tv`,
+/// with `ctx.loading_module` set to `loading` for the duration of the registration. Returns the
+/// registered entry.
 fn registerUnaryMethod(
     ctx: *Context,
     word_name: []const u8,
     tv: *value_mod.TypeValue,
     loading: ?*const value_mod.Module,
 ) !?DispatchEntry {
-    // A native target word skips the `generic` marker requirement, keeping the
-    // test focused on the defining-module capture rather than marker plumbing.
-    try ctx.defineWord(word_name, .{ .name = word_name, .action = .{ .native = noopNative } });
+    try ctx.defineWord(word_name, .{ .name = word_name, .markers = &test_generic_markers, .action = .{ .compound = &.{} } });
 
     const desc_map = try value_mod.MutableMap.create(testing.allocator);
     // The map slot releases its values at destroy, so the types array needs an

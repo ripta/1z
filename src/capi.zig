@@ -3117,6 +3117,22 @@ test "register host word rejects invalid arguments" {
     try std.testing.expect(onez_last_error(handle_ptr) != null);
 }
 
+test "method arm on a host word is refused" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    const value: i64 = 5;
+    try std.testing.expectEqual(ONEZ_OK, onez_register_word(handle_ptr, "host-const", constantHostCallback, @constCast(&value)));
+
+    const src = "host-const: method{ fixnum } [ drop 1 ] ;";
+    try std.testing.expect(onez_eval(handle_ptr, src, src.len) != ONEZ_OK);
+
+    const err_msg = onez_last_error(handle_ptr);
+    try std.testing.expect(err_msg != null);
+    try std.testing.expect(std.mem.indexOf(u8, std.mem.span(err_msg.?), "cannot register method for host callback 'host-const'") != null);
+}
+
 test "set_error provides custom message on callback failure" {
     const handle_ptr = onez_init();
     try std.testing.expect(handle_ptr != null);

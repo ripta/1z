@@ -1,0 +1,53 @@
+use "testing" ;
+use "radix-tree" ;
+
+\ `when` and `unless` hand the caller's quotation to `if` as a value. Compiled on their own, their
+\ arm's stack effect is whatever that quotation does, which the empty literal arm beside it says
+\ nothing about.
+\
+\ `while` runs its predicate once before it calls `when`, so the loop quotation `when` receives
+\ consumes the predicate's extra output. Warming `count-down` compiles `when` standalone.
+
+step?:      ( n -- ..a ? )   [ dup 0 > [ dup 10 * t ] [ f ] if ] ;
+advance:    ( n extra -- n ) [ drop 1 - ] ;
+count-down: ( n -- n )       [ [ step? ] [ advance ] while ] ;
+
+200 [ 3 count-down drop ] times
+
+push-when: no-compile ( ? q -- ..a ) [ when ] ;
+push-unless: no-compile ( ? q -- ..a ) [ unless ] ;
+
+200 [ t [ ] push-when f [ ] push-unless ] times
+
+"a loop quotation that consumes the predicate's extra output" test-section
+100 5 count-down
+0 "the loop ends at zero" assert=
+100 "the value below the loop is untouched" assert=
+
+"an arm that leaves more than the empty arm" test-section
+100 t [ 5 6 ] push-when
+6 "the top pushed value" assert=
+5 "the next pushed value" assert=
+100 "the value below is untouched" assert=
+100 f [ 7 ] push-unless
+7 "unless leaves its pushed value" assert=
+100 "the value below unless is untouched" assert=
+
+"an arm that consumes below it" test-section
+100 1 2 t [ + ] push-when
+3 "when consumed two and pushed their sum" assert=
+100 "the value below the sum is untouched" assert=
+
+"an untaken arm's quotation is released" test-section
+100 [ f 7 [ drop 5 ] curry push-when ] times
+100 f 7 [ drop 5 ] curry push-when
+100 "a false condition leaves the stack as it was" assert=
+
+"a radix lookup after its walk loop compiled" test-section
+200 [
+  string <radix-tree> "roman" 1 radix-insert "roast" 2 radix-insert
+  dup "roman" radix-lookup? drop "roast" radix-lookup? drop
+] times
+string <radix-tree> "roman" 1 radix-insert "roast" 2 radix-insert
+dup "roman" radix-lookup? option:some> 1 "the split key reads back" assert=
+"roast" radix-lookup? option:some> 2 "the forked key reads back" assert=

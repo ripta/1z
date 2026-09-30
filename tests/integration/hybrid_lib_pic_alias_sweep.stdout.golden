@@ -1,0 +1,49 @@
+Stack: [ ]
+=== split ===
+Stack: [ ]
+PASS: a delimiter splits the string
+Stack: [ ]
+PASS: an empty delimiter wraps the whole string
+Stack: [ ]
+PASS: an empty string splits to one empty piece
+Stack: [ ]
+Stack: [ ]
+=== #join ===
+Stack: [ ]
+PASS: several elements join with the separator
+Stack: [ ]
+PASS: one element is its own string
+Stack: [ ]
+PASS: one non-string element is converted
+Stack: [ ]
+Stack: [ ]
+=== strip-trailing-slashes ===
+Stack: [ ]
+PASS: every trailing slash is stripped
+Stack: [ ]
+PASS: a path with none is unchanged
+Stack: [ ]
+Stack: [ ]
+=== basename ===
+Stack: [ ]
+PASS: trailing slashes are stripped
+Stack: [ ]
+PASS: every trailing slash is stripped
+Stack: [ ]
+PASS: a plain path keeps its last component
+Stack: [ ]
+Stack: [ ]
+=== format-source ===
+Stack: [ ]
+Stack: [ "pi:  3.14 ;
+e:   2.71 ;
+tau: 6.28 ;
+" ]
+PASS: a run of definitions aligns on one column
+Stack: [ ]
+Stack: [ "h: H{
+  a: 1
+}
+" ]
+PASS: a line ending in an open brace indents the next
+Stack: [ ]

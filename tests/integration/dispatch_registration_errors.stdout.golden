@@ -12,5 +12,27 @@ Stack: [ ]
 Stack: [ [ +: M{ define: [ define-method ] types: { <type:duration> <type:duration> } body: [ drop drop 1 >duration ] } ; ] [ error-type: @get duplicate-method: = t "error on duplicate without mutable" assert= ] ]
 PASS: error on duplicate without mutable
 Stack: [ ]
+Stack: [ [ div: M{ define: [ define-method ] types: { <type:fixnum> <type:fixnum> } body: [ 2drop 7 ] } ; ] [ error-type: @get type-mismatch: = t "error on non-dispatching native div" assert= ] ]
+PASS: error on non-dispatching native div
+Stack: [ ]
+Stack: [ [ rem: M{ define: [ define-method ] types: { <type:fixnum> <type:fixnum> } body: [ 2drop 7 ] } ; ] [ error-type: @get type-mismatch: = t "error on non-dispatching native rem" assert= ] ]
+PASS: error on non-dispatching native rem
+Stack: [ ]
+Stack: [ [ +%: M{ define: [ define-method ] types: { <type:fixnum> <type:fixnum> } body: [ 2drop 7 ] } ; ] [ error-type: @get type-mismatch: = t "error on non-dispatching native +%" assert= ] ]
+PASS: error on non-dispatching native +%
+Stack: [ ]
+Stack: [ [ dup: M{ define: [ define-method ] types: { <type:fixnum> } body: [ drop 99 ] } ; ] [ error-type: @get type-mismatch: = t "error on non-dispatching native dup" assert= ] ]
+PASS: error on non-dispatching native dup
+Stack: [ ]
+Stack: [ [ native.sin: M{ define: [ define-method ] types: { <type:duration> } body: [ drop 0.0 ] } ; ] [ error-type: @get type-mismatch: = t "error on non-dispatching registry entry native.sin" assert= ] ]
+PASS: error on non-dispatching registry entry native.sin
+Stack: [ ]
+PASS: div keeps its builtin answer
+Stack: [ ]
+PASS: dup keeps its builtin answer
+Stack: [ ]
+Stack: [ ]
+PASS: arm on dispatching native / runs
+Stack: [ ]
 === all error tests passed ===
 Stack: [ ]

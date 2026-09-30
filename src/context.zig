@@ -6146,6 +6146,15 @@ pub const Context = struct {
         return self.native_dispatch_ids.get(word);
     }
 
+    /// Whether `id` is the dispatch id of a native that consults the dispatch table on its own
+    /// identity, and so is the only kind of native a method arm can reach.
+    pub fn isNativeDispatchId(self: *const Context, id: u32) bool {
+        for (self.native_dispatch_ids.values) |did| {
+            if (did == id) return true;
+        }
+        return false;
+    }
+
     /// Record every identity-carrying native's own dispatch id.
     ///
     /// Called once from `init`, after the primitives are in the dictionary and before any frame
