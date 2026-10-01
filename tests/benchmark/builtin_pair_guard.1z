@@ -1,0 +1,46 @@
+\ Benchmark: what the builtin-pair override guard costs compiled arithmetic.
+\
+\ Compiled code inlines `+ - * / % = < >` and `abs` on a fixnum or float pair behind a test of one
+\ process-global bit, so that a `method{` arm replacing that pair is honored. A site whose operands
+\ are known numbers also boxes its inline result, so a chain of arithmetic on known numbers stops
+\ staying unboxed between operations. This file registers no arm, so every bit reads clear and what
+\ it measures is the test and the boxing on the path every program takes.
+\
+\ Each loop is one self-tail-recursive word, so the whole iteration is one compiled body. The typed
+\ loops carry known operands, which used to stay unboxed from one operation to the next. The untyped
+\ loop's operand used to unbox once at its first operation and stay unboxed after it. Both shapes now
+\ store each result to its slot and test its tag again at the next operation.
+\
+\ Run with --compile=eager or --compile=hybrid. Under --compile=off nothing here is compiled, so the
+\ same file run that way is the layout control for an A/B of two builds.
+
+iters: ( -- fixnum ) const [ 3000000 ] ;
+
+fixnum-typed: ( acc: fixnum n: fixnum -- fixnum ) [
+  dup 0 = [ drop ] [
+    swap 3 * 7 + 1000003 % swap 1 - fixnum-typed
+  ] if
+] ;
+
+fixnum-untyped: ( acc n -- acc ) [
+  dup 0 = [ drop ] [
+    swap 3 * 7 + 1000003 % swap 1 - fixnum-untyped
+  ] if
+] ;
+
+float-typed: ( acc: float n: fixnum -- float ) [
+  dup 0 = [ drop ] [
+    swap 1.5 * 0.25 + dup 1000.0 > [ 1000.0 / ] when swap 1 - float-typed
+  ] if
+] ;
+
+\ `benchmark` adds bookkeeping per word call, and a self-tail call compiles to a back-edge rather
+\ than a call, so it times the loop without reaching inside it.
+"fixnum-typed elapsed_ns: " print
+[ 1 iters fixnum-typed drop ] benchmark "elapsed_ns" @get .
+
+"fixnum-untyped elapsed_ns: " print
+[ 1 iters fixnum-untyped drop ] benchmark "elapsed_ns" @get .
+
+"float-typed elapsed_ns: " print
+[ 1.0 iters float-typed drop ] benchmark "elapsed_ns" @get .
