@@ -1,0 +1,21 @@
+\ An `abs` arm on `float` alone. An untyped operand is then only partly replaced: a fixnum still
+\ computes inline and a float reaches the arm. A proven float is replaced outright.
+
+kind: generic ( x -- s ) [ drop "other" ] ;
+kind: method{ fixnum } [ drop "fixnum" ] ;
+kind: method{ float } [ drop "float" ] ;
+
+same-fixnum: ( x: fixnum expected: fixnum -- ) [ = [ "value ok" ] [ "value wrong" ] if print-line ] ;
+
+abs: method{ float } [ drop "abs float arm" ] ;
+
+abs-u:    ( a -- c )         [ abs ] ;
+abs-tf:   ( a: fixnum -- c ) [ abs ] ;
+abs-tF:   ( a: float -- c )  [ abs ] ;
+abs-flit: ( -- c )           [ -7.5 abs ] ;
+
+-7 abs-u dup kind print-line 7 same-fixnum
+-7.5 abs-u print-line
+-7 abs-tf dup kind print-line 7 same-fixnum
+-7.5 abs-tF print-line
+abs-flit print-line

@@ -34,6 +34,7 @@ const call_graph = @import("call_graph.zig");
 const effect_inference = @import("effect_inference.zig");
 const aot_freeze = @import("aot_freeze.zig");
 const aot_type_inference = @import("aot_type_inference.zig");
+const builtin_override = @import("builtin_override.zig");
 const markers_mod = @import("primitives/markers.zig");
 const aot_image = @import("aot_image.zig");
 const aot_image_emit = @import("aot_image_emit.zig");
@@ -3505,6 +3506,7 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
             .arithmetic_result_types = locked_strict,
             .fixnum_type = if (trust_annotations) ctx.lookupBuiltinTypeValue("fixnum") else null,
             .float_type = if (trust_annotations) ctx.lookupBuiltinTypeValue("float") else null,
+            .replaced_pairs = builtin_override.load(),
         }, allocator) catch {};
         traceInferredParamTypes(&freeze_result, ctx);
     }

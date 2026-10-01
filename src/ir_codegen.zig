@@ -1589,30 +1589,65 @@ fn operandCanBe(known: ?NarrowNumeric, is_float: bool) bool {
     return (k == .float) == is_float;
 }
 
-/// Whether every operand pair a site can reach at runtime already has a method arm replacing its
-/// builtin entry. Such a site calls the native with no inline arm, since a guard would send every
-/// execution to the native anyway.
-fn everyReachablePairReplaced(op: builtin_override.Op, known: KnownOperands) bool {
-    const mask = builtin_override.load();
+/// The `builtin_override` bits of the operand pairs a site can reach at runtime.
+fn reachablePairBits(op: builtin_override.Op, known: KnownOperands) u64 {
+    var bits: u64 = 0;
     for ([_]bool{ false, true }) |a_is_float| {
         if (!operandCanBe(known[0], a_is_float)) continue;
         for ([_]bool{ false, true }) |b_is_float| {
             if (!operandCanBe(known[1], b_is_float)) continue;
-            const bit = builtin_override.binaryBit(op, .of(a_is_float, b_is_float));
-            if (mask & (@as(u64, 1) << bit) == 0) return false;
+            bits |= @as(u64, 1) << builtin_override.binaryBit(op, .of(a_is_float, b_is_float));
         }
     }
-    return true;
+    return bits;
+}
+
+/// The `abs` bits a site can reach at runtime.
+fn reachableAbsBits(known: ?NarrowNumeric) u64 {
+    const k = known orelse return builtin_override.absBits();
+    return @as(u64, 1) << builtin_override.absBit(k == .float);
+}
+
+/// Whether every one of `reachable` already has a method arm replacing its builtin entry. Such a
+/// site calls the native with no inline arm, since a guard would send every execution to the
+/// native anyway.
+fn everyReachablePairReplaced(reachable: u64) bool {
+    return builtin_override.load() & reachable == reachable;
 }
 
 fn overrideBitConst(ctx: *c.ir_ctx, bit: u6) c.ir_ref {
     return c.ir_const_u64(ctx, @as(u64, 1) << bit);
 }
 
-/// Load the builtin-override mask. A guarded site reads it on every execution, so an arm
-/// registered while its word is running takes effect at the next operation.
-fn emitOverrideMaskLoad(ctx: *c.ir_ctx) c.ir_ref {
-    return c._ir_LOAD(ctx, c.IR_U64, c.ir_const_addr(ctx, builtin_override.maskAddress()));
+/// The builtin-override mask a site tests, or `IR_UNUSED` when the site can skip the test.
+///
+/// The JIT loads the live mask by address, and an AOT build that can register an arm after the
+/// freeze loads it through the runtime's exported symbol. Either way the site reads it on every
+/// execution, so an arm registered while its word is running takes effect at the next operation.
+///
+/// Every other AOT build is a closed world, so the mask the freeze left is final. A site none of
+/// whose `reachable` bits it set tests nothing, and any other site tests that mask as a constant.
+fn emitOverrideMask(state: *CompileState, reachable: u64) c.ir_ref {
+    const ctx = state.ctx;
+    if (!state.aot_mode) {
+        return c._ir_LOAD(ctx, c.IR_U64, c.ir_const_addr(ctx, builtin_override.maskAddress()));
+    }
+
+    if (state.builtin_override_guard) {
+        const sym = c.ir_const_func(ctx, c.ir_strl(ctx, builtin_override.symbol_name.ptr, builtin_override.symbol_name.len), 0);
+        return c._ir_LOAD(ctx, c.IR_U64, sym);
+    }
+
+    const frozen = builtin_override.load();
+    if (frozen & reachable == 0) return c.IR_UNUSED;
+    return c.ir_const_u64(ctx, frozen);
+}
+
+/// Whether a site must test the builtin-override mask at all, which is what sends it to the
+/// polymorphic path instead of a concrete one.
+fn siteTestsOverrides(state: *const CompileState, reachable: u64) bool {
+    if (!state.aot_mode or state.builtin_override_guard) return true;
+    return builtin_override.load() & reachable != 0;
 }
 
 /// Branch to a cold arm when `mask` has any of `bits` set, and return that arm's END. Control
@@ -1900,6 +1935,34 @@ fn emitPerOperationDispatch(
     }
 }
 
+/// Call a binary operator on the pair settled at `slot_a`, `slot_b`, the way a polymorphic site's
+/// cold arm does. A build class that rejects fallback emissions dispatches through the frozen
+/// table, and `miss` picks how that answers a pair no method covers. Every other class calls the
+/// native, which dispatches.
+///
+/// The call may move the stack backing. `items_ptr` and `base_addr` come back as they were, so a
+/// caller merging with a path that made no call sees consistent refs; it refreshes after the merge.
+fn emitPolyColdCall(
+    state: *CompileState,
+    op_name: []const u8,
+    slot_a: usize,
+    slot_b: usize,
+    line: usize,
+    miss: DispatchMissBehavior,
+) IrCodegenError!void {
+    const saved_items_ptr = state.items_ptr;
+    const saved_base_addr = state.base_addr;
+
+    if (state.aot_mode and (state.fallbacks_locked or state.freestanding)) {
+        try emitPerOperationDispatch(state, op_name, slot_b, line, miss);
+    } else {
+        try emitPerOperationFallback(state, op_name, slot_a, slot_b, line);
+    }
+
+    state.items_ptr = saved_items_ptr;
+    state.base_addr = saved_base_addr;
+}
+
 /// Emit polymorphic binary arithmetic that handles both fixnum and float operands at runtime via
 /// tag-check branching. The result is written as a boxed Value at dest_slot.
 ///
@@ -1911,10 +1974,10 @@ fn emitPerOperationDispatch(
 /// Both cold arms hand the operands over through the physical stack, and both set SP from
 /// `slot_b` alone. So the caller must have settled the pair at `slot_a`, `slot_a + 1` first.
 ///
-/// Under the JIT a method arm can replace a builtin pair after this code is compiled, so each arm
-/// first tests its pair's `builtin_override` bit and sends a set bit to the cold arm, where the
-/// native dispatches. `known` carries operand types the caller already proved; those operands skip
-/// their tag test.
+/// A method arm can replace a builtin pair, so each arm first tests its pair's `builtin_override`
+/// bit and sends a set bit to the cold arm, where the native dispatches. `emitOverrideMask` says
+/// where the bits come from. `known` carries operand types the caller already proved; those
+/// operands skip their tag test.
 fn emitPolymorphicBinaryArith(
     state: *CompileState,
     slot_a: usize,
@@ -1945,7 +2008,7 @@ fn emitPolymorphicBinaryArith(
         // Destination address
         const dest_addr = liveSlotAddr(state, dest_slot);
 
-        const override_mask = if (state.aot_mode) c.IR_UNUSED else emitOverrideMaskLoad(ctx);
+        const override_mask = emitOverrideMask(state, reachablePairBits(op.overrideOp(), known));
 
         // Branch: both fixnum?
         const both_fixnum = c.ir_fold2(ctx, c.IR_OPT(c.IR_AND, c.IR_BOOL), va.is_fixnum, vb.is_fixnum);
@@ -2065,20 +2128,7 @@ fn emitPolymorphicBinaryArith(
         mergeColdEnds(ctx, ends[0 .. cold_count + 1]);
     }
 
-    {
-        const op_name = op.wordName();
-        // Save state refs before the callback (it may refresh them).
-        const saved_items_ptr = state.items_ptr;
-        const saved_base_addr = state.base_addr;
-        if (state.aot_mode and (state.fallbacks_locked or state.freestanding)) {
-            try emitPerOperationDispatch(state, op_name, slot_b, line, .trap);
-        } else {
-            try emitPerOperationFallback(state, op_name, slot_a, slot_b, line);
-        }
-        // Restore so the MERGE sees consistent refs from both paths.
-        state.items_ptr = saved_items_ptr;
-        state.base_addr = saved_base_addr;
-    }
+    try emitPolyColdCall(state, op.wordName(), slot_a, slot_b, line, .trap);
     const end_fallback = c._ir_END(ctx);
 
     c._ir_MERGE_2(ctx, end_numeric, end_fallback);
@@ -2100,8 +2150,8 @@ fn emitPolymorphicBinaryArith(
 /// Both cold arms hand the operands over through the physical stack, and both set SP from
 /// `slot_b` alone. So the caller must have settled the pair at `slot_a`, `slot_a + 1` first.
 ///
-/// Under the JIT each arm first tests its pair's `builtin_override` bit and sends a set bit to the
-/// cold arm. `known` skips the tag test of a proven operand.
+/// Each arm first tests its pair's `builtin_override` bit and sends a set bit to the cold arm.
+/// `known` skips the tag test of a proven operand.
 fn emitPolymorphicBinaryCompare(
     state: *CompileState,
     slot_a: usize,
@@ -2129,7 +2179,7 @@ fn emitPolymorphicBinaryCompare(
     {
         const dest_addr = liveSlotAddr(state, dest_slot);
 
-        const override_mask = if (state.aot_mode) c.IR_UNUSED else emitOverrideMaskLoad(ctx);
+        const override_mask = emitOverrideMask(state, reachablePairBits(op.overrideOp(), known));
 
         const both_fixnum = c.ir_fold2(ctx, c.IR_OPT(c.IR_AND, c.IR_BOOL), va.is_fixnum, vb.is_fixnum);
         const if_both_fixnum = c._ir_IF(ctx, both_fixnum);
@@ -2180,24 +2230,11 @@ fn emitPolymorphicBinaryCompare(
         mergeColdEnds(ctx, ends[0 .. cold_count + 1]);
     }
 
-    {
-        const op_name = op.wordName();
-        // Save state refs before the callback (it may refresh them).
-        const saved_items_ptr = state.items_ptr;
-        const saved_base_addr = state.base_addr;
-        if (state.aot_mode and (state.fallbacks_locked or state.freestanding)) {
-            const miss: DispatchMissBehavior = switch (op) {
-                .eq => .{ .push_false = .{ .opaque_slot = opaque_slot, .dest_slot = dest_slot } },
-                .lt, .gt => .trap,
-            };
-            try emitPerOperationDispatch(state, op_name, slot_b, line, miss);
-        } else {
-            try emitPerOperationFallback(state, op_name, slot_a, slot_b, line);
-        }
-        // Restore so the MERGE sees consistent refs from both paths.
-        state.items_ptr = saved_items_ptr;
-        state.base_addr = saved_base_addr;
-    }
+    const miss: DispatchMissBehavior = switch (op) {
+        .eq => .{ .push_false = .{ .opaque_slot = opaque_slot, .dest_slot = dest_slot } },
+        .lt, .gt => .trap,
+    };
+    try emitPolyColdCall(state, op.wordName(), slot_a, slot_b, line, miss);
     const end_fallback = c._ir_END(ctx);
 
     c._ir_MERGE_2(ctx, end_numeric, end_fallback);
@@ -2803,6 +2840,13 @@ const CompileState = struct {
     /// Codegen paths that would trade a speculative tag-check bail for a
     /// fallback-emitting one must keep the speculative path under the lock.
     fallbacks_locked: bool = false,
+    /// True for an AOT build whose program can register a method arm after the freeze, through
+    /// `eval-string` or a runtime `load`. Its inline numeric sites read the `builtin_override`
+    /// mask at runtime, as the JIT's do.
+    ///
+    /// Every other AOT build is a closed world, so the mask the freeze left is final and a site
+    /// tests it at build time instead.
+    builtin_override_guard: bool = false,
     /// True while `emitIf` trial-compiles the arms of a candidate branchless
     /// `IR_COND` select. The trial relies on the backend folding away pure
     /// discarded code, so any path that would emit a native call or
@@ -6218,7 +6262,6 @@ fn emitIntrinsicAbs(ec: EmitCtx) IrCodegenError!ControlFlow {
     const state = ec.state;
     const stack = ec.stack;
     const sp = ec.sp;
-    const ctx = state.ctx;
 
     if (sp.* < 1) return IrCodegenError.StackUnderflow;
     sp.* -= 1;
@@ -6226,11 +6269,7 @@ fn emitIntrinsicAbs(ec: EmitCtx) IrCodegenError!ControlFlow {
 
     if (!state.aot_mode) return emitGuardedAbs(ec, entry);
 
-    if (entry == .f64_ref) {
-        stack[sp.*] = .{ .f64_ref = emitAbsF64(ctx, entry.f64_ref) };
-    } else {
-        try emitAotFixnumAbs(ec, entry);
-    }
+    try emitAotAbs(ec, entry);
     sp.* += 1;
     return .next;
 }
@@ -6278,7 +6317,7 @@ fn emitGuardedAbs(ec: EmitCtx, entry: StackEntry) IrCodegenError!ControlFlow {
     try materializeQuotations(state, stack, slot + 1, false);
     flushToPhysicalStack(state, stack, slot + 1);
 
-    const override_mask = emitOverrideMaskLoad(ctx);
+    const override_mask = emitOverrideMask(state, @as(u64, 1) << bit);
     const hit = c.ir_fold2(ctx, c.IR_OPT(c.IR_AND, c.IR_U64), override_mask, overrideBitConst(ctx, bit));
     const replaced = c.ir_fold2(ctx, c.IR_OPT(c.IR_NE, c.IR_BOOL), hit, c.ir_const_u64(ctx, 0));
     const to_native = if (is_float) replaced else blk: {
@@ -6329,58 +6368,132 @@ fn emitAbsI64(ctx: *c.ir_ctx, a: c.ir_ref) c.ir_ref {
     return c._ir_PHI_2(ctx, c.IR_I64, neg_a, a);
 }
 
-/// `abs` on a fixnum in AOT code, where a bail has no interpreter to resume into.
+/// `abs` in AOT code, where a bail has no interpreter to resume into.
 ///
-/// minInt's absolute value is a bignum, so that one input goes to the native, which promotes. The
-/// operand is boxed in its slot first, where the native pops it. The fixnum path boxes its result
-/// into the same slot. Both paths therefore leave a boxed value there.
-fn emitAotFixnumAbs(ec: EmitCtx, entry: StackEntry) IrCodegenError!void {
+/// A proven float with no arm to test computes inline, unboxed. Every other operand is boxed in its
+/// slot, where a call pops it, and the site branches on its tag. A fixnum or float computes inline
+/// unless a method arm replaces its builtin entry. A replaced type, a non-number, and minInt, whose
+/// absolute value is a bignum, go to the call. Both paths leave a boxed value in the slot.
+fn emitAotAbs(ec: EmitCtx, entry: StackEntry) IrCodegenError!void {
     const state = ec.state;
     const ctx = state.ctx;
     const stack = ec.stack;
     const slot = ec.sp.*;
 
-    const a = try requireI64(entry, state);
+    if (!isNumericOrOpaqueEntry(entry)) {
+        state.not_compilable_reason = .non_numeric_operand;
+        return IrCodegenError.NotCompilable;
+    }
+
+    const known = knownNumericOf(entry);
+    const reachable = reachableAbsBits(known);
+
+    if (everyReachablePairReplaced(reachable)) {
+        try materializeQuotations(state, stack, slot + 1, false);
+        flushToPhysicalStack(state, stack, slot + 1);
+        try emitAbsColdCall(state, slot, ec.line);
+
+        refreshCachedStackPointer(state);
+        stack[slot] = .{ .raw_at_slot = slot };
+        return;
+    }
+
+    if (entry == .f64_ref and !siteTestsOverrides(state, reachable)) {
+        stack[slot] = .{ .f64_ref = emitAbsF64(ctx, entry.f64_ref) };
+        return;
+    }
 
     try materializeQuotations(state, stack, slot + 1, false);
     flushToPhysicalStack(state, stack, slot + 1);
 
-    const min_val = c.ir_const_i64(ctx, std.math.minInt(i64));
-    const is_min = c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), a, min_val);
-    const if_min = c._ir_IF(ctx, is_min);
+    const override_mask = emitOverrideMask(state, reachable);
+    const va = emitNumericTagCheckKnown(state, slot, known);
 
-    c._ir_IF_TRUE_cold(ctx, if_min);
+    var cold_ends: [2]c.ir_ref = undefined;
+    var cold_count: usize = 0;
+
+    const if_numeric = c._ir_IF(ctx, va.is_numeric);
+    c._ir_IF_TRUE(ctx, if_numeric);
     {
-        const saved_items_ptr = state.items_ptr;
-        const saved_base_addr = state.base_addr;
-        if (state.fallbacks_locked or state.freestanding) {
-            // The per-operation dispatch reads an operand pair, so the one-operand word goes
-            // through the generic dispatch, which falls to a unary lookup.
-            const res = state.resolver orelse return state.refuse(.unresolvable_word, null);
-            const resolved = res.resolve("abs", res.user_data) orelse return state.refuse(.unresolvable_word, null);
-            if (resolved.dispatch_id == 0) return state.refuse(.unresolvable_word, null);
+        const if_fixnum = c._ir_IF(ctx, va.is_fixnum);
 
-            const sp_for_call = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_idx, c.ir_const_addr(ctx, slot + 1));
-            c._ir_STORE(ctx, state.sp_ptr, sp_for_call);
-            emitAotGenericDispatch(state, resolved.dispatch_id, resolved.word_id, "abs", ec.line);
-        } else {
-            try emitPerOperationFallback(state, "abs", slot, slot, ec.line);
+        c._ir_IF_TRUE(ctx, if_fixnum);
+        {
+            const a = emitUnboxI64(ctx, va.elem_addr, state.payload_offset_const);
+            const is_min = c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), a, c.ir_const_i64(ctx, std.math.minInt(i64)));
+            const to_call = if (override_mask == c.IR_UNUSED) is_min else blk: {
+                const hit = c.ir_fold2(ctx, c.IR_OPT(c.IR_AND, c.IR_U64), override_mask, overrideBitConst(ctx, builtin_override.absBit(false)));
+                const replaced = c.ir_fold2(ctx, c.IR_OPT(c.IR_NE, c.IR_BOOL), hit, c.ir_const_u64(ctx, 0));
+                break :blk c.ir_fold2(ctx, c.IR_OPT(c.IR_OR, c.IR_BOOL), replaced, is_min);
+            };
+            const if_call = c._ir_IF(ctx, to_call);
+            c._ir_IF_TRUE_cold(ctx, if_call);
+            cold_ends[cold_count] = c._ir_END(ctx);
+            cold_count += 1;
+            c._ir_IF_FALSE(ctx, if_call);
+
+            emitBoxPayload(ctx, liveSlotAddr(state, slot), state.tag_offset_const, state.payload_offset_const, state.fixnum_tag_const, emitAbsI64(ctx, a));
         }
-        state.items_ptr = saved_items_ptr;
-        state.base_addr = saved_base_addr;
+        const end_fixnum = c._ir_END(ctx);
+
+        c._ir_IF_FALSE(ctx, if_fixnum);
+        {
+            if (override_mask != c.IR_UNUSED) {
+                cold_ends[cold_count] = emitOverrideGuard(ctx, override_mask, overrideBitConst(ctx, builtin_override.absBit(true)));
+                cold_count += 1;
+            }
+
+            const a = emitUnboxF64(ctx, va.elem_addr, state.payload_offset_const);
+            emitBoxPayload(ctx, liveSlotAddr(state, slot), state.tag_offset_const, state.payload_offset_const, state.float_tag_const, emitAbsF64(ctx, a));
+        }
+        const end_float = c._ir_END(ctx);
+
+        c._ir_MERGE_2(ctx, end_fixnum, end_float);
     }
-    const end_promote = c._ir_END(ctx);
+    const end_inline = c._ir_END(ctx);
 
-    c._ir_IF_FALSE(ctx, if_min);
-    const result = emitAbsI64(ctx, a);
-    emitBoxPayload(ctx, liveSlotAddr(state, slot), state.tag_offset_const, state.payload_offset_const, state.fixnum_tag_const, result);
-    const end_fixnum = c._ir_END(ctx);
+    c._ir_IF_FALSE_cold(ctx, if_numeric);
+    {
+        var ends: [3]c.ir_ref = undefined;
+        ends[0] = c._ir_END(ctx);
+        @memcpy(ends[1 .. cold_count + 1], cold_ends[0..cold_count]);
+        mergeColdEnds(ctx, ends[0 .. cold_count + 1]);
 
-    c._ir_MERGE_2(ctx, end_promote, end_fixnum);
+        try emitAbsColdCall(state, slot, ec.line);
+    }
+    const end_call = c._ir_END(ctx);
 
-    // The native call may have moved the stack buffer.
+    c._ir_MERGE_2(ctx, end_inline, end_call);
+
+    // The call may have moved the stack buffer.
     refreshCachedStackPointer(state);
     stack[slot] = .{ .raw_at_slot = slot };
+}
+
+/// Call `abs` on the operand boxed at `slot`.
+///
+/// A build class that rejects fallback emissions dispatches through the frozen table. The
+/// per-operation dispatch reads an operand pair, so the one-operand word goes through the generic
+/// dispatch, which falls to a unary lookup. Every other class calls the native, which dispatches.
+fn emitAbsColdCall(state: *CompileState, slot: usize, line: usize) IrCodegenError!void {
+    const ctx = state.ctx;
+    const saved_items_ptr = state.items_ptr;
+    const saved_base_addr = state.base_addr;
+
+    if (state.fallbacks_locked or state.freestanding) {
+        const res = state.resolver orelse return state.refuse(.unresolvable_word, null);
+        const resolved = res.resolve("abs", res.user_data) orelse return state.refuse(.unresolvable_word, null);
+        if (resolved.dispatch_id == 0) return state.refuse(.unresolvable_word, null);
+
+        const sp_for_call = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_idx, c.ir_const_addr(ctx, slot + 1));
+        c._ir_STORE(ctx, state.sp_ptr, sp_for_call);
+        emitAotGenericDispatch(state, resolved.dispatch_id, resolved.word_id, "abs", line);
+    } else {
+        try emitPerOperationFallback(state, "abs", slot, slot, line);
+    }
+
+    state.items_ptr = saved_items_ptr;
+    state.base_addr = saved_base_addr;
 }
 
 fn emitIntrinsicDup(ec: EmitCtx) IrCodegenError!ControlFlow {
@@ -7819,87 +7932,111 @@ fn emitIntrinsicIf(ec: EmitCtx) IrCodegenError!ControlFlow {
     return .next;
 }
 
-/// Polymorphic fast path for the comparison intrinsics (`=`, `<`, `>`). In AOT mode it takes a
-/// mixed shape, one operand a runtime unknown and the other a proven unboxed number. Under the JIT
-/// it takes any numeric pair except two runtime unknowns.
-///
-/// In AOT mode a mixed pair emits inline tag-branching comparison instead of the speculative tag
-/// check, whose bail has no interpreter to resume into. Returns true when it consumed the
-/// operands; false when the caller should keep its own paths. The caller must have already popped
-/// the two operands, so they sit at sp and sp+1.
+/// Polymorphic fast path for the comparison intrinsics (`=`, `<`, `>`). Returns true when it
+/// consumed the operands; false when the caller should keep its own paths. The caller must have
+/// already popped the two operands, so they sit at sp and sp+1.
 ///
 /// A raw/raw pair stays with the caller's whole-native delegation: on a residual `=` miss the
 /// inline emitter answers a constant `f`, which is exact only when one side is a proven number.
 ///
-/// Under the JIT every other numeric pair, including two proven numbers, takes the inline
-/// polymorphic path, so each compare carries the `builtin_override` guard.
+/// `polySiteTaken` says which other pairs come here.
 fn emitPolyCompareFastPath(ec: EmitCtx, op: PolyCompareOp) IrCodegenError!bool {
     const state = ec.state;
     const stack = ec.stack;
     const sp = ec.sp;
-    var entry_a = stack[sp.*];
-    var entry_b = stack[sp.* + 1];
-    const a_is_opaque = entry_a == .raw_at_slot;
+    const entry_a = stack[sp.*];
+    const entry_b = stack[sp.* + 1];
 
-    if (!state.aot_mode) {
-        if (entry_a == .raw_at_slot and entry_b == .raw_at_slot) return false;
-        if (!isNumericOrOpaqueEntry(entry_a) or !isNumericOrOpaqueEntry(entry_b)) return false;
-        const known: KnownOperands = .{ knownNumericOf(entry_a), knownNumericOf(entry_b) };
+    if (entry_a == .raw_at_slot and entry_b == .raw_at_slot) return false;
+    if (!isNumericOrOpaqueEntry(entry_a) or !isNumericOrOpaqueEntry(entry_b)) return false;
 
-        if (state.in_branchless_trial) return IrCodegenError.BranchlessTrialImpure;
-
-        if (everyReachablePairReplaced(op.overrideOp(), known)) {
-            sp.* += 2;
-            try emitResolvedNativeCallback(state, op.wordName(), stack, sp, ec.line);
-            return true;
-        }
-
-        sp.* += 2;
-        flushToPhysicalStack(state, stack, sp.*);
-        sp.* -= 2;
-
-        const dest_slot = sp.*;
-        const slot_a = stack[sp.*].raw_at_slot;
-        const slot_b = stack[sp.* + 1].raw_at_slot;
-        try emitPolymorphicBinaryCompare(state, slot_a, slot_b, dest_slot, op, known, slot_a, ec.line);
-        stack[sp.*] = .{ .raw_at_slot = sp.* };
-        sp.* += 1;
-        return true;
-    }
-
-    const one_raw = (entry_a == .raw_at_slot) != (entry_b == .raw_at_slot);
-    const known = if (entry_a == .raw_at_slot) entry_b else entry_a;
-    if (!one_raw or !isKnownNumericEntry(known)) return false;
-
-    // The cold arm needs the polymorphic native, or the operator's dispatch id where it dispatches
-    // instead. When neither resolves, keep the concrete speculative path instead of rejecting the
-    // whole word.
-    const res = state.resolver orelse return false;
-    const resolved = res.resolve(op.wordName(), res.user_data) orelse return false;
-    if (state.fallbacks_locked or state.freestanding) {
-        if (resolved.dispatch_id == 0) return false;
-    }
+    const known: KnownOperands = .{ knownNumericOf(entry_a), knownNumericOf(entry_b) };
+    const reachable = reachablePairBits(op.overrideOp(), known);
+    if (!polySiteTaken(state, op.wordName(), known, reachable, false)) return false;
 
     if (state.in_branchless_trial) return IrCodegenError.BranchlessTrialImpure;
 
+    if (everyReachablePairReplaced(reachable)) {
+        try emitReplacedPairCall(ec, op.wordName(), op == .eq, known);
+        return true;
+    }
+
     // The cold arm sets SP from the second slot alone, so the pair must be settled adjacent and
-    // ascending; the known operand also has no physical slot at all until it is boxed into place.
+    // ascending; a proven operand also has no physical slot at all until it is boxed into place.
     sp.* += 2;
     flushToPhysicalStack(state, stack, sp.*);
     sp.* -= 2;
-    entry_a = stack[sp.*];
-    entry_b = stack[sp.* + 1];
 
     // The flush relabeled every live entry below the operands to its own slot, so nothing aliases
     // `dest_slot` and the write cannot clobber a value another entry still reads.
     const dest_slot = sp.*;
-    const slot_a = entry_a.raw_at_slot;
-    const slot_b = entry_b.raw_at_slot;
-    const opaque_slot = if (a_is_opaque) slot_a else slot_b;
-    try emitPolymorphicBinaryCompare(state, slot_a, slot_b, dest_slot, op, .{ null, null }, opaque_slot, ec.line);
+    const slot_a = stack[sp.*].raw_at_slot;
+    const slot_b = stack[sp.* + 1].raw_at_slot;
+    const opaque_slot = if (known[0] == null) slot_a else slot_b;
+    try emitPolymorphicBinaryCompare(state, slot_a, slot_b, dest_slot, op, known, opaque_slot, ec.line);
     stack[sp.*] = .{ .raw_at_slot = sp.* };
     sp.* += 1;
     return true;
+}
+
+/// Whether a numeric site whose operands are each a proven number or an opaque slot takes the
+/// polymorphic path rather than its concrete one.
+///
+/// The JIT, and an AOT build that guards at runtime, send every such site here, because only the
+/// polymorphic path carries the `builtin_override` guard. A closed-world AOT build sends a site
+/// here when an arm replaces a pair it can reach, or when an operand is opaque, since the concrete
+/// path's tag check would bail and an AOT bail aborts the program. It also takes two proven
+/// numbers of different types, and `float_mod` pairs, which the concrete path has no shape for.
+///
+/// An AOT site whose cold arm cannot resolve keeps its concrete path instead of rejecting the
+/// whole word, except a pair of opaque arithmetic operands, which has no concrete path that works.
+fn polySiteTaken(state: *CompileState, op_name: []const u8, known: KnownOperands, reachable: u64, float_mod: bool) bool {
+    if (!state.aot_mode) return true;
+    if (known[0] == null and known[1] == null) return true;
+
+    const res = state.resolver orelse return false;
+    const resolved = res.resolve(op_name, res.user_data) orelse return false;
+    if ((state.fallbacks_locked or state.freestanding) and resolved.dispatch_id == 0) return false;
+
+    if (siteTestsOverrides(state, reachable)) return true;
+
+    const a = known[0] orelse return true;
+    const b = known[1] orelse return true;
+    return a != b or (float_mod and a == .float);
+}
+
+/// Emit a binary site every reachable operand pair of which a method arm replaces: a call that
+/// dispatches, with no inline arm. The caller must have already popped the two operands, so they
+/// sit at sp and sp+1.
+///
+/// The JIT calls the native whole. AOT code calls the operator the way a polymorphic cold arm does.
+fn emitReplacedPairCall(ec: EmitCtx, op_name: []const u8, is_eq: bool, known: KnownOperands) IrCodegenError!void {
+    const state = ec.state;
+    const stack = ec.stack;
+    const sp = ec.sp;
+
+    if (!state.aot_mode) {
+        sp.* += 2;
+        return emitResolvedNativeCallback(state, op_name, stack, sp, ec.line);
+    }
+
+    sp.* += 2;
+    flushToPhysicalStack(state, stack, sp.*);
+    sp.* -= 2;
+
+    // A dispatch miss can only come from an opaque operand that is not a number, and `=` answers
+    // that with `f` rather than an error.
+    const slot_a = sp.*;
+    const opaque_slot: ?usize = if (known[0] == null) slot_a else if (known[1] == null) slot_a + 1 else null;
+    const miss: DispatchMissBehavior = if (is_eq and opaque_slot != null)
+        .{ .push_false = .{ .opaque_slot = opaque_slot.?, .dest_slot = slot_a } }
+    else
+        .trap;
+    try emitPolyColdCall(state, op_name, slot_a, slot_a + 1, ec.line, miss);
+
+    refreshCachedStackPointer(state);
+    stack[slot_a] = .{ .raw_at_slot = slot_a };
+    sp.* += 1;
 }
 
 /// Shared body for the comparison intrinsics (`=`, `<`, `>`): pop two operands
@@ -7970,92 +8107,47 @@ fn emitIntrinsicGt(ec: EmitCtx) IrCodegenError!ControlFlow {
     return emitComparison(ec, .gt);
 }
 
-/// Shared polymorphic fast path for the arithmetic intrinsics that support
-/// both fixnum and float (`+ - * / %`). When both operands are runtime
-/// unknowns, emit polymorphic code that branches on fixnum vs float at runtime
-/// instead of bailing on a type mismatch; returns true when it consumed the
-/// operands, false when the caller should emit its concrete-type path. The
-/// caller must have already popped the two operands (so they sit at sp and
-/// sp+1).
+/// Shared polymorphic fast path for the arithmetic intrinsics that support both fixnum and float
+/// (`+ - * / %`). It emits code that branches on fixnum vs float at runtime instead of bailing on a
+/// type mismatch. Returns true when it consumed the operands, false when the caller should emit
+/// its concrete-type path. The caller must have already popped the two operands, so they sit at
+/// sp and sp+1.
 ///
-/// In AOT mode a mixed pair -- one opaque slot, one unboxed number -- also
-/// takes this path. The concrete path would emit a tag check on the opaque
-/// side that bails when the value is the other numeric type, and an AOT bail
-/// has no interpreter to resume into, so it aborts the program.
-///
-/// Under the JIT every numeric pair takes this path, two proven numbers included, so each site
-/// carries the `builtin_override` guard. A method arm can replace a builtin pair after the word
-/// compiles, and only the cold arm's native call dispatches to it.
+/// `polySiteTaken` says which pairs come here.
 fn emitPolyArithFastPath(ec: EmitCtx, op: PolyArithOp) IrCodegenError!bool {
     const state = ec.state;
     const stack = ec.stack;
     const sp = ec.sp;
-    var entry_a = stack[sp.*];
-    var entry_b = stack[sp.* + 1];
-    const both_raw = entry_a == .raw_at_slot and entry_b == .raw_at_slot;
-    var known: KnownOperands = .{ null, null };
+    const entry_a = stack[sp.*];
+    const entry_b = stack[sp.* + 1];
 
-    if (!state.aot_mode) {
-        if (!isNumericOrOpaqueEntry(entry_a) or !isNumericOrOpaqueEntry(entry_b)) return false;
-        known = .{ knownNumericOf(entry_a), knownNumericOf(entry_b) };
+    if (!isNumericOrOpaqueEntry(entry_a) or !isNumericOrOpaqueEntry(entry_b)) return false;
 
-        if (state.in_branchless_trial) return IrCodegenError.BranchlessTrialImpure;
+    const known: KnownOperands = .{ knownNumericOf(entry_a), knownNumericOf(entry_b) };
+    const reachable = reachablePairBits(op.overrideOp(), known);
+    if (!polySiteTaken(state, op.wordName(), known, reachable, op == .mod)) return false;
 
-        if (everyReachablePairReplaced(op.overrideOp(), known)) {
-            sp.* += 2;
-            try emitResolvedNativeCallback(state, op.wordName(), stack, sp, ec.line);
-            return true;
-        }
+    // The polymorphic path's stores and cold call cannot be folded away from a discarded
+    // branchless trial.
+    if (state.in_branchless_trial) return IrCodegenError.BranchlessTrialImpure;
 
-        // The cold arm hands both operands to the native through adjacent ascending slots, and a
-        // proven operand has no slot at all until it is boxed into place.
-        sp.* += 2;
-        flushToPhysicalStack(state, stack, sp.*);
-        sp.* -= 2;
-        entry_a = stack[sp.*];
-        entry_b = stack[sp.* + 1];
-    } else if (both_raw) {
-        // The polymorphic path's stores and cold native call cannot be folded
-        // away from a discarded branchless trial.
-        if (state.in_branchless_trial) return IrCodegenError.BranchlessTrialImpure;
-
-        // Two opaque entries are not necessarily adjacent, and not necessarily in order: a
-        // `swap` reorders them abstractly without moving anything. The cold arm sets SP from
-        // the second slot alone, so a descending pair points it below both operands.
-        sp.* += 2;
-        flushToPhysicalStack(state, stack, sp.*);
-        sp.* -= 2;
-        entry_a = stack[sp.*];
-        entry_b = stack[sp.* + 1];
-    } else {
-        const one_raw = (entry_a == .raw_at_slot) != (entry_b == .raw_at_slot);
-        const known_entry = if (entry_a == .raw_at_slot) entry_b else entry_a;
-        if (!one_raw or !isKnownNumericEntry(known_entry)) return false;
-
-        // The cold arm needs the polymorphic native, or the operator's dispatch
-        // id where it dispatches instead. When neither resolves, keep the
-        // concrete speculative path instead of rejecting the whole word.
-        const res = state.resolver orelse return false;
-        const resolved = res.resolve(op.wordName(), res.user_data) orelse return false;
-        if (state.fallbacks_locked or state.freestanding) {
-            if (resolved.dispatch_id == 0) return false;
-        }
-
-        if (state.in_branchless_trial) return IrCodegenError.BranchlessTrialImpure;
-
-        // Flush for the same reason, plus one more: the known operand has no physical slot at
-        // all until it is boxed into place.
-        sp.* += 2;
-        flushToPhysicalStack(state, stack, sp.*);
-        sp.* -= 2;
-        entry_a = stack[sp.*];
-        entry_b = stack[sp.* + 1];
+    if (everyReachablePairReplaced(reachable)) {
+        try emitReplacedPairCall(ec, op.wordName(), false, known);
+        return true;
     }
+
+    // Two opaque entries are not necessarily adjacent, and not necessarily in order: a `swap`
+    // reorders them abstractly without moving anything. The cold arm sets SP from the second slot
+    // alone, so a descending pair points it below both operands. A proven operand also has no
+    // physical slot at all until it is boxed into place.
+    sp.* += 2;
+    flushToPhysicalStack(state, stack, sp.*);
+    sp.* -= 2;
 
     // The flush relabeled every live entry below the operands to its own slot, so nothing aliases
     // `dest_slot` and the write cannot clobber a value another entry still reads.
     const dest_slot = sp.*;
-    try emitPolymorphicBinaryArith(state, entry_a.raw_at_slot, entry_b.raw_at_slot, dest_slot, op, known, ec.line);
+    try emitPolymorphicBinaryArith(state, stack[sp.*].raw_at_slot, stack[sp.* + 1].raw_at_slot, dest_slot, op, known, ec.line);
     stack[sp.*] = .{ .raw_at_slot = sp.* };
     sp.* += 1;
     return true;
@@ -10924,7 +11016,7 @@ pub fn emitWordCAot(
     freestanding: bool,
     fallbacks_locked: bool,
 ) (IrCodegenError || ir_mod.IrError || Allocator.Error)![]u8 {
-    return emitWordCAotWithCName(instructions, input_count, output_count, name, null, resolver, self_name, aot_compiled_names, callee_resolution, string_literals, quotation_literals, array_literals, allocator, stack_effect, inferred_param_types, reason_out, quotation_id_map, pic_table, interp_ctx, pic_stats_out, aot_fallback_emit_count_out, aot_fallback_report_out, slot_maps, emit_slot_table_literals, source_file, interpreter_free, freestanding, fallbacks_locked, false, null);
+    return emitWordCAotWithCName(instructions, input_count, output_count, name, null, resolver, self_name, aot_compiled_names, callee_resolution, string_literals, quotation_literals, array_literals, allocator, stack_effect, inferred_param_types, reason_out, quotation_id_map, pic_table, interp_ctx, pic_stats_out, aot_fallback_emit_count_out, aot_fallback_report_out, slot_maps, emit_slot_table_literals, source_file, interpreter_free, freestanding, fallbacks_locked, false, false, null);
 }
 
 /// Like emitWordCAot but with a pre-mangled C function name override.
@@ -10959,17 +11051,18 @@ fn emitWordCAotWithCName(
     interpreter_free: bool,
     freestanding: bool,
     fallbacks_locked: bool,
+    builtin_override_guard: bool,
     needs_lexical_frame: bool,
     lexical_sites: ?*AotLexicalSiteTable,
 ) (IrCodegenError || ir_mod.IrError || Allocator.Error)![]u8 {
     var reason: ?NotCompilable = null;
-    const discovered = emitWordCAotPass(instructions, input_count, output_count, name, c_name_override, resolver, self_name, aot_compiled_names, callee_resolution, string_literals, quotation_literals, array_literals, allocator, stack_effect, inferred_param_types, null, &reason, quotation_id_map, pic_table, interp_ctx, null, null, null, slot_maps, emit_slot_table_literals, source_file, interpreter_free, freestanding, fallbacks_locked, false, needs_lexical_frame, null) catch |err| {
+    const discovered = emitWordCAotPass(instructions, input_count, output_count, name, c_name_override, resolver, self_name, aot_compiled_names, callee_resolution, string_literals, quotation_literals, array_literals, allocator, stack_effect, inferred_param_types, null, &reason, quotation_id_map, pic_table, interp_ctx, null, null, null, slot_maps, emit_slot_table_literals, source_file, interpreter_free, freestanding, fallbacks_locked, builtin_override_guard, false, needs_lexical_frame, null) catch |err| {
         if (reason_out) |ro| ro.* = reason;
         return err;
     };
     if (discovered.body) |b| allocator.free(b);
     reason = null;
-    const result = emitWordCAotPass(instructions, input_count, output_count, name, c_name_override, resolver, self_name, aot_compiled_names, callee_resolution, string_literals, quotation_literals, array_literals, allocator, stack_effect, inferred_param_types, discovered.peak_stack_depth, &reason, quotation_id_map, pic_table, interp_ctx, pic_stats_out, aot_fallback_emit_count_out, aot_fallback_report_out, slot_maps, emit_slot_table_literals, source_file, interpreter_free, freestanding, fallbacks_locked, discovered.row_aware_self_loop, needs_lexical_frame, lexical_sites) catch |err| {
+    const result = emitWordCAotPass(instructions, input_count, output_count, name, c_name_override, resolver, self_name, aot_compiled_names, callee_resolution, string_literals, quotation_literals, array_literals, allocator, stack_effect, inferred_param_types, discovered.peak_stack_depth, &reason, quotation_id_map, pic_table, interp_ctx, pic_stats_out, aot_fallback_emit_count_out, aot_fallback_report_out, slot_maps, emit_slot_table_literals, source_file, interpreter_free, freestanding, fallbacks_locked, builtin_override_guard, discovered.row_aware_self_loop, needs_lexical_frame, lexical_sites) catch |err| {
         if (reason_out) |ro| ro.* = reason;
         return err;
     };
@@ -11025,6 +11118,7 @@ fn emitWordCAotPass(
     interpreter_free: bool,
     freestanding: bool,
     fallbacks_locked: bool,
+    builtin_override_guard: bool,
     row_aware_self_loop: bool,
     /// Bracket the whole body in a transient lexical frame, the way the interpreter's `call`
     /// brackets a quotation.
@@ -11357,6 +11451,7 @@ fn emitWordCAotPass(
         .interpreter_free = interpreter_free,
         .freestanding = freestanding,
         .fallbacks_locked = fallbacks_locked,
+        .builtin_override_guard = builtin_override_guard,
         .aot_compiled_names = aot_compiled_names,
         .aot_callee_resolution = callee_resolution,
         .aot_proto_1arg = proto_1arg,
@@ -12126,6 +12221,11 @@ pub fn emitProgramC(
     // codegen must not trade a speculative bail for a fallback-emitting path.
     const fallbacks_locked = strict_interpreter_free and lock_interpreter_setting;
 
+    // The freeze lets a build carrying the runtime image, or one that keeps the interpreter
+    // outright, run `eval-string` and `load`, so its program can register an arm the build never
+    // saw. Every other build is checked against the mask the freeze left.
+    const builtin_override_guard = !meta.freestanding and (interpreter_fallback == .true or emit_runtime_image);
+
     var resolver_data = AotResolverData{ .map = &word_map, .returns_row_names = &returns_row_names };
     // Rebound per compiled body below; `bare` is program-wide and never changes.
     resolver_data.callee_resolution.bare = &bare_identities;
@@ -12294,6 +12394,7 @@ pub fn emitProgramC(
                     strict_interpreter_free,
                     meta.freestanding,
                     fallbacks_locked,
+                    builtin_override_guard,
                     false,
                     word_needs_frame[i],
                     null,
@@ -12355,6 +12456,7 @@ pub fn emitProgramC(
             strict_interpreter_free,
             meta.freestanding,
             fallbacks_locked,
+            builtin_override_guard,
             word_needs_frame[i],
             null,
         ) catch |err| {
@@ -12406,7 +12508,7 @@ pub fn emitProgramC(
                 var dreason: ?NotCompilable = null;
                 // No inferred types: the freeze-time pass sizes a quotation's table by its
                 // `inferred_effect`, and this branch runs precisely when it has none.
-                const dres = emitWordCAotPass(q.instructions, ic, 0, q.c_name, q.c_name, resolver, null, &compiled_names, resolver_data.callee_resolution, null, null, null, allocator, null, &.{}, null, &dreason, null, null, interp_ctx, null, null, null, slot_maps_ptr, emit_slot_table_literals, q.source_file, strict_interpreter_free, meta.freestanding, fallbacks_locked, false, bracketed_quotation_ids.contains(q.quotation_id), null) catch {
+                const dres = emitWordCAotPass(q.instructions, ic, 0, q.c_name, q.c_name, resolver, null, &compiled_names, resolver_data.callee_resolution, null, null, null, allocator, null, &.{}, null, &dreason, null, null, interp_ctx, null, null, null, slot_maps_ptr, emit_slot_table_literals, q.source_file, strict_interpreter_free, meta.freestanding, fallbacks_locked, builtin_override_guard, false, bracketed_quotation_ids.contains(q.quotation_id), null) catch {
                     emitAotEffectTrace(interp_ctx, q.c_name, ic, null, dreason);
                     continue;
                 };
@@ -12449,6 +12551,7 @@ pub fn emitProgramC(
             strict_interpreter_free,
             meta.freestanding,
             fallbacks_locked,
+            builtin_override_guard,
             bracketed_quotation_ids.contains(q.quotation_id),
             null,
         ) catch {
@@ -12527,6 +12630,7 @@ pub fn emitProgramC(
             strict_interpreter_free,
             meta.freestanding,
             fallbacks_locked,
+            builtin_override_guard,
             word_needs_frame[i],
             &lexical_sites,
         ) catch |err| switch (err) {
@@ -12578,6 +12682,7 @@ pub fn emitProgramC(
             strict_interpreter_free,
             meta.freestanding,
             fallbacks_locked,
+            builtin_override_guard,
             bracketed_quotation_ids.contains(q.quotation_id),
             &lexical_sites,
         ) catch |err| switch (err) {
@@ -12943,6 +13048,9 @@ pub fn emitProgramC(
     try out.appendSlice(allocator, "extern int32_t jitGet(uintptr_t ctx);\n");
     try out.appendSlice(allocator, "extern int32_t jitPushLexicalFrame(uintptr_t ctx, uintptr_t owner);\n");
     try out.appendSlice(allocator, "extern const uint64_t onez_lexical_sites[];\n");
+    if (builtin_override_guard) {
+        try out.appendSlice(allocator, "extern uint64_t " ++ builtin_override.symbol_name ++ "[];\n");
+    }
     try out.appendSlice(allocator, "static inline uintptr_t onez_lexical_site_tag(uintptr_t site) { return site ? (uintptr_t)&onez_lexical_sites[site - 1] : 0; }\n");
     try out.appendSlice(allocator, "static int32_t onez_push_lexical_frame(uintptr_t ctx, uintptr_t site) { return jitPushLexicalFrame(ctx, onez_lexical_site_tag(site)); }\n");
     try out.appendSlice(allocator, "extern int32_t jitPopLexicalFrame(uintptr_t ctx);\n");
@@ -17312,8 +17420,10 @@ fn cmpDerivedOpFor(word_name: []const u8) ?CmpDerivedOp {
 
 /// Which native's error tail a dispatch miss reproduces.
 ///
-/// Only `+ - * / %` and `<` / `>` are emitted with a miss trap. `=` is not: its miss is a constant
-/// `f`, which the call site pushes directly. Any other word arriving here is a codegen bug, so it
+/// Only `+ - * / %` and `<` / `>` are emitted with a miss trap that can fire. `=` is not: its miss
+/// is a constant `f`, which the call site pushes directly. A replaced `=` site on two proven numbers
+/// carries a trap too, but every pair it can reach has a method, so it never misses. Any other word
+/// arriving here is a codegen bug, so it
 /// gets a message naming itself rather than one of the two shapes it does not have.
 const MissMessageKind = enum { number, ordering, unexpected };
 
@@ -20015,6 +20125,69 @@ test "emitProgramC: a fallback-permitted build keeps the per-operation native co
     try testing.expect(std.mem.indexOf(u8, source, "= jitDispatchFull(") == null);
 }
 
+fn setAllAddPairsForTest() void {
+    builtin_override.set(builtin_override.opBits(.add));
+}
+
+test "emitProgramC: a build that can register an arm late loads the override mask at each site" {
+    builtin_override.resetForTest();
+
+    var diag: CodegenDiagnostics = .{};
+    defer if (diag.aot_fallback_report.sites.len > 0) testing.allocator.free(diag.aot_fallback_report.sites);
+    const source = try emitProgramC(&poly_arith_words, &.{}, 0, 2, &.{}, .true, false, test_aot_metadata, &diag, null, false, &.{}, &.{}, &.{}, &.{}, &.{}, testing.allocator);
+    defer testing.allocator.free(source);
+
+    try testing.expect(std.mem.indexOf(u8, source, "extern uint64_t " ++ builtin_override.symbol_name ++ "[];") != null);
+    try testing.expect(std.mem.indexOf(u8, source, "*((uint64_t*)" ++ builtin_override.symbol_name ++ ")") != null);
+}
+
+test "emitProgramC: a closed-world build never loads the override mask, even with an arm" {
+    builtin_override.resetForTest();
+    defer builtin_override.resetForTest();
+    builtin_override.set(@as(u64, 1) << builtin_override.binaryBit(.add, .fixnum_fixnum));
+
+    var diag: CodegenDiagnostics = .{};
+    defer if (diag.aot_fallback_report.sites.len > 0) testing.allocator.free(diag.aot_fallback_report.sites);
+    const source = try emitProgramC(&poly_arith_words, &.{}, 0, 2, &.{}, .auto, false, test_aot_metadata, &diag, null, false, &.{}, &.{}, &.{}, &.{}, &.{}, testing.allocator);
+    defer testing.allocator.free(source);
+
+    try testing.expect(std.mem.indexOf(u8, source, builtin_override.symbol_name) == null);
+}
+
+test "emitProgramC: a closed-world site whose every pair is replaced calls the native with no inline arm" {
+    builtin_override.resetForTest();
+
+    var diag: CodegenDiagnostics = .{};
+    defer if (diag.aot_fallback_report.sites.len > 0) testing.allocator.free(diag.aot_fallback_report.sites);
+    const inline_source = try emitProgramC(&poly_arith_words, &.{}, 0, 2, &.{}, .auto, false, test_aot_metadata, &diag, null, false, &.{}, &.{}, &.{}, &.{}, &.{}, testing.allocator);
+    defer testing.allocator.free(inline_source);
+    try testing.expect(std.mem.indexOf(u8, inline_source, "_overflow(") != null);
+
+    setAllAddPairsForTest();
+    defer builtin_override.resetForTest();
+
+    var replaced_diag: CodegenDiagnostics = .{};
+    defer if (replaced_diag.aot_fallback_report.sites.len > 0) testing.allocator.free(replaced_diag.aot_fallback_report.sites);
+    const source = try emitProgramC(&poly_arith_words, &.{}, 0, 2, &.{}, .auto, false, test_aot_metadata, &replaced_diag, null, false, &.{}, &.{}, &.{}, &.{}, &.{}, testing.allocator);
+    defer testing.allocator.free(source);
+
+    try testing.expect(std.mem.indexOf(u8, source, "_overflow(") == null);
+    try testing.expect(std.mem.indexOf(u8, source, "= jitNativeWordCall(") != null);
+}
+
+test "emitProgramC: a locked site whose every pair is replaced dispatches through the table" {
+    setAllAddPairsForTest();
+    defer builtin_override.resetForTest();
+
+    var diag: CodegenDiagnostics = .{};
+    const source = try emitProgramC(&poly_arith_words, &.{}, 0, 2, &.{}, .false, true, test_aot_metadata, &diag, null, false, &.{}, &.{}, &.{}, &.{}, &.{}, testing.allocator);
+    defer testing.allocator.free(source);
+
+    try testing.expect(std.mem.indexOf(u8, source, "_overflow(") == null);
+    try testing.expect(std.mem.indexOf(u8, source, "= jitDispatchFull(") != null);
+    try testing.expect(std.mem.indexOf(u8, source, "= jitNativeWordCall(") == null);
+}
+
 /// One opaque call result against a proven fixnum literal at a comparison: the mixed shape whose
 /// inline polymorphic path is shared by every AOT class and whose cold arm differs by build class.
 const poly_compare_one_body = makeInstructions(.{@as(i64, 1)});
@@ -22041,7 +22214,7 @@ test "emitWordCAotPass reports discovered_output as the body's final depth" {
     const dup_instrs = [_]Instruction{
         .{ .op = .{ .call_word = "dup" }, .line = 1 },
     };
-    const dup_res = try emitWordCAotPass(&dup_instrs, 1, 2, "q", "q", null, null, &compiled_names, .{}, null, null, null, testing.allocator, null, &.{}, null, &reason, null, null, null, null, null, null, null, false, null, false, false, false, false, false, null);
+    const dup_res = try emitWordCAotPass(&dup_instrs, 1, 2, "q", "q", null, null, &compiled_names, .{}, null, null, null, testing.allocator, null, &.{}, null, &reason, null, null, null, null, null, null, null, false, null, false, false, false, false, false, false, null);
     if (dup_res.body) |b| testing.allocator.free(b);
     try testing.expectEqual(@as(u8, 2), dup_res.discovered_output);
 
@@ -22049,7 +22222,7 @@ test "emitWordCAotPass reports discovered_output as the body's final depth" {
     const drop_instrs = [_]Instruction{
         .{ .op = .{ .call_word = "drop" }, .line = 1 },
     };
-    const drop_res = try emitWordCAotPass(&drop_instrs, 1, 0, "q", "q", null, null, &compiled_names, .{}, null, null, null, testing.allocator, null, &.{}, null, &reason, null, null, null, null, null, null, null, false, null, false, false, false, false, false, null);
+    const drop_res = try emitWordCAotPass(&drop_instrs, 1, 0, "q", "q", null, null, &compiled_names, .{}, null, null, null, testing.allocator, null, &.{}, null, &reason, null, null, null, null, null, null, null, false, null, false, false, false, false, false, false, null);
     if (drop_res.body) |b| testing.allocator.free(b);
     try testing.expectEqual(@as(u8, 0), drop_res.discovered_output);
 }
@@ -22604,6 +22777,7 @@ fn emitQuotationBodyForTest(ctx: *const Context, body: []const Instruction) ![]u
         false,
         false,
         false,
+        false,
         needs_frame,
         null,
     );
@@ -22701,6 +22875,7 @@ fn emitParkWordForTest(body: []const Instruction, framed: bool) ![]u8 {
         null,
         false,
         null,
+        false,
         false,
         false,
         false,

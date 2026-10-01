@@ -1791,14 +1791,7 @@ pub fn replayMethodDispatch(ctx: *Context) LoaderError!void {
             .body = .{ .quotation = .{ .instructions = body_instructions, .effect = body_effect, .code_ptr = code_ptr } },
             .source_module = module,
         };
-        // Fill gaps only: in interpreter-linked AOT the prelude reload already
-        // registers its methods (with working bytecode bodies), so replay must
-        // not clobber them with a compiled code_ptr body. A duplicate key means
-        // the method is already live; keep it.
-        ctx.registerDispatch(key, entry, false) catch |err| switch (err) {
-            error.DuplicateMethod => {},
-            else => return LoaderError.OutOfMemory,
-        };
+        try registerReplayedEntry(ctx, key, entry);
     }
 
     // Patch each loaded generic word's `dispatch_id` to the value its
@@ -1855,6 +1848,30 @@ pub fn replayMethodDispatch(ctx: *Context) LoaderError!void {
             }
         }
     }
+}
+
+/// Register one replayed method row.
+///
+/// Fill gaps only: in interpreter-linked AOT the prelude reload already registers its methods, whose
+/// bytecode bodies work, so replay must not clobber them with a compiled code_ptr body. A duplicate
+/// key means the method is already live; keep it.
+///
+/// A builtin native entry is the exception. Boot puts it back before replay runs, so a duplicate
+/// on one means the frozen program replaced it, as `define-method` allows.
+fn registerReplayedEntry(ctx: *Context, key: dispatch_mod.DispatchKey, entry: dispatch_mod.DispatchEntry) LoaderError!void {
+    ctx.registerDispatch(key, entry, false) catch |err| switch (err) {
+        error.DuplicateMethod => if (isNativeEntry(ctx, key)) {
+            ctx.registerDispatch(key, entry, true) catch return LoaderError.OutOfMemory;
+        },
+        else => return LoaderError.OutOfMemory,
+    };
+}
+
+/// Whether `key` holds a builtin entry boot registered for a native generic.
+fn isNativeEntry(ctx: *Context, key: dispatch_mod.DispatchKey) bool {
+    const existing = ctx.getDispatchEntry(key) orelse return false;
+    const prov = existing.provenance orelse return false;
+    return std.mem.eql(u8, prov.generator, "native");
 }
 
 fn replaceWordBodyWithTypeValuePush(
@@ -4679,6 +4696,34 @@ test "replayMethodDispatch: advances the mint counter past the replayed ids" {
     try replayMethodDispatch(&ctx);
 
     try testing.expect(ctx.next_dispatch_id.load(.monotonic) > 5000);
+}
+
+test "registerReplayedEntry: a row replaces a builtin native entry but not a live method" {
+    const builtin_override = @import("builtin_override.zig");
+    builtin_override.resetForTest();
+    defer builtin_override.resetForTest();
+
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    const fixnum = ctx.lookupBuiltinTypeValue("fixnum").?.descriptor.?;
+    const key = dispatch_mod.DispatchKey{ .dispatch_id = ctx.nativeDispatchId(.add), .type_a = fixnum, .type_b = fixnum };
+    try testing.expect(isNativeEntry(&ctx, key));
+
+    const arm_body = [_]value_mod.Instruction{
+        .{ .op = .{ .push_literal = .{ .fixnum = 42 } }, .line = 0, .column = 0 },
+    };
+    try registerReplayedEntry(&ctx, key, .{ .body = .{ .quotation = .{ .instructions = &arm_body, .effect = null, .code_ptr = null } } });
+
+    const replaced = ctx.getDispatchEntry(key).?;
+    try testing.expectEqual(@intFromPtr(&arm_body), @intFromPtr(replaced.body.quotation.instructions.ptr));
+    try testing.expect(builtin_override.isSet(builtin_override.binaryBit(.add, .fixnum_fixnum)));
+
+    const late_body = [_]value_mod.Instruction{
+        .{ .op = .{ .push_literal = .{ .fixnum = 7 } }, .line = 0, .column = 0 },
+    };
+    try registerReplayedEntry(&ctx, key, .{ .body = .{ .quotation = .{ .instructions = &late_body, .effect = null, .code_ptr = null } } });
+    try testing.expectEqual(@intFromPtr(&arm_body), @intFromPtr(ctx.getDispatchEntry(key).?.body.quotation.instructions.ptr));
 }
 
 test "replayMethodDispatch: patches a dep entry's dispatch_id like a word entry" {

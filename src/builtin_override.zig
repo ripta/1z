@@ -38,7 +38,17 @@ pub const abs_base: u6 = 32;
 ///
 /// Nothing clears a bit. A stale bit sends its sites to the native, which still dispatches to the
 /// right answer, so it costs speed and never correctness.
-var mask: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
+var mask: u64 = 0;
+
+/// The symbol an AOT build that can register an arm after the freeze loads the mask through, since
+/// its C has no address to bake.
+pub const symbol_name = "onez_builtin_override_mask";
+
+comptime {
+    if (builtin.os.tag != .freestanding and !builtin.cpu.arch.isWasm()) {
+        @export(&mask, .{ .name = symbol_name });
+    }
+}
 
 pub fn binaryBit(op: Op, pair: Pair) u6 {
     return @as(u6, @intFromEnum(op)) * 4 + @intFromEnum(pair);
@@ -48,20 +58,29 @@ pub fn absBit(is_float: bool) u6 {
     return abs_base + @intFromBool(is_float);
 }
 
+/// Every bit of `op`, one per operand pair.
+pub fn opBits(op: Op) u64 {
+    return @as(u64, 0xF) << (@as(u6, @intFromEnum(op)) * 4);
+}
+
+pub fn absBits() u64 {
+    return @as(u64, 0b11) << abs_base;
+}
+
 pub fn set(bits: u64) void {
     if (bits == 0) return;
 
     // wasm32 has no 64-bit atomics, and a single-threaded build has no racing access.
     if (builtin.single_threaded) {
-        mask.raw |= bits;
+        mask |= bits;
     } else {
-        _ = mask.fetchOr(bits, .release);
+        _ = @atomicRmw(u64, &mask, .Or, bits, .release);
     }
 }
 
 pub fn load() u64 {
-    if (builtin.single_threaded) return mask.raw;
-    return mask.load(.acquire);
+    if (builtin.single_threaded) return mask;
+    return @atomicLoad(u64, &mask, .acquire);
 }
 
 pub fn isSet(bit: u6) bool {
@@ -70,14 +89,14 @@ pub fn isSet(bit: u6) bool {
 
 /// The address JIT code loads the mask from on every guarded execution.
 pub fn maskAddress() usize {
-    return @intFromPtr(&mask.raw);
+    return @intFromPtr(&mask);
 }
 
 /// Clear the mask. Unit tests share one process, so a test that registers an arm on one of these
 /// operators must clear what it set or every later compiled test takes the native call.
 pub fn resetForTest() void {
     if (!builtin.is_test) @compileError("resetForTest is test-only");
-    mask.raw = 0;
+    mask = 0;
 }
 
 test "Pair.of orders the float flags as a two-bit index" {
@@ -92,4 +111,13 @@ test "binary and abs bits do not overlap" {
     try std.testing.expectEqual(@as(u6, 31), binaryBit(.gt, .float_float));
     try std.testing.expectEqual(@as(u6, 32), absBit(false));
     try std.testing.expectEqual(@as(u6, 33), absBit(true));
+}
+
+test "opBits covers exactly the four pairs of one operator" {
+    var expected: u64 = 0;
+    for ([_]Pair{ .fixnum_fixnum, .fixnum_float, .float_fixnum, .float_float }) |pair| {
+        expected |= @as(u64, 1) << binaryBit(.div, pair);
+    }
+    try std.testing.expectEqual(expected, opBits(.div));
+    try std.testing.expectEqual((@as(u64, 1) << absBit(false)) | (@as(u64, 1) << absBit(true)), absBits());
 }

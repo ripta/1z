@@ -28,6 +28,8 @@ const FreezeResult = aot_freeze.FreezeResult;
 
 const stack_effect_mod = @import("stack_effect.zig");
 
+const builtin_override = @import("builtin_override.zig");
+
 /// Deepest chain of compound callee bodies the simulator will step into before falling back to the
 /// callee's declared arity. Descent exists to resolve shuffle words defined in 1z, which are short
 /// and shallow.
@@ -84,6 +86,10 @@ pub const Options = struct {
     /// null under that pragma and outside locked builds, which disables the trust.
     fixnum_type: ?*const value_mod.TypeValue = null,
     float_type: ?*const value_mod.TypeValue = null,
+    /// The `builtin_override` mask the freeze left: one bit per operator and operand pair whose
+    /// builtin dispatch entry a method arm replaced. A replaced pair's result is whatever the arm
+    /// returns, so the pass types it unknown.
+    replaced_pairs: u64 = 0,
 };
 
 /// One value on the abstract stack.
@@ -124,6 +130,12 @@ const AbstractValue = union(enum) {
 
     fn isDeclared(v: AbstractValue) bool {
         return v == .fixnum_declared or v == .float_declared;
+    }
+
+    /// Whether the value can be a float at runtime when `is_float`, or a fixnum otherwise.
+    fn canBeNumber(v: AbstractValue, is_float: bool) bool {
+        if (v == .unknown) return true;
+        return if (is_float) v.isFloatish() else v.isFixnumish();
     }
 };
 
@@ -537,10 +549,8 @@ const Inference = struct {
         // actually binds to that primitive. A word of the same name defined in 1z takes the
         // ordinary compound path and is stepped into like any other.
         //
-        // This still assumes a call reaching a modelled native with operands of the type the rule
-        // covers runs the builtin rather than a method registered over it. Compiled code makes the
-        // same assumption: codegen emits concrete arithmetic for narrowed operands with no dispatch
-        // check, which is what the declared-annotation narrowing already relies on.
+        // A rule for a numeric operator covers only the operand pairs no method arm replaced.
+        // `Options.replaced_pairs` names the replaced ones, and those results are unknown.
         if (desc.is_native and try self.applyModelledNative(name, frame, depth, mode)) return;
 
         // A row variable makes the call's operand count depend on the caller's stack, which the
@@ -654,16 +664,17 @@ const Inference = struct {
             self.push(frame, .boolean);
             return true;
         }
-        if (eq(name, "=") or eq(name, "<") or eq(name, ">")) {
-            _ = self.pop(frame);
-            _ = self.pop(frame);
-            self.push(frame, .boolean);
+        if (compareOp(name)) |op| {
+            const b = self.pop(frame);
+            const a = self.pop(frame);
+            self.push(frame, if (self.mayBeReplaced(op, a, b)) .unknown else .boolean);
             return true;
         }
         if (arithKind(name)) |kind| {
             const b = self.pop(frame);
             const a = self.pop(frame);
-            self.push(frame, self.arithResult(kind, a, b));
+            const replaced = if (overrideOp(name)) |op| self.mayBeReplaced(op, a, b) else false;
+            self.push(frame, if (replaced) .unknown else self.arithResult(kind, a, b));
             return true;
         }
         if (eq(name, "call")) {
@@ -686,6 +697,40 @@ const Inference = struct {
             return true;
         }
         return false;
+    }
+
+    fn compareOp(name: []const u8) ?builtin_override.Op {
+        if (eq(name, "=")) return .eq;
+        if (eq(name, "<")) return .lt;
+        if (eq(name, ">")) return .gt;
+        return null;
+    }
+
+    /// The overridable operator `name` names. `div` and `rem` never consult the dispatch table, so
+    /// no arm can replace their builtin answer.
+    fn overrideOp(name: []const u8) ?builtin_override.Op {
+        if (eq(name, "+")) return .add;
+        if (eq(name, "-")) return .sub;
+        if (eq(name, "*")) return .mul;
+        if (eq(name, "%")) return .mod;
+        return null;
+    }
+
+    /// Whether a method arm replaces any operand pair `a` and `b` can be at runtime. An operand
+    /// the pass has not typed can be either number.
+    fn mayBeReplaced(self: *const Inference, op: builtin_override.Op, a: AbstractValue, b: AbstractValue) bool {
+        const replaced = self.options.replaced_pairs & builtin_override.opBits(op);
+        if (replaced == 0) return false;
+
+        var reachable: u64 = 0;
+        for ([_]bool{ false, true }) |a_is_float| {
+            if (!a.canBeNumber(a_is_float)) continue;
+            for ([_]bool{ false, true }) |b_is_float| {
+                if (!b.canBeNumber(b_is_float)) continue;
+                reachable |= @as(u64, 1) << builtin_override.binaryBit(op, .of(a_is_float, b_is_float));
+            }
+        }
+        return replaced & reachable != 0;
     }
 
     const ArithKind = enum { checked, guarded };
@@ -1415,6 +1460,51 @@ test "float arithmetic is typed without the lock, fixnum arithmetic only with it
     // entry-check requirement even though no annotation was read.
     try testing.expectEqualSlices(InferredParamType, &.{.fixnum_declared}, wordParams(&locked, "count"));
     try testing.expectEqualSlices(InferredParamType, &.{.float}, wordParams(&locked, "take-float"));
+}
+
+test "arithmetic on a pair a method arm replaced is untyped" {
+    const allocator = testing.allocator;
+
+    const count_body = [_]Instruction{
+        at(.{ .push_literal = .{ .fixnum = 1 } }),
+        at(.{ .call_word = "-" }),
+        at(.{ .call_word = "count" }),
+    };
+    const widen_body = [_]Instruction{
+        at(.{ .push_literal = .{ .float = 1.0 } }),
+        at(.{ .call_word = "+" }),
+        at(.{ .call_word = "take-float" }),
+    };
+    const entry_body = [_]Instruction{
+        at(.{ .push_literal = .{ .fixnum = 5 } }),
+        at(.{ .call_word = "count" }),
+        at(.{ .push_literal = .{ .float = 2.0 } }),
+        at(.{ .call_word = "widen" }),
+    };
+
+    const words = [_]FixtureWord{
+        .{ .name = "__entry__", .body = &entry_body },
+        .{ .name = "count", .body = &count_body, .input_count = 1, .output_count = 1 },
+        .{ .name = "widen", .body = &widen_body, .input_count = 1, .output_count = 1 },
+        .{ .name = "take-float", .body = &[_]Instruction{at(.{ .call_word = "drop" })}, .input_count = 1, .output_count = 1 },
+    };
+
+    const sub_fixnums = @as(u64, 1) << builtin_override.binaryBit(.sub, .fixnum_fixnum);
+    const add_floats = @as(u64, 1) << builtin_override.binaryBit(.add, .float_float);
+    const add_fixnums = @as(u64, 1) << builtin_override.binaryBit(.add, .fixnum_fixnum);
+
+    var replaced = try fixture(allocator, &words, &.{}, &.{});
+    defer replaced.deinit(allocator);
+    try inferParamTypes(&replaced, .{ .arithmetic_result_types = true, .replaced_pairs = sub_fixnums | add_floats }, allocator);
+    try testing.expectEqual(@as(usize, 0), wordParams(&replaced, "count").len);
+    try testing.expectEqual(@as(usize, 0), wordParams(&replaced, "take-float").len);
+
+    // An arm on a pair the site never reaches leaves its result typed.
+    var elsewhere = try fixture(allocator, &words, &.{}, &.{});
+    defer elsewhere.deinit(allocator);
+    try inferParamTypes(&elsewhere, .{ .arithmetic_result_types = true, .replaced_pairs = add_fixnums }, allocator);
+    try testing.expectEqualSlices(InferredParamType, &.{.fixnum_declared}, wordParams(&elsewhere, "count"));
+    try testing.expectEqualSlices(InferredParamType, &.{.float}, wordParams(&elsewhere, "take-float"));
 }
 
 test "a fully annotated callee output feeds the caller's proof under trust" {

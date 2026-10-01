@@ -1,0 +1,38 @@
+\ A build carrying the runtime image can run `eval-string`, so the program can register a method arm
+\ over a builtin pair after the freeze. Every compiled site there tests the runtime mask, so it
+\ reaches an arm from the next execution on, including one registered while its word is running.
+
+add-u:  ( a b -- c )                 [ + ] ;
+add-tf: ( a: fixnum b: fixnum -- c ) [ + ] ;
+sub-tF: ( a: float b: float -- c )   [ - ] ;
+lt-one: ( a -- c )                   [ 2 < ] ;
+abs-u:  ( a -- c )                   [ abs ] ;
+abs-tF: ( a: float -- c )            [ abs ] ;
+
+mul-around: ( -- a b ) [ 3 4 * "*: method{ fixnum fixnum } [ 2drop \"mul fixnum fixnum arm\" ] ;" eval-string 3 4 * ] ;
+
+7 2 add-u inspect print-line
+7.5 2.5 add-u inspect print-line
+7 2 add-tf inspect print-line
+7.5 2.5 sub-tF inspect print-line
+7 lt-one inspect print-line
+-7 abs-u inspect print-line
+-7.5 abs-u inspect print-line
+-7.5 abs-tF inspect print-line
+
+"+: method{ fixnum fixnum } [ 2drop \"add fixnum fixnum arm\" ] ;" eval-string
+"-: method{ float float } [ 2drop \"sub float float arm\" ] ;" eval-string
+"<: method{ fixnum fixnum } [ 2drop \"lt fixnum fixnum arm\" ] ;" eval-string
+"abs: method{ float } [ drop \"abs float arm\" ] ;" eval-string
+
+7 2 add-u print-line
+7.5 2.5 add-u inspect print-line
+7 2 add-tf print-line
+7.5 2.5 sub-tF print-line
+7 lt-one print-line
+7.5 lt-one inspect print-line
+-7 abs-u inspect print-line
+-7.5 abs-u print-line
+-7.5 abs-tF print-line
+
+mul-around print-line inspect print-line

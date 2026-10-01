@@ -21,6 +21,7 @@ const dictionary_mod = @import("dictionary.zig");
 const WordDefinition = dictionary_mod.WordDefinition;
 
 const markers_mod = @import("primitives/markers.zig");
+const builtin_override = @import("builtin_override.zig");
 const ArtifactClass = markers_mod.ArtifactClass;
 
 const primitives_mod = @import("primitives.zig");
@@ -1872,6 +1873,12 @@ fn collectCallWords(
                     };
                     return error.DisallowedNativeInterpreterDependency;
                 }
+                // A descriptor built at runtime cannot be read here, so its arm could replace any
+                // builtin pair.
+                if (std.mem.eql(u8, name, "define-method") and isRuntimeDefineMethodCaller(ctx, caller, vis)) {
+                    builtin_override.set(allOverrideBits());
+                }
+
                 const callee = ctx.lookupWordFiltered(name, vis);
                 const callee_module: ?*const value_mod.Module = if (callee) |w| w.source_module else null;
                 const identity = WordIdentity{ .module = callee_module, .name = name };
@@ -1959,8 +1966,11 @@ fn collectCallWords(
                     // quotations otherwise call ordinary prelude combinators the runtime already
                     // provides. Skipped for strict interpreter-free builds, whose must-compile
                     // invariant handles buried quotations through the keyed promoting passes instead.
-                    .array, .hash, .vector, .mutable_map, .value_map, .mutable_value_map, .struct_instance => if (artifact_class != .interpreter_free_aot)
-                        try seedCompositeQuotationCallees(ctx, val, caller, vis, true, worklist, seen, pending_callee_bindings, allocator),
+                    .array, .hash, .vector, .mutable_map, .value_map, .mutable_value_map, .struct_instance => {
+                        if (val == .mutable_map) markRuntimeMethodPairs(ctx, instrs, idx, val.mutable_map, vis);
+                        if (artifact_class != .interpreter_free_aot)
+                            try seedCompositeQuotationCallees(ctx, val, caller, vis, true, worklist, seen, pending_callee_bindings, allocator);
+                    },
                     else => {},
                 }
             },
@@ -2542,18 +2552,106 @@ fn detectBuriedCallees(
 }
 
 /// The native generics whose dispatch table compiled code resolves against directly, through the
-/// polymorphic arithmetic and comparison cold arms.
+/// polymorphic arithmetic and comparison cold arms and the `abs` call.
 ///
 /// Every other native generic dispatches from inside its own native body, so widening this set is
 /// a separate question from the cold arm's reach. Widening it was measured: `#len` and `>iterator`
 /// then drag method bodies the freeze cannot compile into a strict build, which the fail-clean
 /// check rejects.
 fn isColdArmDispatchOperator(name: []const u8) bool {
+    if (std.mem.eql(u8, name, "abs")) return true;
     if (name.len != 1) return false;
     return switch (name[0]) {
         '+', '-', '*', '/', '%', '=', '<', '>' => true,
         else => false,
     };
+}
+
+/// Mark the `builtin_override` pairs that a method definition in a reachable body can replace.
+///
+/// The freeze runs top-level definitions, so their arms have already set their bits. A definition
+/// inside a word body runs only when that word does, after the freeze. A build with no runtime
+/// guard would then compile its sites inline against a mask that never saw the arm. Marking the
+/// pairs here sends those sites to a dispatching call, which answers correctly before the arm
+/// registers and after it.
+///
+/// `instrs[idx]` pushes `desc`, the descriptor `method{` builds. The symbol pushed just before it
+/// names the generic. A descriptor whose generic or types cannot be read statically marks every
+/// pair of every operator, which costs speed only.
+fn markRuntimeMethodPairs(ctx: *const Context, instrs: []const Instruction, idx: usize, desc: *const value_mod.MutableMap, vis: ?ModuleDepsVisibility) void {
+    const define = desc.map.get("define") orelse return;
+    const define_body = switch (define) {
+        .quotation => |q| q.instructions,
+        else => return,
+    };
+    if (!callsWord(define_body, "define-method")) return;
+
+    builtin_override.set(runtimeMethodBits(ctx, instrs, idx, desc, vis) orelse allOverrideBits());
+}
+
+/// The bits a `method{` descriptor's arm can replace, or null when the generic or a type cannot be
+/// read from the literals.
+fn runtimeMethodBits(ctx: *const Context, instrs: []const Instruction, idx: usize, desc: *const value_mod.MutableMap, vis: ?ModuleDepsVisibility) ?u64 {
+    if (idx == 0) return null;
+    const name = switch (instrs[idx - 1].op) {
+        .push_literal => |v| switch (v) {
+            .symbol => |s| s.bytes,
+            else => return null,
+        },
+        else => return null,
+    };
+
+    const word = ctx.lookupWordFiltered(name, vis) orelse return null;
+    if (word.action != .native) return 0;
+
+    const types = switch (desc.map.get("types") orelse return null) {
+        .array => |arr| arr.items,
+        else => return null,
+    };
+    if (types.len == 0 or types.len > 2) return 0;
+
+    const type_a = methodTypeDescriptor(ctx, types[0]) orelse return null;
+    const type_b = if (types.len == 2)
+        methodTypeDescriptor(ctx, types[1]) orelse return null
+    else
+        ctx.getDispatchUnarySentinel().descriptor.?;
+
+    return ctx.builtinOverrideBits(.{ .dispatch_id = word.dispatch_id, .type_a = type_a, .type_b = type_b });
+}
+
+/// The descriptor a `method{` type position names, read the way `define-method` reads it.
+fn methodTypeDescriptor(ctx: *const Context, val: Value) ?*const value_mod.TypeDescriptor {
+    return switch (val) {
+        .type_val => |tv| tv.descriptor,
+        .marker => |mk| if (markers_mod.isAnyMarker(mk)) ctx.getDispatchAnySentinel().descriptor else null,
+        .string => |s| if (ctx.lookupTypeValueByName(s.bytes)) |tv| tv.descriptor else null,
+        else => null,
+    };
+}
+
+fn allOverrideBits() u64 {
+    var bits = builtin_override.absBits();
+    for (std.enums.values(builtin_override.Op)) |op| bits |= builtin_override.opBits(op);
+    return bits;
+}
+
+fn callsWord(instrs: []const Instruction, name: []const u8) bool {
+    for (instrs) |instr| {
+        const target = instr.op.callTargetName() orelse continue;
+        if (std.mem.eql(u8, target, name)) return true;
+    }
+    return false;
+}
+
+/// Whether a reachable body's direct `define-method` call can register an arm after the freeze.
+///
+/// A parse-time word's body runs only while parsing, so its call never reaches a compiled program.
+fn isRuntimeDefineMethodCaller(ctx: *const Context, caller: WordIdentity, vis: ?ModuleDepsVisibility) bool {
+    const word = ctx.lookupWordFiltered(caller.name, vis) orelse return true;
+    for (word.markers) |mk| {
+        if (markers_mod.isParseTimeMarker(mk)) return false;
+    }
+    return true;
 }
 
 /// The subset of the cold-arm operators whose callback derives an answer from `cmp` on a direct

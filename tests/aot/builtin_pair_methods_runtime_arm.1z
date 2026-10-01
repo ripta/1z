@@ -1,0 +1,25 @@
+\ A method arm defined inside a word body registers when that word runs, after the freeze. The
+\ freeze marks every builtin pair such a definition can replace, so a site compiled in a build with
+\ no runtime guard dispatches, and reaches the arm once it registers.
+
+kind: generic ( x -- s ) [ drop "other" ] ;
+kind: method{ fixnum } [ drop "fixnum" ] ;
+kind: method{ float } [ drop "float" ] ;
+kind: method{ string } [ drop "string" ] ;
+
+register-arm: ( -- ) [ +: method{ fixnum fixnum } [ 2drop "add fixnum fixnum arm" ] ; ] ;
+
+add:     ( a b -- c )                 [ + ] ;
+add-lit: ( -- c )                     [ 7 2 + ] ;
+add-tf:  ( a: fixnum b: fixnum -- c ) [ + ] ;
+
+7 2 add kind print-line
+add-lit kind print-line
+7 2 add-tf kind print-line
+
+register-arm
+
+7 2 add print-line
+add-lit print-line
+7 2 add-tf print-line
+7.5 2.5 add kind print-line

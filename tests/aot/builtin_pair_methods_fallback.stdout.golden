@@ -1,0 +1,132 @@
+add fixnum fixnum arm
+add float float arm
+add fixnum float arm
+float
+value ok
+add fixnum fixnum arm
+add float float arm
+add fixnum float arm
+float
+value ok
+add fixnum fixnum arm
+add float float arm
+add fixnum fixnum arm
+float
+value ok
+sub fixnum fixnum arm
+sub float float arm
+sub fixnum float arm
+float
+value ok
+sub fixnum fixnum arm
+sub float float arm
+sub fixnum float arm
+float
+value ok
+sub fixnum fixnum arm
+sub float float arm
+sub fixnum fixnum arm
+float
+value ok
+mul fixnum fixnum arm
+mul float float arm
+mul fixnum float arm
+float
+value ok
+mul fixnum fixnum arm
+mul float float arm
+mul fixnum float arm
+float
+value ok
+mul fixnum fixnum arm
+mul float float arm
+mul fixnum fixnum arm
+float
+value ok
+div fixnum fixnum arm
+div float float arm
+div fixnum float arm
+float
+value ok
+div fixnum fixnum arm
+div float float arm
+div fixnum float arm
+float
+value ok
+div fixnum fixnum arm
+div float float arm
+div fixnum fixnum arm
+float
+value ok
+mod fixnum fixnum arm
+mod float float arm
+mod fixnum float arm
+float
+value ok
+mod fixnum fixnum arm
+mod float float arm
+mod fixnum float arm
+float
+value ok
+mod fixnum fixnum arm
+mod float float arm
+mod fixnum fixnum arm
+float
+value ok
+eq fixnum fixnum arm
+boolean
+f
+eq fixnum float arm
+boolean
+f
+eq fixnum fixnum arm
+boolean
+f
+eq fixnum float arm
+boolean
+f
+eq fixnum fixnum arm
+boolean
+f
+eq fixnum fixnum arm
+boolean
+f
+lt fixnum fixnum arm
+lt float float arm
+lt fixnum float arm
+boolean
+f
+lt fixnum fixnum arm
+lt float float arm
+lt fixnum float arm
+boolean
+f
+lt fixnum fixnum arm
+lt float float arm
+lt fixnum fixnum arm
+boolean
+f
+gt fixnum fixnum arm
+gt float float arm
+gt fixnum float arm
+boolean
+t
+gt fixnum fixnum arm
+gt float float arm
+gt fixnum float arm
+boolean
+t
+gt fixnum fixnum arm
+gt float float arm
+gt fixnum fixnum arm
+boolean
+t
+abs fixnum arm
+float
+value ok
+abs fixnum arm
+float
+value ok
+abs fixnum arm
+float
+value ok

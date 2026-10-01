@@ -1,0 +1,205 @@
+\ `builtin_pair_methods.1z` under `--interpreter-fallback=false --lock-interpreter-setting`, where
+\ a replaced pair reaches its arm through the frozen dispatch table rather than the native.
+\
+\ The lock rejects a comparison of two untyped operands, which has always called the whole
+\ native, so this copy drops those sites and checks a builtin answer through typed operands.
+
+kind: generic ( x -- s ) [ drop "other" ] ;
+kind: method{ fixnum } [ drop "fixnum" ] ;
+kind: method{ float } [ drop "float" ] ;
+kind: method{ boolean } [ drop "boolean" ] ;
+
+same-float:  ( x: float expected: float -- ) [ = [ "value ok" ] [ "value wrong" ] if print-line ] ;
+show-number: ( x expected -- )               [ over kind print-line same-float ] ;
+show-flag:   ( x -- )                        [ dup kind print-line [ "t" ] [ "f" ] if print-line ] ;
+
++:   method{ fixnum fixnum } [ 2drop "add fixnum fixnum arm" ] ;
++:   method{ float float } [ 2drop "add float float arm" ] ;
++:   method{ fixnum float } [ 2drop "add fixnum float arm" ] ;
+-:   method{ fixnum fixnum } [ 2drop "sub fixnum fixnum arm" ] ;
+-:   method{ float float } [ 2drop "sub float float arm" ] ;
+-:   method{ fixnum float } [ 2drop "sub fixnum float arm" ] ;
+*:   method{ fixnum fixnum } [ 2drop "mul fixnum fixnum arm" ] ;
+*:   method{ float float } [ 2drop "mul float float arm" ] ;
+*:   method{ fixnum float } [ 2drop "mul fixnum float arm" ] ;
+/:   method{ fixnum fixnum } [ 2drop "div fixnum fixnum arm" ] ;
+/:   method{ float float } [ 2drop "div float float arm" ] ;
+/:   method{ fixnum float } [ 2drop "div fixnum float arm" ] ;
+%:   method{ fixnum fixnum } [ 2drop "mod fixnum fixnum arm" ] ;
+%:   method{ float float } [ 2drop "mod float float arm" ] ;
+%:   method{ fixnum float } [ 2drop "mod fixnum float arm" ] ;
+=:   method{ fixnum fixnum } [ 2drop "eq fixnum fixnum arm" ] ;
+=:   method{ fixnum float } [ 2drop "eq fixnum float arm" ] ;
+<:   method{ fixnum fixnum } [ 2drop "lt fixnum fixnum arm" ] ;
+<:   method{ float float } [ 2drop "lt float float arm" ] ;
+<:   method{ fixnum float } [ 2drop "lt fixnum float arm" ] ;
+>:   method{ fixnum fixnum } [ 2drop "gt fixnum fixnum arm" ] ;
+>:   method{ float float } [ 2drop "gt float float arm" ] ;
+>:   method{ fixnum float } [ 2drop "gt fixnum float arm" ] ;
+abs: method{ fixnum } [ drop "abs fixnum arm" ] ;
+
+add-u:    ( a b -- c )                 [ + ] ;
+add-lit:  ( -- c )                     [ 7 2 + ] ;
+add-flit: ( -- c )                     [ 7.5 2.5 + ] ;
+add-mlit: ( -- c )                     [ 7 2.5 + ] ;
+add-rlit: ( -- c )                     [ 7.5 2 + ] ;
+add-tf:   ( a: fixnum b: fixnum -- c ) [ + ] ;
+add-tF:   ( a: float b: float -- c )   [ + ] ;
+add-one:  ( a -- c )                   [ 2 + ] ;
+sub-u:    ( a b -- c )                 [ - ] ;
+sub-lit:  ( -- c )                     [ 7 2 - ] ;
+sub-flit: ( -- c )                     [ 7.5 2.5 - ] ;
+sub-mlit: ( -- c )                     [ 7 2.5 - ] ;
+sub-rlit: ( -- c )                     [ 7.5 2 - ] ;
+sub-tf:   ( a: fixnum b: fixnum -- c ) [ - ] ;
+sub-tF:   ( a: float b: float -- c )   [ - ] ;
+sub-one:  ( a -- c )                   [ 2 - ] ;
+mul-u:    ( a b -- c )                 [ * ] ;
+mul-lit:  ( -- c )                     [ 7 2 * ] ;
+mul-flit: ( -- c )                     [ 7.5 2.5 * ] ;
+mul-mlit: ( -- c )                     [ 7 2.5 * ] ;
+mul-rlit: ( -- c )                     [ 7.5 2 * ] ;
+mul-tf:   ( a: fixnum b: fixnum -- c ) [ * ] ;
+mul-tF:   ( a: float b: float -- c )   [ * ] ;
+mul-one:  ( a -- c )                   [ 2 * ] ;
+div-u:    ( a b -- c )                 [ / ] ;
+div-lit:  ( -- c )                     [ 7 2 / ] ;
+div-flit: ( -- c )                     [ 7.5 2.5 / ] ;
+div-mlit: ( -- c )                     [ 7 2.5 / ] ;
+div-rlit: ( -- c )                     [ 7.5 2 / ] ;
+div-tf:   ( a: fixnum b: fixnum -- c ) [ / ] ;
+div-tF:   ( a: float b: float -- c )   [ / ] ;
+div-one:  ( a -- c )                   [ 2 / ] ;
+mod-u:    ( a b -- c )                 [ % ] ;
+mod-lit:  ( -- c )                     [ 7 2 % ] ;
+mod-flit: ( -- c )                     [ 7.5 2.5 % ] ;
+mod-mlit: ( -- c )                     [ 7 2.5 % ] ;
+mod-rlit: ( -- c )                     [ 7.5 2 % ] ;
+mod-tf:   ( a: fixnum b: fixnum -- c ) [ % ] ;
+mod-tF:   ( a: float b: float -- c )   [ % ] ;
+mod-one:  ( a -- c )                   [ 2 % ] ;
+eq-lit:   ( -- c )                     [ 7 2 = ] ;
+eq-flit:  ( -- c )                     [ 7.5 2.5 = ] ;
+eq-mlit:  ( -- c )                     [ 7 2.5 = ] ;
+eq-rlit:  ( -- c )                     [ 7.5 2 = ] ;
+eq-tf:    ( a: fixnum b: fixnum -- c ) [ = ] ;
+eq-tF:    ( a: float b: float -- c )   [ = ] ;
+eq-one:   ( a -- c )                   [ 2 = ] ;
+lt-lit:   ( -- c )                     [ 7 2 < ] ;
+lt-flit:  ( -- c )                     [ 7.5 2.5 < ] ;
+lt-mlit:  ( -- c )                     [ 7 2.5 < ] ;
+lt-rlit:  ( -- c )                     [ 7.5 2 < ] ;
+lt-tf:    ( a: fixnum b: fixnum -- c ) [ < ] ;
+lt-tF:    ( a: float b: float -- c )   [ < ] ;
+lt-one:   ( a -- c )                   [ 2 < ] ;
+gt-lit:   ( -- c )                     [ 7 2 > ] ;
+gt-flit:  ( -- c )                     [ 7.5 2.5 > ] ;
+gt-mlit:  ( -- c )                     [ 7 2.5 > ] ;
+gt-rlit:  ( -- c )                     [ 7.5 2 > ] ;
+gt-tf:    ( a: fixnum b: fixnum -- c ) [ > ] ;
+gt-tF:    ( a: float b: float -- c )   [ > ] ;
+gt-one:   ( a -- c )                   [ 2 > ] ;
+abs-u:    ( a -- c )                   [ abs ] ;
+abs-lit:  ( -- c )                     [ -7 abs ] ;
+abs-flit: ( -- c )                     [ -7.5 abs ] ;
+abs-tf:   ( a: fixnum -- c )           [ abs ] ;
+abs-tF:   ( a: float -- c )            [ abs ] ;
+
+7 2 add-u print-line
+7.5 2.5 add-u print-line
+7 2.5 add-u print-line
+7.5 2 add-u 9.5 show-number
+add-lit print-line
+add-flit print-line
+add-mlit print-line
+add-rlit 9.5 show-number
+7 2 add-tf print-line
+7.5 2.5 add-tF print-line
+7 add-one print-line
+7.5 add-one 9.5 show-number
+
+7 2 sub-u print-line
+7.5 2.5 sub-u print-line
+7 2.5 sub-u print-line
+7.5 2 sub-u 5.5 show-number
+sub-lit print-line
+sub-flit print-line
+sub-mlit print-line
+sub-rlit 5.5 show-number
+7 2 sub-tf print-line
+7.5 2.5 sub-tF print-line
+7 sub-one print-line
+7.5 sub-one 5.5 show-number
+
+7 2 mul-u print-line
+7.5 2.5 mul-u print-line
+7 2.5 mul-u print-line
+7.5 2 mul-u 15.0 show-number
+mul-lit print-line
+mul-flit print-line
+mul-mlit print-line
+mul-rlit 15.0 show-number
+7 2 mul-tf print-line
+7.5 2.5 mul-tF print-line
+7 mul-one print-line
+7.5 mul-one 15.0 show-number
+
+7 2 div-u print-line
+7.5 2.5 div-u print-line
+7 2.5 div-u print-line
+7.5 2 div-u 3.75 show-number
+div-lit print-line
+div-flit print-line
+div-mlit print-line
+div-rlit 3.75 show-number
+7 2 div-tf print-line
+7.5 2.5 div-tF print-line
+7 div-one print-line
+7.5 div-one 3.75 show-number
+
+7 2 mod-u print-line
+7.5 2.5 mod-u print-line
+7 2.5 mod-u print-line
+7.5 2 mod-u 1.5 show-number
+mod-lit print-line
+mod-flit print-line
+mod-mlit print-line
+mod-rlit 1.5 show-number
+7 2 mod-tf print-line
+7.5 2.5 mod-tF print-line
+7 mod-one print-line
+7.5 mod-one 1.5 show-number
+
+eq-lit print-line
+eq-flit show-flag
+eq-mlit print-line
+eq-rlit show-flag
+7 2 eq-tf print-line
+7.5 2.5 eq-tF show-flag
+7 eq-one print-line
+7.5 eq-one show-flag
+
+lt-lit print-line
+lt-flit print-line
+lt-mlit print-line
+lt-rlit show-flag
+7 2 lt-tf print-line
+7.5 2.5 lt-tF print-line
+7 lt-one print-line
+7.5 lt-one show-flag
+
+gt-lit print-line
+gt-flit print-line
+gt-mlit print-line
+gt-rlit show-flag
+7 2 gt-tf print-line
+7.5 2.5 gt-tF print-line
+7 gt-one print-line
+7.5 gt-one show-flag
+
+-7 abs-u print-line
+-7.5 abs-u 7.5 show-number
+abs-lit print-line
+abs-flit 7.5 show-number
+-7 abs-tf print-line
+-7.5 abs-tF 7.5 show-number

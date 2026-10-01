@@ -1,0 +1,19 @@
+9
+10.0
+9
+5.0
+f
+7
+7.5
+7.5
+add fixnum fixnum arm
+10.0
+add fixnum fixnum arm
+sub float float arm
+lt fixnum fixnum arm
+f
+7
+abs float arm
+abs float arm
+mul fixnum fixnum arm
+12
