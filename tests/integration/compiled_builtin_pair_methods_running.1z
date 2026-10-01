@@ -1,0 +1,60 @@
+\ A method arm registered while a compiled word is running replaces a builtin pair for the rest of
+\ that same activation, since each guarded site reads the override mask on every execution.
+\
+\ Each word computes its operation once before a helper registers an arm and once after, and
+\ leaves ( after before ).
+
+use "testing" ;
+
+register-add-arm: ( -- ) [ "+: method{ fixnum fixnum } [ 2drop 42 ] ;" eval-string ] ;
+register-sub-arm: ( -- ) [ "-: method{ float float } [ 2drop 43 ] ;" eval-string ] ;
+register-mul-arm: ( -- ) [ "*: method{ fixnum float } [ 2drop 44 ] ;" eval-string ] ;
+register-lt-arm:  ( -- ) [ "<: method{ fixnum fixnum } [ 2drop 45 ] ;" eval-string ] ;
+register-abs-arm: ( -- ) [ "abs: method{ float } [ drop 46 ] ;" eval-string ] ;
+
+add-around: ( a b -- after before ) [ 2dup + [ register-add-arm + ] dip ] ;
+sub-around: ( a b -- after before ) [ 2dup - [ register-sub-arm - ] dip ] ;
+mul-around: ( a b -- after before ) [ 2dup * [ register-mul-arm * ] dip ] ;
+lt-around:  ( a b -- after before ) [ 2dup < [ register-lt-arm < ] dip ] ;
+abs-around: ( a -- after before )   [ dup abs [ register-abs-arm abs ] dip ] ;
+float-sum:  ( a b -- c )            [ + ] ;
+
+add-around: compile!
+sub-around: compile!
+mul-around: compile!
+lt-around: compile!
+abs-around: compile!
+float-sum: compile!
+
+t add-around: >word-info compiled?>> "add-around is compiled" assert=
+t sub-around: >word-info compiled?>> "sub-around is compiled" assert=
+t mul-around: >word-info compiled?>> "mul-around is compiled" assert=
+t lt-around: >word-info compiled?>> "lt-around is compiled" assert=
+t abs-around: >word-info compiled?>> "abs-around is compiled" assert=
+t float-sum: >word-info compiled?>> "float-sum is compiled" assert=
+
+"fixnum pair" test-section
+7 2 add-around
+9 "+ before the registration ran the builtin" assert=
+42 "+ after the registration runs the arm" assert=
+7.5 2.5 float-sum 10.0 "a fixnum arm leaves the float pair on the builtin" assert=
+
+"float pair" test-section
+7.5 2.5 sub-around
+5.0 "- before the registration ran the builtin" assert=
+43 "- after the registration runs the arm" assert=
+
+"mixed pair" test-section
+7 2.5 mul-around
+17.5 "* before the registration ran the builtin" assert=
+44 "* after the registration runs the arm" assert=
+
+"comparison" test-section
+7 2 lt-around
+f "< before the registration ran the builtin" assert=
+45 "< after the registration runs the arm" assert=
+
+"abs" test-section
+-7.5 abs-around
+7.5 "abs before the registration ran the builtin" assert=
+46 "abs after the registration runs the arm" assert=

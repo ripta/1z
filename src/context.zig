@@ -18,6 +18,7 @@ const dispatch_helpers = @import("primitives/dispatch_helpers.zig");
 const protocols_mod = @import("primitives/protocols.zig");
 
 const dispatch_mod = @import("dispatch.zig");
+const builtin_override = @import("builtin_override.zig");
 const DispatchEntry = dispatch_mod.DispatchEntry;
 const DispatchKey = dispatch_mod.DispatchKey;
 const DispatchFrame = dispatch_mod.DispatchFrame;
@@ -6155,6 +6156,74 @@ pub const Context = struct {
         return false;
     }
 
+    /// The `builtin_override` bits a method arm under `key` sets: one per inlined fixnum or float
+    /// pair the key covers on an operator compiled code computes inline.
+    ///
+    /// An `any` operand covers both types. A wildcard in a dispatch frame, or in a task's own
+    /// table, is looked up ahead of the base table the builtin entry sits in, so it replaces the
+    /// builtin pair. A base-table wildcard does not, and its bits are false positives that cost
+    /// only speed.
+    pub fn builtinOverrideBits(self: *const Context, key: DispatchKey) u64 {
+        const op: ?builtin_override.Op = blk: {
+            inline for (.{
+                .{ dispatch_mod.NativeDispatchWord.add, builtin_override.Op.add },
+                .{ dispatch_mod.NativeDispatchWord.sub, builtin_override.Op.sub },
+                .{ dispatch_mod.NativeDispatchWord.mul, builtin_override.Op.mul },
+                .{ dispatch_mod.NativeDispatchWord.div, builtin_override.Op.div },
+                .{ dispatch_mod.NativeDispatchWord.mod, builtin_override.Op.mod },
+                .{ dispatch_mod.NativeDispatchWord.eq, builtin_override.Op.eq },
+                .{ dispatch_mod.NativeDispatchWord.lt, builtin_override.Op.lt },
+                .{ dispatch_mod.NativeDispatchWord.gt, builtin_override.Op.gt },
+            }) |pair| {
+                if (self.nativeDispatchId(pair[0]) == key.dispatch_id) break :blk pair[1];
+            }
+            break :blk null;
+        };
+        const is_abs = op == null and self.nativeDispatchId(.abs) == key.dispatch_id;
+        if (op == null and !is_abs) return 0;
+
+        const fixnum_tv = self.lookupBuiltinTypeValueByTag(.fixnum) orelse return 0;
+        const float_tv = self.lookupBuiltinTypeValueByTag(.float) orelse return 0;
+        const fixnum_desc = fixnum_tv.descriptor orelse return 0;
+        const float_desc = float_tv.descriptor orelse return 0;
+        const any_desc = self.getDispatchAnySentinel().descriptor.?;
+
+        const a = OperandCover.of(key.type_a, fixnum_desc, float_desc, any_desc);
+
+        if (is_abs) {
+            if (key.type_b != self.getDispatchUnarySentinel().descriptor.?) return 0;
+            var bits: u64 = 0;
+            if (a.fixnum) bits |= @as(u64, 1) << builtin_override.absBit(false);
+            if (a.float) bits |= @as(u64, 1) << builtin_override.absBit(true);
+            return bits;
+        }
+
+        const b = OperandCover.of(key.type_b, fixnum_desc, float_desc, any_desc);
+        var bits: u64 = 0;
+        for ([_]bool{ false, true }) |a_is_float| {
+            if (!a.covers(a_is_float)) continue;
+            for ([_]bool{ false, true }) |b_is_float| {
+                if (!b.covers(b_is_float)) continue;
+                bits |= @as(u64, 1) << builtin_override.binaryBit(op.?, builtin_override.Pair.of(a_is_float, b_is_float));
+            }
+        }
+        return bits;
+    }
+
+    const OperandCover = struct {
+        fixnum: bool,
+        float: bool,
+
+        fn of(desc: *const value_mod.TypeDescriptor, fixnum_desc: *const value_mod.TypeDescriptor, float_desc: *const value_mod.TypeDescriptor, any_desc: *const value_mod.TypeDescriptor) OperandCover {
+            const any = desc == any_desc;
+            return .{ .fixnum = any or desc == fixnum_desc, .float = any or desc == float_desc };
+        }
+
+        fn covers(self: OperandCover, is_float: bool) bool {
+            return if (is_float) self.float else self.fixnum;
+        }
+    };
+
     /// Record every identity-carrying native's own dispatch id.
     ///
     /// Called once from `init`, after the primitives are in the dictionary and before any frame
@@ -7151,6 +7220,8 @@ pub const Context = struct {
                 return err;
             };
         }
+        builtin_override.set(target.builtinOverrideBits(key));
+
         // Any new method binding may flip a satisfies-check answer; clear
         // coarsely. (Reached only on a successful register.) A redirected
         // register is observable through the executing context's ancestor
@@ -10377,6 +10448,79 @@ test "init and deinit" {
     defer ctx.deinit();
 
     try std.testing.expectEqual(@as(usize, 0), ctx.stack.depth());
+}
+
+fn overrideBit(bit: u6) u64 {
+    return @as(u64, 1) << bit;
+}
+
+test "builtinOverrideBits maps a method key to the inlined pairs it replaces" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const fixnum = ctx.lookupBuiltinTypeValue("fixnum").?.descriptor.?;
+    const float = ctx.lookupBuiltinTypeValue("float").?.descriptor.?;
+    const string = ctx.lookupBuiltinTypeValue("string").?.descriptor.?;
+    const any = ctx.getDispatchAnySentinel().descriptor.?;
+    const unary = ctx.getDispatchUnarySentinel().descriptor.?;
+    const add = ctx.nativeDispatchId(.add);
+    const lt = ctx.nativeDispatchId(.lt);
+    const abs = ctx.nativeDispatchId(.abs);
+
+    try std.testing.expectEqual(
+        overrideBit(builtin_override.binaryBit(.add, .fixnum_fixnum)),
+        ctx.builtinOverrideBits(.{ .dispatch_id = add, .type_a = fixnum, .type_b = fixnum }),
+    );
+    try std.testing.expectEqual(
+        overrideBit(builtin_override.binaryBit(.lt, .float_fixnum)),
+        ctx.builtinOverrideBits(.{ .dispatch_id = lt, .type_a = float, .type_b = fixnum }),
+    );
+    try std.testing.expectEqual(
+        overrideBit(builtin_override.binaryBit(.add, .fixnum_fixnum)) | overrideBit(builtin_override.binaryBit(.add, .fixnum_float)),
+        ctx.builtinOverrideBits(.{ .dispatch_id = add, .type_a = fixnum, .type_b = any }),
+    );
+
+    const all_add_pairs = overrideBit(builtin_override.binaryBit(.add, .fixnum_fixnum)) |
+        overrideBit(builtin_override.binaryBit(.add, .fixnum_float)) |
+        overrideBit(builtin_override.binaryBit(.add, .float_fixnum)) |
+        overrideBit(builtin_override.binaryBit(.add, .float_float));
+    try std.testing.expectEqual(all_add_pairs, ctx.builtinOverrideBits(.{ .dispatch_id = add, .type_a = any, .type_b = any }));
+
+    try std.testing.expectEqual(
+        overrideBit(builtin_override.absBit(true)),
+        ctx.builtinOverrideBits(.{ .dispatch_id = abs, .type_a = float, .type_b = unary }),
+    );
+
+    try std.testing.expectEqual(@as(u64, 0), ctx.builtinOverrideBits(.{ .dispatch_id = add, .type_a = string, .type_b = string }));
+    try std.testing.expectEqual(@as(u64, 0), ctx.builtinOverrideBits(.{ .dispatch_id = add, .type_a = fixnum, .type_b = string }));
+    try std.testing.expectEqual(@as(u64, 0), ctx.builtinOverrideBits(.{ .dispatch_id = ctx.nativeDispatchId(.bitand), .type_a = fixnum, .type_b = fixnum }));
+    try std.testing.expectEqual(@as(u64, 0), ctx.builtinOverrideBits(.{ .dispatch_id = abs, .type_a = float, .type_b = float }));
+}
+
+test "registering a method arm on a builtin pair sets its override bit, in the base table and in a frame" {
+    builtin_override.resetForTest();
+    defer builtin_override.resetForTest();
+
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    // Startup registers the builtin entries without going through a method registration.
+    try std.testing.expectEqual(@as(u64, 0), builtin_override.load());
+
+    const noop = struct {
+        fn f(_: *Context) anyerror!void {}
+    }.f;
+    const fixnum = ctx.lookupBuiltinTypeValue("fixnum").?.descriptor.?;
+    const float = ctx.lookupBuiltinTypeValue("float").?.descriptor.?;
+
+    try ctx.registerDispatch(.{ .dispatch_id = ctx.nativeDispatchId(.div), .type_a = fixnum, .type_b = fixnum }, .{ .body = .{ .native_fn = noop } }, true);
+    try std.testing.expect(builtin_override.isSet(builtin_override.binaryBit(.div, .fixnum_fixnum)));
+    try std.testing.expect(!builtin_override.isSet(builtin_override.binaryBit(.div, .float_float)));
+
+    try ctx.pushDispatchFrame();
+    defer ctx.popDispatchFrame();
+    try ctx.registerDispatch(.{ .dispatch_id = ctx.nativeDispatchId(.mul), .type_a = float, .type_b = float }, .{ .body = .{ .native_fn = noop } }, true);
+    try std.testing.expect(builtin_override.isSet(builtin_override.binaryBit(.mul, .float_float)));
 }
 
 test "defineBinding keys every scope with the one interned copy of a name" {

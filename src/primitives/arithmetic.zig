@@ -869,7 +869,7 @@ fn nativeFloatParts(ctx: *Context) anyerror!void {
 }
 
 /// abs ( n -- n ) - Absolute value for fixnums, bignums, and floats
-fn nativeAbs(ctx: *Context) anyerror!void {
+pub fn nativeAbs(ctx: *Context) anyerror!void {
     if (try dispatch_helpers.tryDispatchUnary(ctx, ctx.nativeDispatchId(.abs))) return;
     const val = try ctx.stack.pop();
     defer container_backing.releaseValue(val);

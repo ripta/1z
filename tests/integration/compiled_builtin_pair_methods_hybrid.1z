@@ -1,0 +1,16 @@
+\ A word the hybrid tier compiled after warming honors a method arm registered afterward.
+
+use "testing" ;
+
+warm-sum: ( a b -- c ) [ + ] ;
+300 [ 7 2 warm-sum drop ] times
+t warm-sum: >word-info compiled?>> "warm-sum is compiled after warming" assert=
+7 2 warm-sum 9 "the warmed word computes the builtin pair" assert=
+
++: method{ fixnum fixnum } [ 2drop 42 ] ;
+7 2 warm-sum 42 "the warmed word runs an arm registered after it compiled" assert=
+7.5 2.5 warm-sum 10.0 "the float pair stays on the builtin" assert=
+
++: method{ float float } [ 2drop 43 ] ;
+7.5 2.5 warm-sum 43 "the warmed word runs a float arm registered after it compiled" assert=
+7 2.5 warm-sum 9.5 "the mixed pair stays on the builtin" assert=

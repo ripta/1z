@@ -1,0 +1,66 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: add-around is compiled
+Stack: [ ]
+PASS: sub-around is compiled
+Stack: [ ]
+PASS: mul-around is compiled
+Stack: [ ]
+PASS: lt-around is compiled
+Stack: [ ]
+PASS: abs-around is compiled
+Stack: [ ]
+PASS: float-sum is compiled
+Stack: [ ]
+=== fixnum pair ===
+Stack: [ ]
+Stack: [ 42 9 ]
+PASS: + before the registration ran the builtin
+Stack: [ 42 ]
+PASS: + after the registration runs the arm
+Stack: [ ]
+PASS: a fixnum arm leaves the float pair on the builtin
+Stack: [ ]
+=== float pair ===
+Stack: [ ]
+Stack: [ 43 5.0 ]
+PASS: - before the registration ran the builtin
+Stack: [ 43 ]
+PASS: - after the registration runs the arm
+Stack: [ ]
+=== mixed pair ===
+Stack: [ ]
+Stack: [ 44 17.5 ]
+PASS: * before the registration ran the builtin
+Stack: [ 44 ]
+PASS: * after the registration runs the arm
+Stack: [ ]
+=== comparison ===
+Stack: [ ]
+Stack: [ 45 f ]
+PASS: < before the registration ran the builtin
+Stack: [ 45 ]
+PASS: < after the registration runs the arm
+Stack: [ ]
+=== abs ===
+Stack: [ ]
+Stack: [ 46 7.5 ]
+PASS: abs before the registration ran the builtin
+Stack: [ 46 ]
+PASS: abs after the registration runs the arm
+Stack: [ ]

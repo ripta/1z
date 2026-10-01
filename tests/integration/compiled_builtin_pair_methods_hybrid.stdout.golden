@@ -1,0 +1,16 @@
+Stack: [ ]
+Stack: [ ]
+PASS: warm-sum is compiled after warming
+Stack: [ ]
+PASS: the warmed word computes the builtin pair
+Stack: [ ]
+Stack: [ ]
+PASS: the warmed word runs an arm registered after it compiled
+Stack: [ ]
+PASS: the float pair stays on the builtin
+Stack: [ ]
+Stack: [ ]
+PASS: the warmed word runs a float arm registered after it compiled
+Stack: [ ]
+PASS: the mixed pair stays on the builtin
+Stack: [ ]

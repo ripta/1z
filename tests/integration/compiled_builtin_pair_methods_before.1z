@@ -1,0 +1,321 @@
+\ Compiled arithmetic honors a method arm that replaces a builtin fixnum or float pair when the
+\ arm is registered before the word compiled, so the compiler emits the native call outright.
+
+use "testing" ;
+
++:   method{ fixnum fixnum } [ 2drop 42 ] ;
+-:   method{ fixnum fixnum } [ 2drop 42 ] ;
+*:   method{ fixnum fixnum } [ 2drop 42 ] ;
+/:   method{ fixnum fixnum } [ 2drop 42 ] ;
+%:   method{ fixnum fixnum } [ 2drop 42 ] ;
+=:   method{ fixnum fixnum } [ 2drop 42 ] ;
+<:   method{ fixnum fixnum } [ 2drop 42 ] ;
+>:   method{ fixnum fixnum } [ 2drop 42 ] ;
++:   method{ float float } [ 2drop 43 ] ;
+-:   method{ float float } [ 2drop 43 ] ;
+*:   method{ float float } [ 2drop 43 ] ;
+/:   method{ float float } [ 2drop 43 ] ;
+%:   method{ float float } [ 2drop 43 ] ;
+=:   method{ float float } [ 2drop 43 ] ;
+<:   method{ float float } [ 2drop 43 ] ;
+>:   method{ float float } [ 2drop 43 ] ;
++:   method{ fixnum float } [ 2drop 44 ] ;
+-:   method{ fixnum float } [ 2drop 44 ] ;
+*:   method{ fixnum float } [ 2drop 44 ] ;
+/:   method{ fixnum float } [ 2drop 44 ] ;
+%:   method{ fixnum float } [ 2drop 44 ] ;
+=:   method{ fixnum float } [ 2drop 44 ] ;
+<:   method{ fixnum float } [ 2drop 44 ] ;
+>:   method{ fixnum float } [ 2drop 44 ] ;
++:   method{ float fixnum } [ 2drop 45 ] ;
+-:   method{ float fixnum } [ 2drop 45 ] ;
+*:   method{ float fixnum } [ 2drop 45 ] ;
+/:   method{ float fixnum } [ 2drop 45 ] ;
+%:   method{ float fixnum } [ 2drop 45 ] ;
+=:   method{ float fixnum } [ 2drop 45 ] ;
+<:   method{ float fixnum } [ 2drop 45 ] ;
+>:   method{ float fixnum } [ 2drop 45 ] ;
+abs: method{ fixnum } [ drop 42 ] ;
+abs: method{ float } [ drop 43 ] ;
+
+add-u:    ( a b -- c )                 [ + ] ;
+add-lit:  ( -- c )                     [ 7 2 + ] ;
+add-flit: ( -- c )                     [ 7.5 2.5 + ] ;
+add-mlit: ( -- c )                     [ 7 2.5 + ] ;
+add-tf:   ( a: fixnum b: fixnum -- c ) [ + ] ;
+add-tF:   ( a: float b: float -- c )   [ + ] ;
+add-one:  ( a -- c )                   [ 2 + ] ;
+sub-u:    ( a b -- c )                 [ - ] ;
+sub-lit:  ( -- c )                     [ 7 2 - ] ;
+sub-flit: ( -- c )                     [ 7.5 2.5 - ] ;
+sub-mlit: ( -- c )                     [ 7 2.5 - ] ;
+sub-tf:   ( a: fixnum b: fixnum -- c ) [ - ] ;
+sub-tF:   ( a: float b: float -- c )   [ - ] ;
+sub-one:  ( a -- c )                   [ 2 - ] ;
+mul-u:    ( a b -- c )                 [ * ] ;
+mul-lit:  ( -- c )                     [ 7 2 * ] ;
+mul-flit: ( -- c )                     [ 7.5 2.5 * ] ;
+mul-mlit: ( -- c )                     [ 7 2.5 * ] ;
+mul-tf:   ( a: fixnum b: fixnum -- c ) [ * ] ;
+mul-tF:   ( a: float b: float -- c )   [ * ] ;
+mul-one:  ( a -- c )                   [ 2 * ] ;
+div-u:    ( a b -- c )                 [ / ] ;
+div-lit:  ( -- c )                     [ 7 2 / ] ;
+div-flit: ( -- c )                     [ 7.5 2.5 / ] ;
+div-mlit: ( -- c )                     [ 7 2.5 / ] ;
+div-tf:   ( a: fixnum b: fixnum -- c ) [ / ] ;
+div-tF:   ( a: float b: float -- c )   [ / ] ;
+div-one:  ( a -- c )                   [ 2 / ] ;
+mod-u:    ( a b -- c )                 [ % ] ;
+mod-lit:  ( -- c )                     [ 7 2 % ] ;
+mod-flit: ( -- c )                     [ 7.5 2.5 % ] ;
+mod-mlit: ( -- c )                     [ 7 2.5 % ] ;
+mod-tf:   ( a: fixnum b: fixnum -- c ) [ % ] ;
+mod-tF:   ( a: float b: float -- c )   [ % ] ;
+mod-one:  ( a -- c )                   [ 2 % ] ;
+eq-u:     ( a b -- c )                 [ = ] ;
+eq-lit:   ( -- c )                     [ 7 2 = ] ;
+eq-flit:  ( -- c )                     [ 7.5 2.5 = ] ;
+eq-mlit:  ( -- c )                     [ 7 2.5 = ] ;
+eq-tf:    ( a: fixnum b: fixnum -- c ) [ = ] ;
+eq-tF:    ( a: float b: float -- c )   [ = ] ;
+eq-one:   ( a -- c )                   [ 2 = ] ;
+lt-u:     ( a b -- c )                 [ < ] ;
+lt-lit:   ( -- c )                     [ 7 2 < ] ;
+lt-flit:  ( -- c )                     [ 7.5 2.5 < ] ;
+lt-mlit:  ( -- c )                     [ 7 2.5 < ] ;
+lt-tf:    ( a: fixnum b: fixnum -- c ) [ < ] ;
+lt-tF:    ( a: float b: float -- c )   [ < ] ;
+lt-one:   ( a -- c )                   [ 2 < ] ;
+gt-u:     ( a b -- c )                 [ > ] ;
+gt-lit:   ( -- c )                     [ 7 2 > ] ;
+gt-flit:  ( -- c )                     [ 7.5 2.5 > ] ;
+gt-mlit:  ( -- c )                     [ 7 2.5 > ] ;
+gt-tf:    ( a: fixnum b: fixnum -- c ) [ > ] ;
+gt-tF:    ( a: float b: float -- c )   [ > ] ;
+gt-one:   ( a -- c )                   [ 2 > ] ;
+abs-u:    ( a -- c )                   [ abs ] ;
+abs-lit:  ( -- c )                     [ -7 abs ] ;
+abs-flit: ( -- c )                     [ -7.5 abs ] ;
+abs-tf:   ( a: fixnum -- c )           [ abs ] ;
+abs-tF:   ( a: float -- c )            [ abs ] ;
+
+add-u: compile!
+add-lit: compile!
+add-flit: compile!
+add-mlit: compile!
+add-tf: compile!
+add-tF: compile!
+add-one: compile!
+sub-u: compile!
+sub-lit: compile!
+sub-flit: compile!
+sub-mlit: compile!
+sub-tf: compile!
+sub-tF: compile!
+sub-one: compile!
+mul-u: compile!
+mul-lit: compile!
+mul-flit: compile!
+mul-mlit: compile!
+mul-tf: compile!
+mul-tF: compile!
+mul-one: compile!
+div-u: compile!
+div-lit: compile!
+div-flit: compile!
+div-mlit: compile!
+div-tf: compile!
+div-tF: compile!
+div-one: compile!
+mod-u: compile!
+mod-lit: compile!
+mod-flit: compile!
+mod-mlit: compile!
+mod-tf: compile!
+mod-tF: compile!
+mod-one: compile!
+eq-u: compile!
+eq-lit: compile!
+eq-flit: compile!
+eq-mlit: compile!
+eq-tf: compile!
+eq-tF: compile!
+eq-one: compile!
+lt-u: compile!
+lt-lit: compile!
+lt-flit: compile!
+lt-mlit: compile!
+lt-tf: compile!
+lt-tF: compile!
+lt-one: compile!
+gt-u: compile!
+gt-lit: compile!
+gt-flit: compile!
+gt-mlit: compile!
+gt-tf: compile!
+gt-tF: compile!
+gt-one: compile!
+abs-u: compile!
+abs-lit: compile!
+abs-flit: compile!
+abs-tf: compile!
+abs-tF: compile!
+
+t add-u: >word-info compiled?>> "add-u is compiled" assert=
+t add-lit: >word-info compiled?>> "add-lit is compiled" assert=
+t add-flit: >word-info compiled?>> "add-flit is compiled" assert=
+t add-mlit: >word-info compiled?>> "add-mlit is compiled" assert=
+t add-tf: >word-info compiled?>> "add-tf is compiled" assert=
+t add-tF: >word-info compiled?>> "add-tF is compiled" assert=
+t add-one: >word-info compiled?>> "add-one is compiled" assert=
+t sub-u: >word-info compiled?>> "sub-u is compiled" assert=
+t sub-lit: >word-info compiled?>> "sub-lit is compiled" assert=
+t sub-flit: >word-info compiled?>> "sub-flit is compiled" assert=
+t sub-mlit: >word-info compiled?>> "sub-mlit is compiled" assert=
+t sub-tf: >word-info compiled?>> "sub-tf is compiled" assert=
+t sub-tF: >word-info compiled?>> "sub-tF is compiled" assert=
+t sub-one: >word-info compiled?>> "sub-one is compiled" assert=
+t mul-u: >word-info compiled?>> "mul-u is compiled" assert=
+t mul-lit: >word-info compiled?>> "mul-lit is compiled" assert=
+t mul-flit: >word-info compiled?>> "mul-flit is compiled" assert=
+t mul-mlit: >word-info compiled?>> "mul-mlit is compiled" assert=
+t mul-tf: >word-info compiled?>> "mul-tf is compiled" assert=
+t mul-tF: >word-info compiled?>> "mul-tF is compiled" assert=
+t mul-one: >word-info compiled?>> "mul-one is compiled" assert=
+t div-u: >word-info compiled?>> "div-u is compiled" assert=
+t div-lit: >word-info compiled?>> "div-lit is compiled" assert=
+t div-flit: >word-info compiled?>> "div-flit is compiled" assert=
+t div-mlit: >word-info compiled?>> "div-mlit is compiled" assert=
+t div-tf: >word-info compiled?>> "div-tf is compiled" assert=
+t div-tF: >word-info compiled?>> "div-tF is compiled" assert=
+t div-one: >word-info compiled?>> "div-one is compiled" assert=
+t mod-u: >word-info compiled?>> "mod-u is compiled" assert=
+t mod-lit: >word-info compiled?>> "mod-lit is compiled" assert=
+t mod-flit: >word-info compiled?>> "mod-flit is compiled" assert=
+t mod-mlit: >word-info compiled?>> "mod-mlit is compiled" assert=
+t mod-tf: >word-info compiled?>> "mod-tf is compiled" assert=
+t mod-tF: >word-info compiled?>> "mod-tF is compiled" assert=
+t mod-one: >word-info compiled?>> "mod-one is compiled" assert=
+t eq-u: >word-info compiled?>> "eq-u is compiled" assert=
+t eq-lit: >word-info compiled?>> "eq-lit is compiled" assert=
+t eq-flit: >word-info compiled?>> "eq-flit is compiled" assert=
+t eq-mlit: >word-info compiled?>> "eq-mlit is compiled" assert=
+t eq-tf: >word-info compiled?>> "eq-tf is compiled" assert=
+t eq-tF: >word-info compiled?>> "eq-tF is compiled" assert=
+t eq-one: >word-info compiled?>> "eq-one is compiled" assert=
+t lt-u: >word-info compiled?>> "lt-u is compiled" assert=
+t lt-lit: >word-info compiled?>> "lt-lit is compiled" assert=
+t lt-flit: >word-info compiled?>> "lt-flit is compiled" assert=
+t lt-mlit: >word-info compiled?>> "lt-mlit is compiled" assert=
+t lt-tf: >word-info compiled?>> "lt-tf is compiled" assert=
+t lt-tF: >word-info compiled?>> "lt-tF is compiled" assert=
+t lt-one: >word-info compiled?>> "lt-one is compiled" assert=
+t gt-u: >word-info compiled?>> "gt-u is compiled" assert=
+t gt-lit: >word-info compiled?>> "gt-lit is compiled" assert=
+t gt-flit: >word-info compiled?>> "gt-flit is compiled" assert=
+t gt-mlit: >word-info compiled?>> "gt-mlit is compiled" assert=
+t gt-tf: >word-info compiled?>> "gt-tf is compiled" assert=
+t gt-tF: >word-info compiled?>> "gt-tF is compiled" assert=
+t gt-one: >word-info compiled?>> "gt-one is compiled" assert=
+t abs-u: >word-info compiled?>> "abs-u is compiled" assert=
+t abs-lit: >word-info compiled?>> "abs-lit is compiled" assert=
+t abs-flit: >word-info compiled?>> "abs-flit is compiled" assert=
+t abs-tf: >word-info compiled?>> "abs-tf is compiled" assert=
+t abs-tF: >word-info compiled?>> "abs-tF is compiled" assert=
+
+"every pair replaced" test-section
+7 2 add-u 42 "replaced: + untyped fixnum pair" assert=
+7.5 2.5 add-u 43 "replaced: + untyped float pair" assert=
+7 2.5 add-u 44 "replaced: + untyped fixnum-float pair" assert=
+7.5 2 add-u 45 "replaced: + untyped float-fixnum pair" assert=
+add-lit 42 "replaced: + literal fixnum pair" assert=
+add-flit 43 "replaced: + literal float pair" assert=
+add-mlit 44 "replaced: + literal fixnum-float pair" assert=
+7 2 add-tf 42 "replaced: + typed fixnum pair" assert=
+7.5 2.5 add-tF 43 "replaced: + typed float pair" assert=
+7 add-one 42 "replaced: + literal fixnum on an untyped fixnum" assert=
+7.5 add-one 45 "replaced: + literal fixnum on an untyped float" assert=
+7 2 sub-u 42 "replaced: - untyped fixnum pair" assert=
+7.5 2.5 sub-u 43 "replaced: - untyped float pair" assert=
+7 2.5 sub-u 44 "replaced: - untyped fixnum-float pair" assert=
+7.5 2 sub-u 45 "replaced: - untyped float-fixnum pair" assert=
+sub-lit 42 "replaced: - literal fixnum pair" assert=
+sub-flit 43 "replaced: - literal float pair" assert=
+sub-mlit 44 "replaced: - literal fixnum-float pair" assert=
+7 2 sub-tf 42 "replaced: - typed fixnum pair" assert=
+7.5 2.5 sub-tF 43 "replaced: - typed float pair" assert=
+7 sub-one 42 "replaced: - literal fixnum on an untyped fixnum" assert=
+7.5 sub-one 45 "replaced: - literal fixnum on an untyped float" assert=
+7 2 mul-u 42 "replaced: * untyped fixnum pair" assert=
+7.5 2.5 mul-u 43 "replaced: * untyped float pair" assert=
+7 2.5 mul-u 44 "replaced: * untyped fixnum-float pair" assert=
+7.5 2 mul-u 45 "replaced: * untyped float-fixnum pair" assert=
+mul-lit 42 "replaced: * literal fixnum pair" assert=
+mul-flit 43 "replaced: * literal float pair" assert=
+mul-mlit 44 "replaced: * literal fixnum-float pair" assert=
+7 2 mul-tf 42 "replaced: * typed fixnum pair" assert=
+7.5 2.5 mul-tF 43 "replaced: * typed float pair" assert=
+7 mul-one 42 "replaced: * literal fixnum on an untyped fixnum" assert=
+7.5 mul-one 45 "replaced: * literal fixnum on an untyped float" assert=
+7 2 div-u 42 "replaced: / untyped fixnum pair" assert=
+7.5 2.5 div-u 43 "replaced: / untyped float pair" assert=
+7 2.5 div-u 44 "replaced: / untyped fixnum-float pair" assert=
+7.5 2 div-u 45 "replaced: / untyped float-fixnum pair" assert=
+div-lit 42 "replaced: / literal fixnum pair" assert=
+div-flit 43 "replaced: / literal float pair" assert=
+div-mlit 44 "replaced: / literal fixnum-float pair" assert=
+7 2 div-tf 42 "replaced: / typed fixnum pair" assert=
+7.5 2.5 div-tF 43 "replaced: / typed float pair" assert=
+7 div-one 42 "replaced: / literal fixnum on an untyped fixnum" assert=
+7.5 div-one 45 "replaced: / literal fixnum on an untyped float" assert=
+7 2 mod-u 42 "replaced: % untyped fixnum pair" assert=
+7.5 2.5 mod-u 43 "replaced: % untyped float pair" assert=
+7 2.5 mod-u 44 "replaced: % untyped fixnum-float pair" assert=
+7.5 2 mod-u 45 "replaced: % untyped float-fixnum pair" assert=
+mod-lit 42 "replaced: % literal fixnum pair" assert=
+mod-flit 43 "replaced: % literal float pair" assert=
+mod-mlit 44 "replaced: % literal fixnum-float pair" assert=
+7 2 mod-tf 42 "replaced: % typed fixnum pair" assert=
+7.5 2.5 mod-tF 43 "replaced: % typed float pair" assert=
+7 mod-one 42 "replaced: % literal fixnum on an untyped fixnum" assert=
+7.5 mod-one 45 "replaced: % literal fixnum on an untyped float" assert=
+7 2 eq-u 42 "replaced: = untyped fixnum pair" assert=
+7.5 2.5 eq-u 43 "replaced: = untyped float pair" assert=
+7 2.5 eq-u 44 "replaced: = untyped fixnum-float pair" assert=
+7.5 2 eq-u 45 "replaced: = untyped float-fixnum pair" assert=
+eq-lit 42 "replaced: = literal fixnum pair" assert=
+eq-flit 43 "replaced: = literal float pair" assert=
+eq-mlit 44 "replaced: = literal fixnum-float pair" assert=
+7 2 eq-tf 42 "replaced: = typed fixnum pair" assert=
+7.5 2.5 eq-tF 43 "replaced: = typed float pair" assert=
+7 eq-one 42 "replaced: = literal fixnum on an untyped fixnum" assert=
+7.5 eq-one 45 "replaced: = literal fixnum on an untyped float" assert=
+7 2 lt-u 42 "replaced: < untyped fixnum pair" assert=
+7.5 2.5 lt-u 43 "replaced: < untyped float pair" assert=
+7 2.5 lt-u 44 "replaced: < untyped fixnum-float pair" assert=
+7.5 2 lt-u 45 "replaced: < untyped float-fixnum pair" assert=
+lt-lit 42 "replaced: < literal fixnum pair" assert=
+lt-flit 43 "replaced: < literal float pair" assert=
+lt-mlit 44 "replaced: < literal fixnum-float pair" assert=
+7 2 lt-tf 42 "replaced: < typed fixnum pair" assert=
+7.5 2.5 lt-tF 43 "replaced: < typed float pair" assert=
+7 lt-one 42 "replaced: < literal fixnum on an untyped fixnum" assert=
+7.5 lt-one 45 "replaced: < literal fixnum on an untyped float" assert=
+7 2 gt-u 42 "replaced: > untyped fixnum pair" assert=
+7.5 2.5 gt-u 43 "replaced: > untyped float pair" assert=
+7 2.5 gt-u 44 "replaced: > untyped fixnum-float pair" assert=
+7.5 2 gt-u 45 "replaced: > untyped float-fixnum pair" assert=
+gt-lit 42 "replaced: > literal fixnum pair" assert=
+gt-flit 43 "replaced: > literal float pair" assert=
+gt-mlit 44 "replaced: > literal fixnum-float pair" assert=
+7 2 gt-tf 42 "replaced: > typed fixnum pair" assert=
+7.5 2.5 gt-tF 43 "replaced: > typed float pair" assert=
+7 gt-one 42 "replaced: > literal fixnum on an untyped fixnum" assert=
+7.5 gt-one 45 "replaced: > literal fixnum on an untyped float" assert=
+-7 abs-u 42 "replaced: abs untyped fixnum" assert=
+-7.5 abs-u 43 "replaced: abs untyped float" assert=
+abs-lit 42 "replaced: abs literal fixnum" assert=
+abs-flit 43 "replaced: abs literal float" assert=
+-7 abs-tf 42 "replaced: abs typed fixnum" assert=
+-7.5 abs-tF 43 "replaced: abs typed float" assert=

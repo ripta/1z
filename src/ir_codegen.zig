@@ -20,6 +20,7 @@ const JitEntry = jit_dispatch_mod.JitEntry;
 
 const pic_mod = @import("pic.zig");
 const dispatch_mod = @import("dispatch.zig");
+const builtin_override = @import("builtin_override.zig");
 
 const context_module = @import("context.zig");
 const Context = context_module.Context;
@@ -1550,6 +1551,113 @@ fn emitConditionalF64Load(
     return c._ir_PHI_2(ctx, c.IR_DOUBLE, conv_f64, raw_f64);
 }
 
+/// The proven type of each operand of a polymorphic site, or null for a runtime unknown.
+const KnownOperands = [2]?NarrowNumeric;
+
+fn knownNumericOf(entry: StackEntry) ?NarrowNumeric {
+    return switch (entry) {
+        .i64_ref => .fixnum,
+        .f64_ref => .float,
+        else => null,
+    };
+}
+
+/// `emitNumericTagCheckNoBail`, with the tag test replaced by a constant for an operand whose type
+/// is already proven.
+fn emitNumericTagCheckKnown(state: *CompileState, slot: usize, known: ?NarrowNumeric) NumericTagCheck {
+    const ctx = state.ctx;
+    const k = known orelse return emitNumericTagCheckNoBail(
+        ctx,
+        slot,
+        state.base_addr,
+        state.tag_offset_const,
+        state.fixnum_tag_const,
+        state.float_tag_const,
+    );
+
+    const slot_byte_offset = c.ir_const_addr(ctx, slot * ValueLayout.value_size);
+    const elem_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_addr, slot_byte_offset);
+    return .{
+        .is_fixnum = c.ir_const_bool(ctx, k == .fixnum),
+        .is_numeric = c.ir_const_bool(ctx, true),
+        .elem_addr = elem_addr,
+    };
+}
+
+fn operandCanBe(known: ?NarrowNumeric, is_float: bool) bool {
+    const k = known orelse return true;
+    return (k == .float) == is_float;
+}
+
+/// Whether every operand pair a site can reach at runtime already has a method arm replacing its
+/// builtin entry. Such a site calls the native with no inline arm, since a guard would send every
+/// execution to the native anyway.
+fn everyReachablePairReplaced(op: builtin_override.Op, known: KnownOperands) bool {
+    const mask = builtin_override.load();
+    for ([_]bool{ false, true }) |a_is_float| {
+        if (!operandCanBe(known[0], a_is_float)) continue;
+        for ([_]bool{ false, true }) |b_is_float| {
+            if (!operandCanBe(known[1], b_is_float)) continue;
+            const bit = builtin_override.binaryBit(op, .of(a_is_float, b_is_float));
+            if (mask & (@as(u64, 1) << bit) == 0) return false;
+        }
+    }
+    return true;
+}
+
+fn overrideBitConst(ctx: *c.ir_ctx, bit: u6) c.ir_ref {
+    return c.ir_const_u64(ctx, @as(u64, 1) << bit);
+}
+
+/// Load the builtin-override mask. A guarded site reads it on every execution, so an arm
+/// registered while its word is running takes effect at the next operation.
+fn emitOverrideMaskLoad(ctx: *c.ir_ctx) c.ir_ref {
+    return c._ir_LOAD(ctx, c.IR_U64, c.ir_const_addr(ctx, builtin_override.maskAddress()));
+}
+
+/// Branch to a cold arm when `mask` has any of `bits` set, and return that arm's END. Control
+/// continues on the clear side.
+fn emitOverrideGuard(ctx: *c.ir_ctx, mask: c.ir_ref, bits: c.ir_ref) c.ir_ref {
+    const hit = c.ir_fold2(ctx, c.IR_OPT(c.IR_AND, c.IR_U64), mask, bits);
+    const replaced = c.ir_fold2(ctx, c.IR_OPT(c.IR_NE, c.IR_BOOL), hit, c.ir_const_u64(ctx, 0));
+    const if_replaced = c._ir_IF(ctx, replaced);
+    c._ir_IF_TRUE_cold(ctx, if_replaced);
+    const end_replaced = c._ir_END(ctx);
+    c._ir_IF_FALSE(ctx, if_replaced);
+    return end_replaced;
+}
+
+/// The mask bit of the mixed or float pair a polymorphic site's float arm is computing, chosen at
+/// runtime from the operand tags.
+fn emitFloatArmOverrideBits(ctx: *c.ir_ctx, op: builtin_override.Op, va: NumericTagCheck, vb: NumericTagCheck) c.ir_ref {
+    const float_fixnum_or_float = c.ir_fold3(
+        ctx,
+        c.IR_OPT(c.IR_COND, c.IR_U64),
+        vb.is_fixnum,
+        overrideBitConst(ctx, builtin_override.binaryBit(op, .float_fixnum)),
+        overrideBitConst(ctx, builtin_override.binaryBit(op, .float_float)),
+    );
+    return c.ir_fold3(
+        ctx,
+        c.IR_OPT(c.IR_COND, c.IR_U64),
+        va.is_fixnum,
+        overrideBitConst(ctx, builtin_override.binaryBit(op, .fixnum_float)),
+        float_fixnum_or_float,
+    );
+}
+
+/// Merge the cold-arm entries collected at a polymorphic site into one control path.
+fn mergeColdEnds(ctx: *c.ir_ctx, ends: []const c.ir_ref) void {
+    std.debug.assert(ends.len >= 2);
+    if (ends.len == 2) {
+        c._ir_MERGE_2(ctx, ends[0], ends[1]);
+    } else {
+        var inputs: [8]c.ir_ref = undefined;
+        @memcpy(inputs[0..ends.len], ends);
+        c._ir_MERGE_N(ctx, @as(c.ir_ref, @intCast(ends.len)), &inputs);
+    }
+}
+
 /// Polymorphic arithmetic operation identifier.
 const PolyArithOp = enum {
     add,
@@ -1557,6 +1665,26 @@ const PolyArithOp = enum {
     mul,
     div,
     mod,
+
+    fn wordName(self: PolyArithOp) []const u8 {
+        return switch (self) {
+            .add => "+",
+            .sub => "-",
+            .mul => "*",
+            .div => "/",
+            .mod => "%",
+        };
+    }
+
+    fn overrideOp(self: PolyArithOp) builtin_override.Op {
+        return switch (self) {
+            .add => .add,
+            .sub => .sub,
+            .mul => .mul,
+            .div => .div,
+            .mod => .mod,
+        };
+    }
 };
 
 /// Polymorphic comparison operation identifier.
@@ -1570,6 +1698,14 @@ const PolyCompareOp = enum {
             .eq => "=",
             .lt => "<",
             .gt => ">",
+        };
+    }
+
+    fn overrideOp(self: PolyCompareOp) builtin_override.Op {
+        return switch (self) {
+            .eq => .eq,
+            .lt => .lt,
+            .gt => .gt,
         };
     }
 
@@ -1774,49 +1910,42 @@ fn emitPerOperationDispatch(
 ///
 /// Both cold arms hand the operands over through the physical stack, and both set SP from
 /// `slot_b` alone. So the caller must have settled the pair at `slot_a`, `slot_a + 1` first.
+///
+/// Under the JIT a method arm can replace a builtin pair after this code is compiled, so each arm
+/// first tests its pair's `builtin_override` bit and sends a set bit to the cold arm, where the
+/// native dispatches. `known` carries operand types the caller already proved; those operands skip
+/// their tag test.
 fn emitPolymorphicBinaryArith(
     state: *CompileState,
     slot_a: usize,
     slot_b: usize,
     dest_slot: usize,
     op: PolyArithOp,
+    known: KnownOperands,
     line: usize,
 ) IrCodegenError!void {
     std.debug.assert(slot_b == slot_a + 1);
     const ctx = state.ctx;
 
-    // Check both operands for numeric tags (no bail on mismatch).
-    const va = emitNumericTagCheckNoBail(
-        ctx,
-        slot_a,
-        state.base_addr,
-        state.tag_offset_const,
-        state.fixnum_tag_const,
-        state.float_tag_const,
-    );
-    const vb = emitNumericTagCheckNoBail(
-        ctx,
-        slot_b,
-        state.base_addr,
-        state.tag_offset_const,
-        state.fixnum_tag_const,
-        state.float_tag_const,
-    );
+    const va = emitNumericTagCheckKnown(state, slot_a, known[0]);
+    const vb = emitNumericTagCheckKnown(state, slot_b, known[1]);
 
     // Branch: both operands numeric (fixnum or float)?
     const both_numeric = c.ir_fold2(ctx, c.IR_OPT(c.IR_AND, c.IR_BOOL), va.is_numeric, vb.is_numeric);
     const if_numeric = c._ir_IF(ctx, both_numeric);
 
-    // Collect fixnum error-path ends (overflow, div-by-zero, minInt/-1).
-    // These merge with the non-numeric fallback instead of bailing.
-    var fixnum_error_ends: [2]c.ir_ref = .{ c.IR_UNUSED, c.IR_UNUSED };
-    var fixnum_error_count: usize = 0;
+    // Replaced pairs and fixnum errors (overflow, div-by-zero, minInt/-1) merge with the
+    // non-numeric fallback instead of bailing.
+    var cold_ends: [4]c.ir_ref = undefined;
+    var cold_count: usize = 0;
 
     // === Numeric path (hottt) ===
     c._ir_IF_TRUE(ctx, if_numeric);
     {
         // Destination address
         const dest_addr = liveSlotAddr(state, dest_slot);
+
+        const override_mask = if (state.aot_mode) c.IR_UNUSED else emitOverrideMaskLoad(ctx);
 
         // Branch: both fixnum?
         const both_fixnum = c.ir_fold2(ctx, c.IR_OPT(c.IR_AND, c.IR_BOOL), va.is_fixnum, vb.is_fixnum);
@@ -1825,6 +1954,12 @@ fn emitPolymorphicBinaryArith(
         // === Fixnum path ===
         c._ir_IF_TRUE(ctx, if_both_fixnum);
         {
+            if (override_mask != c.IR_UNUSED) {
+                const bits = overrideBitConst(ctx, builtin_override.binaryBit(op.overrideOp(), .fixnum_fixnum));
+                cold_ends[cold_count] = emitOverrideGuard(ctx, override_mask, bits);
+                cold_count += 1;
+            }
+
             const a_i64 = emitUnboxI64(ctx, va.elem_addr, state.payload_offset_const);
             const b_i64 = emitUnboxI64(ctx, vb.elem_addr, state.payload_offset_const);
 
@@ -1840,8 +1975,8 @@ fn emitPolymorphicBinaryArith(
                     const ovf = c.ir_fold1(ctx, c.IR_OPT(c.IR_OVERFLOW, c.IR_BOOL), result_i64);
                     const if_ovf = c._ir_IF(ctx, ovf);
                     c._ir_IF_TRUE_cold(ctx, if_ovf);
-                    fixnum_error_ends[fixnum_error_count] = c._ir_END(ctx);
-                    fixnum_error_count += 1;
+                    cold_ends[cold_count] = c._ir_END(ctx);
+                    cold_count += 1;
                     c._ir_IF_FALSE(ctx, if_ovf);
                     emitBoxPayload(ctx, dest_addr, state.tag_offset_const, state.payload_offset_const, state.fixnum_tag_const, result_i64);
                 },
@@ -1850,8 +1985,8 @@ fn emitPolymorphicBinaryArith(
                     const is_zero = c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), b_i64, zero);
                     const if_zero = c._ir_IF(ctx, is_zero);
                     c._ir_IF_TRUE_cold(ctx, if_zero);
-                    fixnum_error_ends[fixnum_error_count] = c._ir_END(ctx);
-                    fixnum_error_count += 1;
+                    cold_ends[cold_count] = c._ir_END(ctx);
+                    cold_count += 1;
                     c._ir_IF_FALSE(ctx, if_zero);
 
                     const min_val = c.ir_const_i64(ctx, std.math.minInt(i64));
@@ -1861,8 +1996,8 @@ fn emitPolymorphicBinaryArith(
                     const is_overflow = c.ir_fold2(ctx, c.IR_OPT(c.IR_AND, c.IR_BOOL), is_min, is_neg_one);
                     const if_ov = c._ir_IF(ctx, is_overflow);
                     c._ir_IF_TRUE_cold(ctx, if_ov);
-                    fixnum_error_ends[fixnum_error_count] = c._ir_END(ctx);
-                    fixnum_error_count += 1;
+                    cold_ends[cold_count] = c._ir_END(ctx);
+                    cold_count += 1;
                     c._ir_IF_FALSE(ctx, if_ov);
 
                     const result_i64 = c.ir_fold2(ctx, c.IR_OPT(c.IR_DIV, c.IR_I64), a_i64, b_i64);
@@ -1873,8 +2008,8 @@ fn emitPolymorphicBinaryArith(
                     const is_zero = c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), b_i64, zero);
                     const if_zero = c._ir_IF(ctx, is_zero);
                     c._ir_IF_TRUE_cold(ctx, if_zero);
-                    fixnum_error_ends[fixnum_error_count] = c._ir_END(ctx);
-                    fixnum_error_count += 1;
+                    cold_ends[cold_count] = c._ir_END(ctx);
+                    cold_count += 1;
                     c._ir_IF_FALSE(ctx, if_zero);
 
                     // Euclidean modulo
@@ -1894,6 +2029,12 @@ fn emitPolymorphicBinaryArith(
         // === Float path (at least one operand is float) ===
         c._ir_IF_FALSE(ctx, if_both_fixnum);
         {
+            if (override_mask != c.IR_UNUSED) {
+                const bits = emitFloatArmOverrideBits(ctx, op.overrideOp(), va, vb);
+                cold_ends[cold_count] = emitOverrideGuard(ctx, override_mask, bits);
+                cold_count += 1;
+            }
+
             const a_f64 = emitConditionalF64Load(ctx, va.elem_addr, va.is_fixnum, state.payload_offset_const);
             const b_f64 = emitConditionalF64Load(ctx, vb.elem_addr, vb.is_fixnum, state.payload_offset_const);
 
@@ -1914,31 +2055,18 @@ fn emitPolymorphicBinaryArith(
     const end_numeric = c._ir_END(ctx);
 
     // === Native fallback (cold): call the polymorphic native ===
-    // Reached from non-numeric types AND fixnum overflow/division errors.
+    // Reached from non-numeric types, replaced pairs, and fixnum overflow/division errors.
     c._ir_IF_FALSE_cold(ctx, if_numeric);
 
-    // Merge fixnum error paths into the fallback entry.
-    if (fixnum_error_count > 0) {
-        const end_non_numeric = c._ir_END(ctx);
-        if (fixnum_error_count == 1) {
-            c._ir_MERGE_2(ctx, end_non_numeric, fixnum_error_ends[0]);
-        } else {
-            var inputs: [3]c.ir_ref = undefined;
-            inputs[0] = end_non_numeric;
-            inputs[1] = fixnum_error_ends[0];
-            inputs[2] = fixnum_error_ends[1];
-            c._ir_MERGE_N(ctx, @as(c.ir_ref, @intCast(fixnum_error_count + 1)), &inputs);
-        }
+    if (cold_count > 0) {
+        var ends: [5]c.ir_ref = undefined;
+        ends[0] = c._ir_END(ctx);
+        @memcpy(ends[1 .. cold_count + 1], cold_ends[0..cold_count]);
+        mergeColdEnds(ctx, ends[0 .. cold_count + 1]);
     }
 
     {
-        const op_name: []const u8 = switch (op) {
-            .add => "+",
-            .sub => "-",
-            .mul => "*",
-            .div => "/",
-            .mod => "%",
-        };
+        const op_name = op.wordName();
         // Save state refs before the callback (it may refresh them).
         const saved_items_ptr = state.items_ptr;
         const saved_base_addr = state.base_addr;
@@ -1971,42 +2099,37 @@ fn emitPolymorphicBinaryArith(
 ///
 /// Both cold arms hand the operands over through the physical stack, and both set SP from
 /// `slot_b` alone. So the caller must have settled the pair at `slot_a`, `slot_a + 1` first.
+///
+/// Under the JIT each arm first tests its pair's `builtin_override` bit and sends a set bit to the
+/// cold arm. `known` skips the tag test of a proven operand.
 fn emitPolymorphicBinaryCompare(
     state: *CompileState,
     slot_a: usize,
     slot_b: usize,
     dest_slot: usize,
     op: PolyCompareOp,
+    known: KnownOperands,
     opaque_slot: usize,
     line: usize,
 ) IrCodegenError!void {
     std.debug.assert(slot_b == slot_a + 1);
     const ctx = state.ctx;
 
-    const va = emitNumericTagCheckNoBail(
-        ctx,
-        slot_a,
-        state.base_addr,
-        state.tag_offset_const,
-        state.fixnum_tag_const,
-        state.float_tag_const,
-    );
-    const vb = emitNumericTagCheckNoBail(
-        ctx,
-        slot_b,
-        state.base_addr,
-        state.tag_offset_const,
-        state.fixnum_tag_const,
-        state.float_tag_const,
-    );
+    const va = emitNumericTagCheckKnown(state, slot_a, known[0]);
+    const vb = emitNumericTagCheckKnown(state, slot_b, known[1]);
 
     const both_numeric = c.ir_fold2(ctx, c.IR_OPT(c.IR_AND, c.IR_BOOL), va.is_numeric, vb.is_numeric);
     const if_numeric = c._ir_IF(ctx, both_numeric);
+
+    var cold_ends: [2]c.ir_ref = undefined;
+    var cold_count: usize = 0;
 
     // === Numeric path (hot) ===
     c._ir_IF_TRUE(ctx, if_numeric);
     {
         const dest_addr = liveSlotAddr(state, dest_slot);
+
+        const override_mask = if (state.aot_mode) c.IR_UNUSED else emitOverrideMaskLoad(ctx);
 
         const both_fixnum = c.ir_fold2(ctx, c.IR_OPT(c.IR_AND, c.IR_BOOL), va.is_fixnum, vb.is_fixnum);
         const if_both_fixnum = c._ir_IF(ctx, both_fixnum);
@@ -2014,6 +2137,12 @@ fn emitPolymorphicBinaryCompare(
         // === Fixnum path ===
         c._ir_IF_TRUE(ctx, if_both_fixnum);
         {
+            if (override_mask != c.IR_UNUSED) {
+                const bits = overrideBitConst(ctx, builtin_override.binaryBit(op.overrideOp(), .fixnum_fixnum));
+                cold_ends[cold_count] = emitOverrideGuard(ctx, override_mask, bits);
+                cold_count += 1;
+            }
+
             const a_i64 = emitUnboxI64(ctx, va.elem_addr, state.payload_offset_const);
             const b_i64 = emitUnboxI64(ctx, vb.elem_addr, state.payload_offset_const);
             const result = c.ir_fold2(ctx, c.IR_OPT(op.irOp(), c.IR_BOOL), a_i64, b_i64);
@@ -2024,6 +2153,12 @@ fn emitPolymorphicBinaryCompare(
         // === Float path (at least one operand is float) ===
         c._ir_IF_FALSE(ctx, if_both_fixnum);
         {
+            if (override_mask != c.IR_UNUSED) {
+                const bits = emitFloatArmOverrideBits(ctx, op.overrideOp(), va, vb);
+                cold_ends[cold_count] = emitOverrideGuard(ctx, override_mask, bits);
+                cold_count += 1;
+            }
+
             const a_f64 = emitConditionalF64Load(ctx, va.elem_addr, va.is_fixnum, state.payload_offset_const);
             const b_f64 = emitConditionalF64Load(ctx, vb.elem_addr, vb.is_fixnum, state.payload_offset_const);
             const result = c.ir_fold2(ctx, c.IR_OPT(op.irOp(), c.IR_BOOL), a_f64, b_f64);
@@ -2035,8 +2170,16 @@ fn emitPolymorphicBinaryCompare(
     }
     const end_numeric = c._ir_END(ctx);
 
-    // === Cold arm: a non-numeric operand resolves through the dispatch table or the native ===
+    // === Cold arm: non-numeric operands and replaced pairs ===
     c._ir_IF_FALSE_cold(ctx, if_numeric);
+
+    if (cold_count > 0) {
+        var ends: [3]c.ir_ref = undefined;
+        ends[0] = c._ir_END(ctx);
+        @memcpy(ends[1 .. cold_count + 1], cold_ends[0..cold_count]);
+        mergeColdEnds(ctx, ends[0 .. cold_count + 1]);
+    }
+
     {
         const op_name = op.wordName();
         // Save state refs before the callback (it may refresh them).
@@ -3728,6 +3871,11 @@ fn requireF64(entry: StackEntry, state: *CompileState) IrCodegenError!c.ir_ref {
 /// True for an abstract entry holding an unboxed number (`.i64_ref` or `.f64_ref`).
 fn isKnownNumericEntry(entry: StackEntry) bool {
     return entry == .i64_ref or entry == .f64_ref;
+}
+
+/// True for an entry a polymorphic numeric site can take: an unboxed number or an opaque slot.
+fn isNumericOrOpaqueEntry(entry: StackEntry) bool {
+    return isKnownNumericEntry(entry) or entry == .raw_at_slot;
 }
 
 const NarrowNumeric = enum { fixnum, float };
@@ -6071,41 +6219,98 @@ fn emitIntrinsicAbs(ec: EmitCtx) IrCodegenError!ControlFlow {
     const stack = ec.stack;
     const sp = ec.sp;
     const ctx = state.ctx;
-    const bail_status = state.bail_status;
 
     if (sp.* < 1) return IrCodegenError.StackUnderflow;
     sp.* -= 1;
     const entry = stack[sp.*];
 
+    if (!state.aot_mode) return emitGuardedAbs(ec, entry);
+
     if (entry == .f64_ref) {
-        const a = entry.f64_ref;
-        const zero = c.ir_const_double(ctx, 0.0);
-        const is_neg = c.ir_fold2(ctx, c.IR_OPT(c.IR_LT, c.IR_BOOL), a, zero);
-        const neg_a = c.ir_fold1(ctx, c.IR_OPT(c.IR_NEG, c.IR_DOUBLE), a);
-        const if_neg = c._ir_IF(ctx, is_neg);
-        c._ir_IF_TRUE(ctx, if_neg);
-        const end_true = c._ir_END(ctx);
-        c._ir_IF_FALSE(ctx, if_neg);
-        const end_false = c._ir_END(ctx);
-        c._ir_MERGE_2(ctx, end_true, end_false);
-        const result = c._ir_PHI_2(ctx, c.IR_DOUBLE, neg_a, a);
-        stack[sp.*] = .{ .f64_ref = result };
-    } else if (!state.aot_mode) {
-        // The absolute value of minInt is a bignum. A bail re-runs the word interpreted, where
-        // the native promotes.
-        const a = try requireI64(entry, state);
-
-        const min_val = c.ir_const_i64(ctx, std.math.minInt(i64));
-        const is_min = c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), a, min_val);
-        const if_min = c._ir_IF(ctx, is_min);
-        c._ir_IF_TRUE_cold(ctx, if_min);
-        emitSettledExit(state, bail_status, .bail);
-        c._ir_IF_FALSE(ctx, if_min);
-
-        stack[sp.*] = .{ .i64_ref = emitAbsI64(ctx, a) };
+        stack[sp.*] = .{ .f64_ref = emitAbsF64(ctx, entry.f64_ref) };
     } else {
         try emitAotFixnumAbs(ec, entry);
     }
+    sp.* += 1;
+    return .next;
+}
+
+/// |a| for a float `a`.
+fn emitAbsF64(ctx: *c.ir_ctx, a: c.ir_ref) c.ir_ref {
+    const zero = c.ir_const_double(ctx, 0.0);
+    const is_neg = c.ir_fold2(ctx, c.IR_OPT(c.IR_LT, c.IR_BOOL), a, zero);
+    const neg_a = c.ir_fold1(ctx, c.IR_OPT(c.IR_NEG, c.IR_DOUBLE), a);
+    const if_neg = c._ir_IF(ctx, is_neg);
+    c._ir_IF_TRUE(ctx, if_neg);
+    const end_true = c._ir_END(ctx);
+    c._ir_IF_FALSE(ctx, if_neg);
+    const end_false = c._ir_END(ctx);
+    c._ir_MERGE_2(ctx, end_true, end_false);
+    return c._ir_PHI_2(ctx, c.IR_DOUBLE, neg_a, a);
+}
+
+/// `abs` under the JIT, where a method arm can replace the builtin fixnum or float entry after the
+/// word compiles.
+///
+/// The operand is boxed in its slot first, where the native pops it. A replaced entry goes to the
+/// native, and so does minInt, whose absolute value is a bignum. The inline path boxes its result
+/// into the same slot, so both paths leave a boxed value there.
+///
+/// An opaque operand is taken to be a fixnum. Its tag check bails otherwise, and the interpreter
+/// then dispatches.
+fn emitGuardedAbs(ec: EmitCtx, entry: StackEntry) IrCodegenError!ControlFlow {
+    const state = ec.state;
+    const ctx = state.ctx;
+    const stack = ec.stack;
+    const sp = ec.sp;
+    const slot = sp.*;
+    const is_float = entry == .f64_ref;
+    const bit = builtin_override.absBit(is_float);
+
+    if (builtin_override.isSet(bit)) {
+        sp.* += 1;
+        try emitResolvedNativeCallback(state, "abs", stack, sp, ec.line);
+        return .next;
+    }
+
+    const a = if (is_float) entry.f64_ref else try requireI64(entry, state);
+
+    try materializeQuotations(state, stack, slot + 1, false);
+    flushToPhysicalStack(state, stack, slot + 1);
+
+    const override_mask = emitOverrideMaskLoad(ctx);
+    const hit = c.ir_fold2(ctx, c.IR_OPT(c.IR_AND, c.IR_U64), override_mask, overrideBitConst(ctx, bit));
+    const replaced = c.ir_fold2(ctx, c.IR_OPT(c.IR_NE, c.IR_BOOL), hit, c.ir_const_u64(ctx, 0));
+    const to_native = if (is_float) replaced else blk: {
+        const is_min = c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), a, c.ir_const_i64(ctx, std.math.minInt(i64)));
+        break :blk c.ir_fold2(ctx, c.IR_OPT(c.IR_OR, c.IR_BOOL), replaced, is_min);
+    };
+    const if_native = c._ir_IF(ctx, to_native);
+
+    c._ir_IF_TRUE_cold(ctx, if_native);
+    {
+        const saved_items_ptr = state.items_ptr;
+        const saved_base_addr = state.base_addr;
+        try emitPerOperationFallback(state, "abs", slot, slot, ec.line);
+        state.items_ptr = saved_items_ptr;
+        state.base_addr = saved_base_addr;
+    }
+    const end_native = c._ir_END(ctx);
+
+    c._ir_IF_FALSE(ctx, if_native);
+    const dest_addr = liveSlotAddr(state, slot);
+    if (is_float) {
+        emitBoxPayload(ctx, dest_addr, state.tag_offset_const, state.payload_offset_const, state.float_tag_const, emitAbsF64(ctx, a));
+    } else {
+        emitBoxPayload(ctx, dest_addr, state.tag_offset_const, state.payload_offset_const, state.fixnum_tag_const, emitAbsI64(ctx, a));
+    }
+    const end_inline = c._ir_END(ctx);
+
+    c._ir_MERGE_2(ctx, end_native, end_inline);
+
+    // The native call may have moved the stack buffer.
+    refreshCachedStackPointer(state);
+    stack[slot] = .{ .raw_at_slot = slot };
     sp.* += 1;
     return .next;
 }
@@ -7614,29 +7819,57 @@ fn emitIntrinsicIf(ec: EmitCtx) IrCodegenError!ControlFlow {
     return .next;
 }
 
-/// Mixed-shape polymorphic fast path for the comparison intrinsics (`=`, `<`, `>`): one operand a
-/// runtime unknown, the other a proven unboxed number.
+/// Polymorphic fast path for the comparison intrinsics (`=`, `<`, `>`). In AOT mode it takes a
+/// mixed shape, one operand a runtime unknown and the other a proven unboxed number. Under the JIT
+/// it takes any numeric pair except two runtime unknowns.
 ///
-/// In AOT mode such a pair emits inline tag-branching comparison instead of the speculative tag
+/// In AOT mode a mixed pair emits inline tag-branching comparison instead of the speculative tag
 /// check, whose bail has no interpreter to resume into. Returns true when it consumed the
 /// operands; false when the caller should keep its own paths. The caller must have already popped
 /// the two operands, so they sit at sp and sp+1.
 ///
 /// A raw/raw pair stays with the caller's whole-native delegation: on a residual `=` miss the
 /// inline emitter answers a constant `f`, which is exact only when one side is a proven number.
-/// Under the JIT the speculative unboxed path stays, since its bail deopts to the interpreter.
+///
+/// Under the JIT every other numeric pair, including two proven numbers, takes the inline
+/// polymorphic path, so each compare carries the `builtin_override` guard.
 fn emitPolyCompareFastPath(ec: EmitCtx, op: PolyCompareOp) IrCodegenError!bool {
     const state = ec.state;
     const stack = ec.stack;
     const sp = ec.sp;
     var entry_a = stack[sp.*];
     var entry_b = stack[sp.* + 1];
+    const a_is_opaque = entry_a == .raw_at_slot;
+
+    if (!state.aot_mode) {
+        if (entry_a == .raw_at_slot and entry_b == .raw_at_slot) return false;
+        if (!isNumericOrOpaqueEntry(entry_a) or !isNumericOrOpaqueEntry(entry_b)) return false;
+        const known: KnownOperands = .{ knownNumericOf(entry_a), knownNumericOf(entry_b) };
+
+        if (state.in_branchless_trial) return IrCodegenError.BranchlessTrialImpure;
+
+        if (everyReachablePairReplaced(op.overrideOp(), known)) {
+            sp.* += 2;
+            try emitResolvedNativeCallback(state, op.wordName(), stack, sp, ec.line);
+            return true;
+        }
+
+        sp.* += 2;
+        flushToPhysicalStack(state, stack, sp.*);
+        sp.* -= 2;
+
+        const dest_slot = sp.*;
+        const slot_a = stack[sp.*].raw_at_slot;
+        const slot_b = stack[sp.* + 1].raw_at_slot;
+        try emitPolymorphicBinaryCompare(state, slot_a, slot_b, dest_slot, op, known, slot_a, ec.line);
+        stack[sp.*] = .{ .raw_at_slot = sp.* };
+        sp.* += 1;
+        return true;
+    }
 
     const one_raw = (entry_a == .raw_at_slot) != (entry_b == .raw_at_slot);
     const known = if (entry_a == .raw_at_slot) entry_b else entry_a;
-    if (!state.aot_mode) return false;
     if (!one_raw or !isKnownNumericEntry(known)) return false;
-    const a_is_opaque = entry_a == .raw_at_slot;
 
     // The cold arm needs the polymorphic native, or the operator's dispatch id where it dispatches
     // instead. When neither resolves, keep the concrete speculative path instead of rejecting the
@@ -7663,7 +7896,7 @@ fn emitPolyCompareFastPath(ec: EmitCtx, op: PolyCompareOp) IrCodegenError!bool {
     const slot_a = entry_a.raw_at_slot;
     const slot_b = entry_b.raw_at_slot;
     const opaque_slot = if (a_is_opaque) slot_a else slot_b;
-    try emitPolymorphicBinaryCompare(state, slot_a, slot_b, dest_slot, op, opaque_slot, ec.line);
+    try emitPolymorphicBinaryCompare(state, slot_a, slot_b, dest_slot, op, .{ null, null }, opaque_slot, ec.line);
     stack[sp.*] = .{ .raw_at_slot = sp.* };
     sp.* += 1;
     return true;
@@ -7748,8 +7981,11 @@ fn emitIntrinsicGt(ec: EmitCtx) IrCodegenError!ControlFlow {
 /// In AOT mode a mixed pair -- one opaque slot, one unboxed number -- also
 /// takes this path. The concrete path would emit a tag check on the opaque
 /// side that bails when the value is the other numeric type, and an AOT bail
-/// has no interpreter to resume into, so it aborts the program. Under the JIT
-/// the bail deopts to the interpreter, so the speculative unboxed path stays.
+/// has no interpreter to resume into, so it aborts the program.
+///
+/// Under the JIT every numeric pair takes this path, two proven numbers included, so each site
+/// carries the `builtin_override` guard. A method arm can replace a builtin pair after the word
+/// compiles, and only the cold arm's native call dispatches to it.
 fn emitPolyArithFastPath(ec: EmitCtx, op: PolyArithOp) IrCodegenError!bool {
     const state = ec.state;
     const stack = ec.stack;
@@ -7757,8 +7993,28 @@ fn emitPolyArithFastPath(ec: EmitCtx, op: PolyArithOp) IrCodegenError!bool {
     var entry_a = stack[sp.*];
     var entry_b = stack[sp.* + 1];
     const both_raw = entry_a == .raw_at_slot and entry_b == .raw_at_slot;
+    var known: KnownOperands = .{ null, null };
 
-    if (both_raw) {
+    if (!state.aot_mode) {
+        if (!isNumericOrOpaqueEntry(entry_a) or !isNumericOrOpaqueEntry(entry_b)) return false;
+        known = .{ knownNumericOf(entry_a), knownNumericOf(entry_b) };
+
+        if (state.in_branchless_trial) return IrCodegenError.BranchlessTrialImpure;
+
+        if (everyReachablePairReplaced(op.overrideOp(), known)) {
+            sp.* += 2;
+            try emitResolvedNativeCallback(state, op.wordName(), stack, sp, ec.line);
+            return true;
+        }
+
+        // The cold arm hands both operands to the native through adjacent ascending slots, and a
+        // proven operand has no slot at all until it is boxed into place.
+        sp.* += 2;
+        flushToPhysicalStack(state, stack, sp.*);
+        sp.* -= 2;
+        entry_a = stack[sp.*];
+        entry_b = stack[sp.* + 1];
+    } else if (both_raw) {
         // The polymorphic path's stores and cold native call cannot be folded
         // away from a discarded branchless trial.
         if (state.in_branchless_trial) return IrCodegenError.BranchlessTrialImpure;
@@ -7773,22 +8029,14 @@ fn emitPolyArithFastPath(ec: EmitCtx, op: PolyArithOp) IrCodegenError!bool {
         entry_b = stack[sp.* + 1];
     } else {
         const one_raw = (entry_a == .raw_at_slot) != (entry_b == .raw_at_slot);
-        const known = if (entry_a == .raw_at_slot) entry_b else entry_a;
-        if (!state.aot_mode) return false;
-        if (!one_raw or !isKnownNumericEntry(known)) return false;
+        const known_entry = if (entry_a == .raw_at_slot) entry_b else entry_a;
+        if (!one_raw or !isKnownNumericEntry(known_entry)) return false;
 
         // The cold arm needs the polymorphic native, or the operator's dispatch
         // id where it dispatches instead. When neither resolves, keep the
         // concrete speculative path instead of rejecting the whole word.
         const res = state.resolver orelse return false;
-        const op_name: []const u8 = switch (op) {
-            .add => "+",
-            .sub => "-",
-            .mul => "*",
-            .div => "/",
-            .mod => "%",
-        };
-        const resolved = res.resolve(op_name, res.user_data) orelse return false;
+        const resolved = res.resolve(op.wordName(), res.user_data) orelse return false;
         if (state.fallbacks_locked or state.freestanding) {
             if (resolved.dispatch_id == 0) return false;
         }
@@ -7807,7 +8055,7 @@ fn emitPolyArithFastPath(ec: EmitCtx, op: PolyArithOp) IrCodegenError!bool {
     // The flush relabeled every live entry below the operands to its own slot, so nothing aliases
     // `dest_slot` and the write cannot clobber a value another entry still reads.
     const dest_slot = sp.*;
-    try emitPolymorphicBinaryArith(state, entry_a.raw_at_slot, entry_b.raw_at_slot, dest_slot, op, ec.line);
+    try emitPolymorphicBinaryArith(state, entry_a.raw_at_slot, entry_b.raw_at_slot, dest_slot, op, known, ec.line);
     stack[sp.*] = .{ .raw_at_slot = sp.* };
     sp.* += 1;
     return true;
@@ -10544,6 +10792,9 @@ pub fn emitWordC(
     var state = CompileState{
         .allocator = allocator,
         .ctx = &ctx,
+        // Emitted C runs in another process, so it takes the AOT shapes rather than the JIT's,
+        // which bake this process's addresses.
+        .aot_mode = true,
         .base_addr = base_addr,
         .tag_offset_const = tag_offset_const,
         .payload_offset_const = payload_offset_const,
@@ -18251,6 +18502,7 @@ test "jitPush*Slot: every miss branch reports UnresolvedSlot with an image-slot-
 test "jitNativeWordCall: dispatch hit runs the registered override, not the native's default body" {
     var ctx = Context.init(testing.allocator);
     defer ctx.deinit();
+    defer builtin_override.resetForTest();
 
     const def = ctx.dictionary.getPtr("+").?;
     const word_id = try ctx.jit_dispatch.assignId("+");
@@ -19036,11 +19288,14 @@ fn makeInstructions(comptime ops: anytype) [ops.len]Instruction {
 /// take the arm, so the dummy id is never dispatched.
 fn resolveArithOpForTest(name: []const u8, user_data: *anyopaque) ?ResolvedWord {
     _ = user_data;
-    const ops = [_][]const u8{ "+", "-", "*", "/", "%" };
+    const ops = [_][]const u8{ "+", "-", "*", "/", "%", "=", "<", ">" };
     for (ops) |op| {
         if (std.mem.eql(u8, name, op)) {
             return .{ .word_id = 0, .input_count = 2, .output_count = 1, .is_native = true };
         }
+    }
+    if (std.mem.eql(u8, name, "abs")) {
+        return .{ .word_id = 0, .input_count = 1, .output_count = 1, .is_native = true };
     }
     return null;
 }
@@ -19049,6 +19304,37 @@ var arith_test_resolver_dummy: u8 = 0;
 
 const arith_test_resolver = WordResolver{
     .resolve = &resolveArithOpForTest,
+    .user_data = @ptrCast(&arith_test_resolver_dummy),
+    .dispatch_table_ptr = @ptrCast(&arith_test_resolver_dummy),
+};
+
+/// Resolve the binary arithmetic and comparison ops to their real natives, for tests that run a
+/// cold arm against a real Context.
+fn resolveArithNativeForTest(name: []const u8, user_data: *anyopaque) ?ResolvedWord {
+    _ = user_data;
+    const natives = .{
+        .{ "+", &arithmetic_mod.nativeAdd },
+        .{ "-", &arithmetic_mod.nativeSub },
+        .{ "*", &arithmetic_mod.nativeMul },
+        .{ "/", &arithmetic_mod.nativeDiv },
+        .{ "%", &arithmetic_mod.nativeMod },
+        .{ "=", &arithmetic_mod.nativeEq },
+        .{ "<", &arithmetic_mod.nativeLt },
+        .{ ">", &arithmetic_mod.nativeGt },
+    };
+    inline for (natives) |entry| {
+        if (std.mem.eql(u8, name, entry[0])) {
+            return .{ .word_id = 0, .input_count = 2, .output_count = 1, .is_native = true, .native_fn_ptr = @intFromPtr(entry[1]) };
+        }
+    }
+    if (std.mem.eql(u8, name, "abs")) {
+        return .{ .word_id = 0, .input_count = 1, .output_count = 1, .is_native = true, .native_fn_ptr = @intFromPtr(&arithmetic_mod.nativeAbs) };
+    }
+    return null;
+}
+
+const arith_native_test_resolver = WordResolver{
+    .resolve = &resolveArithNativeForTest,
     .user_data = @ptrCast(&arith_test_resolver_dummy),
     .dispatch_table_ptr = @ptrCast(&arith_test_resolver_dummy),
 };
@@ -19867,7 +20153,7 @@ test "emitProgramC: freestanding preamble drops libc and emits kernel_main" {
 
 test "compile double: 2 *" {
     const instrs = makeInstructions(.{ @as(i64, 2), "*" });
-    const result = try compileWord(&instrs, 1, 1, null, null, null, null, null);
+    const result = try compileWord(&instrs, 1, 1, arith_test_resolver, null, null, null, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -19880,7 +20166,7 @@ test "compile double: 2 *" {
 
 test "compile (a+3)*4" {
     const instrs = makeInstructions(.{ @as(i64, 3), "+", @as(i64, 4), "*" });
-    const result = try compileWord(&instrs, 1, 1, null, null, null, null, null);
+    const result = try compileWord(&instrs, 1, 1, arith_test_resolver, null, null, null, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -20099,33 +20385,26 @@ test "no relocation: swap arithmetic on a real context stays correct" {
     try testing.expectEqual(@as(i64, -7), out);
 }
 
-test "overflow bails out on non-polymorphic path" {
-    // When one operand is a compile-time i64 literal, the non-polymorphic
-    // path is taken which still uses bail_status for overflow.
+test "overflow against a literal promotes through the native instead of bailing" {
     const instrs = makeInstructions(.{ std.math.maxInt(i64), "+" });
-    const result = try compileWord(&instrs, 1, 1, null, null, null, null, null);
+    const result = try compileWord(&instrs, 1, 1, arith_native_test_resolver, null, null, null, null);
     defer result.jit_buf.deinit();
 
-    const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
-    var out: i64 = undefined;
-    try testing.expectEqual(@as(i32, 1), callCompiled(func, &.{1}, &out));
-    try testing.expectEqual(@as(i32, 0), callCompiled(func, &.{0}, &out));
-    try testing.expectEqual(std.math.maxInt(i64), out);
-}
-
-test "overflow bail on the non-polymorphic path settles both operands" {
-    const instrs = makeInstructions(.{ std.math.maxInt(i64), "+" });
-    const result = try compileWord(&instrs, 1, 1, null, null, null, null, null);
-    defer result.jit_buf.deinit();
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+    try ctx.stack.push(.{ .fixnum = 1 });
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
-    var values = [_]Value{ .{ .fixnum = 1 }, .{ .fixnum = 0 } };
-    var sp: usize = 1;
-    const status = callCompiledValues(func, &values, &sp);
-    try testing.expectEqual(@as(i32, 1), status);
-    try testing.expectEqual(@as(usize, 2), sp);
-    try testing.expectEqual(@as(i64, 1), values[0].fixnum);
-    try testing.expectEqual(@as(i64, std.math.maxInt(i64)), values[1].fixnum);
+    var jit_ctx = JitContext{
+        .items_ptr = ctx.stack.items.items.ptr,
+        .sp_ptr = &ctx.stack.items.items.len,
+        .capacity = ctx.stack.items.capacity,
+        .ctx = @ptrCast(&ctx),
+        .stack_limit = ctx.stack_limit,
+    };
+    try testing.expectEqual(@as(i32, 0), func(&jit_ctx));
+    try testing.expectEqual(@as(usize, 1), ctx.stack.items.items.len);
+    try testing.expect(ctx.stack.items.items[0] == .bignum);
 }
 
 test "polymorphic division without a resolver is not compilable" {
@@ -20135,20 +20414,102 @@ test "polymorphic division without a resolver is not compilable" {
     try testing.expectError(IrCodegenError.NotCompilable, compileWord(&instrs, 2, 1, null, null, null, null, null));
 }
 
-test "bail on non-fixnum input" {
-    const instrs = makeInstructions(.{ @as(i64, 1), "+" });
-    const result = try compileWord(&instrs, 1, 1, null, null, null, null, null);
+fn registerFixnumAddArmForTest(ctx: *Context) !void {
+    const fixnum_tv = ctx.lookupBuiltinTypeValue("fixnum").?;
+    try ctx.registerDispatch(.{
+        .dispatch_id = ctx.nativeDispatchId(.add),
+        .type_a = fixnum_tv.descriptor.?,
+        .type_b = fixnum_tv.descriptor.?,
+    }, .{ .body = .{ .native_fn = struct {
+        fn f(fn_ctx: *Context) anyerror!void {
+            _ = try fn_ctx.stack.pop();
+            _ = try fn_ctx.stack.pop();
+            try fn_ctx.stack.push(.{ .fixnum = 42 });
+        }
+    }.f } }, true);
+}
+
+fn runPoppingTopOnContext(result: CompiledWord, ctx: *Context) !i64 {
+    const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
+    var out: i64 = undefined;
+    try testing.expectEqual(@as(i32, 0), runOnContext(func, ctx, &out));
+    _ = try ctx.stack.pop();
+    return out;
+}
+
+test "a method arm registered before compilation replaces a literal fixnum pair" {
+    defer builtin_override.resetForTest();
+
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+    try registerFixnumAddArmForTest(&ctx);
+
+    const instrs = makeInstructions(.{ @as(i64, 1), @as(i64, 2), "+" });
+    const result = try compileWord(&instrs, 0, 1, arith_native_test_resolver, null, null, null, null);
     defer result.jit_buf.deinit();
 
+    // With the bit cleared, a guarded site would compute 3 inline. Only a site compiled as the
+    // plain native call still reaches the arm in the table.
+    builtin_override.resetForTest();
+    try testing.expectEqual(@as(i64, 42), try runPoppingTopOnContext(result, &ctx));
+}
+
+test "an abs arm registered before compilation replaces a literal fixnum" {
+    defer builtin_override.resetForTest();
+
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    const fixnum_tv = ctx.lookupBuiltinTypeValue("fixnum").?;
+    try ctx.registerDispatch(.{
+        .dispatch_id = ctx.nativeDispatchId(.abs),
+        .type_a = fixnum_tv.descriptor.?,
+        .type_b = ctx.getDispatchUnarySentinel().descriptor.?,
+    }, .{ .body = .{ .native_fn = struct {
+        fn f(fn_ctx: *Context) anyerror!void {
+            _ = try fn_ctx.stack.pop();
+            try fn_ctx.stack.push(.{ .fixnum = 42 });
+        }
+    }.f } }, true);
+
+    const instrs = makeInstructions(.{ @as(i64, -7), "abs" });
+    const result = try compileWord(&instrs, 0, 1, arith_native_test_resolver, null, null, null, null);
+    defer result.jit_buf.deinit();
+
+    // As with the binary operators, only the plain native call reaches the arm once the bit clears.
+    builtin_override.resetForTest();
+    try testing.expectEqual(@as(i64, 42), try runPoppingTopOnContext(result, &ctx));
+}
+
+test "a method arm registered after compilation reaches a guarded literal fixnum pair" {
+    defer builtin_override.resetForTest();
+
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    const instrs = makeInstructions(.{ @as(i64, 1), @as(i64, 2), "+" });
+    const result = try compileWord(&instrs, 0, 1, arith_native_test_resolver, null, null, null, null);
+    defer result.jit_buf.deinit();
+
+    try testing.expectEqual(@as(i64, 3), try runPoppingTopOnContext(result, &ctx));
+    try registerFixnumAddArmForTest(&ctx);
+    try testing.expectEqual(@as(i64, 42), try runPoppingTopOnContext(result, &ctx));
+}
+
+test "non-numeric input against a literal reaches the native" {
+    const instrs = makeInstructions(.{ @as(i64, 1), "+" });
+    const result = try compileWord(&instrs, 1, 1, arith_native_test_resolver, null, null, null, null);
+    defer result.jit_buf.deinit();
+
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+    try ctx.stack.push(.{ .boolean = true });
+
+    // The native raises, so the word propagates an error rather than bailing into a re-run.
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
-    var values = [_]Value{ value_mod.stringValue("hello"), .{ .fixnum = 0 } };
-    var sp: usize = 1;
-    const status = callCompiledValues(func, &values, &sp);
-    // requireI64 tag check still bails (will be converted when comparisons
-    // get polymorphic support).
-    try testing.expectEqual(@as(i32, 1), status);
-    try testing.expectEqual(@as(usize, 2), sp);
-    try testing.expectEqual(@as(i64, 1), values[1].fixnum);
+    var out: i64 = undefined;
+    try testing.expectEqual(@as(i32, 2), runOnContext(func, &ctx, &out));
+    try testing.expectEqual(error.TypeMismatch, ctx.jit_pending_error.?);
 }
 
 test "bail on stack underflow" {
@@ -20258,32 +20619,18 @@ test "polymorphic arithmetic without a resolver is not compilable" {
     try testing.expectError(IrCodegenError.NotCompilable, compileWord(&instrs, 1, 1, null, null, null, null, null));
 }
 
-test "bail on float input to arithmetic" {
+test "float input against a fixnum literal computes a mixed pair inline" {
     const instrs = makeInstructions(.{ @as(i64, 1), "+" });
-    const result = try compileWord(&instrs, 1, 1, null, null, null, null, null);
+    const result = try compileWord(&instrs, 1, 1, arith_test_resolver, null, null, null, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
     var values = [_]Value{ .{ .float = 2.5 }, .{ .fixnum = 0 } };
     var sp: usize = 1;
     const status = callCompiledValues(func, &values, &sp);
-    try testing.expectEqual(@as(i32, 1), status);
-    try testing.expectEqual(@as(usize, 2), sp);
-    try testing.expectEqual(@as(i64, 1), values[1].fixnum);
-}
-
-test "bail on boolean input to arithmetic" {
-    const instrs = makeInstructions(.{ @as(i64, 1), "+" });
-    const result = try compileWord(&instrs, 1, 1, null, null, null, null, null);
-    defer result.jit_buf.deinit();
-
-    const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
-    var values = [_]Value{ .{ .boolean = true }, .{ .fixnum = 0 } };
-    var sp: usize = 1;
-    const status = callCompiledValues(func, &values, &sp);
-    try testing.expectEqual(@as(i32, 1), status);
-    try testing.expectEqual(@as(usize, 2), sp);
-    try testing.expectEqual(@as(i64, 1), values[1].fixnum);
+    try testing.expectEqual(@as(i32, 0), status);
+    try testing.expectEqual(@as(usize, 1), sp);
+    try testing.expectEqual(@as(f64, 3.5), values[0].float);
 }
 
 test "fixnum literal still works after refactor" {
@@ -20434,7 +20781,7 @@ test "compile f pushes false" {
 
 test "compile abs on negative fixnum" {
     const instrs = makeInstructions(.{"abs"});
-    const result = try compileWord(&instrs, 1, 1, null, null, null, null, null);
+    const result = try compileWord(&instrs, 1, 1, arith_test_resolver, null, null, null, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -20730,7 +21077,7 @@ test "compile if with arithmetic in branches" {
         .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = false_body } } }, .line = 3 },
         .{ .op = .{ .call_word = "if" }, .line = 4 },
     };
-    const result = try compileWord(&instrs, 0, 1, null, null, null, null, null);
+    const result = try compileWord(&instrs, 0, 1, arith_test_resolver, null, null, null, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -20959,6 +21306,9 @@ test "compile float if-else merge" {
 // `x dup C < [ TRUE-ARM ] [ FALSE-ARM ] if`: the top-only same-type shape the
 // branchless `IR_COND` merge selects on. The condition is computed from a
 // duplicate of `x`, so `x` remains as the single top the arm replaces.
+//
+// Under the JIT an arithmetic arm carries the builtin-override guard, whose set branch calls the
+// native, so these arms are refused and the `if` branches.
 const cond_select_true_mul = &[_]Instruction{
     .{ .op = .{ .push_literal = .{ .fixnum = 2 } }, .line = 1 },
     .{ .op = .{ .call_word = "*" }, .line = 1 },
@@ -20968,7 +21318,7 @@ const cond_select_false_mul = &[_]Instruction{
     .{ .op = .{ .call_word = "*" }, .line = 1 },
 };
 
-test "cond-select: qualifying i64 merge selects branchlessly (false arm)" {
+test "cond-select: a guarded arithmetic arm is refused (false arm)" {
     // 4 dup 3 < -> false; false arm 5 * -> 20.
     const instrs = [_]Instruction{
         .{ .op = .{ .push_literal = .{ .fixnum = 4 } }, .line = 1 },
@@ -20979,9 +21329,9 @@ test "cond-select: qualifying i64 merge selects branchlessly (false arm)" {
         .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = cond_select_false_mul } } }, .line = 3 },
         .{ .op = .{ .call_word = "if" }, .line = 4 },
     };
-    const result = try compileWord(&instrs, 0, 1, null, null, null, null, null);
+    const result = try compileWord(&instrs, 0, 1, arith_test_resolver, null, null, null, null);
     defer result.jit_buf.deinit();
-    try testing.expectEqual(@as(u32, 1), result.cond_select_count);
+    try testing.expectEqual(@as(u32, 0), result.cond_select_count);
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
     var values: [4]Value = undefined;
@@ -20992,7 +21342,7 @@ test "cond-select: qualifying i64 merge selects branchlessly (false arm)" {
     try testing.expectEqual(@as(i64, 20), values[0].fixnum);
 }
 
-test "cond-select: qualifying i64 merge selects branchlessly (true arm)" {
+test "cond-select: a guarded arithmetic arm is refused (true arm)" {
     // 2 dup 3 < -> true; true arm 2 * -> 4.
     const instrs = [_]Instruction{
         .{ .op = .{ .push_literal = .{ .fixnum = 2 } }, .line = 1 },
@@ -21003,9 +21353,9 @@ test "cond-select: qualifying i64 merge selects branchlessly (true arm)" {
         .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = cond_select_false_mul } } }, .line = 3 },
         .{ .op = .{ .call_word = "if" }, .line = 4 },
     };
-    const result = try compileWord(&instrs, 0, 1, null, null, null, null, null);
+    const result = try compileWord(&instrs, 0, 1, arith_test_resolver, null, null, null, null);
     defer result.jit_buf.deinit();
-    try testing.expectEqual(@as(u32, 1), result.cond_select_count);
+    try testing.expectEqual(@as(u32, 0), result.cond_select_count);
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
     var values: [4]Value = undefined;
@@ -21017,26 +21367,25 @@ test "cond-select: qualifying i64 merge selects branchlessly (true arm)" {
 }
 
 test "cond-select: shuffle arm over scalar operands selects branchlessly" {
-    // 10 3 t [ over + ] [ over - ] if: arms read the sibling 10 and replace the
-    // top; both operands are scalar i64_refs, so the shuffle stays pure. cond t
-    // -> over + -> 3 + 10 = 13, leaving [ 10 13 ].
-    const over_add = &[_]Instruction{
-        .{ .op = .{ .call_word = "over" }, .line = 1 },
-        .{ .op = .{ .call_word = "+" }, .line = 1 },
+    // 10 3 t [ drop dup ] [ drop 7 ] if: arms replace the top, one by copying the sibling 10; both
+    // operands are scalar i64_refs, so the shuffle stays pure. cond t -> drop dup, leaving [ 10 10 ].
+    const drop_dup = &[_]Instruction{
+        .{ .op = .{ .call_word = "drop" }, .line = 1 },
+        .{ .op = .{ .call_word = "dup" }, .line = 1 },
     };
-    const over_sub = &[_]Instruction{
-        .{ .op = .{ .call_word = "over" }, .line = 1 },
-        .{ .op = .{ .call_word = "-" }, .line = 1 },
+    const drop_seven = &[_]Instruction{
+        .{ .op = .{ .call_word = "drop" }, .line = 1 },
+        .{ .op = .{ .push_literal = .{ .fixnum = 7 } }, .line = 1 },
     };
     const instrs = [_]Instruction{
         .{ .op = .{ .push_literal = .{ .fixnum = 10 } }, .line = 1 },
         .{ .op = .{ .push_literal = .{ .fixnum = 3 } }, .line = 1 },
         .{ .op = .{ .push_literal = .{ .boolean = true } }, .line = 1 },
-        .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = over_add } } }, .line = 2 },
-        .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = over_sub } } }, .line = 3 },
+        .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = drop_dup } } }, .line = 2 },
+        .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = drop_seven } } }, .line = 3 },
         .{ .op = .{ .call_word = "if" }, .line = 4 },
     };
-    const result = try compileWord(&instrs, 0, 2, null, null, null, null, null);
+    const result = try compileWord(&instrs, 0, 2, arith_test_resolver, null, null, null, null);
     defer result.jit_buf.deinit();
     try testing.expectEqual(@as(u32, 1), result.cond_select_count);
 
@@ -21048,10 +21397,10 @@ test "cond-select: shuffle arm over scalar operands selects branchlessly" {
     try testing.expect(values[0] == .fixnum);
     try testing.expectEqual(@as(i64, 10), values[0].fixnum);
     try testing.expect(values[1] == .fixnum);
-    try testing.expectEqual(@as(i64, 13), values[1].fixnum);
+    try testing.expectEqual(@as(i64, 10), values[1].fixnum);
 }
 
-test "cond-select: bool merge feeding a follow-on i64 merge selects both" {
+test "cond-select: guarded comparison and arithmetic arms are refused in both merges" {
     // 0 3 dup 5 < [ 2 > ] [ 8 > ] if  -> bool merge (3>2 = t)
     //            [ 1 + ] [ 0 + ] if   -> i64 merge over the accumulator 0 (t -> 0+1)
     const gt2 = &[_]Instruction{
@@ -21083,9 +21432,9 @@ test "cond-select: bool merge feeding a follow-on i64 merge selects both" {
         .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = noinc } } }, .line = 6 },
         .{ .op = .{ .call_word = "if" }, .line = 7 },
     };
-    const result = try compileWord(&instrs, 0, 1, null, null, null, null, null);
+    const result = try compileWord(&instrs, 0, 1, arith_test_resolver, null, null, null, null);
     defer result.jit_buf.deinit();
-    try testing.expectEqual(@as(u32, 2), result.cond_select_count);
+    try testing.expectEqual(@as(u32, 0), result.cond_select_count);
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
     var values: [4]Value = undefined;
@@ -21115,7 +21464,7 @@ test "cond-select: f64 merge falls back to the boxed path" {
         .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = mul1_5 } } }, .line = 3 },
         .{ .op = .{ .call_word = "if" }, .line = 4 },
     };
-    const result = try compileWord(&instrs, 0, 1, null, null, null, null, null);
+    const result = try compileWord(&instrs, 0, 1, arith_test_resolver, null, null, null, null);
     defer result.jit_buf.deinit();
     try testing.expectEqual(@as(u32, 0), result.cond_select_count);
 
@@ -21147,7 +21496,7 @@ test "cond-select: cross-type i64/bool merge falls back to the boxed path" {
         .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = arm_gt } } }, .line = 3 },
         .{ .op = .{ .call_word = "if" }, .line = 4 },
     };
-    const result = try compileWord(&instrs, 0, 1, null, null, null, null, null);
+    const result = try compileWord(&instrs, 0, 1, arith_test_resolver, null, null, null, null);
     defer result.jit_buf.deinit();
     try testing.expectEqual(@as(u32, 0), result.cond_select_count);
 
@@ -21181,7 +21530,7 @@ test "cond-select: trapping arm disqualifies the fast path" {
         .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = div2 } } }, .line = 3 },
         .{ .op = .{ .call_word = "if" }, .line = 4 },
     };
-    const result = try compileWord(&instrs, 0, 1, null, null, null, null, null);
+    const result = try compileWord(&instrs, 0, 1, arith_test_resolver, null, null, null, null);
     defer result.jit_buf.deinit();
     try testing.expectEqual(@as(u32, 0), result.cond_select_count);
 
@@ -21225,7 +21574,7 @@ test "compile float addition" {
         .{ .op = .{ .push_literal = .{ .float = 2.5 } }, .line = 2 },
         .{ .op = .{ .call_word = "+" }, .line = 3 },
     };
-    const result = try compileWord(&instrs, 0, 1, null, null, null, null, null);
+    const result = try compileWord(&instrs, 0, 1, arith_test_resolver, null, null, null, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -21243,7 +21592,7 @@ test "compile float subtraction" {
         .{ .op = .{ .push_literal = .{ .float = 2.0 } }, .line = 2 },
         .{ .op = .{ .call_word = "-" }, .line = 3 },
     };
-    const result = try compileWord(&instrs, 0, 1, null, null, null, null, null);
+    const result = try compileWord(&instrs, 0, 1, arith_test_resolver, null, null, null, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -21261,7 +21610,7 @@ test "compile float multiplication" {
         .{ .op = .{ .push_literal = .{ .float = 3.0 } }, .line = 2 },
         .{ .op = .{ .call_word = "*" }, .line = 3 },
     };
-    const result = try compileWord(&instrs, 0, 1, null, null, null, null, null);
+    const result = try compileWord(&instrs, 0, 1, arith_test_resolver, null, null, null, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -21279,7 +21628,7 @@ test "compile float division" {
         .{ .op = .{ .push_literal = .{ .float = 2.0 } }, .line = 2 },
         .{ .op = .{ .call_word = "/" }, .line = 3 },
     };
-    const result = try compileWord(&instrs, 0, 1, null, null, null, null, null);
+    const result = try compileWord(&instrs, 0, 1, arith_test_resolver, null, null, null, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -21297,7 +21646,7 @@ test "compile float comparison =" {
         .{ .op = .{ .push_literal = .{ .float = 1.5 } }, .line = 2 },
         .{ .op = .{ .call_word = "=" }, .line = 3 },
     };
-    const result_eq = try compileWord(&instrs_eq, 0, 1, null, null, null, null, null);
+    const result_eq = try compileWord(&instrs_eq, 0, 1, arith_test_resolver, null, null, null, null);
     defer result_eq.jit_buf.deinit();
 
     const func_eq: CompiledFn = @ptrCast(@alignCast(result_eq.code_ptr));
@@ -21313,7 +21662,7 @@ test "compile float comparison =" {
         .{ .op = .{ .push_literal = .{ .float = 2.5 } }, .line = 2 },
         .{ .op = .{ .call_word = "=" }, .line = 3 },
     };
-    const result_ne = try compileWord(&instrs_ne, 0, 1, null, null, null, null, null);
+    const result_ne = try compileWord(&instrs_ne, 0, 1, arith_test_resolver, null, null, null, null);
     defer result_ne.jit_buf.deinit();
 
     const func_ne: CompiledFn = @ptrCast(@alignCast(result_ne.code_ptr));
@@ -21330,7 +21679,7 @@ test "compile float comparison <" {
         .{ .op = .{ .push_literal = .{ .float = 2.5 } }, .line = 2 },
         .{ .op = .{ .call_word = "<" }, .line = 3 },
     };
-    const result = try compileWord(&instrs, 0, 1, null, null, null, null, null);
+    const result = try compileWord(&instrs, 0, 1, arith_test_resolver, null, null, null, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -21348,7 +21697,7 @@ test "compile float comparison >" {
         .{ .op = .{ .push_literal = .{ .float = 1.5 } }, .line = 2 },
         .{ .op = .{ .call_word = ">" }, .line = 3 },
     };
-    const result = try compileWord(&instrs, 0, 1, null, null, null, null, null);
+    const result = try compileWord(&instrs, 0, 1, arith_test_resolver, null, null, null, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -21367,7 +21716,7 @@ test "compile float + raw_at_slot input" {
         .{ .op = .{ .push_literal = .{ .float = 1.5 } }, .line = 1 },
         .{ .op = .{ .call_word = "+" }, .line = 2 },
     };
-    const result = try compileWord(&instrs, 1, 1, null, null, null, null, null);
+    const result = try compileWord(&instrs, 1, 1, arith_test_resolver, null, null, null, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -21504,7 +21853,7 @@ test "inline virtual-unwrap then arithmetic" {
         .{ .op = .{ .call_word = "+" }, .line = 4 },
     };
 
-    const result = try compileWord(&instrs, 1, 1, null, null, null, null, null);
+    const result = try compileWord(&instrs, 1, 1, arith_test_resolver, null, null, null, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -21887,7 +22236,7 @@ test "inline typed-validate-and-promote then arithmetic" {
         .{ .op = .{ .call_word = "+" }, .line = 5 },
     };
 
-    const result = try compileWord(&instrs, 0, 1, null, null, null, null, null);
+    const result = try compileWord(&instrs, 0, 1, arith_test_resolver, null, null, null, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -24021,7 +24370,7 @@ test "add above row_region compiles" {
     // ( x quot -- )  body: call 10 20 +
     // Push two known values above the row_region, then add them.
     const instrs = makeInstructions(.{ "call", @as(i64, 10), @as(i64, 20), "+" });
-    const result = try compileWord(&instrs, 2, 0, null, null, null, null, null);
+    const result = try compileWord(&instrs, 2, 0, arith_test_resolver, null, null, null, null);
     defer result.jit_buf.deinit();
 }
 
@@ -24374,13 +24723,13 @@ test "row underflow: a word reaching below its declared inputs compiles in AOT m
     try testing.expect(std.mem.indexOf(u8, source, "onez_w_reach_below") != null);
 }
 
-test "row underflow: the same word is rejected in non-AOT (JIT) C emission" {
-    // emitWordC does not set aot_mode, so reaching below the abstract base stays
-    // a StackUnderflow -- JIT behavior is unchanged by the AOT-only fallback.
+test "row underflow: the same word is rejected by the JIT" {
+    // Reaching below the abstract base stays a StackUnderflow under the JIT, which the AOT-only
+    // fallback leaves unchanged.
     const instrs = makeInstructions(.{"swap"});
     try testing.expectError(
         IrCodegenError.StackUnderflow,
-        emitWordC(&instrs, 1, 1, "reach-below", testing.allocator),
+        compileWord(&instrs, 1, 1, null, null, null, null, null),
     );
 }
 

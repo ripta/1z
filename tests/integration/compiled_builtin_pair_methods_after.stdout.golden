@@ -1,0 +1,1038 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: add-u is compiled
+Stack: [ ]
+PASS: add-lit is compiled
+Stack: [ ]
+PASS: add-flit is compiled
+Stack: [ ]
+PASS: add-mlit is compiled
+Stack: [ ]
+PASS: add-tf is compiled
+Stack: [ ]
+PASS: add-tF is compiled
+Stack: [ ]
+PASS: add-one is compiled
+Stack: [ ]
+PASS: sub-u is compiled
+Stack: [ ]
+PASS: sub-lit is compiled
+Stack: [ ]
+PASS: sub-flit is compiled
+Stack: [ ]
+PASS: sub-mlit is compiled
+Stack: [ ]
+PASS: sub-tf is compiled
+Stack: [ ]
+PASS: sub-tF is compiled
+Stack: [ ]
+PASS: sub-one is compiled
+Stack: [ ]
+PASS: mul-u is compiled
+Stack: [ ]
+PASS: mul-lit is compiled
+Stack: [ ]
+PASS: mul-flit is compiled
+Stack: [ ]
+PASS: mul-mlit is compiled
+Stack: [ ]
+PASS: mul-tf is compiled
+Stack: [ ]
+PASS: mul-tF is compiled
+Stack: [ ]
+PASS: mul-one is compiled
+Stack: [ ]
+PASS: div-u is compiled
+Stack: [ ]
+PASS: div-lit is compiled
+Stack: [ ]
+PASS: div-flit is compiled
+Stack: [ ]
+PASS: div-mlit is compiled
+Stack: [ ]
+PASS: div-tf is compiled
+Stack: [ ]
+PASS: div-tF is compiled
+Stack: [ ]
+PASS: div-one is compiled
+Stack: [ ]
+PASS: mod-u is compiled
+Stack: [ ]
+PASS: mod-lit is compiled
+Stack: [ ]
+PASS: mod-flit is compiled
+Stack: [ ]
+PASS: mod-mlit is compiled
+Stack: [ ]
+PASS: mod-tf is compiled
+Stack: [ ]
+PASS: mod-tF is compiled
+Stack: [ ]
+PASS: mod-one is compiled
+Stack: [ ]
+PASS: eq-u is compiled
+Stack: [ ]
+PASS: eq-lit is compiled
+Stack: [ ]
+PASS: eq-flit is compiled
+Stack: [ ]
+PASS: eq-mlit is compiled
+Stack: [ ]
+PASS: eq-tf is compiled
+Stack: [ ]
+PASS: eq-tF is compiled
+Stack: [ ]
+PASS: eq-one is compiled
+Stack: [ ]
+PASS: lt-u is compiled
+Stack: [ ]
+PASS: lt-lit is compiled
+Stack: [ ]
+PASS: lt-flit is compiled
+Stack: [ ]
+PASS: lt-mlit is compiled
+Stack: [ ]
+PASS: lt-tf is compiled
+Stack: [ ]
+PASS: lt-tF is compiled
+Stack: [ ]
+PASS: lt-one is compiled
+Stack: [ ]
+PASS: gt-u is compiled
+Stack: [ ]
+PASS: gt-lit is compiled
+Stack: [ ]
+PASS: gt-flit is compiled
+Stack: [ ]
+PASS: gt-mlit is compiled
+Stack: [ ]
+PASS: gt-tf is compiled
+Stack: [ ]
+PASS: gt-tF is compiled
+Stack: [ ]
+PASS: gt-one is compiled
+Stack: [ ]
+PASS: abs-u is compiled
+Stack: [ ]
+PASS: abs-lit is compiled
+Stack: [ ]
+PASS: abs-flit is compiled
+Stack: [ ]
+PASS: abs-tf is compiled
+Stack: [ ]
+PASS: abs-tF is compiled
+Stack: [ ]
+=== no arm ===
+Stack: [ ]
+PASS: builtin: + untyped fixnum pair
+Stack: [ ]
+PASS: builtin: + untyped float pair
+Stack: [ ]
+PASS: builtin: + untyped fixnum-float pair
+Stack: [ ]
+PASS: builtin: + untyped float-fixnum pair
+Stack: [ ]
+PASS: builtin: + literal fixnum pair
+Stack: [ ]
+PASS: builtin: + literal float pair
+Stack: [ ]
+PASS: builtin: + literal fixnum-float pair
+Stack: [ ]
+PASS: builtin: + typed fixnum pair
+Stack: [ ]
+PASS: builtin: + typed float pair
+Stack: [ ]
+PASS: builtin: + literal fixnum on an untyped fixnum
+Stack: [ ]
+PASS: builtin: + literal fixnum on an untyped float
+Stack: [ ]
+PASS: builtin: - untyped fixnum pair
+Stack: [ ]
+PASS: builtin: - untyped float pair
+Stack: [ ]
+PASS: builtin: - untyped fixnum-float pair
+Stack: [ ]
+PASS: builtin: - untyped float-fixnum pair
+Stack: [ ]
+PASS: builtin: - literal fixnum pair
+Stack: [ ]
+PASS: builtin: - literal float pair
+Stack: [ ]
+PASS: builtin: - literal fixnum-float pair
+Stack: [ ]
+PASS: builtin: - typed fixnum pair
+Stack: [ ]
+PASS: builtin: - typed float pair
+Stack: [ ]
+PASS: builtin: - literal fixnum on an untyped fixnum
+Stack: [ ]
+PASS: builtin: - literal fixnum on an untyped float
+Stack: [ ]
+PASS: builtin: * untyped fixnum pair
+Stack: [ ]
+PASS: builtin: * untyped float pair
+Stack: [ ]
+PASS: builtin: * untyped fixnum-float pair
+Stack: [ ]
+PASS: builtin: * untyped float-fixnum pair
+Stack: [ ]
+PASS: builtin: * literal fixnum pair
+Stack: [ ]
+PASS: builtin: * literal float pair
+Stack: [ ]
+PASS: builtin: * literal fixnum-float pair
+Stack: [ ]
+PASS: builtin: * typed fixnum pair
+Stack: [ ]
+PASS: builtin: * typed float pair
+Stack: [ ]
+PASS: builtin: * literal fixnum on an untyped fixnum
+Stack: [ ]
+PASS: builtin: * literal fixnum on an untyped float
+Stack: [ ]
+PASS: builtin: / untyped fixnum pair
+Stack: [ ]
+PASS: builtin: / untyped float pair
+Stack: [ ]
+PASS: builtin: / untyped fixnum-float pair
+Stack: [ ]
+PASS: builtin: / untyped float-fixnum pair
+Stack: [ ]
+PASS: builtin: / literal fixnum pair
+Stack: [ ]
+PASS: builtin: / literal float pair
+Stack: [ ]
+PASS: builtin: / literal fixnum-float pair
+Stack: [ ]
+PASS: builtin: / typed fixnum pair
+Stack: [ ]
+PASS: builtin: / typed float pair
+Stack: [ ]
+PASS: builtin: / literal fixnum on an untyped fixnum
+Stack: [ ]
+PASS: builtin: / literal fixnum on an untyped float
+Stack: [ ]
+PASS: builtin: % untyped fixnum pair
+Stack: [ ]
+PASS: builtin: % untyped float pair
+Stack: [ ]
+PASS: builtin: % untyped fixnum-float pair
+Stack: [ ]
+PASS: builtin: % untyped float-fixnum pair
+Stack: [ ]
+PASS: builtin: % literal fixnum pair
+Stack: [ ]
+PASS: builtin: % literal float pair
+Stack: [ ]
+PASS: builtin: % literal fixnum-float pair
+Stack: [ ]
+PASS: builtin: % typed fixnum pair
+Stack: [ ]
+PASS: builtin: % typed float pair
+Stack: [ ]
+PASS: builtin: % literal fixnum on an untyped fixnum
+Stack: [ ]
+PASS: builtin: % literal fixnum on an untyped float
+Stack: [ ]
+PASS: builtin: = untyped fixnum pair
+Stack: [ ]
+PASS: builtin: = untyped float pair
+Stack: [ ]
+PASS: builtin: = untyped fixnum-float pair
+Stack: [ ]
+PASS: builtin: = untyped float-fixnum pair
+Stack: [ ]
+PASS: builtin: = literal fixnum pair
+Stack: [ ]
+PASS: builtin: = literal float pair
+Stack: [ ]
+PASS: builtin: = literal fixnum-float pair
+Stack: [ ]
+PASS: builtin: = typed fixnum pair
+Stack: [ ]
+PASS: builtin: = typed float pair
+Stack: [ ]
+PASS: builtin: = literal fixnum on an untyped fixnum
+Stack: [ ]
+PASS: builtin: = literal fixnum on an untyped float
+Stack: [ ]
+PASS: builtin: < untyped fixnum pair
+Stack: [ ]
+PASS: builtin: < untyped float pair
+Stack: [ ]
+PASS: builtin: < untyped fixnum-float pair
+Stack: [ ]
+PASS: builtin: < untyped float-fixnum pair
+Stack: [ ]
+PASS: builtin: < literal fixnum pair
+Stack: [ ]
+PASS: builtin: < literal float pair
+Stack: [ ]
+PASS: builtin: < literal fixnum-float pair
+Stack: [ ]
+PASS: builtin: < typed fixnum pair
+Stack: [ ]
+PASS: builtin: < typed float pair
+Stack: [ ]
+PASS: builtin: < literal fixnum on an untyped fixnum
+Stack: [ ]
+PASS: builtin: < literal fixnum on an untyped float
+Stack: [ ]
+PASS: builtin: > untyped fixnum pair
+Stack: [ ]
+PASS: builtin: > untyped float pair
+Stack: [ ]
+PASS: builtin: > untyped fixnum-float pair
+Stack: [ ]
+PASS: builtin: > untyped float-fixnum pair
+Stack: [ ]
+PASS: builtin: > literal fixnum pair
+Stack: [ ]
+PASS: builtin: > literal float pair
+Stack: [ ]
+PASS: builtin: > literal fixnum-float pair
+Stack: [ ]
+PASS: builtin: > typed fixnum pair
+Stack: [ ]
+PASS: builtin: > typed float pair
+Stack: [ ]
+PASS: builtin: > literal fixnum on an untyped fixnum
+Stack: [ ]
+PASS: builtin: > literal fixnum on an untyped float
+Stack: [ ]
+PASS: builtin: abs untyped fixnum
+Stack: [ ]
+PASS: builtin: abs untyped float
+Stack: [ ]
+PASS: builtin: abs literal fixnum
+Stack: [ ]
+PASS: builtin: abs literal float
+Stack: [ ]
+PASS: builtin: abs typed fixnum
+Stack: [ ]
+PASS: builtin: abs typed float
+Stack: [ ]
+=== float pair arms ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: float arm: + untyped fixnum pair
+Stack: [ ]
+PASS: float arm: + untyped float pair
+Stack: [ ]
+PASS: float arm: + untyped fixnum-float pair
+Stack: [ ]
+PASS: float arm: + untyped float-fixnum pair
+Stack: [ ]
+PASS: float arm: + literal fixnum pair
+Stack: [ ]
+PASS: float arm: + literal float pair
+Stack: [ ]
+PASS: float arm: + literal fixnum-float pair
+Stack: [ ]
+PASS: float arm: + typed fixnum pair
+Stack: [ ]
+PASS: float arm: + typed float pair
+Stack: [ ]
+PASS: float arm: + literal fixnum on an untyped fixnum
+Stack: [ ]
+PASS: float arm: + literal fixnum on an untyped float
+Stack: [ ]
+PASS: float arm: - untyped fixnum pair
+Stack: [ ]
+PASS: float arm: - untyped float pair
+Stack: [ ]
+PASS: float arm: - untyped fixnum-float pair
+Stack: [ ]
+PASS: float arm: - untyped float-fixnum pair
+Stack: [ ]
+PASS: float arm: - literal fixnum pair
+Stack: [ ]
+PASS: float arm: - literal float pair
+Stack: [ ]
+PASS: float arm: - literal fixnum-float pair
+Stack: [ ]
+PASS: float arm: - typed fixnum pair
+Stack: [ ]
+PASS: float arm: - typed float pair
+Stack: [ ]
+PASS: float arm: - literal fixnum on an untyped fixnum
+Stack: [ ]
+PASS: float arm: - literal fixnum on an untyped float
+Stack: [ ]
+PASS: float arm: * untyped fixnum pair
+Stack: [ ]
+PASS: float arm: * untyped float pair
+Stack: [ ]
+PASS: float arm: * untyped fixnum-float pair
+Stack: [ ]
+PASS: float arm: * untyped float-fixnum pair
+Stack: [ ]
+PASS: float arm: * literal fixnum pair
+Stack: [ ]
+PASS: float arm: * literal float pair
+Stack: [ ]
+PASS: float arm: * literal fixnum-float pair
+Stack: [ ]
+PASS: float arm: * typed fixnum pair
+Stack: [ ]
+PASS: float arm: * typed float pair
+Stack: [ ]
+PASS: float arm: * literal fixnum on an untyped fixnum
+Stack: [ ]
+PASS: float arm: * literal fixnum on an untyped float
+Stack: [ ]
+PASS: float arm: / untyped fixnum pair
+Stack: [ ]
+PASS: float arm: / untyped float pair
+Stack: [ ]
+PASS: float arm: / untyped fixnum-float pair
+Stack: [ ]
+PASS: float arm: / untyped float-fixnum pair
+Stack: [ ]
+PASS: float arm: / literal fixnum pair
+Stack: [ ]
+PASS: float arm: / literal float pair
+Stack: [ ]
+PASS: float arm: / literal fixnum-float pair
+Stack: [ ]
+PASS: float arm: / typed fixnum pair
+Stack: [ ]
+PASS: float arm: / typed float pair
+Stack: [ ]
+PASS: float arm: / literal fixnum on an untyped fixnum
+Stack: [ ]
+PASS: float arm: / literal fixnum on an untyped float
+Stack: [ ]
+PASS: float arm: % untyped fixnum pair
+Stack: [ ]
+PASS: float arm: % untyped float pair
+Stack: [ ]
+PASS: float arm: % untyped fixnum-float pair
+Stack: [ ]
+PASS: float arm: % untyped float-fixnum pair
+Stack: [ ]
+PASS: float arm: % literal fixnum pair
+Stack: [ ]
+PASS: float arm: % literal float pair
+Stack: [ ]
+PASS: float arm: % literal fixnum-float pair
+Stack: [ ]
+PASS: float arm: % typed fixnum pair
+Stack: [ ]
+PASS: float arm: % typed float pair
+Stack: [ ]
+PASS: float arm: % literal fixnum on an untyped fixnum
+Stack: [ ]
+PASS: float arm: % literal fixnum on an untyped float
+Stack: [ ]
+PASS: float arm: = untyped fixnum pair
+Stack: [ ]
+PASS: float arm: = untyped float pair
+Stack: [ ]
+PASS: float arm: = untyped fixnum-float pair
+Stack: [ ]
+PASS: float arm: = untyped float-fixnum pair
+Stack: [ ]
+PASS: float arm: = literal fixnum pair
+Stack: [ ]
+PASS: float arm: = literal float pair
+Stack: [ ]
+PASS: float arm: = literal fixnum-float pair
+Stack: [ ]
+PASS: float arm: = typed fixnum pair
+Stack: [ ]
+PASS: float arm: = typed float pair
+Stack: [ ]
+PASS: float arm: = literal fixnum on an untyped fixnum
+Stack: [ ]
+PASS: float arm: = literal fixnum on an untyped float
+Stack: [ ]
+PASS: float arm: < untyped fixnum pair
+Stack: [ ]
+PASS: float arm: < untyped float pair
+Stack: [ ]
+PASS: float arm: < untyped fixnum-float pair
+Stack: [ ]
+PASS: float arm: < untyped float-fixnum pair
+Stack: [ ]
+PASS: float arm: < literal fixnum pair
+Stack: [ ]
+PASS: float arm: < literal float pair
+Stack: [ ]
+PASS: float arm: < literal fixnum-float pair
+Stack: [ ]
+PASS: float arm: < typed fixnum pair
+Stack: [ ]
+PASS: float arm: < typed float pair
+Stack: [ ]
+PASS: float arm: < literal fixnum on an untyped fixnum
+Stack: [ ]
+PASS: float arm: < literal fixnum on an untyped float
+Stack: [ ]
+PASS: float arm: > untyped fixnum pair
+Stack: [ ]
+PASS: float arm: > untyped float pair
+Stack: [ ]
+PASS: float arm: > untyped fixnum-float pair
+Stack: [ ]
+PASS: float arm: > untyped float-fixnum pair
+Stack: [ ]
+PASS: float arm: > literal fixnum pair
+Stack: [ ]
+PASS: float arm: > literal float pair
+Stack: [ ]
+PASS: float arm: > literal fixnum-float pair
+Stack: [ ]
+PASS: float arm: > typed fixnum pair
+Stack: [ ]
+PASS: float arm: > typed float pair
+Stack: [ ]
+PASS: float arm: > literal fixnum on an untyped fixnum
+Stack: [ ]
+PASS: float arm: > literal fixnum on an untyped float
+Stack: [ ]
+PASS: float arm: abs untyped fixnum
+Stack: [ ]
+PASS: float arm: abs untyped float
+Stack: [ ]
+PASS: float arm: abs literal fixnum
+Stack: [ ]
+PASS: float arm: abs literal float
+Stack: [ ]
+PASS: float arm: abs typed fixnum
+Stack: [ ]
+PASS: float arm: abs typed float
+Stack: [ ]
+=== fixnum pair arms ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: fixnum arm: + untyped fixnum pair
+Stack: [ ]
+PASS: fixnum arm: + untyped float pair
+Stack: [ ]
+PASS: fixnum arm: + untyped fixnum-float pair
+Stack: [ ]
+PASS: fixnum arm: + untyped float-fixnum pair
+Stack: [ ]
+PASS: fixnum arm: + literal fixnum pair
+Stack: [ ]
+PASS: fixnum arm: + literal float pair
+Stack: [ ]
+PASS: fixnum arm: + literal fixnum-float pair
+Stack: [ ]
+PASS: fixnum arm: + typed fixnum pair
+Stack: [ ]
+PASS: fixnum arm: + typed float pair
+Stack: [ ]
+PASS: fixnum arm: + literal fixnum on an untyped fixnum
+Stack: [ ]
+PASS: fixnum arm: + literal fixnum on an untyped float
+Stack: [ ]
+PASS: fixnum arm: - untyped fixnum pair
+Stack: [ ]
+PASS: fixnum arm: - untyped float pair
+Stack: [ ]
+PASS: fixnum arm: - untyped fixnum-float pair
+Stack: [ ]
+PASS: fixnum arm: - untyped float-fixnum pair
+Stack: [ ]
+PASS: fixnum arm: - literal fixnum pair
+Stack: [ ]
+PASS: fixnum arm: - literal float pair
+Stack: [ ]
+PASS: fixnum arm: - literal fixnum-float pair
+Stack: [ ]
+PASS: fixnum arm: - typed fixnum pair
+Stack: [ ]
+PASS: fixnum arm: - typed float pair
+Stack: [ ]
+PASS: fixnum arm: - literal fixnum on an untyped fixnum
+Stack: [ ]
+PASS: fixnum arm: - literal fixnum on an untyped float
+Stack: [ ]
+PASS: fixnum arm: * untyped fixnum pair
+Stack: [ ]
+PASS: fixnum arm: * untyped float pair
+Stack: [ ]
+PASS: fixnum arm: * untyped fixnum-float pair
+Stack: [ ]
+PASS: fixnum arm: * untyped float-fixnum pair
+Stack: [ ]
+PASS: fixnum arm: * literal fixnum pair
+Stack: [ ]
+PASS: fixnum arm: * literal float pair
+Stack: [ ]
+PASS: fixnum arm: * literal fixnum-float pair
+Stack: [ ]
+PASS: fixnum arm: * typed fixnum pair
+Stack: [ ]
+PASS: fixnum arm: * typed float pair
+Stack: [ ]
+PASS: fixnum arm: * literal fixnum on an untyped fixnum
+Stack: [ ]
+PASS: fixnum arm: * literal fixnum on an untyped float
+Stack: [ ]
+PASS: fixnum arm: / untyped fixnum pair
+Stack: [ ]
+PASS: fixnum arm: / untyped float pair
+Stack: [ ]
+PASS: fixnum arm: / untyped fixnum-float pair
+Stack: [ ]
+PASS: fixnum arm: / untyped float-fixnum pair
+Stack: [ ]
+PASS: fixnum arm: / literal fixnum pair
+Stack: [ ]
+PASS: fixnum arm: / literal float pair
+Stack: [ ]
+PASS: fixnum arm: / literal fixnum-float pair
+Stack: [ ]
+PASS: fixnum arm: / typed fixnum pair
+Stack: [ ]
+PASS: fixnum arm: / typed float pair
+Stack: [ ]
+PASS: fixnum arm: / literal fixnum on an untyped fixnum
+Stack: [ ]
+PASS: fixnum arm: / literal fixnum on an untyped float
+Stack: [ ]
+PASS: fixnum arm: % untyped fixnum pair
+Stack: [ ]
+PASS: fixnum arm: % untyped float pair
+Stack: [ ]
+PASS: fixnum arm: % untyped fixnum-float pair
+Stack: [ ]
+PASS: fixnum arm: % untyped float-fixnum pair
+Stack: [ ]
+PASS: fixnum arm: % literal fixnum pair
+Stack: [ ]
+PASS: fixnum arm: % literal float pair
+Stack: [ ]
+PASS: fixnum arm: % literal fixnum-float pair
+Stack: [ ]
+PASS: fixnum arm: % typed fixnum pair
+Stack: [ ]
+PASS: fixnum arm: % typed float pair
+Stack: [ ]
+PASS: fixnum arm: % literal fixnum on an untyped fixnum
+Stack: [ ]
+PASS: fixnum arm: % literal fixnum on an untyped float
+Stack: [ ]
+PASS: fixnum arm: = untyped fixnum pair
+Stack: [ ]
+PASS: fixnum arm: = untyped float pair
+Stack: [ ]
+PASS: fixnum arm: = untyped fixnum-float pair
+Stack: [ ]
+PASS: fixnum arm: = untyped float-fixnum pair
+Stack: [ ]
+PASS: fixnum arm: = literal fixnum pair
+Stack: [ ]
+PASS: fixnum arm: = literal float pair
+Stack: [ ]
+PASS: fixnum arm: = literal fixnum-float pair
+Stack: [ ]
+PASS: fixnum arm: = typed fixnum pair
+Stack: [ ]
+PASS: fixnum arm: = typed float pair
+Stack: [ ]
+PASS: fixnum arm: = literal fixnum on an untyped fixnum
+Stack: [ ]
+PASS: fixnum arm: = literal fixnum on an untyped float
+Stack: [ ]
+PASS: fixnum arm: < untyped fixnum pair
+Stack: [ ]
+PASS: fixnum arm: < untyped float pair
+Stack: [ ]
+PASS: fixnum arm: < untyped fixnum-float pair
+Stack: [ ]
+PASS: fixnum arm: < untyped float-fixnum pair
+Stack: [ ]
+PASS: fixnum arm: < literal fixnum pair
+Stack: [ ]
+PASS: fixnum arm: < literal float pair
+Stack: [ ]
+PASS: fixnum arm: < literal fixnum-float pair
+Stack: [ ]
+PASS: fixnum arm: < typed fixnum pair
+Stack: [ ]
+PASS: fixnum arm: < typed float pair
+Stack: [ ]
+PASS: fixnum arm: < literal fixnum on an untyped fixnum
+Stack: [ ]
+PASS: fixnum arm: < literal fixnum on an untyped float
+Stack: [ ]
+PASS: fixnum arm: > untyped fixnum pair
+Stack: [ ]
+PASS: fixnum arm: > untyped float pair
+Stack: [ ]
+PASS: fixnum arm: > untyped fixnum-float pair
+Stack: [ ]
+PASS: fixnum arm: > untyped float-fixnum pair
+Stack: [ ]
+PASS: fixnum arm: > literal fixnum pair
+Stack: [ ]
+PASS: fixnum arm: > literal float pair
+Stack: [ ]
+PASS: fixnum arm: > literal fixnum-float pair
+Stack: [ ]
+PASS: fixnum arm: > typed fixnum pair
+Stack: [ ]
+PASS: fixnum arm: > typed float pair
+Stack: [ ]
+PASS: fixnum arm: > literal fixnum on an untyped fixnum
+Stack: [ ]
+PASS: fixnum arm: > literal fixnum on an untyped float
+Stack: [ ]
+PASS: fixnum arm: abs untyped fixnum
+Stack: [ ]
+PASS: fixnum arm: abs untyped float
+Stack: [ ]
+PASS: fixnum arm: abs literal fixnum
+Stack: [ ]
+PASS: fixnum arm: abs literal float
+Stack: [ ]
+PASS: fixnum arm: abs typed fixnum
+Stack: [ ]
+PASS: fixnum arm: abs typed float
+Stack: [ ]
+=== mixed pair arms ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: mixed arm: + untyped fixnum pair
+Stack: [ ]
+PASS: mixed arm: + untyped float pair
+Stack: [ ]
+PASS: mixed arm: + untyped fixnum-float pair
+Stack: [ ]
+PASS: mixed arm: + untyped float-fixnum pair
+Stack: [ ]
+PASS: mixed arm: + literal fixnum pair
+Stack: [ ]
+PASS: mixed arm: + literal float pair
+Stack: [ ]
+PASS: mixed arm: + literal fixnum-float pair
+Stack: [ ]
+PASS: mixed arm: + typed fixnum pair
+Stack: [ ]
+PASS: mixed arm: + typed float pair
+Stack: [ ]
+PASS: mixed arm: + literal fixnum on an untyped fixnum
+Stack: [ ]
+PASS: mixed arm: + literal fixnum on an untyped float
+Stack: [ ]
+PASS: mixed arm: - untyped fixnum pair
+Stack: [ ]
+PASS: mixed arm: - untyped float pair
+Stack: [ ]
+PASS: mixed arm: - untyped fixnum-float pair
+Stack: [ ]
+PASS: mixed arm: - untyped float-fixnum pair
+Stack: [ ]
+PASS: mixed arm: - literal fixnum pair
+Stack: [ ]
+PASS: mixed arm: - literal float pair
+Stack: [ ]
+PASS: mixed arm: - literal fixnum-float pair
+Stack: [ ]
+PASS: mixed arm: - typed fixnum pair
+Stack: [ ]
+PASS: mixed arm: - typed float pair
+Stack: [ ]
+PASS: mixed arm: - literal fixnum on an untyped fixnum
+Stack: [ ]
+PASS: mixed arm: - literal fixnum on an untyped float
+Stack: [ ]
+PASS: mixed arm: * untyped fixnum pair
+Stack: [ ]
+PASS: mixed arm: * untyped float pair
+Stack: [ ]
+PASS: mixed arm: * untyped fixnum-float pair
+Stack: [ ]
+PASS: mixed arm: * untyped float-fixnum pair
+Stack: [ ]
+PASS: mixed arm: * literal fixnum pair
+Stack: [ ]
+PASS: mixed arm: * literal float pair
+Stack: [ ]
+PASS: mixed arm: * literal fixnum-float pair
+Stack: [ ]
+PASS: mixed arm: * typed fixnum pair
+Stack: [ ]
+PASS: mixed arm: * typed float pair
+Stack: [ ]
+PASS: mixed arm: * literal fixnum on an untyped fixnum
+Stack: [ ]
+PASS: mixed arm: * literal fixnum on an untyped float
+Stack: [ ]
+PASS: mixed arm: / untyped fixnum pair
+Stack: [ ]
+PASS: mixed arm: / untyped float pair
+Stack: [ ]
+PASS: mixed arm: / untyped fixnum-float pair
+Stack: [ ]
+PASS: mixed arm: / untyped float-fixnum pair
+Stack: [ ]
+PASS: mixed arm: / literal fixnum pair
+Stack: [ ]
+PASS: mixed arm: / literal float pair
+Stack: [ ]
+PASS: mixed arm: / literal fixnum-float pair
+Stack: [ ]
+PASS: mixed arm: / typed fixnum pair
+Stack: [ ]
+PASS: mixed arm: / typed float pair
+Stack: [ ]
+PASS: mixed arm: / literal fixnum on an untyped fixnum
+Stack: [ ]
+PASS: mixed arm: / literal fixnum on an untyped float
+Stack: [ ]
+PASS: mixed arm: % untyped fixnum pair
+Stack: [ ]
+PASS: mixed arm: % untyped float pair
+Stack: [ ]
+PASS: mixed arm: % untyped fixnum-float pair
+Stack: [ ]
+PASS: mixed arm: % untyped float-fixnum pair
+Stack: [ ]
+PASS: mixed arm: % literal fixnum pair
+Stack: [ ]
+PASS: mixed arm: % literal float pair
+Stack: [ ]
+PASS: mixed arm: % literal fixnum-float pair
+Stack: [ ]
+PASS: mixed arm: % typed fixnum pair
+Stack: [ ]
+PASS: mixed arm: % typed float pair
+Stack: [ ]
+PASS: mixed arm: % literal fixnum on an untyped fixnum
+Stack: [ ]
+PASS: mixed arm: % literal fixnum on an untyped float
+Stack: [ ]
+PASS: mixed arm: = untyped fixnum pair
+Stack: [ ]
+PASS: mixed arm: = untyped float pair
+Stack: [ ]
+PASS: mixed arm: = untyped fixnum-float pair
+Stack: [ ]
+PASS: mixed arm: = untyped float-fixnum pair
+Stack: [ ]
+PASS: mixed arm: = literal fixnum pair
+Stack: [ ]
+PASS: mixed arm: = literal float pair
+Stack: [ ]
+PASS: mixed arm: = literal fixnum-float pair
+Stack: [ ]
+PASS: mixed arm: = typed fixnum pair
+Stack: [ ]
+PASS: mixed arm: = typed float pair
+Stack: [ ]
+PASS: mixed arm: = literal fixnum on an untyped fixnum
+Stack: [ ]
+PASS: mixed arm: = literal fixnum on an untyped float
+Stack: [ ]
+PASS: mixed arm: < untyped fixnum pair
+Stack: [ ]
+PASS: mixed arm: < untyped float pair
+Stack: [ ]
+PASS: mixed arm: < untyped fixnum-float pair
+Stack: [ ]
+PASS: mixed arm: < untyped float-fixnum pair
+Stack: [ ]
+PASS: mixed arm: < literal fixnum pair
+Stack: [ ]
+PASS: mixed arm: < literal float pair
+Stack: [ ]
+PASS: mixed arm: < literal fixnum-float pair
+Stack: [ ]
+PASS: mixed arm: < typed fixnum pair
+Stack: [ ]
+PASS: mixed arm: < typed float pair
+Stack: [ ]
+PASS: mixed arm: < literal fixnum on an untyped fixnum
+Stack: [ ]
+PASS: mixed arm: < literal fixnum on an untyped float
+Stack: [ ]
+PASS: mixed arm: > untyped fixnum pair
+Stack: [ ]
+PASS: mixed arm: > untyped float pair
+Stack: [ ]
+PASS: mixed arm: > untyped fixnum-float pair
+Stack: [ ]
+PASS: mixed arm: > untyped float-fixnum pair
+Stack: [ ]
+PASS: mixed arm: > literal fixnum pair
+Stack: [ ]
+PASS: mixed arm: > literal float pair
+Stack: [ ]
+PASS: mixed arm: > literal fixnum-float pair
+Stack: [ ]
+PASS: mixed arm: > typed fixnum pair
+Stack: [ ]
+PASS: mixed arm: > typed float pair
+Stack: [ ]
+PASS: mixed arm: > literal fixnum on an untyped fixnum
+Stack: [ ]
+PASS: mixed arm: > literal fixnum on an untyped float
+Stack: [ ]
+PASS: mixed arm: abs untyped fixnum
+Stack: [ ]
+PASS: mixed arm: abs untyped float
+Stack: [ ]
+PASS: mixed arm: abs literal fixnum
+Stack: [ ]
+PASS: mixed arm: abs literal float
+Stack: [ ]
+PASS: mixed arm: abs typed fixnum
+Stack: [ ]
+PASS: mixed arm: abs typed float
+Stack: [ ]
