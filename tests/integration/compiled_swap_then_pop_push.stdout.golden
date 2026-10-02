@@ -1,0 +1,14 @@
+Stack: [ ]
+Stack: [ ]
+=== a literal pushed in an `if` arm after a swap ===
+Stack: [ ]
+PASS: truthy arm keeps the label
+Stack: [ ]
+PASS: falsy arm keeps the label
+Stack: [ ]
+=== a value under the condition survives the arm's push ===
+Stack: [ ]
+PASS: arm value
+Stack: [ "kept" ]
+PASS: value under the condition
+Stack: [ ]

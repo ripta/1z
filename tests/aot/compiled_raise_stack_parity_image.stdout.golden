@@ -1,0 +1,22 @@
+=== a tag guard after dropping an owned heap slot ===
+PASS: handler ran
+PASS: string below the raise
+=== division by zero after a relabeling swap ===
+PASS: handler ran
+PASS: string below the raise
+=== division by zero over an unboxed sum ===
+PASS: handler ran
+PASS: unboxed sum below the raise
+PASS: string below the sum
+=== choose with a non-quotation selector after dropping an owned heap slot ===
+PASS: handler ran
+PASS: second arm copy
+PASS: first arm copy
+PASS: second arm
+PASS: first arm
+PASS: string below the arms
+=== an inline unwrap over a copied operand ===
+PASS: handler ran
+PASS: copy left by the unwrap
+PASS: original left by the unwrap
+PASS: string below the raise

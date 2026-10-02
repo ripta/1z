@@ -1,0 +1,18 @@
+PASS: fib of 10 stays a fixnum
+PASS: fib of 100 promotes through a restart
+PASS: a loop that stays in fixnums
+PASS: a loop that overflows mid-way promotes
+PASS: the promoted loop keeps counting
+PASS: div of two fixnums
+PASS: minInt div -1 promotes
+PASS: div by zero raises division-by-zero
+PASS: div by zero leaves the string below
+PASS: rem of two fixnums
+PASS: minInt rem -1 is zero
+PASS: minInt % -1 is zero
+PASS: abs of a fixnum
+PASS: abs of minInt promotes
+PASS: a float input beside a fixnum
+PASS: a float input survives a restart
+noisy-add ran
+PASS: a guard after a print still promotes

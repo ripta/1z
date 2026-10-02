@@ -1,0 +1,32 @@
+\ The locked counterpart of inline_bail_parity. A locked build rejects every interpreter fallback, so
+\ this program keeps to the arithmetic guards and compares fixnums. Each raise is caught over a
+\ sentinel, and the handler's value must sit directly on it. The catches sit in words with declared
+\ outputs, so the comparisons after them see two fixnums rather than an opaque row.
+
+check: ( ok label -- ) [ swap [ "PASS: " ] [ "FAIL: " ] if swap #append print-line ] ;
+
+int-div: ( a b -- q )                 [ div ] ;
+int-rem: ( a b -- r )                 [ rem ] ;
+add2:    ( a: fixnum b: fixnum -- c ) [ + ] ;
+div2:    ( a: fixnum b: fixnum -- c ) [ / ] ;
+mod2:    ( a: fixnum b: fixnum -- c ) [ % ] ;
+
+catch-div:  ( -- sentinel caught ) [ 5 7 0 [ int-div ] [ drop 1 ] recover ] ;
+catch-rem:  ( -- sentinel caught ) [ 5 7 0 [ int-rem ] [ drop 1 ] recover ] ;
+catch-div2: ( -- sentinel caught ) [ 5 7 0 [ div2 ] [ drop 1 ] recover ] ;
+catch-mod2: ( -- sentinel caught ) [ 5 7 0 [ mod2 ] [ drop 1 ] recover ] ;
+
+catch-div 1 = "div by zero is caught" check
+5 = "div by zero leaves the sentinel" check
+
+catch-rem 1 = "rem by zero is caught" check
+5 = "rem by zero leaves the sentinel" check
+
+catch-div2 1 = "fixnum / by zero is caught" check
+5 = "fixnum / by zero leaves the sentinel" check
+
+catch-mod2 1 = "fixnum % by zero is caught" check
+5 = "fixnum % by zero leaves the sentinel" check
+
+-9223372036854775808 -1 int-div 9223372036854775807 > "minInt div -1 promotes" check
+9223372036854775807 1 add2 9223372036854775807 > "fixnum + overflow promotes" check

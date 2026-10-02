@@ -63,16 +63,14 @@ pub const Options = struct {
     /// type the result of fixnum arithmetic.
     ///
     /// `+`, `-`, and `*` promote to bignum on fixnum overflow, and `div` promotes on `minInt / -1`,
-    /// so none of those results is a fixnum in general. Compiled concrete arithmetic bails on each
-    /// of those cases instead, and on the division-by-zero cases `rem` and `%` share. An AOT bail
-    /// aborts rather than resuming interpreted.
+    /// so none of those results is a fixnum in general. Compiled AOT arithmetic promotes on each of
+    /// those cases too: a guard restarts the word in its generic copy, and a polymorphic site's
+    /// cold arm dispatches.
     ///
-    /// A polymorphic arithmetic site does promote, through the dispatch cold arm a locked build
-    /// takes. The pass and codegen disagree about which sites those are: this pass proves types
-    /// over the call sites, while codegen sends any operand it holds in an untyped physical slot
-    /// down the polymorphic path. So a site the pass typed `fixnum` can be the one that promotes.
     /// The rule is unsound on its own, and `arithResult` marks every fixnum arithmetic result
-    /// `_declared` so codegen enforces it with an entry tag check.
+    /// `_declared` so codegen enforces it with an entry tag check. A promoted result then raises a
+    /// type mismatch at the entry of the word it is passed to, where the interpreter carries the
+    /// bignum on.
     arithmetic_result_types: bool = false,
     /// Interned builtin type values for trusting a callee's declared output annotations. When set,
     /// a call to a word whose every declared output carries one of these annotations yields those

@@ -1,0 +1,73 @@
+\ An inline guard that cannot finish in compiled code gives the interpreter's result: the native's
+\ value, or its error with the stack the native leaves. An AOT bail has no interpreter to resume
+\ into, so each guard calls the native or raises the native's error itself.
+\
+\ The program avoids `inspect` and the testing library so the same source runs in every class. A
+\ value a raise leaves behind by mistake would sit on top, where the next check reads it.
+
+heap: ( -- s ) [ "hel" "lo" #append ] ;
+
+check: ( ok label -- ) [ swap [ "PASS: " ] [ "FAIL: " ] if swap #append print-line ] ;
+error-is: ( error type -- ok ) [ [ error-type: @get ] dip = ] ;
+
+int-div:  ( a b -- q )                 [ div ] ;
+int-rem:  ( a b -- r )                 [ rem ] ;
+add2:     ( a: fixnum b: fixnum -- c ) [ + ] ;
+div2:     ( a: fixnum b: fixnum -- c ) [ / ] ;
+mod2:     ( a: fixnum b: fixnum -- c ) [ % ] ;
+pick-of:  ( a b q -- x )               [ choose ] ;
+count-up: ( n -- c )                   [ 0 swap [ 1 + ] times ] ;
+add-two:  ( a b -- c )                 [ + ] ;
+
+\ The local `tag` shadows this word, so an interpreter-free build cannot make the loop's quotation a
+\ value. The loop still runs inline.
+tag: ( -- s ) [ "GLOBAL" ] ;
+
+repeat-label: ( n: float s: string -- r ) [
+  tag: swap ;
+  n: swap ;
+  "" n [ tag #append ] times
+] ;
+
+heap 7 0 [ int-div ] [ division-by-zero: error-is "div by zero raises division-by-zero" check ] recover
+"hello" = "div by zero leaves the string below" check
+
+heap 7 0 [ int-rem ] [ division-by-zero: error-is "rem by zero raises division-by-zero" check ] recover
+"hello" = "rem by zero leaves the string below" check
+
+heap "x" 2 [ int-div ] [ type-mismatch: error-is "div of a string raises type-mismatch" check ] recover
+"hello" = "div of a string leaves the string below" check
+
+-9223372036854775808 -1 int-div 9223372036854775807 > "minInt div -1 promotes" check
+-9223372036854775808 -1 int-rem 0 = "minInt rem -1 is zero" check
+
+9223372036854775807 1 add2 9223372036854775807 > "fixnum + overflow promotes" check
+
+heap 7 0 [ div2 ] [ division-by-zero: error-is "fixnum / by zero raises division-by-zero" check ] recover
+"hello" = "fixnum / by zero leaves the string below" check
+
+heap 7 0 [ mod2 ] [ division-by-zero: error-is "fixnum % by zero raises division-by-zero" check ] recover
+"hello" = "fixnum % by zero leaves the string below" check
+
+heap 1 2 "not a quotation" [ pick-of ] [ type-mismatch: error-is "choose on a non-quotation raises type-mismatch" check ] recover
+2 = "second arm copy" check
+1 = "first arm copy" check
+2 = "second arm" check
+1 = "first arm" check
+"hello" = "choose leaves the string below" check
+
+1 2 t [ [ 2drop ] dip ] curry pick-of 1 = "choose runs a closure selector" check
+
+3 count-up 3 = "times with a fixnum count" check
+2.5 count-up 3 = "times with a float count" check
+2.5 "ab" repeat-label "ababab" = "times with a float count over a quotation reading a local" check
+heap "x" [ count-up ] [ type-mismatch: error-is "times with a string count raises type-mismatch" check ] recover
+quotation? "quotation left by times" check
+"x" = "string count left by times" check
+0 = "accumulator left by times" check
+"hello" = "times leaves the string below" check
+
+\ A compiled word checks its inputs on entry, so this case needs a stack holding fewer values than
+\ the word takes. Only the error is checked: the interpreter's `+` pops the one value before it
+\ underflows, and the entry check raises before the body runs, leaving that value in place.
+[ 1 add-two ] [ stack-underflow: error-is "a call short of inputs raises stack-underflow" check ] recover

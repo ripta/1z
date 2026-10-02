@@ -1,0 +1,63 @@
+\ A guard on a proven fixnum pair in AOT code re-runs the current word entry, or self-tail loop
+\ iteration, in the word's generic copy instead of bailing. The typed copy keeps its unboxed result,
+\ and the generic copy gives what the interpreter gives once the guard fires.
+\
+\ The program avoids `inspect` so the same source runs in every class.
+
+heap: ( -- s ) [ "hel" "lo" #append ] ;
+
+check: ( ok label -- ) [ swap [ "PASS: " ] [ "FAIL: " ] if swap #append print-line ] ;
+error-is: ( error type -- ok ) [ [ error-type: @get ] dip = ] ;
+
+\ The `+` sits in a `dip` body, inside an `if` arm, inside a self-tail loop.
+fib-step: ( a b n -- r ) [
+  dup 0 = [ drop drop ] [
+    1 - [ swap over + ] dip fib-step
+  ] if
+] ;
+
+fib: ( n -- r ) [
+  dup 2 < [ ] [
+    0 1 <rot- fib-step
+  ] if
+] ;
+
+\ The `+` sits directly in an `if` arm inside a self-tail loop.
+sum-down: ( acc n -- r ) [
+  dup 0 = [ drop ] [
+    swap over + swap 1 - sum-down
+  ] if
+] ;
+
+int-div:   ( a b -- q ) [ div ] ;
+int-rem:   ( a b -- r ) [ rem ] ;
+floor-mod: ( a b -- r ) [ % ] ;
+magnitude: ( n -- m )   [ abs ] ;
+bump:      ( x n -- r ) [ swap drop 1 + ] ;
+
+\ The print runs before the guard, so this word cannot restart and its print must run once.
+noisy-add: ( a b -- c ) [ "noisy-add ran" print-line + ] ;
+
+10 fib 55 = "fib of 10 stays a fixnum" check
+100 fib >string "354224848179261915075" = "fib of 100 promotes through a restart" check
+
+0 10 sum-down 55 = "a loop that stays in fixnums" check
+9223372036854775800 10 sum-down 9223372036854775807 > "a loop that overflows mid-way promotes" check
+9223372036854775800 10 sum-down 9223372036854775800 - 55 = "the promoted loop keeps counting" check
+
+7 2 int-div 3 = "div of two fixnums" check
+-9223372036854775808 -1 int-div 9223372036854775807 > "minInt div -1 promotes" check
+heap 7 0 [ int-div ] [ division-by-zero: error-is "div by zero raises division-by-zero" check ] recover
+"hello" = "div by zero leaves the string below" check
+
+7 2 int-rem 1 = "rem of two fixnums" check
+-9223372036854775808 -1 int-rem 0 = "minInt rem -1 is zero" check
+-9223372036854775808 -1 floor-mod 0 = "minInt % -1 is zero" check
+
+-5 magnitude 5 = "abs of a fixnum" check
+-9223372036854775808 magnitude 9223372036854775807 > "abs of minInt promotes" check
+
+2.5 3 bump 4 = "a float input beside a fixnum" check
+2.5 9223372036854775807 bump 9223372036854775807 > "a float input survives a restart" check
+
+9223372036854775807 1 noisy-add 9223372036854775807 > "a guard after a print still promotes" check

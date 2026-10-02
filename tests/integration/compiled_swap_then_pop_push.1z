@@ -1,0 +1,16 @@
+\ A pop after a `swap` can leave a value in a physical slot at or above the new top, because `swap`
+\ relabels the two entries without moving them. The next push must not land on that slot. Nothing
+\ here sets a compile flag, so the eager pass checks the compiled run against the interpreted golden.
+
+use "testing" ;
+
+label-of: ( ok label -- s ) [ swap [ "yes: " ] [ "no: " ] if swap #append ] ;
+pick-after-swap: ( ok s -- s s ) [ swap [ "taken" ] [ "skipped" ] if ] ;
+
+"a literal pushed in an `if` arm after a swap" test-section
+t "one" label-of "yes: one" "truthy arm keeps the label" assert=
+f "two" label-of "no: two" "falsy arm keeps the label" assert=
+
+"a value under the condition survives the arm's push" test-section
+t "kept" pick-after-swap "taken" "arm value" assert=
+"kept" "value under the condition" assert=

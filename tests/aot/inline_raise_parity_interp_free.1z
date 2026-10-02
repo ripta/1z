@@ -1,0 +1,20 @@
+\ The raising inline guards in an interpreter-free binary leave the stack the interpreter leaves. The
+\ testing library does not build in this class, so the checks compare and print by hand.
+
+money: virtual{ fixnum } ;
+
+heap: ( -- s ) [ "hel" "lo" #append ] ;
+
+check: ( ok label -- ) [ swap [ "PASS: " ] [ "FAIL: " ] if swap #append print-line ] ;
+error-is: ( error type -- ok ) [ [ error-type: @get ] dip = ] ;
+
+over-then-unwrap: ( s m -- s s n ) [ over swap unmake-money ] ;
+add-any: ( a b -- c ) [ + ] ;
+
+heap heap heap [ over-then-unwrap ] [ type-mismatch: error-is "an unwrap of a string raises type-mismatch" check ] recover
+"hello" = "copy left by the unwrap" check
+"hello" = "original left by the unwrap" check
+"hello" = "unwrap leaves the string below" check
+
+heap "a" 1 [ add-any ] [ type-mismatch: error-is "+ of a string raises type-mismatch" check ] recover
+"hello" = "+ of a string leaves the string below" check

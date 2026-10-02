@@ -1,0 +1,24 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+=== a struct field read after dropping an owned heap slot ===
+Stack: [ ]
+PASS: handler ran
+Stack: [ "hello" "hello" ]
+PASS: operand left by the failed dispatch
+Stack: [ "hello" ]
+PASS: string below the raise
+Stack: [ ]
+=== a struct field write after a relabeling swap ===
+Stack: [ ]
+PASS: handler ran
+Stack: [ "hello" "hello" 5 ]
+PASS: value left by the failed write
+Stack: [ "hello" "hello" ]
+PASS: operand left by the failed write
+Stack: [ "hello" ]
+PASS: string below the raise
+Stack: [ ]

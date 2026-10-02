@@ -1,0 +1,6 @@
+PASS: an unwrap of a string raises type-mismatch
+PASS: copy left by the unwrap
+PASS: original left by the unwrap
+PASS: unwrap leaves the string below
+PASS: + of a string raises type-mismatch
+PASS: + of a string leaves the string below

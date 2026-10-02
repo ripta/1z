@@ -1,0 +1,12 @@
+\ A locked binary's dispatch-miss trap leaves the stack the interpreter leaves: both operands
+\ consumed, and the value below untouched. The catch sits in a word with declared outputs, so the
+\ comparisons after it see two fixnums rather than an opaque row.
+
+check: ( ok label -- ) [ swap [ "PASS: " ] [ "FAIL: " ] if swap #append print-line ] ;
+
+add-any: ( a b -- c ) [ + ] ;
+
+catch-add: ( -- sentinel caught ) [ 5 "a" 1 [ add-any ] [ drop 1 ] recover ] ;
+
+catch-add 1 = "+ of a string is caught" check
+5 = "+ of a string leaves the sentinel" check

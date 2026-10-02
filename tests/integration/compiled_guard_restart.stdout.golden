@@ -1,0 +1,47 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: fib of 10 stays a fixnum
+Stack: [ ]
+PASS: fib of 100 promotes through a restart
+Stack: [ ]
+PASS: a loop that stays in fixnums
+Stack: [ ]
+PASS: a loop that overflows mid-way promotes
+Stack: [ ]
+PASS: the promoted loop keeps counting
+Stack: [ ]
+PASS: div of two fixnums
+Stack: [ ]
+PASS: minInt div -1 promotes
+Stack: [ ]
+PASS: div by zero raises division-by-zero
+Stack: [ "hello" ]
+PASS: div by zero leaves the string below
+Stack: [ ]
+PASS: rem of two fixnums
+Stack: [ ]
+PASS: minInt rem -1 is zero
+Stack: [ ]
+PASS: minInt % -1 is zero
+Stack: [ ]
+PASS: abs of a fixnum
+Stack: [ ]
+PASS: abs of minInt promotes
+Stack: [ ]
+PASS: a float input beside a fixnum
+Stack: [ ]
+PASS: a float input survives a restart
+Stack: [ ]
+noisy-add ran
+PASS: a guard after a print still promotes
+Stack: [ ]

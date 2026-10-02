@@ -1,0 +1,8 @@
+\ An interpreter-free build runs a closure selector through `jitCallValue`, which pushes each
+\ capture onto the stack. The push is the capture's only new owner, so a refcounted capture such as
+\ a built string is released once the closure's body consumes it. The run's stderr must stay empty,
+\ which pins that nothing leaks at exit.
+
+pick-of: ( a b q -- x ) [ choose ] ;
+
+1 2 "hel" "lo" #append [ drop drop ] curry pick-of 1 = [ "PASS: closure selector with a heap capture" ] [ "FAIL: closure selector with a heap capture" ] if print-line

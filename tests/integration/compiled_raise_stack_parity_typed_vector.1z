@@ -1,0 +1,18 @@
+\ The typed element check a parameterized vector's `#push!` runs leaves the stack the interpreter
+\ leaves when it raises. Nothing here sets a compile flag, so the eager pass checks the compiled run
+\ against the interpreted golden. An AOT binary cannot reach this check, since it drops the typed
+\ vector's mutation arms, so this file has no AOT twin.
+
+use "testing" ;
+
+vector(fixnum): M{ inner-type: vector element-type: fixnum define: [ define-parameterized-type ] } ;
+
+heap: ( -- s ) [ "hel" "lo" #append ] ;
+
+over-then-push: ( v e -- v v ) [ over swap #push! ] ;
+
+"a typed element check over a copied vector" test-section
+heap V{ 1 } >vector(fixnum) heap [ over-then-push ] [ drop "caught" ] recover "caught" "handler ran" assert=
+unmake-vector(fixnum) #len 1 "vector copy is unchanged" assert=
+unmake-vector(fixnum) #len 1 "vector is unchanged" assert=
+"hello" "string below the raise" assert=

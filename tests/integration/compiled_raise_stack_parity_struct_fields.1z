@@ -1,0 +1,27 @@
+\ A struct field read or write that raises from its inline guard leaves the stack the interpreter
+\ leaves. Nothing here sets a compile flag, so the eager pass checks the compiled run against the
+\ interpreted golden. The field guards are inlined by the JIT only, so this file has no AOT twin.
+
+use "testing" ;
+
+point: mutable struct{ x y } ;
+
+heap: ( -- s ) [ "hel" "lo" #append ] ;
+
+drop-then-x: ( p s -- x ) [ drop x>> ] ;
+swap-then-set: ( v p -- p ) [ swap >>x ] ;
+
+warm-field-access: ( n -- ) [ [ 1 2 make-point heap drop-then-x drop 5 1 2 make-point swap-then-set drop ] times ] ;
+
+300 warm-field-access
+
+"a struct field read after dropping an owned heap slot" test-section
+heap heap heap [ drop-then-x ] [ drop "caught" ] recover "caught" "handler ran" assert=
+"hello" "operand left by the failed dispatch" assert=
+"hello" "string below the raise" assert=
+
+"a struct field write after a relabeling swap" test-section
+heap 5 heap [ swap-then-set ] [ drop "caught" ] recover "caught" "handler ran" assert=
+5 "value left by the failed write" assert=
+"hello" "operand left by the failed write" assert=
+"hello" "string below the raise" assert=

@@ -1935,6 +1935,23 @@ fn emitPerOperationDispatch(
     }
 }
 
+/// Whether a polymorphic site's cold arm resolves through the frozen dispatch table instead of
+/// calling the native.
+///
+/// A build class that rejects fallback emissions always does. So does an AOT site whose operands
+/// are both proven numbers and whose pair no method arm can replace, since it reaches its cold arm
+/// only on overflow, a zero divisor, or minInt / -1. Calling the native there would link the
+/// interpreter into an AOT build whose code is otherwise all compiled.
+///
+/// A pair an arm can replace keeps the native call outside those classes. The arm may be defined
+/// in a word body or loaded after the freeze, so it can have no compiled code to dispatch to.
+fn coldArmDispatches(state: *const CompileState, known: KnownOperands, reachable: u64) bool {
+    if (!state.aot_mode) return false;
+    if (state.fallbacks_locked or state.freestanding) return true;
+    if (known[0] == null or known[1] == null) return false;
+    return !siteTestsOverrides(state, reachable);
+}
+
 /// Call a binary operator on the pair settled at `slot_a`, `slot_b`, the way a polymorphic site's
 /// cold arm does. A build class that rejects fallback emissions dispatches through the frozen
 /// table, and `miss` picks how that answers a pair no method covers. Every other class calls the
@@ -1949,11 +1966,13 @@ fn emitPolyColdCall(
     slot_b: usize,
     line: usize,
     miss: DispatchMissBehavior,
+    known: KnownOperands,
+    reachable: u64,
 ) IrCodegenError!void {
     const saved_items_ptr = state.items_ptr;
     const saved_base_addr = state.base_addr;
 
-    if (state.aot_mode and (state.fallbacks_locked or state.freestanding)) {
+    if (coldArmDispatches(state, known, reachable)) {
         try emitPerOperationDispatch(state, op_name, slot_b, line, miss);
     } else {
         try emitPerOperationFallback(state, op_name, slot_a, slot_b, line);
@@ -2128,7 +2147,7 @@ fn emitPolymorphicBinaryArith(
         mergeColdEnds(ctx, ends[0 .. cold_count + 1]);
     }
 
-    try emitPolyColdCall(state, op.wordName(), slot_a, slot_b, line, .trap);
+    try emitPolyColdCall(state, op.wordName(), slot_a, slot_b, line, .trap, known, reachablePairBits(op.overrideOp(), known));
     const end_fallback = c._ir_END(ctx);
 
     c._ir_MERGE_2(ctx, end_numeric, end_fallback);
@@ -2234,7 +2253,7 @@ fn emitPolymorphicBinaryCompare(
         .eq => .{ .push_false = .{ .opaque_slot = opaque_slot, .dest_slot = dest_slot } },
         .lt, .gt => .trap,
     };
-    try emitPolyColdCall(state, op.wordName(), slot_a, slot_b, line, miss);
+    try emitPolyColdCall(state, op.wordName(), slot_a, slot_b, line, miss, known, reachablePairBits(op.overrideOp(), known));
     const end_fallback = c._ir_END(ctx);
 
     c._ir_MERGE_2(ctx, end_numeric, end_fallback);
@@ -2350,6 +2369,52 @@ fn emitSwapSlots(ctx: *c.ir_ctx, base_addr: c.ir_ref, slot_a: usize, slot_b: usi
         const b_byte = c._ir_LOAD(ctx, c.IR_U8, b_addr);
         c._ir_STORE(ctx, a_addr, b_byte);
         c._ir_STORE(ctx, b_addr, a_byte);
+    }
+}
+
+/// A Value's raw bytes held in IR values, so a slot can be read before a store that overwrites it.
+const HeldValue = struct {
+    words: [8]c.ir_ref,
+    bytes: [8]c.ir_ref,
+};
+
+/// Load a full Value's raw bytes from a runtime pointer into a `HeldValue`.
+fn emitHoldValue(ctx: *c.ir_ctx, src_ptr: c.ir_ref) HeldValue {
+    const num_words = ValueLayout.value_size / 8;
+    const num_bytes = ValueLayout.value_size % 8;
+    comptime std.debug.assert(num_words <= 8);
+
+    var held: HeldValue = .{ .words = undefined, .bytes = undefined };
+    var i: usize = 0;
+    while (i < num_words) : (i += 1) {
+        const src_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), src_ptr, c.ir_const_addr(ctx, i * 8));
+        held.words[i] = c._ir_LOAD(ctx, c.IR_U64, src_addr);
+    }
+
+    i = 0;
+    while (i < num_bytes) : (i += 1) {
+        const src_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), src_ptr, c.ir_const_addr(ctx, num_words * 8 + i));
+        held.bytes[i] = c._ir_LOAD(ctx, c.IR_U8, src_addr);
+    }
+    return held;
+}
+
+/// Store a `HeldValue` into a physical stack slot.
+fn emitStoreHeldValue(ctx: *c.ir_ctx, base_addr: c.ir_ref, held: HeldValue, dest_slot: usize) void {
+    const num_words = ValueLayout.value_size / 8;
+    const num_bytes = ValueLayout.value_size % 8;
+    const dest_base = dest_slot * ValueLayout.value_size;
+
+    var i: usize = 0;
+    while (i < num_words) : (i += 1) {
+        const dest_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), base_addr, c.ir_const_addr(ctx, dest_base + i * 8));
+        c._ir_STORE(ctx, dest_addr, held.words[i]);
+    }
+
+    i = 0;
+    while (i < num_bytes) : (i += 1) {
+        const dest_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), base_addr, c.ir_const_addr(ctx, dest_base + num_words * 8 + i));
+        c._ir_STORE(ctx, dest_addr, held.bytes[i]);
     }
 }
 
@@ -2847,6 +2912,21 @@ const CompileState = struct {
     /// Every other AOT build is a closed world, so the mask the freeze left is final and a site
     /// tests it at build time instead.
     builtin_override_guard: bool = false,
+    /// The word's generic copy, which an AOT guard re-runs the current entry in instead of bailing.
+    /// `IR_UNUSED` where this pass cannot restart, as in the generic copy itself.
+    ///
+    /// A restart puts back the inputs `restart_inputs` holds and calls this copy, as a JIT bail
+    /// puts back the entry operands and re-runs the word interpreted. It is sound only while
+    /// `restart_clean` holds.
+    restart_fn: c.ir_ref = c.IR_UNUSED,
+    /// The unboxed inputs of the current word entry or self-tail loop iteration, as seeded.
+    restart_inputs: []const StackEntry = &.{},
+    /// Whether everything emitted since the restart point can run again without being observed: no
+    /// runtime call, no refcount change, no materialized value. Cleared on the first emission that
+    /// breaks it, and never set again within the pass.
+    restart_clean: bool = false,
+    /// Whether this pass emitted a restart, so the generic copy it calls has to be emitted too.
+    restart_used: bool = false,
     /// True while `emitIf` trial-compiles the arms of a candidate branchless
     /// `IR_COND` select. The trial relies on the backend folding away pure
     /// discarded code, so any path that would emit a native call or
@@ -4052,11 +4132,8 @@ fn seedInferredParams(state: *CompileState, stack: []StackEntry, input_count: us
     if (state.inferred_param_types.len == 0) return;
 
     // All or nothing. Narrowing only some inputs leaves an operand pair with one narrowed and
-    // one opaque side, which skips the polymorphic path and takes the concrete one, whose tag
-    // check on the opaque side bails when the tag disagrees. An AOT bail aborts rather than
-    // resuming interpreted, so `add2: ( a b -- r ) [ + ] ;` fed `1 2` and `1 2.5` would die on
-    // the second call. That abort is a standing AOT gap, reachable today through a literal
-    // operand and through a declared annotation; this keeps inference from widening it.
+    // one opaque side, which an AOT site sends down the polymorphic path, so the narrowed side
+    // buys nothing there. A restart also needs every input narrowed to put the inputs back.
     //
     // A `_declared` proof without the hard-error callback cannot be enforced, so it also leaves
     // every parameter opaque.
@@ -4277,6 +4354,7 @@ fn materializeQuotations(state: *CompileState, stack: []StackEntry, sp: usize, e
         switch (stack[qi]) {
             .quotation_body => |q| {
                 const body = q.body;
+                state.restart_clean = false;
                 if (state.aot_mode) {
                     // With no interpreter to run the captured closure, the reified body's compiled
                     // code runs instead. It resolves names without the scope the interpreter
@@ -4906,6 +4984,7 @@ fn jitNativeCallFn(state: *CompileState) c.ir_ref {
 /// counts as a new owning reference. No-op for scalar Values at runtime.
 fn emitRetainSlot(state: *CompileState, slot: usize) void {
     if (state.retain_slot_fn == c.IR_UNUSED) return;
+    state.restart_clean = false;
     const ctx = state.ctx;
     const slot_addr = liveSlotAddr(state, slot);
     _ = c._ir_CALL_1(ctx, c.IR_I32, state.retain_slot_fn, slot_addr);
@@ -4916,6 +4995,7 @@ fn emitRetainSlot(state: *CompileState, slot: usize) void {
 /// No-op for scalar Values at runtime.
 fn emitReleaseSlot(state: *CompileState, slot: usize) void {
     if (state.release_slot_fn == c.IR_UNUSED) return;
+    state.restart_clean = false;
     const ctx = state.ctx;
     const slot_addr = liveSlotAddr(state, slot);
     _ = c._ir_CALL_1(ctx, c.IR_I32, state.release_slot_fn, slot_addr);
@@ -6007,6 +6087,105 @@ fn tryEmitInlineStructFieldSet(
     return true;
 }
 
+/// Call the selector `choose` holds at `held_slot`, just above the two arm copies the selector
+/// consumes.
+///
+/// A compiled quotation is called through its code pointer. Anything else takes the cold arm, where
+/// `jitCallQuotation` pops the selector, runs an uncompiled quotation or a closure, and raises
+/// `call`'s type mismatch for a value that is not callable. An interpreter-free build has no
+/// interpreter to run a closure on, so its closures go through `jitCallValue` instead.
+///
+/// The JIT tag-checks the selector first and bails on a non-quotation, since its interpreted
+/// re-run raises the same error. AOT code skips that check and relies on the cold arm.
+fn emitChooseSelectorCall(state: *CompileState, held_slot: usize, fallback_name: []const u8, line: usize, frame: CurrentTraceFrame) void {
+    const ctx = state.ctx;
+    const held_addr = liveSlotAddr(state, held_slot);
+
+    const tag_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), held_addr, state.tag_offset_const);
+    const tag_val = c._ir_LOAD(ctx, ValueLayout.ir_tag_type, tag_addr);
+    const is_not_quotation = c.ir_fold2(ctx, c.IR_OPT(c.IR_NE, c.IR_BOOL), tag_val, emitTagConst(ctx, .quotation));
+
+    // For a value that is not a quotation this reads bytes inside the slot, never through the
+    // payload, and the OR below keeps the loaded value from being called.
+    const code_ptr_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), held_addr, c.ir_const_addr(ctx, ValueLayout.quotation_code_ptr_offset));
+    const code_ptr_val = c._ir_LOAD(ctx, c.IR_ADDR, code_ptr_addr);
+    const code_ptr_is_null = c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), code_ptr_val, c.ir_const_addr(ctx, 0));
+    const is_soft = c.ir_fold2(ctx, c.IR_OPT(c.IR_OR, c.IR_BOOL), code_ptr_is_null, is_not_quotation);
+
+    const saved_items_ptr = state.items_ptr;
+    const saved_base_addr = state.base_addr;
+
+    const if_soft = c._ir_IF(ctx, is_soft);
+    c._ir_IF_TRUE_cold(ctx, if_soft);
+    if (state.aot_mode and state.interpreter_free) {
+        const is_closure = c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), tag_val, emitTagConst(ctx, .closure));
+        const if_closure = c._ir_IF(ctx, is_closure);
+
+        c._ir_IF_TRUE(ctx, if_closure);
+        {
+            // The callee's pushes reuse the selector's slot, so the call reads a spill instead.
+            const spill = emitCallableSpill(state, held_slot);
+            const sp_val = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_idx, c.ir_const_addr(ctx, held_slot));
+            c._ir_STORE(ctx, state.sp_ptr, sp_val);
+
+            const call_result = c._ir_CALL_2(ctx, c.IR_I32, state.call_value_fn, state.jit_ctx_ptr, spill);
+            emitCallbackPostCheck(state, call_result, call_result, null, frame);
+            emitReleaseSpilled(state, spill);
+        }
+        const end_closure = c._ir_END(ctx);
+
+        state.items_ptr = saved_items_ptr;
+        state.base_addr = saved_base_addr;
+
+        c._ir_IF_FALSE(ctx, if_closure);
+        emitChooseSelectorPopCall(state, held_slot, fallback_name, line, frame);
+        const end_other = c._ir_END(ctx);
+
+        c._ir_MERGE_2(ctx, end_closure, end_other);
+    } else {
+        emitChooseSelectorPopCall(state, held_slot, fallback_name, line, frame);
+    }
+    const end_soft = c._ir_END(ctx);
+
+    state.items_ptr = saved_items_ptr;
+    state.base_addr = saved_base_addr;
+
+    c._ir_IF_FALSE(ctx, if_soft);
+    {
+        const sp_val = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_idx, c.ir_const_addr(ctx, held_slot));
+        c._ir_STORE(ctx, state.sp_ptr, sp_val);
+
+        const call_result = if (state.aot_mode)
+            c._ir_CALL_2(ctx, c.IR_I32, state.call_code_ptr_fn, state.jit_ctx_ptr, code_ptr_val)
+        else
+            c._ir_CALL_1(ctx, c.IR_I32, code_ptr_val, state.jit_ctx_ptr);
+        emitCallbackPostCheck(state, call_result, call_result, null, frame);
+    }
+    const end_compiled = c._ir_END(ctx);
+
+    c._ir_MERGE_2(ctx, end_soft, end_compiled);
+
+    if (state.refresh_stack_fn != c.IR_UNUSED) {
+        refreshCachedStackPointer(state);
+    }
+}
+
+/// The interpreter fallback for a `choose` selector: expose it as the stack top and let
+/// `jitCallQuotation` pop and run it.
+fn emitChooseSelectorPopCall(state: *CompileState, held_slot: usize, fallback_name: []const u8, line: usize, frame: CurrentTraceFrame) void {
+    const ctx = state.ctx;
+    const ctx_val = emitCallbackPreamble(state, held_slot + 1);
+
+    const call_quot_fn = if (state.aot_mode)
+        state.call_quotation_fn
+    else
+        c.ir_const_addr(ctx, @intFromPtr(&jitCallQuotation));
+    state.noteAotFallbackEmission(.quotation, fallback_name, 0, line);
+
+    const fb_result = c._ir_CALL_1(ctx, c.IR_I32, call_quot_fn, ctx_val);
+    emitCallbackPostCheck(state, fb_result, state.error_propagate_status, null, frame);
+}
+
 /// Emit the body of the `choose` built-in when compiled as a standalone word.
 /// All three parameters (a1, a2, quot) are raw_at_slot entries.
 /// choose: ( a1 a2 quot -- a )
@@ -6024,14 +6203,16 @@ fn emitChooseBuiltin(
     const quot_slot: usize = 2;
     const output_slot: usize = 0;
 
-    // Load code_ptr from quotation before rearranging.
     const quot_byte_offset = c.ir_const_addr(ctx, quot_slot * ValueLayout.value_size);
     const quot_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), base_addr, quot_byte_offset);
-    const quotation_tag_const = emitTagConst(ctx, .quotation);
-    emitTagCheck(state, quot_addr, quotation_tag_const, state.bail_status);
-    const code_ptr_off = c.ir_const_addr(ctx, ValueLayout.quotation_code_ptr_offset);
-    const code_ptr_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), quot_addr, code_ptr_off);
-    const code_ptr_val = c._ir_LOAD(ctx, c.IR_ADDR, code_ptr_addr);
+
+    if (!state.aot_mode) {
+        const quotation_tag_const = emitTagConst(ctx, .quotation);
+        emitTagCheck(state, quot_addr, quotation_tag_const, state.bail_status);
+    }
+
+    // The copy of a1 below overwrites the quotation's slot.
+    const held_quot = emitHoldValue(ctx, quot_addr);
 
     // Copy a1 to slot 2, a2 to slot 3 (quotation consumption copies). The
     // copies are owning references the predicate consumes and releases, so
@@ -6041,62 +6222,12 @@ fn emitChooseBuiltin(
     emitCopySlot(ctx, base_addr, a2_slot, 3);
     emitRetainSlot(state, 3);
     // Copy quotation to slot 4 (for interpreter fallback).
-    emitCopySlot(ctx, base_addr, quot_slot, 4);
+    emitStoreHeldValue(ctx, base_addr, held_quot, 4);
 
     sp.* = 4;
     if (sp.* + 1 > state.peak_sp) state.peak_sp = @intCast(sp.* + 1);
 
-    // Null-check code_ptr for compiled vs interpreter dispatch.
-    const null_addr = c.ir_const_addr(ctx, 0);
-    const is_null = c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), code_ptr_val, null_addr);
-    const if_null = c._ir_IF(ctx, is_null);
-
-    // Cold path: interpreter fallback expects quotation on top.
-    c._ir_IF_TRUE_cold(ctx, if_null);
-    {
-        const fb_sp: usize = 5;
-        const fb_sp_const = c.ir_const_addr(ctx, fb_sp);
-        const fb_sp_val = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_idx, fb_sp_const);
-        c._ir_STORE(ctx, state.sp_ptr, fb_sp_val);
-
-        const ctx_val = if (state.preloaded_ctx_val != c.IR_UNUSED)
-            state.preloaded_ctx_val
-        else blk: {
-            JitContextLayout.ensureInit();
-            const ctx_off = c.ir_const_addr(ctx, JitContextLayout.ctx_offset);
-            const ctx_addr2 = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.jit_ctx_ptr, ctx_off);
-            break :blk c._ir_LOAD(ctx, c.IR_ADDR, ctx_addr2);
-        };
-        const call_quot_fn = if (state.aot_mode)
-            state.call_quotation_fn
-        else
-            c.ir_const_addr(ctx, @intFromPtr(&jitCallQuotation));
-        state.noteAotFallbackEmission(.quotation, "<choose>", 0, 0);
-        const fb_result = c._ir_CALL_1(ctx, c.IR_I32, call_quot_fn, ctx_val);
-        emitCallbackPostCheck(state, fb_result, state.error_propagate_status, null, .none);
-    }
-    const end_fallback = c._ir_END(ctx);
-
-    // Hot path: compiled quotation via code_ptr.
-    c._ir_IF_FALSE(ctx, if_null);
-    {
-        const hot_sp_const = c.ir_const_addr(ctx, sp.*);
-        const hot_sp_val = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_idx, hot_sp_const);
-        c._ir_STORE(ctx, state.sp_ptr, hot_sp_val);
-
-        const call_result = if (state.aot_mode)
-            c._ir_CALL_2(ctx, c.IR_I32, state.call_code_ptr_fn, state.jit_ctx_ptr, code_ptr_val)
-        else
-            c._ir_CALL_1(ctx, c.IR_I32, code_ptr_val, state.jit_ctx_ptr);
-        emitCallbackPostCheck(state, call_result, call_result, null, .none);
-    }
-    const end_compiled = c._ir_END(ctx);
-
-    c._ir_MERGE_2(ctx, end_fallback, end_compiled);
-
-    if (state.refresh_stack_fn != c.IR_UNUSED) {
-        refreshCachedStackPointer(state);
-    }
+    emitChooseSelectorCall(state, 4, "<choose>", 0, .none);
 
     // Quotation consumed 2 copies, pushed 1 result at slot 2.
     const cond_ref = emitSlotTruthiness(ctx, state.base_addr, output_slot + 2, state);
@@ -6400,6 +6531,18 @@ fn emitAotAbs(ec: EmitCtx, entry: StackEntry) IrCodegenError!void {
 
     if (entry == .f64_ref and !siteTestsOverrides(state, reachable)) {
         stack[slot] = .{ .f64_ref = emitAbsF64(ctx, entry.f64_ref) };
+        return;
+    }
+
+    // minInt restarts the entry in the word's generic copy, so the result stays unboxed.
+    if (entry == .i64_ref and restartReady(state) and !siteTestsOverrides(state, reachable)) {
+        const is_min = c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), entry.i64_ref, c.ir_const_i64(ctx, std.math.minInt(i64)));
+        const if_min = c._ir_IF(ctx, is_min);
+        c._ir_IF_TRUE_cold(ctx, if_min);
+        emitRestart(state);
+        c._ir_IF_FALSE(ctx, if_min);
+
+        stack[slot] = .{ .i64_ref = emitAbsI64(ctx, entry.i64_ref) };
         return;
     }
 
@@ -7185,17 +7328,16 @@ fn emitIntrinsicChoose(ec: EmitCtx) IrCodegenError!ControlFlow {
             else
                 .{ .builtin = .{ .kind = .choose_op, .line = ec.line } };
 
-            // Dynamic quotation: load code_ptr before rearranging.
             const quot_addr = liveSlotAddr(state, quot_slot);
 
-            // Tag-check: must be a quotation.
-            const quotation_tag_const = emitTagConst(ctx, .quotation);
-            emitTagCheck(state, quot_addr, quotation_tag_const, bail_status);
+            if (!state.aot_mode) {
+                const quotation_tag_const = emitTagConst(ctx, .quotation);
+                emitTagCheck(state, quot_addr, quotation_tag_const, bail_status);
+            }
 
-            // Load code_ptr from the quotation payload.
-            const code_ptr_off = c.ir_const_addr(ctx, ValueLayout.quotation_code_ptr_offset);
-            const code_ptr_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), quot_addr, code_ptr_off);
-            const code_ptr_val = c._ir_LOAD(ctx, c.IR_ADDR, code_ptr_addr);
+            // The flush and the copies below may both write the quotation's slot: the flush when
+            // the entry is relabeled below the pair, the copies when it sits just above it.
+            const held_quot = emitHoldValue(ctx, quot_addr);
 
             // Flush a1/a2 to their physical slots.
             stack[output_slot] = entry_a1;
@@ -7210,66 +7352,14 @@ fn emitIntrinsicChoose(ec: EmitCtx) IrCodegenError!ControlFlow {
             emitRetainSlot(state, output_slot + 2);
             emitCopySlot(ctx, state.base_addr, output_slot + 1, output_slot + 3);
             emitRetainSlot(state, output_slot + 3);
-            // Copy quotation to slot after the copies (a
-            // quotation carries no refcounted backing).
-            emitCopySlot(ctx, state.base_addr, quot_slot, output_slot + 4);
+            // The selector moves to the slot after the copies. Its reference moves with it, so
+            // no retain is needed.
+            emitStoreHeldValue(ctx, state.base_addr, held_quot, output_slot + 4);
 
             sp.* = output_slot + 4;
             if (sp.* + 1 > state.peak_sp) state.peak_sp = @intCast(sp.* + 1);
 
-            // Null-check code_ptr for compiled vs interpreter dispatch.
-            const null_addr = c.ir_const_addr(ctx, 0);
-            const is_null = c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), code_ptr_val, null_addr);
-            const if_null = c._ir_IF(ctx, is_null);
-
-            // Cold path: interpreter fallback.
-            c._ir_IF_TRUE_cold(ctx, if_null);
-            {
-                // Interpreter expects quotation on top of stack.
-                const fb_sp = output_slot + 5;
-                const fb_sp_const = c.ir_const_addr(ctx, fb_sp);
-                const fb_sp_val = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_idx, fb_sp_const);
-                c._ir_STORE(ctx, state.sp_ptr, fb_sp_val);
-
-                const ctx_val = if (state.preloaded_ctx_val != c.IR_UNUSED)
-                    state.preloaded_ctx_val
-                else blk: {
-                    JitContextLayout.ensureInit();
-                    const ctx_off = c.ir_const_addr(ctx, JitContextLayout.ctx_offset);
-                    const ctx_addr2 = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.jit_ctx_ptr, ctx_off);
-                    break :blk c._ir_LOAD(ctx, c.IR_ADDR, ctx_addr2);
-                };
-                const call_quot_fn = if (state.aot_mode)
-                    state.call_quotation_fn
-                else
-                    c.ir_const_addr(ctx, @intFromPtr(&jitCallQuotation));
-                state.noteAotFallbackEmission(.quotation, "<quotation>", 0, ec.line);
-                const fb_result = c._ir_CALL_1(ctx, c.IR_I32, call_quot_fn, ctx_val);
-                emitCallbackPostCheck(state, fb_result, state.error_propagate_status, null, choose_frame);
-            }
-            const end_fallback = c._ir_END(ctx);
-
-            // Hot path: compiled quotation via code_ptr.
-            c._ir_IF_FALSE(ctx, if_null);
-            {
-                // sp points past the copies (no quotation on stack).
-                const hot_sp_const = c.ir_const_addr(ctx, sp.*);
-                const hot_sp_val = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_idx, hot_sp_const);
-                c._ir_STORE(ctx, state.sp_ptr, hot_sp_val);
-
-                const call_result = if (state.aot_mode)
-                    c._ir_CALL_2(ctx, c.IR_I32, state.call_code_ptr_fn, state.jit_ctx_ptr, code_ptr_val)
-                else
-                    c._ir_CALL_1(ctx, c.IR_I32, code_ptr_val, state.jit_ctx_ptr);
-                emitCallbackPostCheck(state, call_result, call_result, null, choose_frame);
-            }
-            const end_compiled = c._ir_END(ctx);
-
-            c._ir_MERGE_2(ctx, end_fallback, end_compiled);
-
-            if (state.refresh_stack_fn != c.IR_UNUSED) {
-                refreshCachedStackPointer(state);
-            }
+            emitChooseSelectorCall(state, output_slot + 4, "<quotation>", ec.line, choose_frame);
 
             // Quotation consumed 2 copies and pushed 1 result.
             // Result is at physical slot output_slot + 2.
@@ -7952,12 +8042,12 @@ fn emitPolyCompareFastPath(ec: EmitCtx, op: PolyCompareOp) IrCodegenError!bool {
 
     const known: KnownOperands = .{ knownNumericOf(entry_a), knownNumericOf(entry_b) };
     const reachable = reachablePairBits(op.overrideOp(), known);
-    if (!polySiteTaken(state, op.wordName(), known, reachable, false)) return false;
+    if (!try polySiteTaken(state, op.wordName(), known, reachable, false, false)) return false;
 
     if (state.in_branchless_trial) return IrCodegenError.BranchlessTrialImpure;
 
     if (everyReachablePairReplaced(reachable)) {
-        try emitReplacedPairCall(ec, op.wordName(), op == .eq, known);
+        try emitReplacedPairCall(ec, op.wordName(), op == .eq, known, reachable);
         return true;
     }
 
@@ -7984,24 +8074,41 @@ fn emitPolyCompareFastPath(ec: EmitCtx, op: PolyCompareOp) IrCodegenError!bool {
 ///
 /// The JIT, and an AOT build that guards at runtime, send every such site here, because only the
 /// polymorphic path carries the `builtin_override` guard. A closed-world AOT build sends a site
-/// here when an arm replaces a pair it can reach, or when an operand is opaque, since the concrete
-/// path's tag check would bail and an AOT bail aborts the program. It also takes two proven
-/// numbers of different types, and `float_mod` pairs, which the concrete path has no shape for.
+/// here when an arm replaces a pair it can reach, or when the concrete path would bail: an opaque
+/// operand's tag check, or the overflow and zero-divisor guards `guards_fixnum` says a proven
+/// fixnum pair carries. An AOT bail has no interpreter to resume into, so the cold arm's call is
+/// what gives the site the interpreter's result or error. It also takes two proven numbers of
+/// different types, and `float_mod` pairs, which the concrete path has no shape for.
 ///
-/// An AOT site whose cold arm cannot resolve keeps its concrete path instead of rejecting the
-/// whole word, except a pair of opaque arithmetic operands, which has no concrete path that works.
-fn polySiteTaken(state: *CompileState, op_name: []const u8, known: KnownOperands, reachable: u64, float_mod: bool) bool {
+/// An AOT site whose concrete path would bail and whose cold arm cannot resolve refuses the word.
+/// One whose concrete path cannot bail keeps it, and so does a proven fixnum pair whose guard can
+/// restart the entry instead of bailing.
+fn polySiteTaken(state: *CompileState, op_name: []const u8, known: KnownOperands, reachable: u64, float_mod: bool, guards_fixnum: bool) IrCodegenError!bool {
     if (!state.aot_mode) return true;
     if (known[0] == null and known[1] == null) return true;
 
-    const res = state.resolver orelse return false;
-    const resolved = res.resolve(op_name, res.user_data) orelse return false;
-    if ((state.fallbacks_locked or state.freestanding) and resolved.dispatch_id == 0) return false;
+    // A proven fixnum pair's guard restarts the entry in the word's generic copy where it can,
+    // which keeps the concrete path and its typed result.
+    const guarded_pair = guards_fixnum and known[0] != null and known[1] != null and
+        known[0].? == .fixnum and known[1].? == .fixnum;
+    const restarts = guarded_pair and restartReady(state) and !siteTestsOverrides(state, reachable);
+    const concrete_bails = known[0] == null or known[1] == null or (guarded_pair and !restarts);
+
+    const cold_resolves = blk: {
+        const res = state.resolver orelse break :blk false;
+        const resolved = res.resolve(op_name, res.user_data) orelse break :blk false;
+        break :blk !(coldArmDispatches(state, known, reachable) and resolved.dispatch_id == 0);
+    };
+    if (!cold_resolves) {
+        if (concrete_bails) return state.refuse(.unresolvable_word, op_name);
+        return false;
+    }
 
     if (siteTestsOverrides(state, reachable)) return true;
+    if (concrete_bails) return true;
 
-    const a = known[0] orelse return true;
-    const b = known[1] orelse return true;
+    const a = known[0].?;
+    const b = known[1].?;
     return a != b or (float_mod and a == .float);
 }
 
@@ -8010,7 +8117,7 @@ fn polySiteTaken(state: *CompileState, op_name: []const u8, known: KnownOperands
 /// sit at sp and sp+1.
 ///
 /// The JIT calls the native whole. AOT code calls the operator the way a polymorphic cold arm does.
-fn emitReplacedPairCall(ec: EmitCtx, op_name: []const u8, is_eq: bool, known: KnownOperands) IrCodegenError!void {
+fn emitReplacedPairCall(ec: EmitCtx, op_name: []const u8, is_eq: bool, known: KnownOperands, reachable: u64) IrCodegenError!void {
     const state = ec.state;
     const stack = ec.stack;
     const sp = ec.sp;
@@ -8032,7 +8139,7 @@ fn emitReplacedPairCall(ec: EmitCtx, op_name: []const u8, is_eq: bool, known: Kn
         .{ .push_false = .{ .opaque_slot = opaque_slot.?, .dest_slot = slot_a } }
     else
         .trap;
-    try emitPolyColdCall(state, op_name, slot_a, slot_a + 1, ec.line, miss);
+    try emitPolyColdCall(state, op_name, slot_a, slot_a + 1, ec.line, miss, known, reachable);
 
     refreshCachedStackPointer(state);
     stack[slot_a] = .{ .raw_at_slot = slot_a };
@@ -8125,14 +8232,14 @@ fn emitPolyArithFastPath(ec: EmitCtx, op: PolyArithOp) IrCodegenError!bool {
 
     const known: KnownOperands = .{ knownNumericOf(entry_a), knownNumericOf(entry_b) };
     const reachable = reachablePairBits(op.overrideOp(), known);
-    if (!polySiteTaken(state, op.wordName(), known, reachable, op == .mod)) return false;
+    if (!try polySiteTaken(state, op.wordName(), known, reachable, op == .mod, true)) return false;
 
     // The polymorphic path's stores and cold call cannot be folded away from a discarded
     // branchless trial.
     if (state.in_branchless_trial) return IrCodegenError.BranchlessTrialImpure;
 
     if (everyReachablePairReplaced(reachable)) {
-        try emitReplacedPairCall(ec, op.wordName(), false, known);
+        try emitReplacedPairCall(ec, op.wordName(), false, known, reachable);
         return true;
     }
 
@@ -8239,6 +8346,102 @@ fn emitIntrinsicMod(ec: EmitCtx) IrCodegenError!ControlFlow {
     return .next;
 }
 
+/// `div` and `rem` in AOT code, where a bail has no interpreter to resume into.
+///
+/// Two fixnums compute inline when the divisor is nonzero and, for `div`, the pair is not minInt
+/// over -1. Every other pair goes to the native, which raises the interpreter's error or promotes
+/// to a bignum. Both paths leave a boxed value in the slot, so the result is opaque.
+fn emitAotIntDivision(ec: EmitCtx, comptime is_div: bool) IrCodegenError!ControlFlow {
+    const state = ec.state;
+    const ctx = state.ctx;
+    const stack = ec.stack;
+    const sp = ec.sp;
+    const name = if (is_div) "div" else "rem";
+
+    const entry_a = stack[sp.*];
+    const entry_b = stack[sp.* + 1];
+    sp.* += 2;
+
+    const fixnum_or_opaque = (entry_a == .i64_ref or entry_a == .raw_at_slot) and
+        (entry_b == .i64_ref or entry_b == .raw_at_slot);
+    if (!fixnum_or_opaque) {
+        try emitResolvedNativeCallback(state, name, stack, sp, ec.line);
+        return .next;
+    }
+
+    // The cold arm's call cannot be folded away from a discarded branchless trial.
+    if (state.in_branchless_trial) return IrCodegenError.BranchlessTrialImpure;
+
+    const res = state.resolver orelse return state.refuse(.unresolvable_word, name);
+    const resolved = res.resolve(name, res.user_data) orelse return state.refuse(.unresolvable_word, name);
+    if (!resolved.is_native) return state.refuse(.unresolvable_word, name);
+
+    // The native reads both operands from the physical stack, so the pair settles into its slots.
+    try materializeQuotations(state, stack, sp.*, false);
+    flushToPhysicalStack(state, stack, sp.*);
+    sp.* -= 2;
+    const slot_a = sp.*;
+    const slot_b = slot_a + 1;
+
+    const va = emitNumericTagCheckKnown(state, slot_a, knownNumericOf(entry_a));
+    const vb = emitNumericTagCheckKnown(state, slot_b, knownNumericOf(entry_b));
+    const both_fixnum = c.ir_fold2(ctx, c.IR_OPT(c.IR_AND, c.IR_BOOL), va.is_fixnum, vb.is_fixnum);
+
+    const if_fixnum = c._ir_IF(ctx, both_fixnum);
+    c._ir_IF_TRUE(ctx, if_fixnum);
+    const a = emitUnboxI64(ctx, va.elem_addr, state.payload_offset_const);
+    const b = emitUnboxI64(ctx, vb.elem_addr, state.payload_offset_const);
+
+    // minInt over -1 overflows C's `/` and `%` alike, so `rem` sends it to the native too.
+    const is_zero = c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), b, c.ir_const_i64(ctx, 0));
+    const is_min = c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), a, c.ir_const_i64(ctx, std.math.minInt(i64)));
+    const is_neg_one = c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), b, c.ir_const_i64(ctx, -1));
+    const is_overflow = c.ir_fold2(ctx, c.IR_OPT(c.IR_AND, c.IR_BOOL), is_min, is_neg_one);
+    const to_call = c.ir_fold2(ctx, c.IR_OPT(c.IR_OR, c.IR_BOOL), is_zero, is_overflow);
+
+    const if_call = c._ir_IF(ctx, to_call);
+    c._ir_IF_TRUE_cold(ctx, if_call);
+    const end_guard = c._ir_END(ctx);
+    c._ir_IF_FALSE(ctx, if_call);
+
+    const ir_op = if (is_div) c.IR_DIV else c.IR_MOD;
+    const result = c.ir_fold2(ctx, c.IR_OPT(ir_op, c.IR_I64), a, b);
+    emitBoxPayload(ctx, liveSlotAddr(state, slot_a), state.tag_offset_const, state.payload_offset_const, state.fixnum_tag_const, result);
+    const end_inline = c._ir_END(ctx);
+
+    c._ir_IF_FALSE_cold(ctx, if_fixnum);
+    const end_not_fixnum = c._ir_END(ctx);
+    c._ir_MERGE_2(ctx, end_not_fixnum, end_guard);
+    {
+        const saved_items_ptr = state.items_ptr;
+        const saved_base_addr = state.base_addr;
+
+        const ctx_val = emitCallbackPreamble(state, slot_b + 1);
+        if (resolved.stack_effect_ptr) |eff_ptr| {
+            emitParamValidation(state, eff_ptr);
+        }
+        emitNativeWordCall(state, ctx_val, name, resolved, ec.line, false);
+
+        state.items_ptr = saved_items_ptr;
+        state.base_addr = saved_base_addr;
+    }
+    const end_call = c._ir_END(ctx);
+
+    c._ir_MERGE_2(ctx, end_inline, end_call);
+
+    // The call may have moved the stack buffer.
+    refreshCachedStackPointer(state);
+    stack[slot_a] = .{ .raw_at_slot = slot_a };
+    sp.* = slot_a + 1;
+    return .next;
+}
+
+/// Whether an AOT `div` or `rem` on two proven fixnums keeps its guarded concrete form, whose guards
+/// restart the entry in the word's generic copy. No method arm can replace either operator.
+fn restartsProvenPair(state: *const CompileState, a: StackEntry, b: StackEntry) bool {
+    return a == .i64_ref and b == .i64_ref and restartReady(state);
+}
+
 /// `div`: integer-only guarded division. No polymorphic float path.
 fn emitIntrinsicIntDiv(ec: EmitCtx) IrCodegenError!ControlFlow {
     const state = ec.state;
@@ -8247,6 +8450,8 @@ fn emitIntrinsicIntDiv(ec: EmitCtx) IrCodegenError!ControlFlow {
 
     if (sp.* < 2) return IrCodegenError.StackUnderflow;
     sp.* -= 2;
+
+    if (state.aot_mode and !restartsProvenPair(state, stack[sp.*], stack[sp.* + 1])) return emitAotIntDivision(ec, true);
 
     const a = try requireI64(stack[sp.*], state);
     const b = try requireI64(stack[sp.* + 1], state);
@@ -8264,6 +8469,8 @@ fn emitIntrinsicRem(ec: EmitCtx) IrCodegenError!ControlFlow {
 
     if (sp.* < 2) return IrCodegenError.StackUnderflow;
     sp.* -= 2;
+
+    if (state.aot_mode and !restartsProvenPair(state, stack[sp.*], stack[sp.* + 1])) return emitAotIntDivision(ec, false);
 
     const a = try requireI64(stack[sp.*], state);
     const b = try requireI64(stack[sp.* + 1], state);
@@ -8884,6 +9091,123 @@ fn emitIntrinsicArrayN(ec: EmitCtx) IrCodegenError!ControlFlow {
     return emitLiteralCountConsumingOp(ec, 1, true);
 }
 
+/// Loop a `times` body over a count that is not a fixnum, as the prelude's `times` does.
+///
+/// The count and the quotation move into spills, out of the region the body pushes into, as the
+/// interpreter's `2dip` moves them. A literal quotation stays inline, and is also materialized so
+/// a raise can leave it on the stack as the interpreter does. An interpreter-free build cannot
+/// materialize a quotation reading a local an outside word shadows, so its raise leaves the count
+/// alone.
+fn emitAotTimesGenericLoop(ec: EmitCtx, n_slot: usize, quot_entry: StackEntry) IrCodegenError!void {
+    const state = ec.state;
+    const ctx = state.ctx;
+    const stack = ec.stack;
+    const sp = ec.sp.*;
+
+    // Spilled before the flush below, which may write the slots they sit in.
+    const count_spill = emitCallableSpill(state, n_slot);
+    var quot_spill: ?c.ir_ref = switch (quot_entry) {
+        .raw_at_slot => |s| emitCallableSpill(state, s),
+        .quotation_body => null,
+        else => return state.refuse(.quotation_reification, null),
+    };
+
+    try materializeQuotations(state, stack, sp, true);
+    flushToPhysicalStack(state, stack, sp);
+
+    if (quot_entry == .quotation_body) {
+        const reads_shadowed = state.interpreter_free and quotationReadsShadowedBinding(state, quot_entry.quotation_body.body) != null;
+        if (!reads_shadowed) {
+            try materializeQuotations(state, stack, sp + 2, false);
+            quot_spill = emitCallableSpill(state, sp + 1);
+        }
+    }
+    const quot_arg = quot_spill orelse c.ir_const_addr(ctx, 0);
+
+    const loop_entry_stack = state.allocator.dupe(StackEntry, stack[0..sp]) catch return IrCodegenError.OutOfMemory;
+    defer state.allocator.free(loop_entry_stack);
+
+    const run_flag = c._ir_ALLOCA(ctx, c.ir_const_addr(ctx, 8));
+    var step_params = [_]u8{c.IR_ADDR} ** 4;
+    const test_fn = c.ir_const_func(ctx, c.ir_str(ctx, "jitTimesTest"), c.ir_proto(ctx, 0, c.IR_I32, 4, &step_params));
+    const decrement_fn = c.ir_const_func(ctx, c.ir_str(ctx, "jitTimesDecrement"), c.ir_proto(ctx, 0, c.IR_I32, 3, &step_params));
+
+    const entry_end = c._ir_END(ctx);
+    const loop_ref = c._ir_LOOP_BEGIN(ctx, entry_end);
+    state.recordBlockStart(loop_ref);
+
+    const test_ctx = emitCallbackPreamble(state, sp);
+    const test_result = c._ir_CALL_4(ctx, c.IR_I32, test_fn, test_ctx, count_spill, quot_arg, run_flag);
+    emitCallbackPostCheck(state, test_result, state.error_propagate_status, null, .none);
+
+    const run = c.ir_fold2(ctx, c.IR_OPT(c.IR_NE, c.IR_BOOL), c._ir_LOAD(ctx, c.IR_U64, run_flag), c.ir_const_u64(ctx, 0));
+    const if_run = c._ir_IF(ctx, run);
+    c._ir_IF_TRUE(ctx, if_run);
+    {
+        var body_sp = sp;
+        resetStackToPhysicalPreservingRows(stack, body_sp);
+        switch (quot_entry) {
+            .quotation_body => |q| {
+                try compileQuotationBodyInline(state, q.body, stack, &body_sp);
+                if (!symbolicShapeMatches(stack, body_sp, loop_entry_stack, sp)) return IrCodegenError.StackShapeMismatch;
+                flushToPhysicalStack(state, stack, body_sp);
+            },
+            else => emitValueQuotCall(state, stack, &body_sp, quot_spill.?, ec.line, .{ .builtin = .{ .kind = .call, .line = ec.line } }),
+        }
+        resetStackToPhysicalPreservingRows(stack, sp);
+
+        const step_ctx = emitCallbackPreamble(state, sp);
+        const step_result = c._ir_CALL_3(ctx, c.IR_I32, decrement_fn, step_ctx, count_spill, quot_arg);
+        emitCallbackPostCheck(state, step_result, state.error_propagate_status, null, .none);
+
+        emitSafepointCall(state);
+        const loop_end = c._ir_LOOP_END(ctx);
+        c.ir_set_op2(ctx, loop_ref, loop_end);
+    }
+    c._ir_IF_FALSE(ctx, if_run);
+
+    emitReleaseSpilled(state, count_spill);
+    emitReleaseSpilled(state, quot_spill);
+}
+
+/// Unbox the `times` count at `n_slot` in AOT code, where a bail has no interpreter to resume into.
+///
+/// A count that is not a fixnum takes a cold arm running `emitAotTimesGenericLoop`. The arm leaves
+/// the stack the inline loop leaves, and the caller merges it through `slow_end` after the loop.
+fn emitAotTimesCount(ec: EmitCtx, n_slot: usize, quot_entry: StackEntry, slow_end: *c.ir_ref) IrCodegenError!c.ir_ref {
+    const state = ec.state;
+    const ctx = state.ctx;
+    const stack = ec.stack;
+    const sp = ec.sp.*;
+
+    // The freestanding runtime has no natives to run the generic loop's steps through.
+    if (state.freestanding) return state.refuse(.unresolvable_word, "times");
+
+    const n_addr = liveSlotAddr(state, n_slot);
+    const tag_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), n_addr, state.tag_offset_const);
+    const tag_val = c._ir_LOAD(ctx, ValueLayout.ir_tag_type, tag_addr);
+    const is_fixnum = c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), tag_val, state.fixnum_tag_const);
+
+    // The cold arm settles the stack and compiles the body against its own model. The inline loop
+    // compiles from the model as it stood, so the arm works on a copy and puts the original back.
+    var saved_stack: [max_abstract_stack_depth]StackEntry = undefined;
+    @memcpy(saved_stack[0 .. sp + 2], stack[0 .. sp + 2]);
+    const saved_items_ptr = state.items_ptr;
+    const saved_base_addr = state.base_addr;
+
+    const if_fixnum = c._ir_IF(ctx, is_fixnum);
+    c._ir_IF_FALSE_cold(ctx, if_fixnum);
+    try emitAotTimesGenericLoop(ec, n_slot, quot_entry);
+    slow_end.* = c._ir_END(ctx);
+
+    @memcpy(stack[0 .. sp + 2], saved_stack[0 .. sp + 2]);
+    state.items_ptr = saved_items_ptr;
+    state.base_addr = saved_base_addr;
+
+    c._ir_IF_TRUE(ctx, if_fixnum);
+    return emitUnboxI64(ctx, liveSlotAddr(state, n_slot), state.payload_offset_const);
+}
+
 fn emitIntrinsicTimes(ec: EmitCtx) IrCodegenError!ControlFlow {
     const state = ec.state;
     const stack = ec.stack;
@@ -8895,7 +9219,11 @@ fn emitIntrinsicTimes(ec: EmitCtx) IrCodegenError!ControlFlow {
     const n_entry = stack[sp.*];
     const quot_entry = stack[sp.* + 1];
 
-    const initial_n = try requireI64(n_entry, state);
+    var slow_end: c.ir_ref = c.IR_UNUSED;
+    const initial_n = if (state.aot_mode and n_entry == .raw_at_slot)
+        try emitAotTimesCount(ec, n_entry.raw_at_slot, quot_entry, &slow_end)
+    else
+        try requireI64(n_entry, state);
 
     // A quotation carried in the loop-invariant region below the loop args is
     // carried unchanged across the back-edge; reify it before the loop header so
@@ -8978,6 +9306,11 @@ fn emitIntrinsicTimes(ec: EmitCtx) IrCodegenError!ControlFlow {
     c._ir_MERGE_2(ctx, skip_end, exit_end);
 
     emitReleaseSpilled(state, quot_spill);
+
+    if (slow_end != c.IR_UNUSED) {
+        const loop_done = c._ir_END(ctx);
+        c._ir_MERGE_2(ctx, loop_done, slow_end);
+    }
 
     // The safepoint on the loop-continue path updated
     // state.items_ptr/base_addr to IR refs that don't dominate
@@ -9356,6 +9689,17 @@ fn compileInstructions(
 
     for (instructions, 0..) |instr, idx| {
         state.inline_site = .{ .body = instructions, .index = idx };
+
+        // Any pop can strand a lazily swapped value at or above the new top: `drop`, the condition
+        // `if` consumes, an intrinsic's operands. Settling here, before the next instruction can
+        // push, covers every such pop at once.
+        if (hasStrandedRawEntry(stack, sp.*)) {
+            if (state.in_branchless_trial) return IrCodegenError.BranchlessTrialImpure;
+            flushToPhysicalStack(state, stack, sp.*);
+        }
+
+        if (!restartPureInstruction(instr)) state.restart_clean = false;
+
         state.exit_instr_sp = sp.*;
         emitAotInstrTrace(state, instr, stack, sp.*);
         if (state.dynamic_call_emitted) {
@@ -10786,201 +11130,6 @@ pub fn mangleWordName(name: []const u8, allocator: Allocator) Allocator.Error![:
     return buf.toOwnedSliceSentinel(allocator, 0);
 }
 
-/// Emit a compiled word as C source code via ir_emit_c.
-///
-/// Currently limited to pure-arithmetic words, no callbacks, no dispatch.
-pub fn emitWordC(
-    instructions: []const Instruction,
-    input_count: u8,
-    output_count: u8,
-    name: []const u8,
-    allocator: Allocator,
-) (IrCodegenError || ir_mod.IrError || Allocator.Error)![]u8 {
-    ValueLayout.ensureInit();
-
-    const c_name = try mangleWordName(name, allocator);
-    defer allocator.free(c_name);
-
-    // C emission does not use IR_OPT_FOLDING because the opt-level-0 pipeline
-    // used by ir_emit_c / no ir_sccp pass) is incompatible with it.
-    var ctx: c.ir_ctx = undefined;
-    c.ir_init(&ctx, c.IR_FUNCTION, c.IR_CONSTS_LIMIT_MIN, c.IR_INSNS_LIMIT_MIN);
-    defer c.ir_free(&ctx);
-
-    // ir_init zeroes ret_type to IR_VOID. Set it to IR_I32 so the C emitter
-    // generates the correct return type: compiled words return i32 status.
-    ctx.ret_type = c.IR_I32;
-
-    c._ir_START(&ctx);
-
-    JitContextLayout.ensureInit();
-
-    const jit_ctx_ptr = c._ir_PARAM(&ctx, c.IR_ADDR, "jit_ctx", 1);
-
-    const items_ptr = c._ir_LOAD(&ctx, c.IR_ADDR, jit_ctx_ptr);
-    const sp_ptr_off = c.ir_const_addr(&ctx, JitContextLayout.sp_ptr_offset);
-    const sp_ptr_addr = c.ir_fold2(&ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), jit_ctx_ptr, sp_ptr_off);
-    const sp_ptr = c._ir_LOAD(&ctx, c.IR_ADDR, sp_ptr_addr);
-
-    // Capacity is not loaded for C emission. The ir_emit_c backend assigns
-    // vreg 0 to unused LOAD instructions, producing undeclared d_0 in the
-    // output. Capacity is loaded in the JIT path (compileWord) which uses
-    // IR_OPT_FOLDING and handles dead code.
-    const capacity_param = c.IR_UNUSED;
-
-    const bail_status = c.ir_const_i32(&ctx, 1);
-    const ok_status = c.ir_const_i32(&ctx, 0);
-    const error_propagate_status = c.ir_const_i32(&ctx, 2);
-
-    const proto_1arg = c.ir_proto_1(&ctx, 0, c.IR_I32, c.IR_ADDR);
-    const proto_2arg = c.ir_proto_2(&ctx, 0, c.IR_I32, c.IR_ADDR, c.IR_ADDR);
-    const proto_5arg = c.ir_proto_5(&ctx, 0, c.IR_I32, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR);
-    var proto_9arg_params = [_]u8{ c.IR_ADDR, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR };
-    const proto_9arg = c.ir_proto(&ctx, 0, c.IR_I32, proto_9arg_params.len, &proto_9arg_params);
-    const type_mismatch_error_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "jitTypeMismatchError"), proto_1arg);
-    const param_type_mismatch_error_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "onez_param_type_mismatch"), proto_5arg);
-    const div_zero_error_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "jitDivisionByZeroError"), proto_1arg);
-    const underflow_error_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "jitStackUnderflowError"), proto_1arg);
-    const null_code_ptr_error_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "jitNullCodePtrError"), proto_1arg);
-    const append_word_trace_frame_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "onez_append_named_trace_frame"), proto_9arg);
-    const append_builtin_trace_frame_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "onez_append_builtin_trace_frame"), proto_5arg);
-    const push_lexical_frame_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "jitPushLexicalFrame"), proto_2arg);
-    const pop_lexical_frame_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "jitPopLexicalFrame"), proto_1arg);
-
-    const sp_val = c._ir_LOAD(&ctx, c.IR_ADDR, sp_ptr);
-
-    if (input_count > 0) {
-        const min_sp = c.ir_const_addr(&ctx, input_count);
-        const sp_too_small = c.ir_fold2(&ctx, c.IR_OPT(c.IR_ULT, c.IR_BOOL), sp_val, min_sp);
-        const if_underflow = c._ir_IF(&ctx, sp_too_small);
-        c._ir_IF_TRUE_cold(&ctx, if_underflow);
-        c._ir_RETURN(&ctx, bail_status);
-        c._ir_IF_FALSE(&ctx, if_underflow);
-    }
-
-    const value_size_const = c.ir_const_addr(&ctx, ValueLayout.value_size);
-    const tag_offset_const = c.ir_const_addr(&ctx, ValueLayout.tag_offset);
-    const payload_offset_const = c.ir_const_addr(&ctx, ValueLayout.payload_offset);
-    const fixnum_tag_const = emitTagConst(&ctx, .fixnum);
-    const float_tag_const = emitTagConst(&ctx, .float);
-    const boolean_tag_const = emitTagConst(&ctx, .boolean);
-    const tagged_tag_const = emitTagConst(&ctx, .tagged);
-    const struct_instance_tag_const = emitTagConst(&ctx, .struct_instance);
-
-    const input_count_const = c.ir_const_addr(&ctx, input_count);
-    const base_idx = c.ir_fold2(&ctx, c.IR_OPT(c.IR_SUB, c.IR_ADDR), sp_val, input_count_const);
-    const base_byte_offset = c.ir_fold2(&ctx, c.IR_OPT(c.IR_MUL, c.IR_ADDR), base_idx, value_size_const);
-    const base_addr = c.ir_fold2(&ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), items_ptr, base_byte_offset);
-
-    const stack_depth: usize = estimateStackDepth(instructions, input_count);
-    const stack = try allocator.alloc(StackEntry, stack_depth);
-    defer allocator.free(stack);
-    var sp: usize = 0;
-    for (0..input_count) |_| {
-        stack[sp] = .{ .raw_at_slot = sp };
-        sp += 1;
-    }
-
-    var state = CompileState{
-        .allocator = allocator,
-        .ctx = &ctx,
-        // Emitted C runs in another process, so it takes the AOT shapes rather than the JIT's,
-        // which bake this process's addresses.
-        .aot_mode = true,
-        .base_addr = base_addr,
-        .tag_offset_const = tag_offset_const,
-        .payload_offset_const = payload_offset_const,
-        .fixnum_tag_const = fixnum_tag_const,
-        .float_tag_const = float_tag_const,
-        .boolean_tag_const = boolean_tag_const,
-        .tagged_tag_const = tagged_tag_const,
-        .struct_instance_tag_const = struct_instance_tag_const,
-        .bail_status = bail_status,
-        .ok_status = ok_status,
-        .items_ptr = items_ptr,
-        .sp_ptr = sp_ptr,
-        .capacity_param = capacity_param,
-        .sp_val = sp_val,
-        .base_idx = base_idx,
-        .value_size_const = value_size_const,
-        .jit_ctx_ptr = jit_ctx_ptr,
-        .error_propagate_status = error_propagate_status,
-        .type_mismatch_error_fn = type_mismatch_error_fn,
-        .param_type_mismatch_error_fn = param_type_mismatch_error_fn,
-        .div_zero_error_fn = div_zero_error_fn,
-        .underflow_error_fn = underflow_error_fn,
-        .null_code_ptr_error_fn = null_code_ptr_error_fn,
-        .append_word_trace_frame_fn = append_word_trace_frame_fn,
-        .append_builtin_trace_frame_fn = append_builtin_trace_frame_fn,
-        .push_lexical_frame_fn = push_lexical_frame_fn,
-        .pop_lexical_frame_fn = pop_lexical_frame_fn,
-    };
-    defer if (state.method_index) |*mi| mi.deinit();
-    defer if (state.may_define_memo) |*m| m.deinit();
-    defer state.deinitBindings();
-
-    // The same word-body bracket `compileWordPass` emits. Inert while this emitter threads no
-    // interpreter context, which `quotationBodyNeedsFrame` needs before it can answer at all.
-    const needs_lexical_frame = quotationBodyNeedsFrame(&state, instructions);
-    if (needs_lexical_frame) {
-        try emitPushLexicalFrame(&state, instructions);
-        state.open_lexical_frames += 1;
-    }
-
-    try compileInstructions(&state, instructions, stack, &sp);
-
-    // Materialized ahead of the pop for the reason `compileWordPass` gives.
-    if (needs_lexical_frame) {
-        if (exitFallsThrough(state.exit_kind)) {
-            try materializeQuotations(&state, stack, sp, true);
-            emitPopLexicalFrame(&state);
-        }
-        state.open_lexical_frames -= 1;
-    }
-
-    if (state.exit_kind == .loop_diverged) {
-        c._ir_RETURN(&ctx, ok_status);
-    } else if (state.exit_kind == .terminal_return) {
-        // Terminal control flow already emitted the return.
-    } else if (state.dynamic_call_emitted) {
-        c._ir_RETURN(&ctx, ok_status);
-    } else if (hasRowRegion(stack, sp)) {
-        try materializeQuotations(&state, stack, sp, true);
-        flushToPhysicalStack(&state, stack, sp);
-        const final_sp_const = c.ir_const_addr(&ctx, sp);
-        const final_sp = c.ir_fold2(&ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_idx, final_sp_const);
-        c._ir_STORE(&ctx, state.sp_ptr, final_sp);
-        c._ir_RETURN(&ctx, ok_status);
-    } else {
-        try emitEpilogue(&state, stack, sp, input_count, output_count);
-    }
-
-    // emit as C source with stdint.h preamble. The JIT path does
-    // not need #line directives, so no source-lines table is
-    // installed; the patched ir_emit_c.c falls back to its
-    // no-source-info behavior.
-    const body = try ir_mod.emitC(&ctx, c_name.ptr, allocator, null);
-    errdefer allocator.free(body);
-
-    const preamble =
-        "#include <stdint.h>\n#include <stdbool.h>\n\n" ++
-        "extern int32_t jitTypeMismatchError(uintptr_t ctx);\n" ++
-        "extern int32_t jitParamTypeMismatchError(uintptr_t ctx, uintptr_t name_ptr, uintptr_t name_len, uintptr_t expected, uintptr_t value_ptr);\n" ++
-        "static int32_t onez_param_type_mismatch(uintptr_t ctx, const char *name, uintptr_t len, uintptr_t expected, uintptr_t value_ptr) { return jitParamTypeMismatchError(ctx, (uintptr_t)name, len, expected, value_ptr); }\n" ++
-        "extern int32_t jitDivisionByZeroError(uintptr_t ctx);\n" ++
-        "extern int32_t jitStackUnderflowError(uintptr_t ctx);\n" ++
-        "extern int32_t jitNullCodePtrError(uintptr_t ctx);\n" ++
-        "extern int32_t jitAppendNamedTraceFrame(uintptr_t ctx, uintptr_t name_ptr, uintptr_t name_len, uintptr_t src_ptr, uintptr_t src_len, uintptr_t line, uintptr_t effect_ptr, uintptr_t effect_len, uintptr_t word_id_plus_one);\n" ++
-        "extern int32_t jitAppendBuiltinTraceFrame(uintptr_t ctx, uintptr_t frame_kind, uintptr_t src_ptr, uintptr_t src_len, uintptr_t line);\n" ++
-        "static int32_t onez_append_named_trace_frame(uintptr_t ctx, const char *name, uintptr_t len, const char *src, uintptr_t src_len, uintptr_t line, const char *effect, uintptr_t effect_len, uintptr_t word_id_plus_one) { return jitAppendNamedTraceFrame(ctx, (uintptr_t)name, len, (uintptr_t)src, src_len, line, (uintptr_t)effect, effect_len, word_id_plus_one); }\n" ++
-        "static int32_t onez_append_builtin_trace_frame(uintptr_t ctx, uintptr_t frame_kind, const char *src, uintptr_t src_len, uintptr_t line) { return jitAppendBuiltinTraceFrame(ctx, frame_kind, (uintptr_t)src, src_len, line); }\n\n";
-    const result = try allocator.alloc(u8, preamble.len + body.len);
-    @memcpy(result[0..preamble.len], preamble);
-    @memcpy(result[preamble.len..], body);
-    allocator.free(body);
-    return result;
-}
-
 /// Emit a single word as a C function body for AOT compilation. Uses named
 /// extern references (ir_const_func) for callbacks instead of baked addresses.
 /// Does NOT include the #include preamble -- the caller (emitProgramC) adds it.
@@ -11016,7 +11165,7 @@ pub fn emitWordCAot(
     freestanding: bool,
     fallbacks_locked: bool,
 ) (IrCodegenError || ir_mod.IrError || Allocator.Error)![]u8 {
-    return emitWordCAotWithCName(instructions, input_count, output_count, name, null, resolver, self_name, aot_compiled_names, callee_resolution, string_literals, quotation_literals, array_literals, allocator, stack_effect, inferred_param_types, reason_out, quotation_id_map, pic_table, interp_ctx, pic_stats_out, aot_fallback_emit_count_out, aot_fallback_report_out, slot_maps, emit_slot_table_literals, source_file, interpreter_free, freestanding, fallbacks_locked, false, false, null);
+    return emitWordCAotWithCName(instructions, input_count, output_count, name, null, resolver, self_name, aot_compiled_names, callee_resolution, string_literals, quotation_literals, array_literals, allocator, stack_effect, inferred_param_types, reason_out, quotation_id_map, pic_table, interp_ctx, pic_stats_out, aot_fallback_emit_count_out, aot_fallback_report_out, slot_maps, emit_slot_table_literals, source_file, interpreter_free, freestanding, fallbacks_locked, false, false, null, null);
 }
 
 /// Like emitWordCAot but with a pre-mangled C function name override.
@@ -11054,19 +11203,79 @@ fn emitWordCAotWithCName(
     builtin_override_guard: bool,
     needs_lexical_frame: bool,
     lexical_sites: ?*AotLexicalSiteTable,
+    /// Receives the word's generic copy when the typed body restarts into one. Null turns
+    /// versioning off, so every guard keeps the opaque merge.
+    generic_out: ?*?[]u8,
 ) (IrCodegenError || ir_mod.IrError || Allocator.Error)![]u8 {
+    const generic_c_name: ?[]u8 = if (generic_out == null)
+        null
+    else if (c_name_override) |typed|
+        try genericCName(typed, allocator)
+    else blk: {
+        const typed = try mangleWordName(name, allocator);
+        defer allocator.free(typed);
+        break :blk try genericCName(typed, allocator);
+    };
+    defer if (generic_c_name) |g| allocator.free(g);
+
     var reason: ?NotCompilable = null;
-    const discovered = emitWordCAotPass(instructions, input_count, output_count, name, c_name_override, resolver, self_name, aot_compiled_names, callee_resolution, string_literals, quotation_literals, array_literals, allocator, stack_effect, inferred_param_types, null, &reason, quotation_id_map, pic_table, interp_ctx, null, null, null, slot_maps, emit_slot_table_literals, source_file, interpreter_free, freestanding, fallbacks_locked, builtin_override_guard, false, needs_lexical_frame, null) catch |err| {
+    var restart_target: ?[]const u8 = generic_c_name;
+    var discovered = emitWordCAotPass(instructions, input_count, output_count, name, c_name_override, resolver, self_name, aot_compiled_names, callee_resolution, string_literals, quotation_literals, array_literals, allocator, stack_effect, inferred_param_types, null, &reason, quotation_id_map, pic_table, interp_ctx, null, null, null, slot_maps, emit_slot_table_literals, source_file, interpreter_free, freestanding, fallbacks_locked, builtin_override_guard, false, needs_lexical_frame, null, restart_target) catch |err| {
         if (reason_out) |ro| ro.* = reason;
         return err;
     };
     if (discovered.body) |b| allocator.free(b);
+
+    // The generic copy narrows what the typed copy narrows, except under the lock.
+    //
+    // Under the lock the inference also types arithmetic results, which a restart can promote. So
+    // the generic copy narrows nothing there, and its own back-edge can carry a bignum.
+    //
+    // Elsewhere every proof holds on every entry. Narrowing keeps the generic copy's proven pairs
+    // on the frozen table, where an opaque pair's cold arm would call the native.
+    //
+    // A typed copy restarts only into a generic copy that compiles.
+    const generic_param_types: []const InferredParamType = if (fallbacks_locked) &.{} else inferred_param_types;
+    var generic_discovered: EmitWordCAotPassResult = .{ .body = null, .peak_stack_depth = 0 };
+    if (restart_target != null and discovered.restart_used) {
+        var generic_reason: ?NotCompilable = null;
+        if (emitWordCAotPass(instructions, input_count, output_count, name, generic_c_name, resolver, self_name, aot_compiled_names, callee_resolution, string_literals, quotation_literals, array_literals, allocator, stack_effect, generic_param_types, null, &generic_reason, quotation_id_map, null, interp_ctx, null, null, null, slot_maps, emit_slot_table_literals, source_file, interpreter_free, freestanding, fallbacks_locked, builtin_override_guard, false, needs_lexical_frame, null, null)) |found| {
+            if (found.body) |b| allocator.free(b);
+            generic_discovered = found;
+        } else |_| {
+            restart_target = null;
+            reason = null;
+            discovered = emitWordCAotPass(instructions, input_count, output_count, name, c_name_override, resolver, self_name, aot_compiled_names, callee_resolution, string_literals, quotation_literals, array_literals, allocator, stack_effect, inferred_param_types, null, &reason, quotation_id_map, pic_table, interp_ctx, null, null, null, slot_maps, emit_slot_table_literals, source_file, interpreter_free, freestanding, fallbacks_locked, builtin_override_guard, false, needs_lexical_frame, null, null) catch |err| {
+                if (reason_out) |ro| ro.* = reason;
+                return err;
+            };
+            if (discovered.body) |b| allocator.free(b);
+        }
+    } else {
+        restart_target = null;
+    }
+
     reason = null;
-    const result = emitWordCAotPass(instructions, input_count, output_count, name, c_name_override, resolver, self_name, aot_compiled_names, callee_resolution, string_literals, quotation_literals, array_literals, allocator, stack_effect, inferred_param_types, discovered.peak_stack_depth, &reason, quotation_id_map, pic_table, interp_ctx, pic_stats_out, aot_fallback_emit_count_out, aot_fallback_report_out, slot_maps, emit_slot_table_literals, source_file, interpreter_free, freestanding, fallbacks_locked, builtin_override_guard, discovered.row_aware_self_loop, needs_lexical_frame, lexical_sites) catch |err| {
+    const result = emitWordCAotPass(instructions, input_count, output_count, name, c_name_override, resolver, self_name, aot_compiled_names, callee_resolution, string_literals, quotation_literals, array_literals, allocator, stack_effect, inferred_param_types, discovered.peak_stack_depth, &reason, quotation_id_map, pic_table, interp_ctx, pic_stats_out, aot_fallback_emit_count_out, aot_fallback_report_out, slot_maps, emit_slot_table_literals, source_file, interpreter_free, freestanding, fallbacks_locked, builtin_override_guard, discovered.row_aware_self_loop, needs_lexical_frame, lexical_sites, restart_target) catch |err| {
         if (reason_out) |ro| ro.* = reason;
         return err;
     };
-    return result.body orelse return IrCodegenError.CompilationFailed;
+    const body = result.body orelse return IrCodegenError.CompilationFailed;
+    errdefer allocator.free(body);
+
+    if (restart_target != null and result.restart_used) {
+        const generic = try emitWordCAotPass(instructions, input_count, output_count, name, generic_c_name, resolver, self_name, aot_compiled_names, callee_resolution, string_literals, quotation_literals, array_literals, allocator, stack_effect, generic_param_types, generic_discovered.peak_stack_depth, null, quotation_id_map, null, interp_ctx, null, aot_fallback_emit_count_out, aot_fallback_report_out, slot_maps, emit_slot_table_literals, source_file, interpreter_free, freestanding, fallbacks_locked, builtin_override_guard, generic_discovered.row_aware_self_loop, needs_lexical_frame, lexical_sites, null);
+        generic_out.?.* = generic.body orelse return IrCodegenError.CompilationFailed;
+    }
+    return body;
+}
+
+/// The C name of a word's generic copy: its typed copy's name with the `onez_w_` prefix swapped for
+/// `onez_g_`, which no other function carries.
+fn genericCName(typed: []const u8, allocator: Allocator) Allocator.Error![]u8 {
+    const prefix = "onez_w_";
+    const rest = if (std.mem.startsWith(u8, typed, prefix)) typed[prefix.len..] else typed;
+    return std.mem.concat(allocator, u8, &.{ "onez_g_", rest });
 }
 
 const EmitWordCAotPassResult = struct {
@@ -11086,6 +11295,8 @@ const EmitWordCAotPassResult = struct {
     /// Used by the compile-to-discover effect search for composite-nested quotations whose effect
     /// `inferQuotationEffect` can't derive, e.g., a body using a row-variable combinator like `dip`.
     discovered_output: u8 = 0,
+    /// Whether the body restarts the entry in the word's generic copy anywhere.
+    restart_used: bool = false,
 };
 
 fn emitWordCAotPass(
@@ -11131,6 +11342,9 @@ fn emitWordCAotPass(
     /// The program's site table, which the frames and literals this function tags are added to.
     /// Null for a pass whose output is discarded, which then tags everything `0`.
     lexical_sites: ?*AotLexicalSiteTable,
+    /// The C name of the word's generic copy, which a guard can restart the entry in. Null where the
+    /// pass must not restart, as for the generic copy itself.
+    restart_target: ?[]const u8,
 ) (IrCodegenError || ir_mod.IrError || Allocator.Error)!EmitWordCAotPassResult {
     ValueLayout.ensureInit();
 
@@ -11356,7 +11570,20 @@ fn emitWordCAotPass(
         const sp_too_small = c.ir_fold2(&ctx, c.IR_OPT(c.IR_ULT, c.IR_BOOL), sp_val, min_sp);
         const if_underflow = c._ir_IF(&ctx, sp_too_small);
         c._ir_IF_TRUE_cold(&ctx, if_underflow);
-        c._ir_RETURN(&ctx, bail_status);
+
+        // A word's count comes from its declared effect. Its bail has no interpreter to resume
+        // into, so it raises the interpreter's error. It raises before the body runs and leaves
+        // the stack untouched. The interpreter would have run the body up to its first
+        // underflowing operation.
+        //
+        // A quotation body's count is inferred and can overstate what it reads. The interpreter
+        // that called it re-runs the body on a bail, so it keeps bailing.
+        if (stack_effect != null) {
+            const underflow_status = c._ir_CALL_1(&ctx, c.IR_I32, underflow_error_fn, preloaded_ctx_val);
+            c._ir_RETURN(&ctx, underflow_status);
+        } else {
+            c._ir_RETURN(&ctx, bail_status);
+        }
         c._ir_IF_FALSE(&ctx, if_underflow);
     }
 
@@ -11484,6 +11711,7 @@ fn emitWordCAotPass(
     defer if (state.method_index) |*mi| mi.deinit();
     defer if (state.may_define_memo) |*m| m.deinit();
     defer state.deinitBindings();
+    defer if (state.restart_inputs.len > 0) allocator.free(state.restart_inputs);
 
     emitParkReservation(&state, instructions, needs_lexical_frame);
     state.word_input_count = input_count;
@@ -11532,6 +11760,7 @@ fn emitWordCAotPass(
     } else {
         seedNarrowedParams(&state, stack_buf, input_count);
         emitValueBindingEntryChecks(&state, stack_buf);
+        try armRestart(&state, restart_target, stack_buf[0..input_count], needs_lexical_frame or row_aware_self_loop);
 
         compileInstructions(&state, instructions, stack_buf, &sp) catch |err| {
             if (err == IrCodegenError.NotCompilable) {
@@ -11606,7 +11835,7 @@ fn emitWordCAotPass(
 
     // Discovery pass: skip C emission, let the caller re-run with the peak.
     if (known_peak == null) {
-        return .{ .body = null, .peak_stack_depth = state.peak_sp, .returns_row = returns_row, .row_aware_self_loop = state.row_aware_loop_detected, .discovered_output = discovered_output };
+        return .{ .body = null, .peak_stack_depth = state.peak_sp, .returns_row = returns_row, .row_aware_self_loop = state.row_aware_loop_detected, .discovered_output = discovered_output, .restart_used = state.restart_used };
     }
 
     // Build the source-lines side table for the patched `ir_emit_c.c` so
@@ -11639,7 +11868,7 @@ fn emitWordCAotPass(
     }
 
     const body = try ir_mod.emitC(&ctx, c_name.ptr, allocator, source_lines_ptr);
-    return .{ .body = body, .peak_stack_depth = state.peak_sp, .returns_row = returns_row, .row_aware_self_loop = state.row_aware_loop_detected, .discovered_output = discovered_output };
+    return .{ .body = body, .peak_stack_depth = state.peak_sp, .returns_row = returns_row, .row_aware_self_loop = state.row_aware_loop_detected, .discovered_output = discovered_output, .restart_used = state.restart_used };
 }
 
 /// Append an `asm("name")` declaration attribute to `out` so the C compiler renames the linker symbol
@@ -12398,6 +12627,7 @@ pub fn emitProgramC(
                     false,
                     word_needs_frame[i],
                     null,
+                    null,
                 ) catch continue;
                 if (discovered.body) |b| allocator.free(b);
                 if (discovered.returns_row) {
@@ -12459,6 +12689,7 @@ pub fn emitProgramC(
             builtin_override_guard,
             word_needs_frame[i],
             null,
+            null,
         ) catch |err| {
             const rejected: ?NotCompilable = if (reason) |r|
                 r
@@ -12508,7 +12739,7 @@ pub fn emitProgramC(
                 var dreason: ?NotCompilable = null;
                 // No inferred types: the freeze-time pass sizes a quotation's table by its
                 // `inferred_effect`, and this branch runs precisely when it has none.
-                const dres = emitWordCAotPass(q.instructions, ic, 0, q.c_name, q.c_name, resolver, null, &compiled_names, resolver_data.callee_resolution, null, null, null, allocator, null, &.{}, null, &dreason, null, null, interp_ctx, null, null, null, slot_maps_ptr, emit_slot_table_literals, q.source_file, strict_interpreter_free, meta.freestanding, fallbacks_locked, builtin_override_guard, false, bracketed_quotation_ids.contains(q.quotation_id), null) catch {
+                const dres = emitWordCAotPass(q.instructions, ic, 0, q.c_name, q.c_name, resolver, null, &compiled_names, resolver_data.callee_resolution, null, null, null, allocator, null, &.{}, null, &dreason, null, null, interp_ctx, null, null, null, slot_maps_ptr, emit_slot_table_literals, q.source_file, strict_interpreter_free, meta.freestanding, fallbacks_locked, builtin_override_guard, false, bracketed_quotation_ids.contains(q.quotation_id), null, null) catch {
                     emitAotEffectTrace(interp_ctx, q.c_name, ic, null, dreason);
                     continue;
                 };
@@ -12554,6 +12785,7 @@ pub fn emitProgramC(
             builtin_override_guard,
             bracketed_quotation_ids.contains(q.quotation_id),
             null,
+            null,
         ) catch {
             emitAotCodegenTrace(interp_ctx, "quot", q.c_name, qreason orelse .{ .reason = .unknown_reason });
             continue;
@@ -12584,9 +12816,12 @@ pub fn emitProgramC(
     defer array_literals.deinit(std.heap.page_allocator);
 
     // Pass 2a: compile with only the compilable set
-    var compiled_bodies: std.ArrayListUnmanaged(struct { word_id: u32, body: []u8 }) = .{};
+    var compiled_bodies: std.ArrayListUnmanaged(struct { word_id: u32, body: []u8, generic: ?[]u8 }) = .{};
     defer {
-        for (compiled_bodies.items) |item| allocator.free(item.body);
+        for (compiled_bodies.items) |item| {
+            allocator.free(item.body);
+            if (item.generic) |g| allocator.free(g);
+        }
         compiled_bodies.deinit(allocator);
     }
 
@@ -12601,6 +12836,7 @@ pub fn emitProgramC(
     for (words, 0..) |*w, i| {
         if (!compilable_names.contains(identities[i])) continue;
         resolver_data.callee_resolution.scope = scopeFor(&callee_scopes, identities[i]);
+        var raw_generic: ?[]u8 = null;
         const raw_body = emitWordCAotWithCName(
             w.instructions,
             w.input_count,
@@ -12633,13 +12869,19 @@ pub fn emitProgramC(
             builtin_override_guard,
             word_needs_frame[i],
             &lexical_sites,
+            &raw_generic,
         ) catch |err| switch (err) {
             error.NotCompilable => continue,
             else => return err,
         };
         const body = try patchMissingD0(raw_body, allocator);
         if (body.ptr != raw_body.ptr) allocator.free(raw_body);
-        try compiled_bodies.append(allocator, .{ .word_id = w.word_id, .body = body });
+        const generic: ?[]u8 = if (raw_generic) |g| blk: {
+            const patched = try patchMissingD0(g, allocator);
+            if (patched.ptr != g.ptr) allocator.free(g);
+            break :blk patched;
+        } else null;
+        try compiled_bodies.append(allocator, .{ .word_id = w.word_id, .body = body, .generic = generic });
         try actually_compiled.put(allocator, w.word_id, {});
     }
 
@@ -12685,6 +12927,7 @@ pub fn emitProgramC(
             builtin_override_guard,
             bracketed_quotation_ids.contains(q.quotation_id),
             &lexical_sites,
+            null,
         ) catch |err| switch (err) {
             error.NotCompilable => continue,
             else => return err,
@@ -13073,6 +13316,8 @@ pub fn emitProgramC(
     try out.appendSlice(allocator, "extern int32_t jitCallQuotationValue(uintptr_t ctx, uintptr_t value_ptr);\n");
     try out.appendSlice(allocator, "extern int32_t jitCallCodePtr(uintptr_t jit_ctx, uintptr_t code_ptr);\n");
     try out.appendSlice(allocator, "extern int32_t jitCallValue(uintptr_t jit_ctx, uintptr_t value_ptr);\n");
+    try out.appendSlice(allocator, "extern int32_t jitTimesTest(uintptr_t ctx, uintptr_t count_ptr, uintptr_t quot_ptr, uintptr_t run_out);\n");
+    try out.appendSlice(allocator, "extern int32_t jitTimesDecrement(uintptr_t ctx, uintptr_t count_ptr, uintptr_t quot_ptr);\n");
     try out.appendSlice(allocator, "extern int32_t jitTypeMismatchError(uintptr_t ctx);\n");
     try out.appendSlice(allocator, "extern int32_t jitParamTypeMismatchError(uintptr_t ctx, uintptr_t name_ptr, uintptr_t name_len, uintptr_t expected, uintptr_t value_ptr);\n");
     try out.appendSlice(allocator, "static int32_t onez_param_type_mismatch(uintptr_t ctx, const char *name, uintptr_t len, uintptr_t expected, uintptr_t value_ptr) { return jitParamTypeMismatchError(ctx, (uintptr_t)name, len, expected, value_ptr); }\n");
@@ -13125,6 +13370,12 @@ pub fn emitProgramC(
     try out.appendSlice(allocator, "extern int32_t jitDispatchMissError(uintptr_t ctx, uintptr_t word_id, const char *src, uintptr_t src_len, uintptr_t line);\n");
     try out.appendSlice(allocator, "\n");
 
+    var generic_word_ids: std.AutoHashMapUnmanaged(u32, void) = .{};
+    defer generic_word_ids.deinit(allocator);
+    for (compiled_bodies.items) |item| {
+        if (item.generic != null) try generic_word_ids.put(allocator, item.word_id, {});
+    }
+
     // 4a. Forward declarations (only for successfully compiled words)
     for (words, 0..) |w, i| {
         if (!actually_compiled.contains(w.word_id)) continue;
@@ -13139,6 +13390,23 @@ pub fn emitProgramC(
             }
         }
         try out.appendSlice(allocator, ";\n");
+
+        if (generic_word_ids.contains(w.word_id)) {
+            const generic_c_name = try genericCName(c_identifiers[i], allocator);
+            defer allocator.free(generic_c_name);
+            try out.appendSlice(allocator, "int32_t ");
+            try out.appendSlice(allocator, generic_c_name);
+            try out.appendSlice(allocator, "(uintptr_t jit_ctx)");
+
+            const generic_name = try std.fmt.allocPrint(allocator, "{s} (generic)", .{if (w.is_generated) w.name else identities[i]});
+            defer allocator.free(generic_name);
+            if (w.is_generated) {
+                try appendGeneratedWordAsmNameClause(&out, allocator, w.module, generic_name, w.parent);
+            } else {
+                try appendAsmNameClause(&out, allocator, generic_name);
+            }
+            try out.appendSlice(allocator, ";\n");
+        }
     }
     // Forward declarations for compiled quotation bodies
     for (compiled_quotation_bodies.items) |item| {
@@ -13167,6 +13435,10 @@ pub fn emitProgramC(
         }
         try out.appendSlice(allocator, item.body);
         try out.appendSlice(allocator, "\n");
+        if (item.generic) |g| {
+            try out.appendSlice(allocator, g);
+            try out.appendSlice(allocator, "\n");
+        }
     }
     // 4c. Emit compiled quotation function bodies
     for (compiled_quotation_bodies.items) |item| {
@@ -14266,7 +14538,7 @@ fn emitDivision(
     return c.ir_fold2(ctx, c.IR_OPT(c.IR_DIV, c.IR_I64), a, b);
 }
 
-/// Emit truncating remainder with div-by-zero guard.
+/// Emit truncating remainder with div-by-zero and minInt/-1 guards.
 fn emitRemainder(
     state: *CompileState,
     a: c.ir_ref,
@@ -14282,7 +14554,22 @@ fn emitRemainder(
     emitSettledExit(state, bail_status, .bail);
     c._ir_IF_FALSE(ctx, if_zero);
 
+    emitMinIntOverNegOneGuard(state, a, b, bail_status);
+
     return c.ir_fold2(ctx, c.IR_OPT(c.IR_MOD, c.IR_I64), a, b);
+}
+
+/// Bail on minInt over -1. C's `%` traps on that pair on x86 as its `/` does, though the remainder
+/// itself is zero.
+fn emitMinIntOverNegOneGuard(state: *CompileState, a: c.ir_ref, b: c.ir_ref, bail_status: c.ir_ref) void {
+    const ctx = state.ctx;
+    const is_min = c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), a, c.ir_const_i64(ctx, std.math.minInt(i64)));
+    const is_neg_one = c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), b, c.ir_const_i64(ctx, -1));
+    const is_overflow = c.ir_fold2(ctx, c.IR_OPT(c.IR_AND, c.IR_BOOL), is_min, is_neg_one);
+    const if_ov = c._ir_IF(ctx, is_overflow);
+    c._ir_IF_TRUE_cold(ctx, if_ov);
+    emitSettledExit(state, bail_status, .bail);
+    c._ir_IF_FALSE(ctx, if_ov);
 }
 
 /// Emit Euclidean modulo with div-by-zero guard.
@@ -14301,6 +14588,8 @@ fn emitEuclideanMod(
     c._ir_IF_TRUE_cold(ctx, if_zero);
     emitSettledExit(state, bail_status, .bail);
     c._ir_IF_FALSE(ctx, if_zero);
+
+    emitMinIntOverNegOneGuard(state, a, b, bail_status);
 
     // Compute truncating remainder (C semantics)
     const rem_val = c.ir_fold2(ctx, c.IR_OPT(c.IR_MOD, c.IR_I64), a, b);
@@ -14325,6 +14614,8 @@ fn emitEuclideanMod(
 /// any interpreter callback from compiled code.
 fn emitCallbackPreamble(state: *CompileState, sp: usize) c.ir_ref {
     const ctx = state.ctx;
+    state.restart_clean = false;
+
     const sp_const = c.ir_const_addr(ctx, sp);
     const new_sp = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_idx, sp_const);
     c._ir_STORE(ctx, state.sp_ptr, new_sp);
@@ -14703,6 +14994,7 @@ fn emitCallbackPostCheck(
     current_trace_frame: CurrentTraceFrame,
 ) void {
     const ctx = state.ctx;
+    state.restart_clean = false;
     const zero_status = c.ir_const_i32(ctx, 0);
     const call_failed = c.ir_fold2(ctx, c.IR_OPT(c.IR_NE, c.IR_BOOL), call_result, zero_status);
     const if_bail = c._ir_IF(ctx, call_failed);
@@ -14802,6 +15094,7 @@ fn refreshCachedStackPointer(state: *CompileState) void {
 /// from the JitContext struct and calls jitSafepoint.
 fn emitSafepointCall(state: *CompileState) void {
     if (state.safepoint_fn == c.IR_UNUSED) return;
+    state.restart_clean = false;
 
     const call_result = c._ir_CALL_1(state.ctx, c.IR_I32, state.safepoint_fn, ctxValRef(state));
     emitCallbackPostCheck(state, call_result, state.error_propagate_status, null, .none);
@@ -14918,6 +15211,95 @@ fn emitAbnormalReturn(state: *CompileState, status: c.ir_ref) void {
     c._ir_RETURN(state.ctx, status);
 }
 
+/// Make the point just after the inputs are seeded the restart point, when the word can restart.
+///
+/// It sits after a self-tail loop's header, so a restart re-runs only the current iteration. Every
+/// input has to be a narrowed scalar, so the seeded values alone can put the inputs back. A word
+/// whose stack is not one fixed region, or that holds anything a restart would have to release or
+/// pop, keeps bailing as before: a row effect, a row-aware loop, a lexical frame, or a park.
+fn armRestart(state: *CompileState, target: ?[]const u8, inputs: []const StackEntry, framed_or_row_loop: bool) Allocator.Error!void {
+    const name = target orelse return;
+    const effect = state.stack_effect orelse return;
+    if (framed_or_row_loop or state.park_capacity != 0) return;
+
+    for (effect.inputs) |param| {
+        if (param.is_row_variable) return;
+    }
+    for (effect.outputs) |param| {
+        if (param.is_row_variable) return;
+    }
+    for (inputs) |entry| {
+        switch (entry) {
+            .i64_ref, .f64_ref, .bool_ref => {},
+            else => return,
+        }
+    }
+
+    state.restart_inputs = try state.allocator.dupe(StackEntry, inputs);
+    state.restart_fn = c.ir_const_func(state.ctx, c.ir_strl(state.ctx, name.ptr, name.len), state.aot_proto_1arg);
+    state.restart_clean = true;
+}
+
+/// Whether an AOT guard emitted here can restart the current entry in the word's generic copy.
+fn restartReady(state: *const CompileState) bool {
+    return state.restart_fn != c.IR_UNUSED and state.restart_clean;
+}
+
+/// Re-run the current word entry, or self-tail loop iteration, in the word's generic copy.
+///
+/// Nothing emitted since the restart point was observable, and every value it made is a scalar or a
+/// static literal. So the slots need no release: the seeded inputs are boxed back into theirs, the
+/// depth goes back to the entry depth, and the generic copy runs from the top. Its status is this
+/// entry's status.
+fn emitRestart(state: *CompileState) void {
+    const ctx = state.ctx;
+
+    for (state.restart_inputs, 0..) |entry, i| {
+        const tag = switch (entry) {
+            .i64_ref => state.fixnum_tag_const,
+            .f64_ref => state.float_tag_const,
+            .bool_ref => state.boolean_tag_const,
+            else => unreachable,
+        };
+        const value = switch (entry) {
+            .i64_ref, .f64_ref, .bool_ref => |r| r,
+            else => unreachable,
+        };
+        emitBoxPayload(ctx, liveSlotAddr(state, i), state.tag_offset_const, state.payload_offset_const, tag, value);
+    }
+
+    const depth_const = c.ir_const_addr(ctx, state.restart_inputs.len);
+    const entry_sp = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_idx, depth_const);
+    c._ir_STORE(ctx, state.sp_ptr, entry_sp);
+
+    const status = c._ir_CALL_1(ctx, c.IR_I32, state.restart_fn, state.jit_ctx_ptr);
+    state.restart_used = true;
+    emitAbnormalReturn(state, status);
+}
+
+/// Whether `instr` leaves the restart point's guarantee intact when its operands are scalars: it
+/// pushes a scalar, a static literal, or a quotation literal, or it is an intrinsic whose inline
+/// form calls nothing. An intrinsic that declines to its native goes through a callback preamble,
+/// which clears the guarantee there.
+fn restartPureInstruction(instr: Instruction) bool {
+    const name = switch (instr.op) {
+        .push_literal => |val| return switch (val) {
+            .fixnum, .float, .boolean, .string, .symbol, .quotation => true,
+            else => false,
+        },
+        .call_word => |n| n,
+        .call_word_direct => |slot| slot.name,
+        .call_word_module => return false,
+    };
+    return restart_pure_intrinsics.has(name);
+}
+
+const restart_pure_intrinsics = std.StaticStringMap(void).initComptime(.{
+    .{"t"},  .{"f"},   .{"abs"}, .{"dup"}, .{"drop"}, .{"swap"}, .{"over"},
+    .{"if"}, .{"dip"}, .{"="},   .{"<"},   .{">"},    .{"+"},    .{"-"},
+    .{"*"},  .{"/"},   .{"%"},   .{"div"}, .{"rem"},
+});
+
 /// How an inline guard leaves the body, which decides what it leaves on the stack.
 const InlineExit = enum {
     /// Abandon the attempt. The caller releases what the stack holds and puts the entry operands
@@ -14943,6 +15325,11 @@ const InlineExit = enum {
 /// A guard inside a branchless trial arm settles too. Its stores sit on the cold path, which runs
 /// only when the function is leaving, so a spurious guard in a discarded arm stays a spurious exit.
 fn emitSettledExit(state: *CompileState, status: c.ir_ref, kind: InlineExit) void {
+    if (kind == .bail and restartReady(state)) {
+        emitRestart(state);
+        return;
+    }
+
     const stack = state.exit_stack orelse {
         emitAbnormalReturn(state, status);
         return;
@@ -16653,7 +17040,14 @@ export fn jitNativeCall(ctx_raw: usize, fn_ptr_raw: usize) callconv(.c) i32 {
 export fn jitCallQuotation(ctx_raw: usize) callconv(.c) i32 {
     if (ctx_raw == 0) return 1;
     const ctx: *Context = @ptrFromInt(ctx_raw);
-    if (!ctx.allow_interpreted_fallback) {
+
+    // A non-callable top runs nothing interpreted, so it raises `call`'s own type mismatch in
+    // every build class rather than the fallback refusal.
+    const callable = if (ctx.stack.items.items.len == 0) true else switch (ctx.stack.items.items[ctx.stack.items.items.len - 1]) {
+        .quotation, .closure => true,
+        else => false,
+    };
+    if (callable and !ctx.allow_interpreted_fallback) {
         const stderr_file: std.fs.File = .stderr();
         stderr_file.writeAll("Fatal: quotation call requires interpreter fallback; rebuild with --interpreter-fallback=true\n") catch {};
         ctx.jit_pending_error = error.InterpreterFallbackDisabled;
@@ -16758,7 +17152,6 @@ export fn jitCallValue(jit_ctx_raw: usize, value_ptr_raw: usize) callconv(.c) i3
             defer cl.header.release();
             for (cl.segments) |seg| {
                 for (seg.captures) |cap| {
-                    container_backing.retainValue(cap);
                     ctx.stack.push(cap) catch {
                         ctx.jit_pending_error = error.OutOfMemory;
                         return 2;
@@ -16780,6 +17173,75 @@ export fn jitCallValue(jit_ctx_raw: usize, value_ptr_raw: usize) callconv(.c) i3
             return 2;
         },
     }
+}
+
+/// Run the prelude `times`'s `over 0 >` test on a count that is not a fixnum, for AOT code whose
+/// inline loop counts only fixnums. Writes 1 to `run_out` when the body runs, else 0.
+///
+/// The count and the quotation sit below the comparison's operands, as they do in the interpreter
+/// at this point, so a raise leaves the stack the interpreter leaves. A null `quot_ptr_raw` means
+/// the quotation cannot be a value in this build, and the raise leaves the count alone.
+///
+/// The compiled caller holds the count and the quotation in spills it abandons on a raise, so a
+/// raise releases the references they own.
+export fn jitTimesTest(ctx_raw: usize, count_ptr_raw: usize, quot_ptr_raw: usize, run_out_raw: usize) callconv(.c) i32 {
+    if (ctx_raw == 0 or count_ptr_raw == 0 or run_out_raw == 0) return 1;
+    const ctx: *Context = @ptrFromInt(ctx_raw);
+    const count: *Value = @ptrFromInt(count_ptr_raw);
+    const quot: ?*Value = if (quot_ptr_raw == 0) null else @ptrFromInt(quot_ptr_raw);
+    const run_out: *u64 = @ptrFromInt(run_out_raw);
+
+    pushTimesOperands(ctx, count, quot, &.{ count.*, .{ .fixnum = 0 } }) catch |err| return abandonTimesSpills(ctx, count, quot, err);
+    arithmetic_mod.nativeGt(ctx) catch |err| return abandonTimesSpills(ctx, count, quot, err);
+
+    const answer = ctx.stack.pop() catch |err| return abandonTimesSpills(ctx, count, quot, err);
+    defer container_backing.releaseValue(answer);
+    popTimesOperands(ctx, quot);
+
+    run_out.* = @intFromBool(!(answer == .boolean and !answer.boolean));
+    return 0;
+}
+
+/// Run the prelude `times`'s `swap -- swap` on a count that is not a fixnum, replacing the count
+/// in its spill with the result. Raises as `jitTimesTest` does.
+export fn jitTimesDecrement(ctx_raw: usize, count_ptr_raw: usize, quot_ptr_raw: usize) callconv(.c) i32 {
+    if (ctx_raw == 0 or count_ptr_raw == 0) return 1;
+    const ctx: *Context = @ptrFromInt(ctx_raw);
+    const count: *Value = @ptrFromInt(count_ptr_raw);
+    const quot: ?*Value = if (quot_ptr_raw == 0) null else @ptrFromInt(quot_ptr_raw);
+
+    // After `swap` the quotation sits below the count, the reverse of the test's order.
+    if (quot) |q| ctx.stack.push(q.*) catch |err| return abandonTimesSpills(ctx, count, quot, err);
+    ctx.stack.push(count.*) catch |err| return abandonTimesSpills(ctx, count, quot, err);
+    ctx.stack.push(.{ .fixnum = 1 }) catch |err| return abandonTimesSpills(ctx, count, quot, err);
+    arithmetic_mod.nativeSub(ctx) catch |err| return abandonTimesSpills(ctx, count, quot, err);
+
+    const next = ctx.stack.pop() catch |err| return abandonTimesSpills(ctx, count, quot, err);
+    if (quot != null) ctx.stack.popAndRelease() catch {};
+
+    container_backing.releaseValue(count.*);
+    count.* = next;
+    return 0;
+}
+
+/// Push the count, the quotation when there is one, and `operands`, each as an owned copy.
+fn pushTimesOperands(ctx: *Context, count: *const Value, quot: ?*const Value, operands: []const Value) !void {
+    try ctx.stack.push(count.*);
+    if (quot) |q| try ctx.stack.push(q.*);
+    for (operands) |v| try ctx.stack.push(v);
+}
+
+/// Pop the quotation and count copies `pushTimesOperands` left under a finished operation.
+fn popTimesOperands(ctx: *Context, quot: ?*const Value) void {
+    if (quot != null) ctx.stack.popAndRelease() catch {};
+    ctx.stack.popAndRelease() catch {};
+}
+
+fn abandonTimesSpills(ctx: *Context, count: *const Value, quot: ?*const Value, err: anyerror) i32 {
+    container_backing.releaseValue(count.*);
+    if (quot) |q| container_backing.releaseValue(q.*);
+    ctx.jit_pending_error = err;
+    return 2;
 }
 
 /// Retain the refcounted backing of the Value at a physical stack slot.
@@ -20125,6 +20587,38 @@ test "emitProgramC: a fallback-permitted build keeps the per-operation native co
     try testing.expect(std.mem.indexOf(u8, source, "= jitDispatchFull(") == null);
 }
 
+/// A word whose two inputs the call-site inference proved fixnums, so the `+` overflow guard is the
+/// only way out of its typed path.
+const restart_add_body = [_]Instruction{.{ .op = .{ .call_word = "+" }, .line = 1 }};
+const restart_add_effect = StackEffect{
+    .inputs = &[_]StackEffectParam{ .{ .name = "a" }, .{ .name = "b" } },
+    .outputs = &[_]StackEffectParam{.{ .name = "c" }},
+};
+const restart_add_words = [_]AotWordDesc{
+    .{ .name = "add", .instructions = &restart_add_body, .input_count = 2, .output_count = 1, .word_id = 0, .stack_effect = restart_add_effect, .inferred_param_types = &.{ .fixnum, .fixnum } },
+    .{ .name = "+", .instructions = &.{}, .input_count = 2, .output_count = 1, .word_id = 1, .is_native = true, .is_prelude = true, .dispatch_id = 7 },
+};
+
+test "emitProgramC: a guard on a proven fixnum pair restarts the entry in the word's generic copy" {
+    builtin_override.resetForTest();
+
+    var diag: CodegenDiagnostics = .{};
+    const source = try emitProgramC(&restart_add_words, &.{}, 0, 1, &.{}, .false, true, test_aot_metadata, &diag, null, false, &.{}, &.{}, &.{}, &.{}, &.{}, testing.allocator);
+    defer testing.allocator.free(source);
+
+    try testing.expect(std.mem.indexOf(u8, source, "int32_t onez_g_add(uintptr_t jit_ctx) asm(\"add (generic)\");") != null);
+    try testing.expect(std.mem.indexOf(u8, source, "int32_t onez_g_add(uintptr_t jit_ctx)\n") != null);
+
+    // The typed copy calls the generic copy from its overflow guard instead of bailing.
+    const typed_start = std.mem.indexOf(u8, source, "int32_t onez_w_add(uintptr_t jit_ctx)\n").?;
+    const generic_start = std.mem.indexOf(u8, source, "int32_t onez_g_add(uintptr_t jit_ctx)\n").?;
+    try testing.expect(typed_start < generic_start);
+    try testing.expect(std.mem.indexOf(u8, source[typed_start..generic_start], "onez_g_add(") != null);
+
+    // The generic copy never restarts, so its own header is the only mention of it.
+    try testing.expectEqual(@as(usize, 1), std.mem.count(u8, source[generic_start..], "onez_g_add("));
+}
+
 fn setAllAddPairsForTest() void {
     builtin_override.set(builtin_override.opBits(.add));
 }
@@ -22214,7 +22708,7 @@ test "emitWordCAotPass reports discovered_output as the body's final depth" {
     const dup_instrs = [_]Instruction{
         .{ .op = .{ .call_word = "dup" }, .line = 1 },
     };
-    const dup_res = try emitWordCAotPass(&dup_instrs, 1, 2, "q", "q", null, null, &compiled_names, .{}, null, null, null, testing.allocator, null, &.{}, null, &reason, null, null, null, null, null, null, null, false, null, false, false, false, false, false, false, null);
+    const dup_res = try emitWordCAotPass(&dup_instrs, 1, 2, "q", "q", null, null, &compiled_names, .{}, null, null, null, testing.allocator, null, &.{}, null, &reason, null, null, null, null, null, null, null, false, null, false, false, false, false, false, false, null, null);
     if (dup_res.body) |b| testing.allocator.free(b);
     try testing.expectEqual(@as(u8, 2), dup_res.discovered_output);
 
@@ -22222,7 +22716,7 @@ test "emitWordCAotPass reports discovered_output as the body's final depth" {
     const drop_instrs = [_]Instruction{
         .{ .op = .{ .call_word = "drop" }, .line = 1 },
     };
-    const drop_res = try emitWordCAotPass(&drop_instrs, 1, 0, "q", "q", null, null, &compiled_names, .{}, null, null, null, testing.allocator, null, &.{}, null, &reason, null, null, null, null, null, null, null, false, null, false, false, false, false, false, false, null);
+    const drop_res = try emitWordCAotPass(&drop_instrs, 1, 0, "q", "q", null, null, &compiled_names, .{}, null, null, null, testing.allocator, null, &.{}, null, &reason, null, null, null, null, null, null, null, false, null, false, false, false, false, false, false, null, null);
     if (drop_res.body) |b| testing.allocator.free(b);
     try testing.expectEqual(@as(u8, 0), drop_res.discovered_output);
 }
@@ -22453,57 +22947,6 @@ test "mangle word name preserves digits and underscores" {
     try testing.expectEqualStrings("onez_w_foo_bar2", name);
 }
 
-test "emit C for double: 2 *" {
-    const instrs = makeInstructions(.{ @as(i64, 2), "*" });
-    const source = try emitWordC(&instrs, 1, 1, "double", testing.allocator);
-    defer testing.allocator.free(source);
-
-    try testing.expect(std.mem.startsWith(u8, source, "#include <stdint.h>"));
-    try testing.expect(std.mem.indexOf(u8, source, "onez_w_double") != null);
-    try testing.expect(std.mem.indexOf(u8, source, "return") != null);
-}
-
-test "emit C for (a+3)*4" {
-    const instrs = makeInstructions(.{ @as(i64, 3), "+", @as(i64, 4), "*" });
-    const source = try emitWordC(&instrs, 1, 1, "compute", testing.allocator);
-    defer testing.allocator.free(source);
-
-    try testing.expect(std.mem.indexOf(u8, source, "onez_w_compute") != null);
-}
-
-test "emit C for push literal" {
-    const instrs = makeInstructions(.{@as(i64, 42)});
-    const source = try emitWordC(&instrs, 0, 1, "forty-two", testing.allocator);
-    defer testing.allocator.free(source);
-
-    try testing.expect(std.mem.indexOf(u8, source, "onez_w_forty_two") != null);
-}
-
-test "emitted C compiles with cc" {
-    const instrs = makeInstructions(.{ @as(i64, 2), "*" });
-    const source = try emitWordC(&instrs, 1, 1, "double", testing.allocator);
-    defer testing.allocator.free(source);
-
-    var tmp_dir = testing.tmpDir(.{});
-    defer tmp_dir.cleanup();
-    const c_file = try tmp_dir.dir.createFile("test.c", .{});
-    try c_file.writeAll(source);
-    c_file.close();
-
-    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const c_path = try tmp_dir.dir.realpath("test.c", &path_buf);
-
-    // invoke cc -fsyntax-only to verify the C source is valid
-    var child = std.process.Child.init(
-        &.{ "cc", "-fsyntax-only", "-Wno-incompatible-pointer-types", c_path },
-        testing.allocator,
-    );
-    child.stderr_behavior = .Inherit;
-    try child.spawn();
-    const result = try child.wait();
-    try testing.expectEqual(std.process.Child.Term{ .Exited = 0 }, result);
-}
-
 test "emitWordCAot emits the entry check for a word that pushes nothing" {
     // A word with no stack growth can still recurse, so the native stack check has to run on
     // its entry even though no value-stack capacity needs reserving.
@@ -22605,7 +23048,7 @@ test "emitWordCAot basic arithmetic" {
         1,
         1,
         "double",
-        null,
+        arith_test_resolver,
         null,
         &compiled_names,
         .{},
@@ -22780,6 +23223,7 @@ fn emitQuotationBodyForTest(ctx: *const Context, body: []const Instruction) ![]u
         false,
         needs_frame,
         null,
+        null,
     );
 }
 
@@ -22880,6 +23324,7 @@ fn emitParkWordForTest(body: []const Instruction, framed: bool) ![]u8 {
         false,
         false,
         framed,
+        null,
         null,
     );
 }
@@ -23282,14 +23727,19 @@ test "emitProgramC generates complete C source" {
     const double_instrs = makeInstructions(.{ @as(i64, 2), "*" });
     const add3_instrs = makeInstructions(.{ @as(i64, 3), "+" });
 
+    // The freeze lists every native a body calls, and an arithmetic site's cold arm resolves
+    // through that list.
     const words = [_]AotWordDesc{
         .{ .name = "double", .instructions = &double_instrs, .input_count = 1, .output_count = 1, .word_id = 0 },
         .{ .name = "add3", .instructions = &add3_instrs, .input_count = 1, .output_count = 1, .word_id = 1 },
+        .{ .name = "*", .instructions = &.{}, .input_count = 2, .output_count = 1, .word_id = 2, .is_native = true, .is_prelude = true },
+        .{ .name = "+", .instructions = &.{}, .input_count = 2, .output_count = 1, .word_id = 3, .is_native = true, .is_prelude = true },
     };
 
     var diag: CodegenDiagnostics = .{};
-    const source = try emitProgramC(&words, &.{}, 0, 1, &.{}, .auto, false, test_aot_metadata, &diag, null, false, &.{}, &.{}, &.{}, &.{}, &.{}, testing.allocator);
+    const source = try emitProgramC(&words, &.{}, 0, 3, &.{}, .auto, false, test_aot_metadata, &diag, null, false, &.{}, &.{}, &.{}, &.{}, &.{}, testing.allocator);
     defer testing.allocator.free(source);
+    defer if (diag.aot_fallback_report.sites.len > 0) testing.allocator.free(diag.aot_fallback_report.sites);
 
     // Preamble
     try testing.expect(std.mem.indexOf(u8, source, "#include <stdint.h>") != null);
@@ -23333,11 +23783,13 @@ test "emitProgramC omits legacy name-lookup typed-literal helpers" {
 
     const words = [_]AotWordDesc{
         .{ .name = "double", .instructions = &double_instrs, .input_count = 1, .output_count = 1, .word_id = 0 },
+        .{ .name = "*", .instructions = &.{}, .input_count = 2, .output_count = 1, .word_id = 1, .is_native = true, .is_prelude = true },
     };
 
     var diag: CodegenDiagnostics = .{};
-    const source = try emitProgramC(&words, &.{}, 0, 0, &.{}, .auto, false, test_aot_metadata, &diag, null, false, &.{}, &.{}, &.{}, &.{}, &.{}, testing.allocator);
+    const source = try emitProgramC(&words, &.{}, 0, 1, &.{}, .auto, false, test_aot_metadata, &diag, null, false, &.{}, &.{}, &.{}, &.{}, &.{}, testing.allocator);
     defer testing.allocator.free(source);
+    defer if (diag.aot_fallback_report.sites.len > 0) testing.allocator.free(diag.aot_fallback_report.sites);
 
     try testing.expect(std.mem.indexOf(u8, source, "jitPushWordLiteral") == null);
     try testing.expect(std.mem.indexOf(u8, source, "jitPushStructType(") == null);
@@ -23496,11 +23948,13 @@ test "emitProgramC output compiles with cc" {
     const words = [_]AotWordDesc{
         .{ .name = "double", .instructions = &double_instrs, .input_count = 1, .output_count = 1, .word_id = 0 },
         .{ .name = "answer", .instructions = &lit_instrs, .input_count = 0, .output_count = 1, .word_id = 1 },
+        .{ .name = "*", .instructions = &.{}, .input_count = 2, .output_count = 1, .word_id = 2, .is_native = true, .is_prelude = true },
     };
 
     var diag3: CodegenDiagnostics = .{};
-    const source = try emitProgramC(&words, &.{}, 1, 1, &.{}, .auto, false, test_aot_metadata, &diag3, null, false, &.{}, &.{}, &.{}, &.{}, &.{}, testing.allocator);
+    const source = try emitProgramC(&words, &.{}, 1, 2, &.{}, .auto, false, test_aot_metadata, &diag3, null, false, &.{}, &.{}, &.{}, &.{}, &.{}, testing.allocator);
     defer testing.allocator.free(source);
+    defer if (diag3.aot_fallback_report.sites.len > 0) testing.allocator.free(diag3.aot_fallback_report.sites);
 
     var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
@@ -25126,8 +25580,8 @@ test "self-tail-call carry reifies an escaping quotation argument" {
     // replaces its quotation argument with a fresh literal [ 42 ] on each recursive
     // self-tail-call, so the back-edge carries a quotation_body argument. The
     // back-edge now reifies it via onez_push_quotation before the argument copy
-    // instead of copying from an unwritten slot. Uses only intrinsic ops so no
-    // resolver is needed.
+    // instead of copying from an unwritten slot. The arithmetic resolver gives the opaque
+    // counter's `>` and `-` their cold arms.
     const inner_42 = &[_]Instruction{
         .{ .op = .{ .push_literal = .{ .fixnum = 42 } }, .line = 1 },
     };
@@ -25160,7 +25614,7 @@ test "self-tail-call carry reifies an escaping quotation argument" {
         2,
         1,
         "acc",
-        null,
+        arith_test_resolver,
         "acc",
         &compiled_names,
         .{},
@@ -25301,16 +25755,17 @@ test "swap over a row keeps its pair concrete for a loop predicate in AOT mode" 
     try testing.expect(std.mem.indexOf(u8, source, "onez_w_swap_then_loop") != null);
 }
 
-/// Compile `( a b -- r ) [ + ]` in AOT mode and report how many interpreter
+/// Compile `( a b -- r ) [ < ]` in AOT mode and report how many interpreter
 /// fallbacks it emitted.
 ///
-/// Only a pair of narrowed operands reaches the concrete path, which records nothing. Any other
-/// pair takes the polymorphic cold arm, so a zero count means both parameters were narrowed.
+/// Only a pair of narrowed operands reaches the concrete compare, which has no guard and records
+/// nothing. Any other pair calls the native, so a zero count means both parameters were narrowed.
+/// The probe is a comparison because a narrowed fixnum `+` still carries an overflow cold arm.
 fn arithFallbackCount(
     stack_effect: ?*const StackEffect,
     inferred: []const InferredParamType,
 ) !u32 {
-    const instrs = makeInstructions(.{"+"});
+    const instrs = makeInstructions(.{"<"});
     var compiled_names: std.StringHashMapUnmanaged(u32) = .{};
     defer compiled_names.deinit(testing.allocator);
 
@@ -25763,16 +26218,18 @@ fn dipDeclineEmittedSource(
     );
 }
 
-const dip_add_three_body = [_]Instruction{
+// A comparison, because a proven fixnum `+` carries an overflow cold arm that would count as a
+// fallback, while a proven fixnum `<` compiles with no guard at all.
+const dip_less_than_three_body = [_]Instruction{
     .{ .op = .{ .push_literal = .{ .fixnum = 3 } }, .line = 1 },
-    .{ .op = .{ .call_word = "+" }, .line = 1 },
+    .{ .op = .{ .call_word = "<" }, .line = 1 },
 };
 
 test "dip over a literal quotation with a typed retained entry splices inline" {
     const instrs = [_]Instruction{
         .{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 1 },
         .{ .op = .{ .push_literal = .{ .fixnum = 2 } }, .line = 1 },
-        .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = &dip_add_three_body } } }, .line = 1 },
+        .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = &dip_less_than_three_body } } }, .line = 1 },
         .{ .op = .{ .call_word = "dip" }, .line = 1 },
     };
 
@@ -25790,7 +26247,7 @@ test "2dip splices with two typed retained entries" {
         .{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 1 },
         .{ .op = .{ .push_literal = .{ .fixnum = 2 } }, .line = 1 },
         .{ .op = .{ .push_literal = .{ .fixnum = 3 } }, .line = 1 },
-        .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = &dip_add_three_body } } }, .line = 1 },
+        .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = &dip_less_than_three_body } } }, .line = 1 },
         .{ .op = .{ .call_word = "2dip" }, .line = 1 },
     };
 
@@ -25809,7 +26266,7 @@ test "an interpreter-linked AOT build does not splice dip" {
     const instrs = [_]Instruction{
         .{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 1 },
         .{ .op = .{ .push_literal = .{ .fixnum = 2 } }, .line = 1 },
-        .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = &dip_add_three_body } } }, .line = 1 },
+        .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = &dip_less_than_three_body } } }, .line = 1 },
         .{ .op = .{ .call_word = "dip" }, .line = 1 },
     };
 
@@ -25823,7 +26280,7 @@ test "an interpreter-linked AOT build does not splice dip" {
 test "dip with an opaque retained entry declines to the native path" {
     const instrs = [_]Instruction{
         .{ .op = .{ .call_word = "mk" }, .line = 1 },
-        .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = &dip_add_three_body } } }, .line = 1 },
+        .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = &dip_less_than_three_body } } }, .line = 1 },
         .{ .op = .{ .call_word = "dip" }, .line = 1 },
     };
 

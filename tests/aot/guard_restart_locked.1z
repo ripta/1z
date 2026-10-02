@@ -1,0 +1,44 @@
+\ The locked counterpart of compiled_guard_restart. A locked build proves the inferred inputs, so its
+\ guards on proven fixnum pairs restart the entry in each word's generic copy. It rejects every
+\ interpreter fallback, so this program compares numbers only. The catches sit in words with
+\ declared outputs, so the comparisons after them see two fixnums rather than an opaque row.
+
+check: ( ok label -- ) [ swap [ "PASS: " ] [ "FAIL: " ] if swap #append print-line ] ;
+
+\ The `+` sits in an `if` arm inside a self-tail loop. A locked build compiles a `dip` body as a
+\ separate quotation, whose inferred inputs reject a promoted bignum, so the loop keeps to `swap`.
+sum-down: ( acc n -- r ) [
+  dup 0 = [ drop ] [
+    swap over + swap 1 - sum-down
+  ] if
+] ;
+
+int-div:   ( a b -- q ) [ div ] ;
+int-rem:   ( a b -- r ) [ rem ] ;
+floor-mod: ( a b -- r ) [ % ] ;
+magnitude: ( n -- m )   [ abs ] ;
+bump:      ( x n -- r ) [ swap drop 1 + ] ;
+
+catch-div: ( -- sentinel caught ) [ 5 7 0 [ int-div ] [ drop 1 ] recover ] ;
+catch-rem: ( -- sentinel caught ) [ 5 7 0 [ int-rem ] [ drop 1 ] recover ] ;
+
+0 10 sum-down 55 = "a loop that stays in fixnums" check
+9223372036854775800 10 sum-down 9223372036854775807 > "a loop that overflows mid-way promotes" check
+9223372036854775800 10 sum-down 9223372036854775800 - 55 = "the promoted loop keeps counting" check
+
+7 2 int-div 3 = "div of two fixnums" check
+-9223372036854775808 -1 int-div 9223372036854775807 > "minInt div -1 promotes" check
+catch-div 1 = "div by zero is caught" check
+5 = "div by zero leaves the sentinel" check
+
+7 2 int-rem 1 = "rem of two fixnums" check
+-9223372036854775808 -1 int-rem 0 = "minInt rem -1 is zero" check
+catch-rem 1 = "rem by zero is caught" check
+5 = "rem by zero leaves the sentinel" check
+-9223372036854775808 -1 floor-mod 0 = "minInt % -1 is zero" check
+
+-5 magnitude 5 = "abs of a fixnum" check
+-9223372036854775808 magnitude 9223372036854775807 > "abs of minInt promotes" check
+
+2.5 3 bump 4 = "a float input beside a fixnum" check
+2.5 9223372036854775807 bump 9223372036854775807 > "a float input survives a restart" check

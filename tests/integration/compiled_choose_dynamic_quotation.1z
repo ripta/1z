@@ -1,0 +1,20 @@
+\ Compiled `choose` given a quotation that is not a literal in its body calls that quotation, not an
+\ arm. A quotation without compiled code takes the interpreter fallback, which reads the quotation
+\ from the slot the arm copies are written next to. Nothing here sets a compile flag, so the eager
+\ pass checks the compiled run against the interpreted golden.
+
+use "testing" ;
+
+heap: ( -- s ) [ "hel" "lo" #append ] ;
+
+pick-of: ( x y q -- r ) [ choose ] ;
+reorder-pick: ( q x y -- r ) [ [ swap ] dip swap choose ] ;
+
+"a quotation passed in above the arms" test-section
+1 2 [ 2drop t ] pick-of 1 "truthy keeps the first arm" assert=
+1 2 [ 2drop f ] pick-of 2 "falsy keeps the second arm" assert=
+heap "world" [ 2drop t ] pick-of "hello" "heap arm survives" assert=
+
+"a quotation moved under the arms before the call" test-section
+[ 2drop t ] 3 4 reorder-pick 3 "truthy keeps the first arm" assert=
+[ 2drop f ] 3 4 reorder-pick 4 "falsy keeps the second arm" assert=

@@ -1,0 +1,16 @@
+PASS: a loop that stays in fixnums
+PASS: a loop that overflows mid-way promotes
+PASS: the promoted loop keeps counting
+PASS: div of two fixnums
+PASS: minInt div -1 promotes
+PASS: div by zero is caught
+PASS: div by zero leaves the sentinel
+PASS: rem of two fixnums
+PASS: minInt rem -1 is zero
+PASS: rem by zero is caught
+PASS: rem by zero leaves the sentinel
+PASS: minInt % -1 is zero
+PASS: abs of a fixnum
+PASS: abs of minInt promotes
+PASS: a float input beside a fixnum
+PASS: a float input survives a restart

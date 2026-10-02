@@ -1,0 +1,51 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+=== a tag guard after dropping an owned heap slot ===
+Stack: [ ]
+PASS: handler ran
+Stack: [ "hello" ]
+PASS: string below the raise
+Stack: [ ]
+=== division by zero after a relabeling swap ===
+Stack: [ ]
+PASS: handler ran
+Stack: [ "hello" ]
+PASS: string below the raise
+Stack: [ ]
+=== division by zero over an unboxed sum ===
+Stack: [ ]
+PASS: handler ran
+Stack: [ "hello" 3 ]
+PASS: unboxed sum below the raise
+Stack: [ "hello" ]
+PASS: string below the sum
+Stack: [ ]
+=== choose with a non-quotation selector after dropping an owned heap slot ===
+Stack: [ ]
+PASS: handler ran
+Stack: [ "hello" "hello" "hello" "hello" "hello" ]
+PASS: second arm copy
+Stack: [ "hello" "hello" "hello" "hello" ]
+PASS: first arm copy
+Stack: [ "hello" "hello" "hello" ]
+PASS: second arm
+Stack: [ "hello" "hello" ]
+PASS: first arm
+Stack: [ "hello" ]
+PASS: string below the arms
+Stack: [ ]
+=== an inline unwrap over a copied operand ===
+Stack: [ ]
+PASS: handler ran
+Stack: [ "hello" "hello" "hello" ]
+PASS: copy left by the unwrap
+Stack: [ "hello" "hello" ]
+PASS: original left by the unwrap
+Stack: [ "hello" ]
+PASS: string below the raise
+Stack: [ ]

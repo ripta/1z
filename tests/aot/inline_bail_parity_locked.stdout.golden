@@ -1,0 +1,10 @@
+PASS: div by zero is caught
+PASS: div by zero leaves the sentinel
+PASS: rem by zero is caught
+PASS: rem by zero leaves the sentinel
+PASS: fixnum / by zero is caught
+PASS: fixnum / by zero leaves the sentinel
+PASS: fixnum % by zero is caught
+PASS: fixnum % by zero leaves the sentinel
+PASS: minInt div -1 promotes
+PASS: fixnum + overflow promotes

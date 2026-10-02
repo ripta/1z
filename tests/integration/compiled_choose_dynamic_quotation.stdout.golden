@@ -1,0 +1,17 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+=== a quotation passed in above the arms ===
+Stack: [ ]
+PASS: truthy keeps the first arm
+Stack: [ ]
+PASS: falsy keeps the second arm
+Stack: [ ]
+PASS: heap arm survives
+Stack: [ ]
+=== a quotation moved under the arms before the call ===
+Stack: [ ]
+PASS: truthy keeps the first arm
+Stack: [ ]
+PASS: falsy keeps the second arm
+Stack: [ ]

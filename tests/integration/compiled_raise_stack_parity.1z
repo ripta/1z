@@ -1,0 +1,46 @@
+\ A raise from an inline guard in compiled code leaves the stack the interpreter leaves, and the
+\ stack owns every slot it leaves. Nothing here sets a compile flag, so the eager pass checks the
+\ compiled run against the interpreted golden, and the AOT suite builds this file in the classes
+\ that link the interpreter. The empty stderr golden catches a leak or a double release at teardown.
+\
+\ Each word reaches its guard after a stack move that leaves the physical stack out of step with the
+\ compiled code's view of it: a dropped heap slot, a relabeling swap, an unboxed result, or a copy.
+
+use "testing" ;
+
+money: virtual{ fixnum } ;
+
+heap: ( -- s ) [ "hel" "lo" #append ] ;
+
+drop-then-abs:    ( n s -- m )                       [ drop abs ] ;
+swap-then-div:    ( d n -- q )                       [ swap div ] ;
+sum-then-mod:     ( a: fixnum b: fixnum n d -- s r ) [ [ + ] 2dip % ] ;
+drop-then-pick:   ( a b q s -- x )                   [ drop choose ] ;
+over-then-unwrap: ( s m -- s s n )                   [ over swap unmake-money ] ;
+
+"a tag guard after dropping an owned heap slot" test-section
+heap heap heap [ drop-then-abs ] [ drop "caught" ] recover "caught" "handler ran" assert=
+"hello" "string below the raise" assert=
+
+"division by zero after a relabeling swap" test-section
+heap 0 7 [ swap-then-div ] [ drop "caught" ] recover "caught" "handler ran" assert=
+"hello" "string below the raise" assert=
+
+"division by zero over an unboxed sum" test-section
+heap 1 2 7 0 [ sum-then-mod ] [ drop "caught" ] recover "caught" "handler ran" assert=
+3 "unboxed sum below the raise" assert=
+"hello" "string below the sum" assert=
+
+"choose with a non-quotation selector after dropping an owned heap slot" test-section
+heap heap heap "not a quotation" heap [ drop-then-pick ] [ drop "caught" ] recover "caught" "handler ran" assert=
+"hello" "second arm copy" assert=
+"hello" "first arm copy" assert=
+"hello" "second arm" assert=
+"hello" "first arm" assert=
+"hello" "string below the arms" assert=
+
+"an inline unwrap over a copied operand" test-section
+heap heap heap [ over-then-unwrap ] [ drop "caught" ] recover "caught" "handler ran" assert=
+"hello" "copy left by the unwrap" assert=
+"hello" "original left by the unwrap" assert=
+"hello" "string below the raise" assert=
