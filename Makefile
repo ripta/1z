@@ -810,6 +810,11 @@ benchmark-fmt-modes: release ## Time the 1z formatter interpreted, under both JI
 		> tests/benchmark/fmt_bench.modes.sample
 	@cat tests/benchmark/fmt_bench.modes.sample
 
+benchmark-local-binding: release ## Time a word that binds named locals interpreted, under both JIT modes, and out of both AOT classes
+	@scripts/benchmark-local-binding.sh ./$(RELEASE_PREFIX)/bin/1z $(ZIG_PREFIX)/local_binding.aot \
+		> tests/benchmark/local_binding.sample
+	@cat tests/benchmark/local_binding.sample
+
 benchmark-local-binding-sweep: build ## Record which lib/ words binding a named local compile to C, per AOT class
 	@scripts/benchmark-local-binding-sweep.sh ./$(ZIG_PREFIX)/bin/1z $(ZIG_PREFIX)/local-binding-sweep \
 		> tests/benchmark/local_binding_sweep.sample

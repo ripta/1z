@@ -1,0 +1,7 @@
+\ A parse error partway through a body must release the refcounted literals the body already
+\ holds. `struct{` leaves a descriptor map in the body, and the bad annotation after it abandons
+\ the body before the context takes those literals over. A leak shows up on stderr.
+outer: [
+  inner: struct{ a b } ;
+  bad: ( x: nosuchtype -- ) [ drop ] ;
+] ;

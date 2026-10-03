@@ -1,0 +1,1 @@
+tests/integration/parse_error_releases_body_literals.1z:6: error 'invalid-constraint' 'nosuchtype' is not a known type or constraint

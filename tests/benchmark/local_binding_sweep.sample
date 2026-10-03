@@ -8,7 +8,7 @@ formatter
   (effect-line)                             8  NC.20          unreached       
   (emit-newline-run)                        7  NC.20          unreached       
   (entry-line)                              7  NC.20          unreached       
-  (fmt-one)                                 3  ok             unreached       
+  (fmt-one)                                 2  ok             unreached       
   (fmt-report)                              1  ok             unreached       
   (hash>fmt-config)                         2  NC.20          unreached       
   (index-blocks)                            6  NC.20          unreached       
@@ -36,7 +36,7 @@ game/draw
   <sprite>                                  3  ok             ok              
   blit-sprite                              13  NC.20          NC.20           
   draw-rectangle                            9  NC.20          NC.20           
-  draw-text                                 5  NC.20          NC.20           
+  draw-text                                 5  ok             ok              
 
 math/grid
   word                                  sites  runtime-image  interpreter-free
@@ -49,15 +49,15 @@ testing
   assert-error                              1  NC.22          NC.22           
   assert-error-type                         2  NC.22          NC.22           
 
-binding sites: 153
+binding sites: 152
 binding words by outcome:
-  interpreter-free   NC.20         6
+  interpreter-free   NC.20         5
   interpreter-free   NC.22         2
   interpreter-free   NC.4          2
-  interpreter-free   ok            5
+  interpreter-free   ok            6
   interpreter-free   unreached    16
   runtime-image      NC.13         1
-  runtime-image      NC.20        17
+  runtime-image      NC.20        16
   runtime-image      NC.22         2
   runtime-image      NC.4          2
-  runtime-image      ok            9
+  runtime-image      ok           10

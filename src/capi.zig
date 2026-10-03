@@ -383,12 +383,15 @@ export fn onez_register_base_scope(
     const sources_arr = sources orelse return ONEZ_ERR_NULL_VALUE;
     const flags_arr = flags orelse return ONEZ_ERR_NULL_VALUE;
 
-    handle.ctx.aot_base_scope = .{
+    const scope: context_mod.AotBaseScope = .{
         .names = names_arr,
         .sources = sources_arr,
         .flags = flags_arr,
         .count = count,
     };
+    scope.assertSorted();
+
+    handle.ctx.aot_base_scope = scope;
     return ONEZ_OK;
 }
 

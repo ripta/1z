@@ -663,6 +663,10 @@ pub fn parseQuotationUntil(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*C
     var instructions: std.ArrayListUnmanaged(Instruction) = .{};
     errdefer instructions.deinit(allocator);
 
+    // A literal's reference passes to the context's release list once the body is complete. A
+    // body abandoned partway never gets there, so its literals are released here.
+    errdefer container_backing.releaseInstructionsContainerLiterals(instructions.items);
+
     // Track if we should look for a leading stack effect
     var is_first_token = true;
     var quotation_effect: ?*const StackEffect = null;

@@ -6,11 +6,14 @@
 \ same arithmetic with stack words and binds nothing, so the gap between the two rows is what
 \ the bindings cost in that mode.
 \
+\ The rows time a `times` loop around each call, so a row is not a word's cost alone. Only the
+\ differences between rows in one mode mean anything.
+\
 \ `<color>` is the one library word that binds only its inputs and compiles once they are
 \ declared. It validates four components before it builds the struct.
 \
-\ scripts/benchmark-local-binding.sh runs this file interpreted, under both JIT modes, and as an
-\ AOT binary.
+\ scripts/benchmark-local-binding.sh runs this file interpreted, under both JIT modes, and out of
+\ both AOT classes.
 
 use "game/draw" ;
 
@@ -23,6 +26,16 @@ bound-reads: ( a: fixnum b: fixnum -- n ) [
 shuffled: ( a: fixnum b: fixnum -- n ) [
   2dup + 2 pick-n * over - 2 pick-n + * nip
 ] ;
+
+\ `bind-only` and `dropped` split the gap above into the binds and the reads. Both consume two
+\ inputs and push 0, but only `bind-only` binds them.
+bind-only: ( a: fixnum b: fixnum -- n ) [
+  lb-b: swap ;
+  lb-a: swap ;
+  0
+] ;
+
+dropped: ( a: fixnum b: fixnum -- n ) [ 2drop 0 ] ;
 
 private{
   \\ Time quot n times and print one row: the label, the count, and nanoseconds per iteration.
@@ -40,4 +53,6 @@ private{
 
 "bound-reads" 1000000 [ 3 4 bound-reads drop ] (row)
 "shuffled" 1000000 [ 3 4 shuffled drop ] (row)
+"bind-only" 1000000 [ 3 4 bind-only drop ] (row)
+"dropped" 1000000 [ 3 4 dropped drop ] (row)
 "<color>" 200000 [ 200 200 200 255 <color> drop ] (row)

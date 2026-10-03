@@ -337,9 +337,13 @@ private{
   \ only where every piece still ends in `;`, which is exactly when the line
   \ already does.
   (line-ends-in-semicolon?): ( chunks pos -- ? ) [ f (semi-scan) ] ;
+}
 
-  \ --- Emission ---
+\ --- Emission ---
 
+\ A `private{ }` block is parsed whole before any of it runs, so a type it defines cannot annotate
+\ a stack effect in the same block. `fmt-state` gets a block of its own for that reason.
+private{
   \ Everything phase one carries. `out` is the string-builder the result
   \ accumulates into, and `pending` holds inline comments waiting for the end of
   \ their line.
@@ -348,7 +352,9 @@ private{
     in-effect line-start after-comment at-start
     newlines-written pending
   } ;
+}
 
+private{
   (<fmt-state>): ( chunks stream -- state ) [
     over (index-blocks) swap
     0 0 f t f t 0 V{ } make-fmt-state
@@ -473,7 +479,7 @@ private{
   \
   \ Those surviving 2s are where `max-blank-lines` lands. The 1 stays literal: it
   \ means no blank line at this position rather than a budget, as does the 0.
-  (emit-newline-run): ( s -- s ) [
+  (emit-newline-run): ( s: fmt-state -- s ) [
     dup chunks>> nlr-chunks: swap ;
     dup idx>> nlr-start: swap ;
     nlr-chunks nlr-start (newline-run-end) nlr-end: swap ;
@@ -632,7 +638,7 @@ private{
   \
   \ The host finds each line's marker twice, once while measuring a group and
   \ again while rebuilding it. One pass up front costs the same and reads better.
-  (comment-lines): ( stream lines: array -- ) [
+  (comment-lines): ( stream: stream lines: array -- ) [
     al-lines: swap ;
     al-out:   swap ;
     al-pos:   al-lines [ (inline-comment-pos) ] #map #collect ;
@@ -819,7 +825,7 @@ private{
   ] ;
 
   \ Align every group of like-shaped definition lines, writing the whole text out.
-  (symbol-lines): ( stream lines: array -- ) [
+  (symbol-lines): ( stream: stream lines: array -- ) [
     sl-lines:  swap ;
     sl-out:    swap ;
     sl-parsed: sl-lines [ (parse-alignable) ] #map #collect ;
@@ -991,7 +997,7 @@ private{
   ] ;
 
   \ Check one key the file names, then overlay it on the accumulating hash.
-  (merge-key): ( acc raw path: string key: string -- acc ) [
+  (merge-key): ( acc: hash raw: hash path: string key: string -- acc ) [
     mk-key:  swap ;
     mk-path: swap ;
     mk-raw:  swap ;

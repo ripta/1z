@@ -1,0 +1,38 @@
+Named-local binding cost across execution modes
+binary=./zig-out/release/bin/1z   driver=tests/benchmark/local_binding.1z   reps=5
+
+interpreted
+  bound-reads  n=1000000  median_ns/iter=1790
+  shuffled     n=1000000  median_ns/iter=1344
+  bind-only    n=1000000  median_ns/iter=1279
+  dropped      n=1000000  median_ns/iter=976
+  <color>      n=200000   median_ns/iter=13409
+
+hybrid
+  bound-reads  n=1000000  median_ns/iter=1304
+  shuffled     n=1000000  median_ns/iter=1174
+  bind-only    n=1000000  median_ns/iter=1243
+  dropped      n=1000000  median_ns/iter=997
+  <color>      n=200000   median_ns/iter=13479
+
+eager
+  bound-reads  n=1000000  median_ns/iter=1301
+  shuffled     n=1000000  median_ns/iter=1192
+  bind-only    n=1000000  median_ns/iter=1275
+  dropped      n=1000000  median_ns/iter=1036
+  <color>      n=200000   median_ns/iter=10310
+
+aot-runtime-image
+  bound-reads  n=1000000  median_ns/iter=1109
+  shuffled     n=1000000  median_ns/iter=732
+  bind-only    n=1000000  median_ns/iter=1071
+  dropped      n=1000000  median_ns/iter=686
+  <color>      n=200000   median_ns/iter=2100
+
+aot-interpreter-free
+  bound-reads  n=1000000  median_ns/iter=1110
+  shuffled     n=1000000  median_ns/iter=721
+  bind-only    n=1000000  median_ns/iter=1073
+  dropped      n=1000000  median_ns/iter=680
+  <color>      n=200000   median_ns/iter=2094
+

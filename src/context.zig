@@ -721,6 +721,38 @@ pub const AotBaseScope = struct {
     sources: [*]const ?[*:0]const u8,
     flags: [*]const u8,
     count: u32,
+
+    /// The row naming `name`, found by binary search.
+    ///
+    /// The const guard reads this on every definition the visible lookup misses, which includes
+    /// every fresh local a compiled word body binds.
+    pub fn find(self: AotBaseScope, name: []const u8) ?u32 {
+        var lo: u32 = 0;
+        var hi: u32 = self.count;
+        while (lo < hi) {
+            const mid = lo + (hi - lo) / 2;
+            switch (std.mem.order(u8, std.mem.span(self.names[mid]), name)) {
+                .lt => lo = mid + 1,
+                .gt => hi = mid,
+                .eq => return mid,
+            }
+        }
+        return null;
+    }
+
+    /// Check the invariant `find` relies on: names strictly ascending, bytewise.
+    ///
+    /// The AOT emitter sorts the table. Registration is the one place a table enters a context.
+    pub fn assertSorted(self: AotBaseScope) void {
+        if (builtin.mode != .Debug) return;
+        if (self.count < 2) return;
+
+        for (1..self.count) |i| {
+            const prev = std.mem.span(self.names[i - 1]);
+            const cur = std.mem.span(self.names[i]);
+            std.debug.assert(std.mem.order(u8, prev, cur) == .lt);
+        }
+    }
 };
 
 /// The Context holds all interpreter state.
@@ -4652,10 +4684,7 @@ pub const Context = struct {
         var ctx_iter: ?*const Context = self;
         while (ctx_iter) |c| : (ctx_iter = c.parent_context) {
             const scope = c.aot_base_scope orelse continue;
-            for (0..scope.count) |i| {
-                if (!std.mem.eql(u8, std.mem.span(scope.names[i]), name)) continue;
-                return scope.flags[i] & 2 != 0;
-            }
+            if (scope.find(name)) |i| return scope.flags[i] & 2 != 0;
         }
         return false;
     }
@@ -4845,8 +4874,7 @@ pub const Context = struct {
                             // an AOT boot registers the tables, which keeps this rung inert in
                             // interpreter and eager sessions.
                             if (c.aot_base_scope) |scope| {
-                                for (0..scope.count) |i| {
-                                    if (!std.mem.eql(u8, std.mem.span(scope.names[i]), name)) continue;
+                                if (scope.find(name)) |i| {
                                     shadowed = .{
                                         .name = name,
                                         .source_file = if (scope.sources[i]) |src| std.mem.span(src) else null,
@@ -12279,6 +12307,7 @@ fn setupBakedScopeProbe(ctx: *Context, scope: AotBaseScope) !void {
     ctx.import_frame_index = 0;
     ctx.durable_frame_floor = 0;
     ctx.image_entry_import_frame = 0;
+    scope.assertSorted();
     ctx.aot_base_scope = scope;
 }
 
@@ -12288,6 +12317,26 @@ const baked_scope_no_sources = [_]?[*:0]const u8{null};
 const baked_scope_plain_flags = [_]u8{0};
 const baked_scope_generic_flags = [_]u8{1};
 const baked_scope_const_flags = [_]u8{2};
+
+test "AotBaseScope.find: binary search hits every row and misses between and beyond them" {
+    const names = [_][*:0]const u8{ "<color>", "dup", "dup2", "swap", "~" };
+    const sources = [_]?[*:0]const u8{ null, null, null, null, null };
+    const flags = [_]u8{ 0, 0, 0, 0, 0 };
+    const scope: AotBaseScope = .{ .names = &names, .sources = &sources, .flags = &flags, .count = names.len };
+    scope.assertSorted();
+
+    for (names, 0..) |n, i| {
+        try std.testing.expectEqual(@as(?u32, @intCast(i)), scope.find(std.mem.span(n)));
+    }
+
+    try std.testing.expectEqual(@as(?u32, null), scope.find(""));
+    try std.testing.expectEqual(@as(?u32, null), scope.find("du"));
+    try std.testing.expectEqual(@as(?u32, null), scope.find("dup1"));
+    try std.testing.expectEqual(@as(?u32, null), scope.find("~~"));
+
+    const empty: AotBaseScope = .{ .names = &names, .sources = &sources, .flags = &flags, .count = 0 };
+    try std.testing.expectEqual(@as(?u32, null), empty.find("dup"));
+}
 
 test "defineWordLocked: the baked base-scope rung reports a shadow with its baked source" {
     var ctx = Context.init(std.testing.allocator);

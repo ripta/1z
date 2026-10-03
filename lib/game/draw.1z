@@ -72,7 +72,7 @@ private{
   \\ Pack a color's r/g/b/a components into one framebuffer-native fixnum. Little-endian
   \\ RGBA8888: r lands in the lowest byte, matching #poke32!'s least-significant-byte-first
   \\ write order, so r/g/b/a end up in that order in memory.
-  (color>packed): ( color -- packed ) [
+  (color>packed): ( color: color -- packed ) [
     dup r>> cr: swap ;
     dup g>> cg: swap ;
     dup b>> cb: swap ;
@@ -124,7 +124,7 @@ clear-background: ( color -- ) [
 
 \\ Fill an axis-aligned rectangle. width/height must be non-negative. A rectangle reaching past
 \\ the canvas is clipped, the standard convention for a 2D framebuffer API.
-draw-rectangle: ( x y width height color -- ) [
+draw-rectangle: ( x: fixnum y: fixnum width: fixnum height: fixnum color: color -- ) [
   (color>packed)
   rp: swap ;
   rh: swap ;
@@ -158,7 +158,7 @@ draw-rectangle: ( x y width height color -- ) [
 \\ The sprite is destructured into its three fields before any local binds, because a local bound
 \\ to the sprite itself would be retained for the rest of the program while a local bound to its
 \\ pixel byte-array is reclaimed when this call returns.
-blit-sprite: ( x y sprite -- ) [
+blit-sprite: ( x: fixnum y: fixnum sprite: sprite -- ) [
   dup width>> bw: swap ;
   dup height>> bh: swap ;
   pixels>> bs: swap ;
@@ -237,7 +237,7 @@ private{
   \\ Draw one glyph from an already-packed color. The shared body under draw-char and
   \\ draw-text: both pack the color before any local binds it, because a named local bound
   \\ to a color struct is retained until the program exits, and text is drawn every frame.
-  (draw-glyph-packed): ( x y ch packed -- ) [
+  (draw-glyph-packed): ( x: fixnum y: fixnum ch: string packed: fixnum -- ) [
     dp:  swap ;
     dch: swap ;
     dy:  swap ;
@@ -266,7 +266,7 @@ draw-char: ( x y ch color -- ) [ (color>packed) (draw-glyph-packed) ] ;
 \\ Draw a string starting at (x, y), advancing by font-cell-size pixels per character.
 \\ Characters outside the font's covered range are silently skipped (via draw-char's glyph
 \\ lookup).
-draw-text: ( x y str color -- ) [
+draw-text: ( x: fixnum y: fixnum str: string color: color -- ) [
   (color>packed)
   tp: swap ;
   ts: swap ;
