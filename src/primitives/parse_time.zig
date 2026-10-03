@@ -26,6 +26,7 @@ pub const primitives = [_]Primitive{
     .{ .name = "resolve-literal", .stack_effect = "string -- value ?", .doc = "Resolve a string as a scalar literal.", .func = nativeResolveLiteral },
     .{ .name = "emit-call", .stack_effect = "symbol --", .doc = "Request a call_word emission for the named word after the current parse-time word completes.", .func = nativeEmitCall, .parse_time_only = true },
     .{ .name = "emit-body", .stack_effect = "quotation --", .doc = "Splice the quotation's body (its instructions) inline into the current parse stream after the calling word's stack results.", .func = nativeEmitBody, .parse_time_only = true },
+    .{ .name = "emit-literal", .stack_effect = "value --", .doc = "Request a push_literal emission for the value after the current parse-time word completes, ordered with the other emissions.", .func = nativeEmitLiteral, .parse_time_only = true },
 };
 
 fn isSkippable(kind: Token.Kind) bool {
@@ -344,6 +345,15 @@ fn nativeEmitBody(ctx: *Context) anyerror!void {
         .instructions = pc.quot.instructions,
         .retained_literals = retained,
     } });
+}
+
+/// emit-literal ( value -- )
+fn nativeEmitLiteral(ctx: *Context) anyerror!void {
+    // The popped reference moves into the deferred emission.
+    const val = try ctx.stack.pop();
+    errdefer container_backing.releaseValue(val);
+
+    try ctx.parse_time_deferred_emissions.append(ctx.allocator, .{ .literal = val });
 }
 
 /// parse-literal ( -- value )

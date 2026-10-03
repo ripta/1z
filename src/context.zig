@@ -691,13 +691,16 @@ pub const AotQuotationFnStates = std.AutoHashMapUnmanaged(usize, AotQuotationFnS
 
 /// A deferred parse-time emission requested by a parse-time word, drained in
 /// order by `executeParseTimeWord` after the word runs. `emit-call` records a
-/// `.call`; `emit-body` records a `.body`. A single ordered queue keeps
-/// interleaved emissions in their requested order.
+/// `.call`; `emit-body` records a `.body`; `emit-literal` records a `.literal`.
+/// A single ordered queue keeps interleaved emissions in their requested order.
 pub const DeferredEmission = union(enum) {
     /// A word name to emit as a `call_word` / `call_word_direct` instruction.
     call: []const u8,
     /// A quotation's instructions to splice inline into the parse stream.
     body: SplicedBody,
+    /// A value to emit as a `push_literal` instruction. The entry owns one reference until a
+    /// drain moves it into an instruction or a release drops it.
+    literal: Value,
 
     /// A quotation body queued for splicing, and whether `emit-body` took a reference on its
     /// container literals on the splice's behalf.

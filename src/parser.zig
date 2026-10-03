@@ -168,18 +168,22 @@ fn rollbackParseTimeExecution(c: *Context, pre_depth: usize, pre_emissions: usiz
     while (c.stack.depth() > pre_depth) {
         c.stack.popAndRelease() catch break;
     }
-    releaseRetainedEmissionLiterals(c.parse_time_deferred_emissions.items[pre_emissions..]);
+    releaseEmissionReferences(c.parse_time_deferred_emissions.items[pre_emissions..]);
     c.parse_time_deferred_emissions.shrinkRetainingCapacity(pre_emissions);
 }
 
-/// Give back the references `emit-body` took on behalf of a splice that will not happen, or that
-/// has already handed its copy to the enclosing body.
-fn releaseRetainedEmissionLiterals(emissions: []const DeferredEmission) void {
+/// Give back the references queued emissions still hold once no drain will move them into an
+/// instruction stream.
+///
+/// That covers the references `emit-body` took on behalf of a splice that will not happen, or that
+/// has already handed its copy to the enclosing body, and the value each `emit-literal` entry owns.
+fn releaseEmissionReferences(emissions: []const DeferredEmission) void {
     for (emissions) |emission| {
         switch (emission) {
             .body => |body| {
                 if (body.retained_literals) container_backing.releaseInstructionsContainerLiterals(body.instructions);
             },
+            .literal => |v| container_backing.releaseValue(v),
             .call => {},
         }
     }
@@ -429,10 +433,11 @@ fn executeParseTimeWord(
         }
     }
 
-    // 6. Drain deferred emissions requested via `emit-call` / `emit-body`, in
-    //    order. A `.call` becomes a call_word instruction; a `.body` splices
-    //    the quotation's instructions inline, verbatim, so each instruction
-    //    keeps its own source position for diagnostics.
+    // 6. Drain deferred emissions requested via `emit-call` / `emit-body` / `emit-literal`, in order.
+    //
+    //    A `.call` becomes a call_word instruction. A `.body` splices the quotation's instructions
+    //    inline, verbatim, so each instruction keeps its own source position for diagnostics. A
+    //    `.literal` moves its reference into a push_literal instruction.
     for (c.parse_time_deferred_emissions.items) |emission| {
         switch (emission) {
             .call => |call_name| {
@@ -448,6 +453,9 @@ fn executeParseTimeWord(
                 for (body.instructions) |instr| {
                     instructions.append(allocator, instr) catch return ParseError.OutOfMemory;
                 }
+            },
+            .literal => |v| {
+                instructions.append(allocator, .{ .op = .{ .push_literal = v }, .line = line }) catch return ParseError.OutOfMemory;
             },
         }
     }
@@ -1346,11 +1354,18 @@ fn executeParseTimeWordForArray(
                 rollbackParseTimeExecution(c, pre_depth, pre_emissions);
                 return handleParseTimeError(c, err);
             },
+            // The stack takes a reference of its own, so a later failure's rollback releases the
+            // stack copy and the queued copy independently.
+            .literal => |v| c.stack.push(v) catch |err| {
+                rollbackParseTimeExecution(c, pre_depth, pre_emissions);
+                return handleParseTimeError(c, err);
+            },
         }
     }
-    // No copy of a body survives here, so a reference `emit-body` took has no later owner. An
-    // error above returns through the rollback, which releases the same range.
-    releaseRetainedEmissionLiterals(c.parse_time_deferred_emissions.items[pre_emissions..]);
+    // No copy of a body survives here, so a reference `emit-body` took has no later owner, and
+    // each literal's queued reference is redundant with the stack's. An error above returns
+    // through the rollback, which releases the same range.
+    releaseEmissionReferences(c.parse_time_deferred_emissions.items[pre_emissions..]);
     c.parse_time_deferred_emissions.clearRetainingCapacity();
 
     const post_depth = c.stack.depth();
@@ -2369,6 +2384,27 @@ test "failed parse-time execution rolls back stack values and deferred emissions
     try std.testing.expectError(ParseError.ParseTimeExecutionError, result);
     try std.testing.expectEqual(@as(usize, 0), ctx.stack.depth());
     try std.testing.expectEqual(@as(usize, 0), ctx.parse_time_deferred_emissions.items.len);
+}
+
+test "rolling back a parse-time execution releases a queued emit-literal value" {
+    const Vector = @import("value.zig").Vector;
+
+    var ctx = Context.initWithPrelude(std.testing.allocator);
+    defer ctx.deinit();
+
+    const vec = try Vector.create(ctx.allocator);
+    defer vec.header.release();
+
+    const pre_depth = ctx.stack.depth();
+    const pre_emissions = ctx.parse_time_deferred_emissions.items.len;
+
+    try ctx.stack.push(.{ .vector = vec });
+    try ctx.lookupWord("emit-literal").?.invoke(&ctx);
+    try std.testing.expectEqual(@as(u32, 2), vec.header.refcountValue());
+
+    rollbackParseTimeExecution(&ctx, pre_depth, pre_emissions);
+    try std.testing.expectEqual(@as(u32, 1), vec.header.refcountValue());
+    try std.testing.expectEqual(pre_emissions, ctx.parse_time_deferred_emissions.items.len);
 }
 
 test "bare use with no filename yet reports incompleteness" {

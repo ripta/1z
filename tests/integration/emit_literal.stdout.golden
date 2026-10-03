@@ -1,0 +1,38 @@
+Stack: [ ]
+Stack: [ ]
+=== emit-literal alone ===
+Stack: [ ]
+Stack: [ ]
+PASS: emit-literal pushes its value
+Stack: [ ]
+=== emit-literal ordered against emit-call ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: a literal queued before a call is pushed before the call runs
+Stack: [ ]
+PASS: a literal queued after a call is pushed after the call runs
+Stack: [ ]
+=== emit-literal ordered against stack results ===
+Stack: [ ]
+Stack: [ ]
+PASS: stack results precede queued literals
+Stack: [ ]
+=== emit-literal interleaved with emit-call ===
+Stack: [ ]
+Stack: [ ]
+PASS: queued literals and calls keep their order
+Stack: [ ]
+=== emit-literal in a quotation body ===
+Stack: [ ]
+Stack: [ ]
+PASS: emit-literal splices into a quotation body
+Stack: [ ]
+=== emit-literal in an array literal ===
+Stack: [ ]
+PASS: emit-literal contributes an array element
+Stack: [ ]
+=== emit-literal outside parse time ===
+Stack: [ ]
+PASS: parse time
+Stack: [ ]

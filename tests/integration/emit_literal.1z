@@ -1,0 +1,51 @@
+\ Test emit-literal: queue a push_literal alongside emit-call and emit-body emissions.
+
+use "testing" ;
+
+helper-add1: [ 1 + ] ;
+helper-double: [ 2 * ] ;
+
+"emit-literal alone" test-section
+
+lit-42: parse-time [ 42 emit-literal ] ;
+
+lit-42 42 "emit-literal pushes its value" assert=
+
+"emit-literal ordered against emit-call" test-section
+
+lit-then-call: parse-time [ 5 emit-literal helper-add1: emit-call ] ;
+call-then-lit: parse-time [ helper-double: emit-call 3 emit-literal ] ;
+
+lit-then-call 6 "a literal queued before a call is pushed before the call runs" assert=
+10 call-then-lit - 17 "a literal queued after a call is pushed after the call runs" assert=
+
+"emit-literal ordered against stack results" test-section
+
+\ Stack results become literals ahead of every emission, so the queued 2 lands last.
+results-then-emissions: parse-time [ 1 2 emit-literal 3 ] ;
+
+results-then-emissions 3 array-n { 1 3 2 } "stack results precede queued literals" assert=
+
+"emit-literal interleaved with emit-call" test-section
+
+\ Queued literals and calls keep the order they were requested in. Leaving 10 and 20 as stack
+\ results instead would put both ahead of every call.
+interleaved: parse-time [
+  10 emit-literal dup: emit-call
+  20 emit-literal dup: emit-call
+] ;
+
+interleaved 4 array-n { 10 10 20 20 } "queued literals and calls keep their order" assert=
+
+"emit-literal in a quotation body" test-section
+
+uses-lit: [ lit-then-call helper-double ] ;
+uses-lit 12 "emit-literal splices into a quotation body" assert=
+
+"emit-literal in an array literal" test-section
+
+{ 1 lit-42 2 } { 1 42 2 } "emit-literal contributes an array element" assert=
+
+"emit-literal outside parse time" test-section
+
+[ 1 emit-literal ] [ "parse time" assert-error ] recover
