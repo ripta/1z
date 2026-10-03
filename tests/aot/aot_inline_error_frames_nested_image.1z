@@ -7,8 +7,7 @@
 \ call out of a string, so the freeze never sees it.
 \
 \ The `outer` row itself is absent from the chain because the quotation `>quotation` builds calls it
-\ in tail position. And the inner `call` row reads `<aot>` rather than a file, because the image
-\ carries a decoded body's module but not the file it was parsed from. Both predate this test.
+\ in tail position. That predates this test.
 
 use "fixtures/aot_inline_error_frames_nested_image_caller.1z" ;
 

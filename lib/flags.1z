@@ -474,12 +474,10 @@ private{
     if
   ] ;
 
-  \\ Convert value by type, returning option:some(value') or option:none on a bad
-  \\ value. recover is the terminal operation in this word and the parsers throw a
-  \\ clean stack, so the handler is just [ drop option:none ], matching the prelude
-  \\ #nth? / receive? idiom. Keeping recover terminal here also keeps it AOT-safe.
+  \\ Convert value by type, returning option:some(value') or option:none on a bad value.
+  \\ Keeping recover terminal here keeps it AOT-safe.
   try-convert-flag-value: ( value type -- opt ) [
-    [ convert-flag-value >option:some ] [ drop option:none ] recover
+    [ convert-flag-value >option:some ] [ 3drop option:none ] recover
   ] ;
 
   \\ True when the declared TypeValue is an enum type. descriptor-kind yields the
@@ -505,9 +503,7 @@ private{
   \\ ", "-joined short names for the out-of-set error listing.
   enum-valid-values: ( type -- string ) [ enum-short-names ", " #join ] ;
 
-  \\ Is the raw string argument a valid short variant name of the enum type? The
-  \\ membership check is throw-free, so the enum path avoids the try-convert
-  \\ recover idiom, whose clean-stack precondition an enum conversion cannot meet.
+  \\ Is the raw string argument a valid short variant name of the enum type?
   enum-member?: ( value type -- ? ) [ enum-short-names swap #in? ] ;
 
   \\ Full listing error message for an out-of-set enum argument.

@@ -11,7 +11,7 @@ use "time" ;
 outcome-of: ( src -- sym ) [
   outcomes: V{ } ;
   [
-    [ [ eval-string ok: ] [ error-type: @get ] recover outcomes swap #push! drop ] curry spawn drop
+    [ [ eval-string ok: ] [ error-type: @get nip ] recover outcomes swap #push! drop ] curry spawn drop
   ] curry task-scope
   outcomes 0 #nth
 ] ;

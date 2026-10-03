@@ -8,7 +8,6 @@ use "testing" ;
 use "strict_use_mod_a.1z" ;
 [ "strict_use_mod_b.1z" load reexport ]
 [ error-type: @get EImportConflict "conflicting reexport throws import-conflict" assert= ] recover
-drop  \ the failed reexport leaves the module behind
 \ === A failing reexport writes nothing ===
 "A failing reexport imports none of the module's words" test-section
 

@@ -9,7 +9,7 @@ use "time" ;
 \ flock contends with any lock held through another descriptor.
 (probe-lockable?): ( path -- bool ) [
   read: stream-open
-  dup [ stream>fd "LOCK_EX" posix-const "LOCK_NB" posix-const bitor flock drop t ] [ drop f ] recover
+  dup [ stream>fd "LOCK_EX" posix-const "LOCK_NB" posix-const bitor flock drop t ] [ 2drop f ] recover
   over stream>fd "LOCK_UN" posix-const flock drop
   swap stream-close
 ] ;
@@ -126,11 +126,7 @@ dup stream>fd swap stream-close
   data: @get errno: @get fixnum? "file-lock-error carries the raw errno integer" assert-true
 ] recover
 
-\ using-file-lock leaves the caller's stream on the stack when the acquire
-\ throws, since the caller retains ownership. Drop that residual here.
-drop
-
-\ === try-file-lock genuine errno raises file-lock-error: and leaves only the stream ===
+\ === try-file-lock genuine errno raises file-lock-error: ===
 "try-file-lock file-lock-error on bad descriptor" test-section
 
 "tests/integration/_tmp_oslock.txt" read-write: stream-open
@@ -138,9 +134,9 @@ dup stream>fd swap stream-close
 fd>stream
 exclusive: [ drop t ] [ f ]
 [ try-file-lock ]
-[ error-type: @get file-lock-error: "try-file-lock bad descriptor raises file-lock-error" assert= ]
+[ error-type: @get file-lock-error: "try-file-lock bad descriptor raises file-lock-error" assert= 3drop ]
 recover
-dup stream? "try-file-lock leaves only the caller's stream after a failed acquire" assert-true
+dup stream? "handler sees the restored stream after a failed acquire" assert-true
 drop
 
 \ === cooperative-path acquire errno raises file-lock-error: with a clean stack ===

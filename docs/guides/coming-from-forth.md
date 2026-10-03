@@ -609,8 +609,11 @@ In 1z:
 f "something went wrong" EUserThrown make-error throw
 ```
 
-The error handler receives the error object on the stack. Fields are
-accessible via `@get`:
+Forth's `CATCH` restores the stack depth on a `THROW`, but leaves the contents
+of those cells unspecified. `recover` goes further and restores the contents
+too. The handler receives the entry stack with the error object on top, so it
+drops the body's inputs along with the error.
+Fields are accessible via `@get`:
 
 ```
 [ 1 0 / ] [ error-type: @get ] recover

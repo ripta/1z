@@ -3071,6 +3071,12 @@ const CompileState = struct {
     /// Parks created so far in emission order. At a top-level `;` emission order is execution
     /// order, so every exit emitted after a park's creation releases exactly the parks it holds.
     park_count: usize = 0,
+    /// Callable spills that hold an owning reference, in creation order.
+    ///
+    /// A spill lives in an alloca, so control leaving the body by any route other than the spill's
+    /// own release would leak its reference. Every abnormal return and back-edge releases the
+    /// spills still listed here, and the release on the success path takes a spill off the list.
+    live_spills: std.ArrayListUnmanaged(c.ir_ref) = .{},
     /// Inputs of the word whose own body is being compiled, or null when the body is not a word's.
     word_input_count: ?u8 = null,
     /// Inputs, by index from the bottom, whose declared type the entry checks enforced.
@@ -4645,6 +4651,7 @@ fn emitRowAwareSelfTailCall(state: *CompileState, stack: []StackEntry, sp: *usiz
 
     // After the safepoint, whose own error return already releases the parks.
     emitParkReleases(state);
+    emitLiveSpillReleases(state);
 
     const loop_end = c._ir_LOOP_END(ctx);
     c.ir_set_op2(ctx, state.loop_begin_ref, loop_end);
@@ -5367,22 +5374,57 @@ fn emitValueQuotCall(
 /// clobbers the slot and the next iteration reads garbage. The spill lives on the C stack, which
 /// the 1z stack machinery never touches, so it stays valid for every iteration.
 ///
-/// The consumed slot's owning reference moves into the spill, so the loop's fall-through exit
-/// must pair each spill with `emitReleaseSpilled`; a closure callable is reclaimed there the way
-/// the interpreted combinator's final drop reclaims it.
-fn emitCallableSpill(state: *CompileState, slot: usize) c.ir_ref {
+/// The consumed slot's owning reference moves into the spill. The success path pairs each spill
+/// with `emitReleaseSpilled`, where a closure callable is reclaimed the way the interpreted
+/// combinator's final drop reclaims it. Every other way out of the body releases it through
+/// `live_spills`.
+///
+/// A restart would leave the reference behind, so the spill also ends the stretch a guard may
+/// restart from.
+fn emitCallableSpill(state: *CompileState, slot: usize) IrCodegenError!c.ir_ref {
+    const spill = emitCallableSpillUnowned(state, slot);
+    try ownCallableSpill(state, spill);
+    return spill;
+}
+
+/// Spill the callable at `slot` while the stack's stored depth still covers that slot, so the
+/// stack and not the spill owns the reference. `ownCallableSpill` hands it over once the depth
+/// stops covering the slot; until then an error exit leaves the stack to release it.
+fn emitCallableSpillUnowned(state: *CompileState, slot: usize) c.ir_ref {
     const ctx = state.ctx;
     const spill = c._ir_ALLOCA(ctx, c.ir_const_addr(ctx, ValueLayout.value_size));
     emitCopyToPtr(ctx, state.base_addr, slot, spill);
     return spill;
 }
 
-/// Release the owning reference a callable spill carries, at loop exit. An error unwind out of
-/// the loop skips this and leaks the reference, matching the other compiled error-path corners.
+/// Make `spill` the owner of its reference, so every way out of the body releases it.
+fn ownCallableSpill(state: *CompileState, spill: c.ir_ref) IrCodegenError!void {
+    state.live_spills.append(state.allocator, spill) catch return IrCodegenError.OutOfMemory;
+    state.restart_clean = false;
+}
+
+/// Release the owning reference a callable spill carries, on the path that finished with it.
 fn emitReleaseSpilled(state: *CompileState, spill: ?c.ir_ref) void {
     const s = spill orelse return;
+
+    const index = std.mem.indexOfScalar(c.ir_ref, state.live_spills.items, s);
+    std.debug.assert(index != null);
+    if (index) |i| _ = state.live_spills.orderedRemove(i);
+
     if (state.release_slot_fn == c.IR_UNUSED) return;
     _ = c._ir_CALL_1(state.ctx, c.IR_I32, state.release_slot_fn, s);
+}
+
+/// Release every spill still holding a reference, where control leaves the body or loops back to
+/// its top.
+///
+/// The list is left as it is, since the code after this point in emission order still holds the
+/// spills.
+fn emitLiveSpillReleases(state: *CompileState) void {
+    if (state.release_slot_fn == c.IR_UNUSED) return;
+    for (state.live_spills.items) |spill| {
+        _ = c._ir_CALL_1(state.ctx, c.IR_I32, state.release_slot_fn, spill);
+    }
 }
 
 /// Settle one branch of an if-over-row before its END so both branches leave the
@@ -5453,7 +5495,7 @@ fn emitIfOverRow(
     if (true_body) |tb| {
         try compileQuotationBodyInline(state, tb, stack, &true_sp);
     } else {
-        emitIfBranchDispatch(state, stack, &true_sp, true_entry.raw_at_slot);
+        try emitIfBranchDispatch(state, stack, &true_sp, true_entry.raw_at_slot);
     }
     const true_exit_kind = state.exit_kind;
     var end_true: c.ir_ref = c.IR_UNUSED;
@@ -5477,7 +5519,7 @@ fn emitIfOverRow(
     if (false_body) |fb| {
         try compileQuotationBodyInline(state, fb, stack, &false_sp);
     } else {
-        emitIfBranchDispatch(state, stack, &false_sp, false_entry.raw_at_slot);
+        try emitIfBranchDispatch(state, stack, &false_sp, false_entry.raw_at_slot);
     }
     const false_exit_kind = state.exit_kind;
     var false_ends_on_row = false;
@@ -5538,8 +5580,8 @@ fn emitIfBranchDispatch(
     stack: []StackEntry,
     sp: *usize,
     slot: usize,
-) void {
-    const spill = emitCallableSpill(state, slot);
+) IrCodegenError!void {
+    const spill = try emitCallableSpill(state, slot);
     emitValueQuotCall(state, stack, sp, spill, 0, .none);
     emitReleaseSpilled(state, spill);
 }
@@ -5607,11 +5649,11 @@ fn compilePredBodyLoop(
 
     // Spill runtime callables before the loop; see emitCallableSpill.
     const pred_spill: ?c.ir_ref = switch (pred_entry) {
-        .raw_at_slot => |s| emitCallableSpill(state, s),
+        .raw_at_slot => |s| try emitCallableSpill(state, s),
         else => null,
     };
     const body_spill: ?c.ir_ref = switch (body_source) {
-        .slot => |s| emitCallableSpill(state, s),
+        .slot => |s| try emitCallableSpill(state, s),
         else => null,
     };
 
@@ -6097,7 +6139,7 @@ fn tryEmitInlineStructFieldSet(
 ///
 /// The JIT tag-checks the selector first and bails on a non-quotation, since its interpreted
 /// re-run raises the same error. AOT code skips that check and relies on the cold arm.
-fn emitChooseSelectorCall(state: *CompileState, held_slot: usize, fallback_name: []const u8, line: usize, frame: CurrentTraceFrame) void {
+fn emitChooseSelectorCall(state: *CompileState, held_slot: usize, fallback_name: []const u8, line: usize, frame: CurrentTraceFrame) IrCodegenError!void {
     const ctx = state.ctx;
     const held_addr = liveSlotAddr(state, held_slot);
 
@@ -6124,7 +6166,7 @@ fn emitChooseSelectorCall(state: *CompileState, held_slot: usize, fallback_name:
         c._ir_IF_TRUE(ctx, if_closure);
         {
             // The callee's pushes reuse the selector's slot, so the call reads a spill instead.
-            const spill = emitCallableSpill(state, held_slot);
+            const spill = try emitCallableSpill(state, held_slot);
             const sp_val = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_idx, c.ir_const_addr(ctx, held_slot));
             c._ir_STORE(ctx, state.sp_ptr, sp_val);
 
@@ -6227,7 +6269,7 @@ fn emitChooseBuiltin(
     sp.* = 4;
     if (sp.* + 1 > state.peak_sp) state.peak_sp = @intCast(sp.* + 1);
 
-    emitChooseSelectorCall(state, 4, "<choose>", 0, .none);
+    try emitChooseSelectorCall(state, 4, "<choose>", 0, .none);
 
     // Quotation consumed 2 copies, pushed 1 result at slot 2.
     const cond_ref = emitSlotTruthiness(ctx, state.base_addr, output_slot + 2, state);
@@ -6910,7 +6952,7 @@ fn emitIntrinsicCall(ec: EmitCtx) IrCodegenError!ControlFlow {
                 sp.* += 1;
                 flushToPhysicalStack(state, stack, sp.*);
                 sp.* -= 1;
-                const spill = emitCallableSpill(state, sp.*);
+                const spill = try emitCallableSpill(state, sp.*);
 
                 const new_sp_const = c.ir_const_addr(ctx, sp.*);
                 const new_sp = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_idx, new_sp_const);
@@ -7062,7 +7104,7 @@ fn emitIntrinsicCall(ec: EmitCtx) IrCodegenError!ControlFlow {
                 // segments, or traps cleanly on a null code_ptr -- no interpreter re-entry),
                 // logically popping it by storing sp_ptr = base_idx + 0. The spill carries the
                 // consumed slot's owning reference for the release after the call.
-                const spill = emitCallableSpill(state, 0);
+                const spill = try emitCallableSpill(state, 0);
                 c._ir_STORE(ctx, state.sp_ptr, state.base_idx);
                 const call_result = c._ir_CALL_2(ctx, c.IR_I32, state.call_value_fn, state.jit_ctx_ptr, spill);
                 emitCallbackPostCheck(state, call_result, call_result, null, .{ .builtin = .{ .kind = .call, .line = ec.line } });
@@ -7359,7 +7401,7 @@ fn emitIntrinsicChoose(ec: EmitCtx) IrCodegenError!ControlFlow {
             sp.* = output_slot + 4;
             if (sp.* + 1 > state.peak_sp) state.peak_sp = @intCast(sp.* + 1);
 
-            emitChooseSelectorCall(state, output_slot + 4, "<quotation>", ec.line, choose_frame);
+            try emitChooseSelectorCall(state, output_slot + 4, "<quotation>", ec.line, choose_frame);
 
             // Quotation consumed 2 copies and pushed 1 result.
             // Result is at physical slot output_slot + 2.
@@ -7658,7 +7700,7 @@ fn emitIntrinsicIf(ec: EmitCtx) IrCodegenError!ControlFlow {
                 }
             } else {
                 // True branch is raw_at_slot: dispatch at runtime.
-                emitIfBranchDispatch(state, stack, sp, true_entry.raw_at_slot);
+                try emitIfBranchDispatch(state, stack, sp, true_entry.raw_at_slot);
                 settleDispatchedBranchAsRow(state, stack, sp);
             }
             return .next;
@@ -7833,7 +7875,7 @@ fn emitIntrinsicIf(ec: EmitCtx) IrCodegenError!ControlFlow {
         try compileQuotationBodyInline(state, tb, stack, sp);
     } else {
         // Runtime dispatch for raw_at_slot quotation
-        emitIfBranchDispatch(state, stack, sp, true_entry.raw_at_slot);
+        try emitIfBranchDispatch(state, stack, sp, true_entry.raw_at_slot);
         settleDispatchedBranchAsRow(state, stack, sp);
     }
     if (traceFramesEnabled(state)) state.inline_trace_frame_count = saved_inline_trace_frame_count;
@@ -7900,7 +7942,7 @@ fn emitIntrinsicIf(ec: EmitCtx) IrCodegenError!ControlFlow {
     if (false_body) |fb| {
         try compileQuotationBodyInline(state, fb, saved_stack, &false_sp);
     } else {
-        emitIfBranchDispatch(state, saved_stack, &false_sp, false_entry.raw_at_slot);
+        try emitIfBranchDispatch(state, saved_stack, &false_sp, false_entry.raw_at_slot);
         settleDispatchedBranchAsRow(state, saved_stack, &false_sp);
     }
     if (traceFramesEnabled(state)) state.inline_trace_frame_count = saved_inline_trace_frame_count;
@@ -9104,10 +9146,12 @@ fn emitAotTimesGenericLoop(ec: EmitCtx, n_slot: usize, quot_entry: StackEntry) I
     const stack = ec.stack;
     const sp = ec.sp.*;
 
-    // Spilled before the flush below, which may write the slots they sit in.
-    const count_spill = emitCallableSpill(state, n_slot);
+    // Spilled before the flush below, which may write the slots they sit in. The stored depth may
+    // still cover those slots while the materializations below can raise, so the spills own their
+    // references only from the loop's first preamble, which stores the depth below them.
+    const count_spill = emitCallableSpillUnowned(state, n_slot);
     var quot_spill: ?c.ir_ref = switch (quot_entry) {
-        .raw_at_slot => |s| emitCallableSpill(state, s),
+        .raw_at_slot => |s| emitCallableSpillUnowned(state, s),
         .quotation_body => null,
         else => return state.refuse(.quotation_reification, null),
     };
@@ -9119,9 +9163,12 @@ fn emitAotTimesGenericLoop(ec: EmitCtx, n_slot: usize, quot_entry: StackEntry) I
         const reads_shadowed = state.interpreter_free and quotationReadsShadowedBinding(state, quot_entry.quotation_body.body) != null;
         if (!reads_shadowed) {
             try materializeQuotations(state, stack, sp + 2, false);
-            quot_spill = emitCallableSpill(state, sp + 1);
+            quot_spill = emitCallableSpillUnowned(state, sp + 1);
         }
     }
+
+    try ownCallableSpill(state, count_spill);
+    if (quot_spill) |q| try ownCallableSpill(state, q);
     const quot_arg = quot_spill orelse c.ir_const_addr(ctx, 0);
 
     const loop_entry_stack = state.allocator.dupe(StackEntry, stack[0..sp]) catch return IrCodegenError.OutOfMemory;
@@ -9237,7 +9284,7 @@ fn emitIntrinsicTimes(ec: EmitCtx) IrCodegenError!ControlFlow {
 
     // Spill a runtime callable before the loop; see emitCallableSpill.
     const quot_spill: ?c.ir_ref = switch (quot_entry) {
-        .raw_at_slot => |s| emitCallableSpill(state, s),
+        .raw_at_slot => |s| try emitCallableSpill(state, s),
         else => null,
     };
 
@@ -9340,7 +9387,7 @@ fn emitIntrinsicLoop(ec: EmitCtx) IrCodegenError!ControlFlow {
 
     // Spill a runtime callable before the loop; see emitCallableSpill.
     const pred_spill: ?c.ir_ref = switch (pred_entry) {
-        .raw_at_slot => |s| emitCallableSpill(state, s),
+        .raw_at_slot => |s| try emitCallableSpill(state, s),
         else => null,
     };
 
@@ -10103,6 +10150,7 @@ fn compileInstructions(
 
                     // After the safepoint, whose own error return already releases the parks.
                     emitParkReleases(state);
+                    emitLiveSpillReleases(state);
 
                     // Emit back-edge
                     const loop_end = c._ir_LOOP_END(ctx);
@@ -10971,6 +11019,7 @@ fn compileWordPass(
     defer if (state.method_index) |*mi| mi.deinit();
     defer if (state.may_define_memo) |*m| m.deinit();
     defer state.deinitBindings();
+    defer state.live_spills.deinit(state.allocator);
 
     const needs_lexical_frame = quotationBodyNeedsFrame(&state, instructions);
     emitParkReservation(&state, instructions, needs_lexical_frame);
@@ -11712,6 +11761,7 @@ fn emitWordCAotPass(
     defer if (state.may_define_memo) |*m| m.deinit();
     defer state.deinitBindings();
     defer if (state.restart_inputs.len > 0) allocator.free(state.restart_inputs);
+    defer state.live_spills.deinit(allocator);
 
     emitParkReservation(&state, instructions, needs_lexical_frame);
     state.word_input_count = input_count;
@@ -15201,13 +15251,14 @@ fn emitFallThroughParkReleases(state: *CompileState) void {
     state.park_count = 0;
 }
 
-/// Leave the body with a status other than success, releasing the parks first.
+/// Leave the body with a status other than success, releasing the parks and live spills first.
 ///
 /// The physical stack is left as it is. That is right only where something already owns it: after
 /// a callback, whose preamble stored `sp` and whose callee then ran on it, or on a status that is
 /// not a failure. An inline guard leaves through `emitSettledExit` instead.
 fn emitAbnormalReturn(state: *CompileState, status: c.ir_ref) void {
     emitParkReleases(state);
+    emitLiveSpillReleases(state);
     c._ir_RETURN(state.ctx, status);
 }
 
@@ -17182,8 +17233,8 @@ export fn jitCallValue(jit_ctx_raw: usize, value_ptr_raw: usize) callconv(.c) i3
 /// at this point, so a raise leaves the stack the interpreter leaves. A null `quot_ptr_raw` means
 /// the quotation cannot be a value in this build, and the raise leaves the count alone.
 ///
-/// The compiled caller holds the count and the quotation in spills it abandons on a raise, so a
-/// raise releases the references they own.
+/// The compiled caller holds the count and the quotation in spills, and its error exit releases
+/// them on a raise.
 export fn jitTimesTest(ctx_raw: usize, count_ptr_raw: usize, quot_ptr_raw: usize, run_out_raw: usize) callconv(.c) i32 {
     if (ctx_raw == 0 or count_ptr_raw == 0 or run_out_raw == 0) return 1;
     const ctx: *Context = @ptrFromInt(ctx_raw);
@@ -17191,10 +17242,10 @@ export fn jitTimesTest(ctx_raw: usize, count_ptr_raw: usize, quot_ptr_raw: usize
     const quot: ?*Value = if (quot_ptr_raw == 0) null else @ptrFromInt(quot_ptr_raw);
     const run_out: *u64 = @ptrFromInt(run_out_raw);
 
-    pushTimesOperands(ctx, count, quot, &.{ count.*, .{ .fixnum = 0 } }) catch |err| return abandonTimesSpills(ctx, count, quot, err);
-    arithmetic_mod.nativeGt(ctx) catch |err| return abandonTimesSpills(ctx, count, quot, err);
+    pushTimesOperands(ctx, count, quot, &.{ count.*, .{ .fixnum = 0 } }) catch |err| return raiseFromTimes(ctx, err);
+    arithmetic_mod.nativeGt(ctx) catch |err| return raiseFromTimes(ctx, err);
 
-    const answer = ctx.stack.pop() catch |err| return abandonTimesSpills(ctx, count, quot, err);
+    const answer = ctx.stack.pop() catch |err| return raiseFromTimes(ctx, err);
     defer container_backing.releaseValue(answer);
     popTimesOperands(ctx, quot);
 
@@ -17211,12 +17262,12 @@ export fn jitTimesDecrement(ctx_raw: usize, count_ptr_raw: usize, quot_ptr_raw: 
     const quot: ?*Value = if (quot_ptr_raw == 0) null else @ptrFromInt(quot_ptr_raw);
 
     // After `swap` the quotation sits below the count, the reverse of the test's order.
-    if (quot) |q| ctx.stack.push(q.*) catch |err| return abandonTimesSpills(ctx, count, quot, err);
-    ctx.stack.push(count.*) catch |err| return abandonTimesSpills(ctx, count, quot, err);
-    ctx.stack.push(.{ .fixnum = 1 }) catch |err| return abandonTimesSpills(ctx, count, quot, err);
-    arithmetic_mod.nativeSub(ctx) catch |err| return abandonTimesSpills(ctx, count, quot, err);
+    if (quot) |q| ctx.stack.push(q.*) catch |err| return raiseFromTimes(ctx, err);
+    ctx.stack.push(count.*) catch |err| return raiseFromTimes(ctx, err);
+    ctx.stack.push(.{ .fixnum = 1 }) catch |err| return raiseFromTimes(ctx, err);
+    arithmetic_mod.nativeSub(ctx) catch |err| return raiseFromTimes(ctx, err);
 
-    const next = ctx.stack.pop() catch |err| return abandonTimesSpills(ctx, count, quot, err);
+    const next = ctx.stack.pop() catch |err| return raiseFromTimes(ctx, err);
     if (quot != null) ctx.stack.popAndRelease() catch {};
 
     container_backing.releaseValue(count.*);
@@ -17237,9 +17288,7 @@ fn popTimesOperands(ctx: *Context, quot: ?*const Value) void {
     ctx.stack.popAndRelease() catch {};
 }
 
-fn abandonTimesSpills(ctx: *Context, count: *const Value, quot: ?*const Value, err: anyerror) i32 {
-    container_backing.releaseValue(count.*);
-    if (quot) |q| container_backing.releaseValue(q.*);
+fn raiseFromTimes(ctx: *Context, err: anyerror) i32 {
     ctx.jit_pending_error = err;
     return 2;
 }

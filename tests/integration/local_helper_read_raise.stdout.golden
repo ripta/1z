@@ -6,16 +6,16 @@ Stack: [ ]
 Stack: [ ]
 Stack: [ ]
 <error user-thrown: boom [tests/integration/local_helper_read_raise.1z:10:throw <- tests/integration/local_helper_read_raise.1z:11:boom <- tests/integration/local_helper_read_raise.1z:45:recover]>
-Stack: [ 1 ]
+Stack: [ ]
 <error user-thrown: boom [tests/integration/local_helper_read_raise.1z:15:throw <- tests/integration/local_helper_read_raise.1z:46:recover]>
-Stack: [ 1 1 ]
+Stack: [ ]
 <error user-thrown: boom [tests/integration/local_helper_read_raise.1z:20:throw <- src/prelude.1z:348:if <- tests/integration/local_helper_read_raise.1z:21:boom <- tests/integration/local_helper_read_raise.1z:47:recover]>
-Stack: [ 1 1 1 ]
+Stack: [ ]
 <error user-thrown: boom [tests/integration/local_helper_read_raise.1z:25:throw <- tests/integration/local_helper_read_raise.1z:26:boom <- tests/integration/local_helper_read_raise.1z:27:outer <- tests/integration/local_helper_read_raise.1z:48:recover]>
-Stack: [ 1 1 1 1 ]
+Stack: [ ]
 <error user-thrown: boom [tests/integration/local_helper_read_raise.1z:31:throw <- src/prelude.1z:348:if <- tests/integration/local_helper_read_raise.1z:49:recover]>
-Stack: [ 1 1 1 1 1 ]
+Stack: [ ]
 <error user-thrown: boom [tests/integration/local_helper_read_raise.1z:36:throw <- src/prelude.1z:348:if <- tests/integration/local_helper_read_raise.1z:37:if <- tests/integration/local_helper_read_raise.1z:50:recover]>
-Stack: [ 1 1 1 1 1 1 ]
+Stack: [ ]
 <error type-error: type-error [tests/integration/local_helper_read_raise.1z:42:inc <- tests/integration/local_helper_read_raise.1z:51:recover]>
-Stack: [ 1 1 1 1 1 1 "s" ]
+Stack: [ ]

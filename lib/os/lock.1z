@@ -37,7 +37,7 @@ EFileLockError: ( -- sym ) [ file-lock-error: ] ;
 \ One non-blocking flock attempt. acquired: on success, contended: on would-block, throws
 \ file-lock-error: on any other errno.
 (try-acquire-once): ( fd op-nb -- outcome ) [
-  [ flock drop acquired: ] [ (classify-lock-error) ] recover
+  [ flock drop acquired: ] [ nip nip (classify-lock-error) ] recover
 ] ;
 
 \ Cooperative retry loop: attempt, and on contention sleep with exponential backoff (capped)
@@ -68,7 +68,7 @@ EFileLockError: ( -- sym ) [ file-lock-error: ] ;
 
 \ Bare blocking acquire used when no scheduler is present.
 (blocking-acquire): ( fd op -- ) [
-  [ flock drop ] [ (raise-file-lock-error) ] recover
+  [ flock drop ] [ nip nip (raise-file-lock-error) ] recover
 ] ;
 
 \ t if a scheduler is present. Detected by whether yield throws; a pending cancellation is
@@ -115,7 +115,7 @@ using-file-lock: ( ..a stream mode quot: ( ..a stream -- ..b ) -- ..b ) [
 try-file-lock: ( ..a stream mode acquired: ( ..a stream -- ..b ) missed: ( ..a -- ..b ) -- ..b ) [
   3 pick-n stream>fd
   3 pick-n (mode->flock-op) "LOCK_NB" posix-const bitor
-  [ (try-acquire-once) ] [ 3 nip-n throw ] recover
+  [ (try-acquire-once) ] [ 5 nip-n throw ] recover
   acquired: = [
     drop nip
     over [ stream>fd "LOCK_UN" posix-const flock drop ] curry

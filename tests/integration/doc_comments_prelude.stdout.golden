@@ -7,7 +7,9 @@ when ( ? quot -- ) [<marker:branch-combinator>] \compound
 
 Stack: [ ]
 Execute a quotation, silently discarding any error.
-ignore-errors ( quot -- ) \compound
+
+The quotation takes no inputs. Partially apply any it needs with `curry` first.
+ignore-errors ( quot: ( -- ) -- ) \compound
 
 Stack: [ ]
 Drop the second element, keeping the top.

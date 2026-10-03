@@ -18,6 +18,6 @@ check-trace: ( err -- ) [
   "recover boxes the subtree and the outer rows" assert=
 ] ;
 
-catcher: ( ..a x v -- ..a ) [ [ mid 0 drop ] [ check-trace ] recover drop ] ;
+catcher: ( ..a x v -- ..a ) [ [ mid 0 drop ] [ check-trace drop ] recover drop ] ;
 
 0 42 catcher 0 drop

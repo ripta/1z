@@ -315,8 +315,9 @@ See also: [Concurrency](guides/concurrency.md),
 ## Error Handling
 
 ```
-[ risky ] [ handler ] recover     \ catch errors
-[ risky ] ignore-errors           \ silently discard errors
+[ risky ] [ handler ] recover     \ catch errors; handler sees the entry stack and the error
+x [ risky ] [ 2drop 0 ] recover   \ a handler drops the body's inputs too
+[ risky ] ignore-errors           \ silently discard errors; quotation takes no inputs
 [ body ] [ cleanup ] cleanup      \ always-run cleanup
 f "message" EUserThrown make-error throw  \ throw error
 
@@ -326,6 +327,7 @@ error message: @get               \ get error message
 
 \ Exception-to-result:
 [ risky ] try                     \ result:ok or result:err
+x [ risky ] curry try             \ try takes no inputs; curry them in
 ```
 
 See also: [Error Handling cookbook](cookbook/error-handling.md)

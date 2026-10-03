@@ -4,7 +4,7 @@ use "testing" ;
 
 __error-store__: M{ } ;
 capture-error: ( quot -- ) [
-  [ call f ] [ __error-store__ error: <rot- @set! drop f ] recover drop
+  [ call f ] [ nip __error-store__ error: <rot- @set! drop f ] recover drop
 ] ;
 get-captured-error: ( -- error ) [ __error-store__ error: @get ] ;
 

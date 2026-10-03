@@ -1,0 +1,28 @@
+=== a native that pops its operands and then raises ===
+PASS: the value under the entry stack is untouched
+PASS: the sequence is restored
+PASS: the index is restored
+PASS: the error sits on top
+=== a compound body that fails partway ===
+PASS: the value under the entry stack is untouched
+PASS: the consumed input is restored and the partial values are gone
+PASS: the body's error sits on top
+=== a body that consumes below its own inputs ===
+PASS: every consumed value comes back
+=== the handler idiom drops the body's inputs with the error ===
+PASS: only the value below survives
+PASS: the handler answers none
+PASS: parse?(rfc3986) leaves nothing behind on a reject
+PASS: parse?(rfc3986) rejects ! in the scheme
+=== a body that does not raise ===
+PASS: the body's own stack stands
+=== nested recovers ===
+PASS: the outer entry stack is restored and the inner leftovers are gone
+PASS: the outer handler sees its own error
+PASS: a recover in a handler starts from the handler's stack
+PASS: the inner handler ran
+=== try with a curried input ===
+PASS: an in-range read is ok
+PASS: a failed try leaves only its result
+PASS: an out-of-range read is an err
+PASS: try takes a quotation that always raises

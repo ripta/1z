@@ -1,13 +1,9 @@
 use "testing" ;
 use "lua" ;
 
-\ Run quot, catch its error, and return only the error's message. A throw can
-\ leave partial results on the stack, so a marker bounds what to discard.
-(cm-until): ( marker-and-junk msg -- msg ) [
-  swap dup "::cm::" = [ drop ] [ drop (cm-until) ] if
-] ;
+\ Run quot, catch its error, and return only the error's message.
 (caught-message): ( quot -- msg ) [
-  "::cm::" swap [ call "no error raised" ] [ message: @get ] recover (cm-until)
+  [ call "no error raised" ] [ nip message: @get ] recover
 ] ;
 
 "lua eval result option" test-section

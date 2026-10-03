@@ -12,11 +12,11 @@ use "testing" ;
 
 "ignore-errors" test-section
 \ Error suppressed, execution continues
-[ drop ] ignore-errors
+[ 1 0 / drop ] ignore-errors
 t "ignore-errors continues after error" assert-true
 
 \ Success case with ignore-errors
-[ 100 ] ignore-errors 100 "ignore-errors success value" assert=
+[ "PASS: ignore-errors runs a successful quotation" print-line ] ignore-errors
 
 "Nested recover" test-section
 \ Inner recover handles error, outer recover not triggered

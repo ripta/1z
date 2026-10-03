@@ -1,7 +1,9 @@
 \ A raise from an inline guard in compiled code leaves the stack the interpreter leaves, and the
-\ stack owns every slot it leaves. Nothing here sets a compile flag, so the eager pass checks the
-\ compiled run against the interpreted golden, and the AOT suite builds this file in the classes
-\ that link the interpreter. The empty stderr golden catches a leak or a double release at teardown.
+\ stack owns every slot it leaves. `recover` releases those slots when it restores the entry stack,
+\ so the handler sees the restored operands, and a slot the stack does not own fails there. Nothing
+\ here sets a compile flag, so the eager pass checks the compiled run against the interpreted golden,
+\ and the AOT suite builds this file in the classes that link the interpreter. The empty stderr
+\ golden catches a leak or a double release at teardown.
 \
 \ Each word reaches its guard after a stack move that leaves the physical stack out of step with the
 \ compiled code's view of it: a dropped heap slot, a relabeling swap, an unboxed result, or a copy.
@@ -20,27 +22,34 @@ over-then-unwrap: ( s m -- s s n )                   [ over swap unmake-money ] 
 
 "a tag guard after dropping an owned heap slot" test-section
 heap heap heap [ drop-then-abs ] [ drop "caught" ] recover "caught" "handler ran" assert=
-"hello" "string below the raise" assert=
+"hello" "handler sees the restored dropped slot" assert=
+"hello" "handler sees the restored operand" assert=
+"hello" "handler sees the string below" assert=
 
 "division by zero after a relabeling swap" test-section
 heap 0 7 [ swap-then-div ] [ drop "caught" ] recover "caught" "handler ran" assert=
-"hello" "string below the raise" assert=
+7 "handler sees the restored dividend" assert=
+0 "handler sees the restored divisor" assert=
+"hello" "handler sees the string below" assert=
 
 "division by zero over an unboxed sum" test-section
 heap 1 2 7 0 [ sum-then-mod ] [ drop "caught" ] recover "caught" "handler ran" assert=
-3 "unboxed sum below the raise" assert=
-"hello" "string below the sum" assert=
+0 "handler sees the restored divisor" assert=
+7 "handler sees the restored dividend" assert=
+2 "handler sees the restored second addend" assert=
+1 "handler sees the restored first addend" assert=
+"hello" "handler sees the string below" assert=
 
 "choose with a non-quotation selector after dropping an owned heap slot" test-section
 heap heap heap "not a quotation" heap [ drop-then-pick ] [ drop "caught" ] recover "caught" "handler ran" assert=
-"hello" "second arm copy" assert=
-"hello" "first arm copy" assert=
-"hello" "second arm" assert=
-"hello" "first arm" assert=
-"hello" "string below the arms" assert=
+"hello" "handler sees the restored dropped slot" assert=
+"not a quotation" "handler sees the restored selector" assert=
+"hello" "handler sees the restored second arm" assert=
+"hello" "handler sees the restored first arm" assert=
+"hello" "handler sees the string below the arms" assert=
 
 "an inline unwrap over a copied operand" test-section
 heap heap heap [ over-then-unwrap ] [ drop "caught" ] recover "caught" "handler ran" assert=
-"hello" "copy left by the unwrap" assert=
-"hello" "original left by the unwrap" assert=
-"hello" "string below the raise" assert=
+"hello" "handler sees the restored unwrap operand" assert=
+"hello" "handler sees the restored operand below it" assert=
+"hello" "handler sees the string below" assert=

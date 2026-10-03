@@ -16,3 +16,8 @@ use "testing" ;
 "while" word-markers [ loop-combinator = ] #filter #count 1 = t "while has loop-combinator" assert=
 "until" word-markers [ loop-combinator = ] #filter #count 1 = t "until has loop-combinator" assert=
 "loop" word-markers [ loop-combinator = ] #filter #count 1 = t "loop has loop-combinator" assert=
+
+"recovery-combinator markers" test-section
+
+"recover" word-markers [ recovery-combinator = ] #filter #count 1 = t "recover has recovery-combinator" assert=
+"recover" word-markers [ branch-combinator = ] #filter #count 0 = t "recover is not a branch-combinator" assert=

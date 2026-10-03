@@ -4,8 +4,8 @@ Stack: [ ]
 === a typed element check over a copied vector ===
 Stack: [ ]
 PASS: handler ran
-Stack: [ "hello" <vector(fixnum) V{ 1 }> <vector(fixnum) V{ 1 }> ]
-PASS: vector copy is unchanged
+Stack: [ "hello" <vector(fixnum) V{ 1 }> "hello" ]
+PASS: handler sees the restored element
 Stack: [ "hello" <vector(fixnum) V{ 1 }> ]
 PASS: vector is unchanged
 Stack: [ "hello" ]

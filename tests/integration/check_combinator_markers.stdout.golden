@@ -22,3 +22,9 @@ PASS: until has loop-combinator
 Stack: [ ]
 PASS: loop has loop-combinator
 Stack: [ ]
+=== recovery-combinator markers ===
+Stack: [ ]
+PASS: recover has recovery-combinator
+Stack: [ ]
+PASS: recover is not a branch-combinator
+Stack: [ ]

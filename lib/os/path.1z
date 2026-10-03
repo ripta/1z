@@ -153,9 +153,6 @@ private{
 
   \ The walk both public forms read. Normalize, reject the incomparable pairs, and drop the
   \ shared prefix. Each base segment left over is one `..` the answer leads with.
-  \
-  \ Both throw branches consume the operands first, because `recover` does not restore the
-  \ stack for the callers that catch.
   relative-segments: ( path base -- psegs bsegs ) [
     [ normalize ] dip normalize
     2dup [ "/" #starts-with? ] dip "/" #starts-with? xor
@@ -193,7 +190,7 @@ relative-path: ( path: string base: string -- rel ) [
 \\ option:none otherwise.
 relative-path?: ( path: string base: string -- option ) [
   [ relative-path >option:some ]
-  [ drop option:none ]
+  [ 3drop option:none ]
   recover
 ] ;
 
@@ -211,6 +208,6 @@ subpath?: ( path: string base: string -- option ) [
     [ 2drop option:none ]
     if
   ]
-  [ drop option:none ]
+  [ 3drop option:none ]
   recover
 ] ;

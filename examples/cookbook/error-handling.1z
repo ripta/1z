@@ -31,7 +31,7 @@ division-by-zero: "recover catches division by zero" assert=
 
 \ ignore-errors silently discards any error from the quotation.
 \ Use sparingly -- silent failure hides bugs.
-[ drop ] ignore-errors
+[ 1 0 / drop ] ignore-errors
 \ No crash, no error. Program continues.
 t "ignore-errors: survived" assert-true
 
@@ -45,11 +45,13 @@ t "ignore-errors: survived" assert-true
 20 "cleanup: cleanup result on top" assert=
 10 "cleanup: body result below" assert=
 
-\ Failure case -- cleanup still runs, then error propagates:
-[
-  [ [ drop ] [ 99 ] cleanup ] [ drop ] recover
-] call
-99 "cleanup: ran despite error" assert=
+\ Failure case -- cleanup still runs, then error propagates. The recover
+\ around it restores the stack it began with, so the cleanup records that it
+\ ran in a vector rather than on the stack:
+V{ } dup
+[ [ 1 0 / ] swap [ "cleaned" #push! drop ] curry cleanup ] curry
+[ drop ] recover
+#len 1 "cleanup: ran despite error" assert=
 
 "custom errors" test-section
 

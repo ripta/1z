@@ -162,8 +162,8 @@ use "os/path" ;
   swap  \ module filepath
   dup basename "_test.1z" #ends-with?
   [
-    (sibling-path)                                   \ module sibling-path
-    [ native.resolve-load-path ] [ drop f ] recover  \ module resolved-or-f
+    (sibling-path)                                    \ module sibling-path
+    [ native.resolve-load-path ] [ 2drop f ] recover  \ module resolved-or-f
     dup
     [
       module-cache get swap native.cached-module  \ module sibling-or-f

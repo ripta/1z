@@ -1,22 +1,29 @@
 === a tag guard after dropping an owned heap slot ===
 PASS: handler ran
-PASS: string below the raise
+PASS: handler sees the restored dropped slot
+PASS: handler sees the restored operand
+PASS: handler sees the string below
 === division by zero after a relabeling swap ===
 PASS: handler ran
-PASS: string below the raise
+PASS: handler sees the restored dividend
+PASS: handler sees the restored divisor
+PASS: handler sees the string below
 === division by zero over an unboxed sum ===
 PASS: handler ran
-PASS: unboxed sum below the raise
-PASS: string below the sum
+PASS: handler sees the restored divisor
+PASS: handler sees the restored dividend
+PASS: handler sees the restored second addend
+PASS: handler sees the restored first addend
+PASS: handler sees the string below
 === choose with a non-quotation selector after dropping an owned heap slot ===
 PASS: handler ran
-PASS: second arm copy
-PASS: first arm copy
-PASS: second arm
-PASS: first arm
-PASS: string below the arms
+PASS: handler sees the restored dropped slot
+PASS: handler sees the restored selector
+PASS: handler sees the restored second arm
+PASS: handler sees the restored first arm
+PASS: handler sees the string below the arms
 === an inline unwrap over a copied operand ===
 PASS: handler ran
-PASS: copy left by the unwrap
-PASS: original left by the unwrap
-PASS: string below the raise
+PASS: handler sees the restored unwrap operand
+PASS: handler sees the restored operand below it
+PASS: handler sees the string below

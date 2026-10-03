@@ -10,7 +10,7 @@ use "testing" ;
 
 nothing: ( -- ) [ ] ;
 
-error-type-of: ( quot -- sym ) [ [ call f ] [ error-type: @get ] recover ] ;
+error-type-of: ( quot -- sym ) [ [ call f ] [ error-type: @get nip ] recover ] ;
 
 "container literal with a missing element" test-section
 

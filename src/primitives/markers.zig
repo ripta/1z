@@ -60,6 +60,13 @@ pub const branch_combinator_marker: Marker = .{ .name = "branch-combinator" };
 /// Indicates the word repeatedly executes a quotation argument.
 pub const loop_combinator_marker: Marker = .{ .name = "loop-combinator" };
 
+/// Well-known marker for recovery combinators.
+/// Indicates the word runs a handler quotation in place of a try quotation that raised, from the
+/// same entry stack, so the two quotations' stack adjustments must agree.
+///
+/// Unlike a branch combinator, it does not carry tail position into its quotations.
+pub const recovery_combinator_marker: Marker = .{ .name = "recovery-combinator" };
+
 /// Well-known marker for words that dispatch over an open, non-exhaustive set
 /// of branches and fall through to `no-matching-branch` unless a default arm
 /// is present. Untied from the combinator family: open-dispatch and
@@ -362,6 +369,7 @@ pub const primitives = [_]Primitive{
     .{ .name = "inline", .stack_effect = "-- marker", .doc = "Push the well-known inline marker. The word's body is expanded into its callers instead of called.", .func = nativeInlineMarker, .parse_time = true },
     .{ .name = "branch-combinator", .stack_effect = "-- marker", .doc = "Push the well-known branch-combinator marker.", .func = nativeBranchCombinatorMarker, .parse_time = true },
     .{ .name = "loop-combinator", .stack_effect = "-- marker", .doc = "Push the well-known loop-combinator marker.", .func = nativeLoopCombinatorMarker, .parse_time = true },
+    .{ .name = "recovery-combinator", .stack_effect = "-- marker", .doc = "Push the well-known recovery-combinator marker. The handler arm runs from the try arm's entry stack, so the two must agree.", .func = nativeRecoveryCombinatorMarker, .parse_time = true },
     .{ .name = "partial-dispatch", .stack_effect = "-- marker", .doc = "Push the well-known partial-dispatch marker. Indicates open, non-exhaustive branch dispatch.", .func = nativePartialDispatchMarker, .parse_time = true },
     .{ .name = "shadow-ok", .stack_effect = "-- marker", .doc = "Push the well-known shadow-ok marker. Suppresses the import conflict check on `use` and `borrow`.", .func = nativeShadowOkMarker, .parse_time = true },
     .{ .name = "override", .stack_effect = "-- marker", .doc = "Push the well-known override marker. On a definition, claims permission to overwrite an existing binding.", .func = nativeOverrideMarker, .parse_time = true },
@@ -437,6 +445,11 @@ pub fn nativeBranchCombinatorMarker(ctx: *Context) anyerror!void {
 /// loop-combinator ( -- marker )
 pub fn nativeLoopCombinatorMarker(ctx: *Context) anyerror!void {
     try ctx.stack.push(.{ .marker = @constCast(&loop_combinator_marker) });
+}
+
+/// recovery-combinator ( -- marker )
+pub fn nativeRecoveryCombinatorMarker(ctx: *Context) anyerror!void {
+    try ctx.stack.push(.{ .marker = @constCast(&recovery_combinator_marker) });
 }
 
 /// partial-dispatch ( -- marker )
@@ -559,6 +572,11 @@ pub fn isLoopCombinatorMarker(mk: *const Marker) bool {
     return mk == &loop_combinator_marker;
 }
 
+/// Check if a marker is the well-known recovery-combinator marker
+pub fn isRecoveryCombinatorMarker(mk: *const Marker) bool {
+    return mk == &recovery_combinator_marker;
+}
+
 /// Check if a marker is the well-known partial-dispatch marker
 pub fn isPartialDispatchMarker(mk: *const Marker) bool {
     return mk == &partial_dispatch_marker;
@@ -650,6 +668,7 @@ pub fn lookupWellKnownMarker(name: []const u8) ?*Marker {
     if (std.mem.eql(u8, name, "inline")) return @constCast(&inline_marker);
     if (std.mem.eql(u8, name, "branch-combinator")) return @constCast(&branch_combinator_marker);
     if (std.mem.eql(u8, name, "loop-combinator")) return @constCast(&loop_combinator_marker);
+    if (std.mem.eql(u8, name, "recovery-combinator")) return @constCast(&recovery_combinator_marker);
     if (std.mem.eql(u8, name, "partial-dispatch")) return @constCast(&partial_dispatch_marker);
     if (std.mem.eql(u8, name, "shadow-ok")) return @constCast(&shadow_ok_marker);
     if (std.mem.eql(u8, name, "override")) return @constCast(&override_marker);

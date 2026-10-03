@@ -3,7 +3,6 @@ Stack: [ ]
 Stack: [ ]
 Stack: [ [ [ pub-word: [ "private" ] ; sibling-helper: [ 1 ] ; ] (import-locals-checked) ] ]
 PASS: conflicting private{ throws import-conflict
-Stack: [ <module:<local-scope> (2 words)> ]
 Stack: [ ]
 === A failing private{ imports none of the block's words ===
 Stack: [ ]

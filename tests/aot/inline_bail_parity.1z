@@ -1,9 +1,10 @@
 \ An inline guard that cannot finish in compiled code gives the interpreter's result: the native's
-\ value, or its error with the stack the native leaves. An AOT bail has no interpreter to resume
-\ into, so each guard calls the native or raises the native's error itself.
+\ value or its error. An AOT bail has no interpreter to resume into, so each guard calls the native
+\ or raises the native's error itself.
 \
-\ The program avoids `inspect` and the testing library so the same source runs in every class. A
-\ value a raise leaves behind by mistake would sit on top, where the next check reads it.
+\ The program avoids `inspect` and the testing library so the same source runs in every class.
+\ `recover` restores the entry stack, so each case checks the restored operands. A slot a compiled
+\ raise left unowned would crash or double-release when the restore releases it.
 
 heap: ( -- s ) [ "hel" "lo" #append ] ;
 
@@ -30,13 +31,19 @@ repeat-label: ( n: float s: string -- r ) [
 ] ;
 
 heap 7 0 [ int-div ] [ division-by-zero: error-is "div by zero raises division-by-zero" check ] recover
-"hello" = "div by zero leaves the string below" check
+0 = "div by zero restores the divisor" check
+7 = "div by zero restores the dividend" check
+"hello" = "div by zero restores the string below" check
 
 heap 7 0 [ int-rem ] [ division-by-zero: error-is "rem by zero raises division-by-zero" check ] recover
-"hello" = "rem by zero leaves the string below" check
+0 = "rem by zero restores the divisor" check
+7 = "rem by zero restores the dividend" check
+"hello" = "rem by zero restores the string below" check
 
 heap "x" 2 [ int-div ] [ type-mismatch: error-is "div of a string raises type-mismatch" check ] recover
-"hello" = "div of a string leaves the string below" check
+2 = "div of a string restores the divisor" check
+"x" = "div of a string restores the string dividend" check
+"hello" = "div of a string restores the string below" check
 
 -9223372036854775808 -1 int-div 9223372036854775807 > "minInt div -1 promotes" check
 -9223372036854775808 -1 int-rem 0 = "minInt rem -1 is zero" check
@@ -44,17 +51,20 @@ heap "x" 2 [ int-div ] [ type-mismatch: error-is "div of a string raises type-mi
 9223372036854775807 1 add2 9223372036854775807 > "fixnum + overflow promotes" check
 
 heap 7 0 [ div2 ] [ division-by-zero: error-is "fixnum / by zero raises division-by-zero" check ] recover
-"hello" = "fixnum / by zero leaves the string below" check
+0 = "fixnum / by zero restores the divisor" check
+7 = "fixnum / by zero restores the dividend" check
+"hello" = "fixnum / by zero restores the string below" check
 
 heap 7 0 [ mod2 ] [ division-by-zero: error-is "fixnum % by zero raises division-by-zero" check ] recover
-"hello" = "fixnum % by zero leaves the string below" check
+0 = "fixnum % by zero restores the divisor" check
+7 = "fixnum % by zero restores the dividend" check
+"hello" = "fixnum % by zero restores the string below" check
 
 heap 1 2 "not a quotation" [ pick-of ] [ type-mismatch: error-is "choose on a non-quotation raises type-mismatch" check ] recover
-2 = "second arm copy" check
-1 = "first arm copy" check
-2 = "second arm" check
-1 = "first arm" check
-"hello" = "choose leaves the string below" check
+"not a quotation" = "choose restores the selector" check
+2 = "choose restores the second arm" check
+1 = "choose restores the first arm" check
+"hello" = "choose restores the string below" check
 
 1 2 t [ [ 2drop ] dip ] curry pick-of 1 = "choose runs a closure selector" check
 
@@ -62,12 +72,9 @@ heap 1 2 "not a quotation" [ pick-of ] [ type-mismatch: error-is "choose on a no
 2.5 count-up 3 = "times with a float count" check
 2.5 "ab" repeat-label "ababab" = "times with a float count over a quotation reading a local" check
 heap "x" [ count-up ] [ type-mismatch: error-is "times with a string count raises type-mismatch" check ] recover
-quotation? "quotation left by times" check
-"x" = "string count left by times" check
-0 = "accumulator left by times" check
-"hello" = "times leaves the string below" check
+"x" = "times restores the string count" check
+"hello" = "times restores the string below" check
 
 \ A compiled word checks its inputs on entry, so this case needs a stack holding fewer values than
-\ the word takes. Only the error is checked: the interpreter's `+` pops the one value before it
-\ underflows, and the entry check raises before the body runs, leaving that value in place.
+\ the word takes.
 [ 1 add-two ] [ stack-underflow: error-is "a call short of inputs raises stack-underflow" check ] recover

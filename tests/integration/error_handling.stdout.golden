@@ -11,7 +11,7 @@ Stack: [ ]
 Stack: [ ]
 PASS: ignore-errors continues after error
 Stack: [ ]
-PASS: ignore-errors success value
+PASS: ignore-errors runs a successful quotation
 Stack: [ ]
 === Nested recover ===
 Stack: [ ]

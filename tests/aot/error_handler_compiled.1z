@@ -8,7 +8,7 @@ safe-succeed: ( -- n ) [ [ 42 ] [ drop 0 ] recover ] ;
 safe-succeed .
 
 \ -- recover: body throws, handler runs --
-safe-div: ( a b -- n ) [ [ / ] [ drop 99 ] recover ] ;
+safe-div: ( a b -- n ) [ [ / ] [ 3drop 99 ] recover ] ;
 10 0 safe-div .
 
 \ -- cleanup: body succeeds, cleanup runs --

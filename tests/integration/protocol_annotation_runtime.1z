@@ -31,16 +31,13 @@ test-error-type-is-protocol-error: ( -- ) [
 ] ;
 
 test-error-message-names-protocol: ( -- ) [
-  [ 7 >rock flap ]
+  [ 7 >rock flap drop ]
   [
-    \ Handler receives the error value on top; the body's residual <rock 7>
-    \ sits beneath it. Inspect the error fields, then drop the residual.
     dup "error-type" @get protocol-error: "error type" assert=
     "message" @get
     dup "flyable" #in? "message contains protocol name" assert-true
     dup "rock" #in? "message contains actual type name" assert-true
     "x" #in? "message contains parameter name" assert-true
-    drop
   ]
   recover
 ] ;

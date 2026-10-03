@@ -31,8 +31,15 @@ nested: [ dup 0 > [ dup 1 > [ 1 - nested ] when ] [ drop ] if ] ;
 [ bad2: [ dup 0 > [ bad2 1 + ] [ drop ] if ] ;
 ] ENonTailRecursion "non-tail inside branch arm" assert-error-type
 
+"self-call ending a recover body" test-section
+
+\ 7. recover is a recovery combinator, not a branch combinator, so tail position does not
+\ reach its quotations
+[ bad3: [ [ bad3 ] [ drop ] recover ] ;
+] ENonTailRecursion "self-call ending a recover body is non-tail" assert-error-type
+
 "no self-call" test-section
 
-\ 7. No self-call at all works normally
+\ 8. No self-call at all works normally
 plain: [ 1 2 + ] ;
 3 plain = t "plain word works" assert=

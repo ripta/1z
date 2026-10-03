@@ -323,7 +323,7 @@ definition-symbol?: ( token -- ? ) [
 \\ error is stashed via set-lint-semantic-context-error so (lint-file) can
 \\ report it instead of letting semantic rules silently see no words.
 (build-semantic-context): ( path -- semantic-context-or-f ) [
-  [ (lint-load-cache) swap native.load-check-file ] [ set-lint-semantic-context-error f ] recover
+  [ (lint-load-cache) swap native.load-check-file ] [ nip set-lint-semantic-context-error f ] recover
   dup f = [ ] [
     dup @keys
     H{ }
@@ -359,7 +359,7 @@ semantic-word-names: ( semantic-context -- array ) [
 
 \ Load a module in check mode via the lint cache, or f on failure.
 (lint-fallback-load): ( resolved-path -- module/f ) [
-  [ (lint-load-cache) swap native.load-check-file ] [ drop f ] recover
+  [ (lint-load-cache) swap native.load-check-file ] [ 2drop f ] recover
 ] ;
 
 \\ Load a module by resolved path using the lint cache, returning exported word
@@ -462,11 +462,11 @@ format-diagnostic: ( lint-diagnostic -- string ) [
 
 (preload-lint-file): ( path -- ) [
   (ensure-lint-file-exists)
-  [ (lint-load-cache) swap native.load-check-file drop ] [ drop ] recover
+  [ (lint-load-cache) swap native.load-check-file drop ] [ 2drop ] recover
 ] ;
 
 (compute-dead-definitions): ( files -- array/f ) [
-  [ (lint-load-cache) swap native.dead-definitions ] [ drop f ] recover
+  [ (lint-load-cache) swap native.dead-definitions ] [ 2drop f ] recover
 ] ;
 
 \ --- Circular dependency detection (token-level, runs before preload) ---
@@ -491,13 +491,13 @@ format-diagnostic: ( lint-diagnostic -- string ) [
 \ against the working directory, since a lint path comes from the command line rather than from a
 \ `use` statement.
 (canonical-file-path): ( path -- canonical/f ) [
-  [ canonical-path ] [ drop f ] recover
+  [ canonical-path ] [ 2drop f ] recover
 ] ;
 
 \ Canonical path of a module name the loader would find on its search paths, or f when nothing
 \ resolves.
 (canonical-module-path): ( name -- canonical/f ) [
-  [ native.resolve-load-path ] [ drop f ] recover
+  [ native.resolve-load-path ] [ 2drop f ] recover
 ] ;
 
 \ Record one checked file under its canonical path. A file that does not resolve contributes

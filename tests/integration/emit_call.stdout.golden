@@ -13,4 +13,4 @@ Stack: [ ]
 === emit-call outside parse time ===
 Stack: [ ]
 PASS: parse time
-Stack: [ helper-add1: ]
+Stack: [ ]

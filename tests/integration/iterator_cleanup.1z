@@ -165,5 +165,5 @@ cleaned: @get "using-iterator cleanup ran on normal exit" assert-true
 dup [ cleaned: t @set! drop ] curry
 counter5-gen swap
 >iterator(with-cleanup)
-[ [ #next drop "boom" throw ] using-iterator ] [ drop ] recover
+[ [ #next drop "boom" throw ] using-iterator ] [ 2drop ] recover
 cleaned: @get "using-iterator cleanup ran on error exit" assert-true

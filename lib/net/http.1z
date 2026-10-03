@@ -126,11 +126,10 @@ with-requests-per-connection: ( count quot -- ) [ requests-per-connection swap w
 \\ Read the next request line under the idle-connection timeout.
 \\
 \\ Returns `option:none` on a clean close and, uniformly, on an idle timeout, so the
-\\ loop terminates in both cases. Returns `option:some` the line otherwise. `recover`
-\\ stays terminal so the timeout throw lands on a clean stack.
+\\ loop terminates in both cases. Returns `option:some` the line otherwise.
 (read-request-line-timed?): ( stream -- option ) [
   [ [ (read-request-line?) ] curry idle-connection-timeout get with-timeout ]
-  [ drop option:none ]
+  [ 2drop option:none ]
   recover
 ] ;
 
@@ -495,7 +494,7 @@ static-file-handler: ( stream request doc-root -- ) [
   dup "/" #starts-with? [ 1 #drop ] when
   path-join
   dup extension for-extension swap
-  [ read: stream-open dup stream-read-all swap stream-close ] try
+  [ read: stream-open dup stream-read-all swap stream-close ] curry try
   dup result:ok?
   [ unwrap-or-throw swap ok send-response ]
   [ drop drop not-found send-response ]

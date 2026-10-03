@@ -14,6 +14,7 @@ use "lua" ;
 
   \ the raised error carries the numeric status code and the Lua message
   dup [ "return 1 +" eval ] [
+    nip
     dup data: @get fixnum? "ELuaError carries the numeric status code" assert-true
     message: @get #len 0 > "ELuaError carries a non-empty message" assert-true
   ] recover

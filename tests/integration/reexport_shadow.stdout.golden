@@ -2,7 +2,6 @@
 Stack: [ ]
 Stack: [ [ "strict_use_mod_b.1z" load reexport ] ]
 PASS: conflicting reexport throws import-conflict
-Stack: [ <module:strict_use_mod_b.1z (2 words)> ]
 Stack: [ ]
 === A failing reexport imports none of the module's words ===
 Stack: [ ]

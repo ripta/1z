@@ -19,7 +19,6 @@ Stack: [ ]
 === Module without import ===
 Stack: [ ]
 "add3 not visible - correct"
-Stack: [ 5 ]
 Stack: [ ]
 === Module stored in variable ===
 Stack: [ ]
@@ -58,7 +57,6 @@ Stack: [ ]
 20
 Stack: [ ]
 "quadruple not visible - correct"
-Stack: [ 100 ]
 Stack: [ ]
 === Module accessors @has? ===
 Stack: [ ]
@@ -121,10 +119,10 @@ Stack: [ ]
 Stack: [ ]
 Stack: [ ]
 PASS: empty array error
-Stack: [ <module:module_lib.1z (3 words)> ]
+Stack: [ ]
 PASS: missing word error
-Stack: [ <module:module_lib.1z (3 words)> ]
+Stack: [ ]
 PASS: non-symbol error
-Stack: [ <module:module_lib.1z (3 words)> ]
+Stack: [ ]
 PASS: integer instead of module error
-Stack: [ <module:module_lib.1z (3 words)> ]
+Stack: [ ]

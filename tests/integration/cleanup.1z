@@ -7,5 +7,6 @@ use "testing" ;
 
 "Cleanup runs on error" test-section
 \ cleanup executes, then error propagates
-[ [ drop ] [ 99 ] cleanup ] [ drop ] recover
-99 "cleanup executed before error" assert=
+\ recover restores the entry stack, so the cleanup records into a vector instead of pushing
+V{ } dup [ [ 1 0 / ] swap [ 99 #push! drop ] curry cleanup ] curry [ drop ] recover
+#len 1 "cleanup executed before error" assert=

@@ -351,7 +351,9 @@ unless: branch-combinator ( ? quot -- ) [ [ ] swap if ] ;
 
 \ Error-handling
 \\ Execute a quotation, silently discarding any error.
-ignore-errors: ( quot -- ) [ [ drop ] recover ] ;
+\\
+\\ The quotation takes no inputs. Partially apply any it needs with `curry` first.
+ignore-errors: ( quot: ( -- ) -- ) [ [ drop ] recover ] ;
 \\ Test whether a value is an error object.
 error?: ( val -- ? ) [ type-of error = ] ;
 \\ Test whether an error matches a given error type symbol.
@@ -670,7 +672,7 @@ stream-read(exact): ( stream n -- bytes ) [ B{ } swap (stream-read-exact-step) ]
   dup #len 0 = [
     drop nip
   ] [
-    pick over [ stream-write ] [ drop -1 ] recover
+    pick over [ stream-write ] [ 3drop -1 ] recover
     dup 0 <= [
       drop drop nip
     ] [
@@ -1301,7 +1303,9 @@ unwrap-or-throw: method{ result } [ dup result:ok? [ unmake-result:ok ] [ unmake
 ?flatten: method{ result } [ dup result:ok? [ unmake-result:ok ] when ] ;
 
 \\ Call a quotation, wrapping success in result:ok and thrown errors in result:err.
-try: ( ..a quot: ( ..a -- x ) -- result ) [ [ call >result:ok ] [ >result:err ] recover ] ;
+\\
+\\ The quotation takes no inputs. Partially apply any it needs with `curry` first.
+try: ( quot: ( -- x ) -- result ) [ [ call >result:ok ] [ nip >result:err ] recover ] ;
 
 \\ Look up a key in an associative, returning some(value) or none.
 @get?: ( assoc key -- option ) [ 2dup @has? [ @get >option:some ] [ 2drop option:none ] if ] ;
@@ -1322,13 +1326,13 @@ vmap-get?: ( vmap key -- option ) [ 2dup vmap-has? [ vmap-get >option:some ] [ 2
 vmap-get-or: ( vmap key default -- value ) [ -rot> 2dup vmap-has? [ vmap-get nip ] [ 2drop ] if ] ;
 
 \\ Get the nth element of a sequence, returning some(value) or none if out of bounds.
-#nth?: ( seq n -- option ) [ [ #nth >option:some ] [ drop option:none ] recover ] ;
+#nth?: ( seq n -- option ) [ [ #nth >option:some ] [ 3drop option:none ] recover ] ;
 
 \\ Get the first element of a sequence, returning some(value) or none if empty.
-#first?: ( seq -- option ) [ [ #first >option:some ] [ drop option:none ] recover ] ;
+#first?: ( seq -- option ) [ [ #first >option:some ] [ 2drop option:none ] recover ] ;
 
 \\ Get the last element of a sequence, returning some(value) or none if empty.
-#last?: ( seq -- option ) [ [ #last >option:some ] [ drop option:none ] recover ] ;
+#last?: ( seq -- option ) [ [ #last >option:some ] [ 2drop option:none ] recover ] ;
 
 \\ Test if sequence starts with prefix.
 #starts-with?: ( seq prefix -- ? ) [
@@ -1363,7 +1367,7 @@ vmap-get-or: ( vmap key default -- value ) [ -rot> 2dup vmap-has? [ vmap-get nip
 #index-of: method{ vector any } [ swap >iterator swap 0 (index-of-loop) ] ;
 
 \\ Try to receive from a channel. Returns some(value) on success, none if closed and empty.
-receive?: ( ch -- option ) [ [ receive >option:some ] [ drop option:none ] recover ] ;
+receive?: ( ch -- option ) [ [ receive >option:some ] [ 2drop option:none ] recover ] ;
 
 \\ Create an iterator. Accepts a sequence (delegates to the native), a quotation
 \\ returning option values (wraps to the raw flag convention and creates a callback
@@ -1388,7 +1392,7 @@ receive?: ( ch -- option ) [ [ receive >option:some ] [ drop option:none ] recov
 ] ;
 
 \\ Advance an iterator, returning some(value) or none if exhausted.
-#next?: ( iter -- option ) [ [ #next >option:some ] [ drop option:none ] recover ] ;
+#next?: ( iter -- option ) [ [ #next >option:some ] [ 2drop option:none ] recover ] ;
 
 \\ Close an iterator, running its cleanup quotation if present.
 \\ Propagates through adapter chains (#map, #filter, #take, #drop).
@@ -1622,7 +1626,7 @@ private(shadow-ok){: parse-time [ "}" parse-until import-locals: emit-call ] ;
 private{: parse-time [ "}" parse-until (import-locals-checked): emit-call ] ;
 
 \\ Safe variant of >word-info that returns an option instead of throwing.
->word-info?: ( symbol -- option ) [ [ >word-info >option:some ] [ drop option:none ] recover ] ;
+>word-info?: ( symbol -- option ) [ [ >word-info >option:some ] [ 2drop option:none ] recover ] ;
 
 \\ Return the value of a pragma as an option, or none if unset.
 pragma-get?: ( name -- option ) [ native.pragma-get-raw [ >option:some ] [ option:none ] if ] ;
@@ -1647,23 +1651,23 @@ descriptor-kind:     ( descriptor -- symbol ) [ native.descriptor-kind ] ;
 \\ Field names of a descriptor as an array of strings, or option:none if the
 \\ kind has no fields concept.
 descriptor-fields?: ( descriptor -- option ) [
-  [ native.descriptor-fields-raw >option:some ] [ drop option:none ] recover
+  [ native.descriptor-fields-raw >option:some ] [ 2drop option:none ] recover
 ] ;
 
 \\ Field type annotations of a descriptor, or option:none if the descriptor
 \\ carries no annotations (e.g., an untyped struct).
 descriptor-field-types?: ( descriptor -- option ) [
-  [ native.descriptor-field-types-raw >option:some ] [ drop option:none ] recover
+  [ native.descriptor-field-types-raw >option:some ] [ 2drop option:none ] recover
 ] ;
 
 \\ Inner-type for a virtual or enum-variant descriptor, or option:none.
 descriptor-inner-type?: ( descriptor -- option ) [
-  [ native.descriptor-inner-type-raw >option:some ] [ drop option:none ] recover
+  [ native.descriptor-inner-type-raw >option:some ] [ 2drop option:none ] recover
 ] ;
 
 \\ Parent type for an enum-variant descriptor, or option:none.
 descriptor-parent?: ( descriptor -- option ) [
-  [ native.descriptor-parent-raw >option:some ] [ drop option:none ] recover
+  [ native.descriptor-parent-raw >option:some ] [ 2drop option:none ] recover
 ] ;
 
 \\ Declared or bound type parameters of a struct or parameterized descriptor, or option:none
@@ -1672,7 +1676,7 @@ descriptor-parent?: ( descriptor -- option ) [
 \\ Struct descriptors return their declared parameter holes. Parameterized virtual descriptors
 \\ return the bound tuple (i.e., a mix of concrete types and still-open parameter holes).
 descriptor-type-params?: ( descriptor -- option ) [
-  [ native.descriptor-type-params-raw >option:some ] [ drop option:none ] recover
+  [ native.descriptor-type-params-raw >option:some ] [ 2drop option:none ] recover
 ] ;
 
 \\ Variants of an enum descriptor as an array of descriptor-variant structs,
@@ -1682,17 +1686,17 @@ descriptor-variants?: ( descriptor -- option ) [
     native.descriptor-variants-raw
     [ dup 0 #nth swap 1 #nth make-descriptor-variant ] #map #collect
     >option:some
-  ] [ drop option:none ] recover
+  ] [ 2drop option:none ] recover
 ] ;
 
 \\ Resource-kind string for a resource descriptor, or option:none.
 descriptor-resource-kind?: ( descriptor -- option ) [
-  [ native.descriptor-resource-kind-raw >option:some ] [ drop option:none ] recover
+  [ native.descriptor-resource-kind-raw >option:some ] [ 2drop option:none ] recover
 ] ;
 
 \\ FFI layout pointer (as fixnum) for an ffi-struct descriptor, or option:none.
 descriptor-ffi-layout?: ( descriptor -- option ) [
-  [ native.descriptor-ffi-layout-raw >option:some ] [ drop option:none ] recover
+  [ native.descriptor-ffi-layout-raw >option:some ] [ 2drop option:none ] recover
 ] ;
 
 \\ local{ a b c } binds the top three stack values to a, b, c (leftmost deepest).

@@ -43,4 +43,4 @@ Stack: [ ]
 Stack: [ ]
 Stack: [ ]
 PASS: non-fixnum count re-runs interpreted and raises there
-Stack: [ "hello" [ ] ]
+Stack: [ ]

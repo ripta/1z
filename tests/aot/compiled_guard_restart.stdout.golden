@@ -6,7 +6,9 @@ PASS: the promoted loop keeps counting
 PASS: div of two fixnums
 PASS: minInt div -1 promotes
 PASS: div by zero raises division-by-zero
-PASS: div by zero leaves the string below
+PASS: div by zero restores the divisor
+PASS: div by zero restores the dividend
+PASS: div by zero restores the string below
 PASS: rem of two fixnums
 PASS: minInt rem -1 is zero
 PASS: minInt % -1 is zero

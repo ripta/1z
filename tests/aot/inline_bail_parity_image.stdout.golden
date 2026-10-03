@@ -1,29 +1,36 @@
 PASS: div by zero raises division-by-zero
-PASS: div by zero leaves the string below
+PASS: div by zero restores the divisor
+PASS: div by zero restores the dividend
+PASS: div by zero restores the string below
 PASS: rem by zero raises division-by-zero
-PASS: rem by zero leaves the string below
+PASS: rem by zero restores the divisor
+PASS: rem by zero restores the dividend
+PASS: rem by zero restores the string below
 PASS: div of a string raises type-mismatch
-PASS: div of a string leaves the string below
+PASS: div of a string restores the divisor
+PASS: div of a string restores the string dividend
+PASS: div of a string restores the string below
 PASS: minInt div -1 promotes
 PASS: minInt rem -1 is zero
 PASS: fixnum + overflow promotes
 PASS: fixnum / by zero raises division-by-zero
-PASS: fixnum / by zero leaves the string below
+PASS: fixnum / by zero restores the divisor
+PASS: fixnum / by zero restores the dividend
+PASS: fixnum / by zero restores the string below
 PASS: fixnum % by zero raises division-by-zero
-PASS: fixnum % by zero leaves the string below
+PASS: fixnum % by zero restores the divisor
+PASS: fixnum % by zero restores the dividend
+PASS: fixnum % by zero restores the string below
 PASS: choose on a non-quotation raises type-mismatch
-PASS: second arm copy
-PASS: first arm copy
-PASS: second arm
-PASS: first arm
-PASS: choose leaves the string below
+PASS: choose restores the selector
+PASS: choose restores the second arm
+PASS: choose restores the first arm
+PASS: choose restores the string below
 PASS: choose runs a closure selector
 PASS: times with a fixnum count
 PASS: times with a float count
 PASS: times with a float count over a quotation reading a local
 PASS: times with a string count raises type-mismatch
-PASS: quotation left by times
-PASS: string count left by times
-PASS: accumulator left by times
-PASS: times leaves the string below
+PASS: times restores the string count
+PASS: times restores the string below
 PASS: a call short of inputs raises stack-underflow

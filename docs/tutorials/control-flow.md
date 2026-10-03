@@ -366,14 +366,29 @@ Output:
 division-by-zero:
 ```
 
+The handler starts from the stack the body started from. Whatever the body
+consumed comes back, and whatever it pushed before failing is gone. So a
+handler drops the body's inputs along with the error:
+
+```
+10 0 [ / ] [ 3drop 0 ] recover .
+```
+
+Output:
+
+```
+0
+```
+
 ### `try` -- Wrap the Result
 
 `try` runs a quotation and wraps the outcome: success yields `result:ok`,
-failure yields `result:err`.
+failure yields `result:err`. The quotation takes no inputs, so give it any
+values it needs with `curry`.
 
 ```
 [ 42 ] try .
-[ 1 0 / ] try .
+1 0 [ / ] curry curry try .
 ```
 
 Output:

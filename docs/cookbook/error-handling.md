@@ -31,10 +31,19 @@ Output:
 42
 ```
 
+The handler starts from the stack the body started from, with the error on
+top. Values the body consumed come back, and values it pushed before failing
+are gone. A handler therefore drops the body's inputs along with the error:
+
+```
+"config.txt" [ read-file ] [ 2drop "" ] recover
+```
+
 ## `try` -- exceptions to results
 
-`try` wraps the outcome in `result:ok` or `result:err`. Combine with
-`unwrap-or` for a default value on failure:
+`try` wraps the outcome in `result:ok` or `result:err`. Its quotation takes no
+inputs, so pass it values with `curry`. Combine with `unwrap-or` for a default
+value on failure:
 
 ```
 [ 42 ] try 0 unwrap-or .
@@ -47,7 +56,7 @@ Output:
 ```
 
 ```
-[ 1 0 / ] try 0 unwrap-or .
+1 0 [ / ] curry curry try 0 unwrap-or .
 ```
 
 Output:
@@ -58,11 +67,11 @@ Output:
 
 ## `ignore-errors` -- best-effort operations
 
-`ignore-errors` silently discards any error. Use sparingly -- silent failure
-hides bugs.
+`ignore-errors` silently discards any error. Its quotation takes no inputs.
+Use sparingly -- silent failure hides bugs.
 
 ```
-[ drop ] ignore-errors
+[ 1 0 / drop ] ignore-errors
 \ program continues
 ```
 
@@ -81,18 +90,21 @@ Output:
 \ stack: 10 20
 ```
 
-When the body throws, cleanup still runs, then the error propagates:
+When the body throws, cleanup still runs, then the error propagates. A
+`recover` around it restores the stack it began with, so this cleanup records
+that it ran in a vector rather than on the stack:
 
 ```
-[
-  [ [ drop ] [ 99 ] cleanup ] [ drop ] recover
-] call .
+V{ } dup
+[ [ 1 0 / ] swap [ "cleaned" #push! drop ] curry cleanup ] curry
+[ drop ] recover
+.
 ```
 
 Output:
 
 ```
-99
+V{ "cleaned" }
 ```
 
 ## Custom errors

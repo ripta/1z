@@ -26,7 +26,7 @@ using-file-lock: ( ..a stream mode quot: ( ..a stream -- ..b ) -- ..b ) [
 \ flock contends with any lock held through another descriptor.
 (probe-lockable?): ( path -- bool ) [
   read: stream-open
-  dup [ stream>fd "LOCK_EX" posix-const "LOCK_NB" posix-const bitor flock drop t ] [ drop f ] recover
+  dup [ stream>fd "LOCK_EX" posix-const "LOCK_NB" posix-const bitor flock drop t ] [ 2drop f ] recover
   over stream>fd "LOCK_UN" posix-const flock drop
   swap stream-close
 ] ;

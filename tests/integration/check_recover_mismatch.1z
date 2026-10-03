@@ -1,0 +1,13 @@
+\ `1z check` holds a recover's handler to its try quotation. Both start from the same entry
+\ stack, so they must leave the same stack, with the handler also taking the error.
+
+(boom): never-returns ( -- * ) [ f "boom" EInvalidArgument make-error throw ] ;
+
+agreeing: ( seq n -- option ) [ [ #nth >option:some ] [ 3drop option:none ] recover ] ;
+
+miscounted: ( seq n -- option ) [ [ #nth >option:some ] [ drop option:none ] recover ] ;
+
+always-raises: ( -- ) [
+  [ (boom) ] [ rethrow ] recover
+  "unreachable" print-line
+] ;

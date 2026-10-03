@@ -7,18 +7,20 @@ Stack: [ ]
 === a struct field read after dropping an owned heap slot ===
 Stack: [ ]
 PASS: handler ran
+Stack: [ "hello" "hello" "hello" ]
+PASS: the dropped string operand is restored
 Stack: [ "hello" "hello" ]
-PASS: operand left by the failed dispatch
+PASS: the struct operand slot is restored
 Stack: [ "hello" ]
-PASS: string below the raise
+PASS: string below the raise is restored
 Stack: [ ]
 === a struct field write after a relabeling swap ===
 Stack: [ ]
 PASS: handler ran
-Stack: [ "hello" "hello" 5 ]
-PASS: value left by the failed write
-Stack: [ "hello" "hello" ]
-PASS: operand left by the failed write
+Stack: [ "hello" 5 "hello" ]
+PASS: the struct operand slot is restored
+Stack: [ "hello" 5 ]
+PASS: the value operand is restored
 Stack: [ "hello" ]
-PASS: string below the raise
+PASS: string below the raise is restored
 Stack: [ ]

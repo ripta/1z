@@ -24,7 +24,7 @@ connect-when-ready: ( addr -- stream ) [
 ] ;
 
 connect-loop: ( addr n -- stream ) [
-  over [ connect ] [ drop f ] recover
+  over [ connect ] [ 2drop f ] recover
   dup f =
   [ drop 1 - dup 0 <=
     [ drop connect ]

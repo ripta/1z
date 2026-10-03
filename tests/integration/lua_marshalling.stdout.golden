@@ -1,5 +1,4 @@
 Stack: [ ]
-Stack: [ ]
 === lua eval result option ===
 Stack: [ ]
 PASS: eval of a statement returns option:none

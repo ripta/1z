@@ -1,6 +1,8 @@
 PASS: an unwrap of a string raises type-mismatch
-PASS: copy left by the unwrap
-PASS: original left by the unwrap
-PASS: unwrap leaves the string below
+PASS: the unwrapped operand is restored
+PASS: the string operand is restored
+PASS: the string below the unwrap is restored
 PASS: + of a string raises type-mismatch
-PASS: + of a string leaves the string below
+PASS: the fixnum operand of + is restored
+PASS: the string operand of + is restored
+PASS: the string below + is restored

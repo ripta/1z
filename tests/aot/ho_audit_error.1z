@@ -9,5 +9,5 @@
 "try-err" print-line
 
 \ -- ignore-errors --
-[ 1 0 / ] ignore-errors
+[ 1 0 / drop ] ignore-errors
 "after-ignore" print-line

@@ -81,8 +81,9 @@ swap [ ffi-call ] curry curry
 \\ When called: pushes callback, pushes ffi-fn, runs ffi-call.
 \\ ffi-call pops ffi-fn, then pops 3 args from stack.
 [ [ 1 2 ] dip call ]
-[ error-type: @get test-error: = "callback error propagates" assert-true ]
+[ nip error-type: @get test-error: = "callback error propagates" assert-true ]
 recover
+resource-close
 
 \\ --- Callback body capturing an outer local ---
 \\ The callback body closes over a local bound before it, exercising the fix that lets

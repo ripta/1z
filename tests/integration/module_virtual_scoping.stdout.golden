@@ -10,24 +10,24 @@ Stack: [ ]
 === Virtual words not in global scope without import ===
 Stack: [ ]
 PASS: >meters not in global scope
-Stack: [ 42 ]
+Stack: [ ]
 === Qualified access works for virtual words ===
-Stack: [ 42 ]
+Stack: [ ]
 PASS: qualified wrap and unwrap
-Stack: [ 42 ]
+Stack: [ ]
 PASS: qualified predicate true
-Stack: [ 42 ]
+Stack: [ ]
 PASS: qualified predicate false
-Stack: [ 42 ]
+Stack: [ ]
 === Selective import works for virtual words ===
-Stack: [ 42 ]
-Stack: [ 42 ]
-Stack: [ 42 ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
 PASS: selective import wrap and unwrap
-Stack: [ 42 ]
+Stack: [ ]
 === Full import works for virtual words ===
-Stack: [ 42 ]
+Stack: [ ]
 PASS: full import predicate
-Stack: [ 42 ]
+Stack: [ ]
 PASS: full import unwrap
-Stack: [ 42 ]
+Stack: [ ]

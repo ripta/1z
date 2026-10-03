@@ -21,7 +21,7 @@ PASS: file-lock-error carries the ebadf name
 PASS: file-lock-error carries the raw errno integer
 === try-file-lock file-lock-error on bad descriptor ===
 PASS: try-file-lock bad descriptor raises file-lock-error
-PASS: try-file-lock leaves only the caller's stream after a failed acquire
+PASS: handler sees the restored stream after a failed acquire
 === using-file-lock file-lock-error under a scheduler ===
 PASS: cooperative acquire recorded one outcome
 PASS: cooperative-path bad descriptor raises file-lock-error

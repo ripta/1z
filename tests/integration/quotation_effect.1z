@@ -7,10 +7,9 @@ use "testing" ;
 5 [ ( n -- n ) dup drop ] call 5 "effect (n -- n) with 5" assert=
 
 "Effect violation recovery" test-section
-\ When effect check fails after dup, stack has extra value
+\ The effect check fails after dup leaves an extra value. recover restores the entry 5.
 5 [ ( n -- n ) dup ] [ drop "PASS: wrong effect caught" print-line ] recover
-\ Clean up: dup ran leaving 5 5, recover left one 5
-drop drop
+5 "recover restores the entry value" assert=
 
 "Empty effect" test-section
 [ ( -- ) ] call

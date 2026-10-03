@@ -50,11 +50,9 @@ TEST-LEXER: const [
 message: @get
 dup "expected expression" #in? "unexpected operator mentions expected expression" assert-true
 "byte 0" #in? "unexpected operator includes byte offset" assert-true
-wipe
 
 "error: missing close paren" test-section
 [ "(1 + 2" (eval) ] [ ] recover
 message: @get
 dup "expected ')'" #in? "missing close paren mentions expected token" assert-true
 "end of input" #in? "missing close paren mentions end of input" assert-true
-wipe

@@ -7,7 +7,7 @@ use "testing" ;
 
 FAILING: "fixtures/load_raises_after_define.1z" ;
 
-(do-load): ( name -- ) [ [ load ] [ drop f ] recover drop ] ;
+(do-load): ( name -- ) [ [ load ] [ 2drop f ] recover drop ] ;
 
 (one-local): ( name -- before top after ) [
   m: swap ;

@@ -90,7 +90,7 @@ use "time" ;
       ] each
     ] using-watcher
   ] [ drop ] recover
-  3drop
+  drop
 ] (with-supported-watch-file)
 
 "polling using-watcher closes on exit" test-section

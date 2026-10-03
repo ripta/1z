@@ -1,5 +1,6 @@
-\ The raising inline guards in an interpreter-free binary leave the stack the interpreter leaves. The
-\ testing library does not build in this class, so the checks compare and print by hand.
+\ The raising inline guards in an interpreter-free binary run, and the restore releases what they
+\ left, so the stack after the catch is the entry stack. The testing library does not build in this
+\ class, so the checks compare and print by hand.
 
 money: virtual{ fixnum } ;
 
@@ -12,9 +13,11 @@ over-then-unwrap: ( s m -- s s n ) [ over swap unmake-money ] ;
 add-any: ( a b -- c ) [ + ] ;
 
 heap heap heap [ over-then-unwrap ] [ type-mismatch: error-is "an unwrap of a string raises type-mismatch" check ] recover
-"hello" = "copy left by the unwrap" check
-"hello" = "original left by the unwrap" check
-"hello" = "unwrap leaves the string below" check
+"hello" = "the unwrapped operand is restored" check
+"hello" = "the string operand is restored" check
+"hello" = "the string below the unwrap is restored" check
 
 heap "a" 1 [ add-any ] [ type-mismatch: error-is "+ of a string raises type-mismatch" check ] recover
-"hello" = "+ of a string leaves the string below" check
+1 = "the fixnum operand of + is restored" check
+"a" = "the string operand of + is restored" check
+"hello" = "the string below + is restored" check

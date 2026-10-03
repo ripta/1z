@@ -15,6 +15,7 @@ use "lua" ;
   dup [ "return fail()" eval ] [
     dup error-type: @get boom-error: = "driver-caught abort re-raises the original error type" assert-true
     message: @get "boom" "the original message survives the round trip" assert=
+    drop
   ] recover
 
   dup unmake-lua-state state>> (gettop) 0 "Lua stack balanced after the abort" assert=
@@ -45,6 +46,7 @@ use "lua" ;
   \ carrying the generic boxed error on the driver-caught path
   dup [ "return badresult()" eval ] [
     error-type: @get ffi-type-mismatch: = "a marshal failure raises the generic boxed error" assert-true
+    drop
   ] recover
 
   \ a script-side pcall sees the Zig error name as the message

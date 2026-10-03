@@ -5,6 +5,6 @@ PASS: body result
 Stack: [ ]
 === Cleanup runs on error ===
 Stack: [ ]
-Stack: [ 99 ]
+Stack: [ V{ 99 } ]
 PASS: cleanup executed before error
 Stack: [ ]

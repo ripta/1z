@@ -1,5 +1,4 @@
 Warning: '4keep' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
-Warning: 'try' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
 Warning: 'bi' parameter 'p' has row-variable effect; quotation call falls back to interpreter
 Warning: 'bi' parameter 'q' has row-variable effect; quotation call falls back to interpreter
 Warning: '3keep' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
@@ -23,10 +22,10 @@ Warning: '2dip' parameter 'quot' has row-variable effect; quotation call falls b
 Warning: 'using-iterator' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
 Warning: '1apply' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
 Error: --interpreter-fallback=false rejects compound-fallback dispatch; 2 callsites still route through the interpreter
-  'pragma-get' -> 'pragma-get?' (line 1632)
+  'pragma-get' -> 'pragma-get?' (line 1636)
       callee uncompiled: NC.13: word body underflows the abstract stack (row-variable effects)
       hint: blocked until row-variable stack regions can be modeled
-  '(import-collision-relax)' -> 'pragma-get?' (line 774)
+  '(import-collision-relax)' -> 'pragma-get?' (line 776)
       callee uncompiled: NC.13: word body underflows the abstract stack (row-variable effects)
       hint: blocked until row-variable stack regions can be modeled
 AOT interpreter fallbacks: 299 total (native=247 per-op-native=44 compound-uncompiled=2 quotation=6)

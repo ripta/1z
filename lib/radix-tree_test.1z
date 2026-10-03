@@ -439,8 +439,6 @@ test-protocol-first-and-last: ( -- ) [
 ] ;
 
 test-protocol-first-and-last-twins: ( -- ) [
-  \ The option twins recover around the throwing form, and recover keeps whatever the failed
-  \ quotation left behind. A peek that threw with the tree still up would leak it here.
   string <radix-tree> #first? option:none? "#first? on an empty tree is none" assert-true
   string <radix-tree> #last? option:none? "#last? on an empty tree is none" assert-true
   route-fixture

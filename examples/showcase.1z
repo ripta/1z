@@ -170,9 +170,10 @@ greeting print-line
 "" print-line
 "=== Error Handling ===" print-line
 
-\ 'recover' catches errors: ( try-quot recover-quot -- )
-\ If try-quot fails, recover-quot runs with error on stack
-\ recover-quot has effect ( error -- ), consuming the error
+\ 'recover' catches errors: ( ..a try: ( ..a -- ..b ) handler: ( ..a error -- ..b ) -- ..b )
+\ If the try quotation fails, the stack is restored to what it was when it began, and the handler
+\ runs with the error pushed on top of that stack. With an empty entry stack, the handler has
+\ effect ( error -- ).
 
 \ This succeeds normally
 "Successful operation:" print-line
@@ -182,8 +183,8 @@ greeting print-line
 "Recovered from error:" print-line
 [ drop ] [ drop "recovered!" print-line ] recover
 
-\ 'ignore-errors' suppresses any errors
-[ drop ] ignore-errors  \ silently continues
+\ 'ignore-errors' suppresses any errors from a quotation that takes no inputs
+[ 1 0 / drop ] ignore-errors  \ silently continues
 "Program continued after suppressed error" print-line
 
 \ Nested error handling

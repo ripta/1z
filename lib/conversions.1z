@@ -11,9 +11,6 @@ digit?: ( str -- ? ) [
 
 \ Parse integer from string, supporting all bases and separators
 \ "123" -> 123, "-42" -> -42, "0xFF" -> 255, "0o777" -> 511, "0b101" -> 5
-\ Both failure branches drop the leftover string or value before throwing, so
-\ the stack is clean when the error propagates. That lets a caller catch the
-\ throw with the [ risky >option:some ] [ drop option:none ] recover idiom.
 parse-integer: ( str -- n ) [
   resolve-literal
   [ dup type-of dup fixnum = swap bignum = or

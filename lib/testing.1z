@@ -212,12 +212,12 @@ assert-error: ( quot msg -- ) [
     swap         \ :__START__: quot
 
     [ call :__OK__: ]  \ success: push OK marker
-    [ drop ]           \ error: drop error, effect (1 -- 0)
+    [ 2drop ]          \ error: drop the quotation and the error
     recover
 
     \ Stack after recover:
     \   Success: :__START__: [results] :__OK__:
-    \   Error:   :__START__: [partial-effects]
+    \   Error:   :__START__:
     dup :__OK__: =
     [
       \ SUCCESS - FAIL the test (quotation didn't error)
@@ -267,9 +267,9 @@ assert-error-type: ( quot expected-type msg -- ) [
 
       [ call :__OK__: ]
       [
-        \ Recovery quotation: error on TOS, must consume it (1 -- 0).
-        \ Compare error type and print result here, while parameter
-        \ bindings are still in scope.
+        \ Recovery quotation: the error sits above the tested quotation, and both are consumed.
+        \ Compare error type and print result here, while parameter bindings are still in scope.
+        nip
         error-type: @get      \ actual-type
         __aet_expected__ get  \ actual-type expected-type
         2dup =

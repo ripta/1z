@@ -1,0 +1,2 @@
+tests/integration/check_recover_mismatch.1z:12: warning: always-raises: dead code: unreachable after recovery where both arms are terminal
+tests/integration/check_recover_mismatch.1z:8: err: miscounted: recovery quotations have mismatched row variable adjustments

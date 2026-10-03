@@ -5,15 +5,14 @@ use "testing" ;
 \ bound, holding a frame per level exhausts the memory limit before `recover` can see the error.
 \
 \ The depth, and so the dropped count, moves with the build. The test asserts the bound and the
-\ single elision row rather than the count. The raising quotation leaves depth-dependent residue,
-\ so this runs with --no-show-stack.
+\ single elision row rather than the count.
 
 deep: stack-recursive ( n -- n ) [ dup 0 > [ 1 - deep 1 + ] [ ] if ] ;
 
 elision-row?: ( frame -- ? ) [ word: @get "frames elided" #ends-with? ] ;
 
 test-overflow-chain-is-bounded: ( -- ) [
-  [ 1000000 deep drop ] [ ] recover
+  [ 1000000 deep drop f ] [ ] recover
   stack-trace: @get
   dup [ elision-row? ] #filter #collect #len 1 "one row stands in for the dropped frames" assert=
   #len 2100 < "the chain keeps a bounded number of frames" assert-true

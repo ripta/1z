@@ -18,4 +18,4 @@ Stack: [ ]
 === emit-body outside parse time ===
 Stack: [ ]
 PASS: parse time
-Stack: [ [ 1 ] ]
+Stack: [ ]

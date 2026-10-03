@@ -1,0 +1,11 @@
+\ `times` holds its closure body in a spill for every iteration. When the body raises, the word's
+\ error exit releases the spill, so the binary reports no leak.
+
+count-down: ( n -- s ) [
+  [ [ dup 1 - / drop ] curry 3 swap times "finished" ]
+  [ 2drop "raised" ]
+  recover
+] ;
+
+1 count-down print-line
+2 count-down print-line

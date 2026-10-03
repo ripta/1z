@@ -8,7 +8,6 @@ use "testing" ;
 pub-word: ( -- s ) [ "public" ] ;
 [ private{ pub-word: [ "private" ] ; sibling-helper: [ 1 ] ; } ]
 [ error-type: @get EImportConflict "conflicting private{ throws import-conflict" assert= ] recover
-drop  \ the failed private block leaves the snapshot module behind
 \ === A failing private block writes nothing ===
 "A failing private{ imports none of the block's words" test-section
 

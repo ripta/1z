@@ -38,6 +38,7 @@ const PicTable = pic_mod.PicTable;
 const PolymorphicCache = pic_mod.PolymorphicCache;
 const JitDispatchTable = @import("jit_dispatch.zig").JitDispatchTable;
 const StackSnapshot = @import("stack_snapshot.zig").StackSnapshot;
+const CatchSnapshots = @import("stack_snapshot.zig").CatchSnapshots;
 const ir_codegen = @import("ir_codegen.zig");
 const call_graph_mod = @import("call_graph.zig");
 const bail_stats_mod = @import("bail_stats.zig");
@@ -1003,6 +1004,9 @@ pub const Context = struct {
     /// teardown. The `recover` primitive can clear the slot but does not
     /// individually free the box because the arena does not support it.
     thrown_error: ?*value_mod.ErrorObject = null,
+    /// The entry stacks held by the catch sites running on this context, innermost on top. A task
+    /// context has its own, since its protected code runs on its own stack.
+    catch_snapshots: CatchSnapshots = .{},
     /// Parse-time error diagnostics, populated by the parser catch blocks
     /// and consumed by the display sites in main.zig.
     parse_diagnostics: ?ParseDiagnostics = null,
@@ -2311,6 +2315,7 @@ pub const Context = struct {
         // is torn down. Task contexts share the image slot tables with
         // their root, so only the root walks them.
         self.stack.clear();
+        self.catch_snapshots.deinit(self.allocator);
         // The process-global signal handler table owns its entries; the root releases them here,
         // before the allocators behind the handler bodies go away.
         if (self.parent_context == null) signal.releaseUserHandlers();
@@ -7858,6 +7863,10 @@ pub const Context = struct {
                         return null;
                     }
                     if (self.lookupWord(name)) |word| {
+                        // A quotation that reaches a never-returns word never returns either, so
+                        // it satisfies any declared effect and has no delta to report.
+                        if (hasNeverReturnsMarker(word.markers)) return null;
+
                         if (word.effect_transparent) {
                             if (self.resolveTransparentDelta(word, &shadow)) |resolved| {
                                 delta += resolved.delta;

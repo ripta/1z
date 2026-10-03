@@ -25,8 +25,12 @@ Stack: [ ]
 PASS: minInt div -1 promotes
 Stack: [ ]
 PASS: div by zero raises division-by-zero
+Stack: [ "hello" 7 0 ]
+PASS: div by zero restores the divisor
+Stack: [ "hello" 7 ]
+PASS: div by zero restores the dividend
 Stack: [ "hello" ]
-PASS: div by zero leaves the string below
+PASS: div by zero restores the string below
 Stack: [ ]
 PASS: rem of two fixnums
 Stack: [ ]

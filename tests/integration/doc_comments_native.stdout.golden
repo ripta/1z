@@ -33,8 +33,8 @@ Get length of sequence. Non-destructive, and does not work on iterators (use #co
   method{ value-map }
   method{ vector }
 Stack: [ ]
-Execute try quotation; if error, run recover quotation with error on stack.
-recover ( try-quot recover-quot: ( error -- ..a ) -- ) \native
+Execute try quotation; if it raises, restore the stack it started from, push the error, and run handler.
+recover ( ..a try: ( ..a -- ..b ) handler: ( ..a error -- ..b ) -- ..b ) [<marker:recovery-combinator>] \native
 
 Stack: [ ]
 Open a file stream with mode (read:, write:, append:, read-write:, replace:). A replace: stream writes to a temporary beside the target and renames it over the target at close.

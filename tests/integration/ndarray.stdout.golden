@@ -402,52 +402,52 @@ PASS: mask elem 2
 Stack: [ ]
 Stack: [ ndarray{ data: V{ t f } shape: { 2 } strides: { 1 } element-type: <type:boolean> } ]
 PASS: mask shape mismatch
-Stack: [ ndarray{ data: V{ t f } shape: { 2 } strides: { 1 } element-type: <type:boolean> } ndarray{ data: V{ 1 2 3 } shape: { 3 } strides: { 1 } element-type: <type:fixnum> } :__START__: ndarray{ data: V{ 1 2 3 } shape: { 3 } strides: { 1 } element-type: <type:fixnum> } :__START__: { 3 } ]
-Stack: [ ndarray{ data: V{ t f } shape: { 2 } strides: { 1 } element-type: <type:boolean> } ndarray{ data: V{ 1 2 3 } shape: { 3 } strides: { 1 } element-type: <type:fixnum> } :__START__: ndarray{ data: V{ 1 2 3 } shape: { 3 } strides: { 1 } element-type: <type:fixnum> } :__START__: { 3 } ndarray{ data: V{ f f f } shape: { 3 } strides: { 1 } element-type: <type:boolean> } ]
-Stack: [ ndarray{ data: V{ t f } shape: { 2 } strides: { 1 } element-type: <type:boolean> } ndarray{ data: V{ 1 2 3 } shape: { 3 } strides: { 1 } element-type: <type:fixnum> } :__START__: ndarray{ data: V{ 1 2 3 } shape: { 3 } strides: { 1 } element-type: <type:fixnum> } :__START__: { 3 } ndarray{ data: V{ } shape: { 0 } strides: { 1 } element-type: <type:fixnum> } ]
+Stack: [ ndarray{ data: V{ t f } shape: { 2 } strides: { 1 } element-type: <type:boolean> } ]
+Stack: [ ndarray{ data: V{ t f } shape: { 2 } strides: { 1 } element-type: <type:boolean> } ndarray{ data: V{ f f f } shape: { 3 } strides: { 1 } element-type: <type:boolean> } ]
+Stack: [ ndarray{ data: V{ t f } shape: { 2 } strides: { 1 } element-type: <type:boolean> } ndarray{ data: V{ } shape: { 0 } strides: { 1 } element-type: <type:fixnum> } ]
 PASS: mask empty result
-Stack: [ ndarray{ data: V{ t f } shape: { 2 } strides: { 1 } element-type: <type:boolean> } ndarray{ data: V{ 1 2 3 } shape: { 3 } strides: { 1 } element-type: <type:fixnum> } :__START__: ndarray{ data: V{ 1 2 3 } shape: { 3 } strides: { 1 } element-type: <type:fixnum> } :__START__: { 3 } ]
+Stack: [ ndarray{ data: V{ t f } shape: { 2 } strides: { 1 } element-type: <type:boolean> } ]
 === ndarray gather ===
-Stack: [ ndarray{ data: V{ t f } shape: { 2 } strides: { 1 } element-type: <type:boolean> } ndarray{ data: V{ 1 2 3 } shape: { 3 } strides: { 1 } element-type: <type:fixnum> } :__START__: ndarray{ data: V{ 1 2 3 } shape: { 3 } strides: { 1 } element-type: <type:fixnum> } :__START__: { 3 } ]
-Stack: [ ndarray{ data: V{ t f } shape: { 2 } strides: { 1 } element-type: <type:boolean> } ndarray{ data: V{ 1 2 3 } shape: { 3 } strides: { 1 } element-type: <type:fixnum> } :__START__: ndarray{ data: V{ 1 2 3 } shape: { 3 } strides: { 1 } element-type: <type:fixnum> } :__START__: { 3 } ndarray{ data: V{ 10 30 50 } shape: { 3 } strides: { 1 } element-type: <type:fixnum> } ]
+Stack: [ ndarray{ data: V{ t f } shape: { 2 } strides: { 1 } element-type: <type:boolean> } ]
+Stack: [ ndarray{ data: V{ t f } shape: { 2 } strides: { 1 } element-type: <type:boolean> } ndarray{ data: V{ 10 30 50 } shape: { 3 } strides: { 1 } element-type: <type:fixnum> } ]
 PASS: gather shape
-Stack: [ ndarray{ data: V{ t f } shape: { 2 } strides: { 1 } element-type: <type:boolean> } ndarray{ data: V{ 1 2 3 } shape: { 3 } strides: { 1 } element-type: <type:fixnum> } :__START__: ndarray{ data: V{ 1 2 3 } shape: { 3 } strides: { 1 } element-type: <type:fixnum> } :__START__: { 3 } ndarray{ data: V{ 10 30 50 } shape: { 3 } strides: { 1 } element-type: <type:fixnum> } ]
+Stack: [ ndarray{ data: V{ t f } shape: { 2 } strides: { 1 } element-type: <type:boolean> } ndarray{ data: V{ 10 30 50 } shape: { 3 } strides: { 1 } element-type: <type:fixnum> } ]
 PASS: gather elem 0
-Stack: [ ndarray{ data: V{ t f } shape: { 2 } strides: { 1 } element-type: <type:boolean> } ndarray{ data: V{ 1 2 3 } shape: { 3 } strides: { 1 } element-type: <type:fixnum> } :__START__: ndarray{ data: V{ 1 2 3 } shape: { 3 } strides: { 1 } element-type: <type:fixnum> } :__START__: { 3 } ndarray{ data: V{ 10 30 50 } shape: { 3 } strides: { 1 } element-type: <type:fixnum> } ]
+Stack: [ ndarray{ data: V{ t f } shape: { 2 } strides: { 1 } element-type: <type:boolean> } ndarray{ data: V{ 10 30 50 } shape: { 3 } strides: { 1 } element-type: <type:fixnum> } ]
 PASS: gather elem 1
-Stack: [ ndarray{ data: V{ t f } shape: { 2 } strides: { 1 } element-type: <type:boolean> } ndarray{ data: V{ 1 2 3 } shape: { 3 } strides: { 1 } element-type: <type:fixnum> } :__START__: ndarray{ data: V{ 1 2 3 } shape: { 3 } strides: { 1 } element-type: <type:fixnum> } :__START__: { 3 } ndarray{ data: V{ 10 30 50 } shape: { 3 } strides: { 1 } element-type: <type:fixnum> } ]
+Stack: [ ndarray{ data: V{ t f } shape: { 2 } strides: { 1 } element-type: <type:boolean> } ndarray{ data: V{ 10 30 50 } shape: { 3 } strides: { 1 } element-type: <type:fixnum> } ]
 PASS: gather elem 2
-Stack: [ ndarray{ data: V{ t f } shape: { 2 } strides: { 1 } element-type: <type:boolean> } ndarray{ data: V{ 1 2 3 } shape: { 3 } strides: { 1 } element-type: <type:fixnum> } :__START__: ndarray{ data: V{ 1 2 3 } shape: { 3 } strides: { 1 } element-type: <type:fixnum> } :__START__: { 3 } ]
+Stack: [ ndarray{ data: V{ t f } shape: { 2 } strides: { 1 } element-type: <type:boolean> } ]
 PASS: gather out of bounds
-Stack: [ ndarray{ data: V{ t f } shape: { 2 } strides: { 1 } element-type: <type:boolean> } ndarray{ data: V{ 1 2 3 } shape: { 3 } strides: { 1 } element-type: <type:fixnum> } :__START__: ndarray{ data: V{ 1 2 3 } shape: { 3 } strides: { 1 } element-type: <type:fixnum> } :__START__: { 3 } ]
+Stack: [ ndarray{ data: V{ t f } shape: { 2 } strides: { 1 } element-type: <type:boolean> } ]
 === ndarray >iterator ===
-Stack: [ ndarray{ data: V{ t f } shape: { 2 } strides: { 1 } element-type: <type:boolean> } ndarray{ data: V{ 1 2 3 } shape: { 3 } strides: { 1 } element-type: <type:fixnum> } :__START__: ndarray{ data: V{ 1 2 3 } shape: { 3 } strides: { 1 } element-type: <type:fixnum> } :__START__: { 3 } ]
+Stack: [ ndarray{ data: V{ t f } shape: { 2 } strides: { 1 } element-type: <type:boolean> } ]
 PASS: 1D >iterator collect
-Stack: [ ndarray{ data: V{ t f } shape: { 2 } strides: { 1 } element-type: <type:boolean> } ndarray{ data: V{ 1 2 3 } shape: { 3 } strides: { 1 } element-type: <type:fixnum> } :__START__: ndarray{ data: V{ 1 2 3 } shape: { 3 } strides: { 1 } element-type: <type:fixnum> } :__START__: { 3 } ]
+Stack: [ ndarray{ data: V{ t f } shape: { 2 } strides: { 1 } element-type: <type:boolean> } ]
 PASS: 2D >iterator collect
-Stack: [ ndarray{ data: V{ t f } shape: { 2 } strides: { 1 } element-type: <type:boolean> } ndarray{ data: V{ 1 2 3 } shape: { 3 } strides: { 1 } element-type: <type:fixnum> } :__START__: ndarray{ data: V{ 1 2 3 } shape: { 3 } strides: { 1 } element-type: <type:fixnum> } :__START__: { 3 } ]
+Stack: [ ndarray{ data: V{ t f } shape: { 2 } strides: { 1 } element-type: <type:boolean> } ]
 PASS: >iterator reduce
-Stack: [ ndarray{ data: V{ t f } shape: { 2 } strides: { 1 } element-type: <type:boolean> } ndarray{ data: V{ 1 2 3 } shape: { 3 } strides: { 1 } element-type: <type:fixnum> } :__START__: ndarray{ data: V{ 1 2 3 } shape: { 3 } strides: { 1 } element-type: <type:fixnum> } :__START__: { 3 } ]
+Stack: [ ndarray{ data: V{ t f } shape: { 2 } strides: { 1 } element-type: <type:boolean> } ]
 === ndarray inspect ===
-Stack: [ ndarray{ data: V{ t f } shape: { 2 } strides: { 1 } element-type: <type:boolean> } ndarray{ data: V{ 1 2 3 } shape: { 3 } strides: { 1 } element-type: <type:fixnum> } :__START__: ndarray{ data: V{ 1 2 3 } shape: { 3 } strides: { 1 } element-type: <type:fixnum> } :__START__: { 3 } ]
+Stack: [ ndarray{ data: V{ t f } shape: { 2 } strides: { 1 } element-type: <type:boolean> } ]
 PASS: 1D inspect
-Stack: [ ndarray{ data: V{ t f } shape: { 2 } strides: { 1 } element-type: <type:boolean> } ndarray{ data: V{ 1 2 3 } shape: { 3 } strides: { 1 } element-type: <type:fixnum> } :__START__: ndarray{ data: V{ 1 2 3 } shape: { 3 } strides: { 1 } element-type: <type:fixnum> } :__START__: { 3 } ]
+Stack: [ ndarray{ data: V{ t f } shape: { 2 } strides: { 1 } element-type: <type:boolean> } ]
 PASS: 1D inspect float
-Stack: [ ndarray{ data: V{ t f } shape: { 2 } strides: { 1 } element-type: <type:boolean> } ndarray{ data: V{ 1 2 3 } shape: { 3 } strides: { 1 } element-type: <type:fixnum> } :__START__: ndarray{ data: V{ 1 2 3 } shape: { 3 } strides: { 1 } element-type: <type:fixnum> } :__START__: { 3 } ]
+Stack: [ ndarray{ data: V{ t f } shape: { 2 } strides: { 1 } element-type: <type:boolean> } ]
 PASS: 2D inspect
-Stack: [ ndarray{ data: V{ t f } shape: { 2 } strides: { 1 } element-type: <type:boolean> } ndarray{ data: V{ 1 2 3 } shape: { 3 } strides: { 1 } element-type: <type:fixnum> } :__START__: ndarray{ data: V{ 1 2 3 } shape: { 3 } strides: { 1 } element-type: <type:fixnum> } :__START__: { 3 } ]
-Stack: [ ndarray{ data: V{ t f } shape: { 2 } strides: { 1 } element-type: <type:boolean> } ndarray{ data: V{ 1 2 3 } shape: { 3 } strides: { 1 } element-type: <type:fixnum> } :__START__: ndarray{ data: V{ 1 2 3 } shape: { 3 } strides: { 1 } element-type: <type:fixnum> } :__START__: { 3 } "ndarray(shape={ 2 3 2 } data={ 1 2 3 4 5 6 7 8 9 10 11 12 })" ]
+Stack: [ ndarray{ data: V{ t f } shape: { 2 } strides: { 1 } element-type: <type:boolean> } ]
+Stack: [ ndarray{ data: V{ t f } shape: { 2 } strides: { 1 } element-type: <type:boolean> } "ndarray(shape={ 2 3 2 } data={ 1 2 3 4 5 6 7 8 9 10 11 12 })" ]
 PASS: 3D inspect
-Stack: [ ndarray{ data: V{ t f } shape: { 2 } strides: { 1 } element-type: <type:boolean> } ndarray{ data: V{ 1 2 3 } shape: { 3 } strides: { 1 } element-type: <type:fixnum> } :__START__: ndarray{ data: V{ 1 2 3 } shape: { 3 } strides: { 1 } element-type: <type:fixnum> } :__START__: { 3 } ]
+Stack: [ ndarray{ data: V{ t f } shape: { 2 } strides: { 1 } element-type: <type:boolean> } ]
 === ndarray >string ===
-Stack: [ ndarray{ data: V{ t f } shape: { 2 } strides: { 1 } element-type: <type:boolean> } ndarray{ data: V{ 1 2 3 } shape: { 3 } strides: { 1 } element-type: <type:fixnum> } :__START__: ndarray{ data: V{ 1 2 3 } shape: { 3 } strides: { 1 } element-type: <type:fixnum> } :__START__: { 3 } ]
+Stack: [ ndarray{ data: V{ t f } shape: { 2 } strides: { 1 } element-type: <type:boolean> } ]
 PASS: 1D >string
-Stack: [ ndarray{ data: V{ t f } shape: { 2 } strides: { 1 } element-type: <type:boolean> } ndarray{ data: V{ 1 2 3 } shape: { 3 } strides: { 1 } element-type: <type:fixnum> } :__START__: ndarray{ data: V{ 1 2 3 } shape: { 3 } strides: { 1 } element-type: <type:fixnum> } :__START__: { 3 } ]
+Stack: [ ndarray{ data: V{ t f } shape: { 2 } strides: { 1 } element-type: <type:boolean> } ]
 PASS: 1D >string fixnum
-Stack: [ ndarray{ data: V{ t f } shape: { 2 } strides: { 1 } element-type: <type:boolean> } ndarray{ data: V{ 1 2 3 } shape: { 3 } strides: { 1 } element-type: <type:fixnum> } :__START__: ndarray{ data: V{ 1 2 3 } shape: { 3 } strides: { 1 } element-type: <type:fixnum> } :__START__: { 3 } ]
+Stack: [ ndarray{ data: V{ t f } shape: { 2 } strides: { 1 } element-type: <type:boolean> } ]
 PASS: 2D >string
-Stack: [ ndarray{ data: V{ t f } shape: { 2 } strides: { 1 } element-type: <type:boolean> } ndarray{ data: V{ 1 2 3 } shape: { 3 } strides: { 1 } element-type: <type:fixnum> } :__START__: ndarray{ data: V{ 1 2 3 } shape: { 3 } strides: { 1 } element-type: <type:fixnum> } :__START__: { 3 } ]
-Stack: [ ndarray{ data: V{ t f } shape: { 2 } strides: { 1 } element-type: <type:boolean> } ndarray{ data: V{ 1 2 3 } shape: { 3 } strides: { 1 } element-type: <type:fixnum> } :__START__: ndarray{ data: V{ 1 2 3 } shape: { 3 } strides: { 1 } element-type: <type:fixnum> } :__START__: { 3 } "2x2x3 ndarray{fixnum}:
+Stack: [ ndarray{ data: V{ t f } shape: { 2 } strides: { 1 } element-type: <type:boolean> } ]
+Stack: [ ndarray{ data: V{ t f } shape: { 2 } strides: { 1 } element-type: <type:boolean> } "2x2x3 ndarray{fixnum}:
 [:, :, 0] =
 1 2 3
 4 5 6
@@ -455,4 +455,4 @@ Stack: [ ndarray{ data: V{ t f } shape: { 2 } strides: { 1 } element-type: <type
  7  8  9
 10 11 12" ]
 PASS: 3D >string
-Stack: [ ndarray{ data: V{ t f } shape: { 2 } strides: { 1 } element-type: <type:boolean> } ndarray{ data: V{ 1 2 3 } shape: { 3 } strides: { 1 } element-type: <type:fixnum> } :__START__: ndarray{ data: V{ 1 2 3 } shape: { 3 } strides: { 1 } element-type: <type:fixnum> } :__START__: { 3 } ]
+Stack: [ ndarray{ data: V{ t f } shape: { 2 } strides: { 1 } element-type: <type:boolean> } ]

@@ -312,9 +312,6 @@ heap-unsorted: ( heap: heap -- iterator ) [
 \ #empty? read the size field in O(1), #first is heap-min at O(1), and >array is the
 \ sorted dump through the iterator.
 \
-\ #first needs no drop-before-throw guard: heap-min consumes the heap on every path
-\ before the empty arm throws, so the prelude's recover-based #first? sees a clean stack.
-\
 \ #last and #nth are left unimplemented, each an O(n) walk or worse under an O(1)
 \ expectation. #push and #pop are not registered either: a heap has no end of sequence
 \ for them to name, and heap-insert / heap-pop-min are the honest spellings.
@@ -438,10 +435,8 @@ pq-pop-min: ( pq: priority-queue -- priority-queue entry ) [ priority-queue-pop-
 pq-pop-min?: ( pq: priority-queue -- priority-queue option ) [ priority-queue-pop-min? ] ;
 
 \ The pair layer's conformance surface, yielding entries. A virtual type inherits no
-\ methods, so the wrapper registers its own set over the same O(1) reads. #first needs no
-\ drop-before-throw guard for the heap's reason: priority-queue-min consumes the queue on
-\ every path before the empty arm throws. #last, #nth, #push, and #pop stay unregistered,
-\ as on the heap.
+\ methods, so the wrapper registers its own set over the same O(1) reads. #last, #nth,
+\ #push, and #pop stay unregistered, as on the heap.
 >iterator: method{ priority-queue } [ priority-queue-sorted ] ;
 #len:      method{ priority-queue } [ unmake-priority-queue size>> ] ;
 #empty?:   method{ priority-queue } [ unmake-priority-queue size>> 0 = ] ;

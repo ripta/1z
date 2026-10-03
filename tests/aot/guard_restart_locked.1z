@@ -19,8 +19,8 @@ floor-mod: ( a b -- r ) [ % ] ;
 magnitude: ( n -- m )   [ abs ] ;
 bump:      ( x n -- r ) [ swap drop 1 + ] ;
 
-catch-div: ( -- sentinel caught ) [ 5 7 0 [ int-div ] [ drop 1 ] recover ] ;
-catch-rem: ( -- sentinel caught ) [ 5 7 0 [ int-rem ] [ drop 1 ] recover ] ;
+catch-div: ( -- sentinel caught ) [ 5 7 0 [ int-div ] [ 3drop 1 ] recover ] ;
+catch-rem: ( -- sentinel caught ) [ 5 7 0 [ int-rem ] [ 3drop 1 ] recover ] ;
 
 0 10 sum-down 55 = "a loop that stays in fixnums" check
 9223372036854775800 10 sum-down 9223372036854775807 > "a loop that overflows mid-way promotes" check

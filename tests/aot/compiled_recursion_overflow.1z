@@ -2,10 +2,9 @@
 \ words, so the entry check each compiled word makes is the only guard that sees the native stack.
 \ It raises a catchable error where the binary used to die on a signal.
 \
-\ The handler wipes the depth-dependent residue along with the error. It reports only that it ran,
-\ since reading the error type needs a native the interpreter-free class cannot compile. The
-\ integration twins pin the type.
+\ The handler reports only that it ran, since reading the error type needs a native the
+\ interpreter-free class cannot compile. The integration twins pin the type.
 
 deep: stack-recursive ( n -- n ) [ dup 0 > [ 1 - deep 1 + ] [ ] if ] ;
 
-[ 1000000 deep drop ] [ wipe "caught the overflow" print-line ] recover
+[ 1000000 deep drop ] [ drop "caught the overflow" print-line ] recover

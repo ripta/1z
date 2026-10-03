@@ -28,7 +28,7 @@ private{
   \\ to `ch`. Any failure or cancellation simply ends the attempt. The orchestrator owns every socket
   \\ and closes the ones that lose.
   connect-attempt: ( ch fd addr -- ) [
-    [ over swap native.connect swap send ] ignore-errors
+    [ over swap native.connect swap send ] curry curry curry ignore-errors
   ] ;
 
   \\ Create a socket for `addr`, record its fd in st's fds vector, spawn a connect attempt against it,

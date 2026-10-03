@@ -187,7 +187,7 @@ test-sibling-cancellation-with-cleanup: ( -- ) [
   ] curry
   [
     task-scope
-  ] [ drop ] recover
+  ] [ 2drop ] recover
   #len 1 "sibling cancellation triggers cleanup" assert=
 ] ;
 
@@ -204,7 +204,7 @@ test-with-timeout-cleanup: ( -- ) [
   ] curry
   [
     task-scope
-  ] [ drop ] recover
+  ] [ 2drop ] recover
   #len 1 "with-timeout runs cleanup on timeout" assert=
 ] ;
 

@@ -43,10 +43,10 @@ count-to-zero: ( n -- 0 ) [
 
 "recover quotation effects" test-section
 
-\ Using recover with correct quotation effects
-\ The recover-quot has effect ( error -- ), must only consume error
+\ The handler sees the body's entry stack plus the error, so it consumes the error and leaves
+\ what the body would have left.
 error-handler: ( -- result ) [
-  [ drop ] [ drop ] recover
+  [ 1 0 / drop ] [ drop ] recover
   handled:
 ] ;
 error-handler handled: "error-handler" assert=

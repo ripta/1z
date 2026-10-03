@@ -90,6 +90,70 @@ pub const StackSnapshot = struct {
     }
 };
 
+/// Whole-stack snapshots for the catch sites running on one context, as segments of one buffer.
+///
+/// Catch sites nest strictly, so the segments form a LIFO. A site pushes its segment before the
+/// protected code runs, and pops it by discarding or restoring when that code returns. The buffer
+/// keeps its capacity across calls, so a warm context takes a snapshot without allocating.
+///
+/// The reservation happens before anything is retained. A site whose reservation fails must not
+/// start the code it would protect.
+pub const CatchSnapshots = struct {
+    values: std.ArrayListUnmanaged(Value) = .{},
+
+    /// Where a segment sits in the buffer.
+    pub const Segment = struct {
+        mark: usize,
+        len: usize,
+    };
+
+    /// Hold every slot of `stack` as a new topmost segment.
+    pub fn push(self: *CatchSnapshots, allocator: std.mem.Allocator, stack: *Stack) error{OutOfMemory}!Segment {
+        const live = stack.items.items;
+        try self.values.ensureUnusedCapacity(allocator, live.len);
+
+        const seg: Segment = .{ .mark = self.values.items.len, .len = live.len };
+        self.values.appendSliceAssumeCapacity(live);
+        for (live) |v| container_backing.retainValue(v);
+        return seg;
+    }
+
+    /// Drop the segment once the protected code is kept.
+    pub fn discard(self: *CatchSnapshots, seg: Segment) void {
+        for (self.held(seg)) |v| container_backing.releaseValue(v);
+        self.values.items.len = seg.mark;
+    }
+
+    /// Replace the whole stack with the segment, handing the segment's references to it.
+    ///
+    /// Every slot the protected code left is released, so each must be owned. A compiled raise
+    /// settles its stack before returning, which is what makes that hold in every tier.
+    pub fn restore(self: *CatchSnapshots, seg: Segment, stack: *Stack) void {
+        const values = self.held(seg);
+        StackSnapshot.releaseAbove(stack, 0);
+
+        // The segment was the whole stack when it was taken. A stack never gives back capacity,
+        // so it still covers the segment.
+        stack.items.items.len = values.len;
+        @memcpy(stack.items.items, values);
+        self.values.items.len = seg.mark;
+    }
+
+    /// The values of `seg`, which must be the topmost segment.
+    ///
+    /// A segment above it would mean a catch site returned without popping its own, or two
+    /// executions interleaved on one context. Either breaks the nesting every site relies on.
+    fn held(self: *CatchSnapshots, seg: Segment) []Value {
+        std.debug.assert(seg.mark + seg.len == self.values.items.len);
+        return self.values.items[seg.mark..][0..seg.len];
+    }
+
+    pub fn deinit(self: *CatchSnapshots, allocator: std.mem.Allocator) void {
+        for (self.values.items) |v| container_backing.releaseValue(v);
+        self.values.deinit(allocator);
+    }
+};
+
 test "restore puts back values the attempt overwrote and dropped" {
     var stack = Stack.init(std.testing.allocator);
     defer stack.deinit();
@@ -168,4 +232,75 @@ test "a snapshot wider than the inline buffer uses the heap and frees it" {
     try std.testing.expect(snapshot.heap_values != null);
     snapshot.release(&stack);
     try std.testing.expectEqual(@as(?[]Value, null), snapshot.heap_values);
+}
+
+test "a catch segment restores the whole stack the protected code consumed" {
+    const Vector = @import("value.zig").Vector;
+
+    var stack = Stack.init(std.testing.allocator);
+    defer stack.deinit();
+    defer stack.clear();
+
+    var snapshots: CatchSnapshots = .{};
+    defer snapshots.deinit(std.testing.allocator);
+
+    const below = try Vector.create(std.testing.allocator);
+    try stack.push(.{ .vector = below });
+    below.header.release();
+    try stack.push(.{ .fixnum = 2 });
+
+    const seg = try snapshots.push(std.testing.allocator, &stack);
+    try std.testing.expectEqual(@as(u32, 2), below.header.refcountValue());
+
+    // The protected code consumed both values and left partial state of its own.
+    StackSnapshot.releaseAbove(&stack, 0);
+    const partial = try Vector.create(std.testing.allocator);
+    try stack.push(.{ .vector = partial });
+    partial.header.release();
+
+    snapshots.restore(seg, &stack);
+    try std.testing.expectEqual(@as(usize, 2), stack.depth());
+    try std.testing.expectEqual(@as(u32, 1), below.header.refcountValue());
+    try std.testing.expectEqual(@as(i64, 2), stack.items.items[1].fixnum);
+    try std.testing.expectEqual(@as(usize, 0), snapshots.values.items.len);
+}
+
+test "nested catch segments pop in order" {
+    var stack = Stack.init(std.testing.allocator);
+    defer stack.deinit();
+
+    var snapshots: CatchSnapshots = .{};
+    defer snapshots.deinit(std.testing.allocator);
+
+    try stack.push(.{ .fixnum = 1 });
+    const outer = try snapshots.push(std.testing.allocator, &stack);
+    try stack.push(.{ .fixnum = 2 });
+    const inner = try snapshots.push(std.testing.allocator, &stack);
+    try std.testing.expectEqual(@as(usize, 3), snapshots.values.items.len);
+
+    snapshots.discard(inner);
+    snapshots.restore(outer, &stack);
+    try std.testing.expectEqual(@as(usize, 1), stack.depth());
+    try std.testing.expectEqual(@as(i64, 1), stack.items.items[0].fixnum);
+    try std.testing.expectEqual(@as(usize, 0), snapshots.values.items.len);
+}
+
+test "a catch segment that cannot be reserved retains nothing" {
+    const Vector = @import("value.zig").Vector;
+
+    var stack = Stack.init(std.testing.allocator);
+    defer stack.deinit();
+    defer stack.clear();
+
+    const operand = try Vector.create(std.testing.allocator);
+    try stack.push(.{ .vector = operand });
+    operand.header.release();
+
+    var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{ .fail_index = 0 });
+    var snapshots: CatchSnapshots = .{};
+    defer snapshots.deinit(failing.allocator());
+
+    try std.testing.expectError(error.OutOfMemory, snapshots.push(failing.allocator(), &stack));
+    try std.testing.expectEqual(@as(u32, 1), operand.header.refcountValue());
+    try std.testing.expectEqual(@as(usize, 0), snapshots.values.items.len);
 }

@@ -42,7 +42,7 @@ use "testing" ;
   \ Retry connect until the server is listening, matching router.1z's
   \ connect-when-ready/connect-loop pattern.
   connect-loop: ( addr n -- stream ) [
-    over [ connect ] [ drop f ] recover
+    over [ connect ] [ 2drop f ] recover
     dup f =
     [ drop 1 - dup 0 <=
       [ drop connect ]

@@ -1,12 +1,13 @@
-\ A locked binary's dispatch-miss trap leaves the stack the interpreter leaves: both operands
-\ consumed, and the value below untouched. The catch sits in a word with declared outputs, so the
-\ comparisons after it see two fixnums rather than an opaque row.
+\ A locked binary's dispatch-miss trap leaves the stack the interpreter leaves, so the restore
+\ before the handler releases every slot. The handler sees both restored operands above the
+\ sentinel. The catch sits in a word with declared outputs, so the comparisons after it see two
+\ values rather than an opaque row.
 
 check: ( ok label -- ) [ swap [ "PASS: " ] [ "FAIL: " ] if swap #append print-line ] ;
 
 add-any: ( a b -- c ) [ + ] ;
 
-catch-add: ( -- sentinel caught ) [ 5 "a" 1 [ add-any ] [ drop 1 ] recover ] ;
+catch-add: ( -- sentinel caught ) [ 5 "a" 1 [ add-any ] [ drop nip 1 = ] recover ] ;
 
-catch-add 1 = "+ of a string is caught" check
+catch-add "+ of a string is caught and the handler sees the restored operand" check
 5 = "+ of a string leaves the sentinel" check

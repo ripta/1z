@@ -586,9 +586,6 @@ radix-under: ( tree: radix-tree prefix -- iterator ) [
 #len: method{ radix-tree } [ count>> ] ;
 #empty?: method{ radix-tree } [ count>> 0 = ] ;
 
-\ Both peeks drop the tree before throwing on empty. The prelude's #first? and #last? recover
-\ around the bare form, and recover keeps whatever the failed quotation left behind, so a method
-\ that throws with its operand still up leaks it into the caller's stack.
 #first: method{ radix-tree } [
   dup count>> 0 = [ drop throw-empty ] [ root>> dup label>> swap first-entry ] if
 ] ;

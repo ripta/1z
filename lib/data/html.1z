@@ -67,7 +67,7 @@ private{
   \ Rejects 0 (NUL), out-of-range (>0x10FFFF), and surrogates (0xD800..0xDFFF).
   (decode-codepoint?): ( n -- char/f ) [
     dup 0 = [ drop f ] [
-      [ >char ] [ drop f ] recover
+      [ >char ] [ 2drop f ] recover
     ] if
   ] ;
 

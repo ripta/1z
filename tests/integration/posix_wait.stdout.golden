@@ -19,6 +19,9 @@ PASS: waitpid errno name is echild
 Stack: [ ]
 === posix.wait sandbox gate ===
 Stack: [ ]
+Stack: [ [ sandbox{ ffi system } [ 2147483646 "WNOHANG" posix-const waitpid ] with-sandbox ] ]
 PASS: ffi+system grant lets waitpid reach the syscall
+Stack: [ ]
+Stack: [ [ sandbox{ ffi } [ 2147483646 "WNOHANG" posix-const waitpid ] with-sandbox ] ]
 PASS: ffi-only grant denies the system-capped waitpid
 Stack: [ ]

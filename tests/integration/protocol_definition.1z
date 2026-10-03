@@ -239,7 +239,7 @@ missing-op: generic ( a b -- c ) [ drop ] ;
 err-val: virtual{ fixnum } ;
 
 test-error-message-content: ( -- ) [
-  [ err-val: err-proto assert-satisfies ] [ ] recover
+  [ err-val: err-proto assert-satisfies f ] [ ] recover
   dup "error-type" @get protocol-error: "error type is protocol-error" assert=
   "message" @get
   dup "err-val" #in? "error message contains type name" assert-true

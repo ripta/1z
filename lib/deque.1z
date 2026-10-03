@@ -673,8 +673,7 @@ deque-back: ( deque: deque -- value ) [ deque-pop-back nip ] ;
 
 \ The option twins test the length directly rather than catching the bare form's throw.
 \
-\ A recover would swallow unrelated errors. It would also lose the unchanged deque the pop
-\ twins return on empty.
+\ A recover would swallow unrelated errors.
 
 \\ Remove and return the front value as an option. On an empty deque the deque comes back
 \\ unchanged with `option:none`.
@@ -746,9 +745,6 @@ private{
 #len: method{ deque } [ deque-len ] ;
 #empty?: method{ deque } [ deque-len 0 = ] ;
 
-\ The peeks drop the deque before throwing on empty. The prelude's #first? and #last? recover
-\ around the bare form, and recover keeps whatever the failed quotation left behind, so a
-\ method that throws with its operand still up leaks it into the caller's stack.
 #first: method{ deque } [ dup deque-len 0 = [ drop throw-empty ] [ deque-front ] if ] ;
 #last: method{ deque } [ dup deque-len 0 = [ drop throw-empty ] [ deque-back ] if ] ;
 

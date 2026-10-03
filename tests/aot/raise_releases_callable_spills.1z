@@ -1,0 +1,8 @@
+\ A compiled word that dispatches a closure holds its owning reference in a spill. When the closure
+\ raises, the word's error exit releases the spill, so an interpreter-free binary reports no leak.
+
+\ `try` dispatches the curried quotation through a runtime call.
+divide-into: ( n -- r ) [ [ 100 swap / ] curry try ] ;
+
+0 divide-into result:err? .
+5 divide-into result:ok? .

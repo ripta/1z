@@ -7,7 +7,8 @@ Stack: [ ]
 === Effect violation recovery ===
 Stack: [ ]
 PASS: wrong effect caught
-Stack: [ 5 5 ]
+Stack: [ 5 ]
+PASS: recover restores the entry value
 Stack: [ ]
 === Empty effect ===
 Stack: [ ]

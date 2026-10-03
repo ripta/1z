@@ -1,2 +1,2 @@
-PASS: + of a string is caught
+PASS: + of a string is caught and the handler sees the restored operand
 PASS: + of a string leaves the sentinel

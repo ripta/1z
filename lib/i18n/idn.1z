@@ -139,7 +139,7 @@ decode-host: ( string -- string ) [
 \\ ACE form on success, or option:none on malformed input.
 encode-host?: ( string -- option ) [
   [ encode-host >option:some ]
-  [ drop option:none ]
+  [ 2drop option:none ]
   recover
 ] ;
 
@@ -147,6 +147,6 @@ encode-host?: ( string -- option ) [
 \\ Unicode form on success, or option:none on malformed input.
 decode-host?: ( string -- option ) [
   [ decode-host >option:some ]
-  [ drop option:none ]
+  [ 2drop option:none ]
   recover
 ] ;

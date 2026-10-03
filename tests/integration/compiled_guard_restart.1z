@@ -48,7 +48,9 @@ noisy-add: ( a b -- c ) [ "noisy-add ran" print-line + ] ;
 7 2 int-div 3 = "div of two fixnums" check
 -9223372036854775808 -1 int-div 9223372036854775807 > "minInt div -1 promotes" check
 heap 7 0 [ int-div ] [ division-by-zero: error-is "div by zero raises division-by-zero" check ] recover
-"hello" = "div by zero leaves the string below" check
+0 = "div by zero restores the divisor" check
+7 = "div by zero restores the dividend" check
+"hello" = "div by zero restores the string below" check
 
 7 2 int-rem 1 = "rem of two fixnums" check
 -9223372036854775808 -1 int-rem 0 = "minInt rem -1 is zero" check

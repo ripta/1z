@@ -2,9 +2,8 @@
 \ its own coroutine region, so the limit compiled code checks against is the task's rather than the
 \ main thread's.
 \
-\ Only the error type is printed, and the residue the unwound levels leave behind is wiped, since
-\ the depth moves with the build.
+\ Only the error type is printed, since the depth moves with the build.
 
 deep: stack-recursive ( n -- n ) [ dup 0 > [ 1 - deep 1 + ] [ ] if ] ;
 
-[ [ [ 1000000 deep drop ] [ error-type: @get . wipe ] recover ] spawn await-terminal ] task-scope
+[ [ [ 1000000 deep drop ] [ error-type: @get . ] recover ] spawn await-terminal ] task-scope

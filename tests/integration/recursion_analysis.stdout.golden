@@ -17,6 +17,10 @@ Stack: [ ]
 Stack: [ ]
 PASS: non-tail inside branch arm
 Stack: [ ]
+=== self-call ending a recover body ===
+Stack: [ ]
+PASS: self-call ending a recover body is non-tail
+Stack: [ ]
 === no self-call ===
 Stack: [ ]
 Stack: [ ]

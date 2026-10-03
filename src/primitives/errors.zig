@@ -102,7 +102,7 @@ pub fn pascalToKebabRuntime(name: []const u8, buf: []u8) []const u8 {
 }
 
 pub const primitives = [_]Primitive{
-    .{ .name = "recover", .stack_effect = "try-quot recover-quot: ( error -- ..a ) --", .doc = "Execute try quotation; if error, run recover quotation with error on stack.", .func = nativeRecover },
+    .{ .name = "recover", .stack_effect = "..a try: ( ..a -- ..b ) handler: ( ..a error -- ..b ) -- ..b", .doc = "Execute try quotation; if it raises, restore the stack it started from, push the error, and run handler.", .func = nativeRecover, .markers = &.{@constCast(&markers_mod.recovery_combinator_marker)} },
     .{ .name = "cleanup", .stack_effect = "body-quot cleanup-quot --", .doc = "Execute body, always run cleanup, then re-throw any error from body.", .func = nativeCleanup },
     .{ .name = "rethrow", .stack_effect = "error --", .doc = "Re-raise an error value as an actual error.", .func = nativeRethrow, .markers = &.{@constCast(&markers_mod.never_returns_marker)} },
     .{ .name = "make-error", .stack_effect = "data message type -- error", .doc = "Construct an error object from data, message, and type.", .func = nativeMakeError },
@@ -174,25 +174,31 @@ pub fn pushCaughtError(ctx: *Context, err: anyerror, saved: Context.ErrorStateSn
     ctx.restoreErrorState(saved);
 }
 
-/// recover ( try-quot recover-quot -- )
+/// recover ( ..a try: ( ..a -- ..b ) handler: ( ..a error -- ..b ) -- ..b )
+///
+/// The handler sees the stack as it was when the try quotation began, with the error on top. What
+/// the failed attempt left depends on where it raised, so no handler could be written against it.
 pub fn nativeRecover(ctx: *Context) anyerror!void {
     // A recover reached from inside a cleanup quotation runs while the body's error is still
     // unwinding. That chain is not this consumer's to take, so the state is marked on the way in.
     const saved_error_state = ctx.saveErrorState();
 
-    // Note: Parameter effects are validated statically by validateParameterEffects
-    // before this function is called, so we just pop the quotations here.
     const recover_pc = try popQuotation(ctx);
     defer recover_pc.release();
     const try_pc = try popQuotation(ctx);
     defer try_pc.release();
 
-    // Execute try quotation with error-catching
+    // A try quotation that could not be undone must not start. Nothing has run when the
+    // reservation fails, so there is no partial state to restore.
+    const entry = try ctx.catch_snapshots.push(ctx.allocator, &ctx.stack);
+
     try_pc.executeWithFrame(ctx) catch |err| {
+        ctx.catch_snapshots.restore(entry, &ctx.stack);
         try pushCaughtError(ctx, err, saved_error_state);
         try recover_pc.executeWithFrame(ctx);
         return;
     };
+    ctx.catch_snapshots.discard(entry);
 }
 
 /// cleanup ( body-quot cleanup-quot -- )

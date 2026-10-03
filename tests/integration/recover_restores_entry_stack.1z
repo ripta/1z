@@ -1,0 +1,85 @@
+\ recover hands its handler the stack its try quotation began with, plus the error. What the
+\ body consumed or left before it raised does not reach the handler.
+\
+\ The shapes live in words so the eager suite runs them compiled as well as interpreted.
+use "testing" ;
+use "net/uri" ;
+
+(boom): never-returns ( -- * ) [ f "boom" EInvalidArgument make-error throw ] ;
+
+\ Pack the top n values so an assertion sees exactly what sits there.
+(top): ( ... n -- array ) [ array-n ] ;
+
+(native-raise):  ( seq n -- seen )   [ [ #nth ] [ 3 array-n ] recover ] ;
+(partial-raise): ( s -- s error )    [ [ drop 1 2 3 (boom) ] [ ] recover ] ;
+(deep-raise):    ( a b c -- a b c )  [ [ 3drop 99 (boom) ] [ drop ] recover ] ;
+(nth-or-none):   ( seq n -- option ) [ [ #nth >option:some ] [ 3drop option:none ] recover ] ;
+(no-raise):      ( a b -- c d e )    [ [ + 1 2 ] [ drop 0 ] recover ] ;
+
+"a native that pops its operands and then raises" test-section
+
+"below" { 1 2 3 } 5 (native-raise)
+swap "below" "the value under the entry stack is untouched" assert=
+dup 0 #nth { 1 2 3 } "the sequence is restored" assert=
+dup 1 #nth 5 "the index is restored" assert=
+2 #nth error-type: @get index-out-of-bounds: "the error sits on top" assert=
+
+"a compound body that fails partway" test-section
+
+"below" "input" (partial-raise)
+3 (top)
+dup 0 #nth "below" "the value under the entry stack is untouched" assert=
+dup 1 #nth "input" "the consumed input is restored and the partial values are gone" assert=
+2 #nth error-type: @get invalid-argument: "the body's error sits on top" assert=
+
+"a body that consumes below its own inputs" test-section
+
+10 20 30 (deep-raise)
+3 (top)
+{ 10 20 30 } "every consumed value comes back" assert=
+
+"the handler idiom drops the body's inputs with the error" test-section
+
+"below" { 1 2 3 } 5 (nth-or-none)
+2 (top)
+dup 0 #nth "below" "only the value below survives" assert=
+1 #nth option:none? "the handler answers none" assert-true
+
+"below" "ht!tp:permissive" parse?(rfc3986)
+2 (top)
+dup 0 #nth "below" "parse?(rfc3986) leaves nothing behind on a reject" assert=
+1 #nth option:none? "parse?(rfc3986) rejects ! in the scheme" assert-true
+
+"a body that does not raise" test-section
+
+"below" 1 2 (no-raise)
+4 (top)
+{ "below" 3 1 2 } "the body's own stack stands" assert=
+
+"nested recovers" test-section
+
+"outer" [
+  "inner" [ drop (boom) ] [ nip error-type: @get ] recover
+  "inner-done" (boom)
+] [ ] recover
+2 (top)
+dup 0 #nth "outer" "the outer entry stack is restored and the inner leftovers are gone" assert=
+1 #nth error-type: @get invalid-argument: "the outer handler sees its own error" assert=
+
+"x" [ (boom) ] [ drop [ "y" (boom) ] [ error-type: @get ] recover ] recover
+2 (top)
+dup 0 #nth "x" "a recover in a handler starts from the handler's stack" assert=
+1 #nth invalid-argument: "the inner handler ran" assert=
+
+"try with a curried input" test-section
+
+{ 1 2 3 } 1 [ #nth ] curry curry try
+result:ok? "an in-range read is ok" assert-true
+"below" { 1 2 3 } 9 [ #nth ] curry curry try
+2 (top)
+dup 0 #nth "below" "a failed try leaves only its result" assert=
+1 #nth result:err? "an out-of-range read is an err" assert-true
+
+\ A quotation that always raises never returns, so it satisfies the zero-input effect.
+[ (boom) ] try result:err? "try takes a quotation that always raises" assert-true
+[ (boom) ] ignore-errors

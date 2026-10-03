@@ -744,7 +744,7 @@ pub const InferenceEngine = struct {
         var uncertain_is_dynamic: bool = false;
         var dead_code: bool = false;
         var dead_code_warned: bool = false;
-        const DeadCodeCause = union(enum) { underflow, terminal_call: []const u8, terminal_branch };
+        const DeadCodeCause = union(enum) { underflow, terminal_call: []const u8, terminal_branch, terminal_recovery };
         var dead_code_cause: ?DeadCodeCause = null;
 
         // Quotation-local definitions encountered while walking this body, with
@@ -766,6 +766,11 @@ pub const InferenceEngine = struct {
                         .terminal_branch => try std.fmt.allocPrint(
                             self.allocator,
                             "dead code: unreachable after branch where every arm is terminal",
+                            .{},
+                        ),
+                        .terminal_recovery => try std.fmt.allocPrint(
+                            self.allocator,
+                            "dead code: unreachable after recovery where both arms are terminal",
                             .{},
                         ),
                         .underflow => try std.fmt.allocPrint(
@@ -903,7 +908,7 @@ pub const InferenceEngine = struct {
                                     }
                                     if (applied.terminal) {
                                         dead_code = true;
-                                        dead_code_cause = .terminal_branch;
+                                        dead_code_cause = if (combinator_kind == .recovery) .terminal_recovery else .terminal_branch;
                                     }
                                     continue;
                                 },
@@ -1058,12 +1063,13 @@ pub const InferenceEngine = struct {
         declared_input_count: ?usize = null,
     };
 
-    const CombinatorKind = enum { none, branch, loop };
+    const CombinatorKind = enum { none, branch, loop, recovery };
 
     fn classifyCombinator(word_def: *const WordDefinition) CombinatorKind {
         for (word_def.markers) |mk| {
             if (markers.isBranchCombinatorMarker(mk)) return .branch;
             if (markers.isLoopCombinatorMarker(mk)) return .loop;
+            if (markers.isRecoveryCombinatorMarker(mk)) return .recovery;
         }
         return .none;
     }
@@ -1209,7 +1215,10 @@ pub const InferenceEngine = struct {
                 const new_model_size = stack_model.items.len - consumed;
                 return .{ .applied = .{ .new_delta = total_delta, .new_model_size = new_model_size } };
             },
-            .none => return .fallthrough,
+
+            // A handler takes the error its try arm does not, so raw deltas cannot be compared
+            // without the annotations only the row-polymorphic path reads.
+            .recovery, .none => return .fallthrough,
         }
     }
 
@@ -1351,7 +1360,7 @@ pub const InferenceEngine = struct {
             }
         }
 
-        if (kind == .branch and quot_arm_count >= 2 and all_arms_terminal) {
+        if ((kind == .branch or kind == .recovery) and quot_arm_count >= 2 and all_arms_terminal) {
             const consumed = @min(stack_model.items.len, concrete_inputs);
             const new_model_size = stack_model.items.len - consumed;
             return .{ .applied = .{
@@ -1392,7 +1401,9 @@ pub const InferenceEngine = struct {
                 } };
             },
 
-            .branch => {
+            // A handler runs in place of a try arm that raised, from the same entry stack, so
+            // the two must leave the same stack, as the arms of a branch must.
+            .branch, .recovery => {
                 const first = adjustments.items[0];
                 for (adjustments.items[1..]) |adj| {
                     if (adj != first) {
@@ -1403,8 +1414,8 @@ pub const InferenceEngine = struct {
                             .severity = .err,
                             .message = try std.fmt.allocPrint(
                                 self.allocator,
-                                "branch quotations have mismatched row variable adjustments",
-                                .{},
+                                "{s} quotations have mismatched row variable adjustments",
+                                .{if (kind == .recovery) "recovery" else "branch"},
                             ),
                         });
                         return .unknown;
@@ -3137,6 +3148,111 @@ test "row-poly while with unbalanced quotations emits diagnostic" {
     try testing.expectEqual(InferenceResult.unknown, result);
     try testing.expectEqual(@as(usize, 1), engine.diagnostics.items.len);
     try testing.expectEqual(Severity.err, engine.diagnostics.items[0].severity);
+}
+
+const recover_try_annotation = StackEffect{
+    .inputs = &.{.{ .name = "..a", .is_row_variable = true }},
+    .outputs = &.{.{ .name = "..b", .is_row_variable = true }},
+};
+
+const recover_handler_annotation = StackEffect{
+    .inputs = &.{ .{ .name = "..a", .is_row_variable = true }, .{ .name = "error" } },
+    .outputs = &.{.{ .name = "..b", .is_row_variable = true }},
+};
+
+/// Register `recover` with its declared effect and marker, `drop`, and a word whose body is
+/// `[ try ] [ handler ] recover`.
+fn putRecoverCaller(dict: *Dictionary, try_body: []const Instruction, handler_body: []const Instruction, body: *[3]Instruction) !void {
+    const dummy: dictionary_mod.NativeFn = struct {
+        fn f(_: *Context) anyerror!void {}
+    }.f;
+
+    try dict.put("recover", .{
+        .name = "recover",
+        .markers = &.{@constCast(&markers.recovery_combinator_marker)},
+        .stack_effect = &.{
+            .inputs = &.{
+                .{ .name = "..a", .is_row_variable = true },
+                .{ .name = "try", .quotation_effect = &recover_try_annotation },
+                .{ .name = "handler", .quotation_effect = &recover_handler_annotation },
+            },
+            .outputs = &.{.{ .name = "..b", .is_row_variable = true }},
+        },
+        .action = .{ .native = dummy },
+    });
+
+    try dict.put("drop", .{
+        .name = "drop",
+        .stack_effect = &.{ .inputs = &.{.{ .name = "x" }}, .outputs = &.{} },
+        .action = .{ .native = dummy },
+    });
+
+    body.* = .{
+        makeInstr(.{ .push_literal = .{ .quotation = .{ .instructions = try_body } } }),
+        makeInstr(.{ .push_literal = .{ .quotation = .{ .instructions = handler_body } } }),
+        makeInstr(.{ .call_word = "recover" }),
+    };
+
+    try dict.put("test-word", .{
+        .name = "test-word",
+        .source_file = "test.1z",
+        .action = .{ .compound = body },
+    });
+}
+
+test "recovery arms that leave the same stack agree" {
+    // try: [ drop 1 ] has delta 0 against a concrete delta of 0. handler: [ drop drop 1 ] has
+    // delta -1 against a concrete delta of -1, since it also takes the error. Both adjust by 0.
+    var dict = Dictionary.init(testing.allocator);
+    defer dict.deinit();
+    var dispatch = DispatchTable.init(testing.allocator);
+    defer dispatch.deinit();
+
+    const try_body: []const Instruction = &.{
+        makeInstr(.{ .call_word = "drop" }),
+        makeInstr(.{ .push_literal = .{ .fixnum = 1 } }),
+    };
+    const handler_body: []const Instruction = &.{
+        makeInstr(.{ .call_word = "drop" }),
+        makeInstr(.{ .call_word = "drop" }),
+        makeInstr(.{ .push_literal = .{ .fixnum = 1 } }),
+    };
+
+    var body: [3]Instruction = undefined;
+    try putRecoverCaller(&dict, try_body, handler_body, &body);
+
+    var engine = InferenceEngine.init(&dict, &dispatch, &.{}, testing.allocator, null, false, true, null, null, .off, .off, .off, .off, null);
+    defer engine.deinit();
+
+    const result = try engine.inferWord("test-word");
+    try testing.expectEqual(InferenceResult{ .known = 0 }, result);
+    try testing.expectEqual(@as(usize, 0), engine.diagnostics.items.len);
+}
+
+test "a recovery handler that drops only the error is reported" {
+    // try: [ drop 1 ] adjusts by 0. handler: [ drop 1 ] has delta 0 against -1, so it adjusts by
+    // 1 and leaves the try quotation's input behind.
+    var dict = Dictionary.init(testing.allocator);
+    defer dict.deinit();
+    var dispatch = DispatchTable.init(testing.allocator);
+    defer dispatch.deinit();
+
+    const arm: []const Instruction = &.{
+        makeInstr(.{ .call_word = "drop" }),
+        makeInstr(.{ .push_literal = .{ .fixnum = 1 } }),
+    };
+
+    var body: [3]Instruction = undefined;
+    try putRecoverCaller(&dict, arm, arm, &body);
+
+    var engine = InferenceEngine.init(&dict, &dispatch, &.{}, testing.allocator, null, false, true, null, null, .off, .off, .off, .off, null);
+    defer engine.deinit();
+
+    const result = try engine.inferWord("test-word");
+    try testing.expectEqual(InferenceResult.unknown, result);
+    try testing.expectEqual(@as(usize, 1), engine.diagnostics.items.len);
+    try testing.expectEqual(Severity.err, engine.diagnostics.items[0].severity);
+    try testing.expectEqualStrings("recovery quotations have mismatched row variable adjustments", engine.diagnostics.items[0].message);
 }
 
 test "row-poly keep with insufficient stack falls through" {

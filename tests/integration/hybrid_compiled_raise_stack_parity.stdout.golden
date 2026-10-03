@@ -15,72 +15,88 @@ Stack: [ ]
 === a tag guard after dropping an owned heap slot ===
 Stack: [ ]
 PASS: handler ran
+Stack: [ "hello" "hello" "hello" ]
+PASS: handler sees the restored dropped slot
+Stack: [ "hello" "hello" ]
+PASS: handler sees the restored operand
 Stack: [ "hello" ]
-PASS: string below the raise
+PASS: handler sees the string below
 Stack: [ ]
 === division by zero after a relabeling swap ===
 Stack: [ ]
 PASS: handler ran
+Stack: [ "hello" 0 7 ]
+PASS: handler sees the restored dividend
+Stack: [ "hello" 0 ]
+PASS: handler sees the restored divisor
 Stack: [ "hello" ]
-PASS: string below the raise
+PASS: handler sees the string below
 Stack: [ ]
 === division by zero over an unboxed sum ===
 Stack: [ ]
 PASS: handler ran
-Stack: [ "hello" 3 ]
-PASS: unboxed sum below the raise
+Stack: [ "hello" 1 2 7 0 ]
+PASS: handler sees the restored divisor
+Stack: [ "hello" 1 2 7 ]
+PASS: handler sees the restored dividend
+Stack: [ "hello" 1 2 ]
+PASS: handler sees the restored second addend
+Stack: [ "hello" 1 ]
+PASS: handler sees the restored first addend
 Stack: [ "hello" ]
-PASS: string below the sum
+PASS: handler sees the string below
 Stack: [ ]
 === choose with a non-quotation selector after dropping an owned heap slot ===
 Stack: [ ]
 PASS: handler ran
-Stack: [ "hello" "hello" "hello" "hello" "hello" ]
-PASS: second arm copy
-Stack: [ "hello" "hello" "hello" "hello" ]
-PASS: first arm copy
+Stack: [ "hello" "hello" "hello" "not a quotation" "hello" ]
+PASS: handler sees the restored dropped slot
+Stack: [ "hello" "hello" "hello" "not a quotation" ]
+PASS: handler sees the restored selector
 Stack: [ "hello" "hello" "hello" ]
-PASS: second arm
+PASS: handler sees the restored second arm
 Stack: [ "hello" "hello" ]
-PASS: first arm
+PASS: handler sees the restored first arm
 Stack: [ "hello" ]
-PASS: string below the arms
+PASS: handler sees the string below the arms
 Stack: [ ]
 === an inline unwrap over a copied operand ===
 Stack: [ ]
 PASS: handler ran
 Stack: [ "hello" "hello" "hello" ]
-PASS: copy left by the unwrap
+PASS: handler sees the restored unwrap operand
 Stack: [ "hello" "hello" ]
-PASS: original left by the unwrap
+PASS: handler sees the restored operand below it
 Stack: [ "hello" ]
-PASS: string below the raise
+PASS: handler sees the string below
 Stack: [ ]
 === a typed element check over a copied vector ===
 Stack: [ ]
 PASS: handler ran
-Stack: [ "hello" <vector(fixnum) V{ 1 }> <vector(fixnum) V{ 1 }> ]
-PASS: vector copy is unchanged
+Stack: [ "hello" <vector(fixnum) V{ 1 }> "hello" ]
+PASS: handler sees the restored element
 Stack: [ "hello" <vector(fixnum) V{ 1 }> ]
 PASS: vector is unchanged
 Stack: [ "hello" ]
-PASS: string below the raise
+PASS: handler sees the string below
 Stack: [ ]
 === a struct field read after dropping an owned heap slot ===
 Stack: [ ]
 PASS: handler ran
+Stack: [ "hello" "hello" "hello" ]
+PASS: handler sees the restored dropped slot
 Stack: [ "hello" "hello" ]
-PASS: operand left by the failed dispatch
+PASS: handler sees the restored operand
 Stack: [ "hello" ]
-PASS: string below the raise
+PASS: handler sees the string below
 Stack: [ ]
 === a struct field write after a relabeling swap ===
 Stack: [ ]
 PASS: handler ran
-Stack: [ "hello" "hello" 5 ]
-PASS: value left by the failed write
-Stack: [ "hello" "hello" ]
-PASS: operand left by the failed write
+Stack: [ "hello" 5 "hello" ]
+PASS: handler sees the restored operand
+Stack: [ "hello" 5 ]
+PASS: handler sees the restored value
 Stack: [ "hello" ]
-PASS: string below the raise
+PASS: handler sees the string below
 Stack: [ ]

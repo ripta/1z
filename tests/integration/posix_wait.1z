@@ -40,12 +40,8 @@ use "time" ;
 
 \ The wrapper marshals a status buffer (ffi capability), then calls the
 \ system-capped waitpid binding. Granting both reaches the syscall (ECHILD on the
-\ bad pid); granting ffi alone denies the binding before the syscall. The denied
-\ call leaves a partial stack, so both checks run inside a task-scope whose
-\ isolated stack is discarded at scope exit.
-[
-  [ sandbox{ ffi system } [ 2147483646 "WNOHANG" posix-const waitpid ] with-sandbox ]
-  [ error-type: @get posix-error: "ffi+system grant lets waitpid reach the syscall" assert= ] recover
-  [ sandbox{ ffi } [ 2147483646 "WNOHANG" posix-const waitpid ] with-sandbox ]
-  [ error-type: @get permission-denied: "ffi-only grant denies the system-capped waitpid" assert= ] recover
-] task-scope
+\ bad pid); granting ffi alone denies the binding before the syscall.
+[ sandbox{ ffi system } [ 2147483646 "WNOHANG" posix-const waitpid ] with-sandbox ]
+[ error-type: @get posix-error: "ffi+system grant lets waitpid reach the syscall" assert= ] recover
+[ sandbox{ ffi } [ 2147483646 "WNOHANG" posix-const waitpid ] with-sandbox ]
+[ error-type: @get permission-denied: "ffi-only grant denies the system-capped waitpid" assert= ] recover

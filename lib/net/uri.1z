@@ -341,7 +341,7 @@ parse: ( s -- uri ) [ parse(rfc3986) ] ;
 \\ and `option:none` on any malformed input.
 parse?(rfc3986): ( s -- option ) [
   [ parse(rfc3986) >option:some ]
-  [ drop option:none ]
+  [ 2drop option:none ]
   recover
 ] ;
 
@@ -349,7 +349,7 @@ parse?(rfc3986): ( s -- option ) [
 \\ and `option:none` on any malformed input.
 parse?(whatwg): ( s -- option ) [
   [ parse(whatwg) >option:some ]
-  [ drop option:none ]
+  [ 2drop option:none ]
   recover
 ] ;
 

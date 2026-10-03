@@ -17,6 +17,8 @@ Stack: [ ]
 === a type mismatch raised by an inline unwrap ===
 Stack: [ ]
 PASS: handler ran
+Stack: [ "hello" "hello" ]
+PASS: handler sees the restored operand
 Stack: [ "hello" ]
 PASS: string below the raise
 Stack: [ ]
@@ -29,7 +31,7 @@ PASS: string below the read
 Stack: [ ]
 PASS: handler ran
 Stack: [ "hello" "hello" ]
-PASS: operand left by the failed dispatch
+PASS: handler sees the restored operand
 Stack: [ "hello" ]
 PASS: string below the raise
 Stack: [ ]
