@@ -9,7 +9,8 @@ strip-trailing-slashes: ( path -- path ) [
   [ ]
   [ dup #last "/" =
     [ dup #len 1 - #take strip-trailing-slashes ]
-    when
+    [ ]
+    if
   ]
   if
 ] ;
@@ -43,7 +44,7 @@ dirname: ( path -- dir ) [
       [
         dup #len 1 - #take
         "/" #join
-        dup #empty? [ drop "/" ] when
+        dup #empty? [ drop "/" ] [ ] if
       ]
       if
     ]

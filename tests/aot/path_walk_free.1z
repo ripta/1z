@@ -1,0 +1,22 @@
+\ Interpreter-free (`--interpreter-fallback=false`) run of `dirname` and a caller that consumes it.
+\
+\ `walk-up` is the formatter's config-file walk without the existence probe. Each step compares a
+\ directory against its `dirname`, so the declared `( path -- dir )` must reach the caller intact.
+use "os/path" ;
+
+"/foo/bar//" strip-trailing-slashes print-line
+"/foo/bar.txt" dirname print-line
+"foo.txt" dirname print-line
+"/" dirname print-line
+
+"/" dup dirname = inspect print-line
+"/foo" dup dirname = inspect print-line
+
+walk-up: ( dir: string -- ) [
+  dup print-line
+  dup dirname
+  2dup = [ 2drop ] [ nip walk-up ] if
+] ;
+
+"/a/b/c/" walk-up
+"a/b" walk-up
