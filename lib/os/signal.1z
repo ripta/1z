@@ -18,8 +18,11 @@ SIGWINCH: const [ WINCH: native.signal-number >signal ] ;
 \ Convenience words that unwrap the virtual type before calling the native primitives.
 
 \\ Register a handler quotation for a signal.
-\\ The handler receives the signal number (fixnum) on the stack.
-on-signal: ( signal quot -- ) [ swap unmake-signal swap set-signal-handler ] ;
+\\
+\\ The handler receives the signal number (fixnum) on the stack, and must consume it and leave
+\\ nothing. When it fails, the stack it interrupted is put back. An error other than a `throw`, or
+\\ a return with the stack changed, is reported on stderr. A `throw` still propagates.
+on-signal: ( signal quot: ( signum -- ) -- ) [ swap unmake-signal swap set-signal-handler ] ;
 
 \\ Remove the handler for a signal, restoring default behavior.
 off-signal: ( signal -- ) [ unmake-signal clear-signal-handler ] ;
@@ -28,7 +31,7 @@ off-signal: ( signal -- ) [ unmake-signal clear-signal-handler ] ;
 signal-handler: ( signal -- quot/f ) [ unmake-signal get-signal-handler ] ;
 
 \\ Register a handler for SIGINT (Ctrl-C).
-on-interrupt: ( quot -- ) [ SIGINT swap on-signal ] ;
+on-interrupt: ( quot: ( signum -- ) -- ) [ SIGINT swap on-signal ] ;
 
 \\ Register a handler for SIGTERM.
-on-terminate: ( quot -- ) [ SIGTERM swap on-signal ] ;
+on-terminate: ( quot: ( signum -- ) -- ) [ SIGTERM swap on-signal ] ;

@@ -8,8 +8,11 @@
 [ 1 0 / ] [ drop 99 ] recover .
 
 \ -- cleanup: body succeeds, cleanup runs --
-[ 10 ] [ 1 + ] cleanup .
+[ 10 ] [ 20 . ] cleanup .
 
 \ -- cleanup: body throws, cleanup runs, error re-thrown --
 [ [ 1 0 / ] [ "cleaned" print-line ] cleanup ]
 [ drop "recovered" print-line ] recover
+
+\ -- a try quotation whose body is a recover: its effect is the inner try quotation's --
+[ [ 1 0 / ] [ drop 7 ] recover ] [ drop 0 ] recover .

@@ -1,35 +1,49 @@
-Prelude compilation: 470/471 words compiled (99.8%)
+Prelude compilation: 470/476 words compiled (98.7%)
+  word 'associative' cannot be compiled
+      NC.4: word pushes a value that cannot be embedded in an AOT binary
+      hint: blocked until AOT literals can be serialized
+  word 'comparable' cannot be compiled
+      NC.4: word pushes a value that cannot be embedded in an AOT binary
+      hint: blocked until AOT literals can be serialized
+  word 'stringable' cannot be compiled
+      NC.4: word pushes a value that cannot be embedded in an AOT binary
+      hint: blocked until AOT literals can be serialized
+  word 'inspectable' cannot be compiled
+      NC.4: word pushes a value that cannot be embedded in an AOT binary
+      hint: blocked until AOT literals can be serialized
   word 'pragma-get?' cannot be compiled
       NC.13: word body underflows the abstract stack (row-variable effects)
       hint: blocked until row-variable stack regions can be modeled
+  word 'native' cannot be compiled
+      NC.4: word pushes a value that cannot be embedded in an AOT binary
+      hint: blocked until AOT literals can be serialized
 Quotation bodies compiled: 0
 Inline PIC sites: 90/279 generic call sites preseeded
-AOT interpreter fallbacks: 308 total
+AOT interpreter fallbacks: 311 total
   native: 247
-  per-op-native: 42
+  per-op-native: 44
   compound-uncompiled: 2
-  quotation: 17
+  quotation: 18
   sites:
-    native: nan? -> = (line 456)
-    quotation: run-benchmarks -> <quotation> (line 1269)
-    quotation: (any-loop) -> <quotation> (line 486)
-    native: quotation? -> = (line 419)
-    native: . -> inspect (line 735)
-    native: . -> inspect (line 735)
-    native: #ends-with? -> #len (line 1343)
-    native: #ends-with? -> #len (line 1343)
-    native: #ends-with? -> #len (line 1343)
-    native: #ends-with? -> #len (line 1343)
-    native: #ends-with? -> < (line 1343)
-    native: #ends-with? -> #len (line 1345)
-    native: #ends-with? -> #len (line 1345)
-    native: #ends-with? -> #len (line 1345)
-    native: #ends-with? -> #len (line 1345)
-    per-op-native: #ends-with? -> - (line 1345)
-    ... 292 more
-  static-check: jitInterpretedCall=2/2 jitNativeWordCall=289/289 jitCallQuotation=17/17 (matches build-time inventory)
+    native: nan? -> = (line 462)
+    quotation: run-benchmarks -> <quotation> (line 1275)
+    quotation: (any-loop) -> <quotation> (line 492)
+    native: quotation? -> = (line 425)
+    native: . -> inspect (line 741)
+    native: . -> inspect (line 741)
+    native: #ends-with? -> #len (line 1351)
+    native: #ends-with? -> #len (line 1351)
+    native: #ends-with? -> #len (line 1351)
+    native: #ends-with? -> #len (line 1351)
+    native: #ends-with? -> < (line 1351)
+    native: #ends-with? -> #len (line 1353)
+    native: #ends-with? -> #len (line 1353)
+    native: #ends-with? -> #len (line 1353)
+    native: #ends-with? -> #len (line 1353)
+    per-op-native: #ends-with? -> - (line 1353)
+    ... 295 more
+  static-check: jitInterpretedCall=2/2 jitNativeWordCall=291/291 jitCallQuotation=18/18 (matches build-time inventory)
 Warning: '4keep' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
-Warning: 'try' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
 Warning: 'bi' parameter 'p' has row-variable effect; quotation call falls back to interpreter
 Warning: 'bi' parameter 'q' has row-variable effect; quotation call falls back to interpreter
 Warning: '3keep' parameter 'quot' has row-variable effect; quotation call falls back to interpreter

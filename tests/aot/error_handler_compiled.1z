@@ -12,8 +12,8 @@ safe-div: ( a b -- n ) [ [ / ] [ 3drop 99 ] recover ] ;
 10 0 safe-div .
 
 \ -- cleanup: body succeeds, cleanup runs --
-with-cleanup: ( -- n n ) [ [ 10 ] [ 20 ] cleanup ] ;
-with-cleanup . .
+with-cleanup: ( -- n ) [ [ 10 ] [ 20 . ] cleanup ] ;
+with-cleanup .
 
 \ -- cleanup: body throws, error re-thrown, outer recover catches --
 cleanup-recover: ( -- s ) [ [ [ 1 0 / ] [ ] cleanup ] [ drop "caught" ] recover ] ;

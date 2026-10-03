@@ -1,0 +1,25 @@
+\ `1z check` holds a literal handler quotation to the effect it will run under. Each handler runs on
+\ a stack whose owner cannot account for anything the handler leaves or takes, so a miscounted
+\ literal is reported before it ever runs. Each shape has a correct twin that stays silent.
+
+use "ffi" ;
+use "os/signal" ;
+
+\ cleanup's quotation runs over the body's results or its entry stack, so it must be neutral.
+cleanup-neutral: ( -- n ) [ [ 10 ] [ ] cleanup ] ;
+cleanup-pushes: ( -- n ) [ [ 10 ] [ 20 ] cleanup ] ;
+
+\ A signal handler takes the signal number and leaves nothing.
+signal-neutral: ( -- ) [ SIGUSR1 [ drop ] on-signal ] ;
+signal-leaves: ( -- ) [ SIGUSR1 [ drop 777 ] on-signal ] ;
+
+\ A hook takes its event's arguments and leaves nothing.
+hook-neutral:        ( -- ) [ on:word-defined [ drop ] add-hook ] ;
+hook-leaves:         ( -- ) [ on:word-defined [ drop 888 ] add-hook ] ;
+module-hook-neutral: ( -- ) [ on:module-loaded [ 2drop ] add-hook ] ;
+module-hook-short:   ( -- ) [ on:module-loaded [ drop ] add-hook ] ;
+
+\ A callback takes its C arguments and leaves its return value.
+callback-neutral:     ( -- cb ) [ [ + ] ffi{ i32 i32 -> i32 } ffi-callback ] ;
+callback-drops:       ( -- cb ) [ [ + drop ] ffi{ i32 i32 -> i32 } ffi-callback ] ;
+void-callback-leaves: ( -- cb ) [ [ ] ffi{ i32 } ffi-callback ] ;

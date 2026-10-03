@@ -18,7 +18,7 @@ SIGTERM unmake-signal fixnum? "SIGTERM unwraps to fixnum" assert-true
 f SIGTERM signal-handler "SIGTERM has no handler initially" assert=
 
 \ Register a handler
-SIGTERM [ drop "got SIGTERM" ] on-signal
+SIGTERM [ drop ] on-signal
 
 \ Retrieve handler (should not be f)
 SIGTERM signal-handler f = not "SIGTERM handler is registered" assert-true

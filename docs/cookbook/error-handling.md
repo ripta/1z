@@ -77,22 +77,24 @@ Use sparingly -- silent failure hides bugs.
 
 ## `cleanup` -- guaranteed teardown
 
-`cleanup` runs the second quotation whether the first succeeds or fails.
-Both results stay on the stack:
+`cleanup` runs the second quotation whether the first succeeds or fails. The
+cleanup quotation must leave the stack as it found it. On success it runs over
+the body's results:
 
 ```
-[ 10 ] [ 20 ] cleanup
+V{ } dup [ 10 ] swap [ "cleaned" #push! drop ] curry cleanup
 ```
 
 Output:
 
 ```
-\ stack: 10 20
+\ stack: V{ "cleaned" } 10
 ```
 
-When the body throws, cleanup still runs, then the error propagates. A
-`recover` around it restores the stack it began with, so this cleanup records
-that it ran in a vector rather than on the stack:
+When the body throws, the stack is put back to what it was when the body
+began, cleanup runs on that, and then the error propagates. A `recover` around
+it restores its own entry stack, so this cleanup records that it ran in a
+vector rather than on the stack:
 
 ```
 V{ } dup

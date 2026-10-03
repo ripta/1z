@@ -1,0 +1,45 @@
+\ A hook runs inside `;`, `load`, or the exit path, and none of them can account for a value it
+\ leaves. A hook that raises, or that returns with the stack changed, is reported on stderr and the
+\ stack it was handed is put back.
+\
+\ Each failing hook calls a body read out of an array, so its effect cannot be inferred.
+
+use "testing" ;
+
+opaque: ( body -- handler ) [ 1array [ 0 #nth call ] curry ] ;
+
+"a word-defined hook that leaves a value" test-section
+1 2
+{ } word-defined-hooks [
+  on:word-defined [ drop 888 ] opaque add-hook
+  leaves-a-value: [ 1 ] ;
+] with-parameter
+2 array-n { 1 2 } "the defining code's stack is put back" assert=
+
+"a word-defined hook that swaps a value below its argument" test-section
+1 2
+{ } word-defined-hooks [
+  on:word-defined [ drop drop 888 ] opaque add-hook
+  swaps-a-value: [ 1 ] ;
+] with-parameter
+2 array-n { 1 2 } "the consumed value is put back" assert=
+
+"a word-defined hook that raises partway" test-section
+1 2
+{ } word-defined-hooks [
+  on:word-defined [ drop 5 6 this-word-does-not-exist ] opaque add-hook
+  raises-partway: [ 1 ] ;
+] with-parameter
+2 array-n { 1 2 } "the partial state is discarded" assert=
+
+"a module-loaded hook that leaves a value" test-section
+1 2
+{ } module-loaded-hooks [
+  on:module-loaded [ 2drop 999 ] opaque add-hook
+  "os/path" load drop
+] with-parameter
+2 array-n { 1 2 } "the loading code's stack is put back" assert=
+
+\ Reported when the program exits. `add-hook` declares no runtime effect, so a literal reaches
+\ the fire site.
+on:exit [ drop 777 ] add-hook

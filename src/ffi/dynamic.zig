@@ -2012,25 +2012,45 @@ fn callbackTrampoline(
     // own contribution is bounded from here.
     const saved_error_state = ctx.saveErrorState();
 
+    // C may call further callbacks on this stack once this one returns. A callback that fails has
+    // the stack it was handed put back.
+    //
+    // Every restore runs before `callbackFail`, whose hook may never return.
+    const entry = ctx.catch_snapshots.push(ctx.allocator, &ctx.stack) catch |err| {
+        return callbackFail(ud, args, ret, err, false, saved_error_state);
+    };
+
     for (ud.sig.param_types, 0..) |pt, i| {
         const arg_ptr = args[i].?;
         unmarshalArg(ctx, pt, arg_ptr) catch |err| {
+            ctx.catch_snapshots.restore(entry, &ctx.stack);
             return callbackFail(ud, args, ret, err, false, saved_error_state);
         };
     }
 
     ctx.executeQuotationWithFrame(ud.quotation, ud.quotation_owner) catch |err| {
+        ctx.catch_snapshots.restore(entry, &ctx.stack);
         return callbackFail(ud, args, ret, err, true, saved_error_state);
     };
 
-    if (ud.sig.return_type.tag != .void_type) {
-        const result_val = ctx.stack.pop() catch {
-            return callbackFail(ud, args, ret, error.StackUnderflow, false, saved_error_state);
-        };
-        defer container_backing.releaseValue(result_val);
-        marshalCallbackReturn(ret, ud.sig.return_type, result_val) catch |err| {
-            return callbackFail(ud, args, ret, err, false, saved_error_state);
-        };
+    // The callback's contract is its C signature: it leaves its return value, if any, over the
+    // stack it was handed, and nothing else.
+    const returns_value = ud.sig.return_type.tag != .void_type;
+    const result_val: ?Value = if (returns_value) ctx.stack.pop() catch null else null;
+
+    if ((returns_value and result_val == null) or !ctx.catch_snapshots.unchanged(entry, &ctx.stack)) {
+        // Released by hand rather than deferred: a hook that longjmps skips every defer.
+        if (result_val) |v| container_backing.releaseValue(v);
+        ctx.catch_snapshots.restore(entry, &ctx.stack);
+        ctx.pending_error_message = "ffi callback returned with the stack changed";
+        return callbackFail(ud, args, ret, error.StackEffectMismatch, true, saved_error_state);
+    }
+    ctx.catch_snapshots.discard(entry);
+
+    if (result_val) |v| {
+        const marshalled = marshalCallbackReturn(ret, ud.sig.return_type, v);
+        container_backing.releaseValue(v);
+        marshalled catch |err| return callbackFail(ud, args, ret, err, false, saved_error_state);
     }
 }
 

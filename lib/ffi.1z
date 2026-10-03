@@ -85,6 +85,10 @@ bind-close: ( resource ffi-fn -- ) [ native.bind-close ] ;
 \\ Create a C-callable function pointer from a 1z quotation and FFI signature.
 \\ The returned resource can be passed as a ptr:ffi-callback argument to ffi-call.
 \\ Close the resource when done to free the closure memory.
+\\
+\\ The quotation takes one value per parameter and leaves the return value, or nothing for a void
+\\ return. A callback that raises, or returns with anything else on the stack, has failed: the
+\\ stack is put back, and the failure re-raises in the FFI caller once C returns.
 ffi-callback: ( quotation sig -- ffi-callback ) [ f f native.ffi-callback ] ;
 
 \\ Like ffi-callback, but with an error hook bound at creation.

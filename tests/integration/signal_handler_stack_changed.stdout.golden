@@ -1,0 +1,8 @@
+=== a handler that leaves a value ===
+PASS: the interrupted stack is put back
+=== a handler that swaps a value below its argument ===
+PASS: the consumed value is put back
+=== a handler that raises partway ===
+PASS: the partial state is discarded
+=== a stack-neutral handler ===
+PASS: a neutral handler leaves the stack alone

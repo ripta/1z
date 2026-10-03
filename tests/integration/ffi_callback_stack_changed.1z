@@ -1,0 +1,50 @@
+\ An FFI callback runs on the stack of the code that made the FFI call, and C may call further
+\ callbacks on it. A callback that raises, or that returns with anything but its return value
+\ over the stack it was handed, has failed: the stack is put back, and the failure re-raises in
+\ the FFI caller once C returns.
+
+use "testing" ;
+use "ffi" ;
+
+toy-lib-ext: ( -- ext ) [
+  sys-info "os" @get "macos" = [ ".dylib" ] [ ".so" ] if
+] ;
+
+toy-lib-path: ( -- path ) [
+  environ "PWD" @get "/zig-out/ext/libtoy" #append toy-lib-ext #append
+] ;
+
+toy-apply2: const [
+  toy-lib-path lib-open "toy_apply2" ffi{ i32 i32 ptr:ffi-callback -> i32 } bound-symbol
+] ;
+
+\ Call toy_apply2(a, b, body) through a callback built over body.
+(apply2): ( a b body -- result ) [
+  ffi{ i32 i32 -> i32 } ffi-callback
+  [ toy-apply2 ffi-call ] keep
+  resource-close
+] ;
+
+(failing-apply2): ( below a b body -- below error-type ) [
+  [ (apply2) ] [ error-type: @get [ 3drop ] dip ] recover
+] ;
+
+"a callback that leaves an extra value" test-section
+"below" 3 4 [ + 99 ] (failing-apply2)
+stack-effect-mismatch: "the callback fails in the FFI caller" assert=
+"below" "the caller's stack is put back" assert=
+
+"a callback that consumes a value below its arguments" test-section
+"below" 3 4 [ 2drop drop 5 ] (failing-apply2)
+stack-effect-mismatch: "a same-depth swap is caught" assert=
+"below" "the consumed value is put back" assert=
+
+"a callback that raises partway" test-section
+"below" 3 4 [ 2drop 5 6 this-word-does-not-exist ] (failing-apply2)
+unknown-word: "the callback's own error re-raises" assert=
+"below" "the partial state is discarded" assert=
+
+"a callback that keeps its contract" test-section
+"below" 3 4 [ + ] (apply2)
+7 "the return value comes back" assert=
+"below" "the stack below is untouched" assert=

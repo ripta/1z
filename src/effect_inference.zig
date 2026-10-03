@@ -325,6 +325,9 @@ const StackEntry = union(enum) {
     typed_union: TypeUnion,
     protocol_bounded: *const value_mod.ProtocolDescriptor,
     other,
+    /// A struct instance pushed as a literal, kept so a check that depends on a literal argument
+    /// can read it. It carries no type, so every other consumer treats it as `.other`.
+    struct_literal: Value,
 };
 
 pub const InferenceEngine = struct {
@@ -708,6 +711,7 @@ pub const InferenceEngine = struct {
     fn stackEntryForValue(self: *const InferenceEngine, val: Value) StackEntry {
         switch (val) {
             .quotation => |quot| return .{ .quotation = quot },
+            .struct_instance => return .{ .struct_literal = val },
             .tagged => |tagged| {
                 const tv = tagged.tag.type_val orelse return .other;
                 return .{ .typed = .{
@@ -880,6 +884,11 @@ pub const InferenceEngine = struct {
                         }
                     }
 
+                    // A combinator's arms are compared against each other on its own path.
+                    if (combinator_kind == .none and self.isInCheckedSource(caller.source_file)) {
+                        try self.checkLiteralQuotationArgs(&wd, stack_model.items, instructions, idx, caller, instr.line);
+                    }
+
                     // Try row-polymorphic path for any word with row-poly effect and quotation annotations
                     if (wd.stack_effect) |eff| {
                         if (stack_effect_mod.hasAnyRowVariable(eff.*)) {
@@ -889,6 +898,7 @@ pub const InferenceEngine = struct {
                                 &stack_model,
                                 delta,
                                 caller,
+                                instr.line,
                             );
                             switch (rp_result) {
                                 .applied => |applied| {
@@ -1140,7 +1150,7 @@ pub const InferenceEngine = struct {
                         },
                     }
                 },
-                .typed, .typed_union, .protocol_bounded, .other => {},
+                .typed, .typed_union, .protocol_bounded, .other, .struct_literal => {},
             }
         }
 
@@ -1247,7 +1257,7 @@ pub const InferenceEngine = struct {
 
     fn mergeEntry(a: StackEntry, b: StackEntry) StackEntry {
         switch (a) {
-            .other => return .other,
+            .other, .struct_literal => return .other,
             .quotation => return .other,
             .typed => |tv_a| {
                 switch (b) {
@@ -1300,6 +1310,7 @@ pub const InferenceEngine = struct {
         stack_model: *std.ArrayListUnmanaged(StackEntry),
         current_delta: i64,
         caller: CallerInfo,
+        line: usize,
     ) Allocator.Error!CombinatorResult {
         const eff = word_def.stack_effect orelse return .fallthrough;
         const concrete_inputs = eff.concreteInputCount();
@@ -1338,6 +1349,16 @@ pub const InferenceEngine = struct {
                         switch (qd) {
                             .known => |d| {
                                 const annotated_qcd = annotation.concreteDelta();
+
+                                // An annotation with no row variable is a count, not an arm to
+                                // compare against the others, so the literal must meet it.
+                                if (kind == .none and !self.body_terminal and
+                                    !stack_effect_mod.hasAnyRowVariable(annotation.*) and
+                                    self.isInCheckedSource(caller.source_file))
+                                {
+                                    try self.reportAnnotationMismatch(param.name, annotation, d, caller, line);
+                                }
+
                                 try adjustments.append(self.allocator, d - annotated_qcd);
                                 if (rp_branch_count < max_rp_stacks) {
                                     rp_branch_stacks[rp_branch_count] = rp_out;
@@ -1352,7 +1373,7 @@ pub const InferenceEngine = struct {
                             },
                         }
                     },
-                    .typed, .typed_union, .protocol_bounded, .other => {
+                    .typed, .typed_union, .protocol_bounded, .other, .struct_literal => {
                         all_literal = false;
                         all_arms_terminal = false;
                     },
@@ -1455,6 +1476,184 @@ pub const InferenceEngine = struct {
         }
     }
 
+    /// Report a literal quotation argument whose stack adjustment disagrees with the effect it
+    /// will run under.
+    ///
+    /// `validateParameterEffects` makes the same comparison when the word is called. This reports
+    /// the literal before anything runs. An annotation with a row variable is left to the
+    /// combinator paths, which compare arms against each other rather than against a count.
+    fn checkLiteralQuotationArgs(
+        self: *InferenceEngine,
+        word_def: *const WordDefinition,
+        stack_model: []const StackEntry,
+        instructions: []const Instruction,
+        idx: usize,
+        caller: CallerInfo,
+        line: usize,
+    ) Allocator.Error!void {
+        try self.checkHandlerArgs(word_def, stack_model, instructions, idx, caller, line);
+
+        // A row-polymorphic word has each literal arm walked by `handleRowPoly`, which checks a
+        // concrete annotation there. Walking it here too would report its diagnostics twice.
+        const eff = word_def.stack_effect orelse return;
+        if (stack_effect_mod.hasAnyRowVariable(eff.*)) return;
+
+        const concrete_inputs = eff.concreteInputCount();
+        if (stack_model.len < concrete_inputs) return;
+        const base = stack_model.len - concrete_inputs;
+
+        for (eff.inputs, 0..) |param, i| {
+            const annotation = param.quotation_effect orelse continue;
+            if (stack_effect_mod.hasAnyRowVariable(annotation.*)) continue;
+
+            const quot = switch (stack_model[base + i]) {
+                .quotation => |q| q,
+                else => continue,
+            };
+            const actual = try self.inferLiteralDelta(quot, caller) orelse continue;
+            try self.reportAnnotationMismatch(param.name, annotation, actual, caller, line);
+        }
+    }
+
+    /// The handler words whose quotation's effect depends on another argument, so no single
+    /// annotation can declare it. Each is checked when that argument is a literal.
+    ///
+    /// The words are matched by name, arity, and defining file: `add-hook` from the prelude, and the
+    /// two callback constructors from `lib/ffi.1z`.
+    fn checkHandlerArgs(
+        self: *InferenceEngine,
+        word_def: *const WordDefinition,
+        stack_model: []const StackEntry,
+        instructions: []const Instruction,
+        idx: usize,
+        caller: CallerInfo,
+        line: usize,
+    ) Allocator.Error!void {
+        const eff = word_def.stack_effect orelse return;
+        const arity = eff.inputs.len;
+        if (stack_model.len < arity) return;
+        const args = stack_model[stack_model.len - arity ..];
+
+        if (std.mem.eql(u8, word_def.name, "add-hook") and arity == 2 and definedIn(word_def, "prelude")) {
+            // The variant word's declared output is untyped, so the event is read from the call
+            // that pushed it, just ahead of the quotation literal.
+            if (idx < 2) return;
+            if (instructions[idx - 1].op != .push_literal) return;
+            const variant = instructions[idx - 2].op.callTargetName() orelse return;
+            const event = hookEventEffect(variant) orelse return;
+            const quot = switch (args[1]) {
+                .quotation => |q| q,
+                else => return,
+            };
+            const actual = try self.inferLiteralDelta(quot, caller) orelse return;
+            return self.reportDeltaMismatch("quot", event.delta, event.text, actual, caller, line);
+        }
+
+        const is_callback = definedIn(word_def, "ffi") and
+            (std.mem.eql(u8, word_def.name, "ffi-callback") and arity == 2 or
+                std.mem.eql(u8, word_def.name, "ffi-callback-with-error-hook") and arity == 4);
+        if (is_callback) {
+            const sig = switch (args[1]) {
+                .struct_literal => |v| v,
+                else => return,
+            };
+            const shape = callbackShape(sig) orelse return;
+            const quot = switch (args[0]) {
+                .quotation => |q| q,
+                else => return,
+            };
+            const actual = try self.inferLiteralDelta(quot, caller) orelse return;
+
+            var buf: [128]u8 = undefined;
+            const text = std.fmt.bufPrint(&buf, "( {d} argument{s} -- {d} result{s} )", .{
+                shape.inputs,
+                if (shape.inputs == 1) @as([]const u8, "") else "s",
+                shape.outputs,
+                if (shape.outputs == 1) @as([]const u8, "") else "s",
+            }) catch return;
+            const delta = @as(i64, @intCast(shape.outputs)) - @as(i64, @intCast(shape.inputs));
+            return self.reportDeltaMismatch("quotation", delta, text, actual, caller, line);
+        }
+    }
+
+    /// A literal quotation's inferred stack adjustment, or null when it cannot be inferred or the
+    /// quotation never returns, since such a quotation satisfies any effect.
+    ///
+    /// The engine state a caller reads after a walk is put back, because this walk only answers
+    /// the delta for a check made beside the caller's own.
+    fn inferLiteralDelta(self: *InferenceEngine, quot: Quotation, caller: CallerInfo) Allocator.Error!?i64 {
+        const saved_terminal = self.body_terminal;
+        const saved_unknown_callee = self.last_unknown_callee;
+        const saved_unknown_polymorphic = self.last_unknown_is_polymorphic;
+        defer {
+            self.body_terminal = saved_terminal;
+            self.last_unknown_callee = saved_unknown_callee;
+            self.last_unknown_is_polymorphic = saved_unknown_polymorphic;
+        }
+
+        var quot_caller = caller;
+        quot_caller.declared_input_count = null;
+        const result = try self.inferInstructions(quot.instructions, quot_caller, null);
+        if (self.body_terminal) return null;
+
+        return switch (result) {
+            .known => |d| d,
+            .unknown => null,
+        };
+    }
+
+    fn reportAnnotationMismatch(
+        self: *InferenceEngine,
+        param_name: []const u8,
+        annotation: *const StackEffect,
+        actual: i64,
+        caller: CallerInfo,
+        line: usize,
+    ) Allocator.Error!void {
+        var buf: [128]u8 = undefined;
+        var fbs = std.io.fixedBufferStream(&buf);
+        annotation.write(fbs.writer()) catch {};
+        try self.reportDeltaMismatch(param_name, annotation.concreteDelta(), fbs.getWritten(), actual, caller, line);
+    }
+
+    /// Report a quotation whose adjustment `actual` differs from `expected_delta`, worded as the
+    /// runtime check words it.
+    fn reportDeltaMismatch(
+        self: *InferenceEngine,
+        param_name: []const u8,
+        expected_delta: i64,
+        expected_text: []const u8,
+        actual: i64,
+        caller: CallerInfo,
+        line: usize,
+    ) Allocator.Error!void {
+        if (actual == expected_delta) return;
+
+        const diff = actual - expected_delta;
+        const message = if (diff > 0)
+            try std.fmt.allocPrint(self.allocator, "parameter '{s}' expects {s} but quotation leaves {d} extra value{s} on the stack", .{
+                param_name,
+                expected_text,
+                diff,
+                if (diff == 1) @as([]const u8, "") else "s",
+            })
+        else
+            try std.fmt.allocPrint(self.allocator, "parameter '{s}' expects {s} but quotation consumes {d} extra value{s} from the stack", .{
+                param_name,
+                expected_text,
+                -diff,
+                if (diff == -1) @as([]const u8, "") else "s",
+            });
+
+        try self.emitDiagnostic(.{
+            .word_name = caller.word_name,
+            .source_file = caller.source_file,
+            .source_line = line,
+            .severity = .err,
+            .message = message,
+        });
+    }
+
     fn validateDispatchEntries(self: *InferenceEngine, name: []const u8, base_result: InferenceResult, word_def: *const WordDefinition, caller: CallerInfo) Allocator.Error!void {
         const dispatch_entries = try self.dispatch_table.entriesForDispatchId(word_def.dispatch_id, self.allocator);
         defer self.allocator.free(dispatch_entries);
@@ -1532,7 +1731,7 @@ pub const InferenceEngine = struct {
             .typed_union => |tu| if (!tu.allMatch(target, self.any_type_sentinel)) blk: {
                 break :blk tu.format(self.allocator) catch null;
             } else null,
-            .quotation, .protocol_bounded, .other => null,
+            .quotation, .protocol_bounded, .other, .struct_literal => null,
         };
 
         const actual_name = mismatch_actual orelse return;
@@ -1592,7 +1791,7 @@ pub const InferenceEngine = struct {
                             }
                             break :blk null;
                         },
-                        .protocol_bounded, .other => null,
+                        .protocol_bounded, .other, .struct_literal => null,
                     };
 
                     if (mismatch_actual) |actual_name| {
@@ -1628,7 +1827,7 @@ pub const InferenceEngine = struct {
                             break :blk null;
                         },
                         .protocol_bounded => |actual_desc| if (actual_desc == descriptor) null else null,
-                        .quotation, .other => null,
+                        .quotation, .other, .struct_literal => null,
                     };
 
                     if (mismatch_actual) |actual_name| {
@@ -1804,6 +2003,62 @@ fn isGeneric(word_def: *const WordDefinition) bool {
     }
 
     return false;
+}
+
+/// Whether `word_def` comes from the file named `stem`, whether recorded as a path such as
+/// `src/prelude.1z` or as a module name such as `ffi`.
+fn definedIn(word_def: *const WordDefinition, comptime stem: []const u8) bool {
+    const source = word_def.source_file orelse return false;
+    const base = std.fs.path.basename(source);
+    const name = if (std.mem.endsWith(u8, base, ".1z")) base[0 .. base.len - 3] else base;
+    return std.mem.eql(u8, name, stem);
+}
+
+const HandlerEffect = struct {
+    delta: i64,
+    text: []const u8,
+};
+
+/// What a hook for each lifecycle event is handed, as `fireHooks` and `fireScopedHooks` in
+/// `primitives/hooks.zig` push it. A hook takes its arguments and leaves nothing.
+fn hookEventEffect(variant: []const u8) ?HandlerEffect {
+    const events = [_]struct { name: []const u8, effect: HandlerEffect }{
+        .{ .name = "on:exit", .effect = .{ .delta = -1, .text = "( code -- )" } },
+        .{ .name = "on:unhandled-error", .effect = .{ .delta = -1, .text = "( error -- )" } },
+        .{ .name = "on:word-defined", .effect = .{ .delta = -1, .text = "( word-info -- )" } },
+        .{ .name = "on:module-loaded", .effect = .{ .delta = -2, .text = "( name path -- )" } },
+    };
+    for (events) |event| {
+        if (std.mem.eql(u8, variant, event.name)) return event.effect;
+    }
+    return null;
+}
+
+const CallbackShape = struct {
+    inputs: usize,
+    outputs: usize,
+};
+
+/// The stack shape an FFI callback built over `sig` runs under: the trampoline pushes one value
+/// per parameter and pops one return value unless the return type is void.
+fn callbackShape(sig: Value) ?CallbackShape {
+    const inst = switch (sig) {
+        .struct_instance => |s| s,
+        else => return null,
+    };
+    if (!std.mem.eql(u8, inst.struct_type.name, "ffi-sig")) return null;
+
+    var params: ?usize = null;
+    var returns: ?bool = null;
+    for (inst.struct_type.fields, inst.fields) |name, field| {
+        if (std.mem.eql(u8, name, "params") and field == .array) params = field.array.items.len;
+        if (std.mem.eql(u8, name, "return-type") and field == .string) returns = !std.mem.eql(u8, field.string.bytes, "void");
+    }
+
+    return .{
+        .inputs = params orelse return null,
+        .outputs = if (returns orelse return null) 1 else 0,
+    };
 }
 
 fn isPartialDispatch(word_def: *const WordDefinition) bool {
@@ -3253,6 +3508,99 @@ test "a recovery handler that drops only the error is reported" {
     try testing.expectEqual(@as(usize, 1), engine.diagnostics.items.len);
     try testing.expectEqual(Severity.err, engine.diagnostics.items[0].severity);
     try testing.expectEqualStrings("recovery quotations have mismatched row variable adjustments", engine.diagnostics.items[0].message);
+}
+
+const handler_annotation = StackEffect{ .inputs = &.{.{ .name = "signum" }}, .outputs = &.{} };
+
+/// Register `on-handler ( signal quot: ( signum -- ) -- )`, `drop`, and a word whose body is
+/// `1 [ handler ] on-handler`.
+fn putHandlerCaller(dict: *Dictionary, handler_body: []const Instruction, body: *[3]Instruction) !void {
+    const dummy: dictionary_mod.NativeFn = struct {
+        fn f(_: *Context) anyerror!void {}
+    }.f;
+
+    try dict.put("on-handler", .{
+        .name = "on-handler",
+        .stack_effect = &.{
+            .inputs = &.{ .{ .name = "signal" }, .{ .name = "quot", .quotation_effect = &handler_annotation } },
+            .outputs = &.{},
+        },
+        .action = .{ .native = dummy },
+    });
+
+    try dict.put("drop", .{
+        .name = "drop",
+        .stack_effect = &.{ .inputs = &.{.{ .name = "x" }}, .outputs = &.{} },
+        .action = .{ .native = dummy },
+    });
+
+    body.* = .{
+        makeInstr(.{ .push_literal = .{ .fixnum = 1 } }),
+        makeInstr(.{ .push_literal = .{ .quotation = .{ .instructions = handler_body } } }),
+        makeInstr(.{ .call_word = "on-handler" }),
+    };
+
+    try dict.put("test-word", .{
+        .name = "test-word",
+        .source_file = "test.1z",
+        .action = .{ .compound = body },
+    });
+}
+
+test "a literal quotation matching a concrete annotation is silent" {
+    var dict = Dictionary.init(testing.allocator);
+    defer dict.deinit();
+    var dispatch = DispatchTable.init(testing.allocator);
+    defer dispatch.deinit();
+
+    const handler_body: []const Instruction = &.{makeInstr(.{ .call_word = "drop" })};
+    var body: [3]Instruction = undefined;
+    try putHandlerCaller(&dict, handler_body, &body);
+
+    var engine = InferenceEngine.init(&dict, &dispatch, &.{}, testing.allocator, null, false, true, null, null, .off, .off, .off, .off, null);
+    defer engine.deinit();
+
+    _ = try engine.inferWord("test-word");
+    try testing.expectEqual(@as(usize, 0), engine.diagnostics.items.len);
+}
+
+test "a literal quotation that leaves a value against a concrete annotation is reported" {
+    var dict = Dictionary.init(testing.allocator);
+    defer dict.deinit();
+    var dispatch = DispatchTable.init(testing.allocator);
+    defer dispatch.deinit();
+
+    const handler_body: []const Instruction = &.{
+        makeInstr(.{ .call_word = "drop" }),
+        makeInstr(.{ .push_literal = .{ .fixnum = 777 } }),
+    };
+    var body: [3]Instruction = undefined;
+    try putHandlerCaller(&dict, handler_body, &body);
+
+    var engine = InferenceEngine.init(&dict, &dispatch, &.{}, testing.allocator, null, false, true, null, null, .off, .off, .off, .off, null);
+    defer engine.deinit();
+
+    _ = try engine.inferWord("test-word");
+    try testing.expectEqual(@as(usize, 1), engine.diagnostics.items.len);
+    try testing.expectEqual(Severity.err, engine.diagnostics.items[0].severity);
+    try testing.expect(std.mem.indexOf(u8, engine.diagnostics.items[0].message, "quotation leaves 1 extra value") != null);
+}
+
+test "a literal quotation whose effect cannot be inferred is not reported" {
+    var dict = Dictionary.init(testing.allocator);
+    defer dict.deinit();
+    var dispatch = DispatchTable.init(testing.allocator);
+    defer dispatch.deinit();
+
+    const handler_body: []const Instruction = &.{makeInstr(.{ .call_word = "no-such-word" })};
+    var body: [3]Instruction = undefined;
+    try putHandlerCaller(&dict, handler_body, &body);
+
+    var engine = InferenceEngine.init(&dict, &dispatch, &.{}, testing.allocator, null, false, true, null, null, .off, .off, .off, .off, null);
+    defer engine.deinit();
+
+    _ = try engine.inferWord("test-word");
+    try testing.expectEqual(@as(usize, 0), engine.diagnostics.items.len);
 }
 
 test "row-poly keep with insufficient stack falls through" {

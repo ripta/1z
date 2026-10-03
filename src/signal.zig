@@ -196,21 +196,35 @@ noinline fn dispatchPendingSignals(ctx: *Context) error{UserThrown}!void {
 
         if (retainUserHandler(signum)) |handler| {
             defer handler.release();
-            ctx.stack.push(.{ .fixnum = signum }) catch return;
+
+            // The interrupted program cannot account for anything a handler leaves. A handler that
+            // raises, or that returns with the stack changed, has the interrupted stack put back.
+            const entry = ctx.catch_snapshots.push(ctx.allocator, &ctx.stack) catch {
+                reportHandlerError(signum, error.OutOfMemory);
+                return;
+            };
 
             // A dropped handler error must not bleed into whatever the interrupted program
             // raises next. A user throw is the exception: it propagates from here, so the
             // state that raise wrote belongs to it and is left in place.
             const saved_error_state = ctx.saveErrorState();
-            const handler_failed = if (ctx.executeQuotationWithOwner(handler.quot, handler.ownerClosure())) |_|
-                false
-            else |err| blk: {
-                if (err == error.UserThrown) return error.UserThrown;
-                break :blk true;
-            };
-            ctx.restoreErrorState(saved_error_state);
+            const failure: ?anyerror = if (runHandler(ctx, handler, signum)) |_| blk: {
+                if (ctx.catch_snapshots.unchanged(entry, &ctx.stack)) break :blk null;
+                break :blk error.StackEffectMismatch;
+            } else |err| err;
 
-            if (handler_failed) return;
+            if (failure == null) {
+                ctx.catch_snapshots.discard(entry);
+                ctx.restoreErrorState(saved_error_state);
+                continue;
+            }
+
+            ctx.catch_snapshots.restore(entry, &ctx.stack);
+            if (failure.? == error.UserThrown) return error.UserThrown;
+
+            ctx.restoreErrorState(saved_error_state);
+            reportHandlerError(signum, failure.?);
+            return;
         } else if (signum == SIG.INT) {
             ctx.thrown_error = value_mod.boxErrorObject(ctx.quotationAllocator(), .{
                 .error_type = "interrupted",
@@ -220,6 +234,23 @@ noinline fn dispatchPendingSignals(ctx: *Context) error{UserThrown}!void {
         }
         // Other signals with no handler: consume and ignore.
     }
+}
+
+fn runHandler(ctx: *Context, handler: Callable, signum: u5) anyerror!void {
+    try ctx.stack.push(.{ .fixnum = signum });
+    try ctx.executeQuotationWithOwner(handler.quot, handler.ownerClosure());
+}
+
+/// A handler failure other than a `throw` is reported rather than raised. The interrupted program
+/// did nothing wrong, and a signal can arrive at any safe point.
+fn reportHandlerError(signum: u5, err: anyerror) void {
+    if (builtin.is_test or is_freestanding) return;
+
+    const stderr_file: std.fs.File = .stderr();
+    var buf: [256]u8 = undefined;
+    var writer = stderr_file.writerStreaming(&buf);
+    writer.interface.print("signal handler error ({d}): {s}\n", .{ signum, @errorName(err) }) catch {};
+    writer.interface.flush() catch {};
 }
 
 /// Clear all pending signal state. Called after the REPL catches an
@@ -277,12 +308,10 @@ test "checkPendingSignals consumes every set bit in one pass, lowest first" {
     const high: u6 = @intCast(SIG.TERM);
     try testing.expect(low < high);
 
-    // An empty handler body leaves the signal number the dispatch pushed for it, so the stack
-    // reads back the order the two were consumed in.
-    const empty = Callable{ .quot = .{ .instructions = &.{} }, .owner = .unit };
-    setUserHandler(low, empty);
+    const neutral = Callable{ .quot = .{ .instructions = &drop_body }, .owner = .unit };
+    setUserHandler(low, neutral);
     defer setUserHandler(low, null);
-    setUserHandler(high, empty);
+    setUserHandler(high, neutral);
     defer setUserHandler(high, null);
 
     markPending(low);
@@ -294,10 +323,89 @@ test "checkPendingSignals consumes every set bit in one pass, lowest first" {
 
     try testing.expect(!isPending(low));
     try testing.expect(!isPending(high));
-    try testing.expectEqual(@as(usize, 2), ctx.stack.depth());
-    try testing.expectEqual(@as(i64, low), (try ctx.stack.peekN(1)).fixnum);
-    try testing.expectEqual(@as(i64, high), (try ctx.stack.peekN(0)).fixnum);
+    try testing.expectEqual(@as(usize, 0), ctx.stack.depth());
 }
+
+test "a failed handler ends the pass, leaving higher signals pending" {
+    var ctx = testContext();
+    defer ctx.deinit();
+
+    const low: u6 = @intCast(SIG.HUP);
+    const high: u6 = @intCast(SIG.TERM);
+
+    // An empty body leaves the signal number it was handed, so the low handler fails. Had the
+    // high one run first, both bits would be consumed.
+    setUserHandler(low, .{ .quot = .{ .instructions = &.{} }, .owner = .unit });
+    defer setUserHandler(low, null);
+    setUserHandler(high, .{ .quot = .{ .instructions = &drop_body }, .owner = .unit });
+    defer setUserHandler(high, null);
+
+    markPending(low);
+    defer clearPending(low);
+    markPending(high);
+    defer clearPending(high);
+
+    try checkPendingSignals(&ctx);
+
+    try testing.expect(!isPending(low));
+    try testing.expect(isPending(high));
+}
+
+test "a handler that changes the stack has the interrupted stack put back" {
+    var ctx = testContext();
+    defer ctx.deinit();
+
+    try ctx.stack.push(.{ .fixnum = 1 });
+    try ctx.stack.push(.{ .fixnum = 2 });
+
+    // drop drop 777: consumes the signal number and a value below it, then pushes one back, so
+    // the depth matches and only the contents differ.
+    const body = [_]value_mod.Instruction{
+        .{ .op = .{ .call_word = "drop" }, .line = 1 },
+        .{ .op = .{ .call_word = "drop" }, .line = 1 },
+        .{ .op = .{ .push_literal = .{ .fixnum = 777 } }, .line = 1 },
+    };
+    const signum: u6 = @intCast(SIG.TERM);
+    setUserHandler(signum, .{ .quot = .{ .instructions = &body }, .owner = .unit });
+    defer setUserHandler(signum, null);
+
+    markPending(signum);
+    defer clearPending(signum);
+
+    try checkPendingSignals(&ctx);
+
+    try testing.expectEqual(@as(usize, 2), ctx.stack.depth());
+    try testing.expectEqual(@as(i64, 1), (try ctx.stack.peekN(1)).fixnum);
+    try testing.expectEqual(@as(i64, 2), (try ctx.stack.peekN(0)).fixnum);
+}
+
+test "a throwing handler propagates over the interrupted stack" {
+    var ctx = testContext();
+    defer ctx.deinit();
+
+    try ctx.stack.push(.{ .fixnum = 1 });
+
+    const body = [_]value_mod.Instruction{
+        .{ .op = .{ .push_literal = .{ .fixnum = 5 } }, .line = 1 },
+        .{ .op = .{ .push_literal = .{ .boolean = false } }, .line = 1 },
+        .{ .op = .{ .push_literal = value_mod.stringValue("handler boom") }, .line = 1 },
+        .{ .op = .{ .push_literal = value_mod.symbolValue("handler-error") }, .line = 1 },
+        .{ .op = .{ .call_word = "make-error" }, .line = 1 },
+        .{ .op = .{ .call_word = "throw" }, .line = 1 },
+    };
+    const signum: u6 = @intCast(SIG.TERM);
+    setUserHandler(signum, .{ .quot = .{ .instructions = &body }, .owner = .unit });
+    defer setUserHandler(signum, null);
+
+    markPending(signum);
+    defer clearPending(signum);
+
+    try testing.expectError(error.UserThrown, checkPendingSignals(&ctx));
+    try testing.expectEqual(@as(usize, 1), ctx.stack.depth());
+    try testing.expectEqual(@as(i64, 1), (try ctx.stack.peekN(0)).fixnum);
+}
+
+const drop_body = [_]value_mod.Instruction{.{ .op = .{ .call_word = "drop" }, .line = 1 }};
 
 test "a swallowed handler error gives back the state it overwrote" {
     var ctx = testContext();

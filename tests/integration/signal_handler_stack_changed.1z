@@ -1,0 +1,35 @@
+\ A signal handler runs at an arbitrary safe point, so the interrupted code cannot account for
+\ anything the handler leaves. A handler that raises, or that returns with the stack changed, is
+\ reported on stderr and the interrupted stack is put back.
+\
+\ `kill` delivers to this process synchronously, and the `drop` that consumes its result is the
+\ safe point where the handler runs. Each handler calls a body read out of an array, so its effect
+\ cannot be inferred and the registration-time check does not reject it before it runs.
+
+use "os/signal" ;
+use "posix" ;
+use "testing" ;
+
+opaque: ( body -- handler ) [ 1array [ 0 #nth call ] curry ] ;
+
+"a handler that leaves a value" test-section
+SIGALRM [ drop 777 ] opaque on-signal
+1 2 getpid SIGALRM unmake-signal kill drop
+2 array-n { 1 2 } "the interrupted stack is put back" assert=
+
+"a handler that swaps a value below its argument" test-section
+SIGALRM [ drop drop 777 ] opaque on-signal
+1 2 getpid SIGALRM unmake-signal kill drop
+2 array-n { 1 2 } "the consumed value is put back" assert=
+
+"a handler that raises partway" test-section
+SIGALRM [ drop 5 6 this-word-does-not-exist ] opaque on-signal
+1 2 getpid SIGALRM unmake-signal kill drop
+2 array-n { 1 2 } "the partial state is discarded" assert=
+
+"a stack-neutral handler" test-section
+SIGALRM [ drop ] on-signal
+1 2 getpid SIGALRM unmake-signal kill drop
+2 array-n { 1 2 } "a neutral handler leaves the stack alone" assert=
+
+SIGALRM off-signal

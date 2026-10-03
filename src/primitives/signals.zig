@@ -16,8 +16,8 @@ const Capability = @import("types.zig").Capability;
 pub const primitives = [_]Primitive{
     .{
         .name = "set-signal-handler",
-        .stack_effect = "signal quot --",
-        .doc = "Register a handler quotation for a signal number. The handler receives the signal number on the stack when invoked.",
+        .stack_effect = "signal quot: ( signum -- ) --",
+        .doc = "Register a handler quotation for a signal number. The handler receives the signal number on the stack when invoked, and must consume it and leave nothing. A handler that raises or changes the stack is reported, and the interrupted stack is put back.",
         .func = nativeSetSignalHandler,
         .capability = .system,
     },

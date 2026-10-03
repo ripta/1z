@@ -1,0 +1,7 @@
+tests/integration/check_handler_effects.1z:14: err: signal-leaves: parameter 'quot' expects ( signum --  ) but quotation leaves 1 extra value on the stack
+tests/integration/check_handler_effects.1z:24: err: callback-drops: parameter 'quotation' expects ( 2 arguments -- 1 result ) but quotation consumes 1 extra value from the stack
+tests/integration/check_handler_effects.1z:18: err: hook-leaves: parameter 'quot' expects ( word-info -- ) but quotation leaves 1 extra value on the stack
+tests/integration/check_handler_effects.1z:20: err: module-hook-short: parameter 'quot' expects ( name path -- ) but quotation leaves 1 extra value on the stack
+tests/integration/check_handler_effects.1z:10: err: cleanup-pushes: parameter 'cleanup' expects (  --  ) but quotation leaves 1 extra value on the stack
+tests/integration/check_handler_effects.1z:10: err: cleanup-pushes: declared stack effect delta is 1, but inferred delta is 2
+tests/integration/check_handler_effects.1z:25: err: void-callback-leaves: parameter 'quotation' expects ( 1 argument -- 0 results ) but quotation leaves 1 extra value on the stack

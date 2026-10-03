@@ -1,0 +1,46 @@
+\ When the body raises, `cleanup` runs its cleanup quotation on the stack the body started from,
+\ then re-raises. What the failed body left depends on where it raised, so a cleanup quotation
+\ could not be written against it.
+\
+\ The cleanup quotation records the value on top when it runs, which tells the entry stack apart
+\ from the body's leftovers while staying stack-neutral itself. The shapes live in words so the
+\ eager suite runs them compiled as well as interpreted.
+use "testing" ;
+
+(boom): never-returns ( -- * ) [ f "boom" EInvalidArgument make-error throw ] ;
+
+seen: V{ } ;
+
+(note-top): ( x -- x ) [ dup seen swap #push! drop ] ;
+
+(partial-raise): ( a b -- ) [ [ 2drop 5 6 7 (boom) ] [ (note-top) ] cleanup ] ;
+(succeeds): ( a b -- c ) [ [ + ] [ (note-top) ] cleanup ] ;
+
+"a body that consumes its inputs and raises partway" test-section
+
+"below" 1 2 [ (partial-raise) ] [ error-type: @get [ 2drop ] dip ] recover
+invalid-argument: "the body's error is re-raised" assert=
+"below" "the value under the entry stack is untouched" assert=
+seen 0 #nth 2 "the cleanup quotation sees the entry stack, not the body's leftovers" assert=
+
+"a body that succeeds" test-section
+
+1 2 (succeeds)
+3 "the body's result is kept" assert=
+seen 1 #nth 3 "the cleanup quotation runs over the body's results" assert=
+
+\ A cleanup quotation that fails cannot change what the body produced. Its error is suppressed,
+\ and the stack it was handed is put back. The non-neutral one is built through `opaque`, so the
+\ check on `cleanup`'s declared effect cannot reject it before it runs.
+opaque: ( body -- quot ) [ 1array [ 0 #nth call ] curry ] ;
+
+(cleanup-raises): ( -- n ) [ [ 2 ] [ 3 4 (boom) ] cleanup ] ;
+(cleanup-leaves): ( -- n ) [ [ 2 ] [ 3 4 ] opaque cleanup ] ;
+
+"a cleanup quotation that raises partway" test-section
+
+"below" (cleanup-raises) 2 array-n { "below" 2 } "the body's result is all that continues" assert=
+
+"a cleanup quotation that leaves values" test-section
+
+"below" (cleanup-leaves) 2 array-n { "below" 2 } "the cleanup quotation's values are discarded" assert=

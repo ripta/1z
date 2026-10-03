@@ -78,12 +78,12 @@ load-source-base-url: ( -- base-url-or-f ) [
 \ the grouped hash. Loading without importing avoids the const-redefinition and
 \ parse-time collisions that arise from merging every module into one scope; a
 \ module that still cannot load, such as one needing an absent FFI library, is
-\ reported and skipped. The pre-load `dup` keeps the name available to the
-\ handler no matter where `load` failed.
+\ reported and skipped. The handler sees the stack the body started from, so it drops the duplicated
+\ name along with the error.
 add-module: ( grouped name -- grouped ) [
   dup
   [ load module-word-infos @set ]
-  [ drop dup "  skipped: " swap #append eprint-line drop ]
+  [ drop nip "  skipped: " swap #append eprint-line ]
   recover
 ] ;
 
@@ -155,7 +155,7 @@ render-type-info: ( wi -- str ) [
       [ "\n#### Type Info\n\n```\n" swap #append "```\n" #append ]
       if
     ]
-    [ drop "" ]
+    [ 2drop "" ]
     recover
   ]
   [ drop "" ]

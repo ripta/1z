@@ -3535,10 +3535,10 @@ pub fn inferQuotationEffect(
 ///
 /// - `.fixed` carries a static count pair.
 /// - `.custom` points at a per-op handler for the bespoke mini-stack ops (`dup`, `swap`, `over`,
-///   `call`, `if`).
+///   `call`, `if`, `recover`, `cleanup`).
 /// - `.none` is the deliberate, parity-preserving effect for resolver-dispatched ops
-///   (indexed-stack, iterator, dynamic-var, struct-native, loop, error-handling) whose effect is
-///   not statically inferable here, so they fall through to the `WordResolver`.
+///   (indexed-stack, iterator, dynamic-var, struct-native, loop) whose effect is not statically
+///   inferable here, so they fall through to the `WordResolver`.
 fn inferBuiltinEffect(
     name: []const u8,
     mini_stack: *[max_mini_stack_depth]MiniStackEntry,
@@ -3678,6 +3678,68 @@ fn inferEffectCall(ec: EffectCtx) error{EffectInferenceOverflow}!bool {
         // Popping from below initial level: unknown value, bail.
         return false;
     }
+}
+
+/// `recover` effect: ( ..a try handler -- ..b ). The handler runs from the try quotation's entry
+/// stack with the error pushed. When it leaves the same stack the try quotation leaves, and reaches
+/// no deeper, the try quotation's effect is the call's.
+fn inferEffectRecover(ec: EffectCtx) error{EffectInferenceOverflow}!bool {
+    return inferEffectOfAgreeingArms(ec, .recover);
+}
+
+/// `cleanup` effect: ( ..a body cleanup -- ..b ). When the cleanup quotation leaves the stack as it
+/// found it, the body's effect is the call's.
+fn inferEffectCleanup(ec: EffectCtx) error{EffectInferenceOverflow}!bool {
+    return inferEffectOfAgreeingArms(ec, .cleanup);
+}
+
+/// Consume two quotations and apply the lower one's effect, when both are known bodies whose
+/// effects agree in the way `kind` requires. A disagreeing pair is left uninferred, since the
+/// call's effect then depends on which arm runs.
+fn inferEffectOfAgreeingArms(ec: EffectCtx, comptime kind: enum { recover, cleanup }) error{EffectInferenceOverflow}!bool {
+    const mini_stack = ec.mini_stack;
+    const sp = ec.sp;
+    const delta = ec.delta;
+    const min_delta = ec.min_delta;
+
+    if (sp.* < 2) return false;
+    const body = switch (mini_stack[sp.* - 2]) {
+        .quotation => |b| b,
+        .other => return false,
+    };
+    const upper = switch (mini_stack[sp.* - 1]) {
+        .quotation => |b| b,
+        .other => return false,
+    };
+    sp.* -= 2;
+    delta.* -= 2;
+    min_delta.* = @min(min_delta.*, delta.*);
+
+    const effect = try inferQuotationEffect(body, ec.resolver) orelse return false;
+    const upper_effect = try inferQuotationEffect(upper, ec.resolver) orelse return false;
+
+    const agrees = switch (kind) {
+        .cleanup => upper_effect.input_count == 0 and upper_effect.output_count == 0,
+        // The handler starts one deeper than the try quotation, with the error on top.
+        .recover => @as(i32, upper_effect.output_count) - @as(i32, upper_effect.input_count) + 1 ==
+            @as(i32, effect.output_count) - @as(i32, effect.input_count) and
+            upper_effect.input_count <= @as(u16, effect.input_count) + 1,
+    };
+    if (!agrees) return false;
+    const in: i32 = @intCast(effect.input_count);
+    const out: i32 = @intCast(effect.output_count);
+    delta.* -= in;
+    min_delta.* = @min(min_delta.*, delta.*);
+    delta.* += out;
+
+    var pushes: usize = effect.output_count;
+    while (pushes > 0) {
+        if (sp.* >= max_mini_stack_depth) return error.EffectInferenceOverflow;
+        mini_stack[sp.*] = .other;
+        sp.* += 1;
+        pushes -= 1;
+    }
+    return true;
 }
 
 /// `if` effect: ( cond true-quot false-quot -- results... ). Both branch
@@ -4647,7 +4709,7 @@ fn emitRowAwareSelfTailCall(state: *CompileState, stack: []StackEntry, sp: *usiz
     // `emitOpenLexicalFramePops`.
     emitOpenLexicalFramePops(state);
 
-    emitSafepointCall(state);
+    emitSafepointCall(state, null);
 
     // After the safepoint, whose own error return already releases the parks.
     emitParkReleases(state);
@@ -5731,7 +5793,7 @@ fn compilePredBodyLoop(
 
     resetStackToPhysicalPreservingRows(stack, sp.*);
 
-    emitSafepointCall(state);
+    emitSafepointCall(state, sp.*);
     const loop_end = c._ir_LOOP_END(ctx);
     c.ir_set_op2(ctx, loop_ref, loop_end);
 
@@ -6392,8 +6454,8 @@ const intrinsic_table = std.StaticStringMap(IntrinsicEntry).initComptime(.{
     .{ "loop", IntrinsicEntry{ .handler = emitIntrinsicLoop, .caps = .{ .needs_safepoint = true } } },
     .{ "while", IntrinsicEntry{ .handler = emitIntrinsicWhile, .caps = .{ .needs_safepoint = true } } },
     .{ "until", IntrinsicEntry{ .handler = emitIntrinsicUntil, .caps = .{ .needs_safepoint = true } } },
-    .{ "recover", IntrinsicEntry{ .handler = emitIntrinsicRecover, .caps = .{ .needs_error_handling = true } } },
-    .{ "cleanup", IntrinsicEntry{ .handler = emitIntrinsicCleanup, .caps = .{ .needs_error_handling = true } } },
+    .{ "recover", IntrinsicEntry{ .handler = emitIntrinsicRecover, .effect = .{ .custom = inferEffectRecover }, .caps = .{ .needs_error_handling = true } } },
+    .{ "cleanup", IntrinsicEntry{ .handler = emitIntrinsicCleanup, .effect = .{ .custom = inferEffectCleanup }, .caps = .{ .needs_error_handling = true } } },
     .{ "get", IntrinsicEntry{ .handler = emitIntrinsicGet, .caps = .{ .needs_dynamic_vars = true } } },
     .{ "with-parameter", IntrinsicEntry{ .handler = emitIntrinsicWithParameter, .caps = .{ .needs_dynamic_vars = true } } },
     .{ "#next", IntrinsicEntry{ .handler = emitIntrinsicIterNext, .caps = .{ .needs_iterators = true } } },
@@ -9207,7 +9269,7 @@ fn emitAotTimesGenericLoop(ec: EmitCtx, n_slot: usize, quot_entry: StackEntry) I
         const step_result = c._ir_CALL_3(ctx, c.IR_I32, decrement_fn, step_ctx, count_spill, quot_arg);
         emitCallbackPostCheck(state, step_result, state.error_propagate_status, null, .none);
 
-        emitSafepointCall(state);
+        emitSafepointCall(state, sp);
         const loop_end = c._ir_LOOP_END(ctx);
         c.ir_set_op2(ctx, loop_ref, loop_end);
     }
@@ -9343,7 +9405,7 @@ fn emitIntrinsicTimes(ec: EmitCtx) IrCodegenError!ControlFlow {
     const continue_cond = c.ir_fold2(ctx, c.IR_OPT(c.IR_GT, c.IR_BOOL), new_counter, zero);
     const if_continue = c._ir_IF(ctx, continue_cond);
     c._ir_IF_TRUE(ctx, if_continue);
-    emitSafepointCall(state);
+    emitSafepointCall(state, sp.*);
     const loop_end = c._ir_LOOP_END(ctx);
     c.ir_set_op2(ctx, loop_ref, loop_end);
 
@@ -9441,7 +9503,7 @@ fn emitIntrinsicLoop(ec: EmitCtx) IrCodegenError!ControlFlow {
 
     const if_continue = c._ir_IF(ctx, continue_cond);
     c._ir_IF_TRUE(ctx, if_continue);
-    emitSafepointCall(state);
+    emitSafepointCall(state, sp.*);
     const loop_end = c._ir_LOOP_END(ctx);
     c.ir_set_op2(ctx, loop_ref, loop_end);
 
@@ -10146,7 +10208,7 @@ fn compileInstructions(
                     emitOpenLexicalFramePops(state);
 
                     // Safepoint before looping back
-                    emitSafepointCall(state);
+                    emitSafepointCall(state, null);
 
                     // After the safepoint, whose own error return already releases the parks.
                     emitParkReleases(state);
@@ -15142,11 +15204,16 @@ fn refreshCachedStackPointer(state: *CompileState) void {
 
 /// Emit a safepoint call at the current IR position. Loads the ctx field
 /// from the JitContext struct and calls jitSafepoint.
-fn emitSafepointCall(state: *CompileState) void {
+///
+/// A signal handler runs on `ctx.stack` from inside the call and holds every slot below its stored
+/// pointer, so that pointer must be the logical depth. A slot above it may hold a value an inline
+/// op already released. `sp` is that depth, or null where the caller has just stored it.
+fn emitSafepointCall(state: *CompileState, sp: ?usize) void {
     if (state.safepoint_fn == c.IR_UNUSED) return;
     state.restart_clean = false;
 
-    const call_result = c._ir_CALL_1(state.ctx, c.IR_I32, state.safepoint_fn, ctxValRef(state));
+    const ctx_val = if (sp) |depth| emitCallbackPreamble(state, depth) else ctxValRef(state);
+    const call_result = c._ir_CALL_1(state.ctx, c.IR_I32, state.safepoint_fn, ctx_val);
     emitCallbackPostCheck(state, call_result, state.error_propagate_status, null, .none);
 }
 
@@ -24361,6 +24428,52 @@ test "inferQuotationEffect: call on literal quotation" {
     try testing.expect(eff != null);
     try testing.expectEqual(@as(u8, 0), eff.?.input_count);
     try testing.expectEqual(@as(u8, 1), eff.?.output_count);
+}
+
+/// Infer `[ lower ] [ upper ] name` with both arms as literals.
+fn inferTwoArmCall(lower: []const Instruction, upper: []const Instruction, name: []const u8) ?InferredEffect {
+    const outer = [_]Instruction{
+        .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = lower } } }, .line = 1 },
+        .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = upper } } }, .line = 1 },
+        .{ .op = .{ .call_word = name }, .line = 1 },
+    };
+    return inferQuotationEffect(&outer, null) catch unreachable;
+}
+
+test "inferQuotationEffect: recover and cleanup take the lower quotation's effect when the arms agree" {
+    // [ [ 1 ] [ drop 2 ] recover ] and [ [ 1 ] [ ] cleanup ] both push one value: (0 -- 1).
+    const lower = makeInstructions(.{@as(i64, 1)});
+    const handler = makeInstructions(.{ "drop", @as(i64, 2) });
+    const neutral = [_]Instruction{};
+
+    for ([_]?InferredEffect{ inferTwoArmCall(&lower, &handler, "recover"), inferTwoArmCall(&lower, &neutral, "cleanup") }) |eff| {
+        try testing.expect(eff != null);
+        try testing.expectEqual(@as(u8, 0), eff.?.input_count);
+        try testing.expectEqual(@as(u8, 1), eff.?.output_count);
+    }
+}
+
+test "inferQuotationEffect: recover and cleanup with disagreeing arms return null" {
+    const lower = makeInstructions(.{@as(i64, 1)});
+    const drops_error_only = makeInstructions(.{"drop"});
+    // Same net adjustment as the try quotation, but it consumes a value below the entry stack.
+    const reaches_below = makeInstructions(.{ "drop", "drop", @as(i64, 5), @as(i64, 6) });
+    const leaves_value = makeInstructions(.{@as(i64, 2)});
+
+    try testing.expect(inferTwoArmCall(&lower, &drops_error_only, "recover") == null);
+    try testing.expect(inferTwoArmCall(&lower, &reaches_below, "recover") == null);
+    try testing.expect(inferTwoArmCall(&lower, &leaves_value, "cleanup") == null);
+}
+
+test "inferQuotationEffect: recover over an unknown try quotation returns null" {
+    const upper = makeInstructions(.{"drop"});
+    const upper_val = Value{ .quotation = .{ .instructions = &upper } };
+    const outer = [_]Instruction{
+        .{ .op = .{ .push_literal = upper_val }, .line = 1 },
+        .{ .op = .{ .call_word = "recover" }, .line = 1 },
+    };
+    const eff = inferQuotationEffect(&outer, null) catch unreachable;
+    try testing.expect(eff == null);
 }
 
 test "inferQuotationEffect: call on unknown quotation returns null" {

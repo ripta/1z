@@ -38,16 +38,16 @@ t "ignore-errors: survived" assert-true
 "cleanup -- guaranteed teardown" test-section
 
 \ cleanup runs the second quotation whether the first succeeds or fails.
-\ Both quotations' results stay on the stack.
+\ The cleanup quotation must leave the stack as it found it. It runs over the
+\ body's results on success, and over the body's entry stack when the body
+\ throws, so it records what it does in a vector rather than on the stack.
 
 \ Success case:
-[ 10 ] [ 20 ] cleanup
-20 "cleanup: cleanup result on top" assert=
-10 "cleanup: body result below" assert=
+V{ } dup [ 10 ] swap [ "cleaned" #push! drop ] curry cleanup
+10 "cleanup: body result kept" assert=
+#len 1 "cleanup: ran after the body" assert=
 
-\ Failure case -- cleanup still runs, then error propagates. The recover
-\ around it restores the stack it began with, so the cleanup records that it
-\ ran in a vector rather than on the stack:
+\ Failure case -- cleanup still runs, then error propagates:
 V{ } dup
 [ [ 1 0 / ] swap [ "cleaned" #push! drop ] curry cleanup ] curry
 [ drop ] recover

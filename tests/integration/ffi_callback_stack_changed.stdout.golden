@@ -1,0 +1,33 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+=== a callback that leaves an extra value ===
+Stack: [ ]
+Stack: [ "below" stack-effect-mismatch: ]
+PASS: the callback fails in the FFI caller
+Stack: [ "below" ]
+PASS: the caller's stack is put back
+Stack: [ ]
+=== a callback that consumes a value below its arguments ===
+Stack: [ ]
+Stack: [ "below" stack-effect-mismatch: ]
+PASS: a same-depth swap is caught
+Stack: [ "below" ]
+PASS: the consumed value is put back
+Stack: [ ]
+=== a callback that raises partway ===
+Stack: [ ]
+Stack: [ "below" unknown-word: ]
+PASS: the callback's own error re-raises
+Stack: [ "below" ]
+PASS: the partial state is discarded
+Stack: [ ]
+=== a callback that keeps its contract ===
+Stack: [ ]
+Stack: [ "below" 7 ]
+PASS: the return value comes back
+Stack: [ "below" ]
+PASS: the stack below is untouched
+Stack: [ ]

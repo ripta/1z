@@ -20,21 +20,23 @@ recover-type division-by-zero: "error type captured" assert=
 
 "compiled cleanup on success" test-section
 
-cleanup-ok: ( -- n n ) [ [ 1 ] [ 2 ] cleanup ] ;
+cleanup-log: V{ } ;
+
+cleanup-ok: ( -- n ) [ [ 1 ] [ cleanup-log 2 #push! drop ] cleanup ] ;
 cleanup-ok: compile!
-cleanup-ok 2 "cleanup ran" assert=
-1 "body result" assert=
+cleanup-ok 1 "body result" assert=
+cleanup-log #len 1 "cleanup ran" assert=
 
 "compiled cleanup on error propagates" test-section
 
-cleanup-err: ( -- n ) [ [ [ 1 0 / ] [ drop ] cleanup ] [ drop -1 ] recover ] ;
+cleanup-err: ( -- n ) [ [ [ 1 0 / ] [ ] cleanup ] [ drop -1 ] recover ] ;
 cleanup-err: compile!
 cleanup-err -1 "error propagated through cleanup" assert=
 
 "compiled cleanup + recover composition" test-section
 
 cleanup-recover: ( -- n ) [
-  [ [ 1 0 / ] [ drop 20 ] cleanup ]
+  [ [ 1 0 / ] [ cleanup-log 20 #push! drop ] cleanup ]
   [ drop -1 ]
   recover
 ] ;

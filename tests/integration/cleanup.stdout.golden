@@ -1,7 +1,9 @@
 === Cleanup runs on success ===
 Stack: [ ]
-PASS: cleanup result
+Stack: [ V{ 20 } 10 ]
 PASS: body result
+Stack: [ V{ 20 } ]
+PASS: cleanup executed after the body
 Stack: [ ]
 === Cleanup runs on error ===
 Stack: [ ]

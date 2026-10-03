@@ -21,14 +21,14 @@ test-cleanup-on-cancelled-sleep: ( -- ) [
   #len 1 "cleanup ran on cancelled sleeping task" assert=
 ] ;
 
-\ Cleanup runs without crash (drop the error).
+\ An empty cleanup quotation on a cancelled task runs without crash.
 test-cleanup-drops-on-cancel: ( -- ) [
   [
-    [ [ 100000 milliseconds sleep ] [ drop ] cleanup ] spawn
+    [ [ 100000 milliseconds sleep ] [ ] cleanup ] spawn
     10 milliseconds sleep
     dup cancel-task drop
   ] task-scope
-  t "cleanup with drop completed" assert-true
+  t "cleanup on a cancelled task completed" assert-true
 ] ;
 
 \ recover catches task-cancelled from a cooperatively cancelled task.

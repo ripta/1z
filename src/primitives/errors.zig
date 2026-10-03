@@ -14,6 +14,7 @@ const StackEffect = stack_effect_mod.StackEffect;
 
 const helpers = @import("helpers.zig");
 const popQuotation = helpers.popQuotation;
+const Callable = @import("../callable.zig").Callable;
 const container_backing = @import("../container_backing.zig");
 
 const Marker = value_mod.Marker;
@@ -103,7 +104,7 @@ pub fn pascalToKebabRuntime(name: []const u8, buf: []u8) []const u8 {
 
 pub const primitives = [_]Primitive{
     .{ .name = "recover", .stack_effect = "..a try: ( ..a -- ..b ) handler: ( ..a error -- ..b ) -- ..b", .doc = "Execute try quotation; if it raises, restore the stack it started from, push the error, and run handler.", .func = nativeRecover, .markers = &.{@constCast(&markers_mod.recovery_combinator_marker)} },
-    .{ .name = "cleanup", .stack_effect = "body-quot cleanup-quot --", .doc = "Execute body, always run cleanup, then re-throw any error from body.", .func = nativeCleanup },
+    .{ .name = "cleanup", .stack_effect = "..a body: ( ..a -- ..b ) cleanup: ( -- ) -- ..b", .doc = "Execute body, always run cleanup, then re-throw any error from body. If body raises, cleanup runs on the stack body started from.", .func = nativeCleanup },
     .{ .name = "rethrow", .stack_effect = "error --", .doc = "Re-raise an error value as an actual error.", .func = nativeRethrow, .markers = &.{@constCast(&markers_mod.never_returns_marker)} },
     .{ .name = "make-error", .stack_effect = "data message type -- error", .doc = "Construct an error object from data, message, and type.", .func = nativeMakeError },
     .{ .name = "throw", .stack_effect = "error --", .doc = "Raise an error object as an actual error.", .func = nativeThrow, .markers = &.{@constCast(&markers_mod.never_returns_marker)} },
@@ -201,15 +202,25 @@ pub fn nativeRecover(ctx: *Context) anyerror!void {
     ctx.catch_snapshots.discard(entry);
 }
 
-/// cleanup ( body-quot cleanup-quot -- )
+/// cleanup ( ..a body: ( ..a -- ..b ) cleanup: ( -- ) -- ..b )
+///
+/// When the body raises, the cleanup quotation runs on the stack the body started from, and the
+/// body's error is re-raised. It runs over `..b` when the body succeeds, so it must leave the
+/// stack as it found it.
 pub fn nativeCleanup(ctx: *Context) anyerror!void {
     const cleanup_pc = try popQuotation(ctx);
     defer cleanup_pc.release();
     const body_pc = try popQuotation(ctx);
     defer body_pc.release();
 
-    // Execute body quotation, capturing any error
+    const entry = try ctx.catch_snapshots.push(ctx.allocator, &ctx.stack);
+
     const body_result = body_pc.executeWithFrame(ctx);
+    if (body_result) |_| {
+        ctx.catch_snapshots.discard(entry);
+    } else |_| {
+        ctx.catch_snapshots.restore(entry, &ctx.stack);
+    }
 
     // Shield the cleanup quotation from re-cancellation so it can yield,
     // sleep, or do I/O without being interrupted by a pending cancellation.
@@ -223,9 +234,7 @@ pub fn nativeCleanup(ctx: *Context) anyerror!void {
 
     // Always execute cleanup quotation, even if body failed
     // If cleanup also fails, we ignore that error and prioritize the body error
-    cleanup_pc.executeWithFrame(ctx) catch {
-        // Cleanup error is suppressed; body error takes priority
-    };
+    runCleanupQuotation(ctx, cleanup_pc);
 
     ctx.restoreErrorState(saved_error_state);
 
@@ -233,6 +242,21 @@ pub fn nativeCleanup(ctx: *Context) anyerror!void {
 
     // Re-throw original error if body failed
     try body_result;
+}
+
+/// Run a cleanup quotation, putting back the stack it was handed when it raises or returns with
+/// the stack changed. Either failure is suppressed, so what continues is the body's outcome.
+fn runCleanupQuotation(ctx: *Context, cleanup_pc: Callable) void {
+    const entry = ctx.catch_snapshots.push(ctx.allocator, &ctx.stack) catch return;
+
+    if (cleanup_pc.executeWithFrame(ctx)) |_| {
+        if (ctx.catch_snapshots.unchanged(entry, &ctx.stack)) {
+            ctx.catch_snapshots.discard(entry);
+            return;
+        }
+    } else |_| {}
+
+    ctx.catch_snapshots.restore(entry, &ctx.stack);
 }
 
 /// rethrow ( error -- )

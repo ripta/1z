@@ -1,0 +1,6 @@
+=== a handler sees the logical stack ===
+PASS: the loop's value survives
+PASS: the alarm fired once inside the loop
+PASS: the handler saw only the loop's value below its argument
+=== a handler that swaps a value below its argument ===
+PASS: the loop's value is put back

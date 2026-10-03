@@ -8,10 +8,10 @@ t on:module-loaded on? "on:module-loaded is on" assert-true
 "on:exit" on:exit type-name "on:exit type-name" assert=
 
 "add-hook registration" test-section
-on:exit [ ] add-hook
-on:exit [ ] add-hook
+on:exit [ drop ] add-hook
+on:exit [ drop ] add-hook
 t "multiple hooks for same event" assert-true
 
 "register-global-hook with symbol" test-section
-on:exit: [ ] native.register-global-hook
+on:exit: [ drop ] native.register-global-hook
 t "register-global-hook accepts symbol + quotation" assert-true

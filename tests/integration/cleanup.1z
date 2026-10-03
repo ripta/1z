@@ -3,7 +3,10 @@
 use "testing" ;
 
 "Cleanup runs on success" test-section
-[ 10 ] [ 20 ] cleanup 20 "cleanup result" assert= 10 "body result" assert=
+\ The cleanup quotation must leave the stack as it found it, so it records into a vector
+V{ } dup [ 10 ] swap [ 20 #push! drop ] curry cleanup
+10 "body result" assert=
+0 #nth 20 "cleanup executed after the body" assert=
 
 "Cleanup runs on error" test-section
 \ cleanup executes, then error propagates

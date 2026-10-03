@@ -965,8 +965,18 @@ test "fireWordDefinedHook still builds and fires WordInfo when word-defined-hook
     try nativeSemicolon(&ctx);
 
     const alloc = ctx.quotationAllocator();
+
+    // A hook must leave the stack as it found it, so this one moves its argument into a vector.
+    const log = try value_mod.Vector.create(ctx.allocator);
+    defer log.header.release();
+    const hook_body = try alloc.alloc(Instruction, 4);
+    hook_body[0] = .{ .op = .{ .push_literal = .{ .vector = log } }, .line = 0 };
+    hook_body[1] = .{ .op = .{ .call_word = "swap" }, .line = 0 };
+    hook_body[2] = .{ .op = .{ .call_word = "#push!" }, .line = 0 };
+    hook_body[3] = .{ .op = .{ .call_word = "drop" }, .line = 0 };
+
     const hook_items = try alloc.alloc(Value, 1);
-    hook_items[0] = .{ .quotation = .{ .instructions = &.{} } };
+    hook_items[0] = .{ .quotation = .{ .instructions = hook_body } };
     const hook_arr = try value_mod.Array.fromOwnedSlice(alloc, hook_items);
     try ctx.setParameterInTopFrame("word-defined-hooks", .{ .array = hook_arr });
 
@@ -979,10 +989,9 @@ test "fireWordDefinedHook still builds and fires WordInfo when word-defined-hook
     try std.testing.expect(ctx.arena.state.end_index != before_end or
         ctx.arena.state.buffer_list.first != before_node);
 
-    // fireScopedHooks pushes the hook's args before executing its quotation; an
-    // empty-instruction quotation consumes nothing, so the raw word-info array
-    // is left on the stack for inspection.
-    const info = try ctx.stack.pop();
+    try std.testing.expectEqual(@as(usize, 0), ctx.stack.depth());
+    try std.testing.expectEqual(@as(usize, 1), log.list.items.len);
+    const info = log.list.items[0];
     try std.testing.expect(info == .array);
     try std.testing.expect(info.array.items[0] == .string);
     try std.testing.expectEqualStrings("foo", info.array.items[0].string.bytes);

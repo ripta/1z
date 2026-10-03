@@ -1,1 +1,1 @@
-<error user-thrown: kaboom [tests/integration/tail_boundary_compiled_caller.1z:9:throw <- src/prelude.1z:348:if]>
+<error user-thrown: kaboom [tests/integration/tail_boundary_compiled_caller.1z:9:throw <- src/prelude.1z:352:if]>

@@ -84,30 +84,51 @@ pub fn fireHooks(ctx: *Context, event_name: []const u8, args: []const Value) voi
     var i = hook_list.items.len;
     while (i > 0) {
         i -= 1;
-        const hook = hook_list.items[i];
-
-        for (args) |arg| {
-            ctx.stack.push(arg) catch continue;
-        }
-
-        // The hook's error is reported and dropped, so it must not extend or replace the chain
-        // of whatever is propagating around this fire, nor hand its state to the next hook.
-        const saved_error_state = ctx.saveErrorState();
-
-        hook.execute(ctx) catch |err| {
-            // Freestanding has no real stderr (STDOUT/STDERR_FILENO are undefined there); this
-            // diagnostic is a nicety, not load-bearing, so it's silently skipped on that target.
-            if (!builtin.is_test and !is_freestanding) {
-                const stderr_file: std.fs.File = .stderr();
-                var buf: [256]u8 = undefined;
-                var writer = stderr_file.writerStreaming(&buf);
-                writer.interface.print("hook error ({s}): {s}\n", .{ event_name, @errorName(err) }) catch {};
-                writer.interface.flush() catch {};
-            }
-        };
-
-        ctx.restoreErrorState(saved_error_state);
+        runHook(ctx, hook_list.items[i], args) catch |err| reportHookError("hook error", event_name, err);
     }
+}
+
+/// Run one hook over `args`, leaving the stack as it was before they were pushed.
+///
+/// The code around a fire never chose to run the hook. A hook that raises, or that returns with the
+/// stack changed, has failed, and the stack it was handed is put back.
+fn runHook(ctx: *Context, hook: Callable, args: []const Value) anyerror!void {
+    const entry = try ctx.catch_snapshots.push(ctx.allocator, &ctx.stack);
+
+    // The hook's error is reported and dropped, so it must not extend or replace the chain of
+    // whatever is propagating around this fire, nor hand its state to the next hook.
+    const saved_error_state = ctx.saveErrorState();
+    defer ctx.restoreErrorState(saved_error_state);
+
+    const result = runHookOver(ctx, hook, args);
+    if (result) |_| {
+        if (ctx.catch_snapshots.unchanged(entry, &ctx.stack)) {
+            ctx.catch_snapshots.discard(entry);
+            return;
+        }
+        ctx.catch_snapshots.restore(entry, &ctx.stack);
+        return error.StackEffectMismatch;
+    } else |err| {
+        ctx.catch_snapshots.restore(entry, &ctx.stack);
+        return err;
+    }
+}
+
+fn runHookOver(ctx: *Context, hook: Callable, args: []const Value) anyerror!void {
+    for (args) |arg| try ctx.stack.push(arg);
+    try hook.execute(ctx);
+}
+
+fn reportHookError(comptime kind: []const u8, label: []const u8, err: anyerror) void {
+    // Freestanding has no real stderr (STDOUT/STDERR_FILENO are undefined there); this
+    // diagnostic is a nicety, not load-bearing, so it's silently skipped on that target.
+    if (builtin.is_test or is_freestanding) return;
+
+    const stderr_file: std.fs.File = .stderr();
+    var buf: [256]u8 = undefined;
+    var writer = stderr_file.writerStreaming(&buf);
+    writer.interface.print(kind ++ " ({s}): {s}\n", .{ label, @errorName(err) }) catch {};
+    writer.interface.flush() catch {};
 }
 
 /// ( quot param -- ) Register a scoped hook quotation on a dynamic parameter.
@@ -201,30 +222,24 @@ pub fn fireScopedHooks(ctx: *Context, param_name: []const u8, args: []const Valu
         const hook = items[i];
         const quot = (helpers.asQuotationStamped(ctx, hook) catch continue) orelse continue;
 
-        for (args) |arg| {
-            ctx.stack.push(arg) catch continue;
-        }
-
-        const saved_error_state = ctx.saveErrorState();
-
         // Borrowed: the retained array above owns every element for the sweep.
         const callable: Callable = .{ .quot = quot, .owner = hook };
-        callable.execute(ctx) catch |err| {
-            if (!builtin.is_test and !is_freestanding) {
-                const stderr_file: std.fs.File = .stderr();
-                var buf: [256]u8 = undefined;
-                var writer = stderr_file.writerStreaming(&buf);
-                writer.interface.print("scoped hook error ({s}): {s}\n", .{ param_name, @errorName(err) }) catch {};
-                writer.interface.flush() catch {};
-            }
-        };
-
-        ctx.restoreErrorState(saved_error_state);
+        runHook(ctx, callable, args) catch |err| reportHookError("scoped hook error", param_name, err);
     }
 }
 
 fn makeInstr(op: Instruction.Op) Instruction {
     return .{ .op = op, .line = 0 };
+}
+
+/// A stack-neutral hook body that appends `n` to `log`.
+fn recordingHook(ialloc: std.mem.Allocator, log: *value_mod.Vector, n: i64) !Quotation {
+    const instrs = try ialloc.alloc(Instruction, 4);
+    instrs[0] = makeInstr(.{ .push_literal = .{ .vector = log } });
+    instrs[1] = makeInstr(.{ .push_literal = .{ .fixnum = n } });
+    instrs[2] = makeInstr(.{ .call_word = "#push!" });
+    instrs[3] = makeInstr(.{ .call_word = "drop" });
+    return .{ .instructions = instrs };
 }
 
 test "LIFO ordering" {
@@ -236,27 +251,22 @@ test "LIFO ordering" {
     const ialloc = ctx.quotationAllocator();
     const registry = ctx.hook_registry;
 
-    const instrs1 = try ialloc.alloc(Instruction, 1);
-    instrs1[0] = makeInstr(.{ .push_literal = .{ .fixnum = 1 } });
-    const quot1 = Quotation{ .instructions = instrs1 };
-
-    const instrs2 = try ialloc.alloc(Instruction, 1);
-    instrs2[0] = makeInstr(.{ .push_literal = .{ .fixnum = 2 } });
-    const quot2 = Quotation{ .instructions = instrs2 };
+    const log = try value_mod.Vector.create(alloc);
+    defer log.header.release();
 
     const key = try alloc.dupe(u8, "test-event");
     var list = std.ArrayListUnmanaged(Callable){};
-    try list.append(alloc, .{ .quot = quot1, .owner = .unit });
-    try list.append(alloc, .{ .quot = quot2, .owner = .unit });
+    try list.append(alloc, .{ .quot = try recordingHook(ialloc, log, 1), .owner = .unit });
+    try list.append(alloc, .{ .quot = try recordingHook(ialloc, log, 2), .owner = .unit });
     try registry.hooks.put(alloc, key, list);
 
     // LIFO: hook2 fires first, then hook1
     fireHooks(&ctx, "test-event", &.{});
 
-    const top = try ctx.stack.pop();
-    try std.testing.expectEqual(@as(i64, 1), top.fixnum);
-    const second = try ctx.stack.pop();
-    try std.testing.expectEqual(@as(i64, 2), second.fixnum);
+    try std.testing.expectEqual(@as(usize, 0), ctx.stack.depth());
+    try std.testing.expectEqual(@as(usize, 2), log.list.items.len);
+    try std.testing.expectEqual(@as(i64, 2), log.list.items[0].fixnum);
+    try std.testing.expectEqual(@as(i64, 1), log.list.items[1].fixnum);
 }
 
 test "error resilience" {
@@ -268,35 +278,54 @@ test "error resilience" {
     const ialloc = ctx.quotationAllocator();
     const registry = ctx.hook_registry;
 
-    const instrs1 = try ialloc.alloc(Instruction, 1);
-    instrs1[0] = makeInstr(.{ .push_literal = .{ .fixnum = 42 } });
-    const quot1 = Quotation{ .instructions = instrs1 };
+    const log = try value_mod.Vector.create(alloc);
+    defer log.header.release();
 
-    // Second hook: reference an undefined word (will error without consuming stack)
-    const instrs2 = try ialloc.alloc(Instruction, 1);
-    instrs2[0] = makeInstr(.{ .call_word = "nonexistent-word-for-hook-test" });
-    const quot2 = Quotation{ .instructions = instrs2 };
+    // The middle hook references an undefined word.
+    const failing = try ialloc.alloc(Instruction, 1);
+    failing[0] = makeInstr(.{ .call_word = "nonexistent-word-for-hook-test" });
 
-    const instrs3 = try ialloc.alloc(Instruction, 1);
-    instrs3[0] = makeInstr(.{ .push_literal = .{ .fixnum = 99 } });
-    const quot3 = Quotation{ .instructions = instrs3 };
-
-    // Register: quot1, quot2 (throws), quot3
-    // LIFO firing: quot3 -> quot2 (error) -> quot1
+    // LIFO firing: 99, then the failing hook, then 42
     const key = try alloc.dupe(u8, "test-err");
     var list = std.ArrayListUnmanaged(Callable){};
-    try list.append(alloc, .{ .quot = quot1, .owner = .unit });
-    try list.append(alloc, .{ .quot = quot2, .owner = .unit });
-    try list.append(alloc, .{ .quot = quot3, .owner = .unit });
+    try list.append(alloc, .{ .quot = try recordingHook(ialloc, log, 42), .owner = .unit });
+    try list.append(alloc, .{ .quot = .{ .instructions = failing }, .owner = .unit });
+    try list.append(alloc, .{ .quot = try recordingHook(ialloc, log, 99), .owner = .unit });
     try registry.hooks.put(alloc, key, list);
 
     fireHooks(&ctx, "test-err", &.{});
 
-    // quot3 pushed 99, quot2 errored (UnknownWord), quot1 pushed 42
-    const top = try ctx.stack.pop();
-    try std.testing.expectEqual(@as(i64, 42), top.fixnum);
-    const second = try ctx.stack.pop();
-    try std.testing.expectEqual(@as(i64, 99), second.fixnum);
+    try std.testing.expectEqual(@as(usize, 0), ctx.stack.depth());
+    try std.testing.expectEqual(@as(usize, 2), log.list.items.len);
+    try std.testing.expectEqual(@as(i64, 99), log.list.items[0].fixnum);
+    try std.testing.expectEqual(@as(i64, 42), log.list.items[1].fixnum);
+}
+
+test "a hook that changes the stack has the stack it was handed put back" {
+    var ctx = context_mod.Context.init(std.testing.allocator);
+    defer ctx.deinit();
+    ctx.loadPrelude(null) catch unreachable;
+
+    const alloc = ctx.allocator;
+    const ialloc = ctx.quotationAllocator();
+    const registry = ctx.hook_registry;
+
+    // drop drop 888: consumes its argument and a value below it, then pushes one back.
+    const instrs = try ialloc.alloc(Instruction, 3);
+    instrs[0] = makeInstr(.{ .call_word = "drop" });
+    instrs[1] = makeInstr(.{ .call_word = "drop" });
+    instrs[2] = makeInstr(.{ .push_literal = .{ .fixnum = 888 } });
+
+    const key = try alloc.dupe(u8, "test-changed");
+    var list = std.ArrayListUnmanaged(Callable){};
+    try list.append(alloc, .{ .quot = .{ .instructions = instrs }, .owner = .unit });
+    try registry.hooks.put(alloc, key, list);
+
+    try ctx.stack.push(.{ .fixnum = 1 });
+    fireHooks(&ctx, "test-changed", &.{.{ .fixnum = 7 }});
+
+    try std.testing.expectEqual(@as(usize, 1), ctx.stack.depth());
+    try std.testing.expectEqual(@as(i64, 1), (try ctx.stack.pop()).fixnum);
 }
 
 test "a failing hook gives back the error state it overwrote" {

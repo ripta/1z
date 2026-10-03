@@ -1,0 +1,8 @@
+scoped hook error (word-defined-hooks): StackEffectMismatch
+scoped hook error (word-defined-hooks): StackEffectMismatch
+scoped hook error (word-defined-hooks): UnknownWord
+scoped hook error (module-loaded-hooks): StackEffectMismatch
+scoped hook error (module-loaded-hooks): StackEffectMismatch
+scoped hook error (module-loaded-hooks): StackEffectMismatch
+scoped hook error (module-loaded-hooks): StackEffectMismatch
+hook error (on:exit): StackEffectMismatch

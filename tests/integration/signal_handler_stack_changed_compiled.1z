@@ -1,0 +1,32 @@
+\ A signal handler delivered at a compiled safepoint. The alarm fires once while the compiled
+\ `times` loop runs, so the handler runs from the loop's back-edge with the loop's own value below
+\ its argument.
+\
+\ The loop body drops a fresh string inline. The safepoint must hand the handler the logical depth,
+\ or the handler's snapshot would hold the slot that string was released from.
+
+use "os/signal" ;
+use "ffi" ;
+use "testing" ;
+
+ualarm: const [ "c" lib-open "ualarm" ffi{ u32 u32 -> u32 } bound-symbol ] ;
+
+opaque: ( body -- handler ) [ 1array [ 0 #nth call ] curry ] ;
+
+spin: ( n -- n ) [ 100000 [ dup inspect drop ] times ] ;
+
+seen: V{ } ;
+
+"a handler sees the logical stack" test-section
+SIGALRM [ drop native.stack-snapshot seen swap #push! drop ] on-signal
+10000 0 ualarm ffi-call drop
+12345678 spin 12345678 "the loop's value survives" assert=
+seen #len 1 "the alarm fired once inside the loop" assert=
+seen 0 #nth "[ 12345678 ]" "the handler saw only the loop's value below its argument" assert=
+
+"a handler that swaps a value below its argument" test-section
+SIGALRM [ drop drop 777 ] opaque on-signal
+10000 0 ualarm ffi-call drop
+12345678 spin 12345678 "the loop's value is put back" assert=
+
+SIGALRM off-signal

@@ -1,0 +1,11 @@
+=== a body that consumes its inputs and raises partway ===
+PASS: the body's error is re-raised
+PASS: the value under the entry stack is untouched
+PASS: the cleanup quotation sees the entry stack, not the body's leftovers
+=== a body that succeeds ===
+PASS: the body's result is kept
+PASS: the cleanup quotation runs over the body's results
+=== a cleanup quotation that raises partway ===
+PASS: the body's result is all that continues
+=== a cleanup quotation that leaves values ===
+PASS: the cleanup quotation's values are discarded

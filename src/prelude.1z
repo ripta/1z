@@ -234,6 +234,10 @@ on: enum{
 \\ Global events (exit, unhandled-error) use the shared registry.
 \\ Scoped events (word-defined, module-loaded) use dynamic parameters.
 \\ Defined early with forward references resolved by deferred quotation bodies.
+\\
+\\ A hook takes its event's arguments and leaves nothing: one value for exit, unhandled-error, and
+\\ word-defined, and a name and a path for module-loaded. A hook that raises, or returns with the
+\\ stack changed, is reported on stderr, and the stack it was handed is put back.
 add-hook: ( on-variant quot -- ) [
   [ type-name ] dip
   over "on:word-defined" =

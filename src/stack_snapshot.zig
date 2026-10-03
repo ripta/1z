@@ -139,6 +139,22 @@ pub const CatchSnapshots = struct {
         self.values.items.len = seg.mark;
     }
 
+    /// Whether `stack` still holds exactly the segment, slot for slot.
+    ///
+    /// A handler that returns normally may still have consumed a value below its arguments and
+    /// pushed one back, so depth alone cannot tell. Slots compare by identity, not structure: a
+    /// handler that put back an equal but different value has still changed the stack.
+    pub fn unchanged(self: *CatchSnapshots, seg: Segment, stack: *const Stack) bool {
+        const values = self.held(seg);
+        const live = stack.items.items;
+        if (live.len != values.len) return false;
+
+        for (live, values) |a, b| {
+            if (!sameValue(a, b)) return false;
+        }
+        return true;
+    }
+
     /// The values of `seg`, which must be the topmost segment.
     ///
     /// A segment above it would mean a catch site returned without popping its own, or two
@@ -153,6 +169,14 @@ pub const CatchSnapshots = struct {
         self.values.deinit(allocator);
     }
 };
+
+/// Same tag and same payload, with heap payloads compared by address. A float compares by its
+/// bits, so a NaN is the same value as itself.
+fn sameValue(a: Value, b: Value) bool {
+    if (std.meta.activeTag(a) != std.meta.activeTag(b)) return false;
+    if (a == .float) return @as(u64, @bitCast(a.float)) == @as(u64, @bitCast(b.float));
+    return std.meta.eql(a, b);
+}
 
 test "restore puts back values the attempt overwrote and dropped" {
     var stack = Stack.init(std.testing.allocator);
@@ -303,4 +327,65 @@ test "a catch segment that cannot be reserved retains nothing" {
     try std.testing.expectError(error.OutOfMemory, snapshots.push(failing.allocator(), &stack));
     try std.testing.expectEqual(@as(u32, 1), operand.header.refcountValue());
     try std.testing.expectEqual(@as(usize, 0), snapshots.values.items.len);
+}
+
+test "a stack the handler left alone reads as unchanged, NaN included" {
+    var stack = Stack.init(std.testing.allocator);
+    defer stack.deinit();
+
+    var snapshots: CatchSnapshots = .{};
+    defer snapshots.deinit(std.testing.allocator);
+
+    try stack.push(.{ .fixnum = 1 });
+    try stack.push(.{ .float = std.math.nan(f64) });
+    const seg = try snapshots.push(std.testing.allocator, &stack);
+
+    // A handler that took an argument and consumed it.
+    try stack.push(.{ .fixnum = 30 });
+    _ = try stack.pop();
+
+    try std.testing.expect(snapshots.unchanged(seg, &stack));
+    snapshots.discard(seg);
+}
+
+test "a stack with an extra value reads as changed" {
+    var stack = Stack.init(std.testing.allocator);
+    defer stack.deinit();
+
+    var snapshots: CatchSnapshots = .{};
+    defer snapshots.deinit(std.testing.allocator);
+
+    try stack.push(.{ .fixnum = 1 });
+    const seg = try snapshots.push(std.testing.allocator, &stack);
+    try stack.push(.{ .fixnum = 777 });
+
+    try std.testing.expect(!snapshots.unchanged(seg, &stack));
+    snapshots.restore(seg, &stack);
+    try std.testing.expectEqual(@as(usize, 1), stack.depth());
+}
+
+test "a value swapped below the handler's arguments reads as changed" {
+    const Vector = @import("value.zig").Vector;
+
+    var stack = Stack.init(std.testing.allocator);
+    defer stack.deinit();
+    defer stack.clear();
+
+    var snapshots: CatchSnapshots = .{};
+    defer snapshots.deinit(std.testing.allocator);
+
+    const original = try Vector.create(std.testing.allocator);
+    try stack.push(.{ .vector = original });
+    original.header.release();
+    const seg = try snapshots.push(std.testing.allocator, &stack);
+
+    // An equal but different value in the same slot.
+    StackSnapshot.releaseAbove(&stack, 0);
+    const replacement = try Vector.create(std.testing.allocator);
+    try stack.push(.{ .vector = replacement });
+    replacement.header.release();
+
+    try std.testing.expect(!snapshots.unchanged(seg, &stack));
+    snapshots.restore(seg, &stack);
+    try std.testing.expectEqual(original, stack.items.items[0].vector);
 }

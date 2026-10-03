@@ -14,7 +14,7 @@ Stack: [ ]
 Stack: [ ]
 PASS: cleanup ran on cancelled sleeping task
 Stack: [ ]
-PASS: cleanup with drop completed
+PASS: cleanup on a cancelled task completed
 Stack: [ ]
 PASS: recover catches task-cancelled
 Stack: [ ]

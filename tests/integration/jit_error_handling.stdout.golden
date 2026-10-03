@@ -20,9 +20,10 @@ Stack: [ ]
 Stack: [ ]
 Stack: [ ]
 Stack: [ ]
-PASS: cleanup ran
-Stack: [ 1 ]
+Stack: [ ]
 PASS: body result
+Stack: [ ]
+PASS: cleanup ran
 Stack: [ ]
 === compiled cleanup on error propagates ===
 Stack: [ ]

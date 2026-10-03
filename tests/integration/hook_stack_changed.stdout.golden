@@ -1,0 +1,8 @@
+=== a word-defined hook that leaves a value ===
+PASS: the defining code's stack is put back
+=== a word-defined hook that swaps a value below its argument ===
+PASS: the consumed value is put back
+=== a word-defined hook that raises partway ===
+PASS: the partial state is discarded
+=== a module-loaded hook that leaves a value ===
+PASS: the loading code's stack is put back
