@@ -1,0 +1,21 @@
+use "testing" ;
+
+\ Each vector-returning sequence op builds a fresh vector holding new references to its elements.
+\ The fresh vector must be released when it is dropped, or every element it copied leaks. A `>array`
+\ of a vector is heap-allocated rather than a literal, so a leak shows up as a GPA report on stderr,
+\ which this test has no golden for.
+
+\ A vector holding two heap-allocated arrays.
+held: ( -- vec ) [ V{ } V{ 1 } >array #push! V{ 2 } >array #push! ] ;
+
+"vector ops release what they copy" test-section
+held 0 2 #slice #len 2 "#slice" assert=
+held { 3 } #append #len 3 "#append" assert=
+held { 3 } #prepend #len 3 "#prepend" assert=
+held { 3 } #push #len 3 "#push" assert=
+held #pop drop #len 1 "#pop" assert=
+held { 3 } #unshift #len 3 "#unshift" assert=
+held #shift drop #len 1 "#shift" assert=
+held 1 #take #len 1 "#take" assert=
+held 1 #drop #len 1 "#drop" assert=
+held 5 #drop #len 0 "#drop past the end" assert=

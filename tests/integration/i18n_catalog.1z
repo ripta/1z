@@ -54,7 +54,7 @@ f swap "ignore-me not loaded" assert=
 
 "load-catalog rejects word calls" test-section
 [ "tests/fixtures/catalogs_bad" load-catalog ]
-"rejects word calls" assert-error
+parse-error: "rejects word calls" assert-error-type
 
 \ --- catalog-get? ---
 

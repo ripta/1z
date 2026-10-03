@@ -8,7 +8,7 @@ use "os/path" ;
 use "i18n/locale" ;
 use "i18n/localechain" ;
 use { format-message: } "i18n/message" ;
-use { quotation-has-calls?: } "runtime/introspect" ;
+use { read-config-file: } "config" ;
 
 message-catalog: virtual{ hash } ;
 
@@ -48,18 +48,14 @@ inspect: method{ message-catalog } [
   dup #len 3 - #take
 ] ;
 
-\\ Read and evaluate a single catalog file as data-only 1z.
-\\ Rejects files containing word calls. Result must be a hash.
+\\ Read a single catalog file as a data-only config. Result must be a hash.
 (load-catalog-file): ( path -- hash ) [
-  read: stream-open dup stream-read-all swap stream-close bytes>
-  "[ " swap #append " ]" #append eval-string
-  dup quotation-has-calls?
-  [ f "catalog file contains word calls" EInvalidArgument make-error throw ]
-  when
-  with-isolation
-  dup hash? not
-  [ f "catalog file must evaluate to a hash" EInvalidArgument make-error throw ]
-  when
+  dup read-config-file
+  dup hash? not [
+    drop "catalog file " swap #append " must hold a hash" #append
+    f swap EInvalidArgument make-error throw
+  ] when
+  nip
 ] ;
 
 \\ Process one directory entry during load-catalog.

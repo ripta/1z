@@ -1,0 +1,23 @@
+Stack: [ ]
+=== vector ops release what they copy ===
+Stack: [ ]
+PASS: #slice
+Stack: [ ]
+PASS: #append
+Stack: [ ]
+PASS: #prepend
+Stack: [ ]
+PASS: #push
+Stack: [ ]
+PASS: #pop
+Stack: [ ]
+PASS: #unshift
+Stack: [ ]
+PASS: #shift
+Stack: [ ]
+PASS: #take
+Stack: [ ]
+PASS: #drop
+Stack: [ ]
+PASS: #drop past the end
+Stack: [ ]

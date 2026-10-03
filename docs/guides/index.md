@@ -44,6 +44,8 @@ definitions, and control flow.
     tree-sitter parser in Neovim, Helix, and Zed
 21. [Code Formatting](formatting.md) -- the `.fmt.1z` config file, the rules it
     sets, and how the formatter finds it
+22. [Data-Only Config Files](config-files.md) -- the literal grammar the
+    formatter, highlight themes, and message catalogs read, and what it rejects
 
 All examples are runnable. Save any snippet to a `.1z` file and run it with
 `./zig-out/bin/1z file.1z`.

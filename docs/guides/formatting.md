@@ -26,9 +26,10 @@ H{
 Every key is optional. A key the file omits keeps its default, so the file
 above changes two rules and leaves the other five alone.
 
-The file is read as data, not run as a program. It may hold literals and
-parse-time constructors -- `H{ }`, `V{ }`, `S{ }`, arrays -- and nothing else.
-A word call in it is rejected, so a config file can never execute anything.
+The file is read as data, not run as a program. It holds literals and the
+`H{ }`, `S{ }`, `V{ }` and `{ }` containers, and nothing else, so a config file
+can never execute anything. [Data-Only Config Files](config-files.md) gives
+the full grammar.
 
 ## The rules
 
@@ -120,8 +121,9 @@ key 'align-symbols' in .fmt.1z must be t or f, got 1
 
 And a negative number, which reaches the same message as a wrong type.
 
-A file that evaluates to something other than a hash is rejected too, by the
-config reader underneath.
+A file that holds something other than a hash is rejected too, by the config
+reader underneath. So is a file outside the grammar, which the reader reports
+with a position.
 
 ## Choosing an engine
 

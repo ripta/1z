@@ -1,3 +1,7 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
 === load-config-data basics ===
 Stack: [ ]
 Stack: [ t t ]
@@ -19,8 +23,122 @@ Stack: [ t ]
 Stack: [ t [ "tests/fixtures/config_data_calls.1z" load-config-data ] ]
 PASS: data config with calls is rejected
 Stack: [ t ]
+=== load-config-data never runs a use ===
+Stack: [ t ]
+Stack: [ t [ "tests/fixtures/config_data_use.1z" load-config-data ] ]
+PASS: a use statement is rejected
+Stack: [ t ]
+Stack: [ t "unexpected word 'use' at position 0 in tests/fixtures/config_data_use.1z" ]
+PASS: the rejection names the file
+Stack: [ t ]
 === load-config-data missing file ===
 Stack: [ t ]
 Stack: [ t [ "tests/fixtures/no_such_file.1z" load-config-data ] ]
 PASS: missing file throws error
+Stack: [ t ]
+=== parse-config-data scalars ===
+Stack: [ t ]
+PASS: fixnum
+Stack: [ t ]
+PASS: negative fixnum
+Stack: [ t ]
+PASS: hex with separator
+Stack: [ t ]
+PASS: float
+Stack: [ t ]
+PASS: bignum
+Stack: [ t ]
+PASS: string escapes are processed
+Stack: [ t ]
+PASS: symbol
+Stack: [ t ]
+PASS: t
+Stack: [ t ]
+PASS: f
+Stack: [ t ]
+=== parse-config-data containers ===
+Stack: [ t ]
+PASS: array
+Stack: [ t ]
+PASS: empty array
+Stack: [ t ]
+PASS: set
+Stack: [ t ]
+PASS: vector type
+Stack: [ t V{ t f } ]
+PASS: vector contents
+Stack: [ t ]
+PASS: hash with symbol and string keys
+Stack: [ t ]
+PASS: a repeated key keeps the last value
+Stack: [ t ]
+Stack: [ t H{ a: H{ b: { 1 S{ c: } } } } H{ a: H{ b: { 1 S{ c: } } } } ]
+PASS: nested containers
+Stack: [ t ]
+=== parse-config-data comments ===
+Stack: [ t ]
+Stack: [ t H{ a: 1 } H{ a: 1 } ]
+PASS: comments and line breaks are skipped
+Stack: [ t ]
+=== parse-config-data rejections ===
+Stack: [ t ]
+PASS: use is rejected
+Stack: [ t ]
+PASS: use offset
+Stack: [ t ]
+PASS: unknown word message
+Stack: [ t ]
+PASS: unknown word offset
+Stack: [ t ]
+PASS: M{ is rejected
+Stack: [ t ]
+PASS: a quotation is rejected
+Stack: [ t ]
+PASS: unterminated brace
+Stack: [ t ]
+PASS: odd hash count
+Stack: [ t ]
+PASS: non-key in hash
+Stack: [ t ]
+PASS: malformed number
+Stack: [ t ]
+PASS: unterminated string
+Stack: [ t ]
+PASS: an unterminated string ending in a colon
+Stack: [ t ]
+PASS: a string whose last quote is escaped
+Stack: [ t ]
+PASS: a string ending in an escaped backslash
+Stack: [ t ]
+PASS: a stray close brace
+Stack: [ t ]
+PASS: a close bracket
+Stack: [ t ]
+PASS: a semicolon
+Stack: [ t ]
+PASS: a stack effect
+Stack: [ t ]
+PASS: a key at the end of input
+Stack: [ t ]
+PASS: the innermost open brace is reported
+Stack: [ t ]
+PASS: a position counts codepoints, not bytes
+Stack: [ t ]
+PASS: trailing value offset
+Stack: [ t ]
+PASS: odd hash count offset
+Stack: [ t ]
+PASS: non-key offset
+Stack: [ t ]
+PASS: unsupported constructor offset
+Stack: [ t ]
+PASS: empty source
+Stack: [ t ]
+PASS: trailing value
+Stack: [ t ]
+=== parse-config-data nesting depth ===
+Stack: [ t ]
+PASS: five hundred levels on the main task
+Stack: [ t ]
+PASS: five hundred levels inside a task
 Stack: [ t ]

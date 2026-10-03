@@ -1,33 +1,33 @@
-src/prelude.1z:1636: err: pragma-get?: branch quotations have mismatched row variable adjustments
-src/prelude.1z:1554: err: (>dispatch-prov): type mismatch: make-dispatch-provenance expects string for parameter 'role', but got fixnum
-src/prelude.1z:1554: err: (>dispatch-prov): type mismatch: make-dispatch-provenance expects string for parameter 'field', but got fixnum
-src/prelude.1z:1553: err: (>provenance): type mismatch: make-provenance expects string for parameter 'role', but got fixnum
-src/prelude.1z:1572: err: (raw>word-info): type mismatch: make-word-info expects array for parameter 'markers', but got fixnum
-src/prelude.1z:1572: err: (raw>word-info): type mismatch: make-word-info expects boolean for parameter 'native?', but got fixnum
-src/prelude.1z:1572: err: (raw>word-info): type mismatch: make-word-info expects array for parameter 'methods', but got fixnum
-src/prelude.1z:1572: err: (raw>word-info): type mismatch: make-word-info expects boolean for parameter 'compiled?', but got fixnum
-src/prelude.1z:982: warning: borrow: word has no declared stack effect
+src/prelude.1z:1637: err: pragma-get?: branch quotations have mismatched row variable adjustments
+src/prelude.1z:1555: err: (>dispatch-prov): type mismatch: make-dispatch-provenance expects string for parameter 'role', but got fixnum
+src/prelude.1z:1555: err: (>dispatch-prov): type mismatch: make-dispatch-provenance expects string for parameter 'field', but got fixnum
+src/prelude.1z:1554: err: (>provenance): type mismatch: make-provenance expects string for parameter 'role', but got fixnum
+src/prelude.1z:1573: err: (raw>word-info): type mismatch: make-word-info expects array for parameter 'markers', but got fixnum
+src/prelude.1z:1573: err: (raw>word-info): type mismatch: make-word-info expects boolean for parameter 'native?', but got fixnum
+src/prelude.1z:1573: err: (raw>word-info): type mismatch: make-word-info expects array for parameter 'methods', but got fixnum
+src/prelude.1z:1573: err: (raw>word-info): type mismatch: make-word-info expects boolean for parameter 'compiled?', but got fixnum
+src/prelude.1z:983: warning: borrow: word has no declared stack effect
 src/prelude.1z:293: warning: associative: word has no declared stack effect
 src/prelude.1z:302: warning: parameter{: word has no declared stack effect
 src/prelude.1z:23: warning: B{: word has no declared stack effect
 src/prelude.1z:102: err: virtual{: branch quotations have mismatched row variable adjustments
 src/prelude.1z:102: warning: virtual{: word has no declared stack effect
 src/prelude.1z:259: warning: method{: word has no declared stack effect
-src/prelude.1z:907: warning: use: word has no declared stack effect
+src/prelude.1z:908: warning: use: word has no declared stack effect
 src/prelude.1z:31: warning: M{: word has no declared stack effect
 src/prelude.1z:117: warning: match{: word has no declared stack effect
 src/prelude.1z:77: warning: W{: word has no declared stack effect
-src/prelude.1z:721: warning: trace-stack: cannot verify trace-stack: callee native.stack-snapshot has unknown effect
-src/prelude.1z:1305: note: ?flatten: callee native.virtual-struct-unwrap is polymorphic; effect trusted from declaration
+src/prelude.1z:722: warning: trace-stack: cannot verify trace-stack: callee native.stack-snapshot has unknown effect
+src/prelude.1z:1306: note: ?flatten: callee native.virtual-struct-unwrap is polymorphic; effect trusted from declaration
 src/prelude.1z:274: warning: comparable: word has no declared stack effect
 src/prelude.1z:290: warning: stringable: word has no declared stack effect
 src/prelude.1z:111: warning: enum{: word has no declared stack effect
 src/prelude.1z:37: warning: bind{: word has no declared stack effect
 src/prelude.1z:287: warning: inspectable: word has no declared stack effect
 src/prelude.1z:15: warning: H{: word has no declared stack effect
-src/prelude.1z:1615: warning: private(shadow-ok){: word has no declared stack effect
-src/prelude.1z:1712: warning: local{: word has no declared stack effect
-src/prelude.1z:1630: warning: private{: word has no declared stack effect
+src/prelude.1z:1616: warning: private(shadow-ok){: word has no declared stack effect
+src/prelude.1z:1713: warning: local{: word has no declared stack effect
+src/prelude.1z:1631: warning: private{: word has no declared stack effect
 src/prelude.1z:19: warning: V{: word has no declared stack effect
 src/prelude.1z:86: warning: struct{: word has no declared stack effect
 src/prelude.1z:27: warning: S{: word has no declared stack effect

@@ -1,7 +1,8 @@
 \ lib/config.1z - Config type with dot-path traversal
 
 use "strings" ;
-use { quotation-has-calls?: } "runtime/introspect" ;
+use "lexer" ;
+use "1z-tokens" ;
 
 \\ A config value wrapping a hash, providing dot-path access.
 config: virtual{ hash } ;
@@ -45,18 +46,189 @@ inspect: method{ config } [
   unmake-config >string
 ] ;
 
-\\ Load a data-only config file.
+\ The reader keeps a vector of open containers rather than recursing, so nesting depth is bounded
+\ by memory and not by the native stack, which is small inside a task.
+\
+\ Each frame is a vector holding the token that opened it followed by the values read into it so
+\ far. The bottom frame stands for the file itself, opened by `f`, and may hold one value.
+private{
+  \ Whitespace, line breaks, and both comment kinds carry no data.
+  (significant?): ( token -- ? ) [
+    kind>> dup whitespace: = over newline: = or over comment: = or swap doc-comment: = or not
+  ] ;
+
+  (config-parse-error): never-returns ( pos: fixnum what: string -- * ) [
+    " at position " #append over >string #append
+    swap [ H{ } offset: ] dip @set
+    swap EParseError make-error throw
+  ] ;
+
+  (unterminated): never-returns ( opener -- * ) [
+    dup pos>> swap value>> "unterminated '" swap #append "'" #append (config-parse-error)
+  ] ;
+
+  \ The token at i, or f past the end. The index is left in place.
+  (token-at): ( tokens i -- tokens i token/f ) [
+    2dup swap #len < [ 2dup #nth ] [ f ] if
+  ] ;
+
+  (trailing-backslashes): ( text: string n: fixnum -- n ) [
+    over #empty? [ nip ] [
+      over #last "\\" = [ [ dup #len 1 - #take ] dip 1 + (trailing-backslashes) ] [ nip ] if
+    ] if
+  ] ;
+
+  \ The tokenizer runs an unterminated string to the end of the input, so a string token is closed
+  \ only when it ends in a quote that no backslash escapes.
+  (closed-string?): ( text: string -- ? ) [
+    dup #len 2 < [ drop f ] [
+      dup #last "\"" = [ dup #len 1 - #take 0 (trailing-backslashes) even? ] [ drop f ] if
+    ] if
+  ] ;
+
+  (read-scalar): ( token -- value ) [
+    dup kind>> string: = [
+      dup value>> (closed-string?) [ pos>> "unterminated string" (config-parse-error) ] unless
+    ] when
+
+    dup value>> resolve-literal [ nip ] [
+      drop dup pos>> swap value>> "malformed literal '" swap #append "'" #append
+      (config-parse-error)
+    ] if
+  ] ;
+
+  (read-word): ( token -- value ) [
+    dup value>> dup "t" = [ 2drop t ] [
+      dup "f" = [ 2drop f ] [
+        "unexpected word '" swap #append "'" #append
+        swap pos>> swap (config-parse-error)
+      ] if
+    ] if
+  ] ;
+
+  \ Refuse a value its frame has no room for: a second value in the file, or a hash key that is
+  \ not a string or a symbol. start is the token the value began at.
+  (check-slot): ( start frame -- ) [
+    dup #len 1 - swap 0 #nth
+    dup f = [
+      drop 0 > [ pos>> "unexpected trailing value" (config-parse-error) ] [ drop ] if
+    ] [
+      value>> "H{" = [
+        even? [
+          dup kind>> dup string: = swap symbol: = or
+          [ drop ] [ pos>> "hash key must be a string or symbol" (config-parse-error) ] if
+        ] [ drop ] if
+      ] [ 2drop ] if
+    ] if
+  ] ;
+
+  (deliver): ( frames value start -- frames ) [
+    2 pick-n #last (check-slot)
+    over #last swap #push! drop
+  ] ;
+
+  (open-frame): ( frames opener -- frames ) [
+    dup value>> dup "{" = over "H{" = or over "S{" = or swap "V{" = or [
+      dup pos>> swap value>> "unsupported constructor '" swap #append "'" #append
+      (config-parse-error)
+    ] unless
+
+    V{ } swap #push! #push!
+  ] ;
+
+  \ Fold a hash frame's alternating keys and values into hash in source order, starting at index i.
+  \ A repeated key keeps its last value and the iteration order matches `H{`.
+  (pairs>hash): ( hash frame i: fixnum -- hash ) [
+    2dup swap #len < [
+      2dup #nth 2 pick-n 2 pick-n 1 + #nth
+      2swap [ @set ] 2dip
+      2 + (pairs>hash)
+    ] [ 2drop ] if
+  ] ;
+
+  \ The value a frame closed by the `}` token close stands for.
+  (frame-value): ( close frame -- value ) [
+    dup 0 #nth value>> "H{" = [
+      dup #len even? [ drop pos>> "hash key has no value" (config-parse-error) ] when
+      nip H{ } swap 1 (pairs>hash)
+    ] [
+      nip dup 0 #nth value>> swap 1 #drop
+      over "{" = [ nip >array ] [
+        swap "V{" = [ V{ } [ #push! ] #reduce ] [ [ ] make-set [ @adjoin ] #reduce ] if
+      ] if
+    ] if
+  ] ;
+
+  (close-frame): ( frames close -- frames ) [
+    over #len 1 = [ pos>> "unexpected '}'" (config-parse-error) ] when
+    over #pop! nip
+    dup 0 #nth -rot> (frame-value) swap (deliver)
+  ] ;
+
+  (step): ( frames token -- frames ) [
+    dup kind>> dup string: = over number: = or swap symbol: = or [
+      dup (read-scalar) swap (deliver)
+    ] [
+      dup kind>> word: = [ dup (read-word) swap (deliver) ] [
+        dup kind>> open-brace: = [ (open-frame) ] [
+          dup kind>> close-brace: = [ (close-frame) ] [
+            dup pos>> swap value>> "unexpected '" swap #append "'" #append (config-parse-error)
+          ] if
+        ] if
+      ] if
+    ] if
+  ] ;
+
+  (finish): ( frames -- value ) [
+    dup #len 1 > [ #last 0 #nth (unterminated) ] when
+    #last dup #len 1 = [ drop 0 "empty config" (config-parse-error) ] when
+    1 #nth
+  ] ;
+
+  (read-loop): ( frames tokens i -- value ) [
+    (token-at)
+    dup f = [ drop 2drop (finish) ] [
+      [ 1 + ] dip [ <rot- ] dip (step) -rot>
+      (read-loop)
+    ] if
+  ] ;
+}
+
+\\ Parse data-only config source into the single value it holds.
 \\
-\\ The file must evaluate to a single value using only literals and
-\\ parse-time constructors (H{}, V{}, S{}, arrays). Word calls are rejected.
-load-config-data: ( path -- config ) [
-  read: stream-open dup stream-read-all swap stream-close bytes>
-  "[ " swap #append " ]" #append eval-string
-  dup quotation-has-calls?
-  [ f "config contains word calls; use load-config-eval for computed configs" EInvalidArgument make-error throw ]
-  when
-  with-isolation
-  >config
+\\ The source is tokenized and read against a fixed grammar, so no word in it runs, parse-time or
+\\ otherwise. It holds exactly one value: a string, a number, a symbol, `t`, `f`, or a `{ }`,
+\\ `H{ }`, `S{ }`, or `V{ }` of further values. An `H{ }` key is a string or a symbol, and a
+\\ repeated key keeps the last value. Comments may appear between any two tokens.
+\\
+\\ Anything else raises `parse-error:`, with the codepoint offset of the offending token in the
+\\ error's data under `offset:`.
+parse-config-data: ( source: string -- value ) [
+  1z-tokenize [ (significant?) ] #filter #collect
+  V{ } V{ } f #push! #push! swap 0 (read-loop)
+] ;
+
+\\ Read a data-only config file into the single value it holds.
+\\
+\\ The file is read by `parse-config-data` and never run. A parse failure names the file.
+read-config-file: ( path: string -- value ) [
+  dup read: stream-open dup stream-read-all swap stream-close bytes>
+  [ parse-config-data ] [
+    nip
+    dup error-type: @get parse-error: = [
+      dup data: @get swap message: @get " in " #append <rot- #append
+      EParseError make-error
+    ] [ nip ] if
+    throw
+  ] recover
+  nip
+] ;
+
+\\ Load a data-only config file, which must hold a hash.
+\\
+\\ The file is read by `read-config-file` and never run.
+load-config-data: ( path: string -- config ) [
+  read-config-file >config
 ] ;
 
 \\ Load a computed config file.

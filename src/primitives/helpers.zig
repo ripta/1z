@@ -72,6 +72,15 @@ pub fn pushMovedIterator(ctx: *Context, iter: *Iterator) anyerror!void {
     };
 }
 
+/// Push a freshly created vector, transferring its creation reference to the stack slot. On
+/// failure the reference is dropped, destroying the vector and releasing its elements.
+pub fn pushMovedVector(ctx: *Context, vec: *value_mod.Vector) anyerror!void {
+    ctx.stack.pushMoved(.{ .vector = vec }) catch |e| {
+        container_backing.releaseValue(.{ .vector = vec });
+        return e;
+    };
+}
+
 /// Adopt freshly allocated bytes into a heap-backed string value and push it, transferring
 /// the backing's creation reference to the stack slot. `bytes` must have been allocated on
 /// `ctx.allocator`. The caller's ownership ends here on every path.

@@ -1416,7 +1416,7 @@ pub fn nativeSlice(ctx: *Context) anyerror!void {
             }
             // Each element copied into the new vector is a new owning reference.
             container_backing.retainValues(result_vec.list.items);
-            try ctx.stack.push(.{ .vector = result_vec });
+            try helpers.pushMovedVector(ctx, result_vec);
         },
         .byte_array => |b| {
             const bytes = b.slice();
@@ -1586,7 +1586,7 @@ pub fn nativeAppend(ctx: *Context) anyerror!void {
             }
             // Each element copied into the new vector is a new owning reference.
             container_backing.retainValues(new_vec.list.items);
-            try ctx.stack.push(.{ .vector = new_vec });
+            try helpers.pushMovedVector(ctx, new_vec);
         },
         .string => |s1| {
             // Fast path: seq2 is already byte-compatible, so memcpy directly instead of
@@ -1774,7 +1774,7 @@ pub fn nativePrepend(ctx: *Context) anyerror!void {
             }
             // Each element copied into the new vector is a new owning reference.
             container_backing.retainValues(new_vec.list.items);
-            try ctx.stack.push(.{ .vector = new_vec });
+            try helpers.pushMovedVector(ctx, new_vec);
         },
         .string => |s1| {
             // For strings, convert seq2 elements to strings and prepend
@@ -1897,7 +1897,7 @@ fn nativePush(ctx: *Context) anyerror!void {
                 new_vec.list.appendAssumeCapacity(item);
             }
             new_vec.list.appendAssumeCapacity(elem);
-            try ctx.stack.push(.{ .vector = new_vec });
+            try helpers.pushMovedVector(ctx, new_vec);
         },
         .string => |s| {
             // Element must be a string
@@ -1977,7 +1977,7 @@ fn nativePop(ctx: *Context) anyerror!void {
             for (kept) |item| {
                 new_vec.list.appendAssumeCapacity(item);
             }
-            try ctx.stack.push(.{ .vector = new_vec });
+            try helpers.pushMovedVector(ctx, new_vec);
             try ctx.stack.push(vec.list.items[vec.list.items.len - 1]);
         },
         .string => |s| {
@@ -2043,7 +2043,7 @@ fn nativeUnshift(ctx: *Context) anyerror!void {
             for (vec.list.items) |item| {
                 new_vec.list.appendAssumeCapacity(item);
             }
-            try ctx.stack.push(.{ .vector = new_vec });
+            try helpers.pushMovedVector(ctx, new_vec);
         },
         .string => |s| {
             const elem_str = switch (elem) {
@@ -2120,7 +2120,7 @@ fn nativeShift(ctx: *Context) anyerror!void {
             for (kept) |item| {
                 new_vec.list.appendAssumeCapacity(item);
             }
-            try ctx.stack.push(.{ .vector = new_vec });
+            try helpers.pushMovedVector(ctx, new_vec);
             try ctx.stack.push(vec.list.items[0]);
         },
         .string => |s| {
@@ -2613,7 +2613,7 @@ pub fn nativeTake(ctx: *Context) anyerror!void {
             for (taken) |item| {
                 new_vec.list.appendAssumeCapacity(item);
             }
-            try ctx.stack.push(.{ .vector = new_vec });
+            try helpers.pushMovedVector(ctx, new_vec);
         },
         .byte_array => |b| {
             const bytes = b.slice();
@@ -2681,7 +2681,7 @@ pub fn nativeDrop(ctx: *Context) anyerror!void {
         .vector => |vec| {
             if (n >= vec.list.items.len) {
                 const new_vec = Vector.create(alloc) catch return error.OutOfMemory;
-                try ctx.stack.push(.{ .vector = new_vec });
+                try helpers.pushMovedVector(ctx, new_vec);
                 return;
             }
             const new_vec = Vector.create(alloc) catch return error.OutOfMemory;
@@ -2691,7 +2691,7 @@ pub fn nativeDrop(ctx: *Context) anyerror!void {
             for (kept) |item| {
                 new_vec.list.appendAssumeCapacity(item);
             }
-            try ctx.stack.push(.{ .vector = new_vec });
+            try helpers.pushMovedVector(ctx, new_vec);
         },
         .byte_array => |b| {
             const bytes = b.slice();

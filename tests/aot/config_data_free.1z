@@ -1,0 +1,11 @@
+\ Interpreter-free (`--interpreter-fallback=false`) run of the data-only config reader.
+\
+\ It reads a config file and a source string with every container form, and catches a rejection,
+\ all without `eval-string`.
+use "config" ;
+
+"tests/fixtures/config_data.1z" load-config-data "db.path" config-get print-line
+
+"H{ a: { 1 -2 0x10 } b: S{ x: } c: V{ t f } \"d\" 1.5 }" parse-config-data inspect print-line
+
+[ "H{ a: foo }" parse-config-data drop ] [ message: @get print-line ] recover

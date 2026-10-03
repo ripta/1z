@@ -7,8 +7,8 @@ AOT interpreter fallbacks: 20 total
   sites:
     per-op-native: cmp -> < (line 213)
     per-op-native: cmp -> > (line 215)
-    native: . -> inspect (line 741)
-    native: . -> inspect (line 741)
+    native: . -> inspect (line 742)
+    native: . -> inspect (line 742)
     per-op-native: onez_q_3 -> > (line 215)
     per-op-native: onez_q_6 -> < (line 1)
     per-op-native: onez_q_6 -> > (line 1)

@@ -1,6 +1,30 @@
 use "testing" ;
 use "config" ;
 
+\ The offset a rejected source reports, or f when it parses.
+offset-of: ( source: string -- offset ) [
+  [ parse-config-data drop f ] [ nip data: @get offset: @get ] recover
+] ;
+
+\ The message a rejected source reports, or f when it parses.
+message-of: ( source: string -- message ) [
+  [ parse-config-data drop f ] [ nip message: @get ] recover
+] ;
+
+\ Whether `{ }` nested depth deep parses. The reader keeps its own stack of open containers, so
+\ the depth it reaches is not bounded by the native stack.
+reads-at-depth?: ( depth: fixnum -- ? ) [
+  [
+    dup "" swap [ "{ " #append ] times swap [ "} " #append ] times
+    parse-config-data drop t
+  ] [ 2drop f ] recover
+] ;
+
+\ The message a rejected config file reports, or f when it loads.
+load-message-of: ( path: string -- message ) [
+  [ load-config-data drop f ] [ nip message: @get ] recover
+] ;
+
 "load-config-data basics" test-section
 t "tests/fixtures/config_data.1z" load-config-data config?
 "load-config-data returns config" assert-true
@@ -17,8 +41,74 @@ t "tests/fixtures/config_data.1z" load-config-data config?
 
 "load-config-data rejects word calls" test-section
 [ "tests/fixtures/config_data_calls.1z" load-config-data ]
-"data config with calls is rejected" assert-error
+parse-error: "data config with calls is rejected" assert-error-type
+
+"load-config-data never runs a use" test-section
+[ "tests/fixtures/config_data_use.1z" load-config-data ]
+parse-error: "a use statement is rejected" assert-error-type
+
+"unexpected word 'use' at position 0 in tests/fixtures/config_data_use.1z"
+"tests/fixtures/config_data_use.1z" load-message-of "the rejection names the file" assert=
 
 "load-config-data missing file" test-section
 [ "tests/fixtures/no_such_file.1z" load-config-data ]
 "missing file throws error" assert-error
+
+"parse-config-data scalars" test-section
+42 "42" parse-config-data "fixnum" assert=
+-7 "-7" parse-config-data "negative fixnum" assert=
+16 "0x1_0" parse-config-data "hex with separator" assert=
+1500.0 "1.5e3" parse-config-data "float" assert=
+"99999999999999999999" "99999999999999999999" parse-config-data >string "bignum" assert=
+"a\nb" "\"a\\nb\"" parse-config-data "string escapes are processed" assert=
+port: "port:" parse-config-data "symbol" assert=
+t "t" parse-config-data "t" assert=
+f "f" parse-config-data "f" assert=
+
+"parse-config-data containers" test-section
+{ 1 "two" three: } "{ 1 \"two\" three: }" parse-config-data "array" assert=
+{ } "{ }" parse-config-data "empty array" assert=
+S{ 1 2 } "S{ 1 2 2 }" parse-config-data "set" assert=
+"V{ t f }" parse-config-data dup vector? "vector type" assert-true
+>array t f 2 array-n "vector contents" assert=
+H{ a: 1 "b" 2 } "H{ a: 1 \"b\" 2 }" parse-config-data "hash with symbol and string keys" assert=
+H{ a: 2 } "H{ \"a\" 1 a: 2 }" parse-config-data "a repeated key keeps the last value" assert=
+H{ a: H{ b: { 1 S{ c: } } } } "H{ a: H{ b: { 1 S{ c: } } } }" parse-config-data
+"nested containers" assert=
+
+"parse-config-data comments" test-section
+H{ a: 1 } "\\\\ Doc comment.\nH{\n  a: 1 \\ trailing comment\n}\n" parse-config-data
+"comments and line breaks are skipped" assert=
+
+"parse-config-data rejections" test-section
+[ "use \"x\" ;" parse-config-data ] parse-error: "use is rejected" assert-error-type
+0 "use \"x\" ;" offset-of "use offset" assert=
+"unexpected word 'foo' at position 6" "H{ a: foo }" message-of "unknown word message" assert=
+6 "H{ a: foo }" offset-of "unknown word offset" assert=
+"unsupported constructor 'M{' at position 0" "M{ }" message-of "M{ is rejected" assert=
+"unexpected '[' at position 0" "[ 1 ]" message-of "a quotation is rejected" assert=
+"unterminated 'H{' at position 2" "  H{ a: 1" message-of "unterminated brace" assert=
+"hash key has no value at position 6" "H{ a: }" message-of "odd hash count" assert=
+"hash key must be a string or symbol at position 3" "H{ 1 2 }" message-of "non-key in hash" assert=
+"malformed literal '1_' at position 2" "{ 1_ }" message-of "malformed number" assert=
+"unterminated string at position 2" "{ \"abc }" message-of "unterminated string" assert=
+"unterminated string at position 0" "\"abc:" message-of "an unterminated string ending in a colon" assert=
+"unterminated string at position 0" "\"a\\\"" message-of "a string whose last quote is escaped" assert=
+"a\\" "\"a\\\\\"" parse-config-data "a string ending in an escaped backslash" assert=
+"unexpected '}' at position 0" "}" message-of "a stray close brace" assert=
+"unexpected ']' at position 2" "1 ]" message-of "a close bracket" assert=
+"unexpected ';' at position 0" ";" message-of "a semicolon" assert=
+"unexpected '( a -- b )' at position 0" "( a -- b )" message-of "a stack effect" assert=
+"unterminated 'H{' at position 0" "H{ a:" message-of "a key at the end of input" assert=
+"unterminated '{' at position 4" "{ 1 { 2" message-of "the innermost open brace is reported" assert=
+6 "{ \"é\" foo }" offset-of "a position counts codepoints, not bytes" assert=
+2 "1 2" offset-of "trailing value offset" assert=
+6 "H{ a: }" offset-of "odd hash count offset" assert=
+3 "H{ 1 2 }" offset-of "non-key offset" assert=
+0 "M{ }" offset-of "unsupported constructor offset" assert=
+"empty config at position 0" "  \\ only a comment\n" message-of "empty source" assert=
+"unexpected trailing value at position 2" "1 2" message-of "trailing value" assert=
+
+"parse-config-data nesting depth" test-section
+500 reads-at-depth? "five hundred levels on the main task" assert-true
+[ [ 500 reads-at-depth? "five hundred levels inside a task" assert-true ] spawn await drop ] task-scope

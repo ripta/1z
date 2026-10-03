@@ -4,9 +4,9 @@ files=lib/strings.1z lib/formatter.1z
 
 mode                  median_ms       min_ms       max_ms    vs interp
 ------------------ ------------ ------------ ------------ ------------
-interpreted              1895.9       1884.9       2425.7        1.00x
-hybrid                   1462.6       1461.1       1468.1        1.30x
-eager                    1825.1       1821.3       1846.8        1.04x
+interpreted              1850.7       1839.7       1851.9        1.00x
+hybrid                   1474.5       1470.6       1482.5        1.26x
+eager                    1829.6       1825.1       1838.7        1.01x
 
 runtime-image build: REJECTED
   Warning: 'while' parameter 'pred' has row-variable effect; quotation call falls back to interpreter
@@ -39,6 +39,34 @@ runtime-image build: REJECTED
         hint: bind a literal, or an input declared with a value type such as fixnum or string
     word 'formatter/(find-config-file)': NC.13: word body underflows the abstract stack (row-variable effects)
         hint: blocked until row-variable stack regions can be modeled
-  AOT interpreter fallbacks: 657 total (native=529 per-op-native=113 compound-uncompiled=8 quotation=7)
+  AOT interpreter fallbacks: 798 total (native=652 per-op-native=131 compound-uncompiled=8 quotation=7)
 locked build: REJECTED
-  Error: dynamic feature 'eval-string' in 'load-config-data' is not available in interpreter-free AOT; this feature requires runtime code-loading machinery that interpreter-free binaries omit. Build with --emit-runtime-image to produce a runtime-image AOT binary, or run under the interpreter, if you need 'eval-string'.
+  Warning: 'while' parameter 'pred' has row-variable effect; quotation call falls back to interpreter
+  Warning: 'while' parameter 'body' has row-variable effect; quotation call falls back to interpreter
+  Warning: 'loop' parameter 'pred' has row-variable effect; quotation call falls back to interpreter
+  Warning: '2dip' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
+  Warning: 'bi' parameter 'p' has row-variable effect; quotation call falls back to interpreter
+  Warning: 'bi' parameter 'q' has row-variable effect; quotation call falls back to interpreter
+  Warning: 'keep' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
+  Error: 10 words could not be compiled to C
+    word 'formatter/(symbol-lines)': NC.20: reads local 'sl-len', whose value is not proven to push one value
+        hint: bind a literal, or an input declared with a value type such as fixnum or string
+    word 'formatter/(parse-alignable)': NC.20: reads local 'pa-width', whose value is not proven to push one value
+        hint: bind a literal, or an input declared with a value type such as fixnum or string
+    word 'formatter/(entry-line)': NC.20: reads local 'el-start', whose value is not proven to push one value
+        hint: bind a literal, or an input declared with a value type such as fixnum or string
+    word 'formatter/(definition-line)': NC.20: reads local 'dl-end', whose value is not proven to push one value
+        hint: bind a literal, or an input declared with a value type such as fixnum or string
+    word 'formatter/(effect-line)': NC.20: reads local 'ef-close', whose value is not proven to push one value
+        hint: bind a literal, or an input declared with a value type such as fixnum or string
+    word 'formatter/(comment-lines)': NC.20: reads local 'al-len', whose value is not proven to push one value
+        hint: bind a literal, or an input declared with a value type such as fixnum or string
+    word 'formatter/(index-blocks)': NC.20: reads local 'ib-len', whose value is not proven to push one value
+        hint: bind a literal, or an input declared with a value type such as fixnum or string
+    word 'formatter/(hash>fmt-config)': NC.20: reads local 'hf-raw', whose value is not proven to push one value
+        hint: bind a literal, or an input declared with a value type such as fixnum or string
+    word 'formatter/(merge-key)': NC.20: reads local 'mk-raw', whose value is not proven to push one value
+        hint: bind a literal, or an input declared with a value type such as fixnum or string
+    word 'formatter/(find-config-file)': NC.13: word body underflows the abstract stack (row-variable effects)
+        hint: blocked until row-variable stack regions can be modeled
+  AOT interpreter fallbacks: 674 total (native=660 compound-uncompiled=8 quotation=6)

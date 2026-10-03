@@ -1,0 +1,2 @@
+use "./tests/fixtures/config_side_effect.1z" ;
+H{ "a" 1 }
