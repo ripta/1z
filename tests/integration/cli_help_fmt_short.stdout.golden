@@ -9,6 +9,10 @@ Fmt options:
   --engine=zig|1z           Formatter to run (default zig, or $ONEZ_FMT_ENGINE)
                             The 1z engine reads .fmt.1z and is far slower
 
+Environment variables:
+  ONEZ_FMT_PHASE=1|2|3      Stop the zig engine's --stdout output after the token,
+                            comment-alignment, or symbol-alignment phase
+
 Global options:
   --max-memory=SIZE         Set memory limit (e.g. 128M, 1G; default 256M)
   --load-path=PATH          Add a module search path (repeatable)

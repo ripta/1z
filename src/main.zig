@@ -1095,6 +1095,9 @@ fn printFmtHelp() void {
     w.writeAll("  --stdout                  Write formatted output to stdout instead of in place\n") catch {};
     w.writeAll("  --engine=zig|1z           Formatter to run (default zig, or $ONEZ_FMT_ENGINE)\n") catch {};
     w.writeAll("                            The 1z engine reads .fmt.1z and is far slower\n\n") catch {};
+    w.writeAll("Environment variables:\n") catch {};
+    w.writeAll("  ONEZ_FMT_PHASE=1|2|3      Stop the zig engine's --stdout output after the token,\n") catch {};
+    w.writeAll("                            comment-alignment, or symbol-alignment phase\n\n") catch {};
     w.writeAll("Global options:\n") catch {};
     w.writeAll(global_flags_help) catch {};
     w.writeAll("\n") catch {};
@@ -2193,8 +2196,8 @@ fn handleFmt(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
         var stdout = stdout_file.writerStreaming(&stdout_buf);
         const out_writer = &stdout.interface;
 
-        // How many of the three phases to run. Undocumented, and deliberately not in
-        // `printFmtHelp`. See `formatTokenLevel`.
+        // How many of the three phases to run. `fmt-1z-test` uses it to compare the 1z engine
+        // against a single phase. See `formatTokenLevel`.
         const phase_limit: ?u8 = if (std.posix.getenv("ONEZ_FMT_PHASE")) |v|
             std.fmt.parseInt(u8, v, 10) catch null
         else
