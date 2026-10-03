@@ -1,4 +1,5 @@
-\ Word without stack effect should fail AOT build.
-no-effect: [ 42 ] ;
+\ Word without stack effect should fail AOT build. The body is more than one push, because a
+\ one-push body is given `( -- value )` and builds.
+no-effect: [ 40 2 + ] ;
 
 no-effect print-line
