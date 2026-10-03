@@ -1,0 +1,78 @@
+\ Test current-effect and body-start?: what a parse-time word sees of the body it runs in.
+
+use "testing" ;
+
+\ A raw stack effect left at a body's first token would become that body's in-bracket effect, so
+\ the probe hands back its rendering instead.
+probe-effect: parse-time [ current-effect dup [ >string ] when ] ;
+probe-start: parse-time [ body-start? ] ;
+
+"current-effect" test-section
+
+with-effect: ( a b -- s ) [ probe-effect [ 2drop ] dip ] ;
+1 2 with-effect "( a b -- s )" "a body sees the effect declared before its bracket" assert=
+
+no-effect: [ probe-effect ] ;
+no-effect f "a body with no declared effect sees f" assert=
+
+outer: ( x -- inner-seen outer-seen ) [
+  drop
+  inner: ( p q -- r ) [ probe-effect [ 2drop ] dip ] ;
+  1 2 inner
+  probe-effect
+] ;
+0 outer 2 array-n { "( p q -- r )" "( x -- inner-seen outer-seen )" }
+"a nested definition sees its own effect, and the outer body sees its own again after it" assert=
+
+bare-nested: ( x -- s ) [ drop [ probe-effect ] call ] ;
+0 bare-nested f "a nested bare quotation sees f" assert=
+
+body-of: parse-time [ "]]" parse-until ] ;
+until-nested: ( x -- s ) [ drop body-of probe-effect ]] call ] ;
+0 until-nested f "a body read by parse-until sees f" assert=
+
+probe-effect f "the top level sees f" assert=
+
+eval-probe: parse-time [ "probe-effect" eval-string ] ;
+eval-in-body: ( x -- s ) [ drop eval-probe ] ;
+0 eval-in-body f "a top-level parse started inside a body sees f" assert=
+
+"current-effect outlives the parse" test-section
+
+stashed: V{ } ;
+stash-effect: parse-time [ stashed current-effect #push! drop ] ;
+
+stash-site: ( m n -- ) [ stash-effect 2drop ] ;
+stashed #last >string "( m n --  )" "a stored effect reads back after the parse ends" assert=
+
+[ "abandoned: ( u v -- ) [ stash-effect ]]" eval-string ] [ drop ] recover
+stashed #last >string "( u v --  )" "a stored effect reads back after its parse fails" assert=
+
+"body-start?" test-section
+
+start-first: [ probe-start ] ;
+start-first t "the first token of a body is at the start" assert=
+
+start-later: [ 1 drop probe-start ] ;
+start-later f "a later token is not at the start" assert=
+
+until-start: [ body-of probe-start ]] call ] ;
+until-start t "the first token of a body read by parse-until is at the start" assert=
+
+values-of: parse-time [ "]]" parse-values-until ] ;
+start-nested: [ values-of probe-start ]] ] ;
+start-nested 0 #nth f "a word run by a first-position word is not at the start" assert=
+
+literal-of: parse-time [ parse-literal ] ;
+start-literal: [ literal-of probe-start ] ;
+start-literal f "a word run by parse-literal is not at the start" assert=
+
+start-array: [ { probe-start } ] ;
+start-array 0 #nth f "an array element is not at the start" assert=
+
+probe-start f "the top level is not at the start" assert=
+
+"outside parse time" test-section
+
+[ current-effect ] "current-effect raises outside parse time" assert-error
+[ body-start? ] "body-start? raises outside parse time" assert-error

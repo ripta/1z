@@ -323,6 +323,7 @@ fn executeParseTimeWord(
     allocator: Allocator,
     line: usize,
     column: usize,
+    body_start: bool,
 ) ParseError!void {
     const pre_depth = c.stack.depth();
     const pre_emissions = c.parse_time_deferred_emissions.items.len;
@@ -384,6 +385,10 @@ fn executeParseTimeWord(
     const old_tokenizer = c.parse_tokenizer;
     c.parse_tokenizer = tokenizer;
     defer c.parse_tokenizer = old_tokenizer;
+
+    const old_body_start = c.parse_body_start;
+    c.parse_body_start = body_start;
+    defer c.parse_body_start = old_body_start;
 
     // 4. Run the parse-time word
     switch (word.action) {
@@ -533,6 +538,22 @@ fn classifyLiteral(allocator: Allocator, token: []const u8) Allocator.Error!Clas
 /// parsing, and handles continuation lines (multiline statements).
 /// If ctx is provided, parse-time words will be executed during parsing.
 pub fn parseTopLevel(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*Context) ParseError![]const Instruction {
+    // A top-level parse is in no body. One started while a body parses, such as a module load
+    // from a parse-time word, must not see that body's effect.
+    var old_body_effect: ?*const StackEffect = null;
+    var old_body_start = false;
+    if (ctx) |c| {
+        old_body_effect = c.parse_body_effect;
+        old_body_start = c.parse_body_start;
+        c.parse_body_effect = null;
+        c.parse_body_start = false;
+    }
+
+    defer if (ctx) |c| {
+        c.parse_body_effect = old_body_effect;
+        c.parse_body_start = old_body_start;
+    };
+
     var instructions: std.ArrayListUnmanaged(Instruction) = .{};
     errdefer instructions.deinit(allocator);
 
@@ -560,19 +581,19 @@ pub fn parseTopLevel(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*Context
                     const old = c.parsing_parse_time_def;
                     c.parsing_parse_time_def = true;
 
-                    var quotation = try parseQuotation(allocator, tokenizer, ctx, line);
+                    var quotation = try parseQuotationWithEffect(allocator, tokenizer, ctx, line, preceding_effect);
                     c.parsing_parse_time_def = old;
 
                     if (quotation.effect == null) quotation.effect = preceding_effect;
                     instructions.append(allocator, .{ .op = .{ .push_literal = .{ .quotation = quotation } }, .line = line, .column = column }) catch return ParseError.OutOfMemory;
                 } else {
-                    var quotation = try parseQuotation(allocator, tokenizer, ctx, line);
+                    var quotation = try parseQuotationWithEffect(allocator, tokenizer, ctx, line, preceding_effect);
 
                     if (quotation.effect == null) quotation.effect = preceding_effect;
                     instructions.append(allocator, .{ .op = .{ .push_literal = .{ .quotation = quotation } }, .line = line, .column = column }) catch return ParseError.OutOfMemory;
                 }
             } else {
-                var quotation = try parseQuotation(allocator, tokenizer, ctx, line);
+                var quotation = try parseQuotationWithEffect(allocator, tokenizer, ctx, line, preceding_effect);
                 if (quotation.effect == null) quotation.effect = preceding_effect;
                 instructions.append(allocator, .{ .op = .{ .push_literal = .{ .quotation = quotation } }, .line = line, .column = column }) catch return ParseError.OutOfMemory;
             }
@@ -616,7 +637,7 @@ pub fn parseTopLevel(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*Context
                     if (ctx) |c| {
                         if (c.lookupWord(token)) |word| {
                             if (word.parse_time) {
-                                try executeParseTimeWord(c, word, tokenizer, &instructions, allocator, line, column);
+                                try executeParseTimeWord(c, word, tokenizer, &instructions, allocator, line, column, false);
 
                                 if (has_pending_docs) {
                                     doc_lines.clearRetainingCapacity();
@@ -668,6 +689,43 @@ pub fn parseQuotation(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*Contex
 
 /// Parse a quotation terminated by a caller-specified delimiter.
 pub fn parseQuotationUntil(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*Context, close_delim: []const u8, opening_line: usize) ParseError!Quotation {
+    return parseQuotationBody(allocator, tokenizer, ctx, close_delim, opening_line, null);
+}
+
+/// Parse a `[ ... ]` quotation whose opening bracket followed a stack effect declaration.
+fn parseQuotationWithEffect(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*Context, opening_line: usize, preceding_effect: ?*const StackEffect) ParseError!Quotation {
+    return parseQuotationBody(allocator, tokenizer, ctx, "]", opening_line, preceding_effect);
+}
+
+/// Parse a quotation body, exposing `body_effect` to the parse-time words that run in it.
+///
+/// Every body parse sets the context's body effect and first-token flag for its own extent and
+/// restores them on exit. A nested body therefore never sees the effect of the body enclosing it.
+fn parseQuotationBody(
+    allocator: Allocator,
+    tokenizer: *Tokenizer,
+    ctx: ?*Context,
+    close_delim: []const u8,
+    opening_line: usize,
+    body_effect: ?*const StackEffect,
+) ParseError!Quotation {
+    var old_body_effect: ?*const StackEffect = null;
+    var old_body_start = false;
+    if (ctx) |c| {
+        old_body_effect = c.parse_body_effect;
+        old_body_start = c.parse_body_start;
+        c.parse_body_effect = body_effect;
+        c.parse_body_start = false;
+    }
+
+    defer if (ctx) |c| {
+        // Each nested parse restores what it found, so anything else here means a save and
+        // restore came unpaired, leaving a later body to read an effect that is not its own.
+        std.debug.assert(c.parse_body_effect == body_effect);
+        c.parse_body_effect = old_body_effect;
+        c.parse_body_start = old_body_start;
+    };
+
     var instructions: std.ArrayListUnmanaged(Instruction) = .{};
     errdefer instructions.deinit(allocator);
 
@@ -713,17 +771,17 @@ pub fn parseQuotationUntil(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*C
                 if (hasParseTimeMarkerInTrail(instructions.items)) {
                     const old = c.parsing_parse_time_def;
                     c.parsing_parse_time_def = true;
-                    var nested = try parseQuotation(allocator, tokenizer, ctx, line);
+                    var nested = try parseQuotationWithEffect(allocator, tokenizer, ctx, line, preceding_effect);
                     c.parsing_parse_time_def = old;
                     if (nested.effect == null) nested.effect = preceding_effect;
                     instructions.append(allocator, .{ .op = .{ .push_literal = .{ .quotation = nested } }, .line = line, .column = column }) catch return ParseError.OutOfMemory;
                 } else {
-                    var nested = try parseQuotation(allocator, tokenizer, ctx, line);
+                    var nested = try parseQuotationWithEffect(allocator, tokenizer, ctx, line, preceding_effect);
                     if (nested.effect == null) nested.effect = preceding_effect;
                     instructions.append(allocator, .{ .op = .{ .push_literal = .{ .quotation = nested } }, .line = line, .column = column }) catch return ParseError.OutOfMemory;
                 }
             } else {
-                var nested = try parseQuotation(allocator, tokenizer, ctx, line);
+                var nested = try parseQuotationWithEffect(allocator, tokenizer, ctx, line, preceding_effect);
                 if (nested.effect == null) nested.effect = preceding_effect;
                 instructions.append(allocator, .{ .op = .{ .push_literal = .{ .quotation = nested } }, .line = line, .column = column }) catch return ParseError.OutOfMemory;
             }
@@ -785,7 +843,7 @@ pub fn parseQuotationUntil(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*C
                                     return ParseError.ParseTimeExecutionError;
                                 }
                                 const was_first_token = is_first_token;
-                                try executeParseTimeWord(c, word, tokenizer, &instructions, allocator, line, column);
+                                try executeParseTimeWord(c, word, tokenizer, &instructions, allocator, line, column, was_first_token);
 
                                 if (was_first_token and instructions.items.len > 0) {
                                     const last = instructions.items[instructions.items.len - 1];
@@ -878,6 +936,10 @@ fn resolveTypeAnnotation(ctx: ?*Context, token: []const u8) ?ResolvedAnnotation 
         if (word.parse_time) {
             const old_tokenizer = c.parse_tokenizer;
             defer c.parse_tokenizer = old_tokenizer;
+
+            const old_body_start = c.parse_body_start;
+            c.parse_body_start = false;
+            defer c.parse_body_start = old_body_start;
 
             // A resolution that fails is dropped so the caller can report its own
             // diagnostic, so nothing the attempt raised may reach the next error's chain.
@@ -1309,6 +1371,10 @@ fn executeParseTimeWordForArray(
     const old_tokenizer = c.parse_tokenizer;
     c.parse_tokenizer = tokenizer;
     defer c.parse_tokenizer = old_tokenizer;
+
+    const old_body_start = c.parse_body_start;
+    c.parse_body_start = false;
+    defer c.parse_body_start = old_body_start;
 
     switch (word.action) {
         .native, .host_callback => word.invoke(c) catch |err| {

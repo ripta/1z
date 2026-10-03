@@ -1,0 +1,67 @@
+Stack: [ ]
+Stack: [ ]
+=== current-effect ===
+Stack: [ ]
+Stack: [ ]
+PASS: a body sees the effect declared before its bracket
+Stack: [ ]
+Stack: [ ]
+PASS: a body with no declared effect sees f
+Stack: [ ]
+Stack: [ ]
+Stack: [ { "( p q -- r )" "( x -- inner-seen outer-seen )" } { "( p q -- r )" "( x -- inner-seen outer-seen )" } ]
+PASS: a nested definition sees its own effect, and the outer body sees its own again after it
+Stack: [ ]
+Stack: [ ]
+PASS: a nested bare quotation sees f
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: a body read by parse-until sees f
+Stack: [ ]
+PASS: the top level sees f
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: a top-level parse started inside a body sees f
+Stack: [ ]
+=== current-effect outlives the parse ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: a stored effect reads back after the parse ends
+Stack: [ ]
+Stack: [ ]
+PASS: a stored effect reads back after its parse fails
+Stack: [ ]
+=== body-start? ===
+Stack: [ ]
+Stack: [ ]
+PASS: the first token of a body is at the start
+Stack: [ ]
+Stack: [ ]
+PASS: a later token is not at the start
+Stack: [ ]
+Stack: [ ]
+PASS: the first token of a body read by parse-until is at the start
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: a word run by a first-position word is not at the start
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: a word run by parse-literal is not at the start
+Stack: [ ]
+Stack: [ ]
+PASS: an array element is not at the start
+Stack: [ ]
+PASS: the top level is not at the start
+Stack: [ ]
+=== outside parse time ===
+Stack: [ ]
+PASS: current-effect raises outside parse time
+Stack: [ ]
+PASS: body-start? raises outside parse time
+Stack: [ ]

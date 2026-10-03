@@ -969,6 +969,15 @@ pub const Context = struct {
     /// parse-time-only marker. Used by the parser to allow parse-time-only
     /// words inside parse-time definitions.
     parsing_parse_time_def: bool = false,
+    /// The effect declared before the `[` of the quotation body being parsed, or null for a body
+    /// with none. Read by `current-effect`.
+    ///
+    /// A read-only borrow of the effect the parse owns. Every body parse saves, sets, and restores
+    /// it, so a nested body never sees its enclosing body's effect.
+    parse_body_effect: ?*const StackEffect = null,
+    /// True only while the parse-time word at the first token of a quotation body runs. Every other
+    /// site that runs a parse-time word clears it for the duration. Read by `body-start?`.
+    parse_body_start: bool = false,
     /// Source file of the current parse-time word invocation.
     /// Set by the parser before invoking a parse-time word body (before any
     /// compound-word execution-source tracking can change current_source).

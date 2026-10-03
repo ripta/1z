@@ -5,6 +5,8 @@ const tokenizer_mod = @import("../tokenizer.zig");
 const Token = tokenizer_mod.Token;
 const value_mod = @import("../value.zig");
 const container_backing = @import("../container_backing.zig");
+const stack_effect_mod = @import("../stack_effect.zig");
+const WordDefinition = @import("../dictionary.zig").WordDefinition;
 const Value = value_mod.Value;
 
 const helpers = @import("helpers.zig");
@@ -27,6 +29,8 @@ pub const primitives = [_]Primitive{
     .{ .name = "emit-call", .stack_effect = "symbol --", .doc = "Request a call_word emission for the named word after the current parse-time word completes.", .func = nativeEmitCall, .parse_time_only = true },
     .{ .name = "emit-body", .stack_effect = "quotation --", .doc = "Splice the quotation's body (its instructions) inline into the current parse stream after the calling word's stack results.", .func = nativeEmitBody, .parse_time_only = true },
     .{ .name = "emit-literal", .stack_effect = "value --", .doc = "Request a push_literal emission for the value after the current parse-time word completes, ordered with the other emissions.", .func = nativeEmitLiteral, .parse_time_only = true },
+    .{ .name = "current-effect", .stack_effect = "-- stack-effect/f", .doc = "Return a copy of the stack effect declared before the quotation body being parsed, or f when it declares none.", .func = nativeCurrentEffect, .parse_time_only = true },
+    .{ .name = "body-start?", .stack_effect = "-- ?", .doc = "Return true when the running parse-time word is the first token of the quotation body being parsed.", .func = nativeBodyStart, .parse_time_only = true },
 };
 
 fn isSkippable(kind: Token.Kind) bool {
@@ -34,6 +38,20 @@ fn isSkippable(kind: Token.Kind) bool {
 }
 
 const ParseMode = enum { raw, evaluate_parse_time, evaluate_parse_time_strict };
+
+/// Run a parse-time word met while another parse-time word reads tokens. It is not the first token
+/// of any quotation body, whatever the reading word is.
+fn invokeNestedParseTimeWord(ctx: *Context, word: WordDefinition) !void {
+    const old_body_start = ctx.parse_body_start;
+    ctx.parse_body_start = false;
+    defer ctx.parse_body_start = old_body_start;
+
+    switch (word.action) {
+        .native, .host_callback => try word.invoke(ctx),
+        .compound => |instrs| try ctx.executeQuotationWithFrame(.{ .instructions = instrs }, null),
+        .literal => |v| try ctx.stack.push(v),
+    }
+}
 
 fn parseTokensUntilCore(ctx: *Context, delimiter: []const u8, mode: ParseMode) !Value {
     const tokenizer = ctx.parse_tokenizer.?;
@@ -82,11 +100,7 @@ fn parseTokensUntilCore(ctx: *Context, delimiter: []const u8, mode: ParseMode) !
             if (ctx.lookupWord(token)) |word| {
                 if (word.parse_time) {
                     const pre_depth = ctx.stack.depth();
-                    switch (word.action) {
-                        .native, .host_callback => try word.invoke(ctx),
-                        .compound => |instrs| try ctx.executeQuotationWithFrame(.{ .instructions = instrs }, null),
-                        .literal => |v| try ctx.stack.push(v),
-                    }
+                    try invokeNestedParseTimeWord(ctx, word);
                     const post_depth = ctx.stack.depth();
                     if (post_depth > pre_depth) {
                         var i: usize = 0;
@@ -356,6 +370,24 @@ fn nativeEmitLiteral(ctx: *Context) anyerror!void {
     try ctx.parse_time_deferred_emissions.append(ctx.allocator, .{ .literal = val });
 }
 
+/// current-effect ( -- stack-effect/f )
+fn nativeCurrentEffect(ctx: *Context) anyerror!void {
+    const effect = ctx.parse_body_effect orelse {
+        try ctx.stack.push(.{ .boolean = false });
+        return;
+    };
+
+    // The parse owns the effect and its parameter lists, and 1z code can keep the result past the
+    // end of the parse, so it gets its own copy the way `;` and `>module` take one.
+    const copy = try stack_effect_mod.copyOnto(ctx.quotationAllocator(), effect.*);
+    try ctx.stack.push(.{ .stack_effect = copy.* });
+}
+
+/// body-start? ( -- ? )
+fn nativeBodyStart(ctx: *Context) anyerror!void {
+    try ctx.stack.push(.{ .boolean = ctx.parse_body_start });
+}
+
 /// parse-literal ( -- value )
 pub fn nativeParseLiteral(ctx: *Context) anyerror!void {
     const tokenizer = ctx.parse_tokenizer.?;
@@ -385,11 +417,7 @@ pub fn nativeParseLiteral(ctx: *Context) anyerror!void {
         if (ctx.lookupWord(token)) |word| {
             if (word.parse_time) {
                 const pre_depth = ctx.stack.depth();
-                switch (word.action) {
-                    .native, .host_callback => try word.invoke(ctx),
-                    .compound => |instrs| try ctx.executeQuotationWithFrame(.{ .instructions = instrs }, null),
-                    .literal => |v| try ctx.stack.push(v),
-                }
+                try invokeNestedParseTimeWord(ctx, word);
                 const post_depth = ctx.stack.depth();
                 if (post_depth > pre_depth) return;
                 helpers.setErrorContext(ctx, "parse-literal: parse-time word '{s}' did not produce a value", .{token});
