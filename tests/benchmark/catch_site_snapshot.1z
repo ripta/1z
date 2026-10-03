@@ -1,0 +1,106 @@
+\ Benchmark: what the entry-stack snapshot costs each catch site.
+\
+\ `recover`, `cleanup`, and an FFI callback each hold every slot of the operand stack before the
+\ code they protect runs, and release them when it returns. That is a copy, a retain, and a release
+\ per slot on every call, whether or not anything raises. So each loop runs over a padded stack of
+\ 0, 8, and 64 values, half fixnums and half strings, to show the fixed cost and the per-slot slope.
+\
+\ The raising row's body takes no inputs, so its handler sees the same stack whether or not the
+\ entry stack is restored. The file therefore runs unchanged on a build from before the restore.
+\
+\ Every site is a native, so --compile=off is the mode that matters. The callback rows need
+\ zig-out/ext/libtoy, which `make build` produces, and run from the repository root.
+
+use "ffi" ;
+
+recover-iters: ( -- fixnum ) const [ 1000000 ] ;
+
+\ Memory taken by a caught raise or an FFI call inside these loops is held across rows, so these
+\ two counts stay small enough to fit the default memory limit.
+raise-iters: ( -- fixnum ) const [ 80000 ] ;
+
+callback-iters: ( -- fixnum ) const [ 25000 ] ;
+
+\ Leaves `n` fixnum and string pairs under the loop that follows.
+pad: [ [ 7 "pad" ] times ] ;
+
+unpad: ( n -- ) [ [ 2drop ] times ] ;
+
+recover-ok: ( n -- ) [
+  dup 0 = [ drop ] [
+    [ ] [ drop ] recover 1 - recover-ok
+  ] if
+] ;
+
+recover-raise: ( n -- ) [
+  dup 0 = [ drop ] [
+    [ f "boom" EUserThrown make-error throw ] [ drop ] recover 1 - recover-raise
+  ] if
+] ;
+
+cleanup-ok: ( n -- ) [
+  dup 0 = [ drop ] [
+    [ ] [ ] cleanup 1 - cleanup-ok
+  ] if
+] ;
+
+toy-lib-path: ( -- path ) [
+  environ "PWD" @get "/zig-out/ext/libtoy" #append
+  sys-info "os" @get "macos" = [ ".dylib" ] [ ".so" ] if #append
+] ;
+
+\ The callback and the bound function ride on the stack rather than in `const` words, so the loop
+\ times the call and not a lookup or a library open.
+callback-loop: ( callback ffi-fn n -- ) [
+  dup 0 = [ 3drop ] [
+    3 4 4 pick-n 4 pick-n ffi-call drop 1 - callback-loop
+  ] if
+] ;
+
+\ A quotation running `callback-loop` over `callback-iters` calls, with the callback and the bound
+\ function curried in.
+callback-run: ( callback ffi-fn -- quot ) [
+  [ callback-iters callback-loop ] curry curry
+] ;
+
+clock-ns: ( -- ns ) [ clock-monotonic swap 1000000000 * + ] ;
+
+\ Reads the clock directly rather than through `benchmark`, which adds bookkeeping to every word
+\ call and holds memory across a loop this long.
+elapsed-ns: ( quot -- ns ) [ clock-ns [ call ] dip clock-ns swap - ] ;
+
+\ Each row pads before its quotation is pushed, so the padding sits under the whole loop.
+"recover-ok-0 elapsed_ns: " print
+0 pad [ recover-iters recover-ok ] elapsed-ns . 0 unpad
+"recover-ok-8 elapsed_ns: " print
+4 pad [ recover-iters recover-ok ] elapsed-ns . 4 unpad
+"recover-ok-64 elapsed_ns: " print
+32 pad [ recover-iters recover-ok ] elapsed-ns . 32 unpad
+
+"recover-raise-0 elapsed_ns: " print
+0 pad [ raise-iters recover-raise ] elapsed-ns . 0 unpad
+"recover-raise-8 elapsed_ns: " print
+4 pad [ raise-iters recover-raise ] elapsed-ns . 4 unpad
+"recover-raise-64 elapsed_ns: " print
+32 pad [ raise-iters recover-raise ] elapsed-ns . 32 unpad
+
+"cleanup-ok-0 elapsed_ns: " print
+0 pad [ recover-iters cleanup-ok ] elapsed-ns . 0 unpad
+"cleanup-ok-8 elapsed_ns: " print
+4 pad [ recover-iters cleanup-ok ] elapsed-ns . 4 unpad
+"cleanup-ok-64 elapsed_ns: " print
+32 pad [ recover-iters cleanup-ok ] elapsed-ns . 32 unpad
+
+\ The library, the callback, and the bound function stay under every callback row.
+toy-lib-path lib-open
+[ + ] ffi{ i32 i32 -> i32 } ffi-callback
+over "toy_apply2" ffi{ i32 i32 ptr:ffi-callback -> i32 } bound-symbol
+
+"ffi-callback-0 elapsed_ns: " print
+2dup callback-run [ 0 pad ] dip elapsed-ns . 0 unpad
+"ffi-callback-8 elapsed_ns: " print
+2dup callback-run [ 4 pad ] dip elapsed-ns . 4 unpad
+"ffi-callback-64 elapsed_ns: " print
+2dup callback-run [ 32 pad ] dip elapsed-ns . 32 unpad
+
+drop resource-close resource-close
