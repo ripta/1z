@@ -1,0 +1,25 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+=== main task ===
+Stack: [ ]
+PASS: the main task stops at the stack guard
+PASS: the guard is armed
+PASS: main-task bytes per level is within its band
+Stack: [ ]
+=== task ===
+Stack: [ ]
+PASS: a task stops at the stack guard
+PASS: the guard is armed
+PASS: task bytes per level, less its baseline, is within its band
+Stack: [ ]

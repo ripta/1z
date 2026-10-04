@@ -1,0 +1,79 @@
+\ Test how deep interpreted code recurses before the native stack guard fires, as bytes per level.
+\
+\ Bytes per level moves with the recursion shape, the compile mode, and the build, so all three are
+\ fixed. The shape is `deep`, whose recursive call sits in a `when` arm, so each level enters two
+\ bodies. The mode is `--compile=off`, from the sidecar. The build is the Debug binary the suite runs;
+\ a release build costs about twice as much per level and falls outside both bands.
+\
+\ Each row is the budget divided by the depth reached, so it reads high by the headroom left unused
+\ when the guard fires. The task row subtracts its `task-stack-peak` baseline first. The main task
+\ has no baseline reading, so its row is an upper bound. The rows are banded separately.
+\
+\ Each band is 25% either side of the quotient measured when it was set. A failure reports the
+\ quotient, the budget, and the depth, so a deliberate change can read its new band off the output.
+
+use "testing" ;
+
+MAIN-LOW:  const [ 16581 ] ;
+MAIN-HIGH: const [ 27635 ] ;
+TASK-LOW:  const [ 16945 ] ;
+TASK-HIGH: const [ 28243 ] ;
+
+\ Heap counters survive the unwind that the stack overflow forces.
+LEVELS: V{ } ;
+TASK-READINGS: V{ } ;
+
+deep: stack-recursive ( n -- n ) [ LEVELS 0 #push! drop dup 0 > [ 1 - deep 1 + ] when ] ;
+
+\\ Recurse until the guard fires, answering the levels entered and the error type that stopped it.
+levels-reached: ( -- depth: fixnum type ) [
+  LEVELS #len
+  [ 100000000 deep drop ok: ] [ error-type: @get ] recover
+  [ LEVELS #len swap - ] dip
+] ;
+
+\\ Assert the quotient lies within the band, reporting all three readings when it does not.
+assert-in-band: ( quotient: fixnum budget: fixnum depth: fixnum low: fixnum high: fixnum msg -- ) [
+  bind-inputs
+  quotient low >= quotient high <= and
+  [ in-band: ] [ quotient budget depth 3 array-n ] if
+  in-band: msg assert=
+] ;
+
+\\ Assert a band over budget divided by depth, once the guard is known to be armed.
+assert-ceiling: ( budget depth: fixnum low: fixnum high: fixnum msg -- ) [
+  bind-inputs
+  budget fixnum? "the guard is armed" assert-true
+  budget fixnum? [ budget depth / budget depth low high msg assert-in-band ] when
+] ;
+
+test-main-task: ( -- ) [
+  levels-reached stack-overflow: "the main task stops at the stack guard" assert=
+  stack-budget? swap MAIN-LOW MAIN-HIGH "main-task bytes per level is within its band" assert-ceiling
+] ;
+
+\\ Record a task's baseline, budget, depth, and stopping error, in that order.
+record-task-readings: ( -- ) [
+  [
+    [
+      TASK-READINGS task-stack-peak #push! stack-budget? #push! drop
+      levels-reached [ TASK-READINGS swap #push! ] dip #push! drop
+    ] spawn await drop
+  ] task-scope
+] ;
+
+test-task: ( -- ) [
+  record-task-readings
+  TASK-READINGS 3 #nth stack-overflow: "a task stops at the stack guard" assert=
+
+  TASK-READINGS 1 #nth TASK-READINGS 0 #nth
+  over fixnum? [ - ] [ drop ] if
+  TASK-READINGS 2 #nth
+  TASK-LOW TASK-HIGH "task bytes per level, less its baseline, is within its band" assert-ceiling
+] ;
+
+"main task" test-section
+test-main-task
+
+"task" test-section
+test-task
