@@ -12495,6 +12495,8 @@ pub fn emitProgramC(
         \\extern int32_t onez_set_interpreter_fallback(void *rt, _Bool allowed);
         \\extern int32_t onez_set_trace_words(void *rt, const char *pattern);
         \\extern int32_t onez_set_stdlib_path_z(void *rt, const char *path);
+        \\extern int32_t onez_set_task_stack_cap_z(void *rt, const char *value);
+        \\extern const char *onez_last_error(void *rt);
         \\extern int onez_load_runtime_image(void *rt, const void *header, void *typevalue_slots, void *struct_type_slots, void *marker_slots, void *parameter_slots, void *tagged_slots, void *mutable_map_slots, void *mutable_value_map_slots, void *struct_instance_slots, void *vector_slots, void *once_cell_slots, void *protocoldescriptor_slots, void *constraintcombinator_slots);
         \\extern int onez_replay_method_dispatch(void *rt);
         \\
@@ -14424,6 +14426,20 @@ pub fn emitProgramC(
             \\    {
             \\        const char *stdlib_env = getenv("ONEZ_STDLIB");
             \\        if (stdlib_env) onez_set_stdlib_path_z(rt, stdlib_env);
+            \\    }
+            \\
+        );
+
+        // The task stack cap is process-wide, and an AOT binary spawns tasks too. The setter parses
+        // and validates in the runtime, so a bad value fails here exactly as it fails the CLI.
+        try out.appendSlice(allocator,
+            \\    {
+            \\        const char *cap_env = getenv("ONEZ_TASK_STACK_CAP");
+            \\        if (cap_env && onez_set_task_stack_cap_z(rt, cap_env) != 0) {
+            \\            fprintf(stderr, "Error: %s\n", onez_last_error(rt));
+            \\            onez_deinit(rt);
+            \\            return 1;
+            \\        }
             \\    }
             \\
         );
@@ -20941,6 +20957,8 @@ test "emitProgramC: hosted preamble contains libc includes and main shim" {
     try testing.expect(std.mem.indexOf(u8, source, "getenv(\"ONEZ_INTERPRETER_FALLBACK\")") != null);
     try testing.expect(std.mem.indexOf(u8, source, "getenv(\"ONEZ_TRACE_WORDS\")") != null);
     try testing.expect(std.mem.indexOf(u8, source, "onez_set_trace_words(rt, trace_env)") != null);
+    try testing.expect(std.mem.indexOf(u8, source, "getenv(\"ONEZ_TASK_STACK_CAP\")") != null);
+    try testing.expect(std.mem.indexOf(u8, source, "onez_set_task_stack_cap_z(rt, cap_env) != 0") != null);
     try testing.expect(std.mem.indexOf(u8, source, "fprintf(stderr,") != null);
     try testing.expect(std.mem.indexOf(u8, source, "kernel_main") == null);
 }

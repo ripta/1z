@@ -33,15 +33,7 @@ const container_limits = @import("../container_limits.zig");
 // overflow check always fires before the uncommitted span is reached. Debug
 // builds have larger frames, so we use 1/8 of the base as the reserve
 // rather than a fixed byte count.
-const task_stack = task_mod.TaskStackConfig{
-    .cap = 16 * 1024 * 1024,
-    .base = 768 * 1024,
-};
-const task_stack_reserve: usize = task_stack.base / 8;
-
-// Once grown, the reserve is an eighth of the cap. That is the main thread's own proportion, so a
-// grown task overflows at the same threshold the main thread does.
-const task_stack_grown_reserve: usize = task_stack.cap / 8;
+const task_stack_reserve: usize = task_mod.task_stack_base / 8;
 
 const RegistryEntry = @import("types.zig").RegistryEntry;
 
@@ -118,6 +110,7 @@ fn allocateTaskWithEntry(
         .callable = callable,
     };
 
+    const task_stack = task_mod.TaskStackConfig{ .cap = ctx.task_stack_cap, .base = task_mod.task_stack_base };
     try task_mod.initCoroContext(task, entry_fn, &task_stack);
     errdefer task_mod.coroDestroy(task);
 
@@ -127,7 +120,9 @@ fn allocateTaskWithEntry(
     task_ctx.stack_low = task_ctx.stack_high - task_stack.base;
     task_ctx.stack_limit = task_ctx.stack_low + task_stack_reserve;
     if (comptime !is_freestanding) {
-        task_ctx.stack_growth = task_mod.taskStackGrowth(coro, &task_stack, task_stack_grown_reserve);
+        // Once grown, the reserve is an eighth of the cap, which is the main thread's own
+        // proportion.
+        task_ctx.stack_growth = task_mod.taskStackGrowth(coro, &task_stack, task_stack.cap / 8);
     }
 
     try scheduler.trackTask(task);

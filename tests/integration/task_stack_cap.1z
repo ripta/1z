@@ -1,0 +1,22 @@
+\ Test that `--task-stack-cap` sets the ceiling a task's native stack grows to before it overflows.
+
+use "testing" ;
+
+\ The cap is 2 MiB, so a grown task overflows once it holds an eighth back as the guard's reserve.
+CAP-BUDGET: const [ 1835008 ] ;
+
+\ No stack effect, so eager compilation leaves this interpreted and the peak stays recorded.
+recurse-forever: stack-recursive [ recurse-forever 1 drop ] ;
+
+"overflow at a flag-set cap" test-section
+
+[
+  [
+    [ recurse-forever ] [ error-type: @get ] recover
+    task-stack-peak stack-budget? 3 array-n
+  ] spawn await
+
+  dup 0 #nth stack-overflow: "a task overflows at the flag's cap" assert=
+  dup 1 #nth CAP-BUDGET >= "the guard fired at the flag's cap" assert-true
+  2 #nth CAP-BUDGET "the budget after growing is the flag's cap" assert=
+] task-scope

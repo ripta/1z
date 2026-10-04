@@ -1,0 +1,20 @@
+\ Test that `--task-stack-cap` wins over `ONEZ_TASK_STACK_CAP` when both are set.
+
+use "testing" ;
+
+\ The flag's 4 MiB cap, less the eighth a grown task holds back as the guard's reserve.
+FLAG-BUDGET: const [ 3670016 ] ;
+
+recurse-forever: ( -- ) stack-recursive [ recurse-forever 1 drop ] ;
+
+"the flag wins over the environment" test-section
+
+[
+  [
+    [ recurse-forever ] [ error-type: @get ] recover
+    stack-budget? 2 array-n
+  ] spawn await
+
+  dup 0 #nth stack-overflow: "a task overflows at a cap" assert=
+  1 #nth FLAG-BUDGET "the budget is the flag's cap, not the variable's" assert=
+] task-scope

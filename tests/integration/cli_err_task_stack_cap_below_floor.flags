@@ -1,0 +1,4 @@
+@raw
+run
+--task-stack-cap=512K
+{file}

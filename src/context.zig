@@ -1484,6 +1484,8 @@ pub const Context = struct {
     active_sandbox: ?*const SandboxSpec = null,
     /// Number of OS threads for the scheduler. 0 means auto-detect from CPU count.
     worker_count: usize = 0,
+    /// Bytes of address space each spawned task reserves as its native stack ceiling.
+    task_stack_cap: usize = task_mod.default_task_stack_cap,
     /// Shared hook registry for lifecycle event callbacks.
     /// Allocated on the container arena by the root context and shared by
     /// pointer to all child task contexts.
@@ -1901,6 +1903,7 @@ pub const Context = struct {
             .trace = parent.trace,
             .deadlock_detect_ns = parent.deadlock_detect_ns,
             .report_stall_verdict = parent.report_stall_verdict,
+            .task_stack_cap = parent.task_stack_cap,
             .mem_limit = parent.mem_limit,
             .current_source = parent.current_source,
             .startup_source = parent.startup_source,

@@ -1,0 +1,3 @@
+\ An invalid ONEZ_TASK_STACK_CAP fails the run before this file loads, rather than being ignored.
+
+"unreachable" print-line

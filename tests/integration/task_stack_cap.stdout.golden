@@ -1,0 +1,8 @@
+Stack: [ ]
+Stack: [ ]
+=== overflow at a flag-set cap ===
+Stack: [ ]
+PASS: a task overflows at the flag's cap
+PASS: the guard fired at the flag's cap
+PASS: the budget after growing is the flag's cap
+Stack: [ ]

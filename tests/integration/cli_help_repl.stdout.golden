@@ -8,6 +8,7 @@ REPL options:
 
 Global options:
   --max-memory=SIZE         Set memory limit (e.g. 128M, 1G; default 256M)
+  --task-stack-cap=SIZE     Set each task's native stack cap (e.g. 4M, 64M; default 16M)
   --load-path=PATH          Add a module search path (repeatable)
   --stdlib-path=PATH        Override standard library path
   --prelude=PATH            Override prelude file path

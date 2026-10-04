@@ -1,0 +1,34 @@
+\ Test that `ONEZ_TASK_STACK_CAP` sets the ceiling a task's native stack grows to before it
+\ overflows, and that a task spawned from a task inherits it.
+
+use "testing" ;
+
+\ The cap is 2 MiB, so a grown task overflows once it holds an eighth back as the guard's reserve.
+CAP-BUDGET: const [ 1835008 ] ;
+
+recurse-forever: ( -- ) stack-recursive [ recurse-forever 1 drop ] ;
+
+\\ Overflow on the current task's stack and report the error type and the budget.
+\\
+\\ The peak is left out because an AOT build shares this file, and compiled frames do not record
+\\ one.
+overflow-report: ( -- report ) [
+  [ recurse-forever ] [ error-type: @get ] recover
+  stack-budget? 2 array-n
+] ;
+
+"overflow at an environment-set cap" test-section
+
+[
+  [ overflow-report ] spawn await
+
+  dup 0 #nth stack-overflow: "a task overflows at the variable's cap" assert=
+  1 #nth CAP-BUDGET "the budget after growing is the variable's cap" assert=
+] task-scope
+
+"a nested spawn inherits the cap" test-section
+
+[
+  [ [ overflow-report ] spawn await ] spawn await
+  1 #nth CAP-BUDGET "a grandchild task grows to the same cap" assert=
+] task-scope

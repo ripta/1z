@@ -1,0 +1,12 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+=== overflow at an environment-set cap ===
+Stack: [ ]
+PASS: a task overflows at the variable's cap
+PASS: the budget after growing is the variable's cap
+Stack: [ ]
+=== a nested spawn inherits the cap ===
+Stack: [ ]
+PASS: a grandchild task grows to the same cap
+Stack: [ ]

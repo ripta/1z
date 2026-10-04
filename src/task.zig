@@ -1,6 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const container_backing = @import("container_backing.zig");
+const memory_limit = @import("memory_limit.zig");
 const Allocator = std.mem.Allocator;
 const Callable = @import("callable.zig").Callable;
 const Context = @import("context.zig").Context;
@@ -472,6 +473,8 @@ pub fn getCoroUserData(co: CoroPtr) ?*anyopaque {
 /// The entry function receives the mco_coro pointer and reads the task from user_data. The
 /// coroutine's stack is `cfg.cap` bytes of reserved address space, of which only the top `cfg.base`
 /// is committed. `co.stack_size` reports the whole reservation.
+///
+/// `cfg` is read only during creation, so it may live on the caller's stack.
 pub fn initCoroContext(
     task: *Task,
     entry_fn: CoroEntryFn,
@@ -499,6 +502,47 @@ pub const TaskStackConfig = struct {
     /// Bytes committed at the top of the reservation when the task is created.
     base: usize,
 };
+
+/// Bytes every task commits at creation, whatever its cap.
+pub const task_stack_base: usize = 768 * 1024;
+
+/// The cap when neither `--task-stack-cap` nor `ONEZ_TASK_STACK_CAP` sets one. It is the main
+/// thread's own stack, so a task can go as deep as the main task can.
+pub const default_task_stack_cap: usize = 16 * 1024 * 1024;
+
+/// The smallest cap a user may ask for.
+///
+/// Invariant: a grown task holds an eighth of its cap back as the guard's reserve, and that reserve
+/// has to clear the metadata page and the permanent guard page while staying below the committed
+/// base. `taskStackGrowth` debug-asserts the same two inequalities for every task it arms.
+pub const min_task_stack_cap: usize = 1024 * 1024;
+
+// Freestanding keeps a fixed allocation and has no page size to check against.
+comptime {
+    if (!is_freestanding) {
+        const page = std.heap.page_size_max;
+        std.debug.assert(min_task_stack_cap / 8 >= 2 * page);
+        std.debug.assert(page + min_task_stack_cap / 8 < min_task_stack_cap - task_stack_base);
+    }
+}
+
+/// Turn a requested cap into the one a task reserves: rounded up to `page`, or null when it is below
+/// `min_task_stack_cap` or rounding would overflow.
+pub fn resolveTaskStackCap(requested: usize, page: usize) ?usize {
+    if (requested < min_task_stack_cap) return null;
+    if (requested > std.math.maxInt(usize) - (page - 1)) return null;
+
+    return std.mem.alignForward(usize, requested, page);
+}
+
+/// What a rejected `--task-stack-cap` or `ONEZ_TASK_STACK_CAP` value should have been.
+pub const task_stack_cap_expectation = "expected a size of at least 1M";
+
+/// Parse a user-supplied cap such as `4M` and resolve it against this process's page size.
+pub fn parseTaskStackCap(text: []const u8) ?usize {
+    const requested = memory_limit.parseSize(text) orelse return null;
+    return resolveTaskStackCap(requested, std.heap.pageSize());
+}
 
 /// Where the protection boundaries fall inside one reserved coroutine block.
 ///
@@ -585,6 +629,9 @@ fn reservingAlloc(size: usize, allocator_data: ?*anyopaque) callconv(.c) ?*anyop
 
 /// minicoro `dealloc_cb` paired with `reservingAlloc`. Unmaps the whole reservation whatever its
 /// protection.
+///
+/// `allocator_data` is the creation-time config, which no longer exists by now, so it must not be
+/// read here.
 fn reservingDealloc(ptr: ?*anyopaque, size: usize, allocator_data: ?*anyopaque) callconv(.c) void {
     _ = allocator_data;
     const base: [*]align(std.heap.page_size_min) u8 = @ptrCast(@alignCast(ptr orelse return));
@@ -985,6 +1032,21 @@ test "taskStackLayout commits the metadata and the base around a one-page guard"
         try std.testing.expect(layout.block_end >= block + coro_size);
         try std.testing.expectEqual(@as(usize, 0), layout.block_end % page);
     }
+}
+
+test "resolveTaskStackCap accepts the floor and refuses anything below it" {
+    try std.testing.expectEqual(@as(?usize, min_task_stack_cap), resolveTaskStackCap(min_task_stack_cap, 4096));
+    try std.testing.expectEqual(@as(?usize, null), resolveTaskStackCap(min_task_stack_cap - 1, 4096));
+    try std.testing.expectEqual(@as(?usize, null), resolveTaskStackCap(0, 4096));
+}
+
+test "resolveTaskStackCap rounds a cap up to the page size" {
+    try std.testing.expectEqual(@as(?usize, 2_015_232), resolveTaskStackCap(2_000_000, 16384));
+    try std.testing.expectEqual(@as(?usize, default_task_stack_cap), resolveTaskStackCap(default_task_stack_cap, 16384));
+}
+
+test "resolveTaskStackCap refuses a cap whose rounding would overflow" {
+    try std.testing.expectEqual(@as(?usize, null), resolveTaskStackCap(std.math.maxInt(usize) - 1, 4096));
 }
 
 test "taskStackLayout refuses a cap too small for the metadata, guard, and base" {

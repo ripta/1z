@@ -95,6 +95,7 @@ typedef void *onez_type_t;
 #define ONEZ_ERR_ISOLATION_UNDERFLOW 10
 #define ONEZ_ERR_DEBUGGER_NOT_ACTIVE 11
 #define ONEZ_ERR_BREAKPOINT_NOT_FOUND 12
+#define ONEZ_ERR_INVALID_VALUE      13
 
 /* ---- Debug event constants ---- */
 

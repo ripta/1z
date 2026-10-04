@@ -1,0 +1,1 @@
+Error: invalid value for --task-stack-cap: 'garbage' (expected a size of at least 1M)

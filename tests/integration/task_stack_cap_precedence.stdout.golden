@@ -1,0 +1,7 @@
+Stack: [ ]
+Stack: [ ]
+=== the flag wins over the environment ===
+Stack: [ ]
+PASS: a task overflows at a cap
+PASS: the budget is the flag's cap, not the variable's
+Stack: [ ]

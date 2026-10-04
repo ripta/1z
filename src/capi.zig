@@ -43,6 +43,7 @@ const MutableMap = value_mod.MutableMap;
 const Value = value_mod.Value;
 const TypeValue = value_mod.TypeValue;
 const container_backing = @import("container_backing.zig");
+const task_mod = @import("task.zig");
 
 const debugger_mod = @import("debugger/mod.zig");
 
@@ -162,6 +163,7 @@ pub const ONEZ_ERR_WORD_NOT_FOUND: c_int = 9;
 pub const ONEZ_ERR_ISOLATION_UNDERFLOW: c_int = 10;
 pub const ONEZ_ERR_DEBUGGER_NOT_ACTIVE: c_int = 11;
 pub const ONEZ_ERR_BREAKPOINT_NOT_FOUND: c_int = 12;
+pub const ONEZ_ERR_INVALID_VALUE: c_int = 13;
 
 // Debug event constants for onez_debug_set_callback.
 pub const ONEZ_EVENT_PAUSED: c_int = 0;
@@ -1798,6 +1800,26 @@ export fn onez_set_static_libs(ptr: ?*anyopaque, names: [*]const [*:0]const u8, 
 export fn onez_set_interpreter_fallback(ptr: ?*anyopaque, allowed: bool) c_int {
     const handle = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
     handle.ctx.allow_interpreted_fallback = allowed;
+    return ONEZ_OK;
+}
+
+// =========================================================================
+// Task stack cap
+// =========================================================================
+
+/// Set the native stack cap every task spawned from this runtime reserves, from a size string such
+/// as `4M`.
+///
+/// A rejected value is reported as an `ONEZ_TASK_STACK_CAP` error, since that variable is the
+/// source this setter exists to honor and the message then matches the interpreter's.
+export fn onez_set_task_stack_cap_z(ptr: ?*anyopaque, value: [*:0]const u8) c_int {
+    const handle = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
+    const text = std.mem.span(value);
+
+    handle.ctx.task_stack_cap = task_mod.parseTaskStackCap(text) orelse {
+        setLastError(handle, "invalid value for ONEZ_TASK_STACK_CAP: '{s}' ({s})", .{ text, task_mod.task_stack_cap_expectation });
+        return ONEZ_ERR_INVALID_VALUE;
+    };
     return ONEZ_OK;
 }
 

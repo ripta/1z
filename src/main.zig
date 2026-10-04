@@ -29,6 +29,7 @@ const CountingAllocator = benchmark.CountingAllocator;
 const memory_limit = @import("memory_limit.zig");
 const MemoryLimitAllocator = memory_limit.MemoryLimitAllocator;
 const container_limits = @import("container_limits.zig");
+const task_mod = @import("task.zig");
 const trace_mod = @import("trace.zig");
 const call_graph = @import("call_graph.zig");
 const effect_inference = @import("effect_inference.zig");
@@ -249,6 +250,8 @@ fn runReplStartupStatement(ctx: *Context, writer: anytype, statement: []const u8
 const GlobalFlags = struct {
     max_memory_bytes: usize = 256 * 1024 * 1024,
     cli_set_max_memory: bool = false,
+    task_stack_cap: usize = task_mod.default_task_stack_cap,
+    cli_set_task_stack_cap: bool = false,
     load_paths: std.ArrayListUnmanaged([]const u8) = .{},
     stdlib_path: ?[]const u8 = null,
     prelude_path: ?[]const u8 = null,
@@ -273,6 +276,21 @@ fn resolveMemoryDefault(global: *GlobalFlags, trace_enabled: bool) void {
     }
     const det = container_limits.detectMemory(trace_enabled);
     if (det.source != .fallback) global.max_memory_bytes = det.cap;
+}
+
+/// Resolve the task stack cap when --task-stack-cap was not given on the CLI.
+///
+/// Unlike ONEZ_MAX_MEMORY, a bad ONEZ_TASK_STACK_CAP is an error rather than ignored, so an
+/// operator who set it learns that it did nothing.
+fn resolveTaskStackCapDefault(global: *GlobalFlags, err_writer: anytype) error{InvalidFlagValue}!void {
+    if (global.cli_set_task_stack_cap) return;
+    const env_val = std.posix.getenv("ONEZ_TASK_STACK_CAP") orelse return;
+
+    global.task_stack_cap = task_mod.parseTaskStackCap(env_val) orelse {
+        err_writer.print("Error: invalid value for ONEZ_TASK_STACK_CAP: '{s}' ({s})\n", .{ env_val, task_mod.task_stack_cap_expectation }) catch {};
+        err_writer.flush() catch {};
+        return error.InvalidFlagValue;
+    };
 }
 
 /// The startup file path chain, with the environment supplied by the caller so it can be exercised
@@ -510,6 +528,17 @@ fn parseGlobalFlag(
             return .consumed;
         }
         err_writer.print("Error: invalid value for --max-memory: '{s}'\n", .{value}) catch {};
+        err_writer.flush() catch {};
+        return error.InvalidFlagValue;
+    }
+    if (std.mem.startsWith(u8, arg, "--task-stack-cap=")) {
+        const value = arg["--task-stack-cap=".len..];
+        if (task_mod.parseTaskStackCap(value)) |bytes| {
+            state.task_stack_cap = bytes;
+            state.cli_set_task_stack_cap = true;
+            return .consumed;
+        }
+        err_writer.print("Error: invalid value for --task-stack-cap: '{s}' ({s})\n", .{ value, task_mod.task_stack_cap_expectation }) catch {};
         err_writer.flush() catch {};
         return error.InvalidFlagValue;
     }
@@ -857,6 +886,7 @@ fn printUsage() void {
         \\  -h, --help              Show help
         \\  -V, --version           Show version
         \\  --max-memory=SIZE       Set memory limit (e.g. 128M, 1G; default 256M)
+        \\  --task-stack-cap=SIZE   Set each task's native stack cap (e.g. 4M, 64M; default 16M)
         \\  --load-path=PATH        Add a module search path (repeatable)
         \\  --stdlib-path=PATH      Override standard library path
         \\  --prelude=PATH          Override prelude file path
@@ -872,6 +902,7 @@ fn printUsage() void {
         \\
         \\Environment variables:
         \\  ONEZ_MAX_MEMORY         Default memory limit (overridden by --max-memory)
+        \\  ONEZ_TASK_STACK_CAP     Default task stack cap (overridden by --task-stack-cap)
         \\  ONEZ_COMPILE            Default compile mode (overridden by --compile)
         \\  ONEZ_PRELUDE            Default prelude path (overridden by --prelude)
         \\  ONEZ_LOAD_PATH          Colon-separated module search paths
@@ -917,6 +948,7 @@ const execution_flags_help =
 
 const global_flags_help =
     \\  --max-memory=SIZE         Set memory limit (e.g. 128M, 1G; default 256M)
+    \\  --task-stack-cap=SIZE     Set each task's native stack cap (e.g. 4M, 64M; default 16M)
     \\  --load-path=PATH          Add a module search path (repeatable)
     \\  --stdlib-path=PATH        Override standard library path
     \\  --prelude=PATH            Override prelude file path
@@ -1171,6 +1203,7 @@ const ExecutionContext = struct {
         err_writer: anytype,
     ) !*ExecutionContext {
         resolveMemoryDefault(global, exec.trace_config.trace_container_detect);
+        try resolveTaskStackCapDefault(global, err_writer);
         if (!exec.cli_set_compile) {
             if (std.posix.getenv("ONEZ_COMPILE")) |env_val| {
                 if (std.mem.eql(u8, env_val, "off")) {
@@ -1268,6 +1301,7 @@ const ExecutionContext = struct {
         ec.ctx.deadlock_detect_ns = exec.deadlock_detect_ns;
         ec.ctx.report_stall_verdict = exec.report_stall_verdict;
         ec.ctx.worker_count = exec.worker_count;
+        ec.ctx.task_stack_cap = global.task_stack_cap;
         ec.ctx.mem_limit = mem_limit_ptr;
 
         // A memory-limit abort reports the aborting thread's call stack; the main thread's
@@ -5159,6 +5193,48 @@ test "parseSamplingTick: malformed input returns null" {
     try std.testing.expectEqual(@as(?i128, null), parseSamplingTick("5x"));
     try std.testing.expectEqual(@as(?i128, null), parseSamplingTick("1.5"));
     try std.testing.expectEqual(@as(?i128, null), parseSamplingTick("-1"));
+}
+
+test "parseGlobalFlag: --task-stack-cap" {
+    var buf: [256]u8 = undefined;
+
+    {
+        var w = std.Io.Writer.fixed(&buf);
+        var state = GlobalFlags{};
+        defer state.deinit(std.testing.allocator);
+        try std.testing.expectEqual(
+            FlagParseResult.consumed,
+            try parseGlobalFlag("--task-stack-cap=4M", &state, std.testing.allocator, &w),
+        );
+        try std.testing.expectEqual(@as(usize, 4 * 1024 * 1024), state.task_stack_cap);
+        try std.testing.expect(state.cli_set_task_stack_cap);
+    }
+
+    {
+        var w = std.Io.Writer.fixed(&buf);
+        var state = GlobalFlags{};
+        defer state.deinit(std.testing.allocator);
+        try std.testing.expectError(
+            error.InvalidFlagValue,
+            parseGlobalFlag("--task-stack-cap=garbage", &state, std.testing.allocator, &w),
+        );
+        try std.testing.expectEqualStrings(
+            "Error: invalid value for --task-stack-cap: 'garbage' (expected a size of at least 1M)\n",
+            w.buffered(),
+        );
+    }
+
+    {
+        var w = std.Io.Writer.fixed(&buf);
+        var state = GlobalFlags{};
+        defer state.deinit(std.testing.allocator);
+        try std.testing.expectError(
+            error.InvalidFlagValue,
+            parseGlobalFlag("--task-stack-cap=512K", &state, std.testing.allocator, &w),
+        );
+        try std.testing.expectEqual(task_mod.default_task_stack_cap, state.task_stack_cap);
+        try std.testing.expect(!state.cli_set_task_stack_cap);
+    }
 }
 
 test "parseGlobalFlag: --no-startup" {
