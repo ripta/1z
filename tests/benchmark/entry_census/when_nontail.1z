@@ -1,0 +1,8 @@
+\ A recursive word whose recursion sits in a `when` that work follows.
+\
+\ Each level is one non-tail call to `when`, the `if` arm `when` runs in tail position, and one
+\ non-tail call to `r`.
+
+r: stack-recursive ( n -- n ) [ dup 0 > [ 1 - r 1 + ] when 0 + ] ;
+
+12 r drop

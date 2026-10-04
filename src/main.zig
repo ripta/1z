@@ -41,6 +41,7 @@ const aot_image = @import("aot_image.zig");
 const aot_image_emit = @import("aot_image_emit.zig");
 const ir_codegen = @import("ir_codegen.zig");
 const bail_stats_mod = @import("bail_stats.zig");
+const entry_census_mod = @import("entry_census.zig");
 const scheduler_mod = @import("scheduler.zig");
 
 const signal = @import("signal.zig");
@@ -1364,6 +1365,7 @@ const ExecutionContext = struct {
         if (ec.profile_enabled) {
             ec.ctx.profile = profile_stats_ptr;
         }
+        entry_census_mod.start(&ec.ctx);
 
         const prelude_path = global.prelude_path orelse std.posix.getenv("ONEZ_PRELUDE");
         if (prelude_path) |path| {
@@ -1495,6 +1497,7 @@ const ExecutionContext = struct {
         memory_limit.current_context = null;
 
         bail_stats_mod.deinitGlobal();
+        entry_census_mod.finish();
         if (self.watchdog) |t| t.detach();
         if (self.dbg != null) self.dbg.?.deinit();
         self.ctx.deinit();

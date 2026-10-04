@@ -1,0 +1,8 @@
+\ A recursive word whose recursion sits in a tail-position `when`.
+\
+\ `when` is a free tail call here, so each level is the `if` arm `when` runs in tail position and
+\ one non-tail call to `r`, the same as `tail_if.1z`.
+
+r: stack-recursive ( n -- n ) [ dup 0 > [ 1 - r 1 + ] when ] ;
+
+12 r drop

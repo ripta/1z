@@ -1,0 +1,12 @@
+\ `parse-json` over objects nested 24 deep, `{"a":{"a":...1...}}`.
+\
+\ The census reads the deepest point, which is the innermost value, so its middle levels are the
+\ per-level path from one `parse-json-value` to the next through the object arm.
+
+use "data/json" ;
+
+\\ `str` concatenated `n` times.
+repeat-string: ( str: string n: fixnum -- result: string ) [ "" swap [ over #append ] times nip ] ;
+
+"{\"a\":" 24 repeat-string "1" #append "}" 24 repeat-string #append
+parse-json drop

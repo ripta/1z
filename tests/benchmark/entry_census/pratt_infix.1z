@@ -1,0 +1,12 @@
+\ The expression parser over a right-nested sum 24 deep, `1+(1+(1+...))`.
+\
+\ Each level is one infix `+` whose right operand is a group, so the middle levels are the path
+\ from one `parse-pratt` through the infix loop and the group to the next.
+
+use "expr/parser" ;
+
+\\ `str` concatenated `n` times.
+repeat-string: ( str: string n: fixnum -- result: string ) [ "" swap [ over #append ] times nip ] ;
+
+"1+(" 24 repeat-string "1" #append ")" 24 repeat-string #append
+parse-expr drop

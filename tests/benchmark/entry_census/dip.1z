@@ -1,0 +1,9 @@
+\ A recursive word that reaches its recursion through a non-tail `dip`.
+\
+\ `r` is the last word of the `dip` body, so it is a tail call on the trampoline `dip` already
+\ entered and adds no entry of its own. Each level is the `if` arm `when` runs in tail position
+\ and one `dip` body entered by a native in non-tail position.
+
+r: stack-recursive ( n -- n ) [ dup 0 > [ 1 - 0 [ r ] dip + 1 + ] when ] ;
+
+12 r drop

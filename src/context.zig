@@ -42,6 +42,7 @@ const CatchSnapshots = @import("stack_snapshot.zig").CatchSnapshots;
 const ir_codegen = @import("ir_codegen.zig");
 const call_graph_mod = @import("call_graph.zig");
 const bail_stats_mod = @import("bail_stats.zig");
+const entry_census_mod = @import("entry_census.zig");
 const scheduler_mod = @import("scheduler.zig");
 const Scheduler = scheduler_mod.Scheduler;
 const task_mod = @import("task.zig");
@@ -9420,10 +9421,36 @@ pub const Context = struct {
         self.runPropagatedTailBody() catch |err| return self.wordErrorCleanup(name, err);
     }
 
+    /// Attributes the body entries a call makes to `class` and `name`, answering what to restore.
+    inline fn censusEnter(self: *Context, class: entry_census_mod.Class, name: []const u8) entry_census_mod.Saved {
+        if (entry_census_mod.enabled) {
+            if (entry_census_mod.forContext(self)) |c| return c.enter(.{ .class = class, .name = name });
+            return .{};
+        }
+    }
+
+    /// A propagated body is attributed to the native whose arm left it pending. That native's tag is
+    /// still the current one, since `executeResolvedWord` restores it only after the body has run.
+    inline fn censusEnterPropagated(self: *Context) entry_census_mod.Saved {
+        if (entry_census_mod.enabled) {
+            if (entry_census_mod.forContext(self)) |c| return c.enter(.{ .class = .propagated, .name = c.current.name });
+            return .{};
+        }
+    }
+
+    inline fn censusRestore(self: *Context, saved: entry_census_mod.Saved) void {
+        if (entry_census_mod.enabled) {
+            if (entry_census_mod.forContext(self)) |c| c.restore(saved);
+        }
+    }
+
     /// Run the body a native propagated as a tail call, clearing the tail-call slots.
     ///
     /// Pops and pends no call frame. The caller decides which frames the run leaves in place.
     pub fn runPropagatedTailBody(self: *Context) anyerror!void {
+        const census_saved = self.censusEnterPropagated();
+        defer self.censusRestore(census_saved);
+
         const tci = self.tail_call_instructions orelse return;
         self.tail_call_instructions = null;
 
@@ -9744,6 +9771,8 @@ pub const Context = struct {
                     self.tail_call_compiled = false;
                     self.current_pic_entry = if (site.pic_table) |pt| pt.get(idx) else null;
                     defer self.current_pic_entry = null;
+                    const census_saved = self.censusEnter(.tail_native, name);
+                    defer self.censusRestore(census_saved);
                     if (func(self)) |_| {
                         try self.wordSuccessCleanup(name, word.stack_effect);
                     } else |err| {
@@ -9802,6 +9831,9 @@ pub const Context = struct {
                 self.current_pic_entry = if (site.pic_table) |pt| pt.get(idx) else null;
             }
             defer self.current_pic_entry = null;
+
+            const census_saved = self.censusEnter(if (word.action == .compound) .nontail_compound else .nontail_native, name);
+            defer self.censusRestore(census_saved);
 
             const result = blk: {
                 const saved_source = self.current_source;
@@ -9970,6 +10002,13 @@ pub const Context = struct {
     /// `owner` is a closure that may own `instructions`; see `executeQuotationWithOwner`. It is a
     /// hint, validated where it is admitted below.
     fn executeInstructions(self: *Context, instructions: []const Instruction, pic_table: ?*PicTable, body_module: ?*const value_mod.Module, owner: ?*const value_mod.Closure) anyerror!void {
+        if (entry_census_mod.enabled) {
+            if (entry_census_mod.forContext(self)) |c| c.push(@frameAddress());
+        }
+        defer if (entry_census_mod.enabled) {
+            if (entry_census_mod.forContext(self)) |c| c.pop();
+        };
+
         // Holds this body's creation-site module deps frames after a lazy re-resolution of a
         // `use`-imported word: its captured ambient-deps modules plus its defining-module stamp.
         // These are the frames the body could reach at creation but that may not be live where it

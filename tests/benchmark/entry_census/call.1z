@@ -1,0 +1,9 @@
+\ A recursive word that reaches its recursion through a tail-position `call`.
+\
+\ `when` is the last word of `r`, so it is a free tail call, and its `if` is the last word of
+\ `when`. Each level is one `if` arm, one `call` body, both entered by a native in tail position,
+\ and one non-tail call to `r`.
+
+r: stack-recursive ( n -- n ) [ dup 0 > [ [ 1 - r 1 + ] call ] when ] ;
+
+12 r drop

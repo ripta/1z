@@ -1,0 +1,12 @@
+\ The expression parser over parentheses nested 24 deep, `((((1))))`.
+\
+\ Each level is one group, so the middle levels are the path from one `parse-pratt` to the next
+\ through the prefix handler for `(`.
+
+use "expr/parser" ;
+
+\\ `str` concatenated `n` times.
+repeat-string: ( str: string n: fixnum -- result: string ) [ "" swap [ over #append ] times nip ] ;
+
+"(" 24 repeat-string "1" #append ")" 24 repeat-string #append
+parse-expr drop

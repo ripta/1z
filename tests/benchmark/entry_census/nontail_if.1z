@@ -1,0 +1,8 @@
+\ A recursive word whose recursion sits in an `if` arm that work follows.
+\
+\ Each level is one `if` arm, entered by a native in non-tail position, and one non-tail call to
+\ `r`.
+
+r: stack-recursive ( n -- n ) [ dup 0 > [ 1 - r 1 + ] [ ] if 0 + ] ;
+
+12 r drop

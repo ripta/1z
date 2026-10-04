@@ -207,6 +207,50 @@ body-entry-slope-check: release ## Fail if one interpreted body entry costs more
 			print "PASS: one interpreted body entry costs " first " bytes, within the bound of " max \
 		}'
 
+ENTRY_CENSUS_PREFIX ?= $(ZIG_PREFIX)/entry-census
+
+ENTRY_CENSUS_DIR := tests/benchmark/entry_census
+
+# Synthetic shapes whose composition is known by construction, as FILE|ANCHOR|EXPECTED. Each one
+# checks that the census classifies what it was built from, before the library shapes are trusted.
+ENTRY_CENSUS_SYNTHETIC := \
+	'compound_chain|nontail_compound:*|nontail_compound:*' \
+	'tail_if|nontail_compound:r|nontail_compound:r,tail_native:if' \
+	'nontail_if|nontail_compound:r|nontail_compound:r,nontail_native:if' \
+	'call|nontail_compound:r|nontail_compound:r,tail_native:if,tail_native:call' \
+	'when_nontail|nontail_compound:r|nontail_compound:r,nontail_compound:when,tail_native:if' \
+	'when_tail|nontail_compound:r|nontail_compound:r,tail_native:if' \
+	'dip|nontail_native:dip|nontail_native:dip,tail_native:if'
+
+# Library recursion paths, as FILE|ANCHOR. Their composition is the measurement, so nothing is
+# expected of it beyond the levels agreeing with each other.
+ENTRY_CENSUS_LIBRARY := \
+	'json_object|nontail_compound:parse-json-value' \
+	'json_array|nontail_compound:parse-json-value' \
+	'pratt_paren|nontail_compound:parse-pratt' \
+	'pratt_infix|nontail_compound:parse-pratt'
+
+entry-census-build: branch-info ## Build a release binary that records the live body entries at the deepest native stack point, into its own prefix
+	$(ZIG) build --release=fast -Dentry-census=true --prefix $(ENTRY_CENSUS_PREFIX) $(ZIG_CPU_ARG)
+
+# Not part of `make test`: it is a measurement, and it needs a build of its own.
+benchmark-entry-census: entry-census-build ## Report the live body entries per recursion level, by class, for synthetic and library recursion shapes
+	@set -o pipefail; \
+	status=0; \
+	for spec in $(ENTRY_CENSUS_SYNTHETIC); do \
+		IFS='|' read -r file anchor expect <<< "$$spec"; \
+		echo "== $$file"; \
+		ONEZ_NO_STARTUP=1 timeout $(TARGET_TIMEOUT) $(ENTRY_CENSUS_PREFIX)/bin/1z run --compile=off $(ENTRY_CENSUS_DIR)/$$file.1z 2>&1 >/dev/null \
+			| python3 scripts/entry-census.py - "$$anchor" --expect "$$expect" || status=1; \
+	done; \
+	for spec in $(ENTRY_CENSUS_LIBRARY); do \
+		IFS='|' read -r file anchor <<< "$$spec"; \
+		echo "== $$file"; \
+		ONEZ_NO_STARTUP=1 timeout $(TARGET_TIMEOUT) $(ENTRY_CENSUS_PREFIX)/bin/1z run --compile=off $(ENTRY_CENSUS_DIR)/$$file.1z 2>&1 >/dev/null \
+			| python3 scripts/entry-census.py - "$$anchor" || status=1; \
+	done; \
+	exit $$status
+
 test-threads-1: ## Run all tests with default --threads=1 for integration tests
 	timeout $(TARGET_TIMEOUT) $(ZIG) build test --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT)
 	$(MAKE) embed-stdlib-test

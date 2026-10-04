@@ -1,0 +1,22 @@
+\ A chain of non-tail compound calls with no combinator on the path.
+\
+\ Usage: zig-out/entry-census/bin/1z run --compile=off tests/benchmark/entry_census/compound_chain.1z
+\
+\ Every link of `cN: [ c(N-1) 1 + ]` calls the next one before adding, so each link is one
+\ non-tail compound entry. This is the `body_entry_slope.1z` shape, read through the census.
+
+c0:  ( -- n ) [ 0 ] ;
+c1:  ( -- n ) [ c0 1 + ] ;
+c2:  ( -- n ) [ c1 1 + ] ;
+c3:  ( -- n ) [ c2 1 + ] ;
+c4:  ( -- n ) [ c3 1 + ] ;
+c5:  ( -- n ) [ c4 1 + ] ;
+c6:  ( -- n ) [ c5 1 + ] ;
+c7:  ( -- n ) [ c6 1 + ] ;
+c8:  ( -- n ) [ c7 1 + ] ;
+c9:  ( -- n ) [ c8 1 + ] ;
+c10: ( -- n ) [ c9 1 + ] ;
+c11: ( -- n ) [ c10 1 + ] ;
+c12: ( -- n ) [ c11 1 + ] ;
+
+c12 drop
