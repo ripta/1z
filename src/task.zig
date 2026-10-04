@@ -1107,6 +1107,7 @@ test "a task's guard grows its stack once, then raises only at or below the grow
     ctx.stack_high = @intFromPtr(co.?.stack_base) + co.?.stack_size;
     ctx.stack_low = ctx.stack_high - cfg.base;
     ctx.stack_limit = ctx.stack_low + cfg.base / 8;
+    ctx.stack_floor = growth.stack_limit;
     ctx.stack_growth = growth;
 
     const base_limit = ctx.stack_limit;
@@ -1115,6 +1116,7 @@ test "a task's guard grows its stack once, then raises only at or below the grow
 
     try std.testing.expect(!ctx.stackExhausted(base_limit));
     try std.testing.expectEqual(growth.stack_limit, ctx.stack_limit);
+    try std.testing.expectEqual(growth.stack_limit, ctx.stack_floor);
     try std.testing.expectEqual(growth.stack_low, ctx.stack_low);
     try std.testing.expectEqual(@as(?TaskStackGrowth, null), ctx.stack_growth);
     try std.testing.expectEqual(cfg.cap - cfg.cap / 8, ctx.stack_high - ctx.stack_limit);

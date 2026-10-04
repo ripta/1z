@@ -1,5 +1,5 @@
 === overflow at an environment-set cap ===
 PASS: a task overflows at the variable's cap
-PASS: the budget after growing is the variable's cap
+PASS: the budget is the variable's cap
 === a nested spawn inherits the cap ===
 PASS: a grandchild task grows to the same cap

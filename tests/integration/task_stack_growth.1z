@@ -42,11 +42,13 @@ recurse-forever: stack-recursive [ recurse-forever 1 drop ] ;
 
 [
   [
+    stack-budget?
     [ recurse-forever ] [ error-type: @get ] recover
-    task-stack-peak stack-budget? 3 array-n
+    task-stack-peak stack-budget? 4 array-n
   ] spawn await
 
-  dup 0 #nth stack-overflow: "a grown task still overflows" assert=
-  dup 1 #nth GROWN-BUDGET >= "the guard fired at the cap, not the base" assert-true
-  2 #nth GROWN-BUDGET "the budget after growing is the cap's" assert=
+  dup 1 #nth stack-overflow: "a grown task still overflows" assert=
+  dup 2 #nth GROWN-BUDGET >= "the guard fired at the cap, not the base" assert-true
+  dup 0 #nth GROWN-BUDGET "the budget before growing is the cap's" assert=
+  3 #nth GROWN-BUDGET "the budget after growing is the same" assert=
 ] task-scope

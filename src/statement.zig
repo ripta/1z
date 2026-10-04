@@ -143,11 +143,13 @@ pub const StatementProcessor = struct {
 
         const saved_high = c.stack_high;
         const saved_limit = c.stack_limit;
+        const saved_floor = c.stack_floor;
         const saved_low = c.stack_low;
         const saved_growth = c.stack_growth;
         defer {
             c.stack_high = saved_high;
             c.stack_limit = saved_limit;
+            c.stack_floor = saved_floor;
             c.stack_low = saved_low;
             c.stack_growth = saved_growth;
         }
@@ -161,6 +163,7 @@ pub const StatementProcessor = struct {
         const usable_low = @intFromPtr(co.stack_mem.ptr) + std.heap.page_size_min;
         c.stack_high = @intFromPtr(co.stack_mem.ptr) + co.stack_mem.len;
         c.stack_limit = usable_low + coroutine_stack_reserve;
+        c.stack_floor = c.stack_limit;
         c.stack_low = usable_low;
 
         co.@"resume"();

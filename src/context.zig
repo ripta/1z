@@ -1430,6 +1430,12 @@ pub const Context = struct {
     /// and the runtime marker consistency check.
     allow_all_recursion: bool = false,
     stack_limit: usize = 0,
+    /// Where `stack_limit` ends up once this stack has grown as far as it can. It equals
+    /// `stack_limit` on a stack that cannot grow, and zero where the guard is not armed.
+    ///
+    /// `stack-budget?` reads this rather than `stack_limit`, so a task's answer is the depth it can
+    /// reach and does not change when its stack grows.
+    stack_floor: usize = 0,
     stack_high: usize = 0,
     /// Low bound of the usable native stack region the guard was armed over. Only the overflow
     /// message reads it, to report the stack's size.
@@ -1841,18 +1847,32 @@ pub const Context = struct {
         self.stack_high = bounds.high;
         self.stack_low = bounds.low;
         self.stack_limit = bounds.low + (bounds.high - bounds.low) / 8;
+        self.stack_floor = self.stack_limit;
     }
 
     /// The message a native stack overflow raises with, for a frame at `sp`.
     ///
     /// It names the bytes in use, the guard limit, and the stack's size separately. The guard limit
     /// is the figure `stack-budget?` reports, and the gap between it and the size is the reserve.
+    ///
+    /// A task whose growth failed overflows at its base instead. Its guard limit is then the base's,
+    /// not the budget, so the message also names the size the stack could not grow to.
     pub fn stackOverflowMessage(self: *Context, sp: usize) []const u8 {
         const used = self.stack_high -| sp;
         const limit = self.stack_high -| self.stack_limit;
         const size = self.stack_high -| self.stack_low;
+        const allocator = self.arena.allocator();
+
+        if (self.stack_growth) |growth| {
+            return std.fmt.allocPrint(
+                allocator,
+                "stack overflow: {} bytes used, guard limit {}, stack size {}; could not grow to {}",
+                .{ used, limit, size, self.stack_high -| growth.stack_low },
+            ) catch "stack overflow";
+        }
+
         return std.fmt.allocPrint(
-            self.arena.allocator(),
+            allocator,
             "stack overflow: {} bytes used, guard limit {}, stack size {}",
             .{ used, limit, size },
         ) catch "stack overflow";
@@ -1873,6 +1893,10 @@ pub const Context = struct {
         self.stack_growth = null;
         self.stack_low = growth.stack_low;
         self.stack_limit = growth.stack_limit;
+
+        // Invariant: a grown stack's limit is the floor `stack-budget?` already reported. The site
+        // that arms a growth, `allocateTaskWithEntry`, arms the floor with it.
+        std.debug.assert(self.stack_limit == self.stack_floor);
         return sp <= self.stack_limit;
     }
 
@@ -10886,12 +10910,34 @@ test "stackOverflowMessage names bytes used, the guard limit, and the stack size
     );
 }
 
+test "stackOverflowMessage names the size a stack whose growth failed could not reach" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    ctx.stack_low = 0x100_0000 - 786432;
+    ctx.stack_limit = ctx.stack_low + 98304;
+    ctx.stack_high = 0x100_0000;
+    ctx.stack_growth = .{
+        .commit_low = 0x1000,
+        .commit_high = ctx.stack_low,
+        .stack_low = 0,
+        .stack_limit = 0x100_0000 / 8,
+    };
+
+    const msg = ctx.stackOverflowMessage(ctx.stack_limit - 592);
+    try std.testing.expectEqualStrings(
+        "stack overflow: 688720 bytes used, guard limit 688128, stack size 786432; could not grow to 16777216",
+        msg,
+    );
+}
+
 test "stackExhausted raises at the limit of a stack with no growth left" {
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
 
     ctx.stack_low = 0x10_0000;
     ctx.stack_limit = 0x10_0000 + 98304;
+    ctx.stack_floor = ctx.stack_limit;
     ctx.stack_high = 0x10_0000 + 786432;
 
     try std.testing.expect(!ctx.stackExhausted(ctx.stack_limit + 1));

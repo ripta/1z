@@ -2,8 +2,9 @@
 
 use "testing" ;
 
-\ A task's stack is 768 KiB with an eighth held back as the guard's reserve.
-TASK-BUDGET: const [ 688128 ] ;
+\ A task's stack can grow to the 2 MiB cap the sidecar sets, with an eighth held back as the guard's
+\ reserve. The cap is not the default 16 MiB, so a task's budget differs from the main thread's.
+TASK-BUDGET: const [ 1835008 ] ;
 
 \ The parser coroutine's stack is 1 MiB with the same eighth held back.
 PARSER-BUDGET: const [ 917504 ] ;

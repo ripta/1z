@@ -18,5 +18,5 @@ recurse-forever: stack-recursive [ recurse-forever 1 drop ] ;
 
   dup 0 #nth stack-overflow: "a task overflows at the flag's cap" assert=
   dup 1 #nth CAP-BUDGET >= "the guard fired at the flag's cap" assert-true
-  2 #nth CAP-BUDGET "the budget after growing is the flag's cap" assert=
+  2 #nth CAP-BUDGET "the budget is the flag's cap" assert=
 ] task-scope

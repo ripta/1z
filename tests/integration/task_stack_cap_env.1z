@@ -23,7 +23,7 @@ overflow-report: ( -- report ) [
   [ overflow-report ] spawn await
 
   dup 0 #nth stack-overflow: "a task overflows at the variable's cap" assert=
-  1 #nth CAP-BUDGET "the budget after growing is the variable's cap" assert=
+  1 #nth CAP-BUDGET "the budget is the variable's cap" assert=
 ] task-scope
 
 "a nested spawn inherits the cap" test-section

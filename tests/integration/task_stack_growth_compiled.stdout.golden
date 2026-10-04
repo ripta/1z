@@ -1,5 +1,12 @@
 Stack: [ ]
 Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+=== overflow in a task ===
+Stack: [ ]
 PASS: a compiled recursion in a task still overflows
-PASS: the task grew to its cap before overflowing
+Stack: [ ]
+=== growth in a task ===
+Stack: [ ]
+PASS: a compiled recursion in a task reaches its budget, as the main task does
 Stack: [ ]

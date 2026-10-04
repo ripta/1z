@@ -14,5 +14,6 @@ Stack: [ ]
 Stack: [ ]
 PASS: a grown task still overflows
 PASS: the guard fired at the cap, not the base
-PASS: the budget after growing is the cap's
+PASS: the budget before growing is the cap's
+PASS: the budget after growing is the same
 Stack: [ ]

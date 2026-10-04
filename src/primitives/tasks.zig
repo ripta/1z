@@ -59,7 +59,7 @@ pub const primitives = [_]Primitive{
     .{ .name = "container-limits", .stack_effect = "-- hash", .doc = "Return a hash of detected container CPU and memory limits: cpu-count, cpu-source, cpu-raw, memory-cap, memory-source, memory-raw.", .func = nativeContainerLimits },
     .{ .name = "cancelled?", .stack_effect = "-- bool", .doc = "Push t if the current task has a pending cancellation, f otherwise.", .func = nativeCancelledQuery },
     .{ .name = "task-stack-peak", .stack_effect = "-- n", .doc = "Return the current task's peak native stack usage in bytes.", .func = nativeTaskStackPeak },
-    .{ .name = "stack-budget?", .stack_effect = "-- n/f", .doc = "Return the native stack budget in bytes of the stack the caller is running on, or f where the overflow guard is not armed. The guard fires when task-stack-peak reaches this figure.", .func = nativeStackBudget },
+    .{ .name = "stack-budget?", .stack_effect = "-- n/f", .doc = "Return the native stack budget in bytes of the stack the caller is running on, or f where the overflow guard is not armed. The guard fires when task-stack-peak reaches this figure. A task's budget counts the growth its stack can still make, so it does not change when the stack grows.", .func = nativeStackBudget },
 };
 
 /// Allocate a Task and its Context on the heap, wire up the ucontext, and
@@ -119,10 +119,13 @@ fn allocateTaskWithEntry(
     task_ctx.stack_high = @intFromPtr(coro.stack_base) + coro.stack_size;
     task_ctx.stack_low = task_ctx.stack_high - task_stack.base;
     task_ctx.stack_limit = task_ctx.stack_low + task_stack_reserve;
+    task_ctx.stack_floor = task_ctx.stack_limit;
     if (comptime !is_freestanding) {
         // Once grown, the reserve is an eighth of the cap, which is the main thread's own
         // proportion.
-        task_ctx.stack_growth = task_mod.taskStackGrowth(coro, &task_stack, task_stack.cap / 8);
+        const growth = task_mod.taskStackGrowth(coro, &task_stack, task_stack.cap / 8);
+        task_ctx.stack_growth = growth;
+        task_ctx.stack_floor = growth.stack_limit;
     }
 
     try scheduler.trackTask(task);
@@ -1284,10 +1287,13 @@ fn nativeTaskStackPeak(ctx: *Context) anyerror!void {
 ///
 /// Reads the executing context's guard fields rather than the task constants, because the main
 /// thread, a task, and the parser coroutine each arm them from a different stack.
+///
+/// It reads the floor rather than the live limit. A task's limit moves when its stack grows, and
+/// the budget is the depth the task can reach, so it stays the same before and after.
 fn nativeStackBudget(ctx: *Context) anyerror!void {
-    if (ctx.stack_limit == 0) return ctx.stack.push(.{ .boolean = false });
+    if (ctx.stack_floor == 0) return ctx.stack.push(.{ .boolean = false });
 
-    try ctx.stack.push(.{ .fixnum = @intCast(ctx.stack_high - ctx.stack_limit) });
+    try ctx.stack.push(.{ .fixnum = @intCast(ctx.stack_high - ctx.stack_floor) });
 }
 
 /// fake-clock ( -- )
@@ -1433,6 +1439,7 @@ test "stack-budget?: an unarmed guard answers f" {
 
     ctx.stack_high = 0;
     ctx.stack_limit = 0;
+    ctx.stack_floor = 0;
     try nativeStackBudget(&ctx);
 
     const result = try ctx.stack.pop();
@@ -1440,17 +1447,32 @@ test "stack-budget?: an unarmed guard answers f" {
     try std.testing.expect(!result.boolean);
 }
 
-test "stack-budget?: an armed guard answers the distance from the high end to the limit" {
+test "stack-budget?: an armed guard answers the distance from the high end to the floor" {
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
 
     ctx.stack_high = 0x10_0000;
     ctx.stack_limit = 0x2_0000;
+    ctx.stack_floor = 0x2_0000;
     try nativeStackBudget(&ctx);
 
     const result = try ctx.stack.pop();
     try std.testing.expect(result == .fixnum);
     try std.testing.expectEqual(@as(i64, 0xE_0000), result.fixnum);
+}
+
+test "stack-budget?: a stack that has not grown yet answers the budget it can grow to" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    ctx.stack_high = 0x100_0000;
+    ctx.stack_limit = 0x100_0000 - 688128;
+    ctx.stack_floor = 0x100_0000 / 8;
+    try nativeStackBudget(&ctx);
+
+    const result = try ctx.stack.pop();
+    try std.testing.expect(result == .fixnum);
+    try std.testing.expectEqual(@as(i64, 14680064), result.fixnum);
 }
 
 test "await-all propagates borrowed buffer escape from failed child" {

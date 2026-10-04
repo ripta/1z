@@ -1,19 +1,36 @@
 \ Test that a compiled recursion in a task grows the task's stack instead of overflowing at its
 \ base. Compiled code checks its own copy of the stack limit, so the growth has to reach that copy.
+\
+\ The budget alone cannot show growth, because a task reports the budget it can grow to from the
+\ start. So the test compares bytes per level, the budget divided by the depth reached, against the
+\ main task's. A task that grows reaches its whole budget, and the two figures are close. A task
+\ that overflowed at its base would reach about a twentieth of its budget, and its figure would be
+\ about twenty times the main task's.
 
 use "testing" ;
 
-\ Grown, a task's stack is 16 MiB with an eighth held back as the guard's reserve.
-GROWN-BUDGET: const [ 14680064 ] ;
-
 deep: stack-recursive ( n -- n ) [ dup 0 > [ 1 - deep 1 + ] [ ] if ] ;
 
-[
-  [
-    [ 1000000000 deep drop ok: ] [ error-type: @get ] recover
-    stack-budget? 2 array-n
-  ] spawn await
+\\ Whether `deep` reaches `n` levels without the guard firing.
+reaches?: ( n: fixnum -- n ? ) [ [ dup deep drop t ] [ drop f ] recover ] ;
 
-  dup 0 #nth stack-overflow: "a compiled recursion in a task still overflows" assert=
-  1 #nth GROWN-BUDGET "the task grew to its cap before overflowing" assert=
+\\ The deepest power of two `deep` reaches. It is within a factor of two of the real depth.
+reachable-depth: ( -- depth ) [ 1 [ reaches? ] [ 2 * ] while 2 / ] ;
+
+\\ Bytes of budget per level reached on the stack the caller runs on.
+bytes-per-level: ( -- n ) [ stack-budget? reachable-depth / ] ;
+
+"overflow in a task" test-section
+
+[
+  [ [ 1000000000 deep drop ok: ] [ error-type: @get ] recover ] spawn await
+  stack-overflow: "a compiled recursion in a task still overflows" assert=
 ] task-scope
+
+"growth in a task" test-section
+
+\ One statement, so the main task's figure, which depends on the host's frame size, is never shown.
+bytes-per-level [
+  4 * [ bytes-per-level ] spawn await >
+  "a compiled recursion in a task reaches its budget, as the main task does" assert-true
+] curry task-scope
