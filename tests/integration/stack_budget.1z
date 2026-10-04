@@ -1,0 +1,39 @@
+\ Test stack-budget?: the native stack budget of whichever stack the caller runs on.
+
+use "testing" ;
+
+\ A task's stack is 768 KiB with an eighth held back as the guard's reserve.
+TASK-BUDGET: const [ 688128 ] ;
+
+\ The parser coroutine's stack is 1 MiB with the same eighth held back.
+PARSER-BUDGET: const [ 917504 ] ;
+
+\ Runs while the statement is parsed, so the budget it leaves behind is the parser coroutine's.
+probe-budget: parse-time [ stack-budget? ] ;
+
+"task" test-section
+
+[
+  [ stack-budget? ] spawn await TASK-BUDGET "a task reads its own budget" assert=
+] task-scope
+
+[
+  [ task-stack-peak stack-budget? < ] spawn await
+  "a task's peak stays below its budget until the guard fires" assert-true
+] task-scope
+
+"main task" test-section
+
+stack-budget? fixnum? "the main task's guard is armed" assert-true
+stack-budget? 0 > "the main task's budget is positive" assert-true
+stack-budget? TASK-BUDGET = "the main task's budget is the OS thread's, not a task's" assert-false
+
+"parser coroutine" test-section
+
+probe-budget PARSER-BUDGET "a parse-time word reads the parser coroutine's budget" assert=
+
+[
+  [ "probe-budget" eval-string stack-budget? 2 array-n ] spawn await
+  PARSER-BUDGET TASK-BUDGET 2 array-n
+  "a parse inside a task reads the coroutine's budget, then the task's is restored" assert=
+] task-scope

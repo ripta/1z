@@ -1,0 +1,23 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+=== task ===
+Stack: [ ]
+PASS: a task reads its own budget
+Stack: [ ]
+PASS: a task's peak stays below its budget until the guard fires
+Stack: [ ]
+=== main task ===
+Stack: [ ]
+PASS: the main task's guard is armed
+Stack: [ ]
+PASS: the main task's budget is positive
+Stack: [ ]
+PASS: the main task's budget is the OS thread's, not a task's
+Stack: [ ]
+=== parser coroutine ===
+Stack: [ ]
+PASS: a parse-time word reads the parser coroutine's budget
+Stack: [ ]
+PASS: a parse inside a task reads the coroutine's budget, then the task's is restored
+Stack: [ ]
