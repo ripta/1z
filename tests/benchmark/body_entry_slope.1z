@@ -1,0 +1,84 @@
+\ Native stack cost of one interpreted body entry, as a slope between task stack peaks.
+\
+\ Usage: 1z run --compile=off tests/benchmark/body_entry_slope.1z
+\
+\ `cN` calls `c(N-1)` and then adds one, so every call in the chain is non-tail and no combinator
+\ sits on the path. `c0` reads `task-stack-peak` at the bottom, so `cN` answers that peak plus N.
+\
+\ Each depth runs in a task of its own, because `task-stack-peak` never resets and a second reading
+\ in one task would report the deeper of the two.
+\
+\ Subtracting the peaks at two depths cancels the stack the task used before the chain started.
+\ That difference divided by the difference in depth is the cost of one entry. The adjacent pairs
+\ and the outer pair have to agree.
+\
+\ The figure means bytes per interpreted entry only under `--compile=off`. Under any other mode
+\ some links are compiled bodies that never enter the interpreter.
+
+c0:  ( -- n ) [ task-stack-peak ] ;
+c1:  ( -- n ) [ c0 1 + ] ;
+c2:  ( -- n ) [ c1 1 + ] ;
+c3:  ( -- n ) [ c2 1 + ] ;
+c4:  ( -- n ) [ c3 1 + ] ;
+c5:  ( -- n ) [ c4 1 + ] ;
+c6:  ( -- n ) [ c5 1 + ] ;
+c7:  ( -- n ) [ c6 1 + ] ;
+c8:  ( -- n ) [ c7 1 + ] ;
+c9:  ( -- n ) [ c8 1 + ] ;
+c10: ( -- n ) [ c9 1 + ] ;
+c11: ( -- n ) [ c10 1 + ] ;
+c12: ( -- n ) [ c11 1 + ] ;
+c13: ( -- n ) [ c12 1 + ] ;
+c14: ( -- n ) [ c13 1 + ] ;
+c15: ( -- n ) [ c14 1 + ] ;
+c16: ( -- n ) [ c15 1 + ] ;
+c17: ( -- n ) [ c16 1 + ] ;
+c18: ( -- n ) [ c17 1 + ] ;
+c19: ( -- n ) [ c18 1 + ] ;
+c20: ( -- n ) [ c19 1 + ] ;
+c21: ( -- n ) [ c20 1 + ] ;
+c22: ( -- n ) [ c21 1 + ] ;
+c23: ( -- n ) [ c22 1 + ] ;
+c24: ( -- n ) [ c23 1 + ] ;
+c25: ( -- n ) [ c24 1 + ] ;
+c26: ( -- n ) [ c25 1 + ] ;
+c27: ( -- n ) [ c26 1 + ] ;
+c28: ( -- n ) [ c27 1 + ] ;
+c29: ( -- n ) [ c28 1 + ] ;
+c30: ( -- n ) [ c29 1 + ] ;
+c31: ( -- n ) [ c30 1 + ] ;
+c32: ( -- n ) [ c31 1 + ] ;
+
+\\ Each task pushes its reading here, since a task scope does not hand back its children's values.
+READINGS: V{ } ;
+
+\\ Runs `quot` in a task of its own and answers the value it pushed to `READINGS`.
+in-own-task: ( quot -- value ) [
+  [ [ READINGS swap #push! drop ] compose spawn await drop ] curry task-scope
+  READINGS #pop! nip
+] ;
+
+\\ The task stack peak at the bottom of a chain `depth` entries deep, less the chain's own additions.
+peak-at: ( quot depth: fixnum -- peak: fixnum ) [ [ in-own-task ] dip - ] ;
+
+\\ Prints one labelled reading.
+report: ( value label -- ) [ print " " print . ] ;
+
+\\ Prints the four peaks and the three slopes between them.
+report-slopes: ( p8: fixnum p16: fixnum p24: fixnum p32: fixnum -- ) [
+  bind-inputs
+  p8 "peak@8" report
+  p16 "peak@16" report
+  p24 "peak@24" report
+  p32 "peak@32" report
+
+  p16 p8 - 8 / "slope 8->16" report
+  p32 p24 - 8 / "slope 24->32" report
+  p32 p8 - 24 / "slope 8->32" report
+] ;
+
+[ c8 ] 8 peak-at
+[ c16 ] 16 peak-at
+[ c24 ] 24 peak-at
+[ c32 ] 32 peak-at
+report-slopes
