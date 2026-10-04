@@ -48,13 +48,10 @@ private{
 
 \\ Validate r/g/b/a are each in [0, 255] and construct a color.
 <color>: ( r: fixnum g: fixnum b: fixnum a: fixnum -- color ) [
-  ca: swap ;
-  cb: swap ;
-  cg: swap ;
-  cr: swap ;
-  cr (byte-range?) cg (byte-range?) and cb (byte-range?) and ca (byte-range?) and
+  bind-inputs
+  r (byte-range?) g (byte-range?) and b (byte-range?) and a (byte-range?) and
   not [ f "<color> components must be in [0, 255]" EInvalidArgument make-error throw ] when
-  cr cg cb ca make-color
+  r g b a make-color
 ] ;
 
 \\ Validate width/height are non-negative and pixels' length matches width * height * 4
