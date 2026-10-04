@@ -469,17 +469,148 @@ pub fn getCoroUserData(co: CoroPtr) ?*anyopaque {
 
 /// Initialize a minicoro coroutine for a task.
 ///
-/// The entry function receives the mco_coro pointer and reads the task from
-/// user_data. stack_size controls the OS stack for coroutine execution.
+/// The entry function receives the mco_coro pointer and reads the task from user_data. The
+/// coroutine's stack is `cfg.cap` bytes of reserved address space, of which only the top `cfg.base`
+/// is committed. `co.stack_size` reports the whole reservation.
 pub fn initCoroContext(
     task: *Task,
     entry_fn: CoroEntryFn,
-    stack_size: usize,
+    cfg: *const TaskStackConfig,
 ) !void {
-    var desc = mc.mco_desc_init(entry_fn, stack_size);
+    var desc = mc.mco_desc_init(entry_fn, cfg.cap);
     desc.user_data = task;
+    if (comptime !is_freestanding) {
+        desc.alloc_cb = &reservingAlloc;
+        desc.dealloc_cb = &reservingDealloc;
+        desc.allocator_data = @constCast(cfg);
+    }
+
     const result = mc.mco_create(&task.coro, &desc);
     if (result != mc.MCO_SUCCESS) return error.CoroCreationFailed;
+
+    if (comptime !is_freestanding) assertMetadataCommitted(task.coro.?, desc.coro_size, cfg);
+}
+
+/// The geometry of a task's native stack: how much address space to reserve, and how much of it
+/// to commit up front.
+pub const TaskStackConfig = struct {
+    /// Bytes reserved as minicoro's stack. A task can never run deeper than this.
+    cap: usize,
+    /// Bytes committed at the top of the reservation when the task is created.
+    base: usize,
+};
+
+/// Where the protection boundaries fall inside one reserved coroutine block.
+///
+/// Addresses ascend left to right:
+///
+///     [coro][ctx][storage] |guard| ...... PROT_NONE ...... | committed base |
+///     ^ block      meta_end ^     ^ guard_end   base_low ^      block_end ^
+///
+/// `[block, meta_end)` and `[base_low, block_end)` are read-write. Everything between them is
+/// `PROT_NONE`. The single page at `[meta_end, guard_end)` stays `PROT_NONE` for the task's life,
+/// so a frame that leaps past the software guard faults instead of overwriting the coroutine
+/// struct.
+pub const TaskStackLayout = struct {
+    meta_end: usize,
+    guard_end: usize,
+    base_low: usize,
+    block_end: usize,
+};
+
+/// Compute the protection boundaries for a block of `coro_size` bytes at `block`, as minicoro
+/// requested it for a stack of `cfg.cap` bytes. Returns null when the metadata, the guard page,
+/// and the committed base cannot all fit.
+///
+/// The callback has to commit minicoro's metadata before minicoro has said where it ends.
+/// `coro_size - cap` is minicoro's own allowance for everything that is not stack, so it bounds the
+/// metadata from above without restating minicoro's layout.
+///
+/// The stack starts at or above `block`, so its top `base` bytes start at or above
+/// `block + cap - base`. Committing down to there covers them wherever minicoro places the stack
+/// within its allowance, at the cost of at most the metadata size plus a page.
+pub fn taskStackLayout(block: usize, coro_size: usize, cfg: TaskStackConfig, page: usize) ?TaskStackLayout {
+    if (coro_size < cfg.cap or cfg.cap < cfg.base) return null;
+
+    const meta_end = std.mem.alignForward(usize, block + (coro_size - cfg.cap), page);
+    const guard_end = meta_end + page;
+    const base_low = std.mem.alignBackward(usize, block + cfg.cap - cfg.base, page);
+    const block_end = block + std.mem.alignForward(usize, coro_size, page);
+
+    if (guard_end > base_low) return null;
+
+    return .{
+        .meta_end = meta_end,
+        .guard_end = guard_end,
+        .base_low = base_low,
+        .block_end = block_end,
+    };
+}
+
+/// minicoro `alloc_cb` for task coroutines. Reserves the whole block `PROT_NONE`, then commits the
+/// metadata at the low end and the base stack at the high end.
+///
+/// Returning null makes `mco_create` report `MCO_OUT_OF_MEMORY`.
+fn reservingAlloc(size: usize, allocator_data: ?*anyopaque) callconv(.c) ?*anyopaque {
+    const cfg: *const TaskStackConfig = @ptrCast(@alignCast(allocator_data orelse return null));
+    const page = std.heap.pageSize();
+
+    const mem = std.posix.mmap(
+        null,
+        std.mem.alignForward(usize, size, page),
+        std.posix.PROT.NONE,
+        .{ .TYPE = .PRIVATE, .ANONYMOUS = true },
+        -1,
+        0,
+    ) catch return null;
+
+    const block = @intFromPtr(mem.ptr);
+    const layout = taskStackLayout(block, size, cfg.*, page) orelse {
+        std.posix.munmap(mem);
+        return null;
+    };
+
+    const rw = std.posix.PROT.READ | std.posix.PROT.WRITE;
+    std.posix.mprotect(mem[0 .. layout.meta_end - block], rw) catch {
+        std.posix.munmap(mem);
+        return null;
+    };
+    std.posix.mprotect(@alignCast(mem[layout.base_low - block ..]), rw) catch {
+        std.posix.munmap(mem);
+        return null;
+    };
+
+    return mem.ptr;
+}
+
+/// minicoro `dealloc_cb` paired with `reservingAlloc`. Unmaps the whole reservation whatever its
+/// protection.
+fn reservingDealloc(ptr: ?*anyopaque, size: usize, allocator_data: ?*anyopaque) callconv(.c) void {
+    _ = allocator_data;
+    const base: [*]align(std.heap.page_size_min) u8 = @ptrCast(@alignCast(ptr orelse return));
+    std.posix.munmap(base[0..std.mem.alignForward(usize, size, std.heap.pageSize())]);
+}
+
+/// Debug-only check that minicoro laid the coroutine out inside the spans `reservingAlloc`
+/// committed.
+///
+/// Invariant: the coroutine struct, its context, and its storage end at or below `meta_end`, and the
+/// top `cfg.base` bytes of the stack lie inside the committed base. `taskStackLayout` derives both
+/// spans from `coro_size` alone, before minicoro has placed anything. A minicoro whose metadata
+/// outgrew `coro_size - cap`, or that placed the stack elsewhere, would fault on first touch rather
+/// than here.
+fn assertMetadataCommitted(co: *mc.mco_coro, coro_size: usize, cfg: *const TaskStackConfig) void {
+    if (comptime builtin.mode != .Debug) return;
+
+    const block = @intFromPtr(co);
+    const layout = taskStackLayout(block, coro_size, cfg.*, std.heap.pageSize()).?;
+    const stack_base = @intFromPtr(co.stack_base);
+    const stack_top = stack_base + co.stack_size;
+
+    std.debug.assert(stack_base <= layout.meta_end);
+    std.debug.assert(co.stack_size == cfg.cap);
+    std.debug.assert(stack_top - cfg.base >= layout.base_low);
+    std.debug.assert(stack_top <= layout.block_end);
 }
 
 /// Allocate a native stack for a parser coroutine using mmap with a guard page.
@@ -791,4 +922,64 @@ test "foldAndBoxTaskError returns null with nothing to box" {
     defer ctx.deinit();
 
     try std.testing.expect(foldAndBoxTaskError(&ctx, error.TypeMismatch) == null);
+}
+
+test "taskStackLayout commits the metadata and the base around a one-page guard" {
+    const cfg = TaskStackConfig{ .cap = 16 * 1024 * 1024, .base = 768 * 1024 };
+    const metadata = 1536;
+    const coro_size = metadata + cfg.cap;
+
+    for ([_]usize{ 4096, 16384 }) |page| {
+        const block: usize = 64 * page;
+        const layout = taskStackLayout(block, coro_size, cfg, page).?;
+
+        try std.testing.expect(layout.meta_end >= block + metadata);
+        try std.testing.expectEqual(@as(usize, 0), layout.meta_end % page);
+        try std.testing.expectEqual(layout.meta_end + page, layout.guard_end);
+        try std.testing.expect(layout.guard_end <= layout.base_low);
+
+        // The stack's top `base` bytes are committed wherever minicoro starts the stack within
+        // its metadata allowance.
+        try std.testing.expect(layout.base_low <= block + cfg.cap - cfg.base);
+        try std.testing.expect(layout.block_end >= block + coro_size);
+        try std.testing.expectEqual(@as(usize, 0), layout.block_end % page);
+    }
+}
+
+test "taskStackLayout refuses a cap too small for the metadata, guard, and base" {
+    const page = 16384;
+    const cfg = TaskStackConfig{ .cap = 768 * 1024, .base = 768 * 1024 };
+
+    try std.testing.expect(taskStackLayout(64 * page, 1536 + cfg.cap, cfg, page) == null);
+    try std.testing.expect(taskStackLayout(64 * page, cfg.cap - 1, cfg, page) == null);
+}
+
+fn noopCoroEntry(co: CoroPtr) callconv(.c) void {
+    _ = co;
+}
+
+test "reserving allocator sizes the coroutine stack to the cap and commits its base" {
+    if (comptime is_freestanding) return error.SkipZigTest;
+
+    const cfg = TaskStackConfig{ .cap = 16 * 1024 * 1024, .base = 768 * 1024 };
+    var desc = mc.mco_desc_init(&noopCoroEntry, cfg.cap);
+    desc.alloc_cb = &reservingAlloc;
+    desc.dealloc_cb = &reservingDealloc;
+    desc.allocator_data = @constCast(&cfg);
+
+    var co: ?*mc.mco_coro = null;
+    try std.testing.expectEqual(@as(c_uint, mc.MCO_SUCCESS), mc.mco_create(&co, &desc));
+    assertMetadataCommitted(co.?, desc.coro_size, &cfg);
+
+    try std.testing.expectEqual(cfg.cap, co.?.stack_size);
+
+    const stack_top = @intFromPtr(co.?.stack_base) + co.?.stack_size;
+    const top: *volatile u8 = @ptrFromInt(stack_top - 1);
+    const base_low: *volatile u8 = @ptrFromInt(stack_top - cfg.base);
+    top.* = 0xa5;
+    base_low.* = 0x5a;
+    try std.testing.expectEqual(@as(u8, 0xa5), top.*);
+    try std.testing.expectEqual(@as(u8, 0x5a), base_low.*);
+
+    try std.testing.expectEqual(@as(c_uint, mc.MCO_SUCCESS), mc.mco_destroy(co));
 }

@@ -30,11 +30,14 @@ const container_limits = @import("../container_limits.zig");
 // error object after detecting that a task exhausted its native stack.
 // The reserve must exceed the largest single Zig frame in the recursive
 // execution path (executeInstructions + executeQuotationWithPic) so the 1z
-// overflow check always fires before the OS guard page is reached. Debug
-// builds have larger frames, so we use 1/8 of the total stack as the reserve
+// overflow check always fires before the uncommitted span is reached. Debug
+// builds have larger frames, so we use 1/8 of the base as the reserve
 // rather than a fixed byte count.
-const task_stack_size: usize = 768 * 1024;
-const task_stack_reserve: usize = task_stack_size / 8;
+const task_stack = task_mod.TaskStackConfig{
+    .cap = 16 * 1024 * 1024,
+    .base = 768 * 1024,
+};
+const task_stack_reserve: usize = task_stack.base / 8;
 
 const RegistryEntry = @import("types.zig").RegistryEntry;
 
@@ -111,13 +114,14 @@ fn allocateTaskWithEntry(
         .callable = callable,
     };
 
-    try task_mod.initCoroContext(task, entry_fn, task_stack_size);
+    try task_mod.initCoroContext(task, entry_fn, &task_stack);
     errdefer task_mod.coroDestroy(task);
 
+    // The guard reads the committed base, not the reservation: below `stack_low` is `PROT_NONE`.
     const coro = task.coro.?;
     task_ctx.stack_high = @intFromPtr(coro.stack_base) + coro.stack_size;
-    task_ctx.stack_low = @intFromPtr(coro.stack_base);
-    task_ctx.stack_limit = @intFromPtr(coro.stack_base) + task_stack_reserve;
+    task_ctx.stack_low = task_ctx.stack_high - task_stack.base;
+    task_ctx.stack_limit = task_ctx.stack_low + task_stack_reserve;
 
     try scheduler.trackTask(task);
     return task;
