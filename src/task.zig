@@ -716,26 +716,40 @@ pub fn taskStackGrowth(
 
 /// Commit the span `growth` names read-write. Residency is untouched: the pages still fault in on
 /// first touch.
+///
+/// A span already committed was released since, so it is only handed back for reuse. macOS needs
+/// `MADV_FREE_REUSE` to count the span in the task's footprint again once it is touched. Linux
+/// needs nothing.
 pub fn commitTaskStackGrowth(growth: TaskStackGrowth) !void {
     if (comptime is_freestanding) return error.Unsupported;
-    if (growth.committed) return;
 
     const low: [*]align(std.heap.page_size_min) u8 = @ptrFromInt(growth.commit_low);
-    try std.posix.mprotect(low[0 .. growth.commit_high - growth.commit_low], std.posix.PROT.READ | std.posix.PROT.WRITE);
+    const len = growth.commit_high - growth.commit_low;
+
+    if (growth.committed) {
+        // The advice only corrects accounting, and the span is usable either way, so a failure
+        // must not turn into a stack overflow.
+        if (comptime builtin.os.tag.isDarwin()) std.posix.madvise(low, len, std.posix.MADV.FREE_REUSE) catch {};
+        return;
+    }
+
+    try std.posix.mprotect(low[0..len], std.posix.PROT.READ | std.posix.PROT.WRITE);
 }
 
 /// Drop the residency of the span `growth` committed, leaving it read-write. A page touched again
 /// faults back in.
 ///
-/// Linux zero-fills a released page on its next touch. macOS's `MADV_FREE` lets the kernel reclaim
-/// the page lazily and makes no promise about its contents.
+/// Linux zero-fills a released page on its next touch. macOS's `MADV_FREE_REUSABLE` lets the
+/// kernel reclaim the page lazily and makes no promise about its contents. Unlike `MADV_FREE`, it
+/// takes the span out of the task's footprint at once. A later growth advises `MADV_FREE_REUSE` to
+/// pair with it.
 ///
 /// Either is safe, because the caller releases only from a frame back on the base, and nothing
 /// live sits below it.
 pub fn releaseTaskStackGrowth(growth: TaskStackGrowth) !void {
     if (comptime is_freestanding) return error.Unsupported;
 
-    const advice = if (comptime builtin.os.tag.isDarwin()) std.posix.MADV.FREE else std.posix.MADV.DONTNEED;
+    const advice = if (comptime builtin.os.tag.isDarwin()) std.posix.MADV.FREE_REUSABLE else std.posix.MADV.DONTNEED;
     const low: [*]align(std.heap.page_size_min) u8 = @ptrFromInt(growth.commit_low);
     try std.posix.madvise(low, growth.commit_high - growth.commit_low, advice);
 }
@@ -1214,8 +1228,8 @@ test "a park back at the base releases a grown task's deep pages and re-arms the
     try std.testing.expectEqual(growth.base_limit, ctx.stack_limit);
     try std.testing.expectEqual(growth.stack_limit, ctx.stack_floor);
 
-    // Linux zero-fills a released page on its next touch. `MADV_FREE` promises nothing about the
-    // contents, only that the page stays writable.
+    // Linux zero-fills a released page on its next touch. `MADV_FREE_REUSABLE` promises nothing
+    // about the contents, only that the page stays writable.
     if (comptime builtin.os.tag == .linux) try std.testing.expectEqual(@as(u8, 0), deep.*);
     deep.* = 0x5a;
     try std.testing.expectEqual(@as(u8, 0x5a), deep.*);

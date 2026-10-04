@@ -1,0 +1,11 @@
+Task stack residency
+binary=./zig-out/release/bin/1z   baseline=zig-out/wt-a3e8b197/zig-out/release/bin/1z   os=Darwin   mode=--compile=off
+
+build      mode           n   rss_KiB/task  footprint_KiB/t  mappings/task  peak0_MiB   peak_MiB
+---------- --------- ------ -------------- ---------------- -------------- ---------- ----------
+baseline   idle        1000          107.8            108.2            0.2        9.3      114.9
+candidate  idle        1000          104.5            112.5            3.0        9.3      119.2
+candidate  deep          32         2672.0           2679.5            4.2        9.3       93.0
+candidate  released      32         2632.0            849.1            4.1        9.3       53.4
+candidate  regrown       32         2674.0           2681.7            4.2        9.3       93.1
+candidate  runaway        8        15056.0           1472.2            4.6        9.3      124.7

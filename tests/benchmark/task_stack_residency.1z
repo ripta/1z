@@ -1,0 +1,68 @@
+\ Task stack residency probe for scripts/benchmark-task-stack-residency.sh.
+\
+\ Usage: 1z run --compile=off tests/benchmark/task_stack_residency.1z MODE N [DEPTH]
+\
+\ A scope body spawns N children, which all end up parked in `sleep` at the same time. Each child
+\ signals the body just before it parks. The body prints `ready` once all N have signalled, and the
+\ script samples the process's resident memory and mapping count while they are still parked. The
+\ modes differ only in where each child is when it parks:
+\
+\ - idle: at its entry, so it never leaves the base stack.
+\ - deep: DEPTH levels down, so it holds a grown stack.
+\ - released: back at its entry after descending DEPTH levels, so the park releases the deep pages.
+\ - regrown: DEPTH levels down again after a release, so the stack has grown back over the pages
+\   the release gave up.
+\ - runaway: back at its entry after overflowing at the cap, so the park releases the deepest
+\   stack a task can hold.
+
+use "conversions" ;
+use "time" ;
+
+\\ How long a child stays parked. The script samples inside this window.
+hold-ms: const [ 4000 ] ;
+
+\\ How long the body stays alive after reporting ready. It keeps a run with no children sampleable,
+\\ and it ends before any child stops holding.
+window-ms: const [ 2000 ] ;
+
+args: command-line-args ;
+mode: args 0 #nth ;
+task-count: args 1 #nth parse-integer ;
+depth: args #len 2 > [ args 2 #nth parse-integer ] [ 0 ] if ;
+
+\\ Signals the body on `ch` that this child has reached its park, then parks.
+park: ( ch -- ) [ t swap send hold-ms milliseconds sleep ] ;
+
+\\ Descends `n` levels, parks at the bottom, and climbs back out.
+dive: stack-recursive ( ch n -- ch n ) [ dup 0 > [ 1 - dive 1 + ] [ over park ] if ] ;
+
+\\ Descends `n` levels and climbs back out without parking.
+descend: stack-recursive ( n -- n ) [ dup 0 > [ 1 - descend 1 + ] [ ] if ] ;
+
+\\ Recurses with no base case until the guard raises at the cap.
+runaway: stack-recursive ( n -- n ) [ 1 + runaway 1 + ] ;
+
+\\ The body each child runs for `mode`, signalling on `ch` when it parks.
+child-body: ( ch mode depth -- quot ) [
+  swap
+  {
+    { "idle" [ drop [ park ] curry ] }
+    { "deep" [ [ dive 2drop ] curry curry ] }
+    { "released" [ [ descend drop park ] curry curry ] }
+    { "regrown" [ [ dup descend drop 10 milliseconds sleep dive 2drop ] curry curry ] }
+    { "runaway" [ drop [ [ 0 runaway drop ] [ drop ] recover park ] curry ] }
+  }
+  case
+] ;
+
+[
+  \ One slot per child, so no child blocks on its signal.
+  task-count 1 + <buffered-channel>
+
+  dup mode depth child-body
+  task-count [ dup spawn drop ] times drop
+
+  task-count [ dup receive drop ] times drop
+  "ready" print-line
+  window-ms milliseconds sleep
+] task-scope

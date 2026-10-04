@@ -828,6 +828,11 @@ benchmark-retention: release ## Record the transient-value retention probe table
 	@scripts/benchmark-retention-probes.sh ./$(RELEASE_PREFIX)/bin/1z 500000 > tests/benchmark/retention_probes.sample
 	@cat tests/benchmark/retention_probes.sample
 
+# BASELINE, when set, is a 1z binary without task stack growth, and adds its idle row for comparison.
+benchmark-task-stack-residency: release ## Record task stack residency and mapping count, optionally against BASELINE=<path-to-1z>
+	@scripts/benchmark-task-stack-residency.sh ./$(RELEASE_PREFIX)/bin/1z $(BASELINE) > tests/benchmark/task_stack_residency.sample
+	@cat tests/benchmark/task_stack_residency.sample
+
 benchmark-task-shapes: release ## Record the task-shape body-entry samples: first-visit cost and its steady-state control
 	@scripts/benchmark-task-shape.sh ./$(RELEASE_PREFIX)/bin/1z 7 \
 		tests/benchmark/task_body_entry.1z auto 1 > tests/benchmark/task_body_entry.sample
