@@ -1,0 +1,5 @@
+Stack: [ ]
+Stack: [ ]
+PASS: a compiled recursion in a task still overflows
+PASS: the task grew to its cap before overflowing
+Stack: [ ]

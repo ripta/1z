@@ -613,6 +613,47 @@ fn assertMetadataCommitted(co: *mc.mco_coro, coro_size: usize, cfg: *const TaskS
     std.debug.assert(stack_top <= layout.block_end);
 }
 
+/// What a task's stack becomes when it grows: the span to commit, and the bounds the guard is
+/// re-armed over afterward.
+///
+/// `[commit_low, commit_high)` is everything between the permanent guard page and the committed
+/// base. `stack_low` is the bottom of the whole reservation, so the grown stack's size is the cap.
+pub const TaskStackGrowth = struct {
+    commit_low: usize,
+    commit_high: usize,
+    stack_low: usize,
+    stack_limit: usize,
+};
+
+/// The growth for a coroutine `reservingAlloc` laid out under `cfg`, holding `reserve` bytes back
+/// above the bottom of the reservation as the grown guard's reserve.
+pub fn taskStackGrowth(co: *mc.mco_coro, cfg: *const TaskStackConfig, reserve: usize) TaskStackGrowth {
+    const layout = taskStackLayout(@intFromPtr(co), co.coro_size, cfg.*, std.heap.pageSize()).?;
+    const stack_low = @intFromPtr(co.stack_base);
+
+    const growth = TaskStackGrowth{
+        .commit_low = layout.guard_end,
+        .commit_high = layout.base_low,
+        .stack_low = stack_low,
+        .stack_limit = stack_low + reserve,
+    };
+
+    // The grown guard has to fire while the frame is still inside the span this growth commits,
+    // or the reserve would sit over the permanent guard page.
+    std.debug.assert(growth.commit_low < growth.stack_limit);
+    std.debug.assert(growth.stack_limit < growth.commit_high);
+    return growth;
+}
+
+/// Commit the span `growth` names read-write. Residency is untouched: the pages still fault in on
+/// first touch.
+pub fn commitTaskStackGrowth(growth: TaskStackGrowth) !void {
+    if (comptime is_freestanding) return error.Unsupported;
+
+    const low: [*]align(std.heap.page_size_min) u8 = @ptrFromInt(growth.commit_low);
+    try std.posix.mprotect(low[0 .. growth.commit_high - growth.commit_low], std.posix.PROT.READ | std.posix.PROT.WRITE);
+}
+
 /// Allocate a native stack for a parser coroutine using mmap with a guard page.
 /// Returns the full allocation of guard plus usable.
 ///
@@ -982,4 +1023,47 @@ test "reserving allocator sizes the coroutine stack to the cap and commits its b
     try std.testing.expectEqual(@as(u8, 0x5a), base_low.*);
 
     try std.testing.expectEqual(@as(c_uint, mc.MCO_SUCCESS), mc.mco_destroy(co));
+}
+
+test "a task's guard grows its stack once, then raises only at or below the grown limit" {
+    if (comptime is_freestanding) return error.SkipZigTest;
+
+    const cfg = TaskStackConfig{ .cap = 16 * 1024 * 1024, .base = 768 * 1024 };
+    var desc = mc.mco_desc_init(&noopCoroEntry, cfg.cap);
+    desc.alloc_cb = &reservingAlloc;
+    desc.dealloc_cb = &reservingDealloc;
+    desc.allocator_data = @constCast(&cfg);
+
+    var co: ?*mc.mco_coro = null;
+    try std.testing.expectEqual(@as(c_uint, mc.MCO_SUCCESS), mc.mco_create(&co, &desc));
+    defer _ = mc.mco_destroy(co);
+
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const growth = taskStackGrowth(co.?, &cfg, cfg.cap / 8);
+    ctx.stack_high = @intFromPtr(co.?.stack_base) + co.?.stack_size;
+    ctx.stack_low = ctx.stack_high - cfg.base;
+    ctx.stack_limit = ctx.stack_low + cfg.base / 8;
+    ctx.stack_growth = growth;
+
+    const base_limit = ctx.stack_limit;
+    try std.testing.expect(!ctx.stackExhausted(base_limit + 1));
+    try std.testing.expectEqual(base_limit, ctx.stack_limit);
+
+    try std.testing.expect(!ctx.stackExhausted(base_limit));
+    try std.testing.expectEqual(growth.stack_limit, ctx.stack_limit);
+    try std.testing.expectEqual(growth.stack_low, ctx.stack_low);
+    try std.testing.expectEqual(@as(?TaskStackGrowth, null), ctx.stack_growth);
+    try std.testing.expectEqual(cfg.cap - cfg.cap / 8, ctx.stack_high - ctx.stack_limit);
+
+    const low: *volatile u8 = @ptrFromInt(growth.commit_low);
+    const high: *volatile u8 = @ptrFromInt(growth.commit_high - 1);
+    low.* = 0xa5;
+    high.* = 0x5a;
+    try std.testing.expectEqual(@as(u8, 0xa5), low.*);
+    try std.testing.expectEqual(@as(u8, 0x5a), high.*);
+
+    try std.testing.expect(ctx.stackExhausted(growth.stack_limit));
+    try std.testing.expectEqual(growth.stack_limit, ctx.stack_limit);
 }

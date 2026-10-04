@@ -1,0 +1,18 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+=== parking at depth ===
+Stack: [ ]
+PASS: the stack grew past its base
+PASS: await returns a child's result
+PASS: receive takes a child's send
+PASS: a pipe read takes a child's write
+Stack: [ ]
+=== overflow at the cap ===
+Stack: [ ]
+PASS: a grown task still overflows
+PASS: the guard fired at the cap, not the base
+PASS: the budget after growing is the cap's
+Stack: [ ]

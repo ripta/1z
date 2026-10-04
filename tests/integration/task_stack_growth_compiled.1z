@@ -1,0 +1,19 @@
+\ Test that a compiled recursion in a task grows the task's stack instead of overflowing at its
+\ base. Compiled code checks its own copy of the stack limit, so the growth has to reach that copy.
+
+use "testing" ;
+
+\ Grown, a task's stack is 16 MiB with an eighth held back as the guard's reserve.
+GROWN-BUDGET: const [ 14680064 ] ;
+
+deep: stack-recursive ( n -- n ) [ dup 0 > [ 1 - deep 1 + ] [ ] if ] ;
+
+[
+  [
+    [ 1000000000 deep drop ok: ] [ error-type: @get ] recover
+    stack-budget? 2 array-n
+  ] spawn await
+
+  dup 0 #nth stack-overflow: "a compiled recursion in a task still overflows" assert=
+  1 #nth GROWN-BUDGET "the task grew to its cap before overflowing" assert=
+] task-scope

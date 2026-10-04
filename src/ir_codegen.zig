@@ -10344,10 +10344,12 @@ pub const JitContext = extern struct {
     capacity: usize,
     ctx: *anyopaque,
     trampoline_target: u32 = 0,
-    /// The lowest native stack address compiled code may enter a word at, copied from the
-    /// executing context's guard. `jitEntryCheck` raises `stack-overflow` below it, and `0`
+    /// A copy of the executing context's guard limit, taken when the run enters compiled code. `0`
     /// disarms the check. It has no default, so no construction site can leave it unarmed by
     /// omission.
+    ///
+    /// The context's own limit is authoritative. A growth moves it below this copy, and
+    /// `jitEntryCheck` then refreshes the copy rather than raising.
     stack_limit: usize,
 };
 
@@ -17787,6 +17789,22 @@ export fn jitRefreshStack(jit_ctx_raw: usize) callconv(.c) i32 {
     return 0;
 }
 
+/// Whether a frame at `sp`, at or below the compiled run's copy of the stack limit, still fits once
+/// the executing context has grown its stack.
+///
+/// The copy is taken when the run enters compiled code. A growth since then, here or in interpreted
+/// code nested under this run, leaves it above the context's own limit, so it is refreshed.
+fn jitStackStillFits(jc: *JitContext, sp: usize) bool {
+    @branchHint(.cold);
+    const ctx_raw: usize = @intFromPtr(jc.ctx);
+    if (ctx_raw == 0 or ctx_raw % @alignOf(Context) != 0) return false;
+    const ctx: *Context = @ptrCast(@alignCast(jc.ctx));
+
+    if (ctx.stackExhausted(sp)) return false;
+    jc.stack_limit = ctx.stack_limit;
+    return true;
+}
+
 fn raiseJitStackOverflow(jc: *JitContext, sp: usize) i32 {
     @branchHint(.cold);
     const ctx_raw: usize = @intFromPtr(jc.ctx);
@@ -17799,10 +17817,12 @@ fn raiseJitStackOverflow(jc: *JitContext, sp: usize) i32 {
 
 /// The check every compiled word and compiled quotation makes on entry, from its prologue.
 ///
-/// It raises `stack-overflow` when the native stack is below `jc.stack_limit`. A compiled word
-/// calling a compiled word never passes through the interpreter's guard, so without this a
-/// compiled recursion runs into the OS guard page. The frame measured is this helper's own, one
-/// call below the word's, which errs on the early side.
+/// It raises `stack-overflow` once the executing context cannot grow its stack past the frame. A
+/// frame below `jc.stack_limit` first lets the context grow, or refreshes a stale copy.
+///
+/// A compiled word calling a compiled word never passes through the interpreter's guard, so
+/// without this a compiled recursion runs into the OS guard page. The frame measured is this
+/// helper's own, one call below the word's, which errs on the early side.
 ///
 /// It then grows ctx.stack to at least `needed` slots and refreshes the JitContext fields. A
 /// compiled-to-compiled call bypasses `executeCompiled`'s capacity reservation, so each entry
@@ -17811,7 +17831,9 @@ export fn jitEntryCheck(jit_ctx_raw: usize, needed: usize) callconv(.c) i32 {
     if (jit_ctx_raw == 0) return 2;
     const jc: *JitContext = @ptrFromInt(jit_ctx_raw);
     const sp = @frameAddress();
-    if (sp <= jc.stack_limit) return raiseJitStackOverflow(jc, sp);
+    if (sp <= jc.stack_limit) {
+        if (!jitStackStillFits(jc, sp)) return raiseJitStackOverflow(jc, sp);
+    }
 
     // Fast path: capacity already suffices, so there is nothing to do and
     // ctx does not need to be dereferenced. This keeps unit tests that pass
@@ -19052,6 +19074,27 @@ test "jitEntryCheck: a frame at or below the stack limit raises stack-overflow" 
 
     ctx.stack_high = @frameAddress() + 4096;
     ctx.stack_low = @frameAddress() - 4096;
+    ctx.stack_limit = std.math.maxInt(usize);
+    var jit_ctx = JitContext{
+        .items_ptr = ctx.stack.items.items.ptr,
+        .sp_ptr = &ctx.stack.items.items.len,
+        .capacity = ctx.stack.items.capacity,
+        .ctx = &ctx,
+        .stack_limit = ctx.stack_limit,
+    };
+
+    try testing.expectEqual(@as(i32, 2), jitEntryCheck(@intFromPtr(&jit_ctx), 0));
+    try testing.expectEqual(error.StackOverflow, ctx.jit_pending_error.?);
+    try testing.expect(std.mem.startsWith(u8, ctx.pending_error_message.?, "stack overflow: "));
+}
+
+test "jitEntryCheck: a copied limit the context has since grown past is refreshed, not raised" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    ctx.stack_high = @frameAddress() + 4096;
+    ctx.stack_low = 1;
+    ctx.stack_limit = 1;
     var jit_ctx = JitContext{
         .items_ptr = ctx.stack.items.items.ptr,
         .sp_ptr = &ctx.stack.items.items.len,
@@ -19060,9 +19103,9 @@ test "jitEntryCheck: a frame at or below the stack limit raises stack-overflow" 
         .stack_limit = std.math.maxInt(usize),
     };
 
-    try testing.expectEqual(@as(i32, 2), jitEntryCheck(@intFromPtr(&jit_ctx), 0));
-    try testing.expectEqual(error.StackOverflow, ctx.jit_pending_error.?);
-    try testing.expect(std.mem.startsWith(u8, ctx.pending_error_message.?, "stack overflow: "));
+    try testing.expectEqual(@as(i32, 0), jitEntryCheck(@intFromPtr(&jit_ctx), 0));
+    try testing.expectEqual(@as(?anyerror, null), ctx.jit_pending_error);
+    try testing.expectEqual(ctx.stack_limit, jit_ctx.stack_limit);
 }
 
 test "jitEntryCheck: a zero stack limit disarms the check" {

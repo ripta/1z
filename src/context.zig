@@ -44,6 +44,7 @@ const call_graph_mod = @import("call_graph.zig");
 const bail_stats_mod = @import("bail_stats.zig");
 const scheduler_mod = @import("scheduler.zig");
 const Scheduler = scheduler_mod.Scheduler;
+const task_mod = @import("task.zig");
 const WorkerPool = @import("worker.zig").WorkerPool;
 const Tokenizer = @import("tokenizer.zig").Tokenizer;
 const types_mod = @import("primitives/types.zig");
@@ -1433,6 +1434,10 @@ pub const Context = struct {
     /// Low bound of the usable native stack region the guard was armed over. Only the overflow
     /// message reads it, to report the stack's size.
     stack_low: usize = 0,
+    /// How this stack grows the first time a frame reaches `stack_limit`. Only a task's stack can
+    /// grow, and only once, so this is null on the main thread, while the parser coroutine runs, and
+    /// after the growth has happened.
+    stack_growth: ?task_mod.TaskStackGrowth = null,
     /// Parent context for dictionary and dispatch table lookup chaining.
     /// Task contexts walk this chain to find words and methods defined in
     /// ancestor scopes, up to the root context which holds primitives and
@@ -1849,6 +1854,24 @@ pub const Context = struct {
             "stack overflow: {} bytes used, guard limit {}, stack size {}",
             .{ used, limit, size },
         ) catch "stack overflow";
+    }
+
+    /// Whether a frame at `sp` is past the guard once the stack has grown as far as it can.
+    ///
+    /// The first frame to reach a task's `stack_limit` commits the rest of its reservation and moves
+    /// `stack_low` and `stack_limit` to the grown bounds, so only the cap raises. A failed commit
+    /// leaves the bounds where they were and reports the frame as exhausted, so the guard raises
+    /// `stack-overflow`.
+    pub fn stackExhausted(self: *Context, sp: usize) bool {
+        if (sp > self.stack_limit) return false;
+
+        const growth = self.stack_growth orelse return true;
+        task_mod.commitTaskStackGrowth(growth) catch return true;
+
+        self.stack_growth = null;
+        self.stack_low = growth.stack_low;
+        self.stack_limit = growth.stack_limit;
+        return sp <= self.stack_limit;
     }
 
     /// Create a lightweight Context for a spawned task. Primitives and the prelude are not
@@ -9711,7 +9734,7 @@ pub const Context = struct {
                         }
                     }
                 }
-                if (sp <= self.stack_limit) {
+                if (sp <= self.stack_limit and self.stackExhausted(sp)) {
                     self.pending_error_message = self.stackOverflowMessage(sp);
                     return self.wordErrorCleanup(name, error.StackOverflow);
                 }
@@ -10858,6 +10881,19 @@ test "stackOverflowMessage names bytes used, the guard limit, and the stack size
         "stack overflow: 688720 bytes used, guard limit 688128, stack size 786432",
         msg,
     );
+}
+
+test "stackExhausted raises at the limit of a stack with no growth left" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    ctx.stack_low = 0x10_0000;
+    ctx.stack_limit = 0x10_0000 + 98304;
+    ctx.stack_high = 0x10_0000 + 786432;
+
+    try std.testing.expect(!ctx.stackExhausted(ctx.stack_limit + 1));
+    try std.testing.expect(ctx.stackExhausted(ctx.stack_limit));
+    try std.testing.expectEqual(@as(usize, 0x10_0000 + 98304), ctx.stack_limit);
 }
 
 test "quotation allocator frees on deinit" {

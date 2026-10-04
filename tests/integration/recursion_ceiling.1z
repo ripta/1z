@@ -9,6 +9,9 @@
 \ when the guard fires. The task row subtracts its `task-stack-peak` baseline first. The main task
 \ has no baseline reading, so its row is an upper bound. The rows are banded separately.
 \
+\ A task's stack grows the first time the guard fires, so its budget is read after the overflow.
+\ Read before, it would be the budget of the stack the task started with.
+\
 \ Each band is 25% either side of the quotient measured when it was set. A failure reports the
 \ quotient, the budget, and the depth, so a deliberate change can read its new band off the output.
 
@@ -56,8 +59,10 @@ test-main-task: ( -- ) [
 record-task-readings: ( -- ) [
   [
     [
-      TASK-READINGS task-stack-peak #push! stack-budget? #push! drop
-      levels-reached [ TASK-READINGS swap #push! ] dip #push! drop
+      TASK-READINGS task-stack-peak #push! drop
+      levels-reached
+      TASK-READINGS stack-budget? #push! drop
+      [ TASK-READINGS swap #push! ] dip #push! drop
     ] spawn await drop
   ] task-scope
 ] ;

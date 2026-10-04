@@ -39,6 +39,10 @@ const task_stack = task_mod.TaskStackConfig{
 };
 const task_stack_reserve: usize = task_stack.base / 8;
 
+// Once grown, the reserve is an eighth of the cap. That is the main thread's own proportion, so a
+// grown task overflows at the same threshold the main thread does.
+const task_stack_grown_reserve: usize = task_stack.cap / 8;
+
 const RegistryEntry = @import("types.zig").RegistryEntry;
 
 pub const registry_entries = [_]RegistryEntry{
@@ -122,6 +126,9 @@ fn allocateTaskWithEntry(
     task_ctx.stack_high = @intFromPtr(coro.stack_base) + coro.stack_size;
     task_ctx.stack_low = task_ctx.stack_high - task_stack.base;
     task_ctx.stack_limit = task_ctx.stack_low + task_stack_reserve;
+    if (comptime !is_freestanding) {
+        task_ctx.stack_growth = task_mod.taskStackGrowth(coro, &task_stack, task_stack_grown_reserve);
+    }
 
     try scheduler.trackTask(task);
     return task;

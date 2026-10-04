@@ -1,0 +1,52 @@
+\ Test that a task's native stack grows past its base instead of overflowing there, that a task can
+\ park at that depth, and that the guard still raises once the stack has grown to its cap.
+
+use "testing" ;
+use "time" ;
+
+\ A task's stack starts at 768 KiB with an eighth held back as the guard's reserve.
+BASE-BUDGET: const [ 688128 ] ;
+
+\ Grown, it is 16 MiB with an eighth held back, the same threshold as the main thread's.
+GROWN-BUDGET: const [ 14680064 ] ;
+
+\\ Recurse `n` levels without a tail call, then run `quot` at the bottom.
+descend: stack-recursive ( n quot -- ) [
+  over 0 > [ [ 1 - ] dip descend 0 drop ] [ nip call ] if
+] ;
+
+\\ Park in every way a task can, asserting each one worked.
+park-every-way: ( -- ) [
+  task-stack-peak BASE-BUDGET > "the stack grew past its base" assert-true
+
+  yield
+  10 milliseconds sleep
+  [ 41 1 + ] spawn await 42 "await returns a child's result" assert=
+
+  <channel> dup [ 7 swap send ] curry spawn drop
+  receive 7 "receive takes a child's send" assert=
+
+  <pipe> dup [ "deep" stream-write drop ] curry spawn drop
+  swap dup 4 stream-read "deep" >bytes "a pipe read takes a child's write" assert=
+  stream-close stream-close
+] ;
+
+recurse-forever: stack-recursive [ recurse-forever 1 drop ] ;
+
+"parking at depth" test-section
+
+\ A scope body is itself a task, so it runs on a stack that grows.
+[ 150 [ park-every-way ] descend ] task-scope
+
+"overflow at the cap" test-section
+
+[
+  [
+    [ recurse-forever ] [ error-type: @get ] recover
+    task-stack-peak stack-budget? 3 array-n
+  ] spawn await
+
+  dup 0 #nth stack-overflow: "a grown task still overflows" assert=
+  dup 1 #nth GROWN-BUDGET >= "the guard fired at the cap, not the base" assert-true
+  2 #nth GROWN-BUDGET "the budget after growing is the cap's" assert=
+] task-scope
