@@ -1,0 +1,1 @@
+tests/integration/check_shared_struct_accessor.1z:16: err: agreeing-field-misused: type mismatch: expect-fixnum expects fixnum for parameter 'n', but got string

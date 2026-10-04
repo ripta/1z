@@ -51,6 +51,7 @@ pub const registry_entries = [_]RegistryEntry{
     .{ .name = "type-info-string", .func = nativeTypeInfoString },
     .{ .name = "word-source", .func = nativeWordSource, .stack_effect = "module name -- module/f" },
     .{ .name = "quotation>effect", .func = nativeQuotationToEffect },
+    .{ .name = ">stack-effect-info", .func = nativeStackEffectToInfo, .stack_effect = "stack-effect -- array" },
     .{ .name = "quotation>opcodes", .func = nativeQuotationToOpcodes },
     .{ .name = "parse-stack-effect", .func = nativeParseStackEffect, .stack_effect = "string -- stack-effect" },
 };
@@ -1184,6 +1185,13 @@ fn nativeQuotationToEffect(ctx: *Context) anyerror!void {
     }
 }
 
+/// >stack-effect-info ( stack-effect -- array ) - Unpack a stack-effect value into the raw
+/// `{ inputs outputs }` record that `quotation>effect` returns, so 1z code can read its parameters.
+fn nativeStackEffectToInfo(ctx: *Context) anyerror!void {
+    const effect = try helpers.popStackEffect(ctx);
+    try ctx.stack.push(try buildStackEffectValue(ctx.quotationAllocator(), &effect));
+}
+
 /// parse-stack-effect ( string -- stack-effect ) - Build a stack-effect value
 /// from an effect body string with no surrounding parens, e.g. "a b -- result".
 /// The runtime analog of the parse-time `(` word, sharing its parser, so typed
@@ -1304,6 +1312,46 @@ test "parse-stack-effect keeps row variables" {
     try testing.expect(val.stack_effect.inputs[0].is_row_variable);
     try testing.expect(!val.stack_effect.inputs[1].is_row_variable);
     try testing.expect(val.stack_effect.outputs[0].is_row_variable);
+}
+
+test ">stack-effect-info unpacks row, typed, and nested parameters" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+    try ctx.loadPrelude(null);
+
+    try ctx.stack.push(value_mod.stringValue("..a n: fixnum q: ( x -- y ) -- ..a"));
+    try nativeParseStackEffect(&ctx);
+    try nativeStackEffectToInfo(&ctx);
+
+    const val = try ctx.stack.pop();
+    const record = val.array.items;
+    try testing.expectEqual(@as(usize, 2), record.len);
+
+    const inputs = record[0].array.items;
+    const outputs = record[1].array.items;
+    try testing.expectEqual(@as(usize, 3), inputs.len);
+    try testing.expectEqual(@as(usize, 1), outputs.len);
+
+    const row = inputs[0].array.items;
+    try testing.expectEqualStrings("..a", row[0].string.bytes);
+    try testing.expect(row[1].boolean);
+
+    const typed = inputs[1].array.items;
+    try testing.expectEqualStrings("n", typed[0].string.bytes);
+    try testing.expect(!typed[1].boolean);
+    try testing.expect(typed[3].type_val == ctx.lookupBuiltinTypeValue("fixnum").?);
+
+    const nested = inputs[2].array.items;
+    try testing.expectEqualStrings("q", nested[0].string.bytes);
+    try testing.expect(nested[2] == .array);
+}
+
+test ">stack-effect-info rejects a value that is not a stack effect" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    try ctx.stack.push(.{ .fixnum = 1 });
+    try testing.expectError(error.TypeMismatch, nativeStackEffectToInfo(&ctx));
 }
 
 test "parse-stack-effect rejects an unknown annotation type" {

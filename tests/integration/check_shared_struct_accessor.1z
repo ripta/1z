@@ -1,0 +1,16 @@
+\ Test that --check types a struct accessor shared by several structs from what they all agree on
+
+expect-fixnum: ( n: fixnum -- ) [ drop ] ;
+expect-string: ( s: string -- ) [ drop ] ;
+
+\ The second struct disagrees on the field type, so the getter's output carries no type.
+tagged-label: struct{ label: symbol } ;
+named-label: struct{ label: string } ;
+
+disagreeing-field: ( -- ) [ "x" make-named-label label>> expect-string ] ;
+
+\ Both structs agree, so the getter's output stays typed and a wrong use is still caught.
+left-span: struct{ span: string } ;
+right-span: struct{ span: string } ;
+
+agreeing-field-misused: ( -- ) [ "x" make-right-span span>> expect-fixnum ] ;

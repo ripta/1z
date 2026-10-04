@@ -1,4 +1,4 @@
-Prelude compilation: 471/477 words compiled (98.7%)
+Prelude compilation: 473/479 words compiled (98.7%)
   word 'associative' cannot be compiled
       NC.4: word pushes a value that cannot be embedded in an AOT binary
       hint: blocked until AOT literals can be serialized
@@ -18,9 +18,9 @@ Prelude compilation: 471/477 words compiled (98.7%)
       NC.4: word pushes a value that cannot be embedded in an AOT binary
       hint: blocked until AOT literals can be serialized
 Quotation bodies compiled: 0
-Inline PIC sites: 90/279 generic call sites preseeded
-AOT interpreter fallbacks: 311 total
-  native: 247
+Inline PIC sites: 90/280 generic call sites preseeded
+AOT interpreter fallbacks: 312 total
+  native: 248
   per-op-native: 44
   compound-uncompiled: 2
   quotation: 18
@@ -41,8 +41,8 @@ AOT interpreter fallbacks: 311 total
     native: #ends-with? -> #len (line 1354)
     native: #ends-with? -> #len (line 1354)
     per-op-native: #ends-with? -> - (line 1354)
-    ... 295 more
-  static-check: jitInterpretedCall=2/2 jitNativeWordCall=291/291 jitCallQuotation=18/18 (matches build-time inventory)
+    ... 296 more
+  static-check: jitInterpretedCall=2/2 jitNativeWordCall=292/292 jitCallQuotation=18/18 (matches build-time inventory)
 Warning: '4keep' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
 Warning: 'bi' parameter 'p' has row-variable effect; quotation call falls back to interpreter
 Warning: 'bi' parameter 'q' has row-variable effect; quotation call falls back to interpreter

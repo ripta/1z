@@ -1,0 +1,76 @@
+=== binding ===
+Stack: [ ]
+Stack: [ ]
+PASS: a two-input word binds each name to its own argument
+Stack: [ ]
+Stack: [ ]
+PASS: a three-input word binds each name to its own argument
+Stack: [ ]
+Stack: [ ]
+Stack: [ { { push-literal: b: } { call-word: "swap" } { call-word: ";" } { push-literal: a: } { call-word: "swap" } { call-word: ";" } { call-word: "a" } { call-word: "b" } { call-word: "-" } } ]
+Stack: [ { { push-literal: b: } { call-word: "swap" } { call-word: ";" } { push-literal: a: } { call-word: "swap" } { call-word: ";" } { call-word: "a" } { call-word: "b" } { call-word: "-" } } { { push-literal: b: } { call-word: "swap" } { call-word: ";" } { push-literal: a: } { call-word: "swap" } { call-word: ";" } { call-word: "a" } { call-word: "b" } { call-word: "-" } } ]
+PASS: the lowering is the hand-written idiom
+Stack: [ ]
+Stack: [ ]
+PASS: a nested quotation reads an outer binding
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: a binding is gone after the word returns
+Stack: [ ]
+Stack: [ ]
+PASS: typed and quotation-typed inputs bind by name
+Stack: [ ]
+Stack: [ ]
+PASS: an effect with no inputs binds nothing
+Stack: [ ]
+=== rejections ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ [ "row-bound: ( ..r x -- ..r ) [ bind-inputs ] ;" eval-string ] bind-inputs: ]
+PASS: an input-side row variable raises bind-inputs
+Stack: [ ]
+Stack: [ "row-bound: ( ..r x -- ..r ) [ bind-inputs ] ;" "cannot bind row variable '..r'" ]
+PASS: the row variable message names it
+Stack: [ "row-bound: ( ..r x -- ..r ) [ bind-inputs ] ;" ]
+Stack: [ "row-bound: ( ..r x -- ..r ) [ bind-inputs ] ;" [ "twice-bound: ( x x -- ) [ bind-inputs ] ;" eval-string ] bind-inputs: ]
+PASS: a repeated input name raises bind-inputs
+Stack: [ "row-bound: ( ..r x -- ..r ) [ bind-inputs ] ;" ]
+Stack: [ "row-bound: ( ..r x -- ..r ) [ bind-inputs ] ;" "twice-bound: ( x x -- ) [ bind-inputs ] ;" "duplicate input name 'x'" ]
+PASS: the duplicate message names the input
+Stack: [ "row-bound: ( ..r x -- ..r ) [ bind-inputs ] ;" "twice-bound: ( x x -- ) [ bind-inputs ] ;" ]
+Stack: [ "row-bound: ( ..r x -- ..r ) [ bind-inputs ] ;" "twice-bound: ( x x -- ) [ bind-inputs ] ;" [ "late-bound: ( x -- ) [ 1 drop bind-inputs ] ;" eval-string ] bind-inputs: ]
+PASS: a word that is not first raises bind-inputs
+Stack: [ "row-bound: ( ..r x -- ..r ) [ bind-inputs ] ;" "twice-bound: ( x x -- ) [ bind-inputs ] ;" ]
+Stack: [ "row-bound: ( ..r x -- ..r ) [ bind-inputs ] ;" "twice-bound: ( x x -- ) [ bind-inputs ] ;" "late-bound: ( x -- ) [ 1 drop bind-inputs ] ;" "must be the first word in the body" ]
+PASS: the position message
+Stack: [ "row-bound: ( ..r x -- ..r ) [ bind-inputs ] ;" "twice-bound: ( x x -- ) [ bind-inputs ] ;" "late-bound: ( x -- ) [ 1 drop bind-inputs ] ;" ]
+Stack: [ "row-bound: ( ..r x -- ..r ) [ bind-inputs ] ;" "twice-bound: ( x x -- ) [ bind-inputs ] ;" "late-bound: ( x -- ) [ 1 drop bind-inputs ] ;" [ "unbound: [ bind-inputs ] ;" eval-string ] bind-inputs: ]
+PASS: a body with no declared effect raises bind-inputs
+Stack: [ "row-bound: ( ..r x -- ..r ) [ bind-inputs ] ;" "twice-bound: ( x x -- ) [ bind-inputs ] ;" "late-bound: ( x -- ) [ 1 drop bind-inputs ] ;" ]
+Stack: [ "row-bound: ( ..r x -- ..r ) [ bind-inputs ] ;" "twice-bound: ( x x -- ) [ bind-inputs ] ;" "late-bound: ( x -- ) [ 1 drop bind-inputs ] ;" "unbound: [ bind-inputs ] ;" "the definition declares no stack effect" ]
+PASS: the missing effect message
+Stack: [ "row-bound: ( ..r x -- ..r ) [ bind-inputs ] ;" "twice-bound: ( x x -- ) [ bind-inputs ] ;" "late-bound: ( x -- ) [ 1 drop bind-inputs ] ;" "unbound: [ bind-inputs ] ;" ]
+Stack: [ "row-bound: ( ..r x -- ..r ) [ bind-inputs ] ;" "twice-bound: ( x x -- ) [ bind-inputs ] ;" "late-bound: ( x -- ) [ 1 drop bind-inputs ] ;" "unbound: [ bind-inputs ] ;" "in-bracket: [ ( x -- ) bind-inputs ] ;" "the definition declares no stack effect" ]
+PASS: an effect inside the brackets is not read
+Stack: [ "row-bound: ( ..r x -- ..r ) [ bind-inputs ] ;" "twice-bound: ( x x -- ) [ bind-inputs ] ;" "late-bound: ( x -- ) [ 1 drop bind-inputs ] ;" "unbound: [ bind-inputs ] ;" "in-bracket: [ ( x -- ) bind-inputs ] ;" ]
+Stack: [ "row-bound: ( ..r x -- ..r ) [ bind-inputs ] ;" "twice-bound: ( x x -- ) [ bind-inputs ] ;" "late-bound: ( x -- ) [ 1 drop bind-inputs ] ;" "unbound: [ bind-inputs ] ;" "in-bracket: [ ( x -- ) bind-inputs ] ;" "bare-nested: ( x -- ) [ [ bind-inputs ] drop ] ;" "the definition declares no stack effect" ]
+PASS: a nested bare quotation does not see the outer effect
+Stack: [ "row-bound: ( ..r x -- ..r ) [ bind-inputs ] ;" "twice-bound: ( x x -- ) [ bind-inputs ] ;" "late-bound: ( x -- ) [ 1 drop bind-inputs ] ;" "unbound: [ bind-inputs ] ;" "in-bracket: [ ( x -- ) bind-inputs ] ;" "bare-nested: ( x -- ) [ [ bind-inputs ] drop ] ;" ]
+=== outside parse time ===
+Stack: [ "row-bound: ( ..r x -- ..r ) [ bind-inputs ] ;" "twice-bound: ( x x -- ) [ bind-inputs ] ;" "late-bound: ( x -- ) [ 1 drop bind-inputs ] ;" "unbound: [ bind-inputs ] ;" "in-bracket: [ ( x -- ) bind-inputs ] ;" "bare-nested: ( x -- ) [ [ bind-inputs ] drop ] ;" ]
+Stack: [ "row-bound: ( ..r x -- ..r ) [ bind-inputs ] ;" "twice-bound: ( x x -- ) [ bind-inputs ] ;" "late-bound: ( x -- ) [ 1 drop bind-inputs ] ;" "unbound: [ bind-inputs ] ;" "in-bracket: [ ( x -- ) bind-inputs ] ;" "bare-nested: ( x -- ) [ [ bind-inputs ] drop ] ;" [ bind-inputs: >word-info body>> call ] parse-error: ]
+PASS: a runtime call raises the parse-time-only guard of the accessor it reads
+Stack: [ "row-bound: ( ..r x -- ..r ) [ bind-inputs ] ;" "twice-bound: ( x x -- ) [ bind-inputs ] ;" "late-bound: ( x -- ) [ 1 drop bind-inputs ] ;" "unbound: [ bind-inputs ] ;" "in-bracket: [ ( x -- ) bind-inputs ] ;" "bare-nested: ( x -- ) [ [ bind-inputs ] drop ] ;" ]
+=== >stack-effect-info ===
+Stack: [ "row-bound: ( ..r x -- ..r ) [ bind-inputs ] ;" "twice-bound: ( x x -- ) [ bind-inputs ] ;" "late-bound: ( x -- ) [ 1 drop bind-inputs ] ;" "unbound: [ bind-inputs ] ;" "in-bracket: [ ( x -- ) bind-inputs ] ;" "bare-nested: ( x -- ) [ [ bind-inputs ] drop ] ;" ]
+Stack: [ "row-bound: ( ..r x -- ..r ) [ bind-inputs ] ;" "twice-bound: ( x x -- ) [ bind-inputs ] ;" "late-bound: ( x -- ) [ 1 drop bind-inputs ] ;" "unbound: [ bind-inputs ] ;" "in-bracket: [ ( x -- ) bind-inputs ] ;" "bare-nested: ( x -- ) [ [ bind-inputs ] drop ] ;" stack-effect-info{ inputs: { stack-effect-param{ name: "..b" row-variable?: t nested-effect: f type-annotation: f } stack-effect-param{ name: "a" row-variable?: f nested-effect: f type-annotation: <type:fixnum> } } outputs: { stack-effect-param{ name: "..b" row-variable?: t nested-effect: f type-annotation: f } stack-effect-param{ name: "c" row-variable?: f nested-effect: f type-annotation: f } } } ]
+PASS: a stack-effect value round-trips through >stack-effect-info
+Stack: [ "row-bound: ( ..r x -- ..r ) [ bind-inputs ] ;" "twice-bound: ( x x -- ) [ bind-inputs ] ;" "late-bound: ( x -- ) [ 1 drop bind-inputs ] ;" "unbound: [ bind-inputs ] ;" "in-bracket: [ ( x -- ) bind-inputs ] ;" "bare-nested: ( x -- ) [ [ bind-inputs ] drop ] ;" stack-effect-info{ inputs: { stack-effect-param{ name: "..b" row-variable?: t nested-effect: f type-annotation: f } stack-effect-param{ name: "a" row-variable?: f nested-effect: f type-annotation: <type:fixnum> } } outputs: { stack-effect-param{ name: "..b" row-variable?: t nested-effect: f type-annotation: f } stack-effect-param{ name: "c" row-variable?: f nested-effect: f type-annotation: f } } } ]
+PASS: the row variable flag is readable
+Stack: [ "row-bound: ( ..r x -- ..r ) [ bind-inputs ] ;" "twice-bound: ( x x -- ) [ bind-inputs ] ;" "late-bound: ( x -- ) [ 1 drop bind-inputs ] ;" "unbound: [ bind-inputs ] ;" "in-bracket: [ ( x -- ) bind-inputs ] ;" "bare-nested: ( x -- ) [ [ bind-inputs ] drop ] ;" ]
+Stack: [ "row-bound: ( ..r x -- ..r ) [ bind-inputs ] ;" "twice-bound: ( x x -- ) [ bind-inputs ] ;" "late-bound: ( x -- ) [ 1 drop bind-inputs ] ;" "unbound: [ bind-inputs ] ;" "in-bracket: [ ( x -- ) bind-inputs ] ;" "bare-nested: ( x -- ) [ [ bind-inputs ] drop ] ;" "( -- )" "( -- )" ]
+PASS: the generated hash arm still converts a hash
+Stack: [ "row-bound: ( ..r x -- ..r ) [ bind-inputs ] ;" "twice-bound: ( x x -- ) [ bind-inputs ] ;" "late-bound: ( x -- ) [ 1 drop bind-inputs ] ;" "unbound: [ bind-inputs ] ;" "in-bracket: [ ( x -- ) bind-inputs ] ;" "bare-nested: ( x -- ) [ [ bind-inputs ] drop ] ;" ]
+PASS: a value that is not a stack effect raises
+Stack: [ "row-bound: ( ..r x -- ..r ) [ bind-inputs ] ;" "twice-bound: ( x x -- ) [ bind-inputs ] ;" "late-bound: ( x -- ) [ 1 drop bind-inputs ] ;" "unbound: [ bind-inputs ] ;" "in-bracket: [ ( x -- ) bind-inputs ] ;" "bare-nested: ( x -- ) [ [ bind-inputs ] drop ] ;" ]

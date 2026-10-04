@@ -1205,6 +1205,10 @@ pub const Context = struct {
     /// which scope's `struct{` happened to define it first. Unrelated to `aot_generic_dispatch_ids`
     /// above, which reconstitutes dispatch_ids lost to AOT image serialization.
     generic_accessor_dispatch_ids: std.StringHashMapUnmanaged(u32) = .{},
+    /// name -> stack effect for `struct{`-generated field getters and setters. One dispatch table
+    /// serves every struct with a field of the name, so one effect describes them all, widened as
+    /// each struct joins. Written through `stateTarget`, beside the dispatch entries it describes.
+    generic_accessor_effects: std.StringHashMapUnmanaged(*const StackEffect) = .{},
     /// Set true when `aot_image_loader.loadIntoContext` has populated
     /// this context from an AOT runtime image. Gates the module-cache
     /// fallback in `lookupWordForExecution` so the fallback only fires
@@ -2277,6 +2281,7 @@ pub const Context = struct {
         }
         self.aot_generic_dispatch_ids.deinit(self.allocator);
         self.generic_accessor_dispatch_ids.deinit(self.allocator);
+        self.generic_accessor_effects.deinit(self.allocator);
         for (self.parameter_env.items) |*frame| {
             self.deinitParameterFrame(frame);
         }
@@ -5113,6 +5118,25 @@ pub const Context = struct {
         } else if (self.dictionary.getPtr(name)) |def| {
             def.dispatch_id = dispatch_id;
         }
+    }
+
+    /// The one stack effect every `struct{`-generated accessor named `name` shares, widened to also
+    /// describe the struct whose accessor effect is `joining`.
+    ///
+    /// Every definition and import copy of the accessor points at this box, so widening it in place
+    /// reaches all of them. The first struct to see a name seeds the registry with `joining` itself.
+    pub fn shareAccessorEffect(self: *Context, name: []const u8, joining: *const StackEffect) !*const StackEffect {
+        self.acquireSharedWrite();
+        defer self.releaseSharedWrite();
+
+        const target = self.stateTarget();
+        if (target.generic_accessor_effects.get(name)) |shared| {
+            try stack_effect_mod.widenInPlace(target.arena.allocator(), shared, joining);
+            return shared;
+        }
+
+        try target.generic_accessor_effects.put(target.allocator, name, joining);
+        return joining;
     }
 
     /// Attempt JIT compilation of a newly defined word. Silently ignores

@@ -1,0 +1,38 @@
+Stack: [ ]
+=== one struct ===
+Stack: [ ]
+Stack: [ ]
+PASS: a getter one struct owns keeps both types
+Stack: [ ]
+Stack: [ "( instance: lone-holder lone: fixnum -- instance: lone-holder )" "( instance: lone-holder lone: fixnum -- instance: lone-holder )" ]
+PASS: a setter one struct owns keeps every type
+Stack: [ ]
+=== structs that agree ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: an agreed field type survives on the getter
+Stack: [ ]
+PASS: an agreed field type survives on the setter
+Stack: [ ]
+=== structs that disagree ===
+Stack: [ ]
+Stack: [ ]
+PASS: the first struct sets the getter alone
+Stack: [ ]
+Stack: [ ]
+PASS: a disagreeing field type widens the getter
+Stack: [ ]
+PASS: a disagreeing field type widens the setter
+Stack: [ ]
+Stack: [ ]
+PASS: a widened annotation stays widened
+Stack: [ ]
+PASS: the getter still reads the first struct
+Stack: [ ]
+PASS: the setter still writes the second struct
+Stack: [ ]
+=== the prelude ===
+Stack: [ ]
+PASS: name>> is shared by prelude structs that disagree
+Stack: [ ]

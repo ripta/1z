@@ -330,6 +330,43 @@ fn copyParams(alloc: std.mem.Allocator, params: []const StackEffectParam) std.me
     return copied;
 }
 
+/// Widen `shared` in place so it also describes `joining`, which has the same parameter counts.
+/// An annotation survives only where both effects agree on it.
+///
+/// `shared` must be a box `box` allocated, since its contents are rewritten. Running code may read
+/// it meanwhile, so each widened parameter list goes into a fresh array on `alloc` whose pointer is
+/// then published in one atomic store. The lengths never change, so no reader sees a torn slice.
+pub fn widenInPlace(alloc: std.mem.Allocator, shared: *const StackEffect, joining: *const StackEffect) std.mem.Allocator.Error!void {
+    const target: *StackEffect = @constCast(shared);
+    try widenParams(alloc, &target.inputs, joining.inputs);
+    try widenParams(alloc, &target.outputs, joining.outputs);
+}
+
+fn widenParams(alloc: std.mem.Allocator, params: *[]const StackEffectParam, joining: []const StackEffectParam) std.mem.Allocator.Error!void {
+    std.debug.assert(params.*.len == joining.len);
+
+    const current = params.*;
+    const narrowed = for (current, joining) |have, other| {
+        if (!annotationsAgree(have.type_annotation, other.type_annotation)) break true;
+    } else false;
+    if (!narrowed) return;
+
+    const widened = try alloc.dupe(StackEffectParam, current);
+    for (widened, joining) |*have, other| {
+        if (!annotationsAgree(have.type_annotation, other.type_annotation)) have.type_annotation = null;
+    }
+
+    @atomicStore([*]const StackEffectParam, &params.*.ptr, widened.ptr, .release);
+}
+
+/// True when `have` needs no widening against `other`: it is already absent, or both name the same
+/// type or constraint.
+fn annotationsAgree(have: ?TypeAnnotation, other: ?TypeAnnotation) bool {
+    const kept = have orelse return true;
+    const joined = other orelse return false;
+    return kept.eql(joined);
+}
+
 /// Check if a parameter name is a row variable (starts with "..")
 pub fn isRowVariable(name: []const u8) bool {
     return name.len >= 2 and name[0] == '.' and name[1] == '.';

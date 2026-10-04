@@ -1,0 +1,75 @@
+\ Test bind-inputs: binding a word's declared inputs as named locals.
+
+use "testing" ;
+
+"binding" test-section
+
+diff: ( a b -- c ) [ bind-inputs a b - ] ;
+10 3 diff 7 "a two-input word binds each name to its own argument" assert=
+
+mix: ( a b c -- d ) [ bind-inputs a b - c * ] ;
+10 3 2 mix 14 "a three-input word binds each name to its own argument" assert=
+
+diff-by-hand: ( a b -- c ) [ b: swap ; a: swap ; a b - ] ;
+diff: >word-info body>> native.quotation>opcodes
+diff-by-hand: >word-info body>> native.quotation>opcodes
+"the lowering is the hand-written idiom" assert=
+
+nested-read: ( a b -- c ) [ bind-inputs [ a b + ] call ] ;
+2 3 nested-read 5 "a nested quotation reads an outer binding" assert=
+
+scoped-in: ( scoped-a -- ) [ bind-inputs ] ;
+1 scoped-in
+[ "scoped-a" eval-string ] unknown-word: "a binding is gone after the word returns" assert-error-type
+
+typed-inputs: ( n: fixnum q: ( x -- y ) -- r ) [ bind-inputs n q ] ;
+4 [ 1 + ] typed-inputs 5 "typed and quotation-typed inputs bind by name" assert=
+
+no-inputs: ( -- r ) [ bind-inputs 42 ] ;
+no-inputs 42 "an effect with no inputs binds nothing" assert=
+
+"rejections" test-section
+
+rejection-message: ( source -- message ) [ [ eval-string f ] [ message: @get ] recover ] ;
+
+[ "row-bound: ( ..r x -- ..r ) [ bind-inputs ] ;" eval-string ] bind-inputs:
+"an input-side row variable raises bind-inputs" assert-error-type
+"row-bound: ( ..r x -- ..r ) [ bind-inputs ] ;" rejection-message
+"cannot bind row variable '..r'" "the row variable message names it" assert=
+
+[ "twice-bound: ( x x -- ) [ bind-inputs ] ;" eval-string ] bind-inputs:
+"a repeated input name raises bind-inputs" assert-error-type
+"twice-bound: ( x x -- ) [ bind-inputs ] ;" rejection-message
+"duplicate input name 'x'" "the duplicate message names the input" assert=
+
+[ "late-bound: ( x -- ) [ 1 drop bind-inputs ] ;" eval-string ] bind-inputs:
+"a word that is not first raises bind-inputs" assert-error-type
+"late-bound: ( x -- ) [ 1 drop bind-inputs ] ;" rejection-message
+"must be the first word in the body" "the position message" assert=
+
+[ "unbound: [ bind-inputs ] ;" eval-string ] bind-inputs:
+"a body with no declared effect raises bind-inputs" assert-error-type
+"unbound: [ bind-inputs ] ;" rejection-message
+"the definition declares no stack effect" "the missing effect message" assert=
+
+"in-bracket: [ ( x -- ) bind-inputs ] ;" rejection-message
+"the definition declares no stack effect" "an effect inside the brackets is not read" assert=
+
+"bare-nested: ( x -- ) [ [ bind-inputs ] drop ] ;" rejection-message
+"the definition declares no stack effect" "a nested bare quotation does not see the outer effect" assert=
+
+"outside parse time" test-section
+
+[ bind-inputs: >word-info body>> call ] parse-error:
+"a runtime call raises the parse-time-only guard of the accessor it reads" assert-error-type
+
+">stack-effect-info" test-section
+
+"..b a: fixnum -- ..b c" native.parse-stack-effect >stack-effect-info
+dup >string "( ..b a: fixnum -- ..b c )" "a stack-effect value round-trips through >stack-effect-info" assert=
+inputs>> [ row-variable?>> ] #map #collect t f 2 array-n "the row variable flag is readable" assert=
+
+H{ inputs: { } outputs: { } } >stack-effect-info >string "( -- )"
+"the generated hash arm still converts a hash" assert=
+
+[ 1 >stack-effect-info ] "a value that is not a stack effect raises" assert-error

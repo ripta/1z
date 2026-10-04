@@ -1550,6 +1550,46 @@ word-info: struct{ name: string stack-effect: any doc: any markers: array native
     make-stack-effect-info
   ] if
 ] ;
+
+\\ Unpack a stack-effect value into a stack-effect-info struct, so its parameters can be read.
+>stack-effect-info: method{ stack-effect } [ native.>stack-effect-info (>stack-effect-info) ] ;
+
+\\ Raise a `bind-inputs` error carrying `message`.
+(bind-inputs-error): never-returns ( message: string -- * ) [ f swap bind-inputs: make-error throw ] ;
+
+\\ The input params of the effect declared before the body being parsed, after rejecting every
+\\ declaration `bind-inputs` cannot bind.
+\\
+\\ The missing-effect check runs before the position check, so a body whose effect sits inside its
+\\ brackets is told that no preceding effect exists rather than that the word is misplaced.
+(validated-inputs): ( -- params ) [
+  current-effect
+  dup f = [ drop "the definition declares no stack effect" (bind-inputs-error) ] when
+  body-start? [ "must be the first word in the body" (bind-inputs-error) ] unless
+  >stack-effect-info inputs>>
+
+  dup [
+    dup row-variable?>> [
+      name>> "cannot bind row variable '" swap #append "'" #append (bind-inputs-error)
+    ] [ drop ] if
+  ] #each
+
+  dup { } [
+    name>> 2dup #in? [
+      nip "duplicate input name '" swap #append "'" #append (bind-inputs-error)
+    ] [ #push ] if
+  ] #reduce drop
+] ;
+
+\\ Bind each input declared in the preceding stack effect to a local of the same name.
+\\
+\\ It must be the first word of the body. It lowers to the `name: swap ;` lines written by hand, so
+\\ the last declared input is bound first.
+bind-inputs: parse-time [
+  (validated-inputs) { } [ #unshift ] #reduce
+  [ name>> >symbol emit-literal swap: emit-call ";" >symbol emit-call ] #each
+] ;
+
 (>source-loc):    ( raw -- source-loc )          [ dup f = [ ] [ dup 0 #nth over 1 #nth 2 pick-n 2 #nth make-source-loc nip ] if ] ;
 (>provenance):    ( raw -- provenance )          [ dup f = [ ] [ dup 0 #nth over 1 #nth 2 pick-n 2 #nth make-provenance nip ] if ] ;
 (>dispatch-prov): ( raw -- dispatch-provenance ) [ dup f = [ ] [ dup 0 #nth over 1 #nth 2 pick-n 2 #nth 3 pick-n 3 #nth make-dispatch-provenance nip ] if ] ;

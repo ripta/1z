@@ -564,10 +564,11 @@ fn defineFieldGetter(ctx: *Context, name: []const u8, struct_type: *const Struct
     const generic_markers = try alloc.alloc(*Marker, 1);
     generic_markers[0] = @constCast(&markers_mod.generic_marker);
 
+    const effect = try ctx.shareAccessorEffect(name, try buildGetterEffect(alloc, struct_type, field_index));
     if (!is_generic) {
         try ctx.defineWord(name, .{
             .name = name,
-            .stack_effect = try buildGetterEffect(alloc, struct_type, field_index),
+            .stack_effect = effect,
             .markers = generic_markers,
             .provenance = .{ .generator = "struct", .parent = struct_type.name, .role = "getter" },
             .action = .{ .compound = &.{} },
@@ -610,10 +611,11 @@ fn defineFieldSetter(ctx: *Context, name: []const u8, struct_type: *const Struct
     const generic_markers = try alloc.alloc(*Marker, 1);
     generic_markers[0] = @constCast(&markers_mod.generic_marker);
 
+    const effect = try ctx.shareAccessorEffect(name, try buildSetterEffect(alloc, struct_type, field_index));
     if (!is_generic) {
         try ctx.defineWord(name, .{
             .name = name,
-            .stack_effect = try buildSetterEffect(alloc, struct_type, field_index),
+            .stack_effect = effect,
             .markers = generic_markers,
             .provenance = .{ .generator = "struct", .parent = struct_type.name, .role = "setter" },
             .action = .{ .compound = &.{} },

@@ -1,0 +1,38 @@
+\ Test the stack effect a struct accessor declares once several structs share it.
+
+use "testing" ;
+
+effect-of: ( name -- s ) [ >symbol >word-info stack-effect>> >string ] ;
+
+"one struct" test-section
+
+lone-holder: mutable struct{ lone: fixnum } ;
+"lone>>" effect-of "( instance: lone-holder -- lone: fixnum )" "a getter one struct owns keeps both types" assert=
+">>lone" effect-of "( instance: lone-holder lone: fixnum -- instance: lone-holder )"
+"a setter one struct owns keeps every type" assert=
+
+"structs that agree" test-section
+
+left-pair: mutable struct{ paired: string } ;
+right-pair: mutable struct{ paired: string } ;
+"paired>>" effect-of "( instance -- paired: string )" "an agreed field type survives on the getter" assert=
+">>paired" effect-of "( instance paired: string -- instance )" "an agreed field type survives on the setter" assert=
+
+"structs that disagree" test-section
+
+numbered-tag: mutable struct{ tagged: fixnum } ;
+"tagged>>" effect-of "( instance: numbered-tag -- tagged: fixnum )" "the first struct sets the getter alone" assert=
+
+worded-tag: mutable struct{ tagged: string } ;
+"tagged>>" effect-of "( instance -- tagged )" "a disagreeing field type widens the getter" assert=
+">>tagged" effect-of "( instance tagged -- instance )" "a disagreeing field type widens the setter" assert=
+
+typed-again: mutable struct{ tagged: fixnum } ;
+"tagged>>" effect-of "( instance -- tagged )" "a widened annotation stays widened" assert=
+
+3 make-numbered-tag tagged>> 3 "the getter still reads the first struct" assert=
+"w" make-worded-tag "v" >>tagged tagged>> "v" "the setter still writes the second struct" assert=
+
+"the prelude" test-section
+
+"name>>" effect-of "( instance -- name )" "name>> is shared by prelude structs that disagree" assert=
