@@ -710,10 +710,21 @@ pub const Scheduler = struct {
         return error.NotOnTaskStack;
     }
 
+    /// Release the pages below a grown task stack's base if the parking task is back above it.
+    ///
+    /// It must run after `ensureCanPark` has shown the task is on its own stack, so the context's
+    /// bounds describe that stack rather than the parser coroutine's. The task has not yielded yet,
+    /// so its context is still this thread's to write.
+    fn releaseDeepStackBeforePark(self: *Scheduler) void {
+        const task = self.current_task orelse return;
+        task.ctx.releaseDeepStack(@frameAddress());
+    }
+
     /// Re-enqueue the current task and yield back to the scheduler loop.
     /// Called from within a running task by the `yield` primitive.
     pub fn yieldCurrentTask(self: *Scheduler) !void {
         try self.ensureCanPark();
+        self.releaseDeepStackBeforePark();
         if (self.current_task) |task| {
             self.run_queue.append(self.allocator, task) catch {};
             task_mod.coroYield();
@@ -724,6 +735,7 @@ pub const Scheduler = struct {
     /// Used by nested `task-scope` to block the calling task until its scope completes.
     pub fn suspendCurrentTask(self: *Scheduler) !void {
         try self.ensureCanPark();
+        self.releaseDeepStackBeforePark();
         if (self.current_task != null) {
             task_mod.coroYield();
         }
@@ -733,6 +745,7 @@ pub const Scheduler = struct {
     /// Inserts the task into the sleep queue and yields back to the scheduler.
     pub fn sleepCurrentTask(self: *Scheduler, duration_ns: i128) !void {
         try self.ensureCanPark();
+        self.releaseDeepStackBeforePark();
         if (self.current_task) |task| {
             const wake_time = self.nowNs() + duration_ns;
 
@@ -778,6 +791,7 @@ pub const Scheduler = struct {
     /// Called from stream primitives when an I/O operation would block.
     pub fn ioSuspendCurrentTask(self: *Scheduler, fd: i32, event: IoEvent) !void {
         try self.ensureCanPark();
+        self.releaseDeepStackBeforePark();
         if (self.current_task) |task| {
             self.multiplexer.register(fd, event) catch {};
             self.io_wait_map.put(self.allocator, fd, .{ .task = task, .event = event }) catch {};
@@ -789,6 +803,7 @@ pub const Scheduler = struct {
     /// Suspend the current task until the child process exits.
     pub fn processSuspendCurrentTask(self: *Scheduler, pid: i32) !void {
         try self.ensureCanPark();
+        self.releaseDeepStackBeforePark();
         const task = self.current_task orelse return;
         const handle = try self.multiplexer.registerProcessExit(pid);
         errdefer self.multiplexer.unregisterProcessExit(handle) catch {};
@@ -1731,6 +1746,58 @@ test "a park off the task's own stack raises before writing scheduler state" {
     try std.testing.expectEqual(@as(usize, 0), sched.io_wait_map.count());
     try std.testing.expectEqual(@as(usize, 0), sched.process_wait_map.count());
     try std.testing.expect(ctx.pending_error_message != null);
+}
+
+test "a park releases the current task's grown stack only from above its base guard" {
+    if (comptime builtin.os.tag == .freestanding) return error.SkipZigTest;
+
+    var sched = try Scheduler.init(std.testing.allocator);
+    defer sched.deinit();
+
+    const Context = @import("context.zig").Context;
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+    var task: Task = undefined;
+    task.ctx = &ctx;
+    sched.current_task = &task;
+    defer sched.current_task = null;
+
+    const page = std.heap.pageSize();
+    const span = try std.posix.mmap(
+        null,
+        page,
+        std.posix.PROT.READ | std.posix.PROT.WRITE,
+        .{ .TYPE = .PRIVATE, .ANONYMOUS = true },
+        -1,
+        0,
+    );
+    defer std.posix.munmap(span);
+
+    // The span stands in for the pages below a base. The bounds are arbitrary, because only the
+    // release reads the span, and only the comparison with the parking frame reads `base_limit`.
+    const grown = task_mod.TaskStackGrowth{
+        .commit_low = @intFromPtr(span.ptr),
+        .commit_high = @intFromPtr(span.ptr) + page,
+        .stack_low = 0x1000,
+        .stack_limit = 0x2000,
+        .base_low = 0x3000,
+        .base_limit = std.math.maxInt(usize),
+        .committed = true,
+    };
+    ctx.stack_low = grown.stack_low;
+    ctx.stack_limit = grown.stack_limit;
+    ctx.stack_grown = grown;
+
+    sched.releaseDeepStackBeforePark();
+    try std.testing.expectEqual(grown.stack_limit, ctx.stack_limit);
+    try std.testing.expect(ctx.stack_grown != null);
+
+    ctx.stack_grown.?.base_limit = 0x4000;
+    sched.releaseDeepStackBeforePark();
+    try std.testing.expectEqual(@as(?task_mod.TaskStackGrowth, null), ctx.stack_grown);
+    try std.testing.expectEqual(@as(usize, 0x3000), ctx.stack_low);
+    try std.testing.expectEqual(@as(usize, 0x4000), ctx.stack_limit);
+    try std.testing.expect(ctx.stack_growth.?.committed);
 }
 
 test "the deadlock gate needs every live task blocked" {

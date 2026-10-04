@@ -1,0 +1,34 @@
+\ Test that a task still reaches its full depth after parking back at its base. A park there releases
+\ the pages below the base and re-arms the base guard, so each later descent has to grow the stack
+\ again rather than overflow at the base.
+\
+\ The first descent grows the stack, as `task_stack_growth` shows. A later descent that overflowed
+\ at the base instead would reach about a twentieth of the first one's depth.
+
+use "testing" ;
+use "time" ;
+
+deep: stack-recursive ( n -- n ) [ dup 0 > [ 1 - deep 1 + ] [ ] if ] ;
+
+\\ Whether `deep` reaches `n` levels without the guard firing.
+reaches?: ( n: fixnum -- n ? ) [ [ dup deep drop t ] [ drop f ] recover ] ;
+
+\\ The deepest power of two `deep` reaches. It is within a factor of two of the real depth.
+reachable-depth: ( -- depth ) [ 1 [ reaches? ] [ 2 * ] while 2 / ] ;
+
+"depth after a park" test-section
+
+\ A scope body is itself a task, so it runs on a stack that grows.
+[
+  stack-budget?
+  reachable-depth
+
+  10 milliseconds sleep
+  reachable-depth over "a descent after a sleep reaches the same depth" assert=
+
+  yield
+  reachable-depth over "a descent after a yield reaches the same depth" assert=
+
+  drop
+  stack-budget? "the budget is the same after every release" assert=
+] task-scope

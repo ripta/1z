@@ -123,7 +123,10 @@ fn allocateTaskWithEntry(
     if (comptime !is_freestanding) {
         // Once grown, the reserve is an eighth of the cap, which is the main thread's own
         // proportion.
-        const growth = task_mod.taskStackGrowth(coro, &task_stack, task_stack.cap / 8);
+        const growth = task_mod.taskStackGrowth(coro, &task_stack, task_stack_reserve, task_stack.cap / 8);
+        std.debug.assert(growth.base_low == task_ctx.stack_low);
+        std.debug.assert(growth.base_limit == task_ctx.stack_limit);
+
         task_ctx.stack_growth = growth;
         task_ctx.stack_floor = growth.stack_limit;
     }

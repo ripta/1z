@@ -1440,10 +1440,13 @@ pub const Context = struct {
     /// Low bound of the usable native stack region the guard was armed over. Only the overflow
     /// message reads it, to report the stack's size.
     stack_low: usize = 0,
-    /// How this stack grows the first time a frame reaches `stack_limit`. Only a task's stack can
-    /// grow, and only once, so this is null on the main thread, while the parser coroutine runs, and
-    /// after the growth has happened.
+    /// How this stack grows the next time a frame reaches `stack_limit`. Only a task's stack can
+    /// grow, so this is null on the main thread, while the parser coroutine runs, and while the
+    /// stack sits at its grown bounds.
     stack_growth: ?task_mod.TaskStackGrowth = null,
+    /// The growth this stack has taken, while it sits at its grown bounds and pages below its base
+    /// may be resident. Null otherwise.
+    stack_grown: ?task_mod.TaskStackGrowth = null,
     /// Parent context for dictionary and dispatch table lookup chaining.
     /// Task contexts walk this chain to find words and methods defined in
     /// ancestor scopes, up to the root context which holds primitives and
@@ -1880,17 +1883,20 @@ pub const Context = struct {
 
     /// Whether a frame at `sp` is past the guard once the stack has grown as far as it can.
     ///
-    /// The first frame to reach a task's `stack_limit` commits the rest of its reservation and moves
-    /// `stack_low` and `stack_limit` to the grown bounds, so only the cap raises. A failed commit
+    /// A frame reaching a task's `stack_limit` grows the stack, committing the rest of its
+    /// reservation the first time, and moves `stack_low` and `stack_limit` to the grown bounds, so
+    /// only the cap raises. A failed commit
     /// leaves the bounds where they were and reports the frame as exhausted, so the guard raises
     /// `stack-overflow`.
     pub fn stackExhausted(self: *Context, sp: usize) bool {
         if (sp > self.stack_limit) return false;
 
-        const growth = self.stack_growth orelse return true;
+        var growth = self.stack_growth orelse return true;
         task_mod.commitTaskStackGrowth(growth) catch return true;
+        growth.committed = true;
 
         self.stack_growth = null;
+        self.stack_grown = growth;
         self.stack_low = growth.stack_low;
         self.stack_limit = growth.stack_limit;
 
@@ -1898,6 +1904,29 @@ pub const Context = struct {
         // that arms a growth, `allocateTaskWithEntry`, arms the floor with it.
         std.debug.assert(self.stack_limit == self.stack_floor);
         return sp <= self.stack_limit;
+    }
+
+    /// Release the pages below a grown stack's base when a frame at `sp` is back above the base's
+    /// guard, and re-arm the base bounds. The scheduler calls this as a task parks.
+    ///
+    /// The frame has to be above `base_limit`, not merely above the released span. The release's
+    /// own callees run below `sp` during the syscall, and the base's reserve keeps them clear of
+    /// pages Linux is about to zero.
+    ///
+    /// Re-arming the base is how the next park learns whether the task went deep again: a descent
+    /// past the base reaches the guard and grows again.
+    ///
+    /// A failed release leaves the stack grown, and the next shallow park tries again.
+    pub fn releaseDeepStack(self: *Context, sp: usize) void {
+        const grown = self.stack_grown orelse return;
+        if (sp <= grown.base_limit) return;
+
+        task_mod.releaseTaskStackGrowth(grown) catch return;
+
+        self.stack_grown = null;
+        self.stack_growth = grown;
+        self.stack_low = grown.base_low;
+        self.stack_limit = grown.base_limit;
     }
 
     /// Create a lightweight Context for a spawned task. Primitives and the prelude are not
@@ -10922,6 +10951,8 @@ test "stackOverflowMessage names the size a stack whose growth failed could not 
         .commit_high = ctx.stack_low,
         .stack_low = 0,
         .stack_limit = 0x100_0000 / 8,
+        .base_low = ctx.stack_low,
+        .base_limit = ctx.stack_limit,
     };
 
     const msg = ctx.stackOverflowMessage(ctx.stack_limit - 592);
@@ -10943,6 +10974,21 @@ test "stackExhausted raises at the limit of a stack with no growth left" {
     try std.testing.expect(!ctx.stackExhausted(ctx.stack_limit + 1));
     try std.testing.expect(ctx.stackExhausted(ctx.stack_limit));
     try std.testing.expectEqual(@as(usize, 0x10_0000 + 98304), ctx.stack_limit);
+}
+
+test "releaseDeepStack leaves a stack that has not grown alone" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    ctx.stack_low = 0x10_0000;
+    ctx.stack_limit = 0x10_0000 + 98304;
+    ctx.stack_floor = ctx.stack_limit;
+    ctx.stack_high = 0x10_0000 + 786432;
+
+    ctx.releaseDeepStack(ctx.stack_high - 64);
+    try std.testing.expectEqual(@as(usize, 0x10_0000), ctx.stack_low);
+    try std.testing.expectEqual(@as(usize, 0x10_0000 + 98304), ctx.stack_limit);
+    try std.testing.expectEqual(@as(?task_mod.TaskStackGrowth, null), ctx.stack_growth);
 }
 
 test "quotation allocator frees on deinit" {

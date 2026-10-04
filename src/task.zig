@@ -665,30 +665,52 @@ fn assertMetadataCommitted(co: *mc.mco_coro, coro_size: usize, cfg: *const TaskS
 ///
 /// `[commit_low, commit_high)` is everything between the permanent guard page and the committed
 /// base. `stack_low` is the bottom of the whole reservation, so the grown stack's size is the cap.
+/// `base_low` and `base_limit` are the bounds the guard is armed over before growing, and again
+/// after a release puts the stack back at its base.
+///
+/// `committed` is set once the span is read-write. A release leaves protection alone, so growing
+/// again after one only moves the bounds.
 pub const TaskStackGrowth = struct {
     commit_low: usize,
     commit_high: usize,
     stack_low: usize,
     stack_limit: usize,
+    base_low: usize,
+    base_limit: usize,
+    committed: bool = false,
 };
 
-/// The growth for a coroutine `reservingAlloc` laid out under `cfg`, holding `reserve` bytes back
-/// above the bottom of the reservation as the grown guard's reserve.
-pub fn taskStackGrowth(co: *mc.mco_coro, cfg: *const TaskStackConfig, reserve: usize) TaskStackGrowth {
+/// The growth for a coroutine `reservingAlloc` laid out under `cfg`. The base guard holds
+/// `base_reserve` bytes back above the base's low edge, and the grown guard holds `grown_reserve`
+/// back above the bottom of the reservation.
+pub fn taskStackGrowth(
+    co: *mc.mco_coro,
+    cfg: *const TaskStackConfig,
+    base_reserve: usize,
+    grown_reserve: usize,
+) TaskStackGrowth {
     const layout = taskStackLayout(@intFromPtr(co), co.coro_size, cfg.*, std.heap.pageSize()).?;
     const stack_low = @intFromPtr(co.stack_base);
+    const base_low = stack_low + co.stack_size - cfg.base;
 
     const growth = TaskStackGrowth{
         .commit_low = layout.guard_end,
         .commit_high = layout.base_low,
         .stack_low = stack_low,
-        .stack_limit = stack_low + reserve,
+        .stack_limit = stack_low + grown_reserve,
+        .base_low = base_low,
+        .base_limit = base_low + base_reserve,
     };
 
     // The grown guard has to fire while the frame is still inside the span this growth commits,
     // or the reserve would sit over the permanent guard page.
     std.debug.assert(growth.commit_low < growth.stack_limit);
     std.debug.assert(growth.stack_limit < growth.commit_high);
+
+    // A release drops everything below `commit_high` and runs only from a frame above
+    // `base_limit`, so the base's reserve has to sit wholly inside the committed base.
+    std.debug.assert(growth.commit_high <= growth.base_low);
+    std.debug.assert(growth.base_low < growth.base_limit);
     return growth;
 }
 
@@ -696,9 +718,26 @@ pub fn taskStackGrowth(co: *mc.mco_coro, cfg: *const TaskStackConfig, reserve: u
 /// first touch.
 pub fn commitTaskStackGrowth(growth: TaskStackGrowth) !void {
     if (comptime is_freestanding) return error.Unsupported;
+    if (growth.committed) return;
 
     const low: [*]align(std.heap.page_size_min) u8 = @ptrFromInt(growth.commit_low);
     try std.posix.mprotect(low[0 .. growth.commit_high - growth.commit_low], std.posix.PROT.READ | std.posix.PROT.WRITE);
+}
+
+/// Drop the residency of the span `growth` committed, leaving it read-write. A page touched again
+/// faults back in.
+///
+/// Linux zero-fills a released page on its next touch. macOS's `MADV_FREE` lets the kernel reclaim
+/// the page lazily and makes no promise about its contents.
+///
+/// Either is safe, because the caller releases only from a frame back on the base, and nothing
+/// live sits below it.
+pub fn releaseTaskStackGrowth(growth: TaskStackGrowth) !void {
+    if (comptime is_freestanding) return error.Unsupported;
+
+    const advice = if (comptime builtin.os.tag.isDarwin()) std.posix.MADV.FREE else std.posix.MADV.DONTNEED;
+    const low: [*]align(std.heap.page_size_min) u8 = @ptrFromInt(growth.commit_low);
+    try std.posix.madvise(low, growth.commit_high - growth.commit_low, advice);
 }
 
 /// Allocate a native stack for a parser coroutine using mmap with a guard page.
@@ -1103,12 +1142,15 @@ test "a task's guard grows its stack once, then raises only at or below the grow
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
 
-    const growth = taskStackGrowth(co.?, &cfg, cfg.cap / 8);
+    const growth = taskStackGrowth(co.?, &cfg, cfg.base / 8, cfg.cap / 8);
     ctx.stack_high = @intFromPtr(co.?.stack_base) + co.?.stack_size;
-    ctx.stack_low = ctx.stack_high - cfg.base;
-    ctx.stack_limit = ctx.stack_low + cfg.base / 8;
+    ctx.stack_low = growth.base_low;
+    ctx.stack_limit = growth.base_limit;
     ctx.stack_floor = growth.stack_limit;
     ctx.stack_growth = growth;
+
+    try std.testing.expectEqual(ctx.stack_high - cfg.base, growth.base_low);
+    try std.testing.expectEqual(growth.base_low + cfg.base / 8, growth.base_limit);
 
     const base_limit = ctx.stack_limit;
     try std.testing.expect(!ctx.stackExhausted(base_limit + 1));
@@ -1119,6 +1161,7 @@ test "a task's guard grows its stack once, then raises only at or below the grow
     try std.testing.expectEqual(growth.stack_limit, ctx.stack_floor);
     try std.testing.expectEqual(growth.stack_low, ctx.stack_low);
     try std.testing.expectEqual(@as(?TaskStackGrowth, null), ctx.stack_growth);
+    try std.testing.expect(ctx.stack_grown.?.committed);
     try std.testing.expectEqual(cfg.cap - cfg.cap / 8, ctx.stack_high - ctx.stack_limit);
 
     const low: *volatile u8 = @ptrFromInt(growth.commit_low);
@@ -1130,4 +1173,59 @@ test "a task's guard grows its stack once, then raises only at or below the grow
 
     try std.testing.expect(ctx.stackExhausted(growth.stack_limit));
     try std.testing.expectEqual(growth.stack_limit, ctx.stack_limit);
+}
+
+test "a park back at the base releases a grown task's deep pages and re-arms the base guard" {
+    if (comptime is_freestanding) return error.SkipZigTest;
+
+    const cfg = TaskStackConfig{ .cap = 16 * 1024 * 1024, .base = 768 * 1024 };
+    var desc = mc.mco_desc_init(&noopCoroEntry, cfg.cap);
+    desc.alloc_cb = &reservingAlloc;
+    desc.dealloc_cb = &reservingDealloc;
+    desc.allocator_data = @constCast(&cfg);
+
+    var co: ?*mc.mco_coro = null;
+    try std.testing.expectEqual(@as(c_uint, mc.MCO_SUCCESS), mc.mco_create(&co, &desc));
+    defer _ = mc.mco_destroy(co);
+
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const growth = taskStackGrowth(co.?, &cfg, cfg.base / 8, cfg.cap / 8);
+    ctx.stack_high = @intFromPtr(co.?.stack_base) + co.?.stack_size;
+    ctx.stack_low = growth.base_low;
+    ctx.stack_limit = growth.base_limit;
+    ctx.stack_floor = growth.stack_limit;
+    ctx.stack_growth = growth;
+
+    try std.testing.expect(!ctx.stackExhausted(growth.base_limit));
+    const deep: *volatile u8 = @ptrFromInt(growth.commit_high - 1);
+    deep.* = 0xa5;
+
+    ctx.releaseDeepStack(growth.base_limit);
+    try std.testing.expectEqual(growth.stack_limit, ctx.stack_limit);
+    try std.testing.expect(ctx.stack_grown != null);
+    try std.testing.expectEqual(@as(u8, 0xa5), deep.*);
+
+    ctx.releaseDeepStack(growth.base_limit + 1);
+    try std.testing.expectEqual(@as(?TaskStackGrowth, null), ctx.stack_grown);
+    try std.testing.expect(ctx.stack_growth.?.committed);
+    try std.testing.expectEqual(growth.base_low, ctx.stack_low);
+    try std.testing.expectEqual(growth.base_limit, ctx.stack_limit);
+    try std.testing.expectEqual(growth.stack_limit, ctx.stack_floor);
+
+    // Linux zero-fills a released page on its next touch. `MADV_FREE` promises nothing about the
+    // contents, only that the page stays writable.
+    if (comptime builtin.os.tag == .linux) try std.testing.expectEqual(@as(u8, 0), deep.*);
+    deep.* = 0x5a;
+    try std.testing.expectEqual(@as(u8, 0x5a), deep.*);
+
+    ctx.releaseDeepStack(growth.base_limit + 1);
+    try std.testing.expectEqual(growth.base_limit, ctx.stack_limit);
+    try std.testing.expect(ctx.stack_growth != null);
+
+    try std.testing.expect(!ctx.stackExhausted(growth.base_limit));
+    try std.testing.expectEqual(growth.stack_limit, ctx.stack_limit);
+    try std.testing.expectEqual(growth.stack_low, ctx.stack_low);
+    try std.testing.expect(ctx.stack_grown != null);
 }

@@ -146,17 +146,21 @@ pub const StatementProcessor = struct {
         const saved_floor = c.stack_floor;
         const saved_low = c.stack_low;
         const saved_growth = c.stack_growth;
+        const saved_grown = c.stack_grown;
         defer {
             c.stack_high = saved_high;
             c.stack_limit = saved_limit;
             c.stack_floor = saved_floor;
             c.stack_low = saved_low;
             c.stack_growth = saved_growth;
+            c.stack_grown = saved_grown;
         }
 
         // The parser's stack cannot grow. Left in place, a task's growth would commit the task's
-        // region and arm the guard at an address on a stack the parse is not running on.
+        // region and arm the guard at an address on a stack the parse is not running on. A growth
+        // already taken describes the task's stack too.
         c.stack_growth = null;
+        c.stack_grown = null;
 
         // allocateTaskStack lays the region out as [guard page][usable], and the coroutine's
         // entry sp skips the guard page, so the usable span starts one page in.

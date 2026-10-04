@@ -1,0 +1,9 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+=== depth after a park ===
+Stack: [ ]
+PASS: a descent after a sleep reaches the same depth
+PASS: a descent after a yield reaches the same depth
+PASS: the budget is the same after every release
+Stack: [ ]
