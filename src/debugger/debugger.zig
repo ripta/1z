@@ -139,7 +139,13 @@ pub const Debugger = struct {
 
     /// Enter the interactive debug prompt. Displays instruction context,
     /// then loops reading commands until a stepping command is issued.
-    pub fn enterPrompt(self: *Debugger, instr: Instruction, ctx: *Context) !void {
+    ///
+    /// Kept out of line because its two 4 KB I/O buffers would otherwise be inlined into
+    /// `executeInstructions`, whose frame every interpreted body entry pays for, while only
+    /// `--debug` ever reaches the prompt.
+    pub noinline fn enterPrompt(self: *Debugger, instr: Instruction, ctx: *Context) !void {
+        @branchHint(.cold);
+
         self.events.emit(.paused, ctx);
 
         const stderr_file: std.fs.File = .stderr();

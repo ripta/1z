@@ -148,7 +148,7 @@ fmt: build ## Format zig and 1z source files
 # in the suite compiles for wasm32-freestanding, so a hosted-only declaration
 # newly named from a wasm-reachable function breaks `make wasm` and nothing says
 # so until someone builds the browser module by hand.
-test: branch-info leak-goldens-check module-less-benchmark-check aot-checks wasm-freestanding-build test-threads-1 test-threads-auto capi-test ## Run all tests under both --threads=1 and --threads=auto
+test: branch-info leak-goldens-check module-less-benchmark-check body-entry-slope-check aot-checks wasm-freestanding-build test-threads-1 test-threads-auto capi-test ## Run all tests under both --threads=1 and --threads=auto
 
 leak-goldens-check: ## Fail if any test golden has baked-in GPA leak text
 	@if grep -rl 'error(gpa)' tests/ --include='*.golden'; then \
@@ -180,6 +180,32 @@ module-less-benchmark-check: ## Fail if the pinned module-less benchmark grows a
 		exit 1; \
 	fi
 	@echo "PASS: $(MODULE_LESS_BENCHMARK) loads no module"
+
+BODY_ENTRY_SLOPE_BENCHMARK := tests/benchmark/body_entry_slope.1z
+
+# Native stack bytes one interpreted body entry may cost on a release build.
+BODY_ENTRY_SLOPE_MAX := 10000
+
+# Reads the release binary because the Debug build inlines nothing, so a cold callee folded back into
+# the interpreter's frame shows up only here.
+#
+# The three slopes have to agree as well as clear the bound. Disagreement means the chain stopped
+# entering one interpreted body per link, and the figure no longer measures an entry.
+body-entry-slope-check: release ## Fail if one interpreted body entry costs more native stack than its bound on a release build
+	@out=$$(ONEZ_NO_STARTUP=1 timeout $(TARGET_TIMEOUT) $(RELEASE_PREFIX)/bin/1z run --compile=off $(BODY_ENTRY_SLOPE_BENCHMARK)) || { \
+		echo "$$out"; \
+		echo "FAIL: $(BODY_ENTRY_SLOPE_BENCHMARK) did not run to completion"; \
+		exit 1; \
+	}; \
+	echo "$$out" | awk -v max=$(BODY_ENTRY_SLOPE_MAX) ' \
+		{ lines = lines $$0 "\n" } \
+		$$1 == "slope" { n++; v = $$NF + 0; if (n == 1) first = v; if (v != first) split_ = 1; if (v > max) over = 1 } \
+		END { \
+			if (n != 3) { printf "%s", lines; print "FAIL: expected three slope lines, read " n; exit 1 } \
+			if (split_) { printf "%s", lines; print "FAIL: the slopes disagree, so the chain no longer measures one entry per link"; exit 1 } \
+			if (over) { printf "%s", lines; print "FAIL: one interpreted body entry costs " first " bytes, above the bound of " max; exit 1 } \
+			print "PASS: one interpreted body entry costs " first " bytes, within the bound of " max \
+		}'
 
 test-threads-1: ## Run all tests with default --threads=1 for integration tests
 	timeout $(TARGET_TIMEOUT) $(ZIG) build test --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT)

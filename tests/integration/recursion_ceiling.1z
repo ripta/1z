@@ -3,7 +3,7 @@
 \ Bytes per level moves with the recursion shape, the compile mode, and the build, so all three are
 \ fixed. The shape is `deep`, whose recursive call sits in a `when` arm, so each level enters two
 \ bodies. The mode is `--compile=off`, from the sidecar. The build is the Debug binary the suite runs;
-\ a release build costs about twice as much per level and falls outside both bands.
+\ a release build costs about half as much per level and falls outside both bands.
 \
 \ Each row is the budget divided by the depth reached, so it reads high by the headroom left unused
 \ when the guard fires. The task row subtracts its `task-stack-peak` baseline first. The main task

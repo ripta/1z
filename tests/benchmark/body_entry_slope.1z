@@ -14,6 +14,9 @@
 \
 \ The figure means bytes per interpreted entry only under `--compile=off`. Under any other mode
 \ some links are compiled bodies that never enter the interpreter.
+\
+\ `make body-entry-slope-check` runs this on the release binary and parses the three `slope` lines,
+\ so their label and its trailing figure are a format that check depends on.
 
 c0:  ( -- n ) [ task-stack-peak ] ;
 c1:  ( -- n ) [ c0 1 + ] ;
