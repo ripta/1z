@@ -1430,6 +1430,9 @@ pub const Context = struct {
     allow_all_recursion: bool = false,
     stack_limit: usize = 0,
     stack_high: usize = 0,
+    /// Low bound of the usable native stack region the guard was armed over. Only the overflow
+    /// message reads it, to report the stack's size.
+    stack_low: usize = 0,
     /// Parent context for dictionary and dispatch table lookup chaining.
     /// Task contexts walk this chain to find words and methods defined in
     /// ancestor scopes, up to the root context which holds primitives and
@@ -1829,18 +1832,22 @@ pub const Context = struct {
     pub fn setStackBoundsFromCurrentThread(self: *Context) void {
         const bounds = currentThreadStackBounds() orelse return;
         self.stack_high = bounds.high;
+        self.stack_low = bounds.low;
         self.stack_limit = bounds.low + (bounds.high - bounds.low) / 8;
     }
 
-    /// The message a native stack overflow raises with, for a frame at `sp`: the bytes in use
-    /// against the stack's size.
+    /// The message a native stack overflow raises with, for a frame at `sp`.
+    ///
+    /// It names the bytes in use, the guard limit, and the stack's size separately. The guard limit
+    /// is the figure `stack-budget?` reports, and the gap between it and the size is the reserve.
     pub fn stackOverflowMessage(self: *Context, sp: usize) []const u8 {
         const used = self.stack_high -| sp;
-        const total = self.stack_high -| self.stack_limit +| (32 * 1024);
+        const limit = self.stack_high -| self.stack_limit;
+        const size = self.stack_high -| self.stack_low;
         return std.fmt.allocPrint(
             self.arena.allocator(),
-            "stack overflow: {} of {} bytes used",
-            .{ used, total },
+            "stack overflow: {} bytes used, guard limit {}, stack size {}",
+            .{ used, limit, size },
         ) catch "stack overflow";
     }
 
@@ -10836,6 +10843,21 @@ test "stack operations through context" {
 
     const val = try ctx.stack.pop();
     try std.testing.expectEqual(@as(i64, 42), val.fixnum);
+}
+
+test "stackOverflowMessage names bytes used, the guard limit, and the stack size" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    ctx.stack_low = 0x10_0000;
+    ctx.stack_limit = 0x10_0000 + 98304;
+    ctx.stack_high = 0x10_0000 + 786432;
+
+    const msg = ctx.stackOverflowMessage(ctx.stack_limit - 592);
+    try std.testing.expectEqualStrings(
+        "stack overflow: 688720 bytes used, guard limit 688128, stack size 786432",
+        msg,
+    );
 }
 
 test "quotation allocator frees on deinit" {

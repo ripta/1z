@@ -19051,6 +19051,7 @@ test "jitEntryCheck: a frame at or below the stack limit raises stack-overflow" 
     defer ctx.deinit();
 
     ctx.stack_high = @frameAddress() + 4096;
+    ctx.stack_low = @frameAddress() - 4096;
     var jit_ctx = JitContext{
         .items_ptr = ctx.stack.items.items.ptr,
         .sp_ptr = &ctx.stack.items.items.len,

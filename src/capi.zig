@@ -2625,9 +2625,11 @@ export fn onez_runtime_run(ptr: ?*anyopaque, entry_word_id: u32) i32 {
     // context on another thread.
     const saved_stack_high = ctx.stack_high;
     const saved_stack_limit = ctx.stack_limit;
+    const saved_stack_low = ctx.stack_low;
     defer {
         ctx.stack_high = saved_stack_high;
         ctx.stack_limit = saved_stack_limit;
+        ctx.stack_low = saved_stack_low;
     }
     if (comptime !is_freestanding) {
         if (ctx.stack_limit == 0) ctx.setStackBoundsFromCurrentThread();

@@ -116,6 +116,7 @@ fn allocateTaskWithEntry(
 
     const coro = task.coro.?;
     task_ctx.stack_high = @intFromPtr(coro.stack_base) + coro.stack_size;
+    task_ctx.stack_low = @intFromPtr(coro.stack_base);
     task_ctx.stack_limit = @intFromPtr(coro.stack_base) + task_stack_reserve;
 
     try scheduler.trackTask(task);
