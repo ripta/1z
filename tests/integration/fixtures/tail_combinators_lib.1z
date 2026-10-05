@@ -1,0 +1,12 @@
+\ Module words whose tail-position `if` and `call` select a quotation that reaches a word only the
+\ module can see.
+
+tc-double: ( n -- n ) [ 2 * ] ;
+
+tc-branch: ( n ? -- n ) [ [ tc-double ] [ 1 + ] if ] ;
+
+tc-apply: ( n -- n ) [ [ tc-double ] call ] ;
+
+\\ A quotation written in this file that leaves the stack as it found it, for a caller in another
+\\ file to run.
+tc-neutral-quot: ( -- quot ) [ [ 1 drop ] ] ;

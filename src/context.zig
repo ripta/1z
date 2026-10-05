@@ -94,6 +94,7 @@ const signal = @import("signal.zig");
 const control = @import("primitives/control.zig");
 const nativeSuppressChecksValidator = @import("effect_inference.zig").nativeSuppressChecksValidator;
 const helpers = @import("primitives/helpers.zig");
+const Callable = @import("callable.zig").Callable;
 
 // The JIT is unavailable on freestanding targets (no `ir` link, see build.zig); every call site
 // that would reach into ir_codegen.zig is comptime-gated below and falls back to plain
@@ -910,6 +911,30 @@ pub const Context = struct {
     /// The trampoline tries it after popping the caller's frame, so a compiled callee runs where an
     /// interpreted one would. `tail_call_instructions` runs only if it bails.
     tail_call_compiled: bool = false,
+    /// Whether the tail call target is a quotation a tail-position `if` or `call` selected, rather
+    /// than a word body. Set alongside `tail_call_instructions`.
+    ///
+    /// The trampoline gives such a body a lexical frame of its own for its one iteration, the frame
+    /// the native's helper would have pushed, and closes it at the next transition.
+    tail_call_arm: bool = false,
+    /// The reference that keeps a tail-called closure's body alive, set alongside
+    /// `tail_call_instructions` when the selected quotation is a closure. The trampoline takes it
+    /// and holds it while that body runs.
+    ///
+    /// Only a closure's reference ever needs holding, so the pointer is kept rather than a whole
+    /// value. The trampoline carries it in its own frame, where every byte is paid per body entry.
+    tail_call_owner_ref: ?*value_mod.Closure = null,
+    /// The lowest frame index a transition out of the running trampoline iteration would pop.
+    ///
+    /// A tail-position `if` or `call` reads it to check that none of those frames holds a binding.
+    /// Each trampoline iteration sets it and the trampoline restores it on exit. It is read only
+    /// while `tail_combinators` is on.
+    tail_pop_floor: usize = 0,
+    /// Whether a tail-position `if` or `call` runs its quotation as the trampoline's next iteration
+    /// instead of entering the interpreter again. Set from `ONEZ_TAIL_COMBINATORS`.
+    ///
+    /// Temporary: it gates a prototype whose outcome decides whether the behavior becomes the default.
+    tail_combinators: bool = false,
     /// Where a compiled tail call waits for the trampoline, allocated on the first one and owned
     /// by this context.
     ///
@@ -1959,6 +1984,7 @@ pub const Context = struct {
             .report_stall_verdict = parent.report_stall_verdict,
             .task_stack_cap = parent.task_stack_cap,
             .mem_limit = parent.mem_limit,
+            .tail_combinators = parent.tail_combinators,
             .current_source = parent.current_source,
             .startup_source = parent.startup_source,
             .current_source_dir = parent.current_source_dir,
@@ -8997,12 +9023,27 @@ pub const Context = struct {
     /// `enterBodySource`. Probing here instead would put a lookup on every word call to recompute
     /// what the caller already knows.
     pub inline fn executeQuotationWithPic(self: *Context, quotation: Quotation, pic_table: ?*PicTable, initial_module: ?*const value_mod.Module, owner: ?*const value_mod.Closure, body_defines: bool) anyerror!void {
-        return self.runTrampoline(quotation, pic_table, initial_module, owner, body_defines, false);
+        return self.runTrampoline(quotation, pic_table, initial_module, owner, body_defines, .{});
     }
 
-    /// The body of `executeQuotationWithPic`, entered with `first_compiled` when the body it runs
-    /// is a tail call's whose compiled code is tried first.
-    fn runTrampoline(self: *Context, quotation: Quotation, pic_table: ?*PicTable, initial_module: ?*const value_mod.Module, owner: ?*const value_mod.Closure, body_defines: bool, first_compiled: bool) anyerror!void {
+    /// How the first body `runTrampoline` runs arrived, for a body taken out of the tail-call slots
+    /// rather than called directly.
+    const TrampolineEntry = struct {
+        /// The body is a tail call's whose compiled code is tried first.
+        compiled: bool = false,
+        /// The body is a quotation a tail-position `if` or `call` selected. See `tail_call_arm`.
+        arm: bool = false,
+        /// The reference keeping the body alive, which the trampoline takes over. See
+        /// `tail_call_owner_ref`.
+        owner_ref: ?*value_mod.Closure = null,
+        /// The file that was current before an arm's own was installed. It is put back when the
+        /// arm's iteration ends, as the helper that would have run the arm puts it back on return.
+        arm_return_source: []const u8 = "",
+    };
+
+    /// The body of `executeQuotationWithPic`, entered with a non-default `first` when the body it
+    /// runs came out of the tail-call slots.
+    fn runTrampoline(self: *Context, quotation: Quotation, pic_table: ?*PicTable, initial_module: ?*const value_mod.Module, owner: ?*const value_mod.Closure, body_defines: bool, first: TrampolineEntry) anyerror!void {
         const saved_source = self.current_source;
         defer self.current_source = saved_source;
 
@@ -9015,21 +9056,40 @@ pub const Context = struct {
         var body_may_define = body_defines;
         var owns_lexical_frame = false;
         var lexical_frame_index: usize = 0;
-        var pending_compiled = first_compiled;
+        var pending_compiled = first.compiled;
+
+        // An arm iteration's frame is its own and closes when the iteration ends, unlike the
+        // lexical frame above, which a defining body keeps across tail calls.
+        var is_arm = first.arm;
+        var arm_frame_open = false;
+        var arm_frame_index: usize = 0;
+        var arm_return_source = first.arm_return_source;
+
+        // The closure behind the running arm, if any. One iteration's body is that closure's own
+        // array, so the reference is let go once the next body's is in hand.
+        var held_owner: ?*value_mod.Closure = first.owner_ref;
+        defer if (held_owner) |c| releaseHeldClosure(c);
+
+        const saved_pop_floor = self.tail_pop_floor;
+        defer self.tail_pop_floor = saved_pop_floor;
 
         // Every frame this loop opens sits above this depth, so an exit unwinds to it whatever
         // order the deps frame and the lexical frame ended up in.
         const entry_frame_len = self.local_frames.items.len;
         errdefer self.truncateLocalFrames(entry_frame_len);
 
+        // Taken once, before any tail call. A declared effect describes the quotation as a whole,
+        // and its tail callees run as part of it.
+        const depth_before = self.stack.depth();
+
         while (true) {
-            // Record depth before execution for validation
-            const depth_before = self.stack.depth();
+            self.assertNoPendingTailOwner();
             self.tail_call_instructions = null;
             self.tail_call_module = null;
             self.tail_call_source = null;
             self.tail_call_body_owner = null;
             self.tail_call_may_define = false;
+            self.tail_call_arm = false;
             if (!pending_compiled) self.tail_call_compiled = false;
 
             // Push module deps frame on first entry into a module context. On
@@ -9047,6 +9107,10 @@ pub const Context = struct {
             //
             // A tail callee with compiled code runs it here, where its body would have run. A bail
             // leaves the stack as it found it, and the body runs instead.
+            //
+            // The pop floor is set before the compiled code runs, so an interpreted body it falls
+            // back into never reads a floor left over from an earlier iteration.
+            self.tail_pop_floor = self.local_frames.items.len;
             var ran_compiled = false;
             if (pending_compiled) {
                 pending_compiled = false;
@@ -9071,6 +9135,17 @@ pub const Context = struct {
                     lexical_frame_index = self.local_frames.items.len - 1;
                 }
 
+                // An arm gets the frame the helper running it would have pushed. A transition out of
+                // the arm pops it, so it is the lowest frame the floor protects.
+                if (is_arm) {
+                    try self.pushOwnedLocalFrame(@intFromPtr(current_instructions.ptr));
+                    arm_frame_open = true;
+                    arm_frame_index = self.local_frames.items.len - 1;
+                    self.tail_pop_floor = arm_frame_index;
+                } else {
+                    self.tail_pop_floor = self.local_frames.items.len;
+                }
+
                 self.executeInstructions(current_instructions, current_pic, body_module, current_owner) catch |err| {
                     if (owns_frame) self.traceDepsFrameUnwind(current_module);
                     return err;
@@ -9084,6 +9159,25 @@ pub const Context = struct {
                 current_instructions = tci;
                 self.tail_call_instructions = null;
 
+                // The arm that just ran closes before anything else moves, so the frames below it
+                // are back on top for the rules that follow. The helper that would have run the arm
+                // closed its frame and put the file back before the caller saw the tail call.
+                if (arm_frame_open) {
+                    self.truncateLocalFrames(arm_frame_index);
+                    arm_frame_open = false;
+                    self.current_source = arm_return_source;
+                }
+
+                is_arm = self.tail_call_arm;
+                self.tail_call_arm = false;
+                std.debug.assert(!is_arm or (self.tail_call_module == null and !self.tail_call_compiled));
+
+                // A held reference covers exactly the iteration that runs its closure's body.
+                const next_owner = self.tail_call_owner_ref;
+                self.tail_call_owner_ref = null;
+                if (held_owner) |c| releaseHeldClosure(c);
+                held_owner = next_owner;
+
                 // Taken now, while the caller's frame is already gone, so a raise from the compiled
                 // code pends no row for it. That is what an interpreted tail callee does.
                 pending_compiled = self.tail_call_compiled;
@@ -9091,6 +9185,7 @@ pub const Context = struct {
                 // the PIC table no longer applies.
                 current_pic = null;
 
+                if (is_arm) arm_return_source = self.current_source;
                 if (self.tail_call_source) |tcs| self.current_source = tcs;
                 self.tail_call_source = null;
 
@@ -9111,7 +9206,10 @@ pub const Context = struct {
                 // them. The frame is closed instead, and a defining callee opens its own on the next
                 // iteration. Tags never move, and a mutual tail recursion still stays flat, because
                 // each hop closes one frame before it opens the next.
-                if (owns_lexical_frame and lexical_frame_index + 1 == self.local_frames.items.len and
+                //
+                // An arm leaves the frame where it is. The helper that would have run the arm ran it
+                // with this frame still open, and the body after the arm is checked against it here.
+                if (!is_arm and owns_lexical_frame and lexical_frame_index + 1 == self.local_frames.items.len and
                     !self.frameAdmits(lexical_frame_index, @intFromPtr(current_instructions.ptr)))
                 {
                     self.popLocalFrame();
@@ -9157,6 +9255,10 @@ pub const Context = struct {
             }
             owns_lexical_frame = false;
             self.truncateLocalFrames(entry_frame_len);
+
+            // The effect check below reports the current file, and the helper that would have run
+            // the arm had put the caller's back by now.
+            if (arm_frame_open) self.current_source = arm_return_source;
 
             // Non-tail call: validate quotation's stack effect
             if (quotation.effect) |effect| {
@@ -9465,6 +9567,15 @@ pub const Context = struct {
 
         const tci_compiled = self.tail_call_compiled;
 
+        const tci_arm = self.tail_call_arm;
+        self.tail_call_arm = false;
+
+        // The trampoline below takes this reference over. Only an arm carries one, and an arm
+        // carries no module, so nothing between here and that call can fail and leak it.
+        const tci_owner_ref = self.tail_call_owner_ref;
+        self.tail_call_owner_ref = null;
+        std.debug.assert(tci_owner_ref == null or (tci_arm and tci_module == null));
+
         if (tci_module) |mod| try self.pushModuleDepsFrame(mod);
         defer if (tci_module) |mod| self.popModuleDepsFrameTraced(mod);
 
@@ -9472,7 +9583,134 @@ pub const Context = struct {
         defer self.current_source = saved_source;
         self.enterBodySource(tci);
 
-        try self.runTrampoline(.{ .instructions = tci }, null, null, tci_owner, tci_may_define, tci_compiled);
+        try self.runTrampoline(.{ .instructions = tci }, null, null, tci_owner, tci_may_define, .{
+            .compiled = tci_compiled,
+            .arm = tci_arm,
+            .owner_ref = tci_owner_ref,
+            .arm_return_source = saved_source,
+        });
+    }
+
+    /// Debug-only invariant: no tail-called closure's reference is pending when the trampoline
+    /// clears the slots.
+    ///
+    /// `setQuotationTailCall` fills the slot right before `.tail_call_set` is returned, and both
+    /// consumers of that signal, `runTrampoline`'s transition and `runPropagatedTailBody`, empty it.
+    /// A reference found here was dropped by some other path, and it leaks.
+    fn assertNoPendingTailOwner(self: *const Context) void {
+        std.debug.assert(self.tail_call_owner_ref == null);
+    }
+
+    /// Release the closure reference `runTrampoline` held for an arm.
+    ///
+    /// Out of line so the release's own locals stay out of the trampoline's frame, which every
+    /// interpreted body entry pays for.
+    noinline fn releaseHeldClosure(c: *value_mod.Closure) void {
+        container_backing.releaseValue(.{ .closure = c });
+    }
+
+    /// Run a tail-position `if` or `call` as the trampoline's next iteration rather than as a
+    /// nested body entry, by putting the quotation it selects in the tail-call slots.
+    ///
+    /// Answers false, having changed nothing, for any other native and for every case the native
+    /// still has to run itself. The operands are read in place first, so a fallback runs the
+    /// native on exactly the stack it would have seen, with its own errors and effect checks.
+    fn tryCombinatorTailCall(self: *Context, func: dict_mod.NativeFn, name: []const u8) !bool {
+        const is_if = func == @as(dict_mod.NativeFn, control.nativeIf);
+        if (!is_if and func != @as(dict_mod.NativeFn, control.nativeCall)) return false;
+
+        const items = self.stack.items.items;
+        if (items.len < @as(usize, if (is_if) 3 else 1)) return false;
+
+        const selected: Quotation = if (is_if) blk: {
+            const true_view = tailCallableView(items[items.len - 2]) orelse return false;
+            const false_view = tailCallableView(items[items.len - 1]) orelse return false;
+            const cond = switch (items[items.len - 3]) {
+                .boolean => |b| b,
+                else => true,
+            };
+            break :blk if (cond) true_view else false_view;
+        } else tailCallableView(items[items.len - 1]) orelse return false;
+
+        // A declared effect is checked by the helper when the body returns, which a tail call
+        // never does.
+        if (selected.effect != null) return false;
+
+        // `call` alone: compiled code runs on its own path, and a body that defines needs the
+        // frame `call` keeps open across the body's own tail calls, where a local helper it
+        // defines and tail-calls still resolves.
+        if (!is_if) {
+            if (selected.code_ptr != null) return false;
+            if (may_define.bodyCallsDefiningNative(selected.instructions)) return false;
+        }
+
+        if (!self.tailPopFramesEmpty()) return false;
+
+        const chosen: Callable = if (is_if) blk: {
+            const false_quot = try helpers.popQuotation(self);
+            errdefer false_quot.release();
+            const true_quot = try helpers.popQuotation(self);
+            errdefer true_quot.release();
+            const cond = try helpers.popBoolean(self);
+
+            if (cond) {
+                false_quot.release();
+                break :blk true_quot;
+            }
+            true_quot.release();
+            break :blk false_quot;
+        } else try helpers.popQuotation(self);
+
+        self.setQuotationTailCall(chosen, name);
+        return true;
+    }
+
+    /// The body a tail-position `if` or `call` would run for `val`, or null for a value that is not
+    /// callable. Reads without stamping, so a fallback leaves everything as it was.
+    fn tailCallableView(val: Value) ?Quotation {
+        return switch (val) {
+            .quotation => |q| q,
+            .closure => |c| c.asQuotation(),
+            else => null,
+        };
+    }
+
+    /// Whether every frame a transition out of the running trampoline iteration would pop is
+    /// empty. A binding in one is visible to a body the native's helper would have run beneath it,
+    /// so a tail-position `if` or `call` falls back while one is there.
+    fn tailPopFramesEmpty(self: *const Context) bool {
+        const counted = self.local_frame_counted.items;
+        if (self.tail_pop_floor >= counted.len) return true;
+
+        for (counted[self.tail_pop_floor..]) |nonempty| {
+            if (nonempty) return false;
+        }
+        return true;
+    }
+
+    /// Hand the quotation a tail-position `if` or `call` selected to the trampoline. The native's
+    /// call frame stays for the trampoline to pop.
+    ///
+    /// A closure's reference rides along, since it is what keeps the body alive. A plain
+    /// quotation's is inert and is dropped here.
+    fn setQuotationTailCall(self: *Context, chosen: Callable, name: []const u8) void {
+        std.debug.assert(self.tail_call_owner_ref == null);
+
+        if (self.benchmark) |b| b.endWordProfile(self.allocator, name);
+        if (self.profile) |p| p.recordWordEnd(self.allocator, name);
+
+        self.tail_call_instructions = chosen.quot.instructions;
+        self.tail_call_module = null;
+        self.tail_call_source = self.quotationBodySource(chosen.quot.instructions);
+        self.tail_call_body_owner = chosen.ownerClosure();
+        self.tail_call_may_define = false;
+        self.tail_call_compiled = false;
+        self.tail_call_arm = true;
+
+        switch (chosen.owner) {
+            .closure => |c| self.tail_call_owner_ref = c,
+            else => chosen.release(),
+        }
     }
 
     /// Run a tail call's compiled code at the trampoline, after the caller's frame is gone.
@@ -9764,9 +10002,16 @@ pub const Context = struct {
                     self.tail_call_body_owner = word.body_owner;
                     self.tail_call_may_define = word.exec_flags.may_define;
                     self.tail_call_compiled = false;
+                    self.tail_call_arm = false;
                     return .tail_call_set;
                 },
                 .native => |func| {
+                    if (self.tail_combinators) {
+                        const taken = self.tryCombinatorTailCall(func, name) catch |err|
+                            return self.wordErrorCleanup(name, err);
+                        if (taken) return .tail_call_set;
+                    }
+
                     self.tail_call_instructions = null;
                     self.tail_call_compiled = false;
                     self.current_pic_entry = if (site.pic_table) |pt| pt.get(idx) else null;
@@ -9971,6 +10216,7 @@ pub const Context = struct {
         self.tail_call_body_owner = word.body_owner;
         self.tail_call_may_define = word.exec_flags.may_define;
         self.tail_call_compiled = true;
+        self.tail_call_arm = false;
         return .tail_call_set;
     }
 
@@ -15770,6 +16016,78 @@ test "executeInstructions: a push-time promotion keeps the map path" {
 
     try ctx.executeQuotationWithOwner(cl.asQuotation(), cl);
     try std.testing.expectEqual(@as(i64, 2), (try ctx.stack.pop()).fixnum);
+}
+
+/// Whether the body `tailProbeNative` last ran under still had a `call` frame on the call stack.
+var tail_probe_saw_call_frame: ?bool = null;
+
+fn tailProbeNative(ctx: *Context) anyerror!void {
+    var saw = false;
+    for (ctx.call_stack.items) |frame| {
+        if (std.mem.eql(u8, frame.word_name, "call")) saw = true;
+    }
+    tail_probe_saw_call_frame = saw;
+}
+
+/// A closure owning a fresh one-instruction body that calls `name`, with one reference for the
+/// caller and one already moved onto the stack.
+fn pushClosureCalling(ctx: *Context, name: []const u8) !*value_mod.Closure {
+    const body = try ctx.allocator.alloc(Instruction, 1);
+    body[0] = .{ .op = .{ .call_word = name }, .line = 1 };
+
+    const cl = try value_mod.Closure.create(ctx.allocator, .{
+        .instructions = body,
+        .segments = &.{},
+        .header = undefined,
+        .owns_body = true,
+    });
+    cl.header.retain();
+    try ctx.stack.pushMoved(.{ .closure = cl });
+    return cl;
+}
+
+test "a tail-position call runs a closure as the trampoline's next iteration and releases it" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+    ctx.tail_combinators = true;
+
+    try ctx.dictionary.put("tail-probe", .{
+        .name = "tail-probe",
+        .action = .{ .native = tailProbeNative },
+    });
+
+    const cl = try pushClosureCalling(&ctx, "tail-probe");
+    defer container_backing.releaseValue(.{ .closure = cl });
+
+    const body = try ctx.arena.allocator().alloc(Instruction, 1);
+    body[0] = .{ .op = .{ .call_word = "call" }, .line = 1 };
+
+    tail_probe_saw_call_frame = null;
+    try ctx.executeQuotationWithPic(.{ .instructions = body }, null, null, null, false);
+
+    // The trampoline popped `call`'s frame before running the body, as it would a tail call's.
+    try std.testing.expectEqual(@as(?bool, false), tail_probe_saw_call_frame);
+    try std.testing.expect(ctx.tail_call_owner_ref == null);
+    try std.testing.expectEqual(@as(u32, 1), cl.header.refcount.load(.acquire));
+}
+
+test "a raise inside a tail-called closure still releases it" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+    ctx.tail_combinators = true;
+
+    const cl = try pushClosureCalling(&ctx, "drop");
+    defer container_backing.releaseValue(.{ .closure = cl });
+
+    const body = try ctx.arena.allocator().alloc(Instruction, 1);
+    body[0] = .{ .op = .{ .call_word = "call" }, .line = 1 };
+
+    try std.testing.expectError(
+        error.StackUnderflow,
+        ctx.executeQuotationWithPic(.{ .instructions = body }, null, null, null, false),
+    );
+    try std.testing.expect(ctx.tail_call_owner_ref == null);
+    try std.testing.expectEqual(@as(u32, 1), cl.header.refcount.load(.acquire));
 }
 
 test "executeInstructions: a tail call out of a closure-owned body resolves as the callee" {

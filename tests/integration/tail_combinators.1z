@@ -1,0 +1,71 @@
+\ Test that a tail-position `if` and `call` behave the same when `ONEZ_TAIL_COMBINATORS` runs the
+\ quotation they select as the trampoline's next iteration rather than as a nested body.
+
+use "testing" ;
+use { tc-branch: tc-apply: } "./fixtures/tail_combinators_lib.1z" ;
+
+"tail-position if and when" test-section
+
+pick-arm: ( ? -- n ) [ [ 10 ] [ 20 ] if ] ;
+t pick-arm 10 "the true arm runs" assert=
+f pick-arm 20 "the false arm runs" assert=
+
+add-when: ( n ? -- n ) [ [ 1 + ] when ] ;
+5 t add-when 6 "when runs its arm" assert=
+5 f add-when 5 "when skips its arm" assert=
+
+count-down: stack-recursive ( n -- n ) [ dup 0 > [ 1 - count-down 1 + ] when ] ;
+200 count-down 200 "recursion through a tail arm returns every level" assert=
+
+"tail-position call" test-section
+
+run-it: ( n quot -- n ) [ call ] ;
+4 [ 3 * ] run-it 12 "call runs a plain quotation" assert=
+4 2 [ * ] curry run-it 8 "call runs a closure" assert=
+
+\ Each level builds a fresh closure and tail-calls it, so each hop takes one reference and lets
+\ the last one go.
+closure-loop: stack-recursive ( n -- n ) [ dup 0 > [ [ 1 - closure-loop ] curry call ] [ ] if ] ;
+200 closure-loop 0 "a loop of fresh closures runs to the end" assert=
+
+"a tail if inside a non-tail arm" test-section
+
+\ The outer `if` has work after it, so its arm runs nested. The inner `if` is last in that arm,
+\ so it leaves its quotation for the caller of the outer `if` to run.
+nested-arms: ( ? ? -- n ) [ [ [ 1 ] [ 2 ] if ] [ drop 3 ] if 100 + ] ;
+t t nested-arms 101 "inner true arm under the outer true arm" assert=
+f t nested-arms 102 "inner false arm under the outer true arm" assert=
+t f nested-arms 103 "the outer false arm" assert=
+
+"module words" test-section
+
+5 t tc-branch 10 "a tail arm reaches a word only its module sees" assert=
+5 f tc-branch 6 "the other arm of the same word" assert=
+5 tc-apply 10 "a tail call body reaches a word only its module sees" assert=
+[ 5 tc-double ] unknown-word: "the module's word stays private" assert-error-type
+
+"frames" test-section
+
+\ The outer arm pushes `[ x ]` before it defines `x`, so the quotation captures nothing and reads
+\ `x` from the arm's frame. The frame holds a binding, so the inner `if` runs its arm nested.
+define-then-branch: ( -- n ) [ t [ [ x ] x: 5 ; t swap [ 0 ] if ] [ 0 ] if ] ;
+define-then-branch 5 "a nested arm reads its enclosing arm's definition" assert=
+
+arm-defines: ( -- ) [ t [ y: 7 ; ] [ ] if ] ;
+arm-defines
+[ y ] unknown-word: "an arm's definition is gone once the arm ends" assert-error-type
+
+\ A `call` body that defines keeps its frame across its own tail call, where the helper it defines
+\ still resolves itself.
+helper-loop: ( n -- n ) [ [ h: [ dup 0 > [ 1 - h ] when ] ; h ] call ] ;
+5 helper-loop 0 "a call body's local helper resolves across its tail call" assert=
+
+"declared effects" test-section
+
+\ A selected arm with a declared effect runs nested, where the effect is still checked.
+bad-arm: ( -- ) [ 5 6 t [ ( n -- ) drop drop ] [ ] if ] ;
+[ bad-arm ] stack-effect-mismatch: "a selected arm's declared effect is checked" assert-error-type
+
+\ A quotation's declared effect covers the arm it ends in.
+3 [ ( n -- n n ) dup t [ 1 + ] [ ] if ] call
+4 "an effect across a tail arm, top" assert= 3 "an effect across a tail arm, below" assert=

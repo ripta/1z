@@ -230,6 +230,17 @@ ENTRY_CENSUS_LIBRARY := \
 	'pratt_paren|nontail_compound:parse-pratt' \
 	'pratt_infix|nontail_compound:parse-pratt'
 
+# The same synthetic shapes under ONEZ_TAIL_COMBINATORS, where a tail-position `if` arm or `call`
+# body runs as a trampoline iteration and so leaves no entry of its own.
+ENTRY_CENSUS_TAIL_SYNTHETIC := \
+	'compound_chain|nontail_compound:*|nontail_compound:*' \
+	'tail_if|nontail_compound:r|nontail_compound:r' \
+	'nontail_if|nontail_compound:r|nontail_compound:r,nontail_native:if' \
+	'call|nontail_compound:r|nontail_compound:r' \
+	'when_nontail|nontail_compound:r|nontail_compound:r,nontail_compound:when' \
+	'when_tail|nontail_compound:r|nontail_compound:r' \
+	'dip|nontail_native:dip|nontail_native:dip'
+
 entry-census-build: branch-info ## Build a release binary that records the live body entries at the deepest native stack point, into its own prefix
 	$(ZIG) build --release=fast -Dentry-census=true --prefix $(ENTRY_CENSUS_PREFIX) $(ZIG_CPU_ARG)
 
@@ -247,6 +258,24 @@ benchmark-entry-census: entry-census-build ## Report the live body entries per r
 		IFS='|' read -r file anchor <<< "$$spec"; \
 		echo "== $$file"; \
 		ONEZ_NO_STARTUP=1 timeout $(TARGET_TIMEOUT) $(ENTRY_CENSUS_PREFIX)/bin/1z run --compile=off $(ENTRY_CENSUS_DIR)/$$file.1z 2>&1 >/dev/null \
+			| python3 scripts/entry-census.py - "$$anchor" || status=1; \
+	done; \
+	exit $$status
+
+# Not part of `make test`, for the same reason as the target above.
+benchmark-entry-census-tail: entry-census-build ## Report the same census with ONEZ_TAIL_COMBINATORS set
+	@set -o pipefail; \
+	status=0; \
+	for spec in $(ENTRY_CENSUS_TAIL_SYNTHETIC); do \
+		IFS='|' read -r file anchor expect <<< "$$spec"; \
+		echo "== $$file"; \
+		ONEZ_TAIL_COMBINATORS=1 ONEZ_NO_STARTUP=1 timeout $(TARGET_TIMEOUT) $(ENTRY_CENSUS_PREFIX)/bin/1z run --compile=off $(ENTRY_CENSUS_DIR)/$$file.1z 2>&1 >/dev/null \
+			| python3 scripts/entry-census.py - "$$anchor" --expect "$$expect" || status=1; \
+	done; \
+	for spec in $(ENTRY_CENSUS_LIBRARY); do \
+		IFS='|' read -r file anchor <<< "$$spec"; \
+		echo "== $$file"; \
+		ONEZ_TAIL_COMBINATORS=1 ONEZ_NO_STARTUP=1 timeout $(TARGET_TIMEOUT) $(ENTRY_CENSUS_PREFIX)/bin/1z run --compile=off $(ENTRY_CENSUS_DIR)/$$file.1z 2>&1 >/dev/null \
 			| python3 scripts/entry-census.py - "$$anchor" || status=1; \
 	done; \
 	exit $$status
@@ -797,7 +826,7 @@ update-fmt-golden: ## Update formatter test golden files
 
 # The collision_*.1z build-cost drivers are AOT-built by benchmark-collision-build, never
 # interpreted as benchmarks; the tcp+tls one dials sockets and cannot run standalone.
-BENCHMARK_FILES := $(filter-out tests/benchmark/collision_%,$(wildcard tests/benchmark/*.1z))
+BENCHMARK_FILES := $(filter-out tests/benchmark/collision_% tests/benchmark/json_task_depth.1z,$(wildcard tests/benchmark/*.1z))
 
 benchmark-fib: build ## Run fibonacci benchmark across all execution modes and record the sample
 	@scripts/benchmark-fib.sh ./$(ZIG_PREFIX)/bin/1z tests/benchmark/fibonacci_simple.1z $(ZIG_PREFIX)/benchmark-fib-aot \

@@ -1,0 +1,7 @@
+\ Test that a declared quotation effect failing after a tail-position arm reports the caller's file
+\ under `ONEZ_TAIL_COMBINATORS`. The arm was written in another file, and the report names the file
+\ the quotation sits in, as it does when the arm runs nested.
+
+use { tc-neutral-quot: } "./fixtures/tail_combinators_lib.1z" ;
+
+[ ( -- n ) tc-neutral-quot t swap [ ] if ] call

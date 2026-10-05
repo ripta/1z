@@ -1,0 +1,25 @@
+\ Test that a tail-position `if` arm costs no body entry under `ONEZ_TAIL_COMBINATORS`.
+\
+\ Both words recurse through one non-tail call per level. In `tail-arm` that call sits in an arm
+\ `when` runs in tail position, which the flag turns into a trampoline iteration. In `nested-arm`
+\ work follows the `if`, so its arm stays a nested body entry. Each reading runs in a task of its
+\ own, since `task-stack-peak` is a running maximum.
+
+use "testing" ;
+
+DEPTH: const [ 200 ] ;
+
+tail-arm: stack-recursive ( n -- n ) [ dup 0 > [ 1 - tail-arm 1 + ] when ] ;
+
+nested-arm: stack-recursive ( n -- n ) [ dup 0 > [ 1 - nested-arm 1 + ] [ ] if 0 + ] ;
+
+"a tail arm adds no entry" test-section
+
+[
+  [ DEPTH tail-arm drop task-stack-peak ] spawn await
+  [ DEPTH nested-arm drop task-stack-peak ] spawn await
+
+  \ Two entries a level against one, so the tail-arm reading is near half. Two thirds leaves room
+  \ for the per-task baseline both readings share.
+  2 * swap 3 * swap < "a tail arm's recursion peaks well below the nested arm's" assert-true
+] task-scope

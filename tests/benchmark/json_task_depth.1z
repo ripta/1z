@@ -1,0 +1,37 @@
+\ How deep `parse-json` can nest objects inside a task, and what 20 levels cost.
+\
+\ Usage: zig-out/release/bin/1z run --compile=off tests/benchmark/json_task_depth.1z
+\
+\ Each probe runs in a task of its own, since `task-stack-peak` is a running maximum. The deepest
+\ depth is found by bisection between a depth that parses and one that overflows.
+
+use "data/json" ;
+
+\\ `str` concatenated `n` times.
+repeat-string: ( str: string n: fixnum -- result: string ) [ "" swap [ over #append ] times nip ] ;
+
+\\ A JSON document of objects nested `n` deep around a single number.
+nested-object: ( n: fixnum -- doc: string ) [
+  [ "{\"a\":" swap repeat-string "1" #append ] [ "}" swap repeat-string ] bi #append
+] ;
+
+\\ Whether a task parses objects nested `n` deep without running out of stack.
+parses?: ( n: fixnum -- ? ) [
+  [ [ nested-object parse-json drop t ] curry [ drop f ] recover ] curry spawn await
+] ;
+
+\\ The deepest nesting in `lo..hi` that parses, given that `lo` parses and `hi` does not.
+deepest: ( lo: fixnum hi: fixnum -- n: fixnum ) [
+  over 1 + over = [ drop ] [
+    2dup + 2 div dup parses? [ [ swap ] dip nip swap ] [ nip ] if
+    deepest
+  ] if
+] ;
+
+[
+  [ 20 nested-object parse-json drop task-stack-peak ] spawn await
+  "peak at 20 levels: " print inspect print-line
+
+  1 8192 deepest
+  "deepest nesting that parses: " print inspect print-line
+] task-scope

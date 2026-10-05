@@ -1,0 +1,7 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+=== a tail arm adds no entry ===
+Stack: [ ]
+PASS: a tail arm's recursion peaks well below the nested arm's
+Stack: [ ]

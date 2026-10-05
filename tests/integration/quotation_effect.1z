@@ -20,3 +20,10 @@ t "effect (--) succeeds" assert-true
 
 "Duplicate effect" test-section
 10 [ ( n -- n n ) dup ] call 10 "effect (n -- n n) first" assert= 10 "effect (n -- n n) second" assert=
+
+"Effect across a tail call" test-section
+\ `when` is a compound word in tail position, so it runs as the trampoline's next iteration. The
+\ declared effect still covers the whole quotation, including the work done before the tail call.
+5 [ ( n -- n n ) dup t [ ] when ] call
+5 "tail-calling body, first" assert= 5 "tail-calling body, second" assert=
+[ 5 [ ( n -- n ) dup t [ ] when ] call ] stack-effect-mismatch: "tail-calling body still checked" assert-error-type

@@ -1,0 +1,65 @@
+=== tail-position if and when ===
+Stack: [ ]
+Stack: [ ]
+PASS: the true arm runs
+Stack: [ ]
+PASS: the false arm runs
+Stack: [ ]
+Stack: [ ]
+PASS: when runs its arm
+Stack: [ ]
+PASS: when skips its arm
+Stack: [ ]
+Stack: [ ]
+PASS: recursion through a tail arm returns every level
+Stack: [ ]
+=== tail-position call ===
+Stack: [ ]
+Stack: [ ]
+PASS: call runs a plain quotation
+Stack: [ ]
+PASS: call runs a closure
+Stack: [ ]
+Stack: [ ]
+PASS: a loop of fresh closures runs to the end
+Stack: [ ]
+=== a tail if inside a non-tail arm ===
+Stack: [ ]
+Stack: [ ]
+PASS: inner true arm under the outer true arm
+Stack: [ ]
+PASS: inner false arm under the outer true arm
+Stack: [ ]
+PASS: the outer false arm
+Stack: [ ]
+=== module words ===
+Stack: [ ]
+PASS: a tail arm reaches a word only its module sees
+Stack: [ ]
+PASS: the other arm of the same word
+Stack: [ ]
+PASS: a tail call body reaches a word only its module sees
+Stack: [ ]
+PASS: the module's word stays private
+Stack: [ ]
+=== frames ===
+Stack: [ ]
+Stack: [ ]
+PASS: a nested arm reads its enclosing arm's definition
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: an arm's definition is gone once the arm ends
+Stack: [ ]
+Stack: [ ]
+PASS: a call body's local helper resolves across its tail call
+Stack: [ ]
+=== declared effects ===
+Stack: [ ]
+Stack: [ ]
+PASS: a selected arm's declared effect is checked
+Stack: [ ]
+Stack: [ 3 4 ]
+PASS: an effect across a tail arm, top
+PASS: an effect across a tail arm, below
+Stack: [ ]

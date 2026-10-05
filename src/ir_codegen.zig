@@ -18735,6 +18735,7 @@ export fn jitInterpretedCall(ctx_raw: usize, word_id_raw: usize, src_ptr_raw: us
             ctx.tail_call_body_owner = word.body_owner;
             ctx.tail_call_may_define = word.exec_flags.may_define;
             ctx.tail_call_compiled = false;
+            ctx.tail_call_arm = false;
             return pending_tail_status;
         }
 

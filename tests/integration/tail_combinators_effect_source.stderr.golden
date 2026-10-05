@@ -1,0 +1,1 @@
+tests/integration/tail_combinators_effect_source.1z:7: error 'stack-effect-mismatch' quotation declared (  -- n ), expected delta 1 but got 0 at word '<quotation>'

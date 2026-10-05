@@ -1,0 +1,9 @@
+\ Test that a raise inside a tail-position arm reports the way a raise inside a tail-called word
+\ does under `ONEZ_TAIL_COMBINATORS`. The `if` row is elided, and the rows for the words that
+\ called it stay.
+
+inner: ( -- ) [ t [ "x" 1 + ] [ ] if ] ;
+
+outer: ( -- n ) [ inner 0 ] ;
+
+outer

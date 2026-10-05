@@ -24,3 +24,11 @@ Stack: [ ]
 PASS: effect (n -- n n) first
 PASS: effect (n -- n n) second
 Stack: [ ]
+=== Effect across a tail call ===
+Stack: [ ]
+Stack: [ 5 5 ]
+PASS: tail-calling body, first
+PASS: tail-calling body, second
+Stack: [ ]
+PASS: tail-calling body still checked
+Stack: [ ]
