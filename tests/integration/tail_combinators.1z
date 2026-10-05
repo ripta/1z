@@ -1,5 +1,5 @@
-\ Test that a tail-position `if` and `call` behave the same when `ONEZ_TAIL_COMBINATORS` runs the
-\ quotation they select as the trampoline's next iteration rather than as a nested body.
+\ Test that a tail-position `if` and `call` behave as a nested body would, though the quotation they
+\ select runs as the trampoline's next iteration.
 
 use "testing" ;
 use { tc-branch: tc-apply: } "./fixtures/tail_combinators_lib.1z" ;

@@ -1,9 +1,9 @@
-\ Test that a tail-position `if` arm costs no body entry under `ONEZ_TAIL_COMBINATORS`.
+\ Test that a tail-position `if` arm costs no body entry.
 \
 \ Both words recurse through one non-tail call per level. In `tail-arm` that call sits in an arm
-\ `when` runs in tail position, which the flag turns into a trampoline iteration. In `nested-arm`
-\ work follows the `if`, so its arm stays a nested body entry. Each reading runs in a task of its
-\ own, since `task-stack-peak` is a running maximum.
+\ `when` runs in tail position, so it runs as a trampoline iteration. In `nested-arm` work follows
+\ the `if`, so its arm stays a nested body entry. Each reading runs in a task of its own, since
+\ `task-stack-peak` is a running maximum.
 
 use "testing" ;
 

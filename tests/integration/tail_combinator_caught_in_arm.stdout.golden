@@ -1,0 +1,4 @@
+Stack: [ ]
+Stack: [ ]
+<error user-thrown: boom [tests/integration/tail_combinator_caught_in_arm.1z:8:throw <- tests/integration/tail_combinator_caught_in_arm.1z:10:recover]>
+Stack: [ ]

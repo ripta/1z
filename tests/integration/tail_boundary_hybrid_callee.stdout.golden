@@ -1,9 +1,9 @@
 Stack: [ ]
 Stack: [ ]
-<error user-thrown: kaboom [tests/integration/tail_boundary_hybrid_callee.1z:7:throw <- src/prelude.1z:352:if <- tests/integration/tail_boundary_hybrid_callee.1z:10:recover]>
+<error user-thrown: kaboom [tests/integration/tail_boundary_hybrid_callee.1z:7:throw <- tests/integration/tail_boundary_hybrid_callee.1z:10:recover]>
 Stack: [ ]
 Stack: [ ]
 PASS: maybe-boom compiles through tail calls
 Stack: [ ]
-<error user-thrown: kaboom [tests/integration/tail_boundary_hybrid_callee.1z:7:throw <- src/prelude.1z:352:if <- tests/integration/tail_boundary_hybrid_callee.1z:13:recover]>
+<error user-thrown: kaboom [tests/integration/tail_boundary_hybrid_callee.1z:7:throw <- tests/integration/tail_boundary_hybrid_callee.1z:13:recover]>
 Stack: [ ]

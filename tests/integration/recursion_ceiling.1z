@@ -1,9 +1,10 @@
 \ Test how deep interpreted code recurses before the native stack guard fires, as bytes per level.
 \
 \ Bytes per level moves with the recursion shape, the compile mode, and the build, so all three are
-\ fixed. The shape is `deep`, whose recursive call sits in a `when` arm, so each level enters two
-\ bodies. The mode is `--compile=off`, from the sidecar. The build is the Debug binary the suite runs;
-\ a release build costs about half as much per level and falls outside both bands.
+\ fixed. The shape is `deep`, whose recursive call sits in a tail-position `when` arm. The arm runs
+\ as a trampoline iteration, so each level enters one body. The mode is `--compile=off`, from the
+\ sidecar. The build is the Debug binary the suite runs; a release build costs about half as much
+\ per level and falls outside both bands.
 \
 \ Each row is the budget divided by the depth reached, so it reads high by the headroom left unused
 \ when the guard fires. The task row subtracts its `task-stack-peak` baseline first. The main task
@@ -14,10 +15,10 @@
 
 use "testing" ;
 
-MAIN-LOW:  const [ 16581 ] ;
-MAIN-HIGH: const [ 27635 ] ;
-TASK-LOW:  const [ 16945 ] ;
-TASK-HIGH: const [ 28243 ] ;
+MAIN-LOW:  const [ 8541 ] ;
+MAIN-HIGH: const [ 14235 ] ;
+TASK-LOW:  const [ 8476 ] ;
+TASK-HIGH: const [ 14126 ] ;
 
 \ Heap counters survive the unwind that the stack overflow forces.
 LEVELS: V{ } ;

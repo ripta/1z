@@ -1,7 +1,7 @@
 \ A raise inside a nested helper. A read with code after it keeps the helper's row, as the
 \ interpreter's call of the helper word does. A read last in its body is a tail call, so the row
-\ goes, along with the row of a tail-position `if` it was reached through. A failed entry check on
-\ a typed helper keeps the row either way.
+\ goes. A tail-position `if` reports no row of its own. A failed entry check on a typed helper keeps
+\ the row either way.
 \
 \ No flags, so the eager run checks the same golden against words whose reads compiled to the
 \ helper's body.

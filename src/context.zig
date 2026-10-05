@@ -133,6 +133,9 @@ pub const CallFrame = struct {
     /// The named word's own declared effect, set at push from the definition in hand, so the
     /// error renderer never resolves `word_name` through a ladder a shadowing binding can answer.
     stack_effect: ?*const StackEffect = null,
+    /// A tail-position `if` or `call`, which reports no row as a caller. The fold keeps the frame
+    /// only when it is the innermost one, where the combinator itself raised.
+    raise_site_only: bool = false,
 };
 
 /// A raw effect string by address and length. Both kinds of string a trace frame carries, a
@@ -927,14 +930,8 @@ pub const Context = struct {
     /// The lowest frame index a transition out of the running trampoline iteration would pop.
     ///
     /// A tail-position `if` or `call` reads it to check that none of those frames holds a binding.
-    /// Each trampoline iteration sets it and the trampoline restores it on exit. It is read only
-    /// while `tail_combinators` is on.
+    /// Each trampoline iteration sets it and the trampoline restores it on exit.
     tail_pop_floor: usize = 0,
-    /// Whether a tail-position `if` or `call` runs its quotation as the trampoline's next iteration
-    /// instead of entering the interpreter again. Set from `ONEZ_TAIL_COMBINATORS`.
-    ///
-    /// Temporary: it gates a prototype whose outcome decides whether the behavior becomes the default.
-    tail_combinators: bool = false,
     /// Where a compiled tail call waits for the trampoline, allocated on the first one and owned
     /// by this context.
     ///
@@ -1984,7 +1981,6 @@ pub const Context = struct {
             .report_stall_verdict = parent.report_stall_verdict,
             .task_stack_cap = parent.task_stack_cap,
             .mem_limit = parent.mem_limit,
-            .tail_combinators = parent.tail_combinators,
             .current_source = parent.current_source,
             .startup_source = parent.startup_source,
             .current_source_dir = parent.current_source_dir,
@@ -8775,6 +8771,8 @@ pub const Context = struct {
                 continue;
             }
 
+            if (frame.raise_site_only and !is_innermost) continue;
+
             const message = if (is_innermost and thrown_msg != null)
                 thrown_msg.?
             else if (is_innermost and pending_msg != null)
@@ -8811,6 +8809,8 @@ pub const Context = struct {
         while (i > 0) {
             i -= 1;
             const frame = self.call_stack.items[i];
+            if (frame.raise_site_only and !is_innermost) continue;
+
             const message = if (is_innermost and thrown_msg != null)
                 thrown_msg.?
             else if (is_innermost and pending_msg != null)
@@ -9417,6 +9417,38 @@ pub const Context = struct {
         return err;
     }
 
+    /// Whether `func` is a combinator that reports no caller row in tail position.
+    ///
+    /// A tail-position `if` or `call` usually runs its quotation as the trampoline's next
+    /// iteration, which leaves no frame to report. The rule is positional so that every tier
+    /// reports the same chain, including when the native has to run its quotation nested.
+    pub fn isTailCombinator(func: dict_mod.NativeFn) bool {
+        return func == @as(dict_mod.NativeFn, control.nativeIf) or func == @as(dict_mod.NativeFn, control.nativeCall);
+    }
+
+    /// Mark the frame of a tail-position `if` or `call` about to run its quotation nested, and
+    /// answer the pending-frame mark its error cleanup compares against.
+    ///
+    /// The live frame is marked so a catch inside the quotation does not report it as a caller.
+    pub fn beginTailCombinatorRun(self: *Context) usize {
+        if (self.call_stack.items.len > 0) self.call_stack.items[self.call_stack.items.len - 1].raise_site_only = true;
+        return self.pendingErrorFrameCount();
+    }
+
+    /// `wordErrorCleanup` for a tail-position `if` or `call` that ran its quotation nested.
+    ///
+    /// A raise inside the quotation has pended frames past `mark`, and the combinator's frame is
+    /// popped unpended. A raise by the combinator itself pends nothing first, and its frame pends as
+    /// the raise site.
+    pub fn tailCombinatorErrorCleanup(self: *Context, name: []const u8, err: anyerror, mark: usize) anyerror {
+        if (self.pendingErrorFrameCount() == mark) return self.wordErrorCleanup(name, err);
+
+        if (self.benchmark) |b| b.endWordProfile(self.allocator, name);
+        if (self.profile) |p| p.recordWordEnd(self.allocator, name);
+        self.popCallFrame();
+        return err;
+    }
+
     /// Queue the error rows inline expansion erased, for a raise at `idx` in `body`.
     ///
     /// A copy of an `inline` word's body carries no call to push that word's frame, so its row is
@@ -9609,42 +9641,44 @@ pub const Context = struct {
         container_backing.releaseValue(.{ .closure = c });
     }
 
+    const CombinatorTailOutcome = enum { taken, fallback, not_combinator };
+
     /// Run a tail-position `if` or `call` as the trampoline's next iteration rather than as a
     /// nested body entry, by putting the quotation it selects in the tail-call slots.
     ///
-    /// Answers false, having changed nothing, for any other native and for every case the native
-    /// still has to run itself. The operands are read in place first, so a fallback runs the
-    /// native on exactly the stack it would have seen, with its own errors and effect checks.
-    fn tryCombinatorTailCall(self: *Context, func: dict_mod.NativeFn, name: []const u8) !bool {
+    /// Answers `fallback`, having changed nothing, for every case the native still has to run
+    /// itself. The operands are read in place first, so a fallback runs the native on exactly the
+    /// stack it would have seen, with its own errors and effect checks.
+    fn tryCombinatorTailCall(self: *Context, func: dict_mod.NativeFn, name: []const u8) !CombinatorTailOutcome {
         const is_if = func == @as(dict_mod.NativeFn, control.nativeIf);
-        if (!is_if and func != @as(dict_mod.NativeFn, control.nativeCall)) return false;
+        if (!is_if and func != @as(dict_mod.NativeFn, control.nativeCall)) return .not_combinator;
 
         const items = self.stack.items.items;
-        if (items.len < @as(usize, if (is_if) 3 else 1)) return false;
+        if (items.len < @as(usize, if (is_if) 3 else 1)) return .fallback;
 
         const selected: Quotation = if (is_if) blk: {
-            const true_view = tailCallableView(items[items.len - 2]) orelse return false;
-            const false_view = tailCallableView(items[items.len - 1]) orelse return false;
+            const true_view = tailCallableView(items[items.len - 2]) orelse return .fallback;
+            const false_view = tailCallableView(items[items.len - 1]) orelse return .fallback;
             const cond = switch (items[items.len - 3]) {
                 .boolean => |b| b,
                 else => true,
             };
             break :blk if (cond) true_view else false_view;
-        } else tailCallableView(items[items.len - 1]) orelse return false;
+        } else tailCallableView(items[items.len - 1]) orelse return .fallback;
 
         // A declared effect is checked by the helper when the body returns, which a tail call
         // never does.
-        if (selected.effect != null) return false;
+        if (selected.effect != null) return .fallback;
 
         // `call` alone: compiled code runs on its own path, and a body that defines needs the
         // frame `call` keeps open across the body's own tail calls, where a local helper it
         // defines and tail-calls still resolves.
         if (!is_if) {
-            if (selected.code_ptr != null) return false;
-            if (may_define.bodyCallsDefiningNative(selected.instructions)) return false;
+            if (selected.code_ptr != null) return .fallback;
+            if (may_define.bodyCallsDefiningNative(selected.instructions)) return .fallback;
         }
 
-        if (!self.tailPopFramesEmpty()) return false;
+        if (!self.tailPopFramesEmpty()) return .fallback;
 
         const chosen: Callable = if (is_if) blk: {
             const false_quot = try helpers.popQuotation(self);
@@ -9662,7 +9696,7 @@ pub const Context = struct {
         } else try helpers.popQuotation(self);
 
         self.setQuotationTailCall(chosen, name);
-        return true;
+        return .taken;
     }
 
     /// The body a tail-position `if` or `call` would run for `val`, or null for a value that is not
@@ -10006,11 +10040,9 @@ pub const Context = struct {
                     return .tail_call_set;
                 },
                 .native => |func| {
-                    if (self.tail_combinators) {
-                        const taken = self.tryCombinatorTailCall(func, name) catch |err|
-                            return self.wordErrorCleanup(name, err);
-                        if (taken) return .tail_call_set;
-                    }
+                    const outcome = self.tryCombinatorTailCall(func, name) catch |err|
+                        return self.wordErrorCleanup(name, err);
+                    if (outcome == .taken) return .tail_call_set;
 
                     self.tail_call_instructions = null;
                     self.tail_call_compiled = false;
@@ -10018,9 +10050,11 @@ pub const Context = struct {
                     defer self.current_pic_entry = null;
                     const census_saved = self.censusEnter(.tail_native, name);
                     defer self.censusRestore(census_saved);
+                    const raise_mark: ?usize = if (outcome == .fallback) self.beginTailCombinatorRun() else null;
                     if (func(self)) |_| {
                         try self.wordSuccessCleanup(name, word.stack_effect);
                     } else |err| {
+                        if (raise_mark) |mark| return self.tailCombinatorErrorCleanup(name, err, mark);
                         return self.wordErrorCleanup(name, err);
                     }
                 },
@@ -16049,7 +16083,6 @@ fn pushClosureCalling(ctx: *Context, name: []const u8) !*value_mod.Closure {
 test "a tail-position call runs a closure as the trampoline's next iteration and releases it" {
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
-    ctx.tail_combinators = true;
 
     try ctx.dictionary.put("tail-probe", .{
         .name = "tail-probe",
@@ -16074,7 +16107,6 @@ test "a tail-position call runs a closure as the trampoline's next iteration and
 test "a raise inside a tail-called closure still releases it" {
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
-    ctx.tail_combinators = true;
 
     const cl = try pushClosureCalling(&ctx, "drop");
     defer container_backing.releaseValue(.{ .closure = cl });

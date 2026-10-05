@@ -1,16 +1,16 @@
 Stack: [ ]
 Stack: [ ]
-<error user-thrown: boom [tests/integration/tail_boundary_uncompilable_cycle_error.1z:7:throw <- src/prelude.1z:352:if <- tests/integration/tail_boundary_uncompilable_cycle_error.1z:7:when <- tests/integration/tail_boundary_uncompilable_cycle_error.1z:10:recover]>
+<error user-thrown: boom [tests/integration/tail_boundary_uncompilable_cycle_error.1z:7:throw <- tests/integration/tail_boundary_uncompilable_cycle_error.1z:7:when <- tests/integration/tail_boundary_uncompilable_cycle_error.1z:10:recover]>
 Stack: [ ]
-<error user-thrown: boom [tests/integration/tail_boundary_uncompilable_cycle_error.1z:7:throw <- src/prelude.1z:352:if <- tests/integration/tail_boundary_uncompilable_cycle_error.1z:7:when <- tests/integration/tail_boundary_uncompilable_cycle_error.1z:11:recover]>
+<error user-thrown: boom [tests/integration/tail_boundary_uncompilable_cycle_error.1z:7:throw <- tests/integration/tail_boundary_uncompilable_cycle_error.1z:7:when <- tests/integration/tail_boundary_uncompilable_cycle_error.1z:11:recover]>
 Stack: [ ]
-<error user-thrown: boom [tests/integration/tail_boundary_uncompilable_cycle_error.1z:7:throw <- src/prelude.1z:352:if <- tests/integration/tail_boundary_uncompilable_cycle_error.1z:7:when <- tests/integration/tail_boundary_uncompilable_cycle_error.1z:15:err-a <- tests/integration/tail_boundary_uncompilable_cycle_error.1z:15:recover]>
-Stack: [ ]
-Stack: [ ]
-<error user-thrown: boom [tests/integration/tail_boundary_uncompilable_cycle_error.1z:7:throw <- src/prelude.1z:352:if <- tests/integration/tail_boundary_uncompilable_cycle_error.1z:7:when <- tests/integration/tail_boundary_uncompilable_cycle_error.1z:17:err-a <- tests/integration/tail_boundary_uncompilable_cycle_error.1z:19:recover]>
+<error user-thrown: boom [tests/integration/tail_boundary_uncompilable_cycle_error.1z:7:throw <- tests/integration/tail_boundary_uncompilable_cycle_error.1z:7:when <- tests/integration/tail_boundary_uncompilable_cycle_error.1z:15:err-a <- tests/integration/tail_boundary_uncompilable_cycle_error.1z:15:recover]>
 Stack: [ ]
 Stack: [ ]
+<error user-thrown: boom [tests/integration/tail_boundary_uncompilable_cycle_error.1z:7:throw <- tests/integration/tail_boundary_uncompilable_cycle_error.1z:7:when <- tests/integration/tail_boundary_uncompilable_cycle_error.1z:17:err-a <- tests/integration/tail_boundary_uncompilable_cycle_error.1z:19:recover]>
 Stack: [ ]
 Stack: [ ]
-<error user-thrown: boom [tests/integration/tail_boundary_uncompilable_cycle_error.1z:23:throw <- src/prelude.1z:352:if <- tests/integration/tail_boundary_uncompilable_cycle_error.1z:23:when <- tests/integration/tail_boundary_uncompilable_cycle_error.1z:27:recover]>
+Stack: [ ]
+Stack: [ ]
+<error user-thrown: boom [tests/integration/tail_boundary_uncompilable_cycle_error.1z:23:throw <- tests/integration/tail_boundary_uncompilable_cycle_error.1z:23:when <- tests/integration/tail_boundary_uncompilable_cycle_error.1z:27:recover]>
 Stack: [ ]

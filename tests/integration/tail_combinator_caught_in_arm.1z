@@ -1,0 +1,12 @@
+\ Test that a catch inside the arm of a tail-position `if` reports no `if` row. The declared effect
+\ makes the interpreter run the arm nested, so the `if` frame is still live when the catch folds the
+\ chain.
+\
+\ Pinned to the interpreter. A compiled `recover` inlined into an arm leaves out its own row, which
+\ is a separate gap.
+
+boom: ( -- ) [ f "boom" EUserThrown make-error throw ] ;
+
+caught-in-arm: ( ? -- ) [ [ ( -- ) [ boom ] [ inspect print-line ] recover ] [ ] if ] ;
+
+t caught-in-arm

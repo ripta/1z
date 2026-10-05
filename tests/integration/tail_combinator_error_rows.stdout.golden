@@ -1,0 +1,24 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+<error user-thrown: boom [tests/integration/tail_combinator_error_rows.1z:10:throw <- tests/integration/tail_combinator_error_rows.1z:26:recover]>
+Stack: [ ]
+<error user-thrown: boom [tests/integration/tail_combinator_error_rows.1z:10:throw <- tests/integration/tail_combinator_error_rows.1z:14:if <- tests/integration/tail_combinator_error_rows.1z:27:recover]>
+Stack: [ ]
+<error user-thrown: boom [tests/integration/tail_combinator_error_rows.1z:10:throw <- tests/integration/tail_combinator_error_rows.1z:28:recover]>
+Stack: [ ]
+<error user-thrown: boom [tests/integration/tail_combinator_error_rows.1z:10:throw <- tests/integration/tail_combinator_error_rows.1z:29:recover]>
+Stack: [ ]
+<error user-thrown: boom [tests/integration/tail_combinator_error_rows.1z:10:throw <- tests/integration/tail_combinator_error_rows.1z:20:call <- tests/integration/tail_combinator_error_rows.1z:30:recover]>
+Stack: [ ]
+<error user-thrown: boom [tests/integration/tail_combinator_error_rows.1z:10:throw <- tests/integration/tail_combinator_error_rows.1z:31:recover]>
+Stack: [ ]
+<error type-mismatch: type-mismatch [tests/integration/tail_combinator_error_rows.1z:24:if <- tests/integration/tail_combinator_error_rows.1z:32:recover]>
+Stack: [ ]
+<error type-mismatch: type-mismatch [tests/integration/tail_combinator_error_rows.1z:22:call <- tests/integration/tail_combinator_error_rows.1z:33:recover]>
+Stack: [ ]

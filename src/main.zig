@@ -1382,7 +1382,6 @@ const ExecutionContext = struct {
         };
         ec.ctx.compile_mode = exec.compile_mode;
         ec.ctx.allow_all_recursion = exec.allow_all_recursion;
-        if (std.posix.getenv("ONEZ_TAIL_COMBINATORS")) |v| ec.ctx.tail_combinators = std.mem.eql(u8, v, "1");
 
         if (bench_enabled) {
             bench_stats_ptr.collectPreludeInventory(

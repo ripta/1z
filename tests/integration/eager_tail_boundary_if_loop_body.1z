@@ -1,8 +1,8 @@
-\ A tail-position `if` whose arm raises from the last call of a loop body, pinned eager. That call
-\ is last in the loop body but not in the arm, so the `if` keeps its row, as it does interpreted.
+\ A tail-position `if` whose arm raises from the last call of a loop body, pinned eager. A
+\ tail-position `if` reports no row of its own whatever its arm does, as it does interpreted.
 \
 \ Eager inlines `times`, so the rows inside the loop that the interpreted chain carries are absent
-\ here. The `go`-level `if` row is what this pins.
+\ here. The absent `go`-level `if` row is what this pins.
 
 boom: ( -- ) [ f "kaboom" EUserThrown make-error throw ] ;
 go: ( ? -- ) [ [ 1 [ boom ] times 0 drop ] [ ] if ] ;

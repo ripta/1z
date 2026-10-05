@@ -1,0 +1,33 @@
+\ Test that a tail-position `if` or `call` reports no row as the caller of the quotation it ran,
+\ and that one with code after it does. The rule is positional, so it holds where the combinator
+\ has to run its quotation nested: an arm that declares an effect and a quotation that arrives as a
+\ value.
+\
+\ A combinator that raises itself is the raise site, so its row stays in tail position too.
+\
+\ No flags, so the eager run checks the same golden against compiled bodies.
+
+boom: ( -- ) [ f "boom" EUserThrown make-error throw ] ;
+
+tail-if: ( ? -- ) [ [ boom ] [ ] if ] ;
+
+mid-if: ( ? -- n ) [ [ boom ] [ ] if 1 ] ;
+
+tail-if-declared-arm: ( ? -- ) [ [ ( -- ) boom ] [ ] if ] ;
+
+tail-call: ( -- ) [ [ boom ] call ] ;
+
+mid-call: ( -- n ) [ [ boom ] call 1 ] ;
+
+tail-call-value: ( quot -- ) [ call ] ;
+
+tail-if-bad-arm: ( ? -- ) [ 5 [ ] if ] ;
+
+[ t tail-if ] [ inspect print-line ] recover
+[ t mid-if ] [ inspect print-line ] recover
+[ t tail-if-declared-arm ] [ inspect print-line ] recover
+[ tail-call ] [ inspect print-line ] recover
+[ mid-call ] [ inspect print-line ] recover
+[ [ boom ] tail-call-value ] [ inspect print-line ] recover
+[ t tail-if-bad-arm ] [ inspect print-line ] recover
+[ 5 tail-call-value ] [ inspect print-line ] recover

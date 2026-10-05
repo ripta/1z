@@ -56,6 +56,7 @@ const dispatch_helpers = @import("primitives/dispatch_helpers.zig");
 const arithmetic_mod = @import("primitives/arithmetic.zig");
 const markers_mod = @import("primitives/markers.zig");
 const WordDefinition = @import("dictionary.zig").WordDefinition;
+const NativeFn = @import("dictionary.zig").NativeFn;
 
 const aot_wrappers = @import("aot_native_wrappers.zig");
 const AotQuotationDesc = @import("aot_freeze.zig").AotQuotationDesc;
@@ -3258,6 +3259,10 @@ const BuiltinTraceFrameKind = enum(usize) {
     recover = 2,
     cleanup = 3,
     choose_op = 4,
+    // A tail-position `if` or `call` whose dispatch raised. The frame pends marked
+    // `raise_site_only`, so it shows only when nothing inside the dispatched quotation pended first.
+    if_tail = 5,
+    call_tail = 6,
 };
 
 const InlineTraceFrame = struct {
@@ -3267,9 +3272,8 @@ const InlineTraceFrame = struct {
     word_name: ?[]const u8 = null,
     /// Set on a helper level whose read is the last instruction of its body.
     ///
-    /// The interpreter tail-calls such a helper. It drops the helper's frame once the body starts,
-    /// and pops the tail-position `if` levels the read was reached through. A raise inside the
-    /// body therefore carries no row for any of them.
+    /// The interpreter tail-calls such a helper and drops its frame once the body starts, so a
+    /// raise inside the body carries no row for it.
     tail_read: bool = false,
     line: usize,
     /// Source file captured when the frame was queued. Emission must not read
@@ -3281,14 +3285,6 @@ const InlineTraceFrame = struct {
     /// Emission walks back out through these, and the runs covering an enclosing level's own
     /// instruction are the rows that belong above that level's frame.
     site: InlineSite = .{},
-    /// Set on an `if` level whose `if` is the last instruction of its body.
-    ///
-    /// The interpreter's `if` hands a tail call in its arm back to the enclosing trampoline. The
-    /// trampoline pops the `if` frame before the call runs. A raise from that call therefore
-    /// carries no row for this level.
-    tail_if: bool = false,
-    /// `body_depth` of the body holding the `if`, so its arm runs one deeper.
-    depth: u32 = 0,
 };
 
 const max_inline_trace_frames = 8;
@@ -5557,7 +5553,7 @@ fn emitIfOverRow(
     if (true_body) |tb| {
         try compileQuotationBodyInline(state, tb, stack, &true_sp);
     } else {
-        try emitIfBranchDispatch(state, stack, &true_sp, true_entry.raw_at_slot);
+        try emitIfBranchDispatch(state, stack, &true_sp, true_entry.raw_at_slot, .none);
     }
     const true_exit_kind = state.exit_kind;
     var end_true: c.ir_ref = c.IR_UNUSED;
@@ -5581,7 +5577,7 @@ fn emitIfOverRow(
     if (false_body) |fb| {
         try compileQuotationBodyInline(state, fb, stack, &false_sp);
     } else {
-        try emitIfBranchDispatch(state, stack, &false_sp, false_entry.raw_at_slot);
+        try emitIfBranchDispatch(state, stack, &false_sp, false_entry.raw_at_slot, .none);
     }
     const false_exit_kind = state.exit_kind;
     var false_ends_on_row = false;
@@ -5637,14 +5633,17 @@ fn emitIfOverRow(
 /// spilled and its owning reference released once the call returns; releasing
 /// the stack slot after the call would touch whatever the callee's pushes
 /// left there instead.
+///
+/// `trace` is the frame the dispatch's error branch emits ahead of the inline levels.
 fn emitIfBranchDispatch(
     state: *CompileState,
     stack: []StackEntry,
     sp: *usize,
     slot: usize,
+    trace: CurrentTraceFrame,
 ) IrCodegenError!void {
     const spill = try emitCallableSpill(state, slot);
-    emitValueQuotCall(state, stack, sp, spill, 0, .none);
+    emitValueQuotCall(state, stack, sp, spill, 0, trace);
     emitReleaseSpilled(state, spill);
 }
 
@@ -6971,10 +6970,16 @@ fn emitIntrinsicCall(ec: EmitCtx) IrCodegenError!ControlFlow {
     if (sp.* < 1) return IrCodegenError.StackUnderflow;
     sp.* -= 1;
     const entry = stack[sp.*];
+
+    // A tail-position `call` is no body's caller. An inlined body gets no level, and a dispatch keeps
+    // a frame only for a raise by the dispatch itself.
+    const call_tail = ec.idx == ec.instructions.len - 1;
+    const call_frame: CurrentTraceFrame = .{ .builtin = .{ .kind = if (call_tail) .call_tail else .call, .line = ec.line } };
+
     switch (entry) {
         .quotation_body => |q| {
             const saved_inline_trace_frame_count = state.inline_trace_frame_count;
-            if (traceFramesEnabled(state) and state.inline_trace_frame_count < max_inline_trace_frames) {
+            if (traceFramesEnabled(state) and !call_tail and state.inline_trace_frame_count < max_inline_trace_frames) {
                 state.inline_trace_frames[state.inline_trace_frame_count] = .{
                     .kind = .call,
                     .line = ec.line,
@@ -7021,7 +7026,7 @@ fn emitIntrinsicCall(ec: EmitCtx) IrCodegenError!ControlFlow {
                 c._ir_STORE(ctx, state.sp_ptr, new_sp);
 
                 const call_result = c._ir_CALL_2(ctx, c.IR_I32, state.call_value_fn, state.jit_ctx_ptr, spill);
-                emitCallbackPostCheck(state, call_result, call_result, null, .{ .builtin = .{ .kind = .call, .line = ec.line } });
+                emitCallbackPostCheck(state, call_result, call_result, null, call_frame);
                 emitReleaseSpilled(state, spill);
             } else {
                 // The slot value may be a compiled quotation, i.e., direct hot-path, an uncompiled
@@ -7096,7 +7101,7 @@ fn emitIntrinsicCall(ec: EmitCtx) IrCodegenError!ControlFlow {
                         c.ir_const_addr(ctx, @intFromPtr(&jitCallQuotation));
                     state.noteAotFallbackEmission(.quotation, "<quotation>", 0, ec.line);
                     const fb_result = c._ir_CALL_1(ctx, c.IR_I32, call_quot_fn, ctx_val);
-                    emitCallbackPostCheck(state, fb_result, state.error_propagate_status, null, .{ .builtin = .{ .kind = .call, .line = ec.line } });
+                    emitCallbackPostCheck(state, fb_result, state.error_propagate_status, null, call_frame);
                 }
                 const end_fallback = c._ir_END(ctx);
 
@@ -7117,7 +7122,7 @@ fn emitIntrinsicCall(ec: EmitCtx) IrCodegenError!ControlFlow {
                         c._ir_CALL_2(ctx, c.IR_I32, state.call_code_ptr_fn, state.jit_ctx_ptr, code_ptr_val)
                     else
                         c._ir_CALL_1(ctx, c.IR_I32, code_ptr_val, state.jit_ctx_ptr);
-                    emitCallbackPostCheck(state, call_result, call_result, null, .{ .builtin = .{ .kind = .call, .line = ec.line } });
+                    emitCallbackPostCheck(state, call_result, call_result, null, call_frame);
                 }
                 const end_compiled = c._ir_END(ctx);
 
@@ -7169,7 +7174,7 @@ fn emitIntrinsicCall(ec: EmitCtx) IrCodegenError!ControlFlow {
                 const spill = try emitCallableSpill(state, 0);
                 c._ir_STORE(ctx, state.sp_ptr, state.base_idx);
                 const call_result = c._ir_CALL_2(ctx, c.IR_I32, state.call_value_fn, state.jit_ctx_ptr, spill);
-                emitCallbackPostCheck(state, call_result, call_result, null, .{ .builtin = .{ .kind = .call, .line = ec.line } });
+                emitCallbackPostCheck(state, call_result, call_result, null, call_frame);
                 emitReleaseSpilled(state, spill);
                 reloadBaseAfterDynamicCall(state);
                 sp.* = 1;
@@ -7194,7 +7199,7 @@ fn emitIntrinsicCall(ec: EmitCtx) IrCodegenError!ControlFlow {
                 c.ir_const_addr(ctx, @intFromPtr(&jitCallQuotation));
             state.noteAotFallbackEmission(.quotation, "<quotation>", 0, ec.line);
             const fb_result = c._ir_CALL_1(ctx, c.IR_I32, call_quot_fn, ctx_val);
-            emitCallbackPostCheck(state, fb_result, state.error_propagate_status, null, .{ .builtin = .{ .kind = .call, .line = ec.line } });
+            emitCallbackPostCheck(state, fb_result, state.error_propagate_status, null, call_frame);
             reloadBaseAfterDynamicCall(state);
             sp.* = 1;
             stack[0] = .{ .row_region = state.nextRowId() };
@@ -7762,7 +7767,7 @@ fn emitIntrinsicIf(ec: EmitCtx) IrCodegenError!ControlFlow {
                 }
             } else {
                 // True branch is raw_at_slot: dispatch at runtime.
-                try emitIfBranchDispatch(state, stack, sp, true_entry.raw_at_slot);
+                try emitIfBranchDispatch(state, stack, sp, true_entry.raw_at_slot, .none);
                 settleDispatchedBranchAsRow(state, stack, sp);
             }
             return .next;
@@ -7910,20 +7915,28 @@ fn emitIntrinsicIf(ec: EmitCtx) IrCodegenError!ControlFlow {
     // free of the store.
     const dispatched_arm = true_body == null or false_body == null;
 
+    // A raise inside an arm names `if` as a row, matching the frame the interpreter's `if` pushes.
+    //
+    // A tail-position `if` is no arm's caller, so it pushes no level. Only a dispatched arm keeps a
+    // frame, for a raise by the dispatch itself, and the fold drops it under any other raise.
+    const if_tail = ec.idx == ec.instructions.len - 1;
+    const if_dispatch_frame: CurrentTraceFrame = if (if_tail)
+        .{ .builtin = .{ .kind = .if_tail, .line = ec.line } }
+    else
+        .none;
+
     // Emit true branch
     const if_ref = c._ir_IF(ctx, cond_ref);
     c._ir_IF_TRUE(ctx, if_ref);
     state.recordBlockStart(ctx.unnamed_0.control);
     state.exit_kind = .falls_through;
     const saved_inline_trace_frame_count = state.inline_trace_frame_count;
-    if (traceFramesEnabled(state) and state.inline_trace_frame_count < max_inline_trace_frames) {
+    if (traceFramesEnabled(state) and !if_tail and state.inline_trace_frame_count < max_inline_trace_frames) {
         state.inline_trace_frames[state.inline_trace_frame_count] = .{
             .kind = .if_op,
             .line = ec.line,
             .source = traceFrameSourceHere(state),
             .site = state.inline_site,
-            .tail_if = ec.idx == ec.instructions.len - 1,
-            .depth = state.body_depth,
         };
         state.inline_trace_frame_count += 1;
     }
@@ -7937,7 +7950,7 @@ fn emitIntrinsicIf(ec: EmitCtx) IrCodegenError!ControlFlow {
         try compileQuotationBodyInline(state, tb, stack, sp);
     } else {
         // Runtime dispatch for raw_at_slot quotation
-        try emitIfBranchDispatch(state, stack, sp, true_entry.raw_at_slot);
+        try emitIfBranchDispatch(state, stack, sp, true_entry.raw_at_slot, if_dispatch_frame);
         settleDispatchedBranchAsRow(state, stack, sp);
     }
     if (traceFramesEnabled(state)) state.inline_trace_frame_count = saved_inline_trace_frame_count;
@@ -7989,14 +8002,12 @@ fn emitIntrinsicIf(ec: EmitCtx) IrCodegenError!ControlFlow {
     var false_sp = saved_sp;
     state.exit_kind = .falls_through;
     if (traceFramesEnabled(state)) state.inline_trace_frame_count = saved_inline_trace_frame_count;
-    if (traceFramesEnabled(state) and state.inline_trace_frame_count < max_inline_trace_frames) {
+    if (traceFramesEnabled(state) and !if_tail and state.inline_trace_frame_count < max_inline_trace_frames) {
         state.inline_trace_frames[state.inline_trace_frame_count] = .{
             .kind = .if_op,
             .line = ec.line,
             .source = traceFrameSourceHere(state),
             .site = state.inline_site,
-            .tail_if = ec.idx == ec.instructions.len - 1,
-            .depth = state.body_depth,
         };
         state.inline_trace_frame_count += 1;
     }
@@ -8004,7 +8015,7 @@ fn emitIntrinsicIf(ec: EmitCtx) IrCodegenError!ControlFlow {
     if (false_body) |fb| {
         try compileQuotationBodyInline(state, fb, saved_stack, &false_sp);
     } else {
-        try emitIfBranchDispatch(state, saved_stack, &false_sp, false_entry.raw_at_slot);
+        try emitIfBranchDispatch(state, saved_stack, &false_sp, false_entry.raw_at_slot, if_dispatch_frame);
         settleDispatchedBranchAsRow(state, saved_stack, &false_sp);
     }
     if (traceFramesEnabled(state)) state.inline_trace_frame_count = saved_inline_trace_frame_count;
@@ -8994,7 +9005,7 @@ fn emitGenericResolvedNativeCall(ec: EmitCtx, resolved: ResolvedWord) IrCodegenE
             state.noteAotFallbackEmission(.compound_uncompiled, name, resolved.word_id, line);
             const tail_mode: FallbackTail = if (pending_tail) .handoff else if (is_tail) .tail else .not_tail;
             const fb_result = c._ir_CALL_6(ctx, c.IR_I32, state.interpreted_call_fn, ctx_val2, word_id_const, src.ptr, src.len, line_const, c.ir_const_addr(ctx, @intFromEnum(tail_mode)));
-            const fb_trace: CurrentTraceFrame = if (is_tail) .{ .tail_call = .{ .fallback = true, .pending = pending_tail } } else .none;
+            const fb_trace: CurrentTraceFrame = if (is_tail) .{ .tail_call = .{ .pending = pending_tail } } else .none;
             emitCallbackPostCheck(state, fb_result, state.error_propagate_status, if (resolved.never_returns) state.error_propagate_status else null, fb_trace);
         }
         const end_fallback = if (resolved.never_returns) c.IR_UNUSED else c._ir_END(ctx);
@@ -9005,7 +9016,7 @@ fn emitGenericResolvedNativeCall(ec: EmitCtx, resolved: ResolvedWord) IrCodegenE
         c._ir_IF_FALSE(ctx, if_null);
         {
             const call_result = emitFinishTrampolineHops(state, c._ir_CALL_1(ctx, c.IR_I32, callee_code_ptr, state.jit_ctx_ptr), pending_tail);
-            const trace: CurrentTraceFrame = if (is_tail) .{ .tail_call = .{ .fallback = false, .pending = pending_tail } } else .{ .named = .{ .name = name, .line = line } };
+            const trace: CurrentTraceFrame = if (is_tail) .{ .tail_call = .{ .pending = pending_tail } } else .{ .named = .{ .name = name, .line = line } };
             emitCallbackPostCheck(state, call_result, call_result, if (resolved.never_returns) state.error_propagate_status else null, trace);
         }
         if (resolved.never_returns) {
@@ -14793,13 +14804,7 @@ const CurrentTraceFrame = union(enum) {
     },
     /// A call in tail position, whose error branch emits no row for the callee. A fallback helper
     /// keeps or drops the callee's frame itself.
-    ///
-    /// A raise past the point where the interpreter would have dropped the callee's frame also
-    /// drops the rows of the tail-position `if` levels the call was reached through. A compiled
-    /// callee always raises past that point. A fallback helper says so by returning
-    /// `tail_raise_status`.
     tail_call: struct {
-        fallback: bool,
         /// The call is the whole word's last action and may hand back `pending_tail_status`. That
         /// status leaves the word as it came, with no rows, since the body it names has not run.
         pending: bool = false,
@@ -15026,65 +15031,22 @@ fn emitInlineRegionTraceFrames(state: *CompileState, site: InlineSite) void {
 /// A quotation body is its own instruction array. Its own runs are emitted where the raise sits,
 /// against the site retargeted to that array, so what a level reaches back out for is the
 /// `inline` word enclosing it.
-///
-/// `skip_tail_ifs` leaves out the frames of the innermost unbroken run of tail-position `if`
-/// levels, which the interpreter pops before a tail call in their arms runs.
-fn emitActiveInlineTraceFrames(state: *CompileState, skip_tail_ifs: bool) void {
+fn emitActiveInlineTraceFrames(state: *CompileState) void {
     var i = state.inline_trace_frame_count;
-    var skipping = skip_tail_ifs;
-    var arm_depth = state.body_depth;
     while (i > 0) {
         i -= 1;
         const frame = state.inline_trace_frames[i];
 
-        if (frame.tail_read) {
-            skipping = true;
-            arm_depth = frame.depth;
-            emitInlineRegionTraceFrames(state, frame.site);
-            continue;
-        }
-
-        skipping = skipping and isTailIfArm(frame, arm_depth);
-        if (skipping) {
-            arm_depth = frame.depth;
-        } else if (frame.word_name) |word_name| {
-            emitNamedTraceFrame(state, word_name, frame.source, frame.line, null, .no_effect);
-        } else {
-            emitBuiltinTraceFrame(state, frame.kind, frame.line, frame.source);
+        if (!frame.tail_read) {
+            if (frame.word_name) |word_name| {
+                emitNamedTraceFrame(state, word_name, frame.source, frame.line, null, .no_effect);
+            } else {
+                emitBuiltinTraceFrame(state, frame.kind, frame.line, frame.source);
+            }
         }
 
         emitInlineRegionTraceFrames(state, frame.site);
     }
-}
-
-/// Whether a body at `arm_depth` is the arm of `frame`'s tail-position `if` itself, rather than a
-/// loop body or splice inlined somewhere inside that arm.
-fn isTailIfArm(frame: InlineTraceFrame, arm_depth: u32) bool {
-    return frame.tail_if and frame.depth + 1 == arm_depth;
-}
-
-/// The inline levels' frames for the error branch of a tail call.
-///
-/// A fallback call leaves them out only when its helper reports a raise past the dropped frame.
-/// The choice is therefore made at runtime on the call's status.
-fn emitTailCallInlineTraceFrames(state: *CompileState, call_result: c.ir_ref, fallback: bool) void {
-    const count = state.inline_trace_frame_count;
-    if (count == 0 or !isTailIfArm(state.inline_trace_frames[count - 1], state.body_depth)) return emitActiveInlineTraceFrames(state, false);
-    if (!fallback) return emitActiveInlineTraceFrames(state, true);
-
-    const ctx = state.ctx;
-    const tail_raise = c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), call_result, c.ir_const_i32(ctx, tail_raise_status));
-    const if_ref = c._ir_IF(ctx, tail_raise);
-
-    c._ir_IF_TRUE(ctx, if_ref);
-    emitActiveInlineTraceFrames(state, true);
-    const end_skip = c._ir_END(ctx);
-
-    c._ir_IF_FALSE(ctx, if_ref);
-    emitActiveInlineTraceFrames(state, false);
-    const end_keep = c._ir_END(ctx);
-
-    c._ir_MERGE_2(ctx, end_skip, end_keep);
 }
 
 /// Run the hops a mutual group member handed back, so the calling code resumes with the status of
@@ -15150,10 +15112,7 @@ fn emitCallbackPostCheck(
             .builtin => |frame| if (frame.line != 0) emitBuiltinTraceFrame(state, frame.kind, frame.line, state.source_file),
         }
         emitInlineRegionTraceFrames(state, state.inline_site);
-        switch (current_trace_frame) {
-            .tail_call => |frame| emitTailCallInlineTraceFrames(state, call_result, frame.fallback),
-            else => emitActiveInlineTraceFrames(state, false),
-        }
+        emitActiveInlineTraceFrames(state);
     }
     emitAbnormalReturn(state, return_status);
     c._ir_IF_FALSE(ctx, if_bail);
@@ -15796,7 +15755,6 @@ fn emitHelperRead(
             .line = line,
             .source = traceFrameSourceHere(state),
             .site = state.inline_site,
-            .depth = state.body_depth,
         };
         state.inline_trace_frame_count += 1;
     }
@@ -16473,7 +16431,7 @@ fn emitNativeWordCall(state: *CompileState, ctx_val: c.ir_ref, name: []const u8,
         const line_const = c.ir_const_addr(ictx, line);
         state.noteAotFallbackEmission(.native, name, resolved.word_id, line);
         const call_result = c._ir_CALL_6(ictx, c.IR_I32, state.native_word_call_fn, ctx_val, word_id_const, src.ptr, src.len, line_const, c.ir_const_addr(ictx, @intFromBool(is_tail)));
-        const trace: CurrentTraceFrame = if (is_tail) .{ .tail_call = .{ .fallback = true } } else .none;
+        const trace: CurrentTraceFrame = if (is_tail) .{ .tail_call = .{} } else .none;
         emitCallbackPostCheck(state, call_result, state.error_propagate_status, if (resolved.never_returns) state.error_propagate_status else null, trace);
     } else {
         const fn_ptr_const = c.ir_const_addr(ictx, resolved.native_fn_ptr.?);
@@ -16500,7 +16458,7 @@ fn emitAotWordCall(state: *CompileState, ctx_val: c.ir_ref, name: []const u8, re
             defer std.heap.page_allocator.free(mangled);
             const callee_fn = c.ir_const_func(ictx, c.ir_str(ictx, mangled.ptr), state.aot_proto_1arg);
             const call_result = c._ir_CALL_1(ictx, c.IR_I32, callee_fn, state.jit_ctx_ptr);
-            const trace: CurrentTraceFrame = if (is_tail) .{ .tail_call = .{ .fallback = false } } else .{ .named = .{ .name = name, .line = line, .word_id = resolved.word_id } };
+            const trace: CurrentTraceFrame = if (is_tail) .{ .tail_call = .{} } else .{ .named = .{ .name = name, .line = line, .word_id = resolved.word_id } };
             emitCallbackPostCheck(state, call_result, call_result, if (resolved.never_returns) state.error_propagate_status else null, trace);
             return;
         }
@@ -16511,7 +16469,7 @@ fn emitAotWordCall(state: *CompileState, ctx_val: c.ir_ref, name: []const u8, re
     const line_const = c.ir_const_addr(ictx, line);
     state.noteAotFallbackEmission(.compound_uncompiled, target, resolved.word_id, line);
     const call_result = c._ir_CALL_6(ictx, c.IR_I32, state.interpreted_call_fn, ctx_val, word_id_const, src.ptr, src.len, line_const, c.ir_const_addr(ictx, @intFromBool(is_tail)));
-    const trace: CurrentTraceFrame = if (is_tail) .{ .tail_call = .{ .fallback = true } } else .none;
+    const trace: CurrentTraceFrame = if (is_tail) .{ .tail_call = .{} } else .none;
     emitCallbackPostCheck(state, call_result, state.error_propagate_status, if (resolved.never_returns) state.error_propagate_status else null, trace);
 }
 
@@ -17950,22 +17908,27 @@ export fn jitAppendBuiltinTraceFrame(
     const ctx: *Context = @ptrFromInt(ctx_raw);
     const kind: BuiltinTraceFrameKind = std.meta.intToEnum(BuiltinTraceFrameKind, frame_kind_raw) catch return 0;
     const word_name = switch (kind) {
-        .if_op => "if",
-        .call => "call",
+        .if_op, .if_tail => "if",
+        .call, .call_tail => "call",
         .recover => "recover",
         .cleanup => "cleanup",
         .choose_op => "choose",
     };
     const effect_str: ?[]const u8 = switch (kind) {
-        .if_op => comptime builtinFrameEffectString("if"),
-        .call => comptime builtinFrameEffectString("call"),
+        .if_op, .if_tail => comptime builtinFrameEffectString("if"),
+        .call, .call_tail => comptime builtinFrameEffectString("call"),
         .recover => comptime builtinFrameEffectString("recover"),
         .cleanup => comptime builtinFrameEffectString("cleanup"),
         .choose_op => comptime builtinFrameEffectString("choose"),
     };
     const effect: ?*const StackEffect = if (effect_str) |raw| ctx.cachedTraceEffect(raw) else null;
-    const source = ctx.traceFrameSource(src_ptr_raw, src_len_raw);
-    ctx.appendPendingSyntheticErrorFrame(word_name, source, @intCast(line_raw), effect);
+    ctx.appendPendingErrorFrame(.{
+        .word_name = word_name,
+        .source = ctx.traceFrameSource(src_ptr_raw, src_len_raw),
+        .line = @intCast(line_raw),
+        .stack_effect = effect,
+        .raise_site_only = kind == .if_tail or kind == .call_tail,
+    });
     return 0;
 }
 
@@ -18481,7 +18444,8 @@ export fn jitNativeWordCall(ctx_raw: usize, word_id_raw: usize, src_ptr_raw: usi
         }
 
         if (leaf.source_file) |sf| ctx.current_source = sf;
-        return finishFallbackCall(ctx, display_name, leaf.fn_ptr(ctx), false, is_tail, leaf.stack_effect);
+        const leaf_raise_mark = tailCombinatorRaiseMark(ctx, is_tail, leaf.fn_ptr);
+        return finishFallbackCall(ctx, display_name, leaf.fn_ptr(ctx), false, is_tail, leaf_raise_mark, leaf.stack_effect);
     }
 
     const looked_up_word = resolveEntryWord(ctx, entry, word_name);
@@ -18492,6 +18456,7 @@ export fn jitNativeWordCall(ctx_raw: usize, word_id_raw: usize, src_ptr_raw: usi
         ctx.setTopCallFrameEffect(hit.word.stack_effect);
     }
 
+    var raise_mark: ?usize = null;
     const result = if (looked_up_word) |word| blk: {
         if (word.stack_effect) |effect| {
             ctx.validateParameterEffects(effect, null) catch |err| {
@@ -18534,7 +18499,10 @@ export fn jitNativeWordCall(ctx_raw: usize, word_id_raw: usize, src_ptr_raw: usi
 
         if (word.source_file) |sf| ctx.current_source = sf;
         switch (word.action) {
-            .native => |func| break :blk func(ctx),
+            .native => |func| {
+                raise_mark = tailCombinatorRaiseMark(ctx, is_tail, func);
+                break :blk func(ctx);
+            },
             .host_callback => |host| {
                 const rc = host.callback(host.handle, host.user_data);
                 if (rc != 0) break :blk @as(anyerror!void, error.HostCallbackFailed);
@@ -18558,16 +18526,15 @@ export fn jitNativeWordCall(ctx_raw: usize, word_id_raw: usize, src_ptr_raw: usi
         return 2;
     };
 
-    return finishFallbackCall(ctx, display_name, result, elided, is_tail, if (looked_up_word) |word| word.stack_effect else if (module_hit) |hit| hit.word.stack_effect else null);
+    return finishFallbackCall(ctx, display_name, result, elided, is_tail, raise_mark, if (looked_up_word) |word| word.stack_effect else if (module_hit) |hit| hit.word.stack_effect else null);
 }
 
-/// The status a fallback helper returns for an error raised after the call's frame was dropped
-/// as a tail call.
-///
-/// The interpreter drops the frame of every tail-position `if` the call was reached through as
-/// well, so the caller's error branch leaves out those rows on this status. Any other error keeps
-/// them, and so returns the ordinary error status.
-pub const tail_raise_status: i32 = 4;
+/// The pending-frame mark for a native about to run, when it is a tail-position `if` or `call`.
+/// Null for any other call. See `Context.beginTailCombinatorRun`.
+fn tailCombinatorRaiseMark(ctx: *Context, is_tail: bool, func: NativeFn) ?usize {
+    if (!is_tail or !Context.isTailCombinator(func)) return null;
+    return ctx.beginTailCombinatorRun();
+}
 
 /// The status a compiled word returns when its last action handed an interpreted body back rather
 /// than running it.
@@ -18601,7 +18568,10 @@ const FallbackTail = enum(usize) {
 /// one the tail callee pushed, and its own. The interpreter's tail arm pops the first in its
 /// success cleanup. The trampoline pops the second before running the deferred body. An error
 /// raised there pends neither.
-fn finishFallbackCall(ctx: *Context, display_name: []const u8, result: anyerror!void, elided: bool, is_tail: bool, cleanup_effect: ?*const StackEffect) i32 {
+///
+/// `raise_mark` is set for a tail-position `if` or `call`, whose frame pends only when the
+/// combinator itself raised. See `Context.tailCombinatorErrorCleanup`.
+fn finishFallbackCall(ctx: *Context, display_name: []const u8, result: anyerror!void, elided: bool, is_tail: bool, raise_mark: ?usize, cleanup_effect: ?*const StackEffect) i32 {
     if (result) |_| {
         if (elided) return 0;
 
@@ -18622,16 +18592,19 @@ fn finishFallbackCall(ctx: *Context, display_name: []const u8, result: anyerror!
         ctx.popCallFrame();
         ctx.runPropagatedTailBody() catch |err| {
             ctx.jit_pending_error = err;
-            return tail_raise_status;
+            return 2;
         };
         return 0;
     } else |err| {
         if (elided) {
             ctx.jit_pending_error = err;
-            return tail_raise_status;
+            return 2;
         }
 
-        ctx.jit_pending_error = ctx.wordErrorCleanup(display_name, err);
+        ctx.jit_pending_error = if (raise_mark) |mark|
+            ctx.tailCombinatorErrorCleanup(display_name, err, mark)
+        else
+            ctx.wordErrorCleanup(display_name, err);
         return 2;
     }
 }
@@ -18781,7 +18754,7 @@ export fn jitInterpretedCall(ctx_raw: usize, word_id_raw: usize, src_ptr_raw: us
         return 2;
     };
 
-    return finishFallbackCall(ctx, display_name, result, elided, is_tail, if (looked_up_word) |word| word.stack_effect else if (module_hit) |hit| hit.word.stack_effect else null);
+    return finishFallbackCall(ctx, display_name, result, elided, is_tail, null, if (looked_up_word) |word| word.stack_effect else if (module_hit) |hit| hit.word.stack_effect else null);
 }
 
 /// Result of attempting compiled execution.
@@ -18934,8 +18907,7 @@ fn runTrampolineHops(ctx: *Context, jit_ctx: *JitContext, first_status: i32) ?i3
         const target_id = jit_ctx.trampoline_target;
         const target_entry = jitWordEntryFor(ctx, target_id) orelse return null;
         const code_ptr = target_entry.code_ptr orelse {
-            const interpreted = jitInterpretedCall(@intFromPtr(ctx), target_id, 0, 0, 0, @intFromEnum(FallbackTail.handoff));
-            return if (interpreted == tail_raise_status) 2 else interpreted;
+            return jitInterpretedCall(@intFromPtr(ctx), target_id, 0, 0, 0, @intFromEnum(FallbackTail.handoff));
         };
         if (resolveEntryWord(ctx, target_entry, target_entry.word_name)) |word| {
             ctx.jit_trace_source = word.source_file orelse ctx.current_source;
@@ -19766,7 +19738,7 @@ test "jitInterpretedCall: a tail call drops the compound callee's frame before i
     const word_id = try setUpRaisingProbe(&ctx, &body);
 
     const rc = jitInterpretedCall(@intFromPtr(&ctx), word_id, 0, 0, 1, 1);
-    try testing.expectEqual(tail_raise_status, rc);
+    try testing.expectEqual(@as(i32, 2), rc);
     try testing.expectEqual(@as(?anyerror, error.TypeError), ctx.jit_pending_error);
 
     try testing.expect(pendsFrameNamed(&ctx, "fail"));
