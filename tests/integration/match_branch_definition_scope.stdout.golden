@@ -1,0 +1,22 @@
+Stack: [ ]
+=== a definition in a match branch does not outlive the word ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: a branch definition is gone after a word that tail-calls its host returns
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: and so is one reached through a tail-position call
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: and so is one in the default branch
+Stack: [ ]
+=== a definition in a match branch stays visible to that branch ===
+Stack: [ ]
+Stack: [ ]
+PASS: the branch resolves its own definition
+Stack: [ ]

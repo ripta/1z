@@ -1,0 +1,31 @@
+\ A definition made inside a `match{` branch is scoped to the branch, as one inside an `if` branch is.
+\ The branch used to run without a frame of its own, so the definition landed in whichever frame
+\ was on top and outlived the word that made it.
+
+use "testing" ;
+
+dir: enum{ up: unit down: unit } ;
+
+"a definition in a match branch does not outlive the word" test-section
+
+helper: [ dir:up match{ dir:up: [ zz-direct: [ 42 ] ; zz-direct drop ] dir:down: [ ] } ] ;
+outer: [ helper ] ;
+
+outer
+"zz-direct" defined? f "a branch definition is gone after a word that tail-calls its host returns" assert=
+
+wrapped-helper: [ dir:up match{ dir:up: [ zz-wrapped: [ 42 ] ; ] dir:down: [ ] } ] ;
+wrapped-outer: [ [ wrapped-helper ] call ] ;
+
+wrapped-outer
+"zz-wrapped" defined? f "and so is one reached through a tail-position call" assert=
+
+default-helper: [ dir:down match{ dir:up: [ ] _ [ zz-default: [ 42 ] ; drop ] } ] ;
+
+default-helper
+"zz-default" defined? f "and so is one in the default branch" assert=
+
+"a definition in a match branch stays visible to that branch" test-section
+
+visible: ( -- n ) [ dir:up match{ dir:up: [ inside: [ 7 ] ; inside ] dir:down: [ 0 ] } ] ;
+visible 7 "the branch resolves its own definition" assert=

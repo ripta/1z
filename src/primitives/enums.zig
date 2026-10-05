@@ -692,11 +692,11 @@ fn nativeMatch(ctx: *Context) anyerror!void {
                 else => {},
             }
         }
-        try body.execute(ctx);
+        try body.executeInline(ctx);
     } else if (default_body) |body| {
         // Default branch receives the raw tagged value, not unwrapped
         try ctx.stack.push(val);
-        try body.execute(ctx);
+        try body.executeInline(ctx);
     } else {
         unreachable;
     }
