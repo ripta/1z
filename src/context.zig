@@ -2930,6 +2930,23 @@ pub const Context = struct {
         };
     }
 
+    /// Save the error state, then clear the pending message channels for code that runs while an
+    /// enclosing error is still unwinding.
+    ///
+    /// Those channels describe the enclosing error. Left live, a raise inside the shielded code
+    /// would fold them into its own innermost row and report the enclosing error's message. The
+    /// caller must always restore the snapshot, because nothing else gives the channels back.
+    pub fn shieldErrorState(self: *Context) ErrorStateSnapshot {
+        const saved = self.saveErrorState();
+
+        self.pending_error_message = null;
+        self.pending_error_hint = null;
+        self.pending_dispatch_actual_types = null;
+        self.pending_dispatch_available_methods = null;
+
+        return saved;
+    }
+
     /// Give back the state a swallowed error overwrote, so the next error renders only its
     /// own chain.
     ///
@@ -8835,6 +8852,24 @@ pub const Context = struct {
         }
     }
 
+    /// The message a boxed error carries, read after the fold.
+    ///
+    /// The innermost row at `detail_mark` holds prose only when its message differs from its word
+    /// name. The fold writes the word name there when the raise wrote no message.
+    ///
+    /// A fold with no frames leaves the pending message unconsumed, so it is the next source. A
+    /// raise with neither keeps its type name.
+    pub fn boxedErrorMessage(self: *const Context, detail_mark: usize, type_name: []const u8) []const u8 {
+        if (self.error_details.items.len > detail_mark) {
+            const row = self.error_details.items[detail_mark];
+            const is_filler = row.elided_frames > 0 or
+                (row.word_name != null and std.mem.eql(u8, row.message, row.word_name.?));
+            if (!is_filler) return row.message;
+        }
+
+        return self.pending_error_message orelse type_name;
+    }
+
     /// Render the frame's carried effect for an error row.
     ///
     /// The frame's own pointer is the only source consulted. Resolving `frame.word_name` here
@@ -11673,6 +11708,82 @@ test "finalizeErrorDetails with nothing to fold preserves the pending message" {
     try std.testing.expectEqual(@as(usize, 0), ctx.error_details.items.len);
     try std.testing.expectEqualStrings("kept for the frameless fallback", ctx.pending_error_message.?);
     try std.testing.expectEqualStrings("kept too", ctx.pending_error_hint.?);
+}
+
+test "boxedErrorMessage reads the folded row's prose" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    ctx.appendPendingSyntheticErrorFrame("take", "<test>", 3, null);
+    ctx.pending_error_message = "expected fixnum, got string";
+    ctx.finalizeErrorDetails(error.TypeMismatch);
+
+    try std.testing.expectEqualStrings("expected fixnum, got string", ctx.boxedErrorMessage(0, "type-mismatch"));
+}
+
+test "boxedErrorMessage does not take a row's word name as prose" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    ctx.appendPendingSyntheticErrorFrame("take", "<test>", 3, null);
+    ctx.finalizeErrorDetails(error.TypeMismatch);
+
+    try std.testing.expectEqualStrings("take", ctx.error_details.items[0].message);
+    try std.testing.expectEqualStrings("type-mismatch", ctx.boxedErrorMessage(0, "type-mismatch"));
+}
+
+test "boxedErrorMessage falls back to the frameless pending message, then the type" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    try std.testing.expectEqualStrings("type-mismatch", ctx.boxedErrorMessage(0, "type-mismatch"));
+
+    ctx.pending_error_message = "expected fixnum, got string";
+    ctx.finalizeErrorDetails(error.TypeMismatch);
+
+    try std.testing.expectEqualStrings("expected fixnum, got string", ctx.boxedErrorMessage(0, "type-mismatch"));
+}
+
+test "boxedErrorMessage reads the row at its own mark" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    try ctx.error_details.append(ctx.allocator, .{
+        .error_type = "body-error",
+        .message = "body failed",
+        .source = "<test>",
+        .line = 2,
+        .word_name = "enclosing",
+    });
+    const mark = ctx.error_details.items.len;
+    ctx.appendPendingSyntheticErrorFrame("mine", "<test>", 5, null);
+    ctx.pending_error_message = "mine failed";
+
+    ctx.finalizeErrorDetailsAbove(error.TypeMismatch, mark, 0);
+
+    try std.testing.expectEqualStrings("mine failed", ctx.boxedErrorMessage(mark, "type-mismatch"));
+}
+
+test "shieldErrorState keeps an enclosing error's message out of a nested fold" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    ctx.pending_error_message = "body failed";
+    ctx.pending_error_hint = "body hint";
+    const shielded = ctx.shieldErrorState();
+
+    ctx.appendPendingSyntheticErrorFrame("inner", "<test>", 4, null);
+    ctx.finalizeErrorDetailsAbove(error.DivisionByZero, shielded.detail_mark, shielded.pending_frame_mark);
+
+    const row = ctx.error_details.items[shielded.detail_mark];
+    try std.testing.expectEqualStrings("inner", row.message);
+    try std.testing.expect(row.hint == null);
+    try std.testing.expectEqualStrings("division-by-zero", ctx.boxedErrorMessage(shielded.detail_mark, "division-by-zero"));
+
+    ctx.restoreErrorState(shielded);
+
+    try std.testing.expectEqualStrings("body failed", ctx.pending_error_message.?);
+    try std.testing.expectEqualStrings("body hint", ctx.pending_error_hint.?);
 }
 
 test "capture drops a definition-located frame when the call site queued the same word" {

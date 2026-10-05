@@ -1,0 +1,7 @@
+\ The unhandled-error hook receives the raise site's sentence as the message, not the type name.
+
+on:unhandled-error [ message: @get eprint-line ] add-hook
+
+add-string: ( -- ) [ 1 "a" + drop ] ;
+
+add-string

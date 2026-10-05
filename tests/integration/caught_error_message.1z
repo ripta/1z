@@ -1,0 +1,72 @@
+use "testing" ;
+
+\ A caught interpreter error carries the sentence its raise site wrote, the same one an uncaught
+\ error prints. Its type stays the kebab-cased error name, and a raise that wrote no sentence keeps
+\ that name as its message.
+
+add-string: ( -- ) [ 1 "a" + drop ] ;
+
+divide-by-zero: ( -- ) [ 1 0 / drop ] ;
+
+deep: stack-recursive ( n -- n ) [ dup 0 > [ 1 - deep 1 + ] when ] ;
+
+test-caught-prose: ( -- ) [
+  [ add-string ] [
+    dup error-type: @get type-mismatch: "caught type mismatch keeps its type" assert=
+    message: @get "expected number, got string \"a\"" "caught type mismatch carries its prose" assert=
+  ] recover
+] ;
+
+test-caught-without-prose: ( -- ) [
+  [ divide-by-zero ] [
+    message: @get "division-by-zero" "a raise with no prose keeps its type name" assert=
+  ] recover
+] ;
+
+test-caught-overflow: ( -- ) [
+  [ 1000000 deep drop ] [
+    message: @get "stack overflow:" #starts-with?
+    "caught stack overflow carries its byte counts" assert-true
+  ] recover
+] ;
+
+test-task-prose: ( -- ) [
+  [
+    [ [ add-string ] spawn drop ] task-scope
+    f "scope should have thrown" assert-true
+  ] [
+    dup error-type: @get type-mismatch: "task failure keeps its type" assert=
+    message: @get "expected number, got string \"a\"" "task failure carries its prose" assert=
+  ] recover
+] ;
+
+test-task-without-prose: ( -- ) [
+  [
+    [ [ divide-by-zero ] spawn drop ] task-scope
+    f "scope should have thrown" assert-true
+  ] [
+    message: @get "division-by-zero" "task failure with no prose keeps its type name" assert=
+  ] recover
+] ;
+
+\ A cleanup quotation runs while the body's error is still unwinding. An error caught inside it
+\ reports its own message, not the body's.
+
+test-nested-in-cleanup: ( -- ) [
+  [
+    [ add-string ] [
+      [ divide-by-zero ] [
+        message: @get "division-by-zero" "an error caught in cleanup keeps its own message" assert=
+      ] recover
+    ] cleanup
+  ] [
+    message: @get "expected number, got string \"a\"" "the body's error keeps its prose" assert=
+  ] recover
+] ;
+
+test-caught-prose
+test-caught-without-prose
+test-nested-in-cleanup
+test-caught-overflow
+test-task-prose
+test-task-without-prose

@@ -1,0 +1,4 @@
+expected number, got string "a"
+tests/integration/hook_unhandled_error_message.1z:5: error 'type-mismatch' expected number, got string "a" at word '+'
+  stack effect: ( a b -- a+b )
+  hint: operands must be numbers (fixnum, float, bignum, or ratio)

@@ -8,6 +8,7 @@ const Context = @import("context.zig").Context;
 const value_mod = @import("value.zig");
 const Value = value_mod.Value;
 const ErrorObject = value_mod.ErrorObject;
+const pascalToKebabRuntime = @import("primitives/errors.zig").pascalToKebabRuntime;
 
 const is_freestanding = builtin.os.tag == .freestanding;
 
@@ -119,15 +120,24 @@ pub fn coroDestroy(task: *Task) void {
 /// crosses workers; the scope's collection deep-copies it and never reads this context.
 ///
 /// Boxes from the folded innermost row when the fold produced one, else transfers the
-/// thrown stash, else returns null for the caller's no-details fallback.
+/// thrown stash, else boxes the kebab-cased Zig error. Null means only that the boxing
+/// allocation failed.
 pub fn foldAndBoxTaskError(ctx: *Context, err: anyerror) ?*ErrorObject {
     ctx.finalizeErrorDetails(err);
 
     if (ctx.error_details.items.len > 0) {
         const detail = ctx.error_details.items[0];
+
+        // A thrown error's row carries the thrower's own message, which is never filler even when
+        // it happens to match the word name.
+        const message = if (err == error.UserThrown)
+            detail.message
+        else
+            ctx.boxedErrorMessage(0, detail.error_type);
+
         return value_mod.boxErrorObject(ctx.quotationAllocator(), .{
             .error_type = detail.error_type,
-            .message = detail.message,
+            .message = message,
         }) catch null;
     }
 
@@ -136,7 +146,16 @@ pub fn foldAndBoxTaskError(ctx: *Context, err: anyerror) ?*ErrorObject {
         return thrown;
     }
 
-    return null;
+    const alloc = ctx.quotationAllocator();
+
+    var kebab_buf: [128]u8 = undefined;
+    const kebab_name = pascalToKebabRuntime(@errorName(err), &kebab_buf);
+    const error_type = alloc.dupe(u8, kebab_name) catch @errorName(err);
+
+    return value_mod.boxErrorObject(alloc, .{
+        .error_type = error_type,
+        .message = ctx.boxedErrorMessage(0, error_type),
+    }) catch null;
 }
 
 /// Entry function for task coroutines. Called by minicoro with the coroutine
@@ -1058,11 +1077,37 @@ test "foldAndBoxTaskError transfers the thrown box when nothing folds" {
     try std.testing.expect(ctx.thrown_error == null);
 }
 
-test "foldAndBoxTaskError returns null with nothing to box" {
+test "foldAndBoxTaskError boxes the Zig error with nothing folded" {
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
 
-    try std.testing.expect(foldAndBoxTaskError(&ctx, error.TypeMismatch) == null);
+    const boxed = foldAndBoxTaskError(&ctx, error.TypeMismatch);
+
+    try std.testing.expectEqualStrings("type-mismatch", boxed.?.error_type);
+    try std.testing.expectEqualStrings("type-mismatch", boxed.?.message);
+}
+
+test "foldAndBoxTaskError carries a frameless pending message" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    ctx.pending_error_message = "expected fixnum, got string";
+
+    const boxed = foldAndBoxTaskError(&ctx, error.TypeMismatch);
+
+    try std.testing.expectEqualStrings("type-mismatch", boxed.?.error_type);
+    try std.testing.expectEqualStrings("expected fixnum, got string", boxed.?.message);
+}
+
+test "foldAndBoxTaskError does not take a row's word name as its message" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    ctx.appendPendingSyntheticErrorFrame("boom", "<test>", 7, null);
+
+    const boxed = foldAndBoxTaskError(&ctx, error.TypeMismatch);
+
+    try std.testing.expectEqualStrings("type-mismatch", boxed.?.message);
 }
 
 test "taskStackLayout commits the metadata and the base around a one-page guard" {

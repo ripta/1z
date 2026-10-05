@@ -115,7 +115,7 @@ fn printErrorDetails(ctx: *Context, writer: anytype, err: anyerror) void {
         const duped_name = alloc.dupe(u8, kebab_name) catch @errorName(err);
         var error_obj = ErrorObject{
             .error_type = duped_name,
-            .message = duped_name,
+            .message = ctx.boxedErrorMessage(0, duped_name),
             .data = null,
             .stack_trace = stack_trace,
         };

@@ -97,7 +97,7 @@ fn runHook(ctx: *Context, hook: Callable, args: []const Value) anyerror!void {
 
     // The hook's error is reported and dropped, so it must not extend or replace the chain of
     // whatever is propagating around this fire, nor hand its state to the next hook.
-    const saved_error_state = ctx.saveErrorState();
+    const saved_error_state = ctx.shieldErrorState();
     defer ctx.restoreErrorState(saved_error_state);
 
     const result = runHookOver(ctx, hook, args);

@@ -1,1 +1,1 @@
-tests/fixtures/check_mode/redefine_within_file.1z:1:1: warning: [semantic-context-unavailable] semantic analysis unavailable for this file: arity-mismatch
+tests/fixtures/check_mode/redefine_within_file.1z:1:1: warning: [semantic-context-unavailable] semantic analysis unavailable for this file: arity mismatch on redefinition of 'a' (was 1 -> 1, now 2 -> 1)

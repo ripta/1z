@@ -1,0 +1,24 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: caught type mismatch keeps its type
+PASS: caught type mismatch carries its prose
+Stack: [ ]
+PASS: a raise with no prose keeps its type name
+Stack: [ ]
+PASS: an error caught in cleanup keeps its own message
+PASS: the body's error keeps its prose
+Stack: [ ]
+PASS: caught stack overflow carries its byte counts
+Stack: [ ]
+PASS: task failure keeps its type
+PASS: task failure carries its prose
+Stack: [ ]
+PASS: task failure with no prose keeps its type name
+Stack: [ ]

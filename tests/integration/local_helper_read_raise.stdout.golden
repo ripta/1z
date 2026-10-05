@@ -17,5 +17,5 @@ Stack: [ ]
 Stack: [ ]
 <error user-thrown: boom [tests/integration/local_helper_read_raise.1z:36:throw <- tests/integration/local_helper_read_raise.1z:37:if <- tests/integration/local_helper_read_raise.1z:50:recover]>
 Stack: [ ]
-<error type-error: type-error [tests/integration/local_helper_read_raise.1z:42:inc <- tests/integration/local_helper_read_raise.1z:51:recover]>
+<error type-error: type mismatch for parameter 'n': expected fixnum, got string [tests/integration/local_helper_read_raise.1z:42:inc <- tests/integration/local_helper_read_raise.1z:51:recover]>
 Stack: [ ]

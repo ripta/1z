@@ -131,8 +131,8 @@ fn traceFromDetails(ctx: *Context, detail_mark: usize) ?[]const StackFrame {
 }
 
 /// Box a caught error onto the stack: the stashed thrown ErrorObject with its
-/// stack trace when err is a user throw, else a generic error object named
-/// after the kebab-cased Zig error.
+/// stack trace when err is a user throw, else a generic error object typed
+/// after the kebab-cased Zig error and carrying the raise site's message.
 ///
 /// `saved` is the caller's entry snapshot, and it bounds both halves of the consumption. The
 /// fold builds this error's chain from the frames the caller's subtree pended, and the restore
@@ -165,9 +165,17 @@ pub fn pushCaughtError(ctx: *Context, err: anyerror, saved: Context.ErrorStateSn
     var kebab_buf: [128]u8 = undefined;
     const kebab_name = pascalToKebabRuntime(@errorName(err), &kebab_buf);
     const duped_name = alloc.dupe(u8, kebab_name) catch @errorName(err);
+
+    // The fallback hands back `duped_name` itself, which is already in the box's allocator.
+    const message = ctx.boxedErrorMessage(saved.detail_mark, duped_name);
+    const duped_message = if (message.ptr == duped_name.ptr)
+        duped_name
+    else
+        alloc.dupe(u8, message) catch duped_name;
+
     const error_ptr = try value_mod.boxErrorObject(ctx.quotationAllocator(), .{
         .error_type = duped_name,
-        .message = duped_name,
+        .message = duped_message,
         .data = null,
         .stack_trace = stack_trace,
     });
@@ -230,7 +238,7 @@ pub fn nativeCleanup(ctx: *Context) anyerror!void {
 
     // A suppressed cleanup failure must not bleed into the body error's in-flight state.
     // Anything left behind would replace or extend the chain the body is still propagating.
-    const saved_error_state = ctx.saveErrorState();
+    const saved_error_state = ctx.shieldErrorState();
 
     // Always execute cleanup quotation, even if body failed
     // If cleanup also fails, we ignore that error and prioritize the body error
