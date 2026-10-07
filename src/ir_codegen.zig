@@ -18199,7 +18199,8 @@ export fn jitDispatchMissError(ctx_raw: usize, word_id_raw: usize, src_ptr_raw: 
             .number => helpers.setNumberOperandError(ctx, a, b),
             .unexpected => helpers.setErrorContext(ctx, "no applicable method for '{s}'", .{word_name}),
         }
-        // The message holds arena copies of everything it needed, so the operands can go now.
+        // The message holds arena copies of everything it needed and the payload holds only the
+        // operands' types, so the operands can go now.
         ctx.stack.items.items.len -= 2;
         container_backing.releaseValue(b);
         container_backing.releaseValue(a);

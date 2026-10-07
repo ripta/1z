@@ -359,6 +359,34 @@ test "valueMatchesType preserves tagged parent and base type checks" {
     try testing.expect(!valueMatchesType(&ctx, tagged, &base_tv));
 }
 
+test "setTypeMismatchError leaves a payload naming the expected and actual types" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    setTypeMismatchError(&ctx, "fixnum", value_mod.stringValue("x"));
+
+    const payload = ctx.pending_error_data.?.hash;
+    try testing.expectEqualStrings("fixnum", payload.map.get("expected").?.string.bytes);
+    try testing.expectEqual(ctx.lookupBuiltinTypeValue("string").?, payload.map.get("actual").?.type_val);
+
+    ctx.clearExecutionDetails();
+    try testing.expectEqual(@as(?Value, null), ctx.pending_error_data);
+}
+
+test "setNumberOperandError adds both operands' types to the payload" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    setNumberOperandError(&ctx, .{ .fixnum = 1 }, value_mod.stringValue("x"));
+
+    const payload = ctx.pending_error_data.?.hash;
+    const string_tv = ctx.lookupBuiltinTypeValue("string").?;
+    try testing.expectEqualStrings("number", payload.map.get("expected").?.string.bytes);
+    try testing.expectEqual(string_tv, payload.map.get("actual").?.type_val);
+    try testing.expectEqual(ctx.lookupBuiltinTypeValue("fixnum").?, payload.map.get("left").?.type_val);
+    try testing.expectEqual(string_tv, payload.map.get("right").?.type_val);
+}
+
 test "unwrapTaggedSlotInPlace balances backed and null-backed wrappers" {
     var dummy_vt: value_mod.VirtualType = undefined;
 
@@ -523,7 +551,19 @@ pub fn setErrorContext(ctx: *Context, comptime fmt: []const u8, args: anytype) v
 
 /// Set a pending error message, special case for type mismatch errors,
 /// so we can include the actual value.
+///
+/// The payload carries `expected` as a string and `actual` as the value's type. It never holds the
+/// value itself, so no operand outlives the raise through it.
+///
+/// A failed allocation leaves the error without a payload, since the raise itself must not fail.
 pub fn setTypeMismatchError(ctx: *Context, expected: []const u8, val: Value) void {
+    setTypeMismatchMessage(ctx, expected, val);
+
+    const hash = typeMismatchPayload(ctx, expected, val) catch return;
+    ctx.setPendingErrorData(.{ .hash = hash });
+}
+
+fn setTypeMismatchMessage(ctx: *Context, expected: []const u8, val: Value) void {
     const allocator = ctx.arena.allocator();
     const val_brief = formatValueBrief(allocator, val, 20) catch valueTypeName(val);
     ctx.pending_error_message = std.fmt.allocPrint(
@@ -531,6 +571,28 @@ pub fn setTypeMismatchError(ctx: *Context, expected: []const u8, val: Value) voi
         "expected {s}, got {s} {s}",
         .{ expected, valueTypeName(val), val_brief },
     ) catch null;
+}
+
+fn typeMismatchPayload(ctx: *Context, expected: []const u8, val: Value) !*value_mod.HashTable {
+    const hash = try value_mod.HashTable.create(ctx.allocator);
+    errdefer container_backing.releaseValue(.{ .hash = hash });
+
+    const alloc = hash.header.allocator;
+
+    // `expected` is not always a literal, so the payload keeps its own copy.
+    const expected_bytes = try alloc.dupe(u8, expected);
+    const expected_value = value_mod.ownedStringValue(alloc, expected_bytes) catch |err| {
+        alloc.free(expected_bytes);
+        return err;
+    };
+    try Context.putErrorPayloadField(hash, "expected", expected_value);
+
+    try putPayloadType(ctx, hash, "actual", val);
+    return hash;
+}
+
+fn putPayloadType(ctx: *Context, hash: *value_mod.HashTable, key: []const u8, val: Value) !void {
+    try Context.putErrorPayloadField(hash, key, .{ .type_val = dispatch_mod.dispatchTypeValue(val, ctx) });
 }
 
 /// Set a pending error hint to be displayed alongside the error message.
@@ -549,9 +611,25 @@ pub fn isNativeNumeric(val: Value) bool {
 /// The offending operand is the first non-numeric one, so a ratio meeting a fixnum names the
 /// ratio. Both the natives and the compiled dispatch-miss trap set the error here, so a locked
 /// AOT binary reports what the interpreter reports and the two can share a golden.
+///
+/// The payload adds `left` and `right`, each operand's type, to the type-mismatch payload.
 pub fn setNumberOperandError(ctx: *Context, a: Value, b: Value) void {
     setErrorHint(ctx, "operands must be numbers (fixnum, float, bignum, or ratio)");
-    setTypeMismatchError(ctx, "number", if (!isNativeNumeric(a)) a else b);
+
+    const offending = if (!isNativeNumeric(a)) a else b;
+    setTypeMismatchMessage(ctx, "number", offending);
+
+    const hash = numberOperandPayload(ctx, offending, a, b) catch return;
+    ctx.setPendingErrorData(.{ .hash = hash });
+}
+
+fn numberOperandPayload(ctx: *Context, offending: Value, a: Value, b: Value) !*value_mod.HashTable {
+    const hash = try typeMismatchPayload(ctx, "number", offending);
+    errdefer container_backing.releaseValue(.{ .hash = hash });
+
+    try putPayloadType(ctx, hash, "left", a);
+    try putPayloadType(ctx, hash, "right", b);
+    return hash;
 }
 
 /// Report that a word is not available on the current build target.

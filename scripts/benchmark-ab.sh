@@ -60,7 +60,7 @@ done
 #
 # call_word_micro belongs to neither. It is here so the workload filter reaches
 # it, and it stays out of the archetype suite, whose curation and recorded
-# baseline a seventh row would change.
+# baseline another row would change.
 workloads=(
     "quotation_seq.1z|tests/benchmark/quotation_seq.1z|"
     "fibonacci.1z|tests/benchmark/fibonacci.1z|"
@@ -69,6 +69,7 @@ workloads=(
     "bench_generic_dispatch.1z|tests/benchmark/bench_generic_dispatch.1z|"
     "bench_tokenize_iso.1z|tests/benchmark/bench_tokenize_iso.1z|"
     "module_less_bodies.1z|tests/benchmark/module_less_bodies.1z|"
+    "raise_type_mismatch.1z|tests/benchmark/raise_type_mismatch.1z|"
     "task_body_entry.1z --threads=auto|tests/benchmark/task_body_entry.1z|--threads=auto"
     "task_body_entry.1z --threads=1|tests/benchmark/task_body_entry.1z|--threads=1"
     "combinator_contention.1z|tests/benchmark/combinator_contention.1z|--threads=auto"

@@ -335,6 +335,9 @@ fn nativeSortBy(ctx: *Context) anyerror!void {
     std.mem.sort(usize, indices, &sort_ctx, sortByKeyCompareFn);
     if (sort_ctx.err) |e| {
         if (e == error.NotComparable) {
+            // A type mismatch the comparison raised carries a payload that does not describe this
+            // error.
+            ctx.releasePendingErrorData();
             setErrorContext(ctx, "keys are not comparable", .{});
         }
         return e;

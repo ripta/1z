@@ -35,9 +35,9 @@ PASS: sort from vector returns array
 Stack: [ ]
 === #sort comparator error ===
 Stack: [ ]
-Stack: [ <result:err result-error{ error: <error type-mismatch: expected number, got string "b" [tests/integration/sort_primitives.1z:32:+ <- tests/integration/sort_primitives.1z:32:#sort <- src/prelude.1z:1313:call <- src/prelude.1z:1313:recover]> }> ]
+Stack: [ <result:err result-error{ error: <error type-mismatch: expected number, got string "b" data=H{ expected: "number" actual: <type:string> right: <type:string> left: <type:string> } [tests/integration/sort_primitives.1z:32:+ <- tests/integration/sort_primitives.1z:32:#sort <- src/prelude.1z:1313:call <- src/prelude.1z:1313:recover]> }> ]
 PASS: bad comparator is error
-Stack: [ <result:err result-error{ error: <error type-mismatch: expected number, got string "b" [tests/integration/sort_primitives.1z:32:+ <- tests/integration/sort_primitives.1z:32:#sort <- src/prelude.1z:1313:call <- src/prelude.1z:1313:recover]> }> ]
+Stack: [ <result:err result-error{ error: <error type-mismatch: expected number, got string "b" data=H{ expected: "number" actual: <type:string> right: <type:string> left: <type:string> } [tests/integration/sort_primitives.1z:32:+ <- tests/integration/sort_primitives.1z:32:#sort <- src/prelude.1z:1313:call <- src/prelude.1z:1313:recover]> }> ]
 Stack: [ type-mismatch: ]
 PASS: comparator type error
 Stack: [ ]

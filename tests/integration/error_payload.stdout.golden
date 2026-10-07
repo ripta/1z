@@ -4,6 +4,14 @@ Stack: [ ]
 Stack: [ ]
 Stack: [ ]
 Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
 PASS: used is a fixnum
 PASS: used counts the bytes in use
 PASS: limit is a fixnum
@@ -21,6 +29,29 @@ PASS: the guard limit sits within the stack size
 Stack: [ ]
 PASS: task posix failure keeps its type
 PASS: a thrown payload crosses the scope boundary
+Stack: [ ]
+PASS: the message is unchanged
+PASS: expected names the wanted type
+PASS: actual is the offending value's type
+Stack: [ ]
+PASS: arithmetic expects a number
+PASS: actual is the non-numeric operand's type
+PASS: left is the first operand's type
+PASS: right is the second operand's type
+Stack: [ ]
+PASS: ordering expects a real number
+PASS: ordering names the first operand's type
+Stack: [ ]
+PASS: incomparable keys raise not-comparable
+PASS: not-comparable carries no type-mismatch payload
+Stack: [ ]
+PASS: a task's type mismatch keeps its payload
+Stack: [ ]
+PASS: the payload names the task's resource kind
+PASS: the task's type is the one main resolves
+Stack: [ ]
+PASS: an awaited type-of names the task's resource kind
+PASS: an awaited type-of is the one main resolves
 Stack: [ ]
 PASS: a raise with no payload keeps data f
 Stack: [ ]

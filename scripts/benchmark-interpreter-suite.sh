@@ -30,6 +30,10 @@ reps="${2:-7}"
 # that loads no module pays for body entry differently, and the rows that used to
 # cover that by accident acquired imports. It loads nothing, and a check in the
 # Makefile keeps it that way.
+#
+# raise-heavy times interpreter raises caught by `recover` in a loop. A raise
+# can sit on a control-flow path, so the cost of building an error is a
+# workload of its own.
 suite=(
     "combinator-heavy|tests/benchmark/quotation_seq.1z"
     "numeric/recursive|tests/benchmark/fibonacci.1z"
@@ -38,6 +42,7 @@ suite=(
     "dispatch-heavy|tests/benchmark/bench_generic_dispatch.1z"
     "macro/tokenizer|tests/benchmark/bench_tokenize_iso.1z"
     "module-less|tests/benchmark/module_less_bodies.1z"
+    "raise-heavy|tests/benchmark/raise_type_mismatch.1z"
 )
 
 # median of the integers passed as args

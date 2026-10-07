@@ -18,7 +18,7 @@ Stack: [ ]
 Stack: [ ]
 <error user-thrown: boom [tests/integration/tail_combinator_error_rows.1z:10:throw <- tests/integration/tail_combinator_error_rows.1z:31:recover]>
 Stack: [ ]
-<error type-mismatch: expected quotation, got fixnum 5 [tests/integration/tail_combinator_error_rows.1z:24:if <- tests/integration/tail_combinator_error_rows.1z:32:recover]>
+<error type-mismatch: expected quotation, got fixnum 5 data=H{ expected: "quotation" actual: <type:fixnum> } [tests/integration/tail_combinator_error_rows.1z:24:if <- tests/integration/tail_combinator_error_rows.1z:32:recover]>
 Stack: [ ]
-<error type-mismatch: expected quotation, got fixnum 5 [tests/integration/tail_combinator_error_rows.1z:22:call <- tests/integration/tail_combinator_error_rows.1z:33:recover]>
+<error type-mismatch: expected quotation, got fixnum 5 data=H{ expected: "quotation" actual: <type:fixnum> } [tests/integration/tail_combinator_error_rows.1z:22:call <- tests/integration/tail_combinator_error_rows.1z:33:recover]>
 Stack: [ ]

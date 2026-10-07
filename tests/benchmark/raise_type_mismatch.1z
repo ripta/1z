@@ -1,0 +1,44 @@
+\ Benchmark: what a caught interpreter raise costs, with and without a structured payload.
+\
+\ A type mismatch and an arithmetic operand mismatch each build a payload hash on the way out, and
+\ `recover` and `try` are used for control flow, so a raise can sit in a loop. The `throw` row raises
+\ an error whose `data` is `f`, and is the control the two payload rows are read against.
+\
+\ Every raise site is a native, so --compile=off is the mode that matters.
+
+raise-iters: ( -- fixnum ) const [ 80000 ] ;
+
+\ `#take` pops its count as a fixnum, so a string count raises through the shared type-mismatch
+\ helper.
+type-mismatch-raise: ( n -- ) [
+  dup 0 = [ drop ] [
+    [ 3 "a" #take ] [ drop ] recover 1 - type-mismatch-raise
+  ] if
+] ;
+
+operand-mismatch-raise: ( n -- ) [
+  dup 0 = [ drop ] [
+    [ "a" 1 + ] [ drop ] recover 1 - operand-mismatch-raise
+  ] if
+] ;
+
+throw-raise: ( n -- ) [
+  dup 0 = [ drop ] [
+    [ f "boom" EUserThrown make-error throw ] [ drop ] recover 1 - throw-raise
+  ] if
+] ;
+
+clock-ns: ( -- ns ) [ clock-monotonic swap 1000000000 * + ] ;
+
+\ Reads the clock directly rather than through `benchmark`, which adds bookkeeping to every word
+\ call.
+elapsed-ns: ( quot -- ns ) [ clock-ns [ call ] dip clock-ns swap - ] ;
+
+"type-mismatch elapsed_ns: " print
+[ raise-iters type-mismatch-raise ] elapsed-ns .
+
+"operand-mismatch elapsed_ns: " print
+[ raise-iters operand-mismatch-raise ] elapsed-ns .
+
+"throw elapsed_ns: " print
+[ raise-iters throw-raise ] elapsed-ns .

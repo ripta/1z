@@ -1377,6 +1377,9 @@ pub const Context = struct {
     /// Cache of TypeValues for resource types, keyed by resource type name.
     /// Lazily populated by `type-of` when encountering a resource.
     resource_type_values: std.StringHashMapUnmanaged(*value_mod.TypeValue) = .{},
+    /// The resource TypeValues `getOrCreateResourceTypeValue` built, freed at deinit. Only the root
+    /// holds any. The map above may also hold entries this context does not own.
+    owned_resource_type_values: std.ArrayListUnmanaged(*value_mod.TypeValue) = .{},
     /// Mapping from struct name to its canonical StructType, populated when a `struct{ }` is defined.
     /// The runtime-image loader consults this so a compiled `make-struct-instance` reuses the same
     /// StructType the interpreter (prelude) created, rather than allocating a second one whose
@@ -1936,12 +1939,21 @@ pub const Context = struct {
     }
 
     fn putPayloadFixnum(hash: *value_mod.HashTable, key: []const u8, n: usize) !void {
+        try putErrorPayloadField(hash, key, .{ .fixnum = @intCast(n) });
+    }
+
+    /// Add `key` to an error payload hash, moving the caller's reference to `value` into it.
+    ///
+    /// On failure the value is released, so the caller never holds a reference to clean up.
+    pub fn putErrorPayloadField(hash: *value_mod.HashTable, key: []const u8, value: Value) !void {
+        errdefer container_backing.releaseValue(value);
+
         const alloc = hash.header.allocator;
 
         const owned_key = try alloc.dupe(u8, key);
         errdefer alloc.free(owned_key);
 
-        try hash.map.put(alloc, owned_key, .{ .fixnum = @intCast(n) });
+        try hash.map.put(alloc, owned_key, value);
     }
 
     /// Whether a frame at `sp` is past the guard once the stack has grown as far as it can.
@@ -2469,6 +2481,12 @@ pub const Context = struct {
         self.check_dispatch_log.deinit(self.allocator);
         self.builtin_type_values.deinit(self.allocator);
         self.resource_type_values.deinit(self.allocator);
+        for (self.owned_resource_type_values.items) |tv| {
+            if (tv.descriptor) |desc| value_mod.destroyTypeDescriptor(self.allocator, desc);
+            self.allocator.free(tv.name);
+            self.allocator.destroy(tv);
+        }
+        self.owned_resource_type_values.deinit(self.allocator);
         self.struct_types_by_name.deinit(self.allocator);
         self.parameterized_type_descriptors.deinit(self.allocator);
         self.struct_descriptors.deinit(self.allocator);
@@ -2848,7 +2866,8 @@ pub const Context = struct {
         return data;
     }
 
-    fn releasePendingErrorData(self: *Context) void {
+    /// Release the pending payload and empty the slot.
+    pub fn releasePendingErrorData(self: *Context) void {
         if (self.pending_error_data) |data| container_backing.releaseValue(data);
         self.pending_error_data = null;
     }
@@ -6943,14 +6962,6 @@ pub const Context = struct {
         try self.builtin_type_values.put(self.allocator, name, tv);
     }
 
-    /// Register a resource type value by name (write-locked).
-    pub fn registerResourceTypeValue(self: *Context, name: []const u8, tv: *value_mod.TypeValue) !void {
-        self.acquireSharedWrite();
-        defer self.releaseSharedWrite();
-        const target = self.stateTarget();
-        try target.resource_type_values.put(target.allocator, name, tv);
-    }
-
     /// Register a struct type by name.
     ///
     /// Called when a `struct{ }` is defined so the runtime-image loader can recover the canonical
@@ -6970,20 +6981,42 @@ pub const Context = struct {
 
     /// Look up a resource TypeValue by name, creating and registering one if it does not exist yet.
     /// This centralizes the lazy-creation pattern used by `type-of` and `dispatchTypeValue`.
+    ///
+    /// A type value crosses the task boundary as a plain pointer, in a `type-of` result or an error
+    /// payload, so it must outlive every task. It is therefore built on the root's allocator and
+    /// registered on the root, never in the creating task's arena.
     pub fn getOrCreateResourceTypeValue(self: *Context, name: []const u8) !*value_mod.TypeValue {
         if (self.lookupResourceTypeValue(name)) |tv| return tv;
 
-        const alloc = self.quotationAllocator();
+        const root = self.rootContext();
+
+        self.acquireSharedWrite();
+        defer self.releaseSharedWrite();
+
+        // Another task may have created it between the lookup and the lock.
+        if (root.resource_type_values.get(name)) |tv| return tv;
+
+        const alloc = root.allocator;
+
+        const owned_name = try alloc.dupe(u8, name);
+        errdefer alloc.free(owned_name);
+
         const desc = try value_mod.createTypeDescriptor(
             alloc,
-            .{ .resource = .{ .resource_kind = name } },
+            .{ .resource = .{ .resource_kind = owned_name } },
             .{ .mutable = true },
         );
+        errdefer value_mod.destroyTypeDescriptor(alloc, desc);
+
         // TODO(ripta): investigate per-resource mutability instead of assuming all resources are mutable.
         const tv = try alloc.create(value_mod.TypeValue);
-        tv.* = .{ .name = name, .descriptor = desc };
+        errdefer alloc.destroy(tv);
+        tv.* = .{ .name = owned_name, .descriptor = desc };
 
-        try self.registerResourceTypeValue(name, tv);
+        try root.owned_resource_type_values.append(alloc, tv);
+        errdefer _ = root.owned_resource_type_values.pop();
+
+        try root.resource_type_values.put(alloc, owned_name, tv);
         return tv;
     }
 
