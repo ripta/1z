@@ -121,7 +121,7 @@ pub fn coroDestroy(task: *Task) void {
 ///
 /// Boxes from the folded innermost row when the fold produced one, else transfers the
 /// thrown stash, else boxes the kebab-cased Zig error. Null means only that the boxing
-/// allocation failed.
+/// allocation failed. The box owns its payload's reference.
 pub fn foldAndBoxTaskError(ctx: *Context, err: anyerror) ?*ErrorObject {
     ctx.finalizeErrorDetails(err);
 
@@ -135,10 +135,16 @@ pub fn foldAndBoxTaskError(ctx: *Context, err: anyerror) ?*ErrorObject {
         else
             ctx.boxedErrorMessage(0, detail.error_type);
 
-        return value_mod.boxErrorObject(ctx.quotationAllocator(), .{
+        const data = takeTaskErrorData(ctx, err);
+        const boxed = value_mod.boxErrorObject(ctx.quotationAllocator(), .{
             .error_type = detail.error_type,
             .message = message,
-        }) catch null;
+            .data = data,
+        }) catch {
+            if (data) |d| container_backing.releaseValue(d.*);
+            return null;
+        };
+        return boxed;
     }
 
     if (ctx.thrown_error) |thrown| {
@@ -152,10 +158,40 @@ pub fn foldAndBoxTaskError(ctx: *Context, err: anyerror) ?*ErrorObject {
     const kebab_name = pascalToKebabRuntime(@errorName(err), &kebab_buf);
     const error_type = alloc.dupe(u8, kebab_name) catch @errorName(err);
 
-    return value_mod.boxErrorObject(alloc, .{
+    const data = takeTaskErrorData(ctx, err);
+    const boxed = value_mod.boxErrorObject(alloc, .{
         .error_type = error_type,
         .message = ctx.boxedErrorMessage(0, error_type),
-    }) catch null;
+        .data = data,
+    }) catch {
+        if (data) |d| container_backing.releaseValue(d.*);
+        return null;
+    };
+    return boxed;
+}
+
+/// The payload a task failure crosses the scope boundary with, its reference moved into the
+/// returned slot.
+///
+/// A thrown stash's payload moves off the stash, so the context's teardown does not release it
+/// a second time. Otherwise it is the raise site's pending payload.
+fn takeTaskErrorData(ctx: *Context, err: anyerror) ?*const Value {
+    if (err == error.UserThrown) {
+        if (ctx.thrown_error) |thrown| {
+            const data = thrown.data orelse return null;
+            thrown.data = null;
+            return data;
+        }
+    }
+
+    const data = ctx.takePendingErrorData(null) orelse return null;
+
+    const slot = ctx.quotationAllocator().create(Value) catch {
+        container_backing.releaseValue(data);
+        return null;
+    };
+    slot.* = data;
+    return slot;
 }
 
 /// Entry function for task coroutines. Called by minicoro with the coroutine

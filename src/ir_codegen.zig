@@ -17784,7 +17784,7 @@ fn raiseJitStackOverflow(jc: *JitContext, sp: usize) i32 {
     const ctx_raw: usize = @intFromPtr(jc.ctx);
     if (ctx_raw == 0 or ctx_raw % @alignOf(Context) != 0) return 2;
     const ctx: *Context = @ptrCast(@alignCast(jc.ctx));
-    ctx.pending_error_message = ctx.stackOverflowMessage(sp);
+    ctx.setStackOverflowError(sp);
     ctx.jit_pending_error = error.StackOverflow;
     return 2;
 }

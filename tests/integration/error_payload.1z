@@ -1,0 +1,55 @@
+use "testing" ;
+use "posix" ;
+
+\ A caught stack overflow carries the figures its message prints as a keyed payload.
+\
+\ A task failure crossing the scope boundary keeps its payload, whether the raise site set it or a
+\ thrown error carried it.
+
+deep: stack-recursive ( n -- n ) [ dup 0 > [ 1 - deep 1 + ] when ] ;
+
+check-overflow-payload: ( data -- ) [
+  dup used: @get fixnum? "used is a fixnum" assert-true
+  dup used: @get 0 > "used counts the bytes in use" assert-true
+  dup limit: @get fixnum? "limit is a fixnum" assert-true
+  dup size: @get fixnum? "size is a fixnum" assert-true
+  dup limit: @get swap size: @get <= "the guard limit sits within the stack size" assert-true
+] ;
+
+test-caught-overflow-payload: ( -- ) [
+  [ 1000000 deep drop ] [
+    data: @get
+    dup check-overflow-payload
+    dup grow-to: @has? "the main thread never grows, so it names no growth target" assert-false
+    limit: @get stack-budget? "the guard limit is the figure stack-budget? reports" assert=
+  ] recover
+] ;
+
+test-task-overflow-payload: ( -- ) [
+  [
+    [ [ 100000000 deep drop ] spawn drop ] task-scope
+    f "scope should have thrown" assert-true
+  ] [
+    dup error-type: @get stack-overflow: "task overflow keeps its type" assert=
+    data: @get check-overflow-payload
+  ] recover
+] ;
+
+test-task-thrown-payload: ( -- ) [
+  [
+    [ [ -1 "LOCK_EX" posix-const flock drop ] spawn drop ] task-scope
+    f "scope should have thrown" assert-true
+  ] [
+    dup error-type: @get posix-error: "task posix failure keeps its type" assert=
+    data: @get name: @get ebadf: "a thrown payload crosses the scope boundary" assert=
+  ] recover
+] ;
+
+test-raise-without-payload: ( -- ) [
+  [ 1 0 / drop ] [ data: @get f "a raise with no payload keeps data f" assert= ] recover
+] ;
+
+test-caught-overflow-payload
+test-task-overflow-payload
+test-task-thrown-payload
+test-raise-without-payload

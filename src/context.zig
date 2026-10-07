@@ -1088,6 +1088,11 @@ pub const Context = struct {
     pending_dispatch_actual_types: ?[]const u8 = null,
     /// Pending generic-dispatch method list for the innermost frame.
     pending_dispatch_available_methods: ?[]const u8 = null,
+    /// Pending structured payload for the error's `data` field, set through `setPendingErrorData`.
+    ///
+    /// Unlike the string channels, the slot holds an owning reference. The site that boxes the
+    /// error takes it with `takePendingErrorData`; every other path that discards it releases it.
+    pending_error_data: ?Value = null,
     /// Error captured by the FFI callback trampoline when a 1z quotation throws.
     /// Checked and cleared by nativeFfiCall after ffi_call returns.
     callback_error: ?anyerror = null,
@@ -1904,6 +1909,41 @@ pub const Context = struct {
         ) catch "stack overflow";
     }
 
+    /// Set the message and payload a native stack overflow raises with, for a frame at `sp`.
+    ///
+    /// The payload carries the message's figures under the message's own names: `used`, `limit`,
+    /// and `size`, plus `grow-to` when the stack could not grow. A failed allocation leaves the
+    /// error without a payload, since the raise itself must not fail.
+    pub fn setStackOverflowError(self: *Context, sp: usize) void {
+        self.pending_error_message = self.stackOverflowMessage(sp);
+
+        const hash = value_mod.HashTable.create(self.allocator) catch return;
+        self.fillStackOverflowPayload(hash, sp) catch {
+            container_backing.releaseValue(.{ .hash = hash });
+            return;
+        };
+        self.setPendingErrorData(.{ .hash = hash });
+    }
+
+    fn fillStackOverflowPayload(self: *Context, hash: *value_mod.HashTable, sp: usize) !void {
+        try putPayloadFixnum(hash, "used", self.stack_high -| sp);
+        try putPayloadFixnum(hash, "limit", self.stack_high -| self.stack_limit);
+        try putPayloadFixnum(hash, "size", self.stack_high -| self.stack_low);
+
+        if (self.stack_growth) |growth| {
+            try putPayloadFixnum(hash, "grow-to", self.stack_high -| growth.stack_low);
+        }
+    }
+
+    fn putPayloadFixnum(hash: *value_mod.HashTable, key: []const u8, n: usize) !void {
+        const alloc = hash.header.allocator;
+
+        const owned_key = try alloc.dupe(u8, key);
+        errdefer alloc.free(owned_key);
+
+        try hash.map.put(alloc, owned_key, .{ .fixnum = @intCast(n) });
+    }
+
     /// Whether a frame at `sp` is past the guard once the stack has grown as far as it can.
     ///
     /// A frame reaching a task's `stack_limit` grows the stack, committing the rest of its
@@ -2462,6 +2502,7 @@ pub const Context = struct {
             if (thrown.data) |data| container_backing.releaseValue(data.*);
         }
         self.thrown_error = null;
+        self.releasePendingErrorData();
 
         // An undrained callback courier holds a stash of its own, on the same terms.
         self.dropCallbackErrorState();
@@ -2784,6 +2825,39 @@ pub const Context = struct {
         self.pending_error_hint = null;
         self.pending_dispatch_actual_types = null;
         self.pending_dispatch_available_methods = null;
+        self.releasePendingErrorData();
+    }
+
+    /// Attach a payload to the error about to be raised, taking over the caller's reference.
+    ///
+    /// A payload already in the slot belongs to an error that was never boxed, so it is released.
+    pub fn setPendingErrorData(self: *Context, data: Value) void {
+        self.releasePendingErrorData();
+        self.pending_error_data = data;
+    }
+
+    /// Take the payload for the error being boxed, transferring its reference to the caller.
+    ///
+    /// A payload identical to the snapshot's was live before the caught execution began, so it
+    /// belongs to an enclosing unwind and stays where it is.
+    pub fn takePendingErrorData(self: *Context, saved_data: ?Value) ?Value {
+        const data = self.pending_error_data orelse return null;
+        if (sameErrorData(data, saved_data)) return null;
+
+        self.pending_error_data = null;
+        return data;
+    }
+
+    fn releasePendingErrorData(self: *Context) void {
+        if (self.pending_error_data) |data| container_backing.releaseValue(data);
+        self.pending_error_data = null;
+    }
+
+    /// Whether two payload slots hold the same reference, not merely equal values.
+    fn sameErrorData(a: ?Value, b: ?Value) bool {
+        const x = a orelse return b == null;
+        const y = b orelse return false;
+        return std.meta.eql(x, y);
     }
 
     pub fn ownedCurrentSource(self: *Context) []const u8 {
@@ -2913,18 +2987,38 @@ pub const Context = struct {
         dispatch_actual_types: ?[]const u8,
         dispatch_available_methods: ?[]const u8,
         thrown: ?*value_mod.ErrorObject,
+        /// Borrowed from the live slot. A shield's snapshot carries the reference itself until the
+        /// restore puts it back.
+        data: ?Value,
         pending_frame_mark: usize,
         detail_mark: usize,
     };
 
     /// Record everything a raise can write, ahead of an execution whose error is swallowed.
     pub fn saveErrorState(self: *Context) ErrorStateSnapshot {
+        assertNoBorrowedPayload(self);
+        return self.snapshotErrorState();
+    }
+
+    /// Invariant: a plain snapshot never borrows a live payload.
+    ///
+    /// A raise inside the snapshot's execution would displace that payload, and the displacing set
+    /// releases it, so the restore would reinstall a freed value. A payload is live only while its
+    /// error unwinds, and the only code that runs then is shielded: `nativeCleanup` and `runHook`
+    /// take `shieldErrorState`, which moves the payload into the snapshot. Every execution entry
+    /// clears a payload a failed run left behind.
+    fn assertNoBorrowedPayload(self: *const Context) void {
+        std.debug.assert(self.pending_error_data == null);
+    }
+
+    fn snapshotErrorState(self: *Context) ErrorStateSnapshot {
         return .{
             .message = self.pending_error_message,
             .hint = self.pending_error_hint,
             .dispatch_actual_types = self.pending_dispatch_actual_types,
             .dispatch_available_methods = self.pending_dispatch_available_methods,
             .thrown = self.thrown_error,
+            .data = self.pending_error_data,
             .pending_frame_mark = self.pendingErrorFrameCount(),
             .detail_mark = self.error_details.items.len,
         };
@@ -2937,12 +3031,15 @@ pub const Context = struct {
     /// would fold them into its own innermost row and report the enclosing error's message. The
     /// caller must always restore the snapshot, because nothing else gives the channels back.
     pub fn shieldErrorState(self: *Context) ErrorStateSnapshot {
-        const saved = self.saveErrorState();
+        const saved = self.snapshotErrorState();
 
         self.pending_error_message = null;
         self.pending_error_hint = null;
         self.pending_dispatch_actual_types = null;
         self.pending_dispatch_available_methods = null;
+
+        // The snapshot carries the payload's reference until the restore puts it back.
+        self.pending_error_data = null;
 
         return saved;
     }
@@ -2953,12 +3050,16 @@ pub const Context = struct {
     /// A thrown box the swallowed execution installed is discarded here. The box is
     /// arena-owned, but a refcounted `data` payload is not, so its reference is released.
     /// The identity check is what keeps an unchanged stash from being released twice, once
-    /// here and once at `deinit`.
+    /// here and once at `deinit`. A pending payload is released on the same terms.
     pub fn restoreErrorState(self: *Context, saved: ErrorStateSnapshot) void {
         if (self.thrown_error) |thrown| {
             if (thrown != saved.thrown) {
                 if (thrown.data) |data| container_backing.releaseValue(data.*);
             }
+        }
+
+        if (self.pending_error_data) |data| {
+            if (!sameErrorData(data, saved.data)) container_backing.releaseValue(data);
         }
 
         self.resetErrorStateTo(saved);
@@ -2974,6 +3075,7 @@ pub const Context = struct {
         self.pending_dispatch_actual_types = saved.dispatch_actual_types;
         self.pending_dispatch_available_methods = saved.dispatch_available_methods;
         self.thrown_error = saved.thrown;
+        self.pending_error_data = saved.data;
         self.truncatePendingErrorFrames(saved.pending_frame_mark);
         if (self.error_details.items.len > saved.detail_mark) {
             self.error_details.shrinkRetainingCapacity(saved.detail_mark);
@@ -2986,13 +3088,15 @@ pub const Context = struct {
     /// drained until arbitrary 1z code has run. Holding the state here rather than on the live
     /// channels is what keeps that intervening code rendering its own errors.
     ///
-    /// The struct owns the thrown box's refcounted payload and the two slices.
+    /// The struct owns the thrown box's refcounted payload, the pending payload, and the two
+    /// slices.
     pub const DetachedErrorState = struct {
         message: ?[]const u8,
         hint: ?[]const u8,
         dispatch_actual_types: ?[]const u8,
         dispatch_available_methods: ?[]const u8,
         thrown: ?*value_mod.ErrorObject,
+        data: ?Value,
         frames: []CallFrame,
         details: []ErrorDetail,
         /// Frames the bounded list dropped from this contribution, and the index into `frames`
@@ -3028,13 +3132,15 @@ pub const Context = struct {
             .dispatch_actual_types = self.pending_dispatch_actual_types,
             .dispatch_available_methods = self.pending_dispatch_available_methods,
             .thrown = self.thrown_error,
+            .data = if (sameErrorData(self.pending_error_data, saved.data)) null else self.pending_error_data,
             .frames = frames,
             .details = details,
             .elided = elided,
             .elided_at = if (elided > 0) self.jit_pending_trace_elided_at - start else 0,
         };
 
-        // The stash moves into the detached state, so its payload must not be released here.
+        // The stash and the pending payload move into the detached state, so neither is released
+        // here.
         self.resetErrorStateTo(saved);
     }
 
@@ -3049,6 +3155,7 @@ pub const Context = struct {
         self.pending_dispatch_actual_types = detached.dispatch_actual_types;
         self.pending_dispatch_available_methods = detached.dispatch_available_methods;
         self.thrown_error = detached.thrown;
+        if (detached.data) |data| self.setPendingErrorData(data);
         self.jit_pending_trace_frames.appendSlice(self.allocator, detached.frames[0..detached.elided_at]) catch {};
         if (detached.elided > 0) {
             // The list holds one dropped run. A run already below keeps its place, and every frame
@@ -3075,6 +3182,7 @@ pub const Context = struct {
         if (detached.thrown) |thrown| {
             if (thrown.data) |data| container_backing.releaseValue(data.*);
         }
+        if (detached.data) |data| container_backing.releaseValue(data);
         self.allocator.free(detached.frames);
         self.allocator.free(detached.details);
     }
@@ -10134,7 +10242,7 @@ pub const Context = struct {
                     }
                 }
                 if (sp <= self.stack_limit and self.stackExhausted(sp)) {
-                    self.pending_error_message = self.stackOverflowMessage(sp);
+                    self.setStackOverflowError(sp);
                     return self.wordErrorCleanup(name, error.StackOverflow);
                 }
             }
@@ -12068,6 +12176,133 @@ test "dropping an undrained callback error releases its stash's payload" {
 
     ctx.dropCallbackErrorState();
     try std.testing.expectEqual(@as(u32, 1), vec.header.refcountValue());
+}
+
+test "restoreErrorState releases a pending payload a swallowed raise wrote" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const vec = try value_mod.Vector.create(std.testing.allocator);
+    defer vec.header.release();
+    vec.header.retain();
+
+    const saved = ctx.saveErrorState();
+    ctx.setPendingErrorData(.{ .vector = vec });
+    ctx.restoreErrorState(saved);
+
+    try std.testing.expectEqual(@as(?Value, null), ctx.pending_error_data);
+    try std.testing.expectEqual(@as(u32, 1), vec.header.refcountValue());
+}
+
+test "shieldErrorState hides the enclosing payload and the restore gives it back" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const outer = try value_mod.Vector.create(std.testing.allocator);
+    defer outer.header.release();
+    outer.header.retain();
+
+    const inner = try value_mod.Vector.create(std.testing.allocator);
+    defer inner.header.release();
+    inner.header.retain();
+
+    ctx.setPendingErrorData(.{ .vector = outer });
+
+    const shielded = ctx.shieldErrorState();
+    try std.testing.expectEqual(@as(?Value, null), ctx.pending_error_data);
+
+    ctx.setPendingErrorData(.{ .vector = inner });
+    ctx.restoreErrorState(shielded);
+
+    try std.testing.expectEqual(@as(u32, 1), inner.header.refcountValue());
+    try std.testing.expectEqual(@as(u32, 2), outer.header.refcountValue());
+    try std.testing.expectEqual(outer, ctx.pending_error_data.?.vector);
+}
+
+test "setPendingErrorData releases the payload it displaces" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const first = try value_mod.Vector.create(std.testing.allocator);
+    defer first.header.release();
+    first.header.retain();
+
+    const second = try value_mod.Vector.create(std.testing.allocator);
+    defer second.header.release();
+    second.header.retain();
+
+    ctx.setPendingErrorData(.{ .vector = first });
+    ctx.setPendingErrorData(.{ .vector = second });
+
+    try std.testing.expectEqual(@as(u32, 1), first.header.refcountValue());
+    try std.testing.expectEqual(@as(u32, 2), second.header.refcountValue());
+}
+
+test "clearExecutionDetails releases the pending payload" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const vec = try value_mod.Vector.create(std.testing.allocator);
+    defer vec.header.release();
+    vec.header.retain();
+
+    ctx.setPendingErrorData(.{ .vector = vec });
+    ctx.clearExecutionDetails();
+
+    try std.testing.expectEqual(@as(?Value, null), ctx.pending_error_data);
+    try std.testing.expectEqual(@as(u32, 1), vec.header.refcountValue());
+}
+
+test "takePendingErrorData transfers the payload a raise wrote after the snapshot" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const vec = try value_mod.Vector.create(std.testing.allocator);
+    defer vec.header.release();
+    vec.header.retain();
+
+    const saved = ctx.saveErrorState();
+    ctx.setPendingErrorData(.{ .vector = vec });
+
+    const taken = ctx.takePendingErrorData(saved.data).?;
+    try std.testing.expectEqual(@as(?Value, null), ctx.pending_error_data);
+
+    ctx.restoreErrorState(saved);
+    try std.testing.expectEqual(@as(u32, 2), vec.header.refcountValue());
+
+    container_backing.releaseValue(taken);
+    try std.testing.expectEqual(@as(u32, 1), vec.header.refcountValue());
+}
+
+test "a detached pending payload is released on drop and kept across a reattach" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const dropped = try value_mod.Vector.create(std.testing.allocator);
+    defer dropped.header.release();
+    dropped.header.retain();
+
+    const kept = try value_mod.Vector.create(std.testing.allocator);
+    defer kept.header.release();
+    kept.header.retain();
+
+    var saved = ctx.saveErrorState();
+    ctx.setPendingErrorData(.{ .vector = dropped });
+    ctx.detachErrorStateForCallback(saved);
+
+    try std.testing.expectEqual(@as(?Value, null), ctx.pending_error_data);
+    try std.testing.expectEqual(@as(u32, 2), dropped.header.refcountValue());
+
+    ctx.dropCallbackErrorState();
+    try std.testing.expectEqual(@as(u32, 1), dropped.header.refcountValue());
+
+    saved = ctx.saveErrorState();
+    ctx.setPendingErrorData(.{ .vector = kept });
+    ctx.detachErrorStateForCallback(saved);
+    ctx.reattachCallbackErrorState();
+
+    try std.testing.expectEqual(@as(u32, 2), kept.header.refcountValue());
+    try std.testing.expectEqual(kept, ctx.pending_error_data.?.vector);
 }
 
 test "stack effect validation passes for correct effect" {

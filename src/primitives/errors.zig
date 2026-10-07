@@ -173,14 +173,31 @@ pub fn pushCaughtError(ctx: *Context, err: anyerror, saved: Context.ErrorStateSn
     else
         alloc.dupe(u8, message) catch duped_name;
 
+    const data = try boxedErrorData(ctx, saved.data);
+    errdefer if (data) |d| container_backing.releaseValue(d.*);
+
     const error_ptr = try value_mod.boxErrorObject(ctx.quotationAllocator(), .{
         .error_type = duped_name,
         .message = duped_message,
-        .data = null,
+        .data = data,
         .stack_trace = stack_trace,
     });
-    try ctx.stack.push(.{ .error_value = error_ptr });
+
+    // The payload's reference came off the pending slot, so the stack slot takes it as is.
+    try ctx.stack.pushMoved(.{ .error_value = error_ptr });
     ctx.restoreErrorState(saved);
+}
+
+/// Take the raise site's pending payload for a box built in `ctx`'s quotation allocator.
+fn boxedErrorData(ctx: *Context, saved_data: ?Value) !?*const Value {
+    const data = ctx.takePendingErrorData(saved_data) orelse return null;
+
+    const slot = ctx.quotationAllocator().create(Value) catch |err| {
+        container_backing.releaseValue(data);
+        return err;
+    };
+    slot.* = data;
+    return slot;
 }
 
 /// recover ( ..a try: ( ..a -- ..b ) handler: ( ..a error -- ..b ) -- ..b )

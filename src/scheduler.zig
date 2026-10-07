@@ -418,6 +418,12 @@ pub const Scheduler = struct {
         task_mod.coroDestroy(task);
         task_mod.releaseTaskResult(task);
         task.callable.release();
+
+        // The box is arena-owned, but its payload's reference is not. Anyone who adopted the
+        // failure took a copy with a reference of its own.
+        if (task.error_obj) |obj| {
+            if (obj.data) |data| container_backing.releaseValue(data.*);
+        }
         task.ctx.deinit();
         self.allocator.destroy(task.ctx);
         self.allocator.destroy(task);

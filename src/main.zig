@@ -113,10 +113,16 @@ fn printErrorDetails(ctx: *Context, writer: anytype, err: anyerror) void {
         var kebab_buf: [128]u8 = undefined;
         const kebab_name = pascalToKebabRuntime(@errorName(err), &kebab_buf);
         const duped_name = alloc.dupe(u8, kebab_name) catch @errorName(err);
+
+        // The payload leaves the pending slot for a frame-owned copy: a hook runs shielded, which
+        // empties the slot while the box still points at its payload.
+        const data: ?Value = ctx.takePendingErrorData(null);
+        defer if (data) |d| container_backing.releaseValue(d);
+
         var error_obj = ErrorObject{
             .error_type = duped_name,
             .message = ctx.boxedErrorMessage(0, duped_name),
-            .data = null,
+            .data = if (data != null) &data.? else null,
             .stack_trace = stack_trace,
         };
         hooks.fireHooks(ctx, "on:unhandled-error", &.{.{ .error_value = &error_obj }});
@@ -5873,4 +5879,45 @@ test "writeInspectReport derives interpreter-free-aot when neither flag set" {
     var fbs = std.io.fixedBufferStream(&buf);
     try writeInspectReport(fbs.writer(), fields);
     try std.testing.expect(std.mem.indexOf(u8, fbs.getWritten(), "artifact: interpreter-free-aot\n") != null);
+}
+
+test "printErrorDetails hands a typed error's payload to the unhandled-error hook and releases it" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+    ctx.loadPrelude(null) catch unreachable;
+
+    const alloc = ctx.allocator;
+    const ialloc = ctx.quotationAllocator();
+
+    // A hook must leave the stack as it found it, so this one moves the error's data into a vector.
+    const log = try value_mod.Vector.create(alloc);
+    defer log.header.release();
+    const hook_body = try ialloc.alloc(Instruction, 6);
+    hook_body[0] = .{ .op = .{ .push_literal = value_mod.symbolValue("data") }, .line = 0 };
+    hook_body[1] = .{ .op = .{ .call_word = "@get" }, .line = 0 };
+    hook_body[2] = .{ .op = .{ .push_literal = .{ .vector = log } }, .line = 0 };
+    hook_body[3] = .{ .op = .{ .call_word = "swap" }, .line = 0 };
+    hook_body[4] = .{ .op = .{ .call_word = "#push!" }, .line = 0 };
+    hook_body[5] = .{ .op = .{ .call_word = "drop" }, .line = 0 };
+
+    var list = std.ArrayListUnmanaged(@import("callable.zig").Callable){};
+    try list.append(alloc, .{ .quot = .{ .instructions = hook_body }, .owner = .unit });
+    try ctx.hook_registry.hooks.put(alloc, try alloc.dupe(u8, "on:unhandled-error"), list);
+
+    const payload = try value_mod.HashTable.create(alloc);
+    const payload_alloc = payload.header.allocator;
+    try payload.map.put(payload_alloc, try payload_alloc.dupe(u8, "used"), .{ .fixnum = 7 });
+    ctx.setPendingErrorData(.{ .hash = payload });
+
+    var buf: [1024]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buf);
+    printErrorDetails(&ctx, fbs.writer(), error.StackOverflow);
+
+    try std.testing.expectEqual(@as(usize, 0), ctx.stack.depth());
+    try std.testing.expectEqual(@as(usize, 1), log.list.items.len);
+    try std.testing.expectEqual(payload, log.list.items[0].hash);
+    try std.testing.expectEqual(@as(?Value, null), ctx.pending_error_data);
+
+    // The vector holds the only reference left once the hook has run.
+    try std.testing.expectEqual(@as(u32, 1), payload.header.refcountValue());
 }

@@ -2632,6 +2632,9 @@ export fn onez_runtime_run(ptr: ?*anyopaque, entry_word_id: u32) i32 {
     const handle = castHandle(ptr) orelse return 1;
     const ctx = handle.ctx;
 
+    // A failed earlier run whose host never printed it leaves its pending state behind.
+    ctx.clearExecutionDetails();
+
     // The binary's outermost compiled-entry boundary. A spliced quotation body the may-define
     // analysis flagged opens a transient lexical frame, and an error return leaves before its
     // pop, so the depth is restored here. The generated `main` fires the `on:exit` hooks after

@@ -1,0 +1,26 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: used is a fixnum
+PASS: used counts the bytes in use
+PASS: limit is a fixnum
+PASS: size is a fixnum
+PASS: the guard limit sits within the stack size
+PASS: the main thread never grows, so it names no growth target
+PASS: the guard limit is the figure stack-budget? reports
+Stack: [ ]
+PASS: task overflow keeps its type
+PASS: used is a fixnum
+PASS: used counts the bytes in use
+PASS: limit is a fixnum
+PASS: size is a fixnum
+PASS: the guard limit sits within the stack size
+Stack: [ ]
+PASS: task posix failure keeps its type
+PASS: a thrown payload crosses the scope boundary
+Stack: [ ]
+PASS: a raise with no payload keeps data f
+Stack: [ ]
