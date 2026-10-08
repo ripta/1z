@@ -6742,13 +6742,25 @@ pub const Context = struct {
     }
 
     pub fn lookupTypeNameByDescriptor(self: *const Context, desc: *const value_mod.TypeDescriptor) ?[]const u8 {
-        self.acquireSharedRead();
-        defer self.releaseSharedRead();
-        return self.lookupTypeNameByDescriptorLocked(desc);
+        const tv = self.lookupTypeValueByDescriptor(desc) orelse return null;
+        return tv.name;
     }
 
     fn lookupTypeNameByDescriptorLocked(self: *const Context, desc: *const value_mod.TypeDescriptor) ?[]const u8 {
-        const sentinels = [_]*const value_mod.TypeValue{
+        const tv = self.lookupTypeValueByDescriptorLocked(desc) orelse return null;
+        return tv.name;
+    }
+
+    /// Find the type value a descriptor belongs to, searching sentinels, builtins, resources, and
+    /// type words visible from this context.
+    pub fn lookupTypeValueByDescriptor(self: *const Context, desc: *const value_mod.TypeDescriptor) ?*value_mod.TypeValue {
+        self.acquireSharedRead();
+        defer self.releaseSharedRead();
+        return self.lookupTypeValueByDescriptorLocked(desc);
+    }
+
+    fn lookupTypeValueByDescriptorLocked(self: *const Context, desc: *const value_mod.TypeDescriptor) ?*value_mod.TypeValue {
+        const sentinels = [_]*value_mod.TypeValue{
             self.dispatch_any_sentinel orelse unreachable,
             self.dispatch_unary_sentinel orelse unreachable,
             self.self_type_sentinel orelse unreachable,
@@ -6756,21 +6768,21 @@ pub const Context = struct {
         };
         for (sentinels) |tv| {
             if (tv.descriptor) |tv_desc| {
-                if (tv_desc == desc) return tv.name;
+                if (tv_desc == desc) return tv;
             }
         }
 
         var builtin_iter = self.builtin_type_values.iterator();
         while (builtin_iter.next()) |entry| {
             if (entry.value_ptr.*.descriptor) |tv_desc| {
-                if (tv_desc == desc) return entry.key_ptr.*;
+                if (tv_desc == desc) return entry.value_ptr.*;
             }
         }
 
         var resource_iter = self.resource_type_values.iterator();
         while (resource_iter.next()) |entry| {
             if (entry.value_ptr.*.descriptor) |tv_desc| {
-                if (tv_desc == desc) return entry.key_ptr.*;
+                if (tv_desc == desc) return entry.value_ptr.*;
             }
         }
 
@@ -6792,12 +6804,12 @@ pub const Context = struct {
                             if (instrs.len != 1 or instrs[0].op != .push_literal) continue;
                             switch (instrs[0].op.push_literal) {
                                 .type_val => |tv| if (tv.descriptor) |tv_desc| {
-                                    if (tv_desc == desc) return tv.name;
+                                    if (tv_desc == desc) return tv;
                                 },
                                 .tagged => |t| {
                                     const tv = t.tag.type_val orelse continue;
                                     if (tv.descriptor) |tv_desc| {
-                                        if (tv_desc == desc) return tv.name;
+                                        if (tv_desc == desc) return tv;
                                     }
                                 },
                                 else => {},
@@ -6805,12 +6817,12 @@ pub const Context = struct {
                         },
                         .literal => |val| switch (val) {
                             .type_val => |tv| if (tv.descriptor) |tv_desc| {
-                                if (tv_desc == desc) return tv.name;
+                                if (tv_desc == desc) return tv;
                             },
                             .tagged => |t| {
                                 const tv = t.tag.type_val orelse continue;
                                 if (tv.descriptor) |tv_desc| {
-                                    if (tv_desc == desc) return tv.name;
+                                    if (tv_desc == desc) return tv;
                                 }
                             },
                             else => {},
@@ -6828,12 +6840,12 @@ pub const Context = struct {
                         if (instrs.len != 1 or instrs[0].op != .push_literal) continue;
                         switch (instrs[0].op.push_literal) {
                             .type_val => |tv| if (tv.descriptor) |tv_desc| {
-                                if (tv_desc == desc) return tv.name;
+                                if (tv_desc == desc) return tv;
                             },
                             .tagged => |t| {
                                 const tv = t.tag.type_val orelse continue;
                                 if (tv.descriptor) |tv_desc| {
-                                    if (tv_desc == desc) return tv.name;
+                                    if (tv_desc == desc) return tv;
                                 }
                             },
                             else => {},
@@ -6841,12 +6853,12 @@ pub const Context = struct {
                     },
                     .literal => |val| switch (val) {
                         .type_val => |tv| if (tv.descriptor) |tv_desc| {
-                            if (tv_desc == desc) return tv.name;
+                            if (tv_desc == desc) return tv;
                         },
                         .tagged => |t| {
                             const tv = t.tag.type_val orelse continue;
                             if (tv.descriptor) |tv_desc| {
-                                if (tv_desc == desc) return tv.name;
+                                if (tv_desc == desc) return tv;
                             }
                         },
                         else => {},
@@ -9073,27 +9085,117 @@ pub const Context = struct {
         return 1;
     }
 
+    /// Report that a generic word found no method for its arguments.
+    ///
+    /// The payload carries `actual`, an array of the argument types in stack order with `f` for an
+    /// operand the stack does not hold, and `methods`, an array of each available method's signature
+    /// as an array of types. A failed allocation leaves the error without a payload, since the raise
+    /// itself must not fail.
     pub fn setGenericDispatchErrorDetails(self: *Context, word_name: []const u8, stack_effect: ?*const StackEffect) void {
+        const arity = self.inferGenericDispatchArity(word_name, stack_effect);
+
         self.pending_error_message = "no method found for generic word";
-        self.pending_dispatch_actual_types = self.renderDispatchArgumentTypes(self.inferGenericDispatchArity(word_name, stack_effect));
+        self.pending_dispatch_actual_types = self.renderDispatchArgumentTypes(arity);
 
         const alloc = self.arena.allocator();
         const entries = self.dispatchEntriesForWord(word_name, alloc) catch &.{};
-        if (entries.len == 0) {
-            self.pending_dispatch_available_methods = "none";
+        self.pending_dispatch_available_methods = self.renderDispatchMethodSignatures(entries);
+
+        const hash = value_mod.HashTable.create(self.allocator) catch return;
+        self.fillGenericDispatchPayload(hash, arity, entries) catch {
+            container_backing.releaseValue(.{ .hash = hash });
             return;
-        }
+        };
+        self.setPendingErrorData(.{ .hash = hash });
+    }
+
+    fn renderDispatchMethodSignatures(self: *Context, entries: []const DispatchTable.KeyEntryPair) ?[]const u8 {
+        if (entries.len == 0) return "none";
+
+        const alloc = self.arena.allocator();
 
         var list: std.ArrayListUnmanaged(u8) = .{};
         defer list.deinit(alloc);
 
         for (entries, 0..) |pair, i| {
-            if (i > 0) list.append(alloc, '\n') catch return;
-            list.appendSlice(alloc, "    ") catch return;
-            self.renderDispatchMethodSignature(pair.key, list.writer(alloc)) catch return;
+            if (i > 0) list.append(alloc, '\n') catch return null;
+            list.appendSlice(alloc, "    ") catch return null;
+            self.renderDispatchMethodSignature(pair.key, list.writer(alloc)) catch return null;
         }
 
-        self.pending_dispatch_available_methods = list.toOwnedSlice(alloc) catch null;
+        return list.toOwnedSlice(alloc) catch null;
+    }
+
+    fn fillGenericDispatchPayload(
+        self: *Context,
+        hash: *value_mod.HashTable,
+        arity: usize,
+        entries: []const DispatchTable.KeyEntryPair,
+    ) !void {
+        const alloc = hash.header.allocator;
+
+        const actual = try self.dispatchArgumentTypesArray(alloc, arity);
+        try putErrorPayloadField(hash, "actual", .{ .array = actual });
+
+        const methods = try self.dispatchSignaturesArray(alloc, entries);
+        try putErrorPayloadField(hash, "methods", .{ .array = methods });
+    }
+
+    /// A short stack is missing its deepest operands, so the present ones fill the trailing slots.
+    fn dispatchArgumentTypesArray(self: *Context, alloc: Allocator, arity: usize) !*value_mod.Array {
+        const items = try alloc.alloc(Value, arity);
+        errdefer alloc.free(items);
+
+        const missing = arity -| self.stack.depth();
+        for (items, 0..) |*slot, i| {
+            slot.* = if (i < missing)
+                .{ .boolean = false }
+            else
+                .{ .type_val = dispatch_mod.dispatchTypeValue(try self.stack.peekN(arity - 1 - i), self) };
+        }
+
+        return value_mod.Array.fromOwnedSlice(alloc, items);
+    }
+
+    fn dispatchSignaturesArray(self: *Context, alloc: Allocator, entries: []const DispatchTable.KeyEntryPair) !*value_mod.Array {
+        const items = try alloc.alloc(Value, entries.len);
+
+        var built: usize = 0;
+        errdefer {
+            for (items[0..built]) |item| container_backing.releaseValue(item);
+            alloc.free(items);
+        }
+
+        for (entries) |pair| {
+            items[built] = .{ .array = try self.dispatchSignatureArray(alloc, pair.key) };
+            built += 1;
+        }
+
+        return value_mod.Array.fromOwnedSlice(alloc, items);
+    }
+
+    fn dispatchSignatureArray(self: *Context, alloc: Allocator, key: DispatchKey) !*value_mod.Array {
+        const unary = key.type_b == self.getDispatchUnarySentinel().descriptor.?;
+
+        const items = try alloc.alloc(Value, if (unary) 1 else 2);
+        errdefer alloc.free(items);
+
+        items[0] = self.dispatchSlotTypeValue(key.type_a);
+        if (!unary) items[1] = self.dispatchSlotTypeValue(key.type_b);
+
+        return value_mod.Array.fromOwnedSlice(alloc, items);
+    }
+
+    /// The type a method signature slot names, with the dispatch-any slot read as the `any` type.
+    ///
+    /// A descriptor no visible type word owns reads as `f`, where the rendered list says `<unknown>`.
+    fn dispatchSlotTypeValue(self: *Context, desc: *const value_mod.TypeDescriptor) Value {
+        if (desc == self.getDispatchAnySentinel().descriptor.?) {
+            return .{ .type_val = self.any_type_sentinel.? };
+        }
+
+        const tv = self.lookupTypeValueByDescriptor(desc) orelse return .{ .boolean = false };
+        return .{ .type_val = tv };
     }
 
     /// Capture stack effect mismatch details for error reporting.
@@ -12250,6 +12352,20 @@ test "shieldErrorState hides the enclosing payload and the restore gives it back
     try std.testing.expectEqual(@as(u32, 1), inner.header.refcountValue());
     try std.testing.expectEqual(@as(u32, 2), outer.header.refcountValue());
     try std.testing.expectEqual(outer, ctx.pending_error_data.?.vector);
+}
+
+test "lookupTypeValueByDescriptor returns the type value a descriptor belongs to" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const string_tv = ctx.lookupBuiltinTypeValueByTag(.string).?;
+    try std.testing.expectEqual(string_tv, ctx.lookupTypeValueByDescriptor(string_tv.descriptor.?).?);
+
+    const any_tv = ctx.getDispatchAnySentinel();
+    try std.testing.expectEqual(any_tv, ctx.lookupTypeValueByDescriptor(any_tv.descriptor.?).?);
+
+    const stray = try value_mod.createSentinelTypeDescriptor(ctx.arena.allocator());
+    try std.testing.expect(ctx.lookupTypeValueByDescriptor(stray) == null);
 }
 
 test "setPendingErrorData releases the payload it displaces" {

@@ -8,6 +8,8 @@ use "posix" ;
 \
 \ A caught type mismatch names the expected type and the offending operand's type, and an arithmetic
 \ mismatch names both operands' types.
+\
+\ A generic word's dispatch miss names the argument types and every available method's signature.
 
 deep: stack-recursive ( n -- n ) [ dup 0 > [ 1 - deep 1 + ] when ] ;
 
@@ -115,6 +117,64 @@ test-awaited-resource-type: ( -- ) [
   "awaited-kind" <test-resource> type-of "an awaited type-of is the one main resolves" assert=
 ] ;
 
+wild-op: ( a b -- result ) generic [ ] ;
+wild-op: method{ fixnum any } [ 2drop "ok" ] ;
+
+shape-of: ( a -- name ) generic [ ] ;
+shape-of: method{ string } [ drop "string" ] ;
+shape-of: method{ symbol } [ drop "symbol" ] ;
+
+no-arms: ( a -- b ) generic [ ] ;
+
+test-dispatch-miss-payload: ( -- ) [
+  [ "x" t wild-op ] [
+    dup message: @get "no method found for generic word" "the message is unchanged" assert=
+    data: @get
+    dup actual: @get 0 #nth string "actual starts with the deeper operand's type" assert=
+    dup actual: @get 1 #nth boolean "actual ends with the top operand's type" assert=
+    methods: @get
+    dup #len 1 "one method is available" assert=
+    0 #nth
+    dup 0 #nth fixnum "a signature names its first type" assert=
+    1 #nth >string "<type:any>" "an any slot reads as the any type" assert=
+  ] recover
+] ;
+
+test-dispatch-miss-unary-methods: ( -- ) [
+  [ 1 shape-of ] [
+    data: @get
+    dup actual: @get #len 1 "a unary miss names one argument" assert=
+    methods: @get
+    dup #len 2 "both unary methods are listed" assert=
+    dup 0 #nth #len 1 "a unary signature holds one type" assert=
+    1 #nth #len 1 "every unary signature holds one type" assert=
+  ] recover
+] ;
+
+test-dispatch-miss-no-methods: ( -- ) [
+  [ 1 no-arms ] [
+    data: @get methods: @get #len 0 "a generic with no methods lists none" assert=
+  ] recover
+] ;
+
+test-dispatch-miss-missing-operand: ( -- ) [
+  [ 1 wild-op ] [
+    data: @get actual: @get
+    dup #len 2 "actual keeps the arity when the stack is short" assert=
+    dup 0 #nth f "the missing deeper operand is f" assert=
+    1 #nth fixnum "the present operand keeps its slot" assert=
+  ] recover
+] ;
+
+test-task-dispatch-miss-payload: ( -- ) [
+  [
+    [ [ "x" t wild-op drop ] spawn drop ] task-scope
+    f "scope should have thrown" assert-true
+  ] [
+    data: @get actual: @get 0 #nth string "a task's dispatch miss keeps its payload" assert=
+  ] recover
+] ;
+
 test-raise-without-payload: ( -- ) [
   [ 1 0 / drop ] [ data: @get f "a raise with no payload keeps data f" assert= ] recover
 ] ;
@@ -129,4 +189,9 @@ test-sort-by-drops-mismatch-payload
 test-task-type-mismatch-payload
 test-task-resource-type-payload
 test-awaited-resource-type
+test-dispatch-miss-payload
+test-dispatch-miss-unary-methods
+test-dispatch-miss-no-methods
+test-dispatch-miss-missing-operand
+test-task-dispatch-miss-payload
 test-raise-without-payload

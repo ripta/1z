@@ -12,6 +12,17 @@ Stack: [ ]
 Stack: [ ]
 Stack: [ ]
 Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
 PASS: used is a fixnum
 PASS: used counts the bytes in use
 PASS: limit is a fixnum
@@ -52,6 +63,26 @@ PASS: the task's type is the one main resolves
 Stack: [ ]
 PASS: an awaited type-of names the task's resource kind
 PASS: an awaited type-of is the one main resolves
+Stack: [ ]
+PASS: the message is unchanged
+PASS: actual starts with the deeper operand's type
+PASS: actual ends with the top operand's type
+PASS: one method is available
+PASS: a signature names its first type
+PASS: an any slot reads as the any type
+Stack: [ ]
+PASS: a unary miss names one argument
+PASS: both unary methods are listed
+PASS: a unary signature holds one type
+PASS: every unary signature holds one type
+Stack: [ ]
+PASS: a generic with no methods lists none
+Stack: [ ]
+PASS: actual keeps the arity when the stack is short
+PASS: the missing deeper operand is f
+PASS: the present operand keeps its slot
+Stack: [ ]
+PASS: a task's dispatch miss keeps its payload
 Stack: [ ]
 PASS: a raise with no payload keeps data f
 Stack: [ ]
