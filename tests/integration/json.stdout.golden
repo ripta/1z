@@ -161,6 +161,194 @@ PASS: trailing content throws
 Stack: [ t t t t t t f f f ]
 PASS: trailing comma in object throws
 Stack: [ t t t t t t f f f ]
+Stack: [ t t t t t t f f f ]
+=== parse-json: string error positions ===
+Stack: [ t t t t t t f f f ]
+PASS: parse-json raises parse-error:
+Stack: [ t t t t t t f f f H{ offset: 0 } "unterminated JSON string at position 0" ]
+PASS: unterminated string message
+Stack: [ t t t t t t f f f H{ offset: 0 } ]
+PASS: unterminated string points at its opening quote
+Stack: [ t t t t t t f f f H{ offset: 0 } ]
+PASS: unterminated string carries no text
+Stack: [ t t t t t t f f f ]
+PASS: parse-json raises parse-error:
+PASS: unterminated string after a prefix
+Stack: [ t t t t t t f f f ]
+PASS: parse-json raises parse-error:
+Stack: [ t t t t t t f f f H{ text: "\q" offset: 1 } "invalid JSON escape: \q at position 1" ]
+PASS: bad escape message
+Stack: [ t t t t t t f f f H{ text: "\q" offset: 1 } ]
+PASS: bad escape points at the backslash
+Stack: [ t t t t t t f f f H{ text: "\q" offset: 1 } ]
+PASS: bad escape text is the escape
+Stack: [ t t t t t t f f f ]
+PASS: parse-json raises parse-error:
+Stack: [ t t t t t t f f f H{ offset: 4 } "unterminated JSON escape at position 4" ]
+PASS: trailing backslash message
+Stack: [ t t t t t t f f f H{ offset: 4 } ]
+PASS: trailing backslash points at the end
+Stack: [ t t t t t t f f f ]
+PASS: parse-json raises parse-error:
+Stack: [ t t t t t t f f f H{ offset: 3 } "expected 4 hex digits after \u at position 3" ]
+PASS: bad hex digit message
+Stack: [ t t t t t t f f f H{ offset: 3 } ]
+PASS: bad hex digit points at the digit
+Stack: [ t t t t t t f f f ]
+PASS: parse-json raises parse-error:
+PASS: truncated \u escape points at the end
+Stack: [ t t t t t t f f f ]
+PASS: parse-json raises parse-error:
+Stack: [ t t t t t t f f f H{ offset: 7 } "expected \uXXXX for surrogate pair at position 7" ]
+PASS: missing low half message
+Stack: [ t t t t t t f f f H{ offset: 7 } ]
+PASS: missing low half points after the high half
+Stack: [ t t t t t t f f f ]
+PASS: parse-json raises parse-error:
+Stack: [ t t t t t t f f f H{ offset: 7 } "expected low surrogate after \uXXXX at position 7" ]
+PASS: non-u escape message
+Stack: [ t t t t t t f f f H{ offset: 7 } ]
+PASS: non-u escape points at its backslash
+Stack: [ t t t t t t f f f ]
+PASS: parse-json raises parse-error:
+Stack: [ t t t t t t f f f H{ offset: 7 } "expected low surrogate after \uXXXX at position 7" ]
+PASS: non-low half message
+Stack: [ t t t t t t f f f H{ offset: 7 } ]
+PASS: non-low half points at its escape
+Stack: [ t t t t t t f f f ]
+=== parse-json: structure error positions ===
+Stack: [ t t t t t t f f f ]
+PASS: parse-json raises parse-error:
+Stack: [ t t t t t t f f f H{ offset: 7 } "trailing comma in JSON object at position 7" ]
+PASS: object trailing comma message
+Stack: [ t t t t t t f f f H{ offset: 7 } ]
+PASS: object trailing comma points at the comma
+Stack: [ t t t t t t f f f ]
+PASS: parse-json raises parse-error:
+Stack: [ t t t t t t f f f H{ offset: 2 } "trailing comma in JSON array at position 2" ]
+PASS: array trailing comma message
+Stack: [ t t t t t t f f f H{ offset: 2 } ]
+PASS: array trailing comma points at the comma
+Stack: [ t t t t t t f f f ]
+PASS: parse-json raises parse-error:
+Stack: [ t t t t t t f f f H{ offset: 7 } "expected ',' or '}' at position 7" ]
+PASS: object missing comma message
+Stack: [ t t t t t t f f f H{ offset: 7 } ]
+PASS: object missing comma points at the next member
+Stack: [ t t t t t t f f f ]
+PASS: parse-json raises parse-error:
+Stack: [ t t t t t t f f f H{ offset: 3 } "expected ',' or ']' at position 3" ]
+PASS: array missing comma message
+Stack: [ t t t t t t f f f H{ offset: 3 } ]
+PASS: array missing comma points at the next element
+Stack: [ t t t t t t f f f ]
+PASS: parse-json raises parse-error:
+Stack: [ t t t t t t f f f H{ offset: 6 } "expected ',' or '}' at position 6" ]
+PASS: missing brace message
+Stack: [ t t t t t t f f f H{ offset: 6 } ]
+PASS: missing brace points at the end
+Stack: [ t t t t t t f f f ]
+PASS: parse-json raises parse-error:
+Stack: [ t t t t t t f f f H{ offset: 5 } "expected ',' or ']' at position 5" ]
+PASS: missing bracket message
+Stack: [ t t t t t t f f f H{ offset: 5 } ]
+PASS: missing bracket points at the end
+Stack: [ t t t t t t f f f ]
+PASS: parse-json raises parse-error:
+Stack: [ t t t t t t f f f H{ offset: 5 } "expected ':' after object key at position 5" ]
+PASS: missing colon message
+Stack: [ t t t t t t f f f H{ offset: 5 } ]
+PASS: missing colon points at the value
+Stack: [ t t t t t t f f f ]
+PASS: parse-json raises parse-error:
+Stack: [ t t t t t t f f f H{ offset: 1 } "expected string key in JSON object at position 1" ]
+PASS: non-string key message
+Stack: [ t t t t t t f f f H{ offset: 1 } ]
+PASS: non-string key points at the key
+Stack: [ t t t t t t f f f ]
+PASS: parse-json raises parse-error:
+Stack: [ t t t t t t f f f H{ offset: 0 } "unexpected end of JSON input at position 0" ]
+PASS: empty input message
+Stack: [ t t t t t t f f f H{ offset: 0 } ]
+PASS: empty input points at the end
+Stack: [ t t t t t t f f f ]
+PASS: parse-json raises parse-error:
+Stack: [ t t t t t t f f f H{ offset: 3 } "unexpected trailing content after JSON value at position 3" ]
+Stack: [ t t t t t t f f f H{ offset: 3 } "unexpected trailing content after JSON value at position 3" "unexpected trailing content after JSON value at position 3" "trailing content message" ]
+PASS: trailing content message
+Stack: [ t t t t t t f f f H{ offset: 3 } ]
+PASS: trailing content points at the first trailing character
+Stack: [ t t t t t t f f f ]
+PASS: parse-json raises parse-error:
+Stack: [ t t t t t t f f f H{ text: "tru}" offset: 6 } "expected "true" but found "tru}" at position 6" ]
+PASS: truncated literal message
+Stack: [ t t t t t t f f f H{ text: "tru}" offset: 6 } ]
+PASS: truncated literal offset
+Stack: [ t t t t t t f f f H{ text: "tru}" offset: 6 } ]
+PASS: truncated literal text
+Stack: [ t t t t t t f f f ]
+=== parse-json: value error positions ===
+Stack: [ t t t t t t f f f ]
+PASS: parse-json raises parse-error:
+Stack: [ t t t t t t f f f H{ offset: 0 } "unexpected character in JSON at position 0" ]
+PASS: unexpected character message
+Stack: [ t t t t t t f f f H{ offset: 0 } ]
+PASS: unexpected character offset
+Stack: [ t t t t t t f f f ]
+PASS: parse-json raises parse-error:
+PASS: the offset counts codepoints, not bytes
+Stack: [ t t t t t t f f f ]
+PASS: parse-json raises parse-error:
+Stack: [ t t t t t t f f f H{ text: "1-2" offset: 1 } "invalid JSON number '1-2' at position 1" ]
+PASS: bad number message
+Stack: [ t t t t t t f f f H{ text: "1-2" offset: 1 } ]
+PASS: bad number points at its start
+Stack: [ t t t t t t f f f H{ text: "1-2" offset: 1 } ]
+PASS: bad number text is the token
+Stack: [ t t t t t t f f f ]
+PASS: parse-json raises parse-error:
+PASS: a leading zero is rejected
+Stack: [ t t t t t t f f f ]
+PASS: parse-json raises parse-error:
+PASS: a bare decimal point is rejected
+Stack: [ t t t t t t f f f ]
+PASS: parse-json raises parse-error:
+PASS: a leading plus is rejected
+Stack: [ t t t t t t f f f ]
+PASS: parse-json raises parse-error:
+PASS: an empty exponent is rejected
+Stack: [ t t t t t t f f f ]
+PASS: parse-json raises parse-error:
+PASS: a second decimal point is rejected
+Stack: [ t t t t t t f f f ]
+PASS: parse-json raises parse-error:
+PASS: a lone minus is rejected
+Stack: [ t t t t t t f f f ]
+=== parse-json: numbers the grammar accepts ===
+Stack: [ t t t t t t f f f ]
+PASS: negative zero
+Stack: [ t t t t t t f f f ]
+PASS: uppercase exponent with sign
+Stack: [ t t t t t t f f f ]
+PASS: negative exponent
+Stack: [ t t t t t t f f f ]
+PASS: zero before the decimal point
+Stack: [ t t t t t t f f f ]
+PASS: bignum
+Stack: [ t t t t t t f f f ]
+=== parse-json: surrogate pairs ===
+Stack: [ t t t t t t f f f ]
+PASS: surrogate pair decodes
+Stack: [ t t t t t t f f f ]
+PASS: json-unescape decodes a surrogate pair
+Stack: [ t t t t t t f f f ]
+=== json-unescape: error positions ===
+Stack: [ t t t t t t f f f ]
+Stack: [ t t t t t t f f f H{ text: "\q" offset: 2 } "invalid JSON escape: \q at position 2" ]
+PASS: json-unescape bad escape message
+Stack: [ t t t t t t f f f H{ text: "\q" offset: 2 } ]
+PASS: json-unescape offset is into its argument
+Stack: [ t t t t t t f f f ]
 === json-unescape ===
 Stack: [ t t t t t t f f f ]
 PASS: plain string unchanged

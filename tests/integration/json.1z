@@ -118,6 +118,133 @@ dup 1 #nth "name" @get "bob" "array of objects access" assert=
 [ "42 extra" parse-json ] "trailing content throws" assert-error
 [ "{\"a\": 1,}" parse-json ] "trailing comma in object throws" assert-error
 
+\ -- parse-json: error positions --
+
+\ Parse input that must fail and assert the failure is a parse error. The error itself stays off
+\ the stack, since the stack dump would print its call chain, which differs in the eager run.
+json-failure: ( input: string -- data message ) [
+  [ parse-json drop f ] [ nip ] recover
+  dup data: @get swap dup message: @get swap error-type: @get
+  parse-error: "parse-json raises parse-error:" assert=
+] ;
+
+"parse-json: string error positions" test-section
+"\"hello" json-failure
+"unterminated JSON string at position 0" "unterminated string message" assert=
+dup offset: @get 0 "unterminated string points at its opening quote" assert=
+text: @has? "unterminated string carries no text" assert-false
+
+"[1, \"ab" json-failure drop offset: @get 4 "unterminated string after a prefix" assert=
+
+"\"\\q\"" json-failure
+"invalid JSON escape: \\q at position 1" "bad escape message" assert=
+dup offset: @get 1 "bad escape points at the backslash" assert=
+text: @get "\\q" "bad escape text is the escape" assert=
+
+"\"ab\\" json-failure
+"unterminated JSON escape at position 4" "trailing backslash message" assert=
+offset: @get 4 "trailing backslash points at the end" assert=
+
+"\"\\uZZZZ\"" json-failure
+"expected 4 hex digits after \\u at position 3" "bad hex digit message" assert=
+offset: @get 3 "bad hex digit points at the digit" assert=
+
+"\"\\u12" json-failure drop offset: @get 5 "truncated \\u escape points at the end" assert=
+
+"\"\\ud83dx\"" json-failure
+"expected \\uXXXX for surrogate pair at position 7" "missing low half message" assert=
+offset: @get 7 "missing low half points after the high half" assert=
+
+"\"\\ud83d\\x\"" json-failure
+"expected low surrogate after \\uXXXX at position 7" "non-u escape message" assert=
+offset: @get 7 "non-u escape points at its backslash" assert=
+
+"\"\\ud83d\\u0041\"" json-failure
+"expected low surrogate after \\uXXXX at position 7" "non-low half message" assert=
+offset: @get 7 "non-low half points at its escape" assert=
+
+"parse-json: structure error positions" test-section
+"{\"a\": 1,}" json-failure
+"trailing comma in JSON object at position 7" "object trailing comma message" assert=
+offset: @get 7 "object trailing comma points at the comma" assert=
+
+"[1,]" json-failure
+"trailing comma in JSON array at position 2" "array trailing comma message" assert=
+offset: @get 2 "array trailing comma points at the comma" assert=
+
+"{\"a\":1 \"b\":2}" json-failure
+"expected ',' or '}' at position 7" "object missing comma message" assert=
+offset: @get 7 "object missing comma points at the next member" assert=
+
+"[1 2]" json-failure
+"expected ',' or ']' at position 3" "array missing comma message" assert=
+offset: @get 3 "array missing comma points at the next element" assert=
+
+"{\"a\":1" json-failure
+"expected ',' or '}' at position 6" "missing brace message" assert=
+offset: @get 6 "missing brace points at the end" assert=
+
+"[1, 2" json-failure
+"expected ',' or ']' at position 5" "missing bracket message" assert=
+offset: @get 5 "missing bracket points at the end" assert=
+
+"{\"a\" 1}" json-failure
+"expected ':' after object key at position 5" "missing colon message" assert=
+offset: @get 5 "missing colon points at the value" assert=
+
+"{1:2}" json-failure
+"expected string key in JSON object at position 1" "non-string key message" assert=
+offset: @get 1 "non-string key points at the key" assert=
+
+"" json-failure
+"unexpected end of JSON input at position 0" "empty input message" assert=
+offset: @get 0 "empty input points at the end" assert=
+
+"42 extra" json-failure
+"unexpected trailing content after JSON value at position 3" "trailing content message"
+assert=
+offset: @get 3 "trailing content points at the first trailing character" assert=
+
+"{\"a\": tru}" json-failure
+"expected \"true\" but found \"tru}\" at position 6" "truncated literal message" assert=
+dup offset: @get 6 "truncated literal offset" assert=
+text: @get "tru}" "truncated literal text" assert=
+
+"parse-json: value error positions" test-section
+"x" json-failure
+"unexpected character in JSON at position 0" "unexpected character message" assert=
+offset: @get 0 "unexpected character offset" assert=
+
+"[\"é\", x]" json-failure drop offset: @get 6 "the offset counts codepoints, not bytes" assert=
+
+"[1-2]" json-failure
+"invalid JSON number '1-2' at position 1" "bad number message" assert=
+dup offset: @get 1 "bad number points at its start" assert=
+text: @get "1-2" "bad number text is the token" assert=
+
+"01" json-failure drop text: @get "01" "a leading zero is rejected" assert=
+"1." json-failure drop text: @get "1." "a bare decimal point is rejected" assert=
+"+1" json-failure drop text: @get "+1" "a leading plus is rejected" assert=
+"1e" json-failure drop text: @get "1e" "an empty exponent is rejected" assert=
+"1.2.3" json-failure drop text: @get "1.2.3" "a second decimal point is rejected" assert=
+"-" json-failure drop text: @get "-" "a lone minus is rejected" assert=
+
+"parse-json: numbers the grammar accepts" test-section
+0 "-0" parse-json "negative zero" assert=
+100000.0 "1E+5" parse-json "uppercase exponent with sign" assert=
+-0.0005 "-0.5e-3" parse-json "negative exponent" assert=
+0.5 "0.5" parse-json "zero before the decimal point" assert=
+123456789012345678901234567890 "123456789012345678901234567890" parse-json "bignum" assert=
+
+"parse-json: surrogate pairs" test-section
+"😀" "\"\\ud83d\\ude00\"" parse-json "surrogate pair decodes" assert=
+"a😀b" "a\\ud83d\\ude00b" json-unescape "json-unescape decodes a surrogate pair" assert=
+
+"json-unescape: error positions" test-section
+[ "ab\\q" json-unescape ] [ ] recover dup data: @get swap message: @get
+"invalid JSON escape: \\q at position 2" "json-unescape bad escape message" assert=
+offset: @get 2 "json-unescape offset is into its argument" assert=
+
 \ -- json-unescape --
 
 "json-unescape" test-section
