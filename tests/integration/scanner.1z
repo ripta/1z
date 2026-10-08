@@ -88,6 +88,27 @@ rest " world" "expect leaves rest" assert=
 [ "hello" <scanner> "xyz" expect ] "expect wrong char throws" assert-error
 [ "hi" <scanner> "hello" expect ] "expect past end throws" assert-error
 
+"expect failure positions" test-section
+[ "hello world" <scanner> "xyz" expect ] parse-error: "a mismatch is a parse error" assert-error-type
+[ "hi" <scanner> "hello" expect ] parse-error: "end of input is a parse error" assert-error-type
+
+[ "hello world" <scanner> 6 [ advance ] times "xyz" expect ] [ ] recover
+dup message: @get "expected \"xyz\" but found \"wor\" at position 6" "mismatch message" assert=
+data: @get
+dup offset: @get 6 "mismatch offset" assert=
+text: @get "wor" "mismatch text is the found prefix" assert=
+
+[ "hi" <scanner> advance "hello" expect ] [ ] recover
+dup message: @get "expected \"hello\" but reached end of input at position 1" "end of input message" assert=
+data: @get
+dup offset: @get 1 "end of input offset" assert=
+text: @has? "end of input carries no text" assert-false
+
+[ "héllo wörld" <scanner> 6 [ advance ] times "xyz" expect ] [ ] recover
+data: @get
+dup offset: @get 6 "the offset counts codepoints, not bytes" assert=
+text: @get "wör" "multi-byte found prefix" assert=
+
 "composition" test-section
 "  123abc" <scanner>
 [ " " = ] skip-while

@@ -14,6 +14,7 @@ use "1z-tokens" ;
 use "os/fs" ;
 use "os/path" ;
 use "ranges" ;
+use "source" ;
 
 \ --- Struct definitions ---
 
@@ -80,44 +81,6 @@ register-lint-rule: ( lint-rule -- ) [
   rules: swap @set! drop
 ] ;
 
-\ --- Line index computation ---
-
-(lf-string): ( -- str ) [ 10 >char ] ;
-
-\\ Build an array of newline character positions from a source string.
-\\ Used to convert character offsets to line:column.
-(build-line-index): ( source -- array ) [
-  dup #len 0 = [ drop V{ } ] [
-    V{ }
-    over #len 0 swap 1 - <range> >iterator [
-      2 pick-n over #nth (lf-string) = [
-        over swap #push!
-      ] when
-      drop
-    ] #each
-    nip
-  ] if
-] ;
-
-\\ Convert a 0-based character offset to 1-based line and column numbers.
-\\ line-index is the array of newline positions from (build-line-index).
-(pos>line-col): ( line-index pos -- line column ) [
-  \ Filter to newlines that occur strictly before pos.
-  swap over [ < ] curry #filter #collect
-  \ stack: pos newlines-before
-  dup #len ++ swap
-  \ stack: pos line newlines-before
-  dup #len 0 = [
-    \ No newlines before pos: column = pos + 1
-    \ stack: pos line { }
-    drop swap ++
-  ] [
-    \ Column = pos - last-newline-pos
-    \ stack: pos line newlines-before
-    #last [ swap ] dip -
-  ] if
-] ;
-
 \ --- Diagnostic construction helper ---
 
 \\ Create a lint-diagnostic from rule metadata and a token position.
@@ -125,7 +88,7 @@ register-lint-rule: ( lint-rule -- ) [
 \\ the lint-diagnostic struct.
 (make-diag): ( rule-id severity path line-index pos message -- lint-diagnostic ) [
   \ Save message, compute line:col from line-index and pos
-  [ (pos>line-col) ] dip
+  [ pos>line-col ] dip
   \ stack: rule-id severity path line column message
   make-lint-diagnostic
 ] ;
@@ -385,7 +348,7 @@ lint-module-exports: ( resolved-path -- array ) [
   \ stack: rules path source tokens
   dup (parse-suppressions)
   \ stack: rules path source tokens suppressions
-  2 pick-n (build-line-index)
+  2 pick-n build-line-index
   \ stack: rules path source tokens suppressions line-index
   4 pick-n (lint-circular-file?) [
     f
@@ -574,7 +537,7 @@ format-diagnostic: ( lint-diagnostic -- string ) [
 (use-target-tuple): ( line-index token target -- tuple ) [
   swap pos>>
   \ stack: line-index(2) target(1) pos(0)
-  2 pick-n swap (pos>line-col)
+  2 pick-n swap pos>line-col
   \ stack: line-index(3) target(2) line(1) col(0)
   3 array-n nip
 ] ;
@@ -601,7 +564,7 @@ format-diagnostic: ( lint-diagnostic -- string ) [
 \ Extract the modules a file imports, each resolved to the checked file it names. Returns an array
 \ of { target line col } tuples.
 (extract-use-targets): ( path source tokens -- path targets ) [
-  swap (build-line-index) swap
+  swap build-line-index swap
   [ significant-token? ] #filter #collect
   V{ } 0
   \ Each token is visited by position rather than by value, since recognizing an import needs to

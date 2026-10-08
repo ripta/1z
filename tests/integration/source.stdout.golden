@@ -1,0 +1,63 @@
+=== build-line-index ===
+Stack: [ ]
+PASS: two newlines
+Stack: [ ]
+PASS: empty source
+Stack: [ ]
+PASS: single line
+Stack: [ ]
+PASS: a trailing newline is indexed
+Stack: [ ]
+=== pos>line-col on a multi-line source ===
+Stack: [ ]
+Stack: [ V{ 3 7 } ]
+PASS: pos 0 col
+PASS: pos 0 line
+Stack: [ V{ 3 7 } ]
+PASS: pos 2 col
+PASS: pos 2 line
+Stack: [ V{ 3 7 } ]
+PASS: a newline is the last column of its line
+PASS: pos 3 line
+Stack: [ V{ 3 7 } ]
+PASS: pos 4 col
+PASS: pos 4 line
+Stack: [ V{ 3 7 } ]
+PASS: pos 8 col
+PASS: pos 8 line
+Stack: [ ]
+=== pos>line-col on a single-line source ===
+Stack: [ ]
+Stack: [ V{ } ]
+PASS: first column
+PASS: first line
+Stack: [ V{ } ]
+PASS: last column
+PASS: still the first line
+Stack: [ ]
+=== pos>line-col at the very end ===
+Stack: [ ]
+PASS: end offset column
+PASS: end offset line
+Stack: [ ]
+PASS: end after a trailing newline column
+Stack: [ 2 ]
+PASS: end after a trailing newline line
+Stack: [ ]
+PASS: empty source column
+PASS: empty source line
+Stack: [ ]
+=== source-pos>line-col ===
+Stack: [ ]
+PASS: one-shot column
+PASS: one-shot line
+Stack: [ ]
+Stack: [ 3 2 ]
+Stack: [ 3 2 3 2 ]
+PASS: one-shot column matches the two-step form
+Stack: [ 3 3 ]
+PASS: one-shot line matches the two-step form
+Stack: [ ]
+PASS: codepoint column
+PASS: codepoint line
+Stack: [ ]

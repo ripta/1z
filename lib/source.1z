@@ -1,0 +1,52 @@
+\ lib/source.1z - Source locations from codepoint offsets
+\
+\ A parser reports where it failed as a codepoint offset into its input. These words turn that offset
+\ into a 1-based line and column on the reporting side, for a caller that wants to show one.
+
+use "ranges" ;
+
+private{
+  (lf-string): ( -- str ) [ 10 >char ] ;
+}
+
+\\ Build an array of newline character positions from a source string.
+\\ Used to convert character offsets to line:column.
+build-line-index: ( source: string -- array ) [
+  dup #len 0 = [ drop V{ } ] [
+    V{ }
+    over #len 0 swap <range> >iterator [
+      2 pick-n over #nth (lf-string) = [
+        over swap #push!
+      ] when
+      drop
+    ] #each
+    nip
+  ] if
+] ;
+
+\\ Convert a 0-based character offset to 1-based line and column numbers.
+\\ line-index is the array of newline positions from build-line-index.
+pos>line-col: ( line-index pos: fixnum -- line column ) [
+  \ Filter to newlines that occur strictly before pos.
+  swap over [ < ] curry #filter #collect
+  \ stack: pos newlines-before
+  dup #len ++ swap
+  \ stack: pos line newlines-before
+  dup #len 0 = [
+    \ No newlines before pos: column = pos + 1
+    \ stack: pos line { }
+    drop swap ++
+  ] [
+    \ Column = pos - last-newline-pos
+    \ stack: pos line newlines-before
+    #last [ swap ] dip -
+  ] if
+] ;
+
+\\ Convert a 0-based character offset in source to 1-based line and column numbers.
+\\
+\\ Builds the line index for a single conversion. A caller converting many offsets in one source
+\\ should build the index once and call pos>line-col.
+source-pos>line-col: ( source: string pos: fixnum -- line column ) [
+  swap build-line-index swap pos>line-col
+] ;

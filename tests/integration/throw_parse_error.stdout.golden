@@ -1,0 +1,24 @@
+=== throw-parse-error raises a parse error ===
+Stack: [ ]
+PASS: error type
+Stack: [ ]
+Stack: [ <error parse-error: bad input at position 3 data=H{ offset: 3 } [src/prelude.1z:1329:throw <- tests/integration/throw_parse_error.1z:8:recover]> ]
+PASS: the message ends in the position
+Stack: [ <error parse-error: bad input at position 3 data=H{ offset: 3 } [src/prelude.1z:1329:throw <- tests/integration/throw_parse_error.1z:8:recover]> ]
+PASS: the payload carries the offset
+Stack: [ ]
+=== throw-parse-error passes the payload through ===
+Stack: [ ]
+Stack: [ <error parse-error: bad span at position 0 data=H{ text: "x" offset: 0 end: 2 } [src/prelude.1z:1329:throw <- tests/integration/throw_parse_error.1z:13:recover]> ]
+Stack: [ H{ text: "x" offset: 0 end: 2 } ]
+PASS: text: passes through
+Stack: [ H{ text: "x" offset: 0 end: 2 } ]
+PASS: an extra key passes through
+Stack: [ ]
+=== throw-parse-error requires a fixnum offset ===
+Stack: [ ]
+PASS: a missing offset is a type mismatch
+Stack: [ ]
+Stack: [ [ H{ offset: "3" } "bad offset" throw-parse-error ] type-mismatch: "a string offset is a type mismatch" ]
+PASS: a string offset is a type mismatch
+Stack: [ ]

@@ -1,0 +1,21 @@
+\ Integration tests for the prelude's throw-parse-error
+
+use "testing" ;
+
+"throw-parse-error raises a parse error" test-section
+[ H{ offset: 3 } "bad input" throw-parse-error ] parse-error: "error type" assert-error-type
+
+[ H{ offset: 3 } "bad input" throw-parse-error ] [ ] recover
+dup message: @get "bad input at position 3" "the message ends in the position" assert=
+data: @get offset: @get 3 "the payload carries the offset" assert=
+
+"throw-parse-error passes the payload through" test-section
+[ H{ offset: 0 text: "x" end: 2 } "bad span" throw-parse-error ] [ ] recover
+data: @get
+dup text: @get "x" "text: passes through" assert=
+end: @get 2 "an extra key passes through" assert=
+
+"throw-parse-error requires a fixnum offset" test-section
+[ H{ } "no offset" throw-parse-error ] type-mismatch: "a missing offset is a type mismatch" assert-error-type
+[ H{ offset: "3" } "bad offset" throw-parse-error ] type-mismatch: "a string offset is a type mismatch"
+assert-error-type

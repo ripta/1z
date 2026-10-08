@@ -58,14 +58,17 @@ private{
   ] ;
 
   (config-parse-error): never-returns ( pos: fixnum what: string -- * ) [
-    " at position " #append over >string #append
-    swap [ H{ } offset: ] dip @set
-    swap EParseError make-error throw
+    swap [ H{ } offset: ] dip @set swap throw-parse-error
   ] ;
 
-  (unterminated): never-returns ( opener -- * ) [
-    dup pos>> swap value>> "unterminated '" swap #append "'" #append (config-parse-error)
+  \ Raise at a token whose text the message quotes after prefix, carrying it under `text:`.
+  (config-token-error): never-returns ( token prefix: string -- * ) [
+    over value>> dup [ #append "'" #append ] dip
+    <rot- pos>> [ H{ } text: ] 2dip
+    [ @set offset: ] dip @set swap throw-parse-error
   ] ;
+
+  (unterminated): never-returns ( opener -- * ) [ "unterminated '" (config-token-error) ] ;
 
   \ The token at i, or f past the end. The index is left in place.
   (token-at): ( tokens i -- tokens i token/f ) [
@@ -91,18 +94,12 @@ private{
       dup value>> (closed-string?) [ pos>> "unterminated string" (config-parse-error) ] unless
     ] when
 
-    dup value>> resolve-literal [ nip ] [
-      drop dup pos>> swap value>> "malformed literal '" swap #append "'" #append
-      (config-parse-error)
-    ] if
+    dup value>> resolve-literal [ nip ] [ drop "malformed literal '" (config-token-error) ] if
   ] ;
 
   (read-word): ( token -- value ) [
     dup value>> dup "t" = [ 2drop t ] [
-      dup "f" = [ 2drop f ] [
-        "unexpected word '" swap #append "'" #append
-        swap pos>> swap (config-parse-error)
-      ] if
+      dup "f" = [ 2drop f ] [ drop "unexpected word '" (config-token-error) ] if
     ] if
   ] ;
 
@@ -129,8 +126,7 @@ private{
 
   (open-frame): ( frames opener -- frames ) [
     dup value>> dup "{" = over "H{" = or over "S{" = or swap "V{" = or [
-      dup pos>> swap value>> "unsupported constructor '" swap #append "'" #append
-      (config-parse-error)
+      "unsupported constructor '" (config-token-error)
     ] unless
 
     V{ } swap #push! #push!
@@ -160,7 +156,7 @@ private{
   ] ;
 
   (close-frame): ( frames close -- frames ) [
-    over #len 1 = [ pos>> "unexpected '}'" (config-parse-error) ] when
+    over #len 1 = [ "unexpected '" (config-token-error) ] when
     over #pop! nip
     dup 0 #nth -rot> (frame-value) swap (deliver)
   ] ;
@@ -172,7 +168,7 @@ private{
       dup kind>> word: = [ dup (read-word) swap (deliver) ] [
         dup kind>> open-brace: = [ (open-frame) ] [
           dup kind>> close-brace: = [ (close-frame) ] [
-            dup pos>> swap value>> "unexpected '" swap #append "'" #append (config-parse-error)
+            "unexpected '" (config-token-error)
           ] if
         ] if
       ] if
@@ -202,7 +198,7 @@ private{
 \\ repeated key keeps the last value. Comments may appear between any two tokens.
 \\
 \\ Anything else raises `parse-error:`, with the codepoint offset of the offending token in the
-\\ error's data under `offset:`.
+\\ error's data under `offset:`. When the message quotes the token, its text is under `text:`.
 parse-config-data: ( source: string -- value ) [
   1z-tokenize [ (significant?) ] #filter #collect
   V{ } V{ } f #push! #push! swap 0 (read-loop)

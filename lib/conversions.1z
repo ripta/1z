@@ -14,9 +14,9 @@ digit?: ( str -- ? ) [
 parse-integer: ( str -- n ) [
   resolve-literal
   [ dup type-of dup fixnum = swap bignum = or
-    [ drop "not an integer" throw ] unless
+    [ drop f "not an integer" EParseError make-error throw ] unless
   ]
-  [ drop "invalid integer" throw ]
+  [ drop f "invalid integer" EParseError make-error throw ]
   if
 ] ;
 
@@ -31,7 +31,7 @@ parse-boolean: ( str -- ? ) [
   [ drop t ]
   [ dup { "false" "f" "0" "no" } swap #in?
     [ drop f ]
-    [ drop "invalid boolean" throw ]
+    [ drop f "invalid boolean" EParseError make-error throw ]
     if
   ]
   if

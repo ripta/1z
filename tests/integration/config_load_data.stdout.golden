@@ -2,6 +2,7 @@ Stack: [ ]
 Stack: [ ]
 Stack: [ ]
 Stack: [ ]
+Stack: [ ]
 === load-config-data basics ===
 Stack: [ ]
 Stack: [ t t ]
@@ -135,6 +136,26 @@ Stack: [ t ]
 PASS: empty source
 Stack: [ t ]
 PASS: trailing value
+Stack: [ t ]
+=== parse-config-data rejected text ===
+Stack: [ t ]
+PASS: an unknown word carries its text
+Stack: [ t ]
+PASS: an unsupported constructor carries its text
+Stack: [ t ]
+PASS: a malformed literal carries its text
+Stack: [ t ]
+PASS: an unterminated brace carries its opener
+Stack: [ t ]
+PASS: a stray close brace carries its text
+Stack: [ t ]
+PASS: an unexpected token carries its text
+Stack: [ t ]
+PASS: a trailing value carries no text
+Stack: [ t ]
+PASS: an unterminated string carries no text
+Stack: [ t ]
+PASS: an empty source carries no text
 Stack: [ t ]
 === parse-config-data nesting depth ===
 Stack: [ t ]

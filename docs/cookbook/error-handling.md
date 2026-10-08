@@ -126,6 +126,32 @@ Output:
 "bad input"
 ```
 
+## Where a parse failed
+
+A parser that rejects its input raises `parse-error:`. The error's data holds the codepoint offset
+of the failure under `offset:`. `source-pos>line-col` from `lib/source.1z` turns the offset into a
+line and column:
+
+```
+use "config" ;
+use "source" ;
+
+"H{\n  a: 1\n  b: foo\n}"
+[ parse-config-data drop ] [
+  dup message: @get print-line
+  data: @get offset: @get source-pos>line-col 2 array-n .
+] recover
+```
+
+Output:
+
+```
+unexpected word 'foo' at position 15
+{ 3 6 }
+```
+
+When the message quotes the offending input, the data also carries it under `text:`.
+
 ## Nesting handlers
 
 Inner `recover` handles the error; the outer handler never fires:

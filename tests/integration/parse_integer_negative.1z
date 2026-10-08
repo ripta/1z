@@ -14,3 +14,12 @@ use "conversions" ;
 "-1" parse-integer -1 "negative one" assert=
 "-0" parse-integer 0 "negative zero" assert=
 "-999999" parse-integer -999999 "large negative" assert=
+
+"conversion failures" test-section
+[ "abc" parse-integer ] parse-error: "a non-numeric string is a parse error" assert-error-type
+[ "1.5" parse-integer ] parse-error: "a float literal is a parse error" assert-error-type
+[ "maybe" parse-boolean ] parse-error: "an unknown boolean spelling is a parse error" assert-error-type
+
+"invalid integer" [ "abc" parse-integer ] [ message: @get ] recover "invalid integer message" assert=
+"not an integer" [ "1.5" parse-integer ] [ message: @get ] recover "not an integer message" assert=
+"invalid boolean" [ "maybe" parse-boolean ] [ message: @get ] recover "invalid boolean message" assert=

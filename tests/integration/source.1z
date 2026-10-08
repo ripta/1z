@@ -1,0 +1,37 @@
+\ Integration tests for lib/source.1z
+
+use "testing" ;
+use "source" ;
+
+"build-line-index" test-section
+"abc\ndef\nghi" build-line-index #len 2 "two newlines" assert=
+"" build-line-index #len 0 "empty source" assert=
+"hello" build-line-index #len 0 "single line" assert=
+"abc\n" build-line-index #len 1 "a trailing newline is indexed" assert=
+
+"pos>line-col on a multi-line source" test-section
+"abc\ndef\nghi" build-line-index
+dup 0 pos>line-col 1 "pos 0 col" assert= 1 "pos 0 line" assert=
+dup 2 pos>line-col 3 "pos 2 col" assert= 1 "pos 2 line" assert=
+dup 3 pos>line-col 4 "a newline is the last column of its line" assert= 1 "pos 3 line" assert=
+dup 4 pos>line-col 1 "pos 4 col" assert= 2 "pos 4 line" assert=
+8 pos>line-col 1 "pos 8 col" assert= 3 "pos 8 line" assert=
+
+"pos>line-col on a single-line source" test-section
+"hello" build-line-index
+dup 0 pos>line-col 1 "first column" assert= 1 "first line" assert=
+4 pos>line-col 5 "last column" assert= 1 "still the first line" assert=
+
+"pos>line-col at the very end" test-section
+"abc\ndef" build-line-index 7 pos>line-col 4 "end offset column" assert= 2 "end offset line" assert=
+"abc\n" build-line-index 4 pos>line-col 1 "end after a trailing newline column" assert=
+2 "end after a trailing newline line" assert=
+"" build-line-index 0 pos>line-col 1 "empty source column" assert= 1 "empty source line" assert=
+
+"source-pos>line-col" test-section
+"abc\ndef\nghi" 9 source-pos>line-col 2 "one-shot column" assert= 3 "one-shot line" assert=
+"abc\ndef\nghi" 9 source-pos>line-col
+"abc\ndef\nghi" build-line-index 9 pos>line-col
+<rot- = "one-shot column matches the two-step form" assert-true
+= "one-shot line matches the two-step form" assert-true
+"héllo\nwörld" 8 source-pos>line-col 3 "codepoint column" assert= 2 "codepoint line" assert=

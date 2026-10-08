@@ -11,6 +11,11 @@ message-of: ( source: string -- message ) [
   [ parse-config-data drop f ] [ nip message: @get ] recover
 ] ;
 
+\ The offending text a rejected source reports, or f when it parses or names none.
+text-of: ( source: string -- text ) [
+  [ parse-config-data drop f ] [ nip data: @get text: f @get-or ] recover
+] ;
+
 \ Whether `{ }` nested depth deep parses. The reader keeps its own stack of open containers, so
 \ the depth it reaches is not bounded by the native stack.
 reads-at-depth?: ( depth: fixnum -- ? ) [
@@ -108,6 +113,17 @@ H{ a: 1 } "\\\\ Doc comment.\nH{\n  a: 1 \\ trailing comment\n}\n" parse-config-
 0 "M{ }" offset-of "unsupported constructor offset" assert=
 "empty config at position 0" "  \\ only a comment\n" message-of "empty source" assert=
 "unexpected trailing value at position 2" "1 2" message-of "trailing value" assert=
+
+"parse-config-data rejected text" test-section
+"foo" "H{ a: foo }" text-of "an unknown word carries its text" assert=
+"M{" "M{ }" text-of "an unsupported constructor carries its text" assert=
+"1_" "{ 1_ }" text-of "a malformed literal carries its text" assert=
+"H{" "  H{ a: 1" text-of "an unterminated brace carries its opener" assert=
+"}" "}" text-of "a stray close brace carries its text" assert=
+"]" "1 ]" text-of "an unexpected token carries its text" assert=
+f "1 2" text-of "a trailing value carries no text" assert=
+f "{ \"abc }" text-of "an unterminated string carries no text" assert=
+f "  \\ only a comment\n" text-of "an empty source carries no text" assert=
 
 "parse-config-data nesting depth" test-section
 500 reads-at-depth? "five hundred levels on the main task" assert-true

@@ -3,6 +3,7 @@ use "lint" ;
 use "lint-rules/tier3" ;
 use "1z-tokens" ;
 use "lexer" ;
+use "source" ;
 
 \ Run the borrow-in-production check against a fabricated path and source,
 \ returning the diagnostic count.
@@ -12,7 +13,7 @@ use "lexer" ;
 \ tests/.
 run-borrow-check: ( path source -- n ) [
   dup 1z-tokenize #collect
-  over (build-line-index)
+  over build-line-index
   f
   (check-borrow-in-production)
   #len

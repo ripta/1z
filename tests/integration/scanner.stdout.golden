@@ -127,6 +127,34 @@ PASS: expect wrong char throws
 Stack: [ ]
 PASS: expect past end throws
 Stack: [ ]
+=== expect failure positions ===
+Stack: [ ]
+PASS: a mismatch is a parse error
+Stack: [ ]
+PASS: end of input is a parse error
+Stack: [ ]
+Stack: [ <error parse-error: expected "xyz" but found "wor" at position 6 data=H{ text: "wor" offset: 6 } [src/prelude.1z:1329:throw <- tests/integration/scanner.1z:95:recover]> ]
+PASS: mismatch message
+Stack: [ <error parse-error: expected "xyz" but found "wor" at position 6 data=H{ text: "wor" offset: 6 } [src/prelude.1z:1329:throw <- tests/integration/scanner.1z:95:recover]> ]
+Stack: [ H{ text: "wor" offset: 6 } ]
+PASS: mismatch offset
+Stack: [ H{ text: "wor" offset: 6 } ]
+PASS: mismatch text is the found prefix
+Stack: [ ]
+Stack: [ <error parse-error: expected "hello" but reached end of input at position 1 data=H{ offset: 1 } [src/prelude.1z:1329:throw <- tests/integration/scanner.1z:101:recover]> ]
+PASS: end of input message
+Stack: [ <error parse-error: expected "hello" but reached end of input at position 1 data=H{ offset: 1 } [src/prelude.1z:1329:throw <- tests/integration/scanner.1z:101:recover]> ]
+Stack: [ H{ offset: 1 } ]
+PASS: end of input offset
+Stack: [ H{ offset: 1 } ]
+PASS: end of input carries no text
+Stack: [ ]
+Stack: [ <error parse-error: expected "xyz" but found "wör" at position 6 data=H{ text: "wör" offset: 6 } [src/prelude.1z:1329:throw <- tests/integration/scanner.1z:107:recover]> ]
+Stack: [ H{ text: "wör" offset: 6 } ]
+PASS: the offset counts codepoints, not bytes
+Stack: [ H{ text: "wör" offset: 6 } ]
+PASS: multi-byte found prefix
+Stack: [ ]
 === composition ===
 Stack: [ ]
 Stack: [ scanner{ str: "  123abc" byte-cursor: 0 codepoint-pos: 0 } ]

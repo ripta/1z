@@ -100,19 +100,28 @@ skip-while: ( scanner quot -- scanner ) [
   make-scanner
 ] ;
 
+private{
+  (expect-error): never-returns ( scanner payload what: string -- * ) [
+    [ swap position>> offset: swap @set ] dip throw-parse-error
+  ] ;
+}
+
 \\ Consume an expected string prefix or throw an error.
 \\ Compares the prefix of remaining input against the expected string.
+\\
+\\ A mismatch raises `parse-error:` at the scanner's position, with the text found there under
+\\ `text:`. Reaching the end of input first raises it with no `text:`.
 expect: ( scanner str -- scanner ) [
   over rest over #len
   2dup swap #len swap <
   [
     2drop "expected \"" swap #append "\" but reached end of input" #append
-    f swap EInvalidArgument make-error throw
+    H{ } swap (expect-error)
   ] [
     0 swap #slice
     over over = not [
-      "expected \"" <rot- #append "\" but found \"" #append swap #append "\"" #append
-      f swap EInvalidArgument make-error throw
+      dup [ "expected \"" <rot- #append "\" but found \"" #append swap #append "\"" #append ] dip
+      [ H{ } text: ] dip @set swap (expect-error)
     ] [
       drop (advance-past)
     ] if

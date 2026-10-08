@@ -18,3 +18,17 @@ PASS: negative zero
 Stack: [ ]
 PASS: large negative
 Stack: [ ]
+=== conversion failures ===
+Stack: [ ]
+PASS: a non-numeric string is a parse error
+Stack: [ ]
+PASS: a float literal is a parse error
+Stack: [ ]
+PASS: an unknown boolean spelling is a parse error
+Stack: [ ]
+PASS: invalid integer message
+Stack: [ ]
+PASS: not an integer message
+Stack: [ ]
+PASS: invalid boolean message
+Stack: [ ]

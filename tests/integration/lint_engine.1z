@@ -2,6 +2,7 @@ use "testing" ;
 use "lint" ;
 use "lexer" ;
 use "1z-tokens" ;
+use "source" ;
 
 "rule registration" test-section
 
@@ -17,18 +18,6 @@ register-lint-rule
 
 lint-rules #len 2 "two rules registered" assert=
 
-"line index" test-section
-
-"abc\ndef\nghi" (build-line-index)
-dup #len 2 "two newlines" assert=
-dup 0 (pos>line-col) 1 "pos 0 col" assert= 1 "pos 0 line" assert=
-dup 2 (pos>line-col) 3 "pos 2 col" assert= 1 "pos 2 line" assert=
-dup 4 (pos>line-col) 1 "pos 4 col" assert= 2 "pos 4 line" assert=
-8 (pos>line-col) 1 "pos 8 col" assert= 3 "pos 8 line" assert=
-
-"" (build-line-index) #len 0 "empty source" assert=
-"hello" (build-line-index) #len 0 "single line" assert=
-
 "format-diagnostic" test-section
 
 "my-rule" warning: "test.1z" 5 12 "bad style" make-lint-diagnostic
@@ -41,7 +30,7 @@ format-diagnostic
 
 "make-diag helper" test-section
 
-"abc\ndef\nghi" (build-line-index)
+"abc\ndef\nghi" build-line-index
 "test-rule" warning: "file.1z" 3 pick-n 4 "found issue" (make-diag)
 dup line>> 2 "diag line" assert=
 dup column>> 1 "diag col" assert=
@@ -52,14 +41,14 @@ drop
 
 "public lint helpers" test-section
 
-"abc\ndef\nghi" (build-line-index)
+"abc\ndef\nghi" build-line-index
 "test-rule" warning: "file.1z" 3 pick-n 4 "diag at pos" diag-at-pos
 dup line>> 2 "diag-at-pos line" assert=
 dup column>> 1 "diag-at-pos col" assert=
 message>> "diag at pos" "diag-at-pos message" assert=
 drop
 
-"abc\ndef\nghi" (build-line-index)
+"abc\ndef\nghi" build-line-index
 number: "42" 8 make-token
 "test-rule" warning: "file.1z" 4 pick-n 4 pick-n "diag at token" diag-at-token
 dup line>> 3 "diag-at-token line" assert=

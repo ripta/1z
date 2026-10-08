@@ -1318,6 +1318,17 @@ try: ( quot: ( -- x ) -- result ) [ [ call >result:ok ] [ nip >result:err ] reco
 \\ Get value by key, or return default if missing.
 @get-or: ( assoc key default -- value ) [ -rot> 2dup @has? [ @get nip ] [ 2drop ] if ] ;
 
+\\ Throw a parse-error: whose payload names where in the input the parse failed.
+\\
+\\ payload is a hash holding at least a fixnum `offset:`, the codepoint offset of the failure, and
+\\ may carry `text:` for the offending input. The message is what, followed by " at position N".
+throw-parse-error: never-returns ( payload: hash what: string -- * ) [
+  over offset: f @get-or
+  dup type-of fixnum = [ "fixnum offset:" throw-type-error ] unless
+  >string " at position " swap #append #append
+  EParseError make-error throw
+] ;
+
 \\ Look up a key in either value-map half, returning some(value) or none.
 \\
 \\   { { 1 "a" } } >value-map 1 vmap-get? option:some>
