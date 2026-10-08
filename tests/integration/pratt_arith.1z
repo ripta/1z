@@ -47,12 +47,33 @@ TEST-LEXER: const [
 
 "error: unexpected operator" test-section
 [ "+" (eval) ] [ ] recover
-message: @get
-dup "expected expression" #in? "unexpected operator mentions expected expression" assert-true
-"byte 0" #in? "unexpected operator includes byte offset" assert-true
+dup message: @get "expected expression, got '+' at position 0" "unexpected operator message" assert=
+dup error-type: @get parse-error: "unexpected operator is a parse error" assert=
+data: @get
+dup offset: @get 0 "unexpected operator offset" assert=
+text: @get "+" "unexpected operator text" assert=
+
+"error: unexpected token after operator" test-section
+[ "1 + )" (eval) ] [ ] recover
+data: @get offset: @get 4 "offending ')' offset" assert=
+
+"error: wrong token in place of close paren" test-section
+[ "(1 + 2 3" (eval) ] [ ] recover
+dup message: @get "expected ')', got '3' at position 7" "close paren message names the token" assert=
+data: @get offset: @get 7 "close paren offset" assert=
 
 "error: missing close paren" test-section
 [ "(1 + 2" (eval) ] [ ] recover
-message: @get
-dup "expected ')'" #in? "missing close paren mentions expected token" assert-true
-"end of input" #in? "missing close paren mentions end of input" assert-true
+dup message: @get "expected ')' at end of input" "missing close paren message" assert=
+dup error-type: @get parse-error: "end of input is a parse error" assert=
+data: @get f "end of input carries no data" assert=
+
+"error: trailing token" test-section
+[ "1 + 2)" TEST-LEXER tokenize <arithmetic-pratt> parse-complete ] [ ] recover
+dup message: @get "unexpected trailing token ')' at position 5" "trailing token message" assert=
+data: @get offset: @get 5 "trailing token offset" assert=
+
+"error: unrecognized input after the first token" test-section
+\ Each line consumes the error, because its frame chain differs between interpreted and eager runs.
+[ "1 + $" (eval) ] [ ] recover message: @get "unrecognized input '$' at position 4" "mid-stream lexer failure surfaces" assert=
+[ "1 + $" (eval) ] [ ] recover data: @get offset: @get 4 "mid-stream lexer failure offset" assert=

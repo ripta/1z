@@ -1,3 +1,3 @@
 Stack: [ ]
-<error invalid-argument: expected ')' at end of input [pratt/arith:18:throw <- pratt/arith:51:when <- pratt:123:call <- tests/integration/tail_boundary_compiled_callee.1z:24:recover]>
+<error parse-error: expected ')' at end of input [pratt/arith:24:throw <- pratt/arith:39:when <- pratt:117:call <- tests/integration/tail_boundary_compiled_callee.1z:24:recover]>
 Stack: [ ]

@@ -289,3 +289,39 @@ test-unclosed-call-throws: ( -- ) [
 test-missing-comma-throws: ( -- ) [
   [ "foo(1 2)" parse-expr ] "missing argument comma throws" assert-error
 ] ;
+
+"error positions" test-section
+
+\ Run quot, which must raise, and return the error it raised.
+caught: ( quot -- error ) [ [ ] recover ] ;
+
+test-trailing-token-position: ( -- ) [
+  [ "1 2" parse-expr ] caught
+  dup message: @get "unexpected trailing token '2' at position 2" "trailing token message" assert=
+  dup error-type: @get parse-error: "trailing token is a parse error" assert=
+  data: @get offset: @get 2 "trailing token offset" assert=
+] ;
+
+test-leading-operator-position: ( -- ) [
+  [ "+" parse-expr ] caught data: @get
+  dup offset: @get 0 "leading operator offset" assert=
+  text: @get "+" "leading operator text" assert=
+] ;
+
+test-close-paren-position: ( -- ) [
+  [ "(1 2" parse-expr ] caught
+  dup message: @get "expected ')', got '2' at position 3" "close paren message" assert=
+  data: @get offset: @get 3 "close paren offset" assert=
+] ;
+
+test-argument-delimiter-position: ( -- ) [
+  [ "foo(1 2)" parse-expr ] caught
+  dup message: @get "expected ',' or ')' in argument list, got '2' at position 6" "argument delimiter message" assert=
+  data: @get offset: @get 6 "argument delimiter offset" assert=
+] ;
+
+test-end-of-input-carries-no-data: ( -- ) [
+  [ "" parse-expr ] caught
+  dup error-type: @get parse-error: "end of input is a parse error" assert=
+  data: @get f "end of input carries no data" assert=
+] ;

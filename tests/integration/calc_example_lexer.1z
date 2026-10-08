@@ -1,0 +1,3 @@
+\ Verify the calculator example places the caret under input the lexer rejects mid-expression.
+
+"../../examples/calc.1z" load drop

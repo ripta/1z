@@ -15,27 +15,12 @@ CALC-LEXER: const [
 ] ;
 
 calc-expr: parameter{ [ "" ] } ;
-report-msg: M{ value: "" } ;
 
-(extract-byte-pos): ( msg expr -- pos ) [
-  swap
-  dup "at byte " split dup #len 1 > [
-    #last parse-integer
-    nip
-  ] [
-    drop
-    dup "position " split dup #len 1 > [
-      #last ":" split #first parse-integer
-      nip
-    ] [
-      drop
-      dup "end of input" #in? [
-        drop #len
-      ] [
-        drop drop 0
-      ] if
-    ] if
-  ] if
+\ Only a parse error with data carries a position. Any other failure, including running out of
+\ input, is placed just past the end.
+(error-pos): ( expr error -- pos ) [
+  dup error-type: @get parse-error: = [ data: @get ] [ drop f ] if
+  dup [ nip offset: @get ] [ drop #len ] if
 ] ;
 
 (caret-line): ( pos -- str ) [
@@ -47,12 +32,9 @@ report-msg: M{ value: "" } ;
 ] ;
 
 (report-error): ( expr error -- ) [
-  message: @get
-  report-msg swap value: swap @set! drop
-  dup eprint-line
-  dup report-msg value: @get swap (extract-byte-pos) (caret-line) eprint-line
-  report-msg value: @get eprint-line
-  drop
+  over eprint-line
+  dup message: @get [ (error-pos) (caret-line) eprint-line ] dip
+  eprint-line
 ] ;
 
 (command-expr): ( -- expr ) [

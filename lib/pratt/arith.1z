@@ -1,6 +1,7 @@
 \ lib/pratt/arith.1z - Pre-wired arithmetic Pratt parser
 
 "pratt" load reexport
+use "lexer" ;
 
 ARITHMETIC-OPS: const [
   H{
@@ -14,35 +15,22 @@ ARITHMETIC-OPS: const [
 UNARY-MINUS-BP: const [ 30 ] ;
 
 private{
-  (throw-invalid-argument): ( message -- ) [
-    f swap EInvalidArgument make-error throw
+  (unexpected-expression): never-returns ( token -- * ) [
+    "expected expression, got '" throw-token-error
   ] ;
 
-  (unexpected-expression): ( token -- ) [
-    dup value>> swap pos>>
-    "expected expression, got '" <rot-
-    #append "' at byte " #append
-    swap >string #append
-    (throw-invalid-argument)
-  ] ;
-
-  (expected-close-paren): ( token/f -- ) [
+  (expected-close-paren): never-returns ( token/f -- * ) [
     dup f = [
-      drop "expected ')' at end of input"
+      drop f "expected ')' at end of input" EParseError make-error throw
     ] [
-      dup value>> swap pos>>
-      "expected ')', got '" <rot-
-      #append "' at byte " #append
-      swap >string #append
+      "expected ')', got '" throw-token-error
     ] if
-    (throw-invalid-argument)
   ] ;
 
   (parse-number-token): ( token -- value ) [
-    value>> resolve-literal
-    [ ]
-    [ drop "invalid numeric literal" (throw-invalid-argument) ]
-    if
+    dup value>> resolve-literal [ nip ] [
+      drop pos>> [ H{ } offset: ] dip @set "invalid numeric literal" throw-parse-error
+    ] if
   ] ;
 
   (parse-group): ( parser tokens -- value ) [
@@ -78,13 +66,13 @@ arith-prefix: ( token parser tokens -- value ) [
 arith-infix: ( left token parser tokens -- value ) [
   parse-right
   \ left token right
-  swap value>>
-  dup "+" = [ drop + ] [
-    dup "-" = [ drop - ] [
-      dup "*" = [ drop * ] [
-        dup "/" = [ drop / ] [
-          "unknown operator: " swap #append
-          (throw-invalid-argument)
+  swap dup value>>
+  \ left right token op
+  dup "+" = [ 2drop + ] [
+    dup "-" = [ 2drop - ] [
+      dup "*" = [ 2drop * ] [
+        dup "/" = [ 2drop / ] [
+          drop "unknown operator '" throw-token-error
         ] if
       ] if
     ] if

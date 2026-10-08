@@ -66,18 +66,12 @@ next-token: ( peekable -- token/f ) [
 ] ;
 
 private{
-  (prefix-error): ( token/f -- ) [
+  (prefix-error): never-returns ( token/f -- * ) [
     dup f = [
-      drop "expected expression at end of input"
+      drop f "expected expression at end of input" EParseError make-error throw
     ] [
-      dup value>> swap pos>>
-      \ value pos
-      "expected expression, got '" <rot-
-      \ pos "expected..." value
-      #append "' at byte " #append
-      swap >string #append
+      "expected expression, got '" throw-token-error
     ] if
-    f swap EInvalidArgument make-error throw
   ] ;
 
   (pratt-loop): stack-recursive ( peekable parser min-bp left -- value ) [
@@ -127,12 +121,8 @@ private{
     (pratt-loop)
   ] ;
 
-  (trailing-token-error): ( token -- ) [
-    dup value>> swap pos>>
-    "unexpected trailing token '" <rot-
-    #append "' at byte " #append
-    swap >string #append
-    f swap EInvalidArgument make-error throw
+  (trailing-token-error): never-returns ( token -- * ) [
+    "unexpected trailing token '" throw-token-error
   ] ;
 }
 

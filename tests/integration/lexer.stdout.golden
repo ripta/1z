@@ -125,8 +125,22 @@ Stack: [ ]
 === error includes position ===
 Stack: [ ]
 Stack: [ [ "ab!cd" [ ] make-vector ALPHA-RULE #push! >array <lexer> tokenize #collect ] ]
-Stack: [ <error invalid-argument: unrecognized input at position 2: '!' [lexer:110:throw <- lexer:146:(try-rules) <- tests/integration/lexer.1z:1393:call <- tests/integration/lexer.1z:153:#collect <- tests/integration/lexer.1z:154:recover]> ]
-PASS: error mentions position
+Stack: [ <error parse-error: unrecognized input '!' at position 2 data=H{ text: "!" offset: 2 } [src/prelude.1z:1329:throw <- lexer:155:(try-rules) <- tests/integration/lexer.1z:1393:call <- tests/integration/lexer.1z:153:#collect <- tests/integration/lexer.1z:154:recover]> ]
+PASS: error message quotes input and position
+Stack: [ <error parse-error: unrecognized input '!' at position 2 data=H{ text: "!" offset: 2 } [src/prelude.1z:1329:throw <- lexer:155:(try-rules) <- tests/integration/lexer.1z:1393:call <- tests/integration/lexer.1z:153:#collect <- tests/integration/lexer.1z:154:recover]> ]
+PASS: unrecognized input is a parse error
+Stack: [ <error parse-error: unrecognized input '!' at position 2 data=H{ text: "!" offset: 2 } [src/prelude.1z:1329:throw <- lexer:155:(try-rules) <- tests/integration/lexer.1z:1393:call <- tests/integration/lexer.1z:153:#collect <- tests/integration/lexer.1z:154:recover]> ]
+Stack: [ H{ text: "!" offset: 2 } ]
+PASS: unrecognized input offset
+Stack: [ H{ text: "!" offset: 2 } ]
+PASS: unrecognized input text
+Stack: [ ]
+=== error after the first token propagates through #next? ===
+Stack: [ ]
+Stack: [ <iterator callback callback> ]
+PASS: first token precedes the failure
+Stack: [ <iterator callback callback> ]
+PASS: a lexer failure is not exhaustion
 Stack: [ ]
 === inspect ===
 Stack: [ ]

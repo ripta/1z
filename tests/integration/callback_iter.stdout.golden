@@ -64,6 +64,13 @@ PASS: empty generator count is 0
 Stack: [ ]
 PASS: empty generator next? is none
 Stack: [ ]
+=== #next? propagates a generator's error ===
+Stack: [ ]
+Stack: [ <error invalid-argument: boom [tests/integration/callback_iter.1z:87:throw <- src/prelude.1z:1393:call <- src/prelude.1z:1414:#next <- src/prelude.1z:1416:recover <- tests/integration/callback_iter.1z:87:recover]> ]
+PASS: a generator error is not exhaustion
+Stack: [ <error invalid-argument: boom [tests/integration/callback_iter.1z:87:throw <- src/prelude.1z:1393:call <- src/prelude.1z:1414:#next <- src/prelude.1z:1416:recover <- tests/integration/callback_iter.1z:87:recover]> ]
+PASS: the generator's error arrives intact
+Stack: [ ]
 === Sequence >iterator still works ===
 Stack: [ ]
 PASS: vector round-trips through >iterator

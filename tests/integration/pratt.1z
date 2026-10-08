@@ -52,7 +52,7 @@ TEST-OPS: const [
       nip nip
       dup value>> swap pos>>
       "expected expression, got '" <rot-
-      #append "' at byte " #append
+      #append "' at position " #append
       swap >string #append
       f swap EInvalidArgument make-error throw
     ] if
@@ -107,7 +107,7 @@ EVAL-PARSER: const [
       nip nip
       dup value>> swap pos>>
       "expected expression, got '" <rot-
-      #append "' at byte " #append
+      #append "' at position " #append
       swap >string #append
       f swap EInvalidArgument make-error throw
     ] if
@@ -213,4 +213,4 @@ dup 1 #nth "-" "outer op is -" assert=
 [ "+" (eval) ] [ ] recover
 message: @get
 dup "expected expression" #in? "error mentions expected expression" assert-true
-"byte" #in? "error mentions byte position" assert-true
+"position 0" #in? "error mentions position" assert-true

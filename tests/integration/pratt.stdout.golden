@@ -112,9 +112,9 @@ PASS: empty input throws
 Stack: [ ]
 === error: message content ===
 Stack: [ ]
-Stack: [ <error invalid-argument: expected expression, got '+' at byte 0 [tests/integration/pratt.1z:57:throw <- pratt:123:call <- tests/integration/pratt.1z:213:recover]> ]
-Stack: [ "expected expression, got '+' at byte 0" ]
+Stack: [ <error invalid-argument: expected expression, got '+' at position 0 [tests/integration/pratt.1z:57:throw <- pratt:117:call <- tests/integration/pratt.1z:213:recover]> ]
+Stack: [ "expected expression, got '+' at position 0" ]
 PASS: error mentions expected expression
-Stack: [ "expected expression, got '+' at byte 0" ]
-PASS: error mentions byte position
+Stack: [ "expected expression, got '+' at position 0" ]
+PASS: error mentions position
 Stack: [ ]

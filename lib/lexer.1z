@@ -5,8 +5,17 @@ use "strings" ;
 use "conversions" ;
 use "char" ;
 
-\\ A token with a kind (symbol), value (string), and byte offset position.
+\\ A token with a kind (symbol), value (string), and codepoint offset position.
 token: struct{ kind value pos } ;
+
+\\ Raise `parse-error:` at token, quoting its text after prefix, which ends with the opening quote.
+\\
+\\ The error's data carries the token's position under `offset:` and its text under `text:`.
+throw-token-error: never-returns ( token prefix: string -- * ) [
+  over value>> dup [ #append "'" #append ] dip
+  <rot- pos>> [ H{ } text: ] 2dip
+  [ @set offset: ] dip @set swap throw-parse-error
+] ;
 
 \\ A lexer holding an array of rule hashes and a precomputed first-character
 \\ dispatch table.
@@ -101,13 +110,13 @@ lexer: struct{ rules table } ;
 (try-bucket): ( scanner table bucket -- new-scanner token ) [
   dup #empty? [
     2drop
-    \ scanner
-    "unrecognized input at position " over position>> >string #append
-    over peek dup [
-      [ ": '" ] dip #append "'" #append #append
-    ] [ drop ] if
-    \ scanner message-str
-    nip f swap EInvalidArgument make-error throw
+    dup position>> [ H{ } offset: ] dip @set
+    \ scanner payload
+    swap peek dup [
+      [ text: ] dip dup [ @set ] dip
+      "unrecognized input '" swap #append "'" #append
+    ] [ drop "unrecognized input" ] if
+    throw-parse-error
   ] [
     dup #first match: @get
     \ scanner table bucket match-quot

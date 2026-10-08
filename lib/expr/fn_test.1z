@@ -118,3 +118,48 @@ test-missing-open-paren-throws: ( -- ) [
 test-dangling-comma-throws: ( -- ) [
   [ "f(a,) = a" parse-fn ] "dangling comma in parameter list throws" assert-error
 ] ;
+
+"error positions" test-section
+
+\ Run quot, which must raise `parse-error:`, and return the offset it reported.
+error-offset: ( quot -- offset ) [
+  [ ] recover
+  dup error-type: @get parse-error: "fn failure is a parse error" assert=
+  data: @get offset: @get
+] ;
+
+test-missing-equals-position: ( -- ) [
+  [ "square(x) x * x" parse-fn ] error-offset 15 "missing '=' is reported at the end of source" assert=
+] ;
+
+test-short-header-position: ( -- ) [
+  [ "square = x" parse-fn ] error-offset 7 "a too-short header is reported at the '='" assert=
+] ;
+
+test-dangling-comma-position: ( -- ) [
+  [ "f(a,) = a" parse-fn ] error-offset 3 "a dangling comma is reported at the comma" assert=
+] ;
+
+test-header-close-paren-position: ( -- ) [
+  [ "f(a = 1" parse-fn ] error-offset 2 "a header not ending in ')' is reported at its last token" assert=
+] ;
+
+test-function-name-position: ( -- ) [
+  [ " 1(a) = 1" parse-fn ] error-offset 1 "a non-word name is reported at the name" assert=
+] ;
+
+test-open-paren-position: ( -- ) [
+  [ "f a ) = 1" parse-fn ] error-offset 2 "a missing '(' is reported at the token in its place" assert=
+] ;
+
+test-parameter-delimiter-position: ( -- ) [
+  [ "f(a b) = 1" parse-fn ] error-offset 4 "a missing ',' is reported at the token in its place" assert=
+] ;
+
+test-parameter-name-position: ( -- ) [
+  [ "f(1) = x" parse-fn ] error-offset 2 "a non-word parameter is reported at the parameter" assert=
+] ;
+
+test-rhs-offset-indexes-the-declaration: ( -- ) [
+  [ "f(x) = 1 2" parse-fn ] error-offset 9 "an RHS failure is reported against the whole declaration" assert=
+] ;

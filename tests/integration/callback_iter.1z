@@ -82,6 +82,12 @@ counter-gen >iterator 0 [ + ] #reduce 6 "reduce callback iter" assert=
 [ option:none ] >iterator #count 0 "empty generator count is 0" assert=
 [ option:none ] >iterator #next? option:none? "empty generator next? is none" assert-true
 
+"#next? propagates a generator's error" test-section
+
+[ [ f "boom" EInvalidArgument make-error throw ] >iterator #next? ] [ ] recover
+dup error-type: @get invalid-argument: "a generator error is not exhaustion" assert=
+message: @get "boom" "the generator's error arrives intact" assert=
+
 "Sequence >iterator still works" test-section
 
 V{ 1 2 3 } >iterator #collect { 1 2 3 } "vector round-trips through >iterator" assert=

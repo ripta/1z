@@ -332,3 +332,29 @@ test-empty-statement-between-separators: ( -- ) [
 test-unclosed-call: ( -- ) [
   [ "a(1" parse-stmt ] "an unclosed argument list throws" assert-error
 ] ;
+
+"parse error positions" test-section
+
+\ Run quot, which must raise, and return the error it raised.
+caught: ( quot -- error ) [ [ ] recover ] ;
+
+test-missing-separator-position: ( -- ) [
+  [ "a() b()" parse-stmt ] caught
+  dup message: @get "expected ';' or '}', got 'b' at position 4" "missing separator message" assert=
+  dup error-type: @get parse-error: "missing separator is a parse error" assert=
+  data: @get
+  dup offset: @get 4 "missing separator offset" assert=
+  text: @get "b" "missing separator text" assert=
+] ;
+
+test-missing-then-position: ( -- ) [
+  [ "if ready() a()" parse-stmt ] caught
+  dup message: @get "expected 'then', got 'a' at position 11" "missing then message" assert=
+  data: @get offset: @get 11 "missing then offset" assert=
+] ;
+
+test-missing-then-at-end-carries-no-data: ( -- ) [
+  [ "if ready()" parse-stmt ] caught
+  dup error-type: @get parse-error: "end of input is a parse error" assert=
+  data: @get f "end of input carries no data" assert=
+] ;

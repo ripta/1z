@@ -152,7 +152,16 @@ pos>> 6 "multi-byte: second word at codepoint 6 (not byte 7)" assert=
 "error includes position" test-section
 [ "ab!cd" V{ } ALPHA-RULE #push! >array <lexer> tokenize #collect ]
 [ ] recover
-message: @get "position 2" #in? "error mentions position" assert-true
+dup message: @get "unrecognized input '!' at position 2" "error message quotes input and position" assert=
+dup error-type: @get parse-error: "unrecognized input is a parse error" assert=
+data: @get
+dup offset: @get 2 "unrecognized input offset" assert=
+text: @get "!" "unrecognized input text" assert=
+
+"error after the first token propagates through #next?" test-section
+"ab!cd" V{ } ALPHA-RULE #push! >array <lexer> tokenize
+dup #next? option:some> value>> "ab" "first token precedes the failure" assert=
+[ #next? ] [ ] recover nip error-type: @get parse-error: "a lexer failure is not exhaustion" assert=
 
 "inspect" test-section
 number: "42" 0 make-token inspect

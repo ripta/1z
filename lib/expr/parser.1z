@@ -45,48 +45,31 @@ EXPR-OPS: const [
 tokenize-expr: ( source: string -- iterator ) [ EXPR-LEXER tokenize ] ;
 
 private{
-  (throw-invalid-argument): ( message -- ) [
-    f swap EInvalidArgument make-error throw
+  (unexpected-expression): never-returns ( token -- * ) [
+    "expected expression, got '" throw-token-error
   ] ;
 
-  (unexpected-expression): ( token -- ) [
-    dup value>> swap pos>>
-    "expected expression, got '" <rot-
-    #append "' at byte " #append
-    swap >string #append
-    (throw-invalid-argument)
-  ] ;
-
-  (expected-close-paren): ( token/f -- ) [
+  (expected-close-paren): never-returns ( token/f -- * ) [
     dup f = [
-      drop "expected ')' at end of input"
+      drop f "expected ')' at end of input" EParseError make-error throw
     ] [
-      dup value>> swap pos>>
-      "expected ')', got '" <rot-
-      #append "' at byte " #append
-      swap >string #append
+      "expected ')', got '" throw-token-error
     ] if
-    (throw-invalid-argument)
   ] ;
 
-  (expected-comma-or-close): ( token/f -- ) [
+  (expected-comma-or-close): never-returns ( token/f -- * ) [
     dup f = [
-      drop "expected ',' or ')' in argument list at end of input"
+      drop f "expected ',' or ')' in argument list at end of input" EParseError make-error throw
     ] [
-      dup value>> swap pos>>
-      "expected ',' or ')' in argument list, got '" <rot-
-      #append "' at byte " #append
-      swap >string #append
+      "expected ',' or ')' in argument list, got '" throw-token-error
     ] if
-    (throw-invalid-argument)
   ] ;
 
   \ Wrap a number token's resolved scalar value as a literal node.
   (parse-literal): ( token -- expr-node ) [
-    value>> resolve-literal
-    [ lit ]
-    [ drop "invalid numeric literal" (throw-invalid-argument) ]
-    if
+    dup value>> resolve-literal [ nip lit ] [
+      drop pos>> [ H{ } offset: ] dip @set "invalid numeric literal" throw-parse-error
+    ] if
   ] ;
 
   \ Parse a parenthesized sub-expression and consume the closing ')'. Parens only

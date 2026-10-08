@@ -1408,7 +1408,13 @@ receive?: ( ch -- option ) [ [ receive >option:some ] [ 2drop option:none ] reco
 ] ;
 
 \\ Advance an iterator, returning some(value) or none if exhausted.
-#next?: ( iter -- option ) [ [ #next >option:some ] [ 2drop option:none ] recover ] ;
+\\
+\\ Only exhaustion becomes none. Any other error raised while producing the next value propagates.
+#next?: ( iter -- option ) [
+  [ #next >option:some ] [
+    dup error-type: @get iterator-exhausted: = [ 2drop option:none ] [ nip throw ] if
+  ] recover
+] ;
 
 \\ Close an iterator, running its cleanup quotation if present.
 \\ Propagates through adapter chains (#map, #filter, #take, #drop).

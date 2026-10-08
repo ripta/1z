@@ -39,23 +39,13 @@ STMT-LEXER: const [
 tokenize-stmt: ( source: string -- iterator ) [ STMT-LEXER tokenize ] ;
 
 private{
-  (throw-invalid-argument): ( message -- ) [
-    f swap EInvalidArgument make-error throw
-  ] ;
-
   \ Report an unexpected token, naming what was expected in its place.
-  (unexpected-token): ( expected: string token/f -- ) [
+  (unexpected-token): never-returns ( expected: string token/f -- * ) [
     dup f = [
-      drop " at end of input" #append
+      drop " at end of input" #append f swap EParseError make-error throw
     ] [
-      dup value>> swap pos>>
-      \ expected value pos
-      <rot- ", got '" #append
-      \ value pos message
-      <rot- #append "' at byte " #append
-      swap >string #append
+      swap ", got '" #append throw-token-error
     ] if
-    (throw-invalid-argument)
   ] ;
 
   \ Net brace nesting contributed by one raw 1z token. Counting characters
