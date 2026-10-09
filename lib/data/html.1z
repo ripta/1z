@@ -17,8 +17,6 @@ private{
     dup (escapes) -rot> @get-or
   ] ;
 
-  (html-error): never-returns ( msg -- * ) [ f swap EInvalidArgument make-error throw ] ;
-
   (named-entities): ( -- hash ) H{
     "amp" "&"
     "lt" "<"
@@ -137,14 +135,29 @@ private{
     >>pos
   ] ;
 
-  \ Strict step: throw EInvalidArgument on any malformed entity.
+  (unterminated-entity-error): never-returns ( state -- * ) [
+    pos>> [ H{ } offset: ] dip @set "unterminated HTML entity" throw-parse-error
+  ] ;
+
+  \ The payload spans the entity from its `&` through its `;`, with `end:` exclusive.
+  (invalid-entity-error): never-returns ( state semi-idx: fixnum -- * ) [
+    1 + [ dup pos>> swap src>> ] dip swap
+    \ start end src
+    2 pick-n 2 pick-n #slice
+    \ start end text
+    H{ } text: 2 pick-n @set end: 3 pick-n @set offset: 4 pick-n @set
+    \ start end text payload
+    "invalid HTML entity '" 2 pick-n #append "'" #append throw-parse-error
+  ] ;
+
+  \ Strict step: raise parse-error: on any malformed entity.
   (us-step-strict): ( state -- state ) [
     dup 0 (us-char-at) "&" =
     [
       dup (us-find-semi)
       dup f =
       [
-        drop "unterminated HTML entity" (html-error)
+        drop (unterminated-entity-error)
       ]
       [
         over src>>
@@ -153,7 +166,7 @@ private{
         (decode-entity?)
         dup f =
         [
-          drop drop "invalid HTML entity" (html-error)
+          drop (invalid-entity-error)
         ]
         [
           swap
@@ -217,11 +230,14 @@ escape: ( string -- string ) [
 \\ Decode HTML entities into their literal characters. Recognizes the five
 \\ named entities `&amp;`, `&lt;`, `&gt;`, `&quot;`, `&apos;` and numeric
 \\ character references `&#NN;` (decimal) and `&#xHH;` / `&#XHH;` (hex,
-\\ either case for the prefix and for the digits). Throws `EInvalidArgument`
-\\ on a bare `&`, an unterminated `&foo`, an unknown named entity, a non-digit
-\\ numeric body, a codepoint above `0x10FFFF`, a surrogate codepoint
-\\ (`0xD800..0xDFFF`), or `&#0;`. Use `unescape(permissive)` to leave
-\\ unrecognized entities in place instead.
+\\ either case for the prefix and for the digits).
+\\
+\\ A bare `&` or an unterminated `&foo` raises `parse-error:` at the `&`. So does an unknown named
+\\ entity, a non-digit numeric body, a codepoint above `0x10FFFF`, a surrogate codepoint
+\\ (`0xD800..0xDFFF`), or `&#0;`. Those carry the entity under `text:` and its exclusive end under
+\\ `end:`.
+\\
+\\ Use `unescape(permissive)` to leave unrecognized entities in place instead.
 unescape: ( string -- string ) [
   0 "" make-html-unescape-state
   [ dup (us-remaining) 0 > ] [ (us-step-strict) ] while

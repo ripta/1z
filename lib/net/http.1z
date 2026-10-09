@@ -208,7 +208,7 @@ read-request: ( stream -- request ) [
 \\ decoded key to an array of decoded values, accumulating in the order they
 \\ appeared. The body bytes are the ones the dispatch layer read eagerly and
 \\ attached to the request, so a handler calls `request body>> read-form`.
-\\ Throws EInvalidArgument on malformed percent sequences. Empty segments and
+\\ Raises parse-error: on malformed percent sequences. Empty segments and
 \\ pairs without `=` follow the WHATWG application/x-www-form-urlencoded
 \\ parser: empty segments are dropped; a bare key produces an empty-string
 \\ value.

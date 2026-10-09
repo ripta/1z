@@ -203,7 +203,7 @@ PASS: stray & a entry
 Stack: [ H{ b: { "2" } a: { "1" } } ]
 PASS: stray & b entry
 Stack: [ ]
-=== read-form: malformed percent throws EInvalidArgument ===
+=== read-form: malformed percent throws EParseError ===
 Stack: [ ]
 PASS: malformed % throws
 Stack: [ ]

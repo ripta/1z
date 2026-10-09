@@ -2,16 +2,6 @@
 
 use "strings" ;
 
-(url-error): never-returns ( msg -- * ) [ f swap EInvalidArgument make-error throw ] ;
-
-(invalid-hex-error): never-returns ( -- * ) [
-  "invalid percent-encoded hex digit" (url-error)
-] ;
-
-(truncated-error): never-returns ( -- * ) [
-  "truncated percent-encoded sequence" (url-error)
-] ;
-
 (upper-byte?): ( byte -- ? ) [ dup 0x41 >= swap 0x5A <= and ] ;
 
 (lower-byte?): ( byte -- ? ) [ dup 0x61 >= swap 0x7A <= and ] ;
@@ -37,8 +27,8 @@ use "strings" ;
   dup 10 < [ 0x30 + ] [ 55 + ] if
 ] ;
 
-\ Map a hex-digit byte (0-9, A-F, a-f) to its 0..15 value; throw otherwise.
-(hex-byte>nibble): ( byte -- n ) [
+\ Map a hex-digit byte (0-9, A-F, a-f) to its 0..15 value, or f otherwise.
+(hex-byte>nibble?): ( byte -- n/f ) [
   dup 0x30 >= over 0x39 <= and
   [ 0x30 - ]
   [
@@ -47,7 +37,7 @@ use "strings" ;
     [
       dup 0x61 >= over 0x66 <= and
       [ 0x61 - 10 + ]
-      [ drop (invalid-hex-error) ]
+      [ drop f ]
       if
     ]
     if
@@ -79,12 +69,40 @@ encode-bytes: ( bytes -- bytes ) [
   B{ } [ (encode-byte-into) ] #reduce
 ] ;
 
-url-decode-state: mutable struct{ src pos out } ;
+\\ Percent-decoder state. `base` is where `src` starts within the caller's input.
+\\
+\\ `text?` records that the input was a string, so a failure reports a codepoint offset rather than a
+\\ byte index.
+url-decode-state: mutable struct{ src pos out base text? } ;
 
 (dec-remaining): ( state -- n ) [ dup src>> #len swap pos>> - ] ;
 
 (dec-src-at): ( state offset -- byte ) [
   over pos>> + over src>> swap #nth nip
+] ;
+
+\ Raise at the byte delta past the cursor. That byte is a `%` or follows a `%` or a hex digit, all
+\ ASCII, so a string input's prefix ends on a codepoint boundary.
+(dec-error-at): never-returns ( state delta: fixnum what: string -- * ) [
+  [
+    over pos>> +
+    over text?>> [ [ dup src>> ] dip 0 swap #slice bytes> #len ] when
+    swap base>> +
+  ] dip
+  [ [ H{ } offset: ] dip @set ] dip throw-parse-error
+] ;
+
+(truncated-error): never-returns ( state -- * ) [
+  0 "truncated percent-encoded sequence" (dec-error-at)
+] ;
+
+\ Read the hex digit at the byte delta past the cursor, raising at it if it is not one.
+(dec-nibble-at): ( state delta: fixnum -- state n ) [
+  2dup (dec-src-at) (hex-byte>nibble?)
+  dup f =
+  [ drop "invalid percent-encoded hex digit" (dec-error-at) ]
+  [ nip ]
+  if
 ] ;
 
 (dec-append): ( state byte -- state ) [
@@ -101,8 +119,8 @@ url-decode-state: mutable struct{ src pos out } ;
   [
     drop
     dup (dec-remaining) 3 < [ (truncated-error) ] when
-    dup 1 (dec-src-at) (hex-byte>nibble) 4 shift-left
-    over 2 (dec-src-at) (hex-byte>nibble) bitor
+    1 (dec-nibble-at) 4 shift-left
+    [ 2 (dec-nibble-at) ] dip bitor
     (dec-append) 3 (dec-advance)
   ]
   [
@@ -111,27 +129,30 @@ url-decode-state: mutable struct{ src pos out } ;
   if
 ] ;
 
-\\ RFC 3986 percent-decode a byte sequence. Any `%HH` triple (hex digits in
-\\ either case) decodes to the byte it represents; every other byte passes
-\\ through unchanged. Throws `EInvalidArgument` on a trailing `%` with fewer
-\\ than two hex digits remaining, or on a `%XY` triple where `X` or `Y` is
-\\ not a hex digit.
-decode-bytes: ( bytes -- bytes ) [
-  0 B{ } make-url-decode-state
+(decode-bytes-at): ( bytes base: fixnum text? -- bytes ) [
+  [ 0 B{ } ] 2dip make-url-decode-state
   [ dup (dec-remaining) 0 > ] [ (dec-step) ] while
   out>>
 ] ;
+
+\\ RFC 3986 percent-decode a byte sequence. Any `%HH` triple (hex digits in either case) decodes to
+\\ the byte it represents; every other byte passes through unchanged.
+\\
+\\ A trailing `%` with fewer than two bytes after it raises `parse-error:` at the `%`. A `%XY` triple
+\\ where `X` or `Y` is not a hex digit raises at the first bad digit. The `offset:` is a byte index.
+decode-bytes: ( bytes -- bytes ) [ 0 f (decode-bytes-at) ] ;
 
 \\ RFC 3986 percent-encode a string. The string is interpreted as UTF-8 bytes
 \\ and passed to `encode-bytes`; the result is ASCII (unreserved characters
 \\ plus `%HH` triples) and is re-wrapped as a string.
 encode: ( string -- string ) [ >bytes encode-bytes bytes> ] ;
 
-\\ RFC 3986 percent-decode a string. The string is interpreted as UTF-8 bytes
-\\ and passed to `decode-bytes`; the resulting bytes are re-wrapped as a
-\\ string. Throws `EInvalidArgument` on malformed `%HH` sequences, matching
-\\ the byte-level decoder.
-decode: ( string -- string ) [ >bytes decode-bytes bytes> ] ;
+\\ RFC 3986 percent-decode a string. The string is interpreted as UTF-8 bytes and decoded as by
+\\ `decode-bytes`; the resulting bytes are re-wrapped as a string.
+\\
+\\ Malformed `%HH` sequences raise as in `decode-bytes`, with `offset:` a codepoint offset into the
+\\ string.
+decode: ( string -- string ) [ >bytes 0 t (decode-bytes-at) bytes> ] ;
 
 (encode-byte-into-form): ( acc byte -- acc' ) [
   dup 0x20 =
@@ -156,19 +177,26 @@ encode(form): ( string -- string ) [ >bytes (encode-bytes-form) bytes> ] ;
   if
 ] ;
 
-\\ application/x-www-form-urlencoded byte-level decode. `+` decodes to space;
-\\ `%HH` triples decode as in `decode-bytes` (so `%2B` decodes to a literal
-\\ `+`). Throws `EInvalidArgument` on malformed `%` sequences.
-decode-bytes(form): ( bytes -- bytes ) [
-  0 B{ } make-url-decode-state
+(decode-bytes-form-at): ( bytes base: fixnum text? -- bytes ) [
+  [ 0 B{ } ] 2dip make-url-decode-state
   [ dup (dec-remaining) 0 > ] [ (dec-step-form) ] while
   out>>
 ] ;
 
-\\ application/x-www-form-urlencoded string-level decode. Wraps
-\\ `decode-bytes(form)`. Throws `EInvalidArgument` on malformed `%HH`
-\\ sequences.
-decode(form): ( string -- string ) [ >bytes decode-bytes(form) bytes> ] ;
+\\ application/x-www-form-urlencoded byte-level decode. `+` decodes to space; `%HH` triples decode as
+\\ in `decode-bytes` (so `%2B` decodes to a literal `+`).
+\\
+\\ Malformed `%` sequences raise as in `decode-bytes`.
+decode-bytes(form): ( bytes -- bytes ) [ 0 f (decode-bytes-form-at) ] ;
+
+(decode-form-at): ( string: string base: fixnum -- string ) [
+  [ >bytes ] dip t (decode-bytes-form-at) bytes>
+] ;
+
+\\ application/x-www-form-urlencoded string-level decode, as by `decode-bytes(form)`.
+\\
+\\ Malformed `%HH` sequences raise as in `decode`, with `offset:` a codepoint offset into the string.
+decode(form): ( string -- string ) [ 0 (decode-form-at) ] ;
 
 \ Append `value` to the array stored at `key` in `hash`. Creates a fresh
 \ single-element array when the key is absent. Returns the updated hash.
@@ -180,26 +208,32 @@ decode(form): ( string -- string ) [ >bytes decode-bytes(form) bytes> ] ;
   @set              \ hash'
 ] ;
 
-\ Decode one `key=value` (or bare-key) segment and append it to the
-\ accumulator hash. Empty segments are skipped.
-(decode-query-pair): ( form pair -- form ) [
+\ Decode one `key=value` or bare-key segment that starts at codepoint offset base, and append it to
+\ the accumulator hash. Empty segments are skipped.
+(decode-query-pair): ( form base: fixnum pair: string -- form ) [
   dup #empty?
-  [ drop ]
+  [ 2drop ]
   [
     dup "=" split-once?
     dup option:some?
     [ option:some> nip
-      dup #first decode(form)
-      swap #last decode(form)
+      dup #first #len 1 + 2 pick-n +
+      over #last swap (decode-form-at)
+      [ #first swap (decode-form-at) ] dip
       (append-multi)
     ]
     [ drop
-      decode(form) ""
+      swap (decode-form-at) ""
       (append-multi)
     ]
     if
   ]
   if
+] ;
+
+\ Decode one segment and advance base past it and its `&`.
+(decode-query-segment): ( form base: fixnum segment: string -- form base: fixnum ) [
+  2dup #len 1 + + [ (decode-query-pair) ] dip
 ] ;
 
 \\ Decode an `application/x-www-form-urlencoded` body into a hash mapping
@@ -209,14 +243,17 @@ decode(form): ( string -- string ) [ >bytes decode-bytes(form) bytes> ] ;
 \\ `decode(form)` (so `+` decodes to space and `%2B` to a literal `+`).
 \\ A segment without `=` becomes a bare key with an empty-string value.
 \\ Repeated keys accumulate; a key seen once still yields a one-element
-\\ array. An empty input yields the empty hash. Throws `EInvalidArgument`
-\\ on malformed `%HH` sequences inside any segment.
+\\ array. An empty input yields the empty hash.
+\\
+\\ Malformed `%HH` sequences inside any segment raise as in `decode`, with `offset:` a codepoint offset
+\\ into the whole input rather than into the segment.
 decode-query: ( string -- hash ) [
   dup #empty?
   [ drop H{ } ]
   [
     "&" split
-    H{ } [ (decode-query-pair) ] #reduce
+    H{ } 0 <rot- [ (decode-query-segment) ] #each
+    drop
   ]
   if
 ] ;

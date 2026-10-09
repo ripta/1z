@@ -171,8 +171,8 @@ dup @keys #len 2 "stray & does not create empty entry" assert=
 dup "a" @get { "1" } "stray & a entry" assert=
 "b" @get { "2" } "stray & b entry" assert=
 
-"read-form: malformed percent throws EInvalidArgument" test-section
-[ "a=%" >bytes read-form ] invalid-argument: "malformed % throws" assert-error-type
+"read-form: malformed percent throws EParseError" test-section
+[ "a=%" >bytes read-form ] parse-error: "malformed % throws" assert-error-type
 
 "read-request: eagerly attaches the body" test-section
 <pipe> dup "POST /submit HTTP/1.1\r\nContent-Length: 10\r\n\r\nname=alice" stream-write drop

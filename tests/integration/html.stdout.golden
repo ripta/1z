@@ -91,22 +91,22 @@ Stack: [ "café & 中" ]
 Stack: [ "café & 中" "café & 中" ]
 PASS: escape then unescape round-trips multibyte input
 Stack: [ ]
-=== unescape: malformed input throws EInvalidArgument ===
+=== unescape: malformed input throws EParseError ===
 Stack: [ ]
 PASS: bare & at end throws
 Stack: [ ]
-Stack: [ [ "&" unescape ] invalid-argument: ]
-PASS: bare & is EInvalidArgument
+Stack: [ [ "&" unescape ] parse-error: ]
+PASS: bare & is EParseError
 Stack: [ ]
 PASS: unterminated &foo throws
 Stack: [ ]
-Stack: [ [ "&foo" unescape ] invalid-argument: ]
-PASS: unterminated entity is EInvalidArgument
+Stack: [ [ "&foo" unescape ] parse-error: ]
+PASS: unterminated entity is EParseError
 Stack: [ ]
 PASS: unknown named entity throws
 Stack: [ ]
-Stack: [ [ "&unknown;" unescape ] invalid-argument: ]
-PASS: unknown named entity is EInvalidArgument
+Stack: [ [ "&unknown;" unescape ] parse-error: ]
+PASS: unknown named entity is EParseError
 Stack: [ ]
 PASS: empty entity body throws
 Stack: [ ]
@@ -122,8 +122,37 @@ PASS: surrogate codepoint throws
 Stack: [ ]
 PASS: NUL (&#0;) throws
 Stack: [ ]
-Stack: [ [ "&#0;" unescape ] invalid-argument: ]
-PASS: NUL is EInvalidArgument
+Stack: [ [ "&#0;" unescape ] parse-error: ]
+PASS: NUL is EParseError
+Stack: [ ]
+=== unescape: failure positions ===
+Stack: [ ]
+Stack: [ ]
+PASS: unterminated message
+Stack: [ ]
+Stack: [ H{ offset: 0 } ]
+PASS: bare & reports its offset
+Stack: [ H{ offset: 0 } ]
+PASS: unterminated entity carries no end
+Stack: [ H{ offset: 0 } ]
+PASS: unterminated entity carries no text
+Stack: [ ]
+PASS: unterminated &foo reports its &
+Stack: [ ]
+Stack: [ "invalid HTML entity '&unknown;' at position 1" ]
+PASS: invalid entity message
+Stack: [ ]
+Stack: [ H{ text: "&unknown;" offset: 1 end: 10 } ]
+PASS: invalid entity offset is its &
+Stack: [ H{ text: "&unknown;" offset: 1 end: 10 } ]
+PASS: invalid entity end is one past its ;
+Stack: [ H{ text: "&unknown;" offset: 1 end: 10 } ]
+PASS: invalid entity text
+Stack: [ ]
+Stack: [ H{ text: "&#0;" offset: 1 end: 5 } ]
+PASS: the offset counts codepoints, not bytes
+Stack: [ H{ text: "&#0;" offset: 1 end: 5 } ]
+PASS: the end counts codepoints, not bytes
 Stack: [ ]
 === unescape(permissive): each named entity decodes identically ===
 Stack: [ ]

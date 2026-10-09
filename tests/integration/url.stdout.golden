@@ -81,13 +81,13 @@ Stack: [ ]
 Stack: [ ]
 PASS: trailing % alone throws
 Stack: [ ]
-Stack: [ [ [ 37 ] make-byte-array decode-bytes ] invalid-argument: ]
-PASS: trailing % alone is EInvalidArgument
+Stack: [ [ [ 37 ] make-byte-array decode-bytes ] parse-error: ]
+PASS: trailing % alone is EParseError
 Stack: [ ]
 PASS: %A with one trailing digit throws
 Stack: [ ]
-Stack: [ [ [ 37 65 ] make-byte-array decode-bytes ] invalid-argument: ]
-PASS: %A is EInvalidArgument
+Stack: [ [ [ 37 65 ] make-byte-array decode-bytes ] parse-error: ]
+PASS: %A is EParseError
 Stack: [ ]
 PASS: %GA (first non-hex) throws
 Stack: [ ]
@@ -96,6 +96,24 @@ Stack: [ ]
 PASS: %!" (both non-hex) throws
 Stack: [ ]
 PASS: trailing % after content throws
+Stack: [ ]
+=== decode-bytes: failure positions ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: truncated message
+Stack: [ ]
+PASS: truncated sequence reports its %
+Stack: [ ]
+PASS: invalid hex message
+Stack: [ ]
+PASS: %GA reports the first digit
+Stack: [ ]
+PASS: %AG reports the second digit
+Stack: [ ]
+PASS: both digits bad reports the first
+Stack: [ ]
+PASS: byte input reports a byte index
 Stack: [ ]
 === encode: string-layer wrapper ===
 Stack: [ ]
@@ -148,12 +166,22 @@ Stack: [ ]
 Stack: [ ]
 PASS: trailing % alone (string) throws
 Stack: [ ]
-Stack: [ [ "%" decode ] invalid-argument: ]
-PASS: trailing % alone (string) is EInvalidArgument
+Stack: [ [ "%" decode ] parse-error: ]
+PASS: trailing % alone (string) is EParseError
 Stack: [ ]
 PASS: %G1 (first non-hex, string) throws
 Stack: [ ]
 PASS: %1G (second non-hex, string) throws
+Stack: [ ]
+PASS: %1G reports the second digit
+Stack: [ ]
+PASS: string input reports a codepoint offset
+Stack: [ ]
+PASS: truncated after multibyte text reports a codepoint offset
+Stack: [ ]
+PASS: a multibyte character after % reports it as the bad digit
+Stack: [ ]
+PASS: a multibyte lead byte after % reports it as the bad digit
 Stack: [ ]
 === encode(form): space-as-+ ===
 Stack: [ ]
@@ -241,13 +269,17 @@ Stack: [ ]
 Stack: [ ]
 PASS: trailing % alone throws
 Stack: [ ]
-Stack: [ [ [ 37 ] make-byte-array decode-bytes(form) ] invalid-argument: ]
-PASS: trailing % alone is EInvalidArgument
+Stack: [ [ [ 37 ] make-byte-array decode-bytes(form) ] parse-error: ]
+PASS: trailing % alone is EParseError
 Stack: [ ]
 PASS: %GA (non-hex) throws
 Stack: [ ]
 Stack: [ [ [ 43 37 ] make-byte-array decode-bytes(form) ] ]
 PASS: + then trailing % still throws
+Stack: [ ]
+PASS: + then trailing % reports the %
+Stack: [ ]
+PASS: decode(form) reports a codepoint offset
 Stack: [ ]
 === decode-query: typical key-value pairs ===
 Stack: [ ]
@@ -327,12 +359,22 @@ Stack: [ ]
 Stack: [ ]
 PASS: trailing % in value throws
 Stack: [ ]
-Stack: [ [ "k=%" decode-query ] invalid-argument: ]
-PASS: trailing % is EInvalidArgument
+Stack: [ [ "k=%" decode-query ] parse-error: ]
+PASS: trailing % is EParseError
 Stack: [ ]
 PASS: non-hex in key throws
 Stack: [ ]
 PASS: non-hex in value throws
+Stack: [ ]
+=== decode-query: failure positions index the whole input ===
+Stack: [ ]
+PASS: trailing % in the first value
+Stack: [ ]
+PASS: trailing % in a later value
+Stack: [ ]
+PASS: non-hex in a later key, past an empty segment
+Stack: [ ]
+PASS: bare key after multibyte text reports a codepoint offset
 Stack: [ ]
 === encode-query: single-key cases ===
 Stack: [ ]

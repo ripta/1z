@@ -126,29 +126,51 @@ Stack: [ <uri uri-data{ uri-scheme: "http" uri-has-authority?: t uri-authority: 
 PASS: alias fragment
 Stack: [ <uri uri-data{ uri-scheme: "http" uri-has-authority?: t uri-authority: "example.com" uri-host: "example.com" uri-port: "" uri-path: "/p" uri-has-query?: t uri-query: "q" uri-has-fragment?: t uri-fragment: "f" }> ]
 Stack: [ ]
-=== parse(rfc3986): invalid input throws EInvalidArgument ===
+=== parse(rfc3986): invalid input throws EParseError ===
 Stack: [ ]
 PASS: empty input throws
 Stack: [ ]
-Stack: [ [ "" parse(rfc3986) ] invalid-argument: ]
-PASS: empty input is EInvalidArgument
+Stack: [ [ "" parse(rfc3986) ] parse-error: ]
+PASS: empty input is EParseError
 Stack: [ ]
 PASS: missing scheme separator throws
 Stack: [ ]
-Stack: [ [ "no-scheme-here" parse(rfc3986) ] invalid-argument: ]
-PASS: missing scheme is EInvalidArgument
+Stack: [ [ "no-scheme-here" parse(rfc3986) ] parse-error: ]
+PASS: missing scheme is EParseError
 Stack: [ ]
 PASS: empty scheme throws
 Stack: [ ]
-Stack: [ [ ":authority-no-scheme" parse(rfc3986) ] invalid-argument: ]
-PASS: empty scheme is EInvalidArgument
+Stack: [ [ ":authority-no-scheme" parse(rfc3986) ] parse-error: ]
+PASS: empty scheme is EParseError
 Stack: [ ]
 PASS: digit-first scheme throws strict
 Stack: [ ]
-Stack: [ [ "1http://x" parse(rfc3986) ] invalid-argument: ]
-PASS: digit-first scheme is EInvalidArgument
+Stack: [ [ "1http://x" parse(rfc3986) ] parse-error: ]
+PASS: digit-first scheme is EParseError
 Stack: [ ]
 PASS: invalid scheme byte throws strict
+Stack: [ ]
+=== parse(rfc3986): failure positions ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: empty input reports offset 0
+Stack: [ ]
+PASS: missing separator message
+Stack: [ ]
+PASS: missing separator reports the end of input
+Stack: [ ]
+PASS: empty scheme reports its ':'
+Stack: [ ]
+PASS: digit-first scheme reports the digit
+Stack: [ ]
+PASS: invalid scheme message
+Stack: [ ]
+PASS: invalid scheme reports the first bad character
+Stack: [ ]
+PASS: the offset counts codepoints, not bytes
+Stack: [ ]
+PASS: whatwg missing separator reports the end of input
 Stack: [ ]
 === parse(whatwg): permissive scheme bytes for special schemes ===
 Stack: [ ]

@@ -174,6 +174,24 @@ fragment>>: ( uri -- s ) [ unmake-uri uri-fragment>> ] ;
   if
 ] ;
 
+(uri-error-at): never-returns ( offset: fixnum what: string -- * ) [
+  [ [ H{ } offset: ] dip @set ] dip throw-parse-error
+] ;
+
+\ Index of the first character in a non-empty scheme that breaks the RFC 3986 production.
+(first-invalid-scheme-index): ( s: string -- n ) [
+  dup 0 #nth alpha?
+  [ <scanner> advance [ (scheme-tail-char?) ] skip-while position>> ]
+  [ drop 0 ]
+  if
+] ;
+
+\ The scanner sits on the `:` that ends the scheme, so the scheme starts its length before it.
+(invalid-scheme-error): never-returns ( scanner scheme: string -- * ) [
+  [ position>> ] dip dup #len swap (first-invalid-scheme-index) swap - +
+  "invalid scheme" (uri-error-at)
+] ;
+
 \ === Per-stage scanner readers ===
 \ Each takes a scanner on top, returns the consumed component underneath
 \ the scanner so the orchestrator can chain stages without juggling.
@@ -182,13 +200,13 @@ fragment>>: ( uri -- s ) [ unmake-uri uri-fragment>> ] ;
   swap ":" take-until
   \ strict? scanner consumed
   dup f =
-  [ 3drop "missing scheme separator" (uri-error) ]
+  [ drop nip dup position>> swap rest #len + "missing scheme separator" (uri-error-at) ]
   [
-    dup #len 0 = [ 3drop "empty scheme" (uri-error) ] when
+    dup #len 0 = [ drop nip position>> "empty scheme" (uri-error-at) ] when
     \ strict? scanner consumed
     2 pick-n
     \ strict? scanner consumed strict?
-    [ dup (valid-rfc3986-scheme?) not [ "invalid scheme" (uri-error) ] when ] when
+    [ dup (valid-rfc3986-scheme?) not [ (invalid-scheme-error) ] when ] when
     \ strict? scanner consumed
     [ ":" expect ] dip
     \ strict? scanner' consumed
@@ -311,8 +329,10 @@ fragment>>: ( uri -- s ) [ unmake-uri uri-fragment>> ] ;
 
 \ === Parsers ===
 
-\\ Parse an absolute URI per RFC 3986. Throws `EInvalidArgument` on a
-\\ missing or invalid scheme, or any other structural malformation.
+\\ Parse an absolute URI per RFC 3986.
+\\
+\\ A missing, empty, or invalid scheme raises `parse-error:` with the fault's codepoint offset under
+\\ `offset:`.
 parse(rfc3986): ( s -- uri ) [ t (parse-uri-with-strictness) ] ;
 
 \\ Parse an absolute URI with WHATWG-style permissiveness for the URL-shaped

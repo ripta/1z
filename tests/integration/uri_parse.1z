@@ -98,26 +98,50 @@ dup fragment>> "f" "alias fragment" assert=
 drop
 
 \ -----------------------------------------------------------------------
-"parse(rfc3986): invalid input throws EInvalidArgument" test-section
+"parse(rfc3986): invalid input throws EParseError" test-section
 \ -----------------------------------------------------------------------
 
 [ "" parse(rfc3986) ] "empty input throws" assert-error
-[ "" parse(rfc3986) ] EInvalidArgument
-"empty input is EInvalidArgument" assert-error-type
+[ "" parse(rfc3986) ] EParseError
+"empty input is EParseError" assert-error-type
 
 [ "no-scheme-here" parse(rfc3986) ] "missing scheme separator throws" assert-error
-[ "no-scheme-here" parse(rfc3986) ] EInvalidArgument
-"missing scheme is EInvalidArgument" assert-error-type
+[ "no-scheme-here" parse(rfc3986) ] EParseError
+"missing scheme is EParseError" assert-error-type
 
 [ ":authority-no-scheme" parse(rfc3986) ] "empty scheme throws" assert-error
-[ ":authority-no-scheme" parse(rfc3986) ] EInvalidArgument
-"empty scheme is EInvalidArgument" assert-error-type
+[ ":authority-no-scheme" parse(rfc3986) ] EParseError
+"empty scheme is EParseError" assert-error-type
 
 [ "1http://x" parse(rfc3986) ] "digit-first scheme throws strict" assert-error
-[ "1http://x" parse(rfc3986) ] EInvalidArgument
-"digit-first scheme is EInvalidArgument" assert-error-type
+[ "1http://x" parse(rfc3986) ] EParseError
+"digit-first scheme is EParseError" assert-error-type
 
 [ "ht!tp://x" parse(rfc3986) ] "invalid scheme byte throws strict" assert-error
+
+\ -----------------------------------------------------------------------
+"parse(rfc3986): failure positions" test-section
+\ -----------------------------------------------------------------------
+
+\ The error never stays on the stack across a line, so its traceback stays out of the golden.
+error-of: ( quot -- error ) [ [ ] recover ] ;
+offset-of: ( quot -- n ) [ error-of data: @get offset: @get ] ;
+
+[ "" parse(rfc3986) ] offset-of 0 "empty input reports offset 0" assert=
+
+[ "no-scheme-here" parse(rfc3986) ] error-of message: @get "missing scheme separator at position 14" "missing separator message" assert=
+[ "no-scheme-here" parse(rfc3986) ] offset-of 14 "missing separator reports the end of input" assert=
+
+[ ":authority-no-scheme" parse(rfc3986) ] offset-of 0 "empty scheme reports its ':'" assert=
+
+[ "1http://x" parse(rfc3986) ] offset-of 0 "digit-first scheme reports the digit" assert=
+
+[ "ht!tp://x" parse(rfc3986) ] error-of message: @get "invalid scheme at position 2" "invalid scheme message" assert=
+[ "ht!tp://x" parse(rfc3986) ] offset-of 2 "invalid scheme reports the first bad character" assert=
+
+[ "aé!b:x" parse(rfc3986) ] offset-of 1 "the offset counts codepoints, not bytes" assert=
+
+[ "noscheme" parse(whatwg) ] offset-of 8 "whatwg missing separator reports the end of input" assert=
 
 \ -----------------------------------------------------------------------
 "parse(whatwg): permissive scheme bytes for special schemes" test-section

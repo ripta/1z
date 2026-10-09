@@ -96,19 +96,19 @@ use "data/html" ;
 "café & 中" escape unescape
 "escape then unescape round-trips multibyte input" assert=
 
-"unescape: malformed input throws EInvalidArgument" test-section
+"unescape: malformed input throws EParseError" test-section
 
 [ "&" unescape ] "bare & at end throws" assert-error
-[ "&" unescape ] EInvalidArgument
-"bare & is EInvalidArgument" assert-error-type
+[ "&" unescape ] EParseError
+"bare & is EParseError" assert-error-type
 
 [ "&foo" unescape ] "unterminated &foo throws" assert-error
-[ "&foo" unescape ] EInvalidArgument
-"unterminated entity is EInvalidArgument" assert-error-type
+[ "&foo" unescape ] EParseError
+"unterminated entity is EParseError" assert-error-type
 
 [ "&unknown;" unescape ] "unknown named entity throws" assert-error
-[ "&unknown;" unescape ] EInvalidArgument
-"unknown named entity is EInvalidArgument" assert-error-type
+[ "&unknown;" unescape ] EParseError
+"unknown named entity is EParseError" assert-error-type
 
 [ "&;" unescape ] "empty entity body throws" assert-error
 
@@ -123,8 +123,32 @@ use "data/html" ;
 [ "&#xD800;" unescape ] "surrogate codepoint throws" assert-error
 
 [ "&#0;" unescape ] "NUL (&#0;) throws" assert-error
-[ "&#0;" unescape ] EInvalidArgument
-"NUL is EInvalidArgument" assert-error-type
+[ "&#0;" unescape ] EParseError
+"NUL is EParseError" assert-error-type
+
+"unescape: failure positions" test-section
+
+\ The error never stays on the stack across a line, so its traceback stays out of the golden.
+error-of: ( quot -- error ) [ [ ] recover ] ;
+
+[ "&" unescape ] error-of message: @get "unterminated HTML entity at position 0" "unterminated message" assert=
+[ "&" unescape ] error-of data: @get
+dup offset: @get 0 "bare & reports its offset" assert=
+dup end: @has? "unterminated entity carries no end" assert-false
+text: @has? "unterminated entity carries no text" assert-false
+
+[ "ab&foo" unescape ] error-of data: @get offset: @get 2 "unterminated &foo reports its &" assert=
+
+[ "x&unknown;" unescape ] error-of message: @get
+"invalid HTML entity '&unknown;' at position 1" "invalid entity message" assert=
+[ "x&unknown;" unescape ] error-of data: @get
+dup offset: @get 1 "invalid entity offset is its &" assert=
+dup end: @get 10 "invalid entity end is one past its ;" assert=
+text: @get "&unknown;" "invalid entity text" assert=
+
+[ "é&#0;z" unescape ] error-of data: @get
+dup offset: @get 1 "the offset counts codepoints, not bytes" assert=
+end: @get 5 "the end counts codepoints, not bytes" assert=
 
 "unescape(permissive): each named entity decodes identically" test-section
 

@@ -85,17 +85,35 @@ B{ 0x2F 0x3F 0x3D } B{ 0x2F 0x3F 0x3D } decode-bytes
 "decode-bytes: malformed input throws" test-section
 
 [ B{ 0x25 } decode-bytes ] "trailing % alone throws" assert-error
-[ B{ 0x25 } decode-bytes ] EInvalidArgument
-"trailing % alone is EInvalidArgument" assert-error-type
+[ B{ 0x25 } decode-bytes ] EParseError
+"trailing % alone is EParseError" assert-error-type
 
 [ B{ 0x25 0x41 } decode-bytes ] "%A with one trailing digit throws" assert-error
-[ B{ 0x25 0x41 } decode-bytes ] EInvalidArgument
-"%A is EInvalidArgument" assert-error-type
+[ B{ 0x25 0x41 } decode-bytes ] EParseError
+"%A is EParseError" assert-error-type
 
 [ B{ 0x25 0x47 0x41 } decode-bytes ] "%GA (first non-hex) throws" assert-error
 [ B{ 0x25 0x41 0x47 } decode-bytes ] "%AG (second non-hex) throws" assert-error
 [ B{ 0x25 0x21 0x22 } decode-bytes ] "%!\" (both non-hex) throws" assert-error
 [ B{ 0x41 0x25 } decode-bytes ] "trailing % after content throws" assert-error
+
+"decode-bytes: failure positions" test-section
+
+\ The error never stays on the stack across a line, so its traceback stays out of the golden.
+error-of: ( quot -- error ) [ [ ] recover ] ;
+offset-of: ( quot -- n ) [ error-of data: @get offset: @get ] ;
+
+[ B{ 0x41 0x25 } decode-bytes ] error-of message: @get "truncated percent-encoded sequence at position 1" "truncated message" assert=
+[ B{ 0x41 0x25 } decode-bytes ] offset-of 1 "truncated sequence reports its %" assert=
+
+[ B{ 0x25 0x47 0x41 } decode-bytes ] error-of message: @get "invalid percent-encoded hex digit at position 1" "invalid hex message" assert=
+[ B{ 0x25 0x47 0x41 } decode-bytes ] offset-of 1 "%GA reports the first digit" assert=
+
+[ B{ 0x25 0x41 0x47 } decode-bytes ] offset-of 2 "%AG reports the second digit" assert=
+
+[ B{ 0x25 0x21 0x22 } decode-bytes ] offset-of 1 "both digits bad reports the first" assert=
+
+[ "é%G1" >bytes decode-bytes ] offset-of 3 "byte input reports a byte index" assert=
 
 "encode: string-layer wrapper" test-section
 
@@ -147,11 +165,19 @@ B{ 0x2F 0x3F 0x3D } B{ 0x2F 0x3F 0x3D } decode-bytes
 "decode: malformed string input throws" test-section
 
 [ "%" decode ] "trailing % alone (string) throws" assert-error
-[ "%" decode ] EInvalidArgument
-"trailing % alone (string) is EInvalidArgument" assert-error-type
+[ "%" decode ] EParseError
+"trailing % alone (string) is EParseError" assert-error-type
 
 [ "%G1" decode ] "%G1 (first non-hex, string) throws" assert-error
 [ "%1G" decode ] "%1G (second non-hex, string) throws" assert-error
+
+[ "%1G" decode ] offset-of 2 "%1G reports the second digit" assert=
+
+[ "é%G1" decode ] offset-of 2 "string input reports a codepoint offset" assert=
+
+[ "中文%" decode ] offset-of 2 "truncated after multibyte text reports a codepoint offset" assert=
+[ "%é" decode ] offset-of 1 "a multibyte character after % reports it as the bad digit" assert=
+[ "%é" >bytes decode-bytes ] offset-of 1 "a multibyte lead byte after % reports it as the bad digit" assert=
 
 "encode(form): space-as-+" test-section
 
@@ -238,12 +264,16 @@ B{ 0xFF } B{ 0x25 0x46 0x46 } decode-bytes(form)
 "decode-bytes(form): malformed input still throws" test-section
 
 [ B{ 0x25 } decode-bytes(form) ] "trailing % alone throws" assert-error
-[ B{ 0x25 } decode-bytes(form) ] EInvalidArgument
-"trailing % alone is EInvalidArgument" assert-error-type
+[ B{ 0x25 } decode-bytes(form) ] EParseError
+"trailing % alone is EParseError" assert-error-type
 
 [ B{ 0x25 0x47 0x41 } decode-bytes(form) ] "%GA (non-hex) throws" assert-error
 [ B{ 0x2B 0x25 } decode-bytes(form) ]
 "+ then trailing % still throws" assert-error
+
+[ B{ 0x2B 0x25 } decode-bytes(form) ] offset-of 1 "+ then trailing % reports the %" assert=
+
+[ "a+é%zz" decode(form) ] offset-of 4 "decode(form) reports a codepoint offset" assert=
 
 "decode-query: typical key-value pairs" test-section
 
@@ -322,11 +352,21 @@ H{ "中文" { "value" } } "%E4%B8%AD%E6%96%87=value" decode-query
 "decode-query: malformed input throws" test-section
 
 [ "k=%" decode-query ] "trailing % in value throws" assert-error
-[ "k=%" decode-query ] EInvalidArgument
-"trailing % is EInvalidArgument" assert-error-type
+[ "k=%" decode-query ] EParseError
+"trailing % is EParseError" assert-error-type
 
 [ "%G1=v" decode-query ] "non-hex in key throws" assert-error
 [ "k=%G1" decode-query ] "non-hex in value throws" assert-error
+
+"decode-query: failure positions index the whole input" test-section
+
+[ "k=%" decode-query ] offset-of 2 "trailing % in the first value" assert=
+
+[ "a=b&k=%" decode-query ] offset-of 6 "trailing % in a later value" assert=
+
+[ "a=b&&x%G1=v" decode-query ] offset-of 7 "non-hex in a later key, past an empty segment" assert=
+
+[ "é=1&bare%" decode-query ] offset-of 8 "bare key after multibyte text reports a codepoint offset" assert=
 
 "encode-query: single-key cases" test-section
 
