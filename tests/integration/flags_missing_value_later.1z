@@ -1,0 +1,9 @@
+\ A value flag that is not the first token reports its own index in args as the position.
+\ Here --count is at index 1, after --verbose, and has no following argument to consume.
+
+use "flags" ;
+
+verbose: flag{ type: boolean description: "Verbose output" } ;
+count: flag{ type: fixnum description: "A count" } ;
+
+{ "--verbose" "--count" } "Missing value program" parse-flags drop

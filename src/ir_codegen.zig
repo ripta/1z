@@ -5731,9 +5731,9 @@ fn compilePredBodyLoop(
     const entry_end = c._ir_END(ctx);
     const loop_ref = c._ir_LOOP_BEGIN(ctx, entry_end);
     state.recordBlockStart(loop_ref);
-    // AOT loop back-edges can arrive after callbacks moved ctx.stack.items.
-    // Refresh at the header so predicate/body slot accesses use the live base.
-    if (state.aot_mode and state.refresh_stack_fn != c.IR_UNUSED) {
+    // A back-edge can arrive after a callback in the body moved ctx.stack.items. Refresh at the
+    // header so predicate/body slot accesses use the live base.
+    if (state.refresh_stack_fn != c.IR_UNUSED) {
         refreshCachedStackPointer(state);
     }
 
@@ -9387,6 +9387,12 @@ fn emitIntrinsicTimes(ec: EmitCtx) IrCodegenError!ControlFlow {
     state.recordBlockStart(loop_ref);
     const counter_phi = c._ir_PHI_2(ctx, c.IR_I64, initial_n, c.IR_UNUSED);
 
+    // A back-edge can arrive after a callback in the body moved ctx.stack.items. Refresh at the
+    // header so body slot accesses use the live base.
+    if (state.refresh_stack_fn != c.IR_UNUSED) {
+        refreshCachedStackPointer(state);
+    }
+
     switch (quot_entry) {
         .quotation_body => |q| {
             resetStackToPhysicalPreservingRows(stack, sp.*);
@@ -9477,9 +9483,9 @@ fn emitIntrinsicLoop(ec: EmitCtx) IrCodegenError!ControlFlow {
     const entry_end = c._ir_END(ctx);
     const loop_ref = c._ir_LOOP_BEGIN(ctx, entry_end);
     state.recordBlockStart(loop_ref);
-    // AOT loop back-edges can arrive after callbacks moved ctx.stack.items.
-    // Refresh at the header so predicate slot accesses use the live base.
-    if (state.aot_mode and state.refresh_stack_fn != c.IR_UNUSED) {
+    // A back-edge can arrive after a callback in the body moved ctx.stack.items. Refresh at the
+    // header so predicate slot accesses use the live base.
+    if (state.refresh_stack_fn != c.IR_UNUSED) {
         refreshCachedStackPointer(state);
     }
 
@@ -11120,6 +11126,11 @@ fn compileWordPass(
             if (row_aware_self_loop) {
                 state.row_aware_loop = true;
                 setupRowAwareLoopEntry(&state, stack, &sp);
+            } else if (state.refresh_stack_fn != c.IR_UNUSED) {
+                // A nested call in the body can reallocate ctx.stack.items. Re-derive the base at
+                // the loop header so the back-edge does not keep the entry-time pointer into the
+                // freed buffer.
+                refreshCachedStackPointer(&state);
             }
         }
     }

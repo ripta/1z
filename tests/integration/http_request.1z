@@ -84,8 +84,13 @@ query-string>> "" "empty query string" assert=
 "read-request: EOF throws EUnexpectedEOF" test-section
 [ <pipe> stream-close read-request ] unexpected-eof: "EOF on empty stream" assert-error-type
 
-"read-request: malformed request line throws EMalformedRequest" test-section
-[ <pipe> dup "GET /\r\n\r\n" stream-write drop stream-close read-request ] malformed-request: "too few parts" assert-error-type
+"read-request: malformed request line raises parse-error:" test-section
+[ <pipe> dup "GET /\r\n\r\n" stream-write drop stream-close read-request ] parse-error: "too few parts" assert-error-type
+[ <pipe> dup "GET /\r\n\r\n" stream-write drop stream-close read-request ] [ ] recover
+dup message: @get "malformed request line 'GET /' at position 5" "malformed line message" assert=
+data: @get
+dup offset: @get 5 "malformed line points past its end" assert=
+text: @get "GET /" "malformed line carries the line as text" assert=
 
 "read-request-line?: clean close yields option:none" test-section
 <pipe> stream-close (read-request-line?) option:none? "closed stream is a clean close" assert-true
@@ -100,7 +105,7 @@ option:some> "GET / HTTP/1.1" "some wraps the request line" assert=
 option:some? "a truncated request line is a request to parse, not a clean close" assert-true
 
 "read-request-line?: mid-request truncation keeps the throwing parse" test-section
-[ <pipe> dup "GET /foo\r\n" stream-write drop stream-close (read-request-wire) ] malformed-request: "truncated request line still throws when parsed" assert-error-type
+[ <pipe> dup "GET /foo\r\n" stream-write drop stream-close (read-request-wire) ] parse-error: "truncated request line still throws when parsed" assert-error-type
 
 "make-request: socket-derived fields round-trip" test-section
 "GET" "/" "" "HTTP/1.1" H{ } B{ }
@@ -196,8 +201,11 @@ body>> read-form "name" @get { "alice" } "first body decodes" assert=
 read-request
 path>> "/b" "second request parses after first body consumed" assert=
 
-"read-request: truncated body throws EUnexpectedEOF" test-section
-[ <pipe> dup "POST / HTTP/1.1\r\nContent-Length: 10\r\n\r\nabc" stream-write drop stream-close read-request ] unexpected-eof: "truncated body throws" assert-error-type
+"read-request: truncated body raises parse-error:" test-section
+[ <pipe> dup "POST / HTTP/1.1\r\nContent-Length: 10\r\n\r\nabc" stream-write drop stream-close read-request ] parse-error: "truncated body throws" assert-error-type
+[ <pipe> dup "POST / HTTP/1.1\r\nContent-Length: 10\r\n\r\nabc" stream-write drop stream-close read-request ] [ ] recover
+dup message: @get "unexpected EOF reading request body at position 3" "truncated body message" assert=
+data: @get offset: @get 3 "truncated body offset is the byte count received" assert=
 
 "max-request-body: within default cap is not too large" test-section
 H{ "content-length" "50" } (body-too-large?) f "50 bytes under default cap" assert=

@@ -206,11 +206,19 @@ split-once?: ( str delim -- option ) [
   ] if
 ] ;
 
-\\ Split on first occurrence of delimiter, or throw if not found.
-split-once: ( str delim -- pair ) [
-  split-once?
+private{
+  \ The search ran to the end of str, so that is where the failure points.
+  (delimiter-not-found): never-returns ( str: string delim: string -- * ) [
+    [ #len [ H{ } offset: ] dip @set ] dip
+    "delimiter '" swap #append "' not found" #append throw-parse-error
+  ] ;
+}
+
+\\ Split on first occurrence of delimiter, or raise parse-error: if not found.
+split-once: ( str: string delim: string -- pair ) [
+  2dup split-once?
   dup option:some?
-  [ option:some> ]
-  [ drop f "delimiter not found" EKeyNotFound make-error throw ]
+  [ option:some> 2nip ]
+  [ drop (delimiter-not-found) ]
   if
 ] ;

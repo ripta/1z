@@ -81,9 +81,17 @@ Stack: [ ]
 Stack: [ ]
 PASS: EOF on empty stream
 Stack: [ ]
-=== read-request: malformed request line throws EMalformedRequest ===
+=== read-request: malformed request line raises parse-error: ===
 Stack: [ ]
 PASS: too few parts
+Stack: [ ]
+Stack: [ <error parse-error: malformed request line 'GET /' at position 5 data=H{ text: "GET /" offset: 5 } [src/prelude.1z:1329:throw <- net/http:68:when <- net/http:204:(read-request-wire) <- tests/integration/http_request.1z:89:recover]> ]
+PASS: malformed line message
+Stack: [ <error parse-error: malformed request line 'GET /' at position 5 data=H{ text: "GET /" offset: 5 } [src/prelude.1z:1329:throw <- net/http:68:when <- net/http:204:(read-request-wire) <- tests/integration/http_request.1z:89:recover]> ]
+Stack: [ H{ text: "GET /" offset: 5 } ]
+PASS: malformed line points past its end
+Stack: [ H{ text: "GET /" offset: 5 } ]
+PASS: malformed line carries the line as text
 Stack: [ ]
 === read-request-line?: clean close yields option:none ===
 Stack: [ ]
@@ -235,9 +243,14 @@ Stack: [ <stream pipe(rd) read> ]
 Stack: [ request{ method: "GET" path: "/b" query-string: "" version: "HTTP/1.1" headers: H{ host: "x" } body: B{ } remote-addr: "" remote-port: 0 server-name: "" server-port: 0 is-tls?: f tls-version: "" tls-cipher: "" } ]
 PASS: second request parses after first body consumed
 Stack: [ ]
-=== read-request: truncated body throws EUnexpectedEOF ===
+=== read-request: truncated body raises parse-error: ===
 Stack: [ ]
 PASS: truncated body throws
+Stack: [ ]
+Stack: [ <error parse-error: unexpected EOF reading request body at position 3 data=H{ offset: 3 } [src/prelude.1z:1329:throw <- net/http:205:(read-request-body) <- tests/integration/http_request.1z:206:recover]> ]
+PASS: truncated body message
+Stack: [ <error parse-error: unexpected EOF reading request body at position 3 data=H{ offset: 3 } [src/prelude.1z:1329:throw <- net/http:205:(read-request-body) <- tests/integration/http_request.1z:206:recover]> ]
+PASS: truncated body offset is the byte count received
 Stack: [ ]
 === max-request-body: within default cap is not too large ===
 Stack: [ ]

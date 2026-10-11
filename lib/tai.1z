@@ -7,7 +7,6 @@
 use "time" ;
 use "strings" ;
 use "conversions" ;
-use "text" ;
 
 \ --- tai-timestamp virtual type ---
 
@@ -67,31 +66,55 @@ tai-timestamp-nsec: ( tai-timestamp -- nsec )     [ unmake-tai-timestamp tai-nse
   }
 ] ;
 
-(parse-leap-line): ( timestamps offsets line -- timestamps offsets ) [
-  trim
-  dup #len 0 = [ drop ] [
-    dup "#" #starts-with? [ drop ] [
+(invalid-leap-entry): never-returns ( tok: string start: fixnum -- * ) [
+  [ H{ } offset: ] dip @set text: 2 pick-n @set
+  "invalid leap-second entry '" <rot- #append "'" #append throw-parse-error
+] ;
+
+\ Parse one field of a leap-second line. start is the field's offset into the file.
+(leap-field): ( tok: string start: fixnum -- n ) [
+  over [ parse-integer 2nip ] [ 2drop (invalid-leap-entry) ] recover
+] ;
+
+\ Parse one line that begins at offset start into the file. Blank and comment lines add nothing.
+(parse-leap-entry): ( timestamps offsets start: fixnum line: string -- timestamps offsets ) [
+  dup ltrim tuck #len swap #len swap -
+  \ Stack: timestamps offsets start body leading-ws
+  <rot- + swap rtrim
+  \ Stack: timestamps offsets body-start body
+  dup #len 0 = [ 2drop ] [
+    dup "#" #starts-with? [ 2drop ] [
       " " split
       dup #len 2 >= [
-        dup 0 #nth parse-integer swap
-        1 #nth parse-integer
+        dup 0 #nth 2 pick-n (leap-field)
+        over 0 #nth #len 3 pick-n + 1 +
+        2 pick-n 1 #nth swap (leap-field)
+        [ [ 2drop ] dip ] dip
         \ Stack: timestamps offsets ts offset
         2 pick-n swap #push! drop
         \ Stack: timestamps offsets ts
         2 pick-n swap #push! drop
         \ Stack: timestamps offsets
-      ] [ drop ] if
+      ] [ 2drop ] if
     ] if
   ] if
 ] ;
 
+\ Lines are split on "\n" by hand rather than through read-lines, which drops empty lines and
+\ so loses the offset of every line after one.
+(parse-leap-line): ( timestamps offsets start: fixnum line: string -- timestamps offsets start' ) [
+  dup #len 2 pick-n + 1 +
+  [ (parse-leap-entry) ] dip
+] ;
+
 (parse-leap-file): ( path -- hash ) [
-  read-lines
-  V{ } V{ }
-  \ lines timestamps offsets
-  2 pick-n [ (parse-leap-line) ] #each
-  \ lines timestamps offsets
-  <rot- drop
+  read: stream-open dup stream-read-all swap stream-close bytes>
+  "\n" split
+  V{ } V{ } 0
+  \ lines timestamps offsets start
+  3 pick-n [ (parse-leap-line) ] #each
+  \ lines timestamps offsets start
+  drop <rot- drop
   \ timestamps offsets
   >array swap >array swap
   H{ } swap offsets: swap @set swap timestamps: swap @set

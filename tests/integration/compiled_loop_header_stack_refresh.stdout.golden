@@ -1,0 +1,21 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+=== compiled loop headers re-read the moved stack buffer ===
+Stack: [ ]
+PASS: while predicate reads the live buffer
+Stack: [ "a" "b" "c" ]
+PASS: while leaves the values below intact
+Stack: [ "a" "b" ]
+Stack: [ ]
+PASS: times body reads the live buffer
+Stack: [ "a" "b" "c" ]
+PASS: times leaves the values below intact
+Stack: [ "a" "b" ]
+Stack: [ ]
+PASS: self-tail loop reads the live buffer
+Stack: [ "a" "b" "c" ]
+PASS: self-tail loop leaves the values below intact
+Stack: [ "a" "b" ]
+Stack: [ ]

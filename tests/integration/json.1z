@@ -25,6 +25,12 @@ f " " hex-digit? "space is not hex digit" assert-false
 10 "A" hex>fixnum "A hex value" assert=
 15 "F" hex>fixnum "F hex value" assert=
 [ "g" hex>fixnum ] "hex>fixnum on non-hex throws" assert-error
+[ "g" hex>fixnum ] parse-error: "hex>fixnum on non-hex raises parse-error:" assert-error-type
+[ "g" hex>fixnum ] [ ] recover
+dup message: @get "not a hex digit 'g' at position 0" "hex>fixnum message quotes the character" assert=
+data: @get
+dup offset: @get 0 "hex>fixnum offset" assert=
+text: @get "g" "hex>fixnum text" assert=
 
 \ -- parse-json: primitives --
 

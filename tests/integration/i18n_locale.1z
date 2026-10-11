@@ -84,4 +84,12 @@ calendar: @get "buddhist" swap "extension: calendar" assert=
 "error handling" test-section
 
 [ "" <locale> ] "empty string throws" assert-error
-[ "" <locale> ] locale-error: "empty string error type" assert-error-type
+[ "" <locale> ] parse-error: "empty string error type" assert-error-type
+[ "" <locale> ] [ ] recover
+dup message: @get "empty locale string at position 0" "empty string message" assert=
+data: @get offset: @get 0 "empty string offset" assert=
+
+[ "en-US-!!" <locale> ] parse-error: "invalid tag error type" assert-error-type
+[ "en-US-!!" <locale> ] [ ] recover
+dup message: @get "invalid locale tag at position 5" "invalid tag message" assert=
+data: @get offset: @get 5 "invalid tag offset is where ICU stopped accepting" assert=

@@ -80,4 +80,17 @@ dup #first "café" "split-once? multi-byte segment before ASCII delim" assert=
 "hello" "," split-once? option:none? "split-once? no match is none" assert-true
 "" "," split-once? option:none? "split-once? empty string is none" assert-true
 
+"split-once found" test-section
+"hello,world" "," split-once
+dup #first "hello" "split-once before" assert=
+#last "world" "split-once after" assert=
+
+"split-once not found raises parse-error: at the end of input" test-section
+[ "héllo" "," split-once ] parse-error: "split-once no match type" assert-error-type
+[ "héllo" "," split-once ] [ ] recover
+dup message: @get "delimiter ',' not found at position 5" "split-once no match message" assert=
+data: @get
+dup offset: @get 5 "split-once offset is the input's codepoint length" assert=
+text: @has? "split-once carries no text" assert-false
+
 "All string utility tests complete!" print-line

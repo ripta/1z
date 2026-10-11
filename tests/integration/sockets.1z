@@ -15,8 +15,32 @@ host: @get "0.0.0.0" "host 0.0.0.0" assert=
 "localhost:3000" split-host-port dup port: @get 3000 "port from localhost" assert=
 host: @get "localhost" "host localhost" assert=
 
+"split-host-port bracketed IPv6" test-section
+"[::1]:8080" split-host-port dup port: @get 8080 "port from [host]:port" assert=
+host: @get "::1" "host from [host]:port drops the brackets" assert=
+
 "split-host-port error cases" test-section
 [ "no-port" split-host-port ] [ drop "PASS: missing port error" print-line ] recover
+
+[ "no-port" split-host-port ] [ ] recover
+dup message: @get "invalid address: missing port at position 7" "missing port message" assert=
+data: @get offset: @get 7 "missing port points at the end of input" assert=
+
+[ "[::1]" split-host-port ] [ ] recover
+dup message: @get "invalid address: missing ]:port at position 5" "missing ]:port message" assert=
+data: @get offset: @get 5 "missing ]:port points at the end of input" assert=
+
+[ "[::1]:http" split-host-port ] [ ] recover
+dup message: @get "invalid port 'http' at position 6" "bracketed bad port message" assert=
+data: @get
+dup offset: @get 6 "bracketed bad port points at the port" assert=
+text: @get "http" "bracketed bad port text" assert=
+
+[ "a:b:8o" split-host-port ] [ ] recover
+dup message: @get "invalid port '8o' at position 4" "plain bad port message" assert=
+data: @get
+dup offset: @get 4 "plain bad port points at the port after the last colon" assert=
+text: @get "8o" "plain bad port text" assert=
 
 "addr construction" test-section
 "127.0.0.1" 8080 make-addr:tcp

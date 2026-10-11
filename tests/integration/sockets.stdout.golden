@@ -5,8 +5,21 @@ PASS: port 443
 PASS: host 0.0.0.0
 PASS: port from localhost
 PASS: host localhost
+=== split-host-port bracketed IPv6 ===
+PASS: port from [host]:port
+PASS: host from [host]:port drops the brackets
 === split-host-port error cases ===
 PASS: missing port error
+PASS: missing port message
+PASS: missing port points at the end of input
+PASS: missing ]:port message
+PASS: missing ]:port points at the end of input
+PASS: bracketed bad port message
+PASS: bracketed bad port points at the port
+PASS: bracketed bad port text
+PASS: plain bad port message
+PASS: plain bad port points at the port after the last colon
+PASS: plain bad port text
 === addr construction ===
 PASS: addr:tcp? predicate
 PASS: not addr:udp?

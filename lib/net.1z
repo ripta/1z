@@ -35,27 +35,47 @@ parse-ipv6: ( str -- ip ) [ AF_INET6 swap inet-pton make-ip ] ;
 \\ Parse an IP address string, auto-detecting IPv4 or IPv6.
 >ip: ( str -- ip ) [ dup ":" #in? [ parse-ipv6 ] [ parse-ipv4 ] if ] ;
 
+private{
+  \ The address ended before its separator, so the failure points at its end.
+  (missing-port): never-returns ( str: string what: string -- * ) [
+    [ #len [ H{ } offset: ] dip @set ] dip throw-parse-error
+  ] ;
+
+  (invalid-port): never-returns ( tok: string start: fixnum -- * ) [
+    [ H{ } offset: ] dip @set text: 2 pick-n @set
+    "invalid port '" <rot- #append "'" #append throw-parse-error
+  ] ;
+
+  \ Parse the port token that begins at offset start of the address.
+  (parse-port): ( tok: string start: fixnum -- port ) [
+    over [ parse-integer 2nip ] [ 2drop (invalid-port) ] recover
+  ] ;
+}
+
 \ Split a "host:port" string on the last colon, parse port as integer.
 \ Handles IPv6 addresses in brackets: "[::1]:8080" -> "::1" 8080
-\ Returns a hash with host: and port: keys.
-split-host-port: ( str -- hash ) [
+\ Returns a hash with host: and port: keys. A malformed address raises
+\ parse-error: with an offset into str.
+split-host-port: ( str: string -- hash ) [
   dup #first "[" = [
     \ Bracketed host: "[host]:port"
-    "]:" #index-of dup not [
-      drop f "invalid address: missing ]:port" EInvalidArgument make-error throw
+    dup "]:" #index-of dup not [
+      drop "invalid address: missing ]:port" (missing-port)
     ] [
       \ str idx -- idx points at "]"
-      2dup 2 + over #len #slice parse-integer  \ str idx port
-      [ 1 swap #slice ] dip                    \ host port
+      2dup 2 + over #len #slice  \ str idx port-tok
+      over 2 + (parse-port)      \ str idx port
+      [ 1 swap #slice ] dip      \ host port
     ] if
   ] [
     \ Plain host:port -- split on ":" and rejoin all but last
-    ":" split
-    dup #len 1 = [ drop f "invalid address: missing port" EInvalidArgument make-error throw ] [
-      dup #last parse-integer swap  \ port parts
-      0 over #len 1 - #slice        \ port host-parts
-      ":" #join                     \ port host
-      swap                          \ host port
+    dup ":" split
+    dup #len 1 = [ drop "invalid address: missing port" (missing-port) ] [
+      dup #last                         \ str parts port-tok
+      dup #len 3 pick-n #len swap -     \ str parts port-tok start
+      (parse-port) swap                 \ str port parts
+      0 over #len 1 - #slice ":" #join  \ str port host
+      swap <rot- drop                   \ host port
     ] if
   ] if
   H{ } swap port: swap @set swap host: swap @set

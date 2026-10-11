@@ -132,6 +132,12 @@ variants: @get 2 #nth value: @get "2" = "last variant value" assert-true
 dup #len 1 = "only the extern fn is parsed, builtins are ignored" assert-true
 #first name: @get "toy_add" = "parsed declaration is toy_add" assert-true
 
+"parse-zig-decls malformed function inherits split-once's parse-error:" test-section
+
+[ "pub extern fn broken;" parse-zig-decls ] parse-error: "a function without ( raises parse-error:" assert-error-type
+[ "pub extern fn broken;" parse-zig-decls ] [ ] recover message: @get
+"delimiter '(' not found at position 7" "the message names the missing delimiter" assert=
+
 \ --- Mixed declarations ---
 
 "parse-zig-decls mixed declarations" test-section

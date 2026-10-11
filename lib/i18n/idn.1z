@@ -136,7 +136,8 @@ decode-host: ( string -- string ) [
 ] ;
 
 \\ Option-returning form of encode-host. Returns option:some wrapping the
-\\ ACE form on success, or option:none on malformed input.
+\\ ACE form on success, or option:none on malformed input. Call encode-host
+\\ to read why the input failed, as its UIDNAInfo.errors bitmask.
 encode-host?: ( string -- option ) [
   [ encode-host >option:some ]
   [ 2drop option:none ]
@@ -144,7 +145,8 @@ encode-host?: ( string -- option ) [
 ] ;
 
 \\ Option-returning form of decode-host. Returns option:some wrapping the
-\\ Unicode form on success, or option:none on malformed input.
+\\ Unicode form on success, or option:none on malformed input. Call decode-host
+\\ to read why the input failed, as its UIDNAInfo.errors bitmask.
 decode-host?: ( string -- option ) [
   [ decode-host >option:some ]
   [ 2drop option:none ]

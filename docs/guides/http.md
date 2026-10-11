@@ -112,10 +112,10 @@ use "net/http" ;
 dup body>> read-form                           \ stack: stream request form
 ```
 
-`read-form` throws `EInvalidArgument` on malformed percent sequences. A
-truncated body is caught earlier, when the dispatch layer reads it: a stream
-that reaches EOF before `Content-Length` bytes are available throws
-`EUnexpectedEOF`.
+`read-form` raises `parse-error:` on malformed percent sequences. A truncated
+body is caught earlier, when the dispatch layer reads it. A stream that reaches
+EOF before `Content-Length` bytes are available raises `parse-error:`, and its
+`offset:` is the number of body bytes that did arrive.
 
 Empty segments and segments without `=` follow the WHATWG
 `application/x-www-form-urlencoded` parser: empty segments are dropped, bare

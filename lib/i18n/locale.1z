@@ -28,10 +28,6 @@ ffi-def{
 
 locale: virtual{ string } ;
 
-\ --- Error marker ---
-
-ELocaleError: [ locale-error: ] ;
-
 \ --- Internal helpers ---
 
 (locale-buf-size): const [ 256 ] ;
@@ -44,6 +40,14 @@ ELocaleError: [ locale-error: ] ;
 \\ Read a C string result from buf up to len bytes.
 (buf>string): ( byte-array len -- string ) [
   bytes-resize! bytes>
+] ;
+
+\ The offset is where ICU stopped accepting, which is the separator before the rejected subtag.
+\
+\ ICU's parsedLength is a UTF-8 byte count. ICU accepts only ASCII subtags, so the consumed prefix
+\ is ASCII and the byte count is also the codepoint offset.
+(invalid-locale-tag): never-returns ( parsed-length: fixnum -- * ) [
+  [ H{ } offset: ] dip @set "invalid locale tag" throw-parse-error
 ] ;
 
 \\ Convert a BCP 47 tag to an ICU locale ID. Validates that the entire
@@ -60,10 +64,8 @@ ELocaleError: [ locale-error: ] ;
   \ Stack: tag buf ptr parsedLength actual-len
   swap
   \ Stack: tag buf ptr actual-len parsedLength
-  4 pick-n #len = not [
-    drop drop drop
-    f "invalid locale tag" ELocaleError make-error throw
-  ] when
+  dup 5 pick-n #len = not [ (invalid-locale-tag) ] when
+  drop
   \ Stack: tag buf ptr actual-len
   swap drop
   \ Stack: tag buf actual-len
@@ -106,7 +108,7 @@ ELocaleError: [ locale-error: ] ;
 \\ Normalizes to BCP 47.
 <locale>: ( string -- locale ) [
   dup "" = [
-    drop f "empty locale string" ELocaleError make-error throw
+    drop H{ } offset: 0 @set "empty locale string" throw-parse-error
   ] when
   (strip-posix-charset)
   dup "-" #index-of [

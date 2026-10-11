@@ -1,3 +1,3 @@
-Error: flag --count requires a value
+Error: flag --count requires a value at position 0
 Usage: Missing value program
   --count=<fixnum>    A count

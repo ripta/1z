@@ -1,0 +1,4 @@
+Error: flag --count requires a value at position 1
+Usage: Missing value program
+  --verbose           Verbose output
+  --count=<fixnum>    A count

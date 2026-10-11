@@ -16,8 +16,6 @@ use "net/server" ;
 use "data/url" ;
 use "time" ;
 
-EMalformedRequest: ( -- err: symbol ) [ malformed-request: ] ;
-
 request: struct{ method path query-string version headers body
   remote-addr remote-port server-name server-port
   is-tls? tls-version tls-cipher
@@ -55,13 +53,19 @@ read-headers-loop: ( stream headers -- headers ) [
 ] ;
 
 private{
+  \ A request line short of three fields is missing its tail, so the failure points at its end.
+  (malformed-request-line): never-returns ( line: string -- * ) [
+    H{ } offset: 2 pick-n #len @set text: 2 pick-n @set
+    "malformed request line '" <rot- #append "'" #append throw-parse-error
+  ] ;
+
   \ Parse an already-read request line plus the header block into the five
   \ wire fields. Split out from (read-request-wire) so the server loop can read
   \ the request line non-throwing, decide whether the connection has closed, and
   \ then parse the line it already holds without re-reading the stream.
   (parse-request-line): ( stream line -- method path query-string version headers ) [
     " " split
-    dup #len 3 < [ dup " " #join "malformed request line" EMalformedRequest make-error throw ] when
+    dup #len 3 < [ dup " " #join (malformed-request-line) ] when
     dup 2 #nth
     over 0 #nth
     -rot>
@@ -181,15 +185,15 @@ private{
 \ Read exactly Content-Length bytes of the request body from a stream. A
 \ missing content-length header yields an empty body and reads nothing. A
 \ stream that reaches EOF before content-length bytes have arrived is a
-\ framing violation and throws EUnexpectedEOF. Reading the body eagerly here
-\ keeps the stream positioned at the start of the next request regardless of
-\ what the handler does with the body.
+\ framing violation and raises parse-error: whose offset is the byte count that
+\ did arrive. Reading the body eagerly here keeps the stream positioned at the
+\ start of the next request regardless of what the handler does with the body.
 (read-request-body): ( headers stream -- body ) [
   swap "content-length" "0" @get-or parse-integer
   dup [ stream-read(exact) ] dip
   over #len over =
   [ drop ]
-  [ 2drop f "unexpected EOF reading request body" EUnexpectedEOF make-error throw ]
+  [ drop #len [ H{ } offset: ] dip @set "unexpected EOF reading request body" throw-parse-error ]
   if
 ] ;
 

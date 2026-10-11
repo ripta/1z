@@ -166,6 +166,13 @@ PASS: only the extern fn is parsed, builtins are ignored
 Stack: [ { M{ params: { M{ name: "a" type: "i32" } M{ name: "b" type: "i32" } } variadic?: f name: "toy_add" return-type: "i32" kind: fn: } } ]
 PASS: parsed declaration is toy_add
 Stack: [ ]
+=== parse-zig-decls malformed function inherits split-once's parse-error: ===
+Stack: [ ]
+PASS: a function without ( raises parse-error:
+Stack: [ ]
+Stack: [ "delimiter '(' not found at position 7" ]
+PASS: the message names the missing delimiter
+Stack: [ ]
 === parse-zig-decls mixed declarations ===
 Stack: [ ]
 Stack: [ { M{ name: "struct_toy_counter" kind: opaque: } M{ params: { M{ name: "a" type: "i32" } M{ name: "b" type: "i32" } } variadic?: f name: "toy_add" return-type: "i32" kind: fn: } M{ fields: { M{ name: "x" type: "f32" } M{ name: "y" type: "f32" } } name: "toy_vec2" kind: struct: } M{ params: { M{ name: "count" type: "i32" } } variadic?: t name: "toy_sum_variadic" return-type: "i32" kind: fn: } } ]

@@ -45,17 +45,24 @@ hex-digit?: ( str -- ? ) [
   if
 ] ;
 
+private{
+  (not-a-hex-digit): never-returns ( str: string -- * ) [
+    H{ } offset: 0 @set text: 2 pick-n @set
+    "not a hex digit '" <rot- #append "'" #append throw-parse-error
+  ] ;
+}
+
 \\ Convert a single hex digit character to its integer value (0-15).
-\\ Throws on non-hex input.
+\\ Raises parse-error: at position 0 on non-hex input.
 hex>fixnum: ( str -- n ) [
-  >codepoint
+  dup >codepoint
   dup dup 48 >= swap 57 <= and  \ 0-9
-  [ 48 - ]
+  [ 48 - nip ]
   [ dup dup 65 >= swap 70 <= and  \ A-F
-    [ 65 - 10 + ]
+    [ 65 - 10 + nip ]
     [ dup dup 97 >= swap 102 <= and  \ a-f
-      [ 97 - 10 + ]
-      [ drop "not a hex digit" f swap EInvalidArgument make-error throw ]
+      [ 97 - 10 + nip ]
+      [ drop (not-a-hex-digit) ]
       if
     ]
     if

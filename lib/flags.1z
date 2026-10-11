@@ -282,18 +282,19 @@ private{
     if
   ] ;
 
-  \\ Consume the token following idx as name's value and return idx+2. A missing
-  \\ token prints help and exits. next is bounds-checked before #nth, which throws
-  \\ on an out-of-bounds index. The exit is inlined rather than delegated so the
-  \\ terminal sys-exit is visible to the AOT stack-effect checker, which otherwise
-  \\ models the branch as returning and reports an underflow against the other
-  \\ branch's result.
+  \\ Consume the token following idx as name's value and return idx+2. A missing token prints
+  \\ help and exits, and the message reports the flag's index in args as its position.
+  \\
+  \\ next is bounds-checked before #nth, which throws on an out-of-bounds index. The exit is
+  \\ inlined rather than delegated so the terminal sys-exit is visible to the AOT stack-effect
+  \\ checker, which otherwise models the branch as returning and reports an underflow against
+  \\ the other branch's result.
   consume-value: ( name idx -- idx' ) [
     ++
     dup pf-args get #len >=
     [
-      drop
-      "Error: flag --" swap #append " requires a value" #append
+      1 - >string swap
+      "Error: flag --" swap #append " requires a value at position " #append swap #append
       stderr swap stream-write-string drop
       stderr "\n" >bytes stream-write drop
       pf-desc get print-help
@@ -475,7 +476,8 @@ private{
   ] ;
 
   \\ Convert value by type, returning option:some(value') or option:none on a bad value.
-  \\ Keeping recover terminal here keeps it AOT-safe.
+  \\ Keeping recover terminal here keeps it AOT-safe. Call convert-flag-value to read the
+  \\ parse-error: this discards.
   try-convert-flag-value: ( value type -- opt ) [
     [ convert-flag-value >option:some ] [ 3drop option:none ] recover
   ] ;

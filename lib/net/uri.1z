@@ -358,7 +358,8 @@ parse: ( s -- uri ) [ parse(rfc3986) ] ;
 \ === Option-returning parsers ===
 
 \\ Option-returning `parse(rfc3986)`. Returns `option:some uri` on success
-\\ and `option:none` on any malformed input.
+\\ and `option:none` on any malformed input. Call `parse(rfc3986)` to read
+\\ where the input is malformed.
 parse?(rfc3986): ( s -- option ) [
   [ parse(rfc3986) >option:some ]
   [ 2drop option:none ]
@@ -366,14 +367,16 @@ parse?(rfc3986): ( s -- option ) [
 ] ;
 
 \\ Option-returning `parse(whatwg)`. Returns `option:some uri` on success
-\\ and `option:none` on any malformed input.
+\\ and `option:none` on any malformed input. Call `parse(whatwg)` to read
+\\ where the input is malformed.
 parse?(whatwg): ( s -- option ) [
   [ parse(whatwg) >option:some ]
   [ 2drop option:none ]
   recover
 ] ;
 
-\\ Option-returning default parser. Equivalent to `parse?(rfc3986)`.
+\\ Option-returning default parser. Equivalent to `parse?(rfc3986)`. Call
+\\ `parse` to read where the input is malformed.
 parse?: ( s -- option ) [ parse?(rfc3986) ] ;
 
 \ === Reference resolution per RFC 3986 §5 ===

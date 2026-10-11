@@ -1,0 +1,38 @@
+\ A compiled loop whose body calls out to code that grows the data stack must read its slots
+\ through the live buffer on the next iteration, not through the one it held at loop entry.
+\ Each callee below pushes and drops a growing number of temporaries, so the buffer moves
+\ while the loop is running. Under --compile=eager the loop words are compiled at definition.
+\
+\ The stack never gives capacity back, so each case peaks well above the one before it.
+\ Otherwise a later case would run inside capacity an earlier one already reserved.
+
+use "testing" ;
+
+\ Push n zeros, then drop them, leaving the stack as it was.
+grow: ( n -- ) [ dup [ [ 0 ] times ] dip [ drop ] times ] ;
+
+while-loop: ( -- count ) [
+  1 0
+  [ over 4096 < ] [ over grow 1 + [ 2 * ] dip ] while
+  nip
+] ;
+
+times-loop: ( -- acc ) [ 0 40 [ 1 + dup 256 * grow ] times ] ;
+
+self-loop: ( size acc -- acc ) [
+  over 65536 < [ over grow 1 + [ 2 * ] dip self-loop ] [ nip ] if
+] ;
+
+"compiled loop headers re-read the moved stack buffer" test-section
+
+"a" "b" "c" while-loop 12 "while predicate reads the live buffer" assert=
+"c" "while leaves the values below intact" assert=
+2drop
+
+"a" "b" "c" times-loop 40 "times body reads the live buffer" assert=
+"c" "times leaves the values below intact" assert=
+2drop
+
+"a" "b" "c" 1 0 self-loop 16 "self-tail loop reads the live buffer" assert=
+"c" "self-tail loop leaves the values below intact" assert=
+2drop

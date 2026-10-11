@@ -129,3 +129,17 @@ unmake-duration 300000000 "tai sub-second diff" assert=
 tai-now tai-timestamp? t "tai-now returns tai-timestamp" assert=
 tai-now tai-timestamp-sec 0 > t "tai-now sec is positive" assert=
 tai-now tai-now swap >= t "consecutive tai-now is monotonic" assert=
+
+"leap-second file errors carry a file offset" test-section
+
+[ "tests/integration/tai_leap_bad_timestamp.txt" (parse-leap-file) ] [ ] recover
+dup message: @get "invalid leap-second entry '12x' at position 18" "bad timestamp message" assert=
+data: @get
+dup offset: @get 18 "bad timestamp offset skips a comment, a blank line, and indentation" assert=
+text: @get "12x" "bad timestamp text" assert=
+
+[ "tests/integration/tai_leap_bad_offset.txt" (parse-leap-file) ] [ ] recover
+dup message: @get "invalid leap-second entry '1o' at position 11" "bad offset message" assert=
+data: @get
+dup offset: @get 11 "bad offset field points past the timestamp" assert=
+text: @get "1o" "bad offset text" assert=

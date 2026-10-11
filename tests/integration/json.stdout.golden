@@ -34,6 +34,16 @@ PASS: F hex value
 Stack: [ t t t t t t f f f ]
 PASS: hex>fixnum on non-hex throws
 Stack: [ t t t t t t f f f ]
+PASS: hex>fixnum on non-hex raises parse-error:
+Stack: [ t t t t t t f f f ]
+Stack: [ t t t t t t f f f <error parse-error: not a hex digit 'g' at position 0 data=H{ text: "g" offset: 0 } [src/prelude.1z:1329:throw <- tests/integration/json.1z:29:recover]> ]
+PASS: hex>fixnum message quotes the character
+Stack: [ t t t t t t f f f <error parse-error: not a hex digit 'g' at position 0 data=H{ text: "g" offset: 0 } [src/prelude.1z:1329:throw <- tests/integration/json.1z:29:recover]> ]
+Stack: [ t t t t t t f f f H{ text: "g" offset: 0 } ]
+PASS: hex>fixnum offset
+Stack: [ t t t t t t f f f H{ text: "g" offset: 0 } ]
+PASS: hex>fixnum text
+Stack: [ t t t t t t f f f ]
 === parse-json: strings ===
 Stack: [ t t t t t t f f f ]
 PASS: simple string
