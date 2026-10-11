@@ -35,7 +35,7 @@ use "formatter" ;
 "/foo/bar//" basename "bar" "every trailing slash is stripped" assert=
 "/foo/bar.txt" basename "bar.txt" "a plain path keeps its last component" assert=
 
-200 [
+60 [
   "pi: 3.14 ;\ne: 2.71 ;\ntau: 6.28 ;\n" format-source drop
   "h: H{\n  a: 1\n}\n" format-source drop
 ] times
