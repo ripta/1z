@@ -1,11 +1,4 @@
 src/prelude.1z:1694: err: pragma-get?: branch quotations have mismatched row variable adjustments
-src/prelude.1z:1612: err: (>dispatch-prov): type mismatch: make-dispatch-provenance expects string for parameter 'role', but got fixnum
-src/prelude.1z:1612: err: (>dispatch-prov): type mismatch: make-dispatch-provenance expects string for parameter 'field', but got fixnum
-src/prelude.1z:1611: err: (>provenance): type mismatch: make-provenance expects string for parameter 'role', but got fixnum
-src/prelude.1z:1630: err: (raw>word-info): type mismatch: make-word-info expects array for parameter 'markers', but got fixnum
-src/prelude.1z:1630: err: (raw>word-info): type mismatch: make-word-info expects boolean for parameter 'native?', but got fixnum
-src/prelude.1z:1630: err: (raw>word-info): type mismatch: make-word-info expects array for parameter 'methods', but got fixnum
-src/prelude.1z:1630: err: (raw>word-info): type mismatch: make-word-info expects boolean for parameter 'compiled?', but got fixnum
 src/prelude.1z:983: warning: borrow: word has no declared stack effect
 src/prelude.1z:293: warning: associative: word has no declared stack effect
 src/prelude.1z:302: warning: parameter{: word has no declared stack effect

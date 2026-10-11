@@ -23,6 +23,10 @@ make-bird: ( -- y: bird )    [ "phoenix" >bird ] ;
 make-rock: ( -- y: rock )    [ 7 >rock ] ;
 take-off:  ( -- y: flyable ) [ make-bird ] ;
 
+\ `#first` returns an untyped element, so the body's output is unresolved
+\ and a caller falls back to the declared `flyable`.
+take-off-opaque: ( -- y: flyable ) [ make-bird 1array #first ] ;
+
 \ Same-protocol consumer.
 land: ( x: flyable -- y ) [ fly ] ;
 
@@ -31,12 +35,16 @@ dive: ( x: swimmable -- y ) [ swim ] ;
 
 \ Identity match: producer's `flyable` output flows into consumer's
 \ `flyable` input. Same descriptor pointer; no diagnostic emitted.
-identity-pipeline: ( -- y ) [ take-off land ] ;
+identity-pipeline: ( -- y ) [ take-off-opaque land ] ;
 
 \ Non-identical pair: producer's `flyable` output flows into consumer's
 \ `swimmable` input. Different descriptors; analyzer stays silent and
 \ defers to the runtime check.
-crossover-pipeline: ( -- y ) [ take-off dive ] ;
+crossover-pipeline: ( -- y ) [ take-off-opaque dive ] ;
+
+\ The analyzer reads the inferred `bird` through `take-off`'s `flyable`
+\ declaration, and a bird does not satisfy `swimmable`.
+inferred-crossover-pipeline: ( -- y ) [ take-off dive ] ;
 
 \ Concrete value satisfying the bound: a bird satisfies `flyable` because
 \ `bird` registers `fly:`. No diagnostic emitted.

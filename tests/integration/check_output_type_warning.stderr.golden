@@ -1,0 +1,1 @@
+tests/integration/check_output_type_warning.1z:4: warning: ORDINARY-WRONG: ORDINARY-WRONG declares output 'value' as fixnum, but its body returns string

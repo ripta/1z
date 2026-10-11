@@ -1,0 +1,36 @@
+\ A declared output type is checked against the type the body leaves on the stack
+
+ORDINARY-WRONG: ( -- value: fixnum ) [ "a string" ] ;
+CONST-WRONG:    ( -- value: fixnum ) const [ "not a fixnum" ] ;
+BIND-WRONG:     ( -- value: fixnum ) "also not a fixnum" ;
+
+\ Only the annotated slot is checked, and it is matched from the top.
+PARTIAL-WRONG: ( -- a b: fixnum ) [ 1 "two" ] ;
+
+SWAPPED-WRONG: ( a -- n: fixnum s: string ) [ drop 1 "x" swap ] ;
+
+\ Combinator arms are replayed in order, so a wrong slot after one is still caught.
+BI-WRONG: ( -- a: array s: fixnum ) [ 1 [ drop { } ] [ drop "x" ] bi ] ;
+KEPT-WRONG: ( -- n: fixnum s: fixnum ) [ "s" [ drop 1 ] keep ] ;
+
+\ The nested `if` leaves the arm's window inexact, but the slots above it are still checked.
+INEXACT-ARM-WRONG: ( -- n: string s: string ) [ "s" [ drop t [ 1 ] [ 2 ] if ] keep ] ;
+
+walker: protocol{ walk: } ;
+walk: generic ( x -- y ) [ ] ;
+PROTOCOL-WRONG: ( -- w: walker ) [ 42 ] ;
+
+TAKES-FIXNUM: ( n: fixnum -- ) [ drop ] ;
+
+\ A caller sees the body's inferred string, not the declared fixnum.
+feeds-wrong: ( -- ) [ ORDINARY-WRONG TAKES-FIXNUM ] ;
+
+\ A generic's callers see the merge of its base body and every method.
+TAKES-STRING: ( s: string -- ) [ drop ] ;
+merged: generic ( x -- y ) [ drop { } ] ;
+merged: method{ string } [ drop 1 ] ;
+feeds-merged: ( -- ) [ "s" merged TAKES-STRING ] ;
+
+\ The unannotated slot of a partial effect keeps its inferred string.
+PARTIAL-RIGHT: ( -- a b: fixnum ) [ "one" 2 ] ;
+feeds-partial: ( -- ) [ PARTIAL-RIGHT drop TAKES-FIXNUM ] ;

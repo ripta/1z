@@ -1,0 +1,14 @@
+tests/integration/check_output_type_mismatch.1z:19: warning: walker: word has no declared stack effect
+tests/integration/check_output_type_mismatch.1z:32: err: feeds-merged: type mismatch: TAKES-STRING expects string for parameter 's', but got array | fixnum
+tests/integration/check_output_type_mismatch.1z:8: err: PARTIAL-WRONG: PARTIAL-WRONG declares output 'b' as fixnum, but its body returns string
+tests/integration/check_output_type_mismatch.1z:3: err: ORDINARY-WRONG: ORDINARY-WRONG declares output 'value' as fixnum, but its body returns string
+tests/integration/check_output_type_mismatch.1z:26: err: feeds-wrong: type mismatch: TAKES-FIXNUM expects fixnum for parameter 'n', but got string
+tests/integration/check_output_type_mismatch.1z:36: err: feeds-partial: type mismatch: TAKES-FIXNUM expects fixnum for parameter 'n', but got string
+tests/integration/check_output_type_mismatch.1z:5: err: BIND-WRONG: BIND-WRONG declares output 'value' as fixnum, but its body returns string
+tests/integration/check_output_type_mismatch.1z:4: err: CONST-WRONG: CONST-WRONG declares output 'value' as fixnum, but its body returns string
+tests/integration/check_output_type_mismatch.1z:10: err: SWAPPED-WRONG: SWAPPED-WRONG declares output 'n' as fixnum, but its body returns string
+tests/integration/check_output_type_mismatch.1z:10: err: SWAPPED-WRONG: SWAPPED-WRONG declares output 's' as string, but its body returns fixnum
+tests/integration/check_output_type_mismatch.1z:13: err: BI-WRONG: BI-WRONG declares output 's' as fixnum, but its body returns string
+tests/integration/check_output_type_mismatch.1z:17: err: INEXACT-ARM-WRONG: INEXACT-ARM-WRONG declares output 'n' as string, but its body returns fixnum
+tests/integration/check_output_type_mismatch.1z:21: err: PROTOCOL-WRONG: PROTOCOL-WRONG declares output 'w' as walker, but its body returns fixnum, which does not satisfy it
+tests/integration/check_output_type_mismatch.1z:14: err: KEPT-WRONG: KEPT-WRONG declares output 's' as fixnum, but its body returns string

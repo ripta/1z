@@ -360,6 +360,19 @@ pub const InferenceEngine = struct {
     // combinator handlers immediately after analyzing a quotation arm.
     body_terminal: bool = false,
 
+    // Set by inferInstructions on every exit: true when the stack model it left holds every
+    // entry above the lowest point the body reached, false when some step could only keep a
+    // correct top portion. Read the same way as `body_terminal`.
+    //
+    // An exact window of length L from a body with delta d consumed L - d entries from beneath
+    // its start. That is what lets a caller replay the body as a pop and a push.
+    body_window_exact: bool = true,
+
+    /// Words whose inferred body leaves an exact window, so a caller can replay them.
+    ///
+    /// An exact word with an empty window has no `type_cache` entry.
+    exact_windows: std.StringHashMapUnmanaged(void) = .{},
+
     pub const TypeCheckMode = enum { err, warning, off };
     pub const ArityCheckMode = enum { err, warning, off };
     pub const DefaultArmMode = enum { err, warning, off };
@@ -419,6 +432,7 @@ pub const InferenceEngine = struct {
             }
         }
         self.type_cache.deinit(self.allocator);
+        self.exact_windows.deinit(self.allocator);
     }
 
     pub fn analyzeAll(self: *InferenceEngine, checked_source: ?[]const u8) Allocator.Error!void {
@@ -604,6 +618,9 @@ pub const InferenceEngine = struct {
         var body_out_stack: std.ArrayListUnmanaged(StackEntry) = .{};
         defer body_out_stack.deinit(self.allocator);
         const inferred = try self.inferInstructions(instructions, caller_info, &body_out_stack);
+        if (inferred == .known and self.body_window_exact) {
+            try self.exact_windows.put(self.allocator, name, {});
+        }
 
         if (inferred == .known and body_out_stack.items.len > 0) {
             const cached_types = try self.allocator.alloc(StackEntry, body_out_stack.items.len);
@@ -614,6 +631,14 @@ pub const InferenceEngine = struct {
             try self.type_cache.put(self.allocator, name, cached_types);
         }
 
+        if (inferred == .known and self.type_check_mode != .off and self.isInCheckedSource(word_def.source_file)) {
+            if (word_def.stack_effect) |eff| {
+                if (!stack_effect_mod.hasAnyRowVariable(eff.*)) {
+                    try self.checkDeclaredOutputs(name, &word_def, body_out_stack.items);
+                }
+            }
+        }
+
         const generic_uses_declared_delta = isGeneric(&word_def) and instructions.len == 0 and word_def.stack_effect != null;
         const inferred_for_delta = if (generic_uses_declared_delta)
             computeDeclaredDelta(word_def.stack_effect.?.*) orelse inferred
@@ -621,7 +646,17 @@ pub const InferenceEngine = struct {
             inferred;
 
         if (isGeneric(&word_def)) {
-            try self.validateDispatchEntries(name, inferred_for_delta, &word_def, caller_info);
+            var entry_windows: std.ArrayListUnmanaged(std.ArrayListUnmanaged(StackEntry)) = .{};
+            defer {
+                for (entry_windows.items) |*w| w.deinit(self.allocator);
+                entry_windows.deinit(self.allocator);
+            }
+
+            const entries_mergeable = try self.validateDispatchEntries(name, inferred_for_delta, &word_def, caller_info, &entry_windows);
+            if (inferred == .known) {
+                try self.mergeDispatchWindows(name, body_out_stack.items, entry_windows.items, entries_mergeable);
+            }
+
             if (inferred == .known) {
                 if (self.conversionTarget(name, &word_def)) |target| {
                     try self.checkConversionOutput(name, &word_def, target, &body_out_stack, null);
@@ -739,6 +774,8 @@ pub const InferenceEngine = struct {
         self.last_unknown_is_polymorphic = false;
         var body_is_terminal = false;
         defer self.body_terminal = body_is_terminal;
+        var window_exact = true;
+        defer self.body_window_exact = window_exact;
         var delta: i64 = 0;
         var stack_model: std.ArrayListUnmanaged(StackEntry) = .{};
         defer stack_model.deinit(self.allocator);
@@ -825,7 +862,7 @@ pub const InferenceEngine = struct {
                                     if (mod_word.stack_effect) |eff| {
                                         if (computeDeclaredDelta(eff.*)) |result| {
                                             delta += result.known;
-                                            try adjustStackModel(&stack_model, result.known, self.allocator);
+                                            try self.applyEffectToModel(&stack_model, eff, null);
                                             uncertain = true;
                                             uncertain_source = name;
                                             uncertain_is_polymorphic = true;
@@ -840,7 +877,7 @@ pub const InferenceEngine = struct {
                                 if (mod_word.stack_effect) |eff| {
                                     if (computeDeclaredDelta(eff.*)) |result| {
                                         delta += result.known;
-                                        try adjustStackModel(&stack_model, result.known, self.allocator);
+                                        try self.applyEffectToModel(&stack_model, eff, null);
                                         continue;
                                     }
                                 }
@@ -904,6 +941,7 @@ pub const InferenceEngine = struct {
                                 .applied => |applied| {
                                     delta = applied.new_delta;
                                     stack_model.shrinkRetainingCapacity(0);
+                                    if (!applied.exact) window_exact = false;
 
                                     if (applied.output_types) |out_types| {
                                         defer self.allocator.free(out_types);
@@ -943,6 +981,7 @@ pub const InferenceEngine = struct {
                                     .applied => |applied| {
                                         delta = applied.new_delta;
                                         stack_model.shrinkRetainingCapacity(0);
+                                        if (!applied.exact) window_exact = false;
 
                                         if (applied.output_types) |out_types| {
                                             defer self.allocator.free(out_types);
@@ -994,7 +1033,7 @@ pub const InferenceEngine = struct {
                         if (wd.stack_effect) |eff| {
                             if (computeDeclaredDelta(eff.*)) |result| {
                                 delta += result.known;
-                                try adjustStackModel(&stack_model, result.known, self.allocator);
+                                try self.applyEffectToModel(&stack_model, eff, null);
                                 uncertain = true;
                                 uncertain_source = name;
                                 uncertain_is_dynamic = true;
@@ -1007,13 +1046,21 @@ pub const InferenceEngine = struct {
                     switch (callee_result) {
                         .known => |callee_delta| {
                             delta += callee_delta;
-                            try self.adjustStackModelTyped(&wd, &stack_model, callee_delta);
+                            if (!try self.adjustStackModelTyped(&wd, &stack_model, callee_delta)) window_exact = false;
+
+                            // The model applied the declared effect, so a callee whose body
+                            // disagrees with it leaves the window out of step with `delta`.
+                            if (wd.stack_effect) |eff| {
+                                if (computeDeclaredDelta(eff.*)) |declared| {
+                                    if (declared.known != callee_delta) window_exact = false;
+                                }
+                            }
                         },
                         .unknown => {
                             if (wd.stack_effect) |eff| {
                                 if (computeDeclaredDelta(eff.*)) |result| {
                                     delta += result.known;
-                                    try adjustStackModel(&stack_model, result.known, self.allocator);
+                                    try self.applyEffectToModel(&stack_model, eff, null);
                                     uncertain = true;
                                     uncertain_source = name;
                                     uncertain_is_dynamic = false;
@@ -1090,10 +1137,137 @@ pub const InferenceEngine = struct {
             new_model_size: usize,
             output_types: ?[]StackEntry = null,
             terminal: bool = false,
+            /// True when `output_types` is the whole model, exact in the `body_window_exact`
+            /// sense, rather than the combinator's outputs alone.
+            exact: bool = false,
         },
         unknown,
         fallthrough,
     };
+
+    /// A literal quotation argument that inferred to a known delta.
+    const ArmRecord = struct {
+        annotation: *const StackEffect,
+        delta: i64,
+        exact: bool,
+    };
+
+    /// The whole stack model after a composed combinator, and whether it is still an exact window.
+    const ComposedModel = struct {
+        model: []StackEntry,
+        exact: bool,
+    };
+
+    /// Model a non-branch combinator by walking its declared outputs in order.
+    ///
+    /// A row that one arm's annotation produces replays that arm. The inputs the arm names are
+    /// pushed, then its window is applied over them.
+    ///
+    /// A concrete output takes the popped entry of the input sharing its name, so `keep` and `dip`
+    /// put `x` back above the arm.
+    ///
+    /// Returns null when the shape is not one this walk understands: a row produced by no arm or
+    /// by several, an arm left unused, or an arm naming an input the combinator does not take.
+    /// The caller then falls back to treating the arms as alternatives or to unresolved outputs.
+    fn composeArms(
+        self: *InferenceEngine,
+        eff: *const StackEffect,
+        model: []const StackEntry,
+        arms: []const ArmRecord,
+        windows: []const std.ArrayListUnmanaged(StackEntry),
+    ) Allocator.Error!?ComposedModel {
+        var bottom_row: ?[]const u8 = null;
+        for (eff.inputs, 0..) |param, i| {
+            if (!param.is_row_variable) continue;
+            if (i != 0) return null;
+            bottom_row = param.name;
+        }
+
+        const concrete_inputs = eff.inputs[@intFromBool(bottom_row != null)..];
+        if (model.len < concrete_inputs.len) return null;
+        const popped = model[model.len - concrete_inputs.len ..];
+
+        // `toOwnedSlice` empties `out` on success, so this releases it only on a null or error return.
+        var out: std.ArrayListUnmanaged(StackEntry) = .{};
+        defer out.deinit(self.allocator);
+        try out.appendSlice(self.allocator, model[0 .. model.len - concrete_inputs.len]);
+
+        var used = [_]bool{false} ** 8;
+        var exact = true;
+
+        for (eff.outputs, 0..) |param, oi| {
+            if (!param.is_row_variable) {
+                try out.append(self.allocator, namedEntry(concrete_inputs, popped, param.name) orelse .other);
+                continue;
+            }
+
+            if (oi == 0 and bottom_row != null and std.mem.eql(u8, param.name, bottom_row.?)) continue;
+
+            var producer: ?usize = null;
+            for (arms, 0..) |arm, k| {
+                const arm_out = arm.annotation.outputs;
+                if (arm_out.len != 1 or !arm_out[0].is_row_variable) continue;
+                if (!std.mem.eql(u8, arm_out[0].name, param.name)) continue;
+                if (producer != null) return null;
+                producer = k;
+            }
+
+            const k = producer orelse return null;
+            if (used[k]) return null;
+            used[k] = true;
+
+            for (arms[k].annotation.inputs) |arm_in| {
+                if (arm_in.is_row_variable) continue;
+                const entry = namedEntry(concrete_inputs, popped, arm_in.name) orelse return null;
+                try out.append(self.allocator, entry);
+            }
+
+            // An inexact arm still leaves a correct top portion, but nothing beneath it can be
+            // placed, so the composed model restarts from that portion.
+            const window = windows[k].items;
+            const replayed = arms[k].exact and try self.applyWindow(&out, window, arms[k].delta);
+            if (!replayed) {
+                out.clearRetainingCapacity();
+                try out.appendSlice(self.allocator, window);
+                exact = false;
+            }
+        }
+
+        for (used[0..arms.len]) |u| {
+            if (!u) return null;
+        }
+
+        return .{ .model = try out.toOwnedSlice(self.allocator), .exact = exact };
+    }
+
+    /// True when two or more arms all produce the same single row and the combinator's only output
+    /// is that row, so exactly one arm runs and their stacks merge as branches do.
+    ///
+    /// A lone arm is not an alternative. Whether it ran at all is unknown.
+    fn armsAreAlternatives(eff: *const StackEffect, arms: []const ArmRecord) bool {
+        if (arms.len < 2) return false;
+        if (eff.outputs.len != 1 or !eff.outputs[0].is_row_variable) return false;
+
+        const row = eff.outputs[0].name;
+        for (arms) |arm| {
+            const arm_out = arm.annotation.outputs;
+            if (arm_out.len != 1 or !arm_out[0].is_row_variable) return false;
+            if (!std.mem.eql(u8, arm_out[0].name, row)) return false;
+        }
+
+        return true;
+    }
+
+    /// The popped entry of the topmost input named `name`, or null when no input has that name.
+    fn namedEntry(inputs: []const StackEffectParam, popped: []const StackEntry, name: []const u8) ?StackEntry {
+        var i = inputs.len;
+        while (i > 0) {
+            i -= 1;
+            if (std.mem.eql(u8, inputs[i].name, name)) return popped[i];
+        }
+
+        return null;
+    }
 
     fn handleCombinator(
         self: *InferenceEngine,
@@ -1322,7 +1496,9 @@ pub const InferenceEngine = struct {
 
         const max_rp_stacks = 8;
         var rp_branch_stacks: [max_rp_stacks]std.ArrayListUnmanaged(StackEntry) = undefined;
+        var rp_arms: [max_rp_stacks]ArmRecord = undefined;
         var rp_branch_count: usize = 0;
+        var rp_arms_dropped = false;
         defer for (rp_branch_stacks[0..rp_branch_count]) |*bs| bs.deinit(self.allocator);
 
         var all_literal = true;
@@ -1345,6 +1521,7 @@ pub const InferenceEngine = struct {
                         quot_caller.declared_input_count = null;
 
                         const qd = try self.inferInstructions(quot.instructions, quot_caller, &rp_out);
+                        const arm_exact = self.body_window_exact;
                         if (!self.body_terminal) all_arms_terminal = false;
                         switch (qd) {
                             .known => |d| {
@@ -1362,9 +1539,11 @@ pub const InferenceEngine = struct {
                                 try adjustments.append(self.allocator, d - annotated_qcd);
                                 if (rp_branch_count < max_rp_stacks) {
                                     rp_branch_stacks[rp_branch_count] = rp_out;
+                                    rp_arms[rp_branch_count] = .{ .annotation = annotation, .delta = d, .exact = arm_exact };
                                     rp_branch_count += 1;
                                 } else {
                                     rp_out.deinit(self.allocator);
+                                    rp_arms_dropped = true;
                                 }
                             },
                             .unknown => {
@@ -1454,20 +1633,27 @@ pub const InferenceEngine = struct {
             .none => {
                 var adj_sum: i64 = 0;
                 for (adjustments.items) |adj| adj_sum += adj;
+                const new_delta = current_delta + concrete_delta + adj_sum;
 
-                const out_types = if (rp_branch_count == 1) blk: {
-                    const items = rp_branch_stacks[0].items;
-                    if (items.len > 0) {
-                        const result = try self.allocator.alloc(StackEntry, items.len);
-                        @memcpy(result, items);
-                        break :blk result;
+                if (!rp_arms_dropped) {
+                    if (try self.composeArms(eff, stack_model.items, rp_arms[0..rp_branch_count], rp_branch_stacks[0..rp_branch_count])) |composed| {
+                        return .{ .applied = .{
+                            .new_delta = new_delta,
+                            .new_model_size = 0,
+                            .output_types = composed.model,
+                            .exact = composed.exact,
+                        } };
                     }
-                    break :blk null;
-                } else try self.mergeBranchTypes(rp_branch_stacks[0..rp_branch_count]);
+                }
+
+                const out_types = if (armsAreAlternatives(eff, rp_arms[0..rp_branch_count]))
+                    try self.mergeBranchTypes(rp_branch_stacks[0..rp_branch_count])
+                else
+                    null;
 
                 return .{
                     .applied = .{
-                        .new_delta = current_delta + concrete_delta + adj_sum,
+                        .new_delta = new_delta,
                         .new_model_size = new_model_size,
                         .output_types = out_types,
                     },
@@ -1654,20 +1840,41 @@ pub const InferenceEngine = struct {
         });
     }
 
-    fn validateDispatchEntries(self: *InferenceEngine, name: []const u8, base_result: InferenceResult, word_def: *const WordDefinition, caller: CallerInfo) Allocator.Error!void {
+    /// Infer every dispatch entry of a generic, reporting a delta or conversion mismatch. Each
+    /// entry's window is appended to `entry_windows`. Returns false when some entry cannot stand
+    /// in a merged window: a native entry, an unknown or inexact one, or one whose delta differs
+    /// from the base body's.
+    fn validateDispatchEntries(
+        self: *InferenceEngine,
+        name: []const u8,
+        base_result: InferenceResult,
+        word_def: *const WordDefinition,
+        caller: CallerInfo,
+        entry_windows: *std.ArrayListUnmanaged(std.ArrayListUnmanaged(StackEntry)),
+    ) Allocator.Error!bool {
         const dispatch_entries = try self.dispatch_table.entriesForDispatchId(word_def.dispatch_id, self.allocator);
         defer self.allocator.free(dispatch_entries);
 
         const conv_target = self.conversionTarget(name, word_def);
+        var mergeable = true;
 
         for (dispatch_entries) |pair| {
             const entry_instrs = switch (pair.entry.body) {
                 .quotation => |q| q.instructions,
-                .native_fn, .host_callback => continue,
+                .native_fn, .host_callback => {
+                    mergeable = false;
+                    continue;
+                },
             };
             var entry_out: std.ArrayListUnmanaged(StackEntry) = .{};
-            defer entry_out.deinit(self.allocator);
+            errdefer entry_out.deinit(self.allocator);
             const entry_result = try self.inferInstructions(entry_instrs, caller, &entry_out);
+            const entry_exact = self.body_window_exact;
+
+            if (entry_result != .known or !entry_exact or base_result != .known or base_result.known != entry_result.known) {
+                mergeable = false;
+            }
+
             if (base_result == .known and entry_result == .known) {
                 if (base_result.known != entry_result.known) {
                     try self.emitDiagnostic(.{
@@ -1688,7 +1895,52 @@ pub const InferenceEngine = struct {
                     try self.checkConversionOutput(name, word_def, target, &entry_out, self.descriptorName(pair.key.type_a));
                 }
             }
+
+            try entry_windows.append(self.allocator, entry_out);
         }
+
+        return mergeable;
+    }
+
+    /// Replace a generic's cached window, which so far describes only its base body, with the
+    /// merge of the base body and every dispatch entry. A call may reach any of them, so the base
+    /// body alone cannot stand for the call. When some entry cannot be merged the cache entry is
+    /// dropped, and callers fall back to passthroughs and the declaration.
+    fn mergeDispatchWindows(
+        self: *InferenceEngine,
+        name: []const u8,
+        base_window: []const StackEntry,
+        entry_windows: []const std.ArrayListUnmanaged(StackEntry),
+        entries_mergeable: bool,
+    ) Allocator.Error!void {
+        if (entry_windows.len == 0) return;
+
+        const base_exact = self.exact_windows.contains(name);
+        if (self.type_cache.fetchRemove(name)) |old| {
+            if (old.value) |types| self.allocator.free(types);
+        }
+        _ = self.exact_windows.remove(name);
+
+        if (!entries_mergeable or !base_exact) return;
+
+        var windows: std.ArrayListUnmanaged(std.ArrayListUnmanaged(StackEntry)) = .{};
+        defer windows.deinit(self.allocator);
+        try windows.append(self.allocator, .{ .items = @constCast(base_window), .capacity = base_window.len });
+        try windows.appendSlice(self.allocator, entry_windows);
+
+        var all_empty = true;
+        for (windows.items) |w| {
+            if (w.items.len != 0) all_empty = false;
+        }
+
+        if (all_empty) {
+            try self.exact_windows.put(self.allocator, name, {});
+            return;
+        }
+
+        const merged = try self.mergeBranchTypes(windows.items) orelse return;
+        try self.type_cache.put(self.allocator, name, merged);
+        try self.exact_windows.put(self.allocator, name, {});
     }
 
     /// Convention-derived output type for a `>name` conversion word, or null
@@ -1775,80 +2027,116 @@ pub const InferenceEngine = struct {
 
             const ann = param.type_annotation orelse continue;
             const stack_pos = stack_model.items.len - concrete_count + concrete_index;
-            const entry = stack_model.items[stack_pos];
+            const actual_name = self.annotationMismatch(stack_model.items[stack_pos], ann) orelse continue;
 
-            switch (ann) {
-                .type => |expected_tv| {
-                    const mismatch_actual: ?[]const u8 = switch (entry) {
-                        .typed => |typed| if (!typed.matches(expected_tv, self.any_type_sentinel)) typed.tv.name else null,
-                        .typed_union => |tu| if (!tu.allMatch(expected_tv, self.any_type_sentinel)) blk: {
-                            break :blk tu.format(self.allocator) catch null;
-                        } else null,
-                        .quotation => blk: {
-                            const qtv = self.resolveValueType(.{ .quotation = .{ .instructions = &.{} } });
-                            if (qtv) |qtype| {
-                                if (qtype != expected_tv) break :blk qtype.name;
-                            }
-                            break :blk null;
-                        },
-                        .protocol_bounded, .other, .struct_literal => null,
-                    };
+            const message = switch (ann) {
+                .type => |expected_tv| try std.fmt.allocPrint(
+                    self.allocator,
+                    "type mismatch: {s} expects {s} for parameter '{s}', but got {s}",
+                    .{ word_def.name, expected_tv.name, param.name, actual_name },
+                ),
+                .protocol => |descriptor| try std.fmt.allocPrint(
+                    self.allocator,
+                    "{s}: type '{s}' does not satisfy protocol '{s}' for parameter '{s}'",
+                    .{ word_def.name, actual_name, descriptor.name, param.name },
+                ),
+                .combination => continue,
+            };
 
-                    if (mismatch_actual) |actual_name| {
-                        const severity: Severity = if (self.type_check_mode == .warning) .warning else .err;
-                        try self.emitDiagnostic(.{
-                            .word_name = caller.word_name,
-                            .source_file = caller.source_file,
-                            .source_line = caller.source_line,
-                            .severity = severity,
-                            .message = try std.fmt.allocPrint(
-                                self.allocator,
-                                "type mismatch: {s} expects {s} for parameter '{s}', but got {s}",
-                                .{ word_def.name, expected_tv.name, param.name, actual_name },
-                            ),
-                        });
+            const severity: Severity = if (self.type_check_mode == .warning) .warning else .err;
+            try self.emitDiagnostic(.{
+                .word_name = caller.word_name,
+                .source_file = caller.source_file,
+                .source_line = caller.source_line,
+                .severity = severity,
+                .message = message,
+            });
+        }
+    }
+
+    /// Compare declared outputs against the stack the body left, top-aligned, and report each
+    /// entry that contradicts its annotation. An output below the modelled window is exempt,
+    /// as is any entry `annotationMismatch` cannot decide.
+    fn checkDeclaredOutputs(
+        self: *InferenceEngine,
+        name: []const u8,
+        word_def: *const WordDefinition,
+        out_stack: []const StackEntry,
+    ) Allocator.Error!void {
+        const eff = word_def.stack_effect orelse return;
+
+        for (eff.outputs, 0..) |param, i| {
+            const ann = param.type_annotation orelse continue;
+            const depth = eff.outputs.len - i;
+            if (depth > out_stack.len) continue;
+
+            const actual_name = self.annotationMismatch(out_stack[out_stack.len - depth], ann) orelse continue;
+
+            const message = switch (ann) {
+                .type => |expected_tv| try std.fmt.allocPrint(
+                    self.allocator,
+                    "{s} declares output '{s}' as {s}, but its body returns {s}",
+                    .{ name, param.name, expected_tv.name, actual_name },
+                ),
+                .protocol => |descriptor| try std.fmt.allocPrint(
+                    self.allocator,
+                    "{s} declares output '{s}' as {s}, but its body returns {s}, which does not satisfy it",
+                    .{ name, param.name, descriptor.name, actual_name },
+                ),
+                .combination => continue,
+            };
+
+            const severity: Severity = if (self.type_check_mode == .warning) .warning else .err;
+            try self.emitDiagnostic(.{
+                .word_name = name,
+                .source_file = word_def.source_file,
+                .source_line = word_def.source_line,
+                .severity = severity,
+                .message = message,
+            });
+        }
+    }
+
+    /// The name of the type `entry` holds when it contradicts `ann`, or null when the entry
+    /// satisfies the annotation or cannot be decided statically.
+    fn annotationMismatch(self: *InferenceEngine, entry: StackEntry, ann: stack_effect_mod.TypeAnnotation) ?[]const u8 {
+        switch (ann) {
+            .type => |expected_tv| return switch (entry) {
+                .typed => |typed| if (!typed.matches(expected_tv, self.any_type_sentinel)) typed.tv.name else null,
+                .typed_union => |tu| if (!tu.allMatch(expected_tv, self.any_type_sentinel)) blk: {
+                    break :blk tu.format(self.allocator) catch null;
+                } else null,
+                .quotation => blk: {
+                    const qtv = self.resolveValueType(.{ .quotation = .{ .instructions = &.{} } });
+                    if (qtv) |qtype| {
+                        if (qtype != expected_tv) break :blk qtype.name;
                     }
+                    break :blk null;
                 },
-                .protocol => |descriptor| {
-                    const ctx = self.ctx orelse continue;
-                    const mismatch_actual: ?[]const u8 = switch (entry) {
-                        .typed => |typed| blk: {
-                            const satisfies = protocols_mod.satisfiesByDescriptorSameTypeOnly(ctx, typed.tv, descriptor) catch break :blk null;
-                            if (satisfies) break :blk null;
-                            break :blk typed.tv.name;
-                        },
-                        .typed_union => |tu| blk: {
-                            for (tu.types[0..tu.len]) |member| {
-                                const satisfies = protocols_mod.satisfiesByDescriptorSameTypeOnly(ctx, member.tv, descriptor) catch break :blk null;
-                                if (!satisfies) {
-                                    break :blk tu.format(self.allocator) catch null;
-                                }
+                .protocol_bounded, .other, .struct_literal => null,
+            },
+            .protocol => |descriptor| {
+                const ctx = self.ctx orelse return null;
+                return switch (entry) {
+                    .typed => |typed| blk: {
+                        const satisfies = protocols_mod.satisfiesByDescriptorSameTypeOnly(ctx, typed.tv, descriptor) catch break :blk null;
+                        if (satisfies) break :blk null;
+                        break :blk typed.tv.name;
+                    },
+                    .typed_union => |tu| blk: {
+                        for (tu.types[0..tu.len]) |member| {
+                            const satisfies = protocols_mod.satisfiesByDescriptorSameTypeOnly(ctx, member.tv, descriptor) catch break :blk null;
+                            if (!satisfies) {
+                                break :blk tu.format(self.allocator) catch null;
                             }
-                            break :blk null;
-                        },
-                        .protocol_bounded => |actual_desc| if (actual_desc == descriptor) null else null,
-                        .quotation, .other, .struct_literal => null,
-                    };
-
-                    if (mismatch_actual) |actual_name| {
-                        const severity: Severity = if (self.type_check_mode == .warning) .warning else .err;
-                        try self.emitDiagnostic(.{
-                            .word_name = caller.word_name,
-                            .source_file = caller.source_file,
-                            .source_line = caller.source_line,
-                            .severity = severity,
-                            .message = try std.fmt.allocPrint(
-                                self.allocator,
-                                "{s}: type '{s}' does not satisfy protocol '{s}' for parameter '{s}'",
-                                .{ word_def.name, actual_name, descriptor.name, param.name },
-                            ),
-                        });
-                    }
-                },
-                // Combinator output checking is not yet implemented; treat a
-                // combinator-annotated output as unconstrained for now.
-                .combination => {},
-            }
+                        }
+                        break :blk null;
+                    },
+                    .protocol_bounded, .quotation, .other, .struct_literal => null,
+                };
+            },
+            // A combination annotation is not checked statically, so it never contradicts.
+            .combination => return null,
         }
     }
 
@@ -1900,61 +2188,120 @@ pub const InferenceEngine = struct {
         return false;
     }
 
+    /// Apply a call to `word_def` to the stack model. Returns false when the model afterwards
+    /// holds only a correct top portion of the stack rather than an exact window.
     fn adjustStackModelTyped(
         self: *InferenceEngine,
         word_def: *const WordDefinition,
         stack_model: *std.ArrayListUnmanaged(StackEntry),
         callee_delta: i64,
-    ) Allocator.Error!void {
+    ) Allocator.Error!bool {
         const eff = word_def.stack_effect orelse {
-            try adjustStackModel(stack_model, callee_delta, self.allocator);
-            return;
+            if (!self.exact_windows.contains(word_def.name)) {
+                stack_model.shrinkRetainingCapacity(0);
+                return false;
+            }
+
+            const window: []const StackEntry = if (self.type_cache.get(word_def.name)) |c| c orelse &.{} else &.{};
+            return self.applyWindow(stack_model, window, callee_delta);
         };
 
         if (stack_effect_mod.hasAnyRowVariable(eff.*)) {
-            try adjustStackModel(stack_model, callee_delta, self.allocator);
-            return;
+            stack_model.shrinkRetainingCapacity(0);
+            return false;
         }
 
-        var has_typed_outputs = false;
-        for (eff.outputs) |param| {
-            if (param.type_annotation != null) {
-                has_typed_outputs = true;
-                break;
-            }
+        const cached: ?[]const StackEntry = if (self.type_cache.get(word_def.name)) |c| c else null;
+        try self.applyEffectToModel(stack_model, eff, cached);
+        return true;
+    }
+
+    /// Replay a body with net `delta` whose exact window is `window`: it consumed
+    /// `window.len - delta` entries from beneath its start and left `window` in their place.
+    /// Returns false, leaving an empty model, when the counts are inconsistent.
+    fn applyWindow(
+        self: *InferenceEngine,
+        stack_model: *std.ArrayListUnmanaged(StackEntry),
+        window: []const StackEntry,
+        delta: i64,
+    ) Allocator.Error!bool {
+        const consumed = @as(i64, @intCast(window.len)) - delta;
+        if (consumed < 0) {
+            stack_model.shrinkRetainingCapacity(0);
+            return false;
         }
 
-        if (!has_typed_outputs) {
-            if (self.type_cache.get(word_def.name)) |cached_opt| {
-                if (cached_opt) |cached_types| {
-                    const input_count = eff.inputs.len;
-                    const remove_count = @min(input_count, stack_model.items.len);
-                    stack_model.shrinkRetainingCapacity(stack_model.items.len - remove_count);
-                    for (cached_types) |entry| {
+        const pop_count = @min(@as(usize, @intCast(consumed)), stack_model.items.len);
+        stack_model.shrinkRetainingCapacity(stack_model.items.len - pop_count);
+        try stack_model.appendSlice(self.allocator, window);
+        return true;
+    }
+
+    /// Apply a row-free effect to the stack model by popping its inputs and pushing exactly one
+    /// entry per output, so the model stays an aligned top window of the real stack. Adjusting
+    /// by delta alone would leave `swap` a no-op and make `nip` drop the wrong entry.
+    ///
+    /// Each output slot, matched top-aligned against `cached`, takes the first resolved source:
+    /// the inferred entry, then the popped entry of the input sharing its name, then the declared
+    /// annotation. Inference wins over the annotation because the annotation is only a claim,
+    /// one `checkDeclaredOutputs` verifies against that same inference.
+    fn applyEffectToModel(
+        self: *InferenceEngine,
+        stack_model: *std.ArrayListUnmanaged(StackEntry),
+        eff: *const StackEffect,
+        cached: ?[]const StackEntry,
+    ) Allocator.Error!void {
+        const pop_count = @min(eff.inputs.len, stack_model.items.len);
+        const popped = try self.allocator.dupe(StackEntry, stack_model.items[stack_model.items.len - pop_count ..]);
+        defer self.allocator.free(popped);
+        stack_model.shrinkRetainingCapacity(stack_model.items.len - pop_count);
+
+        // An input the model never held, because the body consumed below its own pushes, has no
+        // popped entry. `popped` lines up with the top `pop_count` inputs.
+        const unmodeled_inputs = eff.inputs.len - pop_count;
+
+        for (eff.outputs, 0..) |param, i| {
+            const depth = eff.outputs.len - i;
+
+            if (cached) |c| {
+                if (depth <= c.len) {
+                    const entry = c[c.len - depth];
+                    if (entry != .other) {
                         try stack_model.append(self.allocator, entry);
+                        continue;
                     }
-                    return;
                 }
             }
-            try adjustStackModel(stack_model, callee_delta, self.allocator);
-            return;
-        }
 
-        const input_count = eff.inputs.len;
-        const remove_count = @min(input_count, stack_model.items.len);
-        stack_model.shrinkRetainingCapacity(stack_model.items.len - remove_count);
-
-        for (eff.outputs) |param| {
-            if (param.type_annotation) |ann| {
-                switch (ann) {
-                    .type => |tv| try stack_model.append(self.allocator, .{ .typed = .{ .tv = tv } }),
-                    .protocol => |desc| try stack_model.append(self.allocator, .{ .protocol_bounded = desc }),
-                    .combination => try stack_model.append(self.allocator, .other),
-                }
-            } else {
-                try stack_model.append(self.allocator, .other);
+            if (passthroughEntry(eff, param.name, popped, unmodeled_inputs)) |entry| {
+                try stack_model.append(self.allocator, entry);
+                continue;
             }
+
+            const entry: StackEntry = if (param.type_annotation) |ann| switch (ann) {
+                .type => |tv| .{ .typed = .{ .tv = tv } },
+                .protocol => |desc| .{ .protocol_bounded = desc },
+                .combination => .other,
+            } else .other;
+            try stack_model.append(self.allocator, entry);
         }
+    }
+
+    /// The popped model entry for the input named `name`, or null when no input shares the name,
+    /// the input sat below the model, or its entry is unresolved. The topmost input wins a
+    /// repeated name.
+    fn passthroughEntry(eff: *const StackEffect, name: []const u8, popped: []const StackEntry, unmodeled_inputs: usize) ?StackEntry {
+        var i = eff.inputs.len;
+        while (i > 0) {
+            i -= 1;
+            if (!std.mem.eql(u8, eff.inputs[i].name, name)) continue;
+            if (i < unmodeled_inputs) return null;
+
+            const entry = popped[i - unmodeled_inputs];
+            return if (entry == .other) null else entry;
+        }
+
+        return null;
     }
 
     fn emitDiagnostic(self: *InferenceEngine, diagnostic: Diagnostic) Allocator.Error!void {
@@ -1967,19 +2314,6 @@ pub const InferenceEngine = struct {
             d.severity = override;
         }
         try self.diagnostics.append(self.allocator, d);
-    }
-
-    fn adjustStackModel(stack_model: *std.ArrayListUnmanaged(StackEntry), delta: i64, allocator: Allocator) Allocator.Error!void {
-        if (delta < 0) {
-            const to_remove: usize = @intCast(-delta);
-            const remove_count = @min(to_remove, stack_model.items.len);
-            stack_model.shrinkRetainingCapacity(stack_model.items.len - remove_count);
-        } else if (delta > 0) {
-            const to_add: usize = @intCast(delta);
-            for (0..to_add) |_| {
-                try stack_model.append(allocator, .other);
-            }
-        }
     }
 };
 
@@ -4563,4 +4897,194 @@ test "concrete typed entry flowing into protocol input without ctx is silently s
 
     _ = try engine.inferWord("test-word");
     try testing.expectEqual(@as(usize, 0), engine.diagnostics.items.len);
+}
+
+fn expectModelTypes(model: []const StackEntry, expected: []const ?*const TypeValue) !void {
+    try testing.expectEqual(expected.len, model.len);
+    for (model, expected) |entry, want| {
+        if (want) |tv| {
+            try testing.expect(entry == .typed);
+            try testing.expectEqual(tv, entry.typed.tv);
+        } else {
+            try testing.expect(entry == .other);
+        }
+    }
+}
+
+test "applying a shuffle effect permutes model entries by parameter name" {
+    var dict = Dictionary.init(testing.allocator);
+    defer dict.deinit();
+    var dispatch = DispatchTable.init(testing.allocator);
+    defer dispatch.deinit();
+
+    var fixnum_tv = TypeValue{ .name = "fixnum", .descriptor = null };
+    var string_tv = TypeValue{ .name = "string", .descriptor = null };
+
+    var engine = InferenceEngine.init(&dict, &dispatch, &.{}, testing.allocator, null, false, true, null, null, .err, .off, .off, .off, null);
+    defer engine.deinit();
+
+    var model: std.ArrayListUnmanaged(StackEntry) = .{};
+    defer model.deinit(testing.allocator);
+
+    const swap_eff = StackEffect{ .inputs = &.{ .{ .name = "a" }, .{ .name = "b" } }, .outputs = &.{ .{ .name = "b" }, .{ .name = "a" } } };
+    try model.appendSlice(testing.allocator, &.{ .{ .typed = .{ .tv = &string_tv } }, .{ .typed = .{ .tv = &fixnum_tv } } });
+    try engine.applyEffectToModel(&model, &swap_eff, null);
+    try expectModelTypes(model.items, &.{ &fixnum_tv, &string_tv });
+
+    const nip_eff = StackEffect{ .inputs = &.{ .{ .name = "a" }, .{ .name = "b" } }, .outputs = &.{.{ .name = "b" }} };
+    try engine.applyEffectToModel(&model, &nip_eff, null);
+    try expectModelTypes(model.items, &.{&string_tv});
+
+    const over_eff = StackEffect{ .inputs = &.{ .{ .name = "a" }, .{ .name = "b" } }, .outputs = &.{ .{ .name = "a" }, .{ .name = "b" }, .{ .name = "a" } } };
+    try model.insert(testing.allocator, 0, .{ .typed = .{ .tv = &fixnum_tv } });
+    try engine.applyEffectToModel(&model, &over_eff, null);
+    try expectModelTypes(model.items, &.{ &fixnum_tv, &string_tv, &fixnum_tv });
+}
+
+test "applying an effect past the bottom of the model pushes unresolved outputs" {
+    var dict = Dictionary.init(testing.allocator);
+    defer dict.deinit();
+    var dispatch = DispatchTable.init(testing.allocator);
+    defer dispatch.deinit();
+
+    var fixnum_tv = TypeValue{ .name = "fixnum", .descriptor = null };
+
+    var engine = InferenceEngine.init(&dict, &dispatch, &.{}, testing.allocator, null, false, true, null, null, .err, .off, .off, .off, null);
+    defer engine.deinit();
+
+    var model: std.ArrayListUnmanaged(StackEntry) = .{};
+    defer model.deinit(testing.allocator);
+
+    // The model holds only `b`. `a` sat below it, so the `a` the swap brings to the top is
+    // unresolved rather than a stale copy of `b`.
+    const swap_eff = StackEffect{ .inputs = &.{ .{ .name = "a" }, .{ .name = "b" } }, .outputs = &.{ .{ .name = "b" }, .{ .name = "a" } } };
+    try model.append(testing.allocator, .{ .typed = .{ .tv = &fixnum_tv } });
+    try engine.applyEffectToModel(&model, &swap_eff, null);
+    try expectModelTypes(model.items, &.{ &fixnum_tv, null });
+
+    const add_eff = StackEffect{ .inputs = &.{ .{ .name = "x" }, .{ .name = "y" }, .{ .name = "z" } }, .outputs = &.{.{ .name = "sum" }} };
+    try engine.applyEffectToModel(&model, &add_eff, null);
+    try expectModelTypes(model.items, &.{null});
+}
+
+test "an inferred output entry outranks a passthrough and a contradicting annotation" {
+    var dict = Dictionary.init(testing.allocator);
+    defer dict.deinit();
+    var dispatch = DispatchTable.init(testing.allocator);
+    defer dispatch.deinit();
+
+    var fixnum_tv = TypeValue{ .name = "fixnum", .descriptor = null };
+    var string_tv = TypeValue{ .name = "string", .descriptor = null };
+
+    var engine = InferenceEngine.init(&dict, &dispatch, &.{}, testing.allocator, null, false, true, null, null, .err, .off, .off, .off, null);
+    defer engine.deinit();
+
+    var model: std.ArrayListUnmanaged(StackEntry) = .{};
+    defer model.deinit(testing.allocator);
+    try model.append(testing.allocator, .{ .typed = .{ .tv = &fixnum_tv } });
+
+    // `( x -- x: fixnum y: fixnum )`, whose body was inferred to leave `.other string`.
+    const eff = StackEffect{
+        .inputs = &.{.{ .name = "x" }},
+        .outputs = &.{
+            .{ .name = "x", .type_annotation = .{ .type = &fixnum_tv } },
+            .{ .name = "y", .type_annotation = .{ .type = &fixnum_tv } },
+        },
+    };
+    const cached = [_]StackEntry{ .other, .{ .typed = .{ .tv = &string_tv } } };
+
+    // `y` takes the inferred string over its annotation. `x` has no resolved inferred entry, so it
+    // carries the caller's fixnum through.
+    try engine.applyEffectToModel(&model, &eff, &cached);
+    try expectModelTypes(model.items, &.{ &fixnum_tv, &string_tv });
+}
+
+test "a callee without a declared effect is replayed from its inferred window" {
+    var dict = Dictionary.init(testing.allocator);
+    defer dict.deinit();
+    var dispatch = DispatchTable.init(testing.allocator);
+    defer dispatch.deinit();
+
+    var fixnum_tv = TypeValue{ .name = "fixnum", .descriptor = null };
+    var string_tv = TypeValue{ .name = "string", .descriptor = null };
+    var btv: std.StringHashMapUnmanaged(*TypeValue) = .{};
+    defer btv.deinit(testing.allocator);
+    try btv.put(testing.allocator, "fixnum", &fixnum_tv);
+    try btv.put(testing.allocator, "string", &string_tv);
+
+    const dummy: dictionary_mod.NativeFn = struct {
+        fn f(_: *Context) anyerror!void {}
+    }.f;
+
+    try dict.put("drop", .{
+        .name = "drop",
+        .stack_effect = &.{ .inputs = &.{.{ .name = "x" }}, .outputs = &.{} },
+        .action = .{ .native = dummy },
+    });
+
+    // `helper` replaces its input with a fixnum. Adjusting by its delta of zero alone would
+    // leave the caller's string in place.
+    const helper_body: []const Instruction = &.{
+        makeInstr(.{ .call_word = "drop" }),
+        makeInstr(.{ .push_literal = .{ .fixnum = 1 } }),
+    };
+    try dict.put("helper", .{ .name = "helper", .source_file = "test.1z", .action = .{ .compound = helper_body } });
+
+    const body: []const Instruction = &.{
+        makeInstr(.{ .push_literal = value_mod.stringValue("s") }),
+        makeInstr(.{ .call_word = "helper" }),
+    };
+    try dict.put("test-word", .{
+        .name = "test-word",
+        .source_file = "test.1z",
+        .stack_effect = &.{ .inputs = &.{}, .outputs = &.{.{ .name = "n", .type_annotation = .{ .type = &fixnum_tv } }} },
+        .action = .{ .compound = body },
+    });
+
+    var engine = InferenceEngine.init(&dict, &dispatch, &.{}, testing.allocator, null, false, true, &btv, null, .err, .off, .off, .off, null);
+    defer engine.deinit();
+
+    _ = try engine.inferWord("test-word");
+    try testing.expectEqual(@as(usize, 0), engine.diagnostics.items.len);
+}
+
+test "a declared output the body contradicts is reported at the definition" {
+    var dict = Dictionary.init(testing.allocator);
+    defer dict.deinit();
+    var dispatch = DispatchTable.init(testing.allocator);
+    defer dispatch.deinit();
+
+    var fixnum_tv = TypeValue{ .name = "fixnum", .descriptor = null };
+    var string_tv = TypeValue{ .name = "string", .descriptor = null };
+    var btv: std.StringHashMapUnmanaged(*TypeValue) = .{};
+    defer btv.deinit(testing.allocator);
+    try btv.put(testing.allocator, "fixnum", &fixnum_tv);
+    try btv.put(testing.allocator, "string", &string_tv);
+
+    const body: []const Instruction = &.{
+        makeInstr(.{ .push_literal = .{ .fixnum = 1 } }),
+        makeInstr(.{ .push_literal = value_mod.stringValue("two") }),
+    };
+
+    try dict.put("test-word", .{
+        .name = "test-word",
+        .source_file = "test.1z",
+        .source_line = 7,
+        .stack_effect = &.{
+            .inputs = &.{},
+            .outputs = &.{ .{ .name = "a" }, .{ .name = "b", .type_annotation = .{ .type = &fixnum_tv } } },
+        },
+        .action = .{ .compound = body },
+    });
+
+    var engine = InferenceEngine.init(&dict, &dispatch, &.{}, testing.allocator, null, false, true, &btv, null, .err, .off, .off, .off, null);
+    defer engine.deinit();
+
+    _ = try engine.inferWord("test-word");
+    try testing.expectEqual(@as(usize, 1), engine.diagnostics.items.len);
+
+    const d = engine.diagnostics.items[0];
+    try testing.expectEqual(Severity.err, d.severity);
+    try testing.expectEqual(@as(usize, 7), d.source_line);
+    try testing.expectEqualStrings("test-word declares output 'b' as fixnum, but its body returns string", d.message);
 }

@@ -1,0 +1,36 @@
+\ Declared output types the body satisfies, or that the analyzer cannot decide, report nothing
+
+ORDINARY-RIGHT: ( -- value: fixnum ) [ 42 ] ;
+CONST-RIGHT:    ( -- value: fixnum ) const [ 42 ] ;
+BIND-RIGHT:     ( -- value: fixnum ) 42 ;
+PARTIAL-RIGHT:  ( -- a b: fixnum )   [ "one" 2 ] ;
+
+\ An output below what the body pushed is the untouched input, so it is not checked.
+PASSTHROUGH: ( a: string -- n: fixnum a: string ) [ 1 swap ] ;
+
+\ Shuffle words move entries rather than leaving them in place.
+SWAPPED: ( a -- n: fixnum s: string )          [ drop "x" 1 swap ] ;
+NIPPED:  ( -- n: fixnum )                      [ "a" 1 nip ] ;
+OVERED:  ( -- s: string n: fixnum s2: string ) [ "a" 1 over ] ;
+
+\ Combinator arms are replayed in order, each over the values it names.
+BI:   ( -- a: array s: string )           [ 1 [ drop { } ] [ drop "x" ] bi ] ;
+TRI:  ( -- a: array s: string n: fixnum ) [ 1 [ drop { } ] [ drop "x" ] [ ] tri ] ;
+KEPT: ( -- n: fixnum s: string )          [ "s" [ drop 1 ] keep ] ;
+DIPPED: ( -- n: fixnum s: string ) [ "s" [ 1 ] dip ] ;
+
+\ The nested `if` leaves the arm's window inexact, so only the slots above it are placed.
+INEXACT-ARM: ( -- n: fixnum s: string ) [ "s" [ drop t [ 1 ] [ 2 ] if ] keep ] ;
+
+\ A call may reach the string method instead of the base body, so its output is unresolved
+\ rather than the base body's array.
+TAKES-STRING: ( s: string -- ) [ drop ] ;
+dispatched: generic ( x -- y ) [ drop { } ] ;
+dispatched: method{ string } [ ] ;
+feeds-dispatched: ( -- ) [ "s" dispatched TAKES-STRING ] ;
+
+\ `#first` returns an untyped element, so the body's output is unresolved.
+UNMODELLED: ( -- n: fixnum ) [ "a string" 1array #first ] ;
+
+\ The conversion check reads the shuffled top correctly too.
+>string: override generic ( a -- n s ) [ drop "x" 1 swap ] ;

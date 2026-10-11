@@ -1,0 +1,4 @@
+\ Under `type-check: "warning"` a declared output mismatch is a warning, so the check passes
+pragma{ type-check: "warning" }
+
+ORDINARY-WRONG: ( -- value: fixnum ) [ "a string" ] ;
