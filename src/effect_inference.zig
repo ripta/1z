@@ -599,6 +599,23 @@ pub const InferenceEngine = struct {
                 }
                 const result = computeDeclaredDelta(eff.*) orelse .unknown;
                 try self.cache.put(self.allocator, name, result);
+
+                // The entries are validated against the declaration, but their windows are not
+                // merged into the cache: an empty base body is no evidence about the outputs, so
+                // call sites keep the annotation-derived types above.
+                var entry_windows: std.ArrayListUnmanaged(std.ArrayListUnmanaged(StackEntry)) = .{};
+                defer {
+                    for (entry_windows.items) |*w| w.deinit(self.allocator);
+                    entry_windows.deinit(self.allocator);
+                }
+
+                const caller_info = CallerInfo{
+                    .word_name = name,
+                    .source_file = word_def.source_file,
+                    .source_line = word_def.source_line,
+                    .declared_input_count = eff.concreteInputCount(),
+                };
+                _ = try self.validateDispatchEntries(name, result, &word_def, caller_info, &entry_windows);
                 return result;
             }
         }
@@ -634,16 +651,10 @@ pub const InferenceEngine = struct {
         if (inferred == .known and self.type_check_mode != .off and self.isInCheckedSource(word_def.source_file)) {
             if (word_def.stack_effect) |eff| {
                 if (!stack_effect_mod.hasAnyRowVariable(eff.*)) {
-                    try self.checkDeclaredOutputs(name, &word_def, body_out_stack.items);
+                    try self.checkDeclaredOutputs(name, &word_def, body_out_stack.items, null);
                 }
             }
         }
-
-        const generic_uses_declared_delta = isGeneric(&word_def) and instructions.len == 0 and word_def.stack_effect != null;
-        const inferred_for_delta = if (generic_uses_declared_delta)
-            computeDeclaredDelta(word_def.stack_effect.?.*) orelse inferred
-        else
-            inferred;
 
         if (isGeneric(&word_def)) {
             var entry_windows: std.ArrayListUnmanaged(std.ArrayListUnmanaged(StackEntry)) = .{};
@@ -652,7 +663,7 @@ pub const InferenceEngine = struct {
                 entry_windows.deinit(self.allocator);
             }
 
-            const entries_mergeable = try self.validateDispatchEntries(name, inferred_for_delta, &word_def, caller_info, &entry_windows);
+            const entries_mergeable = try self.validateDispatchEntries(name, inferred, &word_def, caller_info, &entry_windows);
             if (inferred == .known) {
                 try self.mergeDispatchWindows(name, body_out_stack.items, entry_windows.items, entries_mergeable);
             }
@@ -666,7 +677,7 @@ pub const InferenceEngine = struct {
 
         if (word_def.stack_effect) |eff| {
             if (computeDeclaredDelta(eff.*)) |declared| {
-                switch (inferred_for_delta) {
+                switch (inferred) {
                     .known => |inferred_delta| {
                         if (declared.known != inferred_delta) {
                             try self.emitDiagnostic(.{
@@ -1840,10 +1851,11 @@ pub const InferenceEngine = struct {
         });
     }
 
-    /// Infer every dispatch entry of a generic, reporting a delta or conversion mismatch. Each
-    /// entry's window is appended to `entry_windows`. Returns false when some entry cannot stand
-    /// in a merged window: a native entry, an unknown or inexact one, or one whose delta differs
-    /// from the base body's.
+    /// Infer every dispatch entry of a generic, reporting a delta, declared output, or conversion
+    /// mismatch. Each entry's window is appended to `entry_windows`.
+    ///
+    /// Returns false when some entry cannot stand in a merged window: a native entry, an unknown
+    /// or inexact one, or one whose delta differs from the base body's.
     fn validateDispatchEntries(
         self: *InferenceEngine,
         name: []const u8,
@@ -1856,6 +1868,7 @@ pub const InferenceEngine = struct {
         defer self.allocator.free(dispatch_entries);
 
         const conv_target = self.conversionTarget(name, word_def);
+        const check_outputs = self.type_check_mode != .off and self.isInCheckedSource(word_def.source_file);
         var mergeable = true;
 
         for (dispatch_entries) |pair| {
@@ -1890,9 +1903,19 @@ pub const InferenceEngine = struct {
                     });
                 }
             }
-            if (conv_target) |target| {
-                if (entry_result == .known) {
-                    try self.checkConversionOutput(name, word_def, target, &entry_out, self.descriptorName(pair.key.type_a));
+            if (entry_result == .known and (check_outputs or conv_target != null)) {
+                const type_b = self.descriptorName(pair.key.type_b);
+                const method_types = if (type_b.len == 0)
+                    try self.allocator.dupe(u8, self.descriptorName(pair.key.type_a))
+                else
+                    try std.fmt.allocPrint(self.allocator, "{s} {s}", .{ self.descriptorName(pair.key.type_a), type_b });
+                defer self.allocator.free(method_types);
+
+                if (check_outputs) {
+                    try self.checkDeclaredOutputs(name, word_def, entry_out.items, method_types);
+                }
+                if (conv_target) |target| {
+                    try self.checkConversionOutput(name, word_def, target, &entry_out, method_types);
                 }
             }
 
@@ -2057,13 +2080,23 @@ pub const InferenceEngine = struct {
     /// Compare declared outputs against the stack the body left, top-aligned, and report each
     /// entry that contradicts its annotation. An output below the modelled window is exempt,
     /// as is any entry `annotationMismatch` cannot decide.
+    ///
+    /// `method_types` names the dispatching types for a method entry, or is null for the base
+    /// body.
     fn checkDeclaredOutputs(
         self: *InferenceEngine,
         name: []const u8,
         word_def: *const WordDefinition,
         out_stack: []const StackEntry,
+        method_types: ?[]const u8,
     ) Allocator.Error!void {
         const eff = word_def.stack_effect orelse return;
+
+        const body = if (method_types) |mt|
+            try std.fmt.allocPrint(self.allocator, "method{{ {s} }}", .{mt})
+        else
+            "its body";
+        defer if (method_types != null) self.allocator.free(body);
 
         for (eff.outputs, 0..) |param, i| {
             const ann = param.type_annotation orelse continue;
@@ -2075,13 +2108,13 @@ pub const InferenceEngine = struct {
             const message = switch (ann) {
                 .type => |expected_tv| try std.fmt.allocPrint(
                     self.allocator,
-                    "{s} declares output '{s}' as {s}, but its body returns {s}",
-                    .{ name, param.name, expected_tv.name, actual_name },
+                    "{s} declares output '{s}' as {s}, but {s} returns {s}",
+                    .{ name, param.name, expected_tv.name, body, actual_name },
                 ),
                 .protocol => |descriptor| try std.fmt.allocPrint(
                     self.allocator,
-                    "{s} declares output '{s}' as {s}, but its body returns {s}, which does not satisfy it",
-                    .{ name, param.name, descriptor.name, actual_name },
+                    "{s} declares output '{s}' as {s}, but {s} returns {s}, which does not satisfy it",
+                    .{ name, param.name, descriptor.name, body, actual_name },
                 ),
                 .combination => continue,
             };

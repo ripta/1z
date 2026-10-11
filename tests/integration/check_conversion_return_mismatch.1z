@@ -2,3 +2,7 @@
 
 >fixnum: ( x -- n ) generic [ drop 0 ] ;
 >fixnum: method{ string } [ drop "wrong" ] ;
+
+\ The methods of a generic with an empty base body are checked too
+>float: ( x -- n ) generic [ ] ;
+>float: method{ string } [ drop "wrong" ] ;

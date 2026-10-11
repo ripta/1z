@@ -1,1 +1,2 @@
+tests/integration/check_conversion_return_mismatch.1z:7: err: >float: >float is declared to return float, but method{ string } returns string instead
 tests/integration/check_conversion_return_mismatch.1z:3: err: >fixnum: >fixnum is declared to return fixnum, but method{ string } returns string instead

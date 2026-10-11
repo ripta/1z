@@ -34,3 +34,20 @@ feeds-merged: ( -- ) [ "s" merged TAKES-STRING ] ;
 \ The unannotated slot of a partial effect keeps its inferred string.
 PARTIAL-RIGHT: ( -- a b: fixnum ) [ "one" 2 ] ;
 feeds-partial: ( -- ) [ PARTIAL-RIGHT drop TAKES-FIXNUM ] ;
+
+\ Every method entry is checked against the declaration, even when the base body agrees.
+ENTRY-WRONG: generic ( x -- n: fixnum ) [ drop 0 ] ;
+ENTRY-WRONG: method{ string } [ drop "s" ] ;
+
+\ An empty base body says nothing about the outputs, but its entries are still checked.
+ABSTRACT-WRONG: generic ( x -- n: fixnum ) [ ] ;
+ABSTRACT-WRONG: method{ string } [ drop "s" ] ;
+
+ABSTRACT-DELTA-WRONG: generic ( x -- n ) [ ] ;
+ABSTRACT-DELTA-WRONG: method{ string } [ drop 1 2 ] ;
+
+PAIR-WRONG: generic ( a b -- n: fixnum ) [ 2drop 0 ] ;
+PAIR-WRONG: method{ fixnum string } [ 2drop "s" ] ;
+
+ENTRY-PROTOCOL-WRONG: generic ( x -- w: walker ) [ ] ;
+ENTRY-PROTOCOL-WRONG: method{ string } [ drop 42 ] ;

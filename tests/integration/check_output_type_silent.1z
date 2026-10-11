@@ -32,5 +32,13 @@ feeds-dispatched: ( -- ) [ "s" dispatched TAKES-STRING ] ;
 \ `#first` returns an untyped element, so the body's output is unresolved.
 UNMODELLED: ( -- n: fixnum ) [ "a string" 1array #first ] ;
 
+\ Method entries that agree with the declaration, or that the analyzer cannot decide.
+ENTRY-RIGHT:      generic ( x -- n: fixnum ) [ drop 0 ] ;
+ENTRY-RIGHT:      method{ string } [ drop 1 ] ;
+ABSTRACT-RIGHT:   generic ( x -- n: fixnum ) [ ] ;
+ABSTRACT-RIGHT:   method{ string } [ drop 1 ] ;
+ENTRY-UNMODELLED: generic ( x -- n: fixnum ) [ drop 0 ] ;
+ENTRY-UNMODELLED: method{ string } [ 1array #first ] ;
+
 \ The conversion check reads the shuffled top correctly too.
 >string: override generic ( a -- n s ) [ drop "x" 1 swap ] ;
