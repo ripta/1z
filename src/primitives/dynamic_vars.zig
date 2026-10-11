@@ -21,7 +21,7 @@ pub const primitives = [_]Primitive{
     .{ .name = "make-parameter", .stack_effect = "name: quot -- param", .doc = "Create a dynamic parameter with a name and default quotation.", .func = nativeMakeParameter },
     .{ .name = "define-parameter", .stack_effect = "name: descriptor markers --", .doc = "Define a dynamic parameter word from a descriptor map carrying a 'default' quotation.", .func = nativeDefineParameter, .defines_word = true },
     .{ .name = "get", .stack_effect = "param -- value", .doc = "Get the current value of a dynamic parameter.", .func = nativeGet },
-    .{ .name = "with-parameter", .stack_effect = "value param quot --", .doc = "Execute quotation with parameter temporarily bound to value.", .func = nativeWithParameter },
+    .{ .name = "with-parameter", .stack_effect = "..a value param quot: ( ..a -- ..b ) -- ..b", .doc = "Execute quotation with parameter temporarily bound to value.", .func = nativeWithParameter },
 };
 
 /// make-parameter ( name: quot -- param )
@@ -154,7 +154,7 @@ pub fn nativeGet(ctx: *Context) anyerror!void {
     }
 }
 
-/// with-parameter ( value param quot -- ... )
+/// with-parameter ( ..a value param quot: ( ..a -- ..b ) -- ..b )
 pub fn nativeWithParameter(ctx: *Context) anyerror!void {
     const body_pc = try popQuotation(ctx);
     defer body_pc.release();

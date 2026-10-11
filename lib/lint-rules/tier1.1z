@@ -9,22 +9,6 @@ use "conversions" ;
 
 \ --- Shared helpers ---
 
-(skip-doc-lookahead-token?): ( token -- ? ) [
-  kind>> dup whitespace: = [
-    drop t
-  ] [
-    dup newline: = [
-      drop t
-    ] [
-      dup comment: = [
-        drop t
-      ] [
-        doc-comment: =
-      ] if
-    ] if
-  ] if
-] ;
-
 (preserve-statement-start?): ( token -- ? ) [
   kind>> dup whitespace: = [
     drop t
@@ -42,27 +26,6 @@ use "conversions" ;
         ] if
       ] if
     ] if
-  ] if
-] ;
-
-(next-doc-target-index): stack-recursive ( tokens idx -- idx ) [
-  over #len >= [
-    nip
-  ] [
-    2dup #nth (skip-doc-lookahead-token?) [
-      drop ++ (next-doc-target-index)
-    ] [
-      drop
-    ] if
-  ] if
-] ;
-
-(index-is-symbol?): ( tokens idx -- ? ) [
-  over #len < [
-    2dup #nth kind>> symbol: =
-    nip nip
-  ] [
-    2drop f
   ] if
 ] ;
 

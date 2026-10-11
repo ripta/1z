@@ -721,8 +721,8 @@ pub const primitives = [_]Primitive{
     .{ .name = "#first", .stack_effect = "seq -- elem", .doc = "Get first element of sequence.", .func = nativeFirst, .markers = &.{@constCast(&markers_mod.generic_marker)} },
     .{ .name = "#last", .stack_effect = "seq -- elem", .doc = "Get last element of sequence.", .func = nativeLast, .markers = &.{@constCast(&markers_mod.generic_marker)} },
     // Sequence transformations
-    .{ .name = "#each", .stack_effect = "seq quot: ( elem -- ) --", .doc = "Execute quotation for each element of sequence. An operand that is neither a native sequence nor an iterator is routed through >iterator.", .func = nativeEach },
-    .{ .name = "#each-index", .stack_effect = "seq quot: ( elem idx -- ) --", .doc = "Execute quotation for each element of sequence with its zero-based index. An operand that is neither a native sequence nor an iterator is routed through >iterator.", .func = nativeEachIndex },
+    .{ .name = "#each", .stack_effect = "..a seq quot: ( ..a elem -- ..a ) -- ..a", .doc = "Execute quotation for each element of sequence. An operand that is neither a native sequence nor an iterator is routed through >iterator.", .func = nativeEach },
+    .{ .name = "#each-index", .stack_effect = "..a seq quot: ( ..a elem idx -- ..a ) -- ..a", .doc = "Execute quotation for each element of sequence with its zero-based index. An operand that is neither a native sequence nor an iterator is routed through >iterator.", .func = nativeEachIndex },
     .{ .name = "#map", .stack_effect = "seq quot: ( elem -- elem' ) -- seq'", .doc = "Transform each element of sequence using quotation. An operand that is neither a native sequence nor an iterator is routed through >iterator. A quotation that is a chain of + - * / against numeric literals over a packed float array is vectorized chunk-by-chunk; a recognized packed-f32 computes in f32.", .func = nativeMap },
     .{ .name = "#filter", .stack_effect = "seq quot: ( elem -- ? ) -- seq'", .doc = "Keep elements where quotation returns true. An operand that is neither a native sequence nor an iterator is routed through >iterator.", .func = nativeFilter },
     .{ .name = "#reduce", .stack_effect = "seq init quot: ( acc elem -- acc' ) -- value", .doc = "Fold sequence with accumulator. An operand that is neither a native sequence nor an iterator is routed through >iterator.", .func = nativeReduce },
@@ -906,7 +906,7 @@ pub fn nativeLast(ctx: *Context) anyerror!void {
     return error.TypeMismatch;
 }
 
-/// #each ( seq quot -- )
+/// #each ( ..a seq quot: ( ..a elem -- ..a ) -- ..a )
 pub fn nativeEach(ctx: *Context) anyerror!void {
     const pc = try popQuotation(ctx);
     defer pc.release();
@@ -943,7 +943,7 @@ pub fn nativeEach(ctx: *Context) anyerror!void {
     }
 }
 
-/// #each-index ( seq quot -- )
+/// #each-index ( ..a seq quot: ( ..a elem idx -- ..a ) -- ..a )
 pub fn nativeEachIndex(ctx: *Context) anyerror!void {
     const pc = try popQuotation(ctx);
     defer pc.release();

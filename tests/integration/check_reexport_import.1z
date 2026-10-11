@@ -1,0 +1,5 @@
+\ A word a module forwards with `reexport` is importable under `1z check`
+
+use { <pratt>: } "pratt/arith" ;
+
+make-parser: ( config -- parser ) [ <pratt> ] ;

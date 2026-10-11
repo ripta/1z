@@ -1,0 +1,29 @@
+\ `while` leaves its predicate's row, which may sit deeper than the row it started from
+
+pop?: ( s: string -- string option ) [ drop "s" option:none ] ;
+
+\ The predicate leaves the option it tested, so the loop exits one entry deeper than it began.
+drain: ( s -- array ) [
+  { } swap
+  [ pop? dup option:some? ]
+  [ option:some> swap [ #push ] dip ]
+  while
+  2drop
+] ;
+
+\ The entry the predicate left is usable after the loop.
+walk-root: ( parents i -- root ) [
+  [ 2dup #nth 2dup = not ]
+  [ nip ]
+  while
+  drop nip
+] ;
+
+\ A real underflow after the loop is still reported.
+DRAIN-WRONG: ( s -- array ) [
+  { } swap
+  [ pop? dup option:some? ]
+  [ option:some> swap [ #push ] dip ]
+  while
+  2drop drop
+] ;

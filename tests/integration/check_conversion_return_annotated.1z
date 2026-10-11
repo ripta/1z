@@ -1,0 +1,19 @@
+\ A typed top output on a >name word is checked against the conversion convention
+
+\ An annotation that contradicts the convention is reported once, even though every body agrees with it
+>fixnum: ( x -- s: string ) generic [ drop "ok" ] ;
+>fixnum: method{ string } [ drop "also ok" ] ;
+
+\ Also when the base body is empty
+>symbol: ( x -- s: string ) generic [ ] ;
+>symbol: method{ string } [ ] ;
+
+\ An annotation that agrees with the convention reports each wrong body once
+>float: ( x -- f: float ) generic [ drop "base" ] ;
+>float: method{ string } [ drop 1 ] ;
+
+walker: protocol{ walk: } ;
+walk: generic ( x -- y ) [ ] ;
+
+\ A protocol annotation leaves the convention check in place
+>string: ( x -- w: walker ) generic [ drop 42 ] ;

@@ -1,0 +1,1 @@
+tests/integration/check_passthrough_runners.1z:12: err: BOUND-WRONG: declared stack effect delta is 1, but inferred delta is 0

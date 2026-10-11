@@ -56,6 +56,10 @@ pub fn nativeSuppressChecksValidator(ctx: *Context) anyerror!void {
 pub const InferenceResult = union(enum) {
     known: i64,
     unknown,
+
+    /// A body whose last step is a branch with arms of different arity, or a declaration with
+    /// `|` alternative outputs. Each member is one arity the word may leave.
+    alternatives: stack_effect_mod.DeltaSet,
 };
 
 pub const Severity = enum {
@@ -614,8 +618,10 @@ pub const InferenceEngine = struct {
                     .source_file = word_def.source_file,
                     .source_line = word_def.source_line,
                     .declared_input_count = eff.concreteInputCount(),
+                    .alternatives_ok = result == .alternatives,
                 };
-                _ = try self.validateDispatchEntries(name, result, &word_def, caller_info, &entry_windows);
+                const conv_target = try self.conversionBodyTarget(name, &word_def);
+                _ = try self.validateDispatchEntries(name, result, &word_def, caller_info, conv_target, &entry_windows);
                 return result;
             }
         }
@@ -626,11 +632,16 @@ pub const InferenceEngine = struct {
             if (stack_effect_mod.hasAnyRowVariable(eff.*)) break :blk null;
             break :blk eff.concreteInputCount();
         } else null;
+        const declares_alternatives = if (word_def.stack_effect) |eff|
+            (computeDeclaredDelta(eff.*) orelse InferenceResult.unknown) == .alternatives
+        else
+            false;
         const caller_info = CallerInfo{
             .word_name = name,
             .source_file = word_def.source_file,
             .source_line = word_def.source_line,
             .declared_input_count = declared_inputs,
+            .alternatives_ok = declares_alternatives,
         };
         var body_out_stack: std.ArrayListUnmanaged(StackEntry) = .{};
         defer body_out_stack.deinit(self.allocator);
@@ -651,7 +662,7 @@ pub const InferenceEngine = struct {
         if (inferred == .known and self.type_check_mode != .off and self.isInCheckedSource(word_def.source_file)) {
             if (word_def.stack_effect) |eff| {
                 if (!stack_effect_mod.hasAnyRowVariable(eff.*)) {
-                    try self.checkDeclaredOutputs(name, &word_def, body_out_stack.items, null);
+                    try self.checkDeclaredOutputs(name, &word_def, inferred.known, body_out_stack.items, null);
                 }
             }
         }
@@ -663,13 +674,14 @@ pub const InferenceEngine = struct {
                 entry_windows.deinit(self.allocator);
             }
 
-            const entries_mergeable = try self.validateDispatchEntries(name, inferred, &word_def, caller_info, &entry_windows);
+            const conv_target = try self.conversionBodyTarget(name, &word_def);
+            const entries_mergeable = try self.validateDispatchEntries(name, inferred, &word_def, caller_info, conv_target, &entry_windows);
             if (inferred == .known) {
                 try self.mergeDispatchWindows(name, body_out_stack.items, entry_windows.items, entries_mergeable);
             }
 
             if (inferred == .known) {
-                if (self.conversionTarget(name, &word_def)) |target| {
+                if (conv_target) |target| {
                     try self.checkConversionOutput(name, &word_def, target, &body_out_stack, null);
                 }
             }
@@ -678,8 +690,24 @@ pub const InferenceEngine = struct {
         if (word_def.stack_effect) |eff| {
             if (computeDeclaredDelta(eff.*)) |declared| {
                 switch (inferred) {
-                    .known => |inferred_delta| {
-                        if (declared.known != inferred_delta) {
+                    .known, .alternatives => {
+                        const admitted = switch (inferred) {
+                            .known => |d| declaredAdmits(declared, d),
+                            .alternatives => |set| blk: {
+                                for (set.slice()) |d| {
+                                    if (!declaredAdmits(declared, d)) break :blk false;
+                                }
+                                break :blk true;
+                            },
+                            .unknown => unreachable,
+                        };
+
+                        if (!admitted) {
+                            const declared_text = try formatDeltas(self.allocator, declared);
+                            defer self.allocator.free(declared_text);
+                            const inferred_text = try formatDeltas(self.allocator, inferred);
+                            defer self.allocator.free(inferred_text);
+
                             try self.emitDiagnostic(.{
                                 .word_name = name,
                                 .source_file = word_def.source_file,
@@ -687,8 +715,8 @@ pub const InferenceEngine = struct {
                                 .severity = .err,
                                 .message = try std.fmt.allocPrint(
                                     self.allocator,
-                                    "declared stack effect delta is {d}, but inferred delta is {d}",
-                                    .{ declared.known, inferred_delta },
+                                    "declared stack effect delta is {s}, but inferred delta is {s}",
+                                    .{ declared_text, inferred_text },
                                 ),
                             });
                         }
@@ -798,6 +826,7 @@ pub const InferenceEngine = struct {
         var dead_code_warned: bool = false;
         const DeadCodeCause = union(enum) { underflow, terminal_call: []const u8, terminal_branch, terminal_recovery };
         var dead_code_cause: ?DeadCodeCause = null;
+        var alternatives_result: ?stack_effect_mod.DeltaSet = null;
 
         // Quotation-local definitions encountered while walking this body, with
         // whether each is referenced by a direct call in the same body or by a
@@ -871,8 +900,8 @@ pub const InferenceEngine = struct {
                             if (self.resolveQualifiedName(name)) |mod_word| {
                                 if (mod_word.polymorphic) {
                                     if (mod_word.stack_effect) |eff| {
-                                        if (computeDeclaredDelta(eff.*)) |result| {
-                                            delta += result.known;
+                                        if (declaredKnownDelta(eff.*)) |declared_delta| {
+                                            delta += declared_delta;
                                             try self.applyEffectToModel(&stack_model, eff, null);
                                             uncertain = true;
                                             uncertain_source = name;
@@ -886,14 +915,16 @@ pub const InferenceEngine = struct {
                                     return .unknown;
                                 }
                                 if (mod_word.stack_effect) |eff| {
-                                    if (computeDeclaredDelta(eff.*)) |result| {
-                                        delta += result.known;
+                                    if (declaredKnownDelta(eff.*)) |declared_delta| {
+                                        delta += declared_delta;
                                         try self.applyEffectToModel(&stack_model, eff, null);
                                         continue;
                                     }
                                 }
+
+                                // An alternative-arity callee leaves an uncountable stack.
                                 self.last_unknown_callee = name;
-                                self.last_unknown_is_polymorphic = false;
+                                self.last_unknown_is_polymorphic = if (mod_word.stack_effect) |eff| eff.hasAlternativeOutput() else false;
                                 return .unknown;
                             }
                         }
@@ -947,6 +978,7 @@ pub const InferenceEngine = struct {
                                 delta,
                                 caller,
                                 instr.line,
+                                idx + 1 == instructions.len,
                             );
                             switch (rp_result) {
                                 .applied => |applied| {
@@ -973,6 +1005,12 @@ pub const InferenceEngine = struct {
                                 },
                                 .unknown => return .unknown,
                                 .fallthrough => {},
+                                .alternatives => |set| {
+                                    alternatives_result = set;
+                                    window_exact = false;
+                                    stack_model.clearRetainingCapacity();
+                                    continue;
+                                },
                             }
                         }
                     }
@@ -1011,7 +1049,7 @@ pub const InferenceEngine = struct {
                                         }
                                         continue;
                                     },
-                                    .unknown => return .unknown,
+                                    .unknown, .alternatives => return .unknown,
                                     .fallthrough => {},
                                 }
                             }
@@ -1042,8 +1080,8 @@ pub const InferenceEngine = struct {
 
                     if (isDynamicCall(&wd)) {
                         if (wd.stack_effect) |eff| {
-                            if (computeDeclaredDelta(eff.*)) |result| {
-                                delta += result.known;
+                            if (declaredKnownDelta(eff.*)) |declared_delta| {
+                                delta += declared_delta;
                                 try self.applyEffectToModel(&stack_model, eff, null);
                                 uncertain = true;
                                 uncertain_source = name;
@@ -1062,15 +1100,15 @@ pub const InferenceEngine = struct {
                             // The model applied the declared effect, so a callee whose body
                             // disagrees with it leaves the window out of step with `delta`.
                             if (wd.stack_effect) |eff| {
-                                if (computeDeclaredDelta(eff.*)) |declared| {
-                                    if (declared.known != callee_delta) window_exact = false;
+                                if (declaredKnownDelta(eff.*)) |declared_delta| {
+                                    if (declared_delta != callee_delta) window_exact = false;
                                 }
                             }
                         },
                         .unknown => {
                             if (wd.stack_effect) |eff| {
-                                if (computeDeclaredDelta(eff.*)) |result| {
-                                    delta += result.known;
+                                if (declaredKnownDelta(eff.*)) |declared_delta| {
+                                    delta += declared_delta;
                                     try self.applyEffectToModel(&stack_model, eff, null);
                                     uncertain = true;
                                     uncertain_source = name;
@@ -1078,6 +1116,14 @@ pub const InferenceEngine = struct {
                                     continue;
                                 }
                             }
+                            return .unknown;
+                        },
+
+                        // The arity after the call depends on which alternative ran, so nothing
+                        // after it can be counted. The caller trusts its own declaration.
+                        .alternatives => {
+                            self.last_unknown_callee = name;
+                            self.last_unknown_is_polymorphic = true;
                             return .unknown;
                         },
                     }
@@ -1121,6 +1167,8 @@ pub const InferenceEngine = struct {
             os.appendSliceAssumeCapacity(stack_model.items);
         }
 
+        if (alternatives_result) |set| return .{ .alternatives = set };
+
         return .{ .known = delta };
     }
 
@@ -1129,6 +1177,10 @@ pub const InferenceEngine = struct {
         source_file: ?[]const u8,
         source_line: usize,
         declared_input_count: ?usize = null,
+
+        /// The word declares `|` alternative outputs and the code being inferred ends its body,
+        /// so a final branch may leave a different arity on each arm.
+        alternatives_ok: bool = false,
     };
 
     const CombinatorKind = enum { none, branch, loop, recovery };
@@ -1154,6 +1206,9 @@ pub const InferenceEngine = struct {
         },
         unknown,
         fallthrough,
+
+        /// The call ends the body and its arms leave these different deltas.
+        alternatives: stack_effect_mod.DeltaSet,
     };
 
     /// A literal quotation argument that inferred to a known delta.
@@ -1269,6 +1324,40 @@ pub const InferenceEngine = struct {
         return true;
     }
 
+    /// How many entries a loop combinator's output row sits above its input row.
+    ///
+    /// A loop that leaves its input row, such as `loop`, shifts nothing. One that leaves another
+    /// row exits after the arm producing it, so `while` ends on its predicate's `..a -- ..b` and
+    /// that arm's adjustment is the shift. Null when no single arm leads from one row to the other.
+    fn loopOutputShift(eff: *const StackEffect, arms: []const ArmRecord) ?i64 {
+        const in_row = firstRowName(eff.inputs);
+        const out_row = firstRowName(eff.outputs);
+        if (in_row == null and out_row == null) return 0;
+
+        const from = in_row orelse return null;
+        const to = out_row orelse return null;
+        if (std.mem.eql(u8, from, to)) return 0;
+
+        var shift: ?i64 = null;
+        for (arms) |arm| {
+            const arm_from = firstRowName(arm.annotation.inputs) orelse continue;
+            const arm_to = firstRowName(arm.annotation.outputs) orelse continue;
+            if (!std.mem.eql(u8, arm_from, from) or !std.mem.eql(u8, arm_to, to)) continue;
+            if (shift != null) return null;
+            shift = arm.delta - arm.annotation.concreteDelta();
+        }
+
+        return shift;
+    }
+
+    fn firstRowName(params: []const StackEffectParam) ?[]const u8 {
+        for (params) |param| {
+            if (param.is_row_variable) return param.name;
+        }
+
+        return null;
+    }
+
     /// The popped entry of the topmost input named `name`, or null when no input has that name.
     fn namedEntry(inputs: []const StackEffectParam, popped: []const StackEntry, name: []const u8) ?StackEntry {
         var i = inputs.len;
@@ -1289,7 +1378,7 @@ pub const InferenceEngine = struct {
         caller: CallerInfo,
     ) Allocator.Error!CombinatorResult {
         const eff = word_def.stack_effect orelse return .fallthrough;
-        const declared = computeDeclaredDelta(eff.*) orelse return .fallthrough;
+        const declared = declaredKnownDelta(eff.*) orelse return .fallthrough;
 
         const input_count = eff.inputs.len;
 
@@ -1316,6 +1405,7 @@ pub const InferenceEngine = struct {
                     var branch_out: std.ArrayListUnmanaged(StackEntry) = .{};
                     var quot_caller = caller;
                     quot_caller.declared_input_count = null;
+                    quot_caller.alternatives_ok = false;
 
                     const qd = try self.inferInstructions(quot.instructions, quot_caller, &branch_out);
                     if (!self.body_terminal) all_arms_terminal = false;
@@ -1329,7 +1419,7 @@ pub const InferenceEngine = struct {
                                 branch_out.deinit(self.allocator);
                             }
                         },
-                        .unknown => {
+                        .unknown, .alternatives => {
                             all_literal = false;
                             branch_out.deinit(self.allocator);
                         },
@@ -1343,14 +1433,14 @@ pub const InferenceEngine = struct {
             const consumed = @min(stack_model.items.len, input_count);
             const new_model_size = stack_model.items.len - consumed;
             return .{ .applied = .{
-                .new_delta = current_delta + declared.known,
+                .new_delta = current_delta + declared,
                 .new_model_size = new_model_size,
                 .terminal = true,
             } };
         }
 
         if (!all_literal or !found_any_quot or quot_deltas.items.len == 0) {
-            const new_delta = current_delta + declared.known;
+            const new_delta = current_delta + declared;
             const consumed = @min(stack_model.items.len, input_count);
             const new_model_size = stack_model.items.len - consumed;
             return .{ .applied = .{ .new_delta = new_delta, .new_model_size = new_model_size } };
@@ -1376,7 +1466,7 @@ pub const InferenceEngine = struct {
                     }
                 }
 
-                const total_delta = current_delta + declared.known + first;
+                const total_delta = current_delta + declared + first;
                 const consumed = @min(stack_model.items.len, input_count);
                 const new_model_size = stack_model.items.len - consumed;
 
@@ -1405,7 +1495,7 @@ pub const InferenceEngine = struct {
                     }
                 }
 
-                const total_delta = current_delta + declared.known;
+                const total_delta = current_delta + declared;
                 const consumed = @min(stack_model.items.len, input_count);
                 const new_model_size = stack_model.items.len - consumed;
                 return .{ .applied = .{ .new_delta = total_delta, .new_model_size = new_model_size } };
@@ -1496,6 +1586,7 @@ pub const InferenceEngine = struct {
         current_delta: i64,
         caller: CallerInfo,
         line: usize,
+        is_tail: bool,
     ) Allocator.Error!CombinatorResult {
         const eff = word_def.stack_effect orelse return .fallthrough;
         const concrete_inputs = eff.concreteInputCount();
@@ -1530,6 +1621,7 @@ pub const InferenceEngine = struct {
                         var rp_out: std.ArrayListUnmanaged(StackEntry) = .{};
                         var quot_caller = caller;
                         quot_caller.declared_input_count = null;
+                        quot_caller.alternatives_ok = caller.alternatives_ok and is_tail and kind == .branch;
 
                         const qd = try self.inferInstructions(quot.instructions, quot_caller, &rp_out);
                         const arm_exact = self.body_window_exact;
@@ -1559,6 +1651,14 @@ pub const InferenceEngine = struct {
                             },
                             .unknown => {
                                 all_literal = false;
+                                rp_out.deinit(self.allocator);
+                            },
+
+                            // An arm ending in its own diverging branch contributes one
+                            // adjustment per arity it may leave.
+                            .alternatives => |set| {
+                                const annotated_qcd = annotation.concreteDelta();
+                                for (set.slice()) |d| try adjustments.append(self.allocator, d - annotated_qcd);
                                 rp_out.deinit(self.allocator);
                             },
                         }
@@ -1606,9 +1706,13 @@ pub const InferenceEngine = struct {
                     return .unknown;
                 }
 
+                if (rp_arms_dropped) return .unknown;
+                const shift = loopOutputShift(eff, rp_arms[0..rp_branch_count]) orelse return .unknown;
+                const shifted_size = @as(i64, @intCast(new_model_size)) + shift;
+
                 return .{ .applied = .{
-                    .new_delta = current_delta + concrete_delta,
-                    .new_model_size = new_model_size,
+                    .new_delta = current_delta + concrete_delta + shift,
+                    .new_model_size = @intCast(@max(0, shifted_size)),
                 } };
             },
 
@@ -1618,6 +1722,18 @@ pub const InferenceEngine = struct {
                 const first = adjustments.items[0];
                 for (adjustments.items[1..]) |adj| {
                     if (adj != first) {
+                        // The last branch of a word declaring `|` alternatives may leave a
+                        // different arity on each arm. Each one is checked against the
+                        // declaration once the body is inferred.
+                        if (kind == .branch and caller.alternatives_ok and is_tail) {
+                            var set: stack_effect_mod.DeltaSet = .{};
+                            var fits = true;
+                            for (adjustments.items) |a| {
+                                if (!set.add(current_delta + concrete_delta + a)) fits = false;
+                            }
+                            if (fits) return .{ .alternatives = set };
+                        }
+
                         try self.emitDiagnostic(.{
                             .word_name = caller.word_name,
                             .source_file = caller.source_file,
@@ -1790,12 +1906,13 @@ pub const InferenceEngine = struct {
 
         var quot_caller = caller;
         quot_caller.declared_input_count = null;
+        quot_caller.alternatives_ok = false;
         const result = try self.inferInstructions(quot.instructions, quot_caller, null);
         if (self.body_terminal) return null;
 
         return switch (result) {
             .known => |d| d,
-            .unknown => null,
+            .unknown, .alternatives => null,
         };
     }
 
@@ -1852,7 +1969,8 @@ pub const InferenceEngine = struct {
     }
 
     /// Infer every dispatch entry of a generic, reporting a delta, declared output, or conversion
-    /// mismatch. Each entry's window is appended to `entry_windows`.
+    /// mismatch. Each entry's window is appended to `entry_windows`. A null `conv_target` skips
+    /// the conversion check.
     ///
     /// Returns false when some entry cannot stand in a merged window: a native entry, an unknown
     /// or inexact one, or one whose delta differs from the base body's.
@@ -1862,12 +1980,12 @@ pub const InferenceEngine = struct {
         base_result: InferenceResult,
         word_def: *const WordDefinition,
         caller: CallerInfo,
+        conv_target: ?*const TypeValue,
         entry_windows: *std.ArrayListUnmanaged(std.ArrayListUnmanaged(StackEntry)),
     ) Allocator.Error!bool {
         const dispatch_entries = try self.dispatch_table.entriesForDispatchId(word_def.dispatch_id, self.allocator);
         defer self.allocator.free(dispatch_entries);
 
-        const conv_target = self.conversionTarget(name, word_def);
         const check_outputs = self.type_check_mode != .off and self.isInCheckedSource(word_def.source_file);
         var mergeable = true;
 
@@ -1888,7 +2006,44 @@ pub const InferenceEngine = struct {
                 mergeable = false;
             }
 
-            if (base_result == .known and entry_result == .known) {
+            // A declaration with `|` alternatives lets each body leave any listed arity, so an
+            // entry answers to the declaration rather than to the base body.
+            const declared_alternatives: ?InferenceResult = if (word_def.stack_effect) |eff|
+                if (eff.hasAlternativeOutput()) computeDeclaredDelta(eff.*) else null
+            else
+                null;
+
+            if (declared_alternatives) |declared| {
+                const admitted = switch (entry_result) {
+                    .known => |d| declaredAdmits(declared, d),
+                    .alternatives => |set| blk: {
+                        for (set.slice()) |d| {
+                            if (!declaredAdmits(declared, d)) break :blk false;
+                        }
+                        break :blk true;
+                    },
+                    .unknown => true,
+                };
+
+                if (!admitted) {
+                    const declared_text = try formatDeltas(self.allocator, declared);
+                    defer self.allocator.free(declared_text);
+                    const entry_text = try formatDeltas(self.allocator, entry_result);
+                    defer self.allocator.free(entry_text);
+
+                    try self.emitDiagnostic(.{
+                        .word_name = name,
+                        .source_file = word_def.source_file,
+                        .source_line = word_def.source_line,
+                        .severity = .err,
+                        .message = try std.fmt.allocPrint(
+                            self.allocator,
+                            "dispatch entry for ({s}, {s}) has delta {s}, but the declared delta is {s}",
+                            .{ self.descriptorName(pair.key.type_a), self.descriptorName(pair.key.type_b), entry_text, declared_text },
+                        ),
+                    });
+                }
+            } else if (base_result == .known and entry_result == .known) {
                 if (base_result.known != entry_result.known) {
                     try self.emitDiagnostic(.{
                         .word_name = name,
@@ -1912,7 +2067,7 @@ pub const InferenceEngine = struct {
                 defer self.allocator.free(method_types);
 
                 if (check_outputs) {
-                    try self.checkDeclaredOutputs(name, word_def, entry_out.items, method_types);
+                    try self.checkDeclaredOutputs(name, word_def, entry_result.known, entry_out.items, method_types);
                 }
                 if (conv_target) |target| {
                     try self.checkConversionOutput(name, word_def, target, &entry_out, method_types);
@@ -1966,24 +2121,56 @@ pub const InferenceEngine = struct {
         try self.exact_windows.put(self.allocator, name, {});
     }
 
-    /// Convention-derived output type for a `>name` conversion word, or null
-    /// when the word is not subject to the check. A `>name` word is expected to
-    /// return a value of type `name`. The check is skipped unless the suffix
-    /// names a known builtin type and the word declares no explicit typed top
-    /// output, since an explicit annotation is the user's deliberate override.
+    /// Convention-derived output type for a `>name` conversion word, or null when the word is not
+    /// subject to the check. A `>name` word is expected to return a value of type `name`. The check
+    /// is skipped unless the suffix names a known builtin type.
     fn conversionTarget(self: *const InferenceEngine, name: []const u8, word_def: *const WordDefinition) ?*const TypeValue {
         if (self.type_check_mode == .off) return null;
         if (name.len < 2 or name[0] != '>') return null;
         if (!self.isInCheckedSource(word_def.source_file)) return null;
 
-        if (word_def.stack_effect) |eff| {
-            if (eff.outputs.len > 0) {
-                if (eff.outputs[eff.outputs.len - 1].type_annotation != null) return null;
-            }
-        }
-
         const btv = self.builtin_type_values orelse return null;
         return btv.get(name[1..]);
+    }
+
+    /// The conversion target a `>name` word's bodies are still checked against once its top
+    /// output annotation is accounted for, or null when no body check is needed.
+    ///
+    /// A type annotation that satisfies the target is at least as specific, so the declared
+    /// output check already covers the body and a second report would duplicate it. One that
+    /// contradicts the target is reported here, once, against the declaration itself. A
+    /// protocol, combination, or `any` annotation says nothing the convention does not, so the
+    /// body is checked against the target as if it were unannotated.
+    fn conversionBodyTarget(self: *InferenceEngine, name: []const u8, word_def: *const WordDefinition) Allocator.Error!?*const TypeValue {
+        const target = self.conversionTarget(name, word_def) orelse return null;
+        const eff = word_def.stack_effect orelse return target;
+        if (eff.outputs.len == 0) return target;
+
+        const top = eff.outputs[eff.outputs.len - 1];
+        const ann = top.type_annotation orelse return target;
+        const declared = switch (ann) {
+            .type => |tv| tv,
+            .protocol, .combination => return target,
+        };
+        if (self.any_type_sentinel) |any_tv| {
+            if (declared == any_tv) return target;
+        }
+
+        if (helpers.typeMatchesConstraint(declared, target)) return null;
+
+        const severity: Severity = if (self.type_check_mode == .warning) .warning else .err;
+        try self.emitDiagnostic(.{
+            .word_name = name,
+            .source_file = word_def.source_file,
+            .source_line = word_def.source_line,
+            .severity = severity,
+            .message = try std.fmt.allocPrint(
+                self.allocator,
+                "{s} declares output '{s}' as {s}, but a {s} conversion returns {s}",
+                .{ name, top.name, declared.name, name, target.name },
+            ),
+        });
+        return null;
     }
 
     /// Compare the inferred top-of-stack output of a `>name` conversion body
@@ -2082,15 +2269,18 @@ pub const InferenceEngine = struct {
     /// as is any entry `annotationMismatch` cannot decide.
     ///
     /// `method_types` names the dispatching types for a method entry, or is null for the base
-    /// body.
+    /// body. `delta` picks the alternative to compare against when the effect declares `|`
+    /// alternatives, and a body matching none of them is left to the delta check.
     fn checkDeclaredOutputs(
         self: *InferenceEngine,
         name: []const u8,
         word_def: *const WordDefinition,
+        delta: i64,
         out_stack: []const StackEntry,
         method_types: ?[]const u8,
     ) Allocator.Error!void {
         const eff = word_def.stack_effect orelse return;
+        const outputs = eff.outputsForDelta(delta) orelse return;
 
         const body = if (method_types) |mt|
             try std.fmt.allocPrint(self.allocator, "method{{ {s} }}", .{mt})
@@ -2098,9 +2288,9 @@ pub const InferenceEngine = struct {
             "its body";
         defer if (method_types != null) self.allocator.free(body);
 
-        for (eff.outputs, 0..) |param, i| {
+        for (outputs, 0..) |param, i| {
             const ann = param.type_annotation orelse continue;
-            const depth = eff.outputs.len - i;
+            const depth = outputs.len - i;
             if (depth > out_stack.len) continue;
 
             const actual_name = self.annotationMismatch(out_stack[out_stack.len - depth], ann) orelse continue;
@@ -2244,8 +2434,16 @@ pub const InferenceEngine = struct {
             return false;
         }
 
+        // A declaration with `|` alternatives lists every arity, but the call left only the one
+        // the body inferred, so only that alternative's outputs are placed.
+        const outputs = eff.outputsForDelta(callee_delta) orelse {
+            stack_model.shrinkRetainingCapacity(0);
+            return false;
+        };
+        const chosen = StackEffect{ .inputs = eff.inputs, .outputs = outputs };
+
         const cached: ?[]const StackEntry = if (self.type_cache.get(word_def.name)) |c| c else null;
-        try self.applyEffectToModel(stack_model, eff, cached);
+        try self.applyEffectToModel(stack_model, &chosen, cached);
         return true;
     }
 
@@ -2352,9 +2550,50 @@ pub const InferenceEngine = struct {
 
 fn computeDeclaredDelta(effect: StackEffect) ?InferenceResult {
     if (stack_effect_mod.hasAnyRowVariable(effect)) return null;
+    if (effect.hasAlternativeOutput()) {
+        const set = effect.alternativeDeltas() orelse return null;
+        return .{ .alternatives = set };
+    }
+
     const inputs: i64 = @intCast(effect.inputs.len);
     const outputs: i64 = @intCast(effect.outputs.len);
     return .{ .known = outputs - inputs };
+}
+
+/// The declared delta when the effect fixes a single one, or null for a row-polymorphic effect
+/// or one with `|` alternatives.
+fn declaredKnownDelta(effect: StackEffect) ?i64 {
+    const declared = computeDeclaredDelta(effect) orelse return null;
+    return switch (declared) {
+        .known => |d| d,
+        .unknown, .alternatives => null,
+    };
+}
+
+/// Whether a body that leaves `delta` meets a declaration of `declared`.
+fn declaredAdmits(declared: InferenceResult, delta: i64) bool {
+    return switch (declared) {
+        .known => |d| d == delta,
+        .alternatives => |set| set.contains(delta),
+        .unknown => true,
+    };
+}
+
+/// Render a delta or a set of them for a diagnostic, as `1` or `1 or 0`.
+fn formatDeltas(allocator: Allocator, result: InferenceResult) Allocator.Error![]const u8 {
+    return switch (result) {
+        .known => |d| std.fmt.allocPrint(allocator, "{d}", .{d}),
+        .unknown => allocator.dupe(u8, "unknown"),
+        .alternatives => |set| blk: {
+            var buf: std.ArrayListUnmanaged(u8) = .{};
+            errdefer buf.deinit(allocator);
+            for (set.slice(), 0..) |d, i| {
+                if (i > 0) try buf.appendSlice(allocator, " or ");
+                try buf.writer(allocator).print("{d}", .{d});
+            }
+            break :blk buf.toOwnedSlice(allocator);
+        },
+    };
 }
 
 fn isDynamicCall(word_def: *const WordDefinition) bool {

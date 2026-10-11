@@ -79,6 +79,15 @@ H{ greeting: "Hello!" } "en-US" <locale> catalog-set
 missing-key: "en-US" <locale> <locale-chain> catalog-get?
 f swap "not found flag" assert=
 
+"catalog-get? not found in any locale leaves nothing behind" test-section
+"sentinel"
+<message-catalog>
+H{ greeting: "Hallo!" } "de-DE" <locale> catalog-set
+H{ greeting: "Hello!" } "en-US" <locale> catalog-set
+missing-key: "de-DE" <locale> "en-US" <locale> <locale-chain-with> catalog-get?
+f swap "not found flag" assert=
+"sentinel" swap "a miss in every locale leaves nothing behind" assert=
+
 \ --- catalog-get ---
 
 "catalog-get found" test-section

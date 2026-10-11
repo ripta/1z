@@ -139,7 +139,7 @@ catalog-get-or: ( catalog key chain default -- string ) [
   swap dup option:some? [
     option:some> swap @get?
   ] [
-    drop drop
+    nip
   ] if
 ] ;
 
@@ -165,7 +165,7 @@ catalog-get-or: ( catalog key chain default -- string ) [
       3nip
       >option:some
     ] [
-      3drop option:none
+      drop 3drop option:none
     ] if
   ] if
 ] ;

@@ -903,7 +903,7 @@ export fn onez_check(ptr: ?*anyopaque, code: [*]const u8, len: usize) c_int {
                 return 1;
             },
             .complete => |instrs| {
-                if (instrs.len > 0 and Context.isDefinitionStatement(instrs)) {
+                if (instrs.len > 0 and Context.isCheckStatement(instrs)) {
                     ctx.executeQuotation(.{ .instructions = instrs }) catch |err| {
                         captureError(handle, err);
                         return 1;
@@ -921,7 +921,7 @@ export fn onez_check(ptr: ?*anyopaque, code: [*]const u8, len: usize) c_int {
             return 1;
         },
         .complete => |instrs| {
-            if (instrs.len > 0 and Context.isDefinitionStatement(instrs)) {
+            if (instrs.len > 0 and Context.isCheckStatement(instrs)) {
                 ctx.executeQuotation(.{ .instructions = instrs }) catch |err| {
                     captureError(handle, err);
                     return 1;

@@ -107,7 +107,7 @@ lexer: struct{ rules table } ;
 \\   new-scanner token  -- matched, emit token
 \\   new-scanner t      -- consumed input, no token (restart from the new scanner)
 \\   f                  -- no match (try next rule)
-(try-bucket): ( scanner table bucket -- new-scanner token ) [
+(try-bucket): ( scanner table bucket -- new-scanner token | t ) [
   dup #empty? [
     2drop
     dup position>> [ H{ } offset: ] dip @set
@@ -141,8 +141,9 @@ lexer: struct{ rules table } ;
   ] if
 ] ;
 
-\ Try rules for the scanner's current character.
-(try-rules): ( scanner table -- new-scanner token ) [
+\ Try rules for the scanner's current character. Leaves `t` when skip rules consumed the rest of
+\ the input.
+(try-rules): ( scanner table -- new-scanner token | t ) [
   2dup (bucket-for-scanner) (try-bucket)
 ] ;
 

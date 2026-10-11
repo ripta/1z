@@ -11,7 +11,7 @@ const simd_kernels = @import("../simd_vector.zig");
 const container_backing = @import("../container_backing.zig");
 
 pub const registry_entries = [_]RegistryEntry{
-    .{ .name = "simd-from-stack", .func = nativeSimdFromStack, .stack_effect = "v0..vN-1 type-str -- byte-array" },
+    .{ .name = "simd-from-stack", .func = nativeSimdFromStack, .stack_effect = "...lanes type-str -- byte-array" },
     .{ .name = "simd-splat-impl", .func = nativeSimdSplat, .stack_effect = "value type-str -- byte-array" },
     .{ .name = "simd-to-array", .func = nativeSimdToArray, .stack_effect = "simd-NxT -- array" },
     .{ .name = "simd-lane-get", .func = nativeSimdLaneGet, .stack_effect = "simd-NxT fixnum -- value" },
@@ -249,7 +249,7 @@ fn wrapSimdResult(ctx: *Context, tag: *const VirtualType, out_bytes: [simd_kerne
 }
 
 // ---------------------------------------------------------------------------
-// Construction: simd-from-stack ( v0..vN-1 type-str -- byte-array )
+// Construction: simd-from-stack ( ...lanes type-str -- byte-array )
 // ---------------------------------------------------------------------------
 
 fn nativeSimdFromStack(ctx: *Context) anyerror!void {

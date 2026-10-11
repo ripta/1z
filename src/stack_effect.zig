@@ -198,6 +198,47 @@ pub const StackEffect = struct {
         return paramsHaveAlternativeOutput(self.outputs);
     }
 
+    /// The net delta of each `|`-separated output alternative, or null when the outputs declare
+    /// none. `( scanner -- new-scanner token | f )` declares deltas 1 and 0.
+    pub fn alternativeDeltas(self: StackEffect) ?DeltaSet {
+        if (!self.hasAlternativeOutput()) return null;
+
+        const in: i64 = @intCast(self.concreteInputCount());
+        var set: DeltaSet = .{};
+        var it = AlternativeIterator{ .outputs = self.outputs };
+        while (it.next()) |alt| {
+            if (!set.add(concreteCount(alt) - in)) return null;
+        }
+
+        return set;
+    }
+
+    /// The fewest concrete outputs any alternative leaves, or the concrete output count when the
+    /// effect declares no alternative. A word may return with this many values and no fewer.
+    pub fn minOutputCount(self: StackEffect) usize {
+        if (!self.hasAlternativeOutput()) return self.concreteOutputCount();
+
+        var fewest: i64 = std.math.maxInt(i64);
+        var it = AlternativeIterator{ .outputs = self.outputs };
+        while (it.next()) |alt| fewest = @min(fewest, concreteCount(alt));
+
+        return @intCast(fewest);
+    }
+
+    /// The outputs of the alternative whose net delta is `delta`, or all outputs when the effect
+    /// declares no alternative. Null when no alternative has that delta.
+    pub fn outputsForDelta(self: StackEffect, delta: i64) ?[]const StackEffectParam {
+        if (!self.hasAlternativeOutput()) return self.outputs;
+
+        const in: i64 = @intCast(self.concreteInputCount());
+        var it = AlternativeIterator{ .outputs = self.outputs };
+        while (it.next()) |alt| {
+            if (concreteCount(alt) - in == delta) return alt;
+        }
+
+        return null;
+    }
+
     /// True if the outputs declare the bottom output `-- *`: a single output named `*`.
     ///
     /// This is the honest output shape of a word that never returns to its caller. The
@@ -381,6 +422,66 @@ pub fn hasAnyRowVariable(effect: StackEffect) bool {
         if (param.is_row_variable) return true;
     }
     return false;
+}
+
+/// A small set of distinct stack deltas, one per arity a word may leave.
+pub const DeltaSet = struct {
+    items: [8]i64 = undefined,
+    len: usize = 0,
+
+    /// Add `delta` unless it is already present. Returns false when the set is full.
+    pub fn add(self: *DeltaSet, delta: i64) bool {
+        if (self.contains(delta)) return true;
+        if (self.len == self.items.len) return false;
+
+        self.items[self.len] = delta;
+        self.len += 1;
+        return true;
+    }
+
+    pub fn contains(self: DeltaSet, delta: i64) bool {
+        for (self.items[0..self.len]) |d| {
+            if (d == delta) return true;
+        }
+
+        return false;
+    }
+
+    pub fn slice(self: *const DeltaSet) []const i64 {
+        return self.items[0..self.len];
+    }
+};
+
+/// Walks the `|`-separated groups of an output list.
+const AlternativeIterator = struct {
+    outputs: []const StackEffectParam,
+    pos: usize = 0,
+    done: bool = false,
+
+    fn next(self: *AlternativeIterator) ?[]const StackEffectParam {
+        if (self.done) return null;
+
+        const start = self.pos;
+        while (self.pos < self.outputs.len) : (self.pos += 1) {
+            if (std.mem.eql(u8, self.outputs[self.pos].name, "|")) {
+                const group = self.outputs[start..self.pos];
+                self.pos += 1;
+                return group;
+            }
+        }
+
+        self.done = true;
+        return self.outputs[start..];
+    }
+};
+
+fn concreteCount(params: []const StackEffectParam) i64 {
+    var count: i64 = 0;
+    for (params) |param| {
+        if (!param.is_row_variable) count += 1;
+    }
+
+    return count;
 }
 
 /// Slice-level form of `StackEffect.hasAlternativeOutput`, for callers holding
@@ -608,6 +709,32 @@ test "hasAlternativeOutput" {
         .outputs = &[_]StackEffectParam{.{ .name = "y" }},
     };
     try std.testing.expect(!input_pipe.hasAlternativeOutput());
+}
+
+test "alternativeDeltas and outputsForDelta" {
+    const alt = StackEffect{
+        .inputs = &[_]StackEffectParam{.{ .name = "scanner" }},
+        .outputs = &[_]StackEffectParam{
+            .{ .name = "new-scanner" },
+            .{ .name = "token" },
+            .{ .name = "|" },
+            .{ .name = "f" },
+        },
+    };
+
+    const set = alt.alternativeDeltas().?;
+    try std.testing.expectEqualSlices(i64, &.{ 1, 0 }, set.slice());
+    try std.testing.expectEqual(@as(usize, 2), alt.outputsForDelta(1).?.len);
+    try std.testing.expectEqualStrings("f", alt.outputsForDelta(0).?[0].name);
+    try std.testing.expect(alt.outputsForDelta(2) == null);
+    try std.testing.expectEqual(@as(usize, 1), alt.minOutputCount());
+
+    const concrete = StackEffect{
+        .inputs = &[_]StackEffectParam{.{ .name = "x" }},
+        .outputs = &[_]StackEffectParam{.{ .name = "y" }},
+    };
+    try std.testing.expect(concrete.alternativeDeltas() == null);
+    try std.testing.expectEqual(@as(usize, 1), concrete.outputsForDelta(0).?.len);
 }
 
 test "hasAnyRowVariable using struct field" {

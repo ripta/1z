@@ -276,8 +276,8 @@ regex-match: ( str regex -- option ) [
     2 pick-n 1 + max
     \ Stack: state(5) sb(4) str(3) code(2) ms(1) captures(0) new-offset
     6 pick-n swap 3 swap #nth! drop
-    \ Stack: sb(4) str(3) code(2) ms(1) captures(0)
-    nip nip nip nip
+    \ Stack: state(5) sb(4) str(3) code(2) ms(1) captures(0)
+    nip nip nip nip nip
     >option:some
   ] if
 ] ;
@@ -358,12 +358,12 @@ regex-replace: ( str regex replacement -- str ) [
     4 pick-n 0 3 pick-n #slice bytes>
     \ Stack: repl(6) sb(5) str(4) code(3) ms(2) me(1) prefix(0)
     6 pick-n #append
-    \ Stack: sb(5) str(4) code(3) ms(2) me(1) pr(0)
+    \ Stack: repl(6) sb(5) str(4) code(3) ms(2) me(1) pr(0)
     \ suffix = sb[me..end]
     5 pick-n 2 pick-n over #len #slice bytes>
-    \ Stack: sb(6) str(5) code(4) ms(3) me(2) pr(1) suffix(0)
+    \ Stack: repl(7) sb(6) str(5) code(4) ms(3) me(2) pr(1) suffix(0)
     #append
-    nip nip nip nip nip
+    nip nip nip nip nip nip
   ] if
 ] ;
 

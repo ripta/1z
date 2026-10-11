@@ -1,0 +1,6 @@
+tests/integration/check_alternative_outputs.1z:32: note: caller: callee first-two? is polymorphic; effect trusted from declaration
+tests/integration/check_alternative_outputs.1z:29: err: UNDECLARED: branch quotations have mismatched row variable adjustments
+tests/integration/check_alternative_outputs.1z:18: err: TOO-MANY: declared stack effect delta is 1 or 0, but inferred delta is 2 or 0
+tests/integration/check_alternative_outputs.1z:53: note: uses-pick: callee pick-one is polymorphic; effect trusted from declaration
+tests/integration/check_alternative_outputs.1z:24: err: NOT-LAST: branch quotations have mismatched row variable adjustments
+tests/integration/check_alternative_outputs.1z:48: err: LOOKUP-WRONG?: dispatch entry for (string, ) has delta 3, but the declared delta is 1 or 0

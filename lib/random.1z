@@ -55,4 +55,4 @@ random-below: ( n: fixnum -- k ) [
 ] ;
 
 \\ Run quot with gen bound as the ambient generator.
-with-random: ( gen: random quot: quotation -- ) [ [ current-random ] dip with-parameter ] ;
+with-random: ( ..a gen: random quot: ( ..a -- ..b ) -- ..b ) [ [ current-random ] dip with-parameter ] ;

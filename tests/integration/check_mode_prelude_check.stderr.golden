@@ -1,9 +1,8 @@
-src/prelude.1z:1694: err: pragma-get?: branch quotations have mismatched row variable adjustments
+src/prelude.1z:1694: note: pragma-get?: callee native.pragma-get-raw is polymorphic; effect trusted from declaration
 src/prelude.1z:983: warning: borrow: word has no declared stack effect
 src/prelude.1z:293: warning: associative: word has no declared stack effect
 src/prelude.1z:302: warning: parameter{: word has no declared stack effect
 src/prelude.1z:23: warning: B{: word has no declared stack effect
-src/prelude.1z:102: err: virtual{: branch quotations have mismatched row variable adjustments
 src/prelude.1z:102: warning: virtual{: word has no declared stack effect
 src/prelude.1z:259: warning: method{: word has no declared stack effect
 src/prelude.1z:1608: warning: bind-inputs: word has no declared stack effect

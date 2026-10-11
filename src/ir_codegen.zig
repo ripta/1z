@@ -3483,10 +3483,14 @@ pub fn inferQuotationEffect(
                 const res = resolver orelse return null;
                 const resolved = res.resolve(name, res.user_data) orelse return null;
 
-                // Row-variable callees have input_count/output_count
-                // that include row variable params. Without knowing their
-                // quotation arguments, the counts are unusable here.
-                if (resolved.callee_effect != null) return null;
+                // A row-variable callee's input_count/output_count include row variable params, so
+                // they are unusable here. One that preserves every row it names still applies its
+                // concrete effect.
+                if (resolved.callee_effect) |callee_eff| {
+                    const counts = try rowPreservingCounts(callee_eff.*, mini_stack[0..sp], resolver, resolved.is_native) orelse return null;
+                    try applyFixedEffect(&mini_stack, &sp, &delta, &min_delta, counts.input_count, counts.output_count);
+                    break :blk;
+                }
 
                 // Consume inputs.
                 const in: i32 = @intCast(resolved.input_count);
@@ -3846,11 +3850,15 @@ const RowVarBinding = struct {
 ///
 /// Returns null if specialization is not possible (quotation not visible as
 /// a literal body, inference fails, or row variable bindings conflict).
+///
+/// `trust_unseen` holds a row-preserving quotation that is not visible, or does not infer, to
+/// its annotation. It is set for a native callee, whose concrete effect codegen always trusted.
 fn resolveRowVariableEffect(
     effect: *const StackEffect,
     stack: []const StackEntry,
     sp: usize,
     resolver: ?WordResolver,
+    trust_unseen: bool,
 ) error{ RowBindingOverflow, EffectInferenceOverflow }!?InferredEffect {
     const concrete_in = effect.concreteInputCount();
 
@@ -3878,13 +3886,37 @@ fn resolveRowVariableEffect(
         // This quotation parameter has row-variable effects.
         // Check if the corresponding stack entry is a visible quotation body.
         const stack_pos = base_pos + concrete_idx;
-        const body = switch (stack[stack_pos]) {
-            .quotation_body => |q| q.body,
-            else => return null,
+        const visible: ?InferredEffect = switch (stack[stack_pos]) {
+            .quotation_body => |q| try inferQuotationEffect(q.body, resolver),
+            else => null,
         };
 
-        // Infer the concrete effect of the quotation body.
-        const inferred = try inferQuotationEffect(body, resolver) orelse return null;
+        // A row-preserving annotation leaves the rows beneath the call at the depth it found them,
+        // so they bind to zero and the callee's concrete effect applies, however deep the body
+        // reaches into the row.
+        //
+        // The entries beneath the call are flushed before it and reread from memory once it
+        // settles, so a body that rewrites them in place, such as an accumulator threaded under
+        // `#each`, is still observed. A visible body that takes a different count from the row
+        // than it puts back breaks the annotation, and is left to the dynamic path.
+        if (rowPreserving(qe, effect.*)) {
+            if (visible) |inf| {
+                const dci = qe.concreteInputCount();
+                const dco = qe.concreteOutputCount();
+                if (inf.input_count < dci or inf.output_count < dco) return null;
+                if (inf.input_count - dci != inf.output_count - dco) return null;
+            } else if (!trust_unseen) {
+                return null;
+            }
+
+            for (qe.inputs) |qp| {
+                if (!qp.is_row_variable) continue;
+                if (!(try addOrCheckBinding(&bindings, &num_bindings, qp.name, 0))) return null;
+            }
+            continue;
+        }
+
+        const inferred = visible orelse return null;
 
         // Compute row variable sizes from the difference between
         // inferred concrete counts and the quotation's declared
@@ -3944,6 +3976,98 @@ fn resolveRowVariableEffect(
         .input_count = specialized_in,
         .output_count = specialized_out,
     };
+}
+
+/// True when every row variable of the quotation annotation `qe` appears on both of its sides and on
+/// both sides of the callee's `outer` effect, as in `#each`'s `( ..a elem -- ..a )`. The callee then
+/// leaves the rows beneath it the depth it found them, whatever the quotation does inside them.
+fn rowPreserving(qe: StackEffect, outer: StackEffect) bool {
+    var any = false;
+    for (qe.inputs) |p| {
+        if (!p.is_row_variable) continue;
+        any = true;
+
+        if (!hasRowNamed(qe.outputs, p.name)) return false;
+        if (!hasRowNamed(outer.inputs, p.name) or !hasRowNamed(outer.outputs, p.name)) return false;
+    }
+
+    for (qe.outputs) |p| {
+        if (p.is_row_variable and !hasRowNamed(qe.inputs, p.name)) return false;
+    }
+
+    return any;
+}
+
+/// The concrete counts of a callee whose every row variable is preserved by one of its quotation
+/// parameters, as `#each`'s `..a` is, or null when one is not.
+///
+/// A row named only by the callee's own inputs and outputs, as in `( ... n -- ... )`, binds to
+/// nothing, so such a callee is null here as it is in `resolveRowVariableEffect`.
+///
+/// A quotation body visible on `mini_stack` must take from its rows as many entries as it puts
+/// back. One that is not visible or does not infer is held to its annotation only when
+/// `trust_unseen` is set.
+fn rowPreservingCounts(
+    effect: StackEffect,
+    mini_stack: []const MiniStackEntry,
+    resolver: ?WordResolver,
+    trust_unseen: bool,
+) error{EffectInferenceOverflow}!?InferredEffect {
+    for (effect.inputs) |p| {
+        if (p.is_row_variable and !preservedByQuotation(effect, p.name)) return null;
+    }
+    for (effect.outputs) |p| {
+        if (p.is_row_variable and !hasRowNamed(effect.inputs, p.name)) return null;
+    }
+
+    const concrete_in = effect.concreteInputCount();
+    var concrete_idx: usize = 0;
+    for (effect.inputs) |param| {
+        if (param.is_row_variable) continue;
+        defer concrete_idx += 1;
+
+        const qe = (param.quotation_effect orelse continue).*;
+        if (!stack_effect_mod.hasAnyRowVariable(qe)) continue;
+        if (!rowPreserving(qe, effect)) return null;
+
+        // An argument below the entries this body pushed is not visible here.
+        const body: ?[]const Instruction = if (mini_stack.len + concrete_idx < concrete_in) null else switch (mini_stack[mini_stack.len + concrete_idx - concrete_in]) {
+            .quotation => |q| q,
+            else => null,
+        };
+
+        const inf = (if (body) |b| try inferQuotationEffect(b, resolver) else null) orelse {
+            if (!trust_unseen) return null;
+            continue;
+        };
+        const dci = qe.concreteInputCount();
+        const dco = qe.concreteOutputCount();
+        if (inf.input_count < dci or inf.output_count < dco) return null;
+        if (inf.input_count - dci != inf.output_count - dco) return null;
+    }
+
+    return .{
+        .input_count = @intCast(concrete_in),
+        .output_count = @intCast(effect.concreteOutputCount()),
+    };
+}
+
+/// True when some quotation parameter of `effect` carries the row `name` through unchanged.
+fn preservedByQuotation(effect: StackEffect, name: []const u8) bool {
+    for (effect.inputs) |param| {
+        const qe = (param.quotation_effect orelse continue).*;
+        if (hasRowNamed(qe.inputs, name) and rowPreserving(qe, effect)) return true;
+    }
+
+    return false;
+}
+
+fn hasRowNamed(params: []const StackEffectParam, name: []const u8) bool {
+    for (params) |p| {
+        if (p.is_row_variable and std.mem.eql(u8, p.name, name)) return true;
+    }
+
+    return false;
 }
 
 /// Add a row variable binding or verify consistency with an existing one.
@@ -4624,7 +4748,7 @@ fn rewriteIndexedStackOp(
             stack[target] = saved;
         },
         .nip_n => {
-            // ( ...x1..xn y n -- y )
+            // ( ...xs y n -- y )
             // keep the top entry, drop depth entries beneath it
             if (depth == 0) return;
             const top = stack[sp.* - 1];
@@ -8767,7 +8891,7 @@ fn emitGenericResolvedNativeCall(ec: EmitCtx, resolved: ResolvedWord) IrCodegenE
     var effective_in = resolved.input_count;
     var effective_out = resolved.output_count;
     if (resolved.callee_effect) |callee_eff| {
-        const row_result = resolveRowVariableEffect(callee_eff, stack, sp.*, state.resolver) catch |err| {
+        const row_result = resolveRowVariableEffect(callee_eff, stack, sp.*, state.resolver, resolved.is_native) catch |err| {
             state.not_compilable_reason = switch (err) {
                 error.EffectInferenceOverflow => .effect_inference_overflow,
                 error.RowBindingOverflow => .row_binding_overflow,
@@ -9130,7 +9254,7 @@ fn emitIntrinsicNipN(ec: EmitCtx) IrCodegenError!ControlFlow {
 
 /// Compile `drop-n` / `array-n` when the count is a literal.
 ///
-/// Their declared variadic effect (`x1..xn n --`, `...elems n -- array`) models a
+/// Their declared variadic effect (`...xs n --`, `...elems n -- array`) models a
 /// fixed arity, so without the literal count the abstract stack cannot tell how
 /// many entries the op consumes. It then collapses to a row. That is fatal when
 /// concrete entries sit below the consumed span, because the row swallows them.
@@ -24683,7 +24807,7 @@ test "resolveRowVariableEffect: simple apply with [ 1 + ]" {
     stack[0] = .{ .raw_at_slot = 0 }; // x
     stack[1] = .{ .quotation_body = .{ .body = &body, .effect = null } }; // quot
 
-    const result = resolveRowVariableEffect(&outer, &stack, 2, null) catch unreachable;
+    const result = resolveRowVariableEffect(&outer, &stack, 2, null, false) catch unreachable;
     try testing.expect(result != null);
     try testing.expectEqual(@as(u8, 2), result.?.input_count);
     try testing.expectEqual(@as(u8, 1), result.?.output_count);
@@ -24721,7 +24845,7 @@ test "resolveRowVariableEffect: keep with [ 2 * ]" {
     stack[0] = .{ .raw_at_slot = 0 }; // x
     stack[1] = .{ .quotation_body = .{ .body = &body, .effect = null } }; // quot
 
-    const result = resolveRowVariableEffect(&outer, &stack, 2, null) catch unreachable;
+    const result = resolveRowVariableEffect(&outer, &stack, 2, null, false) catch unreachable;
     try testing.expect(result != null);
     try testing.expectEqual(@as(u8, 2), result.?.input_count);
     try testing.expectEqual(@as(u8, 2), result.?.output_count);
@@ -24758,7 +24882,7 @@ test "resolveRowVariableEffect: keep with [ dup ]" {
     stack[0] = .{ .raw_at_slot = 0 };
     stack[1] = .{ .quotation_body = .{ .body = &body, .effect = null } };
 
-    const result = resolveRowVariableEffect(&outer, &stack, 2, null) catch unreachable;
+    const result = resolveRowVariableEffect(&outer, &stack, 2, null, false) catch unreachable;
     try testing.expect(result != null);
     try testing.expectEqual(@as(u8, 2), result.?.input_count);
     try testing.expectEqual(@as(u8, 3), result.?.output_count);
@@ -24792,7 +24916,7 @@ test "resolveRowVariableEffect: try with a single-output quotation resolves" {
     var stack: [max_abstract_stack_depth]StackEntry = undefined;
     stack[0] = .{ .quotation_body = .{ .body = &body, .effect = null } }; // quot
 
-    const result = resolveRowVariableEffect(&outer, &stack, 1, null) catch unreachable;
+    const result = resolveRowVariableEffect(&outer, &stack, 1, null, false) catch unreachable;
     try testing.expect(result != null);
     try testing.expectEqual(@as(u8, 2), result.?.input_count);
     try testing.expectEqual(@as(u8, 1), result.?.output_count);
@@ -24826,7 +24950,7 @@ test "resolveRowVariableEffect: try with a multi-output quotation bails to null"
     var stack: [max_abstract_stack_depth]StackEntry = undefined;
     stack[0] = .{ .quotation_body = .{ .body = &body, .effect = null } }; // quot
 
-    const result = resolveRowVariableEffect(&outer, &stack, 1, null) catch unreachable;
+    const result = resolveRowVariableEffect(&outer, &stack, 1, null, false) catch unreachable;
     try testing.expect(result == null);
 }
 
@@ -24856,7 +24980,7 @@ test "resolveRowVariableEffect: raw_at_slot quotation returns null" {
     stack[0] = .{ .raw_at_slot = 0 };
     stack[1] = .{ .raw_at_slot = 1 }; // runtime value, not quotation_body
 
-    const result = resolveRowVariableEffect(&outer, &stack, 2, null) catch unreachable;
+    const result = resolveRowVariableEffect(&outer, &stack, 2, null, false) catch unreachable;
     try testing.expect(result == null);
 }
 
@@ -24884,7 +25008,7 @@ test "resolveRowVariableEffect: unresolvable quotation body returns null" {
     stack[0] = .{ .raw_at_slot = 0 };
     stack[1] = .{ .quotation_body = .{ .body = &body, .effect = null } };
 
-    const result = resolveRowVariableEffect(&outer, &stack, 2, null) catch unreachable;
+    const result = resolveRowVariableEffect(&outer, &stack, 2, null, false) catch unreachable;
     try testing.expect(result == null);
 }
 
@@ -24915,7 +25039,7 @@ test "resolveRowVariableEffect: empty quotation [ ]" {
     stack[0] = .{ .raw_at_slot = 0 };
     stack[1] = .{ .quotation_body = .{ .body = &body, .effect = null } };
 
-    const result = resolveRowVariableEffect(&outer, &stack, 2, null) catch unreachable;
+    const result = resolveRowVariableEffect(&outer, &stack, 2, null, false) catch unreachable;
     try testing.expect(result != null);
     try testing.expectEqual(@as(u8, 2), result.?.input_count);
     try testing.expectEqual(@as(u8, 0), result.?.output_count);
@@ -24946,10 +25070,137 @@ test "resolveRowVariableEffect: concrete quotation effect skipped" {
     stack[0] = .{ .raw_at_slot = 0 };
     stack[1] = .{ .raw_at_slot = 1 };
 
-    const result = resolveRowVariableEffect(&outer, &stack, 2, null) catch unreachable;
+    const result = resolveRowVariableEffect(&outer, &stack, 2, null, false) catch unreachable;
     try testing.expect(result != null);
     try testing.expectEqual(@as(u8, 2), result.?.input_count);
     try testing.expectEqual(@as(u8, 1), result.?.output_count);
+}
+
+// `#each`'s shape: ( ..a seq quot: ( ..a elem -- ..a ) -- ..a )
+const each_quot_effect = StackEffect{
+    .inputs = &[_]StackEffectParam{
+        .{ .name = "..a", .is_row_variable = true },
+        .{ .name = "elem" },
+    },
+    .outputs = &[_]StackEffectParam{
+        .{ .name = "..a", .is_row_variable = true },
+    },
+};
+const each_effect = StackEffect{
+    .inputs = &[_]StackEffectParam{
+        .{ .name = "..a", .is_row_variable = true },
+        .{ .name = "seq" },
+        .{ .name = "quot", .quotation_effect = &each_quot_effect },
+    },
+    .outputs = &[_]StackEffectParam{
+        .{ .name = "..a", .is_row_variable = true },
+    },
+};
+
+test "resolveRowVariableEffect: native row-preserving callee with an unseen quotation applies its concrete effect" {
+    var stack: [max_abstract_stack_depth]StackEntry = undefined;
+    stack[0] = .{ .raw_at_slot = 0 };
+    stack[1] = .{ .raw_at_slot = 1 };
+
+    const result = resolveRowVariableEffect(&each_effect, &stack, 2, null, true) catch unreachable;
+    try testing.expect(result != null);
+    try testing.expectEqual(@as(u8, 2), result.?.input_count);
+    try testing.expectEqual(@as(u8, 0), result.?.output_count);
+}
+
+test "resolveRowVariableEffect: compound row-preserving callee with an unseen quotation returns null" {
+    var stack: [max_abstract_stack_depth]StackEntry = undefined;
+    stack[0] = .{ .raw_at_slot = 0 };
+    stack[1] = .{ .raw_at_slot = 1 };
+
+    const result = resolveRowVariableEffect(&each_effect, &stack, 2, null, false) catch unreachable;
+    try testing.expect(result == null);
+}
+
+test "resolveRowVariableEffect: row-preserving body threading an accumulator applies the concrete effect" {
+    // [ + ] reaches one entry into ..a and puts one back.
+    const body = makeInstructions(.{"+"});
+    var stack: [max_abstract_stack_depth]StackEntry = undefined;
+    stack[0] = .{ .raw_at_slot = 0 };
+    stack[1] = .{ .quotation_body = .{ .body = &body, .effect = null } };
+
+    const result = resolveRowVariableEffect(&each_effect, &stack, 2, null, false) catch unreachable;
+    try testing.expect(result != null);
+    try testing.expectEqual(@as(u8, 2), result.?.input_count);
+    try testing.expectEqual(@as(u8, 0), result.?.output_count);
+}
+
+test "resolveRowVariableEffect: row-preserving body leaving a different depth returns null" {
+    // [ dup ] leaves the element and a copy, so ..a grows by two.
+    const body = makeInstructions(.{"dup"});
+    var stack: [max_abstract_stack_depth]StackEntry = undefined;
+    stack[0] = .{ .raw_at_slot = 0 };
+    stack[1] = .{ .quotation_body = .{ .body = &body, .effect = null } };
+
+    const result = resolveRowVariableEffect(&each_effect, &stack, 2, null, false) catch unreachable;
+    try testing.expect(result == null);
+}
+
+test "inferQuotationEffect: a row-preserving callee applies its concrete effect" {
+    const TestResolver = struct {
+        fn resolve(name: []const u8, _: *anyopaque) ?ResolvedWord {
+            if (std.mem.eql(u8, name, "each")) {
+                return .{ .word_id = 0, .input_count = 3, .output_count = 1, .is_native = true, .callee_effect = &each_effect };
+            }
+            return null;
+        }
+    };
+    var dummy: u8 = 0;
+    const resolver = WordResolver{
+        .resolve = TestResolver.resolve,
+        .user_data = @ptrCast(&dummy),
+        .dispatch_table_ptr = @ptrFromInt(1),
+    };
+
+    // [ [ drop ] each ] consumes the sequence below it.
+    const inner = makeInstructions(.{"drop"});
+    const instrs = [_]Instruction{
+        .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = &inner } } }, .line = 1 },
+        .{ .op = .{ .call_word = "each" }, .line = 1 },
+    };
+    const eff = inferQuotationEffect(&instrs, resolver) catch unreachable;
+    try testing.expect(eff != null);
+    try testing.expectEqual(@as(u8, 1), eff.?.input_count);
+    try testing.expectEqual(@as(u8, 0), eff.?.output_count);
+}
+
+test "inferQuotationEffect: a row no quotation carries leaves the callee unresolved" {
+    // drop-at: ( ... n -- ... ) names its row on both sides but binds it to nothing.
+    const drop_at_effect = StackEffect{
+        .inputs = &[_]StackEffectParam{
+            .{ .name = "...", .is_row_variable = true },
+            .{ .name = "n" },
+        },
+        .outputs = &[_]StackEffectParam{
+            .{ .name = "...", .is_row_variable = true },
+        },
+    };
+    const TestResolver = struct {
+        var effect: StackEffect = undefined;
+
+        fn resolve(name: []const u8, _: *anyopaque) ?ResolvedWord {
+            if (std.mem.eql(u8, name, "drop-at")) {
+                return .{ .word_id = 0, .input_count = 2, .output_count = 1, .callee_effect = &effect };
+            }
+            return null;
+        }
+    };
+    TestResolver.effect = drop_at_effect;
+    var dummy: u8 = 0;
+    const resolver = WordResolver{
+        .resolve = TestResolver.resolve,
+        .user_data = @ptrCast(&dummy),
+        .dispatch_table_ptr = @ptrFromInt(1),
+    };
+
+    const instrs = makeInstructions(.{ @as(i64, 1), "drop-at" });
+    const eff = inferQuotationEffect(&instrs, resolver) catch unreachable;
+    try testing.expect(eff == null);
 }
 
 // ---------------------------------------------------------------------------

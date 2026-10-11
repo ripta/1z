@@ -1,0 +1,7 @@
+tests/integration/check_conversion_return_annotated.1z:12: err: >float: >float declares output 'f' as float, but its body returns string
+tests/integration/check_conversion_return_annotated.1z:12: err: >float: >float declares output 'f' as float, but method{ string } returns fixnum
+tests/integration/check_conversion_return_annotated.1z:4: err: >fixnum: >fixnum declares output 's' as string, but a >fixnum conversion returns fixnum
+tests/integration/check_conversion_return_annotated.1z:8: err: >symbol: >symbol declares output 's' as string, but a >symbol conversion returns symbol
+tests/integration/check_conversion_return_annotated.1z:15: warning: walker: word has no declared stack effect
+tests/integration/check_conversion_return_annotated.1z:19: err: >string: >string declares output 'w' as walker, but its body returns fixnum, which does not satisfy it
+tests/integration/check_conversion_return_annotated.1z:19: err: >string: >string is declared to return string, but its body returns fixnum instead

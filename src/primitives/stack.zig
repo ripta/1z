@@ -18,9 +18,9 @@ pub const primitives = [_]Primitive{
     .{ .name = "<rot-n", .stack_effect = "n --", .doc = "Pull item at depth n to top, shifting items above it down.", .func = nativeRotUp },
     .{ .name = "rot-n>", .stack_effect = "n --", .doc = "Push top item to depth n, shifting items above it up.", .func = nativeRotDown },
     .{ .name = "array-n", .stack_effect = "...elems n -- array", .doc = "Pop n, then pop n elements and pack them into an array (stack-order preserved).", .func = nativeArrayN },
-    .{ .name = "drop-n", .stack_effect = "x1..xn n --", .doc = "Drop n items from the stack.", .func = nativeDropN },
-    .{ .name = "nip-n", .stack_effect = "...x1..xn y n -- y", .doc = "Drop n items beneath the top value, preserving the top value.", .func = nativeNipN },
-    .{ .name = "apply-n", .stack_effect = "x1..xn quot: ( x -- ..results ) n -- ..results", .doc = "Apply quotation to each of the top n stack values separately, left to right.", .func = nativeApplyN },
+    .{ .name = "drop-n", .stack_effect = "...xs n --", .doc = "Drop n items from the stack.", .func = nativeDropN },
+    .{ .name = "nip-n", .stack_effect = "...xs y n -- y", .doc = "Drop n items beneath the top value, preserving the top value.", .func = nativeNipN },
+    .{ .name = "apply-n", .stack_effect = "...xs quot: ( x -- ..results ) n -- ..results", .doc = "Apply quotation to each of the top n stack values separately, left to right.", .func = nativeApplyN },
 };
 
 /// dup ( a -- a a )
@@ -162,7 +162,7 @@ fn nativeDropN(ctx: *Context) anyerror!void {
     ctx.stack.items.shrinkRetainingCapacity(len - count);
 }
 
-/// nip-n ( ...x1..xn y n -- y )
+/// nip-n ( ...xs y n -- y )
 pub fn nativeNipN(ctx: *Context) anyerror!void {
     const n = try helpers.popFixnum(ctx);
     if (n < 0) return error.StackUnderflow;

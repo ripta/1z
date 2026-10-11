@@ -158,9 +158,13 @@ test-group-brace-spacing: ( -- ) [
 
 "else-less conditional" test-section
 
+\ A taken else-less branch that pushed a value would leave the stack deeper on one path than the
+\ other. These branches act through the counter cells instead.
 test-when-taken: ( -- ) [
-  stmt{ if yes() then add1(1) }
-  yes [ 1 add1 ] when "a taken else-less conditional matches its `when`" assert=
+  reset-counters stmt{ if yes() then bump() } ticks
+  reset-counters yes [ bump ] when ticks
+  "a taken else-less conditional matches its `when`" assert=
+  ticks 1 "and it ran its branch" assert=
 ] ;
 
 test-when-not-taken: ( -- ) [
@@ -178,8 +182,9 @@ test-when-not-taken-matches-direct: ( -- ) [
 ] ;
 
 test-when-comparison-condition: ( -- ) [
-  stmt{ if 1 + 2 < 4 then add1(1) }
-  1 2 + 4 < [ 1 add1 ] when "a comparison condition matches its `when`" assert=
+  reset-counters stmt{ if 1 + 2 < 4 then bump() } ticks
+  reset-counters 1 2 + 4 < [ bump ] when ticks
+  "a comparison condition matches its `when`" assert=
 ] ;
 
 "two-branch conditional" test-section
@@ -235,8 +240,8 @@ test-group-on-both-branches: ( -- ) [
 
 test-dangling-else-binds-inward: ( -- ) [
   \ The else belongs to the inner conditional, so this is `when` around `if`.
-  stmt{ if yes() then if no() then add1(1) else dbl(3) }
-  yes [ no [ 1 add1 ] [ 3 dbl ] if ] when
+  reset-counters stmt{ if yes() then if no() then bump() else bumpstep() } ticks steps 2 array-n
+  reset-counters yes [ no [ bump ] [ bumpstep ] if ] when ticks steps 2 array-n
   "a dangling else lowers as the inner conditional's" assert=
 ] ;
 
@@ -249,8 +254,9 @@ test-group-moves-else-outward: ( -- ) [
 
 test-three-level-dangling-else: ( -- ) [
   \ Only the innermost conditional has an else, so the two outer ones are `when`.
-  stmt{ if yes() then if yes() then if no() then add1(1) else dbl(3) }
-  yes [ yes [ no [ 1 add1 ] [ 3 dbl ] if ] when ] when
+  reset-counters
+  stmt{ if yes() then if yes() then if no() then bump() else bumpstep() } ticks steps 2 array-n
+  reset-counters yes [ yes [ no [ bump ] [ bumpstep ] if ] when ] when ticks steps 2 array-n
   "a three-level dangling else still binds to the innermost if" assert=
 ] ;
 
@@ -402,13 +408,15 @@ test-bare-identifier-statement: ( -- ) [
 ] ;
 
 test-bare-identifier-top-level-condition: ( -- ) [
-  stmt{ if yes then add1(1) }
-  yes [ 1 add1 ] when "a top-level bare condition matches its `when`" assert=
+  reset-counters stmt{ if yes then bump() } ticks
+  reset-counters yes [ bump ] when ticks
+  "a top-level bare condition matches its `when`" assert=
 ] ;
 
 test-bare-identifier-comparison-taken: ( -- ) [
-  stmt{ if five > 3 then add1(1) }
-  five 3 > [ 1 add1 ] when "a bare-identifier comparison matches its `when`" assert=
+  reset-counters stmt{ if five > 3 then bump() } ticks
+  reset-counters five 3 > [ bump ] when ticks
+  "a bare-identifier comparison matches its `when`" assert=
 ] ;
 
 test-bare-identifier-comparison-not-taken: ( -- ) [
@@ -419,8 +427,8 @@ test-bare-identifier-comparison-not-taken: ( -- ) [
 test-bare-identifier-nested-condition: ( -- ) [
   \ A nested branch becomes a quotation value, so its condition lowers through
   \ the other path.
-  stmt{ if yes() then if no then add1(1) else dbl(3) }
-  yes [ no [ 1 add1 ] [ 3 dbl ] if ] when
+  reset-counters stmt{ if yes() then if no then bump() else bumpstep() } ticks steps 2 array-n
+  reset-counters yes [ no [ bump ] [ bumpstep ] if ] when ticks steps 2 array-n
   "a nested bare condition matches its hand-written form" assert=
 ] ;
 
@@ -433,9 +441,9 @@ test-bare-identifier-loop-condition: ( -- ) [
 "sequencing with conditionals" test-section
 
 test-conditional-among-statements: ( -- ) [
-  stmt{ add1(1); if yes() then dbl(3); add1(9) }
-  10 "the statement after a conditional runs after it" assert=
-  6 "the conditional's branch value is beneath it" assert=
+  reset-counters
+  stmt{ add1(1); if yes() then bump(); ticks() }
+  1 "the statement after a conditional sees its branch's effect" assert=
   2 "the statement before it ran first" assert=
 ] ;
 
@@ -448,8 +456,8 @@ test-conditional-among-statements-matches-direct: ( -- ) [
 "expression and statement interaction" test-section
 
 test-condition-mixes-calls-and-arithmetic: ( -- ) [
-  stmt{ if add1(1) < dbl(2) then add1(1) }
-  1 add1 2 dbl < [ 1 add1 ] when
+  reset-counters stmt{ if add1(1) < dbl(2) then bump() } ticks
+  reset-counters 1 add1 2 dbl < [ bump ] when ticks
   "a condition mixing calls and arithmetic matches its `when`" assert=
 ] ;
 

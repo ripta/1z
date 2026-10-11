@@ -84,6 +84,17 @@ Stack: [ <message-catalog H{ en-US: H{ greeting: "Hello!" } }> ]
 Stack: [ f ]
 PASS: not found flag
 Stack: [ ]
+=== catalog-get? not found in any locale leaves nothing behind ===
+Stack: [ ]
+Stack: [ "sentinel" ]
+Stack: [ "sentinel" <message-catalog H{ }> ]
+Stack: [ "sentinel" <message-catalog H{ de-DE: H{ greeting: "Hallo!" } }> ]
+Stack: [ "sentinel" <message-catalog H{ de-DE: H{ greeting: "Hallo!" } en-US: H{ greeting: "Hello!" } }> ]
+Stack: [ "sentinel" f ]
+PASS: not found flag
+Stack: [ "sentinel" ]
+PASS: a miss in every locale leaves nothing behind
+Stack: [ ]
 === catalog-get found ===
 Stack: [ ]
 Stack: [ <message-catalog H{ }> ]

@@ -1,0 +1,53 @@
+\ A `|` in a declared output lists the arities a word may leave, and each arm is checked against them
+
+\ Each arm leaves one of the declared arities.
+first-two?: ( seq -- a b t | f ) [
+  dup #len 2 >= [ dup 0 #nth swap 1 #nth t ] [ drop f ] if
+] ;
+
+\ A nested final branch contributes its own arities.
+classify: ( n -- s t | f ) [
+  dup 0 > [
+    1 > [ "many" t ] [ "one" t ] if
+  ] [ drop f ] if
+] ;
+
+\ An arm leaving an arity the declaration does not list is reported.
+TOO-MANY: ( n -- a t | f ) [
+  0 > [ 1 2 t ] [ f ] if
+] ;
+
+\ A diverging branch that does not end the body cannot be counted past.
+NOT-LAST: ( n -- a t | f ) [
+  0 > [ 1 t ] [ f ] if
+  dup drop
+] ;
+
+\ Without a `|` in the declaration, diverging arms are still an error.
+UNDECLARED: ( n -- a ) [
+  0 > [ 1 2 ] [ 3 ] if
+] ;
+
+\ A caller cannot count past an alternative-arity call, so it trusts its own declaration.
+caller: ( seq -- ? ) [ first-two? [ 2drop t ] [ f ] if ] ;
+
+\ A body that always leaves one alternative places only that alternative's outputs at a call.
+always-one:   ( x -- s: string t | f ) [ drop "a" t ] ;
+takes-fixnum: ( n: fixnum -- )         [ drop ] ;
+one-under:    ( -- )                   [ 1 2 always-one 2drop takes-fixnum ] ;
+
+\ Each dispatch entry may leave any declared arity, whatever the base body leaves.
+lookup?: generic ( x -- y t | f ) [ drop f ] ;
+lookup?: method{ string } [ t ] ;
+
+\ The entries of a generic with an empty base body may end in a diverging branch too.
+probe?: generic ( x -- y t | f ) [ ] ;
+probe?: method{ string } [ dup #empty? [ drop f ] [ t ] if ] ;
+
+\ An entry leaving an arity the declaration does not list is reported.
+LOOKUP-WRONG?: generic ( x -- y t | f ) [ drop f ] ;
+LOOKUP-WRONG?: method{ string } [ 1 2 t ] ;
+
+\ A combinator word declaring alternatives is applied without a fixed delta.
+pick-one: branch-combinator ( ? a b -- x | x y ) [ if ] ;
+uses-pick: ( -- ) [ t [ 1 ] [ 2 ] pick-one drop ] ;

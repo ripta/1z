@@ -1,0 +1,12 @@
+\ Words that run a quotation in place pass its results through to the caller
+
+use "strings" ;
+
+answer: parameter{ [ 0 ] } ;
+
+bound:    ( -- n )   [ 42 answer [ answer get ] with-parameter ] ;
+isolated: ( -- n )   [ [ 1 2 + ] with-isolation ] ;
+built:    ( -- ? s ) [ [ "x" stream-write drop t ] using-string-builder ] ;
+
+\ A caller still sees a wrong count through the passthrough.
+BOUND-WRONG: ( -- n ) [ 42 answer [ ] with-parameter ] ;

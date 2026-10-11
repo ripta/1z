@@ -87,7 +87,7 @@ mktemp_or_die = $(or $(shell mktemp $(1)),$(error mktemp failed for $(1)))
 #
 # The pattern and the explicit list are separate lines because make rejects a rule mixing pattern
 # and normal targets.
-lib-test games-test docs profiles benchmark prelude-lint-check update-prelude-lint-golden: export ONEZ_NO_STARTUP := 1
+lib-test lib-check games-test docs profiles benchmark prelude-lint-check update-prelude-lint-golden: export ONEZ_NO_STARTUP := 1
 benchmark-%: export ONEZ_NO_STARTUP := 1
 
 all: build test ## Build and run all tests
@@ -148,7 +148,7 @@ fmt: build ## Format zig and 1z source files
 # in the suite compiles for wasm32-freestanding, so a hosted-only declaration
 # newly named from a wasm-reachable function breaks `make wasm` and nothing says
 # so until someone builds the browser module by hand.
-test: branch-info leak-goldens-check module-less-benchmark-check body-entry-slope-check aot-checks wasm-freestanding-build test-threads-1 test-threads-auto capi-test ## Run all tests under both --threads=1 and --threads=auto
+test: branch-info leak-goldens-check module-less-benchmark-check body-entry-slope-check aot-checks wasm-freestanding-build lib-check test-threads-1 test-threads-auto capi-test ## Run all tests under both --threads=1 and --threads=auto
 
 leak-goldens-check: ## Fail if any test golden has baked-in GPA leak text
 	@if grep -rl 'error(gpa)' tests/ --include='*.golden'; then \
@@ -312,6 +312,9 @@ integration-test: ## Run integration tests
 
 lib-test: build ## Run *_test.1z unit tests under lib/
 	find lib -name '*_test.1z' -print0 | xargs -0 -P $(TEST_JOBS) -n 1 timeout $(TARGET_TIMEOUT) ./$(ZIG_PREFIX)/bin/1z test
+
+lib-check: build ## Run `1z check` over every lib/ module and list the files it rejects
+	scripts/lib-check.sh ./$(ZIG_PREFIX)/bin/1z $(TARGET_TIMEOUT)
 
 games-test: build ## Run *_test.1z unit tests under every examples/wasm-*/ game directory
 	find examples -path 'examples/wasm-*' -name '*_test.1z' -print0 | xargs -0 -P $(TEST_JOBS) -n 1 timeout $(TARGET_TIMEOUT) ./$(ZIG_PREFIX)/bin/1z test

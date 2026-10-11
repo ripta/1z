@@ -28,6 +28,11 @@ dup 0 #nth option:some> "12+34" "full match" assert=
 dup 1 #nth option:some> "12" "group 1" assert=
 2 #nth option:some> "34" "group 2" assert=
 
+"regex-find-all: leaves nothing behind" test-section
+"sentinel"
+"a1b2" "\\d" regex-compile regex-find-all #collect drop
+"sentinel" "matching steps leave no iterator state on the stack" assert=
+
 "regex-split: comma-separated" test-section
 "a,b,c" "," regex-compile regex-split
 dup #len 3 "3 segments" assert=
@@ -64,6 +69,11 @@ dup #len 3 "3 segments with trailing delimiter" assert=
 "regex-replace: no match" test-section
 "hello" "xyz" regex-compile "replaced" regex-replace
 "hello" "returns original when no match" assert=
+
+"regex-replace: leaves nothing behind" test-section
+"sentinel"
+"foo" "o" regex-compile "0" regex-replace drop
+"sentinel" "a match leaves no replacement string on the stack" assert=
 
 "regex-replace-all: all occurrences" test-section
 "aaa" "a" regex-compile "b" regex-replace-all

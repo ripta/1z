@@ -54,7 +54,7 @@ private{
   \ The body is `[ [ <bind params> <rhs> ] call ]`: the inner `call` gives each
   \ invocation its own local frame, so the parameter bindings are per-invocation
   \ and gone once the frame pops.
-  (lower-fn-decl): ( fn-decl -- ) [
+  (lower-fn-decl): ( fn-decl -- name effect body ) [
     dup params>> (bind-preamble)  \ decl preamble
     over rhs>> lower              \ decl preamble rhs-quot
     compose                       \ decl inner

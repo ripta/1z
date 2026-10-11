@@ -372,7 +372,7 @@ pub const Server = struct {
             };
             if (instrs.len == 0 and tokenizer.pos == prev_pos) break;
             if (instrs.len == 0) continue;
-            if (Context.isDefinitionStatement(instrs)) {
+            if (Context.isCheckStatement(instrs)) {
                 self.ctx.executeQuotation(.{ .instructions = instrs }) catch {};
             }
         }
@@ -882,7 +882,7 @@ pub const Server = struct {
             const instrs = parser.parseTopLevel(self.ctx.quotationAllocator(), &tokenizer, self.ctx) catch break;
             if (instrs.len == 0 and tokenizer.pos == prev_pos) break;
             if (instrs.len == 0) continue;
-            if (Context.isDefinitionStatement(instrs)) {
+            if (Context.isCheckStatement(instrs)) {
                 self.ctx.executeQuotation(.{ .instructions = instrs }) catch {};
             }
         }
@@ -1084,7 +1084,7 @@ pub const Server = struct {
             const instrs = parser.parseTopLevel(self.ctx.quotationAllocator(), &tokenizer, self.ctx) catch break;
             if (instrs.len == 0 and tokenizer.pos == prev_pos) break;
             if (instrs.len == 0) continue;
-            if (Context.isDefinitionStatement(instrs)) {
+            if (Context.isCheckStatement(instrs)) {
                 self.ctx.executeQuotation(.{ .instructions = instrs }) catch {};
             }
         }

@@ -1612,15 +1612,43 @@ pub const Context = struct {
     /// or `import-locals`, which means it is a word definition or a `private{ }` / `private(shadow-ok){ }`
     /// block install and should be executed even in check mode.
     pub fn isDefinitionStatement(instrs: []const Instruction) bool {
-        if (instrs.len == 0) return false;
-        const name = switch (instrs[instrs.len - 1].op) {
-            .call_word => |name| name,
-            .call_word_direct, .call_word_module => |slot| slot.name,
-            .push_literal => return false,
-        };
+        const name = lastCalledName(instrs) orelse return false;
         return std.mem.eql(u8, name, ";") or
             std.mem.eql(u8, name, "(import-locals-checked)") or
             std.mem.eql(u8, name, "import-locals");
+    }
+
+    /// Returns true when check mode, which runs definitions and nothing else, must execute the
+    /// statement.
+    ///
+    /// A `"name" load reexport` statement forwards another module's words, so it runs as well.
+    /// Skipping it would leave an importer checked against the module without them.
+    ///
+    /// Only that self-contained shape qualifies. An FFI module's `reexport` consumes a library
+    /// handle made by an earlier statement, and check mode does not run that statement.
+    pub fn isCheckStatement(instrs: []const Instruction) bool {
+        if (isDefinitionStatement(instrs)) return true;
+        if (instrs.len != 3) return false;
+
+        switch (instrs[0].op) {
+            .push_literal => |val| if (val != .string) return false,
+            else => return false,
+        }
+
+        const loader = instrs[1].op.callTargetName() orelse return false;
+        if (!std.mem.eql(u8, loader, "load")) return false;
+
+        const name = lastCalledName(instrs) orelse return false;
+        return std.mem.eql(u8, name, "reexport") or std.mem.eql(u8, name, "reexport(shadow-ok)");
+    }
+
+    fn lastCalledName(instrs: []const Instruction) ?[]const u8 {
+        if (instrs.len == 0) return null;
+        return switch (instrs[instrs.len - 1].op) {
+            .call_word => |name| name,
+            .call_word_direct, .call_word_module => |slot| slot.name,
+            .push_literal => null,
+        };
     }
 
     fn builtinDescriptorFlags(comptime tag: std.meta.Tag(value_mod.Value)) value_mod.DescriptorFlags {
@@ -9219,7 +9247,7 @@ pub const Context = struct {
 
         // Write explanation
         writer.print(", requires {d} output(s) but stack has {d}", .{
-            effect.outputs.len,
+            effect.minOutputCount(),
             actual_depth,
         }) catch {};
 
@@ -9777,7 +9805,7 @@ pub const Context = struct {
     pub fn wordSuccessCleanup(self: *Context, name: []const u8, stack_effect: ?*const StackEffect) !void {
         if (stack_effect) |effect| {
             const depth_after = self.stack.depth();
-            if (depth_after < effect.concreteOutputCount()) {
+            if (depth_after < effect.minOutputCount()) {
                 self.captureStackEffectMismatch(name, effect.*, depth_after);
                 if (self.benchmark) |b| b.endWordProfile(self.allocator, name);
                 if (self.profile) |p| p.recordWordEnd(self.allocator, name);

@@ -5012,7 +5012,7 @@ fn batch(ctx: *Context, file_path: []const u8, show_stack: bool) u8 {
                         return 1;
                     },
                     .complete => |instrs| {
-                        if (instrs.len > 0 and (!ctx.check_mode or Context.isDefinitionStatement(instrs))) {
+                        if (instrs.len > 0 and (!ctx.check_mode or Context.isCheckStatement(instrs))) {
                             ctx.executeQuotation(.{ .instructions = instrs }) catch |e| {
                                 if (e == debugger_mod.DebuggerQuit.DebuggerQuit) return 0;
                                 printErrorDetails(ctx, err_writer, e);
@@ -5057,7 +5057,7 @@ fn batch(ctx: *Context, file_path: []const u8, show_stack: bool) u8 {
                 return 1;
             },
             .complete => |instrs| {
-                if (instrs.len > 0 and (!ctx.check_mode or Context.isDefinitionStatement(instrs))) {
+                if (instrs.len > 0 and (!ctx.check_mode or Context.isCheckStatement(instrs))) {
                     ctx.executeQuotation(.{ .instructions = instrs }) catch |err| {
                         if (err == debugger_mod.DebuggerQuit.DebuggerQuit) return 0;
                         printErrorDetails(ctx, err_writer, err);

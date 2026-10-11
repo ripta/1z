@@ -1,0 +1,1 @@
+tests/integration/check_while_row_shift.1z:29: err: DRAIN-WRONG: declared stack effect delta is 0, but inferred delta is -1

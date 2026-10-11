@@ -34,7 +34,7 @@ pub const primitives = [_]Primitive{
 };
 
 pub const registry_entries = [_]RegistryEntry{
-    .{ .name = "ffi-struct-make", .func = nativeFfiStructMake, .stack_effect = "fields... layout-ptr vtype-ptr -- tagged" },
+    .{ .name = "ffi-struct-make", .func = nativeFfiStructMake, .stack_effect = "...fields layout-ptr vtype-ptr -- tagged" },
     .{ .name = "ffi-struct-field-get", .func = nativeFfiStructFieldGet, .stack_effect = "tagged layout-ptr field-index -- value" },
     .{ .name = "ffi-struct-field-set", .func = nativeFfiStructFieldSet, .stack_effect = "tagged value layout-ptr field-index -- tagged" },
 };

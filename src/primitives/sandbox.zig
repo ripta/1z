@@ -9,10 +9,10 @@ const Token = @import("../tokenizer.zig").Token;
 
 pub const primitives = [_]Primitive{
     .{ .name = "sandbox{", .func = nativeSandboxParse, .parse_time = true, .stack_effect = "-- sandbox-spec", .doc = "Parse a sandbox specification granting named capabilities. Default-deny: an empty sandbox{ } grants nothing." },
-    .{ .name = "with-sandbox", .func = nativeWithSandbox, .stack_effect = "sandbox-spec quot --", .doc = "Execute quotation with the given sandbox restricting capability access. Nesting intersects (can only restrict, never widen)." },
+    .{ .name = "with-sandbox", .func = nativeWithSandbox, .stack_effect = "..a sandbox-spec quot: ( ..a -- ..b ) -- ..b", .doc = "Execute quotation with the given sandbox restricting capability access. Nesting intersects (can only restrict, never widen)." },
 };
 
-/// with-sandbox ( sandbox-spec quot -- )
+/// with-sandbox ( ..a sandbox-spec quot: ( ..a -- ..b ) -- ..b )
 fn nativeWithSandbox(ctx: *Context) anyerror!void {
     const pc = try helpers.popQuotation(ctx);
     defer pc.release();

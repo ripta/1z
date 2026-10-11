@@ -292,7 +292,7 @@ fn feedOneLine(
         .needs_more_input => {},
         .parse_error => |err| return parser_mod.raiseParseDiagnostics(ctx, err),
         .complete => |instrs| {
-            if (instrs.len > 0 and (!ctx.check_mode or Context.isDefinitionStatement(instrs))) {
+            if (instrs.len > 0 and (!ctx.check_mode or Context.isCheckStatement(instrs))) {
                 try ctx.executeQuotation(.{ .instructions = instrs });
             }
             processor.reset();
@@ -309,7 +309,7 @@ fn flushProcessor(
         .needs_more_input => {},
         .parse_error => |e| return parser_mod.raiseParseDiagnostics(ctx, e),
         .complete => |instrs| {
-            if (instrs.len > 0 and (!ctx.check_mode or Context.isDefinitionStatement(instrs))) {
+            if (instrs.len > 0 and (!ctx.check_mode or Context.isCheckStatement(instrs))) {
                 try ctx.executeQuotation(.{ .instructions = instrs });
             }
         },

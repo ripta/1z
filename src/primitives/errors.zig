@@ -108,7 +108,7 @@ pub const primitives = [_]Primitive{
     .{ .name = "rethrow", .stack_effect = "error --", .doc = "Re-raise an error value as an actual error.", .func = nativeRethrow, .markers = &.{@constCast(&markers_mod.never_returns_marker)} },
     .{ .name = "make-error", .stack_effect = "data message type -- error", .doc = "Construct an error object from data, message, and type.", .func = nativeMakeError },
     .{ .name = "throw", .stack_effect = "error --", .doc = "Raise an error object as an actual error.", .func = nativeThrow, .markers = &.{@constCast(&markers_mod.never_returns_marker)} },
-    .{ .name = "with-isolation", .stack_effect = "quot --", .doc = "Execute quotation with isolated type registry, dispatch tables, and protocol obligations. Only stack effects survive.", .func = nativeWithIsolation },
+    .{ .name = "with-isolation", .stack_effect = "..a quot: ( ..a -- ..b ) -- ..b", .doc = "Execute quotation with isolated type registry, dispatch tables, and protocol obligations. Only stack effects survive.", .func = nativeWithIsolation },
 };
 
 /// Copy the rows this consumer owns into a boxed error's stack trace.
@@ -505,7 +505,7 @@ fn checkIsolationBoundary(ctx: *Context, effect: *const StackEffect, isolation_f
     }
 }
 
-/// with-isolation ( quot -- )
+/// with-isolation ( ..a quot: ( ..a -- ..b ) -- ..b )
 fn nativeWithIsolation(ctx: *Context) anyerror!void {
     const pc = try popQuotation(ctx);
     defer pc.release();

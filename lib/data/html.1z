@@ -5,7 +5,7 @@ use "char" ;
 use "conversions" ;
 
 private{
-  (escapes): ( char -- string ) H{
+  (escapes): ( -- hash ) H{
     "&" "&amp;"
     "<" "&lt;"
     ">" "&gt;"
