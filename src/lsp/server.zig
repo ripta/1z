@@ -15,6 +15,7 @@ const formatter = @import("../formatter.zig");
 const value_mod = @import("../value.zig");
 const Instruction = value_mod.Instruction;
 const DispatchKey = @import("../dispatch.zig").DispatchKey;
+const StatementProcessor = @import("../statement.zig").StatementProcessor;
 
 const Allocator = std.mem.Allocator;
 
@@ -27,6 +28,67 @@ const State = enum {
     shutdown,
 };
 
+/// The percent-decoded directory of a `file://` document, so the document's relative `use` and
+/// `load` paths resolve against its own directory, the way `1z run` resolves them. Null for any
+/// other scheme, which leaves the server's working directory as the base.
+fn fileUriDir(alloc: Allocator, uri: []const u8) Allocator.Error!?[]u8 {
+    const prefix = "file://";
+    if (!std.mem.startsWith(u8, uri, prefix)) return null;
+
+    const path = try alloc.dupe(u8, uri[prefix.len..]);
+    defer alloc.free(path);
+
+    const dir = std.fs.path.dirname(std.Uri.percentDecodeInPlace(path)) orelse return null;
+    return try alloc.dupe(u8, dir);
+}
+
+/// Run a document's check statements on `ctx`: its definitions and its `"name" load reexport`
+/// lines. Returns the 1-based line a parse error stopped on, or null when the whole document parsed.
+///
+/// The text goes through `StatementProcessor` a line at a time, the way `1z check` and a module
+/// load feed theirs, so each statement is parsed and tested on its own. Parsing the whole document
+/// as one statement would let any top-level code beside a definition hide the definition.
+fn runCheckStatements(ctx: *Context, text: []const u8) ?usize {
+    const saved_line_offset = ctx.parse_line_offset;
+    defer ctx.parse_line_offset = saved_line_offset;
+
+    var processor: StatementProcessor = .{};
+    defer processor.deinit();
+
+    var lines = std.mem.splitScalar(u8, text, '\n');
+    var file_line: usize = 0;
+    while (true) {
+        // Re-analysis drops whatever a statement raises, and the drop must be complete: the
+        // residue would otherwise reach the next statement, the request that follows, and every
+        // later request on this long-lived context. The bracket covers the parse as well as the
+        // execution, since a parse-time word's failure clears to zero rather than to an
+        // enclosing shield's mark.
+        const saved_error_state = ctx.saveErrorState();
+        defer ctx.restoreErrorState(saved_error_state);
+
+        const next_line = lines.next();
+        const result = if (next_line) |line| blk: {
+            file_line += 1;
+            processor.trackLine(file_line);
+            if (processor.start_line > 0) ctx.parse_line_offset = processor.start_line - 1;
+            break :blk processor.feedLine(ctx.quotationAllocator(), line, ctx);
+        } else processor.flush(ctx.quotationAllocator(), ctx);
+
+        switch (result) {
+            .needs_more_input => {},
+            .parse_error => return if (next_line != null) file_line else processor.start_line,
+            .complete => |instrs| {
+                if (instrs.len > 0 and Context.isCheckStatement(instrs)) {
+                    ctx.executeQuotation(.{ .instructions = instrs }) catch {};
+                }
+                processor.reset();
+            },
+        }
+
+        if (next_line == null) return null;
+    }
+}
+
 pub const Server = struct {
     const AnalysisResult = struct {
         arena: std.heap.ArenaAllocator,
@@ -34,6 +96,82 @@ pub const Server = struct {
 
         fn deinit(self: *AnalysisResult) void {
             self.arena.deinit();
+        }
+    };
+
+    /// A temporary frame holding what one open document defines and imports, so a name lookup
+    /// sees the document's own words and the words its `use` and `reexport` statements bring in.
+    /// The server's context outlives every request, and none of that survives on it between
+    /// requests.
+    ///
+    /// A definition looked up inside the scope may be owned by the frame, so read it before
+    /// `exit`.
+    const DocumentScope = struct {
+        ctx: *Context,
+        allocator: Allocator,
+        source_dir: ?[]u8,
+        saved_source: []const u8,
+        saved_source_dir: ?[]const u8,
+        saved_check_mode: bool,
+        saved_import_frame: ?usize,
+        saved_durable_floor: ?usize,
+        saved_stack_depth: usize,
+        dispatch_log_mark: usize,
+        /// The 1-based line a parse error stopped re-analysis on, or null when the whole document
+        /// parsed. The statements before it still ran.
+        parse_error_line: ?usize = null,
+
+        fn enter(allocator: Allocator, ctx: *Context, uri: []const u8, text: []const u8) !DocumentScope {
+            const source_dir = try fileUriDir(allocator, uri);
+            errdefer if (source_dir) |d| allocator.free(d);
+
+            var scope: DocumentScope = .{
+                .ctx = ctx,
+                .allocator = allocator,
+                .source_dir = source_dir,
+                .saved_source = ctx.current_source,
+                .saved_source_dir = ctx.current_source_dir,
+                .saved_check_mode = ctx.check_mode,
+                .saved_import_frame = ctx.import_frame_index,
+                .saved_durable_floor = ctx.durable_frame_floor,
+                .saved_stack_depth = ctx.stack.depth(),
+                .dispatch_log_mark = undefined,
+            };
+            errdefer scope.restoreState();
+
+            try ctx.pushLocalFrame();
+            errdefer ctx.popLocalFrame();
+
+            try ctx.pushPragmaFrame();
+
+            ctx.enterCheckMode();
+            scope.dispatch_log_mark = ctx.beginCheckDispatchLog();
+            ctx.current_source = uri;
+            ctx.current_source_dir = source_dir;
+            ctx.import_frame_index = ctx.local_frames.items.len - 1;
+            ctx.durable_frame_floor = ctx.import_frame_index;
+
+            scope.parse_error_line = runCheckStatements(ctx, text);
+            return scope;
+        }
+
+        fn exit(self: *DocumentScope) void {
+            self.ctx.endCheckDispatchLog(self.dispatch_log_mark);
+            self.ctx.popPragmaFrame();
+            self.ctx.popLocalFrame();
+            self.restoreState();
+            if (self.source_dir) |d| self.allocator.free(d);
+        }
+
+        fn restoreState(self: *DocumentScope) void {
+            self.ctx.current_source = self.saved_source;
+            self.ctx.current_source_dir = self.saved_source_dir;
+            self.ctx.check_mode = self.saved_check_mode;
+            self.ctx.import_frame_index = self.saved_import_frame;
+            self.ctx.durable_frame_floor = self.saved_durable_floor;
+            while (self.ctx.stack.depth() > self.saved_stack_depth) {
+                self.ctx.stack.popAndRelease() catch break;
+            }
         }
     };
 
@@ -308,76 +446,21 @@ pub const Server = struct {
         defer if (!stored_in_cache) analysis_arena.deinit();
         const arena_alloc = analysis_arena.allocator();
 
-        // Save context state
-        const saved_source = self.ctx.current_source;
-        const saved_source_dir = self.ctx.current_source_dir;
-        const saved_check_mode = self.ctx.check_mode;
-        const saved_import_frame = self.ctx.import_frame_index;
-        const saved_durable_floor = self.ctx.durable_frame_floor;
-        const saved_stack_depth = self.ctx.stack.depth();
+        var scope = DocumentScope.enter(self.allocator, self.ctx, uri, text) catch return;
+        defer scope.exit();
 
-        // Restore context state on exit
-        defer {
-            self.ctx.current_source = saved_source;
-            self.ctx.current_source_dir = saved_source_dir;
-            self.ctx.check_mode = saved_check_mode;
-            self.ctx.import_frame_index = saved_import_frame;
-            self.ctx.durable_frame_floor = saved_durable_floor;
-            // Truncate stack to saved depth
-            while (self.ctx.stack.depth() > saved_stack_depth) {
-                self.ctx.stack.popAndRelease() catch break;
-            }
-        }
-
-        // Push frames for analysis
-        self.ctx.pushLocalFrame() catch return;
-        defer self.ctx.popLocalFrame();
-
-        self.ctx.pushPragmaFrame() catch return;
-        defer self.ctx.popPragmaFrame();
-
-        self.ctx.enterCheckMode();
-        const dispatch_log_mark = self.ctx.beginCheckDispatchLog();
-        defer self.ctx.endCheckDispatchLog(dispatch_log_mark);
-        self.ctx.current_source = uri;
-        self.ctx.import_frame_index = self.ctx.local_frames.items.len - 1;
-        self.ctx.durable_frame_floor = self.ctx.import_frame_index;
-
-        // Parse and execute definitions using the parser directly
-        var parse_error_diag: ?types.LspDiagnostic = null;
-        var tokenizer = Tokenizer.init(text);
-
-        while (true) {
-            // Analysis drops whatever a statement raises, and the drop must be complete: the
-            // residue would otherwise reach the next statement, the inference pass below, and
-            // every later request on this long-lived context. The bracket covers the parse as
-            // well as the execution, since a parse-time word's failure clears to zero rather
-            // than to an enclosing shield's mark.
-            const saved_error_state = self.ctx.saveErrorState();
-            defer self.ctx.restoreErrorState(saved_error_state);
-
-            const prev_pos = tokenizer.pos;
-            const instrs = parser.parseTopLevel(self.ctx.quotationAllocator(), &tokenizer, self.ctx) catch {
-                const lsp_line: i64 = if (tokenizer.line > 1) @intCast(tokenizer.line - 1) else 0;
-                parse_error_diag = .{
-                    .range = .{
-                        .start = .{ .line = lsp_line, .character = 0 },
-                        .end = .{ .line = lsp_line, .character = 0 },
-                    },
-                    .severity = 1,
-                    .source = "1z",
-                    .message = "parse error",
-                };
-                break;
+        if (scope.parse_error_line) |error_line| {
+            const lsp_line: i64 = if (error_line > 1) @intCast(error_line - 1) else 0;
+            const parse_error_diag: types.LspDiagnostic = .{
+                .range = .{
+                    .start = .{ .line = lsp_line, .character = 0 },
+                    .end = .{ .line = lsp_line, .character = 0 },
+                },
+                .severity = 1,
+                .source = "1z",
+                .message = "parse error",
             };
-            if (instrs.len == 0 and tokenizer.pos == prev_pos) break;
-            if (instrs.len == 0) continue;
-            if (Context.isCheckStatement(instrs)) {
-                self.ctx.executeQuotation(.{ .instructions = instrs }) catch {};
-            }
-        }
 
-        if (parse_error_diag != null) {
             // Error recovery: use cached diagnostics if available, else publish parse error
             var diag_it = self.last_diagnostics.iterator();
             while (diag_it.next()) |entry| {
@@ -391,7 +474,7 @@ pub const Server = struct {
                 }
             }
             // No cache; publish just the parse error
-            const diags = [1]types.LspDiagnostic{parse_error_diag.?};
+            const diags = [1]types.LspDiagnostic{parse_error_diag};
             self.transport.writeNotification("textDocument/publishDiagnostics", types.PublishDiagnosticsParams{
                 .uri = uri,
                 .diagnostics = &diags,
@@ -534,6 +617,12 @@ pub const Server = struct {
         else
             word;
 
+        var scope = DocumentScope.enter(self.allocator, self.ctx, uri, text) catch {
+            try self.transport.writeNullResponse(id);
+            return;
+        };
+        defer scope.exit();
+
         const def = self.ctx.lookupWord(lookup_name) orelse {
             try self.transport.writeNullResponse(id);
             return;
@@ -661,6 +750,12 @@ pub const Server = struct {
             word[0 .. word.len - 1]
         else
             word;
+
+        var scope = DocumentScope.enter(self.allocator, self.ctx, uri, text) catch {
+            try self.transport.writeNullResponse(id);
+            return;
+        };
+        defer scope.exit();
 
         const def = self.ctx.lookupWord(lookup_name) orelse {
             try self.transport.writeNullResponse(id);
@@ -834,58 +929,11 @@ pub const Server = struct {
             return;
         };
 
-        const saved_source = self.ctx.current_source;
-        const saved_source_dir = self.ctx.current_source_dir;
-        const saved_check_mode = self.ctx.check_mode;
-        const saved_import_frame = self.ctx.import_frame_index;
-        const saved_durable_floor = self.ctx.durable_frame_floor;
-        const saved_stack_depth = self.ctx.stack.depth();
-        defer {
-            self.ctx.current_source = saved_source;
-            self.ctx.current_source_dir = saved_source_dir;
-            self.ctx.check_mode = saved_check_mode;
-            self.ctx.import_frame_index = saved_import_frame;
-            self.ctx.durable_frame_floor = saved_durable_floor;
-            while (self.ctx.stack.depth() > saved_stack_depth) {
-                self.ctx.stack.popAndRelease() catch break;
-            }
-        }
-
-        self.ctx.pushLocalFrame() catch {
+        var scope = DocumentScope.enter(self.allocator, self.ctx, uri, text) catch {
             try self.transport.writeResponse(id, @as([]const types.DocumentSymbol, &.{}));
             return;
         };
-        defer self.ctx.popLocalFrame();
-
-        self.ctx.pushPragmaFrame() catch {
-            try self.transport.writeResponse(id, @as([]const types.DocumentSymbol, &.{}));
-            return;
-        };
-        defer self.ctx.popPragmaFrame();
-
-        self.ctx.enterCheckMode();
-        const dispatch_log_mark = self.ctx.beginCheckDispatchLog();
-        defer self.ctx.endCheckDispatchLog(dispatch_log_mark);
-        self.ctx.current_source = uri;
-        self.ctx.import_frame_index = self.ctx.local_frames.items.len - 1;
-        self.ctx.durable_frame_floor = self.ctx.import_frame_index;
-
-        var tokenizer = Tokenizer.init(text);
-        while (true) {
-            // Re-analysis drops whatever a statement raises, and the drop must be complete: the
-            // residue would otherwise reach the next statement, the symbol walk below, and
-            // every later request on this long-lived context.
-            const saved_error_state = self.ctx.saveErrorState();
-            defer self.ctx.restoreErrorState(saved_error_state);
-
-            const prev_pos = tokenizer.pos;
-            const instrs = parser.parseTopLevel(self.ctx.quotationAllocator(), &tokenizer, self.ctx) catch break;
-            if (instrs.len == 0 and tokenizer.pos == prev_pos) break;
-            if (instrs.len == 0) continue;
-            if (Context.isCheckStatement(instrs)) {
-                self.ctx.executeQuotation(.{ .instructions = instrs }) catch {};
-            }
-        }
+        defer scope.exit();
 
         var symbols: std.ArrayListUnmanaged(types.DocumentSymbol) = .{};
         defer symbols.deinit(self.allocator);
@@ -1035,59 +1083,11 @@ pub const Server = struct {
         else
             word;
 
-        // Parse document definitions into a temporary frame so user-defined words are visible
-        const saved_source = self.ctx.current_source;
-        const saved_source_dir = self.ctx.current_source_dir;
-        const saved_check_mode = self.ctx.check_mode;
-        const saved_import_frame = self.ctx.import_frame_index;
-        const saved_durable_floor = self.ctx.durable_frame_floor;
-        const saved_stack_depth = self.ctx.stack.depth();
-        defer {
-            self.ctx.current_source = saved_source;
-            self.ctx.current_source_dir = saved_source_dir;
-            self.ctx.check_mode = saved_check_mode;
-            self.ctx.import_frame_index = saved_import_frame;
-            self.ctx.durable_frame_floor = saved_durable_floor;
-            while (self.ctx.stack.depth() > saved_stack_depth) {
-                self.ctx.stack.popAndRelease() catch break;
-            }
-        }
-
-        self.ctx.pushLocalFrame() catch {
+        var scope = DocumentScope.enter(self.allocator, self.ctx, uri, text) catch {
             try self.transport.writeNullResponse(id);
             return;
         };
-        defer self.ctx.popLocalFrame();
-
-        self.ctx.pushPragmaFrame() catch {
-            try self.transport.writeNullResponse(id);
-            return;
-        };
-        defer self.ctx.popPragmaFrame();
-
-        self.ctx.enterCheckMode();
-        const dispatch_log_mark = self.ctx.beginCheckDispatchLog();
-        defer self.ctx.endCheckDispatchLog(dispatch_log_mark);
-        self.ctx.current_source = uri;
-        self.ctx.import_frame_index = self.ctx.local_frames.items.len - 1;
-        self.ctx.durable_frame_floor = self.ctx.import_frame_index;
-
-        var tokenizer = Tokenizer.init(text);
-        while (true) {
-            // Re-analysis drops whatever a statement raises, and the drop must be complete: the
-            // residue would otherwise reach the next statement, the lookup below, and every
-            // later request on this long-lived context.
-            const saved_error_state = self.ctx.saveErrorState();
-            defer self.ctx.restoreErrorState(saved_error_state);
-
-            const prev_pos = tokenizer.pos;
-            const instrs = parser.parseTopLevel(self.ctx.quotationAllocator(), &tokenizer, self.ctx) catch break;
-            if (instrs.len == 0 and tokenizer.pos == prev_pos) break;
-            if (instrs.len == 0) continue;
-            if (Context.isCheckStatement(instrs)) {
-                self.ctx.executeQuotation(.{ .instructions = instrs }) catch {};
-            }
-        }
+        defer scope.exit();
 
         const def = self.ctx.lookupWord(lookup_name) orelse {
             try self.transport.writeNullResponse(id);
@@ -1672,6 +1672,93 @@ test "hover on unknown word returns null result" {
     const hover_resp = extractResponse(result.output, 2);
     try std.testing.expect(hover_resp != null);
     try std.testing.expect(std.mem.indexOf(u8, hover_resp.?, "\"result\":null") != null);
+}
+
+test "hover reports the doc of a word the document defines" {
+    const allocator = std.testing.allocator;
+    const input = try buildInput(allocator, &.{
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{}}}
+        ,
+        \\{"jsonrpc":"2.0","method":"initialized","params":{}}
+        ,
+        \\{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///test.1z","languageId":"1z","version":1,"text":"\\\\ Doubles its input.\ndouble: ( n -- n ) [ 2 * ] ;\n3 double"}}}
+        ,
+        \\{"jsonrpc":"2.0","id":2,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///test.1z"},"position":{"line":2,"character":3}}}
+        ,
+        \\{"jsonrpc":"2.0","id":3,"method":"shutdown"}
+        ,
+        \\{"jsonrpc":"2.0","method":"exit"}
+        ,
+    });
+    defer allocator.free(input);
+
+    var out_buf: [65536]u8 = undefined;
+    const result = runServer(input, &out_buf);
+    try std.testing.expectEqual(@as(u8, 0), result.exit_code);
+
+    // response 0 = initialize, 1 = publishDiagnostics, 2 = hover
+    const hover_resp = extractResponse(result.output, 2) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(std.mem.indexOf(u8, hover_resp, "Doubles its input.") != null);
+}
+
+test "hover reports the doc of a use-imported and a reexported word" {
+    const allocator = std.testing.allocator;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.writeFile(.{ .sub_path = "base.1z", .data = "\\\\ Doc of the base word.\nbase-word: [ 1 ] ;\n" });
+    try tmp.dir.writeFile(.{
+        .sub_path = "facade.1z",
+        .data = "\"base.1z\" load reexport\n\n\\\\ Doc of the facade word.\nfacade-word: [ 2 ] ;\n",
+    });
+
+    const dir_path = try tmp.dir.realpathAlloc(allocator, ".");
+    defer allocator.free(dir_path);
+
+    // The relative `use` resolves against the document's own directory, which only the `file://`
+    // URI names: the server's working directory is elsewhere.
+    const open_msg = try std.fmt.allocPrint(allocator,
+        \\{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"file://{s}/doc.1z","languageId":"1z","version":1,"text":"use \"./facade.1z\" ;\nfacade-word base-word"}}}}}}
+    , .{dir_path});
+    defer allocator.free(open_msg);
+
+    const hover_facade = try std.fmt.allocPrint(allocator,
+        \\{{"jsonrpc":"2.0","id":2,"method":"textDocument/hover","params":{{"textDocument":{{"uri":"file://{s}/doc.1z"}},"position":{{"line":1,"character":2}}}}}}
+    , .{dir_path});
+    defer allocator.free(hover_facade);
+
+    const hover_base = try std.fmt.allocPrint(allocator,
+        \\{{"jsonrpc":"2.0","id":3,"method":"textDocument/hover","params":{{"textDocument":{{"uri":"file://{s}/doc.1z"}},"position":{{"line":1,"character":14}}}}}}
+    , .{dir_path});
+    defer allocator.free(hover_base);
+
+    const input = try buildInput(allocator, &.{
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{}}}
+        ,
+        \\{"jsonrpc":"2.0","method":"initialized","params":{}}
+        ,
+        open_msg,
+        hover_facade,
+        hover_base,
+        \\{"jsonrpc":"2.0","id":4,"method":"shutdown"}
+        ,
+        \\{"jsonrpc":"2.0","method":"exit"}
+        ,
+    });
+    defer allocator.free(input);
+
+    var out_buf: [65536]u8 = undefined;
+    const result = runServer(input, &out_buf);
+    try std.testing.expectEqual(@as(u8, 0), result.exit_code);
+
+    // response 0 = initialize, 1 = publishDiagnostics, 2 = hover on the use-imported word,
+    // 3 = hover on the reexported word
+    const facade_resp = extractResponse(result.output, 2) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(std.mem.indexOf(u8, facade_resp, "Doc of the facade word.") != null);
+
+    const base_resp = extractResponse(result.output, 3) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(std.mem.indexOf(u8, base_resp, "Doc of the base word.") != null);
 }
 
 test "hover on whitespace returns null result" {
@@ -2324,6 +2411,37 @@ test "documentSymbol finds defined words" {
     try std.testing.expect(std.mem.indexOf(u8, sym_resp.?, "double") != null);
     // kind 12 = Function (has stack effect)
     try std.testing.expect(std.mem.indexOf(u8, sym_resp.?, "\"kind\":12") != null);
+}
+
+test "analysis keeps definitions that share the document with top-level code" {
+    const allocator = std.testing.allocator;
+    const input = try buildInput(allocator, &.{
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{}}}
+        ,
+        \\{"jsonrpc":"2.0","method":"initialized","params":{}}
+        ,
+        \\{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///test.1z","languageId":"1z","version":1,"text":"first: ( -- ) [ ] ;\n1 drop\nsecond: [ ] ;"}}}
+        ,
+        \\{"jsonrpc":"2.0","id":2,"method":"textDocument/documentSymbol","params":{"textDocument":{"uri":"file:///test.1z"}}}
+        ,
+        \\{"jsonrpc":"2.0","id":3,"method":"shutdown"}
+        ,
+        \\{"jsonrpc":"2.0","method":"exit"}
+        ,
+    });
+    defer allocator.free(input);
+
+    var out_buf: [65536]u8 = undefined;
+    const result = runServer(input, &out_buf);
+    try std.testing.expectEqual(@as(u8, 0), result.exit_code);
+
+    // response 0 = initialize, 1 = publishDiagnostics, 2 = documentSymbol
+    const diag_resp = extractResponse(result.output, 1) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(std.mem.indexOf(u8, diag_resp, "second: word has no declared stack effect") != null);
+
+    const sym_resp = extractResponse(result.output, 2) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(std.mem.indexOf(u8, sym_resp, "\"name\":\"first\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sym_resp, "\"name\":\"second\"") != null);
 }
 
 test "documentSymbol excludes prelude words" {

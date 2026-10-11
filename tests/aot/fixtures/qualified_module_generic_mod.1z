@@ -1,0 +1,9 @@
+\ Fixture for qualified_module_generic.1z: a struct and a user generic, both reached by
+\ qualified name from the entry.
+
+point: struct{ x y } ;
+
+\\ Names the kind of its input.
+kind: ( v -- s ) generic [ ] ;
+kind: method{ fixnum } [ drop "fixnum" ] ;
+kind: method{ string } [ drop "string" ] ;

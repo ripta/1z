@@ -288,23 +288,16 @@ pub fn buildWordInfo(alloc: Allocator, ctx: *const Context, name: []const u8, wo
 }
 
 fn moduleWordToWordDef(name: []const u8, mw: ModuleWord) WordDefinition {
-    return .{
+    var def: WordDefinition = .{
         .name = name,
-        .stack_effect = mw.stack_effect,
-        .markers = mw.markers,
-        .source_module = mw.source_module,
-        .doc = mw.doc,
-        .source_file = mw.source_file,
-        .source_line = mw.source_line,
-        .source_column = mw.source_column,
-        .provenance = mw.provenance,
-        .dispatch_id = mw.dispatch_id,
         .action = switch (mw.action) {
             .compound => |instrs| .{ .compound = instrs },
             .native => |f| .{ .native = f },
             .host_callback => |host| .{ .host_callback = host },
         },
     };
+    dictionary_mod.copySharedFields(&def, mw, &.{"action"});
+    return def;
 }
 
 const DeadDefinitionInfo = struct {

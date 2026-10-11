@@ -736,22 +736,7 @@ pub fn importWord(ctx: *Context, name: []const u8, mod_word: ModuleWord, module:
         },
     };
 
-    // Every other field ModuleWord and WordDefinition share by name copies straight across, so a
-    // field added to both later crosses the module boundary without another hand-edit here. The
-    // fields set explicitly above need conversion (action) or merge logic (source_module,
-    // dispatch_id, word_id) beyond a plain copy.
-    const handled_above = [_][]const u8{ "source_module", "dispatch_id", "word_id", "action" };
-    inline for (std.meta.fields(ModuleWord)) |field| {
-        const needs_custom_handling = comptime blk: {
-            for (handled_above) |h| {
-                if (std.mem.eql(u8, h, field.name)) break :blk true;
-            }
-            break :blk false;
-        };
-        if (!needs_custom_handling and @hasField(dict_mod.WordDefinition, field.name)) {
-            @field(definition, field.name) = @field(mod_word, field.name);
-        }
-    }
+    dict_mod.copySharedFields(&definition, mod_word, &.{ "source_module", "dispatch_id", "word_id", "action" });
 
     try ctx.defineImportedWord(name, definition);
     if (ctx.trace.trace_modules.import) {

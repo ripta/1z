@@ -7,3 +7,16 @@ Stack: [ ]
 Stack: [ [ [ pt-only-word ] call ] ]
 PASS: imported parse-time-only word cannot be called at runtime
 Stack: [ ]
+Stack: [ [ call-private-pt-only ] ]
+PASS: a module's private parse-time-only word cannot be called at runtime
+Stack: [ ]
+=== qualified access ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ "A word whose doc comment must survive a `use` import." ]
+Stack: [ "A word whose doc comment must survive a `use` import." "A word whose doc comment must survive a `use` import." ]
+PASS: qualified word keeps its doc comment
+Stack: [ ]
+Stack: [ [ [ helper.pt-only-word ] call ] ]
+PASS: qualified parse-time-only word cannot be called at runtime
+Stack: [ ]

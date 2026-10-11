@@ -1,0 +1,9 @@
+\ Companion module for help_imported_word.1z.
+\
+\ A facade that republishes the helper module next to a documented word of its own, so the driver
+\ reaches one word through a plain `use` and another through `reexport`.
+
+"import_field_fidelity_helper.1z" load reexport
+
+\\ A word the facade defines itself, reached by its importer through a plain `use`.
+facade-word: [ 7 ] ;

@@ -1089,8 +1089,11 @@ const MethodBody = struct {
 /// and no instruction index or quotation path is needed.
 const PendingCalleeBinding = struct {
     caller: WordIdentity,
+    /// The name as written at the call site, which keys the caller's callee scope.
     callee_name: []const u8,
-    callee_module: ?*const value_mod.Module,
+    /// The callee's word-table identity. Its name differs from `callee_name` for a dot-qualified
+    /// call, which `qualifiedCompoundIdentity` files under the module word's bare name.
+    callee: WordIdentity,
 };
 
 const DiscoveredWords = struct {
@@ -1563,6 +1566,8 @@ fn drainWorklist(
             // operations via qualified names that lookupWord cannot resolve
             // directly.
             if (ctx.resolveQualifiedModuleWord(name)) |mod_word| {
+                if (mod_word.parse_time_only) continue;
+
                 switch (mod_word.action) {
                     .native, .host_callback => {
                         // Polymorphic natives without a declared stack effect
@@ -1705,14 +1710,55 @@ fn classifyCallee(ctx: *const Context, name: []const u8, vis: ?ModuleDepsVisibil
         };
     }
     // `wordDefFromModuleWord` leaves `source_module` null on the dot-qualified path, so discovery
-    // records these module-less. Classify them the same way or the remap would not find them.
+    // records a word it reaches there module-less. Classify it the same way or the remap would not
+    // find it.
     if (ctx.resolveQualifiedModuleWord(name)) |mod_word| {
+        if (mod_word.parse_time_only) {
+            return .{ .unresolved = .skipped_parse_time_only };
+        }
         return switch (mod_word.action) {
             .native, .host_callback => .{ .native = bareIdentity(name) },
-            .compound => .{ .compound = bareIdentity(name) },
+            .compound => .{ .compound = qualifiedCompoundIdentity(ctx, name, mod_word) },
         };
     }
     return .{ .unresolved = .not_in_dictionary };
+}
+
+/// The identity a direct call to `name` seeds discovery with, given what it resolved to under the
+/// caller's scope. Agrees with `classifyCallee`, so the remap finds the seeded word.
+fn calleeIdentity(ctx: *const Context, name: []const u8, callee: ?WordDefinition) WordIdentity {
+    if (callee) |w| return .{ .module = w.source_module, .name = name };
+
+    const mod_word = ctx.resolveQualifiedModuleWord(name) orelse return bareIdentity(name);
+    return switch (mod_word.action) {
+        .compound => qualifiedCompoundIdentity(ctx, name, mod_word),
+        .native, .host_callback => bareIdentity(name),
+    };
+}
+
+/// The identity a dot-qualified compound callee is filed under.
+///
+/// A word from a cached module takes the identity a `use` import of the same word carries: its
+/// defining module and its bare name. Discovery then walks it in that module's scope, and the binary
+/// resolves it through the module's segment. The dotted name resolves nothing in the binary, because
+/// the module binding it starts from is a value no image can carry.
+///
+/// A word from a module the cache does not hold, such as an ad-hoc `>module`, has no segment to
+/// resolve through and stays module-less under its dotted name.
+fn qualifiedCompoundIdentity(ctx: *const Context, name: []const u8, mod_word: value_mod.ModuleWord) WordIdentity {
+    const qn = Context.splitQualifiedName(name) orelse return bareIdentity(name);
+    const binding = ctx.lookupWord(qn.module_path) orelse return bareIdentity(name);
+    const bound_module = Context.moduleLiteralFromWordDef(binding) orelse return bareIdentity(name);
+    const defining_module: *const value_mod.Module = mod_word.source_module orelse bound_module;
+
+    var cache_iter = ctx.module_cache_value.map.iterator();
+    while (cache_iter.next()) |entry| {
+        if (entry.value_ptr.* != .module) continue;
+        if (entry.value_ptr.*.module == defining_module) {
+            return .{ .module = defining_module, .name = qn.word_name };
+        }
+    }
+    return bareIdentity(name);
 }
 
 /// Recurse through a composite literal Value to reach every buried `.quotation` and seed its callees
@@ -1776,7 +1822,7 @@ fn seedQuotationBodyCallees(ctx: *const Context, instrs: []const Instruction, ca
             try pending_callee_bindings.append(allocator, .{
                 .caller = caller,
                 .callee_name = name,
-                .callee_module = callee.source_module,
+                .callee = identity,
             });
         },
         .push_literal => |v| switch (v) {
@@ -1880,8 +1926,7 @@ fn collectCallWords(
                 }
 
                 const callee = ctx.lookupWordFiltered(name, vis);
-                const callee_module: ?*const value_mod.Module = if (callee) |w| w.source_module else null;
-                const identity = WordIdentity{ .module = callee_module, .name = name };
+                const identity = calleeIdentity(ctx, name, callee);
 
                 // Every word dedups by identity, so two modules exporting one name both reach the
                 // manifest. Codegen gives each its own C function, and the per-scope callee map
@@ -1890,11 +1935,11 @@ fn collectCallWords(
                 if (!gop.found_existing) {
                     try worklist.append(allocator, identity);
                 }
-                if (callee != null) {
+                if (callee != null or identity.module != null) {
                     try pending_callee_bindings.append(allocator, .{
                         .caller = caller,
                         .callee_name = name,
-                        .callee_module = callee_module,
+                        .callee = identity,
                     });
                 }
                 const path_copy: []const u32 = if (quotation_path.items.len == 0)
@@ -2523,8 +2568,8 @@ fn detectBuriedCallees(
                 const name = instr.op.callTargetName().?;
                 if (prelude_words.contains(name)) continue;
                 switch (classifyCallee(ctx, name, null)) {
-                    .compound => {
-                        if (discovered_names.contains(name)) continue;
+                    .compound => |identity| {
+                        if (discovered_names.contains(identity.name)) continue;
                         const gop = try callee_seen.getOrPut(allocator, name);
                         if (gop.found_existing) continue;
                         try violations.append(allocator, .{
@@ -2822,19 +2867,19 @@ const one_push_effect: StackEffect = .{
 
 /// Convert a ModuleWord to a WordDefinition, using the given qualified
 /// name (e.g., "native.struct-field-get") as the word name.
+///
+/// `source_module` stays null, matching `classifyCallee`'s module-less identity for these words.
 fn wordDefFromModuleWord(name: []const u8, mod_word: value_mod.ModuleWord) WordDefinition {
-    return .{
+    var def: WordDefinition = .{
         .name = name,
-        .stack_effect = mod_word.stack_effect,
-        .source_file = mod_word.source_file,
-        .source_line = mod_word.source_line,
         .action = switch (mod_word.action) {
             .native => |f| .{ .native = f },
             .host_callback => |h| .{ .host_callback = h },
             .compound => |c| .{ .compound = c },
         },
-        .capability = mod_word.capability,
     };
+    dictionary_mod.copySharedFields(&def, mod_word, &.{ "source_module", "action" });
+    return def;
 }
 
 /// Try to discover a callee word that isn't yet in the discovered set.
@@ -3736,10 +3781,7 @@ fn buildAotDescs(
         scopes_by_caller.deinit(allocator);
     }
     for (discovered.pending_callee_bindings.items) |binding| {
-        const callee_entry = identity_map.get(.{
-            .module = binding.callee_module,
-            .name = binding.callee_name,
-        }) orelse continue;
+        const callee_entry = identity_map.get(binding.callee) orelse continue;
         const caller_entry = identity_map.get(binding.caller) orelse continue;
 
         const scope_gop = try scopes_by_caller.getOrPut(allocator, caller_entry.identity.?);
@@ -5395,7 +5437,7 @@ test "seedCompositeQuotationCallees seeds a module-scoped callee and skips a mod
     try testing.expect(worklist.items[0].module == mod);
     try testing.expectEqual(@as(usize, 1), bindings.items.len);
     try testing.expectEqualStrings("mod-probe", bindings.items[0].callee_name);
-    try testing.expect(bindings.items[0].callee_module == mod);
+    try testing.expect(bindings.items[0].callee.module == mod);
 }
 
 test "collectCompositeQuotations collects a quotation nested in a nested composite" {

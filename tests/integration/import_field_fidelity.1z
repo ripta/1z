@@ -1,7 +1,7 @@
-\ Regression test: a `use`-imported word must keep its doc comment and its `parse-time-only`
-\ restriction, not just its compiled body. `importWord` copied a hand-listed subset of
-\ ModuleWord's fields into the imported WordDefinition, silently dropping `doc` and never
-\ carrying `parse_time_only` at all.
+\ Regression test: a word must keep its doc comment and its `parse-time-only` restriction across
+\ every route that crosses a module boundary, not just its compiled body. Each conversion between
+\ a module's word and a definition once carried a hand-listed subset of the fields, and each list
+\ drifted on its own.
 
 use "testing" ;
 use "./import_field_fidelity_helper.1z" ;
@@ -14,3 +14,17 @@ documented-word: >word-info doc>>
 
 [ [ pt-only-word ] call ]
 parse-error: "imported parse-time-only word cannot be called at runtime" assert-error-type
+
+[ call-private-pt-only ]
+parse-error: "a module's private parse-time-only word cannot be called at runtime" assert-error-type
+
+"qualified access" test-section
+
+helper: "./import_field_fidelity_helper.1z" load ;
+
+helper.documented-word: >word-info doc>>
+"A word whose doc comment must survive a `use` import."
+"qualified word keeps its doc comment" assert=
+
+[ [ helper.pt-only-word ] call ]
+parse-error: "qualified parse-time-only word cannot be called at runtime" assert-error-type

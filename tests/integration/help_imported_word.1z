@@ -1,0 +1,22 @@
+\ `help` and `>word-info` report the doc comment of a word reached through a `use` import and of
+\ a word reached through a `reexport` facade, the same as for a word defined in this file.
+
+use "testing" ;
+use "runtime/introspect" ;
+use "./help_imported_word_facade.1z" ;
+
+"imported word" test-section
+
+facade-word: >word-info doc>>
+"A word the facade defines itself, reached by its importer through a plain `use`."
+"imported word keeps its doc comment" assert=
+
+facade-word: help
+
+"reexported word" test-section
+
+documented-word: >word-info doc>>
+"A word whose doc comment must survive a `use` import."
+"reexported word keeps its doc comment" assert=
+
+documented-word: help

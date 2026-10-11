@@ -1,0 +1,20 @@
+=== imported word ===
+Stack: [ ]
+Stack: [ "A word the facade defines itself, reached by its importer through a plain `use`." ]
+Stack: [ "A word the facade defines itself, reached by its importer through a plain `use`." "A word the facade defines itself, reached by its importer through a plain `use`." ]
+PASS: imported word keeps its doc comment
+Stack: [ ]
+A word the facade defines itself, reached by its importer through a plain `use`.
+facade-word \compound
+
+Stack: [ ]
+=== reexported word ===
+Stack: [ ]
+Stack: [ "A word whose doc comment must survive a `use` import." ]
+Stack: [ "A word whose doc comment must survive a `use` import." "A word whose doc comment must survive a `use` import." ]
+PASS: reexported word keeps its doc comment
+Stack: [ ]
+A word whose doc comment must survive a `use` import.
+documented-word \compound
+
+Stack: [ ]

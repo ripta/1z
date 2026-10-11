@@ -8,3 +8,12 @@ documented-word: [ 42 ] ;
 
 \\ A parse-time-only word, to check that the restriction survives a `use` import.
 pt-only-word: parse-time-only [ 42 ] ;
+
+private{
+  \\ A private parse-time-only word, reachable only through this module's deps frame.
+  (private-pt-only): parse-time-only [ 42 ] ;
+}
+
+\\ Calls a private parse-time-only sibling at runtime. The sibling is never imported, so the only
+\\ definition the call can reach is the one in the module's deps frame.
+call-private-pt-only: [ [ (private-pt-only) ] call ] ;

@@ -1,0 +1,9 @@
+\ A module's struct getter and user generic, called by qualified name, must dispatch to their
+\ methods in a compiled binary. The module binding `m` never reaches the binary, so each word has
+\ to be filed under its module and bare name, the way a `use` import of it would be.
+
+m: "fixtures/qualified_module_generic_mod.1z" load ;
+
+3 4 m.make-point m.x>> .
+5 m.kind print-line
+"hi" m.kind print-line

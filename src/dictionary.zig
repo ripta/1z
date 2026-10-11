@@ -178,6 +178,36 @@ pub const WordDefinition = struct {
     }
 };
 
+/// Copy into `dst` every field its type shares by name with `src`, except the fields in `handled`.
+///
+/// Every conversion between `value.ModuleWord` and `WordDefinition` goes through here, so a field
+/// added to both structs crosses the module boundary in each direction without another hand-edit.
+///
+/// A conversion lists in `handled` only the fields it builds itself, because they need conversion or
+/// merge logic. A shared name with incompatible types fails to compile.
+pub fn copySharedFields(dst: anytype, src: anytype, comptime handled: []const []const u8) void {
+    const Dst = @typeInfo(@TypeOf(dst)).pointer.child;
+    const Src = @TypeOf(src);
+
+    comptime for (handled) |h| {
+        if (!@hasField(Dst, h) and !@hasField(Src, h)) {
+            @compileError("copySharedFields: neither side has a field named '" ++ h ++ "'");
+        }
+    };
+
+    inline for (std.meta.fields(Src)) |field| {
+        const is_handled = comptime blk: {
+            for (handled) |h| {
+                if (std.mem.eql(u8, h, field.name)) break :blk true;
+            }
+            break :blk false;
+        };
+        if (!is_handled and @hasField(Dst, field.name)) {
+            @field(dst, field.name) = @field(src, field.name);
+        }
+    }
+}
+
 /// Typed view onto a `WordSlot`'s current definition pointer. The slot
 /// itself stores the pointer as `*word_slot.WordDefinition` (an opaque type
 /// declared in `word_slot.zig`) so that `value.zig` can reference

@@ -4246,21 +4246,7 @@ pub const Context = struct {
     /// Every path that promotes a frame into a module goes through here: a file's own words at load
     /// finalization, `private{ }`'s scope capture, and `>module`.
     pub fn moduleWordFor(self: *Context, alloc: Allocator, def: WordDefinition) !value_mod.ModuleWord {
-        return .{
-            .stack_effect = def.stack_effect,
-            .markers = def.markers,
-            .source_module = def.source_module,
-            .dispatch_id = def.dispatch_id,
-            // A word compiled while its file loaded carries its compiled id here. Dropping it
-            // leaves every later call, from an importer or from the module itself, interpreted.
-            .word_id = def.word_id,
-            .doc = def.doc,
-            .parse_time_only = def.parse_time_only,
-            .source_file = def.source_file,
-            .source_line = def.source_line,
-            .source_column = def.source_column,
-            .provenance = def.provenance,
-            .body_owner = def.body_owner,
+        var mod_word: value_mod.ModuleWord = .{
             .may_define = def.exec_flags.may_define,
             .action = switch (def.action) {
                 .compound => |instrs| .{ .compound = instrs },
@@ -4278,6 +4264,12 @@ pub const Context = struct {
                 },
             },
         };
+
+        // `word_id` must stay among the shared fields. A word compiled while its file loaded
+        // carries its compiled id here, and dropping it would leave every later call, from an
+        // importer or from the module itself, interpreted.
+        dict_mod.copySharedFields(&mod_word, def, &.{ "may_define", "action" });
+        return mod_word;
     }
 
     /// Build the frame `WordDefinition` for a module dep/word entry. The
@@ -4292,26 +4284,21 @@ pub const Context = struct {
     ) WordDefinition {
         var def: WordDefinition = .{
             .name = name,
-            .stack_effect = mod_word.stack_effect,
-            .markers = mod_word.markers,
-            // A caller reaching this entry from compiled code has not set the file its body lives
-            // in, so the entry carries it rather than inheriting the caller's.
-            .source_file = mod_word.source_file,
-            .source_line = mod_word.source_line,
-            .source_column = mod_word.source_column,
             .source_module = mod_word.source_module orelse module,
-            .capability = mod_word.capability,
-            .dispatch_id = mod_word.dispatch_id,
-            // Compiled functions and image word rows are keyed per (module, word), so the row's
-            // id names this entry's own body and a frame or probe hit dispatches compiled.
-            .word_id = mod_word.word_id,
-            .body_owner = mod_word.body_owner,
             .action = switch (mod_word.action) {
                 .compound => |instrs| .{ .compound = instrs },
                 .native => |func| .{ .native = func },
                 .host_callback => |host| .{ .host_callback = host },
             },
         };
+
+        // The shared fields carry `source_file`, because a caller reaching this entry from compiled
+        // code has not set the file its body lives in.
+        //
+        // They also carry `word_id`. Compiled functions and image word rows are keyed per
+        // (module, word), so the row's id names this entry's own body and a frame or probe hit
+        // dispatches compiled.
+        dict_mod.copySharedFields(&def, mod_word, &.{ "source_module", "action" });
         def.exec_flags = computeExecFlagsWithMayDefine(def, mod_word.may_define);
         return def;
     }
@@ -4466,15 +4453,13 @@ pub const Context = struct {
 
         var def: WordDefinition = .{
             .name = name,
-            .stack_effect = mod_word.stack_effect,
-            .markers = mod_word.markers,
             .source_module = mod_word.source_module orelse cached.module,
-            .capability = mod_word.capability,
-            .dispatch_id = mod_word.dispatch_id,
-            .word_id = mod_word.word_id,
             .imported = true,
             .action = .{ .native = aotCompiledOnlyBailSentinel },
         };
+
+        // `body_owner` stays unset along with the body it owns.
+        dict_mod.copySharedFields(&def, mod_word, &.{ "source_module", "action", "body_owner" });
         def.exec_flags = computeExecFlags(def);
         try frame.put(self.allocator, name, def);
     }
@@ -6174,24 +6159,15 @@ pub const Context = struct {
     ) WordDefinition {
         var def: WordDefinition = .{
             .name = name,
-            .stack_effect = mod_word.stack_effect,
-            .markers = mod_word.markers,
-            .doc = mod_word.doc,
-            .source_file = mod_word.source_file,
-            .source_line = mod_word.source_line,
-            .source_column = mod_word.source_column,
             .source_module = mod_word.source_module orelse module,
-            .provenance = mod_word.provenance,
-            .capability = mod_word.capability,
-            .word_id = mod_word.word_id,
-            .dispatch_id = mod_word.dispatch_id,
-            .body_owner = mod_word.body_owner,
             .action = switch (mod_word.action) {
                 .compound => |instrs| .{ .compound = instrs },
                 .native => |func| .{ .native = func },
                 .host_callback => |host| .{ .host_callback = host },
             },
         };
+        dict_mod.copySharedFields(&def, mod_word, &.{ "source_module", "action" });
+
         // Module-cache words are synthesized fresh on each lookup rather than
         // stored through the finalization points, so compute the flags here so
         // `executeResolvedWord` reads correct bits for module-private words.
@@ -7858,6 +7834,19 @@ pub const Context = struct {
                     });
                     return error.PermissionDenied;
                 }
+            }
+
+            // Repeats `executeResolvedWord`'s parse-time-only guard.
+            if (mod_word.parse_time_only and self.parse_tokenizer == null) {
+                self.pending_error_message = "parse-time-only word cannot be called at runtime";
+                self.appendPendingErrorFrame(.{
+                    .word_name = name,
+                    .source = self.current_source,
+                    .line = line,
+                    .column = column,
+                    .stack_effect = mod_word.stack_effect,
+                });
+                return error.ParseError;
             }
 
             if (self.trace.trace_resolve and trace_mod.matchesPattern(name, self.trace.trace_resolve_pattern)) {
