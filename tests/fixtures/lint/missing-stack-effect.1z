@@ -1,2 +1,11 @@
 \\ A word without a stack effect.
 no-effect: [ 42 ] ;
+
+\\ A bracket-less binding, whose effect is always one push.
+bound-value: 7 ;
+
+\\ A const inline literal, which is a bracket-less binding too.
+inline-value: const inline 8 ;
+
+\\ A parse-time word, which has no runtime effect.
+parse-time-word: parse-time [ ] ;

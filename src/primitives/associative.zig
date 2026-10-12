@@ -195,6 +195,9 @@ fn nativeAtGetModule(ctx: *Context) anyerror!void {
             .compound => |instrs| {
                 try ctx.stack.push(.{ .quotation = .{ .instructions = instrs, .effect = word.stack_effect } });
             },
+            .literal => |lit| {
+                try ctx.stack.push(.{ .quotation = .{ .instructions = lit.body, .effect = word.stack_effect } });
+            },
             .native, .host_callback => {
                 try word.invoke(ctx);
             },

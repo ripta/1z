@@ -13,7 +13,7 @@ use "ffi" ;
   (compress-bound): "compressBound" ffi{ usize -> usize }
 } call "zlib-raw" swap >module import
 
-EZlibError: [ zlib-error: ] ;
+EZlibError: ( -- sym ) [ zlib-error: ] ;
 
 \\ Check zlib return code, throw on error.
 (check-zlib): ( code -- ) [
@@ -123,4 +123,4 @@ uncompress-sized: ( byte-array expected-len -- byte-array ) [
   ] if
 ] ;
 
-pragma{ lint-suppress: { complex-word-undocumented: dead-definition: missing-doc-comment: missing-stack-effect: missing-type-annotation: orphaned-doc-comment: } }
+pragma{ lint-suppress: { complex-word-undocumented: dead-definition: missing-doc-comment: missing-type-annotation: orphaned-doc-comment: } }

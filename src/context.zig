@@ -4276,10 +4276,11 @@ pub const Context = struct {
 
     /// Build the module entry for a frame definition, the direction opposite `moduleWordFrameDef`.
     ///
-    /// `ModuleWord` has no `.literal` counterpart, so a directly-bound value becomes the
-    /// one-instruction body it replaced. A module outlives the frame that defined its words, so a
-    /// frame-owned value needs a reference of its own here; the dictionary's teardown list holds it,
-    /// which is the same lifetime a durable binding's own definition would have given it.
+    /// A directly-bound value stays a `.literal`.
+    ///
+    /// A module outlives the frame that defined its words, so a frame-owned value needs a reference
+    /// of its own here; the dictionary's teardown list holds it, which is the same lifetime a
+    /// durable binding's own definition would have given it.
     ///
     /// Every path that promotes a frame into a module goes through here: a file's own words at load
     /// finalization, `private{ }`'s scope capture, and `>module`.
@@ -4298,7 +4299,7 @@ pub const Context = struct {
                         errdefer container_backing.releaseValue(v);
                         try self.retainValueForTeardown(v);
                     }
-                    break :blk .{ .compound = instrs };
+                    break :blk .{ .literal = .{ .value = v, .body = instrs } };
                 },
             },
         };
@@ -4327,6 +4328,7 @@ pub const Context = struct {
                 .compound => |instrs| .{ .compound = instrs },
                 .native => |func| .{ .native = func },
                 .host_callback => |host| .{ .host_callback = host },
+                .literal => |lit| .{ .literal = lit.value },
             },
         };
 
@@ -6199,6 +6201,7 @@ pub const Context = struct {
                 .compound => |instrs| .{ .compound = instrs },
                 .native => |func| .{ .native = func },
                 .host_callback => |host| .{ .host_callback = host },
+                .literal => |lit| .{ .literal = lit.value },
             },
         };
         dict_mod.copySharedFields(&def, mod_word, &.{ "source_module", "action" });
@@ -8119,6 +8122,7 @@ pub const Context = struct {
                     const rc = host.callback(host.handle, host.user_data);
                     if (rc != 0) return error.HostCallbackFailed;
                 },
+                .literal => |lit| try self.stack.push(lit.value),
             }
         } else {
             if (self.trace.trace_resolve and trace_mod.matchesPattern(name, self.trace.trace_resolve_pattern)) {

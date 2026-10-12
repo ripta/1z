@@ -484,7 +484,7 @@ outer: ( ndarray ndarray -- ndarray ) [
 
 \ Element-wise arithmetic support
 
-EShapeMismatch: [ shape-mismatch: ] ;
+EShapeMismatch: ( -- sym ) [ shape-mismatch: ] ;
 
 assert-shapes=: ( ndarray ndarray -- ) [
   over shape over shape =
@@ -902,4 +902,4 @@ inspect: method{ ndarray } [
   ] if
 ] ;
 
-pragma{ lint-suppress: { broad-import: complex-word-undocumented: dead-definition: deep-nesting: missing-doc-comment: missing-stack-effect: missing-type-annotation: non-kebab-case: } }
+pragma{ lint-suppress: { broad-import: complex-word-undocumented: dead-definition: deep-nesting: missing-doc-comment: missing-type-annotation: non-kebab-case: } }

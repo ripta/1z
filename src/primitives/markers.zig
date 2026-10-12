@@ -786,7 +786,7 @@ fn nativeIsNative(ctx: *Context) anyerror!void {
 
     const is_native = switch (mod_word.action) {
         .native, .host_callback => true,
-        .compound => false,
+        .compound, .literal => false,
     };
     try ctx.stack.push(.{ .boolean = is_native });
 }

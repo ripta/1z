@@ -1507,6 +1507,8 @@ pub const ModuleWord = struct {
     markers: []const *Marker = &.{},
     source_module: ?*const Module = null,
     doc: ?[]const u8 = null,
+    /// Whether this word runs at parse time. Mirrors `dictionary.WordDefinition.parse_time`.
+    parse_time: bool = false,
     /// Whether this word can only be called during parse time. Mirrors
     /// `dictionary.WordDefinition.parse_time_only`.
     parse_time_only: bool = false,
@@ -1536,7 +1538,27 @@ pub const ModuleWord = struct {
         compound: []const Instruction,
         native: NativeFn,
         host_callback: HostCallback,
+        /// A bracket-less binding. Mirrors `dictionary.WordDefinition.Action.literal`.
+        literal: Literal,
     };
+
+    /// A bracket-less binding's value, with the one-instruction body that pushes it.
+    ///
+    /// The body is built once when the word enters a module, so a consumer that runs, compiles, or
+    /// serializes a module word as instructions reads `body` without allocating.
+    pub const Literal = struct {
+        value: Value,
+        body: []const Instruction,
+    };
+
+    /// The instructions a `.compound` or `.literal` word runs, or null for a native word.
+    pub fn body(self: ModuleWord) ?[]const Instruction {
+        return switch (self.action) {
+            .compound => |instrs| instrs,
+            .literal => |lit| lit.body,
+            .native, .host_callback => null,
+        };
+    }
 
     pub fn invoke(self: ModuleWord, ctx: *Context) anyerror!void {
         switch (self.action) {
@@ -1545,7 +1567,7 @@ pub const ModuleWord = struct {
                 const rc = host.callback(host.handle, host.user_data);
                 if (rc != 0) return error.HostCallbackFailed;
             },
-            .compound => unreachable,
+            .compound, .literal => unreachable,
         }
     }
 };

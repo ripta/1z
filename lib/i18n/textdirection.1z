@@ -64,26 +64,26 @@ script-direction: ( string -- symbol ) [
 \ --- Bidi marker constants ---
 
 \\ U+200E Left-to-Right Mark
-bidi-lrm: const [ "\u{200E}" ] ;
+bidi-lrm: ( -- mark: string ) const [ "\u{200E}" ] ;
 \\ U+200F Right-to-Left Mark
-bidi-rlm: const [ "\u{200F}" ] ;
+bidi-rlm: ( -- mark: string ) const [ "\u{200F}" ] ;
 \\ U+202A Left-to-Right Embedding
-bidi-lre: const [ "\u{202A}" ] ;
+bidi-lre: ( -- mark: string ) const [ "\u{202A}" ] ;
 \\ U+202B Right-to-Left Embedding
-bidi-rle: const [ "\u{202B}" ] ;
+bidi-rle: ( -- mark: string ) const [ "\u{202B}" ] ;
 \\ U+202C Pop Directional Formatting
-bidi-pdf: const [ "\u{202C}" ] ;
+bidi-pdf: ( -- mark: string ) const [ "\u{202C}" ] ;
 \\ U+202D Left-to-Right Override
-bidi-lro: const [ "\u{202D}" ] ;
+bidi-lro: ( -- mark: string ) const [ "\u{202D}" ] ;
 \\ U+202E Right-to-Left Override
-bidi-rlo: const [ "\u{202E}" ] ;
+bidi-rlo: ( -- mark: string ) const [ "\u{202E}" ] ;
 \\ U+2066 Left-to-Right Isolate
-bidi-lri: const [ "\u{2066}" ] ;
+bidi-lri: ( -- mark: string ) const [ "\u{2066}" ] ;
 \\ U+2067 Right-to-Left Isolate
-bidi-rli: const [ "\u{2067}" ] ;
+bidi-rli: ( -- mark: string ) const [ "\u{2067}" ] ;
 \\ U+2068 First Strong Isolate
-bidi-fsi: const [ "\u{2068}" ] ;
+bidi-fsi: ( -- mark: string ) const [ "\u{2068}" ] ;
 \\ U+2069 Pop Directional Isolate
-bidi-pdi: const [ "\u{2069}" ] ;
+bidi-pdi: ( -- mark: string ) const [ "\u{2069}" ] ;
 
-pragma{ lint-suppress: { broad-import: dead-definition: missing-stack-effect: missing-type-annotation: unused-import: } }
+pragma{ lint-suppress: { broad-import: dead-definition: missing-type-annotation: unused-import: } }

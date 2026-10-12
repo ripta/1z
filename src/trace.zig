@@ -414,7 +414,7 @@ pub fn traceModuleDefine(trace_writer: *TraceWriter, module_name: []const u8, wo
     const w = fbs.writer();
 
     const kind: []const u8 = switch (mod_word.action) {
-        .compound => "compound",
+        .compound, .literal => "compound",
         .native, .host_callback => "native",
     };
 

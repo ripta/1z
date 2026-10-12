@@ -2465,7 +2465,7 @@ fn emitCopyToPtr(ctx: *c.ir_ctx, base_addr: c.ir_ref, src_slot: usize, dest_ptr:
 
 /// Maximum depth of the abstract compilation stack used during word compilation. Each entry tracks
 /// the type and form of a value at that stack position. Bounded by the largest word arity in prelude,
-/// which is currently 9 for `make-word-info`, 64 should provides plenty headroom.
+/// which is currently 14 for `make-word-info`. 64 provides plenty of headroom.
 const max_abstract_stack_depth = 64;
 
 /// Compute a conservative upper bound on the abstract stack depth needed to
@@ -18496,6 +18496,7 @@ fn invokeModuleWord(ctx: *Context, hit: ModuleWordHit, name: []const u8, is_tail
             ctx.enterBodySource(instrs);
             try ctx.executeQuotationWithPic(.{ .instructions = instrs }, null, null, hit.word.body_owner, hit.word.may_define);
         },
+        .literal => |lit| try ctx.stack.push(lit.value),
     }
 }
 

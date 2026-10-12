@@ -126,4 +126,4 @@ font-glyph-bytes: const inline B{
   if
 ] ;
 
-pragma{ lint-suppress: { dead-definition: missing-doc-comment: missing-stack-effect: } }
+pragma{ lint-suppress: { dead-definition: missing-doc-comment: } }

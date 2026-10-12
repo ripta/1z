@@ -61,7 +61,7 @@ ffi-def{
 
 \\ IDN error marker for make-error. Raised when the UTS #46 UIDNAInfo.errors
 \\ bitmask is non-zero; the bitmask is carried as the error's data field.
-EIDNError: [ idn-error: ] ;
+EIDNError: ( -- sym ) [ idn-error: ] ;
 
 \ --- Conversion cores ---
 
@@ -153,4 +153,4 @@ decode-host?: ( string -- option ) [
   recover
 ] ;
 
-pragma{ lint-suppress: { broad-import: dead-definition: import-ordering: missing-stack-effect: missing-type-annotation: non-kebab-case: predicate-naming: } }
+pragma{ lint-suppress: { broad-import: dead-definition: import-ordering: missing-type-annotation: non-kebab-case: predicate-naming: } }

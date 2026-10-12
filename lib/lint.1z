@@ -340,6 +340,16 @@ param-annotated?: ( param: stack-effect-param -- ? ) [
   ] if
 ] ;
 
+\\ Whether a word should declare a stack effect and does not.
+\\
+\\ A bracket-less binding pushes exactly one value, so a declared effect would add nothing. A
+\\ parse-time word runs while the parser reads, and has no runtime effect to declare.
+missing-stack-effect?: ( word-info: word-info -- ? ) [
+  dup stack-effect>> f = [
+    dup binding?>> swap parse-time?>> or not
+  ] [ drop f ] if
+] ;
+
 \\ Get all word names from a semantic context. Returns array or empty array.
 semantic-word-names: ( semantic-context -- array ) [
   dup f = [ drop { } ] [ word-infos>> @keys ] if

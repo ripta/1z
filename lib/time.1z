@@ -215,9 +215,9 @@ format-in: ( timestamp tz fmt-string -- string ) [
 
 \ Format constants
 iso8601-fmt: ( -- fmt: string ) const [ "{year}-{month-num:width=2,fill=0}-{day:width=2,fill=0}T{hour:width=2,fill=0}:{min:width=2,fill=0}:{sec:width=2,fill=0}{tz}" ] ;
-rfc2822-fmt: const [ "{weekday-short}, {day:width=2,fill=0} {month-short} {year} {hour:width=2,fill=0}:{min:width=2,fill=0}:{sec:width=2,fill=0} {tz}" ] ;
-date-fmt:    const [ "{year}-{month-num:width=2,fill=0}-{day:width=2,fill=0}" ] ;
-time-fmt:    const [ "{hour:width=2,fill=0}:{min:width=2,fill=0}:{sec:width=2,fill=0}" ] ;
+rfc2822-fmt: ( -- fmt: string ) const [ "{weekday-short}, {day:width=2,fill=0} {month-short} {year} {hour:width=2,fill=0}:{min:width=2,fill=0}:{sec:width=2,fill=0} {tz}" ] ;
+date-fmt:    ( -- fmt: string ) const [ "{year}-{month-num:width=2,fill=0}-{day:width=2,fill=0}" ] ;
+time-fmt:    ( -- fmt: string ) const [ "{hour:width=2,fill=0}:{min:width=2,fill=0}:{sec:width=2,fill=0}" ] ;
 
 \ --- Elapsed time measurement ---
 
@@ -252,4 +252,4 @@ inspect: method{ timezone } [
   swap "<timezone " swap #append " " #append swap #append ">" #append
 ] ;
 
-pragma{ lint-suppress: { complex-word-undocumented: constructor-consistency: conversion-naming: dead-definition: missing-doc-comment: missing-stack-effect: missing-type-annotation: } }
+pragma{ lint-suppress: { complex-word-undocumented: constructor-consistency: conversion-naming: dead-definition: missing-doc-comment: missing-type-annotation: } }

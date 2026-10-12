@@ -279,4 +279,4 @@ draw-text: ( x: fixnum y: fixnum str: string color: color -- ) [
   ] #each
 ] ;
 
-pragma{ lint-suppress: { broad-import: complex-word-undocumented: dead-definition: import-ordering: missing-doc-comment: missing-stack-effect: missing-type-annotation: unused-import: } }
+pragma{ lint-suppress: { broad-import: complex-word-undocumented: dead-definition: import-ordering: missing-doc-comment: missing-type-annotation: unused-import: } }

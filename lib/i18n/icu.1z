@@ -33,7 +33,7 @@ ffi-def{
 \ --- Error handling ---
 
 \\ ICU error marker for make-error.
-EICUError: [ icu-error: ] ;
+EICUError: ( -- sym ) [ icu-error: ] ;
 
 \\ Check an ICU UErrorCode. Throw EICUError if status > 0.
 \\ ICU convention: <= 0 is success (0 = U_ZERO_ERROR, negative = warning).
@@ -110,4 +110,4 @@ uchar>utf8: ( byte-array fixnum -- string ) [
   ] if
 ] ;
 
-pragma{ lint-suppress: { complex-word-undocumented: dead-definition: missing-stack-effect: missing-type-annotation: } }
+pragma{ lint-suppress: { complex-word-undocumented: dead-definition: missing-type-annotation: } }

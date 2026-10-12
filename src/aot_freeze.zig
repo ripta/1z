@@ -1583,7 +1583,8 @@ fn drainWorklist(
                         });
                         emitFreezeWordTrace(ctx, name, "native");
                     },
-                    .compound => |compound_instrs| {
+                    .compound, .literal => {
+                        const compound_instrs = mod_word.body().?;
                         const qualified_def = wordDefFromModuleWord(name, mod_word);
                         try result.words.append(allocator, .{
                             .name = name,
@@ -1718,7 +1719,7 @@ fn classifyCallee(ctx: *const Context, name: []const u8, vis: ?ModuleDepsVisibil
         }
         return switch (mod_word.action) {
             .native, .host_callback => .{ .native = bareIdentity(name) },
-            .compound => .{ .compound = qualifiedCompoundIdentity(ctx, name, mod_word) },
+            .compound, .literal => .{ .compound = qualifiedCompoundIdentity(ctx, name, mod_word) },
         };
     }
     return .{ .unresolved = .not_in_dictionary };
@@ -1731,7 +1732,7 @@ fn calleeIdentity(ctx: *const Context, name: []const u8, callee: ?WordDefinition
 
     const mod_word = ctx.resolveQualifiedModuleWord(name) orelse return bareIdentity(name);
     return switch (mod_word.action) {
-        .compound => qualifiedCompoundIdentity(ctx, name, mod_word),
+        .compound, .literal => qualifiedCompoundIdentity(ctx, name, mod_word),
         .native, .host_callback => bareIdentity(name),
     };
 }
@@ -2814,7 +2815,7 @@ fn isInterpreterDependentNative(ctx: *const Context, name: []const u8) bool {
                 const word = wordDefFromModuleWord(name, mod_word);
                 return hasInterpreterDependentMarker(word);
             },
-            .compound => return false,
+            .compound, .literal => return false,
         }
     }
     return false;
@@ -2876,6 +2877,8 @@ fn wordDefFromModuleWord(name: []const u8, mod_word: value_mod.ModuleWord) WordD
             .native => |f| .{ .native = f },
             .host_callback => |h| .{ .host_callback = h },
             .compound => |c| .{ .compound = c },
+            // Discovery has no first-class `.literal` support; see `literalWordAsCompound`.
+            .literal => |lit| .{ .compound = lit.body },
         },
     };
     dictionary_mod.copySharedFields(&def, mod_word, &.{ "source_module", "action" });
@@ -2904,7 +2907,7 @@ fn discoverCalleeWord(ctx: *const Context, call_name: []const u8, discovered: *D
             .native, .host_callback => {
                 try discovered.natives.append(allocator, moduleLessWord(call_name, wordDefFromModuleWord(call_name, mod_word)));
             },
-            .compound => {},
+            .compound, .literal => {},
         }
         return;
     }

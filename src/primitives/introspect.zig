@@ -193,8 +193,7 @@ pub fn buildWordInfo(alloc: Allocator, ctx: *const Context, name: []const u8, wo
 
     // A .literal word has no instruction body; wrap its value in the same
     // single-instruction shape a one-element .compound body would have
-    // produced before this variant existed, so >word-info's observable
-    // output for any given word is unchanged by this internal detail.
+    // produced before this variant existed, so `body>>` reads the same either way.
     const body_val: Value = switch (word.action) {
         .compound => |instrs| .{ .quotation = .{ .instructions = instrs } },
         .literal => |v| blk: {
@@ -272,8 +271,12 @@ pub fn buildWordInfo(alloc: Allocator, ctx: *const Context, name: []const u8, wo
 
     const protocol_val = try buildConstraintInfo(alloc, name, word);
 
-    // Raw array: name stack-effect doc markers native? body methods source-loc module provenance compiled? protocol
-    const wi_fields = try alloc.alloc(Value, 12);
+    // Raw array: name stack-effect doc markers native? body methods source-loc module provenance
+    // compiled? protocol binding? parse-time?
+    //
+    // `binding?` exposes the `.literal` action the body wrapping above hides, so a bracket-less
+    // binding stays distinguishable from a one-literal quotation body.
+    const wi_fields = try alloc.alloc(Value, 14);
     wi_fields[0] = value_mod.stringValue(name);
     wi_fields[1] = effect_val;
     wi_fields[2] = doc_val;
@@ -286,6 +289,8 @@ pub fn buildWordInfo(alloc: Allocator, ctx: *const Context, name: []const u8, wo
     wi_fields[9] = provenance_val;
     wi_fields[10] = .{ .boolean = is_compiled };
     wi_fields[11] = protocol_val;
+    wi_fields[12] = .{ .boolean = word.action == .literal };
+    wi_fields[13] = .{ .boolean = word.parse_time };
 
     return .{ .array = try value_mod.Array.fromOwnedSlice(alloc, wi_fields) };
 }
@@ -297,6 +302,7 @@ fn moduleWordToWordDef(name: []const u8, mw: ModuleWord) WordDefinition {
             .compound => |instrs| .{ .compound = instrs },
             .native => |f| .{ .native = f },
             .host_callback => |host| .{ .host_callback = host },
+            .literal => |lit| .{ .literal = lit.value },
         },
     };
     dictionary_mod.copySharedFields(&def, mw, &.{"action"});

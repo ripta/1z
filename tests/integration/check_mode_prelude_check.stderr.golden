@@ -1,4 +1,4 @@
-src/prelude.1z:1694: note: pragma-get?: callee native.pragma-get-raw is polymorphic; effect trusted from declaration
+src/prelude.1z:1696: note: pragma-get?: callee native.pragma-get-raw is polymorphic; effect trusted from declaration
 src/prelude.1z:983: warning: borrow: word has no declared stack effect
 src/prelude.1z:293: warning: associative: word has no declared stack effect
 src/prelude.1z:302: warning: parameter{: word has no declared stack effect
@@ -18,9 +18,9 @@ src/prelude.1z:111: warning: enum{: word has no declared stack effect
 src/prelude.1z:37: warning: bind{: word has no declared stack effect
 src/prelude.1z:287: warning: inspectable: word has no declared stack effect
 src/prelude.1z:15: warning: H{: word has no declared stack effect
-src/prelude.1z:1673: warning: private(shadow-ok){: word has no declared stack effect
-src/prelude.1z:1770: warning: local{: word has no declared stack effect
-src/prelude.1z:1688: warning: private{: word has no declared stack effect
+src/prelude.1z:1675: warning: private(shadow-ok){: word has no declared stack effect
+src/prelude.1z:1772: warning: local{: word has no declared stack effect
+src/prelude.1z:1690: warning: private{: word has no declared stack effect
 src/prelude.1z:19: warning: V{: word has no declared stack effect
 src/prelude.1z:86: warning: struct{: word has no declared stack effect
 src/prelude.1z:27: warning: S{: word has no declared stack effect

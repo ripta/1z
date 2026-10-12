@@ -152,7 +152,7 @@ LUA_TTABLE: 5 ;
 \\ The 1z error type raised for a Lua load or runtime failure, mirroring
 \\ ESqliteError: the numeric status code is the error data, the Lua message the
 \\ error message.
-ELuaError: [ lua-error: ] ;
+ELuaError: ( -- sym ) [ lua-error: ] ;
 
 \\ Read the Lua error object at the top of the stack as a string, pop it, and
 \\ throw ELuaError carrying the status code and message. On a non-OK status Lua
@@ -716,4 +716,4 @@ get-global-array: ( lua: lua-state name: string -- array ) [
   ] (read-table)
 ] ;
 
-pragma{ lint-suppress: { broad-import: complex-word-undocumented: dead-definition: duplicate-definition: missing-stack-effect: missing-type-annotation: non-kebab-case: } }
+pragma{ lint-suppress: { broad-import: complex-word-undocumented: dead-definition: duplicate-definition: missing-type-annotation: non-kebab-case: } }

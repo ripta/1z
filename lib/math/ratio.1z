@@ -1,6 +1,6 @@
 \ lib/ratio.1z - Exact rational arithmetic
 
-EInexactConversion: [ inexact-conversion: ] ;
+EInexactConversion: ( -- sym ) [ inexact-conversion: ] ;
 
 ratio: H{ numeric: t exact: t } virtual{ struct{ numer denom } } ;
 
@@ -332,4 +332,4 @@ ln10-approx: ( n -- ratio ) [
   +
 ] ;
 
-pragma{ lint-suppress: { complex-word-undocumented: dead-definition: missing-doc-comment: missing-stack-effect: missing-type-annotation: non-kebab-case: } }
+pragma{ lint-suppress: { complex-word-undocumented: dead-definition: missing-doc-comment: missing-type-annotation: non-kebab-case: } }

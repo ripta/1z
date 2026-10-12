@@ -290,4 +290,4 @@ ffi-def{: parse-time [
   [ drop ] compose
 ] ;
 
-pragma{ lint-suppress: { complex-word-undocumented: dead-definition: missing-stack-effect: missing-type-annotation: } }
+pragma{ lint-suppress: { complex-word-undocumented: dead-definition: missing-type-annotation: } }

@@ -1,7 +1,7 @@
-\ Regression test: a word must keep its doc comment and its `parse-time-only` restriction across
-\ every route that crosses a module boundary, not just its compiled body. Each conversion between
-\ a module's word and a definition once carried a hand-listed subset of the fields, and each list
-\ drifted on its own.
+\ Regression test: a word must keep its doc comment, its `parse-time-only` restriction, whether it
+\ is parse-time, and whether it is a bracket-less binding across every route that crosses a module
+\ boundary, not just its compiled body. Each conversion between a module's word and a definition
+\ once carried a hand-listed subset of the fields, and each list drifted on its own.
 
 use "testing" ;
 use "./import_field_fidelity_helper.1z" ;
@@ -12,11 +12,41 @@ documented-word: >word-info doc>>
 "A word whose doc comment must survive a `use` import."
 "imported word keeps its doc comment" assert=
 
-[ [ pt-only-word ] call ]
-parse-error: "imported parse-time-only word cannot be called at runtime" assert-error-type
+\ parse-time-only implies parse-time, so the imported word runs while this statement is parsed, as
+\ it does in its own module.
+imported-pto-result: pt-only-word ;
+imported-pto-result 42 "imported parse-time-only word executes at parse time" assert=
 
-[ call-private-pt-only ]
-parse-error: "a module's private parse-time-only word cannot be called at runtime" assert-error-type
+\ The load runs inside a parse-time word, as a `use` does, so the loaded file must still get its own
+\ parse-time-only check rather than inherit the invoking word's parse session.
+load-private-helper-at-parse-time: parse-time [
+  [ "./fixtures/import_field_fidelity_private.1z" load drop ok: ] [ error-type: @get ] recover
+  emit-literal
+] ;
+private-helper-load-result: load-private-helper-at-parse-time ;
+private-helper-load-result parse-time-only:
+"a module's private parse-time-only word is rejected when the module loads" assert=
+
+bound-value: >word-info binding?>> "imported bracket-less binding stays a binding" assert-true
+bound-value 7 "imported bracket-less binding pushes its value" assert=
+parse-time-word: >word-info parse-time?>> "imported parse-time word stays parse-time" assert-true
+helper-mark: >word-info binding?>> "imported user marker is a binding" assert-true
+helper-mark: >word-info parse-time?>> "imported user marker stays parse-time" assert-true
+documented-word: >word-info binding?>> "imported bracketed word is not a binding" assert-false
+documented-word: >word-info parse-time?>> "imported bracketed word is not parse-time" assert-false
+
+"local definitions" test-section
+
+local-bound:      7 ;
+local-inline:     const inline 8 ;
+local-parse-time: parse-time [ ] ;
+local-body: ( -- n ) [ 7 ] ;
+
+local-bound: >word-info binding?>> "bracket-less binding is a binding" assert-true
+local-inline: >word-info binding?>> "const inline literal is a binding" assert-true
+local-body: >word-info binding?>> "bracketed one-literal body is not a binding" assert-false
+local-parse-time: >word-info parse-time?>> "parse-time word is parse-time" assert-true
+local-body: >word-info parse-time?>> "bracketed word is not parse-time" assert-false
 
 "qualified access" test-section
 
@@ -28,3 +58,7 @@ helper.documented-word: >word-info doc>>
 
 [ [ helper.pt-only-word ] call ]
 parse-error: "qualified parse-time-only word cannot be called at runtime" assert-error-type
+
+helper.bound-value: >word-info binding?>> "qualified bracket-less binding stays a binding" assert-true
+helper.bound-value 7 "qualified bracket-less binding pushes its value" assert=
+helper.parse-time-word: >word-info parse-time?>> "qualified parse-time word stays parse-time" assert-true

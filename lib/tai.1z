@@ -127,8 +127,8 @@ tai-timestamp-nsec: ( tai-timestamp -- nsec )     [ unmake-tai-timestamp tai-nse
   if
 ] ;
 
-leap-second-timestamps: const [ (leap-table) timestamps: @get ] ;
-leap-second-offsets: const [ (leap-table) offsets: @get ] ;
+leap-second-timestamps: ( -- timestamps: array ) const [ (leap-table) timestamps: @get ] ;
+leap-second-offsets: ( -- offsets: array ) const [ (leap-table) offsets: @get ] ;
 
 \ --- Table lookup ---
 
@@ -234,4 +234,4 @@ tai-now: ( -- tai-timestamp ) [
   clock-realtime swap dup (leap-offset-for) + swap make-tai-timestamp
 ] ;
 
-pragma{ lint-suppress: { broad-import: complex-word-undocumented: constructor-consistency: dead-definition: deep-nesting: import-ordering: missing-doc-comment: missing-stack-effect: missing-type-annotation: } }
+pragma{ lint-suppress: { broad-import: complex-word-undocumented: constructor-consistency: dead-definition: deep-nesting: import-ordering: missing-doc-comment: missing-type-annotation: } }

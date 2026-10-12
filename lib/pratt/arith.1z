@@ -3,7 +3,7 @@
 "pratt" load reexport
 use "lexer" ;
 
-ARITHMETIC-OPS: const [
+ARITHMETIC-OPS: ( -- ops: hash ) const [
   H{
     "+" H{ left-bp: 10 right-bp: 11 }
     "-" H{ left-bp: 10 right-bp: 11 }
@@ -12,7 +12,7 @@ ARITHMETIC-OPS: const [
   }
 ] ;
 
-UNARY-MINUS-BP: const [ 30 ] ;
+UNARY-MINUS-BP: ( -- bp: fixnum ) const [ 30 ] ;
 
 private{
   (unexpected-expression): never-returns ( token -- * ) [
@@ -89,4 +89,4 @@ arith-infix: ( left token parser tokens -- value ) [
   } <pratt>
 ] ;
 
-pragma{ lint-suppress: { broad-import: complex-word-undocumented: dead-definition: import-ordering: missing-doc-comment: missing-stack-effect: missing-type-annotation: non-kebab-case: } }
+pragma{ lint-suppress: { broad-import: complex-word-undocumented: dead-definition: import-ordering: missing-doc-comment: missing-type-annotation: non-kebab-case: } }

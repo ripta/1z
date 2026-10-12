@@ -4,11 +4,43 @@ Stack: [ "A word whose doc comment must survive a `use` import." ]
 Stack: [ "A word whose doc comment must survive a `use` import." "A word whose doc comment must survive a `use` import." ]
 PASS: imported word keeps its doc comment
 Stack: [ ]
-Stack: [ [ [ pt-only-word ] call ] ]
-PASS: imported parse-time-only word cannot be called at runtime
 Stack: [ ]
-Stack: [ [ call-private-pt-only ] ]
-PASS: a module's private parse-time-only word cannot be called at runtime
+PASS: imported parse-time-only word executes at parse time
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ parse-time-only: parse-time-only: ]
+PASS: a module's private parse-time-only word is rejected when the module loads
+Stack: [ ]
+PASS: imported bracket-less binding stays a binding
+Stack: [ ]
+PASS: imported bracket-less binding pushes its value
+Stack: [ ]
+PASS: imported parse-time word stays parse-time
+Stack: [ ]
+PASS: imported user marker is a binding
+Stack: [ ]
+PASS: imported user marker stays parse-time
+Stack: [ ]
+PASS: imported bracketed word is not a binding
+Stack: [ ]
+PASS: imported bracketed word is not parse-time
+Stack: [ ]
+=== local definitions ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: bracket-less binding is a binding
+Stack: [ ]
+PASS: const inline literal is a binding
+Stack: [ ]
+PASS: bracketed one-literal body is not a binding
+Stack: [ ]
+PASS: parse-time word is parse-time
+Stack: [ ]
+PASS: bracketed word is not parse-time
 Stack: [ ]
 === qualified access ===
 Stack: [ ]
@@ -19,4 +51,10 @@ PASS: qualified word keeps its doc comment
 Stack: [ ]
 Stack: [ [ [ helper.pt-only-word ] call ] ]
 PASS: qualified parse-time-only word cannot be called at runtime
+Stack: [ ]
+PASS: qualified bracket-less binding stays a binding
+Stack: [ ]
+PASS: qualified bracket-less binding pushes its value
+Stack: [ ]
+PASS: qualified parse-time word stays parse-time
 Stack: [ ]

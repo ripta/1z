@@ -62,7 +62,7 @@ use "lint" ;
   \ stack: path(1) sem-ctx(0)
   [
     \ predicate: ( path word-info -- diag-or-f )
-    dup stack-effect>> f = [
+    dup missing-stack-effect? [
       source-loc>> dup f = [ 2drop f ] [
         \ stack: path(1) source-loc(0)
         "missing-stack-effect" warning: 3 pick-n 3 pick-n dup line>> swap column>>

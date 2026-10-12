@@ -248,7 +248,7 @@ fn resolveWordForDispatch(ctx: *Context, name: []const u8) ?ResolvedWord {
         .action = switch (mod_word.action) {
             .native => .native,
             .host_callback => .host_callback,
-            .compound => .compound,
+            .compound, .literal => .compound,
         },
     };
 }
@@ -270,6 +270,11 @@ fn resolveQualifiedTypeValue(ctx: *Context, name: []const u8) ?*const value_mod.
                 }
             }
             return null;
+        },
+        .literal => |lit| switch (lit.value) {
+            .type_val => |tv| return tv,
+            .tagged => |t| return t.tag.type_val,
+            else => return null,
         },
         .native, .host_callback => return null,
     }

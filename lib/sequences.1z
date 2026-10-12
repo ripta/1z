@@ -1,8 +1,8 @@
 \ lib/sequences.1z - Sequence predicates and utilities
 
 \ `#starts-with?` and `#ends-with?` are prelude words. Aliases only here.
-#head?: [ #starts-with? ] ;
-#tail?: [ #ends-with? ] ;
+#head?: ( seq prefix -- ? ) [ #starts-with? ] ;
+#tail?: ( seq suffix -- ? ) [ #ends-with? ] ;
 
 \ Check if index is within bounds of sequence
 #in-bounds?: ( index seq -- ? ) [
@@ -58,4 +58,4 @@
   #reduce
 ] ;
 
-pragma{ lint-suppress: { complex-word-undocumented: dead-definition: missing-doc-comment: missing-stack-effect: missing-type-annotation: } }
+pragma{ lint-suppress: { complex-word-undocumented: dead-definition: missing-doc-comment: missing-type-annotation: } }

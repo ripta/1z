@@ -15,7 +15,7 @@ Stack: [ ]
 Stack: [ [ bad: H{ fields: H{ default: "oops" type: <type:fixnum> } } { } define-flag ] ]
 PASS: default not matching type: is rejected
 Stack: [ ]
-Stack: [ [ bad: H{ fields: H{ default: 5 type: <type:fixnum> } } required 1array define-flag ] ]
+Stack: [ [ bad: H{ fields: H{ default: 5 type: <type:fixnum> } } <marker:required> 1array define-flag ] ]
 PASS: required + default is rejected
 Stack: [ ]
 All default flags tests complete!

@@ -577,8 +577,8 @@ fn stampWordBodies(ctx: *Context, header: *const Header) LoaderError!void {
 
         var word_it = module_ptr.words.valueIterator();
         while (word_it.next()) |mw| {
-            if (mw.action != .compound) continue;
-            ctx.stampQuotationBodies(mw.action.compound, module_ptr) catch
+            const body = mw.body() orelse continue;
+            ctx.stampQuotationBodies(body, module_ptr) catch
                 return LoaderError.OutOfMemory;
         }
 
@@ -586,8 +586,8 @@ fn stampWordBodies(ctx: *Context, header: *const Header) LoaderError!void {
         // runs after this pass, so their bodies stamp with the owning module.
         var dep_it = module_ptr.deps.valueIterator();
         while (dep_it.next()) |mw| {
-            if (mw.action != .compound) continue;
-            ctx.stampQuotationBodies(mw.action.compound, module_ptr) catch
+            const body = mw.body() orelse continue;
+            ctx.stampQuotationBodies(body, module_ptr) catch
                 return LoaderError.OutOfMemory;
         }
     }
@@ -624,10 +624,7 @@ fn recordInlineRegions(ctx: *Context, header: *const Header) LoaderError!void {
             cached.module.deps.get(word_name) orelse continue
         else
             cached.module.words.get(word_name) orelse continue;
-        const body = switch (mw.action) {
-            .compound => |b| b,
-            .native, .host_callback => continue,
-        };
+        const body = mw.body() orelse continue;
 
         if (w.inline_regions) |set| try replayRegionSet(ctx, &scratch, set.*, body);
 

@@ -20,7 +20,7 @@ use { ARITHMETIC-OPS: UNARY-MINUS-BP: <pratt>: parse-pratt: parse-right: next-to
 \\
 \\ `symbols-rule` tries its candidates longest-first, so `<=` and `>=` win over
 \\ the one-character comparisons they start with.
-EXPR-LEXER: const [
+EXPR-LEXER: ( -- lexer: lexer ) const [
   V{ }
   skip-whitespace-rule #push!
   number-rule #push!
@@ -32,7 +32,7 @@ EXPR-LEXER: const [
 \\ The operator table for hosted expressions: the arithmetic operators, plus the
 \\ comparisons a statement condition is written with. The comparisons bind
 \\ looser than `+` and `-`, so `1 + 2 < 4` groups as `(1 + 2) < 4`.
-EXPR-OPS: const [
+EXPR-OPS: ( -- ops: hash ) const [
   ARITHMETIC-OPS
   "=" H{ left-bp: 5 right-bp: 6 } @set
   "<" H{ left-bp: 5 right-bp: 6 } @set
@@ -200,4 +200,4 @@ parse-expr: ( source: string -- expr-node ) [
   tokenize-expr <expr-pratt> parse-complete
 ] ;
 
-pragma{ lint-suppress: { const-rebuilds-value: dead-definition: import-ordering: missing-stack-effect: non-kebab-case: unused-import: } }
+pragma{ lint-suppress: { const-rebuilds-value: dead-definition: import-ordering: non-kebab-case: unused-import: } }

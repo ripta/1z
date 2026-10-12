@@ -4,16 +4,16 @@
 signal: virtual{ fixnum } ;
 
 \ Named constants (platform-correct via native lookup)
-SIGINT:   const [ INT: native.signal-number >signal ] ;
-SIGTERM:  const [ TERM: native.signal-number >signal ] ;
-SIGHUP:   const [ HUP: native.signal-number >signal ] ;
-SIGQUIT:  const [ QUIT: native.signal-number >signal ] ;
-SIGPIPE:  const [ PIPE: native.signal-number >signal ] ;
-SIGUSR1:  const [ USR1: native.signal-number >signal ] ;
-SIGUSR2:  const [ USR2: native.signal-number >signal ] ;
-SIGALRM:  const [ ALRM: native.signal-number >signal ] ;
-SIGCHLD:  const [ CHLD: native.signal-number >signal ] ;
-SIGWINCH: const [ WINCH: native.signal-number >signal ] ;
+SIGINT:   ( -- signal: signal ) const [ INT: native.signal-number >signal ] ;
+SIGTERM:  ( -- signal: signal ) const [ TERM: native.signal-number >signal ] ;
+SIGHUP:   ( -- signal: signal ) const [ HUP: native.signal-number >signal ] ;
+SIGQUIT:  ( -- signal: signal ) const [ QUIT: native.signal-number >signal ] ;
+SIGPIPE:  ( -- signal: signal ) const [ PIPE: native.signal-number >signal ] ;
+SIGUSR1:  ( -- signal: signal ) const [ USR1: native.signal-number >signal ] ;
+SIGUSR2:  ( -- signal: signal ) const [ USR2: native.signal-number >signal ] ;
+SIGALRM:  ( -- signal: signal ) const [ ALRM: native.signal-number >signal ] ;
+SIGCHLD:  ( -- signal: signal ) const [ CHLD: native.signal-number >signal ] ;
+SIGWINCH: ( -- signal: signal ) const [ WINCH: native.signal-number >signal ] ;
 
 \ Convenience words that unwrap the virtual type before calling the native primitives.
 
@@ -36,4 +36,4 @@ on-interrupt: ( quot: ( signum -- ) -- ) [ SIGINT swap on-signal ] ;
 \\ Register a handler for SIGTERM.
 on-terminate: ( quot: ( signum -- ) -- ) [ SIGTERM swap on-signal ] ;
 
-pragma{ lint-suppress: { dead-definition: missing-doc-comment: missing-stack-effect: missing-type-annotation: non-kebab-case: } }
+pragma{ lint-suppress: { dead-definition: missing-doc-comment: missing-type-annotation: non-kebab-case: } }

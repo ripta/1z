@@ -5,8 +5,8 @@
 \ the repository root.
 \
 \ A word counts only in the file that defines it, so a facade that reexports another module adds
-\ nothing. Public means what the linter means by it, and an input counts as typed by the same test
-\ `missing-type-annotation` uses.
+\ nothing. Public means what the linter means by it. A missing effect and an untyped input are
+\ counted by the same tests `missing-stack-effect` and `missing-type-annotation` use.
 \
 \ Every file is check-loaded, so a module that opens an FFI library at load is counted without that
 \ library installed, and the output is the same on every machine.
@@ -40,7 +40,7 @@ use "doc/report" ;
 (word-counts): ( words: array -- public undocumented no-effect inputs untyped ) [
   dup #len swap
   dup [ doc>> f = ] (count-if) swap
-  dup [ stack-effect>> f = ] (count-if) swap
+  dup [ missing-stack-effect? ] (count-if) swap
   (declared-inputs) dup #len swap [ param-annotated? not ] (count-if)
 ] ;
 

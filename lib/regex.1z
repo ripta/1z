@@ -49,8 +49,8 @@ regex-flag: enum{
   ungreedy:  unit
 } ;
 
-ERegexCompileError: [ f swap regex-compile-error: ] ;
-ERegexMatchError: [ f swap regex-match-error: ] ;
+ERegexCompileError: ( -- sym ) [ regex-compile-error: ] ;
+ERegexMatchError: ( -- sym ) [ regex-match-error: ] ;
 
 \ Internal helpers
 
@@ -63,7 +63,7 @@ ERegexMatchError: [ f swap regex-match-error: ] ;
     { dotall: [ PCRE2_DOTALL ] }
     { extended: [ PCRE2_EXTENDED ] }
     { ungreedy: [ PCRE2_UNGREEDY ] }
-    [ "unknown regex flag" ERegexCompileError make-error throw ]
+    [ f "unknown regex flag" ERegexCompileError make-error throw ]
   } case
 ] ;
 
@@ -122,7 +122,7 @@ regex-compile-with: ( flags pattern -- regex ) [
     7 nip-n
     \ Stack: errorcode
     (pcre2-error-msg)
-    ERegexCompileError make-error throw
+    f swap ERegexCompileError make-error throw
   ] if
 ] ;
 
@@ -154,7 +154,7 @@ regex-match: ( str regex -- option ) [
       (pcre2-error-msg)
       swap (match-data-free)
       3drop
-      ERegexMatchError make-error throw
+      f swap ERegexMatchError make-error throw
     ] [
       \ Stack: subject-bytes str code match-data rc
       swap dup (get-ovector-pointer)
@@ -195,7 +195,7 @@ regex-match: ( str regex -- option ) [
     dup 0 < [
       (pcre2-error-msg)
       swap (match-data-free) drop
-      ERegexMatchError make-error throw
+      f swap ERegexMatchError make-error throw
     ] [
       \ Stack: sb(5) str(4) code(3) offset(2) rc(1) md(0)
       swap dup (get-ovector-pointer)
@@ -487,4 +487,4 @@ named-groups: ( match-array regex -- hash ) [
   ] if
 ] ;
 
-pragma{ lint-suppress: { complex-word-undocumented: dead-definition: missing-doc-comment: missing-stack-effect: missing-type-annotation: non-kebab-case: } }
+pragma{ lint-suppress: { complex-word-undocumented: dead-definition: missing-doc-comment: missing-type-annotation: non-kebab-case: } }

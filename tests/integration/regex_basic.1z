@@ -9,6 +9,14 @@ use "regex" ;
 "regex-compile error" test-section
 [ "(" regex-compile ] regex-compile-error: "invalid pattern throws ERegexCompileError" assert-error-type
 
+[ "(" regex-compile drop f ] [ ] recover
+dup message: @get string? "compile error carries the PCRE2 message" assert-true
+data: @get f "compile error carries no data" assert=
+
+[ { bogus: } "a" regex-compile-with drop f ] [ ] recover
+dup error-type: @get regex-compile-error: "unknown flag throws ERegexCompileError" assert=
+message: @get "unknown regex flag" "unknown flag error names the problem" assert=
+
 "regex-match: simple match" test-section
 "hello world" "hello" regex-compile regex-match
 dup option:some? t "simple match returns option:some" assert=

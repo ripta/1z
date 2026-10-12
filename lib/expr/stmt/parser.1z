@@ -26,7 +26,7 @@ use { <peekable>: parse-pratt: next-token: peek-token: } "pratt" ;
 \\ The lexer that splits a statement block into number, word, and punctuation
 \\ tokens, skipping whitespace. Extends the expression lexer's symbol set with
 \\ the statement separator and the group braces.
-STMT-LEXER: const [
+STMT-LEXER: ( -- lexer: lexer ) const [
   V{ }
   skip-whitespace-rule #push!
   number-rule #push!
@@ -241,4 +241,4 @@ parse-stmt: ( source: string -- stmt-node ) [
   group-stmt
 ] ;
 
-pragma{ lint-suppress: { broad-import: const-rebuilds-value: dead-definition: deep-nesting: import-ordering: missing-stack-effect: non-kebab-case: unused-import: } }
+pragma{ lint-suppress: { broad-import: const-rebuilds-value: dead-definition: deep-nesting: import-ordering: non-kebab-case: unused-import: } }

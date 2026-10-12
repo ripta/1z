@@ -39,4 +39,4 @@ matrix{: parse-time [
   { } (read-matrix)
 ] ;
 
-pragma{ lint-suppress: { dead-definition: missing-stack-effect: } }
+pragma{ lint-suppress: { dead-definition: } }

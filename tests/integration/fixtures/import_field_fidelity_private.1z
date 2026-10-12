@@ -1,0 +1,12 @@
+\ Companion module for import_field_fidelity.1z. Loading it must fail.
+\
+\ A `private{ }` helper keeps its parse-time-only restriction when the block re-imports it, so
+\ using it in an ordinary body is rejected while this file is parsed, as it would be at top level.
+
+private{
+  \\ A private parse-time-only word.
+  (private-pt-only): parse-time-only [ 42 ] ;
+}
+
+\\ Uses the private parse-time-only sibling in an ordinary body.
+call-private-pt-only: [ [ (private-pt-only) ] call ] ;

@@ -1546,7 +1546,7 @@ constraint-info>>: ( stack-effect-param -- constraint-info ) [
 ] ;
 
 \\ Structured word information for runtime introspection.
-word-info: struct{ name: string stack-effect: any doc: any markers: array native?: boolean body: any methods: array source-loc: any module: any provenance: any compiled?: boolean protocol: any } ;
+word-info: struct{ name: string stack-effect: any doc: any markers: array native?: boolean body: any methods: array source-loc: any module: any provenance: any compiled?: boolean protocol: any binding?: boolean parse-time?: boolean } ;
 
 \ Helpers lifted out of `(raw>word-info)` so AOT compilation can discover them.
 \
@@ -1612,7 +1612,7 @@ bind-inputs: parse-time [
 (>dispatch-prov): ( raw -- dispatch-provenance ) [ dup f = [ ] [ dup 0 #nth over 1 #nth 2 pick-n 2 #nth 3 pick-n 3 #nth make-dispatch-provenance nip ] if ] ;
 (>method-info):   ( raw -- method-info )         [ dup 0 #nth swap 1 #nth (>dispatch-prov) make-method-info ] ;
 
-\\ Convert a raw 12-element array from native.>word into a word-info struct.
+\\ Convert a raw 14-element array from native.>word into a word-info struct.
 (raw>word-info): ( raw -- word-info ) [
   dup 0 #nth
   over 1 #nth (>stack-effect-info)
@@ -1626,6 +1626,8 @@ bind-inputs: parse-time [
   9 pick-n 9 #nth (>provenance)
   10 pick-n 10 #nth
   11 pick-n 11 #nth (raw>constraint-info)
+  12 pick-n 12 #nth
+  13 pick-n 13 #nth
   make-word-info nip
 ] ;
 
@@ -1773,4 +1775,4 @@ local{: parse-time [
 \ the base scope this same file booted, so every one of them would report as a shadow.
 \
 \ The other rules are ones this file does not yet satisfy. The change that fixes one drops it here.
-pragma{ lint-suppress: { base-scope-shadow: complex-word-undocumented: constructor-consistency: conversion-naming: dead-definition: duplicate-definition: missing-doc-comment: missing-stack-effect: missing-type-annotation: mutation-suffix-misuse: non-kebab-case: orphaned-doc-comment: predicate-naming: } }
+pragma{ lint-suppress: { base-scope-shadow: complex-word-undocumented: constructor-consistency: conversion-naming: dead-definition: duplicate-definition: missing-doc-comment: missing-type-annotation: mutation-suffix-misuse: non-kebab-case: orphaned-doc-comment: predicate-naming: } }

@@ -505,6 +505,17 @@ pub fn nativeLoadImpl(ctx: *Context, cache: *value_mod.MutableMap, filename: []c
     ctx.parse_stamp_source = null;
     defer ctx.parse_stamp_source = old_stamp_source;
 
+    // The new session is not inside the invoking parse-time word either. The parser reads an
+    // installed tokenizer as running inside one, so a loaded file would otherwise skip the check
+    // that rejects a `parse-time-only` word in an ordinary body.
+    const old_parse_tokenizer = ctx.parse_tokenizer;
+    ctx.parse_tokenizer = null;
+    defer ctx.parse_tokenizer = old_parse_tokenizer;
+
+    const old_parsing_parse_time_def = ctx.parsing_parse_time_def;
+    ctx.parsing_parse_time_def = false;
+    defer ctx.parsing_parse_time_def = old_parsing_parse_time_def;
+
     // A file's bodies are lexical even when an `eval-string` string started the load.
     const old_dynamic_scope = ctx.parse_dynamic_scope;
     ctx.parse_dynamic_scope = false;
@@ -714,7 +725,9 @@ pub fn importWord(ctx: *Context, name: []const u8, mod_word: ModuleWord, module:
 
     var definition = dict_mod.WordDefinition{
         .name = name,
-        .parse_time = has_parse_time,
+        // A module word built outside `moduleWordFor`, such as one an image or a native module
+        // registers, may carry only the marker, so either source makes the word parse-time.
+        .parse_time = mod_word.parse_time or has_parse_time,
         .imported = true,
         // A word the module being imported had itself imported (e.g. via
         // `reexport`) already carries its originating module, which is where
@@ -733,10 +746,11 @@ pub fn importWord(ctx: *Context, name: []const u8, mod_word: ModuleWord, module:
             .compound => |instrs| .{ .compound = instrs },
             .native => |func| .{ .native = func },
             .host_callback => |host| .{ .host_callback = host },
+            .literal => |lit| .{ .literal = lit.value },
         },
     };
 
-    dict_mod.copySharedFields(&definition, mod_word, &.{ "source_module", "dispatch_id", "word_id", "action" });
+    dict_mod.copySharedFields(&definition, mod_word, &.{ "source_module", "dispatch_id", "word_id", "action", "parse_time" });
 
     try ctx.defineImportedWord(name, definition);
     if (ctx.trace.trace_modules.import) {

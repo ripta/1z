@@ -6,6 +6,16 @@ Stack: [ ]
 Stack: [ ]
 PASS: invalid pattern throws ERegexCompileError
 Stack: [ ]
+Stack: [ <error regex-compile-error: B{ 0x6D 0x69 0x73 0x73 0x69 0x6E 0x67 0x20 0x63 0x6C 0x6F 0x73 0x69 0x6E 0x67 0x20 0x70 0x61 0x72 0x65 0x6E 0x74 0x68 0x65 0x73 0x69 0x73 } [regex:125:throw <- tests/integration/regex_basic.1z:12:regex-compile <- tests/integration/regex_basic.1z:12:recover]> ]
+PASS: compile error carries the PCRE2 message
+Stack: [ <error regex-compile-error: B{ 0x6D 0x69 0x73 0x73 0x69 0x6E 0x67 0x20 0x63 0x6C 0x6F 0x73 0x69 0x6E 0x67 0x20 0x70 0x61 0x72 0x65 0x6E 0x74 0x68 0x65 0x73 0x69 0x73 } [regex:125:throw <- tests/integration/regex_basic.1z:12:regex-compile <- tests/integration/regex_basic.1z:12:recover]> ]
+PASS: compile error carries no data
+Stack: [ ]
+Stack: [ <error regex-compile-error: unknown regex flag [src/prelude.1z:8:throw <- regex:71:(flag>bit) <- regex:71:#reduce <- regex:98:(flags>options) <- tests/integration/regex_basic.1z:16:regex-compile-with <- tests/integration/regex_basic.1z:16:recover]> ]
+PASS: unknown flag throws ERegexCompileError
+Stack: [ <error regex-compile-error: unknown regex flag [src/prelude.1z:8:throw <- regex:71:(flag>bit) <- regex:71:#reduce <- regex:98:(flags>options) <- tests/integration/regex_basic.1z:16:regex-compile-with <- tests/integration/regex_basic.1z:16:recover]> ]
+PASS: unknown flag error names the problem
+Stack: [ ]
 === regex-match: simple match ===
 Stack: [ ]
 Stack: [ <option:some option-payload{ value: { <option:some option-payload{ value: "hello" }> } }> ]

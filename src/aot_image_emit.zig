@@ -929,10 +929,7 @@ fn internStructType(
 /// all carry exactly one TypeValue per blob word; a richer search is
 /// only necessary if multiple TypeValue literals coexist in one body.
 fn findTypeValueLiteral(mw: *const ModuleWord) ?*const TypeValue {
-    const body = switch (mw.action) {
-        .compound => |b| b,
-        else => return null,
-    };
+    const body = mw.body() orelse return null;
     for (body) |instr| {
         switch (instr.op) {
             .push_literal => |lit| switch (lit) {
@@ -966,10 +963,7 @@ fn internBodyTypeLiterals(
     effect_table: *StackEffectTable,
     mw: *const ModuleWord,
 ) Allocator.Error!void {
-    const body = switch (mw.action) {
-        .compound => |b| b,
-        else => return,
-    };
+    const body = mw.body() orelse return;
     try internInstructionTypeLiterals(struct_plans, struct_index, effect_table, body);
 }
 
@@ -3726,7 +3720,7 @@ fn computeFlags(mw: *const ModuleWord) u8 {
     switch (mw.action) {
         .native => flags |= flag_bit_native,
         .host_callback => flags |= flag_bit_host_callback,
-        .compound => {},
+        .compound, .literal => {},
     }
     if (mw.stack_effect != null) flags |= flag_bit_has_stack_effect;
     return flags;
@@ -4354,10 +4348,7 @@ fn emitWordBodyBytecode(
     for (manifest.entries, 0..) |entry, idx| {
         if (entry.path != .structural) continue;
         const mw_ptr = lookupModuleWord(ctx, entry) orelse continue;
-        const body = switch (mw_ptr.action) {
-            .compound => |b| b,
-            .native, .host_callback => continue,
-        };
+        const body = mw_ptr.body() orelse continue;
         if (body.len == 0) continue;
         // Words that push a TypeValue have their body rewritten by the
         // runtime-image loader after it allocates the runtime
@@ -4568,10 +4559,7 @@ fn emitWordInlineRegions(
     for (manifest.entries, 0..) |entry, idx| {
         if (word_body_lens[idx] == 0) continue;
         const mw_ptr = lookupModuleWord(ctx, entry) orelse continue;
-        const body = switch (mw_ptr.action) {
-            .compound => |b| b,
-            .native, .host_callback => continue,
-        };
+        const body = mw_ptr.body() orelse continue;
 
         for (nested.items) |row| allocator.free(row.path);
         nested.clearRetainingCapacity();

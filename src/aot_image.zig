@@ -259,6 +259,7 @@ pub fn classifyModuleWord(mw: ModuleWord) ?Classification {
     return switch (mw.action) {
         .native, .host_callback => null,
         .compound => |body| classifyInstructions(body),
+        .literal => |lit| classifyInstructions(lit.body),
     };
 }
 
