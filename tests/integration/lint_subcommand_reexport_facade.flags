@@ -1,0 +1,5 @@
+@raw
+lint
+--stdlib-path=lib
+--load-path=tests/fixtures/lint
+tests/fixtures/lint/reexport-facade.1z

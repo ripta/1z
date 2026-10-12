@@ -157,3 +157,5 @@ inspect: method{ simd-16xu8 } [ "16xu8" (simd-inspect-helper) ] ;
 >string: method{ simd-4xu32 } [ inspect ] ;
 >string: method{ simd-8xu16 } [ inspect ] ;
 >string: method{ simd-16xu8 } [ inspect ] ;
+
+pragma{ lint-suppress: { broad-import: complex-word-undocumented: dead-definition: missing-doc-comment: missing-type-annotation: } }

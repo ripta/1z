@@ -315,6 +315,31 @@ semantic-word-info: ( semantic-context name -- word-info-or-f ) [
   ] if
 ] ;
 
+\\ Whether a word was defined in the file at path, rather than reexported into its module from
+\\ another. A check-load records a file's own definitions under the path it was given, so a
+\\ diagnostic placed at the word's source location belongs to this file only when this holds.
+semantic-word-in-file?: ( path: string word-info: word-info -- ? ) [
+  source-loc>> dup f = [ 2drop f ] [ file>> = ] if
+] ;
+
+\\ Whether a stack-effect parameter says what it accepts. A row variable has no concrete type to
+\\ name, and a quotation parameter's nested effect already describes it. `any` is an annotation like
+\\ any other.
+\\
+\\ The `missing-type-annotation` rule and the API coverage audit both count with this, so their
+\\ numbers stay comparable.
+param-annotated?: ( param: stack-effect-param -- ? ) [
+  dup row-variable?>> [
+    drop t
+  ] [
+    dup nested-effect>> f = not [
+      drop t
+    ] [
+      type-annotation>> f = not
+    ] if
+  ] if
+] ;
+
 \\ Get all word names from a semantic context. Returns array or empty array.
 semantic-word-names: ( semantic-context -- array ) [
   dup f = [ drop { } ] [ word-infos>> @keys ] if
@@ -828,3 +853,5 @@ run-lint: ( files -- bool ) [
     ] if
   ] if
 ] ;
+
+pragma{ lint-suppress: { broad-import: complex-word-undocumented: dead-definition: deep-nesting: import-ordering: missing-doc-comment: missing-type-annotation: unused-import: } }

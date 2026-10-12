@@ -163,3 +163,5 @@ collation-key: ( string locale -- byte-array ) [
     ] if
   ] dip (ucol-close)
 ] ;
+
+pragma{ lint-suppress: { broad-import: complex-word-undocumented: dead-definition: missing-type-annotation: } }

@@ -1,0 +1,24 @@
+=== check-loading an imported module ===
+Stack: [ ]
+Stack: [ <result:ok result-value{ value: <module:tests/fixtures/check_mode/const_module.1z (7 words)> }> ]
+PASS: an imported const does not block the check-load
+Stack: [ ]
+PASS: the imported struct still works
+Stack: [ ]
+PASS: the imported const still answers
+Stack: [ ]
+=== check-loading a module whose arm the caller dispatches on ===
+Stack: [ ]
+Stack: [ spot{ x: 3 y: 4 } ]
+Stack: [ spot{ x: 3 y: 4 } <result:ok result-value{ value: <module:tests/fixtures/check_mode/struct_arm_module.1z (6 words)> }> ]
+PASS: the check-load of the arm's module succeeds
+Stack: [ spot{ x: 3 y: 4 } ]
+PASS: the live instance still dispatches to the live arm
+Stack: [ spot{ x: 3 y: 4 } ]
+PASS: the live unmaker still accepts the live instance
+Stack: [ spot{ x: 3 y: 4 } ]
+PASS: the live field getter still reads the live instance
+Stack: [ spot{ x: 3 y: 4 } ]
+PASS: the live hash still accepts the live instance
+Stack: [ spot{ x: 3 y: 4 } ]
+Stack: [ ]

@@ -195,3 +195,5 @@ inspect: method{ scanner } [
   swap rest inspect
   "<scanner pos=" <rot- #append " rest=" #append swap #append ">" #append
 ] ;
+
+pragma{ lint-suppress: { complex-word-undocumented: dead-definition: missing-type-annotation: } }

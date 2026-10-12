@@ -180,3 +180,5 @@ watch-exec: ( watcher duration command -- ) [
   [ drop run-shell drop ] curry
   debounced-each
 ] ;
+
+pragma{ lint-suppress: { broad-import: complex-word-undocumented: dead-definition: import-ordering: missing-type-annotation: unused-import: } }

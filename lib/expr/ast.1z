@@ -66,3 +66,5 @@ invoke?: ( expr-node -- bool ) [ expr-node:invoke? ] ;
 
 \\ True when the node is a bare-identifier reference; returns f for any other value.
 ref?: ( expr-node -- bool ) [ expr-node:ref? ] ;
+
+pragma{ lint-suppress: { complex-word-undocumented: dead-definition: missing-type-annotation: } }

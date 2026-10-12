@@ -19,3 +19,5 @@ import-record: struct{
     make-import-record
   ] #map #collect
 ] ;
+
+pragma{ lint-suppress: { conversion-naming: dead-definition: } }

@@ -1,0 +1,6 @@
+PASS: a check-time binding that dispatches on its own struct's arm loads cleanly
+=== live arms survive a check-load ===
+PASS: the live fixnum arm still answers
+PASS: the checked string arm never reaches a live call
+=== checked arms are still analyzed ===
+PASS: the generic lists the checked string arm

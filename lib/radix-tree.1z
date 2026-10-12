@@ -595,3 +595,5 @@ radix-under: ( tree: radix-tree prefix -- iterator ) [
 ] ;
 
 >array: method{ radix-tree } [ #collect ] ;
+
+pragma{ lint-suppress: { dead-definition: missing-type-annotation: predicate-naming: } }

@@ -56,3 +56,5 @@ private{
 \\ A play before that gesture is not an error; it simply produces sound once the output is
 \\ armed.
 play-sample: ( sample -- ) [ unmake-sample current-sample-player get call ] ;
+
+pragma{ lint-suppress: { complex-word-undocumented: dead-definition: missing-type-annotation: } }

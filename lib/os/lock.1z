@@ -124,3 +124,5 @@ try-file-lock: ( ..a stream mode acquired: ( ..a stream -- ..b ) missed: ( ..a -
     nip nip nip call
   ] if
 ] ;
+
+pragma{ lint-suppress: { broad-import: complex-word-undocumented: dead-definition: missing-type-annotation: non-kebab-case: } }

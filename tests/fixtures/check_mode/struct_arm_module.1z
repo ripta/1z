@@ -1,0 +1,7 @@
+\ A module that defines a bare struct and an arm on a prelude generic for it, the shape of
+\ `lib/ranges.1z`. The integration test imports it, builds an instance, and then check-loads it.
+
+\\ A point with two coordinates.
+spot: struct{ x y } ;
+
+#len: method{ spot } [ unmake-spot + ] ;

@@ -166,7 +166,7 @@ pub const Server = struct {
         fn restoreState(self: *DocumentScope) void {
             self.ctx.current_source = self.saved_source;
             self.ctx.current_source_dir = self.saved_source_dir;
-            self.ctx.check_mode = self.saved_check_mode;
+            self.ctx.exitCheckMode(self.saved_check_mode);
             self.ctx.import_frame_index = self.saved_import_frame;
             self.ctx.durable_frame_floor = self.saved_durable_floor;
             while (self.ctx.stack.depth() > self.saved_stack_depth) {
@@ -483,7 +483,7 @@ pub const Server = struct {
         }
 
         // Run InferenceEngine
-        _ = call_graph.build(&self.ctx.dictionary, &self.ctx.dispatch, self.ctx.quotationAllocator()) catch return;
+        _ = call_graph.build(&self.ctx.dictionary, .{ .context = self.ctx }, self.ctx.quotationAllocator()) catch return;
 
         var engine = effect_inference.InferenceEngine.init(
             &self.ctx.dictionary,

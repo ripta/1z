@@ -233,3 +233,5 @@ tai-timestamp+nanos: ( tai nanos -- tai ) [
 tai-now: ( -- tai-timestamp ) [
   clock-realtime swap dup (leap-offset-for) + swap make-tai-timestamp
 ] ;
+
+pragma{ lint-suppress: { broad-import: complex-word-undocumented: constructor-consistency: dead-definition: deep-nesting: import-ordering: missing-doc-comment: missing-stack-effect: missing-type-annotation: } }

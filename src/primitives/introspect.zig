@@ -208,7 +208,10 @@ pub fn buildWordInfo(alloc: Allocator, ctx: *const Context, name: []const u8, wo
     // Use the definition's own dispatch id rather than re-resolving the name
     // in scope: a module-qualified word's bare name is not in scope, and a
     // shadowed name would resolve to the wrong definition's methods.
-    const dispatch_pairs = try ctx.dispatchEntriesForId(word.dispatch_id, alloc);
+    //
+    // The analysis view includes the arms a check-mode load registered, which the linter reads
+    // after the load has ended.
+    const dispatch_pairs = try ctx.analysisDispatchEntriesForId(word.dispatch_id, .by_type_name, alloc);
     const methods_arr = try alloc.alloc(Value, dispatch_pairs.len);
     for (dispatch_pairs, 0..) |pair, i| {
         const type_a_name = ctx.lookupTypeNameByDescriptor(pair.key.type_a) orelse "<unknown>";
@@ -425,7 +428,7 @@ fn nativeDeadDefinitions(ctx: *Context) anyerror!void {
         }
     }
 
-    var graph = try call_graph_mod.build(&dictionary, &ctx.dispatch, alloc);
+    var graph = try call_graph_mod.build(&dictionary, .{ .context = ctx }, alloc);
     defer {
         var iter = graph.iterator();
         while (iter.next()) |entry| {

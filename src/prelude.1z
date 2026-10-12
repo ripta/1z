@@ -1769,6 +1769,8 @@ local{: parse-time [
   emit-body
 ] ;
 
-\ Linting this file reads its definitions against the base scope this same file booted, so every
-\ one of them would report as a shadow.
-pragma{ lint-suppress: { base-scope-shadow: } }
+\ `base-scope-shadow` stays suppressed for good. Linting this file reads its definitions against
+\ the base scope this same file booted, so every one of them would report as a shadow.
+\
+\ The other rules are ones this file does not yet satisfy. The change that fixes one drops it here.
+pragma{ lint-suppress: { base-scope-shadow: complex-word-undocumented: constructor-consistency: conversion-naming: dead-definition: duplicate-definition: missing-doc-comment: missing-stack-effect: missing-type-annotation: mutation-suffix-misuse: non-kebab-case: orphaned-doc-comment: predicate-naming: } }

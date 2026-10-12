@@ -70,3 +70,5 @@ if-else-stmt?: ( stmt-node -- bool ) [ stmt-node:if-else-stmt? ] ;
 
 \\ True when the node is a loop; returns f for any other value.
 while-stmt?: ( stmt-node -- bool ) [ stmt-node:while-stmt? ] ;
+
+pragma{ lint-suppress: { complex-word-undocumented: dead-definition: missing-type-annotation: unused-import: } }

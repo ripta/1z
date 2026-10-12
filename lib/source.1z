@@ -50,3 +50,5 @@ pos>line-col: ( line-index pos: fixnum -- line column ) [
 source-pos>line-col: ( source: string pos: fixnum -- line column ) [
   swap build-line-index swap pos>line-col
 ] ;
+
+pragma{ lint-suppress: { broad-import: complex-word-undocumented: dead-definition: missing-type-annotation: } }

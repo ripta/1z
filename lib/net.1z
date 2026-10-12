@@ -80,3 +80,5 @@ split-host-port: ( str: string -- hash ) [
   ] if
   H{ } swap port: swap @set swap host: swap @set
 ] ;
+
+pragma{ lint-suppress: { broad-import: complex-word-undocumented: dead-definition: import-ordering: missing-doc-comment: missing-type-annotation: non-kebab-case: } }

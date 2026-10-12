@@ -196,3 +196,5 @@ locale-parts: ( locale -- hash ) [
   over "numbers" (extract-keyword) numbers: (maybe-set)
   nip
 ] ;
+
+pragma{ lint-suppress: { broad-import: dead-definition: missing-type-annotation: unused-import: } }

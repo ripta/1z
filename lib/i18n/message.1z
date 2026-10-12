@@ -306,3 +306,5 @@ format-message: ( hash pattern locale -- string ) [
   \ Stack: values-array rewritten-pattern locale
   format-message-positional
 ] ;
+
+pragma{ lint-suppress: { broad-import: complex-word-undocumented: dead-definition: missing-type-annotation: } }

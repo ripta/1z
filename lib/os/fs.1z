@@ -152,3 +152,5 @@ walk: ( path -- iterator ) [
   [ (walk-step) ] curry curry
   >iterator
 ] ;
+
+pragma{ lint-suppress: { broad-import: complex-word-undocumented: dead-definition: missing-type-annotation: } }

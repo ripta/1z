@@ -55,3 +55,5 @@ format-undocumented-warning: ( rel line name -- str ) [
   ] dip
   #append "'" #append
 ] ;
+
+pragma{ lint-suppress: { complex-word-undocumented: dead-definition: import-ordering: missing-type-annotation: unused-import: } }

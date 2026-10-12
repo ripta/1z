@@ -23,3 +23,5 @@ release: ( sem -- ) [
 ] ;
 
 inspect: method{ semaphore } [ drop "<semaphore>" ] ;
+
+pragma{ lint-suppress: { dead-definition: missing-doc-comment: missing-type-annotation: } }

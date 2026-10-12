@@ -172,12 +172,10 @@ fn nativeDefineMethod(ctx: *Context) anyerror!void {
                     }
                 }
 
-                // A check-mode load treats the analyzer's own base scope as empty, so an arm the
-                // base scope registered is not a collision. The file's arm replaces it, so the
-                // analyzers read the body the file wrote.
-                //
-                // This is how the prelude checks itself: its arms on natives land on the keys the
-                // booted prelude already filled.
+                // A check-mode load writes into the check overlay, so a live base arm never
+                // collides with it. What can collide is an overlay arm an earlier check-mode load
+                // registered. That load's file is not the one being checked, so the new arm
+                // replaces it, and the analyzers read the body this file wrote.
                 if (ctx.check_mode and existing.check_epoch != ctx.check_load_epoch) {
                     try ctx.registerDispatch(key, entry, true);
                     return;

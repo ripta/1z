@@ -901,3 +901,5 @@ inspect: method{ ndarray } [
     ] if
   ] if
 ] ;
+
+pragma{ lint-suppress: { broad-import: complex-word-undocumented: dead-definition: deep-nesting: missing-doc-comment: missing-stack-effect: missing-type-annotation: non-kebab-case: } }

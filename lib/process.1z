@@ -206,3 +206,5 @@ run-shell: ( shell-safe -- process-result ) [
   <stdio-opts>
   run
 ] ;
+
+pragma{ lint-suppress: { broad-import: complex-word-undocumented: dead-definition: missing-type-annotation: } }

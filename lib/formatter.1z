@@ -1201,3 +1201,5 @@ run-fmt: ( files: array mode: symbol -- boolean ) [
   rf-mode: swap ;
   t [ rf-mode (fmt-one) and ] #reduce
 ] ;
+
+pragma{ lint-suppress: { broad-import: complex-word-undocumented: dead-definition: deep-nesting: mutation-suffix-misuse: non-kebab-case: unused-import: } }

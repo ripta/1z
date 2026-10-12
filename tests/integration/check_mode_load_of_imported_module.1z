@@ -1,0 +1,29 @@
+\ Check-loading a module this file already imports. The imported const words are the caller's, not
+\ the loaded file's, so they must not block its definitions.
+
+use "testing" ;
+use "../fixtures/check_mode/const_module.1z" ;
+use "../fixtures/check_mode/struct_arm_module.1z" ;
+
+"check-loading an imported module" test-section
+
+[ M{ } "tests/fixtures/check_mode/const_module.1z" native.load-check-file ] try
+result:ok? "an imported const does not block the check-load" assert-true
+
+1 2 make-const-pair left>> 1 "the imported struct still works" assert=
+PAIR-LIMIT 3 "the imported const still answers" assert=
+
+"check-loading a module whose arm the caller dispatches on" test-section
+
+\ The checked module's struct shares the live one's descriptor, so its `#len` arm lands on the
+\ same key. The checked arm unmakes the checked struct, which the live instance is not.
+3 4 make-spot
+
+[ M{ } "tests/fixtures/check_mode/struct_arm_module.1z" native.load-check-file ] try
+result:ok? "the check-load of the arm's module succeeds" assert-true
+
+dup #len 7 "the live instance still dispatches to the live arm" assert=
+dup unmake-spot + 7 "the live unmaker still accepts the live instance" assert=
+dup x>> 3 "the live field getter still reads the live instance" assert=
+dup >hash 3 4 make-spot >hash "the live hash still accepts the live instance" assert=
+drop

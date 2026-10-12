@@ -53,3 +53,5 @@ build: ( router -- quotation ) [
   [ <rot- find-handler ] curry curry
   [ route-dispatch ] curry
 ] ;
+
+pragma{ lint-suppress: { broad-import: complex-word-undocumented: dead-definition: import-ordering: missing-type-annotation: } }

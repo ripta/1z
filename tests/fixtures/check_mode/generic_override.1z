@@ -1,0 +1,17 @@
+\ Replaces the `fixnum` arm of a generic it imports and adds a `string` arm. The integration test
+\ check-loads this file and then confirms neither arm reaches its own calls.
+
+use "./generic_module.1z" ;
+
+describe: method{ fixnum } [ drop "checked fixnum" ] ;
+
+describe: method{ string } [ drop "checked string" ] ;
+
+\\ A box around one value.
+crate: struct{ contents } ;
+
+#len: method{ crate } [ contents>> ] ;
+
+\ The value runs when the statement does, so it dispatches on the arm above while the check-mode
+\ load is open. The live table never holds that arm.
+crate-size: 3 make-crate #len ;

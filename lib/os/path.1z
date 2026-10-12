@@ -212,3 +212,5 @@ subpath?: ( path: string base: string -- option ) [
   [ 3drop option:none ]
   recover
 ] ;
+
+pragma{ lint-suppress: { broad-import: complex-word-undocumented: dead-definition: import-ordering: missing-type-annotation: predicate-naming: } }

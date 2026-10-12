@@ -715,3 +715,5 @@ get-global-array: ( lua: lua-state name: string -- array ) [
     (table-to-array)
   ] (read-table)
 ] ;
+
+pragma{ lint-suppress: { broad-import: complex-word-undocumented: dead-definition: duplicate-definition: missing-stack-effect: missing-type-annotation: non-kebab-case: } }

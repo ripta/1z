@@ -1,3 +1,5 @@
+tests/fixtures/lint/sequence-prefix-misuse.1z:2:29: info: [missing-type-annotation] public word has untyped parameters: n
 tests/fixtures/lint/sequence-prefix-misuse.1z:2:29: info: [dead-definition] definition is not referenced by any other checked-file word
 tests/fixtures/lint/sequence-prefix-misuse.1z:2:29: warning: [sequence-prefix-misuse] word with # prefix does not appear to operate on sequences
+tests/fixtures/lint/sequence-prefix-misuse.1z:6:42: info: [missing-type-annotation] public word has untyped parameters: byte-array
 tests/fixtures/lint/sequence-prefix-misuse.1z:6:42: info: [dead-definition] definition is not referenced by any other checked-file word

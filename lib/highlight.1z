@@ -307,3 +307,5 @@ run-highlight-cli: ( args -- ) [
   \ stack: source format theme-path
   (highlight-with-options) print
 ] ;
+
+pragma{ lint-suppress: { broad-import: complex-word-undocumented: dead-definition: deep-nesting: import-ordering: missing-type-annotation: unused-import: } }

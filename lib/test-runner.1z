@@ -207,3 +207,5 @@ run-test-file: ( filepath -- failed ) [
   drop drop
   test-counts failed: @get
 ] ;
+
+pragma{ lint-suppress: { broad-import: dead-definition: import-ordering: missing-doc-comment: missing-type-annotation: } }

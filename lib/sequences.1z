@@ -57,3 +57,5 @@
   H{ } swap
   #reduce
 ] ;
+
+pragma{ lint-suppress: { complex-word-undocumented: dead-definition: missing-doc-comment: missing-stack-effect: missing-type-annotation: } }

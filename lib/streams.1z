@@ -7,3 +7,5 @@
 \\ net/http-shaped handler ( stream R -- ) runs unchanged against the CGI
 \\ transport.
 <stdio-stream>: ( -- stream ) [ 0 1 <duplex-stream> ] ;
+
+pragma{ lint-suppress: { dead-definition: } }

@@ -45,3 +45,5 @@ split-lines-slow: ( str -- lines ) [
   { } "" make-slow-acc [ slow-split-nl ] #reduce
   slow-flush-last
 ] ;
+
+pragma{ lint-suppress: { complex-word-undocumented: dead-definition: missing-doc-comment: missing-type-annotation: } }

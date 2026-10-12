@@ -99,3 +99,5 @@ inspect: method{ range } [
   1 pick-n #append ">" #append
   nip nip nip
 ] ;
+
+pragma{ lint-suppress: { complex-word-undocumented: dead-definition: missing-doc-comment: missing-type-annotation: } }

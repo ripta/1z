@@ -41,3 +41,5 @@ connect-with: ( hostname port tls-config -- stream ) [
   [ make-addr:tcp tcp.connect ] dip
   [ swap ] dip tls-upgrade
 ] ;
+
+pragma{ lint-suppress: { broad-import: complex-word-undocumented: dead-definition: missing-doc-comment: missing-stack-effect: missing-type-annotation: } }

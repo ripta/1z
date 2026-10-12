@@ -59,3 +59,5 @@ read-lines: ( path -- lines ) [
   dup stream-read-all swap stream-close
   bytes> split-lines
 ] ;
+
+pragma{ lint-suppress: { complex-word-undocumented: dead-definition: missing-doc-comment: missing-type-annotation: } }

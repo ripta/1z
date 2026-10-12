@@ -35,3 +35,5 @@ on-interrupt: ( quot: ( signum -- ) -- ) [ SIGINT swap on-signal ] ;
 
 \\ Register a handler for SIGTERM.
 on-terminate: ( quot: ( signum -- ) -- ) [ SIGTERM swap on-signal ] ;
+
+pragma{ lint-suppress: { dead-definition: missing-doc-comment: missing-stack-effect: missing-type-annotation: non-kebab-case: } }

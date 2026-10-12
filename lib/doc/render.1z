@@ -71,3 +71,5 @@ format-source-ref: ( base-url rel-path line -- str ) [
   ]
   if
 ] ;
+
+pragma{ lint-suppress: { broad-import: complex-word-undocumented: dead-definition: import-ordering: missing-type-annotation: unused-import: } }

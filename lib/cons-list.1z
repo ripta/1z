@@ -169,3 +169,5 @@ private{
 #empty?: method{ cons-list } [ nil? ] ;
 
 >array: method{ cons-list } [ cons-list>array ] ;
+
+pragma{ lint-suppress: { broad-import: complex-word-undocumented: dead-definition: missing-doc-comment: missing-type-annotation: } }

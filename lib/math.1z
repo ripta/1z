@@ -132,3 +132,5 @@ float-ulp: ( f -- ulp ) [
     ] if
   ] if
 ] ;
+
+pragma{ lint-suppress: { complex-word-undocumented: dead-definition: missing-doc-comment: missing-type-annotation: } }

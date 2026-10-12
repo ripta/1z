@@ -36,3 +36,5 @@ parse-boolean: ( str -- ? ) [
   ]
   if
 ] ;
+
+pragma{ lint-suppress: { dead-definition: missing-doc-comment: missing-type-annotation: } }

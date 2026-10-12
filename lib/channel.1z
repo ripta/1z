@@ -61,3 +61,5 @@ fan-out: ( ch quot n -- array ) [
   [ [ channel-each ] curry curry ] dip
   spawn-n
 ] ;
+
+pragma{ lint-suppress: { complex-word-undocumented: dead-definition: missing-doc-comment: missing-type-annotation: } }

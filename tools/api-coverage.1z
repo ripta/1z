@@ -1,0 +1,80 @@
+\ tools/api-coverage.1z - Doc, stack effect, and type annotation coverage of the public API
+\
+\ Prints one row per file: public words, public words with no doc comment, public words with no
+\ declared stack effect, declared inputs, and declared inputs with no type annotation. Run it from
+\ the repository root.
+\
+\ A word counts only in the file that defines it, so a facade that reexports another module adds
+\ nothing. Public means what the linter means by it, and an input counts as typed by the same test
+\ `missing-type-annotation` uses.
+\
+\ Every file is check-loaded, so a module that opens an FFI library at load is counted without that
+\ library installed, and the output is the same on every machine.
+
+use "os/fs" ;
+use "lint" ;
+use "doc/report" ;
+
+\ The prelude, then every non-test file under lib/, sorted.
+(coverage-files): ( -- array ) [
+  "lib" walk
+  [ name>> dup ".1z" #ends-with? swap "_test.1z" #ends-with? not and ] #filter
+  [ name>> "lib/" swap #append ] #map #collect [ ] #sort-by
+  "src/prelude.1z" 1array swap #append
+] ;
+
+\ The public words a check-loaded module defines in the file at path.
+(public-file-words): ( path: string module -- array ) [
+  dup @keys swap [ swap native.>word (raw>word-info) ] curry #map
+  swap [ over semantic-word-in-file? [ public-word? ] [ drop f ] if ] curry #filter #collect
+] ;
+
+(count-if): ( seq quot -- n ) [ #filter #collect #len ] ;
+
+\ Every input of every word that declares a stack effect.
+(declared-inputs): ( words: array -- params ) [
+  [ stack-effect>> dup f = [ drop { } ] [ inputs>> ] if ] #map
+  { } [ #append ] #reduce
+] ;
+
+(word-counts): ( words: array -- public undocumented no-effect inputs untyped ) [
+  dup #len swap
+  dup [ doc>> f = ] (count-if) swap
+  dup [ stack-effect>> f = ] (count-if) swap
+  (declared-inputs) dup #len swap [ param-annotated? not ] (count-if)
+] ;
+
+(coverage-row): ( cache path: string -- row ) [
+  tuck native.load-check-file
+  over swap (public-file-words) (word-counts)
+  6 array-n
+] ;
+
+(column-sum): ( rows: array i: fixnum -- n ) [
+  [ #nth ] curry #map 0 [ + ] #reduce
+] ;
+
+(total-row): ( rows: array -- row ) [
+  "total" swap
+  { 1 2 3 4 5 } [ over swap (column-sum) swap ] #each
+  drop 6 array-n
+] ;
+
+(pad-left): ( str: string width: fixnum -- str ) [
+  [ over #len over < ] [ [ " " swap #append ] dip ] while drop
+] ;
+
+(pad-right): ( str: string width: fixnum -- str ) [
+  [ over #len over < ] [ [ " " #append ] dip ] while drop
+] ;
+
+(format-row): ( row: array -- str ) [
+  dup 0 #nth >string 32 (pad-right)
+  swap 1 #drop [ >string 13 (pad-left) #append ] #each
+] ;
+
+{ "file" "public" "undocumented" "no-effect" "inputs" "untyped" } (format-row) print-line
+
+M{ } [ swap (coverage-row) ] curry (coverage-files) swap #map #collect
+dup (total-row) 1array #append
+[ (format-row) print-line ] #each

@@ -240,3 +240,5 @@ parse-stmt: ( source: string -- stmt-node ) [
   dup f = [ drop ] [ "expected end of input" swap (unexpected-token) ] if
   group-stmt
 ] ;
+
+pragma{ lint-suppress: { broad-import: const-rebuilds-value: dead-definition: deep-nesting: import-ordering: missing-stack-effect: non-kebab-case: unused-import: } }

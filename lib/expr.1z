@@ -83,3 +83,5 @@ fn: parse-time [
   parse-fn
   (lower-fn-decl)
 ] ;
+
+pragma{ lint-suppress: { broad-import: dead-definition: import-ordering: missing-stack-effect: unused-import: } }

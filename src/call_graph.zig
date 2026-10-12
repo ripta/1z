@@ -24,12 +24,27 @@ pub const CallGraphEntry = struct {
 
 pub const CallGraph = std.StringHashMapUnmanaged(CallGraphEntry);
 
+/// Where `build` reads a generic word's method arms from.
+pub const DispatchSource = union(enum) {
+    /// One bare table, for a graph built without a context.
+    table: *const DispatchTable,
+    /// The context's analysis view, which adds the arms a check-mode load registered.
+    context: *const Context,
+
+    fn entriesForDispatchId(self: DispatchSource, dispatch_id: u32, allocator: Allocator) ![]DispatchTable.KeyEntryPair {
+        return switch (self) {
+            .table => |table| table.entriesForDispatchId(dispatch_id, allocator),
+            .context => |ctx| ctx.analysisDispatchEntriesForId(dispatch_id, .by_sequence, allocator),
+        };
+    }
+};
+
 /// Build a complete call graph from the dictionary and dispatch table.
 /// Every word in the dictionary gets an entry. Native words are leaf nodes
 /// with empty callees. Compound words have their instruction bodies scanned
 /// for call_word references. Generic words additionally include callees from
 /// all dispatch table entries for that word.
-pub fn build(dictionary: *const Dictionary, dispatch_table: *const DispatchTable, allocator: Allocator) !CallGraph {
+pub fn build(dictionary: *const Dictionary, dispatch_source: DispatchSource, allocator: Allocator) !CallGraph {
     var graph: CallGraph = .{};
 
     var iter = dictionary.entries.iterator();
@@ -37,14 +52,14 @@ pub fn build(dictionary: *const Dictionary, dispatch_table: *const DispatchTable
         const word_name = entry.key_ptr.*;
         const word_def = dict_mod.loadSlot(entry.value_ptr.*);
 
-        const graph_entry = try buildEntry(word_name, word_def, dispatch_table, allocator);
+        const graph_entry = try buildEntry(word_name, word_def, dispatch_source, allocator);
         try graph.put(allocator, word_name, graph_entry);
     }
 
     return graph;
 }
 
-fn buildEntry(_: []const u8, word_def: *const WordDefinition, dispatch_table: *const DispatchTable, allocator: Allocator) !CallGraphEntry {
+fn buildEntry(_: []const u8, word_def: *const WordDefinition, dispatch_source: DispatchSource, allocator: Allocator) !CallGraphEntry {
     switch (word_def.action) {
         .native, .host_callback, .literal => return .{ .callees = &.{}, .has_opaque = false },
         .compound => |instructions| {
@@ -55,7 +70,7 @@ fn buildEntry(_: []const u8, word_def: *const WordDefinition, dispatch_table: *c
             try collectCallees(instructions, &callee_set, &has_opaque, allocator);
 
             if (isGeneric(word_def)) {
-                const dispatch_entries = try dispatch_table.entriesForDispatchId(word_def.dispatch_id, allocator);
+                const dispatch_entries = try dispatch_source.entriesForDispatchId(word_def.dispatch_id, allocator);
                 defer allocator.free(dispatch_entries);
                 for (dispatch_entries) |pair| {
                     switch (pair.entry.body) {
@@ -568,7 +583,7 @@ test "native word produces empty leaf entry" {
         .action = .{ .native = dummyNative },
     });
 
-    var graph = try build(&dict, &dispatch, std.testing.allocator);
+    var graph = try build(&dict, .{ .table = &dispatch }, std.testing.allocator);
     defer graph.deinit(std.testing.allocator);
 
     const entry = graph.get("native-word").?;
@@ -592,7 +607,7 @@ test "compound word with direct callees" {
         .action = .{ .compound = instrs },
     });
 
-    var graph = try build(&dict, &dispatch, std.testing.allocator);
+    var graph = try build(&dict, .{ .table = &dispatch }, std.testing.allocator);
     defer deinitGraph(&graph, std.testing.allocator);
 
     const entry = graph.get("my-word").?;
@@ -621,7 +636,7 @@ test "nested quotation descent finds callees inside quotation literals" {
         .action = .{ .compound = instrs },
     });
 
-    var graph = try build(&dict, &dispatch, std.testing.allocator);
+    var graph = try build(&dict, .{ .table = &dispatch }, std.testing.allocator);
     defer deinitGraph(&graph, std.testing.allocator);
 
     const entry = graph.get("nested-word").?;
@@ -646,7 +661,7 @@ test ">quotation triggers has_opaque" {
         .action = .{ .compound = instrs },
     });
 
-    var graph = try build(&dict, &dispatch, std.testing.allocator);
+    var graph = try build(&dict, .{ .table = &dispatch }, std.testing.allocator);
     defer deinitGraph(&graph, std.testing.allocator);
 
     const entry = graph.get("opaque-word").?;
@@ -671,7 +686,7 @@ test "callee deduplication: same name called twice produces one entry" {
         .action = .{ .compound = instrs },
     });
 
-    var graph = try build(&dict, &dispatch, std.testing.allocator);
+    var graph = try build(&dict, .{ .table = &dispatch }, std.testing.allocator);
     defer deinitGraph(&graph, std.testing.allocator);
 
     const entry = graph.get("dedup-word").?;
@@ -711,7 +726,7 @@ test "generic word includes dispatch entry callees" {
         false,
     );
 
-    var graph = try build(&dict, &dispatch, std.testing.allocator);
+    var graph = try build(&dict, .{ .table = &dispatch }, std.testing.allocator);
     defer deinitGraph(&graph, std.testing.allocator);
 
     const entry = graph.get("my-generic").?;
@@ -719,6 +734,44 @@ test "generic word includes dispatch entry callees" {
     try std.testing.expectEqualStrings("base-call", entry.callees[0]);
     try std.testing.expectEqualStrings("dispatch-call", entry.callees[1]);
     try std.testing.expect(!entry.has_opaque);
+}
+
+test "build over a context reads the check overlay over the base arms" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    var dict = Dictionary.init(std.testing.allocator);
+    defer dict.deinit();
+
+    const did: u32 = 979;
+    try dict.put("my-generic", .{
+        .name = "my-generic",
+        .action = .{ .compound = &.{} },
+        .markers = &.{@constCast(&markers.generic_marker)},
+        .dispatch_id = did,
+    });
+
+    const fixnum = ctx.lookupBuiltinTypeValue("fixnum").?.descriptor.?;
+    const string = ctx.lookupBuiltinTypeValue("string").?.descriptor.?;
+    const unary = ctx.getDispatchUnarySentinel().descriptor.?;
+    const live_body = &[_]Instruction{.{ .op = .{ .call_word = "live-call" }, .line = 1 }};
+    const check_body = &[_]Instruction{.{ .op = .{ .call_word = "check-call" }, .line = 1 }};
+    const added_body = &[_]Instruction{.{ .op = .{ .call_word = "added-call" }, .line = 1 }};
+
+    try ctx.registerDispatch(.{ .dispatch_id = did, .type_a = fixnum, .type_b = unary }, .{ .body = .{ .quotation = .{ .instructions = live_body } } }, false);
+
+    ctx.enterCheckMode();
+    try ctx.registerDispatch(.{ .dispatch_id = did, .type_a = fixnum, .type_b = unary }, .{ .body = .{ .quotation = .{ .instructions = check_body } } }, false);
+    try ctx.registerDispatch(.{ .dispatch_id = did, .type_a = string, .type_b = unary }, .{ .body = .{ .quotation = .{ .instructions = added_body } } }, false);
+    ctx.exitCheckMode(false);
+
+    var graph = try build(&dict, .{ .context = &ctx }, std.testing.allocator);
+    defer deinitGraph(&graph, std.testing.allocator);
+
+    const entry = graph.get("my-generic").?;
+    try std.testing.expectEqual(@as(usize, 2), entry.callees.len);
+    try std.testing.expectEqualStrings("added-call", entry.callees[0]);
+    try std.testing.expectEqualStrings("check-call", entry.callees[1]);
 }
 
 fn dummyNative(_: *Context) anyerror!void {}
@@ -901,7 +954,7 @@ test "findMutualTcoGroups: all tail-call edges produces group" {
 
     var dispatch = DispatchTable.init(std.testing.allocator);
     defer dispatch.deinit();
-    var graph = try build(&dict, &dispatch, std.testing.allocator);
+    var graph = try build(&dict, .{ .table = &dispatch }, std.testing.allocator);
     defer deinitGraph(&graph, std.testing.allocator);
 
     var groups = try findMutualTcoGroups(&graph, &dict, std.testing.allocator);
@@ -931,7 +984,7 @@ test "findMutualTcoGroups: one non-tail edge disqualifies" {
 
     var dispatch = DispatchTable.init(std.testing.allocator);
     defer dispatch.deinit();
-    var graph = try build(&dict, &dispatch, std.testing.allocator);
+    var graph = try build(&dict, .{ .table = &dispatch }, std.testing.allocator);
     defer deinitGraph(&graph, std.testing.allocator);
 
     var groups = try findMutualTcoGroups(&graph, &dict, std.testing.allocator);
@@ -956,7 +1009,7 @@ test "findMutualTcoGroups: opaque member disqualifies" {
 
     var dispatch = DispatchTable.init(std.testing.allocator);
     defer dispatch.deinit();
-    var graph = try build(&dict, &dispatch, std.testing.allocator);
+    var graph = try build(&dict, .{ .table = &dispatch }, std.testing.allocator);
     defer deinitGraph(&graph, std.testing.allocator);
 
     var groups = try findMutualTcoGroups(&graph, &dict, std.testing.allocator);
@@ -986,7 +1039,7 @@ test "findMutualTcoGroups: mismatched arities disqualifies" {
 
     var dispatch = DispatchTable.init(std.testing.allocator);
     defer dispatch.deinit();
-    var graph = try build(&dict, &dispatch, std.testing.allocator);
+    var graph = try build(&dict, .{ .table = &dispatch }, std.testing.allocator);
     defer deinitGraph(&graph, std.testing.allocator);
 
     var groups = try findMutualTcoGroups(&graph, &dict, std.testing.allocator);
@@ -1007,7 +1060,7 @@ test "findMutualTcoGroups: native member disqualifies" {
 
     var dispatch = DispatchTable.init(std.testing.allocator);
     defer dispatch.deinit();
-    var graph = try build(&dict, &dispatch, std.testing.allocator);
+    var graph = try build(&dict, .{ .table = &dispatch }, std.testing.allocator);
     defer deinitGraph(&graph, std.testing.allocator);
 
     var groups = try findMutualTcoGroups(&graph, &dict, std.testing.allocator);

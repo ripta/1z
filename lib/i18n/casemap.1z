@@ -103,3 +103,5 @@ case-fold: ( string locale -- string ) [
   [ 0 0 (u-str-fold-case) ]
   (apply-case-map)
 ] ;
+
+pragma{ lint-suppress: { broad-import: complex-word-undocumented: dead-definition: missing-type-annotation: unused-import: } }

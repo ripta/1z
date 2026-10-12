@@ -152,3 +152,5 @@ decode-host?: ( string -- option ) [
   [ 2drop option:none ]
   recover
 ] ;
+
+pragma{ lint-suppress: { broad-import: dead-definition: import-ordering: missing-stack-effect: missing-type-annotation: non-kebab-case: predicate-naming: } }

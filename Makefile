@@ -87,7 +87,7 @@ mktemp_or_die = $(or $(shell mktemp $(1)),$(error mktemp failed for $(1)))
 #
 # The pattern and the explicit list are separate lines because make rejects a rule mixing pattern
 # and normal targets.
-lib-test lib-check games-test docs profiles benchmark prelude-lint-check update-prelude-lint-golden: export ONEZ_NO_STARTUP := 1
+lib-test lib-check games-test docs profiles benchmark lint api-coverage api-coverage-check update-api-coverage: export ONEZ_NO_STARTUP := 1
 benchmark-%: export ONEZ_NO_STARTUP := 1
 
 all: build test ## Build and run all tests
@@ -148,7 +148,7 @@ fmt: build ## Format zig and 1z source files
 # in the suite compiles for wasm32-freestanding, so a hosted-only declaration
 # newly named from a wasm-reachable function breaks `make wasm` and nothing says
 # so until someone builds the browser module by hand.
-test: branch-info leak-goldens-check module-less-benchmark-check body-entry-slope-check aot-checks wasm-freestanding-build lib-check test-threads-1 test-threads-auto capi-test ## Run all tests under both --threads=1 and --threads=auto
+test: branch-info leak-goldens-check module-less-benchmark-check body-entry-slope-check aot-checks wasm-freestanding-build lib-check lint api-coverage-check test-threads-1 test-threads-auto capi-test ## Run all tests under both --threads=1 and --threads=auto
 
 leak-goldens-check: ## Fail if any test golden has baked-in GPA leak text
 	@if grep -rl 'error(gpa)' tests/ --include='*.golden'; then \
@@ -319,24 +319,27 @@ lib-check: build ## Run `1z check` over every lib/ module and list the files it 
 games-test: build ## Run *_test.1z unit tests under every examples/wasm-*/ game directory
 	find examples -path 'examples/wasm-*' -name '*_test.1z' -print0 | xargs -0 -P $(TEST_JOBS) -n 1 timeout $(TARGET_TIMEOUT) ./$(ZIG_PREFIX)/bin/1z test
 
-PRELUDE_LINT_GOLDEN := tests/lint/prelude.stderr.golden
+# Each file is linted in its own process, so one file's check-load cannot change what another file's
+# lint sees. A file passes only with no diagnostics at all. A rule a file does not yet satisfy is
+# named in that file's `pragma{ lint-suppress: { ... } }`, and the change that fixes the file drops
+# it from the list. The release binary runs it because linting the prelude takes over a minute on
+# the Debug one.
+lint: release ## Run `1z lint` over the prelude and every non-test file under lib/
+	{ echo src/prelude.1z; find lib -name '*.1z' ! -name '*_test.1z'; } | \
+		xargs -P $(TEST_JOBS) -n 1 timeout $(TARGET_TIMEOUT) ./$(RELEASE_PREFIX)/bin/1z lint --stdlib-path=lib
 
-# Kept out of `make test`, because linting the prelude takes over a minute on the Debug binary the
-# suite runs. The linter exits 1 whenever it reports anything, so the diff decides the result and
-# only an exit above 1 fails the run on its own.
-prelude-lint-check: release ## Diff `1z lint src/prelude.1z` against its golden (not part of make test)
-	@timeout $(TARGET_TIMEOUT) ./$(RELEASE_PREFIX)/bin/1z lint --stdlib-path=lib src/prelude.1z 2> $(ZIG_PREFIX)/prelude-lint.stderr; \
-		status=$$?; \
-		if [ $$status -gt 1 ]; then echo "FAIL: 1z lint src/prelude.1z exited $$status"; exit 1; fi
-	@diff -u $(PRELUDE_LINT_GOLDEN) $(ZIG_PREFIX)/prelude-lint.stderr
-	@echo "PASS: 1z lint src/prelude.1z matches $(PRELUDE_LINT_GOLDEN)"
+API_COVERAGE_GOLDEN := tests/lint/api-coverage.golden
 
-update-prelude-lint-golden: release ## Regenerate the `1z lint src/prelude.1z` golden
-	@mkdir -p $(dir $(PRELUDE_LINT_GOLDEN))
-	@timeout $(TARGET_TIMEOUT) ./$(RELEASE_PREFIX)/bin/1z lint --stdlib-path=lib src/prelude.1z 2> $(PRELUDE_LINT_GOLDEN); \
-		status=$$?; \
-		if [ $$status -gt 1 ]; then echo "FAIL: 1z lint src/prelude.1z exited $$status"; exit 1; fi
-	@echo "Updated $(PRELUDE_LINT_GOLDEN)"
+api-coverage: build ## Print per-file doc, stack effect, and type annotation coverage of the public API
+	timeout $(TARGET_TIMEOUT) ./$(ZIG_PREFIX)/bin/1z run --stdlib-path=lib tools/api-coverage.1z
+
+api-coverage-check: build ## Diff the API coverage report against its committed golden
+	@timeout $(TARGET_TIMEOUT) ./$(ZIG_PREFIX)/bin/1z run --stdlib-path=lib tools/api-coverage.1z > $(ZIG_PREFIX)/api-coverage.out
+	@diff -u $(API_COVERAGE_GOLDEN) $(ZIG_PREFIX)/api-coverage.out
+	@echo "PASS: API coverage matches $(API_COVERAGE_GOLDEN)"
+
+update-api-coverage: build ## Regenerate the API coverage golden (commit the result)
+	timeout $(TARGET_TIMEOUT) ./$(ZIG_PREFIX)/bin/1z run --stdlib-path=lib tools/api-coverage.1z > $(API_COVERAGE_GOLDEN)
 
 jit-build: ## Build only the 1z-jit binary
 	timeout $(TIMEOUT) $(ZIG) build jit-build --prefix $(ZIG_PREFIX)

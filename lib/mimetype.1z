@@ -24,3 +24,5 @@ for-extension: ( ext -- content-type ) [
   }
   swap "application/octet-stream" @get-or
 ] ;
+
+pragma{ lint-suppress: { dead-definition: missing-type-annotation: } }

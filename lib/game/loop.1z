@@ -87,3 +87,5 @@ run-frame: ( -- ) [
   game-loop draw>> call
   present-frame
 ] ;
+
+pragma{ lint-suppress: { broad-import: complex-word-undocumented: dead-definition: import-ordering: } }

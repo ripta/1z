@@ -1,0 +1,7 @@
+\ A module that defines a generic with a `fixnum` arm. The integration test imports it, and the
+\ file it check-loads registers arms of its own on the same generic.
+
+\\ Name the kind of value on top of the stack.
+describe: ( x -- s ) generic [ drop "unknown" ] ;
+
+describe: method{ fixnum } [ drop "live fixnum" ] ;

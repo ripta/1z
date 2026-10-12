@@ -60,3 +60,5 @@ serve-forever: ( config -- ) [
   start-server
   serve-loop
 ] ;
+
+pragma{ lint-suppress: { broad-import: dead-definition: missing-doc-comment: missing-type-annotation: } }

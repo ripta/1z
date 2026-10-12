@@ -1,0 +1,14 @@
+\\ Two untyped inputs and one typed.
+mixed: ( n str: string count -- n ) [ drop drop ] ;
+
+\\ Every input typed.
+all-typed: ( n: fixnum s: string -- n ) [ drop ] ;
+
+\\ A row variable, a quotation with a nested effect, and `any` all count as annotated.
+annotated-forms: ( ..a quot: ( ..a -- ..b ) value: any -- ..b ) [ drop call ] ;
+
+\\ No inputs at all.
+no-inputs: ( -- n ) [ 42 ] ;
+
+\\ No stack effect, which missing-stack-effect reports instead.
+no-effect: [ 43 ] ;

@@ -85,3 +85,5 @@ bidi-rli: const [ "\u{2067}" ] ;
 bidi-fsi: const [ "\u{2068}" ] ;
 \\ U+2069 Pop Directional Isolate
 bidi-pdi: const [ "\u{2069}" ] ;
+
+pragma{ lint-suppress: { broad-import: dead-definition: missing-stack-effect: missing-type-annotation: unused-import: } }

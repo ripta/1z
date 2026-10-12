@@ -220,3 +220,5 @@ split-once: ( str: string delim: string -- pair ) [
   [ drop (delimiter-not-found) ]
   if
 ] ;
+
+pragma{ lint-suppress: { complex-word-undocumented: dead-definition: import-ordering: missing-type-annotation: predicate-naming: unused-import: } }

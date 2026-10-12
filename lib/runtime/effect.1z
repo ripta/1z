@@ -117,3 +117,5 @@ assert-effect: ( quot expected-effect msg -- ) [
   ]
   if
 ] ;
+
+pragma{ lint-suppress: { complex-word-undocumented: dead-definition: missing-type-annotation: predicate-naming: } }

@@ -266,7 +266,7 @@ make-lint-rule register-lint-rule
       \ stack: path(3) sem-ctx(2) pairs(1) word-name(0)
       2 pick-n swap semantic-word-info
       dup f = [ drop ] [
-        dup (skip-word?) [ drop ] [
+        dup (skip-word?) 4 pick-n 2 pick-n semantic-word-in-file? not or [ drop ] [
           dup (body-fingerprint) dup f = [ 2drop ] [
             \ stack: ... pairs(2) word-info(1) fingerprint(0)
             swap 2 array-n
@@ -918,6 +918,7 @@ make-lint-rule register-lint-rule
       2 pick-n swap semantic-word-info
       dup f = [ drop ] [
         dup (has-const-marker?) over body>> (body-constructs?) and
+        4 pick-n 2 pick-n semantic-word-in-file? and
         [
           source-loc>> dup f = [ drop ] [
             "const-rebuilds-value" warning: 5 pick-n 3 pick-n dup line>> swap column>>
@@ -1018,7 +1019,7 @@ make-lint-rule register-lint-rule
       2 pick-n over >string @has? [
         3 pick-n swap semantic-word-info
         dup f = [ drop ] [
-          dup (shadow-exempt?) over source-loc>> f = or [ drop ] [
+          dup (shadow-exempt?) 5 pick-n 2 pick-n semantic-word-in-file? not or [ drop ] [
             4 pick-n 3 pick-n <rot- (base-scope-shadow-diagnostic)
             over swap #push! drop
           ] if
@@ -1031,3 +1032,5 @@ make-lint-rule register-lint-rule
 
 "base-scope-shadow" warning: [ (check-base-scope-shadow) ] f
 make-lint-rule register-lint-rule
+
+pragma{ lint-suppress: { broad-import: deep-nesting: import-ordering: unused-import: } }

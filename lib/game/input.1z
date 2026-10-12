@@ -221,3 +221,5 @@ advance-mouse-frame: ( -- ) [
     dup (mouse-write-index) mouse-read-offset swap #poke8! drop
   ] if
 ] ;
+
+pragma{ lint-suppress: { broad-import: dead-definition: unused-import: } }

@@ -285,3 +285,5 @@ locale-time-parts: ( timestamp locale -- hash ) [
   2 pick-n 2 pick-n "G" (format-pattern-utc) era: (time-parts-maybe-set)
   nip nip
 ] ;
+
+pragma{ lint-suppress: { broad-import: complex-word-undocumented: dead-definition: missing-type-annotation: } }

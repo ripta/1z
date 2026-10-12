@@ -16001,7 +16001,14 @@ fn compileQuotationBodyInline(
 /// Without an interpreter context the emitter has no dispatch table to read, so the analysis has
 /// no answer to give and the body keeps its bare call. That shape is unit-test-only: the two JIT
 /// entry points and the AOT program driver each pass a live context.
+///
+/// The index reads the base table alone. During a check-mode load a defining arm can live only in
+/// the check overlay, so the body keeps its frame then.
 fn quotationBodyNeedsFrame(state: *CompileState, body: []const Instruction) bool {
+    if (state.interp_ctx) |ictx| {
+        if (ictx.check_mode) return true;
+    }
+
     if (state.method_index == null) {
         const ictx = state.interp_ctx orelse return false;
         state.method_index = may_define.DispatchMethodIndex.init(state.allocator, &ictx.dispatch) catch return true;
@@ -16272,6 +16279,11 @@ fn emitInlineDispatchTableCheck(
     if (resolved.never_returns) return false;
     if (effective_in < 2) return false;
 
+    // The snapshot below reads the base table alone. In check mode a check-overlay arm can shadow
+    // a base native arm on the same key, and the generation guard cannot tell, since the overlay
+    // was written before the snapshot.
+    if (interp_ctx.check_mode) return false;
+
     const dispatch_id = interp_ctx.resolveDispatchId(name) orelse return false;
 
     // Skip sentinel descriptors so wildcard and unary entries are
@@ -16377,6 +16389,9 @@ fn emitInlineDispatchTableCheckUnary(
     const interp_ctx = state.interp_ctx orelse return false;
     if (resolved.never_returns) return false;
     if (effective_in != 1) return false;
+
+    // The snapshot reads the base table alone, which a check-overlay arm can shadow.
+    if (interp_ctx.check_mode) return false;
 
     const dispatch_id = interp_ctx.resolveDispatchId(name) orelse return false;
 

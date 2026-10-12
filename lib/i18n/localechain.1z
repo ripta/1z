@@ -131,3 +131,5 @@ inspect: method{ locale-chain } [
 #len: method{ locale-chain } [
   unmake-locale-chain #len
 ] ;
+
+pragma{ lint-suppress: { broad-import: complex-word-undocumented: dead-definition: import-ordering: missing-type-annotation: unused-import: } }

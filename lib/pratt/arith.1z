@@ -88,3 +88,5 @@ arith-infix: ( left token parser tokens -- value ) [
     infix:     [ arith-infix ]
   } <pratt>
 ] ;
+
+pragma{ lint-suppress: { broad-import: complex-word-undocumented: dead-definition: import-ordering: missing-doc-comment: missing-stack-effect: missing-type-annotation: non-kebab-case: } }

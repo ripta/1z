@@ -224,3 +224,5 @@ phase: ( c -- f ) [
 conjugate: ( c -- c ) [
   dup real-part swap imaginary-part 0.0 swap - make-complex
 ] ;
+
+pragma{ lint-suppress: { broad-import: dead-definition: missing-stack-effect: missing-type-annotation: } }

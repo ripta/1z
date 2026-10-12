@@ -327,3 +327,5 @@ decode(url): ( str -- bytes ) [
 
 \\ Decode URL-safe Base64 text and interpret the result as a UTF-8 string.
 decode>string(url): ( str -- str ) [ decode(url) bytes> ] ;
+
+pragma{ lint-suppress: { broad-import: const-rebuilds-value: dead-definition: missing-doc-comment: missing-type-annotation: } }

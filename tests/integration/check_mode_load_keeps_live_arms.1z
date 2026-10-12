@@ -1,0 +1,17 @@
+\ Check-loading a file that registers arms on a generic this file already uses. The checked arms
+\ are for the analyzers, so the running program keeps dispatching to its own.
+
+use "testing" ;
+use "../fixtures/check_mode/generic_module.1z" ;
+
+[ M{ } "tests/fixtures/check_mode/generic_override.1z" native.load-check-file ] try
+result:ok? "a check-time binding that dispatches on its own struct's arm loads cleanly" assert-true
+
+"live arms survive a check-load" test-section
+
+5 describe "live fixnum" "the live fixnum arm still answers" assert=
+"s" describe "unknown" "the checked string arm never reaches a live call" assert=
+
+"checked arms are still analyzed" test-section
+
+describe: >word-info methods>> #len 2 "the generic lists the checked string arm" assert=

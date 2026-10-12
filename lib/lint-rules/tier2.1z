@@ -29,6 +29,8 @@ use "lint" ;
 \ Iterate semantic word-infos, collecting diagnostics for words that
 \ match a predicate. The predicate receives ( path word-info -- diag-or-f ).
 \ Returns an array of lint-diagnostic structs.
+\
+\ A word reexported into the module is skipped. The file that defines it reports it.
 (check-semantic-words): ( path sem-ctx predicate -- diagnostics ) [
   \ stack: path(2) sem-ctx(1) predicate(0)
   swap dup f = [
@@ -41,7 +43,7 @@ use "lint" ;
       2 pick-n swap semantic-word-info
       \ stack: path(4) predicate(3) sem-ctx(2) results(1) word-info(0)
       dup f = [ drop ] [
-        dup (skip-word?) [ drop ] [
+        dup (skip-word?) 5 pick-n 2 pick-n semantic-word-in-file? not or [ drop ] [
           \ Call predicate: ( path word-info -- diag-or-f )
           4 pick-n swap 4 pick-n call
           \ stack: path(4) predicate(3) sem-ctx(2) results(1) diag-or-f(0)
@@ -90,6 +92,39 @@ make-lint-rule register-lint-rule
 ] ;
 
 "missing-doc-comment" info: [ (check-missing-doc-comment) ] f
+make-lint-rule register-lint-rule
+
+\ --- Rule: missing-type-annotation ---
+
+\ Join input names into one comma-separated string.
+(join-input-names): ( names: array -- str ) [
+  dup #first swap 1 #drop swap
+  [ swap ", " #append swap #append ] #reduce
+] ;
+
+\ A word whose stack effect is missing is left to missing-stack-effect. Outputs are not checked.
+(check-missing-type-annotation): ( path source tokens line-index semantic-context -- diagnostics ) [
+  nip nip nip
+  [
+    \ predicate: ( path word-info -- diag-or-f )
+    dup stack-effect>> dup f = [
+      drop 2drop f
+    ] [
+      inputs>> [ param-annotated? not ] #filter [ name>> ] #map #collect
+      dup #len 0 = [
+        3drop f
+      ] [
+        (join-input-names) "public word has untyped parameters: " swap #append
+        swap source-loc>>
+        \ stack: path(2) message(1) source-loc(0)
+        "missing-type-annotation" info: 4 pick-n 3 pick-n dup line>> swap column>> 6 pick-n
+        make-lint-diagnostic nip nip nip
+      ] if
+    ] if
+  ] (check-semantic-words)
+] ;
+
+"missing-type-annotation" info: [ (check-missing-type-annotation) ] f
 make-lint-rule register-lint-rule
 
 \ --- Rule 8: predicate-naming ---
@@ -205,7 +240,7 @@ make-lint-rule register-lint-rule
           3 pick-n over semantic-word-info
           \ stack: path(4) sem-ctx(3) results(2) all-names(1) word-name(0) word-info
           dup f = [ 2drop ] [
-            dup provenance>> f = not [ 2drop ] [
+            dup provenance>> f = not 6 pick-n 2 pick-n semantic-word-in-file? not or [ 2drop ] [
               source-loc>> dup f = [ 2drop ] [
                 nip
                 \ stack: path(4) sem-ctx(3) results(2) all-names(1) source-loc(0)
@@ -478,3 +513,5 @@ make-lint-rule register-lint-rule
 
 "unused-import" warning: [ (check-unused-import) ] f
 make-lint-rule register-lint-rule
+
+pragma{ lint-suppress: { deep-nesting: } }

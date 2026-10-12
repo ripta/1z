@@ -641,3 +641,5 @@ parse-flags: ( args: array description: string -- result: hash ) [
     ] with-parameter
   ] with-parameter
 ] ;
+
+pragma{ lint-suppress: { complex-word-undocumented: dead-definition: deep-nesting: import-ordering: missing-doc-comment: missing-stack-effect: missing-type-annotation: unused-import: } }

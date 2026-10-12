@@ -281,3 +281,5 @@ using-transaction: ( ..a db: db-handle quot: ( ..a db: db-handle -- ..b ) -- ..b
 
 \\ Deprecated alias of `using-transaction`.
 with-transaction: deprecated ( ..a db: db-handle quot: ( ..a db: db-handle -- ..b ) -- ..b ) [ using-transaction ] ;
+
+pragma{ lint-suppress: { broad-import: complex-word-undocumented: dead-definition: missing-doc-comment: missing-type-annotation: non-kebab-case: orphaned-doc-comment: } }

@@ -56,3 +56,5 @@ random-below: ( n: fixnum -- k ) [
 
 \\ Run quot with gen bound as the ambient generator.
 with-random: ( ..a gen: random quot: ( ..a -- ..b ) -- ..b ) [ [ current-random ] dip with-parameter ] ;
+
+pragma{ lint-suppress: { broad-import: complex-word-undocumented: dead-definition: } }

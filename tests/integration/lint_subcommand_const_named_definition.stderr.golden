@@ -2,4 +2,5 @@ tests/fixtures/lint/const-named-definition.1z:1:1: info: [broad-import] only 1 o
 tests/fixtures/lint/const-named-definition.1z:6:24: info: [missing-doc-comment] public word lacks a doc comment
 tests/fixtures/lint/const-named-definition.1z:6:24: info: [dead-definition] definition is not referenced by any other checked-file word
 tests/fixtures/lint/const-named-definition.1z:8:38: info: [missing-doc-comment] public word lacks a doc comment
+tests/fixtures/lint/const-named-definition.1z:8:38: info: [missing-type-annotation] public word has untyped parameters: s
 tests/fixtures/lint/const-named-definition.1z:8:38: info: [dead-definition] definition is not referenced by any other checked-file word

@@ -122,3 +122,5 @@ uncompress-sized: ( byte-array expected-len -- byte-array ) [
     ] if
   ] if
 ] ;
+
+pragma{ lint-suppress: { complex-word-undocumented: dead-definition: missing-doc-comment: missing-stack-effect: missing-type-annotation: orphaned-doc-comment: } }

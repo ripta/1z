@@ -69,3 +69,5 @@ hex>fixnum: ( str -- n ) [
   ]
   if
 ] ;
+
+pragma{ lint-suppress: { broad-import: dead-definition: missing-type-annotation: } }

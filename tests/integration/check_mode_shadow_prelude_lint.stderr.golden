@@ -1,4 +1,5 @@
 tests/fixtures/check_mode/shadow_prelude.1z:4:33: info: [missing-doc-comment] public word lacks a doc comment
+tests/fixtures/check_mode/shadow_prelude.1z:4:33: info: [missing-type-annotation] public word has untyped parameters: x, y
 tests/fixtures/check_mode/shadow_prelude.1z:4:33: info: [complex-word-undocumented] complex word should include a doc comment example
 tests/fixtures/check_mode/shadow_prelude.1z:4:33: info: [dead-definition] definition is not referenced by any other checked-file word
 tests/fixtures/check_mode/shadow_prelude.1z:4:33: warning: [base-scope-shadow] defining 'nip' would shadow a base-scope word

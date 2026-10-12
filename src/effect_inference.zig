@@ -1983,7 +1983,12 @@ pub const InferenceEngine = struct {
         conv_target: ?*const TypeValue,
         entry_windows: *std.ArrayListUnmanaged(std.ArrayListUnmanaged(StackEntry)),
     ) Allocator.Error!bool {
-        const dispatch_entries = try self.dispatch_table.entriesForDispatchId(word_def.dispatch_id, self.allocator);
+        // The context's analysis view adds the arms a check-mode load registered, which sit in
+        // its check overlay rather than in the dispatch table.
+        const dispatch_entries = if (self.ctx) |ctx|
+            try ctx.analysisDispatchEntriesForId(word_def.dispatch_id, .by_sequence, self.allocator)
+        else
+            try self.dispatch_table.entriesForDispatchId(word_def.dispatch_id, self.allocator);
         defer self.allocator.free(dispatch_entries);
 
         const check_outputs = self.type_check_mode != .off and self.isInCheckedSource(word_def.source_file);

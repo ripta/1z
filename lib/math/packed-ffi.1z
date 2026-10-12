@@ -33,3 +33,5 @@ packed-from-ptr:u32: ( resource n -- packed-u32 ) [ 4 * native.ffi-ptr+len>borro
 packed-from-ptr:u64: ( resource n -- packed-u64 ) [ 8 * native.ffi-ptr+len>borrowed-bytes >packed-u64 ] ;
 packed-from-ptr:f32: ( resource n -- packed-f32 ) [ 4 * native.ffi-ptr+len>borrowed-bytes >packed-f32 ] ;
 packed-from-ptr:f64: ( resource n -- packed-f64 ) [ 8 * native.ffi-ptr+len>borrowed-bytes >packed-f64 ] ;
+
+pragma{ lint-suppress: { broad-import: complex-word-undocumented: dead-definition: missing-doc-comment: missing-type-annotation: } }

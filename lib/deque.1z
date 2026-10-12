@@ -754,3 +754,5 @@ private{
 \ "end of sequence".
 #push: method{ deque } [ deque-push-back ] ;
 #pop: method{ deque } [ deque-pop-back ] ;
+
+pragma{ lint-suppress: { complex-word-undocumented: dead-definition: missing-type-annotation: non-kebab-case: predicate-naming: } }

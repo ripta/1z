@@ -109,3 +109,5 @@ uchar>utf8: ( byte-array fixnum -- string ) [
     bytes-resize! bytes>
   ] if
 ] ;
+
+pragma{ lint-suppress: { complex-word-undocumented: dead-definition: missing-stack-effect: missing-type-annotation: } }

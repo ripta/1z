@@ -442,3 +442,5 @@ pq-pop-min?: ( pq: priority-queue -- priority-queue option ) [ priority-queue-po
 #empty?:   method{ priority-queue } [ unmake-priority-queue size>> 0 = ] ;
 #first:    method{ priority-queue } [ priority-queue-min ] ;
 >array:    method{ priority-queue } [ #collect ] ;
+
+pragma{ lint-suppress: { complex-word-undocumented: dead-definition: missing-type-annotation: predicate-naming: } }

@@ -966,3 +966,5 @@ private{
 >bst: ( array comparator -- bst ) [
   <bst> swap [ tree-insert ] #each
 ] ;
+
+pragma{ lint-suppress: { complex-word-undocumented: constructor-consistency: conversion-naming: dead-definition: deep-nesting: missing-doc-comment: missing-type-annotation: } }

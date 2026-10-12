@@ -347,3 +347,5 @@ inspect: method{ packed-f64 } [ "f64" (packed-inspect-helper) ] ;
 >string: method{ packed-u64 } [ inspect ] ;
 >string: method{ packed-f32 } [ inspect ] ;
 >string: method{ packed-f64 } [ inspect ] ;
+
+pragma{ lint-suppress: { broad-import: complex-word-undocumented: dead-definition: missing-doc-comment: missing-type-annotation: } }

@@ -1,0 +1,6 @@
+\ A module whose struct type word and `const` word both carry the const marker. The integration test
+\ imports it and then check-loads it, as `1z lint` does with a module the linter itself imports.
+
+const-pair: struct{ left right } ;
+
+PAIR-LIMIT: const [ 3 ] ;

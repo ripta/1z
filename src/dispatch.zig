@@ -352,6 +352,8 @@ pub const DispatchEntry = struct {
     /// of the key and a replaced body does not reshuffle order-sensitive consumers.
     ///
     /// Dispatch-frame entries bypass `register`, so a frame entry carries no meaningful sequence.
+    /// A check-overlay entry takes the sequence of the base entry it shadows, or draws a fresh one
+    /// from the base table's counter.
     sequence: u64 = 0,
     /// Whether a `.quotation` body calls a defining native at its top level, so dispatch runs it
     /// in a transient lexical frame of its own. Stamped by `Context.registerDispatch`, the one
@@ -359,8 +361,8 @@ pub const DispatchEntry = struct {
     /// since the compiled body brackets itself.
     may_define: bool = false,
     /// The check-mode load that registered this entry, or 0 for one registered outside check mode.
-    /// Stamped by `Context.registerDispatch`. `define-method` reads it to tell a collision with the
-    /// analyzer's own base scope from a duplicate inside the file being checked.
+    /// Stamped by `Context.registerDispatch`. `define-method` reads it to tell a collision with an
+    /// earlier check-mode load's overlay arm from a duplicate inside the file being checked.
     check_epoch: u32 = 0,
 };
 
@@ -594,7 +596,7 @@ pub const DispatchFrame = struct {
     }
 };
 
-const EntriesMap = std.HashMapUnmanaged(DispatchKey, DispatchEntry, DispatchKeyContext, 80);
+pub const EntriesMap = std.HashMapUnmanaged(DispatchKey, DispatchEntry, DispatchKeyContext, 80);
 
 /// Look up a binary dispatch entry in a single entries map, following the
 /// 4-step precedence: exact, wildcard-b, wildcard-a, both-wildcards.

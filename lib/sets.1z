@@ -11,3 +11,5 @@
 
 \ Elements in either set but not both
 @symmetric-difference: ( set1 set2 -- set ) [ 2dup @difference -rot> swap @difference @union ] ;
+
+pragma{ lint-suppress: { complex-word-undocumented: dead-definition: missing-doc-comment: missing-type-annotation: } }

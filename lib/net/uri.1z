@@ -949,3 +949,5 @@ decode-query: ( string -- hash ) [ (url-codec).decode-query ] ;
 \\ `application/x-www-form-urlencoded` body. Re-exported from
 \\ `lib/data/url.1z`; see `url.encode-query` for the full contract.
 encode-query: ( hash -- string ) [ (url-codec).encode-query ] ;
+
+pragma{ lint-suppress: { broad-import: complex-word-undocumented: constructor-consistency: dead-definition: deep-nesting: duplicate-definition: import-ordering: missing-type-annotation: predicate-naming: } }

@@ -254,3 +254,5 @@ unescape(permissive): ( string -- string ) [
   [ dup (us-remaining) 0 > ] [ (us-step-permissive) ] while
   out>>
 ] ;
+
+pragma{ lint-suppress: { broad-import: dead-definition: import-ordering: missing-type-annotation: } }

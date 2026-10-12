@@ -24,11 +24,23 @@ const DispatchKey = dispatch_mod.DispatchKey;
 const DispatchFrame = dispatch_mod.DispatchFrame;
 const DispatchTable = dispatch_mod.DispatchTable;
 
-/// One base-table dispatch write made inside a check-mode analysis bracket. A null `previous`
-/// means the key was absent, so restoring removes it.
+/// One dispatch write made inside a check-mode analysis bracket. `table` names the table the
+/// write landed in, so the undo restores the same one. A null `previous` means the key was absent,
+/// so restoring removes it.
 const CheckDispatchWrite = struct {
+    table: CheckDispatchTable,
     key: DispatchKey,
     previous: ?DispatchEntry,
+};
+
+const CheckDispatchTable = enum { base, overlay };
+
+/// The order `analysisDispatchEntriesForId` returns its entries in.
+pub const DispatchEntryOrder = enum {
+    /// Registration sequence, for consumers whose output must not depend on hash order.
+    by_sequence,
+    /// Type name, then registration sequence, for listings a person reads.
+    by_type_name,
 };
 
 const inline_expand = @import("inline_expand.zig");
@@ -1345,8 +1357,16 @@ pub const Context = struct {
     /// Stack of dispatch frames layered on top of `dispatch.entries`.
     /// Pushed by `with-isolation` for scoped method registrations.
     dispatch_frames: std.ArrayListUnmanaged(DispatchFrame) = .{},
-    /// What each base-table dispatch write replaced while a check-mode analysis bracket is open,
-    /// so the bracket can put the table back. See `beginCheckDispatchLog`.
+    /// Every dispatch arm a check-mode load registers. The shared table never sees them.
+    ///
+    /// A checked file can register an arm on a key the running program already uses: a bare
+    /// struct interns by shape, so a checked module's struct shares the live descriptor. Written
+    /// into the shared table, the checked arm would answer the program's own calls. Runtime
+    /// lookups read this table only while `check_mode` is on. The analyzers read it over the base
+    /// table always, since they run after the load ends.
+    check_dispatch_overlay: dispatch_mod.EntriesMap = .{},
+    /// What each base-table or overlay dispatch write replaced while a check-mode analysis
+    /// bracket is open, so the bracket can put the tables back. See `beginCheckDispatchLog`.
     check_dispatch_log: std.ArrayListUnmanaged(CheckDispatchWrite) = .{},
     /// Open `beginCheckDispatchLog` brackets. Writes are logged only while this is nonzero.
     check_dispatch_log_depth: u32 = 0,
@@ -1599,13 +1619,30 @@ pub const Context = struct {
     binding_names: *BindingNameStore = undefined,
 
     /// Turn check mode on, starting a new check-mode load when it was off. A caller already in check
-    /// mode keeps its epoch, so a nested load shares the outer load's identity. The caller restores
-    /// `check_mode` itself.
+    /// mode keeps its epoch, so a nested load shares the outer load's identity. The caller saves
+    /// `check_mode` first and hands it to `exitCheckMode`.
     pub fn enterCheckMode(self: *Context) void {
-        if (!self.check_mode) {
-            self.check_load_epoch = self.rootContext().next_check_load_epoch.fetchAdd(1, .monotonic) + 1;
-        }
+        if (self.check_mode) return;
+
+        self.check_load_epoch = self.rootContext().next_check_load_epoch.fetchAdd(1, .monotonic) + 1;
         self.check_mode = true;
+        self.invalidateCheckModeDispatchCaches();
+    }
+
+    /// Put back the `check_mode` value the caller saved before `enterCheckMode`.
+    pub fn exitCheckMode(self: *Context, prev: bool) void {
+        if (self.check_mode == prev) return;
+
+        self.check_mode = prev;
+        self.invalidateCheckModeDispatchCaches();
+    }
+
+    /// Runtime lookups read the check overlay only in check mode, so flipping the mode changes what
+    /// a lookup answers without any dispatch write. The generation bump drops every PIC entry filled
+    /// on the other side of the flip. The satisfies memo goes for the same reason.
+    fn invalidateCheckModeDispatchCaches(self: *Context) void {
+        self.dispatch.generation +%= 1;
+        self.protocol_satisfies_cache.clearRetainingCapacity();
     }
 
     /// Returns true when the instruction sequence ends with a call to `;`, `(import-locals-checked)`,
@@ -2506,6 +2543,7 @@ pub const Context = struct {
             frame.deinit(self.allocator);
         }
         self.dispatch_frames.deinit(self.allocator);
+        self.check_dispatch_overlay.deinit(self.allocator);
         self.check_dispatch_log.deinit(self.allocator);
         self.builtin_type_values.deinit(self.allocator);
         self.resource_type_values.deinit(self.allocator);
@@ -4972,16 +5010,21 @@ pub const Context = struct {
         return false;
     }
 
-    /// `lookupWordLocked` with the base scope left out: the frames below the durable floor, the
-    /// native dictionary, and each ancestor's frames below its floor. Those are the rungs the
-    /// dictionary-shadow probe treats as base scope, so the const guard and that probe agree on
-    /// what a check-mode load may redefine.
-    fn lookupAboveBaseScopeLocked(self: *const Context, name: []const u8, vis: ModuleDepsVisibility) ?WordDefinition {
+    /// `lookupWordLocked` over only the frames a check-mode load binds into: the import-target
+    /// frame and the frames above it. A const bound there is the loaded file's own.
+    ///
+    /// Everything below the import target belongs to whoever runs the check. That is the base
+    /// scope, and also the caller's own frames between the durable floor and the import target.
+    /// `native.load-check-file` moves only the import target, so under `1z lint` those frames hold
+    /// the linter's imports, and linting a module the linter itself imports would otherwise stop
+    /// at that module's first const. Ancestor contexts are left out for the same reason. A load
+    /// binds into its own context, never a parent's.
+    fn lookupInLoadTargetLocked(self: *const Context, name: []const u8, vis: ModuleDepsVisibility) ?WordDefinition {
         var key: ?PrehashedName = null;
 
-        const floor = self.durable_frame_floor orelse 0;
+        const bottom = self.import_frame_index orelse (self.durable_frame_floor orelse 0);
         var i = self.local_frames.items.len;
-        while (i > floor) {
+        while (i > bottom) {
             i -= 1;
             if (i < self.local_frame_kinds.items.len and self.local_frame_kinds.items[i] == .module_deps) {
                 const m = if (i < self.local_frame_modules.items.len) self.local_frame_modules.items[i] else null;
@@ -4990,14 +5033,6 @@ pub const Context = struct {
                 }
             }
             const frame = &self.local_frames.items[i];
-            if (frame.count() == 0) continue;
-            if (frame.getAdapted(name, prehash(&key, name))) |def| return def;
-        }
-
-        var ancestor = self.parent_context;
-        while (ancestor) |ctx| : (ancestor = ctx.parent_context) {
-            const anc_floor = ctx.durable_frame_floor orelse continue;
-            const frame = &ctx.local_frames.items[anc_floor];
             if (frame.count() == 0) continue;
             if (frame.getAdapted(name, prehash(&key, name))) |def| return def;
         }
@@ -5030,13 +5065,13 @@ pub const Context = struct {
         // while a check-mode load runs from inside a module word whose module imports that const,
         // must not block the loaded file's own definitions.
         //
-        // A check-mode load leaves the base scope out of the lookup, as the dictionary-shadow probe
-        // below does. Its definitions never execute, so a const it would collide with there is the
-        // analyzer's own, and checking the prelude would otherwise stop at its first type word. A
-        // const bound by the loaded file itself still blocks.
+        // A check-mode load looks only where the loaded file binds. Its definitions never execute,
+        // so a const it would collide with anywhere else is the analyzer's own, and checking the
+        // prelude would otherwise stop at its first type word. A const bound by the loaded file
+        // itself still blocks.
         const const_guard_vis: ModuleDepsVisibility = .{ .deps_modules = &.{}, .defining_module = null };
         const visible_existing = if (self.check_mode)
-            self.lookupAboveBaseScopeLocked(name, const_guard_vis)
+            self.lookupInLoadTargetLocked(name, const_guard_vis)
         else
             self.lookupWordLocked(name, const_guard_vis);
         const existing_is_const = blk: {
@@ -6389,6 +6424,7 @@ pub const Context = struct {
 
     /// Look up a binary dispatch entry by walking dispatch frames (top to
     /// bottom), then the base dispatch table, then the parent context chain.
+    /// In check mode each level's check overlay answers first.
     pub fn lookupBinaryDispatch(self: *const Context, dispatch_id: u32, type_a: *const value_mod.TypeDescriptor, type_b: *const value_mod.TypeDescriptor) ?DispatchEntry {
         self.acquireSharedRead();
         defer self.releaseSharedRead();
@@ -6396,6 +6432,8 @@ pub const Context = struct {
     }
 
     fn lookupBinaryDispatchLocked(self: *const Context, dispatch_id: u32, type_a: *const value_mod.TypeDescriptor, type_b: *const value_mod.TypeDescriptor) ?DispatchEntry {
+        if (self.check_mode) return self.lookupBinaryDispatchChecked(dispatch_id, type_a, type_b);
+
         const any_sentinel = self.getDispatchAnySentinel().descriptor.?;
         // Walk dispatch frames top-to-bottom
         var i = self.dispatch_frames.items.len;
@@ -6422,6 +6460,7 @@ pub const Context = struct {
 
     /// Look up a unary dispatch entry by walking dispatch frames (top to
     /// bottom), then the base dispatch table, then the parent context chain.
+    /// In check mode each level's check overlay answers first.
     pub fn lookupUnaryDispatch(self: *const Context, dispatch_id: u32, type_a: *const value_mod.TypeDescriptor) ?DispatchEntry {
         self.acquireSharedRead();
         defer self.releaseSharedRead();
@@ -6429,6 +6468,8 @@ pub const Context = struct {
     }
 
     fn lookupUnaryDispatchLocked(self: *const Context, dispatch_id: u32, type_a: *const value_mod.TypeDescriptor) ?DispatchEntry {
+        if (self.check_mode) return self.lookupUnaryDispatchChecked(dispatch_id, type_a);
+
         const any_sentinel = self.getDispatchAnySentinel().descriptor.?;
         const unary_sentinel = self.getDispatchUnarySentinel().descriptor.?;
         // Walk dispatch frames top-to-bottom
@@ -6451,6 +6492,61 @@ pub const Context = struct {
             ancestor = ctx.parent_context;
         }
 
+        return null;
+    }
+
+    /// One key at one context level while check mode is on: the check overlay, then the dispatch
+    /// frames top-down, then the base table. The analysis view merges the same layers in the same
+    /// order.
+    fn checkedLevelEntry(ctx: *const Context, key: DispatchKey) ?DispatchEntry {
+        if (ctx.check_dispatch_overlay.get(key)) |entry| return entry;
+
+        var i = ctx.dispatch_frames.items.len;
+        while (i > 0) {
+            i -= 1;
+            if (ctx.dispatch_frames.items[i].entries.get(key)) |entry| return entry;
+        }
+
+        return ctx.dispatch.entries.get(key);
+    }
+
+    /// The binary lookup while check mode is on.
+    ///
+    /// At each context level, every precedence step probes all three layers before the next step
+    /// runs. A live arm on the exact types therefore still beats a checked `any` arm, as it did
+    /// when both sat in one table.
+    fn lookupBinaryDispatchChecked(self: *const Context, dispatch_id: u32, type_a: *const value_mod.TypeDescriptor, type_b: *const value_mod.TypeDescriptor) ?DispatchEntry {
+        var level: ?*const Context = self;
+        while (level) |ctx| : (level = ctx.parent_context) {
+            const any_sentinel = ctx.getDispatchAnySentinel().descriptor.?;
+            const steps = [_]DispatchKey{
+                .{ .dispatch_id = dispatch_id, .type_a = type_a, .type_b = type_b },
+                .{ .dispatch_id = dispatch_id, .type_a = type_a, .type_b = any_sentinel },
+                .{ .dispatch_id = dispatch_id, .type_a = any_sentinel, .type_b = type_b },
+                .{ .dispatch_id = dispatch_id, .type_a = any_sentinel, .type_b = any_sentinel },
+            };
+            for (steps) |key| {
+                if (checkedLevelEntry(ctx, key)) |entry| return entry;
+            }
+        }
+        return null;
+    }
+
+    /// The unary lookup while check mode is on. Exact, then `any`, each across all three layers
+    /// of a level before the next step runs.
+    fn lookupUnaryDispatchChecked(self: *const Context, dispatch_id: u32, type_a: *const value_mod.TypeDescriptor) ?DispatchEntry {
+        var level: ?*const Context = self;
+        while (level) |ctx| : (level = ctx.parent_context) {
+            const any_sentinel = ctx.getDispatchAnySentinel().descriptor.?;
+            const unary_sentinel = ctx.getDispatchUnarySentinel().descriptor.?;
+            const steps = [_]DispatchKey{
+                .{ .dispatch_id = dispatch_id, .type_a = type_a, .type_b = unary_sentinel },
+                .{ .dispatch_id = dispatch_id, .type_a = any_sentinel, .type_b = unary_sentinel },
+            };
+            for (steps) |key| {
+                if (checkedLevelEntry(ctx, key)) |entry| return entry;
+            }
+        }
         return null;
     }
 
@@ -7483,13 +7579,12 @@ pub const Context = struct {
         }
     }
 
-    /// Start recording what each base-table dispatch write replaces, so `endCheckDispatchLog` can
-    /// put the table back. Returns the mark to hand to it.
+    /// Start recording what each base-table or overlay dispatch write replaces, so
+    /// `endCheckDispatchLog` can put the tables back. Returns the mark to hand to it.
     ///
     /// A check-mode analysis in a long-lived context needs this. Its definitions sit in a frame
-    /// it pops, but a `method{` arm on a native or a prelude generic lands in the shared table,
-    /// and under check mode it replaces the base arm rather than raising. Left in place, the
-    /// analyzed document's body answers every later dispatch on that key.
+    /// it pops, but its `method{` arms land in the context's check overlay, which outlives the
+    /// analysis. Left in place, the analyzed document's arms answer the next analysis's lookups.
     pub fn beginCheckDispatchLog(self: *Context) usize {
         self.acquireSharedWrite();
         defer self.releaseSharedWrite();
@@ -7498,9 +7593,9 @@ pub const Context = struct {
         return target.check_dispatch_log.items.len;
     }
 
-    /// Undo every base-table dispatch write recorded since `mark`, newest first, so a key written
-    /// twice ends at the entry it held before the first write. A restored entry keeps its own
-    /// sequence and check epoch.
+    /// Undo every dispatch write recorded since `mark`, newest first, so a key written twice ends
+    /// at the entry it held before the first write. A restored entry keeps its own sequence and
+    /// check epoch.
     pub fn endCheckDispatchLog(self: *Context, mark: usize) void {
         self.acquireSharedWrite();
         defer self.releaseSharedWrite();
@@ -7510,11 +7605,15 @@ pub const Context = struct {
         while (i > mark) {
             i -= 1;
             const write = target.check_dispatch_log.items[i];
+            const entries = switch (write.table) {
+                .base => &target.dispatch.entries,
+                .overlay => &target.check_dispatch_overlay,
+            };
             if (write.previous) |prev| {
                 // The key is present, since the write that displaced it put it there.
-                target.dispatch.entries.getPtr(write.key).?.* = prev;
+                entries.getPtr(write.key).?.* = prev;
             } else {
-                _ = target.dispatch.entries.remove(write.key);
+                _ = entries.remove(write.key);
             }
         }
 
@@ -7530,8 +7629,8 @@ pub const Context = struct {
         target.check_dispatch_log_depth -= 1;
     }
 
-    /// Register a dispatch entry into the topmost dispatch frame, or the
-    /// base `dispatch.entries` if no frames are pushed.
+    /// Register a dispatch entry into the check overlay in check mode. Otherwise it goes into the
+    /// topmost dispatch frame, or the base `dispatch.entries` if no frames are pushed.
     pub fn registerDispatch(self: *Context, key: DispatchKey, entry: DispatchEntry, allow_overwrite: bool) !void {
         self.acquireSharedWrite();
         defer self.releaseSharedWrite();
@@ -7550,7 +7649,9 @@ pub const Context = struct {
         };
         stamped.check_epoch = if (self.check_mode) self.check_load_epoch else 0;
 
-        if (target.dispatch_frames.items.len > 0) {
+        if (self.check_mode) {
+            try target.registerCheckOverlayLocked(key, stamped, allow_overwrite);
+        } else if (target.dispatch_frames.items.len > 0) {
             const top = target.dispatch_frames.items.len - 1;
             const gop = try target.dispatch_frames.items[top].entries.getOrPut(target.allocator, key);
             if (gop.found_existing and !allow_overwrite) {
@@ -7563,6 +7664,7 @@ pub const Context = struct {
             // needs a record to be undone.
             if (target.check_dispatch_log_depth > 0) {
                 try target.check_dispatch_log.append(target.allocator, .{
+                    .table = .base,
                     .key = key,
                     .previous = target.dispatch.entries.get(key),
                 });
@@ -7585,8 +7687,43 @@ pub const Context = struct {
         }
     }
 
-    /// Look up a dispatch entry by key, walking frames then base table.
-    /// Used for duplicate/provenance checks during method registration.
+    /// Write a check-mode arm into `check_dispatch_overlay`, never the base table.
+    ///
+    /// The arm takes the sequence of the base entry it shadows, so an analyzer that orders arms by
+    /// sequence sees the checked arm where the live one stood. A key new to both tables draws from
+    /// the base table's counter, so overlay and base sequences never collide.
+    fn registerCheckOverlayLocked(self: *Context, key: DispatchKey, entry: DispatchEntry, allow_overwrite: bool) !void {
+        const gop = try self.check_dispatch_overlay.getOrPut(self.allocator, key);
+        if (gop.found_existing and !allow_overwrite) return error.DuplicateMethod;
+
+        const previous: ?DispatchEntry = if (gop.found_existing) gop.value_ptr.* else null;
+        if (self.check_dispatch_log_depth > 0) {
+            self.check_dispatch_log.append(self.allocator, .{
+                .table = .overlay,
+                .key = key,
+                .previous = previous,
+            }) catch |err| {
+                if (previous == null) _ = self.check_dispatch_overlay.remove(key);
+                return err;
+            };
+        }
+
+        var stamped = entry;
+        if (self.dispatch.entries.get(key)) |base| {
+            stamped.sequence = base.sequence;
+        } else if (previous) |prev| {
+            stamped.sequence = prev.sequence;
+        } else {
+            stamped.sequence = self.dispatch.next_sequence;
+            self.dispatch.next_sequence += 1;
+        }
+
+        gop.value_ptr.* = stamped;
+        self.dispatch.generation +%= 1;
+    }
+
+    /// Look up a dispatch entry by key, walking the check overlay in check mode, then frames, then
+    /// the base table. Used for duplicate/provenance checks during method registration.
     pub fn getDispatchEntry(self: *const Context, key: DispatchKey) ?DispatchEntry {
         self.acquireSharedRead();
         defer self.releaseSharedRead();
@@ -7594,6 +7731,16 @@ pub const Context = struct {
     }
 
     fn getDispatchEntryLocked(self: *const Context, key: DispatchKey) ?DispatchEntry {
+        return self.getDispatchEntryIn(key, self.check_mode);
+    }
+
+    /// `include_overlay` is the executing context's check mode, carried through the redirect so a
+    /// load running on a task still sees the overlay it writes on the target.
+    fn getDispatchEntryIn(self: *const Context, key: DispatchKey, include_overlay: bool) ?DispatchEntry {
+        if (include_overlay) {
+            if (self.check_dispatch_overlay.get(key)) |entry| return entry;
+        }
+
         // Walk dispatch frames top-to-bottom
         var i = self.dispatch_frames.items.len;
         while (i > 0) {
@@ -7605,13 +7752,14 @@ pub const Context = struct {
         // A redirected load registers on the target, so a duplicate check
         // during the load must see what was just written there.
         if (self.load_target) |target| {
-            if (@as(*const Context, target) != self) return target.getDispatchEntryLocked(key);
+            if (@as(*const Context, target) != self) return target.getDispatchEntryIn(key, include_overlay);
         }
         return null;
     }
 
     /// Collect all dispatch key-entry pairs for a given dispatch ID, including
-    /// entries from all frames, the base table, and parent contexts.
+    /// entries from all frames, the base table, and parent contexts. The check
+    /// overlay joins them in check mode only. See `analysisDispatchEntriesForId`.
     pub fn dispatchEntriesForId(self: *const Context, dispatch_id: u32, alloc: Allocator) ![]DispatchTable.KeyEntryPair {
         self.acquireSharedRead();
         defer self.releaseSharedRead();
@@ -7625,51 +7773,117 @@ pub const Context = struct {
     }
 
     fn dispatchEntriesForIdLocked(self: *const Context, dispatch_id: u32, alloc: Allocator) ![]DispatchTable.KeyEntryPair {
-        var results: std.ArrayListUnmanaged(DispatchTable.KeyEntryPair) = .{};
-        // Walk dispatch frames top-to-bottom
-        var i = self.dispatch_frames.items.len;
-        while (i > 0) {
-            i -= 1;
-            try dispatch_mod.collectEntriesForDispatchId(&self.dispatch_frames.items[i].entries, dispatch_id, &results, alloc);
-        }
-        // Base dispatch table
-        try dispatch_mod.collectEntriesForDispatchId(&self.dispatch.entries, dispatch_id, &results, alloc);
-
-        var ancestor = self.parent_context;
-        while (ancestor) |ctx| {
-            var j = ctx.dispatch_frames.items.len;
-            while (j > 0) {
-                j -= 1;
-                try dispatch_mod.collectEntriesForDispatchId(&ctx.dispatch_frames.items[j].entries, dispatch_id, &results, alloc);
-            }
-            try dispatch_mod.collectEntriesForDispatchId(&ctx.dispatch.entries, dispatch_id, &results, alloc);
-            ancestor = ctx.parent_context;
-        }
-        const slice = try results.toOwnedSlice(alloc);
-        std.mem.sort(DispatchTable.KeyEntryPair, slice, self, struct {
-            fn lessThan(ctx: *const Context, a: DispatchTable.KeyEntryPair, b: DispatchTable.KeyEntryPair) bool {
-                const a_name = ctx.lookupTypeNameByDescriptorLocked(a.key.type_a) orelse "";
-                const b_name = ctx.lookupTypeNameByDescriptorLocked(b.key.type_a) orelse "";
-                const cmp_a = std.mem.order(u8, a_name, b_name);
-                if (cmp_a != .eq) return cmp_a == .lt;
-                const a_b_name = ctx.lookupTypeNameByDescriptorLocked(a.key.type_b) orelse "";
-                const b_b_name = ctx.lookupTypeNameByDescriptorLocked(b.key.type_b) orelse "";
-                const cmp_b = std.mem.order(u8, a_b_name, b_b_name);
-                if (cmp_b != .eq) return cmp_b == .lt;
-
-                // Two descriptors resolving to the same name, or to no name at all, would
-                // otherwise keep raw hash-collection order. Registration sequence breaks the tie
-                // for base-table entries. A tie between frame entries keeps collection order,
-                // which is hash order; that residual cannot reach emission, since dispatch frames
-                // are popped before freeze collects.
-                return a.entry.sequence < b.entry.sequence;
-            }
-        }.lessThan);
+        const slice = try self.collectDispatchEntriesLocked(dispatch_id, self.check_mode, alloc);
+        self.sortDispatchEntries(slice, .by_type_name);
         return slice;
     }
 
+    /// Collect the entries registered under `dispatch_id` as an analyzer sees them, in `order`.
+    /// The caller owns the returned slice.
+    ///
+    /// This reads the check overlay whether or not check mode is on. An analyzer runs after the
+    /// check-mode load it inspects has ended, and the arms the checked file registered sit in the
+    /// overlay alone.
+    pub fn analysisDispatchEntriesForId(
+        self: *const Context,
+        dispatch_id: u32,
+        order: DispatchEntryOrder,
+        alloc: Allocator,
+    ) ![]DispatchTable.KeyEntryPair {
+        self.acquireSharedRead();
+        defer self.releaseSharedRead();
+
+        const slice = try self.collectDispatchEntriesLocked(dispatch_id, true, alloc);
+        self.sortDispatchEntries(slice, order);
+        return slice;
+    }
+
+    /// Collect the entries registered under `dispatch_id` across this context and its ancestors,
+    /// in no particular order. The caller owns the returned slice.
+    ///
+    /// Each level reads its check overlay when `include_overlay` is set, then its dispatch frames
+    /// top to bottom, then its base table. A key held in more than one place keeps the nearest
+    /// entry, which is the one a lookup answers with.
+    fn collectDispatchEntriesLocked(
+        self: *const Context,
+        dispatch_id: u32,
+        include_overlay: bool,
+        alloc: Allocator,
+    ) ![]DispatchTable.KeyEntryPair {
+        var results: std.ArrayListUnmanaged(DispatchTable.KeyEntryPair) = .{};
+        errdefer results.deinit(alloc);
+
+        var seen: std.HashMapUnmanaged(DispatchKey, void, dispatch_mod.DispatchKeyContext, 80) = .{};
+        defer seen.deinit(alloc);
+
+        var level: ?*const Context = self;
+        while (level) |ctx| : (level = ctx.parent_context) {
+            if (include_overlay) {
+                try collectUnseenDispatchEntries(&ctx.check_dispatch_overlay, dispatch_id, &seen, &results, alloc);
+            }
+
+            var i = ctx.dispatch_frames.items.len;
+            while (i > 0) {
+                i -= 1;
+                try collectUnseenDispatchEntries(&ctx.dispatch_frames.items[i].entries, dispatch_id, &seen, &results, alloc);
+            }
+
+            try collectUnseenDispatchEntries(&ctx.dispatch.entries, dispatch_id, &seen, &results, alloc);
+        }
+
+        return results.toOwnedSlice(alloc);
+    }
+
+    fn collectUnseenDispatchEntries(
+        entries: *const dispatch_mod.EntriesMap,
+        dispatch_id: u32,
+        seen: *std.HashMapUnmanaged(DispatchKey, void, dispatch_mod.DispatchKeyContext, 80),
+        results: *std.ArrayListUnmanaged(DispatchTable.KeyEntryPair),
+        alloc: Allocator,
+    ) !void {
+        var iter = entries.iterator();
+        while (iter.next()) |entry| {
+            if (entry.key_ptr.dispatch_id != dispatch_id) continue;
+
+            const gop = try seen.getOrPut(alloc, entry.key_ptr.*);
+            if (gop.found_existing) continue;
+
+            try results.append(alloc, .{ .key = entry.key_ptr.*, .entry = entry.value_ptr.* });
+        }
+    }
+
+    fn sortDispatchEntries(self: *const Context, slice: []DispatchTable.KeyEntryPair, order: DispatchEntryOrder) void {
+        switch (order) {
+            .by_sequence => std.mem.sort(DispatchTable.KeyEntryPair, slice, {}, struct {
+                fn lessThan(_: void, a: DispatchTable.KeyEntryPair, b: DispatchTable.KeyEntryPair) bool {
+                    return a.entry.sequence < b.entry.sequence;
+                }
+            }.lessThan),
+            .by_type_name => std.mem.sort(DispatchTable.KeyEntryPair, slice, self, struct {
+                fn lessThan(ctx: *const Context, a: DispatchTable.KeyEntryPair, b: DispatchTable.KeyEntryPair) bool {
+                    const a_name = ctx.lookupTypeNameByDescriptorLocked(a.key.type_a) orelse "";
+                    const b_name = ctx.lookupTypeNameByDescriptorLocked(b.key.type_a) orelse "";
+                    const cmp_a = std.mem.order(u8, a_name, b_name);
+                    if (cmp_a != .eq) return cmp_a == .lt;
+                    const a_b_name = ctx.lookupTypeNameByDescriptorLocked(a.key.type_b) orelse "";
+                    const b_b_name = ctx.lookupTypeNameByDescriptorLocked(b.key.type_b) orelse "";
+                    const cmp_b = std.mem.order(u8, a_b_name, b_b_name);
+                    if (cmp_b != .eq) return cmp_b == .lt;
+
+                    // Two descriptors resolving to the same name, or to no name at all, would
+                    // otherwise keep raw hash-collection order. Registration sequence breaks the
+                    // tie for base-table and overlay entries. A tie between frame entries keeps
+                    // collection order, which is hash order; that residual cannot reach emission,
+                    // since dispatch frames are popped before freeze collects.
+                    return a.entry.sequence < b.entry.sequence;
+                }
+            }.lessThan),
+        }
+    }
+
     /// Collect all dispatch keys for a given dispatch ID, including
-    /// entries from all frames, the base table, and parent contexts.
+    /// entries from all frames, the base table, and parent contexts. The check
+    /// overlay joins them in check mode only.
     pub fn dispatchKeysForId(self: *const Context, dispatch_id: u32, alloc: Allocator) ![]DispatchKey {
         self.acquireSharedRead();
         defer self.releaseSharedRead();
@@ -7683,27 +7897,12 @@ pub const Context = struct {
     }
 
     fn dispatchKeysForIdLocked(self: *const Context, dispatch_id: u32, alloc: Allocator) ![]DispatchKey {
-        var results: std.ArrayListUnmanaged(DispatchKey) = .{};
-        // Walk dispatch frames top-to-bottom
-        var i = self.dispatch_frames.items.len;
-        while (i > 0) {
-            i -= 1;
-            try dispatch_mod.collectKeysForDispatchId(&self.dispatch_frames.items[i].entries, dispatch_id, &results, alloc);
-        }
-        // Base dispatch table
-        try dispatch_mod.collectKeysForDispatchId(&self.dispatch.entries, dispatch_id, &results, alloc);
+        const pairs = try self.collectDispatchEntriesLocked(dispatch_id, self.check_mode, alloc);
+        defer alloc.free(pairs);
 
-        var ancestor = self.parent_context;
-        while (ancestor) |ctx| {
-            var j = ctx.dispatch_frames.items.len;
-            while (j > 0) {
-                j -= 1;
-                try dispatch_mod.collectKeysForDispatchId(&ctx.dispatch_frames.items[j].entries, dispatch_id, &results, alloc);
-            }
-            try dispatch_mod.collectKeysForDispatchId(&ctx.dispatch.entries, dispatch_id, &results, alloc);
-            ancestor = ctx.parent_context;
-        }
-        const slice = try results.toOwnedSlice(alloc);
+        const slice = try alloc.alloc(DispatchKey, pairs.len);
+        for (pairs, slice) |pair, *key| key.* = pair.key;
+
         std.mem.sort(DispatchKey, slice, self, struct {
             fn lessThan(ctx: *const Context, a: DispatchKey, b: DispatchKey) bool {
                 const a_name = ctx.lookupTypeNameByDescriptorLocked(a.type_a) orelse "";
@@ -13534,9 +13733,16 @@ test "endCheckDispatchLog: puts back a replaced entry and removes an added one" 
     try ctx.registerDispatch(replaced, .{ .body = .{ .quotation = .{ .instructions = &check_body } } }, true);
     try ctx.registerDispatch(added, .{ .body = .{ .quotation = .{ .instructions = &check_body } } }, false);
 
+    try std.testing.expectEqual(@as(usize, 2), ctx.check_dispatch_overlay.count());
+    try std.testing.expectEqual(@as([*]const Instruction, &base_body), ctx.dispatch.entries.get(replaced).?.body.quotation.instructions.ptr);
+    try std.testing.expect(ctx.dispatch.entries.get(added) == null);
+
     const generation = ctx.dispatch.generation;
     ctx.endCheckDispatchLog(mark);
-    ctx.check_mode = false;
+    ctx.exitCheckMode(false);
+
+    try std.testing.expectEqual(@as(usize, 0), ctx.check_dispatch_overlay.count());
+    try std.testing.expect(ctx.dispatch.entries.get(added) == null);
 
     const restored = ctx.getDispatchEntry(replaced).?;
     try std.testing.expectEqual(@as([*]const Instruction, &base_body), restored.body.quotation.instructions.ptr);
@@ -13585,6 +13791,188 @@ test "registerDispatch: records nothing outside a check dispatch bracket" {
     const key: DispatchKey = .{ .dispatch_id = 974, .type_a = fixnum_tv.descriptor.?, .type_b = unary };
     try ctx.registerDispatch(key, .{ .body = .{ .quotation = .{ .instructions = &body } } }, false);
     try std.testing.expectEqual(@as(usize, 0), ctx.check_dispatch_log.items.len);
+}
+
+test "registerDispatch: a check-mode write lands in the overlay and leaves the base arm alone" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const fixnum_tv = ctx.lookupBuiltinTypeValue("fixnum").?;
+    const unary = ctx.getDispatchUnarySentinel().descriptor.?;
+    const live_body = [_]Instruction{.{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 0 }};
+    const check_body = [_]Instruction{.{ .op = .{ .push_literal = .{ .fixnum = 2 } }, .line = 0 }};
+
+    const key: DispatchKey = .{ .dispatch_id = 975, .type_a = fixnum_tv.descriptor.?, .type_b = unary };
+    try ctx.registerDispatch(key, .{ .body = .{ .quotation = .{ .instructions = &live_body } } }, false);
+
+    // The live arm is no collision for a check-mode registration without overwrite.
+    ctx.enterCheckMode();
+    try ctx.registerDispatch(key, .{ .body = .{ .quotation = .{ .instructions = &check_body } } }, false);
+
+    const overlay_entry = ctx.check_dispatch_overlay.get(key).?;
+    try std.testing.expectEqual(@as([*]const Instruction, &check_body), overlay_entry.body.quotation.instructions.ptr);
+    try std.testing.expectEqual(ctx.check_load_epoch, overlay_entry.check_epoch);
+    try std.testing.expectEqual(@as([*]const Instruction, &live_body), ctx.dispatch.entries.get(key).?.body.quotation.instructions.ptr);
+    try std.testing.expectEqual(@as([*]const Instruction, &check_body), ctx.getDispatchEntry(key).?.body.quotation.instructions.ptr);
+
+    // A second write from the same load is a duplicate.
+    try std.testing.expectError(
+        error.DuplicateMethod,
+        ctx.registerDispatch(key, .{ .body = .{ .quotation = .{ .instructions = &check_body } } }, false),
+    );
+
+    ctx.exitCheckMode(false);
+    try std.testing.expectEqual(@as([*]const Instruction, &live_body), ctx.getDispatchEntry(key).?.body.quotation.instructions.ptr);
+}
+
+test "lookupUnaryDispatch: reads the overlay only in check mode" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const fixnum = ctx.lookupBuiltinTypeValue("fixnum").?.descriptor.?;
+    const string = ctx.lookupBuiltinTypeValue("string").?.descriptor.?;
+    const unary = ctx.getDispatchUnarySentinel().descriptor.?;
+    const live_body = [_]Instruction{.{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 0 }};
+    const check_body = [_]Instruction{.{ .op = .{ .push_literal = .{ .fixnum = 2 } }, .line = 0 }};
+    const string_body = [_]Instruction{.{ .op = .{ .push_literal = .{ .fixnum = 3 } }, .line = 0 }};
+
+    const did: u32 = 976;
+    try ctx.registerDispatch(.{ .dispatch_id = did, .type_a = fixnum, .type_b = unary }, .{ .body = .{ .quotation = .{ .instructions = &live_body } } }, false);
+
+    ctx.enterCheckMode();
+    try ctx.registerDispatch(.{ .dispatch_id = did, .type_a = fixnum, .type_b = unary }, .{ .body = .{ .quotation = .{ .instructions = &check_body } } }, true);
+    try ctx.registerDispatch(.{ .dispatch_id = did, .type_a = string, .type_b = unary }, .{ .body = .{ .quotation = .{ .instructions = &string_body } } }, false);
+
+    try std.testing.expectEqual(@as([*]const Instruction, &check_body), ctx.lookupUnaryDispatch(did, fixnum).?.body.quotation.instructions.ptr);
+    try std.testing.expectEqual(@as([*]const Instruction, &string_body), ctx.lookupUnaryDispatch(did, string).?.body.quotation.instructions.ptr);
+    try std.testing.expectEqual(@as(usize, 2), (try ctx.dispatchKeysForId(did, ctx.arena.allocator())).len);
+
+    ctx.exitCheckMode(false);
+    try std.testing.expectEqual(@as([*]const Instruction, &live_body), ctx.lookupUnaryDispatch(did, fixnum).?.body.quotation.instructions.ptr);
+    try std.testing.expect(ctx.lookupUnaryDispatch(did, string) == null);
+    try std.testing.expectEqual(@as(usize, 1), (try ctx.dispatchKeysForId(did, ctx.arena.allocator())).len);
+}
+
+test "lookupDispatch: in check mode a live exact arm beats an overlay any arm" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const fixnum = ctx.lookupBuiltinTypeValue("fixnum").?.descriptor.?;
+    const string = ctx.lookupBuiltinTypeValue("string").?.descriptor.?;
+    const any = ctx.getDispatchAnySentinel().descriptor.?;
+    const unary = ctx.getDispatchUnarySentinel().descriptor.?;
+    const live_body = [_]Instruction{.{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 0 }};
+    const any_body = [_]Instruction{.{ .op = .{ .push_literal = .{ .fixnum = 2 } }, .line = 0 }};
+
+    const unary_did: u32 = 977;
+    const binary_did: u32 = 978;
+    try ctx.registerDispatch(.{ .dispatch_id = unary_did, .type_a = fixnum, .type_b = unary }, .{ .body = .{ .quotation = .{ .instructions = &live_body } } }, false);
+    try ctx.registerDispatch(.{ .dispatch_id = binary_did, .type_a = fixnum, .type_b = fixnum }, .{ .body = .{ .quotation = .{ .instructions = &live_body } } }, false);
+
+    ctx.enterCheckMode();
+    try ctx.registerDispatch(.{ .dispatch_id = unary_did, .type_a = any, .type_b = unary }, .{ .body = .{ .quotation = .{ .instructions = &any_body } } }, false);
+    try ctx.registerDispatch(.{ .dispatch_id = binary_did, .type_a = any, .type_b = any }, .{ .body = .{ .quotation = .{ .instructions = &any_body } } }, false);
+
+    try std.testing.expectEqual(@as([*]const Instruction, &live_body), ctx.lookupUnaryDispatch(unary_did, fixnum).?.body.quotation.instructions.ptr);
+    try std.testing.expectEqual(@as([*]const Instruction, &any_body), ctx.lookupUnaryDispatch(unary_did, string).?.body.quotation.instructions.ptr);
+    try std.testing.expectEqual(@as([*]const Instruction, &live_body), ctx.lookupBinaryDispatch(binary_did, fixnum, fixnum).?.body.quotation.instructions.ptr);
+    try std.testing.expectEqual(@as([*]const Instruction, &any_body), ctx.lookupBinaryDispatch(binary_did, fixnum, string).?.body.quotation.instructions.ptr);
+
+    ctx.exitCheckMode(false);
+}
+
+test "registerDispatch: an overlay arm takes the sequence of the base arm it shadows" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const fixnum = ctx.lookupBuiltinTypeValue("fixnum").?.descriptor.?;
+    const string = ctx.lookupBuiltinTypeValue("string").?.descriptor.?;
+    const float = ctx.lookupBuiltinTypeValue("float").?.descriptor.?;
+    const unary = ctx.getDispatchUnarySentinel().descriptor.?;
+    const body = [_]Instruction{.{ .op = .{ .push_literal = .{ .fixnum = 0 } }, .line = 0 }};
+
+    const did: u32 = 977;
+    const shadowed: DispatchKey = .{ .dispatch_id = did, .type_a = fixnum, .type_b = unary };
+    const fresh: DispatchKey = .{ .dispatch_id = did, .type_a = string, .type_b = unary };
+    const later: DispatchKey = .{ .dispatch_id = did, .type_a = float, .type_b = unary };
+    try ctx.registerDispatch(shadowed, .{ .body = .{ .quotation = .{ .instructions = &body } } }, false);
+    const base_sequence = ctx.dispatch.entries.get(shadowed).?.sequence;
+
+    ctx.enterCheckMode();
+    try ctx.registerDispatch(shadowed, .{ .body = .{ .quotation = .{ .instructions = &body } } }, false);
+    try std.testing.expectEqual(base_sequence, ctx.check_dispatch_overlay.get(shadowed).?.sequence);
+
+    const next_before = ctx.dispatch.next_sequence;
+    try ctx.registerDispatch(fresh, .{ .body = .{ .quotation = .{ .instructions = &body } } }, false);
+    try std.testing.expectEqual(next_before, ctx.check_dispatch_overlay.get(fresh).?.sequence);
+    try std.testing.expectEqual(next_before + 1, ctx.dispatch.next_sequence);
+
+    // A rewrite of an overlay arm keeps its sequence.
+    try ctx.registerDispatch(fresh, .{ .body = .{ .quotation = .{ .instructions = &body } } }, true);
+    try std.testing.expectEqual(next_before, ctx.check_dispatch_overlay.get(fresh).?.sequence);
+
+    ctx.exitCheckMode(false);
+    try ctx.registerDispatch(later, .{ .body = .{ .quotation = .{ .instructions = &body } } }, false);
+    try std.testing.expect(ctx.dispatch.entries.get(later).?.sequence > next_before);
+}
+
+test "exitCheckMode: bumps the dispatch generation on each transition" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const before_enter = ctx.dispatch.generation;
+    ctx.enterCheckMode();
+    const after_enter = ctx.dispatch.generation;
+    try std.testing.expect(after_enter != before_enter);
+
+    // A nested entry is no transition, so a PIC filled inside the outer load stays valid.
+    const prev = ctx.check_mode;
+    ctx.enterCheckMode();
+    ctx.exitCheckMode(prev);
+    try std.testing.expectEqual(after_enter, ctx.dispatch.generation);
+
+    ctx.exitCheckMode(false);
+    try std.testing.expect(!ctx.check_mode);
+    try std.testing.expect(ctx.dispatch.generation != after_enter);
+}
+
+test "analysisDispatchEntriesForId: an overlay arm replaces the base arm it shadows" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const fixnum = ctx.lookupBuiltinTypeValue("fixnum").?.descriptor.?;
+    const string = ctx.lookupBuiltinTypeValue("string").?.descriptor.?;
+    const unary = ctx.getDispatchUnarySentinel().descriptor.?;
+    const live_body = [_]Instruction{.{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 0 }};
+    const check_body = [_]Instruction{.{ .op = .{ .push_literal = .{ .fixnum = 2 } }, .line = 0 }};
+
+    const did: u32 = 978;
+    try ctx.registerDispatch(.{ .dispatch_id = did, .type_a = string, .type_b = unary }, .{ .body = .{ .quotation = .{ .instructions = &live_body } } }, false);
+    try ctx.registerDispatch(.{ .dispatch_id = did, .type_a = fixnum, .type_b = unary }, .{ .body = .{ .quotation = .{ .instructions = &live_body } } }, false);
+
+    ctx.enterCheckMode();
+    try ctx.registerDispatch(.{ .dispatch_id = did, .type_a = fixnum, .type_b = unary }, .{ .body = .{ .quotation = .{ .instructions = &check_body } } }, false);
+    ctx.exitCheckMode(false);
+
+    const alloc = ctx.arena.allocator();
+
+    // Registration order: string first, then the fixnum key the overlay arm took over.
+    const by_sequence = try ctx.analysisDispatchEntriesForId(did, .by_sequence, alloc);
+    try std.testing.expectEqual(@as(usize, 2), by_sequence.len);
+    try std.testing.expectEqual(string, by_sequence[0].key.type_a);
+    try std.testing.expectEqual(fixnum, by_sequence[1].key.type_a);
+    try std.testing.expectEqual(@as([*]const Instruction, &check_body), by_sequence[1].entry.body.quotation.instructions.ptr);
+
+    const by_name = try ctx.analysisDispatchEntriesForId(did, .by_type_name, alloc);
+    try std.testing.expectEqual(@as(usize, 2), by_name.len);
+    try std.testing.expectEqual(fixnum, by_name[0].key.type_a);
+    try std.testing.expectEqual(@as([*]const Instruction, &check_body), by_name[0].entry.body.quotation.instructions.ptr);
+
+    // The runtime view outside check mode never sees the overlay.
+    const live = try ctx.dispatchEntriesForId(did, alloc);
+    try std.testing.expectEqual(@as(usize, 2), live.len);
+    try std.testing.expectEqual(fixnum, live[0].key.type_a);
+    try std.testing.expectEqual(@as([*]const Instruction, &live_body), live[0].entry.body.quotation.instructions.ptr);
 }
 
 test "seedEntryWord: the baked dispatch id keeps another word's replayed methods out of the guard" {

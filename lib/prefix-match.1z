@@ -31,3 +31,5 @@ prefix-match: ( table: prefix-table key: string -- value ) [
 inspect: method{ prefix-table } [
   "<prefix-table " swap unmake-prefix-table #len inspect #append " entries>" #append
 ] ;
+
+pragma{ lint-suppress: { complex-word-undocumented: dead-definition: missing-type-annotation: predicate-naming: } }

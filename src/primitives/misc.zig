@@ -747,9 +747,15 @@ pub fn importWord(ctx: *Context, name: []const u8, mod_word: ModuleWord, module:
 
 /// Copy all dispatch entries from one dispatch_id to another, allowing
 /// overwrites for entries that already exist under the target ID.
+///
+/// Under check mode the module's arms sit in the check overlay, so the copy reads the overlay over
+/// the base table.
 fn mergeDispatchEntries(ctx: *Context, from_id: u32, to_id: u32) !void {
     const dispatch_mod = @import("../dispatch.zig");
-    const pairs = try ctx.dispatch.entriesForDispatchId(from_id, ctx.allocator);
+    const pairs = if (ctx.check_mode)
+        try ctx.analysisDispatchEntriesForId(from_id, .by_sequence, ctx.allocator)
+    else
+        try ctx.dispatch.entriesForDispatchId(from_id, ctx.allocator);
     defer ctx.allocator.free(pairs);
     for (pairs) |pair| {
         const new_key = dispatch_mod.DispatchKey{
@@ -1561,7 +1567,7 @@ fn nativeLoadCheckFile(ctx: *Context) anyerror!void {
 
     const prev_check_mode = ctx.check_mode;
     ctx.enterCheckMode();
-    defer ctx.check_mode = prev_check_mode;
+    defer ctx.exitCheckMode(prev_check_mode);
     return nativeLoadImpl(ctx, cache, filename, alloc, .{ .file = .{ .path = resolved } });
 }
 

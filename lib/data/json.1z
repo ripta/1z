@@ -457,3 +457,5 @@ emit-json: ( value -- str ) [
 emit-json-pretty: ( value -- str ) [
   t 0 emit-json-value
 ] ;
+
+pragma{ lint-suppress: { broad-import: complex-word-undocumented: dead-definition: deep-nesting: import-ordering: missing-doc-comment: missing-type-annotation: } }

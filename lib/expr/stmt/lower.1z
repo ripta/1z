@@ -77,3 +77,5 @@ emit-stmt: ( node: stmt-node -- ) [
     ]
   }
 ] ;
+
+pragma{ lint-suppress: { dead-definition: import-ordering: unused-import: } }

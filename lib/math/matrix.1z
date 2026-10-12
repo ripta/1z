@@ -38,3 +38,5 @@ matrix{: parse-time [
   \ Entrypoint
   { } (read-matrix)
 ] ;
+
+pragma{ lint-suppress: { dead-definition: missing-stack-effect: } }

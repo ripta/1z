@@ -367,3 +367,5 @@ make-lint-rule register-lint-rule
 
 "excessive-blank-lines" warning: [ (check-blank-lines) ] f
 make-lint-rule register-lint-rule
+
+pragma{ lint-suppress: { broad-import: deep-nesting: import-ordering: } }

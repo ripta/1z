@@ -199,3 +199,5 @@ private{
 parse-expr: ( source: string -- expr-node ) [
   tokenize-expr <expr-pratt> parse-complete
 ] ;
+
+pragma{ lint-suppress: { const-rebuilds-value: dead-definition: import-ordering: missing-stack-effect: non-kebab-case: unused-import: } }

@@ -5077,7 +5077,7 @@ fn batch(ctx: *Context, file_path: []const u8, show_stack: bool) u8 {
     }
 
     if (ctx.check_mode) {
-        _ = call_graph.build(&ctx.dictionary, &ctx.dispatch, ctx.quotationAllocator()) catch |err| {
+        _ = call_graph.build(&ctx.dictionary, .{ .context = ctx }, ctx.quotationAllocator()) catch |err| {
             err_writer.print("Error building call graph: {any}\n", .{err}) catch {};
             err_writer.flush() catch {};
             return 1;

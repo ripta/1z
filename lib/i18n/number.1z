@@ -178,3 +178,5 @@ parse-number: ( string locale -- float ) [
   \ Stack: fmt-ptr uchar-buf uchar-ptr uchar-len f64
   3nip swap (unum-close)
 ] ;
+
+pragma{ lint-suppress: { broad-import: complex-word-undocumented: dead-definition: missing-type-annotation: } }

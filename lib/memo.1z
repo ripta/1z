@@ -36,3 +36,5 @@ memo-get: ( key -- value ) [
 memo!: ( key value -- ) [
   memo-cache get -rot> @set! drop
 ] ;
+
+pragma{ lint-suppress: { dead-definition: missing-doc-comment: missing-type-annotation: mutation-suffix-misuse: predicate-naming: } }

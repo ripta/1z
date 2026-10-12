@@ -295,3 +295,5 @@ encode-query: ( hash -- string ) [
   drop                        \ vec
   >array "&" #join            \ string
 ] ;
+
+pragma{ lint-suppress: { dead-definition: missing-type-annotation: } }

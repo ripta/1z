@@ -238,3 +238,5 @@ load-config-eval: ( sandbox path -- config ) [
   with-sandbox
   >config
 ] ;
+
+pragma{ lint-suppress: { broad-import: complex-word-undocumented: dead-definition: import-ordering: missing-type-annotation: predicate-naming: unused-import: } }

@@ -15,3 +15,5 @@ concurrent: ( array -- array ) [
   [ spawn ] #map #collect
   await-all
 ] ;
+
+pragma{ lint-suppress: { complex-word-undocumented: dead-definition: missing-doc-comment: missing-type-annotation: } }

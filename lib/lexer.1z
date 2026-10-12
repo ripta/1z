@@ -271,3 +271,5 @@ symbols-rule: ( array -- rule ) [
 skip-whitespace-rule: ( -- rule ) [
   H{ kind: whitespace: match: [ (skip-ws-match) ] }
 ] ;
+
+pragma{ lint-suppress: { broad-import: complex-word-undocumented: dead-definition: import-ordering: missing-type-annotation: } }

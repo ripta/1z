@@ -34,3 +34,5 @@ RAYWHITE:   const [ 245 245 245 255 make-Color ] ;
 
 \ Key codes
 KEY_ESCAPE: 256 ;
+
+pragma{ lint-suppress: { const-rebuilds-value: dead-definition: missing-doc-comment: missing-stack-effect: non-kebab-case: unused-import: } }

@@ -1,3 +1,4 @@
+tests/fixtures/lint/const-rebuilds-value.1z:8:42: info: [missing-type-annotation] public word has untyped parameters: x, y
 tests/fixtures/lint/const-rebuilds-value.1z:8:42: info: [complex-word-undocumented] complex word should include a doc comment example
 tests/fixtures/lint/const-rebuilds-value.1z:11:47: warning: [const-rebuilds-value] `const` word rebuilds its value on every call; a top-level binding evaluates at load, and a `once` word on first use
 tests/fixtures/lint/const-rebuilds-value.1z:14:44: warning: [const-rebuilds-value] `const` word rebuilds its value on every call; a top-level binding evaluates at load, and a `once` word on first use

@@ -426,3 +426,5 @@ BRACE-PREFIXES: ( -- array ) const [
 1z-tokenize: ( string -- iterator ) [
   <1z-lexer> tokenize
 ] ;
+
+pragma{ lint-suppress: { broad-import: dead-definition: deep-nesting: import-ordering: missing-doc-comment: missing-type-annotation: non-kebab-case: orphaned-doc-comment: } }

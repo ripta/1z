@@ -50,3 +50,5 @@ grid>string: ( grid -- str ) [
 print-grid: ( grid -- ) [
   grid>string print-line
 ] ;
+
+pragma{ lint-suppress: { broad-import: complex-word-undocumented: dead-definition: import-ordering: missing-doc-comment: missing-type-annotation: with-combinator-naming: } }

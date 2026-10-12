@@ -882,7 +882,7 @@ export fn onez_check(ptr: ?*anyopaque, code: [*]const u8, len: usize) c_int {
 
     const prev_check_mode = ctx.check_mode;
     ctx.enterCheckMode();
-    defer ctx.check_mode = prev_check_mode;
+    defer ctx.exitCheckMode(prev_check_mode);
 
     const dispatch_log_mark = ctx.beginCheckDispatchLog();
     defer ctx.endCheckDispatchLog(dispatch_log_mark);
@@ -930,7 +930,7 @@ export fn onez_check(ptr: ?*anyopaque, code: [*]const u8, len: usize) c_int {
         },
     }
 
-    _ = call_graph.build(&ctx.dictionary, &ctx.dispatch, ctx.quotationAllocator()) catch {
+    _ = call_graph.build(&ctx.dictionary, .{ .context = ctx }, ctx.quotationAllocator()) catch {
         setLastError(handle, "onez_check: failed to build call graph", .{});
         return 1;
     };

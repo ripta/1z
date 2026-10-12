@@ -56,3 +56,5 @@ try-acquire: method{ rate-limiter } [
     drop option:none
   ] if
 ] ;
+
+pragma{ lint-suppress: { complex-word-undocumented: dead-definition: missing-doc-comment: missing-type-annotation: } }

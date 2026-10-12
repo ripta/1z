@@ -112,3 +112,5 @@ join-multicast: ( udp-socket group-ip -- ) [
 leave-multicast: ( udp-socket group-ip -- ) [
   "0.0.0.0" parse-ipv4 leave-multicast-on
 ] ;
+
+pragma{ lint-suppress: { complex-word-undocumented: dead-definition: missing-type-annotation: } }

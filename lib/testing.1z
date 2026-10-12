@@ -380,3 +380,5 @@ fake-clock: ( -- ) [ native.fake-clock ] ;
 
 \ Advance the fake clock by the given duration
 advance-clock: ( duration -- ) [ native.advance-clock ] ;
+
+pragma{ lint-suppress: { complex-word-undocumented: dead-definition: missing-doc-comment: missing-type-annotation: non-kebab-case: } }

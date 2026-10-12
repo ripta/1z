@@ -331,3 +331,5 @@ ln10-approx: ( n -- ratio ) [
   3 7 normalize-ratio swap (arctanh-ratio) 2 *
   +
 ] ;
+
+pragma{ lint-suppress: { complex-word-undocumented: dead-definition: missing-doc-comment: missing-stack-effect: missing-type-annotation: non-kebab-case: } }

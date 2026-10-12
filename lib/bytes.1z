@@ -42,3 +42,5 @@
 
 \\ Write count copies of a 64-bit value, end to end from offset, each in native byte order.
 #fill64!: ( byte-array offset value count -- byte-array ) [ 8 swap #fill! ] ;
+
+pragma{ lint-suppress: { complex-word-undocumented: dead-definition: missing-type-annotation: } }

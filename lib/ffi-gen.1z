@@ -671,3 +671,5 @@ generate-bindings: ( header-path lib-name opts -- str ) [
     "use \"ffi\" ;\n\n" swap #append "\n" #append
   ] with-parameter
 ] ;
+
+pragma{ lint-suppress: { complex-word-undocumented: dead-definition: deep-nesting: missing-type-annotation: } }

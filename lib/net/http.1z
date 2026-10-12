@@ -512,3 +512,5 @@ static-file-handler: ( stream request doc-root -- ) [
 serve-static: ( host port doc-root -- ) [
   [ static-file-handler ] curry serve
 ] ;
+
+pragma{ lint-suppress: { broad-import: complex-word-undocumented: dead-definition: import-ordering: missing-doc-comment: missing-type-annotation: } }

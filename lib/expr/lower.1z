@@ -93,3 +93,5 @@ emit-expr: ( node: expr-node -- ) [
     ]
   }
 ] ;
+
+pragma{ lint-suppress: { dead-definition: import-ordering: unused-import: } }

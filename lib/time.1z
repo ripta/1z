@@ -251,3 +251,5 @@ inspect: method{ timezone } [
   \ Stack: name-str offset-str
   swap "<timezone " swap #append " " #append swap #append ">" #append
 ] ;
+
+pragma{ lint-suppress: { complex-word-undocumented: constructor-consistency: conversion-naming: dead-definition: missing-doc-comment: missing-stack-effect: missing-type-annotation: } }

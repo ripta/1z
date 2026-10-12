@@ -226,3 +226,5 @@ resource-limit: ( kind -- soft hard ) [ (resource->rlimit) getrlimit ] ;
 set-resource-limit: ( kind soft hard -- ) [
   [ (resource->rlimit) ] 2dip setrlimit drop
 ] ;
+
+pragma{ lint-suppress: { broad-import: complex-word-undocumented: dead-definition: deep-nesting: doc-comment-misuse: missing-type-annotation: non-kebab-case: } }

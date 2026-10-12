@@ -157,3 +157,5 @@ cgi-run: ( handler: ( s: stream req: request -- ) -- ) [
   ] with-parameter
   stream-close
 ] ;
+
+pragma{ lint-suppress: { broad-import: dead-definition: import-ordering: unused-import: } }

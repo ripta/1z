@@ -109,3 +109,5 @@ parse-fn: ( source: string -- fn-decl ) [
   \ source iterator name params rhs
   make-fn-decl nip nip
 ] ;
+
+pragma{ lint-suppress: { broad-import: dead-definition: import-ordering: unused-import: } }

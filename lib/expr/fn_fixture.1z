@@ -4,3 +4,5 @@
 use "expr" ;
 
 fn cube(x) = x * x * x ;
+
+pragma{ lint-suppress: { broad-import: dead-definition: missing-doc-comment: missing-type-annotation: } }

@@ -1,0 +1,4 @@
+\ A facade over a module whose word lacks a doc comment and a stack effect. The module that defines
+\ the word reports it, so linting the facade alone is clean.
+
+"reexport-inner" load reexport
