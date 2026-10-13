@@ -23,6 +23,14 @@ Stack: [ ]
 Stack: [ ]
 PASS: struct with doc at strict level
 Stack: [ ]
+=== strict level: documented virtual type with an attribute hash passes ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: attributed virtual with doc at strict level
+Stack: [ ]
+PASS: attribute hash survives the doc
+Stack: [ ]
 === relaxed level: no enforcement ===
 Stack: [ ]
 Stack: [ ]

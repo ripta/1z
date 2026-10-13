@@ -1,16 +1,26 @@
 \ lib/ratio.1z - Exact rational arithmetic
 
+\\ The error type `>float(exact)` raises when a value has no exact float representation.
 EInexactConversion: ( -- sym ) [ inexact-conversion: ] ;
 
+\\ An exact rational number. It is always in lowest terms with a positive denominator other than
+\\ 1, so a whole result is a fixnum or bignum instead. Build one with `normalize-ratio` or by
+\\ dividing two integers with `/`.
 ratio: H{ numeric: t exact: t } virtual{ struct{ numer denom } } ;
 
-\ Accessors: unwrap the virtual type, then extract by position
-\ Virtual structs don't export these by default
+\ Virtual structs don't export field getters, so these unwrap and extract by position.
+
+\\ The numerator, which carries the ratio's sign.
 numer>>: ( ratio -- n ) [ unmake-ratio drop ] ;
+
+\\ The denominator, which is always greater than 1.
 denom>>: ( ratio -- d ) [ unmake-ratio nip ] ;
 
-\ Normalizing constructor: reduces to lowest terms, enforces positive
-\ denominator, demotes to integer when denominator is 1.
+\\ numer/denom reduced to lowest terms with a positive denominator. The result is an integer when
+\\ the denominator reduces to 1. Throws `division-by-zero` when denom is zero.
+\\
+\\   6 -4 normalize-ratio
+\\   => -3/2
 normalize-ratio: ( numer denom -- ratio-or-int ) [
   dup 0 = [ f "division by zero" EDivisionByZero make-error throw ] when
   2dup gcd
@@ -109,6 +119,7 @@ inspect: method{ ratio } [
 
 \ --- Ratio-to-float promotion ---
 
+\\ The nearest float, computed as numerator / denominator in floating point.
 ratio>float: ( ratio -- f ) [ dup numer>> >float swap denom>> >float / ] ;
 
 \ --- Mixed ratio/float arithmetic ---
@@ -184,10 +195,14 @@ ratio>float: ( ratio -- f ) [ dup numer>> >float swap denom>> >float / ] ;
 >integer: method{ ratio } [ dup numer>> swap denom>> div ] ;
 >float: method{ ratio } [ ratio>float ] ;
 
+\\ The first continued-fraction convergent within a relative error of 1e-15 of the float, such as
+\\ 1/10 for 0.1. Use `float>ratio` for the float's exact binary value. Throws `type-mismatch` on
+\\ NaN and infinity.
 float-approx-ratio: ( f -- ratio-or-int ) [ native.float-approx-ratio normalize-ratio ] ;
 
-\ Exact f64 bit representation as a ratio using float-parts.
-\ value = sign * mantissa * 2^exponent
+\\ The exact value of the float's binary representation, computed from `float-parts` as
+\\ sign * mantissa * 2^exponent. 0.1 becomes 3602879701896397/36028797018963968. Throws
+\\ `type-mismatch` on NaN and infinity.
 float>ratio: ( f -- ratio-or-int ) [
   float-parts
   -rot>
@@ -332,4 +347,4 @@ ln10-approx: ( n -- ratio ) [
   +
 ] ;
 
-pragma{ lint-suppress: { complex-word-undocumented: dead-definition: missing-doc-comment: missing-type-annotation: non-kebab-case: } }
+pragma{ lint-suppress: { dead-definition: missing-type-annotation: non-kebab-case: } }

@@ -41,6 +41,20 @@ my-point: struct{ x y } ;
 
 1 2 make-my-point my-point? t "struct with doc at strict level" assert=
 
+"strict level: documented virtual type with an attribute hash passes" test-section
+
+\ Two parse-time words run in a row here. `virtual{` folds the hash, and the doc must still land
+\ next to the name rather than after the descriptor.
+
+\\ A documented numeric virtual type.
+my-num: H{ numeric: t } virtual{ fixnum } ;
+
+\\ A documented word right after it.
+after-num: [ 3 make-my-num ] ;
+
+after-num my-num? t "attributed virtual with doc at strict level" assert=
+after-num number? t "attribute hash survives the doc" assert=
+
 "relaxed level: no enforcement" test-section
 
 pragma{ require-doc: "relaxed" }

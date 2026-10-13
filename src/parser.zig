@@ -344,12 +344,14 @@ fn executeParseTimeWord(
     // TODO(ripta): Supports up to 8 trailing doc_strings, which should be
     //              plenty for most use cases but is an arbitrary limit.
     var saved_doc_instrs: [8]Instruction = undefined;
+    var saved_doc_after: [8]usize = undefined;
     var saved_doc_count: usize = 0;
     var pushed_count: usize = 0;
     for (instructions.items[tail_start..]) |instr| {
         switch (instr.op.push_literal) {
             .doc_string => {
                 saved_doc_instrs[saved_doc_count] = instr;
+                saved_doc_after[saved_doc_count] = pushed_count;
                 saved_doc_count += 1;
             },
             else => {
@@ -420,17 +422,19 @@ fn executeParseTimeWord(
 
         std.mem.reverse(Instruction, instructions.items[base_idx..]);
 
-        // Reïnsert saved doc_string instructions after the original
-        // trailing literals, e.g., the name symbol, but before the
-        // parse-time word's results: they end up between the name
-        // and the definition value on the stack for `;` to collect.
+        // Reïnsert each saved doc_string after the same number of literals that preceded it
+        // in the trail, which puts it right after the name symbol for `;` to collect.
+        //
+        // That count, not the number of literals pushed, is what survives a parse-time word
+        // that folds its inputs. In `name: H{ ... } virtual{ ... }`, `virtual{` takes the
+        // name and the hash and returns the name and one descriptor.
         //
         // TODO(ripta): Hacky
-        if (saved_doc_count > 0) {
-            const insert_at = base_idx + @min(pushed_count, num_results);
-            for (saved_doc_instrs[0..saved_doc_count]) |doc_instr| {
-                instructions.insert(allocator, insert_at, doc_instr) catch return ParseError.OutOfMemory;
-            }
+        var inserted: usize = 0;
+        for (saved_doc_instrs[0..saved_doc_count], saved_doc_after[0..saved_doc_count]) |doc_instr, after| {
+            const insert_at = base_idx + @min(after, num_results) + inserted;
+            instructions.insert(allocator, insert_at, doc_instr) catch return ParseError.OutOfMemory;
+            inserted += 1;
         }
     } else if (saved_doc_count > 0) {
         for (saved_doc_instrs[0..saved_doc_count]) |doc_instr| {

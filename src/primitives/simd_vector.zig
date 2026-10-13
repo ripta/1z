@@ -502,7 +502,12 @@ fn simdArithmeticOp(comptime op: simd_kernels.Op, ctx: *Context) anyerror!void {
             const T = comptime etToType(et);
             const N = comptime etToLaneCount(et);
             var out_bytes: [simd_kernels.SIMD_BYTES]u8 = undefined;
-            simd_kernels.simdBinaryOp(N, T, op, a_bytes, b_bytes, &out_bytes);
+            if (comptime op == .div) {
+                try simd_kernels.simdBinaryOp(N, T, op, a_bytes, b_bytes, &out_bytes);
+            } else {
+                simd_kernels.simdBinaryOp(N, T, op, a_bytes, b_bytes, &out_bytes);
+            }
+
             try wrapSimdResult(ctx, a_tagged.tag, out_bytes);
         },
     }

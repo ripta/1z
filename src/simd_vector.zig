@@ -2,6 +2,11 @@ const std = @import("std");
 
 pub const SIMD_BYTES = 16;
 pub const Op = enum { add, sub, mul, div };
+pub const DivideError = error{ DivisionByZero, FixnumOverflow };
+
+fn OpResult(comptime op: Op) type {
+    return if (op == .div) DivideError!void else void;
+}
 
 /// Load 16 raw bytes into an aligned @Vector(N, T).
 pub fn bytesToVector(comptime N: comptime_int, comptime T: type, bytes: *const [SIMD_BYTES]u8) @Vector(N, T) {
@@ -18,10 +23,28 @@ pub fn vectorToBytes(comptime N: comptime_int, comptime T: type, v: @Vector(N, T
 }
 
 /// Element-wise binary operation on two 128-bit SIMD vectors.
-pub fn simdBinaryOp(comptime N: comptime_int, comptime T: type, comptime op: Op, a: *const [SIMD_BYTES]u8, b: *const [SIMD_BYTES]u8, out: *[SIMD_BYTES]u8) void {
+///
+/// Integer division checks every lane before dividing, as the packed kernels do. A zero divisor
+/// lane is `DivisionByZero`, and a signed minInt / -1 lane is `FixnumOverflow`. Unguarded, either
+/// one is a Zig safety panic.
+pub fn simdBinaryOp(comptime N: comptime_int, comptime T: type, comptime op: Op, a: *const [SIMD_BYTES]u8, b: *const [SIMD_BYTES]u8, out: *[SIMD_BYTES]u8) OpResult(op) {
     const va = bytesToVector(N, T, a);
     const vb = bytesToVector(N, T, b);
     const is_int = @typeInfo(T) == .int;
+
+    if (comptime (op == .div and is_int)) {
+        const zero_splat: @Vector(N, T) = @splat(0);
+        if (@reduce(.Or, vb == zero_splat)) return error.DivisionByZero;
+
+        if (comptime @typeInfo(T).int.signedness == .signed) {
+            const min_splat: @Vector(N, T) = @splat(std.math.minInt(T));
+            const neg_one_splat: @Vector(N, T) = @splat(-1);
+            const false_splat: @Vector(N, bool) = @splat(false);
+            const overflow_lanes = @select(bool, va == min_splat, vb == neg_one_splat, false_splat);
+            if (@reduce(.Or, overflow_lanes)) return error.FixnumOverflow;
+        }
+    }
+
     const vr: @Vector(N, T) = switch (op) {
         .add => if (is_int) va +% vb else va + vb,
         .sub => if (is_int) va -% vb else va - vb,
@@ -202,8 +225,56 @@ test "simdBinaryOp f64 div" {
     const a: *const [16]u8 = @ptrCast(&a_vals);
     const b: *const [16]u8 = @ptrCast(&b_vals);
     var out: [16]u8 = undefined;
-    simdBinaryOp(2, f64, .div, a, b, &out);
+    try simdBinaryOp(2, f64, .div, a, b, &out);
     const result: *const [2]f64 = @ptrCast(@alignCast(&out));
     try testing.expectEqual(@as(f64, 2.5), result[0]);
     try testing.expectEqual(@as(f64, 4.0), result[1]);
+}
+
+test "simdBinaryOp f64 div by zero is infinity" {
+    const a_vals = [2]f64{ 1.0, -1.0 };
+    const b_vals = [2]f64{ 0.0, 0.0 };
+    const a: *const [16]u8 = @ptrCast(&a_vals);
+    const b: *const [16]u8 = @ptrCast(&b_vals);
+    var out: [16]u8 = undefined;
+    try simdBinaryOp(2, f64, .div, a, b, &out);
+    const result: *const [2]f64 = @ptrCast(@alignCast(&out));
+    try testing.expect(std.math.isPositiveInf(result[0]));
+    try testing.expect(std.math.isNegativeInf(result[1]));
+}
+
+test "simdBinaryOp integer div by a zero lane" {
+    const a_vals = [4]i32{ 10, 20, 30, 40 };
+    const b_vals = [4]i32{ 1, 2, 0, 4 };
+    const a: *const [16]u8 = @ptrCast(&a_vals);
+    const b: *const [16]u8 = @ptrCast(&b_vals);
+    var out: [16]u8 = undefined;
+    try testing.expectError(error.DivisionByZero, simdBinaryOp(4, i32, .div, a, b, &out));
+
+    const ua = [16]u8{ 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9 };
+    const ub = [16]u8{ 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0 };
+    try testing.expectError(error.DivisionByZero, simdBinaryOp(16, u8, .div, &ua, &ub, &out));
+}
+
+test "simdBinaryOp signed minInt div by -1 overflows" {
+    const a_vals = [2]i64{ 7, std.math.minInt(i64) };
+    const b_vals = [2]i64{ -1, -1 };
+    const a: *const [16]u8 = @ptrCast(&a_vals);
+    const b: *const [16]u8 = @ptrCast(&b_vals);
+    var out: [16]u8 = undefined;
+    try testing.expectError(error.FixnumOverflow, simdBinaryOp(2, i64, .div, a, b, &out));
+}
+
+test "simdBinaryOp integer div truncates" {
+    const a_vals = [4]i32{ 7, -7, std.math.minInt(i32), 0 };
+    const b_vals = [4]i32{ 2, 2, 1, -1 };
+    const a: *const [16]u8 = @ptrCast(&a_vals);
+    const b: *const [16]u8 = @ptrCast(&b_vals);
+    var out: [16]u8 = undefined;
+    try simdBinaryOp(4, i32, .div, a, b, &out);
+    const result: *const [4]i32 = @ptrCast(@alignCast(&out));
+    try testing.expectEqual(@as(i32, 3), result[0]);
+    try testing.expectEqual(@as(i32, -3), result[1]);
+    try testing.expectEqual(std.math.minInt(i32), result[2]);
+    try testing.expectEqual(@as(i32, 0), result[3]);
 }

@@ -86,6 +86,20 @@ use "math/simd" ;
 + simd>array 0 #nth
 0 "u8 255+1 wraps to 0" assert=
 
+\ -- Integer division --
+
+"arithmetic: simd-2xi64 division truncates" test-section
+{ 3 -3 }
+7 -7 <simd-2xi64> 2 2 <simd-2xi64> / simd>array
+"2xi64 / truncates toward zero" assert=
+
+"arithmetic: integer division guards" test-section
+[ 1 2 <simd-2xi64> 0 1 <simd-2xi64> / ] division-by-zero: "2xi64 zero lane" assert-error-type
+[ 9 9 9 9 9 9 9 9 9 9 9 9 9 9 9 9 <simd-16xu8> 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 0 <simd-16xu8> / ]
+division-by-zero: "16xu8 zero lane" assert-error-type
+[ -9223372036854775808 1 <simd-2xi64> -1 1 <simd-2xi64> / ] fixnum-overflow:
+"2xi64 minInt / -1" assert-error-type
+
 \ -- Type mismatch --
 
 "type mismatch: different SIMD types" test-section

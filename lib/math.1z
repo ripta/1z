@@ -19,7 +19,10 @@ asin: ( n -- f ) [ native.asin ] ;
 acos: ( n -- f ) [ native.acos ] ;
 \\ Arctangent.
 atan: ( n -- f ) [ native.atan ] ;
-\\ Two-argument arctangent.
+\\ Two-argument arctangent: the angle of the point (x, y) in radians, in the range -pi to pi.
+\\
+\\   0.0 -1.0 atan2
+\\   => 3.141592653589793
 atan2: ( y x -- f ) [ native.atan2 ] ;
 
 \\ Natural exponential (e^n).
@@ -33,7 +36,10 @@ log10: ( n -- f ) [ native.log10 ] ;
 
 \\ Square root.
 sqrt: generic ( n -- f ) [ native.sqrt ] ;
-\\ Exponentiation.
+\\ base raised to exp. Real operands give a float. `math/complex` adds complex arms.
+\\
+\\   2 10 pow
+\\   => 1024.0
 pow: generic ( base exp -- f ) [ native.pow ] ;
 
 \\ Round toward negative infinity.
@@ -64,12 +70,14 @@ float64>bits: ( f -- bits ) [ float>bits ] ;
 \\ Alias for bits>float.
 bits>float64: ( bits -- f ) [ bits>float ] ;
 
-\ Prepend "0" until the string is 16 characters.
-bits-pad-hex: ( str -- str ) [
-  dup #len 16 < [
-    "0" swap #append bits-pad-hex
-  ] when
-] ;
+private{
+  \ Prepend "0" until the string is 16 characters.
+  bits-pad-hex: ( str -- str ) [
+    dup #len 16 < [
+      "0" swap #append bits-pad-hex
+    ] when
+  ] ;
+}
 
 \\ Display bits as zero-padded 16-digit uppercase hex.
 inspect: method{ bits } [
@@ -133,4 +141,4 @@ float-ulp: ( f -- ulp ) [
   ] if
 ] ;
 
-pragma{ lint-suppress: { complex-word-undocumented: dead-definition: missing-doc-comment: missing-type-annotation: } }
+pragma{ lint-suppress: { dead-definition: missing-type-annotation: } }

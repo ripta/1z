@@ -181,6 +181,9 @@ element-type float "fixnum ndarray + float scalar -> float" assert=
 { 1 2 3 4 5 6 } { 2 3 } <ndarray> 5 logical-nth 6 "logical-nth 2D last" assert=
 { 1 2 3 4 5 6 } { 2 3 } <ndarray> 4 logical-nth 5 "logical-nth 2D middle" assert=
 { 10 20 30 } { 3 } <ndarray> 1 logical-nth 20 "logical-nth 1D" assert=
+{ 1 2 3 4 5 6 } { 2 3 } <ndarray> transpose 1 logical-nth 4 "logical-nth follows strides" assert=
+[ { 1 2 } { 2 } <ndarray> 2 logical-nth ] index-out-of-bounds: "logical-nth past the end" assert-error-type
+[ { 1 2 } { 2 } <ndarray> -1 logical-nth ] index-out-of-bounds: "logical-nth negative" assert-error-type
 
 "ndarray transpose" test-section
 
@@ -206,6 +209,19 @@ swap shape
 \ 1D transpose is identity on shape
 { 1 2 3 } { 3 } <ndarray> transpose
 shape { 3 } "transpose 1D shape unchanged" assert=
+
+"ndarray arithmetic on a transposed operand" test-section
+
+\ A transposed ndarray shares its source's data under reversed strides, so arithmetic must read it
+\ in logical order rather than storage order.
+nd{ 1 2 3 ; 4 5 6 } transpose 10 *
+nd{ 10 40 ; 20 50 ; 30 60 } "transposed * scalar" assert=
+10 nd{ 1 2 3 ; 4 5 6 } transpose -
+nd{ 9 6 ; 8 5 ; 7 4 } "scalar - transposed" assert=
+nd{ 1 2 3 ; 4 5 6 } transpose nd{ 1 1 ; 1 1 ; 1 1 } +
+nd{ 2 5 ; 3 6 ; 4 7 } "transposed + contiguous" assert=
+nd{ 1 1 ; 1 1 ; 1 1 } nd{ 1 2 3 ; 4 5 6 } transpose -
+nd{ 0 -3 ; -1 -4 ; -2 -5 } "contiguous - transposed" assert=
 
 "ndarray map" test-section
 

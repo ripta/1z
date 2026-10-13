@@ -3,8 +3,12 @@
 use "ffi" ;
 use "math/packed" ;
 
-\ packed-raw-ptr: extract pointer and byte length from packed array backing data
-
+\\ A pointer to the packed array's backing bytes and their length in bytes, for passing to a C
+\\ function. The pointer is valid only while the packed array is alive. Throws `invalid-argument`
+\\ on a value that is not a packed array.
+\\
+\\   { 1 2 3 } >packed:i32 packed-raw-ptr nip
+\\   => 12
 packed-raw-ptr: generic ( packed-T -- resource fixnum ) [
   f "packed-raw-ptr: not a packed type" EInvalidArgument make-error throw
 ] ;
@@ -19,19 +23,84 @@ packed-raw-ptr: method{ packed-u64 } [ unmake-packed-u64 bytes>ffi-ptr+len ] ;
 packed-raw-ptr: method{ packed-f32 } [ unmake-packed-f32 bytes>ffi-ptr+len ] ;
 packed-raw-ptr: method{ packed-f64 } [ unmake-packed-f64 bytes>ffi-ptr+len ] ;
 
-\ packed-from-ptr:T: wrap n elements from a C pointer without copying
-\ Lifetime is tied to the source pointer; call >byte-array before long-lived use,
-\ e.g., crossing a task boundary or outliving the source allocation.
+\\ A packed-i8 over n elements of C memory at the pointer, borrowed rather than copied. The memory
+\\ must outlive the result. Copy it with `>byte-array` before long-lived use, such as crossing a
+\\ task boundary.
+\\
+\\   { 1 -2 } >packed:i8 dup packed-raw-ptr drop 2 packed-from-ptr:i8 packed>array nip
+\\   => { 1 -2 }
+packed-from-ptr:i8: ( resource n -- packed-i8 ) [ native.ffi-ptr+len>borrowed-bytes >packed-i8 ] ;
 
-packed-from-ptr:i8:  ( resource n -- packed-i8 )  [ native.ffi-ptr+len>borrowed-bytes >packed-i8 ] ;
+\\ A packed-i16 over n elements of C memory at the pointer, borrowed rather than copied. The memory
+\\ must outlive the result. Copy it with `>byte-array` before long-lived use, such as crossing a
+\\ task boundary.
+\\
+\\   { 1 -2 } >packed:i16 dup packed-raw-ptr drop 2 packed-from-ptr:i16 packed>array nip
+\\   => { 1 -2 }
 packed-from-ptr:i16: ( resource n -- packed-i16 ) [ 2 * native.ffi-ptr+len>borrowed-bytes >packed-i16 ] ;
+
+\\ A packed-i32 over n elements of C memory at the pointer, borrowed rather than copied. The memory
+\\ must outlive the result. Copy it with `>byte-array` before long-lived use, such as crossing a
+\\ task boundary.
+\\
+\\   { 1 -2 } >packed:i32 dup packed-raw-ptr drop 2 packed-from-ptr:i32 packed>array nip
+\\   => { 1 -2 }
 packed-from-ptr:i32: ( resource n -- packed-i32 ) [ 4 * native.ffi-ptr+len>borrowed-bytes >packed-i32 ] ;
+
+\\ A packed-i64 over n elements of C memory at the pointer, borrowed rather than copied. The memory
+\\ must outlive the result. Copy it with `>byte-array` before long-lived use, such as crossing a
+\\ task boundary.
+\\
+\\   { 1 -2 } >packed:i64 dup packed-raw-ptr drop 2 packed-from-ptr:i64 packed>array nip
+\\   => { 1 -2 }
 packed-from-ptr:i64: ( resource n -- packed-i64 ) [ 8 * native.ffi-ptr+len>borrowed-bytes >packed-i64 ] ;
-packed-from-ptr:u8:  ( resource n -- packed-u8 )  [ native.ffi-ptr+len>borrowed-bytes >packed-u8 ] ;
+
+\\ A packed-u8 over n elements of C memory at the pointer, borrowed rather than copied. The memory
+\\ must outlive the result. Copy it with `>byte-array` before long-lived use, such as crossing a
+\\ task boundary.
+\\
+\\   B{ 7 9 } dup bytes>ffi-ptr+len drop 2 packed-from-ptr:u8 packed>array nip
+\\   => { 7 9 }
+packed-from-ptr:u8: ( resource n -- packed-u8 ) [ native.ffi-ptr+len>borrowed-bytes >packed-u8 ] ;
+
+\\ A packed-u16 over n elements of C memory at the pointer, borrowed rather than copied. The memory
+\\ must outlive the result. Copy it with `>byte-array` before long-lived use, such as crossing a
+\\ task boundary.
+\\
+\\   { 1 2 } >packed:u16 dup packed-raw-ptr drop 2 packed-from-ptr:u16 packed>array nip
+\\   => { 1 2 }
 packed-from-ptr:u16: ( resource n -- packed-u16 ) [ 2 * native.ffi-ptr+len>borrowed-bytes >packed-u16 ] ;
+
+\\ A packed-u32 over n elements of C memory at the pointer, borrowed rather than copied. The memory
+\\ must outlive the result. Copy it with `>byte-array` before long-lived use, such as crossing a
+\\ task boundary.
+\\
+\\   { 1 2 } >packed:u32 dup packed-raw-ptr drop 2 packed-from-ptr:u32 packed>array nip
+\\   => { 1 2 }
 packed-from-ptr:u32: ( resource n -- packed-u32 ) [ 4 * native.ffi-ptr+len>borrowed-bytes >packed-u32 ] ;
+
+\\ A packed-u64 over n elements of C memory at the pointer, borrowed rather than copied. The memory
+\\ must outlive the result. Copy it with `>byte-array` before long-lived use, such as crossing a
+\\ task boundary.
+\\
+\\   { 1 2 } >packed:u64 dup packed-raw-ptr drop 2 packed-from-ptr:u64 packed>array nip
+\\   => { 1 2 }
 packed-from-ptr:u64: ( resource n -- packed-u64 ) [ 8 * native.ffi-ptr+len>borrowed-bytes >packed-u64 ] ;
+
+\\ A packed-f32 over n elements of C memory at the pointer, borrowed rather than copied. The memory
+\\ must outlive the result. Copy it with `>byte-array` before long-lived use, such as crossing a
+\\ task boundary.
+\\
+\\   { 1.5 2.5 } >packed:f32 dup packed-raw-ptr drop 2 packed-from-ptr:f32 packed>array nip
+\\   => { 1.5 2.5 }
 packed-from-ptr:f32: ( resource n -- packed-f32 ) [ 4 * native.ffi-ptr+len>borrowed-bytes >packed-f32 ] ;
+
+\\ A packed-f64 over n elements of C memory at the pointer, borrowed rather than copied. The memory
+\\ must outlive the result. Copy it with `>byte-array` before long-lived use, such as crossing a
+\\ task boundary.
+\\
+\\   { 1.5 2.5 } >packed:f64 dup packed-raw-ptr drop 2 packed-from-ptr:f64 packed>array nip
+\\   => { 1.5 2.5 }
 packed-from-ptr:f64: ( resource n -- packed-f64 ) [ 8 * native.ffi-ptr+len>borrowed-bytes >packed-f64 ] ;
 
-pragma{ lint-suppress: { broad-import: complex-word-undocumented: dead-definition: missing-doc-comment: missing-type-annotation: } }
+pragma{ lint-suppress: { broad-import: dead-definition: missing-type-annotation: } }

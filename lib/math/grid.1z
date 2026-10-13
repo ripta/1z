@@ -4,14 +4,22 @@ use "ranges" ;
 use "strings" ;
 use "sequences" ;
 
+\\ A width-by-height grid of cells for text output. `marks` is a set of `{ x y }` pairs, and each
+\\ marked cell prints as `mark-char` while every other cell prints as `empty-char`.
 grid: struct{ width height marks mark-char empty-char } ;
 
-\ Convenience constructor with default characters
+\\ A grid that prints marked cells as "X" and empty cells as ".".
+\\
+\\   3 2 S{ { 0 0 } { 2 1 } } new-grid grid>string
+\\   => "X..\n..X"
 new-grid: ( width height marks -- grid ) [
   "X" "." make-grid
 ] ;
 
-\ Set custom characters (returns new grid)
+\\ A copy of the grid with new mark and empty characters.
+\\
+\\   3 2 S{ { 0 0 } { 2 1 } } new-grid "#" " " with-chars grid>string
+\\   => "#  \n  #"
 with-chars: ( grid: grid mark-char: string empty-char: string -- grid ) [
   ec: swap ;
   mc: swap ;
@@ -19,13 +27,19 @@ with-chars: ( grid: grid mark-char: string empty-char: string -- grid ) [
   g width>> g height>> g marks>> mc ec make-grid
 ] ;
 
-\ Check if coordinate is marked
+\\ True when `{ x y }` is in the grid's marks.
+\\
+\\   3 2 S{ { 0 0 } { 2 1 } } new-grid 2 1 marked?
+\\   => t
 marked?: ( grid x y -- ? ) [
   swap { } swap #suffix swap #suffix
   swap marks>> swap @in?
 ] ;
 
-\ Convert row to string
+\\ Row y as a string of one character per column, with no trailing newline.
+\\
+\\   3 2 S{ { 0 0 } { 2 1 } } new-grid 1 row>string
+\\   => "..X"
 row>string: ( grid: grid y: fixnum -- str ) [
   row-y: swap ;
   row-g: swap ;
@@ -38,7 +52,7 @@ row>string: ( grid: grid y: fixnum -- str ) [
   "" #join
 ] ;
 
-\ Convert grid to string (for testing)
+\\ Every row from y = 0 down, joined by newlines, with no trailing newline.
 grid>string: ( grid -- str ) [
   dup g: swap ;
   height>> iota >iterator
@@ -46,9 +60,9 @@ grid>string: ( grid -- str ) [
   "\n" #join
 ] ;
 
-\ Print entire grid
+\\ Print the grid as `grid>string` renders it, followed by a newline.
 print-grid: ( grid -- ) [
   grid>string print-line
 ] ;
 
-pragma{ lint-suppress: { broad-import: complex-word-undocumented: dead-definition: import-ordering: missing-doc-comment: missing-type-annotation: with-combinator-naming: } }
+pragma{ lint-suppress: { broad-import: dead-definition: import-ordering: missing-type-annotation: with-combinator-naming: } }

@@ -2,45 +2,164 @@
 
 use "strings" ;
 
-\ Virtual type definitions: each SIMD vector wraps a 16-byte byte-array
-\ A byte-array backing is deliberately not freezable, so these are not set members or container
-\ keys. See docs/guides/type-system.md, "Freezing a Newtype".
+\ Each SIMD vector wraps a 16-byte byte-array. A byte-array backing is deliberately not freezable,
+\ so these are not set members or container keys. See docs/guides/type-system.md, "Freezing a
+\ Newtype".
+
+\\ A 128-bit SIMD vector of two 64-bit float lanes.
 simd-2xf64: virtual{ byte-array } ;
+
+\\ A 128-bit SIMD vector of four 32-bit float lanes.
 simd-4xf32: virtual{ byte-array } ;
+
+\\ A 128-bit SIMD vector of two signed 64-bit integer lanes. Lane `+`, `-`, and `*` wrap on
+\\ overflow. `/` truncates toward zero. It throws `division-by-zero` on a zero lane, and
+\\ `fixnum-overflow` on a signed minInt / -1.
 simd-2xi64: virtual{ byte-array } ;
+
+\\ A 128-bit SIMD vector of four signed 32-bit integer lanes. Lane `+`, `-`, and `*` wrap on
+\\ overflow. `/` truncates toward zero. It throws `division-by-zero` on a zero lane, and
+\\ `fixnum-overflow` on a signed minInt / -1.
 simd-4xi32: virtual{ byte-array } ;
+
+\\ A 128-bit SIMD vector of eight signed 16-bit integer lanes. Lane `+`, `-`, and `*` wrap on
+\\ overflow. `/` truncates toward zero. It throws `division-by-zero` on a zero lane, and
+\\ `fixnum-overflow` on a signed minInt / -1.
 simd-8xi16: virtual{ byte-array } ;
+
+\\ A 128-bit SIMD vector of sixteen signed 8-bit integer lanes. Lane `+`, `-`, and `*` wrap on
+\\ overflow. `/` truncates toward zero. It throws `division-by-zero` on a zero lane, and
+\\ `fixnum-overflow` on a signed minInt / -1.
 simd-16xi8: virtual{ byte-array } ;
+
+\\ A 128-bit SIMD vector of two unsigned 64-bit integer lanes. Lane `+`, `-`, and `*` wrap on
+\\ overflow. `/` truncates toward zero. It throws `division-by-zero` on a zero lane, and
+\\ `fixnum-overflow` on a signed minInt / -1.
 simd-2xu64: virtual{ byte-array } ;
+
+\\ A 128-bit SIMD vector of four unsigned 32-bit integer lanes. Lane `+`, `-`, and `*` wrap on
+\\ overflow. `/` truncates toward zero. It throws `division-by-zero` on a zero lane, and
+\\ `fixnum-overflow` on a signed minInt / -1.
 simd-4xu32: virtual{ byte-array } ;
+
+\\ A 128-bit SIMD vector of eight unsigned 16-bit integer lanes. Lane `+`, `-`, and `*` wrap on
+\\ overflow. `/` truncates toward zero. It throws `division-by-zero` on a zero lane, and
+\\ `fixnum-overflow` on a signed minInt / -1.
 simd-8xu16: virtual{ byte-array } ;
+
+\\ A 128-bit SIMD vector of sixteen unsigned 8-bit integer lanes. Lane `+`, `-`, and `*` wrap on
+\\ overflow. `/` truncates toward zero. It throws `division-by-zero` on a zero lane, and
+\\ `fixnum-overflow` on a signed minInt / -1.
 simd-16xu8: virtual{ byte-array } ;
 
-\ Construction: <simd-NxT> ( v0..vN-1 -- simd-NxT )
-<simd-2xf64>: ( f0 f1 -- simd-2xf64 )                                                 [ "2xf64" native.simd-from-stack >simd-2xf64 ] ;
-<simd-4xf32>: ( f0 f1 f2 f3 -- simd-4xf32 )                                           [ "4xf32" native.simd-from-stack >simd-4xf32 ] ;
-<simd-2xi64>: ( n0 n1 -- simd-2xi64 )                                                 [ "2xi64" native.simd-from-stack >simd-2xi64 ] ;
-<simd-4xi32>: ( n0 n1 n2 n3 -- simd-4xi32 )                                           [ "4xi32" native.simd-from-stack >simd-4xi32 ] ;
-<simd-8xi16>: ( n0 n1 n2 n3 n4 n5 n6 n7 -- simd-8xi16 )                               [ "8xi16" native.simd-from-stack >simd-8xi16 ] ;
+\\ A simd-2xf64 with lanes f0 and f1, in that order.
+\\
+\\   1.0 2.5 <simd-2xf64> simd>array
+\\   => { 1.0 2.5 }
+<simd-2xf64>: ( f0 f1 -- simd-2xf64 ) [ "2xf64" native.simd-from-stack >simd-2xf64 ] ;
+
+\\ A simd-4xf32 with lanes f0 through f3, in that order.
+\\
+\\   1.5 2.5 3.5 4.5 <simd-4xf32> 3 simd-lane
+\\   => 4.5
+<simd-4xf32>: ( f0 f1 f2 f3 -- simd-4xf32 ) [ "4xf32" native.simd-from-stack >simd-4xf32 ] ;
+
+\\ A simd-2xi64 with lanes n0 and n1, in that order. Throws `type-mismatch` when a value does not
+\\ fit the lane type.
+\\
+\\   7 -7 <simd-2xi64> simd>array
+\\   => { 7 -7 }
+<simd-2xi64>: ( n0 n1 -- simd-2xi64 ) [ "2xi64" native.simd-from-stack >simd-2xi64 ] ;
+
+\\ A simd-4xi32 with lanes n0 through n3, in that order. Throws `type-mismatch` when a value does
+\\ not fit the lane type.
+\\
+\\   1 2 3 4 <simd-4xi32> 2 simd-lane
+\\   => 3
+<simd-4xi32>: ( n0 n1 n2 n3 -- simd-4xi32 ) [ "4xi32" native.simd-from-stack >simd-4xi32 ] ;
+
+\\ A simd-8xi16 with lanes n0 through n7, in that order. Throws `type-mismatch` when a value does
+\\ not fit the lane type.
+\\
+\\   1 2 3 4 5 6 7 8 <simd-8xi16> 7 simd-lane
+\\   => 8
+<simd-8xi16>: ( n0 n1 n2 n3 n4 n5 n6 n7 -- simd-8xi16 ) [ "8xi16" native.simd-from-stack >simd-8xi16 ] ;
+
+\\ A simd-16xi8 with lanes n0 through n15, in that order. Throws `type-mismatch` when a value does
+\\ not fit the lane type.
+\\
+\\   1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 <simd-16xi8> 15 simd-lane
+\\   => 16
 <simd-16xi8>: ( n0 n1 n2 n3 n4 n5 n6 n7 n8 n9 n10 n11 n12 n13 n14 n15 -- simd-16xi8 ) [ "16xi8" native.simd-from-stack >simd-16xi8 ] ;
-<simd-2xu64>: ( n0 n1 -- simd-2xu64 )                                                 [ "2xu64" native.simd-from-stack >simd-2xu64 ] ;
-<simd-4xu32>: ( n0 n1 n2 n3 -- simd-4xu32 )                                           [ "4xu32" native.simd-from-stack >simd-4xu32 ] ;
-<simd-8xu16>: ( n0 n1 n2 n3 n4 n5 n6 n7 -- simd-8xu16 )                               [ "8xu16" native.simd-from-stack >simd-8xu16 ] ;
+
+\\ A simd-2xu64 with lanes n0 and n1, in that order. Throws `type-mismatch` when a value does not
+\\ fit the lane type.
+\\
+\\   1 2 <simd-2xu64> simd>array
+\\   => { 1 2 }
+<simd-2xu64>: ( n0 n1 -- simd-2xu64 ) [ "2xu64" native.simd-from-stack >simd-2xu64 ] ;
+
+\\ A simd-4xu32 with lanes n0 through n3, in that order. Throws `type-mismatch` when a value does
+\\ not fit the lane type.
+\\
+\\   1 2 3 4 <simd-4xu32> 0 simd-lane
+\\   => 1
+<simd-4xu32>: ( n0 n1 n2 n3 -- simd-4xu32 ) [ "4xu32" native.simd-from-stack >simd-4xu32 ] ;
+
+\\ A simd-8xu16 with lanes n0 through n7, in that order. Throws `type-mismatch` when a value does
+\\ not fit the lane type.
+\\
+\\   1 2 3 4 5 6 7 8 <simd-8xu16> 4 simd-lane
+\\   => 5
+<simd-8xu16>: ( n0 n1 n2 n3 n4 n5 n6 n7 -- simd-8xu16 ) [ "8xu16" native.simd-from-stack >simd-8xu16 ] ;
+
+\\ A simd-16xu8 with lanes n0 through n15, in that order. Throws `type-mismatch` when a value does
+\\ not fit the lane type.
+\\
+\\   255 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 <simd-16xu8> 0 simd-lane
+\\   => 255
 <simd-16xu8>: ( n0 n1 n2 n3 n4 n5 n6 n7 n8 n9 n10 n11 n12 n13 n14 n15 -- simd-16xu8 ) [ "16xu8" native.simd-from-stack >simd-16xu8 ] ;
 
-\ Construction: simd-splat:NxT ( value -- simd-NxT )
+\\ A simd-2xf64 with every lane set to value.
 simd-splat:2xf64: ( value -- simd-2xf64 ) [ "2xf64" native.simd-splat-impl >simd-2xf64 ] ;
+
+\\ A simd-4xf32 with every lane set to value.
 simd-splat:4xf32: ( value -- simd-4xf32 ) [ "4xf32" native.simd-splat-impl >simd-4xf32 ] ;
+
+\\ A simd-2xi64 with every lane set to value. Throws `type-mismatch` when the value does not fit
+\\ the lane type.
 simd-splat:2xi64: ( value -- simd-2xi64 ) [ "2xi64" native.simd-splat-impl >simd-2xi64 ] ;
+
+\\ A simd-4xi32 with every lane set to value. Throws `type-mismatch` when the value does not fit
+\\ the lane type.
 simd-splat:4xi32: ( value -- simd-4xi32 ) [ "4xi32" native.simd-splat-impl >simd-4xi32 ] ;
+
+\\ A simd-8xi16 with every lane set to value. Throws `type-mismatch` when the value does not fit
+\\ the lane type.
 simd-splat:8xi16: ( value -- simd-8xi16 ) [ "8xi16" native.simd-splat-impl >simd-8xi16 ] ;
+
+\\ A simd-16xi8 with every lane set to value. Throws `type-mismatch` when the value does not fit
+\\ the lane type.
 simd-splat:16xi8: ( value -- simd-16xi8 ) [ "16xi8" native.simd-splat-impl >simd-16xi8 ] ;
+
+\\ A simd-2xu64 with every lane set to value. Throws `type-mismatch` when the value does not fit
+\\ the lane type.
 simd-splat:2xu64: ( value -- simd-2xu64 ) [ "2xu64" native.simd-splat-impl >simd-2xu64 ] ;
+
+\\ A simd-4xu32 with every lane set to value. Throws `type-mismatch` when the value does not fit
+\\ the lane type.
 simd-splat:4xu32: ( value -- simd-4xu32 ) [ "4xu32" native.simd-splat-impl >simd-4xu32 ] ;
+
+\\ A simd-8xu16 with every lane set to value. Throws `type-mismatch` when the value does not fit
+\\ the lane type.
 simd-splat:8xu16: ( value -- simd-8xu16 ) [ "8xu16" native.simd-splat-impl >simd-8xu16 ] ;
+
+\\ A simd-16xu8 with every lane set to value. Throws `type-mismatch` when the value does not fit
+\\ the lane type.
 simd-splat:16xu8: ( value -- simd-16xu8 ) [ "16xu8" native.simd-splat-impl >simd-16xu8 ] ;
 
-\ Conversion: simd>array ( simd-NxT -- array )
+\\ The lanes as an array, lane 0 first. Throws `invalid-argument` on a value that is not a SIMD
+\\ vector.
 simd>array: generic ( simd-NxT -- array ) [
   f "simd>array: not a SIMD vector type" EInvalidArgument make-error throw
 ] ;
@@ -55,7 +174,11 @@ simd>array: method{ simd-4xu32 } [ native.simd-to-array ] ;
 simd>array: method{ simd-8xu16 } [ native.simd-to-array ] ;
 simd>array: method{ simd-16xu8 } [ native.simd-to-array ] ;
 
-\ Lane access: simd-lane ( simd-NxT fixnum -- value )
+\\ The value in lane n, counting from 0. Throws `index-out-of-bounds` when n is negative or not
+\\ below the lane count.
+\\
+\\   10 20 30 40 <simd-4xi32> 1 simd-lane
+\\   => 20
 simd-lane: generic ( simd-NxT fixnum -- value ) [
   f "simd-lane: not a SIMD vector type" EInvalidArgument make-error throw
 ] ;
@@ -70,13 +193,34 @@ simd-lane: method{ simd-4xu32 fixnum } [ native.simd-lane-get ] ;
 simd-lane: method{ simd-8xu16 fixnum } [ native.simd-lane-get ] ;
 simd-lane: method{ simd-16xu8 fixnum } [ native.simd-lane-get ] ;
 
-\ Lane mutation: simd-set-lane ( simd-NxT value fixnum -- simd-NxT )
+\\ A copy of the vector with lane n set to value. Throws `index-out-of-bounds` when n is outside
+\\ the lanes, and `type-mismatch` when the value does not fit the lane type.
+\\
+\\   1 2 3 4 <simd-4xi32> 9 2 simd-set-lane simd>array
+\\   => { 1 2 9 4 }
 simd-set-lane: ( simd-NxT value fixnum -- simd-NxT ) [ native.simd-lane-set ] ;
 
-\ Lane manipulation
+\\ A vector whose lane i is the source lane at index i of the array. The array holds one index per
+\\ lane. Throws `type-mismatch` when its length differs, and `index-out-of-bounds` when an index is
+\\ outside the lanes.
+\\
+\\   1 2 3 4 <simd-4xi32> { 3 2 1 0 } simd-shuffle simd>array
+\\   => { 4 3 2 1 }
 simd-shuffle: ( simd-NxT array -- simd-NxT ) [ native.simd-shuffle-impl ] ;
-simd-select:  ( mask a b -- simd-NxT )       [ native.simd-select-impl ] ;
-simd-blend:   ( a b fixnum -- simd-NxT )     [ native.simd-blend-impl ] ;
+
+\\ Lane i from a where lane i of mask is non-zero, and from b otherwise. All three vectors must be
+\\ the same type, or it throws `type-mismatch`.
+\\
+\\   -1 0 -1 0 <simd-4xi32> 1 2 3 4 <simd-4xi32> 5 6 7 8 <simd-4xi32> simd-select simd>array
+\\   => { 1 6 3 8 }
+simd-select: ( mask a b -- simd-NxT ) [ native.simd-select-impl ] ;
+
+\\ Lane i from b where bit i of the bitmask is set, and from a otherwise. Both vectors must be the
+\\ same type, or it throws `type-mismatch`.
+\\
+\\   1 2 3 4 <simd-4xi32> 5 6 7 8 <simd-4xi32> 5 simd-blend simd>array
+\\   => { 5 2 7 4 }
+simd-blend: ( a b fixnum -- simd-NxT ) [ native.simd-blend-impl ] ;
 
 \ Element-wise arithmetic: + - * /
 +: method{ simd-2xf64 simd-2xf64 } [ native.simd-add ] ;
@@ -158,4 +302,4 @@ inspect: method{ simd-16xu8 } [ "16xu8" (simd-inspect-helper) ] ;
 >string: method{ simd-8xu16 } [ inspect ] ;
 >string: method{ simd-16xu8 } [ inspect ] ;
 
-pragma{ lint-suppress: { broad-import: complex-word-undocumented: dead-definition: missing-doc-comment: missing-type-annotation: } }
+pragma{ lint-suppress: { broad-import: dead-definition: missing-type-annotation: } }

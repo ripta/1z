@@ -2,45 +2,139 @@
 
 use "strings" ;
 
-\ Virtual type definitions: each packed type wraps a byte-array
 \ A byte-array backing is deliberately not freezable, so these are not set members or container
 \ keys. See docs/guides/type-system.md, "Freezing a Newtype".
-packed-i8:  virtual{ byte-array } ;
+
+\\ A packed array of signed 8-bit integers. Integer `+`, `-`, and `*` wrap on overflow.
+packed-i8: virtual{ byte-array } ;
+
+\\ A packed array of signed 16-bit integers. Integer `+`, `-`, and `*` wrap on overflow.
 packed-i16: virtual{ byte-array } ;
+
+\\ A packed array of signed 32-bit integers. Integer `+`, `-`, and `*` wrap on overflow.
 packed-i32: virtual{ byte-array } ;
+
+\\ A packed array of signed 64-bit integers. Integer `+`, `-`, and `*` wrap on overflow.
 packed-i64: virtual{ byte-array } ;
-packed-u8:  virtual{ byte-array } ;
+
+\\ A packed array of unsigned 8-bit integers. Integer `+`, `-`, and `*` wrap on overflow.
+packed-u8: virtual{ byte-array } ;
+
+\\ A packed array of unsigned 16-bit integers. Integer `+`, `-`, and `*` wrap on overflow.
 packed-u16: virtual{ byte-array } ;
+
+\\ A packed array of unsigned 32-bit integers. Integer `+`, `-`, and `*` wrap on overflow.
 packed-u32: virtual{ byte-array } ;
+
+\\ A packed array of unsigned 64-bit integers. Integer `+`, `-`, and `*` wrap on overflow.
 packed-u64: virtual{ byte-array } ;
+
+\\ A packed array of 32-bit floats. Arithmetic computes in single precision.
 packed-f32: virtual{ byte-array } ;
+
+\\ A packed array of 64-bit floats.
 packed-f64: virtual{ byte-array } ;
 
-\ Construction: >packed:T ( array -- packed-T )
->packed:i8:  ( array -- packed-i8 )  [ "i8" native.packed-from-array >packed-i8 ] ;
+\\ A packed-i8 of the array's elements. Throws `type-mismatch` when an element is not a whole
+\\ number in the i8 range.
+>packed:i8: ( array -- packed-i8 ) [ "i8" native.packed-from-array >packed-i8 ] ;
+
+\\ A packed-i16 of the array's elements. Throws `type-mismatch` when an element is not a whole
+\\ number in the i16 range.
 >packed:i16: ( array -- packed-i16 ) [ "i16" native.packed-from-array >packed-i16 ] ;
+
+\\ A packed-i32 of the array's elements. Throws `type-mismatch` when an element is not a whole
+\\ number in the i32 range.
 >packed:i32: ( array -- packed-i32 ) [ "i32" native.packed-from-array >packed-i32 ] ;
+
+\\ A packed-i64 of the array's elements. Throws `type-mismatch` when an element is not a whole
+\\ number in the i64 range.
 >packed:i64: ( array -- packed-i64 ) [ "i64" native.packed-from-array >packed-i64 ] ;
->packed:u8:  ( array -- packed-u8 )  [ "u8" native.packed-from-array >packed-u8 ] ;
+
+\\ A packed-u8 of the array's elements. Throws `type-mismatch` when an element is not a whole
+\\ number in the u8 range.
+>packed:u8: ( array -- packed-u8 ) [ "u8" native.packed-from-array >packed-u8 ] ;
+
+\\ A packed-u16 of the array's elements. Throws `type-mismatch` when an element is not a whole
+\\ number in the u16 range.
 >packed:u16: ( array -- packed-u16 ) [ "u16" native.packed-from-array >packed-u16 ] ;
+
+\\ A packed-u32 of the array's elements. Throws `type-mismatch` when an element is not a whole
+\\ number in the u32 range.
 >packed:u32: ( array -- packed-u32 ) [ "u32" native.packed-from-array >packed-u32 ] ;
+
+\\ A packed-u64 of the array's elements. Throws `type-mismatch` when an element is not a whole
+\\ number in the u64 range.
 >packed:u64: ( array -- packed-u64 ) [ "u64" native.packed-from-array >packed-u64 ] ;
+
+\\ A packed-f32 of the array's elements, with integers converted to float.
 >packed:f32: ( array -- packed-f32 ) [ "f32" native.packed-from-array >packed-f32 ] ;
+
+\\ A packed-f64 of the array's elements, with integers converted to float.
 >packed:f64: ( array -- packed-f64 ) [ "f64" native.packed-from-array >packed-f64 ] ;
 
-\ Construction: packed-fill:T ( n value -- packed-T )
-packed-fill:i8:  ( n value -- packed-i8 )  [ "i8" native.packed-fill-impl >packed-i8 ] ;
+\\ A packed-i8 of n copies of value. Throws `type-mismatch` when the value does not fit.
+\\
+\\   3 -7 packed-fill:i8 packed>array
+\\   => { -7 -7 -7 }
+packed-fill:i8: ( n value -- packed-i8 ) [ "i8" native.packed-fill-impl >packed-i8 ] ;
+
+\\ A packed-i16 of n copies of value. Throws `type-mismatch` when the value does not fit.
+\\
+\\   3 7 packed-fill:i16 packed>array
+\\   => { 7 7 7 }
 packed-fill:i16: ( n value -- packed-i16 ) [ "i16" native.packed-fill-impl >packed-i16 ] ;
+
+\\ A packed-i32 of n copies of value. Throws `type-mismatch` when the value does not fit.
+\\
+\\   2 -1 packed-fill:i32 packed>array
+\\   => { -1 -1 }
 packed-fill:i32: ( n value -- packed-i32 ) [ "i32" native.packed-fill-impl >packed-i32 ] ;
+
+\\ A packed-i64 of n copies of value. Throws `type-mismatch` when the value does not fit.
+\\
+\\   2 5 packed-fill:i64 packed>array
+\\   => { 5 5 }
 packed-fill:i64: ( n value -- packed-i64 ) [ "i64" native.packed-fill-impl >packed-i64 ] ;
-packed-fill:u8:  ( n value -- packed-u8 )  [ "u8" native.packed-fill-impl >packed-u8 ] ;
+
+\\ A packed-u8 of n copies of value. Throws `type-mismatch` when the value does not fit.
+\\
+\\   3 255 packed-fill:u8 packed>array
+\\   => { 255 255 255 }
+packed-fill:u8: ( n value -- packed-u8 ) [ "u8" native.packed-fill-impl >packed-u8 ] ;
+
+\\ A packed-u16 of n copies of value. Throws `type-mismatch` when the value does not fit.
+\\
+\\   2 9 packed-fill:u16 packed>array
+\\   => { 9 9 }
 packed-fill:u16: ( n value -- packed-u16 ) [ "u16" native.packed-fill-impl >packed-u16 ] ;
+
+\\ A packed-u32 of n copies of value. Throws `type-mismatch` when the value does not fit.
+\\
+\\   2 9 packed-fill:u32 packed>array
+\\   => { 9 9 }
 packed-fill:u32: ( n value -- packed-u32 ) [ "u32" native.packed-fill-impl >packed-u32 ] ;
+
+\\ A packed-u64 of n copies of value. Throws `type-mismatch` when the value does not fit.
+\\
+\\   2 9 packed-fill:u64 packed>array
+\\   => { 9 9 }
 packed-fill:u64: ( n value -- packed-u64 ) [ "u64" native.packed-fill-impl >packed-u64 ] ;
+
+\\ A packed-f32 of n copies of value.
+\\
+\\   2 0.5 packed-fill:f32 packed>array
+\\   => { 0.5 0.5 }
 packed-fill:f32: ( n value -- packed-f32 ) [ "f32" native.packed-fill-impl >packed-f32 ] ;
+
+\\ A packed-f64 of n copies of value.
+\\
+\\   2 1.5 packed-fill:f64 packed>array
+\\   => { 1.5 1.5 }
 packed-fill:f64: ( n value -- packed-f64 ) [ "f64" native.packed-fill-impl >packed-f64 ] ;
 
-\ Conversion: packed>array ( packed-T -- array )
+\\ The elements as an array of numbers. Throws `invalid-argument` on a value that is
+\\ not a packed array.
 packed>array: generic ( packed-T -- array ) [
   f "packed>array: not a packed type" EInvalidArgument make-error throw
 ] ;
@@ -200,6 +294,8 @@ packed>array: method{ packed-f64 } [ native.packed-to-array ] ;
 
 \ Reductions
 
+\\ The sum of the elements, or 0 when empty. An integer sum wraps in the element type, so
+\\ `{ 100 200 } >packed:u8 packed-sum` is 44.
 packed-sum: generic ( packed-T -- number ) [
   f "packed-sum: not a packed type" EInvalidArgument make-error throw
 ] ;
@@ -214,6 +310,7 @@ packed-sum: method{ packed-u64 } [ native.packed-sum-impl ] ;
 packed-sum: method{ packed-f32 } [ native.packed-sum-impl ] ;
 packed-sum: method{ packed-f64 } [ native.packed-sum-impl ] ;
 
+\\ The product of the elements, or 1 when empty. An integer product wraps in the element type.
 packed-product: generic ( packed-T -- number ) [
   f "packed-product: not a packed type" EInvalidArgument make-error throw
 ] ;
@@ -228,6 +325,7 @@ packed-product: method{ packed-u64 } [ native.packed-product-impl ] ;
 packed-product: method{ packed-f32 } [ native.packed-product-impl ] ;
 packed-product: method{ packed-f64 } [ native.packed-product-impl ] ;
 
+\\ The smallest element. Throws `invalid-argument` when empty.
 packed-min: generic ( packed-T -- number ) [
   f "packed-min: not a packed type" EInvalidArgument make-error throw
 ] ;
@@ -242,6 +340,7 @@ packed-min: method{ packed-u64 } [ native.packed-min-impl ] ;
 packed-min: method{ packed-f32 } [ native.packed-min-impl ] ;
 packed-min: method{ packed-f64 } [ native.packed-min-impl ] ;
 
+\\ The largest element. Throws `invalid-argument` when empty.
 packed-max: generic ( packed-T -- number ) [
   f "packed-max: not a packed type" EInvalidArgument make-error throw
 ] ;
@@ -256,6 +355,11 @@ packed-max: method{ packed-u64 } [ native.packed-max-impl ] ;
 packed-max: method{ packed-f32 } [ native.packed-max-impl ] ;
 packed-max: method{ packed-f64 } [ native.packed-max-impl ] ;
 
+\\ The sum of the element-wise products of two packed arrays of the same type, or 0 when empty.
+\\ An integer result wraps in the element type. Throws `type-mismatch` when the lengths differ.
+\\
+\\   { 1 2 3 } >packed:i32 { 4 5 6 } >packed:i32 packed-dot
+\\   => 32
 packed-dot: generic ( packed-T packed-T -- number ) [
   f "packed-dot: not a packed type" EInvalidArgument make-error throw
 ] ;
@@ -310,6 +414,9 @@ packed-dot: method{ packed-f64 packed-f64 } [ native.packed-dot-impl ] ;
 \\ #map probes this word to vectorize a recognized arithmetic quotation. Only the float
 \\ types register it: a recognized #map over a packed-f32 computes in f32, matching the
 \\ explicit broadcast path rather than the f64 the scalar quotation path computes in.
+\\
+\\   { 1.5 2.5 } >packed:f32 packed-parts nip
+\\   => f32:
 packed-parts: generic ( packed-T -- byte-array elem-type ) [
   f "packed-parts: not a packed float type" EInvalidArgument make-error throw
 ] ;
@@ -348,4 +455,4 @@ inspect: method{ packed-f64 } [ "f64" (packed-inspect-helper) ] ;
 >string: method{ packed-f32 } [ inspect ] ;
 >string: method{ packed-f64 } [ inspect ] ;
 
-pragma{ lint-suppress: { broad-import: complex-word-undocumented: dead-definition: missing-doc-comment: missing-type-annotation: } }
+pragma{ lint-suppress: { broad-import: dead-definition: missing-type-annotation: } }

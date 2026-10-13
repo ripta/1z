@@ -232,6 +232,12 @@ PASS: logical-nth 2D middle
 Stack: [ ]
 PASS: logical-nth 1D
 Stack: [ ]
+PASS: logical-nth follows strides
+Stack: [ ]
+PASS: logical-nth past the end
+Stack: [ ]
+PASS: logical-nth negative
+Stack: [ ]
 === ndarray transpose ===
 Stack: [ ]
 Stack: [ ndarray{ data: V{ 1 2 3 4 5 6 } shape: { 3 2 } strides: { 1 3 } element-type: <type:fixnum> } ]
@@ -256,6 +262,20 @@ PASS: transpose of transpose shape
 Stack: [ ]
 Stack: [ ndarray{ data: V{ 1 2 3 } shape: { 3 } strides: { 1 } element-type: <type:fixnum> } ]
 PASS: transpose 1D shape unchanged
+Stack: [ ]
+=== ndarray arithmetic on a transposed operand ===
+Stack: [ ]
+Stack: [ ndarray{ data: V{ 10 40 20 50 30 60 } shape: { 3 2 } strides: { 2 1 } element-type: <type:fixnum> } ]
+PASS: transposed * scalar
+Stack: [ ]
+Stack: [ ndarray{ data: V{ 9 6 8 5 7 4 } shape: { 3 2 } strides: { 2 1 } element-type: <type:fixnum> } ]
+PASS: scalar - transposed
+Stack: [ ]
+Stack: [ ndarray{ data: V{ 2 5 3 6 4 7 } shape: { 3 2 } strides: { 2 1 } element-type: <type:fixnum> } ]
+PASS: transposed + contiguous
+Stack: [ ]
+Stack: [ ndarray{ data: V{ 0 -3 -1 -4 -2 -5 } shape: { 3 2 } strides: { 2 1 } element-type: <type:fixnum> } ]
+PASS: contiguous - transposed
 Stack: [ ]
 === ndarray map ===
 Stack: [ ]
