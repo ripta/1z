@@ -1,26 +1,26 @@
-src/prelude.1z:1696: note: pragma-get?: callee native.pragma-get-raw is polymorphic; effect trusted from declaration
-src/prelude.1z:983: warning: borrow: word has no declared stack effect
+src/prelude.1z:1752: note: pragma-get?: callee native.pragma-get-raw is polymorphic; effect trusted from declaration
+src/prelude.1z:1039: warning: borrow: word has no declared stack effect
 src/prelude.1z:293: warning: associative: word has no declared stack effect
 src/prelude.1z:302: warning: parameter{: word has no declared stack effect
 src/prelude.1z:23: warning: B{: word has no declared stack effect
 src/prelude.1z:102: warning: virtual{: word has no declared stack effect
 src/prelude.1z:259: warning: method{: word has no declared stack effect
-src/prelude.1z:1608: warning: bind-inputs: word has no declared stack effect
-src/prelude.1z:908: warning: use: word has no declared stack effect
+src/prelude.1z:1664: warning: bind-inputs: word has no declared stack effect
+src/prelude.1z:964: warning: use: word has no declared stack effect
 src/prelude.1z:31: warning: M{: word has no declared stack effect
 src/prelude.1z:117: warning: match{: word has no declared stack effect
 src/prelude.1z:77: warning: W{: word has no declared stack effect
-src/prelude.1z:722: warning: trace-stack: cannot verify trace-stack: callee native.stack-snapshot has unknown effect
-src/prelude.1z:1306: note: ?flatten: callee native.virtual-struct-unwrap is polymorphic; effect trusted from declaration
+src/prelude.1z:776: warning: trace-stack: cannot verify trace-stack: callee native.stack-snapshot has unknown effect
+src/prelude.1z:1362: note: ?flatten: callee native.virtual-struct-unwrap is polymorphic; effect trusted from declaration
 src/prelude.1z:274: warning: comparable: word has no declared stack effect
 src/prelude.1z:290: warning: stringable: word has no declared stack effect
 src/prelude.1z:111: warning: enum{: word has no declared stack effect
 src/prelude.1z:37: warning: bind{: word has no declared stack effect
 src/prelude.1z:287: warning: inspectable: word has no declared stack effect
 src/prelude.1z:15: warning: H{: word has no declared stack effect
-src/prelude.1z:1675: warning: private(shadow-ok){: word has no declared stack effect
-src/prelude.1z:1772: warning: local{: word has no declared stack effect
-src/prelude.1z:1690: warning: private{: word has no declared stack effect
+src/prelude.1z:1731: warning: private(shadow-ok){: word has no declared stack effect
+src/prelude.1z:1832: warning: local{: word has no declared stack effect
+src/prelude.1z:1746: warning: private{: word has no declared stack effect
 src/prelude.1z:19: warning: V{: word has no declared stack effect
 src/prelude.1z:86: warning: struct{: word has no declared stack effect
 src/prelude.1z:27: warning: S{: word has no declared stack effect

@@ -132,17 +132,17 @@ PASS: consecutive tai-now is monotonic
 Stack: [ ]
 === leap-second file errors carry a file offset ===
 Stack: [ ]
-Stack: [ <error parse-error: invalid leap-second entry '12x' at position 18 data=H{ text: "12x" offset: 18 } [src/prelude.1z:1329:throw <- tai:76:recover <- tai:89:(leap-field) <- tai:107:dip <- tai:115:#each <- tests/integration/tai.1z:135:recover]> ]
+Stack: [ <error parse-error: invalid leap-second entry '12x' at position 18 data=H{ text: "12x" offset: 18 } [src/prelude.1z:1385:throw <- tai:76:recover <- tai:89:(leap-field) <- tai:107:dip <- tai:115:#each <- tests/integration/tai.1z:135:recover]> ]
 PASS: bad timestamp message
-Stack: [ <error parse-error: invalid leap-second entry '12x' at position 18 data=H{ text: "12x" offset: 18 } [src/prelude.1z:1329:throw <- tai:76:recover <- tai:89:(leap-field) <- tai:107:dip <- tai:115:#each <- tests/integration/tai.1z:135:recover]> ]
+Stack: [ <error parse-error: invalid leap-second entry '12x' at position 18 data=H{ text: "12x" offset: 18 } [src/prelude.1z:1385:throw <- tai:76:recover <- tai:89:(leap-field) <- tai:107:dip <- tai:115:#each <- tests/integration/tai.1z:135:recover]> ]
 Stack: [ H{ text: "12x" offset: 18 } ]
 PASS: bad timestamp offset skips a comment, a blank line, and indentation
 Stack: [ H{ text: "12x" offset: 18 } ]
 PASS: bad timestamp text
 Stack: [ ]
-Stack: [ <error parse-error: invalid leap-second entry '1o' at position 11 data=H{ text: "1o" offset: 11 } [src/prelude.1z:1329:throw <- tai:76:recover <- tai:91:(leap-field) <- tai:107:dip <- tai:115:#each <- tests/integration/tai.1z:141:recover]> ]
+Stack: [ <error parse-error: invalid leap-second entry '1o' at position 11 data=H{ text: "1o" offset: 11 } [src/prelude.1z:1385:throw <- tai:76:recover <- tai:91:(leap-field) <- tai:107:dip <- tai:115:#each <- tests/integration/tai.1z:141:recover]> ]
 PASS: bad offset message
-Stack: [ <error parse-error: invalid leap-second entry '1o' at position 11 data=H{ text: "1o" offset: 11 } [src/prelude.1z:1329:throw <- tai:76:recover <- tai:91:(leap-field) <- tai:107:dip <- tai:115:#each <- tests/integration/tai.1z:141:recover]> ]
+Stack: [ <error parse-error: invalid leap-second entry '1o' at position 11 data=H{ text: "1o" offset: 11 } [src/prelude.1z:1385:throw <- tai:76:recover <- tai:91:(leap-field) <- tai:107:dip <- tai:115:#each <- tests/integration/tai.1z:141:recover]> ]
 Stack: [ H{ text: "1o" offset: 11 } ]
 PASS: bad offset field points past the timestamp
 Stack: [ H{ text: "1o" offset: 11 } ]

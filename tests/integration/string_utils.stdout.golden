@@ -129,9 +129,9 @@ Stack: [ ]
 Stack: [ ]
 PASS: split-once no match type
 Stack: [ ]
-Stack: [ <error parse-error: delimiter ',' not found at position 5 data=H{ offset: 5 } [src/prelude.1z:1329:throw <- tests/integration/string_utils.1z:90:recover]> ]
+Stack: [ <error parse-error: delimiter ',' not found at position 5 data=H{ offset: 5 } [src/prelude.1z:1385:throw <- tests/integration/string_utils.1z:90:recover]> ]
 PASS: split-once no match message
-Stack: [ <error parse-error: delimiter ',' not found at position 5 data=H{ offset: 5 } [src/prelude.1z:1329:throw <- tests/integration/string_utils.1z:90:recover]> ]
+Stack: [ <error parse-error: delimiter ',' not found at position 5 data=H{ offset: 5 } [src/prelude.1z:1385:throw <- tests/integration/string_utils.1z:90:recover]> ]
 Stack: [ H{ offset: 5 } ]
 PASS: split-once offset is the input's codepoint length
 Stack: [ H{ offset: 5 } ]

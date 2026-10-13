@@ -1,5 +1,5 @@
 file                                   public undocumented    no-effect       inputs      untyped
-src/prelude.1z                            252           53            0          348          298
+src/prelude.1z                            252            0            0          348          298
 lib/1z-tokens.1z                            3            1            0            1            1
 lib/bst.1z                                 58           57            0          119          119
 lib/bytes.1z                               12            0            0           36           36
@@ -119,4 +119,4 @@ lib/text_slow.1z                            3            3            0         
 lib/time.1z                                36           36            0           34           34
 lib/union-find.1z                          13            0            0           26            8
 lib/zlib.1z                                 6            1            0            8            8
-total                                    1367          486            0         1975         1624
+total                                    1367          433            0         1975         1624

@@ -365,34 +365,68 @@ error?: ( val -- ? ) [ type-of error = ] ;
 error-type?: ( error type -- error ? ) [ over error-type: @get = ] ;
 
 \ Error type constants
-EStackUnderflow:      ( -- sym ) [ stack-underflow: ] ;
-ETypeMismatch:        ( -- sym ) [ type-mismatch: ] ;
-EDivisionByZero:      ( -- sym ) [ division-by-zero: ] ;
-EFixnumOverflow:      ( -- sym ) [ fixnum-overflow: ] ;
+\\ Error type raised when a word needs more values than the stack holds.
+EStackUnderflow: ( -- sym ) [ stack-underflow: ] ;
+\\ Error type raised when a native word, or `throw-type-error`, gets a value of the wrong type.
+ETypeMismatch: ( -- sym ) [ type-mismatch: ] ;
+\\ Error type raised by integer `/` or `%` with a zero divisor. Float division does not raise it.
+EDivisionByZero: ( -- sym ) [ division-by-zero: ] ;
+\\ Error type raised when an integer does not fit a fixed width, such as a byte outside 0-255.
+\\ Ordinary arithmetic promotes to a bignum instead.
+EFixnumOverflow: ( -- sym ) [ fixnum-overflow: ] ;
+\\ Error type raised when a word or quotation leaves a stack depth its declared effect does not allow.
 EStackEffectMismatch: ( -- sym ) [ stack-effect-mismatch: ] ;
-EUnknownWord:         ( -- sym ) [ unknown-word: ] ;
-EFileNotFound:        ( -- sym ) [ file-not-found: ] ;
-EFileReadFailed:      ( -- sym ) [ file-read-failed: ] ;
-EUserRethrown:        ( -- sym ) [ user-rethrown: ] ;
-EUserThrown:          ( -- sym ) [ user-thrown: ] ;
-EKeyNotFound:         ( -- sym ) [ key-not-found: ] ;
-ENotComparable:       ( -- sym ) [ not-comparable: ] ;
+\\ Error type raised when a word, or a qualified `module.word` name, does not resolve.
+EUnknownWord: ( -- sym ) [ unknown-word: ] ;
+\\ Error type raised when a load or a filesystem operation cannot find its path.
+EFileNotFound: ( -- sym ) [ file-not-found: ] ;
+\\ Error type raised when reading a module's source fails during `load`.
+EFileReadFailed: ( -- sym ) [ file-read-failed: ] ;
+\\ Error type `rethrow` raises when it re-raises a caught error.
+EUserRethrown: ( -- sym ) [ user-rethrown: ] ;
+\\ Generic error type for a user error with no more specific type. `recover` reports a thrown error
+\\ under its own type, not this one.
+EUserThrown: ( -- sym ) [ user-thrown: ] ;
+\\ Error type raised when `@get` or another lookup finds no entry for the key.
+EKeyNotFound: ( -- sym ) [ key-not-found: ] ;
+\\ Error type raised when `cmp` gets a NaN, or a pair of values with no ordering.
+ENotComparable: ( -- sym ) [ not-comparable: ] ;
+\\ Error type for an operating-system I/O failure with no more specific error type.
 EIOFailed: ( -- sym ) [ io-failed: ] ;
+\\ Error type raised when `case` or `cond` runs out of branches and has no default.
 ENoMatchingBranch: ( -- sym ) [ no-matching-branch: ] ;
+\\ Error type raised when a definition would replace a `const` word.
 ECannotRedefineConst: ( -- sym ) [ cannot-redefine-const: ] ;
-EArityMismatch:       ( -- sym ) [ arity-mismatch: ] ;
-EUnexpectedEOF:       ( -- sym ) [ unexpected-eof: ] ;
-EIndexOutOfBounds:    ( -- sym ) [ index-out-of-bounds: ] ;
-EInvalidArgument:     ( -- sym ) [ invalid-argument: ] ;
-EUseAfterClose:       ( -- sym ) [ use-after-close: ] ;
-EMissingDocComment:   ( -- sym ) [ missing-doc-comment: ] ;
-ENonTailRecursion:    ( -- sym ) [ non-tail-recursion: ] ;
-EStackOverflow:       ( -- sym ) [ stack-overflow: ] ;
-ETaskArenaEscape:     ( -- sym ) [ task-arena-escape: ] ;
-EOrphanedMethods:     ( -- sym ) [ orphaned-methods: ] ;
-EEmptySequence:       ( -- sym ) [ empty-sequence: ] ;
-ENotOnTaskStack:      ( -- sym ) [ not-on-task-stack: ] ;
-EParseError:          ( -- sym ) [ parse-error: ] ;
+\\ Error type raised when a redefinition changes a word's input or output count.
+EArityMismatch: ( -- sym ) [ arity-mismatch: ] ;
+\\ Error type raised when input ends before a complete item has been read.
+EUnexpectedEOF: ( -- sym ) [ unexpected-eof: ] ;
+\\ Error type raised when an index, slice bound, or count falls outside a sequence.
+EIndexOutOfBounds: ( -- sym ) [ index-out-of-bounds: ] ;
+\\ Error type raised for an argument of the right type whose value is not allowed.
+EInvalidArgument: ( -- sym ) [ invalid-argument: ] ;
+\\ Error type raised when an operation uses a closed resource, such as a watcher or an FFI library.
+\\ A closed stream raises `closed-stream` instead.
+EUseAfterClose: ( -- sym ) [ use-after-close: ] ;
+\\ Error type raised when the `require-doc` pragma covers a word defined without a doc comment.
+EMissingDocComment: ( -- sym ) [ missing-doc-comment: ] ;
+\\ Error type raised when a word calls itself outside tail position without the `stack-recursive`
+\\ marker.
+ENonTailRecursion: ( -- sym ) [ non-tail-recursion: ] ;
+\\ Error type raised when nested word calls exhaust the native stack.
+EStackOverflow: ( -- sym ) [ stack-overflow: ] ;
+\\ Error type raised when a stream, parameter, iterator, or resource is sent across a task boundary.
+\\ Those values are owned by the sending task's arena.
+ETaskArenaEscape: ( -- sym ) [ task-arena-escape: ] ;
+\\ Error type raised when a redefinition without `override` would drop a generic's registered methods.
+EOrphanedMethods: ( -- sym ) [ orphaned-methods: ] ;
+\\ Error type raised when `#first`, `#last`, `#pop`, or `#shift` finds an empty sequence.
+EEmptySequence: ( -- sym ) [ empty-sequence: ] ;
+\\ Error type raised when a task tries to park while off its own task stack, such as during
+\\ parse-time execution.
+ENotOnTaskStack: ( -- sym ) [ not-on-task-stack: ] ;
+\\ Error type raised for malformed syntax, or when a parse-time-only word runs at runtime.
+EParseError: ( -- sym ) [ parse-error: ] ;
 
 \ TODO(ripta): the pattern is a bit repetitive and odd; maybe a parse-time?
 \\ Construct and throw a no-matching-branch error with the given data.
@@ -418,26 +452,46 @@ throw-type-error: never-returns ( value expected-str -- * ) [
 ] ;
 
 \ Type predicates
-fixnum?:     ( val -- ? ) [ type-of fixnum = ] ;
-boolean?:    ( val -- ? ) [ type-of boolean = ] ;
-string?:     ( val -- ? ) [ type-of string = ] ;
-symbol?:     ( val -- ? ) [ type-of symbol = ] ;
-array?:      ( val -- ? ) [ type-of array = ] ;
-quotation?:  ( val -- ? ) [ type-of quotation = ] ;
-hash?:       ( val -- ? ) [ type-of hash = ] ;
-vector?:     ( val -- ? ) [ type-of vector = ] ;
+\\ True for a fixnum.
+fixnum?: ( val -- ? ) [ type-of fixnum = ] ;
+\\ True for a boolean.
+boolean?: ( val -- ? ) [ type-of boolean = ] ;
+\\ True for a string.
+string?: ( val -- ? ) [ type-of string = ] ;
+\\ True for a symbol.
+symbol?: ( val -- ? ) [ type-of symbol = ] ;
+\\ True for an array.
+array?: ( val -- ? ) [ type-of array = ] ;
+\\ True for a quotation.
+quotation?: ( val -- ? ) [ type-of quotation = ] ;
+\\ True for a hash.
+hash?: ( val -- ? ) [ type-of hash = ] ;
+\\ True for a vector.
+vector?: ( val -- ? ) [ type-of vector = ] ;
+\\ True for a byte-array.
 byte-array?: ( val -- ? ) [ type-of byte-array = ] ;
+\\ True for a set.
 set?: ( val -- ? ) [ type-of set = ] ;
-mutable-map?:       ( val -- ? ) [ type-of mutable-map = ] ;
-value-map?:         ( val -- ? ) [ type-of value-map = ] ;
+\\ True for a mutable-map.
+mutable-map?: ( val -- ? ) [ type-of mutable-map = ] ;
+\\ True for a value-map.
+value-map?: ( val -- ? ) [ type-of value-map = ] ;
+\\ True for a mutable-value-map.
 mutable-value-map?: ( val -- ? ) [ type-of mutable-value-map = ] ;
-stream?:    ( val -- ? ) [ type-of stream = ] ;
+\\ True for a stream.
+stream?: ( val -- ? ) [ type-of stream = ] ;
+\\ True for a parameter.
 parameter?: ( val -- ? ) [ type-of parameter = ] ;
-module?:    ( val -- ? ) [ type-of module = ] ;
-marker?:    ( val -- ? ) [ type-of marker = ] ;
-iterator?:  ( val -- ? ) [ type-of iterator = ] ;
-float?:     ( val -- ? ) [ type-of float = ] ;
-bignum?:    ( val -- ? ) [ type-of bignum = ] ;
+\\ True for a module.
+module?: ( val -- ? ) [ type-of module = ] ;
+\\ True for a marker.
+marker?: ( val -- ? ) [ type-of marker = ] ;
+\\ True for an iterator.
+iterator?: ( val -- ? ) [ type-of iterator = ] ;
+\\ True for a float. Use `number?` for any numeric type.
+float?: ( val -- ? ) [ type-of float = ] ;
+\\ True for a bignum. Use `integer?` to accept a fixnum too.
+bignum?: ( val -- ? ) [ type-of bignum = ] ;
 
 \\ True for any numeric type.
 number?: ( val -- ? ) [ "numeric" type-has-property? ] ;
@@ -749,6 +803,8 @@ read-line: ( -- str/f ) [ input-stream get stream-read-line ] ;
 \   selective words:   use { word1: word2: } "file.1z" ;
 \   allow shadowing:   use "file.1z" shadow-ok ;
 
+\\ Error type raised when an import or a definition would shadow an existing binding without
+\\ `shadow-ok` or `override`.
 EImportConflict: ( -- sym ) [ import-conflict: ] ;
 
 \ True when `name` resolves to the same definition in the incoming `module` and in the import
@@ -1704,13 +1760,17 @@ pragma-get: ( name -- value ) [
   if
 ] ;
 
-\\ Universal-bool descriptor predicates and kind accessor exposed at the
-\\ global namespace. Pass through to the native implementations.
-descriptor-numeric?: ( descriptor -- ? )      [ native.descriptor-numeric? ] ;
-descriptor-exact?:   ( descriptor -- ? )      [ native.descriptor-exact? ] ;
-descriptor-integer?: ( descriptor -- ? )      [ native.descriptor-integer? ] ;
-descriptor-mutable?: ( descriptor -- ? )      [ native.descriptor-mutable? ] ;
-descriptor-kind:     ( descriptor -- symbol ) [ native.descriptor-kind ] ;
+\\ True when a type descriptor is numeric, as for fixnum, bignum, and float.
+descriptor-numeric?: ( descriptor -- ? ) [ native.descriptor-numeric? ] ;
+\\ True when a type descriptor is an exact numeric type, as for fixnum and bignum.
+descriptor-exact?: ( descriptor -- ? ) [ native.descriptor-exact? ] ;
+\\ True when a type descriptor is an integer type, as for fixnum and bignum.
+descriptor-integer?: ( descriptor -- ? ) [ native.descriptor-integer? ] ;
+\\ True when a type descriptor's values are mutable, as for vector and mutable-map.
+descriptor-mutable?: ( descriptor -- ? ) [ native.descriptor-mutable? ] ;
+\\ The kind of a type descriptor as a symbol, such as `builtin-type`, `struct-descriptor`, or
+\\ `enum-descriptor`.
+descriptor-kind: ( descriptor -- symbol ) [ native.descriptor-kind ] ;
 
 \\ Field names of a descriptor as an array of strings, or option:none if the
 \\ kind has no fields concept.
@@ -1775,4 +1835,4 @@ local{: parse-time [
 \ the base scope this same file booted, so every one of them would report as a shadow.
 \
 \ The other rules are ones this file does not yet satisfy. The change that fixes one drops it here.
-pragma{ lint-suppress: { base-scope-shadow: complex-word-undocumented: constructor-consistency: conversion-naming: dead-definition: duplicate-definition: missing-doc-comment: missing-type-annotation: mutation-suffix-misuse: non-kebab-case: orphaned-doc-comment: predicate-naming: } }
+pragma{ lint-suppress: { base-scope-shadow: complex-word-undocumented: constructor-consistency: conversion-naming: dead-definition: duplicate-definition: missing-type-annotation: mutation-suffix-misuse: non-kebab-case: orphaned-doc-comment: predicate-naming: } }
