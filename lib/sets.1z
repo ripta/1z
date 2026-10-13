@@ -1,15 +1,27 @@
 \ lib/sets.1z - Set predicates and utilities
 
-\ Check if set1 is a subset of set2 (every element of set1 is in set2)
+\\ True when every element of set1 is also in set2.
+\\
+\\   S{ 1 2 } S{ 1 2 3 } @subset?
+\\   => t
 @subset?: ( set1 set2 -- ? ) [ @difference #len 0 = ] ;
 
-\ Check if set1 is a superset of set2 (every element of set2 is in set1)
+\\ True when every element of set2 is also in set1.
+\\
+\\   S{ 1 2 3 } S{ 1 2 } @superset?
+\\   => t
 @superset?: ( set1 set2 -- ? ) [ swap @subset? ] ;
 
-\ Check if two sets have no elements in common
+\\ True when the two sets have no element in common.
+\\
+\\   S{ 1 2 } S{ 3 4 } @disjoint?
+\\   => t
 @disjoint?: ( set1 set2 -- ? ) [ @intersection #len 0 = ] ;
 
-\ Elements in either set but not both
+\\ The elements in exactly one of the two sets.
+\\
+\\   S{ 1 2 3 } S{ 2 3 4 } @symmetric-difference S{ 1 4 } =
+\\   => t
 @symmetric-difference: ( set1 set2 -- set ) [ 2dup @difference -rot> swap @difference @union ] ;
 
-pragma{ lint-suppress: { complex-word-undocumented: dead-definition: missing-doc-comment: missing-type-annotation: } }
+pragma{ lint-suppress: { dead-definition: missing-type-annotation: } }

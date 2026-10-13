@@ -11,879 +11,708 @@ tree-node: enum{
 } ;
 bst: struct{ root: tree-node comparator: quotation } ;
 
-\ Short aliases
-leaf: ( -- tree-node ) [ tree-node:leaf ] ;
-leaf?: ( node -- bool ) [ tree-node:leaf? ] ;
-
-\ Cached subtree size, read from the node in O(1). Leaves are empty.
-node-size: ( node -- n ) [
-  {
-    tree-node:branch:    [ nip nip nip nip ]
-    tree-node:leaf:      [ 0 ]
-    tree-node:bb-leaf:   [ 0 ]
-    tree-node:bb-branch: [ nip nip nip nip ]
-  } unchecked-match
-] ;
-
-\ Branch constructors that derive the subtree size from the two children.
-\ Every branch construction routes through these, so a rebuilt node always
-\ recomputes its own size from whatever children it ends up with.
-branch-node: ( color key left right -- tree-node ) [
-  over node-size over node-size + 1 + make-tree-node:branch
-] ;
-
-bb-branch-node: ( color key left right -- tree-node ) [
-  over node-size over node-size + 1 + make-tree-node:bb-branch
-] ;
-
-\ After unchecked-match on tree-node:branch, stack is ( color key left right size )
-red-node: ( key left right -- tree-node ) [
-  [ [ tree-color:red ] dip ] 2dip branch-node
-] ;
-
-black-node: ( key left right -- tree-node ) [
-  [ [ tree-color:black ] dip ] 2dip branch-node
-] ;
-
-red-branch?: ( node -- bool ) [
-  {
-    tree-node:branch:    [ drop drop drop drop tree-color:red? ]
-    tree-node:leaf:      [ f ]
-    tree-node:bb-leaf:   [ f ]
-    tree-node:bb-branch: [ drop drop drop drop drop f ]
-  } unchecked-match
-] ;
-
-\ Okasaki balance: all 4 red-red violation cases produce R(y, B(x,a,b), B(z,c,d))
-make-balanced: ( x a b y z c d -- tree-node ) [
-  black-node swap [ [ black-node ] dip ] dip -rot> red-node
-] ;
-
-\ Node accessors
-node-color: ( branch-node -- color ) [
-  {
-    tree-node:branch:    [ drop drop drop drop ]
-    tree-node:leaf:      [ "node-color on leaf" throw ]
-    tree-node:bb-leaf:   [ "node-color on bb-leaf" throw ]
-    tree-node:bb-branch: [ drop drop drop drop ]
-  } unchecked-match
-] ;
-
-node-key: ( branch-node -- key ) [
-  {
-    tree-node:branch:    [ drop drop drop nip ]
-    tree-node:leaf:      [ "node-key on leaf" throw ]
-    tree-node:bb-leaf:   [ "node-key on bb-leaf" throw ]
-    tree-node:bb-branch: [ drop drop drop nip ]
-  } unchecked-match
-] ;
-
-node-left: ( branch-node -- left ) [
-  {
-    tree-node:branch:    [ drop drop nip nip ]
-    tree-node:leaf:      [ "node-left on leaf" throw ]
-    tree-node:bb-leaf:   [ "node-left on bb-leaf" throw ]
-    tree-node:bb-branch: [ drop drop nip nip ]
-  } unchecked-match
-] ;
-
-node-right: ( branch-node -- right ) [
-  {
-    tree-node:branch:    [ drop nip nip nip ]
-    tree-node:leaf:      [ "node-right on leaf" throw ]
-    tree-node:bb-leaf:   [ "node-right on bb-leaf" throw ]
-    tree-node:bb-branch: [ drop nip nip nip ]
-  } unchecked-match
-] ;
-
-\ Force root color to black.
-blacken: ( node -- node ) [
-  {
-    tree-node:branch: [
-      drop 3 <rot-n drop tree-color:black 3 rot-n>
-      branch-node
-    ]
-    tree-node:leaf:      [ leaf ]
-    tree-node:bb-leaf:   [ leaf ]
-    tree-node:bb-branch: [
-      drop 3 <rot-n drop tree-color:black 3 rot-n>
-      branch-node
-    ]
-  } unchecked-match
-] ;
-
-\ Double-black predicates
-bb?: ( node -- bool ) [
-  {
-    tree-node:bb-leaf:   [ t ]
-    tree-node:bb-branch: [ drop drop drop drop drop t ]
-    tree-node:branch:    [ drop drop drop drop drop f ]
-    tree-node:leaf:      [ f ]
-  } unchecked-match
-] ;
-
-\ Make a node one shade blacker
-blacker: ( node -- node ) [
-  {
-    tree-node:branch: [
-      \ ( color key left right size )
-      drop
-      3 pick-n tree-color:red? [
-        3 <rot-n drop tree-color:black 3 rot-n> branch-node
-      ] [
-        bb-branch-node
-      ] if
-    ]
-    tree-node:leaf:      [ tree-node:bb-leaf ]
-    tree-node:bb-leaf:   [ "blacker on bb-leaf" throw ]
-    tree-node:bb-branch: [ "blacker on bb-branch" throw ]
-  } unchecked-match
-] ;
-
-\ Make a node one shade redder
-redder: ( node -- node ) [
-  {
-    tree-node:branch: [
-      \ ( color key left right size )
-      drop
-      3 pick-n tree-color:black? [
-        3 <rot-n drop tree-color:red 3 rot-n> branch-node
-      ] [
-        "redder on red branch" throw
-      ] if
-    ]
-    tree-node:bb-branch: [
-      drop 3 <rot-n drop tree-color:black 3 rot-n> branch-node
-    ]
-    tree-node:bb-leaf: [ leaf ]
-    tree-node:leaf: [ "redder on leaf" throw ]
-  } unchecked-match
-] ;
-
-\ Make a color one shade blacker
-color-blacker: ( color -- color ) [
-  { tree-color:red: [ tree-color:black ] tree-color:black: [ tree-color:black ] } unchecked-match
-] ;
-
-\ Balance helper: LL case
-\ B(z, R(y, R(x,a,b), c), d) => R(y, B(x,a,b), B(z,c,d))
-\ Entry stack: ( z left d ) where left = R(y, R(x,a,b), c)
-balance-ll: ( z left d -- tree-node ) [
-  swap                 \ ( z d left )
-  dup node-key         \ ( z d left y )
-  swap dup node-right  \ ( z d y left c )
-  swap node-left       \ ( z d y c ll=R(x,a,b) )
-  dup node-key         \ ( z d y c ll x )
-  swap dup node-left   \ ( z d y c x ll a )
-  swap node-right      \ ( z d y c x a b )
-  \ have: z(6) d(5) y(4) c(3) x(2) a(1) b(0)
-  \ need: x a b y z c d
-  2 pick-n   \ x
-  2 pick-n   \ a
-  2 pick-n   \ b
-  7 pick-n   \ y
-  10 pick-n  \ z
-  8 pick-n   \ c
-  11 pick-n  \ d
-  make-balanced
-  nip nip nip nip nip nip nip
-] ;
-
-\ Balance helper: LR case
-\ B(z, R(x, a, R(y,b,c)), d) => R(y, B(x,a,b), B(z,c,d))
-\ Entry stack: ( z left d ) where left = R(x, a, R(y,b,c))
-balance-lr: ( z left d -- tree-node ) [
-  swap                \ ( z d left )
-  dup node-key        \ ( z d left x )
-  swap dup node-left  \ ( z d x left a )
-  swap node-right     \ ( z d x a lr=R(y,b,c) )
-  dup node-key        \ ( z d x a lr y )
-  swap dup node-left  \ ( z d x a y lr b )
-  swap node-right     \ ( z d x a y b c )
-  \ have: z(6) d(5) x(4) a(3) y(2) b(1) c(0)
-  \ need: x a b y z c d
-  4 pick-n   \ x
-  4 pick-n   \ a
-  3 pick-n   \ b
-  5 pick-n   \ y
-  10 pick-n  \ z
-  5 pick-n   \ c
-  11 pick-n  \ d
-  make-balanced
-  nip nip nip nip nip nip nip
-] ;
-
-\ Balance helper: RR case
-\ B(x, a, R(y, b, R(z,c,d))) => R(y, B(x,a,b), B(z,c,d))
-\ Entry stack: ( x a right ) where right = R(y, b, R(z,c,d))
-balance-rr: ( x a right -- tree-node ) [
-  dup node-key        \ ( x a right y )
-  swap dup node-left  \ ( x a y right b )
-  swap node-right     \ ( x a y b rr=R(z,c,d) )
-  dup node-key        \ ( x a y b rr z )
-  swap dup node-left  \ ( x a y b z rr c )
-  swap node-right     \ ( x a y b z c d )
-  \ have: x(6) a(5) y(4) b(3) z(2) c(1) d(0)
-  \ need: x a b y z c d
-  6 pick-n  \ x
-  6 pick-n  \ a
-  5 pick-n  \ b
-  7 pick-n  \ y
-  6 pick-n  \ z
-  6 pick-n  \ c
-  6 pick-n  \ d
-  make-balanced
-  nip nip nip nip nip nip nip
-] ;
-
-\ Balance helper: RL case
-\ B(x, a, R(z, R(y,b,c), d)) => R(y, B(x,a,b), B(z,c,d))
-\ Entry stack: ( x a right ) where right = R(z, R(y,b,c), d)
-balance-rl: ( x a right -- tree-node ) [
-  dup node-key         \ ( x a right z )
-  swap dup node-right  \ ( x a z right d )
-  swap node-left       \ ( x a z d rl=R(y,b,c) )
-  dup node-key         \ ( x a z d rl y )
-  swap dup node-left   \ ( x a z d y rl b )
-  swap node-right      \ ( x a z d y b c )
-  \ have: x(6) a(5) z(4) d(3) y(2) b(1) c(0)
-  \ need: x a b y z c d
-  6 pick-n  \ x
-  6 pick-n  \ a
-  3 pick-n  \ b
-  5 pick-n  \ y
-  8 pick-n  \ z
-  5 pick-n  \ c
-  9 pick-n  \ d
-  make-balanced
-  nip nip nip nip nip nip nip
-] ;
-
-\ Okasaki balance: ( color key left right -- tree-node )
-\ If color is black, check for red-red violations and rebalance.
-balance: ( color key left right -- tree-node ) [
-  3 pick-n tree-color:black? [
-    over red-branch? [
-      over node-left red-branch? [
-        \ LL: left red, left.left red
-        3 <rot-n drop balance-ll
-      ] [
-        over node-right red-branch? [
-          \ LR: left red, left.right red
-          3 <rot-n drop balance-lr
-        ] [
-          branch-node
-        ] if
-      ] if
-    ] [
-      dup red-branch? [
-        dup node-right red-branch? [
-          \ RR: right red, right.right red
-          3 <rot-n drop balance-rr
-        ] [
-          dup node-left red-branch? [
-            \ RL: right red, right.left red
-            3 <rot-n drop balance-rl
-          ] [
-            branch-node
-          ] if
-        ] if
-      ] [
-        branch-node
-      ] if
-    ] if
-  ] [
-    branch-node
-  ] if
-] ;
-
-\ Extended balance for deletion: handles double-black children.
-\ Same 4 Okasaki cases plus 6 double-black rotation cases.
-balance-del: ( color key left right -- tree-node ) [
-  \ First try the standard balance cases by checking for red-red violations
-  3 pick-n tree-color:black? [
-    over red-branch? [
-      over node-left red-branch? [
-        3 <rot-n drop balance-ll
-      ] [
-        over node-right red-branch? [
-          3 <rot-n drop balance-lr
-        ] [
-          \ Check double-black cases: black parent, red left, bb right
-          dup bb? [
-            \ B(z, R(y, a, b), BB) => balance of blacker parent
-            \ Rotate left child's structure to fix double-black
-            swap dup node-key swap dup node-left swap node-right
-            \ ( color(6) key=z(5) bb=right(4) y(3) a(2) b(1) )
-            \ Rebuild as: balance-del(black, y, a, B(z, b, redder(bb)))
-            4 pick-n redder 2 pick-n swap black-node
-            \ ( color(6) z(5) bb(4) y(3) a(2) b(1) B(z,b,redder(bb))(0) )
-            swap drop 3 pick-n swap
-            \ ( color(5) z(4) bb(3) y(2) a(1) right'(0) )
-            nip nip nip tree-color:black swap balance-del
-          ] [
-            branch-node
-          ] if
-        ] if
-      ] if
-    ] [
-      dup red-branch? [
-        dup node-right red-branch? [
-          3 <rot-n drop balance-rr
-        ] [
-          dup node-left red-branch? [
-            3 <rot-n drop balance-rl
-          ] [
-            \ Check double-black cases: black parent, bb left, red right
-            over bb? [
-              \ B(x, BB, R(y, a, b)) => balance of blacker parent
-              dup dup node-key swap dup node-left swap node-right
-              \ ( color(6) key=x(5) bb=left(4) right(3) y(2) a(1) b(0) )
-              5 pick-n redder swap 6 pick-n swap black-node
-              \ ( color(6) x(5) bb(4) right(3) y(2) a(1) b(0) B(x,redder(bb),a)(7) )
-              swap drop
-              \ ( color(6) x(5) bb(4) right(3) y(2) a(1) B(...)(6) )
-              5 pick-n swap
-              \ ( color(6) x(5) bb(4) right(3) y(2) B(...)(5) b(4) )
-              4 <rot-n drop drop drop drop
-              \ ( B(...)(1) b(0) )
-              tree-color:black -rot> balance-del
-            ] [
-              branch-node
-            ] if
-          ] if
-        ] if
-      ] [
-        \ Neither child is red; check for double-black children with red parent
-        3 pick-n tree-color:red? [
-          over bb? [
-            \ R(x, BB, b) => B(x, redder(BB), b)
-            swap redder swap branch-node
-          ] [
-            dup bb? [
-              \ R(x, a, BB) => B(x, a, redder(BB))
-              redder branch-node
-            ] [
-              branch-node
-            ] if
-          ] if
-        ] [
-          branch-node
-        ] if
-      ] if
-    ] if
-  ] [
-    branch-node
-  ] if
-] ;
-
-\ If either child is double-black, make children redder and parent blacker,
-\ then rebalance. Otherwise build a normal branch.
-\ Helper: make a child redder only if it's double-black
-redder-if-bb: ( node -- node ) [
-  dup bb? [ redder ] [ ] if
-] ;
-
-bubble: ( color key left right -- tree-node ) [
-  over bb? 1 pick-n bb? or [
-    \ At least one child is double-black.
-    \ Make bb children redder, keep non-bb children as-is.
-    redder-if-bb swap redder-if-bb swap
-    \ ( color key left' right' )
-    3 pick-n tree-color:black? [
-      \ Parent was black: use black, then propagate double-black upward
-      3 <rot-n drop tree-color:black 3 rot-n>
-      balance-del blacker
-    ] [
-      \ Parent was red: absorb deficit by becoming black
-      3 <rot-n drop tree-color:black 3 rot-n>
-      balance-del
-    ] if
-  ] [
-    balance-del
-  ] if
-] ;
-
-\ Remove the minimum node from a subtree.
-\ Returns ( min-key node' ) where node' is the subtree with min removed.
-remove-min: stack-recursive ( node -- min-key node ) [
-  {
-    tree-node:branch: [
-      \ ( color key left right size )
-      drop
-      over leaf? [
-        \ This node is the minimum since left is a leaf.
-        \ ( color key left right )
-        \ Return ( min-key right' ) where right' may be blacker if node was black.
-        swap drop
-        \ ( color key right )
-        2 pick-n tree-color:black? [ blacker ] [ ] if
-        \ ( color key right' )
-        [ nip ] dip
-      ] [
-        \ Recurse into left subtree
-        \ ( color key left right )
-        swap remove-min
-        \ ( color(4) key(3) right(2) min-key(1) left'(0) )
-        \ Build bubble(color, key, left', right)
-        4 pick-n 4 pick-n 2 pick-n 5 pick-n bubble
-        \ Top-down: result left' min-key right key color
-        \ Drop left', keep result and min-key, drop rest
-        swap drop [ nip nip nip ] dip
-      ] if
-    ]
-    tree-node:leaf:      [ "remove-min on leaf" throw ]
-    tree-node:bb-leaf:   [ "remove-min on bb-leaf" throw ]
-    tree-node:bb-branch: [ "remove-min on bb-branch" throw ]
-  } unchecked-match
-] ;
-
-\ Core recursive deletion.
-delete-node: stack-recursive ( value comparator node -- tree-node ) [
-  {
-    tree-node:branch: [
-      \ ( value comparator color key left right size )
-      drop
-      compare-with-key {
-        ordering:lt: [
-          \ Recurse into left subtree
-          \ ( value(5) comparator(4) color(3) key(2) left(1) right(0) )
-          5 pick-n 5 pick-n 3 pick-n delete-node
-          \ ( value(6) comparator(5) color(4) key(3) left(2) right(1) new-left(0) )
-          4 pick-n 4 pick-n 2 pick-n 4 pick-n bubble
-          nip nip nip nip nip nip nip
-        ]
-        ordering:eq: [
-          \ Found the node to delete
-          \ ( value(5) comparator(4) color(3) key(2) left(1) right(0) )
-          over leaf? 1 pick-n leaf? and [
-            \ Both children are leaves
-            3 pick-n tree-color:red? [
-              \ Red leaf node: just remove it
-              drop drop drop drop drop drop leaf
-            ] [
-              \ Black leaf node: double-black
-              drop drop drop drop drop drop tree-node:bb-leaf
-            ] if
-          ] [
-            1 pick-n leaf? [
-              \ Right is leaf, left is not: replace with left
-              \ ( value(5) comparator(4) color(3) key(2) left(1) right(0) )
-              drop swap drop
-              \ ( value comparator color left )
-              swap tree-color:black? [ blacker ] [ ] if
-              nip nip
-            ] [
-              over leaf? [
-                \ Left is leaf, right is not: replace with right
-                \ ( value(5) comparator(4) color(3) key(2) left(1) right(0) )
-                nip nip
-                \ ( value comparator color right )
-                swap tree-color:black? [ blacker ] [ ] if
-                nip nip
-              ] [
-                \ Both children are non-leaf: find successor
-                \ ( value(5) comparator(4) color(3) key(2) left(1) right(0) )
-                remove-min
-                \ ( value(6) comparator(5) color(4) key(3) left(2) min-key(1) right'(0) )
-                \ Need bubble( color, min-key, left, right' )
-                4 pick-n 2 pick-n 4 pick-n 3 pick-n bubble
-                nip nip nip nip nip nip nip
-              ] if
-            ] if
-          ] if
-        ]
-        ordering:gt: [
-          \ Recurse into right subtree
-          \ ( value(5) comparator(4) color(3) key(2) left(1) right(0) )
-          5 pick-n 5 pick-n 2 pick-n delete-node
-          \ ( value(6) comparator(5) color(4) key(3) left(2) right(1) new-right(0) )
-          4 pick-n 4 pick-n 4 pick-n 3 pick-n bubble
-          nip nip nip nip nip nip nip
-        ]
-      } unchecked-match
-    ]
-    tree-node:leaf: [
-      drop drop leaf
-    ]
-    tree-node:bb-leaf: [ drop drop tree-node:bb-leaf ]
-    tree-node:bb-branch: [
-      \ Shouldn't happen during normal deletion, treat like branch
-      drop
-      compare-with-key {
-        ordering:lt: [
-          5 pick-n 5 pick-n 3 pick-n delete-node
-          4 pick-n 4 pick-n 2 pick-n 4 pick-n bubble
-          nip nip nip nip nip nip nip
-        ]
-        ordering:eq: [
-          drop drop drop drop drop drop leaf
-        ]
-        ordering:gt: [
-          5 pick-n 5 pick-n 2 pick-n delete-node
-          4 pick-n 4 pick-n 4 pick-n 3 pick-n bubble
-          nip nip nip nip nip nip nip
-        ]
-      } unchecked-match
-    ]
-  } unchecked-match
-] ;
-
-tree-delete: ( bst value -- bst ) [
-  swap unmake-bst      \ ( value root comparator )
-  dup                  \ ( value root comparator comparator )
-  3 rot-n>             \ ( comparator value root comparator )
-  swap                 \ ( comparator value comparator root )
-  delete-node blacken  \ ( comparator root' )
-  swap make-bst
-] ;
-
-\ Key-value pair for bst-map
-kv-pair: struct{ key value } ;
-bst-map: virtual{ bst } ;
-
-<bst-map>: ( comparator -- bst-map ) [
-  \ Wrap the user's key comparator to work on kv-pairs.
-  \ ( pair1 pair2 -- ordering ) extracts keys then calls user comparator.
-  [ [ [ key>> ] dip key>> ] dip call ] curry
-  <bst> make-bst-map
-] ;
-
-map-insert: ( bst-map key value -- bst-map ) [
-  make-kv-pair swap unmake-bst-map swap tree-insert make-bst-map
-] ;
-
-map-lookup: ( bst-map key -- option ) [
-  f make-kv-pair swap unmake-bst-map swap tree-lookup
-  [ value>> ] ?map
-] ;
-
-map-delete: ( bst-map key -- bst-map ) [
-  f make-kv-pair swap unmake-bst-map swap tree-delete make-bst-map
-] ;
-
-\ bst-map wrappers for tree operations
-map-empty?: ( bst-map -- bool )  [ unmake-bst-map tree-empty? ] ;
-map-size:   ( bst-map -- n )     [ unmake-bst-map #len ] ;
-map>array:  ( bst-map -- array ) [ unmake-bst-map tree>array ] ;
-
-\ Compare value with key using the comparator.
-\ ( value comparator color key left right -- value comparator color key left right ordering )
-compare-with-key: ( value comparator color key left right -- ..a ordering ) [
-  5 pick-n 3 pick-n 6 pick-n call
-] ;
-
-\ Recursive insert helper.
-insert-node: stack-recursive ( value comparator node -- tree-node ) [
-  {
-    tree-node:branch: [
-      \ ( value comparator color key left right size )
-      drop
-      compare-with-key {
-        ordering:lt: [
-          \ Recurse into left subtree, then balance
-          \ ( value(5) comparator(4) color(3) key(2) left(1) right(0) )
-          5 pick-n 5 pick-n 3 pick-n insert-node
-          \ ( value(6) comparator(5) color(4) key(3) left(2) right(1) new-left(0) )
-          4 pick-n 4 pick-n 2 pick-n 4 pick-n balance
-          nip nip nip nip nip nip nip
-        ]
-        ordering:eq: [
-          \ Replace key with new value, keep same structure
-          \ ( value(5) comparator(4) color(3) key(2) left(1) right(0) )
-          3 pick-n 6 pick-n 3 pick-n 3 pick-n
-          branch-node
-          nip nip nip nip nip nip
-        ]
-        ordering:gt: [
-          \ Recurse into right subtree, then balance
-          \ ( value(5) comparator(4) color(3) key(2) left(1) right(0) )
-          5 pick-n 5 pick-n 2 pick-n insert-node
-          \ ( value(6) comparator(5) color(4) key(3) left(2) right(1) new-right(0) )
-          4 pick-n 4 pick-n 4 pick-n 3 pick-n balance
-          nip nip nip nip nip nip nip
-        ]
-      } unchecked-match
-    ]
-    tree-node:leaf: [
-      \ Create new red node, drop comparator
-      drop leaf leaf red-node
-    ]
-    tree-node:bb-leaf: [ drop leaf leaf red-node ]
-    tree-node:bb-branch: [
-      drop
-      compare-with-key {
-        ordering:lt: [
-          5 pick-n 5 pick-n 3 pick-n insert-node
-          4 pick-n 4 pick-n 2 pick-n 4 pick-n balance
-          nip nip nip nip nip nip nip
-        ]
-        ordering:eq: [
-          3 pick-n 6 pick-n 3 pick-n 3 pick-n
-          branch-node
-          nip nip nip nip nip nip
-        ]
-        ordering:gt: [
-          5 pick-n 5 pick-n 2 pick-n insert-node
-          4 pick-n 4 pick-n 4 pick-n 3 pick-n balance
-          nip nip nip nip nip nip nip
-        ]
-      } unchecked-match
-    ]
-  } unchecked-match
-] ;
-
-\ Recursive contains helper.
-contains-node: stack-recursive ( value comparator node -- bool ) [
-  {
-    tree-node:branch: [
-      \ ( value comparator color key left right size )
-      drop
-      compare-with-key {
-        ordering:lt: [
-          drop nip nip contains-node
-        ]
-        ordering:eq: [
-          drop drop drop drop drop drop t
-        ]
-        ordering:gt: [
-          nip nip nip contains-node
-        ]
-      } unchecked-match
-    ]
-    tree-node:leaf: [
-      drop drop f
-    ]
-    tree-node:bb-leaf: [ drop drop f ]
-    tree-node:bb-branch: [
-      drop
-      compare-with-key {
-        ordering:lt: [ drop nip nip contains-node ]
-        ordering:eq: [ drop drop drop drop drop drop t ]
-        ordering:gt: [ nip nip nip contains-node ]
-      } unchecked-match
-    ]
-  } unchecked-match
-] ;
-
-<bst>: ( comparator -- bst ) [ leaf swap make-bst ] ;
-
-tree-insert: ( bst value -- bst ) [
-  swap unmake-bst      \ ( value root comparator )
-  dup                  \ ( value root comparator comparator )
-  3 rot-n>             \ ( comparator value root comparator )
-  swap                 \ ( comparator value comparator root )
-  insert-node blacken  \ ( comparator root' )
-  swap make-bst
-] ;
-
-tree-empty?: ( bst -- bool ) [ root>> leaf? ] ;
-
-tree-contains?: ( bst value -- bool ) [
-  swap unmake-bst  \ ( value root comparator )
-  swap             \ ( value comparator root )
-  contains-node
-] ;
-
-min-node: stack-recursive ( node -- option ) [
-  {
-    tree-node:branch: [
-      \ ( color key left right size )
-      drop drop [ nip ] dip
-      \ ( key left )
-      dup leaf? [
-        drop >option:some
-      ] [
-        nip min-node
-      ] if
-    ]
-    tree-node:leaf:      [ option:none ]
-    tree-node:bb-leaf:   [ option:none ]
-    tree-node:bb-branch: [
-      drop drop [ nip ] dip
-      dup leaf? [ drop >option:some ] [ nip min-node ] if
-    ]
-  } unchecked-match
-] ;
-
-max-node: stack-recursive ( node -- option ) [
-  {
-    tree-node:branch: [
-      \ ( color key left right size )
-      drop nip [ nip ] dip
-      \ ( key right )
-      dup leaf? [
-        drop >option:some
-      ] [
-        nip max-node
-      ] if
-    ]
-    tree-node:leaf:      [ option:none ]
-    tree-node:bb-leaf:   [ option:none ]
-    tree-node:bb-branch: [
-      drop nip [ nip ] dip
-      dup leaf? [ drop >option:some ] [ nip max-node ] if
-    ]
-  } unchecked-match
-] ;
-
-\ Count nodes by full traversal, as an independent check of the cached sizes.
-count-nodes: stack-recursive ( node -- n ) [
-  {
-    tree-node:branch: [
-      \ ( color key left right size )
-      drop
-      swap count-nodes swap count-nodes + 1 + nip nip
-    ]
-    tree-node:leaf:      [ 0 ]
-    tree-node:bb-leaf:   [ 0 ]
-    tree-node:bb-branch: [
-      drop
-      swap count-nodes swap count-nodes + 1 + nip nip
-    ]
-  } unchecked-match
-] ;
-
-\ Order-statistic select: the key at 0-based rank n in sorted order.
-\ Descends by comparing n against the left subtree's cached size, so the
-\ cost is O(log n). Callers bounds-check n, making the leaf arms unreachable.
-nth-node: stack-recursive ( n node -- key ) [
-  {
-    tree-node:branch: [
-      \ ( n color key left right size )
-      drop over node-size 5 pick-n
-      \ ( n color key left right lsize n )
-      2dup > [
-        \ n falls in the left subtree
-        2drop drop nip nip nth-node
-      ] [
-        2dup = [
-          \ this node is the nth key
-          2drop 2drop nip nip
-        ] [
-          \ skip the left subtree and this node, recurse right
-          swap - -- swap [ nip nip nip nip ] dip nth-node
-        ] if
-      ] if
-    ]
-    tree-node:leaf:      [ "nth-node on leaf" throw ]
-    tree-node:bb-leaf:   [ "nth-node on bb-leaf" throw ]
-    tree-node:bb-branch: [
-      drop over node-size 5 pick-n
-      2dup > [
-        2drop drop nip nip nth-node
-      ] [
-        2dup = [
-          2drop 2drop nip nip
-        ] [
-          swap - -- swap [ nip nip nip nip ] dip nth-node
-        ] if
-      ] if
-    ]
-  } unchecked-match
-] ;
-
-lookup-node: stack-recursive ( value comparator node -- option ) [
-  {
-    tree-node:branch: [
-      \ ( value comparator color key left right size )
-      drop
-      compare-with-key {
-        ordering:lt: [
-          drop nip nip lookup-node
-        ]
-        ordering:eq: [
-          drop drop nip nip nip >option:some
-        ]
-        ordering:gt: [
-          nip nip nip lookup-node
-        ]
-      } unchecked-match
-    ]
-    tree-node:leaf: [
-      drop drop option:none
-    ]
-    tree-node:bb-leaf: [ drop drop option:none ]
-    tree-node:bb-branch: [
-      drop
-      compare-with-key {
-        ordering:lt: [ drop nip nip lookup-node ]
-        ordering:eq: [ drop drop nip nip nip >option:some ]
-        ordering:gt: [ nip nip nip lookup-node ]
-      } unchecked-match
-    ]
-  } unchecked-match
-] ;
-
-tree-min: ( bst -- option ) [ root>> min-node ] ;
-tree-max: ( bst -- option ) [ root>> max-node ] ;
-
-\\ Deprecated alias of `#len`.
-tree-size: deprecated ( bst -- n ) [ #len ] ;
-
-tree-lookup: ( bst value -- option ) [
-  swap unmake-bst  \ ( value root comparator )
-  swap             \ ( value comparator root )
-  lookup-node
-] ;
-
-each-node: stack-recursive ( node quot -- ) [
-  swap {
-    tree-node:branch: [
-      \ ( quot color key left right size )
-      drop
-      swap 4 pick-n each-node  \ recurse left
-      swap 3 pick-n call       \ call quot on key
-      nip swap each-node       \ drop color, recurse right
-    ]
-    tree-node:leaf:      [ drop ]
-    tree-node:bb-leaf:   [ drop ]
-    tree-node:bb-branch: [
-      drop
-      swap 4 pick-n each-node
-      swap 3 pick-n call
-      nip swap each-node
-    ]
-  } unchecked-match
-] ;
-
-fold-node: stack-recursive ( node acc quot -- acc ) [
-  [ swap ] dip swap {
-    tree-node:branch: [
-      \ ( acc quot color key left right size )
-      drop
-      3 <rot-n drop
-      \ ( acc quot key left right )
-      swap 4 pick-n 4 pick-n fold-node
-      \ ( acc quot key right acc' )
-      2 pick-n 4 pick-n call
-      \ ( acc quot key right acc'' )
-      1 pick-n 1 pick-n 5 pick-n fold-node
-      \ ( acc quot key right acc'' final )
-      nip nip nip nip nip
-    ]
-    tree-node:leaf:      [ drop ]
-    tree-node:bb-leaf:   [ drop ]
-    tree-node:bb-branch: [
-      drop
-      3 <rot-n drop
-      swap 4 pick-n 4 pick-n fold-node
-      2 pick-n 4 pick-n call
-      1 pick-n 1 pick-n 5 pick-n fold-node
-      nip nip nip nip nip
-    ]
-  } unchecked-match
-] ;
-
-tree-each: ( bst quot -- ) [ swap root>> swap each-node ] ;
-
-tree-fold: ( bst init quot -- value ) [ [ [ root>> ] dip ] dip fold-node ] ;
-
-tree>array: ( bst -- array ) [
-  { } [ #push ] tree-fold
-] ;
-
 private{
+  \ Short aliases
+  leaf: ( -- tree-node ) [ tree-node:leaf ] ;
+  leaf?: ( node -- bool ) [ tree-node:leaf? ] ;
+
+  \ Cached subtree size, read from the node in O(1). Leaves are empty.
+  node-size: ( node -- n ) [
+    {
+      tree-node:branch:    [ nip nip nip nip ]
+      tree-node:leaf:      [ 0 ]
+      tree-node:bb-leaf:   [ 0 ]
+      tree-node:bb-branch: [ nip nip nip nip ]
+    } unchecked-match
+  ] ;
+
+  \ Branch constructors that derive the subtree size from the two children.
+  \ Every branch construction routes through these, so a rebuilt node always
+  \ recomputes its own size from whatever children it ends up with.
+  branch-node: ( color key left right -- tree-node ) [
+    over node-size over node-size + 1 + make-tree-node:branch
+  ] ;
+
+  bb-branch-node: ( color key left right -- tree-node ) [
+    over node-size over node-size + 1 + make-tree-node:bb-branch
+  ] ;
+
+  \ After unchecked-match on tree-node:branch, stack is ( color key left right size )
+  red-node: ( key left right -- tree-node ) [
+    [ [ tree-color:red ] dip ] 2dip branch-node
+  ] ;
+
+  black-node: ( key left right -- tree-node ) [
+    [ [ tree-color:black ] dip ] 2dip branch-node
+  ] ;
+
+  red-branch?: ( node -- bool ) [
+    {
+      tree-node:branch:    [ drop drop drop drop tree-color:red? ]
+      tree-node:leaf:      [ f ]
+      tree-node:bb-leaf:   [ f ]
+      tree-node:bb-branch: [ drop drop drop drop drop f ]
+    } unchecked-match
+  ] ;
+
+  \ Okasaki balance: all 4 red-red violation cases produce R(y, B(x,a,b), B(z,c,d))
+  make-balanced: ( x a b y z c d -- tree-node ) [
+    black-node swap [ [ black-node ] dip ] dip -rot> red-node
+  ] ;
+
+  \ Node accessors
+  node-color: ( branch-node -- color ) [
+    {
+      tree-node:branch:    [ drop drop drop drop ]
+      tree-node:leaf:      [ f "node-color on leaf" EInvalidArgument make-error throw ]
+      tree-node:bb-leaf:   [ f "node-color on bb-leaf" EInvalidArgument make-error throw ]
+      tree-node:bb-branch: [ drop drop drop drop ]
+    } unchecked-match
+  ] ;
+
+  node-key: ( branch-node -- key ) [
+    {
+      tree-node:branch:    [ drop drop drop nip ]
+      tree-node:leaf:      [ f "node-key on leaf" EInvalidArgument make-error throw ]
+      tree-node:bb-leaf:   [ f "node-key on bb-leaf" EInvalidArgument make-error throw ]
+      tree-node:bb-branch: [ drop drop drop nip ]
+    } unchecked-match
+  ] ;
+
+  node-left: ( branch-node -- left ) [
+    {
+      tree-node:branch:    [ drop drop nip nip ]
+      tree-node:leaf:      [ f "node-left on leaf" EInvalidArgument make-error throw ]
+      tree-node:bb-leaf:   [ f "node-left on bb-leaf" EInvalidArgument make-error throw ]
+      tree-node:bb-branch: [ drop drop nip nip ]
+    } unchecked-match
+  ] ;
+
+  node-right: ( branch-node -- right ) [
+    {
+      tree-node:branch:    [ drop nip nip nip ]
+      tree-node:leaf:      [ f "node-right on leaf" EInvalidArgument make-error throw ]
+      tree-node:bb-leaf:   [ f "node-right on bb-leaf" EInvalidArgument make-error throw ]
+      tree-node:bb-branch: [ drop nip nip nip ]
+    } unchecked-match
+  ] ;
+
+  \ Force root color to black.
+  blacken: ( node -- node ) [
+    {
+      tree-node:branch: [
+        drop 3 <rot-n drop tree-color:black 3 rot-n>
+        branch-node
+      ]
+      tree-node:leaf:      [ leaf ]
+      tree-node:bb-leaf:   [ leaf ]
+      tree-node:bb-branch: [
+        drop 3 <rot-n drop tree-color:black 3 rot-n>
+        branch-node
+      ]
+    } unchecked-match
+  ] ;
+
+  \ Double-black predicates
+  bb?: ( node -- bool ) [
+    {
+      tree-node:bb-leaf:   [ t ]
+      tree-node:bb-branch: [ drop drop drop drop drop t ]
+      tree-node:branch:    [ drop drop drop drop drop f ]
+      tree-node:leaf:      [ f ]
+    } unchecked-match
+  ] ;
+
+  \ Balance helper: LL case
+  \ B(z, R(y, R(x,a,b), c), d) => R(y, B(x,a,b), B(z,c,d))
+  \ Entry stack: ( z left d ) where left = R(y, R(x,a,b), c)
+  balance-ll: ( z left d -- tree-node ) [
+    swap                 \ ( z d left )
+    dup node-key         \ ( z d left y )
+    swap dup node-right  \ ( z d y left c )
+    swap node-left       \ ( z d y c ll=R(x,a,b) )
+    dup node-key         \ ( z d y c ll x )
+    swap dup node-left   \ ( z d y c x ll a )
+    swap node-right      \ ( z d y c x a b )
+    \ have: z(6) d(5) y(4) c(3) x(2) a(1) b(0)
+    \ need: x a b y z c d
+    2 pick-n   \ x
+    2 pick-n   \ a
+    2 pick-n   \ b
+    7 pick-n   \ y
+    10 pick-n  \ z
+    8 pick-n   \ c
+    11 pick-n  \ d
+    make-balanced
+    nip nip nip nip nip nip nip
+  ] ;
+
+  \ Balance helper: LR case
+  \ B(z, R(x, a, R(y,b,c)), d) => R(y, B(x,a,b), B(z,c,d))
+  \ Entry stack: ( z left d ) where left = R(x, a, R(y,b,c))
+  balance-lr: ( z left d -- tree-node ) [
+    swap                \ ( z d left )
+    dup node-key        \ ( z d left x )
+    swap dup node-left  \ ( z d x left a )
+    swap node-right     \ ( z d x a lr=R(y,b,c) )
+    dup node-key        \ ( z d x a lr y )
+    swap dup node-left  \ ( z d x a y lr b )
+    swap node-right     \ ( z d x a y b c )
+    \ have: z(6) d(5) x(4) a(3) y(2) b(1) c(0)
+    \ need: x a b y z c d
+    4 pick-n   \ x
+    4 pick-n   \ a
+    3 pick-n   \ b
+    5 pick-n   \ y
+    10 pick-n  \ z
+    5 pick-n   \ c
+    11 pick-n  \ d
+    make-balanced
+    nip nip nip nip nip nip nip
+  ] ;
+
+  \ Balance helper: RR case
+  \ B(x, a, R(y, b, R(z,c,d))) => R(y, B(x,a,b), B(z,c,d))
+  \ Entry stack: ( x a right ) where right = R(y, b, R(z,c,d))
+  balance-rr: ( x a right -- tree-node ) [
+    dup node-key        \ ( x a right y )
+    swap dup node-left  \ ( x a y right b )
+    swap node-right     \ ( x a y b rr=R(z,c,d) )
+    dup node-key        \ ( x a y b rr z )
+    swap dup node-left  \ ( x a y b z rr c )
+    swap node-right     \ ( x a y b z c d )
+    \ have: x(6) a(5) y(4) b(3) z(2) c(1) d(0)
+    \ need: x a b y z c d
+    6 pick-n  \ x
+    6 pick-n  \ a
+    5 pick-n  \ b
+    7 pick-n  \ y
+    6 pick-n  \ z
+    6 pick-n  \ c
+    6 pick-n  \ d
+    make-balanced
+    nip nip nip nip nip nip nip
+  ] ;
+
+  \ Balance helper: RL case
+  \ B(x, a, R(z, R(y,b,c), d)) => R(y, B(x,a,b), B(z,c,d))
+  \ Entry stack: ( x a right ) where right = R(z, R(y,b,c), d)
+  balance-rl: ( x a right -- tree-node ) [
+    dup node-key         \ ( x a right z )
+    swap dup node-right  \ ( x a z right d )
+    swap node-left       \ ( x a z d rl=R(y,b,c) )
+    dup node-key         \ ( x a z d rl y )
+    swap dup node-left   \ ( x a z d y rl b )
+    swap node-right      \ ( x a z d y b c )
+    \ have: x(6) a(5) z(4) d(3) y(2) b(1) c(0)
+    \ need: x a b y z c d
+    6 pick-n  \ x
+    6 pick-n  \ a
+    3 pick-n  \ b
+    5 pick-n  \ y
+    8 pick-n  \ z
+    5 pick-n  \ c
+    9 pick-n  \ d
+    make-balanced
+    nip nip nip nip nip nip nip
+  ] ;
+
+  \ Balancing and deletion stay in stack style. A `bind-inputs` local is a definition made on every
+  \ call, and that cost would land at every level of every insert and delete.
+
+  \ A red branch whose left child is red.
+  red-with-red-left?: ( node -- bool ) [
+    dup red-branch? [ node-left red-branch? ] [ drop f ] if
+  ] ;
+
+  \ A red branch whose right child is red.
+  red-with-red-right?: ( node -- bool ) [
+    dup red-branch? [ node-right red-branch? ] [ drop f ] if
+  ] ;
+
+  \ Okasaki balance: a black node with a red child that has a red child of its own becomes a red
+  \ node with two black children. All four cases are tried, because a red child with no red child
+  \ does not rule out a violation under its sibling.
+  balance: ( color key left right -- tree-node ) [
+    3 pick-n tree-color:black? [
+      over red-with-red-left? [ 3 <rot-n drop balance-ll ] [
+        over red-with-red-right? [ 3 <rot-n drop balance-lr ] [
+          dup red-with-red-left? [ 3 <rot-n drop balance-rl ] [
+            dup red-with-red-right? [ 3 <rot-n drop balance-rr ] [ branch-node ] if
+          ] if
+        ] if
+      ] if
+    ] [
+      branch-node
+    ] if
+  ] ;
+
+  \ Compare value with key using the comparator.
+  \ ( value comparator color key left right -- value comparator color key left right ordering )
+  compare-with-key: ( value comparator color key left right -- ..a ordering ) [
+    5 pick-n 3 pick-n 6 pick-n call
+  ] ;
+
+  \ Deletion follows Germane and Might, "Deletion: The curse of the red-black tree" (JFP 2014).
+  \ A removed black node leaves a double-black branch or leaf, which `rotate` pushes toward the root
+  \ until a red node absorbs it or it reaches the root, where `blacken` drops it.
+
+  black-branch?: ( node -- bool ) [
+    {
+      tree-node:branch:    [ drop drop drop drop tree-color:black? ]
+      tree-node:leaf:      [ f ]
+      tree-node:bb-leaf:   [ f ]
+      tree-node:bb-branch: [ drop drop drop drop drop f ]
+    } unchecked-match
+  ] ;
+
+  \ A red branch whose left child is a black branch.
+  red-with-black-left?: ( node -- bool ) [
+    dup red-branch? [ node-left black-branch? ] [ drop f ] if
+  ] ;
+
+  \ A red branch whose right child is a black branch.
+  red-with-black-right?: ( node -- bool ) [
+    dup red-branch? [ node-right black-branch? ] [ drop f ] if
+  ] ;
+
+  \ A red branch with two leaf children.
+  red-leaf?: ( node -- bool ) [
+    dup red-branch? [ dup node-left leaf? swap node-right leaf? and ] [ drop f ] if
+  ] ;
+
+  \ A black branch with two leaf children.
+  black-leaf?: ( node -- bool ) [
+    dup black-branch? [ dup node-left leaf? swap node-right leaf? and ] [ drop f ] if
+  ] ;
+
+  \ Remove the extra black from a double-black branch or leaf.
+  drop-extra-black: ( node -- node ) [
+    {
+      tree-node:bb-branch: [ drop 3 <rot-n drop tree-color:black 3 rot-n> branch-node ]
+      tree-node:bb-leaf:   [ leaf ]
+      tree-node:branch:    [ f "drop-extra-black on branch" EInvalidArgument make-error throw ]
+      tree-node:leaf:      [ f "drop-extra-black on leaf" EInvalidArgument make-error throw ]
+    } unchecked-match
+  ] ;
+
+  \ With l double-black and r = B(c, z, d), give the pieces of B(R(l', k, c), z, d), where l' is l
+  \ without its extra black.
+  lift-from-left: ( k l r -- z red d ) [
+    [ drop-extra-black ] dip
+    [ node-left red-node ] keep
+    [ node-key ] [ node-right ] bi
+    [ swap ] dip
+  ] ;
+
+  \ With l = B(a, x, b) and r double-black, give the pieces of B(a, x, R(b, k, r')), where r' is r
+  \ without its extra black.
+  lift-from-right: ( k l r -- x a red ) [
+    drop-extra-black swap
+    [ node-right swap red-node ] keep
+    [ node-key ] [ node-left ] bi
+    <rot-
+  ] ;
+
+  \ Balance a double-black parent with a red child that has a red inner child. Both cases produce
+  \ B(B(a, x, b), y, B(c, z, d)). Any other shape stays double-black.
+  balance-bb: ( key left right -- tree-node ) [
+    dup red-with-red-left? [ balance-rl blacken ] [
+      over red-with-red-right? [ balance-lr blacken ] [
+        [ [ tree-color:black ] dip ] 2dip bb-branch-node
+      ] if
+    ] if
+  ] ;
+
+  \ Rebuild a red node whose child may be double-black, moving the extra black up through it.
+  rotate-red: ( key left right -- tree-node ) [
+    over bb? over black-branch? and [
+      lift-from-left [ [ tree-color:black ] dip ] 2dip balance
+    ] [
+      over black-branch? over bb? and [
+        lift-from-right [ [ tree-color:black ] dip ] 2dip balance
+      ] [
+        [ [ tree-color:red ] dip ] 2dip branch-node
+      ] if
+    ] if
+  ] ;
+
+  \ Rebuild a black node whose child may be double-black. With a black sibling the extra black
+  \ moves up into a double-black parent. With a red sibling a rotation resolves it here.
+  rotate-black: ( key left right -- tree-node ) [
+    over bb? over black-branch? and [ lift-from-left balance-bb ] [
+      over black-branch? over bb? and [ lift-from-right balance-bb ] [
+        over bb? over red-with-black-left? and [
+          \ B(BB(a, w, b), x, R(B(c, y, d), z, e)) => B(balance B(R(B(a, w, b), x, c), y, d), z, e)
+          dup node-left swap
+          [ lift-from-left [ [ tree-color:black ] dip ] 2dip balance ] dip
+          [ node-key ] [ node-right ] bi
+          [ swap ] dip
+          black-node
+        ] [
+          over red-with-black-right? over bb? and [
+            \ B(R(a, w, B(b, x, c)), y, BB(d, z, e)) => B(a, w, balance B(b, x, R(c, y, B(d, z, e))))
+            swap dup
+            [ node-right swap lift-from-right [ [ tree-color:black ] dip ] 2dip balance ] dip
+            [ node-key ] [ node-left ] bi
+            <rot-
+            black-node
+          ] [
+            [ [ tree-color:black ] dip ] 2dip branch-node
+          ] if
+        ] if
+      ] if
+    ] if
+  ] ;
+
+  \ Rebuild a node whose child may be double-black, by the node's color.
+  rotate: ( color key left right -- tree-node ) [
+    3 pick-n tree-color:red? [ 3 <rot-n drop rotate-red ] [ 3 <rot-n drop rotate-black ] if
+  ] ;
+
+  \ Remove the minimum of a non-empty subtree, returning its key and the rebuilt subtree.
+  min-del: stack-recursive ( node -- min-key tree-node ) [
+    dup red-leaf? [ node-key leaf ] [
+      dup black-leaf? [ node-key tree-node:bb-leaf ] [
+        dup black-branch? [ dup node-left leaf? ] [ f ] if [
+          \ B(E, x, R(E, y, E)) => x, B(E, y, E)
+          dup node-key swap node-right node-key leaf leaf black-node
+        ] [
+          dup node-left min-del
+          <rot-
+          [ node-color ] [ node-key ] [ node-right ] tri
+          [ <rot- ] dip
+          rotate
+        ] if
+      ] if
+    ] if
+  ] ;
+
+  \ Order a node key against the value being deleted, with the context `{ value comparator }`.
+  order-against: ( key ctx -- ordering ) [ [ 0 #nth swap ] [ 1 #nth ] bi call ] ;
+
+  \ Delete the value the comparator calls equal from a subtree. The result may be double-black.
+  delete-node: stack-recursive ( ctx node -- tree-node ) [
+    dup leaf? [ nip ] [
+      dup red-leaf? [
+        2dup node-key swap order-against ordering:eq? [ 2drop leaf ] [ nip ] if
+      ] [
+        dup black-leaf? [
+          2dup node-key swap order-against ordering:eq? [ 2drop tree-node:bb-leaf ] [ nip ] if
+        ] [
+          dup black-branch? [ dup node-right leaf? ] [ f ] if [
+            \ B(R(E, y, E), z, E)
+            2dup node-key swap order-against {
+              ordering:lt: [ dup node-key -rot> node-left delete-node leaf black-node ]
+              ordering:eq: [ nip node-left node-key leaf leaf black-node ]
+              ordering:gt: [ nip ]
+            } unchecked-match
+          ] [
+            2dup node-key swap order-against {
+              ordering:lt: [
+                swap over node-left delete-node
+                swap [ node-color ] [ node-key ] [ node-right ] tri
+                [ <rot- ] dip
+                rotate
+              ]
+              ordering:eq: [
+                nip dup node-color swap
+                dup node-right min-del
+                [ swap node-left ] dip
+                rotate
+              ]
+              ordering:gt: [
+                swap over node-right delete-node
+                swap [ node-color ] [ node-key ] [ node-left ] tri
+                3 <rot-n
+                rotate
+              ]
+            } unchecked-match
+          ] if
+        ] if
+      ] if
+    ] if
+  ] ;
+
+  \ Color the root red when both its children are black branches, so deleting below it has a red
+  \ node to absorb a double black.
+  redden: ( node -- tree-node ) [
+    dup black-branch? [ dup node-left black-branch? over node-right black-branch? and ] [ f ] if [
+      [ node-key ] [ node-left ] [ node-right ] tri red-node
+    ] when
+  ] ;
+
+  \ Recursive insert helper.
+  insert-node: stack-recursive ( value comparator node -- tree-node ) [
+    {
+      tree-node:branch: [
+        \ ( value comparator color key left right size )
+        drop
+        compare-with-key {
+          ordering:lt: [
+            \ Recurse into left subtree, then balance
+            \ ( value(5) comparator(4) color(3) key(2) left(1) right(0) )
+            5 pick-n 5 pick-n 3 pick-n insert-node
+            \ ( value(6) comparator(5) color(4) key(3) left(2) right(1) new-left(0) )
+            4 pick-n 4 pick-n 2 pick-n 4 pick-n balance
+            nip nip nip nip nip nip nip
+          ]
+          ordering:eq: [
+            \ Replace key with new value, keep same structure
+            \ ( value(5) comparator(4) color(3) key(2) left(1) right(0) )
+            3 pick-n 6 pick-n 3 pick-n 3 pick-n
+            branch-node
+            nip nip nip nip nip nip
+          ]
+          ordering:gt: [
+            \ Recurse into right subtree, then balance
+            \ ( value(5) comparator(4) color(3) key(2) left(1) right(0) )
+            5 pick-n 5 pick-n 2 pick-n insert-node
+            \ ( value(6) comparator(5) color(4) key(3) left(2) right(1) new-right(0) )
+            4 pick-n 4 pick-n 4 pick-n 3 pick-n balance
+            nip nip nip nip nip nip nip
+          ]
+        } unchecked-match
+      ]
+      tree-node:leaf: [
+        \ Create new red node, drop comparator
+        drop leaf leaf red-node
+      ]
+      tree-node:bb-leaf: [ drop leaf leaf red-node ]
+      tree-node:bb-branch: [
+        drop
+        compare-with-key {
+          ordering:lt: [
+            5 pick-n 5 pick-n 3 pick-n insert-node
+            4 pick-n 4 pick-n 2 pick-n 4 pick-n balance
+            nip nip nip nip nip nip nip
+          ]
+          ordering:eq: [
+            3 pick-n 6 pick-n 3 pick-n 3 pick-n
+            branch-node
+            nip nip nip nip nip nip
+          ]
+          ordering:gt: [
+            5 pick-n 5 pick-n 2 pick-n insert-node
+            4 pick-n 4 pick-n 4 pick-n 3 pick-n balance
+            nip nip nip nip nip nip nip
+          ]
+        } unchecked-match
+      ]
+    } unchecked-match
+  ] ;
+
+  \ Recursive contains helper.
+  contains-node: stack-recursive ( value comparator node -- bool ) [
+    {
+      tree-node:branch: [
+        \ ( value comparator color key left right size )
+        drop
+        compare-with-key {
+          ordering:lt: [
+            drop nip nip contains-node
+          ]
+          ordering:eq: [
+            drop drop drop drop drop drop t
+          ]
+          ordering:gt: [
+            nip nip nip contains-node
+          ]
+        } unchecked-match
+      ]
+      tree-node:leaf: [
+        drop drop f
+      ]
+      tree-node:bb-leaf: [ drop drop f ]
+      tree-node:bb-branch: [
+        drop
+        compare-with-key {
+          ordering:lt: [ drop nip nip contains-node ]
+          ordering:eq: [ drop drop drop drop drop drop t ]
+          ordering:gt: [ nip nip nip contains-node ]
+        } unchecked-match
+      ]
+    } unchecked-match
+  ] ;
+
+  min-node: stack-recursive ( node -- option ) [
+    {
+      tree-node:branch: [
+        \ ( color key left right size )
+        drop drop [ nip ] dip
+        \ ( key left )
+        dup leaf? [
+          drop >option:some
+        ] [
+          nip min-node
+        ] if
+      ]
+      tree-node:leaf:      [ option:none ]
+      tree-node:bb-leaf:   [ option:none ]
+      tree-node:bb-branch: [
+        drop drop [ nip ] dip
+        dup leaf? [ drop >option:some ] [ nip min-node ] if
+      ]
+    } unchecked-match
+  ] ;
+
+  max-node: stack-recursive ( node -- option ) [
+    {
+      tree-node:branch: [
+        \ ( color key left right size )
+        drop nip [ nip ] dip
+        \ ( key right )
+        dup leaf? [
+          drop >option:some
+        ] [
+          nip max-node
+        ] if
+      ]
+      tree-node:leaf:      [ option:none ]
+      tree-node:bb-leaf:   [ option:none ]
+      tree-node:bb-branch: [
+        drop nip [ nip ] dip
+        dup leaf? [ drop >option:some ] [ nip max-node ] if
+      ]
+    } unchecked-match
+  ] ;
+
+  \ Count nodes by full traversal, as an independent check of the cached sizes.
+  count-nodes: stack-recursive ( node -- n ) [
+    {
+      tree-node:branch: [
+        \ ( color key left right size )
+        drop
+        swap count-nodes swap count-nodes + 1 + nip nip
+      ]
+      tree-node:leaf:      [ 0 ]
+      tree-node:bb-leaf:   [ 0 ]
+      tree-node:bb-branch: [
+        drop
+        swap count-nodes swap count-nodes + 1 + nip nip
+      ]
+    } unchecked-match
+  ] ;
+
+  \ Order-statistic select: the key at 0-based rank n in sorted order.
+  \ Descends by comparing n against the left subtree's cached size, so the
+  \ cost is O(log n). Callers bounds-check n, making the leaf arms unreachable.
+  nth-node: stack-recursive ( n node -- key ) [
+    {
+      tree-node:branch: [
+        \ ( n color key left right size )
+        drop over node-size 5 pick-n
+        \ ( n color key left right lsize n )
+        2dup > [
+          \ n falls in the left subtree
+          2drop drop nip nip nth-node
+        ] [
+          2dup = [
+            \ this node is the nth key
+            2drop 2drop nip nip
+          ] [
+            \ skip the left subtree and this node, recurse right
+            swap - -- swap [ nip nip nip nip ] dip nth-node
+          ] if
+        ] if
+      ]
+      tree-node:leaf:      [ f "nth-node on leaf" EInvalidArgument make-error throw ]
+      tree-node:bb-leaf:   [ f "nth-node on bb-leaf" EInvalidArgument make-error throw ]
+      tree-node:bb-branch: [
+        drop over node-size 5 pick-n
+        2dup > [
+          2drop drop nip nip nth-node
+        ] [
+          2dup = [
+            2drop 2drop nip nip
+          ] [
+            swap - -- swap [ nip nip nip nip ] dip nth-node
+          ] if
+        ] if
+      ]
+    } unchecked-match
+  ] ;
+
+  lookup-node: stack-recursive ( value comparator node -- option ) [
+    {
+      tree-node:branch: [
+        \ ( value comparator color key left right size )
+        drop
+        compare-with-key {
+          ordering:lt: [
+            drop nip nip lookup-node
+          ]
+          ordering:eq: [
+            drop drop nip nip nip >option:some
+          ]
+          ordering:gt: [
+            nip nip nip lookup-node
+          ]
+        } unchecked-match
+      ]
+      tree-node:leaf: [
+        drop drop option:none
+      ]
+      tree-node:bb-leaf: [ drop drop option:none ]
+      tree-node:bb-branch: [
+        drop
+        compare-with-key {
+          ordering:lt: [ drop nip nip lookup-node ]
+          ordering:eq: [ drop drop nip nip nip >option:some ]
+          ordering:gt: [ nip nip nip lookup-node ]
+        } unchecked-match
+      ]
+    } unchecked-match
+  ] ;
+
+  each-node: stack-recursive ( node quot -- ) [
+    swap {
+      tree-node:branch: [
+        \ ( quot color key left right size )
+        drop
+        swap 4 pick-n each-node  \ recurse left
+        swap 3 pick-n call       \ call quot on key
+        nip swap each-node       \ drop color, recurse right
+      ]
+      tree-node:leaf:      [ drop ]
+      tree-node:bb-leaf:   [ drop ]
+      tree-node:bb-branch: [
+        drop
+        swap 4 pick-n each-node
+        swap 3 pick-n call
+        nip swap each-node
+      ]
+    } unchecked-match
+  ] ;
+
+  fold-node: stack-recursive ( node acc quot -- acc ) [
+    [ swap ] dip swap {
+      tree-node:branch: [
+        \ ( acc quot color key left right size )
+        drop
+        3 <rot-n drop
+        \ ( acc quot key left right )
+        swap 4 pick-n 4 pick-n fold-node
+        \ ( acc quot key right acc' )
+        2 pick-n 4 pick-n call
+        \ ( acc quot key right acc'' )
+        1 pick-n 1 pick-n 5 pick-n fold-node
+        \ ( acc quot key right acc'' final )
+        nip nip nip nip nip
+      ]
+      tree-node:leaf:      [ drop ]
+      tree-node:bb-leaf:   [ drop ]
+      tree-node:bb-branch: [
+        drop
+        3 <rot-n drop
+        swap 4 pick-n 4 pick-n fold-node
+        2 pick-n 4 pick-n call
+        1 pick-n 1 pick-n 5 pick-n fold-node
+        nip nip nip nip nip
+      ]
+    } unchecked-match
+  ] ;
+
   \ Push node and its left spine onto the pending stack, deepest last.
   tree-iter-descend: stack-recursive ( stack node -- stack ) [
     dup {
@@ -929,6 +758,111 @@ private{
   ] ;
 }
 
+\\ An empty tree ordered by a comparator `( a b -- ordering )`, such as `[ cmp ]`.
+\\
+\\ The tree is immutable. Every operation that changes it returns a new tree and leaves its input
+\\ unchanged.
+\\
+\\   [ cmp ] <bst> tree-empty?
+\\   => t
+<bst>: ( comparator -- bst ) [ leaf swap make-bst ] ;
+
+\\ Insert a value in O(log n). A value the comparator calls equal to a stored one replaces it, so
+\\ the size does not grow.
+\\
+\\   [ cmp ] <bst> 3 tree-insert 1 tree-insert 3 tree-insert tree>array
+\\   => { 1 3 }
+tree-insert: ( bst value -- bst ) [
+  swap unmake-bst      \ ( value root comparator )
+  dup                  \ ( value root comparator comparator )
+  3 rot-n>             \ ( comparator value root comparator )
+  swap                 \ ( comparator value comparator root )
+  insert-node blacken  \ ( comparator root' )
+  swap make-bst
+] ;
+
+\\ Remove the value the comparator calls equal to `value`, in O(log n). Removing an absent value
+\\ returns an equal tree.
+\\
+\\   { 1 2 3 } [ cmp ] >bst 2 tree-delete tree>array
+\\   => { 1 3 }
+tree-delete: ( bst value -- bst ) [
+  swap unmake-bst             \ ( value root comparator )
+  dup                         \ ( value root comparator comparator )
+  3 rot-n>                    \ ( comparator value root comparator )
+  swap                        \ ( comparator value comparator root )
+  [ 2 array-n ] dip           \ ( comparator { value comparator } root )
+  redden delete-node blacken  \ ( comparator root' )
+  swap make-bst
+] ;
+
+\\ True when the tree holds no values. O(1).
+tree-empty?: ( bst -- bool ) [ root>> leaf? ] ;
+
+\\ True when the tree holds a value the comparator calls equal to `value`. O(log n).
+\\
+\\   { 1 2 3 } [ cmp ] >bst 2 tree-contains?
+\\   => t
+tree-contains?: ( bst value -- bool ) [
+  swap unmake-bst  \ ( value root comparator )
+  swap             \ ( value comparator root )
+  contains-node
+] ;
+
+\\ The stored value the comparator calls equal to `value`, or `option:none`. O(log n).
+\\
+\\ The stored value can differ from the probe, so a comparator over part of a value finds the whole
+\\ stored value.
+\\
+\\   { 1 2 3 } [ cmp ] >bst 2 tree-lookup option:some>
+\\   => 2
+tree-lookup: ( bst value -- option ) [
+  swap unmake-bst  \ ( value root comparator )
+  swap             \ ( value comparator root )
+  lookup-node
+] ;
+
+\\ The smallest value, or `option:none` on an empty tree. O(log n).
+\\
+\\   { 3 1 2 } [ cmp ] >bst tree-min option:some>
+\\   => 1
+tree-min: ( bst -- option ) [ root>> min-node ] ;
+
+\\ The largest value, or `option:none` on an empty tree. O(log n).
+\\
+\\   { 3 1 2 } [ cmp ] >bst tree-max option:some>
+\\   => 3
+tree-max: ( bst -- option ) [ root>> max-node ] ;
+
+\\ Deprecated alias of `#len`.
+tree-size: deprecated ( bst -- n ) [ #len ] ;
+
+\\ Call `quot ( value -- )` on every value in ascending order.
+tree-each: ( bst quot -- ) [ swap root>> swap each-node ] ;
+
+\\ Fold over the values in ascending order, with `quot ( acc value -- acc' )`.
+\\
+\\   { 1 2 3 } [ cmp ] >bst 0 [ + ] tree-fold
+\\   => 6
+tree-fold: ( bst init quot -- value ) [ [ [ root>> ] dip ] dip fold-node ] ;
+
+\\ The values in ascending order.
+\\
+\\   { 3 1 2 } [ cmp ] >bst tree>array
+\\   => { 1 2 3 }
+tree>array: ( bst -- array ) [
+  { } [ #push ] tree-fold
+] ;
+
+\\ A tree of the array's values ordered by `comparator`. Values the comparator calls equal collapse
+\\ to the last one.
+\\
+\\   { 3 1 2 1 } [ cmp ] >bst tree>array
+\\   => { 1 2 3 }
+>bst: ( array comparator -- bst ) [
+  <bst> swap [ tree-insert ] #each
+] ;
+
 \ Iterator protocol integration: lazy in-order traversal, O(height) space.
 >iterator: method{ bst } [
   root>> [ ] make-vector swap tree-iter-descend
@@ -963,8 +897,59 @@ private{
 
 >array: method{ bst } [ tree>array ] ;
 
->bst: ( array comparator -- bst ) [
-  <bst> swap [ tree-insert ] #each
+\\ One binding in a `bst-map`.
+kv-pair: struct{ key value } ;
+
+\\ An ordered map: a `bst` of `kv-pair` values compared by key.
+bst-map: virtual{ bst } ;
+
+\\ An empty map ordered by a key comparator `( a b -- ordering )`, such as `[ cmp ]`. It is a `bst`
+\\ of `kv-pair` values, so it is immutable and every operation is O(log n) unless noted.
+\\
+\\   [ cmp ] <bst-map> map-empty?
+\\   => t
+<bst-map>: ( comparator -- bst-map ) [
+  \ Wrap the user's key comparator to work on kv-pairs.
+  \ ( pair1 pair2 -- ordering ) extracts keys then calls user comparator.
+  [ [ [ key>> ] dip key>> ] dip call ] curry
+  <bst> make-bst-map
 ] ;
 
-pragma{ lint-suppress: { complex-word-undocumented: constructor-consistency: conversion-naming: dead-definition: deep-nesting: missing-doc-comment: missing-type-annotation: } }
+\\ Bind `key` to `value`, replacing any existing binding for the key.
+\\
+\\   [ cmp ] <bst-map> "a" 1 map-insert "a" 2 map-insert "a" map-lookup option:some>
+\\   => 2
+map-insert: ( bst-map key value -- bst-map ) [
+  make-kv-pair swap unmake-bst-map swap tree-insert make-bst-map
+] ;
+
+\\ The value bound to `key`, or `option:none`.
+\\
+\\   [ cmp ] <bst-map> "a" 1 map-insert "a" map-lookup option:some>
+\\   => 1
+map-lookup: ( bst-map key -- option ) [
+  f make-kv-pair swap unmake-bst-map swap tree-lookup
+  [ value>> ] ?map
+] ;
+
+\\ Remove the binding for `key`. Removing an absent key returns an equal map.
+\\
+\\   [ cmp ] <bst-map> "a" 1 map-insert "a" map-delete map-empty?
+\\   => t
+map-delete: ( bst-map key -- bst-map ) [
+  f make-kv-pair swap unmake-bst-map swap tree-delete make-bst-map
+] ;
+
+\\ True when the map holds no bindings. O(1).
+map-empty?: ( bst-map -- bool ) [ unmake-bst-map tree-empty? ] ;
+
+\\ The number of bindings. O(1).
+map-size: ( bst-map -- n ) [ unmake-bst-map #len ] ;
+
+\\ The bindings as `kv-pair` values in ascending key order.
+\\
+\\   [ cmp ] <bst-map> "b" 2 map-insert "a" 1 map-insert map>array [ key>> ] #map #collect
+\\   => { "a" "b" }
+map>array: ( bst-map -- array ) [ unmake-bst-map tree>array ] ;
+
+pragma{ lint-suppress: { conversion-naming: dead-definition: deep-nesting: missing-type-annotation: } }

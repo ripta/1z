@@ -1,7 +1,7 @@
 \ Integration tests for bst, an immutable red-black binary search tree
 
 use "testing" ;
-use "bst" ;
+borrow { leaf?: node-size: count-nodes: } "bst" ;
 
 \ Order-statistic invariant: the cached subtree size must match an actual
 \ traversal count.

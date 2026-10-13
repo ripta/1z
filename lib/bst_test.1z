@@ -2,6 +2,7 @@
 
 use "testing" ;
 use "bst" ;
+use "ranges" ;
 
 \ Order-statistic invariant: the cached subtree size must match an actual
 \ traversal count.
@@ -170,6 +171,74 @@ test-delete-all: ( -- ) [
   1 tree-delete assert-size-invariant
   4 tree-delete assert-size-invariant
   tree-empty? t "tree empty after deleting every element" assert=
+] ;
+
+\ --- Red-black invariants under scrambled inserts and deletes ---
+
+\ Black height of a subtree, or -1 when it breaks a red-black invariant: a leftover double-black
+\ node, a red node with a red child, or children of unequal black height.
+rb-height: stack-recursive ( nd -- n ) [
+  bind-inputs
+  nd leaf? [ 1 ] [
+    nd bb? [ -1 ] [
+      nd red-branch? [ nd node-left red-branch? nd node-right red-branch? or ] [ f ] if [ -1 ] [
+        nd node-left rb-height nd node-right rb-height
+        2dup = over 0 > and [ drop nd red-branch? [ 0 ] [ 1 ] if + ] [ 2drop -1 ] if
+      ] if
+    ] if
+  ] if
+] ;
+
+\ True when the tree holds exactly the sorted model's values, has a black root, keeps every
+\ red-black invariant, and caches correct subtree sizes.
+tree-valid?: ( tree model -- ? ) [
+  bind-inputs
+  tree tree>array model =
+  tree root>> red-branch? not and
+  tree root>> rb-height 0 > and
+  tree root>> node-size tree root>> count-nodes = and
+] ;
+
+\ (i * m) rem 41 for i in 1..n. 41 is prime, so the keys are distinct and nonzero.
+scrambled-keys: ( n m -- array ) [
+  swap 1 swap ++ <range>
+  swap [ * 41 rem ] curry #map #collect
+] ;
+
+\ Delete one key from the tree and the model, and clear the flag when they disagree.
+delete-step: ( tree model ok? k -- tree model ok? ) [
+  bind-inputs
+  tree k tree-delete
+  model [ k = not ] #filter #collect
+  2dup tree-valid? ok? and
+] ;
+
+\ Insert n scrambled keys, then delete all forty residues in a second scrambled order, so absent
+\ keys are deleted too. True when the tree stays valid after every delete.
+delete-sweep-ok?: ( n m d -- ? ) [
+  bind-inputs
+  n m scrambled-keys
+  dup [ cmp ] >bst swap [ < ] #sort
+  2dup tree-valid?
+  40 d scrambled-keys [ delete-step ] #each
+  nip nip
+] ;
+
+\ Append "n/m" to the failures for every insert multiplier m in ms that breaks the sweep at size n.
+sweep-n: ( fails n ms -- fails ) [
+  bind-inputs
+  fails ms [
+    n over dup ++ delete-sweep-ok?
+    [ drop ] [ >string n >string "/" #append swap #append #push! ] if
+  ] #each
+] ;
+
+\ Every multiplier on the small trees, and two on deeper ones, keeps the run under the test timeout.
+test-delete-keeps-red-black-invariants: ( -- ) [
+  V{ }
+  1 13 <range> [ 2 8 <range> sweep-n ] #each
+  { 20 30 40 } [ { 3 5 } sweep-n ] #each
+  >array { } "every scrambled insert and delete order keeps the tree valid" assert=
 ] ;
 
 \ --- Protocol methods ---

@@ -1,28 +1,48 @@
 \ lib/sequences.1z - Sequence predicates and utilities
 
 \ `#starts-with?` and `#ends-with?` are prelude words. Aliases only here.
+
+\\ Alias of `#starts-with?`.
+\\
+\\   "hello" "he" #head?
+\\   => t
 #head?: ( seq prefix -- ? ) [ #starts-with? ] ;
+
+\\ Alias of `#ends-with?`.
+\\
+\\   "hello" "lo" #tail?
+\\   => t
 #tail?: ( seq suffix -- ? ) [ #ends-with? ] ;
 
-\ Check if index is within bounds of sequence
+\\ True when the index is a valid 0-based position in the sequence.
+\\
+\\   3 { 1 2 3 } #in-bounds?
+\\   => f
 #in-bounds?: ( index seq -- ? ) [
   dupd #len < [ 0 >= ] [ drop f ] if
 ] ;
 
-\ Sequence element operations
+\\ A new sequence with the element added at the end.
+\\
+\\   { 1 2 } 3 #suffix
+\\   => { 1 2 3 }
 #suffix: ( seq elem -- seq' ) [ 1array #append ] ;
+
+\\ A new sequence with the element added at the front.
+\\
+\\   0 { 1 2 } #prefix
+\\   => { 0 1 2 }
 #prefix: ( elem seq -- seq' ) [ swap 1array #prepend ] ;
 
-\ Remove empty elements from a sequence
-\
-\ Examples:
-\   { "a" "" "b" "" "c" } #squeeze #collect  →  { "a" "b" "c" }
-\   { "" } #squeeze #collect                 →  { }
+\\ A lazy iterator over the elements whose length is not zero, such as the non-empty strings.
+\\
+\\   { "a" "" "b" "" "c" } #squeeze #collect
+\\   => { "a" "b" "c" }
 #squeeze: ( seq -- iterator ) [
   [ #len 0 > ] #filter
 ] ;
 
-\ Split sequence into two arrays by predicate
+\\ Split sequence into two arrays by predicate.
 \\
 \\ Elements satisfying the predicate go into the deeper array;
 \\ others go into the top array.
@@ -41,8 +61,8 @@
 \\ The key function must return a string or symbol.
 \\
 \\   { "apple" "avocado" "banana" "blueberry" }
-\\   [ 0 #nth ] #group-by
-\\   => H{ "a" { "apple" "avocado" } "b" { "banana" "blueberry" } }
+\\   [ 0 #nth ] #group-by a: @get
+\\   => { "apple" "avocado" }
 #group-by: ( seq quot -- hash ) [
   [
     -rot>
@@ -58,4 +78,4 @@
   #reduce
 ] ;
 
-pragma{ lint-suppress: { complex-word-undocumented: dead-definition: missing-doc-comment: missing-type-annotation: } }
+pragma{ lint-suppress: { dead-definition: missing-type-annotation: } }

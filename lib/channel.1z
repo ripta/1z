@@ -2,8 +2,8 @@
 
 use "task" ;
 
-\ Consume all values from a channel until it closes.
-\ Calls quot for each value received.
+\\ Receive values until the channel closes, calling `quot ( value -- )` on each one. Blocks while
+\\ the channel is open and empty.
 channel-each: ( ch quot -- ) [
   over receive?
   dup option:some? [
@@ -15,7 +15,8 @@ channel-each: ( ch quot -- ) [
   ] if
 ] ;
 
-\ Drain all values from a channel into an array.
+\\ Receive values until the channel closes, and return them in arrival order. Blocks until the
+\\ channel is closed.
 channel>array: ( ch -- array ) [
 
   c>a-loop: ( arr ch -- arr ) [
@@ -32,8 +33,11 @@ channel>array: ( ch -- array ) [
   { } swap c>a-loop
 ] ;
 
-\ Create a channel and spawn a task that runs channel-each with quot.
-\ Returns the task handle and the channel.
+\\ Create an unbuffered channel and spawn a task that runs `channel-each` with the quotation over
+\\ it. Closing the channel ends the task. Must be called inside a `task-scope`.
+\\
+\\   [ [ 2 * . ] spawn-server 5 over send close-channel await drop ] task-scope
+\\   => 10
 spawn-server: ( quot -- task ch ) [
   <channel>
   swap
@@ -42,8 +46,15 @@ spawn-server: ( quot -- task ch ) [
   spawn swap
 ] ;
 
-\ Spawn a task that receives from in-ch, applies quot to each value,
-\ sends results to a new output channel, and closes it when in-ch closes.
+\\ Spawn a task that sends `quot ( value -- value' )` of each value received from in-ch to a new
+\\ unbuffered channel. The new channel closes when in-ch does. Must be called inside a
+\\ `task-scope`.
+\\
+\\   [
+\\     2 <buffered-channel> 1 over send 2 over send dup close-channel
+\\     [ 10 * ] pipeline channel>array .
+\\   ] task-scope
+\\   => { 10 20 }
 pipeline: ( in-ch quot -- out-ch ) [
   <channel>
   [
@@ -55,11 +66,18 @@ pipeline: ( in-ch quot -- out-ch ) [
   compose spawn drop
 ] ;
 
-\ Spawn n tasks, each receiving from ch and applying quot.
-\ Returns an array of task handles.
+\\ Spawn n tasks that each run `channel-each` with the quotation over the same channel, so each
+\\ value goes to whichever task receives it first. Returns the task handles. Must be called inside
+\\ a `task-scope`.
+\\
+\\   [
+\\     2 <buffered-channel> 1 over send 2 over send dup close-channel
+\\     [ drop ] 3 fan-out #len .
+\\   ] task-scope
+\\   => 3
 fan-out: ( ch quot n -- array ) [
   [ [ channel-each ] curry curry ] dip
   spawn-n
 ] ;
 
-pragma{ lint-suppress: { complex-word-undocumented: dead-definition: missing-doc-comment: missing-type-annotation: } }
+pragma{ lint-suppress: { dead-definition: missing-type-annotation: } }

@@ -1,7 +1,10 @@
 \ lib/task.1z - Concurrency combinators for use within task-scope
 
-\ Spawn n copies of a quotation, returning an array of task handles.
-\ Must be called within a task-scope.
+\\ Spawn n tasks that each run the quotation, and return their handles in spawn order. Must be
+\\ called inside a `task-scope`.
+\\
+\\   [ [ 7 ] 3 spawn-n await-all . ] task-scope
+\\   => { 7 7 7 }
 spawn-n: ( quot n -- array ) [
   { } -rot>                            \ { } quot n
   [ dup [ spawn ] dip [ #push ] dip ]  \ { } quot n [body]
@@ -9,11 +12,14 @@ spawn-n: ( quot n -- array ) [
   drop                                 \ drop leftover quot
 ] ;
 
-\ Run an array of quotations concurrently, returning an array of results
-\ in the same order. Must be called within a task-scope.
+\\ Run an array of quotations as concurrent tasks and wait for all of them. The results come back
+\\ in the order of the quotations. Must be called inside a `task-scope`.
+\\
+\\   [ { [ 1 ] [ 2 ] } concurrent . ] task-scope
+\\   => { 1 2 }
 concurrent: ( array -- array ) [
   [ spawn ] #map #collect
   await-all
 ] ;
 
-pragma{ lint-suppress: { complex-word-undocumented: dead-definition: missing-doc-comment: missing-type-annotation: } }
+pragma{ lint-suppress: { dead-definition: missing-type-annotation: } }

@@ -8,13 +8,22 @@ cons-list: enum{
   nil: unit
 } ;
 
-\ Short aliases for constructors and predicates
-cons:  ( head tail -- cons-list ) [ make-cons-list:cons ] ;
-nil:   ( -- cons-list )           [ cons-list:nil ] ;
-cons?: ( value -- bool )          [ cons-list:cons? ] ;
-nil?:  ( value -- bool )          [ cons-list:nil? ] ;
+\\ A list with `head` in front of the list `tail`. O(1), and `tail` is shared, not copied.
+\\
+\\   1 2 nil cons cons cons-list>array
+\\   => { 1 2 }
+cons: ( head tail -- cons-list ) [ make-cons-list:cons ] ;
 
-\ Accessors
+\\ The empty list.
+nil: ( -- cons-list ) [ cons-list:nil ] ;
+
+\\ True when the value is a non-empty list.
+cons?: ( value -- bool ) [ cons-list:cons? ] ;
+
+\\ True when the value is the empty list.
+nil?: ( value -- bool ) [ cons-list:nil? ] ;
+
+\\ The first element. Throws `index-out-of-bounds` on the empty list.
 head: ( cons-list -- value ) [
   {
     cons-list:cons: [ drop ]
@@ -22,6 +31,7 @@ head: ( cons-list -- value ) [
   } unchecked-match
 ] ;
 
+\\ The list after the first element. Throws `index-out-of-bounds` on the empty list.
 tail: ( cons-list -- cons-list ) [
   {
     cons-list:cons: [ swap drop ]
@@ -29,7 +39,7 @@ tail: ( cons-list -- cons-list ) [
   } unchecked-match
 ] ;
 
-\ Convert cons-list to array
+\\ The elements as an array, head first. O(n), and not tail-recursive.
 cons-list>array: ( cons-list -- array ) [
   {
     cons-list:cons: [ cons-list>array #prefix ]
@@ -37,7 +47,10 @@ cons-list>array: ( cons-list -- array ) [
   } unchecked-match
 ] ;
 
-\ Convert array to cons-list (preserving element order)
+\\ A list of the array's elements in the same order. O(n).
+\\
+\\   { 1 2 3 } >cons-list head
+\\   => 1
 >cons-list: stack-recursive ( array -- cons-list ) [
   dup #len 0 = [ drop nil ] [
     dup #first swap
@@ -46,7 +59,7 @@ cons-list>array: ( cons-list -- array ) [
   ] if
 ] ;
 
-\ Length of a list, O(n).
+\\ The number of elements. O(n).
 list-len: ( cons-list -- n ) [
   0 swap
   [ dup cons? ] [ tail swap 1 + swap ] while
@@ -62,19 +75,27 @@ private{
   ] ;
 }
 
-\ Reverse a list, O(n).
+\\ The elements in reverse order. O(n).
 list-reverse: ( cons-list -- cons-list ) [
   nil swap list-reverse-acc
 ] ;
 
-\ Nth element, O(n). Throws if out of bounds.
+\\ The element at 0-based index n. O(n). Throws `index-out-of-bounds` when n is negative or past
+\\ the end.
+\\
+\\   { 10 20 30 } >cons-list 1 list-nth
+\\   => 20
 list-nth: ( cons-list n -- value ) [
   over nil? [ 2drop f "list index out of bounds" EIndexOutOfBounds make-error throw ] [
     dup 0 = [ drop head ] [ 1 - swap tail swap list-nth ] if
   ] if
 ] ;
 
-\ Append two lists, O(n) in the first list.
+\\ The elements of the first list followed by those of the second. O(n) in the first list, which
+\\ is copied. The second list is shared.
+\\
+\\   { 1 2 } >cons-list { 3 } >cons-list list-append cons-list>array
+\\   => { 1 2 3 }
 list-append: ( cons-list-a cons-list-b -- cons-list' ) [
   swap {
     cons-list:cons: [ <rot- list-append cons ]
@@ -82,7 +103,7 @@ list-append: ( cons-list-a cons-list-b -- cons-list' ) [
   } unchecked-match
 ] ;
 
-\ Call quot for each element, head to tail.
+\\ Call `quot ( elem -- )` on each element, head to tail.
 list-each: ( cons-list quot -- ) [
   swap {
     cons-list:cons: [
@@ -92,7 +113,10 @@ list-each: ( cons-list quot -- ) [
   } unchecked-match
 ] ;
 
-\ Fold from left, head to tail.
+\\ Fold from the head to the tail.
+\\
+\\   { 1 2 3 } >cons-list nil [ swap cons ] list-foldl cons-list>array
+\\   => { 3 2 1 }
 list-foldl: ( cons-list acc quot: ( acc elem -- acc' ) -- acc' ) [
   <rot-
   {
@@ -102,9 +126,17 @@ list-foldl: ( cons-list acc quot: ( acc elem -- acc' ) -- acc' ) [
     cons-list:nil: [ drop ]
   } unchecked-match
 ] ;
+
+\\ Alias of `list-foldl`.
+\\
+\\   { 1 2 3 } >cons-list 0 [ + ] list-fold
+\\   => 6
 list-fold: ( cons-list acc quot: ( acc elem -- acc' ) -- acc' ) [ list-foldl ] ;
 
-\ Fold from right, tail to head. Not tail-recursive, O(n) stack frames.
+\\ Fold from the tail to the head. Not tail-recursive, so it takes O(n) stack frames.
+\\
+\\   { 1 2 3 } >cons-list nil [ cons ] list-foldr cons-list>array
+\\   => { 1 2 3 }
 list-foldr: ( cons-list init quot: ( elem acc -- acc' ) -- result ) [
   <rot-
   {
@@ -116,7 +148,10 @@ list-foldr: ( cons-list init quot: ( elem acc -- acc' ) -- result ) [
   } unchecked-match
 ] ;
 
-\ Map over elements, producing a new list.
+\\ A new list of `quot ( elem -- elem' )` applied to each element, in order. Not tail-recursive.
+\\
+\\   { 1 2 3 } >cons-list [ 10 * ] list-map cons-list>array
+\\   => { 10 20 30 }
 list-map: ( cons-list quot -- cons-list' ) [
   swap {
     cons-list:cons: [
@@ -128,7 +163,10 @@ list-map: ( cons-list quot -- cons-list' ) [
   } unchecked-match
 ] ;
 
-\ Keep elements where quot returns true.
+\\ A new list of the elements for which `quot ( elem -- ? )` is true, in order. Not tail-recursive.
+\\
+\\   { 1 2 3 4 } >cons-list [ even? ] list-filter cons-list>array
+\\   => { 2 4 }
 list-filter: ( cons-list quot -- cons-list' ) [
   swap {
     cons-list:cons: [
@@ -170,4 +208,4 @@ private{
 
 >array: method{ cons-list } [ cons-list>array ] ;
 
-pragma{ lint-suppress: { broad-import: complex-word-undocumented: dead-definition: missing-doc-comment: missing-type-annotation: } }
+pragma{ lint-suppress: { broad-import: dead-definition: missing-type-annotation: } }

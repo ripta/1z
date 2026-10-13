@@ -3,49 +3,54 @@
 \ Accumulator for index-tracking split
 split-fast-acc: mutable struct{ src lines start pos } ;
 
-\ Extract src[start..pos] as a string from acc, keeping acc on stack
-acc-slice: ( acc -- acc slice-str ) [
-  dup src>> swap
-  dup start>> swap
-  dup pos>> swap
-  [ #slice ] dip swap bytes>
-] ;
+private{
+  \ Extract src[start..pos] as a string from acc, keeping acc on stack
+  acc-slice: ( acc -- acc slice-str ) [
+    dup src>> swap
+    dup start>> swap
+    dup pos>> swap
+    [ #slice ] dip swap bytes>
+  ] ;
 
-\ Reducer step: on newline, slice and append; otherwise increment pos
-split-fast-step: ( acc byte -- acc' ) [
-  10 =
-  [
-    \ Newline: slice src[start..pos], append to lines, advance start past pos
-    acc-slice
-    dup #len 0 >
-    [ over lines>> swap 1array #append! >>lines ]
-    [ drop ]
+  \ Reducer step: on newline, slice and append; otherwise increment pos
+  split-fast-step: ( acc byte -- acc' ) [
+    10 =
+    [
+      \ Newline: slice src[start..pos], append to lines, advance start past pos
+      acc-slice
+      dup #len 0 >
+      [ over lines>> swap 1array #append! >>lines ]
+      [ drop ]
+      if
+      dup pos>> ++ >>start
+      dup start>> >>pos
+    ]
+    [
+      \ Anything else: increment pos
+      dup pos>> ++ >>pos
+    ]
     if
-    dup pos>> ++ >>start
-    dup start>> >>pos
-  ]
-  [
-    \ Anything else: increment pos
-    dup pos>> ++ >>pos
-  ]
-  if
-] ;
+  ] ;
 
-\ Flush remaining bytes after last newline
-split-fast-flush: ( acc -- lines ) [
-  dup start>> over pos>> <
-  [
-    acc-slice
-    dup #len 0 >
-    [ over lines>> swap 1array #append! nip ]
-    [ drop lines>> ]
+  \ Flush remaining bytes after last newline
+  split-fast-flush: ( acc -- lines ) [
+    dup start>> over pos>> <
+    [
+      acc-slice
+      dup #len 0 >
+      [ over lines>> swap 1array #append! nip ]
+      [ drop lines>> ]
+      if
+    ]
+    [ lines>> ]
     if
-  ]
-  [ lines>> ]
-  if
-] ;
+  ] ;
+}
 
-\ Split a string into an array of non-empty lines
+\\ Split a string on `\n` into its non-empty lines, in one pass over its bytes.
+\\
+\\   "a\n\nb\n" split-lines
+\\   => V{ "a" "b" }
 split-lines: ( str -- lines ) [
   >bytes
   dup V{ } 0 0 make-split-fast-acc
@@ -53,11 +58,11 @@ split-lines: ( str -- lines ) [
   split-fast-flush
 ] ;
 
-\ Read a file and return its non-empty lines as an array
+\\ Read a whole file and split it into its non-empty lines with `split-lines`.
 read-lines: ( path -- lines ) [
   read: stream-open
   dup stream-read-all swap stream-close
   bytes> split-lines
 ] ;
 
-pragma{ lint-suppress: { complex-word-undocumented: dead-definition: missing-doc-comment: missing-type-annotation: } }
+pragma{ lint-suppress: { dead-definition: missing-type-annotation: } }

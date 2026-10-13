@@ -1,5 +1,7 @@
 \ lib/debug.1z - Debugging utilities
 
+\\ Print the current scope frames to stderr, one line each. A line shows the frame type, its index
+\\ when it has one, its word count, and whether it is an import frame.
 scope-trace: ( -- ) [
   native.scope-frames
   >iterator [
@@ -16,4 +18,4 @@ scope-trace: ( -- ) [
   ] #each
 ] ;
 
-pragma{ lint-suppress: { dead-definition: missing-doc-comment: } }
+pragma{ lint-suppress: { dead-definition: } }

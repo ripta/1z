@@ -2,7 +2,7 @@
 
 semaphore: struct{ ch: channel } ;
 
-\ Create a counting semaphore with n permits.
+\\ A counting semaphore holding n permits, backed by a buffered channel of capacity n.
 <semaphore>: ( n -- sem ) [
   dup <buffered-channel>
   swap [ dup t swap send ] times
@@ -24,4 +24,4 @@ release: ( sem -- ) [
 
 inspect: method{ semaphore } [ drop "<semaphore>" ] ;
 
-pragma{ lint-suppress: { dead-definition: missing-doc-comment: missing-type-annotation: } }
+pragma{ lint-suppress: { dead-definition: missing-type-annotation: } }

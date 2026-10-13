@@ -5,17 +5,20 @@
 \ Parameter holding the current memo cache
 memo-cache: parameter{ [ M{ } ] } ;
 
-\ Run a quotation with a fresh memo cache, after which the memo is discarded
+\\ Run a quotation with a fresh, empty memo cache. The cache is discarded when the quotation
+\\ returns, so memoized values never outlive one call.
+\\
+\\ The cache is an `M{ }` hash, so every key is a string or a symbol.
 with-memo: ( quot -- ... ) [
   [ M{ } memo-cache ] dip with-parameter
 ] ;
 
-\ Check whether a key exists in the memo cache.
+\\ True when the current memo cache holds the key.
 memo-has?: ( key -- ? ) [
   memo-cache get swap @has?
 ] ;
 
-\ Look up a key in the memo cache, returning an option.
+\\ The value cached under the key, or `option:none`.
 memo-get?: ( key -- option ) [
   memo-cache get over @has?
   [ memo-cache get swap @get >option:some ]
@@ -23,7 +26,7 @@ memo-get?: ( key -- option ) [
   if
 ] ;
 
-\ Look up a key in the memo cache, or throw if not found.
+\\ The value cached under the key. Throws `key-not-found` when the key is absent.
 memo-get: ( key -- value ) [
   memo-get?
   dup option:some?
@@ -32,9 +35,13 @@ memo-get: ( key -- value ) [
   if
 ] ;
 
-\ Store a key-value pair in the memo cache.
+\\ Cache a value under a string or symbol key in the current memo cache, replacing any earlier
+\\ value.
+\\
+\\   [ "5" 25 memo! "5" memo-get ] with-memo
+\\   => 25
 memo!: ( key value -- ) [
   memo-cache get -rot> @set! drop
 ] ;
 
-pragma{ lint-suppress: { dead-definition: missing-doc-comment: missing-type-annotation: mutation-suffix-misuse: predicate-naming: } }
+pragma{ lint-suppress: { dead-definition: missing-type-annotation: mutation-suffix-misuse: predicate-naming: } }

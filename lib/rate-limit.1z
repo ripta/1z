@@ -4,8 +4,11 @@ use "time" ;
 
 rate-limiter: mutable struct{ tokens burst interval last-refill } ;
 
-\ Create a rate limiter.
-\ interval is a duration between token additions; burst is the max token count.
+\\ A token-bucket rate limiter that starts full. One token is added per `interval`, a duration, up
+\\ to `burst` tokens.
+\\
+\\   10 per-second 5 <rate-limiter> tokens>>
+\\   => 5
 <rate-limiter>: ( interval burst -- limiter ) [
   dup                    \ interval burst burst
   <rot- unmake-duration  \ burst burst interval-nanos
@@ -13,13 +16,15 @@ rate-limiter: mutable struct{ tokens burst interval last-refill } ;
   make-rate-limiter      \ tokens=burst burst=burst interval last-refill
 ] ;
 
-\ Convenience: compute interval from a per-second rate.
+\\ The interval that adds n tokens per second.
 per-second: ( n -- duration ) [ 1 seconds swap / ] ;
 
-\ Convenience: compute interval from a per-minute rate.
+\\ The interval that adds n tokens per minute.
 per-minute: ( n -- duration ) [ 1 minutes swap / ] ;
 
-\ Refill tokens based on elapsed time.
+\\ Add one token for each whole interval since the last refill, capped at the burst size. Mutates
+\\ the limiter in place. The time left over from a partial interval is dropped when tokens are
+\\ added.
 refill: ( limiter -- limiter ) [
   dup last-refill>>       \ limiter last-refill
   monotonic-nanos swap -  \ limiter elapsed
@@ -57,4 +62,4 @@ try-acquire: method{ rate-limiter } [
   ] if
 ] ;
 
-pragma{ lint-suppress: { complex-word-undocumented: dead-definition: missing-doc-comment: missing-type-annotation: } }
+pragma{ lint-suppress: { dead-definition: missing-type-annotation: } }

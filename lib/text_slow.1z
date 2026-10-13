@@ -5,45 +5,51 @@
 \ Accumulator for splitting lines
 slow-acc: struct{ slow-lines slow-current } ;
 
-\ Reducer to split by newline
-slow-split-nl: ( acc char -- acc' ) [
-  dup "\n" =
-  [
-    \ Newline: flush current line into lines if non-empty
-    drop
+private{
+  \ Reducer to split by newline
+  slow-split-nl: ( acc char -- acc' ) [
+    dup "\n" =
+    [
+      \ Newline: flush current line into lines if non-empty
+      drop
+      dup slow-current>>
+      dup #len 0 >
+      [
+        over slow-lines>>    \ acc current lines
+        swap 1array #append  \ acc lines'
+        nip                  \ lines'
+        "" make-slow-acc
+      ]
+      [ drop ]
+      if
+    ]
+    [
+      \ Anything else: append to current line, rebuild accumulator
+      over slow-current>> swap #append  \ acc new-current
+      swap slow-lines>>                 \ new-current lines
+      swap make-slow-acc
+    ]
+    if
+  ] ;
+
+  \ Flush the last line from accumulator into lines array
+  slow-flush-last: ( acc -- lines ) [
     dup slow-current>>
     dup #len 0 >
-    [
-      over slow-lines>>    \ acc current lines
-      swap 1array #append  \ acc lines'
-      nip                  \ lines'
-      "" make-slow-acc
-    ]
-    [ drop ]
+    [ over slow-lines>> swap 1array #append nip ]
+    [ drop slow-lines>> ]
     if
-  ]
-  [
-    \ Anything else: append to current line, rebuild accumulator
-    over slow-current>> swap #append  \ acc new-current
-    swap slow-lines>>                 \ new-current lines
-    swap make-slow-acc
-  ]
-  if
-] ;
+  ] ;
+}
 
-\ Flush the last line from accumulator into lines array
-slow-flush-last: ( acc -- lines ) [
-  dup slow-current>>
-  dup #len 0 >
-  [ over slow-lines>> swap 1array #append nip ]
-  [ drop slow-lines>> ]
-  if
-] ;
-
-\ Split a string into an array of non-empty lines (O(n^2) char-by-char)
+\\ Split a string on `\n` into its non-empty lines, one character at a time. O(n^2), kept as the
+\\ slow baseline that benchmarks compare `split-lines` against.
+\\
+\\   "a\n\nb\n" split-lines-slow
+\\   => { "a" "b" }
 split-lines-slow: ( str -- lines ) [
   { } "" make-slow-acc [ slow-split-nl ] #reduce
   slow-flush-last
 ] ;
 
-pragma{ lint-suppress: { complex-word-undocumented: dead-definition: missing-doc-comment: missing-type-annotation: } }
+pragma{ lint-suppress: { dead-definition: missing-type-annotation: } }

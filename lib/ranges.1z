@@ -3,18 +3,29 @@
 \ Range record: start, end, step, infinite? fields
 range: struct{ start: fixnum | bignum | float end: fixnum | bignum | float step: fixnum infinite?: boolean } ;
 
-\ Exclusive range [start, end) with auto-step +-1
+\\ The exclusive range `[start, end)`. It steps by 1 when start < end and by -1 otherwise.
+\\
+\\   1 4 <range> #collect
+\\   => { 1 2 3 }
 <range>: ( start end -- range ) [
   2dup < [ 1 ] [ -1 ] if f make-range
 ] ;
 
-\ Inclusive range [start, end] with auto-step +-1
-\ Adjusts end to convert to exclusive representation internally
+\\ The inclusive range `[start, end]`. It steps by 1 when start < end and by -1 otherwise. It is
+\\ stored as the equivalent exclusive range.
+\\
+\\   3 1 range= #collect
+\\   => { 3 2 1 }
 range=: ( start end -- range ) [
   2dup < [ ++ 1 ] [ -- -1 ] if f make-range
 ] ;
 
-\ Exclusive range with explicit step
+\\ The exclusive range `[start, end)` with an explicit step.
+\\
+\\ Throws `invalid-argument` when the step is zero, or when its sign points away from `end`.
+\\
+\\   0 10 3 range-step #collect
+\\   => { 0 3 6 9 }
 range-step: ( start end step -- range ) [
   dup 0 = [ f "step must not be zero" EInvalidArgument make-error throw ] when
   2 pick-n 2 pick-n < over 0 < and
@@ -24,19 +35,32 @@ range-step: ( start end step -- range ) [
   f make-range
 ] ;
 
-\ Generate exclusive range [0, n)
+\\ The exclusive range `[0, n)`.
+\\
+\\   3 iota #collect
+\\   => { 0 1 2 }
 iota: ( n -- range ) [ 0 swap <range> ] ;
 
-\ Infinite range from start, step 1
+\\ The infinite range from start, stepping by 1. `#len` and `#last` throw on it.
+\\
+\\   5 range-from 3 #take #collect
+\\   => { 5 6 7 }
 range-from: ( start -- range ) [ 0 1 t make-range ] ;
 
-\ Infinite range from start with explicit step
+\\ The infinite range from start with an explicit step. Throws `invalid-argument` when the step is
+\\ zero.
+\\
+\\   0 -2 range-from-step 3 #take #collect
+\\   => { 0 -2 -4 }
 range-from-step: ( start step -- range ) [
   dup 0 = [ f "step must not be zero" EInvalidArgument make-error throw ] when
   0 swap t make-range
 ] ;
 
-\ Inclusive range (legacy alias for range=)
+\\ Alias of `range=`.
+\\
+\\   1 3 range-inclusive #collect
+\\   => { 1 2 3 }
 range-inclusive: ( start end -- range ) [ range= ] ;
 
 \ Iterator support: convert range to a lazy iterator
@@ -100,4 +124,4 @@ inspect: method{ range } [
   nip nip nip
 ] ;
 
-pragma{ lint-suppress: { complex-word-undocumented: dead-definition: missing-doc-comment: missing-type-annotation: } }
+pragma{ lint-suppress: { dead-definition: missing-type-annotation: } }

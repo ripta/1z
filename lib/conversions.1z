@@ -1,16 +1,23 @@
 \ lib/conversions.1z - Numeric conversions
 
-\ Convert single-digit character string to integer
-\ "0" -> 0, "9" -> 9
+\\ The value of a single ASCII digit character. Any other character gives its code point minus 48,
+\\ so check it with `digit?` first.
+\\
+\\   "7" char>digit
+\\   => 7
 char>digit: ( str -- n ) [ >codepoint 48 - ] ;
 
-\ Check if single-char string is an ASCII digit
+\\ True when a single-character string is an ASCII digit, `0` through `9`.
 digit?: ( str -- ? ) [
   >codepoint dup 48 >= swap 57 <= and
 ] ;
 
-\ Parse integer from string, supporting all bases and separators
-\ "123" -> 123, "-42" -> -42, "0xFF" -> 255, "0o777" -> 511, "0b101" -> 5
+\\ Parse an integer literal, with any base prefix and digit separator the reader accepts.
+\\
+\\ Throws `parse-error` when the string is not a literal, or is a literal that is not an integer.
+\\
+\\   "0xFF" parse-integer
+\\   => 255
 parse-integer: ( str -- n ) [
   resolve-literal
   [ dup type-of dup fixnum = swap bignum = or
@@ -20,11 +27,18 @@ parse-integer: ( str -- n ) [
   if
 ] ;
 
-\ Parse a float from a string. "0.25" -> 0.25, "5" -> 5.0. Throws on non-numeric.
+\\ Parse a float. An integer string becomes the equal float. Throws `type-mismatch` on a
+\\ non-numeric string.
+\\
+\\   "5" parse-float
+\\   => 5.0
 parse-float: ( str -- f ) [ >float ] ;
 
-\ Parse a boolean from a string using the flag spelling table. Case-insensitive.
-\ true/t/1/yes -> t ; false/f/0/no -> f ; any other spelling throws.
+\\ Parse a boolean, ignoring case. `true`, `t`, `1`, and `yes` give `t`. `false`, `f`, `0`, and `no`
+\\ give `f`. Any other spelling throws `parse-error`.
+\\
+\\   "Yes" parse-boolean
+\\   => t
 parse-boolean: ( str -- ? ) [
   lowercase
   dup { "true" "t" "1" "yes" } swap #in?
@@ -37,4 +51,4 @@ parse-boolean: ( str -- ? ) [
   if
 ] ;
 
-pragma{ lint-suppress: { dead-definition: missing-doc-comment: missing-type-annotation: } }
+pragma{ lint-suppress: { dead-definition: missing-type-annotation: } }

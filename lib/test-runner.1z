@@ -184,12 +184,11 @@ use "os/path" ;
   if
 ] ;
 
-\ Run every `test-` word defined in the given file.
-\
-\ Stack: ( filepath -- failed )
-\
-\   - filepath: path to a *_test.1z file
-\   - failed: number of failed assertions across all tests in the file
+\\ Load a `_test.1z` file, run each of its `test-` words in name order, and return the number of
+\\ failed assertions across the file.
+\\
+\\ `ONEZ_TEST_TAGS` selects tests by marker. The file's `before-each` and `after-each` words, when
+\\ defined, run around every test that is not skipped.
 run-test-file: ( filepath -- failed ) [
   dup load
   tuck
@@ -208,4 +207,4 @@ run-test-file: ( filepath -- failed ) [
   test-counts failed: @get
 ] ;
 
-pragma{ lint-suppress: { broad-import: dead-definition: import-ordering: missing-doc-comment: missing-type-annotation: } }
+pragma{ lint-suppress: { broad-import: dead-definition: import-ordering: missing-type-annotation: } }
