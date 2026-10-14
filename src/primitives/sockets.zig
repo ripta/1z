@@ -25,7 +25,7 @@ pub const primitives = [_]Primitive{
     .{ .name = "udp-recvfrom", .stack_effect = "fd maxlen -- data host port", .doc = "Receive datagram; returns byte-array data, sender host string, and port.", .func = nativeUdpRecvfrom, .capability = .io_net },
     .{ .name = "udp-send", .stack_effect = "fd data -- n", .doc = "Send datagram on connected socket; data is string or byte-array; returns bytes sent.", .func = nativeUdpSend, .capability = .io_net },
     .{ .name = "udp-recv", .stack_effect = "fd maxlen -- data", .doc = "Receive datagram on connected socket; returns byte-array.", .func = nativeUdpRecv, .capability = .io_net },
-    .{ .name = "inet-pton", .stack_effect = "family str -- bytes", .doc = "Parse IP address string to raw bytes; family is AF_INET (2) or AF_INET6 (30).", .func = nativeInetPton, .capability = .io_net },
+    .{ .name = "inet-pton", .stack_effect = "family str -- bytes", .doc = "Parse an IP address string to raw bytes in network order. The family is inet: or inet6:.", .func = nativeInetPton, .capability = .io_net },
     .{ .name = "sock-const", .stack_effect = "str -- n", .doc = "Look up a platform-correct socket constant by name.", .func = nativeSockConst, .capability = .io_net },
 };
 
@@ -690,35 +690,36 @@ fn nativeSetsockopt(ctx: *Context) anyerror!void {
 }
 
 /// inet-pton ( family str -- bytes )
+///
+/// The family is a symbol rather than an AF_* number, because the numbers differ by platform:
+/// AF_INET6 is 30 on macOS and 10 on Linux.
 fn nativeInetPton(ctx: *Context) anyerror!void {
     if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "inet-pton");
     const str_val = try helpers.popString(ctx);
     defer container_backing.releaseValue(.{ .string = str_val });
     const str = str_val.bytes;
-    const family = try popFixnum(ctx);
+    const family_val = try helpers.popSymbol(ctx);
+    defer container_backing.releaseValue(.{ .symbol = family_val });
+    const family = family_val.bytes;
     const alloc = ctx.quotationAllocator();
 
-    switch (family) {
-        std.posix.AF.INET => {
-            const addr = std.net.Address.parseIp4(str, 0) catch {
-                helpers.setErrorContext(ctx, "invalid IPv4 address: {s}", .{str});
-                return error.InvalidArgument;
-            };
-            const bytes: *const [4]u8 = @ptrCast(&addr.in.sa.addr);
-            try ctx.stack.push(try makeBytesValue(alloc, bytes));
-        },
-        std.posix.AF.INET6 => {
-            const addr = std.net.Address.parseIp6(str, 0) catch {
-                helpers.setErrorContext(ctx, "invalid IPv6 address: {s}", .{str});
-                return error.InvalidArgument;
-            };
-            const bytes: []const u8 = addr.in6.sa.addr[0..16];
-            try ctx.stack.push(try makeBytesValue(alloc, bytes));
-        },
-        else => {
-            helpers.setErrorContext(ctx, "inet-pton: unsupported address family {d}", .{family});
+    if (std.mem.eql(u8, family, "inet")) {
+        const addr = std.net.Address.parseIp4(str, 0) catch {
+            helpers.setErrorContext(ctx, "invalid IPv4 address: {s}", .{str});
             return error.InvalidArgument;
-        },
+        };
+        const bytes: *const [4]u8 = @ptrCast(&addr.in.sa.addr);
+        try ctx.stack.push(try makeBytesValue(alloc, bytes));
+    } else if (std.mem.eql(u8, family, "inet6")) {
+        const addr = std.net.Address.parseIp6(str, 0) catch {
+            helpers.setErrorContext(ctx, "invalid IPv6 address: {s}", .{str});
+            return error.InvalidArgument;
+        };
+        const bytes: []const u8 = addr.in6.sa.addr[0..16];
+        try ctx.stack.push(try makeBytesValue(alloc, bytes));
+    } else {
+        helpers.setErrorContext(ctx, "inet-pton: unsupported address family '{s}', expected inet: or inet6:", .{family});
+        return error.InvalidArgument;
     }
 }
 

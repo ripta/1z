@@ -10,12 +10,26 @@ use "conversions" ;
 
 \ --- tai-timestamp virtual type ---
 
+\\ The fields behind a `tai-timestamp`: whole TAI seconds since the POSIX epoch, and nanoseconds
+\\ within that second.
 tai-inner: struct{ tai-sec: fixnum tai-nsec: fixnum } ;
+
+\\ A point on the TAI scale. It is a distinct type from a UTC `timestamp`, so the two cannot be
+\\ mixed by accident. Convert with `>tai-timestamp` and `>timestamp`.
 tai-timestamp: virtual{ tai-inner } ;
 
+\\ A TAI timestamp from whole TAI seconds and nanoseconds. The seconds count includes the
+\\ accumulated leap seconds, so it runs ahead of the POSIX value for the same instant.
+\\
+\\   1483228837 0 make-tai-timestamp >timestamp timestamp-sec
+\\   => 1483228800
 make-tai-timestamp: ( sec nsec -- tai-timestamp ) [ make-tai-inner >tai-timestamp ] ;
-tai-timestamp-sec:  ( tai-timestamp -- sec )      [ unmake-tai-timestamp tai-sec>> ] ;
-tai-timestamp-nsec: ( tai-timestamp -- nsec )     [ unmake-tai-timestamp tai-nsec>> ] ;
+
+\\ The whole TAI seconds of a TAI timestamp.
+tai-timestamp-sec: ( tai-timestamp -- sec ) [ unmake-tai-timestamp tai-sec>> ] ;
+
+\\ The nanoseconds within the second of a TAI timestamp.
+tai-timestamp-nsec: ( tai-timestamp -- nsec ) [ unmake-tai-timestamp tai-nsec>> ] ;
 
 \ --- Leap second table ---
 \
@@ -127,8 +141,10 @@ tai-timestamp-nsec: ( tai-timestamp -- nsec )     [ unmake-tai-timestamp tai-nse
   if
 ] ;
 
-leap-second-timestamps: ( -- timestamps: array ) const [ (leap-table) timestamps: @get ] ;
-leap-second-offsets: ( -- offsets: array ) const [ (leap-table) offsets: @get ] ;
+private{
+  leap-second-timestamps: ( -- timestamps: array ) const [ (leap-table) timestamps: @get ] ;
+  leap-second-offsets: ( -- offsets: array ) const [ (leap-table) offsets: @get ] ;
+}
 
 \ --- Table lookup ---
 
@@ -208,12 +224,14 @@ inspect: method{ tai-timestamp } [
 
 \ --- TAI arithmetic ---
 
-tai-timestamp+nanos: ( tai nanos -- tai ) [
-  over tai-timestamp-sec -rot>
-  swap tai-timestamp-nsec +
-  ns>sec-nsec [ + ] dip
-  make-tai-timestamp
-] ;
+private{
+  tai-timestamp+nanos: ( tai nanos -- tai ) [
+    over tai-timestamp-sec -rot>
+    swap tai-timestamp-nsec +
+    ns>sec-nsec [ + ] dip
+    make-tai-timestamp
+  ] ;
+}
 
 +: method{ tai-timestamp duration } [ unmake-duration tai-timestamp+nanos ] ;
 +: method{ duration tai-timestamp } [ swap unmake-duration tai-timestamp+nanos ] ;
@@ -234,4 +252,4 @@ tai-now: ( -- tai-timestamp ) [
   clock-realtime swap dup (leap-offset-for) + swap make-tai-timestamp
 ] ;
 
-pragma{ lint-suppress: { broad-import: complex-word-undocumented: constructor-consistency: dead-definition: deep-nesting: import-ordering: missing-doc-comment: missing-type-annotation: } }
+pragma{ lint-suppress: { broad-import: constructor-consistency: dead-definition: deep-nesting: import-ordering: missing-type-annotation: } }

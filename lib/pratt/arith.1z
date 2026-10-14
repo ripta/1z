@@ -3,6 +3,8 @@
 "pratt" load reexport
 use "lexer" ;
 
+\\ The binary operator table for arithmetic, mapping each operator to its left and right binding
+\\ powers. `*` and `/` bind tighter than `+` and `-`, and all four associate to the left.
 ARITHMETIC-OPS: ( -- ops: hash ) const [
   H{
     "+" H{ left-bp: 10 right-bp: 11 }
@@ -12,6 +14,8 @@ ARITHMETIC-OPS: ( -- ops: hash ) const [
   }
 ] ;
 
+\\ The binding power of unary minus, which binds tighter than every binary operator in
+\\ `ARITHMETIC-OPS`.
 UNARY-MINUS-BP: ( -- bp: fixnum ) const [ 30 ] ;
 
 private{
@@ -42,42 +46,44 @@ private{
   ] ;
 }
 
-arith-prefix: ( token parser tokens -- value ) [
-  <rot-
-  \ parser tokens token
-  dup kind>> number: = [
-    (parse-number-token)
-    nip nip
-  ] [
-    dup value>> "(" = [
-      drop (parse-group)
+private{
+  arith-prefix: ( token parser tokens -- value ) [
+    <rot-
+    \ parser tokens token
+    dup kind>> number: = [
+      (parse-number-token)
+      nip nip
     ] [
-      dup value>> "-" = [
-        drop
-        swap UNARY-MINUS-BP parse-pratt
-        -1 *
+      dup value>> "(" = [
+        drop (parse-group)
       ] [
-        (unexpected-expression)
-      ] if
-    ] if
-  ] if
-] ;
-
-arith-infix: ( left token parser tokens -- value ) [
-  parse-right
-  \ left token right
-  swap dup value>>
-  \ left right token op
-  dup "+" = [ 2drop + ] [
-    dup "-" = [ 2drop - ] [
-      dup "*" = [ 2drop * ] [
-        dup "/" = [ 2drop / ] [
-          drop "unknown operator '" throw-token-error
+        dup value>> "-" = [
+          drop
+          swap UNARY-MINUS-BP parse-pratt
+          -1 *
+        ] [
+          (unexpected-expression)
         ] if
       ] if
     ] if
-  ] if
-] ;
+  ] ;
+
+  arith-infix: ( left token parser tokens -- value ) [
+    parse-right
+    \ left token right
+    swap dup value>>
+    \ left right token op
+    dup "+" = [ 2drop + ] [
+      dup "-" = [ 2drop - ] [
+        dup "*" = [ 2drop * ] [
+          dup "/" = [ 2drop / ] [
+            drop "unknown operator '" throw-token-error
+          ] if
+        ] if
+      ] if
+    ] if
+  ] ;
+}
 
 \\ Construct a Pratt parser pre-wired for arithmetic expressions.
 \\ Supports `+`, `-`, `*`, `/`, parentheses, and unary minus.
@@ -89,4 +95,4 @@ arith-infix: ( left token parser tokens -- value ) [
   } <pratt>
 ] ;
 
-pragma{ lint-suppress: { broad-import: complex-word-undocumented: dead-definition: import-ordering: missing-doc-comment: missing-type-annotation: non-kebab-case: } }
+pragma{ lint-suppress: { broad-import: dead-definition: import-ordering: non-kebab-case: } }

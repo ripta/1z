@@ -1,18 +1,37 @@
 \ lib/os/signal.1z - Signal handling API
 
-\ Virtual type wrapping POSIX signal numbers
+\\ A POSIX signal, wrapping its platform signal number. The named constants below look the number
+\\ up on the running platform, so they are correct on both Linux and macOS.
 signal: virtual{ fixnum } ;
 
-\ Named constants (platform-correct via native lookup)
-SIGINT:   ( -- signal: signal ) const [ INT: native.signal-number >signal ] ;
-SIGTERM:  ( -- signal: signal ) const [ TERM: native.signal-number >signal ] ;
-SIGHUP:   ( -- signal: signal ) const [ HUP: native.signal-number >signal ] ;
-SIGQUIT:  ( -- signal: signal ) const [ QUIT: native.signal-number >signal ] ;
-SIGPIPE:  ( -- signal: signal ) const [ PIPE: native.signal-number >signal ] ;
-SIGUSR1:  ( -- signal: signal ) const [ USR1: native.signal-number >signal ] ;
-SIGUSR2:  ( -- signal: signal ) const [ USR2: native.signal-number >signal ] ;
-SIGALRM:  ( -- signal: signal ) const [ ALRM: native.signal-number >signal ] ;
-SIGCHLD:  ( -- signal: signal ) const [ CHLD: native.signal-number >signal ] ;
+\\ SIGINT, the interrupt sent by Ctrl-C.
+SIGINT: ( -- signal: signal ) const [ INT: native.signal-number >signal ] ;
+
+\\ SIGTERM, the polite request to terminate.
+SIGTERM: ( -- signal: signal ) const [ TERM: native.signal-number >signal ] ;
+
+\\ SIGHUP, sent when the controlling terminal hangs up. Daemons often treat it as a reload request.
+SIGHUP: ( -- signal: signal ) const [ HUP: native.signal-number >signal ] ;
+
+\\ SIGQUIT, the quit sent by Ctrl-backslash.
+SIGQUIT: ( -- signal: signal ) const [ QUIT: native.signal-number >signal ] ;
+
+\\ SIGPIPE, sent on a write to a pipe or socket with no reader.
+SIGPIPE: ( -- signal: signal ) const [ PIPE: native.signal-number >signal ] ;
+
+\\ SIGUSR1, the first user-defined signal.
+SIGUSR1: ( -- signal: signal ) const [ USR1: native.signal-number >signal ] ;
+
+\\ SIGUSR2, the second user-defined signal.
+SIGUSR2: ( -- signal: signal ) const [ USR2: native.signal-number >signal ] ;
+
+\\ SIGALRM, sent when a timer set by alarm expires.
+SIGALRM: ( -- signal: signal ) const [ ALRM: native.signal-number >signal ] ;
+
+\\ SIGCHLD, sent when a child process stops or exits.
+SIGCHLD: ( -- signal: signal ) const [ CHLD: native.signal-number >signal ] ;
+
+\\ SIGWINCH, sent when the terminal window changes size.
 SIGWINCH: ( -- signal: signal ) const [ WINCH: native.signal-number >signal ] ;
 
 \ Convenience words that unwrap the virtual type before calling the native primitives.
@@ -36,4 +55,4 @@ on-interrupt: ( quot: ( signum -- ) -- ) [ SIGINT swap on-signal ] ;
 \\ Register a handler for SIGTERM.
 on-terminate: ( quot: ( signum -- ) -- ) [ SIGTERM swap on-signal ] ;
 
-pragma{ lint-suppress: { dead-definition: missing-doc-comment: missing-type-annotation: non-kebab-case: } }
+pragma{ lint-suppress: { dead-definition: missing-type-annotation: non-kebab-case: } }

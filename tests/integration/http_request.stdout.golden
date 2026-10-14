@@ -85,9 +85,9 @@ Stack: [ ]
 Stack: [ ]
 PASS: too few parts
 Stack: [ ]
-Stack: [ <error parse-error: malformed request line 'GET /' at position 5 data=H{ text: "GET /" offset: 5 } [src/prelude.1z:1385:throw <- net/http:68:when <- net/http:204:(read-request-wire) <- tests/integration/http_request.1z:89:recover]> ]
+Stack: [ <error parse-error: malformed request line 'GET /' at position 5 data=H{ text: "GET /" offset: 5 } [src/prelude.1z:1385:throw <- net/http:72:when <- net/http:208:(read-request-wire) <- tests/integration/http_request.1z:89:recover]> ]
 PASS: malformed line message
-Stack: [ <error parse-error: malformed request line 'GET /' at position 5 data=H{ text: "GET /" offset: 5 } [src/prelude.1z:1385:throw <- net/http:68:when <- net/http:204:(read-request-wire) <- tests/integration/http_request.1z:89:recover]> ]
+Stack: [ <error parse-error: malformed request line 'GET /' at position 5 data=H{ text: "GET /" offset: 5 } [src/prelude.1z:1385:throw <- net/http:72:when <- net/http:208:(read-request-wire) <- tests/integration/http_request.1z:89:recover]> ]
 Stack: [ H{ text: "GET /" offset: 5 } ]
 PASS: malformed line points past its end
 Stack: [ H{ text: "GET /" offset: 5 } ]
@@ -247,9 +247,9 @@ Stack: [ ]
 Stack: [ ]
 PASS: truncated body throws
 Stack: [ ]
-Stack: [ <error parse-error: unexpected EOF reading request body at position 3 data=H{ offset: 3 } [src/prelude.1z:1385:throw <- net/http:205:(read-request-body) <- tests/integration/http_request.1z:206:recover]> ]
+Stack: [ <error parse-error: unexpected EOF reading request body at position 3 data=H{ offset: 3 } [src/prelude.1z:1385:throw <- net/http:209:(read-request-body) <- tests/integration/http_request.1z:206:recover]> ]
 PASS: truncated body message
-Stack: [ <error parse-error: unexpected EOF reading request body at position 3 data=H{ offset: 3 } [src/prelude.1z:1385:throw <- net/http:205:(read-request-body) <- tests/integration/http_request.1z:206:recover]> ]
+Stack: [ <error parse-error: unexpected EOF reading request body at position 3 data=H{ offset: 3 } [src/prelude.1z:1385:throw <- net/http:209:(read-request-body) <- tests/integration/http_request.1z:206:recover]> ]
 PASS: truncated body offset is the byte count received
 Stack: [ ]
 === max-request-body: within default cap is not too large ===

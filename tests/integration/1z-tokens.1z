@@ -138,6 +138,29 @@ value>> "-42" "-42 value" assert=
 "-3.14" (tokens)
 #first value>> "-3.14" "-3.14 value" assert=
 
+"digit-led names" test-section
+"1z-tokenize:" (tokens)
+dup #len 1 "1z-tokenize: one token" assert=
+#first dup kind>> symbol: "1z-tokenize: kind" assert=
+value>> "1z-tokenize:" "1z-tokenize: value" assert=
+
+"2dup" (tokens)
+dup #len 1 "2dup: one token" assert=
+#first dup kind>> word: "2dup kind" assert=
+value>> "2dup" "2dup value" assert=
+
+"-1x" (tokens)
+#first dup kind>> word: "-1x kind" assert=
+value>> "-1x" "-1x value" assert=
+
+"1]" (tokens)
+dup #len 1 "1]: one token" assert=
+#first value>> "1]" "1] value" assert=
+
+"0x1F\n" (tokens)
+#first dup kind>> number: "number before newline kind" assert=
+value>> "0x1F" "number before newline value" assert=
+
 \ ===== Symbols =====
 
 "symbols" test-section

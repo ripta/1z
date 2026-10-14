@@ -47,14 +47,21 @@ semantic-context: struct{ module word-infos } ;
 ] ;
 (lint-run-state): ( -- mmap ) [ (lint-run-storage) ] ;
 
-lint-checked-files: ( -- array ) [ (lint-run-state) checked-files: @get ] ;
-set-lint-checked-files: ( files -- ) [ (lint-run-state) swap checked-files: swap @set! drop ] ;
+private{
+  lint-checked-files:        ( -- array ) [ (lint-run-state) checked-files: @get ] ;
+  set-lint-checked-files:    ( files -- ) [ (lint-run-state) swap checked-files: swap @set! drop ] ;
+  set-lint-dead-definitions: ( dead-defs -- ) [ (lint-run-state) swap dead-definitions: swap @set! drop ] ;
+  set-lint-circular-files:   ( circular -- ) [ (lint-run-state) swap circular-files: swap @set! drop ] ;
+}
 
+\\ The definitions that no other checked file references, computed once per `run-lint`, or f when
+\\ that analysis could not run. Each entry is `{ name file line column }`.
 lint-dead-definitions: ( -- array/f ) [ (lint-run-state) dead-definitions: @get ] ;
-set-lint-dead-definitions: ( dead-defs -- ) [ (lint-run-state) swap dead-definitions: swap @set! drop ] ;
 
+\\ The import cycles found among the checked files in the current `run-lint`. Each entry is
+\\ `{ chain file line column }` for one file that sits on a cycle, naming the shortest chain
+\\ through it and the position of the import that starts it.
 lint-circular-files: ( -- array ) [ (lint-run-state) circular-files: @get ] ;
-set-lint-circular-files: ( circular -- ) [ (lint-run-state) swap circular-files: swap @set! drop ] ;
 
 \ Canonical path of every checked file, mapped to the spelling the caller passed, or f before
 \ (build-dep-graph) has run.
@@ -64,9 +71,12 @@ set-lint-circular-files: ( circular -- ) [ (lint-run-state) swap circular-files:
 \\ The error raised by the most recent (build-semantic-context) attempt for
 \\ the file currently being linted, or f if it succeeded or was skipped.
 lint-semantic-context-error: ( -- error/f ) [ (lint-run-state) semantic-context-error: @get ] ;
-set-lint-semantic-context-error: ( error -- ) [
-  (lint-run-state) swap semantic-context-error: swap @set! drop
-] ;
+
+private{
+  set-lint-semantic-context-error: ( error -- ) [
+    (lint-run-state) swap semantic-context-error: swap @set! drop
+  ] ;
+}
 
 \\ Return the array of registered lint rules.
 lint-rules: ( -- array ) [ (lint-registry) rules: @get ] ;
@@ -93,18 +103,29 @@ register-lint-rule: ( lint-rule -- ) [
   make-lint-diagnostic
 ] ;
 
-\\ Public helper: create a diagnostic anchored at a character offset.
+\\ Create a diagnostic anchored at a character offset into the source. The line-index comes from
+\\ `build-line-index` and turns the offset into a line and column.
+\\
+\\   "my-rule" warning: "a.1z" "a\nbc" build-line-index 3 "bad" diag-at-pos format-diagnostic
+\\   => "a.1z:2:2: warning: [my-rule] bad"
 diag-at-pos: ( rule-id severity path line-index pos message -- lint-diagnostic ) [
   (make-diag)
 ] ;
 
-\\ Public helper: create a diagnostic anchored at a token's position.
+\\ Create a diagnostic anchored at a token's position.
+\\
+\\   "my-rule" warning: "a.1z" "a\nbc" build-line-index word: "bc" 2 make-token "bad" diag-at-token
+\\   format-diagnostic
+\\   => "a.1z:2:1: warning: [my-rule] bad"
 diag-at-token: ( rule-id severity path line-index token message -- lint-diagnostic ) [
   [ pos>> ] dip
   diag-at-pos
 ] ;
 
 \\ Predicate: token has the given kind.
+\\
+\\   symbol: "foo:" 0 make-token symbol: token-kind?
+\\   => t
 token-kind?: ( token kind -- ? ) [
   swap kind>> =
 ] ;
@@ -304,7 +325,11 @@ definition-symbol?: ( token -- ? ) [
   ] if
 ] ;
 
-\\ Look up a word-info by name from a semantic context. Returns word-info or f.
+\\ Look up a word-info by name from a semantic context. Returns word-info or f, and also f when
+\\ the context itself is f.
+\\
+\\   f H{ } "dup" dup: >word-info @set make-semantic-context "dup" semantic-word-info name>>
+\\   => "dup"
 semantic-word-info: ( semantic-context name -- word-info-or-f ) [
   swap dup f = [ nip ] [
     word-infos>> swap
@@ -318,6 +343,9 @@ semantic-word-info: ( semantic-context name -- word-info-or-f ) [
 \\ Whether a word was defined in the file at path, rather than reexported into its module from
 \\ another. A check-load records a file's own definitions under the path it was given, so a
 \\ diagnostic placed at the word's source location belongs to this file only when this holds.
+\\
+\\   "other.1z" when: >word-info semantic-word-in-file?
+\\   => f
 semantic-word-in-file?: ( path: string word-info: word-info -- ? ) [
   source-loc>> dup f = [ 2drop f ] [ file>> = ] if
 ] ;
@@ -864,4 +892,4 @@ run-lint: ( files -- bool ) [
   ] if
 ] ;
 
-pragma{ lint-suppress: { broad-import: complex-word-undocumented: dead-definition: deep-nesting: import-ordering: missing-doc-comment: missing-type-annotation: unused-import: } }
+pragma{ lint-suppress: { broad-import: dead-definition: deep-nesting: import-ordering: missing-type-annotation: unused-import: } }

@@ -3,18 +3,28 @@
 use "strings" ;
 use "conversions" ;
 
+\\ A host name or address string and a port number, the payload of a TCP or UDP `addr`.
 host-port: struct{ host port } ;
+
+\\ A Unix domain socket's filesystem path, the payload of a Unix `addr`.
 unix-addr: struct{ path } ;
+
+\\ A socket address: TCP or UDP with a host and port, or a Unix socket path. Build one with
+\\ `make-addr:tcp`, `make-addr:udp`, or `>addr:unix`.
 addr: enum{
   tcp:  host-port
   udp:  host-port
   unix: unix-addr
 } ;
 
+\\ A parsed IP address in network byte order: 4 bytes for IPv4, 16 for IPv6.
 ip: virtual{ byte-array } ;
 
 \\ Extract host and port from an addr enum value. Unix addresses produce
 \\ sentinel values ("" and 0) since they have no host or port.
+\\
+\\   "example.com" 80 make-addr:tcp addr-host-port
+\\   => "example.com" 80
 addr-host-port: ( addr -- host port ) [
   match{
     addr:tcp:  [ ]
@@ -23,14 +33,11 @@ addr-host-port: ( addr -- host port ) [
   }
 ] ;
 
-AF_INET: ( -- n: fixnum ) 2 ;
-AF_INET6: ( -- n: fixnum ) 30 ;
-
 \\ Parse an IPv4 address string into an ip value.
-parse-ipv4: ( str -- ip ) [ AF_INET swap inet-pton make-ip ] ;
+parse-ipv4: ( str -- ip ) [ inet: swap inet-pton make-ip ] ;
 
 \\ Parse an IPv6 address string into an ip value.
-parse-ipv6: ( str -- ip ) [ AF_INET6 swap inet-pton make-ip ] ;
+parse-ipv6: ( str -- ip ) [ inet6: swap inet-pton make-ip ] ;
 
 \\ Parse an IP address string, auto-detecting IPv4 or IPv6.
 >ip: ( str -- ip ) [ dup ":" #in? [ parse-ipv6 ] [ parse-ipv4 ] if ] ;
@@ -52,10 +59,12 @@ private{
   ] ;
 }
 
-\ Split a "host:port" string on the last colon, parse port as integer.
-\ Handles IPv6 addresses in brackets: "[::1]:8080" -> "::1" 8080
-\ Returns a hash with host: and port: keys. A malformed address raises
-\ parse-error: with an offset into str.
+\\ Split a "host:port" string on the last colon and parse the port as an integer. Returns a hash
+\\ with `host:` and `port:` keys. An IPv6 host goes in brackets, which are removed. A malformed
+\\ address raises `parse-error:` with an offset into str.
+\\
+\\   "[::1]:8080" split-host-port
+\\   => H{ host: "::1" port: 8080 }
 split-host-port: ( str: string -- hash ) [
   dup #first "[" = [
     \ Bracketed host: "[host]:port"
@@ -81,4 +90,4 @@ split-host-port: ( str: string -- hash ) [
   H{ } swap port: swap @set swap host: swap @set
 ] ;
 
-pragma{ lint-suppress: { broad-import: complex-word-undocumented: dead-definition: import-ordering: missing-doc-comment: missing-type-annotation: non-kebab-case: } }
+pragma{ lint-suppress: { broad-import: dead-definition: import-ordering: missing-type-annotation: } }

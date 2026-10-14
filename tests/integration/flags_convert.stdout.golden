@@ -6,6 +6,8 @@ Stack: [ ]
 Stack: [ ]
 PASS: bare boolean flag is true
 Stack: [ ]
+PASS: short boolean flag is true
+Stack: [ ]
 PASS: =true
 Stack: [ ]
 PASS: =t

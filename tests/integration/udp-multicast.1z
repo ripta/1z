@@ -22,6 +22,13 @@ unmake-ip #len 4 ">ip on dotted quad is 4 bytes" assert=
 "::1" >ip
 unmake-ip #len 16 ">ip on coloned addr is 16 bytes" assert=
 
+\ The family is a symbol because the AF_* numbers differ by platform, so a hard-coded number
+\ parsed on one OS and failed on another.
+"inet-pton names the family by symbol" test-section
+inet: "10.0.0.1" inet-pton B{ 10 0 0 1 } "inet: parses IPv4 in network order" assert=
+inet6: "::1" inet-pton 15 #nth 1 "inet6: parses IPv6 in network order" assert=
+[ ipx: "::1" inet-pton ] invalid-argument: "an unknown family is rejected" assert-error-type
+
 "set-sockopt with reuseaddr variant" test-section
 [
   "127.0.0.1" 39800 make-addr:udp udp-bind

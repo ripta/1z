@@ -2,37 +2,93 @@
 
 use "ffi" ;
 
+\\ raylib's `Color`: red, green, blue, and alpha, one byte each, laid out as the C struct so it
+\\ passes to raylib by value.
 Color: ffi-struct{ r: u8 g: u8 b: u8 a: u8 } ;
 
 \ Standard colors (matching raylib.h)
+
+\\ raylib's `LIGHTGRAY`, RGBA (200, 200, 200, 255).
 LIGHTGRAY: ( -- color: Color ) const [ 200 200 200 255 make-Color ] ;
-GRAY:      ( -- color: Color ) const [ 130 130 130 255 make-Color ] ;
-DARKGRAY:  ( -- color: Color ) const [ 80 80 80 255 make-Color ] ;
-YELLOW:    ( -- color: Color ) const [ 253 249 0 255 make-Color ] ;
-GOLD:      ( -- color: Color ) const [ 255 203 0 255 make-Color ] ;
-ORANGE:    ( -- color: Color ) const [ 255 161 0 255 make-Color ] ;
-PINK:      ( -- color: Color ) const [ 255 109 194 255 make-Color ] ;
-RED:    ( -- color: Color ) const [ 230 41 55 255 make-Color ] ;
+
+\\ raylib's `GRAY`, RGBA (130, 130, 130, 255).
+GRAY: ( -- color: Color ) const [ 130 130 130 255 make-Color ] ;
+
+\\ raylib's `DARKGRAY`, RGBA (80, 80, 80, 255).
+DARKGRAY: ( -- color: Color ) const [ 80 80 80 255 make-Color ] ;
+
+\\ raylib's `YELLOW`, RGBA (253, 249, 0, 255).
+YELLOW: ( -- color: Color ) const [ 253 249 0 255 make-Color ] ;
+
+\\ raylib's `GOLD`, RGBA (255, 203, 0, 255).
+GOLD: ( -- color: Color ) const [ 255 203 0 255 make-Color ] ;
+
+\\ raylib's `ORANGE`, RGBA (255, 161, 0, 255).
+ORANGE: ( -- color: Color ) const [ 255 161 0 255 make-Color ] ;
+
+\\ raylib's `PINK`, RGBA (255, 109, 194, 255).
+PINK: ( -- color: Color ) const [ 255 109 194 255 make-Color ] ;
+
+\\ raylib's `RED`, RGBA (230, 41, 55, 255).
+RED: ( -- color: Color ) const [ 230 41 55 255 make-Color ] ;
+
+\\ raylib's `MAROON`, RGBA (190, 33, 55, 255).
 MAROON: ( -- color: Color ) const [ 190 33 55 255 make-Color ] ;
-GREEN:  ( -- color: Color ) const [ 0 228 48 255 make-Color ] ;
-LIME:   ( -- color: Color ) const [ 0 158 47 255 make-Color ] ;
+
+\\ raylib's `GREEN`, RGBA (0, 228, 48, 255).
+GREEN: ( -- color: Color ) const [ 0 228 48 255 make-Color ] ;
+
+\\ raylib's `LIME`, RGBA (0, 158, 47, 255).
+LIME: ( -- color: Color ) const [ 0 158 47 255 make-Color ] ;
+
+\\ raylib's `DARKGREEN`, RGBA (0, 117, 44, 255).
 DARKGREEN: ( -- color: Color ) const [ 0 117 44 255 make-Color ] ;
-SKYBLUE:   ( -- color: Color ) const [ 102 191 255 255 make-Color ] ;
-BLUE:      ( -- color: Color ) const [ 0 121 241 255 make-Color ] ;
-DARKBLUE:  ( -- color: Color ) const [ 0 82 172 255 make-Color ] ;
-PURPLE:    ( -- color: Color ) const [ 200 122 255 255 make-Color ] ;
-VIOLET:    ( -- color: Color ) const [ 135 60 190 255 make-Color ] ;
+
+\\ raylib's `SKYBLUE`, RGBA (102, 191, 255, 255).
+SKYBLUE: ( -- color: Color ) const [ 102 191 255 255 make-Color ] ;
+
+\\ raylib's `BLUE`, RGBA (0, 121, 241, 255).
+BLUE: ( -- color: Color ) const [ 0 121 241 255 make-Color ] ;
+
+\\ raylib's `DARKBLUE`, RGBA (0, 82, 172, 255).
+DARKBLUE: ( -- color: Color ) const [ 0 82 172 255 make-Color ] ;
+
+\\ raylib's `PURPLE`, RGBA (200, 122, 255, 255).
+PURPLE: ( -- color: Color ) const [ 200 122 255 255 make-Color ] ;
+
+\\ raylib's `VIOLET`, RGBA (135, 60, 190, 255).
+VIOLET: ( -- color: Color ) const [ 135 60 190 255 make-Color ] ;
+
+\\ raylib's `DARKPURPLE`, RGBA (112, 31, 126, 255).
 DARKPURPLE: ( -- color: Color ) const [ 112 31 126 255 make-Color ] ;
-BEIGE:      ( -- color: Color ) const [ 211 176 131 255 make-Color ] ;
-BROWN:      ( -- color: Color ) const [ 127 106 79 255 make-Color ] ;
-DARKBROWN:  ( -- color: Color ) const [ 76 63 47 255 make-Color ] ;
-WHITE:      ( -- color: Color ) const [ 255 255 255 255 make-Color ] ;
-BLACK:      ( -- color: Color ) const [ 0 0 0 255 make-Color ] ;
-BLANK:      ( -- color: Color ) const [ 0 0 0 0 make-Color ] ;
-MAGENTA:    ( -- color: Color ) const [ 255 0 255 255 make-Color ] ;
-RAYWHITE:   ( -- color: Color ) const [ 245 245 245 255 make-Color ] ;
+
+\\ raylib's `BEIGE`, RGBA (211, 176, 131, 255).
+BEIGE: ( -- color: Color ) const [ 211 176 131 255 make-Color ] ;
+
+\\ raylib's `BROWN`, RGBA (127, 106, 79, 255).
+BROWN: ( -- color: Color ) const [ 127 106 79 255 make-Color ] ;
+
+\\ raylib's `DARKBROWN`, RGBA (76, 63, 47, 255).
+DARKBROWN: ( -- color: Color ) const [ 76 63 47 255 make-Color ] ;
+
+\\ raylib's `WHITE`, RGBA (255, 255, 255, 255).
+WHITE: ( -- color: Color ) const [ 255 255 255 255 make-Color ] ;
+
+\\ raylib's `BLACK`, RGBA (0, 0, 0, 255).
+BLACK: ( -- color: Color ) const [ 0 0 0 255 make-Color ] ;
+
+\\ raylib's `BLANK`, RGBA (0, 0, 0, 0). Fully transparent, so drawing with it draws nothing.
+BLANK: ( -- color: Color ) const [ 0 0 0 0 make-Color ] ;
+
+\\ raylib's `MAGENTA`, RGBA (255, 0, 255, 255).
+MAGENTA: ( -- color: Color ) const [ 255 0 255 255 make-Color ] ;
+
+\\ raylib's `RAYWHITE`, RGBA (245, 245, 245, 255). The off-white raylib uses for its own backgrounds.
+RAYWHITE: ( -- color: Color ) const [ 245 245 245 255 make-Color ] ;
 
 \ Key codes
+
+\\ raylib's key code for the Escape key, which closes the window by default.
 KEY_ESCAPE: 256 ;
 
-pragma{ lint-suppress: { const-rebuilds-value: dead-definition: missing-doc-comment: non-kebab-case: unused-import: } }
+pragma{ lint-suppress: { const-rebuilds-value: dead-definition: non-kebab-case: unused-import: } }

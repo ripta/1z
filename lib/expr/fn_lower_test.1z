@@ -3,7 +3,6 @@
 
 use "testing" ;
 use "expr" ;
-use "expr/fn_fixture" ;
 
 \ Words defined with the fn sugar.
 fn square(x) = x * x ;
@@ -78,10 +77,4 @@ test-unary-effect: ( -- ) [
 test-multi-arg-effect: ( -- ) [
   hypot2: >word-info stack-effect>> >string
   "( a b -- result )" "multi-arg effect uses both parameter names" assert=
-] ;
-
-"module loading" test-section
-
-test-fn-in-module: ( -- ) [
-  3 cube 27 "an fn-defined word is importable from a module" assert=
 ] ;

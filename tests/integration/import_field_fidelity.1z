@@ -32,6 +32,10 @@ bound-value 7 "imported bracket-less binding pushes its value" assert=
 parse-time-word: >word-info parse-time?>> "imported parse-time word stays parse-time" assert-true
 helper-mark: >word-info binding?>> "imported user marker is a binding" assert-true
 helper-mark: >word-info parse-time?>> "imported user marker stays parse-time" assert-true
+
+helper-mark: >word-info doc>>
+"A user marker, which is both a bracket-less binding and parse-time."
+"imported user marker keeps its doc comment" assert=
 documented-word: >word-info binding?>> "imported bracketed word is not a binding" assert-false
 documented-word: >word-info parse-time?>> "imported bracketed word is not parse-time" assert-false
 
@@ -42,11 +46,15 @@ local-inline:     const inline 8 ;
 local-parse-time: parse-time [ ] ;
 local-body: ( -- n ) [ 7 ] ;
 
+\\ A local marker, whose doc must survive `;` naming it.
+local-mark: make-marker ;
+
 local-bound: >word-info binding?>> "bracket-less binding is a binding" assert-true
 local-inline: >word-info binding?>> "const inline literal is a binding" assert-true
 local-body: >word-info binding?>> "bracketed one-literal body is not a binding" assert-false
 local-parse-time: >word-info parse-time?>> "parse-time word is parse-time" assert-true
 local-body: >word-info parse-time?>> "bracketed word is not parse-time" assert-false
+local-mark: >word-info doc>> "A local marker, whose doc must survive `;` naming it." "marker keeps its doc comment" assert=
 
 "qualified access" test-section
 

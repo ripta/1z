@@ -29,3 +29,16 @@ Stack: [ ]
 Stack: [ ]
 PASS: corrupt data throws error
 Stack: [ ]
+PASS: corrupt data throws zlib-error
+Stack: [ ]
+=== errors past the output limit ===
+Stack: [ ]
+PASS: uncompress-max past its limit throws zlib-error
+Stack: [ ]
+PASS: uncompress-sized too small throws zlib-error
+Stack: [ ]
+Stack: [ <result:err result-error{ error: <error zlib-error: output buffer too small data=-5 [zlib:23:throw <- zlib:90:(check-zlib) <- src/prelude.1z:1369:call <- src/prelude.1z:1369:recover]> }> ]
+PASS: buffer-too-small message
+Stack: [ <error zlib-error: output buffer too small data=-5 [zlib:23:throw <- zlib:90:(check-zlib) <- src/prelude.1z:1369:call <- src/prelude.1z:1369:recover]> ]
+PASS: buffer-too-small data is zlib's Z_BUF_ERROR code
+Stack: [ ]

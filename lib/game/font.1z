@@ -12,13 +12,20 @@
 \ in the reading body. game/draw reads both inside its per-pixel glyph loops. The two codepoint
 \ bounds are read once per character, so they stay plain.
 
-font-glyph-first: 32 ;
-\ 0x20, space -- first covered codepoint
-font-glyph-last: 126 ;
-\ 0x7E, ~ -- last covered codepoint
-font-cell-size: const inline 8 ;
-\ pixels per glyph row/column, and bytes per glyph
+private{
+  \ 0x20, space -- first covered codepoint
+  font-glyph-first: 32 ;
 
+  \ 0x7E, ~ -- last covered codepoint
+  font-glyph-last: 126 ;
+}
+
+\\ The width and height of a glyph in pixels. It is also the number of bytes per glyph in
+\\ `font-glyph-bytes`, one per row.
+font-cell-size: const inline 8 ;
+
+\\ Every glyph's rows, 8 bytes per glyph from U+0020 space through U+007E tilde in codepoint
+\\ order. Bit c of a row byte is set when column c, counted from the left, is lit.
 font-glyph-bytes: const inline B{
   0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00  \ U+0020 (space)
   0x18 0x3C 0x3C 0x18 0x18 0x00 0x18 0x00  \ U+0021 (!)
@@ -126,4 +133,4 @@ font-glyph-bytes: const inline B{
   if
 ] ;
 
-pragma{ lint-suppress: { dead-definition: missing-doc-comment: } }
+pragma{ lint-suppress: { dead-definition: } }

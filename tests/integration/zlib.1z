@@ -26,3 +26,13 @@ B{ } compress uncompress B{ } "empty round-trip" assert=
 
 "error on corrupt data" test-section
 [ B{ 0 1 2 3 4 5 } uncompress ] "corrupt data throws error" assert-error
+[ B{ 0 1 2 3 4 5 } uncompress ] zlib-error: "corrupt data throws zlib-error" assert-error-type
+
+"errors past the output limit" test-section
+[ B{ 1 2 3 } compress 2 uncompress-max ] zlib-error: "uncompress-max past its limit throws zlib-error" assert-error-type
+[ B{ 1 2 3 } compress 1 uncompress-sized ] zlib-error: "uncompress-sized too small throws zlib-error" assert-error-type
+
+\ The error carries zlib's return code as its data, rather than whatever sat below it on the stack.
+[ B{ 1 2 3 } compress 1 uncompress-sized ] try
+result:err> dup message: @get "output buffer too small" "buffer-too-small message" assert=
+data: @get -5 "buffer-too-small data is zlib's Z_BUF_ERROR code" assert=

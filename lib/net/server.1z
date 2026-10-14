@@ -1,18 +1,22 @@
-\ lib/server.1z - TCP server framework
+\ lib/net/server.1z - TCP server framework
 
 use "net" ;
 use "net/tcp" ;
 use "semaphore" ;
 
+\\ How `serve-forever` runs a server. `host` and `port` are the address to bind, `backlog` is the
+\\ listen queue length, `handler` is called with each connection's stream and peer address, and
+\\ `on-error` is the `recover` handler for an error the handler throws.
 server-config: mutable struct{ host port backlog handler on-error } ;
 
-\ Create a default server config.
+\\ A server config bound to 0.0.0.0 on port 0, so the system picks a free port, with a backlog of
+\\ 128 and handlers that drop what they receive. Set the fields with the `>>field` setters.
 <server-config>: ( -- config ) [
   "0.0.0.0" 0 128 [ drop ] [ drop ] make-server-config
 ] ;
 
-\ Start a server from a config. Returns the server handle.
-\ The server binds and listens but does not start accepting connections.
+\\ Bind and listen on a config's host and port, returning the listening server. It does not
+\\ accept connections yet.
 start-server: ( config -- server ) [
   dup host>> over port>> make-addr:tcp
   swap backlog>>
@@ -61,4 +65,4 @@ serve-forever: ( config -- ) [
   serve-loop
 ] ;
 
-pragma{ lint-suppress: { broad-import: dead-definition: missing-doc-comment: missing-type-annotation: } }
+pragma{ lint-suppress: { broad-import: dead-definition: missing-type-annotation: } }

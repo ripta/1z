@@ -1,8 +1,13 @@
-\ lib/tls.1z - TLS configuration and connection support
+\ lib/net/tls.1z - TLS configuration and connection support
 
 use "net" ;
-tcp: "net/tcp" load ;
 
+private{
+  tcp: "net/tcp" load ;
+}
+
+\\ A TLS client configuration: the CA certificates a connection trusts, or no verification at
+\\ all. Build one with `<tls-config>` or `<tls-config-no-verify>`.
 tls-config: virtual{ resource } ;
 
 \\ Create a TLS config loaded with system CA certificates.
@@ -12,23 +17,38 @@ tls-config: virtual{ resource } ;
 <tls-config-no-verify>: ( -- tls-config ) [ native.tls-config-no-verify >tls-config ] ;
 
 \\ Add CA certificates from in-memory PEM data to a TLS config.
+\\
+\\   <tls-config> "ca.pem" read: stream-open dup stream-read-all swap stream-close add-ca-pem
+\\   tls-config?
+\\   => t
 add-ca-pem: ( tls-config pem-data -- tls-config ) [
   [ unmake-tls-config ] dip native.tls-config-add-ca-pem >tls-config
 ] ;
 
 \\ Add CA certificates from a PEM file to a TLS config.
+\\
+\\   <tls-config> "ca.pem" add-ca-file tls-config?
+\\   => t
 add-ca-file: ( tls-config path -- tls-config ) [
   read: stream-open dup stream-read-all swap stream-close
   add-ca-pem
 ] ;
 
-\\ Upgrade a TCP stream to TLS.
+\\ Upgrade a TCP stream to TLS, verifying the peer's certificate against hostname.
 \\ Returns a new TLS-wrapped stream. The original stream should not be used.
+\\
+\\   "127.0.0.1" 8443 make-addr:tcp tcp.connect <tls-config> "ca.pem" add-ca-file "localhost"
+\\   tls-upgrade inspect "<stream tls" #starts-with?
+\\   => t
 tls-upgrade: ( stream tls-config hostname -- stream ) [
   native.tls-upgrade
 ] ;
 
-\\ Connect to a host over TLS using system CA certificates.
+\\ Connect to a host over TLS using system CA certificates. Throws `io-failed` when the peer's
+\\ certificate does not verify.
+\\
+\\   "example.com" 443 connect inspect "<stream tls" #starts-with?
+\\   => t
 connect: ( hostname port -- stream ) [
   over
   [ make-addr:tcp tcp.connect ] dip
@@ -36,10 +56,14 @@ connect: ( hostname port -- stream ) [
 ] ;
 
 \\ Connect to a host over TLS using an explicit TLS config.
+\\
+\\   "localhost" 8443 <tls-config> "ca.pem" add-ca-file connect-with inspect
+\\   "<stream tls" #starts-with?
+\\   => t
 connect-with: ( hostname port tls-config -- stream ) [
   -rot> over
   [ make-addr:tcp tcp.connect ] dip
   [ swap ] dip tls-upgrade
 ] ;
 
-pragma{ lint-suppress: { broad-import: complex-word-undocumented: dead-definition: missing-doc-comment: missing-type-annotation: } }
+pragma{ lint-suppress: { broad-import: dead-definition: missing-type-annotation: } }

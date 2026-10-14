@@ -1,4 +1,4 @@
-\ lib/introspect.1z - Word introspection and dictionary queries
+\ lib/runtime/introspect.1z - Word introspection and dictionary queries
 
 use "strings" ;
 
@@ -20,87 +20,22 @@ quotation-has-calls?: ( quotation -- bool ) [
   native.quotation>opcodes [ 0 #nth call-word: = ] #any
 ] ;
 
-\ Format a method-info struct as "  method{ type1 }" or "  method{ type1 type2 }"
-format-method: ( method-info -- str ) [
-  types>> "  method{ " swap " " #join #append " }" #append
-] ;
+private{
+  \ Format a method-info struct as "  method{ type1 }" or "  method{ type1 type2 }"
+  format-method: ( method-info -- str ) [
+    types>> "  method{ " swap " " #join #append " }" #append
+  ] ;
 
-\ Pad string to width with trailing spaces
-pad-right: ( str width -- str ) [
-  over #len - dup 0 > [ " " swap repeat #append ] [ drop ] if
-] ;
+  \ Format a single word line as "name stack-effect\n"
+  format-word-line: ( wi -- ) [
+    dup name>> print
+    stack-effect>> dup f = [ drop ] [ " " print >string print ] if
+    "\n" print
+  ] ;
+}
 
-\ Find max variant name length across an array of descriptor-variant structs
-variant-max-name-len-acc: ( max variants -- max ) [
-  dup #len 0 =
-  [ drop ]
-  [
-    dup #first name>> >string #len
-    -rot> 1 #drop
-    [ max ] dip
-    variant-max-name-len-acc
-  ]
-  if
-] ;
-
-variant-max-name-len: ( variants -- n ) [
-  0 swap variant-max-name-len-acc
-] ;
-
-\ Format one variant line: "    name:PADDING typename\n"
-format-one-variant: ( max-name-len name tname -- line ) [
-  -rot>
-  ":" #append
-  swap 2 + pad-right
-  "    " swap #append
-  swap #append "\n" #append
-] ;
-
-\ Format all variant lines with column-aligned type names. `variants` is an
-\ array of descriptor-variant struct instances.
-format-variant-lines: stack-recursive ( variants max-name-len -- str ) [
-  over #len 0 =
-  [ 2drop "" ]
-  [
-    over #first dup name>> >string swap type>> native.type-name
-    2 pick-n -rot>
-    format-one-variant
-    -rot> swap 1 #drop swap
-    format-variant-lines
-    #append
-  ]
-  if
-] ;
-
-format-builtin-type-info: ( desc -- str ) [
-  drop "type info:\n  kind: builtin-type\n"
-] ;
-
-format-struct-type-info: ( desc -- str ) [
-  "type info:\n  kind: struct\n  fields: "
-  swap descriptor-fields? unwrap-or-throw " " #join #append "\n" #append
-] ;
-
-format-virtual-type-info: ( desc -- str ) [
-  dup descriptor-inner-type? dup option:some?
-  [
-    option:some> swap drop native.type-name
-    "type info:\n  kind: virtual\n  wraps: " swap #append "\n" #append
-  ]
-  [
-    drop descriptor-fields? unwrap-or-throw " " #join
-    "type info:\n  kind: virtual\n  fields: " swap #append "\n" #append
-  ]
-  if
-] ;
-
-format-enum-type-info: ( desc -- str ) [
-  "type info:\n  kind: enum\n  variants:\n"
-  swap descriptor-variants? unwrap-or-throw
-  dup variant-max-name-len
-  format-variant-lines #append
-] ;
-
+\\ The `type info:` block `help` shows for a type word, giving its kind, fields or variants, and
+\\ generated words. Empty for any word that is not a type.
 format-type-info: ( wi -- str ) [
   dup markers>> [ typed = ] #any
   [ name>> native.type-info-string ]
@@ -108,7 +43,8 @@ format-type-info: ( wi -- str ) [
   if
 ] ;
 
-\ Format word-info as a multi-line help string matching the native help output
+\\ The help text for a word-info, as `help` prints it: the doc comment, then the name, stack
+\\ effect, markers, and whether it is native or compound, then its methods and type info.
 format-word-info: ( wi -- str ) [
   dup
   dup name>>
@@ -126,7 +62,12 @@ format-word-info: ( wi -- str ) [
   swap format-type-info #append
 ] ;
 
-\ Display help for a word, matching the output of the native help primitive
+\\ Print the help text for the word a symbol names, or a "no such word" line when nothing by that
+\\ name is defined.
+\\
+\\   dup: help
+\\   => Duplicate top of stack.
+\\   => dup ( a -- a a ) \native
 help: ( symbol -- ) [
   dup >word-info? dup option:some?
   [ option:some> nip format-word-info ]
@@ -134,41 +75,37 @@ help: ( symbol -- ) [
   if print flush
 ] ;
 
-\ Find words whose markers include the given marker. Compares by marker
-\ identity, so pass the marker value itself (e.g. parse-time words-with-marker).
+\\ The word-infos of every word whose markers include m. Markers compare by identity, so pass the
+\\ marker value itself, as in `parse-time words-with-marker`.
 words-with-marker: ( m: marker -- array ) [
   all-words >iterator swap
   [ swap markers>> swap #in? ] curry #filter
   #collect
 ] ;
 
-\ Find words whose input arity matches n
+\\ The word-infos of every word that declares exactly n inputs. A word with no declared stack
+\\ effect never matches.
 words-with-arity: ( n -- array ) [
   all-words >iterator swap
   [ swap stack-effect>> dup f = [ drop drop f ] [ inputs>> #len = ] if ] curry #filter
   #collect
 ] ;
 
-\ Find words whose name contains the given substring
+\\ The word-infos of every word whose name contains str.
 words-matching: ( str -- array ) [
   all-words >iterator swap
   [ swap name>> swap #in? ] curry #filter
   #collect
 ] ;
 
-\ Get the source location of a word as an option
+\\ The source location of the word a symbol names, or none when the word is undefined or has no
+\\ location, as with a native word.
 word-source: ( symbol -- option ) [
   >word-info? [ source-loc>> ] ?map
 ] ;
 
-\ Format a single word line as "name stack-effect\n"
-format-word-line: ( wi -- ) [
-  dup name>> print
-  stack-effect>> dup f = [ drop ] [ " " print >string print ] if
-  "\n" print
-] ;
-
-\ Look up the provenance of a generated word, or f if none
+\\ The provenance of a generated word, naming the generator, the parent type, and the word's
+\\ role, or f when the word was written by hand or does not exist.
 generated-by: ( symbol -- provenance/f ) [
   >word-info? dup option:some?
   [ option:some> provenance>> ]
@@ -176,12 +113,14 @@ generated-by: ( symbol -- provenance/f ) [
   if
 ] ;
 
-\ Return the generated-words array for a type name
+\\ The names of the words a type definition generated, such as its constructor, predicate, and
+\\ field getters.
 generated-words: ( symbol -- array ) [
   native.type-generated-words
 ] ;
 
-\ Print all defined words in the dictionary, grouped by native vs user-defined
+\\ Print every defined word with its stack effect, sorted by name, with native primitives first
+\\ and user-defined words after.
 words: ( -- ) [
   all-words [ name>> ] #sort-by
 
@@ -196,4 +135,4 @@ words: ( -- ) [
   flush
 ] ;
 
-pragma{ lint-suppress: { broad-import: complex-word-undocumented: dead-definition: missing-doc-comment: missing-type-annotation: } }
+pragma{ lint-suppress: { broad-import: dead-definition: missing-type-annotation: } }

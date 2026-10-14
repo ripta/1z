@@ -1,0 +1,4 @@
+=== fn module loading ===
+Stack: [ ]
+PASS: an fn-defined word is importable from a module
+Stack: [ ]

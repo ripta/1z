@@ -497,13 +497,13 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
         // the name until the semicolon is executed.
         .marker => |marker| {
             // TODO(ripta): check for duplicate markers?
-            var has_doc = false;
+            var doc_val: ?[]const u8 = null;
             while (true) {
                 const next_val = try ctx.stack.peek();
                 switch (next_val) {
-                    .doc_string => {
+                    .doc_string => |d| {
                         try ctx.stack.popAndRelease();
-                        has_doc = true;
+                        doc_val = d;
                     },
                     .symbol => break,
                     else => {
@@ -516,12 +516,13 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
             const name_pay = try popSymbol(ctx);
             defer container_backing.releaseValue(.{ .symbol = name_pay });
             const name = name_pay.bytes;
-            try enforceRequireDoc(ctx, name, has_doc, false, false, true);
+            try enforceRequireDoc(ctx, name, doc_val != null, false, false, true);
 
             // User-defined markers are automatically parse-time so they work
             // correctly with parse-time constructs like struct{}.
             const interned = try ctx.defineBinding(name, WordDefinition{
                 .name = name,
+                .doc = doc_val,
                 .parse_time = true,
                 .action = .{ .literal = top_val },
             });

@@ -16,26 +16,30 @@ use "net/server" ;
 use "data/url" ;
 use "time" ;
 
+\\ One HTTP request as `serve` hands it to a handler. `serve` documents where each field comes
+\\ from. `headers` has lowercased keys, and `body` is the raw request body bytes.
 request: struct{ method path query-string version headers body
   remote-addr remote-port server-name server-port
   is-tls? tls-version tls-cipher
 } ;
 
+private{
+  read-headers-loop: ( stream headers -- headers ) [
+    over stream-read-line
+    dup f = [ drop swap drop ] [
+      dup #empty? [ drop swap drop ] [
+        ":" split-once
+        dup #first lowercase swap #last trim
+        @set
+        read-headers-loop
+      ] if
+    ] if
+  ] ;
+}
+
 \\ Parse header lines from a stream into a hash with lowercased keys.
 read-headers: ( stream -- headers ) [
   H{ } read-headers-loop
-] ;
-
-read-headers-loop: ( stream headers -- headers ) [
-  over stream-read-line
-  dup f = [ drop swap drop ] [
-    dup #empty? [ drop swap drop ] [
-      ":" split-once
-      dup #first lowercase swap #last trim
-      @set
-      read-headers-loop
-    ] if
-  ] if
 ] ;
 
 \ Split a request-target on the first `?` into a path and a query-string.
@@ -220,17 +224,34 @@ read-form: ( body -- form ) [
   bytes> decode-query
 ] ;
 
+\\ An HTTP response for `send-response`: a status code, its reason phrase, a headers hash, and a
+\\ body string.
 response: struct{ status reason headers body } ;
 
-status-reasons: ( -- reasons: hash ) H{
-  "100" "Continue" "101" "Switching Protocols"
-  "200" "OK" "201" "Created" "202" "Accepted" "204" "No Content" "206" "Partial Content"
-  "301" "Moved Permanently" "302" "Found" "304" "Not Modified" "307" "Temporary Redirect" "308" "Permanent Redirect"
-  "400" "Bad Request" "401" "Unauthorized" "403" "Forbidden" "404" "Not Found"
-  "405" "Method Not Allowed" "406" "Not Acceptable" "408" "Request Timeout" "409" "Conflict"
-  "410" "Gone" "411" "Length Required" "413" "Content Too Large" "415" "Unsupported Media Type" "422" "Unprocessable Content" "429" "Too Many Requests"
-  "500" "Internal Server Error" "501" "Not Implemented" "502" "Bad Gateway" "503" "Service Unavailable" "504" "Gateway Timeout"
-} ;
+private{
+  status-reasons: ( -- reasons: hash ) H{
+    "100" "Continue" "101" "Switching Protocols"
+    "200" "OK" "201" "Created" "202" "Accepted" "204" "No Content" "206" "Partial Content"
+    "301" "Moved Permanently" "302" "Found" "304" "Not Modified" "307" "Temporary Redirect" "308" "Permanent Redirect"
+    "400" "Bad Request" "401" "Unauthorized" "403" "Forbidden" "404" "Not Found"
+    "405" "Method Not Allowed" "406" "Not Acceptable" "408" "Request Timeout" "409" "Conflict"
+    "410" "Gone" "411" "Length Required" "413" "Content Too Large" "415" "Unsupported Media Type" "422" "Unprocessable Content" "429" "Too Many Requests"
+    "500" "Internal Server Error" "501" "Not Implemented" "502" "Bad Gateway" "503" "Service Unavailable" "504" "Gateway Timeout"
+  } ;
+
+  format-headers-loop: ( headers keys accum -- string ) [
+    over #empty?
+    [ nip nip ]
+    [
+      over #first
+      3 pick-n over @get
+      swap >string ": " #append swap #append "\r\n" #append
+      #append
+      swap 1 #drop swap
+      format-headers-loop
+    ] if
+  ] ;
+}
 
 \\ Look up the reason phrase for an HTTP status code.
 reason-for: ( status -- reason ) [
@@ -243,19 +264,6 @@ reason-for: ( status -- reason ) [
 \\ disposition, so a handler-set connection header must not be double-emitted.
 format-response-headers: ( headers -- string ) [
   dup @keys [ >string "connection" = not ] #filter #collect "" format-headers-loop
-] ;
-
-format-headers-loop: ( headers keys accum -- string ) [
-  over #empty?
-  [ nip nip ]
-  [
-    over #first
-    3 pick-n over @get
-    swap >string ": " #append swap #append "\r\n" #append
-    #append
-    swap 1 #drop swap
-    format-headers-loop
-  ] if
 ] ;
 
 \\ First-line prefix that `send-response` emits in front of the status code
@@ -343,12 +351,18 @@ send-response: ( stream response -- ) [
 ] ;
 
 \\ Construct an HTTP response with a single Content-Type header.
+\\
+\\   200 "OK" "text/plain" "hi" <response> headers>>
+\\   => H{ content-type: "text/plain" }
 <response>: ( status reason content-type body -- response ) [
   [ H{ } swap "content-type" swap @set ] dip
   make-response
 ] ;
 
 \\ Construct a 200 OK response.
+\\
+\\   "hi" "text/plain" ok status>>
+\\   => 200
 ok: ( body content-type -- response ) [
   swap [ 200 dup reason-for ] 2dip <response>
 ] ;
@@ -374,6 +388,9 @@ length-required: ( -- response ) [
 ] ;
 
 \\ Construct an error response with text/plain body.
+\\
+\\   400 "Bad Request" "missing id" error-response body>>
+\\   => "missing id"
 error-response: ( status reason message -- response ) [
   "text/plain; charset=utf-8" swap <response>
 ] ;
@@ -475,6 +492,16 @@ private{
 \\ The TLS fields stay at sentinel defaults (`f`, `""`, `""`) until server-side TLS lands.
 \\ The stream is closed automatically after the handler returns.
 \\ This word blocks forever, creating its own task-scope.
+\\
+\\   [
+\\     "127.0.0.1" 8080 [ drop "hi" "text/plain" ok send-response ] [ serve ] curry curry curry spawn
+\\     100 milliseconds sleep
+\\     "127.0.0.1" 8080 make-addr:tcp connect
+\\     dup "GET / HTTP/1.1\r\nHost: localhost\r\n\r\n" stream-write drop
+\\     stream-read-line .
+\\     cancel-task
+\\   ] task-scope
+\\   => "HTTP/1.1 200 OK"
 serve: ( host: string port: fixnum handler: ( s: stream req: request -- ) -- ) [
   \ Duplicate host, port, and handler so they can be curried into the wrapper
   \ while the originals remain on the stack for server-config setup. The
@@ -489,7 +516,18 @@ serve: ( host: string port: fixnum handler: ( s: stream req: request -- ) -- ) [
 \\ Serve a single static file request.
 \\
 \\ Normalizes the path, appends index.html for directory paths,
-\\ resolves the file from the document root, and sends the response.
+\\ resolves the file from the document root, and sends the response. A file that cannot be read
+\\ gets a 404. Curry the document root in to make a `serve` handler.
+\\
+\\   [
+\\     "127.0.0.1" 8080 [ "public" static-file-handler ] [ serve ] curry curry curry spawn
+\\     100 milliseconds sleep
+\\     "127.0.0.1" 8080 make-addr:tcp connect
+\\     dup "GET /style.css HTTP/1.1\r\nHost: localhost\r\n\r\n" stream-write drop
+\\     stream-read-line .
+\\     cancel-task
+\\   ] task-scope
+\\   => "HTTP/1.1 200 OK"
 static-file-handler: ( stream request doc-root -- ) [
   swap path>>
   dup "/" #ends-with?
@@ -509,8 +547,18 @@ static-file-handler: ( stream request doc-root -- ) [
 \\
 \\ Normalizes request paths to prevent directory traversal.
 \\ Serves index.html for paths ending in /.
+\\
+\\   [
+\\     "127.0.0.1" 8080 "public" [ serve-static ] curry curry curry spawn
+\\     100 milliseconds sleep
+\\     "127.0.0.1" 8080 make-addr:tcp connect
+\\     dup "GET /nope.txt HTTP/1.1\r\nHost: localhost\r\n\r\n" stream-write drop
+\\     stream-read-line .
+\\     cancel-task
+\\   ] task-scope
+\\   => "HTTP/1.1 404 Not Found"
 serve-static: ( host port doc-root -- ) [
   [ static-file-handler ] curry serve
 ] ;
 
-pragma{ lint-suppress: { broad-import: complex-word-undocumented: dead-definition: import-ordering: missing-doc-comment: missing-type-annotation: } }
+pragma{ lint-suppress: { broad-import: dead-definition: import-ordering: missing-type-annotation: } }

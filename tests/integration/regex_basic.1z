@@ -10,7 +10,7 @@ use "regex" ;
 [ "(" regex-compile ] regex-compile-error: "invalid pattern throws ERegexCompileError" assert-error-type
 
 [ "(" regex-compile drop f ] [ ] recover
-dup message: @get string? "compile error carries the PCRE2 message" assert-true
+dup message: @get "missing closing parenthesis" "compile error carries the PCRE2 message" assert=
 data: @get f "compile error carries no data" assert=
 
 [ { bogus: } "a" regex-compile-with drop f ] [ ] recover

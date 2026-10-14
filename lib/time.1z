@@ -1,31 +1,51 @@
 \ Time library - durations, timestamps, and formatting
 
-\ Duration: virtual type backed by fixnum nanoseconds
+\\ A span of time, held as a fixnum count of nanoseconds. Build one with `seconds` and its
+\\ siblings. Durations add, subtract, scale by a fixnum, and compare.
 duration: virtual{ fixnum } ;
 
-\ Convenience constructors for durations
-nanoseconds:  ( n -- duration ) [ >duration ] ;
+\\ A duration of n nanoseconds.
+nanoseconds: ( n -- duration ) [ >duration ] ;
+
+\\ A duration of n microseconds.
 microseconds: ( n -- duration ) [ 1000 * >duration ] ;
+
+\\ A duration of n milliseconds.
 milliseconds: ( n -- duration ) [ 1000000 * >duration ] ;
-seconds:      ( n -- duration ) [ 1000000000 * >duration ] ;
-minutes:      ( n -- duration ) [ 60 * seconds ] ;
+
+\\ A duration of n seconds.
+seconds: ( n -- duration ) [ 1000000000 * >duration ] ;
+
+\\ A duration of n minutes.
+minutes: ( n -- duration ) [ 60 * seconds ] ;
+
+\\ A duration of n hours.
 hours: ( n -- duration ) [ 60 * minutes ] ;
 
-\ Accessor: extract nanosecond count from a duration
+\\ The length of a duration in nanoseconds.
 duration-nsec: ( duration -- nsec ) [ unmake-duration ] ;
 
-\ Timestamp: virtual type backed by a hidden struct
+\\ The fields behind a `timestamp`: whole seconds since the POSIX epoch, and nanoseconds within
+\\ that second.
 timestamp-inner: struct{ ts-sec: fixnum ts-nsec: fixnum } ;
+
+\\ A UTC point in time, counted from the POSIX epoch. Adding or subtracting a duration gives a
+\\ timestamp, and subtracting two timestamps gives a duration.
 timestamp: virtual{ timestamp-inner } ;
 
-\ Constructor from sec/nsec components
+\\ A timestamp from whole seconds since the POSIX epoch and nanoseconds within that second.
+\\
+\\   1 2 make-timestamp
+\\   => <timestamp 1 2>
 make-timestamp: ( sec nsec -- timestamp ) [ make-timestamp-inner >timestamp ] ;
 
-\ Accessors
+\\ The whole seconds since the POSIX epoch of a timestamp.
 timestamp-sec: ( timestamp -- sec ) [ unmake-timestamp ts-sec>> ] ;
+
+\\ The nanoseconds within the second of a timestamp.
 timestamp-nsec: ( timestamp -- nsec ) [ unmake-timestamp ts-nsec>> ] ;
 
-\ Create timestamp from current wall-clock time
+\\ The current wall-clock time as a timestamp.
 now: ( -- timestamp ) [ clock-realtime make-timestamp ] ;
 
 \ Duration arithmetic
@@ -40,17 +60,23 @@ now: ( -- timestamp ) [ clock-realtime make-timestamp ] ;
 >: method{ duration duration } [ swap unmake-duration swap unmake-duration > ] ;
 =: method{ duration duration } [ swap unmake-duration swap unmake-duration = ] ;
 
-\ Helper: split nanoseconds into sec + nsec with consistent floored semantics
+\\ Split a nanosecond count into whole seconds and the nanoseconds left over. The split floors,
+\\ so the nanoseconds are never negative, even for a negative count.
+\\
+\\   -1500000000 ns>sec-nsec
+\\   => -2 500000000
 ns>sec-nsec: ( ns -- sec nsec ) [
   dup 1000000000 % swap over - 1000000000 div swap
 ] ;
 
-timestamp+nanos: ( ts nanos -- timestamp ) [
-  over timestamp-sec -rot>
-  swap timestamp-nsec +
-  ns>sec-nsec [ + ] dip
-  make-timestamp
-] ;
+private{
+  timestamp+nanos: ( ts nanos -- timestamp ) [
+    over timestamp-sec -rot>
+    swap timestamp-nsec +
+    ns>sec-nsec [ + ] dip
+    make-timestamp
+  ] ;
+}
 
 \ Timestamp + Duration = Timestamp
 +: method{ timestamp duration } [ unmake-duration timestamp+nanos ] ;
@@ -71,123 +97,157 @@ timestamp+nanos: ( ts nanos -- timestamp ) [
 
 \ --- Lookup tables for >time-parts ---
 
-month-names: ( -- array ) [
-  { "January" "February" "March" "April" "May" "June" "July" "August" "September" "October" "November" "December" }
-] ;
+private{
+  month-names: ( -- array ) [
+    { "January" "February" "March" "April" "May" "June" "July" "August" "September" "October" "November" "December" }
+  ] ;
 
-month-names-short: ( -- array ) [
-  { "Jan" "Feb" "Mar" "Apr" "May" "Jun" "Jul" "Aug" "Sep" "Oct" "Nov" "Dec" }
-] ;
+  month-names-short: ( -- array ) [
+    { "Jan" "Feb" "Mar" "Apr" "May" "Jun" "Jul" "Aug" "Sep" "Oct" "Nov" "Dec" }
+  ] ;
 
-weekday-names: ( -- array ) [
-  { "Sunday" "Monday" "Tuesday" "Wednesday" "Thursday" "Friday" "Saturday" }
-] ;
+  weekday-names: ( -- array ) [
+    { "Sunday" "Monday" "Tuesday" "Wednesday" "Thursday" "Friday" "Saturday" }
+  ] ;
 
-weekday-names-short: ( -- array ) [
-  { "Sun" "Mon" "Tue" "Wed" "Thu" "Fri" "Sat" }
-] ;
+  weekday-names-short: ( -- array ) [
+    { "Sun" "Mon" "Tue" "Wed" "Thu" "Fri" "Sat" }
+  ] ;
 
-\ Compute ISO week number (simplified: edge cases at year boundaries may be off)
-compute-iso-week: ( yearday iso-weekday -- iso-week ) [
-  - 10 + 7 div
-  dup 1 < [ drop 1 ] [ dup 53 > [ drop 53 ] [ ] if ] if
-] ;
+  \ Compute ISO week number (simplified: edge cases at year boundaries may be off)
+  compute-iso-week: ( yearday iso-weekday -- iso-week ) [
+    - 10 + 7 div
+    dup 1 < [ drop 1 ] [ dup 53 > [ drop 53 ] [ ] if ] if
+  ] ;
+}
 
 \ --- Timezone type ---
 
+\\ The fields behind a `timezone`: its offset in minutes east of UTC, and its name.
 tz-inner: struct{ offset-min: fixnum name: string } ;
+
+\\ A named timezone. The name is what the C library resolves, such as "UTC" or
+\\ "America/New_York", and an empty name means the system's local zone.
 timezone: virtual{ tz-inner } ;
 
+\\ A timezone from an offset in minutes east of UTC and a name. Decomposing a timestamp
+\\ resolves the name through the C library rather than applying the offset.
+\\
+\\   -300 "EST" make-timezone
+\\   => <timezone EST -0500>
 make-timezone: ( offset-min name -- timezone ) [ make-tz-inner >timezone ] ;
 
+\\ The offset in minutes east of UTC that a timezone was made with.
 timezone-offset: ( tz -- offset-min ) [ unmake-timezone offset-min>> ] ;
+
+\\ The name of a timezone, or the empty string for the system's local zone.
 timezone-name: ( tz -- name ) [ unmake-timezone name>> ] ;
 
+\\ The UTC timezone.
 utc: ( -- timezone ) [ 0 "UTC" make-timezone ] ;
+
+\\ The system's local timezone, which the C library picks from the TZ environment variable or
+\\ the system setting.
 local: ( -- timezone ) [ 0 "" make-timezone ] ;
 
 \ --- libc bridge struct and wrappers ---
 
+\\ The calendar fields of one instant in one timezone, as the C library reports them.
+\\ `month-num` runs 1 to 12, `posix-weekday` runs 0 for Sunday to 6, `yearday` starts at 1, and
+\\ `gmtoff` is the zone's offset in seconds east of UTC.
 tm-result: struct{ year: fixnum month-num: fixnum day: fixnum hour: fixnum min: fixnum sec: fixnum posix-weekday: fixnum yearday: fixnum gmtoff: fixnum tz-abbrev: string } ;
 
+\\ Break down sec, in seconds since the POSIX epoch, into calendar fields in the named timezone.
+\\ An empty name means the system's local zone.
+\\
+\\   0 "Etc/GMT-5" tz-localtime hour>>
+\\   => 5
 tz-localtime: ( sec tz-name -- tm-result ) [ tz-decompose make-tm-result ] ;
 
-\ Format gmtoff (seconds east of UTC) as "+HHMM" or "-HHMM"
-format-tz-offset: ( gmtoff-sec -- string ) [
-  dup 0 < [ 0 swap - "-" ] [ "+" ] if swap
-  \ Stack: sign abs-gmtoff
-  60 div dup 60 div swap 60 %
-  \ Stack: sign hh mm
-  H{ }
-  \ Stack: sign hh mm hash
-  3 pick-n sign: swap @set
-  2 pick-n hour: swap @set
-  1 pick-n min: swap @set
-  \ Stack: sign hh mm hash
-  \ Clean up the 3 values below the hash
-  swap drop swap drop swap drop
-  "{sign}{hour:width=2,fill=0}{min:width=2,fill=0}" fmt
-] ;
+private{
+  \ Format gmtoff (seconds east of UTC) as "+HHMM" or "-HHMM"
+  format-tz-offset: ( gmtoff-sec -- string ) [
+    dup 0 < [ 0 swap - "-" ] [ "+" ] if swap
+    \ Stack: sign abs-gmtoff
+    60 div dup 60 div swap 60 %
+    \ Stack: sign hh mm
+    H{ }
+    \ Stack: sign hh mm hash
+    3 pick-n sign: swap @set
+    2 pick-n hour: swap @set
+    1 pick-n min: swap @set
+    \ Stack: sign hh mm hash
+    \ Clean up the 3 values below the hash
+    swap drop swap drop swap drop
+    "{sign}{hour:width=2,fill=0}{min:width=2,fill=0}" fmt
+  ] ;
 
-\ Build a time-parts hash from a tm-result and nsec value.
-\
-\ 2 pick-n always reaches tm-result, 1 pick-n always reaches nsec.
-\ @set is stack-neutral so depths stay constant.
-tm>time-parts: ( tm-result nsec -- hash ) [
-  H{ }
+  \ Build a time-parts hash from a tm-result and nsec value.
+  \
+  \ 2 pick-n always reaches tm-result, 1 pick-n always reaches nsec.
+  \ @set is stack-neutral so depths stay constant.
+  tm>time-parts: ( tm-result nsec -- hash ) [
+    H{ }
 
-  \ Year
-  2 pick-n year>> year: swap @set
-  2 pick-n year>> 100 % year-short: swap @set
+    \ Year
+    2 pick-n year>> year: swap @set
+    2 pick-n year>> 100 % year-short: swap @set
 
-  \ Month (month-num is 1-12; arrays are 0-indexed)
-  2 pick-n month-num>> month-num: swap @set
-  2 pick-n month-num>> 1 - month-names swap #nth month: swap @set
-  2 pick-n month-num>> 1 - month-names swap #nth month-name: swap @set
-  2 pick-n month-num>> 1 - month-names-short swap #nth month-short: swap @set
+    \ Month (month-num is 1-12; arrays are 0-indexed)
+    2 pick-n month-num>> month-num: swap @set
+    2 pick-n month-num>> 1 - month-names swap #nth month: swap @set
+    2 pick-n month-num>> 1 - month-names swap #nth month-name: swap @set
+    2 pick-n month-num>> 1 - month-names-short swap #nth month-short: swap @set
 
-  \ Day
-  2 pick-n day>> day: swap @set
-  2 pick-n yearday>> yearday: swap @set
+    \ Day
+    2 pick-n day>> day: swap @set
+    2 pick-n yearday>> yearday: swap @set
 
-  \ Weekday (posix-weekday 0=Sun; arrays 0-indexed)
-  2 pick-n posix-weekday>> weekday-names swap #nth weekday: swap @set
-  2 pick-n posix-weekday>> weekday-names swap #nth weekday-name: swap @set
-  2 pick-n posix-weekday>> weekday-names-short swap #nth weekday-short: swap @set
-  2 pick-n posix-weekday>> posix-weekday: swap @set
-  2 pick-n posix-weekday>> dup 0 = [ drop 7 ] [ ] if iso-weekday: swap @set
+    \ Weekday (posix-weekday 0=Sun; arrays 0-indexed)
+    2 pick-n posix-weekday>> weekday-names swap #nth weekday: swap @set
+    2 pick-n posix-weekday>> weekday-names swap #nth weekday-name: swap @set
+    2 pick-n posix-weekday>> weekday-names-short swap #nth weekday-short: swap @set
+    2 pick-n posix-weekday>> posix-weekday: swap @set
+    2 pick-n posix-weekday>> dup 0 = [ drop 7 ] [ ] if iso-weekday: swap @set
 
-  \ ISO week
-  2 pick-n yearday>>
-  3 pick-n posix-weekday>> dup 0 = [ drop 7 ] [ ] if
-  compute-iso-week iso-week: swap @set
+    \ ISO week
+    2 pick-n yearday>>
+    3 pick-n posix-weekday>> dup 0 = [ drop 7 ] [ ] if
+    compute-iso-week iso-week: swap @set
 
-  \ Time
-  2 pick-n hour>> hour: swap @set
-  2 pick-n hour>> hour24: swap @set
-  2 pick-n hour>> 12 % dup 0 = [ drop 12 ] [ ] if hour12: swap @set
-  2 pick-n min>> min: swap @set
-  2 pick-n sec>> sec: swap @set
+    \ Time
+    2 pick-n hour>> hour: swap @set
+    2 pick-n hour>> hour24: swap @set
+    2 pick-n hour>> 12 % dup 0 = [ drop 12 ] [ ] if hour12: swap @set
+    2 pick-n min>> min: swap @set
+    2 pick-n sec>> sec: swap @set
 
-  \ Sub-second (from nsec argument)
-  1 pick-n nsec: swap @set
-  1 pick-n 1000 div usec: swap @set
-  1 pick-n 1000000 div msec: swap @set
+    \ Sub-second (from nsec argument)
+    1 pick-n nsec: swap @set
+    1 pick-n 1000 div usec: swap @set
+    1 pick-n 1000000 div msec: swap @set
 
-  \ AM/PM
-  2 pick-n hour>> 12 < [ "AM" ] [ "PM" ] if ampm: swap @set
+    \ AM/PM
+    2 pick-n hour>> 12 < [ "AM" ] [ "PM" ] if ampm: swap @set
 
-  \ Timezone
-  2 pick-n gmtoff>> format-tz-offset tz: swap @set
-  2 pick-n gmtoff>> format-tz-offset tz-offset: swap @set
-  2 pick-n tz-abbrev>> tz-name: swap @set
+    \ Timezone
+    2 pick-n gmtoff>> format-tz-offset tz: swap @set
+    2 pick-n gmtoff>> format-tz-offset tz-offset: swap @set
+    2 pick-n tz-abbrev>> tz-name: swap @set
 
-  \ Clean up tm-result and nsec from below hash
-  swap drop swap drop
-] ;
+    \ Clean up tm-result and nsec from below hash
+    swap drop swap drop
+  ] ;
+}
 
 \ --- >time-parts (UTC decomposition via libc) ---
 
+\\ Break a timestamp down into a hash of calendar parts in UTC.
+\\
+\\ The keys are the placeholders `format` accepts: `year`, `year-short`, `month`, `month-name`,
+\\ `month-num`, `month-short`, `day`, `yearday`, `weekday`, `weekday-name`, `weekday-short`,
+\\ `posix-weekday`, `iso-weekday`, `iso-week`, `hour`, `hour24`, `hour12`, `min`, `sec`, `msec`,
+\\ `usec`, `nsec`, `ampm`, `tz`, `tz-offset`, and `tz-name`.
 >time-parts: ( timestamp -- hash ) [
   dup timestamp-nsec swap timestamp-sec
   "UTC" tz-localtime swap
@@ -196,6 +256,11 @@ tm>time-parts: ( tm-result nsec -- hash ) [
 
 \ --- >time-parts-in (timezone-aware decomposition via libc) ---
 
+\\ Break a timestamp down into a hash of calendar parts in the given timezone. The keys are the
+\\ same as for `>time-parts`.
+\\
+\\   0 0 make-timestamp -300 "Etc/GMT+5" make-timezone >time-parts-in hour: @get
+\\   => 19
 >time-parts-in: ( timestamp tz -- hash ) [
   swap dup timestamp-nsec swap timestamp-sec
   <rot- timezone-name
@@ -205,29 +270,48 @@ tm>time-parts: ( tm-result nsec -- hash ) [
 
 \ --- Formatting ---
 
+\\ Format a timestamp in UTC. The format string names `>time-parts` keys in braces, with the
+\\ same width and fill options as `fmt`.
+\\
+\\   0 0 make-timestamp "{year}-{month-short}" format
+\\   => "1970-Jan"
 format: ( timestamp fmt-string -- string ) [
   swap >time-parts swap fmt
 ] ;
 
+\\ Format a timestamp in the given timezone. The format string is the same as for `format`.
+\\
+\\   0 0 make-timestamp -300 "Etc/GMT+5" make-timezone "{hour}:{min:width=2,fill=0} {tz}" format-in
+\\   => "19:00 -0500"
 format-in: ( timestamp tz fmt-string -- string ) [
   -rot> >time-parts-in swap fmt
 ] ;
 
-\ Format constants
+\\ The ISO 8601 format, as in "1970-01-01T00:00:00+0000".
 iso8601-fmt: ( -- fmt: string ) const [ "{year}-{month-num:width=2,fill=0}-{day:width=2,fill=0}T{hour:width=2,fill=0}:{min:width=2,fill=0}:{sec:width=2,fill=0}{tz}" ] ;
+
+\\ The RFC 2822 format, as in "Thu, 01 Jan 1970 00:00:00 +0000".
 rfc2822-fmt: ( -- fmt: string ) const [ "{weekday-short}, {day:width=2,fill=0} {month-short} {year} {hour:width=2,fill=0}:{min:width=2,fill=0}:{sec:width=2,fill=0} {tz}" ] ;
-date-fmt:    ( -- fmt: string ) const [ "{year}-{month-num:width=2,fill=0}-{day:width=2,fill=0}" ] ;
-time-fmt:    ( -- fmt: string ) const [ "{hour:width=2,fill=0}:{min:width=2,fill=0}:{sec:width=2,fill=0}" ] ;
+
+\\ The date-only format, as in "1970-01-01".
+date-fmt: ( -- fmt: string ) const [ "{year}-{month-num:width=2,fill=0}-{day:width=2,fill=0}" ] ;
+
+\\ The time-only format, as in "00:00:00".
+time-fmt: ( -- fmt: string ) const [ "{hour:width=2,fill=0}:{min:width=2,fill=0}:{sec:width=2,fill=0}" ] ;
 
 \ --- Elapsed time measurement ---
 
-\ Get monotonic clock as raw nanoseconds.
+\\ The monotonic clock as a raw nanosecond count. Only the difference between two readings means
+\\ anything.
 monotonic-nanos: ( -- nanos ) [
   clock-monotonic swap 1000000000 * +
 ] ;
 
-\ Runs quotation, measures wall time, pushes duration on top.
-\ Quotation results remain on stack below the duration.
+\\ Run a quotation and push the wall time it took as a duration. The quotation's results stay on
+\\ the stack below the duration.
+\\
+\\   [ 1 2 + ] elapsed drop
+\\   => 3
 elapsed: ( quot -- ... duration ) [
   monotonic-nanos
   [ call ] dip
@@ -252,4 +336,4 @@ inspect: method{ timezone } [
   swap "<timezone " swap #append " " #append swap #append ">" #append
 ] ;
 
-pragma{ lint-suppress: { complex-word-undocumented: constructor-consistency: conversion-naming: dead-definition: missing-doc-comment: missing-type-annotation: } }
+pragma{ lint-suppress: { constructor-consistency: conversion-naming: dead-definition: missing-type-annotation: } }

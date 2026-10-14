@@ -27,8 +27,13 @@ use "sequences" ;
 use "bytes" ;
 use "game/font" ;
 
-framebuffer-width:           const inline 256 ;
-framebuffer-height:          const inline 224 ;
+\\ The canvas width in pixels.
+framebuffer-width: const inline 256 ;
+
+\\ The canvas height in pixels.
+framebuffer-height: const inline 224 ;
+
+\\ Bytes per framebuffer pixel: one each of red, green, blue, and alpha, in that order.
 framebuffer-bytes-per-pixel: const inline 4 ;
 
 \\ The byte-array every drawing word writes into. Defaults to the real wasm framebuffer; tests
@@ -39,7 +44,12 @@ framebuffer-bytes-per-pixel: const inline 4 ;
 \\ `get`, so with-parameter keeps its full effect.
 current-framebuffer: const inline parameter{ [ (wasm-framebuffer) ] } ;
 
+\\ An RGBA color with each component from 0 to 255. Build one with `<color>`, which checks the
+\\ range.
 color: struct{ r: fixnum g: fixnum b: fixnum a: fixnum } ;
+
+\\ A width by height image whose pixels are RGBA8888 bytes in row-major order, the framebuffer's
+\\ own layout. Build one with `<sprite>`, which checks the length.
 sprite: struct{ width: fixnum height: fixnum pixels: byte-array } ;
 
 private{
@@ -47,6 +57,9 @@ private{
 }
 
 \\ Validate r/g/b/a are each in [0, 255] and construct a color.
+\\
+\\   1 2 3 4 <color> g>>
+\\   => 2
 <color>: ( r: fixnum g: fixnum b: fixnum a: fixnum -- color ) [
   bind-inputs
   r (byte-range?) g (byte-range?) and b (byte-range?) and a (byte-range?) and
@@ -56,6 +69,9 @@ private{
 
 \\ Validate width/height are non-negative and pixels' length matches width * height * 4
 \\ (RGBA8888, the same layout the framebuffer uses), then construct a sprite.
+\\
+\\   2 1 B{ 1 2 3 4 5 6 7 8 } <sprite> width>>
+\\   => 2
 <sprite>: ( width: fixnum height: fixnum pixels: byte-array -- sprite ) [
   sp: swap ;
   sh: swap ;
@@ -107,6 +123,12 @@ private{
 \\ Draw one pixel at (x, y). A pixel outside the canvas is silently skipped.
 \\
 \\ 3 rot-n> buries the framebuffer under the coordinates, since (set-pixel!) takes it first.
+\\
+\\   framebuffer-width framebuffer-height * 4 * bytes-alloc current-framebuffer [
+\\     10 20 255 0 0 255 <color> draw-pixel
+\\     current-framebuffer get 20 framebuffer-width * 10 + 4 * #nth .
+\\   ] with-parameter
+\\   => 255
 draw-pixel: ( x y color -- ) [ (color>packed) current-framebuffer get 3 rot-n> (set-pixel!) ] ;
 
 \\ Fill the entire framebuffer with one color.
@@ -121,6 +143,12 @@ clear-background: ( color -- ) [
 
 \\ Fill an axis-aligned rectangle. width/height must be non-negative. A rectangle reaching past
 \\ the canvas is clipped, the standard convention for a 2D framebuffer API.
+\\
+\\   framebuffer-width framebuffer-height * 4 * bytes-alloc current-framebuffer [
+\\     2 3 4 5 0 255 0 255 <color> draw-rectangle
+\\     current-framebuffer get 5 framebuffer-width * 4 + 4 * 1 + #nth .
+\\   ] with-parameter
+\\   => 255
 draw-rectangle: ( x: fixnum y: fixnum width: fixnum height: fixnum color: color -- ) [
   (color>packed)
   rp: swap ;
@@ -155,6 +183,12 @@ draw-rectangle: ( x: fixnum y: fixnum width: fixnum height: fixnum color: color 
 \\ The sprite is destructured into its three fields before any local binds, because a local bound
 \\ to the sprite itself would be retained for the rest of the program while a local bound to its
 \\ pixel byte-array is reclaimed when this call returns.
+\\
+\\   framebuffer-width framebuffer-height * 4 * bytes-alloc current-framebuffer [
+\\     0 0 2 1 B{ 1 2 3 4 5 6 7 8 } <sprite> blit-sprite
+\\     current-framebuffer get 4 #nth .
+\\   ] with-parameter
+\\   => 5
 blit-sprite: ( x: fixnum y: fixnum sprite: sprite -- ) [
   dup width>> bw: swap ;
   dup height>> bh: swap ;
@@ -258,11 +292,23 @@ private{
 \\ Draw one character's glyph at (x, y). Characters outside the font's covered range
 \\ (0x20-0x7E) are silently skipped. Background pixels (unset glyph bits) are transparent --
 \\ not drawn in any background color.
+\\
+\\   framebuffer-width framebuffer-height * 4 * bytes-alloc current-framebuffer [
+\\     0 0 "A" 255 255 255 255 <color> draw-char
+\\     current-framebuffer get 2 4 * #nth .
+\\   ] with-parameter
+\\   => 255
 draw-char: ( x y ch color -- ) [ (color>packed) (draw-glyph-packed) ] ;
 
 \\ Draw a string starting at (x, y), advancing by font-cell-size pixels per character.
 \\ Characters outside the font's covered range are silently skipped (via draw-char's glyph
 \\ lookup).
+\\
+\\   framebuffer-width framebuffer-height * 4 * bytes-alloc current-framebuffer [
+\\     0 0 "AB" 255 255 255 255 <color> draw-text
+\\     current-framebuffer get 10 4 * #nth .
+\\   ] with-parameter
+\\   => 255
 draw-text: ( x: fixnum y: fixnum str: string color: color -- ) [
   (color>packed)
   tp: swap ;
@@ -279,4 +325,4 @@ draw-text: ( x: fixnum y: fixnum str: string color: color -- ) [
   ] #each
 ] ;
 
-pragma{ lint-suppress: { broad-import: complex-word-undocumented: dead-definition: import-ordering: missing-doc-comment: missing-type-annotation: unused-import: } }
+pragma{ lint-suppress: { broad-import: dead-definition: import-ordering: missing-type-annotation: unused-import: } }

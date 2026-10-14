@@ -14,17 +14,22 @@ use "conversions" ;
 use "strings" ;
 use "sequences" ;
 
-\ Markers
+\\ Marks a flag that `parse-flags` must find in the arguments. A required flag cannot also
+\\ declare a default.
 required: make-marker ;
+
+\\ Marks a flag that takes its value from a bare argument rather than from a `--name`.
 positional: make-marker ;
 
-\ Shared state
-flag-registry: ( -- registry: mutable-map ) M{ } ;
+private{
+  \ Shared state
+  flag-registry: ( -- registry: mutable-map ) M{ } ;
 
-\ Monotonic counter assigning each registered flag a definition order. Shared
-\ across define-flag calls, so it lives at module scope rather than nested inside
-\ define-flag's body where AOT discovery could not see it.
-flag-order: ( -- order: mutable-map ) M{ n: 0 } ;
+  \ Monotonic counter assigning each registered flag a definition order. Shared
+  \ across define-flag calls, so it lives at module scope rather than nested inside
+  \ define-flag's body where AOT discovery could not see it.
+  flag-order: ( -- order: mutable-map ) M{ n: 0 } ;
+}
 
 \\ Defines a command-line flag.
 flag{: parse-time [
@@ -34,7 +39,13 @@ flag{: parse-time [
   [ define-flag ] define: swap @set!
 ] ;
 
-\\ Registers the flag in the global registry.
+\\ Registers the flag in the global registry. `flag{` calls this for each flag it defines, after
+\\ checking that a `type:` is a type rather than a symbol, that a required flag has no default,
+\\ and that a default matches its type.
+\\
+\\   count: flag{ type: fixnum default: 1 description: "Times" } ;
+\\   { "--count" "3" } "demo" parse-flags "count" @get
+\\   => 3
 define-flag: ( name fields markers -- ) [
   \ The declared flag type lives under the descriptor's "fields" hash. A symbol
   \ there (the dropped `type: integer:` form) is a loud definition-time error.
@@ -118,7 +129,7 @@ private{
     [ flag-short-matches? ] curry #filter #collect
     dup #len 0 =
     [ drop f ]
-    [ #first ]
+    [ #first >string ]
     if
   ] ;
 
@@ -609,7 +620,13 @@ private{
   pf-args:      parameter{ [ { } ] } ;
 }
 
-\\ Parses command-line arguments according to registered flags.
+\\ Parses command-line arguments according to registered flags, returning a hash from flag name
+\\ to value. A flag that was not given takes its default, or f. `--help` or `-h` anywhere prints
+\\ the description and every flag's usage to stderr, then exits with status 0.
+\\
+\\   verbose: flag{ type: boolean description: "Talk more" } ;
+\\   { "--verbose" } "demo" parse-flags "verbose" @get
+\\   => t
 parse-flags: ( args: array description: string -- result: hash ) [
   swap
   [ ] make-mutable-map
@@ -642,4 +659,4 @@ parse-flags: ( args: array description: string -- result: hash ) [
   ] with-parameter
 ] ;
 
-pragma{ lint-suppress: { complex-word-undocumented: dead-definition: deep-nesting: import-ordering: missing-doc-comment: missing-type-annotation: unused-import: } }
+pragma{ lint-suppress: { dead-definition: deep-nesting: import-ordering: missing-type-annotation: unused-import: } }

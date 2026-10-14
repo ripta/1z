@@ -18,29 +18,34 @@ use "ffi" ;
 
 \ Constants
 
-PCRE2_UTF:           0x00080000 ;
-PCRE2_UCP:           0x00020000 ;
-PCRE2_CASELESS:      0x00000008 ;
-PCRE2_MULTILINE:     0x00000400 ;
-PCRE2_DOTALL:        0x00000020 ;
-PCRE2_EXTENDED:      0x00000080 ;
-PCRE2_UNGREEDY:      0x00040000 ;
-PCRE2_ERROR_NOMATCH: -1 ;
-PCRE2_UNSET:         18446744073709551615 ;
+private{
+  PCRE2_UTF:           0x00080000 ;
+  PCRE2_UCP:           0x00020000 ;
+  PCRE2_CASELESS:      0x00000008 ;
+  PCRE2_MULTILINE:     0x00000400 ;
+  PCRE2_DOTALL:        0x00000020 ;
+  PCRE2_EXTENDED:      0x00000080 ;
+  PCRE2_UNGREEDY:      0x00040000 ;
+  PCRE2_ERROR_NOMATCH: -1 ;
+  PCRE2_UNSET:         18446744073709551615 ;
 
-\ PCRE2 sets *errorcode = COMPILE_ERROR_BASE (100) at compilation start.
-\ On success it stays 100; on error it becomes 101+.
-PCRE2_COMPILE_ERROR_BASE: 100 ;
+  \ PCRE2 sets *errorcode = COMPILE_ERROR_BASE (100) at compilation start.
+  \ On success it stays 100; on error it becomes 101+.
+  PCRE2_COMPILE_ERROR_BASE: 100 ;
 
-\ Pattern info constants (for named-groups)
-PCRE2_INFO_NAMECOUNT:     17 ;
-PCRE2_INFO_NAMEENTRYSIZE: 18 ;
-PCRE2_INFO_NAMETABLE:     19 ;
+  \ Pattern info constants (for named-groups)
+  PCRE2_INFO_NAMECOUNT:     17 ;
+  PCRE2_INFO_NAMEENTRYSIZE: 18 ;
+  PCRE2_INFO_NAMETABLE:     19 ;
+}
 
 \ Types and errors
 
+\\ A compiled PCRE2 pattern. The compiled code is freed when the regex is collected.
 regex: virtual{ resource } ;
 
+\\ The flags `regex-compile-with` accepts. Pass each flag as its plain symbol, such as
+\\ `caseless:`, in the flags array.
 regex-flag: enum{
   caseless:  unit
   multiline: unit
@@ -49,7 +54,10 @@ regex-flag: enum{
   ungreedy:  unit
 } ;
 
+\\ The error type raised when a pattern does not compile or a flag is unknown.
 ERegexCompileError: ( -- sym ) [ regex-compile-error: ] ;
+
+\\ The error type raised when PCRE2 fails while matching, as opposed to finding no match.
 ERegexMatchError: ( -- sym ) [ regex-match-error: ] ;
 
 \ Internal helpers
@@ -80,7 +88,7 @@ ERegexMatchError: ( -- sym ) [ regex-match-error: ] ;
   <rot- swap 256 (get-error-message)
   \ Stack: buf written-or-error
   dup 0 > [
-    bytes-resize! >string
+    bytes-resize! bytes>
   ] [
     2drop "unknown PCRE2 error"
   ] if
@@ -91,9 +99,12 @@ ERegexMatchError: ( -- sym ) [ regex-match-error: ] ;
 \\ Compile a regex pattern with default flags (UTF-8 and UCP enabled).
 regex-compile: ( pattern -- regex ) [ { } swap regex-compile-with ] ;
 
-\\ Compile a regex pattern with additional flags.
-\\ After (compile), stack is: errorcode erroroffset code (code on top).
-\\ Compile a regex pattern with additional flags.
+\\ Compile a regex pattern with an array of flag symbols on top of the default UTF-8 and UCP
+\\ modes. The flags are `caseless:`, `multiline:`, `dotall:`, `extended:`, and `ungreedy:`. Throws
+\\ `regex-compile-error` for an unknown flag or a pattern that does not compile.
+\\
+\\   "HELLO" { caseless: } "hel+o" regex-compile-with regex-match option:some> 0 #nth
+\\   => <option:some option-payload{ value: "HELLO" }>
 regex-compile-with: ( flags pattern -- regex ) [
   swap (flags>options)
   \ Stack: pattern options
@@ -130,6 +141,9 @@ regex-compile-with: ( flags pattern -- regex ) [
 \\ array of capture groups on match, or option:none on no match. Each capture
 \\ group is option:some wrapping the matched text, or option:none for unmatched
 \\ optional groups. Index 0 is the full match.
+\\
+\\   "key=val" "(\\w+)=(\\w+)" regex-compile regex-match option:some> 2 #nth
+\\   => <option:some option-payload{ value: "val" }>
 regex-match: ( str regex -- option ) [
   unmake-regex
   \ Stack: str code
@@ -284,6 +298,9 @@ regex-match: ( str regex -- option ) [
 
 \\ Return a lazy iterator of all non-overlapping matches.
 \\ Each element is an array of option-wrapped capture groups (same as regex-match).
+\\
+\\   "a1 b22 c333" "\\d+" regex-compile regex-find-all [ 0 #nth option:some> ] #map #collect
+\\   => { "1" "22" "333" }
 regex-find-all: ( str regex -- iterator ) [
   unmake-regex
   \ Stack: str code
@@ -298,12 +315,10 @@ regex-find-all: ( str regex -- iterator ) [
   >iterator
 ] ;
 
-\ Helper: set up sb str code offset from bottom of stack.
-\ Given sb str code already deep in the stack with extra values on top,
-\ call (regex-match-at) with offset argument from the top.
-\ After the call, match results replace the offset on the stack.
-
 \\ Split a string by regex matches, returning an array of substrings.
+\\
+\\   "a, b,c" ",\\s*" regex-compile regex-split
+\\   => { "a" "b" "c" }
 regex-split: ( str regex -- array ) [
   unmake-regex
   over >bytes -rot>
@@ -342,7 +357,11 @@ regex-split: ( str regex -- array ) [
   ] if
 ] ;
 
-\\ Replace the first match of a regex with a replacement string.
+\\ Replace the first match of a regex with a replacement string. The replacement is literal text,
+\\ so `$1` is not expanded.
+\\
+\\   "a1 b22" "\\d+" regex-compile "#" regex-replace
+\\   => "a# b22"
 regex-replace: ( str regex replacement -- str ) [
   -rot> unmake-regex
   over >bytes -rot>
@@ -367,7 +386,11 @@ regex-replace: ( str regex replacement -- str ) [
   ] if
 ] ;
 
-\\ Replace all matches of a regex with a replacement string.
+\\ Replace all matches of a regex with a replacement string. The replacement is literal text, as
+\\ with `regex-replace`.
+\\
+\\   "a1 b22" "\\d+" regex-compile "#" regex-replace-all
+\\   => "a# b#"
 regex-replace-all: ( str regex replacement -- str ) [
   -rot> unmake-regex
   over >bytes -rot>
@@ -464,6 +487,9 @@ regex-replace-all: ( str regex replacement -- str ) [
 
 \\ Extract named capture groups from a match result array and compiled regex.
 \\ Returns a hash mapping group name symbols to their capture values.
+\\
+\\   "(?<year>\\d+)-\\d+" regex-compile "2026-10" over regex-match option:some> swap named-groups
+\\   => H{ year: <option:some option-payload{ value: "2026" }> }
 named-groups: ( match-array regex -- hash ) [
   unmake-regex
   \ Stack: match-array code
@@ -487,4 +513,4 @@ named-groups: ( match-array regex -- hash ) [
   ] if
 ] ;
 
-pragma{ lint-suppress: { complex-word-undocumented: dead-definition: missing-doc-comment: missing-type-annotation: non-kebab-case: } }
+pragma{ lint-suppress: { dead-definition: missing-type-annotation: non-kebab-case: } }

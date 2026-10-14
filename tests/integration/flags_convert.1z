@@ -19,6 +19,9 @@ ratio:    flag{ type: float description: "Ratio" } ;
 \ Bare --verbose is presence-true.
 { "--verbose" } "p" parse-flags "verbose" @get t "bare boolean flag is true" assert=
 
+\ The short alias of a boolean flag is presence-true too.
+{ "-v" } "p" parse-flags "verbose" @get t "short boolean flag is true" assert=
+
 \ Every true spelling, plus a mixed-case one.
 { "--verbose=true" } "p" parse-flags "verbose" @get t "=true" assert=
 { "--verbose=t" } "p" parse-flags "verbose" @get t "=t" assert=

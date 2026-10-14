@@ -1,0 +1,5 @@
+use "testing" ;
+use "./fixtures/fn_module.1z" ;
+
+"fn module loading" test-section
+3 cube 27 "an fn-defined word is importable from a module" assert=

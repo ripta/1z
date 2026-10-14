@@ -48,22 +48,20 @@ private{
     [ 2drop "expected 4 hex digits after \\u" (json-error) ]
     if
   ] ;
-}
 
-json-ws?: ( str -- ? ) [
-  dup " " = swap dup "\t" = swap dup "\n" = swap "\r" = or or or
-] ;
+  json-ws?: ( str -- ? ) [
+    dup " " = swap dup "\t" = swap dup "\n" = swap "\r" = or or or
+  ] ;
 
-skip-ws: ( scanner -- scanner ) [
-  [ json-ws? ] skip-while
-] ;
+  skip-ws: ( scanner -- scanner ) [
+    [ json-ws? ] skip-while
+  ] ;
 
-\ Parse a 4-digit hex escape, returning the advanced scanner and the codepoint.
-parse-hex4: ( scanner -- scanner codepoint ) [
-  0 4 [ (json-hex-digit) ] times
-] ;
+  \ Parse a 4-digit hex escape, returning the advanced scanner and the codepoint.
+  parse-hex4: ( scanner -- scanner codepoint ) [
+    0 4 [ (json-hex-digit) ] times
+  ] ;
 
-private{
   \ Read the low half of a surrogate pair after its high half, combining the two. Every failure
   \ points at where the low half's \u escape should begin.
   (json-low-surrogate): ( scanner high: fixnum -- scanner codepoint ) [
@@ -81,37 +79,37 @@ private{
     [ swap ] dip swap 55296 - 1024 * swap 56320 - + 65536 +
     [ nip ] dip
   ] ;
-}
 
-\ Parse a unicode escape (after \u has been consumed).
-\ Handles surrogate pairs.
-parse-unicode-escape: ( scanner -- scanner str ) [
-  parse-hex4
-  dup 55296 >= over 56319 <= and [ (json-low-surrogate) ] when
-  >char
-] ;
+  \ Parse a unicode escape (after \u has been consumed).
+  \ Handles surrogate pairs.
+  parse-unicode-escape: ( scanner -- scanner str ) [
+    parse-hex4
+    dup 55296 >= over 56319 <= and [ (json-low-surrogate) ] when
+    >char
+  ] ;
 
-\ Process a single backslash escape (scanner positioned after the backslash).
-\ Returns advanced scanner and the unescaped character string.
-parse-escape: ( scanner -- scanner str ) [
-  dup at-end? [ "unterminated JSON escape" (json-error) ] when
-  dup peek
-  dup "\"" = [ drop advance "\"" ]
-  [ dup "\\" = [ drop advance "\\" ]
-    [ dup "/" = [ drop advance "/" ]
-      [ dup "b" = [ drop advance 8 >char ]
-        [ dup "f" = [ drop advance 12 >char ]
-          [ dup "n" = [ drop advance "\n" ]
-            [ dup "r" = [ drop advance "\r" ]
-              [ dup "t" = [ drop advance "\t" ]
-                [ dup "u" = [
-                    drop advance parse-unicode-escape
-                  ]
-                  \ The scanner sits on the escape character, so the backslash is one before it.
-                  [ "\\" swap #append swap position>> 1 - swap
-                    "invalid JSON escape: " over #append (json-text-error-at)
-                  ]
-                  if
+  \ Process a single backslash escape (scanner positioned after the backslash).
+  \ Returns advanced scanner and the unescaped character string.
+  parse-escape: ( scanner -- scanner str ) [
+    dup at-end? [ "unterminated JSON escape" (json-error) ] when
+    dup peek
+    dup "\"" = [ drop advance "\"" ]
+    [ dup "\\" = [ drop advance "\\" ]
+      [ dup "/" = [ drop advance "/" ]
+        [ dup "b" = [ drop advance 8 >char ]
+          [ dup "f" = [ drop advance 12 >char ]
+            [ dup "n" = [ drop advance "\n" ]
+              [ dup "r" = [ drop advance "\r" ]
+                [ dup "t" = [ drop advance "\t" ]
+                  [ dup "u" = [
+                      drop advance parse-unicode-escape
+                    ]
+                    \ The scanner sits on the escape character, so the backslash is one before it.
+                    [ "\\" swap #append swap position>> 1 - swap
+                      "invalid JSON escape: " over #append (json-text-error-at)
+                    ]
+                    if
+                  ] if
                 ] if
               ] if
             ] if
@@ -119,220 +117,220 @@ parse-escape: ( scanner -- scanner str ) [
         ] if
       ] if
     ] if
-  ] if
-] ;
+  ] ;
 
-\ Parse a JSON string (scanner positioned at opening quote).
-parse-json-string: ( scanner -- scanner str ) [
-  dup position>> swap  \ the opening quote's offset stays under the loop
-  advance              \ consume opening "
-  ""                   \ accumulator
-  [
-    over peek dup f =
-    [ drop f ]
-    [ "\"" = not ]
+  \ Parse a JSON string (scanner positioned at opening quote).
+  parse-json-string: ( scanner -- scanner str ) [
+    dup position>> swap  \ the opening quote's offset stays under the loop
+    advance              \ consume opening "
+    ""                   \ accumulator
+    [
+      over peek dup f =
+      [ drop f ]
+      [ "\"" = not ]
+      if
+    ]
+    [
+      over peek "\\" = [
+        swap advance parse-escape  \ accum scanner' char
+        [ swap ] dip #append       \ scanner' (accum++char)
+      ] [
+        over peek          \ scanner accum char
+        #append            \ scanner (accum++char)
+        swap advance swap  \ scanner' (accum++char)
+      ] if
+    ] while
+    over peek "\"" =
+    [ swap advance swap [ nip ] dip ]
+    [ 2drop "unterminated JSON string" (json-error-at) ]
     if
-  ]
-  [
-    over peek "\\" = [
-      swap advance parse-escape  \ accum scanner' char
-      [ swap ] dip #append       \ scanner' (accum++char)
-    ] [
-      over peek          \ scanner accum char
-      #append            \ scanner (accum++char)
-      swap advance swap  \ scanner' (accum++char)
-    ] if
-  ] while
-  over peek "\"" =
-  [ swap advance swap [ nip ] dip ]
-  [ 2drop "unterminated JSON string" (json-error-at) ]
-  if
-] ;
+  ] ;
 
-\ Parse a JSON number
-json-num-char?: ( str -- ? ) [
-  dup digit?
-  swap dup "." = swap dup "-" = swap dup "+" = swap dup "e" = swap "E" = or or or or or
-] ;
+  json-num-char?: ( str -- ? ) [
+    dup digit?
+    swap dup "." = swap dup "-" = swap dup "+" = swap dup "e" = swap "E" = or or or or or
+  ] ;
 
-\ Check if a number string contains a float indicator (., e, E)
-json-float?: ( str -- ? ) [
-  dup "." #index-of
-  swap dup "e" #index-of
-  swap "E" #index-of
-  or or
-] ;
+  \ Check if a number string contains a float indicator (., e, E)
+  json-float?: ( str -- ? ) [
+    dup "." #index-of
+    swap dup "e" #index-of
+    swap "E" #index-of
+    or or
+  ] ;
 
-parse-json-number: ( scanner -- scanner value ) [
-  dup position>> swap
-  [ json-num-char? ] take-while
-  dup "" = [ 2drop "unexpected character in JSON" (json-error-at) ] when
+  \ Parse a JSON number
+  parse-json-number: ( scanner -- scanner value ) [
+    dup position>> swap
+    [ json-num-char? ] take-while
+    dup "" = [ 2drop "unexpected character in JSON" (json-error-at) ] when
 
-  dup (json-number-text?) not [
-    nip "invalid JSON number '" over #append "'" #append (json-text-error-at)
-  ] when
+    dup (json-number-text?) not [
+      nip "invalid JSON number '" over #append "'" #append (json-text-error-at)
+    ] when
 
-  [ nip ] dip
-  dup json-float?
-  [ >float ]
-  [ parse-integer ]
-  if
-] ;
+    [ nip ] dip
+    dup json-float?
+    [ >float ]
+    [ parse-integer ]
+    if
+  ] ;
 
-\ Emit a 4-digit uppercase hex string for a codepoint <= 0xFFFF.
-emit-hex4: ( n -- str ) [
-  16 >string-base uppercase
-  dup #len 4 swap - "0" swap repeat swap #append
-] ;
+  \ Emit a 4-digit uppercase hex string for a codepoint <= 0xFFFF.
+  emit-hex4: ( n -- str ) [
+    16 >string-base uppercase
+    dup #len 4 swap - "0" swap repeat swap #append
+  ] ;
 
-\ Escape a single character as JSON string content.
-json-escape-char: ( char -- str ) [
-  dup "\"" = [ drop "\\\"" ]
-  [ dup "\\" = [ drop "\\\\" ]
-    [ dup 8 >char = [ drop "\\b" ]
-      [ dup 12 >char = [ drop "\\f" ]
-        [ dup "\n" = [ drop "\\n" ]
-          [ dup "\r" = [ drop "\\r" ]
-            [ dup "\t" = [ drop "\\t" ]
-              [ dup >codepoint 32 < [
-                  >codepoint emit-hex4 "\\u" swap #append
-                ] [ ] if
+  \ Escape a single character as JSON string content.
+  json-escape-char: ( char -- str ) [
+    dup "\"" = [ drop "\\\"" ]
+    [ dup "\\" = [ drop "\\\\" ]
+      [ dup 8 >char = [ drop "\\b" ]
+        [ dup 12 >char = [ drop "\\f" ]
+          [ dup "\n" = [ drop "\\n" ]
+            [ dup "\r" = [ drop "\\r" ]
+              [ dup "\t" = [ drop "\\t" ]
+                [ dup >codepoint 32 < [
+                    >codepoint emit-hex4 "\\u" swap #append
+                  ] [ ] if
+                ] if
               ] if
             ] if
           ] if
         ] if
       ] if
     ] if
-  ] if
-] ;
+  ] ;
 
-json-indent: ( level -- str ) [
-  2 * " " swap repeat
-] ;
+  json-indent: ( level -- str ) [
+    2 * " " swap repeat
+  ] ;
 
-emit-json-quoted-string: ( str -- str ) [
-  json-escape "\"" swap #append "\"" #append
-] ;
+  emit-json-quoted-string: ( str -- str ) [
+    json-escape "\"" swap #append "\"" #append
+  ] ;
 
-emit-json-array-item-compact: ( value indent -- str ) [
-  f swap emit-json-value
-] ;
+  emit-json-array-item-compact: ( value indent -- str ) [
+    f swap emit-json-value
+  ] ;
 
-emit-json-array-item-pretty: ( value indent -- str ) [
-  [ t swap emit-json-value ] keep
-  json-indent swap #append
-] ;
+  emit-json-array-item-pretty: ( value indent -- str ) [
+    [ t swap emit-json-value ] keep
+    json-indent swap #append
+  ] ;
 
-emit-json-array-items-compact: ( array indent -- array ) [
-  [ emit-json-array-item-compact ] curry #map #collect
-] ;
+  emit-json-array-items-compact: ( array indent -- array ) [
+    [ emit-json-array-item-compact ] curry #map #collect
+  ] ;
 
-emit-json-array-items-pretty: ( array indent -- array ) [
-  1 + [ emit-json-array-item-pretty ] curry #map #collect
-] ;
+  emit-json-array-items-pretty: ( array indent -- array ) [
+    1 + [ emit-json-array-item-pretty ] curry #map #collect
+  ] ;
 
-emit-json-check-key: ( key -- key ) [
-  dup string? [
-  ] [
-    dup symbol? not [ dup "string or symbol" throw-type-error ] when
-  ] if
-] ;
-
-emit-json-key-value-pair: ( key hash -- pair ) [
-  2dup swap @get nip 2 array-n
-] ;
-
-emit-json-object-pairs: ( hash indent -- array ) [
-  drop
-  dup @keys [ >string ] #sort-by
-  swap [ emit-json-key-value-pair ] curry #map #collect
-] ;
-
-emit-json-object-pair-compact: ( pair indent -- str ) [
-  over 0 #nth emit-json-check-key >string emit-json-quoted-string ":" #append
-  2 pick-n 1 #nth f 3 pick-n emit-json-value #append
-  2nip
-] ;
-
-emit-json-object-pair-pretty: ( pair indent -- str ) [
-  over 0 #nth emit-json-check-key >string emit-json-quoted-string ": " #append
-  2 pick-n 1 #nth t 3 pick-n emit-json-value #append
-  swap json-indent swap #append
-  nip
-] ;
-
-emit-json-object-items-compact: ( hash indent -- array ) [
-  [ emit-json-object-pairs ] keep
-  [ emit-json-object-pair-compact ] curry #map #collect
-] ;
-
-emit-json-object-items-pretty: ( hash indent -- array ) [
-  [ emit-json-object-pairs ] keep
-  1 + [ emit-json-object-pair-pretty ] curry #map #collect
-] ;
-
-emit-json-array-compact: ( array indent -- str ) [
-  emit-json-array-items-compact
-  "," #join "[" swap #append "]" #append
-] ;
-
-emit-json-array-pretty: ( array indent -- str ) [
-  over #len 0 = [ 2drop "[]" ] [
-    [ emit-json-array-items-pretty ",\n" #join ] keep
-    swap "[\n" swap #append
-    "\n" #append
-    swap json-indent #append
-    "]" #append
-  ] if
-] ;
-
-emit-json-object-compact: ( hash indent -- str ) [
-  emit-json-object-items-compact
-  "," #join "{" swap #append "}" #append
-] ;
-
-emit-json-object-pretty: ( hash indent -- str ) [
-  over @keys #empty? [ 2drop "{}" ] [
-    [ emit-json-object-items-pretty ",\n" #join ] keep
-    swap "{\n" swap #append
-    "\n" #append
-    swap json-indent #append
-    "}" #append
-  ] if
-] ;
-
-emit-json-value: stack-recursive ( value pretty? indent -- str ) [
-  2 pick-n string? [
-    swap 2drop emit-json-quoted-string
-  ] [
-    2 pick-n array? [
-      1 pick-n
-      [ swap drop emit-json-array-pretty ]
-      [ swap drop emit-json-array-compact ]
-      if
+  emit-json-check-key: ( key -- key ) [
+    dup string? [
     ] [
-      2 pick-n hash? [
+      dup symbol? not [ dup "string or symbol" throw-type-error ] when
+    ] if
+  ] ;
+
+  emit-json-key-value-pair: ( key hash -- pair ) [
+    2dup swap @get nip 2 array-n
+  ] ;
+
+  emit-json-object-pairs: ( hash indent -- array ) [
+    drop
+    dup @keys [ >string ] #sort-by
+    swap [ emit-json-key-value-pair ] curry #map #collect
+  ] ;
+
+  emit-json-object-pair-compact: ( pair indent -- str ) [
+    over 0 #nth emit-json-check-key >string emit-json-quoted-string ":" #append
+    2 pick-n 1 #nth f 3 pick-n emit-json-value #append
+    2nip
+  ] ;
+
+  emit-json-object-pair-pretty: ( pair indent -- str ) [
+    over 0 #nth emit-json-check-key >string emit-json-quoted-string ": " #append
+    2 pick-n 1 #nth t 3 pick-n emit-json-value #append
+    swap json-indent swap #append
+    nip
+  ] ;
+
+  emit-json-object-items-compact: ( hash indent -- array ) [
+    [ emit-json-object-pairs ] keep
+    [ emit-json-object-pair-compact ] curry #map #collect
+  ] ;
+
+  emit-json-object-items-pretty: ( hash indent -- array ) [
+    [ emit-json-object-pairs ] keep
+    1 + [ emit-json-object-pair-pretty ] curry #map #collect
+  ] ;
+
+  emit-json-array-compact: ( array indent -- str ) [
+    emit-json-array-items-compact
+    "," #join "[" swap #append "]" #append
+  ] ;
+
+  emit-json-array-pretty: ( array indent -- str ) [
+    over #len 0 = [ 2drop "[]" ] [
+      [ emit-json-array-items-pretty ",\n" #join ] keep
+      swap "[\n" swap #append
+      "\n" #append
+      swap json-indent #append
+      "]" #append
+    ] if
+  ] ;
+
+  emit-json-object-compact: ( hash indent -- str ) [
+    emit-json-object-items-compact
+    "," #join "{" swap #append "}" #append
+  ] ;
+
+  emit-json-object-pretty: ( hash indent -- str ) [
+    over @keys #empty? [ 2drop "{}" ] [
+      [ emit-json-object-items-pretty ",\n" #join ] keep
+      swap "{\n" swap #append
+      "\n" #append
+      swap json-indent #append
+      "}" #append
+    ] if
+  ] ;
+
+  emit-json-value: stack-recursive ( value pretty? indent -- str ) [
+    2 pick-n string? [
+      swap 2drop emit-json-quoted-string
+    ] [
+      2 pick-n array? [
         1 pick-n
-        [ swap drop emit-json-object-pretty ]
-        [ swap drop emit-json-object-compact ]
+        [ swap drop emit-json-array-pretty ]
+        [ swap drop emit-json-array-compact ]
         if
       ] [
-        2 pick-n boolean? [
-          swap 2drop [ "true" ] [ "false" ] if
+        2 pick-n hash? [
+          1 pick-n
+          [ swap drop emit-json-object-pretty ]
+          [ swap drop emit-json-object-compact ]
+          if
         ] [
-          2 pick-n option:none? [
-            drop drop drop "null"
+          2 pick-n boolean? [
+            swap 2drop [ "true" ] [ "false" ] if
           ] [
-            2 pick-n fixnum? [
-              swap 2drop >string
+            2 pick-n option:none? [
+              drop drop drop "null"
             ] [
-              2 pick-n bignum? [
+              2 pick-n fixnum? [
                 swap 2drop >string
               ] [
-                2 pick-n float? [
+                2 pick-n bignum? [
                   swap 2drop >string
                 ] [
-                  2 pick-n "JSON-serializable value" throw-type-error
+                  2 pick-n float? [
+                    swap 2drop >string
+                  ] [
+                    2 pick-n "JSON-serializable value" throw-type-error
+                  ] if
                 ] if
               ] if
             ] if
@@ -340,73 +338,73 @@ emit-json-value: stack-recursive ( value pretty? indent -- str ) [
         ] if
       ] if
     ] if
-  ] if
-] ;
+  ] ;
 
-\ Parse a JSON value (scanner positioned at or before the value).
-\ Loop invariants: object = hash scanner, array = array scanner
-parse-json-value: stack-recursive ( scanner -- scanner value ) [
-  skip-ws
-  dup at-end? [ "unexpected end of JSON input" (json-error) ] when
-  dup peek
-  dup "\"" = [ drop parse-json-string ]
-  [ dup "{" = [ drop
-      advance skip-ws  \ consume {, scanner on top
-      M{ } swap        \ mmap scanner
-      [ dup peek "}" = not ]
-      [
-        skip-ws
-        dup peek "\"" = [
-          parse-json-string  \ hash scanner' key
-        ] [
-          "expected string key in JSON object" (json-error)
-        ] if
-        swap  \ hash key scanner'
-        skip-ws dup peek ":" = [
-          advance skip-ws
-        ] [
-          "expected ':' after object key" (json-error)
-        ] if
-        parse-json-value    \ hash key scanner'' value
-        swap [ @set! ] dip  \ hash' scanner''
-        skip-ws
-        dup peek "," = [
-          dup position>> swap advance skip-ws  \ hash comma scanner
-          dup peek "}" = [ drop "trailing comma in JSON object" (json-error-at) ] [ nip ] if
-        ] [
-          dup peek "}" = not [ "expected ',' or '}'" (json-error) ] when
-        ] if
-      ] while
-      advance swap >hash  \ scanner hash
-    ]
-    [ dup "[" = [ drop
-        advance skip-ws  \ consume [, scanner on top
-        V{ } swap        \ vec scanner
-        [ dup peek "]" = not ]
+  \ Parse a JSON value (scanner positioned at or before the value).
+  \ Loop invariants: object = hash scanner, array = array scanner
+  parse-json-value: stack-recursive ( scanner -- scanner value ) [
+    skip-ws
+    dup at-end? [ "unexpected end of JSON input" (json-error) ] when
+    dup peek
+    dup "\"" = [ drop parse-json-string ]
+    [ dup "{" = [ drop
+        advance skip-ws  \ consume {, scanner on top
+        M{ } swap        \ mmap scanner
+        [ dup peek "}" = not ]
         [
-          parse-json-value     \ array scanner' value
-          swap [ #push! ] dip  \ array' scanner'
+          skip-ws
+          dup peek "\"" = [
+            parse-json-string  \ hash scanner' key
+          ] [
+            "expected string key in JSON object" (json-error)
+          ] if
+          swap  \ hash key scanner'
+          skip-ws dup peek ":" = [
+            advance skip-ws
+          ] [
+            "expected ':' after object key" (json-error)
+          ] if
+          parse-json-value    \ hash key scanner'' value
+          swap [ @set! ] dip  \ hash' scanner''
           skip-ws
           dup peek "," = [
-            dup position>> swap advance skip-ws  \ array comma scanner
-            dup peek "]" = [ drop "trailing comma in JSON array" (json-error-at) ] [ nip ] if
+            dup position>> swap advance skip-ws  \ hash comma scanner
+            dup peek "}" = [ drop "trailing comma in JSON object" (json-error-at) ] [ nip ] if
           ] [
-            dup peek "]" = not [ "expected ',' or ']'" (json-error) ] when
+            dup peek "}" = not [ "expected ',' or '}'" (json-error) ] when
           ] if
         ] while
-        advance swap >array  \ scanner array
+        advance swap >hash  \ scanner hash
       ]
-      [ dup "t" = [ drop "true" expect t ]
-        [ dup "f" = [ drop "false" expect f ]
-          [ dup "n" = [ drop "null" expect option:none ]
-            [ drop parse-json-number ]
-            if
+      [ dup "[" = [ drop
+          advance skip-ws  \ consume [, scanner on top
+          V{ } swap        \ vec scanner
+          [ dup peek "]" = not ]
+          [
+            parse-json-value     \ array scanner' value
+            swap [ #push! ] dip  \ array' scanner'
+            skip-ws
+            dup peek "," = [
+              dup position>> swap advance skip-ws  \ array comma scanner
+              dup peek "]" = [ drop "trailing comma in JSON array" (json-error-at) ] [ nip ] if
+            ] [
+              dup peek "]" = not [ "expected ',' or ']'" (json-error) ] when
+            ] if
+          ] while
+          advance swap >array  \ scanner array
+        ]
+        [ dup "t" = [ drop "true" expect t ]
+          [ dup "f" = [ drop "false" expect f ]
+            [ dup "n" = [ drop "null" expect option:none ]
+              [ drop parse-json-number ]
+              if
+            ] if
           ] if
         ] if
       ] if
     ] if
-  ] if
-] ;
+  ] ;
+}
 
 \ -- Public API --
 
@@ -458,4 +456,4 @@ emit-json-pretty: ( value -- str ) [
   t 0 emit-json-value
 ] ;
 
-pragma{ lint-suppress: { broad-import: complex-word-undocumented: dead-definition: deep-nesting: import-ordering: missing-doc-comment: missing-type-annotation: } }
+pragma{ lint-suppress: { broad-import: dead-definition: deep-nesting: import-ordering: missing-type-annotation: } }

@@ -2,7 +2,7 @@
 
 use "ffi" ;
 
-\\ Bind sqlite3 functions via dynamic FFI against system libsqlite3.
+\ Bind sqlite3 functions via dynamic FFI against system libsqlite3.
 "sqlite3" lib-open ffi-def{
   (open):       "sqlite3_open" ffi{ cstring out-ptr:sqlite3 -> i32 }
   (close-v2):   "sqlite3_close_v2" ffi{ ptr -> i32 }
@@ -28,8 +28,13 @@ use "ffi" ;
   (db-handle):     "sqlite3_db_handle" ffi{ ptr -> ptr }
 } call "sqlite-raw" swap >module reexport
 
-SQLITE_OK:   ( -- fixnum ) 0 ;
-SQLITE_ROW:  ( -- fixnum ) 100 ;
+\\ SQLite's result code for success.
+SQLITE_OK: ( -- fixnum ) 0 ;
+
+\\ SQLite's result code from a step that produced a row.
+SQLITE_ROW: ( -- fixnum ) 100 ;
+
+\\ SQLite's result code from a step that finished the statement.
 SQLITE_DONE: ( -- fixnum ) 101 ;
 
 \ Handle types
@@ -41,6 +46,9 @@ db-handle: virtual{ resource } ;
 stmt-handle: virtual{ resource } ;
 
 \ Error handling
+
+\\ The error type raised when SQLite returns a failure code. The message is SQLite's own error
+\\ text, and the data is the result code.
 ESqliteError: ( -- sym ) [ sqlite-error: ] ;
 
 \\ Check that a return code is SQLITE_OK; throw ESqliteError with errmsg otherwise.
@@ -71,24 +79,39 @@ open: ( path -- db-handle ) [
 close-db: ( db-handle -- ) [ unmake-db-handle resource-close ] ;
 
 \\ Open a database for the duration of a quotation, closing it on exit.
+\\
+\\   ":memory:" [ "SELECT 1 AS n" { } query-hash #collect #first ] using-db
+\\   => H{ n: 1 }
 using-db: ( ..a path: string quot: ( ..a db: db-handle -- ..b ) -- ..b ) [ [ open ] dip over [ close-db ] curry cleanup ] ;
 
 \\ Deprecated alias of `using-db`.
+\\
+\\   ":memory:" [ "SELECT 1 AS n" { } query-hash #collect #first ] with-db
+\\   => H{ n: 1 }
 with-db: deprecated ( ..a path: string quot: ( ..a db: db-handle -- ..b ) -- ..b ) [ using-db ] ;
 
 \\ Prepare a statement for the duration of a quotation, finalizing it on exit.
+\\
+\\   ":memory:" [ "SELECT ?1 + 1 AS n" [ dup 1 41 bind step-hash ] using-stmt ] using-db
+\\   => <option:some option-payload{ value: H{ n: 42 } }>
 using-stmt: ( ..a db: db-handle sql: string quot: ( ..a stmt: stmt-handle -- ..b ) -- ..b ) [
   [ [ unmake-db-handle ] dip -1 0 (prepare-v2) over (check-ok-stmt) >stmt-handle ] dip
   over [ unmake-stmt-handle resource-close ] curry cleanup
 ] ;
 
 \\ Deprecated alias of `using-stmt`.
+\\
+\\   ":memory:" [ "SELECT ?1 + 1 AS n" [ dup 1 41 bind step-hash ] with-stmt ] using-db
+\\   => <option:some option-payload{ value: H{ n: 42 } }>
 with-stmt: deprecated ( ..a db: db-handle sql: string quot: ( ..a stmt: stmt-handle -- ..b ) -- ..b ) [ using-stmt ] ;
 
 \ Polymorphic parameter binding
 
 \\ Bind a value to a prepared statement parameter by index (1-based).
 \\ Dispatches on the value's type: fixnum, float, string, byte-array, or option:none.
+\\
+\\   ":memory:" [ "SELECT ?1 AS s" [ dup 1 "hi" bind step-hash ] using-stmt ] using-db
+\\   => <option:some option-payload{ value: H{ s: "hi" } }>
 bind: override ( stmt i value -- ) [ [ unmake-stmt-handle ] 2dip (bind) ] ;
 
 \\ Bind against the unwrapped raw statement resource.
@@ -223,6 +246,13 @@ step-array: ( stmt -- option ) [
 
 \\ Execute a SQL statement with parameters, discarding all results.
 \\ Use for INSERT, UPDATE, DELETE, and DDL statements.
+\\
+\\   ":memory:" [
+\\     dup "CREATE TABLE t (x INTEGER)" { } execute
+\\     dup "INSERT INTO t VALUES (?1)" { 7 } execute
+\\     "SELECT x FROM t" { } query-hash #collect
+\\   ] using-db
+\\   => { H{ x: 7 } }
 execute: ( db sql params -- ) [
   [ [ unmake-stmt-handle ] dip over swap (bind-params) (step-until-done) ] curry
   using-stmt
@@ -245,6 +275,9 @@ execute: ( db sql params -- ) [
 
 \\ Query returning a lazy iterator of hash rows. Prepares and binds the statement,
 \\ then returns a callback iterator that steps through results and finalizes on cleanup.
+\\
+\\   ":memory:" [ "SELECT 1 AS a, 'b' AS b" { } query-hash #collect ] using-db
+\\   => { H{ b: "b" a: 1 } }
 query-hash: ( db sql params -- iterator ) [
   (query-prepare-bind) >stmt-handle
   dup [ step-hash ] curry
@@ -254,6 +287,9 @@ query-hash: ( db sql params -- iterator ) [
 
 \\ Query returning a lazy iterator of array rows. Same lifecycle as query-hash
 \\ but each row is an array of option values.
+\\
+\\   ":memory:" [ "SELECT ?1, NULL" { 3 } query-array #collect ] using-db
+\\   => { { <option:some option-payload{ value: 3 }> <option:none none:> } }
 query-array: ( db sql params -- iterator ) [
   (query-prepare-bind) >stmt-handle
   dup [ step-array ] curry
@@ -270,7 +306,14 @@ query-array: ( db sql params -- iterator ) [
 \ Transaction support
 
 \\ Execute a quotation inside a transaction. Commits on success, rolls back on error.
-\\ The quotation receives db on the stack.
+\\ The quotation receives db on the stack. A rollback rethrows the error.
+\\
+\\   ":memory:" [
+\\     dup "CREATE TABLE t (x INTEGER)" { } execute
+\\     dup [ "INSERT INTO t VALUES (1)" { } execute ] using-transaction
+\\     "SELECT count(*) AS n FROM t" { } query-hash #collect #first
+\\   ] using-db
+\\   => H{ n: 1 }
 using-transaction: ( ..a db: db-handle quot: ( ..a db: db-handle -- ..b ) -- ..b ) [
   over unmake-db-handle dup "BEGIN" 0 0 0 (exec) swap (check-ok)
   over [ unmake-db-handle dup "COMMIT" 0 0 0 (exec) swap (check-ok) ] curry
@@ -280,6 +323,13 @@ using-transaction: ( ..a db: db-handle quot: ( ..a db: db-handle -- ..b ) -- ..b
 ] ;
 
 \\ Deprecated alias of `using-transaction`.
+\\
+\\   ":memory:" [
+\\     dup "CREATE TABLE t (x INTEGER)" { } execute
+\\     dup [ "INSERT INTO t VALUES (1)" { } execute ] with-transaction
+\\     "SELECT count(*) AS n FROM t" { } query-hash #collect #first
+\\   ] using-db
+\\   => H{ n: 1 }
 with-transaction: deprecated ( ..a db: db-handle quot: ( ..a db: db-handle -- ..b ) -- ..b ) [ using-transaction ] ;
 
-pragma{ lint-suppress: { broad-import: complex-word-undocumented: dead-definition: missing-doc-comment: missing-type-annotation: non-kebab-case: orphaned-doc-comment: } }
+pragma{ lint-suppress: { broad-import: dead-definition: missing-type-annotation: non-kebab-case: } }

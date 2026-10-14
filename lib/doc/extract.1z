@@ -194,4 +194,4 @@ extract-doc-info-from-file: ( path -- doc-map line-map ) [
   swap (definition-lines-from-tokens)
 ] ;
 
-pragma{ lint-suppress: { complex-word-undocumented: dead-definition: import-ordering: missing-type-annotation: unused-import: } }
+pragma{ lint-suppress: { broad-import: complex-word-undocumented: dead-definition: import-ordering: missing-type-annotation: unused-import: } }

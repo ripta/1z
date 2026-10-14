@@ -156,6 +156,38 @@ Stack: [ ]
 Stack: [ { token{ kind: number: value: "-3.14" pos: 0 } } ]
 PASS: -3.14 value
 Stack: [ ]
+=== digit-led names ===
+Stack: [ ]
+Stack: [ { token{ kind: symbol: value: "1z-tokenize:" pos: 0 } } ]
+PASS: 1z-tokenize: one token
+Stack: [ { token{ kind: symbol: value: "1z-tokenize:" pos: 0 } } ]
+PASS: 1z-tokenize: kind
+Stack: [ token{ kind: symbol: value: "1z-tokenize:" pos: 0 } ]
+PASS: 1z-tokenize: value
+Stack: [ ]
+Stack: [ { token{ kind: word: value: "2dup" pos: 0 } } ]
+PASS: 2dup: one token
+Stack: [ { token{ kind: word: value: "2dup" pos: 0 } } ]
+PASS: 2dup kind
+Stack: [ token{ kind: word: value: "2dup" pos: 0 } ]
+PASS: 2dup value
+Stack: [ ]
+Stack: [ { token{ kind: word: value: "-1x" pos: 0 } } ]
+PASS: -1x kind
+Stack: [ token{ kind: word: value: "-1x" pos: 0 } ]
+PASS: -1x value
+Stack: [ ]
+Stack: [ { token{ kind: word: value: "1]" pos: 0 } } ]
+PASS: 1]: one token
+Stack: [ { token{ kind: word: value: "1]" pos: 0 } } ]
+PASS: 1] value
+Stack: [ ]
+Stack: [ { token{ kind: number: value: "0x1F" pos: 0 } token{ kind: newline: value: "
+" pos: 4 } } ]
+PASS: number before newline kind
+Stack: [ token{ kind: number: value: "0x1F" pos: 0 } ]
+PASS: number before newline value
+Stack: [ ]
 === symbols ===
 Stack: [ ]
 Stack: [ { token{ kind: symbol: value: "name:" pos: 0 } } ]

@@ -21,10 +21,16 @@
 \ --- Module-scope mutable counter ---
 
 (test-counts-storage): ( -- mmap ) parse-time [ [ counter: 0 passed: 0 failed: 0 skipped: 0 ] make-mutable-map ] ;
+
+\\ The running tallies for this process, as a mutable map with `counter:`, `passed:`, `failed:`,
+\\ and `skipped:` keys. `counter:` numbers every assertion and skip in order.
 test-counts: ( -- mmap ) [ (test-counts-storage) ] ;
 
 (section-state-storage): ( -- mmap ) parse-time [ [ current: f ] make-mutable-map ] ;
-section-state: ( -- mmap ) [ (section-state-storage) ] ;
+
+private{
+  section-state: ( -- mmap ) [ (section-state-storage) ] ;
+}
 
 (next-counter): ( -- n ) [
   test-counts counter: @get 1 +
@@ -148,6 +154,10 @@ target-os choose{
 
 \ --- Dynamic parameter and dispatch helper ---
 
+\\ The parameter holding the active reporter: a hash from event keys, such as `on-pass:` and
+\\ `on-fail:`, to quotations that each take the event's details hash. It defaults to plain
+\\ PASS/FAIL lines, or to TAP output when the ONEZ_TEST_REPORTER environment variable is "tap".
+\\ Bind it with `with-parameter` to report another way.
 test-reporter: ( -- param ) [ test-reporter: [ (select-reporter) ] make-parameter ] ;
 
 (fire-reporter): ( key details -- ) [
@@ -156,8 +166,10 @@ test-reporter: ( -- param ) [ test-reporter: [ (select-reporter) ] make-paramete
 
 \ --- Assertion words ---
 
-\ Core assertion: check equality, print PASS/FAIL with values on failure
-\ Stack: actual expected msg --
+\\ Pass when actual equals expected under `=`. A failure reports both values.
+\\
+\\   2 2 + 4 "two plus two" assert=
+\\   => PASS: two plus two
 assert=: ( actual expected msg -- ) [
   -rot>   \ msg actual expected
   2dup =  \ msg actual expected bool
@@ -183,17 +195,16 @@ assert=: ( actual expected msg -- ) [
   if
 ] ;
 
-\ Assert boolean is true
+\\ Pass when bool is exactly `t`. Any other truthy value fails.
 assert-true: ( bool msg -- ) [ t swap assert= ] ;
 
-\ Assert boolean is false
+\\ Pass when bool is `f`.
 assert-false: ( bool msg -- ) [ f swap assert= ] ;
 
-\ Assert quotation throws an error (any error).
-\
-\ We save msg to parameter, execute test with start marker; after execution,
-\ recover and check if TOS is :__OK__: (success) or something else (error).
+\\ Pass when calling quot throws any error. Whatever quot left on the stack is dropped either way.
 assert-error: ( quot msg -- ) [
+  \ We save msg to parameter, execute test with start marker; after execution,
+  \ recover and check if TOS is :__OK__: (success) or something else (error).
 
   \ Parameter to store test message during assert-error execution
   __assert_msg__: parameter{ [ "" ] } ;
@@ -244,9 +255,11 @@ assert-error: ( quot msg -- ) [
   ] with-parameter
 ] ;
 
-\ Assert quotation throws an error of a specific type.
-\
-\   [ 1 0 / ] division-by-zero: "division by zero" assert-error-type
+\\ Pass when calling quot throws an error whose type is expected-type. A different error type, or
+\\ no error at all, fails.
+\\
+\\   [ 1 0 / ] division-by-zero: "division by zero" assert-error-type
+\\   => PASS: division by zero
 assert-error-type: ( quot expected-type msg -- ) [
   __aet_msg__: parameter{ [ "" ] } ;
   __aet_expected__: parameter{ [ "" ] } ;
@@ -318,7 +331,8 @@ assert-error-type: ( quot expected-type msg -- ) [
   ] with-parameter
 ] ;
 
-\ Print section header
+\\ Start a named section, which closes the previous one. The default reporter prints the name as
+\\ a `=== msg ===` header.
 test-section: ( msg -- ) [
   section-state current: @get
   dup f = not
@@ -330,7 +344,7 @@ test-section: ( msg -- ) [
   on-section-start: swap (fire-reporter)
 ] ;
 
-\ Skip a test
+\\ Record a skipped test, with msg as both its description and the reason.
 skip: ( msg -- ) [
   (next-counter) swap
   H{ } swap description: swap @set
@@ -375,10 +389,12 @@ on:exit swap add-hook
 
 \ --- Fake clock ---
 
-\ Activate fake clock in the current task-scope
+\\ Switch the current task-scope's scheduler to a fake clock starting at 0, so sleeping tasks wake
+\\ only when `advance-clock` moves it. Throws outside a task-scope.
 fake-clock: ( -- ) [ native.fake-clock ] ;
 
-\ Advance the fake clock by the given duration
+\\ Move the fake clock forward by a duration, waking every sleeper whose deadline it reaches.
+\\ Throws when the clock is not fake.
 advance-clock: ( duration -- ) [ native.advance-clock ] ;
 
-pragma{ lint-suppress: { complex-word-undocumented: dead-definition: missing-doc-comment: missing-type-annotation: non-kebab-case: } }
+pragma{ lint-suppress: { dead-definition: missing-type-annotation: non-kebab-case: } }

@@ -22,11 +22,16 @@ PASS: imported user marker is a binding
 Stack: [ ]
 PASS: imported user marker stays parse-time
 Stack: [ ]
+Stack: [ "A user marker, which is both a bracket-less binding and parse-time." ]
+Stack: [ "A user marker, which is both a bracket-less binding and parse-time." "A user marker, which is both a bracket-less binding and parse-time." ]
+PASS: imported user marker keeps its doc comment
+Stack: [ ]
 PASS: imported bracketed word is not a binding
 Stack: [ ]
 PASS: imported bracketed word is not parse-time
 Stack: [ ]
 === local definitions ===
+Stack: [ ]
 Stack: [ ]
 Stack: [ ]
 Stack: [ ]
@@ -41,6 +46,8 @@ Stack: [ ]
 PASS: parse-time word is parse-time
 Stack: [ ]
 PASS: bracketed word is not parse-time
+Stack: [ ]
+PASS: marker keeps its doc comment
 Stack: [ ]
 === qualified access ===
 Stack: [ ]

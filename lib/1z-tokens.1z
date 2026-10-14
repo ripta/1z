@@ -277,8 +277,13 @@ use "conversions" ;
       (consume-exponent)
     ] if
     \ start-cp start-byte scanner'
-    (extract-value)
-    <rot- [ number: swap ] dip make-token
+    \ The interpreter splits tokens on whitespace alone, so digits running into any other
+    \ character, as in `1z-tokenize:` or `2dup`, are not a number. Leave them to the symbol and
+    \ word rules.
+    dup peek dup f = [ drop t ] [ whitespace? ] if [
+      (extract-value)
+      <rot- [ number: swap ] dip make-token
+    ] [ 3drop f ] if
   ] [ drop f ] if
 ] ;
 
@@ -320,9 +325,11 @@ use "conversions" ;
 
 \ --- Rule 13: open-brace (including compound forms) ---
 
-BRACE-PREFIXES: ( -- array ) const [
-  { "virtual{" "struct{" "pragma{" "method{" "match{" "enum{" "H{" "V{" "M{" "{" }
-] ;
+private{
+  BRACE-PREFIXES: ( -- array ) const [
+    { "virtual{" "struct{" "pragma{" "method{" "match{" "enum{" "H{" "V{" "M{" "{" }
+  ] ;
+}
 
 (try-brace-prefix): ( scanner prefixes -- new-scanner token | f ) [
   dup #empty? [ 2drop f ] [
@@ -427,4 +434,4 @@ BRACE-PREFIXES: ( -- array ) const [
   <1z-lexer> tokenize
 ] ;
 
-pragma{ lint-suppress: { broad-import: dead-definition: deep-nesting: import-ordering: missing-doc-comment: missing-type-annotation: non-kebab-case: orphaned-doc-comment: } }
+pragma{ lint-suppress: { broad-import: dead-definition: deep-nesting: import-ordering: missing-type-annotation: } }
