@@ -732,12 +732,12 @@ fn nativeWordMarkers(ctx: *Context) anyerror!void {
     };
 
     const word_markers = mod_word.markers;
-    const result = try alloc.alloc(Value, word_markers.len);
+    const result = try ctx.allocator.alloc(Value, word_markers.len);
     for (word_markers, 0..) |mk, i| {
         result[i] = .{ .marker = @constCast(mk) };
     }
 
-    try helpers.pushAdoptedArray(ctx, alloc, result);
+    try helpers.pushAdoptedArray(ctx, ctx.allocator, result);
 }
 
 /// native? ( module name -- ? )

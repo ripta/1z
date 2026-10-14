@@ -133,7 +133,7 @@ fn nativeArrayN(ctx: *Context) anyerror!void {
     const count: usize = @intCast(n);
     if (count > ctx.stack.items.items.len) return error.StackUnderflow;
 
-    const alloc = ctx.quotationAllocator();
+    const alloc = ctx.allocator;
     const arr = try alloc.alloc(Value, count);
 
     var i: usize = count;
@@ -257,6 +257,23 @@ test "nip-n keeps lower prefix intact" {
     const bottom = try ctx.stack.pop();
     try std.testing.expectEqual(@as(i64, 100), top.fixnum);
     try std.testing.expectEqual(@as(i64, 7), bottom.fixnum);
+}
+
+test "array-n builds its array on the shared allocator, not the arena" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    try ctx.stack.push(.{ .fixnum = 1 });
+    try ctx.stack.push(.{ .fixnum = 2 });
+    try ctx.stack.push(.{ .fixnum = 2 });
+
+    try nativeArrayN(&ctx);
+
+    const result = try ctx.stack.pop();
+    defer container_backing.releaseValue(result);
+
+    try std.testing.expectEqual(@as(usize, 2), result.array.items.len);
+    try std.testing.expectEqual(ctx.allocator.ptr, result.array.header.allocator.ptr);
 }
 
 test "nip-n rejects dropping past stack bottom" {

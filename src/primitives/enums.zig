@@ -544,7 +544,7 @@ fn nativeEnumVariants(ctx: *Context) anyerror!void {
         return error.NameError;
     };
 
-    const alloc = ctx.quotationAllocator();
+    const alloc = ctx.allocator;
     const result = try alloc.alloc(Value, vtypes.len);
     for (vtypes, 0..) |vt, i| {
         result[i] = value_mod.symbolValue(vt.name);

@@ -1,0 +1,41 @@
+\ Container literals a compiled word pushes outlive the task that pushed them.
+\
+\ Each compiled literal site decodes once onto the root's long-lived allocator, and every push
+\ shares that one value. A task that stores a pushed literal in a shared vector leaves it readable
+\ after the task is reaped.
+
+use "testing" ;
+
+"literals pushed inside a task" test-section
+
+pushed-literals: V{ } ;
+
+push-literals: ( -- ) [
+  { "alpha" beta: 3 } pushed-literals swap #push! drop
+  H{ name: "gamma" kind: delta: } pushed-literals swap #push! drop
+] ;
+
+[
+  [ 50 [ push-literals ] times ] spawn drop
+  [ 50 [ push-literals ] times ] spawn drop
+] task-scope
+
+\ Churn the allocator so a freed task arena would be reused before the reads below.
+[
+  [ 200 [ { "churn" churn: } drop ] times ] spawn drop
+  [ 200 [ { "churn" churn: } drop ] times ] spawn drop
+] task-scope
+
+pushed-literals #len 200 "every push landed in the vector" assert=
+
+count-equal: ( expected -- n ) [ pushed-literals swap [ = ] curry #filter #collect #len ] ;
+
+{ "alpha" beta: 3 } count-equal 100 "every array literal survives its task" assert=
+H{ name: "gamma" kind: delta: } count-equal 100 "every hash literal survives its task" assert=
+
+"one value per literal site" test-section
+
+shared-literal: ( -- array ) [ { "shared" { nested: "inner" } } ] ;
+
+shared-literal shared-literal "two pushes of one site are equal" assert=
+pushed-literals 0 #nth pushed-literals 198 #nth "pushes from two tasks are equal" assert=

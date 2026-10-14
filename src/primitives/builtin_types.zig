@@ -248,11 +248,11 @@ fn nativeTypeMembers(ctx: *Context) anyerror!void {
     switch (val) {
         .type_val => |tv| {
             if (tv.member_types) |members| {
-                const arr = try ctx.quotationAllocator().alloc(value_mod.Value, members.len);
+                const arr = try ctx.allocator.alloc(value_mod.Value, members.len);
                 for (members, 0..) |member, i| {
                     arr[i] = .{ .type_val = @constCast(member) };
                 }
-                try helpers.pushAdoptedArray(ctx, ctx.quotationAllocator(), arr);
+                try helpers.pushAdoptedArray(ctx, ctx.allocator, arr);
             } else {
                 try ctx.stack.push(.{ .boolean = false });
             }
@@ -315,7 +315,7 @@ fn nativeDescriptorKind(ctx: *Context) anyerror!void {
 /// anon_struct's field names. Throws TypeMismatch on any other kind.
 fn nativeDescriptorFieldsRaw(ctx: *Context) anyerror!void {
     const desc = try popDescriptor(ctx);
-    const alloc = ctx.quotationAllocator();
+    const alloc = ctx.allocator;
     const fields: []const []const u8 = switch (desc.kind) {
         .struct_ => |sd| sd.fields,
         .ffi_struct => |fsd| fsd.fields,
@@ -339,7 +339,7 @@ fn nativeDescriptorFieldsRaw(ctx: *Context) anyerror!void {
 /// annotations (e.g., untyped struct).
 fn nativeDescriptorFieldTypesRaw(ctx: *Context) anyerror!void {
     const desc = try popDescriptor(ctx);
-    const alloc = ctx.quotationAllocator();
+    const alloc = ctx.allocator;
 
     // Struct and struct-backed virtual field types carry full constraint
     // elements; FFI struct fields are concrete C types.
@@ -433,7 +433,7 @@ fn nativeDescriptorParentRaw(ctx: *Context) anyerror!void {
 /// parameters or an unsupported kind.
 fn nativeDescriptorTypeParamsRaw(ctx: *Context) anyerror!void {
     const desc = try popDescriptor(ctx);
-    const alloc = ctx.quotationAllocator();
+    const alloc = ctx.allocator;
 
     const params: []const *const value_mod.TypeValue = switch (desc.kind) {
         .struct_ => |sd| sd.type_params,
@@ -466,15 +466,29 @@ fn nativeDescriptorVariantsRaw(ctx: *Context) anyerror!void {
             return error.TypeMismatch;
         },
     };
-    const alloc = ctx.quotationAllocator();
+    const alloc = ctx.allocator;
     const unit_tv = ctx.lookupBuiltinTypeValueByTag(.unit) orelse unreachable;
     const arr = try alloc.alloc(value_mod.Value, variants.len);
-    for (variants, 0..) |v, i| {
-        const pair = try alloc.alloc(value_mod.Value, 2);
-        pair[0] = value_mod.symbolValue(v.name);
-        pair[1] = .{ .type_val = if (v.type_val) |tv| @constCast(tv) else unit_tv };
-        arr[i] = .{ .array = try value_mod.Array.fromOwnedSlice(alloc, pair) };
+
+    {
+        var filled: usize = 0;
+        errdefer {
+            container_backing.releaseValues(arr[0..filled]);
+            alloc.free(arr);
+        }
+
+        for (variants, 0..) |v, i| {
+            const pair = try alloc.alloc(value_mod.Value, 2);
+            pair[0] = value_mod.symbolValue(v.name);
+            pair[1] = .{ .type_val = if (v.type_val) |tv| @constCast(tv) else unit_tv };
+            arr[i] = .{ .array = value_mod.Array.fromOwnedSlice(alloc, pair) catch |e| {
+                alloc.free(pair);
+                return e;
+            } };
+            filled = i + 1;
+        }
     }
+
     try helpers.pushAdoptedArray(ctx, alloc, arr);
 }
 
@@ -528,6 +542,7 @@ test "native type-members returns members for union types" {
     try nativeTypeMembers(&ctx);
 
     const result = try ctx.stack.pop();
+    defer container_backing.releaseValue(result);
     try testing.expect(result == .array);
     try testing.expectEqual(@as(usize, 2), result.array.items.len);
     try testing.expect(result.array.items[0] == .type_val);
@@ -585,6 +600,7 @@ test "descriptor-fields-raw returns struct field names" {
     try nativeDescriptorFieldsRaw(&ctx);
 
     const result = try ctx.stack.pop();
+    defer container_backing.releaseValue(result);
     try testing.expect(result == .array);
     try testing.expectEqual(@as(usize, 2), result.array.items.len);
     try testing.expectEqualStrings("x", result.array.items[0].string.bytes);
@@ -628,6 +644,7 @@ test "descriptor-field-types-raw returns typed struct field types" {
     try nativeDescriptorFieldTypesRaw(&ctx);
 
     const result = try ctx.stack.pop();
+    defer container_backing.releaseValue(result);
     try testing.expect(result == .array);
     try testing.expectEqual(@as(usize, 2), result.array.items.len);
     try testing.expect(result.array.items[0] == .type_val);
@@ -708,6 +725,7 @@ test "descriptor-variants-raw returns name/type pair arrays for enums" {
     try nativeDescriptorVariantsRaw(&ctx);
 
     const result = try ctx.stack.pop();
+    defer container_backing.releaseValue(result);
     try testing.expect(result == .array);
     try testing.expectEqual(@as(usize, 2), result.array.items.len);
     const first = result.array.items[0];

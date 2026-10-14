@@ -715,14 +715,23 @@ pub fn defineVirtualToHash(ctx: *Context, name: []const u8, vtype: *const Virtua
     });
 }
 
+/// Whether numeric tower promotion can turn `elem` into the expected type.
+fn canPromoteElement(elem: Value, expected: []const u8) bool {
+    if (std.mem.eql(u8, expected, "float")) return elem == .fixnum or elem == .bignum;
+    if (std.mem.eql(u8, expected, "bignum")) return elem == .fixnum;
+    return false;
+}
+
 /// Attempt numeric tower promotion of a single element to the expected type.
-/// Returns the promoted value, or null if promotion is not possible.
+/// Returns the promoted value, or null if promotion is not possible. A promoted bignum is an
+/// owned value on `alloc`, and the caller holds its creation reference.
 fn tryPromoteElement(alloc: Allocator, elem: Value, expected: []const u8) ?Value {
     if (std.mem.eql(u8, expected, "float")) {
         return switch (elem) {
             .fixnum => |i| .{ .float = @floatFromInt(i) },
             .bignum => |b| .{ .float = blk: {
                 const str = b.big.toConst().toStringAlloc(alloc, 10, .lower) catch break :blk std.math.nan(f64);
+                defer alloc.free(str);
                 break :blk std.fmt.parseFloat(f64, str) catch std.math.nan(f64);
             } },
             else => null,
@@ -731,9 +740,11 @@ fn tryPromoteElement(alloc: Allocator, elem: Value, expected: []const u8) ?Value
     if (std.mem.eql(u8, expected, "bignum")) {
         return switch (elem) {
             .fixnum => |i| blk: {
-                const big = BigIntManaged.initSet(alloc, i) catch return null;
-                const ptr = value_mod.boxBigInt(alloc, big) catch return null;
-                break :blk .{ .bignum = .{ .big = ptr } };
+                var big = BigIntManaged.initSet(alloc, i) catch return null;
+                break :blk value_mod.ownedBignumValue(alloc, big) catch {
+                    big.deinit();
+                    return null;
+                };
             },
             else => null,
         };
@@ -741,11 +752,90 @@ fn tryPromoteElement(alloc: Allocator, elem: Value, expected: []const u8) ?Value
     return null;
 }
 
+/// Promote the elements of `items` that miss `expected_tv`. Returns null when none needs it.
+/// Otherwise returns a fresh slice on `ctx.allocator` that holds one owning reference per slot,
+/// for the caller to adopt into an array.
+fn promoteItems(
+    ctx: *Context,
+    vt: *const VirtualType,
+    items: []const Value,
+    expected_tv: *const value_mod.TypeValue,
+    prefix: []const u8,
+) anyerror!?[]Value {
+    var promoted: ?[]Value = null;
+    var filled: usize = 0;
+    errdefer if (promoted) |pa| {
+        container_backing.releaseValues(pa[0..filled]);
+        ctx.allocator.free(pa);
+    };
+
+    for (items, 0..) |elem, i| {
+        const elem_tv = dispatch_mod.dispatchTypeValue(elem, ctx);
+        if (elem_tv == expected_tv) {
+            if (promoted) |pa| {
+                container_backing.retainValue(elem);
+                pa[i] = elem;
+                filled = i + 1;
+            }
+            continue;
+        }
+
+        const replacement = tryPromoteElement(ctx.allocator, elem, expected_tv.name) orelse {
+            helpers.setErrorContext(ctx, "{s}{s} element at index {d} has type {s}, expected {s}", .{ prefix, vt.name, i, elem_tv.name, expected_tv.name });
+            return error.TypeMismatch;
+        };
+
+        if (promoted == null) {
+            const pa = ctx.allocator.alloc(Value, items.len) catch {
+                container_backing.releaseValue(replacement);
+                return error.OutOfMemory;
+            };
+            @memcpy(pa[0..i], items[0..i]);
+            // Copied originals become new owning references; promoted elements are fresh.
+            container_backing.retainValues(pa[0..i]);
+            promoted = pa;
+        }
+
+        promoted.?[i] = replacement;
+        filled = i + 1;
+    }
+
+    return promoted;
+}
+
+/// Promote a vector's elements in place. The wrap keeps the same mutable backing, so the
+/// elements are validated first and a failed call leaves the vector untouched.
+fn promoteVectorInPlace(
+    ctx: *Context,
+    vt: *const VirtualType,
+    v: *value_mod.Vector,
+    expected_tv: *const value_mod.TypeValue,
+    prefix: []const u8,
+) anyerror!void {
+    v.header.lock();
+    defer v.header.unlock();
+
+    for (v.list.items, 0..) |elem, i| {
+        const elem_tv = dispatch_mod.dispatchTypeValue(elem, ctx);
+        if (elem_tv == expected_tv) continue;
+        if (!canPromoteElement(elem, expected_tv.name)) {
+            helpers.setErrorContext(ctx, "{s}{s} element at index {d} has type {s}, expected {s}", .{ prefix, vt.name, i, elem_tv.name, expected_tv.name });
+            return error.TypeMismatch;
+        }
+    }
+
+    for (v.list.items) |*slot| {
+        if (dispatch_mod.dispatchTypeValue(slot.*, ctx) == expected_tv) continue;
+        const replacement = tryPromoteElement(ctx.allocator, slot.*, expected_tv.name) orelse return error.OutOfMemory;
+        const displaced = slot.*;
+        slot.* = replacement;
+        container_backing.releaseValue(displaced);
+    }
+}
+
 /// Validate a single value against a parameterized type's element type,
 /// with numeric tower promotion. ( value tv -- promoted-value )
 fn typedValidateAndPromote(ctx: *Context) anyerror!void {
-    const alloc = ctx.quotationAllocator();
-
     const tv = try helpers.popTypeVal(ctx);
     const vt = tv.virtual_type.?;
 
@@ -770,7 +860,7 @@ fn typedValidateAndPromote(ctx: *Context) anyerror!void {
         return;
     }
 
-    if (tryPromoteElement(alloc, val, expected_tv.name)) |promoted| {
+    if (tryPromoteElement(ctx.allocator, val, expected_tv.name)) |promoted| {
         container_backing.releaseValue(val);
         try ctx.stack.pushMoved(promoted);
         return;
@@ -784,8 +874,6 @@ fn typedValidateAndPromote(ctx: *Context) anyerror!void {
 /// Validate all elements of a sequence against a parameterized type's
 /// element type, with numeric tower promotion. ( seq tv -- seq )
 fn typedValidateSeqElements(ctx: *Context) anyerror!void {
-    const alloc = ctx.quotationAllocator();
-
     const tv = try helpers.popTypeVal(ctx);
     const vt = tv.virtual_type.?;
 
@@ -809,79 +897,37 @@ fn typedValidateSeqElements(ctx: *Context) anyerror!void {
     }
 
     const expected_tv = params[0];
-    const items: []const Value = switch (seq) {
-        .array => |arr| arr.items,
-        .vector => |v| v.list.items,
-        else => {
-            try ctx.stack.pushMoved(seq);
-            return;
+    switch (seq) {
+        .array => |arr| {
+            const new_items = (try promoteItems(ctx, vt, arr.items, expected_tv, "")) orelse {
+                try ctx.stack.pushMoved(seq);
+                return;
+            };
+
+            const new_arr = value_mod.Array.fromOwnedSlice(ctx.allocator, new_items) catch |e| {
+                container_backing.releaseValues(new_items);
+                ctx.allocator.free(new_items);
+                return e;
+            };
+
+            // The promoted array replaces the popped original.
+            seq_owned = false;
+            container_backing.releaseValue(seq);
+            ctx.stack.pushMoved(.{ .array = new_arr }) catch |err| {
+                container_backing.releaseValue(.{ .array = new_arr });
+                return err;
+            };
         },
-    };
-
-    // For an array source, the promoted result becomes a fresh owned array,
-    // so copied originals are retained as they enter the new backing;
-    // promoted elements are fresh references either way. The retained copies
-    // drop on any error exit; `toOwnedSlice` empties the list on the success
-    // path, so this covers exactly the abandoned partial builds.
-    const seq_is_array = seq == .array;
-    var promoted_items: ?std.ArrayListUnmanaged(Value) = null;
-    errdefer if (seq_is_array) {
-        if (promoted_items) |*pi| container_backing.releaseValues(pi.items);
-    };
-    for (items, 0..) |elem, i| {
-        const actual_tv = dispatch_mod.dispatchTypeValue(elem, ctx);
-        if (actual_tv != expected_tv) {
-            if (tryPromoteElement(alloc, elem, expected_tv.name)) |promoted| {
-                if (promoted_items == null) {
-                    promoted_items = std.ArrayListUnmanaged(Value){};
-                    promoted_items.?.ensureTotalCapacity(alloc, items.len) catch return error.OutOfMemory;
-                    promoted_items.?.appendSlice(alloc, items[0..i]) catch return error.OutOfMemory;
-                    if (seq_is_array) container_backing.retainValues(promoted_items.?.items);
-                }
-                promoted_items.?.append(alloc, promoted) catch return error.OutOfMemory;
-            } else {
-                helpers.setErrorContext(ctx, "{s} element at index {d} has type {s}, expected {s}", .{ vt.name, i, actual_tv.name, expected_tv.name });
-                return error.TypeMismatch;
-            }
-        } else if (promoted_items) |*pi| {
-            if (seq_is_array) container_backing.retainValue(elem);
-            pi.append(alloc, elem) catch return error.OutOfMemory;
-        }
-    }
-
-    if (promoted_items) |*pi| {
-        switch (seq) {
-            .array => {
-                const new_items = pi.toOwnedSlice(alloc) catch return error.OutOfMemory;
-                const new_arr = value_mod.Array.fromOwnedSlice(alloc, new_items) catch |e| {
-                    container_backing.releaseValues(new_items);
-                    alloc.free(new_items);
-                    return e;
-                };
-                // The promoted array replaces the popped original.
-                seq_owned = false;
-                container_backing.releaseValue(seq);
-                ctx.stack.pushMoved(.{ .array = new_arr }) catch |err| {
-                    container_backing.releaseValue(.{ .array = new_arr });
-                    return err;
-                };
-            },
-            .vector => |v| {
-                v.list.items = pi.items;
-                v.list.capacity = pi.capacity;
-                try ctx.stack.pushMoved(.{ .vector = v });
-            },
-            else => try ctx.stack.pushMoved(seq),
-        }
-    } else {
-        try ctx.stack.pushMoved(seq);
+        .vector => |v| {
+            try promoteVectorInPlace(ctx, vt, v, expected_tv, "");
+            try ctx.stack.pushMoved(seq);
+        },
+        else => try ctx.stack.pushMoved(seq),
     }
 }
 
 /// Native dispatch helper for #nth! on typed vectors.
 fn typedNthMutDispatch(ctx: *Context) anyerror!void {
-    const alloc = ctx.quotationAllocator();
-
     const tv = try helpers.popTypeVal(ctx);
     const vt = tv.virtual_type.?;
 
@@ -903,7 +949,7 @@ fn typedNthMutDispatch(ctx: *Context) anyerror!void {
             const expected_tv = params[0];
             const actual_tv = dispatch_mod.dispatchTypeValue(elem, ctx);
             if (actual_tv != expected_tv) {
-                if (tryPromoteElement(alloc, elem, expected_tv.name)) |promoted| {
+                if (tryPromoteElement(ctx.allocator, elem, expected_tv.name)) |promoted| {
                     // The promoted replacement supersedes the popped original.
                     container_backing.releaseValue(elem);
                     elem = promoted;
@@ -934,8 +980,6 @@ fn typedNthMutDispatch(ctx: *Context) anyerror!void {
 
 /// Native dispatch helper for @set! on typed mutable maps.
 fn typedAtSetMutDispatch(ctx: *Context) anyerror!void {
-    const alloc = ctx.quotationAllocator();
-
     const tv = try helpers.popTypeVal(ctx);
     const vt = tv.virtual_type.?;
 
@@ -956,7 +1000,7 @@ fn typedAtSetMutDispatch(ctx: *Context) anyerror!void {
             const expected_tv = params[0];
             const actual_tv = dispatch_mod.dispatchTypeValue(new_value, ctx);
             if (actual_tv != expected_tv) {
-                if (tryPromoteElement(alloc, new_value, expected_tv.name)) |promoted| {
+                if (tryPromoteElement(ctx.allocator, new_value, expected_tv.name)) |promoted| {
                     // The promoted replacement supersedes the popped original.
                     container_backing.releaseValue(new_value);
                     new_value = promoted;
@@ -1032,8 +1076,6 @@ fn typedFreezeDispatch(ctx: *Context) anyerror!void {
 /// Like virtualWrapHelper but additionally validates the wrapped value's contents against the
 /// parameterized type's type_params[0], promoting numeric elements where the tower allows.
 fn virtualParameterizedWrapHelper(ctx: *Context) anyerror!void {
-    const alloc = ctx.quotationAllocator();
-
     const tv = try helpers.popTypeVal(ctx);
     const vt = tv.virtual_type.?;
 
@@ -1073,31 +1115,13 @@ fn virtualParameterizedWrapHelper(ctx: *Context) anyerror!void {
             const expected_tv = params[0];
             switch (val) {
                 .array => |arr| {
-                    var promoted_arr: ?[]Value = null;
-                    for (arr.items, 0..) |elem, i| {
-                        const elem_tv = dispatch_mod.dispatchTypeValue(elem, ctx);
-                        if (elem_tv != expected_tv) {
-                            if (tryPromoteElement(alloc, elem, expected_tv.name)) |promoted| {
-                                if (promoted_arr == null) {
-                                    promoted_arr = try alloc.alloc(Value, arr.items.len);
-                                    @memcpy(promoted_arr.?[0..i], arr.items[0..i]);
-                                    // Copied originals become new owning
-                                    // references; promoted elements are fresh.
-                                    container_backing.retainValues(promoted_arr.?[0..i]);
-                                }
-                                promoted_arr.?[i] = promoted;
-                            } else {
-                                if (promoted_arr) |pa| container_backing.releaseValues(pa[0..i]);
-                                helpers.setErrorContext(ctx, ">{s} element at index {d} has type {s}, expected {s}", .{ vt.name, i, elem_tv.name, expected_tv.name });
-                                return error.TypeMismatch;
-                            }
-                        } else if (promoted_arr) |pa| {
-                            container_backing.retainValue(elem);
-                            pa[i] = elem;
-                        }
-                    }
-                    if (promoted_arr) |pa| {
-                        const new_arr = try value_mod.Array.fromOwnedSlice(alloc, pa);
+                    if (try promoteItems(ctx, vt, arr.items, expected_tv, ">")) |new_items| {
+                        const new_arr = value_mod.Array.fromOwnedSlice(ctx.allocator, new_items) catch |e| {
+                            container_backing.releaseValues(new_items);
+                            ctx.allocator.free(new_items);
+                            return e;
+                        };
+
                         // Swap in the promoted array, dropping the popped
                         // original's reference.
                         container_backing.releaseValue(val);
@@ -1143,7 +1167,7 @@ fn virtualParameterizedWrapHelper(ctx: *Context) anyerror!void {
                         const elem = entry.value_ptr.*;
                         const elem_tv = dispatch_mod.dispatchTypeValue(elem, ctx);
                         if (elem_tv == expected_tv) continue;
-                        if (tryPromoteElement(alloc, elem, expected_tv.name) == null) {
+                        if (!canPromoteElement(elem, expected_tv.name)) {
                             helpers.setErrorContext(ctx, ">{s} value for key '{s}' has type {s}, expected {s}", .{ vt.name, entry.key_ptr.*, elem_tv.name, expected_tv.name });
                             return error.TypeMismatch;
                         }
@@ -1161,12 +1185,15 @@ fn virtualParameterizedWrapHelper(ctx: *Context) anyerror!void {
 
                             const elem = entry.value_ptr.*;
                             const carried = dispatch_mod.dispatchTypeValue(elem, ctx) == expected_tv;
-                            const stored = if (carried) elem else tryPromoteElement(alloc, elem, expected_tv.name).?;
+                            const stored = if (carried) elem else tryPromoteElement(ctx.allocator, elem, expected_tv.name) orelse {
+                                hash_alloc.free(key_copy);
+                                return error.OutOfMemory;
+                            };
                             if (carried) container_backing.retainValue(stored);
 
                             new_hash.map.put(hash_alloc, key_copy, stored) catch {
                                 hash_alloc.free(key_copy);
-                                if (carried) container_backing.releaseValue(stored);
+                                container_backing.releaseValue(stored);
                                 return error.OutOfMemory;
                             };
                         }
@@ -1180,7 +1207,7 @@ fn virtualParameterizedWrapHelper(ctx: *Context) anyerror!void {
                     for (s.map.keys()) |member| {
                         const member_tv = dispatch_mod.dispatchTypeValue(member, ctx);
                         if (member_tv == expected_tv) continue;
-                        if (tryPromoteElement(alloc, member, expected_tv.name) == null) {
+                        if (!canPromoteElement(member, expected_tv.name)) {
                             helpers.setErrorContext(ctx, ">{s} member has type {s}, expected {s}", .{ vt.name, member_tv.name, expected_tv.name });
                             return error.TypeMismatch;
                         }
@@ -1194,7 +1221,7 @@ fn virtualParameterizedWrapHelper(ctx: *Context) anyerror!void {
 
                         for (s.map.keys()) |member| {
                             const carried = dispatch_mod.dispatchTypeValue(member, ctx) == expected_tv;
-                            const stored = if (carried) member else tryPromoteElement(alloc, member, expected_tv.name).?;
+                            const stored = if (carried) member else tryPromoteElement(ctx.allocator, member, expected_tv.name) orelse return error.OutOfMemory;
                             if (carried) container_backing.retainValue(stored);
 
                             // A promoted member may collide with an existing one; drop the duplicate.
@@ -1216,7 +1243,7 @@ fn virtualParameterizedWrapHelper(ctx: *Context) anyerror!void {
                     for (m.map.values()) |elem| {
                         const elem_tv = dispatch_mod.dispatchTypeValue(elem, ctx);
                         if (elem_tv == expected_tv) continue;
-                        if (tryPromoteElement(alloc, elem, expected_tv.name) == null) {
+                        if (!canPromoteElement(elem, expected_tv.name)) {
                             helpers.setErrorContext(ctx, ">{s} value has type {s}, expected {s}", .{ vt.name, elem_tv.name, expected_tv.name });
                             return error.TypeMismatch;
                         }
@@ -1230,13 +1257,13 @@ fn virtualParameterizedWrapHelper(ctx: *Context) anyerror!void {
 
                         for (m.map.keys(), m.map.values()) |key, elem| {
                             const carried = dispatch_mod.dispatchTypeValue(elem, ctx) == expected_tv;
-                            const stored = if (carried) elem else tryPromoteElement(alloc, elem, expected_tv.name).?;
+                            const stored = if (carried) elem else tryPromoteElement(ctx.allocator, elem, expected_tv.name) orelse return error.OutOfMemory;
                             if (carried) container_backing.retainValue(stored);
                             container_backing.retainValue(key);
 
                             new_map.map.put(map_alloc, key, stored) catch {
                                 container_backing.releaseValue(key);
-                                if (carried) container_backing.releaseValue(stored);
+                                container_backing.releaseValue(stored);
                                 return error.OutOfMemory;
                             };
                         }
@@ -1252,7 +1279,7 @@ fn virtualParameterizedWrapHelper(ctx: *Context) anyerror!void {
                     for (m.map.values()) |elem| {
                         const elem_tv = dispatch_mod.dispatchTypeValue(elem, ctx);
                         if (elem_tv == expected_tv) continue;
-                        if (tryPromoteElement(alloc, elem, expected_tv.name) == null) {
+                        if (!canPromoteElement(elem, expected_tv.name)) {
                             helpers.setErrorContext(ctx, ">{s} value has type {s}, expected {s}", .{ vt.name, elem_tv.name, expected_tv.name });
                             return error.TypeMismatch;
                         }
@@ -1260,33 +1287,14 @@ fn virtualParameterizedWrapHelper(ctx: *Context) anyerror!void {
 
                     for (m.map.values()) |*slot| {
                         if (dispatch_mod.dispatchTypeValue(slot.*, ctx) != expected_tv) {
-                            // Displaces only a fixnum or bignum, neither refcounted.
-                            slot.* = tryPromoteElement(alloc, slot.*, expected_tv.name).?;
+                            const replacement = tryPromoteElement(ctx.allocator, slot.*, expected_tv.name) orelse return error.OutOfMemory;
+                            const displaced = slot.*;
+                            slot.* = replacement;
+                            container_backing.releaseValue(displaced);
                         }
                     }
                 },
-                .vector => |v| {
-                    // The wrap keeps the same mutable backing, so promote in place; validate
-                    // first so a failed wrap leaves it untouched.
-                    v.header.lock();
-                    defer v.header.unlock();
-
-                    for (v.list.items, 0..) |elem, i| {
-                        const elem_tv = dispatch_mod.dispatchTypeValue(elem, ctx);
-                        if (elem_tv == expected_tv) continue;
-                        if (tryPromoteElement(alloc, elem, expected_tv.name) == null) {
-                            helpers.setErrorContext(ctx, ">{s} element at index {d} has type {s}, expected {s}", .{ vt.name, i, elem_tv.name, expected_tv.name });
-                            return error.TypeMismatch;
-                        }
-                    }
-
-                    for (v.list.items, 0..) |elem, i| {
-                        if (dispatch_mod.dispatchTypeValue(elem, ctx) != expected_tv) {
-                            // Displaces only a fixnum or bignum, neither refcounted.
-                            v.list.items[i] = tryPromoteElement(alloc, elem, expected_tv.name).?;
-                        }
-                    }
-                },
+                .vector => |v| try promoteVectorInPlace(ctx, vt, v, expected_tv, ">"),
                 .mutable_map => |m| {
                     m.header.lock();
                     defer m.header.unlock();
@@ -1296,7 +1304,7 @@ fn virtualParameterizedWrapHelper(ctx: *Context) anyerror!void {
                         const elem = entry.value_ptr.*;
                         const elem_tv = dispatch_mod.dispatchTypeValue(elem, ctx);
                         if (elem_tv == expected_tv) continue;
-                        if (tryPromoteElement(alloc, elem, expected_tv.name) == null) {
+                        if (!canPromoteElement(elem, expected_tv.name)) {
                             helpers.setErrorContext(ctx, ">{s} value for key '{s}' has type {s}, expected {s}", .{ vt.name, entry.key_ptr.*, elem_tv.name, expected_tv.name });
                             return error.TypeMismatch;
                         }
@@ -1306,8 +1314,9 @@ fn virtualParameterizedWrapHelper(ctx: *Context) anyerror!void {
                     while (rewrite.next()) |entry| {
                         const elem = entry.value_ptr.*;
                         if (dispatch_mod.dispatchTypeValue(elem, ctx) != expected_tv) {
-                            // Displaces only a fixnum or bignum, neither refcounted.
-                            entry.value_ptr.* = tryPromoteElement(alloc, elem, expected_tv.name).?;
+                            const replacement = tryPromoteElement(ctx.allocator, elem, expected_tv.name) orelse return error.OutOfMemory;
+                            entry.value_ptr.* = replacement;
+                            container_backing.releaseValue(elem);
                         }
                     }
                 },

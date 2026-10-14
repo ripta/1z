@@ -834,6 +834,26 @@ pub fn deserializeValueAt(data: []const u8, offset: *usize, allocator: Allocator
     return d.readValue();
 }
 
+/// Owned-mode variant of `deserializeValueAt`, for a literal that outlives the context decoding it.
+///
+/// Strings, symbols, and headered containers are built with owned, refcounted backings on `owner`.
+/// The caller holds the creation reference. A failure part way releases what was built.
+///
+/// Quotation bodies and stack effects have no refcounted form. They decode in the parse-time form
+/// onto `bodies`, which must live as long as the returned value.
+pub fn deserializeOwnedValueAt(
+    data: []const u8,
+    offset: *usize,
+    owner: Allocator,
+    bodies: Allocator,
+    qfns: ?[]const ?*const anyopaque,
+    diag: ?*DecodeDiagnostic,
+) DecodeError!Value {
+    var d = Decoder{ .data = data, .offset = offset.*, .allocator = bodies, .qfns = qfns, .diag = diag };
+    defer offset.* = d.offset;
+    return d.readValueOwned(owner);
+}
+
 /// Image-mode variant of `deserializeValueAt`. When the encoded value
 /// uses one of the slot-reference tags emitted by
 /// `serializeValueIntoForImage`, resolve the slot index through
@@ -1141,6 +1161,119 @@ const Decoder = struct {
             value_tag_unit => .{ .unit = {} },
             else => return self.failUnknownTag(val_tag, isImageOnlyValueTag(val_tag)),
         };
+    }
+
+    /// A u32 length and that many bytes, borrowed from the stream.
+    fn readLengthPrefixed(self: *Decoder) DecodeError![]const u8 {
+        if (self.offset + 4 > self.data.len) return self.failTruncated();
+        const len = std.mem.readInt(u32, self.data[self.offset..][0..4], .little);
+        self.offset += 4;
+
+        if (self.offset + len > self.data.len) return self.failTruncated();
+        const bytes = self.data[self.offset..][0..len];
+        self.offset += len;
+        return bytes;
+    }
+
+    /// Owned-mode variant of `readValue`. See `deserializeOwnedValueAt`.
+    ///
+    /// The tag is peeked, not consumed, so a kind with no owned form falls through to `readValue`
+    /// with the cursor still on its tag.
+    fn readValueOwned(self: *Decoder, owner: Allocator) DecodeError!Value {
+        if (self.offset >= self.data.len) return self.failTruncated();
+        const val_tag = self.data[self.offset];
+
+        switch (val_tag) {
+            value_tag_string, value_tag_symbol => {
+                self.offset += 1;
+                const copy = try owner.dupe(u8, try self.readLengthPrefixed());
+                const owned = if (val_tag == value_tag_string)
+                    value_mod.ownedStringValue(owner, copy)
+                else
+                    value_mod.ownedSymbolValue(owner, copy);
+                return owned catch |e| {
+                    owner.free(copy);
+                    return e;
+                };
+            },
+
+            value_tag_array => {
+                self.offset += 1;
+                if (self.offset + 4 > self.data.len) return self.failTruncated();
+                const count = std.mem.readInt(u32, self.data[self.offset..][0..4], .little);
+                self.offset += 4;
+
+                const items = try owner.alloc(Value, count);
+                @memset(items, .{ .boolean = false });
+                errdefer {
+                    container_backing.releaseValues(items);
+                    owner.free(items);
+                }
+
+                for (items) |*item| item.* = try self.readValueOwned(owner);
+                return .{ .array = try value_mod.Array.fromOwnedSlice(owner, items) };
+            },
+
+            value_tag_hash, value_tag_mutable_map => {
+                self.offset += 1;
+                if (self.offset + 4 > self.data.len) return self.failTruncated();
+                const count = std.mem.readInt(u32, self.data[self.offset..][0..4], .little);
+                self.offset += 4;
+
+                const result: Value = if (val_tag == value_tag_hash)
+                    .{ .hash = try HashTable.create(owner) }
+                else
+                    .{ .mutable_map = try MutableMap.create(owner) };
+                errdefer container_backing.releaseValue(result);
+
+                const map = switch (result) {
+                    .hash => |h| &h.map,
+                    .mutable_map => |m| &m.map,
+                    else => unreachable,
+                };
+                try map.ensureTotalCapacity(owner, count);
+
+                for (0..count) |_| {
+                    const key = try owner.dupe(u8, try self.readLengthPrefixed());
+                    errdefer owner.free(key);
+
+                    const value = try self.readValueOwned(owner);
+
+                    // A stream written from a live map holds no duplicate. On a malformed one the
+                    // first key wins, as `putDecodedValueMapEntry` does.
+                    const gop = map.getOrPutAssumeCapacity(key);
+                    if (gop.found_existing) {
+                        owner.free(key);
+                        container_backing.releaseValue(value);
+                        continue;
+                    }
+                    gop.value_ptr.* = value;
+                }
+                return result;
+            },
+
+            value_tag_value_map => {
+                self.offset += 1;
+                if (self.offset + 4 > self.data.len) return self.failTruncated();
+                const count = std.mem.readInt(u32, self.data[self.offset..][0..4], .little);
+                self.offset += 4;
+
+                const m = try ValueMap.create(owner);
+                errdefer m.header.release();
+                try m.map.ensureTotalCapacity(owner, count);
+
+                for (0..count) |_| {
+                    const key = try self.readValueOwned(owner);
+                    errdefer container_backing.releaseValue(key);
+
+                    const value = try self.readValueOwned(owner);
+                    putDecodedValueMapEntry(&m.map, key, value);
+                }
+                return .{ .value_map = m };
+            },
+
+            else => return self.readValue(),
+        }
     }
 
     /// Image-mode variant of `readValue`. Resolves the slot-reference tags emitted by

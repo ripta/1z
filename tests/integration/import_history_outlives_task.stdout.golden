@@ -1,0 +1,15 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+=== stored history ===
+Stack: [ ]
+PASS: the stored history is non-empty
+Stack: [ ]
+PASS: the entry's module path survives the task
+Stack: [ ]
+PASS: the entry's word selection survives the task
+Stack: [ ]
+PASS: the entry's resolved path survives the task
+Stack: [ ]
+PASS: the entry's source file is a string
+Stack: [ ]

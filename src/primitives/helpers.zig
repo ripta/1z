@@ -107,6 +107,52 @@ pub fn pushOwnedSymbol(ctx: *Context, bytes: []u8) anyerror!void {
     };
 }
 
+/// An owned string value over a copy of `bytes` on `alloc`. The caller holds the creation
+/// reference. Safe to store in a container that outlives the context that produced `bytes`.
+pub fn ownedStringCopy(alloc: Allocator, bytes: []const u8) error{OutOfMemory}!Value {
+    const copy = try alloc.dupe(u8, bytes);
+    return value_mod.ownedStringValue(alloc, copy) catch |e| {
+        alloc.free(copy);
+        return e;
+    };
+}
+
+/// Symbol twin of `ownedStringCopy`.
+pub fn ownedSymbolCopy(alloc: Allocator, bytes: []const u8) error{OutOfMemory}!Value {
+    const copy = try alloc.dupe(u8, bytes);
+    return value_mod.ownedSymbolValue(alloc, copy) catch |e| {
+        alloc.free(copy);
+        return e;
+    };
+}
+
+/// Fills a runtime array slot by slot, with every slot holding an inert value until assigned.
+/// A failure part way through releases whatever was assigned, so callers pair `init` with
+/// `errdefer deinit` and finish with `finish`. After `finish` succeeds the array owns the items
+/// and a later `deinit` is a no-op.
+pub const ArrayBuilder = struct {
+    alloc: Allocator,
+    items: []Value,
+
+    pub fn init(alloc: Allocator, count: usize) error{OutOfMemory}!ArrayBuilder {
+        const items = try alloc.alloc(Value, count);
+        @memset(items, .{ .boolean = false });
+        return .{ .alloc = alloc, .items = items };
+    }
+
+    pub fn deinit(self: ArrayBuilder) void {
+        container_backing.releaseValues(self.items);
+        self.alloc.free(self.items);
+    }
+
+    /// The array value holding the creation reference.
+    pub fn finish(self: *ArrayBuilder) error{OutOfMemory}!Value {
+        const arr = try value_mod.Array.fromOwnedSlice(self.alloc, self.items);
+        self.items = &.{};
+        return .{ .array = arr };
+    }
+};
+
 /// Push a value whose owning reference the caller transfers to the stack slot. On push
 /// failure the reference is released. A no-op wrapper for refcount-inert values.
 pub fn pushMovedValue(ctx: *Context, val: Value) anyerror!void {

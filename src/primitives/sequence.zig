@@ -197,8 +197,20 @@ pub const SequenceIterator = struct {
         };
     }
 
+    /// An iterator whose string codepoints are owned on `ctx.allocator`, with ASCII served from the
+    /// context's interned table.
+    pub fn initInContext(val: Value, ctx: *Context) ?SequenceIterator {
+        var iter = init(val, ctx.allocator) orelse return null;
+        iter.single_char_cache = ctx.single_char_strings;
+        return iter;
+    }
+
     /// Get the next element as a Value.
-    /// For strings, allocates a new string for each codepoint.
+    ///
+    /// A string source yields a fresh owned string for each non-ASCII codepoint, backed on the
+    /// iterator's allocator, and the caller holds its creation reference. An interned ASCII
+    /// codepoint is a static value with nothing to release. Every other source yields the element
+    /// borrowed from the container. `release` drops the reference in the owned case only.
     pub fn next(self: *SequenceIterator) !?Value {
         switch (self.kind) {
             .string => {
@@ -217,7 +229,10 @@ pub const SequenceIterator = struct {
                     return value_mod.stringValue(self.single_char_cache[cp_slice[0]]);
                 }
                 const char_str = self.allocator.dupe(u8, cp_slice) catch return error.OutOfMemory;
-                return value_mod.stringValue(char_str);
+                return value_mod.ownedStringValue(self.allocator, char_str) catch |e| {
+                    self.allocator.free(char_str);
+                    return e;
+                };
             },
             .array => {
                 if (self.state.array.index < self.state.array.items.len) {
@@ -252,6 +267,12 @@ pub const SequenceIterator = struct {
                 return null;
             },
         }
+    }
+
+    /// Drop the reference `next` handed out when the caller is done with the element. Only a string
+    /// source yields an owned element. Other sources lend theirs, so there is nothing to drop.
+    pub fn release(self: *const SequenceIterator, elem: Value) void {
+        if (self.kind == .string) container_backing.releaseValue(elem);
     }
 
     /// Reset the iterator to the beginning.
@@ -400,25 +421,23 @@ pub const SequenceBuilder = struct {
 // Convenience Functions
 // =============================================================================
 
-/// Convert a sequence to an array of Values.
-/// Useful for operations that need random access.
-pub fn sequenceToValues(val: Value, allocator: Allocator) ![]Value {
-    return sequenceToValuesScratch(val, allocator, allocator);
-}
-
-/// Convert a sequence to an array of Values, splitting the slice from the element allocations.
+/// Convert a sequence to a slice of Values for operations that need random access.
 ///
-/// The `[]Value` lands on `slice_alloc` so a caller using it as scratch can free it when done.
-/// Per-codepoint strings duped for a string source land on `elem_alloc`; those may escape into the
-/// caller's result, so a scratch caller passes the arena there.
-pub fn sequenceToValuesScratch(val: Value, slice_alloc: Allocator, elem_alloc: Allocator) ![]Value {
+/// The slice lands on `ctx.allocator` and holds one owning reference per element. A borrowed
+/// element is retained, and a non-ASCII codepoint carries the creation reference it was minted
+/// with. The caller either moves the references into a container and frees only the slice, or
+/// drops them with `releaseOwnedValues`.
+pub fn sequenceToValues(val: Value, ctx: *Context) ![]Value {
     const len = sequenceLength(val) orelse return error.TypeMismatch;
-    const result = slice_alloc.alloc(Value, len) catch return error.OutOfMemory;
-    errdefer slice_alloc.free(result);
+    const result = ctx.allocator.alloc(Value, len) catch return error.OutOfMemory;
+    @memset(result, .{ .boolean = false });
+    errdefer ctx.allocator.free(result);
 
-    var iter = SequenceIterator.init(val, elem_alloc) orelse return error.TypeMismatch;
+    var iter = SequenceIterator.initInContext(val, ctx) orelse return error.TypeMismatch;
     var i: usize = 0;
+    errdefer container_backing.releaseValues(result[0..i]);
     while (try iter.next()) |elem| {
+        if (iter.kind != .string) container_backing.retainValue(elem);
         result[i] = elem;
         i += 1;
     }
@@ -426,23 +445,69 @@ pub fn sequenceToValuesScratch(val: Value, slice_alloc: Allocator, elem_alloc: A
     return result;
 }
 
+/// Drop the references `sequenceToValues` handed out and free the slice.
+pub fn releaseOwnedValues(ctx: *Context, items: []Value) void {
+    container_backing.releaseValues(items);
+    ctx.allocator.free(items);
+}
+
 // =============================================================================
 // Tests
 // =============================================================================
 
-test "sequenceToValuesScratch splits slice and element allocators" {
-    var elem_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer elem_arena.deinit();
+test "sequenceToValues owns non-ASCII codepoints and leaves the arena untouched" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
 
-    // The leak detector pins the split: codepoint dupes on the slice allocator would leak once
-    // only the slice is freed.
-    const items = try sequenceToValuesScratch(value_mod.stringValue("héllo"), std.testing.allocator, elem_arena.allocator());
-    defer std.testing.allocator.free(items);
+    const arena_before = ctx.arena.queryCapacity();
 
-    try std.testing.expectEqual(@as(usize, 5), items.len);
+    const items = try sequenceToValues(value_mod.stringValue("héllo→"), &ctx);
+    defer releaseOwnedValues(&ctx, items);
+
+    try std.testing.expectEqual(@as(usize, 6), items.len);
     try std.testing.expectEqualStrings("h", items[0].string.bytes);
     try std.testing.expectEqualStrings("é", items[1].string.bytes);
-    try std.testing.expectEqualStrings("o", items[4].string.bytes);
+    try std.testing.expectEqualStrings("→", items[5].string.bytes);
+    try std.testing.expect(items[0].string.backing == null);
+    try std.testing.expect(items[1].string.backing != null);
+    try std.testing.expect(items[5].string.backing != null);
+    try std.testing.expect(items[1].string.backing.?.header.allocator.ptr == ctx.allocator.ptr);
+    try std.testing.expectEqual(arena_before, ctx.arena.queryCapacity());
+}
+
+test "sequenceToValues retains borrowed elements" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const inner = try Vector.create(ctx.allocator);
+    defer container_backing.releaseValue(.{ .vector = inner });
+    try inner.list.append(ctx.allocator, .{ .fixnum = 1 });
+
+    const outer = try Vector.create(ctx.allocator);
+    defer container_backing.releaseValue(.{ .vector = outer });
+    try outer.list.append(ctx.allocator, .{ .vector = inner });
+    container_backing.retainValue(.{ .vector = inner });
+
+    const items = try sequenceToValues(.{ .vector = outer }, &ctx);
+    try std.testing.expectEqual(@as(usize, 1), items.len);
+    releaseOwnedValues(&ctx, items);
+}
+
+test "SequenceIterator.release drops the owned codepoint" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    var iter = SequenceIterator.initInContext(value_mod.stringValue("aé"), &ctx).?;
+
+    const a = (try iter.next()).?;
+    try std.testing.expect(a.string.backing == null);
+    iter.release(a);
+
+    const e = (try iter.next()).?;
+    try std.testing.expect(e.string.backing != null);
+    iter.release(e);
+
+    try std.testing.expect((try iter.next()) == null);
 }
 
 test "utf8CodepointCount" {
@@ -499,11 +564,11 @@ test "SequenceIterator over string" {
     var iter = SequenceIterator.init(value_mod.stringValue("ab"), allocator).?;
 
     const a = (try iter.next()).?;
-    defer allocator.free(a.string.bytes);
+    defer iter.release(a);
     try std.testing.expectEqualStrings("a", a.string.bytes);
 
     const b = (try iter.next()).?;
-    defer allocator.free(b.string.bytes);
+    defer iter.release(b);
     try std.testing.expectEqualStrings("b", b.string.bytes);
 
     try std.testing.expect((try iter.next()) == null);

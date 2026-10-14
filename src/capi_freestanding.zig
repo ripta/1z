@@ -294,6 +294,7 @@ comptime {
         @export(&onez_runtime_register_quotations, .{ .name = "onez_runtime_register_quotations" });
         @export(&onez_runtime_register_quotation_input_counts, .{ .name = "onez_runtime_register_quotation_input_counts" });
         @export(&onez_runtime_register_lexical_sites, .{ .name = "onez_runtime_register_lexical_sites" });
+        @export(&onez_runtime_register_array_literals, .{ .name = "onez_runtime_register_array_literals" });
         @export(&onez_replay_method_dispatch, .{ .name = "onez_replay_method_dispatch" });
         @export(&onez_runtime_run, .{ .name = "onez_runtime_run" });
         @export(&onez_set_interpreter_fallback, .{ .name = "onez_set_interpreter_fallback" });
@@ -966,6 +967,13 @@ fn onez_runtime_register_lexical_sites(ptr: ?*anyopaque, rows: [*]const u64, cou
     _ = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
     _ = rows;
     _ = count;
+    return ONEZ_OK;
+}
+
+/// Accepted and ignored. Container literals are unsupported here, so the sites have no cache.
+fn onez_runtime_register_array_literals(ptr: ?*anyopaque, site_count: u32) callconv(.c) i32 {
+    _ = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
+    _ = site_count;
     return ONEZ_OK;
 }
 
@@ -2022,9 +2030,10 @@ fn jitPushQuotation(ctx_raw: usize, data_ptr: usize, data_len: usize, dest_raw: 
     return unsupportedJit(ctx_raw, "quotation literals");
 }
 
-fn jitPushArray(ctx_raw: usize, data_ptr: usize, data_len: usize) callconv(.c) i32 {
+fn jitPushArray(ctx_raw: usize, data_ptr: usize, data_len: usize, site: usize) callconv(.c) i32 {
     _ = data_ptr;
     _ = data_len;
+    _ = site;
     return unsupportedJit(ctx_raw, "array literals");
 }
 

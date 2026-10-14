@@ -1,0 +1,168 @@
+\ Arrays that runtime words build outlive the task that built them.
+\
+\ These words used to build their result on the task's own arena, or to fill it with strings and
+\ symbols that borrowed arena bytes. A task that stored the result in a shared container left a
+\ dangling array behind once the task was reaped. Each section has a task build the result, push it
+\ into a top-level vector, and let the scope end. The main context compares the values afterwards.
+
+use "testing" ;
+
+"array-n and 1array" test-section
+
+built-arrays: V{ } ;
+
+[
+  [
+    10 20 30 3 array-n built-arrays swap #push! drop
+    "solo" 1array built-arrays swap #push! drop
+  ] spawn drop
+] task-scope
+
+[
+  [ 200 [ 9 9 9 3 array-n drop ] times ] spawn drop
+  [ 200 [ 9 9 9 3 array-n drop ] times ] spawn drop
+] task-scope
+
+built-arrays 0 #nth { 10 20 30 } "array-n survives the task" assert=
+built-arrays 1 #nth { "solo" } "1array survives the task" assert=
+
+"@keys" test-section
+
+built-keys: V{ } ;
+
+[
+  [
+    H{ alpha: 1 } @keys built-keys swap #push! drop
+    M{ beta: 2 } @keys built-keys swap #push! drop
+  ] spawn drop
+] task-scope
+
+built-keys 0 #nth { alpha: } "hash keys survive the task" assert=
+built-keys 1 #nth { beta: } "mutable map keys survive the task" assert=
+
+"error stack-trace" test-section
+
+built-traces: V{ } ;
+
+[
+  [
+    [ f "boom" custom-failure: make-error throw ]
+    [ stack-trace: @get built-traces swap #push! drop ]
+    recover
+  ] spawn drop
+] task-scope
+
+built-traces #len 1 "one trace was reported" assert=
+built-traces 0 #nth type-name "array" "the trace is an array" assert=
+built-traces 0 #nth #len 0 > "the trace has frames" assert-true
+built-traces 0 #nth 0 #nth word: @get type-name "string" "a frame names its word" assert=
+built-traces 0 #nth 0 #nth word: @get #len 0 > "the frame's word name is readable" assert-true
+
+"enum-variants" test-section
+
+task-color: enum{ red: unit green: unit blue: unit } ;
+
+built-variants: V{ } ;
+
+[
+  [ task-color: enum-variants built-variants swap #push! drop ] spawn drop
+] task-scope
+
+built-variants 0 #nth { task-color:red: task-color:green: task-color:blue: } "enum-variants survives the task" assert=
+
+"word records" test-section
+
+\\ Documentation that the record must carry out of the task.
+documented-word: ( n -- n ) [ 1 + ] ;
+
+built-words: V{ } ;
+
+[
+  [
+    native.current-scope documented-word: native.>word built-words swap #push! drop
+  ] spawn drop
+] task-scope
+
+built-words 0 #nth 0 #nth "documented-word" "the word name survives the task" assert=
+built-words 0 #nth 2 #nth "Documentation that the record must carry out of the task." "the doc string survives the task" assert=
+built-words 0 #nth 1 #nth 0 #nth 0 #nth 0 #nth "n" "a stack effect parameter name survives the task" assert=
+
+"quotation>opcodes" test-section
+
+built-opcodes: V{ } ;
+
+[
+  [ [ 7 documented-word ] native.quotation>opcodes built-opcodes swap #push! drop ] spawn drop
+] task-scope
+
+built-opcodes 0 #nth #len 2 "two instructions were reported" assert=
+built-opcodes 0 #nth 0 #nth { push-literal: 7 } "the literal instruction survives the task" assert=
+built-opcodes 0 #nth 1 #nth { call-word: "documented-word" } "the call instruction's word name survives the task" assert=
+
+"scope-frames" test-section
+
+built-frames: V{ } ;
+
+[
+  [
+    task-local-marker: [ 5 ] ;
+    native.scope-frames built-frames swap #push! drop
+  ] spawn drop
+] task-scope
+
+names-marker?: ( frame -- ? ) [ words: @get [ "task-local-marker" = ] #filter #collect #len 0 > ] ;
+
+count-marker-frames: ( frames -- n ) [ [ names-marker? ] #filter #collect #len ] ;
+
+built-frames 0 #nth count-marker-frames 1 "exactly one frame holds the task's own local word" assert=
+
+"list-directory" test-section
+
+built-listings: V{ } ;
+
+[
+  [ "tests/integration/fixtures/runtime_arrays_dir" list-directory built-listings swap #push! drop ] spawn drop
+] task-scope
+
+built-listings 0 #nth #len 1 "the fixture directory has one entry" assert=
+built-listings 0 #nth 0 #nth { "entry.txt" file: } "the entry's name survives the task" assert=
+
+"numeric tower promotion to bignum" test-section
+
+array(bignum): M{ inner-type: array element-type: bignum define: [ define-parameterized-type ] } ;
+vector(bignum): M{ inner-type: vector element-type: bignum define: [ define-parameterized-type ] } ;
+
+promoted-bignums: V{ } ;
+
+[
+  [
+    { 1 2 3 } >array(bignum) unmake-array(bignum) promoted-bignums swap #push! drop
+    V{ 4 5 } >vector(bignum) unmake-vector(bignum) promoted-bignums swap #push! drop
+    V{ } >vector(bignum) 6 #push! { 7 8 } #append! unmake-vector(bignum) promoted-bignums swap #push! drop
+  ] spawn drop
+] task-scope
+
+promoted-bignums 0 #nth 0 #nth type-name "bignum" "a wrapped array element is a bignum after the task" assert=
+promoted-bignums 0 #nth 2 #nth >string "3" "a wrapped array element keeps its value" assert=
+promoted-bignums 1 #nth 1 #nth type-name "bignum" "a wrapped vector element is a bignum after the task" assert=
+promoted-bignums 1 #nth 1 #nth >string "5" "a wrapped vector element keeps its value" assert=
+promoted-bignums 2 #nth #len 3 "pushed and appended elements are all present" assert=
+promoted-bignums 2 #nth 0 #nth >string "6" "a pushed element keeps its value" assert=
+promoted-bignums 2 #nth 2 #nth >string "8" "an appended element keeps its value" assert=
+promoted-bignums 2 #nth 2 #nth type-name "bignum" "an appended element is a bignum after the task" assert=
+
+"#append and #prepend on vectors" test-section
+
+built-vectors: V{ } ;
+
+[
+  [
+    V{ 1 2 } { 3 4 } #append built-vectors swap #push! drop
+    V{ 3 4 } { 1 2 } #prepend built-vectors swap #push! drop
+    V{ 1 2 3 } 4 #push built-vectors swap #push! drop
+  ] spawn drop
+] task-scope
+
+built-vectors 0 #nth V{ 1 2 3 4 } "#append on a vector survives the task" assert=
+built-vectors 1 #nth V{ 1 2 3 4 } "#prepend on a vector survives the task" assert=
+built-vectors 2 #nth V{ 1 2 3 4 } "#push on a vector survives the task" assert=

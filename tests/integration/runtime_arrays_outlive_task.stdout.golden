@@ -1,0 +1,107 @@
+=== array-n and 1array ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: array-n survives the task
+Stack: [ ]
+PASS: 1array survives the task
+Stack: [ ]
+=== @keys ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: hash keys survive the task
+Stack: [ ]
+PASS: mutable map keys survive the task
+Stack: [ ]
+=== error stack-trace ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: one trace was reported
+Stack: [ ]
+PASS: the trace is an array
+Stack: [ ]
+PASS: the trace has frames
+Stack: [ ]
+PASS: a frame names its word
+Stack: [ ]
+PASS: the frame's word name is readable
+Stack: [ ]
+=== enum-variants ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: enum-variants survives the task
+Stack: [ ]
+=== word records ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: the word name survives the task
+Stack: [ ]
+PASS: the doc string survives the task
+Stack: [ ]
+PASS: a stack effect parameter name survives the task
+Stack: [ ]
+=== quotation>opcodes ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: two instructions were reported
+Stack: [ ]
+PASS: the literal instruction survives the task
+Stack: [ ]
+PASS: the call instruction's word name survives the task
+Stack: [ ]
+=== scope-frames ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: exactly one frame holds the task's own local word
+Stack: [ ]
+=== list-directory ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: the fixture directory has one entry
+Stack: [ ]
+PASS: the entry's name survives the task
+Stack: [ ]
+=== numeric tower promotion to bignum ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: a wrapped array element is a bignum after the task
+Stack: [ ]
+PASS: a wrapped array element keeps its value
+Stack: [ ]
+PASS: a wrapped vector element is a bignum after the task
+Stack: [ ]
+PASS: a wrapped vector element keeps its value
+Stack: [ ]
+PASS: pushed and appended elements are all present
+Stack: [ ]
+PASS: a pushed element keeps its value
+Stack: [ ]
+PASS: an appended element keeps its value
+Stack: [ ]
+PASS: an appended element is a bignum after the task
+Stack: [ ]
+=== #append and #prepend on vectors ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: #append on a vector survives the task
+Stack: [ ]
+PASS: #prepend on a vector survives the task
+Stack: [ ]
+PASS: #push on a vector survives the task
+Stack: [ ]

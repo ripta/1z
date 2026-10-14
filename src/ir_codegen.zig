@@ -55,6 +55,7 @@ const control = @import("primitives/control.zig");
 const dispatch_helpers = @import("primitives/dispatch_helpers.zig");
 const arithmetic_mod = @import("primitives/arithmetic.zig");
 const markers_mod = @import("primitives/markers.zig");
+const AotArrayLiteralCache = @import("aot_array_literal_cache.zig").AotArrayLiteralCache;
 const WordDefinition = @import("dictionary.zig").WordDefinition;
 const NativeFn = @import("dictionary.zig").NativeFn;
 
@@ -10131,7 +10132,8 @@ fn compileInstructions(
                     sp.* += 1;
                 } else if (state.aot_mode and (val == .array or val == .hash or val == .value_map)) {
                     // By-value container literals: serialize to bytes, store in C
-                    // preamble, and emit a callback to deserialize at runtime.
+                    // preamble, and emit a callback that pushes the site's one
+                    // decoded value. The literal id names the site's cache slot.
                     // Pass the quotation-ID map so nested branch quotations carry
                     // their compiled global ID; jitPushArray attaches the matching
                     // code_ptr when reconstructing the composite at runtime.
@@ -10148,8 +10150,8 @@ fn compileInstructions(
                         lits.append(std.heap.page_allocator, .{ .data = serialized }) catch {};
                     }
 
-                    const proto_3arg = c.ir_proto_3(ctx, 0, c.IR_I32, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR);
-                    const push_fn = c.ir_const_func(ctx, c.ir_str(ctx, "onez_push_array"), proto_3arg);
+                    const proto_4arg = c.ir_proto_4(ctx, 0, c.IR_I32, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR);
+                    const push_fn = c.ir_const_func(ctx, c.ir_str(ctx, "onez_push_array"), proto_4arg);
 
                     // Store sp before callback.
                     const sp_const = c.ir_const_addr(ctx, sp.*);
@@ -10169,8 +10171,9 @@ fn compileInstructions(
                     const sym_name = std.fmt.bufPrint(&sym_buf, "onez_arr_{d}", .{lit_id}) catch unreachable;
                     const sym_ref = c.ir_const_func(ctx, c.ir_strl(ctx, &sym_buf, sym_name.len), 0);
                     const data_len_const = c.ir_const_addr(ctx, serialized.len);
+                    const site_const = c.ir_const_addr(ctx, lit_id);
 
-                    const call_result = c._ir_CALL_3(ctx, c.IR_I32, push_fn, ctx_val, sym_ref, data_len_const);
+                    const call_result = c._ir_CALL_4(ctx, c.IR_I32, push_fn, ctx_val, sym_ref, data_len_const, site_const);
                     emitCallbackPostCheck(state, call_result, state.error_propagate_status, null, .none);
 
                     // Re-read sp after callback (it pushed one value).
@@ -12633,6 +12636,7 @@ pub fn emitProgramC(
         \\extern int32_t onez_runtime_register_quotations(void *rt, int32_t (**table)(uintptr_t), uint32_t size);
         \\extern int32_t onez_runtime_register_quotation_input_counts(void *rt, int32_t (**table)(uintptr_t), const uint8_t *counts, uint32_t size);
         \\extern int32_t onez_runtime_register_lexical_sites(void *rt, const uint64_t *rows, uint32_t count);
+        \\extern int32_t onez_runtime_register_array_literals(void *rt, uint32_t site_count);
         \\extern int32_t onez_runtime_run(void *rt, uint32_t entry_word_id);
         \\extern void onez_fire_exit_hooks(void *rt, int32_t code);
         \\extern void onez_print_error(void *rt);
@@ -13596,8 +13600,8 @@ pub fn emitProgramC(
     try out.appendSlice(allocator, "static int32_t onez_push_string(uintptr_t ctx, const char *str, uintptr_t len) { return jitPushString(ctx, (uintptr_t)str, len); }\n");
     try out.appendSlice(allocator, "static int32_t onez_push_symbol(uintptr_t ctx, const char *str, uintptr_t len) { return jitPushSymbol(ctx, (uintptr_t)str, len); }\n");
     try out.appendSlice(allocator, "static int32_t onez_push_quotation(uintptr_t ctx, const unsigned char *data, uintptr_t len, uintptr_t dest, uintptr_t quotation_id, uintptr_t site) { return jitPushQuotation(ctx, (uintptr_t)data, len, dest, quotation_id, onez_lexical_site_tag(site)); }\n");
-    try out.appendSlice(allocator, "extern int32_t jitPushArray(uintptr_t ctx, uintptr_t data_ptr, uintptr_t data_len);\n");
-    try out.appendSlice(allocator, "static int32_t onez_push_array(uintptr_t ctx, const unsigned char *data, uintptr_t len) { return jitPushArray(ctx, (uintptr_t)data, len); }\n");
+    try out.appendSlice(allocator, "extern int32_t jitPushArray(uintptr_t ctx, uintptr_t data_ptr, uintptr_t data_len, uintptr_t site);\n");
+    try out.appendSlice(allocator, "static int32_t onez_push_array(uintptr_t ctx, const unsigned char *data, uintptr_t len, uintptr_t site) { return jitPushArray(ctx, (uintptr_t)data, len, site); }\n");
     // Slot-table-indexed typed-literal helpers. The runtime caches
     // each slot table's pointer on Context during image loading; the
     // jit functions index through it to recover the runtime pointer
@@ -14271,6 +14275,20 @@ pub fn emitProgramC(
         var sites_buf: [96]u8 = undefined;
         const sites_line = std.fmt.bufPrint(&sites_buf, "    onez_runtime_register_lexical_sites(rt, onez_lexical_sites, {d});\n", .{lexical_sites.count()}) catch unreachable;
         try out.appendSlice(allocator, sites_line);
+    }
+
+    // Ahead of any compiled code, since a container literal's first push fills its site's slot.
+    if (array_literals.items.len > 0) {
+        var lits_buf: [96]u8 = undefined;
+        const lits_line = std.fmt.bufPrint(&lits_buf, "    if (onez_runtime_register_array_literals(rt, {d}) != 0) {{\n", .{array_literals.items.len}) catch unreachable;
+        try out.appendSlice(allocator, lits_line);
+        try out.appendSlice(allocator,
+            \\        onez_print_error(rt);
+            \\        onez_deinit(rt);
+            \\        return 1;
+            \\    }
+            \\
+        );
     }
 
     // Image hookup: rehydrate module-private dictionary entries (and,
@@ -17866,32 +17884,61 @@ export fn jitCaptureQuotation(ctx_raw: usize, dest_raw: usize) callconv(.c) i32 
     return 0;
 }
 
-/// Deserialize a by-value container literal from its serialized byte representation and push it
-/// onto the stack. The val_tag in the serialized data determines which container is constructed.
-export fn jitPushArray(ctx_raw: usize, data_ptr: usize, data_len: usize) callconv(.c) i32 {
+/// Push the by-value container literal compiled at `site`. The val_tag in the serialized data
+/// determines which container is constructed.
+///
+/// The first push of a site decodes it once onto the root's long-lived allocator and publishes it
+/// in the root's literal cache. Every push retains that one value, as the interpreter shares one
+/// parsed literal. A value a task stores in a shared container then outlives the task.
+export fn jitPushArray(ctx_raw: usize, data_ptr: usize, data_len: usize, site: usize) callconv(.c) i32 {
     if (ctx_raw == 0) return 1;
     const ctx: *Context = @ptrFromInt(ctx_raw);
     const src: [*]const u8 = @ptrFromInt(data_ptr);
-    const alloc = ctx.quotationAllocator();
-    var offset: usize = 0;
-    // Attach compiled code_ptrs to quotations nested in the composite, indexed by
-    // the build-time quotation_id stamped into the serialized form.
-    const qfns: ?[]const ?*const anyopaque = if (ctx.aot_quotation_fns) |fns| fns.table[0..fns.size] else null;
-    var diag: ibc.DecodeDiagnostic = undefined;
-    const val = deserializeValueAt(src[0..data_len], &offset, alloc, qfns, &diag) catch |err| {
-        setDecodeFailureMessage(ctx, &diag, err);
-        ctx.jit_pending_error = err;
-        return 2;
+
+    const cache = ctx.rootContext().aot_array_literal_cache orelse return slotMiss(ctx, "array-literal", site);
+    if (site >= cache.slots.len) return slotMiss(ctx, "array-literal", site);
+
+    const entry = cache.lookup(site) orelse blk: {
+        const decoded = decodeArrayLiteralEntry(ctx, src[0..data_len]) catch |err| {
+            ctx.jit_pending_error = err;
+            return 2;
+        };
+        break :blk cache.publish(site, decoded);
     };
-    // The deserialized composite is freshly constructed, so its slots already
-    // hold owning references; transfer them to the stack slot instead of
-    // retaining a second time and stranding the construction reference.
-    ctx.stack.pushMoved(val) catch {
-        container_backing.releaseValue(val);
+
+    container_backing.retainValue(entry.value);
+    ctx.stack.pushMoved(entry.value) catch {
+        container_backing.releaseValue(entry.value);
         ctx.jit_pending_error = error.OutOfMemory;
         return 2;
     };
     return 0;
+}
+
+/// Decode a container literal into a cache entry on the root's long-lived allocator.
+///
+/// Strings, symbols, and containers get owned, refcounted backings there, which is the form the
+/// task-boundary share check accepts. Quotation bodies and stack effects have no refcounted form,
+/// so they go on the entry's own arena.
+fn decodeArrayLiteralEntry(ctx: *Context, data: []const u8) anyerror!*AotArrayLiteralCache.Entry {
+    const longlived = ctx.rootContext().allocator;
+
+    const entry = try longlived.create(AotArrayLiteralCache.Entry);
+    errdefer longlived.destroy(entry);
+
+    entry.bodies = std.heap.ArenaAllocator.init(longlived);
+    errdefer entry.bodies.deinit();
+
+    // Attach compiled code_ptrs to quotations nested in the composite, indexed by the build-time
+    // quotation_id stamped into the serialized form.
+    const qfns: ?[]const ?*const anyopaque = if (ctx.aot_quotation_fns) |fns| fns.table[0..fns.size] else null;
+    var diag: ibc.DecodeDiagnostic = undefined;
+    var offset: usize = 0;
+    entry.value = ibc.deserializeOwnedValueAt(data, &offset, longlived, entry.bodies.allocator(), qfns, &diag) catch |err| {
+        setDecodeFailureMessage(ctx, &diag, err);
+        return err;
+    };
+    return entry;
 }
 
 /// Refresh cached stack-buffer pointer and capacity in the JitContext after
@@ -19281,15 +19328,132 @@ test "jitPushQuotation: a truncated stream propagates TruncatedBytecode" {
 test "jitPushArray: a truncated stream propagates TruncatedBytecode" {
     var ctx = Context.init(testing.allocator);
     defer ctx.deinit();
+    ctx.aot_array_literal_cache = try AotArrayLiteralCache.create(testing.allocator, 1);
 
     var encoded: std.ArrayListUnmanaged(u8) = .{};
     defer encoded.deinit(testing.allocator);
     try ibc.serializeValueInto(&encoded, .{ .fixnum = 7 }, testing.allocator, null, null);
 
-    const rc = jitPushArray(@intFromPtr(&ctx), @intFromPtr(encoded.items.ptr), encoded.items.len - 1);
+    const rc = jitPushArray(@intFromPtr(&ctx), @intFromPtr(encoded.items.ptr), encoded.items.len - 1, 0);
     try testing.expectEqual(@as(i32, 2), rc);
     try testing.expectEqual(error.TruncatedBytecode, ctx.jit_pending_error.?);
     try testing.expectEqualStrings("truncated bytecode at offset 1", ctx.pending_error_message.?);
+
+    // A failed decode publishes nothing, so a later push decodes again.
+    try testing.expect(ctx.aot_array_literal_cache.?.lookup(0) == null);
+}
+
+test "jitPushArray: a site with no registered cache slot reports UnresolvedSlot" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    var encoded: std.ArrayListUnmanaged(u8) = .{};
+    defer encoded.deinit(testing.allocator);
+    try ibc.serializeValueInto(&encoded, .{ .fixnum = 7 }, testing.allocator, null, null);
+
+    try testing.expectEqual(@as(i32, 2), jitPushArray(@intFromPtr(&ctx), @intFromPtr(encoded.items.ptr), encoded.items.len, 0));
+    try testing.expectEqual(error.UnresolvedSlot, ctx.jit_pending_error.?);
+
+    ctx.jit_pending_error = null;
+    ctx.aot_array_literal_cache = try AotArrayLiteralCache.create(testing.allocator, 1);
+    try testing.expectEqual(@as(i32, 2), jitPushArray(@intFromPtr(&ctx), @intFromPtr(encoded.items.ptr), encoded.items.len, 1));
+    try testing.expectEqual(error.UnresolvedSlot, ctx.jit_pending_error.?);
+}
+
+/// Serialize `{ "alpha" beta: [ 1 ] H{ k: "v" } }`, a literal with string, symbol, quotation,
+/// and nested hash elements. The quotation carries compiled quotation id 0.
+fn encodeTestArrayLiteral(out: *std.ArrayListUnmanaged(u8)) !void {
+    const body = [_]Instruction{.{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 1 }};
+
+    const nested = try value_mod.HashTable.create(testing.allocator);
+    defer container_backing.releaseValue(.{ .hash = nested });
+    try nested.map.put(testing.allocator, try testing.allocator.dupe(u8, "k"), value_mod.stringValue("v"));
+
+    const items = [_]Value{
+        value_mod.stringValue("alpha"),
+        value_mod.symbolValue("beta"),
+        .{ .quotation = .{ .instructions = &body } },
+        .{ .hash = nested },
+    };
+    const arr = try value_mod.Array.createStatic(testing.allocator, &items);
+    defer testing.allocator.destroy(arr);
+
+    var qid_map: ibc.QuotationIdMap = .{};
+    defer qid_map.deinit(testing.allocator);
+    try qid_map.put(testing.allocator, @intFromPtr(&body), 0);
+
+    try ibc.serializeValueInto(out, .{ .array = arr }, testing.allocator, &qid_map, null);
+}
+
+test "jitPushArray: a site decodes once onto the root allocator with owned backings" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+    ctx.aot_array_literal_cache = try AotArrayLiteralCache.create(testing.allocator, 1);
+
+    // Never called. The test is that the decode attaches it to the nested quotation.
+    var fake_fn: u8 = 0;
+    var quotation_table = [_]?*const anyopaque{@ptrCast(&fake_fn)};
+    ctx.aot_quotation_fns = .{ .table = &quotation_table, .size = quotation_table.len };
+
+    var encoded: std.ArrayListUnmanaged(u8) = .{};
+    defer encoded.deinit(testing.allocator);
+    try encodeTestArrayLiteral(&encoded);
+
+    const ctx_raw = @intFromPtr(&ctx);
+    try testing.expectEqual(@as(i32, 0), jitPushArray(ctx_raw, @intFromPtr(encoded.items.ptr), encoded.items.len, 0));
+    try testing.expectEqual(@as(i32, 0), jitPushArray(ctx_raw, @intFromPtr(encoded.items.ptr), encoded.items.len, 0));
+
+    const second = try ctx.stack.pop();
+    defer container_backing.releaseValue(second);
+    const first = try ctx.stack.pop();
+    defer container_backing.releaseValue(first);
+
+    try testing.expectEqual(first.array, second.array);
+    try testing.expectEqual(first.array, ctx.aot_array_literal_cache.?.lookup(0).?.value.array);
+
+    const arr = first.array;
+    try testing.expect(arr.storage == .owned);
+    try testing.expect(container_backing.allocatorEql(arr.header.allocator, ctx.allocator));
+
+    try testing.expectEqualStrings("alpha", arr.items[0].string.bytes);
+    const string_backing = arr.items[0].string.backing orelse return error.TestExpectedOwnedBacking;
+    try testing.expect(container_backing.allocatorEql(string_backing.header.allocator, ctx.allocator));
+
+    try testing.expectEqualStrings("beta", arr.items[1].symbol.bytes);
+    const symbol_backing = arr.items[1].symbol.backing orelse return error.TestExpectedOwnedBacking;
+    try testing.expect(container_backing.allocatorEql(symbol_backing.header.allocator, ctx.allocator));
+
+    try testing.expectEqual(@as(usize, 1), arr.items[2].quotation.instructions.len);
+    try testing.expectEqual(@as(?*const anyopaque, @ptrCast(&fake_fn)), arr.items[2].quotation.code_ptr);
+
+    const nested = arr.items[3].hash;
+    try testing.expect(container_backing.allocatorEql(nested.header.allocator, ctx.allocator));
+    const nested_value = nested.map.get("k") orelse return error.TestExpectedKey;
+    try testing.expect(nested_value.string.backing != null);
+
+    // A quotation has no shareable form, so the shareable check is run on the hash alone.
+    try testing.expect(container_backing.valueShareable(arr.items[3], ctx.allocator));
+}
+
+test "AotArrayLiteralCache: a losing publish releases its own entry and returns the winner" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    const cache = try AotArrayLiteralCache.create(testing.allocator, 1);
+    defer cache.destroy();
+
+    var encoded: std.ArrayListUnmanaged(u8) = .{};
+    defer encoded.deinit(testing.allocator);
+    try encodeTestArrayLiteral(&encoded);
+
+    // Two racers that both missed the slot and decoded their own copies.
+    const winner = try decodeArrayLiteralEntry(&ctx, encoded.items);
+    const loser = try decodeArrayLiteralEntry(&ctx, encoded.items);
+    try testing.expect(winner.value.array != loser.value.array);
+
+    try testing.expectEqual(winner, cache.publish(0, winner));
+    try testing.expectEqual(winner, cache.publish(0, loser));
+    try testing.expectEqual(winner, cache.lookup(0).?);
 }
 
 test "jitPush*Slot: every miss branch reports UnresolvedSlot with an image-slot-miss row" {

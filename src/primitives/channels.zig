@@ -80,7 +80,7 @@ fn adoptForBuffer(ctx: *Context, ch: *Channel, value: Value) anyerror!channel_mo
     arena.* = std.heap.ArenaAllocator.init(ch.allocator);
     errdefer arena.deinit();
 
-    const copied = try tasks.deepCopyForTransfer(ctx, value, arena.allocator(), ctx.allocator);
+    const copied = try tasks.deepCopyForTransfer(ctx, value, arena.allocator(), arena.allocator(), ctx.allocator);
     return .{ .value = copied, .arena = arena };
 }
 
@@ -172,7 +172,7 @@ fn nativeSend(ctx: *Context) anyerror!void {
 
         // Copy before dequeuing or firing the select, so a rejected arena-owned value fails
         // the sender here while the receiver stays queued and undisturbed.
-        const copied = tasks.deepCopyForTransfer(ctx, value, ch.waiting_receivers.items[0].task.ctx.arena.allocator(), ctx.allocator) catch |err| {
+        const copied = tasks.deepCopyForTransfer(ctx, value, ch.waiting_receivers.items[0].task.ctx.arena.allocator(), ctx.allocator, ctx.allocator) catch |err| {
             releaseChannel(ctx, ch);
             container_backing.releaseValue(value);
             return err;
@@ -186,7 +186,7 @@ fn nativeSend(ctx: *Context) anyerror!void {
             sel.result_value = copied;
             sel.result_channel = ch;
         } else {
-            try receiver.ctx.stack.pushMoved(copied);
+            try helpers.pushMovedValue(receiver.ctx, copied);
         }
 
         receiver.blocked_on_channel = null;
@@ -284,8 +284,8 @@ fn nativeReceive(ctx: *Context) anyerror!void {
     // move its value into the freed slot and wake the sender.
     if (ch.capacity > 0 and !ch.buffer.isEmpty()) {
         const entry = ch.buffer.pop();
-        const copied = try tasks.deepCopyForTransfer(ctx, entry.value, ctx.arena.allocator(), ctx.allocator);
-        try ctx.stack.pushMoved(copied);
+        const copied = try tasks.deepCopyForTransfer(ctx, entry.value, ctx.arena.allocator(), ctx.allocator, ctx.allocator);
+        try helpers.pushMovedValue(ctx, copied);
 
         // The buffer's ownership of the popped entry ends here.
         entry.destroy(ch.allocator);
@@ -318,14 +318,14 @@ fn nativeReceive(ctx: *Context) anyerror!void {
     if (ch.waiting_senders.items.len > 0) {
         // Copy before dequeuing, so a rejected arena-owned value leaves the sender queued
         // instead of removed and never woken.
-        const copied = tasks.deepCopyForTransfer(ctx, ch.waiting_senders.items[0].value, ctx.arena.allocator(), ctx.allocator) catch |err| {
+        const copied = tasks.deepCopyForTransfer(ctx, ch.waiting_senders.items[0].value, ctx.arena.allocator(), ctx.allocator, ctx.allocator) catch |err| {
             releaseChannel(ctx, ch);
             return err;
         };
 
         const sender_entry = ch.waiting_senders.orderedRemove(0);
         const sender = sender_entry.task;
-        try ctx.stack.pushMoved(copied);
+        try helpers.pushMovedValue(ctx, copied);
 
         sender.blocked_on_channel = null;
         sender.value_delivered = true;
@@ -392,8 +392,8 @@ fn nativeTryReceive(ctx: *Context) anyerror!void {
     // an unbuffered channel has an empty buffer and falls through
     if (ch.capacity > 0 and !ch.buffer.isEmpty()) {
         const entry = ch.buffer.pop();
-        const copied = try tasks.deepCopyForTransfer(ctx, entry.value, ctx.arena.allocator(), ctx.allocator);
-        try ctx.stack.pushMoved(copied);
+        const copied = try tasks.deepCopyForTransfer(ctx, entry.value, ctx.arena.allocator(), ctx.allocator, ctx.allocator);
+        try helpers.pushMovedValue(ctx, copied);
         try ctx.stack.push(.{ .boolean = true });
         // The buffer's ownership of the popped entry ends here.
         entry.destroy(ch.allocator);
@@ -421,10 +421,10 @@ fn nativeTryReceive(ctx: *Context) anyerror!void {
     if (ch.waiting_senders.items.len > 0) {
         // Copy before dequeuing, so a rejected arena-owned value leaves the sender queued
         // instead of removed and never woken.
-        const copied = try tasks.deepCopyForTransfer(ctx, ch.waiting_senders.items[0].value, ctx.arena.allocator(), ctx.allocator);
+        const copied = try tasks.deepCopyForTransfer(ctx, ch.waiting_senders.items[0].value, ctx.arena.allocator(), ctx.allocator, ctx.allocator);
 
         const sender_entry = ch.waiting_senders.orderedRemove(0);
-        try ctx.stack.pushMoved(copied);
+        try helpers.pushMovedValue(ctx, copied);
         try ctx.stack.push(.{ .boolean = true });
         sender_entry.task.blocked_on_channel = null;
         sender_entry.task.value_delivered = true;
@@ -545,9 +545,9 @@ fn nativeSelect(ctx: *Context) anyerror!void {
     for (channels) |ch| {
         if (ch.capacity > 0 and !ch.buffer.isEmpty()) {
             const entry = ch.buffer.pop();
-            const copied = try tasks.deepCopyForTransfer(ctx, entry.value, alloc, ctx.allocator);
+            const copied = try tasks.deepCopyForTransfer(ctx, entry.value, alloc, ctx.allocator, ctx.allocator);
 
-            try ctx.stack.pushMoved(copied);
+            try helpers.pushMovedValue(ctx, copied);
             try ctx.stack.push(.{ .channel = ch });
             // The buffer's ownership of the popped entry ends here.
             entry.destroy(ch.allocator);
@@ -576,13 +576,13 @@ fn nativeSelect(ctx: *Context) anyerror!void {
         if (ch.waiting_senders.items.len > 0) {
             // Copy before dequeuing, so a rejected arena-owned value leaves the sender
             // queued instead of removed and never woken.
-            const copied = tasks.deepCopyForTransfer(ctx, ch.waiting_senders.items[0].value, alloc, ctx.allocator) catch |err| {
+            const copied = tasks.deepCopyForTransfer(ctx, ch.waiting_senders.items[0].value, alloc, ctx.allocator, ctx.allocator) catch |err| {
                 unlockChannelsOrdered(ctx, channels);
                 return err;
             };
 
             const sender_entry = ch.waiting_senders.orderedRemove(0);
-            try ctx.stack.pushMoved(copied);
+            try helpers.pushMovedValue(ctx, copied);
             try ctx.stack.push(.{ .channel = ch });
 
             sender_entry.task.blocked_on_channel = null;
@@ -645,7 +645,7 @@ fn nativeSelect(ctx: *Context) anyerror!void {
     };
 
     if (result_value) |result_val| {
-        try ctx.stack.pushMoved(result_val);
+        try helpers.pushMovedValue(ctx, result_val);
         try ctx.stack.push(.{ .channel = result_channel.? });
         return;
     }

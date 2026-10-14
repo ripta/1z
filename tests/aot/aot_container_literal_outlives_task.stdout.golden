@@ -1,0 +1,7 @@
+=== literals pushed inside a task ===
+PASS: every push landed in the vector
+PASS: every array literal survives its task
+PASS: every hash literal survives its task
+=== one value per literal site ===
+PASS: two pushes of one site are equal
+PASS: pushes from two tasks are equal

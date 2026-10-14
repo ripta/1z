@@ -103,6 +103,7 @@ const closure_body_registry = @import("closure_body_registry.zig");
 const LoadLock = @import("load_lock.zig").LoadLock;
 const ModuleLoadRecord = @import("module_load_record.zig").ModuleLoadRecord;
 const ReifiedDecodeCache = @import("reified_decode_cache.zig").ReifiedDecodeCache;
+const AotArrayLiteralCache = @import("aot_array_literal_cache.zig").AotArrayLiteralCache;
 const BindingNameStore = @import("binding_name_store.zig").BindingNameStore;
 
 const signal = @import("signal.zig");
@@ -1254,6 +1255,10 @@ pub const Context = struct {
     /// process-lifetime. One decode per push site serves every context, in every AOT class. See
     /// `ReifiedDecodeCache`.
     reified_decode_cache: *ReifiedDecodeCache = undefined,
+    /// One decoded by-value container literal per compiled push site. Registered on the root by
+    /// `onez_runtime_register_array_literals` and owned by it. Task contexts read the root's
+    /// through `rootContext`, so theirs stays null.
+    aot_array_literal_cache: ?*AotArrayLiteralCache = null,
     /// name -> dispatch_id for user generic words, replayed from the AOT image
     /// dispatch-entry table at startup. The AOT runtime keeps user generics
     /// only in compiled form, so `resolveDispatchId` consults this to resolve a
@@ -2639,6 +2644,11 @@ pub const Context = struct {
             // root-owned allocators it sits in front of. Child contexts share
             // the parent's pointer without retaining and skip this branch.
             container_backing.releaseValue(.{ .mutable_map = self.module_cache_value });
+
+            // Last of the release traffic: a cached literal can sit in any container released
+            // above, and its quotation bodies live on the entry this frees.
+            if (self.aot_array_literal_cache) |cache| cache.destroy();
+
             self.hook_registry.deinit(self.allocator);
             self.allocator.destroy(self.hook_registry);
             self.quotation_stamp_store.destroy();

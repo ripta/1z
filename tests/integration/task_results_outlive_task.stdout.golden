@@ -1,0 +1,81 @@
+Stack: [ ]
+Stack: [ ]
+=== await ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: the string survives the task
+PASS: the symbol survives the task
+PASS: the bignum survives the task
+PASS: the nested array survives the task
+Stack: [ ]
+=== await-all ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: await-all returns both results
+Stack: [ ]
+PASS: the string survives the task
+PASS: the symbol survives the task
+PASS: the bignum survives the task
+PASS: the nested array survives the task
+Stack: [ ]
+PASS: the string survives the task
+PASS: the symbol survives the task
+PASS: the bignum survives the task
+PASS: the nested array survives the task
+Stack: [ ]
+=== receive on an unbuffered channel ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: the string survives the task
+PASS: the symbol survives the task
+PASS: the bignum survives the task
+PASS: the nested array survives the task
+Stack: [ ]
+=== receive from a buffered channel ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: the string survives the task
+PASS: the symbol survives the task
+PASS: the bignum survives the task
+PASS: the nested array survives the task
+Stack: [ ]
+=== select ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: the string survives the task
+PASS: the symbol survives the task
+PASS: the bignum survives the task
+PASS: the nested array survives the task
+Stack: [ ]
+=== try-receive ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: the string survives the task
+PASS: the symbol survives the task
+PASS: the bignum survives the task
+PASS: the nested array survives the task
+Stack: [ ]
+=== byte-array results ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: #slice keeps its length
+Stack: [ ]
+PASS: #slice keeps its first byte
+Stack: [ ]
+PASS: #slice keeps its last byte
+Stack: [ ]
+PASS: #append keeps its length
+Stack: [ ]
+PASS: #append keeps its last byte
+Stack: [ ]
+PASS: #push keeps its length
+Stack: [ ]
+PASS: #push keeps its last byte
+Stack: [ ]

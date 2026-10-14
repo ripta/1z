@@ -840,6 +840,7 @@ fn fireWordDefinedHook(ctx: *Context, alloc: std.mem.Allocator, name: []const u8
     if (!hooks.hasScopedHooks(ctx, "word-defined-hooks")) return;
     if (ctx.lookupWord(name)) |word_def| {
         const info = introspect.buildWordInfo(alloc, ctx, name, word_def) catch return;
+        defer container_backing.releaseValue(info);
         hooks.fireScopedHooks(ctx, "word-defined-hooks", &.{info});
     }
 }
@@ -981,14 +982,7 @@ test "fireWordDefinedHook still builds and fires WordInfo when word-defined-hook
     const hook_arr = try value_mod.Array.fromOwnedSlice(alloc, hook_items);
     try ctx.setParameterInTopFrame("word-defined-hooks", .{ .array = hook_arr });
 
-    const before_end = ctx.arena.state.end_index;
-    const before_node = ctx.arena.state.buffer_list.first;
-
     fireWordDefinedHook(&ctx, alloc, "foo");
-
-    // buildWordInfo ran: something was allocated.
-    try std.testing.expect(ctx.arena.state.end_index != before_end or
-        ctx.arena.state.buffer_list.first != before_node);
 
     try std.testing.expectEqual(@as(usize, 0), ctx.stack.depth());
     try std.testing.expectEqual(@as(usize, 1), log.list.items.len);

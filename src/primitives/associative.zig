@@ -112,8 +112,18 @@ fn getErrorField(ctx: *Context, err: *const ErrorObject, field_name: []const u8)
                 built = i + 1;
                 const hash_alloc = frame_hash.header.allocator;
                 const word_key = hash_alloc.dupe(u8, "word") catch return error.OutOfMemory;
-                frame_hash.map.put(hash_alloc, word_key, value_mod.stringValue(frame.word_name)) catch {
+                const name_copy = hash_alloc.dupe(u8, frame.word_name) catch {
                     hash_alloc.free(word_key);
+                    return error.OutOfMemory;
+                };
+                const name_val = value_mod.ownedStringValue(hash_alloc, name_copy) catch {
+                    hash_alloc.free(word_key);
+                    hash_alloc.free(name_copy);
+                    return error.OutOfMemory;
+                };
+                frame_hash.map.put(hash_alloc, word_key, name_val) catch {
+                    hash_alloc.free(word_key);
+                    container_backing.releaseValue(name_val);
                     return error.OutOfMemory;
                 };
                 const line_key = hash_alloc.dupe(u8, "line") catch return error.OutOfMemory;
@@ -380,13 +390,11 @@ fn nativeAtKeysHash(ctx: *Context) anyerror!void {
     var iter = h.map.iterator();
     var i: usize = 0;
     while (iter.next()) |entry| {
-        // The hash owns its key bytes and frees them at destroy, so
-        // the escaping symbols need arena-lifetime copies.
-        const key_copy = ctx.quotationAllocator().dupe(u8, entry.key_ptr.*) catch {
+        keys[i] = helpers.ownedSymbolCopy(ctx.allocator, entry.key_ptr.*) catch {
+            container_backing.releaseValues(keys[0..i]);
             ctx.allocator.free(keys);
             return error.OutOfMemory;
         };
-        keys[i] = value_mod.symbolValue(key_copy);
         i += 1;
     }
     try helpers.pushAdoptedArray(ctx, ctx.allocator, keys);
@@ -400,13 +408,11 @@ fn nativeAtKeysMutableMap(ctx: *Context) anyerror!void {
     var iter = m.map.iterator();
     var i: usize = 0;
     while (iter.next()) |entry| {
-        // The map owns its key bytes and frees them at release, so
-        // the escaping symbols need arena-lifetime copies.
-        const key_copy = ctx.quotationAllocator().dupe(u8, entry.key_ptr.*) catch {
+        keys[i] = helpers.ownedSymbolCopy(ctx.allocator, entry.key_ptr.*) catch {
+            container_backing.releaseValues(keys[0..i]);
             ctx.allocator.free(keys);
             return error.OutOfMemory;
         };
-        keys[i] = value_mod.symbolValue(key_copy);
         i += 1;
     }
     try helpers.pushAdoptedArray(ctx, ctx.allocator, keys);
@@ -503,4 +509,23 @@ fn nativeAtValuesError(ctx: *Context) anyerror!void {
 
     adopted = true;
     try helpers.pushAdoptedArray(ctx, ctx.allocator, values);
+}
+
+test "@keys on a hash returns owned symbols in an array on the shared allocator" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const hash = try HashTable.create(ctx.allocator);
+    try ctx.stack.pushMoved(.{ .hash = hash });
+    const key = try ctx.allocator.dupe(u8, "alpha");
+    try hash.map.put(hash.header.allocator, key, .{ .fixnum = 1 });
+
+    try nativeAtKeysHash(&ctx);
+
+    const result = try ctx.stack.pop();
+    defer container_backing.releaseValue(result);
+
+    try std.testing.expectEqual(ctx.allocator.ptr, result.array.header.allocator.ptr);
+    try std.testing.expectEqualStrings("alpha", result.array.items[0].symbol.bytes);
+    try std.testing.expect(result.array.items[0].symbol.backing != null);
 }

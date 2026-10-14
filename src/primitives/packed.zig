@@ -217,7 +217,7 @@ fn nativePackedFill(ctx: *Context) anyerror!void {
 // ---------------------------------------------------------------------------
 
 fn nativePackedToArray(ctx: *Context) anyerror!void {
-    const alloc = ctx.quotationAllocator();
+    const alloc = ctx.allocator;
 
     const val = try ctx.stack.pop();
     defer container_backing.releaseValue(val);
@@ -246,19 +246,28 @@ fn nativePackedToArray(ctx: *Context) anyerror!void {
     const count = bytes.len / elem_type.elemSize();
     const result = try alloc.alloc(Value, count);
 
-    switch (elem_type) {
-        inline .f64, .f32, .i8, .i16, .i32, .i64, .u8, .u16, .u32, .u64 => |et| {
-            try readElements(et.toType(), ctx, bytes, result);
-        },
+    {
+        var filled: usize = 0;
+        errdefer {
+            container_backing.releaseValues(result[0..filled]);
+            alloc.free(result);
+        }
+
+        switch (elem_type) {
+            inline .f64, .f32, .i8, .i16, .i32, .i64, .u8, .u16, .u32, .u64 => |et| {
+                try readElements(et.toType(), ctx, bytes, result, &filled);
+            },
+        }
     }
 
     try helpers.pushAdoptedArray(ctx, alloc, result);
 }
 
-fn readElements(comptime T: type, ctx: *Context, bytes: []const u8, out: []Value) !void {
+fn readElements(comptime T: type, ctx: *Context, bytes: []const u8, out: []Value, filled: *usize) !void {
     const n = packed_kernels.elementCount(T, bytes);
     for (0..n) |i| {
         out[i] = try elementToValue(T, ctx, packed_kernels.readElement(T, bytes, i));
+        filled.* = i + 1;
     }
 }
 

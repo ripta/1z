@@ -41,9 +41,9 @@ const unwrapBaseType = dispatch_mod.unwrapBaseType;
 /// sequence type.
 ///
 /// The returned iterator owns its backing, released at destroy: an array source is retained
-/// through its header, and the other sequence types materialize a slice on `ctx.allocator` whose
-/// elements are retained. String codepoint dupes go to the arena, since a yielded string may
-/// outlive the iterator and string bytes have no ownership model yet.
+/// through its header, and the other sequence types materialize a slice on `ctx.allocator` that
+/// owns one reference per element. A non-ASCII codepoint of a string source is an owned string on
+/// `ctx.allocator`, so a yielded codepoint outlives the task that iterated.
 pub fn seqToArrayIter(seq: Value, ctx: *Context) !?*Iterator {
     const s = unwrapBaseType(seq);
     const kind: Iterator.Kind = switch (s) {
@@ -52,8 +52,7 @@ pub fn seqToArrayIter(seq: Value, ctx: *Context) !?*Iterator {
             break :blk .{ .array = .{ .items = arr.items, .index = 0, .source = arr } };
         },
         .string, .vector, .byte_array, .set => blk: {
-            const items = try sequenceToValuesScratch(s, ctx.allocator, ctx.quotationAllocator());
-            container_backing.retainValues(items);
+            const items = try sequenceToValues(s, ctx);
             break :blk .{ .array = .{ .items = items, .index = 0 } };
         },
         // A value-map entry is built rather than borrowed, so these two arms sit here rather than
@@ -164,13 +163,9 @@ fn collectToMutableArray(in_seq: Value, ctx: *Context, alloc: Allocator) ![]Valu
             return list.toOwnedSlice(alloc) catch return error.OutOfMemory;
         },
         .string, .vector, .byte_array, .set => {
-            // The slice lands on `alloc` for the result array to adopt. A string source dupes
-            // per-codepoint strings; those go to the arena, since string bytes have no ownership
-            // model yet and must die with the context rather than land on the process-lifetime
-            // allocator.
-            const result = try sequenceToValuesScratch(seq, alloc, ctx.quotationAllocator());
-            container_backing.retainValues(result);
-            return result;
+            // The slice lands on the context allocator for the result array to adopt. It already
+            // owns one reference per element.
+            return try sequenceToValues(seq, ctx);
         },
         else => {
             setSequenceOperandMismatch(ctx, in_seq);
@@ -361,7 +356,7 @@ const SequenceBuilder = sequence.SequenceBuilder;
 const SequenceKind = sequence.SequenceKind;
 const classifySequence = sequence.classifySequence;
 const sequenceToValues = sequence.sequenceToValues;
-const sequenceToValuesScratch = sequence.sequenceToValuesScratch;
+const releaseOwnedValues = sequence.releaseOwnedValues;
 const utf8NthCodepoint = sequence.utf8NthCodepoint;
 const utf8LastCodepoint = sequence.utf8LastCodepoint;
 const utf8CodepointCount = sequence.utf8CodepointCount;
@@ -914,7 +909,6 @@ pub fn nativeEach(ctx: *Context) anyerror!void {
     // The iterator below borrows the container and is fully consumed before
     // this scope exits, so releasing the source on exit is safe.
     defer container_backing.releaseValue(raw_seq);
-    const alloc = ctx.quotationAllocator();
     const coerced = (try coerceSequenceOperand(ctx, raw_seq, .native_seqs)) orelse {
         setSequenceOperandMismatch(ctx, raw_seq);
         return error.TypeMismatch;
@@ -933,11 +927,12 @@ pub fn nativeEach(ctx: *Context) anyerror!void {
         return;
     }
 
-    var iter = SequenceIterator.init(seq, alloc) orelse {
+    var iter = SequenceIterator.initInContext(seq, ctx) orelse {
         setSequenceOperandMismatch(ctx, raw_seq);
         return error.TypeMismatch;
     };
     while (try iter.next()) |elem| {
+        defer iter.release(elem);
         try ctx.stack.push(elem);
         try pc.executeWithFrame(ctx);
     }
@@ -949,7 +944,6 @@ pub fn nativeEachIndex(ctx: *Context) anyerror!void {
     defer pc.release();
     const raw_seq = try ctx.stack.pop();
     defer container_backing.releaseValue(raw_seq);
-    const alloc = ctx.quotationAllocator();
     const coerced = (try coerceSequenceOperand(ctx, raw_seq, .native_seqs)) orelse {
         setSequenceOperandMismatch(ctx, raw_seq);
         return error.TypeMismatch;
@@ -969,11 +963,12 @@ pub fn nativeEachIndex(ctx: *Context) anyerror!void {
         return;
     }
 
-    var iter = SequenceIterator.init(seq, alloc) orelse {
+    var iter = SequenceIterator.initInContext(seq, ctx) orelse {
         setSequenceOperandMismatch(ctx, raw_seq);
         return error.TypeMismatch;
     };
     while (try iter.next()) |elem| {
+        defer iter.release(elem);
         try ctx.stack.push(elem);
         try ctx.stack.push(.{ .fixnum = idx });
         try pc.executeWithFrame(ctx);
@@ -1266,7 +1261,6 @@ pub fn nativeReduce(ctx: *Context) anyerror!void {
     errdefer container_backing.releaseValue(acc);
     const raw_seq = try ctx.stack.pop();
     defer container_backing.releaseValue(raw_seq);
-    const alloc = ctx.quotationAllocator();
     const coerced = (try coerceSequenceOperand(ctx, raw_seq, .native_seqs)) orelse {
         setSequenceOperandMismatch(ctx, raw_seq);
         return error.TypeMismatch;
@@ -1292,17 +1286,16 @@ pub fn nativeReduce(ctx: *Context) anyerror!void {
         return;
     }
 
-    var iter = SequenceIterator.init(seq, alloc) orelse {
+    var iter = SequenceIterator.initInContext(seq, ctx) orelse {
         setSequenceOperandMismatch(ctx, raw_seq);
         return error.TypeMismatch;
     };
     while (try iter.next()) |elem| {
+        defer iter.release(elem);
         try ctx.stack.push(acc);
         try ctx.stack.push(elem);
         try pc.executeWithFrame(ctx);
         const new_acc = try ctx.stack.pop();
-        // SequenceIterator yields borrowed elements, so only the accumulator's
-        // owning reference is dropped here.
         container_backing.releaseValue(acc);
         acc = new_acc;
     }
@@ -1320,7 +1313,6 @@ pub fn nativeReduceIndex(ctx: *Context) anyerror!void {
     errdefer container_backing.releaseValue(acc);
     const raw_seq = try ctx.stack.pop();
     defer container_backing.releaseValue(raw_seq);
-    const alloc = ctx.quotationAllocator();
     const coerced = (try coerceSequenceOperand(ctx, raw_seq, .native_seqs)) orelse {
         setSequenceOperandMismatch(ctx, raw_seq);
         return error.TypeMismatch;
@@ -1347,11 +1339,12 @@ pub fn nativeReduceIndex(ctx: *Context) anyerror!void {
         return;
     }
 
-    var iter = SequenceIterator.init(seq, alloc) orelse {
+    var iter = SequenceIterator.initInContext(seq, ctx) orelse {
         setSequenceOperandMismatch(ctx, raw_seq);
         return error.TypeMismatch;
     };
     while (try iter.next()) |elem| {
+        defer iter.release(elem);
         try ctx.stack.push(acc);
         try ctx.stack.push(elem);
         try ctx.stack.push(.{ .fixnum = idx });
@@ -1388,8 +1381,6 @@ pub fn nativeSlice(ctx: *Context) anyerror!void {
     const start: usize = @intCast(start_val);
     const end: usize = @intCast(end_val);
 
-    const alloc = ctx.quotationAllocator();
-
     switch (seq) {
         .array => |arr| {
             if (end > arr.items.len) {
@@ -1412,8 +1403,7 @@ pub fn nativeSlice(ctx: *Context) anyerror!void {
                 return error.IndexOutOfBounds;
             }
             const slice_len = end - start;
-            const result_vec = Vector.create(alloc) catch return error.OutOfMemory;
-            result_vec.list.ensureTotalCapacity(alloc, slice_len) catch return error.OutOfMemory;
+            const result_vec = try vectorWithCapacity(ctx, slice_len);
             for (v.list.items[start..end]) |elem| {
                 result_vec.list.appendAssumeCapacity(elem);
             }
@@ -1428,12 +1418,11 @@ pub fn nativeSlice(ctx: *Context) anyerror!void {
                 return error.IndexOutOfBounds;
             }
             const slice_len = end - start;
-            const result_ba = ByteArray.create(alloc) catch return error.OutOfMemory;
-            result_ba.ensureTotalCapacity(alloc, slice_len) catch return error.OutOfMemory;
+            const result_ba = try byteArrayWithCapacity(ctx, slice_len);
             for (bytes[start..end]) |byte| {
                 result_ba.appendAssumeCapacity(byte);
             }
-            try ctx.stack.push(.{ .byte_array = result_ba });
+            try helpers.pushMovedValue(ctx, .{ .byte_array = result_ba });
         },
         else => {
             setErrorContext(ctx, "expected sequence, got {s}", .{valueTypeName(seq)});
@@ -1554,6 +1543,27 @@ fn nativeByteDecode(ctx: *Context) anyerror!void {
     try ctx.stack.push(.{ .fixnum = @intCast(next) });
 }
 
+/// The elements of a sequence as owned references on the shared allocator. `deinit` releases them
+/// and frees the slice, unless `moved` says a container took the references. The slice is freed
+/// either way.
+const OwnedItems = struct {
+    ctx: *Context,
+    items: []Value,
+    moved: bool = false,
+
+    fn init(ctx: *Context, seq: Value) !OwnedItems {
+        return .{ .ctx = ctx, .items = try sequenceToValues(seq, ctx) };
+    }
+
+    fn deinit(self: OwnedItems) void {
+        if (self.moved) {
+            self.ctx.allocator.free(self.items);
+        } else {
+            releaseOwnedValues(self.ctx, self.items);
+        }
+    }
+};
+
 /// #append ( seq1 seq2 -- seq )
 ///
 /// seq2's elements are converted or iterated into seq1's type as needed.
@@ -1563,32 +1573,31 @@ pub fn nativeAppend(ctx: *Context) anyerror!void {
     const seq1 = try ctx.stack.pop();
     defer container_backing.releaseValue(seq1);
 
-    const alloc = ctx.quotationAllocator();
-
     switch (seq1) {
         .array => |arr1| {
-            const items2 = try sequenceToValuesScratch(seq2, ctx.allocator, alloc);
-            defer ctx.allocator.free(items2);
+            var owned2 = try OwnedItems.init(ctx, seq2);
+            defer owned2.deinit();
+            const items2 = owned2.items;
             const result = ctx.allocator.alloc(Value, arr1.items.len + items2.len) catch return error.OutOfMemory;
             @memcpy(result[0..arr1.items.len], arr1.items);
+            container_backing.retainValues(result[0..arr1.items.len]);
             @memcpy(result[arr1.items.len..], items2);
-            // Each element copied into the result is a new owning reference.
-            container_backing.retainValues(result);
+            owned2.moved = true;
             try helpers.pushAdoptedArray(ctx, ctx.allocator, result);
         },
         .vector => |vec1| {
-            const items2 = try sequenceToValuesScratch(seq2, ctx.allocator, alloc);
-            defer ctx.allocator.free(items2);
-            const new_vec = Vector.create(alloc) catch return error.OutOfMemory;
-            new_vec.list.ensureTotalCapacity(alloc, vec1.list.items.len + items2.len) catch return error.OutOfMemory;
+            var owned2 = try OwnedItems.init(ctx, seq2);
+            defer owned2.deinit();
+            const items2 = owned2.items;
+            const new_vec = try vectorWithCapacity(ctx, vec1.list.items.len + items2.len);
             for (vec1.list.items) |item| {
                 new_vec.list.appendAssumeCapacity(item);
             }
+            container_backing.retainValues(new_vec.list.items);
             for (items2) |item| {
                 new_vec.list.appendAssumeCapacity(item);
             }
-            // Each element copied into the new vector is a new owning reference.
-            container_backing.retainValues(new_vec.list.items);
+            owned2.moved = true;
             try helpers.pushMovedVector(ctx, new_vec);
         },
         .string => |s1| {
@@ -1605,8 +1614,9 @@ pub fn nativeAppend(ctx: *Context) anyerror!void {
 
             // For strings, convert seq2 elements to strings and concatenate
             // Accept both strings (codepoints) and integers 0-255 (single bytes)
-            const items2 = try sequenceToValuesScratch(seq2, ctx.allocator, alloc);
-            defer ctx.allocator.free(items2);
+            const owned2 = try OwnedItems.init(ctx, seq2);
+            defer owned2.deinit();
+            const items2 = owned2.items;
             var total_len: usize = s1.bytes.len;
             for (items2) |item| {
                 switch (item) {
@@ -1647,18 +1657,18 @@ pub fn nativeAppend(ctx: *Context) anyerror!void {
             // expanding it into one boxed Value per byte via sequenceToValues below.
             if (seq2 == .string or seq2 == .byte_array) {
                 const bytes2: []const u8 = if (seq2 == .string) seq2.string.bytes else seq2.byte_array.slice();
-                const result_ba = ByteArray.create(alloc) catch return error.OutOfMemory;
                 const bytes1 = b1.slice();
-                result_ba.ensureTotalCapacity(alloc, bytes1.len + bytes2.len) catch return error.OutOfMemory;
+                const result_ba = try byteArrayWithCapacity(ctx, bytes1.len + bytes2.len);
                 result_ba.appendSliceAssumeCapacity(bytes1);
                 result_ba.appendSliceAssumeCapacity(bytes2);
-                try ctx.stack.push(.{ .byte_array = result_ba });
+                try helpers.pushMovedValue(ctx, .{ .byte_array = result_ba });
                 return;
             }
 
             // For byte arrays, accept integers 0-255 and strings (as UTF-8 bytes)
-            const items2 = try sequenceToValuesScratch(seq2, ctx.allocator, alloc);
-            defer ctx.allocator.free(items2);
+            const owned2 = try OwnedItems.init(ctx, seq2);
+            defer owned2.deinit();
+            const items2 = owned2.items;
 
             var extra_len: usize = 0;
             for (items2) |item| {
@@ -1677,9 +1687,8 @@ pub fn nativeAppend(ctx: *Context) anyerror!void {
                     },
                 }
             }
-            const result_ba = ByteArray.create(alloc) catch return error.OutOfMemory;
             const bytes1 = b1.slice();
-            result_ba.ensureTotalCapacity(alloc, bytes1.len + extra_len) catch return error.OutOfMemory;
+            const result_ba = try byteArrayWithCapacity(ctx, bytes1.len + extra_len);
             result_ba.appendSliceAssumeCapacity(bytes1);
             for (items2) |item| {
                 switch (item) {
@@ -1694,7 +1703,7 @@ pub fn nativeAppend(ctx: *Context) anyerror!void {
                     else => unreachable,
                 }
             }
-            try ctx.stack.push(.{ .byte_array = result_ba });
+            try helpers.pushMovedValue(ctx, .{ .byte_array = result_ba });
         },
         else => {
             setErrorContext(ctx, "expected sequence, got {s}", .{valueTypeName(seq1)});
@@ -1714,7 +1723,7 @@ pub fn nativeAppendMut(ctx: *Context) anyerror!void {
         return err;
     };
 
-    const items = sequenceToValuesScratch(seq, ctx.allocator, ctx.quotationAllocator()) catch |err| {
+    const items = sequenceToValues(seq, ctx) catch |err| {
         container_backing.releaseValue(seq);
         container_backing.releaseValue(.{ .vector = vec });
         return err;
@@ -1724,10 +1733,8 @@ pub fn nativeAppendMut(ctx: *Context) anyerror!void {
     vec.header.lock();
     var appended: usize = 0;
     while (appended < items.len) : (appended += 1) {
-        const elem = items[appended];
-        container_backing.retainValue(elem);
-        vec.list.append(vec.header.allocator, elem) catch |err| {
-            container_backing.releaseValue(elem);
+        vec.list.append(vec.header.allocator, items[appended]) catch |err| {
+            container_backing.releaseValues(items[appended..]);
             vec.header.unlock();
             container_backing.releaseValue(seq);
             container_backing.releaseValue(.{ .vector = vec });
@@ -1744,6 +1751,28 @@ pub fn nativeAppendMut(ctx: *Context) anyerror!void {
     };
 }
 
+/// A fresh vector with room for `capacity` elements. It lives on the shared allocator so that
+/// a task can store it in a container that outlives the task. The caller owns the creation
+/// reference.
+fn vectorWithCapacity(ctx: *Context, capacity: usize) error{OutOfMemory}!*Vector {
+    const vec = try Vector.create(ctx.allocator);
+    vec.list.ensureTotalCapacity(ctx.allocator, capacity) catch {
+        container_backing.releaseValue(.{ .vector = vec });
+        return error.OutOfMemory;
+    };
+    return vec;
+}
+
+/// Byte-array twin of `vectorWithCapacity`.
+fn byteArrayWithCapacity(ctx: *Context, capacity: usize) ByteArray.ResizeError!*ByteArray {
+    const ba = try ByteArray.create(ctx.allocator);
+    ba.ensureTotalCapacity(ctx.allocator, capacity) catch |e| {
+        container_backing.releaseValue(.{ .byte_array = ba });
+        return e;
+    };
+    return ba;
+}
+
 /// #prepend ( seq1 seq2 -- seq )
 pub fn nativePrepend(ctx: *Context) anyerror!void {
     const seq2 = try ctx.stack.pop();
@@ -1751,39 +1780,40 @@ pub fn nativePrepend(ctx: *Context) anyerror!void {
     const seq1 = try ctx.stack.pop();
     defer container_backing.releaseValue(seq1);
 
-    const alloc = ctx.quotationAllocator();
-
     switch (seq1) {
         .array => |arr1| {
-            const items2 = try sequenceToValuesScratch(seq2, ctx.allocator, alloc);
-            defer ctx.allocator.free(items2);
+            var owned2 = try OwnedItems.init(ctx, seq2);
+            defer owned2.deinit();
+            const items2 = owned2.items;
             const result = ctx.allocator.alloc(Value, items2.len + arr1.items.len) catch return error.OutOfMemory;
             @memcpy(result[0..items2.len], items2);
+            owned2.moved = true;
             @memcpy(result[items2.len..], arr1.items);
-            // Each element copied into the result is a new owning reference.
-            container_backing.retainValues(result);
+            container_backing.retainValues(result[items2.len..]);
             try helpers.pushAdoptedArray(ctx, ctx.allocator, result);
         },
         .vector => |vec1| {
-            const items2 = try sequenceToValuesScratch(seq2, ctx.allocator, alloc);
-            defer ctx.allocator.free(items2);
-            const new_vec = Vector.create(alloc) catch return error.OutOfMemory;
-            new_vec.list.ensureTotalCapacity(alloc, items2.len + vec1.list.items.len) catch return error.OutOfMemory;
+            var owned2 = try OwnedItems.init(ctx, seq2);
+            defer owned2.deinit();
+            const items2 = owned2.items;
+            const new_vec = try vectorWithCapacity(ctx, items2.len + vec1.list.items.len);
             for (items2) |item| {
                 new_vec.list.appendAssumeCapacity(item);
             }
+            owned2.moved = true;
+            const own_start = new_vec.list.items.len;
             for (vec1.list.items) |item| {
                 new_vec.list.appendAssumeCapacity(item);
             }
-            // Each element copied into the new vector is a new owning reference.
-            container_backing.retainValues(new_vec.list.items);
+            container_backing.retainValues(new_vec.list.items[own_start..]);
             try helpers.pushMovedVector(ctx, new_vec);
         },
         .string => |s1| {
             // For strings, convert seq2 elements to strings and prepend
             // Accept both strings (codepoints) and integers 0-255 (single bytes)
-            const items2 = try sequenceToValuesScratch(seq2, ctx.allocator, alloc);
-            defer ctx.allocator.free(items2);
+            const owned2 = try OwnedItems.init(ctx, seq2);
+            defer owned2.deinit();
+            const items2 = owned2.items;
             var total_len: usize = s1.bytes.len;
             for (items2) |item| {
                 switch (item) {
@@ -1823,8 +1853,9 @@ pub fn nativePrepend(ctx: *Context) anyerror!void {
         },
         .byte_array => |b1| {
             // For byte arrays, accept integers 0-255 and strings (as UTF-8 bytes)
-            const items2 = try sequenceToValuesScratch(seq2, ctx.allocator, alloc);
-            defer ctx.allocator.free(items2);
+            const owned2 = try OwnedItems.init(ctx, seq2);
+            defer owned2.deinit();
+            const items2 = owned2.items;
 
             var extra_len: usize = 0;
             for (items2) |item| {
@@ -1844,9 +1875,8 @@ pub fn nativePrepend(ctx: *Context) anyerror!void {
                 }
             }
 
-            const result_ba = ByteArray.create(alloc) catch return error.OutOfMemory;
             const bytes1 = b1.slice();
-            result_ba.ensureTotalCapacity(alloc, extra_len + bytes1.len) catch return error.OutOfMemory;
+            const result_ba = try byteArrayWithCapacity(ctx, extra_len + bytes1.len);
             for (items2) |item| {
                 switch (item) {
                     .fixnum => |i| {
@@ -1865,7 +1895,7 @@ pub fn nativePrepend(ctx: *Context) anyerror!void {
                 result_ba.appendAssumeCapacity(byte);
             }
 
-            try ctx.stack.push(.{ .byte_array = result_ba });
+            try helpers.pushMovedValue(ctx, .{ .byte_array = result_ba });
         },
         else => {
             setErrorContext(ctx, "expected sequence, got {s}", .{valueTypeName(seq1)});
@@ -1880,7 +1910,6 @@ fn nativePush(ctx: *Context) anyerror!void {
     const elem = try ctx.stack.pop();
     const seq = try ctx.stack.pop();
     defer container_backing.releaseValue(seq);
-    const alloc = ctx.quotationAllocator();
 
     switch (seq) {
         .array => |arr| {
@@ -1893,8 +1922,7 @@ fn nativePush(ctx: *Context) anyerror!void {
             try helpers.pushAdoptedArray(ctx, ctx.allocator, result);
         },
         .vector => |vec| {
-            const new_vec = Vector.create(alloc) catch return error.OutOfMemory;
-            new_vec.list.ensureTotalCapacity(alloc, vec.list.items.len + 1) catch return error.OutOfMemory;
+            const new_vec = try vectorWithCapacity(ctx, vec.list.items.len + 1);
             container_backing.retainValues(vec.list.items);
             for (vec.list.items) |item| {
                 new_vec.list.appendAssumeCapacity(item);
@@ -1934,15 +1962,14 @@ fn nativePush(ctx: *Context) anyerror!void {
                     return error.TypeMismatch;
                 },
             };
-            const result_ba = ByteArray.create(alloc) catch return error.OutOfMemory;
             const bytes = b.slice();
-            result_ba.ensureTotalCapacity(alloc, bytes.len + 1) catch return error.OutOfMemory;
+            const result_ba = try byteArrayWithCapacity(ctx, bytes.len + 1);
             for (bytes) |byte| {
                 result_ba.appendAssumeCapacity(byte);
             }
             result_ba.appendAssumeCapacity(byte_val);
             container_backing.releaseValue(elem);
-            try ctx.stack.push(.{ .byte_array = result_ba });
+            try helpers.pushMovedValue(ctx, .{ .byte_array = result_ba });
         },
         else => {
             container_backing.releaseValue(elem);
@@ -1957,7 +1984,6 @@ fn nativePop(ctx: *Context) anyerror!void {
     if (try dispatch_helpers.tryDispatchContainerAtDepth(ctx, ctx.nativeDispatchId(.pop), 0, true)) return;
     const seq = try ctx.stack.pop();
     defer container_backing.releaseValue(seq);
-    const alloc = ctx.quotationAllocator();
 
     switch (seq) {
         .array => |arr| {
@@ -1973,8 +1999,7 @@ fn nativePop(ctx: *Context) anyerror!void {
                 setErrorContext(ctx, "cannot #pop from empty vector", .{});
                 return error.EmptySequence;
             }
-            const new_vec = Vector.create(alloc) catch return error.OutOfMemory;
-            new_vec.list.ensureTotalCapacity(alloc, vec.list.items.len - 1) catch return error.OutOfMemory;
+            const new_vec = try vectorWithCapacity(ctx, vec.list.items.len - 1);
             const kept = vec.list.items[0 .. vec.list.items.len - 1];
             container_backing.retainValues(kept);
             for (kept) |item| {
@@ -2006,12 +2031,11 @@ fn nativePop(ctx: *Context) anyerror!void {
                 return error.EmptySequence;
             }
             const last_byte = bytes[bytes.len - 1];
-            const result_ba = ByteArray.create(alloc) catch return error.OutOfMemory;
-            result_ba.ensureTotalCapacity(alloc, bytes.len - 1) catch return error.OutOfMemory;
+            const result_ba = try byteArrayWithCapacity(ctx, bytes.len - 1);
             for (bytes[0 .. bytes.len - 1]) |byte| {
                 result_ba.appendAssumeCapacity(byte);
             }
-            try ctx.stack.push(.{ .byte_array = result_ba });
+            try helpers.pushMovedValue(ctx, .{ .byte_array = result_ba });
             try ctx.stack.push(.{ .fixnum = last_byte });
         },
         else => {
@@ -2026,7 +2050,6 @@ fn nativeUnshift(ctx: *Context) anyerror!void {
     const elem = try ctx.stack.pop();
     const seq = try ctx.stack.pop();
     defer container_backing.releaseValue(seq);
-    const alloc = ctx.quotationAllocator();
 
     switch (seq) {
         .array => |arr| {
@@ -2039,8 +2062,7 @@ fn nativeUnshift(ctx: *Context) anyerror!void {
             try helpers.pushAdoptedArray(ctx, ctx.allocator, result);
         },
         .vector => |vec| {
-            const new_vec = Vector.create(alloc) catch return error.OutOfMemory;
-            new_vec.list.ensureTotalCapacity(alloc, vec.list.items.len + 1) catch return error.OutOfMemory;
+            const new_vec = try vectorWithCapacity(ctx, vec.list.items.len + 1);
             new_vec.list.appendAssumeCapacity(elem);
             container_backing.retainValues(vec.list.items);
             for (vec.list.items) |item| {
@@ -2078,15 +2100,14 @@ fn nativeUnshift(ctx: *Context) anyerror!void {
                     return error.TypeMismatch;
                 },
             };
-            const result_ba = ByteArray.create(alloc) catch return error.OutOfMemory;
             const bytes = b.slice();
-            result_ba.ensureTotalCapacity(alloc, bytes.len + 1) catch return error.OutOfMemory;
+            const result_ba = try byteArrayWithCapacity(ctx, bytes.len + 1);
             result_ba.appendAssumeCapacity(byte_val);
             for (bytes) |byte| {
                 result_ba.appendAssumeCapacity(byte);
             }
             container_backing.releaseValue(elem);
-            try ctx.stack.push(.{ .byte_array = result_ba });
+            try helpers.pushMovedValue(ctx, .{ .byte_array = result_ba });
         },
         else => {
             container_backing.releaseValue(elem);
@@ -2100,7 +2121,6 @@ fn nativeUnshift(ctx: *Context) anyerror!void {
 fn nativeShift(ctx: *Context) anyerror!void {
     const seq = try ctx.stack.pop();
     defer container_backing.releaseValue(seq);
-    const alloc = ctx.quotationAllocator();
 
     switch (seq) {
         .array => |arr| {
@@ -2116,8 +2136,7 @@ fn nativeShift(ctx: *Context) anyerror!void {
                 setErrorContext(ctx, "cannot #shift from empty vector", .{});
                 return error.EmptySequence;
             }
-            const new_vec = Vector.create(alloc) catch return error.OutOfMemory;
-            new_vec.list.ensureTotalCapacity(alloc, vec.list.items.len - 1) catch return error.OutOfMemory;
+            const new_vec = try vectorWithCapacity(ctx, vec.list.items.len - 1);
             const kept = vec.list.items[1..];
             container_backing.retainValues(kept);
             for (kept) |item| {
@@ -2149,12 +2168,11 @@ fn nativeShift(ctx: *Context) anyerror!void {
                 return error.EmptySequence;
             }
             const first_byte = bytes[0];
-            const result_ba = ByteArray.create(alloc) catch return error.OutOfMemory;
-            result_ba.ensureTotalCapacity(alloc, bytes.len - 1) catch return error.OutOfMemory;
+            const result_ba = try byteArrayWithCapacity(ctx, bytes.len - 1);
             for (bytes[1..]) |byte| {
                 result_ba.appendAssumeCapacity(byte);
             }
-            try ctx.stack.push(.{ .byte_array = result_ba });
+            try helpers.pushMovedValue(ctx, .{ .byte_array = result_ba });
             try ctx.stack.push(.{ .fixnum = first_byte });
         },
         else => {
@@ -2282,14 +2300,13 @@ pub fn nativeIn(ctx: *Context) anyerror!void {
     const seq = try ctx.stack.pop();
     defer container_backing.releaseValue(elem);
     defer container_backing.releaseValue(seq);
-    const alloc = ctx.quotationAllocator();
-
-    var iter = SequenceIterator.init(seq, alloc) orelse {
+    var iter = SequenceIterator.initInContext(seq, ctx) orelse {
         setErrorContext(ctx, "expected sequence, got {s}", .{valueTypeName(seq)});
         return error.TypeMismatch;
     };
 
     while (try iter.next()) |item| {
+        defer iter.release(item);
         if (item.eql(elem)) {
             try ctx.stack.push(.{ .boolean = true });
             return;
@@ -2362,20 +2379,19 @@ pub fn nativeIndexOf(ctx: *Context) anyerror!void {
     const seq = try ctx.stack.pop();
     defer container_backing.releaseValue(elem);
     defer container_backing.releaseValue(seq);
-    const alloc = ctx.quotationAllocator();
-
     if (seq == .set) {
         setErrorContext(ctx, "expected sequence, got {s}", .{valueTypeName(seq)});
         return error.TypeMismatch;
     }
 
-    var iter = SequenceIterator.init(seq, alloc) orelse {
+    var iter = SequenceIterator.initInContext(seq, ctx) orelse {
         setErrorContext(ctx, "expected sequence, got {s}", .{valueTypeName(seq)});
         return error.TypeMismatch;
     };
 
     var idx: usize = 0;
     while (try iter.next()) |item| : (idx += 1) {
+        defer iter.release(item);
         if (item.eql(elem)) {
             try ctx.stack.push(.{ .fixnum = @intCast(idx) });
             return;
@@ -2571,7 +2587,6 @@ pub fn nativeTake(ctx: *Context) anyerror!void {
         return error.IndexOutOfBounds;
     }
     const n: usize = @intCast(n_val);
-    const alloc = ctx.quotationAllocator();
 
     const coerced = (try coerceSequenceOperand(ctx, raw_seq, .native_seqs_no_set)) orelse {
         setSequenceOperandMismatch(ctx, raw_seq);
@@ -2609,8 +2624,7 @@ pub fn nativeTake(ctx: *Context) anyerror!void {
         },
         .vector => |vec| {
             const take_count = @min(n, vec.list.items.len);
-            const new_vec = Vector.create(alloc) catch return error.OutOfMemory;
-            new_vec.list.ensureTotalCapacity(alloc, take_count) catch return error.OutOfMemory;
+            const new_vec = try vectorWithCapacity(ctx, take_count);
             const taken = vec.list.items[0..take_count];
             container_backing.retainValues(taken);
             for (taken) |item| {
@@ -2621,12 +2635,11 @@ pub fn nativeTake(ctx: *Context) anyerror!void {
         .byte_array => |b| {
             const bytes = b.slice();
             const take_count = @min(n, bytes.len);
-            const result_ba = ByteArray.create(alloc) catch return error.OutOfMemory;
-            result_ba.ensureTotalCapacity(alloc, take_count) catch return error.OutOfMemory;
+            const result_ba = try byteArrayWithCapacity(ctx, take_count);
             for (bytes[0..take_count]) |byte| {
                 result_ba.appendAssumeCapacity(byte);
             }
-            try ctx.stack.push(.{ .byte_array = result_ba });
+            try helpers.pushMovedValue(ctx, .{ .byte_array = result_ba });
         },
         else => {
             setSequenceOperandMismatch(ctx, raw_seq);
@@ -2646,7 +2659,6 @@ pub fn nativeDrop(ctx: *Context) anyerror!void {
         return error.IndexOutOfBounds;
     }
     const n: usize = @intCast(n_val);
-    const alloc = ctx.quotationAllocator();
 
     const coerced = (try coerceSequenceOperand(ctx, raw_seq, .native_seqs_no_set)) orelse {
         setSequenceOperandMismatch(ctx, raw_seq);
@@ -2683,12 +2695,11 @@ pub fn nativeDrop(ctx: *Context) anyerror!void {
         },
         .vector => |vec| {
             if (n >= vec.list.items.len) {
-                const new_vec = Vector.create(alloc) catch return error.OutOfMemory;
+                const new_vec = try vectorWithCapacity(ctx, 0);
                 try helpers.pushMovedVector(ctx, new_vec);
                 return;
             }
-            const new_vec = Vector.create(alloc) catch return error.OutOfMemory;
-            new_vec.list.ensureTotalCapacity(alloc, vec.list.items.len - n) catch return error.OutOfMemory;
+            const new_vec = try vectorWithCapacity(ctx, vec.list.items.len - n);
             const kept = vec.list.items[n..];
             container_backing.retainValues(kept);
             for (kept) |item| {
@@ -2699,16 +2710,15 @@ pub fn nativeDrop(ctx: *Context) anyerror!void {
         .byte_array => |b| {
             const bytes = b.slice();
             if (n >= bytes.len) {
-                const result_ba = ByteArray.create(alloc) catch return error.OutOfMemory;
-                try ctx.stack.push(.{ .byte_array = result_ba });
+                const result_ba = try byteArrayWithCapacity(ctx, 0);
+                try helpers.pushMovedValue(ctx, .{ .byte_array = result_ba });
                 return;
             }
-            const result_ba = ByteArray.create(alloc) catch return error.OutOfMemory;
-            result_ba.ensureTotalCapacity(alloc, bytes.len - n) catch return error.OutOfMemory;
+            const result_ba = try byteArrayWithCapacity(ctx, bytes.len - n);
             for (bytes[n..]) |byte| {
                 result_ba.appendAssumeCapacity(byte);
             }
-            try ctx.stack.push(.{ .byte_array = result_ba });
+            try helpers.pushMovedValue(ctx, .{ .byte_array = result_ba });
         },
         else => {
             setSequenceOperandMismatch(ctx, raw_seq);
@@ -2959,7 +2969,7 @@ fn nativeToArrayVector(ctx: *Context) anyerror!void {
 fn nativeToArrayByteArray(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
     defer container_backing.releaseValue(val);
-    const items = try sequenceToValues(val, ctx.allocator);
+    const items = try sequenceToValues(val, ctx);
     try helpers.pushAdoptedArray(ctx, ctx.allocator, items);
 }
 
@@ -2969,10 +2979,7 @@ fn nativeToArrayByteArray(ctx: *Context) anyerror!void {
 fn nativeToArraySet(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
     defer container_backing.releaseValue(val);
-    const items = try sequenceToValues(val, ctx.allocator);
-    // The materialized values are borrowed from the set; the result array
-    // must own its own references.
-    container_backing.retainValues(items);
+    const items = try sequenceToValues(val, ctx);
     try helpers.pushAdoptedArray(ctx, ctx.allocator, items);
 }
 
@@ -4306,6 +4313,72 @@ test "#append array arm frees its scratch and leaves the arena flat" {
     }
     // The scratch slice lives on ctx.allocator now; the leak detector pins the free, and the
     // arena pin shows nothing per-call lands there.
+    try std.testing.expectEqual(baseline, ctx.arena.queryCapacity());
+}
+
+test "#append and #prepend vector arms build the vector on the shared allocator" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const baseline = ctx.arena.queryCapacity();
+
+    const first = try Vector.create(std.testing.allocator);
+    try ctx.stack.pushMoved(.{ .vector = first });
+    try testPushFixnumArray(&ctx, &.{ 3, 4 });
+    try nativeAppend(&ctx);
+
+    const appended = try ctx.stack.pop();
+    defer container_backing.releaseValue(appended);
+    try std.testing.expectEqual(@as(usize, 2), appended.vector.list.items.len);
+    try std.testing.expectEqual(ctx.allocator.ptr, appended.vector.header.allocator.ptr);
+
+    const second = try Vector.create(std.testing.allocator);
+    try ctx.stack.pushMoved(.{ .vector = second });
+    try testPushFixnumArray(&ctx, &.{ 1, 2 });
+    try nativePrepend(&ctx);
+
+    const prepended = try ctx.stack.pop();
+    defer container_backing.releaseValue(prepended);
+    try std.testing.expectEqual(@as(usize, 2), prepended.vector.list.items.len);
+    try std.testing.expectEqual(ctx.allocator.ptr, prepended.vector.header.allocator.ptr);
+
+    try std.testing.expectEqual(baseline, ctx.arena.queryCapacity());
+}
+
+test "#append and #push byte-array arms build the byte array on the shared allocator" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const baseline = ctx.arena.queryCapacity();
+
+    const first = try ByteArray.create(std.testing.allocator);
+    try first.ensureTotalCapacity(std.testing.allocator, 2);
+    first.appendAssumeCapacity(1);
+    first.appendAssumeCapacity(2);
+    try ctx.stack.pushMoved(.{ .byte_array = first });
+
+    const second = try ByteArray.create(std.testing.allocator);
+    try second.ensureTotalCapacity(std.testing.allocator, 1);
+    second.appendAssumeCapacity(3);
+    try ctx.stack.pushMoved(.{ .byte_array = second });
+
+    try nativeAppend(&ctx);
+
+    const appended = try ctx.stack.pop();
+    defer container_backing.releaseValue(appended);
+    try std.testing.expectEqualSlices(u8, &.{ 1, 2, 3 }, appended.byte_array.slice());
+    try std.testing.expectEqual(ctx.allocator.ptr, appended.byte_array.header.allocator.ptr);
+
+    try ctx.stack.push(appended);
+    try ctx.stack.push(.{ .fixnum = 4 });
+    try nativePush(&ctx);
+
+    const pushed = try ctx.stack.pop();
+    defer container_backing.releaseValue(pushed);
+    try std.testing.expectEqualSlices(u8, &.{ 1, 2, 3, 4 }, pushed.byte_array.slice());
+    try std.testing.expectEqual(ctx.allocator.ptr, pushed.byte_array.header.allocator.ptr);
+
+    ctx.stack.clear();
     try std.testing.expectEqual(baseline, ctx.arena.queryCapacity());
 }
 

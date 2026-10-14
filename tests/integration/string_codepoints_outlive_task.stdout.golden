@@ -1,0 +1,41 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+=== sort ===
+Stack: [ ]
+PASS: sort keeps every codepoint
+Stack: [ ]
+PASS: sort keeps ASCII
+Stack: [ ]
+PASS: sort keeps the last non-ASCII codepoint
+Stack: [ ]
+=== #append with an array operand ===
+Stack: [ ]
+PASS: #append keeps the codepoints
+Stack: [ ]
+=== >iterator and #collect ===
+Stack: [ ]
+PASS: #collect keeps the codepoints
+Stack: [ ]
+=== #append! into a vector ===
+Stack: [ ]
+PASS: #append! keeps the codepoints
+Stack: [ ]
+=== #each ===
+Stack: [ ]
+PASS: #each saw every codepoint
+Stack: [ ]
+PASS: #each keeps a two-byte codepoint
+Stack: [ ]
+PASS: #each keeps a three-byte codepoint
+Stack: [ ]
+=== #map ===
+Stack: [ ]
+PASS: #map saw every codepoint
+Stack: [ ]
+PASS: #map keeps the last codepoint
+Stack: [ ]

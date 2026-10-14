@@ -981,7 +981,7 @@ fn nativeBorrowDeps(ctx: *Context) anyerror!void {
 
 /// command-line-args ( -- args )
 fn nativeCommandLineArgs(ctx: *Context) anyerror!void {
-    const alloc = ctx.quotationAllocator();
+    const alloc = ctx.allocator;
     const args = ctx.program_args;
 
     const arr = alloc.alloc(Value, args.len) catch return error.OutOfMemory;
@@ -1012,9 +1012,12 @@ fn nativeAddLoadPath(ctx: *Context) anyerror!void {
 /// 1array ( elem -- array )
 fn native1Array(ctx: *Context) anyerror!void {
     const elem = try ctx.stack.pop();
-    const alloc = ctx.quotationAllocator();
+    const alloc = ctx.allocator;
 
-    const arr = alloc.alloc(Value, 1) catch return error.OutOfMemory;
+    const arr = alloc.alloc(Value, 1) catch {
+        container_backing.releaseValue(elem);
+        return error.OutOfMemory;
+    };
     arr[0] = elem;
 
     // `elem` was moved into the array slot, which already owns its reference;
@@ -1700,34 +1703,62 @@ fn nativeRecordImport(ctx: *Context) anyerror!void {
         },
     }
 
-    const arena = ctx.arena.allocator();
-    const fields = try arena.alloc(Value, 6);
+    // The popped reference is released here. The entry holds its own owned copy.
+    defer container_backing.releaseValue(words_or_f);
 
-    // Determine the source file that triggered this import.
-    // For runtime imports (e.g., `reexport` called from within a loaded file),
-    // load_file_source holds the file being loaded by nativeLoadImpl.
-    // For parse-time imports (e.g., `use`), parse_time_source_file holds the
-    // file being parsed at the moment the parse-time word was invoked.
+    // Entries live as long as the context and may be copied into containers that outlive a task,
+    // so every field is an owned backing on the shared allocator.
+    var builder = try helpers.ArrayBuilder.init(ctx.allocator, 6);
+    errdefer builder.deinit();
+
+    // For runtime imports such as `reexport` called from within a loaded file, load_file_source
+    // holds the file being loaded. For parse-time imports such as `use`, parse_time_source_file
+    // holds the file being parsed when the parse-time word was invoked.
     const import_source = ctx.load_file_source orelse ctx.parse_time_source_file;
-    fields[0] = value_mod.stringValue(try arena.dupe(u8, import_source));
-    fields[1] = .{ .fixnum = @intCast(ctx.parse_time_source_line) };
-    fields[2] = .{ .fixnum = @intCast(ctx.parse_time_source_column) };
-    fields[3] = value_mod.stringValue(try arena.dupe(u8, module_path));
-    // The popped reference transfers into the record and is never released:
-    // import history lives for the context. Callers only pass `f` or a
-    // parse-time static selection array of symbols, so nothing here can leak.
-    fields[4] = words_or_f;
-    fields[5] = value_mod.stringValue(try arena.dupe(u8, resolved_path));
+    builder.items[0] = try helpers.ownedStringCopy(ctx.allocator, import_source);
+    builder.items[1] = .{ .fixnum = @intCast(ctx.parse_time_source_line) };
+    builder.items[2] = .{ .fixnum = @intCast(ctx.parse_time_source_column) };
+    builder.items[3] = try helpers.ownedStringCopy(ctx.allocator, module_path);
+    builder.items[4] = try ownedWordSelection(ctx.allocator, words_or_f);
+    builder.items[5] = try helpers.ownedStringCopy(ctx.allocator, resolved_path);
 
-    const arr = try value_mod.Array.fromOwnedSlice(arena, fields);
-    try ctx.import_history.append(ctx.allocator, .{ .array = arr });
+    const entry = try builder.finish();
+    ctx.import_history.append(ctx.allocator, entry) catch |e| {
+        container_backing.releaseValue(entry);
+        return e;
+    };
+}
+
+/// An owned copy of an import's word selection. `f` passes through. A selection array gets owned
+/// symbol and string elements, since the original may borrow parse-time memory.
+fn ownedWordSelection(alloc: std.mem.Allocator, words_or_f: Value) !Value {
+    const src = switch (words_or_f) {
+        .array => |a| a.items,
+        else => return words_or_f,
+    };
+
+    var builder = try helpers.ArrayBuilder.init(alloc, src.len);
+    errdefer builder.deinit();
+
+    for (src, 0..) |item, i| {
+        builder.items[i] = switch (item) {
+            .symbol => |s| try helpers.ownedSymbolCopy(alloc, s.bytes),
+            .string => |s| try helpers.ownedStringCopy(alloc, s.bytes),
+            else => blk: {
+                container_backing.retainValue(item);
+                break :blk item;
+            },
+        };
+    }
+
+    return builder.finish();
 }
 
 // ( -- array )
 // Return the accumulated import history as an array of arrays.
 fn nativeImportHistory(ctx: *Context) anyerror!void {
-    // The history entries stay owned by the context; the result copies them.
-    try helpers.pushCopiedArray(ctx, ctx.quotationAllocator(), ctx.import_history.items);
+    // The entries stay owned by the context. The result holds retained references to them.
+    try helpers.pushCopiedArray(ctx, ctx.allocator, ctx.import_history.items);
 }
 
 // ( -- file line column )
@@ -1902,6 +1933,53 @@ test "moduleSourceKindOf maps file to filesystem" {
 test "moduleSourceKindOf maps embedded to embedded" {
     const rm: ResolvedModule = .{ .embedded = .{ .virtual_path = "<stdlib>/strings.1z", .source = "" } };
     try std.testing.expectEqual(trace_mod.ModuleSourceKind.embedded, moduleSourceKindOf(rm));
+}
+
+test "record-import: entries are owned on the shared allocator and released at deinit" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const borrowed = try arena.allocator().dupe(u8, "borrowed");
+
+    const selection = try value_mod.Array.createCopyFrom(
+        std.testing.allocator,
+        &.{ value_mod.symbolValue(borrowed), value_mod.symbolValue(borrowed) },
+    );
+    const selection_value: Value = .{ .array = selection };
+    defer container_backing.releaseValue(selection_value);
+
+    for (0..2) |_| {
+        try ctx.stack.push(value_mod.stringValue(borrowed));
+        try ctx.stack.push(selection_value);
+        try ctx.stack.push(value_mod.stringValue(borrowed));
+        try nativeRecordImport(&ctx);
+    }
+
+    try std.testing.expectEqual(@as(usize, 2), ctx.import_history.items.len);
+
+    for (ctx.import_history.items) |entry| {
+        const arr = entry.array;
+        try std.testing.expect(container_backing.allocatorEql(arr.header.allocator, ctx.allocator));
+
+        for ([_]usize{ 0, 3, 5 }) |i| {
+            try std.testing.expect(arr.items[i].string.backing != null);
+        }
+
+        const words = arr.items[4].array;
+        try std.testing.expect(container_backing.allocatorEql(words.header.allocator, ctx.allocator));
+        try std.testing.expectEqual(@as(usize, 2), words.items.len);
+        for (words.items) |w| {
+            try std.testing.expect(w.symbol.backing != null);
+        }
+    }
+
+    try nativeImportHistory(&ctx);
+    const result = try ctx.stack.pop();
+    defer container_backing.releaseValue(result);
+    try std.testing.expect(container_backing.allocatorEql(result.array.header.allocator, ctx.allocator));
+    try std.testing.expectEqual(@as(usize, 2), result.array.items.len);
 }
 
 test "importWord: copies an image module word's compiled id" {

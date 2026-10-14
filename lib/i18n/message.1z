@@ -83,13 +83,11 @@ ffi-def{
 \\ Prepare all arguments in a positional array for umsg_format.
 \\ Returns (keep-alive-array ffi-args-array).
 (prepare-args): ( array -- keep-alive-array ffi-args-array ) [
-  dup
-  [ (prepare-arg) nip ] #map #collect
-  \ Stack: input-array ffi-args-array
-  swap
-  [ (prepare-arg) drop ] #map #collect
-  \ Stack: ffi-args-array keep-alive-array
-  swap
+  [ (prepare-arg) 2 array-n ] #map #collect
+  \ Stack: pairs
+  dup [ 0 #nth ] #map #collect
+  swap [ 1 #nth ] #map #collect
+  \ Stack: keep-alive-array ffi-args-array
 ] ;
 
 \\ Format using an open UMessageFormat and a prepared variadic args array.
@@ -124,9 +122,11 @@ format-message-positional: ( array pattern locale -- string ) [
   \ Stack: array uchar-buf uchar-len icu-locale-id
   (open-msg-format)
   \ Stack: array fmt-ptr
-  swap (prepare-args) nip swap
-  \ Stack: ffi-args-array fmt-ptr
-  dup [ (format-with-args) ] dip (umsg-close)
+  swap (prepare-args)
+  \ Stack: fmt-ptr keep-alive-array ffi-args-array
+  2 pick-n (format-with-args)
+  \ Stack: fmt-ptr keep-alive-array string
+  nip swap (umsg-close)
 ] ;
 
 \\ Look up or assign a positional index for a placeholder name.

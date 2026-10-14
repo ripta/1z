@@ -49,6 +49,7 @@ const debugger_mod = @import("debugger/mod.zig");
 
 const aot_image_loader = @import("aot_image_loader.zig");
 const aot_lexical_sites = @import("aot_lexical_sites.zig");
+const AotArrayLiteralCache = @import("aot_array_literal_cache.zig").AotArrayLiteralCache;
 
 const HostWordRegistration = struct {
     name: []const u8,
@@ -1489,7 +1490,7 @@ export fn onez_hash_keys(ptr: ?*anyopaque, val_ptr: ?*anyopaque, out: *?*anyopaq
     const value: *const Value = @ptrCast(@alignCast(vp));
     switch (value.*) {
         .hash => |h| {
-            const alloc = handle.ctx.quotationAllocator();
+            const alloc = handle.ctx.allocator;
             const count = h.map.count();
             const keys = alloc.alloc(Value, count) catch {
                 setLastError(handle, "allocation failure creating keys array", .{});
@@ -1498,18 +1499,38 @@ export fn onez_hash_keys(ptr: ?*anyopaque, val_ptr: ?*anyopaque, out: *?*anyopaq
             var i: usize = 0;
             var it = h.map.iterator();
             while (it.next()) |entry| {
-                keys[i] = value_mod.symbolValue(entry.key_ptr.*);
+                const key_copy = alloc.dupe(u8, entry.key_ptr.*) catch {
+                    container_backing.releaseValues(keys[0..i]);
+                    alloc.free(keys);
+                    setLastError(handle, "allocation failure creating keys array", .{});
+                    return ONEZ_ERR_ALLOC;
+                };
+                keys[i] = value_mod.ownedSymbolValue(alloc, key_copy) catch {
+                    alloc.free(key_copy);
+                    container_backing.releaseValues(keys[0..i]);
+                    alloc.free(keys);
+                    setLastError(handle, "allocation failure creating keys array", .{});
+                    return ONEZ_ERR_ALLOC;
+                };
                 i += 1;
             }
             const keys_arr = value_mod.Array.fromOwnedSlice(alloc, keys) catch {
+                container_backing.releaseValues(keys);
+                alloc.free(keys);
                 setLastError(handle, "allocation failure creating array", .{});
                 return ONEZ_ERR_ALLOC;
             };
-            const slot = alloc.create(Value) catch {
+            const slot = handle.ctx.quotationAllocator().create(Value) catch {
+                container_backing.releaseValue(.{ .array = keys_arr });
                 setLastError(handle, "allocation failure creating value handle", .{});
                 return ONEZ_ERR_ALLOC;
             };
             slot.* = .{ .array = keys_arr };
+            handle.popped_values.append(handle.allocator, slot) catch {
+                container_backing.releaseValue(slot.*);
+                setLastError(handle, "allocation failure tracking value handle", .{});
+                return ONEZ_ERR_ALLOC;
+            };
             out.* = slot;
             return ONEZ_OK;
         },
@@ -1562,13 +1583,14 @@ export fn onez_push_symbol(ptr: ?*anyopaque, data: [*]const u8, len: usize) c_in
 
 export fn onez_push_array(ptr: ?*anyopaque, handles: [*]const ?*anyopaque, count: usize) c_int {
     const handle = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
-    const alloc = handle.ctx.quotationAllocator();
+    const alloc = handle.ctx.allocator;
     const values = alloc.alloc(Value, count) catch {
         setLastError(handle, "allocation failure creating array", .{});
         return ONEZ_ERR_ALLOC;
     };
     for (0..count) |i| {
         const elem_ptr = handles[i] orelse {
+            alloc.free(values);
             setLastError(handle, "null element handle at index {d}", .{i});
             return ONEZ_ERR_NULL_VALUE;
         };
@@ -1581,6 +1603,7 @@ export fn onez_push_array(ptr: ?*anyopaque, handles: [*]const ?*anyopaque, count
     const arr = value_mod.Array.fromOwnedSlice(alloc, values) catch {
         setLastError(handle, "allocation failure creating array", .{});
         container_backing.releaseValues(values);
+        alloc.free(values);
         return ONEZ_ERR_ALLOC;
     };
     handle.ctx.stack.pushMoved(.{ .array = arr }) catch {
@@ -2600,6 +2623,21 @@ export fn onez_runtime_register_quotation_input_counts(ptr: ?*anyopaque, table: 
     }
 
     ctx.aot_quotation_fn_states = states;
+    return ONEZ_OK;
+}
+
+/// Give the root one cache slot per compiled container-literal push site. Must run before any
+/// compiled code, and only once: a second registration would orphan the quotation bodies of
+/// literals already handed out.
+export fn onez_runtime_register_array_literals(ptr: ?*anyopaque, site_count: u32) i32 {
+    const handle = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
+    const ctx = handle.ctx;
+    if (ctx.aot_array_literal_cache != null) return ONEZ_ERR_LOAD_FAILED;
+
+    ctx.aot_array_literal_cache = AotArrayLiteralCache.create(ctx.allocator, site_count) catch |err| {
+        captureError(handle, err);
+        return ONEZ_ERR_ALLOC;
+    };
     return ONEZ_OK;
 }
 

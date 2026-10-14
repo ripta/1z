@@ -1,0 +1,121 @@
+\ Values that cross a task boundary outlive the task that received them.
+\
+\ A task used to receive the copy on its own arena, and a null-backed string, symbol, or bignum
+\ inside it borrowed arena bytes. A receiver that stored the value in a shared container left a
+\ dangling value behind once the task was reaped. Each section has a task receive the payload,
+\ push it into a top-level vector, and let the scope end. The main context compares the values
+\ afterwards.
+
+use "testing" ;
+
+\\ A payload with a string, a symbol, a bignum, and a nested array.
+make-payload: ( -- payload ) [
+  "str" payload-sym: 1000000000000 1000000000000 * { "inner" } 4 array-n
+] ;
+
+check-payload: ( payload -- ) [
+  dup 0 #nth "str" "the string survives the task" assert=
+  dup 1 #nth payload-sym: "the symbol survives the task" assert=
+  dup 2 #nth 1000000000000 1000000000000 * "the bignum survives the task" assert=
+  3 #nth { "inner" } "the nested array survives the task" assert=
+] ;
+
+"await" test-section
+
+awaited: V{ } ;
+
+[
+  [
+    [
+      [ make-payload ] spawn await awaited swap #push! drop
+    ] task-scope
+  ] spawn drop
+] task-scope
+
+awaited 0 #nth check-payload
+
+"await-all" test-section
+
+awaited-all: V{ } ;
+
+[
+  [
+    [
+      [ make-payload ] spawn
+      [ make-payload ] spawn
+      2 array-n await-all awaited-all swap #push! drop
+    ] task-scope
+  ] spawn drop
+] task-scope
+
+awaited-all 0 #nth #len 2 "await-all returns both results" assert=
+awaited-all 0 #nth 0 #nth check-payload
+awaited-all 0 #nth 1 #nth check-payload
+
+"receive on an unbuffered channel" test-section
+
+received: V{ } ;
+
+[
+  <channel>
+  dup [ make-payload swap send ] curry spawn drop
+  [ receive received swap #push! drop ] curry spawn drop
+] task-scope
+
+received 0 #nth check-payload
+
+"receive from a buffered channel" test-section
+
+received-buffered: V{ } ;
+
+[
+  2 <buffered-channel>
+  dup [ make-payload swap send ] curry spawn drop
+  [ receive received-buffered swap #push! drop ] curry spawn drop
+] task-scope
+
+received-buffered 0 #nth check-payload
+
+"select" test-section
+
+selected: V{ } ;
+
+[
+  <channel>
+  dup [ make-payload swap send ] curry spawn drop
+  [ 1array select drop selected swap #push! drop ] curry spawn drop
+] task-scope
+
+selected 0 #nth check-payload
+
+"try-receive" test-section
+
+tried: V{ } ;
+
+[
+  1 <buffered-channel>
+  dup make-payload swap send
+  [ try-receive drop tried swap #push! drop ] curry spawn drop
+] task-scope
+
+tried 0 #nth check-payload
+
+"byte-array results" test-section
+
+built-bytes: V{ } ;
+
+[
+  [
+    B{ 1 2 3 4 } 1 3 #slice built-bytes swap #push! drop
+    B{ 1 2 } B{ 3 } #append built-bytes swap #push! drop
+    B{ 1 2 } 3 #push built-bytes swap #push! drop
+  ] spawn drop
+] task-scope
+
+built-bytes 0 #nth #len 2 "#slice keeps its length" assert=
+built-bytes 0 #nth 0 #nth 2 "#slice keeps its first byte" assert=
+built-bytes 0 #nth 1 #nth 3 "#slice keeps its last byte" assert=
+built-bytes 1 #nth #len 3 "#append keeps its length" assert=
+built-bytes 1 #nth 2 #nth 3 "#append keeps its last byte" assert=
+built-bytes 2 #nth #len 3 "#push keeps its length" assert=
+built-bytes 2 #nth 2 #nth 3 "#push keeps its last byte" assert=

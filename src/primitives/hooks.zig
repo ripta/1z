@@ -155,7 +155,7 @@ fn nativeRegisterScopedHook(ctx: *Context) anyerror!void {
         },
     }
 
-    const alloc = ctx.quotationAllocator();
+    const alloc = ctx.allocator;
 
     var current_owned = false;
     const current = ctx.getParameterBinding(param.name) orelse blk: {
@@ -171,14 +171,21 @@ fn nativeRegisterScopedHook(ctx: *Context) anyerror!void {
         else => &[_]Value{},
     };
 
-    const new_items = alloc.alloc(Value, old_items.len + 1) catch return error.OutOfMemory;
+    const new_items = alloc.alloc(Value, old_items.len + 1) catch {
+        container_backing.releaseValue(quot_val);
+        return error.OutOfMemory;
+    };
     @memcpy(new_items[0..old_items.len], old_items);
     // The copied elements become new owning references held by the array;
     // quot_val's reference transfers into the last slot.
     container_backing.retainValues(new_items[0..old_items.len]);
     new_items[old_items.len] = quot_val;
 
-    const arr = try value_mod.Array.fromOwnedSlice(alloc, new_items);
+    const arr = value_mod.Array.fromOwnedSlice(alloc, new_items) catch |e| {
+        container_backing.releaseValues(new_items);
+        alloc.free(new_items);
+        return e;
+    };
     // The parameter frame slot retains on store; drop the creation reference
     // so the binding is the sole owner.
     defer container_backing.releaseValue(.{ .array = arr });

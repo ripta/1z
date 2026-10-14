@@ -144,12 +144,19 @@ fn makeInetAddr(ctx: *Context, tag: *const VirtualType, host: []const u8, port: 
         return error.TypeMismatch;
     };
 
-    // The host string stays arena-owned; the instance backing follows
-    // createStructInstance's process-lifetime contract.
     const fields = try ctx.allocator.alloc(Value, 2);
     var fields_owned = true;
     errdefer if (fields_owned) ctx.allocator.free(fields);
-    fields[0] = value_mod.stringValue(host);
+
+    // The pushed instance can outlive the addr this host came from, so the field adopts a
+    // fresh heap-backed copy. The instance's destroy releases it.
+    const host_copy = try ctx.allocator.dupe(u8, host);
+    fields[0] = value_mod.ownedStringValue(ctx.allocator, host_copy) catch |e| {
+        ctx.allocator.free(host_copy);
+        return e;
+    };
+    errdefer if (fields_owned) container_backing.releaseValue(fields[0]);
+
     fields[1] = .{ .fixnum = port };
 
     const instance = try value_mod.createStructInstance(ctx.allocator, struct_type, fields);
@@ -166,7 +173,7 @@ fn makeInetAddr(ctx: *Context, tag: *const VirtualType, host: []const u8, port: 
 fn nativeResolve(ctx: *Context) anyerror!void {
     if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "resolve");
     const addr_info = try extractAddr(ctx);
-    const alloc = ctx.quotationAllocator();
+    const alloc = ctx.allocator;
 
     switch (addr_info.kind) {
         .tcp, .udp => {
@@ -179,8 +186,7 @@ fn nativeResolve(ctx: *Context) anyerror!void {
             if (std.net.Address.resolveIp(addr_info.host, port)) |net_addr| {
                 var ip_buf: [46]u8 = undefined;
                 const ip_str = formatAddress(net_addr, &ip_buf);
-                const host_copy = try alloc.dupe(u8, ip_str);
-                const addr_val = try makeInetAddr(ctx, addr_info.tag, host_copy, addr_info.port);
+                const addr_val = try makeInetAddr(ctx, addr_info.tag, ip_str, addr_info.port);
                 const arr = alloc.alloc(Value, 1) catch |e| {
                     container_backing.releaseValue(addr_val);
                     return e;
@@ -203,8 +209,7 @@ fn nativeResolve(ctx: *Context) anyerror!void {
             for (list.addrs) |net_addr| {
                 var ip_buf: [46]u8 = undefined;
                 const ip_str = formatAddress(net_addr, &ip_buf);
-                const host_copy = try alloc.dupe(u8, ip_str);
-                const addr_val = try makeInetAddr(ctx, addr_info.tag, host_copy, addr_info.port);
+                const addr_val = try makeInetAddr(ctx, addr_info.tag, ip_str, addr_info.port);
                 results.append(alloc, addr_val) catch |e| {
                     container_backing.releaseValue(addr_val);
                     return e;

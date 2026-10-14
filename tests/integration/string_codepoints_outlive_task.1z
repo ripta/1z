@@ -1,0 +1,55 @@
+\ One-codepoint strings from string iteration outlive the task that iterated.
+\
+\ A non-ASCII codepoint used to be duped onto the task's arena and handed out as a borrowed string.
+\ A task that stored it in a shared container left a dangling string behind once the task was
+\ reaped. Each section has a task iterate a string and push the results into a top-level vector.
+\ The main context compares the values after the scope ends.
+
+use "testing" ;
+
+sorted-out:    V{ } ;
+appended-out:  V{ } ;
+collected-out: V{ } ;
+each-out:      V{ } ;
+mapped-out:    V{ } ;
+shared-vec:    V{ } ;
+
+[
+  [
+    "héllo→✓" [ < ] #sort sorted-out swap #push! drop
+    { 1 } "é→" #append appended-out swap #push! drop
+    "é→" >iterator #collect collected-out swap #push! drop
+    shared-vec "é→✓" #append! drop
+    "héllo→✓" [ each-out swap #push! drop ] #each
+    "héllo→✓" [ dup drop ] #map #collect mapped-out swap #push! drop
+  ] spawn drop
+] task-scope
+
+"sort" test-section
+
+sorted-out 0 #nth #len 7 "sort keeps every codepoint" assert=
+sorted-out 0 #nth 0 #nth "h" "sort keeps ASCII" assert=
+sorted-out 0 #nth 6 #nth "✓" "sort keeps the last non-ASCII codepoint" assert=
+
+"#append with an array operand" test-section
+
+appended-out 0 #nth { 1 "é" "→" } "#append keeps the codepoints" assert=
+
+">iterator and #collect" test-section
+
+collected-out 0 #nth { "é" "→" } "#collect keeps the codepoints" assert=
+
+"#append! into a vector" test-section
+
+shared-vec V{ "é" "→" "✓" } "#append! keeps the codepoints" assert=
+
+"#each" test-section
+
+each-out #len 7 "#each saw every codepoint" assert=
+each-out 1 #nth "é" "#each keeps a two-byte codepoint" assert=
+each-out 5 #nth "→" "#each keeps a three-byte codepoint" assert=
+
+"#map" test-section
+
+mapped-out 0 #nth #len 7 "#map saw every codepoint" assert=
+mapped-out 0 #nth 6 #nth "✓" "#map keeps the last codepoint" assert=

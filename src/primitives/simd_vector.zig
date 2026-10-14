@@ -350,7 +350,7 @@ fn nativeSimdSplat(ctx: *Context) anyerror!void {
 // ---------------------------------------------------------------------------
 
 fn nativeSimdToArray(ctx: *Context) anyerror!void {
-    const alloc = ctx.quotationAllocator();
+    const alloc = ctx.allocator;
 
     const tagged = try popSimdTagged(ctx);
     defer container_backing.releaseValue(.{ .tagged = tagged });
@@ -361,14 +361,23 @@ fn nativeSimdToArray(ctx: *Context) anyerror!void {
     const n = simd_type.laneCount();
     const result = try alloc.alloc(Value, n);
 
-    switch (simd_type) {
-        inline .@"2xf64", .@"4xf32", .@"2xi64", .@"4xi32", .@"8xi16", .@"16xi8", .@"2xu64", .@"4xu32", .@"8xu16", .@"16xu8" => |et| {
-            const T = comptime etToType(et);
-            const N = comptime etToLaneCount(et);
-            for (0..N) |i| {
-                result[i] = try elementToValue(T, ctx, simd_kernels.simdGetLane(N, T, bytes, i));
-            }
-        },
+    {
+        var filled: usize = 0;
+        errdefer {
+            container_backing.releaseValues(result[0..filled]);
+            alloc.free(result);
+        }
+
+        switch (simd_type) {
+            inline .@"2xf64", .@"4xf32", .@"2xi64", .@"4xi32", .@"8xi16", .@"16xi8", .@"2xu64", .@"4xu32", .@"8xu16", .@"16xu8" => |et| {
+                const T = comptime etToType(et);
+                const N = comptime etToLaneCount(et);
+                for (0..N) |i| {
+                    result[i] = try elementToValue(T, ctx, simd_kernels.simdGetLane(N, T, bytes, i));
+                    filled = i + 1;
+                }
+            },
+        }
     }
 
     try helpers.pushAdoptedArray(ctx, alloc, result);

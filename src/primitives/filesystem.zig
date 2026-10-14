@@ -60,7 +60,7 @@ fn nativeListDirectory(ctx: *Context) anyerror!void {
     if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "list-directory");
     const path = try helpers.popString(ctx);
     defer container_backing.releaseValue(.{ .string = path });
-    const alloc = ctx.quotationAllocator();
+    const alloc = ctx.allocator;
 
     var dir = std.fs.cwd().openDir(path.bytes, .{ .iterate = true }) catch |err| {
         helpers.setErrorContext(ctx, "list-directory: {s}", .{@errorName(err)});
@@ -69,12 +69,14 @@ fn nativeListDirectory(ctx: *Context) anyerror!void {
     defer dir.close();
 
     var entries: std.ArrayListUnmanaged(Value) = .{};
+    defer entries.deinit(alloc);
+    errdefer container_backing.releaseValues(entries.items);
+
     var iter = dir.iterate();
     while (iter.next() catch |err| {
         helpers.setErrorContext(ctx, "list-directory: {s}", .{@errorName(err)});
         return error.IOFailed;
     }) |entry| {
-        const name = alloc.dupe(u8, entry.name) catch return error.OutOfMemory;
         const type_sym: []const u8 = switch (entry.kind) {
             .file => "file",
             .directory => "directory",
@@ -82,16 +84,39 @@ fn nativeListDirectory(ctx: *Context) anyerror!void {
             else => "unknown",
         };
 
-        const pair = alloc.alloc(Value, 2) catch return error.OutOfMemory;
-        pair[0] = value_mod.stringValue(name);
-        pair[1] = value_mod.symbolValue(type_sym);
-
-        const pair_arr = value_mod.Array.fromOwnedSlice(alloc, pair) catch return error.OutOfMemory;
-        entries.append(alloc, .{ .array = pair_arr }) catch return error.OutOfMemory;
+        const pair_val = try makeEntryPair(alloc, entry.name, type_sym);
+        entries.append(alloc, pair_val) catch |e| {
+            container_backing.releaseValue(pair_val);
+            return e;
+        };
     }
 
-    const items = entries.toOwnedSlice(alloc) catch return error.OutOfMemory;
+    const items = try alloc.dupe(Value, entries.items);
+    entries.clearRetainingCapacity();
     try helpers.pushAdoptedArray(ctx, alloc, items);
+}
+
+/// Build a `{ name type }` pair whose name is an owned string, so the pair outlives any arena.
+fn makeEntryPair(alloc: std.mem.Allocator, name: []const u8, type_sym: []const u8) !Value {
+    const name_copy = try alloc.dupe(u8, name);
+    const name_val = value_mod.ownedStringValue(alloc, name_copy) catch |e| {
+        alloc.free(name_copy);
+        return e;
+    };
+
+    const pair = alloc.alloc(Value, 2) catch |e| {
+        container_backing.releaseValue(name_val);
+        return e;
+    };
+    pair[0] = name_val;
+    pair[1] = value_mod.symbolValue(type_sym);
+
+    const pair_arr = value_mod.Array.fromOwnedSlice(alloc, pair) catch |e| {
+        container_backing.releaseValue(name_val);
+        alloc.free(pair);
+        return e;
+    };
+    return .{ .array = pair_arr };
 }
 
 /// delete-file ( path -- )

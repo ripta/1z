@@ -1,0 +1,32 @@
+\ Import history read inside a task outlives that task.
+\
+\ An entry recorded on a task's context used to live on the task's arena, and the history array
+\ borrowed it. A task that stored the history in a shared container left a dangling value behind
+\ once the scope ended. The main context checks the stored values afterwards.
+
+use "testing" ;
+
+stored: V{ } ;
+stored-entry: V{ } ;
+
+[
+  [
+    "task-module" { alpha: beta: } "/task/resolved.1z" native.record-import
+
+    native.import-history
+    dup stored swap #push! drop
+    dup #len 1 - #nth stored-entry swap #push! drop
+  ] spawn drop
+] task-scope
+
+"stored history" test-section
+
+stored 0 #nth #len 0 > "the stored history is non-empty" assert-true
+
+stored-entry 0 #nth 3 #nth "task-module" "the entry's module path survives the task" assert=
+
+stored-entry 0 #nth 4 #nth { alpha: beta: } "the entry's word selection survives the task" assert=
+
+stored-entry 0 #nth 5 #nth "/task/resolved.1z" "the entry's resolved path survives the task" assert=
+
+stored-entry 0 #nth 0 #nth string? "the entry's source file is a string" assert-true

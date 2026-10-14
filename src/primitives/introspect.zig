@@ -58,15 +58,21 @@ pub const registry_entries = [_]RegistryEntry{
 
 const StackEffectParam = @import("../stack_effect.zig").StackEffectParam;
 
+/// Build one `{ name row? effect annotation }` parameter record on `alloc`.
+///
+/// The name is an owned copy because the effect can come from a task's own storage, and the record
+/// can outlive that task.
 fn buildStackEffectParamValue(alloc: Allocator, param: StackEffectParam) Allocator.Error!Value {
-    const fields = try alloc.alloc(Value, 4);
-    fields[0] = value_mod.stringValue(param.name);
-    fields[1] = .{ .boolean = param.is_row_variable };
-    fields[2] = if (param.quotation_effect) |nested|
+    var fields = try helpers.ArrayBuilder.init(alloc, 4);
+    errdefer fields.deinit();
+
+    fields.items[0] = try helpers.ownedStringCopy(alloc, param.name);
+    fields.items[1] = .{ .boolean = param.is_row_variable };
+    fields.items[2] = if (param.quotation_effect) |nested|
         try buildStackEffectValue(alloc, nested)
     else
         .{ .boolean = false };
-    fields[3] = if (param.type_annotation) |ann| switch (ann) {
+    fields.items[3] = if (param.type_annotation) |ann| switch (ann) {
         .type => |tv| Value{ .type_val = @constCast(tv) },
         .protocol => |pd| Value{ .protocol_descriptor = pd },
         // Surface the combinator value itself, mirroring how a protocol-bound
@@ -74,7 +80,8 @@ fn buildStackEffectParamValue(alloc: Allocator, param: StackEffectParam) Allocat
         // combinator's elements is a separate introspection surface.
         .combination => |cc| Value{ .constraint_combinator = cc },
     } else .{ .boolean = false };
-    return .{ .array = try value_mod.Array.fromOwnedSlice(alloc, fields) };
+
+    return try fields.finish();
 }
 
 /// The backing of a constraint node: a base protocol or a combinator. Type
@@ -100,34 +107,46 @@ fn constraintKindSymbol(kind: ConstraintCombinator.Kind) []const u8 {
 /// A combinator's element list is heterogeneous: a `type` element is the raw type value, while
 /// `protocol` and `combinator` elements recurse into nested records.
 fn buildConstraintRecord(alloc: Allocator, backing: ConstraintBacking, name_override: ?[]const u8) Allocator.Error!Value {
-    const fields = try alloc.alloc(Value, 5);
+    var fields = try helpers.ArrayBuilder.init(alloc, 5);
+    errdefer fields.deinit();
+
     switch (backing) {
         .protocol => |descriptor| {
-            const methods_arr = try alloc.alloc(Value, descriptor.methods.len);
-            @memcpy(methods_arr, descriptor.methods);
-            fields[0] = value_mod.stringValue(name_override orelse descriptor.name);
-            fields[1] = value_mod.symbolValue("protocol");
-            fields[2] = .{ .array = try value_mod.Array.fromOwnedSlice(alloc, methods_arr) };
-            fields[3] = .{ .boolean = false };
-            fields[4] = .{ .fixnum = @intCast(descriptor.protocol_id) };
+            var methods = try helpers.ArrayBuilder.init(alloc, descriptor.methods.len);
+            errdefer methods.deinit();
+
+            for (descriptor.methods, 0..) |method, i| {
+                container_backing.retainValue(method);
+                methods.items[i] = method;
+            }
+
+            fields.items[0] = try helpers.ownedStringCopy(alloc, name_override orelse descriptor.name);
+            fields.items[1] = value_mod.symbolValue("protocol");
+            fields.items[2] = try methods.finish();
+            fields.items[3] = .{ .boolean = false };
+            fields.items[4] = .{ .fixnum = @intCast(descriptor.protocol_id) };
         },
         .combinator => |cc| {
-            const elements_arr = try alloc.alloc(Value, cc.elements.len);
+            var elements = try helpers.ArrayBuilder.init(alloc, cc.elements.len);
+            errdefer elements.deinit();
+
             for (cc.elements, 0..) |el, i| {
-                elements_arr[i] = switch (el) {
+                elements.items[i] = switch (el) {
                     .type => |tv| Value{ .type_val = @constCast(tv) },
                     .protocol => |pd| try buildConstraintRecord(alloc, .{ .protocol = pd }, null),
                     .combinator => |nested| try buildConstraintRecord(alloc, .{ .combinator = nested }, null),
                 };
             }
-            fields[0] = if (name_override) |n| value_mod.stringValue(n) else Value{ .boolean = false };
-            fields[1] = value_mod.symbolValue(constraintKindSymbol(cc.kind));
-            fields[2] = .{ .boolean = false };
-            fields[3] = .{ .array = try value_mod.Array.fromOwnedSlice(alloc, elements_arr) };
-            fields[4] = .{ .fixnum = @intCast(cc.combinator_id) };
+
+            fields.items[0] = if (name_override) |n| try helpers.ownedStringCopy(alloc, n) else Value{ .boolean = false };
+            fields.items[1] = value_mod.symbolValue(constraintKindSymbol(cc.kind));
+            fields.items[2] = .{ .boolean = false };
+            fields.items[3] = try elements.finish();
+            fields.items[4] = .{ .fixnum = @intCast(cc.combinator_id) };
         },
     }
-    return .{ .array = try value_mod.Array.fromOwnedSlice(alloc, fields) };
+
+    return try fields.finish();
 }
 
 /// Recognize a constraint word and return the raw constraint-info record, or `f`
@@ -156,48 +175,82 @@ fn buildConstraintInfo(alloc: Allocator, name: []const u8, word: WordDefinition)
 }
 
 fn buildStackEffectValue(alloc: Allocator, effect: *const StackEffect) Allocator.Error!Value {
-    const inputs_arr = try alloc.alloc(Value, effect.inputs.len);
+    var record = try helpers.ArrayBuilder.init(alloc, 2);
+    errdefer record.deinit();
+
+    var inputs = try helpers.ArrayBuilder.init(alloc, effect.inputs.len);
+    errdefer inputs.deinit();
     for (effect.inputs, 0..) |param, i| {
-        inputs_arr[i] = try buildStackEffectParamValue(alloc, param);
+        inputs.items[i] = try buildStackEffectParamValue(alloc, param);
     }
-    const outputs_arr = try alloc.alloc(Value, effect.outputs.len);
+    record.items[0] = try inputs.finish();
+
+    var outputs = try helpers.ArrayBuilder.init(alloc, effect.outputs.len);
+    errdefer outputs.deinit();
     for (effect.outputs, 0..) |param, i| {
-        outputs_arr[i] = try buildStackEffectParamValue(alloc, param);
+        outputs.items[i] = try buildStackEffectParamValue(alloc, param);
     }
-    const se_fields = try alloc.alloc(Value, 2);
-    se_fields[0] = .{ .array = try value_mod.Array.fromOwnedSlice(alloc, inputs_arr) };
-    se_fields[1] = .{ .array = try value_mod.Array.fromOwnedSlice(alloc, outputs_arr) };
-    return .{ .array = try value_mod.Array.fromOwnedSlice(alloc, se_fields) };
+    record.items[1] = try outputs.finish();
+
+    return try record.finish();
 }
 
-pub fn buildWordInfo(alloc: Allocator, ctx: *const Context, name: []const u8, word: WordDefinition) !Value {
-    const effect_val: Value = if (word.stack_effect) |effect|
+/// An array of owned strings copied from `parts`.
+fn buildOwnedStringsArray(alloc: Allocator, parts: []const []const u8) Allocator.Error!Value {
+    var strings = try helpers.ArrayBuilder.init(alloc, parts.len);
+    errdefer strings.deinit();
+
+    for (parts, 0..) |part, i| {
+        strings.items[i] = try helpers.ownedStringCopy(alloc, part);
+    }
+
+    return try strings.finish();
+}
+
+/// Build the raw word-info array on `ctx.allocator`, so the result outlives the context that
+/// built it. `scratch` holds only temporaries and the one-instruction body of a literal word.
+pub fn buildWordInfo(scratch: Allocator, ctx: *const Context, name: []const u8, word: WordDefinition) !Value {
+    const alloc = ctx.allocator;
+
+    // Raw array: name stack-effect doc markers native? body methods source-loc module provenance
+    // compiled? protocol binding? parse-time?
+    //
+    // `binding?` exposes the `.literal` action the body wrapping hides, so a bracket-less
+    // binding stays distinguishable from a one-literal quotation body.
+    var info = try helpers.ArrayBuilder.init(alloc, 14);
+    errdefer info.deinit();
+
+    info.items[0] = try helpers.ownedStringCopy(alloc, name);
+
+    info.items[1] = if (word.stack_effect) |effect|
         try buildStackEffectValue(alloc, effect)
     else
         .{ .boolean = false };
 
-    const doc_val: Value = if (word.doc) |d|
-        value_mod.stringValue(d)
+    info.items[2] = if (word.doc) |d|
+        try helpers.ownedStringCopy(alloc, d)
     else
         .{ .boolean = false };
 
-    const markers_arr = try alloc.alloc(Value, word.markers.len);
+    var markers = try helpers.ArrayBuilder.init(alloc, word.markers.len);
+    errdefer markers.deinit();
     for (word.markers, 0..) |mk, i| {
-        markers_arr[i] = .{ .marker = mk };
+        markers.items[i] = .{ .marker = mk };
     }
+    info.items[3] = try markers.finish();
 
-    const is_native: bool = switch (word.action) {
+    info.items[4] = .{ .boolean = switch (word.action) {
         .compound, .literal => false,
         .native, .host_callback => true,
-    };
+    } };
 
     // A .literal word has no instruction body; wrap its value in the same
     // single-instruction shape a one-element .compound body would have
     // produced before this variant existed, so `body>>` reads the same either way.
-    const body_val: Value = switch (word.action) {
+    info.items[5] = switch (word.action) {
         .compound => |instrs| .{ .quotation = .{ .instructions = instrs } },
         .literal => |v| blk: {
-            const instrs = try alloc.alloc(Instruction, 1);
+            const instrs = try scratch.alloc(Instruction, 1);
             instrs[0] = .{ .op = .{ .push_literal = v }, .line = 0 };
             break :blk .{ .quotation = .{ .instructions = instrs } };
         },
@@ -210,89 +263,63 @@ pub fn buildWordInfo(alloc: Allocator, ctx: *const Context, name: []const u8, wo
     //
     // The analysis view includes the arms a check-mode load registered, which the linter reads
     // after the load has ended.
-    const dispatch_pairs = try ctx.analysisDispatchEntriesForId(word.dispatch_id, .by_type_name, alloc);
-    const methods_arr = try alloc.alloc(Value, dispatch_pairs.len);
+    const dispatch_pairs = try ctx.analysisDispatchEntriesForId(word.dispatch_id, .by_type_name, scratch);
+    var methods = try helpers.ArrayBuilder.init(alloc, dispatch_pairs.len);
+    errdefer methods.deinit();
     for (dispatch_pairs, 0..) |pair, i| {
         const type_a_name = ctx.lookupTypeNameByDescriptor(pair.key.type_a) orelse "<unknown>";
         const type_b_name = ctx.lookupTypeNameByDescriptor(pair.key.type_b) orelse "<unknown>";
-        const types = if (pair.key.type_b == ctx.getDispatchUnarySentinel().descriptor.?) blk: {
-            const t = try alloc.alloc(Value, 1);
-            t[0] = value_mod.stringValue(type_a_name);
-            break :blk t;
-        } else blk: {
-            const t = try alloc.alloc(Value, 2);
-            t[0] = value_mod.stringValue(type_a_name);
-            t[1] = value_mod.stringValue(type_b_name);
-            break :blk t;
-        };
+        const is_unary = pair.key.type_b == ctx.getDispatchUnarySentinel().descriptor.?;
 
-        const prov_val: Value = if (pair.entry.provenance) |dp| blk: {
-            const dp_fields = try alloc.alloc(Value, 4);
-            dp_fields[0] = value_mod.stringValue(dp.generator);
-            dp_fields[1] = value_mod.stringValue(dp.parent);
-            dp_fields[2] = value_mod.stringValue(dp.role);
-            dp_fields[3] = value_mod.stringValue(dp.field);
-            break :blk .{ .array = try value_mod.Array.fromOwnedSlice(alloc, dp_fields) };
-        } else .{ .boolean = false };
+        var method = try helpers.ArrayBuilder.init(alloc, 2);
+        errdefer method.deinit();
 
-        const method_fields = try alloc.alloc(Value, 2);
-        method_fields[0] = .{ .array = try value_mod.Array.fromOwnedSlice(alloc, types) };
-        method_fields[1] = prov_val;
-        methods_arr[i] = .{ .array = try value_mod.Array.fromOwnedSlice(alloc, method_fields) };
+        var types = try helpers.ArrayBuilder.init(alloc, if (is_unary) 1 else 2);
+        errdefer types.deinit();
+        types.items[0] = value_mod.stringValue(type_a_name);
+        if (!is_unary) types.items[1] = value_mod.stringValue(type_b_name);
+        method.items[0] = try types.finish();
+
+        method.items[1] = if (pair.entry.provenance) |dp|
+            try buildOwnedStringsArray(alloc, &.{ dp.generator, dp.parent, dp.role, dp.field })
+        else
+            .{ .boolean = false };
+
+        methods.items[i] = try method.finish();
     }
+    info.items[6] = try methods.finish();
 
-    const source_loc_val: Value = if (word.source_file) |file| blk: {
-        const sl_fields = try alloc.alloc(Value, 3);
-        sl_fields[0] = value_mod.stringValue(file);
-        sl_fields[1] = .{ .fixnum = @intCast(word.source_line) };
-        sl_fields[2] = .{ .fixnum = @intCast(word.source_column) };
-        break :blk .{ .array = try value_mod.Array.fromOwnedSlice(alloc, sl_fields) };
+    info.items[7] = if (word.source_file) |file| blk: {
+        var loc = try helpers.ArrayBuilder.init(alloc, 3);
+        errdefer loc.deinit();
+        loc.items[0] = try helpers.ownedStringCopy(alloc, file);
+        loc.items[1] = .{ .fixnum = @intCast(word.source_line) };
+        loc.items[2] = .{ .fixnum = @intCast(word.source_column) };
+        break :blk try loc.finish();
     } else .{ .boolean = false };
 
-    const module_val: Value = if (word.source_module) |mod|
+    info.items[8] = if (word.source_module) |mod|
         .{ .module = @constCast(mod) }
     else
         .{ .boolean = false };
 
-    const provenance_val: Value = if (word.provenance) |p| blk: {
-        const prov_fields = try alloc.alloc(Value, 3);
-        prov_fields[0] = value_mod.stringValue(p.generator);
-        prov_fields[1] = value_mod.stringValue(p.parent);
-        prov_fields[2] = value_mod.stringValue(p.role);
-        break :blk .{ .array = try value_mod.Array.fromOwnedSlice(alloc, prov_fields) };
-    } else .{ .boolean = false };
+    info.items[9] = if (word.provenance) |p|
+        try buildOwnedStringsArray(alloc, &.{ p.generator, p.parent, p.role })
+    else
+        .{ .boolean = false };
 
-    const is_compiled: bool = blk: {
+    info.items[10] = .{ .boolean = blk: {
         for (ctx.jit_dispatch.entries.items) |entry| {
             if (std.mem.eql(u8, entry.word_name, name) and entry.code_ptr != null) break :blk true;
         }
         break :blk false;
-    };
+    } };
 
-    const protocol_val = try buildConstraintInfo(alloc, name, word);
+    info.items[11] = try buildConstraintInfo(alloc, name, word);
+    info.items[12] = .{ .boolean = word.action == .literal };
+    info.items[13] = .{ .boolean = word.parse_time };
 
-    // Raw array: name stack-effect doc markers native? body methods source-loc module provenance
-    // compiled? protocol binding? parse-time?
-    //
-    // `binding?` exposes the `.literal` action the body wrapping above hides, so a bracket-less
-    // binding stays distinguishable from a one-literal quotation body.
-    const wi_fields = try alloc.alloc(Value, 14);
-    wi_fields[0] = value_mod.stringValue(name);
-    wi_fields[1] = effect_val;
-    wi_fields[2] = doc_val;
-    wi_fields[3] = .{ .array = try value_mod.Array.fromOwnedSlice(alloc, markers_arr) };
-    wi_fields[4] = .{ .boolean = is_native };
-    wi_fields[5] = body_val;
-    wi_fields[6] = .{ .array = try value_mod.Array.fromOwnedSlice(alloc, methods_arr) };
-    wi_fields[7] = source_loc_val;
-    wi_fields[8] = module_val;
-    wi_fields[9] = provenance_val;
-    wi_fields[10] = .{ .boolean = is_compiled };
-    wi_fields[11] = protocol_val;
-    wi_fields[12] = .{ .boolean = word.action == .literal };
-    wi_fields[13] = .{ .boolean = word.parse_time };
-
-    return .{ .array = try value_mod.Array.fromOwnedSlice(alloc, wi_fields) };
+    return try info.finish();
 }
 
 fn moduleWordToWordDef(name: []const u8, mw: ModuleWord) WordDefinition {
@@ -364,12 +391,15 @@ fn componentKey(component_ids: *const std.StringHashMapUnmanaged(u32), name: []c
 }
 
 fn buildDeadDefinitionValue(alloc: Allocator, info: DeadDefinitionInfo) !Value {
-    const fields = try alloc.alloc(Value, 4);
-    fields[0] = value_mod.stringValue(info.name);
-    fields[1] = value_mod.stringValue(info.source_file);
-    fields[2] = .{ .fixnum = @intCast(info.source_line) };
-    fields[3] = .{ .fixnum = @intCast(info.source_column) };
-    return .{ .array = try value_mod.Array.fromOwnedSlice(alloc, fields) };
+    var fields = try helpers.ArrayBuilder.init(alloc, 4);
+    errdefer fields.deinit();
+
+    fields.items[0] = try helpers.ownedStringCopy(alloc, info.name);
+    fields.items[1] = try helpers.ownedStringCopy(alloc, info.source_file);
+    fields.items[2] = .{ .fixnum = @intCast(info.source_line) };
+    fields.items[3] = .{ .fixnum = @intCast(info.source_column) };
+
+    return try fields.finish();
 }
 
 /// dead-definitions ( cache files -- array )
@@ -517,11 +547,12 @@ fn nativeDeadDefinitions(ctx: *Context) anyerror!void {
         }
     }.lessThan);
 
-    const result = try alloc.alloc(Value, dead_infos.items.len);
+    var result = try helpers.ArrayBuilder.init(ctx.allocator, dead_infos.items.len);
+    errdefer result.deinit();
     for (dead_infos.items, 0..) |info, i| {
-        result[i] = try buildDeadDefinitionValue(alloc, info);
+        result.items[i] = try buildDeadDefinitionValue(ctx.allocator, info);
     }
-    try helpers.pushAdoptedArray(ctx, alloc, result);
+    try helpers.pushMovedValue(ctx, try result.finish());
 }
 
 /// current-scope ( -- module ) - Snapshot all user-visible words into a Module value.
@@ -676,9 +707,8 @@ fn nativeToWord(ctx: *Context) anyerror!void {
 
     const val = try ctx.stack.pop();
     defer container_backing.releaseValue(val);
-    // The word-info result embeds the name.
     const name = switch (val) {
-        .symbol, .string => |s| try alloc.dupe(u8, s.bytes),
+        .symbol, .string => |s| s.bytes,
         else => {
             helpers.setTypeMismatchError(ctx, "symbol", val);
             return error.TypeMismatch;
@@ -697,7 +727,7 @@ fn nativeToWord(ctx: *Context) anyerror!void {
 
     if (module.words.get(name)) |mod_word| {
         const word = moduleWordToWordDef(name, mod_word);
-        try ctx.stack.push(try buildWordInfo(alloc, ctx, name, word));
+        try helpers.pushMovedValue(ctx, try buildWordInfo(alloc, ctx, name, word));
         return;
     }
 
@@ -709,7 +739,7 @@ fn nativeToWord(ctx: *Context) anyerror!void {
     if (Context.splitQualifiedName(name)) |qn| {
         if (ctx.resolveQualifiedModuleWord(name)) |mod_word| {
             const word = moduleWordToWordDef(qn.word_name, mod_word);
-            try ctx.stack.push(try buildWordInfo(alloc, ctx, qn.word_name, word));
+            try helpers.pushMovedValue(ctx, try buildWordInfo(alloc, ctx, qn.word_name, word));
             return;
         }
     }
@@ -722,7 +752,6 @@ fn nativeToWord(ctx: *Context) anyerror!void {
 /// raw constraint-info record `{name kind methods elements id}` that `>word-info`'s
 /// `protocol` field carries. Accepts both protocol-descriptor and combinator backings.
 fn nativeConstraintToInfo(ctx: *Context) anyerror!void {
-    const alloc = ctx.quotationAllocator();
     const val = try ctx.stack.pop();
     defer container_backing.releaseValue(val);
     const backing: ConstraintBacking = switch (val) {
@@ -733,7 +762,7 @@ fn nativeConstraintToInfo(ctx: *Context) anyerror!void {
             return error.TypeMismatch;
         },
     };
-    try ctx.stack.push(try buildConstraintRecord(alloc, backing, null));
+    try helpers.pushMovedValue(ctx, try buildConstraintRecord(ctx.allocator, backing, null));
 }
 
 /// type-descriptor ( symbol|type -- type-descriptor ) - Look up a type descriptor by name or type value.
@@ -779,7 +808,7 @@ fn nativeTypeGeneratedWords(ctx: *Context) anyerror!void {
     };
     // The generated-words slice belongs to the type value; the result array
     // copies it.
-    try helpers.pushCopiedArray(ctx, ctx.quotationAllocator(), tv.generated_words orelse &.{});
+    try helpers.pushCopiedArray(ctx, ctx.allocator, tv.generated_words orelse &.{});
 }
 
 fn resolveTypeValue(ctx: *Context, val: Value) !*value_mod.TypeValue {
@@ -1021,6 +1050,8 @@ fn nativeAllWords(ctx: *Context) anyerror!void {
 
     var seen: std.StringHashMapUnmanaged(void) = .{};
     var results: std.ArrayListUnmanaged(Value) = .{};
+    defer results.deinit(ctx.allocator);
+    errdefer container_backing.releaseValues(results.items);
 
     try collectFrameWords(alloc, ctx, ctx, &seen, &results, false);
 
@@ -1030,28 +1061,46 @@ fn nativeAllWords(ctx: *Context) anyerror!void {
         ancestor = anc.parent_context;
     }
 
-    const items = results.toOwnedSlice(alloc) catch return error.OutOfMemory;
-    try helpers.pushAdoptedArray(ctx, alloc, items);
+    const items = try ctx.allocator.dupe(Value, results.items);
+    results.clearRetainingCapacity();
+    try helpers.pushAdoptedArray(ctx, ctx.allocator, items);
+}
+
+/// Append the word-info record for `name`, releasing it when the append fails.
+fn appendWordInfo(
+    scratch: Allocator,
+    lookup_ctx: *Context,
+    results: *std.ArrayListUnmanaged(Value),
+    name: []const u8,
+    word: WordDefinition,
+) !void {
+    const info = try buildWordInfo(scratch, lookup_ctx, name, word);
+    results.append(lookup_ctx.allocator, info) catch |e| {
+        container_backing.releaseValue(info);
+        return e;
+    };
 }
 
 /// scope-frames ( -- array ) - Return an array of frame descriptor hashes for the full scope chain.
 fn nativeScopeFrames(ctx: *Context) anyerror!void {
-    const alloc = ctx.quotationAllocator();
     var results: std.ArrayListUnmanaged(Value) = .{};
+    defer results.deinit(ctx.allocator);
+    errdefer container_backing.releaseValues(results.items);
 
-    try collectScopeFrames(alloc, ctx.allocator, ctx, "", &results, false);
+    try collectScopeFrames(ctx.allocator, ctx, "", &results, false);
 
     var ancestor = ctx.parent_context;
     while (ancestor) |anc| {
         // A descendant task resolves only an ancestor's stable scope, so the
         // dump stops at each ancestor's durable floor rather than walking its
         // task-private transient frames across the spawn boundary.
-        try collectScopeFrames(alloc, ctx.allocator, anc, "parent-", &results, true);
+        try collectScopeFrames(ctx.allocator, anc, "parent-", &results, true);
         ancestor = anc.parent_context;
     }
 
-    const items = results.toOwnedSlice(alloc) catch return error.OutOfMemory;
-    try helpers.pushAdoptedArray(ctx, alloc, items);
+    const items = try ctx.allocator.dupe(Value, results.items);
+    results.clearRetainingCapacity();
+    try helpers.pushAdoptedArray(ctx, ctx.allocator, items);
 }
 
 /// stack-snapshot ( -- string ) - Return a debug snapshot of the current data stack.
@@ -1062,8 +1111,23 @@ fn nativeStackSnapshot(ctx: *Context) anyerror!void {
     try helpers.pushOwnedString(ctx, try buf.toOwnedSlice(ctx.allocator));
 }
 
+/// Store `val` under a copy of `key`, taking ownership of `val` on every path.
+fn putFrameEntry(hash: *HashTable, key: []const u8, val: Value) !void {
+    const hash_alloc = hash.header.allocator;
+    const key_copy = hash_alloc.dupe(u8, key) catch |e| {
+        container_backing.releaseValue(val);
+        return e;
+    };
+    hash.map.put(hash_alloc, key_copy, val) catch |e| {
+        hash_alloc.free(key_copy);
+        container_backing.releaseValue(val);
+        return e;
+    };
+}
+
+/// A frame descriptor hash on `gpa`. The word names are owned copies because a frame can belong
+/// to a task, and the hash can outlive it.
 fn buildFrameHash(
-    alloc: Allocator,
     gpa: Allocator,
     type_name: []const u8,
     index: i64,
@@ -1071,32 +1135,56 @@ fn buildFrameHash(
     is_import_frame: bool,
 ) !Value {
     const hash = try HashTable.create(gpa);
-    errdefer hash.header.release();
-    const hash_alloc = hash.header.allocator;
+    errdefer container_backing.releaseValue(.{ .hash = hash });
 
-    try hash.map.put(hash_alloc, try hash_alloc.dupe(u8, "type"), value_mod.stringValue(type_name));
-    try hash.map.put(hash_alloc, try hash_alloc.dupe(u8, "index"), .{ .fixnum = index });
-    try hash.map.put(hash_alloc, try hash_alloc.dupe(u8, "import-frame?"), .{ .boolean = is_import_frame });
+    try putFrameEntry(hash, "type", value_mod.stringValue(type_name));
+    try putFrameEntry(hash, "index", .{ .fixnum = index });
+    try putFrameEntry(hash, "import-frame?", .{ .boolean = is_import_frame });
 
     var word_names: std.ArrayListUnmanaged(Value) = .{};
-    var count: i64 = 0;
+    defer word_names.deinit(gpa);
+    errdefer container_backing.releaseValues(word_names.items);
 
     var iter = frame_words.iterator();
     while (iter.next()) |entry| {
-        try word_names.append(alloc, value_mod.stringValue(entry.key_ptr.*));
-        count += 1;
+        const name_val = try helpers.ownedStringCopy(gpa, entry.key_ptr.*);
+        word_names.append(gpa, name_val) catch |e| {
+            container_backing.releaseValue(name_val);
+            return e;
+        };
     }
+    const count: i64 = @intCast(word_names.items.len);
 
-    const names = word_names.toOwnedSlice(alloc) catch return error.OutOfMemory;
-    const names_arr = try value_mod.Array.fromOwnedSlice(alloc, names);
-    try hash.map.put(hash_alloc, try hash_alloc.dupe(u8, "words"), .{ .array = names_arr });
-    try hash.map.put(hash_alloc, try hash_alloc.dupe(u8, "count"), .{ .fixnum = count });
+    const names = try gpa.dupe(Value, word_names.items);
+    const names_arr = value_mod.Array.fromOwnedSlice(gpa, names) catch |e| {
+        gpa.free(names);
+        return e;
+    };
+    word_names.clearRetainingCapacity();
+
+    try putFrameEntry(hash, "words", .{ .array = names_arr });
+    try putFrameEntry(hash, "count", .{ .fixnum = count });
 
     return .{ .hash = hash };
 }
 
+/// Append the frame descriptor for one frame, releasing it when the append fails.
+fn appendFrameHash(
+    gpa: Allocator,
+    results: *std.ArrayListUnmanaged(Value),
+    type_name: []const u8,
+    index: i64,
+    frame_words: anytype,
+    is_import_frame: bool,
+) !void {
+    const frame_val = try buildFrameHash(gpa, type_name, index, frame_words, is_import_frame);
+    results.append(gpa, frame_val) catch |e| {
+        container_backing.releaseValue(frame_val);
+        return e;
+    };
+}
+
 fn collectScopeFrames(
-    alloc: Allocator,
     gpa: Allocator,
     source_ctx: *const Context,
     prefix: []const u8,
@@ -1118,24 +1206,10 @@ fn collectScopeFrames(
         // is a live field a runtime load moves without synchronization.
         const import_idx = if (stable_only) source_ctx.durable_frame_floor else source_ctx.import_frame_index;
         const is_import = import_idx != null and i == import_idx.?;
-        try results.append(alloc, try buildFrameHash(
-            alloc,
-            gpa,
-            local_type,
-            @intCast(i),
-            &source_ctx.local_frames.items[i],
-            is_import,
-        ));
+        try appendFrameHash(gpa, results, local_type, @intCast(i), &source_ctx.local_frames.items[i], is_import);
     }
 
-    try results.append(alloc, try buildFrameHash(
-        alloc,
-        gpa,
-        dict_type,
-        -1,
-        &source_ctx.dictionary.entries,
-        false,
-    ));
+    try appendFrameHash(gpa, results, dict_type, -1, &source_ctx.dictionary.entries, false);
 }
 
 /// Collect words from a single context's local frames and dictionary, skipping any names already
@@ -1160,7 +1234,7 @@ fn collectFrameWords(
         while (iter.next()) |entry| {
             const gop = try seen.getOrPut(alloc, entry.key_ptr.*);
             if (!gop.found_existing) {
-                try results.append(alloc, try buildWordInfo(alloc, lookup_ctx, entry.key_ptr.*, entry.value_ptr.*));
+                try appendWordInfo(alloc, lookup_ctx, results, entry.key_ptr.*, entry.value_ptr.*);
             }
         }
     }
@@ -1168,20 +1242,19 @@ fn collectFrameWords(
     while (dict_iter.next()) |entry| {
         const gop = try seen.getOrPut(alloc, entry.key_ptr.*);
         if (!gop.found_existing) {
-            try results.append(alloc, try buildWordInfo(alloc, lookup_ctx, entry.key_ptr.*, dictionary_mod.loadSlot(entry.value_ptr.*).*));
+            try appendWordInfo(alloc, lookup_ctx, results, entry.key_ptr.*, dictionary_mod.loadSlot(entry.value_ptr.*).*);
         }
     }
 }
 
 /// quotation>effect ( quot -- effect-or-false ) - Extract the stack effect from a quotation.
 fn nativeQuotationToEffect(ctx: *Context) anyerror!void {
-    const alloc = ctx.quotationAllocator();
     const pc = try helpers.popQuotation(ctx);
     defer pc.release();
     const quot = pc.quot;
 
     if (quot.effect) |effect| {
-        try ctx.stack.push(try buildStackEffectValue(alloc, effect));
+        try helpers.pushMovedValue(ctx, try buildStackEffectValue(ctx.allocator, effect));
     } else {
         try ctx.stack.push(.{ .boolean = false });
     }
@@ -1191,7 +1264,7 @@ fn nativeQuotationToEffect(ctx: *Context) anyerror!void {
 /// `{ inputs outputs }` record that `quotation>effect` returns, so 1z code can read its parameters.
 fn nativeStackEffectToInfo(ctx: *Context) anyerror!void {
     const effect = try helpers.popStackEffect(ctx);
-    try ctx.stack.push(try buildStackEffectValue(ctx.quotationAllocator(), &effect));
+    try helpers.pushMovedValue(ctx, try buildStackEffectValue(ctx.allocator, &effect));
 }
 
 /// parse-stack-effect ( string -- stack-effect ) - Build a stack-effect value
@@ -1229,35 +1302,40 @@ fn nativeParseStackEffect(ctx: *Context) anyerror!void {
 
 /// quotation>opcodes ( quotation -- array ) - Return instruction pairs as raw [symbol, value] arrays.
 fn nativeQuotationToOpcodes(ctx: *Context) anyerror!void {
-    const alloc = ctx.quotationAllocator();
+    const alloc = ctx.allocator;
     const pc = try helpers.popQuotation(ctx);
     defer pc.release();
     const quot = pc.quot;
 
-    const result = try alloc.alloc(Value, quot.instructions.len);
+    var result = try helpers.ArrayBuilder.init(alloc, quot.instructions.len);
+    errdefer result.deinit();
+
     for (quot.instructions, 0..) |instr, i| {
-        const pair = try alloc.alloc(Value, 2);
+        var pair = try helpers.ArrayBuilder.init(alloc, 2);
+        errdefer pair.deinit();
+
         switch (instr.op) {
             .push_literal => |lit| {
-                pair[0] = value_mod.symbolValue("push-literal");
+                pair.items[0] = value_mod.symbolValue("push-literal");
                 // The literal is borrowed from the instruction stream; the
                 // pair array must own its own reference.
                 container_backing.retainValue(lit);
-                pair[1] = lit;
+                pair.items[1] = lit;
             },
             .call_word => |name| {
-                pair[0] = value_mod.symbolValue("call-word");
-                pair[1] = value_mod.stringValue(name);
+                pair.items[0] = value_mod.symbolValue("call-word");
+                pair.items[1] = try helpers.ownedStringCopy(alloc, name);
             },
             .call_word_direct, .call_word_module => |slot| {
-                pair[0] = value_mod.symbolValue("call-word");
-                pair[1] = value_mod.stringValue(slot.name);
+                pair.items[0] = value_mod.symbolValue("call-word");
+                pair.items[1] = try helpers.ownedStringCopy(alloc, slot.name);
             },
         }
-        result[i] = .{ .array = try value_mod.Array.fromOwnedSlice(alloc, pair) };
+
+        result.items[i] = try pair.finish();
     }
 
-    try helpers.pushAdoptedArray(ctx, alloc, result);
+    try helpers.pushMovedValue(ctx, try result.finish());
 }
 
 const testing = std.testing;
@@ -1326,6 +1404,7 @@ test ">stack-effect-info unpacks row, typed, and nested parameters" {
     try nativeStackEffectToInfo(&ctx);
 
     const val = try ctx.stack.pop();
+    defer container_backing.releaseValue(val);
     const record = val.array.items;
     try testing.expectEqual(@as(usize, 2), record.len);
 
@@ -1340,6 +1419,8 @@ test ">stack-effect-info unpacks row, typed, and nested parameters" {
 
     const typed = inputs[1].array.items;
     try testing.expectEqualStrings("n", typed[0].string.bytes);
+    try testing.expect(typed[0].string.backing != null);
+    try testing.expectEqual(ctx.allocator.ptr, val.array.header.allocator.ptr);
     try testing.expect(!typed[1].boolean);
     try testing.expect(typed[3].type_val == ctx.lookupBuiltinTypeValue("fixnum").?);
 
