@@ -1,0 +1,9 @@
+\ Loaded by pragma_view_scoping.1z. It sees the caller's pragma at load time, then sets its own,
+\ which must end with the load.
+
+use "testing" ;
+
+"x-scope" pragma-get? option:some> 2 "a loading module sees the caller's pragma" assert=
+
+pragma{ x-scope: 99 }
+"x-scope" pragma-get? option:some> 99 "a module's own pragma{ is visible during its load" assert=

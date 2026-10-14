@@ -6,6 +6,9 @@ const Stack = @import("stack.zig").Stack;
 const dict_mod = @import("dictionary.zig");
 const Dictionary = dict_mod.Dictionary;
 const container_backing = @import("container_backing.zig");
+const PragmaView = @import("pragma_view.zig").PragmaView;
+const typeCheckModeOf = @import("pragma_view.zig").typeCheckModeOf;
+const TypeCheckMode = @import("pragma_view.zig").TypeCheckMode;
 
 const value_mod = @import("value.zig");
 const Instruction = value_mod.Instruction;
@@ -466,8 +469,29 @@ pub const PragmaRegistration = struct {
     native_validator: ?*const fn (*Context) anyerror!void = null,
 };
 
-/// PragmaFrame holds pragma values for the current file scope.
-pub const PragmaFrame = std.StringHashMapUnmanaged(Value);
+/// PragmaFrame holds the pragma values set in one file scope, and the view of every pragma visible
+/// at that level.
+///
+/// Reads go through the view. The Debug coherence check rebuilds the view from the frame's own
+/// values.
+pub const PragmaFrame = struct {
+    values: std.StringHashMapUnmanaged(Value) = .{},
+    view: *PragmaView,
+};
+
+fn deinitPragmaFrame(allocator: Allocator, frame: *PragmaFrame) void {
+    var values = frame.values.valueIterator();
+    while (values.next()) |v| container_backing.releaseValue(v.*);
+    frame.values.deinit(allocator);
+    frame.view.release();
+}
+
+/// Whether a pragma view and its frame hold the same value. A float compares by bits, so a NaN a
+/// validator let through still matches itself.
+fn pragmaValuesMatch(a: Value, b: Value) bool {
+    if (a == .float and b == .float) return @as(u64, @bitCast(a.float)) == @as(u64, @bitCast(b.float));
+    return a.eql(b);
+}
 
 /// TypeRegistryFrame holds type descriptor and enum registry entries for
 /// a single scope. Pushed/popped by `with-isolation` to enable rollback
@@ -2526,14 +2550,11 @@ pub const Context = struct {
         self.error_details.deinit(self.allocator);
         self.jit_pending_trace_frames.deinit(self.allocator);
         self.load_paths.deinit(self.allocator);
-        for (self.pragma_frames.items) |*frame| {
-            var pragma_vals = frame.valueIterator();
-            while (pragma_vals.next()) |v| container_backing.releaseValue(v.*);
-            frame.deinit(self.allocator);
-        }
+        for (self.pragma_frames.items) |*frame| deinitPragmaFrame(self.allocator, frame);
         self.pragma_frames.deinit(self.allocator);
         self.pragma_registry.deinit(self.allocator);
         self.parse_time_deferred_emissions.deinit(self.allocator);
+        container_backing.releaseValues(self.import_history.items);
         self.import_history.deinit(self.allocator);
         for (self.type_registry_frames.items) |*frame| {
             frame.deinit(self.allocator);
@@ -4663,7 +4684,8 @@ pub const Context = struct {
     // Pragma frame methods (file-scoped pragma values)
     // =========================================================================
 
-    /// Push a new empty pragma frame onto the frame stack.
+    /// Push a new empty pragma frame onto the frame stack. It shares the view below it, so every
+    /// pragma visible before the push stays visible.
     pub fn pushPragmaFrame(self: *Context) !void {
         self.acquireSharedWrite();
         defer self.releaseSharedWrite();
@@ -4671,10 +4693,17 @@ pub const Context = struct {
     }
 
     fn pushPragmaFrameLocked(self: *Context) !void {
-        try self.pragma_frames.append(self.allocator, PragmaFrame{});
+        const view = if (self.topPragmaView()) |below| blk: {
+            below.retain();
+            break :blk below;
+        } else try PragmaView.createEmpty(self.allocator);
+        errdefer view.release();
+
+        try self.pragma_frames.append(self.allocator, .{ .view = view });
+        self.assertPragmaViewCoherent();
     }
 
-    /// Pop the top pragma frame from the frame stack.
+    /// Pop the top pragma frame from the frame stack. It only releases, so it cannot fail.
     pub fn popPragmaFrame(self: *Context) void {
         self.acquireSharedWrite();
         defer self.releaseSharedWrite();
@@ -4682,28 +4711,39 @@ pub const Context = struct {
     }
 
     fn popPragmaFrameLocked(self: *Context) void {
-        if (self.pragma_frames.items.len > 0) {
-            const last_idx = self.pragma_frames.items.len - 1;
-            var pragma_vals = self.pragma_frames.items[last_idx].valueIterator();
-            while (pragma_vals.next()) |v| container_backing.releaseValue(v.*);
-            self.pragma_frames.items[last_idx].deinit(self.allocator);
-            self.pragma_frames.items.len -= 1;
-        }
+        var frame = self.pragma_frames.pop() orelse return;
+        deinitPragmaFrame(self.allocator, &frame);
+        self.assertPragmaViewCoherent();
     }
 
     /// Set a pragma value in the top frame.
     /// Takes ownership of `value`'s reference; the frame releases it on overwrite,
     /// frame pop, or context teardown.
+    ///
+    /// The top view is replaced, never edited, so a holder of the old view keeps a consistent
+    /// one. The write lock keeps an ancestor walk in another context from reading the old view
+    /// while it is released.
     pub fn setPragma(self: *Context, name: []const u8, value: Value) !void {
+        self.acquireSharedWrite();
+        defer self.releaseSharedWrite();
+
         if (self.pragma_frames.items.len == 0) return error.NoPragmaFrame;
-        const top_index = self.pragma_frames.items.len - 1;
-        const gop = try self.pragma_frames.items[top_index].getOrPut(self.allocator, name);
+        const top = &self.pragma_frames.items[self.pragma_frames.items.len - 1];
+
+        const view = try top.view.withValue(name, value);
+        errdefer view.release();
+
+        const gop = try top.values.getOrPut(self.allocator, name);
         if (gop.found_existing) container_backing.releaseValue(gop.value_ptr.*);
         gop.value_ptr.* = value;
+
+        top.view.release();
+        top.view = view;
+        self.assertPragmaViewCoherent();
     }
 
-    /// Get the current value of a pragma, searching frames top-to-bottom
-    /// and then walking the parent context chain.
+    /// Get the current value of a pragma from the top view, and then from each ancestor
+    /// context's top view.
     pub fn getPragma(self: *const Context, name: []const u8) ?Value {
         self.acquireSharedRead();
         defer self.releaseSharedRead();
@@ -4711,26 +4751,63 @@ pub const Context = struct {
     }
 
     fn getPragmaLocked(self: *const Context, name: []const u8) ?Value {
-        var i = self.pragma_frames.items.len;
-        while (i > 0) {
-            i -= 1;
-            if (self.pragma_frames.items[i].get(name)) |value| {
-                return value;
-            }
+        if (self.topPragmaView()) |view| {
+            if (view.get(name)) |value| return value;
         }
 
         var ancestor = self.parent_context;
         while (ancestor) |ctx| {
-            var j = ctx.pragma_frames.items.len;
-            while (j > 0) {
-                j -= 1;
-                if (ctx.pragma_frames.items[j].get(name)) |value| {
-                    return value;
-                }
+            if (ctx.topPragmaView()) |view| {
+                if (view.get(name)) |value| return value;
             }
             ancestor = ctx.parent_context;
         }
 
+        return null;
+    }
+
+    fn topPragmaView(self: *const Context) ?*PragmaView {
+        const frames = self.pragma_frames.items;
+        if (frames.len == 0) return null;
+        return frames[frames.len - 1].view;
+    }
+
+    /// Check that the top pragma view matches this context's own frames. Every key in the view
+    /// resolves to the same value through a fresh top-down walk of the frames. Every key a frame
+    /// set is in the view. The view's `type-check` mode is the one the walked value selects.
+    ///
+    /// `pushPragmaFrame`, `popPragmaFrame`, and `setPragma` maintain the view, and each calls this
+    /// after its change. Only the top view is checked: a lower view is immutable and was checked
+    /// when it was on top.
+    fn assertPragmaViewCoherent(self: *const Context) void {
+        if (comptime builtin.mode != .Debug) return;
+        const view = self.topPragmaView() orelse return;
+
+        var entries = view.values.iterator();
+        while (entries.next()) |entry| {
+            const walked = self.walkOwnPragmaFrames(entry.key_ptr.*) orelse
+                @panic("pragma view holds a key no frame set");
+            if (!pragmaValuesMatch(walked, entry.value_ptr.*)) @panic("pragma view value differs from its frame");
+        }
+
+        for (self.pragma_frames.items) |frame| {
+            var keys = frame.values.keyIterator();
+            while (keys.next()) |key| {
+                if (!view.values.contains(key.*)) @panic("pragma view is missing a key a frame set");
+            }
+        }
+
+        if (view.type_check != typeCheckModeOf(self.walkOwnPragmaFrames("type-check"))) {
+            @panic("pragma view type-check mode differs from its frames");
+        }
+    }
+
+    fn walkOwnPragmaFrames(self: *const Context, name: []const u8) ?Value {
+        var i = self.pragma_frames.items.len;
+        while (i > 0) {
+            i -= 1;
+            if (self.pragma_frames.items[i].values.get(name)) |value| return value;
+        }
         return null;
     }
 
@@ -11728,6 +11805,126 @@ test "collisionGuardMode maps each accepted value, and defaults to error" {
 
     // Each key is read on its own, so relaxing one guard leaves the other at its default.
     try std.testing.expectEqual(Context.CollisionGuardMode.err, ctx.collisionGuardMode("import-collision", "dup"));
+}
+
+test "pushPragmaFrame: the first frame starts from an empty view" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    try ctx.pushPragmaFrame();
+
+    const view = ctx.topPragmaView().?;
+    try std.testing.expectEqual(@as(u32, 0), view.values.count());
+    try std.testing.expectEqual(TypeCheckMode.err, view.type_check);
+    try std.testing.expect(ctx.getPragma("type-check") == null);
+}
+
+test "pushPragmaFrame: a pushed frame shares the view below it" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    try ctx.pushPragmaFrame();
+    try ctx.setPragma("type-check", value_mod.stringValue("off"));
+    const below = ctx.topPragmaView().?;
+
+    try ctx.pushPragmaFrame();
+
+    try std.testing.expectEqual(below, ctx.topPragmaView().?);
+    try std.testing.expectEqual(@as(u32, 2), below.refcount.load(.monotonic));
+    try std.testing.expectEqual(TypeCheckMode.off, ctx.topPragmaView().?.type_check);
+    try std.testing.expectEqualStrings("off", ctx.getPragma("type-check").?.string.bytes);
+}
+
+test "setPragma: replaces only the top view and leaves the frame below unchanged" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    try ctx.pushPragmaFrame();
+    try ctx.setPragma("x-level", .{ .fixnum = 1 });
+    const below = ctx.topPragmaView().?;
+
+    try ctx.pushPragmaFrame();
+    try ctx.setPragma("x-level", .{ .fixnum = 2 });
+    try ctx.setPragma("type-check", value_mod.stringValue("warning"));
+
+    const top = ctx.topPragmaView().?;
+    try std.testing.expect(top != below);
+    try std.testing.expectEqual(@as(u32, 1), below.refcount.load(.monotonic));
+    try std.testing.expectEqual(@as(i64, 1), below.get("x-level").?.fixnum);
+    try std.testing.expect(below.get("type-check") == null);
+    try std.testing.expectEqual(TypeCheckMode.err, below.type_check);
+
+    try std.testing.expectEqual(@as(i64, 2), ctx.getPragma("x-level").?.fixnum);
+    try std.testing.expectEqual(TypeCheckMode.warning, top.type_check);
+}
+
+test "popPragmaFrame: restores the view and values below" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    try ctx.pushPragmaFrame();
+    try ctx.setPragma("type-check", value_mod.stringValue("warning"));
+    const below = ctx.topPragmaView().?;
+
+    try ctx.pushPragmaFrame();
+    try ctx.setPragma("type-check", value_mod.stringValue("off"));
+    try ctx.setPragma("x-debug", .{ .boolean = true });
+
+    ctx.popPragmaFrame();
+
+    try std.testing.expectEqual(below, ctx.topPragmaView().?);
+    try std.testing.expectEqual(TypeCheckMode.warning, below.type_check);
+    try std.testing.expectEqualStrings("warning", ctx.getPragma("type-check").?.string.bytes);
+    try std.testing.expect(ctx.getPragma("x-debug") == null);
+
+    ctx.popPragmaFrame();
+    try std.testing.expect(ctx.topPragmaView() == null);
+    try std.testing.expect(ctx.getPragma("type-check") == null);
+}
+
+test "setPragma: overwriting a refcounted value releases the frame's and the old view's references" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    try ctx.pushPragmaFrame();
+
+    const first_names = try std.testing.allocator.alloc(Value, 1);
+    first_names[0] = value_mod.symbolValue("dup");
+    const first = try value_mod.Array.fromOwnedSlice(std.testing.allocator, first_names);
+    try ctx.setPragma("dictionary-shadow", .{ .array = first });
+
+    // The frame holds the transferred reference and the view holds its own.
+    try std.testing.expectEqual(@as(u32, 2), first.header.refcount.load(.monotonic));
+
+    const second_names = try std.testing.allocator.alloc(Value, 1);
+    second_names[0] = value_mod.symbolValue("nip");
+    const second = try value_mod.Array.fromOwnedSlice(std.testing.allocator, second_names);
+
+    // Keep `first` alive past the overwrite to observe that both references were dropped.
+    container_backing.retainValue(.{ .array = first });
+    defer container_backing.releaseValue(.{ .array = first });
+
+    try ctx.setPragma("dictionary-shadow", .{ .array = second });
+    try std.testing.expectEqual(@as(u32, 1), first.header.refcount.load(.monotonic));
+    try std.testing.expectEqual(second, ctx.getPragma("dictionary-shadow").?.array);
+}
+
+test "deinit releases every live pragma frame and view" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    try ctx.pushPragmaFrame();
+    try ctx.setPragma("type-check", value_mod.stringValue("off"));
+
+    try ctx.pushPragmaFrame();
+
+    try ctx.pushPragmaFrame();
+    const names = try std.testing.allocator.alloc(Value, 1);
+    names[0] = value_mod.symbolValue("dup");
+    const allowlist = try value_mod.Array.fromOwnedSlice(std.testing.allocator, names);
+    try ctx.setPragma("dictionary-shadow", .{ .array = allowlist });
+
+    // No pops: the testing allocator reports a leak if deinit misses a frame, a view, or a value.
 }
 
 test "stack operations through context" {

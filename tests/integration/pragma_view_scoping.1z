@@ -1,0 +1,40 @@
+\ Pragma reads see each frame level's settings: a mid-file overwrite, a nested load whose own
+\ setting ends with the load, a type-check change for a later annotated call, and a task reading
+\ its spawner's pragma.
+
+use "testing" ;
+
+pragma-def{ x-scope: [ t ] }
+
+"pragma{ mid-file overwrites a key" test-section
+
+"x-scope" pragma-get? option:none? t "an unset pragma reads as none" assert=
+
+pragma{ x-scope: 1 }
+"x-scope" pragma-get? option:some> 1 "the first pragma{ sets the key" assert=
+
+pragma{ x-scope: 2 }
+"x-scope" pragma-get? option:some> 2 "a later pragma{ overwrites the key" assert=
+
+"a nested load's pragma ends with the load" test-section
+
+use "./fixtures/pragma_view_scoping_mod.1z" ;
+"x-scope" pragma-get? option:some> 2 "the module's setting does not outlive its load" assert=
+
+"type-check changes reach a later annotated call" test-section
+
+typed-const: ( s: string -- n ) [ drop 7 ] ;
+
+[ 42 typed-const ] "a mistyped input raises under the default" assert-error
+
+pragma{ type-check: "off" }
+42 typed-const 7 "a mistyped input passes once type-check is off" assert=
+
+pragma{ type-check: "error" }
+[ 42 typed-const ] "a mistyped input raises again once type-check is error" assert-error
+
+"a task reads its spawner's pragma" test-section
+
+[
+  [ "x-scope" pragma-get? ] spawn await option:some> 2 "a spawned task sees the spawner's pragma" assert=
+] task-scope

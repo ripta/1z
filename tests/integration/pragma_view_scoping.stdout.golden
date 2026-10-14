@@ -1,0 +1,27 @@
+=== pragma{ mid-file overwrites a key ===
+Stack: [ ]
+PASS: an unset pragma reads as none
+Stack: [ ]
+PASS: the first pragma{ sets the key
+Stack: [ ]
+PASS: a later pragma{ overwrites the key
+Stack: [ ]
+=== a nested load's pragma ends with the load ===
+Stack: [ ]
+PASS: a loading module sees the caller's pragma
+PASS: a module's own pragma{ is visible during its load
+PASS: the module's setting does not outlive its load
+Stack: [ ]
+=== type-check changes reach a later annotated call ===
+Stack: [ ]
+Stack: [ ]
+PASS: a mistyped input raises under the default
+Stack: [ ]
+PASS: a mistyped input passes once type-check is off
+Stack: [ ]
+PASS: a mistyped input raises again once type-check is error
+Stack: [ ]
+=== a task reads its spawner's pragma ===
+Stack: [ ]
+PASS: a spawned task sees the spawner's pragma
+Stack: [ ]
