@@ -45,8 +45,7 @@ pub fn executeDispatchBody(ctx: *Context, entry: dispatch_mod.DispatchEntry) !vo
         .host_callback => |host| {
             const saved_native = ctx.withCurrentNative(null);
             defer ctx.restoreCurrentNative(saved_native);
-            const rc = host.callback(host.handle, host.user_data);
-            if (rc != 0) return error.HostCallbackFailed;
+            try host.invoke(ctx);
         },
     }
 }

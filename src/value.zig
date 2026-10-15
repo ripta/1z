@@ -1563,10 +1563,7 @@ pub const ModuleWord = struct {
     pub fn invoke(self: ModuleWord, ctx: *Context) anyerror!void {
         switch (self.action) {
             .native => |func| try func(ctx),
-            .host_callback => |host| {
-                const rc = host.callback(host.handle, host.user_data);
-                if (rc != 0) return error.HostCallbackFailed;
-            },
+            .host_callback => |host| try host.invoke(ctx),
             .compound, .literal => unreachable,
         }
     }

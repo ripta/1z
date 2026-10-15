@@ -8,6 +8,7 @@ const Value = value_mod.Value;
 const StackEffect = @import("stack_effect.zig").StackEffect;
 const container_backing = @import("container_backing.zig");
 const word_slot_mod = @import("word_slot.zig");
+const misc = @import("primitives/misc.zig");
 pub const WordSlot = word_slot_mod.WordSlot;
 pub const Capability = @import("primitives/types.zig").Capability;
 
@@ -20,6 +21,18 @@ pub const HostCallback = struct {
     handle: ?*anyopaque,
     callback: HostCallbackFn,
     user_data: ?*anyopaque,
+    /// The host word or method name it was registered under, for errors raised before it runs.
+    /// Outlives the callback, on the registering root's allocator.
+    name: []const u8,
+
+    /// Run the callback, serialized against other callbacks re-entering the same root handle. Every
+    /// host word runs through here.
+    pub fn invoke(self: HostCallback, ctx: *Context) anyerror!void {
+        const held = try misc.acquireHostReentry(ctx, self.name);
+        defer if (held) misc.releaseHostReentry(ctx);
+
+        if (self.callback(self.handle, self.user_data) != 0) return error.HostCallbackFailed;
+    }
 };
 
 /// Provenance metadata for generated words, e.g., constructors, predicates, accessors.
@@ -169,10 +182,7 @@ pub const WordDefinition = struct {
 
         switch (self.action) {
             .native => |func| try func(ctx),
-            .host_callback => |host| {
-                const rc = host.callback(host.handle, host.user_data);
-                if (rc != 0) return error.HostCallbackFailed;
-            },
+            .host_callback => |host| try host.invoke(ctx),
             .compound, .literal => unreachable,
         }
     }

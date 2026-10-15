@@ -1,0 +1,23 @@
+=== reading pragmas in a task ===
+Stack: [ ]
+PASS: pragma-get in a task
+PASS: pragma-get? in a task
+Stack: [ ]
+=== a spawner's later pragma{ does not reach an earlier task ===
+Stack: [ ]
+PASS: a task spawned after the pragma{ sees the new value
+PASS: a task spawned before the pragma{ keeps the old value
+PASS: the spawner sees its own pragma{
+Stack: [ ]
+PASS: a pragma{ in a task does not reach the main file
+Stack: [ ]
+=== pragma{ through eval-string in a task ===
+Stack: [ ]
+PASS: the task sets its own value
+PASS: the spawner keeps its value
+Stack: [ ]
+=== tasks spawned during a load keep the module's pragma ===
+Stack: [ ]
+PASS: the loader sees its own value once the load ends
+PASS: every task spawned during the load reads the module's pragma
+Stack: [ ]

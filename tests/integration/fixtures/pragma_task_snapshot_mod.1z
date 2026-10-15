@@ -1,0 +1,16 @@
+\ Loaded by pragma_task_snapshot.1z inside a task-scope. Its tasks block until the loader releases
+\ them after the load returns, then report the pragma they see.
+
+pragma{ x-snap: 99 }
+
+snap-go: 8 <buffered-channel> ;
+snap-results: 8 <buffered-channel> ;
+
+[ snap-go receive drop "x-snap" pragma-get snap-results send ] spawn drop
+[ snap-go receive drop "x-snap" pragma-get snap-results send ] spawn drop
+[ snap-go receive drop "x-snap" pragma-get snap-results send ] spawn drop
+[ snap-go receive drop "x-snap" pragma-get snap-results send ] spawn drop
+[ snap-go receive drop "x-snap" pragma-get snap-results send ] spawn drop
+[ snap-go receive drop "x-snap" pragma-get snap-results send ] spawn drop
+[ snap-go receive drop "x-snap" pragma-get snap-results send ] spawn drop
+[ snap-go receive drop "x-snap" pragma-get snap-results send ] spawn drop

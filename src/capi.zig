@@ -1323,11 +1323,18 @@ export fn onez_register_method(
         .type_b = desc_b,
     };
 
+    // The host's name buffer is borrowed, and the method outlives this call.
+    const method_name = handle.ctx.quotationAllocator().dupe(u8, name_slice) catch {
+        setLastError(handle, "allocation failure copying method name", .{});
+        return ONEZ_ERR_ALLOC;
+    };
+
     const entry = DispatchEntry{
         .body = .{ .host_callback = HostCallback{
             .handle = ptr,
             .callback = callback_fn,
             .user_data = user_data,
+            .name = method_name,
         } },
     };
 
@@ -2903,18 +2910,15 @@ const NestedLoadProbe = struct {
     inner_path: []const u8,
     calls: usize = 0,
     nested_rc: c_int = -1,
-    /// Whether someone already held the load lock when the callback fired. Without this a
-    /// scheduling shift would quietly turn a contention test into an uncontended one.
-    saw_holder: bool = false,
+    /// When the callback body began. The contention test's guard against running uncontended.
+    entered_ns: ?i128 = null,
 };
 
 /// Re-enter the library through `onez_load_file` from inside a host word call.
 fn nestedLoadHostCallback(ctx: ?*anyopaque, user_data: ?*anyopaque) callconv(.c) c_int {
     const probe: *NestedLoadProbe = @ptrCast(@alignCast(user_data orelse return 1));
     probe.calls += 1;
-    if (castHandle(ctx)) |handle| {
-        probe.saw_holder = handle.ctx.load_lock.isHeld();
-    }
+    probe.entered_ns = std.time.nanoTimestamp();
     probe.nested_rc = onez_load_file(ctx, probe.inner_path.ptr, probe.inner_path.len);
     return 0;
 }
@@ -2936,6 +2940,70 @@ fn nestedLoadAndDropHostCallback(ctx: ?*anyopaque, user_data: ?*anyopaque) callc
     }
 
     return rc;
+}
+
+const PragmaReentryProbe = struct {
+    iterations: usize,
+    inside: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+    max_inside: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+    calls: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+    failures: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+    thread_ids: [2]std.atomic.Value(std.Thread.Id) = .{
+        std.atomic.Value(std.Thread.Id).init(0),
+        std.atomic.Value(std.Thread.Id).init(0),
+    },
+};
+
+/// Evaluate `pragma{` on the root handle repeatedly and read each setting back, recording how many
+/// callbacks are inside at once and which thread each call ran on.
+fn pragmaReentryHostCallback(ctx: ?*anyopaque, user_data: ?*anyopaque) callconv(.c) c_int {
+    const probe: *PragmaReentryProbe = @ptrCast(@alignCast(user_data orelse return 1));
+    const handle = castHandle(ctx) orelse return 1;
+
+    const now_inside = probe.inside.fetchAdd(1, .acq_rel) + 1;
+    defer _ = probe.inside.fetchSub(1, .acq_rel);
+    _ = probe.max_inside.fetchMax(now_inside, .acq_rel);
+
+    const call = probe.calls.fetchAdd(1, .acq_rel);
+    if (call < probe.thread_ids.len) probe.thread_ids[call].store(std.Thread.getCurrentId(), .release);
+
+    const modes = [_][]const u8{ "off", "warning" };
+    for (0..probe.iterations) |i| {
+        const mode = modes[(i + call) % modes.len];
+
+        var buf: [128]u8 = undefined;
+        const code = std.fmt.bufPrint(&buf, "pragma{{ type-check: \"{s}\" }}\n\"type-check\" pragma-get", .{mode}) catch return 1;
+        if (onez_eval(ctx, code.ptr, code.len) != ONEZ_OK) {
+            _ = probe.failures.fetchAdd(1, .acq_rel);
+            continue;
+        }
+
+        const got = handle.ctx.stack.pop() catch {
+            _ = probe.failures.fetchAdd(1, .acq_rel);
+            continue;
+        };
+        defer container_backing.releaseValue(got);
+        if (got != .string or !std.mem.eql(u8, got.string.bytes, mode)) _ = probe.failures.fetchAdd(1, .acq_rel);
+    }
+
+    return 0;
+}
+
+const HoldingProbe = struct {
+    holding: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    max_hold_ms: u64,
+};
+
+/// Hold the root handle by staying inside the callback, for at most `max_hold_ms`.
+fn holdingHostCallback(_: ?*anyopaque, user_data: ?*anyopaque) callconv(.c) c_int {
+    const probe: *HoldingProbe = @ptrCast(@alignCast(user_data orelse return 1));
+    probe.holding.store(true, .release);
+    std.Thread.sleep(probe.max_hold_ms * std.time.ns_per_ms);
+    return 0;
+}
+
+fn noopHostCallback(_: ?*anyopaque, _: ?*anyopaque) callconv(.c) c_int {
+    return 0;
 }
 
 // =============================================================================
@@ -4197,7 +4265,7 @@ test "load_file from a host callback during a task-driven load" {
     try std.testing.expectEqual(@as(usize, 0), ctx.module_load_record.entries.items.len);
 }
 
-test "load_file from a host callback contends with a concurrent task load" {
+test "a host word called from a task waits for a concurrent task load" {
     const handle_ptr = onez_init();
     try std.testing.expect(handle_ptr != null);
     defer onez_deinit(handle_ptr);
@@ -4229,10 +4297,11 @@ test "load_file from a host callback contends with a concurrent task load" {
     // sleeping hands the holder the lock first; the 5 ms head start against the holder's
     // 50 ms park is what makes the contention ordered rather than raced. Neither task is in
     // the other's wait chain, so the contender queues and suspends instead of borrowing the
-    // hold, and the holder's release has to wake it.
+    // hold, and the holder's release has to wake it. The contender waits at the host word's
+    // entry, which takes the same lock before the callback runs.
     //
-    // `probe.saw_holder` is the guard on all of that: without it a scheduling shift turns
-    // this into an uncontended load that still passes.
+    // `probe.entered_ns` is the guard on all of that. A callback that starts before the holder's
+    // 50 ms park ends did not wait, which means a scheduling shift made the test uncontended.
     const code = try std.fmt.allocPrint(
         std.testing.allocator,
         "use \"time\" ;\n" ++
@@ -4244,15 +4313,76 @@ test "load_file from a host callback contends with a concurrent task load" {
         .{slow_path},
     );
     defer std.testing.allocator.free(code);
+    const started_ns = std.time.nanoTimestamp();
     try std.testing.expectEqual(ONEZ_OK, onez_eval(handle_ptr, code.ptr, code.len));
 
     try std.testing.expectEqual(@as(usize, 1), probe.calls);
     try std.testing.expectEqual(ONEZ_OK, probe.nested_rc);
-    try std.testing.expect(probe.saw_holder);
+    try std.testing.expect(probe.entered_ns.? - started_ns >= 50 * std.time.ns_per_ms);
 
     const ctx = castHandle(handle_ptr).?.ctx;
     try std.testing.expect(!ctx.load_lock.isHeldBy(.main));
     try std.testing.expectEqual(@as(usize, 0), ctx.module_load_record.entries.items.len);
+}
+
+test "host callbacks evaluating pragma{ from tasks on different workers take turns on the root" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    // The scope body occupies the primary worker, so least-loaded picking sends the two spawns to
+    // the two background workers.
+    const ctx = castHandle(handle_ptr).?.ctx;
+    ctx.worker_count = 3;
+
+    var probe = PragmaReentryProbe{ .iterations = 200 };
+    try std.testing.expectEqual(
+        ONEZ_OK,
+        onez_register_word(handle_ptr, "pragma-host", pragmaReentryHostCallback, &probe),
+    );
+
+    const frames_before = ctx.pragma_frames.items.len;
+
+    const code = "[ [ pragma-host ] spawn drop [ pragma-host ] spawn drop ] task-scope";
+    try std.testing.expectEqual(ONEZ_OK, onez_eval(handle_ptr, code.ptr, code.len));
+
+    try std.testing.expectEqual(@as(u32, 2), probe.calls.load(.acquire));
+    try std.testing.expectEqual(@as(u32, 0), probe.failures.load(.acquire));
+    try std.testing.expectEqual(@as(u32, 1), probe.max_inside.load(.acquire));
+    try std.testing.expect(probe.thread_ids[0].load(.acquire) != probe.thread_ids[1].load(.acquire));
+
+    try std.testing.expectEqual(frames_before, ctx.pragma_frames.items.len);
+    try std.testing.expect(!ctx.load_lock.isHeld());
+}
+
+test "a host word called at parse time while another task holds the handle names the host word" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    const ctx = castHandle(handle_ptr).?.ctx;
+    ctx.worker_count = 3;
+
+    var holder = HoldingProbe{ .max_hold_ms = 300 };
+    try std.testing.expectEqual(ONEZ_OK, onez_register_word(handle_ptr, "hold-host", holdingHostCallback, &holder));
+    try std.testing.expectEqual(ONEZ_OK, onez_register_word(handle_ptr, "probe-host", noopHostCallback, null));
+
+    // The holder blocks its worker inside its callback. The second task waits until the hold is
+    // surely taken, then runs a parse-time word that calls the second host word. A parse-time call
+    // cannot park, so it must refuse rather than wait. `eval-string` parses a whole line before
+    // running it, so the definition and the call sit on separate lines.
+    const code =
+        "use \"time\" ;\n" ++
+        "[ [ hold-host ] spawn drop" ++
+        " [ 50 milliseconds sleep \"(pt): parse-time [ probe-host ] ;\\n(pt)\" eval-string ] spawn drop" ++
+        " ] task-scope";
+    try std.testing.expect(onez_eval(handle_ptr, code.ptr, code.len) != ONEZ_OK);
+    try std.testing.expect(holder.holding.load(.acquire));
+
+    const message = std.mem.span(onez_last_error(handle_ptr).?);
+    try std.testing.expect(std.mem.indexOf(u8, message, "host word 'probe-host'") != null);
+    try std.testing.expect(std.mem.indexOf(u8, message, "parse-time") != null);
+    try std.testing.expect(!ctx.load_lock.isHeld());
 }
 
 test "register_word_with_effect attaches stack effect visible via introspection" {

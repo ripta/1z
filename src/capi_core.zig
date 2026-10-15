@@ -298,6 +298,7 @@ pub fn defineHostWord(
             .handle = callback_handle,
             .callback = callback,
             .user_data = user_data,
+            .name = name_copy,
         } },
     });
 }

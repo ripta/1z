@@ -1497,7 +1497,22 @@ pub const Context = struct {
     /// Registry of known pragma keys and their validation rules.
     pragma_registry: std.StringHashMapUnmanaged(PragmaRegistration) = .{},
     /// Stack of pragma frames for file-scoped pragma values.
+    ///
+    /// Only this context reads and writes its frames, so they take no lock. A task starts with one
+    /// frame of its own above its spawner's view.
     pragma_frames: std.ArrayListUnmanaged(PragmaFrame) = .{},
+    /// The spawner's top pragma view, retained at spawn as a read-only layer under the task's own
+    /// frames. Null on a root context. The Debug coherence check resolves keys no frame set here.
+    pragma_spawn_view: ?*PragmaView = null,
+    /// Debug-only tripwire set while a pragma frame push, pop, or set runs.
+    ///
+    /// Two of these overlapping on one context means two threads are driving it at once. For the
+    /// root, that means host-callback re-entry was not serialized.
+    ///
+    /// It does not compare thread identity, because a host may run a context on different threads
+    /// one call at a time.
+    pragma_op_active: if (builtin.mode == .Debug) std.atomic.Value(bool) else void =
+        if (builtin.mode == .Debug) std.atomic.Value(bool).init(false) else {},
     /// When true, only definition statements (ending with `;`) are executed
     /// at the top level. All other runtime statements are skipped. Parse-time
     /// words still execute during parsing.
@@ -2101,11 +2116,12 @@ pub const Context = struct {
     /// Create a lightweight Context for a spawned task. Primitives and the prelude are not
     /// registered here. They are resolved at lookup time by walking up the parent_context chain.
     /// Per-task state like the stack, dictionary, and arena are freshly allocated.
+    ///
+    /// Once the context exists, `deinit` owns every cleanup on failure, so each later step leaves
+    /// whatever it acquired either on the context or released.
     pub fn initForTask(allocator: Allocator, parent: *Context, scheduler: *Scheduler) !Context {
         const arena = try allocator.create(std.heap.ArenaAllocator);
-        errdefer allocator.destroy(arena);
         arena.* = std.heap.ArenaAllocator.init(allocator);
-        errdefer arena.deinit();
 
         var ctx = Context{
             .stack = Stack.init(allocator),
@@ -2142,6 +2158,7 @@ pub const Context = struct {
             .self_type_sentinel = parent.self_type_sentinel,
             .any_type_sentinel = parent.any_type_sentinel,
         };
+        errdefer ctx.deinit();
 
         // Share the parent's lock so all tasks use the same RwLock.
         ctx.shared_lock = parent.shared_lock;
@@ -2257,17 +2274,37 @@ pub const Context = struct {
         // dangling pointer once the task is reaped.
         try ctx.type_registry_frames.append(allocator, .{});
 
+        // Retain the spawner's pragma view as a read-only layer, under one empty frame the task
+        // owns. `pragma{` in the task writes that frame, so the shared view is never written, and
+        // nothing the spawner sets later reaches the task.
+        //
+        // The spawner is the context running this spawn, so reading its top view here is a read of
+        // its own state on its own thread.
+        try ctx.pragma_frames.ensureUnusedCapacity(allocator, 1);
+        const spawn_view = if (parent.topPragmaView()) |view| blk: {
+            view.retain();
+            break :blk view;
+        } else try PragmaView.createEmpty(allocator);
+        ctx.pragma_spawn_view = spawn_view;
+        spawn_view.retain();
+        ctx.pragma_frames.appendAssumeCapacity(.{ .view = spawn_view });
+
         // Snapshot the parent's dynamic variable bindings into the task context.
         for (parent.parameter_env.items) |parent_frame| {
             var cloned_frame = ParameterFrame{};
-            var iter = parent_frame.iterator();
-            while (iter.next()) |entry| {
-                // The cloned task context co-owns the shared container backing,
-                // so it takes its own owning reference.
-                container_backing.retainValue(entry.value_ptr.*);
-                try cloned_frame.put(allocator, entry.key_ptr.*, entry.value_ptr.*);
+            {
+                errdefer ctx.deinitParameterFrame(&cloned_frame);
+
+                var iter = parent_frame.iterator();
+                while (iter.next()) |entry| {
+                    try cloned_frame.put(allocator, entry.key_ptr.*, entry.value_ptr.*);
+
+                    // The cloned task context co-owns the shared container backing, so it takes its
+                    // own owning reference. Retained after the put, so a failed put strands nothing.
+                    container_backing.retainValue(entry.value_ptr.*);
+                }
+                try ctx.parameter_env.append(allocator, cloned_frame);
             }
-            try ctx.parameter_env.append(allocator, cloned_frame);
         }
 
         // Clone the parent's in-scope transient local frames at spawn, the same snapshot-at-spawn
@@ -2303,12 +2340,17 @@ pub const Context = struct {
         // slice from `binding_names`, which is never freed, so the clone's key cannot dangle.
         const transient_start = if (parent.durable_frame_floor) |idx| idx + 1 else 0;
         for (parent.local_frames.items[transient_start..], transient_start..) |parent_frame, src_idx| {
-            var cloned_frame = LocalFrame{};
-            var iter = parent_frame.iterator();
-            while (iter.next()) |entry| {
-                try cloned_frame.put(allocator, entry.key_ptr.*, entry.value_ptr.*);
+            {
+                var cloned_frame = LocalFrame{};
+                errdefer cloned_frame.deinit(allocator);
+
+                var iter = parent_frame.iterator();
+                while (iter.next()) |entry| {
+                    try cloned_frame.put(allocator, entry.key_ptr.*, entry.value_ptr.*);
+                }
+                try ctx.local_frames.append(allocator, cloned_frame);
             }
-            try ctx.local_frames.append(allocator, cloned_frame);
+
             // Retained after the append, so a failing append leaves no reference stranded on a
             // frame the context never took over.
             retainFrameBindings(&ctx.local_frames.items[ctx.local_frames.items.len - 1]);
@@ -2557,6 +2599,7 @@ pub const Context = struct {
         self.load_paths.deinit(self.allocator);
         for (self.pragma_frames.items) |*frame| deinitPragmaFrame(self.allocator, frame);
         self.pragma_frames.deinit(self.allocator);
+        if (self.pragma_spawn_view) |view| view.release();
         self.pragma_registry.deinit(self.allocator);
         self.parse_time_deferred_emissions.deinit(self.allocator);
         container_backing.releaseValues(self.import_history.items);
@@ -4697,12 +4740,9 @@ pub const Context = struct {
     /// Push a new empty pragma frame onto the frame stack. It shares the view below it, so every
     /// pragma visible before the push stays visible.
     pub fn pushPragmaFrame(self: *Context) !void {
-        self.acquireSharedWrite();
-        defer self.releaseSharedWrite();
-        return self.pushPragmaFrameLocked();
-    }
+        self.enterPragmaOp();
+        defer self.exitPragmaOp();
 
-    fn pushPragmaFrameLocked(self: *Context) !void {
         const view = if (self.topPragmaView()) |below| blk: {
             below.retain();
             break :blk below;
@@ -4715,12 +4755,9 @@ pub const Context = struct {
 
     /// Pop the top pragma frame from the frame stack. It only releases, so it cannot fail.
     pub fn popPragmaFrame(self: *Context) void {
-        self.acquireSharedWrite();
-        defer self.releaseSharedWrite();
-        return self.popPragmaFrameLocked();
-    }
+        self.enterPragmaOp();
+        defer self.exitPragmaOp();
 
-    fn popPragmaFrameLocked(self: *Context) void {
         var frame = self.pragma_frames.pop() orelse return;
         deinitPragmaFrame(self.allocator, &frame);
         self.assertPragmaViewCoherent();
@@ -4730,12 +4767,11 @@ pub const Context = struct {
     /// Takes ownership of `value`'s reference; the frame releases it on overwrite,
     /// frame pop, or context teardown.
     ///
-    /// The top view is replaced, never edited, so a holder of the old view keeps a consistent
-    /// one. The write lock keeps an ancestor walk in another context from reading the old view
-    /// while it is released.
+    /// The top view is replaced, never edited, so a task that retained the old view at spawn keeps
+    /// a consistent one.
     pub fn setPragma(self: *Context, name: []const u8, value: Value) !void {
-        self.acquireSharedWrite();
-        defer self.releaseSharedWrite();
+        self.enterPragmaOp();
+        defer self.exitPragmaOp();
 
         if (self.pragma_frames.items.len == 0) return error.NoPragmaFrame;
         const top = &self.pragma_frames.items[self.pragma_frames.items.len - 1];
@@ -4752,28 +4788,24 @@ pub const Context = struct {
         self.assertPragmaViewCoherent();
     }
 
-    /// Get the current value of a pragma from the top view, and then from each ancestor
-    /// context's top view.
+    /// Get the current value of a pragma from the top view. A task's view already holds what its
+    /// spawner saw, so no ancestor is read.
+    ///
+    /// The value is borrowed from the view. It stays valid until this context next sets or pops a
+    /// pragma.
     pub fn getPragma(self: *const Context, name: []const u8) ?Value {
-        self.acquireSharedRead();
-        defer self.releaseSharedRead();
-        return self.getPragmaLocked(name);
+        const view = self.topPragmaView() orelse return null;
+        return view.get(name);
     }
 
-    fn getPragmaLocked(self: *const Context, name: []const u8) ?Value {
-        if (self.topPragmaView()) |view| {
-            if (view.get(name)) |value| return value;
-        }
+    fn enterPragmaOp(self: *Context) void {
+        if (comptime builtin.mode != .Debug) return;
+        if (self.pragma_op_active.swap(true, .acquire)) @panic("overlapping pragma frame operations on one context");
+    }
 
-        var ancestor = self.parent_context;
-        while (ancestor) |ctx| {
-            if (ctx.topPragmaView()) |view| {
-                if (view.get(name)) |value| return value;
-            }
-            ancestor = ctx.parent_context;
-        }
-
-        return null;
+    fn exitPragmaOp(self: *Context) void {
+        if (comptime builtin.mode != .Debug) return;
+        self.pragma_op_active.store(false, .release);
     }
 
     fn topPragmaView(self: *const Context) ?*PragmaView {
@@ -4782,13 +4814,14 @@ pub const Context = struct {
         return frames[frames.len - 1].view;
     }
 
-    /// Check that the top pragma view matches this context's own frames. Every key in the view
-    /// resolves to the same value through a fresh top-down walk of the frames. Every key a frame
-    /// set is in the view. The view's `type-check` mode is the one the walked value selects.
+    /// Check that the top pragma view matches this context's own frames over its spawn view. Every
+    /// key in the top view resolves to the same value through a fresh top-down walk of the frames,
+    /// then the spawn view. Every key a frame or the spawn view holds is in the top view. The top
+    /// view's `type-check` mode is the one the walked value selects.
     ///
     /// `pushPragmaFrame`, `popPragmaFrame`, and `setPragma` maintain the view, and each calls this
     /// after its change. Only the top view is checked: a lower view is immutable and was checked
-    /// when it was on top.
+    /// when it was on top. An ancestor's live frames are never read.
     fn assertPragmaViewCoherent(self: *const Context) void {
         if (comptime builtin.mode != .Debug) return;
         const view = self.topPragmaView() orelse return;
@@ -4807,6 +4840,13 @@ pub const Context = struct {
             }
         }
 
+        if (self.pragma_spawn_view) |spawn_view| {
+            var keys = spawn_view.values.keyIterator();
+            while (keys.next()) |key| {
+                if (!view.values.contains(key.*)) @panic("pragma view is missing a key its spawn view holds");
+            }
+        }
+
         if (view.type_check != typeCheckModeOf(self.walkOwnPragmaFrames("type-check"))) {
             @panic("pragma view type-check mode differs from its frames");
         }
@@ -4818,7 +4858,8 @@ pub const Context = struct {
             i -= 1;
             if (self.pragma_frames.items[i].values.get(name)) |value| return value;
         }
-        return null;
+        const spawn_view = self.pragma_spawn_view orelse return null;
+        return spawn_view.get(name);
     }
 
     /// How one of the redefinition collision guards reports a name.
@@ -4830,10 +4871,8 @@ pub const Context = struct {
     /// An allowlist relaxes exactly the names on it, so a word the user meant to shadow is silent
     /// while one they mistyped still throws. The validator has already proven the value is a
     /// severity word or an array of symbols, so anything else here is `error`.
-    ///
-    /// Callers hold the write lock, so the read goes through `getPragmaLocked`.
     fn collisionGuardMode(self: *const Context, key: []const u8, name: []const u8) CollisionGuardMode {
-        const val = self.getPragmaLocked(key) orelse return .err;
+        const val = self.getPragma(key) orelse return .err;
         switch (val) {
             .string => |s| {
                 if (std.mem.eql(u8, s.bytes, "warning")) return .warning;
@@ -5364,7 +5403,7 @@ pub const Context = struct {
                             old_effect.concreteOutputCount() != new_effect.concreteOutputCount())
                         {
                             const msg = std.fmt.allocPrint(self.arena.allocator(), "arity mismatch on redefinition of '{s}' (was {d} -> {d}, now {d} -> {d})", .{ name, old_effect.concreteInputCount(), old_effect.concreteOutputCount(), new_effect.concreteInputCount(), new_effect.concreteOutputCount() }) catch "arity mismatch on redefinition";
-                            const pragma_val = self.getPragmaLocked("redefinition-arity-mismatch");
+                            const pragma_val = self.getPragma("redefinition-arity-mismatch");
                             const is_warning = if (pragma_val) |pv| switch (pv) {
                                 .string => |s| std.mem.eql(u8, s.bytes, "warning"),
                                 else => false,
@@ -8076,10 +8115,7 @@ pub const Context = struct {
 
             switch (module_word.action) {
                 .native => |func| try func(self),
-                .host_callback => |host| {
-                    const rc = host.callback(host.handle, host.user_data);
-                    if (rc != 0) return error.HostCallbackFailed;
-                },
+                .host_callback => |host| try host.invoke(self),
                 .compound => |instrs| {
                     const saved_source = self.current_source;
                     defer self.current_source = saved_source;
@@ -8205,10 +8241,7 @@ pub const Context = struct {
                     try self.executeQuotationWithPic(.{ .instructions = instrs }, null, module, mod_word.body_owner, mod_word.may_define);
                 },
                 .native => |func| try func(self),
-                .host_callback => |host| {
-                    const rc = host.callback(host.handle, host.user_data);
-                    if (rc != 0) return error.HostCallbackFailed;
-                },
+                .host_callback => |host| try host.invoke(self),
                 .literal => |lit| try self.stack.push(lit.value),
             }
         } else {
@@ -10648,10 +10681,7 @@ pub const Context = struct {
                     self.tail_call_compiled = false;
                     self.current_pic_entry = if (site.pic_table) |pt| pt.get(idx) else null;
                     defer self.current_pic_entry = null;
-                    const result: anyerror!void = blk: {
-                        const rc = host.callback(host.handle, host.user_data);
-                        if (rc != 0) break :blk error.HostCallbackFailed;
-                    };
+                    const result: anyerror!void = host.invoke(self);
                     if (result) |_| {
                         try self.wordSuccessCleanup(name, word.stack_effect);
                     } else |err| {
@@ -10711,11 +10741,7 @@ pub const Context = struct {
                             break :blk self.executeQuotationWithPic(.{ .instructions = instrs }, callee_pic, mod, word.body_owner, word.exec_flags.may_define);
                         },
                         .native => |func| break :blk func(self),
-                        .host_callback => |host| break :blk host_result: {
-                            const rc = host.callback(host.handle, host.user_data);
-                            if (rc != 0) break :host_result error.HostCallbackFailed;
-                            break :host_result;
-                        },
+                        .host_callback => |host| break :blk host.invoke(self),
                         // A literal has no body that could reference
                         // module-private bare words, so there is nothing
                         // to push a module-deps frame for.
@@ -10724,11 +10750,7 @@ pub const Context = struct {
                 } else {
                     break :blk switch (word.action) {
                         .native => |func| func(self),
-                        .host_callback => |host| host_result: {
-                            const rc = host.callback(host.handle, host.user_data);
-                            if (rc != 0) break :host_result error.HostCallbackFailed;
-                            break :host_result;
-                        },
+                        .host_callback => |host| host.invoke(self),
                         .compound => |instrs| self.executeQuotationWithPic(.{ .instructions = instrs }, callee_pic, null, word.body_owner, word.exec_flags.may_define),
                         .literal => |v| self.stack.push(v),
                     };
@@ -11935,6 +11957,160 @@ test "deinit releases every live pragma frame and view" {
     try ctx.setPragma("dictionary-shadow", .{ .array = allowlist });
 
     // No pops: the testing allocator reports a leak if deinit misses a frame, a view, or a value.
+}
+
+fn createTestScheduler() !*Scheduler {
+    const scheduler = try std.testing.allocator.create(Scheduler);
+    errdefer std.testing.allocator.destroy(scheduler);
+    scheduler.* = try Scheduler.init(std.testing.allocator);
+    return scheduler;
+}
+
+fn destroyTestScheduler(scheduler: *Scheduler) void {
+    scheduler.deinit();
+    std.testing.allocator.destroy(scheduler);
+}
+
+test "initForTask: a task's own frame shares its spawner's top view" {
+    var parent = Context.init(std.testing.allocator);
+    defer parent.deinit();
+
+    try parent.pushPragmaFrame();
+    try parent.setPragma("type-check", value_mod.stringValue("off"));
+    const spawner_view = parent.topPragmaView().?;
+
+    const scheduler = try createTestScheduler();
+    defer destroyTestScheduler(scheduler);
+
+    var task_ctx = try Context.initForTask(std.testing.allocator, &parent, scheduler);
+
+    // One reference for the spawner's frame, one for the spawn layer, one for the task's frame.
+    try std.testing.expectEqual(@as(u32, 3), spawner_view.refcount.load(.monotonic));
+    try std.testing.expectEqual(spawner_view, task_ctx.pragma_spawn_view.?);
+    try std.testing.expectEqual(@as(usize, 1), task_ctx.pragma_frames.items.len);
+    try std.testing.expectEqual(spawner_view, task_ctx.topPragmaView().?);
+    try std.testing.expectEqual(TypeCheckMode.off, task_ctx.topPragmaView().?.type_check);
+    try std.testing.expectEqualStrings("off", task_ctx.getPragma("type-check").?.string.bytes);
+
+    task_ctx.deinit();
+    try std.testing.expectEqual(@as(u32, 1), spawner_view.refcount.load(.monotonic));
+}
+
+test "initForTask: a spawner's later pragma does not reach the task" {
+    var parent = Context.init(std.testing.allocator);
+    defer parent.deinit();
+
+    try parent.pushPragmaFrame();
+    try parent.setPragma("x-level", .{ .fixnum = 1 });
+
+    const scheduler = try createTestScheduler();
+    defer destroyTestScheduler(scheduler);
+
+    var task_ctx = try Context.initForTask(std.testing.allocator, &parent, scheduler);
+    defer task_ctx.deinit();
+
+    try parent.setPragma("x-level", .{ .fixnum = 2 });
+    try parent.setPragma("type-check", value_mod.stringValue("warning"));
+
+    try std.testing.expectEqual(@as(i64, 1), task_ctx.getPragma("x-level").?.fixnum);
+    try std.testing.expect(task_ctx.getPragma("type-check") == null);
+    try std.testing.expectEqual(TypeCheckMode.err, task_ctx.topPragmaView().?.type_check);
+
+    // Popping the spawner's frame drops its reference, and the task's layer keeps the view alive.
+    parent.popPragmaFrame();
+    try std.testing.expectEqual(@as(i64, 1), task_ctx.getPragma("x-level").?.fixnum);
+}
+
+test "initForTask: a task's pragma writes its own frame and leaves the spawner unchanged" {
+    var parent = Context.init(std.testing.allocator);
+    defer parent.deinit();
+
+    try parent.pushPragmaFrame();
+    try parent.setPragma("x-level", .{ .fixnum = 1 });
+    const spawner_view = parent.topPragmaView().?;
+
+    const scheduler = try createTestScheduler();
+    defer destroyTestScheduler(scheduler);
+
+    var task_ctx = try Context.initForTask(std.testing.allocator, &parent, scheduler);
+    defer task_ctx.deinit();
+
+    try task_ctx.setPragma("x-level", .{ .fixnum = 5 });
+    try task_ctx.setPragma("type-check", value_mod.stringValue("off"));
+
+    try std.testing.expectEqual(@as(i64, 5), task_ctx.getPragma("x-level").?.fixnum);
+    try std.testing.expectEqual(TypeCheckMode.off, task_ctx.topPragmaView().?.type_check);
+    try std.testing.expectEqual(spawner_view, task_ctx.pragma_spawn_view.?);
+    try std.testing.expectEqual(@as(i64, 1), spawner_view.get("x-level").?.fixnum);
+
+    try std.testing.expectEqual(spawner_view, parent.topPragmaView().?);
+    try std.testing.expectEqual(@as(i64, 1), parent.getPragma("x-level").?.fixnum);
+    try std.testing.expect(parent.getPragma("type-check") == null);
+
+    // A load in the task pushes above its own frame and sees the task's setting.
+    try task_ctx.pushPragmaFrame();
+    try std.testing.expectEqual(@as(i64, 5), task_ctx.getPragma("x-level").?.fixnum);
+    task_ctx.popPragmaFrame();
+}
+
+test "initForTask: a spawner with no pragma frame gives the task an empty view" {
+    var parent = Context.init(std.testing.allocator);
+    defer parent.deinit();
+
+    const scheduler = try createTestScheduler();
+    defer destroyTestScheduler(scheduler);
+
+    var task_ctx = try Context.initForTask(std.testing.allocator, &parent, scheduler);
+    defer task_ctx.deinit();
+
+    const view = task_ctx.topPragmaView().?;
+    try std.testing.expectEqual(view, task_ctx.pragma_spawn_view.?);
+    try std.testing.expectEqual(@as(u32, 0), view.values.count());
+    try std.testing.expectEqual(@as(u32, 2), view.refcount.load(.monotonic));
+    try std.testing.expectEqual(TypeCheckMode.err, view.type_check);
+
+    // `pragma{` in a task outside a load has a frame to write.
+    try task_ctx.setPragma("x-level", .{ .fixnum = 3 });
+    try std.testing.expectEqual(@as(i64, 3), task_ctx.getPragma("x-level").?.fixnum);
+}
+
+fn initForTaskThenDeinit(allocator: Allocator, parent: *Context, scheduler: *Scheduler) !void {
+    var task_ctx = try Context.initForTask(allocator, parent, scheduler);
+    task_ctx.deinit();
+}
+
+test "initForTask: a failure at any allocation strands nothing" {
+    var parent = Context.init(std.testing.allocator);
+    defer parent.deinit();
+
+    try parent.pushPragmaFrame();
+    try parent.setPragma("x-level", .{ .fixnum = 1 });
+
+    // A refcounted parameter binding: a clone that retains it and then fails to keep it would
+    // leave the array alive past the parent's teardown, which the testing allocator reports.
+    try parent.pushParameterFrame();
+    const items = try std.testing.allocator.alloc(Value, 1);
+    items[0] = .{ .fixnum = 7 };
+    const array = try value_mod.Array.fromOwnedSlice(std.testing.allocator, items);
+    try parent.parameter_env.items[0].put(std.testing.allocator, "*probe*", .{ .array = array });
+
+    // The same array as a transient local binding, with its own reference, covers the local-frame
+    // clone the same way.
+    try parent.pushLocalFrame();
+    container_backing.retainValue(.{ .array = array });
+    try parent.local_frames.items[0].put(std.testing.allocator, "probe-word", .{
+        .name = "probe-word",
+        .action = .{ .literal = .{ .array = array } },
+        .owns_literal = true,
+    });
+
+    const scheduler = try createTestScheduler();
+    defer destroyTestScheduler(scheduler);
+
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, initForTaskThenDeinit, .{ &parent, scheduler });
+
+    try std.testing.expectEqual(@as(u32, 2), array.header.refcount.load(.monotonic));
+    try std.testing.expectEqual(@as(u32, 1), parent.topPragmaView().?.refcount.load(.monotonic));
 }
 
 test "stack operations through context" {

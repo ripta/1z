@@ -1,0 +1,53 @@
+\ A task keeps the pragmas its spawner saw at spawn. A later `pragma{` in the spawner does not reach
+\ it, its own `pragma{` stays its own, and a task spawned during a load keeps the module's pragma
+\ after the load ends.
+
+use "testing" ;
+
+pragma-def{ x-snap: [ t ] }
+
+pragma{ x-snap: 1 }
+
+"reading pragmas in a task" test-section
+
+[
+  [ "x-snap" pragma-get ] spawn await 1 "pragma-get in a task" assert=
+  [ "x-snap" pragma-get? ] spawn await option:some> 1 "pragma-get? in a task" assert=
+] task-scope
+
+"a spawner's later pragma{ does not reach an earlier task" test-section
+
+[
+  go: 1 <buffered-channel> ;
+  [ go receive drop "x-snap" pragma-get ] spawn
+
+  "pragma{ x-snap: 2 }" eval-string
+  [ "x-snap" pragma-get ] spawn await 2 "a task spawned after the pragma{ sees the new value" assert=
+
+  t go send
+  await 1 "a task spawned before the pragma{ keeps the old value" assert=
+  "x-snap" pragma-get 2 "the spawner sees its own pragma{" assert=
+] task-scope
+
+"x-snap" pragma-get 1 "a pragma{ in a task does not reach the main file" assert=
+
+"pragma{ through eval-string in a task" test-section
+
+[
+  [ "pragma{ x-snap: 5 }" eval-string "x-snap" pragma-get ] spawn await 5
+  "the task sets its own value" assert=
+  "x-snap" pragma-get 1 "the spawner keeps its value" assert=
+] task-scope
+
+"tasks spawned during a load keep the module's pragma" test-section
+
+[
+  snap-mod: "fixtures/pragma_task_snapshot_mod.1z" load ;
+  go: snap-mod snap-go: @get call ;
+  results: snap-mod snap-results: @get call ;
+  "x-snap" pragma-get 1 "the loader sees its own value once the load ends" assert=
+
+  8 [ t go send ] times
+  0 8 [ results receive 99 = [ 1 + ] when ] times
+  8 "every task spawned during the load reads the module's pragma" assert=
+] task-scope

@@ -1257,7 +1257,7 @@ fn acquireLoadLock(ctx: *Context) anyerror!void {
     const lock = ctx.load_lock;
     switch (loadLockOwner()) {
         .main => lock.acquireMain(),
-        .task => |task| try acquireLoadLockAsTask(ctx, lock, task),
+        .task => |task| try acquireLoadLockAsTask(ctx, lock, task, null),
     }
 }
 
@@ -1286,7 +1286,9 @@ fn holderAwaitsTask(holder: LoadLock.Owner, contender: *Task) bool {
     return false;
 }
 
-fn acquireLoadLockAsTask(ctx: *Context, lock: *LoadLock, task: *Task) anyerror!void {
+/// `host_word` names the host word acquiring for root re-entry, so a parse-time refusal reports the
+/// word the user called rather than a load they never started. Null for a load.
+fn acquireLoadLockAsTask(ctx: *Context, lock: *LoadLock, task: *Task, host_word: ?[]const u8) anyerror!void {
     const sched = currentScheduler().?;
     const owner: LoadLock.Owner = .{ .task = task };
     while (true) {
@@ -1303,9 +1305,19 @@ fn acquireLoadLockAsTask(ctx: *Context, lock: *LoadLock, task: *Task) anyerror!v
         // A contended parse-time acquire runs on the parser coroutine's own stack, where the
         // scheduler cannot suspend this task. Raising beats spinning on a wait that can never park.
         if (!task_mod.runningOnOwnStack(task)) {
-            ctx.thrown_error = try value_mod.boxErrorObject(ctx.quotationAllocator(), .{
+            const alloc = ctx.quotationAllocator();
+            const message = if (host_word) |name|
+                try std.fmt.allocPrint(
+                    alloc,
+                    "cannot wait to run host word '{s}' during parse-time execution while another task holds the embedding handle",
+                    .{name},
+                )
+            else
+                "cannot wait for the load lock during parse-time execution";
+
+            ctx.thrown_error = try value_mod.boxErrorObject(alloc, .{
                 .error_type = "load-parse-wait",
-                .message = "cannot wait for the load lock during parse-time execution",
+                .message = message,
             });
             return error.UserThrown;
         }
@@ -1361,6 +1373,32 @@ fn releaseLoadLock(ctx: *Context) void {
         };
         return;
     }
+}
+
+/// Serialize a host callback's re-entry onto the root handle, returning whether a hold was taken.
+/// Pass the result to `releaseHostReentry`.
+///
+/// A host callback always works on the root context, from whichever worker runs the calling task.
+/// Two callbacks on different workers would otherwise push and pop the root's pragma frames and use
+/// its stack at once.
+///
+/// The hold is taken only while a task is resumed on this thread. A host calling in from outside
+/// any task cannot overlap a task. That call may also block in `task-scope` while a task's callback
+/// re-enters, so it must not hold the lock.
+///
+/// The hold is the handle's load lock, which is per root. It is reentrant, so a callback's own
+/// `use` or nested host word passes through. A contender suspends rather than parking its worker. A
+/// task the holder transitively awaits borrows the hold, so a callback that waits on a nested task
+/// which re-enters does not deadlock. Being the same lock as module loads, it adds no level and no
+/// ordering against them.
+pub fn acquireHostReentry(ctx: *Context, host_word: []const u8) anyerror!bool {
+    const task = task_mod.resumed_task orelse return false;
+    try acquireLoadLockAsTask(ctx, ctx.load_lock, task, host_word);
+    return true;
+}
+
+pub fn releaseHostReentry(ctx: *Context) void {
+    releaseLoadLock(ctx);
 }
 
 /// A load's hold on the load lock together with its `load_target` redirect, released as one.

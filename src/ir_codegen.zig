@@ -18250,8 +18250,7 @@ fn runCompiledDispatchBody(ctx: *Context, entry: dispatch_mod.DispatchEntry) !vo
         .host_callback => |host| {
             const saved_native = ctx.withCurrentNative(null);
             defer ctx.restoreCurrentNative(saved_native);
-            const rc = host.callback(host.handle, host.user_data);
-            if (rc != 0) return error.HostCallbackFailed;
+            try host.invoke(ctx);
         },
     }
 }
@@ -18528,10 +18527,7 @@ fn invokeModuleWord(ctx: *Context, hit: ModuleWordHit, name: []const u8, is_tail
 
     switch (hit.word.action) {
         .native => |func| try func(ctx),
-        .host_callback => |host| {
-            const rc = host.callback(host.handle, host.user_data);
-            if (rc != 0) return error.HostCallbackFailed;
-        },
+        .host_callback => |host| try host.invoke(ctx),
         .compound => |instrs| {
             if (is_tail) {
                 elideTailFrame(ctx, name);
@@ -18702,11 +18698,7 @@ export fn jitNativeWordCall(ctx_raw: usize, word_id_raw: usize, src_ptr_raw: usi
                 raise_mark = tailCombinatorRaiseMark(ctx, is_tail, func);
                 break :blk func(ctx);
             },
-            .host_callback => |host| {
-                const rc = host.callback(host.handle, host.user_data);
-                if (rc != 0) break :blk @as(anyerror!void, error.HostCallbackFailed);
-                break :blk @as(anyerror!void, {});
-            },
+            .host_callback => |host| break :blk host.invoke(ctx),
             .compound, .literal => {
                 const stderr_file: std.fs.File = .stderr();
                 stderr_file.writeAll("Fatal: jitNativeWordCall invoked for non-native word '") catch {};
@@ -18925,21 +18917,13 @@ export fn jitInterpretedCall(ctx_raw: usize, word_id_raw: usize, src_ptr_raw: us
                     break :blk ctx.executeQuotationWithPic(.{ .instructions = instrs }, entry.pic_snapshot, mod, word.body_owner, word.exec_flags.may_define);
                 },
                 .native => |func| break :blk func(ctx),
-                .host_callback => |host| break :blk host_result: {
-                    const rc = host.callback(host.handle, host.user_data);
-                    if (rc != 0) break :host_result error.HostCallbackFailed;
-                    break :host_result;
-                },
+                .host_callback => |host| break :blk host.invoke(ctx),
                 .literal => |v| break :blk ctx.stack.push(v),
             }
         } else {
             break :blk switch (word.action) {
                 .native => |func| func(ctx),
-                .host_callback => |host| host_result: {
-                    const rc = host.callback(host.handle, host.user_data);
-                    if (rc != 0) break :host_result error.HostCallbackFailed;
-                    break :host_result;
-                },
+                .host_callback => |host| host.invoke(ctx),
                 .compound => |instrs| ctx.executeQuotationWithPic(.{ .instructions = instrs }, entry.pic_snapshot, null, word.body_owner, word.exec_flags.may_define),
                 .literal => |v| ctx.stack.push(v),
             };
