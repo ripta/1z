@@ -1,0 +1,51 @@
+\ The entry-check shapes under hybrid, where each word compiles once its call count passes the
+\ threshold. The warm-up loop compiles every word with well-typed arguments first.
+
+use "testing" ;
+
+bump:      ( n: fixnum -- m ) [ 1 + ] ;
+shout:     ( s: string -- t ) [ "!" #append ] ;
+via-bump:  ( x -- y )         [ bump 0 + ] ;
+tail-bump: ( x -- y )         [ 0 drop bump ] ;
+via-shout: ( x -- y )         [ shout "" #append ] ;
+noisy:     ( x -- y )         [ "noisy ran" print-line bump 0 + ] ;
+twice:     ( n q: ( n -- n )  -- n ) [ dup dip call ] ;
+via-twice: ( n q -- n )       [ twice 0 + ] ;
+
+countdown: ( n: fixnum -- ) [
+  dup 0 = [ drop ] [
+    dup 3 = [ drop 2.5 ] [ 1 - ] if countdown
+  ] if
+] ;
+
+ping: ( n: fixnum -- ) [ dup 0 = [ drop ] [ dup 4 = [ drop "four" ] [ 1 - ] if pong ] if ] ;
+pong: ( n: fixnum -- ) [ dup 0 = [ drop ] [ 1 - ping ] if ] ;
+
+300 [ 1 via-bump drop 1 tail-bump drop "a" via-shout drop 2 countdown 3 ping 1 [ 1 + ] via-twice drop ] times
+2 [ 1 noisy drop ] times
+300 [ 1 bump drop ] times
+
+"a compiled caller reports the callee's parameter" test-section
+[ 3.5 via-bump ] [ . ] recover
+[ 3.5 tail-bump ] [ . ] recover
+[ 42 via-shout ] [ . ] recover
+
+"a later self-loop iteration reports the parameter" test-section
+[ 10 countdown ] [ . ] recover
+
+"a mutual hop reports the entered member's parameter" test-section
+[ 8 ping ] [ . ] recover
+
+"a quotation-effect mismatch is reported" test-section
+[ 1 [ dup ] via-twice ] [ . ] recover
+
+pragma{ type-check: "warning" }
+
+"a miss under warning warns, then continues" test-section
+[ 42 via-shout ] [ . ] recover
+[ 1 [ dup ] via-twice ] [ . ] recover
+
+pragma{ type-check: "off" }
+
+"a miss under off runs the callee once, interpreted" test-section
+3.5 noisy 4.5 "a float through a non-tail call" assert=

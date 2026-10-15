@@ -863,27 +863,16 @@ pub fn freezeModuleGraphOpts(
 }
 
 /// Render `eff` as a bare-name body: parameter names joined by spaces around `--`, type
-/// annotations and quotation effects dropped, row variables kept verbatim.
+/// annotations dropped, row variables kept verbatim. A quotation effect is kept, as `name: ( ... )`
+/// around its own bare body. See `StackEffect.writeBareBody`.
 ///
 /// The boot-side seed re-parses this with `makeSimpleEffect`, whose token-per-parameter model
 /// reads an annotated parameter as two names. Bare names map one token to one parameter, so the
-/// re-parsed effect carries the concrete counts the definition declared, which is all the
-/// redefinition arity check reads.
+/// re-parsed effect carries the concrete counts the definition declared, which the redefinition
+/// arity check reads. The parser reads a nested effect back as the parameter's quotation effect,
+/// which a compiled word's entry check validates an argument against.
 fn renderBareEffectBody(allocator: Allocator, eff: StackEffect) ![]const u8 {
-    var buf: std.ArrayListUnmanaged(u8) = .{};
-    errdefer buf.deinit(allocator);
-
-    for (eff.inputs, 0..) |param, i| {
-        if (i > 0) try buf.append(allocator, ' ');
-        try buf.appendSlice(allocator, param.name);
-    }
-    try buf.appendSlice(allocator, " -- ");
-    for (eff.outputs, 0..) |param, i| {
-        if (i > 0) try buf.append(allocator, ' ');
-        try buf.appendSlice(allocator, param.name);
-    }
-
-    return buf.toOwnedSlice(allocator);
+    return eff.renderBareBody(allocator);
 }
 
 /// Phase 2b helper: resolve every unseen callee in `instrs` into the discovered set, descending
@@ -7310,7 +7299,7 @@ test "DisallowedDynamicFeature leaves unresolved-callee hint null for resolved n
     try testing.expect(diagnostics.unresolved_callee_hint == null);
 }
 
-test "renderBareEffectBody drops parameter suffixes and keeps row variables" {
+test "renderBareEffectBody keeps quotation effects and row variables" {
     const helpers = @import("primitives/helpers.zig");
     const alloc = testing.allocator;
 
@@ -7331,15 +7320,19 @@ test "renderBareEffectBody drops parameter suffixes and keeps row variables" {
 
     const body = try renderBareEffectBody(alloc, eff);
     defer alloc.free(body);
-    try testing.expectEqualStrings("..a x quot -- ..a res/f", body);
+    try testing.expectEqualStrings("..a x quot: ( elem -- elem2 ) -- ..a res/f", body);
 
     // The boot seed re-parses with `makeSimpleEffect`; the concrete counts must survive the
-    // round trip, since they are what the redefinition arity check compares.
+    // round trip, since they are what the redefinition arity check compares. The quotation effect
+    // must survive too, since an entry check validates against it.
     var arena = std.heap.ArenaAllocator.init(alloc);
     defer arena.deinit();
     const reparsed = try helpers.makeSimpleEffect(arena.allocator(), body);
     try testing.expectEqual(eff.concreteInputCount(), reparsed.concreteInputCount());
     try testing.expectEqual(eff.concreteOutputCount(), reparsed.concreteOutputCount());
+    const nested_back = reparsed.inputs[2].quotation_effect.?;
+    try testing.expectEqualStrings("elem", nested_back.inputs[0].name);
+    try testing.expectEqualStrings("elem2", nested_back.outputs[0].name);
 }
 
 test "renderBareEffectBody renders an empty effect makeSimpleEffect reads back as zero counts" {

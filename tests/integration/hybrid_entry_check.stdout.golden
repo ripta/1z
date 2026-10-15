@@ -1,0 +1,47 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+noisy ran
+noisy ran
+Stack: [ ]
+Stack: [ ]
+=== a compiled caller reports the callee's parameter ===
+Stack: [ ]
+<error type-error: type mismatch for parameter 'n': expected fixnum, got float [tests/integration/hybrid_entry_check.1z:8:bump <- tests/integration/hybrid_entry_check.1z:29:recover]>
+Stack: [ ]
+<error type-error: type mismatch for parameter 'n': expected fixnum, got float [tests/integration/hybrid_entry_check.1z:9:bump <- tests/integration/hybrid_entry_check.1z:30:recover]>
+Stack: [ ]
+<error type-error: type mismatch for parameter 's': expected string, got fixnum [tests/integration/hybrid_entry_check.1z:10:shout <- tests/integration/hybrid_entry_check.1z:31:recover]>
+Stack: [ ]
+=== a later self-loop iteration reports the parameter ===
+Stack: [ ]
+<error type-error: type mismatch for parameter 'n': expected fixnum, got float [tests/integration/hybrid_entry_check.1z:17:countdown <- tests/integration/hybrid_entry_check.1z:34:recover]>
+Stack: [ ]
+=== a mutual hop reports the entered member's parameter ===
+Stack: [ ]
+<error type-error: type mismatch for parameter 'n': expected fixnum, got string [tests/integration/hybrid_entry_check.1z:21:pong <- tests/integration/hybrid_entry_check.1z:37:recover]>
+Stack: [ ]
+=== a quotation-effect mismatch is reported ===
+Stack: [ ]
+<error stack-effect-mismatch: parameter 'q' expects ( n -- n ) but quotation leaves 1 extra value on the stack [tests/integration/hybrid_entry_check.1z:0:q]>
+Stack: [ ]
+=== a miss under warning warns, then continues ===
+Stack: [ ]
+<error type-mismatch: expected sequence, got fixnum [tests/integration/hybrid_entry_check.1z:7:#append <- tests/integration/hybrid_entry_check.1z:10:shout <- tests/integration/hybrid_entry_check.1z:45:recover]>
+Stack: [ ]
+<error stack-effect-mismatch: parameter 'q' expects ( n -- n ) but quotation leaves 1 extra value on the stack [tests/integration/hybrid_entry_check.1z:0:q]>
+Stack: [ ]
+=== a miss under off runs the callee once, interpreted ===
+Stack: [ ]
+noisy ran
+PASS: a float through a non-tail call
+Stack: [ ]

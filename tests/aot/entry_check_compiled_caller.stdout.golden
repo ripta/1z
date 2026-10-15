@@ -1,0 +1,16 @@
+=== a compiled caller passes the right types ===
+PASS: fixnum input
+PASS: string input
+PASS: quotation input
+PASS: user-type input
+PASS: fixnum input in tail position
+=== a non-tail call reports the callee's parameter ===
+<error type-error: type mismatch for parameter 'n': expected fixnum, got float [tests/integration/entry_check_compiled_caller.1z:13:bump]>
+<error type-error: type mismatch for parameter 'n': expected fixnum, got string [tests/integration/entry_check_compiled_caller.1z:13:bump]>
+<error type-error: type mismatch for parameter 's': expected string, got fixnum [tests/integration/entry_check_compiled_caller.1z:14:shout]>
+<error type-error: type mismatch for parameter 'q': expected quotation, got fixnum [tests/integration/entry_check_compiled_caller.1z:15:apply]>
+<error type-error: type mismatch for parameter 'w': expected weight, got fixnum [tests/integration/entry_check_compiled_caller.1z:16:heft]>
+=== a tail call reports the callee's parameter ===
+<error type-error: type mismatch for parameter 'n': expected fixnum, got float [tests/integration/entry_check_compiled_caller.1z:18:bump]>
+<error type-error: type mismatch for parameter 's': expected string, got fixnum [tests/integration/entry_check_compiled_caller.1z:19:shout]>
+<error type-error: type mismatch for parameter 'q': expected quotation, got fixnum [tests/integration/entry_check_compiled_caller.1z:20:apply]>

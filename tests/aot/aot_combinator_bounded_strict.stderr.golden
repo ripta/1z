@@ -1,2 +1,1 @@
-tests/aot/aot_combinator_bounded_strict.1z:20: error 'protocol-error' type 'fixnum' does not satisfy the required constraint at word 'bump-it'
-  called from tests/aot/aot_combinator_bounded_strict.1z:22: bounded-caller
+tests/aot/aot_combinator_bounded_strict.1z:22: error 'protocol-error' parameter 'x': type 'fixnum' does not satisfy the required constraint at word 'bounded-caller'

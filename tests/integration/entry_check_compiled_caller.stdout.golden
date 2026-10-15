@@ -1,0 +1,44 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+=== a compiled caller passes the right types ===
+Stack: [ ]
+PASS: fixnum input
+Stack: [ ]
+PASS: string input
+Stack: [ ]
+PASS: quotation input
+Stack: [ ]
+PASS: user-type input
+Stack: [ ]
+PASS: fixnum input in tail position
+Stack: [ ]
+=== a non-tail call reports the callee's parameter ===
+Stack: [ ]
+<error type-error: type mismatch for parameter 'n': expected fixnum, got float [tests/integration/entry_check_compiled_caller.1z:13:bump <- tests/integration/entry_check_compiled_caller.1z:30:recover]>
+Stack: [ ]
+<error type-error: type mismatch for parameter 'n': expected fixnum, got string [tests/integration/entry_check_compiled_caller.1z:13:bump <- tests/integration/entry_check_compiled_caller.1z:31:recover]>
+Stack: [ ]
+<error type-error: type mismatch for parameter 's': expected string, got fixnum [tests/integration/entry_check_compiled_caller.1z:14:shout <- tests/integration/entry_check_compiled_caller.1z:32:recover]>
+Stack: [ ]
+<error type-error: type mismatch for parameter 'q': expected quotation, got fixnum [tests/integration/entry_check_compiled_caller.1z:15:apply <- tests/integration/entry_check_compiled_caller.1z:33:recover]>
+Stack: [ ]
+<error type-error: type mismatch for parameter 'w': expected weight, got fixnum [tests/integration/entry_check_compiled_caller.1z:16:heft <- tests/integration/entry_check_compiled_caller.1z:34:recover]>
+Stack: [ ]
+=== a tail call reports the callee's parameter ===
+Stack: [ ]
+<error type-error: type mismatch for parameter 'n': expected fixnum, got float [tests/integration/entry_check_compiled_caller.1z:18:bump <- tests/integration/entry_check_compiled_caller.1z:37:recover]>
+Stack: [ ]
+<error type-error: type mismatch for parameter 's': expected string, got fixnum [tests/integration/entry_check_compiled_caller.1z:19:shout <- tests/integration/entry_check_compiled_caller.1z:38:recover]>
+Stack: [ ]
+<error type-error: type mismatch for parameter 'q': expected quotation, got fixnum [tests/integration/entry_check_compiled_caller.1z:20:apply <- tests/integration/entry_check_compiled_caller.1z:39:recover]>
+Stack: [ ]

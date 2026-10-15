@@ -654,28 +654,26 @@ pub const ProtocolSatisfiesKeyContext = struct {
 };
 
 /// Key for the per-context memo of an annotated quotation parameter's inferred stack delta: one
-/// entry per call site and parameter position.
+/// entry per callee and parameter position.
 ///
-/// `body` is the caller's instruction-slice pointer and `index` the call's position in it. `param`
-/// is the parameter's position among the callee's concrete inputs, so a word with two annotated
-/// quotation parameters holds two entries at one site.
-pub const ParamEffectSiteKey = struct {
+/// `body` is the callee's instruction-slice pointer, so every path into the callee shares its
+/// entries, a compiled entry check included. `param` is the parameter's position among the
+/// callee's concrete inputs, so a word with two annotated quotation parameters holds two entries.
+pub const ParamEffectKey = struct {
     body: usize,
-    index: usize,
     param: usize,
 };
 
-pub const ParamEffectSiteKeyContext = struct {
-    pub fn hash(_: @This(), key: ParamEffectSiteKey) u64 {
+pub const ParamEffectKeyContext = struct {
+    pub fn hash(_: @This(), key: ParamEffectKey) u64 {
         var h = std.hash.Wyhash.init(0);
         h.update(std.mem.asBytes(&key.body));
-        h.update(std.mem.asBytes(&key.index));
         h.update(std.mem.asBytes(&key.param));
         return h.final();
     }
 
-    pub fn eql(_: @This(), a: ParamEffectSiteKey, b: ParamEffectSiteKey) bool {
-        return a.body == b.body and a.index == b.index and a.param == b.param;
+    pub fn eql(_: @This(), a: ParamEffectKey, b: ParamEffectKey) bool {
+        return a.body == b.body and a.param == b.param;
     }
 };
 
@@ -1319,23 +1317,31 @@ pub const Context = struct {
     /// The index in `jit_pending_trace_frames` the dropped frames sat at. Meaningful only while
     /// `jit_pending_trace_elided` is nonzero.
     jit_pending_trace_elided_at: usize = 0,
+    /// Whether a compiled body's type-annotation entry check just raised.
+    ///
+    /// A receiver that drops a tail callee's frame reads it to keep the row a validation error
+    /// shows. See `jitAppendTailEntryRow`. A quotation-effect raise leaves it clear, since that
+    /// raise records its own row.
+    ///
+    /// The next frame queued clears it, and so does any reset of the pending frames.
+    entry_check_raised: bool = false,
     /// Stack effects parsed for pended frames, keyed by the raw effect string they came from.
     /// The effects live on the arena.
     trace_effect_cache: std.AutoHashMapUnmanaged(TraceEffectKey, *const StackEffect) = .{},
     /// PIC cache mapping instruction slice pointers to their PIC tables.
     /// Lazily populated on first generic dispatch through a compound word body.
     pic_cache: std.AutoHashMapUnmanaged(usize, *PicTable) = .{},
-    /// One inferred delta per annotated-quotation-parameter call site.
+    /// One inferred delta per annotated quotation parameter of a callee.
     ///
-    /// Keyed on the caller's body and instruction index, and guarded by the argument body the delta
-    /// was derived from. Admits no closure-owned body on either side; `paramEffectSlot` decides.
+    /// Keyed on the callee's body and the parameter, and guarded by the argument body the delta was
+    /// derived from. Admits no closure-owned body on either side; `paramEffectSlot` decides.
     ///
     /// Every other body this context runs lives at least as long as the context, and the map dies
     /// with it.
     param_effect_cache: std.HashMapUnmanaged(
-        ParamEffectSiteKey,
+        ParamEffectKey,
         ParamEffectEntry,
-        ParamEffectSiteKeyContext,
+        ParamEffectKeyContext,
         80,
     ) = .{},
     /// Maps a quotation/word body instruction-slice pointer to everything resolution knows about
@@ -3066,6 +3072,7 @@ pub const Context = struct {
     /// in one move and counted. The list therefore never holds more than the head cap plus twice
     /// the tail cap, and a drop costs one move per tail-cap appends.
     pub fn appendPendingErrorFrame(self: *Context, frame: CallFrame) void {
+        self.entry_check_raised = false;
         const list = &self.jit_pending_trace_frames;
         const gap = self.pendingFrameGap();
         if (list.items.len >= gap + 2 * pending_frame_tail_cap) {
@@ -3076,6 +3083,7 @@ pub const Context = struct {
     }
 
     pub fn clearPendingSyntheticErrorFrames(self: *Context) void {
+        self.entry_check_raised = false;
         self.jit_pending_trace_frames.clearRetainingCapacity();
         self.jit_pending_trace_elided = 0;
     }
@@ -3127,6 +3135,7 @@ pub const Context = struct {
     /// The guard covers a nested consumer having already cleared the whole list. A mark inside
     /// the dropped run keeps only the dropped frames below it, which are all still counted.
     pub fn truncatePendingErrorFrames(self: *Context, mark: usize) void {
+        self.entry_check_raised = false;
         if (self.pendingErrorFrameCount() <= mark) return;
 
         const kept_elided = self.jit_pending_trace_elided -| self.pendingFramesElidedAbove(mark);
@@ -4814,6 +4823,18 @@ pub const Context = struct {
         return frames[frames.len - 1].view;
     }
 
+    /// The `type-check` mode in effect for a call made now, read from the top view.
+    pub fn typeCheckMode(self: *const Context) TypeCheckMode {
+        const view = self.topPragmaView() orelse return .err;
+        return view.type_check;
+    }
+
+    /// Whether the top view sets `type-check` at all, rather than leaving it at the default.
+    pub fn typeCheckModeSet(self: *const Context) bool {
+        const view = self.topPragmaView() orelse return false;
+        return view.get("type-check") != null;
+    }
+
     /// Check that the top pragma view matches this context's own frames over its spawn view. Every
     /// key in the top view resolves to the same value through a fresh top-down walk of the frames,
     /// then the spawn view. Every key a frame or the spawn view holds is in the top view. The top
@@ -5701,7 +5722,7 @@ pub const Context = struct {
         };
 
         const pic_snapshot = self.clonePicSnapshotForInstructions(instrs);
-        const word = ir_codegen.compileWordWithPicSnapshot(instrs, input_count, output_count, resolver, name, pic_snapshot, self, mutual_group, effect, def.source_file) catch {
+        const word = ir_codegen.compileWordWithPicSnapshot(instrs, input_count, output_count, resolver, name, pic_snapshot, self, mutual_group, effect, def.source_file, def.body_owner) catch {
             if (pic_snapshot) |ps| {
                 ps.deinit();
                 self.allocator.destroy(ps);
@@ -8452,17 +8473,17 @@ pub const Context = struct {
         return self.inferQuotationDeltaImpl(quot, 0, enclosing_effect);
     }
 
-    /// `inferQuotationDelta` through the per-call-site memo.
+    /// `inferQuotationDelta` through the per-callee memo.
     ///
     /// A hit is an entry at `slot` whose guards match the argument body and the enclosing effect. A
-    /// miss walks, and a successful walk fills the entry, displacing whatever was there, so a site
-    /// that alternates arguments walks each time. A walk that cannot infer is never recorded: it
-    /// skips validation today, and recording that would freeze the skip at a site whose argument
+    /// miss walks, and a successful walk fills the entry, displacing whatever was there, so a callee
+    /// whose callers alternate arguments walks each time. A walk that cannot infer is never recorded: it
+    /// skips validation today, and recording that would freeze the skip for a callee whose argument
     /// may become inferable later.
     ///
     /// The caller has already decided admissibility. Both keys are checked against the live
     /// closure-body registry at the write, which is the independent check on that decision.
-    fn inferQuotationDeltaAt(self: *Context, quot: Quotation, enclosing_effect: *const StackEffect, slot: ?ParamEffectSiteKey) ?i64 {
+    fn inferQuotationDeltaAt(self: *Context, quot: Quotation, enclosing_effect: *const StackEffect, slot: ?ParamEffectKey) ?i64 {
         const arg_body = @intFromPtr(quot.instructions.ptr);
 
         if (slot) |key| {
@@ -8841,9 +8862,9 @@ pub const Context = struct {
     /// An effect with unbalanced row variables is skipped before inferring: its expected delta
     /// could only come from the same inference, so the comparison cannot report a mismatch.
     ///
-    /// `slot` names the call-site memo entry the inference may read or fill, or null when the site
-    /// is not cacheable.
-    fn validateQuotationEffect(self: *Context, quot: Quotation, expected_effect: *const StackEffect, param_name: []const u8, enclosing_effect: *const StackEffect, slot: ?ParamEffectSiteKey) !void {
+    /// `slot` names the memo entry the inference may read or fill, or null when the callee is not
+    /// cacheable.
+    fn validateQuotationEffect(self: *Context, quot: Quotation, expected_effect: *const StackEffect, param_name: []const u8, enclosing_effect: *const StackEffect, slot: ?ParamEffectKey) !void {
         if (!expected_effect.hasBalancedRowVariables()) return;
 
         const expected_delta = expected_effect.concreteDelta();
@@ -8962,31 +8983,37 @@ pub const Context = struct {
         }
     }
 
-    /// The interpreter call site a parameter-effect validation runs for: the dispatch loop's
-    /// call-site context and the call's index within it. A compiled call site has no body pointer
-    /// and index in hand, so it passes none and takes the walk.
-    pub const ParamEffectSite = struct {
-        site: *const CallSite,
-        index: usize,
+    /// The callee a parameter-effect validation runs for: its body and the closure that may own it.
+    pub const ParamEffectCallee = struct {
+        body: []const Instruction,
+        owner: ?*const value_mod.Closure,
+
+        /// The callee a call to `word` validates for, or null for a word with no compound body.
+        pub fn of(word: *const WordDefinition) ?ParamEffectCallee {
+            return switch (word.action) {
+                .compound => |body| .{ .body = body, .owner = word.body_owner },
+                else => null,
+            };
+        }
     };
 
-    /// The memo key for parameter `param` of the call at `site`, or null when nothing may be
-    /// recorded there.
+    /// The memo key for parameter `param` of `callee`, or null when nothing may be recorded.
     ///
-    /// A closure-owned body is refused on either side, the caller's through its carrier and the
+    /// A closure-owned body is refused on either side, the callee's through its owner and the
     /// argument's through the value itself. A push-time promotion aliases a durable body and passes.
-    /// An empty argument body is refused too: every zero-length slice shares one address, so the
-    /// guard could not tell two apart.
-    fn paramEffectSlot(site: ?ParamEffectSite, val: Value, quot: Quotation, param: usize) ?ParamEffectSiteKey {
-        const s = site orelse return null;
+    /// An empty body is refused on either side too: every zero-length slice shares one address, so
+    /// neither the key nor the guard could tell two apart.
+    fn paramEffectSlot(callee: ?ParamEffectCallee, val: Value, quot: Quotation, param: usize) ?ParamEffectKey {
+        const c = callee orelse return null;
 
-        if (s.site.owner) |c| {
-            if (c.ownsBody(s.site.body)) return null;
+        if (c.body.len == 0) return null;
+        if (c.owner) |owner| {
+            if (owner.ownsBody(c.body)) return null;
         }
         if (quot.instructions.len == 0) return null;
         if (val == .closure and val.closure.ownsBody(quot.instructions)) return null;
 
-        return .{ .body = @intFromPtr(s.site.body.ptr), .index = s.index, .param = param };
+        return .{ .body = @intFromPtr(c.body.ptr), .param = param };
     }
 
     /// Validate quotation parameters against their declared effects.
@@ -8994,9 +9021,9 @@ pub const Context = struct {
     /// against the expected effect from the parameter annotation.
     /// Also validates that row variables in quotation effects are defined in the word's effect.
     ///
-    /// When `site` is given, each inference goes through the per-call-site memo under the key
+    /// When `callee` is given, each inference goes through the per-callee memo under the key
     /// `paramEffectSlot` admits.
-    pub fn validateParameterEffects(self: *Context, effect: *const StackEffect, site: ?ParamEffectSite) !void {
+    pub fn validateParameterEffects(self: *Context, effect: *const StackEffect, callee: ?ParamEffectCallee) !void {
         // First, validate that all row variables in quotation effects are defined
         for (effect.inputs) |param| {
             if (param.quotation_effect) |quot_effect| {
@@ -9028,7 +9055,7 @@ pub const Context = struct {
                 const stack_index = self.stack.depth() - 1 - offset_from_top;
                 const val = self.stack.items.items[stack_index];
                 if (callableView(val)) |quot| {
-                    const slot = paramEffectSlot(site, val, quot, concrete_index);
+                    const slot = paramEffectSlot(callee, val, quot, concrete_index);
                     try self.validateQuotationEffect(quot, expected_effect, param.name, effect, slot);
                 }
             }
@@ -9050,10 +9077,8 @@ pub const Context = struct {
     /// type) annotations with `.except_protocols` to avoid checking the bound
     /// twice.
     pub fn validateTypeAnnotationsScoped(self: *Context, effect: *const StackEffect, scope: AnnotationScope) !void {
-        // Check pragma for opt-out
-        if (self.getPragma("type-check")) |pv| {
-            if (pv == .string and std.mem.eql(u8, pv.string.bytes, "off")) return;
-        }
+        const mode = self.typeCheckMode();
+        if (mode == .off) return;
 
         const concrete_params = effect.concreteInputCount();
         if (concrete_params == 0 or self.stack.depth() < concrete_params) return;
@@ -9064,85 +9089,68 @@ pub const Context = struct {
             defer concrete_index += 1;
 
             const ann = param.type_annotation orelse continue;
+            if (scope == .except_protocols and ann != .type) continue;
 
             const offset_from_top = concrete_params - 1 - concrete_index;
             const stack_index = self.stack.depth() - 1 - offset_from_top;
-            const val = self.stack.items.items[stack_index];
+            try self.checkAnnotatedParam(param.name, ann, self.stack.items.items[stack_index], mode);
+        }
+    }
 
-            switch (ann) {
-                .type => |expected_tv| {
-                    if (self.any_type_sentinel) |any_tv| {
-                        if (expected_tv == any_tv) continue;
-                    }
+    /// Whether `val` satisfies annotation `ann`, as the interpreter's entry validation judges it.
+    ///
+    /// A value whose type cannot be resolved passes, and so does a protocol or constraint check
+    /// against a type with no descriptor.
+    pub fn annotationAccepts(self: *Context, ann: stack_effect_mod.TypeAnnotation, val: Value) !bool {
+        switch (ann) {
+            .type => |expected_tv| {
+                if (self.any_type_sentinel) |any_tv| {
+                    if (expected_tv == any_tv) return true;
+                }
+                if (helpers.resolveValueTypeValue(self, val) == null) return true;
+                return helpers.valueMatchesType(self, val, expected_tv);
+            },
+            .protocol => |descriptor| {
+                const val_tv = helpers.resolveValueTypeValue(self, val) orelse return true;
+                if (val_tv.descriptor == null) return true;
+                return protocols_mod.satisfiesByDescriptor(self, val_tv, descriptor);
+            },
+            .combination => |cc| {
+                const val_tv = helpers.resolveValueTypeValue(self, val) orelse return true;
+                if (val_tv.descriptor == null) return true;
+                return protocols_mod.typeSatisfiesConstraint(self, val_tv, .{ .combinator = cc });
+            },
+        }
+    }
 
-                    const val_tv = helpers.resolveValueTypeValue(self, val) orelse continue;
-                    if (helpers.valueMatchesType(self, val, expected_tv)) continue;
+    /// Check one annotated parameter's argument and report a mismatch under `mode`.
+    ///
+    /// Under `.err` a mismatch raises. Under `.warning` it prints one warning and returns. Under
+    /// `.off` nothing is checked.
+    pub fn checkAnnotatedParam(self: *Context, param_name: []const u8, ann: stack_effect_mod.TypeAnnotation, val: Value, mode: TypeCheckMode) !void {
+        if (mode == .off) return;
+        if (try self.annotationAccepts(ann, val)) return;
 
-                    const actual_name = val_tv.name;
-                    const msg = std.fmt.allocPrint(self.arena.allocator(), "type mismatch for parameter '{s}': expected {s}, got {s}", .{ param.name, expected_tv.name, actual_name }) catch "type mismatch";
+        const actual_name = if (helpers.resolveValueTypeValue(self, val)) |tv| tv.name else "unknown";
+        const arena = self.arena.allocator();
+        const msg = switch (ann) {
+            .type => |expected_tv| std.fmt.allocPrint(arena, "type mismatch for parameter '{s}': expected {s}, got {s}", .{ param_name, expected_tv.name, actual_name }) catch "type mismatch",
+            .protocol => |descriptor| std.fmt.allocPrint(arena, "parameter '{s}': type '{s}' does not satisfy protocol '{s}'", .{ param_name, actual_name, descriptor.name }) catch "protocol mismatch",
+            .combination => std.fmt.allocPrint(arena, "parameter '{s}': type '{s}' does not satisfy the required constraint", .{ param_name, actual_name }) catch "constraint mismatch",
+        };
 
-                    const is_warning = if (self.getPragma("type-check")) |pv2| switch (pv2) {
-                        .string => |s| std.mem.eql(u8, s.bytes, "warning"),
-                        else => false,
-                    } else false;
+        if (mode == .warning) {
+            var tw = trace_mod.TraceWriter.init();
+            tw.print("warning: {s}\n", .{msg});
+            return;
+        }
 
-                    if (is_warning) {
-                        var tw = trace_mod.TraceWriter.init();
-                        tw.print("warning: {s}\n", .{msg});
-                    } else {
-                        self.pending_error_message = msg;
-                        return error.TypeError;
-                    }
-                },
-                .protocol => |descriptor| {
-                    if (scope == .except_protocols) continue;
-
-                    const val_tv = helpers.resolveValueTypeValue(self, val) orelse continue;
-                    if (val_tv.descriptor == null) continue;
-
-                    const satisfies = try protocols_mod.satisfiesByDescriptor(self, val_tv, descriptor);
-                    if (satisfies) continue;
-
-                    const actual_name = val_tv.name;
-                    const msg = std.fmt.allocPrint(self.arena.allocator(), "parameter '{s}': type '{s}' does not satisfy protocol '{s}'", .{ param.name, actual_name, descriptor.name }) catch "protocol mismatch";
-
-                    const is_warning = if (self.getPragma("type-check")) |pv2| switch (pv2) {
-                        .string => |s| std.mem.eql(u8, s.bytes, "warning"),
-                        else => false,
-                    } else false;
-
-                    if (is_warning) {
-                        var tw = trace_mod.TraceWriter.init();
-                        tw.print("warning: {s}\n", .{msg});
-                    } else {
-                        return protocols_mod.raiseProtocolError(self, msg);
-                    }
-                },
-                .combination => |cc| {
-                    if (scope == .except_protocols) continue;
-
-                    const val_tv = helpers.resolveValueTypeValue(self, val) orelse continue;
-                    if (val_tv.descriptor == null) continue;
-
-                    const satisfies = try protocols_mod.typeSatisfiesConstraint(self, val_tv, .{ .combinator = cc });
-                    if (satisfies) continue;
-
-                    const actual_name = val_tv.name;
-                    const msg = std.fmt.allocPrint(self.arena.allocator(), "parameter '{s}': type '{s}' does not satisfy the required constraint", .{ param.name, actual_name }) catch "constraint mismatch";
-
-                    const is_warning = if (self.getPragma("type-check")) |pv2| switch (pv2) {
-                        .string => |s| std.mem.eql(u8, s.bytes, "warning"),
-                        else => false,
-                    } else false;
-
-                    if (is_warning) {
-                        var tw = trace_mod.TraceWriter.init();
-                        tw.print("warning: {s}\n", .{msg});
-                    } else {
-                        return protocols_mod.raiseProtocolError(self, msg);
-                    }
-                },
-            }
+        switch (ann) {
+            .type => {
+                self.pending_error_message = msg;
+                return error.TypeError;
+            },
+            .protocol, .combination => return protocols_mod.raiseProtocolError(self, msg),
         }
     }
 
@@ -9200,6 +9208,7 @@ pub const Context = struct {
     /// With nothing to fold, no pending state is consumed, so a pending message survives for
     /// the readers that render it without frames.
     pub fn finalizeErrorDetailsAbove(self: *Context, err: anyerror, detail_mark: usize, pending_frame_mark: usize) void {
+        self.entry_check_raised = false;
         if (self.error_details.items.len > detail_mark) {
             self.truncatePendingErrorFrames(pending_frame_mark);
             return;
@@ -9972,7 +9981,7 @@ pub const Context = struct {
                         // deferred truncation would keep it live for the whole re-run.
                         self.truncateLocalFrames(frame_mark);
                     },
-                    .tail_call => unreachable,
+                    .tail_call, .declined => unreachable,
                 }
             }
         }
@@ -10369,6 +10378,9 @@ pub const Context = struct {
     ///
     /// Returns true when the code ran to completion. A bail returns false with the stack as it
     /// was, and the trampoline interprets the body instead.
+    ///
+    /// Code that was never entered never ran its entry check, so the call's inputs are validated
+    /// here before the body runs. A body that bailed has already checked them.
     fn dispatchTailCompiled(self: *Context, call: TailCompiledCall) anyerror!bool {
         if (comptime is_freestanding) return false;
 
@@ -10377,7 +10389,7 @@ pub const Context = struct {
 
         if (self.trace.trace_jit) {
             var tw = trace_mod.TraceWriter.init();
-            trace_mod.traceJitDispatch(&tw, name, call.word_id, result != .bail);
+            trace_mod.traceJitDispatch(&tw, name, call.word_id, result != .bail and result != .declined);
         }
 
         switch (result) {
@@ -10389,9 +10401,12 @@ pub const Context = struct {
                 const err = self.jit_pending_error orelse error.UserThrown;
                 self.jit_pending_error = null;
 
-                // A tail call contributes no row of its own, so the callee's row pends only when
-                // nothing else would carry the pending message.
-                if (self.jit_pending_trace_frames.items.len == 0 and self.call_stack.items.len == 0) {
+                // A tail call contributes no row of its own. The callee's row pends only when
+                // nothing else would carry the pending message, or when the callee's entry check
+                // raised. An interpreted tail call validates under the callee's frame, so that
+                // error keeps the row.
+                const bare = self.jit_pending_trace_frames.items.len == 0 and self.call_stack.items.len == 0;
+                if (bare or self.entry_check_raised) {
                     self.appendPendingErrorFrame(.{
                         .word_name = name,
                         .source = call.source,
@@ -10407,6 +10422,33 @@ pub const Context = struct {
                 try self.replayTailBailChecks(call);
                 return false;
             },
+            .declined => {
+                if (self.compile_mode == .hybrid) self.tryHybridCompile(call.word_id, name, call.word);
+                try self.validateTailCallInputs(call);
+                try self.replayTailBailChecks(call);
+                return false;
+            },
+        }
+    }
+
+    /// Validate a tail call's inputs under the callee's frame, as an interpreted tail call does
+    /// before the trampoline pops that frame.
+    fn validateTailCallInputs(self: *Context, call: TailCompiledCall) anyerror!void {
+        const effect = call.word.stack_effect orelse return;
+        const name = call.word.name;
+
+        self.pushCallFrame(name, call.source, call.instr.line, call.instr.column, effect);
+        self.validateCallInputs(&call.word, effect) catch |err| return self.wordErrorCleanup(name, err);
+        self.popCallFrame();
+    }
+
+    /// Validate a call's quotation-effect and type-annotated inputs against `word`'s declaration.
+    fn validateCallInputs(self: *Context, word: *const WordDefinition, effect: *const StackEffect) anyerror!void {
+        if (word.exec_flags.has_param_effects) {
+            try self.validateParameterEffects(effect, ParamEffectCallee.of(word));
+        }
+        if (word.exec_flags.has_type_annotations and !word.exec_flags.skip_type_validation) {
+            try self.validateTypeAnnotations(effect);
         }
     }
 
@@ -10441,19 +10483,6 @@ pub const Context = struct {
         trace_mod.traceModuleDepsPop(&tw, cm.name);
     }
 
-    /// Everything a word call needs to know about where it sits: the body it is in, the closure
-    /// that may own that body, and the body's inline-cache table. All three are fixed for one run
-    /// of `executeInstructions`, so the loop builds this once and every call passes a pointer to
-    /// it rather than spending three argument registers.
-    ///
-    /// `body` and `owner` together with the call's index name the call site for the
-    /// parameter-effect memo. `pic_table` is indexed by that same call index.
-    pub const CallSite = struct {
-        body: []const Instruction,
-        owner: ?*const value_mod.Closure,
-        pic_table: ?*PicTable,
-    };
-
     /// A tail call whose callee has compiled code, carried to the trampoline that runs it.
     ///
     /// The definition rides along because a bail in hybrid mode counts the call against it, and a
@@ -10481,8 +10510,7 @@ pub const Context = struct {
     /// JIT dispatch, generic dispatch, recursion-marker check, tail-call
     /// setup, stack-limit check, and the native/host/compound call itself.
     ///
-    /// `site` is where this call sits: the body holding it, that body's carrier, and its inline
-    /// cache. Together with `idx` the first two name the call site for the parameter-effect memo.
+    /// `pic_table` is the inline cache of the body holding the call, indexed by `idx`.
     ///
     /// The call's name comes off the definition; see `assertResolvedName`, which checks that in Debug.
     fn executeResolvedWord(
@@ -10491,7 +10519,7 @@ pub const Context = struct {
         instr: Instruction,
         idx: usize,
         is_last: bool,
-        site: *const CallSite,
+        pic_table: ?*PicTable,
     ) anyerror!ResolvedWordResult {
         const name = word.name;
 
@@ -10512,6 +10540,11 @@ pub const Context = struct {
             self.pending_error_message = "parse-time-only word cannot be called at runtime";
             return self.wordErrorCleanup(name, error.ParseError);
         }
+
+        // Set where the call's inputs are already checked, so the interpreted run below does not
+        // check them again: compiled code that bailed checked them at its entry, and a generic is
+        // checked ahead of its compiled attempt.
+        var inputs_validated = false;
 
         // Try JIT-compiled dispatch before interpreter path. A word that compiled
         // to native and had its interpretable body dropped (an empty compound body)
@@ -10538,23 +10571,25 @@ pub const Context = struct {
                 // A generic word stays on this path. Its bail has to reach generic dispatch below,
                 // which the trampoline does not run.
                 if (is_last and word.action == .compound and !word.exec_flags.is_generic) {
-                    return self.setCompiledTailCall(word, wid, instr, idx, site);
+                    return self.setCompiledTailCall(word, wid, instr);
                 }
 
-                if (word.stack_effect) |effect| {
-                    if (word.exec_flags.has_param_effects) {
-                        self.validateParameterEffects(effect, .{ .site = site, .index = idx }) catch |err| {
+                // The compiled body checks its own inputs at entry. Code that was never entered
+                // falls through to the interpreted path, which checks them there.
+                //
+                // A generic's compiled body is its default body, which dispatch reaches only after a
+                // miss, so it checks nothing at entry. Its inputs are checked here instead, as a
+                // compiled call site checks them ahead of dispatch.
+                if (word.exec_flags.is_generic) {
+                    if (word.stack_effect) |effect| {
+                        self.validateCallInputs(&word, effect) catch |err| {
                             self.pushCallFrame(name, self.current_source, instr.line, instr.column, word.stack_effect);
                             return self.wordErrorCleanup(name, err);
                         };
                     }
-                    if (word.exec_flags.has_type_annotations and !word.exec_flags.skip_type_validation) {
-                        self.validateTypeAnnotations(effect) catch |err| {
-                            self.pushCallFrame(name, self.current_source, instr.line, instr.column, word.stack_effect);
-                            return self.wordErrorCleanup(name, err);
-                        };
-                    }
+                    inputs_validated = true;
                 }
+
                 const saved_source = self.current_source;
                 if (word.source_file) |sf| self.current_source = sf;
                 var tail_body: anyerror!void = {};
@@ -10570,7 +10605,7 @@ pub const Context = struct {
                 self.current_source = saved_source;
                 if (self.trace.trace_jit) {
                     var tw = trace_mod.TraceWriter.init();
-                    trace_mod.traceJitDispatch(&tw, name, wid, jit_result != .bail);
+                    trace_mod.traceJitDispatch(&tw, name, wid, jit_result != .bail and jit_result != .declined);
                 }
                 switch (jit_result) {
                     .ok => {
@@ -10594,6 +10629,12 @@ pub const Context = struct {
                         if (self.compile_mode == .hybrid) {
                             self.tryHybridCompile(wid, name, word);
                         }
+                        inputs_validated = true;
+                    },
+                    .declined => {
+                        if (self.compile_mode == .hybrid) {
+                            self.tryHybridCompile(wid, name, word);
+                        }
                     },
                 }
             }
@@ -10602,20 +10643,15 @@ pub const Context = struct {
         self.pushCallFrame(name, self.current_source, instr.line, instr.column, word.stack_effect);
         self.traceWordExecution(name, instr);
 
-        if (word.stack_effect) |effect| {
-            if (word.exec_flags.has_param_effects) {
-                self.validateParameterEffects(effect, .{ .site = site, .index = idx }) catch |err|
-                    return self.wordErrorCleanup(name, err);
-            }
-            if (word.exec_flags.has_type_annotations and !word.exec_flags.skip_type_validation) {
-                self.validateTypeAnnotations(effect) catch |err|
-                    return self.wordErrorCleanup(name, err);
+        if (!inputs_validated) {
+            if (word.stack_effect) |effect| {
+                self.validateCallInputs(&word, effect) catch |err| return self.wordErrorCleanup(name, err);
             }
         }
 
         if (word.action == .compound) {
             if (word.exec_flags.is_generic) {
-                const pic_entry = if (site.pic_table) |pt| pt.get(idx) else null;
+                const pic_entry = if (pic_table) |pt| pt.get(idx) else null;
                 const dispatched = dispatch_helpers.tryDispatchGenericById(self, word.dispatch_id, pic_entry) catch |err|
                     return self.wordErrorCleanup(name, err);
 
@@ -10664,7 +10700,7 @@ pub const Context = struct {
 
                     self.tail_call_instructions = null;
                     self.tail_call_compiled = false;
-                    self.current_pic_entry = if (site.pic_table) |pt| pt.get(idx) else null;
+                    self.current_pic_entry = if (pic_table) |pt| pt.get(idx) else null;
                     defer self.current_pic_entry = null;
                     const census_saved = self.censusEnter(.tail_native, name);
                     defer self.censusRestore(census_saved);
@@ -10679,7 +10715,7 @@ pub const Context = struct {
                 .host_callback => |host| {
                     self.tail_call_instructions = null;
                     self.tail_call_compiled = false;
-                    self.current_pic_entry = if (site.pic_table) |pt| pt.get(idx) else null;
+                    self.current_pic_entry = if (pic_table) |pt| pt.get(idx) else null;
                     defer self.current_pic_entry = null;
                     const result: anyerror!void = host.invoke(self);
                     if (result) |_| {
@@ -10693,7 +10729,7 @@ pub const Context = struct {
                     // to call into, so it finishes like a native word does.
                     self.tail_call_instructions = null;
                     self.tail_call_compiled = false;
-                    self.current_pic_entry = if (site.pic_table) |pt| pt.get(idx) else null;
+                    self.current_pic_entry = if (pic_table) |pt| pt.get(idx) else null;
                     defer self.current_pic_entry = null;
                     if (self.stack.push(v)) |_| {
                         try self.wordSuccessCleanup(name, word.stack_effect);
@@ -10722,7 +10758,7 @@ pub const Context = struct {
             const callee_pic = if (word.action == .compound) self.getOrAllocPicTable(word.action.compound) else null;
 
             if (word.isNativeLike()) {
-                self.current_pic_entry = if (site.pic_table) |pt| pt.get(idx) else null;
+                self.current_pic_entry = if (pic_table) |pt| pt.get(idx) else null;
             }
             defer self.current_pic_entry = null;
 
@@ -10794,7 +10830,7 @@ pub const Context = struct {
         if (self.benchmark) |b| b.endWordProfile(self.allocator, name);
         if (self.profile) |p| p.recordWordEnd(self.allocator, name);
 
-        const pend = !is_last or
+        const pend = !is_last or self.entry_check_raised or
             (self.jit_pending_trace_frames.items.len == 0 and self.call_stack.items.len == 0);
         if (pend) {
             self.appendPendingErrorFrame(.{
@@ -10811,28 +10847,16 @@ pub const Context = struct {
     /// Set up a tail call to a word with compiled code, leaving the code for the trampoline to run.
     ///
     /// Everything ahead of the body matches the non-tail compiled path. The frame pushed here is the
-    /// one the trampoline pops, so a validation error pends it as an interpreted call's would.
+    /// one the trampoline pops. The compiled body checks its own inputs at entry, so nothing is
+    /// validated here; `dispatchTailCompiled` validates when the code is never entered.
     fn setCompiledTailCall(
         self: *Context,
         word: WordDefinition,
         wid: u32,
         instr: Instruction,
-        idx: usize,
-        site: *const CallSite,
     ) anyerror!ResolvedWordResult {
         const name = word.name;
         self.pushCallFrame(name, self.current_source, instr.line, instr.column, word.stack_effect);
-
-        if (word.stack_effect) |effect| {
-            if (word.exec_flags.has_param_effects) {
-                self.validateParameterEffects(effect, .{ .site = site, .index = idx }) catch |err|
-                    return self.wordErrorCleanup(name, err);
-            }
-            if (word.exec_flags.has_type_annotations and !word.exec_flags.skip_type_validation) {
-                self.validateTypeAnnotations(effect) catch |err|
-                    return self.wordErrorCleanup(name, err);
-            }
-        }
 
         if (self.benchmark) |b| b.endWordProfile(self.allocator, name);
         if (self.profile) |p| p.recordWordEnd(self.allocator, name);
@@ -11035,9 +11059,6 @@ pub const Context = struct {
         self.active_captured_scope = captured_scope;
         defer self.active_captured_scope = saved_captured_scope;
 
-        // Fixed for the whole loop, so every call below hands one pointer to all three.
-        const site: CallSite = .{ .body = instructions, .owner = owner, .pic_table = pic_table };
-
         // The identity a bare-word lookup here asks the owner check with. A local frame opened by
         // a body that does not enclose this one is not this body's scope.
         const lexical_body: usize = if (instructions.len > 0) @intFromPtr(instructions.ptr) else 0;
@@ -11107,7 +11128,7 @@ pub const Context = struct {
                     if (captured_scope) |scope| {
                         if (lookupInCapturedScope(scope, name)) |word| {
                             if (comptime builtin.mode == .Debug) assertResolvedName(word, name);
-                            switch (try self.executeResolvedWord(word, instr, idx, is_last, &site)) {
+                            switch (try self.executeResolvedWord(word, instr, idx, is_last, pic_table)) {
                                 .proceed => {},
                                 .tail_call_set => return,
                             }
@@ -11117,7 +11138,7 @@ pub const Context = struct {
 
                     if (self.lookupWordForExecutionOwnScope(name, deps_vis, own_module, own_ambient_deps, lexical_body)) |word| {
                         if (comptime builtin.mode == .Debug) assertResolvedName(word, name);
-                        switch (try self.executeResolvedWord(word, instr, idx, is_last, &site)) {
+                        switch (try self.executeResolvedWord(word, instr, idx, is_last, pic_table)) {
                             .proceed => {},
                             .tail_call_set => return,
                         }
@@ -11204,7 +11225,7 @@ pub const Context = struct {
                                 const gate_module = if (isSyntheticScopeModule(lazy_module)) null else lazy_module;
                                 if (self.lookupWordForExecutionFiltered(name, lazy_vis, gate_module, lexical_body)) |word| {
                                     if (comptime builtin.mode == .Debug) assertResolvedName(word, name);
-                                    switch (try self.executeResolvedWord(word, instr, idx, is_last, &site)) {
+                                    switch (try self.executeResolvedWord(word, instr, idx, is_last, pic_table)) {
                                         .proceed => {},
                                         .tail_call_set => return,
                                     }
@@ -11241,7 +11262,7 @@ pub const Context = struct {
 
                     const word = dict_mod.loadSlot(slot).*;
                     if (comptime builtin.mode == .Debug) assertResolvedName(word, name);
-                    switch (try self.executeResolvedWord(word, instr, idx, is_last, &site)) {
+                    switch (try self.executeResolvedWord(word, instr, idx, is_last, pic_table)) {
                         .proceed => {},
                         .tail_call_set => return,
                     }
@@ -11265,7 +11286,7 @@ pub const Context = struct {
                     if (captured_scope) |scope| {
                         if (lookupInCapturedScope(scope, name)) |word| {
                             if (comptime builtin.mode == .Debug) assertResolvedName(word, name);
-                            switch (try self.executeResolvedWord(word, instr, idx, is_last, &site)) {
+                            switch (try self.executeResolvedWord(word, instr, idx, is_last, pic_table)) {
                                 .proceed => {},
                                 .tail_call_set => return,
                             }
@@ -11275,7 +11296,7 @@ pub const Context = struct {
 
                     const word = dict_mod.loadSlot(slot).*;
                     if (comptime builtin.mode == .Debug) assertResolvedName(word, name);
-                    switch (try self.executeResolvedWord(word, instr, idx, is_last, &site)) {
+                    switch (try self.executeResolvedWord(word, instr, idx, is_last, pic_table)) {
                         .proceed => {},
                         .tail_call_set => return,
                     }
@@ -11436,6 +11457,7 @@ fn resolveWordForDispatch(name: []const u8, user_data: *anyopaque) ?ir_codegen.R
         .word_id = word_id,
         .input_count = @intCast(effect.inputs.len),
         .output_count = @intCast(effect.outputs.len),
+        .declared_effect = effect,
         .never_returns = hasNeverReturnsMarker(callee.markers),
         .dispatch_id = callee.dispatch_id,
         .bounded_constraint = if (bounded) |b| b.constraint else null,
@@ -11837,6 +11859,41 @@ test "collisionGuardMode maps each accepted value, and defaults to error" {
 
     // Each key is read on its own, so relaxing one guard leaves the other at its default.
     try std.testing.expectEqual(Context.CollisionGuardMode.err, ctx.collisionGuardMode("import-collision", "dup"));
+}
+
+test "typeCheckMode reads the top view and defaults to error" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    try std.testing.expectEqual(TypeCheckMode.err, ctx.typeCheckMode());
+    try std.testing.expect(!ctx.typeCheckModeSet());
+
+    try ctx.pushPragmaFrame();
+    try std.testing.expectEqual(TypeCheckMode.err, ctx.typeCheckMode());
+    try std.testing.expect(!ctx.typeCheckModeSet());
+
+    try ctx.setPragma("type-check", value_mod.stringValue("warning"));
+    try std.testing.expectEqual(TypeCheckMode.warning, ctx.typeCheckMode());
+    try std.testing.expect(ctx.typeCheckModeSet());
+
+    ctx.popPragmaFrame();
+    try std.testing.expectEqual(TypeCheckMode.err, ctx.typeCheckMode());
+}
+
+test "checkAnnotatedParam raises only under error, and only on a mismatch" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const ann: stack_effect_mod.TypeAnnotation = .{ .type = ctx.lookupBuiltinTypeValue("fixnum").? };
+    const float_arg: Value = .{ .float = 1.5 };
+
+    try ctx.checkAnnotatedParam("n", ann, .{ .fixnum = 1 }, .err);
+    try std.testing.expectError(error.TypeError, ctx.checkAnnotatedParam("n", ann, float_arg, .err));
+    try std.testing.expectEqualStrings("type mismatch for parameter 'n': expected fixnum, got float", ctx.pending_error_message.?);
+
+    try ctx.checkAnnotatedParam("n", ann, float_arg, .off);
+    try std.testing.expect(!try ctx.annotationAccepts(ann, float_arg));
+    try std.testing.expect(try ctx.annotationAccepts(ann, .{ .fixnum = 1 }));
 }
 
 test "pushPragmaFrame: the first frame starts from an empty view" {
@@ -13229,18 +13286,17 @@ fn testAnnotatedQuotationEffect(alloc: Allocator) !*const StackEffect {
     });
 }
 
-test "param_effect_cache: one entry per site, guarded on the argument body" {
+test "param_effect_cache: one entry per callee parameter, guarded on the argument body" {
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
 
     const alloc = ctx.quotationAllocator();
     const effect = try testAnnotatedQuotationEffect(alloc);
 
-    const caller = try alloc.alloc(Instruction, 1);
-    caller[0] = .{ .op = .{ .call_word = "annotated" }, .line = 1 };
-    const call_site: Context.CallSite = .{ .body = caller, .owner = null, .pic_table = null };
-    const site: Context.ParamEffectSite = .{ .site = &call_site, .index = 0 };
-    const key: ParamEffectSiteKey = .{ .body = @intFromPtr(caller.ptr), .index = 0, .param = 1 };
+    const callee_body = try alloc.alloc(Instruction, 1);
+    callee_body[0] = .{ .op = .{ .call_word = "call" }, .line = 1 };
+    const site: Context.ParamEffectCallee = .{ .body = callee_body, .owner = null };
+    const key: ParamEffectKey = .{ .body = @intFromPtr(callee_body.ptr), .param = 1 };
 
     const one = try alloc.alloc(Instruction, 1);
     one[0] = .{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 1 };
@@ -13259,8 +13315,8 @@ test "param_effect_cache: one entry per site, guarded on the argument body" {
     try std.testing.expectEqual(@as(i64, 1), entry.delta);
     try std.testing.expect(entry.effect == effect);
 
-    // A different body at the same site misses the guard, is walked, and is reported. The walk's
-    // own result displaces the entry.
+    // A different argument body for the same callee misses the guard, is walked, and is reported.
+    // The walk's own result displaces the entry.
     ctx.stack.items.items[1] = .{ .quotation = .{ .instructions = two } };
     try std.testing.expectError(primitives.InterpreterError.StackEffectMismatch, ctx.validateParameterEffects(effect, site));
     try std.testing.expectEqual(@as(u32, 1), ctx.param_effect_cache.count());
@@ -13271,17 +13327,16 @@ test "param_effect_cache: one entry per site, guarded on the argument body" {
     try std.testing.expectEqual(@intFromPtr(one.ptr), ctx.param_effect_cache.get(key).?.arg_body);
 }
 
-test "param_effect_cache: closure-owned bodies, site-less calls, and empty arguments write nothing" {
+test "param_effect_cache: closure-owned bodies, callee-less calls, and empty bodies write nothing" {
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
 
     const alloc = ctx.quotationAllocator();
     const effect = try testAnnotatedQuotationEffect(alloc);
 
-    const caller = try alloc.alloc(Instruction, 1);
-    caller[0] = .{ .op = .{ .call_word = "annotated" }, .line = 1 };
-    const call_site: Context.CallSite = .{ .body = caller, .owner = null, .pic_table = null };
-    const site: Context.ParamEffectSite = .{ .site = &call_site, .index = 0 };
+    const callee_body = try alloc.alloc(Instruction, 1);
+    callee_body[0] = .{ .op = .{ .call_word = "call" }, .line = 1 };
+    const site: Context.ParamEffectCallee = .{ .body = callee_body, .owner = null };
 
     const literal = try alloc.alloc(Instruction, 1);
     literal[0] = .{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 1 };
@@ -13303,24 +13358,25 @@ test "param_effect_cache: closure-owned bodies, site-less calls, and empty argum
     try std.testing.expectEqual(@as(u32, 0), ctx.param_effect_cache.count());
     try ctx.stack.popAndRelease();
 
-    // A caller body a closure owns is not a durable site either.
-    const owned_caller = try std.testing.allocator.alloc(Instruction, 1);
-    owned_caller[0] = caller[0];
-    const caller_closure = try value_mod.Closure.create(std.testing.allocator, .{
-        .instructions = owned_caller,
+    // A callee body a closure owns is not a durable key either.
+    const owned_callee = try std.testing.allocator.alloc(Instruction, 1);
+    owned_callee[0] = callee_body[0];
+    const callee_closure = try value_mod.Closure.create(std.testing.allocator, .{
+        .instructions = owned_callee,
         .segments = &.{},
         .owns_body = true,
         .header = undefined,
     });
-    defer container_backing.releaseValue(.{ .closure = caller_closure });
+    defer container_backing.releaseValue(.{ .closure = callee_closure });
 
-    const owned_site: Context.CallSite = .{ .body = owned_caller, .owner = caller_closure, .pic_table = null };
     try ctx.stack.push(.{ .quotation = .{ .instructions = literal } });
-    try ctx.validateParameterEffects(effect, .{ .site = &owned_site, .index = 0 });
+    try ctx.validateParameterEffects(effect, .{ .body = owned_callee, .owner = callee_closure });
     try std.testing.expectEqual(@as(u32, 0), ctx.param_effect_cache.count());
 
-    // A compiled call site names no site.
+    // A callee with no body to key on names none.
     try ctx.validateParameterEffects(effect, null);
+    try std.testing.expectEqual(@as(u32, 0), ctx.param_effect_cache.count());
+    try ctx.validateParameterEffects(effect, .{ .body = &.{}, .owner = null });
     try std.testing.expectEqual(@as(u32, 0), ctx.param_effect_cache.count());
 
     // An empty body's pointer is the shared zero-length sentinel, so the verdict is reported but

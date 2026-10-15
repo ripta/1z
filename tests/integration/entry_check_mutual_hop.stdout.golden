@@ -1,0 +1,16 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+=== the groups run clean with the right types ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+groups finish
+Stack: [ ]
+=== a hop reports the entered member's parameter ===
+Stack: [ ]
+<error type-error: type mismatch for parameter 'n': expected fixnum, got string [tests/integration/entry_check_mutual_hop.1z:6:pong <- tests/integration/entry_check_mutual_hop.1z:19:recover]>
+Stack: [ ]
+<error type-error: type mismatch for parameter 's': expected string, got fixnum [tests/integration/entry_check_mutual_hop.1z:10:trim-b <- tests/integration/entry_check_mutual_hop.1z:20:recover]>
+Stack: [ ]

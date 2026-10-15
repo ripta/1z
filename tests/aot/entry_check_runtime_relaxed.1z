@@ -1,0 +1,9 @@
+\ A word compiled under the default mode narrows its typed input. A program that relaxes the mode
+\ at runtime still gets the interpreter's result: the entry check runs the call in the word's
+\ generic copy, once, rather than in the narrowed body.
+
+bump: ( n: fixnum -- m ) [ 1 + ] ;
+noisy: ( x -- y ) [ "noisy ran" print-line bump 0 + ] ;
+
+1 noisy .
+"pragma{ type-check: \"off\" } 3.5 noisy ." eval-string

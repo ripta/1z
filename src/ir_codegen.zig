@@ -38,6 +38,7 @@ const may_define = @import("may_define.zig");
 const AotLexicalSiteTable = @import("aot_lexical_sites.zig").AotLexicalSiteTable;
 
 const stack_effect_mod = @import("stack_effect.zig");
+const TypeCheckMode = @import("pragma_view.zig").TypeCheckMode;
 const StackEffect = stack_effect_mod.StackEffect;
 
 const signal = @import("signal.zig");
@@ -120,6 +121,7 @@ pub const NotCompilableReason = enum {
     typed_helper_in_aot,
     reified_local_read,
     own_module_read,
+    unchecked_input_in_aot,
     unknown_reason,
 
     pub fn code(self: NotCompilableReason) []const u8 {
@@ -149,6 +151,7 @@ pub const NotCompilableReason = enum {
             .typed_helper_in_aot => "NC.24",
             .reified_local_read => "NC.25",
             .own_module_read => "NC.26",
+            .unchecked_input_in_aot => "NC.27",
         };
     }
 
@@ -179,6 +182,7 @@ pub const NotCompilableReason = enum {
             .typed_helper_in_aot => "calls a nested helper with typed inputs, which an AOT quotation cannot check",
             .reified_local_read => "hands off a quotation reading a local that also names a word outside the body",
             .own_module_read => "reads a local its own module also defines as a word, which the module's word outranks",
+            .unchecked_input_in_aot => "declares an input this AOT build cannot check at the word's entry",
         };
     }
 
@@ -192,6 +196,7 @@ pub const NotCompilableReason = enum {
             .typed_helper_in_aot => "calls nested helper '{s}', whose typed inputs an AOT quotation cannot check",
             .reified_local_read => "hands off a quotation reading local '{s}', which also names a word outside the body",
             .own_module_read => "reads local '{s}', which its own module also defines as a word, and the module's word outranks it",
+            .unchecked_input_in_aot => "declares input '{s}', which this AOT build cannot check at the word's entry",
             else => null,
         };
     }
@@ -223,6 +228,7 @@ pub const NotCompilableReason = enum {
             .typed_helper_in_aot => "blocked until AOT quotations keep their type annotations",
             .reified_local_read => "rename the local so it names no outside word, or build with the interpreter linked",
             .own_module_read => "rename the local so it names no word of its own module",
+            .unchecked_input_in_aot => "build with the interpreter linked, or drop the declaration the build cannot check",
         };
     }
 };
@@ -1101,7 +1107,9 @@ pub const ResolvedWord = struct {
     /// inline dispatch additionally set `native_fn_ptr`.
     is_native: bool = false,
     native_fn_ptr: ?usize = null,
-    stack_effect_ptr: ?usize = null,
+    /// The callee's declared effect, which a compiled call site checks a generic callee's own
+    /// inputs against before dispatching it. JIT only, since it is a process pointer.
+    declared_effect: ?*const StackEffect = null,
     /// When non-null, the callee has row-variable quotation parameters.
     /// The caller must specialize the effect at the call site using
     /// resolveRowVariableEffect() before using input_count/output_count.
@@ -1238,28 +1246,40 @@ fn emitTagConst(ctx: *c.ir_ctx, tag: ValueLayout.TagType) c.ir_ref {
     };
 }
 
+/// The Value variant a builtin type name names, or null for a type a single tag does not identify.
+fn builtinTagForTypeName(name: []const u8) ?ValueLayout.TagType {
+    const names = [_]struct { []const u8, ValueLayout.TagType }{
+        .{ "fixnum", .fixnum },
+        .{ "float", .float },
+        .{ "boolean", .boolean },
+        .{ "string", .string },
+        .{ "symbol", .symbol },
+        .{ "array", .array },
+        .{ "quotation", .quotation },
+        .{ "hash", .hash },
+        .{ "vector", .vector },
+        .{ "byte-array", .byte_array },
+        .{ "set", .set },
+        .{ "mutable-map", .mutable_map },
+        .{ "value-map", .value_map },
+        .{ "mutable-value-map", .mutable_value_map },
+        .{ "bignum", .bignum },
+    };
+    for (names) |entry| {
+        if (std.mem.eql(u8, name, entry[0])) return entry[1];
+    }
+    return null;
+}
+
 /// Map a type name string to an IR tag constant for the corresponding Value variant.
 /// Returns null for types that need pointer comparison (virtual types, struct types).
 fn mapTypeNameToTagConst(state: *CompileState, name: []const u8) ?c.ir_ref {
-    const ctx = state.ctx;
-
-    if (std.mem.eql(u8, name, "fixnum")) return state.fixnum_tag_const;
-    if (std.mem.eql(u8, name, "float")) return state.float_tag_const;
-    if (std.mem.eql(u8, name, "boolean")) return state.boolean_tag_const;
-    if (std.mem.eql(u8, name, "string")) return emitTagConst(ctx, .string);
-    if (std.mem.eql(u8, name, "symbol")) return emitTagConst(ctx, .symbol);
-    if (std.mem.eql(u8, name, "array")) return emitTagConst(ctx, .array);
-    if (std.mem.eql(u8, name, "quotation")) return emitTagConst(ctx, .quotation);
-    if (std.mem.eql(u8, name, "hash")) return emitTagConst(ctx, .hash);
-    if (std.mem.eql(u8, name, "vector")) return emitTagConst(ctx, .vector);
-    if (std.mem.eql(u8, name, "byte-array")) return emitTagConst(ctx, .byte_array);
-    if (std.mem.eql(u8, name, "set")) return emitTagConst(ctx, .set);
-    if (std.mem.eql(u8, name, "mutable-map")) return emitTagConst(ctx, .mutable_map);
-    if (std.mem.eql(u8, name, "value-map")) return emitTagConst(ctx, .value_map);
-    if (std.mem.eql(u8, name, "mutable-value-map")) return emitTagConst(ctx, .mutable_value_map);
-    if (std.mem.eql(u8, name, "bignum")) return emitTagConst(ctx, .bignum);
-
-    return null;
+    return switch (builtinTagForTypeName(name) orelse return null) {
+        .fixnum => state.fixnum_tag_const,
+        .float => state.float_tag_const,
+        .boolean => state.boolean_tag_const,
+        else => |tag| emitTagConst(state.ctx, tag),
+    };
 }
 
 /// Check the tag of a Value at elem_addr; bail if it doesn't match expected_tag.
@@ -2929,6 +2949,42 @@ const CompileState = struct {
     restart_clean: bool = false,
     /// Whether this pass emitted a restart, so the generic copy it calls has to be emitted too.
     restart_used: bool = false,
+    /// Whether the body may narrow inputs or prove value bindings from their declared types.
+    ///
+    /// Cleared where an input the body relied on could miss with no other body to run instead.
+    rely_on_declarations: bool = true,
+    /// The inputs `seedAnnotatedParams` narrows, one bit per input. Decided before the entry check
+    /// is emitted, so a miss on one of them can leave the compiled body.
+    narrow_plan: u64 = 0,
+    /// The inputs a value-binding proof may rest on, one bit per input.
+    value_binding_plan: u64 = 0,
+    /// The word's own JIT id, which the entry check runs the interpreted body under when an input
+    /// the body relies on misses. Null where nothing relies on a declaration.
+    self_word_id: ?u32 = null,
+    /// The word body being compiled. The entry check keys the parameter-effect memo on it.
+    entry_body: []const Instruction = &.{},
+    /// The closure that owns `entry_body`, if any. The memo refuses a body a closure owns.
+    body_owner: ?*const value_mod.Closure = null,
+    /// The name the word being compiled is called by. Unlike `self_name`, set with or without a
+    /// self-tail loop.
+    entry_name: ?[]const u8 = null,
+    /// `jitAppendTailEntryRow`, or `IR_UNUSED` where nothing can queue a row.
+    append_tail_entry_row_fn: c.ir_ref = c.IR_UNUSED,
+    // The AOT entry-check callbacks, `IR_UNUSED` in the JIT. The two effects checks are also unused
+    // where the build has no context to run them on.
+    aot_entry_matches_fn: c.ir_ref = c.IR_UNUSED,
+    aot_entry_miss_fn: c.ir_ref = c.IR_UNUSED,
+    aot_entry_effects_fn: c.ir_ref = c.IR_UNUSED,
+    aot_entry_effects_baked_fn: c.ir_ref = c.IR_UNUSED,
+    /// The word's generic copy, which an AOT entry check runs the call in when an input the typed
+    /// copy relies on misses. `IR_UNUSED` where the pass has none.
+    generic_copy_fn: c.ir_ref = c.IR_UNUSED,
+    /// True for the pass emitting a word's generic copy. The typed copy that entered it already
+    /// checked the inputs, and it narrows none of them.
+    is_generic_copy: bool = false,
+    /// The `type-check` mode the build read. An AOT entry check falls back to it where the running
+    /// program sets no mode of its own.
+    baked_type_check: TypeCheckMode = .err,
     /// True while `emitIf` trial-compiles the arms of a candidate branchless
     /// `IR_COND` select. The trial relies on the backend folding away pure
     /// discarded code, so any path that would emit a native call or
@@ -4224,9 +4280,7 @@ fn narrowableAnnotation(state: *CompileState, ann: stack_effect_mod.TypeAnnotati
 /// trusts it) would be unsound. Mirrors the pragma read in
 /// `Context.validateTypeAnnotationsScoped`.
 pub fn typeCheckRelaxed(ctx: *const Context) bool {
-    const pv = ctx.getPragma("type-check") orelse return false;
-    if (pv != .string) return false;
-    return std.mem.eql(u8, pv.string.bytes, "off") or std.mem.eql(u8, pv.string.bytes, "warning");
+    return ctx.typeCheckMode() != .err;
 }
 
 /// Seed narrowed `.i64_ref`/`.f64_ref` entries for every parameter whose type is known at
@@ -4255,9 +4309,6 @@ fn seedNarrowedParams(state: *CompileState, stack: []StackEntry, input_count: us
 /// JIT dispatch's own entry-time validation otherwise (see `enforce` below).
 fn seedAnnotatedParams(state: *CompileState, stack: []StackEntry, input_count: usize) void {
     const effect = state.stack_effect orelse return;
-    const ictx = state.interp_ctx orelse return;
-
-    if (typeCheckRelaxed(ictx)) return;
 
     // AOT calls a compiled body directly with no annotation check in front of
     // it, so an AOT body enforces its own declared types. A self-tail-call loop
@@ -4269,22 +4320,12 @@ fn seedAnnotatedParams(state: *CompileState, stack: []StackEntry, input_count: u
     // body relies on that and skips the redundant check.
     const enforce = state.aot_mode or state.loop_begin_ref != c.IR_UNUSED;
 
-    // The enforcement path needs the hard-error callback to reject a mistyped
-    // argument; without it, narrowing would be unsound, so leave params opaque.
-    if (enforce and state.type_mismatch_error_fn == c.IR_UNUSED) return;
-
-    // A row variable among the inputs makes the input-index -> slot mapping
-    // ambiguous (the row stands for a variable slot count), so narrow nothing.
-    for (effect.inputs) |param| {
-        if (param.is_row_variable) return;
-    }
-
     for (effect.inputs, 0..) |param, i| {
-        if (i >= input_count) break;
+        if (i >= input_count or i >= 64) break;
+        if ((state.narrow_plan >> @intCast(i)) & 1 == 0) continue;
         if (stack[i] != .raw_at_slot or stack[i].raw_at_slot != i) continue;
 
-        const ann = param.type_annotation orelse continue;
-        const kind = narrowableAnnotation(state, ann) orelse continue;
+        const kind = narrowableAnnotation(state, param.type_annotation.?).?;
 
         const slot_addr = liveSlotAddr(state, i);
         switch (kind) {
@@ -4298,6 +4339,82 @@ fn seedAnnotatedParams(state: *CompileState, stack: []StackEntry, input_count: u
             },
         }
     }
+}
+
+/// The inputs `seedAnnotatedParams` will narrow, as a mask.
+///
+/// `loops` and `row_aware_loop` describe the self-tail loop the body is about to get, since the
+/// plan is made before its header is built.
+fn planAnnotatedNarrowing(state: *CompileState, input_count: usize, loops: bool, row_aware_loop: bool) u64 {
+    if (!state.rely_on_declarations or state.is_generic_copy or row_aware_loop) return 0;
+    const effect = state.stack_effect orelse return 0;
+    const ictx = state.interp_ctx orelse return 0;
+
+    if (typeCheckRelaxed(ictx)) return 0;
+
+    // The enforcement path needs the hard-error callback to reject a mistyped argument; without it,
+    // narrowing would be unsound, so leave params opaque.
+    const enforce = state.aot_mode or loops;
+    if (enforce and state.type_mismatch_error_fn == c.IR_UNUSED) return 0;
+
+    // A row variable among the inputs makes the input-index -> slot mapping ambiguous (the row
+    // stands for a variable slot count), so narrow nothing.
+    for (effect.inputs) |param| {
+        if (param.is_row_variable) return 0;
+    }
+
+    var mask: u64 = 0;
+    for (effect.inputs, 0..) |param, i| {
+        if (i >= input_count or i >= 64) break;
+        const ann = param.type_annotation orelse continue;
+        if (narrowableAnnotation(state, ann) == null) continue;
+        mask |= @as(u64, 1) << @intCast(i);
+    }
+    return mask;
+}
+
+/// Decide which inputs the body relies on its declarations for, before the entry check that guards
+/// them is emitted.
+///
+/// A JIT body whose relied input misses runs the word's interpreted body in place, under the word's
+/// own id. A body that cannot name itself relies on nothing.
+///
+/// Resolving the name mints the id, so a discovery pass, whose code is thrown away, takes a stand-in
+/// instead. A word whose body the discovery pass refuses then never gets an id from its compile.
+fn planReliedInputs(state: *CompileState, input_count: usize, loops: bool, row_aware_loop: bool, discovery: bool) void {
+    state.narrow_plan = planAnnotatedNarrowing(state, input_count, loops, row_aware_loop);
+    state.value_binding_plan = planValueBindingReliance(state);
+    if ((state.narrow_plan | state.value_binding_plan) == 0) return;
+
+    if (state.aot_mode) {
+        // A narrowed input that misses in a build that can relax its mode at runtime runs the
+        // generic copy. With no generic copy, the typed copy narrows nothing.
+        //
+        // A value-binding input keeps its proof either way. The value-binding entry check raises
+        // on a miss, as it did before entry checks, until that check folds into the entry check.
+        if (!aotModeIsClosed(state) and state.generic_copy_fn == c.IR_UNUSED) state.narrow_plan = 0;
+        return;
+    }
+
+    state.self_word_id = if (discovery) 0 else selfWordId(state);
+    if (state.self_word_id == null) {
+        state.rely_on_declarations = false;
+        state.narrow_plan = 0;
+        state.value_binding_plan = 0;
+    }
+}
+
+/// The JIT id of the word being compiled, when its name resolves to the body being compiled.
+///
+/// The resolver mints the id if the word has none yet. The install then picks it up, as it does for
+/// a self-call the body makes.
+fn selfWordId(state: *CompileState) ?u32 {
+    const res = state.resolver orelse return null;
+    const name = state.entry_name orelse return null;
+    const resolved = res.resolve(name, res.user_data) orelse return null;
+    const body = resolved.body orelse return null;
+    if (body.ptr != state.entry_body.ptr or body.len != state.entry_body.len) return null;
+    return resolved.word_id;
 }
 
 /// Seed narrowed entries for parameters the freeze-time call-site inference proved.
@@ -4806,7 +4923,7 @@ fn setupRowAwareLoopEntry(state: *CompileState, stack: []StackEntry, sp: *usize)
 /// The `ic` new arguments are already the live top slots, so no copy to static input slots is needed.
 /// sp is re-stored to the row-relative entry height (i.e., `base_idx + 1 + ic`) and the loop closes
 /// over `LOOP_BEGIN`.
-fn emitRowAwareSelfTailCall(state: *CompileState, stack: []StackEntry, sp: *usize) IrCodegenError!void {
+fn emitRowAwareSelfTailCall(state: *CompileState, stack: []StackEntry, sp: *usize, line: usize) IrCodegenError!void {
     const ctx = state.ctx;
     const ic: usize = state.input_count;
     if (state.loop_end_set) {
@@ -4835,6 +4952,8 @@ fn emitRowAwareSelfTailCall(state: *CompileState, stack: []StackEntry, sp: *usiz
     // After the safepoint, whose own error return already releases the parks.
     emitParkReleases(state);
     emitLiveSpillReleases(state);
+
+    try emitInputEntryCheck(state, ic, .{ .back_edge = .{ .line = line, .slot_offset = 1 } });
 
     const loop_end = c._ir_LOOP_END(ctx);
     c.ir_set_op2(ctx, state.loop_begin_ref, loop_end);
@@ -5258,10 +5377,6 @@ fn emitResolvedNativeCallback(
         flushToPhysicalStack(state, stack, sp.*);
         const ctx_val = emitCallbackPreamble(state, sp.*);
 
-        if (resolved.stack_effect_ptr) |eff_ptr| {
-            emitParamValidation(state, eff_ptr);
-        }
-
         emitNativeWordCall(state, ctx_val, name, resolved, line, false);
 
         if (exitFallsThrough(state.exit_kind)) {
@@ -5300,6 +5415,7 @@ fn emitReachBelowConcrete(state: *CompileState, stack: []StackEntry, sp: *usize,
     if (resolved.is_native) {
         emitNativeWordCall(state, ctx_val, name, resolved, line, is_tail);
     } else if (resolved.is_generic) {
+        try emitGenericInputCheck(state, resolved, name, line);
         emitAotGenericDispatch(state, resolved.dispatch_id, resolved.word_id, name, line);
     } else {
         emitAotWordCall(state, ctx_val, name, resolved, line, is_tail);
@@ -5353,6 +5469,7 @@ fn emitDynamicRowFallbackPreserving(state: *CompileState, stack: []StackEntry, s
     if (resolved.is_native) {
         emitNativeWordCall(state, ctx_val, name, resolved, line, is_tail);
     } else if (resolved.is_generic) {
+        try emitGenericInputCheck(state, resolved, name, line);
         emitAotGenericDispatch(state, resolved.dispatch_id, resolved.word_id, name, line);
     } else {
         emitAotWordCall(state, ctx_val, name, resolved, line, is_tail);
@@ -8657,9 +8774,6 @@ fn emitAotIntDivision(ec: EmitCtx, comptime is_div: bool) IrCodegenError!Control
         const saved_base_addr = state.base_addr;
 
         const ctx_val = emitCallbackPreamble(state, slot_b + 1);
-        if (resolved.stack_effect_ptr) |eff_ptr| {
-            emitParamValidation(state, eff_ptr);
-        }
         emitNativeWordCall(state, ctx_val, name, resolved, ec.line, false);
 
         state.items_ptr = saved_items_ptr;
@@ -8748,8 +8862,8 @@ fn bodyHasExcludedOp(instructions: []const Instruction) bool {
 /// The statically-checkable half of compound-splice eligibility, shared by the emitter and the
 /// pre-scan. Returns the callee body when the resolved word is a plain compound whose body is
 /// small and shaped like a straight-line forwarder: no generic/bounded dispatch, no row-returning
-/// or diverging control flow, no annotated inputs (a splice skips the call path's runtime
-/// validation), and none of the excluded ops.
+/// or diverging control flow, no annotated or quotation-effect inputs (a splice skips the callee's
+/// entry check), and none of the excluded ops.
 fn spliceBodyStatic(resolved: ResolvedWord) ?[]const Instruction {
     if (resolved.is_native or resolved.is_generic or resolved.bounded_constraint != null) return null;
     if (resolved.returns_row or resolved.never_returns) return null;
@@ -8759,7 +8873,7 @@ fn spliceBodyStatic(resolved: ResolvedWord) ?[]const Instruction {
 
     if (resolved.input_params) |inputs| {
         for (inputs) |param| {
-            if (param.type_annotation != null) return null;
+            if (param.type_annotation != null or param.quotation_effect != null) return null;
         }
     }
 
@@ -8958,10 +9072,6 @@ fn emitGenericResolvedNativeCall(ec: EmitCtx, resolved: ResolvedWord) IrCodegenE
         flushToPhysicalStack(state, stack, sp.*);
         const ctx_val = emitCallbackPreamble(state, sp.*);
 
-        if (resolved.stack_effect_ptr) |eff_ptr| {
-            emitParamValidation(state, eff_ptr);
-        }
-
         // A site with statically-proven operand types monomorphizes to one direct dispatch call
         // with no cold branch.
         //
@@ -9004,6 +9114,7 @@ fn emitGenericResolvedNativeCall(ec: EmitCtx, resolved: ResolvedWord) IrCodegenE
         try materializeQuotations(state, stack, sp.*, false);
         flushToPhysicalStack(state, stack, sp.*);
         _ = emitCallbackPreamble(state, sp.*);
+        try emitGenericInputCheck(state, resolved, name, line);
 
         switch (resolved.bounded_constraint.?) {
             .protocol => |pd| emitAotSatisfiesAndDispatch(state, resolved.dispatch_id, pd, resolved.bounded_arity, resolved.bounded_trace_name orelse name, line),
@@ -9041,11 +9152,8 @@ fn emitGenericResolvedNativeCall(ec: EmitCtx, resolved: ResolvedWord) IrCodegenE
         flushToPhysicalStack(state, stack, sp.*);
         const ctx_val = emitCallbackPreamble(state, sp.*);
 
-        if (resolved.stack_effect_ptr) |eff_ptr| {
-            emitParamValidation(state, eff_ptr);
-        }
-
         if (resolved.is_generic) {
+            try emitGenericInputCheck(state, resolved, name, line);
             emitAotGenericDispatch(state, resolved.dispatch_id, resolved.word_id, name, line);
         } else {
             emitAotWordCall(state, ctx_val, name, resolved, line, is_tail);
@@ -9074,6 +9182,7 @@ fn emitGenericResolvedNativeCall(ec: EmitCtx, resolved: ResolvedWord) IrCodegenE
         try materializeQuotations(state, stack, sp.*, false);
         flushToPhysicalStack(state, stack, sp.*);
         _ = emitCallbackPreamble(state, sp.*);
+        try emitGenericInputCheck(state, resolved, name, line);
 
         switch (resolved.bounded_constraint.?) {
             .protocol => |pd| emitSatisfiesAndDispatch(state, resolved.dispatch_id, @intFromPtr(pd), resolved.bounded_arity, resolved.bounded_trace_name orelse name, line),
@@ -9092,10 +9201,6 @@ fn emitGenericResolvedNativeCall(ec: EmitCtx, resolved: ResolvedWord) IrCodegenE
         try materializeQuotations(state, stack, sp.*, false);
         flushToPhysicalStack(state, stack, sp.*);
         _ = emitCallbackPreamble(state, sp.*);
-
-        if (resolved.stack_effect_ptr) |eff_ptr| {
-            emitParamValidation(state, eff_ptr);
-        }
 
         // Load entries.items.ptr from the dispatch table
         const dispatch_ptr = state.dispatch_ptr;
@@ -9140,8 +9245,11 @@ fn emitGenericResolvedNativeCall(ec: EmitCtx, resolved: ResolvedWord) IrCodegenE
         // interpreted run.
         c._ir_IF_FALSE(ctx, if_null);
         {
-            const call_result = emitFinishTrampolineHops(state, c._ir_CALL_1(ctx, c.IR_I32, callee_code_ptr, state.jit_ctx_ptr), pending_tail);
-            const trace: CurrentTraceFrame = if (is_tail) .{ .tail_call = .{ .pending = pending_tail } } else .{ .named = .{ .name = name, .line = line } };
+            const call_result = emitFinishTrampolineHops(state, c._ir_CALL_1(ctx, c.IR_I32, callee_code_ptr, state.jit_ctx_ptr), pending_tail, resolved.word_id);
+            const trace: CurrentTraceFrame = if (is_tail)
+                .{ .tail_call = .{ .pending = pending_tail, .callee = .{ .name = name, .line = line } } }
+            else
+                .{ .named = .{ .name = name, .line = line } };
             emitCallbackPostCheck(state, call_result, call_result, if (resolved.never_returns) state.error_propagate_status else null, trace);
         }
         if (resolved.never_returns) {
@@ -9315,7 +9423,6 @@ fn emitLiteralCountConsumingOp(ec: EmitCtx, produced: usize, escapes: bool) IrCo
     try materializeQuotations(state, stack, sp.*, escapes);
     flushToPhysicalStack(state, stack, sp.*);
     const ctx_val = emitCallbackPreamble(state, sp.*);
-    if (resolved.stack_effect_ptr) |eff_ptr| emitParamValidation(state, eff_ptr);
     emitNativeWordCall(state, ctx_val, name, resolved, ec.line, ec.idx == ec.instructions.len - 1);
     if (exitFallsThrough(state.exit_kind)) {
         settleRowAwareStack(state, stack, sp, consumed, produced);
@@ -10290,7 +10397,7 @@ fn compileInstructions(
                         // (`sp == 1`) keep ordinary recursion.
                         if (row_at_slot0 and sp.* - 1 == @as(usize, ic)) {
                             if (state.row_aware_loop) {
-                                try emitRowAwareSelfTailCall(state, stack, sp);
+                                try emitRowAwareSelfTailCall(state, stack, sp, instr.line);
                                 break;
                             }
                             state.row_aware_loop_detected = true;
@@ -10358,6 +10465,10 @@ fn compileInstructions(
                     emitParkReleases(state);
                     emitLiveSpillReleases(state);
 
+                    // The next iteration is a call the interpreter would validate. The arguments
+                    // are in the input slots and `sp` is back at the entry depth.
+                    try emitInputEntryCheck(state, ic, .{ .back_edge = .{ .line = instr.line } });
+
                     // Emit back-edge
                     const loop_end = c._ir_LOOP_END(ctx);
                     c.ir_set_op2(ctx, state.loop_begin_ref, loop_end);
@@ -10412,6 +10523,9 @@ fn compileInstructions(
                     const tramp_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.jit_ctx_ptr, tramp_off);
                     const target_const = c.ir_const_u32(ctx, resolved.word_id);
                     c._ir_STORE(ctx, tramp_addr, target_const);
+                    const line_off = c.ir_const_addr(ctx, JitContextLayout.trampoline_line_offset);
+                    const line_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.jit_ctx_ptr, line_off);
+                    c._ir_STORE(ctx, line_addr, c.ir_const_u32(ctx, @intCast(instr.line)));
 
                     // The boundary's truncation runs after the whole trampoline loop, not between
                     // hops, so a transient lexical frame opened by an enclosing quotation splice
@@ -10488,6 +10602,9 @@ pub const JitContext = extern struct {
     capacity: usize,
     ctx: *anyopaque,
     trampoline_target: u32 = 0,
+    /// The line of the hop that stored `trampoline_target`, for the target's row when its entry
+    /// check raises.
+    trampoline_line: u32 = 0,
     /// A copy of the executing context's guard limit, taken when the run enters compiled code. `0`
     /// disarms the check. It has no default, so no construction site can leave it unarmed by
     /// omission.
@@ -10503,6 +10620,7 @@ const JitContextLayout = struct {
     var capacity_offset: usize = 0;
     var ctx_offset: usize = 0;
     var trampoline_target_offset: usize = 0;
+    var trampoline_line_offset: usize = 0;
     var initialized: bool = false;
 
     fn ensureInit() void {
@@ -10514,6 +10632,7 @@ const JitContextLayout = struct {
         capacity_offset = @intFromPtr(&dummy.capacity) - base;
         ctx_offset = @intFromPtr(&dummy.ctx) - base;
         trampoline_target_offset = @intFromPtr(&dummy.trampoline_target) - base;
+        trampoline_line_offset = @intFromPtr(&dummy.trampoline_line) - base;
         initialized = true;
     }
 };
@@ -10657,9 +10776,6 @@ fn preScanInstructions(
                                 flags.needs_native_call = true;
                             } else {
                                 flags.needs_dispatch = true;
-                            }
-                            if (resolved.stack_effect_ptr != null) {
-                                flags.needs_param_validation = true;
                             }
                             if (resolved.bounded_constraint != null) {
                                 flags.needs_satisfies_dispatch = true;
@@ -10938,7 +11054,7 @@ pub fn compileWord(
     mutual_group: ?[]const []const u8,
     stack_effect: ?*const StackEffect,
 ) IrCodegenError!CompiledWord {
-    return compileWordWithPicSnapshot(instructions, input_count, output_count, resolver, self_name, null, interp_ctx, mutual_group, stack_effect, null);
+    return compileWordWithPicSnapshot(instructions, input_count, output_count, resolver, self_name, null, interp_ctx, mutual_group, stack_effect, null, null);
 }
 
 pub fn compileWordWithPicSnapshot(
@@ -10952,9 +11068,10 @@ pub fn compileWordWithPicSnapshot(
     mutual_group: ?[]const []const u8,
     stack_effect: ?*const StackEffect,
     source_file: ?[]const u8,
+    body_owner: ?*const value_mod.Closure,
 ) IrCodegenError!CompiledWord {
-    const discovered = try compileWordPass(instructions, input_count, output_count, resolver, self_name, pic_table, interp_ctx, mutual_group, stack_effect, source_file, null, false);
-    const second = try compileWordPass(instructions, input_count, output_count, resolver, self_name, pic_table, interp_ctx, mutual_group, stack_effect, source_file, discovered.peak_stack_depth, discovered.row_aware_self_loop);
+    const discovered = try compileWordPass(instructions, input_count, output_count, resolver, self_name, pic_table, interp_ctx, mutual_group, stack_effect, source_file, body_owner, null, false);
+    const second = try compileWordPass(instructions, input_count, output_count, resolver, self_name, pic_table, interp_ctx, mutual_group, stack_effect, source_file, body_owner, discovered.peak_stack_depth, discovered.row_aware_self_loop);
     return second.compiled orelse IrCodegenError.CompilationFailed;
 }
 
@@ -10975,6 +11092,7 @@ fn compileWordPass(
     mutual_group: ?[]const []const u8,
     stack_effect: ?*const StackEffect,
     source_file: ?[]const u8,
+    body_owner: ?*const value_mod.Closure,
     known_peak: ?u32,
     row_aware_self_loop: bool,
 ) IrCodegenError!CompileWordPassResult {
@@ -11223,6 +11341,10 @@ fn compileWordPass(
         .stack_effect = stack_effect,
         .quotation_slots = buildQuotationSlotMap(stack_effect) orelse return IrCodegenError.NotCompilable,
         .source_file = source_file,
+        .entry_name = self_name,
+        .entry_body = instructions,
+        .body_owner = body_owner,
+        .append_tail_entry_row_fn = c.ir_const_addr(&ctx, @intFromPtr(&jitAppendTailEntryRow)),
     };
     defer if (state.method_index) |*mi| mi.deinit();
     defer if (state.may_define_memo) |*m| m.deinit();
@@ -11233,6 +11355,10 @@ fn compileWordPass(
     emitParkReservation(&state, instructions, needs_lexical_frame);
     state.word_input_count = input_count;
     state.binds_into_own_frame = needs_lexical_frame;
+
+    const loops = if (self_name) |sn| hasSelfTailCall(instructions, sn, .{}) else false;
+    planReliedInputs(&state, input_count, loops, row_aware_self_loop, known_peak == null);
+    try emitInputEntryCheck(&state, input_count, .prologue);
 
     // If this word contains a self-tail-call, wrap the body in a LOOP_BEGIN
     // so the self-call becomes a back-edge instead of a recursive native call.
@@ -11795,6 +11921,33 @@ fn emitWordCAotPass(
         c.ir_const_func(&ctx, c.ir_str(&ctx, "onez_append_builtin_trace_frame"), proto_5arg)
     else
         c.IR_UNUSED;
+    const append_tail_entry_row_fn = if (!freestanding)
+        c.ir_const_func(&ctx, c.ir_str(&ctx, "onez_append_tail_entry_row"), trace_frame_proto_9arg)
+    else
+        c.IR_UNUSED;
+
+    // Entry-check callbacks. The miss check takes its parameter name as a char array, so it goes
+    // through a static wrapper for the same reason the trace frames do. The effects check needs the
+    // runtime's word table, which a freestanding build does not carry.
+    var entry_miss_proto_params = [_]u8{ c.IR_ADDR, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR };
+    const entry_miss_proto = c.ir_proto(&ctx, 0, c.IR_I32, entry_miss_proto_params.len, &entry_miss_proto_params);
+    const aot_entry_matches_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "aotEntryParamMatches"), proto_4arg);
+    const aot_entry_miss_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "onez_entry_param_miss"), entry_miss_proto);
+    const aot_entry_effects_fn = if (!freestanding)
+        c.ir_const_func(&ctx, c.ir_str(&ctx, "onez_entry_param_effects"), proto_4arg)
+    else
+        c.IR_UNUSED;
+    const aot_entry_effects_baked_fn = if (!freestanding)
+        c.ir_const_func(&ctx, c.ir_str(&ctx, "onez_entry_param_effects_baked"), proto_5arg)
+    else
+        c.IR_UNUSED;
+    const generic_copy_fn = if (restart_target) |target|
+        c.ir_const_func(&ctx, c.ir_strl(&ctx, target.ptr, target.len), proto_1arg)
+    else
+        c.IR_UNUSED;
+
+    // `genericCName` gives a word's generic copy a prefix no other function carries.
+    const is_generic_copy = if (c_name_override) |n| std.mem.startsWith(u8, n, "onez_g_") else false;
 
     const bail_status = c.ir_const_i32(&ctx, 1);
     const ok_status = c.ir_const_i32(&ctx, 0);
@@ -11935,6 +12088,16 @@ fn emitWordCAotPass(
         .null_code_ptr_error_fn = null_code_ptr_error_fn,
         .append_word_trace_frame_fn = append_word_trace_frame_fn,
         .append_builtin_trace_frame_fn = append_builtin_trace_frame_fn,
+        .append_tail_entry_row_fn = append_tail_entry_row_fn,
+        .aot_entry_matches_fn = aot_entry_matches_fn,
+        .aot_entry_miss_fn = aot_entry_miss_fn,
+        .aot_entry_effects_fn = aot_entry_effects_fn,
+        .aot_entry_effects_baked_fn = aot_entry_effects_baked_fn,
+        .generic_copy_fn = generic_copy_fn,
+        .is_generic_copy = is_generic_copy,
+        .baked_type_check = if (interp_ctx_param) |ictx| ictx.typeCheckMode() else .err,
+        .entry_name = self_name,
+        .entry_body = instructions,
         .aot_mode = true,
         .lexical_owners = if (lexical_sites) |sites| .{ .sites = sites } else .none,
         .interpreter_free = interpreter_free,
@@ -11979,6 +12142,15 @@ fn emitWordCAotPass(
     emitParkReservation(&state, instructions, needs_lexical_frame);
     state.word_input_count = input_count;
     state.binds_into_own_frame = needs_lexical_frame;
+
+    const loops = if (self_name) |sn| hasSelfTailCall(instructions, sn, callee_resolution) else false;
+    planReliedInputs(&state, input_count, loops, row_aware_self_loop, known_peak == null);
+    emitInputEntryCheck(&state, input_count, .prologue) catch |err| {
+        if (err == IrCodegenError.NotCompilable) {
+            if (nc_reason_out) |ro| ro.* = state.notCompilable();
+        }
+        return err;
+    };
 
     // Self-tail-call detection for AOT
     if (self_name) |sn| {
@@ -12782,6 +12954,13 @@ pub fn emitProgramC(
                 .protocol => |pd| _ = try image_collection.?.effect_table.internProtocol(pd),
                 .combinator => |cc| _ = try image_collection.?.effect_table.internCombinator(cc),
             };
+        }
+        // Every annotation a compiled word's entry check names needs a slot to name it by.
+        for (words) |w| {
+            const eff = w.stack_effect orelse continue;
+            for (eff.inputs) |param| {
+                if (param.type_annotation) |ann| try image_collection.?.effect_table.internAnnotation(ann);
+            }
         }
         image_slot_maps = .{
             .typevalue_slot_index = &image_collection.?.effect_table.type_slot_index,
@@ -13594,6 +13773,15 @@ pub fn emitProgramC(
     try out.appendSlice(allocator, "extern int32_t jitAppendBuiltinTraceFrame(uintptr_t ctx, uintptr_t frame_kind, uintptr_t src_ptr, uintptr_t src_len, uintptr_t line);\n");
     try out.appendSlice(allocator, "static int32_t onez_append_named_trace_frame(uintptr_t ctx, const char *name, uintptr_t len, const char *src, uintptr_t src_len, uintptr_t line, const char *effect, uintptr_t effect_len, uintptr_t word_id_plus_one) { return jitAppendNamedTraceFrame(ctx, (uintptr_t)name, len, (uintptr_t)src, src_len, line, (uintptr_t)effect, effect_len, word_id_plus_one); }\n");
     try out.appendSlice(allocator, "static int32_t onez_append_builtin_trace_frame(uintptr_t ctx, uintptr_t frame_kind, const char *src, uintptr_t src_len, uintptr_t line) { return jitAppendBuiltinTraceFrame(ctx, frame_kind, (uintptr_t)src, src_len, line); }\n");
+    try out.appendSlice(allocator, "extern int32_t jitAppendTailEntryRow(uintptr_t ctx, uintptr_t name_ptr, uintptr_t name_len, uintptr_t src_ptr, uintptr_t src_len, uintptr_t line, uintptr_t effect_ptr, uintptr_t effect_len, uintptr_t word_id_plus_one);\n");
+    try out.appendSlice(allocator, "static int32_t onez_append_tail_entry_row(uintptr_t ctx, const char *name, uintptr_t len, const char *src, uintptr_t src_len, uintptr_t line, const char *effect, uintptr_t effect_len, uintptr_t word_id_plus_one) { return jitAppendTailEntryRow(ctx, (uintptr_t)name, len, (uintptr_t)src, src_len, line, (uintptr_t)effect, effect_len, word_id_plus_one); }\n");
+    try out.appendSlice(allocator, "extern int32_t aotEntryParamMatches(uintptr_t ctx, uintptr_t kind, uintptr_t slot, uintptr_t value_ptr);\n");
+    try out.appendSlice(allocator, "extern int32_t aotEntryParamMiss(uintptr_t ctx, uintptr_t kind, uintptr_t slot, uintptr_t name_ptr, uintptr_t name_len, uintptr_t value_ptr, uintptr_t mode);\n");
+    try out.appendSlice(allocator, "static int32_t onez_entry_param_miss(uintptr_t ctx, uintptr_t kind, uintptr_t slot, const char *name, uintptr_t len, uintptr_t value_ptr, uintptr_t mode) { return aotEntryParamMiss(ctx, kind, slot, (uintptr_t)name, len, value_ptr, mode); }\n");
+    try out.appendSlice(allocator, "extern int32_t aotEntryParamEffects(uintptr_t ctx, uintptr_t word_id, uintptr_t src_ptr, uintptr_t src_len);\n");
+    try out.appendSlice(allocator, "static int32_t onez_entry_param_effects(uintptr_t ctx, uintptr_t word_id, const char *src, uintptr_t src_len) { return aotEntryParamEffects(ctx, word_id, (uintptr_t)src, src_len); }\n");
+    try out.appendSlice(allocator, "extern int32_t aotEntryParamEffectsBaked(uintptr_t ctx, uintptr_t effect_ptr, uintptr_t effect_len, uintptr_t src_ptr, uintptr_t src_len);\n");
+    try out.appendSlice(allocator, "static int32_t onez_entry_param_effects_baked(uintptr_t ctx, const char *effect, uintptr_t effect_len, const char *src, uintptr_t src_len) { return aotEntryParamEffectsBaked(ctx, (uintptr_t)effect, effect_len, (uintptr_t)src, src_len); }\n");
     try out.appendSlice(allocator, "extern int32_t jitPushString(uintptr_t ctx, uintptr_t str_ptr, uintptr_t str_len);\n");
     try out.appendSlice(allocator, "extern int32_t jitPushSymbol(uintptr_t ctx, uintptr_t str_ptr, uintptr_t str_len);\n");
     try out.appendSlice(allocator, "extern int32_t jitPushQuotation(uintptr_t ctx, uintptr_t data, uintptr_t len, uintptr_t dest, uintptr_t quotation_id, uintptr_t site);\n");
@@ -14961,6 +15149,12 @@ const CurrentTraceFrame = union(enum) {
         /// The call is the whole word's last action and may hand back `pending_tail_status`. That
         /// status leaves the word as it came, with no rows, since the body it names has not run.
         pending: bool = false,
+        /// A compiled callee, whose row is queued when its own entry check raised.
+        callee: ?struct {
+            name: []const u8,
+            line: usize,
+            word_id: ?u32 = null,
+        } = null,
     },
 };
 
@@ -15112,6 +15306,19 @@ fn emitNamedTraceFrame(
     effect_mode: TraceFrameEffect,
 ) void {
     if (state.append_word_trace_frame_fn == c.IR_UNUSED) return;
+    emitNamedTraceFrameVia(state, state.append_word_trace_frame_fn, word_name, source, line, word_id, effect_mode);
+}
+
+/// `emitNamedTraceFrame` through `fn_ref`, any callback taking the named-frame arguments.
+fn emitNamedTraceFrameVia(
+    state: *CompileState,
+    fn_ref: c.ir_ref,
+    word_name: []const u8,
+    source: ?[]const u8,
+    line: usize,
+    word_id: ?u32,
+    effect_mode: TraceFrameEffect,
+) void {
     const ctx_val = if (state.preloaded_ctx_val != c.IR_UNUSED)
         state.preloaded_ctx_val
     else blk: {
@@ -15140,7 +15347,7 @@ fn emitNamedTraceFrame(
     const wid_const = c.ir_const_addr(state.ctx, wid_plus_one);
 
     var args = [_]c.ir_ref{ ctx_val, name_ptr, name_len_const, src.ptr, src.len, line_const, eff.ptr, eff.len, wid_const };
-    _ = c._ir_CALL_N(state.ctx, c.IR_I32, state.append_word_trace_frame_fn, args.len, &args);
+    _ = c._ir_CALL_N(state.ctx, c.IR_I32, fn_ref, args.len, &args);
 }
 
 /// The rows for the `inline` words whose code the instruction at `site` came from, or null when
@@ -15211,7 +15418,7 @@ fn emitActiveInlineTraceFrames(state: *CompileState) void {
 /// The callee's code pointer is read at runtime, and a group can form after this caller compiled.
 /// So any compiled callee may be a member, and the check cannot be decided here. An AOT build
 /// never forms a group or hands a body back, so it emits no check.
-fn emitFinishTrampolineHops(state: *CompileState, call_result: c.ir_ref, pass_through: bool) c.ir_ref {
+fn emitFinishTrampolineHops(state: *CompileState, call_result: c.ir_ref, pass_through: bool, callee_id: u32) c.ir_ref {
     if (state.aot_mode) return call_result;
 
     // Both statuses sit above the error status, so one compare finds either.
@@ -15221,7 +15428,7 @@ fn emitFinishTrampolineHops(state: *CompileState, call_result: c.ir_ref, pass_th
 
     c._ir_IF_TRUE_cold(ctx, if_hop);
     const run_fn = c.ir_const_addr(ctx, @intFromPtr(&jitRunTrampoline));
-    const hop_result = c._ir_CALL_3(ctx, c.IR_I32, run_fn, state.jit_ctx_ptr, call_result, c.ir_const_addr(ctx, @intFromBool(pass_through)));
+    const hop_result = c._ir_CALL_4(ctx, c.IR_I32, run_fn, state.jit_ctx_ptr, call_result, c.ir_const_addr(ctx, @intFromBool(pass_through)), c.ir_const_addr(ctx, callee_id));
     const end_hop = c._ir_END(ctx);
 
     c._ir_IF_FALSE(ctx, if_hop);
@@ -15260,7 +15467,10 @@ fn emitCallbackPostCheck(
 
     if (traceFramesEnabled(state)) {
         switch (current_trace_frame) {
-            .none, .tail_call => {},
+            .none => {},
+            .tail_call => |frame| if (frame.callee) |callee| {
+                if (callee.line != 0) emitTailEntryRow(state, callee.name, callee.line, callee.word_id);
+            },
             .named => |frame| if (frame.line != 0) emitWordTraceFrame(state, frame.name, frame.line, frame.word_id),
             .builtin => |frame| if (frame.line != 0) emitBuiltinTraceFrame(state, frame.kind, frame.line, state.source_file),
         }
@@ -15771,6 +15981,7 @@ const value_binding_type_names = [_][]const u8{
 
 /// The declared inputs of the word being compiled, when a declaration can prove anything about them.
 fn provableInputs(state: *const CompileState) ?[]const stack_effect_mod.StackEffectParam {
+    if (!state.rely_on_declarations) return null;
     const effect = state.stack_effect orelse return null;
     const ictx = state.interp_ctx orelse return null;
     if (typeCheckRelaxed(ictx)) return null;
@@ -15781,6 +15992,19 @@ fn provableInputs(state: *const CompileState) ?[]const stack_effect_mod.StackEff
         if (param.is_row_variable) return null;
     }
     return effect.inputs;
+}
+
+/// The inputs a value-binding proof may rest on, as a mask: every input declared with a builtin
+/// type `;` binds as a value, in a body that parks anything.
+fn planValueBindingReliance(state: *const CompileState) u64 {
+    if (state.park_base == c.IR_UNUSED) return 0;
+    const inputs = provableInputs(state) orelse return 0;
+
+    var mask: u64 = 0;
+    for (inputs, 0..) |param, i| {
+        if (declaresValueBinding(state.interp_ctx.?, param)) mask |= @as(u64, 1) << @intCast(i);
+    }
+    return mask;
 }
 
 /// Whether `param` is declared with a builtin type whose values `;` binds as values.
@@ -15870,6 +16094,513 @@ fn emitParkRead(state: *CompileState, index: usize, stack: []StackEntry, sp: *us
 
     stack[sp.*] = .{ .raw_at_slot = sp.* };
     sp.* += 1;
+}
+
+/// Where an entry check sits: the body's prologue, or a self-tail loop's back-edge, which carries the
+/// recursive call's line for the row a raise there leaves.
+const EntryCheckSite = union(enum) {
+    prologue,
+    back_edge: struct {
+        line: usize,
+        /// Where the inputs start among the slots. A row-aware loop keeps its row below them.
+        slot_offset: usize = 0,
+    },
+
+    fn slotOffset(self: EntryCheckSite) usize {
+        return switch (self) {
+            .prologue => 0,
+            .back_edge => |edge| edge.slot_offset,
+        };
+    }
+};
+
+/// Check the word's declared inputs where control enters the body.
+///
+/// The prologue check covers a call from compiled code, a mutual-group hop, and the interpreter. The
+/// back-edge check covers each further self-tail iteration. A hit on a builtin type is an inline tag
+/// compare, any other annotation is one call, and neither reads the `type-check` mode.
+///
+/// A miss validates the call again through the interpreter's own check, which reads the mode,
+/// renders the interpreter's diagnostics, and raises only under `error`. The call then continues
+/// here, unless an input the body relies on missed. That call runs the word's interpreted body in
+/// place instead. It never bails, since a bail would re-run every compiled caller above it.
+///
+/// At both sites the physical stack ends exactly at the inputs, so the interpreter's check reads
+/// them where it would for an interpreted call.
+fn emitInputEntryCheck(state: *CompileState, input_count: usize, site: EntryCheckSite) IrCodegenError!void {
+    if (state.aot_mode) return emitAotInputEntryCheck(state, input_count, site);
+    const effect = state.stack_effect orelse return;
+    const ictx = state.interp_ctx orelse return;
+    const ctx = state.ctx;
+
+    var has_effects = false;
+    var has_types = false;
+    var has_rows = false;
+    for (effect.inputs) |param| {
+        if (param.is_row_variable) has_rows = true;
+        if (param.quotation_effect != null) has_effects = true;
+        if (param.type_annotation != null) has_types = true;
+    }
+    if (!has_effects and !has_types) return;
+
+    const effect_const = c.ir_const_addr(ctx, @intFromPtr(effect));
+
+    if (has_effects) {
+        var args = [_]c.ir_ref{
+            ctxValRef(state),
+            effect_const,
+            c.ir_const_addr(ctx, @intFromPtr(state.entry_body.ptr)),
+            c.ir_const_addr(ctx, state.entry_body.len),
+            c.ir_const_addr(ctx, if (state.body_owner) |owner| @intFromPtr(owner) else 0),
+        };
+        const fn_ref = c.ir_const_addr(ctx, @intFromPtr(&jitEntryParamEffects));
+        emitEntryCheckExit(state, c._ir_CALL_N(ctx, c.IR_I32, fn_ref, args.len, &args), site);
+    }
+    if (!has_types) return;
+
+    const miss_fn = c.ir_const_addr(ctx, @intFromPtr(&jitEntryTypeMiss));
+
+    // With a row among the inputs no input sits at a fixed slot, so the interpreter's check reads
+    // them off the stack on every entry. The body narrows nothing then.
+    if (has_rows) {
+        emitEntryCheckExit(state, c._ir_CALL_2(ctx, c.IR_I32, miss_fn, ctxValRef(state), effect_const), site);
+        return;
+    }
+
+    const relied = state.narrow_plan | state.value_binding_plan;
+    var any_miss: c.ir_ref = c.IR_UNUSED;
+    var relied_miss: c.ir_ref = c.IR_UNUSED;
+    for (effect.inputs, 0..) |*param, i| {
+        if (i >= input_count) break;
+        const ann = param.type_annotation orelse continue;
+        const miss = emitAnnotationMiss(state, ictx, param, ann, liveSlotAddr(state, site.slotOffset() + i)) orelse continue;
+
+        any_miss = orBool(ctx, any_miss, miss);
+        if (i < 64 and (relied >> @intCast(i)) & 1 == 1) relied_miss = orBool(ctx, relied_miss, miss);
+    }
+    if (any_miss == c.IR_UNUSED) return;
+
+    const if_miss = c._ir_IF(ctx, any_miss);
+    c._ir_IF_TRUE_cold(ctx, if_miss);
+    {
+        const ctx_val = ctxValRef(state);
+        emitEntryCheckExit(state, c._ir_CALL_2(ctx, c.IR_I32, miss_fn, ctx_val, effect_const), site);
+
+        if (relied_miss != c.IR_UNUSED) {
+            const if_relied = c._ir_IF(ctx, relied_miss);
+            c._ir_IF_TRUE_cold(ctx, if_relied);
+            const run_fn = c.ir_const_addr(ctx, @intFromPtr(&jitRunInPlaceUnchecked));
+            const status = c._ir_CALL_2(ctx, c.IR_I32, run_fn, ctx_val, c.ir_const_addr(ctx, state.self_word_id.?));
+            c._ir_RETURN(ctx, status);
+            c._ir_IF_FALSE(ctx, if_relied);
+        }
+    }
+    const end_miss = c._ir_END(ctx);
+
+    c._ir_IF_FALSE(ctx, if_miss);
+    const end_hit = c._ir_END(ctx);
+    c._ir_MERGE_2(ctx, end_miss, end_hit);
+}
+
+/// A bool that is true when the argument at `slot_addr` misses annotation `ann`, or null when the
+/// annotation accepts every value.
+///
+/// A builtin type compares the tag inline. A tag hit implies the interpreter's hit; a tag miss may
+/// still be accepted, as a tagged value is through its base type, which the miss path decides.
+fn emitAnnotationMiss(
+    state: *CompileState,
+    ictx: *const Context,
+    param: *const stack_effect_mod.StackEffectParam,
+    ann: stack_effect_mod.TypeAnnotation,
+    slot_addr: c.ir_ref,
+) ?c.ir_ref {
+    const ctx = state.ctx;
+
+    if (ann == .type) {
+        const tv = ann.type;
+        if (ictx.any_type_sentinel) |any_tv| {
+            if (tv == any_tv) return null;
+        }
+        if (ictx.lookupBuiltinTypeValue(tv.name)) |builtin| {
+            if (builtin == tv) {
+                if (mapTypeNameToTagConst(state, tv.name)) |tag_const| {
+                    const tag_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), slot_addr, state.tag_offset_const);
+                    const tag_val = c._ir_LOAD(ctx, ValueLayout.ir_tag_type, tag_addr);
+                    return c.ir_fold2(ctx, c.IR_OPT(c.IR_NE, c.IR_BOOL), tag_val, tag_const);
+                }
+            }
+        }
+    }
+
+    const fn_ref = c.ir_const_addr(ctx, @intFromPtr(&jitEntryParamMatches));
+    const matched = c._ir_CALL_3(ctx, c.IR_I32, fn_ref, ctxValRef(state), c.ir_const_addr(ctx, @intFromPtr(param)), slot_addr);
+    return c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), matched, c.ir_const_i32(ctx, 0));
+}
+
+/// The AOT form of `emitInputEntryCheck`.
+///
+/// A process pointer means nothing to the built binary, so each annotation is baked as an index
+/// into the runtime's tables: a builtin type by its tag, and any other type, protocol, or
+/// constraint by its runtime-image slot.
+///
+/// A generic's compiled body is its default body, which every compiled call reaches through
+/// `emitGenericInputCheck`, so its prologue checks nothing.
+fn emitAotInputEntryCheck(state: *CompileState, input_count: usize, site: EntryCheckSite) IrCodegenError!void {
+    if (site == .prologue and (state.is_generic_copy or aotSelfIsGeneric(state))) return;
+    const effect = state.stack_effect orelse return;
+    if (state.interp_ctx == null or !effectHasCheckedInputs(effect)) return;
+
+    if (firstQuotationEffectParam(effect.inputs) != null) {
+        try emitAotEffectsCheck(state, aotSelfWordId(state), effect.*, .{ .entry = site });
+    }
+
+    const concrete = effect.concreteInputCount();
+    if (input_count < concrete) return state.refuse(.unchecked_input_in_aot, null);
+    const relied = state.narrow_plan | state.value_binding_plan;
+    try emitAotTypeChecks(state, effect.inputs, .{ .base = site.slotOffset() + input_count - concrete }, relied, false, .{ .entry = site });
+}
+
+/// Check a generic word's own declared inputs at a compiled call site, before its dispatch, as the
+/// interpreter checks them before it dispatches.
+///
+/// A bounded site leaves the bound to its dispatch helper, which checks it. A generic with no body
+/// of its own has only its quotation effects checked, since the interpreter skips its type
+/// annotations. The call's arguments are the top of the physical stack, with `sp` stored.
+fn emitGenericInputCheck(state: *CompileState, resolved: ResolvedWord, name: []const u8, line: usize) IrCodegenError!void {
+    const bodiless = resolved.body == null or resolved.body.?.len == 0;
+    const exit: CheckExit = .{ .call_site = .{ .name = name, .line = line, .word_id = resolved.word_id } };
+
+    if (state.aot_mode) {
+        const params = resolved.input_params orelse return;
+        if (firstQuotationEffectParam(params) != null) {
+            const effect = StackEffect{ .inputs = params, .outputs = resolved.output_params orelse &.{} };
+            try emitAotEffectsCheck(state, resolved.word_id, effect, exit);
+        }
+        if (bodiless) return;
+        return emitAotTypeChecks(state, params, .stored_top, 0, resolved.bounded_constraint != null, exit);
+    }
+
+    const effect = resolved.declared_effect orelse return;
+    if (!effectHasCheckedInputs(effect)) return;
+
+    var flags: usize = 0;
+    if (bodiless) flags |= generic_check_skip_types;
+    if (resolved.bounded_constraint != null) flags |= generic_check_skip_bound;
+
+    const ctx = state.ctx;
+    const fn_ref = c.ir_const_addr(ctx, @intFromPtr(&jitGenericInputCheck));
+    const status = c._ir_CALL_3(ctx, c.IR_I32, fn_ref, ctxValRef(state), c.ir_const_addr(ctx, @intFromPtr(effect)), c.ir_const_addr(ctx, flags));
+    emitCheckExit(state, status, exit);
+}
+
+/// Flags for `jitGenericInputCheck`.
+const generic_check_skip_types: usize = 1;
+const generic_check_skip_bound: usize = 2;
+
+/// How a failed input check leaves: as a compiled body's entry check, or at a compiled call site
+/// that checks a generic callee before dispatching it, which queues the callee's row.
+const CheckExit = union(enum) {
+    entry: EntryCheckSite,
+    call_site: struct {
+        name: []const u8,
+        line: usize,
+        word_id: u32,
+    },
+};
+
+fn emitCheckExit(state: *CompileState, status: c.ir_ref, exit: CheckExit) void {
+    switch (exit) {
+        .entry => |site| emitEntryCheckExit(state, status, site),
+        .call_site => |call| emitCallbackPostCheck(state, status, status, null, .{ .named = .{ .name = call.name, .line = call.line, .word_id = call.word_id } }),
+    }
+}
+
+/// Where the arguments an AOT check reads sit: from slot `base` up, or as the top of the physical
+/// stack, whose depth is stored.
+const ArgSlots = union(enum) {
+    base: usize,
+    stored_top,
+};
+
+/// The name of the first input of `params` declared with a quotation effect.
+fn firstQuotationEffectParam(params: []const stack_effect_mod.StackEffectParam) ?[]const u8 {
+    for (params) |param| {
+        if (param.quotation_effect != null) return param.name;
+    }
+    return null;
+}
+
+/// Check the quotation-effect inputs of word `word_id`, declared with `effect`. A word the build has
+/// no id for refuses where the check needs one.
+///
+/// A build with the interpreter linked checks against the effect the runtime restored for the word.
+/// A closed build has no runtime definition to restore it into, so the effect is baked as text,
+/// which the runtime parses once. A freestanding build has no context to run the check on, and
+/// checks nothing.
+fn emitAotEffectsCheck(state: *CompileState, word_id: ?u32, effect: StackEffect, exit: CheckExit) IrCodegenError!void {
+    if (state.freestanding) return;
+
+    const ctx = state.ctx;
+    const src = emitTraceSourceArgs(state);
+    const param_name = firstQuotationEffectParam(effect.inputs) orelse "";
+    if (!aotModeIsClosed(state)) {
+        const id = word_id orelse return state.refuse(.unchecked_input_in_aot, param_name);
+        const status = c._ir_CALL_4(ctx, c.IR_I32, state.aot_entry_effects_fn, ctxValRef(state), c.ir_const_addr(ctx, id), src.ptr, src.len);
+        emitCheckExit(state, status, exit);
+        return;
+    }
+
+    const text = effect.renderBareBody(std.heap.page_allocator) catch return IrCodegenError.OutOfMemory;
+    defer std.heap.page_allocator.free(text);
+
+    // A compilability trial carries no literal table, and its output is discarded, so it bakes an
+    // empty effect, as `emitStringLiteralPtr` does for its strings.
+    const baked: TraceSourceArgs = if (state.aot_string_literals) |lits| .{
+        .ptr = emitLiteralSymbolRef(state, lits.internEffect(text) orelse return state.refuse(.unchecked_input_in_aot, param_name)),
+        .len = c.ir_const_addr(ctx, text.len),
+    } else .{ .ptr = c.ir_const_addr(ctx, 0), .len = c.ir_const_addr(ctx, 0) };
+
+    var args = [_]c.ir_ref{
+        ctxValRef(state),
+        baked.ptr,
+        baked.len,
+        src.ptr,
+        src.len,
+    };
+    emitCheckExit(state, c._ir_CALL_N(ctx, c.IR_I32, state.aot_entry_effects_baked_fn, args.len, &args), exit);
+}
+
+/// Check the type-annotated inputs among `params`, whose arguments sit at `slots`.
+///
+/// The miss path reads the mode the running program sets, or the build's own where it sets none.
+///
+/// At an entry, a miss on an input in `relied` runs the call in the word's generic copy instead.
+///
+/// A closed build cannot change its mode at runtime. It relies on declarations only under a strict
+/// build-time mode, and under `off` it checks nothing.
+fn emitAotTypeChecks(
+    state: *CompileState,
+    params: []const stack_effect_mod.StackEffectParam,
+    slots: ArgSlots,
+    relied: u64,
+    skip_protocols: bool,
+    exit: CheckExit,
+) IrCodegenError!void {
+    const ictx = state.interp_ctx orelse return;
+    const ctx = state.ctx;
+    const closed = aotModeIsClosed(state);
+
+    var has_types = false;
+    var concrete: usize = 0;
+    for (params) |param| {
+        if (param.is_row_variable) continue;
+        concrete += 1;
+        const ann = param.type_annotation orelse continue;
+        if (skip_protocols and ann != .type) continue;
+        has_types = true;
+    }
+    if (!has_types) return;
+    if (closed and state.baked_type_check == .off) return;
+    if (concrete > max_entry_checks) return state.refuse(.unchecked_input_in_aot, null);
+
+    // Arguments on top of the stored stack are found from its stored depth, which every call
+    // site's preamble writes.
+    const top_base: c.ir_ref = switch (slots) {
+        .base => c.IR_UNUSED,
+        .stored_top => blk: {
+            const sp_now = c._ir_LOAD(ctx, c.IR_ADDR, state.sp_ptr);
+            const first = c.ir_fold2(ctx, c.IR_OPT(c.IR_SUB, c.IR_ADDR), sp_now, c.ir_const_addr(ctx, concrete));
+            const offset = c.ir_fold2(ctx, c.IR_OPT(c.IR_MUL, c.IR_ADDR), first, state.value_size_const);
+            const items = c._ir_LOAD(ctx, c.IR_ADDR, state.jit_ctx_ptr);
+            break :blk c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), items, offset);
+        },
+    };
+
+    const Check = struct {
+        miss: c.ir_ref,
+        spec: AotAnnotationSpec,
+        name: []const u8,
+        addr: c.ir_ref,
+    };
+    var checks: [max_entry_checks]Check = undefined;
+    var count: usize = 0;
+
+    var any_miss: c.ir_ref = c.IR_UNUSED;
+    var relied_miss: c.ir_ref = c.IR_UNUSED;
+    var k: usize = 0;
+    for (params, 0..) |param, i| {
+        if (param.is_row_variable) continue;
+        defer k += 1;
+
+        const ann = param.type_annotation orelse continue;
+        if (skip_protocols and ann != .type) continue;
+        const spec = try aotAnnotationSpec(state, ictx, ann, param.name) orelse continue;
+        const addr = switch (slots) {
+            .base => |base| liveSlotAddr(state, base + k),
+            .stored_top => c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), top_base, c.ir_const_addr(ctx, k * ValueLayout.value_size)),
+        };
+        const miss = if (spec.tag) |tag| blk: {
+            const tag_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), addr, state.tag_offset_const);
+            const tag_val = c._ir_LOAD(ctx, ValueLayout.ir_tag_type, tag_addr);
+            break :blk c.ir_fold2(ctx, c.IR_OPT(c.IR_NE, c.IR_BOOL), tag_val, emitTagConst(ctx, tag));
+        } else blk: {
+            const matched = c._ir_CALL_4(ctx, c.IR_I32, state.aot_entry_matches_fn, ctxValRef(state), c.ir_const_addr(ctx, spec.kind), c.ir_const_addr(ctx, spec.slot), addr);
+            break :blk c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), matched, c.ir_const_i32(ctx, 0));
+        };
+
+        checks[count] = .{ .miss = miss, .spec = spec, .name = param.name, .addr = addr };
+        count += 1;
+        any_miss = orBool(ctx, any_miss, miss);
+        if (i < 64 and (relied >> @intCast(i)) & 1 == 1) relied_miss = orBool(ctx, relied_miss, miss);
+    }
+    if (any_miss == c.IR_UNUSED) return;
+
+    // The running program may override the build's mode only where it can set one.
+    const mode_arg: usize = @intFromEnum(state.baked_type_check) | if (closed) @as(usize, 0) else aot_mode_overridable;
+
+    const if_miss = c._ir_IF(ctx, any_miss);
+    c._ir_IF_TRUE_cold(ctx, if_miss);
+    {
+        const ctx_val = ctxValRef(state);
+        for (checks[0..count]) |check| {
+            const if_this = c._ir_IF(ctx, check.miss);
+            c._ir_IF_TRUE(ctx, if_this);
+            var args = [_]c.ir_ref{
+                ctx_val,
+                c.ir_const_addr(ctx, check.spec.kind),
+                c.ir_const_addr(ctx, check.spec.slot),
+                emitStringLiteralPtr(state, check.name),
+                c.ir_const_addr(ctx, check.name.len),
+                check.addr,
+                c.ir_const_addr(ctx, mode_arg),
+            };
+            emitCheckExit(state, c._ir_CALL_N(ctx, c.IR_I32, state.aot_entry_miss_fn, args.len, &args), exit);
+            const end_this = c._ir_END(ctx);
+            c._ir_IF_FALSE(ctx, if_this);
+            const end_skip = c._ir_END(ctx);
+            c._ir_MERGE_2(ctx, end_this, end_skip);
+        }
+
+        if (relied_miss != c.IR_UNUSED and !closed and state.generic_copy_fn != c.IR_UNUSED and exit == .entry) {
+            const if_relied = c._ir_IF(ctx, relied_miss);
+            c._ir_IF_TRUE_cold(ctx, if_relied);
+            state.restart_used = true;
+            const status = c._ir_CALL_1(ctx, c.IR_I32, state.generic_copy_fn, state.jit_ctx_ptr);
+            c._ir_RETURN(ctx, status);
+            c._ir_IF_FALSE(ctx, if_relied);
+        }
+    }
+    const end_miss = c._ir_END(ctx);
+
+    c._ir_IF_FALSE(ctx, if_miss);
+    const end_hit = c._ir_END(ctx);
+    c._ir_MERGE_2(ctx, end_miss, end_hit);
+}
+
+/// The most declared inputs an AOT entry check covers. A word with more refuses.
+const max_entry_checks = 64;
+
+/// Set in the mode argument of an AOT miss check where the running program's own `type-check`
+/// setting, when it has one, outranks the build's.
+const aot_mode_overridable: usize = 0x100;
+
+/// Whether an AOT build has no interpreter to change the `type-check` mode at runtime.
+fn aotModeIsClosed(state: *const CompileState) bool {
+    return state.interpreter_free or state.freestanding;
+}
+
+/// How an AOT entry check names an annotation at runtime: `kind` 0 is a builtin type by its tag, 1
+/// a type by its runtime-image slot, 2 a protocol slot, and 3 a constraint slot. A builtin also
+/// carries the tag its inline compare tests.
+const AotAnnotationSpec = struct {
+    kind: u8,
+    slot: u32,
+    tag: ?ValueLayout.TagType = null,
+};
+
+/// The runtime name of annotation `ann`, or null when it accepts every value. An annotation the
+/// image has no slot for refuses the word, since the built binary could not check it.
+fn aotAnnotationSpec(
+    state: *CompileState,
+    ictx: *const Context,
+    ann: stack_effect_mod.TypeAnnotation,
+    param_name: []const u8,
+) IrCodegenError!?AotAnnotationSpec {
+    switch (ann) {
+        .type => |tv| {
+            if (ictx.any_type_sentinel) |any_tv| {
+                if (tv == any_tv) return null;
+            }
+            if (ictx.lookupBuiltinTypeValue(tv.name)) |builtin| {
+                if (builtin == tv) {
+                    if (builtinTagForTypeName(tv.name)) |tag| return .{ .kind = 0, .slot = @intFromEnum(tag), .tag = tag };
+                }
+            }
+            const maps = state.aot_slot_maps orelse return state.refuse(.unchecked_input_in_aot, param_name);
+            const slot = maps.typevalue_slot_index.get(tv) orelse return state.refuse(.unchecked_input_in_aot, param_name);
+            return .{ .kind = 1, .slot = slot };
+        },
+        .protocol => |pd| {
+            const maps = state.aot_slot_maps orelse return state.refuse(.unchecked_input_in_aot, param_name);
+            const slot = maps.protocol_slot_index.get(pd) orelse return state.refuse(.unchecked_input_in_aot, param_name);
+            return .{ .kind = 2, .slot = slot };
+        },
+        .combination => |cc| {
+            const maps = state.aot_slot_maps orelse return state.refuse(.unchecked_input_in_aot, param_name);
+            const slot = maps.combinator_slot_index.get(cc) orelse return state.refuse(.unchecked_input_in_aot, param_name);
+            return .{ .kind = 3, .slot = slot };
+        },
+    }
+}
+
+/// The AOT word id of the word being compiled.
+fn aotSelfWordId(state: *CompileState) ?u32 {
+    const resolved = aotSelf(state) orelse return null;
+    return resolved.word_id;
+}
+
+/// Whether the AOT word being compiled is a generic, whose compiled body is its default body.
+fn aotSelfIsGeneric(state: *CompileState) bool {
+    const resolved = aotSelf(state) orelse return false;
+    return resolved.is_generic;
+}
+
+fn aotSelf(state: *CompileState) ?ResolvedWord {
+    const res = state.resolver orelse return null;
+    const name = state.entry_name orelse return null;
+    return res.resolve(name, res.user_data);
+}
+
+fn orBool(ctx: *c.ir_ctx, acc: c.ir_ref, next: c.ir_ref) c.ir_ref {
+    if (acc == c.IR_UNUSED) return next;
+    return c.ir_fold2(ctx, c.IR_OPT(c.IR_OR, c.IR_BOOL), acc, next);
+}
+
+/// Leave the body with `status` when an entry check raised.
+///
+/// Nothing is parked or spilled at either site, so the return releases nothing. A back-edge raise
+/// queues the word's own row first, since the call it stands for is a tail call whose frame the
+/// interpreter keeps for a validation error.
+fn emitEntryCheckExit(state: *CompileState, status: c.ir_ref, site: EntryCheckSite) void {
+    const ctx = state.ctx;
+    const failed = c.ir_fold2(ctx, c.IR_OPT(c.IR_NE, c.IR_BOOL), status, c.ir_const_i32(ctx, 0));
+    const if_failed = c._ir_IF(ctx, failed);
+    c._ir_IF_TRUE_cold(ctx, if_failed);
+    switch (site) {
+        .prologue => {},
+        .back_edge => |edge| if (traceFramesEnabled(state)) {
+            if (state.self_name) |name| emitTailEntryRow(state, name, edge.line, state.self_word_id);
+        },
+    }
+    c._ir_RETURN(ctx, status);
+    c._ir_IF_FALSE(ctx, if_failed);
+}
+
+/// Queue the row of a tail-called word whose entry check raised. See `jitAppendTailEntryRow`.
+fn emitTailEntryRow(state: *CompileState, word_name: []const u8, line: usize, word_id: ?u32) void {
+    if (state.append_tail_entry_row_fn == c.IR_UNUSED) return;
+    const source = inlineRegionBodySource(state) orelse state.source_file;
+    emitNamedTraceFrameVia(state, state.append_tail_entry_row_fn, word_name, source, line, word_id, .own_effect);
 }
 
 /// Run a nested helper's body at a read of its name.
@@ -16626,7 +17357,10 @@ fn emitAotWordCall(state: *CompileState, ctx_val: c.ir_ref, name: []const u8, re
             defer std.heap.page_allocator.free(mangled);
             const callee_fn = c.ir_const_func(ictx, c.ir_str(ictx, mangled.ptr), state.aot_proto_1arg);
             const call_result = c._ir_CALL_1(ictx, c.IR_I32, callee_fn, state.jit_ctx_ptr);
-            const trace: CurrentTraceFrame = if (is_tail) .{ .tail_call = .{} } else .{ .named = .{ .name = name, .line = line, .word_id = resolved.word_id } };
+            const trace: CurrentTraceFrame = if (is_tail)
+                .{ .tail_call = .{ .callee = .{ .name = name, .line = line, .word_id = resolved.word_id } } }
+            else
+                .{ .named = .{ .name = name, .line = line, .word_id = resolved.word_id } };
             emitCallbackPostCheck(state, call_result, call_result, if (resolved.never_returns) state.error_propagate_status else null, trace);
             return;
         }
@@ -16937,6 +17671,250 @@ export fn jitValidateParamEffects(ctx_raw: usize, effect_ptr_raw: usize) callcon
         return 2;
     };
     ctx.validateTypeAnnotations(effect) catch |err| {
+        ctx.jit_pending_error = err;
+        return 2;
+    };
+    return 0;
+}
+
+/// ( -- ) Whether the argument at `value_ptr_raw` satisfies the annotation of the input
+/// `param_ptr_raw` points at, for a compiled body's entry check. 1 when it does.
+///
+/// Reads no mode. A miss is reported by `jitEntryTypeMiss`, and a check that fails to run counts as
+/// a miss so that path reports it.
+export fn jitEntryParamMatches(ctx_raw: usize, param_ptr_raw: usize, value_ptr_raw: usize) callconv(.c) i32 {
+    const ctx: *Context = @ptrFromInt(ctx_raw);
+    const param: *const stack_effect_mod.StackEffectParam = @ptrFromInt(param_ptr_raw);
+    const ann = param.type_annotation orelse return 1;
+    const val: *const Value = @ptrFromInt(value_ptr_raw);
+    const accepted = ctx.annotationAccepts(ann, val.*) catch return 0;
+    return @intFromBool(accepted);
+}
+
+/// ( -- ) Validate a compiled body's typed inputs after its entry check missed, as an interpreted
+/// call validates them. 0 continues the call, 2 raises.
+///
+/// The inputs are the top of `ctx.stack`. A raise is marked so a receiver that drops the callee's
+/// frame for a tail call keeps its row, as the interpreter does for a validation error.
+export fn jitEntryTypeMiss(ctx_raw: usize, effect_ptr_raw: usize) callconv(.c) i32 {
+    const ctx: *Context = @ptrFromInt(ctx_raw);
+    const effect: *const StackEffect = @ptrFromInt(effect_ptr_raw);
+    ctx.validateTypeAnnotations(effect) catch |err| {
+        ctx.jit_pending_error = err;
+        ctx.entry_check_raised = true;
+        return 2;
+    };
+    return 0;
+}
+
+/// ( -- ) Validate a generic word's own inputs at a compiled call site, before its dispatch. 0
+/// continues to the dispatch, 2 raises.
+///
+/// `flags_raw` carries `generic_check_skip_types` for a generic with no body of its own, whose
+/// type annotations the interpreter skips, and `generic_check_skip_bound` for a bounded site,
+/// whose dispatch helper checks the bound.
+export fn jitGenericInputCheck(ctx_raw: usize, effect_ptr_raw: usize, flags_raw: usize) callconv(.c) i32 {
+    const ctx: *Context = @ptrFromInt(ctx_raw);
+    const effect: *const StackEffect = @ptrFromInt(effect_ptr_raw);
+    ctx.validateParameterEffects(effect, null) catch |err| {
+        ctx.jit_pending_error = err;
+        return 2;
+    };
+    if (flags_raw & generic_check_skip_types != 0) return 0;
+
+    const scope: context_module.AnnotationScope = if (flags_raw & generic_check_skip_bound != 0) .except_protocols else .all;
+    ctx.validateTypeAnnotationsScoped(effect, scope) catch |err| {
+        ctx.jit_pending_error = err;
+        return 2;
+    };
+    return 0;
+}
+
+/// ( -- ) Validate a compiled body's quotation-effect inputs at its entry. 0 continues the call, 2
+/// raises.
+///
+/// A mismatch raises whatever the `type-check` mode, as the interpreter's check does. The memo is
+/// keyed on the callee's body, `body_ptr_raw`, which `owner_raw` may own.
+export fn jitEntryParamEffects(ctx_raw: usize, effect_ptr_raw: usize, body_ptr_raw: usize, body_len_raw: usize, owner_raw: usize) callconv(.c) i32 {
+    const ctx: *Context = @ptrFromInt(ctx_raw);
+    const effect: *const StackEffect = @ptrFromInt(effect_ptr_raw);
+    const callee: ?Context.ParamEffectCallee = if (body_len_raw == 0) null else .{
+        .body = @as([*]const Instruction, @ptrFromInt(body_ptr_raw))[0..body_len_raw],
+        .owner = if (owner_raw == 0) null else @ptrFromInt(owner_raw),
+    };
+    ctx.validateParameterEffects(effect, callee) catch |err| {
+        ctx.jit_pending_error = err;
+        return 2;
+    };
+    return 0;
+}
+
+/// ( -- ) Run word `word_id_raw`'s interpreted body in place of its compiled one, whose entry check
+/// found an input the compiled body relies on mistyped. The call's inputs are already validated.
+///
+/// The body is handed back as `pending_tail_status`, the way a tail call's is, so the call keeps its
+/// tail mode: its receiver runs the body where the compiled body would have returned. The frame
+/// pushed here is the one that receiver pops.
+export fn jitRunInPlaceUnchecked(ctx_raw: usize, word_id_raw: usize) callconv(.c) i32 {
+    const ctx: *Context = @ptrFromInt(ctx_raw);
+    const entry = jitWordEntryFor(ctx, @intCast(word_id_raw)) orelse return setJitError(ctx_raw, error.UnknownWord);
+    const word = resolveEntryWord(ctx, entry, entry.word_name) orelse return setJitError(ctx_raw, error.UnknownWord);
+    const body = switch (word.action) {
+        .compound => |instrs| instrs,
+        .native, .host_callback, .literal => return setJitError(ctx_raw, error.UnknownWord),
+    };
+    const display_name = entry.displayName();
+
+    ctx.pushCallFrame(display_name, ctx.current_source, 0, 0, word.stack_effect);
+    endTailCallProfile(ctx, display_name);
+    ctx.tail_call_instructions = body;
+    ctx.tail_call_module = word.source_module;
+    ctx.tail_call_source = word.source_file;
+    ctx.tail_call_body_owner = word.body_owner;
+    ctx.tail_call_may_define = word.exec_flags.may_define;
+    ctx.tail_call_compiled = false;
+    ctx.tail_call_arm = false;
+    return pending_tail_status;
+}
+
+/// Queue a tail-called word's row at its caller, but only for a raise from that word's entry check.
+///
+/// The interpreter checks a tail call's arguments before it drops the callee's frame, so a
+/// validation error keeps the callee's row and every other raise from the callee does not. The mark
+/// clears on the next queued frame, so only the receiver directly above the check sees it. Takes the
+/// arguments of `jitAppendNamedTraceFrame`.
+export fn jitAppendTailEntryRow(
+    ctx_raw: usize,
+    name_ptr_raw: usize,
+    name_len_raw: usize,
+    src_ptr_raw: usize,
+    src_len_raw: usize,
+    line_raw: usize,
+    effect_ptr_raw: usize,
+    effect_len_raw: usize,
+    word_id_plus_one_raw: usize,
+) callconv(.c) i32 {
+    if (ctx_raw == 0) return 0;
+    const ctx: *Context = @ptrFromInt(ctx_raw);
+    if (!ctx.entry_check_raised) return 0;
+    return jitAppendNamedTraceFrame(ctx_raw, name_ptr_raw, name_len_raw, src_ptr_raw, src_len_raw, line_raw, effect_ptr_raw, effect_len_raw, word_id_plus_one_raw);
+}
+
+/// The annotation an AOT entry check names by `kind` and `slot`, resolved through the runtime's
+/// tables. See `AotAnnotationSpec`.
+fn aotEntryAnnotation(ctx: *Context, kind: usize, slot: usize) ?stack_effect_mod.TypeAnnotation {
+    switch (kind) {
+        0 => {
+            const tag = std.meta.intToEnum(ValueLayout.TagType, slot) catch return null;
+            const tv = ctx.lookupBuiltinTypeValueByTag(tag) orelse return null;
+            return .{ .type = tv };
+        },
+        1 => {
+            const table = ctx.image_typevalue_slots orelse return null;
+            if (slot >= ctx.image_typevalue_slot_count) return null;
+            const tv = table[slot] orelse return null;
+            return .{ .type = @constCast(tv) };
+        },
+        2 => {
+            const table = ctx.image_protocoldescriptor_slots orelse return null;
+            if (slot >= ctx.image_protocoldescriptor_slot_count) return null;
+            const pd = table[slot] orelse return null;
+            return .{ .protocol = pd };
+        },
+        3 => {
+            const table = ctx.image_constraintcombinator_slots orelse return null;
+            if (slot >= ctx.image_constraintcombinator_slot_count) return null;
+            const cc = table[slot] orelse return null;
+            return .{ .combination = cc };
+        },
+        else => return null,
+    }
+}
+
+/// ( -- ) Whether the argument at `value_ptr_raw` satisfies the annotation an AOT entry check names
+/// by `kind_raw` and `slot_raw`. 1 when it does. An annotation the runtime cannot resolve counts as
+/// a miss, which `aotEntryParamMiss` reports.
+export fn aotEntryParamMatches(ctx_raw: usize, kind_raw: usize, slot_raw: usize, value_ptr_raw: usize) callconv(.c) i32 {
+    const ctx: *Context = @ptrFromInt(ctx_raw);
+    const ann = aotEntryAnnotation(ctx, kind_raw, slot_raw) orelse return 0;
+    const val: *const Value = @ptrFromInt(value_ptr_raw);
+    const accepted = ctx.annotationAccepts(ann, val.*) catch return 0;
+    return @intFromBool(accepted);
+}
+
+/// ( -- ) Report one argument an AOT entry check found mistyped, as the interpreter's check does.
+/// 0 continues the call, 2 raises.
+///
+/// `mode_raw` carries the build's mode. With `aot_mode_overridable` set, a mode the running
+/// program's pragmas set outranks it.
+export fn aotEntryParamMiss(
+    ctx_raw: usize,
+    kind_raw: usize,
+    slot_raw: usize,
+    name_ptr_raw: usize,
+    name_len_raw: usize,
+    value_ptr_raw: usize,
+    mode_raw: usize,
+) callconv(.c) i32 {
+    const ctx: *Context = @ptrFromInt(ctx_raw);
+    const ann = aotEntryAnnotation(ctx, kind_raw, slot_raw) orelse {
+        ctx.recordImageSlotMiss("annotation", slot_raw);
+        return setJitError(ctx_raw, error.UnresolvedSlot);
+    };
+    const name = @as([*]const u8, @ptrFromInt(name_ptr_raw))[0..name_len_raw];
+    const val: *const Value = @ptrFromInt(value_ptr_raw);
+
+    const baked = std.meta.intToEnum(TypeCheckMode, mode_raw & 0xff) catch .err;
+    const mode = if (mode_raw & aot_mode_overridable != 0 and ctx.typeCheckModeSet()) ctx.typeCheckMode() else baked;
+
+    ctx.checkAnnotatedParam(name, ann, val.*, mode) catch |err| {
+        ctx.jit_pending_error = err;
+        ctx.entry_check_raised = true;
+        return 2;
+    };
+    return 0;
+}
+
+/// ( -- ) Validate an AOT word's quotation-effect inputs at its entry, against the effect the
+/// runtime restored for word `word_id_raw`. 0 continues the call, 2 raises.
+///
+/// `src_ptr_raw` and `src_len_raw` name the word's file, which a mismatch row names.
+export fn aotEntryParamEffects(ctx_raw: usize, word_id_raw: usize, src_ptr_raw: usize, src_len_raw: usize) callconv(.c) i32 {
+    const ctx: *Context = @ptrFromInt(ctx_raw);
+    const entry = jitWordEntryFor(ctx, @intCast(word_id_raw)) orelse return setJitError(ctx_raw, error.UnknownWord);
+    const word = resolveEntryWord(ctx, entry, entry.word_name);
+    const effect = entry.stack_effect orelse (if (word) |w| w.stack_effect else null) orelse return 0;
+    const callee: ?Context.ParamEffectCallee = if (word) |w| Context.ParamEffectCallee.of(&w) else null;
+
+    // A mismatch row names the file it was found in. Compiled code never sets the current file, so
+    // the word's own stands in for the call site's.
+    const saved_source = ctx.current_source;
+    defer ctx.current_source = saved_source;
+    ctx.current_source = ctx.traceFrameSource(src_ptr_raw, src_len_raw);
+
+    ctx.validateParameterEffects(effect, callee) catch |err| {
+        ctx.jit_pending_error = err;
+        return 2;
+    };
+    return 0;
+}
+
+/// ( -- ) Validate a closed AOT build's quotation-effect inputs at a word's entry, against the
+/// word's effect baked as text. 0 continues the call, 2 raises.
+///
+/// The text is parsed once and cached. `src_ptr_raw` and `src_len_raw` name the word's file, which
+/// a mismatch row names.
+export fn aotEntryParamEffectsBaked(ctx_raw: usize, effect_ptr_raw: usize, effect_len_raw: usize, src_ptr_raw: usize, src_len_raw: usize) callconv(.c) i32 {
+    const ctx: *Context = @ptrFromInt(ctx_raw);
+    if (effect_len_raw == 0) return 0;
+    const text = @as([*]const u8, @ptrFromInt(effect_ptr_raw))[0..effect_len_raw];
+    const effect = ctx.cachedTraceEffect(text) orelse return setJitError(ctx_raw, error.OutOfMemory);
+
+    const saved_source = ctx.current_source;
+    defer ctx.current_source = saved_source;
+    ctx.current_source = ctx.traceFrameSource(src_ptr_raw, src_len_raw);
+
+    ctx.validateParameterEffects(effect, null) catch |err| {
         ctx.jit_pending_error = err;
         return 2;
     };
@@ -18283,7 +19261,7 @@ fn runCompiledQuotationBody(ctx: *Context, q: value_mod.Quotation) !void {
             return err;
         },
         .bail => return error.NullCodePtr,
-        .tail_call => unreachable,
+        .tail_call, .declined => unreachable,
     }
 }
 
@@ -18654,7 +19632,7 @@ export fn jitNativeWordCall(ctx_raw: usize, word_id_raw: usize, src_ptr_raw: usi
     var raise_mark: ?usize = null;
     const result = if (looked_up_word) |word| blk: {
         if (word.stack_effect) |effect| {
-            ctx.validateParameterEffects(effect, null) catch |err| {
+            ctx.validateParameterEffects(effect, Context.ParamEffectCallee.of(&word)) catch |err| {
                 ctx.jit_pending_error = ctx.wordErrorCleanup(display_name, err);
                 return 2;
             };
@@ -18846,7 +19824,7 @@ export fn jitInterpretedCall(ctx_raw: usize, word_id_raw: usize, src_ptr_raw: us
 
     const result = if (looked_up_word) |word| blk: {
         if (word.stack_effect) |effect| {
-            ctx.validateParameterEffects(effect, null) catch |err| {
+            ctx.validateParameterEffects(effect, Context.ParamEffectCallee.of(&word)) catch |err| {
                 ctx.jit_pending_error = ctx.wordErrorCleanup(display_name, err);
                 return 2;
             };
@@ -18947,6 +19925,9 @@ pub const ExecResult = enum {
     error_propagate,
     /// The word returned `pending_tail_status`.
     tail_call,
+    /// The code was never entered, so its entry check did not run. Only `executeCompiled` returns
+    /// this; a status from compiled code always means the code ran.
+    declined,
 
     /// Convert a compiled function's raw i32 return status to an ExecResult.
     /// Status 0 = ok, 2 = error_propagate, anything else = bail.
@@ -18997,9 +19978,9 @@ pub fn executeCompiled(ctx: *Context, word_id: u32) ExecResult {
         while (parent) |p| : (parent = p.parent_context) {
             if (p.jit_dispatch.get(word_id)) |e| break :blk e;
         }
-        return .bail;
+        return .declined;
     };
-    const code_ptr = entry.code_ptr orelse return .bail;
+    const code_ptr = entry.code_ptr orelse return .declined;
     if (resolveEntryWord(ctx, entry, entry.word_name)) |word| {
         ctx.jit_trace_source = word.source_file orelse ctx.current_source;
     } else {
@@ -19011,7 +19992,7 @@ pub fn executeCompiled(ctx: *Context, word_id: u32) ExecResult {
     if (entry.peak_stack_depth > 0) {
         const min_capacity = ctx.stack.items.items.len + entry.peak_stack_depth;
         if (ctx.stack.items.capacity < min_capacity) {
-            ctx.stack.items.ensureTotalCapacity(ctx.stack.allocator, min_capacity) catch return .bail;
+            ctx.stack.items.ensureTotalCapacity(ctx.stack.allocator, min_capacity) catch return .declined;
         }
     }
 
@@ -19021,7 +20002,7 @@ pub fn executeCompiled(ctx: *Context, word_id: u32) ExecResult {
     // interpreted stand-in raises instead.
     var operands: StackSnapshot = .{};
     if (entry.input_count) |n| {
-        if (!operands.take(&ctx.stack, n)) return .bail;
+        if (!operands.take(&ctx.stack, n)) return .declined;
     }
 
     var jit_ctx = JitContext{
@@ -19032,7 +20013,7 @@ pub fn executeCompiled(ctx: *Context, word_id: u32) ExecResult {
         .stack_limit = ctx.stack_limit,
     };
     const func: CompiledFn = @ptrCast(@alignCast(code_ptr));
-    const status = runTrampolineHops(ctx, &jit_ctx, func(&jit_ctx)) orelse {
+    const status = runTrampolineHops(ctx, &jit_ctx, func(&jit_ctx), word_id) orelse {
         bailFromEntry(ctx, own_table, word_id, &operands, saved_sp);
         return .bail;
     };
@@ -19084,10 +20065,15 @@ fn bailFromEntry(ctx: *Context, table: ?*JitDispatchTable, word_id: u32, operand
 /// are already in place and the hop has already rewritten the caller's, so bailing to re-run the
 /// word that started the chain would run it on the wrong values. The hop is the word's last action,
 /// so that body is handed back rather than run here.
-fn runTrampolineHops(ctx: *Context, jit_ctx: *JitContext, first_status: i32) ?i32 {
+///
+/// `first_hopper` is the word whose code returned `first_status`, when the caller knows it. A target
+/// whose entry check raises gets its row at the hop, in the hopping word's file.
+fn runTrampolineHops(ctx: *Context, jit_ctx: *JitContext, first_status: i32, first_hopper: ?u32) ?i32 {
     var status = first_status;
+    var hopper = first_hopper;
     while (status == 3) {
         const target_id = jit_ctx.trampoline_target;
+        const hop_line = jit_ctx.trampoline_line;
         const target_entry = jitWordEntryFor(ctx, target_id) orelse return null;
         const code_ptr = target_entry.code_ptr orelse {
             return jitInterpretedCall(@intFromPtr(ctx), target_id, 0, 0, 0, @intFromEnum(FallbackTail.handoff));
@@ -19104,8 +20090,25 @@ fn runTrampolineHops(ctx: *Context, jit_ctx: *JitContext, first_status: i32) ?i3
 
         const func: CompiledFn = @ptrCast(@alignCast(code_ptr));
         status = func(jit_ctx);
+        if (status == 2) appendHopEntryRow(ctx, hopper, target_entry, hop_line);
+        hopper = target_id;
     }
     return status;
+}
+
+/// Queue the row of a hop target whose entry check raised, at the line of the hop.
+fn appendHopEntryRow(ctx: *Context, hopper: ?u32, target: jit_dispatch_mod.JitEntry, line: u32) void {
+    if (!ctx.entry_check_raised) return;
+
+    const target_word = resolveEntryWord(ctx, target, target.word_name);
+    const hopper_word: ?WordDefinition = if (hopper) |id| blk: {
+        const entry = jitWordEntryFor(ctx, id) orelse break :blk null;
+        break :blk resolveEntryWord(ctx, entry, entry.word_name);
+    } else null;
+
+    const source = if (hopper_word) |w| w.source_file orelse ctx.current_source else ctx.current_source;
+    const effect = if (target_word) |w| w.stack_effect else null;
+    ctx.appendPendingSyntheticErrorFrame(target.displayName(), source, line, effect);
 }
 
 /// Finish a direct compiled call whose callee handed back a group hop or an interpreted body.
@@ -19116,12 +20119,14 @@ fn runTrampolineHops(ctx: *Context, jit_ctx: *JitContext, first_status: i32) ?i3
 ///
 /// A handed-back body runs here as well, unless `pass_through` is nonzero. The call is then the
 /// caller's own last action, and the caller hands the body on to its receiver.
-export fn jitRunTrampoline(jit_ctx: *JitContext, status: i32, pass_through: usize) callconv(.c) i32 {
+///
+/// `callee_id` is the word the caller called, which made the first hop.
+export fn jitRunTrampoline(jit_ctx: *JitContext, status: i32, pass_through: usize, callee_id: usize) callconv(.c) i32 {
     const ctx: *Context = @ptrCast(@alignCast(jit_ctx.ctx));
     const saved_trace_source = ctx.jit_trace_source;
     defer ctx.jit_trace_source = saved_trace_source;
 
-    const last = runTrampolineHops(ctx, jit_ctx, status) orelse return 1;
+    const last = runTrampolineHops(ctx, jit_ctx, status, @intCast(callee_id)) orelse return 1;
     if (last != pending_tail_status or pass_through != 0) return last;
 
     ctx.popCallFrame();
@@ -23396,6 +24401,197 @@ test "mangle word name preserves digits and underscores" {
     const name = try mangleWordName("foo_bar2", testing.allocator);
     defer testing.allocator.free(name);
     try testing.expectEqualStrings("onez_w_foo_bar2", name);
+}
+
+fn emitEntryCheckTestWord(ctx: *const Context, effect: *const StackEffect, reason: ?*?NotCompilable, interpreter_free: bool) ![]u8 {
+    const instrs = makeInstructions(.{});
+    var compiled_names: std.StringHashMapUnmanaged(u32) = .{};
+    defer compiled_names.deinit(testing.allocator);
+    var literals: AotStringLiteralTable = .{};
+    defer literals.deinit();
+
+    return emitWordCAot(
+        &instrs,
+        @intCast(effect.inputs.len),
+        @intCast(effect.outputs.len),
+        "keep",
+        null,
+        null,
+        &compiled_names,
+        .{},
+        &literals,
+        null,
+        null,
+        testing.allocator,
+        effect,
+        &.{},
+        reason,
+        null,
+        null,
+        ctx,
+        null,
+        null,
+        null,
+        null,
+        false,
+        null,
+        interpreter_free,
+        false,
+        false,
+    );
+}
+
+test "an AOT entry check compares a builtin type's tag inline and calls out only on a miss" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    const inputs = [_]stack_effect_mod.StackEffectParam{.{ .name = "n", .type_annotation = .{ .type = ctx.lookupBuiltinTypeValue("fixnum").? } }};
+    const outputs = [_]stack_effect_mod.StackEffectParam{.{ .name = "n" }};
+    const effect = StackEffect{ .inputs = &inputs, .outputs = &outputs };
+
+    const source = try emitEntryCheckTestWord(&ctx, &effect, null, false);
+    defer testing.allocator.free(source);
+
+    try testing.expect(std.mem.indexOf(u8, source, "onez_entry_param_miss(") != null);
+    try testing.expect(std.mem.indexOf(u8, source, "aotEntryParamMatches(") == null);
+}
+
+test "an AOT entry check calls out once for a type a tag does not identify" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    var weight: value_mod.TypeValue = undefined;
+    weight.name = "weight";
+    const inputs = [_]stack_effect_mod.StackEffectParam{.{ .name = "w", .type_annotation = .{ .type = &weight } }};
+    const outputs = [_]stack_effect_mod.StackEffectParam{.{ .name = "w" }};
+    const effect = StackEffect{ .inputs = &inputs, .outputs = &outputs };
+
+    var typevalues: std.AutoHashMapUnmanaged(*const value_mod.TypeValue, u32) = .{};
+    defer typevalues.deinit(testing.allocator);
+    try typevalues.put(testing.allocator, &weight, 7);
+    var struct_types: std.AutoHashMapUnmanaged(*const value_mod.StructType, u32) = .{};
+    var markers: std.AutoHashMapUnmanaged(*const value_mod.Marker, u32) = .{};
+    var parameters: std.AutoHashMapUnmanaged(*const value_mod.Parameter, u32) = .{};
+    var tagged: std.AutoHashMapUnmanaged(ibc.TaggedKey, u32) = .{};
+    var mutable_maps: std.AutoHashMapUnmanaged(*const value_mod.MutableMap, u32) = .{};
+    var mutable_value_maps: std.AutoHashMapUnmanaged(*const value_mod.MutableValueMap, u32) = .{};
+    var struct_instances: std.AutoHashMapUnmanaged(*const value_mod.StructInstance, u32) = .{};
+    var vectors: std.AutoHashMapUnmanaged(*const value_mod.Vector, u32) = .{};
+    var once_cells: std.AutoHashMapUnmanaged(*const value_mod.OnceCell, u32) = .{};
+    var protocols: std.AutoHashMapUnmanaged(*const value_mod.ProtocolDescriptor, u32) = .{};
+    var combinators: std.AutoHashMapUnmanaged(*const value_mod.ConstraintCombinator, u32) = .{};
+    const maps = AotImageSlotMaps{
+        .typevalue_slot_index = &typevalues,
+        .struct_type_slot_index = &struct_types,
+        .marker_slot_index = &markers,
+        .parameter_slot_index = &parameters,
+        .tagged_slot_index = &tagged,
+        .mutable_map_slot_index = &mutable_maps,
+        .mutable_value_map_slot_index = &mutable_value_maps,
+        .struct_instance_slot_index = &struct_instances,
+        .vector_slot_index = &vectors,
+        .once_cell_slot_index = &once_cells,
+        .protocol_slot_index = &protocols,
+        .combinator_slot_index = &combinators,
+    };
+
+    const instrs = makeInstructions(.{});
+    var compiled_names: std.StringHashMapUnmanaged(u32) = .{};
+    defer compiled_names.deinit(testing.allocator);
+    var literals: AotStringLiteralTable = .{};
+    defer literals.deinit();
+
+    const source = try emitWordCAot(&instrs, 1, 1, "heft", null, null, &compiled_names, .{}, &literals, null, null, testing.allocator, &effect, &.{}, null, null, null, &ctx, null, null, null, &maps, true, null, false, false, false);
+    defer testing.allocator.free(source);
+
+    const first = std.mem.indexOf(u8, source, "aotEntryParamMatches(") orelse return error.TestExpectedCall;
+    try testing.expect(std.mem.indexOfPos(u8, source, first + 1, "aotEntryParamMatches(") == null);
+}
+
+test "an AOT entry check refuses an annotation the image has no slot for" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    var descriptor: value_mod.ProtocolDescriptor = undefined;
+    const inputs = [_]stack_effect_mod.StackEffectParam{.{ .name = "x", .type_annotation = .{ .protocol = &descriptor } }};
+    const outputs = [_]stack_effect_mod.StackEffectParam{.{ .name = "x" }};
+    const effect = StackEffect{ .inputs = &inputs, .outputs = &outputs };
+
+    var reason: ?NotCompilable = null;
+    try testing.expectError(IrCodegenError.NotCompilable, emitEntryCheckTestWord(&ctx, &effect, &reason, false));
+    try testing.expectEqual(NotCompilableReason.unchecked_input_in_aot, reason.?.reason);
+    try testing.expectEqualStrings("x", reason.?.subject.?);
+}
+
+test "an interpreter-free AOT build checks a quotation-effect input against its baked effect" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    const nested = StackEffect{ .inputs = &.{.{ .name = "a" }}, .outputs = &.{.{ .name = "b" }} };
+    const inputs = [_]stack_effect_mod.StackEffectParam{.{ .name = "q", .quotation_effect = &nested }};
+    const outputs = [_]stack_effect_mod.StackEffectParam{.{ .name = "q" }};
+    const effect = StackEffect{ .inputs = &inputs, .outputs = &outputs };
+
+    const source = try emitEntryCheckTestWord(&ctx, &effect, null, true);
+    defer testing.allocator.free(source);
+
+    try testing.expect(std.mem.indexOf(u8, source, "onez_entry_param_effects_baked(") != null);
+    try testing.expect(std.mem.indexOf(u8, source, "onez_entry_param_effects(") == null);
+}
+
+test "an AOT word that narrows a typed input runs its generic copy when that input misses" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    const inputs = [_]stack_effect_mod.StackEffectParam{.{ .name = "n", .type_annotation = .{ .type = ctx.lookupBuiltinTypeValue("fixnum").? } }};
+    const outputs = [_]stack_effect_mod.StackEffectParam{.{ .name = "m" }};
+    const effect = StackEffect{ .inputs = &inputs, .outputs = &outputs };
+
+    const instrs = makeInstructions(.{ 1, "+" });
+    var compiled_names: std.StringHashMapUnmanaged(u32) = .{};
+    defer compiled_names.deinit(testing.allocator);
+    var literals: AotStringLiteralTable = .{};
+    defer literals.deinit();
+
+    var generic: ?[]u8 = null;
+    const source = try emitWordCAotWithCName(&instrs, 1, 1, "bump", null, arith_test_resolver, null, &compiled_names, .{}, &literals, null, null, testing.allocator, &effect, &.{}, null, null, null, &ctx, null, null, null, null, false, null, false, false, false, false, false, null, &generic);
+    defer testing.allocator.free(source);
+    defer if (generic) |g| testing.allocator.free(g);
+
+    // The typed copy calls the generic copy from its entry check's miss path, so the copy is
+    // emitted alongside it.
+    try testing.expect(generic != null);
+    try testing.expect(std.mem.indexOf(u8, source, "onez_g_bump(") != null);
+    try testing.expect(std.mem.indexOf(u8, generic.?, "onez_entry_param_miss(") == null);
+}
+
+test "jitEntryTypeMiss raises under error and marks the raise until the next queued frame" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    const inputs = [_]stack_effect_mod.StackEffectParam{.{ .name = "n", .type_annotation = .{ .type = ctx.lookupBuiltinTypeValue("fixnum").? } }};
+    const effect = StackEffect{ .inputs = &inputs, .outputs = &.{} };
+
+    try ctx.stack.push(.{ .fixnum = 1 });
+    try testing.expectEqual(@as(i32, 1), jitEntryParamMatches(@intFromPtr(&ctx), @intFromPtr(&inputs[0]), @intFromPtr(&ctx.stack.items.items[0])));
+    try testing.expectEqual(@as(i32, 0), jitEntryTypeMiss(@intFromPtr(&ctx), @intFromPtr(&effect)));
+    try testing.expect(!ctx.entry_check_raised);
+
+    ctx.stack.items.items[0] = .{ .float = 1.5 };
+    try testing.expectEqual(@as(i32, 0), jitEntryParamMatches(@intFromPtr(&ctx), @intFromPtr(&inputs[0]), @intFromPtr(&ctx.stack.items.items[0])));
+    try testing.expectEqual(@as(i32, 2), jitEntryTypeMiss(@intFromPtr(&ctx), @intFromPtr(&effect)));
+    try testing.expect(ctx.entry_check_raised);
+
+    ctx.appendPendingSyntheticErrorFrame("keep", "", 1, null);
+    try testing.expect(!ctx.entry_check_raised);
+}
+
+test "builtinTagForTypeName names the single-tag builtin types and nothing else" {
+    try testing.expectEqual(ValueLayout.TagType.fixnum, builtinTagForTypeName("fixnum").?);
+    try testing.expectEqual(ValueLayout.TagType.string, builtinTagForTypeName("string").?);
+    try testing.expectEqual(ValueLayout.TagType.quotation, builtinTagForTypeName("quotation").?);
+    try testing.expect(builtinTagForTypeName("number") == null);
+    try testing.expect(builtinTagForTypeName("weight") == null);
 }
 
 test "emitWordCAot emits the entry check for a word that pushes nothing" {

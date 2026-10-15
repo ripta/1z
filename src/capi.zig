@@ -2688,6 +2688,11 @@ export fn onez_runtime_run(ptr: ?*anyopaque, entry_word_id: u32) i32 {
     const frame_mark = ctx.local_frames.items.len;
     defer ctx.truncateLocalFrames(frame_mark);
 
+    // The entry program's own pragma frame, as the interpreter pushes one for the file it runs. A
+    // `pragma{ }` the program evaluates at runtime, through `eval-string`, writes this frame.
+    ctx.pushPragmaFrame() catch return 1;
+    defer ctx.popPragmaFrame();
+
     // Nothing else arms the native stack guard for a binary's main thread, so without this a deep
     // recursion runs into the OS guard page rather than raising `stack-overflow`.
     //

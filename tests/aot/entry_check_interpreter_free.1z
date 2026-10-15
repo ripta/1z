@@ -1,0 +1,10 @@
+\ An interpreter-free build checks a compiled word's typed input at its entry under the build's
+\ mode, which is the default here, so a mistyped argument raises.
+
+check: ( ok label -- ) [ swap [ "PASS: " ] [ "FAIL: " ] if swap #append print-line ] ;
+
+bump: ( n: fixnum -- m ) [ 1 + ] ;
+via-bump: ( x -- y ) [ bump 0 + ] ;
+
+1 via-bump 2 = "a fixnum passes the entry check" check
+3.5 via-bump drop

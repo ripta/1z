@@ -1,0 +1,60 @@
+\ The `type-check` mode in effect at the call decides what an entry-check miss does, not the mode
+\ the callee was compiled under. Every word here compiles under the default mode.
+
+use "testing" ;
+
+bump:  ( n: fixnum -- m )             [ 1 + ] ;
+shout: ( s: string -- t )             [ "!" #append ] ;
+apply: ( q: quotation -- x )          [ call ] ;
+both:  ( n: fixnum s: string -- n s ) [ ] ;
+
+via-bump:  ( x -- y )     [ bump 0 + ] ;
+via-shout: ( x -- y )     [ shout "" #append ] ;
+via-apply: ( x -- y )     [ apply ] ;
+via-both:  ( x y -- n s ) [ both ] ;
+
+\ A bignum `n` meets the fixnum guard on `div`, which makes the compiled body bail after its entry
+\ check.
+wide: ( n s: string -- m ) [ drop 2 div ] ;
+
+\ Steps down to zero, handing a float back in at 3, so a later iteration misses.
+steps: ( n: fixnum -- ) [ dup 0 <= [ drop ] [ dup . dup 3 = [ drop 2.5 ] [ 1 - ] if steps ] if ] ;
+
+\ A hop hands a string to `pong` on the step from 4.
+ping: ( n: fixnum -- ) [ dup 0 = [ drop ] [ dup 4 = [ drop "four" ] [ 1 - ] if pong ] if ] ;
+pong: ( n: fixnum -- ) [ dup 0 = [ drop ] [ 1 - ping ] if ] ;
+
+twice: ( n q: ( n -- n ) -- n ) [ dup dip call ] ;
+via-twice: ( n q -- n ) [ twice 0 + ] ;
+
+"warning: the call warns once per mismatched parameter, then continues" test-section
+pragma{ type-check: "warning" }
+[ "x" via-bump ] [ . ] recover
+[ 42 via-shout ] [ . ] recover
+[ 42 via-apply ] [ . ] recover
+"a" 7 via-both . .
+
+"warning: a body that bails after its check does not warn again" test-section
+99999999999999999999 7 wide .
+
+"warning: a self-loop iteration and a mutual hop warn, then continue" test-section
+5 steps
+[ 8 ping ] [ . ] recover
+
+"warning: a quotation-effect mismatch still raises" test-section
+[ 1 [ dup ] via-twice ] [ . ] recover
+
+"off: the call continues without a warning" test-section
+pragma{ type-check: "off" }
+[ "x" via-bump ] [ . ] recover
+[ 42 via-apply ] [ . ] recover
+"a" 7 via-both . .
+5 steps
+[ 8 ping ] [ . ] recover
+
+"off: a quotation-effect mismatch still raises" test-section
+[ 1 [ dup ] via-twice ] [ . ] recover
+
+"error: the call raises again once the mode is back" test-section
+pragma{ type-check: "error" }
+[ 3.5 via-bump ] [ . ] recover

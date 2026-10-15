@@ -1,0 +1,20 @@
+\ A quotation-effect input is checked when a compiled caller passes the quotation on, in every
+\ type-check mode.
+
+use "testing" ;
+
+twice:      ( n q: ( n -- n ) -- n ) [ dup dip call ] ;
+via-twice:  ( n q -- n )      [ twice 0 + ] ;
+tail-twice: ( n q -- n )      [ 0 drop twice ] ;
+
+"the right effect passes" test-section
+1 [ 1 + ] via-twice 3 "non-tail" assert=
+1 [ 1 + ] tail-twice 3 "tail" assert=
+
+"the wrong effect is reported" test-section
+[ 1 [ dup ] via-twice ] [ . ] recover
+[ 1 [ dup ] tail-twice ] [ . ] recover
+
+"the wrong effect is reported under type-check off" test-section
+pragma{ type-check: "off" }
+[ 1 [ drop ] via-twice ] [ . ] recover

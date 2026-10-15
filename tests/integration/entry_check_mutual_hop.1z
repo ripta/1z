@@ -1,0 +1,20 @@
+\ A mutual-recursion group checks a member's typed input when another member's tail call enters
+\ it. Under --compile=eager that entry is a trampoline hop, which must check as a call does.
+
+use "testing" ;
+
+ping: ( n: fixnum -- ) [ dup 0 = [ drop ] [ dup 4 = [ drop "four" ] [ 1 - ] if pong ] if ] ;
+pong: ( n: fixnum -- ) [ dup 0 = [ drop ] [ 1 - ping ] if ] ;
+
+\ Shortens a string in turns, and hands a fixnum to `trim-b` once two characters are left.
+trim-a: ( s: string -- ) [ dup #empty? [ drop ] [ dup #len 2 = [ drop 2 ] [ 1 #drop ] if trim-b ] if ] ;
+trim-b: ( s: string -- ) [ dup #empty? [ drop ] [ 1 #drop trim-a ] if ] ;
+
+"the groups run clean with the right types" test-section
+3 ping
+"a" trim-a
+"groups finish" print-line
+
+"a hop reports the entered member's parameter" test-section
+[ 8 ping ] [ . ] recover
+[ "abcd" trim-a ] [ . ] recover

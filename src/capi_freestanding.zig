@@ -5,6 +5,8 @@ const populate_core = @import("aot_image_populate_core.zig");
 const value_mod = @import("value.zig");
 const dispatch_mod = @import("dispatch.zig");
 const satisfies_core = @import("satisfies_core.zig");
+const stack_effect_mod = @import("stack_effect.zig");
+const TypeCheckMode = @import("pragma_view.zig").TypeCheckMode;
 
 const BigIntManaged = opaque {};
 const HashTable = opaque {};
@@ -337,6 +339,8 @@ comptime {
         @export(&jitStackUnderflowError, .{ .name = "jitStackUnderflowError" });
         @export(&jitTypeMismatchError, .{ .name = "jitTypeMismatchError" });
         @export(&jitParamTypeMismatchError, .{ .name = "jitParamTypeMismatchError" });
+        @export(&aotEntryParamMatches, .{ .name = "aotEntryParamMatches" });
+        @export(&aotEntryParamMiss, .{ .name = "aotEntryParamMiss" });
         @export(&jitNullCodePtrError, .{ .name = "jitNullCodePtrError" });
     }
 }
@@ -425,6 +429,7 @@ pub const JitContext = extern struct {
     capacity: usize,
     ctx: *anyopaque,
     trampoline_target: u32 = 0,
+    trampoline_line: u32 = 0,
     stack_limit: usize,
 };
 
@@ -2194,6 +2199,119 @@ fn jitNullCodePtrError(ctx_raw: usize) callconv(.c) i32 {
     return 2;
 }
 
+/// The annotation an entry check names by `kind` and `slot`, mirroring the hosted
+/// `aotEntryAnnotation` over this substrate's image tables.
+fn freestandingEntryAnnotation(handle: *OnezHandle, kind: usize, slot: usize) ?stack_effect_mod.TypeAnnotation {
+    switch (kind) {
+        0 => {
+            const tag = std.meta.intToEnum(std.meta.Tag(value_mod.Value), slot) catch return null;
+            const name = switch (tag) {
+                inline else => |t| dispatch_mod.builtinTypeName(t),
+            };
+            const tv = lookupImageTypeValueByName(handle, name) orelse return null;
+            return .{ .type = @constCast(tv) };
+        },
+        1 => {
+            const table = handle.image_typevalue_slots orelse return null;
+            if (slot >= handle.image_typevalue_slot_count) return null;
+            const tv = table[slot] orelse return null;
+            return .{ .type = @constCast(tv) };
+        },
+        2 => {
+            const table = handle.image_protocoldescriptor_slots orelse return null;
+            if (slot >= handle.image_protocoldescriptor_slot_count) return null;
+            const pd = table[slot] orelse return null;
+            return .{ .protocol = pd };
+        },
+        3 => {
+            const table = handle.image_constraintcombinator_slots orelse return null;
+            if (slot >= handle.image_constraintcombinator_slot_count) return null;
+            const cc = table[slot] orelse return null;
+            return .{ .combination = cc };
+        },
+        else => return null,
+    }
+}
+
+/// Whether `v` satisfies `ann`, mirroring the hosted `annotationAccepts`. A value whose type does
+/// not resolve here passes, as it does there.
+fn freestandingAnnotationAccepts(handle: *OnezHandle, ann: stack_effect_mod.TypeAnnotation, v: Value) bool {
+    switch (ann) {
+        .type => |expected| {
+            if (handle.any_type_sentinel) |any_tv| {
+                if (expected == any_tv) return true;
+            }
+            const actual = freestandingResolveValueTypeValue(handle, v) orelse return true;
+            if (satisfies_core.typeMatchesConstraint(actual, expected)) return true;
+            if (v == .tagged) {
+                const vt: *const value_mod.VirtualType = @ptrCast(@alignCast(v.tagged.tag));
+                if (vt.parent_type) |pt| {
+                    if (satisfies_core.typeMatchesConstraint(pt, expected)) return true;
+                }
+                if (vt.base_type) |bt| {
+                    if (satisfies_core.typeMatchesConstraint(bt, expected)) return true;
+                }
+            }
+            return false;
+        },
+        .protocol => |pd| return freestandingCheckOperand(handle, v, .{ .protocol = pd }) == 0,
+        .combination => |cc| return freestandingCheckOperand(handle, v, .{ .combinator = cc }) == 0,
+    }
+}
+
+/// Freestanding twin of the hosted `aotEntryParamMatches`.
+fn aotEntryParamMatches(ctx_raw: usize, kind_raw: usize, slot_raw: usize, value_ptr_raw: usize) callconv(.c) i32 {
+    const handle = handleFromContext(ctx_raw) orelse return 0;
+    ensureAnnotationSentinels(handle) catch return 0;
+    const ann = freestandingEntryAnnotation(handle, kind_raw, slot_raw) orelse return 0;
+    return @intFromBool(freestandingAnnotationAccepts(handle, ann, @as(*const Value, @ptrFromInt(value_ptr_raw)).*));
+}
+
+/// Freestanding twin of the hosted `aotEntryParamMiss`. This substrate's mode is the build's, so
+/// the mode argument's override bit is never set here, and a build under `off` emits no check.
+///
+/// A warning goes to the output stream. A raise names the parameter in `last_error`, as the
+/// hosted message does, with no call frames.
+fn aotEntryParamMiss(
+    ctx_raw: usize,
+    kind_raw: usize,
+    slot_raw: usize,
+    name_ptr_raw: usize,
+    name_len_raw: usize,
+    value_ptr_raw: usize,
+    mode_raw: usize,
+) callconv(.c) i32 {
+    const handle = handleFromContext(ctx_raw) orelse return 2;
+    ensureAnnotationSentinels(handle) catch return 2;
+    const ann = freestandingEntryAnnotation(handle, kind_raw, slot_raw) orelse {
+        setLastError(handle, "annotation slot {d} did not resolve", .{slot_raw});
+        return 2;
+    };
+    const val = @as(*const Value, @ptrFromInt(value_ptr_raw)).*;
+    if (freestandingAnnotationAccepts(handle, ann, val)) return 0;
+
+    const mode = std.meta.intToEnum(TypeCheckMode, mode_raw & 0xff) catch .err;
+    if (mode == .off) return 0;
+
+    const name = @as([*]const u8, @ptrFromInt(name_ptr_raw))[0..name_len_raw];
+    const actual = freestandingValueTypeName(val);
+    var buf: [256]u8 = undefined;
+    const msg = switch (ann) {
+        .type => |tv| std.fmt.bufPrint(&buf, "type mismatch for parameter '{s}': expected {s}, got {s}", .{ name, tv.name, actual }),
+        .protocol => |pd| std.fmt.bufPrint(&buf, "parameter '{s}': type '{s}' does not satisfy protocol '{s}'", .{ name, actual, pd.name }),
+        .combination => std.fmt.bufPrint(&buf, "parameter '{s}': type '{s}' does not satisfy the required constraint", .{ name, actual }),
+    } catch "type mismatch";
+
+    if (mode == .warning) {
+        _ = onez_freestanding_write_output(handle, "warning: ", 9);
+        _ = onez_freestanding_write_output(handle, msg.ptr, msg.len);
+        _ = onez_freestanding_write_output(handle, "\n", 1);
+        return 0;
+    }
+    setLastError(handle, "{s}", .{msg});
+    return 2;
+}
+
 test "freestanding literal helpers push string and symbol values" {
     var stack: [4]Value align(16) = undefined;
     var handle = OnezHandle{
@@ -3343,6 +3461,44 @@ test "freestanding replay no-ops on a zero-entry image" {
     try std.testing.expectEqual(ONEZ_OK, onez_replay_method_dispatch(&handle));
     try std.testing.expect(handle.method_dispatch == null);
     try std.testing.expect(handle.dispatch_any_sentinel == null);
+}
+
+test "freestanding entry check matches a builtin type by tag and raises on a miss" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var stack: [4]Value align(16) = undefined;
+    var handle = OnezHandle{ .allocator = arena.allocator(), .stack = stack[0..] };
+    defer handle.protocol_satisfies_memo.deinit(handle.allocator);
+
+    const descs = [_]populate_core.TypeDescriptor{
+        std.mem.zeroes(populate_core.TypeDescriptor),
+        std.mem.zeroes(populate_core.TypeDescriptor),
+    };
+    const tv_rows = [_]populate_core.TypeValueRow{
+        .{ .name = "fixnum", .name_len = 6, .slot = 1, .descriptor = null, .member_type_slots = null, .member_type_count = 0 },
+        .{ .name = "float", .name_len = 5, .slot = 2, .descriptor = null, .member_type_slots = null, .member_type_count = 0 },
+    };
+    var header = emptyTestImageHeader();
+    header.typevalue_slot_count = 3;
+    header.typevalue_count = tv_rows.len;
+    header.typevalues = &tv_rows;
+    header.typedescriptors = &descs;
+
+    var tv_slots = [_]?*const value_mod.TypeValue{ null, null, null };
+    try std.testing.expectEqual(ONEZ_OK, onez_load_runtime_image(&handle, &header, @ptrCast(&tv_slots), null, null, null, null, null, null, null, null, null, null, null));
+
+    const ctx_raw = @intFromPtr(&handle);
+    const fixnum_tag: usize = @intFromEnum(std.meta.Tag(Value).fixnum);
+    const one: Value = .{ .fixnum = 1 };
+    const half: Value = .{ .float = 0.5 };
+    const err_mode: usize = @intFromEnum(TypeCheckMode.err);
+
+    try std.testing.expectEqual(@as(i32, 1), aotEntryParamMatches(ctx_raw, 0, fixnum_tag, @intFromPtr(&one)));
+    try std.testing.expectEqual(@as(i32, 0), aotEntryParamMatches(ctx_raw, 0, fixnum_tag, @intFromPtr(&half)));
+
+    try std.testing.expectEqual(@as(i32, 0), aotEntryParamMiss(ctx_raw, 0, fixnum_tag, @intFromPtr("n".ptr), 1, @intFromPtr(&one), err_mode));
+    try std.testing.expectEqual(@as(i32, 2), aotEntryParamMiss(ctx_raw, 0, fixnum_tag, @intFromPtr("n".ptr), 1, @intFromPtr(&half), err_mode));
+    try std.testing.expectEqualStrings("type mismatch for parameter 'n': expected fixnum, got float", std.mem.span(onez_last_error(&handle).?));
 }
 
 test "freestanding protocol-bounded dispatch checks the operand and dispatches" {

@@ -1,0 +1,11 @@
+warning: type mismatch for parameter 'n': expected fixnum, got string
+warning: type mismatch for parameter 's': expected string, got fixnum
+warning: type mismatch for parameter 'q': expected quotation, got fixnum
+warning: type mismatch for parameter 'n': expected fixnum, got string
+warning: type mismatch for parameter 's': expected string, got fixnum
+warning: type mismatch for parameter 's': expected string, got fixnum
+warning: type mismatch for parameter 'n': expected fixnum, got float
+warning: type mismatch for parameter 'n': expected fixnum, got float
+warning: type mismatch for parameter 'n': expected fixnum, got float
+warning: type mismatch for parameter 'n': expected fixnum, got float
+warning: type mismatch for parameter 'n': expected fixnum, got string

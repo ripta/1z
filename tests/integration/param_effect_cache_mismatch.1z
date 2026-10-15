@@ -1,8 +1,4 @@
 \ Wrong-delta verdicts at a memoized call site.
-\
-\ Kept out of the eager suite. A compiled forwarding word that passes a
-\ stack-borne quotation to an annotated word raises no mismatch under
-\ --compile=eager, on the build before the memo as well.
 
 use "testing" ;
 

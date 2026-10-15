@@ -70,6 +70,16 @@ pub const StackEffectParam = struct {
         }
     }
 
+    /// Write the parameter for `StackEffect.writeBareBody`: its name and any quotation effect, but
+    /// no type annotation.
+    pub fn writeBare(self: StackEffectParam, writer: anytype) anyerror!void {
+        try writer.writeAll(self.name);
+        const effect = self.quotation_effect orelse return;
+        try writer.writeAll(": ( ");
+        try effect.writeBareBody(writer);
+        try writer.writeAll(" )");
+    }
+
     pub fn eql(self: StackEffectParam, other: StackEffectParam) bool {
         if (!std.mem.eql(u8, self.name, other.name)) return false;
         if (self.is_row_variable != other.is_row_variable) return false;
@@ -96,6 +106,36 @@ pub const StackEffect = struct {
         try writer.writeAll("( ");
         try self.writeBody(writer);
         try writer.writeAll(" )");
+    }
+
+    /// Write the effect without parens or type annotations, keeping each quotation effect as
+    /// `name: ( ... )`.
+    ///
+    /// The runtime's simple effect parser reads this back with the same parameters and the same
+    /// nested effects. It reads a type annotation as a second parameter, so none is written.
+    pub fn writeBareBody(self: StackEffect, writer: anytype) anyerror!void {
+        for (self.inputs, 0..) |param, i| {
+            if (i > 0) try writer.writeAll(" ");
+            try param.writeBare(writer);
+        }
+        try writer.writeAll(" -- ");
+        for (self.outputs, 0..) |param, i| {
+            if (i > 0) try writer.writeAll(" ");
+            try param.writeBare(writer);
+        }
+    }
+
+    /// `writeBareBody` into a buffer `allocator` owns, grown until the text fits.
+    pub fn renderBareBody(self: StackEffect, allocator: std.mem.Allocator) error{OutOfMemory}![]u8 {
+        var size: usize = 256;
+        while (true) : (size *= 2) {
+            const buf = try allocator.alloc(u8, size);
+            var fbs = std.io.fixedBufferStream(buf);
+            if (self.writeBareBody(fbs.writer())) |_| {
+                defer allocator.free(buf);
+                return allocator.dupe(u8, fbs.getWritten());
+            } else |_| allocator.free(buf);
+        }
     }
 
     /// Write the effect without the surrounding parens.

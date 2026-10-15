@@ -1,0 +1,8 @@
+=== the right effect passes ===
+PASS: non-tail
+PASS: tail
+=== the wrong effect is reported ===
+<error stack-effect-mismatch: parameter 'q' expects ( n -- n ) but quotation leaves 1 extra value on the stack [tests/integration/entry_check_quotation_effect.1z:0:q]>
+<error stack-effect-mismatch: parameter 'q' expects ( n -- n ) but quotation leaves 1 extra value on the stack [tests/integration/entry_check_quotation_effect.1z:0:q]>
+=== the wrong effect is reported under type-check off ===
+<error stack-effect-mismatch: parameter 'q' expects ( n -- n ) but quotation consumes 1 extra value from the stack [tests/integration/entry_check_quotation_effect.1z:0:q]>

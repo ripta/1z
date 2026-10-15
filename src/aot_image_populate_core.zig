@@ -704,9 +704,12 @@ fn decodeStackEffectParams(
         out[i] = .{
             .name = nameSlice(ip.name, ip.name_len),
             .is_row_variable = ip.is_row_variable != 0,
-            // Quotation-effect restoration is deferred to future
-            // fidelity work; the row carries the effect index only.
-            .quotation_effect = null,
+            // The nested effect sits in the same table. An entry check reads it to validate a
+            // quotation argument.
+            .quotation_effect = if (ip.has_quotation_effect != 0)
+                try decodeStackEffect(arena, header, ip.quotation_effect_idx, protocol_slots)
+            else
+                null,
             .type_annotation = annotation,
         };
     }

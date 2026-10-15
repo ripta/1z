@@ -667,6 +667,15 @@ pub const StackEffectTable = struct {
         return idx;
     }
 
+    /// Intern the slot an AOT entry check names annotation `ann` by.
+    pub fn internAnnotation(self: *StackEffectTable, ann: stack_effect_mod.TypeAnnotation) Allocator.Error!void {
+        switch (ann) {
+            .type => |tv| _ = try self.internType(tv),
+            .protocol => |pd| _ = try self.internProtocol(pd),
+            .combination => |cc| _ = try self.internCombinator(cc),
+        }
+    }
+
     /// Intern a `*ConstraintCombinator` pointer post-order. Each element is
     /// interned first -- `.type` into the typevalue slots, `.protocol` into the
     /// protocol slots, `.combinator` recursively -- so a nested combinator lands

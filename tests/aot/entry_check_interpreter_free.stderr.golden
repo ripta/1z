@@ -1,0 +1,2 @@
+tests/aot/entry_check_interpreter_free.1z:7: error 'type-error' type mismatch for parameter 'n': expected fixnum, got float at word 'bump'
+  called from tests/aot/entry_check_interpreter_free.1z:10: call

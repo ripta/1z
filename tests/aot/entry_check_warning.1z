@@ -1,0 +1,12 @@
+\ Under `type-check: "warning"` a compiled word's entry check warns once per mismatched parameter
+\ and the call continues.
+
+pragma{ type-check: "warning" }
+
+bump:     ( n: fixnum -- m )             [ 1 + ] ;
+both:     ( n: fixnum s: string -- n s ) [ ] ;
+via-bump: ( x -- y )                     [ bump 0 + ] ;
+via-both: ( x y -- n s )                 [ both ] ;
+
+"a" 7 via-both . .
+2.5 via-bump .

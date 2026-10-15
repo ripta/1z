@@ -1,0 +1,12 @@
+\ Under `type-check: "off"` a compiled word's entry check neither warns nor raises, and the call
+\ continues with what the interpreter would compute.
+
+pragma{ type-check: "off" }
+
+bump:     ( n: fixnum -- m )             [ 1 + ] ;
+both:     ( n: fixnum s: string -- n s ) [ ] ;
+via-bump: ( x -- y )                     [ bump 0 + ] ;
+via-both: ( x y -- n s )                 [ both ] ;
+
+"a" 7 via-both . .
+2.5 via-bump .

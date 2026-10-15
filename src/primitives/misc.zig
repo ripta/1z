@@ -11,7 +11,6 @@ const StatementProcessor = @import("../statement.zig").StatementProcessor;
 const parser_mod = @import("../parser.zig");
 
 const markers_mod = @import("markers.zig");
-const dispatch_helpers = @import("dispatch_helpers.zig");
 const helpers = @import("helpers.zig");
 const hooks = @import("hooks.zig");
 const protocols = @import("protocols.zig");
@@ -26,7 +25,6 @@ const callable_mod = @import("../callable.zig");
 const container_backing = @import("../container_backing.zig");
 const dict_mod = @import("../dictionary.zig");
 const may_define = @import("../may_define.zig");
-const primitives_root = @import("../primitives.zig");
 const embedded_stdlib = @import("../embedded_stdlib.zig");
 const LoadLock = @import("../load_lock.zig").LoadLock;
 const ModuleLoadRecord = @import("../module_load_record.zig").ModuleLoadRecord;
@@ -1025,96 +1023,6 @@ fn native1Array(ctx: *Context) anyerror!void {
     try helpers.pushAdoptedArray(ctx, alloc, arr);
 }
 
-const ResolverState = struct {
-    context: *Context,
-};
-
-fn hasQuotationParams(effect: stack_effect_mod.StackEffect) bool {
-    for (effect.inputs) |param| {
-        if (param.quotation_effect != null) return true;
-    }
-    return false;
-}
-
-fn hasNeverReturnsMarker(word_markers: []const *const value_mod.Marker) bool {
-    for (word_markers) |mk| {
-        if (markers_mod.isNeverReturnsMarker(mk)) return true;
-    }
-    return false;
-}
-
-fn resolveWordForDispatch(name: []const u8, user_data: *anyopaque) ?ir_codegen.ResolvedWord {
-    const state: *ResolverState = @ptrCast(@alignCast(user_data));
-    const ctx = state.context;
-    const callee = ctx.lookupWord(name) orelse return null;
-
-    // A definition owns its effect outright, parameters included, so both the address baked into
-    // compiled code and the param slices handed to `ResolvedWord` stay valid for as long as the
-    // definition does.
-    const effect_ptr: ?usize = if (callee.stack_effect) |eff|
-        (if (hasQuotationParams(eff.*)) @intFromPtr(eff) else null)
-    else
-        null;
-
-    const output_params: ?[]const stack_effect_mod.StackEffectParam =
-        if (callee.stack_effect) |eff| eff.outputs else null;
-    const input_params: ?[]const stack_effect_mod.StackEffectParam =
-        if (callee.stack_effect) |eff| eff.inputs else null;
-
-    switch (callee.action) {
-        // A literal has no instruction body (`ResolvedWord.body` stays null),
-        // so it resolves exactly like a bodiless compound word from this
-        // point on.
-        .compound, .literal => {},
-        .native => |func| {
-            const effect = callee.stack_effect orelse return null;
-            if (stack_effect_mod.hasAnyRowVariable(effect.*)) return null;
-            return ir_codegen.ResolvedWord{
-                .word_id = 0,
-                .input_count = @intCast(effect.inputs.len),
-                .output_count = @intCast(effect.outputs.len),
-                .is_native = true,
-                .native_fn_ptr = @intFromPtr(func),
-                .defines_word = primitives_root.nativeDefinesWord(func),
-                .stack_effect_ptr = effect_ptr,
-                .never_returns = hasNeverReturnsMarker(callee.markers),
-                .dispatch_id = callee.dispatch_id,
-                .output_params = output_params,
-                .input_params = input_params,
-            };
-        },
-        .host_callback => return null,
-    }
-
-    const effect = callee.stack_effect orelse return null;
-
-    const word_id = if (callee.word_id) |id| id else blk: {
-        const id = ctx.jit_dispatch.assignId(name) catch return null;
-        propagateWordId(ctx, name, id);
-        break :blk id;
-    };
-    if (ctx.jit_dispatch.getMut(word_id)) |em| {
-        if (em.stack_effect == null) em.stack_effect = callee.stack_effect;
-    }
-
-    const bounded = dispatch_helpers.boundedDispatchFor(effect, callee.markers, name);
-
-    return ir_codegen.ResolvedWord{
-        .word_id = word_id,
-        .input_count = @intCast(effect.inputs.len),
-        .output_count = @intCast(effect.outputs.len),
-        .stack_effect_ptr = effect_ptr,
-        .never_returns = hasNeverReturnsMarker(callee.markers),
-        .dispatch_id = callee.dispatch_id,
-        .bounded_constraint = if (bounded) |b| b.constraint else null,
-        .bounded_arity = if (bounded) |b| b.arity else .unary,
-        .bounded_trace_name = if (bounded) |b| ctx.boundedConstraintTraceName(b.constraint) else null,
-        .output_params = output_params,
-        .input_params = input_params,
-        .body = if (callee.action == .compound) callee.action.compound else null,
-    };
-}
-
 /// compile! ( sym -- )
 fn nativeCompile(ctx: *Context) anyerror!void {
     if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "compile!");
@@ -1173,44 +1081,6 @@ fn compileSingleWord(ctx: *Context, sym: []const u8) !void {
     if (ctx.benchmark) |bm| bm.recordJitCompile(std.time.nanoTimestamp() - before_ns);
 
     ctx.installCompiledBody(sym, word, instrs, body);
-}
-
-/// Write word_id to whichever scope lookupWord would find the word in:
-/// local frames (innermost first), then dictionary, then parent contexts.
-fn propagateWordId(ctx: *Context, name: []const u8, word_id: u32) void {
-    var i = ctx.local_frames.items.len;
-    while (i > 0) {
-        i -= 1;
-        if (ctx.local_frames.items[i].getPtr(name)) |entry| {
-            entry.word_id = word_id;
-            return;
-        }
-    }
-    if (ctx.dictionary.entries.get(name)) |slot| {
-        dict_mod.loadSlot(slot).word_id = word_id;
-        return;
-    }
-    var ancestor = ctx.parent_context;
-    while (ancestor) |anc| {
-        // Match `lookupWordLocked`'s bounded ancestor walk: a descendant only
-        // resolves an ancestor's stable scope (the durable floor and below),
-        // so back-writing a word_id into an ancestor's transient frame would
-        // land where resolution never looks.
-        const anc_cap = if (anc.durable_frame_floor) |idx| idx + 1 else 0;
-        var j = anc_cap;
-        while (j > 0) {
-            j -= 1;
-            if (anc.local_frames.items[j].getPtr(name)) |entry| {
-                entry.word_id = word_id;
-                return;
-            }
-        }
-        if (anc.dictionary.entries.get(name)) |slot| {
-            dict_mod.loadSlot(slot).word_id = word_id;
-            return;
-        }
-        ancestor = anc.parent_context;
-    }
 }
 
 /// The current execution's load-lock identity: the running task, or the main sentinel for

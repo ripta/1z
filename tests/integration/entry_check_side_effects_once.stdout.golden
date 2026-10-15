@@ -1,0 +1,30 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+=== the words run clean with the right types ===
+Stack: [ ]
+noisy ran
+PASS: fixnum through a non-tail call
+Stack: [ ]
+noisy-tail ran
+PASS: fixnum through a tail call
+Stack: [ ]
+2
+1
+Stack: [ ]
+=== a miss under off runs the callee once, interpreted ===
+Stack: [ ]
+noisy ran
+PASS: a float through a non-tail call
+Stack: [ ]
+noisy-tail ran
+PASS: a float through a tail call
+Stack: [ ]
+5
+4
+3
+2.5
+1.5
+0.5
+Stack: [ ]

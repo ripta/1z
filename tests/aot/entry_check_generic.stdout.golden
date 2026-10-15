@@ -1,0 +1,5 @@
+=== a well-typed argument reaches the default body ===
+PASS: the default body runs
+=== a mistyped argument raises before dispatch reaches a method ===
+<error type-error: type mismatch for parameter 'n': expected fixnum, got string [tests/integration/entry_check_generic.1z:8:describe]>
+<error type-error: type mismatch for parameter 'n': expected fixnum, got float [tests/integration/entry_check_generic.1z:8:describe]>

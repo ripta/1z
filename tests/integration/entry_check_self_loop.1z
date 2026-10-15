@@ -1,0 +1,27 @@
+\ A self-recursive word checks its typed input on every iteration, not only the first. Under
+\ --compile=eager the recursion is a compiled loop, whose back-edge must check as a call does.
+
+use "testing" ;
+
+\ Counts down by one, and hands a float back in on the step from 3.
+countdown: ( n: fixnum -- ) [
+  dup 0 = [ drop ] [
+    dup 3 = [ drop 2.5 ] [ 1 - ] if countdown
+  ] if
+] ;
+
+\ Builds a string down to empty, and hands a fixnum back in once it is two long.
+shorten: ( s: string -- ) [
+  dup #empty? [ drop ] [
+    dup #len 2 = [ drop 7 ] [ 1 #drop ] if shorten
+  ] if
+] ;
+
+"the loop runs clean with the right types" test-section
+2 countdown
+"a" shorten
+"loops finish" print-line
+
+"a later iteration reports the parameter" test-section
+[ 10 countdown ] [ . ] recover
+[ "abcde" shorten ] [ . ] recover

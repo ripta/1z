@@ -1,0 +1,39 @@
+\ A word's typed inputs are checked whichever path enters it. Under --compile=eager every word
+\ here compiles, so each call below is a compiled caller entering a compiled callee.
+
+use "testing" ;
+
+weight: virtual{ fixnum } ;
+
+bump:  ( n: fixnum -- m )    [ 1 + ] ;
+shout: ( s: string -- t )    [ "!" #append ] ;
+apply: ( q: quotation -- x ) [ call ] ;
+heft:  ( w: weight -- w )    [ ] ;
+
+via-bump:  ( x -- y ) [ bump 0 + ] ;
+via-shout: ( x -- y ) [ shout "" #append ] ;
+via-apply: ( x -- y ) [ apply 0 + ] ;
+via-heft:  ( x -- y ) [ heft 0 drop ] ;
+
+tail-bump:  ( x -- y ) [ 0 drop bump ] ;
+tail-shout: ( x -- y ) [ 0 drop shout ] ;
+tail-apply: ( x -- y ) [ 0 drop apply ] ;
+
+"a compiled caller passes the right types" test-section
+1 via-bump 2 "fixnum input" assert=
+"hi" via-shout "hi!" "string input" assert=
+[ 7 ] via-apply 7 "quotation input" assert=
+100 >weight via-heft unmake-weight 100 "user-type input" assert=
+1 tail-bump 2 "fixnum input in tail position" assert=
+
+"a non-tail call reports the callee's parameter" test-section
+[ 3.5 via-bump ] [ . ] recover
+[ "x" via-bump ] [ . ] recover
+[ 42 via-shout ] [ . ] recover
+[ 42 via-apply ] [ . ] recover
+[ 100 via-heft ] [ . ] recover
+
+"a tail call reports the callee's parameter" test-section
+[ 3.5 tail-bump ] [ . ] recover
+[ 42 tail-shout ] [ . ] recover
+[ 42 tail-apply ] [ . ] recover

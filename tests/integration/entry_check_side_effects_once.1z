@@ -1,0 +1,26 @@
+\ A callee whose entry check misses under `type-check: "off"` runs its interpreted body in place.
+\ The call never bails, so its compiled caller's side effects run once.
+\
+\ The words compile under the default mode, which lets `bump` narrow its input. The mode is relaxed
+\ only after that, so the miss happens at the call.
+
+use "testing" ;
+
+bump: ( n: fixnum -- m ) [ 1 + ] ;
+noisy: ( x -- y ) [ "noisy ran" print-line bump 0 + ] ;
+noisy-tail: ( x -- y ) [ "noisy-tail ran" print-line bump ] ;
+
+\ Steps down to zero, handing a float back in at 3. Each step prints once.
+steps: ( n: fixnum -- ) [ dup 0 <= [ drop ] [ dup . dup 3 = [ drop 2.5 ] [ 1 - ] if steps ] if ] ;
+
+"the words run clean with the right types" test-section
+1 noisy 2 "fixnum through a non-tail call" assert=
+1 noisy-tail 2 "fixnum through a tail call" assert=
+2 steps
+
+pragma{ type-check: "off" }
+
+"a miss under off runs the callee once, interpreted" test-section
+3.5 noisy 4.5 "a float through a non-tail call" assert=
+3.5 noisy-tail 4.5 "a float through a tail call" assert=
+5 steps

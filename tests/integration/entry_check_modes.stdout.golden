@@ -1,0 +1,70 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+=== warning: the call warns once per mismatched parameter, then continues ===
+Stack: [ ]
+<error type-mismatch: expected number, got string "x" data=H{ expected: "number" actual: <type:string> right: <type:fixnum> left: <type:string> } [tests/integration/entry_check_modes.1z:6:+ <- tests/integration/entry_check_modes.1z:11:bump <- tests/integration/entry_check_modes.1z:32:recover]>
+Stack: [ ]
+<error type-mismatch: expected sequence, got fixnum [tests/integration/entry_check_modes.1z:7:#append <- tests/integration/entry_check_modes.1z:12:shout <- tests/integration/entry_check_modes.1z:33:recover]>
+Stack: [ ]
+<error type-mismatch: expected quotation, got fixnum 42 data=H{ expected: "quotation" actual: <type:fixnum> } [tests/integration/entry_check_modes.1z:8:call <- tests/integration/entry_check_modes.1z:34:recover]>
+Stack: [ ]
+7
+"a"
+Stack: [ ]
+=== warning: a body that bails after its check does not warn again ===
+Stack: [ ]
+49999999999999999999
+Stack: [ ]
+=== warning: a self-loop iteration and a mutual hop warn, then continue ===
+Stack: [ ]
+5
+4
+3
+2.5
+1.5
+0.5
+Stack: [ ]
+<error type-mismatch: expected number, got string "four" data=H{ expected: "number" actual: <type:string> right: <type:fixnum> left: <type:string> } [tests/integration/entry_check_modes.1z:25:- <- tests/integration/entry_check_modes.1z:42:recover]>
+Stack: [ ]
+=== warning: a quotation-effect mismatch still raises ===
+Stack: [ ]
+<error stack-effect-mismatch: parameter 'q' expects ( n -- n ) but quotation leaves 1 extra value on the stack [tests/integration/entry_check_modes.1z:0:q]>
+Stack: [ ]
+=== off: the call continues without a warning ===
+Stack: [ ]
+<error type-mismatch: expected number, got string "x" data=H{ expected: "number" actual: <type:string> right: <type:fixnum> left: <type:string> } [tests/integration/entry_check_modes.1z:6:+ <- tests/integration/entry_check_modes.1z:11:bump <- tests/integration/entry_check_modes.1z:49:recover]>
+Stack: [ ]
+<error type-mismatch: expected quotation, got fixnum 42 data=H{ expected: "quotation" actual: <type:fixnum> } [tests/integration/entry_check_modes.1z:8:call <- tests/integration/entry_check_modes.1z:50:recover]>
+Stack: [ ]
+7
+"a"
+Stack: [ ]
+5
+4
+3
+2.5
+1.5
+0.5
+Stack: [ ]
+<error type-mismatch: expected number, got string "four" data=H{ expected: "number" actual: <type:string> right: <type:fixnum> left: <type:string> } [tests/integration/entry_check_modes.1z:25:- <- tests/integration/entry_check_modes.1z:53:recover]>
+Stack: [ ]
+=== off: a quotation-effect mismatch still raises ===
+Stack: [ ]
+<error stack-effect-mismatch: parameter 'q' expects ( n -- n ) but quotation leaves 1 extra value on the stack [tests/integration/entry_check_modes.1z:0:q]>
+Stack: [ ]
+=== error: the call raises again once the mode is back ===
+Stack: [ ]
+<error type-error: type mismatch for parameter 'n': expected fixnum, got float [tests/integration/entry_check_modes.1z:11:bump <- tests/integration/entry_check_modes.1z:60:recover]>
+Stack: [ ]

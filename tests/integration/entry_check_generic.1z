@@ -1,0 +1,15 @@
+\ A generic word's own annotations are checked before method dispatch, on every path. A compiled
+\ caller checks them at the call site, ahead of the dispatch.
+
+use "testing" ;
+
+describe: ( n: fixnum -- s ) generic [ drop "a fixnum" ] ;
+describe: method{ string } [ drop "a string" ] ;
+via-describe: ( x -- s ) [ describe "" #append ] ;
+
+"a well-typed argument reaches the default body" test-section
+5 via-describe "a fixnum" "the default body runs" assert=
+
+"a mistyped argument raises before dispatch reaches a method" test-section
+[ "x" via-describe ] [ . ] recover
+[ 2.5 via-describe ] [ . ] recover

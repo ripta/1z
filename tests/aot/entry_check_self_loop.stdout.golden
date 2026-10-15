@@ -1,0 +1,5 @@
+=== the loop runs clean with the right types ===
+loops finish
+=== a later iteration reports the parameter ===
+<error type-error: type mismatch for parameter 'n': expected fixnum, got float [tests/integration/entry_check_self_loop.1z:9:countdown]>
+<error type-error: type mismatch for parameter 's': expected string, got fixnum [tests/integration/entry_check_self_loop.1z:16:shorten]>
