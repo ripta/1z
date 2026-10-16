@@ -1,0 +1,20 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+=== under error a mistyped argument raises at entry ===
+Stack: [ ]
+PASS: a fixnum
+Stack: [ ]
+PASS: a float into a word compiled under off
+Stack: [ ]
+PASS: a float into a loop compiled under off
+Stack: [ ]
+PASS: a quotation into a binding compiled under off
+Stack: [ ]
+=== under off again a mistyped argument computes as it does interpreted ===
+Stack: [ ]
+PASS: a float reaches *
+Stack: [ ]
+PASS: a quotation defines a word the read calls
+Stack: [ ]

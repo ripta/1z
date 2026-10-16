@@ -1146,8 +1146,8 @@ pub const ResolvedWord = struct {
     /// narrowing. Read only at compile time; never baked into emitted code.
     output_params: ?[]const stack_effect_mod.StackEffectParam = null,
     /// The callee's declared input parameters, read at compile time by the
-    /// compound splicer to decline callees with annotated inputs, whose
-    /// call-path runtime validation a splice would skip.
+    /// compound splicer to decline callees with annotated or quotation-effect
+    /// inputs, whose entry check a splice would skip.
     input_params: ?[]const stack_effect_mod.StackEffectParam = null,
     /// The callee's compound instruction body, for the call-site compound
     /// splicer. Read only at compile time; never baked into emitted code.
@@ -1655,7 +1655,7 @@ fn emitOverrideMask(state: *CompileState, reachable: u64) c.ir_ref {
         return c._ir_LOAD(ctx, c.IR_U64, c.ir_const_addr(ctx, builtin_override.maskAddress()));
     }
 
-    if (state.builtin_override_guard) {
+    if (state.runs_new_code) {
         const sym = c.ir_const_func(ctx, c.ir_strl(ctx, builtin_override.symbol_name.ptr, builtin_override.symbol_name.len), 0);
         return c._ir_LOAD(ctx, c.IR_U64, sym);
     }
@@ -1668,7 +1668,7 @@ fn emitOverrideMask(state: *CompileState, reachable: u64) c.ir_ref {
 /// Whether a site must test the builtin-override mask at all, which is what sends it to the
 /// polymorphic path instead of a concrete one.
 fn siteTestsOverrides(state: *const CompileState, reachable: u64) bool {
-    if (!state.aot_mode or state.builtin_override_guard) return true;
+    if (!state.aot_mode or state.runs_new_code) return true;
     return builtin_override.load() & reachable != 0;
 }
 
@@ -2927,13 +2927,21 @@ const CompileState = struct {
     /// Codegen paths that would trade a speculative tag-check bail for a
     /// fallback-emitting one must keep the speculative path under the lock.
     fallbacks_locked: bool = false,
-    /// True for an AOT build whose program can register a method arm after the freeze, through
-    /// `eval-string` or a runtime `load`. Its inline numeric sites read the `builtin_override`
-    /// mask at runtime, as the JIT's do.
+    /// True for an AOT build whose program can run code the build never saw, through `eval-string`
+    /// or a runtime `load`. It can register a method arm after the freeze, so its inline numeric
+    /// sites read the `builtin_override` mask at runtime, as the JIT's do. It can also set its own
+    /// `type-check` mode, which its entry checks read.
     ///
-    /// Every other AOT build is a closed world, so the mask the freeze left is final and a site
-    /// tests it at build time instead.
-    builtin_override_guard: bool = false,
+    /// Every other AOT build is a closed world, so the mask and the mode the freeze left are final
+    /// and a site tests them at build time instead.
+    runs_new_code: bool = false,
+    /// True for an AOT build where an entry check can run a word's interpreted body in place: one
+    /// that carries the runtime image, which keeps the bodies such a check names, and that may call
+    /// the interpreter.
+    can_run_in_place: bool = false,
+    /// Whether this pass calls `aotRunInPlaceUnchecked`, so the build has to keep the word's
+    /// interpreted body.
+    runs_in_place: bool = false,
     /// The word's generic copy, which an AOT guard re-runs the current entry in instead of bailing.
     /// `IR_UNUSED` where this pass cannot restart, as in the generic copy itself.
     ///
@@ -2976,6 +2984,9 @@ const CompileState = struct {
     aot_entry_miss_fn: c.ir_ref = c.IR_UNUSED,
     aot_entry_effects_fn: c.ir_ref = c.IR_UNUSED,
     aot_entry_effects_baked_fn: c.ir_ref = c.IR_UNUSED,
+    /// `aotRunInPlaceUnchecked` through its static wrapper, or `IR_UNUSED` where the build
+    /// cannot run an interpreted body.
+    aot_run_in_place_fn: c.ir_ref = c.IR_UNUSED,
     /// The word's generic copy, which an AOT entry check runs the call in when an input the typed
     /// copy relies on misses. `IR_UNUSED` where the pass has none.
     generic_copy_fn: c.ir_ref = c.IR_UNUSED,
@@ -3137,8 +3148,8 @@ const CompileState = struct {
     live_spills: std.ArrayListUnmanaged(c.ir_ref) = .{},
     /// Inputs of the word whose own body is being compiled, or null when the body is not a word's.
     word_input_count: ?u8 = null,
-    /// Inputs, by index from the bottom, whose declared type the entry checks enforced.
-    value_binding_inputs_checked: u64 = 0,
+    /// Inputs, by index from the bottom, that `seedInferredParams` narrowed.
+    inferred_inputs_narrowed: u64 = 0,
     /// Whether a `;` in the compiled body binds into a frame the body opened itself. A word body
     /// that opens none, such as the entry body, defines into an enclosing durable frame, which the
     /// push-before-bind guard does not describe.
@@ -4274,11 +4285,11 @@ fn narrowableAnnotation(state: *CompileState, ann: stack_effect_mod.TypeAnnotati
     return null;
 }
 
-/// True when the `type-check` pragma relaxes annotation checking to `off` or
-/// `warning`. In either mode the interpreter lets a mistyped argument through,
-/// so the declared type is not guaranteed at runtime and narrowing (which
-/// trusts it) would be unsound. Mirrors the pragma read in
-/// `Context.validateTypeAnnotationsScoped`.
+/// True when the `type-check` pragma relaxes annotation checking to `off` or `warning`, under which
+/// the interpreter lets a mistyped argument through.
+///
+/// Only a build whose mode is final reads it to decide what to trust, since the mode at the call is
+/// what governs. Code that can run under a different mode trusts an entry check instead.
 pub fn typeCheckRelaxed(ctx: *const Context) bool {
     return ctx.typeCheckMode() != .err;
 }
@@ -4304,21 +4315,12 @@ fn seedNarrowedParams(state: *CompileState, stack: []StackEntry, input_count: us
 /// type annotation.
 ///
 /// A narrowed operand is consumed with no tag check, so the parameter's type
-/// must be guaranteed. That guarantee comes from a tag-check-or-error at entry
-/// in AOT mode and in any self-tail-call loop, and from the interpreter's or
-/// JIT dispatch's own entry-time validation otherwise (see `enforce` below).
+/// must be guaranteed. The entry check guarantees it: every input in
+/// `narrow_plan` is checked on every way into the code below, at the prologue
+/// and at each self-tail back-edge, and a miss leaves for a body that does not
+/// narrow it.
 fn seedAnnotatedParams(state: *CompileState, stack: []StackEntry, input_count: usize) void {
     const effect = state.stack_effect orelse return;
-
-    // AOT calls a compiled body directly with no annotation check in front of
-    // it, so an AOT body enforces its own declared types. A self-tail-call loop
-    // needs the same enforcement in every mode: the interpreter re-validates on
-    // each recursive call, but the compiled back-edge rewrites the parameter
-    // slots and jumps to the loop header, so nothing re-checks iterations past
-    // the first. A non-looping word is validated once at entry by interpreter
-    // and JIT dispatch, and its parameters are not rewritten, so its compiled
-    // body relies on that and skips the redundant check.
-    const enforce = state.aot_mode or state.loop_begin_ref != c.IR_UNUSED;
 
     for (effect.inputs, 0..) |param, i| {
         if (i >= input_count or i >= 64) break;
@@ -4328,34 +4330,20 @@ fn seedAnnotatedParams(state: *CompileState, stack: []StackEntry, input_count: u
         const kind = narrowableAnnotation(state, param.type_annotation.?).?;
 
         const slot_addr = liveSlotAddr(state, i);
-        switch (kind) {
-            .fixnum => {
-                if (enforce) emitTagCheckOrError(state, slot_addr, state.fixnum_tag_const, state.type_mismatch_error_fn);
-                stack[i] = .{ .i64_ref = emitUnboxI64(state.ctx, slot_addr, state.payload_offset_const) };
-            },
-            .float => {
-                if (enforce) emitTagCheckOrError(state, slot_addr, state.float_tag_const, state.type_mismatch_error_fn);
-                stack[i] = .{ .f64_ref = emitUnboxF64(state.ctx, slot_addr, state.payload_offset_const) };
-            },
-        }
+        stack[i] = switch (kind) {
+            .fixnum => .{ .i64_ref = emitUnboxI64(state.ctx, slot_addr, state.payload_offset_const) },
+            .float => .{ .f64_ref = emitUnboxF64(state.ctx, slot_addr, state.payload_offset_const) },
+        };
     }
 }
 
 /// The inputs `seedAnnotatedParams` will narrow, as a mask.
 ///
-/// `loops` and `row_aware_loop` describe the self-tail loop the body is about to get, since the
-/// plan is made before its header is built.
-fn planAnnotatedNarrowing(state: *CompileState, input_count: usize, loops: bool, row_aware_loop: bool) u64 {
+/// `row_aware_loop` describes the self-tail loop the body is about to get, since the plan is made
+/// before its header is built.
+fn planAnnotatedNarrowing(state: *CompileState, input_count: usize, row_aware_loop: bool) u64 {
     if (!state.rely_on_declarations or state.is_generic_copy or row_aware_loop) return 0;
     const effect = state.stack_effect orelse return 0;
-    const ictx = state.interp_ctx orelse return 0;
-
-    if (typeCheckRelaxed(ictx)) return 0;
-
-    // The enforcement path needs the hard-error callback to reject a mistyped argument; without it,
-    // narrowing would be unsound, so leave params opaque.
-    const enforce = state.aot_mode or loops;
-    if (enforce and state.type_mismatch_error_fn == c.IR_UNUSED) return 0;
 
     // A row variable among the inputs makes the input-index -> slot mapping ambiguous (the row
     // stands for a variable slot count), so narrow nothing.
@@ -4381,20 +4369,12 @@ fn planAnnotatedNarrowing(state: *CompileState, input_count: usize, loops: bool,
 ///
 /// Resolving the name mints the id, so a discovery pass, whose code is thrown away, takes a stand-in
 /// instead. A word whose body the discovery pass refuses then never gets an id from its compile.
-fn planReliedInputs(state: *CompileState, input_count: usize, loops: bool, row_aware_loop: bool, discovery: bool) void {
-    state.narrow_plan = planAnnotatedNarrowing(state, input_count, loops, row_aware_loop);
+fn planReliedInputs(state: *CompileState, input_count: usize, row_aware_loop: bool, discovery: bool) void {
+    state.narrow_plan = planAnnotatedNarrowing(state, input_count, row_aware_loop);
     state.value_binding_plan = planValueBindingReliance(state);
     if ((state.narrow_plan | state.value_binding_plan) == 0) return;
 
-    if (state.aot_mode) {
-        // A narrowed input that misses in a build that can relax its mode at runtime runs the
-        // generic copy. With no generic copy, the typed copy narrows nothing.
-        //
-        // A value-binding input keeps its proof either way. The value-binding entry check raises
-        // on a miss, as it did before entry checks, until that check folds into the entry check.
-        if (!aotModeIsClosed(state) and state.generic_copy_fn == c.IR_UNUSED) state.narrow_plan = 0;
-        return;
-    }
+    if (state.aot_mode) return planAotReliance(state);
 
     state.self_word_id = if (discovery) 0 else selfWordId(state);
     if (state.self_word_id == null) {
@@ -4402,6 +4382,28 @@ fn planReliedInputs(state: *CompileState, input_count: usize, loops: bool, row_a
         state.narrow_plan = 0;
         state.value_binding_plan = 0;
     }
+}
+
+/// Keep the AOT plans to the inputs whose miss the entry check has somewhere to send.
+///
+/// A build whose mode is final relies on declarations only under `error`. A miss there either
+/// raises, or is a value the interpreter accepts through its base type. Such a value binds as a
+/// value, but a narrowed input cannot unbox it, so that miss raises.
+///
+/// A build that can relax its mode at runtime runs a narrowed input's miss in the word's generic
+/// copy, and without one narrows nothing. It runs a value-binding input's miss in the word's
+/// interpreted body where the build keeps it, and raises otherwise when the value would define a
+/// word. See `emitAotReliedMiss`.
+fn planAotReliance(state: *CompileState) void {
+    if (aotModeIsClosed(state)) {
+        if (state.baked_type_check != .err) {
+            state.narrow_plan = 0;
+            state.value_binding_plan = 0;
+        }
+        if (state.type_mismatch_error_fn == c.IR_UNUSED) state.narrow_plan = 0;
+        return;
+    }
+    if (state.generic_copy_fn == c.IR_UNUSED) state.narrow_plan = 0;
 }
 
 /// The JIT id of the word being compiled, when its name resolves to the body being compiled.
@@ -4489,6 +4491,7 @@ fn seedInferredParams(state: *CompileState, stack: []StackEntry, input_count: us
                 stack[i] = .{ .f64_ref = emitUnboxF64(state.ctx, slot_addr, state.payload_offset_const) };
             },
         }
+        if (kind != .unknown and i < 64) state.inferred_inputs_narrowed |= @as(u64, 1) << @intCast(i);
     }
 }
 
@@ -4499,9 +4502,10 @@ fn seedInferredParams(state: *CompileState, stack: []StackEntry, input_count: us
 /// before the unbox; trusting a mistyped callee without one would be unsound. Skipped under a
 /// relaxed `type-check` pragma.
 ///
-/// Gated to the strict `--interpreter-fallback=false` build class, whose freeze rejects dynamic
-/// definition features, so no runtime redefinition can change a callee's return type out from
-/// under the baked annotation.
+/// Gated to the strict `--interpreter-fallback=false` build class with no way to run new code.
+/// Its freeze rejects dynamic definition features, so no runtime redefinition can change a
+/// callee's return type out from under the baked annotation, and its mode is the one it was built
+/// under.
 fn narrowAnnotatedOutputs(
     state: *CompileState,
     stack: []StackEntry,
@@ -4509,7 +4513,7 @@ fn narrowAnnotatedOutputs(
     resolved: ResolvedWord,
     effective_out: usize,
 ) void {
-    if (!state.aot_mode or !state.interpreter_free) return;
+    if (!state.aot_mode or !state.interpreter_free or state.runs_new_code) return;
     const outputs = resolved.output_params orelse return;
     const ictx = state.interp_ctx orelse return;
 
@@ -11356,8 +11360,7 @@ fn compileWordPass(
     state.word_input_count = input_count;
     state.binds_into_own_frame = needs_lexical_frame;
 
-    const loops = if (self_name) |sn| hasSelfTailCall(instructions, sn, .{}) else false;
-    planReliedInputs(&state, input_count, loops, row_aware_self_loop, known_peak == null);
+    planReliedInputs(&state, input_count, row_aware_self_loop, known_peak == null);
     try emitInputEntryCheck(&state, input_count, .prologue);
 
     // If this word contains a self-tail-call, wrap the body in a LOOP_BEGIN
@@ -11406,7 +11409,6 @@ fn compileWordPass(
     }
 
     seedNarrowedParams(&state, stack, input_count);
-    emitValueBindingEntryChecks(&state, stack);
 
     try compileInstructions(&state, instructions, stack, &sp);
 
@@ -11553,7 +11555,7 @@ pub fn emitWordCAot(
     freestanding: bool,
     fallbacks_locked: bool,
 ) (IrCodegenError || ir_mod.IrError || Allocator.Error)![]u8 {
-    return emitWordCAotWithCName(instructions, input_count, output_count, name, null, resolver, self_name, aot_compiled_names, callee_resolution, string_literals, quotation_literals, array_literals, allocator, stack_effect, inferred_param_types, reason_out, quotation_id_map, pic_table, interp_ctx, pic_stats_out, aot_fallback_emit_count_out, aot_fallback_report_out, slot_maps, emit_slot_table_literals, source_file, interpreter_free, freestanding, fallbacks_locked, false, false, null, null);
+    return emitWordCAotWithCName(instructions, input_count, output_count, name, null, resolver, self_name, aot_compiled_names, callee_resolution, string_literals, quotation_literals, array_literals, allocator, stack_effect, inferred_param_types, reason_out, quotation_id_map, pic_table, interp_ctx, pic_stats_out, aot_fallback_emit_count_out, aot_fallback_report_out, slot_maps, emit_slot_table_literals, source_file, interpreter_free, freestanding, fallbacks_locked, false, false, false, null, null, null);
 }
 
 /// Like emitWordCAot but with a pre-mangled C function name override.
@@ -11588,12 +11590,16 @@ fn emitWordCAotWithCName(
     interpreter_free: bool,
     freestanding: bool,
     fallbacks_locked: bool,
-    builtin_override_guard: bool,
+    runs_new_code: bool,
+    can_run_in_place: bool,
     needs_lexical_frame: bool,
     lexical_sites: ?*AotLexicalSiteTable,
     /// Receives the word's generic copy when the typed body restarts into one. Null turns
     /// versioning off, so every guard keeps the opaque merge.
     generic_out: ?*?[]u8,
+    /// Set when the emitted code runs the word's interpreted body in place, which the build then
+    /// has to keep.
+    runs_in_place_out: ?*bool,
 ) (IrCodegenError || ir_mod.IrError || Allocator.Error)![]u8 {
     const generic_c_name: ?[]u8 = if (generic_out == null)
         null
@@ -11608,7 +11614,7 @@ fn emitWordCAotWithCName(
 
     var reason: ?NotCompilable = null;
     var restart_target: ?[]const u8 = generic_c_name;
-    var discovered = emitWordCAotPass(instructions, input_count, output_count, name, c_name_override, resolver, self_name, aot_compiled_names, callee_resolution, string_literals, quotation_literals, array_literals, allocator, stack_effect, inferred_param_types, null, &reason, quotation_id_map, pic_table, interp_ctx, null, null, null, slot_maps, emit_slot_table_literals, source_file, interpreter_free, freestanding, fallbacks_locked, builtin_override_guard, false, needs_lexical_frame, null, restart_target) catch |err| {
+    var discovered = emitWordCAotPass(instructions, input_count, output_count, name, c_name_override, resolver, self_name, aot_compiled_names, callee_resolution, string_literals, quotation_literals, array_literals, allocator, stack_effect, inferred_param_types, null, &reason, quotation_id_map, pic_table, interp_ctx, null, null, null, slot_maps, emit_slot_table_literals, source_file, interpreter_free, freestanding, fallbacks_locked, runs_new_code, can_run_in_place, false, needs_lexical_frame, null, restart_target) catch |err| {
         if (reason_out) |ro| ro.* = reason;
         return err;
     };
@@ -11627,13 +11633,13 @@ fn emitWordCAotWithCName(
     var generic_discovered: EmitWordCAotPassResult = .{ .body = null, .peak_stack_depth = 0 };
     if (restart_target != null and discovered.restart_used) {
         var generic_reason: ?NotCompilable = null;
-        if (emitWordCAotPass(instructions, input_count, output_count, name, generic_c_name, resolver, self_name, aot_compiled_names, callee_resolution, string_literals, quotation_literals, array_literals, allocator, stack_effect, generic_param_types, null, &generic_reason, quotation_id_map, null, interp_ctx, null, null, null, slot_maps, emit_slot_table_literals, source_file, interpreter_free, freestanding, fallbacks_locked, builtin_override_guard, false, needs_lexical_frame, null, null)) |found| {
+        if (emitWordCAotPass(instructions, input_count, output_count, name, generic_c_name, resolver, self_name, aot_compiled_names, callee_resolution, string_literals, quotation_literals, array_literals, allocator, stack_effect, generic_param_types, null, &generic_reason, quotation_id_map, null, interp_ctx, null, null, null, slot_maps, emit_slot_table_literals, source_file, interpreter_free, freestanding, fallbacks_locked, runs_new_code, can_run_in_place, false, needs_lexical_frame, null, null)) |found| {
             if (found.body) |b| allocator.free(b);
             generic_discovered = found;
         } else |_| {
             restart_target = null;
             reason = null;
-            discovered = emitWordCAotPass(instructions, input_count, output_count, name, c_name_override, resolver, self_name, aot_compiled_names, callee_resolution, string_literals, quotation_literals, array_literals, allocator, stack_effect, inferred_param_types, null, &reason, quotation_id_map, pic_table, interp_ctx, null, null, null, slot_maps, emit_slot_table_literals, source_file, interpreter_free, freestanding, fallbacks_locked, builtin_override_guard, false, needs_lexical_frame, null, null) catch |err| {
+            discovered = emitWordCAotPass(instructions, input_count, output_count, name, c_name_override, resolver, self_name, aot_compiled_names, callee_resolution, string_literals, quotation_literals, array_literals, allocator, stack_effect, inferred_param_types, null, &reason, quotation_id_map, pic_table, interp_ctx, null, null, null, slot_maps, emit_slot_table_literals, source_file, interpreter_free, freestanding, fallbacks_locked, runs_new_code, can_run_in_place, false, needs_lexical_frame, null, null) catch |err| {
                 if (reason_out) |ro| ro.* = reason;
                 return err;
             };
@@ -11644,16 +11650,18 @@ fn emitWordCAotWithCName(
     }
 
     reason = null;
-    const result = emitWordCAotPass(instructions, input_count, output_count, name, c_name_override, resolver, self_name, aot_compiled_names, callee_resolution, string_literals, quotation_literals, array_literals, allocator, stack_effect, inferred_param_types, discovered.peak_stack_depth, &reason, quotation_id_map, pic_table, interp_ctx, pic_stats_out, aot_fallback_emit_count_out, aot_fallback_report_out, slot_maps, emit_slot_table_literals, source_file, interpreter_free, freestanding, fallbacks_locked, builtin_override_guard, discovered.row_aware_self_loop, needs_lexical_frame, lexical_sites, restart_target) catch |err| {
+    const result = emitWordCAotPass(instructions, input_count, output_count, name, c_name_override, resolver, self_name, aot_compiled_names, callee_resolution, string_literals, quotation_literals, array_literals, allocator, stack_effect, inferred_param_types, discovered.peak_stack_depth, &reason, quotation_id_map, pic_table, interp_ctx, pic_stats_out, aot_fallback_emit_count_out, aot_fallback_report_out, slot_maps, emit_slot_table_literals, source_file, interpreter_free, freestanding, fallbacks_locked, runs_new_code, can_run_in_place, discovered.row_aware_self_loop, needs_lexical_frame, lexical_sites, restart_target) catch |err| {
         if (reason_out) |ro| ro.* = reason;
         return err;
     };
     const body = result.body orelse return IrCodegenError.CompilationFailed;
     errdefer allocator.free(body);
+    if (runs_in_place_out) |out| out.* = result.runs_in_place;
 
     if (restart_target != null and result.restart_used) {
-        const generic = try emitWordCAotPass(instructions, input_count, output_count, name, generic_c_name, resolver, self_name, aot_compiled_names, callee_resolution, string_literals, quotation_literals, array_literals, allocator, stack_effect, generic_param_types, generic_discovered.peak_stack_depth, null, quotation_id_map, null, interp_ctx, null, aot_fallback_emit_count_out, aot_fallback_report_out, slot_maps, emit_slot_table_literals, source_file, interpreter_free, freestanding, fallbacks_locked, builtin_override_guard, generic_discovered.row_aware_self_loop, needs_lexical_frame, lexical_sites, null);
+        const generic = try emitWordCAotPass(instructions, input_count, output_count, name, generic_c_name, resolver, self_name, aot_compiled_names, callee_resolution, string_literals, quotation_literals, array_literals, allocator, stack_effect, generic_param_types, generic_discovered.peak_stack_depth, null, quotation_id_map, null, interp_ctx, null, aot_fallback_emit_count_out, aot_fallback_report_out, slot_maps, emit_slot_table_literals, source_file, interpreter_free, freestanding, fallbacks_locked, runs_new_code, can_run_in_place, generic_discovered.row_aware_self_loop, needs_lexical_frame, lexical_sites, null);
         generic_out.?.* = generic.body orelse return IrCodegenError.CompilationFailed;
+        if (runs_in_place_out) |out| out.* = out.* or generic.runs_in_place;
     }
     return body;
 }
@@ -11685,6 +11693,8 @@ const EmitWordCAotPassResult = struct {
     discovered_output: u8 = 0,
     /// Whether the body restarts the entry in the word's generic copy anywhere.
     restart_used: bool = false,
+    /// Whether the body runs the word's interpreted body in place anywhere.
+    runs_in_place: bool = false,
 };
 
 fn emitWordCAotPass(
@@ -11717,7 +11727,8 @@ fn emitWordCAotPass(
     interpreter_free: bool,
     freestanding: bool,
     fallbacks_locked: bool,
-    builtin_override_guard: bool,
+    runs_new_code: bool,
+    can_run_in_place: bool,
     row_aware_self_loop: bool,
     /// Bracket the whole body in a transient lexical frame, the way the interpreter's `call`
     /// brackets a quotation.
@@ -11941,6 +11952,10 @@ fn emitWordCAotPass(
         c.ir_const_func(&ctx, c.ir_str(&ctx, "onez_entry_param_effects_baked"), proto_5arg)
     else
         c.IR_UNUSED;
+    const aot_run_in_place_fn = if (can_run_in_place)
+        c.ir_const_func(&ctx, c.ir_str(&ctx, "onez_run_in_place"), proto_4arg)
+    else
+        c.IR_UNUSED;
     const generic_copy_fn = if (restart_target) |target|
         c.ir_const_func(&ctx, c.ir_strl(&ctx, target.ptr, target.len), proto_1arg)
     else
@@ -12093,6 +12108,7 @@ fn emitWordCAotPass(
         .aot_entry_miss_fn = aot_entry_miss_fn,
         .aot_entry_effects_fn = aot_entry_effects_fn,
         .aot_entry_effects_baked_fn = aot_entry_effects_baked_fn,
+        .aot_run_in_place_fn = aot_run_in_place_fn,
         .generic_copy_fn = generic_copy_fn,
         .is_generic_copy = is_generic_copy,
         .baked_type_check = if (interp_ctx_param) |ictx| ictx.typeCheckMode() else .err,
@@ -12103,7 +12119,8 @@ fn emitWordCAotPass(
         .interpreter_free = interpreter_free,
         .freestanding = freestanding,
         .fallbacks_locked = fallbacks_locked,
-        .builtin_override_guard = builtin_override_guard,
+        .runs_new_code = runs_new_code,
+        .can_run_in_place = can_run_in_place,
         .aot_compiled_names = aot_compiled_names,
         .aot_callee_resolution = callee_resolution,
         .aot_proto_1arg = proto_1arg,
@@ -12143,8 +12160,7 @@ fn emitWordCAotPass(
     state.word_input_count = input_count;
     state.binds_into_own_frame = needs_lexical_frame;
 
-    const loops = if (self_name) |sn| hasSelfTailCall(instructions, sn, callee_resolution) else false;
-    planReliedInputs(&state, input_count, loops, row_aware_self_loop, known_peak == null);
+    planReliedInputs(&state, input_count, row_aware_self_loop, known_peak == null);
     emitInputEntryCheck(&state, input_count, .prologue) catch |err| {
         if (err == IrCodegenError.NotCompilable) {
             if (nc_reason_out) |ro| ro.* = state.notCompilable();
@@ -12194,7 +12210,6 @@ fn emitWordCAotPass(
         };
     } else {
         seedNarrowedParams(&state, stack_buf, input_count);
-        emitValueBindingEntryChecks(&state, stack_buf);
         try armRestart(&state, restart_target, stack_buf[0..input_count], needs_lexical_frame or row_aware_self_loop);
 
         compileInstructions(&state, instructions, stack_buf, &sp) catch |err| {
@@ -12270,7 +12285,7 @@ fn emitWordCAotPass(
 
     // Discovery pass: skip C emission, let the caller re-run with the peak.
     if (known_peak == null) {
-        return .{ .body = null, .peak_stack_depth = state.peak_sp, .returns_row = returns_row, .row_aware_self_loop = state.row_aware_loop_detected, .discovered_output = discovered_output, .restart_used = state.restart_used };
+        return .{ .body = null, .peak_stack_depth = state.peak_sp, .returns_row = returns_row, .row_aware_self_loop = state.row_aware_loop_detected, .discovered_output = discovered_output, .restart_used = state.restart_used, .runs_in_place = state.runs_in_place };
     }
 
     // Build the source-lines side table for the patched `ir_emit_c.c` so
@@ -12303,7 +12318,7 @@ fn emitWordCAotPass(
     }
 
     const body = try ir_mod.emitC(&ctx, c_name.ptr, allocator, source_lines_ptr);
-    return .{ .body = body, .peak_stack_depth = state.peak_sp, .returns_row = returns_row, .row_aware_self_loop = state.row_aware_loop_detected, .discovered_output = discovered_output, .restart_used = state.restart_used };
+    return .{ .body = body, .peak_stack_depth = state.peak_sp, .returns_row = returns_row, .row_aware_self_loop = state.row_aware_loop_detected, .discovered_output = discovered_output, .restart_used = state.restart_used, .runs_in_place = state.runs_in_place };
 }
 
 /// Append an `asm("name")` declaration attribute to `out` so the C compiler renames the linker symbol
@@ -12427,6 +12442,82 @@ fn appendCStringLiteral(
 
 fn entryWordLessThan(_: void, a: EntryWordInput, b: EntryWordInput) bool {
     return std.mem.lessThan(u8, a.name, b.name);
+}
+
+/// Emit the interpreted body of each entry word in `keep`, parallel to the sorted seed tables, with
+/// a null row for every other word. An entry check runs a kept body in place, and the image keeps
+/// no entry word's body, since the entry file is not a module.
+///
+/// The bodies are image-encoded, so a literal slot-references the live runtime value and a nested
+/// quotation keeps its compiled code.
+fn emitEntryWordBodies(
+    out: *std.ArrayListUnmanaged(u8),
+    allocator: Allocator,
+    sorted_entry_words: []const EntryWordInput,
+    words: []const AotWordDesc,
+    keep: *const std.AutoHashMapUnmanaged(u32, void),
+    slot_maps: AotImageSlotMaps,
+    quotation_id_map: *const std.AutoHashMapUnmanaged(usize, u32),
+) (IrCodegenError || Allocator.Error)!void {
+    const encode_maps: ibc.SlotEncodingMaps = .{
+        .typevalue_slot_index = slot_maps.typevalue_slot_index,
+        .struct_type_slot_index = slot_maps.struct_type_slot_index,
+        .marker_slot_index = slot_maps.marker_slot_index,
+        .parameter_slot_index = slot_maps.parameter_slot_index,
+        .tagged_slot_index = slot_maps.tagged_slot_index,
+        .mutable_map_slot_index = slot_maps.mutable_map_slot_index,
+        .mutable_value_map_slot_index = slot_maps.mutable_value_map_slot_index,
+        .struct_instance_slot_index = slot_maps.struct_instance_slot_index,
+        .vector_slot_index = slot_maps.vector_slot_index,
+        .once_cell_slot_index = slot_maps.once_cell_slot_index,
+        .quotation_id_map = quotation_id_map,
+    };
+
+    const lens = try allocator.alloc(usize, sorted_entry_words.len);
+    defer allocator.free(lens);
+    @memset(lens, 0);
+
+    var num_buf: [64]u8 = undefined;
+    for (sorted_entry_words, 0..) |ew, i| {
+        const wid = ew.word_id orelse continue;
+        if (!keep.contains(wid)) continue;
+        const body = for (words) |w| {
+            if (w.word_id == wid) break w.instructions;
+        } else continue;
+
+        const bytes = ibc.serializeQuotationInstructionsForImage(body, null, allocator, &encode_maps, null) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            // As for a module word's body, an encoder that cannot represent a literal fails the
+            // build rather than leave the entry check with no body to run.
+            error.NotEncodable => return IrCodegenError.NotCompilable,
+        };
+        defer allocator.free(bytes);
+
+        try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "static const uint8_t onez_entry_word_body_{d}[] = {{", .{i}) catch unreachable);
+        for (bytes, 0..) |byte, bi| {
+            if (bi > 0) try out.append(allocator, ',');
+            try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{byte}) catch unreachable);
+        }
+        try out.appendSlice(allocator, "};\n");
+        lens[i] = bytes.len;
+    }
+
+    try out.appendSlice(allocator, "static const uint8_t *onez_entry_word_bodies[] = {\n");
+    for (lens, 0..) |len, i| {
+        if (len == 0) {
+            try out.appendSlice(allocator, "    NULL,\n");
+        } else {
+            try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "    onez_entry_word_body_{d},\n", .{i}) catch unreachable);
+        }
+    }
+    try out.appendSlice(allocator, "};\n");
+
+    try out.appendSlice(allocator, "static const uint32_t onez_entry_word_body_lens[] = {\n");
+    for (lens) |len| {
+        try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "    {d},\n", .{len}) catch unreachable);
+    }
+    try out.appendSlice(allocator, "};\n");
+    try out.appendSlice(allocator, "extern int onez_seed_entry_word_bodies(void *rt, const char **names, const uint8_t **bodies, const uint32_t *body_lens, uint32_t count);\n\n");
 }
 
 /// Source module breaks a name tie, so the emitted order is total rather than merely sorted.
@@ -12889,9 +12980,14 @@ pub fn emitProgramC(
     const fallbacks_locked = strict_interpreter_free and lock_interpreter_setting;
 
     // The freeze lets a build carrying the runtime image, or one that keeps the interpreter
-    // outright, run `eval-string` and `load`, so its program can register an arm the build never
-    // saw. Every other build is checked against the mask the freeze left.
-    const builtin_override_guard = !meta.freestanding and (interpreter_fallback == .true or emit_runtime_image);
+    // outright, run `eval-string` and `load`. Its program can register an arm the build never saw,
+    // and set its own `type-check` mode. Every other build is checked against the mask and the
+    // mode the freeze left.
+    const runs_new_code = !meta.freestanding and (interpreter_fallback == .true or emit_runtime_image);
+
+    // A build carrying the runtime image keeps the interpreted body of each word whose entry check
+    // may run it in place, and that check needs the interpreter.
+    const can_run_in_place = !meta.freestanding and emit_runtime_image and interpreter_fallback != .false and interp_ctx != null;
 
     var resolver_data = AotResolverData{ .map = &word_map, .returns_row_names = &returns_row_names };
     // Rebound per compiled body below; `bare` is program-wide and never changes.
@@ -13068,7 +13164,8 @@ pub fn emitProgramC(
                     strict_interpreter_free,
                     meta.freestanding,
                     fallbacks_locked,
-                    builtin_override_guard,
+                    runs_new_code,
+                    can_run_in_place,
                     false,
                     word_needs_frame[i],
                     null,
@@ -13131,8 +13228,10 @@ pub fn emitProgramC(
             strict_interpreter_free,
             meta.freestanding,
             fallbacks_locked,
-            builtin_override_guard,
+            runs_new_code,
+            can_run_in_place,
             word_needs_frame[i],
+            null,
             null,
             null,
         ) catch |err| {
@@ -13184,7 +13283,7 @@ pub fn emitProgramC(
                 var dreason: ?NotCompilable = null;
                 // No inferred types: the freeze-time pass sizes a quotation's table by its
                 // `inferred_effect`, and this branch runs precisely when it has none.
-                const dres = emitWordCAotPass(q.instructions, ic, 0, q.c_name, q.c_name, resolver, null, &compiled_names, resolver_data.callee_resolution, null, null, null, allocator, null, &.{}, null, &dreason, null, null, interp_ctx, null, null, null, slot_maps_ptr, emit_slot_table_literals, q.source_file, strict_interpreter_free, meta.freestanding, fallbacks_locked, builtin_override_guard, false, bracketed_quotation_ids.contains(q.quotation_id), null, null) catch {
+                const dres = emitWordCAotPass(q.instructions, ic, 0, q.c_name, q.c_name, resolver, null, &compiled_names, resolver_data.callee_resolution, null, null, null, allocator, null, &.{}, null, &dreason, null, null, interp_ctx, null, null, null, slot_maps_ptr, emit_slot_table_literals, q.source_file, strict_interpreter_free, meta.freestanding, fallbacks_locked, runs_new_code, can_run_in_place, false, bracketed_quotation_ids.contains(q.quotation_id), null, null) catch {
                     emitAotEffectTrace(interp_ctx, q.c_name, ic, null, dreason);
                     continue;
                 };
@@ -13227,8 +13326,10 @@ pub fn emitProgramC(
             strict_interpreter_free,
             meta.freestanding,
             fallbacks_locked,
-            builtin_override_guard,
+            runs_new_code,
+            can_run_in_place,
             bracketed_quotation_ids.contains(q.quotation_id),
+            null,
             null,
             null,
         ) catch {
@@ -13273,6 +13374,10 @@ pub fn emitProgramC(
     var actually_compiled: std.AutoHashMapUnmanaged(u32, void) = .{};
     defer actually_compiled.deinit(allocator);
 
+    // The words whose code runs their interpreted body in place, whose bodies the build keeps.
+    var runs_in_place_ids: std.AutoHashMapUnmanaged(u32, void) = .{};
+    defer runs_in_place_ids.deinit(allocator);
+
     var pic_stats = PicStats{};
     var aot_fallback_emit_count: u32 = 0;
     var aot_fallback_builder = AotFallbackReportBuilder.init(allocator);
@@ -13282,6 +13387,7 @@ pub fn emitProgramC(
         if (!compilable_names.contains(identities[i])) continue;
         resolver_data.callee_resolution.scope = scopeFor(&callee_scopes, identities[i]);
         var raw_generic: ?[]u8 = null;
+        var word_runs_in_place = false;
         const raw_body = emitWordCAotWithCName(
             w.instructions,
             w.input_count,
@@ -13311,10 +13417,12 @@ pub fn emitProgramC(
             strict_interpreter_free,
             meta.freestanding,
             fallbacks_locked,
-            builtin_override_guard,
+            runs_new_code,
+            can_run_in_place,
             word_needs_frame[i],
             &lexical_sites,
             &raw_generic,
+            &word_runs_in_place,
         ) catch |err| switch (err) {
             error.NotCompilable => continue,
             else => return err,
@@ -13328,6 +13436,7 @@ pub fn emitProgramC(
         } else null;
         try compiled_bodies.append(allocator, .{ .word_id = w.word_id, .body = body, .generic = generic });
         try actually_compiled.put(allocator, w.word_id, {});
+        if (word_runs_in_place) try runs_in_place_ids.put(allocator, w.word_id, {});
     }
 
     // Pass 2b: compile quotation bodies with the compilable set
@@ -13369,9 +13478,11 @@ pub fn emitProgramC(
             strict_interpreter_free,
             meta.freestanding,
             fallbacks_locked,
-            builtin_override_guard,
+            runs_new_code,
+            can_run_in_place,
             bracketed_quotation_ids.contains(q.quotation_id),
             &lexical_sites,
+            null,
             null,
         ) catch |err| switch (err) {
             error.NotCompilable => continue,
@@ -13484,7 +13595,9 @@ pub fn emitProgramC(
     // dispatch; forces the interpreter linked so the body has something to run
     // it (the body would otherwise be unreachable in an interpreter-free auto
     // build that emitted no other fallbacks).
-    var force_interpreter_linked = false;
+    //
+    // A word whose entry check runs its interpreted body in place forces it the same way.
+    var force_interpreter_linked = runs_in_place_ids.count() > 0;
 
     // NOTE(ripta): Strict codegen: quotation bodies with inferred effects must compile.
     //              Bodies without inferred effects (row-polymorphic, e.g., `[ call ]`
@@ -13736,7 +13849,7 @@ pub fn emitProgramC(
     try out.appendSlice(allocator, "extern int32_t jitGet(uintptr_t ctx);\n");
     try out.appendSlice(allocator, "extern int32_t jitPushLexicalFrame(uintptr_t ctx, uintptr_t owner);\n");
     try out.appendSlice(allocator, "extern const uint64_t onez_lexical_sites[];\n");
-    if (builtin_override_guard) {
+    if (runs_new_code) {
         try out.appendSlice(allocator, "extern uint64_t " ++ builtin_override.symbol_name ++ "[];\n");
     }
     try out.appendSlice(allocator, "static inline uintptr_t onez_lexical_site_tag(uintptr_t site) { return site ? (uintptr_t)&onez_lexical_sites[site - 1] : 0; }\n");
@@ -13782,6 +13895,10 @@ pub fn emitProgramC(
     try out.appendSlice(allocator, "static int32_t onez_entry_param_effects(uintptr_t ctx, uintptr_t word_id, const char *src, uintptr_t src_len) { return aotEntryParamEffects(ctx, word_id, (uintptr_t)src, src_len); }\n");
     try out.appendSlice(allocator, "extern int32_t aotEntryParamEffectsBaked(uintptr_t ctx, uintptr_t effect_ptr, uintptr_t effect_len, uintptr_t src_ptr, uintptr_t src_len);\n");
     try out.appendSlice(allocator, "static int32_t onez_entry_param_effects_baked(uintptr_t ctx, const char *effect, uintptr_t effect_len, const char *src, uintptr_t src_len) { return aotEntryParamEffectsBaked(ctx, (uintptr_t)effect, effect_len, (uintptr_t)src, src_len); }\n");
+    if (runs_in_place_ids.count() > 0) {
+        try out.appendSlice(allocator, "extern int32_t aotRunInPlaceUnchecked(uintptr_t ctx, uintptr_t word_id, uintptr_t src_ptr, uintptr_t src_len);\n");
+        try out.appendSlice(allocator, "static int32_t onez_run_in_place(uintptr_t ctx, uintptr_t word_id, const char *src, uintptr_t src_len) { return aotRunInPlaceUnchecked(ctx, word_id, (uintptr_t)src, src_len); }\n");
+    }
     try out.appendSlice(allocator, "extern int32_t jitPushString(uintptr_t ctx, uintptr_t str_ptr, uintptr_t str_len);\n");
     try out.appendSlice(allocator, "extern int32_t jitPushSymbol(uintptr_t ctx, uintptr_t str_ptr, uintptr_t str_len);\n");
     try out.appendSlice(allocator, "extern int32_t jitPushQuotation(uintptr_t ctx, uintptr_t data, uintptr_t len, uintptr_t dest, uintptr_t quotation_id, uintptr_t site);\n");
@@ -14060,6 +14177,8 @@ pub fn emitProgramC(
             try out.appendSlice(allocator, flags_str);
         }
         try out.appendSlice(allocator, "};\n\n");
+
+        if (runs_in_place_ids.count() > 0) try emitEntryWordBodies(&out, allocator, sorted_entry_words, words, &runs_in_place_ids, image_slot_maps.?, &quotation_id_map);
     }
 
     // 5b'''. Entry-import seed tables: the entry file's `use` imports, which the generated `main`
@@ -14657,6 +14776,20 @@ pub fn emitProgramC(
             \\    }
             \\
         );
+
+        // The kept bodies go onto the seeded bindings, after the image load patched the slot
+        // tables their literals name. A failed decode has rendered no 1z error either.
+        if (runs_in_place_ids.count() > 0) {
+            try out.appendSlice(allocator, "    if (onez_seed_entry_word_bodies(rt, onez_entry_word_names, onez_entry_word_bodies, onez_entry_word_body_lens, ");
+            try out.appendSlice(allocator, seed_count_str);
+            try out.appendSlice(allocator,
+                \\) != 0) {
+                \\        onez_deinit(rt);
+                \\        return 1;
+                \\    }
+                \\
+            );
+        }
     }
 
     // Register the baked base scope for the guards. A plain field store borrowing the static
@@ -15983,8 +16116,7 @@ const value_binding_type_names = [_][]const u8{
 fn provableInputs(state: *const CompileState) ?[]const stack_effect_mod.StackEffectParam {
     if (!state.rely_on_declarations) return null;
     const effect = state.stack_effect orelse return null;
-    const ictx = state.interp_ctx orelse return null;
-    if (typeCheckRelaxed(ictx)) return null;
+    if (state.interp_ctx == null) return null;
 
     const input_count = state.word_input_count orelse return null;
     if (effect.inputs.len != input_count or input_count > 64) return null;
@@ -16022,54 +16154,21 @@ fn declaresValueBinding(ictx: *const Context, param: stack_effect_mod.StackEffec
     return false;
 }
 
-/// Whether nothing ahead of the compiled body enforces its declared input types.
-///
-/// AOT calls a body with no annotation check in front of it. A self-tail loop rewrites the inputs
-/// and jumps to its header, and a mutual-group hop enters a member directly, so neither
-/// re-checks. Elsewhere interpreter and JIT dispatch validate at entry.
-fn inputDeclarationsUnenforced(state: *const CompileState) bool {
-    return state.aot_mode or state.loop_begin_ref != c.IR_UNUSED or state.mutual_group != null;
-}
-
 /// Whether input `depth` below the top at body entry is proven to bind as a value.
+///
+/// An input in `value_binding_plan` is proven by the entry check, which sends a miss on it to a
+/// body that does not rely on it. An input `seedInferredParams` narrowed is proven by the freeze's
+/// proof over the program's call sites.
 fn inputProven(state: *const CompileState, depth: usize) bool {
-    const inputs = provableInputs(state) orelse return false;
-    if (depth >= inputs.len) return false;
+    const input_count = state.word_input_count orelse return false;
+    if (depth >= input_count or input_count > 64) return false;
 
-    const k = inputs.len - 1 - depth;
-    if (inputDeclarationsUnenforced(state)) return (state.value_binding_inputs_checked >> @intCast(k)) & 1 == 1;
-    return declaresValueBinding(state.interp_ctx.?, inputs[k]);
+    const bit = @as(u64, 1) << @intCast(input_count - 1 - depth);
+    return (state.value_binding_plan | state.inferred_inputs_narrowed) & bit != 0;
 }
 
-/// Tag-check at entry each input whose declaration a park may rely on, where nothing ahead of the
-/// body enforces it. The check runs where the interpreter would reject the argument, before any of
-/// the body runs.
-///
-/// An input the seeders already narrowed to a number is proven by that and is not checked again.
-fn emitValueBindingEntryChecks(state: *CompileState, stack: []const StackEntry) void {
-    if (state.park_base == c.IR_UNUSED or !inputDeclarationsUnenforced(state)) return;
-    if (state.type_mismatch_error_fn == c.IR_UNUSED) return;
-    const inputs = provableInputs(state) orelse return;
-
-    for (inputs, 0..) |param, i| {
-        const bit = @as(u64, 1) << @intCast(i);
-        switch (stack[i]) {
-            .i64_ref, .f64_ref => state.value_binding_inputs_checked |= bit,
-            .raw_at_slot => |s| {
-                if (s != i or !declaresValueBinding(state.interp_ctx.?, param)) continue;
-                emitValueBindingCheck(state, liveSlotAddr(state, i));
-                state.value_binding_inputs_checked |= bit;
-            },
-            .bool_ref, .quotation_body, .row_region => {},
-        }
-    }
-}
-
-/// Raise a type mismatch when the value at `elem_addr` has a tag `;` would define a word from.
-///
-/// Only an input whose declared type rules those tags out is checked, so the interpreter would have
-/// rejected the same argument at entry.
-fn emitValueBindingCheck(state: *CompileState, elem_addr: c.ir_ref) void {
+/// A bool that is true when the value at `elem_addr` has a tag `;` would define a word from.
+fn emitDefiningTagTest(state: *CompileState, elem_addr: c.ir_ref) c.ir_ref {
     const ctx = state.ctx;
     const tag_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), elem_addr, state.tag_offset_const);
     const tag_val = c._ir_LOAD(ctx, ValueLayout.ir_tag_type, tag_addr);
@@ -16077,13 +16176,9 @@ fn emitValueBindingCheck(state: *CompileState, elem_addr: c.ir_ref) void {
     var defines: c.ir_ref = c.IR_UNUSED;
     for ([_]ValueLayout.TagType{ .quotation, .closure, .hash, .mutable_map }) |tag| {
         const is_tag = c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), tag_val, emitTagConst(ctx, tag));
-        defines = if (defines == c.IR_UNUSED) is_tag else c.ir_fold2(ctx, c.IR_OPT(c.IR_OR, c.IR_BOOL), defines, is_tag);
+        defines = orBool(ctx, defines, is_tag);
     }
-
-    const if_defines = c._ir_IF(ctx, defines);
-    c._ir_IF_TRUE_cold(ctx, if_defines);
-    emitErrorReturn(state, state.type_mismatch_error_fn);
-    c._ir_IF_FALSE(ctx, if_defines);
+    return defines;
 }
 
 /// Push a copy of park `index`, which is what reading its binding pushes.
@@ -16244,9 +16339,11 @@ fn emitAnnotationMiss(
 /// constraint by its runtime-image slot.
 ///
 /// A generic's compiled body is its default body, which every compiled call reaches through
-/// `emitGenericInputCheck`, so its prologue checks nothing.
+/// `emitGenericInputCheck`, so its prologue checks only what `emitAotGenericValueBindingGuard`
+/// describes.
 fn emitAotInputEntryCheck(state: *CompileState, input_count: usize, site: EntryCheckSite) IrCodegenError!void {
-    if (site == .prologue and (state.is_generic_copy or aotSelfIsGeneric(state))) return;
+    if (site == .prologue and state.is_generic_copy) return;
+    if (site == .prologue and aotSelfIsGeneric(state)) return emitAotGenericValueBindingGuard(state, input_count);
     const effect = state.stack_effect orelse return;
     if (state.interp_ctx == null or !effectHasCheckedInputs(effect)) return;
 
@@ -16256,8 +16353,53 @@ fn emitAotInputEntryCheck(state: *CompileState, input_count: usize, site: EntryC
 
     const concrete = effect.concreteInputCount();
     if (input_count < concrete) return state.refuse(.unchecked_input_in_aot, null);
-    const relied = state.narrow_plan | state.value_binding_plan;
+    const relied: ReliedInputs = .{ .narrowed = state.narrow_plan, .value_binding = state.value_binding_plan };
     try emitAotTypeChecks(state, effect.inputs, .{ .base = site.slotOffset() + input_count - concrete }, relied, false, .{ .entry = site });
+}
+
+/// Guard the inputs a generic's value-binding proofs rely on, where its compiled default body
+/// starts.
+///
+/// The call already checked the generic's annotations before dispatching and reported any miss.
+/// Where the program can relax its mode, that check can let a mistyped value through, which the
+/// body would read as the declared type. A miss here leaves as `emitAotReliedMiss` describes.
+fn emitAotGenericValueBindingGuard(state: *CompileState, input_count: usize) IrCodegenError!void {
+    if (aotModeIsClosed(state) or state.value_binding_plan == 0) return;
+    const effect = state.stack_effect orelse return;
+    const ictx = state.interp_ctx orelse return;
+    const ctx = state.ctx;
+
+    var checks: [max_entry_checks]AotEntryCheck = undefined;
+    var count: usize = 0;
+    var any_miss: c.ir_ref = c.IR_UNUSED;
+    for (effect.inputs, 0..) |param, i| {
+        if (i >= input_count or i >= 64) break;
+        if (state.value_binding_plan & (@as(u64, 1) << @intCast(i)) == 0) continue;
+
+        const spec = try aotAnnotationSpec(state, ictx, param.type_annotation.?, param.name) orelse continue;
+        const addr = liveSlotAddr(state, i);
+        const miss = if (spec.tag) |tag| blk: {
+            const tag_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), addr, state.tag_offset_const);
+            const tag_val = c._ir_LOAD(ctx, ValueLayout.ir_tag_type, tag_addr);
+            break :blk c.ir_fold2(ctx, c.IR_OPT(c.IR_NE, c.IR_BOOL), tag_val, emitTagConst(ctx, tag));
+        } else blk: {
+            const matched = c._ir_CALL_4(ctx, c.IR_I32, state.aot_entry_matches_fn, ctxValRef(state), c.ir_const_addr(ctx, spec.kind), c.ir_const_addr(ctx, spec.slot), addr);
+            break :blk c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), matched, c.ir_const_i32(ctx, 0));
+        };
+
+        checks[count] = .{ .miss = miss, .spec = spec, .name = param.name, .addr = addr, .value_binding = true };
+        count += 1;
+        any_miss = orBool(ctx, any_miss, miss);
+    }
+    if (any_miss == c.IR_UNUSED) return;
+
+    const if_miss = c._ir_IF(ctx, any_miss);
+    c._ir_IF_TRUE_cold(ctx, if_miss);
+    emitAotReliedMiss(state, checks[0..count], c.IR_UNUSED, any_miss, .prologue);
+    const end_miss = c._ir_END(ctx);
+    c._ir_IF_FALSE(ctx, if_miss);
+    const end_hit = c._ir_END(ctx);
+    c._ir_MERGE_2(ctx, end_miss, end_hit);
 }
 
 /// Check a generic word's own declared inputs at a compiled call site, before its dispatch, as the
@@ -16277,7 +16419,7 @@ fn emitGenericInputCheck(state: *CompileState, resolved: ResolvedWord, name: []c
             try emitAotEffectsCheck(state, resolved.word_id, effect, exit);
         }
         if (bodiless) return;
-        return emitAotTypeChecks(state, params, .stored_top, 0, resolved.bounded_constraint != null, exit);
+        return emitAotTypeChecks(state, params, .stored_top, .{}, resolved.bounded_constraint != null, exit);
     }
 
     const effect = resolved.declared_effect orelse return;
@@ -16370,11 +16512,18 @@ fn emitAotEffectsCheck(state: *CompileState, word_id: ?u32, effect: StackEffect,
     emitCheckExit(state, c._ir_CALL_N(ctx, c.IR_I32, state.aot_entry_effects_baked_fn, args.len, &args), exit);
 }
 
+/// The inputs a compiled body relies on its declarations for, one bit per input.
+const ReliedInputs = struct {
+    narrowed: u64 = 0,
+    value_binding: u64 = 0,
+};
+
 /// Check the type-annotated inputs among `params`, whose arguments sit at `slots`.
 ///
 /// The miss path reads the mode the running program sets, or the build's own where it sets none.
 ///
-/// At an entry, a miss on an input in `relied` runs the call in the word's generic copy instead.
+/// At an entry, a miss on an input in `relied` then leaves for a body that does not rely on it. See
+/// `emitAotReliedMiss`.
 ///
 /// A closed build cannot change its mode at runtime. It relies on declarations only under a strict
 /// build-time mode, and under `off` it checks nothing.
@@ -16382,7 +16531,7 @@ fn emitAotTypeChecks(
     state: *CompileState,
     params: []const stack_effect_mod.StackEffectParam,
     slots: ArgSlots,
-    relied: u64,
+    relied: ReliedInputs,
     skip_protocols: bool,
     exit: CheckExit,
 ) IrCodegenError!void {
@@ -16416,17 +16565,12 @@ fn emitAotTypeChecks(
         },
     };
 
-    const Check = struct {
-        miss: c.ir_ref,
-        spec: AotAnnotationSpec,
-        name: []const u8,
-        addr: c.ir_ref,
-    };
-    var checks: [max_entry_checks]Check = undefined;
+    var checks: [max_entry_checks]AotEntryCheck = undefined;
     var count: usize = 0;
 
     var any_miss: c.ir_ref = c.IR_UNUSED;
-    var relied_miss: c.ir_ref = c.IR_UNUSED;
+    var narrowed_miss: c.ir_ref = c.IR_UNUSED;
+    var value_binding_miss: c.ir_ref = c.IR_UNUSED;
     var k: usize = 0;
     for (params, 0..) |param, i| {
         if (param.is_row_variable) continue;
@@ -16448,10 +16592,13 @@ fn emitAotTypeChecks(
             break :blk c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), matched, c.ir_const_i32(ctx, 0));
         };
 
-        checks[count] = .{ .miss = miss, .spec = spec, .name = param.name, .addr = addr };
+        const bit: u64 = if (i < 64) @as(u64, 1) << @intCast(i) else 0;
+        const binds_value = relied.value_binding & bit != 0;
+        checks[count] = .{ .miss = miss, .spec = spec, .name = param.name, .addr = addr, .value_binding = binds_value };
         count += 1;
         any_miss = orBool(ctx, any_miss, miss);
-        if (i < 64 and (relied >> @intCast(i)) & 1 == 1) relied_miss = orBool(ctx, relied_miss, miss);
+        if (relied.narrowed & bit != 0) narrowed_miss = orBool(ctx, narrowed_miss, miss);
+        if (binds_value) value_binding_miss = orBool(ctx, value_binding_miss, miss);
     }
     if (any_miss == c.IR_UNUSED) return;
 
@@ -16461,33 +16608,19 @@ fn emitAotTypeChecks(
     const if_miss = c._ir_IF(ctx, any_miss);
     c._ir_IF_TRUE_cold(ctx, if_miss);
     {
-        const ctx_val = ctxValRef(state);
         for (checks[0..count]) |check| {
             const if_this = c._ir_IF(ctx, check.miss);
             c._ir_IF_TRUE(ctx, if_this);
-            var args = [_]c.ir_ref{
-                ctx_val,
-                c.ir_const_addr(ctx, check.spec.kind),
-                c.ir_const_addr(ctx, check.spec.slot),
-                emitStringLiteralPtr(state, check.name),
-                c.ir_const_addr(ctx, check.name.len),
-                check.addr,
-                c.ir_const_addr(ctx, mode_arg),
-            };
-            emitCheckExit(state, c._ir_CALL_N(ctx, c.IR_I32, state.aot_entry_miss_fn, args.len, &args), exit);
+            emitCheckExit(state, emitAotMissCall(state, check, mode_arg), exit);
             const end_this = c._ir_END(ctx);
             c._ir_IF_FALSE(ctx, if_this);
             const end_skip = c._ir_END(ctx);
             c._ir_MERGE_2(ctx, end_this, end_skip);
         }
 
-        if (relied_miss != c.IR_UNUSED and !closed and state.generic_copy_fn != c.IR_UNUSED and exit == .entry) {
-            const if_relied = c._ir_IF(ctx, relied_miss);
-            c._ir_IF_TRUE_cold(ctx, if_relied);
-            state.restart_used = true;
-            const status = c._ir_CALL_1(ctx, c.IR_I32, state.generic_copy_fn, state.jit_ctx_ptr);
-            c._ir_RETURN(ctx, status);
-            c._ir_IF_FALSE(ctx, if_relied);
+        switch (exit) {
+            .entry => |site| emitAotReliedMiss(state, checks[0..count], narrowed_miss, value_binding_miss, site),
+            .call_site => {},
         }
     }
     const end_miss = c._ir_END(ctx);
@@ -16497,6 +16630,99 @@ fn emitAotTypeChecks(
     c._ir_MERGE_2(ctx, end_miss, end_hit);
 }
 
+/// One annotated input an AOT check tests.
+const AotEntryCheck = struct {
+    /// True when the argument misses the annotation's inline test or call.
+    miss: c.ir_ref,
+    spec: AotAnnotationSpec,
+    name: []const u8,
+    addr: c.ir_ref,
+    /// Whether the body's value-binding proofs rely on this input.
+    value_binding: bool,
+};
+
+/// Run the miss check for `check` under `mode_arg`, which renders the interpreter's diagnostics and
+/// returns non-zero when it raised.
+fn emitAotMissCall(state: *CompileState, check: AotEntryCheck, mode_arg: usize) c.ir_ref {
+    const ctx = state.ctx;
+    var args = [_]c.ir_ref{
+        ctxValRef(state),
+        c.ir_const_addr(ctx, check.spec.kind),
+        c.ir_const_addr(ctx, check.spec.slot),
+        emitStringLiteralPtr(state, check.name),
+        c.ir_const_addr(ctx, check.name.len),
+        check.addr,
+        c.ir_const_addr(ctx, mode_arg),
+    };
+    return c._ir_CALL_N(ctx, c.IR_I32, state.aot_entry_miss_fn, args.len, &args);
+}
+
+/// Leave an entry whose relied-on input missed, once the miss checks let the call continue.
+///
+/// A value-binding input that missed runs the word's interpreted body in place, where the build
+/// keeps it. Without one, a value `;` would define a word from raises the interpreter's `error`
+/// mismatch, since a compiled read of the binding would push the value where the interpreter's
+/// calls it. Any other value binds as a value, so the call continues. A closed build relies on
+/// these inputs only under `error`, whose miss check already raised on such a value.
+///
+/// A narrowed input that missed runs the call in the word's generic copy. A closed build runs none
+/// and raises, since its miss check accepted a value through its base type, which the body cannot
+/// unbox.
+///
+/// Neither path bails, since a bail would re-run every compiled caller above it.
+fn emitAotReliedMiss(
+    state: *CompileState,
+    checks: []const AotEntryCheck,
+    narrowed_miss: c.ir_ref,
+    value_binding_miss: c.ir_ref,
+    site: EntryCheckSite,
+) void {
+    const ctx = state.ctx;
+    const closed = aotModeIsClosed(state);
+
+    if (value_binding_miss != c.IR_UNUSED and !closed) {
+        const in_place_id: ?u32 = if (state.aot_run_in_place_fn != c.IR_UNUSED) aotSelfWordId(state) else null;
+        if (in_place_id) |id| {
+            const if_missed = c._ir_IF(ctx, value_binding_miss);
+            c._ir_IF_TRUE_cold(ctx, if_missed);
+            state.runs_in_place = true;
+            const src = emitTraceSourceArgs(state);
+            const status = c._ir_CALL_4(ctx, c.IR_I32, state.aot_run_in_place_fn, ctxValRef(state), c.ir_const_addr(ctx, id), src.ptr, src.len);
+            c._ir_RETURN(ctx, status);
+            c._ir_IF_FALSE(ctx, if_missed);
+        } else {
+            for (checks) |check| {
+                if (!check.value_binding) continue;
+                const defines = c.ir_fold2(ctx, c.IR_OPT(c.IR_AND, c.IR_BOOL), check.miss, emitDefiningTagTest(state, check.addr));
+                const if_defines = c._ir_IF(ctx, defines);
+                c._ir_IF_TRUE_cold(ctx, if_defines);
+                emitEntryCheckExit(state, emitAotMissCall(state, check, @intFromEnum(TypeCheckMode.err)), site);
+                const end_raise = c._ir_END(ctx);
+                c._ir_IF_FALSE(ctx, if_defines);
+                const end_skip = c._ir_END(ctx);
+                c._ir_MERGE_2(ctx, end_raise, end_skip);
+            }
+        }
+    }
+
+    if (narrowed_miss != c.IR_UNUSED) {
+        const if_missed = c._ir_IF(ctx, narrowed_miss);
+        c._ir_IF_TRUE_cold(ctx, if_missed);
+        if (closed) {
+            emitEntryCheckExit(state, c._ir_CALL_1(ctx, c.IR_I32, state.type_mismatch_error_fn, ctxValRef(state)), site);
+            const end_raise = c._ir_END(ctx);
+            c._ir_IF_FALSE(ctx, if_missed);
+            const end_hit = c._ir_END(ctx);
+            c._ir_MERGE_2(ctx, end_raise, end_hit);
+        } else {
+            state.restart_used = true;
+            const status = c._ir_CALL_1(ctx, c.IR_I32, state.generic_copy_fn, state.jit_ctx_ptr);
+            c._ir_RETURN(ctx, status);
+            c._ir_IF_FALSE(ctx, if_missed);
+        }
+    }
+}
+
 /// The most declared inputs an AOT entry check covers. A word with more refuses.
 const max_entry_checks = 64;
 
@@ -16504,9 +16730,10 @@ const max_entry_checks = 64;
 /// setting, when it has one, outranks the build's.
 const aot_mode_overridable: usize = 0x100;
 
-/// Whether an AOT build has no interpreter to change the `type-check` mode at runtime.
+/// Whether an AOT build's `type-check` mode is the one it was built under, because its program
+/// cannot run code that sets another.
 fn aotModeIsClosed(state: *const CompileState) bool {
-    return state.interpreter_free or state.freestanding;
+    return !state.runs_new_code;
 }
 
 /// How an AOT entry check names an annotation at runtime: `kind` 0 is a builtin type by its tag, 1
@@ -17775,6 +18002,43 @@ export fn jitRunInPlaceUnchecked(ctx_raw: usize, word_id_raw: usize) callconv(.c
     ctx.tail_call_compiled = false;
     ctx.tail_call_arm = false;
     return pending_tail_status;
+}
+
+/// ( -- ) Run word `word_id_raw`'s interpreted body in place of its AOT-compiled one, whose entry
+/// check found an input a value-binding proof relies on mistyped. The call's inputs are already
+/// validated.
+///
+/// No AOT function's caller receives `pending_tail_status`, so unlike `jitRunInPlaceUnchecked` this
+/// runs the body itself, nested under a frame of its own, as a non-tail fallback call does. The
+/// call that entered the compiled body already accounts for the word's row, so a raise drops that
+/// frame without pending it. The body's own rows name the compiled body's source, which a seeded
+/// entry word does not carry.
+export fn aotRunInPlaceUnchecked(ctx_raw: usize, word_id_raw: usize, src_ptr_raw: usize, src_len_raw: usize) callconv(.c) i32 {
+    const ctx: *Context = @ptrFromInt(ctx_raw);
+    const entry = jitWordEntryFor(ctx, @intCast(word_id_raw)) orelse return setJitError(ctx_raw, error.UnknownWord);
+    const word = resolveEntryWord(ctx, entry, entry.word_name) orelse return setJitError(ctx_raw, error.UnknownWord);
+    const body = switch (word.action) {
+        .compound => |instrs| instrs,
+        .native, .host_callback, .literal => return setJitError(ctx_raw, error.UnknownWord),
+    };
+    const display_name = entry.displayName();
+
+    const saved_source = ctx.current_source;
+    defer ctx.current_source = saved_source;
+    ctx.current_source = word.source_file orelse ctx.traceFrameSource(src_ptr_raw, src_len_raw);
+
+    ctx.pushCallFrame(display_name, ctx.current_source, 0, 0, word.stack_effect);
+    const result = if (word.source_module) |mod| blk: {
+        ctx.pushModuleDepsFrame(mod) catch |e| break :blk @as(anyerror!void, e);
+        defer ctx.popModuleDepsFrameTraced(mod);
+        break :blk ctx.executeQuotationWithPic(.{ .instructions = body }, entry.pic_snapshot, mod, word.body_owner, word.exec_flags.may_define);
+    } else ctx.executeQuotationWithPic(.{ .instructions = body }, entry.pic_snapshot, null, word.body_owner, word.exec_flags.may_define);
+
+    result catch |err| {
+        ctx.popCallFrame();
+        return setJitError(ctx_raw, err);
+    };
+    return finishFallbackCall(ctx, display_name, result, false, false, null, word.stack_effect);
 }
 
 /// Queue a tail-called word's row at its caller, but only for a raise from that word's entry check.
@@ -24164,7 +24428,7 @@ test "emitWordCAotPass reports discovered_output as the body's final depth" {
     const dup_instrs = [_]Instruction{
         .{ .op = .{ .call_word = "dup" }, .line = 1 },
     };
-    const dup_res = try emitWordCAotPass(&dup_instrs, 1, 2, "q", "q", null, null, &compiled_names, .{}, null, null, null, testing.allocator, null, &.{}, null, &reason, null, null, null, null, null, null, null, false, null, false, false, false, false, false, false, null, null);
+    const dup_res = try emitWordCAotPass(&dup_instrs, 1, 2, "q", "q", null, null, &compiled_names, .{}, null, null, null, testing.allocator, null, &.{}, null, &reason, null, null, null, null, null, null, null, false, null, false, false, false, false, false, false, false, null, null);
     if (dup_res.body) |b| testing.allocator.free(b);
     try testing.expectEqual(@as(u8, 2), dup_res.discovered_output);
 
@@ -24172,7 +24436,7 @@ test "emitWordCAotPass reports discovered_output as the body's final depth" {
     const drop_instrs = [_]Instruction{
         .{ .op = .{ .call_word = "drop" }, .line = 1 },
     };
-    const drop_res = try emitWordCAotPass(&drop_instrs, 1, 0, "q", "q", null, null, &compiled_names, .{}, null, null, null, testing.allocator, null, &.{}, null, &reason, null, null, null, null, null, null, null, false, null, false, false, false, false, false, false, null, null);
+    const drop_res = try emitWordCAotPass(&drop_instrs, 1, 0, "q", "q", null, null, &compiled_names, .{}, null, null, null, testing.allocator, null, &.{}, null, &reason, null, null, null, null, null, null, null, false, null, false, false, false, false, false, false, false, null, null);
     if (drop_res.body) |b| testing.allocator.free(b);
     try testing.expectEqual(@as(u8, 0), drop_res.discovered_output);
 }
@@ -24554,7 +24818,7 @@ test "an AOT word that narrows a typed input runs its generic copy when that inp
     defer literals.deinit();
 
     var generic: ?[]u8 = null;
-    const source = try emitWordCAotWithCName(&instrs, 1, 1, "bump", null, arith_test_resolver, null, &compiled_names, .{}, &literals, null, null, testing.allocator, &effect, &.{}, null, null, null, &ctx, null, null, null, null, false, null, false, false, false, false, false, null, &generic);
+    const source = try emitWordCAotWithCName(&instrs, 1, 1, "bump", null, arith_test_resolver, null, &compiled_names, .{}, &literals, null, null, testing.allocator, &effect, &.{}, null, null, null, &ctx, null, null, null, null, false, null, false, false, false, false, false, false, null, &generic, null);
     defer testing.allocator.free(source);
     defer if (generic) |g| testing.allocator.free(g);
 
@@ -24563,6 +24827,105 @@ test "an AOT word that narrows a typed input runs its generic copy when that inp
     try testing.expect(generic != null);
     try testing.expect(std.mem.indexOf(u8, source, "onez_g_bump(") != null);
     try testing.expect(std.mem.indexOf(u8, generic.?, "onez_entry_param_miss(") == null);
+}
+
+/// Emit AOT C for `bump: ( n: fixnum -- m ) [ 1 + ]` built under a relaxed `type-check`, with or
+/// without a way for the program to run new code.
+fn emitRelaxedBumpForTest(runs_new_code: bool, generic: *?[]u8) ![]u8 {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+    try ctx.pushPragmaFrame();
+    try ctx.setPragma("type-check", value_mod.stringValue("off"));
+
+    const inputs = [_]stack_effect_mod.StackEffectParam{.{ .name = "n", .type_annotation = .{ .type = ctx.lookupBuiltinTypeValue("fixnum").? } }};
+    const outputs = [_]stack_effect_mod.StackEffectParam{.{ .name = "m" }};
+    const effect = StackEffect{ .inputs = &inputs, .outputs = &outputs };
+
+    const instrs = makeInstructions(.{ 1, "+" });
+    var compiled_names: std.StringHashMapUnmanaged(u32) = .{};
+    defer compiled_names.deinit(testing.allocator);
+    var literals: AotStringLiteralTable = .{};
+    defer literals.deinit();
+
+    return emitWordCAotWithCName(&instrs, 1, 1, "bump", null, arith_test_resolver, null, &compiled_names, .{}, &literals, null, null, testing.allocator, &effect, &.{}, null, null, null, &ctx, null, null, null, null, false, null, false, false, false, runs_new_code, false, false, null, generic, null);
+}
+
+test "an AOT build that can run new code narrows a typed input whatever mode it was built under" {
+    var generic: ?[]u8 = null;
+    const source = try emitRelaxedBumpForTest(true, &generic);
+    defer testing.allocator.free(source);
+    defer if (generic) |g| testing.allocator.free(g);
+
+    // The program can set its own mode, so the build's relaxed one decides nothing. The entry check
+    // guards the narrowed input and sends a miss to the generic copy.
+    try testing.expect(generic != null);
+    try testing.expect(std.mem.indexOf(u8, source, "onez_g_bump(") != null);
+}
+
+test "a closed AOT build relaxed at build time narrows nothing" {
+    var generic: ?[]u8 = null;
+    const source = try emitRelaxedBumpForTest(false, &generic);
+    defer testing.allocator.free(source);
+    defer if (generic) |g| testing.allocator.free(g);
+
+    try testing.expect(generic == null);
+    try testing.expect(std.mem.indexOf(u8, source, "onez_g_bump(") == null);
+}
+
+/// Resolve `;` as the defining native and `greet` as the word under test, which the entry check
+/// names by its id.
+fn resolveGreetForTest(name: []const u8, user_data: *anyopaque) ?ResolvedWord {
+    if (std.mem.eql(u8, name, "greet")) return .{ .word_id = 5, .input_count = 1, .output_count = 1 };
+    return resolveDefineFamilyForTest(name, user_data);
+}
+
+const greet_test_resolver = WordResolver{
+    .resolve = &resolveGreetForTest,
+    .user_data = @ptrCast(&define_family_resolver_dummy),
+    .dispatch_table_ptr = @ptrCast(&define_family_resolver_dummy),
+};
+
+/// Emit AOT C for `greet: ( s: string -- s ) [ held: swap ; held ]`, a read the park proves from
+/// the input's declaration, in a build that can run new code.
+fn emitGreetForTest(can_run_in_place: bool, runs_in_place: *bool) ![]u8 {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    const inputs = [_]stack_effect_mod.StackEffectParam{.{ .name = "s", .type_annotation = .{ .type = ctx.lookupBuiltinTypeValue("string").? } }};
+    const outputs = [_]stack_effect_mod.StackEffectParam{.{ .name = "s" }};
+    const effect = StackEffect{ .inputs = &inputs, .outputs = &outputs };
+
+    const body = [_]Instruction{ symbolInstr("held"), callInstr("swap"), callInstr(";"), callInstr("held") };
+    var compiled_names: std.StringHashMapUnmanaged(u32) = .{};
+    defer compiled_names.deinit(testing.allocator);
+    var literals: AotStringLiteralTable = .{};
+    defer literals.deinit();
+
+    var generic: ?[]u8 = null;
+    defer if (generic) |g| testing.allocator.free(g);
+    return emitWordCAotWithCName(&body, 1, 1, "greet", null, greet_test_resolver, "greet", &compiled_names, .{}, &literals, null, null, testing.allocator, &effect, &.{}, null, null, null, &ctx, null, null, null, null, false, null, false, false, false, true, can_run_in_place, true, null, &generic, runs_in_place);
+}
+
+test "a value-binding input that misses runs the word's interpreted body where the build keeps it" {
+    var runs_in_place = false;
+    const source = try emitGreetForTest(true, &runs_in_place);
+    defer testing.allocator.free(source);
+
+    try testing.expect(runs_in_place);
+    try testing.expect(std.mem.indexOf(u8, source, "onez_run_in_place(") != null);
+    try testing.expect(std.mem.indexOf(u8, source, "onez_g_greet(") == null);
+}
+
+test "a value-binding input that misses raises on a defining value where the build keeps no body" {
+    var runs_in_place = false;
+    const source = try emitGreetForTest(false, &runs_in_place);
+    defer testing.allocator.free(source);
+
+    // The miss check runs once under the program's mode, and once more under `error` for a value
+    // that would define a word.
+    try testing.expect(!runs_in_place);
+    try testing.expect(std.mem.indexOf(u8, source, "onez_run_in_place(") == null);
+    try testing.expectEqual(@as(usize, 2), countOccurrences(source, "onez_entry_param_miss("));
 }
 
 test "jitEntryTypeMiss raises under error and marks the raise until the next queued frame" {
@@ -24868,7 +25231,9 @@ fn emitQuotationBodyForTest(ctx: *const Context, body: []const Instruction) ![]u
         false,
         false,
         false,
+        false,
         needs_frame,
+        null,
         null,
         null,
     );
@@ -24970,7 +25335,9 @@ fn emitParkWordForTest(body: []const Instruction, framed: bool) ![]u8 {
         false,
         false,
         false,
+        false,
         framed,
+        null,
         null,
         null,
     );

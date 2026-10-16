@@ -1,0 +1,27 @@
+\ A build that may not call the interpreter but carries the runtime image can still run
+\ `eval-string`, so its program can relax the mode. A narrowed input that misses then runs the word's
+\ generic copy, as in any build that runs new code.
+\
+\ With no interpreter to run a body in place, a value-binding input that misses with a value `;`
+\ would define a word from raises the interpreter's `error` mismatch instead.
+
+bump: ( n: fixnum -- m ) [ 1 + ] ;
+noisy: ( x -- y ) [ "noisy ran" print-line bump 0 + ] ;
+
+greet: ( s: string -- t ) [
+  held: swap ;
+  held held #append
+] ;
+
+greet-all: generic ( s: string -- t ) [
+  held: swap ;
+  held held #append
+] ;
+
+1 noisy .
+"ab" greet .
+"ab" greet-all .
+"pragma{ type-check: \"off\" } 3.5 noisy ." eval-string
+"pragma{ type-check: \"off\" } [ [ \"q\" ] greet . ] [ error-type: @get . ] recover" eval-string
+"pragma{ type-check: \"off\" } [ 7 greet ] [ error-type: @get . ] recover" eval-string
+"pragma{ type-check: \"off\" } [ [ \"q\" ] greet-all . ] [ error-type: @get . ] recover" eval-string

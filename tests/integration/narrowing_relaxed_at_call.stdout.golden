@@ -1,0 +1,17 @@
+Stack: [ ]
+Stack: [ ]
+=== the words run clean with the right types ===
+Stack: [ ]
+Stack: [ ]
+PASS: a fixnum
+Stack: [ ]
+PASS: a fixnum loop
+Stack: [ ]
+=== a mistyped argument under off computes as it does interpreted ===
+Stack: [ ]
+PASS: a float reaches +
+Stack: [ ]
+PASS: a float runs every iteration
+Stack: [ ]
+PASS: a string raises from +
+Stack: [ ]

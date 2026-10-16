@@ -1,0 +1,24 @@
+\ A word that narrows its typed input under the default mode keeps the interpreter's result once a
+\ program relaxes `type-check` to "off". The mistyped argument reaches the body's own operations,
+\ which raise or compute exactly as they do interpreted, rather than being read as the declared type.
+\
+\ The words compile and run under the default mode first, so the relaxed call is a miss at entry.
+
+use "testing" ;
+
+bump: ( n: fixnum -- m ) [ 1 + ] ;
+
+\ Steps a number down past zero. A self-tail loop, so every iteration enters through its back-edge.
+below: ( n: fixnum -- m ) [ dup 0 > [ 1 - below ] [ ] if ] ;
+
+"the words run clean with the right types" test-section
+2000 [ 1 bump drop ] times
+2 bump 3 "a fixnum" assert=
+3 below 0 "a fixnum loop" assert=
+
+pragma{ type-check: "off" }
+
+"a mistyped argument under off computes as it does interpreted" test-section
+3.5 bump 4.5 "a float reaches +" assert=
+2.5 below -0.5 "a float runs every iteration" assert=
+[ "hello" bump ] [ error-type: @get ] recover type-mismatch: "a string raises from +" assert=

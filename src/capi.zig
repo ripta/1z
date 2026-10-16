@@ -332,6 +332,40 @@ export fn onez_seed_entry_words(
     return ONEZ_OK;
 }
 
+/// Give the seeded entry words the interpreted bodies the build kept, from baked tables parallel
+/// to the ones `onez_seed_entry_words` read. A word's compiled entry check runs its kept body in
+/// place. A NULL `bodies` row keeps no body.
+///
+/// The bodies are image-encoded, so the generated `main` calls this after the image load patched
+/// the slot tables they name. A body that fails to decode fails the boot.
+export fn onez_seed_entry_word_bodies(
+    ptr: ?*anyopaque,
+    names: ?[*]const [*:0]const u8,
+    bodies: ?[*]const ?[*]const u8,
+    body_lens: ?[*]const u32,
+    count: u32,
+) c_int {
+    const handle = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
+    const ctx = handle.ctx;
+    if (ctx.image_entry_import_frame == null) return ONEZ_OK;
+    if (count == 0) return ONEZ_OK;
+
+    const names_arr = names orelse return ONEZ_ERR_NULL_VALUE;
+    const bodies_arr = bodies orelse return ONEZ_ERR_NULL_VALUE;
+    const lens_arr = body_lens orelse return ONEZ_ERR_NULL_VALUE;
+
+    var i: u32 = 0;
+    while (i < count) : (i += 1) {
+        const bytes = bodies_arr[i] orelse continue;
+        const body = aot_image_loader.decodeImageEncodedBody(ctx, bytes[0..lens_arr[i]]) catch |err| return switch (err) {
+            error.OutOfMemory => ONEZ_ERR_ALLOC,
+            else => ONEZ_ERR_LOAD_FAILED,
+        };
+        ctx.seedEntryWordBody(std.mem.span(names_arr[i]), body);
+    }
+    return ONEZ_OK;
+}
+
 /// Seed the durable entry frame with the entry file's `use` imports, from the baked tables the
 /// freeze emitted. Only a tier whose image carries no entry-import rows emits the call, so a
 /// runtime-image interpreter-linked binary keeps the loader's bindings and their real bodies.

@@ -1,12 +1,10 @@
 Prelude compilation: 10/10 words compiled (100.0%)
 Quotation bodies compiled: 29/29 (100.0%)
 Inline PIC sites: 1/3 generic call sites preseeded
-AOT interpreter fallbacks: 25 total
-  native: 3
-  per-op-native: 22
+AOT interpreter fallbacks: 23 total
+  native: 2
+  per-op-native: 21
   sites:
-    per-op-native: fadd -> + (line 13)
-    native: lt2 -> < (line 12)
     per-op-native: cmp -> < (line 213)
     per-op-native: cmp -> > (line 215)
     per-op-native: mul2 -> * (line 11)
@@ -21,8 +19,10 @@ AOT interpreter fallbacks: 25 total
     per-op-native: onez_q_9 -> < (line 1)
     per-op-native: onez_q_9 -> > (line 1)
     per-op-native: onez_q_11 -> > (line 1)
-    ... 9 more
-  static-check: jitInterpretedCall=0/0 jitNativeWordCall=25/25 jitCallQuotation=0/0 (matches build-time inventory)
+    per-op-native: onez_q_14 -> < (line 5)
+    per-op-native: onez_q_14 -> > (line 5)
+    ... 7 more
+  static-check: jitInterpretedCall=0/0 jitNativeWordCall=23/23 jitCallQuotation=0/0 (matches build-time inventory)
 artifact: interpreter
 interpreter: linked (auto: compiled code calls interpreter)
 jitInterpretedCall: not linked

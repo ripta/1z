@@ -1,0 +1,31 @@
+\ A word compiled under the default mode binds its typed input with `;`. A program that relaxes the
+\ mode at runtime still gets the interpreter's result: `;` defines a word from a quotation, and a
+\ read of the binding calls it. The entry check runs the call in the word's interpreted body, which
+\ the build keeps for it.
+
+greet: ( s: string -- t ) [
+  held: swap ;
+  held held #append
+] ;
+
+\ A generic's compiled default body guards its value-bound input the same way, since the call checks
+\ only the generic's annotations before dispatching.
+greet-all: generic ( s: string -- t ) [
+  held: swap ;
+  held held #append
+] ;
+
+shout-n: ( s: string n: fixnum -- t ) [
+  k: swap ;
+  held: swap ;
+  k 0 > [ held "!" #append k 1 - shout-n ] [ held ] if
+] ;
+
+"ab" greet .
+"a" 2 shout-n .
+"ab" greet-all .
+"pragma{ type-check: \"off\" } [ \"q\" ] greet ." eval-string
+"pragma{ type-check: \"off\" } [ \"q\" ] 2 shout-n ." eval-string
+"pragma{ type-check: \"off\" } [ \"q\" ] greet-all ." eval-string
+"pragma{ type-check: \"off\" } \"b\" 2.5 shout-n ." eval-string
+"pragma{ type-check: \"off\" } [ 7 greet ] [ error-type: @get . ] recover" eval-string

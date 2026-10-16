@@ -366,9 +366,6 @@ fn decodeWordBodies(ctx: *Context, header: *const Header) LoaderError!void {
     if (header.word_count == 0) return;
     const words = header.words orelse return;
     const modules = header.modules orelse return;
-    const arena = ctx.quotationAllocator();
-
-    const tables = imageSlotTables(ctx);
 
     var wi: u32 = 0;
     while (wi < header.word_count) : (wi += 1) {
@@ -391,15 +388,21 @@ fn decodeWordBodies(ctx: *Context, header: *const Header) LoaderError!void {
         else
             cache_entry.*.module.words.getPtr(word_name) orelse continue;
 
-        const bytes = w.body_bytecode.?[0..w.body_bytecode_len];
-        var diag: instruction_bytecode.DecodeDiagnostic = undefined;
-        const decoded = instruction_bytecode.deserializeQuotationInstructionsForImage(bytes, arena, &tables, &diag) catch |err| {
-            reportDecodeFailure(ctx, &diag, err);
-            return err;
-        };
-        ctx.registerQuotationContainerLiterals(decoded.instructions) catch return LoaderError.OutOfMemory;
-        word_entry.action = .{ .compound = decoded.instructions };
+        word_entry.action = .{ .compound = try decodeImageEncodedBody(ctx, w.body_bytecode.?[0..w.body_bytecode_len]) };
     }
+}
+
+/// Decode an image-encoded body against the slot tables the loader patched, so its slot-encoded
+/// literals and baked call targets resolve to the live runtime values.
+pub fn decodeImageEncodedBody(ctx: *Context, bytes: []const u8) LoaderError![]const value_mod.Instruction {
+    const tables = imageSlotTables(ctx);
+    var diag: instruction_bytecode.DecodeDiagnostic = undefined;
+    const decoded = instruction_bytecode.deserializeQuotationInstructionsForImage(bytes, ctx.quotationAllocator(), &tables, &diag) catch |err| {
+        reportDecodeFailure(ctx, &diag, err);
+        return err;
+    };
+    ctx.registerQuotationContainerLiterals(decoded.instructions) catch return LoaderError.OutOfMemory;
+    return decoded.instructions;
 }
 
 /// Body of a call-target slot between `allocateCallTargetSlots` and `fillCallTargetSlots`, and of

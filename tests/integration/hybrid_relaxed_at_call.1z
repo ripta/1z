@@ -1,0 +1,37 @@
+\ Narrowing and value bindings under hybrid, where each word compiles once its call count passes the
+\ threshold. The warm-up compiles every word with well-typed arguments under the default mode. Once
+\ the program relaxes `type-check` to "off", a mistyped argument still gets the interpreter's result.
+
+use "testing" ;
+
+bump: ( n: fixnum -- m ) [ 1 + ] ;
+below: ( n: fixnum -- m ) [ dup 0 > [ 1 - below ] [ ] if ] ;
+greet: ( s: string -- t ) [
+  held: swap ;
+  held held #append
+] ;
+shout-n: ( s: string n: fixnum -- t ) [
+  k: swap ;
+  held: swap ;
+  k 0 > [ held "!" #append k 1 - shout-n ] [ held ] if
+] ;
+
+1000 [ 1 bump drop 1 below drop "x" greet drop "x" 1 shout-n drop ] times
+
+"the warm-up compiled every word" test-section
+t bump: >word-info compiled?>> "bump is compiled" assert=
+t below: >word-info compiled?>> "below is compiled" assert=
+t greet: >word-info compiled?>> "greet is compiled" assert=
+t shout-n: >word-info compiled?>> "shout-n is compiled" assert=
+
+pragma{ type-check: "off" }
+
+"a narrowed input under off computes as it does interpreted" test-section
+3.5 bump 4.5 "a float reaches +" assert=
+2.5 below -0.5 "a float runs every iteration" assert=
+[ "hello" bump ] ETypeMismatch "a string raises from +" assert-error-type
+
+"a value-binding input under off binds as it does interpreted" test-section
+[ "q" ] greet "qq" "a quotation defines a word the read calls" assert=
+[ "q" ] 2 shout-n "q!!" "a quotation through the loop" assert=
+[ 7 greet ] ETypeMismatch "a fixnum binds as a value and raises from #append" assert-error-type

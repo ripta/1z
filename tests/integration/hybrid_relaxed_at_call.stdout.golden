@@ -1,0 +1,31 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+=== the warm-up compiled every word ===
+Stack: [ ]
+PASS: bump is compiled
+Stack: [ ]
+PASS: below is compiled
+Stack: [ ]
+PASS: greet is compiled
+Stack: [ ]
+PASS: shout-n is compiled
+Stack: [ ]
+=== a narrowed input under off computes as it does interpreted ===
+Stack: [ ]
+PASS: a float reaches +
+Stack: [ ]
+PASS: a float runs every iteration
+Stack: [ ]
+PASS: a string raises from +
+Stack: [ ]
+=== a value-binding input under off binds as it does interpreted ===
+Stack: [ ]
+PASS: a quotation defines a word the read calls
+Stack: [ ]
+PASS: a quotation through the loop
+Stack: [ ]
+PASS: a fixnum binds as a value and raises from #append
+Stack: [ ]

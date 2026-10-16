@@ -1,0 +1,32 @@
+\ A word that binds a typed input with `;` keeps the interpreter's result once a program relaxes
+\ `type-check` to "off". `;` defines a word from a quotation, so a read of the binding calls it,
+\ where a value of the declared type reads back as itself.
+\
+\ The words compile and run under the default mode first, so the relaxed call is a miss at entry.
+
+use "testing" ;
+
+greet: ( s: string -- t ) [
+  held: swap ;
+  held held #append
+] ;
+
+\ Appends one "!" per step. A self-tail loop, so later iterations enter through its back-edge.
+shout-n: ( s: string n: fixnum -- t ) [
+  k: swap ;
+  held: swap ;
+  k 0 > [ held "!" #append k 1 - shout-n ] [ held ] if
+] ;
+
+"the words run clean with the right types" test-section
+2000 [ "x" greet drop ] times
+"ab" greet "abab" "a string binds as a value" assert=
+"a" 2 shout-n "a!!" "a string loop" assert=
+
+pragma{ type-check: "off" }
+
+"a mistyped argument under off binds as it does interpreted" test-section
+[ "q" ] greet "qq" "a quotation defines a word the read calls" assert=
+[ "q" ] 2 shout-n "q!!" "a quotation through the loop" assert=
+"b" 2.5 shout-n "b!!!" "a float count runs every iteration" assert=
+[ 7 greet ] ETypeMismatch "a fixnum binds as a value and raises from #append" assert-error-type

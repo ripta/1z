@@ -4500,7 +4500,8 @@ pub const Context = struct {
     /// compiled dispatch table -- so the binding takes the shape `lookupAotCompiledWordLocked`
     /// synthesizes for the same words today: `word_id` drives the compiled dispatch in
     /// `executeResolvedWord`, and the bail sentinel raises rather than silently no-opping when no
-    /// compiled body exists.
+    /// compiled body exists. The one exception is a body the build kept for its entry check to run,
+    /// which `seedEntryWordBody` installs afterwards.
     ///
     /// The dispatch_id is the word's own freeze-time id, baked into the seed row. Replayed method
     /// entries and compiled call sites carry freeze-time ids verbatim, so a minted id would be a
@@ -4548,6 +4549,18 @@ pub const Context = struct {
         };
         def.exec_flags = computeExecFlags(def);
         try frame.put(self.allocator, seed.name, def);
+    }
+
+    /// Give a word `seedEntryWord` seeded the interpreted body the build kept for it, which the
+    /// word's compiled entry check runs in place when an input a value-binding proof relies on
+    /// misses. A binding the seed left alone keeps what it has.
+    pub fn seedEntryWordBody(self: *Context, name: []const u8, body: []const Instruction) void {
+        const idx = self.image_entry_import_frame orelse return;
+        const def = self.local_frames.items[idx].getPtr(name) orelse return;
+        if (def.action != .native or def.action.native != aotCompiledOnlyBailSentinel) return;
+
+        def.action = .{ .compound = body };
+        def.exec_flags = computeExecFlags(def.*);
     }
 
     /// Seed one of the entry file's `use` imports into the durable entry frame at AOT boot, on the

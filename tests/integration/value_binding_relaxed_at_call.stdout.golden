@@ -1,0 +1,19 @@
+Stack: [ ]
+Stack: [ ]
+=== the words run clean with the right types ===
+Stack: [ ]
+Stack: [ ]
+PASS: a string binds as a value
+Stack: [ ]
+PASS: a string loop
+Stack: [ ]
+=== a mistyped argument under off binds as it does interpreted ===
+Stack: [ ]
+PASS: a quotation defines a word the read calls
+Stack: [ ]
+PASS: a quotation through the loop
+Stack: [ ]
+PASS: a float count runs every iteration
+Stack: [ ]
+PASS: a fixnum binds as a value and raises from #append
+Stack: [ ]

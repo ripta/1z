@@ -1,0 +1,7 @@
+=== the words run clean with the right types ===
+PASS: a fixnum
+PASS: a fixnum loop
+=== a mistyped argument under off computes as it does interpreted ===
+PASS: a float reaches +
+PASS: a float runs every iteration
+PASS: a string raises from +
