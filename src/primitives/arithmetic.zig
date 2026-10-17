@@ -878,7 +878,7 @@ pub fn nativeAbs(ctx: *Context) anyerror!void {
 }
 
 /// div ( a b -- q ) - Truncating integer division toward zero
-fn nativeTruncDiv(ctx: *Context) anyerror!void {
+pub fn nativeTruncDiv(ctx: *Context) anyerror!void {
     const b = try ctx.stack.pop();
     defer container_backing.releaseValue(b);
     const a = try ctx.stack.pop();
@@ -922,7 +922,7 @@ fn nativeTruncDiv(ctx: *Context) anyerror!void {
 }
 
 /// rem ( a b -- r ) - Truncating integer remainder
-fn nativeTruncRem(ctx: *Context) anyerror!void {
+pub fn nativeTruncRem(ctx: *Context) anyerror!void {
     const b = try ctx.stack.pop();
     defer container_backing.releaseValue(b);
     const a = try ctx.stack.pop();

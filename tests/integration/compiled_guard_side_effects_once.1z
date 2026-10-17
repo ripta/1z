@@ -1,0 +1,90 @@
+\ A compiled word whose inline guard fails after a side effect keeps running instead of re-running
+\ its body. Each side effect happens once, as it does in the interpreter.
+
+use "testing" ;
+
+hits: V{ 0 } ;
+hit: ( -- ) [ hits 0 #nth 1 + hits swap 0 swap #nth! drop ] ;
+hit-count: ( -- n ) [ hits 0 #nth ] ;
+reset-hits: ( -- ) [ hits 0 0 #nth! drop ] ;
+
+big: ( -- n ) [ 99999999999999999999 ] ;
+
+"div guard after a side effect" test-section
+
+effect-div: ( n -- q ) [ hit 2 div ] ;
+effect-div: compile!
+reset-hits
+big effect-div 49999999999999999999 "div of a bignum" assert=
+hit-count 1 "the effect before the div ran once" assert=
+
+"rem guard after a side effect" test-section
+
+effect-rem: ( n -- r ) [ hit 7 rem ] ;
+effect-rem: compile!
+reset-hits
+big effect-rem big 7 rem "rem of a bignum" assert=
+hit-count 1 "the effect before the rem ran once" assert=
+
+"division by zero after a side effect" test-section
+
+effect-div-zero: ( n -- q ) [ hit 0 div ] ;
+effect-div-zero: compile!
+reset-hits
+[ 7 effect-div-zero ] division-by-zero: "div by zero still raises" assert-error-type
+hit-count 1 "the effect before the failing div ran once" assert=
+
+"a callee guard after its caller's side effect" test-section
+
+halve: ( n -- q ) [ 2 div ] ;
+halve: compile!
+effect-then-halve: ( n -- q ) [ hit halve ] ;
+effect-then-halve: compile!
+reset-hits
+big effect-then-halve 49999999999999999999 "a bignum through the callee" assert=
+hit-count 1 "the caller's effect ran once" assert=
+
+"a guard in a later loop iteration" test-section
+
+\ The divisor reaches zero on the second iteration, after the first iteration's effect.
+count-down: ( n -- ) [
+  dup 0 = [ drop ] [
+    10 over 2 - div drop hit 1 - count-down
+  ] if
+] ;
+count-down: compile!
+reset-hits
+[ 3 count-down ] division-by-zero: "the second iteration's div raises" assert-error-type
+hit-count 1 "the first iteration's effect ran once" assert=
+
+"abs of a bignum after a side effect" test-section
+
+effect-abs: ( n -- m ) [ hit abs ] ;
+effect-abs: compile!
+reset-hits
+0 big - effect-abs big "abs of a negative bignum" assert=
+hit-count 1 "the effect before the abs ran once" assert=
+
+"times over a float count after a side effect" test-section
+
+effect-times: ( n -- r ) [ hit 0 swap [ 1 + ] times ] ;
+effect-times: compile!
+reset-hits
+3.0 effect-times 3 "a float count loops three times" assert=
+hit-count 1 "the effect before the times ran once" assert=
+
+"choose with a composed selector after a side effect" test-section
+
+effect-choose: ( a b q -- c ) [ hit choose ] ;
+effect-choose: compile!
+reset-hits
+1 2 [ < ] [ ] compose effect-choose 1 "a composed selector picks the first" assert=
+hit-count 1 "the effect before the choose ran once" assert=
+
+"a callee entry warning before a guard" test-section
+
+shout: ( s: string -- t ) [ ] ;
+warn-then-div: ( s n -- q ) [ swap shout drop 2 div ] ;
+warn-then-div: compile!
+pragma{ type-check: "warning" }
+7 big warn-then-div 49999999999999999999 "the div result after a warning" assert=

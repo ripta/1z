@@ -4177,10 +4177,18 @@ const AotStringLiteralTable = struct {
 
 /// Extract or emit an i64 IR ref from a stack entry. For raw_at_slot entries,
 /// emits a fixnum tag check and unboxes the payload; bails if the tag doesn't match.
+///
+/// JIT code never bails from inside its body, so the JIT refuses an opaque entry here. Its sites
+/// with a resolver take a path that calls the native instead and never reach this.
 fn requireI64(entry: StackEntry, state: *CompileState) IrCodegenError!c.ir_ref {
     return switch (entry) {
         .i64_ref => |ref| ref,
         .raw_at_slot => |s| {
+            if (!state.aot_mode) {
+                state.not_compilable_reason = .unresolvable_operands;
+                return IrCodegenError.NotCompilable;
+            }
+
             const ctx = state.ctx;
             const elem_addr = liveSlotAddr(state, s);
             emitTagCheck(state, elem_addr, state.fixnum_tag_const, state.bail_status);
@@ -4194,11 +4202,17 @@ fn requireI64(entry: StackEntry, state: *CompileState) IrCodegenError!c.ir_ref {
 }
 
 /// Extract or emit an f64 IR ref from a stack entry. For raw_at_slot entries,
-/// emits a float tag check and unboxes the payload; bails if the tag doesn't match.
+/// emits a float tag check and unboxes the payload; bails if the tag doesn't match. The JIT
+/// refuses an opaque entry, as `requireI64` does.
 fn requireF64(entry: StackEntry, state: *CompileState) IrCodegenError!c.ir_ref {
     return switch (entry) {
         .f64_ref => |ref| ref,
         .raw_at_slot => |s| {
+            if (!state.aot_mode) {
+                state.not_compilable_reason = .unresolvable_operands;
+                return IrCodegenError.NotCompilable;
+            }
+
             const ctx = state.ctx;
             const elem_addr = liveSlotAddr(state, s);
             emitTagCheck(state, elem_addr, state.float_tag_const, state.bail_status);
@@ -6569,11 +6583,6 @@ fn emitChooseBuiltin(
     const quot_byte_offset = c.ir_const_addr(ctx, quot_slot * ValueLayout.value_size);
     const quot_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), base_addr, quot_byte_offset);
 
-    if (!state.aot_mode) {
-        const quotation_tag_const = emitTagConst(ctx, .quotation);
-        emitTagCheck(state, quot_addr, quotation_tag_const, state.bail_status);
-    }
-
     // The copy of a1 below overwrites the quotation's slot.
     const held_quot = emitHoldValue(ctx, quot_addr);
 
@@ -6753,7 +6762,6 @@ fn emitIntrinsicFalse(ec: EmitCtx) IrCodegenError!ControlFlow {
 }
 
 fn emitIntrinsicAbs(ec: EmitCtx) IrCodegenError!ControlFlow {
-    const state = ec.state;
     const stack = ec.stack;
     const sp = ec.sp;
 
@@ -6761,9 +6769,7 @@ fn emitIntrinsicAbs(ec: EmitCtx) IrCodegenError!ControlFlow {
     sp.* -= 1;
     const entry = stack[sp.*];
 
-    if (!state.aot_mode) return emitGuardedAbs(ec, entry);
-
-    try emitAotAbs(ec, entry);
+    try emitBoxedAbs(ec, entry);
     sp.* += 1;
     return .next;
 }
@@ -6782,72 +6788,6 @@ fn emitAbsF64(ctx: *c.ir_ctx, a: c.ir_ref) c.ir_ref {
     return c._ir_PHI_2(ctx, c.IR_DOUBLE, neg_a, a);
 }
 
-/// `abs` under the JIT, where a method arm can replace the builtin fixnum or float entry after the
-/// word compiles.
-///
-/// The operand is boxed in its slot first, where the native pops it. A replaced entry goes to the
-/// native, and so does minInt, whose absolute value is a bignum. The inline path boxes its result
-/// into the same slot, so both paths leave a boxed value there.
-///
-/// An opaque operand is taken to be a fixnum. Its tag check bails otherwise, and the interpreter
-/// then dispatches.
-fn emitGuardedAbs(ec: EmitCtx, entry: StackEntry) IrCodegenError!ControlFlow {
-    const state = ec.state;
-    const ctx = state.ctx;
-    const stack = ec.stack;
-    const sp = ec.sp;
-    const slot = sp.*;
-    const is_float = entry == .f64_ref;
-    const bit = builtin_override.absBit(is_float);
-
-    if (builtin_override.isSet(bit)) {
-        sp.* += 1;
-        try emitResolvedNativeCallback(state, "abs", stack, sp, ec.line);
-        return .next;
-    }
-
-    const a = if (is_float) entry.f64_ref else try requireI64(entry, state);
-
-    try materializeQuotations(state, stack, slot + 1, false);
-    flushToPhysicalStack(state, stack, slot + 1);
-
-    const override_mask = emitOverrideMask(state, @as(u64, 1) << bit);
-    const hit = c.ir_fold2(ctx, c.IR_OPT(c.IR_AND, c.IR_U64), override_mask, overrideBitConst(ctx, bit));
-    const replaced = c.ir_fold2(ctx, c.IR_OPT(c.IR_NE, c.IR_BOOL), hit, c.ir_const_u64(ctx, 0));
-    const to_native = if (is_float) replaced else blk: {
-        const is_min = c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), a, c.ir_const_i64(ctx, std.math.minInt(i64)));
-        break :blk c.ir_fold2(ctx, c.IR_OPT(c.IR_OR, c.IR_BOOL), replaced, is_min);
-    };
-    const if_native = c._ir_IF(ctx, to_native);
-
-    c._ir_IF_TRUE_cold(ctx, if_native);
-    {
-        const saved_items_ptr = state.items_ptr;
-        const saved_base_addr = state.base_addr;
-        try emitPerOperationFallback(state, "abs", slot, slot, ec.line);
-        state.items_ptr = saved_items_ptr;
-        state.base_addr = saved_base_addr;
-    }
-    const end_native = c._ir_END(ctx);
-
-    c._ir_IF_FALSE(ctx, if_native);
-    const dest_addr = liveSlotAddr(state, slot);
-    if (is_float) {
-        emitBoxPayload(ctx, dest_addr, state.tag_offset_const, state.payload_offset_const, state.float_tag_const, emitAbsF64(ctx, a));
-    } else {
-        emitBoxPayload(ctx, dest_addr, state.tag_offset_const, state.payload_offset_const, state.fixnum_tag_const, emitAbsI64(ctx, a));
-    }
-    const end_inline = c._ir_END(ctx);
-
-    c._ir_MERGE_2(ctx, end_native, end_inline);
-
-    // The native call may have moved the stack buffer.
-    refreshCachedStackPointer(state);
-    stack[slot] = .{ .raw_at_slot = slot };
-    sp.* += 1;
-    return .next;
-}
-
 /// |a| for an `a` known not to be minInt.
 fn emitAbsI64(ctx: *c.ir_ctx, a: c.ir_ref) c.ir_ref {
     const zero = c.ir_const_i64(ctx, 0);
@@ -6862,13 +6802,17 @@ fn emitAbsI64(ctx: *c.ir_ctx, a: c.ir_ref) c.ir_ref {
     return c._ir_PHI_2(ctx, c.IR_I64, neg_a, a);
 }
 
-/// `abs` in AOT code, where a bail has no interpreter to resume into.
+/// `abs` without a bail.
+///
+/// An AOT bail has no interpreter to resume into. A JIT bail re-runs the whole body interpreted,
+/// which repeats every side effect the code made before the guard. The JIT also tests the live
+/// override mask, since a method arm can replace a builtin entry after the word compiles.
 ///
 /// A proven float with no arm to test computes inline, unboxed. Every other operand is boxed in its
 /// slot, where a call pops it, and the site branches on its tag. A fixnum or float computes inline
 /// unless a method arm replaces its builtin entry. A replaced type, a non-number, and minInt, whose
 /// absolute value is a bignum, go to the call. Both paths leave a boxed value in the slot.
-fn emitAotAbs(ec: EmitCtx, entry: StackEntry) IrCodegenError!void {
+fn emitBoxedAbs(ec: EmitCtx, entry: StackEntry) IrCodegenError!void {
     const state = ec.state;
     const ctx = state.ctx;
     const stack = ec.stack;
@@ -7612,7 +7556,6 @@ fn spliceDipRetaining(ec: EmitCtx, retain_count: usize) IrCodegenError!ControlFl
 fn emitIntrinsicChoose(ec: EmitCtx) IrCodegenError!ControlFlow {
     const state = ec.state;
     const ctx = state.ctx;
-    const bail_status = state.bail_status;
     const stack = ec.stack;
     const sp = ec.sp;
 
@@ -7698,11 +7641,6 @@ fn emitIntrinsicChoose(ec: EmitCtx) IrCodegenError!ControlFlow {
                 .{ .builtin = .{ .kind = .choose_op, .line = ec.line } };
 
             const quot_addr = liveSlotAddr(state, quot_slot);
-
-            if (!state.aot_mode) {
-                const quotation_tag_const = emitTagConst(ctx, .quotation);
-                emitTagCheck(state, quot_addr, quotation_tag_const, bail_status);
-            }
 
             // The flush and the copies below may both write the quotation's slot: the flush when
             // the entry is relabeled below the pair, the copies when it sits just above it.
@@ -8721,12 +8659,15 @@ fn emitIntrinsicMod(ec: EmitCtx) IrCodegenError!ControlFlow {
     return .next;
 }
 
-/// `div` and `rem` in AOT code, where a bail has no interpreter to resume into.
+/// `div` and `rem` without a bail.
+///
+/// An AOT bail has no interpreter to resume into. A JIT bail re-runs the whole body interpreted,
+/// which repeats every side effect the code made before the guard.
 ///
 /// Two fixnums compute inline when the divisor is nonzero and, for `div`, the pair is not minInt
 /// over -1. Every other pair goes to the native, which raises the interpreter's error or promotes
 /// to a bignum. Both paths leave a boxed value in the slot, so the result is opaque.
-fn emitAotIntDivision(ec: EmitCtx, comptime is_div: bool) IrCodegenError!ControlFlow {
+fn emitBoxedIntDivision(ec: EmitCtx, comptime is_div: bool) IrCodegenError!ControlFlow {
     const state = ec.state;
     const ctx = state.ctx;
     const stack = ec.stack;
@@ -8809,7 +8750,8 @@ fn emitAotIntDivision(ec: EmitCtx, comptime is_div: bool) IrCodegenError!Control
 }
 
 /// Whether an AOT `div` or `rem` on two proven fixnums keeps its guarded concrete form, whose guards
-/// restart the entry in the word's generic copy. No method arm can replace either operator.
+/// restart the entry in the word's generic copy. No method arm can replace either operator. The JIT
+/// never restarts, so its sites always take the boxed form.
 fn restartsProvenPair(state: *const CompileState, a: StackEntry, b: StackEntry) bool {
     return a == .i64_ref and b == .i64_ref and restartReady(state);
 }
@@ -8823,7 +8765,7 @@ fn emitIntrinsicIntDiv(ec: EmitCtx) IrCodegenError!ControlFlow {
     if (sp.* < 2) return IrCodegenError.StackUnderflow;
     sp.* -= 2;
 
-    if (state.aot_mode and !restartsProvenPair(state, stack[sp.*], stack[sp.* + 1])) return emitAotIntDivision(ec, true);
+    if (!restartsProvenPair(state, stack[sp.*], stack[sp.* + 1])) return emitBoxedIntDivision(ec, true);
 
     const a = try requireI64(stack[sp.*], state);
     const b = try requireI64(stack[sp.* + 1], state);
@@ -8842,7 +8784,7 @@ fn emitIntrinsicRem(ec: EmitCtx) IrCodegenError!ControlFlow {
     if (sp.* < 2) return IrCodegenError.StackUnderflow;
     sp.* -= 2;
 
-    if (state.aot_mode and !restartsProvenPair(state, stack[sp.*], stack[sp.* + 1])) return emitAotIntDivision(ec, false);
+    if (!restartsProvenPair(state, stack[sp.*], stack[sp.* + 1])) return emitBoxedIntDivision(ec, false);
 
     const a = try requireI64(stack[sp.*], state);
     const b = try requireI64(stack[sp.* + 1], state);
@@ -9463,7 +9405,7 @@ fn emitIntrinsicArrayN(ec: EmitCtx) IrCodegenError!ControlFlow {
 /// a raise can leave it on the stack as the interpreter does. An interpreter-free build cannot
 /// materialize a quotation reading a local an outside word shadows, so its raise leaves the count
 /// alone.
-fn emitAotTimesGenericLoop(ec: EmitCtx, n_slot: usize, quot_entry: StackEntry) IrCodegenError!void {
+fn emitTimesGenericLoop(ec: EmitCtx, n_slot: usize, quot_entry: StackEntry) IrCodegenError!void {
     const state = ec.state;
     const ctx = state.ctx;
     const stack = ec.stack;
@@ -9499,8 +9441,14 @@ fn emitAotTimesGenericLoop(ec: EmitCtx, n_slot: usize, quot_entry: StackEntry) I
 
     const run_flag = c._ir_ALLOCA(ctx, c.ir_const_addr(ctx, 8));
     var step_params = [_]u8{c.IR_ADDR} ** 4;
-    const test_fn = c.ir_const_func(ctx, c.ir_str(ctx, "jitTimesTest"), c.ir_proto(ctx, 0, c.IR_I32, 4, &step_params));
-    const decrement_fn = c.ir_const_func(ctx, c.ir_str(ctx, "jitTimesDecrement"), c.ir_proto(ctx, 0, c.IR_I32, 3, &step_params));
+    const test_fn = if (state.aot_mode)
+        c.ir_const_func(ctx, c.ir_str(ctx, "jitTimesTest"), c.ir_proto(ctx, 0, c.IR_I32, 4, &step_params))
+    else
+        c.ir_const_addr(ctx, @intFromPtr(&jitTimesTest));
+    const decrement_fn = if (state.aot_mode)
+        c.ir_const_func(ctx, c.ir_str(ctx, "jitTimesDecrement"), c.ir_proto(ctx, 0, c.IR_I32, 3, &step_params))
+    else
+        c.ir_const_addr(ctx, @intFromPtr(&jitTimesDecrement));
 
     const entry_end = c._ir_END(ctx);
     const loop_ref = c._ir_LOOP_BEGIN(ctx, entry_end);
@@ -9540,11 +9488,14 @@ fn emitAotTimesGenericLoop(ec: EmitCtx, n_slot: usize, quot_entry: StackEntry) I
     emitReleaseSpilled(state, quot_spill);
 }
 
-/// Unbox the `times` count at `n_slot` in AOT code, where a bail has no interpreter to resume into.
+/// Unbox the `times` count at `n_slot` without a bail.
 ///
-/// A count that is not a fixnum takes a cold arm running `emitAotTimesGenericLoop`. The arm leaves
+/// An AOT bail has no interpreter to resume into. A JIT bail re-runs the whole body interpreted,
+/// which repeats every side effect the code made before the guard.
+///
+/// A count that is not a fixnum takes a cold arm running `emitTimesGenericLoop`. The arm leaves
 /// the stack the inline loop leaves, and the caller merges it through `slow_end` after the loop.
-fn emitAotTimesCount(ec: EmitCtx, n_slot: usize, quot_entry: StackEntry, slow_end: *c.ir_ref) IrCodegenError!c.ir_ref {
+fn emitTimesCount(ec: EmitCtx, n_slot: usize, quot_entry: StackEntry, slow_end: *c.ir_ref) IrCodegenError!c.ir_ref {
     const state = ec.state;
     const ctx = state.ctx;
     const stack = ec.stack;
@@ -9567,7 +9518,7 @@ fn emitAotTimesCount(ec: EmitCtx, n_slot: usize, quot_entry: StackEntry, slow_en
 
     const if_fixnum = c._ir_IF(ctx, is_fixnum);
     c._ir_IF_FALSE_cold(ctx, if_fixnum);
-    try emitAotTimesGenericLoop(ec, n_slot, quot_entry);
+    try emitTimesGenericLoop(ec, n_slot, quot_entry);
     slow_end.* = c._ir_END(ctx);
 
     @memcpy(stack[0 .. sp + 2], saved_stack[0 .. sp + 2]);
@@ -9590,8 +9541,8 @@ fn emitIntrinsicTimes(ec: EmitCtx) IrCodegenError!ControlFlow {
     const quot_entry = stack[sp.* + 1];
 
     var slow_end: c.ir_ref = c.IR_UNUSED;
-    const initial_n = if (state.aot_mode and n_entry == .raw_at_slot)
-        try emitAotTimesCount(ec, n_entry.raw_at_slot, quot_entry, &slow_end)
+    const initial_n = if (n_entry == .raw_at_slot)
+        try emitTimesCount(ec, n_entry.raw_at_slot, quot_entry, &slow_end)
     else
         try requireI64(n_entry, state);
 
@@ -15930,6 +15881,10 @@ const InlineExit = enum {
 /// A guard inside a branchless trial arm settles too. Its stores sit on the cold path, which runs
 /// only when the function is leaving, so a spurious guard in a discarded arm stays a spurious exit.
 fn emitSettledExit(state: *CompileState, status: c.ir_ref, kind: InlineExit) void {
+    // JIT code never bails from inside its body. A bail re-runs the whole body interpreted, which
+    // repeats every side effect made before the guard, so a JIT guard calls the native instead.
+    std.debug.assert(kind != .bail or state.aot_mode);
+
     if (kind == .bail and restartReady(state)) {
         emitRestart(state);
         return;
@@ -21683,6 +21638,8 @@ fn resolveArithNativeForTest(name: []const u8, user_data: *anyopaque) ?ResolvedW
         .{ "*", &arithmetic_mod.nativeMul },
         .{ "/", &arithmetic_mod.nativeDiv },
         .{ "%", &arithmetic_mod.nativeMod },
+        .{ "div", &arithmetic_mod.nativeTruncDiv },
+        .{ "rem", &arithmetic_mod.nativeTruncRem },
         .{ "=", &arithmetic_mod.nativeEq },
         .{ "<", &arithmetic_mod.nativeLt },
         .{ ">", &arithmetic_mod.nativeGt },
@@ -23134,18 +23091,37 @@ test "compile with output_count 2" {
     try testing.expectEqual(@as(i64, 20), values[1].fixnum);
 }
 
-test "rem with div-by-zero guard" {
+test "rem computes a fixnum pair inline and raises a zero divisor through the native" {
     const instrs = makeInstructions(.{"rem"});
-    const result = try compileWord(&instrs, 2, 1, null, null, null, null, null);
+    const result = try compileWord(&instrs, 2, 1, arith_native_test_resolver, null, null, null, null);
     defer result.jit_buf.deinit();
 
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    try ctx.stack.push(.{ .fixnum = 7 });
+    try ctx.stack.push(.{ .fixnum = 3 });
+    try testing.expectEqual(@as(i64, 1), try runPoppingTopOnContext(result, &ctx));
+
+    try ctx.stack.push(.{ .fixnum = -7 });
+    try ctx.stack.push(.{ .fixnum = 3 });
+    try testing.expectEqual(@as(i64, -1), try runPoppingTopOnContext(result, &ctx));
+
+    // A bail would re-run the word interpreted. The native raises instead.
+    try ctx.stack.push(.{ .fixnum = 7 });
+    try ctx.stack.push(.{ .fixnum = 0 });
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
     var out: i64 = undefined;
-    try testing.expectEqual(@as(i32, 0), callCompiled(func, &.{ 7, 3 }, &out));
-    try testing.expectEqual(@as(i64, 1), out);
-    try testing.expectEqual(@as(i32, 0), callCompiled(func, &.{ -7, 3 }, &out));
-    try testing.expectEqual(@as(i64, -1), out);
-    try testing.expectEqual(@as(i32, 1), callCompiled(func, &.{ 7, 0 }, &out));
+    try testing.expectEqual(@as(i32, 2), runOnContext(func, &ctx, &out));
+    try testing.expectEqual(error.DivisionByZero, ctx.jit_pending_error.?);
+}
+
+test "a JIT site with no resolver refuses an opaque operand instead of bailing" {
+    const rem_instrs = makeInstructions(.{"rem"});
+    try testing.expectError(IrCodegenError.NotCompilable, compileWord(&rem_instrs, 2, 1, null, null, null, null, null));
+
+    const eq_instrs = makeInstructions(.{"="});
+    try testing.expectError(IrCodegenError.NotCompilable, compileWord(&eq_instrs, 2, 1, null, null, null, null, null));
 }
 
 test "compile dup on fixnum" {
@@ -23351,90 +23327,62 @@ test "compile literal + input swap" {
     try testing.expectEqual(@as(i64, 42), values[1].fixnum);
 }
 
-test "compile = comparison" {
-    const instrs = makeInstructions(.{"="});
-    const result = try compileWord(&instrs, 2, 1, null, null, null, null, null);
-    defer result.jit_buf.deinit();
+/// Run a compiled two-input comparison on a real Context and return the boolean it leaves.
+fn compareOnContext(result: CompiledWord, a: Value, b: Value) !bool {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+    try ctx.stack.push(a);
+    try ctx.stack.push(b);
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
-    var values: [4]Value = undefined;
-    var sp: usize = 0;
+    var jit_ctx = JitContext{
+        .items_ptr = ctx.stack.items.items.ptr,
+        .sp_ptr = &ctx.stack.items.items.len,
+        .capacity = ctx.stack.items.capacity,
+        .ctx = @ptrCast(&ctx),
+        .stack_limit = ctx.stack_limit,
+    };
+    try testing.expectEqual(@as(i32, 0), func(&jit_ctx));
+    try testing.expectEqual(@as(usize, 1), ctx.stack.items.items.len);
 
-    values[0] = .{ .fixnum = 5 };
-    values[1] = .{ .fixnum = 5 };
-    sp = 2;
-    try testing.expectEqual(@as(i32, 0), callCompiledValues(func, &values, &sp));
-    try testing.expectEqual(@as(usize, 1), sp);
-    try testing.expect(values[0] == .boolean);
-    try testing.expectEqual(true, values[0].boolean);
+    const top = try ctx.stack.pop();
+    try testing.expect(top == .boolean);
+    return top.boolean;
+}
 
-    values[0] = .{ .fixnum = 3 };
-    values[1] = .{ .fixnum = 5 };
-    sp = 2;
-    try testing.expectEqual(@as(i32, 0), callCompiledValues(func, &values, &sp));
-    try testing.expectEqual(@as(usize, 1), sp);
-    try testing.expect(values[0] == .boolean);
-    try testing.expectEqual(false, values[0].boolean);
+test "compile = comparison" {
+    const instrs = makeInstructions(.{"="});
+    const result = try compileWord(&instrs, 2, 1, arith_native_test_resolver, null, null, null, null);
+    defer result.jit_buf.deinit();
+
+    try testing.expect(try compareOnContext(result, .{ .fixnum = 5 }, .{ .fixnum = 5 }));
+    try testing.expect(!try compareOnContext(result, .{ .fixnum = 3 }, .{ .fixnum = 5 }));
 }
 
 test "compile < comparison" {
     const instrs = makeInstructions(.{"<"});
-    const result = try compileWord(&instrs, 2, 1, null, null, null, null, null);
+    const result = try compileWord(&instrs, 2, 1, arith_native_test_resolver, null, null, null, null);
     defer result.jit_buf.deinit();
 
-    const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
-    var values: [4]Value = undefined;
-    var sp: usize = 0;
-
-    values[0] = .{ .fixnum = 3 };
-    values[1] = .{ .fixnum = 5 };
-    sp = 2;
-    try testing.expectEqual(@as(i32, 0), callCompiledValues(func, &values, &sp));
-    try testing.expect(values[0] == .boolean);
-    try testing.expectEqual(true, values[0].boolean);
-
-    values[0] = .{ .fixnum = 5 };
-    values[1] = .{ .fixnum = 3 };
-    sp = 2;
-    try testing.expectEqual(@as(i32, 0), callCompiledValues(func, &values, &sp));
-    try testing.expect(values[0] == .boolean);
-    try testing.expectEqual(false, values[0].boolean);
+    try testing.expect(try compareOnContext(result, .{ .fixnum = 3 }, .{ .fixnum = 5 }));
+    try testing.expect(!try compareOnContext(result, .{ .fixnum = 5 }, .{ .fixnum = 3 }));
 }
 
 test "compile > comparison" {
     const instrs = makeInstructions(.{">"});
-    const result = try compileWord(&instrs, 2, 1, null, null, null, null, null);
+    const result = try compileWord(&instrs, 2, 1, arith_native_test_resolver, null, null, null, null);
     defer result.jit_buf.deinit();
 
-    const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
-    var values: [4]Value = undefined;
-    var sp: usize = 0;
-
-    values[0] = .{ .fixnum = 5 };
-    values[1] = .{ .fixnum = 3 };
-    sp = 2;
-    try testing.expectEqual(@as(i32, 0), callCompiledValues(func, &values, &sp));
-    try testing.expect(values[0] == .boolean);
-    try testing.expectEqual(true, values[0].boolean);
-
-    values[0] = .{ .fixnum = 3 };
-    values[1] = .{ .fixnum = 5 };
-    sp = 2;
-    try testing.expectEqual(@as(i32, 0), callCompiledValues(func, &values, &sp));
-    try testing.expect(values[0] == .boolean);
-    try testing.expectEqual(false, values[0].boolean);
+    try testing.expect(try compareOnContext(result, .{ .fixnum = 5 }, .{ .fixnum = 3 }));
+    try testing.expect(!try compareOnContext(result, .{ .fixnum = 3 }, .{ .fixnum = 5 }));
 }
 
-test "compile comparison on non-fixnum bails" {
+test "compile comparison on non-fixnum reaches the native" {
     const instrs = makeInstructions(.{"="});
-    const result = try compileWord(&instrs, 2, 1, null, null, null, null, null);
+    const result = try compileWord(&instrs, 2, 1, arith_native_test_resolver, null, null, null, null);
     defer result.jit_buf.deinit();
 
-    const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
-    var values = [_]Value{ value_mod.stringValue("hello"), .{ .fixnum = 5 } };
-    var sp: usize = 2;
-    try testing.expectEqual(@as(i32, 1), callCompiledValues(func, &values, &sp));
-    try testing.expectEqual(@as(usize, 2), sp);
+    try testing.expect(!try compareOnContext(result, value_mod.stringValue("hello"), .{ .fixnum = 5 }));
 }
 
 test "compile if with bool condition" {
@@ -23500,26 +23448,21 @@ test "compile comparison + if" {
         .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = false_body } } }, .line = 3 },
         .{ .op = .{ .call_word = "if" }, .line = 4 },
     };
-    const result = try compileWord(&instrs, 2, 1, null, null, null, null, null);
+    const result = try compileWord(&instrs, 2, 1, arith_native_test_resolver, null, null, null, null);
     defer result.jit_buf.deinit();
 
-    const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
-    var values: [4]Value = undefined;
-    var sp: usize = 0;
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
 
-    values[0] = .{ .fixnum = 5 };
-    values[1] = .{ .fixnum = 3 };
-    sp = 2;
-    try testing.expectEqual(@as(i32, 0), callCompiledValues(func, &values, &sp));
-    try testing.expectEqual(@as(usize, 1), sp);
-    try testing.expectEqual(@as(i64, 10), values[0].fixnum);
+    try ctx.stack.push(.{ .fixnum = 5 });
+    try ctx.stack.push(.{ .fixnum = 3 });
+    try testing.expectEqual(@as(i64, 10), try runPoppingTopOnContext(result, &ctx));
+    try testing.expectEqual(@as(usize, 0), ctx.stack.items.items.len);
 
-    values[0] = .{ .fixnum = 3 };
-    values[1] = .{ .fixnum = 5 };
-    sp = 2;
-    try testing.expectEqual(@as(i32, 0), callCompiledValues(func, &values, &sp));
-    try testing.expectEqual(@as(usize, 1), sp);
-    try testing.expectEqual(@as(i64, 20), values[0].fixnum);
+    try ctx.stack.push(.{ .fixnum = 3 });
+    try ctx.stack.push(.{ .fixnum = 5 });
+    try testing.expectEqual(@as(i64, 20), try runPoppingTopOnContext(result, &ctx));
+    try testing.expectEqual(@as(usize, 0), ctx.stack.items.items.len);
 }
 
 test "compile if with arithmetic in branches" {

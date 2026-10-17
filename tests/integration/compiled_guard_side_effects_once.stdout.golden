@@ -1,0 +1,86 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+=== div guard after a side effect ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: div of a bignum
+Stack: [ ]
+PASS: the effect before the div ran once
+Stack: [ ]
+=== rem guard after a side effect ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: rem of a bignum
+Stack: [ ]
+PASS: the effect before the rem ran once
+Stack: [ ]
+=== division by zero after a side effect ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: div by zero still raises
+Stack: [ ]
+PASS: the effect before the failing div ran once
+Stack: [ ]
+=== a callee guard after its caller's side effect ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: a bignum through the callee
+Stack: [ ]
+PASS: the caller's effect ran once
+Stack: [ ]
+=== a guard in a later loop iteration ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: the second iteration's div raises
+Stack: [ ]
+PASS: the first iteration's effect ran once
+Stack: [ ]
+=== abs of a bignum after a side effect ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: abs of a negative bignum
+Stack: [ ]
+PASS: the effect before the abs ran once
+Stack: [ ]
+=== times over a float count after a side effect ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: a float count loops three times
+Stack: [ ]
+PASS: the effect before the times ran once
+Stack: [ ]
+=== choose with a composed selector after a side effect ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: a composed selector picks the first
+Stack: [ ]
+PASS: the effect before the choose ran once
+Stack: [ ]
+=== a callee entry warning before a guard ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: the div result after a warning
+Stack: [ ]
