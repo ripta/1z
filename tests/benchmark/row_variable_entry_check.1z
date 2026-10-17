@@ -1,0 +1,58 @@
+\ Benchmark: the entry check of a compiled word with a row variable among its inputs.
+\
+\ With a row among the inputs no typed input sits at a fixed slot, so the compiled entry check
+\ calls the interpreter's validation on every entry instead of comparing a tag inline. That call
+\ reads the `type-check` mode on a hit too. The two words differ only in the annotation, so the
+\ difference between their rows is that call's cost.
+\
+\ Only `compile!` compiles a row-variable typed word, and a word that calls one does not compile,
+\ so interpreter dispatch is the one way into the compiled body. The loop is driven by `times`
+\ rather than `benchmark-n`, whose per-word bookkeeping sits on that same dispatch path. A value
+\ stays under the counter so the row is never empty.
+\
+\ Each round times the untyped word, the typed word, and the untyped word again, so a load spike
+\ lands on all three series. The second untyped series is the control: its ratio to the first is
+\ the noise floor the typed ratio is read against.
+\
+\ Prints the median of each series, the two ratios, and the per-call delta. Run with
+\ --compile=eager.
+
+use "time" ;
+
+row-typed: ( ..a n: fixnum -- ..a n ) [ 1 + ] ;
+row-untyped: ( ..a n -- ..a n ) [ 1 + ] ;
+
+row-typed: compile!
+row-untyped: compile!
+
+iters: const [ 2000000 ] ;
+rounds: const [ 9 ] ;
+
+time-row: ( quot -- ns ) [ [ 0 0 iters ] dip monotonic-nanos [ times 2drop ] dip monotonic-nanos swap - ] ;
+
+median: ( seq -- n ) [ [ < ] #sort dup #len 2 div #nth ] ;
+
+\ Warm up both paths before measuring.
+[ row-typed ] time-row drop
+[ row-untyped ] time-row drop
+
+untyped-samples: V{ } ;
+typed-samples:   V{ } ;
+control-samples: V{ } ;
+
+rounds [
+  untyped-samples [ row-untyped ] time-row #push! drop
+  typed-samples [ row-typed ] time-row #push! drop
+  control-samples [ row-untyped ] time-row #push! drop
+] times
+
+untyped-ns: untyped-samples median ;
+typed-ns:   typed-samples median ;
+control-ns: control-samples median ;
+
+"untyped ns=" print untyped-ns inspect print-line
+"typed ns=" print typed-ns inspect print-line
+"control ns=" print control-ns inspect print-line
+"typed/untyped=" print typed-ns >float untyped-ns >float / inspect print-line
+"control/untyped=" print control-ns >float untyped-ns >float / inspect print-line
+"per-call delta ns=" print typed-ns untyped-ns - >float iters >float / inspect print-line

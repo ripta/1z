@@ -24718,6 +24718,58 @@ test "an AOT entry check compares a builtin type's tag inline and calls out only
 
     try testing.expect(std.mem.indexOf(u8, source, "onez_entry_param_miss(") != null);
     try testing.expect(std.mem.indexOf(u8, source, "aotEntryParamMatches(") == null);
+
+    // The hit branches past the miss region straight after the tag compare. The mode is read only
+    // inside `onez_entry_param_miss`, so a hit that calls nothing reads no mode either.
+    const load = std.mem.indexOf(u8, source, "*((uint8_t*)") orelse return error.TestUnexpectedResult;
+    const compare = std.mem.indexOfPos(u8, source, load, " != ") orelse return error.TestUnexpectedResult;
+    const line_start = (std.mem.lastIndexOfScalar(u8, source[0..compare], '\n') orelse return error.TestUnexpectedResult) + 1;
+    const assigned = std.mem.trimLeft(u8, source[line_start..compare], " \t");
+    const miss_var = assigned[0 .. std.mem.indexOf(u8, assigned, " = ") orelse return error.TestUnexpectedResult];
+
+    const branch_on_miss = try std.fmt.allocPrint(testing.allocator, "if (!{s}) goto ", .{miss_var});
+    defer testing.allocator.free(branch_on_miss);
+    const branch = std.mem.indexOfPos(u8, source, compare, "if (!") orelse return error.TestUnexpectedResult;
+    try testing.expect(std.mem.startsWith(u8, source[branch..], branch_on_miss));
+    const goto_at = std.mem.indexOfPos(u8, source, branch, "goto ") orelse return error.TestUnexpectedResult;
+    const label_end = std.mem.indexOfScalarPos(u8, source, goto_at, ';') orelse return error.TestUnexpectedResult;
+    const label = source[goto_at + "goto ".len .. label_end];
+
+    const label_def = try std.fmt.allocPrint(testing.allocator, "\n{s}:", .{label});
+    defer testing.allocator.free(label_def);
+    const hit = std.mem.indexOfPos(u8, source, label_end, label_def) orelse return error.TestUnexpectedResult;
+
+    try testing.expect(std.mem.indexOf(u8, source[0..branch], "onez_entry_param_miss(") == null);
+    try testing.expect(std.mem.indexOf(u8, source[label_end..hit], "onez_entry_param_miss(") != null);
+    try testing.expectEqual(@as(?[]const u8, null), cCallOutside(source[load..branch], &.{}));
+
+    // Ahead of the load sit only the stack guards every compiled body runs.
+    const body = std.mem.lastIndexOf(u8, source[0..load], "\n{") orelse return error.TestUnexpectedResult;
+    try testing.expectEqual(@as(?[]const u8, null), cCallOutside(source[body..load], &.{ "jitEntryCheck", "jitStackUnderflowError" }));
+}
+
+/// The first function called in a span of emitted C that `allowed` does not name, by the `name(`
+/// shape, or null when every call is allowed.
+///
+/// A cast or a dereference starts with `(` or `*`, so neither reads as a call. An indirect call
+/// reads as its `d_N` operand, which no allowlist names.
+fn cCallOutside(span: []const u8, allowed: []const []const u8) ?[]const u8 {
+    var i: usize = 1;
+    outer: while (i < span.len) : (i += 1) {
+        if (span[i] != '(') continue;
+
+        var start = i;
+        while (start > 0 and (std.ascii.isAlphanumeric(span[start - 1]) or span[start - 1] == '_')) start -= 1;
+        if (start == i or std.ascii.isDigit(span[start])) continue;
+
+        const name = span[start..i];
+        if (std.mem.eql(u8, name, "if")) continue;
+        for (allowed) |ok| {
+            if (std.mem.eql(u8, name, ok)) continue :outer;
+        }
+        return name;
+    }
+    return null;
 }
 
 test "an AOT entry check calls out once for a type a tag does not identify" {

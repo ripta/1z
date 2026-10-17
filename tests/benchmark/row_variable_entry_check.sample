@@ -1,0 +1,9 @@
+Row-variable entry check cost: row_variable_entry_check.1z
+binary=./zig-out/release/bin/1z   rounds=9   iters=2000000   mode=--compile=eager
+
+untyped ns=1483548000
+typed ns=1469801000
+control ns=1487320000
+typed/untyped=0.9907337005610873
+control/untyped=1.0025425533922732
+per-call delta ns=-6.8735
