@@ -1,0 +1,3 @@
+warning: type mismatch for parameter 'a': expected fixnum, got string
+warning: type mismatch for parameter 'b': expected string, got fixnum
+warning: type mismatch for parameter 'e': expected fixnum, got string

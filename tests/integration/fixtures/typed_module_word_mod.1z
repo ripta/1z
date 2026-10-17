@@ -1,0 +1,4 @@
+\ Typed words a test reaches by qualified name from a compiled caller.
+
+bump: ( n: fixnum -- m ) [ 1 + ] ;
+twice: ( n q: ( n -- n ) -- n ) [ dup dip call ] ;

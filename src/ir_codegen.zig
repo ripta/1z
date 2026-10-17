@@ -628,18 +628,6 @@ pub const CompiledWord = struct {
     }
 };
 
-fn shouldSkipTypeAnnotationValidation(word: WordDefinition) bool {
-    const has_generic = for (word.markers) |mk| {
-        if (markers_mod.isGenericMarker(mk)) break true;
-    } else false;
-    if (!has_generic) return false;
-
-    return switch (word.action) {
-        .compound => |instrs| instrs.len == 0,
-        .native, .host_callback, .literal => false,
-    };
-}
-
 /// A parameter type proved by the freeze-time call-site inference pass.
 ///
 /// `unknown` means the pass proved nothing and the parameter stays opaque, which is how every
@@ -1246,35 +1234,10 @@ fn emitTagConst(ctx: *c.ir_ctx, tag: ValueLayout.TagType) c.ir_ref {
     };
 }
 
-/// The Value variant a builtin type name names, or null for a type a single tag does not identify.
-fn builtinTagForTypeName(name: []const u8) ?ValueLayout.TagType {
-    const names = [_]struct { []const u8, ValueLayout.TagType }{
-        .{ "fixnum", .fixnum },
-        .{ "float", .float },
-        .{ "boolean", .boolean },
-        .{ "string", .string },
-        .{ "symbol", .symbol },
-        .{ "array", .array },
-        .{ "quotation", .quotation },
-        .{ "hash", .hash },
-        .{ "vector", .vector },
-        .{ "byte-array", .byte_array },
-        .{ "set", .set },
-        .{ "mutable-map", .mutable_map },
-        .{ "value-map", .value_map },
-        .{ "mutable-value-map", .mutable_value_map },
-        .{ "bignum", .bignum },
-    };
-    for (names) |entry| {
-        if (std.mem.eql(u8, name, entry[0])) return entry[1];
-    }
-    return null;
-}
-
-/// Map a type name string to an IR tag constant for the corresponding Value variant.
-/// Returns null for types that need pointer comparison (virtual types, struct types).
-fn mapTypeNameToTagConst(state: *CompileState, name: []const u8) ?c.ir_ref {
-    return switch (builtinTagForTypeName(name) orelse return null) {
+/// An IR tag constant for the tag that identifies builtin type `tv`, or null for a type one tag
+/// does not identify. See `TypeValue.builtin_tag`.
+fn tagConstFor(state: *CompileState, tv: *const TypeValue) ?c.ir_ref {
+    return switch (tv.builtin_tag orelse return null) {
         .fixnum => state.fixnum_tag_const,
         .float => state.float_tag_const,
         .boolean => state.boolean_tag_const,
@@ -6223,7 +6186,7 @@ fn tryEmitInlineTypedValidateAndPromote(
         .quotation_body, .row_region => return false,
     }
 
-    const expected_tag_const = mapTypeNameToTagConst(state, expected_name) orelse return false;
+    const expected_tag_const = tagConstFor(state, params[0]) orelse return false;
 
     const value_slot: usize = value_entry.slotIndex().?;
 
@@ -16316,14 +16279,10 @@ fn emitAnnotationMiss(
         if (ictx.any_type_sentinel) |any_tv| {
             if (tv == any_tv) return null;
         }
-        if (ictx.lookupBuiltinTypeValue(tv.name)) |builtin| {
-            if (builtin == tv) {
-                if (mapTypeNameToTagConst(state, tv.name)) |tag_const| {
-                    const tag_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), slot_addr, state.tag_offset_const);
-                    const tag_val = c._ir_LOAD(ctx, ValueLayout.ir_tag_type, tag_addr);
-                    return c.ir_fold2(ctx, c.IR_OPT(c.IR_NE, c.IR_BOOL), tag_val, tag_const);
-                }
-            }
+        if (tagConstFor(state, tv)) |tag_const| {
+            const tag_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), slot_addr, state.tag_offset_const);
+            const tag_val = c._ir_LOAD(ctx, ValueLayout.ir_tag_type, tag_addr);
+            return c.ir_fold2(ctx, c.IR_OPT(c.IR_NE, c.IR_BOOL), tag_val, tag_const);
         }
     }
 
@@ -16758,11 +16717,7 @@ fn aotAnnotationSpec(
             if (ictx.any_type_sentinel) |any_tv| {
                 if (tv == any_tv) return null;
             }
-            if (ictx.lookupBuiltinTypeValue(tv.name)) |builtin| {
-                if (builtin == tv) {
-                    if (builtinTagForTypeName(tv.name)) |tag| return .{ .kind = 0, .slot = @intFromEnum(tag), .tag = tag };
-                }
-            }
+            if (tv.builtin_tag) |tag| return .{ .kind = 0, .slot = @intFromEnum(tag), .tag = tag };
             const maps = state.aot_slot_maps orelse return state.refuse(.unchecked_input_in_aot, param_name);
             const slot = maps.typevalue_slot_index.get(tv) orelse return state.refuse(.unchecked_input_in_aot, param_name);
             return .{ .kind = 1, .slot = slot };
@@ -19738,9 +19693,17 @@ fn dispatchResolvedGeneric(ctx: *Context, word: WordDefinition, word_name: []con
 /// the owning module's deps frame so any references inside the word's
 /// body (other module-private helpers, struct types, etc.) resolve.
 ///
+/// Its inputs are validated first, as an interpreted call validates them.
+///
 /// A compound body called in tail position runs without the call frame, as `elideTailFrame`
 /// describes. `elided` reports that, so the caller skips its own cleanup of that frame.
 fn invokeModuleWord(ctx: *Context, hit: ModuleWordHit, name: []const u8, is_tail: bool, elided: *bool) !void {
+    if (hit.word.stack_effect) |effect| {
+        const def = Context.wordDefFromModuleWord(name, hit.word, hit.module);
+        try ctx.validateParameterEffects(effect, Context.ParamEffectCallee.of(&def));
+        try ctx.validateWordTypeAnnotations(&def, effect);
+    }
+
     try ctx.pushModuleDepsFrame(hit.module);
     defer ctx.popModuleDepsFrameTraced(hit.module);
 
@@ -19900,12 +19863,10 @@ export fn jitNativeWordCall(ctx_raw: usize, word_id_raw: usize, src_ptr_raw: usi
                 ctx.jit_pending_error = ctx.wordErrorCleanup(display_name, err);
                 return 2;
             };
-            if (!shouldSkipTypeAnnotationValidation(word)) {
-                ctx.validateTypeAnnotations(effect) catch |err| {
-                    ctx.jit_pending_error = ctx.wordErrorCleanup(display_name, err);
-                    return 2;
-                };
-            }
+            ctx.validateWordTypeAnnotations(&word, effect) catch |err| {
+                ctx.jit_pending_error = ctx.wordErrorCleanup(display_name, err);
+                return 2;
+            };
         }
 
         const has_generic = for (word.markers) |mk| {
@@ -20092,12 +20053,10 @@ export fn jitInterpretedCall(ctx_raw: usize, word_id_raw: usize, src_ptr_raw: us
                 ctx.jit_pending_error = ctx.wordErrorCleanup(display_name, err);
                 return 2;
             };
-            if (!shouldSkipTypeAnnotationValidation(word)) {
-                ctx.validateTypeAnnotations(effect) catch |err| {
-                    ctx.jit_pending_error = ctx.wordErrorCleanup(display_name, err);
-                    return 2;
-                };
-            }
+            ctx.validateWordTypeAnnotations(&word, effect) catch |err| {
+                ctx.jit_pending_error = ctx.wordErrorCleanup(display_name, err);
+                return 2;
+            };
         }
 
         if (word.action == .compound) {
@@ -24485,7 +24444,7 @@ test "inline struct-field-set returns error_propagate on wrong struct type" {
 }
 
 test "compile inline typed-validate-and-promote with fixnum" {
-    var fixnum_tv = TypeValue{ .name = "fixnum", .descriptor = null };
+    var fixnum_tv = TypeValue{ .name = "fixnum", .descriptor = null, .builtin_tag = .fixnum };
     var type_params = [_]*const TypeValue{&fixnum_tv};
     var vt = VirtualType{ .name = "array(fixnum)", .inner_type = "array", .type_params = &type_params };
     var tv = TypeValue{ .name = "array(fixnum)", .descriptor = null, .virtual_type = &vt };
@@ -24511,7 +24470,7 @@ test "compile inline typed-validate-and-promote with fixnum" {
 }
 
 test "compile inline typed-validate-and-promote with float" {
-    var float_tv = TypeValue{ .name = "float", .descriptor = null };
+    var float_tv = TypeValue{ .name = "float", .descriptor = null, .builtin_tag = .float };
     var type_params = [_]*const TypeValue{&float_tv};
     var vt = VirtualType{ .name = "array(float)", .inner_type = "array", .type_params = &type_params };
     var tv = TypeValue{ .name = "array(float)", .descriptor = null, .virtual_type = &vt };
@@ -24537,7 +24496,7 @@ test "compile inline typed-validate-and-promote with float" {
 }
 
 test "inline typed-validate-and-promote returns error_propagate on type mismatch" {
-    var fixnum_tv = TypeValue{ .name = "fixnum", .descriptor = null };
+    var fixnum_tv = TypeValue{ .name = "fixnum", .descriptor = null, .builtin_tag = .fixnum };
     var type_params = [_]*const TypeValue{&fixnum_tv};
     var vt = VirtualType{ .name = "array(fixnum)", .inner_type = "array", .type_params = &type_params };
     var tv = TypeValue{ .name = "array(fixnum)", .descriptor = null, .virtual_type = &vt };
@@ -24583,7 +24542,7 @@ test "inline typed-validate-and-promote no-op when no type_params" {
 }
 
 test "inline typed-validate-and-promote on input parameter" {
-    var fixnum_tv = TypeValue{ .name = "fixnum", .descriptor = null };
+    var fixnum_tv = TypeValue{ .name = "fixnum", .descriptor = null, .builtin_tag = .fixnum };
     var type_params = [_]*const TypeValue{&fixnum_tv};
     var vt = VirtualType{ .name = "vector(fixnum)", .inner_type = "vector", .type_params = &type_params };
     var tv = TypeValue{ .name = "vector(fixnum)", .descriptor = null, .virtual_type = &vt };
@@ -24608,7 +24567,7 @@ test "inline typed-validate-and-promote on input parameter" {
 }
 
 test "inline typed-validate-and-promote then arithmetic" {
-    var fixnum_tv = TypeValue{ .name = "fixnum", .descriptor = null };
+    var fixnum_tv = TypeValue{ .name = "fixnum", .descriptor = null, .builtin_tag = .fixnum };
     var type_params = [_]*const TypeValue{&fixnum_tv};
     var vt = VirtualType{ .name = "array(fixnum)", .inner_type = "array", .type_params = &type_params };
     var tv = TypeValue{ .name = "array(fixnum)", .descriptor = null, .virtual_type = &vt };
@@ -24776,8 +24735,7 @@ test "an AOT entry check calls out once for a type a tag does not identify" {
     var ctx = Context.init(testing.allocator);
     defer ctx.deinit();
 
-    var weight: value_mod.TypeValue = undefined;
-    weight.name = "weight";
+    var weight = value_mod.TypeValue{ .name = "weight", .descriptor = null };
     const inputs = [_]stack_effect_mod.StackEffectParam{.{ .name = "w", .type_annotation = .{ .type = &weight } }};
     const outputs = [_]stack_effect_mod.StackEffectParam{.{ .name = "w" }};
     const effect = StackEffect{ .inputs = &inputs, .outputs = &outputs };
@@ -24999,14 +24957,6 @@ test "jitEntryTypeMiss raises under error and marks the raise until the next que
 
     ctx.appendPendingSyntheticErrorFrame("keep", "", 1, null);
     try testing.expect(!ctx.entry_check_raised);
-}
-
-test "builtinTagForTypeName names the single-tag builtin types and nothing else" {
-    try testing.expectEqual(ValueLayout.TagType.fixnum, builtinTagForTypeName("fixnum").?);
-    try testing.expectEqual(ValueLayout.TagType.string, builtinTagForTypeName("string").?);
-    try testing.expectEqual(ValueLayout.TagType.quotation, builtinTagForTypeName("quotation").?);
-    try testing.expect(builtinTagForTypeName("number") == null);
-    try testing.expect(builtinTagForTypeName("weight") == null);
 }
 
 test "emitWordCAot emits the entry check for a word that pushes nothing" {

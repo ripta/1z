@@ -1111,7 +1111,27 @@ pub const TypeValue = struct {
     /// natives to recover the VirtualType pointer from a popped .type_val
     /// without resorting to fixnum-disguised pointers.
     virtual_type: ?*const VirtualType = null,
+    /// The `Value` tag that identifies this builtin type, or null for a type no single tag
+    /// identifies.
+    ///
+    /// It is set only where the builtin types are registered.
+    ///
+    /// A value carrying the tag satisfies the type, so the interpreter and the compiled tiers accept
+    /// it on a tag compare alone. A value without it may still satisfy the type, as a tagged value
+    /// does through its base type, so a miss falls back to the full check.
+    builtin_tag: ?ValueTag = null,
 };
+
+/// Whether a builtin type is identified by its one `Value` tag, so a tag compare decides a hit.
+///
+/// This list decides which builtin `TypeValue`s get a `builtin_tag`. `closure` is absent: it
+/// shares the `quotation` type, whose tag is `quotation`.
+pub fn tagIdentifiesBuiltinType(tag: ValueTag) bool {
+    return switch (tag) {
+        .fixnum, .float, .boolean, .string, .symbol, .array, .quotation, .hash, .vector, .byte_array, .set, .mutable_map, .value_map, .mutable_value_map, .bignum => true,
+        else => false,
+    };
+}
 
 pub const DescriptorFlags = struct {
     numeric: bool = false,
@@ -1947,8 +1967,55 @@ fn callableView(v: Value) Quotation {
     };
 }
 
+/// The tag of a `Value`.
+///
+/// Declared on its own so a type can name it without resolving `Value`. `TypeValue.builtin_tag`
+/// needs that, since `Value` holds `TypeValue` pointers.
+///
+/// The order matches `Value`'s fields, which a comptime check below enforces.
+pub const ValueTag = enum {
+    fixnum,
+    float,
+    bignum,
+    boolean,
+    string,
+    symbol,
+    array,
+    quotation,
+    closure,
+    hash,
+    vector,
+    byte_array,
+    set,
+    mutable_map,
+    value_map,
+    mutable_value_map,
+    stream,
+    resource,
+    parameter,
+    once_cell,
+    module,
+    marker,
+    struct_type,
+    struct_instance,
+    tagged,
+    template,
+    stack_effect,
+    error_value,
+    task,
+    channel,
+    iterator,
+    doc_string,
+    type_val,
+    type_descriptor,
+    protocol_descriptor,
+    constraint_combinator,
+    sandbox_spec,
+    unit,
+};
+
 /// Value represents any value that can be stored on the stack.
-pub const Value = union(enum) {
+pub const Value = union(ValueTag) {
     fixnum: i64,
     float: f64,
     bignum: BignumPayload,
@@ -2614,6 +2681,16 @@ comptime {
         std.debug.assert(@sizeOf(Value) == 40);
     } else if (@sizeOf(usize) == 4) {
         std.debug.assert(@sizeOf(Value) == 24);
+    }
+}
+
+// Code walks `Value`'s fields by index and converts each index to a tag, so field `i` must be the
+// variant whose tag value is `i`.
+comptime {
+    for (@typeInfo(Value).@"union".fields, 0..) |field, i| {
+        if (!std.mem.eql(u8, field.name, @tagName(@as(ValueTag, @enumFromInt(i))))) {
+            @compileError("ValueTag order differs from Value's fields at '" ++ field.name ++ "'");
+        }
     }
 }
 

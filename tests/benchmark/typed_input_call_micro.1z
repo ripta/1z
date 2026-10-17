@@ -1,0 +1,54 @@
+\ Benchmark: the interpreter's per-call check of one typed `fixnum` input.
+\
+\ The two words differ only in the annotation, so the difference between their rows is what the
+\ interpreted call spends validating `n`. Each iteration makes ten calls, so the check's cost is not
+\ lost under the loop's own. The loop is driven by `times` rather than `benchmark-n`, whose per-word
+\ bookkeeping sits on the dispatch path being measured.
+\
+\ Each round times the untyped word, the typed word, and the untyped word again, so a load spike
+\ lands on all three series. The second untyped series is the control: its ratio to the first is
+\ the noise floor the typed ratio is read against.
+\
+\ Prints the median of each series, the two ratios, and the per-call delta. Run with
+\ --compile=off.
+
+use "time" ;
+
+typed-bump: ( n: fixnum -- n ) [ 1 + ] ;
+untyped-bump: ( n -- n ) [ 1 + ] ;
+
+typed10: ( n -- n ) [ typed-bump typed-bump typed-bump typed-bump typed-bump typed-bump typed-bump typed-bump typed-bump typed-bump ] ;
+untyped10: ( n -- n ) [ untyped-bump untyped-bump untyped-bump untyped-bump untyped-bump untyped-bump untyped-bump untyped-bump untyped-bump untyped-bump ] ;
+
+iters: const [ 300000 ] ;
+calls-per-iter: const [ 10 ] ;
+rounds: const [ 9 ] ;
+
+time-row: ( quot -- ns ) [ [ 0 0 iters ] dip monotonic-nanos [ times 2drop ] dip monotonic-nanos swap - ] ;
+
+median: ( seq -- n ) [ [ < ] #sort dup #len 2 div #nth ] ;
+
+\ Warm up both paths before measuring.
+[ typed10 ] time-row drop
+[ untyped10 ] time-row drop
+
+untyped-samples: V{ } ;
+typed-samples:   V{ } ;
+control-samples: V{ } ;
+
+rounds [
+  untyped-samples [ untyped10 ] time-row #push! drop
+  typed-samples [ typed10 ] time-row #push! drop
+  control-samples [ untyped10 ] time-row #push! drop
+] times
+
+untyped-ns: untyped-samples median ;
+typed-ns:   typed-samples median ;
+control-ns: control-samples median ;
+
+"untyped ns=" print untyped-ns inspect print-line
+"typed ns=" print typed-ns inspect print-line
+"control ns=" print control-ns inspect print-line
+"typed/untyped=" print typed-ns >float untyped-ns >float / inspect print-line
+"control/untyped=" print control-ns >float untyped-ns >float / inspect print-line
+"per-call delta ns=" print typed-ns untyped-ns - >float iters calls-per-iter * >float / inspect print-line

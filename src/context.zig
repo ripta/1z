@@ -1799,6 +1799,7 @@ pub const Context = struct {
                 try self.builtin_type_values.put(self.allocator, name, new_tv);
                 break :blk new_tv;
             };
+            if (comptime value_mod.tagIdentifiesBuiltinType(tag)) tv.builtin_tag = tag;
 
             self.builtin_type_array[i] = tv;
         }
@@ -6349,7 +6350,7 @@ pub const Context = struct {
         return ExecutionError.UnknownWord;
     }
 
-    fn wordDefFromModuleWord(
+    pub fn wordDefFromModuleWord(
         name: []const u8,
         mod_word: value_mod.ModuleWord,
         module: *const value_mod.Module,
@@ -6369,7 +6370,7 @@ pub const Context = struct {
         // Module-cache words are synthesized fresh on each lookup rather than
         // stored through the finalization points, so compute the flags here so
         // `executeResolvedWord` reads correct bits for module-private words.
-        def.exec_flags = computeExecFlags(def);
+        def.exec_flags = computeExecFlagsWithMayDefine(def, mod_word.may_define);
         return def;
     }
 
@@ -8243,6 +8244,12 @@ pub const Context = struct {
             defer self.current_source = saved_source;
             if (mod_word.source_file) |sf| self.current_source = sf;
 
+            // Its inputs are validated here for the same reason.
+            if (mod_word.stack_effect) |effect| {
+                const def = wordDefFromModuleWord(word_name, mod_word, module);
+                try self.validateCallInputs(&def, effect);
+            }
+
             switch (mod_word.action) {
                 .compound => |instrs| {
                     try self.pushModuleDepsFrame(module);
@@ -9114,7 +9121,22 @@ pub const Context = struct {
     ///
     /// A value whose type cannot be resolved passes, and so does a protocol or constraint check
     /// against a type with no descriptor.
+    ///
+    /// A value carrying a builtin type's tag is accepted on that compare alone.
     pub fn annotationAccepts(self: *Context, ann: stack_effect_mod.TypeAnnotation, val: Value) !bool {
+        if (ann == .type) {
+            if (ann.type.builtin_tag) |tag| {
+                if (std.meta.activeTag(val) == tag) {
+                    self.assertTagHitAccepted(ann, val);
+                    return true;
+                }
+            }
+        }
+        return self.annotationAcceptsFull(ann, val);
+    }
+
+    /// `annotationAccepts` without the tag compare, resolving the value's type in every case.
+    fn annotationAcceptsFull(self: *Context, ann: stack_effect_mod.TypeAnnotation, val: Value) !bool {
         switch (ann) {
             .type => |expected_tv| {
                 if (self.any_type_sentinel) |any_tv| {
@@ -10460,9 +10482,21 @@ pub const Context = struct {
         if (word.exec_flags.has_param_effects) {
             try self.validateParameterEffects(effect, ParamEffectCallee.of(word));
         }
+        try self.validateWordTypeAnnotations(word, effect);
+    }
+
+    /// Validate `word`'s type-annotated inputs, when its flags say they are checked.
+    pub fn validateWordTypeAnnotations(self: *Context, word: *const WordDefinition, effect: *const StackEffect) anyerror!void {
         if (word.exec_flags.has_type_annotations and !word.exec_flags.skip_type_validation) {
             try self.validateTypeAnnotations(effect);
         }
+    }
+
+    /// Debug check that a tag hit means what a full-check hit means: a value carrying a builtin
+    /// type's tag satisfies that type.
+    fn assertTagHitAccepted(self: *Context, ann: stack_effect_mod.TypeAnnotation, val: Value) void {
+        if (comptime builtin.mode != .Debug) return;
+        std.debug.assert(self.annotationAcceptsFull(ann, val) catch false);
     }
 
     /// Run what `executeResolvedWord` runs between a bailed compiled call and its tail call, which
@@ -14896,6 +14930,27 @@ test "lookupBuiltinTypeValueByTag returns same pointer as name lookup" {
         try std.testing.expect(by_name != null);
         try std.testing.expect(by_tag.? == by_name.?);
     }
+}
+
+test "a builtin TypeValue carries its tag exactly when one tag identifies it" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    var tagged: usize = 0;
+    const num_variants = comptime @typeInfo(value_mod.Value).@"union".fields.len;
+    inline for (0..num_variants) |i| {
+        const tag: std.meta.Tag(value_mod.Value) = @enumFromInt(i);
+        if (comptime value_mod.tagIdentifiesBuiltinType(tag)) {
+            try std.testing.expectEqual(tag, ctx.lookupBuiltinTypeValueByTag(tag).?.builtin_tag.?);
+            tagged += 1;
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 15), tagged);
+
+    // A closure shares the quotation type without overwriting its tag.
+    try std.testing.expectEqual(std.meta.Tag(Value).quotation, ctx.lookupBuiltinTypeValueByTag(.closure).?.builtin_tag.?);
+    try std.testing.expect(ctx.lookupBuiltinTypeValueByTag(.stream).?.builtin_tag == null);
+    try std.testing.expect(ctx.lookupBuiltinTypeValueByTag(.tagged).?.builtin_tag == null);
 }
 
 test "constraint_combinator and protocol_descriptor share the constraint TypeValue" {

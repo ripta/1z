@@ -1,0 +1,17 @@
+\ A call that reaches a module's typed word by qualified name validates its inputs, from interpreted
+\ and compiled callers alike.
+
+use "testing" ;
+
+m: "./fixtures/typed_module_word_mod.1z" load ;
+
+via-bump: ( x -- y ) [ m.bump 0 + ] ;
+via-twice: ( n q -- n ) [ m.twice 0 + ] ;
+
+"a matching input runs the module word" test-section
+41 via-bump 42 "fixnum accepted" assert=
+1 [ 1 + ] via-twice 3 "quotation with the declared effect accepted" assert=
+
+"a mismatched input raises" test-section
+[ 3.5 via-bump ] type-error: "float rejected by the module word's fixnum input" assert-error-type
+[ 1 [ dup ] via-twice ] stack-effect-mismatch: "wrong-effect quotation rejected" assert-error-type

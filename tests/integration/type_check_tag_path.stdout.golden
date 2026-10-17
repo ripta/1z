@@ -1,0 +1,93 @@
+=== a builtin tag hit accepts the input ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: fixnum accepted
+Stack: [ ]
+PASS: string accepted
+Stack: [ ]
+PASS: string rejected by fixnum
+Stack: [ ]
+PASS: fixnum rejected by string
+Stack: [ ]
+=== a tagged value misses the tag and is accepted through its base type ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: typed array accepted as array
+Stack: [ ]
+PASS: plain array accepted as array
+Stack: [ ]
+PASS: fixnum rejected by array
+Stack: [ ]
+=== a user type, a virtual type, and a protocol take the full check ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: struct accepted
+Stack: [ ]
+PASS: fixnum rejected by struct
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: virtual accepted
+Stack: [ ]
+PASS: fixnum rejected by virtual
+Stack: [ ]
+PASS: virtual rejected by its inner fixnum
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: protocol satisfied
+Stack: [ ]
+PASS: protocol not satisfied
+Stack: [ ]
+=== a row-variable word checks its concrete input under the row ===
+Stack: [ ]
+Stack: [ ]
+PASS: row word result
+PASS: row preserved
+Stack: [ ]
+PASS: row word rejects string
+Stack: [ ]
+=== a redefinition checks the new declaration ===
+Stack: [ ]
+Stack: [ ]
+PASS: old declaration accepts fixnum
+Stack: [ ]
+Stack: [ ]
+PASS: new declaration accepts string
+Stack: [ ]
+PASS: new declaration rejects fixnum
+Stack: [ ]
+=== each of five typed inputs is checked in its own position ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: first input checked
+Stack: [ ]
+PASS: second input checked
+Stack: [ ]
+PASS: third input checked
+Stack: [ ]
+PASS: fourth input checked
+Stack: [ ]
+PASS: fifth input checked
+Stack: [ ]
+=== warning: one warning per mismatched input, then the call continues ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+=== off: no warning and no error ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+=== error: raises again once the mode is back ===
+Stack: [ ]
+PASS: error mode raises
+Stack: [ ]

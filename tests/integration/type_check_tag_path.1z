@@ -1,0 +1,77 @@
+\ An interpreted call accepts a typed input whose value carries its builtin type's tag on that
+\ compare alone. Anything else takes the full check, which still accepts a tagged value through
+\ its base type.
+
+use "testing" ;
+
+"a builtin tag hit accepts the input" test-section
+add-one: ( n: fixnum -- m ) [ 1 + ] ;
+exclaim: ( s: string -- t ) [ "!" #append ] ;
+41 add-one 42 "fixnum accepted" assert=
+"hi" exclaim "hi!" "string accepted" assert=
+[ "41" add-one ] type-error: "string rejected by fixnum" assert-error-type
+[ 41 exclaim ] type-error: "fixnum rejected by string" assert-error-type
+
+"a tagged value misses the tag and is accepted through its base type" test-section
+array(fixnum): M{ inner-type: array element-type: fixnum define: [ define-parameterized-type ] } ;
+first-of: ( a: array -- x ) [ #first ] ;
+{ 7 8 } >array(fixnum) first-of 7 "typed array accepted as array" assert=
+{ 7 8 } first-of 7 "plain array accepted as array" assert=
+[ 7 first-of ] type-error: "fixnum rejected by array" assert-error-type
+
+"a user type, a virtual type, and a protocol take the full check" test-section
+vec2: struct{ x y } ;
+x-of: ( v: vec2 -- x ) [ x>> ] ;
+3 4 make-vec2 x-of 3 "struct accepted" assert=
+[ 3 x-of ] type-error: "fixnum rejected by struct" assert-error-type
+
+meters: virtual{ fixnum } ;
+unwrap-meters: ( m: meters -- n ) [ unmake-meters ] ;
+5 >meters unwrap-meters 5 "virtual accepted" assert=
+[ 5 unwrap-meters ] type-error: "fixnum rejected by virtual" assert-error-type
+[ 5 >meters add-one ] type-error: "virtual rejected by its inner fixnum" assert-error-type
+
+sayable: protocol{ say: } ;
+parrot:  virtual{ string } ;
+say:     generic ( x -- y ) [ drop "..." ] ;
+say:     method{ parrot } [ unmake-parrot ] ;
+speak: ( x: sayable -- y ) [ say ] ;
+"polly" >parrot speak "polly" "protocol satisfied" assert=
+[ 5 >meters speak ] protocol-error: "protocol not satisfied" assert-error-type
+
+"a row-variable word checks its concrete input under the row" test-section
+row-add: ( ..a n: fixnum -- ..a m ) [ 1 + ] ;
+"keep" 1 row-add 2 "row word result" assert= "keep" "row preserved" assert=
+[ "keep" "one" row-add ] type-error: "row word rejects string" assert-error-type
+
+"a redefinition checks the new declaration" test-section
+retyped: ( n: fixnum -- n ) [ ] ;
+5 retyped 5 "old declaration accepts fixnum" assert=
+retyped: ( s: string -- s ) [ ] ;
+"five" retyped "five" "new declaration accepts string" assert=
+[ 5 retyped ] type-error: "new declaration rejects fixnum" assert-error-type
+
+"each of five typed inputs is checked in its own position" test-section
+five: ( a: fixnum b: string c: fixnum d: string e: fixnum -- ) [ drop drop drop drop drop ] ;
+1 "b" 3 "d" 5 five
+[ "a" "b" 3 "d" 5 five ] type-error: "first input checked" assert-error-type
+[ 1 2 3 "d" 5 five ] type-error: "second input checked" assert-error-type
+[ 1 "b" "c" "d" 5 five ] type-error: "third input checked" assert-error-type
+[ 1 "b" 3 4 5 five ] type-error: "fourth input checked" assert-error-type
+[ 1 "b" 3 "d" "e" five ] type-error: "fifth input checked" assert-error-type
+
+"warning: one warning per mismatched input, then the call continues" test-section
+two-typed: ( a: fixnum b: string -- ) [ drop drop ] ;
+retyped-back: ( n: fixnum -- n ) [ ] ;
+pragma{ type-check: "warning" }
+"a" 2 two-typed
+1 "b" 3 "d" "e" five
+
+"off: no warning and no error" test-section
+pragma{ type-check: "off" }
+"a" 2 two-typed
+"41" retyped-back drop
+
+"error: raises again once the mode is back" test-section
+pragma{ type-check: "error" }
+[ "41" retyped-back ] type-error: "error mode raises" assert-error-type

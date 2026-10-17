@@ -1,0 +1,15 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+=== a matching input runs the module word ===
+Stack: [ ]
+PASS: fixnum accepted
+Stack: [ ]
+PASS: quotation with the declared effect accepted
+Stack: [ ]
+=== a mismatched input raises ===
+Stack: [ ]
+PASS: float rejected by the module word's fixnum input
+Stack: [ ]
+PASS: wrong-effect quotation rejected
+Stack: [ ]
