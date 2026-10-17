@@ -1,0 +1,5 @@
+=== a quotation swapped under a value ===
+PASS: the quotation survives
+PASS: the value under it survives
+=== a quotation sent to a spawned task ===
+PASS: await returns the task's result

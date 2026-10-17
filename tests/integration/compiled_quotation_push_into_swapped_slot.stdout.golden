@@ -1,0 +1,12 @@
+Stack: [ ]
+=== a quotation swapped under a value ===
+Stack: [ ]
+Stack: [ 2 [ 7 8 + ] ]
+PASS: the quotation survives
+Stack: [ 2 ]
+PASS: the value under it survives
+Stack: [ ]
+=== a quotation sent to a spawned task ===
+Stack: [ ]
+PASS: await returns the task's result
+Stack: [ ]

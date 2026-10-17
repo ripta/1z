@@ -4620,8 +4620,15 @@ fn ownModuleDefines(state: *const CompileState, name: []const u8) bool {
 ///
 /// In AOT mode, quotation bodies are serialized to byte arrays and pushed
 /// via the jitPushQuotation callback, avoiding dangling instruction pointers.
+///
+/// `sp` must cover every live entry, or the caller settles quotation-slot readers over the full
+/// stack first, as `materializeUnderRaiseGuard` does.
 fn materializeQuotations(state: *CompileState, stack: []StackEntry, sp: usize, escape: bool) IrCodegenError!void {
     const ctx = state.ctx;
+
+    settleQuotationSlotReaders(state, stack, sp);
+    if (@import("builtin").mode == .Debug) std.debug.assert(!quotationSlotIsRead(stack, sp));
+
     const base_addr = state.base_addr;
     for (0..sp) |qi| {
         switch (stack[qi]) {
@@ -5191,6 +5198,51 @@ fn hasStrandedRawEntry(stack: []const StackEntry, sp: usize) bool {
 fn settleStrandedEntries(state: *CompileState, stack: []StackEntry, sp: usize) void {
     if (!hasStrandedRawEntry(stack, sp)) return;
     flushToPhysicalStack(state, stack, sp);
+}
+
+/// True when a live `raw_at_slot` entry reads the physical slot of a `quotation_body` entry.
+///
+/// A lazy reorder such as `swap [ q ] swap` can leave a quotation at index `i` while slot `i` still
+/// holds the value another entry designates. Materializing the quotation writes slot `i` at once,
+/// so that value must move first.
+fn quotationSlotIsRead(stack: []const StackEntry, sp: usize) bool {
+    for (0..sp) |j| {
+        const s = stack[j].slotIndex() orelse continue;
+        if (s != j and s < sp and stack[s] == .quotation_body) return true;
+    }
+    return false;
+}
+
+/// Plan the copies that move every `raw_at_slot` entry in `stack[0..sp]` into its own slot, and
+/// nothing else.
+///
+/// Typed entries stay unboxed and quotation and row entries stay symbolic, so the plan holds only
+/// copies and swaps. Those entries are presented to `planFlushMoves` as identity slots: no move
+/// writes them, while a copy may still read the value their slot physically holds.
+fn planRawSettleMoves(stack: []const StackEntry, sp: usize, out: []MoveOp) usize {
+    std.debug.assert(sp <= max_abstract_stack_depth);
+    var raw_only: [max_abstract_stack_depth]StackEntry = undefined;
+    for (0..sp) |i| {
+        raw_only[i] = if (stack[i] == .raw_at_slot) stack[i] else .{ .raw_at_slot = i };
+    }
+    return planFlushMoves(raw_only[0..sp], sp, out);
+}
+
+/// Move every value a quotation's slot still holds for another entry out of that slot.
+///
+/// Only the `raw_at_slot` entries move, through `planRawSettleMoves`. `sp` must cover every live
+/// entry, since a reader above `sp` is invisible here and a copy below `sp` may write the slot it
+/// reads.
+fn settleQuotationSlotReaders(state: *CompileState, stack: []StackEntry, sp: usize) void {
+    if (!quotationSlotIsRead(stack, sp)) return;
+
+    var plan: [max_abstract_stack_depth]MoveOp = undefined;
+    const n = planRawSettleMoves(stack, sp, &plan);
+    for (plan[0..n]) |m| emitMoveOp(state, state.base_addr, m);
+
+    for (0..sp) |i| {
+        if (stack[i] == .raw_at_slot) stack[i] = .{ .raw_at_slot = i };
+    }
 }
 
 /// Emit the common epilogue for a compiled word: box typed stack entries
@@ -6025,12 +6077,16 @@ fn compilePredBodyLoop(
 /// A raise leaves the stack below the operands in place, so a literal there has to be a real
 /// quotation by the time the guard can fire. False when the literal cannot be built, which sends
 /// the caller to its native callback.
+///
+/// An operand may still read a literal's slot, so the readers are settled over the whole stack
+/// first. That can move an operand, so callers read operand slots only after this returns.
 fn materializeUnderRaiseGuard(state: *CompileState, stack: []StackEntry, sp: usize, operand_count: usize) bool {
     const below = sp - operand_count;
     for (stack[0..below]) |entry| {
         if (entry == .quotation_body) break;
     } else return true;
 
+    settleQuotationSlotReaders(state, stack, sp);
     materializeQuotations(state, stack, below, false) catch return false;
     return true;
 }
@@ -6058,12 +6114,10 @@ fn tryEmitInlineVirtualUnwrap(
         };
     } else return false;
 
-    const value_slot: usize = switch (stack[sp.* - 2]) {
-        .raw_at_slot => |s| s,
-        else => return false,
-    };
+    if (stack[sp.* - 2] != .raw_at_slot) return false;
 
     if (!materializeUnderRaiseGuard(state, stack, sp.*, 2)) return false;
+    const value_slot: usize = stack[sp.* - 2].slotIndex().?;
     sp.* -= 2;
 
     const ctx = state.ctx;
@@ -6188,9 +6242,8 @@ fn tryEmitInlineTypedValidateAndPromote(
 
     const expected_tag_const = tagConstFor(state, params[0]) orelse return false;
 
-    const value_slot: usize = value_entry.slotIndex().?;
-
     if (!materializeUnderRaiseGuard(state, stack, sp.*, 2)) return false;
+    const value_slot: usize = stack[sp.* - 2].slotIndex().?;
     sp.* -= 2;
 
     const ctx = state.ctx;
@@ -6244,12 +6297,10 @@ fn tryEmitInlineStructFieldGet(
     };
 
     // the instance must be a raw value on the physical stack
-    const instance_slot: usize = switch (stack[sp.* - 3]) {
-        .raw_at_slot => |s| s,
-        else => return false,
-    };
+    if (stack[sp.* - 3] != .raw_at_slot) return false;
 
     if (!materializeUnderRaiseGuard(state, stack, sp.*, 3)) return false;
+    const instance_slot: usize = stack[sp.* - 3].slotIndex().?;
     sp.* -= 3;
 
     StructInstanceLayout.ensureInit();
@@ -21454,6 +21505,71 @@ test "flush planner: cycle mixed with a dependent box" {
         .{ .raw_at_slot = 2 },
     };
     try checkFlushPlan(&stack, 4);
+}
+
+/// Plan the quotation-reader settle for `stack[0..sp]`, simulate it over marker slots, then overwrite
+/// every quotation slot the way materialization does.
+///
+/// Every `raw_at_slot` entry must still find its designated value in its own slot. The plan must
+/// hold no boxing, so typed entries stay unboxed.
+fn checkQuotationSettle(stack: []const StackEntry, sp: usize) !void {
+    var plan: [max_abstract_stack_depth]MoveOp = undefined;
+    const n = planRawSettleMoves(stack, sp, &plan);
+
+    const quotation_marker: i64 = -1;
+    var slots: [max_abstract_stack_depth]i64 = undefined;
+    for (0..max_abstract_stack_depth) |i| slots[i] = @intCast(i);
+    for (plan[0..n]) |m| {
+        switch (m) {
+            .box_i64, .box_f64, .box_bool => return error.TestUnexpectedResult,
+            .copy => |cp| slots[cp.dest] = slots[cp.src],
+            .swap => |sw| {
+                const t = slots[sw.a];
+                slots[sw.a] = slots[sw.b];
+                slots[sw.b] = t;
+            },
+        }
+    }
+
+    for (0..sp) |i| {
+        if (stack[i] == .quotation_body) slots[i] = quotation_marker;
+    }
+
+    for (0..sp) |i| {
+        const s = stack[i].slotIndex() orelse continue;
+        try testing.expectEqual(@as(i64, @intCast(s)), slots[i]);
+    }
+}
+
+const test_quotation_entry: StackEntry = .{ .quotation_body = .{ .body = &.{}, .effect = null } };
+
+test "quotation settle: swap q swap moves the value out of the quotation's slot" {
+    // `ch task swap [ q ] swap`: index 0 reads slot 1, the quotation sits at index 1, and index 2
+    // reads slot 0.
+    const stack = [_]StackEntry{ .{ .raw_at_slot = 1 }, test_quotation_entry, .{ .raw_at_slot = 0 } };
+    try testing.expect(quotationSlotIsRead(&stack, 3));
+    try checkQuotationSettle(&stack, 3);
+}
+
+test "quotation settle: rot-shaped reader cycle around a quotation" {
+    const stack = [_]StackEntry{ .{ .raw_at_slot = 2 }, .{ .raw_at_slot = 3 }, .{ .raw_at_slot = 0 }, test_quotation_entry };
+    try testing.expect(quotationSlotIsRead(&stack, 4));
+    try checkQuotationSettle(&stack, 4);
+}
+
+test "quotation settle: typed entries stay unboxed" {
+    // The fixnum at index 0 never moves, and the reader of the quotation's slot moves into its own.
+    const stack = [_]StackEntry{ .{ .i64_ref = 0 }, test_quotation_entry, .{ .raw_at_slot = 1 } };
+    try testing.expect(quotationSlotIsRead(&stack, 3));
+    try checkQuotationSettle(&stack, 3);
+}
+
+test "quotation settle: no reader means no hazard" {
+    const stack = [_]StackEntry{ .{ .raw_at_slot = 2 }, test_quotation_entry, .{ .raw_at_slot = 0 } };
+    try testing.expect(!quotationSlotIsRead(&stack, 3));
+
+    const identity = [_]StackEntry{ .{ .raw_at_slot = 0 }, test_quotation_entry };
+    try testing.expect(!quotationSlotIsRead(&identity, 2));
 }
 
 test "ValueLayout string offsets reconstruct a string Value" {

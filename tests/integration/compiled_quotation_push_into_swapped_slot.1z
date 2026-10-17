@@ -1,0 +1,24 @@
+\ `swap` relabels its two entries without moving them, so a quotation literal swapped under a value
+\ can sit at an index whose physical slot still holds the value another entry reads. Building the
+\ quotation must not overwrite that slot. Nothing here sets a compile flag, so the eager pass checks
+\ the compiled run against the interpreted golden.
+
+use "testing" ;
+
+\ After the first swap, `b` lives in slot 1. The second swap leaves the quotation at index 1, and
+\ `drop` exposes it as the word's output.
+quotation-under-swap: ( a b -- b q ) [ swap [ 7 8 + ] swap drop ] ;
+
+"a quotation swapped under a value" test-section
+1 2 quotation-under-swap
+call 15 "the quotation survives" assert=
+2 "the value under it survives" assert=
+
+\ The original report: a task handle swapped above a channel, then a quotation sent through it.
+"a quotation sent to a spawned task" test-section
+[
+  <channel> dup
+  [ receive call ] curry spawn
+  swap [ 7 8 + ] swap send
+  await 15 "await returns the task's result" assert=
+] task-scope

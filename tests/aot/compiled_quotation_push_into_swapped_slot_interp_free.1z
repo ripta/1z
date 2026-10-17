@@ -1,0 +1,17 @@
+\ Interpreter-free coverage for a quotation literal swapped under a value. `swap` relabels its two
+\ entries without moving them, so the quotation can sit at an index whose physical slot still holds
+\ the value another entry reads. Building the quotation must not overwrite that slot. Output must
+\ match the interpreter.
+quotation-under-swap: ( a b -- b q ) [ swap [ 7 8 + ] swap drop ] ;
+
+1 2 quotation-under-swap
+call .
+.
+
+\ The original report: a task handle swapped above a channel, then a quotation sent through it.
+[
+  <channel> dup
+  [ receive call ] curry spawn
+  swap [ 7 8 + ] swap send
+  await .
+] task-scope
