@@ -5,6 +5,10 @@ const lsp = @import("lsp/mod.zig");
 const formatter = @import("formatter.zig");
 
 pub fn main() u8 {
+    const protocol_fd = claimProtocolStream() catch |err| {
+        std.debug.panic("Failed to claim the protocol stream: {any}", .{err});
+    };
+
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
@@ -22,7 +26,7 @@ pub fn main() u8 {
     var stdin_buf: [4096]u8 = undefined;
     var stdin = stdin_file.reader(&stdin_buf);
 
-    const stdout_file: File = .stdout();
+    const stdout_file: File = .{ .handle = protocol_fd };
     var stdout_buf: [4096]u8 = undefined;
     var stdout = stdout_file.writer(&stdout_buf);
 
@@ -30,6 +34,17 @@ pub fn main() u8 {
     var server = lsp.Server.init(allocator, &transport, &ctx, resolveFmtEngine());
 
     return server.run();
+}
+
+/// Moves the JSON-RPC stream onto a private descriptor and returns it.
+///
+/// Analysis runs parse-time words and binding statements, and the `stdout` stream primitive writes
+/// to descriptor 1 directly. Descriptor 1 is pointed at stderr so that output reaches the server
+/// log instead of landing between protocol messages.
+fn claimProtocolStream() !std.posix.fd_t {
+    const protocol_fd = try std.posix.dup(std.posix.STDOUT_FILENO);
+    try std.posix.dup2(std.posix.STDERR_FILENO, std.posix.STDOUT_FILENO);
+    return protocol_fd;
 }
 
 /// Where the standard library lives, on the interpreter's own precedence: `ONEZ_STDLIB` first,

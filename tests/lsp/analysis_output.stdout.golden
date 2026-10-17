@@ -1,0 +1,7 @@
+Content-Length: 522
+
+{"jsonrpc":"2.0","id":1,"result":{"capabilities":{"hoverProvider":true,"completionProvider":{},"textDocumentSync":{"openClose":true,"change":1},"signatureHelpProvider":{"triggerCharacters":[" "]},"documentFormattingProvider":true,"documentSymbolProvider":true,"semanticTokensProvider":{"legend":{"tokenTypes":["keyword","number","string","comment","function","variable","operator"],"tokenModifiers":["declaration","documentation"]},"full":true},"definitionProvider":true},"serverInfo":{"name":"1z-lsp","version":"0.0.1"}}}Content-Length: 424
+
+{"jsonrpc":"2.0","method":"textDocument/publishDiagnostics","params":{"uri":"file:///noisy.1z","diagnostics":[{"range":{"start":{"line":2,"character":0},"end":{"line":2,"character":12}},"severity":2,"source":"1z","message":"foo: word has no declared stack effect"},{"range":{"start":{"line":0,"character":0},"end":{"line":0,"character":53}},"severity":2,"source":"1z","message":"noisy: word has no declared stack effect"}]}}Content-Length: 38
+
+{"jsonrpc":"2.0","id":2,"result":null}
