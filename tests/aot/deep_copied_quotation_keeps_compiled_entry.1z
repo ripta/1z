@@ -1,0 +1,13 @@
+\ A quotation copied across a task boundary must stay callable without the interpreter. The copy
+\ has to keep the compiled entry of the original. Output must match the interpreter.
+[
+  [ [ "returned" print-line ] ] spawn
+  await call
+] task-scope
+
+[
+  <channel> dup
+  [ receive [ "sent" print-line ] swap call call ] curry spawn
+  swap [ "inner" print-line ] swap send
+  await
+] task-scope

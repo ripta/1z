@@ -1214,9 +1214,12 @@ fn deepCopyQuotation(quot: value_mod.Quotation, alloc: Allocator, longlived: All
         break :blk copied;
     } else null;
 
+    // A quotation's `code_ptr` always comes from the AOT quotation-function table. Every task
+    // context inherits that table, so the pointer is valid on the receiving side.
     return .{
         .instructions = new_instrs,
         .effect = new_effect,
+        .code_ptr = quot.code_ptr,
     };
 }
 
