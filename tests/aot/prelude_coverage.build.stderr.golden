@@ -1,4 +1,4 @@
-Prelude compilation: 476/482 words compiled (98.8%)
+Prelude compilation: 475/481 words compiled (98.8%)
   word 'associative' cannot be compiled
       NC.4: word pushes a value that cannot be embedded in an AOT binary
       hint: blocked until AOT literals can be serialized
@@ -25,22 +25,22 @@ AOT interpreter fallbacks: 319 total
   compound-uncompiled: 2
   quotation: 18
   sites:
-    native: nan? -> = (line 517)
-    quotation: run-benchmarks -> <quotation> (line 1332)
-    quotation: (any-loop) -> <quotation> (line 547)
-    native: quotation? -> = (line 466)
-    native: . -> inspect (line 796)
-    native: . -> inspect (line 796)
+    native: nan? -> = (line 515)
+    quotation: run-benchmarks -> <quotation> (line 1330)
+    quotation: (any-loop) -> <quotation> (line 545)
+    native: quotation? -> = (line 464)
+    native: . -> inspect (line 794)
+    native: . -> inspect (line 794)
+    native: #ends-with? -> #len (line 1417)
+    native: #ends-with? -> #len (line 1417)
+    native: #ends-with? -> #len (line 1417)
+    native: #ends-with? -> #len (line 1417)
+    native: #ends-with? -> < (line 1417)
     native: #ends-with? -> #len (line 1419)
     native: #ends-with? -> #len (line 1419)
     native: #ends-with? -> #len (line 1419)
     native: #ends-with? -> #len (line 1419)
-    native: #ends-with? -> < (line 1419)
-    native: #ends-with? -> #len (line 1421)
-    native: #ends-with? -> #len (line 1421)
-    native: #ends-with? -> #len (line 1421)
-    native: #ends-with? -> #len (line 1421)
-    per-op-native: #ends-with? -> - (line 1421)
+    per-op-native: #ends-with? -> - (line 1419)
     ... 303 more
   static-check: jitInterpretedCall=2/2 jitNativeWordCall=299/299 jitCallQuotation=18/18 (matches build-time inventory)
 Warning: '4keep' parameter 'quot' has row-variable effect; quotation call falls back to interpreter

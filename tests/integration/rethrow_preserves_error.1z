@@ -1,0 +1,15 @@
+use "testing" ;
+
+"rethrow of a thrown error" test-section
+
+[ [ 42 "boom" EKeyNotFound make-error throw ] [ rethrow ] recover ]
+[
+  dup error-type: @get EKeyNotFound "type survives" assert=
+  dup message: @get "boom" "message survives" assert=
+  data: @get 42 "data survives" assert=
+] recover
+
+"rethrow of a runtime error" test-section
+
+[ [ 1 0 / ] [ rethrow ] recover ]
+[ error-type: @get division-by-zero: "type survives" assert= ] recover

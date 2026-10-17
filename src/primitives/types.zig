@@ -8,7 +8,6 @@ pub const InterpreterError = error{
     TypeMismatch,
     NoTokenizerAvailable,
     // Error handling types
-    UserRethrown,
     UserThrown,
     // Stack effect error types
     StackEffectMismatch,

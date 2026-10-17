@@ -2,14 +2,14 @@
 Stack: [ ]
 PASS: error type
 Stack: [ ]
-Stack: [ <error parse-error: bad input at position 3 data=H{ offset: 3 } [src/prelude.1z:1385:throw <- tests/integration/throw_parse_error.1z:8:recover]> ]
+Stack: [ <error parse-error: bad input at position 3 data=H{ offset: 3 } [src/prelude.1z:1383:throw <- tests/integration/throw_parse_error.1z:8:recover]> ]
 PASS: the message ends in the position
-Stack: [ <error parse-error: bad input at position 3 data=H{ offset: 3 } [src/prelude.1z:1385:throw <- tests/integration/throw_parse_error.1z:8:recover]> ]
+Stack: [ <error parse-error: bad input at position 3 data=H{ offset: 3 } [src/prelude.1z:1383:throw <- tests/integration/throw_parse_error.1z:8:recover]> ]
 PASS: the payload carries the offset
 Stack: [ ]
 === throw-parse-error passes the payload through ===
 Stack: [ ]
-Stack: [ <error parse-error: bad span at position 0 data=H{ text: "x" offset: 0 end: 2 } [src/prelude.1z:1385:throw <- tests/integration/throw_parse_error.1z:13:recover]> ]
+Stack: [ <error parse-error: bad span at position 0 data=H{ text: "x" offset: 0 end: 2 } [src/prelude.1z:1383:throw <- tests/integration/throw_parse_error.1z:13:recover]> ]
 Stack: [ H{ text: "x" offset: 0 end: 2 } ]
 PASS: text: passes through
 Stack: [ H{ text: "x" offset: 0 end: 2 } ]

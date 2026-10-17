@@ -287,10 +287,15 @@ fn runCleanupQuotation(ctx: *Context, cleanup_pc: Callable) void {
 /// rethrow ( error -- )
 pub fn nativeRethrow(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
-    // Releasing the popped error touches only its data payload; the details copied below borrow arena strings.
-    defer container_backing.releaseValue(val);
     switch (val) {
         .error_value => |err_obj| {
+            // Stashed the way `throw` does, so the next `recover` gets the original type, message,
+            // and data. The popped value's data reference transfers to the clone.
+            const stashed = value_mod.boxErrorObject(ctx.quotationAllocator(), err_obj.*) catch |e| {
+                container_backing.releaseValue(val);
+                return e;
+            };
+
             // Restore the error details from the ErrorObject's stack trace
             if (err_obj.stack_trace) |trace| {
                 // Clear any existing error details and restore from the error object
@@ -306,10 +311,12 @@ pub fn nativeRethrow(ctx: *Context) anyerror!void {
                     }) catch {};
                 }
             }
-            return error.UserRethrown;
+            ctx.thrown_error = stashed;
+            return error.UserThrown;
         },
         else => {
             helpers.setTypeMismatchError(ctx, "error", val);
+            container_backing.releaseValue(val);
             return error.TypeMismatch;
         },
     }

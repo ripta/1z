@@ -382,8 +382,6 @@ EUnknownWord: ( -- sym ) [ unknown-word: ] ;
 EFileNotFound: ( -- sym ) [ file-not-found: ] ;
 \\ Error type raised when reading a module's source fails during `load`.
 EFileReadFailed: ( -- sym ) [ file-read-failed: ] ;
-\\ Error type `rethrow` raises when it re-raises a caught error.
-EUserRethrown: ( -- sym ) [ user-rethrown: ] ;
 \\ Generic error type for a user error with no more specific type. `recover` reports a thrown error
 \\ under its own type, not this one.
 EUserThrown: ( -- sym ) [ user-thrown: ] ;

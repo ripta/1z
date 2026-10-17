@@ -468,7 +468,6 @@ ETypeMismatch ( -- sym )
 EUnexpectedEOF ( -- sym )
 EUnknownWord ( -- sym )
 EUseAfterClose ( -- sym )
-EUserRethrown ( -- sym )
 EUserThrown ( -- sym )
 H{
 M{

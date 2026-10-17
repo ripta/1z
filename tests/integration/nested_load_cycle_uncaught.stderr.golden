@@ -1,9 +1,9 @@
 src/prelude.1z:334: error 'circular-dependency' circular dependency: fixtures/cycle_two_a.1z -> ./cycle_two_b.1z -> ./cycle_two_a.1z at word 'load-file'
   stack effect: ( cache filename -- module )
-  called from src/prelude.1z:943: dip
-  called from src/prelude.1z:947: dip
+  called from src/prelude.1z:941: dip
+  called from src/prelude.1z:945: dip
   called from src/prelude.1z:334: load-file
-  called from src/prelude.1z:943: dip
-  called from src/prelude.1z:947: dip
+  called from src/prelude.1z:941: dip
+  called from src/prelude.1z:945: dip
   called from src/prelude.1z:334: load-file
   called from tests/integration/nested_load_cycle_uncaught.1z:8: load

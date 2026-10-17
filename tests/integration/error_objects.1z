@@ -14,7 +14,7 @@ outer-fail: [ nested-fail ] ;
 [ unknown-word-xyz ] [ dup error-type: @get EUnknownWord = [ "PASS: unknown word error type" print-line ] [ "FAIL" print-line ] if drop ] recover
 
 "Rethrow error" test-section
-[ [ drop ] [ rethrow ] recover ] [ dup error-type: @get EUserRethrown = [ "PASS: rethrow error type" print-line ] [ "FAIL" print-line ] if drop ] recover
+[ [ drop ] [ rethrow ] recover ] [ dup error-type: @get EStackUnderflow = [ "PASS: rethrow error type" print-line ] [ "FAIL" print-line ] if drop ] recover
 
 "Error type contract: bare symbol" test-section
 \ Verify built-in error types are kebab-case symbols

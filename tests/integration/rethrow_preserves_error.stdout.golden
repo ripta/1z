@@ -1,0 +1,12 @@
+=== rethrow of a thrown error ===
+Stack: [ ]
+Stack: [ [ [ 42 "boom" EKeyNotFound make-error throw ] [ rethrow ] recover ] ]
+PASS: type survives
+PASS: message survives
+PASS: data survives
+Stack: [ ]
+=== rethrow of a runtime error ===
+Stack: [ ]
+Stack: [ [ [ 1 0 / ] [ rethrow ] recover ] ]
+PASS: type survives
+Stack: [ ]
