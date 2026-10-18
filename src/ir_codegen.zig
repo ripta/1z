@@ -2899,8 +2899,8 @@ const CompileState = struct {
     /// and a site tests them at build time instead.
     runs_new_code: bool = false,
     /// True for an AOT build where an entry check can run a word's interpreted body in place: one
-    /// that carries the runtime image, which keeps the bodies such a check names, and that may call
-    /// the interpreter.
+    /// that runs new code, which keeps the bodies such a check names, and that may call the
+    /// interpreter.
     can_run_in_place: bool = false,
     /// Whether this pass calls `aotRunInPlaceUnchecked`, so the build has to keep the word's
     /// interpreted body.
@@ -12950,9 +12950,10 @@ pub fn emitProgramC(
     // mode the freeze left.
     const runs_new_code = !meta.freestanding and (interpreter_fallback == .true or emit_runtime_image);
 
-    // A build carrying the runtime image keeps the interpreted body of each word whose entry check
-    // may run it in place, and that check needs the interpreter.
-    const can_run_in_place = !meta.freestanding and emit_runtime_image and interpreter_fallback != .false and interp_ctx != null;
+    // A build that runs new code keeps the interpreted body of each word whose entry check may run
+    // it in place, and that check needs the interpreter. The bodies are image-encoded, so a build
+    // without the runtime image decodes them against its metadata image's slot tables.
+    const can_run_in_place = !meta.freestanding and runs_new_code and interpreter_fallback != .false and interp_ctx != null;
 
     var resolver_data = AotResolverData{ .map = &word_map, .returns_row_names = &returns_row_names };
     // Rebound per compiled body below; `bare` is program-wide and never changes.
