@@ -6350,6 +6350,12 @@ pub const Context = struct {
         return ExecutionError.UnknownWord;
     }
 
+    /// Whether `action` is the bail sentinel, which stands in for a user-defined word whose body
+    /// lives only in compiled code. Such a binding is not a native, whatever its action's tag says.
+    pub fn isAotCompiledOnlyBail(action: WordDefinition.Action) bool {
+        return action == .native and action.native == aotCompiledOnlyBailSentinel;
+    }
+
     pub fn wordDefFromModuleWord(
         name: []const u8,
         mod_word: value_mod.ModuleWord,
@@ -10593,6 +10599,10 @@ pub const Context = struct {
         // checked ahead of its compiled attempt.
         var inputs_validated = false;
 
+        // Set once a generic's dispatch missed ahead of its compiled default body, so a bail from
+        // that body does not dispatch a second time.
+        var generic_dispatch_missed = false;
+
         // Try JIT-compiled dispatch before interpreter path. A word that compiled
         // to native and had its interpretable body dropped (an empty compound body)
         // must dispatch compiled: interpreting the empty body is a silent no-op that
@@ -10615,8 +10625,8 @@ pub const Context = struct {
                 // caller's frame is gone, as it would the body. Running it here instead would raise
                 // under that frame and pend a row the interpreted run never shows.
                 //
-                // A generic word stays on this path. Its bail has to reach generic dispatch below,
-                // which the trampoline does not run.
+                // A generic word stays on this path. It has to dispatch before its default body,
+                // which the trampoline does not do.
                 if (is_last and word.action == .compound and !word.exec_flags.is_generic) {
                     return self.setCompiledTailCall(word, wid, instr);
                 }
@@ -10627,14 +10637,29 @@ pub const Context = struct {
                 // A generic's compiled body is its default body, which dispatch reaches only after a
                 // miss, so it checks nothing at entry. Its inputs are checked here instead, as a
                 // compiled call site checks them ahead of dispatch.
+                //
+                // Dispatch runs here too, ahead of the default body, as it does at a compiled call
+                // site. A hit never enters compiled code.
                 if (word.exec_flags.is_generic) {
+                    self.pushCallFrame(name, self.current_source, instr.line, instr.column, word.stack_effect);
+                    self.traceWordExecution(name, instr);
+
                     if (word.stack_effect) |effect| {
-                        self.validateCallInputs(&word, effect) catch |err| {
-                            self.pushCallFrame(name, self.current_source, instr.line, instr.column, word.stack_effect);
-                            return self.wordErrorCleanup(name, err);
-                        };
+                        self.validateCallInputs(&word, effect) catch |err| return self.wordErrorCleanup(name, err);
                     }
                     inputs_validated = true;
+
+                    const pic_entry = if (pic_table) |pt| pt.get(idx) else null;
+                    const dispatched = dispatch_helpers.tryDispatchGenericById(self, word.dispatch_id, pic_entry) catch |err|
+                        return self.wordErrorCleanup(name, err);
+
+                    if (dispatched) {
+                        try self.wordSuccessCleanup(name, null);
+                        return .proceed;
+                    }
+
+                    self.popCallFrame();
+                    generic_dispatch_missed = true;
                 }
 
                 const saved_source = self.current_source;
@@ -10698,13 +10723,15 @@ pub const Context = struct {
 
         if (word.action == .compound) {
             if (word.exec_flags.is_generic) {
-                const pic_entry = if (pic_table) |pt| pt.get(idx) else null;
-                const dispatched = dispatch_helpers.tryDispatchGenericById(self, word.dispatch_id, pic_entry) catch |err|
-                    return self.wordErrorCleanup(name, err);
+                if (!generic_dispatch_missed) {
+                    const pic_entry = if (pic_table) |pt| pt.get(idx) else null;
+                    const dispatched = dispatch_helpers.tryDispatchGenericById(self, word.dispatch_id, pic_entry) catch |err|
+                        return self.wordErrorCleanup(name, err);
 
-                if (dispatched) {
-                    try self.wordSuccessCleanup(name, null);
-                    return .proceed;
+                    if (dispatched) {
+                        try self.wordSuccessCleanup(name, null);
+                        return .proceed;
+                    }
                 }
 
                 if (word.action.compound.len == 0) {

@@ -1,0 +1,22 @@
+\ A method registered at runtime on a generic the entry file defined, and a runtime call to a
+\ generic that carries a method from the entry file. Both reach dispatch as the interpreter does.
+
+box: virtual{ fixnum } ;
+
+size: generic ( s -- n ) [ drop -1 ] ;
+size: method{ box } [ unmake-box 1 + ] ;
+
+via: ( x -- n ) [ size 0 + ] ;
+
+5 make-box via .
+"x" via .
+"size: method{ string } [ #count ] ;" eval-string
+"x" via .
+"\"abc\" size ." eval-string
+
+tag: generic ( s -- t ) [ drop "default" ] ;
+tag: method{ fixnum } [ drop "fx" ] ;
+
+7 tag .
+"7 tag ." eval-string
+"\"s\" tag ." eval-string

@@ -231,7 +231,9 @@ fn resolveWordForDispatch(ctx: *Context, name: []const u8) ?ResolvedWord {
             .dispatch_id = wd.dispatch_id,
             .markers = wd.markers,
             .action = switch (wd.action) {
-                .native => .native,
+                // An AOT binary binds an entry-file word it executed at the freeze to the bail
+                // sentinel. The word is still user-defined, so its markers decide.
+                .native => if (Context.isAotCompiledOnlyBail(wd.action)) .compound else .native,
                 .host_callback => .host_callback,
                 // A literal is a user-defined binding, not a native
                 // function, so it is subject to the same generic-marker
