@@ -1,0 +1,10 @@
+\ A word with a row among its inputs runs compiled whatever the row holds, including nothing. The
+\ row is not a stack slot, so a call with only `n` on the stack is as valid as one with a value
+\ under it. The trace shows a dispatch hit on all three calls.
+
+row-plain: ( ..a n -- ..a n ) [ 1 + ] ;
+row-plain: compile!
+
+0 3 row-plain . .
+3 row-plain .
+0 3 row-plain . .

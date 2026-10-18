@@ -1,0 +1,4 @@
+JIT compile row-plain (wid=0)
+JIT dispatch row-plain (wid=0) -> hit
+JIT dispatch row-plain (wid=0) -> hit
+JIT dispatch row-plain (wid=0) -> hit

@@ -5725,8 +5725,9 @@ pub const Context = struct {
         effect: *const StackEffect,
         mutual_group: ?[]const []const u8,
     ) ?CompiledBody {
-        const input_count: u8 = @intCast(effect.inputs.len);
-        const output_count: u8 = @intCast(effect.outputs.len);
+        // A row occupies no slot. Counting it would make an empty row look like an underflow.
+        const input_count: u8 = @intCast(effect.concreteInputCount());
+        const output_count: u8 = @intCast(effect.concreteOutputCount());
 
         var resolver_ctx = ResolverState{ .context = self };
         const resolver = ir_codegen.WordResolver{
@@ -5768,7 +5769,7 @@ pub const Context = struct {
         self.jit_dispatch.replacePicSnapshot(final_id, body.pic_snapshot);
         if (self.jit_dispatch.getMut(final_id)) |em| {
             em.stack_effect = def.stack_effect;
-            em.input_count = @intCast(def.stack_effect.?.inputs.len);
+            em.input_count = @intCast(def.stack_effect.?.concreteInputCount());
         }
 
         // A failed copy leaves the entry with no names, which finalization reads as nothing to

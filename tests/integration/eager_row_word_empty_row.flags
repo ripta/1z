@@ -1,0 +1,2 @@
+--compile=eager
+--trace-jit
