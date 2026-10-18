@@ -1508,8 +1508,11 @@ fn addIntegrationTests(
             if (update_exit_code != 0) {
                 update_run.expectExitCode(update_exit_code);
             }
+            const update_stderr = normalizeStderr(b, update_run.captureStdErr());
             if (te.has_stderr_golden or update_exit_code != 0 or te.has_exitcode) {
-                uf_ptr.*.addCopyFileToSource(normalizeStderr(b, update_run.captureStdErr()), te.stderr_golden_path);
+                uf_ptr.*.addCopyFileToSource(update_stderr, te.stderr_golden_path);
+            } else {
+                addGoldenIfNonempty(b, helper, uf_ptr.*, update_stderr, te.stderr_golden_path);
             }
         }
     }
@@ -2124,13 +2127,18 @@ fn addAotTests(
                 te.override_pinned
             else
                 te.has_stderr_golden or expected_exit != 0;
-            if (owns_stderr) {
+            // A shared golden this entry does not own belongs to the suite it was redirected from.
+            if (owns_stderr or !te.golden_shared) {
                 const update_stderr = update_exec.captureStdErr();
                 const update_normalize = b.addSystemCommand(&.{
                     "sed", "s|[^ ]*\\.zig-cache[^ :]*|<aot>|g",
                 });
                 update_normalize.addFileArg(update_stderr);
-                update_files.*.addCopyFileToSource(update_normalize.captureStdOut(), te.stderr_golden_path);
+                if (owns_stderr) {
+                    update_files.*.addCopyFileToSource(update_normalize.captureStdOut(), te.stderr_golden_path);
+                } else {
+                    addGoldenIfNonempty(b, helper, update_files.*, update_normalize.captureStdOut(), te.stderr_golden_path);
+                }
             }
         }
     }
@@ -2298,6 +2306,26 @@ fn normalizeStderr(b: *std.Build, captured: std.Build.LazyPath) std.Build.LazyPa
     const normalize = b.addSystemCommand(&.{ "sed", stderr_normalize_script });
     normalize.addFileArg(captured);
     return normalize.captureStdOut();
+}
+
+/// Write `captured` to `golden_path` during a golden update, only when it is non-empty.
+///
+/// For a test that has no golden for this stream yet. Whether the program wrote anything is known
+/// only after it runs, which a copy wired into `UpdateSourceFiles` cannot wait for.
+fn addGoldenIfNonempty(
+    b: *std.Build,
+    helper: *std.Build.Step.Compile,
+    update_files: *std.Build.Step.UpdateSourceFiles,
+    captured: std.Build.LazyPath,
+    golden_path: []const u8,
+) void {
+    const write = b.addRunArtifact(helper);
+    write.setName(b.fmt("update-golden: {s} if non-empty", .{golden_path}));
+    write.addArg("write-if-nonempty");
+    write.addFileArg(captured);
+    write.addArg(b.pathFromRoot(golden_path));
+    write.has_side_effects = true;
+    update_files.step.dependOn(&write.step);
 }
 
 fn addGoldenDiff(
@@ -2577,6 +2605,8 @@ fn addLspTests(
             update_files.*.addCopyFileToSource(update_run.captureStdOut(), te.stdout_golden_path);
             if (te.has_stderr_golden or expected_exit != 0) {
                 update_files.*.addCopyFileToSource(update_run.captureStdErr(), te.stderr_golden_path);
+            } else {
+                addGoldenIfNonempty(b, helper, update_files.*, update_run.captureStdErr(), te.stderr_golden_path);
             }
         }
     }

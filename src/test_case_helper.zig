@@ -70,8 +70,25 @@ pub fn main() !void {
         try summarize(allocator, args[2..]);
         return;
     }
+    if (std.mem.eql(u8, args[1], "write-if-nonempty")) {
+        if (args.len != 4) return error.InvalidArguments;
+        try writeIfNonempty(args[2], args[3]);
+        return;
+    }
 
     return error.InvalidArguments;
+}
+
+/// Copy `src` over `dst` when `src` holds any bytes, and leave `dst` alone otherwise.
+///
+/// A golden update uses this for output the test has no golden for yet: output that appeared gets
+/// a golden to review, and a test that stays silent gets no empty file.
+fn writeIfNonempty(src: []const u8, dst: []const u8) !void {
+    const cwd = std.fs.cwd();
+    const stat = try cwd.statFile(src);
+    if (stat.size == 0) return;
+
+    try cwd.copyFile(src, cwd, dst, .{});
 }
 
 fn parseRunArgs(args: []const []const u8) !RunOptions {
