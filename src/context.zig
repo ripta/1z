@@ -9103,10 +9103,54 @@ pub const Context = struct {
     /// check inside the dispatch helper, so it validates the remaining (concrete
     /// type) annotations with `.except_protocols` to avoid checking the bound
     /// twice.
+    ///
+    /// A call whose typed inputs all carry their builtin type's tag is decided by one pass over the
+    /// inputs, with no call out of this function. Anything else runs the full check below.
     pub fn validateTypeAnnotationsScoped(self: *Context, effect: *const StackEffect, scope: AnnotationScope) !void {
         const mode = self.typeCheckMode();
         if (mode == .off) return;
 
+        if (self.typedInputsAllHitTags(effect, scope)) return;
+
+        return self.validateTypeAnnotationsFull(effect, scope, mode);
+    }
+
+    /// Whether every typed input on the stack carries its builtin type's tag, so the call needs no
+    /// further check. A stack too shallow to hold the inputs also needs none, as in the full check.
+    ///
+    /// The scan walks the inputs from the top of the stack down, so it needs no input count first.
+    /// The first input that is not a tag hit ends it with `false`. The caller then runs the full
+    /// check from the start, which decides that input and every other.
+    inline fn typedInputsAllHitTags(self: *Context, effect: *const StackEffect, scope: AnnotationScope) bool {
+        const items = self.stack.items.items;
+        var depth = items.len;
+
+        var i = effect.inputs.len;
+        while (i > 0) {
+            i -= 1;
+            const param = &effect.inputs[i];
+            if (param.is_row_variable) continue;
+
+            if (depth == 0) return true;
+            depth -= 1;
+
+            const ann = param.type_annotation orelse continue;
+            if (ann != .type) {
+                if (scope == .except_protocols) continue;
+                return false;
+            }
+
+            const tag = ann.type.builtin_tag orelse return false;
+            if (std.meta.activeTag(items[depth]) != tag) return false;
+
+            self.assertTagHitAccepted(ann, items[depth]);
+        }
+
+        return true;
+    }
+
+    /// `validateTypeAnnotationsScoped` without the tag scan, deciding every input in order.
+    fn validateTypeAnnotationsFull(self: *Context, effect: *const StackEffect, scope: AnnotationScope, mode: TypeCheckMode) !void {
         const concrete_params = effect.concreteInputCount();
         if (concrete_params == 0 or self.stack.depth() < concrete_params) return;
 
@@ -13793,6 +13837,215 @@ test "validateTypeAnnotationsScoped except_protocols still checks concrete types
 
     // Concrete-type annotations are still validated under `.except_protocols`.
     try std.testing.expectError(error.TypeError, ctx.validateTypeAnnotationsScoped(&effect, .except_protocols));
+}
+
+test "validateTypeAnnotationsScoped accepts a call whose typed inputs all carry their tags" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const effect = StackEffect{
+        .inputs = &[_]StackEffectParam{
+            .{ .name = "n", .type_annotation = .{ .type = ctx.lookupBuiltinTypeValue("fixnum").? } },
+            .{ .name = "s", .type_annotation = .{ .type = ctx.lookupBuiltinTypeValue("string").? } },
+        },
+        .outputs = &[_]StackEffectParam{.{ .name = "y" }},
+    };
+
+    try ctx.stack.push(.{ .fixnum = 1 });
+    try ctx.stack.push(value_mod.stringValue("x"));
+
+    try ctx.validateTypeAnnotationsScoped(&effect, .all);
+    try ctx.validateTypeAnnotationsScoped(&effect, .except_protocols);
+    try std.testing.expect(ctx.pending_error_message == null);
+}
+
+test "validateTypeAnnotationsScoped runs the full check for the input that misses" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const fixnum_tv = ctx.lookupBuiltinTypeValue("fixnum").?;
+    const effect = StackEffect{
+        .inputs = &[_]StackEffectParam{
+            .{ .name = "a", .type_annotation = .{ .type = fixnum_tv } },
+            .{ .name = "b", .type_annotation = .{ .type = fixnum_tv } },
+        },
+        .outputs = &[_]StackEffectParam{.{ .name = "y" }},
+    };
+
+    try ctx.stack.push(.{ .float = 1.5 });
+    try ctx.stack.push(.{ .fixnum = 2 });
+
+    try std.testing.expectError(error.TypeError, ctx.validateTypeAnnotationsScoped(&effect, .all));
+    try std.testing.expectEqualStrings("type mismatch for parameter 'a': expected fixnum, got float", ctx.pending_error_message.?);
+
+    _ = try ctx.stack.pop();
+    _ = try ctx.stack.pop();
+    ctx.pending_error_message = null;
+
+    try ctx.stack.push(.{ .fixnum = 1 });
+    try ctx.stack.push(.{ .float = 2.5 });
+
+    try std.testing.expectError(error.TypeError, ctx.validateTypeAnnotationsScoped(&effect, .all));
+    try std.testing.expectEqualStrings("type mismatch for parameter 'b': expected fixnum, got float", ctx.pending_error_message.?);
+}
+
+test "validateTypeAnnotationsScoped reads the type-check mode at call time on a miss" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const effect = StackEffect{
+        .inputs = &[_]StackEffectParam{
+            .{ .name = "n", .type_annotation = .{ .type = ctx.lookupBuiltinTypeValue("fixnum").? } },
+        },
+        .outputs = &[_]StackEffectParam{.{ .name = "y" }},
+    };
+
+    try ctx.pushPragmaFrame();
+
+    inline for (.{ "error", "warning", "off" }) |mode_name| {
+        try ctx.setPragma("type-check", value_mod.stringValue(mode_name));
+
+        try ctx.stack.push(.{ .fixnum = 1 });
+        try ctx.validateTypeAnnotationsScoped(&effect, .all);
+        _ = try ctx.stack.pop();
+
+        try ctx.stack.push(.{ .float = 1.5 });
+        if (comptime std.mem.eql(u8, mode_name, "error")) {
+            try std.testing.expectError(error.TypeError, ctx.validateTypeAnnotationsScoped(&effect, .all));
+        } else {
+            try ctx.validateTypeAnnotationsScoped(&effect, .all);
+        }
+        _ = try ctx.stack.pop();
+        ctx.pending_error_message = null;
+    }
+
+    ctx.popPragmaFrame();
+}
+
+test "validateTypeAnnotationsScoped checks a typed input beside an untyped one" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const effect = StackEffect{
+        .inputs = &[_]StackEffectParam{
+            .{ .name = "x" },
+            .{ .name = "n", .type_annotation = .{ .type = ctx.lookupBuiltinTypeValue("fixnum").? } },
+        },
+        .outputs = &[_]StackEffectParam{.{ .name = "y" }},
+    };
+
+    try ctx.stack.push(value_mod.stringValue("anything"));
+    try ctx.stack.push(.{ .fixnum = 1 });
+    try ctx.validateTypeAnnotationsScoped(&effect, .all);
+
+    _ = try ctx.stack.pop();
+    try ctx.stack.push(.{ .float = 1.5 });
+    try std.testing.expectError(error.TypeError, ctx.validateTypeAnnotationsScoped(&effect, .all));
+}
+
+test "validateTypeAnnotationsScoped counts only concrete inputs for a row-variable word" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const effect = StackEffect{
+        .inputs = &[_]StackEffectParam{
+            .{ .name = "..a", .is_row_variable = true },
+            .{ .name = "n", .type_annotation = .{ .type = ctx.lookupBuiltinTypeValue("fixnum").? } },
+        },
+        .outputs = &[_]StackEffectParam{.{ .name = "..a", .is_row_variable = true }},
+    };
+
+    try ctx.stack.push(value_mod.stringValue("row value"));
+    try ctx.stack.push(.{ .fixnum = 1 });
+    try ctx.validateTypeAnnotationsScoped(&effect, .all);
+
+    _ = try ctx.stack.pop();
+    try ctx.stack.push(.{ .float = 1.5 });
+    try std.testing.expectError(error.TypeError, ctx.validateTypeAnnotationsScoped(&effect, .all));
+}
+
+test "validateTypeAnnotationsScoped checks nothing when the stack is shallower than the inputs" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const fixnum_tv = ctx.lookupBuiltinTypeValue("fixnum").?;
+    const effect = StackEffect{
+        .inputs = &[_]StackEffectParam{
+            .{ .name = "a", .type_annotation = .{ .type = fixnum_tv } },
+            .{ .name = "b", .type_annotation = .{ .type = fixnum_tv } },
+        },
+        .outputs = &[_]StackEffectParam{.{ .name = "y" }},
+    };
+
+    try ctx.stack.push(.{ .fixnum = 1 });
+    try ctx.validateTypeAnnotationsScoped(&effect, .all);
+
+    _ = try ctx.stack.pop();
+    try ctx.stack.push(.{ .float = 1.5 });
+    try ctx.validateTypeAnnotationsScoped(&effect, .all);
+}
+
+test "validateTypeAnnotationsScoped sends a protocol annotation to the full check unless it is skipped" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const methods = [_]value_mod.Value{value_mod.symbolValue("no-such-method")};
+    const desc = try ctx.createProtocolDescriptor("needy", &methods);
+
+    const effect = StackEffect{
+        .inputs = &[_]StackEffectParam{
+            .{ .name = "x", .type_annotation = .{ .protocol = desc } },
+            .{ .name = "n", .type_annotation = .{ .type = ctx.lookupBuiltinTypeValue("fixnum").? } },
+        },
+        .outputs = &[_]StackEffectParam{.{ .name = "y" }},
+    };
+
+    try ctx.stack.push(.{ .fixnum = 1 });
+    try ctx.stack.push(.{ .fixnum = 2 });
+
+    try std.testing.expectError(error.UserThrown, ctx.validateTypeAnnotationsScoped(&effect, .all));
+    try ctx.validateTypeAnnotationsScoped(&effect, .except_protocols);
+}
+
+test "validateTypeAnnotationsScoped accepts a tagged value through its base type on the full check" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const fixnum_tv = ctx.lookupBuiltinTypeValue("fixnum").?;
+    const effect = StackEffect{
+        .inputs = &[_]StackEffectParam{
+            .{ .name = "n", .type_annotation = .{ .type = fixnum_tv } },
+        },
+        .outputs = &[_]StackEffectParam{.{ .name = "y" }},
+    };
+
+    const vt = value_mod.VirtualType{ .name = "duration", .inner_type = "fixnum", .base_type = fixnum_tv };
+    const inner = Value{ .fixnum = 42 };
+    const tagged = Value{ .tagged = .{ .tag = &vt, .inner = &inner } };
+
+    try std.testing.expect(std.meta.activeTag(tagged) != ctx.lookupBuiltinTypeValue("fixnum").?.builtin_tag.?);
+
+    try ctx.stack.push(tagged);
+    try ctx.validateTypeAnnotationsScoped(&effect, .all);
+    try std.testing.expect(ctx.pending_error_message == null);
+}
+
+test "validateTypeAnnotationsScoped runs the full check for a type no tag identifies" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    var point_tv = value_mod.TypeValue{ .name = "point", .descriptor = null };
+    const effect = StackEffect{
+        .inputs = &[_]StackEffectParam{
+            .{ .name = "p", .type_annotation = .{ .type = &point_tv } },
+        },
+        .outputs = &[_]StackEffectParam{.{ .name = "y" }},
+    };
+
+    try ctx.stack.push(.{ .fixnum = 1 });
+
+    try std.testing.expectError(error.TypeError, ctx.validateTypeAnnotationsScoped(&effect, .all));
+    try std.testing.expectEqualStrings("type mismatch for parameter 'p': expected point, got fixnum", ctx.pending_error_message.?);
 }
 
 test "protocol satisfies cache invalidated by method registration" {
