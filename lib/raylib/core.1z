@@ -16,7 +16,7 @@ use "raylib/types" ;
 } call "raylib-core-raw" swap >module import
 
 \\ Initialize a window with given dimensions and title. C: InitWindow
-init-window: ( width height title -- ) [ (init-window) ] ;
+init-window: ( width: fixnum height: fixnum title -- ) [ (init-window) ] ;
 \\ Close the current window and OpenGL context. C: CloseWindow
 close-window: ( -- ) [ (close-window) ] ;
 \\ Check if the window close button or ESC key has been pressed. C: WindowShouldClose
@@ -28,14 +28,14 @@ end-drawing: ( -- ) [ (end-drawing) ] ;
 \\ Clear the background with a color. C: ClearBackground
 clear-background: ( color -- ) [ (clear-background) ] ;
 \\ Draw a filled rectangle at position (x, y) with given size and color. C: DrawRectangle
-draw-rectangle: ( x y width height color -- ) [ (draw-rectangle) ] ;
+draw-rectangle: ( x: fixnum y: fixnum width: fixnum height: fixnum color -- ) [ (draw-rectangle) ] ;
 \\ Check if a specific key has been pressed once. C: IsKeyPressed
-key-pressed?: ( key -- bool ) [ (is-key-pressed) ] ;
+key-pressed?: ( key: fixnum -- bool ) [ (is-key-pressed) ] ;
 \\ Set the target frames per second. C: SetTargetFPS
-set-target-fps: ( fps -- ) [ (set-target-fps) ] ;
+set-target-fps: ( fps: fixnum -- ) [ (set-target-fps) ] ;
 
 \\ Open a window, run a quotation, and close the window on exit.
-with-window: ( width height title quot -- ... ) [
+with-window: ( width: fixnum height: fixnum title quot -- ... ) [
   [ init-window ] dip
   [ close-window ] cleanup
 ] ;

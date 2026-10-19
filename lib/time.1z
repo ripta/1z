@@ -37,7 +37,7 @@ timestamp: virtual{ timestamp-inner } ;
 \\
 \\   1 2 make-timestamp
 \\   => <timestamp 1 2>
-make-timestamp: ( sec nsec -- timestamp ) [ make-timestamp-inner >timestamp ] ;
+make-timestamp: ( sec: fixnum nsec: fixnum -- timestamp ) [ make-timestamp-inner >timestamp ] ;
 
 \\ The whole seconds since the POSIX epoch of a timestamp.
 timestamp-sec: ( timestamp -- sec ) [ unmake-timestamp ts-sec>> ] ;
@@ -135,7 +135,7 @@ timezone: virtual{ tz-inner } ;
 \\
 \\   -300 "EST" make-timezone
 \\   => <timezone EST -0500>
-make-timezone: ( offset-min name -- timezone ) [ make-tz-inner >timezone ] ;
+make-timezone: ( offset-min: fixnum name -- timezone ) [ make-tz-inner >timezone ] ;
 
 \\ The offset in minutes east of UTC that a timezone was made with.
 timezone-offset: ( tz -- offset-min ) [ unmake-timezone offset-min>> ] ;
@@ -162,7 +162,7 @@ tm-result: struct{ year: fixnum month-num: fixnum day: fixnum hour: fixnum min: 
 \\
 \\   0 "Etc/GMT-5" tz-localtime hour>>
 \\   => 5
-tz-localtime: ( sec tz-name -- tm-result ) [ tz-decompose make-tm-result ] ;
+tz-localtime: ( sec: fixnum tz-name -- tm-result ) [ tz-decompose make-tm-result ] ;
 
 private{
   \ Format gmtoff (seconds east of UTC) as "+HHMM" or "-HHMM"

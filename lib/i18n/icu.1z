@@ -81,7 +81,7 @@ utf8>uchar: ( string -- byte-array fixnum ) [
 
 \\ Convert a UChar (UTF-16) buffer back to a 1z UTF-8 string.
 \\ Takes the byte-array containing UChar data and the UChar count.
-uchar>utf8: ( byte-array fixnum -- string ) [
+uchar>utf8: ( byte-array n: fixnum -- string ) [
   dup 0 = [
     2drop ""
   ] [

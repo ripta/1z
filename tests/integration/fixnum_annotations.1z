@@ -1,0 +1,40 @@
+\ Public inputs whose accepted type is exactly fixnum are annotated. Each case below passes a float
+\ where a wrong-typed input used to be tolerated or to fail later with a different error.
+
+use "testing" ;
+use "math" ;
+use "math/simd" ;
+use "i18n/icu" ;
+use "net/server" ;
+
+"prelude" test-section
+
+[ 1.5 bytes-alloc ] type-error: "bytes-alloc rejects a float length" assert-error-type
+[ B{ 0x01 } 2.0 bytes-resize! ] type-error: "bytes-resize! rejects a float length" assert-error-type
+[ V{ 1 2 } 3.0 0 #resize! ] type-error: "#resize! rejects a float length" assert-error-type
+[ f 0.0 stream-read(exact) ] type-error: "stream-read(exact) rejects a float count" assert-error-type
+[ 65.0 emit ] type-error: "emit rejects a float codepoint" assert-error-type
+[ V{ 1 2 3 } 1.0 #nth? ] type-error: "#nth? rejects a float index" assert-error-type
+V{ 1 2 3 } 5 #nth? option:none? "#nth? still returns none past the end" assert-true
+V{ 1 2 3 } 1 #nth? option:some? "#nth? still returns some in bounds" assert-true
+
+"math" test-section
+
+[ 1.0 bits>float32 ] type-error: "bits>float32 rejects a float" assert-error-type
+1065353216 bits>float32 1.0 "bits>float32 reads the bits of one" assert=
+
+"simd" test-section
+
+[ 1 2 3 4 <simd-4xi32> 1.0 simd-lane ] type-error: "simd-lane rejects a float lane" assert-error-type
+[ 1 2 3 4 <simd-4xi32> 9 1.0 simd-set-lane ] type-error: "simd-set-lane rejects a float lane" assert-error-type
+[ 1 2 3 4 <simd-4xi32> 5 6 7 8 <simd-4xi32> 1.0 simd-blend ] type-error: "simd-blend rejects a float mask" assert-error-type
+1 2 3 4 <simd-4xi32> 1 simd-lane 2 "simd-lane still reads a lane" assert=
+
+"icu" test-section
+
+[ B{ } 0.0 uchar>utf8 ] type-error: "uchar>utf8 rejects a float length" assert-error-type
+B{ } 0 uchar>utf8 "" "uchar>utf8 still returns the empty string for zero" assert=
+
+"server" test-section
+
+[ 2.0 [ ] with-max-concurrent-connections ] type-error: "with-max-concurrent-connections rejects a float count at the call" assert-error-type

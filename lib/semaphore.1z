@@ -3,7 +3,7 @@
 semaphore: struct{ ch: channel } ;
 
 \\ A counting semaphore holding n permits, backed by a buffered channel of capacity n.
-<semaphore>: ( n -- sem ) [
+<semaphore>: ( n: fixnum -- sem ) [
   dup <buffered-channel>
   swap [ dup t swap send ] times
   make-semaphore

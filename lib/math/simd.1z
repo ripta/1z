@@ -174,12 +174,12 @@ simd>array: method{ simd-4xu32 } [ native.simd-to-array ] ;
 simd>array: method{ simd-8xu16 } [ native.simd-to-array ] ;
 simd>array: method{ simd-16xu8 } [ native.simd-to-array ] ;
 
-\\ The value in lane n, counting from 0. Throws `index-out-of-bounds` when n is negative or not
+\\ The value in `lane`, counting from 0. Throws `index-out-of-bounds` when `lane` is negative or not
 \\ below the lane count.
 \\
 \\   10 20 30 40 <simd-4xi32> 1 simd-lane
 \\   => 20
-simd-lane: generic ( simd-NxT fixnum -- value ) [
+simd-lane: generic ( simd-NxT lane: fixnum -- value ) [
   f "simd-lane: not a SIMD vector type" EInvalidArgument make-error throw
 ] ;
 simd-lane: method{ simd-2xf64 fixnum } [ native.simd-lane-get ] ;
@@ -193,12 +193,12 @@ simd-lane: method{ simd-4xu32 fixnum } [ native.simd-lane-get ] ;
 simd-lane: method{ simd-8xu16 fixnum } [ native.simd-lane-get ] ;
 simd-lane: method{ simd-16xu8 fixnum } [ native.simd-lane-get ] ;
 
-\\ A copy of the vector with lane n set to value. Throws `index-out-of-bounds` when n is outside
+\\ A copy of the vector with `lane` set to value. Throws `index-out-of-bounds` when `lane` is outside
 \\ the lanes, and `type-mismatch` when the value does not fit the lane type.
 \\
 \\   1 2 3 4 <simd-4xi32> 9 2 simd-set-lane simd>array
 \\   => { 1 2 9 4 }
-simd-set-lane: ( simd-NxT value fixnum -- simd-NxT ) [ native.simd-lane-set ] ;
+simd-set-lane: ( simd-NxT value lane: fixnum -- simd-NxT ) [ native.simd-lane-set ] ;
 
 \\ A vector whose lane i is the source lane at index i of the array. The array holds one index per
 \\ lane. Throws `type-mismatch` when its length differs, and `index-out-of-bounds` when an index is
@@ -220,7 +220,7 @@ simd-select: ( mask a b -- simd-NxT ) [ native.simd-select-impl ] ;
 \\
 \\   1 2 3 4 <simd-4xi32> 5 6 7 8 <simd-4xi32> 5 simd-blend simd>array
 \\   => { 5 2 7 4 }
-simd-blend: ( a b fixnum -- simd-NxT ) [ native.simd-blend-impl ] ;
+simd-blend: ( a b bitmask: fixnum -- simd-NxT ) [ native.simd-blend-impl ] ;
 
 \ Element-wise arithmetic: + - * /
 +: method{ simd-2xf64 simd-2xf64 } [ native.simd-add ] ;

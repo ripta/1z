@@ -108,7 +108,7 @@ register-lint-rule: ( lint-rule -- ) [
 \\
 \\   "my-rule" warning: "a.1z" "a\nbc" build-line-index 3 "bad" diag-at-pos format-diagnostic
 \\   => "a.1z:2:2: warning: [my-rule] bad"
-diag-at-pos: ( rule-id severity path line-index pos message -- lint-diagnostic ) [
+diag-at-pos: ( rule-id severity path line-index pos: fixnum message -- lint-diagnostic ) [
   (make-diag)
 ] ;
 

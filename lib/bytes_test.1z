@@ -118,3 +118,27 @@ test-poke8-peek16: ( -- ) [
 test-zero-roundtrip: ( -- ) [
   B{ 0xFF 0xFF 0xFF 0xFF } 0 0 #poke32! 0 #peek32 0 "writing zero clears the width" assert=
 ] ;
+
+\ --- fixnum inputs ---
+
+test-offset-rejects-non-fixnum: ( -- ) [
+  [ B{ 0x01 0x02 0x03 0x04 } 1.0 #peek8 ] type-error: "peek8 rejects a float offset" assert-error-type
+  [ B{ 0x01 0x02 0x03 0x04 } 1.0 #peek32 ] type-error: "peek32 rejects a float offset" assert-error-type
+  [ B{ 0x00 0x00 0x00 0x00 } 1.0 7 #poke8! ] type-error: "poke8 rejects a float offset" assert-error-type
+  [ B{ 0x00 0x00 0x00 0x00 } 1.0 7 1 #fill8! ] type-error: "fill8 rejects a float offset" assert-error-type
+] ;
+
+test-value-rejects-non-fixnum: ( -- ) [
+  [ B{ 0x00 0x00 0x00 0x00 } 0 1.0 #poke16! ] type-error: "poke16 rejects a float value" assert-error-type
+  [ B{ 0x00 0x00 0x00 0x00 } 0 1.0 1 #fill8! ] type-error: "fill8 rejects a float value" assert-error-type
+  [ B{ 0x00 0x00 0x00 0x00 } 0 1 1.0 #fill16! ] type-error: "fill16 rejects a float count" assert-error-type
+] ;
+
+test-value-rejects-bignum: ( -- ) [
+  [ B{ 0x00 0x00 0x00 0x00 } 0 100000000000000000000 #poke16! ] type-error: "poke16 rejects a bignum value" assert-error-type
+  [ B{ 0x00 0x00 0x00 0x00 } 0 100000000000000000000 #poke32! ] type-error: "poke32 rejects a bignum value" assert-error-type
+] ;
+
+test-poke8-value-stays-untyped: ( -- ) [
+  V{ 1 2 3 } 0 "x" #poke8! V{ "x" 2 3 } "poke8 still stores any value into a vector" assert=
+] ;

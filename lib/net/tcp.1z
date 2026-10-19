@@ -7,7 +7,7 @@ server: virtual{ struct{ fd bound-addr } } ;
 
 \\ Create a listening TCP server socket.
 \\ Resolves the address, creates a socket, binds, and starts listening.
-listen: ( addr backlog -- server ) [
+listen: ( addr backlog: fixnum -- server ) [
   swap resolve #first              \ backlog resolved-addr
   dup socket                       \ backlog resolved-addr fd
   dup 2 pick-n bind                \ backlog resolved-addr fd

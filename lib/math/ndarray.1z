@@ -130,7 +130,7 @@ ref: ( ndarray index-array -- val ) [
 \\
 \\   nd{ 1 2 3 ; 4 5 6 } 1 0 ref2d
 \\   => 4
-ref2d: ( ndarray i j -- val ) [
+ref2d: ( ndarray i: fixnum j: fixnum -- val ) [
   2 pick-n rank 2 =
   not [ f "ref2d requires rank-2 ndarray" EInvalidArgument make-error throw ] when
   2 array-n ref
@@ -140,7 +140,7 @@ ref2d: ( ndarray i j -- val ) [
 \\
 \\   { 1 2 3 4 5 6 7 8 } { 2 2 2 } <ndarray> 1 0 1 ref3d
 \\   => 6
-ref3d: ( ndarray i j k -- val ) [
+ref3d: ( ndarray i: fixnum j: fixnum k: fixnum -- val ) [
   3 pick-n rank 3 =
   not [ f "ref3d requires rank-3 ndarray" EInvalidArgument make-error throw ] when
   3 array-n ref
@@ -195,7 +195,7 @@ private{
 \\
 \\   nd{ 1 2 3 ; 4 5 6 } transpose 1 logical-nth
 \\   => 4
-logical-nth: ( ndarray logical-idx -- val ) [
+logical-nth: ( ndarray logical-idx: fixnum -- val ) [
   dup 0 < [ f "index out of bounds" EIndexOutOfBounds make-error throw ] when
   over #len over <= [ f "index out of bounds" EIndexOutOfBounds make-error throw ] when
   unchecked-logical-nth
@@ -353,7 +353,7 @@ private{
 \\
 \\   nd{ 1 2 3 ; 4 5 6 } 0 [ + ] reduce-axis
 \\   => nd{ 5 7 9 }
-reduce-axis: ( ndarray axis quot -- ndarray ) [
+reduce-axis: ( ndarray axis: fixnum quot -- ndarray ) [
   2 pick-n rank 2 pick-n <=
   [ f "axis out of bounds" EInvalidArgument make-error throw ] when
 

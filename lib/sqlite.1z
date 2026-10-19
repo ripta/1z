@@ -112,7 +112,7 @@ with-stmt: deprecated ( ..a db: db-handle sql: string quot: ( ..a stmt: stmt-han
 \\
 \\   ":memory:" [ "SELECT ?1 AS s" [ dup 1 "hi" bind step-hash ] using-stmt ] using-db
 \\   => <option:some option-payload{ value: H{ s: "hi" } }>
-bind: override ( stmt i value -- ) [ [ unmake-stmt-handle ] 2dip (bind) ] ;
+bind: override ( stmt i: fixnum value -- ) [ [ unmake-stmt-handle ] 2dip (bind) ] ;
 
 \\ Bind against the unwrapped raw statement resource.
 (bind): ( stmt i value -- ) [

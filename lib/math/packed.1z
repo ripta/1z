@@ -77,61 +77,61 @@ packed-f64: virtual{ byte-array } ;
 \\
 \\   3 -7 packed-fill:i8 packed>array
 \\   => { -7 -7 -7 }
-packed-fill:i8: ( n value -- packed-i8 ) [ "i8" native.packed-fill-impl >packed-i8 ] ;
+packed-fill:i8: ( n: fixnum value -- packed-i8 ) [ "i8" native.packed-fill-impl >packed-i8 ] ;
 
 \\ A packed-i16 of n copies of value. Throws `type-mismatch` when the value does not fit.
 \\
 \\   3 7 packed-fill:i16 packed>array
 \\   => { 7 7 7 }
-packed-fill:i16: ( n value -- packed-i16 ) [ "i16" native.packed-fill-impl >packed-i16 ] ;
+packed-fill:i16: ( n: fixnum value -- packed-i16 ) [ "i16" native.packed-fill-impl >packed-i16 ] ;
 
 \\ A packed-i32 of n copies of value. Throws `type-mismatch` when the value does not fit.
 \\
 \\   2 -1 packed-fill:i32 packed>array
 \\   => { -1 -1 }
-packed-fill:i32: ( n value -- packed-i32 ) [ "i32" native.packed-fill-impl >packed-i32 ] ;
+packed-fill:i32: ( n: fixnum value -- packed-i32 ) [ "i32" native.packed-fill-impl >packed-i32 ] ;
 
 \\ A packed-i64 of n copies of value. Throws `type-mismatch` when the value does not fit.
 \\
 \\   2 5 packed-fill:i64 packed>array
 \\   => { 5 5 }
-packed-fill:i64: ( n value -- packed-i64 ) [ "i64" native.packed-fill-impl >packed-i64 ] ;
+packed-fill:i64: ( n: fixnum value -- packed-i64 ) [ "i64" native.packed-fill-impl >packed-i64 ] ;
 
 \\ A packed-u8 of n copies of value. Throws `type-mismatch` when the value does not fit.
 \\
 \\   3 255 packed-fill:u8 packed>array
 \\   => { 255 255 255 }
-packed-fill:u8: ( n value -- packed-u8 ) [ "u8" native.packed-fill-impl >packed-u8 ] ;
+packed-fill:u8: ( n: fixnum value -- packed-u8 ) [ "u8" native.packed-fill-impl >packed-u8 ] ;
 
 \\ A packed-u16 of n copies of value. Throws `type-mismatch` when the value does not fit.
 \\
 \\   2 9 packed-fill:u16 packed>array
 \\   => { 9 9 }
-packed-fill:u16: ( n value -- packed-u16 ) [ "u16" native.packed-fill-impl >packed-u16 ] ;
+packed-fill:u16: ( n: fixnum value -- packed-u16 ) [ "u16" native.packed-fill-impl >packed-u16 ] ;
 
 \\ A packed-u32 of n copies of value. Throws `type-mismatch` when the value does not fit.
 \\
 \\   2 9 packed-fill:u32 packed>array
 \\   => { 9 9 }
-packed-fill:u32: ( n value -- packed-u32 ) [ "u32" native.packed-fill-impl >packed-u32 ] ;
+packed-fill:u32: ( n: fixnum value -- packed-u32 ) [ "u32" native.packed-fill-impl >packed-u32 ] ;
 
 \\ A packed-u64 of n copies of value. Throws `type-mismatch` when the value does not fit.
 \\
 \\   2 9 packed-fill:u64 packed>array
 \\   => { 9 9 }
-packed-fill:u64: ( n value -- packed-u64 ) [ "u64" native.packed-fill-impl >packed-u64 ] ;
+packed-fill:u64: ( n: fixnum value -- packed-u64 ) [ "u64" native.packed-fill-impl >packed-u64 ] ;
 
 \\ A packed-f32 of n copies of value.
 \\
 \\   2 0.5 packed-fill:f32 packed>array
 \\   => { 0.5 0.5 }
-packed-fill:f32: ( n value -- packed-f32 ) [ "f32" native.packed-fill-impl >packed-f32 ] ;
+packed-fill:f32: ( n: fixnum value -- packed-f32 ) [ "f32" native.packed-fill-impl >packed-f32 ] ;
 
 \\ A packed-f64 of n copies of value.
 \\
 \\   2 1.5 packed-fill:f64 packed>array
 \\   => { 1.5 1.5 }
-packed-fill:f64: ( n value -- packed-f64 ) [ "f64" native.packed-fill-impl >packed-f64 ] ;
+packed-fill:f64: ( n: fixnum value -- packed-f64 ) [ "f64" native.packed-fill-impl >packed-f64 ] ;
 
 \\ The elements as an array of numbers. Throws `invalid-argument` on a value that is
 \\ not a packed array.

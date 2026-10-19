@@ -33,12 +33,12 @@ posix-const: ( name -- value ) [ native.posix-const ] ;
 \\ `op` combines LOCK_SH/LOCK_EX with optional LOCK_NB, or is LOCK_UN.
 \\
 \\ Throws `posix-error:` on failure.
-flock: ( fd op -- result ) [ (flock) ] ;
+flock: ( fd: fixnum op: fixnum -- result ) [ (flock) ] ;
 
 \\ Send a signal to a process.
 \\
 \\ A `sig` of 0 checks for existence without sending. Throws `posix-error:` on failure.
-kill: ( pid sig -- result ) [ (kill) ] ;
+kill: ( pid: fixnum sig: fixnum -- result ) [ (kill) ] ;
 
 \\ Process id of the calling process.
 getpid: ( -- pid ) [ (getpid) ] ;
@@ -54,7 +54,7 @@ getppid: ( -- pid ) [ (getppid) ] ;
 \\ with the caller's own bit math (`status 256 div` is the exit code for a
 \\ normal exit). Throws `posix-error:` on failure, e.g. ECHILD when no child
 \\ exists.
-waitpid: ( pid options -- pid status ) [
+waitpid: ( pid: fixnum options: fixnum -- pid status ) [
   4 bytes-alloc
   bytes>ffi-ptr
   -rot>
@@ -73,22 +73,22 @@ wait: ( -- pid status ) [ -1 "WNOHANG" posix-const waitpid ] ;
 \\ Set the protection on a region of memory.
 \\
 \\ `prot` combines PROT_* flags. Throws `posix-error:` on failure.
-mprotect: ( addr len prot -- result ) [ (mprotect) ] ;
+mprotect: ( addr len: fixnum prot: fixnum -- result ) [ (mprotect) ] ;
 
 \\ Advise the kernel about the expected access pattern of a memory region.
 \\
 \\ `advice` is a MADV_* value. Throws `posix-error:` on failure.
-madvise: ( addr len advice -- result ) [ (madvise) ] ;
+madvise: ( addr len: fixnum advice: fixnum -- result ) [ (madvise) ] ;
 
 \\ Truncate a file, named by path, to a given length.
 \\
 \\ Throws `posix-error:` on failure.
-truncate: ( path len -- result ) [ (truncate) ] ;
+truncate: ( path len: fixnum -- result ) [ (truncate) ] ;
 
 \\ Truncate a file, referenced by descriptor, to a given length.
 \\
 \\ Throws posix-error: on failure.
-ftruncate: ( fd len -- result ) [ (ftruncate) ] ;
+ftruncate: ( fd: fixnum len: fixnum -- result ) [ (ftruncate) ] ;
 
 \ Marshal two u64 fields (lo at offset 0, hi at offset 8) into a fresh
 \ 16-byte buffer, mutating it in place, and leave just the buffer.
@@ -102,7 +102,7 @@ ftruncate: ( fd len -- result ) [ (ftruncate) ] ;
 \\ Read a resource limit into its soft and hard values.
 \\
 \\ `resource` is a RLIMIT_* value. Throws `posix-error:` on failure.
-getrlimit: ( resource -- soft hard ) [
+getrlimit: ( resource: fixnum -- soft hard ) [
   16 bytes-alloc
   bytes>ffi-ptr
   swap
@@ -114,7 +114,7 @@ getrlimit: ( resource -- soft hard ) [
 \\ Set a resource limit from its soft and hard values.
 \\
 \\ `resource` is a RLIMIT_* value. Throws `posix-error:` on failure.
-setrlimit: ( resource soft hard -- result ) [
+setrlimit: ( resource: fixnum soft hard -- result ) [
   (pair>buf)
   bytes>ffi-ptr
   swap
@@ -125,7 +125,7 @@ setrlimit: ( resource soft hard -- result ) [
 \\ Read a clock into its seconds and nanoseconds.
 \\
 \\ `clock-id` is a CLOCK_* value. Throws `posix-error:` on failure.
-clock_gettime: ( clock-id -- sec nsec ) [
+clock_gettime: ( clock-id: fixnum -- sec nsec ) [
   16 bytes-alloc
   bytes>ffi-ptr
   swap
@@ -139,7 +139,7 @@ clock_gettime: ( clock-id -- sec nsec ) [
 \\ `cmd` is an F_* value; `arg` is its integer argument. `fcntl` is variadic in
 \\ C, so `arg` is passed through the variadic calling convention. Throws
 \\ `posix-error:` on failure.
-fcntl: ( fd cmd arg -- result ) [ 1array (fcntl) ] ;
+fcntl: ( fd: fixnum cmd: fixnum arg -- result ) [ 1array (fcntl) ] ;
 
 \ posix_fadvise is Linux-only. std.posix has no Darwin binding, and the C
 \ symbol is absent from macOS libc, so the binding and wrapper are selected at
@@ -155,7 +155,7 @@ target-os choose{
     \\ `advice` is a POSIX_FADV_* value. posix_fadvise reports failure by
     \\ returning the error number directly, so the raw return reaches the caller
     \\ rather than raising `posix-error:`. Linux-only.
-    posix_fadvise: ( fd offset len advice -- result ) [ (posix_fadvise) ] ;
+    posix_fadvise: ( fd: fixnum offset: fixnum len: fixnum advice: fixnum -- result ) [ (posix_fadvise) ] ;
   ]
   _ [ ]
 }
@@ -184,7 +184,7 @@ lock-file: ( stream mode -- ) [
 \\ `signal` is a bare signal-name symbol (`TERM:`, `INT:`, `HUP:`, ...). A
 \\ `pid` of the current process with signal 0 checks existence. Throws
 \\ `posix-error:` on failure.
-send-signal: ( pid signal -- ) [
+send-signal: ( pid: fixnum signal -- ) [
   >string native.signal-number
   kill drop
 ] ;

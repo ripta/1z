@@ -119,7 +119,7 @@ format-number: ( n locale -- string ) [
 ] ;
 
 \\ Format a number with a fixed number of decimal places.
-format-decimal: ( n decimals locale -- string ) [
+format-decimal: ( n decimals: fixnum locale -- string ) [
   (locale>icu-id)
   (UNUM_DECIMAL) swap (open-number-format)
   \ Stack: n decimals fmt-ptr

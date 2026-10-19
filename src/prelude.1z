@@ -528,11 +528,11 @@ generic?: ( name -- ? ) [ word-markers [ generic = ] #any ] ;
 
 \ Mutable sequence resize
 \\ Create an n-byte zeroed buffer.
-bytes-alloc: ( n -- byte-array ) [ native.bytes-alloc ] ;
+bytes-alloc: ( n: fixnum -- byte-array ) [ native.bytes-alloc ] ;
 \\ Resize byte array in place, truncating or zero-filling as needed.
-bytes-resize!: ( byte-array n -- byte-array ) [ over #len over < [ 0x00 native.#grow! ] [ native.#shrink! ] if ] ;
+bytes-resize!: ( byte-array n: fixnum -- byte-array ) [ over #len over < [ 0x00 native.#grow! ] [ native.#shrink! ] if ] ;
 \\ Resize a mutable sequence in place with an explicit fill value for growth.
-#resize!: ( seq n fill -- seq ) [ -rot> over #len over < [ [ swap ] dip swap native.#grow! ] [ [ swap drop ] dip native.#shrink! ] if ] ;
+#resize!: ( seq n: fixnum fill -- seq ) [ -rot> over #len over < [ [ swap ] dip swap native.#grow! ] [ [ swap drop ] dip native.#shrink! ] if ] ;
 
 \\ Short-circuiting sequence predicates
 \\
@@ -720,7 +720,7 @@ stream-write-string: ( stream str -- n ) [ stream-write ] ;
 \\ on `stream-read` until the requested count is satisfied or the stream
 \\ reaches EOF. Returns a short byte-array (`#len < n`) on EOF; non-EOF
 \\ I/O errors propagate as thrown errors.
-stream-read(exact): ( stream n -- bytes ) [ B{ } swap (stream-read-exact-step) ] ;
+stream-read(exact): ( stream n: fixnum -- bytes ) [ B{ } swap (stream-read-exact-step) ] ;
 
 \ Internal helper: tail-recursive write loop used by stream-write(exact).
 \ State carries (stream total remaining): stream to write to, bytes written
@@ -779,7 +779,7 @@ trace-value: ( x label -- x label ) [
 ] ;
 
 \\ Write a Unicode code point as a character.
-emit: ( codepoint -- ) [ >char print ] ;
+emit: ( codepoint: fixnum -- ) [ >char print ] ;
 \\ Write a newline.
 nl: ( -- ) [ "\n" print ] ;
 \\ Write a space.
@@ -1318,7 +1318,7 @@ benchmark: ( quot -- hash ) [ 1 swap (benchmark-n) ] ;
 benchmark-run: ( report label quot -- report ) [ 1 swap (benchmark-n) swap "label" swap @set (bench-report-push) ] ;
 
 \\ Benchmark a quotation n times and add a labelled entry to a report.
-benchmark-n: ( report label n quot -- report ) [ (benchmark-n) swap "label" swap @set (bench-report-push) ] ;
+benchmark-n: ( report label n: fixnum quot -- report ) [ (benchmark-n) swap "label" swap @set (bench-report-push) ] ;
 
 \\ Auto-calibrate iterations targeting ~100ms and add a labelled entry to a report.
 benchmark-auto: ( report label quot -- report ) [ 1 swap (bench-auto-loop) swap "label" swap @set (bench-report-push) ] ;
@@ -1396,7 +1396,7 @@ vmap-get?: ( vmap key -- option ) [ 2dup vmap-has? [ vmap-get >option:some ] [ 2
 vmap-get-or: ( vmap key default -- value ) [ -rot> 2dup vmap-has? [ vmap-get nip ] [ 2drop ] if ] ;
 
 \\ Get the nth element of a sequence, returning some(value) or none if out of bounds.
-#nth?: ( seq n -- option ) [ [ #nth >option:some ] [ 3drop option:none ] recover ] ;
+#nth?: ( seq n: fixnum -- option ) [ [ #nth >option:some ] [ 3drop option:none ] recover ] ;
 
 \\ Get the first element of a sequence, returning some(value) or none if empty.
 #first?: ( seq -- option ) [ [ #first >option:some ] [ 2drop option:none ] recover ] ;
@@ -1486,7 +1486,7 @@ with-iterator: deprecated ( ..a it: iterator quot: ( ..a it: iterator -- ..b ) -
 
 \\ Copy n bytes from an FFI pointer resource into a new byte-array.
 \\ The resource is not consumed or closed.
-ffi-ptr+len>bytes: ( resource n -- byte-array ) [ native.ffi-ptr+len>bytes ] ;
+ffi-ptr+len>bytes: ( resource n: fixnum -- byte-array ) [ native.ffi-ptr+len>bytes ] ;
 
 \\ Blocking acquire: consumes a token or permit from the resource.
 \\ Yields to the scheduler until a token is available.

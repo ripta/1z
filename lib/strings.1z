@@ -105,7 +105,7 @@ split: ( str delim -- array ) [
 #concat: ( seq -- string ) [ "" swap #append ] ;
 
 \\ Create a write-only in-memory string stream with initial capacity n.
-<sized-string-builder>: ( n -- stream ) [ <string-stream> ] ;
+<sized-string-builder>: ( n: fixnum -- stream ) [ <string-stream> ] ;
 
 \\ Create a write-only in-memory string stream with a 256-byte reservation.
 <string-builder>: ( -- stream ) [ 256 <sized-string-builder> ] ;

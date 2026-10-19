@@ -8,39 +8,39 @@
 \ count * width bytes long.
 
 \\ Read a single byte at offset (alias for #nth).
-#peek8: ( byte-array offset -- fixnum ) [ #nth ] ;
+#peek8: ( byte-array offset: fixnum -- fixnum ) [ #nth ] ;
 
 \\ Write a single byte at offset (alias for #nth!).
-#poke8!: ( byte-array offset value -- byte-array ) [ #nth! ] ;
+#poke8!: ( byte-array offset: fixnum value -- byte-array ) [ #nth! ] ;
 
 \\ Write count copies of a single byte, end to end from offset.
-#fill8!: ( byte-array offset value count -- byte-array ) [ 1 swap #fill! ] ;
+#fill8!: ( byte-array offset: fixnum value: fixnum count: fixnum -- byte-array ) [ 1 swap #fill! ] ;
 
 \\ Read a 16-bit (2-byte) value at offset, in native byte order.
-#peek16: ( byte-array offset -- fixnum ) [ 2 #peek ] ;
+#peek16: ( byte-array offset: fixnum -- fixnum ) [ 2 #peek ] ;
 
 \\ Write a 16-bit (2-byte) value at offset, in native byte order.
-#poke16!: ( byte-array offset value -- byte-array ) [ 2 #poke! ] ;
+#poke16!: ( byte-array offset: fixnum value: fixnum -- byte-array ) [ 2 #poke! ] ;
 
 \\ Write count copies of a 16-bit value, end to end from offset, each in native byte order.
-#fill16!: ( byte-array offset value count -- byte-array ) [ 2 swap #fill! ] ;
+#fill16!: ( byte-array offset: fixnum value: fixnum count: fixnum -- byte-array ) [ 2 swap #fill! ] ;
 
 \\ Read a 32-bit (4-byte) value at offset, in native byte order.
-#peek32: ( byte-array offset -- fixnum ) [ 4 #peek ] ;
+#peek32: ( byte-array offset: fixnum -- fixnum ) [ 4 #peek ] ;
 
 \\ Write a 32-bit (4-byte) value at offset, in native byte order.
-#poke32!: ( byte-array offset value -- byte-array ) [ 4 #poke! ] ;
+#poke32!: ( byte-array offset: fixnum value: fixnum -- byte-array ) [ 4 #poke! ] ;
 
 \\ Write count copies of a 32-bit value, end to end from offset, each in native byte order.
-#fill32!: ( byte-array offset value count -- byte-array ) [ 4 swap #fill! ] ;
+#fill32!: ( byte-array offset: fixnum value: fixnum count: fixnum -- byte-array ) [ 4 swap #fill! ] ;
 
 \\ Read a 64-bit (8-byte) value at offset, in native byte order.
-#peek64: ( byte-array offset -- fixnum ) [ 8 #peek ] ;
+#peek64: ( byte-array offset: fixnum -- fixnum ) [ 8 #peek ] ;
 
 \\ Write a 64-bit (8-byte) value at offset, in native byte order.
-#poke64!: ( byte-array offset value -- byte-array ) [ 8 #poke! ] ;
+#poke64!: ( byte-array offset: fixnum value -- byte-array ) [ 8 #poke! ] ;
 
 \\ Write count copies of a 64-bit value, end to end from offset, each in native byte order.
-#fill64!: ( byte-array offset value count -- byte-array ) [ 8 swap #fill! ] ;
+#fill64!: ( byte-array offset: fixnum value count: fixnum -- byte-array ) [ 8 swap #fill! ] ;
 
 pragma{ lint-suppress: { complex-word-undocumented: dead-definition: missing-type-annotation: } }

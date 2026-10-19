@@ -1,0 +1,44 @@
+=== prelude ===
+Stack: [ ]
+PASS: bytes-alloc rejects a float length
+Stack: [ ]
+PASS: bytes-resize! rejects a float length
+Stack: [ ]
+PASS: #resize! rejects a float length
+Stack: [ ]
+PASS: stream-read(exact) rejects a float count
+Stack: [ ]
+PASS: emit rejects a float codepoint
+Stack: [ ]
+PASS: #nth? rejects a float index
+Stack: [ ]
+PASS: #nth? still returns none past the end
+Stack: [ ]
+PASS: #nth? still returns some in bounds
+Stack: [ ]
+=== math ===
+Stack: [ ]
+PASS: bits>float32 rejects a float
+Stack: [ ]
+PASS: bits>float32 reads the bits of one
+Stack: [ ]
+=== simd ===
+Stack: [ ]
+PASS: simd-lane rejects a float lane
+Stack: [ ]
+PASS: simd-set-lane rejects a float lane
+Stack: [ ]
+PASS: simd-blend rejects a float mask
+Stack: [ ]
+PASS: simd-lane still reads a lane
+Stack: [ ]
+=== icu ===
+Stack: [ ]
+PASS: uchar>utf8 rejects a float length
+Stack: [ ]
+PASS: uchar>utf8 still returns the empty string for zero
+Stack: [ ]
+=== server ===
+Stack: [ ]
+PASS: with-max-concurrent-connections rejects a float count at the call
+Stack: [ ]

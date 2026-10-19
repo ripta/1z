@@ -167,7 +167,7 @@ skip-exact: ( scanner needle -- scanner/f ) [
 ] ;
 
 \\ Extract the substring from mark to the current scanner position.
-slice-from: ( scanner mark -- str ) [
+slice-from: ( scanner mark: fixnum -- str ) [
   over str>>
   -rot>
   swap byte-cursor>>

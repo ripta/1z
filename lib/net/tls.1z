@@ -49,7 +49,7 @@ tls-upgrade: ( stream tls-config hostname -- stream ) [
 \\
 \\   "example.com" 443 connect inspect "<stream tls" #starts-with?
 \\   => t
-connect: ( hostname port -- stream ) [
+connect: ( hostname port: fixnum -- stream ) [
   over
   [ make-addr:tcp tcp.connect ] dip
   <tls-config> swap tls-upgrade
@@ -60,7 +60,7 @@ connect: ( hostname port -- stream ) [
 \\   "localhost" 8443 <tls-config> "ca.pem" add-ca-file connect-with inspect
 \\   "<stream tls" #starts-with?
 \\   => t
-connect-with: ( hostname port tls-config -- stream ) [
+connect-with: ( hostname port: fixnum tls-config -- stream ) [
   -rot> over
   [ make-addr:tcp tcp.connect ] dip
   [ swap ] dip tls-upgrade

@@ -23,7 +23,7 @@ tai-timestamp: virtual{ tai-inner } ;
 \\
 \\   1483228837 0 make-tai-timestamp >timestamp timestamp-sec
 \\   => 1483228800
-make-tai-timestamp: ( sec nsec -- tai-timestamp ) [ make-tai-inner >tai-timestamp ] ;
+make-tai-timestamp: ( sec: fixnum nsec: fixnum -- tai-timestamp ) [ make-tai-inner >tai-timestamp ] ;
 
 \\ The whole TAI seconds of a TAI timestamp.
 tai-timestamp-sec: ( tai-timestamp -- sec ) [ unmake-tai-timestamp tai-sec>> ] ;

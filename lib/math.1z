@@ -64,7 +64,7 @@ bits>float: ( bits -- f ) [ unmake-bits 64 native.raw-bits-float ] ;
 \\ Convert a float to its raw 32-bit IEEE 754 bit pattern as a fixnum.
 float32>bits: ( f -- fixnum ) [ 32 native.float-raw-bits ] ;
 \\ Convert a raw 32-bit IEEE 754 bit pattern to a float.
-bits>float32: ( fixnum -- f ) [ 32 native.raw-bits-float ] ;
+bits>float32: ( bits: fixnum -- f ) [ 32 native.raw-bits-float ] ;
 \\ Alias for float>bits.
 float64>bits: ( f -- bits ) [ float>bits ] ;
 \\ Alias for bits>float.

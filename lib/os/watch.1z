@@ -88,7 +88,7 @@ add-watch-recursive: ( watcher path -- watch-ids ) [
 ] ;
 
 \\ Remove a previously registered watch id.
-remove-watch: ( watcher watch-id -- ) [ swap unmake-watcher swap watcher-remove ] ;
+remove-watch: ( watcher watch-id: fixnum -- ) [ swap unmake-watcher swap watcher-remove ] ;
 
 \\ Read the next watcher event and convert it to watch-event.
 next-event: ( watcher -- event ) [ unmake-watcher watcher-read (raw-event>watch-event) ] ;

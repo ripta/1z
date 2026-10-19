@@ -557,7 +557,7 @@ static-file-handler: ( stream request doc-root -- ) [
 \\     cancel-task
 \\   ] task-scope
 \\   => "HTTP/1.1 404 Not Found"
-serve-static: ( host port doc-root -- ) [
+serve-static: ( host port: fixnum doc-root -- ) [
   [ static-file-handler ] curry serve
 ] ;
 

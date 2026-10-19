@@ -32,7 +32,7 @@ start-server: ( config -- server ) [
 max-concurrent-connections: parameter{ [ 256 ] } ;
 
 \\ Run `quot` with `max-concurrent-connections` bound to `count`.
-with-max-concurrent-connections: ( count quot -- ) [ max-concurrent-connections swap with-parameter ] ;
+with-max-concurrent-connections: ( count: fixnum quot -- ) [ max-concurrent-connections swap with-parameter ] ;
 
 private{
   \\ Repeatedly accept connections and spawn one handler task per connection, bounded by the

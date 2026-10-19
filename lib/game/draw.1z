@@ -129,7 +129,7 @@ private{
 \\     current-framebuffer get 20 framebuffer-width * 10 + 4 * #nth .
 \\   ] with-parameter
 \\   => 255
-draw-pixel: ( x y color -- ) [ (color>packed) current-framebuffer get 3 rot-n> (set-pixel!) ] ;
+draw-pixel: ( x: fixnum y: fixnum color -- ) [ (color>packed) current-framebuffer get 3 rot-n> (set-pixel!) ] ;
 
 \\ Fill the entire framebuffer with one color.
 \\
@@ -298,7 +298,7 @@ private{
 \\     current-framebuffer get 2 4 * #nth .
 \\   ] with-parameter
 \\   => 255
-draw-char: ( x y ch color -- ) [ (color>packed) (draw-glyph-packed) ] ;
+draw-char: ( x: fixnum y: fixnum ch color -- ) [ (color>packed) (draw-glyph-packed) ] ;
 
 \\ Draw a string starting at (x, y), advancing by font-cell-size pixels per character.
 \\ Characters outside the font's covered range are silently skipped (via draw-char's glyph

@@ -66,6 +66,23 @@ test-draw-pixel-out-of-bounds-does-not-throw: ( -- ) [
   ] with-parameter
 ] ;
 
+test-draw-pixel-rejects-float-coordinate: ( -- ) [
+  (scratch-framebuffer) current-framebuffer
+  [
+    [ 1.5 20 200 100 50 255 <color> draw-pixel ] type-error: "draw-pixel rejects a float x" assert-error-type
+    [ 300.0 20 200 100 50 255 <color> draw-pixel ] type-error: "draw-pixel rejects an off-canvas float x" assert-error-type
+    [ 10 1.5 200 100 50 255 <color> draw-pixel ] type-error: "draw-pixel rejects a float y" assert-error-type
+  ] with-parameter
+] ;
+
+test-draw-char-rejects-float-coordinate: ( -- ) [
+  (scratch-framebuffer) current-framebuffer
+  [
+    [ 1.5 10 "A" 255 255 255 255 <color> draw-char ] type-error: "draw-char rejects a float x" assert-error-type
+    [ 10 1.5 "A" 255 255 255 255 <color> draw-char ] type-error: "draw-char rejects a float y" assert-error-type
+  ] with-parameter
+] ;
+
 test-clear-background-fills-every-corner-and-center: ( -- ) [
   (scratch-framebuffer) current-framebuffer
   [

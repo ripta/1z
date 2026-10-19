@@ -131,7 +131,7 @@ bytes>ffi-ptr+len: ( byte-array -- resource fixnum ) [ native.bytes-raw-ptr ] ;
 bytes>ffi-ptr: ( byte-array -- byte-array ptr ) [ dup bytes>ffi-ptr+len drop ] ;
 
 \\ Allocate a byte-array and leave both the byte-array and raw FFI pointer.
-bytes-alloc-ptr: ( n -- byte-array ptr ) [ bytes-alloc dup bytes>ffi-ptr+len drop ] ;
+bytes-alloc-ptr: ( n: fixnum -- byte-array ptr ) [ bytes-alloc dup bytes>ffi-ptr+len drop ] ;
 
 \\ True iff sym is one of the errno failure sentinels: neg1, null, or neg.
 (valid-errno-sentinel?): ( sym -- bool ) [

@@ -35,7 +35,7 @@ compress: ( byte-array -- byte-array ) [ 6 compress-level ] ;
 \\
 \\   B{ 1 2 3 } 9 compress-level uncompress
 \\   => B{ 0x01 0x02 0x03 }
-compress-level: ( byte-array level -- byte-array ) [
+compress-level: ( byte-array level: fixnum -- byte-array ) [
   swap
   dup #len (compress-bound)
   dup bytes-alloc
@@ -76,7 +76,7 @@ uncompress-max: ( byte-array max-size -- byte-array ) [
 \\
 \\   B{ 1 2 3 } compress 3 uncompress-sized
 \\   => B{ 0x01 0x02 0x03 }
-uncompress-sized: ( byte-array expected-len -- byte-array ) [
+uncompress-sized: ( byte-array expected-len: fixnum -- byte-array ) [
   dup bytes-alloc
   \ Stack: input expected out-buf
   bytes>ffi-ptr
