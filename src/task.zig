@@ -421,8 +421,12 @@ pub const TaskScope = struct {
     /// register-vs-complete handshake described on `WaiterSlot`.
     waiting_slot: WaiterSlot = .{},
     allocator: Allocator,
-    /// Atomic count of children that have not yet finished.
-    active_children: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+    /// Count of tracked and detached tasks that have not finished.
+    ///
+    /// The scope lives on its owner's stack, and the owner frees it once this reaches zero and the
+    /// waiter is claimed. So a finishing task makes its decrement, through `finishOne`, its last
+    /// access to the scope. Only the task whose decrement reaches zero claims `waiting_slot`.
+    outstanding: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
     /// Atomic flag set when a child fails and sibling cancellation triggers.
     cancellation_requested: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     /// When true, the first child to finish with any status fires the
@@ -440,9 +444,6 @@ pub const TaskScope = struct {
     /// separate from `children_mu` so detached reaping never contends with
     /// the sibling-cancellation walk over `children`.
     detached_mu: std.Thread.Mutex = .{},
-    /// Atomic count of detached tasks that have not yet finished. Drives
-    /// scope-exit waiting alongside `active_children`.
-    detached_active: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
 
     pub fn init(allocator: Allocator) TaskScope {
         return .{
@@ -460,17 +461,24 @@ pub const TaskScope = struct {
         self.children_mu.lock();
         defer self.children_mu.unlock();
         try self.children.append(self.allocator, task);
-        _ = self.active_children.fetchAdd(1, .release);
+        _ = self.outstanding.fetchAdd(1, .release);
     }
 
     /// Register a detached task. Mirrors `addChild` but tracks the task in
-    /// the separate `detached` list and counter, so it stays out of the
+    /// the separate `detached` list, so it stays out of the
     /// sibling-cancellation and first-error paths.
     pub fn addDetached(self: *TaskScope, task: *Task) !void {
         self.detached_mu.lock();
         defer self.detached_mu.unlock();
         try self.detached.append(self.allocator, task);
-        _ = self.detached_active.fetchAdd(1, .release);
+        _ = self.outstanding.fetchAdd(1, .release);
+    }
+
+    /// Count one tracked or detached task as finished. Returns true for the task that drained the
+    /// scope, which alone may claim `waiting_slot`. Any other caller must not touch the scope after
+    /// this returns, since the owner may already have freed it.
+    pub fn finishOne(self: *TaskScope) bool {
+        return self.outstanding.fetchSub(1, .acq_rel) == 1;
     }
 
     /// Remove a detached task from the list at its own completion. Order in
@@ -487,19 +495,20 @@ pub const TaskScope = struct {
         }
     }
 
-    /// Check if all children have finished (completed, failed, or cancelled).
-    pub fn allChildrenDone(self: *const TaskScope) bool {
-        return self.active_children.load(.acquire) == 0;
+    /// Check if every tracked and detached task has finished (completed, failed, or cancelled).
+    pub fn isDrained(self: *const TaskScope) bool {
+        return self.outstanding.load(.acquire) == 0;
     }
 
     /// Walk children in spawn order under `children_mu` and return the
     /// first child whose status is `.failed`, along with its
     /// `error_obj`. Returns null when no child failed. Intended to be
-    /// called only after `allChildrenDone()` returns true so every
+    /// called only after `isDrained()` returns true so every
     /// child has reached a stable terminal status; the per-task status
-    /// transition to `.failed` happens-before the `active_children`
-    /// fetchSub that drives the scope waiter, so reads of `error_obj`
-    /// observe the writer's assignment without further synchronization.
+    /// transition to `.failed` and the fallback `error_obj` store
+    /// happen-before the `finishOne` decrement that drives the scope
+    /// waiter, so reads of `error_obj` observe the writer's assignment
+    /// without further synchronization.
     pub fn firstFailedChildError(self: *TaskScope) ?*ErrorObject {
         self.children_mu.lock();
         defer self.children_mu.unlock();
@@ -865,27 +874,41 @@ test "atomic status round-trip" {
     try std.testing.expectEqual(TaskStatus.completed, status.load(.acquire));
 }
 
-test "active children counter and allChildrenDone" {
+test "only the finisher that drains the scope is told it was last" {
     var scope = TaskScope.init(std.testing.allocator);
     defer scope.deinit();
 
-    try std.testing.expect(scope.allChildrenDone());
+    var tracked = Task{
+        .id = 1,
+        .name = null,
+        .status = std.atomic.Value(TaskStatus).init(.pending),
+        .ctx = undefined,
+        .scope = &scope,
+        .callable = .{ .quot = .{ .instructions = &.{}, .effect = null }, .owner = .unit },
+    };
+    var detached = Task{
+        .id = 2,
+        .name = null,
+        .status = std.atomic.Value(TaskStatus).init(.pending),
+        .ctx = undefined,
+        .scope = &scope,
+        .callable = .{ .quot = .{ .instructions = &.{}, .effect = null }, .owner = .unit },
+    };
 
-    // Simulate two children added
-    _ = scope.active_children.fetchAdd(1, .release);
-    _ = scope.active_children.fetchAdd(1, .release);
-    try std.testing.expect(!scope.allChildrenDone());
+    try std.testing.expect(scope.isDrained());
 
-    // First child finishes
-    _ = scope.active_children.fetchSub(1, .release);
-    try std.testing.expect(!scope.allChildrenDone());
+    try scope.addChild(&tracked);
+    try scope.addDetached(&detached);
+    try std.testing.expect(!scope.isDrained());
 
-    // Second child finishes
-    _ = scope.active_children.fetchSub(1, .release);
-    try std.testing.expect(scope.allChildrenDone());
+    try std.testing.expect(!scope.finishOne());
+    try std.testing.expect(!scope.isDrained());
+
+    try std.testing.expect(scope.finishOne());
+    try std.testing.expect(scope.isDrained());
 }
 
-test "addDetached and removeDetached track the detached counter and list" {
+test "addDetached and removeDetached track the outstanding count and list" {
     var scope = TaskScope.init(std.testing.allocator);
     defer scope.deinit();
 
@@ -906,16 +929,16 @@ test "addDetached and removeDetached track the detached counter and list" {
         .callable = .{ .quot = .{ .instructions = &.{}, .effect = null }, .owner = .unit },
     };
 
-    try std.testing.expectEqual(@as(u32, 0), scope.detached_active.load(.acquire));
+    try std.testing.expectEqual(@as(u32, 0), scope.outstanding.load(.acquire));
 
     try scope.addDetached(&t0);
     try scope.addDetached(&t1);
-    try std.testing.expectEqual(@as(u32, 2), scope.detached_active.load(.acquire));
+    try std.testing.expectEqual(@as(u32, 2), scope.outstanding.load(.acquire));
     try std.testing.expectEqual(@as(usize, 2), scope.detached.items.len);
 
-    // Detached tasks stay out of the tracked-children path.
+    // Detached tasks stay out of the tracked-children path, but the scope is not drained.
     try std.testing.expectEqual(@as(usize, 0), scope.children.items.len);
-    try std.testing.expect(scope.allChildrenDone());
+    try std.testing.expect(!scope.isDrained());
 
     // Reaping one removes it from the list; the counter is decremented
     // separately by the scheduler at reap time.

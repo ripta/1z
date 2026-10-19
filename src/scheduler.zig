@@ -507,7 +507,7 @@ pub const Scheduler = struct {
     /// A local child, i.e., whose home is this scheduler, is reaped inline. A remote child is
     /// routed to its home worker's reap queue so destruction stays on the owning worker.
     pub fn reapScopeAtExit(self: *Scheduler, scope: *TaskScope) void {
-        if (scope.active_children.load(.acquire) != 0) return;
+        if (!scope.isDrained()) return;
         scope.children_mu.lock();
         defer scope.children_mu.unlock();
         for (scope.children.items) |child| {
@@ -1467,15 +1467,18 @@ pub const Scheduler = struct {
     ///
     /// 1. If the task is awaited by another task, re-enqueue the awaiting task.
     /// 2. If the task failed and the scope doesn't have an error yet, store the error on the scope.
-    /// 3. If all children in the scope are done and the scope is being awaited, re-enqueue the scope waiter.
+    /// 3. If this task drained the scope and the scope is being awaited, re-enqueue the scope waiter.
     /// 4. Track the finished task for resource cleanup in deinit.
+    ///
+    /// The scope may be freed by its owner as soon as this task's `finishOne` lands, so every other
+    /// scope access comes before it.
     fn handleTaskDone(self: *Scheduler, task: *Task) void {
         if (task.detached) {
             self.handleDetachedTaskDone(task);
             return;
         }
 
-        _ = task.scope.active_children.fetchSub(1, .acq_rel);
+        const scope = task.scope;
 
         if (task.awaiting_slot.claim()) |awaiter| {
             self.wakeTask(awaiter) catch {};
@@ -1520,8 +1523,8 @@ pub const Scheduler = struct {
         // by `TaskScope.firstFailedChildError`, so the cancellation
         // trigger and the propagated error may identify different
         // tasks under M:N.
-        if ((task.getStatus() == .failed or task.scope.race_first_finisher) and
-            task.scope.cancellation_requested.cmpxchgStrong(false, true, .acq_rel, .acquire) == null)
+        if ((task.getStatus() == .failed or scope.race_first_finisher) and
+            scope.cancellation_requested.cmpxchgStrong(false, true, .acq_rel, .acquire) == null)
         {
             // The scope body is one of these children, so it is cancelled too. A body parked on
             // a waitable whose only producer was the failed child would otherwise be stranded.
@@ -1530,15 +1533,15 @@ pub const Scheduler = struct {
             // `cancelTask` routes siblings on other workers through their
             // home worker's cancellation queue, so per-state cleanup
             // happens on the owning thread.
-            task.scope.children_mu.lock();
-            defer task.scope.children_mu.unlock();
-            for (task.scope.children.items) |sibling| {
+            scope.children_mu.lock();
+            defer scope.children_mu.unlock();
+            for (scope.children.items) |sibling| {
                 if (sibling == task) continue;
                 self.cancelTask(sibling);
             }
         }
 
-        self.maybeWakeScopeWaiter(task.scope);
+        if (scope.finishOne()) self.wakeScopeWaiter(scope);
 
         if (task.peak_stack_usage > self.peak_task_stack_usage) {
             self.peak_task_stack_usage = task.peak_stack_usage;
@@ -1565,17 +1568,17 @@ pub const Scheduler = struct {
     /// cancellation and it is not a `firstFailedChildError` candidate, so
     /// the tracked-child failure path is skipped entirely. It is removed
     /// from both the scope's `detached` list and the scheduler's `all_tasks`
-    /// list while it is still counted in `detached_active`, so the scope
+    /// list while it is still counted in `outstanding`, so the scope
     /// cannot be observed drained (and freed by the woken waiter) mid-way.
-    /// Only then is `detached_active` decremented; `maybeWakeScopeWaiter` is
-    /// the last access to `scope`. `reapTask` and `notifyOwnerTaskDone`
-    /// touch only the task and this scheduler.
+    /// Only then does `finishOne` decrement it, as the last access to `scope`.
+    /// `reapTask` and `notifyOwnerTaskDone` touch only the task and this
+    /// scheduler.
     fn handleDetachedTaskDone(self: *Scheduler, task: *Task) void {
         const scope = task.scope;
 
         scope.removeDetached(task);
         self.untrackTask(task);
-        _ = scope.detached_active.fetchSub(1, .acq_rel);
+        if (scope.finishOne()) self.wakeScopeWaiter(scope);
 
         if (task.peak_stack_usage > self.peak_task_stack_usage) {
             self.peak_task_stack_usage = task.peak_stack_usage;
@@ -1587,7 +1590,6 @@ pub const Scheduler = struct {
         // (such as a server handler bug) is not silent.
         if (task.getStatus() == .failed) logUnhandledDetachedFailure(task);
 
-        self.maybeWakeScopeWaiter(scope);
         self.reapTask(task);
         self.notifyOwnerDetachedDone();
         self.notifyOwnerTaskDone();
@@ -1609,16 +1611,14 @@ pub const Scheduler = struct {
         }
     }
 
-    /// Wake the scope waiter once both tracked and detached tasks have
-    /// drained. `waiting_slot.claim` guarantees a single wake even when the
-    /// last tracked child and the last detached task complete concurrently
-    /// on different workers, and even when a child drains the scope before
-    /// the waiter has registered. Top-level scopes have no waiter; they
-    /// terminate via the pool's `active_tasks` / `poolHasAliveTasks` path,
-    /// so this is a no-op for them.
-    fn maybeWakeScopeWaiter(self: *Scheduler, scope: *TaskScope) void {
-        if (scope.active_children.load(.acquire) != 0) return;
-        if (scope.detached_active.load(.acquire) != 0) return;
+    /// Wake the scope waiter. Called only by the task whose `finishOne` drained the scope.
+    ///
+    /// The claim is safe after the decrement: the owner frees the scope only once it is woken or
+    /// its `tryRegister` sees the claim. A child that drains the scope before the waiter registers
+    /// leaves the slot claimed, so the owner does not suspend. Top-level scopes have no waiter;
+    /// they terminate via the pool's `active_tasks` / `poolHasAliveTasks` path, so the claim finds
+    /// no one for them.
+    fn wakeScopeWaiter(self: *Scheduler, scope: *TaskScope) void {
         if (scope.waiting_slot.claim()) |scope_waiter| {
             self.wakeTask(scope_waiter) catch {};
         }

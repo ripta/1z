@@ -430,8 +430,9 @@ pub const WorkerPool = struct {
     /// The memory-cap allocator, read for the `bytes=`/`peak=` figures.
     mem_limit: ?*MemoryLimitAllocator = null,
     /// Count of in-flight detached tasks across the pool, the `detached=`
-    /// field. Per-scope `detached_active` is not summable pool-wide because
-    /// there is no scope registry, so this pool-level atomic mirrors it.
+    /// field. A scope's `outstanding` count mixes tracked and detached tasks
+    /// and there is no scope registry, so this pool-level atomic counts
+    /// detached tasks on its own.
     detached_in_flight: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
     /// Monotonic deadline of the next sample. The worker that advances it past
     /// `now` via CAS is the sole emitter for that tick, re-arming it to

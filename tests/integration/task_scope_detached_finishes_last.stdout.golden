@@ -1,0 +1,4 @@
+PASS: every scope waited for its detached task
+Stack: [ ]
+drained
+Stack: [ ]

@@ -139,7 +139,7 @@ fn allocateTaskWithEntry(
 ///
 /// Top-level (`ctx.scheduler == null`) builds the worker pool and runs the scheduling loop to
 /// completion; nested creates a `TaskScope` on the current task's frame and suspends until it
-/// drains. Either way, cross-worker completion signals through the `active_children` counter,
+/// drains. Either way, cross-worker completion signals through the scope's `outstanding` count,
 /// which wakes the scope's owner via its home worker's external queue.
 fn nativeTaskScope(ctx: *Context) anyerror!void {
     // Pop without stamping this context: the scope body runs in the scope task, so its carried

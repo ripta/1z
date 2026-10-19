@@ -1,0 +1,28 @@
+\ A nested scope waits for a detached task that finishes after its tracked children.
+\
+\ Tracked and detached tasks share one outstanding count, and only the finisher that drains it
+\ wakes the scope's owner. Here the tracked child finishes at once and the detached task sleeps
+\ first, so the detached task is the drainer. Its value must already be in the channel when the
+\ scope returns. A scope that woke on the tracked child alone would find the channel empty.
+\
+\ Each scope lives on its owner's stack and is freed when the owner returns. The four workers in
+\ the `.flags` sidecar put the finishers on other workers, so a finisher that touched the scope
+\ after waking the owner would read freed memory.
+
+use "testing" ;
+use "time" ;
+
+[
+  0
+  200 [
+    1 <buffered-channel>
+    dup [
+      [ 1 milliseconds sleep 42 swap send ] curry spawn-detached
+      [ 1 1 + drop ] spawn drop
+    ] curry task-scope
+    try-receive [ 42 = [ 1 + ] when ] [ drop ] if
+  ] times
+  200 "every scope waited for its detached task" assert=
+] task-scope
+
+"drained" print-line
