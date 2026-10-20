@@ -459,6 +459,24 @@ test "force-once: a cycle through a second cell names both words" {
     try testing.expectEqual(OnceCell.State.cold, inner.state.load(.acquire));
 }
 
+test "force-once: a child with no scheduler cannot wait on a cell forced elsewhere" {
+    var root = Context.init(testing.allocator);
+    defer root.deinit();
+
+    var child = try Context.initChild(testing.allocator, &root, .analysis);
+    defer child.deinit();
+
+    var cell = testCell(&.{}, "held");
+    defer cell.deinit();
+
+    var holder: Task = undefined;
+    holder.blocked_on_once_cell = null;
+    try testing.expectEqual(OnceCell.Arrival.begun, cell.arrive(&holder, null));
+
+    try testing.expectError(error.UserThrown, forceCell(&child, &cell));
+    try testing.expectEqualStrings("once-force-wait", child.thrown_error.?.error_type);
+}
+
 test "force-once: a contended force with nothing to park raises once-force-wait" {
     var ctx = Context.init(testing.allocator);
     defer ctx.deinit();

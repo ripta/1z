@@ -2084,3 +2084,115 @@ test "deepCopyValue: a scalar-parameterized tag does not exempt string contents 
     try testing.expectEqual(@as(u32, 1), h.header.refcountValue());
     container_backing.releaseValue(copied);
 }
+
+test "a child with no scheduler fails fast at the scheduler sites" {
+    var root = Context.init(std.testing.allocator);
+    defer root.deinit();
+
+    var child = try Context.initChild(std.testing.allocator, &root, .analysis);
+    defer child.deinit();
+
+    try std.testing.expectError(error.InvalidState, nativeYield(&child));
+    try std.testing.expectEqualStrings(
+        "yield must be called within a task-scope",
+        child.pending_error_message.?,
+    );
+
+    try std.testing.expectError(error.InvalidState, nativeTaskSelf(&child));
+    try std.testing.expectEqualStrings(
+        "task-self must be called within a task-scope",
+        child.pending_error_message.?,
+    );
+
+    try child.stack.push(.{ .quotation = .{ .instructions = &.{}, .effect = null } });
+    try std.testing.expectError(error.InvalidState, nativeSpawn(&child));
+    try std.testing.expectEqualStrings(
+        "spawn must be called within a task-scope",
+        child.pending_error_message.?,
+    );
+
+    var vt: value_mod.VirtualType = .{ .name = "duration", .inner_type = "fixnum" };
+    const duration = try value_mod.ownedTaggedValue(std.testing.allocator, &vt, .{ .fixnum = 5 });
+    defer container_backing.releaseValue(duration);
+    try child.stack.push(duration);
+    try std.testing.expectError(error.InvalidState, nativeSleep(&child));
+    try std.testing.expectEqualStrings(
+        "sleep must be called within a task-scope",
+        child.pending_error_message.?,
+    );
+
+    // The task value is popped and never dereferenced before the scheduler check fails.
+    var unreached: Task = undefined;
+    try child.stack.push(.{ .task = &unreached });
+    try std.testing.expectError(error.InvalidState, nativeAwait(&child));
+    try std.testing.expectEqualStrings(
+        "await must be called within a task-scope",
+        child.pending_error_message.?,
+    );
+}
+
+test "a task child's guard is armed from the thread, then overwritten with the task's bounds" {
+    const alloc = std.testing.allocator;
+
+    var root = Context.init(alloc);
+    defer root.deinit();
+
+    var sched = try Scheduler.init(alloc);
+    defer sched.deinit();
+    root.scheduler = &sched;
+
+    var bare = try Context.initChild(alloc, &root, .task);
+    defer bare.deinit();
+
+    const thread_high = bare.stack_high;
+    const thread_limit = bare.stack_limit;
+    try std.testing.expect(thread_high != 0);
+
+    var scope = TaskScope.init(alloc);
+    defer scope.deinit();
+
+    const Probe = struct {
+        var high: usize = 0;
+        var limit: usize = 0;
+        fn entry(co: task_mod.CoroPtr) callconv(.c) void {
+            const task: *Task = @ptrCast(@alignCast(task_mod.getCoroUserData(co)));
+            high = task.ctx.stack_high;
+            limit = task.ctx.stack_limit;
+            task.setStatus(.completed);
+        }
+    };
+
+    const task = try allocateTaskWithEntry(
+        &root,
+        &sched,
+        &scope,
+        .{ .quot = .{ .instructions = &.{}, .effect = null }, .owner = .unit },
+        null,
+        &Probe.entry,
+    );
+    const coro = task.coro.?;
+    const task_high = @intFromPtr(coro.stack_base) + coro.stack_size;
+    try scope.addChild(task);
+    try sched.enqueue(task);
+
+    sched.runLoop();
+
+    try std.testing.expectEqual(task_high, Probe.high);
+    try std.testing.expect(Probe.high != thread_high);
+    try std.testing.expect(Probe.limit != thread_limit);
+    try std.testing.expect(Probe.limit < Probe.high);
+}
+
+test "a top-level task-scope on a child with no scheduler leaves no pool behind" {
+    var root = Context.init(std.testing.allocator);
+    defer root.deinit();
+
+    var child = try Context.initChild(std.testing.allocator, &root, .analysis);
+    defer child.deinit();
+
+    try child.stack.push(.{ .quotation = .{ .instructions = &.{}, .effect = null } });
+    try nativeTaskScope(&child);
+
+    try std.testing.expect(child.scheduler == null);
+    try std.testing.expect(child.worker_pool == null);
+}

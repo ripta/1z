@@ -1527,6 +1527,13 @@ pub const Context = struct {
     /// it. `enterCheckMode` draws a fresh value from the root's counter on each transition into
     /// check mode, so no two loads in the process share one. Zero means no check-mode load has run.
     check_load_epoch: u32 = 0,
+    /// Whether a module load started here targets this context. Fixed at construction: the root and
+    /// an analysis child own their loads, and a task never does. Check mode cannot stand in for
+    /// this, because user code can flip it on any context.
+    owns_loads: bool = false,
+    /// Whether this context is an analysis context or descends from one. A task spawned under an
+    /// analysis context inherits it, along with check mode and its epoch.
+    in_analysis: bool = false,
     /// When true, disables both definition-time non-tail-recursion analysis
     /// and the runtime marker consistency check.
     allow_all_recursion: bool = false,
@@ -1853,6 +1860,8 @@ pub const Context = struct {
             .jit_dispatch = JitDispatchTable.init(allocator),
         };
 
+        ctx.owns_loads = true;
+
         ctx.shared_lock = allocator.create(std.Thread.RwLock) catch |err| {
             std.debug.panic("Failed to allocate shared lock: {any}", .{err});
         };
@@ -2120,13 +2129,35 @@ pub const Context = struct {
         self.stack_limit = grown.base_limit;
     }
 
-    /// Create a lightweight Context for a spawned task. Primitives and the prelude are not
-    /// registered here. They are resolved at lookup time by walking up the parent_context chain.
-    /// Per-task state like the stack, dictionary, and arena are freshly allocated.
+    /// What a child context is for. It fixes load ownership at construction.
+    pub const ChildKind = enum {
+        /// A spawned task. It never owns its loads, and it runs under its parent's analysis if any.
+        task,
+        /// An analysis context. It owns its loads and is torn down whole.
+        analysis,
+    };
+
+    /// Create a lightweight Context for a spawned task. A task always has a scheduler.
+    pub fn initForTask(allocator: Allocator, parent: *Context, scheduler: *Scheduler) !Context {
+        var ctx = try initChild(allocator, parent, .task);
+        ctx.scheduler = scheduler;
+        return ctx;
+    }
+
+    /// Create a lightweight Context under `parent`, with no scheduler. Primitives and the prelude
+    /// are not registered here. They are resolved at lookup time by walking up the parent_context
+    /// chain. Per-child state like the stack, dictionary, and arena are freshly allocated.
+    ///
+    /// A child with no scheduler behaves as a root that has none: channel operations, `spawn`,
+    /// `await`, and `sleep` fail fast, stream IO and `wait-pid` block, and a top-level `task-scope`
+    /// builds its own worker pool.
+    ///
+    /// Every child arms the native stack guard from the calling thread. A task overwrites the bounds
+    /// when the task allocator arms it over the task's own stack.
     ///
     /// Once the context exists, `deinit` owns every cleanup on failure, so each later step leaves
     /// whatever it acquired either on the context or released.
-    pub fn initForTask(allocator: Allocator, parent: *Context, scheduler: *Scheduler) !Context {
+    pub fn initChild(allocator: Allocator, parent: *Context, child_kind: ChildKind) !Context {
         const arena = try allocator.create(std.heap.ArenaAllocator);
         arena.* = std.heap.ArenaAllocator.init(allocator);
 
@@ -2141,7 +2172,6 @@ pub const Context = struct {
             .local_frames = .{},
             .dispatch = DispatchTable.init(allocator),
             .jit_dispatch = JitDispatchTable.init(allocator),
-            .scheduler = scheduler,
             .worker_pool = parent.worker_pool,
             .parent_context = parent,
 
@@ -2166,6 +2196,22 @@ pub const Context = struct {
             .any_type_sentinel = parent.any_type_sentinel,
         };
         errdefer ctx.deinit();
+
+        ctx.setStackBoundsFromCurrentThread();
+
+        switch (child_kind) {
+            .task => {
+                if (parent.in_analysis) {
+                    ctx.in_analysis = true;
+                    ctx.check_mode = parent.check_mode;
+                    ctx.check_load_epoch = parent.check_load_epoch;
+                }
+            },
+            .analysis => {
+                ctx.owns_loads = true;
+                ctx.in_analysis = true;
+            },
+        }
 
         // Share the parent's lock so all tasks use the same RwLock.
         ctx.shared_lock = parent.shared_lock;
@@ -12287,6 +12333,172 @@ test "initForTask: a failure at any allocation strands nothing" {
 
     try std.testing.expectEqual(@as(u32, 2), array.header.refcount.load(.monotonic));
     try std.testing.expectEqual(@as(u32, 1), parent.topPragmaView().?.refcount.load(.monotonic));
+}
+
+fn initChildThenDeinit(allocator: Allocator, parent: *Context, kind: Context.ChildKind) !void {
+    var child = try Context.initChild(allocator, parent, kind);
+    child.deinit();
+}
+
+test "initChild: a failure at any allocation strands nothing" {
+    var parent = Context.init(std.testing.allocator);
+    defer parent.deinit();
+
+    try parent.pushPragmaFrame();
+    try parent.setPragma("x-level", .{ .fixnum = 1 });
+
+    try parent.pushParameterFrame();
+    const items = try std.testing.allocator.alloc(Value, 1);
+    items[0] = .{ .fixnum = 7 };
+    const array = try value_mod.Array.fromOwnedSlice(std.testing.allocator, items);
+    try parent.parameter_env.items[0].put(std.testing.allocator, "*probe*", .{ .array = array });
+
+    try parent.pushLocalFrame();
+    container_backing.retainValue(.{ .array = array });
+    try parent.local_frames.items[0].put(std.testing.allocator, "probe-word", .{
+        .name = "probe-word",
+        .action = .{ .literal = .{ .array = array } },
+        .owns_literal = true,
+    });
+
+    try std.testing.checkAllAllocationFailures(
+        std.testing.allocator,
+        initChildThenDeinit,
+        .{ &parent, Context.ChildKind.analysis },
+    );
+    try std.testing.checkAllAllocationFailures(
+        std.testing.allocator,
+        initChildThenDeinit,
+        .{ &parent, Context.ChildKind.task },
+    );
+
+    try std.testing.expectEqual(@as(u32, 2), array.header.refcount.load(.monotonic));
+    try std.testing.expectEqual(@as(u32, 1), parent.topPragmaView().?.refcount.load(.monotonic));
+}
+
+test "initChild: an analysis child has no scheduler and arms the guard from the thread" {
+    var parent = Context.init(std.testing.allocator);
+    defer parent.deinit();
+
+    var child = try Context.initChild(std.testing.allocator, &parent, .analysis);
+    defer child.deinit();
+
+    try std.testing.expect(child.scheduler == null);
+    try std.testing.expectEqual(&parent, child.parent_context.?);
+    try std.testing.expectEqual(&parent, child.rootContext());
+
+    if (currentThreadStackBounds()) |bounds| {
+        try std.testing.expectEqual(bounds.high, child.stack_high);
+        try std.testing.expectEqual(bounds.low, child.stack_low);
+        try std.testing.expect(child.stack_limit > child.stack_low);
+        try std.testing.expectEqual(child.stack_limit, child.stack_floor);
+    }
+}
+
+test "initChild: a task child arms the guard from the thread like an analysis child" {
+    var parent = Context.init(std.testing.allocator);
+    defer parent.deinit();
+
+    var child = try Context.initChild(std.testing.allocator, &parent, .task);
+    defer child.deinit();
+
+    try std.testing.expect(child.scheduler == null);
+
+    if (currentThreadStackBounds()) |bounds| {
+        try std.testing.expectEqual(bounds.high, child.stack_high);
+        try std.testing.expectEqual(bounds.low, child.stack_low);
+        try std.testing.expectEqual(child.stack_limit, child.stack_floor);
+    }
+}
+
+test "initForTask: sets the given scheduler on the context initChild builds" {
+    var parent = Context.init(std.testing.allocator);
+    defer parent.deinit();
+
+    const scheduler = try createTestScheduler();
+    defer destroyTestScheduler(scheduler);
+
+    var task_ctx = try Context.initForTask(std.testing.allocator, &parent, scheduler);
+    defer task_ctx.deinit();
+
+    try std.testing.expectEqual(@as(?*Scheduler, scheduler), task_ctx.scheduler);
+    try std.testing.expectEqual(&parent, task_ctx.parent_context.?);
+    try std.testing.expectEqual(&parent, task_ctx.rootContext());
+}
+
+test "load ownership is fixed at construction" {
+    var root = Context.init(std.testing.allocator);
+    defer root.deinit();
+
+    try std.testing.expect(root.owns_loads);
+    try std.testing.expect(!root.in_analysis);
+
+    const scheduler = try createTestScheduler();
+    defer destroyTestScheduler(scheduler);
+
+    var task_ctx = try Context.initForTask(std.testing.allocator, &root, scheduler);
+    defer task_ctx.deinit();
+
+    try std.testing.expect(!task_ctx.owns_loads);
+    try std.testing.expect(!task_ctx.in_analysis);
+
+    var analysis = try Context.initChild(std.testing.allocator, &root, .analysis);
+    defer analysis.deinit();
+
+    try std.testing.expect(analysis.owns_loads);
+    try std.testing.expect(analysis.in_analysis);
+
+    var under_analysis = try Context.initForTask(std.testing.allocator, &analysis, scheduler);
+    defer under_analysis.deinit();
+
+    try std.testing.expect(!under_analysis.owns_loads);
+    try std.testing.expect(under_analysis.in_analysis);
+
+    // Flipping check mode neither grants nor revokes ownership.
+    task_ctx.enterCheckMode();
+    try std.testing.expect(!task_ctx.owns_loads);
+}
+
+test "a task under an analysis context inherits check mode and its epoch" {
+    var root = Context.init(std.testing.allocator);
+    defer root.deinit();
+
+    var analysis = try Context.initChild(std.testing.allocator, &root, .analysis);
+    defer analysis.deinit();
+
+    analysis.enterCheckMode();
+    try std.testing.expect(analysis.check_load_epoch != 0);
+
+    const scheduler = try createTestScheduler();
+    defer destroyTestScheduler(scheduler);
+
+    var task_ctx = try Context.initForTask(std.testing.allocator, &analysis, scheduler);
+    defer task_ctx.deinit();
+
+    try std.testing.expect(task_ctx.check_mode);
+    try std.testing.expectEqual(analysis.check_load_epoch, task_ctx.check_load_epoch);
+
+    var nested = try Context.initForTask(std.testing.allocator, &task_ctx, scheduler);
+    defer nested.deinit();
+
+    try std.testing.expect(nested.check_mode);
+    try std.testing.expectEqual(analysis.check_load_epoch, nested.check_load_epoch);
+}
+
+test "a task outside analysis does not inherit check mode" {
+    var root = Context.init(std.testing.allocator);
+    defer root.deinit();
+
+    root.enterCheckMode();
+
+    const scheduler = try createTestScheduler();
+    defer destroyTestScheduler(scheduler);
+
+    var task_ctx = try Context.initForTask(std.testing.allocator, &root, scheduler);
+    defer task_ctx.deinit();
+
+    try std.testing.expect(!task_ctx.check_mode);
+    try std.testing.expectEqual(@as(u32, 0), task_ctx.check_load_epoch);
 }
 
 test "stack operations through context" {

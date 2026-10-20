@@ -809,3 +809,24 @@ test "send accepts owned buffer into buffered channel" {
     const buffered = ch.buffer.pop();
     buffered.destroy(ch.allocator);
 }
+
+test "channel creation fails fast on a child with no scheduler" {
+    var root = Context.init(std.testing.allocator);
+    defer root.deinit();
+
+    var child = try Context.initChild(std.testing.allocator, &root, .analysis);
+    defer child.deinit();
+
+    try std.testing.expectError(error.InvalidState, nativeCreateChannel(&child));
+    try std.testing.expectEqualStrings(
+        "<channel> must be called within a task-scope",
+        child.pending_error_message.?,
+    );
+
+    try child.stack.push(.{ .fixnum = 2 });
+    try std.testing.expectError(error.InvalidState, nativeCreateBufferedChannel(&child));
+    try std.testing.expectEqualStrings(
+        "<buffered-channel> must be called within a task-scope",
+        child.pending_error_message.?,
+    );
+}
