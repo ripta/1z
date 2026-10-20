@@ -1565,7 +1565,7 @@ fn emitMarkerDescriptionsStorage(
 fn parameterDefaultModule(ctx: *const Context, param: *const Parameter) ?*const value_mod.Module {
     const instrs = param.default_quotation.instructions;
     if (instrs.len == 0) return null;
-    const module = ctx.quotation_stamp_store.lookup(@intFromPtr(instrs.ptr)) orelse return null;
+    const module = ctx.body_stores.quotation_stamp_store.lookup(@intFromPtr(instrs.ptr)) orelse return null;
     if (context_mod.isSyntheticScopeModule(module)) return null;
     return module;
 }
@@ -1680,7 +1680,7 @@ fn writeOnceCellDescModuleSym(
 fn onceCellBodyModule(ctx: *const Context, cell: *const value_mod.OnceCell) ?*const value_mod.Module {
     const instrs = cell.body.instructions;
     if (instrs.len == 0) return null;
-    const module = ctx.quotation_stamp_store.lookup(@intFromPtr(instrs.ptr)) orelse return null;
+    const module = ctx.body_stores.quotation_stamp_store.lookup(@intFromPtr(instrs.ptr)) orelse return null;
     if (context_mod.isSyntheticScopeModule(module)) return null;
     return module;
 }

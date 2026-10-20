@@ -135,7 +135,7 @@ fn runBody(ctx: *Context, cell: *OnceCell) anyerror!void {
         return ctx.executeQuotationWithFrame(cell.body, cell.owner);
     }
     const stamped = if (cell.body.instructions.len > 0)
-        ctx.quotation_stamp_store.lookup(@intFromPtr(cell.body.instructions.ptr))
+        ctx.body_stores.quotation_stamp_store.lookup(@intFromPtr(cell.body.instructions.ptr))
     else
         null;
     const defining_module = stamped orelse

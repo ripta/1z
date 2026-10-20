@@ -21,8 +21,12 @@ const AtomicSlotMap = @import("atomic_slot_map.zig").AtomicSlotMap;
 /// the mark is visible to a descendant's walk no later than the entry is. A writer that publishes
 /// without marking silently loses that capture in a descendant task.
 ///
-/// The gate is allocated by the root context, aliased by pointer into every child, and freed only
-/// by the root.
+/// The gate is one layer of a `BodyKeyedStores` set. The root's layer is the base, and a context
+/// that owns its loads has a layer of its own, linked to its parent's. Every other context aliases
+/// the set of its nearest load owner.
+///
+/// A mark lands in the layer of the context that installs the scope, which is the layer its
+/// descendants read through. Mark-before-publish therefore holds in the layer a reader sees.
 ///
 /// Reads take no lock. Writers serialize on `write_mu`, which is a leaf: every writer marks before
 /// taking its own map mutex, so this is never held while another lock is.
@@ -40,19 +44,18 @@ pub const CarryableScopeGate = struct {
     /// lexical local is marked here.
     const initial_capacity: usize = 64;
 
-    pub fn create(allocator: std.mem.Allocator) error{OutOfMemory}!*CarryableScopeGate {
-        var map = try AtomicSlotMap(?*const anyopaque).init(allocator, initial_capacity);
-        errdefer map.deinit();
-
-        const self = try allocator.create(CarryableScopeGate);
-        self.* = .{ .map = map };
-        return self;
+    /// A layer over `parent`, or the base layer when `parent` is null.
+    pub fn init(allocator: std.mem.Allocator, parent: ?*const CarryableScopeGate) error{OutOfMemory}!CarryableScopeGate {
+        const map = try AtomicSlotMap(?*const anyopaque).initLayered(
+            allocator,
+            initial_capacity,
+            if (parent) |p| &p.map else null,
+        );
+        return .{ .map = map };
     }
 
-    pub fn destroy(self: *CarryableScopeGate) void {
-        const allocator = self.map.allocator;
+    pub fn deinit(self: *CarryableScopeGate) void {
         self.map.deinit();
-        allocator.destroy(self);
     }
 
     /// Whether any context has ever installed a carryable scope for the body at `key`.
@@ -88,8 +91,8 @@ pub const CarryableScopeGate = struct {
 const testing = std.testing;
 
 test "CarryableScopeGate: a marked body reports present and an unmarked one does not" {
-    const gate = try CarryableScopeGate.create(testing.allocator);
-    defer gate.destroy();
+    var gate = try CarryableScopeGate.init(testing.allocator, null);
+    defer gate.deinit();
 
     try testing.expect(try gate.mark(0x1000));
 
@@ -100,8 +103,8 @@ test "CarryableScopeGate: a marked body reports present and an unmarked one does
 }
 
 test "CarryableScopeGate: a repeat mark reports not-marked and leaves the key present" {
-    const gate = try CarryableScopeGate.create(testing.allocator);
-    defer gate.destroy();
+    var gate = try CarryableScopeGate.init(testing.allocator, null);
+    defer gate.deinit();
 
     try testing.expect(try gate.mark(0x1000));
     try testing.expect(!try gate.mark(0x1000));
@@ -111,8 +114,8 @@ test "CarryableScopeGate: a repeat mark reports not-marked and leaves the key pr
 }
 
 test "CarryableScopeGate: growth preserves every mark" {
-    const gate = try CarryableScopeGate.create(testing.allocator);
-    defer gate.destroy();
+    var gate = try CarryableScopeGate.init(testing.allocator, null);
+    defer gate.deinit();
 
     const entries: usize = 1000;
     var key: usize = 1;
@@ -172,15 +175,15 @@ fn markRaceReader(args: MarkRaceArgs) void {
 }
 
 test "CarryableScopeGate: a published mark stays visible to readers across a growth" {
-    const gate = try CarryableScopeGate.create(testing.allocator);
-    defer gate.destroy();
+    var gate = try CarryableScopeGate.init(testing.allocator, null);
+    defer gate.deinit();
 
     const entries: usize = 2000;
     var published = std.atomic.Value(usize).init(0);
     var failed = std.atomic.Value(bool).init(false);
 
     const args: MarkRaceArgs = .{
-        .gate = gate,
+        .gate = &gate,
         .entries = entries,
         .published = &published,
         .failed = &failed,

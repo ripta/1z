@@ -3715,13 +3715,13 @@ test "loadIntoContext: stamps decoded bodies and nested quotations with their mo
 
     try testing.expectEqual(
         @as(?*const value_mod.Module, module_ptr),
-        ctx.quotation_stamp_store.lookup(@intFromPtr(decoded.ptr)),
+        ctx.body_stores.quotation_stamp_store.lookup(@intFromPtr(decoded.ptr)),
     );
 
     const nested = decoded[0].op.push_literal.quotation.instructions;
     try testing.expectEqual(
         @as(?*const value_mod.Module, module_ptr),
-        ctx.quotation_stamp_store.lookup(@intFromPtr(nested.ptr)),
+        ctx.body_stores.quotation_stamp_store.lookup(@intFromPtr(nested.ptr)),
     );
 }
 
@@ -3783,13 +3783,13 @@ test "replayMethodDispatch: stamps interpreter-run body with its module" {
 
     try testing.expectEqual(
         @as(?*const value_mod.Module, module_ptr),
-        ctx.quotation_stamp_store.lookup(@intFromPtr(decoded.ptr)),
+        ctx.body_stores.quotation_stamp_store.lookup(@intFromPtr(decoded.ptr)),
     );
 
     const nested = decoded[0].op.push_literal.quotation.instructions;
     try testing.expectEqual(
         @as(?*const value_mod.Module, module_ptr),
-        ctx.quotation_stamp_store.lookup(@intFromPtr(nested.ptr)),
+        ctx.body_stores.quotation_stamp_store.lookup(@intFromPtr(nested.ptr)),
     );
 }
 
@@ -3846,13 +3846,13 @@ test "populateParameterSlots: stamps a module-attributed default" {
 
     try testing.expectEqual(
         @as(?*const value_mod.Module, module_ptr),
-        ctx.quotation_stamp_store.lookup(@intFromPtr(param.default_quotation.instructions.ptr)),
+        ctx.body_stores.quotation_stamp_store.lookup(@intFromPtr(param.default_quotation.instructions.ptr)),
     );
 
     const nested = param.default_quotation.instructions[0].op.push_literal.quotation.instructions;
     try testing.expectEqual(
         @as(?*const value_mod.Module, module_ptr),
-        ctx.quotation_stamp_store.lookup(@intFromPtr(nested.ptr)),
+        ctx.body_stores.quotation_stamp_store.lookup(@intFromPtr(nested.ptr)),
     );
 
     // The default's declared effect survives the image round trip.
@@ -3918,7 +3918,7 @@ test "populateOnceCellSlots: decodes the body, attaches its compiled function, a
     try testing.expectEqual(@as(?*const anyopaque, @ptrCast(&fake_fn)), cell.body.code_ptr);
     try testing.expectEqual(
         @as(?*const value_mod.Module, cached.module),
-        ctx.quotation_stamp_store.lookup(@intFromPtr(cell.body.instructions.ptr)),
+        ctx.body_stores.quotation_stamp_store.lookup(@intFromPtr(cell.body.instructions.ptr)),
     );
 }
 
@@ -4899,12 +4899,12 @@ test "loadIntoContext: stamps a private helper's decoded body with the owning mo
 
     try testing.expectEqual(
         @as(?*const value_mod.Module, module_ptr),
-        ctx.quotation_stamp_store.lookup(@intFromPtr(decoded.ptr)),
+        ctx.body_stores.quotation_stamp_store.lookup(@intFromPtr(decoded.ptr)),
     );
     const nested = decoded[0].op.push_literal.quotation.instructions;
     try testing.expectEqual(
         @as(?*const value_mod.Module, module_ptr),
-        ctx.quotation_stamp_store.lookup(@intFromPtr(nested.ptr)),
+        ctx.body_stores.quotation_stamp_store.lookup(@intFromPtr(nested.ptr)),
     );
 }
 

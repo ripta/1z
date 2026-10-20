@@ -1,7 +1,8 @@
 //! Debug-only registry of live closure-owned body addresses.
 //!
 //! The body-keyed resolution maps (`Context.quotation_scope_info` and the process-shared
-//! `carryable_scope_gate`) admit only process-lifetime keys. A body a closure owns is freed when
+//! `carryable_scope_gate`) admit only keys that outlive the layer or map they enter. A body a
+//! closure owns is freed when
 //! the closure is released, so an entry under its address would outlive its own key, and a later
 //! unrelated allocation at the same address would inherit the dead closure's resolution data. The
 //! writers refuse such a body by asking the threaded carrier, but that re-checks what the caller

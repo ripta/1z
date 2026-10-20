@@ -114,15 +114,17 @@ pub const InlineRegionSet = struct {
 /// which never reach that pass. A body no `inline` word reached has no entry either way, so the
 /// overwhelming majority of programs leave the table empty.
 ///
-/// Entries are permanent, so only process-lifetime keys may enter: a body built on a task or
-/// scoped-eval arena dies with it and would leave a key that a later unrelated allocation at the
-/// same address falsely matches. `Context.recordInlineRegions` applies that gate.
+/// An entry lasts as long as its layer, so a key must outlive the layer it enters: a body built on
+/// a task or scoped-eval arena dies with it and would leave a key that a later unrelated
+/// allocation at the same address falsely matches. `Context.recordInlineRegions` applies that
+/// gate.
 ///
-/// The table is allocated by the root context, aliased by pointer into every child, and freed only
-/// by the root.
+/// The table is one layer of a `BodyKeyedStores` set. The root's layer is the base, and a context
+/// that owns its loads has a layer of its own, linked to its parent's. Every other context aliases
+/// the set of its nearest load owner.
 ///
-/// Reads take no lock. Writers serialize on `write_mu` and apply first-record-wins, which is what
-/// a repeated expansion of the same slice would write anyway.
+/// Reads take no lock. Writers serialize on `write_mu` and apply first-record-wins across the
+/// layers, which is what a repeated expansion of the same slice would write anyway.
 pub const InlineRegionTable = struct {
     /// Key `0` marks an empty slot in the map and is never a real key:
     /// `Context.recordInlineRegions` skips zero-length instruction slices, which are the only
@@ -141,23 +143,22 @@ pub const InlineRegionTable = struct {
     /// all, so this starts far below the every-parsed-body tables beside it.
     const initial_capacity: usize = 64;
 
-    pub fn create(allocator: std.mem.Allocator) error{OutOfMemory}!*InlineRegionTable {
-        var map = try AtomicSlotMap(?*const InlineRegionSet).init(allocator, initial_capacity);
-        errdefer map.deinit();
-
-        const self = try allocator.create(InlineRegionTable);
-        self.* = .{
+    /// A layer over `parent`, or the base layer when `parent` is null.
+    pub fn init(allocator: std.mem.Allocator, parent: ?*const InlineRegionTable) error{OutOfMemory}!InlineRegionTable {
+        const map = try AtomicSlotMap(?*const InlineRegionSet).initLayered(
+            allocator,
+            initial_capacity,
+            if (parent) |p| &p.map else null,
+        );
+        return .{
             .map = map,
             .arena = std.heap.ArenaAllocator.init(allocator),
         };
-        return self;
     }
 
-    pub fn destroy(self: *InlineRegionTable) void {
-        const allocator = self.map.allocator;
+    pub fn deinit(self: *InlineRegionTable) void {
         self.map.deinit();
         self.arena.deinit();
-        allocator.destroy(self);
     }
 
     /// The inlined runs of the body at `key`, or null when the body has none recorded.
@@ -247,8 +248,8 @@ fn region(start: u32, end: u32, name: []const u8, source: []const u8, line: u32)
 }
 
 test "InlineRegionTable: a recorded body resolves and an unrecorded one misses" {
-    const table = try InlineRegionTable.create(testing.allocator);
-    defer table.destroy();
+    var table = try InlineRegionTable.init(testing.allocator, null);
+    defer table.deinit();
 
     try testing.expect(table.lookup(0x1000) == null);
 
@@ -267,8 +268,8 @@ test "InlineRegionTable: a recorded body resolves and an unrecorded one misses" 
 }
 
 test "InlineRegionTable: an empty region list takes no slot" {
-    const table = try InlineRegionTable.create(testing.allocator);
-    defer table.destroy();
+    var table = try InlineRegionTable.init(testing.allocator, null);
+    defer table.deinit();
 
     try table.record(0x1000, "caller.1z", &.{});
 
@@ -277,8 +278,8 @@ test "InlineRegionTable: an empty region list takes no slot" {
 }
 
 test "InlineRegionTable: the names and paths are copied, not aliased" {
-    const table = try InlineRegionTable.create(testing.allocator);
-    defer table.destroy();
+    var table = try InlineRegionTable.init(testing.allocator, null);
+    defer table.deinit();
 
     // A callee's name can belong to a local frame, and a file path to the caller of a module
     // load. All three are overwritten here to stand in for that.
@@ -297,8 +298,8 @@ test "InlineRegionTable: the names and paths are copied, not aliased" {
 }
 
 test "InlineRegionTable: the first record wins" {
-    const table = try InlineRegionTable.create(testing.allocator);
-    defer table.destroy();
+    var table = try InlineRegionTable.init(testing.allocator, null);
+    defer table.deinit();
 
     try table.record(0x1000, "caller.1z", &.{region(0, 2, "first", "a.1z", 1)});
     try table.record(0x1000, "caller.1z", &.{region(0, 2, "second", "a.1z", 2)});
@@ -309,8 +310,8 @@ test "InlineRegionTable: the first record wins" {
 }
 
 test "InlineRegionTable: growth preserves every entry" {
-    const table = try InlineRegionTable.create(testing.allocator);
-    defer table.destroy();
+    var table = try InlineRegionTable.init(testing.allocator, null);
+    defer table.deinit();
 
     const entries: usize = 500;
     var key: usize = 1;

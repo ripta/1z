@@ -2686,7 +2686,7 @@ export fn onez_runtime_register_array_literals(ptr: ?*anyopaque, site_count: u32
 /// placed in the nesting their build recorded. Must run before any compiled code.
 export fn onez_runtime_register_lexical_sites(ptr: ?*anyopaque, rows: [*]const u64, count: u32) i32 {
     const handle = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
-    aot_lexical_sites.registerSites(handle.ctx.lexical_parents, rows[0..count]) catch |err| {
+    aot_lexical_sites.registerSites(&handle.ctx.body_stores.lexical_parents, rows[0..count]) catch |err| {
         captureError(handle, err);
         return ONEZ_ERR_LOAD_FAILED;
     };

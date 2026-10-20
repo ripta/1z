@@ -5126,6 +5126,8 @@ test {
     _ = @import("value.zig");
     _ = @import("stack.zig");
     _ = @import("context.zig");
+    _ = @import("body_keyed_stores.zig");
+    _ = @import("arena_origin.zig");
     _ = @import("quotation_stamp_store.zig");
     _ = @import("carryable_scope_gate.zig");
     _ = @import("nested_name_cache.zig");

@@ -12,12 +12,20 @@ const std = @import("std");
 /// The map holds no mutex of its own: callers must serialize all inserts with each other.
 /// Readers take no lock at all -- one acquire load of the published table plus a linear probe.
 /// `V` must be a nullable pointer type; `null` is the absent value.
+///
+/// A map may be layered over a parent map. A lookup probes its own table and then the parent's,
+/// so a reader pays one probe per layer. An insert checks the whole chain before writing, so the
+/// first insert still wins across layers. Each table stays write-once: a layer is destroyed whole
+/// with its owner and never has an entry removed. The parent must outlive every layer above it.
 pub fn AtomicSlotMap(comptime V: type) type {
     return struct {
         const Self = @This();
 
         allocator: std.mem.Allocator,
         published: std.atomic.Value(*Table),
+
+        /// The layer this one reads through on a miss. Fixed at construction.
+        parent: ?*const Self = null,
 
         /// Tables displaced by growth. A reader may still be probing one through a pointer it
         /// loaded before the swap, so a displaced table stays allocated until `deinit`.
@@ -40,10 +48,21 @@ pub fn AtomicSlotMap(comptime V: type) type {
         };
 
         pub fn init(allocator: std.mem.Allocator, initial_capacity: usize) error{OutOfMemory}!Self {
+            return initLayered(allocator, initial_capacity, null);
+        }
+
+        /// A map that reads through `parent` on a miss and refuses to insert a key `parent`
+        /// already holds.
+        pub fn initLayered(
+            allocator: std.mem.Allocator,
+            initial_capacity: usize,
+            parent: ?*const Self,
+        ) error{OutOfMemory}!Self {
             const table = try allocTable(allocator, initial_capacity);
             return .{
                 .allocator = allocator,
                 .published = std.atomic.Value(*Table).init(table),
+                .parent = parent,
             };
         }
 
@@ -53,10 +72,19 @@ pub fn AtomicSlotMap(comptime V: type) type {
             self.retired.deinit(self.allocator);
         }
 
-        /// The value at `key`, or null when absent. One acquire load plus one probe, no lock.
+        /// The value at `key`, or null when absent. One acquire load plus one probe per layer, no
+        /// lock.
         pub fn lookup(self: *const Self, key: usize) V {
             if (key == 0) return null;
 
+            if (self.lookupOwn(key)) |found| return found;
+
+            const parent = self.parent orelse return null;
+            return parent.lookup(key);
+        }
+
+        /// The value at `key` in this layer alone.
+        fn lookupOwn(self: *const Self, key: usize) V {
             const table = self.published.load(.acquire);
             var i = slotIndex(key, table.mask);
             while (true) {
@@ -67,10 +95,15 @@ pub fn AtomicSlotMap(comptime V: type) type {
             }
         }
 
-        /// Insert `val` at `key` unless the key is already present, and report whether this call
-        /// inserted. First-insert-wins: a present key keeps its original value.
+        /// Insert `val` at `key` unless the key is already present in this layer or any parent,
+        /// and report whether this call inserted. First-insert-wins: a present key keeps its
+        /// original value.
         pub fn insert(self: *Self, key: usize, val: V) error{OutOfMemory}!bool {
             std.debug.assert(key != 0);
+
+            if (self.parent) |parent| {
+                if (parent.lookup(key) != null) return false;
+            }
 
             var table = self.published.load(.monotonic);
             var i = slotIndex(key, table.mask);
@@ -92,6 +125,16 @@ pub fn AtomicSlotMap(comptime V: type) type {
             table.keys[i].store(key, .release);
             self.live += 1;
             return true;
+        }
+
+        /// Whether `pred` holds for any key in this layer, parents excluded. Diagnostics and tests.
+        pub fn anyKey(self: *const Self, ctx: anytype, comptime pred: fn (@TypeOf(ctx), usize) bool) bool {
+            const table = self.published.load(.acquire);
+            for (table.keys) |*slot| {
+                const key = slot.load(.acquire);
+                if (key != 0 and pred(ctx, key)) return true;
+            }
+            return false;
         }
 
         /// Occupied slot count. `live` is a plain field the serialized writer mutates, so this
@@ -189,6 +232,63 @@ test "AtomicSlotMap: the first insert wins and repeats report not-inserted" {
 
     try testing.expectEqual(@as(?*const u32, &a), map.lookup(0x1000));
     try testing.expectEqual(@as(usize, 1), map.count());
+}
+
+test "AtomicSlotMap: a layer reads through its parent and leaves it untouched" {
+    var base = try TestMap.init(testing.allocator, 8);
+    defer base.deinit();
+
+    var layer = try TestMap.initLayered(testing.allocator, 8, &base);
+    defer layer.deinit();
+
+    const a: u32 = 1;
+    const b: u32 = 2;
+    try testing.expect(try base.insert(0x1000, &a));
+    try testing.expect(try layer.insert(0x2000, &b));
+
+    try testing.expectEqual(@as(?*const u32, &a), layer.lookup(0x1000));
+    try testing.expectEqual(@as(?*const u32, &b), layer.lookup(0x2000));
+    try testing.expectEqual(@as(?*const u32, null), layer.lookup(0x3000));
+
+    try testing.expectEqual(@as(?*const u32, null), base.lookup(0x2000));
+    try testing.expectEqual(@as(usize, 1), base.count());
+    try testing.expectEqual(@as(usize, 1), layer.count());
+}
+
+test "AtomicSlotMap: the first insert wins across layers" {
+    var base = try TestMap.init(testing.allocator, 8);
+    defer base.deinit();
+
+    var layer = try TestMap.initLayered(testing.allocator, 8, &base);
+    defer layer.deinit();
+
+    const a: u32 = 1;
+    const b: u32 = 2;
+    try testing.expect(try base.insert(0x1000, &a));
+    try testing.expect(!try layer.insert(0x1000, &b));
+
+    try testing.expectEqual(@as(?*const u32, &a), layer.lookup(0x1000));
+    try testing.expectEqual(@as(usize, 0), layer.count());
+}
+
+test "AtomicSlotMap: a lookup walks a chain of three layers" {
+    var root = try TestMap.init(testing.allocator, 8);
+    defer root.deinit();
+
+    var middle = try TestMap.initLayered(testing.allocator, 8, &root);
+    defer middle.deinit();
+
+    var leaf = try TestMap.initLayered(testing.allocator, 8, &middle);
+    defer leaf.deinit();
+
+    const a: u32 = 1;
+    const b: u32 = 2;
+    try testing.expect(try root.insert(0x1000, &a));
+    try testing.expect(try middle.insert(0x2000, &b));
+
+    try testing.expectEqual(@as(?*const u32, &a), leaf.lookup(0x1000));
+    try testing.expectEqual(@as(?*const u32, &b), leaf.lookup(0x2000));
+    try testing.expect(!try leaf.insert(0x2000, &a));
 }
 
 test "AtomicSlotMap: growth preserves every entry and a missing probe terminates" {

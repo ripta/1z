@@ -127,7 +127,7 @@ fn baseDefiningModule(ctx: *Context, val: Value) ?*const value_mod.Module {
             if (info.defining_module) |m| return m;
         }
     }
-    return ctx.quotation_stamp_store.lookup(key);
+    return ctx.body_stores.quotation_stamp_store.lookup(key);
 }
 
 /// Deep-copy the concatenation of two source scopes onto `alloc`, `a`'s frames before `b`'s.
@@ -794,7 +794,7 @@ test "nested curry prepends a capture to the first segment" {
 fn stampedBase(ctx: *Context, module: *const value_mod.Module) !Value {
     const instrs = try ctx.arena.allocator().alloc(Instruction, 1);
     instrs[0] = .{ .op = .{ .push_literal = .{ .fixnum = 0 } }, .line = 1 };
-    _ = try ctx.quotation_stamp_store.stamp(@intFromPtr(instrs.ptr), module);
+    _ = try ctx.body_stores.quotation_stamp_store.stamp(@intFromPtr(instrs.ptr), module);
     return .{ .quotation = .{ .instructions = instrs } };
 }
 

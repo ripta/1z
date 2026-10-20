@@ -1172,16 +1172,16 @@ test "a rebuilt quotation body keeps the file the old one was stamped with" {
 
     try bind(&ctx, here, "width", .{ .fixnum = 256 }, true);
 
-    const nested = [_]Instruction{
+    const nested = try ctx.arena.allocator().dupe(Instruction, &[_]Instruction{
         .{ .op = .{ .call_word = "width" }, .line = 4 },
-    };
+    });
 
     // The shape a cross-module inline leaves: a quotation written in one file, pushed from a body
     // being built in another.
-    try ctx.stampQuotationBodySourceAs(&nested, elsewhere);
+    try ctx.stampQuotationBodySourceAs(nested, elsewhere);
 
     try define(&ctx, here, "holder", &.{
-        quot(&nested, 4),
+        quot(nested, 4),
         .{ .op = .{ .call_word = "call" }, .line = 4 },
     }, false);
 

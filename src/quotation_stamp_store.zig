@@ -10,18 +10,19 @@ const AtomicSlotMap = @import("atomic_slot_map.zig").AtomicSlotMap;
 /// modules are process-shared through the module cache. So the stamp cannot live in a per-context
 /// map. A spawned task runs in a fresh context and would see none of them.
 ///
-/// The lifetime coupling cuts both ways: entries are permanent, so only process-lifetime keys may
-/// enter the store. A body decoded onto a task's arena dies with the task, and stamping it here
+/// The lifetime coupling cuts both ways: an entry lasts as long as its layer, so a key must outlive
+/// the layer it enters. A body decoded onto a task's arena dies with the task, and stamping it here
 /// would leave a key that can falsely match an unrelated later allocation at the same address.
-/// Task-lifetime decodes go through the shared `ReifiedDecodeCache` instead, whose slices are
-/// root-owned.
+/// Task-lifetime decodes go through the shared `ReifiedDecodeCache` instead, whose slices live on
+/// its process-lifetime arena.
 ///
-/// The store is allocated by the root context, aliased by pointer into every child, and freed only
-/// by the root.
+/// The store is one layer of a `BodyKeyedStores` set. The root's layer is the base, and a context
+/// that owns its loads has a layer of its own, linked to its parent's. Every other context aliases
+/// the set of its nearest load owner.
 ///
-/// Reads take no lock. Writers serialize on `write_mu` and apply first-stamp-wins. The first module
-/// to stamp a body is its original defining module. That matters because a reexporting module later
-/// reprocesses the same instruction-slice pointers.
+/// Reads take no lock. Writers serialize on `write_mu` and apply first-stamp-wins across the
+/// layers. The first module to stamp a body is its original defining module. That matters because a
+/// reexporting module later reprocesses the same instruction-slice pointers.
 pub const QuotationStampStore = struct {
     /// Key `0` marks an empty slot in the map and is never a real key: `stampQuotationBodies`
     /// skips zero-length instruction slices, which are the only bodies whose `.ptr` could be a
@@ -30,22 +31,21 @@ pub const QuotationStampStore = struct {
     write_mu: std.Thread.Mutex = .{},
 
     /// Small enough that a context which never loads a module wastes nothing worth counting.
-    /// `create` allocates the table eagerly at this size, so `lookup` needs no null-table branch.
+    /// `init` allocates the table eagerly at this size, so `lookup` needs no null-table branch.
     const initial_capacity: usize = 64;
 
-    pub fn create(allocator: std.mem.Allocator) error{OutOfMemory}!*QuotationStampStore {
-        var map = try AtomicSlotMap(?*const value_mod.Module).init(allocator, initial_capacity);
-        errdefer map.deinit();
-
-        const self = try allocator.create(QuotationStampStore);
-        self.* = .{ .map = map };
-        return self;
+    /// A layer over `parent`, or the base layer when `parent` is null.
+    pub fn init(allocator: std.mem.Allocator, parent: ?*const QuotationStampStore) error{OutOfMemory}!QuotationStampStore {
+        const map = try AtomicSlotMap(?*const value_mod.Module).initLayered(
+            allocator,
+            initial_capacity,
+            if (parent) |p| &p.map else null,
+        );
+        return .{ .map = map };
     }
 
-    pub fn destroy(self: *QuotationStampStore) void {
-        const allocator = self.map.allocator;
+    pub fn deinit(self: *QuotationStampStore) void {
         self.map.deinit();
-        allocator.destroy(self);
     }
 
     /// The module `key`'s body was written in, or null if the body was never stamped.
@@ -88,8 +88,8 @@ fn testModule(name: []const u8) value_mod.Module {
 }
 
 test "QuotationStampStore: a stamped body resolves to its module" {
-    const store = try QuotationStampStore.create(testing.allocator);
-    defer store.destroy();
+    var store = try QuotationStampStore.init(testing.allocator, null);
+    defer store.deinit();
 
     var alpha = testModule("alpha");
     try testing.expect(try store.stamp(0x1000, &alpha));
@@ -99,8 +99,8 @@ test "QuotationStampStore: a stamped body resolves to its module" {
 }
 
 test "QuotationStampStore: an unstamped key resolves to null" {
-    const store = try QuotationStampStore.create(testing.allocator);
-    defer store.destroy();
+    var store = try QuotationStampStore.init(testing.allocator, null);
+    defer store.deinit();
 
     var alpha = testModule("alpha");
     _ = try store.stamp(0x1000, &alpha);
@@ -110,8 +110,8 @@ test "QuotationStampStore: an unstamped key resolves to null" {
 }
 
 test "QuotationStampStore: the first stamp wins" {
-    const store = try QuotationStampStore.create(testing.allocator);
-    defer store.destroy();
+    var store = try QuotationStampStore.init(testing.allocator, null);
+    defer store.deinit();
 
     var original = testModule("original");
     var reexporter = testModule("reexporter");
@@ -124,8 +124,8 @@ test "QuotationStampStore: the first stamp wins" {
 }
 
 test "QuotationStampStore: growth preserves every entry" {
-    const store = try QuotationStampStore.create(testing.allocator);
-    defer store.destroy();
+    var store = try QuotationStampStore.init(testing.allocator, null);
+    defer store.deinit();
 
     var even = testModule("even");
     var odd = testModule("odd");
@@ -197,8 +197,8 @@ fn stampRaceReader(args: StampRaceArgs) void {
 }
 
 test "QuotationStampStore: a published stamp stays visible to readers across a growth" {
-    const store = try QuotationStampStore.create(testing.allocator);
-    defer store.destroy();
+    var store = try QuotationStampStore.init(testing.allocator, null);
+    defer store.deinit();
 
     const entries: usize = 2000;
     var even = testModule("even");
@@ -207,7 +207,7 @@ test "QuotationStampStore: a published stamp stays visible to readers across a g
     var failed = std.atomic.Value(bool).init(false);
 
     const args: StampRaceArgs = .{
-        .store = store,
+        .store = &store,
         .even = &even,
         .odd = &odd,
         .entries = entries,

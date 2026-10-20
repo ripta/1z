@@ -1903,11 +1903,11 @@ test "a finished body is recorded as the lexical parent of the quotations it pus
     const outer = instrs[0].op.push_literal.quotation.instructions;
     const inner = outer[1].op.push_literal.quotation.instructions;
 
-    try std.testing.expectEqual(@as(?usize, @intFromPtr(outer.ptr)), ctx.lexical_parents.parentOf(@intFromPtr(inner.ptr)));
-    try std.testing.expectEqual(@as(?usize, @intFromPtr(instrs.ptr)), ctx.lexical_parents.parentOf(@intFromPtr(outer.ptr)));
+    try std.testing.expectEqual(@as(?usize, @intFromPtr(outer.ptr)), ctx.body_stores.lexical_parents.parentOf(@intFromPtr(inner.ptr)));
+    try std.testing.expectEqual(@as(?usize, @intFromPtr(instrs.ptr)), ctx.body_stores.lexical_parents.parentOf(@intFromPtr(outer.ptr)));
 
     // The statement itself is never a child, so it stays unknown.
-    try std.testing.expectEqual(@as(?usize, null), ctx.lexical_parents.parentOf(@intFromPtr(instrs.ptr)));
+    try std.testing.expectEqual(@as(?usize, null), ctx.body_stores.lexical_parents.parentOf(@intFromPtr(instrs.ptr)));
 }
 
 test "code parsed to run in its caller's scope records no lexical parents" {
@@ -1922,8 +1922,8 @@ test "code parsed to run in its caller's scope records no lexical parents" {
     const outer = instrs[0].op.push_literal.quotation.instructions;
     const inner = outer[1].op.push_literal.quotation.instructions;
 
-    try std.testing.expectEqual(@as(?usize, null), ctx.lexical_parents.parentOf(@intFromPtr(inner.ptr)));
-    try std.testing.expectEqual(@as(?usize, null), ctx.lexical_parents.parentOf(@intFromPtr(outer.ptr)));
+    try std.testing.expectEqual(@as(?usize, null), ctx.body_stores.lexical_parents.parentOf(@intFromPtr(inner.ptr)));
+    try std.testing.expectEqual(@as(?usize, null), ctx.body_stores.lexical_parents.parentOf(@intFromPtr(outer.ptr)));
 }
 
 test "doc-comment before definition emits doc_string after symbol" {

@@ -4605,7 +4605,7 @@ const deserializeValueAt = ibc.deserializeValueAt;
 fn reifiedBodyModuleName(state: *const CompileState, body: []const Instruction) ?[]const u8 {
     const interp_ctx = state.interp_ctx orelse return null;
     if (body.len == 0) return null;
-    const module = interp_ctx.quotation_stamp_store.lookup(@intFromPtr(body.ptr)) orelse return null;
+    const module = interp_ctx.body_stores.quotation_stamp_store.lookup(@intFromPtr(body.ptr)) orelse return null;
     if (context_module.isSyntheticScopeModule(module)) return null;
     return module.name;
 }
@@ -4622,7 +4622,7 @@ fn ownModuleDefines(state: *const CompileState, name: []const u8) bool {
     const body = state.open_lexical_bodies.items[0];
     if (body.len == 0) return false;
 
-    const module = interp_ctx.quotation_stamp_store.lookup(@intFromPtr(body.ptr)) orelse return false;
+    const module = interp_ctx.body_stores.quotation_stamp_store.lookup(@intFromPtr(body.ptr)) orelse return false;
     if (context_module.isSyntheticScopeModule(module)) return false;
     return module.words.contains(name) or module.deps.contains(name);
 }
@@ -10943,7 +10943,7 @@ fn collectLexicalBodies(state: *CompileState, body: []const Instruction, owner: 
 
                 const nested = val.quotation.instructions;
                 if (state.interp_ctx) |ictx| {
-                    if (!ictx.lexical_parents.admits(@intFromPtr(nested.ptr), owner)) continue;
+                    if (!ictx.body_stores.lexical_parents.admits(@intFromPtr(nested.ptr), owner)) continue;
                 }
                 try collectLexicalBodies(state, nested, owner);
             },
@@ -15699,7 +15699,7 @@ fn lexicalOwnerRef(state: *CompileState, body: []const Instruction) IrCodegenErr
         .none => return c.ir_const_addr(state.ctx, 0),
         .address => return c.ir_const_addr(state.ctx, @intFromPtr(body.ptr)),
         .sites => |sites| {
-            const index = sites.siteFor(ictx.lexical_parents, @intFromPtr(body.ptr)) catch
+            const index = sites.siteFor(&ictx.body_stores.lexical_parents, @intFromPtr(body.ptr)) catch
                 return IrCodegenError.CompilationFailed;
             return c.ir_const_addr(state.ctx, if (index) |i| @as(usize, i) + 1 else 0);
         },
@@ -18992,9 +18992,10 @@ export fn jitPushOnceCellSlot(ctx_raw: usize, slot: usize) callconv(.c) i32 {
 /// That matches the interpreter, where a literal push reuses the parsed slice and module bodies
 /// are process-shared through the module cache.
 ///
-/// Keys in the lexical parent map must live for the whole process, and a cached decode does. The
-/// decode is aliased to `site`, the literal's row in the program's site table. The literals nested
-/// inside it are recorded under it.
+/// The decode is written to the root's layer of the lexical parent map and the stamp store, and a
+/// key must outlive the layer it enters. A cached decode lives for the whole process, so it does.
+/// The decode is aliased to `site`, the literal's row in the program's site table. The literals
+/// nested inside it are recorded under it.
 ///
 /// The defining-module stamp from the image's reified-quotation table is written into the shared
 /// stamp store before the slice is published, under the cache's decode mutex, so no context can
@@ -19027,7 +19028,7 @@ export fn jitPushQuotation(ctx_raw: usize, data_ptr: usize, data_len: usize, des
         };
         if (ctx.image_reified_quotation_modules) |modules| {
             if (modules.get(data_ptr)) |module| {
-                ctx.stampQuotationBodies(decoded.instructions, module) catch {
+                ctx.stampDecodedQuotationBodies(decoded.instructions, module) catch {
                     ctx.jit_pending_error = error.OutOfMemory;
                     return 2;
                 };
@@ -19036,7 +19037,7 @@ export fn jitPushQuotation(ctx_raw: usize, data_ptr: usize, data_len: usize, des
 
         // Published before the slice is, under the same mutex, so no context can push this
         // literal and find it outside the nesting.
-        ctx.lexical_parents.recordDecodedBody(decoded.instructions, site) catch {
+        ctx.recordDecodedLexicalBody(decoded.instructions, site) catch {
             ctx.jit_pending_error = error.OutOfMemory;
             return 2;
         };
@@ -20447,7 +20448,7 @@ test "jitPushQuotation: runtime-image push caches the decode and stamps the defi
     const decoded = first.quotation.instructions;
     try testing.expectEqual(
         @as(?*const value_mod.Module, &module),
-        ctx.quotation_stamp_store.lookup(@intFromPtr(decoded.ptr)),
+        ctx.body_stores.quotation_stamp_store.lookup(@intFromPtr(decoded.ptr)),
     );
 
     // The decoded push carries the stream's declared effect.
@@ -20459,17 +20460,17 @@ test "jitPushQuotation: runtime-image push caches the decode and stamps the defi
     const nested = decoded[0].op.push_literal.quotation.instructions;
     try testing.expectEqual(
         @as(?*const value_mod.Module, &module),
-        ctx.quotation_stamp_store.lookup(@intFromPtr(nested.ptr)),
+        ctx.body_stores.quotation_stamp_store.lookup(@intFromPtr(nested.ptr)),
     );
 
     // A push in the root reuses the task's decode: the identical slice, no fresh decode, no
     // second stamp entry.
-    const stamp_count = ctx.quotation_stamp_store.count();
+    const stamp_count = ctx.body_stores.quotation_stamp_store.count();
     var second: Value = undefined;
     const rc2 = jitPushQuotation(@intFromPtr(&ctx), @intFromPtr(encoded.items.ptr), encoded.items.len, @intFromPtr(&second), std.math.maxInt(usize), 0);
     try testing.expectEqual(@as(i32, 0), rc2);
     try testing.expectEqual(decoded.ptr, second.quotation.instructions.ptr);
-    try testing.expectEqual(stamp_count, ctx.quotation_stamp_store.count());
+    try testing.expectEqual(stamp_count, ctx.body_stores.quotation_stamp_store.count());
 
     // The cached second push preserves the effect the first decode recovered.
     try testing.expectEqual(first.quotation.effect, second.quotation.effect);

@@ -23,19 +23,21 @@ pub const NestedNameSet = struct {
 /// A body's own top-level names are not here. The gate scans those directly off the instruction
 /// array it already holds.
 ///
-/// Absence does not mean "no nested names". Only a body the parser finished on the root arena is
-/// filled, so a body built at runtime or decoded from an image has no entry and the gate falls back
-/// to the walk. That keeps a missing entry slow rather than wrong.
+/// Absence does not mean "no nested names". Only a body the parser finished on a load owner's
+/// arena is filled, so a body built at runtime or decoded from an image has no entry and the gate
+/// falls back to the walk. That keeps a missing entry slow rather than wrong.
 ///
-/// Entries are permanent, so only process-lifetime keys may enter: a body parsed onto a task or
-/// scoped-eval arena dies with it and would leave a key that a later unrelated allocation at the
-/// same address falsely matches. `Context.cacheQuotationBodyNestedNames` applies that gate.
+/// An entry lasts as long as its layer, so a key must outlive the layer it enters: a body parsed
+/// onto a task or scoped-eval arena dies with it and would leave a key that a later unrelated
+/// allocation at the same address falsely matches. `Context.cacheQuotationBodyNestedNames` applies
+/// that gate.
 ///
-/// The cache is allocated by the root context, aliased by pointer into every child, and freed only
-/// by the root.
+/// The store is one layer of a `BodyKeyedStores` set. The root's layer is the base, and a context
+/// that owns its loads has a layer of its own, linked to its parent's. Every other context aliases
+/// the set of its nearest load owner.
 ///
-/// Reads take no lock. Writers serialize on `write_mu` and apply first-fill-wins, which is what a
-/// repeated parse of the same slice would write anyway.
+/// Reads take no lock. Writers serialize on `write_mu` and apply first-fill-wins across the layers,
+/// which is what a repeated parse of the same slice would write anyway.
 pub const NestedNameCache = struct {
     /// Key `0` marks an empty slot in the map and is never a real key: `fill` skips zero-length
     /// instruction slices, which are the only bodies whose `.ptr` could be a shared sentinel.
@@ -59,23 +61,22 @@ pub const NestedNameCache = struct {
     /// displaced tables stay allocated until teardown, off the common path.
     const initial_capacity: usize = 4096;
 
-    pub fn create(allocator: std.mem.Allocator) error{OutOfMemory}!*NestedNameCache {
-        var map = try AtomicSlotMap(?*const NestedNameSet).init(allocator, initial_capacity);
-        errdefer map.deinit();
-
-        const self = try allocator.create(NestedNameCache);
-        self.* = .{
+    /// A layer over `parent`, or the base layer when `parent` is null.
+    pub fn init(allocator: std.mem.Allocator, parent: ?*const NestedNameCache) error{OutOfMemory}!NestedNameCache {
+        const map = try AtomicSlotMap(?*const NestedNameSet).initLayered(
+            allocator,
+            initial_capacity,
+            if (parent) |p| &p.map else null,
+        );
+        return .{
             .map = map,
             .arena = std.heap.ArenaAllocator.init(allocator),
         };
-        return self;
     }
 
-    pub fn destroy(self: *NestedNameCache) void {
-        const allocator = self.map.allocator;
+    pub fn deinit(self: *NestedNameCache) void {
         self.map.deinit();
         self.arena.deinit();
-        allocator.destroy(self);
     }
 
     /// The nested names of the body at `key`, or null when the body was never filled.
@@ -317,8 +318,8 @@ test "collectNestedNames: call_word_module is collected and call_word_direct is 
 }
 
 test "NestedNameCache: an unfilled body misses and a filled one resolves" {
-    const cache = try NestedNameCache.create(testing.allocator);
-    defer cache.destroy();
+    var cache = try NestedNameCache.init(testing.allocator, null);
+    defer cache.deinit();
 
     const inner = [_]Instruction{callWord("nested")};
     const outer = [_]Instruction{pushQuotation(&inner)};
@@ -334,8 +335,8 @@ test "NestedNameCache: an unfilled body misses and a filled one resolves" {
 }
 
 test "NestedNameCache: a body with no nested names fills as an empty set, not a miss" {
-    const cache = try NestedNameCache.create(testing.allocator);
-    defer cache.destroy();
+    var cache = try NestedNameCache.init(testing.allocator, null);
+    defer cache.deinit();
 
     const body = [_]Instruction{callWord("a")};
     try cache.fill(0x1000, &body);
@@ -345,8 +346,8 @@ test "NestedNameCache: a body with no nested names fills as an empty set, not a 
 }
 
 test "NestedNameCache: the first fill wins" {
-    const cache = try NestedNameCache.create(testing.allocator);
-    defer cache.destroy();
+    var cache = try NestedNameCache.init(testing.allocator, null);
+    defer cache.deinit();
 
     const first = [_]Instruction{pushQuotation(&[_]Instruction{callWord("first")})};
     const second = [_]Instruction{pushQuotation(&[_]Instruction{callWord("second")})};
@@ -359,8 +360,8 @@ test "NestedNameCache: the first fill wins" {
 }
 
 test "NestedNameCache: growth preserves every entry" {
-    const cache = try NestedNameCache.create(testing.allocator);
-    defer cache.destroy();
+    var cache = try NestedNameCache.init(testing.allocator, null);
+    defer cache.deinit();
 
     const even = [_]Instruction{pushQuotation(&[_]Instruction{callWord("even")})};
     const odd = [_]Instruction{pushQuotation(&[_]Instruction{callWord("odd")})};

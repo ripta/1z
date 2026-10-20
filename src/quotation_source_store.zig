@@ -21,15 +21,17 @@ pub const SourceName = struct {
 /// bodies, which are exactly the bodies error attribution needs. It also stamps at module
 /// finalization, which runs after parsing, so one write-once slot cannot serve both.
 ///
-/// Entries are permanent, so only process-lifetime keys may enter: a body parsed onto a task or
-/// scoped-eval arena dies with it and would leave a key that a later unrelated allocation at the
-/// same address falsely matches. `Context.stampQuotationBodySource` applies that gate.
+/// An entry lasts as long as its layer, so a key must outlive the layer it enters: a body parsed
+/// onto a task or scoped-eval arena dies with it and would leave a key that a later unrelated
+/// allocation at the same address falsely matches. `Context.stampQuotationBodySource` applies that
+/// gate.
 ///
-/// The store is allocated by the root context, aliased by pointer into every child, and freed only
-/// by the root.
+/// The store is one layer of a `BodyKeyedStores` set. The root's layer is the base, and a context
+/// that owns its loads has a layer of its own, linked to its parent's. Every other context aliases
+/// the set of its nearest load owner.
 ///
-/// Reads take no lock. Writers serialize on `write_mu` and apply first-stamp-wins, which is what a
-/// repeated parse of the same slice would write anyway.
+/// Reads take no lock. Writers serialize on `write_mu` and apply first-stamp-wins across the layers,
+/// which is what a repeated parse of the same slice would write anyway.
 pub const QuotationSourceStore = struct {
     /// Key `0` marks an empty slot in the map and is never a real key: `stampQuotationBodySource`
     /// skips zero-length instruction slices, which are the only bodies whose `.ptr` could be a
@@ -51,16 +53,17 @@ pub const QuotationSourceStore = struct {
     /// allocated until teardown, off the common path.
     const initial_capacity: usize = 4096;
 
-    pub fn create(allocator: std.mem.Allocator) error{OutOfMemory}!*QuotationSourceStore {
-        var map = try AtomicSlotMap(?*const SourceName).init(allocator, initial_capacity);
-        errdefer map.deinit();
-
-        const self = try allocator.create(QuotationSourceStore);
-        self.* = .{ .map = map };
-        return self;
+    /// A layer over `parent`, or the base layer when `parent` is null.
+    pub fn init(allocator: std.mem.Allocator, parent: ?*const QuotationSourceStore) error{OutOfMemory}!QuotationSourceStore {
+        const map = try AtomicSlotMap(?*const SourceName).initLayered(
+            allocator,
+            initial_capacity,
+            if (parent) |p| &p.map else null,
+        );
+        return .{ .map = map };
     }
 
-    pub fn destroy(self: *QuotationSourceStore) void {
+    pub fn deinit(self: *QuotationSourceStore) void {
         const allocator = self.map.allocator;
 
         var it = self.interned.valueIterator();
@@ -71,7 +74,6 @@ pub const QuotationSourceStore = struct {
         self.interned.deinit(allocator);
 
         self.map.deinit();
-        allocator.destroy(self);
     }
 
     /// The source file the body at `key` was written in, or null if the body was never stamped.
@@ -139,8 +141,8 @@ pub const QuotationSourceStore = struct {
 const testing = std.testing;
 
 test "QuotationSourceStore: a stamped body resolves to its source" {
-    const store = try QuotationSourceStore.create(testing.allocator);
-    defer store.destroy();
+    var store = try QuotationSourceStore.init(testing.allocator, null);
+    defer store.deinit();
 
     try store.stamp(0x1000, "src/prelude.1z");
 
@@ -149,8 +151,8 @@ test "QuotationSourceStore: a stamped body resolves to its source" {
 }
 
 test "QuotationSourceStore: an unstamped key resolves to null" {
-    const store = try QuotationSourceStore.create(testing.allocator);
-    defer store.destroy();
+    var store = try QuotationSourceStore.init(testing.allocator, null);
+    defer store.deinit();
 
     try store.stamp(0x1000, "src/prelude.1z");
 
@@ -159,8 +161,8 @@ test "QuotationSourceStore: an unstamped key resolves to null" {
 }
 
 test "QuotationSourceStore: the first stamp wins" {
-    const store = try QuotationSourceStore.create(testing.allocator);
-    defer store.destroy();
+    var store = try QuotationSourceStore.init(testing.allocator, null);
+    defer store.deinit();
 
     try store.stamp(0x1000, "first.1z");
     try store.stamp(0x1000, "second.1z");
@@ -170,8 +172,8 @@ test "QuotationSourceStore: the first stamp wins" {
 }
 
 test "QuotationSourceStore: bodies from one file share a single owned name" {
-    const store = try QuotationSourceStore.create(testing.allocator);
-    defer store.destroy();
+    var store = try QuotationSourceStore.init(testing.allocator, null);
+    defer store.deinit();
 
     // A caller-owned buffer the store must not alias, mutated after both stamps.
     var buf = "shared.1z".*;
@@ -187,8 +189,8 @@ test "QuotationSourceStore: bodies from one file share a single owned name" {
 }
 
 test "QuotationSourceStore: growth preserves every entry" {
-    const store = try QuotationSourceStore.create(testing.allocator);
-    defer store.destroy();
+    var store = try QuotationSourceStore.init(testing.allocator, null);
+    defer store.deinit();
 
     const entries: usize = 8000;
     var key: usize = 1;

@@ -88,16 +88,12 @@ const StackEffectParam = stack_effect_mod.StackEffectParam;
 const lock_order = @import("lock_order.zig");
 const LockOrderTracker = lock_order.LockOrderTracker;
 
-const QuotationStampStore = @import("quotation_stamp_store.zig").QuotationStampStore;
-const QuotationSourceStore = @import("quotation_source_store.zig").QuotationSourceStore;
-const CarryableScopeGate = @import("carryable_scope_gate.zig").CarryableScopeGate;
-const NestedNameCache = @import("nested_name_cache.zig").NestedNameCache;
+const BodyKeyedStores = @import("body_keyed_stores.zig").BodyKeyedStores;
+const arena_origin = @import("arena_origin.zig");
 const nestedNamesMatchFrame = @import("nested_name_cache.zig").nestedNamesMatchFrame;
 const visitNestedNames = @import("nested_name_cache.zig").visitNestedNames;
-const LexicalParentMap = @import("lexical_parent_map.zig").LexicalParentMap;
 const inline_region_table = @import("inline_region_table.zig");
 const InlineRegion = inline_region_table.InlineRegion;
-const InlineRegionTable = inline_region_table.InlineRegionTable;
 const may_define = @import("may_define.zig");
 const closure_body_registry = @import("closure_body_registry.zig");
 const LoadLock = @import("load_lock.zig").LoadLock;
@@ -1607,53 +1603,18 @@ pub const Context = struct {
     /// Allocated on the container arena by the root context and shared by
     /// pointer to all child task contexts.
     hook_registry: *HookRegistry = undefined,
-    /// Process-shared defining-module stamps for quotation bodies, keyed by instruction-slice
-    /// pointer. Heap-allocated by the root context and shared by pointer to all child task
-    /// contexts.
+    /// The stores keyed by body address that this context reads and writes: defining-module
+    /// stamps, source files, nested names, the carryable scope gate, lexical parents, and inline
+    /// regions. A context that owns its loads has a set of its own, linked to its parent's. Every
+    /// other context aliases the set of its nearest load owner. See `BodyKeyedStores`.
     ///
-    /// A body's defining module outlives any one context, so a per-context map loses it the
-    /// moment a spawned task executes a stored quotation. The per-execution captured-scope half
-    /// stays in `quotation_scope_info`, which is genuinely per-context.
-    quotation_stamp_store: *QuotationStampStore = undefined,
-    /// Process-shared source files for parsed bodies, keyed by instruction-slice pointer.
-    /// Heap-allocated by the root context and shared by pointer to all child task contexts.
-    ///
-    /// A body's file is fixed when it is parsed, and a body outlives the context that parsed it
-    /// once it is stored in a word or spawned onto a task. So this cannot be a per-context map
-    /// either.
-    quotation_source_store: *QuotationSourceStore = undefined,
-    /// Process-shared set of bodies that have ever had a carryable captured scope installed in
-    /// some context's `quotation_scope_info`. Heap-allocated by the root context and shared by
-    /// pointer to all child task contexts.
-    ///
-    /// An absent body cannot have a carryable scope anywhere on the ancestor chain, so a body
-    /// entry that misses can skip `findCapturedScopeForBody` rather than locking every ancestor's
-    /// `captured_scope_mu` to learn the same thing.
-    carryable_scope_gate: *CarryableScopeGate = undefined,
-    /// Process-shared nested bare-word names for parsed bodies, keyed by instruction-slice
-    /// pointer. Heap-allocated by the root context and shared by pointer to all child task
-    /// contexts.
-    ///
-    /// A body's nested names are fixed when it is parsed, and the capture gate needs them on every
-    /// push, so the walk over its nested quotation literals runs once here rather than per push.
-    ///
-    /// Absence does not mean "no nested names". Only a body the parser finished on the root arena
-    /// is filled, so a miss means the gate has to walk. See `NestedNameCache`.
-    nested_name_cache: *NestedNameCache = undefined,
-    /// Process-shared record of the body that syntactically encloses each parsed quotation
-    /// literal, keyed by instruction-slice pointer. Heap-allocated by the root context and shared
-    /// by pointer to all child task contexts.
-    ///
-    /// Resolution and capture admit a lexical frame by whether its owner encloses the body asking.
-    /// See `LexicalParentMap`.
-    lexical_parents: *LexicalParentMap = undefined,
-    /// Process-shared inlined runs of expanded bodies, keyed by instruction-slice pointer.
-    /// Heap-allocated by the root context and shared by pointer to all child task contexts.
-    ///
-    /// Inline expansion erases the call it replaces, so the callee's frame no longer exists to be
-    /// pushed. This is what the error path reads to put that row back. Nothing consults it while a
-    /// program runs normally. See `InlineRegionTable`.
-    inline_regions: *InlineRegionTable = undefined,
+    /// A body's defining module outlives any one context, so a per-context map loses it the moment
+    /// a spawned task executes a stored quotation. The per-execution captured-scope half stays in
+    /// `quotation_scope_info`, which is genuinely per-context.
+    body_stores: *BodyKeyedStores = undefined,
+    /// Whether this context created `body_stores` and destroys it in `deinit`. An alias is never
+    /// owned, so a task's teardown leaves its load owner's set intact.
+    body_stores_owned: bool = false,
     /// Process-wide lock serializing module loads. Heap-allocated by the root context and
     /// shared by pointer to all child task contexts.
     ///
@@ -1886,41 +1847,12 @@ pub const Context = struct {
         };
         ctx.hook_registry.* = .{};
 
-        // Allocate the shared quotation stamp store on the long-lived allocator; the root
-        // context frees it in deinit.
-        ctx.quotation_stamp_store = QuotationStampStore.create(allocator) catch |err| {
-            std.debug.panic("Failed to allocate quotation stamp store: {any}", .{err});
+        // Allocate the root's body-keyed stores on the long-lived allocator; the root context
+        // frees them in deinit.
+        ctx.body_stores = BodyKeyedStores.create(allocator, null) catch |err| {
+            std.debug.panic("Failed to allocate body-keyed stores: {any}", .{err});
         };
-
-        // Allocate the shared quotation source store on the long-lived allocator; the root
-        // context frees it in deinit.
-        ctx.quotation_source_store = QuotationSourceStore.create(allocator) catch |err| {
-            std.debug.panic("Failed to allocate quotation source store: {any}", .{err});
-        };
-
-        // Allocate the shared carryable-scope gate on the long-lived allocator; the root context
-        // frees it in deinit.
-        ctx.carryable_scope_gate = CarryableScopeGate.create(allocator) catch |err| {
-            std.debug.panic("Failed to allocate carryable scope gate: {any}", .{err});
-        };
-
-        // Allocate the shared nested-name cache on the long-lived allocator; the root context
-        // frees it in deinit.
-        ctx.nested_name_cache = NestedNameCache.create(allocator) catch |err| {
-            std.debug.panic("Failed to allocate nested name cache: {any}", .{err});
-        };
-
-        // Allocate the shared lexical parent map on the long-lived allocator; the root context
-        // frees it in deinit.
-        ctx.lexical_parents = LexicalParentMap.create(allocator) catch |err| {
-            std.debug.panic("Failed to allocate lexical parent map: {any}", .{err});
-        };
-
-        // Allocate the shared inline-region table on the long-lived allocator; the root context
-        // frees it in deinit.
-        ctx.inline_regions = InlineRegionTable.create(allocator) catch |err| {
-            std.debug.panic("Failed to allocate inline region table: {any}", .{err});
-        };
+        ctx.body_stores_owned = true;
 
         // Allocate the shared reified-quotation decode cache on the long-lived allocator; the
         // root context frees it in deinit.
@@ -2213,6 +2145,17 @@ pub const Context = struct {
             },
         }
 
+        // A context that owns its loads layers stores of its own over its parent's, so nothing it
+        // parses reaches a store that outlives it. Every other context aliases the set of its
+        // nearest load owner, which its parent already reads. Aliased, never retained: that owner
+        // destroys it.
+        if (ctx.owns_loads) {
+            ctx.body_stores = try BodyKeyedStores.create(allocator, parent.body_stores);
+            ctx.body_stores_owned = true;
+        } else {
+            ctx.body_stores = parent.body_stores;
+        }
+
         // Share the parent's lock so all tasks use the same RwLock.
         ctx.shared_lock = parent.shared_lock;
         ctx.lock_order_tracker = parent.lock_order_tracker;
@@ -2268,30 +2211,6 @@ pub const Context = struct {
 
         // Share the parent's hook registry so all contexts fire the same hooks.
         ctx.hook_registry = parent.hook_registry;
-
-        // Share the parent's quotation stamp store so a stored quotation executing here resolves
-        // against its own defining module. Aliased, never retained: the root owns it.
-        ctx.quotation_stamp_store = parent.quotation_stamp_store;
-
-        // Share the parent's quotation source store so a body parsed there keeps its own file in
-        // the error frames a raise here produces. Aliased, never retained: the root owns it.
-        ctx.quotation_source_store = parent.quotation_source_store;
-
-        // Share the parent's carryable-scope gate so a body marked anywhere is visible here.
-        // Aliased, never retained: the root owns it.
-        ctx.carryable_scope_gate = parent.carryable_scope_gate;
-
-        // Share the parent's nested-name cache so a body parsed there answers the capture gate off
-        // the one walk instead of a fresh one here. Aliased, never retained: the root owns it.
-        ctx.nested_name_cache = parent.nested_name_cache;
-
-        // Share the parent's lexical parent map, since frames cloned here keep the owner tags it is
-        // read against. Aliased, never retained: the root owns it.
-        ctx.lexical_parents = parent.lexical_parents;
-
-        // Share the parent's inline-region table so a body expanded there names its inlined words
-        // in a trace raised here. Aliased, never retained: the root owns it.
-        ctx.inline_regions = parent.inline_regions;
 
         // Share the parent's reified-quotation decode cache so a task's `jitPushQuotation`
         // reuses the process-wide decode instead of decoding onto its own arena. Aliased, never
@@ -2735,6 +2654,7 @@ pub const Context = struct {
         self.arena.deinit();
         self.allocator.destroy(self.arena);
         self.dictionary.deinit();
+        if (self.body_stores_owned) self.body_stores.destroy();
         if (self.parent_context == null) {
             // Release the refcounted module cache before tearing down the
             // root-owned allocators it sits in front of. Child contexts share
@@ -2747,12 +2667,6 @@ pub const Context = struct {
 
             self.hook_registry.deinit(self.allocator);
             self.allocator.destroy(self.hook_registry);
-            self.quotation_stamp_store.destroy();
-            self.quotation_source_store.destroy();
-            self.carryable_scope_gate.destroy();
-            self.nested_name_cache.destroy();
-            self.lexical_parents.destroy();
-            self.inline_regions.destroy();
             self.reified_decode_cache.destroy();
             self.load_lock.destroy();
             self.module_load_record.destroy();
@@ -2774,6 +2688,39 @@ pub const Context = struct {
     /// produces outlives the executing task.
     pub fn stateTarget(self: *Context) *Context {
         return self.load_target orelse self;
+    }
+
+    /// Debug-only. Assert that a write into a body-keyed store names a key that outlives the layer
+    /// it enters.
+    ///
+    /// A layer is destroyed with its owner and never loses an entry before then. A key that dies
+    /// sooner would leave a stale entry, and the next body allocated at that address would inherit
+    /// it. The allowed origins are:
+    ///
+    /// - the arena of a load owner at or above `layer_owner`, which lives at least as long as the
+    ///   layer;
+    /// - the decode cache's arena, whose bodies live for the process;
+    /// - the body of any live closure. This is looser than the pinned bodies the origin is meant
+    ///   for, because a pinned body has no cheap exact test. `;` parks a closure on the teardown
+    ///   list of a dictionary, but a closure literal embedded in a word body, such as an `fn`
+    ///   product, is held by the body's container literals and sits on no such list. So a transient
+    ///   `curry` or `compose` body passes this check.
+    ///
+    /// Every writer of a body-keyed store calls this. The tests that insert into a child's layers
+    /// directly check the other side, that no such key reached a layer above the child.
+    fn assertBodyKeyOrigin(layer_owner: *const Context, key: usize) void {
+        if (comptime builtin.mode != .Debug) return;
+
+        var cur: ?*const Context = layer_owner;
+        while (cur) |c| : (cur = c.parent_context) {
+            if (c.owns_loads and arena_origin.contains(c.arena, key)) return;
+        }
+
+        const root = layer_owner.root_context orelse layer_owner;
+        if (arena_origin.contains(&root.reified_decode_cache.arena, key)) return;
+        if (closure_body_registry.isLive(key)) return;
+
+        std.debug.panic("body-keyed store write for key 0x{x} outside every allowed origin", .{key});
     }
 
     /// Allocator for quotations and other parsed data. During a module load
@@ -2802,23 +2749,28 @@ pub const Context = struct {
     /// A nested body the expansion pass rebuilt belongs to whichever file wrote the quotation,
     /// which after a cross-module inline is not the file being read.
     ///
-    /// Stamps are permanent, so only a body the root arena owns may enter: a body parsed onto a
-    /// task or scoped-eval arena dies with it, and its key would then falsely match a later
-    /// unrelated allocation at the same address.
+    /// A stamp lasts as long as the layer it enters, so only a body that the arena of the state
+    /// target's load owner owns may enter. A body parsed onto a task or scoped-eval arena dies
+    /// with it, and its key would then falsely match a later unrelated allocation at the same
+    /// address.
     pub fn stampQuotationBodySourceAs(
         self: *Context,
         instructions: []const Instruction,
         source: []const u8,
     ) !void {
         if (instructions.len == 0) return;
-        if (self.stateTarget() != self.rootContext()) return;
-        try self.quotation_source_store.stamp(@intFromPtr(instructions.ptr), source);
+
+        const target = self.stateTarget();
+        if (!target.owns_loads) return;
+
+        assertBodyKeyOrigin(target, @intFromPtr(instructions.ptr));
+        try target.body_stores.quotation_source_store.stamp(@intFromPtr(instructions.ptr), source);
     }
 
     /// The file `instructions` was parsed from, or null for a body that was never stamped.
     pub fn quotationBodySource(self: *const Context, instructions: []const Instruction) ?[]const u8 {
         if (instructions.len == 0) return null;
-        return self.quotation_source_store.lookup(@intFromPtr(instructions.ptr));
+        return self.body_stores.quotation_source_store.lookup(@intFromPtr(instructions.ptr));
     }
 
     /// Record the bare-word names `instructions`' nested quotation literals call, so the capture
@@ -2827,53 +2779,83 @@ pub const Context = struct {
     /// The parser calls this for every body it finishes, alongside the source stamp. Bodies built
     /// at runtime, by `curry` or an image decode, carry no record and the gate walks them.
     ///
-    /// Entries are permanent and the recorded names alias the body, so only a body the root arena
-    /// owns may enter. A body parsed onto a task or scoped-eval arena dies with it, and its key
-    /// would then falsely match a later unrelated allocation at the same address.
+    /// An entry lasts as long as the layer it enters, and the recorded names alias the body. So
+    /// only a body that the arena of the state target's load owner owns may enter. A body parsed
+    /// onto a task or scoped-eval arena dies with it, and its key would then falsely match a later
+    /// unrelated allocation at the same address.
     pub fn cacheQuotationBodyNestedNames(self: *Context, instructions: []const Instruction) !void {
         if (instructions.len == 0) return;
-        if (self.stateTarget() != self.rootContext()) return;
-        try self.nested_name_cache.fill(@intFromPtr(instructions.ptr), instructions);
+
+        const target = self.stateTarget();
+        if (!target.owns_loads) return;
+
+        assertBodyKeyOrigin(target, @intFromPtr(instructions.ptr));
+        try target.body_stores.nested_name_cache.fill(@intFromPtr(instructions.ptr), instructions);
     }
 
     /// Record `instructions` as the enclosing body of each quotation literal it pushes directly.
     ///
     /// The parser calls this for every body it finishes, beside the nested-name cache, and under
-    /// the same root-arena gate. Code parsed to run in its caller's scope is skipped; see
+    /// the same load-owner gate. Code parsed to run in its caller's scope is skipped; see
     /// `parse_dynamic_scope`.
     pub fn recordLexicalChildren(self: *Context, instructions: []const Instruction) !void {
         if (instructions.len == 0 or self.parse_dynamic_scope) return;
-        if (self.stateTarget() != self.rootContext()) return;
-        try self.lexical_parents.recordChildren(instructions);
+
+        const target = self.stateTarget();
+        if (!target.owns_loads) return;
+
+        assertBodyKeyOrigin(target, @intFromPtr(instructions.ptr));
+        try target.body_stores.lexical_parents.recordChildren(instructions);
     }
 
     /// Record `statement` as a root of the lexical nesting: a top-level statement the parser read
     /// from a file. Gated as `recordLexicalChildren` is.
     pub fn recordLexicalRoot(self: *Context, statement: []const Instruction) !void {
         if (statement.len == 0 or self.parse_dynamic_scope) return;
-        if (self.stateTarget() != self.rootContext()) return;
-        try self.lexical_parents.recordRoot(statement);
+
+        const target = self.stateTarget();
+        if (!target.owns_loads) return;
+
+        assertBodyKeyOrigin(target, @intFromPtr(statement.ptr));
+        try target.body_stores.lexical_parents.recordRoot(statement);
     }
 
     /// Record that `rebuilt` stands in for `source` in the owner check, for a body the inline
     /// expansion pass built in `source`'s place.
     pub fn recordLexicalAlias(self: *Context, rebuilt: []const Instruction, source: []const Instruction) !void {
-        if (self.stateTarget() != self.rootContext()) return;
-        try self.lexical_parents.recordAlias(rebuilt, source);
+        const target = self.stateTarget();
+        if (!target.owns_loads) return;
+
+        if (rebuilt.len != 0) assertBodyKeyOrigin(target, @intFromPtr(rebuilt.ptr));
+        try target.body_stores.lexical_parents.recordAlias(rebuilt, source);
+    }
+
+    /// Place a body the JIT decode path produced in the lexical nesting, under site `site`.
+    ///
+    /// The write goes to the root's layer whatever context runs the push. Decoded bodies live on the
+    /// decode cache's process-lifetime arena and are cached process-wide. A write through the
+    /// running context could land in the layer of an analysis child, and the record would vanish
+    /// with the child while the decoded body stays cached.
+    pub fn recordDecodedLexicalBody(self: *Context, body: []const Instruction, site: usize) error{OutOfMemory}!void {
+        if (site == 0 or body.len == 0) return;
+
+        const root = self.rootContext();
+        assertBodyKeyOrigin(root, @intFromPtr(body.ptr));
+        try root.body_stores.lexical_parents.recordDecodedBody(body, site);
     }
 
     /// Whether frame `idx` may answer a bare word for `body`, by its owner's lexical relation to
     /// `body`. A `body` of `0` asks for no filtering. See `LexicalParentMap.admits`.
     fn frameAdmits(self: *const Context, idx: usize, body: usize) bool {
         if (body == 0 or idx >= self.local_frame_owners.items.len) return true;
-        return self.lexical_parents.admits(body, self.local_frame_owners.items[idx]);
+        return self.body_stores.lexical_parents.admits(body, self.local_frame_owners.items[idx]);
     }
 
     /// The bare-word names `instructions`' nested quotation literals call, or null for a body that
     /// was never cached. Null is "unknown", not "none": the caller has to walk.
     pub fn quotationBodyNestedNames(self: *const Context, instructions: []const Instruction) ?[]const []const u8 {
         if (instructions.len == 0) return null;
-        return self.nested_name_cache.lookup(@intFromPtr(instructions.ptr));
+        return self.body_stores.nested_name_cache.lookup(@intFromPtr(instructions.ptr));
     }
 
     /// Record which runs of `instructions` were copied out of `inline`-marked words, so a raise
@@ -2885,9 +2867,9 @@ pub const Context = struct {
     /// body installed from an AOT image never reaches the expansion pass. A body nothing was
     /// inlined into has no entry either way.
     ///
-    /// Entries are permanent, so only a body the root arena owns may enter. A body built on a task
-    /// or scoped-eval arena dies with it, and its key would then falsely match a later unrelated
-    /// allocation at the same address.
+    /// An entry lasts as long as the layer it enters, so only a body that the arena of the state
+    /// target's load owner owns may enter. A body built on a task or scoped-eval arena dies with
+    /// it, and its key would then falsely match a later unrelated allocation at the same address.
     pub fn recordInlineRegions(
         self: *Context,
         instructions: []const Instruction,
@@ -2895,14 +2877,18 @@ pub const Context = struct {
         regions: []const InlineRegion,
     ) !void {
         if (instructions.len == 0) return;
-        if (self.stateTarget() != self.rootContext()) return;
-        try self.inline_regions.record(@intFromPtr(instructions.ptr), body_source, regions);
+
+        const target = self.stateTarget();
+        if (!target.owns_loads) return;
+
+        assertBodyKeyOrigin(target, @intFromPtr(instructions.ptr));
+        try target.body_stores.inline_regions.record(@intFromPtr(instructions.ptr), body_source, regions);
     }
 
     /// The inlined runs of `instructions`, or null for a body nothing was inlined into.
     pub fn inlineRegionsFor(self: *const Context, instructions: []const Instruction) ?inline_region_table.InlineRegionSet {
         if (instructions.len == 0) return null;
-        return self.inline_regions.lookup(@intFromPtr(instructions.ptr));
+        return self.body_stores.inline_regions.lookup(@intFromPtr(instructions.ptr));
     }
 
     /// The file `def`'s compound body was parsed in, from the body stamps. Null when the action
@@ -4000,14 +3986,21 @@ pub const Context = struct {
         }
 
         const carryable = if (scope) |s| s.lexical_frames.len > 0 else false;
-        if (carryable) _ = try self.carryable_scope_gate.mark(key);
+        if (carryable) {
+            // The gate is monotone, and a stale mark costs one walk that finds nothing. So the root's
+            // gate takes the keys of a task's arena and of bodies the compiled code decodes. A
+            // child's layer is held to the origin rule, so that nothing of the child's reaches a
+            // layer above it.
+            if (self.owns_loads and self.parent_context != null) assertBodyKeyOrigin(self, key);
+            _ = try self.body_stores.carryable_scope_gate.mark(key);
+        }
 
         self.captured_scope_mu.lock();
         errdefer self.captured_scope_mu.unlock();
         const gop = try self.quotation_scope_info.getOrPut(self.allocator, key);
         const fresh = !gop.found_existing;
         if (fresh)
-            gop.value_ptr.* = .{ .defining_module = self.quotation_stamp_store.lookup(key) };
+            gop.value_ptr.* = .{ .defining_module = self.body_stores.quotation_stamp_store.lookup(key) };
 
         var displaced: ?*CapturedScope = null;
         switch (mode) {
@@ -4293,10 +4286,31 @@ pub const Context = struct {
     /// frame stack has moved on. Empty slices share a sentinel pointer and have
     /// no words to resolve, so they are skipped.
     pub fn stampQuotationBodies(self: *Context, instructions: []const Instruction, module: *const value_mod.Module) error{OutOfMemory}!void {
+        try self.stampBodiesIn(self.stateTarget(), instructions, module);
+    }
+
+    /// Stamp a body the JIT decode path produced, into the root's layer.
+    ///
+    /// Decoded bodies live on the decode cache's process-lifetime arena and are cached
+    /// process-wide. A write through the running context could land in the layer of an analysis
+    /// child, and the stamp would vanish with the child while the decoded body stays cached.
+    pub fn stampDecodedQuotationBodies(self: *Context, instructions: []const Instruction, module: *const value_mod.Module) error{OutOfMemory}!void {
+        try self.stampBodiesIn(self.rootContext(), instructions, module);
+    }
+
+    /// Stamp `instructions` and everything nested in them into the layer `layer_owner` holds.
+    fn stampBodiesIn(
+        self: *Context,
+        layer_owner: *Context,
+        instructions: []const Instruction,
+        module: *const value_mod.Module,
+    ) error{OutOfMemory}!void {
         if (instructions.len == 0) return;
 
-        // The store applies first-stamp-wins: the first module to stamp a body is its original
-        // defining module.
+        assertBodyKeyOrigin(layer_owner, @intFromPtr(instructions.ptr));
+
+        // The store applies first-stamp-wins across the layers: the first module to stamp a body is
+        // its original defining module.
         //
         // That matters because a body's instruction slice is shared when a module reexports
         // another's word. The reexporting module reprocesses the same pointers, and the body's
@@ -4304,7 +4318,7 @@ pub const Context = struct {
         //
         // A false return means this body and everything nested under it were already stamped, so
         // stop here. The store's writer mutex is not held across the recursion below.
-        if (!try self.quotation_stamp_store.stamp(@intFromPtr(instructions.ptr), module)) return;
+        if (!try layer_owner.body_stores.quotation_stamp_store.stamp(@intFromPtr(instructions.ptr), module)) return;
 
         // Repair this context's own read-through entry. Stamped-before-reachable covers other
         // executors only: the loading context itself can push or execute this body before
@@ -4322,7 +4336,7 @@ pub const Context = struct {
 
         for (instructions) |instr| {
             switch (instr.op) {
-                .push_literal => |val| try self.stampValueQuotations(val, module),
+                .push_literal => |val| try self.stampValueIn(layer_owner, val, module),
                 else => {},
             }
         }
@@ -4344,38 +4358,42 @@ pub const Context = struct {
     /// the closure owns. Body entry reads that off the value rather than out of the map, so the
     /// two have to agree.
     pub fn stampValueQuotations(self: *Context, val: Value, module: *const value_mod.Module) error{OutOfMemory}!void {
+        try self.stampValueIn(self.stateTarget(), val, module);
+    }
+
+    fn stampValueIn(self: *Context, layer_owner: *Context, val: Value, module: *const value_mod.Module) error{OutOfMemory}!void {
         switch (val) {
-            .quotation => |q| try self.stampQuotationBodies(q.instructions, module),
+            .quotation => |q| try self.stampBodiesIn(layer_owner, q.instructions, module),
             .closure => |c| {
                 if (c.defining_module == null) c.defining_module = module;
-                try self.stampQuotationBodies(c.instructions, module);
+                try self.stampBodiesIn(layer_owner, c.instructions, module);
             },
-            .parameter => |p| try self.stampQuotationBodies(p.default_quotation.instructions, module),
+            .parameter => |p| try self.stampBodiesIn(layer_owner, p.default_quotation.instructions, module),
             // A `once` word's source body never reaches a push site, so the stamp is its only
             // route to a defining module when the guard is not the thing executing -- which is
             // every AOT build, where the guard is compiled C and carries no deps visibility.
-            .once_cell => |cell| try self.stampQuotationBodies(cell.body.instructions, module),
-            .array => |a| for (a.items) |item| try self.stampValueQuotations(item, module),
-            .vector => |v| for (v.list.items) |item| try self.stampValueQuotations(item, module),
-            .set => |s| for (s.map.keys()) |item| try self.stampValueQuotations(item, module),
+            .once_cell => |cell| try self.stampBodiesIn(layer_owner, cell.body.instructions, module),
+            .array => |a| for (a.items) |item| try self.stampValueIn(layer_owner, item, module),
+            .vector => |v| for (v.list.items) |item| try self.stampValueIn(layer_owner, item, module),
+            .set => |s| for (s.map.keys()) |item| try self.stampValueIn(layer_owner, item, module),
             .value_map => |m| for (m.map.keys(), m.map.values()) |key, value| {
-                try self.stampValueQuotations(key, module);
-                try self.stampValueQuotations(value, module);
+                try self.stampValueIn(layer_owner, key, module);
+                try self.stampValueIn(layer_owner, value, module);
             },
             .mutable_value_map => |m| for (m.map.keys(), m.map.values()) |key, value| {
-                try self.stampValueQuotations(key, module);
-                try self.stampValueQuotations(value, module);
+                try self.stampValueIn(layer_owner, key, module);
+                try self.stampValueIn(layer_owner, value, module);
             },
             .hash => |h| {
                 var it = h.map.valueIterator();
-                while (it.next()) |vp| try self.stampValueQuotations(vp.*, module);
+                while (it.next()) |vp| try self.stampValueIn(layer_owner, vp.*, module);
             },
             .mutable_map => |m| {
                 var it = m.map.valueIterator();
-                while (it.next()) |vp| try self.stampValueQuotations(vp.*, module);
+                while (it.next()) |vp| try self.stampValueIn(layer_owner, vp.*, module);
             },
-            .struct_instance => |si| for (si.fields) |f| try self.stampValueQuotations(f, module),
-            .tagged => |t| try self.stampValueQuotations(t.inner.*, module),
+            .struct_instance => |si| for (si.fields) |f| try self.stampValueIn(layer_owner, f, module),
+            .tagged => |t| try self.stampValueIn(layer_owner, t.inner.*, module),
             else => {},
         }
     }
@@ -11148,7 +11166,7 @@ pub const Context = struct {
             // The store still has the last word where the value has none: `;` turns a closure into
             // a compound word over its own body, and module finalization stamps that slice.
             .defining_module = owner.?.defining_module orelse
-                self.quotation_stamp_store.lookup(@intFromPtr(instructions.ptr)),
+                self.body_stores.quotation_stamp_store.lookup(@intFromPtr(instructions.ptr)),
             .scope = @constCast(owner.?.captured_scope),
         } else blk: {
             const key = @intFromPtr(instructions.ptr);
@@ -11166,7 +11184,7 @@ pub const Context = struct {
             // body, and every writer that installs one marks the key before publishing the entry.
             // A probe that lands before a concurrent writer's mark caches a null, which is what
             // the walk itself would have found at that instant.
-            const inherited = if (self.carryable_scope_gate.isMarked(key))
+            const inherited = if (self.body_stores.carryable_scope_gate.isMarked(key))
                 try self.findCapturedScopeForBody(self.allocator, key)
             else
                 null;
@@ -11360,7 +11378,7 @@ pub const Context = struct {
                             else
                                 &.{};
                             const stamp_module = lazy_info.defining_module orelse
-                                self.quotation_stamp_store.lookup(@intFromPtr(instructions.ptr));
+                                self.body_stores.quotation_stamp_store.lookup(@intFromPtr(instructions.ptr));
 
                             // Reserve up front so a `pushModuleDepsFrame` success is always paired
                             // with a tracking append that cannot then OOM, leaving no untracked live
@@ -16366,18 +16384,44 @@ test "moduleScopeWordDef: carries the module word's compiled id" {
     try std.testing.expectEqual(@as(?u32, 17), def.word_id);
 }
 
-test "init: the root context owns an empty quotation stamp store" {
+/// A one-instruction body on `ctx`'s arena, standing in for a body the parser finished there.
+fn arenaBody(ctx: *Context, name: []const u8) ![]const Instruction {
+    const body = try ctx.arena.allocator().alloc(Instruction, 1);
+    body[0] = .{ .op = .{ .call_word = name }, .line = 0 };
+    return body;
+}
+
+/// A body on `ctx`'s arena that pushes one quotation literal calling `name`.
+fn arenaBodyWithNested(ctx: *Context, name: []const u8) ![]const Instruction {
+    const nested = try arenaBody(ctx, name);
+    const body = try ctx.arena.allocator().alloc(Instruction, 1);
+    body[0] = .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = nested } } }, .line = 0 };
+    return body;
+}
+
+test "init: the root context owns an empty set of body-keyed stores" {
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
 
-    try std.testing.expectEqual(@as(usize, 0), ctx.quotation_stamp_store.count());
+    try std.testing.expect(ctx.body_stores_owned);
+    try std.testing.expect(ctx.body_stores.parent == null);
+
+    try std.testing.expectEqual(@as(usize, 0), ctx.body_stores.quotation_stamp_store.count());
+    try std.testing.expectEqual(@as(usize, 0), ctx.body_stores.quotation_source_store.count());
+    try std.testing.expectEqual(@as(usize, 0), ctx.body_stores.carryable_scope_gate.count());
+    try std.testing.expectEqual(@as(usize, 0), ctx.body_stores.nested_name_cache.count());
+    try std.testing.expectEqual(@as(usize, 0), ctx.body_stores.lexical_parents.count());
+    try std.testing.expectEqual(@as(usize, 0), ctx.body_stores.inline_regions.count());
+
     try std.testing.expectEqual(
         @as(?*const value_mod.Module, null),
-        ctx.quotation_stamp_store.lookup(0x1000),
+        ctx.body_stores.quotation_stamp_store.lookup(0x1000),
     );
+    try std.testing.expect(!ctx.body_stores.carryable_scope_gate.isMarked(0x1000));
+    try std.testing.expect(ctx.body_stores.nested_name_cache.lookup(0x1000) == null);
 }
 
-test "initForTask: shares the parent's quotation stamp store" {
+test "initForTask: aliases the parent's body-keyed stores without owning them" {
     var parent = Context.init(std.testing.allocator);
     defer parent.deinit();
 
@@ -16387,148 +16431,75 @@ test "initForTask: shares the parent's quotation stamp store" {
     defer scheduler.deinit();
 
     const module: value_mod.Module = .{ .name = "m", .words = .{} };
-    _ = try parent.quotation_stamp_store.stamp(0x1000, &module);
+    _ = try parent.body_stores.quotation_stamp_store.stamp(0x1000, &module);
+    try parent.body_stores.quotation_source_store.stamp(0x2000, "parent.1z");
+    _ = try parent.body_stores.carryable_scope_gate.mark(0x3000);
+
+    const body = try arenaBodyWithNested(&parent, "from-parent");
+    try parent.cacheQuotationBodyNestedNames(body);
 
     {
         var task_ctx = try Context.initForTask(std.testing.allocator, &parent, scheduler);
         defer task_ctx.deinit();
+
+        try std.testing.expectEqual(parent.body_stores, task_ctx.body_stores);
+        try std.testing.expect(!task_ctx.body_stores_owned);
 
         // A stamp written before the spawn is what a stored quotation executing here needs.
-        try std.testing.expectEqual(parent.quotation_stamp_store, task_ctx.quotation_stamp_store);
         try std.testing.expectEqual(
             @as(?*const value_mod.Module, &module),
-            task_ctx.quotation_stamp_store.lookup(0x1000),
+            task_ctx.body_stores.quotation_stamp_store.lookup(0x1000),
         );
-    }
-
-    // The task aliased the store without retaining, so its teardown left the root's intact.
-    try std.testing.expectEqual(
-        @as(?*const value_mod.Module, &module),
-        parent.quotation_stamp_store.lookup(0x1000),
-    );
-}
-
-test "initForTask: shares the parent's quotation source store" {
-    var parent = Context.init(std.testing.allocator);
-    defer parent.deinit();
-
-    var scheduler = try std.testing.allocator.create(Scheduler);
-    defer std.testing.allocator.destroy(scheduler);
-    scheduler.* = try Scheduler.init(std.testing.allocator);
-    defer scheduler.deinit();
-
-    try parent.quotation_source_store.stamp(0x1000, "parent.1z");
-
-    {
-        var task_ctx = try Context.initForTask(std.testing.allocator, &parent, scheduler);
-        defer task_ctx.deinit();
 
         // A body parsed on the parent keeps its own file in the frames a raise here produces.
-        try std.testing.expectEqual(parent.quotation_source_store, task_ctx.quotation_source_store);
-        try std.testing.expectEqualStrings("parent.1z", task_ctx.quotation_source_store.lookup(0x1000).?);
-    }
+        try std.testing.expectEqualStrings("parent.1z", task_ctx.body_stores.quotation_source_store.lookup(0x2000).?);
 
-    // The task aliased the store without retaining, so its teardown left the root's intact.
-    try std.testing.expectEqualStrings("parent.1z", parent.quotation_source_store.lookup(0x1000).?);
-}
+        // A mark written before the spawn tells a body entry here to walk the chain.
+        try std.testing.expect(task_ctx.body_stores.carryable_scope_gate.isMarked(0x3000));
 
-test "init: the root context owns an empty carryable scope gate" {
-    var ctx = Context.init(std.testing.allocator);
-    defer ctx.deinit();
-
-    try std.testing.expectEqual(@as(usize, 0), ctx.carryable_scope_gate.count());
-    try std.testing.expect(!ctx.carryable_scope_gate.isMarked(0x1000));
-}
-
-test "initForTask: shares the parent's carryable scope gate" {
-    var parent = Context.init(std.testing.allocator);
-    defer parent.deinit();
-
-    var scheduler = try std.testing.allocator.create(Scheduler);
-    defer std.testing.allocator.destroy(scheduler);
-    scheduler.* = try Scheduler.init(std.testing.allocator);
-    defer scheduler.deinit();
-
-    _ = try parent.carryable_scope_gate.mark(0x1000);
-
-    {
-        var task_ctx = try Context.initForTask(std.testing.allocator, &parent, scheduler);
-        defer task_ctx.deinit();
-
-        // A mark written before the spawn is what tells a body entry here to walk the chain.
-        try std.testing.expectEqual(parent.carryable_scope_gate, task_ctx.carryable_scope_gate);
-        try std.testing.expect(task_ctx.carryable_scope_gate.isMarked(0x1000));
+        // A body parsed on the parent answers the capture gate here off the parent's one walk.
+        const names = task_ctx.quotationBodyNestedNames(body) orelse return error.TestExpectedEntry;
+        try std.testing.expectEqual(@as(usize, 1), names.len);
+        try std.testing.expectEqualStrings("from-parent", names[0]);
 
         // A mark written inside the task is visible to the parent, which is what makes the gate
         // exact per body rather than per context.
-        _ = try task_ctx.carryable_scope_gate.mark(0x2000);
+        _ = try task_ctx.body_stores.carryable_scope_gate.mark(0x4000);
     }
 
-    // The task aliased the gate without retaining, so its teardown left the root's intact.
-    try std.testing.expect(parent.carryable_scope_gate.isMarked(0x1000));
-    try std.testing.expect(parent.carryable_scope_gate.isMarked(0x2000));
-}
-
-test "init: the root context owns an empty nested name cache" {
-    var ctx = Context.init(std.testing.allocator);
-    defer ctx.deinit();
-
-    try std.testing.expectEqual(@as(usize, 0), ctx.nested_name_cache.count());
-    try std.testing.expect(ctx.nested_name_cache.lookup(0x1000) == null);
-}
-
-test "initForTask: shares the parent's nested name cache" {
-    var parent = Context.init(std.testing.allocator);
-    defer parent.deinit();
-
-    var scheduler = try std.testing.allocator.create(Scheduler);
-    defer std.testing.allocator.destroy(scheduler);
-    scheduler.* = try Scheduler.init(std.testing.allocator);
-    defer scheduler.deinit();
-
-    const nested = [_]Instruction{.{ .op = .{ .call_word = "from-parent" }, .line = 0 }};
-    const body = [_]Instruction{.{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = &nested } } }, .line = 0 }};
-    try parent.cacheQuotationBodyNestedNames(&body);
-
-    {
-        var task_ctx = try Context.initForTask(std.testing.allocator, &parent, scheduler);
-        defer task_ctx.deinit();
-
-        // A body parsed on the parent answers the capture gate here off the parent's one walk.
-        try std.testing.expectEqual(parent.nested_name_cache, task_ctx.nested_name_cache);
-        const names = task_ctx.quotationBodyNestedNames(&body) orelse return error.TestExpectedEntry;
-        try std.testing.expectEqual(@as(usize, 1), names.len);
-        try std.testing.expectEqualStrings("from-parent", names[0]);
-    }
-
-    // The task aliased the cache without retaining, so its teardown left the root's intact.
-    try std.testing.expect(parent.quotationBodyNestedNames(&body) != null);
+    // The task aliased the set without retaining it, so its teardown left the root's intact.
+    try std.testing.expectEqual(
+        @as(?*const value_mod.Module, &module),
+        parent.body_stores.quotation_stamp_store.lookup(0x1000),
+    );
+    try std.testing.expectEqualStrings("parent.1z", parent.body_stores.quotation_source_store.lookup(0x2000).?);
+    try std.testing.expect(parent.body_stores.carryable_scope_gate.isMarked(0x4000));
+    try std.testing.expect(parent.quotationBodyNestedNames(body) != null);
 }
 
 test "cacheQuotationBodyNestedNames: records a nested name and distinguishes empty from absent" {
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
 
-    const nested = [_]Instruction{.{ .op = .{ .call_word = "inner" }, .line = 0 }};
-    const with_nested = [_]Instruction{.{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = &nested } } }, .line = 0 }};
-    const flat = [_]Instruction{.{ .op = .{ .call_word = "outer" }, .line = 0 }};
+    const with_nested = try arenaBodyWithNested(&ctx, "inner");
+    const flat = try arenaBody(&ctx, "outer");
 
-    try std.testing.expect(ctx.quotationBodyNestedNames(&with_nested) == null);
+    try std.testing.expect(ctx.quotationBodyNestedNames(with_nested) == null);
 
-    try ctx.cacheQuotationBodyNestedNames(&with_nested);
-    try ctx.cacheQuotationBodyNestedNames(&flat);
+    try ctx.cacheQuotationBodyNestedNames(with_nested);
+    try ctx.cacheQuotationBodyNestedNames(flat);
 
-    const names = ctx.quotationBodyNestedNames(&with_nested) orelse return error.TestExpectedEntry;
+    const names = ctx.quotationBodyNestedNames(with_nested) orelse return error.TestExpectedEntry;
     try std.testing.expectEqual(@as(usize, 1), names.len);
     try std.testing.expectEqualStrings("inner", names[0]);
 
     // A body with no nested literal is recorded as an empty set, not left absent: absence means
     // the gate has to walk, and this body has nothing to find.
-    const flat_names = ctx.quotationBodyNestedNames(&flat) orelse return error.TestExpectedEntry;
+    const flat_names = ctx.quotationBodyNestedNames(flat) orelse return error.TestExpectedEntry;
     try std.testing.expectEqual(@as(usize, 0), flat_names.len);
 }
 
-test "cacheQuotationBodyNestedNames: a body whose state target is not the root does not enter" {
+test "cacheQuotationBodyNestedNames: a body whose state target does not own its loads does not enter" {
     var parent = Context.init(std.testing.allocator);
     defer parent.deinit();
 
@@ -16541,13 +16512,159 @@ test "cacheQuotationBodyNestedNames: a body whose state target is not the root d
     defer task_ctx.deinit();
 
     // The task's own arena owns anything it parses, so the body's address is recyclable and the
-    // permanent cache must not key on it.
-    const nested = [_]Instruction{.{ .op = .{ .call_word = "inner" }, .line = 0 }};
-    const body = [_]Instruction{.{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = &nested } } }, .line = 0 }};
-    try task_ctx.cacheQuotationBodyNestedNames(&body);
+    // layer it would enter must not key on it.
+    const body = try arenaBodyWithNested(&task_ctx, "inner");
+    try task_ctx.cacheQuotationBodyNestedNames(body);
 
-    try std.testing.expect(task_ctx.quotationBodyNestedNames(&body) == null);
-    try std.testing.expectEqual(@as(usize, 0), task_ctx.nested_name_cache.count());
+    try std.testing.expect(task_ctx.quotationBodyNestedNames(body) == null);
+    try std.testing.expectEqual(@as(usize, 0), task_ctx.body_stores.nested_name_cache.count());
+}
+
+test "initChild: an analysis child layers its body-keyed stores over its parent's" {
+    var root = Context.init(std.testing.allocator);
+    defer root.deinit();
+
+    var child = try Context.initChild(std.testing.allocator, &root, .analysis);
+    defer child.deinit();
+
+    try std.testing.expect(child.body_stores_owned);
+    try std.testing.expect(child.body_stores != root.body_stores);
+    try std.testing.expectEqual(@as(?*const BodyKeyedStores, root.body_stores), child.body_stores.parent);
+
+    const module: value_mod.Module = .{ .name = "m", .words = .{} };
+
+    const root_body = try arenaBody(&root, "root-word");
+    try root.stampQuotationBodySourceAs(root_body, "root.1z");
+    try root.stampQuotationBodies(root_body, &module);
+
+    const child_body = try arenaBody(&child, "child-word");
+    try child.stampQuotationBodySourceAs(child_body, "child.1z");
+    try child.stampQuotationBodies(child_body, &module);
+
+    // The child reads its own layer and then the root's.
+    try std.testing.expectEqualStrings("root.1z", child.quotationBodySource(root_body).?);
+    try std.testing.expectEqualStrings("child.1z", child.quotationBodySource(child_body).?);
+    try std.testing.expectEqual(
+        @as(?*const value_mod.Module, &module),
+        child.body_stores.quotation_stamp_store.lookup(@intFromPtr(root_body.ptr)),
+    );
+
+    // The root never sees the child's layer.
+    try std.testing.expect(root.quotationBodySource(child_body) == null);
+    try std.testing.expectEqual(
+        @as(?*const value_mod.Module, null),
+        root.body_stores.quotation_stamp_store.lookup(@intFromPtr(child_body.ptr)),
+    );
+    try std.testing.expectEqual(@as(usize, 1), root.body_stores.quotation_source_store.count());
+    try std.testing.expectEqual(@as(usize, 1), child.body_stores.quotation_source_store.count());
+    try std.testing.expectEqual(@as(usize, 1), root.body_stores.quotation_stamp_store.count());
+    try std.testing.expectEqual(@as(usize, 1), child.body_stores.quotation_stamp_store.count());
+
+    // The first stamp still wins across layers, and the child's layer takes no second entry.
+    try child.stampQuotationBodySourceAs(root_body, "other.1z");
+    try std.testing.expectEqualStrings("root.1z", child.quotationBodySource(root_body).?);
+    try std.testing.expectEqual(@as(usize, 1), child.body_stores.quotation_source_store.count());
+}
+
+test "initForTask: a task under an analysis child writes the child's layer" {
+    var root = Context.init(std.testing.allocator);
+    defer root.deinit();
+
+    var child = try Context.initChild(std.testing.allocator, &root, .analysis);
+    defer child.deinit();
+
+    var scheduler = try std.testing.allocator.create(Scheduler);
+    defer std.testing.allocator.destroy(scheduler);
+    scheduler.* = try Scheduler.init(std.testing.allocator);
+    defer scheduler.deinit();
+
+    {
+        var task_ctx = try Context.initForTask(std.testing.allocator, &child, scheduler);
+        defer task_ctx.deinit();
+
+        try std.testing.expectEqual(child.body_stores, task_ctx.body_stores);
+        try std.testing.expect(!task_ctx.body_stores_owned);
+
+        _ = try task_ctx.body_stores.carryable_scope_gate.mark(0x5000);
+    }
+
+    try std.testing.expect(child.body_stores.carryable_scope_gate.isMarked(0x5000));
+    try std.testing.expect(!root.body_stores.carryable_scope_gate.isMarked(0x5000));
+}
+
+test "analysis children leave no key of their arena in the root's stores" {
+    var root = Context.init(std.testing.allocator);
+    defer root.deinit();
+
+    const module: value_mod.Module = .{ .name = "m", .words = .{} };
+    const regions = [_]InlineRegion{.{
+        .start = 0,
+        .end = 1,
+        .word_name = "inlined",
+        .body_source = "doc.1z",
+        .call_line = 1,
+        .call_column = 0,
+    }};
+
+    var round: usize = 0;
+    while (round < 8) : (round += 1) {
+        // The child stays alive through the checks. A key left on its arena would dangle only after
+        // `deinit`, and by then the address could be reused and the stale entry go unseen.
+        var child = try Context.initChild(std.testing.allocator, &root, .analysis);
+        defer child.deinit();
+
+        const outer = try arenaBodyWithNested(&child, "inner");
+        const rebuilt = try arenaBodyWithNested(&child, "inner");
+
+        try child.stampQuotationBodySourceAs(outer, "doc.1z");
+        try child.stampQuotationBodies(outer, &module);
+        try child.cacheQuotationBodyNestedNames(outer);
+        try child.recordLexicalChildren(outer);
+        try child.recordLexicalRoot(outer);
+        try child.recordLexicalAlias(rebuilt, outer);
+        try child.recordInlineRegions(outer, "doc.1z", &regions);
+        _ = try child.body_stores.carryable_scope_gate.mark(@intFromPtr(outer.ptr));
+
+        try std.testing.expect(child.body_stores.anyKeyOnArena(child.arena));
+        try std.testing.expect(!root.body_stores.anyKeyOnArena(child.arena));
+
+        try std.testing.expectEqual(@as(usize, 0), root.body_stores.quotation_stamp_store.count());
+        try std.testing.expectEqual(@as(usize, 0), root.body_stores.quotation_source_store.count());
+        try std.testing.expectEqual(@as(usize, 0), root.body_stores.carryable_scope_gate.count());
+        try std.testing.expectEqual(@as(usize, 0), root.body_stores.nested_name_cache.count());
+        try std.testing.expectEqual(@as(usize, 0), root.body_stores.lexical_parents.count());
+        try std.testing.expectEqual(@as(usize, 0), root.body_stores.inline_regions.count());
+    }
+}
+
+test "stampDecodedQuotationBodies: a child's decode write lands in the root's layer" {
+    var root = Context.init(std.testing.allocator);
+    defer root.deinit();
+
+    var child = try Context.initChild(std.testing.allocator, &root, .analysis);
+    defer child.deinit();
+
+    const module: value_mod.Module = .{ .name = "m", .words = .{} };
+
+    const cache = child.reified_decode_cache;
+    cache.decode_mu.lock();
+    const decoded = try cache.decodeAllocator().alloc(Instruction, 1);
+    decoded[0] = .{ .op = .{ .call_word = "decoded" }, .line = 0 };
+    cache.decode_mu.unlock();
+
+    const site: usize = 0x7000;
+    try child.stampDecodedQuotationBodies(decoded, &module);
+    try child.recordDecodedLexicalBody(decoded, site);
+
+    // The decoded body stays cached after the child is gone, so its records must not leave with it.
+    try std.testing.expectEqual(
+        @as(?*const value_mod.Module, &module),
+        root.body_stores.quotation_stamp_store.lookup(@intFromPtr(decoded.ptr)),
+    );
+    try std.testing.expectEqual(site, root.body_stores.lexical_parents.canonical(@intFromPtr(decoded.ptr)));
+
+    try std.testing.expectEqual(@as(usize, 0), child.body_stores.quotation_stamp_store.count());
+    try std.testing.expectEqual(@as(usize, 0), child.body_stores.lexical_parents.aliases.count());
 }
 
 test "initForTask: shares the parent's module-load lock and in-flight record" {
@@ -17221,16 +17338,16 @@ test "defineWord: a stamped body's parse file outranks the ambient current_sourc
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
 
-    const body = [_]Instruction{.{ .op = .{ .call_word = "noop" }, .line = 0 }};
+    const body = try arenaBody(&ctx, "noop");
     ctx.current_source = "mod.1z";
-    try ctx.stampQuotationBodySource(&body);
+    try ctx.stampQuotationBodySource(body);
 
     // A definition made while another word's body executes, e.g. a `private{` helper defined
     // inside the composed quotation the prelude calls, sees that word's file here.
     ctx.current_source = "src/prelude.1z";
     try ctx.defineWord("w", .{
         .name = "w",
-        .action = .{ .compound = &body },
+        .action = .{ .compound = body },
     });
 
     const def = ctx.lookupWordForExecution("w") orelse return error.TestExpectedLookup;
@@ -17258,12 +17375,12 @@ test "stampQuotationBodySource: parse_stamp_source outranks current_source" {
 
     // While a parse-time word executes, `current_source` names the word's own file, and the
     // parser's saved invoking file is what the tokens being read belong to.
-    const body = [_]Instruction{.{ .op = .{ .call_word = "noop" }, .line = 0 }};
+    const body = try arenaBody(&ctx, "noop");
     ctx.current_source = "src/prelude.1z";
     ctx.parse_stamp_source = "mod.1z";
-    try ctx.stampQuotationBodySource(&body);
+    try ctx.stampQuotationBodySource(body);
 
-    try std.testing.expectEqualStrings("mod.1z", ctx.quotationBodySource(&body).?);
+    try std.testing.expectEqualStrings("mod.1z", ctx.quotationBodySource(body).?);
 }
 
 test "wordDefFromModuleWord: synthesized definition carries computed exec_flags" {
@@ -17776,7 +17893,7 @@ test "executeInstructions: a stamped body resolves its own module ahead of the d
     // the module's binding ahead of the durable frame.
     const instrs = try arena_alloc.alloc(Instruction, 1);
     instrs[0] = .{ .op = .{ .call_word = "probe-word" }, .line = 1 };
-    _ = try ctx.quotation_stamp_store.stamp(@intFromPtr(instrs.ptr), module);
+    _ = try ctx.body_stores.quotation_stamp_store.stamp(@intFromPtr(instrs.ptr), module);
     try ctx.executeQuotation(.{ .instructions = instrs });
     try std.testing.expectEqual(@as(i64, 2), (try ctx.stack.pop()).fixnum);
 
@@ -17830,7 +17947,7 @@ test "executeInstructions: a store miss is cached, so a late stamp is not observ
 
     // A stamp arriving only now violates stamped-before-reachable, which production sites never
     // do. The cached null stays authoritative: no store re-probe, the durable binding still wins.
-    _ = try ctx.quotation_stamp_store.stamp(@intFromPtr(instrs.ptr), module);
+    _ = try ctx.body_stores.quotation_stamp_store.stamp(@intFromPtr(instrs.ptr), module);
     try ctx.executeQuotation(.{ .instructions = instrs });
     try std.testing.expectEqual(@as(i64, 1), (try ctx.stack.pop()).fixnum);
 }
@@ -18067,7 +18184,7 @@ test "executeInstructions: a closure-owned body with no carried module falls bac
 
     // `;` turns a closure into a compound word over its own body, which module finalization then
     // stamps. The value never learns of that stamp, so the store keeps the last word.
-    _ = try ctx.quotation_stamp_store.stamp(@intFromPtr(cl.instructions.ptr), module);
+    _ = try ctx.body_stores.quotation_stamp_store.stamp(@intFromPtr(cl.instructions.ptr), module);
 
     try ctx.executeQuotationWithOwner(cl.asQuotation(), cl);
     try std.testing.expectEqual(@as(i64, 2), (try ctx.stack.pop()).fixnum);
@@ -18143,7 +18260,7 @@ test "executeInstructions: a stored quotation resolves its stamp in a child task
 
     const instrs = try arena_alloc.alloc(Instruction, 1);
     instrs[0] = .{ .op = .{ .call_word = "probe-word" }, .line = 1 };
-    _ = try parent.quotation_stamp_store.stamp(@intFromPtr(instrs.ptr), module);
+    _ = try parent.body_stores.quotation_stamp_store.stamp(@intFromPtr(instrs.ptr), module);
 
     // The child's own map starts empty; the fill reaches the stamp through the shared store.
     var task_ctx = try Context.initForTask(std.testing.allocator, &parent, scheduler);
@@ -18158,7 +18275,7 @@ test "executeInstructions: a stored quotation resolves its stamp in a child task
 /// A test that hand-builds an ancestor entry bypasses `captureQuotationScope`, which is what marks
 /// in production, and an unmarked entry is a state the gate's invariant forbids.
 fn putCarryableScopeForTest(ctx: *Context, key: usize, scope: *CapturedScope) !void {
-    _ = try ctx.carryable_scope_gate.mark(key);
+    _ = try ctx.body_stores.carryable_scope_gate.mark(key);
     try ctx.quotation_scope_info.put(ctx.allocator, key, .{ .scope = scope });
 }
 
@@ -18214,7 +18331,7 @@ test "executeInstructions: a stored quotation resolves a parent-captured lexical
     const module = try arena_alloc.create(value_mod.Module);
     module.* = .{ .name = "m", .words = .{} };
     try module.words.put(arena_alloc, "probe-word", .{ .action = .{ .native = push_module } });
-    _ = try parent.quotation_stamp_store.stamp(@intFromPtr(instrs.ptr), module);
+    _ = try parent.body_stores.quotation_stamp_store.stamp(@intFromPtr(instrs.ptr), module);
 
     // The child's fill walks to the parent's entry; the captured binding outranks both the durable
     // one and the stamped module's.
@@ -18406,7 +18523,7 @@ test "captureQuotationScope: a fresh entry's module half is filled from the stam
 
     var def_module: value_mod.Module = .{ .name = "def", .words = .{} };
     const body = [_]Instruction{.{ .op = .{ .call_word = "foo" }, .line = 0 }};
-    _ = try ctx.quotation_stamp_store.stamp(@intFromPtr(&body), &def_module);
+    _ = try ctx.body_stores.quotation_stamp_store.stamp(@intFromPtr(&body), &def_module);
 
     // The deps-only recording path creates the entry; its module half must carry the stamp, so a
     // body-entry map hit stays authoritative.
@@ -18422,7 +18539,7 @@ test "stampCapturedScopeForExecution: a fresh entry's module half is filled from
 
     var def_module: value_mod.Module = .{ .name = "def", .words = .{} };
     const body = [_]Instruction{.{ .op = .{ .call_word = "w" }, .line = 0 }};
-    _ = try ctx.quotation_stamp_store.stamp(@intFromPtr(&body), &def_module);
+    _ = try ctx.body_stores.quotation_stamp_store.stamp(@intFromPtr(&body), &def_module);
 
     var scope: CapturedScope = .{ .lexical_frames = &.{}, .deps_modules = &.{}, .allocator = ctx.allocator };
     try ctx.stampCapturedScopeForExecution(&body, &scope, null);
@@ -18456,7 +18573,7 @@ test "stampCapturedScopeForExecution: a closure-owned body enters neither the ma
 
     try ctx.stampCapturedScopeForExecution(cl.instructions, &scope, cl);
     try std.testing.expectEqual(@as(usize, 0), ctx.quotation_scope_info.count());
-    try std.testing.expect(!ctx.carryable_scope_gate.isMarked(@intFromPtr(cl.instructions.ptr)));
+    try std.testing.expect(!ctx.body_stores.carryable_scope_gate.isMarked(@intFromPtr(cl.instructions.ptr)));
 }
 
 test "stampCapturedScopeForExecution: a push-time promotion still stamps" {
@@ -18506,10 +18623,10 @@ test "captureQuotationScope: a lexical capture marks the carryable scope gate" {
     try ctx.defineWord("local", .{ .name = "local", .action = .{ .compound = &.{} } });
 
     const body = [_]Instruction{.{ .op = .{ .call_word = "local" }, .line = 0 }};
-    try std.testing.expect(!ctx.carryable_scope_gate.isMarked(@intFromPtr(&body)));
+    try std.testing.expect(!ctx.body_stores.carryable_scope_gate.isMarked(@intFromPtr(&body)));
 
     _ = (try ctx.captureQuotationScope(&body)) orelse return error.TestExpectedCapture;
-    try std.testing.expect(ctx.carryable_scope_gate.isMarked(@intFromPtr(&body)));
+    try std.testing.expect(ctx.body_stores.carryable_scope_gate.isMarked(@intFromPtr(&body)));
 }
 
 test "captureQuotationScope: a deps-only entry leaves the gate unmarked" {
@@ -18534,7 +18651,7 @@ test "captureQuotationScope: a deps-only entry leaves the gate unmarked" {
     const body = [_]Instruction{.{ .op = .{ .call_word = "foo" }, .line = 0 }};
     try std.testing.expect((try ctx.captureQuotationScope(&body)) == null);
     try std.testing.expect(ctx.quotation_scope_info.get(@intFromPtr(&body)) != null);
-    try std.testing.expect(!ctx.carryable_scope_gate.isMarked(@intFromPtr(&body)));
+    try std.testing.expect(!ctx.body_stores.carryable_scope_gate.isMarked(@intFromPtr(&body)));
 }
 
 test "stampCapturedScopeForExecution: marks the gate only for a scope with a lexical frame" {
@@ -18548,7 +18665,7 @@ test "stampCapturedScopeForExecution: marks the gate only for a scope with a lex
     const deps_body = [_]Instruction{.{ .op = .{ .call_word = "w" }, .line = 0 }};
     var empty: CapturedScope = .{ .lexical_frames = &.{}, .deps_modules = &.{}, .allocator = ctx.allocator };
     try ctx.stampCapturedScopeForExecution(&deps_body, &empty, null);
-    try std.testing.expect(!ctx.carryable_scope_gate.isMarked(@intFromPtr(&deps_body)));
+    try std.testing.expect(!ctx.body_stores.carryable_scope_gate.isMarked(@intFromPtr(&deps_body)));
 
     var frame: LocalFrame = .{};
     try frame.put(ctx.allocator, "local", .{ .name = "local", .action = .{ .native = noop } });
@@ -18562,7 +18679,7 @@ test "stampCapturedScopeForExecution: marks the gate only for a scope with a lex
 
     const lexical_body = [_]Instruction{.{ .op = .{ .call_word = "local" }, .line = 0 }};
     try ctx.stampCapturedScopeForExecution(&lexical_body, &lexical, null);
-    try std.testing.expect(ctx.carryable_scope_gate.isMarked(@intFromPtr(&lexical_body)));
+    try std.testing.expect(ctx.body_stores.carryable_scope_gate.isMarked(@intFromPtr(&lexical_body)));
 }
 
 /// Give `parent` a durable `probe-word` pushing 1 and a carryable scope binding the same name to a
@@ -18673,16 +18790,16 @@ test "stampQuotationBodies: repairs an entry created before the stamp" {
 
     // The module's own top-level code pushes the literal before finalization stamps it, so the
     // entry's module half caches the store miss.
-    const body = [_]Instruction{.{ .op = .{ .call_word = "foo" }, .line = 0 }};
-    try std.testing.expect((try ctx.captureQuotationScope(&body)) == null);
-    const before = ctx.quotation_scope_info.get(@intFromPtr(&body)) orelse return error.TestExpectedEntry;
+    const body = try arenaBody(&ctx, "foo");
+    try std.testing.expect((try ctx.captureQuotationScope(body)) == null);
+    const before = ctx.quotation_scope_info.get(@intFromPtr(body.ptr)) orelse return error.TestExpectedEntry;
     try std.testing.expectEqual(@as(?*const value_mod.Module, null), before.defining_module);
 
     // Finalization stamps the store and repairs the loading context's stale null in place, so the
     // now-authoritative map hit carries the stamp.
     var def_module: value_mod.Module = .{ .name = "def", .words = .{} };
-    try ctx.stampQuotationBodies(&body, &def_module);
-    const after = ctx.quotation_scope_info.get(@intFromPtr(&body)) orelse return error.TestExpectedEntry;
+    try ctx.stampQuotationBodies(body, &def_module);
+    const after = ctx.quotation_scope_info.get(@intFromPtr(body.ptr)) orelse return error.TestExpectedEntry;
     try std.testing.expectEqual(@as(?*const value_mod.Module, &def_module), after.defining_module);
     try std.testing.expect(after.scope != null);
 }
@@ -18719,7 +18836,7 @@ test "executeInstructions: a synthetic-scope stamp leaves the own-module probe o
 
     const instrs = try arena_alloc.alloc(Instruction, 1);
     instrs[0] = .{ .op = .{ .call_word = "probe-word" }, .line = 1 };
-    _ = try ctx.quotation_stamp_store.stamp(@intFromPtr(instrs.ptr), module);
+    _ = try ctx.body_stores.quotation_stamp_store.stamp(@intFromPtr(instrs.ptr), module);
 
     try ctx.executeQuotation(.{ .instructions = instrs });
     try std.testing.expectEqual(@as(i64, 1), (try ctx.stack.pop()).fixnum);
@@ -18904,11 +19021,10 @@ test "captureQuotationScope: a cached nested literal naming a live local capture
     defer ctx.deinit();
     try seedLiveLocalFrame(&ctx);
 
-    const inner = [_]Instruction{.{ .op = .{ .call_word = "local" }, .line = 0 }};
-    const body = [_]Instruction{nestedBody(&inner)};
-    try ctx.cacheQuotationBodyNestedNames(&body);
+    const body = try arenaBodyWithNested(&ctx, "local");
+    try ctx.cacheQuotationBodyNestedNames(body);
 
-    const scope = (try ctx.captureQuotationScope(&body)) orelse return error.TestExpectedCapture;
+    const scope = (try ctx.captureQuotationScope(body)) orelse return error.TestExpectedCapture;
     const resolved = Context.lookupInCapturedScope(scope, "local") orelse return error.TestExpectedResolution;
     try std.testing.expectEqualStrings("local-site", resolved.source_file.?);
 }
@@ -18934,12 +19050,12 @@ test "captureQuotationScope: a nested literal at depth two naming a live local c
     defer ctx.deinit();
     try seedLiveLocalFrame(&ctx);
 
-    const innermost = [_]Instruction{.{ .op = .{ .call_word = "local" }, .line = 0 }};
-    const middle = [_]Instruction{nestedBody(&innermost)};
-    const body = [_]Instruction{nestedBody(&middle)};
-    try ctx.cacheQuotationBodyNestedNames(&body);
+    const innermost = try arenaBody(&ctx, "local");
+    const middle = try ctx.arena.allocator().dupe(Instruction, &[_]Instruction{nestedBody(innermost)});
+    const body = try ctx.arena.allocator().dupe(Instruction, &[_]Instruction{nestedBody(middle)});
+    try ctx.cacheQuotationBodyNestedNames(body);
 
-    _ = (try ctx.captureQuotationScope(&body)) orelse return error.TestExpectedCapture;
+    _ = (try ctx.captureQuotationScope(body)) orelse return error.TestExpectedCapture;
 }
 
 test "captureQuotationScope: a nested literal naming nothing live does not capture" {
@@ -18947,11 +19063,10 @@ test "captureQuotationScope: a nested literal naming nothing live does not captu
     defer ctx.deinit();
     try seedLiveLocalFrame(&ctx);
 
-    const inner = [_]Instruction{.{ .op = .{ .call_word = "elsewhere" }, .line = 0 }};
-    const body = [_]Instruction{nestedBody(&inner)};
-    try ctx.cacheQuotationBodyNestedNames(&body);
+    const body = try arenaBodyWithNested(&ctx, "elsewhere");
+    try ctx.cacheQuotationBodyNestedNames(body);
 
-    try std.testing.expect((try ctx.captureQuotationScope(&body)) == null);
+    try std.testing.expect((try ctx.captureQuotationScope(body)) == null);
 }
 
 /// The state a module-changing tail call leaves behind, which is what the seed exists for: a scope
@@ -19009,11 +19124,14 @@ test "captureQuotationScope: a nested body naming only an enclosing scope's loca
     const outer = [_]Instruction{nestedBody(&outer_inner)};
     try seedPoppedEnclosingScope(&ctx, &outer);
 
-    const inner = [_]Instruction{.{ .op = .{ .call_word = "outer-only" }, .line = 0 }};
-    const body = [_]Instruction{ nestedBody(&inner), .{ .op = .{ .call_word = "call" }, .line = 0 } };
-    try ctx.cacheQuotationBodyNestedNames(&body);
+    const inner = try arenaBody(&ctx, "outer-only");
+    const body = try ctx.arena.allocator().dupe(Instruction, &[_]Instruction{
+        nestedBody(inner),
+        .{ .op = .{ .call_word = "call" }, .line = 0 },
+    });
+    try ctx.cacheQuotationBodyNestedNames(body);
 
-    const scope = (try ctx.captureQuotationScope(&body)) orelse return error.TestExpectedCapture;
+    const scope = (try ctx.captureQuotationScope(body)) orelse return error.TestExpectedCapture;
     const resolved = Context.lookupInCapturedScope(scope, "outer-only") orelse return error.TestExpectedResolution;
     try std.testing.expectEqualStrings("outer-site", resolved.source_file.?);
 }

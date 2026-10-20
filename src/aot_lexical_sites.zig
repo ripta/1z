@@ -100,8 +100,8 @@ fn quotationPushAt(body: []const Instruction, line: usize) Instruction {
 }
 
 test "AotLexicalSiteTable: a site brings its ancestors, and the registered table keeps the relation" {
-    var build = try LexicalParentMap.create(testing.allocator);
-    defer build.destroy();
+    var build = try LexicalParentMap.init(testing.allocator, null);
+    defer build.deinit();
 
     const reader_quot = [_]Instruction{.{ .op = .{ .call_word = "label" }, .line = 1 }};
     const reader_body = [_]Instruction{quotationPushAt(&reader_quot, 1)};
@@ -116,20 +116,20 @@ test "AotLexicalSiteTable: a site brings its ancestors, and the registered table
     var sites = AotLexicalSiteTable.init(testing.allocator);
     defer sites.deinit();
 
-    const quot_site = (try sites.siteFor(build, @intFromPtr(&reader_quot))).?;
-    const caller_site = (try sites.siteFor(build, @intFromPtr(&caller_body))).?;
-    try testing.expectEqual(@as(?u32, null), try sites.siteFor(build, @intFromPtr(&unknown)));
+    const quot_site = (try sites.siteFor(&build, @intFromPtr(&reader_quot))).?;
+    const caller_site = (try sites.siteFor(&build, @intFromPtr(&caller_body))).?;
+    try testing.expectEqual(@as(?u32, null), try sites.siteFor(&build, @intFromPtr(&unknown)));
 
     // The quotation, its reader, and the shared statement, then the caller beside them.
     try testing.expectEqual(@as(usize, 4), sites.count());
-    try testing.expectEqual(quot_site, (try sites.siteFor(build, @intFromPtr(&reader_quot))).?);
+    try testing.expectEqual(quot_site, (try sites.siteFor(&build, @intFromPtr(&reader_quot))).?);
 
     var rows: [4]u64 = undefined;
     for (sites.parents.items, 0..) |p, i| rows[i] = p;
 
-    var runtime = try LexicalParentMap.create(testing.allocator);
-    defer runtime.destroy();
-    try registerSites(runtime, &rows);
+    var runtime = try LexicalParentMap.init(testing.allocator, null);
+    defer runtime.deinit();
+    try registerSites(&runtime, &rows);
 
     const quot_tag = @intFromPtr(&rows[quot_site]);
     const caller_tag = @intFromPtr(&rows[caller_site]);

@@ -32,9 +32,11 @@ const AtomicSlotMap = @import("atomic_slot_map.zig").AtomicSlotMap;
 /// canonical address. Untouched literals inside a rebuilt body keep naming the source as their
 /// parent, and a frame the rebuilt body opens still has to match them.
 ///
-/// Entries are permanent, so only process-lifetime keys may enter. The map is allocated by the root
-/// context, aliased by pointer into every child, and freed only by the root. Reads take no lock.
-/// Writers serialize on `write_mu`, and the first write for a key wins.
+/// The map is one layer of a `BodyKeyedStores` set. The root's layer is the base, and a context
+/// that owns its loads has a layer of its own, linked to its parent's. Every other context aliases
+/// the set of its nearest load owner. A body, its parent, and its root may sit in different layers,
+/// and a reader sees them through the chain. Reads take no lock. Writers serialize on `write_mu`,
+/// and the first write for a key wins across the layers.
 pub const LexicalParentMap = struct {
     parents: AtomicSlotMap(?*const anyopaque),
     aliases: AtomicSlotMap(?*const anyopaque),
@@ -47,27 +49,35 @@ pub const LexicalParentMap = struct {
     /// alone contributes about a thousand.
     const initial_capacity: usize = 4096;
 
-    pub fn create(allocator: std.mem.Allocator) error{OutOfMemory}!*LexicalParentMap {
-        var parents = try AtomicSlotMap(?*const anyopaque).init(allocator, initial_capacity);
+    /// A layer over `parent`, or the base layer when `parent` is null.
+    pub fn init(allocator: std.mem.Allocator, parent: ?*const LexicalParentMap) error{OutOfMemory}!LexicalParentMap {
+        var parents = try AtomicSlotMap(?*const anyopaque).initLayered(
+            allocator,
+            initial_capacity,
+            if (parent) |p| &p.parents else null,
+        );
         errdefer parents.deinit();
 
-        var aliases = try AtomicSlotMap(?*const anyopaque).init(allocator, 64);
+        var aliases = try AtomicSlotMap(?*const anyopaque).initLayered(
+            allocator,
+            64,
+            if (parent) |p| &p.aliases else null,
+        );
         errdefer aliases.deinit();
 
-        var roots = try AtomicSlotMap(?*const anyopaque).init(allocator, initial_capacity);
-        errdefer roots.deinit();
+        const roots = try AtomicSlotMap(?*const anyopaque).initLayered(
+            allocator,
+            initial_capacity,
+            if (parent) |p| &p.roots else null,
+        );
 
-        const self = try allocator.create(LexicalParentMap);
-        self.* = .{ .parents = parents, .aliases = aliases, .roots = roots };
-        return self;
+        return .{ .parents = parents, .aliases = aliases, .roots = roots };
     }
 
-    pub fn destroy(self: *LexicalParentMap) void {
-        const allocator = self.parents.allocator;
+    pub fn deinit(self: *LexicalParentMap) void {
         self.parents.deinit();
         self.aliases.deinit();
         self.roots.deinit();
-        allocator.destroy(self);
     }
 
     /// Record `statement` as a root: a top-level statement read from a file.
@@ -134,7 +144,7 @@ pub const LexicalParentMap = struct {
     ///
     /// A `tag` of `0` is a literal its build did not know. Nothing is recorded then, so the body and
     /// everything inside it stay unknown, as the build-time body was. `body` must live for the whole
-    /// process, as every key here must.
+    /// process, because this writes the root's layer and a key must outlive the layer it enters.
     ///
     /// A direct child names the tag rather than `body` as its parent, since comparisons run on the
     /// canonical address and a parent recorded under its alias would never match.
@@ -234,8 +244,8 @@ fn quotationPushAt(body: []const Instruction, line: usize) Instruction {
 }
 
 test "LexicalParentMap: records direct children and walks the chain" {
-    var map = try LexicalParentMap.create(testing.allocator);
-    defer map.destroy();
+    var map = try LexicalParentMap.init(testing.allocator, null);
+    defer map.deinit();
 
     const leaf = [_]Instruction{.{ .op = .{ .call_word = "x" }, .line = 1 }};
     const middle = [_]Instruction{quotationPush(&leaf)};
@@ -255,8 +265,8 @@ test "LexicalParentMap: records direct children and walks the chain" {
 }
 
 test "LexicalParentMap: admits refuses only a known foreign owner" {
-    var map = try LexicalParentMap.create(testing.allocator);
-    defer map.destroy();
+    var map = try LexicalParentMap.init(testing.allocator, null);
+    defer map.deinit();
 
     const reader_body = [_]Instruction{.{ .op = .{ .call_word = "label" }, .line = 1 }};
     const caller_body = [_]Instruction{.{ .op = .{ .call_word = "reader" }, .line = 1 }};
@@ -274,8 +284,8 @@ test "LexicalParentMap: admits refuses only a known foreign owner" {
 }
 
 test "LexicalParentMap: a chain that ends short of a root is unknown" {
-    var map = try LexicalParentMap.create(testing.allocator);
-    defer map.destroy();
+    var map = try LexicalParentMap.init(testing.allocator, null);
+    defer map.deinit();
 
     // `contents` stands for a body a parse-time word consumed as data, so nothing records it as a
     // child and no statement roots it.
@@ -294,8 +304,8 @@ test "LexicalParentMap: a chain that ends short of a root is unknown" {
 }
 
 test "LexicalParentMap: a decoded body stands for its site, and its nested literals follow it" {
-    var map = try LexicalParentMap.create(testing.allocator);
-    defer map.destroy();
+    var map = try LexicalParentMap.init(testing.allocator, null);
+    defer map.deinit();
 
     // Two site rows: a caller's body and, beside it, a reader whose literal was decoded.
     const rows = [_]u64{ 0, 0, 1 };
@@ -324,8 +334,8 @@ test "LexicalParentMap: a decoded body stands for its site, and its nested liter
 }
 
 test "LexicalParentMap: a rebuilt body compares as its source" {
-    var map = try LexicalParentMap.create(testing.allocator);
-    defer map.destroy();
+    var map = try LexicalParentMap.init(testing.allocator, null);
+    defer map.deinit();
 
     const inner = [_]Instruction{.{ .op = .{ .call_word = "x" }, .line = 1 }};
     const source = [_]Instruction{quotationPush(&inner)};
