@@ -912,7 +912,8 @@ pub const Context = struct {
     /// fresh buffer; the main context borrows one owned by main.zig.
     profile_owned: bool = false,
     /// Counters for unique VirtualType/StructType allocations, used by
-    /// --benchmark to report prelude output inventory.
+    /// --benchmark to report prelude output inventory. A definition bumps the counter of its
+    /// state target, so a load from a task counts on its load owner.
     virtual_type_count: usize = 0,
     struct_type_count: usize = 0,
     /// Current source file name for error reporting (defaults to "<repl>")
@@ -1087,7 +1088,9 @@ pub const Context = struct {
     /// The tokenizer restarts at line 1 for each statement. This offset is
     /// the file line where the current statement starts minus 1.
     parse_line_offset: usize = 0,
-    /// Accumulated import records from `use` and `reexport` calls.
+    /// Accumulated import records from `use` and `reexport` calls. A record lands on the state
+    /// target of the import that made it, so a reader walks the ancestors as well. See
+    /// `importHistoryValues`.
     import_history: std.ArrayListUnmanaged(Value) = .{},
     /// Cache of loaded modules keyed by canonical file path.
     /// Prevents redundant loading when multiple files `use` the same module.
@@ -1098,6 +1101,14 @@ pub const Context = struct {
     /// image loader and the AOT build-time passes run before scheduler workers exist and access
     /// the map bare.
     module_cache_value: *value_mod.MutableMap = undefined,
+    /// Whether this context created `module_cache_value` and releases it in `deinit`. The root and
+    /// an analysis child each have a cache of their own. Every other context aliases the cache of
+    /// its nearest load owner.
+    module_cache_owned: bool = false,
+    /// The parent's module cache, which a cache miss on this context's own cache reads through
+    /// before loading. Fixed at construction, and null when the context loads every module itself.
+    /// A hit is reused as is. Nothing is ever written to this cache from here.
+    reused_module_cache: ?*value_mod.MutableMap = null,
     /// Stashed error object from user `throw`, consumed by `recover`.
     /// Arena-allocated; owned by the context arena and freed at context
     /// teardown. The `recover` primitive can clear the slot but does not
@@ -1563,12 +1574,12 @@ pub const Context = struct {
     root_context: ?*Context = null,
     /// Durable-state target for module loads. Null means self.
     ///
-    /// A module load must produce process-lifetime state no matter which
-    /// context runs it: the module cache and the quotation-stamp store retain
-    /// what the load builds. The load entries point this at the root for the
-    /// load's duration, and every writer of teardown-walked or ancestor-walked
-    /// state resolves its target through `stateTarget`. A registry added later
-    /// joins the redirected unit by following the same rule.
+    /// A module load must produce state that outlives the context running it: the module cache and
+    /// the quotation-stamp store retain what the load builds. The load entries point this at the
+    /// nearest load owner for the load's duration. That is the root, or the analysis context a
+    /// task runs under. Every writer of teardown-walked or ancestor-walked state resolves its
+    /// target through `stateTarget`. A registry added later joins the redirected unit by following
+    /// the same rule.
     load_target: ?*Context = null,
     /// RwLock protecting shared registries. Heap-allocated by the root context
     /// and shared by reference to all child task contexts.
@@ -1839,6 +1850,7 @@ pub const Context = struct {
         ctx.module_cache_value = value_mod.MutableMap.create(allocator) catch |err| {
             std.debug.panic("Failed to allocate module cache: {any}", .{err});
         };
+        ctx.module_cache_owned = true;
 
         // Allocate the shared hook registry on the long-lived allocator; the
         // root context frees it in deinit.
@@ -2065,8 +2077,12 @@ pub const Context = struct {
     pub const ChildKind = enum {
         /// A spawned task. It never owns its loads, and it runs under its parent's analysis if any.
         task,
-        /// An analysis context. It owns its loads and is torn down whole.
+        /// An analysis context. It owns its loads and its module cache, and is torn down whole.
+        /// It loads every module it imports itself.
         analysis,
+        /// An analysis context that reuses a module its parent loaded in full mode, on a miss in
+        /// its own cache. It never writes the parent's cache.
+        analysis_reusing,
     };
 
     /// Create a lightweight Context for a spawned task. A task always has a scheduler.
@@ -2139,9 +2155,10 @@ pub const Context = struct {
                     ctx.check_load_epoch = parent.check_load_epoch;
                 }
             },
-            .analysis => {
+            .analysis, .analysis_reusing => {
                 ctx.owns_loads = true;
                 ctx.in_analysis = true;
+                if (child_kind == .analysis_reusing) ctx.reused_module_cache = parent.module_cache_value;
             },
         }
 
@@ -2164,8 +2181,15 @@ pub const Context = struct {
         // resolves the process-lifetime context a module load targets.
         ctx.root_context = parent.root_context orelse parent;
 
-        // Share the parent's module cache so tasks don't re-load from disk.
-        ctx.module_cache_value = parent.module_cache_value;
+        // A context that owns its loads has a module cache of its own, so what it loads dies with
+        // it. Every other context shares the cache of its nearest load owner, so tasks don't
+        // re-load from disk.
+        if (ctx.owns_loads) {
+            ctx.module_cache_value = try value_mod.MutableMap.create(allocator);
+            ctx.module_cache_owned = true;
+        } else {
+            ctx.module_cache_value = parent.module_cache_value;
+        }
 
         // Inherit AOT runtime-image state from the parent so spawned tasks
         // can resolve image-backed literals (typed values, parameters,
@@ -2655,12 +2679,14 @@ pub const Context = struct {
         self.allocator.destroy(self.arena);
         self.dictionary.deinit();
         if (self.body_stores_owned) self.body_stores.destroy();
-        if (self.parent_context == null) {
-            // Release the refcounted module cache before tearing down the
-            // root-owned allocators it sits in front of. Child contexts share
-            // the parent's pointer without retaining and skip this branch.
-            container_backing.releaseValue(.{ .mutable_map = self.module_cache_value });
 
+        // Release the refcounted module cache before tearing down the root-owned allocators it
+        // sits in front of. A context that aliases a load owner's cache never retained it.
+        if (self.module_cache_owned) {
+            container_backing.releaseValue(.{ .mutable_map = self.module_cache_value });
+        }
+
+        if (self.parent_context == null) {
             // Last of the release traffic: a cached literal can sit in any container released
             // above, and its quotation bodies live on the entry this frees.
             if (self.aot_array_literal_cache) |cache| cache.destroy();
@@ -2683,11 +2709,31 @@ pub const Context = struct {
         return self.root_context orelse self;
     }
 
-    /// The context whose durable state writes should land on. Self outside a
-    /// module load; the root while one is running, so everything a load
-    /// produces outlives the executing task.
+    /// The context whose durable state writes should land on. Self outside a module load. The
+    /// nearest load owner while one is running, so everything a load produces outlives the
+    /// executing task.
     pub fn stateTarget(self: *Context) *Context {
         return self.load_target orelse self;
+    }
+
+    /// The nearest context at or above this one that owns its loads. A task never owns its loads,
+    /// so it resolves to the root or to the analysis context it runs under. Every chain ends at the
+    /// root, which owns its loads.
+    ///
+    /// The parent link is const because it points at a spawning context that may itself be a task.
+    /// A load owner outlives every task under it, so the mutable pointer stays valid.
+    pub fn nearestLoadOwner(self: *Context) *Context {
+        var cur: *Context = self;
+        while (!cur.owns_loads) {
+            cur = @constCast(cur.parent_context orelse return cur);
+        }
+        return cur;
+    }
+
+    /// Whether this context's registrations live on the root. False for an analysis child and for
+    /// a task whose load runs against one.
+    pub fn stateTargetIsRoot(self: *Context) bool {
+        return self.stateTarget() == self.rootContext();
     }
 
     /// Debug-only. Assert that a write into a body-keyed store names a key that outlives the layer
@@ -7302,28 +7348,98 @@ pub const Context = struct {
         return null;
     }
 
-    /// Register a built-in type value by name (write-locked).
-    pub fn registerBuiltinTypeValue(self: *Context, name: []const u8, tv: *value_mod.TypeValue) !void {
-        self.acquireSharedWrite();
-        defer self.releaseSharedWrite();
-        try self.builtin_type_values.put(self.allocator, name, tv);
+    /// Look up a built-in type value held by this context itself, without walking the ancestors.
+    ///
+    /// `define-builtin-type` merges only into an entry the state target owns, so it needs to tell
+    /// an own entry from an inherited one.
+    pub fn lookupOwnBuiltinTypeValue(self: *const Context, name: []const u8) ?*value_mod.TypeValue {
+        self.acquireSharedRead();
+        defer self.releaseSharedRead();
+        return self.builtin_type_values.get(name);
     }
 
-    /// Register a struct type by name.
+    /// Register a built-in type under `name` with `desc`, on the state target, and return its type
+    /// value.
+    ///
+    /// The type value is built here, on the target's arena, so an entry without a descriptor cannot
+    /// be represented. `name` must outlive the target.
+    pub fn registerBuiltinTypeValue(
+        self: *Context,
+        name: []const u8,
+        desc: *value_mod.TypeDescriptor,
+    ) !*value_mod.TypeValue {
+        const target = self.stateTarget();
+
+        self.acquireSharedWrite();
+        defer self.releaseSharedWrite();
+
+        const tv = try target.arena.allocator().create(value_mod.TypeValue);
+        tv.* = .{ .name = name, .descriptor = desc };
+        try target.builtin_type_values.put(target.allocator, name, tv);
+        return tv;
+    }
+
+    /// Register a struct type by name on the state target.
     ///
     /// Called when a `struct{ }` is defined so the runtime-image loader can recover the canonical
     /// StructType for a compiled-construction instance.
     pub fn registerStructType(self: *Context, name: []const u8, st: *value_mod.StructType) !void {
+        const target = self.stateTarget();
+
         self.acquireSharedWrite();
         defer self.releaseSharedWrite();
-        try self.struct_types_by_name.put(self.allocator, name, st);
+
+        try target.struct_types_by_name.put(target.allocator, name, st);
     }
 
-    /// Look up a struct type by name, or null if none is registered.
+    /// Look up a struct type by name, walking the ancestors, or null if none is registered.
     pub fn lookupStructTypeByName(self: *const Context, name: []const u8) ?*value_mod.StructType {
         self.acquireSharedRead();
         defer self.releaseSharedRead();
-        return self.struct_types_by_name.get(name);
+
+        if (self.struct_types_by_name.get(name)) |st| return st;
+
+        var ancestor = self.parent_context;
+        while (ancestor) |ctx| : (ancestor = ctx.parent_context) {
+            if (ctx.struct_types_by_name.get(name)) |st| return st;
+        }
+
+        return null;
+    }
+
+    /// Append an import record to the state target's history, under the shared write lock.
+    pub fn appendImportHistory(self: *Context, entry: Value) !void {
+        const target = self.stateTarget();
+
+        self.acquireSharedWrite();
+        defer self.releaseSharedWrite();
+
+        try target.import_history.append(target.allocator, entry);
+    }
+
+    /// Append the import records visible from this context to `out`, the oldest owner first.
+    ///
+    /// A root caller sees the root's records. A context under an analysis child sees the child's
+    /// as well. Each owner's list is read once, so no record repeats. The entries are the owners'
+    /// own values, so the caller retains what it keeps.
+    pub fn importHistoryValues(
+        self: *const Context,
+        alloc: Allocator,
+        out: *std.ArrayListUnmanaged(Value),
+    ) !void {
+        self.acquireSharedRead();
+        defer self.releaseSharedRead();
+
+        try self.appendImportHistoryLocked(alloc, out);
+    }
+
+    fn appendImportHistoryLocked(
+        self: *const Context,
+        alloc: Allocator,
+        out: *std.ArrayListUnmanaged(Value),
+    ) error{OutOfMemory}!void {
+        if (self.parent_context) |parent| try parent.appendImportHistoryLocked(alloc, out);
+        try out.appendSlice(alloc, self.import_history.items);
     }
 
     /// Look up a resource TypeValue by name, creating and registering one if it does not exist yet.
@@ -7367,16 +7483,22 @@ pub const Context = struct {
         return tv;
     }
 
-    /// Allocate a fresh ProtocolDescriptor owned by this Context. Each call
-    /// produces a distinct descriptor with a unique monotonic protocol_id;
-    /// there is no structural interning by name, mirroring the word-identity
-    /// semantics already in place for dispatch IDs. The descriptor body lives
-    /// in the quotation arena. The list header is freed by deinit.
+    /// Allocate a fresh ProtocolDescriptor owned by the state target.
+    ///
+    /// Each call produces a distinct descriptor with a unique monotonic protocol_id. There is no
+    /// structural interning by name, mirroring the word-identity semantics already in place for
+    /// dispatch IDs. The descriptor body lives in the quotation arena, and deinit frees the list
+    /// header.
+    ///
+    /// The id comes from the root's counter. A counter on an analysis child would restart at zero
+    /// and hand out ids the root already used.
     pub fn createProtocolDescriptor(
         self: *Context,
         name: []const u8,
         methods: []const value_mod.Value,
     ) !*value_mod.ProtocolDescriptor {
+        const target = self.stateTarget();
+
         self.acquireSharedWrite();
         defer self.releaseSharedWrite();
 
@@ -7388,22 +7510,25 @@ pub const Context = struct {
         desc.* = .{
             .name = name_dup,
             .methods = methods_dup,
-            .protocol_id = self.next_protocol_id.fetchAdd(1, .monotonic),
+            .protocol_id = self.rootContext().next_protocol_id.fetchAdd(1, .monotonic),
         };
-        try self.protocol_descriptors.append(self.allocator, desc);
+        try target.protocol_descriptors.append(target.allocator, desc);
         return desc;
     }
 
-    /// Allocate a fresh ConstraintCombinator owned by this Context. Each call
-    /// produces a distinct descriptor with a unique monotonic combinator_id;
-    /// there is no structural interning, mirroring createProtocolDescriptor.
-    /// The element list is copied into the quotation arena. The list header is
-    /// freed by deinit.
+    /// Allocate a fresh ConstraintCombinator owned by the state target.
+    ///
+    /// Each call produces a distinct descriptor with a unique monotonic combinator_id from the
+    /// root's counter. There is no structural interning, mirroring createProtocolDescriptor.
+    ///
+    /// The element list is copied into the quotation arena, and deinit frees the list header.
     pub fn createConstraintCombinator(
         self: *Context,
         kind: value_mod.ConstraintCombinator.Kind,
         elements: []const value_mod.ConstraintCombinator.Element,
     ) !*value_mod.ConstraintCombinator {
+        const target = self.stateTarget();
+
         self.acquireSharedWrite();
         defer self.releaseSharedWrite();
 
@@ -7414,9 +7539,9 @@ pub const Context = struct {
         desc.* = .{
             .kind = kind,
             .elements = elements_dup,
-            .combinator_id = self.next_combinator_id.fetchAdd(1, .monotonic),
+            .combinator_id = self.rootContext().next_combinator_id.fetchAdd(1, .monotonic),
         };
-        try self.constraint_combinators.append(self.allocator, desc);
+        try target.constraint_combinators.append(target.allocator, desc);
         return desc;
     }
 
@@ -7551,8 +7676,9 @@ pub const Context = struct {
             .{},
         );
 
-        try self.parameterized_type_descriptors.put(
-            self.allocator,
+        const target = self.stateTarget();
+        try target.parameterized_type_descriptors.put(
+            target.allocator,
             .{ .base = base, .params = owned_params },
             desc,
         );
@@ -7613,7 +7739,7 @@ pub const Context = struct {
         const target = self.stateTarget();
         try target.struct_descriptors.put(
             target.allocator,
-            .{ .fields = fields, .field_types = field_types, .mutable = mutable },
+            .{ .fields = owned_fields, .field_types = owned_field_types, .mutable = mutable },
             desc,
         );
         return desc;
@@ -7659,6 +7785,8 @@ pub const Context = struct {
         members: []const *const value_mod.TypeValue,
     ) !*value_mod.TypeValue {
         std.debug.assert(members.len != 0);
+
+        const target = self.stateTarget();
 
         self.acquireSharedWrite();
         defer self.releaseSharedWrite();
@@ -7715,8 +7843,8 @@ pub const Context = struct {
             .member_types = sorted_members,
         };
 
-        try self.anonymous_union_type_values.put(
-            self.allocator,
+        try target.anonymous_union_type_values.put(
+            target.allocator,
             .{ .members = sorted_members },
             tv,
         );
@@ -12387,6 +12515,11 @@ test "initChild: a failure at any allocation strands nothing" {
     try std.testing.checkAllAllocationFailures(
         std.testing.allocator,
         initChildThenDeinit,
+        .{ &parent, Context.ChildKind.analysis_reusing },
+    );
+    try std.testing.checkAllAllocationFailures(
+        std.testing.allocator,
+        initChildThenDeinit,
         .{ &parent, Context.ChildKind.task },
     );
 
@@ -12517,6 +12650,221 @@ test "a task outside analysis does not inherit check mode" {
 
     try std.testing.expect(!task_ctx.check_mode);
     try std.testing.expectEqual(@as(u32, 0), task_ctx.check_load_epoch);
+}
+
+test "nearestLoadOwner resolves a task to the root or the analysis context it runs under" {
+    var root = Context.init(std.testing.allocator);
+    defer root.deinit();
+
+    var analysis = try Context.initChild(std.testing.allocator, &root, .analysis);
+    defer analysis.deinit();
+
+    var task_ctx = try Context.initChild(std.testing.allocator, &root, .task);
+    defer task_ctx.deinit();
+
+    var under_analysis = try Context.initChild(std.testing.allocator, &analysis, .task);
+    defer under_analysis.deinit();
+
+    var nested = try Context.initChild(std.testing.allocator, &under_analysis, .task);
+    defer nested.deinit();
+
+    try std.testing.expectEqual(&root, root.nearestLoadOwner());
+    try std.testing.expectEqual(&analysis, analysis.nearestLoadOwner());
+    try std.testing.expectEqual(&root, task_ctx.nearestLoadOwner());
+    try std.testing.expectEqual(&analysis, under_analysis.nearestLoadOwner());
+    try std.testing.expectEqual(&analysis, nested.nearestLoadOwner());
+
+    try std.testing.expect(root.stateTargetIsRoot());
+    try std.testing.expect(!analysis.stateTargetIsRoot());
+    try std.testing.expect(!task_ctx.stateTargetIsRoot());
+
+    task_ctx.load_target = task_ctx.nearestLoadOwner();
+    try std.testing.expect(task_ctx.stateTargetIsRoot());
+}
+
+test "a module cache belongs to its load owner and a task shares it" {
+    var root = Context.init(std.testing.allocator);
+    defer root.deinit();
+
+    var analysis = try Context.initChild(std.testing.allocator, &root, .analysis);
+    defer analysis.deinit();
+
+    var reusing = try Context.initChild(std.testing.allocator, &root, .analysis_reusing);
+    defer reusing.deinit();
+
+    var task_ctx = try Context.initChild(std.testing.allocator, &analysis, .task);
+    defer task_ctx.deinit();
+
+    try std.testing.expect(root.module_cache_owned);
+    try std.testing.expect(analysis.module_cache_owned);
+    try std.testing.expect(analysis.module_cache_value != root.module_cache_value);
+    try std.testing.expect(reusing.module_cache_value != root.module_cache_value);
+    try std.testing.expect(reusing.module_cache_value != analysis.module_cache_value);
+
+    try std.testing.expect(!task_ctx.module_cache_owned);
+    try std.testing.expectEqual(analysis.module_cache_value, task_ctx.module_cache_value);
+
+    // Read-through is fixed at construction, by the kind alone.
+    try std.testing.expectEqual(@as(?*value_mod.MutableMap, null), root.reused_module_cache);
+    try std.testing.expectEqual(@as(?*value_mod.MutableMap, null), analysis.reused_module_cache);
+    try std.testing.expectEqual(@as(?*value_mod.MutableMap, null), task_ctx.reused_module_cache);
+    try std.testing.expectEqual(@as(?*value_mod.MutableMap, root.module_cache_value), reusing.reused_module_cache);
+}
+
+test "canonical registries land on the state target and ids mint from the root" {
+    var root = Context.init(std.testing.allocator);
+    defer root.deinit();
+
+    var analysis = try Context.initChild(std.testing.allocator, &root, .analysis);
+    defer analysis.deinit();
+
+    var task_ctx = try Context.initChild(std.testing.allocator, &analysis, .task);
+    defer task_ctx.deinit();
+
+    task_ctx.load_target = task_ctx.nearestLoadOwner();
+    try std.testing.expectEqual(&analysis, task_ctx.stateTarget());
+
+    const first = try task_ctx.createProtocolDescriptor("first", &.{});
+    const second = try root.createProtocolDescriptor("second", &.{});
+    const third = try analysis.createProtocolDescriptor("third", &.{});
+
+    try std.testing.expectEqual(@as(u32, 0), first.protocol_id);
+    try std.testing.expectEqual(@as(u32, 1), second.protocol_id);
+    try std.testing.expectEqual(@as(u32, 2), third.protocol_id);
+    try std.testing.expectEqual(@as(usize, 2), analysis.protocol_descriptors.items.len);
+    try std.testing.expectEqual(@as(usize, 1), root.protocol_descriptors.items.len);
+    try std.testing.expectEqual(@as(usize, 0), task_ctx.protocol_descriptors.items.len);
+    try std.testing.expectEqual(@as(u32, 0), analysis.next_protocol_id.load(.monotonic));
+
+    const cc_first = try task_ctx.createConstraintCombinator(.@"union", &.{});
+    const cc_second = try root.createConstraintCombinator(.intersection, &.{});
+
+    try std.testing.expectEqual(@as(u32, 0), cc_first.combinator_id);
+    try std.testing.expectEqual(@as(u32, 1), cc_second.combinator_id);
+    try std.testing.expectEqual(@as(usize, 1), analysis.constraint_combinators.items.len);
+    try std.testing.expectEqual(@as(usize, 1), root.constraint_combinators.items.len);
+    try std.testing.expectEqual(@as(usize, 0), task_ctx.constraint_combinators.items.len);
+
+    const fixnum_tv = root.lookupBuiltinTypeValue("fixnum").?;
+    const string_tv = root.lookupBuiltinTypeValue("string").?;
+    const union_tv = try task_ctx.getOrCreateAnonymousUnionTypeValue(&.{ fixnum_tv, string_tv });
+
+    try std.testing.expectEqual(@as(u32, 1), analysis.anonymous_union_type_values.count());
+    try std.testing.expectEqual(@as(u32, 0), root.anonymous_union_type_values.count());
+    try std.testing.expectEqual(@as(u32, 0), task_ctx.anonymous_union_type_values.count());
+    try std.testing.expectEqual(union_tv, try analysis.getOrCreateAnonymousUnionTypeValue(&.{ string_tv, fixnum_tv }));
+    try std.testing.expectEqual(@as(?*value_mod.TypeValue, null), root.lookupAnonymousUnionTypeValue(&.{ fixnum_tv, string_tv }));
+
+    var point = value_mod.StructType{ .name = "point", .fields = &.{} };
+    try task_ctx.registerStructType("point", &point);
+
+    try std.testing.expect(analysis.struct_types_by_name.contains("point"));
+    try std.testing.expect(!root.struct_types_by_name.contains("point"));
+    try std.testing.expect(!task_ctx.struct_types_by_name.contains("point"));
+    try std.testing.expectEqual(@as(?*value_mod.StructType, &point), task_ctx.lookupStructTypeByName("point"));
+    try std.testing.expectEqual(@as(?*value_mod.StructType, null), root.lookupStructTypeByName("point"));
+
+    const desc = try value_mod.createBuiltinTypeDescriptor(analysis.arena.allocator(), .{});
+    const widget_tv = try task_ctx.registerBuiltinTypeValue("widget", desc);
+
+    try std.testing.expectEqual(desc, widget_tv.descriptor.?);
+    try std.testing.expectEqual(@as(?*value_mod.TypeValue, widget_tv), analysis.lookupOwnBuiltinTypeValue("widget"));
+    try std.testing.expectEqual(@as(?*value_mod.TypeValue, null), root.lookupBuiltinTypeValue("widget"));
+    try std.testing.expectEqual(@as(?*value_mod.TypeValue, widget_tv), task_ctx.lookupBuiltinTypeValue("widget"));
+}
+
+fn importHistoryFixnums(ctx: *Context, out: []i64) !usize {
+    var records: std.ArrayListUnmanaged(Value) = .{};
+    defer records.deinit(std.testing.allocator);
+
+    try ctx.importHistoryValues(std.testing.allocator, &records);
+
+    for (records.items, 0..) |record, i| out[i] = record.fixnum;
+    return records.items.len;
+}
+
+test "import history records on the state target and a reader walks the ancestors" {
+    var root = Context.init(std.testing.allocator);
+    defer root.deinit();
+
+    var analysis = try Context.initChild(std.testing.allocator, &root, .analysis);
+    defer analysis.deinit();
+
+    var task_ctx = try Context.initChild(std.testing.allocator, &analysis, .task);
+    defer task_ctx.deinit();
+
+    var root_task = try Context.initChild(std.testing.allocator, &root, .task);
+    defer root_task.deinit();
+
+    try root.appendImportHistory(.{ .fixnum = 10 });
+
+    task_ctx.load_target = task_ctx.nearestLoadOwner();
+    try task_ctx.appendImportHistory(.{ .fixnum = 20 });
+    task_ctx.load_target = null;
+
+    root_task.load_target = root_task.nearestLoadOwner();
+    try root_task.appendImportHistory(.{ .fixnum = 30 });
+    root_task.load_target = null;
+
+    try std.testing.expectEqual(@as(usize, 2), root.import_history.items.len);
+    try std.testing.expectEqual(@as(usize, 1), analysis.import_history.items.len);
+    try std.testing.expectEqual(@as(usize, 0), task_ctx.import_history.items.len);
+    try std.testing.expectEqual(@as(usize, 0), root_task.import_history.items.len);
+
+    var seen: [8]i64 = undefined;
+
+    // A root caller sees each record once, and nothing from a child.
+    try std.testing.expectEqual(@as(usize, 2), try importHistoryFixnums(&root, &seen));
+    try std.testing.expectEqualSlices(i64, &.{ 10, 30 }, seen[0..2]);
+
+    // A context under an analysis child sees the root's records first, then the child's.
+    try std.testing.expectEqual(@as(usize, 3), try importHistoryFixnums(&task_ctx, &seen));
+    try std.testing.expectEqualSlices(i64, &.{ 10, 30, 20 }, seen[0..3]);
+    try std.testing.expectEqual(@as(usize, 3), try importHistoryFixnums(&analysis, &seen));
+
+    try std.testing.expectEqual(@as(usize, 2), try importHistoryFixnums(&root_task, &seen));
+}
+
+fn appendHistoryThread(ctx: *Context, count: i64) void {
+    var i: i64 = 0;
+    while (i < count) : (i += 1) {
+        ctx.appendImportHistory(.{ .fixnum = i }) catch @panic("out of memory");
+    }
+}
+
+test "an import history read is consistent against a concurrent append" {
+    var root = Context.init(std.testing.allocator);
+    defer root.deinit();
+
+    var analysis = try Context.initChild(std.testing.allocator, &root, .analysis);
+    defer analysis.deinit();
+
+    const total: i64 = 2000;
+    const writer = try std.Thread.spawn(.{}, appendHistoryThread, .{ &analysis, total });
+
+    var floor: usize = 0;
+    var rounds: usize = 0;
+    while (rounds < 400) : (rounds += 1) {
+        var records: std.ArrayListUnmanaged(Value) = .{};
+        defer records.deinit(std.testing.allocator);
+
+        try analysis.importHistoryValues(std.testing.allocator, &records);
+
+        try std.testing.expect(records.items.len >= floor);
+        floor = records.items.len;
+
+        for (records.items, 0..) |record, i| {
+            try std.testing.expectEqual(@as(i64, @intCast(i)), record.fixnum);
+        }
+    }
+
+    writer.join();
+
+    var records: std.ArrayListUnmanaged(Value) = .{};
+    defer records.deinit(std.testing.allocator);
+
+    try analysis.importHistoryValues(std.testing.allocator, &records);
+    try std.testing.expectEqual(@as(usize, @intCast(total)), records.items.len);
 }
 
 test "stack operations through context" {

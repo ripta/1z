@@ -1290,7 +1290,10 @@ pub const LoadGuard = struct {
     }
 };
 
-/// Open a load: take the lock, then redirect durable state to the root.
+/// Open a load: take the lock, then redirect durable state to the nearest load owner.
+///
+/// The owner is the root, or the analysis context the load runs under. What the load builds then
+/// lives as long as that owner and dies with it.
 ///
 /// Callers must read `ctx.quotationAllocator()` only after this returns. It resolves through
 /// `stateTarget`, so an allocator taken beforehand is the executing context's arena and
@@ -1298,8 +1301,27 @@ pub const LoadGuard = struct {
 pub fn beginLoad(ctx: *Context) anyerror!LoadGuard {
     try acquireLoadLock(ctx);
     const saved_target = ctx.load_target;
-    ctx.load_target = ctx.rootContext();
+    ctx.load_target = ctx.nearestLoadOwner();
     return .{ .ctx = ctx, .saved_target = saved_target };
+}
+
+/// The module a load owner reuses from its parent for `resolved`, or null.
+///
+/// Only the owner's own cache reads through. A cache the caller passed in, such as one a program
+/// built, is probed as it is. The parent's cache is read under its mutex and never written.
+fn reusedModule(ctx: *Context, cache: *value_mod.MutableMap, resolved: []const u8) ?Value {
+    const owner = ctx.nearestLoadOwner();
+    if (cache != owner.module_cache_value) return null;
+
+    const parent_cache = owner.reused_module_cache orelse return null;
+
+    parent_cache.header.lock();
+    defer parent_cache.header.unlock();
+
+    const hit = parent_cache.map.get(resolved) orelse return null;
+    if (hit != .module) return null;
+
+    return hit;
 }
 
 /// load-file ( cache filename -- module )
@@ -1350,6 +1372,11 @@ fn nativeLoadFile(ctx: *Context) anyerror!void {
             try ctx.stack.push(hit);
             return;
         }
+    }
+
+    if (reusedModule(ctx, cache, resolved)) |hit| {
+        try ctx.stack.push(hit);
+        return;
     }
 
     const resolved_module = classifyResolved(resolved) orelse {
@@ -1490,6 +1517,11 @@ fn nativeLoadCheckFile(ctx: *Context) anyerror!void {
         return;
     }
 
+    if (reusedModule(ctx, cache, resolved)) |hit| {
+        try ctx.stack.push(hit);
+        return;
+    }
+
     const prev_check_mode = ctx.check_mode;
     ctx.enterCheckMode();
     defer ctx.exitCheckMode(prev_check_mode);
@@ -1529,6 +1561,12 @@ fn nativeCachedModule(ctx: *Context) anyerror!void {
             return;
         }
     }
+
+    if (reusedModule(ctx, cache, resolved_str.bytes)) |hit| {
+        try ctx.stack.push(hit);
+        return;
+    }
+
     try ctx.stack.push(.{ .boolean = false });
 }
 
@@ -1614,8 +1652,8 @@ fn nativeRecordImport(ctx: *Context) anyerror!void {
     // The popped reference is released here. The entry holds its own owned copy.
     defer container_backing.releaseValue(words_or_f);
 
-    // Entries live as long as the context and may be copied into containers that outlive a task,
-    // so every field is an owned backing on the shared allocator.
+    // Entries live as long as the state target and may be copied into containers that outlive a
+    // task, so every field is an owned backing on the shared allocator.
     var builder = try helpers.ArrayBuilder.init(ctx.allocator, 6);
     errdefer builder.deinit();
 
@@ -1631,7 +1669,7 @@ fn nativeRecordImport(ctx: *Context) anyerror!void {
     builder.items[5] = try helpers.ownedStringCopy(ctx.allocator, resolved_path);
 
     const entry = try builder.finish();
-    ctx.import_history.append(ctx.allocator, entry) catch |e| {
+    ctx.appendImportHistory(entry) catch |e| {
         container_backing.releaseValue(entry);
         return e;
     };
@@ -1663,10 +1701,16 @@ fn ownedWordSelection(alloc: std.mem.Allocator, words_or_f: Value) !Value {
 }
 
 // ( -- array )
-// Return the accumulated import history as an array of arrays.
+// Return the accumulated import history as an array of arrays. The records of the load owners above
+// this context come first, so a root caller sees each record once.
 fn nativeImportHistory(ctx: *Context) anyerror!void {
-    // The entries stay owned by the context. The result holds retained references to them.
-    try helpers.pushCopiedArray(ctx, ctx.allocator, ctx.import_history.items);
+    var records: std.ArrayListUnmanaged(Value) = .{};
+    defer records.deinit(ctx.allocator);
+
+    try ctx.importHistoryValues(ctx.allocator, &records);
+
+    // The entries stay owned by their contexts. The result holds retained references to them.
+    try helpers.pushCopiedArray(ctx, ctx.allocator, records.items);
 }
 
 // ( -- file line column )
@@ -2275,4 +2319,308 @@ test "resolveLoadPath returns null without embed when stdlib_path is empty" {
 
     const alloc = ctx.quotationAllocator();
     try std.testing.expectEqual(@as(?[]const u8, null), resolveLoadPath(&ctx, "strings", alloc));
+}
+
+test "beginLoad targets the nearest load owner" {
+    var root = Context.init(std.testing.allocator);
+    defer root.deinit();
+
+    var analysis = try Context.initChild(std.testing.allocator, &root, .analysis);
+    defer analysis.deinit();
+
+    var task_under_root = try Context.initChild(std.testing.allocator, &root, .task);
+    defer task_under_root.deinit();
+
+    var task_under_analysis = try Context.initChild(std.testing.allocator, &analysis, .task);
+    defer task_under_analysis.deinit();
+
+    {
+        const guard = try beginLoad(&task_under_root);
+        defer guard.end();
+
+        try std.testing.expectEqual(&root, task_under_root.stateTarget());
+    }
+    try std.testing.expectEqual(@as(?*Context, null), task_under_root.load_target);
+
+    {
+        const guard = try beginLoad(&task_under_analysis);
+        defer guard.end();
+
+        try std.testing.expectEqual(&analysis, task_under_analysis.stateTarget());
+        try std.testing.expectEqual(
+            analysis.arena.allocator().ptr,
+            task_under_analysis.quotationAllocator().ptr,
+        );
+    }
+    try std.testing.expectEqual(@as(?*Context, null), task_under_analysis.load_target);
+
+    {
+        const guard = try beginLoad(&analysis);
+        defer guard.end();
+
+        try std.testing.expectEqual(&analysis, analysis.stateTarget());
+    }
+}
+
+fn writeModuleFile(tmp: *std.testing.TmpDir, name: []const u8, source: []const u8) ![]u8 {
+    try tmp.dir.writeFile(.{ .sub_path = name, .data = source });
+    return tmp.dir.realpathAlloc(std.testing.allocator, name);
+}
+
+fn loadFileThrough(ctx: *Context, path: []const u8) !void {
+    try ctx.stack.push(.{ .mutable_map = ctx.module_cache_value });
+    try ctx.stack.push(value_mod.stringValue(path));
+    try nativeLoadFile(ctx);
+
+    const module = try ctx.stack.pop();
+    defer container_backing.releaseValue(module);
+    try std.testing.expect(module == .module);
+}
+
+test "a load from an analysis child lands its types, protocols, and cache entry on the child" {
+    var root = Context.initWithPrelude(std.testing.allocator);
+    defer root.deinit();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const path = try writeModuleFile(&tmp, "shapes.1z", "pt: struct{ x y } ;\nshapely: protocol{ area: } ;\n");
+    defer std.testing.allocator.free(path);
+
+    const root_protocols = root.protocol_descriptors.items.len;
+    const root_next_id = root.next_protocol_id.load(.monotonic);
+
+    var analysis = try Context.initChild(std.testing.allocator, &root, .analysis);
+    defer analysis.deinit();
+
+    try loadFileThrough(&analysis, path);
+
+    try std.testing.expect(analysis.struct_types_by_name.contains("pt"));
+    try std.testing.expect(root.lookupStructTypeByName("pt") == null);
+    try std.testing.expect(analysis.lookupStructTypeByName("pt") != null);
+
+    try std.testing.expectEqual(@as(usize, 1), analysis.protocol_descriptors.items.len);
+    try std.testing.expectEqual(root_protocols, root.protocol_descriptors.items.len);
+    try std.testing.expectEqual(root_next_id, analysis.protocol_descriptors.items[0].protocol_id);
+    try std.testing.expectEqual(root_next_id + 1, root.next_protocol_id.load(.monotonic));
+    try std.testing.expectEqual(@as(u32, 0), analysis.next_protocol_id.load(.monotonic));
+
+    try std.testing.expectEqual(@as(u32, 1), analysis.module_cache_value.map.count());
+    try std.testing.expectEqual(@as(u32, 0), root.module_cache_value.map.count());
+}
+
+test "a load from a task lands on the context it runs under" {
+    var root = Context.initWithPrelude(std.testing.allocator);
+    defer root.deinit();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const root_path = try writeModuleFile(&tmp, "on-root.1z", "gizmo: struct{ a } ;\n");
+    defer std.testing.allocator.free(root_path);
+
+    const child_path = try writeModuleFile(&tmp, "on-child.1z", "gadget: struct{ b } ;\n");
+    defer std.testing.allocator.free(child_path);
+
+    var analysis = try Context.initChild(std.testing.allocator, &root, .analysis);
+    defer analysis.deinit();
+
+    const root_types_before = root.struct_type_count;
+
+    {
+        var task_ctx = try Context.initChild(std.testing.allocator, &root, .task);
+        defer task_ctx.deinit();
+
+        try loadFileThrough(&task_ctx, root_path);
+        try std.testing.expectEqual(@as(usize, 0), task_ctx.struct_type_count);
+    }
+
+    {
+        var task_ctx = try Context.initChild(std.testing.allocator, &analysis, .task);
+        defer task_ctx.deinit();
+
+        try loadFileThrough(&task_ctx, child_path);
+        try std.testing.expectEqual(@as(u32, 0), task_ctx.struct_types_by_name.count());
+        try std.testing.expectEqual(@as(usize, 0), task_ctx.struct_type_count);
+    }
+
+    try std.testing.expectEqual(root_types_before + 1, root.struct_type_count);
+    try std.testing.expectEqual(@as(usize, 1), analysis.struct_type_count);
+
+    try std.testing.expect(root.struct_types_by_name.contains("gizmo"));
+    try std.testing.expect(!analysis.struct_types_by_name.contains("gizmo"));
+    try std.testing.expect(analysis.struct_types_by_name.contains("gadget"));
+    try std.testing.expect(!root.struct_types_by_name.contains("gadget"));
+}
+
+fn putCachedModule(owner: *Context, cache: *value_mod.MutableMap, key: []const u8, name: []const u8) !*Module {
+    const module = try owner.arena.allocator().create(Module);
+    module.* = .{ .name = name, .words = .{} };
+
+    const cache_alloc = cache.header.allocator;
+    try cache.map.put(cache_alloc, try cache_alloc.dupe(u8, key), .{ .module = module });
+
+    return module;
+}
+
+fn cachedModuleThrough(ctx: *Context, key: []const u8) !Value {
+    try ctx.stack.push(.{ .mutable_map = ctx.module_cache_value });
+    try ctx.stack.push(value_mod.stringValue(key));
+    try nativeCachedModule(ctx);
+
+    return ctx.stack.pop();
+}
+
+test "a cache miss reads through to the parent's modules only on a reusing child" {
+    var root = Context.init(std.testing.allocator);
+    defer root.deinit();
+
+    const shared = try putCachedModule(&root, root.module_cache_value, "/lib/shared.1z", "shared");
+
+    var reusing = try Context.initChild(std.testing.allocator, &root, .analysis_reusing);
+    defer reusing.deinit();
+
+    var isolated = try Context.initChild(std.testing.allocator, &root, .analysis);
+    defer isolated.deinit();
+
+    const hit = try cachedModuleThrough(&reusing, "/lib/shared.1z");
+    try std.testing.expect(hit == .module);
+    try std.testing.expectEqual(shared, hit.module);
+
+    const miss = try cachedModuleThrough(&isolated, "/lib/shared.1z");
+    try std.testing.expectEqual(false, miss.boolean);
+
+    const absent = try cachedModuleThrough(&reusing, "/lib/absent.1z");
+    try std.testing.expectEqual(false, absent.boolean);
+
+    try std.testing.expectEqual(@as(u32, 0), reusing.module_cache_value.map.count());
+    try std.testing.expectEqual(@as(u32, 1), root.module_cache_value.map.count());
+}
+
+test "a reusing child loads a missing module itself and never writes the parent's cache" {
+    var root = Context.initWithPrelude(std.testing.allocator);
+    defer root.deinit();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const path = try writeModuleFile(&tmp, "fresh.1z", "fresh-point: struct{ x } ;\n");
+    defer std.testing.allocator.free(path);
+
+    var reusing = try Context.initChild(std.testing.allocator, &root, .analysis_reusing);
+    defer reusing.deinit();
+
+    try loadFileThrough(&reusing, path);
+
+    try std.testing.expectEqual(@as(u32, 1), reusing.module_cache_value.map.count());
+    try std.testing.expectEqual(@as(u32, 0), root.module_cache_value.map.count());
+
+    const shared = try putCachedModule(&root, root.module_cache_value, path, "parent-copy");
+
+    // The path is now cached in the parent, so the child's own copy is found first.
+    const own = try cachedModuleThrough(&reusing, path);
+    try std.testing.expect(own == .module);
+    try std.testing.expect(own.module != shared);
+}
+
+fn loadThrough(ctx: *Context, comptime native: fn (*Context) anyerror!void, path: []const u8) !Value {
+    try ctx.stack.push(.{ .mutable_map = ctx.module_cache_value });
+    try ctx.stack.push(value_mod.stringValue(path));
+    try native(ctx);
+
+    return ctx.stack.pop();
+}
+
+test "load-file and load-check-file reuse the parent's module on a reusing child" {
+    var root = Context.init(std.testing.allocator);
+    defer root.deinit();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const path = try writeModuleFile(&tmp, "shared.1z", "shared-point: struct{ x } ;\n");
+    defer std.testing.allocator.free(path);
+
+    const shared = try putCachedModule(&root, root.module_cache_value, path, "shared");
+
+    var reusing = try Context.initChild(std.testing.allocator, &root, .analysis_reusing);
+    defer reusing.deinit();
+
+    const loaded = try loadThrough(&reusing, nativeLoadFile, path);
+    try std.testing.expect(loaded == .module);
+    try std.testing.expectEqual(shared, loaded.module);
+
+    const checked = try loadThrough(&reusing, nativeLoadCheckFile, path);
+    try std.testing.expect(checked == .module);
+    try std.testing.expectEqual(shared, checked.module);
+
+    try std.testing.expectEqual(@as(u32, 0), reusing.module_cache_value.map.count());
+    try std.testing.expectEqual(@as(u32, 1), root.module_cache_value.map.count());
+    try std.testing.expectEqual(@as(u32, 0), reusing.struct_types_by_name.count());
+    try std.testing.expectEqual(@as(usize, 0), reusing.struct_type_count);
+}
+
+test "load-file and load-check-file load a missing module on an isolated child" {
+    var root = Context.initWithPrelude(std.testing.allocator);
+    defer root.deinit();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const path = try writeModuleFile(&tmp, "shared.1z", "iso-point: struct{ x } ;\n");
+    defer std.testing.allocator.free(path);
+
+    const shared = try putCachedModule(&root, root.module_cache_value, path, "shared");
+
+    var isolated = try Context.initChild(std.testing.allocator, &root, .analysis);
+    defer isolated.deinit();
+
+    const loaded = try loadThrough(&isolated, nativeLoadFile, path);
+    try std.testing.expect(loaded == .module);
+    try std.testing.expect(loaded.module != shared);
+    try std.testing.expectEqual(@as(u32, 1), isolated.module_cache_value.map.count());
+}
+
+test "reload-file never reads through to the parent" {
+    var root = Context.initWithPrelude(std.testing.allocator);
+    defer root.deinit();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const path = try writeModuleFile(&tmp, "again.1z", "again-point: struct{ x } ;\n");
+    defer std.testing.allocator.free(path);
+
+    const shared = try putCachedModule(&root, root.module_cache_value, path, "parent-copy");
+
+    var reusing = try Context.initChild(std.testing.allocator, &root, .analysis_reusing);
+    defer reusing.deinit();
+
+    const reloaded = try loadThrough(&reusing, nativeReloadFile, path);
+    try std.testing.expect(reloaded == .module);
+    try std.testing.expect(reloaded.module != shared);
+
+    try std.testing.expectEqual(@as(u32, 1), reusing.module_cache_value.map.count());
+    try std.testing.expectEqual(@as(u32, 1), root.module_cache_value.map.count());
+    try std.testing.expectEqual(shared, root.module_cache_value.map.get(path).?.module);
+}
+
+test "a cache the program built is probed as it is" {
+    var root = Context.init(std.testing.allocator);
+    defer root.deinit();
+
+    _ = try putCachedModule(&root, root.module_cache_value, "/lib/shared.1z", "shared");
+
+    var reusing = try Context.initChild(std.testing.allocator, &root, .analysis_reusing);
+    defer reusing.deinit();
+
+    const other = try value_mod.MutableMap.create(std.testing.allocator);
+    defer container_backing.releaseValue(.{ .mutable_map = other });
+
+    try reusing.stack.push(.{ .mutable_map = other });
+    try reusing.stack.push(value_mod.stringValue("/lib/shared.1z"));
+    try nativeCachedModule(&reusing);
+
+    const result = try reusing.stack.pop();
+    try std.testing.expectEqual(false, result.boolean);
 }

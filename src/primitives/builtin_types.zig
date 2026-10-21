@@ -44,10 +44,11 @@ pub const registry_entries = [_]RegistryEntry{
 /// Invoked through the descriptor-driven `;` protocol: the descriptor's `define:` quotation
 /// calls this native after `;` has pushed name, descriptor, and the collected markers array.
 ///
-/// If a TypeValue for this name was pre-created by Context.initBuiltinTypeValues(), the existing
-/// object is augmented with the descriptor, preserving pointer identity. Otherwise a new TypeValue
-/// is allocated and registered. The resulting word is defined as a parse-time, const, typed
-/// compound that pushes the TypeValue literal.
+/// If the state target holds a TypeValue for this name, such as one pre-created by
+/// Context.initBuiltinTypeValues(), its descriptor is augmented, preserving pointer identity. If
+/// only an ancestor holds one, the merge is a no-op and the word pushes that shared value.
+/// Otherwise a new TypeValue is allocated and registered on the state target. The resulting word
+/// is defined as a parse-time, const, typed compound that pushes the TypeValue literal.
 fn nativeDefineBuiltinType(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
 
@@ -82,22 +83,15 @@ fn nativeDefineBuiltinType(ctx: *Context) anyerror!void {
         },
     };
 
-    const tv = if (ctx.lookupBuiltinTypeValue(name)) |existing| blk: {
-        if (existing.descriptor) |existing_desc| {
-            applyDescriptorMerge(existing_desc, source_map);
-            break :blk existing;
-        }
+    // Only the state target's own entry is merged. An entry an ancestor owns is shared with the
+    // root and left as it is, so analyzing the prelude does not change flags the root already has.
+    const tv = if (ctx.stateTarget().lookupOwnBuiltinTypeValue(name)) |own| blk: {
+        applyDescriptorMerge(own.descriptor.?, source_map);
+        break :blk own;
+    } else if (ctx.lookupBuiltinTypeValue(name)) |inherited| inherited else blk: {
         const new_desc = try value_mod.createBuiltinTypeDescriptor(alloc, .{});
         applyDescriptorMerge(new_desc, source_map);
-        existing.descriptor = new_desc;
-        break :blk existing;
-    } else blk: {
-        const new_desc = try value_mod.createBuiltinTypeDescriptor(alloc, .{});
-        applyDescriptorMerge(new_desc, source_map);
-        const new_tv = try alloc.create(value_mod.TypeValue);
-        new_tv.* = .{ .name = name, .descriptor = new_desc };
-        try ctx.registerBuiltinTypeValue(name, new_tv);
-        break :blk new_tv;
+        break :blk try ctx.registerBuiltinTypeValue(name, new_desc);
     };
 
     try ctx.registerTypeDescriptor(name, tv.descriptor.?);
@@ -736,4 +730,75 @@ test "descriptor-variants-raw returns name/type pair arrays for enums" {
     const second = result.array.items[1];
     try testing.expectEqualStrings("blue", second.array.items[0].symbol.bytes);
     try testing.expect(second.array.items[1].type_val == unit_tv);
+}
+
+fn pushDefineBuiltinArgs(ctx: *Context, name: []const u8, flag: ?[]const u8) !void {
+    const alloc = ctx.allocator;
+
+    try ctx.stack.push(value_mod.symbolValue(name));
+
+    const source = try MutableMap.create(alloc);
+    if (flag) |key| {
+        try source.map.put(alloc, try alloc.dupe(u8, key), .{ .boolean = true });
+    }
+    try ctx.stack.pushMoved(.{ .mutable_map = source });
+
+    const markers = try value_mod.Array.createCopyFrom(alloc, &.{});
+    try ctx.stack.pushMoved(.{ .array = markers });
+}
+
+test "define-builtin-type: an ancestor's entry is shared and left as it is" {
+    var root = Context.init(testing.allocator);
+    defer root.deinit();
+
+    var child = try Context.initChild(testing.allocator, &root, .analysis);
+    defer child.deinit();
+
+    const shared = root.lookupBuiltinTypeValue("fixnum").?;
+    try testing.expect(!shared.descriptor.?.mutable);
+
+    try pushDefineBuiltinArgs(&child, "fixnum", "mutable");
+    try nativeDefineBuiltinType(&child);
+
+    try testing.expectEqual(shared, root.lookupBuiltinTypeValue("fixnum").?);
+    try testing.expectEqual(shared, child.lookupBuiltinTypeValue("fixnum").?);
+    try testing.expect(!shared.descriptor.?.mutable);
+    try testing.expectEqual(@as(?*value_mod.TypeValue, null), child.lookupOwnBuiltinTypeValue("fixnum"));
+    try testing.expectEqual(@as(u32, 0), child.builtin_type_values.count());
+}
+
+test "define-builtin-type: a new type registers on the state target only" {
+    var root = Context.init(testing.allocator);
+    defer root.deinit();
+
+    var child = try Context.initChild(testing.allocator, &root, .analysis);
+    defer child.deinit();
+
+    try pushDefineBuiltinArgs(&child, "widget", "mutable");
+    try nativeDefineBuiltinType(&child);
+
+    const own = child.lookupOwnBuiltinTypeValue("widget").?;
+    try testing.expect(own.descriptor.?.mutable);
+    try testing.expectEqual(@as(?*value_mod.TypeValue, null), root.lookupOwnBuiltinTypeValue("widget"));
+    try testing.expectEqual(@as(?*value_mod.TypeValue, null), root.lookupBuiltinTypeValue("widget"));
+}
+
+test "define-builtin-type: a load targeting the root merges into the root's entry" {
+    var root = Context.init(testing.allocator);
+    defer root.deinit();
+
+    var child = try Context.initChild(testing.allocator, &root, .task);
+    defer child.deinit();
+
+    child.load_target = child.nearestLoadOwner();
+    try testing.expectEqual(&root, child.stateTarget());
+
+    const own = root.lookupOwnBuiltinTypeValue("fixnum").?;
+    try testing.expect(!own.descriptor.?.mutable);
+
+    try pushDefineBuiltinArgs(&child, "fixnum", "mutable");
+    try nativeDefineBuiltinType(&child);
+
+    try testing.expectEqual(own, root.lookupOwnBuiltinTypeValue("fixnum").?);
+    try testing.expect(own.descriptor.?.mutable);
 }

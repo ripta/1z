@@ -246,7 +246,7 @@ fn nativeDefineFfiStruct(ctx: *Context) anyerror!void {
         .name = name,
         .inner_type = "byte-array",
     };
-    ctx.virtual_type_count += 1;
+    ctx.stateTarget().virtual_type_count += 1;
     layout.vtype = vtype;
 
     // Populate the FfiStructData payload now that we have the field

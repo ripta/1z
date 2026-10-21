@@ -39,7 +39,16 @@ pub const registry_entries = [_]RegistryEntry{
 
 /// ( key quot -- ) Register a hook quotation for a lifecycle event.
 /// The key can be a symbol or a string.
+///
+/// The registry is shared with the root, and it outlives any other state target. A quotation
+/// registered from an analysis child or a task load under one would dangle after teardown, so the
+/// call raises unless the state target is the root.
 fn nativeRegisterHook(ctx: *Context) anyerror!void {
+    if (!ctx.stateTargetIsRoot()) {
+        ctx.pending_error_message = "register-global-hook cannot run off the root context, since the registry outlives it";
+        return error.InvalidArgument;
+    }
+
     // The popped owning reference transfers into the registry entry; every
     // failure path below releases it instead.
     const pc = try helpers.popQuotation(ctx);
@@ -395,4 +404,22 @@ test "hasScopedHooks reports true with a non-empty array binding" {
     const arr = try value_mod.Array.fromOwnedSlice(alloc, items);
     try ctx.setParameterInTopFrame("word-defined-hooks", .{ .array = arr });
     try std.testing.expect(hasScopedHooks(&ctx, "word-defined-hooks"));
+}
+
+test "register-global-hook raises when the state target is not the root" {
+    var root = context_mod.Context.init(std.testing.allocator);
+    defer root.deinit();
+
+    var child = try context_mod.Context.initChild(std.testing.allocator, &root, .analysis);
+    defer child.deinit();
+
+    try std.testing.expectError(error.InvalidArgument, nativeRegisterHook(&child));
+    try std.testing.expect(child.pending_error_message != null);
+    try std.testing.expectEqual(@as(u32, 0), root.hook_registry.hooks.count());
+
+    var task_ctx = try context_mod.Context.initChild(std.testing.allocator, &root, .task);
+    defer task_ctx.deinit();
+
+    try std.testing.expectError(error.InvalidArgument, nativeRegisterHook(&task_ctx));
+    try std.testing.expectEqual(@as(u32, 0), root.hook_registry.hooks.count());
 }
