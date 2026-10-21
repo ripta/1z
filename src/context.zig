@@ -1639,13 +1639,18 @@ pub const Context = struct {
     /// can learn that the file it is about to read is already being read further up the chain.
     /// Serialized by `load_lock`, which every load holds for its whole duration.
     module_load_record: *ModuleLoadRecord = undefined,
-    /// Process-shared intern table for `;` binding names. Heap-allocated by the root context and
-    /// shared by pointer to all child task contexts.
+    /// Intern table for `;` binding names. The root's table lives for the process. A context that
+    /// owns its loads layers a table of its own over its parent's, and every other context aliases
+    /// the table of its nearest load owner. See `BindingNameStore`.
     ///
     /// The frame key, `WordDefinition.name`, and a defined marker's name all borrow the interned
-    /// slice, and an entry is never removed, so a borrowed key outlives every frame. Guarded by
-    /// `shared_lock` on the write side, which `defineBinding` holds for the definition anyway.
+    /// slice, and an entry is never removed, so a borrowed key outlives every frame that sits at or
+    /// under the owning context. Guarded by `shared_lock` on the write side, which `defineBinding`
+    /// holds for the definition anyway.
     binding_names: *BindingNameStore = undefined,
+    /// Whether this context created `binding_names` and destroys it in `deinit`. An alias is never
+    /// owned, so a task's teardown leaves its load owner's table intact.
+    binding_names_owned: bool = false,
 
     /// Turn check mode on, starting a new check-mode load when it was off. A caller already in check
     /// mode keeps its epoch, so a nested load shares the outer load's identity. The caller saves
@@ -1884,11 +1889,12 @@ pub const Context = struct {
             std.debug.panic("Failed to allocate module load record: {any}", .{err});
         };
 
-        // Allocate the shared binding-name intern table on the long-lived allocator; the root
+        // Allocate the root's binding-name intern table on the long-lived allocator; the root
         // context frees it in deinit.
-        ctx.binding_names = BindingNameStore.create(allocator) catch |err| {
+        ctx.binding_names = BindingNameStore.create(allocator, null) catch |err| {
             std.debug.panic("Failed to allocate binding name store: {any}", .{err});
         };
+        ctx.binding_names_owned = true;
 
         // Push base parameter frame so scoped hooks can be registered at top level.
         ctx.parameter_env.append(allocator, .{}) catch |err| {
@@ -2173,6 +2179,17 @@ pub const Context = struct {
             ctx.body_stores = parent.body_stores;
         }
 
+        // The binding-name table follows the same rule. A load owner layers a table of its own over
+        // its parent's, so a name first bound under it dies with it. Every other context aliases its
+        // nearest load owner's table, which its parent already reads. Aliased, never retained: that
+        // owner destroys it.
+        if (ctx.owns_loads) {
+            ctx.binding_names = try BindingNameStore.create(allocator, parent.binding_names);
+            ctx.binding_names_owned = true;
+        } else {
+            ctx.binding_names = parent.binding_names;
+        }
+
         // Share the parent's lock so all tasks use the same RwLock.
         ctx.shared_lock = parent.shared_lock;
         ctx.lock_order_tracker = parent.lock_order_tracker;
@@ -2248,10 +2265,6 @@ pub const Context = struct {
         // Share the parent's in-flight load record so a load started here sees the chain it is
         // nested inside. Aliased, never retained: the root owns it.
         ctx.module_load_record = parent.module_load_record;
-
-        // Share the parent's binding-name intern table so a task's `;` keys its frame with the same
-        // process-lifetime slice the root would. Aliased, never retained: the root owns it.
-        ctx.binding_names = parent.binding_names;
 
         // Inherit the parent's active sandbox, if any. Allocate a copy on the
         // task's arena so the pointer outlives the parent's stack frame.
@@ -2333,7 +2346,8 @@ pub const Context = struct {
         // A `WordDefinition` borrows its name, effect, markers, and body slice, so the entries copy
         // directly. Its bound value is the one thing it can own, and the clone outlives the frame it
         // came from, so the clone takes references of its own. A `;`-defined name is the interned
-        // slice from `binding_names`, which is never freed, so the clone's key cannot dangle.
+        // slice from the table of the nearest load owner at or above the spawner. That table
+        // outlives the task, which cannot outlive its load owner, so the clone's key cannot dangle.
         const transient_start = if (parent.durable_frame_floor) |idx| idx + 1 else 0;
         for (parent.local_frames.items[transient_start..], transient_start..) |parent_frame, src_idx| {
             {
@@ -2342,6 +2356,7 @@ pub const Context = struct {
 
                 var iter = parent_frame.iterator();
                 while (iter.next()) |entry| {
+                    parent.assertFrameKeyOrigin(entry.key_ptr.*, entry.value_ptr, parent);
                     try cloned_frame.put(allocator, entry.key_ptr.*, entry.value_ptr.*);
                 }
                 try ctx.local_frames.append(allocator, cloned_frame);
@@ -2696,10 +2711,11 @@ pub const Context = struct {
             self.reified_decode_cache.destroy();
             self.load_lock.destroy();
             self.module_load_record.destroy();
-            self.binding_names.destroy();
             self.allocator.destroy(self.lock_order_tracker);
             self.allocator.destroy(self.shared_lock);
         }
+
+        if (self.binding_names_owned) self.binding_names.destroy();
         self.stack.deinit();
     }
 
@@ -2767,6 +2783,79 @@ pub const Context = struct {
         if (closure_body_registry.isLive(key)) return;
 
         std.debug.panic("body-keyed store write for key 0x{x} outside every allowed origin", .{key});
+    }
+
+    /// Debug-only. Assert that a frame key a site copies by reference outlives the copy.
+    ///
+    /// A frame key is borrowed, never owned, so every site that copies one into a structure that can
+    /// outlive the frame must hold a key that lives at least as long as that structure. Those sites
+    /// are the task frame clone at spawn, a captured scope's frame clones and seeds, and a module
+    /// promotion. The allowed origins are:
+    ///
+    /// - a slice interned in this context's binding-name table or any table below it, which lives as
+    ///   long as the context that owns the table;
+    /// - the arena of `dest` or any ancestor of it, where `dest` is the context whose arena holds the
+    ///   copy. That arena lives at least as long as the copy's own storage. A captured scope can
+    ///   still outlive a task whose arena holds the key. That open class is the one the write
+    ///   barrier leaves to the task-arena rules;
+    /// - static data of the executable, such as the string literals that name built-in natives and
+    ///   the names a compiled program carries in its own tables. They sit in no arena and no table,
+    ///   and they live for the process;
+    /// - the name of a host callback word, which is the name its own callback record carries. The
+    ///   embedding handle owns that name and frees it after the context.
+    ///
+    /// A key from anywhere else would dangle once its owner is torn down, and the clone would key a
+    /// freed slice.
+    ///
+    /// `def` is the entry the key files. It is read for the host word origin only.
+    ///
+    /// `dest` is the context whose arena holds the copy. A frame clone or a captured scope is built
+    /// for the running context, so its destination is the context itself. A module promotion
+    /// allocates on `quotationAllocator`, which is the state target's arena. A key that lives only in
+    /// a task's arena is therefore refused when a load promotes it onto the load owner.
+    ///
+    /// The table probe takes the shared read lock, since a writer may be interning on another thread.
+    fn assertFrameKeyOrigin(
+        self: *const Context,
+        key: []const u8,
+        def: *const WordDefinition,
+        dest: *const Context,
+    ) void {
+        if (comptime builtin.mode != .Debug) return;
+        if (self.frameKeyOriginAllowed(key, def, dest)) return;
+
+        std.debug.panic("frame key \"{s}\" at 0x{x} outside every allowed origin", .{ key, @intFromPtr(key.ptr) });
+    }
+
+    /// Whether `key` has an origin `assertFrameKeyOrigin` allows. Split out so a test can check a
+    /// rejected origin without a panic.
+    fn frameKeyOriginAllowed(
+        self: *const Context,
+        key: []const u8,
+        def: *const WordDefinition,
+        dest: *const Context,
+    ) bool {
+        if (key.len == 0) return true;
+
+        const addr = @intFromPtr(key.ptr);
+
+        switch (def.action) {
+            .host_callback => |host| if (host.name.ptr == key.ptr) return true,
+            .compound, .native, .literal => {},
+        }
+
+        {
+            self.acquireSharedRead();
+            defer self.releaseSharedRead();
+            if (self.binding_names.owns(key)) return true;
+        }
+
+        var cur: ?*const Context = dest;
+        while (cur) |c| : (cur = c.parent_context) {
+            if (arena_origin.contains(c.arena, addr)) return true;
+        }
+
+        return arena_origin.inLoadedImage(addr);
     }
 
     /// Allocator for quotations and other parsed data. During a module load
@@ -3791,6 +3880,7 @@ pub const Context = struct {
         if (frame.contains(name)) return;
         const entry = set.lookup(name) orelse return;
 
+        self.assertFrameKeyOrigin(entry.key_ptr.*, entry.value_ptr, self);
         try frame.put(self.allocator, entry.key_ptr.*, entry.value_ptr.*);
     }
 
@@ -3804,7 +3894,10 @@ pub const Context = struct {
         errdefer clone.deinit(self.allocator);
 
         var it = src.iterator();
-        while (it.next()) |e| try clone.put(self.allocator, e.key_ptr.*, e.value_ptr.*);
+        while (it.next()) |e| {
+            self.assertFrameKeyOrigin(e.key_ptr.*, e.value_ptr, self);
+            try clone.put(self.allocator, e.key_ptr.*, e.value_ptr.*);
+        }
 
         retainFrameBindings(&clone);
         errdefer releaseFrameBindings(&clone);
@@ -4478,7 +4571,12 @@ pub const Context = struct {
     ///
     /// Every path that promotes a frame into a module goes through here: a file's own words at load
     /// finalization, `private{ }`'s scope capture, and `>module`.
-    pub fn moduleWordFor(self: *Context, alloc: Allocator, def: WordDefinition) !value_mod.ModuleWord {
+    ///
+    /// `key` is the frame key the caller files the entry under. The module borrows it, so it is
+    /// checked here, the one choke point every promotion passes through.
+    pub fn moduleWordFor(self: *Context, alloc: Allocator, key: []const u8, def: WordDefinition) !value_mod.ModuleWord {
+        self.assertFrameKeyOrigin(key, &def, self.stateTarget());
+
         var mod_word: value_mod.ModuleWord = .{
             .may_define = def.exec_flags.may_define,
             .action = switch (def.action) {
@@ -11980,6 +12078,144 @@ test "defineBinding in a task context interns into the root's table" {
 
     try std.testing.expectEqual(in_parent.ptr, in_task.ptr);
     try std.testing.expectEqual(@as(usize, 1), parent.binding_names.count());
+}
+
+test "defineBinding in an analysis child interns on the child's table and reuses the root's names" {
+    var root = Context.init(std.testing.allocator);
+    defer root.deinit();
+
+    const shared = try root.defineBinding("shared", .{ .name = "shared", .action = .{ .literal = .{ .fixnum = 1 } } });
+
+    var child = try Context.initChild(std.testing.allocator, &root, .analysis);
+    defer child.deinit();
+
+    try std.testing.expect(child.binding_names_owned);
+    try std.testing.expect(child.binding_names != root.binding_names);
+    try std.testing.expectEqual(@as(?*const BindingNameStore, root.binding_names), child.binding_names.parent);
+
+    const reused = try child.defineBinding("shared", .{ .name = "shared", .action = .{ .literal = .{ .fixnum = 2 } } });
+    const fresh = try child.defineBinding("fresh", .{ .name = "fresh", .action = .{ .literal = .{ .fixnum = 3 } } });
+
+    try std.testing.expectEqual(shared.ptr, reused.ptr);
+    try std.testing.expectEqual(@as(usize, 1), child.binding_names.count());
+    try std.testing.expectEqual(@as(usize, 1), root.binding_names.count());
+    try std.testing.expect(child.binding_names.owns(fresh));
+    try std.testing.expect(!root.binding_names.owns(fresh));
+}
+
+test "defineBinding in a task under an analysis child interns on the child" {
+    var root = Context.init(std.testing.allocator);
+    defer root.deinit();
+
+    var child = try Context.initChild(std.testing.allocator, &root, .analysis);
+    defer child.deinit();
+
+    var scheduler = try std.testing.allocator.create(Scheduler);
+    defer std.testing.allocator.destroy(scheduler);
+    scheduler.* = try Scheduler.init(std.testing.allocator);
+    defer scheduler.deinit();
+
+    var task_ctx = try Context.initForTask(std.testing.allocator, &child, scheduler);
+    defer task_ctx.deinit();
+
+    try std.testing.expectEqual(child.binding_names, task_ctx.binding_names);
+    try std.testing.expect(!task_ctx.binding_names_owned);
+
+    const in_task = try task_ctx.defineBinding("task-only", .{ .name = "task-only", .action = .{ .literal = .{ .fixnum = 1 } } });
+
+    try std.testing.expect(child.binding_names.owns(in_task));
+    try std.testing.expectEqual(@as(usize, 0), root.binding_names.count());
+}
+
+test "a child's binding names are freed with it" {
+    var root = Context.init(std.testing.allocator);
+    defer root.deinit();
+
+    var round: usize = 0;
+    while (round < 4) : (round += 1) {
+        var child = try Context.initChild(std.testing.allocator, &root, .analysis);
+        defer child.deinit();
+
+        _ = try child.defineBinding("transient-name", .{ .name = "x", .action = .{ .literal = .{ .fixnum = 1 } } });
+    }
+
+    try std.testing.expectEqual(@as(usize, 0), root.binding_names.count());
+}
+
+test "assertFrameKeyOrigin accepts interned and arena-owned keys at every copy site" {
+    var root = Context.init(std.testing.allocator);
+    defer root.deinit();
+
+    const root_interned = try root.defineBinding("root-name", .{ .name = "x", .action = .{ .literal = .{ .fixnum = 1 } } });
+    const root_arena = try root.arena.allocator().dupe(u8, "root-arena-name");
+
+    var child = try Context.initChild(std.testing.allocator, &root, .analysis);
+    defer child.deinit();
+
+    const child_interned = try child.defineBinding("child-name", .{ .name = "x", .action = .{ .literal = .{ .fixnum = 2 } } });
+    const child_arena = try child.arena.allocator().dupe(u8, "child-arena-name");
+
+    // A frame key promoted into a module, a seeded or captured binding, and a task frame clone all
+    // pass through the same check.
+    const def: WordDefinition = .{ .name = "x", .action = .{ .literal = .{ .fixnum = 0 } } };
+    child.assertFrameKeyOrigin(child_interned, &def, &child);
+    child.assertFrameKeyOrigin(root_interned, &def, &child);
+    child.assertFrameKeyOrigin(child_arena, &def, &child);
+    child.assertFrameKeyOrigin(root_arena, &def, &child);
+    root.assertFrameKeyOrigin(root_interned, &def, &root);
+    root.assertFrameKeyOrigin(root_arena, &def, &root);
+
+    // A built-in native's registered name is a static literal that `current-scope` copies.
+    child.assertFrameKeyOrigin("static-native", &def, &child);
+    root.assertFrameKeyOrigin("static-native", &def, &root);
+
+    // A host word's name is owned by the embedding handle. Its callback record carries the same slice.
+    const host_callback = struct {
+        fn f(_: ?*anyopaque, _: ?*anyopaque) callconv(.c) c_int {
+            return 0;
+        }
+    }.f;
+    const host_key = try std.testing.allocator.dupe(u8, "host-word");
+    defer std.testing.allocator.free(host_key);
+    const host_def: WordDefinition = .{
+        .name = host_key,
+        .action = .{ .host_callback = .{ .handle = null, .callback = host_callback, .user_data = null, .name = host_key } },
+    };
+    child.assertFrameKeyOrigin(host_key, &host_def, &child);
+    root.assertFrameKeyOrigin(host_key, &host_def, &root);
+
+    var scheduler = try std.testing.allocator.create(Scheduler);
+    defer std.testing.allocator.destroy(scheduler);
+    scheduler.* = try Scheduler.init(std.testing.allocator);
+    defer scheduler.deinit();
+
+    var task_ctx = try Context.initForTask(std.testing.allocator, &child, scheduler);
+    defer task_ctx.deinit();
+
+    task_ctx.assertFrameKeyOrigin(child_interned, &def, &task_ctx);
+    task_ctx.assertFrameKeyOrigin(root_interned, &def, &task_ctx);
+    task_ctx.assertFrameKeyOrigin(child_arena, &def, &task_ctx);
+
+    // A copy that lives on the task keeps a key from the task's arena. A copy promoted onto the load
+    // owner would outlive that arena, so the same key is refused there.
+    const task_arena = try task_ctx.arena.allocator().dupe(u8, "task-arena-name");
+    try std.testing.expect(task_ctx.frameKeyOriginAllowed(task_arena, &def, &task_ctx));
+    try std.testing.expect(!task_ctx.frameKeyOriginAllowed(task_arena, &def, &child));
+    try std.testing.expect(!child.frameKeyOriginAllowed(task_arena, &def, &child));
+}
+
+test "moduleWordFor accepts a key interned on the promoting context" {
+    var root = Context.init(std.testing.allocator);
+    defer root.deinit();
+
+    var child = try Context.initChild(std.testing.allocator, &root, .analysis);
+    defer child.deinit();
+
+    const key = try child.defineBinding("promoted", .{ .name = "x", .action = .{ .literal = .{ .fixnum = 1 } } });
+    const def = child.lookupWord("promoted") orelse return error.TestExpectedWord;
+
+    const mod_word = try child.moduleWordFor(child.arena.allocator(), key, def);
+    try std.testing.expect(mod_word.action == .literal);
 }
 
 test "computeExecFlags: a compound body calling a defining native may define" {

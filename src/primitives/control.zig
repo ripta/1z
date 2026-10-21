@@ -530,11 +530,14 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
             // Tag the marker with its name. This is just for identification
             // purposes, and doesn't affect identity or equality checks.
             //
-            // The interned slice outlives the marker, so no copy is taken.
+            // Only an anonymous marker takes the name. A marker that already carries one, such as
+            // a well-known marker, is bound under the new name and keeps its own, because the
+            // interned slice lives in the table of the context running this definition and a
+            // marker shared beyond that context must not borrow it.
             //
             // TODO(ripta): This mutates the marker in place, which is not ideal,
             //              but probably acceptable for now.
-            marker.name = interned;
+            if (marker.name.len == 0) marker.name = interned;
             fireWordDefinedHook(ctx, alloc, interned);
         },
 
@@ -1296,6 +1299,24 @@ test "semicolon binds a container-backed plain value as .literal at durable scop
     try std.testing.expect(result == .array);
     try std.testing.expectEqual(@as(usize, 1), result.array.items.len);
     try std.testing.expectEqual(@as(i64, 7), result.array.items[0].fixnum);
+}
+
+test "semicolon marker-definition branch keeps the name a marker already carries" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    var marker: Marker = .{ .name = "original" };
+
+    try ctx.stack.push(value_mod.symbolValue("alias"));
+    try ctx.stack.push(.{ .marker = &marker });
+    try nativeSemicolon(&ctx);
+
+    try std.testing.expectEqualStrings("original", marker.name);
+
+    const word = ctx.lookupWord("alias") orelse return error.TestExpectedWord;
+    try std.testing.expectEqualStrings("alias", word.name);
+    try std.testing.expect(word.action == .literal);
+    try std.testing.expectEqual(&marker, word.action.literal.marker);
 }
 
 test "semicolon marker-definition branch binds the tagged marker as .literal" {

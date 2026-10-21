@@ -576,7 +576,7 @@ fn nativeCurrentScope(ctx: *Context) anyerror!void {
         while (iter.next()) |entry| {
             const gop = try seen.getOrPut(alloc, entry.key_ptr.*);
             if (!gop.found_existing) {
-                try module.words.put(alloc, entry.key_ptr.*, try ctx.moduleWordFor(alloc, entry.value_ptr.*));
+                try module.words.put(alloc, entry.key_ptr.*, try ctx.moduleWordFor(alloc, entry.key_ptr.*, entry.value_ptr.*));
             }
         }
     }
@@ -586,7 +586,7 @@ fn nativeCurrentScope(ctx: *Context) anyerror!void {
         while (iter.next()) |entry| {
             const gop = try seen.getOrPut(alloc, entry.key_ptr.*);
             if (!gop.found_existing) {
-                try module.words.put(alloc, entry.key_ptr.*, try ctx.moduleWordFor(alloc, dictionary_mod.loadSlot(entry.value_ptr.*).*));
+                try module.words.put(alloc, entry.key_ptr.*, try ctx.moduleWordFor(alloc, entry.key_ptr.*, dictionary_mod.loadSlot(entry.value_ptr.*).*));
             }
         }
     }
@@ -601,7 +601,7 @@ fn nativeCurrentScope(ctx: *Context) anyerror!void {
             while (iter.next()) |entry| {
                 const gop = try seen.getOrPut(alloc, entry.key_ptr.*);
                 if (!gop.found_existing) {
-                    try module.words.put(alloc, entry.key_ptr.*, try ctx.moduleWordFor(alloc, entry.value_ptr.*));
+                    try module.words.put(alloc, entry.key_ptr.*, try ctx.moduleWordFor(alloc, entry.key_ptr.*, entry.value_ptr.*));
                 }
             }
         }
@@ -611,7 +611,7 @@ fn nativeCurrentScope(ctx: *Context) anyerror!void {
             while (iter.next()) |entry| {
                 const gop = try seen.getOrPut(alloc, entry.key_ptr.*);
                 if (!gop.found_existing) {
-                    try module.words.put(alloc, entry.key_ptr.*, try ctx.moduleWordFor(alloc, dictionary_mod.loadSlot(entry.value_ptr.*).*));
+                    try module.words.put(alloc, entry.key_ptr.*, try ctx.moduleWordFor(alloc, entry.key_ptr.*, dictionary_mod.loadSlot(entry.value_ptr.*).*));
                 }
             }
         }
@@ -651,14 +651,14 @@ fn nativeLocalScope(ctx: *Context) anyerror!void {
         var dep_iter = frame.iterator();
         while (dep_iter.next()) |entry| {
             if (entry.value_ptr.*.imported) {
-                try module.deps.put(alloc, entry.key_ptr.*, try ctx.moduleWordFor(alloc, entry.value_ptr.*));
+                try module.deps.put(alloc, entry.key_ptr.*, try ctx.moduleWordFor(alloc, entry.key_ptr.*, entry.value_ptr.*));
             }
         }
     }
 
     var iter = ctx.local_frames.items[ctx.local_frames.items.len - 1].iterator();
     while (iter.next()) |entry| {
-        try module.words.put(alloc, entry.key_ptr.*, try ctx.moduleWordFor(alloc, entry.value_ptr.*));
+        try module.words.put(alloc, entry.key_ptr.*, try ctx.moduleWordFor(alloc, entry.key_ptr.*, entry.value_ptr.*));
     }
 
     // The snapshot is complete here, so pre-build the frame template the way a `load` does. Every

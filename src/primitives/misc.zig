@@ -96,7 +96,7 @@ fn nativeToModule(ctx: *Context) anyerror!void {
         while (frame_iter.next()) |entry| {
             const word_def = entry.value_ptr.*;
             if (word_def.imported) {
-                try module.deps.put(alloc, entry.key_ptr.*, try ctx.moduleWordFor(alloc, word_def));
+                try module.deps.put(alloc, entry.key_ptr.*, try ctx.moduleWordFor(alloc, entry.key_ptr.*, word_def));
             }
         }
     }
@@ -631,7 +631,7 @@ pub fn nativeLoadImpl(ctx: *Context, cache: *value_mod.MutableMap, filename: []c
     var iter = frame.iterator();
     while (iter.next()) |entry| {
         const word_def = entry.value_ptr.*;
-        const mod_word = try ctx.moduleWordFor(alloc, word_def);
+        const mod_word = try ctx.moduleWordFor(alloc, entry.key_ptr.*, word_def);
         if (word_def.imported) {
             try module.deps.put(alloc, entry.key_ptr.*, mod_word);
 
