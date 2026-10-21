@@ -11,7 +11,7 @@ pub const NestedNameSet = struct {
     names: []const []const u8,
 };
 
-/// Process-shared map from a body's instruction-slice pointer to the bare-word names its nested
+/// Map, one layer per load owner, from a body's instruction-slice pointer to the bare-word names its nested
 /// quotation literals call.
 ///
 /// The capture gate has to know whether a body closes over a live lexical binding, and a nested

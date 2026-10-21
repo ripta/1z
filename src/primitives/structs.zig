@@ -120,7 +120,7 @@ fn nativeDefineStruct(ctx: *Context) anyerror!void {
         .fields = fields_slice,
         .field_types = field_types_slice,
     };
-    ctx.stateTarget().struct_type_count += 1;
+    ctx.noteStructType();
 
     // Create a TypeValue for type-of lookups
     const tv = try alloc.create(value_mod.TypeValue);
@@ -451,10 +451,7 @@ fn defineConstructor(ctx: *Context, name: []const u8, struct_type: *const Struct
 /// Not used by the `>NAME` hash converter: see the comment at its own dispatch registration for why
 /// that one must stay scope-local.
 fn sharedAccessorDispatchId(ctx: *Context, name: []const u8, local_dispatch_id: u32) !u32 {
-    const target = ctx.stateTarget();
-    if (target.generic_accessor_dispatch_ids.get(name)) |shared_id| return shared_id;
-    try target.generic_accessor_dispatch_ids.put(target.allocator, name, local_dispatch_id);
-    return local_dispatch_id;
+    return ctx.shareAccessorDispatchId(name, local_dispatch_id);
 }
 
 // >NAME: ( hash -- instance ) - hash-to-struct converter (generic, extensible via method{)

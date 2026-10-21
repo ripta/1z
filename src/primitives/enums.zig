@@ -314,7 +314,7 @@ fn nativeDefineEnum(ctx: *Context) anyerror!void {
                 .inner_type = "symbol",
                 .parent_type = enum_tv,
             };
-            ctx.stateTarget().virtual_type_count += 1;
+            ctx.noteVirtualType();
 
             const variant_tv = try alloc.create(value_mod.TypeValue);
             const variant_desc = try value_mod.createTypeDescriptor(
@@ -385,7 +385,7 @@ fn nativeDefineEnum(ctx: *Context) anyerror!void {
                 .base_type = variant_base_type,
                 .type_params = variant_type_params,
             };
-            ctx.stateTarget().virtual_type_count += 1;
+            ctx.noteVirtualType();
 
             const variant_tv = try alloc.create(value_mod.TypeValue);
             const variant_desc = try value_mod.createTypeDescriptor(

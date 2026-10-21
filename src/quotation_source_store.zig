@@ -7,7 +7,7 @@ pub const SourceName = struct {
     text: []const u8,
 };
 
-/// Process-shared, write-once map from a body's instruction-slice pointer to the source file the
+/// Write-once map, one layer per load owner, from a body's instruction-slice pointer to the source file the
 /// body was written in.
 ///
 /// A call frame records where a call happened: `instr.line` is a line in the body currently

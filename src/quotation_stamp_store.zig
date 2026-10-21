@@ -3,7 +3,7 @@ const std = @import("std");
 const value_mod = @import("value.zig");
 const AtomicSlotMap = @import("atomic_slot_map.zig").AtomicSlotMap;
 
-/// Process-shared, write-once map from a quotation body's instruction-slice pointer to the module
+/// Write-once map, one layer per load owner, from a quotation body's instruction-slice pointer to the module
 /// the body was written in.
 ///
 /// A body's defining module is metadata of the body. Bodies live as long as their module, and

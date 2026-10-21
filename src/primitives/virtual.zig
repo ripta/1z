@@ -161,7 +161,7 @@ fn nativeDefineVirtual(ctx: *Context) anyerror!void {
                 .name = name,
                 .inner_type = inner_type,
             };
-            ctx.stateTarget().virtual_type_count += 1;
+            ctx.noteVirtualType();
 
             desc_map.kind = .{ .virtual = .{ .inner_type = inner_tv } };
 
@@ -244,7 +244,7 @@ fn nativeDefineVirtual(ctx: *Context) anyerror!void {
                 .fields = fields_slice,
                 .field_types = field_types_slice,
             };
-            ctx.stateTarget().struct_type_count += 1;
+            ctx.noteStructType();
 
             const vtype = try alloc.create(VirtualType);
             vtype.* = .{
@@ -252,7 +252,7 @@ fn nativeDefineVirtual(ctx: *Context) anyerror!void {
                 .inner_type = name,
                 .anon_struct = anon_struct,
             };
-            ctx.stateTarget().virtual_type_count += 1;
+            ctx.noteVirtualType();
 
             desc_map.kind = .{ .virtual = .{ .anon_struct = anon_struct } };
 
@@ -1566,7 +1566,7 @@ fn nativeDefineParameterizedType(ctx: *Context) anyerror!void {
         .base_type = base_tv,
         .type_params = type_params,
     };
-    ctx.stateTarget().virtual_type_count += 1;
+    ctx.noteVirtualType();
 
     const desc = try ctx.getOrCreateParameterizedTypeDescriptor(base_tv, type_params);
 

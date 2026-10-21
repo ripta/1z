@@ -2,7 +2,7 @@ const std = @import("std");
 
 const AtomicSlotMap = @import("atomic_slot_map.zig").AtomicSlotMap;
 
-/// Process-shared set of quotation body instruction-slice pointers that have ever had a carryable
+/// Set, one layer per load owner, of quotation body instruction-slice pointers that have ever had a carryable
 /// captured scope installed in some context's map. A carryable scope is one with at least one
 /// lexical frame, which is the predicate `findCapturedScopeForBody` already tests.
 ///

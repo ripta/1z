@@ -373,7 +373,7 @@ fn ownedBinding(def: WordDefinition) ?Value {
 /// the body's instruction-slice pointer.
 ///
 /// The two halves have independent writers and lifetimes. The authoritative defining-module
-/// stamp lives in the process-shared `quotation_stamp_store`; `defining_module` here is a
+/// stamp lives in the layered `body_stores.quotation_stamp_store`; `defining_module` here is a
 /// per-context read-through cache of it, filled from the store whenever an entry is created, so
 /// it is authoritative -- a null included -- whenever the entry exists. The one rewrite is
 /// `stampQuotationBodies`, which repairs a null cached before it stamped the store. `scope` is
@@ -913,7 +913,9 @@ pub const Context = struct {
     profile_owned: bool = false,
     /// Counters for unique VirtualType/StructType allocations, used by
     /// --benchmark to report prelude output inventory. A definition bumps the counter of its
-    /// state target, so a load from a task counts on its load owner.
+    /// state target, so a load from a task counts on its load owner. Bump them through
+    /// `noteVirtualType` and `noteStructType`, since a task's load and the owner's own top-level
+    /// code can bump the same counter at once.
     virtual_type_count: usize = 0,
     struct_type_count: usize = 0,
     /// Current source file name for error reporting (defaults to "<repl>")
@@ -1256,8 +1258,9 @@ pub const Context = struct {
     image_entry_import_frame: ?usize = null,
     /// Decoded-instruction cache for reified quotation pushes, keyed by the same static data
     /// pointer. Root-owned and process-shared; slices live on the cache's own arena, so the keys
-    /// the decode path stamps into `quotation_stamp_store` and records in `lexical_parents` are
-    /// process-lifetime. One decode per push site serves every context, in every AOT class. See
+    /// the decode path stamps into `body_stores.quotation_stamp_store` and records in
+    /// `body_stores.lexical_parents` are process-lifetime. Those writes go to the root's layer. One
+    /// decode per push site serves every context, in every AOT class. See
     /// `ReifiedDecodeCache`.
     reified_decode_cache: *ReifiedDecodeCache = undefined,
     /// One decoded by-value container literal per compiled push site. Registered on the root by
@@ -3739,7 +3742,7 @@ pub const Context = struct {
 
     /// The nested half of `quotationReferencesLiveFrame`.
     ///
-    /// A body the parser finished on the root arena has its nested names precomputed, so the check
+    /// A body the parser finished on a load owner's arena has its nested names precomputed, so the check
     /// is a map probe and a walk of that list. The overwhelming majority of bodies nest no
     /// quotation at all and are recorded as an empty list, which costs the probe and no frame walk.
     ///
@@ -4127,9 +4130,9 @@ pub const Context = struct {
         const carryable = if (scope) |s| s.lexical_frames.len > 0 else false;
         if (carryable) {
             // The gate is monotone, and a stale mark costs one walk that finds nothing. So the root's
-            // gate takes the keys of a task's arena and of bodies the compiled code decodes. A
-            // child's layer is held to the origin rule, so that nothing of the child's reaches a
-            // layer above it.
+            // gate takes the keys of a task's arena and of bodies the compiled code decodes. Only
+            // a load-owning child's own writes are held to the origin rule, so that nothing of the
+            // child's reaches a layer above it.
             if (self.owns_loads and self.parent_context != null) assertBodyKeyOrigin(self, key);
             _ = try self.body_stores.carryable_scope_gate.mark(key);
         }
@@ -5809,6 +5812,32 @@ pub const Context = struct {
 
         try target.generic_accessor_effects.put(target.allocator, name, joining);
         return joining;
+    }
+
+    /// The one dispatch_id every `struct{`-generated accessor named `name` shares. The first struct
+    /// to see a name seeds the registry with `local_dispatch_id`.
+    ///
+    /// The registry lives on the state target. A task's load and the owner's own top-level code can
+    /// both write it, so the lookup and the insert happen under the shared write lock.
+    pub fn shareAccessorDispatchId(self: *Context, name: []const u8, local_dispatch_id: u32) !u32 {
+        self.acquireSharedWrite();
+        defer self.releaseSharedWrite();
+
+        const target = self.stateTarget();
+        if (target.generic_accessor_dispatch_ids.get(name)) |shared_id| return shared_id;
+
+        try target.generic_accessor_dispatch_ids.put(target.allocator, name, local_dispatch_id);
+        return local_dispatch_id;
+    }
+
+    /// Count one new VirtualType on the state target.
+    pub fn noteVirtualType(self: *Context) void {
+        _ = @atomicRmw(usize, &self.stateTarget().virtual_type_count, .Add, 1, .monotonic);
+    }
+
+    /// Count one new StructType on the state target.
+    pub fn noteStructType(self: *Context) void {
+        _ = @atomicRmw(usize, &self.stateTarget().struct_type_count, .Add, 1, .monotonic);
     }
 
     /// Attempt JIT compilation of a newly defined word. Silently ignores
