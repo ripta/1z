@@ -2,9 +2,9 @@ const std = @import("std");
 
 const AtomicSlotMap = @import("atomic_slot_map.zig").AtomicSlotMap;
 
-/// Set, one layer per load owner, of quotation body instruction-slice pointers that have ever had a carryable
-/// captured scope installed in some context's map. A carryable scope is one with at least one
-/// lexical frame, which is the predicate `findCapturedScopeForBody` already tests.
+/// Set, one layer per load owner, of quotation body instruction-slice pointers that have ever had
+/// a carryable captured scope installed in some context's map. A carryable scope is one with at
+/// least one lexical frame, which is the predicate `findCapturedScopeForBody` already tests.
 ///
 /// The walk that reaches a scope recorded in an ancestor locks each ancestor's map mutex before it
 /// knows whether that ancestor holds anything. Every spawned task shares one parent, so those

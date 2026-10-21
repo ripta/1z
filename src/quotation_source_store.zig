@@ -7,8 +7,8 @@ pub const SourceName = struct {
     text: []const u8,
 };
 
-/// Write-once map, one layer per load owner, from a body's instruction-slice pointer to the source file the
-/// body was written in.
+/// Write-once map, one layer per load owner, from a body's instruction-slice pointer to the source
+/// file the body was written in.
 ///
 /// A call frame records where a call happened: `instr.line` is a line in the body currently
 /// executing, so the frame's source must be that body's file. `current_source` tracks the defining

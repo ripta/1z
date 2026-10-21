@@ -3742,8 +3742,8 @@ pub const Context = struct {
 
     /// The nested half of `quotationReferencesLiveFrame`.
     ///
-    /// A body the parser finished on a load owner's arena has its nested names precomputed, so the check
-    /// is a map probe and a walk of that list. The overwhelming majority of bodies nest no
+    /// A body the parser finished on a load owner's arena has its nested names precomputed, so the
+    /// check is a map probe and a walk of that list. The overwhelming majority of bodies nest no
     /// quotation at all and are recorded as an empty list, which costs the probe and no frame walk.
     ///
     /// A body with no entry -- built at runtime, or decoded from an image -- is walked instead.

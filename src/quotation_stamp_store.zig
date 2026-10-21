@@ -3,8 +3,8 @@ const std = @import("std");
 const value_mod = @import("value.zig");
 const AtomicSlotMap = @import("atomic_slot_map.zig").AtomicSlotMap;
 
-/// Write-once map, one layer per load owner, from a quotation body's instruction-slice pointer to the module
-/// the body was written in.
+/// Write-once map, one layer per load owner, from a quotation body's instruction-slice pointer to
+/// the module the body was written in.
 ///
 /// A body's defining module is metadata of the body. Bodies live as long as their module, and
 /// modules are process-shared through the module cache. So the stamp cannot live in a per-context

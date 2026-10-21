@@ -102,8 +102,8 @@ pub const InlineRegionSet = struct {
     };
 };
 
-/// Map, one layer per load owner, from an expanded body's instruction-slice pointer to the runs inside it that
-/// were copied out of `inline`-marked words.
+/// Map, one layer per load owner, from an expanded body's instruction-slice pointer to the runs
+/// inside it that were copied out of `inline`-marked words.
 ///
 /// Expansion erases a call, so the callee's frame no longer exists to be pushed and its row
 /// vanishes from every trace. This table is what puts the row back: the error path looks up the

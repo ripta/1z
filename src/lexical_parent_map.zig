@@ -4,8 +4,8 @@ const value_mod = @import("value.zig");
 const Instruction = value_mod.Instruction;
 const AtomicSlotMap = @import("atomic_slot_map.zig").AtomicSlotMap;
 
-/// Record, one layer per load owner, of which body syntactically encloses each parsed quotation literal, keyed
-/// by instruction-slice address or, for an AOT program, by site tag.
+/// Record, one layer per load owner, of which body syntactically encloses each parsed quotation
+/// literal, keyed by instruction-slice address or, for an AOT program, by site tag.
 ///
 /// A lexical frame is tagged with the body that opened it. Resolution and capture admit a frame
 /// only when its owner is the body asking or one of that body's lexical ancestors, and this map is

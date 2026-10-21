@@ -2,10 +2,10 @@
 //!
 //! The body-keyed resolution maps (`Context.quotation_scope_info` and the layered
 //! `carryable_scope_gate`) admit only keys that outlive the layer or map they enter. A body a
-//! closure owns is freed when the closure is released, so an entry under its address would outlive its own key, and a later
-//! unrelated allocation at the same address would inherit the dead closure's resolution data. The
-//! writers refuse such a body by asking the threaded carrier, but that re-checks what the caller
-//! decided. This registry answers independently: it tracks every live closure-owned body address,
+//! closure owns is freed when the closure is released, so an entry under its address would
+//! outlive its own key, and a later unrelated allocation at the same address would inherit the
+//! dead closure's resolution data. The writers refuse such a body by asking the threaded carrier,
+//! but that re-checks what the caller decided. This registry answers independently: it tracks every live closure-owned body address,
 //! and the one shared insert helper asserts the key is not among them.
 //!
 //! Registration mirrors the body's own alloc and free: an entry is written where ownership is
