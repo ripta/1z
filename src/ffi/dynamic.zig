@@ -254,7 +254,7 @@ fn raisePosixError(ctx: *Context, e: c_int) anyerror!void {
     // errdefer would release the hash the stash just took ownership of. Build
     // the error inside a helper whose error returns all mean "the hash did not
     // reach the stash", and release only when that helper fails.
-    const hash = try HashTable.create(ctx.allocator);
+    const hash = try HashTable.create(ctx.allocator, ctx.containerOwnerTag());
     stashPosixError(ctx, alloc, hash, e, name) catch |err| {
         container_backing.releaseValue(.{ .hash = hash });
         return err;
@@ -783,7 +783,7 @@ fn nativeFfiCall(ctx: *Context) anyerror!void {
 
     if (sig.return_type.tag == .struct_type) {
         const layout = sig.return_type.struct_layout.?;
-        const ba = try ByteArray.create(alloc);
+        const ba = try ByteArray.create(alloc, ctx.containerOwnerTag());
         try ba.ensureTotalCapacity(alloc, layout.total_size);
         ba.items.len = layout.total_size;
         @memset(ba.items[0..layout.total_size], 0);
@@ -1035,7 +1035,7 @@ fn nativeFfiCallVariadic(ctx: *Context, ffi_fn: *Resource, sig: *const FfiSignat
 
     if (sig.return_type.tag == .struct_type) {
         const layout = sig.return_type.struct_layout.?;
-        const ba = try ByteArray.create(alloc);
+        const ba = try ByteArray.create(alloc, ctx.containerOwnerTag());
         try ba.ensureTotalCapacity(alloc, layout.total_size);
         ba.items.len = layout.total_size;
         @memset(ba.items[0..layout.total_size], 0);
@@ -1453,7 +1453,7 @@ fn nativeFfiPtrLenToBytes(ctx: *Context) anyerror!void {
     const n: usize = @intCast(n_val);
 
     const alloc = ctx.quotationAllocator();
-    const ba = ByteArray.create(alloc) catch return error.OutOfMemory;
+    const ba = ByteArray.create(alloc, ctx.containerOwnerTag()) catch return error.OutOfMemory;
 
     if (n > 0) {
         const raw_ptr = resource.ptr orelse {
@@ -1505,7 +1505,7 @@ fn nativeFfiPtrLenToBorrowedBytes(ctx: *Context) anyerror!void {
         bytes = src[0..n];
     }
 
-    const ba = try value_mod.makeBorrowedByteArray(ctx.quotationAllocator(), bytes);
+    const ba = try value_mod.makeBorrowedByteArray(ctx.quotationAllocator(), bytes, ctx.containerOwnerTag());
     try ctx.stack.push(.{ .byte_array = ba });
 }
 

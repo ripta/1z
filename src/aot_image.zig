@@ -653,19 +653,19 @@ test "classifyValue: hash is blob; mutable_map and empty vector are structural" 
     try testing.expectEqual(ImagePath.blob, classifyValue(.{ .hash = &ht }).path);
     try testing.expectEqual(BlobReason.mutable_map, classifyValue(.{ .hash = &ht }).reason);
 
-    const mm = try value_mod.MutableMap.create(testing.allocator);
+    const mm = try value_mod.MutableMap.create(testing.allocator, 0);
     defer mm.header.release();
     try testing.expectEqual(ImagePath.structural, classifyValue(.{ .mutable_map = mm }).path);
 
     // A vector is structural via the vector slot table; its elements classify
     // independently.
-    const vec = try value_mod.Vector.create(testing.allocator);
+    const vec = try value_mod.Vector.create(testing.allocator, 0);
     defer vec.header.release();
     try testing.expectEqual(ImagePath.structural, classifyValue(.{ .vector = vec }).path);
 }
 
 test "classifyValue: both value-map halves follow their entries" {
-    const vm = try value_mod.ValueMap.create(testing.allocator);
+    const vm = try value_mod.ValueMap.create(testing.allocator, 0);
     defer vm.header.release();
     try testing.expectEqual(ImagePath.structural, classifyValue(.{ .value_map = vm }).path);
 
@@ -674,7 +674,7 @@ test "classifyValue: both value-map halves follow their entries" {
 
     // A set has no serialized form, so a map holding one takes the blob path with it. The map's
     // destroy releases every half it holds, so each stored slot takes its own reference.
-    const value_side = try value_mod.Set.create(testing.allocator);
+    const value_side = try value_mod.Set.create(testing.allocator, 0);
     defer value_side.header.release();
     value_side.header.retain();
     try vm.map.put(testing.allocator, .{ .fixnum = 2 }, .{ .set = value_side });
@@ -683,23 +683,23 @@ test "classifyValue: both value-map halves follow their entries" {
     try testing.expectEqual(BlobReason.dynamic_container, with_blob_value.reason);
 
     // A key reaches the same answer, which is what the key-side recursion is for.
-    const keyed = try value_mod.ValueMap.create(testing.allocator);
+    const keyed = try value_mod.ValueMap.create(testing.allocator, 0);
     defer keyed.header.release();
-    const key_side = try value_mod.Set.create(testing.allocator);
+    const key_side = try value_mod.Set.create(testing.allocator, 0);
     defer key_side.header.release();
     key_side.header.retain();
     try keyed.map.put(testing.allocator, .{ .set = key_side }, .{ .fixnum = 3 });
     try testing.expectEqual(ImagePath.blob, classifyValue(.{ .value_map = keyed }).path);
 
     // The mutable half takes the same recursion, because it rides a slot table of its own.
-    const mvm = try value_mod.MutableValueMap.create(testing.allocator);
+    const mvm = try value_mod.MutableValueMap.create(testing.allocator, 0);
     defer mvm.header.release();
     try testing.expectEqual(ImagePath.structural, classifyValue(.{ .mutable_value_map = mvm }).path);
 
     try mvm.map.put(testing.allocator, .{ .fixnum = 1 }, value_mod.stringValue("a"));
     try testing.expectEqual(ImagePath.structural, classifyValue(.{ .mutable_value_map = mvm }).path);
 
-    const mut_side = try value_mod.Set.create(testing.allocator);
+    const mut_side = try value_mod.Set.create(testing.allocator, 0);
     defer mut_side.header.release();
     mut_side.header.retain();
     try mvm.map.put(testing.allocator, .{ .fixnum = 2 }, .{ .set = mut_side });

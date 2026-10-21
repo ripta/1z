@@ -518,6 +518,10 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
             const name = name_pay.bytes;
             try enforceRequireDoc(ctx, name, doc_val != null, false, false, true);
 
+            // Naming writes into the marker, so analysis may name only a marker its own load owner
+            // made. The check runs ahead of the binding so a refused name leaves no trace.
+            if (marker.name.len == 0) try ctx.checkWrite(marker.owner, "a marker");
+
             // User-defined markers are automatically parse-time so they work
             // correctly with parse-time constructs like struct{}.
             const interned = try ctx.defineBinding(name, WordDefinition{
@@ -972,7 +976,7 @@ test "fireWordDefinedHook still builds and fires WordInfo when word-defined-hook
     const alloc = ctx.quotationAllocator();
 
     // A hook must leave the stack as it found it, so this one moves its argument into a vector.
-    const log = try value_mod.Vector.create(ctx.allocator);
+    const log = try value_mod.Vector.create(ctx.allocator, ctx.containerOwnerTag());
     defer log.header.release();
     const hook_body = try alloc.alloc(Instruction, 4);
     hook_body[0] = .{ .op = .{ .push_literal = .{ .vector = log } }, .line = 0 };
@@ -982,7 +986,7 @@ test "fireWordDefinedHook still builds and fires WordInfo when word-defined-hook
 
     const hook_items = try alloc.alloc(Value, 1);
     hook_items[0] = .{ .quotation = .{ .instructions = hook_body } };
-    const hook_arr = try value_mod.Array.fromOwnedSlice(alloc, hook_items);
+    const hook_arr = try value_mod.Array.fromOwnedSlice(alloc, hook_items, 0);
     try ctx.setParameterInTopFrame("word-defined-hooks", .{ .array = hook_arr });
 
     fireWordDefinedHook(&ctx, alloc, "foo");
@@ -1277,7 +1281,7 @@ test "semicolon binds a container-backed plain value as .literal at durable scop
     const alloc = ctx.quotationAllocator();
     const elements = try alloc.alloc(Value, 1);
     elements[0] = .{ .fixnum = 7 };
-    const arr = try value_mod.Array.fromOwnedSlice(alloc, elements);
+    const arr = try value_mod.Array.fromOwnedSlice(alloc, elements, 0);
 
     try ctx.stack.push(value_mod.symbolValue("xs"));
     try ctx.stack.push(.{ .array = arr });
@@ -1444,7 +1448,7 @@ test "word with a container-bound named local documents the accepted residual le
     const arr_alloc = ctx.quotationAllocator();
     const elements = try arr_alloc.alloc(Value, 1);
     elements[0] = .{ .fixnum = 1 };
-    const arr = try value_mod.Array.fromOwnedSlice(arr_alloc, elements);
+    const arr = try value_mod.Array.fromOwnedSlice(arr_alloc, elements, 0);
 
     const call_body = [_]Instruction{.{ .op = .{ .call_word = "b" }, .line = 0 }};
 
@@ -1588,7 +1592,7 @@ test "spot-check: representative unverified pointer types round-trip identically
             .instructions = closure_instrs,
             .segments = &.{},
             .header = undefined,
-        });
+        }, 0);
         const v: Value = .{ .closure = closure };
         // Drop the creation reference once the definition's adopted reference
         // is the only intended owner.

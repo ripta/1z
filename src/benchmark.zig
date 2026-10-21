@@ -1185,10 +1185,10 @@ test "collectVariantHistogram counts nested arrays hashes and quotation literals
     // The hash releases its values at destroy, so the array wrapper needs an
     // initialized header; the static no-op destroy leaves the struct to the
     // deferred free.
-    const arr_val = try @import("value.zig").Array.createStatic(std.testing.allocator, arr[0..]);
+    const arr_val = try @import("value.zig").Array.createStatic(std.testing.allocator, arr[0..], 0);
     defer std.testing.allocator.destroy(arr_val);
 
-    const hash = try @import("value.zig").HashTable.create(std.testing.allocator);
+    const hash = try @import("value.zig").HashTable.create(std.testing.allocator, 0);
     defer hash.header.release();
     const hash_alloc = hash.header.allocator;
     try hash.map.put(hash_alloc, try hash_alloc.dupe(u8, "k"), .{ .array = arr_val });
@@ -1214,7 +1214,7 @@ test "collectVariantHistogram stops on self-referential vector cycles" {
     const Tag = std.meta.Tag(Value);
 
     const cb = @import("container_backing.zig");
-    const vec = try @import("value.zig").Vector.create(std.testing.allocator);
+    const vec = try @import("value.zig").Vector.create(std.testing.allocator, 0);
     // Self-referential cycle: the self-slot is a new owner of vec, so
     // retain to match the eventual release in destroyVector.
     cb.retainValue(.{ .vector = vec });

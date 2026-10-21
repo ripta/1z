@@ -245,7 +245,7 @@ fn makeStructInstanceHelper(ctx: *Context) anyerror!void {
         }
     }
 
-    const instance = try value_mod.createStructInstance(alloc, st, field_values);
+    const instance = try value_mod.createStructInstance(alloc, st, field_values, ctx.containerOwnerTag());
     fields_owned = false;
     errdefer container_backing.releaseValue(.{ .struct_instance = instance });
 
@@ -295,7 +295,7 @@ fn hashToStructHelper(ctx: *Context) anyerror!void {
     container_backing.retainValues(field_values);
     errdefer if (fields_owned) container_backing.releaseValues(field_values);
 
-    const instance = try value_mod.createStructInstance(alloc, st, field_values);
+    const instance = try value_mod.createStructInstance(alloc, st, field_values, ctx.containerOwnerTag());
     fields_owned = false;
     errdefer container_backing.releaseValue(.{ .struct_instance = instance });
 
@@ -357,6 +357,8 @@ fn structFieldSetHelper(ctx: *Context) anyerror!void {
             return error.TypeMismatch;
         }
 
+        if (inst.header) |h| try helpers.beginContainerWrite(ctx, h);
+
         if (st.field_types.len != 0) {
             const expected = st.field_types[idx] orelse unreachable;
             if (!try protocols.valueMatchesElement(ctx, new_val, expected)) {
@@ -371,6 +373,7 @@ fn structFieldSetHelper(ctx: *Context) anyerror!void {
     // value and move the new value in. The popped instance reference itself returns to the
     // stack via pushMoved. Sound only for a headered instance, where the instance is the one
     // owner of its field set; no runtime creation path produces a headerless one.
+    if (inst.header) |h| ctx.assertWriteAllowed(h.ownerTag());
     container_backing.releaseValue(inst.fields[idx]);
     inst.fields[idx] = new_val;
     ctx.stack.pushMoved(.{ .struct_instance = inst }) catch |err| {
@@ -410,7 +413,7 @@ fn structInstanceToHashHelper(ctx: *Context) anyerror!void {
         return error.TypeMismatch;
     }
 
-    const hash = try value_mod.HashTable.create(ctx.allocator);
+    const hash = try value_mod.HashTable.create(ctx.allocator, ctx.containerOwnerTag());
     errdefer hash.header.release();
     const hash_alloc = hash.header.allocator;
     for (st.fields, 0..) |field, i| {

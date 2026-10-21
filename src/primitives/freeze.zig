@@ -188,7 +188,7 @@ fn freezeCopy(ctx: *Context, val: Value) anyerror!FreezeResult {
 
         .byte_array => |b| {
             const copy = try ctx.allocator.dupe(u8, b.slice());
-            return .{ .value = try value_mod.ownedStringValue(ctx.allocator, copy), .changed = true };
+            return .{ .value = try value_mod.ownedStringValue(ctx.allocator, copy, ctx.containerOwnerTag()), .changed = true };
         },
 
         .array => |arr| return freezeArray(ctx, arr, val),
@@ -251,13 +251,16 @@ fn freezeConsume(ctx: *Context, val: Value) anyerror!FreezeResult {
             // In-place adoption is safe only for the sole owner: no alias exists and no other
             // thread can reach the backing, so no lock is needed. The allocator must already be
             // the process-lifetime one because the array adopts the element buffer as-is.
+            //
+            // The same fact keeps this off the analysis write barrier. A sole owner is the only
+            // holder of the backing, so no ancestor can observe the conversion.
             if (vec.header.isSoleOwner() and container_backing.allocatorEql(vec.header.allocator, ctx.allocator)) {
                 for (vec.list.items) |*slot| {
                     const r = try freezeConsume(ctx, slot.*);
                     slot.* = r.value;
                 }
                 const items = try vec.list.toOwnedSlice(ctx.allocator);
-                const arr = value_mod.Array.fromOwnedSlice(ctx.allocator, items) catch |e| {
+                const arr = value_mod.Array.fromOwnedSlice(ctx.allocator, items, ctx.containerOwnerTag()) catch |e| {
                     container_backing.releaseValues(items);
                     ctx.allocator.free(items);
                     return e;
@@ -297,8 +300,8 @@ fn freezeStringLeaf(ctx: *Context, val: Value, s: value_mod.StringPayload) anyer
     const copy = try ctx.allocator.dupe(u8, s.bytes);
     errdefer ctx.allocator.free(copy);
     const promoted = switch (val) {
-        .string => try value_mod.ownedStringValue(ctx.allocator, copy),
-        .symbol => try value_mod.ownedSymbolValue(ctx.allocator, copy),
+        .string => try value_mod.ownedStringValue(ctx.allocator, copy, ctx.containerOwnerTag()),
+        .symbol => try value_mod.ownedSymbolValue(ctx.allocator, copy, ctx.containerOwnerTag()),
         else => unreachable,
     };
     return .{ .value = promoted, .changed = true };
@@ -326,7 +329,7 @@ fn freezeItemsCopy(ctx: *Context, src: []const Value) anyerror!ItemsResult {
 /// Adopt a filled slice (allocated on the process-lifetime allocator, elements owned) into a
 /// fresh array. Ownership of the slice and elements ends here on every path.
 fn adoptArray(ctx: *Context, items: []Value) anyerror!Value {
-    const arr = value_mod.Array.fromOwnedSlice(ctx.allocator, items) catch |e| {
+    const arr = value_mod.Array.fromOwnedSlice(ctx.allocator, items, ctx.containerOwnerTag()) catch |e| {
         container_backing.releaseValues(items);
         ctx.allocator.free(items);
         return e;
@@ -338,7 +341,7 @@ fn adoptArray(ctx: *Context, items: []Value) anyerror!Value {
 /// freezing each value. Keys are duped onto the hash's own backing, matching every hash insert
 /// path.
 fn freezeMapCopy(ctx: *Context, map: *const std.StringHashMapUnmanaged(Value)) anyerror!*value_mod.HashTable {
-    const new_h = try value_mod.HashTable.create(ctx.allocator);
+    const new_h = try value_mod.HashTable.create(ctx.allocator, ctx.containerOwnerTag());
     errdefer new_h.header.release();
     const hash_alloc = new_h.header.allocator;
     try new_h.map.ensureTotalCapacity(hash_alloc, @intCast(map.count()));
@@ -403,7 +406,7 @@ fn freezeHash(ctx: *Context, h: *value_mod.HashTable, val: Value) anyerror!Freez
 /// Build a hash from entries whose values this function owns: on success they transfer into the
 /// hash, on error the untransferred remainder is released alongside the partial hash.
 fn buildFrozenHash(ctx: *Context, entries: []const HashEntry) anyerror!*value_mod.HashTable {
-    const new_h = try value_mod.HashTable.create(ctx.allocator);
+    const new_h = try value_mod.HashTable.create(ctx.allocator, ctx.containerOwnerTag());
     errdefer new_h.header.release();
     var done: usize = 0;
     errdefer for (entries[done..]) |e| container_backing.releaseValue(e.value);
@@ -445,7 +448,7 @@ fn freezeSet(ctx: *Context, s: *value_mod.Set, val: Value) anyerror!FreezeResult
 /// Build a set from keys this function owns: on success they transfer into the set (duplicates
 /// collapsing to the first occurrence), on error the untransferred remainder is released.
 fn buildFrozenSet(ctx: *Context, keys: []const Value) anyerror!*value_mod.Set {
-    const new_s = try value_mod.Set.create(ctx.allocator);
+    const new_s = try value_mod.Set.create(ctx.allocator, ctx.containerOwnerTag());
     errdefer new_s.header.release();
     var done: usize = 0;
     errdefer for (keys[done..]) |k| container_backing.releaseValue(k);
@@ -532,7 +535,7 @@ fn freezeValueMap(ctx: *Context, m: *value_mod.ValueMap, val: Value) anyerror!Fr
 /// Freezing collapses `V{ 1 2 }` and `{ 1 2 }` onto one key, so two entries distinct before the
 /// freeze can collide here. The first one inserted wins, matching `buildFrozenSet`.
 fn buildFrozenValueMap(ctx: *Context, entries: []const ValueMapEntry) anyerror!*value_mod.ValueMap {
-    const new_m = try value_mod.ValueMap.create(ctx.allocator);
+    const new_m = try value_mod.ValueMap.create(ctx.allocator, ctx.containerOwnerTag());
     errdefer new_m.header.release();
     var done: usize = 0;
     errdefer releaseValueMapEntries(entries[done..]);
@@ -570,7 +573,7 @@ fn freezeStruct(ctx: *Context, si: *const value_mod.StructInstance) anyerror!Val
         done += 1;
     }
 
-    const new_si = try value_mod.createStructInstance(alloc, si.struct_type, new_fields);
+    const new_si = try value_mod.createStructInstance(alloc, si.struct_type, new_fields, ctx.containerOwnerTag());
     return .{ .struct_instance = new_si };
 }
 
@@ -602,7 +605,7 @@ fn freezeTagged(ctx: *Context, t: TaggedPayload, val: Value) anyerror!FreezeResu
                 container_backing.retainValue(val);
                 return .{ .value = val, .changed = false };
             }
-            const wrapped = value_mod.ownedTaggedValue(ctx.allocator, t.tag, r.value) catch |e| {
+            const wrapped = value_mod.ownedTaggedValue(ctx.allocator, t.tag, r.value, ctx.containerOwnerTag()) catch |e| {
                 container_backing.releaseValue(r.value);
                 return e;
             };
@@ -676,7 +679,7 @@ test "freeze converts a vector of scalars to a shareable array" {
     var ctx = Context.init(testing.allocator);
     defer ctx.deinit();
 
-    const vec = try value_mod.Vector.create(ctx.allocator);
+    const vec = try value_mod.Vector.create(ctx.allocator, ctx.containerOwnerTag());
     try vec.list.append(ctx.allocator, .{ .fixnum = 1 });
     try vec.list.append(ctx.allocator, .{ .fixnum = 2 });
     const input: Value = .{ .vector = vec };
@@ -698,9 +701,9 @@ test "freeze recurses into nested vectors" {
     var ctx = Context.init(testing.allocator);
     defer ctx.deinit();
 
-    const inner = try value_mod.Vector.create(ctx.allocator);
+    const inner = try value_mod.Vector.create(ctx.allocator, ctx.containerOwnerTag());
     try inner.list.append(ctx.allocator, .{ .fixnum = 7 });
-    const outer = try value_mod.Vector.create(ctx.allocator);
+    const outer = try value_mod.Vector.create(ctx.allocator, ctx.containerOwnerTag());
     try outer.list.append(ctx.allocator, .{ .vector = inner });
     const input: Value = .{ .vector = outer };
     defer container_backing.releaseValue(input);
@@ -718,7 +721,7 @@ test "freeze promotes string leaves onto heap backings and the array shares" {
     var ctx = Context.init(testing.allocator);
     defer ctx.deinit();
 
-    const vec = try value_mod.Vector.create(ctx.allocator);
+    const vec = try value_mod.Vector.create(ctx.allocator, ctx.containerOwnerTag());
     try vec.list.append(ctx.allocator, value_mod.stringValue("hello"));
     const input: Value = .{ .vector = vec };
     defer container_backing.releaseValue(input);
@@ -756,8 +759,8 @@ test "freeze returns a durable array of backed strings by identity" {
     defer ctx.deinit();
 
     const items = try ctx.allocator.alloc(Value, 1);
-    items[0] = try value_mod.ownedStringValue(ctx.allocator, try ctx.allocator.dupe(u8, "owned"));
-    const arr = try value_mod.Array.fromOwnedSlice(ctx.allocator, items);
+    items[0] = try value_mod.ownedStringValue(ctx.allocator, try ctx.allocator.dupe(u8, "owned"), ctx.containerOwnerTag());
+    const arr = try value_mod.Array.fromOwnedSlice(ctx.allocator, items, ctx.containerOwnerTag());
     const input: Value = .{ .array = arr };
     defer container_backing.releaseValue(input);
 
@@ -773,9 +776,9 @@ test "freeze converts a mutable-map to a hash with frozen values" {
     var ctx = Context.init(testing.allocator);
     defer ctx.deinit();
 
-    const mm = try value_mod.MutableMap.create(ctx.allocator);
+    const mm = try value_mod.MutableMap.create(ctx.allocator, ctx.containerOwnerTag());
     const key = try ctx.allocator.dupe(u8, "k");
-    const inner = try value_mod.Vector.create(ctx.allocator);
+    const inner = try value_mod.Vector.create(ctx.allocator, ctx.containerOwnerTag());
     try inner.list.append(ctx.allocator, .{ .fixnum = 3 });
     try mm.map.put(ctx.allocator, key, .{ .vector = inner });
     const input: Value = .{ .mutable_map = mm };
@@ -797,10 +800,10 @@ test "freeze converts a mutable-value-map to a value-map with both halves frozen
     var ctx = Context.init(testing.allocator);
     defer ctx.deinit();
 
-    const mm = try value_mod.MutableValueMap.create(ctx.allocator);
-    const key_vec = try value_mod.Vector.create(ctx.allocator);
+    const mm = try value_mod.MutableValueMap.create(ctx.allocator, ctx.containerOwnerTag());
+    const key_vec = try value_mod.Vector.create(ctx.allocator, ctx.containerOwnerTag());
     try key_vec.list.append(ctx.allocator, .{ .fixnum = 1 });
-    const value_vec = try value_mod.Vector.create(ctx.allocator);
+    const value_vec = try value_mod.Vector.create(ctx.allocator, ctx.containerOwnerTag());
     try value_vec.list.append(ctx.allocator, .{ .fixnum = 3 });
     try mm.map.put(ctx.allocator, .{ .vector = key_vec }, .{ .vector = value_vec });
     const input: Value = .{ .mutable_value_map = mm };
@@ -828,12 +831,12 @@ test "freeze collapses two keys that share a frozen form onto the first entry" {
 
     // A vector key and an array key with the same contents are distinct keys
     // before the freeze and one key after it.
-    const mm = try value_mod.MutableValueMap.create(ctx.allocator);
-    const vec_key = try value_mod.Vector.create(ctx.allocator);
+    const mm = try value_mod.MutableValueMap.create(ctx.allocator, ctx.containerOwnerTag());
+    const vec_key = try value_mod.Vector.create(ctx.allocator, ctx.containerOwnerTag());
     try vec_key.list.append(ctx.allocator, .{ .fixnum = 7 });
     const items = try ctx.allocator.alloc(Value, 1);
     items[0] = .{ .fixnum = 7 };
-    const arr_key = try value_mod.Array.fromOwnedSlice(ctx.allocator, items);
+    const arr_key = try value_mod.Array.fromOwnedSlice(ctx.allocator, items, ctx.containerOwnerTag());
 
     try mm.map.put(ctx.allocator, .{ .vector = vec_key }, .{ .fixnum = 1 });
     try mm.map.put(ctx.allocator, .{ .array = arr_key }, .{ .fixnum = 2 });
@@ -854,7 +857,7 @@ test "freeze returns an unchanged durable value-map by identity" {
     var ctx = Context.init(testing.allocator);
     defer ctx.deinit();
 
-    const m = try value_mod.ValueMap.create(ctx.allocator);
+    const m = try value_mod.ValueMap.create(ctx.allocator, ctx.containerOwnerTag());
     try m.map.put(ctx.allocator, .{ .fixnum = 1 }, .{ .fixnum = 2 });
     const input: Value = .{ .value_map = m };
     defer container_backing.releaseValue(input);
@@ -891,7 +894,7 @@ test "an immutable container key is not copied for a lookup" {
     const items = try ctx.allocator.alloc(Value, 2);
     items[0] = .{ .fixnum = 0 };
     items[1] = .{ .fixnum = 1 };
-    const arr = try value_mod.Array.fromOwnedSlice(ctx.allocator, items);
+    const arr = try value_mod.Array.fromOwnedSlice(ctx.allocator, items, ctx.containerOwnerTag());
     const key: Value = .{ .array = arr };
     defer container_backing.releaseValue(key);
 
@@ -906,7 +909,7 @@ test "a mutable container key is frozen for a lookup, nested in an array or not"
     var ctx = Context.init(testing.allocator);
     defer ctx.deinit();
 
-    const vec = try value_mod.Vector.create(ctx.allocator);
+    const vec = try value_mod.Vector.create(ctx.allocator, ctx.containerOwnerTag());
     try vec.list.append(ctx.allocator, .{ .fixnum = 1 });
     const bare: Value = .{ .vector = vec };
     defer container_backing.releaseValue(bare);
@@ -920,7 +923,7 @@ test "a mutable container key is frozen for a lookup, nested in an array or not"
     const items = try ctx.allocator.alloc(Value, 1);
     container_backing.retainValue(bare);
     items[0] = bare;
-    const wrapper: Value = .{ .array = try value_mod.Array.fromOwnedSlice(ctx.allocator, items) };
+    const wrapper: Value = .{ .array = try value_mod.Array.fromOwnedSlice(ctx.allocator, items, ctx.containerOwnerTag()) };
     defer container_backing.releaseValue(wrapper);
 
     const frozen_wrapper = try frozenKey(&ctx, wrapper);
@@ -938,7 +941,7 @@ test "a struct instance key is frozen for a lookup" {
     var st = value_mod.StructType{ .name = "box", .fields = &.{"data"} };
     const fields = try ctx.allocator.alloc(Value, 1);
     fields[0] = .{ .fixnum = 1 };
-    const key: Value = .{ .struct_instance = try value_mod.createStructInstance(ctx.allocator, &st, fields) };
+    const key: Value = .{ .struct_instance = try value_mod.createStructInstance(ctx.allocator, &st, fields, ctx.containerOwnerTag()) };
     defer container_backing.releaseValue(key);
 
     const frozen = try frozenKey(&ctx, key);
@@ -955,7 +958,7 @@ test "frozenKeyConsume passes a stable key through and consumes the rest" {
     const scalar = try frozenKeyConsume(&ctx, .{ .fixnum = 3 });
     try testing.expectEqual(@as(i64, 3), scalar.fixnum);
 
-    const vec = try value_mod.Vector.create(ctx.allocator);
+    const vec = try value_mod.Vector.create(ctx.allocator, ctx.containerOwnerTag());
     try vec.list.append(ctx.allocator, .{ .fixnum = 5 });
     // A second reference stands in for the caller's own handle, so the refcount stays inspectable
     // after the insert reference is consumed.
@@ -973,7 +976,7 @@ test "freeze converts a byte-array to a string" {
     var ctx = Context.init(testing.allocator);
     defer ctx.deinit();
 
-    const ba = try value_mod.ByteArray.create(ctx.allocator);
+    const ba = try value_mod.ByteArray.create(ctx.allocator, ctx.containerOwnerTag());
     try ba.ensureTotalCapacity(ctx.allocator, 2);
     ba.appendSliceAssumeCapacity("ab");
     const input: Value = .{ .byte_array = ba };
@@ -994,7 +997,7 @@ test "freeze rebuilds a static array onto owned shareable storage" {
     const items = try scratch.alloc(Value, 2);
     items[0] = .{ .fixnum = 1 };
     items[1] = .{ .fixnum = 2 };
-    const static_arr = try value_mod.Array.createStatic(scratch, items);
+    const static_arr = try value_mod.Array.createStatic(scratch, items, 0);
     const input: Value = .{ .array = static_arr };
     defer container_backing.releaseValue(input);
 
@@ -1011,7 +1014,7 @@ test "freeze returns an unchanged durable array by identity" {
     var ctx = Context.init(testing.allocator);
     defer ctx.deinit();
 
-    const arr = try value_mod.Array.createCopyFrom(ctx.allocator, &.{.{ .fixnum = 5 }});
+    const arr = try value_mod.Array.createCopyFrom(ctx.allocator, &.{.{ .fixnum = 5 }}, ctx.containerOwnerTag());
     const input: Value = .{ .array = arr };
     defer container_backing.releaseValue(input);
 
@@ -1027,7 +1030,7 @@ test "freeze! adopts a sole-owner vector backing in place" {
     var ctx = Context.init(testing.allocator);
     defer ctx.deinit();
 
-    const vec = try value_mod.Vector.create(ctx.allocator);
+    const vec = try value_mod.Vector.create(ctx.allocator, ctx.containerOwnerTag());
     try vec.list.ensureTotalCapacityPrecise(ctx.allocator, 2);
     vec.list.appendAssumeCapacity(.{ .fixnum = 1 });
     vec.list.appendAssumeCapacity(.{ .fixnum = 2 });
@@ -1045,7 +1048,7 @@ test "freeze! in-place vector adoption promotes string elements" {
     var ctx = Context.init(testing.allocator);
     defer ctx.deinit();
 
-    const vec = try value_mod.Vector.create(ctx.allocator);
+    const vec = try value_mod.Vector.create(ctx.allocator, ctx.containerOwnerTag());
     try vec.list.ensureTotalCapacityPrecise(ctx.allocator, 1);
     vec.list.appendAssumeCapacity(value_mod.stringValue("lit"));
     const items_ptr = vec.list.items.ptr;
@@ -1063,7 +1066,7 @@ test "freeze! copies an aliased vector and leaves the alias intact" {
     var ctx = Context.init(testing.allocator);
     defer ctx.deinit();
 
-    const vec = try value_mod.Vector.create(ctx.allocator);
+    const vec = try value_mod.Vector.create(ctx.allocator, ctx.containerOwnerTag());
     try vec.list.append(ctx.allocator, .{ .fixnum = 9 });
     const alias: Value = .{ .vector = vec };
     container_backing.retainValue(alias);
@@ -1081,7 +1084,7 @@ test "freeze returns an unchanged durable hash and set by identity" {
     var ctx = Context.init(testing.allocator);
     defer ctx.deinit();
 
-    const h = try value_mod.HashTable.create(ctx.allocator);
+    const h = try value_mod.HashTable.create(ctx.allocator, ctx.containerOwnerTag());
     const key = try ctx.allocator.dupe(u8, "a");
     try h.map.put(ctx.allocator, key, .{ .fixnum = 1 });
     const hash_input: Value = .{ .hash = h };
@@ -1091,7 +1094,7 @@ test "freeze returns an unchanged durable hash and set by identity" {
     defer container_backing.releaseValue(frozen_hash);
     try testing.expect(frozen_hash.hash == h);
 
-    const s = try value_mod.Set.create(ctx.allocator);
+    const s = try value_mod.Set.create(ctx.allocator, ctx.containerOwnerTag());
     try s.map.put(ctx.allocator, .{ .fixnum = 4 }, {});
     const set_input: Value = .{ .set = s };
     defer container_backing.releaseValue(set_input);

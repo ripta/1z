@@ -568,7 +568,7 @@ fn nativeWatcherRemove(ctx: *Context) anyerror!void {
 /// creation reference transfers to the map slot; the errdefers cover a failed put.
 fn putOwnedPath(ctx: *Context, hash: *value_mod.HashTable, key: []const u8, path: []const u8) !void {
     const copy = try ctx.allocator.dupe(u8, path);
-    const val = value_mod.ownedStringValue(ctx.allocator, copy) catch |e| {
+    const val = value_mod.ownedStringValue(ctx.allocator, copy, ctx.containerOwnerTag()) catch |e| {
         ctx.allocator.free(copy);
         return e;
     };
@@ -604,7 +604,7 @@ fn nativeWatcherRead(ctx: *Context) anyerror!void {
             try helpers.checkCancellation(ctx);
         }
 
-        const hash = try HashTable.create(ctx.allocator);
+        const hash = try HashTable.create(ctx.allocator, ctx.containerOwnerTag());
         errdefer hash.header.release();
         const hash_alloc = hash.header.allocator;
 

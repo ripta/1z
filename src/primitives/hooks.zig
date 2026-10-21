@@ -190,7 +190,7 @@ fn nativeRegisterScopedHook(ctx: *Context) anyerror!void {
     container_backing.retainValues(new_items[0..old_items.len]);
     new_items[old_items.len] = quot_val;
 
-    const arr = value_mod.Array.fromOwnedSlice(alloc, new_items) catch |e| {
+    const arr = value_mod.Array.fromOwnedSlice(alloc, new_items, ctx.containerOwnerTag()) catch |e| {
         container_backing.releaseValues(new_items);
         alloc.free(new_items);
         return e;
@@ -267,7 +267,7 @@ test "LIFO ordering" {
     const ialloc = ctx.quotationAllocator();
     const registry = ctx.hook_registry;
 
-    const log = try value_mod.Vector.create(alloc);
+    const log = try value_mod.Vector.create(alloc, 0);
     defer log.header.release();
 
     const key = try alloc.dupe(u8, "test-event");
@@ -294,7 +294,7 @@ test "error resilience" {
     const ialloc = ctx.quotationAllocator();
     const registry = ctx.hook_registry;
 
-    const log = try value_mod.Vector.create(alloc);
+    const log = try value_mod.Vector.create(alloc, 0);
     defer log.header.release();
 
     // The middle hook references an undefined word.
@@ -390,7 +390,7 @@ test "hasScopedHooks reports false with an empty array binding" {
     var ctx = context_mod.Context.init(std.testing.allocator);
     defer ctx.deinit();
     const alloc = ctx.quotationAllocator();
-    const empty_arr = try value_mod.Array.fromOwnedSlice(alloc, &.{});
+    const empty_arr = try value_mod.Array.fromOwnedSlice(alloc, &.{}, 0);
     try ctx.setParameterInTopFrame("word-defined-hooks", .{ .array = empty_arr });
     try std.testing.expect(!hasScopedHooks(&ctx, "word-defined-hooks"));
 }
@@ -401,7 +401,7 @@ test "hasScopedHooks reports true with a non-empty array binding" {
     const alloc = ctx.quotationAllocator();
     const items = try alloc.alloc(Value, 1);
     items[0] = .{ .quotation = .{ .instructions = &.{} } };
-    const arr = try value_mod.Array.fromOwnedSlice(alloc, items);
+    const arr = try value_mod.Array.fromOwnedSlice(alloc, items, 0);
     try ctx.setParameterInTopFrame("word-defined-hooks", .{ .array = arr });
     try std.testing.expect(hasScopedHooks(&ctx, "word-defined-hooks"));
 }

@@ -50,7 +50,7 @@ pub fn nativeMakeHash(ctx: *Context) anyerror!void {
     const quot = pc.quot;
     const instrs = quot.instructions;
 
-    const hash = HashTable.create(ctx.allocator) catch return error.OutOfMemory;
+    const hash = HashTable.create(ctx.allocator, ctx.containerOwnerTag()) catch return error.OutOfMemory;
     errdefer container_backing.releaseValue(.{ .hash = hash });
     const hash_alloc = hash.header.allocator;
 
@@ -133,7 +133,7 @@ pub fn nativeMakeVector(ctx: *Context) anyerror!void {
     const quot = pc.quot;
     const instrs = quot.instructions;
 
-    const vec = Vector.create(ctx.allocator) catch return error.OutOfMemory;
+    const vec = Vector.create(ctx.allocator, ctx.containerOwnerTag()) catch return error.OutOfMemory;
     errdefer container_backing.releaseValue(.{ .vector = vec });
 
     // Execute each instruction and collect values.
@@ -171,7 +171,7 @@ pub fn nativeMakeByteArray(ctx: *Context) anyerror!void {
 
     // Create a new byte array on the thread-safe heap so the backing
     // participates in the refcounted cross-worker lifecycle.
-    const ba = ByteArray.create(ctx.allocator) catch return error.OutOfMemory;
+    const ba = ByteArray.create(ctx.allocator, ctx.containerOwnerTag()) catch return error.OutOfMemory;
     errdefer container_backing.releaseValue(.{ .byte_array = ba });
     const alloc = ba.header.allocator;
 
@@ -217,7 +217,7 @@ pub fn nativeMakeSet(ctx: *Context) anyerror!void {
     const quot = pc.quot;
     const instrs = quot.instructions;
 
-    const set = Set.create(ctx.allocator) catch return error.OutOfMemory;
+    const set = Set.create(ctx.allocator, ctx.containerOwnerTag()) catch return error.OutOfMemory;
     errdefer container_backing.releaseValue(.{ .set = set });
     const set_alloc = set.header.allocator;
 
@@ -265,7 +265,7 @@ pub fn nativeMakeMutableMap(ctx: *Context) anyerror!void {
     const quot = pc.quot;
     const instrs = quot.instructions;
 
-    const mmap = MutableMap.create(ctx.allocator) catch return error.OutOfMemory;
+    const mmap = MutableMap.create(ctx.allocator, ctx.containerOwnerTag()) catch return error.OutOfMemory;
     errdefer container_backing.releaseValue(.{ .mutable_map = mmap });
     const alloc = mmap.header.allocator;
 
@@ -336,6 +336,7 @@ pub fn nativeMakeMutableMap(ctx: *Context) anyerror!void {
 pub fn nativeAtSetMut(ctx: *Context) anyerror!void {
     // mmap is at position 2, below key and value
     if (try dispatch_helpers.tryDispatchContainerAtDepth(ctx, ctx.nativeDispatchId(.at_set_mut), 2, true)) return;
+    try helpers.beginWriteAtDepth(ctx, 2, &.{.mutable_map});
 
     const new_value = try ctx.stack.pop();
     const key = ctx.stack.pop() catch |err| {
@@ -364,6 +365,7 @@ pub fn nativeAtSetMut(ctx: *Context) anyerror!void {
             // over `new_value`'s reference; `obj` flows into the result slot
             // via `pushMoved`. No extra retains are needed in either path.
             m.header.lock();
+            ctx.assertWriteAllowed(m.header.ownerTag());
             const existing_entry = m.map.getEntry(key_str);
             if (existing_entry) |entry| {
                 const displaced = entry.value_ptr.*;
@@ -405,6 +407,7 @@ pub fn nativeAtSetMut(ctx: *Context) anyerror!void {
 pub fn nativeAtRemoveMut(ctx: *Context) anyerror!void {
     // mmap is at position 1, below key
     if (try dispatch_helpers.tryDispatchContainerAtDepth(ctx, ctx.nativeDispatchId(.at_remove_mut), 1, true)) return;
+    try helpers.beginWriteAtDepth(ctx, 1, &.{.mutable_map});
 
     const key = try ctx.stack.pop();
     defer container_backing.releaseValue(key);
@@ -418,6 +421,7 @@ pub fn nativeAtRemoveMut(ctx: *Context) anyerror!void {
     switch (obj) {
         .mutable_map => |m| {
             m.header.lock();
+            ctx.assertWriteAllowed(m.header.ownerTag());
             const removed = m.map.fetchRemove(key_str);
             m.header.unlock();
             if (removed) |kv| {

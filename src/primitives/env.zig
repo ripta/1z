@@ -21,7 +21,7 @@ fn nativeEnviron(ctx: *Context) anyerror!void {
     if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "environ");
     const alloc = ctx.quotationAllocator();
 
-    const hash = HashTable.create(ctx.allocator) catch return error.OutOfMemory;
+    const hash = HashTable.create(ctx.allocator, ctx.containerOwnerTag()) catch return error.OutOfMemory;
     errdefer hash.header.release();
     const hash_alloc = hash.header.allocator;
 
@@ -43,7 +43,7 @@ fn nativeEnviron(ctx: *Context) anyerror!void {
 fn nativeSysInfo(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
 
-    const hash = HashTable.create(ctx.allocator) catch return error.OutOfMemory;
+    const hash = HashTable.create(ctx.allocator, ctx.containerOwnerTag()) catch return error.OutOfMemory;
     errdefer hash.header.release();
     const hash_alloc = hash.header.allocator;
 

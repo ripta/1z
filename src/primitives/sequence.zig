@@ -229,7 +229,7 @@ pub const SequenceIterator = struct {
                     return value_mod.stringValue(self.single_char_cache[cp_slice[0]]);
                 }
                 const char_str = self.allocator.dupe(u8, cp_slice) catch return error.OutOfMemory;
-                return value_mod.ownedStringValue(self.allocator, char_str) catch |e| {
+                return value_mod.ownedStringValue(self.allocator, char_str, 0) catch |e| {
                     self.allocator.free(char_str);
                     return e;
                 };
@@ -296,6 +296,7 @@ pub const SequenceIterator = struct {
 pub const SequenceBuilder = struct {
     kind: SequenceKind,
     allocator: Allocator,
+    owner: u32,
     state: union {
         string: std.ArrayListUnmanaged(u8),
         array: std.ArrayListUnmanaged(Value),
@@ -305,39 +306,44 @@ pub const SequenceBuilder = struct {
     },
 
     /// Initialize a builder for the given sequence kind.
-    pub fn init(kind: SequenceKind, allocator: Allocator) !SequenceBuilder {
+    pub fn init(kind: SequenceKind, allocator: Allocator, owner: u32) !SequenceBuilder {
         return switch (kind) {
             .string => SequenceBuilder{
                 .kind = kind,
                 .allocator = allocator,
+                .owner = owner,
                 .state = .{ .string = .{} },
             },
             .array => SequenceBuilder{
                 .kind = kind,
                 .allocator = allocator,
+                .owner = owner,
                 .state = .{ .array = .{} },
             },
             .vector => blk: {
-                const vec = Vector.create(allocator) catch return error.OutOfMemory;
+                const vec = Vector.create(allocator, owner) catch return error.OutOfMemory;
                 break :blk SequenceBuilder{
                     .kind = kind,
                     .allocator = allocator,
+                    .owner = owner,
                     .state = .{ .vector = vec },
                 };
             },
             .byte_array => blk: {
-                const ba = ByteArray.create(allocator) catch return error.OutOfMemory;
+                const ba = ByteArray.create(allocator, owner) catch return error.OutOfMemory;
                 break :blk SequenceBuilder{
                     .kind = kind,
                     .allocator = allocator,
+                    .owner = owner,
                     .state = .{ .byte_array = ba },
                 };
             },
             .set => blk: {
-                const s = Set.create(allocator) catch return error.OutOfMemory;
+                const s = Set.create(allocator, owner) catch return error.OutOfMemory;
                 break :blk SequenceBuilder{
                     .kind = kind,
                     .allocator = allocator,
+                    .owner = owner,
                     .state = .{ .set = s },
                 };
             },
@@ -345,8 +351,8 @@ pub const SequenceBuilder = struct {
     }
 
     /// Initialize a builder with a capacity hint.
-    pub fn initWithCapacity(kind: SequenceKind, allocator: Allocator, capacity: usize) !SequenceBuilder {
-        var builder = try init(kind, allocator);
+    pub fn initWithCapacity(kind: SequenceKind, allocator: Allocator, capacity: usize, owner: u32) !SequenceBuilder {
+        var builder = try init(kind, allocator, owner);
         switch (kind) {
             .string => builder.state.string.ensureTotalCapacity(allocator, capacity) catch return error.OutOfMemory,
             .array => builder.state.array.ensureTotalCapacity(allocator, capacity) catch return error.OutOfMemory,
@@ -404,7 +410,7 @@ pub const SequenceBuilder = struct {
             .string => value_mod.stringValue(self.state.string.toOwnedSlice(self.allocator) catch return error.OutOfMemory),
             .array => blk: {
                 const items = self.state.array.toOwnedSlice(self.allocator) catch return error.OutOfMemory;
-                const arr = value_mod.Array.fromOwnedSlice(self.allocator, items) catch |e| {
+                const arr = value_mod.Array.fromOwnedSlice(self.allocator, items, self.owner) catch |e| {
                     self.allocator.free(items);
                     return e;
                 };
@@ -479,11 +485,11 @@ test "sequenceToValues retains borrowed elements" {
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
 
-    const inner = try Vector.create(ctx.allocator);
+    const inner = try Vector.create(ctx.allocator, ctx.containerOwnerTag());
     defer container_backing.releaseValue(.{ .vector = inner });
     try inner.list.append(ctx.allocator, .{ .fixnum = 1 });
 
-    const outer = try Vector.create(ctx.allocator);
+    const outer = try Vector.create(ctx.allocator, ctx.containerOwnerTag());
     defer container_backing.releaseValue(.{ .vector = outer });
     try outer.list.append(ctx.allocator, .{ .vector = inner });
     container_backing.retainValue(.{ .vector = inner });
@@ -578,7 +584,7 @@ test "SequenceBuilder for array" {
     const allocator = std.testing.allocator;
     var ctx = Context.init(allocator);
     defer ctx.deinit();
-    var builder = try SequenceBuilder.init(.array, allocator);
+    var builder = try SequenceBuilder.init(.array, allocator, 0);
 
     try builder.append(&ctx, .{ .fixnum = 1 });
     try builder.append(&ctx, .{ .fixnum = 2 });

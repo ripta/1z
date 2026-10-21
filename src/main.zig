@@ -5893,7 +5893,7 @@ test "printErrorDetails hands a typed error's payload to the unhandled-error hoo
     const ialloc = ctx.quotationAllocator();
 
     // A hook must leave the stack as it found it, so this one moves the error's data into a vector.
-    const log = try value_mod.Vector.create(alloc);
+    const log = try value_mod.Vector.create(alloc, 0);
     defer log.header.release();
     const hook_body = try ialloc.alloc(Instruction, 6);
     hook_body[0] = .{ .op = .{ .push_literal = value_mod.symbolValue("data") }, .line = 0 };
@@ -5907,7 +5907,7 @@ test "printErrorDetails hands a typed error's payload to the unhandled-error hoo
     try list.append(alloc, .{ .quot = .{ .instructions = hook_body }, .owner = .unit });
     try ctx.hook_registry.hooks.put(alloc, try alloc.dupe(u8, "on:unhandled-error"), list);
 
-    const payload = try value_mod.HashTable.create(alloc);
+    const payload = try value_mod.HashTable.create(alloc, 0);
     const payload_alloc = payload.header.allocator;
     try payload.map.put(payload_alloc, try payload_alloc.dupe(u8, "used"), .{ .fixnum = 7 });
     ctx.setPendingErrorData(.{ .hash = payload });

@@ -172,7 +172,8 @@ fn nativeSend(ctx: *Context) anyerror!void {
 
         // Copy before dequeuing or firing the select, so a rejected arena-owned value fails
         // the sender here while the receiver stays queued and undisturbed.
-        const copied = tasks.deepCopyForTransfer(ctx, value, ch.waiting_receivers.items[0].task.ctx.arena.allocator(), ctx.allocator, ctx.allocator) catch |err| {
+        const receiving_ctx = ch.waiting_receivers.items[0].task.ctx;
+        const copied = tasks.deepCopyForTransferTo(ctx, receiving_ctx, value, receiving_ctx.arena.allocator(), ctx.allocator, ctx.allocator) catch |err| {
             releaseChannel(ctx, ch);
             container_backing.releaseValue(value);
             return err;
@@ -710,7 +711,7 @@ test "send rejects borrowed buffer before buffered channel insertion" {
     }
 
     var bytes = [_]u8{ 1, 2, 3 };
-    const ba = try value_mod.makeBorrowedByteArray(std.testing.allocator, bytes[0..]);
+    const ba = try value_mod.makeBorrowedByteArray(std.testing.allocator, bytes[0..], 0);
     defer std.testing.allocator.destroy(ba);
 
     try ctx.stack.push(.{ .byte_array = ba });
@@ -789,7 +790,7 @@ test "send accepts owned buffer into buffered channel" {
         std.testing.allocator.destroy(ch);
     }
 
-    const ba = try value_mod.ByteArray.create(std.testing.allocator);
+    const ba = try value_mod.ByteArray.create(std.testing.allocator, 0);
     defer container_backing.releaseValue(.{ .byte_array = ba });
     try ba.ensureTotalCapacity(std.testing.allocator, 3);
     ba.appendAssumeCapacity(1);

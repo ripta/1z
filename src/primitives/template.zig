@@ -433,7 +433,7 @@ test "valueToString converts boolean" {
 }
 
 test "lookupNamed on hash" {
-    const h = try HashTable.create(test_alloc);
+    const h = try HashTable.create(test_alloc, 0);
     defer h.header.release();
     try h.map.put(test_alloc, try test_alloc.dupe(u8, "x"), .{ .fixnum = 10 });
     const val = try lookupNamed(null, .{ .hash = h }, "x");
@@ -441,7 +441,7 @@ test "lookupNamed on hash" {
 }
 
 test "lookupNamed on hash missing key" {
-    const h = try HashTable.create(test_alloc);
+    const h = try HashTable.create(test_alloc, 0);
     defer h.header.release();
     try h.map.put(test_alloc, try test_alloc.dupe(u8, "x"), .{ .fixnum = 10 });
     const result = lookupNamed(null, .{ .hash = h }, "y");
@@ -467,7 +467,7 @@ test "lookupIndexed out of bounds" {
 }
 
 test "lookupIndexed on hash is TypeError" {
-    const h = try HashTable.create(test_alloc);
+    const h = try HashTable.create(test_alloc, 0);
     defer h.header.release();
     const result = lookupIndexed(null, .{ .hash = h }, 0);
     try testing.expectError(error.TypeMismatch, result);

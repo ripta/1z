@@ -475,7 +475,7 @@ fn nativeDescriptorVariantsRaw(ctx: *Context) anyerror!void {
             const pair = try alloc.alloc(value_mod.Value, 2);
             pair[0] = value_mod.symbolValue(v.name);
             pair[1] = .{ .type_val = if (v.type_val) |tv| @constCast(tv) else unit_tv };
-            arr[i] = .{ .array = value_mod.Array.fromOwnedSlice(alloc, pair) catch |e| {
+            arr[i] = .{ .array = value_mod.Array.fromOwnedSlice(alloc, pair, ctx.containerOwnerTag()) catch |e| {
                 alloc.free(pair);
                 return e;
             } };
@@ -737,13 +737,13 @@ fn pushDefineBuiltinArgs(ctx: *Context, name: []const u8, flag: ?[]const u8) !vo
 
     try ctx.stack.push(value_mod.symbolValue(name));
 
-    const source = try MutableMap.create(alloc);
+    const source = try MutableMap.create(alloc, 0);
     if (flag) |key| {
         try source.map.put(alloc, try alloc.dupe(u8, key), .{ .boolean = true });
     }
     try ctx.stack.pushMoved(.{ .mutable_map = source });
 
-    const markers = try value_mod.Array.createCopyFrom(alloc, &.{});
+    const markers = try value_mod.Array.createCopyFrom(alloc, &.{}, 0);
     try ctx.stack.pushMoved(.{ .array = markers });
 }
 

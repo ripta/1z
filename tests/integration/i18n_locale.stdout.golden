@@ -89,15 +89,15 @@ PASS: empty string throws
 Stack: [ ]
 PASS: empty string error type
 Stack: [ ]
-Stack: [ <error parse-error: empty locale string at position 0 data=H{ offset: 0 } [src/prelude.1z:1383:throw <- i18n/locale:112:when <- tests/integration/i18n_locale.1z:88:recover]> ]
+Stack: [ <error parse-error: empty locale string at position 0 data=H{ offset: 0 } [src/prelude.1z:1386:throw <- i18n/locale:112:when <- tests/integration/i18n_locale.1z:88:recover]> ]
 PASS: empty string message
-Stack: [ <error parse-error: empty locale string at position 0 data=H{ offset: 0 } [src/prelude.1z:1383:throw <- i18n/locale:112:when <- tests/integration/i18n_locale.1z:88:recover]> ]
+Stack: [ <error parse-error: empty locale string at position 0 data=H{ offset: 0 } [src/prelude.1z:1386:throw <- i18n/locale:112:when <- tests/integration/i18n_locale.1z:88:recover]> ]
 PASS: empty string offset
 Stack: [ ]
 PASS: invalid tag error type
 Stack: [ ]
-Stack: [ <error parse-error: invalid locale tag at position 5 data=H{ offset: 5 } [src/prelude.1z:1383:throw <- i18n/locale:67:when <- i18n/locale:116:(bcp47>icu-id) <- i18n/locale:120:if <- tests/integration/i18n_locale.1z:93:recover]> ]
+Stack: [ <error parse-error: invalid locale tag at position 5 data=H{ offset: 5 } [src/prelude.1z:1386:throw <- i18n/locale:67:when <- i18n/locale:116:(bcp47>icu-id) <- i18n/locale:120:if <- tests/integration/i18n_locale.1z:93:recover]> ]
 PASS: invalid tag message
-Stack: [ <error parse-error: invalid locale tag at position 5 data=H{ offset: 5 } [src/prelude.1z:1383:throw <- i18n/locale:67:when <- i18n/locale:116:(bcp47>icu-id) <- i18n/locale:120:if <- tests/integration/i18n_locale.1z:93:recover]> ]
+Stack: [ <error parse-error: invalid locale tag at position 5 data=H{ offset: 5 } [src/prelude.1z:1386:throw <- i18n/locale:67:when <- i18n/locale:116:(bcp47>icu-id) <- i18n/locale:120:if <- tests/integration/i18n_locale.1z:93:recover]> ]
 PASS: invalid tag offset is where ICU stopped accepting
 Stack: [ ]

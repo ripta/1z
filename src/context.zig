@@ -795,6 +795,14 @@ pub const AotBaseScope = struct {
     }
 };
 
+/// Source of `Context.load_owner_id`. Zero is reserved for contexts that are not analysis load
+/// owners, so the first identity handed out is one.
+///
+/// The counter is 32 bits wide. The tag shares a container's flags word with bits reserved for
+/// cycle handling, and wasm32 has no 64-bit atomics. Exhaustion panics instead of wrapping, so a
+/// reused identity can never alias an older owner.
+var next_load_owner_id = std.atomic.Value(u32).init(1);
+
 /// The Context holds all interpreter state.
 pub const Context = struct {
     stack: Stack,
@@ -1544,6 +1552,12 @@ pub const Context = struct {
     /// Whether this context is an analysis context or descends from one. A task spawned under an
     /// analysis context inherits it, along with check mode and its epoch.
     in_analysis: bool = false,
+    /// The identity an analysis load owner stamps on the containers it and its tasks make. Zero for
+    /// every context that is not an analysis load owner.
+    ///
+    /// It is a counter value. `initChild` returns the context by value, and a freed owner's
+    /// address can be reused.
+    load_owner_id: u32 = 0,
     /// When true, disables both definition-time non-tail-recursion analysis
     /// and the runtime marker consistency check.
     allow_all_recursion: bool = false,
@@ -1855,7 +1869,7 @@ pub const Context = struct {
         // Allocate the module cache M{} via the refcounted container path so
         // it survives cross-worker mutation and is freed deterministically
         // during root-context teardown.
-        ctx.module_cache_value = value_mod.MutableMap.create(allocator) catch |err| {
+        ctx.module_cache_value = value_mod.MutableMap.create(allocator, 0) catch |err| {
             std.debug.panic("Failed to allocate module cache: {any}", .{err});
         };
         ctx.module_cache_owned = true;
@@ -1998,7 +2012,7 @@ pub const Context = struct {
     pub fn setStackOverflowError(self: *Context, sp: usize) void {
         self.pending_error_message = self.stackOverflowMessage(sp);
 
-        const hash = value_mod.HashTable.create(self.allocator) catch return;
+        const hash = value_mod.HashTable.create(self.allocator, self.containerOwnerTag()) catch return;
         self.fillStackOverflowPayload(hash, sp) catch {
             container_backing.releaseValue(.{ .hash = hash });
             return;
@@ -2167,6 +2181,8 @@ pub const Context = struct {
             .analysis, .analysis_reusing => {
                 ctx.owns_loads = true;
                 ctx.in_analysis = true;
+                ctx.load_owner_id = next_load_owner_id.fetchAdd(1, .monotonic);
+                if (ctx.load_owner_id == 0) @panic("load owner identities exhausted");
                 if (child_kind == .analysis_reusing) ctx.reused_module_cache = parent.module_cache_value;
             },
         }
@@ -2205,7 +2221,7 @@ pub const Context = struct {
         // it. Every other context shares the cache of its nearest load owner, so tasks don't
         // re-load from disk.
         if (ctx.owns_loads) {
-            ctx.module_cache_value = try value_mod.MutableMap.create(allocator);
+            ctx.module_cache_value = try value_mod.MutableMap.create(allocator, ctx.containerOwnerTag());
             ctx.module_cache_owned = true;
         } else {
             ctx.module_cache_value = parent.module_cache_value;
@@ -2749,6 +2765,47 @@ pub const Context = struct {
         return cur;
     }
 
+    /// The owner tag a container made by this context carries. Zero outside analysis. Inside
+    /// analysis it is the identity of the nearest load owner, which outlives every task under it.
+    pub inline fn containerOwnerTag(self: *Context) u32 {
+        if (!self.in_analysis) return 0;
+        return self.nearestLoadOwner().load_owner_id;
+    }
+
+    /// Whether a write by this context may land on a target carrying `owner_tag`. A context outside
+    /// analysis pays only the flag test. Inside analysis the tag must name the running context's
+    /// nearest load owner.
+    pub inline fn writeAllowed(self: *Context, owner_tag: u32) bool {
+        if (!self.in_analysis) return true;
+        return owner_tag == self.nearestLoadOwner().load_owner_id;
+    }
+
+    /// Fail with `analysis-escape` when analysis would write into state it does not own. `what`
+    /// names the target for the error message.
+    pub inline fn checkWrite(self: *Context, owner_tag: u32, what: []const u8) error{AnalysisEscape}!void {
+        if (self.writeAllowed(owner_tag)) return;
+        return self.raiseAnalysisEscape(what);
+    }
+
+    fn raiseAnalysisEscape(self: *Context, what: []const u8) error{AnalysisEscape} {
+        self.pending_error_message = std.fmt.allocPrint(
+            self.arena.allocator(),
+            "analysis cannot write to {s} it does not own",
+            .{what},
+        ) catch "analysis cannot write to state it does not own";
+        return error.AnalysisEscape;
+    }
+
+    /// Debug-only. Assert that a write about to land on a target carrying `owner_tag` passed the
+    /// analysis write check.
+    ///
+    /// The write check runs before a mutation. Each lowest-level mutator that holds a context
+    /// repeats the predicate here, so a caller that reaches the mutation without the check trips
+    /// an assertion instead of writing into an ancestor's state.
+    pub inline fn assertWriteAllowed(self: *Context, owner_tag: u32) void {
+        if (builtin.mode == .Debug) std.debug.assert(self.writeAllowed(owner_tag));
+    }
+
     /// Whether this context's registrations live on the root. False for an analysis child and for
     /// a task whose load runs against one.
     pub fn stateTargetIsRoot(self: *Context) bool {
@@ -3136,7 +3193,9 @@ pub const Context = struct {
     /// Record a `once` word's cell on the durable-state target's dictionary, so the value it
     /// publishes is released at that context's teardown.
     pub fn registerOnceCell(self: *Context, cell: *value_mod.OnceCell) !void {
-        try self.stateTarget().dictionary.registerOnceCell(cell);
+        const target = self.stateTarget();
+        cell.owner_tag = target.containerOwnerTag();
+        try target.dictionary.registerOnceCell(cell);
     }
 
     /// Record a compound body's container literals on the durable-state
@@ -4244,7 +4303,7 @@ pub const Context = struct {
             .header = undefined,
             .owns_segments = true,
             .owns_scope = true,
-        });
+        }, self.containerOwnerTag());
     }
 
     /// The value a quotation-literal push should place: `quot` itself, or a `.closure` carrying the
@@ -5871,12 +5930,12 @@ pub const Context = struct {
         if (call_graph_mod.hasTailCallToGroupCandidate(self, instrs, name, effect.inputs.len, effect.outputs.len)) {
             if (call_graph_mod.detectMutualGroup(self, name)) |members| {
                 defer self.allocator.free(members);
-                if (!self.groupPartnerHasCode(name, members) and self.compileMutualGroup(members)) return;
+                if (!self.groupPartnerHasCode(name, members) and (self.compileMutualGroup(members) catch false)) return;
             }
         }
 
         const body = self.compileBody(name, def, instrs, effect, null) orelse return;
-        self.installCompiledBody(name, def, instrs, body);
+        self.installCompiledBody(name, def, instrs, body) catch {};
     }
 
     fn groupPartnerHasCode(self: *Context, name: []const u8, members: []const []const u8) bool {
@@ -5896,7 +5955,12 @@ pub const Context = struct {
     ///
     /// Nothing is installed until every member has compiled. A member installed alone would hop to
     /// a partner with no code, which then runs interpreted on every hop.
-    pub fn compileMutualGroup(self: *Context, members: []const []const u8) bool {
+    pub fn compileMutualGroup(self: *Context, members: []const []const u8) error{AnalysisEscape}!bool {
+        // Every slot is checked before anything compiles, so a refused group installs nothing and
+        // there is no half-installed state to undo. A member that already has an id would not
+        // reach the check below.
+        for (members) |member| try checkWordIdSlot(self, member);
+
         // Every member's code bakes its partners' ids, so all of them exist before any compiles.
         for (members) |member| {
             const member_def = self.lookupWord(member) orelse continue;
@@ -5904,7 +5968,7 @@ pub const Context = struct {
 
             const id = self.mintJitId(member, member_def) catch return false;
             if (self.jit_dispatch.getMut(id)) |em| em.stack_effect = member_def.stack_effect;
-            propagateWordId(self, member, id);
+            try propagateWordId(self, member, id);
         }
 
         const bodies = self.allocator.alloc(?CompiledBody, members.len) catch return false;
@@ -5931,7 +5995,7 @@ pub const Context = struct {
         installed = true;
         for (members, bodies) |member, body| {
             const member_def = self.lookupWord(member).?;
-            self.installCompiledBody(member, member_def, member_def.action.compound, body.?);
+            try self.installCompiledBody(member, member_def, member_def.action.compound, body.?);
         }
         return true;
     }
@@ -5985,7 +6049,16 @@ pub const Context = struct {
     }
 
     /// Install compiled code under the word's id, minting one when it has none.
-    pub fn installCompiledBody(self: *Context, name: []const u8, def: WordDefinition, instrs: []const Instruction, body: CompiledBody) void {
+    ///
+    /// Fails with `analysis-escape` when the word's slot belongs to an ancestor of an analysis
+    /// context. The compiled body is discarded before anything is installed.
+    pub fn installCompiledBody(self: *Context, name: []const u8, def: WordDefinition, instrs: []const Instruction, body: CompiledBody) error{AnalysisEscape}!void {
+        checkWordIdSlot(self, name) catch |err| {
+            body.discard(self);
+            return err;
+        };
+
+        // The slot was checked on entry, so the propagations below cannot refuse.
         const compiled = body.word;
         const final_id = if (def.word_id orelse self.mintedWordIdForBody(name, instrs)) |existing_id| blk: {
             if (self.jit_dispatch.get(existing_id) != null) {
@@ -5994,12 +6067,12 @@ pub const Context = struct {
             }
             const new_id = self.mintJitId(name, def) catch return body.discard(self);
             self.jit_dispatch.update(new_id, compiled.code_ptr, compiled.jit_buf, compiled.peak_stack_depth);
-            propagateWordId(self, name, new_id);
+            propagateWordId(self, name, new_id) catch {};
             break :blk new_id;
         } else blk: {
             const new_id = self.mintJitId(name, def) catch return body.discard(self);
             self.jit_dispatch.update(new_id, compiled.code_ptr, compiled.jit_buf, compiled.peak_stack_depth);
-            propagateWordId(self, name, new_id);
+            propagateWordId(self, name, new_id) catch {};
             break :blk new_id;
         };
 
@@ -6066,7 +6139,9 @@ pub const Context = struct {
 
         const new_id = self.mintJitId(name, def) catch return;
         if (self.jit_dispatch.getMut(new_id)) |em| em.stack_effect = def.stack_effect;
-        propagateWordId(self, name, new_id);
+
+        // A refusal leaves the word without an id, so it runs interpreted.
+        propagateWordId(self, name, new_id) catch {};
     }
 
     /// In hybrid mode, increment the call counter for a word and compile it
@@ -9855,7 +9930,7 @@ pub const Context = struct {
         const entries = self.dispatchEntriesForWord(word_name, alloc) catch &.{};
         self.pending_dispatch_available_methods = self.renderDispatchMethodSignatures(entries);
 
-        const hash = value_mod.HashTable.create(self.allocator) catch return;
+        const hash = value_mod.HashTable.create(self.allocator, self.containerOwnerTag()) catch return;
         self.fillGenericDispatchPayload(hash, arity, entries) catch {
             container_backing.releaseValue(.{ .hash = hash });
             return;
@@ -9908,7 +9983,7 @@ pub const Context = struct {
                 .{ .type_val = dispatch_mod.dispatchTypeValue(try self.stack.peekN(arity - 1 - i), self) };
         }
 
-        return value_mod.Array.fromOwnedSlice(alloc, items);
+        return value_mod.Array.fromOwnedSlice(alloc, items, self.containerOwnerTag());
     }
 
     fn dispatchSignaturesArray(self: *Context, alloc: Allocator, entries: []const DispatchTable.KeyEntryPair) !*value_mod.Array {
@@ -9925,7 +10000,7 @@ pub const Context = struct {
             built += 1;
         }
 
-        return value_mod.Array.fromOwnedSlice(alloc, items);
+        return value_mod.Array.fromOwnedSlice(alloc, items, self.containerOwnerTag());
     }
 
     fn dispatchSignatureArray(self: *Context, alloc: Allocator, key: DispatchKey) !*value_mod.Array {
@@ -9937,7 +10012,7 @@ pub const Context = struct {
         items[0] = self.dispatchSlotTypeValue(key.type_a);
         if (!unary) items[1] = self.dispatchSlotTypeValue(key.type_b);
 
-        return value_mod.Array.fromOwnedSlice(alloc, items);
+        return value_mod.Array.fromOwnedSlice(alloc, items, self.containerOwnerTag());
     }
 
     /// The type a method signature slot names, with the dispatch-any slot read as the `any` type.
@@ -11882,7 +11957,7 @@ fn resolveWordForDispatch(name: []const u8, user_data: *anyopaque) ?ir_codegen.R
 
     const word_id = if (callee.word_id) |id| id else blk: {
         const id = ctx.mintJitId(name, callee) catch return null;
-        propagateWordId(ctx, name, id);
+        propagateWordId(ctx, name, id) catch return null;
         break :blk id;
     };
     if (ctx.jit_dispatch.getMut(word_id)) |em| {
@@ -11912,18 +11987,24 @@ fn resolveWordForDispatch(name: []const u8, user_data: *anyopaque) ?ir_codegen.R
     return result;
 }
 
-fn propagateWordId(ctx: *Context, name: []const u8, word_id: u32) void {
+/// A word's `word_id` slot, and the context whose state holds it.
+const WordIdSlot = struct {
+    word_id: *?u32,
+    holder: *const Context,
+};
+
+/// The slot `name` resolves to for a write of a freshly minted `word_id`, walking the same scopes
+/// the write lands in.
+fn findWordIdSlot(ctx: *Context, name: []const u8) ?WordIdSlot {
     var i = ctx.local_frames.items.len;
     while (i > 0) {
         i -= 1;
         if (ctx.local_frames.items[i].getPtr(name)) |entry| {
-            entry.word_id = word_id;
-            return;
+            return .{ .word_id = &entry.word_id, .holder = ctx };
         }
     }
     if (ctx.dictionary.entries.get(name)) |slot| {
-        dict_mod.loadSlot(slot).word_id = word_id;
-        return;
+        return .{ .word_id = &dict_mod.loadSlot(slot).word_id, .holder = ctx };
     }
     var ancestor = ctx.parent_context;
     while (ancestor) |anc| {
@@ -11937,16 +12018,34 @@ fn propagateWordId(ctx: *Context, name: []const u8, word_id: u32) void {
         while (j > 0) {
             j -= 1;
             if (anc.local_frames.items[j].getPtr(name)) |entry| {
-                entry.word_id = word_id;
-                return;
+                return .{ .word_id = &entry.word_id, .holder = anc };
             }
         }
         if (anc.dictionary.entries.get(name)) |slot| {
-            dict_mod.loadSlot(slot).word_id = word_id;
-            return;
+            return .{ .word_id = &dict_mod.loadSlot(slot).word_id, .holder = anc };
         }
         ancestor = anc.parent_context;
     }
+    return null;
+}
+
+/// Fail with `analysis-escape` when writing an id into the slot `name` resolves to would reach a
+/// slot another load owner holds. A slot in an ancestor belongs to that ancestor's load owner, and
+/// an id from the running context's own dispatch table names nothing in the ancestor's table.
+fn checkWordIdSlot(ctx: *Context, name: []const u8) error{AnalysisEscape}!void {
+    if (!ctx.in_analysis) return;
+    const slot = findWordIdSlot(ctx, name) orelse return;
+    const holder: *Context = @constCast(slot.holder);
+    try ctx.checkWrite(holder.nearestLoadOwner().load_owner_id, "a word it does not own");
+}
+
+fn propagateWordId(ctx: *Context, name: []const u8, word_id: u32) error{AnalysisEscape}!void {
+    const slot = findWordIdSlot(ctx, name) orelse return;
+    if (ctx.in_analysis) {
+        const holder: *Context = @constCast(slot.holder);
+        try ctx.checkWrite(holder.nearestLoadOwner().load_owner_id, "a word it does not own");
+    }
+    slot.word_id.* = word_id;
 }
 
 /// A word that compiled to native in an AOT runtime image has its interpretable
@@ -11977,7 +12076,8 @@ fn backfillCompiledWordId(self: *Context, name: []const u8) ?u32 {
             if (entry.code_ptr == null) continue;
             if (!std.mem.eql(u8, entry.word_name, name)) continue;
             const wid: u32 = @intCast(idx);
-            propagateWordId(self, name, wid);
+            // The write only caches the id on the slot, so a refusal still leaves the id valid.
+            propagateWordId(self, name, wid) catch {};
             return wid;
         }
     }
@@ -12428,7 +12528,7 @@ test "collisionGuardMode maps each accepted value, and defaults to error" {
 
     const names = try std.testing.allocator.alloc(Value, 1);
     names[0] = value_mod.symbolValue("dup");
-    const allowlist = try value_mod.Array.fromOwnedSlice(std.testing.allocator, names);
+    const allowlist = try value_mod.Array.fromOwnedSlice(std.testing.allocator, names, 0);
     try ctx.setPragma("dictionary-shadow", .{ .array = allowlist });
     try std.testing.expectEqual(Context.CollisionGuardMode.off, ctx.collisionGuardMode("dictionary-shadow", "dup"));
     try std.testing.expectEqual(Context.CollisionGuardMode.err, ctx.collisionGuardMode("dictionary-shadow", "nip"));
@@ -12555,7 +12655,7 @@ test "setPragma: overwriting a refcounted value releases the frame's and the old
 
     const first_names = try std.testing.allocator.alloc(Value, 1);
     first_names[0] = value_mod.symbolValue("dup");
-    const first = try value_mod.Array.fromOwnedSlice(std.testing.allocator, first_names);
+    const first = try value_mod.Array.fromOwnedSlice(std.testing.allocator, first_names, 0);
     try ctx.setPragma("dictionary-shadow", .{ .array = first });
 
     // The frame holds the transferred reference and the view holds its own.
@@ -12563,7 +12663,7 @@ test "setPragma: overwriting a refcounted value releases the frame's and the old
 
     const second_names = try std.testing.allocator.alloc(Value, 1);
     second_names[0] = value_mod.symbolValue("nip");
-    const second = try value_mod.Array.fromOwnedSlice(std.testing.allocator, second_names);
+    const second = try value_mod.Array.fromOwnedSlice(std.testing.allocator, second_names, 0);
 
     // Keep `first` alive past the overwrite to observe that both references were dropped.
     container_backing.retainValue(.{ .array = first });
@@ -12586,7 +12686,7 @@ test "deinit releases every live pragma frame and view" {
     try ctx.pushPragmaFrame();
     const names = try std.testing.allocator.alloc(Value, 1);
     names[0] = value_mod.symbolValue("dup");
-    const allowlist = try value_mod.Array.fromOwnedSlice(std.testing.allocator, names);
+    const allowlist = try value_mod.Array.fromOwnedSlice(std.testing.allocator, names, 0);
     try ctx.setPragma("dictionary-shadow", .{ .array = allowlist });
 
     // No pops: the testing allocator reports a leak if deinit misses a frame, a view, or a value.
@@ -12724,7 +12824,7 @@ test "initForTask: a failure at any allocation strands nothing" {
     try parent.pushParameterFrame();
     const items = try std.testing.allocator.alloc(Value, 1);
     items[0] = .{ .fixnum = 7 };
-    const array = try value_mod.Array.fromOwnedSlice(std.testing.allocator, items);
+    const array = try value_mod.Array.fromOwnedSlice(std.testing.allocator, items, 0);
     try parent.parameter_env.items[0].put(std.testing.allocator, "*probe*", .{ .array = array });
 
     // The same array as a transient local binding, with its own reference, covers the local-frame
@@ -12761,7 +12861,7 @@ test "initChild: a failure at any allocation strands nothing" {
     try parent.pushParameterFrame();
     const items = try std.testing.allocator.alloc(Value, 1);
     items[0] = .{ .fixnum = 7 };
-    const array = try value_mod.Array.fromOwnedSlice(std.testing.allocator, items);
+    const array = try value_mod.Array.fromOwnedSlice(std.testing.allocator, items, 0);
     try parent.parameter_env.items[0].put(std.testing.allocator, "*probe*", .{ .array = array });
 
     try parent.pushLocalFrame();
@@ -13242,7 +13342,7 @@ test "registerQuotationContainerLiterals: records quotations with container lite
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
 
-    const dummy_vec = try value_mod.Vector.create(std.testing.allocator);
+    const dummy_vec = try value_mod.Vector.create(std.testing.allocator, 0);
     // Two registrations of the same instrs slice means the walk will
     // release the embedded vector twice. Bump refcount once so total
     // refs after create+retain (=2) match the two walk-releases.
@@ -13265,7 +13365,7 @@ test "Context.deinit walks release list before arena teardown" {
     // not flag a leak through the release-list storage itself.
     var ctx = Context.init(std.testing.allocator);
 
-    const dummy_vec = try value_mod.Vector.create(std.testing.allocator);
+    const dummy_vec = try value_mod.Vector.create(std.testing.allocator, 0);
     // One registration of the slice; the deinit walk releases the
     // embedded vector once. The create's rc=1 balances that single
     // release, so the vec is destroyed cleanly by deinit.
@@ -13827,7 +13927,7 @@ test "restoreErrorState releases a discarded thrown box's refcounted payload" {
     defer ctx.deinit();
 
     // One reference for the box's own claim, one to keep the count inspectable afterwards.
-    const vec = try value_mod.Vector.create(std.testing.allocator);
+    const vec = try value_mod.Vector.create(std.testing.allocator, 0);
     defer vec.header.release();
     vec.header.retain();
 
@@ -13851,7 +13951,7 @@ test "restoreErrorState keeps the payload of a stash the execution never replace
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
 
-    const vec = try value_mod.Vector.create(std.testing.allocator);
+    const vec = try value_mod.Vector.create(std.testing.allocator, 0);
     defer vec.header.release();
     vec.header.retain();
 
@@ -13914,7 +14014,7 @@ test "dropping an undrained callback error releases its stash's payload" {
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
 
-    const vec = try value_mod.Vector.create(std.testing.allocator);
+    const vec = try value_mod.Vector.create(std.testing.allocator, 0);
     defer vec.header.release();
     vec.header.retain();
 
@@ -13939,7 +14039,7 @@ test "restoreErrorState releases a pending payload a swallowed raise wrote" {
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
 
-    const vec = try value_mod.Vector.create(std.testing.allocator);
+    const vec = try value_mod.Vector.create(std.testing.allocator, 0);
     defer vec.header.release();
     vec.header.retain();
 
@@ -13955,11 +14055,11 @@ test "shieldErrorState hides the enclosing payload and the restore gives it back
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
 
-    const outer = try value_mod.Vector.create(std.testing.allocator);
+    const outer = try value_mod.Vector.create(std.testing.allocator, 0);
     defer outer.header.release();
     outer.header.retain();
 
-    const inner = try value_mod.Vector.create(std.testing.allocator);
+    const inner = try value_mod.Vector.create(std.testing.allocator, 0);
     defer inner.header.release();
     inner.header.retain();
 
@@ -13994,11 +14094,11 @@ test "setPendingErrorData releases the payload it displaces" {
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
 
-    const first = try value_mod.Vector.create(std.testing.allocator);
+    const first = try value_mod.Vector.create(std.testing.allocator, 0);
     defer first.header.release();
     first.header.retain();
 
-    const second = try value_mod.Vector.create(std.testing.allocator);
+    const second = try value_mod.Vector.create(std.testing.allocator, 0);
     defer second.header.release();
     second.header.retain();
 
@@ -14013,7 +14113,7 @@ test "clearExecutionDetails releases the pending payload" {
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
 
-    const vec = try value_mod.Vector.create(std.testing.allocator);
+    const vec = try value_mod.Vector.create(std.testing.allocator, 0);
     defer vec.header.release();
     vec.header.retain();
 
@@ -14028,7 +14128,7 @@ test "takePendingErrorData transfers the payload a raise wrote after the snapsho
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
 
-    const vec = try value_mod.Vector.create(std.testing.allocator);
+    const vec = try value_mod.Vector.create(std.testing.allocator, 0);
     defer vec.header.release();
     vec.header.retain();
 
@@ -14049,11 +14149,11 @@ test "a detached pending payload is released on drop and kept across a reattach"
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
 
-    const dropped = try value_mod.Vector.create(std.testing.allocator);
+    const dropped = try value_mod.Vector.create(std.testing.allocator, 0);
     defer dropped.header.release();
     dropped.header.retain();
 
-    const kept = try value_mod.Vector.create(std.testing.allocator);
+    const kept = try value_mod.Vector.create(std.testing.allocator, 0);
     defer kept.header.release();
     kept.header.retain();
 
@@ -14311,7 +14411,7 @@ test "param_effect_cache: closure-owned bodies, callee-less calls, and empty bod
         .segments = &.{},
         .owns_body = true,
         .header = undefined,
-    });
+    }, 0);
     defer container_backing.releaseValue(.{ .closure = arg_closure });
 
     try ctx.stack.push(.{ .fixnum = 5 });
@@ -14328,7 +14428,7 @@ test "param_effect_cache: closure-owned bodies, callee-less calls, and empty bod
         .segments = &.{},
         .owns_body = true,
         .header = undefined,
-    });
+    }, 0);
     defer container_backing.releaseValue(.{ .closure = callee_closure });
 
     try ctx.stack.push(.{ .quotation = .{ .instructions = literal } });
@@ -16442,7 +16542,7 @@ test "propagateWordId: back-writes ancestor stable slot, not transient frame" {
     child.parent_context = &parent;
     defer child.parent_context = null;
 
-    propagateWordId(&child, "back-word", 4242);
+    try propagateWordId(&child, "back-word", 4242);
 
     try std.testing.expectEqual(
         @as(?u32, 4242),
@@ -17471,7 +17571,7 @@ test "initForTask: the cloned frame takes its own reference to a frame-owned bin
     try parent.pushLocalFrame();
 
     const bytes = try std.testing.allocator.dupe(u8, "computed");
-    const str = try value_mod.ownedStringValue(std.testing.allocator, bytes);
+    const str = try value_mod.ownedStringValue(std.testing.allocator, bytes, 0);
     const backing = str.string.backing.?;
     try parent.defineWord("s", .{ .name = "s", .action = .{ .literal = str } });
 
@@ -18598,7 +18698,7 @@ fn closureOwnedProbeBody(ctx: *Context, module: ?*const value_mod.Module, scope:
         .header = undefined,
         .owns_body = true,
         .owns_scope = scope != null,
-    });
+    }, ctx.containerOwnerTag());
 }
 
 /// A durable-frame `probe-word` pushing 1 and a module one pushing 2, so which of the two a body
@@ -18677,7 +18777,7 @@ test "executeInstructions: a push-time promotion keeps the map path" {
         .instructions = body,
         .segments = &.{},
         .header = undefined,
-    });
+    }, ctx.containerOwnerTag());
     defer container_backing.releaseValue(.{ .closure = cl });
 
     try ctx.quotation_scope_info.put(ctx.allocator, @intFromPtr(body.ptr), .{ .defining_module = module });
@@ -18708,7 +18808,7 @@ fn pushClosureCalling(ctx: *Context, name: []const u8) !*value_mod.Closure {
         .segments = &.{},
         .header = undefined,
         .owns_body = true,
-    });
+    }, ctx.containerOwnerTag());
     cl.header.retain();
     try ctx.stack.pushMoved(.{ .closure = cl });
     return cl;
@@ -18777,7 +18877,7 @@ test "executeInstructions: a tail call out of a closure-owned body resolves as t
         .defining_module = module,
         .header = undefined,
         .owns_body = true,
-    });
+    }, ctx.containerOwnerTag());
     defer container_backing.releaseValue(.{ .closure = cl });
 
     // The call is the body's last instruction, so the TCO loop runs the callee's own body on its
@@ -19201,7 +19301,7 @@ test "stampCapturedScopeForExecution: a push-time promotion still stamps" {
         .instructions = body,
         .segments = &.{},
         .header = undefined,
-    });
+    }, ctx.containerOwnerTag());
     defer container_backing.releaseValue(.{ .closure = cl });
 
     var scope: CapturedScope = .{ .lexical_frames = &.{}, .deps_modules = &.{}, .allocator = ctx.allocator };
@@ -19811,7 +19911,7 @@ test "defineWordLocked: a leaf-backed binding in a transient frame is released w
     try ctx.pushLocalFrame();
 
     const bytes = try std.testing.allocator.dupe(u8, "computed");
-    const str = try value_mod.ownedStringValue(std.testing.allocator, bytes);
+    const str = try value_mod.ownedStringValue(std.testing.allocator, bytes, 0);
     const backing = str.string.backing.?;
 
     // A second reference stands in for the caller that outlives the binding, so the refcount is
@@ -19837,7 +19937,7 @@ test "defineWordLocked: a container binding keeps the durable path even inside a
     ctx.durable_frame_floor = 0;
     try ctx.pushLocalFrame();
 
-    const vec = try value_mod.Vector.create(std.testing.allocator);
+    const vec = try value_mod.Vector.create(std.testing.allocator, 0);
     try ctx.defineWord("v", .{ .name = "v", .action = .{ .literal = .{ .vector = vec } } });
 
     // Frame ownership would let a captured scope holding this same binding outlive the reclamation
@@ -19861,13 +19961,13 @@ test "defineWordLocked: rebinding a name in the same frame releases the displace
     try ctx.pushLocalFrame();
 
     const first_bytes = try std.testing.allocator.dupe(u8, "first");
-    const first = try value_mod.ownedStringValue(std.testing.allocator, first_bytes);
+    const first = try value_mod.ownedStringValue(std.testing.allocator, first_bytes, 0);
     const first_backing = first.string.backing.?;
     container_backing.retainValue(first);
     defer container_backing.releaseValue(first);
 
     const second_bytes = try std.testing.allocator.dupe(u8, "second");
-    const second = try value_mod.ownedStringValue(std.testing.allocator, second_bytes);
+    const second = try value_mod.ownedStringValue(std.testing.allocator, second_bytes, 0);
 
     try ctx.defineWord("s", .{ .name = "s", .action = .{ .literal = first } });
     try std.testing.expectEqual(@as(u32, 2), first_backing.header.refcountValue());
@@ -19886,7 +19986,7 @@ test "captureQuotationScope: a cloned binding outlives the frame it was captured
     try ctx.pushLocalFrame();
 
     const bytes = try std.testing.allocator.dupe(u8, "captured");
-    const str = try value_mod.ownedStringValue(std.testing.allocator, bytes);
+    const str = try value_mod.ownedStringValue(std.testing.allocator, bytes, 0);
     const backing = str.string.backing.?;
     try ctx.defineWord("s", .{ .name = "s", .action = .{ .literal = str } });
 
@@ -20187,21 +20287,21 @@ test "deinit releases runtime-created values stored into image container slots" 
     // donated reference each. The vector receives a runtime-created hash
     // (as a compiled `#push!` would store it); the map receives a
     // runtime-created value under a runtime `@set!`.
-    const vec = try value_mod.Vector.create(ctx.quotationAllocator());
+    const vec = try value_mod.Vector.create(ctx.quotationAllocator(), ctx.containerOwnerTag());
     var vec_slots = [_]?*value_mod.Vector{vec};
     ctx.image_vector_slots = &vec_slots;
     ctx.image_vector_slot_count = 1;
 
-    const mmap = try value_mod.MutableMap.create(ctx.quotationAllocator());
+    const mmap = try value_mod.MutableMap.create(ctx.quotationAllocator(), ctx.containerOwnerTag());
     var map_slots = [_]?*value_mod.MutableMap{mmap};
     ctx.image_mutable_map_slots = &map_slots;
     ctx.image_mutable_map_slot_count = 1;
 
-    const h = try value_mod.HashTable.create(alloc);
+    const h = try value_mod.HashTable.create(alloc, 0);
     try h.map.put(alloc, try alloc.dupe(u8, "k"), .{ .fixnum = 42 });
     try vec.list.append(ctx.quotationAllocator(), .{ .hash = h });
 
-    const h2 = try value_mod.HashTable.create(alloc);
+    const h2 = try value_mod.HashTable.create(alloc, 0);
     const key = try ctx.quotationAllocator().dupe(u8, "r");
     try mmap.map.put(ctx.quotationAllocator(), key, .{ .hash = h2 });
 

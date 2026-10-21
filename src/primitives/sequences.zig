@@ -62,7 +62,7 @@ pub fn seqToArrayIter(seq: Value, ctx: *Context) !?*Iterator {
         .mutable_value_map => |m| .{ .array = .{ .items = try valueMapEntries(ctx, &m.map), .index = 0 } },
         else => return null,
     };
-    return Iterator.create(ctx.allocator, kind) catch |err| {
+    return Iterator.create(ctx.allocator, kind, ctx.containerOwnerTag()) catch |err| {
         switch (kind) {
             .array => |ai| if (ai.source) |arr| arr.header.release() else {
                 container_backing.releaseValues(ai.items);
@@ -783,6 +783,7 @@ pub fn nativeNth(ctx: *Context) anyerror!void {
 pub fn nativeNthMut(ctx: *Context) anyerror!void {
     // seq is at position 2, below n and value
     if (try dispatch_helpers.tryDispatchContainerAtDepth(ctx, ctx.nativeDispatchId(.nth_mut), 2, true)) return;
+    try helpers.beginWriteAtDepth(ctx, 2, &.{ .vector, .byte_array });
 
     const value = try ctx.stack.pop();
     const index = popFixnum(ctx) catch |err| {
@@ -805,6 +806,7 @@ pub fn nativeNthMut(ctx: *Context) anyerror!void {
     switch (seq) {
         .vector => |v| {
             v.header.lock();
+            ctx.assertWriteAllowed(v.header.ownerTag());
             if (idx >= v.list.items.len) {
                 const vec_len = v.list.items.len;
                 v.header.unlock();
@@ -824,6 +826,7 @@ pub fn nativeNthMut(ctx: *Context) anyerror!void {
         },
         .byte_array => |b| {
             b.header.lock();
+            ctx.assertWriteAllowed(b.header.ownerTag());
             const bytes = b.slice();
             if (idx >= bytes.len) {
                 const ba_len = bytes.len;
@@ -1135,7 +1138,7 @@ fn tryVectorizedPackedMap(ctx: *Context, seq: Value, pc: Callable) anyerror!bool
             .dispatch_generation = generation,
             .quotation = pc.quot,
         },
-    } }) catch |err| {
+    } }, ctx.containerOwnerTag()) catch |err| {
         ctx.allocator.free(chain);
         container_backing.releaseValue(ba_val);
         return err;
@@ -1200,7 +1203,7 @@ pub fn nativeMap(ctx: *Context) anyerror!void {
         return error.TypeMismatch;
     };
 
-    const iter = Iterator.create(ctx.allocator, .{ .map = .{ .inner = inner, .callable = pc } }) catch |err| {
+    const iter = Iterator.create(ctx.allocator, .{ .map = .{ .inner = inner, .callable = pc } }, ctx.containerOwnerTag()) catch |err| {
         inner.header.release();
         pc.release();
         return err;
@@ -1242,7 +1245,7 @@ pub fn nativeFilter(ctx: *Context) anyerror!void {
         return error.TypeMismatch;
     };
 
-    const iter = Iterator.create(ctx.allocator, .{ .filter = .{ .inner = inner, .callable = pc } }) catch |err| {
+    const iter = Iterator.create(ctx.allocator, .{ .filter = .{ .inner = inner, .callable = pc } }, ctx.containerOwnerTag()) catch |err| {
         inner.header.release();
         pc.release();
         return err;
@@ -1716,6 +1719,7 @@ pub fn nativeAppend(ctx: *Context) anyerror!void {
 pub fn nativeAppendMut(ctx: *Context) anyerror!void {
     // vec is at position 1, below seq
     if (try dispatch_helpers.tryDispatchContainerAtDepth(ctx, ctx.nativeDispatchId(.append_mut), 1, true)) return;
+    try helpers.beginWriteAtDepth(ctx, 1, &.{.vector});
 
     const seq = try ctx.stack.pop();
     const vec = popVector(ctx) catch |err| {
@@ -1731,6 +1735,8 @@ pub fn nativeAppendMut(ctx: *Context) anyerror!void {
     defer ctx.allocator.free(items);
 
     vec.header.lock();
+
+    ctx.assertWriteAllowed(vec.header.ownerTag());
     var appended: usize = 0;
     while (appended < items.len) : (appended += 1) {
         vec.list.append(vec.header.allocator, items[appended]) catch |err| {
@@ -1755,7 +1761,7 @@ pub fn nativeAppendMut(ctx: *Context) anyerror!void {
 /// a task can store it in a container that outlives the task. The caller owns the creation
 /// reference.
 fn vectorWithCapacity(ctx: *Context, capacity: usize) error{OutOfMemory}!*Vector {
-    const vec = try Vector.create(ctx.allocator);
+    const vec = try Vector.create(ctx.allocator, ctx.containerOwnerTag());
     vec.list.ensureTotalCapacity(ctx.allocator, capacity) catch {
         container_backing.releaseValue(.{ .vector = vec });
         return error.OutOfMemory;
@@ -1765,7 +1771,7 @@ fn vectorWithCapacity(ctx: *Context, capacity: usize) error{OutOfMemory}!*Vector
 
 /// Byte-array twin of `vectorWithCapacity`.
 fn byteArrayWithCapacity(ctx: *Context, capacity: usize) ByteArray.ResizeError!*ByteArray {
-    const ba = try ByteArray.create(ctx.allocator);
+    const ba = try ByteArray.create(ctx.allocator, ctx.containerOwnerTag());
     ba.ensureTotalCapacity(ctx.allocator, capacity) catch |e| {
         container_backing.releaseValue(.{ .byte_array = ba });
         return e;
@@ -2186,6 +2192,7 @@ fn nativeShift(ctx: *Context) anyerror!void {
 fn nativePushMut(ctx: *Context) anyerror!void {
     // vec is at position 1, below elem
     if (try dispatch_helpers.tryDispatchContainerAtDepth(ctx, ctx.nativeDispatchId(.push_mut), 1, true)) return;
+    try helpers.beginWriteAtDepth(ctx, 1, &.{.vector});
 
     const elem = try ctx.stack.pop();
     const vec = popVector(ctx) catch |err| {
@@ -2194,6 +2201,8 @@ fn nativePushMut(ctx: *Context) anyerror!void {
     };
 
     vec.header.lock();
+
+    ctx.assertWriteAllowed(vec.header.ownerTag());
     const append_result = vec.list.append(vec.header.allocator, elem);
     vec.header.unlock();
     append_result catch |err| {
@@ -2211,10 +2220,13 @@ fn nativePushMut(ctx: *Context) anyerror!void {
 /// #pop! ( vec -- vec elem )
 fn nativePopMut(ctx: *Context) anyerror!void {
     if (try dispatch_helpers.tryDispatchContainerAtDepth(ctx, ctx.nativeDispatchId(.pop_mut), 0, true)) return;
+    try helpers.beginWriteAtDepth(ctx, 0, &.{.vector});
 
     const vec = try popVector(ctx);
 
     vec.header.lock();
+
+    ctx.assertWriteAllowed(vec.header.ownerTag());
     if (vec.list.items.len == 0) {
         vec.header.unlock();
         container_backing.releaseValue(.{ .vector = vec });
@@ -2239,6 +2251,7 @@ fn nativePopMut(ctx: *Context) anyerror!void {
 fn nativeUnshiftMut(ctx: *Context) anyerror!void {
     // vec is at position 1, below elem
     if (try dispatch_helpers.tryDispatchContainerAtDepth(ctx, ctx.nativeDispatchId(.unshift_mut), 1, true)) return;
+    try helpers.beginWriteAtDepth(ctx, 1, &.{.vector});
 
     const elem = try ctx.stack.pop();
     const vec = popVector(ctx) catch |err| {
@@ -2247,6 +2260,8 @@ fn nativeUnshiftMut(ctx: *Context) anyerror!void {
     };
 
     vec.header.lock();
+
+    ctx.assertWriteAllowed(vec.header.ownerTag());
     const insert_result = vec.list.insert(vec.header.allocator, 0, elem);
     vec.header.unlock();
     insert_result catch |err| {
@@ -2264,10 +2279,13 @@ fn nativeUnshiftMut(ctx: *Context) anyerror!void {
 /// #shift! ( vec -- vec elem )
 fn nativeShiftMut(ctx: *Context) anyerror!void {
     if (try dispatch_helpers.tryDispatchContainerAtDepth(ctx, ctx.nativeDispatchId(.shift_mut), 0, true)) return;
+    try helpers.beginWriteAtDepth(ctx, 0, &.{.vector});
 
     const vec = try popVector(ctx);
 
     vec.header.lock();
+
+    ctx.assertWriteAllowed(vec.header.ownerTag());
     if (vec.list.items.len == 0) {
         vec.header.unlock();
         container_backing.releaseValue(.{ .vector = vec });
@@ -2595,7 +2613,7 @@ pub fn nativeTake(ctx: *Context) anyerror!void {
 
     if (coerced == .iterator) {
         // The wrapper takes over the coerced reference to the inner.
-        const iter = Iterator.create(ctx.allocator, .{ .take = .{ .inner = coerced.iterator, .remaining = n } }) catch |err| {
+        const iter = Iterator.create(ctx.allocator, .{ .take = .{ .inner = coerced.iterator, .remaining = n } }, ctx.containerOwnerTag()) catch |err| {
             container_backing.releaseValue(coerced);
             return err;
         };
@@ -2667,7 +2685,7 @@ pub fn nativeDrop(ctx: *Context) anyerror!void {
 
     if (coerced == .iterator) {
         // The wrapper takes over the coerced reference to the inner.
-        const iter = Iterator.create(ctx.allocator, .{ .drop = .{ .inner = coerced.iterator, .to_skip = n } }) catch |err| {
+        const iter = Iterator.create(ctx.allocator, .{ .drop = .{ .inner = coerced.iterator, .to_skip = n } }, ctx.containerOwnerTag()) catch |err| {
             container_backing.releaseValue(coerced);
             return err;
         };
@@ -2745,7 +2763,7 @@ fn nativeBytesAlloc(ctx: *Context) anyerror!void {
         return error.IndexOutOfBounds;
     }
     const n: usize = @intCast(n_val);
-    const ba = ByteArray.create(ctx.allocator) catch return error.OutOfMemory;
+    const ba = ByteArray.create(ctx.allocator, ctx.containerOwnerTag()) catch return error.OutOfMemory;
     errdefer container_backing.releaseValue(.{ .byte_array = ba });
     const alloc = ba.header.allocator;
     if (n > 0) {
@@ -2760,6 +2778,7 @@ fn nativeBytesAlloc(ctx: *Context) anyerror!void {
 ///
 /// Polymorphic on byte-array and vector.
 fn nativeShrinkMut(ctx: *Context) anyerror!void {
+    try helpers.beginWriteAtDepth(ctx, 1, &.{ .vector, .byte_array });
     const n_val = try popFixnum(ctx);
     const seq = try ctx.stack.pop();
 
@@ -2773,6 +2792,7 @@ fn nativeShrinkMut(ctx: *Context) anyerror!void {
     switch (seq) {
         .byte_array => |ba| {
             ba.header.lock();
+            ctx.assertWriteAllowed(ba.header.ownerTag());
             const bytes = ba.slice();
             if (n > bytes.len) {
                 const ba_len = bytes.len;
@@ -2801,6 +2821,7 @@ fn nativeShrinkMut(ctx: *Context) anyerror!void {
         },
         .vector => |vec| {
             vec.header.lock();
+            ctx.assertWriteAllowed(vec.header.ownerTag());
             if (n > vec.list.items.len) {
                 const vec_len = vec.list.items.len;
                 vec.header.unlock();
@@ -2831,6 +2852,7 @@ fn nativeShrinkMut(ctx: *Context) anyerror!void {
 ///
 /// Polymorphic on byte-array and vector.
 fn nativeGrowMut(ctx: *Context) anyerror!void {
+    try helpers.beginWriteAtDepth(ctx, 2, &.{ .vector, .byte_array });
     const fill = try ctx.stack.pop();
     const n_val = popFixnum(ctx) catch |err| {
         container_backing.releaseValue(fill);
@@ -2852,6 +2874,7 @@ fn nativeGrowMut(ctx: *Context) anyerror!void {
     switch (seq) {
         .byte_array => |ba| {
             ba.header.lock();
+            ctx.assertWriteAllowed(ba.header.ownerTag());
             const bytes = ba.slice();
             if (n < bytes.len) {
                 const ba_len = bytes.len;
@@ -2911,6 +2934,7 @@ fn nativeGrowMut(ctx: *Context) anyerror!void {
         },
         .vector => |vec| {
             vec.header.lock();
+            ctx.assertWriteAllowed(vec.header.ownerTag());
             if (n < vec.list.items.len) {
                 const vec_len = vec.list.items.len;
                 vec.header.unlock();
@@ -3003,7 +3027,7 @@ pub fn valueMapEntries(ctx: *Context, map: *const value_mod.ValueEntries) ![]Val
         pair[1] = val;
         container_backing.retainValues(pair);
 
-        const entry = value_mod.Array.fromOwnedSlice(alloc, pair) catch {
+        const entry = value_mod.Array.fromOwnedSlice(alloc, pair, ctx.containerOwnerTag()) catch {
             container_backing.releaseValues(pair);
             alloc.free(pair);
             return error.OutOfMemory;
@@ -3045,8 +3069,8 @@ fn nativeToArray(ctx: *Context) anyerror!void {
     return error.TypeMismatch;
 }
 
-fn copyByteArrayToOwned(alloc: Allocator, src: *ByteArray) !*ByteArray {
-    const dst = try ByteArray.create(alloc);
+fn copyByteArrayToOwned(alloc: Allocator, src: *ByteArray, owner: u32) !*ByteArray {
+    const dst = try ByteArray.create(alloc, owner);
     try dst.ensureTotalCapacity(alloc, src.slice().len);
     dst.items.len = src.slice().len;
     @memcpy(dst.items, src.slice());
@@ -3079,7 +3103,7 @@ fn clonePackedToOwned(ctx: *Context, val: Value) !void {
         return;
     }
 
-    const owned_ba = copyByteArrayToOwned(ctx.allocator, inner_ba) catch |err| {
+    const owned_ba = copyByteArrayToOwned(ctx.allocator, inner_ba, ctx.containerOwnerTag()) catch |err| {
         container_backing.releaseValue(val);
         return err;
     };
@@ -3102,7 +3126,7 @@ fn nativeToByteArray(ctx: *Context) anyerror!void {
                 return;
             }
 
-            const owned = copyByteArrayToOwned(ctx.allocator, ba) catch |err| {
+            const owned = copyByteArrayToOwned(ctx.allocator, ba, ctx.containerOwnerTag()) catch |err| {
                 container_backing.releaseValue(val);
                 return err;
             };
@@ -3126,7 +3150,7 @@ fn nativeToHashMutableMap(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
     defer container_backing.releaseValue(val);
     const m = val.mutable_map;
-    const new_hash = HashTable.create(ctx.allocator) catch return error.OutOfMemory;
+    const new_hash = HashTable.create(ctx.allocator, ctx.containerOwnerTag()) catch return error.OutOfMemory;
     errdefer new_hash.header.release();
     const hash_alloc = new_hash.header.allocator;
     var iter = m.map.iterator();
@@ -3252,6 +3276,8 @@ fn writeRunByteArray(ctx: *Context, word: []const u8, count_val: i64) anyerror!v
     defer container_backing.releaseValue(value);
     errdefer container_backing.releaseValue(ba_val);
 
+    try helpers.beginContainerWrite(ctx, &ba.header);
+
     _ = try validateWidth(ctx, word, width_val);
     const width: usize = @intCast(width_val);
 
@@ -3268,6 +3294,7 @@ fn writeRunByteArray(ctx: *Context, word: []const u8, count_val: i64) anyerror!v
 
     {
         ba.header.lock();
+        ctx.assertWriteAllowed(ba.header.ownerTag());
         defer ba.header.unlock();
         const bytes = ba.slice();
 
@@ -3397,6 +3424,7 @@ fn nativeCopyByteArray(ctx: *Context) anyerror!void {
     errdefer container_backing.releaseValue(dst_val);
 
     const dst = dst_val.byte_array;
+    try helpers.beginContainerWrite(ctx, &dst.header);
     if (src_val != .byte_array) {
         setErrorContext(ctx, "#copy! expected byte-array source, got {s}", .{valueTypeName(src_val)});
         return error.TypeMismatch;
@@ -3422,6 +3450,7 @@ fn nativeCopyByteArray(ctx: *Context) anyerror!void {
     {
         const held = ByteArrayPair.lock(dst, src);
         defer held.unlock();
+        ctx.assertWriteAllowed(dst.header.ownerTag());
 
         const dst_bytes = dst.slice();
         const src_bytes = src.slice();
@@ -3542,7 +3571,7 @@ test "borrowed byte-array #nth! allows element writes" {
     defer ctx.deinit();
 
     var backing = [_]u8{ 10, 20, 30 };
-    const ba = try value_mod.makeBorrowedByteArray(std.testing.allocator, backing[0..]);
+    const ba = try value_mod.makeBorrowedByteArray(std.testing.allocator, backing[0..], 0);
     defer container_backing.releaseValue(.{ .byte_array = ba });
 
     try ctx.stack.push(.{ .byte_array = ba });
@@ -3564,7 +3593,7 @@ test "borrowed byte-array #poke! allows element writes" {
     defer ctx.deinit();
 
     var backing = [_]u8{ 0x00, 0x00, 0x00, 0x00 };
-    const ba = try value_mod.makeBorrowedByteArray(std.testing.allocator, backing[0..]);
+    const ba = try value_mod.makeBorrowedByteArray(std.testing.allocator, backing[0..], 0);
     defer container_backing.releaseValue(.{ .byte_array = ba });
 
     try ctx.stack.push(.{ .byte_array = ba });
@@ -3588,7 +3617,7 @@ test "borrowed byte-array #fill! allows a multi-element run" {
     defer ctx.deinit();
 
     var backing = [_]u8{0x00} ** 10;
-    const ba = try value_mod.makeBorrowedByteArray(std.testing.allocator, backing[0..]);
+    const ba = try value_mod.makeBorrowedByteArray(std.testing.allocator, backing[0..], 0);
     defer container_backing.releaseValue(.{ .byte_array = ba });
 
     try ctx.stack.push(.{ .byte_array = ba });
@@ -3612,7 +3641,7 @@ test "#fill! admits an empty run at the very end" {
     defer ctx.deinit();
 
     var backing = [_]u8{ 1, 2, 3 };
-    const ba = try value_mod.makeBorrowedByteArray(std.testing.allocator, backing[0..]);
+    const ba = try value_mod.makeBorrowedByteArray(std.testing.allocator, backing[0..], 0);
     defer container_backing.releaseValue(.{ .byte_array = ba });
 
     try ctx.stack.push(.{ .byte_array = ba });
@@ -3643,9 +3672,9 @@ test "borrowed byte-array #copy! moves a run between two arrays" {
 
     var dst_backing = [_]u8{0x00} ** 6;
     var src_backing = [_]u8{ 0x11, 0x22, 0x33, 0x44 };
-    const dst = try value_mod.makeBorrowedByteArray(std.testing.allocator, dst_backing[0..]);
+    const dst = try value_mod.makeBorrowedByteArray(std.testing.allocator, dst_backing[0..], 0);
     defer container_backing.releaseValue(.{ .byte_array = dst });
-    const src = try value_mod.makeBorrowedByteArray(std.testing.allocator, src_backing[0..]);
+    const src = try value_mod.makeBorrowedByteArray(std.testing.allocator, src_backing[0..], 0);
     defer container_backing.releaseValue(.{ .byte_array = src });
 
     try ctx.stack.push(.{ .byte_array = dst });
@@ -3670,7 +3699,7 @@ test "#copy! within one array copies as through a temporary" {
     defer ctx.deinit();
 
     var backing = [_]u8{ 1, 2, 3, 4, 5 };
-    const ba = try value_mod.makeBorrowedByteArray(std.testing.allocator, backing[0..]);
+    const ba = try value_mod.makeBorrowedByteArray(std.testing.allocator, backing[0..], 0);
     defer container_backing.releaseValue(.{ .byte_array = ba });
 
     // Destination after source: a forward element loop would smear byte 1 across the run.
@@ -3706,9 +3735,9 @@ test "#copy! checks the destination range and the source range" {
 
     var dst_backing = [_]u8{ 0, 0, 0, 0 };
     var src_backing = [_]u8{ 9, 9, 9, 9, 9, 9 };
-    const dst = try value_mod.makeBorrowedByteArray(std.testing.allocator, dst_backing[0..]);
+    const dst = try value_mod.makeBorrowedByteArray(std.testing.allocator, dst_backing[0..], 0);
     defer container_backing.releaseValue(.{ .byte_array = dst });
-    const src = try value_mod.makeBorrowedByteArray(std.testing.allocator, src_backing[0..]);
+    const src = try value_mod.makeBorrowedByteArray(std.testing.allocator, src_backing[0..], 0);
     defer container_backing.releaseValue(.{ .byte_array = src });
 
     // Fits the source, overruns the destination.
@@ -3737,7 +3766,7 @@ test "borrowed byte-array structural mutations are rejected" {
     defer ctx.deinit();
 
     var backing = [_]u8{ 1, 2, 3 };
-    const ba = try value_mod.makeBorrowedByteArray(std.testing.allocator, backing[0..]);
+    const ba = try value_mod.makeBorrowedByteArray(std.testing.allocator, backing[0..], 0);
     defer container_backing.releaseValue(.{ .byte_array = ba });
 
     try ctx.stack.push(.{ .byte_array = ba });
@@ -3759,7 +3788,7 @@ test ">byte-array on owned byte-array is a no-op" {
     defer ctx.deinit();
 
     const items = [_]u8{ 1, 2, 3 };
-    const ba = try ByteArray.create(std.testing.allocator);
+    const ba = try ByteArray.create(std.testing.allocator, 0);
     defer container_backing.releaseValue(.{ .byte_array = ba });
     try ba.ensureTotalCapacity(std.testing.allocator, items.len);
     ba.appendSliceAssumeCapacity(items[0..]);
@@ -3778,7 +3807,7 @@ test ">byte-array copies borrowed byte-array to owned storage" {
     defer ctx.deinit();
 
     var items = [_]u8{ 9, 8, 7 };
-    const ba = try value_mod.makeBorrowedByteArray(std.testing.allocator, items[0..]);
+    const ba = try value_mod.makeBorrowedByteArray(std.testing.allocator, items[0..], 0);
     defer container_backing.releaseValue(.{ .byte_array = ba });
 
     try ctx.stack.push(.{ .byte_array = ba });
@@ -3797,7 +3826,7 @@ test ">byte-array copies borrowed packed backing and preserves tag" {
     defer ctx.deinit();
 
     var items = [_]u8{ 0xAA, 0xBB, 0xCC, 0xDD };
-    const ba = try value_mod.makeBorrowedByteArray(std.testing.allocator, items[0..]);
+    const ba = try value_mod.makeBorrowedByteArray(std.testing.allocator, items[0..], 0);
     defer container_backing.releaseValue(.{ .byte_array = ba });
     const inner = Value{ .byte_array = ba };
     const packed_type = value_mod.VirtualType{
@@ -3887,7 +3916,7 @@ test "string #first and #last share the source backing for a multi-byte codepoin
 
     // "á" and "é" are 2-byte codepoints, so neither end is interned.
     const bytes = try std.testing.allocator.dupe(u8, "\xc3\xa1z\xc3\xa9");
-    const src = try value_mod.ownedStringValue(std.testing.allocator, bytes);
+    const src = try value_mod.ownedStringValue(std.testing.allocator, bytes, 0);
     defer container_backing.releaseValue(src);
 
     try ctx.stack.push(src);
@@ -4288,7 +4317,7 @@ fn testPushFixnumArray(ctx: *Context, comptime fixnums: []const i64) !void {
     for (fixnums, 0..) |n, i| {
         items[i] = .{ .fixnum = n };
     }
-    const arr = try value_mod.Array.fromOwnedSlice(std.testing.allocator, items);
+    const arr = try value_mod.Array.fromOwnedSlice(std.testing.allocator, items, 0);
     ctx.stack.pushMoved(.{ .array = arr }) catch |err| {
         container_backing.releaseValue(.{ .array = arr });
         return err;
@@ -4322,7 +4351,7 @@ test "#append and #prepend vector arms build the vector on the shared allocator"
 
     const baseline = ctx.arena.queryCapacity();
 
-    const first = try Vector.create(std.testing.allocator);
+    const first = try Vector.create(std.testing.allocator, 0);
     try ctx.stack.pushMoved(.{ .vector = first });
     try testPushFixnumArray(&ctx, &.{ 3, 4 });
     try nativeAppend(&ctx);
@@ -4332,7 +4361,7 @@ test "#append and #prepend vector arms build the vector on the shared allocator"
     try std.testing.expectEqual(@as(usize, 2), appended.vector.list.items.len);
     try std.testing.expectEqual(ctx.allocator.ptr, appended.vector.header.allocator.ptr);
 
-    const second = try Vector.create(std.testing.allocator);
+    const second = try Vector.create(std.testing.allocator, 0);
     try ctx.stack.pushMoved(.{ .vector = second });
     try testPushFixnumArray(&ctx, &.{ 1, 2 });
     try nativePrepend(&ctx);
@@ -4351,13 +4380,13 @@ test "#append and #push byte-array arms build the byte array on the shared alloc
 
     const baseline = ctx.arena.queryCapacity();
 
-    const first = try ByteArray.create(std.testing.allocator);
+    const first = try ByteArray.create(std.testing.allocator, 0);
     try first.ensureTotalCapacity(std.testing.allocator, 2);
     first.appendAssumeCapacity(1);
     first.appendAssumeCapacity(2);
     try ctx.stack.pushMoved(.{ .byte_array = first });
 
-    const second = try ByteArray.create(std.testing.allocator);
+    const second = try ByteArray.create(std.testing.allocator, 0);
     try second.ensureTotalCapacity(std.testing.allocator, 1);
     second.appendAssumeCapacity(3);
     try ctx.stack.pushMoved(.{ .byte_array = second });
@@ -4416,7 +4445,7 @@ test "#append! frees its scratch slice" {
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
 
-    const vec = try Vector.create(std.testing.allocator);
+    const vec = try Vector.create(std.testing.allocator, 0);
     try ctx.stack.pushMoved(.{ .vector = vec });
     try testPushFixnumArray(&ctx, &.{ 5, 6 });
     try nativeAppendMut(&ctx);
@@ -4434,7 +4463,7 @@ test "#map wrapper retains an aliased inner and death releases it" {
     const items = try std.testing.allocator.alloc(Value, 2);
     items[0] = .{ .fixnum = 1 };
     items[1] = .{ .fixnum = 2 };
-    const inner = try Iterator.create(std.testing.allocator, .{ .array = .{ .items = items, .index = 0 } });
+    const inner = try Iterator.create(std.testing.allocator, .{ .array = .{ .items = items, .index = 0 } }, 0);
 
     try ctx.stack.pushMoved(.{ .iterator = inner });
     try ctx.stack.push(.{ .quotation = .{ .instructions = &.{}, .effect = null, .code_ptr = null } });
@@ -4458,7 +4487,7 @@ test "#take wrapper takes over the popped inner reference" {
     for (items, 0..) |*slot, i| {
         slot.* = .{ .fixnum = @intCast(i) };
     }
-    const inner = try Iterator.create(std.testing.allocator, .{ .array = .{ .items = items, .index = 0 } });
+    const inner = try Iterator.create(std.testing.allocator, .{ .array = .{ .items = items, .index = 0 } }, 0);
 
     try ctx.stack.pushMoved(.{ .iterator = inner });
     try ctx.stack.push(.{ .fixnum = 2 });
@@ -4476,7 +4505,7 @@ test "two wrappers over one inner both die cleanly" {
 
     const items = try std.testing.allocator.alloc(Value, 1);
     items[0] = .{ .fixnum = 7 };
-    const inner = try Iterator.create(std.testing.allocator, .{ .array = .{ .items = items, .index = 0 } });
+    const inner = try Iterator.create(std.testing.allocator, .{ .array = .{ .items = items, .index = 0 } }, 0);
 
     // Two wrapper sources: the stack slot pushed here plus one extra reference standing in for a
     // dup'd slot.
@@ -4502,7 +4531,7 @@ fn testToIterMethodBody(ctx: *Context) anyerror!void {
     container_backing.releaseValue(v);
     const items = try std.testing.allocator.alloc(Value, 1);
     items[0] = .{ .fixnum = 42 };
-    const iter = try Iterator.create(std.testing.allocator, .{ .array = .{ .items = items, .index = 0 } });
+    const iter = try Iterator.create(std.testing.allocator, .{ .array = .{ .items = items, .index = 0 } }, 0);
     try helpers.pushMovedIterator(ctx, iter);
 }
 
@@ -4530,7 +4559,7 @@ test "coerceSequenceOperand passes a consumable operand through retained" {
     const items = try std.testing.allocator.alloc(Value, 2);
     items[0] = .{ .fixnum = 1 };
     items[1] = .{ .fixnum = 2 };
-    const arr = try value_mod.Array.fromOwnedSlice(std.testing.allocator, items);
+    const arr = try value_mod.Array.fromOwnedSlice(std.testing.allocator, items, 0);
     defer container_backing.releaseValue(.{ .array = arr });
 
     const coerced = (try coerceSequenceOperand(&ctx, .{ .array = arr }, .native_seqs)).?;
@@ -4544,7 +4573,7 @@ test "coerceSequenceOperand routes a set to an iterator when the caller takes no
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
 
-    const set = try value_mod.Set.create(std.testing.allocator);
+    const set = try value_mod.Set.create(std.testing.allocator, 0);
     defer container_backing.releaseValue(.{ .set = set });
     _ = try set.map.getOrPut(set.header.allocator, .{ .fixnum = 5 });
 
@@ -4563,7 +4592,7 @@ test "coerceSequenceOperand routes a native sequence to an iterator in iterator-
     const items = try std.testing.allocator.alloc(Value, 2);
     items[0] = .{ .fixnum = 3 };
     items[1] = .{ .fixnum = 4 };
-    const arr = try value_mod.Array.fromOwnedSlice(std.testing.allocator, items);
+    const arr = try value_mod.Array.fromOwnedSlice(std.testing.allocator, items, 0);
     defer container_backing.releaseValue(.{ .array = arr });
 
     const coerced = (try coerceSequenceOperand(&ctx, .{ .array = arr }, .iterator_only)).?;
@@ -4612,8 +4641,8 @@ test "a value-map entry outlives the map it was built from" {
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
 
-    const map = try value_mod.ValueMap.create(std.testing.allocator);
-    const inner = try value_mod.Array.fromOwnedSlice(std.testing.allocator, try std.testing.allocator.alloc(Value, 0));
+    const map = try value_mod.ValueMap.create(std.testing.allocator, 0);
+    const inner = try value_mod.Array.fromOwnedSlice(std.testing.allocator, try std.testing.allocator.alloc(Value, 0), 0);
     _ = try map.map.getOrPut(map.header.allocator, .{ .fixnum = 1 });
     map.map.values()[0] = .{ .array = inner };
 

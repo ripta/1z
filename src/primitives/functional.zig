@@ -309,7 +309,7 @@ pub fn nativeCurry(ctx: *Context) anyerror!void {
         .owns_segments = true,
         .owns_scope = carried.owned,
         .bases = bases,
-    });
+    }, ctx.containerOwnerTag());
     built = true;
     try helpers.pushMovedValue(ctx, .{ .closure = cl });
 }
@@ -492,7 +492,7 @@ pub fn nativeCompose(ctx: *Context) anyerror!void {
         .owns_segments = true,
         .owns_scope = carried_owned,
         .bases = bases,
-    });
+    }, ctx.containerOwnerTag());
     built = true;
     try helpers.pushMovedValue(ctx, .{ .closure = cl });
 }
@@ -549,7 +549,7 @@ fn nativeAttachStackEffect(ctx: *Context) anyerror!void {
                 .defining_module = c.defining_module,
                 .header = undefined,
                 .bases = bases,
-            }) catch |err| {
+            }, ctx.containerOwnerTag()) catch |err| {
                 ctx.allocator.free(bases);
                 container_backing.releaseValue(quot_val);
                 return err;
@@ -610,7 +610,7 @@ fn executeBenchmarkN(ctx: *Context, callable: Callable, n: u64) !*HashTable {
     try exec_result;
 
     // Build result hash
-    const hash = HashTable.create(ctx.allocator) catch return error.OutOfMemory;
+    const hash = HashTable.create(ctx.allocator, ctx.containerOwnerTag()) catch return error.OutOfMemory;
     errdefer hash.header.release();
     const hash_alloc = hash.header.allocator;
 
@@ -899,7 +899,7 @@ test "curry: a closure base's deps come off the value, not from its body's addre
         .segments = &.{},
         .header = undefined,
         .owns_body = true,
-    });
+    }, ctx.containerOwnerTag());
 
     // What a recycled address looks like: an entry left by whatever last held this pointer.
     const deps = try ctx.allocator.alloc(*const value_mod.Module, 1);

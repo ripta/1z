@@ -85,11 +85,11 @@ fn getErrorField(ctx: *Context, err: *const ErrorObject, field_name: []const u8)
     if (std.mem.eql(u8, field_name, "error-type")) {
         const copy = try ctx.allocator.dupe(u8, err.error_type);
         errdefer ctx.allocator.free(copy);
-        return try value_mod.ownedSymbolValue(ctx.allocator, copy);
+        return try value_mod.ownedSymbolValue(ctx.allocator, copy, ctx.containerOwnerTag());
     } else if (std.mem.eql(u8, field_name, "message")) {
         const copy = try ctx.allocator.dupe(u8, err.message);
         errdefer ctx.allocator.free(copy);
-        return try value_mod.ownedStringValue(ctx.allocator, copy);
+        return try value_mod.ownedStringValue(ctx.allocator, copy, ctx.containerOwnerTag());
     } else if (std.mem.eql(u8, field_name, "data")) {
         if (err.data) |data| {
             container_backing.retainValue(data.*);
@@ -107,7 +107,7 @@ fn getErrorField(ctx: *Context, err: *const ErrorObject, field_name: []const u8)
                 alloc.free(frames);
             }
             for (trace, 0..) |frame, i| {
-                const frame_hash = HashTable.create(ctx.allocator) catch return error.OutOfMemory;
+                const frame_hash = HashTable.create(ctx.allocator, ctx.containerOwnerTag()) catch return error.OutOfMemory;
                 frames[i] = .{ .hash = frame_hash };
                 built = i + 1;
                 const hash_alloc = frame_hash.header.allocator;
@@ -116,7 +116,7 @@ fn getErrorField(ctx: *Context, err: *const ErrorObject, field_name: []const u8)
                     hash_alloc.free(word_key);
                     return error.OutOfMemory;
                 };
-                const name_val = value_mod.ownedStringValue(hash_alloc, name_copy) catch {
+                const name_val = value_mod.ownedStringValue(hash_alloc, name_copy, ctx.containerOwnerTag()) catch {
                     hash_alloc.free(word_key);
                     hash_alloc.free(name_copy);
                     return error.OutOfMemory;
@@ -132,7 +132,7 @@ fn getErrorField(ctx: *Context, err: *const ErrorObject, field_name: []const u8)
                     return error.OutOfMemory;
                 };
             }
-            const arr = try value_mod.Array.fromOwnedSlice(alloc, frames);
+            const arr = try value_mod.Array.fromOwnedSlice(alloc, frames, ctx.containerOwnerTag());
             return .{ .array = arr };
         } else {
             return .{ .boolean = false }; // f for null
@@ -311,7 +311,7 @@ fn nativeAtSetHash(ctx: *Context) anyerror!void {
     };
 
     const h = obj.hash;
-    const new_hash = HashTable.create(ctx.allocator) catch {
+    const new_hash = HashTable.create(ctx.allocator, ctx.containerOwnerTag()) catch {
         container_backing.releaseValue(new_value);
         return error.OutOfMemory;
     };
@@ -515,7 +515,7 @@ test "@keys on a hash returns owned symbols in an array on the shared allocator"
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
 
-    const hash = try HashTable.create(ctx.allocator);
+    const hash = try HashTable.create(ctx.allocator, ctx.containerOwnerTag());
     try ctx.stack.pushMoved(.{ .hash = hash });
     const key = try ctx.allocator.dupe(u8, "alpha");
     try hash.map.put(hash.header.allocator, key, .{ .fixnum = 1 });

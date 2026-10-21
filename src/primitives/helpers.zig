@@ -47,12 +47,53 @@ pub fn genSrcLocFrom(alloc: Allocator, entry: ?Value) !GenSrcLoc {
     return src_loc;
 }
 
+/// The shared entry to every in-place container write.
+///
+/// Analysis may mutate only a container its own load owner made. Outside analysis the check is a
+/// flag test. Inside it, the check is one integer comparison. A write into a container an
+/// ancestor made raises `analysis-escape` before anything is mutated.
+///
+/// A primitive that has already popped its operands calls this once the target is in hand and
+/// releases its references on the error. A primitive that has not popped yet checks by stack
+/// depth instead.
+pub inline fn beginContainerWrite(ctx: *Context, header: *const container_backing.ContainerHeader) error{AnalysisEscape}!void {
+    return ctx.checkWrite(header.ownerTag(), "a container");
+}
+
+/// `beginContainerWrite` for the container at `depth` below the stack top, checked before the
+/// primitive pops anything.
+///
+/// Only a slot whose kind is in `kinds` is checked. Any other slot is left for the primitive's own
+/// type check, so a wrong-typed operand reports a type mismatch before it reports an escape.
+pub inline fn beginWriteAtDepth(
+    ctx: *Context,
+    depth: usize,
+    comptime kinds: []const std.meta.Tag(Value),
+) error{AnalysisEscape}!void {
+    if (!ctx.in_analysis) return;
+    return beginWriteAtDepthInAnalysis(ctx, depth, kinds);
+}
+
+fn beginWriteAtDepthInAnalysis(
+    ctx: *Context,
+    depth: usize,
+    comptime kinds: []const std.meta.Tag(Value),
+) error{AnalysisEscape}!void {
+    const target = ctx.stack.peekN(depth) catch return;
+
+    inline for (kinds) |kind| {
+        if (std.meta.activeTag(target) == kind) {
+            return beginContainerWrite(ctx, &@field(target, @tagName(kind)).header);
+        }
+    }
+}
+
 /// Adopt a filled slice into a fresh owned array and push it, transferring
 /// the slice and its element references to the stack slot. The caller's
 /// ownership of `items` ends here on every path: on failure the elements are
 /// released and the slice freed. `items` must have been allocated on `alloc`.
 pub fn pushAdoptedArray(ctx: *Context, alloc: Allocator, items: []const Value) anyerror!void {
-    const arr = value_mod.Array.fromOwnedSlice(alloc, items) catch |e| {
+    const arr = value_mod.Array.fromOwnedSlice(alloc, items, ctx.containerOwnerTag()) catch |e| {
         container_backing.releaseValues(items);
         alloc.free(items);
         return e;
@@ -85,7 +126,7 @@ pub fn pushMovedVector(ctx: *Context, vec: *value_mod.Vector) anyerror!void {
 /// the backing's creation reference to the stack slot. `bytes` must have been allocated on
 /// `ctx.allocator`. The caller's ownership ends here on every path.
 pub fn pushOwnedString(ctx: *Context, bytes: []u8) anyerror!void {
-    const val = value_mod.ownedStringValue(ctx.allocator, bytes) catch |e| {
+    const val = value_mod.ownedStringValue(ctx.allocator, bytes, ctx.containerOwnerTag()) catch |e| {
         ctx.allocator.free(bytes);
         return e;
     };
@@ -97,7 +138,7 @@ pub fn pushOwnedString(ctx: *Context, bytes: []u8) anyerror!void {
 
 /// Symbol twin of `pushOwnedString`.
 pub fn pushOwnedSymbol(ctx: *Context, bytes: []u8) anyerror!void {
-    const val = value_mod.ownedSymbolValue(ctx.allocator, bytes) catch |e| {
+    const val = value_mod.ownedSymbolValue(ctx.allocator, bytes, ctx.containerOwnerTag()) catch |e| {
         ctx.allocator.free(bytes);
         return e;
     };
@@ -111,7 +152,7 @@ pub fn pushOwnedSymbol(ctx: *Context, bytes: []u8) anyerror!void {
 /// reference. Safe to store in a container that outlives the context that produced `bytes`.
 pub fn ownedStringCopy(alloc: Allocator, bytes: []const u8) error{OutOfMemory}!Value {
     const copy = try alloc.dupe(u8, bytes);
-    return value_mod.ownedStringValue(alloc, copy) catch |e| {
+    return value_mod.ownedStringValue(alloc, copy, 0) catch |e| {
         alloc.free(copy);
         return e;
     };
@@ -120,7 +161,7 @@ pub fn ownedStringCopy(alloc: Allocator, bytes: []const u8) error{OutOfMemory}!V
 /// Symbol twin of `ownedStringCopy`.
 pub fn ownedSymbolCopy(alloc: Allocator, bytes: []const u8) error{OutOfMemory}!Value {
     const copy = try alloc.dupe(u8, bytes);
-    return value_mod.ownedSymbolValue(alloc, copy) catch |e| {
+    return value_mod.ownedSymbolValue(alloc, copy, 0) catch |e| {
         alloc.free(copy);
         return e;
     };
@@ -147,7 +188,7 @@ pub const ArrayBuilder = struct {
 
     /// The array value holding the creation reference.
     pub fn finish(self: *ArrayBuilder) error{OutOfMemory}!Value {
-        const arr = try value_mod.Array.fromOwnedSlice(self.alloc, self.items);
+        const arr = try value_mod.Array.fromOwnedSlice(self.alloc, self.items, 0);
         self.items = &.{};
         return .{ .array = arr };
     }
@@ -166,7 +207,7 @@ pub fn pushMovedValue(ctx: *Context, val: Value) anyerror!void {
 /// adopting the caller's reference to `inner` and transferring the backing's creation
 /// reference to the stack slot. The caller's ownership ends here on every path.
 pub fn pushOwnedTagged(ctx: *Context, tag: *const value_mod.VirtualType, inner: Value) anyerror!void {
-    const val = value_mod.ownedTaggedValue(ctx.allocator, tag, inner) catch |e| {
+    const val = value_mod.ownedTaggedValue(ctx.allocator, tag, inner, ctx.containerOwnerTag()) catch |e| {
         container_backing.releaseValue(inner);
         return e;
     };
@@ -194,7 +235,7 @@ pub fn pushDemotedBignum(ctx: *Context, big: BigIntManaged) anyerror!void {
 /// push it. Each copied element is retained; the caller keeps its own
 /// references to `src`.
 pub fn pushCopiedArray(ctx: *Context, alloc: Allocator, src: []const Value) anyerror!void {
-    const arr = try value_mod.Array.createCopyFrom(alloc, src);
+    const arr = try value_mod.Array.createCopyFrom(alloc, src, ctx.containerOwnerTag());
     ctx.stack.pushMoved(.{ .array = arr }) catch |e| {
         container_backing.releaseValue(.{ .array = arr });
         return e;
@@ -438,8 +479,8 @@ test "unwrapTaggedSlotInPlace balances backed and null-backed wrappers" {
 
     // Backed: the rewrite retains the inner for the slot, and dropping the
     // wrapper's last reference frees the box without touching that retain.
-    const vec = try value_mod.Vector.create(testing.allocator);
-    var slot = try value_mod.ownedTaggedValue(testing.allocator, &dummy_vt, .{ .vector = vec });
+    const vec = try value_mod.Vector.create(testing.allocator, 0);
+    var slot = try value_mod.ownedTaggedValue(testing.allocator, &dummy_vt, .{ .vector = vec }, 0);
     unwrapTaggedSlotInPlace(&slot);
     try testing.expect(slot == .vector);
     try testing.expectEqual(@as(u32, 1), vec.header.refcountValue());
@@ -447,7 +488,7 @@ test "unwrapTaggedSlotInPlace balances backed and null-backed wrappers" {
 
     // Null-backed: the slot's reference is the inner's own, so the rewrite is
     // a plain transfer.
-    const vec2 = try value_mod.Vector.create(testing.allocator);
+    const vec2 = try value_mod.Vector.create(testing.allocator, 0);
     var inner: Value = .{ .vector = vec2 };
     var slot2 = Value{ .tagged = .{ .tag = &dummy_vt, .inner = &inner } };
     unwrapTaggedSlotInPlace(&slot2);
@@ -620,14 +661,14 @@ fn setTypeMismatchMessage(ctx: *Context, expected: []const u8, val: Value) void 
 }
 
 fn typeMismatchPayload(ctx: *Context, expected: []const u8, val: Value) !*value_mod.HashTable {
-    const hash = try value_mod.HashTable.create(ctx.allocator);
+    const hash = try value_mod.HashTable.create(ctx.allocator, ctx.containerOwnerTag());
     errdefer container_backing.releaseValue(.{ .hash = hash });
 
     const alloc = hash.header.allocator;
 
     // `expected` is not always a literal, so the payload keeps its own copy.
     const expected_bytes = try alloc.dupe(u8, expected);
-    const expected_value = value_mod.ownedStringValue(alloc, expected_bytes) catch |err| {
+    const expected_value = value_mod.ownedStringValue(alloc, expected_bytes, 0) catch |err| {
         alloc.free(expected_bytes);
         return err;
     };
@@ -960,7 +1001,7 @@ pub fn demoteBignum(alloc: Allocator, big: BigIntManaged) !Value {
         defer owned.deinit();
         return .{ .fixnum = owned.toInt(i64) catch unreachable };
     }
-    return value_mod.ownedBignumValue(alloc, big) catch |e| {
+    return value_mod.ownedBignumValue(alloc, big, 0) catch |e| {
         var owned = big;
         owned.deinit();
         return e;

@@ -80,7 +80,7 @@ pub fn nativeAtAdjoin(ctx: *Context) anyerror!void {
         return;
     }
 
-    const new_set = Set.create(ctx.allocator) catch {
+    const new_set = Set.create(ctx.allocator, ctx.containerOwnerTag()) catch {
         container_backing.releaseValue(member);
         return error.OutOfMemory;
     };
@@ -119,7 +119,7 @@ pub fn nativeAtRemove(ctx: *Context) anyerror!void {
     const probe = try freeze.frozenKey(ctx, val);
     defer probe.release();
 
-    const new_set = Set.create(ctx.allocator) catch return error.OutOfMemory;
+    const new_set = Set.create(ctx.allocator, ctx.containerOwnerTag()) catch return error.OutOfMemory;
     errdefer container_backing.releaseValue(.{ .set = new_set });
     const alloc = new_set.header.allocator;
 
@@ -157,7 +157,7 @@ pub fn nativeAtUnion(ctx: *Context) anyerror!void {
         },
     };
 
-    const new_set = Set.create(ctx.allocator) catch return error.OutOfMemory;
+    const new_set = Set.create(ctx.allocator, ctx.containerOwnerTag()) catch return error.OutOfMemory;
     errdefer container_backing.releaseValue(.{ .set = new_set });
     const alloc = new_set.header.allocator;
 
@@ -195,7 +195,7 @@ pub fn nativeAtIntersection(ctx: *Context) anyerror!void {
         },
     };
 
-    const new_set = Set.create(ctx.allocator) catch return error.OutOfMemory;
+    const new_set = Set.create(ctx.allocator, ctx.containerOwnerTag()) catch return error.OutOfMemory;
     errdefer container_backing.releaseValue(.{ .set = new_set });
     const alloc = new_set.header.allocator;
 
@@ -234,7 +234,7 @@ pub fn nativeAtDifference(ctx: *Context) anyerror!void {
         },
     };
 
-    const new_set = Set.create(ctx.allocator) catch return error.OutOfMemory;
+    const new_set = Set.create(ctx.allocator, ctx.containerOwnerTag()) catch return error.OutOfMemory;
     errdefer container_backing.releaseValue(.{ .set = new_set });
     const alloc = new_set.header.allocator;
 

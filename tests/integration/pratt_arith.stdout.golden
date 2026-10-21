@@ -50,11 +50,11 @@ PASS: empty input throws
 Stack: [ ]
 === error: unexpected operator ===
 Stack: [ ]
-Stack: [ <error parse-error: expected expression, got '+' at position 0 data=H{ text: "+" offset: 0 } [src/prelude.1z:1383:throw <- pratt:117:call <- tests/integration/pratt_arith.1z:49:recover]> ]
+Stack: [ <error parse-error: expected expression, got '+' at position 0 data=H{ text: "+" offset: 0 } [src/prelude.1z:1386:throw <- pratt:117:call <- tests/integration/pratt_arith.1z:49:recover]> ]
 PASS: unexpected operator message
-Stack: [ <error parse-error: expected expression, got '+' at position 0 data=H{ text: "+" offset: 0 } [src/prelude.1z:1383:throw <- pratt:117:call <- tests/integration/pratt_arith.1z:49:recover]> ]
+Stack: [ <error parse-error: expected expression, got '+' at position 0 data=H{ text: "+" offset: 0 } [src/prelude.1z:1386:throw <- pratt:117:call <- tests/integration/pratt_arith.1z:49:recover]> ]
 PASS: unexpected operator is a parse error
-Stack: [ <error parse-error: expected expression, got '+' at position 0 data=H{ text: "+" offset: 0 } [src/prelude.1z:1383:throw <- pratt:117:call <- tests/integration/pratt_arith.1z:49:recover]> ]
+Stack: [ <error parse-error: expected expression, got '+' at position 0 data=H{ text: "+" offset: 0 } [src/prelude.1z:1386:throw <- pratt:117:call <- tests/integration/pratt_arith.1z:49:recover]> ]
 Stack: [ H{ text: "+" offset: 0 } ]
 PASS: unexpected operator offset
 Stack: [ H{ text: "+" offset: 0 } ]
@@ -62,14 +62,14 @@ PASS: unexpected operator text
 Stack: [ ]
 === error: unexpected token after operator ===
 Stack: [ ]
-Stack: [ <error parse-error: expected expression, got ')' at position 4 data=H{ text: ")" offset: 4 } [src/prelude.1z:1383:throw <- pratt:117:call <- pratt/arith:72:parse-right <- pratt:103:call <- tests/integration/pratt_arith.1z:57:recover]> ]
+Stack: [ <error parse-error: expected expression, got ')' at position 4 data=H{ text: ")" offset: 4 } [src/prelude.1z:1386:throw <- pratt:117:call <- pratt/arith:72:parse-right <- pratt:103:call <- tests/integration/pratt_arith.1z:57:recover]> ]
 PASS: offending ')' offset
 Stack: [ ]
 === error: wrong token in place of close paren ===
 Stack: [ ]
-Stack: [ <error parse-error: expected ')', got '3' at position 7 data=H{ text: "3" offset: 7 } [src/prelude.1z:1383:throw <- pratt/arith:44:when <- pratt:117:call <- tests/integration/pratt_arith.1z:61:recover]> ]
+Stack: [ <error parse-error: expected ')', got '3' at position 7 data=H{ text: "3" offset: 7 } [src/prelude.1z:1386:throw <- pratt/arith:44:when <- pratt:117:call <- tests/integration/pratt_arith.1z:61:recover]> ]
 PASS: close paren message names the token
-Stack: [ <error parse-error: expected ')', got '3' at position 7 data=H{ text: "3" offset: 7 } [src/prelude.1z:1383:throw <- pratt/arith:44:when <- pratt:117:call <- tests/integration/pratt_arith.1z:61:recover]> ]
+Stack: [ <error parse-error: expected ')', got '3' at position 7 data=H{ text: "3" offset: 7 } [src/prelude.1z:1386:throw <- pratt/arith:44:when <- pratt:117:call <- tests/integration/pratt_arith.1z:61:recover]> ]
 PASS: close paren offset
 Stack: [ ]
 === error: missing close paren ===
@@ -83,9 +83,9 @@ PASS: end of input carries no data
 Stack: [ ]
 === error: trailing token ===
 Stack: [ ]
-Stack: [ <error parse-error: unexpected trailing token ')' at position 5 data=H{ text: ")" offset: 5 } [src/prelude.1z:1383:throw <- tests/integration/pratt_arith.1z:72:recover]> ]
+Stack: [ <error parse-error: unexpected trailing token ')' at position 5 data=H{ text: ")" offset: 5 } [src/prelude.1z:1386:throw <- tests/integration/pratt_arith.1z:72:recover]> ]
 PASS: trailing token message
-Stack: [ <error parse-error: unexpected trailing token ')' at position 5 data=H{ text: ")" offset: 5 } [src/prelude.1z:1383:throw <- tests/integration/pratt_arith.1z:72:recover]> ]
+Stack: [ <error parse-error: unexpected trailing token ')' at position 5 data=H{ text: ")" offset: 5 } [src/prelude.1z:1386:throw <- tests/integration/pratt_arith.1z:72:recover]> ]
 PASS: trailing token offset
 Stack: [ ]
 === error: unrecognized input after the first token ===

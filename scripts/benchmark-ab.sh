@@ -74,6 +74,7 @@ workloads=(
     "task_body_entry.1z --threads=1|tests/benchmark/task_body_entry.1z|--threads=1"
     "combinator_contention.1z|tests/benchmark/combinator_contention.1z|--threads=auto"
     "call_word_micro.1z|tests/benchmark/call_word_micro.1z|"
+    "mutation_heavy.1z|tests/benchmark/mutation_heavy.1z|"
 )
 
 # median of the integers passed as args

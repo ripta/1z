@@ -166,7 +166,7 @@ pub fn pushBool(ctx: *Context, value: bool) !void {
 
 pub fn pushString(ctx: *Context, data: []const u8) !void {
     const copy = try ctx.allocator.dupe(u8, data);
-    const val = value_mod.ownedStringValue(ctx.allocator, copy) catch |err| {
+    const val = value_mod.ownedStringValue(ctx.allocator, copy, ctx.containerOwnerTag()) catch |err| {
         ctx.allocator.free(copy);
         return err;
     };
@@ -178,7 +178,7 @@ pub fn pushString(ctx: *Context, data: []const u8) !void {
 
 pub fn pushSymbol(ctx: *Context, data: []const u8) !void {
     const copy = try ctx.allocator.dupe(u8, data);
-    const val = value_mod.ownedSymbolValue(ctx.allocator, copy) catch |err| {
+    const val = value_mod.ownedSymbolValue(ctx.allocator, copy, ctx.containerOwnerTag()) catch |err| {
         ctx.allocator.free(copy);
         return err;
     };

@@ -5357,7 +5357,7 @@ test "collectCompositeQuotations collects a quotation nested in a hash literal" 
     const inner_instrs = &[_]Instruction{
         .{ .op = .{ .call_word = "inner-noop" }, .line = 1 },
     };
-    const hash = try value_mod.HashTable.create(allocator);
+    const hash = try value_mod.HashTable.create(allocator, 0);
     defer hash.header.release();
     try hash.map.put(allocator, try allocator.dupe(u8, "match"), .{ .quotation = .{ .instructions = inner_instrs } });
     const outer_instrs = &[_]Instruction{
@@ -5409,7 +5409,7 @@ test "seedCompositeQuotationCallees seeds a module-scoped callee and skips a mod
         .{ .op = .{ .call_word = "mod-probe" }, .line = 1 },
         .{ .op = .{ .call_word = "bare-probe" }, .line = 1 },
     };
-    const hash = try value_mod.HashTable.create(allocator);
+    const hash = try value_mod.HashTable.create(allocator, 0);
     defer hash.header.release();
     try hash.map.put(allocator, try allocator.dupe(u8, "go"), .{ .quotation = .{ .instructions = inner_instrs } });
 
@@ -5446,9 +5446,9 @@ test "collectCompositeQuotations collects a quotation nested in a nested composi
     // The hash releases its values at destroy, so the array wrapper needs an
     // initialized header; the static no-op destroy leaves the struct to the
     // deferred free.
-    const arr_elems_arr = try value_mod.Array.createStatic(allocator, &arr_elems);
+    const arr_elems_arr = try value_mod.Array.createStatic(allocator, &arr_elems, 0);
     defer allocator.destroy(arr_elems_arr);
-    const hash = try value_mod.HashTable.create(allocator);
+    const hash = try value_mod.HashTable.create(allocator, 0);
     defer hash.header.release();
     try hash.map.put(allocator, try allocator.dupe(u8, "match"), .{ .array = arr_elems_arr });
     const outer_instrs = &[_]Instruction{
@@ -5645,7 +5645,7 @@ test "collectDispatchContainerQuotationsPromoting promotes the match key quotati
     const match_instrs = &[_]Instruction{
         .{ .op = .{ .call_word = "promoted-rule-callee" }, .line = 1 },
     };
-    const hash = try value_mod.HashTable.create(allocator);
+    const hash = try value_mod.HashTable.create(allocator, 0);
     defer hash.header.release();
     try hash.map.put(allocator, try allocator.dupe(u8, "kind"), value_mod.symbolValue("word"));
     try hash.map.put(allocator, try allocator.dupe(u8, "match"), .{ .quotation = .{ .instructions = match_instrs } });
@@ -5735,7 +5735,7 @@ test "collectDispatchContainerQuotationsPromoting does not promote a hash entry 
     const other_instrs = &[_]Instruction{
         .{ .op = .{ .call_word = "should-not-promote-2" }, .line = 1 },
     };
-    const hash = try value_mod.HashTable.create(allocator);
+    const hash = try value_mod.HashTable.create(allocator, 0);
     defer hash.header.release();
     try hash.map.put(allocator, try allocator.dupe(u8, "fallback"), .{ .quotation = .{ .instructions = other_instrs } });
     const outer_instrs = &[_]Instruction{

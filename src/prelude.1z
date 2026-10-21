@@ -387,6 +387,9 @@ EFileReadFailed: ( -- sym ) [ file-read-failed: ] ;
 EUserThrown: ( -- sym ) [ user-thrown: ] ;
 \\ Error type raised when `@get` or another lookup finds no entry for the key.
 EKeyNotFound: ( -- sym ) [ key-not-found: ] ;
+\\ Error type raised when code running under analysis writes into a container, once cell, marker, or
+\\ word that an ancestor context owns.
+EAnalysisEscape: ( -- sym ) [ analysis-escape: ] ;
 \\ Error type raised when `cmp` gets a NaN, or a pair of values with no ordering.
 ENotComparable: ( -- sym ) [ not-comparable: ] ;
 \\ Error type for an operating-system I/O failure with no more specific error type.

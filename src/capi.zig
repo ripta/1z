@@ -1546,7 +1546,7 @@ export fn onez_hash_keys(ptr: ?*anyopaque, val_ptr: ?*anyopaque, out: *?*anyopaq
                     setLastError(handle, "allocation failure creating keys array", .{});
                     return ONEZ_ERR_ALLOC;
                 };
-                keys[i] = value_mod.ownedSymbolValue(alloc, key_copy) catch {
+                keys[i] = value_mod.ownedSymbolValue(alloc, key_copy, handle.ctx.containerOwnerTag()) catch {
                     alloc.free(key_copy);
                     container_backing.releaseValues(keys[0..i]);
                     alloc.free(keys);
@@ -1555,7 +1555,7 @@ export fn onez_hash_keys(ptr: ?*anyopaque, val_ptr: ?*anyopaque, out: *?*anyopaq
                 };
                 i += 1;
             }
-            const keys_arr = value_mod.Array.fromOwnedSlice(alloc, keys) catch {
+            const keys_arr = value_mod.Array.fromOwnedSlice(alloc, keys, handle.ctx.containerOwnerTag()) catch {
                 container_backing.releaseValues(keys);
                 alloc.free(keys);
                 setLastError(handle, "allocation failure creating array", .{});
@@ -1641,7 +1641,7 @@ export fn onez_push_array(ptr: ?*anyopaque, handles: [*]const ?*anyopaque, count
     // The copied elements are borrowed from the caller's boxes; the fresh
     // array must own its own references.
     container_backing.retainValues(values);
-    const arr = value_mod.Array.fromOwnedSlice(alloc, values) catch {
+    const arr = value_mod.Array.fromOwnedSlice(alloc, values, handle.ctx.containerOwnerTag()) catch {
         setLastError(handle, "allocation failure creating array", .{});
         container_backing.releaseValues(values);
         alloc.free(values);

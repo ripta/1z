@@ -856,7 +856,7 @@ test "each copy of a bound container carries a reference of its own" {
     defer ctx.deinit();
     ctx.current_source = here;
 
-    const vec = try value_mod.Vector.create(ctx.allocator);
+    const vec = try value_mod.Vector.create(ctx.allocator, ctx.containerOwnerTag());
 
     // The binding adopts the creation reference rather than taking one, so this reads 1.
     try bind(&ctx, here, "shared", .{ .vector = vec }, true);
@@ -878,7 +878,7 @@ test "each copy of a container literal carries a reference of its own" {
     defer ctx.deinit();
     ctx.current_source = here;
 
-    const vec = try value_mod.Vector.create(ctx.allocator);
+    const vec = try value_mod.Vector.create(ctx.allocator, ctx.containerOwnerTag());
 
     try define(&ctx, here, "pushes-a-vector", &.{
         .{ .op = .{ .push_literal = .{ .vector = vec } }, .line = 1 },
@@ -1223,7 +1223,7 @@ test "each container literal in a rebuilt nested body carries a reference of its
 
     try bind(&ctx, here, "width", .{ .fixnum = 256 }, true);
 
-    const vec = try value_mod.Vector.create(ctx.allocator);
+    const vec = try value_mod.Vector.create(ctx.allocator, ctx.containerOwnerTag());
     const before = vec.header.refcountValue();
 
     const nested = [_]Instruction{
@@ -1295,7 +1295,7 @@ test "a nested body rebuilt inside a discarded copy keeps its references balance
         .{ .op = .{ .call_word = "+" }, .line = 1 },
     }, false);
 
-    const vec = try value_mod.Vector.create(ctx.allocator);
+    const vec = try value_mod.Vector.create(ctx.allocator, ctx.containerOwnerTag());
     const before = vec.header.refcountValue();
 
     const nested = [_]Instruction{

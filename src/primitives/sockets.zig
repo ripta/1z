@@ -151,7 +151,7 @@ fn makeInetAddr(ctx: *Context, tag: *const VirtualType, host: []const u8, port: 
     // The pushed instance can outlive the addr this host came from, so the field adopts a
     // fresh heap-backed copy. The instance's destroy releases it.
     const host_copy = try ctx.allocator.dupe(u8, host);
-    fields[0] = value_mod.ownedStringValue(ctx.allocator, host_copy) catch |e| {
+    fields[0] = value_mod.ownedStringValue(ctx.allocator, host_copy, ctx.containerOwnerTag()) catch |e| {
         ctx.allocator.free(host_copy);
         return e;
     };
@@ -159,11 +159,11 @@ fn makeInetAddr(ctx: *Context, tag: *const VirtualType, host: []const u8, port: 
 
     fields[1] = .{ .fixnum = port };
 
-    const instance = try value_mod.createStructInstance(ctx.allocator, struct_type, fields);
+    const instance = try value_mod.createStructInstance(ctx.allocator, struct_type, fields, ctx.containerOwnerTag());
     fields_owned = false;
     errdefer container_backing.releaseValue(.{ .struct_instance = instance });
 
-    return try value_mod.ownedTaggedValue(ctx.allocator, tag, .{ .struct_instance = instance });
+    return try value_mod.ownedTaggedValue(ctx.allocator, tag, .{ .struct_instance = instance }, ctx.containerOwnerTag());
 }
 
 /// resolve ( addr -- addrs )
@@ -239,16 +239,16 @@ fn nativeResolve(ctx: *Context) anyerror!void {
             // The pushed instance outlives the addr this path came from, so the field adopts
             // a fresh heap-backed copy. The instance's destroy releases it.
             const path_copy = try ctx.allocator.dupe(u8, addr_info.path);
-            fields[0] = value_mod.ownedStringValue(ctx.allocator, path_copy) catch |e| {
+            fields[0] = value_mod.ownedStringValue(ctx.allocator, path_copy, ctx.containerOwnerTag()) catch |e| {
                 ctx.allocator.free(path_copy);
                 return e;
             };
             errdefer if (fields_owned) container_backing.releaseValue(fields[0]);
 
-            const instance = try value_mod.createStructInstance(ctx.allocator, struct_type, fields);
+            const instance = try value_mod.createStructInstance(ctx.allocator, struct_type, fields, ctx.containerOwnerTag());
             fields_owned = false;
 
-            const addr_val = value_mod.ownedTaggedValue(ctx.allocator, addr_info.tag, .{ .struct_instance = instance }) catch |e| {
+            const addr_val = value_mod.ownedTaggedValue(ctx.allocator, addr_info.tag, .{ .struct_instance = instance }, ctx.containerOwnerTag()) catch |e| {
                 container_backing.releaseValue(.{ .struct_instance = instance });
                 return e;
             };
@@ -495,8 +495,8 @@ fn extractDataBytes(ctx: *Context, val: Value) ![]const u8 {
 }
 
 /// Create a ByteArray value from a slice of bytes.
-fn makeBytesValue(alloc: std.mem.Allocator, data: []const u8) !Value {
-    const ba = try value_mod.ByteArray.create(alloc);
+fn makeBytesValue(alloc: std.mem.Allocator, data: []const u8, owner: u32) !Value {
+    const ba = try value_mod.ByteArray.create(alloc, owner);
     try ba.ensureTotalCapacity(alloc, data.len);
     for (data) |byte| {
         ba.appendAssumeCapacity(byte);
@@ -575,7 +575,7 @@ fn nativeUdpRecvfrom(ctx: *Context) anyerror!void {
             return error.IOFailed;
         };
 
-        const data_val = try makeBytesValue(alloc, buffer[0..n]);
+        const data_val = try makeBytesValue(alloc, buffer[0..n], ctx.containerOwnerTag());
         try ctx.stack.push(data_val);
 
         const net_addr = std.net.Address{ .any = @as(*const std.posix.sockaddr, @ptrCast(&peer_addr)).* };
@@ -653,7 +653,7 @@ fn nativeUdpRecv(ctx: *Context) anyerror!void {
             helpers.setErrorContext(ctx, "udp-recv failed", .{});
             return error.IOFailed;
         };
-        const data_val = try makeBytesValue(alloc, buffer[0..n]);
+        const data_val = try makeBytesValue(alloc, buffer[0..n], ctx.containerOwnerTag());
         try ctx.stack.push(data_val);
         return;
     }
@@ -714,14 +714,14 @@ fn nativeInetPton(ctx: *Context) anyerror!void {
             return error.InvalidArgument;
         };
         const bytes: *const [4]u8 = @ptrCast(&addr.in.sa.addr);
-        try ctx.stack.push(try makeBytesValue(alloc, bytes));
+        try ctx.stack.push(try makeBytesValue(alloc, bytes, ctx.containerOwnerTag()));
     } else if (std.mem.eql(u8, family, "inet6")) {
         const addr = std.net.Address.parseIp6(str, 0) catch {
             helpers.setErrorContext(ctx, "invalid IPv6 address: {s}", .{str});
             return error.InvalidArgument;
         };
         const bytes: []const u8 = addr.in6.sa.addr[0..16];
-        try ctx.stack.push(try makeBytesValue(alloc, bytes));
+        try ctx.stack.push(try makeBytesValue(alloc, bytes, ctx.containerOwnerTag()));
     } else {
         helpers.setErrorContext(ctx, "inet-pton: unsupported address family '{s}', expected inet: or inet6:", .{family});
         return error.InvalidArgument;

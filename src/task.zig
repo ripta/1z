@@ -1083,7 +1083,7 @@ test "publishTaskResult rejects borrowed buffer results" {
     defer scope.deinit();
 
     var bytes = [_]u8{ 1, 2, 3 };
-    const ba = try value_mod.makeBorrowedByteArray(std.testing.allocator, bytes[0..]);
+    const ba = try value_mod.makeBorrowedByteArray(std.testing.allocator, bytes[0..], 0);
     defer container_backing.releaseValue(.{ .byte_array = ba });
 
     try ctx.stack.push(.{ .byte_array = ba });

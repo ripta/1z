@@ -1098,14 +1098,14 @@ const Decoder = struct {
                 }
                 // Decoded literals mirror parse-time literals: static storage,
                 // struct and backing owned by the decode allocator.
-                const arr = value_mod.Array.createStatic(self.allocator, elems) catch return error.OutOfMemory;
+                const arr = value_mod.Array.createStatic(self.allocator, elems, 0) catch return error.OutOfMemory;
                 break :blk .{ .array = arr };
             },
             value_tag_hash => blk: {
                 if (self.offset + 4 > self.data.len) return self.failTruncated();
                 const entry_count = std.mem.readInt(u32, self.data[self.offset..][0..4], .little);
                 self.offset += 4;
-                const h = HashTable.create(self.allocator) catch return error.OutOfMemory;
+                const h = HashTable.create(self.allocator, 0) catch return error.OutOfMemory;
                 try h.map.ensureTotalCapacity(self.allocator, entry_count);
                 for (0..entry_count) |_| {
                     if (self.offset + 4 > self.data.len) return self.failTruncated();
@@ -1123,7 +1123,7 @@ const Decoder = struct {
                 if (self.offset + 4 > self.data.len) return self.failTruncated();
                 const entry_count = std.mem.readInt(u32, self.data[self.offset..][0..4], .little);
                 self.offset += 4;
-                const m = ValueMap.create(self.allocator) catch return error.OutOfMemory;
+                const m = ValueMap.create(self.allocator, 0) catch return error.OutOfMemory;
                 errdefer m.header.release();
                 try m.map.ensureTotalCapacity(self.allocator, entry_count);
                 for (0..entry_count) |_| {
@@ -1139,7 +1139,7 @@ const Decoder = struct {
                 if (self.offset + 4 > self.data.len) return self.failTruncated();
                 const entry_count = std.mem.readInt(u32, self.data[self.offset..][0..4], .little);
                 self.offset += 4;
-                const m = MutableMap.create(self.allocator) catch return error.OutOfMemory;
+                const m = MutableMap.create(self.allocator, 0) catch return error.OutOfMemory;
                 try m.map.ensureTotalCapacity(self.allocator, entry_count);
                 for (0..entry_count) |_| {
                     if (self.offset + 4 > self.data.len) return self.failTruncated();
@@ -1188,9 +1188,9 @@ const Decoder = struct {
                 self.offset += 1;
                 const copy = try owner.dupe(u8, try self.readLengthPrefixed());
                 const owned = if (val_tag == value_tag_string)
-                    value_mod.ownedStringValue(owner, copy)
+                    value_mod.ownedStringValue(owner, copy, 0)
                 else
-                    value_mod.ownedSymbolValue(owner, copy);
+                    value_mod.ownedSymbolValue(owner, copy, 0);
                 return owned catch |e| {
                     owner.free(copy);
                     return e;
@@ -1211,7 +1211,7 @@ const Decoder = struct {
                 }
 
                 for (items) |*item| item.* = try self.readValueOwned(owner);
-                return .{ .array = try value_mod.Array.fromOwnedSlice(owner, items) };
+                return .{ .array = try value_mod.Array.fromOwnedSlice(owner, items, 0) };
             },
 
             value_tag_hash, value_tag_mutable_map => {
@@ -1221,9 +1221,9 @@ const Decoder = struct {
                 self.offset += 4;
 
                 const result: Value = if (val_tag == value_tag_hash)
-                    .{ .hash = try HashTable.create(owner) }
+                    .{ .hash = try HashTable.create(owner, 0) }
                 else
-                    .{ .mutable_map = try MutableMap.create(owner) };
+                    .{ .mutable_map = try MutableMap.create(owner, 0) };
                 errdefer container_backing.releaseValue(result);
 
                 const map = switch (result) {
@@ -1258,7 +1258,7 @@ const Decoder = struct {
                 const count = std.mem.readInt(u32, self.data[self.offset..][0..4], .little);
                 self.offset += 4;
 
-                const m = try ValueMap.create(owner);
+                const m = try ValueMap.create(owner, 0);
                 errdefer m.header.release();
                 try m.map.ensureTotalCapacity(owner, count);
 
@@ -1404,14 +1404,14 @@ const Decoder = struct {
                 }
                 // Decoded literals mirror parse-time literals: static storage,
                 // struct and backing owned by the decode allocator.
-                const arr = value_mod.Array.createStatic(self.allocator, elems) catch return error.OutOfMemory;
+                const arr = value_mod.Array.createStatic(self.allocator, elems, 0) catch return error.OutOfMemory;
                 break :blk .{ .array = arr };
             },
             value_tag_hash => blk: {
                 if (self.offset + 4 > self.data.len) return self.failTruncated();
                 const entry_count = std.mem.readInt(u32, self.data[self.offset..][0..4], .little);
                 self.offset += 4;
-                const h = HashTable.create(self.allocator) catch return error.OutOfMemory;
+                const h = HashTable.create(self.allocator, 0) catch return error.OutOfMemory;
                 try h.map.ensureTotalCapacity(self.allocator, entry_count);
                 for (0..entry_count) |_| {
                     if (self.offset + 4 > self.data.len) return self.failTruncated();
@@ -1429,7 +1429,7 @@ const Decoder = struct {
                 if (self.offset + 4 > self.data.len) return self.failTruncated();
                 const entry_count = std.mem.readInt(u32, self.data[self.offset..][0..4], .little);
                 self.offset += 4;
-                const m = ValueMap.create(self.allocator) catch return error.OutOfMemory;
+                const m = ValueMap.create(self.allocator, 0) catch return error.OutOfMemory;
                 errdefer m.header.release();
                 // Reserved whether or not the entries are parked, because the install pass assumes
                 // the capacity is already there.
@@ -2018,7 +2018,7 @@ test "roundtrip: nested array" {
 }
 
 test "roundtrip: empty hash" {
-    const h_ptr = try HashTable.create(testing.allocator);
+    const h_ptr = try HashTable.create(testing.allocator, 0);
     defer h_ptr.header.release();
     const instrs = [_]Instruction{
         .{ .op = .{ .push_literal = .{ .hash = h_ptr } }, .line = 1 },
@@ -2034,7 +2034,7 @@ test "roundtrip: empty hash" {
 }
 
 test "roundtrip: hash with entries" {
-    const h_ptr = try HashTable.create(testing.allocator);
+    const h_ptr = try HashTable.create(testing.allocator, 0);
     defer h_ptr.header.release();
     try h_ptr.map.put(testing.allocator, try testing.allocator.dupe(u8, "x"), .{ .fixnum = 10 });
     try h_ptr.map.put(testing.allocator, try testing.allocator.dupe(u8, "y"), .{ .boolean = false });
@@ -2054,7 +2054,7 @@ test "roundtrip: hash with entries" {
 }
 
 test "roundtrip: empty value_map" {
-    const m_ptr = try ValueMap.create(testing.allocator);
+    const m_ptr = try ValueMap.create(testing.allocator, 0);
     defer m_ptr.header.release();
     const instrs = [_]Instruction{
         .{ .op = .{ .push_literal = .{ .value_map = m_ptr } }, .line = 1 },
@@ -2072,9 +2072,9 @@ test "roundtrip: value_map keyed on a fixnum, an array, and a string" {
     const key_elems = [_]Value{ .{ .fixnum = 1 }, .{ .fixnum = 2 } };
     // Owned rather than static: a stored key is an owning reference, and the map's destroy
     // releases every one of them.
-    const key_arr = try value_mod.Array.createCopyFrom(testing.allocator, &key_elems);
+    const key_arr = try value_mod.Array.createCopyFrom(testing.allocator, &key_elems, 0);
 
-    const m_ptr = try ValueMap.create(testing.allocator);
+    const m_ptr = try ValueMap.create(testing.allocator, 0);
     defer m_ptr.header.release();
     try m_ptr.map.put(testing.allocator, .{ .fixnum = 42 }, .{ .fixnum = 10 });
     try m_ptr.map.put(testing.allocator, .{ .array = key_arr }, .{ .boolean = false });
@@ -2102,7 +2102,7 @@ test "roundtrip: value_map keyed on a fixnum, an array, and a string" {
 }
 
 test "roundtrip: value_map truncated mid-entry reports TruncatedBytecode" {
-    const m_ptr = try ValueMap.create(testing.allocator);
+    const m_ptr = try ValueMap.create(testing.allocator, 0);
     defer m_ptr.header.release();
     try m_ptr.map.put(testing.allocator, .{ .fixnum = 1 }, .{ .fixnum = 2 });
 
@@ -2122,7 +2122,7 @@ test "roundtrip: value_map truncated mid-entry reports TruncatedBytecode" {
 test "roundtrip: value_map key and value both resolve through the image slot tables" {
     const alloc = testing.allocator;
 
-    const inner_map = try MutableMap.create(alloc);
+    const inner_map = try MutableMap.create(alloc, 0);
     defer inner_map.header.release();
 
     var tag_virtual = VirtualType{ .name = "tagged-key", .inner_type = "fixnum" };
@@ -2131,7 +2131,7 @@ test "roundtrip: value_map key and value both resolve through the image slot tab
     // alone. A key has to come back with its tag, since `hashValue` folds the tag pointer in.
     const tagged_key = Value{ .tagged = .{ .tag = &tag_virtual, .inner = &tagged_inner } };
 
-    const m_ptr = try ValueMap.create(alloc);
+    const m_ptr = try ValueMap.create(alloc, 0);
     defer m_ptr.header.release();
     // A stored slot is an owning reference, and the map's destroy releases one, so take it here.
     inner_map.header.retain();
@@ -2238,7 +2238,7 @@ const EmptySlotIndices = struct {
 test "roundtrip: mutable_value_map encodes as a slot reference and decodes to the same map" {
     const alloc = testing.allocator;
 
-    const live = try MutableValueMap.create(alloc);
+    const live = try MutableValueMap.create(alloc, 0);
     defer live.header.release();
     try live.map.put(alloc, .{ .fixnum = 1 }, .{ .fixnum = 10 });
 
@@ -2275,7 +2275,7 @@ test "roundtrip: mutable_value_map encodes as a slot reference and decodes to th
 test "roundtrip: an un-interned mutable_value_map is NotEncodable in either mode" {
     const alloc = testing.allocator;
 
-    const live = try MutableValueMap.create(alloc);
+    const live = try MutableValueMap.create(alloc, 0);
     defer live.header.release();
 
     var mvm_idx: std.AutoHashMapUnmanaged(*const MutableValueMap, u32) = .{};
@@ -2429,7 +2429,7 @@ test "image roundtrip: struct_instance encodes as a slot and decodes to the same
     fields[1] = .{ .fixnum = 20 };
     // The decode arm retains the instance header, so the fixture must be a
     // headered instance, matching what the loader puts in a real slot table.
-    const si = try value_mod.createStructInstance(alloc, &st, fields);
+    const si = try value_mod.createStructInstance(alloc, &st, fields, 0);
     defer si.header.?.release();
 
     // Encode side: only the struct_instance index is populated; the other
@@ -2882,7 +2882,7 @@ test "nested quotation in hash literal carries compiled code_ptr" {
         .{ .op = .{ .call_word = "noop" }, .line = 1 },
     };
     const inner_slice: []const Instruction = &inner;
-    const h = try HashTable.create(testing.allocator);
+    const h = try HashTable.create(testing.allocator, 0);
     defer h.header.release();
     try h.map.put(testing.allocator, try testing.allocator.dupe(u8, "match"), .{ .quotation = .{ .instructions = inner_slice } });
     const hash_val: Value = .{ .hash = h };

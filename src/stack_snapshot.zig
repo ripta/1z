@@ -205,7 +205,7 @@ test "restore releases what the attempt left and hands back the snapshot's refer
     defer stack.clear();
 
     // A push retains, so each creator's own reference is dropped once the stack holds one.
-    const operand = try Vector.create(std.testing.allocator);
+    const operand = try Vector.create(std.testing.allocator, 0);
     try stack.push(.{ .vector = operand });
     operand.header.release();
     try stack.push(.{ .fixnum = 2 });
@@ -215,7 +215,7 @@ test "restore releases what the attempt left and hands back the snapshot's refer
     try std.testing.expectEqual(@as(u32, 2), operand.header.refcountValue());
 
     // The attempt left the operand unconsumed and pushed a value of its own.
-    const pushed = try Vector.create(std.testing.allocator);
+    const pushed = try Vector.create(std.testing.allocator, 0);
     try stack.push(.{ .vector = pushed });
     pushed.header.release();
 
@@ -236,7 +236,7 @@ test "an empty snapshot releases only what the attempt pushed above the entry" {
     var snapshot: StackSnapshot = .{};
     try std.testing.expect(snapshot.take(&stack, 0));
 
-    const pushed = try Vector.create(std.testing.allocator);
+    const pushed = try Vector.create(std.testing.allocator, 0);
     try stack.push(.{ .vector = pushed });
     pushed.header.release();
 
@@ -268,7 +268,7 @@ test "a catch segment restores the whole stack the protected code consumed" {
     var snapshots: CatchSnapshots = .{};
     defer snapshots.deinit(std.testing.allocator);
 
-    const below = try Vector.create(std.testing.allocator);
+    const below = try Vector.create(std.testing.allocator, 0);
     try stack.push(.{ .vector = below });
     below.header.release();
     try stack.push(.{ .fixnum = 2 });
@@ -278,7 +278,7 @@ test "a catch segment restores the whole stack the protected code consumed" {
 
     // The protected code consumed both values and left partial state of its own.
     StackSnapshot.releaseAbove(&stack, 0);
-    const partial = try Vector.create(std.testing.allocator);
+    const partial = try Vector.create(std.testing.allocator, 0);
     try stack.push(.{ .vector = partial });
     partial.header.release();
 
@@ -316,7 +316,7 @@ test "a catch segment that cannot be reserved retains nothing" {
     defer stack.deinit();
     defer stack.clear();
 
-    const operand = try Vector.create(std.testing.allocator);
+    const operand = try Vector.create(std.testing.allocator, 0);
     try stack.push(.{ .vector = operand });
     operand.header.release();
 
@@ -374,14 +374,14 @@ test "a value swapped below the handler's arguments reads as changed" {
     var snapshots: CatchSnapshots = .{};
     defer snapshots.deinit(std.testing.allocator);
 
-    const original = try Vector.create(std.testing.allocator);
+    const original = try Vector.create(std.testing.allocator, 0);
     try stack.push(.{ .vector = original });
     original.header.release();
     const seg = try snapshots.push(std.testing.allocator, &stack);
 
     // An equal but different value in the same slot.
     StackSnapshot.releaseAbove(&stack, 0);
-    const replacement = try Vector.create(std.testing.allocator);
+    const replacement = try Vector.create(std.testing.allocator, 0);
     try stack.push(.{ .vector = replacement });
     replacement.header.release();
 

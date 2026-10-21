@@ -30,7 +30,7 @@ pub const primitives = [_]Primitive{
 
 /// <value-map> ( -- value-map )
 fn nativeMakeValueMap(ctx: *Context) anyerror!void {
-    const map = ValueMap.create(ctx.allocator) catch return error.OutOfMemory;
+    const map = ValueMap.create(ctx.allocator, ctx.containerOwnerTag()) catch return error.OutOfMemory;
     ctx.stack.pushMoved(.{ .value_map = map }) catch |err| {
         container_backing.releaseValue(.{ .value_map = map });
         return err;
@@ -39,7 +39,7 @@ fn nativeMakeValueMap(ctx: *Context) anyerror!void {
 
 /// <mutable-value-map> ( -- mutable-value-map )
 fn nativeMakeMutableValueMap(ctx: *Context) anyerror!void {
-    const map = MutableValueMap.create(ctx.allocator) catch return error.OutOfMemory;
+    const map = MutableValueMap.create(ctx.allocator, ctx.containerOwnerTag()) catch return error.OutOfMemory;
     ctx.stack.pushMoved(.{ .mutable_value_map = map }) catch |err| {
         container_backing.releaseValue(.{ .mutable_value_map = map });
         return err;
@@ -59,14 +59,27 @@ fn nativeMakeMutableValueMap(ctx: *Context) anyerror!void {
 /// The freeze runs ahead of that lock deliberately. A tagged container is normalized through its
 /// generated wrap word, so freezing a key can re-enter the interpreter, and the container mutex is
 /// not reentrant.
+///
+/// The analysis write check runs before the freeze, so a refused write never runs a wrap word.
 pub fn putEntry(ctx: *Context, map: *ValueEntries, alloc: Allocator, header: ?*ContainerHeader, key: Value, value: Value) anyerror!void {
+    if (header) |h| {
+        helpers.beginContainerWrite(ctx, h) catch |e| {
+            container_backing.releaseValue(key);
+            container_backing.releaseValue(value);
+            return e;
+        };
+    }
+
     const stored_key = freeze.frozenKeyConsume(ctx, key) catch |e| {
         container_backing.releaseValue(key);
         container_backing.releaseValue(value);
         return e;
     };
 
-    if (header) |h| h.lock();
+    if (header) |h| {
+        h.lock();
+        ctx.assertWriteAllowed(h.ownerTag());
+    }
 
     const gop = map.getOrPut(alloc, stored_key) catch {
         if (header) |h| h.unlock();
@@ -163,7 +176,7 @@ fn fillFromEntrySequence(ctx: *Context, map: *ValueEntries, alloc: Allocator) an
 
 /// >value-map ( seq -- value-map )
 fn nativeToValueMap(ctx: *Context) anyerror!void {
-    const map = ValueMap.create(ctx.allocator) catch return error.OutOfMemory;
+    const map = ValueMap.create(ctx.allocator, ctx.containerOwnerTag()) catch return error.OutOfMemory;
     errdefer container_backing.releaseValue(.{ .value_map = map });
 
     try fillFromEntrySequence(ctx, &map.map, map.header.allocator);
@@ -172,7 +185,7 @@ fn nativeToValueMap(ctx: *Context) anyerror!void {
 
 /// >mutable-value-map ( seq -- mutable-value-map )
 fn nativeToMutableValueMap(ctx: *Context) anyerror!void {
-    const map = MutableValueMap.create(ctx.allocator) catch return error.OutOfMemory;
+    const map = MutableValueMap.create(ctx.allocator, ctx.containerOwnerTag()) catch return error.OutOfMemory;
     errdefer container_backing.releaseValue(.{ .mutable_value_map = map });
 
     try fillFromEntrySequence(ctx, &map.map, map.header.allocator);
@@ -247,7 +260,7 @@ fn nativeVmapSet(ctx: *Context) anyerror!void {
         },
     };
 
-    const new_map = ValueMap.create(ctx.allocator) catch {
+    const new_map = ValueMap.create(ctx.allocator, ctx.containerOwnerTag()) catch {
         container_backing.releaseValue(new_value);
         container_backing.releaseValue(key);
         return error.OutOfMemory;
@@ -323,7 +336,7 @@ fn nativeVmapDelete(ctx: *Context) anyerror!void {
     const probe = try freeze.frozenKey(ctx, key);
     defer probe.release();
 
-    const new_map = ValueMap.create(ctx.allocator) catch return error.OutOfMemory;
+    const new_map = ValueMap.create(ctx.allocator, ctx.containerOwnerTag()) catch return error.OutOfMemory;
     errdefer container_backing.releaseValue(.{ .value_map = new_map });
     const alloc = new_map.header.allocator;
 
@@ -359,6 +372,11 @@ fn nativeVmapDeleteMut(ctx: *Context) anyerror!void {
         },
     };
 
+    helpers.beginContainerWrite(ctx, &m.header) catch |e| {
+        container_backing.releaseValue(map_val);
+        return e;
+    };
+
     const probe = freeze.frozenKey(ctx, key) catch |e| {
         container_backing.releaseValue(map_val);
         return e;
@@ -366,6 +384,7 @@ fn nativeVmapDeleteMut(ctx: *Context) anyerror!void {
     defer probe.release();
 
     m.header.lock();
+    ctx.assertWriteAllowed(m.header.ownerTag());
     const removed = m.map.fetchSwapRemove(probe.value);
     m.header.unlock();
 
@@ -386,17 +405,17 @@ const testing = std.testing;
 fn testArrayOf(ctx: *Context, elem: Value) !Value {
     const items = try ctx.allocator.alloc(Value, 1);
     items[0] = elem;
-    return .{ .array = try value_mod.Array.fromOwnedSlice(ctx.allocator, items) };
+    return .{ .array = try value_mod.Array.fromOwnedSlice(ctx.allocator, items, ctx.containerOwnerTag()) };
 }
 
 test "a value-map entry stays reachable after the caller mutates its key handle" {
     var ctx = Context.init(testing.allocator);
     defer ctx.deinit();
 
-    const m = try ValueMap.create(ctx.allocator);
+    const m = try ValueMap.create(ctx.allocator, ctx.containerOwnerTag());
     defer container_backing.releaseValue(.{ .value_map = m });
 
-    const key = try value_mod.Vector.create(ctx.allocator);
+    const key = try value_mod.Vector.create(ctx.allocator, ctx.containerOwnerTag());
     try key.list.append(ctx.allocator, .{ .fixnum = 1 });
     // A second reference stands in for the caller's own handle, which outlives the insert.
     key.header.retain();
@@ -419,10 +438,10 @@ test "the mutable half stores a key by its frozen form too" {
     var ctx = Context.init(testing.allocator);
     defer ctx.deinit();
 
-    const m = try MutableValueMap.create(ctx.allocator);
+    const m = try MutableValueMap.create(ctx.allocator, ctx.containerOwnerTag());
     defer container_backing.releaseValue(.{ .mutable_value_map = m });
 
-    const key = try value_mod.Vector.create(ctx.allocator);
+    const key = try value_mod.Vector.create(ctx.allocator, ctx.containerOwnerTag());
     try key.list.append(ctx.allocator, .{ .fixnum = 4 });
     key.header.retain();
     defer key.header.release();
@@ -442,11 +461,11 @@ test "a vector key and an array key of the same contents write to one entry" {
     var ctx = Context.init(testing.allocator);
     defer ctx.deinit();
 
-    const m = try MutableValueMap.create(ctx.allocator);
+    const m = try MutableValueMap.create(ctx.allocator, ctx.containerOwnerTag());
     defer container_backing.releaseValue(.{ .mutable_value_map = m });
     const alloc = m.header.allocator;
 
-    const vec = try value_mod.Vector.create(ctx.allocator);
+    const vec = try value_mod.Vector.create(ctx.allocator, ctx.containerOwnerTag());
     try vec.list.append(ctx.allocator, .{ .fixnum = 7 });
     try putEntry(&ctx, &m.map, alloc, &m.header, .{ .vector = vec }, .{ .fixnum = 1 });
 
@@ -465,7 +484,7 @@ test "a write to the wrong half reports the map it refused" {
     // Each writer's stack slot holds the map's last reference, so the refusal destroys it. The
     // message renders the operand's entry count, which would come off freed memory if the release
     // ran first.
-    const target = try ValueMap.create(ctx.allocator);
+    const target = try ValueMap.create(ctx.allocator, ctx.containerOwnerTag());
     try putEntry(&ctx, &target.map, target.header.allocator, null, .{ .fixnum = 1 }, .{ .fixnum = 2 });
     try putEntry(&ctx, &target.map, target.header.allocator, null, .{ .fixnum = 3 }, .{ .fixnum = 4 });
 
@@ -475,7 +494,7 @@ test "a write to the wrong half reports the map it refused" {
     try testing.expectError(error.TypeMismatch, nativeVmapSetMut(&ctx));
     try testing.expect(std.mem.indexOf(u8, ctx.pending_error_message.?, "value-map[2]") != null);
 
-    const doomed = try ValueMap.create(ctx.allocator);
+    const doomed = try ValueMap.create(ctx.allocator, ctx.containerOwnerTag());
     try putEntry(&ctx, &doomed.map, doomed.header.allocator, null, .{ .fixnum = 5 }, .{ .fixnum = 6 });
 
     try ctx.stack.pushMoved(.{ .value_map = doomed });
@@ -488,11 +507,11 @@ test "a copied entry survives the map it was copied from" {
     var ctx = Context.init(testing.allocator);
     defer ctx.deinit();
 
-    const source = try ValueMap.create(ctx.allocator);
+    const source = try ValueMap.create(ctx.allocator, ctx.containerOwnerTag());
     const key = try testArrayOf(&ctx, .{ .fixnum = 1 });
     try putEntry(&ctx, &source.map, source.header.allocator, null, key, .{ .fixnum = 2 });
 
-    const copy = try ValueMap.create(ctx.allocator);
+    const copy = try ValueMap.create(ctx.allocator, ctx.containerOwnerTag());
     defer container_backing.releaseValue(.{ .value_map = copy });
     try copyRetainedEntries(&copy.map, copy.header.allocator, &source.map);
 

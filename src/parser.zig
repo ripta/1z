@@ -1471,7 +1471,7 @@ pub fn parseArray(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*Context, o
             values.append(allocator, .{ .array = nested }) catch return ParseError.OutOfMemory;
         } else if (std.mem.eql(u8, token, "}")) {
             const items = values.toOwnedSlice(allocator) catch return ParseError.OutOfMemory;
-            return value_mod.Array.createStatic(allocator, items) catch return ParseError.OutOfMemory;
+            return value_mod.Array.createStatic(allocator, items, if (ctx) |c| c.containerOwnerTag() else 0) catch return ParseError.OutOfMemory;
         } else if (std.mem.eql(u8, token, "[")) {
             // Quotations inside arrays don't execute parse-time words (arrays are data)
             const quot = try parseQuotation(allocator, tokenizer, null, tok.line);
@@ -2462,7 +2462,7 @@ test "rolling back a parse-time execution releases a queued emit-literal value" 
     var ctx = Context.initWithPrelude(std.testing.allocator);
     defer ctx.deinit();
 
-    const vec = try Vector.create(ctx.allocator);
+    const vec = try Vector.create(ctx.allocator, ctx.containerOwnerTag());
     defer vec.header.release();
 
     const pre_depth = ctx.stack.depth();

@@ -7104,10 +7104,10 @@ test "emitImageC: a type carrier buried in a value_map reaches its slot table" {
     // A mutable map is slot-encoded, so without the intern walk reaching value-map halves the
     // image serializer would answer NotEncodable for this body. Keys and values both, since a
     // value-map key is a Value.
-    const key_map = try value_mod.MutableMap.create(arena);
-    const value_map_entry = try value_mod.MutableMap.create(arena);
+    const key_map = try value_mod.MutableMap.create(arena, 0);
+    const value_map_entry = try value_mod.MutableMap.create(arena, 0);
 
-    const vm = try value_mod.ValueMap.create(arena);
+    const vm = try value_mod.ValueMap.create(arena, 0);
     try vm.map.put(arena, .{ .mutable_map = key_map }, .{ .mutable_map = value_map_entry });
 
     const instrs = try arena.dupe(Instruction, &.{
@@ -7138,9 +7138,9 @@ test "emitImageC: a mutable_value_map takes one slot per pointer and emits its d
     defer ctx.deinit();
     const arena = ctx.quotationAllocator();
 
-    const shared = try value_mod.MutableValueMap.create(arena);
+    const shared = try value_mod.MutableValueMap.create(arena, 0);
     try shared.map.put(arena, .{ .fixnum = 1 }, value_mod.stringValue("one"));
-    const other = try value_mod.MutableValueMap.create(arena);
+    const other = try value_mod.MutableValueMap.create(arena, 0);
 
     // Two push sites naming the same map collapse to one slot; that is what preserves identity.
     const instrs = try arena.dupe(Instruction, &.{
@@ -7177,10 +7177,10 @@ test "emitImageC: a type carrier buried in a mutable_value_map reaches its slot 
 
     // Both halves, as for the immutable map: a mutable-map key and a mutable-map value each need a
     // slot of their own or the image serializer answers NotEncodable for this body.
-    const key_map = try value_mod.MutableMap.create(arena);
-    const value_map_entry = try value_mod.MutableMap.create(arena);
+    const key_map = try value_mod.MutableMap.create(arena, 0);
+    const value_map_entry = try value_mod.MutableMap.create(arena, 0);
 
-    const mvm = try value_mod.MutableValueMap.create(arena);
+    const mvm = try value_mod.MutableValueMap.create(arena, 0);
     try mvm.map.put(arena, .{ .mutable_map = key_map }, .{ .mutable_map = value_map_entry });
 
     const instrs = try arena.dupe(Instruction, &.{
@@ -7642,7 +7642,7 @@ test "emitImageC: a body that falls back to the image serializer flags its row" 
     defer ctx.deinit();
     const arena = ctx.quotationAllocator();
 
-    const mm = try value_mod.MutableMap.create(arena);
+    const mm = try value_mod.MutableMap.create(arena, 0);
 
     const owner = try arena.create(Module);
     owner.* = .{ .name = "moda", .words = .{} };

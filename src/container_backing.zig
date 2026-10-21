@@ -72,8 +72,9 @@ pub const Shareable = enum(u8) {
 ///     without callers threading one in
 ///   - a `destroy_fn` callback the variant supplies to free its
 ///     storage-specific resources and the header itself
-///   - a reserved `flags` word for future cycle-handling work; the
-///     layout is intentionally undefined here
+///   - a `flags` word. The low 32 bits hold the analysis write barrier's
+///     owner tag. The high 32 bits are reserved for future cycle-handling
+///     work, and their layout is intentionally undefined here
 ///   - a tri-state `shareable` memo recording whether the backing is
 ///     safe to share across task boundaries, populated lazily by
 ///     `memoShareable`
@@ -107,17 +108,28 @@ pub const ContainerHeader = struct {
     flags: u64,
     shareable: std.atomic.Value(Shareable),
 
+    /// Mask of the bits of `flags` that hold the owner tag. The high half stays reserved for
+    /// cycle handling.
+    pub const owner_mask: u64 = 0xffff_ffff;
+
     /// Initialize a header in-place with refcount=1, an unlocked mutex,
-    /// zeroed `len`/`capacity`/`storage`, and a zeroed `flags` word.
+    /// zeroed `len`/`capacity`/`storage`, and the owner tag in the low
+    /// half of `flags`.
     ///
     /// The caller owns the storage layout; this entry point only sets up
     /// the bookkeeping fields. Use `init` immediately after the host
     /// struct is created on `allocator`, before any other thread can
     /// observe it.
+    ///
+    /// `owner` is the identity of the analysis load owner of the context that made the backing, or
+    /// 0 for a backing made outside analysis. It is fixed for the backing's lifetime. The analysis
+    /// write barrier compares it with the running context's load owner. Every constructor takes the
+    /// tag, so a creation site cannot leave it out.
     pub fn init(
         self: *ContainerHeader,
         allocator: std.mem.Allocator,
         destroy_fn: *const fn (*ContainerHeader) void,
+        owner: u32,
     ) void {
         self.* = .{
             .refcount = std.atomic.Value(u32).init(1),
@@ -127,10 +139,15 @@ pub const ContainerHeader = struct {
             .storage = null,
             .allocator = allocator,
             .destroy_fn = destroy_fn,
-            .flags = 0,
+            .flags = owner,
             .shareable = std.atomic.Value(Shareable).init(.unknown),
         };
         accountBackingCreated();
+    }
+
+    /// The owner tag held in the low half of `flags`.
+    pub inline fn ownerTag(self: *const ContainerHeader) u32 {
+        return @truncate(self.flags & owner_mask);
     }
 
     /// Increment the refcount. Cheap, monotonic; safe to call from any
@@ -545,7 +562,7 @@ fn createTestBacking(allocator: std.mem.Allocator, payload_size: usize) !*TestBa
     const payload = try allocator.alloc(u8, payload_size);
     errdefer allocator.free(payload);
 
-    backing.header.init(allocator, destroyTestBacking);
+    backing.header.init(allocator, destroyTestBacking, 0);
     backing.counter = std.atomic.Value(u64).init(0);
     backing.payload = payload;
     return backing;
@@ -727,9 +744,9 @@ test "live-backing accounting tracks create and destroy under bench guard" {
     live_backings.store(0, .monotonic);
     peak_backings.store(0, .monotonic);
 
-    const vec = try value_mod.Vector.create(testing.allocator);
-    const mm = try value_mod.MutableMap.create(testing.allocator);
-    const ba = try value_mod.ByteArray.create(testing.allocator);
+    const vec = try value_mod.Vector.create(testing.allocator, 0);
+    const mm = try value_mod.MutableMap.create(testing.allocator, 0);
+    const ba = try value_mod.ByteArray.create(testing.allocator, 0);
     try testing.expectEqual(@as(usize, 3), liveBackingCount());
     try testing.expectEqual(@as(usize, 3), peakBackingCount());
 
@@ -749,7 +766,7 @@ test "live-backing accounting is inert when bench guard is off" {
     live_backings.store(0, .monotonic);
     peak_backings.store(0, .monotonic);
 
-    const vec = try value_mod.Vector.create(testing.allocator);
+    const vec = try value_mod.Vector.create(testing.allocator, 0);
     try testing.expectEqual(@as(usize, 0), liveBackingCount());
     try testing.expectEqual(@as(usize, 0), peakBackingCount());
     vec.header.release();
@@ -757,7 +774,7 @@ test "live-backing accounting is inert when bench guard is off" {
 }
 
 test "retainValue/releaseValue: vector dispatch exercises the header" {
-    const vec = try value_mod.Vector.create(testing.allocator);
+    const vec = try value_mod.Vector.create(testing.allocator, 0);
     try testing.expectEqual(@as(u32, 1), vec.header.refcountValue());
 
     retainValue(.{ .vector = vec });
@@ -771,7 +788,7 @@ test "retainValue/releaseValue: vector dispatch exercises the header" {
 }
 
 test "retainValue/releaseValue: mutable_map dispatch exercises the header" {
-    const mm = try value_mod.MutableMap.create(testing.allocator);
+    const mm = try value_mod.MutableMap.create(testing.allocator, 0);
     try testing.expectEqual(@as(u32, 1), mm.header.refcountValue());
 
     retainValue(.{ .mutable_map = mm });
@@ -785,7 +802,7 @@ test "retainValue/releaseValue: mutable_map dispatch exercises the header" {
 }
 
 test "retainValue/releaseValue: byte_array dispatch exercises the header" {
-    const ba = try value_mod.ByteArray.create(testing.allocator);
+    const ba = try value_mod.ByteArray.create(testing.allocator, 0);
     try testing.expectEqual(@as(u32, 1), ba.header.refcountValue());
 
     retainValue(.{ .byte_array = ba });
@@ -802,12 +819,12 @@ test "retainValue/releaseValue: array dispatch exercises the header" {
     // The vector's construction reference transfers into the array slot;
     // retain an observation reference so the refcount stays inspectable
     // across the array's destroy.
-    const vec = try value_mod.Vector.create(testing.allocator);
+    const vec = try value_mod.Vector.create(testing.allocator, 0);
     vec.header.retain();
 
     const items = try testing.allocator.alloc(Value, 1);
     items[0] = .{ .vector = vec };
-    const arr = try value_mod.Array.fromOwnedSlice(testing.allocator, items);
+    const arr = try value_mod.Array.fromOwnedSlice(testing.allocator, items, 0);
     try testing.expectEqual(@as(u32, 1), arr.header.refcountValue());
 
     retainValue(.{ .array = arr });
@@ -824,7 +841,7 @@ test "retainValue/releaseValue: array dispatch exercises the header" {
 }
 
 test "retainValue/releaseValue: tagged propagates to inner vector" {
-    const vec = try value_mod.Vector.create(testing.allocator);
+    const vec = try value_mod.Vector.create(testing.allocator, 0);
     var inner: Value = .{ .vector = vec };
     var dummy_vt: value_mod.VirtualType = undefined;
 
@@ -838,9 +855,9 @@ test "retainValue/releaseValue: tagged propagates to inner vector" {
 }
 
 test "retainValue/releaseValue: backed tagged routes through the backing header, not the inner" {
-    const vec = try value_mod.Vector.create(testing.allocator);
+    const vec = try value_mod.Vector.create(testing.allocator, 0);
     var dummy_vt: value_mod.VirtualType = undefined;
-    const val = try value_mod.ownedTaggedValue(testing.allocator, &dummy_vt, .{ .vector = vec });
+    const val = try value_mod.ownedTaggedValue(testing.allocator, &dummy_vt, .{ .vector = vec }, 0);
     try testing.expect(valueHoldsRefcountedBacking(val));
 
     retainValue(val);
@@ -855,7 +872,7 @@ test "retainValue/releaseValue: backed tagged routes through the backing header,
 }
 
 test "retainValue/releaseValue: headerless struct_instance propagates to field vector" {
-    const vec = try value_mod.Vector.create(testing.allocator);
+    const vec = try value_mod.Vector.create(testing.allocator, 0);
     var fields = [_]Value{.{ .vector = vec }};
     var st = value_mod.StructType{ .name = "box", .fields = &.{"data"} };
     var inst = value_mod.StructInstance{ .struct_type = &st, .fields = &fields };
@@ -871,10 +888,10 @@ test "retainValue/releaseValue: headerless struct_instance propagates to field v
 
 test "retainValue/releaseValue: headered struct_instance routes through the header, not the fields" {
     var st = value_mod.StructType{ .name = "box", .fields = &.{"data"} };
-    const vec = try value_mod.Vector.create(testing.allocator);
+    const vec = try value_mod.Vector.create(testing.allocator, 0);
     const fields = try testing.allocator.alloc(Value, 1);
     fields[0] = .{ .vector = vec };
-    const inst = try value_mod.createStructInstance(testing.allocator, &st, fields);
+    const inst = try value_mod.createStructInstance(testing.allocator, &st, fields, 0);
 
     retainValue(.{ .struct_instance = inst });
     // The header absorbs the new owner; the field's own refcount is untouched.
@@ -893,7 +910,7 @@ test "headered struct_instance: setter-shape field replacement stays balanced ac
     var st = value_mod.StructType{ .name = "box", .fields = &.{"data"} };
     const fields = try testing.allocator.alloc(Value, 1);
     fields[0] = .{ .fixnum = 0 };
-    const inst = try value_mod.createStructInstance(testing.allocator, &st, fields);
+    const inst = try value_mod.createStructInstance(testing.allocator, &st, fields, 0);
 
     // A second live copy of the instance value, the shape a top-level binding
     // holds while the setter runs against a stack copy.
@@ -901,7 +918,7 @@ test "headered struct_instance: setter-shape field replacement stays balanced ac
 
     // The generated field setter's replacement sequence: release the old
     // owning reference, move the new value into the slot.
-    const vec = try value_mod.Vector.create(testing.allocator);
+    const vec = try value_mod.Vector.create(testing.allocator, 0);
     releaseValue(inst.fields[0]);
     inst.fields[0] = .{ .vector = vec };
 
@@ -915,7 +932,7 @@ test "headered struct_instance: setter-shape field replacement stays balanced ac
 }
 
 test "retainValue/releaseValue: hash dispatch exercises the header" {
-    const h = try value_mod.HashTable.create(testing.allocator);
+    const h = try value_mod.HashTable.create(testing.allocator, 0);
     try testing.expectEqual(@as(u32, 1), h.header.refcountValue());
 
     retainValue(.{ .hash = h });
@@ -932,10 +949,10 @@ test "HashTable: destroy releases stored values and frees keys" {
     // The vector's construction reference transfers into the hash slot;
     // retain an observation reference so the refcount stays inspectable
     // across the hash's destroy.
-    const vec = try value_mod.Vector.create(testing.allocator);
+    const vec = try value_mod.Vector.create(testing.allocator, 0);
     vec.header.retain();
 
-    const h = try value_mod.HashTable.create(testing.allocator);
+    const h = try value_mod.HashTable.create(testing.allocator, 0);
     const key = try h.header.allocator.dupe(u8, "k");
     try h.map.put(h.header.allocator, key, .{ .vector = vec });
     try testing.expectEqual(@as(u32, 2), vec.header.refcountValue());
@@ -947,7 +964,7 @@ test "HashTable: destroy releases stored values and frees keys" {
 }
 
 test "retainValue/releaseValue: set dispatch exercises the header" {
-    const s = try value_mod.Set.create(testing.allocator);
+    const s = try value_mod.Set.create(testing.allocator, 0);
     try testing.expectEqual(@as(u32, 1), s.header.refcountValue());
 
     retainValue(.{ .set = s });
@@ -961,7 +978,7 @@ test "retainValue/releaseValue: set dispatch exercises the header" {
 }
 
 test "retainValue/releaseValue: value-map dispatch exercises the header" {
-    const m = try value_mod.ValueMap.create(testing.allocator);
+    const m = try value_mod.ValueMap.create(testing.allocator, 0);
     try testing.expectEqual(@as(u32, 1), m.header.refcountValue());
 
     retainValue(.{ .value_map = m });
@@ -977,12 +994,12 @@ test "retainValue/releaseValue: value-map dispatch exercises the header" {
 test "ValueMap: destroy releases both halves of every entry" {
     // Each vector's construction reference transfers into the map; retain an
     // observation reference so the refcounts stay inspectable across destroy.
-    const key_vec = try value_mod.Vector.create(testing.allocator);
+    const key_vec = try value_mod.Vector.create(testing.allocator, 0);
     key_vec.header.retain();
-    const value_vec = try value_mod.Vector.create(testing.allocator);
+    const value_vec = try value_mod.Vector.create(testing.allocator, 0);
     value_vec.header.retain();
 
-    const m = try value_mod.ValueMap.create(testing.allocator);
+    const m = try value_mod.ValueMap.create(testing.allocator, 0);
     try m.map.put(m.header.allocator, .{ .vector = key_vec }, .{ .vector = value_vec });
     try testing.expectEqual(@as(u32, 2), key_vec.header.refcountValue());
     try testing.expectEqual(@as(u32, 2), value_vec.header.refcountValue());
@@ -996,12 +1013,12 @@ test "ValueMap: destroy releases both halves of every entry" {
 }
 
 test "MutableValueMap: destroy releases both halves of every entry" {
-    const key_vec = try value_mod.Vector.create(testing.allocator);
+    const key_vec = try value_mod.Vector.create(testing.allocator, 0);
     key_vec.header.retain();
-    const value_vec = try value_mod.Vector.create(testing.allocator);
+    const value_vec = try value_mod.Vector.create(testing.allocator, 0);
     value_vec.header.retain();
 
-    const m = try value_mod.MutableValueMap.create(testing.allocator);
+    const m = try value_mod.MutableValueMap.create(testing.allocator, 0);
     try m.map.put(m.header.allocator, .{ .vector = key_vec }, .{ .vector = value_vec });
 
     releaseValue(.{ .mutable_value_map = m });
@@ -1016,10 +1033,10 @@ test "Set: destroy releases member values" {
     // The vector's construction reference transfers into the set slot;
     // retain an observation reference so the refcount stays inspectable
     // across the set's destroy.
-    const vec = try value_mod.Vector.create(testing.allocator);
+    const vec = try value_mod.Vector.create(testing.allocator, 0);
     vec.header.retain();
 
-    const s = try value_mod.Set.create(testing.allocator);
+    const s = try value_mod.Set.create(testing.allocator, 0);
     try s.map.put(s.header.allocator, .{ .vector = vec }, {});
     try testing.expectEqual(@as(u32, 2), vec.header.refcountValue());
 
@@ -1037,7 +1054,7 @@ test "retainValue/releaseValue: static array release never frees the backing" {
     const items = try alloc.alloc(Value, 2);
     items[0] = .{ .fixnum = 1 };
     items[1] = .{ .fixnum = 2 };
-    const arr = try value_mod.Array.createStatic(alloc, items);
+    const arr = try value_mod.Array.createStatic(alloc, items, 0);
 
     retainValue(.{ .array = arr });
     releaseValue(.{ .array = arr });
@@ -1048,12 +1065,12 @@ test "retainValue/releaseValue: static array release never frees the backing" {
 }
 
 test "retainValue/releaseValue: iterator header owns its materialized backing" {
-    const vec = try value_mod.Vector.create(testing.allocator);
+    const vec = try value_mod.Vector.create(testing.allocator, 0);
     const items = try testing.allocator.alloc(Value, 1);
     items[0] = .{ .vector = vec };
     // The iterator's backing owns one reference per element.
     vec.header.retain();
-    const it = try Iterator.create(testing.allocator, .{ .array = .{ .items = items, .index = 0 } });
+    const it = try Iterator.create(testing.allocator, .{ .array = .{ .items = items, .index = 0 } }, 0);
 
     // A stack slot bumps the iterator's own header, not the captured elements.
     retainValue(.{ .iterator = it });
@@ -1085,7 +1102,7 @@ test "instructionsHaveContainerLiteral: detects container push_literal operands"
     // Build a one-off Vector pointer so we can construct a container Value
     // for the scan. The dispatch is no-op today so the underlying pointer
     // is never dereferenced.
-    const dummy_vec = try value_mod.Vector.create(testing.allocator);
+    const dummy_vec = try value_mod.Vector.create(testing.allocator, 0);
     defer dummy_vec.header.release();
     const with_vector = [_]Instruction{
         .{ .op = .{ .push_literal = .{ .fixnum = 7 } }, .line = 0 },
@@ -1096,14 +1113,14 @@ test "instructionsHaveContainerLiteral: detects container push_literal operands"
 
 test "valueCarriesLeafBacking: the byte- and limb-carrying kinds qualify" {
     const bytes = try testing.allocator.dupe(u8, "hello");
-    const str = try value_mod.ownedStringValue(testing.allocator, bytes);
+    const str = try value_mod.ownedStringValue(testing.allocator, bytes, 0);
     defer releaseValue(str);
 
     const sym_bytes = try testing.allocator.dupe(u8, "sym");
-    const sym = try value_mod.ownedSymbolValue(testing.allocator, sym_bytes);
+    const sym = try value_mod.ownedSymbolValue(testing.allocator, sym_bytes, 0);
     defer releaseValue(sym);
 
-    const ba = try value_mod.ByteArray.create(testing.allocator);
+    const ba = try value_mod.ByteArray.create(testing.allocator, 0);
     defer releaseValue(.{ .byte_array = ba });
 
     try testing.expect(valueCarriesLeafBacking(str));
@@ -1112,7 +1129,7 @@ test "valueCarriesLeafBacking: the byte- and limb-carrying kinds qualify" {
 }
 
 test "valueCarriesLeafBacking: a backing-free value and a container both refuse" {
-    const vec = try value_mod.Vector.create(testing.allocator);
+    const vec = try value_mod.Vector.create(testing.allocator, 0);
     defer releaseValue(.{ .vector = vec });
 
     try testing.expect(!valueCarriesLeafBacking(.{ .fixnum = 7 }));
@@ -1123,12 +1140,12 @@ test "valueCarriesLeafBacking: a backing-free value and a container both refuse"
 test "valueCarriesLeafBacking: a tagged wrapper follows its inner value" {
     var vt = value_mod.VirtualType{ .name = "gauge", .inner_type = "fixnum" };
 
-    const scalar = try value_mod.ownedTaggedValue(testing.allocator, &vt, .{ .fixnum = 3 });
+    const scalar = try value_mod.ownedTaggedValue(testing.allocator, &vt, .{ .fixnum = 3 }, 0);
     defer releaseValue(scalar);
     try testing.expect(valueCarriesLeafBacking(scalar));
 
-    const vec = try value_mod.Vector.create(testing.allocator);
-    const wrapped = try value_mod.ownedTaggedValue(testing.allocator, &vt, .{ .vector = vec });
+    const vec = try value_mod.Vector.create(testing.allocator, 0);
+    const wrapped = try value_mod.ownedTaggedValue(testing.allocator, &vt, .{ .vector = vec }, 0);
     defer releaseValue(wrapped);
     try testing.expect(!valueCarriesLeafBacking(wrapped));
 }
@@ -1173,11 +1190,11 @@ test "valueShareable: immutable arena-payload leaves do not qualify" {
 }
 
 test "valueShareable: mutable containers, composites, and code values do not qualify" {
-    const vec = try value_mod.Vector.create(testing.allocator);
+    const vec = try value_mod.Vector.create(testing.allocator, 0);
     defer vec.header.release();
-    const mm = try value_mod.MutableMap.create(testing.allocator);
+    const mm = try value_mod.MutableMap.create(testing.allocator, 0);
     defer mm.header.release();
-    const ba = try value_mod.ByteArray.create(testing.allocator);
+    const ba = try value_mod.ByteArray.create(testing.allocator, 0);
     defer ba.header.release();
 
     try testing.expect(!valueShareable(.{ .vector = vec }, testing.allocator));
@@ -1206,22 +1223,22 @@ test "valueShareable: mutable containers, composites, and code values do not qua
 }
 
 test "valueShareable: heap-backed leaves qualify and off-allocator backings do not" {
-    const s = try value_mod.ownedStringValue(testing.allocator, try testing.allocator.dupe(u8, "s"));
+    const s = try value_mod.ownedStringValue(testing.allocator, try testing.allocator.dupe(u8, "s"), 0);
     defer releaseValue(s);
     try testing.expect(valueShareable(s, testing.allocator));
 
-    const sym = try value_mod.ownedSymbolValue(testing.allocator, try testing.allocator.dupe(u8, "sym"));
+    const sym = try value_mod.ownedSymbolValue(testing.allocator, try testing.allocator.dupe(u8, "sym"), 0);
     defer releaseValue(sym);
     try testing.expect(valueShareable(sym, testing.allocator));
 
     const big = try value_mod.BigIntManaged.initSet(testing.allocator, 42);
-    const bn = try value_mod.ownedBignumValue(testing.allocator, big);
+    const bn = try value_mod.ownedBignumValue(testing.allocator, big, 0);
     defer releaseValue(bn);
     try testing.expect(valueShareable(bn, testing.allocator));
 
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
-    const foreign = try value_mod.ownedStringValue(arena.allocator(), try arena.allocator().dupe(u8, "f"));
+    const foreign = try value_mod.ownedStringValue(arena.allocator(), try arena.allocator().dupe(u8, "f"), 0);
     try testing.expect(!valueShareable(foreign, testing.allocator));
     releaseValue(foreign);
 }
@@ -1229,13 +1246,13 @@ test "valueShareable: heap-backed leaves qualify and off-allocator backings do n
 test "valueShareable: backed tagged follows its inner value and memoizes" {
     var dummy_vt: value_mod.VirtualType = undefined;
 
-    const ok = try value_mod.ownedTaggedValue(testing.allocator, &dummy_vt, .{ .fixnum = 4 });
+    const ok = try value_mod.ownedTaggedValue(testing.allocator, &dummy_vt, .{ .fixnum = 4 }, 0);
     defer releaseValue(ok);
     try testing.expectEqual(Shareable.unknown, ok.tagged.backing.?.header.shareableState());
     try testing.expect(valueShareable(ok, testing.allocator));
     try testing.expectEqual(Shareable.shareable, ok.tagged.backing.?.header.shareableState());
 
-    const blocked = try value_mod.ownedTaggedValue(testing.allocator, &dummy_vt, value_mod.stringValue("s"));
+    const blocked = try value_mod.ownedTaggedValue(testing.allocator, &dummy_vt, value_mod.stringValue("s"), 0);
     defer releaseValue(blocked);
     try testing.expect(!valueShareable(blocked, testing.allocator));
     try testing.expectEqual(Shareable.not_shareable, blocked.tagged.backing.?.header.shareableState());
@@ -1243,8 +1260,8 @@ test "valueShareable: backed tagged follows its inner value and memoizes" {
 
 test "valueShareable: heap-backed string elements allow array sharing" {
     const items = try testing.allocator.alloc(Value, 1);
-    items[0] = try value_mod.ownedStringValue(testing.allocator, try testing.allocator.dupe(u8, "s"));
-    const arr = try value_mod.Array.fromOwnedSlice(testing.allocator, items);
+    items[0] = try value_mod.ownedStringValue(testing.allocator, try testing.allocator.dupe(u8, "s"), 0);
+    const arr = try value_mod.Array.fromOwnedSlice(testing.allocator, items, 0);
     defer releaseValue(.{ .array = arr });
 
     try testing.expect(valueShareable(.{ .array = arr }, testing.allocator));
@@ -1254,13 +1271,13 @@ test "valueShareable: heap-backed string elements allow array sharing" {
 test "valueShareable: owned array of scalars qualifies and memoizes" {
     const inner_items = try testing.allocator.alloc(Value, 1);
     inner_items[0] = .{ .fixnum = 7 };
-    const inner = try value_mod.Array.fromOwnedSlice(testing.allocator, inner_items);
+    const inner = try value_mod.Array.fromOwnedSlice(testing.allocator, inner_items, 0);
 
     const items = try testing.allocator.alloc(Value, 2);
     items[0] = .{ .float = 2.0 };
     // The outer slot takes the inner's creation reference.
     items[1] = .{ .array = inner };
-    const arr = try value_mod.Array.fromOwnedSlice(testing.allocator, items);
+    const arr = try value_mod.Array.fromOwnedSlice(testing.allocator, items, 0);
     defer releaseValue(.{ .array = arr });
 
     try testing.expectEqual(Shareable.unknown, inner.header.shareableState());
@@ -1272,7 +1289,7 @@ test "valueShareable: owned array of scalars qualifies and memoizes" {
 test "valueShareable: string elements and off-allocator backing block array sharing" {
     const items = try testing.allocator.alloc(Value, 1);
     items[0] = value_mod.stringValue("s");
-    const arr = try value_mod.Array.fromOwnedSlice(testing.allocator, items);
+    const arr = try value_mod.Array.fromOwnedSlice(testing.allocator, items, 0);
     defer releaseValue(.{ .array = arr });
     try testing.expect(!valueShareable(.{ .array = arr }, testing.allocator));
     try testing.expectEqual(Shareable.not_shareable, arr.header.shareableState());
@@ -1281,7 +1298,7 @@ test "valueShareable: string elements and off-allocator backing block array shar
     defer arena.deinit();
     const arena_items = try arena.allocator().alloc(Value, 1);
     arena_items[0] = .{ .fixnum = 1 };
-    const arena_arr = try value_mod.Array.fromOwnedSlice(arena.allocator(), arena_items);
+    const arena_arr = try value_mod.Array.fromOwnedSlice(arena.allocator(), arena_items, 0);
     try testing.expect(!valueShareable(.{ .array = arena_arr }, testing.allocator));
     releaseValue(.{ .array = arena_arr });
 }
@@ -1289,7 +1306,7 @@ test "valueShareable: string elements and off-allocator backing block array shar
 test "valueShareable: static arrays classify not-shareable even on the long-lived allocator" {
     const items = try testing.allocator.alloc(Value, 1);
     items[0] = .{ .fixnum = 1 };
-    const arr = try value_mod.Array.createStatic(testing.allocator, items);
+    const arr = try value_mod.Array.createStatic(testing.allocator, items, 0);
     // Static destroy is a no-op, so the test owns the memory.
     defer testing.allocator.destroy(arr);
     defer testing.allocator.free(items);
@@ -1299,30 +1316,30 @@ test "valueShareable: static arrays classify not-shareable even on the long-live
 }
 
 test "valueShareable: hash and set of scalars qualify" {
-    const h = try value_mod.HashTable.create(testing.allocator);
+    const h = try value_mod.HashTable.create(testing.allocator, 0);
     defer releaseValue(.{ .hash = h });
     const h_alloc = h.header.allocator;
     try h.map.put(h_alloc, try h_alloc.dupe(u8, "k"), .{ .fixnum = 1 });
     try testing.expect(valueShareable(.{ .hash = h }, testing.allocator));
 
-    const s = try value_mod.Set.create(testing.allocator);
+    const s = try value_mod.Set.create(testing.allocator, 0);
     defer releaseValue(.{ .set = s });
     try s.map.put(s.header.allocator, .{ .fixnum = 3 }, {});
     try testing.expect(valueShareable(.{ .set = s }, testing.allocator));
 }
 
 test "valueShareable: a value-map of scalars qualifies and a mutable key blocks it" {
-    const m = try value_mod.ValueMap.create(testing.allocator);
+    const m = try value_mod.ValueMap.create(testing.allocator, 0);
     defer releaseValue(.{ .value_map = m });
     try m.map.put(m.header.allocator, .{ .fixnum = 1 }, .{ .fixnum = 2 });
     try testing.expect(valueShareable(.{ .value_map = m }, testing.allocator));
 
     // Only the key is mutable here, which the scan has to reach: a key-blind
     // walk would call this one shareable.
-    const vec = try value_mod.Vector.create(testing.allocator);
+    const vec = try value_mod.Vector.create(testing.allocator, 0);
     defer vec.header.release();
 
-    const blocked = try value_mod.ValueMap.create(testing.allocator);
+    const blocked = try value_mod.ValueMap.create(testing.allocator, 0);
     defer releaseValue(.{ .value_map = blocked });
     retainValue(.{ .vector = vec });
     try blocked.map.put(blocked.header.allocator, .{ .vector = vec }, .{ .fixnum = 1 });
@@ -1330,41 +1347,41 @@ test "valueShareable: a value-map of scalars qualifies and a mutable key blocks 
 }
 
 test "valueShareable: the mutable value-map half never shares" {
-    const m = try value_mod.MutableValueMap.create(testing.allocator);
+    const m = try value_mod.MutableValueMap.create(testing.allocator, 0);
     defer releaseValue(.{ .mutable_value_map = m });
     try m.map.put(m.header.allocator, .{ .fixnum = 1 }, .{ .fixnum = 2 });
     try testing.expect(!valueShareable(.{ .mutable_value_map = m }, testing.allocator));
 }
 
 test "valueShareable: string values and mutable elements block sharing" {
-    const h = try value_mod.HashTable.create(testing.allocator);
+    const h = try value_mod.HashTable.create(testing.allocator, 0);
     defer releaseValue(.{ .hash = h });
     const h_alloc = h.header.allocator;
     try h.map.put(h_alloc, try h_alloc.dupe(u8, "k"), value_mod.stringValue("v"));
     try testing.expect(!valueShareable(.{ .hash = h }, testing.allocator));
 
-    const vec = try value_mod.Vector.create(testing.allocator);
+    const vec = try value_mod.Vector.create(testing.allocator, 0);
     defer vec.header.release();
 
-    const h2 = try value_mod.HashTable.create(testing.allocator);
+    const h2 = try value_mod.HashTable.create(testing.allocator, 0);
     defer releaseValue(.{ .hash = h2 });
     // The hash slot owns its own reference; destroy releases it.
     retainValue(.{ .vector = vec });
     try h2.map.put(h2.header.allocator, try h2.header.allocator.dupe(u8, "m"), .{ .vector = vec });
     try testing.expect(!valueShareable(.{ .hash = h2 }, testing.allocator));
 
-    const s = try value_mod.Set.create(testing.allocator);
+    const s = try value_mod.Set.create(testing.allocator, 0);
     defer releaseValue(.{ .set = s });
     try s.map.put(s.header.allocator, value_mod.stringValue("member"), {});
     try testing.expect(!valueShareable(.{ .set = s }, testing.allocator));
 }
 
 test "valueShareable: nested hash recursion populates the inner memo" {
-    const inner = try value_mod.HashTable.create(testing.allocator);
+    const inner = try value_mod.HashTable.create(testing.allocator, 0);
     const inner_alloc = inner.header.allocator;
     try inner.map.put(inner_alloc, try inner_alloc.dupe(u8, "n"), .{ .fixnum = 2 });
 
-    const outer = try value_mod.HashTable.create(testing.allocator);
+    const outer = try value_mod.HashTable.create(testing.allocator, 0);
     defer releaseValue(.{ .hash = outer });
     const outer_alloc = outer.header.allocator;
     // The outer slot takes the inner's creation reference.
@@ -1380,7 +1397,7 @@ test "valueShareable: backing off the long-lived allocator does not share" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
 
-    const h = try value_mod.HashTable.create(arena.allocator());
+    const h = try value_mod.HashTable.create(arena.allocator(), 0);
     const h_alloc = h.header.allocator;
     try h.map.put(h_alloc, try h_alloc.dupe(u8, "k"), .{ .fixnum = 1 });
 
@@ -1390,7 +1407,7 @@ test "valueShareable: backing off the long-lived allocator does not share" {
 }
 
 test "memoShareable: scans once and memoizes in the header" {
-    const h = try value_mod.HashTable.create(testing.allocator);
+    const h = try value_mod.HashTable.create(testing.allocator, 0);
     defer releaseValue(.{ .hash = h });
     const h_alloc = h.header.allocator;
     try h.map.put(h_alloc, try h_alloc.dupe(u8, "k"), .{ .fixnum = 1 });
@@ -1407,7 +1424,7 @@ test "memoShareable: scans once and memoizes in the header" {
 }
 
 test "memoShareable: records a not-shareable verdict" {
-    const h = try value_mod.HashTable.create(testing.allocator);
+    const h = try value_mod.HashTable.create(testing.allocator, 0);
     defer releaseValue(.{ .hash = h });
     const h_alloc = h.header.allocator;
     try h.map.put(h_alloc, try h_alloc.dupe(u8, "k"), value_mod.stringValue("v"));
@@ -1430,7 +1447,7 @@ fn memoWorker(args: MemoWorkerArgs) void {
 }
 
 test "memoShareable: concurrent callers converge on one state" {
-    const h = try value_mod.HashTable.create(testing.allocator);
+    const h = try value_mod.HashTable.create(testing.allocator, 0);
     defer releaseValue(.{ .hash = h });
     const h_alloc = h.header.allocator;
     try h.map.put(h_alloc, try h_alloc.dupe(u8, "k"), .{ .fixnum = 1 });
@@ -1454,7 +1471,7 @@ test "releaseInstructionsContainerLiterals: shallow walk over push_literal opera
     // into). Walks the outer slice, which contains one container
     // push_literal that will be released; bump the refcount so the
     // C-local can still observe state afterwards.
-    const dummy_vec = try value_mod.Vector.create(testing.allocator);
+    const dummy_vec = try value_mod.Vector.create(testing.allocator, 0);
     dummy_vec.header.retain();
     defer dummy_vec.header.release();
     var inner_instrs = [_]Instruction{

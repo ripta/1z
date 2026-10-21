@@ -432,6 +432,10 @@ fn raiseLoadInFlight(ctx: *Context, start: usize, reentrant: LoadLock.Owner, clo
 pub fn nativeLoadImpl(ctx: *Context, cache: *value_mod.MutableMap, filename: []const u8, alloc: std.mem.Allocator, resolved_module: ResolvedModule) anyerror!void {
     const resolved = resolved_module.resolvedPath();
 
+    // The insert below checks again. Refusing here keeps the module's top level from running when
+    // its result could not be cached.
+    try helpers.beginContainerWrite(ctx, &cache.header);
+
     // The cache is written only once a body finishes, so a module already loading up the chain is
     // not in it and a circular import would recurse here.
     //
@@ -680,7 +684,9 @@ pub fn nativeLoadImpl(ctx: *Context, cache: *value_mod.MutableMap, filename: []c
     // Only insert if the resolved path is not already in the cache; an overwrite would silently
     // drop the fresh key dupe. The header mutex excludes the resolution scans and cache probes
     // running on other workers.
+    try helpers.beginContainerWrite(ctx, &cache.header);
     cache.header.lock();
+    ctx.assertWriteAllowed(cache.header.ownerTag());
     if (!cache.map.contains(resolved)) {
         if (cache.header.allocator.dupe(u8, resolved)) |resolved_owned| {
             cache.map.put(cache.header.allocator, resolved_owned, .{ .module = module }) catch {
@@ -1053,14 +1059,15 @@ fn nativeCompile(ctx: *Context) anyerror!void {
         defer ctx.allocator.free(members);
 
         const before_ns = if (ctx.benchmark != null) std.time.nanoTimestamp() else 0;
-        const all_ok = ctx.compileMutualGroup(members);
+        const all_ok = try ctx.compileMutualGroup(members);
         if (ctx.benchmark) |bm| bm.recordJitCompile(std.time.nanoTimestamp() - before_ns);
 
         // A member that did not compile leaves the requested word to compile alone.
         if (all_ok) return;
     }
 
-    compileSingleWord(ctx, sym) catch {
+    compileSingleWord(ctx, sym) catch |err| {
+        if (err == error.AnalysisEscape) return err;
         ctx.pending_error_message = "compile!: word is not compilable (must use only fixnum literals and integer arithmetic)";
         return error.TypeMismatch;
     };
@@ -1080,7 +1087,7 @@ fn compileSingleWord(ctx: *Context, sym: []const u8) !void {
     const body = ctx.compileBody(sym, word, instrs, effect, null) orelse return error.TypeMismatch;
     if (ctx.benchmark) |bm| bm.recordJitCompile(std.time.nanoTimestamp() - before_ns);
 
-    ctx.installCompiledBody(sym, word, instrs, body);
+    try ctx.installCompiledBody(sym, word, instrs, body);
 }
 
 /// The current execution's load-lock identity: the running task, or the main sentinel for
@@ -1895,10 +1902,7 @@ test "record-import: entries are owned on the shared allocator and released at d
     defer arena.deinit();
     const borrowed = try arena.allocator().dupe(u8, "borrowed");
 
-    const selection = try value_mod.Array.createCopyFrom(
-        std.testing.allocator,
-        &.{ value_mod.symbolValue(borrowed), value_mod.symbolValue(borrowed) },
-    );
+    const selection = try value_mod.Array.createCopyFrom(std.testing.allocator, &.{ value_mod.symbolValue(borrowed), value_mod.symbolValue(borrowed) }, 0);
     const selection_value: Value = .{ .array = selection };
     defer container_backing.releaseValue(selection_value);
 
@@ -1996,7 +2000,7 @@ test ">module carries a quotation's attached effect into the word declaration" {
     const effect = try alloc.create(stack_effect_mod.StackEffect);
     effect.* = try helpers.makeSimpleEffect(alloc, "a -- r");
 
-    const hash = try value_mod.HashTable.create(alloc);
+    const hash = try value_mod.HashTable.create(alloc, 0);
     try hash.map.put(alloc, "w", .{ .quotation = .{ .instructions = &.{}, .effect = effect } });
     try hash.map.put(alloc, "bare", .{ .quotation = .{ .instructions = &.{} } });
 
@@ -2605,6 +2609,294 @@ test "reload-file never reads through to the parent" {
     try std.testing.expectEqual(shared, root.module_cache_value.map.get(path).?.module);
 }
 
+fn runSourceLines(ctx: *Context, source: []const u8) !void {
+    var processor: StatementProcessor = .{};
+    const alloc = ctx.quotationAllocator();
+
+    var number: usize = 0;
+    var lines = std.mem.splitScalar(u8, source, '\n');
+    while (lines.next()) |line| {
+        number += 1;
+        try feedOneLine(ctx, alloc, &processor, line, number);
+    }
+    try flushProcessor(ctx, alloc, &processor);
+}
+
+fn expectAnalysisEscape(root: *Context, source: []const u8) !void {
+    var analysis = try Context.initChild(std.testing.allocator, root, .analysis);
+    defer analysis.deinit();
+
+    runSourceLines(&analysis, source) catch |err| {
+        if (err == error.AnalysisEscape) {
+            while (analysis.stack.depth() > 0) try analysis.stack.popAndRelease();
+            return;
+        }
+        std.debug.print("expected analysis-escape from `{s}`, got {s}\n", .{ source, @errorName(err) });
+        return error.TestUnexpectedError;
+    };
+    std.debug.print("expected analysis-escape from `{s}`, got none\n", .{source});
+    return error.TestExpectedError;
+}
+
+/// Build a value on the root and bind it under `name` as a literal word. Every call of the word
+/// pushes that one container, where a `V{ }` literal in a definition body makes a new one per call.
+/// The returned reference is the caller's own, to release.
+fn bindHost(root: *Context, name: []const u8, source: []const u8) !Value {
+    try runSourceLines(root, source);
+    const value = try root.stack.pop();
+
+    container_backing.retainValue(value);
+    try root.defineWord(name, .{ .name = name, .action = .{ .literal = value } });
+    return value;
+}
+
+const host_definitions =
+    \\pt: mutable struct{ left right } ;
+    \\host-inc: ( n -- n ) [ 1 + ] ;
+    \\host-once: once ( -- n ) [ 42 ] ;
+;
+
+test "a container made under analysis carries the load owner identity" {
+    var root = Context.initWithPrelude(std.testing.allocator);
+    defer root.deinit();
+
+    var analysis = try Context.initChild(std.testing.allocator, &root, .analysis);
+    defer analysis.deinit();
+
+    var task_under_analysis = try Context.initChild(std.testing.allocator, &analysis, .task);
+    defer task_under_analysis.deinit();
+
+    try std.testing.expectEqual(@as(u32, 0), root.containerOwnerTag());
+    try std.testing.expect(analysis.containerOwnerTag() != 0);
+    try std.testing.expectEqual(analysis.containerOwnerTag(), task_under_analysis.containerOwnerTag());
+
+    var other = try Context.initChild(std.testing.allocator, &root, .analysis);
+    defer other.deinit();
+    try std.testing.expect(other.containerOwnerTag() != analysis.containerOwnerTag());
+}
+
+test "analysis-escape is the symbol of the escape error" {
+    var buf: [64]u8 = undefined;
+    try std.testing.expectEqualStrings("analysis-escape", @import("errors.zig").pascalToKebabRuntime(@errorName(error.AnalysisEscape), &buf));
+}
+
+test "analysis writes to its own containers" {
+    var root = Context.initWithPrelude(std.testing.allocator);
+    defer root.deinit();
+
+    var analysis = try Context.initChild(std.testing.allocator, &root, .analysis);
+    defer analysis.deinit();
+
+    try runSourceLines(&analysis, "V{ 1 } 2 #push!");
+    const grown = try analysis.stack.pop();
+    defer container_backing.releaseValue(grown);
+    try std.testing.expectEqual(@as(usize, 2), grown.vector.list.items.len);
+
+    try runSourceLines(&analysis, "mine: once ( -- n ) [ 7 ] ;\nmine");
+    const forced = try analysis.stack.pop();
+    try std.testing.expectEqual(@as(i64, 7), forced.fixnum);
+}
+
+test "no mutating word reaches a container the root owns from analysis" {
+    var root = Context.initWithPrelude(std.testing.allocator);
+    defer root.deinit();
+
+    try runSourceLines(&root, host_definitions);
+
+    const vec = try bindHost(&root, "host-vec", "V{ 1 2 3 }");
+    defer container_backing.releaseValue(vec);
+    const ba = try bindHost(&root, "host-ba", "B{ 1 2 3 4 }");
+    defer container_backing.releaseValue(ba);
+    const mm = try bindHost(&root, "host-mm", "[ a: 1 ] make-mutable-map");
+    defer container_backing.releaseValue(mm);
+    const mvm = try bindHost(&root, "host-mvm", "<mutable-value-map> 1 \"a\" vmap-set!");
+    defer container_backing.releaseValue(mvm);
+    const pt = try bindHost(&root, "host-pt", "1 2 make-pt");
+    defer container_backing.releaseValue(pt);
+
+    const statements = [_][]const u8{
+        "host-vec 4 #push!",
+        "host-vec #pop!",
+        "host-vec 0 #unshift!",
+        "host-vec #shift!",
+        "host-vec 0 9 #nth!",
+        "host-vec V{ 7 } #append!",
+        "host-vec 1 native.#shrink!",
+        "host-vec 5 0 native.#grow!",
+        "host-ba 0 9 #nth!",
+        "host-ba 0 9 1 #poke!",
+        "host-ba 0 9 1 2 #fill!",
+        "host-ba 0 host-ba 1 2 #copy!",
+        "host-ba 1 native.#shrink!",
+        "host-ba 6 0 native.#grow!",
+        "host-mm b: 2 @set!",
+        "host-mm a: @remove!",
+        "host-mvm 2 \"b\" vmap-set!",
+        "host-mvm 1 vmap-delete!",
+        "host-pt 5 >>left",
+    };
+    for (statements) |statement| try expectAnalysisEscape(&root, statement);
+
+    try std.testing.expectEqual(@as(usize, 3), vec.vector.list.items.len);
+    try std.testing.expectEqual(@as(i64, 1), vec.vector.list.items[0].fixnum);
+    try std.testing.expectEqualSlices(u8, &.{ 1, 2, 3, 4 }, ba.byte_array.slice());
+    try std.testing.expectEqual(@as(u32, 1), mm.mutable_map.map.count());
+    try std.testing.expectEqual(@as(i64, 1), mm.mutable_map.map.get("a").?.fixnum);
+    try std.testing.expectEqual(@as(usize, 1), mvm.mutable_value_map.map.count());
+    try std.testing.expectEqual(@as(i64, 1), pt.struct_instance.fields[0].fixnum);
+}
+
+test "a wrong-typed operand reports a type mismatch before an escape" {
+    var root = Context.initWithPrelude(std.testing.allocator);
+    defer root.deinit();
+
+    const vec = try bindHost(&root, "host-vec", "V{ 1 2 3 }");
+    defer container_backing.releaseValue(vec);
+    const mm = try bindHost(&root, "host-mm", "[ a: 1 ] make-mutable-map");
+    defer container_backing.releaseValue(mm);
+
+    const statements = [_][]const u8{
+        "host-vec b: 2 @set!",
+        "host-vec a: @remove!",
+        "host-mm 4 #push!",
+        "host-mm #pop!",
+    };
+    for (statements) |statement| {
+        var analysis = try Context.initChild(std.testing.allocator, &root, .analysis);
+        defer analysis.deinit();
+
+        try std.testing.expectError(error.TypeMismatch, runSourceLines(&analysis, statement));
+        while (analysis.stack.depth() > 0) try analysis.stack.popAndRelease();
+    }
+}
+
+const host_typed_definitions =
+    \\vector(float): M{ inner-type: vector element-type: float define: [ define-parameterized-type ] } ;
+    \\mutable-map(float): M{ inner-type: mutable-map element-type: float define: [ define-parameterized-type ] } ;
+    \\mutable-value-map(float): M{ inner-type: mutable-value-map element-type: float define: [ define-parameterized-type ] } ;
+;
+
+test "a typed wrap from analysis promotes no element of a container the root owns" {
+    var root = Context.initWithPrelude(std.testing.allocator);
+    defer root.deinit();
+
+    try runSourceLines(&root, host_typed_definitions);
+
+    const vec = try bindHost(&root, "host-vec", "V{ 1 2 }");
+    defer container_backing.releaseValue(vec);
+    const mm = try bindHost(&root, "host-mm", "[ a: 1 ] make-mutable-map");
+    defer container_backing.releaseValue(mm);
+    const mvm = try bindHost(&root, "host-mvm", "<mutable-value-map> \"a\" 1 vmap-set!");
+    defer container_backing.releaseValue(mvm);
+
+    try expectAnalysisEscape(&root, "host-vec >vector(float)");
+    try expectAnalysisEscape(&root, "host-mm >mutable-map(float)");
+    try expectAnalysisEscape(&root, "host-mvm >mutable-value-map(float)");
+
+    try std.testing.expectEqual(@as(i64, 1), vec.vector.list.items[0].fixnum);
+    try std.testing.expectEqual(@as(i64, 1), mm.mutable_map.map.get("a").?.fixnum);
+    try std.testing.expectEqual(@as(i64, 1), mvm.mutable_value_map.map.values()[0].fixnum);
+}
+
+test "load-file from analysis into a host cache raises and leaves the cache alone" {
+    var root = Context.initWithPrelude(std.testing.allocator);
+    defer root.deinit();
+
+    const cache = try bindHost(&root, "host-cache", "[ ] make-mutable-map");
+    defer container_backing.releaseValue(cache);
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const path = try writeModuleFile(&tmp, "barrier.1z", "barrier-word: [ 1 ] ;\n");
+    defer std.testing.allocator.free(path);
+
+    const source = try std.fmt.allocPrint(std.testing.allocator, "host-cache \"{s}\" load-file", .{path});
+    defer std.testing.allocator.free(source);
+
+    try expectAnalysisEscape(&root, source);
+    try std.testing.expectEqual(@as(u32, 0), cache.mutable_map.map.count());
+
+    const failing_path = try writeModuleFile(&tmp, "barrier-runs.1z", "1 0 /\n");
+    defer std.testing.allocator.free(failing_path);
+
+    const failing_source = try std.fmt.allocPrint(std.testing.allocator, "host-cache \"{s}\" load-file", .{failing_path});
+    defer std.testing.allocator.free(failing_source);
+
+    try expectAnalysisEscape(&root, failing_source);
+}
+
+test "compile! of a host word from analysis raises and leaves the host word's id unset" {
+    var root = Context.initWithPrelude(std.testing.allocator);
+    defer root.deinit();
+
+    try runSourceLines(&root, host_definitions);
+    try std.testing.expect(root.lookupWord("host-inc").?.word_id == null);
+
+    try expectAnalysisEscape(&root, "host-inc: compile!");
+
+    try std.testing.expect(root.lookupWord("host-inc").?.word_id == null);
+}
+
+test "compile! of a host mutual group from analysis raises and installs no member" {
+    var root = Context.initWithPrelude(std.testing.allocator);
+    defer root.deinit();
+
+    try runSourceLines(&root,
+        \\host-even?: ( n -- b ) [ dup 0 = [ drop t ] [ 1 - host-odd? ] if ] ;
+        \\host-odd?: ( n -- b ) [ dup 0 = [ drop f ] [ 1 - host-even? ] if ] ;
+        \\host-even?: compile!
+    );
+
+    const even_id = root.lookupWord("host-even?").?.word_id;
+    const odd_id = root.lookupWord("host-odd?").?.word_id;
+    try std.testing.expect(even_id != null);
+    try std.testing.expect(odd_id != null);
+
+    try expectAnalysisEscape(&root, "host-odd?: compile!");
+
+    try std.testing.expectEqual(even_id, root.lookupWord("host-even?").?.word_id);
+    try std.testing.expectEqual(odd_id, root.lookupWord("host-odd?").?.word_id);
+}
+
+test "forcing a host once word from analysis raises and leaves the cell cold" {
+    var root = Context.initWithPrelude(std.testing.allocator);
+    defer root.deinit();
+
+    try runSourceLines(&root, host_definitions);
+
+    try expectAnalysisEscape(&root, "host-once");
+
+    try runSourceLines(&root, "host-once");
+    const forced = try root.stack.pop();
+    try std.testing.expectEqual(@as(i64, 42), forced.fixnum);
+}
+
+test "naming a host marker from analysis raises and leaves it anonymous" {
+    var root = Context.initWithPrelude(std.testing.allocator);
+    defer root.deinit();
+
+    var marker: value_mod.Marker = .{ .name = "" };
+    try root.defineWord("host-anon-marker", .{
+        .name = "host-anon-marker",
+        .parse_time = true,
+        .action = .{ .literal = .{ .marker = &marker } },
+    });
+
+    try expectAnalysisEscape(&root, "alias: host-anon-marker ;");
+    try std.testing.expectEqualStrings("", marker.name);
+}
+
+test "analysis names a marker it made" {
+    var root = Context.initWithPrelude(std.testing.allocator);
+    defer root.deinit();
+
+    var analysis = try Context.initChild(std.testing.allocator, &root, .analysis);
+    defer analysis.deinit();
+
+    try runSourceLines(&analysis, "mine: marker ;");
+    try std.testing.expect(analysis.lookupWord("mine") != null);
+}
+
 test "a cache the program built is probed as it is" {
     var root = Context.init(std.testing.allocator);
     defer root.deinit();
@@ -2614,7 +2906,7 @@ test "a cache the program built is probed as it is" {
     var reusing = try Context.initChild(std.testing.allocator, &root, .analysis_reusing);
     defer reusing.deinit();
 
-    const other = try value_mod.MutableMap.create(std.testing.allocator);
+    const other = try value_mod.MutableMap.create(std.testing.allocator, 0);
     defer container_backing.releaseValue(.{ .mutable_map = other });
 
     try reusing.stack.push(.{ .mutable_map = other });

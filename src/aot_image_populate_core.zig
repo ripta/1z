@@ -575,7 +575,7 @@ pub const StructInstanceSlotTable = [*]?*value_mod.StructInstance;
 
 /// Slot table for `.vector` pointers.
 ///
-/// Each entry is allocated by the loader via `Vector.create(arena)`; elements are populated from
+/// Each entry is allocated by the loader via `Vector.create(arena, 0)`; elements are populated from
 /// the matching description row's bytecode. The compiled-code helper retains the pointer before
 /// pushing so the cache's strong reference is preserved.
 pub const VectorSlotTable = [*]?*value_mod.Vector;

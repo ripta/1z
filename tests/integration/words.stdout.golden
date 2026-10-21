@@ -441,6 +441,7 @@ yield ( -- )
 @get-or ( assoc key default -- value )
 @get? ( assoc key -- option )
 B{
+EAnalysisEscape ( -- sym )
 EArityMismatch ( -- sym )
 ECannotRedefineConst ( -- sym )
 EDivisionByZero ( -- sym )

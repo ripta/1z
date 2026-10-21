@@ -278,7 +278,7 @@ pub fn nativeStringStreamToBytes(ctx: *Context) anyerror!void {
     const buf: *MemBuffer = @ptrCast(@alignCast(stream.impl.?));
     // Header allocator is the GPA that backs the buffer, so destroyByteArray
     // frees the moved allocation correctly.
-    const ba = ByteArray.create(buf.allocator) catch return error.OutOfMemory;
+    const ba = ByteArray.create(buf.allocator, ctx.containerOwnerTag()) catch return error.OutOfMemory;
     ba.owned_items = buf.list;
     ba.refreshOwnedView();
     // Empty the buffer's view so close releases nothing the byte-array now owns.
@@ -761,7 +761,7 @@ pub fn nativeStreamRead(ctx: *Context) anyerror!void {
         return mapStreamReadError(err);
     };
 
-    const ba = ByteArray.create(alloc) catch return error.OutOfMemory;
+    const ba = ByteArray.create(alloc, ctx.containerOwnerTag()) catch return error.OutOfMemory;
     ba.ensureTotalCapacity(alloc, bytes_read) catch return error.OutOfMemory;
     for (buffer[0..bytes_read]) |byte| {
         ba.appendAssumeCapacity(byte);
@@ -858,7 +858,7 @@ pub fn nativeStreamReadAll(ctx: *Context) anyerror!void {
         content.appendSlice(alloc, buffer[0..bytes_read]) catch return error.OutOfMemory;
     }
 
-    const ba = ByteArray.create(alloc) catch return error.OutOfMemory;
+    const ba = ByteArray.create(alloc, ctx.containerOwnerTag()) catch return error.OutOfMemory;
     ba.ensureTotalCapacity(alloc, content.items.len) catch return error.OutOfMemory;
     for (content.items) |byte| {
         ba.appendAssumeCapacity(byte);

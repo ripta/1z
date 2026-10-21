@@ -71,7 +71,7 @@ fn nativePackedFromArray(ctx: *Context) anyerror!void {
     };
 
     const byte_len = items.len * elem_type.elemSize();
-    const ba = try ByteArray.create(alloc);
+    const ba = try ByteArray.create(alloc, ctx.containerOwnerTag());
     errdefer container_backing.releaseValue(.{ .byte_array = ba });
     try ba.ensureTotalCapacity(alloc, byte_len);
     ba.items.len = byte_len;
@@ -191,7 +191,7 @@ fn nativePackedFill(ctx: *Context) anyerror!void {
     };
 
     const byte_len = count * elem_type.elemSize();
-    const ba = try ByteArray.create(alloc);
+    const ba = try ByteArray.create(alloc, ctx.containerOwnerTag());
     errdefer container_backing.releaseValue(.{ .byte_array = ba });
     try ba.ensureTotalCapacity(alloc, byte_len);
     ba.items.len = byte_len;
@@ -272,7 +272,7 @@ fn readElements(comptime T: type, ctx: *Context, bytes: []const u8, out: []Value
 }
 
 fn elementToValue(comptime T: type, ctx: *Context, elem: T) !Value {
-    return value_mod.packedElementValue(T, ctx.allocator, elem);
+    return value_mod.packedElementValue(T, ctx.allocator, elem, ctx.containerOwnerTag());
 }
 
 // ---------------------------------------------------------------------------
@@ -350,7 +350,7 @@ fn packedArithmeticOp(comptime op: packed_kernels.Op, ctx: *Context) anyerror!vo
         return error.TypeMismatch;
     }
 
-    const out_ba = try ByteArray.create(alloc);
+    const out_ba = try ByteArray.create(alloc, ctx.containerOwnerTag());
     {
         // Scoped so the release cannot double up with pushOwnedTagged's own
         // failure handling, which owns the byte array from the call on.
@@ -438,7 +438,7 @@ fn packedScalarArithmeticOp(comptime op: packed_kernels.Op, ctx: *Context) anyer
         return error.TypeMismatch;
     };
 
-    const out_ba = try ByteArray.create(alloc);
+    const out_ba = try ByteArray.create(alloc, ctx.containerOwnerTag());
     {
         // Scoped so the release cannot double up with pushOwnedTagged's own
         // failure handling, which owns the byte array from the call on.
@@ -691,7 +691,7 @@ fn nativePackedIterator(ctx: *Context) anyerror!void {
         .source = ba,
         .elem_type = elem_type,
         .index = 0,
-    } }) catch |err| {
+    } }, ctx.containerOwnerTag()) catch |err| {
         container_backing.releaseValue(ba_val);
         return err;
     };

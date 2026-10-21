@@ -398,7 +398,7 @@ pub const registry_entries = [_]RegistryEntry{
 pub fn nativeMarker(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
     const marker = try alloc.create(Marker);
-    marker.* = .{ .name = "" }; // Anonymous until defined
+    marker.* = .{ .name = "", .owner = ctx.containerOwnerTag() }; // Anonymous until defined
     try ctx.stack.push(.{ .marker = marker });
 }
 

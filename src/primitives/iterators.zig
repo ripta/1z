@@ -162,7 +162,7 @@ fn nativeMakeRangeIter(ctx: *Context) anyerror!void {
         .end = end,
         .step = step,
         .infinite = infinite,
-    } });
+    } }, ctx.containerOwnerTag());
     try helpers.pushMovedIterator(ctx, iter);
 }
 
@@ -185,7 +185,7 @@ fn nativeMakeCallbackIter(ctx: *Context) anyerror!void {
         .exhausted = false,
         .cleanup = null,
         .cleanup_ran = false,
-    } }) catch |err| {
+    } }, ctx.containerOwnerTag()) catch |err| {
         container_backing.releaseValue(val);
         return err;
     };
@@ -222,7 +222,7 @@ fn nativeMakeCallbackIterWithCleanup(ctx: *Context) anyerror!void {
         .exhausted = false,
         .cleanup = .{ .quot = cleanup_quotation, .owner = cleanup_val },
         .cleanup_ran = false,
-    } }) catch |err| {
+    } }, ctx.containerOwnerTag()) catch |err| {
         container_backing.releaseValue(step_val);
         container_backing.releaseValue(cleanup_val);
         return err;
@@ -250,8 +250,8 @@ test ">iterator materialized backing retains elements until destroy" {
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
 
-    const elem = try value_mod.Vector.create(std.testing.allocator);
-    const src = try value_mod.Vector.create(std.testing.allocator);
+    const elem = try value_mod.Vector.create(std.testing.allocator, 0);
+    const src = try value_mod.Vector.create(std.testing.allocator, 0);
     // The source's slot takes the element's creation reference.
     try src.list.append(src.header.allocator, .{ .vector = elem });
 
@@ -274,7 +274,7 @@ test ">iterator over an array retains the source through its header" {
 
     const items = try std.testing.allocator.alloc(Value, 1);
     items[0] = .{ .fixnum = 3 };
-    const arr = try value_mod.Array.fromOwnedSlice(std.testing.allocator, items);
+    const arr = try value_mod.Array.fromOwnedSlice(std.testing.allocator, items, 0);
 
     try ctx.stack.pushMoved(.{ .array = arr });
     try nativeToIterator(&ctx);
@@ -304,8 +304,8 @@ test "#collect drains and destroys a partially shared chain" {
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
 
-    const elem = try value_mod.Vector.create(std.testing.allocator);
-    const src = try value_mod.Vector.create(std.testing.allocator);
+    const elem = try value_mod.Vector.create(std.testing.allocator, 0);
+    const src = try value_mod.Vector.create(std.testing.allocator, 0);
     try src.list.append(src.header.allocator, .{ .vector = elem });
 
     try ctx.stack.pushMoved(.{ .vector = src });

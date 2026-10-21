@@ -1182,7 +1182,7 @@ fn populateOnceCellSlots(
 
 /// Walk the mutable_map description table and patch
 /// `onez_image_mutable_map_slots[]`. A first pass allocates a fresh
-/// `*MutableMap` via `MutableMap.create(ctx.allocator)` for every slot and
+/// `*MutableMap` via `MutableMap.create(ctx.allocator, ctx.containerOwnerTag())` for every slot and
 /// patches the slot table; a second pass decodes each row's entries blob
 /// (u32 entry_count followed by u32 key_len + key bytes + image-mode
 /// serialized Value per entry) and puts each key/value pair into the map.
@@ -1229,7 +1229,7 @@ fn populateMutableMapSlots(
     while (i < header.mutable_map_slot_count) : (i += 1) {
         const row = descs[i];
         if (row.slot >= header.mutable_map_slot_count) return LoaderError.BadSlotIndex;
-        const mmap = value_mod.MutableMap.create(arena) catch return LoaderError.OutOfMemory;
+        const mmap = value_mod.MutableMap.create(arena, 0) catch return LoaderError.OutOfMemory;
         slot_table[row.slot] = mmap;
     }
 
@@ -1342,7 +1342,7 @@ fn allocateMutableValueMapSlots(
     while (i < header.mutable_value_map_slot_count) : (i += 1) {
         const row = descs[i];
         if (row.slot >= header.mutable_value_map_slot_count) return LoaderError.BadSlotIndex;
-        const map = value_mod.MutableValueMap.create(arena) catch return LoaderError.OutOfMemory;
+        const map = value_mod.MutableValueMap.create(arena, 0) catch return LoaderError.OutOfMemory;
         slot_table[row.slot] = map;
     }
 }
@@ -1467,7 +1467,7 @@ fn allocateStructInstanceSlots(
         // context's image-slot teardown walk. The arena allocator is safe here despite
         // createStructInstance's process-lifetime contract: the donation pins the refcount
         // above zero until that walk, which runs before the arena is torn down.
-        const si = value_mod.createStructInstance(arena, st, fields) catch return LoaderError.OutOfMemory;
+        const si = value_mod.createStructInstance(arena, st, fields, 0) catch return LoaderError.OutOfMemory;
         slot_table[row.slot] = si;
     }
 }
@@ -1542,7 +1542,7 @@ fn allocateVectorSlots(
     while (i < header.vector_slot_count) : (i += 1) {
         const row = descs[i];
         if (row.slot >= header.vector_slot_count) return LoaderError.BadSlotIndex;
-        const vec = value_mod.Vector.create(arena) catch return LoaderError.OutOfMemory;
+        const vec = value_mod.Vector.create(arena, 0) catch return LoaderError.OutOfMemory;
         slot_table[row.slot] = vec;
     }
 }
@@ -2954,7 +2954,7 @@ test "populateMutableMapSlots: lower slot forward-references a higher slot" {
 
     // A dummy MutableMap used only as the encoding key that maps to slot
     // index 1; released after encoding. The loader allocates its own maps.
-    const key_map = try value_mod.MutableMap.create(testing.allocator);
+    const key_map = try value_mod.MutableMap.create(testing.allocator, 0);
     defer key_map.header.release();
 
     var mm_index: std.AutoHashMapUnmanaged(*const value_mod.MutableMap, u32) = .{};
@@ -3094,7 +3094,7 @@ test "populateMutableValueMapEntries: a lower slot forward-references a higher o
 
     // A dummy map used only as the encoding key for slot 1, released after encoding. The loader
     // allocates its own maps.
-    const key_map = try value_mod.MutableValueMap.create(testing.allocator);
+    const key_map = try value_mod.MutableValueMap.create(testing.allocator, 0);
     defer key_map.header.release();
 
     var mvm_index: std.AutoHashMapUnmanaged(*const value_mod.MutableValueMap, u32) = .{};
@@ -3153,11 +3153,7 @@ test "populateMutableValueMapEntries: a struct-instance key stays findable after
     // computed at insert. A key inserted while the instance was still holding `.unit` placeholders
     // would sit in the wrong bucket forever, which is what the post-population re-index repairs.
     var struct_type = value_mod.StructType{ .name = "box", .fields = &.{"data"} };
-    const key_instance = try value_mod.createStructInstance(
-        testing.allocator,
-        &struct_type,
-        try testing.allocator.dupe(value_mod.Value, &.{.{ .fixnum = 99 }}),
-    );
+    const key_instance = try value_mod.createStructInstance(testing.allocator, &struct_type, try testing.allocator.dupe(value_mod.Value, &.{.{ .fixnum = 99 }}), 0);
     defer container_backing.releaseValue(.{ .struct_instance = key_instance });
 
     var mvm_index: std.AutoHashMapUnmanaged(*const value_mod.MutableValueMap, u32) = .{};
@@ -3349,11 +3345,7 @@ test "installPendingValueMapEntries: an inline value_map keyed on a struct insta
     // struct-instance key there hashes over `.unit` placeholders, and `ValueEntries` stores that
     // hash, so the entry would be unreachable by the very key that was inserted.
     var struct_type = value_mod.StructType{ .name = "box", .fields = &.{"data"} };
-    const key_instance = try value_mod.createStructInstance(
-        testing.allocator,
-        &struct_type,
-        try testing.allocator.dupe(value_mod.Value, &.{.{ .fixnum = 99 }}),
-    );
+    const key_instance = try value_mod.createStructInstance(testing.allocator, &struct_type, try testing.allocator.dupe(value_mod.Value, &.{.{ .fixnum = 99 }}), 0);
     defer container_backing.releaseValue(.{ .struct_instance = key_instance });
 
     var mvm_index: std.AutoHashMapUnmanaged(*const value_mod.MutableValueMap, u32) = .{};
@@ -3373,7 +3365,7 @@ test "installPendingValueMapEntries: an inline value_map keyed on a struct insta
     try instruction_bytecode.serializeValueIntoForImage(&fields_enc, .{ .fixnum = 99 }, testing.allocator, &enc_maps, null);
 
     // The inline value-map that rides inside the mutable map's entry, keyed on the slot reference.
-    const inline_map = try value_mod.ValueMap.create(testing.allocator);
+    const inline_map = try value_mod.ValueMap.create(testing.allocator, 0);
     defer inline_map.header.release();
     container_backing.retainValue(.{ .struct_instance = key_instance });
     try inline_map.map.put(testing.allocator, .{ .struct_instance = key_instance }, .{ .fixnum = 5 });
@@ -3451,17 +3443,9 @@ test "installPendingValueMapEntries: two struct-instance keys in one inline valu
     // misplaced: it reports a duplicate and drops the second entry outright, which is why the
     // entries are parked rather than hashed and re-indexed.
     var struct_type = value_mod.StructType{ .name = "box", .fields = &.{"data"} };
-    const key_a = try value_mod.createStructInstance(
-        testing.allocator,
-        &struct_type,
-        try testing.allocator.dupe(value_mod.Value, &.{.{ .fixnum = 1 }}),
-    );
+    const key_a = try value_mod.createStructInstance(testing.allocator, &struct_type, try testing.allocator.dupe(value_mod.Value, &.{.{ .fixnum = 1 }}), 0);
     defer container_backing.releaseValue(.{ .struct_instance = key_a });
-    const key_b = try value_mod.createStructInstance(
-        testing.allocator,
-        &struct_type,
-        try testing.allocator.dupe(value_mod.Value, &.{.{ .fixnum = 2 }}),
-    );
+    const key_b = try value_mod.createStructInstance(testing.allocator, &struct_type, try testing.allocator.dupe(value_mod.Value, &.{.{ .fixnum = 2 }}), 0);
     defer container_backing.releaseValue(.{ .struct_instance = key_b });
 
     var mvm_index: std.AutoHashMapUnmanaged(*const value_mod.MutableValueMap, u32) = .{};
@@ -3486,7 +3470,7 @@ test "installPendingValueMapEntries: two struct-instance keys in one inline valu
     try fields_b.appendSlice(testing.allocator, std.mem.asBytes(&one));
     try instruction_bytecode.serializeValueIntoForImage(&fields_b, .{ .fixnum = 2 }, testing.allocator, &enc_maps, null);
 
-    const inline_map = try value_mod.ValueMap.create(testing.allocator);
+    const inline_map = try value_mod.ValueMap.create(testing.allocator, 0);
     defer inline_map.header.release();
     container_backing.retainValue(.{ .struct_instance = key_a });
     try inline_map.map.put(testing.allocator, .{ .struct_instance = key_a }, .{ .fixnum = 10 });

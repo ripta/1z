@@ -99,7 +99,7 @@ fn nativeListDirectory(ctx: *Context) anyerror!void {
 /// Build a `{ name type }` pair whose name is an owned string, so the pair outlives any arena.
 fn makeEntryPair(alloc: std.mem.Allocator, name: []const u8, type_sym: []const u8) !Value {
     const name_copy = try alloc.dupe(u8, name);
-    const name_val = value_mod.ownedStringValue(alloc, name_copy) catch |e| {
+    const name_val = value_mod.ownedStringValue(alloc, name_copy, 0) catch |e| {
         alloc.free(name_copy);
         return e;
     };
@@ -111,7 +111,7 @@ fn makeEntryPair(alloc: std.mem.Allocator, name: []const u8, type_sym: []const u
     pair[0] = name_val;
     pair[1] = value_mod.symbolValue(type_sym);
 
-    const pair_arr = value_mod.Array.fromOwnedSlice(alloc, pair) catch |e| {
+    const pair_arr = value_mod.Array.fromOwnedSlice(alloc, pair, 0) catch |e| {
         container_backing.releaseValue(name_val);
         alloc.free(pair);
         return e;
@@ -188,7 +188,7 @@ fn nativeFileInfo(ctx: *Context) anyerror!void {
         return mapFileOpenError(err);
     };
 
-    const hash = HashTable.create(ctx.allocator) catch return error.OutOfMemory;
+    const hash = HashTable.create(ctx.allocator, ctx.containerOwnerTag()) catch return error.OutOfMemory;
     errdefer hash.header.release();
     const hash_alloc = hash.header.allocator;
 

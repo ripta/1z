@@ -18750,7 +18750,7 @@ export fn jitPushString(ctx_raw: usize, str_ptr: usize, str_len: usize) callconv
         ctx.jit_pending_error = error.OutOfMemory;
         return 2;
     };
-    const val = value_mod.ownedStringValue(ctx.allocator, copy) catch {
+    const val = value_mod.ownedStringValue(ctx.allocator, copy, ctx.containerOwnerTag()) catch {
         ctx.allocator.free(copy);
         ctx.jit_pending_error = error.OutOfMemory;
         return 2;
@@ -18773,7 +18773,7 @@ export fn jitPushSymbol(ctx_raw: usize, str_ptr: usize, str_len: usize) callconv
         ctx.jit_pending_error = error.OutOfMemory;
         return 2;
     };
-    const val = value_mod.ownedSymbolValue(ctx.allocator, copy) catch {
+    const val = value_mod.ownedSymbolValue(ctx.allocator, copy, ctx.containerOwnerTag()) catch {
         ctx.allocator.free(copy);
         ctx.jit_pending_error = error.OutOfMemory;
         return 2;
@@ -20585,7 +20585,7 @@ test "jitPushArray: a site with no registered cache slot reports UnresolvedSlot"
 fn encodeTestArrayLiteral(out: *std.ArrayListUnmanaged(u8)) !void {
     const body = [_]Instruction{.{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 1 }};
 
-    const nested = try value_mod.HashTable.create(testing.allocator);
+    const nested = try value_mod.HashTable.create(testing.allocator, 0);
     defer container_backing.releaseValue(.{ .hash = nested });
     try nested.map.put(testing.allocator, try testing.allocator.dupe(u8, "k"), value_mod.stringValue("v"));
 
@@ -20595,7 +20595,7 @@ fn encodeTestArrayLiteral(out: *std.ArrayListUnmanaged(u8)) !void {
         .{ .quotation = .{ .instructions = &body } },
         .{ .hash = nested },
     };
-    const arr = try value_mod.Array.createStatic(testing.allocator, &items);
+    const arr = try value_mod.Array.createStatic(testing.allocator, &items, 0);
     defer testing.allocator.destroy(arr);
 
     var qid_map: ibc.QuotationIdMap = .{};

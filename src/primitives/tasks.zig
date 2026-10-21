@@ -889,7 +889,7 @@ const DeepCopyError = Allocator.Error || value_mod.ByteArray.ResizeError || erro
 /// of copied, as is a heap-backed string, symbol, bignum, or backed tagged wrapper that passes
 /// the same check. The returned value carries a +1 owning reference either way: a fresh copy's
 /// creation reference, or the share's retain. A copy that fails part way releases what it built.
-pub fn deepCopyValue(val: Value, alloc: Allocator, owner: Allocator, longlived: Allocator) DeepCopyError!Value {
+pub fn deepCopyValue(val: Value, alloc: Allocator, owner: Allocator, longlived: Allocator, tag: u32) DeepCopyError!Value {
     return switch (val) {
         .fixnum, .float, .boolean, .unit => val,
         .bignum => |b| blk: {
@@ -899,7 +899,7 @@ pub fn deepCopyValue(val: Value, alloc: Allocator, owner: Allocator, longlived: 
             }
 
             var cloned = b.big.cloneWithDifferentAllocator(owner) catch return error.OutOfMemory;
-            break :blk value_mod.ownedBignumValue(owner, cloned) catch |e| {
+            break :blk value_mod.ownedBignumValue(owner, cloned, tag) catch |e| {
                 cloned.deinit();
                 return e;
             };
@@ -930,20 +930,20 @@ pub fn deepCopyValue(val: Value, alloc: Allocator, owner: Allocator, longlived: 
             errdefer builder.deinit();
 
             for (arr.items, 0..) |item, i| {
-                builder.items[i] = try deepCopyValue(item, alloc, owner, longlived);
+                builder.items[i] = try deepCopyValue(item, alloc, owner, longlived, tag);
             }
             break :blk try builder.finish();
         },
 
-        .quotation => |quot| .{ .quotation = try deepCopyQuotation(quot, alloc, longlived) },
+        .quotation => |quot| .{ .quotation = try deepCopyQuotation(quot, alloc, longlived, tag) },
 
         .closure => |c| blk: {
-            const copied = try deepCopyQuotation(c.asQuotation(), alloc, longlived);
+            const copied = try deepCopyQuotation(c.asQuotation(), alloc, longlived, tag);
             const new_segments = try alloc.alloc(value_mod.Segment, c.segments.len);
             for (c.segments, 0..) |seg, i| {
                 const new_caps = try alloc.alloc(Value, seg.captures.len);
                 for (seg.captures, 0..) |cap, j| {
-                    new_caps[j] = try deepCopyValue(cap, alloc, alloc, longlived);
+                    new_caps[j] = try deepCopyValue(cap, alloc, alloc, longlived, tag);
                 }
                 new_segments[i] = .{ .captures = new_caps, .base_code_ptr = seg.base_code_ptr };
             }
@@ -970,7 +970,7 @@ pub fn deepCopyValue(val: Value, alloc: Allocator, owner: Allocator, longlived: 
                 .defining_module = c.defining_module,
                 .header = undefined,
                 .owns_scope = new_scope != null,
-            }) };
+            }, tag) };
         },
 
         .hash => |h| blk: {
@@ -979,7 +979,7 @@ pub fn deepCopyValue(val: Value, alloc: Allocator, owner: Allocator, longlived: 
                 break :blk val;
             }
 
-            const new_h = try value_mod.HashTable.create(owner);
+            const new_h = try value_mod.HashTable.create(owner, tag);
             errdefer container_backing.releaseValue(.{ .hash = new_h });
 
             try new_h.map.ensureTotalCapacity(owner, @intCast(h.map.count()));
@@ -988,25 +988,25 @@ pub fn deepCopyValue(val: Value, alloc: Allocator, owner: Allocator, longlived: 
                 const key = try owner.dupe(u8, entry.key_ptr.*);
                 errdefer owner.free(key);
 
-                const v = try deepCopyValue(entry.value_ptr.*, alloc, owner, longlived);
+                const v = try deepCopyValue(entry.value_ptr.*, alloc, owner, longlived, tag);
                 new_h.map.putAssumeCapacityNoClobber(key, v);
             }
             break :blk .{ .hash = new_h };
         },
 
         .vector => |v| blk: {
-            const new_v = try value_mod.Vector.create(owner);
+            const new_v = try value_mod.Vector.create(owner, tag);
             errdefer container_backing.releaseValue(.{ .vector = new_v });
 
             try new_v.list.ensureTotalCapacity(owner, v.list.items.len);
             for (v.list.items) |item| {
-                new_v.list.appendAssumeCapacity(try deepCopyValue(item, alloc, owner, longlived));
+                new_v.list.appendAssumeCapacity(try deepCopyValue(item, alloc, owner, longlived, tag));
             }
             break :blk .{ .vector = new_v };
         },
 
         .byte_array => |b| blk: {
-            const new_b = try value_mod.ByteArray.create(owner);
+            const new_b = try value_mod.ByteArray.create(owner, tag);
             errdefer container_backing.releaseValue(.{ .byte_array = new_b });
 
             const bytes = b.slice();
@@ -1021,18 +1021,18 @@ pub fn deepCopyValue(val: Value, alloc: Allocator, owner: Allocator, longlived: 
                 break :blk val;
             }
 
-            const new_s = try value_mod.Set.create(owner);
+            const new_s = try value_mod.Set.create(owner, tag);
             errdefer container_backing.releaseValue(.{ .set = new_s });
 
             try new_s.map.ensureTotalCapacity(owner, @intCast(s.map.count()));
             for (s.map.keys()) |key| {
-                new_s.map.putAssumeCapacity(try deepCopyValue(key, alloc, owner, longlived), {});
+                new_s.map.putAssumeCapacity(try deepCopyValue(key, alloc, owner, longlived, tag), {});
             }
             break :blk .{ .set = new_s };
         },
 
         .mutable_map => |m| blk: {
-            const new_m = try value_mod.MutableMap.create(owner);
+            const new_m = try value_mod.MutableMap.create(owner, tag);
             errdefer container_backing.releaseValue(.{ .mutable_map = new_m });
 
             try new_m.map.ensureTotalCapacity(owner, @intCast(m.map.count()));
@@ -1041,7 +1041,7 @@ pub fn deepCopyValue(val: Value, alloc: Allocator, owner: Allocator, longlived: 
                 const key = try owner.dupe(u8, entry.key_ptr.*);
                 errdefer owner.free(key);
 
-                const v = try deepCopyValue(entry.value_ptr.*, alloc, owner, longlived);
+                const v = try deepCopyValue(entry.value_ptr.*, alloc, owner, longlived, tag);
                 new_m.map.putAssumeCapacityNoClobber(key, v);
             }
             break :blk .{ .mutable_map = new_m };
@@ -1053,30 +1053,30 @@ pub fn deepCopyValue(val: Value, alloc: Allocator, owner: Allocator, longlived: 
                 break :blk val;
             }
 
-            const new_m = try value_mod.ValueMap.create(owner);
+            const new_m = try value_mod.ValueMap.create(owner, tag);
             errdefer container_backing.releaseValue(.{ .value_map = new_m });
 
             try new_m.map.ensureTotalCapacity(owner, @intCast(m.map.count()));
             for (m.map.keys(), m.map.values()) |key, value| {
-                const key_copy = try deepCopyValue(key, alloc, owner, longlived);
+                const key_copy = try deepCopyValue(key, alloc, owner, longlived, tag);
                 errdefer container_backing.releaseValue(key_copy);
 
-                const value_copy = try deepCopyValue(value, alloc, owner, longlived);
+                const value_copy = try deepCopyValue(value, alloc, owner, longlived, tag);
                 new_m.map.putAssumeCapacity(key_copy, value_copy);
             }
             break :blk .{ .value_map = new_m };
         },
 
         .mutable_value_map => |m| blk: {
-            const new_m = try value_mod.MutableValueMap.create(owner);
+            const new_m = try value_mod.MutableValueMap.create(owner, tag);
             errdefer container_backing.releaseValue(.{ .mutable_value_map = new_m });
 
             try new_m.map.ensureTotalCapacity(owner, @intCast(m.map.count()));
             for (m.map.keys(), m.map.values()) |key, value| {
-                const key_copy = try deepCopyValue(key, alloc, owner, longlived);
+                const key_copy = try deepCopyValue(key, alloc, owner, longlived, tag);
                 errdefer container_backing.releaseValue(key_copy);
 
-                const value_copy = try deepCopyValue(value, alloc, owner, longlived);
+                const value_copy = try deepCopyValue(value, alloc, owner, longlived, tag);
                 new_m.map.putAssumeCapacity(key_copy, value_copy);
             }
             break :blk .{ .mutable_value_map = new_m };
@@ -1087,10 +1087,10 @@ pub fn deepCopyValue(val: Value, alloc: Allocator, owner: Allocator, longlived: 
             errdefer builder.deinit();
 
             for (si.fields, 0..) |field, i| {
-                builder.items[i] = try deepCopyValue(field, alloc, owner, longlived);
+                builder.items[i] = try deepCopyValue(field, alloc, owner, longlived, tag);
             }
 
-            const new_si = try value_mod.createStructInstance(owner, si.struct_type, builder.items);
+            const new_si = try value_mod.createStructInstance(owner, si.struct_type, builder.items, tag);
             builder.items = &.{};
             break :blk .{ .struct_instance = new_si };
         },
@@ -1110,10 +1110,10 @@ pub fn deepCopyValue(val: Value, alloc: Allocator, owner: Allocator, longlived: 
                 }
             }
 
-            const new_inner = try deepCopyValue(t.inner.*, alloc, owner, longlived);
+            const new_inner = try deepCopyValue(t.inner.*, alloc, owner, longlived, tag);
             errdefer container_backing.releaseValue(new_inner);
 
-            break :blk try value_mod.ownedTaggedValue(owner, t.tag, new_inner);
+            break :blk try value_mod.ownedTaggedValue(owner, t.tag, new_inner, tag);
         },
 
         .template => |segments| blk: {
@@ -1125,7 +1125,7 @@ pub fn deepCopyValue(val: Value, alloc: Allocator, owner: Allocator, longlived: 
         },
 
         .stack_effect => |effect| .{ .stack_effect = try deepCopyStackEffect(effect, alloc) },
-        .error_value => |err| .{ .error_value = try deepCopyErrorObject(err, alloc, alloc, longlived) },
+        .error_value => |err| .{ .error_value = try deepCopyErrorObject(err, alloc, alloc, longlived, tag) },
 
         .doc_string => |s| .{ .doc_string = try alloc.dupe(u8, s) },
 
@@ -1168,11 +1168,19 @@ pub fn throwTaskArenaEscape(ctx: *Context, val: Value) anyerror {
 /// a partially built copy whose already-copied shared elements were retained and would
 /// leak on unwind. The catch below is the drift backstop for a copy path the scan misses.
 pub fn deepCopyForTransfer(ctx: *Context, val: Value, alloc: Allocator, owner: Allocator, longlived: Allocator) anyerror!Value {
+    return deepCopyForTransferTo(ctx, ctx, val, alloc, owner, longlived);
+}
+
+/// `deepCopyForTransfer` for a copy that `dest` will own. Errors are thrown on `ctx`.
+///
+/// The copy carries the owner tag of `dest`, not of `ctx`. A sender handing a value to a waiting
+/// receiver would otherwise stamp the sender's tag on a container the receiver has to mutate.
+pub fn deepCopyForTransferTo(ctx: *Context, dest: *Context, val: Value, alloc: Allocator, owner: Allocator, longlived: Allocator) anyerror!Value {
     if (value_mod.findTaskArenaOwned(val) != null) {
         return throwTaskArenaEscape(ctx, val);
     }
 
-    return deepCopyValue(val, alloc, owner, longlived) catch |err| switch (err) {
+    return deepCopyValue(val, alloc, owner, longlived, dest.containerOwnerTag()) catch |err| switch (err) {
         error.TaskArenaEscape => throwTaskArenaEscape(ctx, val),
         else => err,
     };
@@ -1186,15 +1194,15 @@ fn adoptChildError(ctx: *Context, err_obj: *value_mod.ErrorObject) anyerror!void
         return throwTaskArenaEscape(ctx, .{ .error_value = err_obj });
     }
 
-    ctx.thrown_error = try deepCopyErrorObject(err_obj, ctx.quotationAllocator(), ctx.quotationAllocator(), ctx.allocator);
+    ctx.thrown_error = try deepCopyErrorObject(err_obj, ctx.quotationAllocator(), ctx.quotationAllocator(), ctx.allocator, ctx.containerOwnerTag());
 }
 
-fn deepCopyQuotation(quot: value_mod.Quotation, alloc: Allocator, longlived: Allocator) DeepCopyError!value_mod.Quotation {
+fn deepCopyQuotation(quot: value_mod.Quotation, alloc: Allocator, longlived: Allocator, tag: u32) DeepCopyError!value_mod.Quotation {
     const new_instrs = try alloc.alloc(Instruction, quot.instructions.len);
     for (quot.instructions, 0..) |instr, i| {
         new_instrs[i] = .{
             .op = switch (instr.op) {
-                .push_literal => |v| .{ .push_literal = try deepCopyValue(v, alloc, alloc, longlived) },
+                .push_literal => |v| .{ .push_literal = try deepCopyValue(v, alloc, alloc, longlived, tag) },
                 .call_word => |name| .{ .call_word = try alloc.dupe(u8, name) },
                 // Both slot forms are heap-stable for the process: the dictionary owns one, the
                 // runtime-image loader arena the other. The copy shares the pointer.
@@ -1259,10 +1267,10 @@ fn deepCopyTemplateSegment(seg: value_mod.TemplateSegment, alloc: Allocator) Dee
     };
 }
 
-fn deepCopyErrorObjectValue(err: ErrorObject, alloc: Allocator, longlived: Allocator) DeepCopyError!ErrorObject {
+fn deepCopyErrorObjectValue(err: ErrorObject, alloc: Allocator, longlived: Allocator, tag: u32) DeepCopyError!ErrorObject {
     const new_data: ?*const Value = if (err.data) |data| blk: {
         const new_d = try alloc.create(Value);
-        new_d.* = try deepCopyValue(data.*, alloc, alloc, longlived);
+        new_d.* = try deepCopyValue(data.*, alloc, alloc, longlived, tag);
         break :blk new_d;
     } else null;
 
@@ -1290,8 +1298,8 @@ fn deepCopyErrorObjectValue(err: ErrorObject, alloc: Allocator, longlived: Alloc
 /// Deep-copy an `ErrorObject` and box it. The box is allocated on
 /// `box_alloc` (typically GPA); the inner strings, data, and stack-trace
 /// frames are allocated on `inner_alloc` (typically the per-context arena).
-fn deepCopyErrorObject(err: *const ErrorObject, box_alloc: Allocator, inner_alloc: Allocator, longlived: Allocator) DeepCopyError!*ErrorObject {
-    const inner = try deepCopyErrorObjectValue(err.*, inner_alloc, longlived);
+fn deepCopyErrorObject(err: *const ErrorObject, box_alloc: Allocator, inner_alloc: Allocator, longlived: Allocator, tag: u32) DeepCopyError!*ErrorObject {
+    const inner = try deepCopyErrorObjectValue(err.*, inner_alloc, longlived, tag);
     const ptr = try box_alloc.create(ErrorObject);
     ptr.* = inner;
     return ptr;
@@ -1374,7 +1382,7 @@ fn nativeMultiplexerStats(ctx: *Context) anyerror!void {
         return error.InvalidState;
     };
 
-    const hash = value_mod.HashTable.create(ctx.allocator) catch return error.OutOfMemory;
+    const hash = value_mod.HashTable.create(ctx.allocator, ctx.containerOwnerTag()) catch return error.OutOfMemory;
     errdefer hash.header.release();
     const hash_alloc = hash.header.allocator;
 
@@ -1416,14 +1424,14 @@ fn nativeContainerLimits(ctx: *Context) anyerror!void {
     const cpu = container_limits.detectCpus(trace_enabled);
     const mem = container_limits.detectMemory(trace_enabled);
 
-    const hash = value_mod.HashTable.create(ctx.allocator) catch return error.OutOfMemory;
+    const hash = value_mod.HashTable.create(ctx.allocator, ctx.containerOwnerTag()) catch return error.OutOfMemory;
     errdefer hash.header.release();
     const hash_alloc = hash.header.allocator;
 
     hash.map.put(hash_alloc, try hash_alloc.dupe(u8, "cpu-count"), .{ .fixnum = @intCast(cpu.count) }) catch return error.OutOfMemory;
     hash.map.put(hash_alloc, try hash_alloc.dupe(u8, "cpu-source"), value_mod.symbolValue(cpuSourceSymbol(cpu.source))) catch return error.OutOfMemory;
     const cpu_raw: Value = if (cpu.raw_quota != null and cpu.raw_period != null) blk: {
-        const inner = value_mod.HashTable.create(ctx.allocator) catch return error.OutOfMemory;
+        const inner = value_mod.HashTable.create(ctx.allocator, ctx.containerOwnerTag()) catch return error.OutOfMemory;
         errdefer inner.header.release();
         const inner_alloc = inner.header.allocator;
         inner.map.put(inner_alloc, try inner_alloc.dupe(u8, "quota"), .{ .fixnum = cpu.raw_quota.? }) catch return error.OutOfMemory;
@@ -1564,7 +1572,7 @@ test "await-all propagates borrowed buffer escape from failed child" {
     };
     // The push retains the header, so the wrapper needs an initialized one;
     // static storage keeps the stack-local items untouched by the release.
-    const task_arr = try value_mod.Array.createStatic(ctx.quotationAllocator(), task_values[0..]);
+    const task_arr = try value_mod.Array.createStatic(ctx.quotationAllocator(), task_values[0..], ctx.containerOwnerTag());
     try ctx.stack.push(.{ .array = task_arr });
 
     try std.testing.expectError(error.UserThrown, nativeAwaitAll(&ctx));
@@ -1633,7 +1641,7 @@ test "deepCopyValue: a quotation's declared effect is copied, not shared" {
     };
     const quot = value_mod.Quotation{ .instructions = &instrs, .effect = &declared };
 
-    const copied = try deepCopyValue(.{ .quotation = quot }, arena.allocator(), testing.allocator, testing.allocator);
+    const copied = try deepCopyValue(.{ .quotation = quot }, arena.allocator(), testing.allocator, testing.allocator, 0);
     const copied_effect = copied.quotation.effect.?;
     try testing.expect(copied_effect != &declared);
     try testing.expectEqual(@as(usize, 2), copied_effect.inputs.len);
@@ -1657,12 +1665,12 @@ test "deepCopyValue: a closure copy carries its defining module" {
         .segments = &.{},
         .defining_module = &module,
         .header = undefined,
-    });
+    }, 0);
     defer container_backing.releaseValue(.{ .closure = cl });
 
     // The copy's body lands on the destination task's arena, a key the shared stamp store cannot
     // answer for, so the module has to ride the value across.
-    const copied = try deepCopyValue(.{ .closure = cl }, arena.allocator(), testing.allocator, testing.allocator);
+    const copied = try deepCopyValue(.{ .closure = cl }, arena.allocator(), testing.allocator, testing.allocator, 0);
     try testing.expect(copied.closure.instructions.ptr != cl.instructions.ptr);
     try testing.expectEqual(@as(?*const value_mod.Module, &module), copied.closure.defining_module);
 }
@@ -1672,12 +1680,12 @@ test "deepCopyValue: shares a self-contained hash by refcount bump" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
 
-    const h = try value_mod.HashTable.create(testing.allocator);
+    const h = try value_mod.HashTable.create(testing.allocator, 0);
     defer container_backing.releaseValue(.{ .hash = h });
     const h_alloc = h.header.allocator;
     try h.map.put(h_alloc, try h_alloc.dupe(u8, "k"), .{ .fixnum = 1 });
 
-    const copied = try deepCopyValue(.{ .hash = h }, arena.allocator(), testing.allocator, testing.allocator);
+    const copied = try deepCopyValue(.{ .hash = h }, arena.allocator(), testing.allocator, testing.allocator, 0);
     try testing.expect(copied.hash == h);
     try testing.expectEqual(@as(u32, 2), h.header.refcountValue());
 
@@ -1690,11 +1698,11 @@ test "deepCopyValue: shares a self-contained set by refcount bump" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
 
-    const s = try value_mod.Set.create(testing.allocator);
+    const s = try value_mod.Set.create(testing.allocator, 0);
     defer container_backing.releaseValue(.{ .set = s });
     try s.map.put(s.header.allocator, .{ .fixnum = 3 }, {});
 
-    const copied = try deepCopyValue(.{ .set = s }, arena.allocator(), testing.allocator, testing.allocator);
+    const copied = try deepCopyValue(.{ .set = s }, arena.allocator(), testing.allocator, testing.allocator, 0);
     try testing.expect(copied.set == s);
     try testing.expectEqual(@as(u32, 2), s.header.refcountValue());
 
@@ -1707,11 +1715,11 @@ test "deepCopyValue: shares a self-contained value-map by refcount bump" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
 
-    const m = try value_mod.ValueMap.create(testing.allocator);
+    const m = try value_mod.ValueMap.create(testing.allocator, 0);
     defer container_backing.releaseValue(.{ .value_map = m });
     try m.map.put(m.header.allocator, .{ .fixnum = 1 }, .{ .fixnum = 2 });
 
-    const copied = try deepCopyValue(.{ .value_map = m }, arena.allocator(), testing.allocator, testing.allocator);
+    const copied = try deepCopyValue(.{ .value_map = m }, arena.allocator(), testing.allocator, testing.allocator, 0);
     try testing.expect(copied.value_map == m);
     try testing.expectEqual(@as(u32, 2), m.header.refcountValue());
 
@@ -1724,11 +1732,11 @@ test "deepCopyValue: copies a mutable value-map rather than sharing it" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
 
-    const m = try value_mod.MutableValueMap.create(testing.allocator);
+    const m = try value_mod.MutableValueMap.create(testing.allocator, 0);
     defer container_backing.releaseValue(.{ .mutable_value_map = m });
     try m.map.put(m.header.allocator, .{ .fixnum = 1 }, .{ .fixnum = 2 });
 
-    const copied = try deepCopyValue(.{ .mutable_value_map = m }, arena.allocator(), testing.allocator, testing.allocator);
+    const copied = try deepCopyValue(.{ .mutable_value_map = m }, arena.allocator(), testing.allocator, testing.allocator, 0);
     defer container_backing.releaseValue(copied);
 
     try testing.expect(copied.mutable_value_map != m);
@@ -1742,7 +1750,7 @@ test "deepCopyValue: an arena-owned reference type fails with TaskArenaEscape" {
     defer arena.deinit();
 
     var res = value_mod.Resource{ .type_name = "test-resource" };
-    try testing.expectError(error.TaskArenaEscape, deepCopyValue(.{ .resource = &res }, arena.allocator(), testing.allocator, testing.allocator));
+    try testing.expectError(error.TaskArenaEscape, deepCopyValue(.{ .resource = &res }, arena.allocator(), testing.allocator, testing.allocator, 0));
 }
 
 test "deepCopyValue: an arena-owned reference type nested in an array fails with TaskArenaEscape" {
@@ -1755,8 +1763,8 @@ test "deepCopyValue: an arena-owned reference type nested in an array fails with
         .{ .fixnum = 1 },
         .{ .resource = &res },
     };
-    const arr = try value_mod.Array.createStatic(arena.allocator(), items[0..]);
-    try testing.expectError(error.TaskArenaEscape, deepCopyValue(.{ .array = arr }, arena.allocator(), testing.allocator, testing.allocator));
+    const arr = try value_mod.Array.createStatic(arena.allocator(), items[0..], 0);
+    try testing.expectError(error.TaskArenaEscape, deepCopyValue(.{ .array = arr }, arena.allocator(), testing.allocator, testing.allocator, 0));
 }
 
 test "deepCopyForTransfer: rejects before retaining shared elements" {
@@ -1764,7 +1772,7 @@ test "deepCopyForTransfer: rejects before retaining shared elements" {
     var ctx = Context.init(testing.allocator);
     defer ctx.deinit();
 
-    const h = try value_mod.HashTable.create(testing.allocator);
+    const h = try value_mod.HashTable.create(testing.allocator, 0);
     defer container_backing.releaseValue(.{ .hash = h });
 
     var res = value_mod.Resource{ .type_name = "test-resource" };
@@ -1772,7 +1780,7 @@ test "deepCopyForTransfer: rejects before retaining shared elements" {
         .{ .hash = h },
         .{ .resource = &res },
     };
-    const arr = try value_mod.Array.createStatic(ctx.quotationAllocator(), items[0..]);
+    const arr = try value_mod.Array.createStatic(ctx.quotationAllocator(), items[0..], ctx.containerOwnerTag());
 
     try testing.expectError(error.UserThrown, deepCopyForTransfer(&ctx, .{ .array = arr }, ctx.quotationAllocator(), testing.allocator, testing.allocator));
     try testing.expect(ctx.thrown_error != null);
@@ -1790,10 +1798,10 @@ test "deepCopyValue: shares a self-contained array by refcount bump" {
     const items = try testing.allocator.alloc(Value, 2);
     items[0] = .{ .fixnum = 1 };
     items[1] = .{ .float = 2.5 };
-    const arr = try value_mod.Array.fromOwnedSlice(testing.allocator, items);
+    const arr = try value_mod.Array.fromOwnedSlice(testing.allocator, items, 0);
     defer container_backing.releaseValue(.{ .array = arr });
 
-    const copied = try deepCopyValue(.{ .array = arr }, arena.allocator(), testing.allocator, testing.allocator);
+    const copied = try deepCopyValue(.{ .array = arr }, arena.allocator(), testing.allocator, testing.allocator, 0);
     try testing.expect(copied.array == arr);
     try testing.expectEqual(@as(u32, 2), arr.header.refcountValue());
 
@@ -1808,10 +1816,10 @@ test "deepCopyValue: string-bearing array is copied, not shared" {
 
     const items = try testing.allocator.alloc(Value, 1);
     items[0] = value_mod.stringValue("s");
-    const arr = try value_mod.Array.fromOwnedSlice(testing.allocator, items);
+    const arr = try value_mod.Array.fromOwnedSlice(testing.allocator, items, 0);
     defer container_backing.releaseValue(.{ .array = arr });
 
-    const copied = try deepCopyValue(.{ .array = arr }, arena.allocator(), testing.allocator, testing.allocator);
+    const copied = try deepCopyValue(.{ .array = arr }, arena.allocator(), testing.allocator, testing.allocator, 0);
     try testing.expect(copied.array != arr);
     try testing.expectEqual(@as(u32, 1), arr.header.refcountValue());
     container_backing.releaseValue(copied);
@@ -1824,9 +1832,9 @@ test "deepCopyValue: a static array is copied, not shared" {
 
     const items = try arena.allocator().alloc(Value, 1);
     items[0] = .{ .fixnum = 9 };
-    const arr = try value_mod.Array.createStatic(arena.allocator(), items);
+    const arr = try value_mod.Array.createStatic(arena.allocator(), items, 0);
 
-    const copied = try deepCopyValue(.{ .array = arr }, arena.allocator(), testing.allocator, testing.allocator);
+    const copied = try deepCopyValue(.{ .array = arr }, arena.allocator(), testing.allocator, testing.allocator, 0);
     try testing.expect(copied.array != arr);
     try testing.expectEqual(container_backing.Shareable.not_shareable, arr.header.shareableState());
     container_backing.releaseValue(copied);
@@ -1837,12 +1845,12 @@ test "deepCopyValue: string-bearing hash is copied, not shared" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
 
-    const h = try value_mod.HashTable.create(testing.allocator);
+    const h = try value_mod.HashTable.create(testing.allocator, 0);
     defer container_backing.releaseValue(.{ .hash = h });
     const h_alloc = h.header.allocator;
     try h.map.put(h_alloc, try h_alloc.dupe(u8, "k"), value_mod.stringValue("v"));
 
-    const copied = try deepCopyValue(.{ .hash = h }, arena.allocator(), testing.allocator, testing.allocator);
+    const copied = try deepCopyValue(.{ .hash = h }, arena.allocator(), testing.allocator, testing.allocator, 0);
     try testing.expect(copied.hash != h);
     try testing.expectEqual(@as(u32, 1), h.header.refcountValue());
     container_backing.releaseValue(copied);
@@ -1856,11 +1864,11 @@ test "deepCopyValue: a backing off the long-lived allocator is copied on the nex
     // Simulates a value that was itself produced by a cross-task copy onto a
     // receiver arena: contents qualify, but the backing's provenance fails the
     // identity check, so a re-send copies again instead of sharing.
-    const h = try value_mod.HashTable.create(arena.allocator());
+    const h = try value_mod.HashTable.create(arena.allocator(), 0);
     const h_alloc = h.header.allocator;
     try h.map.put(h_alloc, try h_alloc.dupe(u8, "k"), .{ .fixnum = 1 });
 
-    const copied = try deepCopyValue(.{ .hash = h }, arena.allocator(), testing.allocator, testing.allocator);
+    const copied = try deepCopyValue(.{ .hash = h }, arena.allocator(), testing.allocator, testing.allocator, 0);
     try testing.expect(copied.hash != h);
     container_backing.releaseValue(copied);
     container_backing.releaseValue(.{ .hash = h });
@@ -1871,7 +1879,7 @@ test "deepCopyValue: tagged hash shares the backing through the scan and copies 
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
 
-    const h = try value_mod.HashTable.create(testing.allocator);
+    const h = try value_mod.HashTable.create(testing.allocator, 0);
     defer container_backing.releaseValue(.{ .hash = h });
     const h_alloc = h.header.allocator;
     try h.map.put(h_alloc, try h_alloc.dupe(u8, "k"), .{ .fixnum = 1 });
@@ -1879,7 +1887,7 @@ test "deepCopyValue: tagged hash shares the backing through the scan and copies 
     var vt: value_mod.VirtualType = .{ .name = "counts", .inner_type = "hash" };
     const inner: Value = .{ .hash = h };
 
-    const copied = try deepCopyValue(.{ .tagged = .{ .tag = &vt, .inner = &inner } }, arena.allocator(), testing.allocator, testing.allocator);
+    const copied = try deepCopyValue(.{ .tagged = .{ .tag = &vt, .inner = &inner } }, arena.allocator(), testing.allocator, testing.allocator, 0);
     try testing.expect(copied.tagged.inner != &inner);
     try testing.expect(copied.tagged.inner.hash == h);
     try testing.expectEqual(@as(u32, 2), h.header.refcountValue());
@@ -1895,10 +1903,10 @@ test "deepCopyValue: a backed shareable tagged shares whole by refcount bump" {
     defer arena.deinit();
 
     var vt: value_mod.VirtualType = .{ .name = "gauge", .inner_type = "fixnum" };
-    const src = try value_mod.ownedTaggedValue(testing.allocator, &vt, .{ .fixnum = 9 });
+    const src = try value_mod.ownedTaggedValue(testing.allocator, &vt, .{ .fixnum = 9 }, 0);
     defer container_backing.releaseValue(src);
 
-    const copied = try deepCopyValue(src, arena.allocator(), testing.allocator, testing.allocator);
+    const copied = try deepCopyValue(src, arena.allocator(), testing.allocator, testing.allocator, 0);
     try testing.expect(copied.tagged.backing == src.tagged.backing);
     try testing.expectEqual(@as(u32, 2), src.tagged.backing.?.header.refcountValue());
 
@@ -1912,10 +1920,10 @@ test "deepCopyValue: a backed non-shareable tagged copies to an owned backing on
     defer arena.deinit();
 
     var vt: value_mod.VirtualType = .{ .name = "label", .inner_type = "string" };
-    const src = try value_mod.ownedTaggedValue(testing.allocator, &vt, value_mod.stringValue("s"));
+    const src = try value_mod.ownedTaggedValue(testing.allocator, &vt, value_mod.stringValue("s"), 0);
     defer container_backing.releaseValue(src);
 
-    const copied = try deepCopyValue(src, arena.allocator(), testing.allocator, testing.allocator);
+    const copied = try deepCopyValue(src, arena.allocator(), testing.allocator, testing.allocator, 0);
     defer container_backing.releaseValue(copied);
 
     try testing.expect(copied.tagged.backing != null);
@@ -1938,16 +1946,16 @@ test "deepCopyValue: copies are owned on the owner allocator, not the arena" {
 
     const inner_items = try testing.allocator.alloc(Value, 1);
     inner_items[0] = value_mod.symbolValue("inner");
-    const inner = try value_mod.Array.fromOwnedSlice(testing.allocator, inner_items);
+    const inner = try value_mod.Array.fromOwnedSlice(testing.allocator, inner_items, 0);
 
     const items = try testing.allocator.alloc(Value, 3);
     items[0] = value_mod.stringValue("s");
     items[1] = big_val;
     items[2] = .{ .array = inner };
-    const arr = try value_mod.Array.fromOwnedSlice(testing.allocator, items);
+    const arr = try value_mod.Array.fromOwnedSlice(testing.allocator, items, 0);
     defer container_backing.releaseValue(.{ .array = arr });
 
-    const copied = try deepCopyValue(.{ .array = arr }, arena.allocator(), testing.allocator, testing.allocator);
+    const copied = try deepCopyValue(.{ .array = arr }, arena.allocator(), testing.allocator, testing.allocator, 0);
     defer container_backing.releaseValue(copied);
 
     try testing.expect(copied.array != arr);
@@ -1967,22 +1975,22 @@ test "deepCopyValue: vectors, hashes, and byte arrays are owned on the owner all
 
     const baseline = arena.queryCapacity();
 
-    const vec = try value_mod.Vector.create(testing.allocator);
+    const vec = try value_mod.Vector.create(testing.allocator, 0);
     defer container_backing.releaseValue(.{ .vector = vec });
     try vec.list.append(testing.allocator, value_mod.stringValue("v"));
 
-    const ba = try value_mod.ByteArray.create(testing.allocator);
+    const ba = try value_mod.ByteArray.create(testing.allocator, 0);
     defer container_backing.releaseValue(.{ .byte_array = ba });
     try ba.ensureTotalCapacity(testing.allocator, 2);
     ba.appendAssumeCapacity(1);
     ba.appendAssumeCapacity(2);
 
-    const copied_vec = try deepCopyValue(.{ .vector = vec }, arena.allocator(), testing.allocator, testing.allocator);
+    const copied_vec = try deepCopyValue(.{ .vector = vec }, arena.allocator(), testing.allocator, testing.allocator, 0);
     defer container_backing.releaseValue(copied_vec);
     try testing.expectEqual(testing.allocator.ptr, copied_vec.vector.header.allocator.ptr);
     try testing.expect(copied_vec.vector.list.items[0].string.backing != null);
 
-    const copied_ba = try deepCopyValue(.{ .byte_array = ba }, arena.allocator(), testing.allocator, testing.allocator);
+    const copied_ba = try deepCopyValue(.{ .byte_array = ba }, arena.allocator(), testing.allocator, testing.allocator, 0);
     defer container_backing.releaseValue(copied_ba);
     try testing.expectEqual(testing.allocator.ptr, copied_ba.byte_array.header.allocator.ptr);
     try testing.expectEqualSlices(u8, &.{ 1, 2 }, copied_ba.byte_array.slice());
@@ -1995,10 +2003,10 @@ test "deepCopyValue: shares a heap-backed string by refcount bump" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
 
-    const src = try value_mod.ownedStringValue(testing.allocator, try testing.allocator.dupe(u8, "shared"));
+    const src = try value_mod.ownedStringValue(testing.allocator, try testing.allocator.dupe(u8, "shared"), 0);
     defer container_backing.releaseValue(src);
 
-    const copied = try deepCopyValue(src, arena.allocator(), testing.allocator, testing.allocator);
+    const copied = try deepCopyValue(src, arena.allocator(), testing.allocator, testing.allocator, 0);
     try testing.expect(copied.string.backing == src.string.backing);
     try testing.expect(copied.string.bytes.ptr == src.string.bytes.ptr);
     try testing.expectEqual(@as(u32, 2), src.string.backing.?.header.refcountValue());
@@ -2013,7 +2021,7 @@ test "deepCopyValue: a null-backed string is copied to an owned backing" {
     defer arena.deinit();
 
     const src = value_mod.stringValue("s");
-    const copied = try deepCopyValue(src, arena.allocator(), testing.allocator, testing.allocator);
+    const copied = try deepCopyValue(src, arena.allocator(), testing.allocator, testing.allocator, 0);
     defer container_backing.releaseValue(copied);
 
     try testing.expect(copied.string.backing != null);
@@ -2026,16 +2034,16 @@ test "deepCopyValue: shares a heap-backed symbol and bignum by refcount bump" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
 
-    const sym = try value_mod.ownedSymbolValue(testing.allocator, try testing.allocator.dupe(u8, "sym"));
+    const sym = try value_mod.ownedSymbolValue(testing.allocator, try testing.allocator.dupe(u8, "sym"), 0);
     defer container_backing.releaseValue(sym);
-    const sym_copy = try deepCopyValue(sym, arena.allocator(), testing.allocator, testing.allocator);
+    const sym_copy = try deepCopyValue(sym, arena.allocator(), testing.allocator, testing.allocator, 0);
     try testing.expect(sym_copy.symbol.backing == sym.symbol.backing);
     container_backing.releaseValue(sym_copy);
 
     const big = try value_mod.BigIntManaged.initSet(testing.allocator, 12345);
-    const bn = try value_mod.ownedBignumValue(testing.allocator, big);
+    const bn = try value_mod.ownedBignumValue(testing.allocator, big, 0);
     defer container_backing.releaseValue(bn);
-    const bn_copy = try deepCopyValue(bn, arena.allocator(), testing.allocator, testing.allocator);
+    const bn_copy = try deepCopyValue(bn, arena.allocator(), testing.allocator, testing.allocator, 0);
     try testing.expect(bn_copy.bignum.backing == bn.bignum.backing);
     try testing.expect(bn_copy.bignum.big == bn.bignum.big);
     container_backing.releaseValue(bn_copy);
@@ -2047,11 +2055,11 @@ test "deepCopyValue: heap-backed string elements share with the array" {
     defer arena.deinit();
 
     const items = try testing.allocator.alloc(Value, 1);
-    items[0] = try value_mod.ownedStringValue(testing.allocator, try testing.allocator.dupe(u8, "s"));
-    const arr = try value_mod.Array.fromOwnedSlice(testing.allocator, items);
+    items[0] = try value_mod.ownedStringValue(testing.allocator, try testing.allocator.dupe(u8, "s"), 0);
+    const arr = try value_mod.Array.fromOwnedSlice(testing.allocator, items, 0);
     defer container_backing.releaseValue(.{ .array = arr });
 
-    const copied = try deepCopyValue(.{ .array = arr }, arena.allocator(), testing.allocator, testing.allocator);
+    const copied = try deepCopyValue(.{ .array = arr }, arena.allocator(), testing.allocator, testing.allocator, 0);
     try testing.expect(copied.array == arr);
     try testing.expectEqual(@as(u32, 2), arr.header.refcountValue());
     container_backing.releaseValue(copied);
@@ -2065,7 +2073,7 @@ test "deepCopyValue: a scalar-parameterized tag does not exempt string contents 
     // The parameterized wrap does not validate hash contents, so a tag
     // claiming scalar elements can sit on a string-bearing hash. The scan,
     // not the tag, decides: this must copy.
-    const h = try value_mod.HashTable.create(testing.allocator);
+    const h = try value_mod.HashTable.create(testing.allocator, 0);
     defer container_backing.releaseValue(.{ .hash = h });
     const h_alloc = h.header.allocator;
     try h.map.put(h_alloc, try h_alloc.dupe(u8, "k"), value_mod.stringValue("v"));
@@ -2079,7 +2087,7 @@ test "deepCopyValue: a scalar-parameterized tag does not exempt string contents 
     };
     const inner: Value = .{ .hash = h };
 
-    const copied = try deepCopyValue(.{ .tagged = .{ .tag = &vt, .inner = &inner } }, arena.allocator(), testing.allocator, testing.allocator);
+    const copied = try deepCopyValue(.{ .tagged = .{ .tag = &vt, .inner = &inner } }, arena.allocator(), testing.allocator, testing.allocator, 0);
     try testing.expect(copied.tagged.inner.hash != h);
     try testing.expectEqual(@as(u32, 1), h.header.refcountValue());
     container_backing.releaseValue(copied);
@@ -2112,7 +2120,7 @@ test "a child with no scheduler fails fast at the scheduler sites" {
     );
 
     var vt: value_mod.VirtualType = .{ .name = "duration", .inner_type = "fixnum" };
-    const duration = try value_mod.ownedTaggedValue(std.testing.allocator, &vt, .{ .fixnum = 5 });
+    const duration = try value_mod.ownedTaggedValue(std.testing.allocator, &vt, .{ .fixnum = 5 }, 0);
     defer container_backing.releaseValue(duration);
     try child.stack.push(duration);
     try std.testing.expectError(error.InvalidState, nativeSleep(&child));

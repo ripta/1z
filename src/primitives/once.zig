@@ -49,6 +49,10 @@ fn nativeForceOnce(ctx: *Context) anyerror!void {
         return;
     }
 
+    // Forcing a cold cell runs its body and publishes the result into the cell. The check runs
+    // ahead of `arrive`, which would leave the cell forcing if the raise came after it.
+    try ctx.checkWrite(cell.owner_tag, "a once cell");
+
     while (true) {
         // The task this OS thread is resumed into, and nothing else. A context names whatever
         // scheduler it was pointed at, which a `task-scope` moves, so it is not a witness for
@@ -109,6 +113,7 @@ fn runForce(ctx: *Context, cell: *OnceCell) anyerror!void {
     };
     container_backing.retainValue(produced);
 
+    ctx.assertWriteAllowed(cell.owner_tag);
     var woken = cell.publish(produced);
     defer woken.deinit(cell.allocator);
     wakeAll(ctx, cell, woken.items);
@@ -348,7 +353,7 @@ test "force-once: a reused refcounted value gains no reference per read" {
 
     const items = try testing.allocator.alloc(value_mod.Value, 1);
     items[0] = .{ .fixnum = 1 };
-    const arr = try value_mod.Array.fromOwnedSlice(testing.allocator, items);
+    const arr = try value_mod.Array.fromOwnedSlice(testing.allocator, items, 0);
     const literal = value_mod.Value{ .array = arr };
 
     const body = [_]value_mod.Instruction{
@@ -468,6 +473,7 @@ test "force-once: a child with no scheduler cannot wait on a cell forced elsewhe
 
     var cell = testCell(&.{}, "held");
     defer cell.deinit();
+    cell.owner_tag = child.containerOwnerTag();
 
     var holder: Task = undefined;
     holder.blocked_on_once_cell = null;

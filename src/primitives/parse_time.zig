@@ -130,7 +130,7 @@ fn parseTokensUntilCore(ctx: *Context, delimiter: []const u8, mode: ParseMode) !
     if (!found_delimiter) return error.UnterminatedTokenScan;
 
     const result = try tokens.toOwnedSlice(alloc);
-    return .{ .array = try value_mod.Array.fromOwnedSlice(alloc, result) };
+    return .{ .array = try value_mod.Array.fromOwnedSlice(alloc, result, ctx.containerOwnerTag()) };
 }
 
 /// Resolve a token string as a scalar literal value. Returns null if the token is not a

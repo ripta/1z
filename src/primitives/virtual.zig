@@ -492,7 +492,7 @@ fn virtualStructWrapHelper(ctx: *Context) anyerror!void {
         lowest = i;
     }
 
-    const instance = try value_mod.createStructInstance(ctx.allocator, st, field_values);
+    const instance = try value_mod.createStructInstance(ctx.allocator, st, field_values, ctx.containerOwnerTag());
     fields_owned = false;
 
     // The backing adopts the instance's creation reference, so a dropped
@@ -556,7 +556,7 @@ fn virtualStructToHashHelper(ctx: *Context) anyerror!void {
             }
             switch (t.inner.*) {
                 .struct_instance => |si| {
-                    const hash = try value_mod.HashTable.create(ctx.allocator);
+                    const hash = try value_mod.HashTable.create(ctx.allocator, ctx.containerOwnerTag());
                     errdefer hash.header.release();
                     const hash_alloc = hash.header.allocator;
                     for (st.fields, 0..) |field, i| {
@@ -624,7 +624,7 @@ fn virtualStructHashWrapHelper(ctx: *Context) anyerror!void {
     container_backing.retainValues(field_values);
     errdefer if (fields_owned) container_backing.releaseValues(field_values);
 
-    const instance = try value_mod.createStructInstance(ctx.allocator, st, field_values);
+    const instance = try value_mod.createStructInstance(ctx.allocator, st, field_values, ctx.containerOwnerTag());
     fields_owned = false;
 
     try helpers.pushOwnedTagged(ctx, vt, .{ .struct_instance = instance });
@@ -741,7 +741,7 @@ fn tryPromoteElement(alloc: Allocator, elem: Value, expected: []const u8) ?Value
         return switch (elem) {
             .fixnum => |i| blk: {
                 var big = BigIntManaged.initSet(alloc, i) catch return null;
-                break :blk value_mod.ownedBignumValue(alloc, big) catch {
+                break :blk value_mod.ownedBignumValue(alloc, big, 0) catch {
                     big.deinit();
                     return null;
                 };
@@ -826,6 +826,7 @@ fn promoteVectorInPlace(
 
     for (v.list.items) |*slot| {
         if (dispatch_mod.dispatchTypeValue(slot.*, ctx) == expected_tv) continue;
+        try helpers.beginContainerWrite(ctx, &v.header);
         const replacement = tryPromoteElement(ctx.allocator, slot.*, expected_tv.name) orelse return error.OutOfMemory;
         const displaced = slot.*;
         slot.* = replacement;
@@ -904,7 +905,7 @@ fn typedValidateSeqElements(ctx: *Context) anyerror!void {
                 return;
             };
 
-            const new_arr = value_mod.Array.fromOwnedSlice(ctx.allocator, new_items) catch |e| {
+            const new_arr = value_mod.Array.fromOwnedSlice(ctx.allocator, new_items, ctx.containerOwnerTag()) catch |e| {
                 container_backing.releaseValues(new_items);
                 ctx.allocator.free(new_items);
                 return e;
@@ -1116,7 +1117,7 @@ fn virtualParameterizedWrapHelper(ctx: *Context) anyerror!void {
             switch (val) {
                 .array => |arr| {
                     if (try promoteItems(ctx, vt, arr.items, expected_tv, ">")) |new_items| {
-                        const new_arr = value_mod.Array.fromOwnedSlice(ctx.allocator, new_items) catch |e| {
+                        const new_arr = value_mod.Array.fromOwnedSlice(ctx.allocator, new_items, ctx.containerOwnerTag()) catch |e| {
                             container_backing.releaseValues(new_items);
                             ctx.allocator.free(new_items);
                             return e;
@@ -1175,7 +1176,7 @@ fn virtualParameterizedWrapHelper(ctx: *Context) anyerror!void {
                     }
 
                     if (needs_promotion) {
-                        const new_hash = try value_mod.HashTable.create(ctx.allocator);
+                        const new_hash = try value_mod.HashTable.create(ctx.allocator, ctx.containerOwnerTag());
                         errdefer container_backing.releaseValue(.{ .hash = new_hash });
                         const hash_alloc = new_hash.header.allocator;
 
@@ -1215,7 +1216,7 @@ fn virtualParameterizedWrapHelper(ctx: *Context) anyerror!void {
                     }
 
                     if (needs_promotion) {
-                        const new_set = try value_mod.Set.create(ctx.allocator);
+                        const new_set = try value_mod.Set.create(ctx.allocator, ctx.containerOwnerTag());
                         errdefer container_backing.releaseValue(.{ .set = new_set });
                         const set_alloc = new_set.header.allocator;
 
@@ -1251,7 +1252,7 @@ fn virtualParameterizedWrapHelper(ctx: *Context) anyerror!void {
                     }
 
                     if (needs_promotion) {
-                        const new_map = try value_mod.ValueMap.create(ctx.allocator);
+                        const new_map = try value_mod.ValueMap.create(ctx.allocator, ctx.containerOwnerTag());
                         errdefer container_backing.releaseValue(.{ .value_map = new_map });
                         const map_alloc = new_map.header.allocator;
 
@@ -1287,6 +1288,7 @@ fn virtualParameterizedWrapHelper(ctx: *Context) anyerror!void {
 
                     for (m.map.values()) |*slot| {
                         if (dispatch_mod.dispatchTypeValue(slot.*, ctx) != expected_tv) {
+                            try helpers.beginContainerWrite(ctx, &m.header);
                             const replacement = tryPromoteElement(ctx.allocator, slot.*, expected_tv.name) orelse return error.OutOfMemory;
                             const displaced = slot.*;
                             slot.* = replacement;
@@ -1314,6 +1316,7 @@ fn virtualParameterizedWrapHelper(ctx: *Context) anyerror!void {
                     while (rewrite.next()) |entry| {
                         const elem = entry.value_ptr.*;
                         if (dispatch_mod.dispatchTypeValue(elem, ctx) != expected_tv) {
+                            try helpers.beginContainerWrite(ctx, &m.header);
                             const replacement = tryPromoteElement(ctx.allocator, elem, expected_tv.name) orelse return error.OutOfMemory;
                             entry.value_ptr.* = replacement;
                             container_backing.releaseValue(elem);

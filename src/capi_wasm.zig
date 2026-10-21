@@ -213,7 +213,7 @@ export fn onez_init() ?*anyopaque {
         return null;
     };
 
-    handle.framebuffer_ba = value_mod.makeBorrowedByteArray(ctx.quotationAllocator(), &framebuffer_buf) catch {
+    handle.framebuffer_ba = value_mod.makeBorrowedByteArray(ctx.quotationAllocator(), &framebuffer_buf, ctx.containerOwnerTag()) catch {
         onez_deinit(handle);
         return null;
     };
@@ -226,7 +226,7 @@ export fn onez_init() ?*anyopaque {
         return null;
     };
 
-    handle.keyboard_ba = value_mod.makeBorrowedByteArray(ctx.quotationAllocator(), &keyboard_buf) catch {
+    handle.keyboard_ba = value_mod.makeBorrowedByteArray(ctx.quotationAllocator(), &keyboard_buf, ctx.containerOwnerTag()) catch {
         onez_deinit(handle);
         return null;
     };
@@ -239,7 +239,7 @@ export fn onez_init() ?*anyopaque {
         return null;
     };
 
-    handle.mouse_ba = value_mod.makeBorrowedByteArray(ctx.quotationAllocator(), &mouse_buf) catch {
+    handle.mouse_ba = value_mod.makeBorrowedByteArray(ctx.quotationAllocator(), &mouse_buf, ctx.containerOwnerTag()) catch {
         onez_deinit(handle);
         return null;
     };

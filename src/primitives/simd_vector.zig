@@ -157,7 +157,7 @@ fn elementToValue(comptime T: type, ctx: *Context, elem: T) !Value {
             // u64 is the one element type whose range exceeds fixnum; the upper half boxes as bignum
             if (elem > std.math.maxInt(i64)) {
                 const big = try value_mod.BigIntManaged.initSet(ctx.allocator, elem);
-                return try value_mod.ownedBignumValue(ctx.allocator, big);
+                return try value_mod.ownedBignumValue(ctx.allocator, big, ctx.containerOwnerTag());
             }
             return .{ .fixnum = @intCast(elem) };
         }
@@ -235,15 +235,15 @@ fn validateSimdSize(ctx: *Context, ba: *ByteArray) !*[simd_kernels.SIMD_BYTES]u8
     return bytes[0..simd_kernels.SIMD_BYTES];
 }
 
-fn allocSimdByteArray(alloc: Allocator) !*ByteArray {
-    const ba = try ByteArray.create(alloc);
+fn allocSimdByteArray(alloc: Allocator, owner: u32) !*ByteArray {
+    const ba = try ByteArray.create(alloc, owner);
     try ba.ensureTotalCapacity(alloc, simd_kernels.SIMD_BYTES);
     ba.items.len = simd_kernels.SIMD_BYTES;
     return ba;
 }
 
 fn wrapSimdResult(ctx: *Context, tag: *const VirtualType, out_bytes: [simd_kernels.SIMD_BYTES]u8) !void {
-    const out_ba = try allocSimdByteArray(ctx.allocator);
+    const out_ba = try allocSimdByteArray(ctx.allocator, ctx.containerOwnerTag());
     out_ba.items[0..simd_kernels.SIMD_BYTES].* = out_bytes;
     try helpers.pushOwnedTagged(ctx, tag, .{ .byte_array = out_ba });
 }
@@ -285,7 +285,7 @@ fn nativeSimdFromStack(ctx: *Context) anyerror!void {
     }
     defer container_backing.releaseValues(vals[0..n]);
 
-    const ba = try allocSimdByteArray(alloc);
+    const ba = try allocSimdByteArray(alloc, ctx.containerOwnerTag());
     errdefer container_backing.releaseValue(.{ .byte_array = ba });
 
     switch (simd_type) {
@@ -330,7 +330,7 @@ fn nativeSimdSplat(ctx: *Context) anyerror!void {
         return error.TypeMismatch;
     };
 
-    const ba = try allocSimdByteArray(alloc);
+    const ba = try allocSimdByteArray(alloc, ctx.containerOwnerTag());
     errdefer container_backing.releaseValue(.{ .byte_array = ba });
 
     switch (simd_type) {

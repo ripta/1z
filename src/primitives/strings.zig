@@ -188,7 +188,7 @@ fn nativeToBytes(ctx: *Context) anyerror!void {
     switch (val) {
         .string => |s| {
             const alloc = ctx.quotationAllocator();
-            const ba = ByteArray.create(alloc) catch return error.OutOfMemory;
+            const ba = ByteArray.create(alloc, ctx.containerOwnerTag()) catch return error.OutOfMemory;
             ba.ensureTotalCapacity(alloc, s.bytes.len) catch return error.OutOfMemory;
             for (s.bytes) |byte| {
                 ba.appendAssumeCapacity(byte);

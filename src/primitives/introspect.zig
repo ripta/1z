@@ -1134,7 +1134,7 @@ fn buildFrameHash(
     frame_words: anytype,
     is_import_frame: bool,
 ) !Value {
-    const hash = try HashTable.create(gpa);
+    const hash = try HashTable.create(gpa, 0);
     errdefer container_backing.releaseValue(.{ .hash = hash });
 
     try putFrameEntry(hash, "type", value_mod.stringValue(type_name));
@@ -1156,7 +1156,7 @@ fn buildFrameHash(
     const count: i64 = @intCast(word_names.items.len);
 
     const names = try gpa.dupe(Value, word_names.items);
-    const names_arr = value_mod.Array.fromOwnedSlice(gpa, names) catch |e| {
+    const names_arr = value_mod.Array.fromOwnedSlice(gpa, names, 0) catch |e| {
         gpa.free(names);
         return e;
     };

@@ -1,0 +1,39 @@
+\ Benchmark: in-place container writes.
+\
+\ Every body here builds a small container and then mutates it many times, so what the file measures
+\ is the shared container write path: the analysis check that runs before each `#nth!`, `#push!`,
+\ `@set!`, and the other mutating words touch their target. Outside analysis that check is a single
+\ flag test, so the file reads the cost the check adds to ordinary mutation-heavy code.
+\
+\ The loops are driven by `times` rather than `benchmark-n`, so the file reports `timing.user_ns`
+\ under scripts/benchmark-ab.sh and runs un-instrumented under scripts/benchmark-wall-ab.sh.
+\
+\ Run with --compile=off. A compiled body does not take the interpreter's native write path.
+
+vec-writes: ( -- ) [
+  V{ 0 0 0 0 0 0 0 0 }
+  0 1 #nth! 1 2 #nth! 2 3 #nth! 3 4 #nth! 4 5 #nth! 5 6 #nth! 6 7 #nth! 7 8 #nth!
+  0 9 #nth! 1 8 #nth! 2 7 #nth! 3 6 #nth! 4 5 #nth! 5 4 #nth! 6 3 #nth! 7 2 #nth!
+  8 #push! 9 #push! #pop! drop #pop! drop
+  0 #unshift! #shift! drop
+  drop
+] ;
+
+map-writes: ( -- ) [
+  M{ a: 1 b: 2 c: 3 }
+  a: 10 @set! b: 20 @set! c: 30 @set! d: 40 @set!
+  a: 11 @set! b: 21 @set! c: 31 @set! d: 41 @set!
+  d: @remove! c: @remove!
+  drop
+] ;
+
+bytes-writes: ( -- ) [
+  B{ 0 0 0 0 0 0 0 0 }
+  0 1 #nth! 1 2 #nth! 2 3 #nth! 3 4 #nth! 4 5 #nth! 5 6 #nth! 6 7 #nth! 7 8 #nth!
+  0 65535 2 #poke! 2 65535 2 #poke! 4 65535 2 #poke! 6 65535 2 #poke!
+  drop
+] ;
+
+200000 [ vec-writes ] times
+200000 [ map-writes ] times
+200000 [ bytes-writes ] times

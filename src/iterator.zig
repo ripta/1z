@@ -22,10 +22,10 @@ pub const Iterator = struct {
         packed_elems: PackedIter,
     };
 
-    pub fn create(allocator: std.mem.Allocator, kind: Kind) error{OutOfMemory}!*Iterator {
+    pub fn create(allocator: std.mem.Allocator, kind: Kind, owner: u32) error{OutOfMemory}!*Iterator {
         const self = try allocator.create(Iterator);
         self.* = .{ .header = undefined, .kind = kind };
-        self.header.init(allocator, destroyIterator);
+        self.header.init(allocator, destroyIterator, owner);
         return self;
     }
 
@@ -372,7 +372,7 @@ pub const PackedIter = struct {
                 self.index += 1;
                 // The element is freshly boxed, so the construction reference is the
                 // yield; no retain is needed.
-                return try value_mod.packedElementValue(T, allocator, elem);
+                return try value_mod.packedElementValue(T, allocator, elem, 0);
             },
         }
     }
@@ -465,7 +465,7 @@ test "PackedIter walks an f64 backing and yields floats" {
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
 
-    const ba = try value_mod.ByteArray.create(std.testing.allocator);
+    const ba = try value_mod.ByteArray.create(std.testing.allocator, 0);
     defer container_backing.releaseValue(.{ .byte_array = ba });
     try ba.ensureTotalCapacity(std.testing.allocator, 3 * 8);
     ba.items.len = 3 * 8;
@@ -485,7 +485,7 @@ test "PackedIter on empty backing returns null immediately" {
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
 
-    const ba = try value_mod.ByteArray.create(std.testing.allocator);
+    const ba = try value_mod.ByteArray.create(std.testing.allocator, 0);
     defer container_backing.releaseValue(.{ .byte_array = ba });
 
     var it = PackedIter{ .source = ba, .elem_type = .f64, .index = 0 };
@@ -496,7 +496,7 @@ test "PackedIter boxes the u64 upper half as an owned bignum" {
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
 
-    const ba = try value_mod.ByteArray.create(std.testing.allocator);
+    const ba = try value_mod.ByteArray.create(std.testing.allocator, 0);
     defer container_backing.releaseValue(.{ .byte_array = ba });
     try ba.ensureTotalCapacity(std.testing.allocator, 2 * 8);
     ba.items.len = 2 * 8;
@@ -515,7 +515,7 @@ test "PackedIter applies a chain across chunk boundaries" {
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
 
-    const ba = try value_mod.ByteArray.create(std.testing.allocator);
+    const ba = try value_mod.ByteArray.create(std.testing.allocator, 0);
     defer container_backing.releaseValue(.{ .byte_array = ba });
     const n = PackedIter.chain_buf_cap + 1;
     try ba.ensureTotalCapacity(std.testing.allocator, n * 8);
@@ -545,7 +545,7 @@ test "PackedIter chained f32 computes in f32 and widens" {
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
 
-    const ba = try value_mod.ByteArray.create(std.testing.allocator);
+    const ba = try value_mod.ByteArray.create(std.testing.allocator, 0);
     defer container_backing.releaseValue(.{ .byte_array = ba });
     try ba.ensureTotalCapacity(std.testing.allocator, 4);
     ba.items.len = 4;
@@ -566,7 +566,7 @@ test "PackedIter chained on empty backing returns null immediately" {
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
 
-    const ba = try value_mod.ByteArray.create(std.testing.allocator);
+    const ba = try value_mod.ByteArray.create(std.testing.allocator, 0);
     defer container_backing.releaseValue(.{ .byte_array = ba });
 
     const chain = [_]packed_kernels.ChainOp{.{ .op = .add, .scalar = 1.0 }};
@@ -582,7 +582,7 @@ test "PackedIter bails the unyielded remainder when the dispatch generation chan
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
 
-    const ba = try value_mod.ByteArray.create(std.testing.allocator);
+    const ba = try value_mod.ByteArray.create(std.testing.allocator, 0);
     defer container_backing.releaseValue(.{ .byte_array = ba });
     const n = 4 * packed_kernels.chainChunkLen(f64);
     try ba.ensureTotalCapacity(std.testing.allocator, n * 8);
@@ -618,7 +618,7 @@ test "Iterator kindName returns packed" {
 
 test "ArrayIter yields an owned reference for refcounted elements" {
     const Vector = value_mod.Vector;
-    const vec = try Vector.create(std.testing.allocator);
+    const vec = try Vector.create(std.testing.allocator, 0);
     // Creation leaves refcount=1; the backing slice below is that one owner.
     const items = [_]Value{.{ .vector = vec }};
     var it = ArrayIter{ .items = &items, .index = 0 };

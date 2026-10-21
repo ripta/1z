@@ -593,7 +593,7 @@ test "registerCompoundBody: records bodies with container literals" {
     var dict = Dictionary.init(allocator);
     defer dict.deinit();
 
-    const dummy_vec = try value_mod.Vector.create(allocator);
+    const dummy_vec = try value_mod.Vector.create(allocator, 0);
     // One registration; walkContainerReleaseList will release the
     // embedded vector once. The create's rc=1 balances that release,
     // so dummy_vec is destroyed cleanly by the walk.

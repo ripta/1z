@@ -36,6 +36,11 @@ pub const OnceCell = struct {
     /// The word's own name, for the cycle diagnostic. Duped onto the cell's own arena.
     name: []const u8 = "",
 
+    /// The analysis load owner whose dictionary registered the cell, or zero for a cell made
+    /// outside analysis. Forcing a cold cell publishes into it, so analysis may force only a cell
+    /// its own load owner registered.
+    owner_tag: u32 = 0,
+
     /// Read without the mutex on every reference, so a hit costs a load and a branch. The
     /// release-store that publishes pairs with the acquire-load that reads it, which is what
     /// makes `value` visible to a reader that never takes `mu`.

@@ -80,13 +80,13 @@ pub const HashTable = struct {
     header: @import("container_backing.zig").ContainerHeader,
     map: std.StringHashMapUnmanaged(Value) = .{},
 
-    pub fn create(allocator: std.mem.Allocator) error{OutOfMemory}!*HashTable {
+    pub fn create(allocator: std.mem.Allocator, owner: u32) error{OutOfMemory}!*HashTable {
         const self = try allocator.create(HashTable);
         self.* = .{
             .header = undefined,
             .map = .{},
         };
-        self.header.init(allocator, destroyHashTable);
+        self.header.init(allocator, destroyHashTable, owner);
         return self;
     }
 
@@ -113,13 +113,13 @@ pub const Vector = struct {
     header: @import("container_backing.zig").ContainerHeader,
     list: std.ArrayListUnmanaged(Value) = .{},
 
-    pub fn create(allocator: std.mem.Allocator) error{OutOfMemory}!*Vector {
+    pub fn create(allocator: std.mem.Allocator, owner: u32) error{OutOfMemory}!*Vector {
         const self = try allocator.create(Vector);
         self.* = .{
             .header = undefined,
             .list = .{},
         };
-        self.header.init(allocator, destroyVector);
+        self.header.init(allocator, destroyVector, owner);
         return self;
     }
 
@@ -161,25 +161,25 @@ pub const Array = struct {
     /// and of the element references transfers to the array: destroy releases
     /// each element and frees the slice. Callers that copy elements out of a
     /// container they do not own must retain them first.
-    pub fn fromOwnedSlice(allocator: std.mem.Allocator, items: []const Value) error{OutOfMemory}!*Array {
+    pub fn fromOwnedSlice(allocator: std.mem.Allocator, items: []const Value, owner: u32) error{OutOfMemory}!*Array {
         const self = try allocator.create(Array);
         self.* = .{
             .header = undefined,
             .items = items,
             .storage = .owned,
         };
-        self.header.init(allocator, destroyArray);
+        self.header.init(allocator, destroyArray, owner);
         return self;
     }
 
     /// Copy `src` into a fresh owned array, retaining each copied element:
     /// the copies become owning references held by the array's backing and
     /// released by its destroy.
-    pub fn createCopyFrom(allocator: std.mem.Allocator, src: []const Value) error{OutOfMemory}!*Array {
+    pub fn createCopyFrom(allocator: std.mem.Allocator, src: []const Value, owner: u32) error{OutOfMemory}!*Array {
         const items = try allocator.alloc(Value, src.len);
         errdefer allocator.free(items);
         @memcpy(items, src);
-        const self = try fromOwnedSlice(allocator, items);
+        const self = try fromOwnedSlice(allocator, items, owner);
         @import("container_backing.zig").retainValues(items);
         return self;
     }
@@ -188,14 +188,14 @@ pub const Array = struct {
     /// memory. The shareable flag stays `.unknown`: instruction memory is not
     /// the process-lifetime allocator, so the send-path scan classifies static
     /// arrays not-shareable and they cross task boundaries by deep copy.
-    pub fn createStatic(allocator: std.mem.Allocator, items: []const Value) error{OutOfMemory}!*Array {
+    pub fn createStatic(allocator: std.mem.Allocator, items: []const Value, owner: u32) error{OutOfMemory}!*Array {
         const self = try allocator.create(Array);
         self.* = .{
             .header = undefined,
             .items = items,
             .storage = .static,
         };
-        self.header.init(allocator, destroyArray);
+        self.header.init(allocator, destroyArray, owner);
         return self;
     }
 
@@ -234,7 +234,7 @@ pub const ByteArray = struct {
         borrowed: []u8,
     } = .owned,
 
-    pub fn create(allocator: std.mem.Allocator) error{OutOfMemory}!*ByteArray {
+    pub fn create(allocator: std.mem.Allocator, owner: u32) error{OutOfMemory}!*ByteArray {
         const self = try allocator.create(ByteArray);
         self.* = .{
             .header = undefined,
@@ -242,7 +242,7 @@ pub const ByteArray = struct {
             .owned_items = .{},
             .storage = .owned,
         };
-        self.header.init(allocator, destroyByteArray);
+        self.header.init(allocator, destroyByteArray, owner);
         return self;
     }
 
@@ -334,14 +334,14 @@ pub const ByteArray = struct {
     }
 };
 
-pub fn makeBorrowedByteArray(allocator: std.mem.Allocator, bytes: []u8) !*ByteArray {
+pub fn makeBorrowedByteArray(allocator: std.mem.Allocator, bytes: []u8, owner: u32) !*ByteArray {
     const ba = try allocator.create(ByteArray);
     ba.* = .{
         .header = undefined,
         .items = bytes,
         .storage = .{ .borrowed = bytes },
     };
-    ba.header.init(allocator, ByteArray.destroyByteArray);
+    ba.header.init(allocator, ByteArray.destroyByteArray, owner);
     return ba;
 }
 
@@ -362,13 +362,13 @@ pub const StringBacking = struct {
 
     /// Take ownership of `bytes`, which must have been allocated on `allocator`. The backing
     /// frees them when the last reference drops.
-    pub fn adoptOwned(allocator: std.mem.Allocator, bytes: []u8) error{OutOfMemory}!*StringBacking {
+    pub fn adoptOwned(allocator: std.mem.Allocator, bytes: []u8, owner: u32) error{OutOfMemory}!*StringBacking {
         const self = try allocator.create(StringBacking);
         self.* = .{
             .header = undefined,
             .storage = .{ .owned = bytes },
         };
-        self.header.init(allocator, destroyStringBacking);
+        self.header.init(allocator, destroyStringBacking, owner);
         return self;
     }
 
@@ -414,13 +414,13 @@ pub fn symbolValue(bytes: []const u8) Value {
 /// A string value owning `bytes` through a fresh heap backing. `bytes` must have been
 /// allocated on `allocator`. The returned value holds the backing's creation reference,
 /// which the caller transfers (`pushMoved`, container adoption) or releases.
-pub fn ownedStringValue(allocator: std.mem.Allocator, bytes: []u8) error{OutOfMemory}!Value {
-    return .{ .string = .{ .backing = try StringBacking.adoptOwned(allocator, bytes), .bytes = bytes } };
+pub fn ownedStringValue(allocator: std.mem.Allocator, bytes: []u8, owner: u32) error{OutOfMemory}!Value {
+    return .{ .string = .{ .backing = try StringBacking.adoptOwned(allocator, bytes, owner), .bytes = bytes } };
 }
 
 /// Symbol twin of `ownedStringValue`.
-pub fn ownedSymbolValue(allocator: std.mem.Allocator, bytes: []u8) error{OutOfMemory}!Value {
-    return .{ .symbol = .{ .backing = try StringBacking.adoptOwned(allocator, bytes), .bytes = bytes } };
+pub fn ownedSymbolValue(allocator: std.mem.Allocator, bytes: []u8, owner: u32) error{OutOfMemory}!Value {
+    return .{ .symbol = .{ .backing = try StringBacking.adoptOwned(allocator, bytes, owner), .bytes = bytes } };
 }
 
 /// Refcounted backing for a bignum value. A `BignumPayload` carries an optional pointer to
@@ -436,13 +436,13 @@ pub const BignumBacking = struct {
 
     /// Take ownership of `big`, whose limbs must have been allocated on `allocator`. The
     /// backing deinits them when the last reference drops.
-    pub fn adopt(allocator: std.mem.Allocator, big: BigIntManaged) error{OutOfMemory}!*BignumBacking {
+    pub fn adopt(allocator: std.mem.Allocator, big: BigIntManaged, owner: u32) error{OutOfMemory}!*BignumBacking {
         const self = try allocator.create(BignumBacking);
         self.* = .{
             .header = undefined,
             .big = big,
         };
-        self.header.init(allocator, destroyBignumBacking);
+        self.header.init(allocator, destroyBignumBacking, owner);
         return self;
     }
 
@@ -469,15 +469,15 @@ pub fn bignumValue(alloc: std.mem.Allocator, big: BigIntManaged) !Value {
 /// A bignum value owning `big` through a fresh heap backing. `big`'s limbs must have been
 /// allocated on `allocator`. The returned value holds the backing's creation reference,
 /// which the caller transfers (`pushMoved`, container adoption) or releases.
-pub fn ownedBignumValue(allocator: std.mem.Allocator, big: BigIntManaged) error{OutOfMemory}!Value {
-    const backing = try BignumBacking.adopt(allocator, big);
+pub fn ownedBignumValue(allocator: std.mem.Allocator, big: BigIntManaged, owner: u32) error{OutOfMemory}!Value {
+    const backing = try BignumBacking.adopt(allocator, big, owner);
     return .{ .bignum = .{ .backing = backing, .big = &backing.big } };
 }
 
 /// Box a packed-array element. Floats box as `.float` (an f32 widens to f64), integers as
 /// `.fixnum`, except the upper half of u64, which exceeds fixnum range and boxes as an owned
 /// bignum on `allocator`.
-pub fn packedElementValue(comptime T: type, allocator: std.mem.Allocator, elem: T) error{OutOfMemory}!Value {
+pub fn packedElementValue(comptime T: type, allocator: std.mem.Allocator, elem: T, owner: u32) error{OutOfMemory}!Value {
     const info = @typeInfo(T);
     if (info == .float) {
         return .{ .float = @floatCast(elem) };
@@ -485,7 +485,7 @@ pub fn packedElementValue(comptime T: type, allocator: std.mem.Allocator, elem: 
         if (info.int.signedness == .unsigned and @sizeOf(T) == 8) {
             if (elem > std.math.maxInt(i64)) {
                 const big = try BigIntManaged.initSet(allocator, elem);
-                return try ownedBignumValue(allocator, big);
+                return try ownedBignumValue(allocator, big, owner);
             }
             return .{ .fixnum = @intCast(elem) };
         }
@@ -508,13 +508,13 @@ pub const TaggedBacking = struct {
 
     /// Take ownership of the caller's reference to `inner`. The backing releases it when the
     /// last reference drops.
-    pub fn adopt(allocator: std.mem.Allocator, inner: Value) error{OutOfMemory}!*TaggedBacking {
+    pub fn adopt(allocator: std.mem.Allocator, inner: Value, owner: u32) error{OutOfMemory}!*TaggedBacking {
         const self = try allocator.create(TaggedBacking);
         self.* = .{
             .header = undefined,
             .inner = inner,
         };
-        self.header.init(allocator, destroyTaggedBacking);
+        self.header.init(allocator, destroyTaggedBacking, owner);
         return self;
     }
 
@@ -540,8 +540,8 @@ pub const TaggedPayload = struct {
 /// reference to `inner`. The returned value holds the backing's creation reference, which
 /// the caller transfers (`pushMoved`, container adoption) or releases. On failure the
 /// caller still owns `inner`.
-pub fn ownedTaggedValue(allocator: std.mem.Allocator, tag: *const VirtualType, inner: Value) error{OutOfMemory}!Value {
-    const backing = try TaggedBacking.adopt(allocator, inner);
+pub fn ownedTaggedValue(allocator: std.mem.Allocator, tag: *const VirtualType, inner: Value, owner: u32) error{OutOfMemory}!Value {
+    const backing = try TaggedBacking.adopt(allocator, inner, owner);
     return .{ .tagged = .{ .backing = backing, .tag = tag, .inner = &backing.inner } };
 }
 
@@ -769,13 +769,13 @@ pub const Set = struct {
     header: @import("container_backing.zig").ContainerHeader,
     map: std.ArrayHashMapUnmanaged(Value, void, ValueContext, true) = .{},
 
-    pub fn create(allocator: std.mem.Allocator) error{OutOfMemory}!*Set {
+    pub fn create(allocator: std.mem.Allocator, owner: u32) error{OutOfMemory}!*Set {
         const self = try allocator.create(Set);
         self.* = .{
             .header = undefined,
             .map = .{},
         };
-        self.header.init(allocator, destroySet);
+        self.header.init(allocator, destroySet, owner);
         return self;
     }
 
@@ -801,13 +801,13 @@ pub const MutableMap = struct {
     header: @import("container_backing.zig").ContainerHeader,
     map: std.StringHashMapUnmanaged(Value) = .{},
 
-    pub fn create(allocator: std.mem.Allocator) error{OutOfMemory}!*MutableMap {
+    pub fn create(allocator: std.mem.Allocator, owner: u32) error{OutOfMemory}!*MutableMap {
         const self = try allocator.create(MutableMap);
         self.* = .{
             .header = undefined,
             .map = .{},
         };
-        self.header.init(allocator, destroyMutableMap);
+        self.header.init(allocator, destroyMutableMap, owner);
         return self;
     }
 
@@ -853,13 +853,13 @@ pub const ValueMap = struct {
     header: @import("container_backing.zig").ContainerHeader,
     map: ValueEntries = .{},
 
-    pub fn create(allocator: std.mem.Allocator) error{OutOfMemory}!*ValueMap {
+    pub fn create(allocator: std.mem.Allocator, owner: u32) error{OutOfMemory}!*ValueMap {
         const self = try allocator.create(ValueMap);
         self.* = .{
             .header = undefined,
             .map = .{},
         };
-        self.header.init(allocator, destroyValueMap);
+        self.header.init(allocator, destroyValueMap, owner);
         return self;
     }
 
@@ -885,13 +885,13 @@ pub const MutableValueMap = struct {
     header: @import("container_backing.zig").ContainerHeader,
     map: ValueEntries = .{},
 
-    pub fn create(allocator: std.mem.Allocator) error{OutOfMemory}!*MutableValueMap {
+    pub fn create(allocator: std.mem.Allocator, owner: u32) error{OutOfMemory}!*MutableValueMap {
         const self = try allocator.create(MutableValueMap);
         self.* = .{
             .header = undefined,
             .map = .{},
         };
-        self.header.init(allocator, destroyMutableValueMap);
+        self.header.init(allocator, destroyMutableValueMap, owner);
         return self;
     }
 
@@ -1016,6 +1016,10 @@ pub const Parameter = struct {
 /// Anonymous markers (created by `marker` word) have empty name until defined.
 pub const Marker = struct {
     name: []const u8, // Empty for anonymous, actual name when defined with ;
+
+    /// The analysis load owner that made the marker, or zero outside analysis. Naming an anonymous
+    /// marker writes into it, so analysis may name only a marker its own load owner made.
+    owner: u32 = 0,
 };
 
 /// VirtualType represents the definition of a virtual type.
@@ -1493,11 +1497,7 @@ pub const StructInstanceBacking = struct {
 /// backing: the last release can run from a context whose arena is already gone, so
 /// nothing destroy frees may be arena-owned. A site that passes an arena anyway must
 /// prove its own release ordering pins the refcount until the arena's teardown.
-pub fn createStructInstance(
-    allocator: std.mem.Allocator,
-    struct_type: *const StructType,
-    fields: []Value,
-) error{OutOfMemory}!*StructInstance {
+pub fn createStructInstance(allocator: std.mem.Allocator, struct_type: *const StructType, fields: []Value, owner: u32) error{OutOfMemory}!*StructInstance {
     const backing = try allocator.create(StructInstanceBacking);
     backing.* = .{
         .header = undefined,
@@ -1507,7 +1507,7 @@ pub fn createStructInstance(
             .header = undefined,
         },
     };
-    backing.header.init(allocator, StructInstanceBacking.destroyStructInstance);
+    backing.header.init(allocator, StructInstanceBacking.destroyStructInstance, owner);
     backing.instance.header = &backing.header;
     return &backing.instance;
 }
@@ -1834,10 +1834,10 @@ pub const Closure = struct {
     /// Allocate a closure on `allocator` from a template whose `header` field
     /// is ignored, initializing the refcount at 1. The caller transfers that
     /// creation reference (`pushMoved`, container adoption) or releases it.
-    pub fn create(allocator: std.mem.Allocator, template: Closure) error{OutOfMemory}!*Closure {
+    pub fn create(allocator: std.mem.Allocator, template: Closure, owner: u32) error{OutOfMemory}!*Closure {
         const self = try allocator.create(Closure);
         self.* = template;
-        self.header.init(allocator, destroyClosure);
+        self.header.init(allocator, destroyClosure, owner);
         if (self.owns_body)
             closure_body_registry.register(@intFromPtr(self.instructions.ptr), self.instructions.len);
         return self;
@@ -2928,7 +2928,7 @@ test "byte array slice borrowed" {
 
 test "makeBorrowedByteArray constructs borrowed storage" {
     var items = [_]u8{ 0xAA, 0xBB, 0xCC };
-    const ba = try makeBorrowedByteArray(std.testing.allocator, items[0..]);
+    const ba = try makeBorrowedByteArray(std.testing.allocator, items[0..], 0);
     defer std.testing.allocator.destroy(ba);
 
     try std.testing.expect(ba.isBorrowed());
@@ -2939,7 +2939,7 @@ test "makeBorrowedByteArray constructs borrowed storage" {
 test "string backing adoptOwned lifecycle balances retain and release" {
     const cb = @import("container_backing.zig");
     const bytes = try std.testing.allocator.dupe(u8, "hello");
-    const val = try ownedStringValue(std.testing.allocator, bytes);
+    const val = try ownedStringValue(std.testing.allocator, bytes, 0);
     try std.testing.expectEqualStrings("hello", val.string.bytes);
     try std.testing.expect(val.string.backing != null);
 
@@ -2952,7 +2952,7 @@ test "string backing adoptOwned lifecycle balances retain and release" {
 test "string sub-slice shares the parent backing" {
     const cb = @import("container_backing.zig");
     const bytes = try std.testing.allocator.dupe(u8, "hello world");
-    const val = try ownedStringValue(std.testing.allocator, bytes);
+    const val = try ownedStringValue(std.testing.allocator, bytes, 0);
 
     const sub = Value{ .string = val.string.sub(val.string.bytes[6..]) };
     try std.testing.expectEqualStrings("world", sub.string.bytes);
@@ -2968,7 +2968,7 @@ test "string sub-slice shares the parent backing" {
 test "bignum backing adopt lifecycle balances retain and release" {
     const cb = @import("container_backing.zig");
     const big = try BigIntManaged.initSet(std.testing.allocator, 123456789);
-    const val = try ownedBignumValue(std.testing.allocator, big);
+    const val = try ownedBignumValue(std.testing.allocator, big, 0);
     try std.testing.expect(val.bignum.backing != null);
     try std.testing.expect(cb.valueCarriesBacking(val));
 
@@ -3009,9 +3009,9 @@ test "null-backed bignum retain and release are no-ops" {
 
 test "tagged backing adopt lifecycle balances retain and release" {
     const cb = @import("container_backing.zig");
-    const vec = try Vector.create(std.testing.allocator);
+    const vec = try Vector.create(std.testing.allocator, 0);
     var dummy_vt: VirtualType = undefined;
-    const val = try ownedTaggedValue(std.testing.allocator, &dummy_vt, .{ .vector = vec });
+    const val = try ownedTaggedValue(std.testing.allocator, &dummy_vt, .{ .vector = vec }, 0);
     try std.testing.expect(val.tagged.backing != null);
     try std.testing.expect(cb.valueCarriesBacking(val));
 
@@ -3177,7 +3177,7 @@ test "array equality" {
 
 /// Build a two-entry value-keyed map, inserting the entries in the given order.
 fn testValueMap(swapped: bool) !*ValueMap {
-    const m = try ValueMap.create(std.testing.allocator);
+    const m = try ValueMap.create(std.testing.allocator, 0);
     const alloc = m.header.allocator;
     if (swapped) {
         try m.map.put(alloc, .{ .fixnum = 2 }, .{ .fixnum = 20 });
@@ -3205,17 +3205,17 @@ test "value-map equality distinguishes a differing value, a differing key, and t
     const base = try testValueMap(false);
     defer base.header.release();
 
-    const other_value = try ValueMap.create(std.testing.allocator);
+    const other_value = try ValueMap.create(std.testing.allocator, 0);
     defer other_value.header.release();
     try other_value.map.put(other_value.header.allocator, .{ .fixnum = 1 }, .{ .fixnum = 10 });
     try other_value.map.put(other_value.header.allocator, .{ .fixnum = 2 }, .{ .fixnum = 99 });
 
-    const other_key = try ValueMap.create(std.testing.allocator);
+    const other_key = try ValueMap.create(std.testing.allocator, 0);
     defer other_key.header.release();
     try other_key.map.put(other_key.header.allocator, .{ .fixnum = 1 }, .{ .fixnum = 10 });
     try other_key.map.put(other_key.header.allocator, .{ .fixnum = 3 }, .{ .fixnum = 20 });
 
-    const mutable = try MutableValueMap.create(std.testing.allocator);
+    const mutable = try MutableValueMap.create(std.testing.allocator, 0);
     defer mutable.header.release();
     try mutable.map.put(mutable.header.allocator, .{ .fixnum = 1 }, .{ .fixnum = 10 });
     try mutable.map.put(mutable.header.allocator, .{ .fixnum = 2 }, .{ .fixnum = 20 });
@@ -3230,13 +3230,13 @@ test "value-map renders as the conversion that rebuilds it" {
     var buf: [128]u8 = undefined;
     var stream = std.io.fixedBufferStream(&buf);
 
-    const empty = try ValueMap.create(std.testing.allocator);
+    const empty = try ValueMap.create(std.testing.allocator, 0);
     defer empty.header.release();
     try (Value{ .value_map = empty }).write(stream.writer());
     try std.testing.expectEqualStrings("{ } >value-map", stream.getWritten());
 
     stream.reset();
-    const filled = try MutableValueMap.create(std.testing.allocator);
+    const filled = try MutableValueMap.create(std.testing.allocator, 0);
     defer filled.header.release();
     try filled.map.put(filled.header.allocator, .{ .fixnum = 1 }, .{ .boolean = true });
     try (Value{ .mutable_value_map = filled }).write(stream.writer());
