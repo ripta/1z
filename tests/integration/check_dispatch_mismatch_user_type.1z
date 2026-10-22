@@ -1,0 +1,7 @@
+\ A dispatch arm keyed on a user type names that type in the diagnostic.
+
+gadget: struct{ size: fixnum } ;
+
+grow: ( x -- x x ) generic [ dup ] ;
+
+grow: method{ gadget } [ drop ] ;

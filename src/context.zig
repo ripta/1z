@@ -41,7 +41,9 @@ const CheckDispatchTable = enum { base, overlay };
 
 /// The order `analysisDispatchEntriesForId` returns its entries in.
 pub const DispatchEntryOrder = enum {
-    /// Registration sequence, for consumers whose output must not depend on hash order.
+    /// Ancestors' arms first, then registration sequence within each context, for consumers whose
+    /// output must not depend on hash order. Each context numbers its own registrations, so
+    /// sequences are only comparable within one context.
     by_sequence,
     /// Type name, then registration sequence, for listings a person reads.
     by_type_name,
@@ -7423,6 +7425,22 @@ pub const Context = struct {
 
         var ancestor = self;
         while (true) {
+            if (ancestor != self) {
+                var ancestor_builtins = ancestor.builtin_type_values.iterator();
+                while (ancestor_builtins.next()) |entry| {
+                    if (entry.value_ptr.*.descriptor) |tv_desc| {
+                        if (tv_desc == desc) return entry.value_ptr.*;
+                    }
+                }
+
+                var ancestor_resources = ancestor.resource_type_values.iterator();
+                while (ancestor_resources.next()) |entry| {
+                    if (entry.value_ptr.*.descriptor) |tv_desc| {
+                        if (tv_desc == desc) return entry.value_ptr.*;
+                    }
+                }
+            }
+
             // Self reads all its frames; an ancestor is read only through its
             // stable scope (the durable floor and below), never its live
             // transient frames, so this walk stays clear of another task's
@@ -8410,9 +8428,33 @@ pub const Context = struct {
         self.acquireSharedRead();
         defer self.releaseSharedRead();
 
-        const slice = try self.collectDispatchEntriesLocked(dispatch_id, true, alloc);
-        self.sortDispatchEntries(slice, order);
-        return slice;
+        var level_ends: std.ArrayListUnmanaged(usize) = .{};
+        defer level_ends.deinit(alloc);
+
+        const slice = try self.collectDispatchEntriesLevels(dispatch_id, true, &level_ends, alloc);
+
+        if (order == .by_type_name) {
+            self.sortDispatchEntries(slice, order);
+            return slice;
+        }
+
+        // Each context numbers its own registrations from zero, so sequences from different levels
+        // cannot be compared. The ancestors' arms come first, then the child's.
+        defer alloc.free(slice);
+
+        const ordered = try alloc.alloc(DispatchTable.KeyEntryPair, slice.len);
+        var out: usize = 0;
+        var k = level_ends.items.len;
+        while (k > 0) {
+            k -= 1;
+            const start = if (k == 0) 0 else level_ends.items[k - 1];
+            const segment = slice[start..level_ends.items[k]];
+            self.sortDispatchEntries(segment, .by_sequence);
+            @memcpy(ordered[out .. out + segment.len], segment);
+            out += segment.len;
+        }
+
+        return ordered;
     }
 
     /// Collect the entries registered under `dispatch_id` across this context and its ancestors,
@@ -8425,6 +8467,18 @@ pub const Context = struct {
         self: *const Context,
         dispatch_id: u32,
         include_overlay: bool,
+        alloc: Allocator,
+    ) ![]DispatchTable.KeyEntryPair {
+        return self.collectDispatchEntriesLevels(dispatch_id, include_overlay, null, alloc);
+    }
+
+    /// Like `collectDispatchEntriesLocked`. When `level_ends` is set, it receives the end index of
+    /// each context's entries in the result, innermost context first.
+    fn collectDispatchEntriesLevels(
+        self: *const Context,
+        dispatch_id: u32,
+        include_overlay: bool,
+        level_ends: ?*std.ArrayListUnmanaged(usize),
         alloc: Allocator,
     ) ![]DispatchTable.KeyEntryPair {
         var results: std.ArrayListUnmanaged(DispatchTable.KeyEntryPair) = .{};
@@ -8446,6 +8500,8 @@ pub const Context = struct {
             }
 
             try collectUnseenDispatchEntries(&ctx.dispatch.entries, dispatch_id, &seen, &results, alloc);
+
+            if (level_ends) |ends| try ends.append(alloc, results.items.len);
         }
 
         return results.toOwnedSlice(alloc);
@@ -15746,6 +15802,63 @@ test "analysisDispatchEntriesForId: an overlay arm replaces the base arm it shad
     try std.testing.expectEqual(@as(usize, 2), live.len);
     try std.testing.expectEqual(fixnum, live[0].key.type_a);
     try std.testing.expectEqual(@as([*]const Instruction, &live_body), live[0].entry.body.quotation.instructions.ptr);
+}
+
+test "analysisDispatchEntriesForId: root arms precede a child's, and the child's arm wins a shared key" {
+    var root = Context.init(std.testing.allocator);
+    defer root.deinit();
+
+    const fixnum = root.lookupBuiltinTypeValue("fixnum").?.descriptor.?;
+    const string = root.lookupBuiltinTypeValue("string").?.descriptor.?;
+    const vector = root.lookupBuiltinTypeValue("vector").?.descriptor.?;
+    const float = root.lookupBuiltinTypeValue("float").?.descriptor.?;
+    const unary = root.getDispatchUnarySentinel().descriptor.?;
+    const root_body = [_]Instruction{.{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 0 }};
+    const child_body = [_]Instruction{.{ .op = .{ .push_literal = .{ .fixnum = 2 } }, .line = 0 }};
+
+    const did: u32 = 979;
+    try root.registerDispatch(.{ .dispatch_id = did, .type_a = string, .type_b = unary }, .{ .body = .{ .quotation = .{ .instructions = &root_body } } }, false);
+    try root.registerDispatch(.{ .dispatch_id = did, .type_a = fixnum, .type_b = unary }, .{ .body = .{ .quotation = .{ .instructions = &root_body } } }, false);
+    try root.registerDispatch(.{ .dispatch_id = did, .type_a = vector, .type_b = unary }, .{ .body = .{ .quotation = .{ .instructions = &root_body } } }, false);
+
+    var child = try Context.initChild(std.testing.allocator, &root, .analysis);
+    defer child.deinit();
+
+    // The child numbers its own registrations from zero, so its sequences sit below the root's.
+    try child.registerDispatch(.{ .dispatch_id = did, .type_a = float, .type_b = unary }, .{ .body = .{ .quotation = .{ .instructions = &child_body } } }, false);
+    try child.registerDispatch(.{ .dispatch_id = did, .type_a = fixnum, .type_b = unary }, .{ .body = .{ .quotation = .{ .instructions = &child_body } } }, false);
+
+    const alloc = child.arena.allocator();
+    const pairs = try child.analysisDispatchEntriesForId(did, .by_sequence, alloc);
+    try std.testing.expectEqual(@as(usize, 4), pairs.len);
+
+    try std.testing.expectEqual(string, pairs[0].key.type_a);
+    try std.testing.expectEqual(vector, pairs[1].key.type_a);
+    try std.testing.expectEqual(@as([*]const Instruction, &root_body), pairs[0].entry.body.quotation.instructions.ptr);
+    try std.testing.expectEqual(@as([*]const Instruction, &root_body), pairs[1].entry.body.quotation.instructions.ptr);
+
+    try std.testing.expectEqual(float, pairs[2].key.type_a);
+    try std.testing.expectEqual(fixnum, pairs[3].key.type_a);
+    try std.testing.expectEqual(@as([*]const Instruction, &child_body), pairs[2].entry.body.quotation.instructions.ptr);
+    try std.testing.expectEqual(@as([*]const Instruction, &child_body), pairs[3].entry.body.quotation.instructions.ptr);
+}
+
+test "lookupTypeNameByDescriptor: a child names the root's builtin and resource types" {
+    var root = Context.init(std.testing.allocator);
+    defer root.deinit();
+
+    var child = try Context.initChild(std.testing.allocator, &root, .analysis);
+    defer child.deinit();
+
+    const fixnum_desc = root.lookupBuiltinTypeValue("fixnum").?.descriptor.?;
+    try std.testing.expectEqualStrings("fixnum", child.lookupTypeNameByDescriptor(fixnum_desc).?);
+
+    var resource_desc = value_mod.TypeDescriptor{ .kind = .builtin };
+    var resource_tv = value_mod.TypeValue{ .name = "probe-resource", .descriptor = &resource_desc };
+    try root.resource_type_values.put(root.allocator, "probe-resource", &resource_tv);
+    defer _ = root.resource_type_values.remove("probe-resource");
+
+    try std.testing.expectEqualStrings("probe-resource", child.lookupTypeNameByDescriptor(&resource_desc).?);
 }
 
 test "seedEntryWord: the baked dispatch id keeps another word's replayed methods out of the guard" {

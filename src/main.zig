@@ -31,7 +31,6 @@ const MemoryLimitAllocator = memory_limit.MemoryLimitAllocator;
 const container_limits = @import("container_limits.zig");
 const task_mod = @import("task.zig");
 const trace_mod = @import("trace.zig");
-const call_graph = @import("call_graph.zig");
 const effect_inference = @import("effect_inference.zig");
 const aot_freeze = @import("aot_freeze.zig");
 const aot_type_inference = @import("aot_type_inference.zig");
@@ -5077,15 +5076,9 @@ fn batch(ctx: *Context, file_path: []const u8, show_stack: bool) u8 {
     }
 
     if (ctx.check_mode) {
-        _ = call_graph.build(&ctx.dictionary, .{ .context = ctx }, ctx.quotationAllocator()) catch |err| {
-            err_writer.print("Error building call graph: {any}\n", .{err}) catch {};
-            err_writer.flush() catch {};
-            return 1;
-        };
-
         const pragma_settings = effect_inference.readCheckPragmas(ctx);
 
-        var engine = effect_inference.InferenceEngine.init(&ctx.dictionary, &ctx.dispatch, ctx.local_frames.items, ctx.quotationAllocator(), pragma_settings.severity_override, pragma_settings.suppressed, pragma_settings.suppress_undeclared, &ctx.builtin_type_values, ctx.getAnyTypeSentinel(), pragma_settings.type_check_mode, pragma_settings.arity_check_mode, pragma_settings.default_arm_mode, pragma_settings.never_returns_mode, ctx);
+        var engine = effect_inference.InferenceEngine.init(ctx, ctx.quotationAllocator(), pragma_settings.severity_override, pragma_settings.suppressed, pragma_settings.suppress_undeclared, ctx.getAnyTypeSentinel(), pragma_settings.type_check_mode, pragma_settings.arity_check_mode, pragma_settings.default_arm_mode, pragma_settings.never_returns_mode);
         defer engine.deinit();
         engine.analyzeAll(ctx.current_source) catch |err| {
             err_writer.print("Error during effect inference: {any}\n", .{err}) catch {};

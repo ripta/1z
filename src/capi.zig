@@ -18,7 +18,6 @@ const StatementProcessor = statement_mod.StatementProcessor;
 const capi_core = @import("capi_core.zig");
 
 const effect_inference = @import("effect_inference.zig");
-const call_graph = @import("call_graph.zig");
 
 const errors_mod = @import("primitives/errors.zig");
 const pascalToKebabRuntime = errors_mod.pascalToKebabRuntime;
@@ -965,28 +964,19 @@ export fn onez_check(ptr: ?*anyopaque, code: [*]const u8, len: usize) c_int {
         },
     }
 
-    _ = call_graph.build(&ctx.dictionary, .{ .context = ctx }, ctx.quotationAllocator()) catch {
-        setLastError(handle, "onez_check: failed to build call graph", .{});
-        return 1;
-    };
-
     const settings = effect_inference.readCheckPragmas(ctx);
 
     var engine = effect_inference.InferenceEngine.init(
-        &ctx.dictionary,
-        &ctx.dispatch,
-        ctx.local_frames.items,
+        ctx,
         ctx.quotationAllocator(),
         settings.severity_override,
         settings.suppressed,
         settings.suppress_undeclared,
-        &ctx.builtin_type_values,
         ctx.getAnyTypeSentinel(),
         settings.type_check_mode,
         settings.arity_check_mode,
         settings.default_arm_mode,
         settings.never_returns_mode,
-        ctx,
     );
     defer engine.deinit();
 

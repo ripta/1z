@@ -9,7 +9,6 @@ const dict_mod = @import("../dictionary.zig");
 const WordDefinition = dict_mod.WordDefinition;
 const StackEffect = @import("../stack_effect.zig").StackEffect;
 const effect_inference = @import("../effect_inference.zig");
-const call_graph = @import("../call_graph.zig");
 const parser = @import("../parser.zig");
 const formatter = @import("../formatter.zig");
 const value_mod = @import("../value.zig");
@@ -483,23 +482,17 @@ pub const Server = struct {
         }
 
         // Run InferenceEngine
-        _ = call_graph.build(&self.ctx.dictionary, .{ .context = self.ctx }, self.ctx.quotationAllocator()) catch return;
-
         var engine = effect_inference.InferenceEngine.init(
-            &self.ctx.dictionary,
-            &self.ctx.dispatch,
-            self.ctx.local_frames.items,
+            self.ctx,
             self.ctx.quotationAllocator(),
             null,
             false,
             false,
-            &self.ctx.builtin_type_values,
             self.ctx.getAnyTypeSentinel(),
             .err,
             .err,
             .err,
             .warning,
-            self.ctx,
         );
         defer engine.deinit();
         engine.analyzeAll(uri) catch return;
