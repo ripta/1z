@@ -1,0 +1,5 @@
+=== a statement past the buffer fails the run and names the limit and the line ===
+PASS: the run fails
+PASS: the error names its type
+PASS: the error names the limit
+PASS: the error names the line

@@ -5018,13 +5018,21 @@ fn checkBatch(ctx: *Context, file_path: []const u8, show_stack: bool) u8 {
     const stderr_file: File = .stderr();
     var stderr_buf: [4096]u8 = undefined;
     var stderr = stderr_file.writerStreaming(&stderr_buf);
-    const err_writer = &stderr.interface;
 
     const stdout_file: File = .stdout();
     var stdout_buf: [4096]u8 = undefined;
     var stdout = stdout_file.writerStreaming(&stdout_buf);
-    const out_writer = &stdout.interface;
 
+    return checkBatchTo(ctx, file_path, show_stack, &stderr.interface, &stdout.interface);
+}
+
+fn checkBatchTo(
+    ctx: *Context,
+    file_path: []const u8,
+    show_stack: bool,
+    err_writer: *std.Io.Writer,
+    out_writer: *std.Io.Writer,
+) u8 {
     const file = std.fs.cwd().openFile(file_path, .{}) catch |err| {
         err_writer.print("Error opening file '{s}': {any}\n", .{ file_path, err }) catch {};
         err_writer.flush() catch {};
@@ -5180,6 +5188,83 @@ fn runFileStatements(
 // =============================================================================
 // Tests - import other modules to run their tests
 // =============================================================================
+
+test "a document with no parse error reads the same to the language server as to the check command" {
+    const allocator = std.testing.allocator;
+    const lsp = @import("lsp/mod.zig");
+
+    var root = Context.initWithPrelude(allocator);
+    defer root.deinit();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const documents = [_][]const u8{
+        "ok: ( n -- n ) [ 1 + ] ;\nuses-ok: ( n -- n ) [ ok ok ] ;\n",
+        "wrong: ( -- x ) [ ] ;\n",
+        "bad-arity: ( a b -- c ) [ + + ] ;\n",
+        "unknown-word: ( -- ) [ no-such-word-anywhere ] ;\n",
+        "keeps: ( -- x ) [ 1 ] ;\nrepeats: ( -- x ) [ keeps keeps drop ] ;\n",
+    };
+
+    for (documents) |text| {
+        try tmp.dir.writeFile(.{ .sub_path = "doc.1z", .data = text });
+        const path = try tmp.dir.realpathAlloc(allocator, "doc.1z");
+        defer allocator.free(path);
+
+        var err_buf: [8192]u8 = undefined;
+        var out_buf: [8192]u8 = undefined;
+        var err_writer = std.Io.Writer.fixed(&err_buf);
+        var out_writer = std.Io.Writer.fixed(&out_buf);
+
+        var check_child = try Context.initChild(allocator, &root, .analysis_reusing);
+        defer check_child.deinit();
+        const exit_code = checkBatchTo(&check_child, path, false, &err_writer, &out_writer);
+
+        var reader = std.Io.Reader.fixed("");
+        var sink: [65536]u8 = undefined;
+        var writer = std.Io.Writer.fixed(&sink);
+        var transport = lsp.Transport.init(allocator, &reader, &writer);
+        var server = lsp.Server.init(allocator, &transport, &root, .zig);
+        defer server.deinit();
+
+        const built = try server.buildAnalysis("file:///doc.1z", text);
+        defer {
+            built.child.deinit();
+            allocator.destroy(built.child);
+        }
+        try std.testing.expectEqual(@as(usize, 0), built.parse_failures.len);
+
+        var served = try server.diagnose(built.child, text, built.parse_failures);
+        defer served.deinit();
+
+        var expected: std.ArrayListUnmanaged(u8) = .{};
+        defer expected.deinit(allocator);
+        var any_error = false;
+        for (served.diagnostics) |diag| {
+            const severity = switch (diag.severity) {
+                1 => "err",
+                2 => "warning",
+                else => "note",
+            };
+            if (diag.severity == 1) any_error = true;
+            try expected.writer(allocator).print("{d}: {s}: {s}\n", .{ diag.range.start.line + 1, severity, diag.message });
+        }
+
+        var printed: std.ArrayListUnmanaged(u8) = .{};
+        defer printed.deinit(allocator);
+        var lines = std.mem.splitScalar(u8, err_writer.buffered(), '\n');
+        while (lines.next()) |line| {
+            if (line.len == 0) continue;
+            const after_source = std.mem.indexOfScalar(u8, line, ':') orelse return error.TestUnexpectedResult;
+            try printed.appendSlice(allocator, line[after_source + 1 ..]);
+            try printed.append(allocator, '\n');
+        }
+
+        try std.testing.expectEqualStrings(expected.items, printed.items);
+        try std.testing.expectEqual(any_error, exit_code != 0);
+    }
+}
 
 test {
     _ = @import("value.zig");

@@ -15,6 +15,7 @@ const value_mod = @import("../value.zig");
 const Instruction = value_mod.Instruction;
 const DispatchKey = @import("../dispatch.zig").DispatchKey;
 const analysis_build = @import("../analysis_build.zig");
+const pascalToKebabRuntime = @import("../primitives/errors.zig").pascalToKebabRuntime;
 
 const Allocator = std.mem.Allocator;
 
@@ -44,21 +45,21 @@ fn fileUriDir(alloc: Allocator, uri: []const u8) Allocator.Error!?[]u8 {
 const runCheckStatements = analysis_build.runCheckStatements;
 
 pub const Server = struct {
-    const AnalysisResult = struct {
+    pub const AnalysisResult = struct {
         arena: std.heap.ArenaAllocator,
         diagnostics: []const types.LspDiagnostic,
 
-        fn deinit(self: *AnalysisResult) void {
+        pub fn deinit(self: *AnalysisResult) void {
             self.arena.deinit();
         }
     };
 
     /// What building a document's analysis produced.
-    const Built = struct {
+    pub const Built = struct {
         child: *Context,
-        /// The 1-based line a parse error stopped the build on, or null when the whole document
-        /// parsed. The statements before it still ran.
-        parse_error_line: ?usize,
+        /// Every parse error of the last pass, on the child's arena. Empty when the whole document
+        /// parsed.
+        parse_failures: []const analysis_build.ParseFailure,
     };
 
     /// Builds a document's analysis. The server's own build is the default. A test replaces it to
@@ -80,7 +81,6 @@ pub const Server = struct {
     const Document = struct {
         text: []u8,
         child: ?*Context = null,
-        parse_error_line: ?usize = null,
         failure: ?Failure = null,
         published: ?AnalysisResult = null,
 
@@ -141,12 +141,42 @@ pub const Server = struct {
         self.documents.deinit();
     }
 
-    /// Build a child of the server's context for one document and run its check statements. The
-    /// child owns copies of the `uri` and the directory, so nothing it keeps borrows a request.
-    fn buildAnalysis(self: *Server, uri: []const u8, text: []const u8) anyerror!Built {
+    /// Build a child of the server's context for one document and run its check statements.
+    ///
+    /// A document that parses builds in one pass. A parse error sends the build through a second
+    /// pass on a fresh child, because parse-time words in the abandoned prefix have already run.
+    /// A second pass that still ends inside an open string runs a third with the string guard off.
+    /// The last pass's child is the one kept.
+    pub fn buildAnalysis(self: *Server, uri: []const u8, text: []const u8) anyerror!Built {
         const source_dir = try fileUriDir(self.allocator, uri);
         defer if (source_dir) |dir| self.allocator.free(dir);
 
+        var child: ?*Context = try self.newAnalysisChild(uri, source_dir);
+        errdefer if (child) |c| self.destroyChild(c);
+
+        var outcome = try analysis_build.runCheckStatements(child.?, text, null);
+
+        if (outcome.failed_start_line) |start| {
+            var recovery: analysis_build.Recovery = .{ .split_from = start };
+
+            while (true) {
+                self.destroyChild(child.?);
+                child = null;
+                child = try self.newAnalysisChild(uri, source_dir);
+
+                outcome = try analysis_build.runCheckStatements(child.?, text, recovery);
+
+                const open = outcome.open_string_line orelse break;
+                if (recovery.guard_off_from != null) break;
+                recovery.guard_off_from = open;
+            }
+        }
+
+        return .{ .child = child.?, .parse_failures = outcome.failures };
+    }
+
+    /// The child owns copies of the `uri` and the directory, so nothing it keeps borrows a request.
+    fn newAnalysisChild(self: *Server, uri: []const u8, source_dir: ?[]const u8) !*Context {
         const child = try self.allocator.create(Context);
         errdefer self.allocator.destroy(child);
 
@@ -155,10 +185,12 @@ pub const Server = struct {
 
         try analysis_build.begin(child, uri, source_dir);
 
-        return .{
-            .child = child,
-            .parse_error_line = try analysis_build.runCheckStatements(child, text),
-        };
+        return child;
+    }
+
+    fn destroyChild(self: *Server, child: *Context) void {
+        child.deinit();
+        self.allocator.destroy(child);
     }
 
     /// Main loop: read requests and dispatch until exit.
@@ -347,7 +379,6 @@ pub const Server = struct {
             self.dropChild(doc);
             self.allocator.free(doc.text);
             doc.text = owned_text;
-            doc.parse_error_line = null;
             doc.failure = null;
             return;
         }
@@ -367,8 +398,7 @@ pub const Server = struct {
         const child = doc.child orelse return;
         doc.child = null;
 
-        child.deinit();
-        self.allocator.destroy(child);
+        self.destroyChild(child);
         self.live_children -= 1;
     }
 
@@ -403,16 +433,10 @@ pub const Server = struct {
         };
 
         doc.child = built.child;
-        doc.parse_error_line = built.parse_error_line;
         doc.failure = null;
         self.live_children += 1;
 
-        if (built.parse_error_line) |line| {
-            self.publishParseError(uri, doc, line);
-            return;
-        }
-
-        const result = self.diagnose(built.child, doc.text) catch |err| {
+        const result = self.diagnose(built.child, doc.text, built.parse_failures) catch |err| {
             self.dropChild(doc);
             self.recordFailure(uri, doc, err, retry);
             return;
@@ -453,30 +477,6 @@ pub const Server = struct {
         self.publish(uri, diags);
     }
 
-    /// Publish a version that stopped on a parse error.
-    ///
-    /// The statements before the error still ran, so queries answer from them. The diagnostics
-    /// last published are republished, or a bare "parse error" at the failing line when nothing
-    /// was published yet.
-    fn publishParseError(self: *Server, uri: []const u8, doc: *Document, error_line: usize) void {
-        if (doc.published) |published| {
-            self.publish(uri, published.diagnostics);
-            return;
-        }
-
-        const lsp_line: i64 = if (error_line > 1) @intCast(error_line - 1) else 0;
-        const diags = [1]types.LspDiagnostic{.{
-            .range = .{
-                .start = .{ .line = lsp_line, .character = 0 },
-                .end = .{ .line = lsp_line, .character = 0 },
-            },
-            .severity = 1,
-            .source = "1z",
-            .message = "parse error",
-        }};
-        self.publish(uri, &diags);
-    }
-
     fn publish(self: *Server, uri: []const u8, diagnostics: []const types.LspDiagnostic) void {
         self.transport.writeNotification("textDocument/publishDiagnostics", types.PublishDiagnosticsParams{
             .uri = uri,
@@ -484,8 +484,32 @@ pub const Server = struct {
         }) catch {};
     }
 
+    /// The byte length of every line of `text`, so a range's end is found without rescanning.
+    fn lineLengths(allocator: Allocator, text: []const u8) Allocator.Error![]const i64 {
+        var lengths: std.ArrayListUnmanaged(i64) = .{};
+        var scan_lines = std.mem.splitScalar(u8, text, '\n');
+        while (scan_lines.next()) |scan_line| {
+            try lengths.append(allocator, @intCast(scan_line.len));
+        }
+        return lengths.toOwnedSlice(allocator);
+    }
+
+    /// The length of the 0-based `line`, or 0 past the end of the text.
+    fn lineEnd(lengths: []const i64, line: i64) i64 {
+        const index: usize = @intCast(line);
+        return if (index < lengths.len) lengths[index] else 0;
+    }
+
     /// Run the inference engine over the kept child and map what it reports to LSP diagnostics.
-    fn diagnose(self: *Server, child: *Context, text: []const u8) !AnalysisResult {
+    ///
+    /// One diagnostic per parse error comes first, carrying the parser's own type and message.
+    /// A range ends at the line's byte length, as every diagnostic here has.
+    pub fn diagnose(
+        self: *Server,
+        child: *Context,
+        text: []const u8,
+        parse_failures: []const analysis_build.ParseFailure,
+    ) !AnalysisResult {
         var analysis_arena = std.heap.ArenaAllocator.init(self.allocator);
         errdefer analysis_arena.deinit();
         const arena_alloc = analysis_arena.allocator();
@@ -506,19 +530,31 @@ pub const Server = struct {
         try engine.analyzeAll(child.current_source);
 
         var lsp_diags: std.ArrayListUnmanaged(types.LspDiagnostic) = .{};
+        const line_lengths = try lineLengths(arena_alloc, text);
+
+        for (parse_failures) |failure| {
+            const lsp_line: i64 = if (failure.line > 0) @intCast(failure.line - 1) else 0;
+
+            var kebab_buf: [128]u8 = undefined;
+            const kebab = pascalToKebabRuntime(failure.error_type, &kebab_buf);
+            const message = if (failure.message) |detail|
+                try std.fmt.allocPrint(arena_alloc, "{s}: {s}", .{ kebab, detail })
+            else
+                try arena_alloc.dupe(u8, kebab);
+
+            try lsp_diags.append(arena_alloc, .{
+                .range = .{
+                    .start = .{ .line = lsp_line, .character = 0 },
+                    .end = .{ .line = lsp_line, .character = lineEnd(line_lengths, lsp_line) },
+                },
+                .severity = 1,
+                .source = "1z",
+                .message = message,
+            });
+        }
+
         for (engine.getDiagnostics()) |diag| {
             const lsp_line: i64 = if (diag.source_line > 0) @intCast(diag.source_line - 1) else 0;
-
-            var end_char: i64 = 0;
-            var line_idx: usize = 0;
-            var scan_lines = std.mem.splitScalar(u8, text, '\n');
-            while (scan_lines.next()) |scan_line| {
-                if (line_idx == @as(usize, @intCast(lsp_line))) {
-                    end_char = @intCast(scan_line.len);
-                    break;
-                }
-                line_idx += 1;
-            }
 
             const severity: i64 = switch (diag.severity) {
                 .err => 1,
@@ -531,7 +567,7 @@ pub const Server = struct {
             try lsp_diags.append(arena_alloc, .{
                 .range = .{
                     .start = .{ .line = lsp_line, .character = 0 },
-                    .end = .{ .line = lsp_line, .character = end_char },
+                    .end = .{ .line = lsp_line, .character = lineEnd(line_lengths, lsp_line) },
                 },
                 .severity = severity,
                 .source = "1z",
@@ -2705,10 +2741,14 @@ const Session = struct {
     }
 
     fn query(self: *Session, method: []const u8, uri: []const u8, character: usize) ![]const u8 {
+        return self.queryAt(method, uri, 0, character);
+    }
+
+    fn queryAt(self: *Session, method: []const u8, uri: []const u8, line: usize, character: usize) ![]const u8 {
         const json = try std.fmt.allocPrint(
             std.testing.allocator,
-            "{{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"{s}\",\"params\":{{\"textDocument\":{{\"uri\":\"{s}\"}},\"position\":{{\"line\":0,\"character\":{d}}}}}}}",
-            .{ method, uri, character },
+            "{{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"{s}\",\"params\":{{\"textDocument\":{{\"uri\":\"{s}\"}},\"position\":{{\"line\":{d},\"character\":{d}}}}}}}",
+            .{ method, uri, line, character },
         );
         defer std.testing.allocator.free(json);
 
@@ -2930,7 +2970,7 @@ test "documentSymbol reads the import frame, not the top frame" {
     try std.testing.expect(std.mem.indexOf(u8, symbols, "\"frame-word\"") != null);
 }
 
-test "a parse error keeps the statements before it and republishes the last diagnostics" {
+test "an unclosed bracket still yields hover and symbols for the definitions below it" {
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
     try ctx.loadPrelude(null);
@@ -2940,20 +2980,180 @@ test "a parse error keeps the statements before it and republishes the last diag
     session.start(std.testing.allocator, &ctx, &out_buf);
     defer session.stop();
 
-    const first = try session.open(test_uri, "kept: ( -- x ) [ ] ;\\n[ unclosed");
-    try std.testing.expect(std.mem.indexOf(u8, first, "parse error") != null);
-    try std.testing.expect(session.server.documents.get(test_uri).?.published == null);
+    const text = "above: ( -- x ) [ 1 ] ;\\n[ unclosed\\nbelow: ( -- x ) [ 2 ] ;\\nlast: ( -- x ) [ 3 ] ;";
+    const published = try session.open(test_uri, text);
+    try std.testing.expect(std.mem.indexOf(u8, published, "publishDiagnostics") != null);
 
-    const hovered = try session.hover(test_uri, 2);
-    try std.testing.expect(std.mem.indexOf(u8, hovered, "kept") != null);
+    const child = session.server.documents.get(test_uri).?.child.?;
+    try std.testing.expect(child.lookupWord("above") != null);
+    try std.testing.expect(child.lookupWord("below") != null);
+    try std.testing.expect(child.lookupWord("last") != null);
+    try std.testing.expectEqual(@as(usize, 1), session.server.live_children);
 
-    _ = try session.change(test_uri, "kept: ( -- x ) [ ] ;");
+    const hovered = try session.queryAt("textDocument/hover", test_uri, 2, 2);
+    try std.testing.expect(std.mem.indexOf(u8, hovered, "below") != null);
+
+    const symbols = try session.query("textDocument/documentSymbol", test_uri, 0);
+    try std.testing.expect(std.mem.indexOf(u8, symbols, "\"last\"") != null);
+}
+
+test "a parse diagnostic carries the parser's message at the opener's line" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+    try ctx.loadPrelude(null);
+
+    var out_buf: [65536]u8 = undefined;
+    var session: Session = undefined;
+    session.start(std.testing.allocator, &ctx, &out_buf);
+    defer session.stop();
+
+    const text = "above: ( -- x ) [ 1 ] ;\\nbroken: ( -- x ) [\\n  1\\n  [ 2\\nbelow: ( -- x ) [ 2 ] ;";
+    const sent = try session.open(test_uri, text);
+    try std.testing.expect(std.mem.indexOf(u8, sent, "unmatched-open-bracket") != null);
+
     const published = session.server.documents.get(test_uri).?.published.?;
-    try std.testing.expect(published.diagnostics.len > 0);
+    var parse_diagnostics: usize = 0;
+    for (published.diagnostics) |diag| {
+        if (std.mem.indexOf(u8, diag.message, "unmatched-open-bracket") == null) continue;
 
-    const again = try session.change(test_uri, "kept: ( -- x ) [ ] ;\\n[ unclosed");
-    try std.testing.expect(std.mem.indexOf(u8, again, "kept") != null);
-    try std.testing.expect(std.mem.indexOf(u8, again, "parse error") == null);
+        parse_diagnostics += 1;
+        try std.testing.expectEqual(@as(i64, 3), diag.range.start.line);
+        try std.testing.expectEqual(@as(i64, 1), diag.severity);
+    }
+    try std.testing.expectEqual(@as(usize, 1), parse_diagnostics);
+}
+
+test "a version that ends in an unclosed quote recovers the definitions after it" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+    try ctx.loadPrelude(null);
+
+    var out_buf: [65536]u8 = undefined;
+    var session: Session = undefined;
+    session.start(std.testing.allocator, &ctx, &out_buf);
+    defer session.stop();
+
+    const text = "a: ( -- x ) [ 1 ] ;\\nb: ( -- s ) [ \\\"oops ] ;\\nc: ( -- x ) [ 2 ] ;";
+    _ = try session.open(test_uri, text);
+
+    const child = session.server.documents.get(test_uri).?.child.?;
+    try std.testing.expect(child.lookupWord("a") != null);
+    try std.testing.expect(child.lookupWord("c") != null);
+    try std.testing.expectEqual(@as(usize, 1), session.server.live_children);
+
+    const published = session.server.documents.get(test_uri).?.published.?;
+    var found = false;
+    for (published.diagnostics) |diag| {
+        if (std.mem.indexOf(u8, diag.message, "unmatched-open-quote") == null) continue;
+        found = true;
+        try std.testing.expectEqual(@as(i64, 1), diag.range.start.line);
+    }
+    try std.testing.expect(found);
+}
+
+test "a fixed document stops publishing its parse diagnostics" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+    try ctx.loadPrelude(null);
+
+    var out_buf: [65536]u8 = undefined;
+    var session: Session = undefined;
+    session.start(std.testing.allocator, &ctx, &out_buf);
+    defer session.stop();
+
+    const broken = try session.open(test_uri, "kept: ( -- x ) [ 1 ] ;\\n[ unclosed");
+    try std.testing.expect(std.mem.indexOf(u8, broken, "unmatched-open-bracket") != null);
+
+    const fixed = try session.change(test_uri, "kept: ( -- x ) [ 1 ] ;");
+    try std.testing.expect(std.mem.indexOf(u8, fixed, "unmatched-open-bracket") == null);
+}
+
+test "a document with several parse errors publishes one diagnostic for each" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+    try ctx.loadPrelude(null);
+
+    var out_buf: [65536]u8 = undefined;
+    var session: Session = undefined;
+    session.start(std.testing.allocator, &ctx, &out_buf);
+    defer session.stop();
+
+    const text = "a: ( -- x ) [ 1 ] ;\\n[ open1\\nb: ( -- x ) [ 2 ] ;\\n[ open2\\nc: ( -- x ) [ 3 ] ;";
+    _ = try session.open(test_uri, text);
+
+    const child = session.server.documents.get(test_uri).?.child.?;
+    try std.testing.expect(child.lookupWord("a") != null);
+    try std.testing.expect(child.lookupWord("b") != null);
+    try std.testing.expect(child.lookupWord("c") != null);
+
+    const published = session.server.documents.get(test_uri).?.published.?;
+    var lines: [2]i64 = undefined;
+    var found: usize = 0;
+    for (published.diagnostics) |diag| {
+        if (std.mem.indexOf(u8, diag.message, "unmatched-open-bracket") == null) continue;
+        if (found < lines.len) lines[found] = diag.range.start.line;
+        found += 1;
+    }
+
+    try std.testing.expectEqual(@as(usize, 2), found);
+    try std.testing.expectEqual(@as(i64, 1), lines[0]);
+    try std.testing.expectEqual(@as(i64, 3), lines[1]);
+}
+
+test "a stray brace or parenthesis is skipped past, and the definition after it is kept" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+    try ctx.loadPrelude(null);
+
+    const documents = [_]struct { text: []const u8, kebab: []const u8 }{
+        .{ .text = "} stray\\n  ]\\n  )\\nlater: ( -- x ) [ 1 ] ;", .kebab = "unmatched-close-brace" },
+        .{ .text = ") stray\\n  }\\n  ]\\nlater: ( -- x ) [ 1 ] ;", .kebab = "unmatched-close-paren" },
+    };
+
+    for (documents) |doc| {
+        var out_buf: [65536]u8 = undefined;
+        var session: Session = undefined;
+        session.start(std.testing.allocator, &ctx, &out_buf);
+        defer session.stop();
+
+        _ = try session.open(test_uri, doc.text);
+
+        const child = session.server.documents.get(test_uri).?.child.?;
+        try std.testing.expect(child.lookupWord("later") != null);
+
+        const published = session.server.documents.get(test_uri).?.published.?;
+        var parse_errors: usize = 0;
+        for (published.diagnostics) |diag| {
+            if (std.mem.indexOf(u8, diag.message, "unmatched-") == null) continue;
+            parse_errors += 1;
+            try std.testing.expect(std.mem.indexOf(u8, diag.message, doc.kebab) != null);
+            try std.testing.expectEqual(@as(i64, 0), diag.range.start.line);
+        }
+        try std.testing.expectEqual(@as(usize, 1), parse_errors);
+    }
+}
+
+test "building a broken document under allocation failure runs every pass and leaves nothing behind" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+    try ctx.loadPrelude(null);
+
+    const text = "a: ( -- x ) [ 1 ] ;\\nb: ( -- s ) [ \\\"oops ] ;\\nc: ( -- x ) [ 2 ] ;\\n[ open\\nd: ( -- x ) [ 3 ] ;";
+
+    var fail_index: usize = 0;
+    while (true) : (fail_index += 1) {
+        var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{ .fail_index = fail_index });
+
+        var out_buf: [65536]u8 = undefined;
+        var session: Session = undefined;
+        session.start(failing.allocator(), &ctx, &out_buf);
+
+        _ = session.open(test_uri, text) catch {};
+        _ = session.queryAt("textDocument/hover", test_uri, 2, 2) catch {};
+        session.stop();
+
+        if (!failing.has_induced_failure) break;
+    }
 }
 
 test "building a document under allocation failure leaves nothing behind" {
@@ -3049,8 +3249,8 @@ test "a statement that runs out of memory fails the build instead of being dropp
         failing.fail_index = failing.alloc_index + extra;
 
         var failed = false;
-        if (analysis_build.runCheckStatements(&child, text)) |line| {
-            try std.testing.expectEqual(@as(?usize, null), line);
+        if (analysis_build.runCheckStatements(&child, text, null)) |outcome| {
+            try std.testing.expectEqual(@as(usize, 0), outcome.failures.len);
         } else |err| {
             try std.testing.expectEqual(error.OutOfMemory, err);
             failed = true;

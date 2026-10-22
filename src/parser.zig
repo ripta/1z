@@ -35,6 +35,7 @@ pub fn processEscapes(allocator: Allocator, input: []const u8) ![]u8 {
     var i: usize = 0;
     while (i < input.len) {
         if (input[i] == '\\') {
+            const escape_start = i;
             const parsed = std.zig.string_literal.parseEscapeSequence(input, &i);
             switch (parsed) {
                 .success => |codepoint| {
@@ -44,10 +45,11 @@ pub fn processEscapes(allocator: Allocator, input: []const u8) ![]u8 {
                     out_idx += len;
                 },
                 .failure => {
-                    // Invalid escape - keep backslash
-                    result[out_idx] = input[i];
+                    // The parser has already moved past the escape, so reading `input[i]` here ran
+                    // off the end of a string that ends in a backslash.
+                    result[out_idx] = '\\';
                     out_idx += 1;
-                    i += 1;
+                    i = escape_start + 1;
                 },
             }
             continue;
@@ -97,6 +99,7 @@ pub const ParseError = error{
     UnterminatedTokenScan,
     MalformedStackEffect,
     InvalidArrayElement,
+    StatementTooLong,
     OutOfMemory,
     ParseTimeExecutionError,
     DebuggerQuit,
@@ -2490,4 +2493,22 @@ test "bare use with no filename yet reports incompleteness" {
     const result = parseTopLevel(alloc, &tokenizer, &ctx);
 
     try std.testing.expectError(ParseError.UnterminatedTokenScan, result);
+}
+
+test "processEscapes keeps the backslash of an invalid escape and reads on after it" {
+    const keeps = try processEscapes(std.testing.allocator, "a\\qb");
+    defer std.testing.allocator.free(keeps);
+    try std.testing.expectEqualStrings("a\\qb", keeps);
+
+    const trailing = try processEscapes(std.testing.allocator, "abc\\");
+    defer std.testing.allocator.free(trailing);
+    try std.testing.expectEqualStrings("abc\\", trailing);
+
+    const before_newline = try processEscapes(std.testing.allocator, "abc\\\n");
+    defer std.testing.allocator.free(before_newline);
+    try std.testing.expectEqualStrings("abc\\\n", before_newline);
+
+    const valid = try processEscapes(std.testing.allocator, "a\\nb");
+    defer std.testing.allocator.free(valid);
+    try std.testing.expectEqualStrings("a\nb", valid);
 }

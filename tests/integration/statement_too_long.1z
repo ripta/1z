@@ -1,0 +1,47 @@
+\ A statement past the 64 KiB statement buffer is a parse error. The fixture is generated in a
+\ temporary directory, so no 64 KiB file sits in the repository.
+\
+\ The interpreter path arrives as the sole command-line argument via the harness @self-exe
+\ directive. The case runs @raw so the harness supplies the standard library through the
+\ environment.
+
+use { using-temp-directory: } "os/fs" ;
+use { path-join: } "os/path" ;
+use { repeat: } "strings" ;
+use "process" ;
+use "testing" ;
+
+\ One line of 4000 bytes, which is under the file reader's own line limit.
+(long-line): ( -- string ) [ "1 " 2000 repeat ] ;
+
+\ A bracket that opens on line 1 and takes 17 lines of 4001 bytes each. The 17th passes the buffer.
+(write-fixture): ( path: string -- ) [
+  wf-lines: (long-line) "\n" #append 17 repeat ;
+  wf-text: "[\n" wf-lines #append "] drop\n" #append ;
+
+  write: stream-open
+  dup wf-text stream-write-string drop
+  stream-close
+] ;
+
+"a statement past the buffer fails the run and names the limit and the line" test-section
+
+[
+  [
+    stl-dir:  swap ;
+    stl-self: command-line-args 0 #nth ;
+    stl-path: stl-dir "long.1z" path-join ;
+
+    stl-path (write-fixture)
+
+    stl-self "run" stl-path 3 array-n
+    <stdio-opts> capture-all
+    stl-result: swap ;
+    stl-text: stl-result stderr>> bytes> ;
+
+    stl-result exit-code>> 0 > "the run fails" assert-true
+    stl-text "statement-too-long" #in? "the error names its type" assert-true
+    stl-text "65536" #in? "the error names the limit" assert-true
+    stl-text "line 18" #in? "the error names the line" assert-true
+  ] using-temp-directory
+] task-scope
