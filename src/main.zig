@@ -5125,6 +5125,7 @@ fn batch(ctx: *Context, file_path: []const u8, show_stack: bool) u8 {
 test {
     _ = @import("value.zig");
     _ = @import("stack.zig");
+    _ = @import("analysis_shadow.zig");
     _ = @import("context.zig");
     _ = @import("body_keyed_stores.zig");
     _ = @import("arena_origin.zig");

@@ -37,8 +37,8 @@ pub const OnceCell = struct {
     name: []const u8 = "",
 
     /// The analysis load owner whose dictionary registered the cell, or zero for a cell made
-    /// outside analysis. Forcing a cold cell publishes into it, so analysis may force only a cell
-    /// its own load owner registered.
+    /// outside analysis. Forcing a cold cell publishes into it, so analysis forces a cell of another
+    /// owner on a copy its own load owner holds.
     owner_tag: u32 = 0,
 
     /// Read without the mutex on every reference, so a hit costs a load and a branch. The

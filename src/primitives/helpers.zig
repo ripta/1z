@@ -20,6 +20,7 @@ const Task = @import("../task.zig").Task;
 const Channel = @import("../channel.zig").Channel;
 const dispatch_mod = @import("../dispatch.zig");
 const container_backing = @import("../container_backing.zig");
+const analysis_shadow = @import("../analysis_shadow.zig");
 
 const stack_effect_mod = @import("../stack_effect.zig");
 const StackEffect = stack_effect_mod.StackEffect;
@@ -47,29 +48,28 @@ pub fn genSrcLocFrom(alloc: Allocator, entry: ?Value) !GenSrcLoc {
     return src_loc;
 }
 
-/// The shared entry to every in-place container write.
+/// The check for a write the analysis must refuse rather than redirect.
 ///
-/// Analysis may mutate only a container its own load owner made. Outside analysis the check is a
-/// flag test. Inside it, the check is one integer comparison. A write into a container an
-/// ancestor made raises `analysis-escape` before anything is mutated.
-///
-/// A primitive that has already popped its operands calls this once the target is in hand and
-/// releases its references on the error. A primitive that has not popped yet checks by stack
-/// depth instead.
+/// The module cache is read by the loader through its own pointer, never through the stack, so a
+/// copy of it could not be seen by the code that probes it. A write into a cache an ancestor made
+/// raises `analysis-escape` before anything is mutated. Outside analysis the check is a flag test.
 pub inline fn beginContainerWrite(ctx: *Context, header: *const container_backing.ContainerHeader) error{AnalysisEscape}!void {
     return ctx.checkWrite(header.ownerTag(), "a container");
 }
 
-/// `beginContainerWrite` for the container at `depth` below the stack top, checked before the
-/// primitive pops anything.
+/// Make the container at `depth` below the stack top writable, before the primitive pops anything.
 ///
-/// Only a slot whose kind is in `kinds` is checked. Any other slot is left for the primitive's own
-/// type check, so a wrong-typed operand reports a type mismatch before it reports an escape.
+/// A container an ancestor made gets a copy on the nearest load owner when it has none. The
+/// primitive's pop then returns the copy, so the write lands there. Outside analysis this is a
+/// flag test. A container the owner made is left alone.
+///
+/// Only a slot whose kind is in `kinds` is touched. Any other slot is left for the primitive's own
+/// type check, so a wrong-typed operand reports its type mismatch.
 pub inline fn beginWriteAtDepth(
     ctx: *Context,
     depth: usize,
     comptime kinds: []const std.meta.Tag(Value),
-) error{AnalysisEscape}!void {
+) error{OutOfMemory}!void {
     if (!ctx.in_analysis) return;
     return beginWriteAtDepthInAnalysis(ctx, depth, kinds);
 }
@@ -78,14 +78,31 @@ fn beginWriteAtDepthInAnalysis(
     ctx: *Context,
     depth: usize,
     comptime kinds: []const std.meta.Tag(Value),
-) error{AnalysisEscape}!void {
+) error{OutOfMemory}!void {
     const target = ctx.stack.peekN(depth) catch return;
 
     inline for (kinds) |kind| {
         if (std.meta.activeTag(target) == kind) {
-            return beginContainerWrite(ctx, &@field(target, @tagName(kind)).header);
+            _ = try ctx.writableContainer(target);
+            return;
         }
     }
+}
+
+/// Replace the container `slot` owns a reference to with its analysis copy, when a write to it
+/// would be redirected. The reference moves to the copy.
+///
+/// For a primitive that holds a popped container and cannot check by stack depth first. Outside
+/// analysis this is a flag test.
+pub inline fn adoptWritable(ctx: *Context, slot: *Value) error{OutOfMemory}!void {
+    if (!ctx.in_analysis) return;
+
+    const copy = try ctx.writableContainer(slot.*);
+    if (analysis_shadow.mutableHeader(copy) == analysis_shadow.mutableHeader(slot.*)) return;
+
+    container_backing.retainValue(copy);
+    container_backing.releaseValue(slot.*);
+    slot.* = copy;
 }
 
 /// Adopt a filled slice into a fresh owned array and push it, transferring
@@ -736,7 +753,7 @@ pub fn throwBuildUnsupported(ctx: *Context, word_name: []const u8) error{BuildUn
 
 /// Generic type-safe pop: extract a single union variant or report a type mismatch.
 pub fn popAs(comptime tag: std.meta.Tag(Value), ctx: *Context) !std.meta.TagPayload(Value, tag) {
-    const val = try ctx.stack.pop();
+    const val = if (comptime tagIsMutableContainer(tag)) try ctx.stack.pop() else try ctx.stack.popPlain();
     switch (val) {
         tag => |payload| return payload,
         else => {
@@ -745,6 +762,14 @@ pub fn popAs(comptime tag: std.meta.Tag(Value), ctx: *Context) !std.meta.TagPayl
             return error.TypeMismatch;
         },
     }
+}
+
+/// Whether a write can mutate a value of `tag` in place, so an analysis pop must redirect it.
+fn tagIsMutableContainer(comptime tag: std.meta.Tag(Value)) bool {
+    return switch (tag) {
+        .vector, .mutable_map, .byte_array, .mutable_value_map, .struct_instance => true,
+        else => false,
+    };
 }
 
 fn tagDisplayName(comptime tag: std.meta.Tag(Value)) []const u8 {
@@ -765,7 +790,7 @@ pub fn popFixnum(ctx: *Context) !i64 {
 
 /// Pop a boolean value.
 pub fn popBoolean(ctx: *Context) !bool {
-    const val = try ctx.stack.pop();
+    const val = try ctx.stack.popPlain();
     defer container_backing.releaseValue(val);
     return switch (val) {
         .boolean => |b| b,
@@ -806,7 +831,7 @@ pub fn asQuotationStamped(ctx: *Context, val: Value) !?Quotation {
 /// through the returned `Callable`, holding it across execution
 /// (`defer pc.release()`) or handing it onward where the callable escapes.
 pub fn popQuotation(ctx: *Context) !Callable {
-    const val = try ctx.stack.pop();
+    const val = try ctx.stack.popPlain();
     const quot = try asQuotationStamped(ctx, val) orelse {
         setTypeMismatchError(ctx, "quotation", val);
         container_backing.releaseValue(val);
@@ -832,7 +857,7 @@ pub const CallableWithScope = struct {
 /// context instead, before the child can start. The caller holds the popped owning reference at
 /// least until the body and scope have been copied for the child (`release`).
 pub fn popCallableWithScope(ctx: *Context) !CallableWithScope {
-    const val = try ctx.stack.pop();
+    const val = try ctx.stack.popPlain();
     switch (val) {
         .quotation => |q| {
             // A plain quotation carries no scope on the value, so source its own from this
@@ -937,7 +962,7 @@ pub const Number = union(enum) {
 };
 
 pub fn popNumber(ctx: *Context) !Number {
-    const val = try ctx.stack.pop();
+    const val = try ctx.stack.popPlain();
     return switch (val) {
         .fixnum => |i| .{ .fixnum = i },
         .float => |f| .{ .float = f },
@@ -965,7 +990,7 @@ pub fn toFloats(a: Number, b: Number) [2]f64 {
 /// Pop a duration value (tagged fixnum with inner_type "fixnum") and return
 /// the raw nanosecond count plus the original Value for re-use.
 pub fn popDuration(ctx: *Context) !struct { ns: i128, val: Value } {
-    const val = try ctx.stack.pop();
+    const val = try ctx.stack.popPlain();
     return switch (val) {
         .tagged => |t| {
             if (!std.mem.eql(u8, t.tag.inner_type, "fixnum")) {

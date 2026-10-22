@@ -806,7 +806,12 @@ pub fn nativeNthMut(ctx: *Context) anyerror!void {
     switch (seq) {
         .vector => |v| {
             v.header.lock();
-            ctx.assertWriteAllowed(v.header.ownerTag());
+            ctx.checkWrite(v.header.ownerTag(), "a container") catch |err| {
+                v.header.unlock();
+                container_backing.releaseValue(value);
+                container_backing.releaseValue(seq);
+                return err;
+            };
             if (idx >= v.list.items.len) {
                 const vec_len = v.list.items.len;
                 v.header.unlock();
@@ -826,7 +831,12 @@ pub fn nativeNthMut(ctx: *Context) anyerror!void {
         },
         .byte_array => |b| {
             b.header.lock();
-            ctx.assertWriteAllowed(b.header.ownerTag());
+            ctx.checkWrite(b.header.ownerTag(), "a container") catch |err| {
+                b.header.unlock();
+                container_backing.releaseValue(value);
+                container_backing.releaseValue(seq);
+                return err;
+            };
             const bytes = b.slice();
             if (idx >= bytes.len) {
                 const ba_len = bytes.len;
@@ -1736,7 +1746,13 @@ pub fn nativeAppendMut(ctx: *Context) anyerror!void {
 
     vec.header.lock();
 
-    ctx.assertWriteAllowed(vec.header.ownerTag());
+    ctx.checkWrite(vec.header.ownerTag(), "a container") catch |err| {
+        vec.header.unlock();
+        container_backing.releaseValues(items);
+        container_backing.releaseValue(seq);
+        container_backing.releaseValue(.{ .vector = vec });
+        return err;
+    };
     var appended: usize = 0;
     while (appended < items.len) : (appended += 1) {
         vec.list.append(vec.header.allocator, items[appended]) catch |err| {
@@ -2202,7 +2218,12 @@ fn nativePushMut(ctx: *Context) anyerror!void {
 
     vec.header.lock();
 
-    ctx.assertWriteAllowed(vec.header.ownerTag());
+    ctx.checkWrite(vec.header.ownerTag(), "a container") catch |err| {
+        vec.header.unlock();
+        container_backing.releaseValue(elem);
+        container_backing.releaseValue(.{ .vector = vec });
+        return err;
+    };
     const append_result = vec.list.append(vec.header.allocator, elem);
     vec.header.unlock();
     append_result catch |err| {
@@ -2226,7 +2247,11 @@ fn nativePopMut(ctx: *Context) anyerror!void {
 
     vec.header.lock();
 
-    ctx.assertWriteAllowed(vec.header.ownerTag());
+    ctx.checkWrite(vec.header.ownerTag(), "a container") catch |err| {
+        vec.header.unlock();
+        container_backing.releaseValue(.{ .vector = vec });
+        return err;
+    };
     if (vec.list.items.len == 0) {
         vec.header.unlock();
         container_backing.releaseValue(.{ .vector = vec });
@@ -2261,7 +2286,12 @@ fn nativeUnshiftMut(ctx: *Context) anyerror!void {
 
     vec.header.lock();
 
-    ctx.assertWriteAllowed(vec.header.ownerTag());
+    ctx.checkWrite(vec.header.ownerTag(), "a container") catch |err| {
+        vec.header.unlock();
+        container_backing.releaseValue(elem);
+        container_backing.releaseValue(.{ .vector = vec });
+        return err;
+    };
     const insert_result = vec.list.insert(vec.header.allocator, 0, elem);
     vec.header.unlock();
     insert_result catch |err| {
@@ -2285,7 +2315,11 @@ fn nativeShiftMut(ctx: *Context) anyerror!void {
 
     vec.header.lock();
 
-    ctx.assertWriteAllowed(vec.header.ownerTag());
+    ctx.checkWrite(vec.header.ownerTag(), "a container") catch |err| {
+        vec.header.unlock();
+        container_backing.releaseValue(.{ .vector = vec });
+        return err;
+    };
     if (vec.list.items.len == 0) {
         vec.header.unlock();
         container_backing.releaseValue(.{ .vector = vec });
@@ -2792,7 +2826,11 @@ fn nativeShrinkMut(ctx: *Context) anyerror!void {
     switch (seq) {
         .byte_array => |ba| {
             ba.header.lock();
-            ctx.assertWriteAllowed(ba.header.ownerTag());
+            ctx.checkWrite(ba.header.ownerTag(), "a container") catch |err| {
+                ba.header.unlock();
+                container_backing.releaseValue(seq);
+                return err;
+            };
             const bytes = ba.slice();
             if (n > bytes.len) {
                 const ba_len = bytes.len;
@@ -2821,7 +2859,11 @@ fn nativeShrinkMut(ctx: *Context) anyerror!void {
         },
         .vector => |vec| {
             vec.header.lock();
-            ctx.assertWriteAllowed(vec.header.ownerTag());
+            ctx.checkWrite(vec.header.ownerTag(), "a container") catch |err| {
+                vec.header.unlock();
+                container_backing.releaseValue(.{ .vector = vec });
+                return err;
+            };
             if (n > vec.list.items.len) {
                 const vec_len = vec.list.items.len;
                 vec.header.unlock();
@@ -2874,7 +2916,12 @@ fn nativeGrowMut(ctx: *Context) anyerror!void {
     switch (seq) {
         .byte_array => |ba| {
             ba.header.lock();
-            ctx.assertWriteAllowed(ba.header.ownerTag());
+            ctx.checkWrite(ba.header.ownerTag(), "a container") catch |err| {
+                ba.header.unlock();
+                container_backing.releaseValue(fill);
+                container_backing.releaseValue(seq);
+                return err;
+            };
             const bytes = ba.slice();
             if (n < bytes.len) {
                 const ba_len = bytes.len;
@@ -2934,7 +2981,12 @@ fn nativeGrowMut(ctx: *Context) anyerror!void {
         },
         .vector => |vec| {
             vec.header.lock();
-            ctx.assertWriteAllowed(vec.header.ownerTag());
+            ctx.checkWrite(vec.header.ownerTag(), "a container") catch |err| {
+                vec.header.unlock();
+                container_backing.releaseValue(fill);
+                container_backing.releaseValue(.{ .vector = vec });
+                return err;
+            };
             if (n < vec.list.items.len) {
                 const vec_len = vec.list.items.len;
                 vec.header.unlock();
@@ -3258,6 +3310,9 @@ fn nativePeekByteArray(ctx: *Context) anyerror!void {
 /// Nothing here reads `ba.storage`. A borrowed buffer accepts any write that leaves `items.len`
 /// alone, whatever its size, so a bulk run needs no more permission than a single element does.
 fn writeRunByteArray(ctx: *Context, word: []const u8, count_val: i64) anyerror!void {
+    // The array sits below the width, the value, and the offset.
+    try helpers.beginWriteAtDepth(ctx, 3, &.{.byte_array});
+
     const width_val = try popFixnum(ctx);
     const value = try ctx.stack.pop();
     const offset_val = popFixnum(ctx) catch |err| {
@@ -3276,8 +3331,6 @@ fn writeRunByteArray(ctx: *Context, word: []const u8, count_val: i64) anyerror!v
     defer container_backing.releaseValue(value);
     errdefer container_backing.releaseValue(ba_val);
 
-    try helpers.beginContainerWrite(ctx, &ba.header);
-
     _ = try validateWidth(ctx, word, width_val);
     const width: usize = @intCast(width_val);
 
@@ -3294,8 +3347,8 @@ fn writeRunByteArray(ctx: *Context, word: []const u8, count_val: i64) anyerror!v
 
     {
         ba.header.lock();
-        ctx.assertWriteAllowed(ba.header.ownerTag());
         defer ba.header.unlock();
+        try ctx.checkWrite(ba.header.ownerTag(), "a container");
         const bytes = ba.slice();
 
         // Saturating, so a run whose byte length overflows fails the range test instead of
@@ -3406,6 +3459,9 @@ const ByteArrayPair = struct {
 /// Nothing here reads either `storage`. A borrowed buffer accepts any write that leaves `items.len`
 /// alone, whatever its size, so a bulk copy needs no more permission than a single element does.
 fn nativeCopyByteArray(ctx: *Context) anyerror!void {
+    // The destination sits below the destination offset, the source, the source offset, and the count.
+    try helpers.beginWriteAtDepth(ctx, 4, &.{.byte_array});
+
     const count_val = try popFixnum(ctx);
     const src_offset_val = try popFixnum(ctx);
     const src_val = try ctx.stack.pop();
@@ -3424,7 +3480,6 @@ fn nativeCopyByteArray(ctx: *Context) anyerror!void {
     errdefer container_backing.releaseValue(dst_val);
 
     const dst = dst_val.byte_array;
-    try helpers.beginContainerWrite(ctx, &dst.header);
     if (src_val != .byte_array) {
         setErrorContext(ctx, "#copy! expected byte-array source, got {s}", .{valueTypeName(src_val)});
         return error.TypeMismatch;
@@ -3450,7 +3505,7 @@ fn nativeCopyByteArray(ctx: *Context) anyerror!void {
     {
         const held = ByteArrayPair.lock(dst, src);
         defer held.unlock();
-        ctx.assertWriteAllowed(dst.header.ownerTag());
+        try ctx.checkWrite(dst.header.ownerTag(), "a container");
 
         const dst_bytes = dst.slice();
         const src_bytes = src.slice();

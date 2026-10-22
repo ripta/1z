@@ -60,16 +60,9 @@ fn nativeMakeMutableValueMap(ctx: *Context) anyerror!void {
 /// generated wrap word, so freezing a key can re-enter the interpreter, and the container mutex is
 /// not reentrant.
 ///
-/// The analysis write check runs before the freeze, so a refused write never runs a wrap word.
+/// A map an ancestor made has already been swapped for its analysis copy by the caller, so the
+/// write never reaches the ancestor's map.
 pub fn putEntry(ctx: *Context, map: *ValueEntries, alloc: Allocator, header: ?*ContainerHeader, key: Value, value: Value) anyerror!void {
-    if (header) |h| {
-        helpers.beginContainerWrite(ctx, h) catch |e| {
-            container_backing.releaseValue(key);
-            container_backing.releaseValue(value);
-            return e;
-        };
-    }
-
     const stored_key = freeze.frozenKeyConsume(ctx, key) catch |e| {
         container_backing.releaseValue(key);
         container_backing.releaseValue(value);
@@ -78,7 +71,12 @@ pub fn putEntry(ctx: *Context, map: *ValueEntries, alloc: Allocator, header: ?*C
 
     if (header) |h| {
         h.lock();
-        ctx.assertWriteAllowed(h.ownerTag());
+        ctx.checkWrite(h.ownerTag(), "a container") catch |err| {
+            h.unlock();
+            container_backing.releaseValue(stored_key);
+            container_backing.releaseValue(value);
+            return err;
+        };
     }
 
     const gop = map.getOrPut(alloc, stored_key) catch {
@@ -280,6 +278,9 @@ fn nativeVmapSet(ctx: *Context) anyerror!void {
 
 /// vmap-set! ( mutable-value-map key value -- mutable-value-map )
 fn nativeVmapSetMut(ctx: *Context) anyerror!void {
+    // The map sits below the key and the new value.
+    try helpers.beginWriteAtDepth(ctx, 2, &.{.mutable_value_map});
+
     const new_value = try ctx.stack.pop();
     const key = ctx.stack.pop() catch |e| {
         container_backing.releaseValue(new_value);
@@ -357,6 +358,9 @@ fn nativeVmapDelete(ctx: *Context) anyerror!void {
 
 /// vmap-delete! ( mutable-value-map key -- mutable-value-map )
 fn nativeVmapDeleteMut(ctx: *Context) anyerror!void {
+    // The map sits below the key.
+    try helpers.beginWriteAtDepth(ctx, 1, &.{.mutable_value_map});
+
     const key = try ctx.stack.pop();
     defer container_backing.releaseValue(key);
     const map_val = try ctx.stack.pop();
@@ -372,11 +376,6 @@ fn nativeVmapDeleteMut(ctx: *Context) anyerror!void {
         },
     };
 
-    helpers.beginContainerWrite(ctx, &m.header) catch |e| {
-        container_backing.releaseValue(map_val);
-        return e;
-    };
-
     const probe = freeze.frozenKey(ctx, key) catch |e| {
         container_backing.releaseValue(map_val);
         return e;
@@ -384,7 +383,11 @@ fn nativeVmapDeleteMut(ctx: *Context) anyerror!void {
     defer probe.release();
 
     m.header.lock();
-    ctx.assertWriteAllowed(m.header.ownerTag());
+    ctx.checkWrite(m.header.ownerTag(), "a container") catch |err| {
+        m.header.unlock();
+        container_backing.releaseValue(map_val);
+        return err;
+    };
     const removed = m.map.fetchSwapRemove(probe.value);
     m.header.unlock();
 

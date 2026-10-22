@@ -133,9 +133,9 @@ fn makeBinaryArithEntry(comptime op: ArithOp, comptime type_a: NumType, comptime
     return &struct {
         fn func(ctx: *Context) anyerror!void {
             const alloc = ctx.allocator;
-            const b = try ctx.stack.pop();
+            const b = try ctx.stack.popPlain();
             defer container_backing.releaseValue(b);
-            const a = try ctx.stack.pop();
+            const a = try ctx.stack.popPlain();
             defer container_backing.releaseValue(a);
 
             if (type_a == .fixnum and type_b == .fixnum) {
@@ -177,9 +177,9 @@ fn makeDivEntry(comptime type_a: NumType, comptime type_b: NumType) *const fn (*
     return &struct {
         fn func(ctx: *Context) anyerror!void {
             const alloc = ctx.allocator;
-            const b = try ctx.stack.pop();
+            const b = try ctx.stack.popPlain();
             defer container_backing.releaseValue(b);
-            const a = try ctx.stack.pop();
+            const a = try ctx.stack.popPlain();
             defer container_backing.releaseValue(a);
 
             if (type_a == .fixnum and type_b == .fixnum) {
@@ -224,9 +224,9 @@ fn makeModEntry(comptime type_a: NumType, comptime type_b: NumType) *const fn (*
     return &struct {
         fn func(ctx: *Context) anyerror!void {
             const alloc = ctx.allocator;
-            const b = try ctx.stack.pop();
+            const b = try ctx.stack.popPlain();
             defer container_backing.releaseValue(b);
-            const a = try ctx.stack.pop();
+            const a = try ctx.stack.popPlain();
             defer container_backing.releaseValue(a);
 
             if (type_a == .fixnum and type_b == .fixnum) {
@@ -258,9 +258,9 @@ fn makeModEntry(comptime type_a: NumType, comptime type_b: NumType) *const fn (*
 fn makeEqCrossTypeEntry(comptime type_a: NumType, comptime type_b: NumType) *const fn (*Context) anyerror!void {
     return &struct {
         fn func(ctx: *Context) anyerror!void {
-            const b = try ctx.stack.pop();
+            const b = try ctx.stack.popPlain();
             defer container_backing.releaseValue(b);
-            const a = try ctx.stack.pop();
+            const a = try ctx.stack.popPlain();
             defer container_backing.releaseValue(a);
 
             if (type_a == .fixnum and type_b == .float) {
@@ -288,9 +288,9 @@ fn makeEqCrossTypeEntry(comptime type_a: NumType, comptime type_b: NumType) *con
 fn makeLtEntry(comptime type_a: NumType, comptime type_b: NumType) *const fn (*Context) anyerror!void {
     return &struct {
         fn func(ctx: *Context) anyerror!void {
-            const b = try ctx.stack.pop();
+            const b = try ctx.stack.popPlain();
             defer container_backing.releaseValue(b);
-            const a = try ctx.stack.pop();
+            const a = try ctx.stack.popPlain();
             defer container_backing.releaseValue(a);
 
             if (type_a == .fixnum and type_b == .fixnum) {
@@ -320,9 +320,9 @@ fn makeLtEntry(comptime type_a: NumType, comptime type_b: NumType) *const fn (*C
 fn makeGtEntry(comptime type_a: NumType, comptime type_b: NumType) *const fn (*Context) anyerror!void {
     return &struct {
         fn func(ctx: *Context) anyerror!void {
-            const b = try ctx.stack.pop();
+            const b = try ctx.stack.popPlain();
             defer container_backing.releaseValue(b);
-            const a = try ctx.stack.pop();
+            const a = try ctx.stack.popPlain();
             defer container_backing.releaseValue(a);
 
             if (type_a == .fixnum and type_b == .fixnum) {
@@ -352,9 +352,9 @@ fn makeGtEntry(comptime type_a: NumType, comptime type_b: NumType) *const fn (*C
 fn makeCmpEntry(comptime type_a: NumType, comptime type_b: NumType) *const fn (*Context) anyerror!void {
     return &struct {
         fn func(ctx: *Context) anyerror!void {
-            const b = try ctx.stack.pop();
+            const b = try ctx.stack.popPlain();
             defer container_backing.releaseValue(b);
-            const a = try ctx.stack.pop();
+            const a = try ctx.stack.popPlain();
             defer container_backing.releaseValue(a);
 
             const result: i64 = blk: {

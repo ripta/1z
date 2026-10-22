@@ -365,7 +365,12 @@ pub fn nativeAtSetMut(ctx: *Context) anyerror!void {
             // over `new_value`'s reference; `obj` flows into the result slot
             // via `pushMoved`. No extra retains are needed in either path.
             m.header.lock();
-            ctx.assertWriteAllowed(m.header.ownerTag());
+            ctx.checkWrite(m.header.ownerTag(), "a container") catch |err| {
+                m.header.unlock();
+                container_backing.releaseValue(new_value);
+                container_backing.releaseValue(obj);
+                return err;
+            };
             const existing_entry = m.map.getEntry(key_str);
             if (existing_entry) |entry| {
                 const displaced = entry.value_ptr.*;
@@ -421,7 +426,11 @@ pub fn nativeAtRemoveMut(ctx: *Context) anyerror!void {
     switch (obj) {
         .mutable_map => |m| {
             m.header.lock();
-            ctx.assertWriteAllowed(m.header.ownerTag());
+            ctx.checkWrite(m.header.ownerTag(), "a container") catch |err| {
+                m.header.unlock();
+                container_backing.releaseValue(obj);
+                return err;
+            };
             const removed = m.map.fetchRemove(key_str);
             m.header.unlock();
             if (removed) |kv| {

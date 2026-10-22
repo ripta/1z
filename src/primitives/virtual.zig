@@ -805,31 +805,47 @@ fn promoteItems(
 
 /// Promote a vector's elements in place. The wrap keeps the same mutable backing, so the
 /// elements are validated first and a failed call leaves the vector untouched.
+///
+/// `slot` owns the vector's reference. A vector an ancestor made is promoted on its analysis copy,
+/// and the slot then holds the copy.
 fn promoteVectorInPlace(
     ctx: *Context,
     vt: *const VirtualType,
-    v: *value_mod.Vector,
+    slot: *Value,
     expected_tv: *const value_mod.TypeValue,
     prefix: []const u8,
 ) anyerror!void {
+    const needs_promotion = blk: {
+        const v = slot.vector;
+        v.header.lock();
+        defer v.header.unlock();
+
+        var needs = false;
+        for (v.list.items, 0..) |elem, i| {
+            const elem_tv = dispatch_mod.dispatchTypeValue(elem, ctx);
+            if (elem_tv == expected_tv) continue;
+            if (!canPromoteElement(elem, expected_tv.name)) {
+                helpers.setErrorContext(ctx, "{s}{s} element at index {d} has type {s}, expected {s}", .{ prefix, vt.name, i, elem_tv.name, expected_tv.name });
+                return error.TypeMismatch;
+            }
+            needs = true;
+        }
+        break :blk needs;
+    };
+    if (!needs_promotion) return;
+
+    try helpers.adoptWritable(ctx, slot);
+
+    const v = slot.vector;
     v.header.lock();
     defer v.header.unlock();
 
-    for (v.list.items, 0..) |elem, i| {
-        const elem_tv = dispatch_mod.dispatchTypeValue(elem, ctx);
-        if (elem_tv == expected_tv) continue;
-        if (!canPromoteElement(elem, expected_tv.name)) {
-            helpers.setErrorContext(ctx, "{s}{s} element at index {d} has type {s}, expected {s}", .{ prefix, vt.name, i, elem_tv.name, expected_tv.name });
-            return error.TypeMismatch;
-        }
-    }
-
-    for (v.list.items) |*slot| {
-        if (dispatch_mod.dispatchTypeValue(slot.*, ctx) == expected_tv) continue;
-        try helpers.beginContainerWrite(ctx, &v.header);
-        const replacement = tryPromoteElement(ctx.allocator, slot.*, expected_tv.name) orelse return error.OutOfMemory;
-        const displaced = slot.*;
-        slot.* = replacement;
+    for (v.list.items) |*elem_slot| {
+        if (dispatch_mod.dispatchTypeValue(elem_slot.*, ctx) == expected_tv) continue;
+        try ctx.checkWrite(v.header.ownerTag(), "a container");
+        const replacement = tryPromoteElement(ctx.allocator, elem_slot.*, expected_tv.name) orelse return error.OutOfMemory;
+        const displaced = elem_slot.*;
+        elem_slot.* = replacement;
         container_backing.releaseValue(displaced);
     }
 }
@@ -878,7 +894,7 @@ fn typedValidateSeqElements(ctx: *Context) anyerror!void {
     const tv = try helpers.popTypeVal(ctx);
     const vt = tv.virtual_type.?;
 
-    const seq = try ctx.stack.pop();
+    var seq = try ctx.stack.pop();
 
     // Like typedValidateAndPromote, every branch re-stores the popped
     // sequence (or an in-place-promoted version of it) into its slot, so
@@ -919,8 +935,8 @@ fn typedValidateSeqElements(ctx: *Context) anyerror!void {
                 return err;
             };
         },
-        .vector => |v| {
-            try promoteVectorInPlace(ctx, vt, v, expected_tv, "");
+        .vector => {
+            try promoteVectorInPlace(ctx, vt, &seq, expected_tv, "");
             try ctx.stack.pushMoved(seq);
         },
         else => try ctx.stack.pushMoved(seq),
@@ -1273,22 +1289,35 @@ fn virtualParameterizedWrapHelper(ctx: *Context) anyerror!void {
                         val = .{ .value_map = new_map };
                     }
                 },
-                .mutable_value_map => |m| {
-                    m.header.lock();
-                    defer m.header.unlock();
+                .mutable_value_map => {
+                    const needs_promotion = blk: {
+                        const m = val.mutable_value_map;
+                        m.header.lock();
+                        defer m.header.unlock();
 
-                    for (m.map.values()) |elem| {
-                        const elem_tv = dispatch_mod.dispatchTypeValue(elem, ctx);
-                        if (elem_tv == expected_tv) continue;
-                        if (!canPromoteElement(elem, expected_tv.name)) {
-                            helpers.setErrorContext(ctx, ">{s} value has type {s}, expected {s}", .{ vt.name, elem_tv.name, expected_tv.name });
-                            return error.TypeMismatch;
+                        var needs = false;
+                        for (m.map.values()) |elem| {
+                            const elem_tv = dispatch_mod.dispatchTypeValue(elem, ctx);
+                            if (elem_tv == expected_tv) continue;
+                            if (!canPromoteElement(elem, expected_tv.name)) {
+                                helpers.setErrorContext(ctx, ">{s} value has type {s}, expected {s}", .{ vt.name, elem_tv.name, expected_tv.name });
+                                return error.TypeMismatch;
+                            }
+                            needs = true;
                         }
-                    }
+                        break :blk needs;
+                    };
 
-                    for (m.map.values()) |*slot| {
-                        if (dispatch_mod.dispatchTypeValue(slot.*, ctx) != expected_tv) {
-                            try helpers.beginContainerWrite(ctx, &m.header);
+                    if (needs_promotion) {
+                        try helpers.adoptWritable(ctx, &val);
+
+                        const m = val.mutable_value_map;
+                        m.header.lock();
+                        defer m.header.unlock();
+
+                        for (m.map.values()) |*slot| {
+                            if (dispatch_mod.dispatchTypeValue(slot.*, ctx) == expected_tv) continue;
+                            try ctx.checkWrite(m.header.ownerTag(), "a container");
                             const replacement = tryPromoteElement(ctx.allocator, slot.*, expected_tv.name) orelse return error.OutOfMemory;
                             const displaced = slot.*;
                             slot.* = replacement;
@@ -1296,27 +1325,40 @@ fn virtualParameterizedWrapHelper(ctx: *Context) anyerror!void {
                         }
                     }
                 },
-                .vector => |v| try promoteVectorInPlace(ctx, vt, v, expected_tv, ">"),
-                .mutable_map => |m| {
-                    m.header.lock();
-                    defer m.header.unlock();
+                .vector => try promoteVectorInPlace(ctx, vt, &val, expected_tv, ">"),
+                .mutable_map => {
+                    const needs_promotion = blk: {
+                        const m = val.mutable_map;
+                        m.header.lock();
+                        defer m.header.unlock();
 
-                    var scan = m.map.iterator();
-                    while (scan.next()) |entry| {
-                        const elem = entry.value_ptr.*;
-                        const elem_tv = dispatch_mod.dispatchTypeValue(elem, ctx);
-                        if (elem_tv == expected_tv) continue;
-                        if (!canPromoteElement(elem, expected_tv.name)) {
-                            helpers.setErrorContext(ctx, ">{s} value for key '{s}' has type {s}, expected {s}", .{ vt.name, entry.key_ptr.*, elem_tv.name, expected_tv.name });
-                            return error.TypeMismatch;
+                        var needs = false;
+                        var scan = m.map.iterator();
+                        while (scan.next()) |entry| {
+                            const elem = entry.value_ptr.*;
+                            const elem_tv = dispatch_mod.dispatchTypeValue(elem, ctx);
+                            if (elem_tv == expected_tv) continue;
+                            if (!canPromoteElement(elem, expected_tv.name)) {
+                                helpers.setErrorContext(ctx, ">{s} value for key '{s}' has type {s}, expected {s}", .{ vt.name, entry.key_ptr.*, elem_tv.name, expected_tv.name });
+                                return error.TypeMismatch;
+                            }
+                            needs = true;
                         }
-                    }
+                        break :blk needs;
+                    };
 
-                    var rewrite = m.map.iterator();
-                    while (rewrite.next()) |entry| {
-                        const elem = entry.value_ptr.*;
-                        if (dispatch_mod.dispatchTypeValue(elem, ctx) != expected_tv) {
-                            try helpers.beginContainerWrite(ctx, &m.header);
+                    if (needs_promotion) {
+                        try helpers.adoptWritable(ctx, &val);
+
+                        const m = val.mutable_map;
+                        m.header.lock();
+                        defer m.header.unlock();
+
+                        var rewrite = m.map.iterator();
+                        while (rewrite.next()) |entry| {
+                            const elem = entry.value_ptr.*;
+                            if (dispatch_mod.dispatchTypeValue(elem, ctx) == expected_tv) continue;
+                            try ctx.checkWrite(m.header.ownerTag(), "a container");
                             const replacement = tryPromoteElement(ctx.allocator, elem, expected_tv.name) orelse return error.OutOfMemory;
                             entry.value_ptr.* = replacement;
                             container_backing.releaseValue(elem);

@@ -3,6 +3,7 @@ const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 
 const Stack = @import("stack.zig").Stack;
+const ShadowTable = @import("analysis_shadow.zig").ShadowTable;
 const dict_mod = @import("dictionary.zig");
 const Dictionary = dict_mod.Dictionary;
 const container_backing = @import("container_backing.zig");
@@ -113,6 +114,12 @@ const Callable = @import("callable.zig").Callable;
 // interpretation, which is already what happens at runtime on every target when compile_mode
 // stays .off (the default, and the only mode reachable without a CLI --compile flag).
 const is_freestanding = builtin.os.tag == .freestanding;
+
+/// Test-only switch that lets analysis enter compiled code, so a test can show what the bar stops.
+pub var compiled_code_bar_off_for_test: if (builtin.is_test) bool else void = if (builtin.is_test) false else {};
+
+/// Test-only count of quotation bodies entered through their compiled code.
+pub var compiled_quotation_entries_for_test: if (builtin.is_test) usize else void = if (builtin.is_test) 0 else {};
 
 /// Embedded prelude source code
 pub const prelude_source = @embedFile("prelude.1z");
@@ -2176,6 +2183,7 @@ pub const Context = struct {
                     ctx.in_analysis = true;
                     ctx.check_mode = parent.check_mode;
                     ctx.check_load_epoch = parent.check_load_epoch;
+                    ctx.stack.shadows = parent.stack.shadows;
                 }
             },
             .analysis, .analysis_reusing => {
@@ -2183,6 +2191,7 @@ pub const Context = struct {
                 ctx.in_analysis = true;
                 ctx.load_owner_id = next_load_owner_id.fetchAdd(1, .monotonic);
                 if (ctx.load_owner_id == 0) @panic("load owner identities exhausted");
+                ctx.stack.shadows = try ShadowTable.create(allocator, ctx.load_owner_id);
                 if (child_kind == .analysis_reusing) ctx.reused_module_cache = parent.module_cache_value;
             },
         }
@@ -2708,6 +2717,13 @@ pub const Context = struct {
         self.container_release_list.deinit(self.allocator);
         if (self.parent_context == null) self.releaseImageSlotReferences();
 
+        // The copies hold values that may reference the arena freed below. Every task under this
+        // owner is already reaped, so nothing pops through the table any more.
+        if (self.load_owner_id != 0) {
+            if (self.stack.shadows) |table| table.destroy();
+            self.stack.shadows = null;
+        }
+
         self.trace_effect_cache.deinit(self.allocator);
         self.arena.deinit();
         self.allocator.destroy(self.arena);
@@ -2770,6 +2786,42 @@ pub const Context = struct {
     pub inline fn containerOwnerTag(self: *Context) u32 {
         if (!self.in_analysis) return 0;
         return self.nearestLoadOwner().load_owner_id;
+    }
+
+    /// Whether this context must interpret a body that has compiled code, so the shadow redirect
+    /// sees every container access.
+    ///
+    /// JIT-compiled code reads a container straight from a stack slot, and writes a struct field
+    /// there, without the stack's pop and peek. Code compiled for an ancestor can run under an
+    /// analysis context, so the entry is barred and not the emitter.
+    ///
+    /// A body that was dropped in favor of its compiled code has nothing to interpret, so it is
+    /// not barred.
+    ///
+    /// Every route from the interpreter into compiled code passes this test: a word call and its
+    /// tail call, and a quotation body, which also covers dispatch methods and `once` bodies.
+    pub inline fn compiledCodeBarred(self: *const Context, body_dropped: bool) bool {
+        if (!self.in_analysis or body_dropped) return false;
+        if (comptime builtin.is_test) {
+            if (compiled_code_bar_off_for_test) return false;
+        }
+        return true;
+    }
+
+    /// The analysis copy of `v` when it has one, and `v` otherwise. Borrowed.
+    ///
+    /// The stack pop and peek swap a container for its copy. A reader that pushes a container
+    /// without going through them calls this instead.
+    pub inline fn redirectRead(self: *Context, v: Value) Value {
+        const table = self.stack.shadows orelse return v;
+        return table.lookup(v) orelse v;
+    }
+
+    /// The analysis copy writes to `v` land in, made on first use. `v` itself outside analysis and
+    /// for a container the nearest load owner made.
+    pub inline fn writableContainer(self: *Context, v: Value) error{OutOfMemory}!Value {
+        const table = self.stack.shadows orelse return v;
+        return table.ensure(v);
     }
 
     /// Whether a write by this context may land on a target carrying `owner_tag`. A context outside
@@ -10400,6 +10452,8 @@ pub const Context = struct {
         // quotation.code_ptr is never set on freestanding targets.
         if (comptime !is_freestanding) compiled: {
             if (quotation.code_ptr) |ptr| {
+                if (self.compiledCodeBarred(quotation.instructions.len == 0)) break :compiled;
+
                 // A function with no recorded count predates the count table or was never
                 // compiled with one, so a bail there resets only the depth, as it always has.
                 const fn_state: ?*AotQuotationFnState = if (self.aot_quotation_fn_states) |states|
@@ -10426,6 +10480,7 @@ pub const Context = struct {
                 const saved_native = self.withCurrentNative(null);
                 defer self.restoreCurrentNative(saved_native);
                 const func: ir_codegen.CompiledFn = @ptrCast(@alignCast(ptr));
+                if (comptime builtin.is_test) compiled_quotation_entries_for_test += 1;
                 const result = ir_codegen.ExecResult.fromStatus(func(&jit_ctx));
                 if (result != .bail) operands.release(&self.stack);
                 switch (result) {
@@ -11053,7 +11108,11 @@ pub const Context = struct {
         // On freestanding targets word.word_id is never assigned and runtime_image_loaded is
         // never set, so effective_word_id would always resolve to null anyway.
         if (comptime !is_freestanding) {
-            const effective_word_id: ?u32 = word.word_id orelse blk: {
+            // Analysis interprets. See `compiledCodeBarred`. The test follows the id so a word
+            // with no compiled code never pays it.
+            const effective_word_id: ?u32 = if (word.word_id) |compiled_id|
+                (if (self.compiledCodeBarred(word.exec_flags.empty_compound_body)) null else compiled_id)
+            else blk: {
                 if (word.source_module == null and word.exec_flags.empty_compound_body and self.runtime_image_loaded) {
                     break :blk backfillCompiledWordId(self, name);
                 }

@@ -35,7 +35,7 @@ pub const registry_entries = [_]RegistryEntry{
 fn nativeForceOnce(ctx: *Context) anyerror!void {
     const cell_val = try ctx.stack.pop();
     defer container_backing.releaseValue(cell_val);
-    const cell = switch (cell_val) {
+    var cell = switch (cell_val) {
         .once_cell => |c| c,
         else => {
             helpers.setTypeMismatchError(ctx, "once-cell", cell_val);
@@ -43,14 +43,19 @@ fn nativeForceOnce(ctx: *Context) anyerror!void {
         },
     };
 
+    if (ctx.in_analysis and !ctx.writeAllowed(cell.owner_tag)) {
+        cell = try analysisCell(ctx, cell);
+    }
+
     if (cell.state.load(.acquire) == .forced) {
         // `push` takes the reader's reference itself, so the cell keeps the one it published.
         try ctx.stack.push(cell.value.?);
         return;
     }
 
-    // Forcing a cold cell runs its body and publishes the result into the cell. The check runs
-    // ahead of `arrive`, which would leave the cell forcing if the raise came after it.
+    // Every cell that reaches this point is one the running owner made, or a copy of one. The
+    // check stays as a backstop, ahead of `arrive`, which would leave the cell forcing if the raise
+    // came after it.
     try ctx.checkWrite(cell.owner_tag, "a once cell");
 
     while (true) {
@@ -74,6 +79,21 @@ fn nativeForceOnce(ctx: *Context) anyerror!void {
             },
         }
     }
+}
+
+/// The cell analysis forces in place of `cell`, which an ancestor owns.
+///
+/// Forcing a cold cell publishes its value into the cell. An ancestor's cell must not take a value
+/// that analysis computed, so a cold one is forced on a copy the nearest load owner owns. A forced
+/// cell is read as it stands. A copy made earlier wins over the original, so every force in one
+/// analysis agrees on one value.
+fn analysisCell(ctx: *Context, cell: *OnceCell) error{OutOfMemory}!*OnceCell {
+    const table = ctx.stack.shadows.?;
+
+    if (table.lookupCell(cell)) |copy| return copy;
+    if (cell.state.load(.acquire) == .forced) return cell;
+
+    return table.ensureCell(cell);
 }
 
 /// Run the body, then publish what it produced or hand its error to every waiter.

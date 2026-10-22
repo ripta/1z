@@ -1,7 +1,8 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const is_freestanding = builtin.os.tag == .freestanding;
-const Context = @import("../context.zig").Context;
+const context_mod = @import("../context.zig");
+const Context = context_mod.Context;
 const value_mod = @import("../value.zig");
 const Value = value_mod.Value;
 const Module = value_mod.Module;
@@ -2653,7 +2654,6 @@ fn bindHost(root: *Context, name: []const u8, source: []const u8) !Value {
 const host_definitions =
     \\pt: mutable struct{ left right } ;
     \\host-inc: ( n -- n ) [ 1 + ] ;
-    \\host-once: once ( -- n ) [ 42 ] ;
 ;
 
 test "a container made under analysis carries the load owner identity" {
@@ -2697,7 +2697,48 @@ test "analysis writes to its own containers" {
     try std.testing.expectEqual(@as(i64, 7), forced.fixnum);
 }
 
-test "no mutating word reaches a container the root owns from analysis" {
+/// Run `source` on a fresh analysis child of `root` and return the top of its stack.
+///
+/// Only an immediate value survives the child's teardown, so a caller asks for a fixnum, float, or
+/// boolean.
+fn analysisResult(root: *Context, source: []const u8) !Value {
+    var analysis = try Context.initChild(std.testing.allocator, root, .analysis);
+    defer analysis.deinit();
+
+    try runSourceLines(&analysis, source);
+    const result = try analysis.stack.pop();
+    while (analysis.stack.depth() > 0) try analysis.stack.popAndRelease();
+    return result;
+}
+
+const ShadowCase = struct {
+    source: []const u8,
+    expected: i64,
+};
+
+const shadow_cases = [_]ShadowCase{
+    .{ .source = "host-vec 4 #push! drop host-vec #len", .expected = 4 },
+    .{ .source = "host-vec #pop! drop drop host-vec #len", .expected = 2 },
+    .{ .source = "host-vec 0 #unshift! drop host-vec 0 #nth", .expected = 0 },
+    .{ .source = "host-vec #shift! drop drop host-vec 0 #nth", .expected = 2 },
+    .{ .source = "host-vec 0 9 #nth! drop host-vec 0 #nth", .expected = 9 },
+    .{ .source = "host-vec V{ 7 } #append! drop host-vec #len", .expected = 4 },
+    .{ .source = "host-vec 1 native.#shrink! drop host-vec #len", .expected = 1 },
+    .{ .source = "host-vec 5 0 native.#grow! drop host-vec #len", .expected = 5 },
+    .{ .source = "host-ba 0 9 #nth! drop host-ba 0 #nth", .expected = 9 },
+    .{ .source = "host-ba 0 9 1 #poke! drop host-ba 0 1 #peek", .expected = 9 },
+    .{ .source = "host-ba 0 9 1 2 #fill! drop host-ba 1 1 #peek", .expected = 9 },
+    .{ .source = "host-ba 0 host-ba 1 2 #copy! drop host-ba 0 1 #peek", .expected = 2 },
+    .{ .source = "host-ba 1 native.#shrink! drop host-ba #len", .expected = 1 },
+    .{ .source = "host-ba 6 0 native.#grow! drop host-ba #len", .expected = 6 },
+    .{ .source = "host-mm b: 2 @set! drop host-mm b: @get", .expected = 2 },
+    .{ .source = "host-mm a: @remove! drop host-mm #len", .expected = 0 },
+    .{ .source = "host-mvm 2 \"b\" vmap-set! drop host-mvm #len", .expected = 2 },
+    .{ .source = "host-mvm 1 vmap-delete! drop host-mvm #len", .expected = 0 },
+    .{ .source = "host-pt 5 >>left drop host-pt left>>", .expected = 5 },
+};
+
+test "every mutating word from analysis writes a copy that analysis reads back" {
     var root = Context.initWithPrelude(std.testing.allocator);
     defer root.deinit();
 
@@ -2714,28 +2755,18 @@ test "no mutating word reaches a container the root owns from analysis" {
     const pt = try bindHost(&root, "host-pt", "1 2 make-pt");
     defer container_backing.releaseValue(pt);
 
-    const statements = [_][]const u8{
-        "host-vec 4 #push!",
-        "host-vec #pop!",
-        "host-vec 0 #unshift!",
-        "host-vec #shift!",
-        "host-vec 0 9 #nth!",
-        "host-vec V{ 7 } #append!",
-        "host-vec 1 native.#shrink!",
-        "host-vec 5 0 native.#grow!",
-        "host-ba 0 9 #nth!",
-        "host-ba 0 9 1 #poke!",
-        "host-ba 0 9 1 2 #fill!",
-        "host-ba 0 host-ba 1 2 #copy!",
-        "host-ba 1 native.#shrink!",
-        "host-ba 6 0 native.#grow!",
-        "host-mm b: 2 @set!",
-        "host-mm a: @remove!",
-        "host-mvm 2 \"b\" vmap-set!",
-        "host-mvm 1 vmap-delete!",
-        "host-pt 5 >>left",
-    };
-    for (statements) |statement| try expectAnalysisEscape(&root, statement);
+    const vec_refs = vec.vector.header.refcountValue();
+
+    for (shadow_cases) |case| {
+        const result = analysisResult(&root, case.source) catch |err| {
+            std.debug.print("`{s}` failed with {s}\n", .{ case.source, @errorName(err) });
+            return err;
+        };
+        std.testing.expectEqual(case.expected, result.fixnum) catch |err| {
+            std.debug.print("`{s}` left {d}\n", .{ case.source, result.fixnum });
+            return err;
+        };
+    }
 
     try std.testing.expectEqual(@as(usize, 3), vec.vector.list.items.len);
     try std.testing.expectEqual(@as(i64, 1), vec.vector.list.items[0].fixnum);
@@ -2744,6 +2775,88 @@ test "no mutating word reaches a container the root owns from analysis" {
     try std.testing.expectEqual(@as(i64, 1), mm.mutable_map.map.get("a").?.fixnum);
     try std.testing.expectEqual(@as(usize, 1), mvm.mutable_value_map.map.count());
     try std.testing.expectEqual(@as(i64, 1), pt.struct_instance.fields[0].fixnum);
+
+    try std.testing.expectEqual(vec_refs, vec.vector.header.refcountValue());
+}
+
+test "a nested container is copied on its own first write" {
+    var root = Context.initWithPrelude(std.testing.allocator);
+    defer root.deinit();
+
+    const nested = try bindHost(&root, "host-nested", "V{ } V{ 1 } #push!");
+    defer container_backing.releaseValue(nested);
+
+    const grown = try analysisResult(&root, "host-nested 0 #nth 2 #push! drop host-nested 0 #nth #len");
+    try std.testing.expectEqual(@as(i64, 2), grown.fixnum);
+
+    const outer_unchanged = try analysisResult(&root, "host-nested 0 #nth 2 #push! drop host-nested #len");
+    try std.testing.expectEqual(@as(i64, 1), outer_unchanged.fixnum);
+
+    try std.testing.expectEqual(@as(usize, 1), nested.vector.list.items.len);
+    try std.testing.expectEqual(@as(usize, 1), nested.vector.list.items[0].vector.list.items.len);
+}
+
+test "an original and its copy are one object to analysis" {
+    var root = Context.initWithPrelude(std.testing.allocator);
+    defer root.deinit();
+
+    const vec = try bindHost(&root, "host-vec", "V{ 1 2 3 }");
+    defer container_backing.releaseValue(vec);
+
+    const same = try analysisResult(&root, "V{ } host-vec #push! host-vec 4 #push! drop 0 #nth host-vec =");
+    try std.testing.expect(same.boolean);
+
+    const stale_sees_write = try analysisResult(&root, "V{ } host-vec #push! host-vec 4 #push! drop 0 #nth #len");
+    try std.testing.expectEqual(@as(i64, 4), stale_sees_write.fixnum);
+
+    try std.testing.expectEqual(@as(usize, 3), vec.vector.list.items.len);
+}
+
+test "a task under analysis shares its load owner's copies" {
+    var root = Context.initWithPrelude(std.testing.allocator);
+    defer root.deinit();
+
+    const vec = try bindHost(&root, "host-vec", "V{ 1 2 3 }");
+    defer container_backing.releaseValue(vec);
+
+    var analysis = try Context.initChild(std.testing.allocator, &root, .analysis);
+    defer analysis.deinit();
+
+    var task_under_analysis = try Context.initChild(std.testing.allocator, &analysis, .task);
+    defer task_under_analysis.deinit();
+
+    try runSourceLines(&analysis, "host-vec 4 #push! drop");
+
+    try runSourceLines(&task_under_analysis, "host-vec #len");
+    const seen_by_task = try task_under_analysis.stack.pop();
+    try std.testing.expectEqual(@as(i64, 4), seen_by_task.fixnum);
+
+    try runSourceLines(&task_under_analysis, "host-vec 5 #push! drop");
+
+    try runSourceLines(&analysis, "host-vec #len");
+    const seen_by_analysis = try analysis.stack.pop();
+    try std.testing.expectEqual(@as(i64, 5), seen_by_analysis.fixnum);
+
+    try std.testing.expectEqual(@as(usize, 3), vec.vector.list.items.len);
+}
+
+test "two analyses of one host container do not see each other's writes" {
+    var root = Context.initWithPrelude(std.testing.allocator);
+    defer root.deinit();
+
+    const vec = try bindHost(&root, "host-vec", "V{ 1 2 3 }");
+    defer container_backing.releaseValue(vec);
+
+    var first = try Context.initChild(std.testing.allocator, &root, .analysis);
+    defer first.deinit();
+    var second = try Context.initChild(std.testing.allocator, &root, .analysis);
+    defer second.deinit();
+
+    try runSourceLines(&first, "host-vec 4 #push! drop");
+    try runSourceLines(&second, "host-vec #len");
+
+    const second_len = try second.stack.pop();
+    try std.testing.expectEqual(@as(i64, 3), second_len.fixnum);
 }
 
 test "a wrong-typed operand reports a type mismatch before an escape" {
@@ -2776,7 +2889,152 @@ const host_typed_definitions =
     \\mutable-value-map(float): M{ inner-type: mutable-value-map element-type: float define: [ define-parameterized-type ] } ;
 ;
 
-test "a typed wrap from analysis promotes no element of a container the root owns" {
+test "a copy of a borrowed byte array keeps the borrowed buffer's fixed length" {
+    var root = Context.initWithPrelude(std.testing.allocator);
+    defer root.deinit();
+
+    var backing = [_]u8{ 1, 2, 3, 4 };
+    const ba = try value_mod.makeBorrowedByteArray(std.testing.allocator, &backing, 0);
+    defer container_backing.releaseValue(.{ .byte_array = ba });
+
+    container_backing.retainValue(.{ .byte_array = ba });
+    try root.defineWord("host-borrowed", .{ .name = "host-borrowed", .action = .{ .literal = .{ .byte_array = ba } } });
+
+    const written = try analysisResult(&root, "host-borrowed 0 9 #nth! drop host-borrowed 0 #nth");
+    try std.testing.expectEqual(@as(i64, 9), written.fixnum);
+
+    const still_borrowed = try analysisResult(&root, "host-borrowed 0 9 #nth! drop host-borrowed borrowed?");
+    try std.testing.expect(still_borrowed.boolean);
+
+    try std.testing.expectEqualSlices(u8, &.{ 1, 2, 3, 4 }, &backing);
+
+    var grower = try Context.initChild(std.testing.allocator, &root, .analysis);
+    defer grower.deinit();
+    try std.testing.expectError(error.InvalidArgument, runSourceLines(&grower, "host-borrowed 8 0 native.#grow!"));
+
+    var shrinker = try Context.initChild(std.testing.allocator, &root, .analysis);
+    defer shrinker.deinit();
+    try std.testing.expectError(error.InvalidArgument, runSourceLines(&shrinker, "host-borrowed 2 native.#shrink!"));
+}
+
+const RaceWorker = struct {
+    ctx: *Context,
+    failed: bool = false,
+
+    fn run(self: *RaceWorker) void {
+        self.ctx.setStackBoundsFromCurrentThread();
+
+        var round: usize = 0;
+        while (round < 40) : (round += 1) {
+            runSourceLines(self.ctx, "host-vec 1 #push! drop host-vec #len") catch {
+                self.failed = true;
+                return;
+            };
+            const len = self.ctx.stack.pop() catch {
+                self.failed = true;
+                return;
+            };
+            if (len.fixnum < 4) self.failed = true;
+        }
+    }
+};
+
+test "tasks under one analysis owner race to copy and read one host container" {
+    var root = Context.initWithPrelude(std.testing.allocator);
+    defer root.deinit();
+
+    const vec = try bindHost(&root, "host-vec", "V{ 1 2 3 }");
+    defer container_backing.releaseValue(vec);
+
+    var analysis = try Context.initChild(std.testing.allocator, &root, .analysis);
+    defer analysis.deinit();
+
+    const worker_count = 4;
+    var tasks: [worker_count]Context = undefined;
+    var workers: [worker_count]RaceWorker = undefined;
+    var threads: [worker_count]std.Thread = undefined;
+
+    var built: usize = 0;
+    defer for (tasks[0..built]) |*task| task.deinit();
+
+    while (built < worker_count) : (built += 1) {
+        tasks[built] = try Context.initChild(std.testing.allocator, &analysis, .task);
+        workers[built] = .{ .ctx = &tasks[built] };
+    }
+
+    for (&threads, &workers) |*thread, *worker| thread.* = try std.Thread.spawn(.{}, RaceWorker.run, .{worker});
+    for (threads) |thread| thread.join();
+
+    for (workers) |worker| try std.testing.expect(!worker.failed);
+
+    try runSourceLines(&analysis, "host-vec #len");
+    const total = try analysis.stack.pop();
+    try std.testing.expectEqual(@as(i64, 3 + worker_count * 40), total.fixnum);
+
+    try std.testing.expectEqual(@as(usize, 3), vec.vector.list.items.len);
+}
+
+test "analysis interprets a quotation that has compiled code" {
+    var root = Context.initWithPrelude(std.testing.allocator);
+    defer root.deinit();
+
+    const instrs = [_]value_mod.Instruction{
+        .{ .op = .{ .push_literal = .{ .fixnum = 7 } }, .line = 1 },
+    };
+    const compiled = try ir_codegen.compileWord(&instrs, 0, 1, null, null, null, null, null);
+    defer compiled.jit_buf.deinit();
+    const quotation: value_mod.Quotation = .{ .instructions = &instrs, .code_ptr = compiled.code_ptr };
+
+    var analysis = try Context.initChild(std.testing.allocator, &root, .analysis);
+    defer analysis.deinit();
+
+    const before_root = context_mod.compiled_quotation_entries_for_test;
+    try root.executeQuotationWithFrame(quotation, null);
+    try std.testing.expectEqual(@as(i64, 7), (try root.stack.pop()).fixnum);
+    try std.testing.expect(context_mod.compiled_quotation_entries_for_test > before_root);
+
+    const before_barred = context_mod.compiled_quotation_entries_for_test;
+    try analysis.executeQuotationWithFrame(quotation, null);
+    try std.testing.expectEqual(@as(i64, 7), (try analysis.stack.pop()).fixnum);
+    try std.testing.expectEqual(before_barred, context_mod.compiled_quotation_entries_for_test);
+
+    context_mod.compiled_code_bar_off_for_test = true;
+    defer context_mod.compiled_code_bar_off_for_test = false;
+
+    const before_open = context_mod.compiled_quotation_entries_for_test;
+    try analysis.executeQuotationWithFrame(quotation, null);
+    try std.testing.expectEqual(@as(i64, 7), (try analysis.stack.pop()).fixnum);
+    try std.testing.expect(context_mod.compiled_quotation_entries_for_test > before_open);
+}
+
+test "analysis interprets a host word that has compiled code" {
+    var root = Context.initWithPrelude(std.testing.allocator);
+    defer root.deinit();
+
+    try runSourceLines(&root, host_definitions);
+    try runSourceLines(&root, "host-inc: compile!");
+    try std.testing.expect(root.lookupWord("host-inc").?.word_id != null);
+
+    const before_root = ir_codegen.compiled_entries_for_test;
+    try runSourceLines(&root, "3 host-inc");
+    try std.testing.expect(ir_codegen.compiled_entries_for_test > before_root);
+    try root.stack.popAndRelease();
+
+    const before_barred = ir_codegen.compiled_entries_for_test;
+    const barred = try analysisResult(&root, "3 host-inc");
+    try std.testing.expectEqual(@as(i64, 4), barred.fixnum);
+    try std.testing.expectEqual(before_barred, ir_codegen.compiled_entries_for_test);
+
+    context_mod.compiled_code_bar_off_for_test = true;
+    defer context_mod.compiled_code_bar_off_for_test = false;
+
+    const before_open = ir_codegen.compiled_entries_for_test;
+    const open = try analysisResult(&root, "3 host-inc");
+    try std.testing.expectEqual(@as(i64, 4), open.fixnum);
+    try std.testing.expect(ir_codegen.compiled_entries_for_test > before_open);
+}
+
+test "a typed wrap from analysis promotes the elements of a copy" {
     var root = Context.initWithPrelude(std.testing.allocator);
     defer root.deinit();
 
@@ -2789,13 +3047,34 @@ test "a typed wrap from analysis promotes no element of a container the root own
     const mvm = try bindHost(&root, "host-mvm", "<mutable-value-map> \"a\" 1 vmap-set!");
     defer container_backing.releaseValue(mvm);
 
-    try expectAnalysisEscape(&root, "host-vec >vector(float)");
-    try expectAnalysisEscape(&root, "host-mm >mutable-map(float)");
-    try expectAnalysisEscape(&root, "host-mvm >mutable-value-map(float)");
+    const vec_promoted = try analysisResult(&root, "host-vec >vector(float) drop host-vec 0 #nth");
+    try std.testing.expectEqual(@as(f64, 1.0), vec_promoted.float);
+
+    const mm_promoted = try analysisResult(&root, "host-mm >mutable-map(float) drop host-mm a: @get");
+    try std.testing.expectEqual(@as(f64, 1.0), mm_promoted.float);
+
+    const mvm_promoted = try analysisResult(&root, "host-mvm >mutable-value-map(float) drop host-mvm \"a\" vmap-get");
+    try std.testing.expectEqual(@as(f64, 1.0), mvm_promoted.float);
 
     try std.testing.expectEqual(@as(i64, 1), vec.vector.list.items[0].fixnum);
     try std.testing.expectEqual(@as(i64, 1), mm.mutable_map.map.get("a").?.fixnum);
     try std.testing.expectEqual(@as(i64, 1), mvm.mutable_value_map.map.values()[0].fixnum);
+}
+
+test "a typed wrap that promotes nothing makes no copy" {
+    var root = Context.initWithPrelude(std.testing.allocator);
+    defer root.deinit();
+
+    try runSourceLines(&root, host_typed_definitions);
+
+    const vec = try bindHost(&root, "host-vec", "V{ 1.5 2.5 }");
+    defer container_backing.releaseValue(vec);
+
+    var analysis = try Context.initChild(std.testing.allocator, &root, .analysis);
+    defer analysis.deinit();
+
+    try runSourceLines(&analysis, "host-vec >vector(float) drop");
+    try std.testing.expect(analysis.stack.shadows.?.lookup(vec) == null);
 }
 
 test "load-file from analysis into a host cache raises and leaves the cache alone" {
@@ -2858,17 +3137,41 @@ test "compile! of a host mutual group from analysis raises and installs no membe
     try std.testing.expectEqual(odd_id, root.lookupWord("host-odd?").?.word_id);
 }
 
-test "forcing a host once word from analysis raises and leaves the cell cold" {
+const host_once_definitions =
+    \\host-once: once ( -- n ) [ 42 ] ;
+    \\host-once-vec: once ( -- v ) [ V{ 1 } ] ;
+;
+
+test "forcing a host once word from analysis publishes into the load owner and leaves the cell cold" {
     var root = Context.initWithPrelude(std.testing.allocator);
     defer root.deinit();
 
-    try runSourceLines(&root, host_definitions);
+    try runSourceLines(&root, host_once_definitions);
 
-    try expectAnalysisEscape(&root, "host-once");
-
-    try runSourceLines(&root, "host-once");
-    const forced = try root.stack.pop();
+    const forced = try analysisResult(&root, "host-once");
     try std.testing.expectEqual(@as(i64, 42), forced.fixnum);
+
+    const computed_once = try analysisResult(&root, "host-once-vec 2 #push! drop host-once-vec #len");
+    try std.testing.expectEqual(@as(i64, 2), computed_once.fixnum);
+
+    try runSourceLines(&root, "host-once-vec #len");
+    const host_len = try root.stack.pop();
+    try std.testing.expectEqual(@as(i64, 1), host_len.fixnum);
+}
+
+test "analysis reads a host once cell the host already forced as it stands" {
+    var root = Context.initWithPrelude(std.testing.allocator);
+    defer root.deinit();
+
+    try runSourceLines(&root, host_once_definitions);
+    try runSourceLines(&root, "host-once-vec drop");
+
+    const written = try analysisResult(&root, "host-once-vec 9 #push! drop host-once-vec #len");
+    try std.testing.expectEqual(@as(i64, 2), written.fixnum);
+
+    try runSourceLines(&root, "host-once-vec #len");
+    const host_len = try root.stack.pop();
+    try std.testing.expectEqual(@as(i64, 1), host_len.fixnum);
 }
 
 test "naming a host marker from analysis raises and leaves it anonymous" {

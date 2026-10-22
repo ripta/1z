@@ -11,6 +11,12 @@ const std = @import("std");
 /// Level 3: Channel mutex (per-channel Mutex, address-ordered among peers)
 /// Level 4: Container mutex (per-container Mutex on refcounted backings)
 /// Level 5: tz_mutex (leaf-only Mutex in time.zig)
+/// Level 6: analysis shadow table lock (leaf-only RwLock in analysis_shadow.zig)
+///
+/// The shadow table lock is held only around a map probe or insert. It is never held while a
+/// container mutex is held, because a copy is made before the lock is taken. Pops of an ancestor's
+/// container take it shared from any level, including inside a container or channel critical
+/// section, so it sits above them.
 ///
 /// Channels lock the channel mutex and may call `deepCopyValue`, which
 /// locks the source container's mutex while iterating; container therefore
@@ -31,6 +37,7 @@ pub const LockLevel = enum(u8) {
     channel = 3,
     container = 4,
     tz = 5,
+    shadow_table = 6,
 };
 
 /// Per-thread lock-ordering state. Each OS thread maintains its own

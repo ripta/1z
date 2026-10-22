@@ -186,8 +186,8 @@ fn lookupUnaryWithFallback(ctx: *Context, dispatch_id: u32, a: Value) ?AutoUnwra
 pub fn tryDispatchBinary(ctx: *Context, dispatch_id: u32) !bool {
     if (ctx.stack.depth() < 2) return false;
 
-    const a = try ctx.stack.peekN(1);
-    const b = try ctx.stack.peek();
+    const a = try ctx.stack.peekPlainN(1);
+    const b = try ctx.stack.peekPlain();
 
     if (ctx.current_pic_entry) |cache| {
         if (!cache.megamorphic) {
@@ -241,7 +241,7 @@ pub fn tryDispatchBinary(ctx: *Context, dispatch_id: u32) !bool {
 pub fn tryDispatchUnary(ctx: *Context, dispatch_id: u32) !bool {
     if (ctx.stack.depth() < 1) return false;
 
-    const a = try ctx.stack.peek();
+    const a = try ctx.stack.peekPlain();
 
     if (ctx.current_pic_entry) |cache| {
         if (!cache.megamorphic) {
@@ -313,7 +313,7 @@ pub fn dispatchUnaryOnValue(ctx: *Context, dispatch_id: u32, val: Value) !bool {
 pub fn tryDispatchContainerAtDepth(ctx: *Context, dispatch_id: u32, depth: usize, unwrap_base: bool) !bool {
     if (ctx.stack.depth() < depth + 1) return false;
 
-    const peeked = try ctx.stack.peekN(depth);
+    const peeked = try ctx.stack.peekPlainN(depth);
     const a_type = dispatch_mod.dispatchDescriptor(peeked, ctx);
     if (ctx.lookupUnaryDispatch(dispatch_id, a_type)) |entry| {
         try executeDispatchBody(ctx, entry);
@@ -349,8 +349,8 @@ pub fn tryDispatchBinaryViaCmp(ctx: *Context, comptime op: enum { eq, lt, gt }) 
     if (ctx.stack.depth() < 2) return false;
     const cmp_id = ctx.resolveDispatchId("cmp") orelse return false;
 
-    const a = try ctx.stack.peekN(1);
-    const b = try ctx.stack.peek();
+    const a = try ctx.stack.peekPlainN(1);
+    const b = try ctx.stack.peekPlain();
     if (lookupBinaryWithFallback(ctx, cmp_id, a, b)) |result| {
         if (result.unwrap_a or result.unwrap_b) {
             try autoUnwrapBinaryOperands(ctx, result.unwrap_a, result.unwrap_b);
@@ -415,8 +415,8 @@ pub fn tryDispatchGenericById(ctx: *Context, dispatch_id: u32, pic: ?*Polymorphi
                 cache.count = 0;
             } else if (cache.count > 0) {
                 if (ctx.stack.depth() >= 2) {
-                    const a = try ctx.stack.peekN(1);
-                    const b = try ctx.stack.peek();
+                    const a = try ctx.stack.peekPlainN(1);
+                    const b = try ctx.stack.peekPlain();
                     const a_type = dispatch_mod.dispatchDescriptor(a, ctx);
                     const b_type = dispatch_mod.dispatchDescriptor(b, ctx);
                     if (cache.lookup(a_type, b_type)) |entry| {
@@ -427,7 +427,7 @@ pub fn tryDispatchGenericById(ctx: *Context, dispatch_id: u32, pic: ?*Polymorphi
                         return true;
                     }
                 } else if (ctx.stack.depth() >= 1) {
-                    const a = try ctx.stack.peek();
+                    const a = try ctx.stack.peekPlain();
                     const a_type = dispatch_mod.dispatchDescriptor(a, ctx);
                     if (cache.lookup(a_type, ctx.getDispatchUnarySentinel().descriptor.?)) |entry| {
                         if (entry.unwrap_a) {
@@ -442,8 +442,8 @@ pub fn tryDispatchGenericById(ctx: *Context, dispatch_id: u32, pic: ?*Polymorphi
     }
 
     if (ctx.stack.depth() >= 2) {
-        const a = try ctx.stack.peekN(1);
-        const b = try ctx.stack.peek();
+        const a = try ctx.stack.peekPlainN(1);
+        const b = try ctx.stack.peekPlain();
         if (lookupBinaryWithFallback(ctx, dispatch_id, a, b)) |result| {
             if (pic) |cache| {
                 if (!cache.megamorphic) {
@@ -468,7 +468,7 @@ pub fn tryDispatchGenericById(ctx: *Context, dispatch_id: u32, pic: ?*Polymorphi
     }
 
     if (ctx.stack.depth() >= 1) {
-        const a = try ctx.stack.peek();
+        const a = try ctx.stack.peekPlain();
         if (lookupUnaryWithFallback(ctx, dispatch_id, a)) |result| {
             if (pic) |cache| {
                 if (!cache.megamorphic) {
@@ -560,8 +560,8 @@ pub fn satisfiesAndDispatch(
     switch (arity) {
         .binary => {
             if (ctx.stack.depth() < 2) return error.StackUnderflow;
-            const a = try ctx.stack.peekN(1);
-            const b = try ctx.stack.peek();
+            const a = try ctx.stack.peekPlainN(1);
+            const b = try ctx.stack.peekPlain();
             try checkOperand(ctx, a, constraint);
             try checkOperand(ctx, b, constraint);
 
@@ -575,7 +575,7 @@ pub fn satisfiesAndDispatch(
         },
         .unary => {
             if (ctx.stack.depth() < 1) return error.StackUnderflow;
-            const a = try ctx.stack.peek();
+            const a = try ctx.stack.peekPlain();
             try checkOperand(ctx, a, constraint);
 
             if (lookupUnaryWithFallback(ctx, dispatch_id, a)) |result| {

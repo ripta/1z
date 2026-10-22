@@ -335,6 +335,9 @@ fn structFieldGetHelper(ctx: *Context) anyerror!void {
 
 /// Trampoline helper ( instance value struct-type field-index -- instance )
 fn structFieldSetHelper(ctx: *Context) anyerror!void {
+    // The instance sits below the index, the struct type, and the new value.
+    try helpers.beginWriteAtDepth(ctx, 3, &.{.struct_instance});
+
     const idx: usize = @intCast(try helpers.popFixnum(ctx));
     const st = try helpers.popStructType(ctx);
     const new_val = try ctx.stack.pop();
@@ -357,8 +360,6 @@ fn structFieldSetHelper(ctx: *Context) anyerror!void {
             return error.TypeMismatch;
         }
 
-        if (inst.header) |h| try helpers.beginContainerWrite(ctx, h);
-
         if (st.field_types.len != 0) {
             const expected = st.field_types[idx] orelse unreachable;
             if (!try protocols.valueMatchesElement(ctx, new_val, expected)) {
@@ -373,7 +374,11 @@ fn structFieldSetHelper(ctx: *Context) anyerror!void {
     // value and move the new value in. The popped instance reference itself returns to the
     // stack via pushMoved. Sound only for a headered instance, where the instance is the one
     // owner of its field set; no runtime creation path produces a headerless one.
-    if (inst.header) |h| ctx.assertWriteAllowed(h.ownerTag());
+    if (inst.header) |h| ctx.checkWrite(h.ownerTag(), "a container") catch |err| {
+        container_backing.releaseValue(new_val);
+        container_backing.releaseValue(.{ .struct_instance = inst });
+        return err;
+    };
     container_backing.releaseValue(inst.fields[idx]);
     inst.fields[idx] = new_val;
     ctx.stack.pushMoved(.{ .struct_instance = inst }) catch |err| {

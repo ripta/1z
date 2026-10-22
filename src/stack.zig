@@ -2,6 +2,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const Value = @import("value.zig").Value;
 const container_backing = @import("container_backing.zig");
+const ShadowTable = @import("analysis_shadow.zig").ShadowTable;
 
 pub const StackError = error{
     StackUnderflow,
@@ -15,6 +16,12 @@ pub const StackError = error{
 /// borrows. See spec/language/15-value-lifecycle.md.
 pub const Stack = struct {
     items: std.ArrayListUnmanaged(Value),
+
+    /// The copies an analysis load owner keeps of its ancestors' containers. Null for a stack
+    /// outside analysis, so a pop pays one test. It is the choke point of the shadow redirect: a
+    /// container with a copy is swapped for the copy at `pop`, `peek`, and `peekN`.
+    shadows: ?*ShadowTable = null,
+
     allocator: Allocator,
 
     /// Initialize a new empty stack.
@@ -55,14 +62,28 @@ pub const Stack = struct {
     /// No atomic refcount change. The caller MUST either re-store the
     /// value (via push, container insert, etc.) or release it via
     /// `container_backing.releaseValue`.
+    ///
+    /// A stack under analysis swaps a container for its copy here, and the caller owns the copy.
     pub fn pop(self: *Stack) StackError!Value {
+        const v = self.items.pop() orelse return error.StackUnderflow;
+        if (self.shadows) |table| {
+            @branchHint(.unlikely);
+            return table.redirectPopped(v);
+        }
+        return v;
+    }
+
+    /// Pop for a caller that accepts only kinds a write can never mutate in place, such as a
+    /// fixnum, a boolean, or a quotation. Such a value is never redirected, so this skips the test.
+    pub fn popPlain(self: *Stack) StackError!Value {
         return self.items.pop() orelse error.StackUnderflow;
     }
 
     /// Pop and release the top value in one step, for the common
-    /// discard pattern (`_ = try stack.pop()` and `nativeDrop`).
+    /// discard pattern (`_ = try stack.pop()` and `nativeDrop`). The value is
+    /// dropped, so it is never redirected.
     pub fn popAndRelease(self: *Stack) StackError!void {
-        const v = try self.pop();
+        const v = self.items.pop() orelse return error.StackUnderflow;
         container_backing.releaseValue(v);
     }
 
@@ -73,7 +94,7 @@ pub const Stack = struct {
         if (self.items.items.len == 0) {
             return error.StackUnderflow;
         }
-        return self.items.items[self.items.items.len - 1];
+        return self.redirected(self.items.items[self.items.items.len - 1]);
     }
 
     /// Return the value at depth n from top (0 = top, 1 = second from top, etc.)
@@ -83,7 +104,32 @@ pub const Stack = struct {
         if (n >= self.items.items.len) {
             return error.StackUnderflow;
         }
+        return self.redirected(self.items.items[self.items.items.len - 1 - n]);
+    }
+
+    /// `peek` for a caller that reads only the value's type, which a copy shares with its original.
+    pub fn peekPlain(self: *const Stack) StackError!Value {
+        if (self.items.items.len == 0) {
+            return error.StackUnderflow;
+        }
+        return self.items.items[self.items.items.len - 1];
+    }
+
+    /// `peekN` for a caller that reads only the value's type. See `peekPlain`.
+    pub fn peekPlainN(self: *const Stack, n: usize) StackError!Value {
+        if (n >= self.items.items.len) {
+            return error.StackUnderflow;
+        }
         return self.items.items[self.items.items.len - 1 - n];
+    }
+
+    /// A borrowed value, with a container swapped for its copy under analysis.
+    inline fn redirected(self: *const Stack, v: Value) Value {
+        if (self.shadows) |table| {
+            @branchHint(.unlikely);
+            return table.lookup(v) orelse v;
+        }
+        return v;
     }
 
     /// Return the number of items on the stack.

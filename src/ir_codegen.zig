@@ -6275,6 +6275,10 @@ fn tryEmitInlineTypedValidateAndPromote(
     return true;
 }
 
+/// Test-only count of entries into compiled words, so a test can show whether a context ran
+/// compiled code or interpreted the word.
+pub var compiled_entries_for_test: if (@import("builtin").is_test) usize else void = if (@import("builtin").is_test) 0 else {};
+
 /// Try to emit inline IR for struct field access.
 ///
 /// Attempts to recognize the pattern:
@@ -9927,11 +9931,18 @@ fn emitIntrinsicVirtualUnwrap(ec: EmitCtx) IrCodegenError!ControlFlow {
     return .next;
 }
 
+/// Whether the code being emitted is for an analysis context. Its container reads and writes go
+/// through the native callbacks, which pop through the shadow redirect, and not through a stack slot.
+fn compilingForAnalysis(state: *const CompileState) bool {
+    const ictx = state.interp_ctx orelse return false;
+    return ictx.in_analysis;
+}
+
 fn emitIntrinsicStructFieldGet(ec: EmitCtx) IrCodegenError!ControlFlow {
     // JIT-only inline emitter; AOT uses the native callback because the preceding .struct_type
     // literal goes through the runtime-image slot table. The inline emitter bakes a freeze-time
     // StructType pointer that does not match the runtime-image pointer across the process boundary.
-    if (ec.state.aot_mode or !tryEmitInlineStructFieldGet(ec.state, ec.instructions, ec.idx, ec.stack, ec.sp)) {
+    if (ec.state.aot_mode or compilingForAnalysis(ec.state) or !tryEmitInlineStructFieldGet(ec.state, ec.instructions, ec.idx, ec.stack, ec.sp)) {
         return emitNativeCallbackOp(ec);
     }
     return .next;
@@ -9940,7 +9951,7 @@ fn emitIntrinsicStructFieldGet(ec: EmitCtx) IrCodegenError!ControlFlow {
 fn emitIntrinsicStructFieldSet(ec: EmitCtx) IrCodegenError!ControlFlow {
     // JIT-only inline emitter; AOT uses the native callback for the same freeze-time vs runtime-
     // image pointer mismatch reason as native.struct-field-get above.
-    if (ec.state.aot_mode or !tryEmitInlineStructFieldSet(ec.state, ec.instructions, ec.idx, ec.stack, ec.sp)) {
+    if (ec.state.aot_mode or compilingForAnalysis(ec.state) or !tryEmitInlineStructFieldSet(ec.state, ec.instructions, ec.idx, ec.stack, ec.sp)) {
         return emitNativeCallbackOp(ec);
     }
     return .next;
@@ -18905,7 +18916,7 @@ export fn jitPushMutableMapSlot(ctx_raw: usize, slot: usize) callconv(.c) i32 {
     const table = ctx.image_mutable_map_slots orelse return slotMiss(ctx, "mutable_map", slot);
     if (slot >= ctx.image_mutable_map_slot_count) return slotMiss(ctx, "mutable_map", slot);
     const mmap = table[slot] orelse return slotMiss(ctx, "mutable_map", slot);
-    ctx.stack.push(.{ .mutable_map = mmap }) catch {
+    ctx.stack.push(ctx.redirectRead(.{ .mutable_map = mmap })) catch {
         ctx.jit_pending_error = error.OutOfMemory;
         return 2;
     };
@@ -18922,7 +18933,7 @@ export fn jitPushMutableValueMapSlot(ctx_raw: usize, slot: usize) callconv(.c) i
     const table = ctx.image_mutable_value_map_slots orelse return slotMiss(ctx, "mutable_value_map", slot);
     if (slot >= ctx.image_mutable_value_map_slot_count) return slotMiss(ctx, "mutable_value_map", slot);
     const map = table[slot] orelse return slotMiss(ctx, "mutable_value_map", slot);
-    ctx.stack.push(.{ .mutable_value_map = map }) catch {
+    ctx.stack.push(ctx.redirectRead(.{ .mutable_value_map = map })) catch {
         ctx.jit_pending_error = error.OutOfMemory;
         return 2;
     };
@@ -18938,7 +18949,7 @@ export fn jitPushStructInstanceSlot(ctx_raw: usize, slot: usize) callconv(.c) i3
     const table = ctx.image_struct_instance_slots orelse return slotMiss(ctx, "struct_instance", slot);
     if (slot >= ctx.image_struct_instance_slot_count) return slotMiss(ctx, "struct_instance", slot);
     const si = table[slot] orelse return slotMiss(ctx, "struct_instance", slot);
-    ctx.stack.push(.{ .struct_instance = si }) catch {
+    ctx.stack.push(ctx.redirectRead(.{ .struct_instance = si })) catch {
         ctx.jit_pending_error = error.OutOfMemory;
         return 2;
     };
@@ -18957,7 +18968,7 @@ export fn jitPushVectorSlot(ctx_raw: usize, slot: usize) callconv(.c) i32 {
     const table = ctx.image_vector_slots orelse return slotMiss(ctx, "vector", slot);
     if (slot >= ctx.image_vector_slot_count) return slotMiss(ctx, "vector", slot);
     const vec = table[slot] orelse return slotMiss(ctx, "vector", slot);
-    ctx.stack.push(.{ .vector = vec }) catch {
+    ctx.stack.push(ctx.redirectRead(.{ .vector = vec })) catch {
         ctx.jit_pending_error = error.OutOfMemory;
         return 2;
     };
@@ -20184,6 +20195,8 @@ pub const ExecResult = enum {
 /// holds the operands the word was called with, as though it never ran, and the word's code is
 /// disabled so later calls run its interpreted body.
 pub fn executeCompiled(ctx: *Context, word_id: u32) ExecResult {
+    if (comptime @import("builtin").is_test) compiled_entries_for_test += 1;
+
     // Frames already pending belong to an enclosing unwind whose cleanup quotation reached
     // this call. Leave them; discard only what this execution appends and abandons.
     const pending_mark = ctx.pendingErrorFrameCount();
