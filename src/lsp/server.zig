@@ -53,88 +53,64 @@ pub const Server = struct {
         }
     };
 
-    /// A temporary frame holding what one open document defines and imports, so a name lookup
-    /// sees the document's own words and the words its `use` and `reexport` statements bring in.
-    /// The server's context outlives every request, and none of that survives on it between
-    /// requests.
-    ///
-    /// A definition looked up inside the scope may be owned by the frame, so read it before
-    /// `exit`.
-    const DocumentScope = struct {
-        ctx: *Context,
-        allocator: Allocator,
-        source_dir: ?[]u8,
-        saved_source: []const u8,
-        saved_source_dir: ?[]const u8,
-        saved_check_mode: bool,
-        saved_import_frame: ?usize,
-        saved_durable_floor: ?usize,
-        saved_stack_depth: usize,
-        dispatch_log_mark: usize,
-        /// The 1-based line a parse error stopped re-analysis on, or null when the whole document
+    /// What building a document's analysis produced.
+    const Built = struct {
+        child: *Context,
+        /// The 1-based line a parse error stopped the build on, or null when the whole document
         /// parsed. The statements before it still ran.
+        parse_error_line: ?usize,
+    };
+
+    /// Builds a document's analysis. The server's own build is the default. A test replaces it to
+    /// make a build fail in a way production cannot.
+    const Builder = *const fn (server: *Server, uri: []const u8, text: []const u8) anyerror!Built;
+
+    /// Why a version's build left no analysis.
+    const Failure = enum {
+        /// Out of memory. The next query on the version builds again.
+        transient,
+        /// Anything else. The same text would fail the same way, so queries answer empty.
+        permanent,
+    };
+
+    /// One open document: its text, the analysis kept for that text, and what was last published.
+    ///
+    /// The child is built once per version. It is read only afterwards, so a query never runs
+    /// code on it. Teardown is one `deinit` of the child.
+    const Document = struct {
+        text: []u8,
+        child: ?*Context = null,
         parse_error_line: ?usize = null,
+        failure: ?Failure = null,
+        published: ?AnalysisResult = null,
 
-        fn enter(allocator: Allocator, ctx: *Context, uri: []const u8, text: []const u8) !DocumentScope {
-            const source_dir = try fileUriDir(allocator, uri);
-            errdefer if (source_dir) |d| allocator.free(d);
+        fn deinit(self: *Document, allocator: Allocator) void {
+            std.debug.assert(self.child == null);
 
-            var scope: DocumentScope = .{
-                .ctx = ctx,
-                .allocator = allocator,
-                .source_dir = source_dir,
-                .saved_source = ctx.current_source,
-                .saved_source_dir = ctx.current_source_dir,
-                .saved_check_mode = ctx.check_mode,
-                .saved_import_frame = ctx.import_frame_index,
-                .saved_durable_floor = ctx.durable_frame_floor,
-                .saved_stack_depth = ctx.stack.depth(),
-                .dispatch_log_mark = undefined,
-            };
-            errdefer scope.restoreState();
-
-            try ctx.pushLocalFrame();
-            errdefer ctx.popLocalFrame();
-
-            try ctx.pushPragmaFrame();
-
-            ctx.enterCheckMode();
-            scope.dispatch_log_mark = ctx.beginCheckDispatchLog();
-            ctx.current_source = uri;
-            ctx.current_source_dir = source_dir;
-            ctx.import_frame_index = ctx.local_frames.items.len - 1;
-            ctx.durable_frame_floor = ctx.import_frame_index;
-
-            scope.parse_error_line = runCheckStatements(ctx, text);
-            return scope;
-        }
-
-        fn exit(self: *DocumentScope) void {
-            self.ctx.endCheckDispatchLog(self.dispatch_log_mark);
-            self.ctx.popPragmaFrame();
-            self.ctx.popLocalFrame();
-            self.restoreState();
-            if (self.source_dir) |d| self.allocator.free(d);
-        }
-
-        fn restoreState(self: *DocumentScope) void {
-            self.ctx.current_source = self.saved_source;
-            self.ctx.current_source_dir = self.saved_source_dir;
-            self.ctx.exitCheckMode(self.saved_check_mode);
-            self.ctx.import_frame_index = self.saved_import_frame;
-            self.ctx.durable_frame_floor = self.saved_durable_floor;
-            while (self.ctx.stack.depth() > self.saved_stack_depth) {
-                self.ctx.stack.popAndRelease() catch break;
-            }
+            allocator.free(self.text);
+            if (self.published) |*published| published.deinit();
         }
     };
+
+    /// Published when even the failure's own diagnostic could not be allocated.
+    const failed_without_detail = [1]types.LspDiagnostic{.{
+        .range = .{ .start = .{ .line = 0, .character = 0 }, .end = .{ .line = 0, .character = 0 } },
+        .severity = 1,
+        .source = "1z",
+        .message = "analysis failed",
+    }};
 
     allocator: Allocator,
     transport: *Transport,
     state: State = .uninitialized,
     ctx: *Context,
-    documents: std.StringHashMap([]const u8),
-    last_diagnostics: std.StringHashMap(AnalysisResult),
+    documents: std.StringHashMap(Document),
+    /// Builds attempted. A test seam: tests read it to show that a query builds nothing.
+    builds: usize = 0,
+    /// Children alive. A test seam: tests read it to show that every teardown site runs.
+    live_children: usize = 0,
+    /// A test seam. Production always builds with `buildAnalysis`.
+    builder: Builder = buildAnalysis,
     fmt_engine: formatter.Engine,
     /// The parsed `format-buffer` call, or null when the 1z formatter is not in use or failed
     /// to load.
@@ -148,27 +124,41 @@ pub const Server = struct {
             .allocator = allocator,
             .transport = transport,
             .ctx = ctx,
-            .documents = std.StringHashMap([]const u8).init(allocator),
-            .last_diagnostics = std.StringHashMap(AnalysisResult).init(allocator),
+            .documents = std.StringHashMap(Document).init(allocator),
             .fmt_engine = fmt_engine,
         };
     }
 
+    /// Tear down every kept child. The caller's context is the children's parent, so this runs
+    /// before it goes away.
     pub fn deinit(self: *Server) void {
-        var diag_it = self.last_diagnostics.iterator();
-        while (diag_it.next()) |entry| {
-            self.allocator.free(entry.key_ptr.*);
-            var result = entry.value_ptr.*;
-            result.deinit();
-        }
-        self.last_diagnostics.deinit();
-
         var it = self.documents.iterator();
         while (it.next()) |entry| {
             self.allocator.free(entry.key_ptr.*);
-            self.allocator.free(entry.value_ptr.*);
+            self.dropChild(entry.value_ptr);
+            entry.value_ptr.deinit(self.allocator);
         }
         self.documents.deinit();
+    }
+
+    /// Build a child of the server's context for one document and run its check statements. The
+    /// child owns copies of the `uri` and the directory, so nothing it keeps borrows a request.
+    fn buildAnalysis(self: *Server, uri: []const u8, text: []const u8) anyerror!Built {
+        const source_dir = try fileUriDir(self.allocator, uri);
+        defer if (source_dir) |dir| self.allocator.free(dir);
+
+        const child = try self.allocator.create(Context);
+        errdefer self.allocator.destroy(child);
+
+        child.* = try Context.initChild(self.allocator, self.ctx, .analysis);
+        errdefer child.deinit();
+
+        try analysis_build.begin(child, uri, source_dir);
+
+        return .{
+            .child = child,
+            .parse_error_line = try analysis_build.runCheckStatements(child, text),
+        };
     }
 
     /// Main loop: read requests and dispatch until exit.
@@ -312,20 +302,8 @@ pub const Server = struct {
         const uri = getJsonString(td, "uri") orelse return;
         const text = getJsonString(td, "text") orelse return;
 
-        const owned_uri = try self.allocator.dupe(u8, uri);
-        errdefer self.allocator.free(owned_uri);
-
-        const owned_text = try self.allocator.dupe(u8, text);
-        errdefer self.allocator.free(owned_text);
-
-        if (self.documents.fetchRemove(owned_uri)) |removed| {
-            self.allocator.free(removed.key);
-            self.allocator.free(removed.value);
-        }
-
-        try self.documents.put(owned_uri, owned_text);
-
-        self.analyzeDocument(uri, text);
+        try self.setText(uri, text);
+        self.analyzeDocument(uri);
     }
 
     fn handleDidChange(self: *Server, request: types.Request) !void {
@@ -337,26 +315,8 @@ pub const Server = struct {
         if (changes.len == 0) return;
         const new_text = getJsonString(changes[0], "text") orelse return;
 
-        const owned_text = try self.allocator.dupe(u8, new_text);
-        errdefer self.allocator.free(owned_text);
-
-        var found = false;
-        var it = self.documents.iterator();
-        while (it.next()) |entry| {
-            if (std.mem.eql(u8, entry.key_ptr.*, uri)) {
-                self.allocator.free(entry.value_ptr.*);
-                entry.value_ptr.* = owned_text;
-                found = true;
-                break;
-            }
-        }
-
-        if (!found) {
-            const owned_uri = try self.allocator.dupe(u8, uri);
-            try self.documents.put(owned_uri, owned_text);
-        }
-
-        self.analyzeDocument(uri, new_text);
+        try self.setText(uri, new_text);
+        self.analyzeDocument(uri);
     }
 
     fn handleDidClose(self: *Server, request: types.Request) !void {
@@ -364,101 +324,191 @@ pub const Server = struct {
         const td = getJsonObject(params, "textDocument") orelse return;
         const uri = getJsonString(td, "uri") orelse return;
 
-        // Remove document text
-        var it = self.documents.iterator();
-        while (it.next()) |entry| {
-            if (std.mem.eql(u8, entry.key_ptr.*, uri)) {
-                self.allocator.free(entry.key_ptr.*);
-                self.allocator.free(entry.value_ptr.*);
-                self.documents.removeByPtr(entry.key_ptr);
-                break;
-            }
+        if (self.documents.fetchRemove(uri)) |removed| {
+            self.allocator.free(removed.key);
+
+            var doc = removed.value;
+            self.dropChild(&doc);
+            doc.deinit(self.allocator);
         }
 
-        // Remove cached diagnostics
-        var diag_it = self.last_diagnostics.iterator();
-        while (diag_it.next()) |entry| {
-            if (std.mem.eql(u8, entry.key_ptr.*, uri)) {
-                self.allocator.free(entry.key_ptr.*);
-                var result = entry.value_ptr.*;
-                result.deinit();
-                self.last_diagnostics.removeByPtr(entry.key_ptr);
-                break;
-            }
-        }
-
-        // Publish empty diagnostics to clear editor markers
-        self.transport.writeNotification("textDocument/publishDiagnostics", types.PublishDiagnosticsParams{
-            .uri = uri,
-            .diagnostics = &.{},
-        }) catch {};
+        self.publish(uri, &.{});
     }
 
-    fn analyzeDocument(self: *Server, uri: []const u8, text: []const u8) void {
-        var analysis_arena = std.heap.ArenaAllocator.init(self.allocator);
-        var stored_in_cache = false;
-        defer if (!stored_in_cache) analysis_arena.deinit();
-        const arena_alloc = analysis_arena.allocator();
+    /// Store a document's new text and drop the analysis built from the old text.
+    ///
+    /// No query can then answer from an older version. The record keeps the diagnostics last
+    /// published, which a version with a parse error republishes.
+    fn setText(self: *Server, uri: []const u8, text: []const u8) !void {
+        const owned_text = try self.allocator.dupe(u8, text);
+        errdefer self.allocator.free(owned_text);
 
-        var scope = DocumentScope.enter(self.allocator, self.ctx, uri, text) catch return;
-        defer scope.exit();
-
-        if (scope.parse_error_line) |error_line| {
-            const lsp_line: i64 = if (error_line > 1) @intCast(error_line - 1) else 0;
-            const parse_error_diag: types.LspDiagnostic = .{
-                .range = .{
-                    .start = .{ .line = lsp_line, .character = 0 },
-                    .end = .{ .line = lsp_line, .character = 0 },
-                },
-                .severity = 1,
-                .source = "1z",
-                .message = "parse error",
-            };
-
-            // Error recovery: use cached diagnostics if available, else publish parse error
-            var diag_it = self.last_diagnostics.iterator();
-            while (diag_it.next()) |entry| {
-                if (std.mem.eql(u8, entry.key_ptr.*, uri)) {
-                    // Republish cached diagnostics
-                    self.transport.writeNotification("textDocument/publishDiagnostics", types.PublishDiagnosticsParams{
-                        .uri = uri,
-                        .diagnostics = entry.value_ptr.diagnostics,
-                    }) catch {};
-                    return;
-                }
-            }
-            // No cache; publish just the parse error
-            const diags = [1]types.LspDiagnostic{parse_error_diag};
-            self.transport.writeNotification("textDocument/publishDiagnostics", types.PublishDiagnosticsParams{
-                .uri = uri,
-                .diagnostics = &diags,
-            }) catch {};
+        if (self.documents.getPtr(uri)) |doc| {
+            self.dropChild(doc);
+            self.allocator.free(doc.text);
+            doc.text = owned_text;
+            doc.parse_error_line = null;
+            doc.failure = null;
             return;
         }
 
-        // Run InferenceEngine
+        const owned_uri = try self.allocator.dupe(u8, uri);
+        errdefer self.allocator.free(owned_uri);
+
+        try self.documents.put(owned_uri, .{ .text = owned_text });
+    }
+
+    /// Tear down a document's kept child.
+    ///
+    /// Every task under the child is already reaped. A child has no scheduler, so `spawn` fails
+    /// fast. A top-level `task-scope` builds its own worker pool and joins and frees it before it
+    /// returns, so no task survives the statement that made it.
+    fn dropChild(self: *Server, doc: *Document) void {
+        const child = doc.child orelse return;
+        doc.child = null;
+
+        child.deinit();
+        self.allocator.destroy(child);
+        self.live_children -= 1;
+    }
+
+    fn analyzeDocument(self: *Server, uri: []const u8) void {
+        const doc = self.documents.getPtr(uri) orelse return;
+        self.rebuild(uri, doc, false);
+    }
+
+    /// The kept analysis of an open document, or null when the document is not open or its
+    /// version's build failed.
+    ///
+    /// A transient failure is retried here. A successful retry publishes the way a `didChange`
+    /// build does.
+    fn analysisFor(self: *Server, uri: []const u8) ?*Context {
+        const doc = self.documents.getPtr(uri) orelse return null;
+        if (doc.child) |child| return child;
+
+        if (doc.failure != .transient) return null;
+        self.rebuild(uri, doc, true);
+        return doc.child;
+    }
+
+    /// Build the analysis of the document's current text, record it, and publish its
+    /// diagnostics. A failure is recorded on the document for this version, and `retry` keeps a
+    /// repeated failure from publishing the same diagnostic again.
+    fn rebuild(self: *Server, uri: []const u8, doc: *Document, retry: bool) void {
+        self.builds += 1;
+
+        const built = self.builder(self, uri, doc.text) catch |err| {
+            self.recordFailure(uri, doc, err, retry);
+            return;
+        };
+
+        doc.child = built.child;
+        doc.parse_error_line = built.parse_error_line;
+        doc.failure = null;
+        self.live_children += 1;
+
+        if (built.parse_error_line) |line| {
+            self.publishParseError(uri, doc, line);
+            return;
+        }
+
+        const result = self.diagnose(built.child, doc.text) catch |err| {
+            self.dropChild(doc);
+            self.recordFailure(uri, doc, err, retry);
+            return;
+        };
+
+        if (doc.published) |*old| old.deinit();
+        doc.published = result;
+        self.publish(uri, result.diagnostics);
+    }
+
+    fn recordFailure(self: *Server, uri: []const u8, doc: *Document, err: anyerror, retry: bool) void {
+        doc.failure = if (err == error.OutOfMemory) .transient else .permanent;
+        if (retry) return;
+
+        if (doc.published) |*old| old.deinit();
+        doc.published = null;
+
+        var arena = std.heap.ArenaAllocator.init(self.allocator);
+        const arena_alloc = arena.allocator();
+
+        const message = std.fmt.allocPrint(arena_alloc, "analysis failed: {s}", .{@errorName(err)}) catch {
+            arena.deinit();
+            self.publish(uri, &failed_without_detail);
+            return;
+        };
+        const diags = arena_alloc.dupe(types.LspDiagnostic, &.{.{
+            .range = .{ .start = .{ .line = 0, .character = 0 }, .end = .{ .line = 0, .character = 0 } },
+            .severity = 1,
+            .source = "1z",
+            .message = message,
+        }}) catch {
+            arena.deinit();
+            self.publish(uri, &failed_without_detail);
+            return;
+        };
+
+        doc.published = .{ .arena = arena, .diagnostics = diags };
+        self.publish(uri, diags);
+    }
+
+    /// Publish a version that stopped on a parse error.
+    ///
+    /// The statements before the error still ran, so queries answer from them. The diagnostics
+    /// last published are republished, or a bare "parse error" at the failing line when nothing
+    /// was published yet.
+    fn publishParseError(self: *Server, uri: []const u8, doc: *Document, error_line: usize) void {
+        if (doc.published) |published| {
+            self.publish(uri, published.diagnostics);
+            return;
+        }
+
+        const lsp_line: i64 = if (error_line > 1) @intCast(error_line - 1) else 0;
+        const diags = [1]types.LspDiagnostic{.{
+            .range = .{
+                .start = .{ .line = lsp_line, .character = 0 },
+                .end = .{ .line = lsp_line, .character = 0 },
+            },
+            .severity = 1,
+            .source = "1z",
+            .message = "parse error",
+        }};
+        self.publish(uri, &diags);
+    }
+
+    fn publish(self: *Server, uri: []const u8, diagnostics: []const types.LspDiagnostic) void {
+        self.transport.writeNotification("textDocument/publishDiagnostics", types.PublishDiagnosticsParams{
+            .uri = uri,
+            .diagnostics = diagnostics,
+        }) catch {};
+    }
+
+    /// Run the inference engine over the kept child and map what it reports to LSP diagnostics.
+    fn diagnose(self: *Server, child: *Context, text: []const u8) !AnalysisResult {
+        var analysis_arena = std.heap.ArenaAllocator.init(self.allocator);
+        errdefer analysis_arena.deinit();
+        const arena_alloc = analysis_arena.allocator();
+
         var engine = effect_inference.InferenceEngine.init(
-            self.ctx,
-            self.ctx.quotationAllocator(),
+            child,
+            child.quotationAllocator(),
             null,
             false,
             false,
-            self.ctx.getAnyTypeSentinel(),
+            child.getAnyTypeSentinel(),
             .err,
             .err,
             .err,
             .warning,
         );
         defer engine.deinit();
-        engine.analyzeAll(uri) catch return;
+        try engine.analyzeAll(child.current_source);
 
-        // Map engine diagnostics to LSP diagnostics
-        const engine_diags = engine.getDiagnostics();
         var lsp_diags: std.ArrayListUnmanaged(types.LspDiagnostic) = .{};
-        for (engine_diags) |diag| {
+        for (engine.getDiagnostics()) |diag| {
             const lsp_line: i64 = if (diag.source_line > 0) @intCast(diag.source_line - 1) else 0;
 
-            // Find line length for end character
             var end_char: i64 = 0;
             var line_idx: usize = 0;
             var scan_lines = std.mem.splitScalar(u8, text, '\n');
@@ -476,9 +526,9 @@ pub const Server = struct {
                 .note => 3,
             };
 
-            const message = std.fmt.allocPrint(arena_alloc, "{s}: {s}", .{ diag.word_name, diag.message }) catch continue;
+            const message = try std.fmt.allocPrint(arena_alloc, "{s}: {s}", .{ diag.word_name, diag.message });
 
-            lsp_diags.append(arena_alloc, .{
+            try lsp_diags.append(arena_alloc, .{
                 .range = .{
                     .start = .{ .line = lsp_line, .character = 0 },
                     .end = .{ .line = lsp_line, .character = end_char },
@@ -486,39 +536,13 @@ pub const Server = struct {
                 .severity = severity,
                 .source = "1z",
                 .message = message,
-            }) catch continue;
+            });
         }
 
-        // Store in cache
-        const cached_diags = arena_alloc.dupe(types.LspDiagnostic, lsp_diags.items) catch return;
-
-        // Remove old cached entry for this URI
-        var old_it = self.last_diagnostics.iterator();
-        while (old_it.next()) |entry| {
-            if (std.mem.eql(u8, entry.key_ptr.*, uri)) {
-                self.allocator.free(entry.key_ptr.*);
-                var old_result = entry.value_ptr.*;
-                old_result.deinit();
-                self.last_diagnostics.removeByPtr(entry.key_ptr);
-                break;
-            }
-        }
-
-        const cache_key = self.allocator.dupe(u8, uri) catch return;
-        self.last_diagnostics.put(cache_key, .{
-            .arena = analysis_arena,
-            .diagnostics = cached_diags,
-        }) catch {
-            self.allocator.free(cache_key);
-            return;
-        };
-        stored_in_cache = true;
-
-        // Publish diagnostics
-        self.transport.writeNotification("textDocument/publishDiagnostics", types.PublishDiagnosticsParams{
-            .uri = uri,
-            .diagnostics = cached_diags,
-        }) catch {};
+        // The copy of the arena must happen after this allocation, since a new buffer node it
+        // makes would otherwise land in the local arena and leak.
+        const diagnostics = try arena_alloc.dupe(types.LspDiagnostic, lsp_diags.items);
+        return .{ .arena = analysis_arena, .diagnostics = diagnostics };
     }
 
     fn handleHover(self: *Server, request: types.Request) !void {
@@ -565,13 +589,12 @@ pub const Server = struct {
         else
             word;
 
-        var scope = DocumentScope.enter(self.allocator, self.ctx, uri, text) catch {
+        const child = self.analysisFor(uri) orelse {
             try self.transport.writeNullResponse(id);
             return;
         };
-        defer scope.exit();
 
-        const def = self.ctx.lookupWord(lookup_name) orelse {
+        const def = child.lookupWord(lookup_name) orelse {
             try self.transport.writeNullResponse(id);
             return;
         };
@@ -699,13 +722,12 @@ pub const Server = struct {
         else
             word;
 
-        var scope = DocumentScope.enter(self.allocator, self.ctx, uri, text) catch {
+        const child = self.analysisFor(uri) orelse {
             try self.transport.writeNullResponse(id);
             return;
         };
-        defer scope.exit();
 
-        const def = self.ctx.lookupWord(lookup_name) orelse {
+        const def = child.lookupWord(lookup_name) orelse {
             try self.transport.writeNullResponse(id);
             return;
         };
@@ -872,22 +894,16 @@ pub const Server = struct {
             return;
         };
 
-        const text = self.getDocumentText(uri) orelse {
+        const child = self.analysisFor(uri) orelse {
             try self.transport.writeResponse(id, @as([]const types.DocumentSymbol, &.{}));
             return;
         };
-
-        var scope = DocumentScope.enter(self.allocator, self.ctx, uri, text) catch {
-            try self.transport.writeResponse(id, @as([]const types.DocumentSymbol, &.{}));
-            return;
-        };
-        defer scope.exit();
 
         var symbols: std.ArrayListUnmanaged(types.DocumentSymbol) = .{};
         defer symbols.deinit(self.allocator);
 
-        const top_frame = &self.ctx.local_frames.items[self.ctx.local_frames.items.len - 1];
-        var frame_it = top_frame.iterator();
+        const document_frame = &child.local_frames.items[child.import_frame_index.?];
+        var frame_it = document_frame.iterator();
         while (frame_it.next()) |entry| {
             const def = entry.value_ptr.*;
             const src = def.source_file orelse continue;
@@ -1031,13 +1047,12 @@ pub const Server = struct {
         else
             word;
 
-        var scope = DocumentScope.enter(self.allocator, self.ctx, uri, text) catch {
+        const child = self.analysisFor(uri) orelse {
             try self.transport.writeNullResponse(id);
             return;
         };
-        defer scope.exit();
 
-        const def = self.ctx.lookupWord(lookup_name) orelse {
+        const def = child.lookupWord(lookup_name) orelse {
             try self.transport.writeNullResponse(id);
             return;
         };
@@ -1075,13 +1090,8 @@ pub const Server = struct {
     }
 
     fn getDocumentText(self: *Server, uri: []const u8) ?[]const u8 {
-        var it = self.documents.iterator();
-        while (it.next()) |entry| {
-            if (std.mem.eql(u8, entry.key_ptr.*, uri)) {
-                return entry.value_ptr.*;
-            }
-        }
-        return null;
+        const doc = self.documents.getPtr(uri) orelse return null;
+        return doc.text;
     }
 
     fn log(self: *Server, comptime fmt: []const u8, args: anytype) void {
@@ -2055,8 +2065,8 @@ fn seedErrorState(ctx: *Context) void {
     ctx.appendPendingSyntheticErrorFrame("boom", "<test>", 4, null);
 }
 
-/// Assert the session gave back exactly what `seedErrorState` wrote, and installed no
-/// thrown stash of its own.
+/// Assert the session left exactly what `seedErrorState` wrote, and installed no thrown stash of
+/// its own.
 fn expectSeededErrorState(ctx: *Context) !void {
     try std.testing.expectEqualStrings("body failed", ctx.pending_error_message.?);
     try std.testing.expectEqual(@as(usize, 1), ctx.jit_pending_trace_frames.items.len);
@@ -2064,10 +2074,10 @@ fn expectSeededErrorState(ctx: *Context) !void {
     try std.testing.expect(ctx.thrown_error == null);
 }
 
-// The document each of the three analysis pins opens redefines `foo` at a different arity,
-// which the redefinition guard rejects from `;`. That is a definition statement, so the
-// analysis loop executes it and drops the error it raises.
-test "didOpen analysis gives back the error state a failed definition overwrote" {
+// The document each of the three tests below opens redefines `foo` at a different arity, which
+// the redefinition guard rejects from `;`. The analysis loop executes that statement on the
+// document's own child and drops the error it raises, so the root's error state stays as seeded.
+test "didOpen analysis leaves the root's error state untouched" {
     const allocator = std.testing.allocator;
     const input = try buildInput(allocator, &.{
         \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{}}}
@@ -2095,7 +2105,7 @@ test "didOpen analysis gives back the error state a failed definition overwrote"
     try expectSeededErrorState(&ctx);
 }
 
-test "documentSymbol analysis gives back the error state a failed definition overwrote" {
+test "documentSymbol analysis leaves the root's error state untouched" {
     const allocator = std.testing.allocator;
     const input = try buildInput(allocator, &.{
         \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{}}}
@@ -2125,7 +2135,7 @@ test "documentSymbol analysis gives back the error state a failed definition ove
     try expectSeededErrorState(&ctx);
 }
 
-test "definition analysis gives back the error state a failed definition overwrote" {
+test "definition analysis leaves the root's error state untouched" {
     const allocator = std.testing.allocator;
     const input = try buildInput(allocator, &.{
         \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{}}}
@@ -2155,9 +2165,9 @@ test "definition analysis gives back the error state a failed definition overwro
     try expectSeededErrorState(&ctx);
 }
 
-// Analysis replaces the booted prelude's `#in?` arm with the document's, which the prelude's own
-// `use` machinery calls. Each handler has to put the base arm back before the next request.
-test "analysis restores a base dispatch arm the document replaced" {
+// The document registers an arm for `#in?` that the prelude's own `use` machinery also calls.
+// The arm lands in the child's dispatch table, so the root's arm stays as booted.
+test "analysis leaves the root's dispatch arm untouched when the document replaces it" {
     const allocator = std.testing.allocator;
     const input = try buildInput(allocator, &.{
         \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{}}}
@@ -2629,4 +2639,427 @@ test "definition on native word returns null" {
     // depending on whether 'dup' is prelude (has source) or native (no source).
     // 'dup' is actually a native word, so it should return null.
     // But if it's defined in prelude, it has a source file. Let's just check it doesn't crash.
+}
+
+/// A server driven one message at a time, so a test can read the record between messages.
+const Session = struct {
+    reader: IoReader,
+    writer: IoWriter,
+    transport: Transport,
+    server: Server,
+
+    fn start(self: *Session, allocator: Allocator, ctx: *Context, out_buf: []u8) void {
+        self.reader = IoReader.fixed("");
+        self.writer = IoWriter.fixed(out_buf);
+        self.transport = Transport.init(std.testing.allocator, &self.reader, &self.writer);
+        self.server = Server.init(allocator, &self.transport, ctx, .zig);
+        self.server.state = .initialized;
+    }
+
+    fn stop(self: *Session) void {
+        self.server.deinit();
+    }
+
+    /// Dispatch one message, and return what the server wrote in answer.
+    fn send(self: *Session, json: []const u8) ![]const u8 {
+        const before = self.writer.buffered().len;
+
+        var request = try self.transport.parseRequest(json);
+        defer request.deinit();
+        try self.server.dispatch(request);
+
+        return self.writer.buffered()[before..];
+    }
+
+    fn open(self: *Session, uri: []const u8, text: []const u8) ![]const u8 {
+        const json = try std.fmt.allocPrint(
+            std.testing.allocator,
+            "{{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{{\"textDocument\":{{\"uri\":\"{s}\",\"languageId\":\"1z\",\"version\":1,\"text\":\"{s}\"}}}}}}",
+            .{ uri, text },
+        );
+        defer std.testing.allocator.free(json);
+
+        return self.send(json);
+    }
+
+    fn change(self: *Session, uri: []const u8, text: []const u8) ![]const u8 {
+        const json = try std.fmt.allocPrint(
+            std.testing.allocator,
+            "{{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didChange\",\"params\":{{\"textDocument\":{{\"uri\":\"{s}\",\"version\":2}},\"contentChanges\":[{{\"text\":\"{s}\"}}]}}}}",
+            .{ uri, text },
+        );
+        defer std.testing.allocator.free(json);
+
+        return self.send(json);
+    }
+
+    fn close(self: *Session, uri: []const u8) ![]const u8 {
+        const json = try std.fmt.allocPrint(
+            std.testing.allocator,
+            "{{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didClose\",\"params\":{{\"textDocument\":{{\"uri\":\"{s}\"}}}}}}",
+            .{uri},
+        );
+        defer std.testing.allocator.free(json);
+
+        return self.send(json);
+    }
+
+    fn query(self: *Session, method: []const u8, uri: []const u8, character: usize) ![]const u8 {
+        const json = try std.fmt.allocPrint(
+            std.testing.allocator,
+            "{{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"{s}\",\"params\":{{\"textDocument\":{{\"uri\":\"{s}\"}},\"position\":{{\"line\":0,\"character\":{d}}}}}}}",
+            .{ method, uri, character },
+        );
+        defer std.testing.allocator.free(json);
+
+        return self.send(json);
+    }
+
+    fn hover(self: *Session, uri: []const u8, character: usize) ![]const u8 {
+        return self.query("textDocument/hover", uri, character);
+    }
+};
+
+const test_uri = "file:///test.1z";
+
+var test_build_error: anyerror = error.AnalysisTestFailure;
+var test_transient_failures_left: usize = 0;
+
+fn failingBuilder(server: *Server, uri: []const u8, text: []const u8) anyerror!Server.Built {
+    _ = server;
+    _ = uri;
+    _ = text;
+    return test_build_error;
+}
+
+/// Fails with an out-of-memory error for the first `test_transient_failures_left` builds, then
+/// builds the way the server does.
+fn flakyBuilder(server: *Server, uri: []const u8, text: []const u8) anyerror!Server.Built {
+    if (test_transient_failures_left > 0) {
+        test_transient_failures_left -= 1;
+        return error.OutOfMemory;
+    }
+    return server.buildAnalysis(uri, text);
+}
+
+test "a hover on unchanged text builds nothing" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+    try ctx.loadPrelude(null);
+
+    var out_buf: [65536]u8 = undefined;
+    var session: Session = undefined;
+    session.start(std.testing.allocator, &ctx, &out_buf);
+    defer session.stop();
+
+    _ = try session.open(test_uri, "my-word: ( -- ) [ ] ;\\ndup drop");
+    try std.testing.expectEqual(@as(usize, 1), session.server.builds);
+    try std.testing.expectEqual(@as(usize, 1), session.server.live_children);
+
+    var round: usize = 0;
+    while (round < 3) : (round += 1) {
+        const word = try session.hover(test_uri, 2);
+        try std.testing.expect(std.mem.indexOf(u8, word, "my-word") != null);
+    }
+
+    _ = try session.query("textDocument/definition", test_uri, 2);
+    _ = try session.query("textDocument/documentSymbol", test_uri, 0);
+    _ = try session.query("textDocument/signatureHelp", test_uri, 8);
+
+    try std.testing.expectEqual(@as(usize, 1), session.server.builds);
+}
+
+test "a didChange replaces the child, and no query answers from the old text" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+    try ctx.loadPrelude(null);
+
+    var out_buf: [65536]u8 = undefined;
+    var session: Session = undefined;
+    session.start(std.testing.allocator, &ctx, &out_buf);
+    defer session.stop();
+
+    _ = try session.open(test_uri, "old-word: ( -- ) [ ] ;");
+    const before = try session.hover(test_uri, 2);
+    try std.testing.expect(std.mem.indexOf(u8, before, "old-word") != null);
+
+    _ = try session.change(test_uri, "new-word: ( -- ) [ ] ;");
+    try std.testing.expectEqual(@as(usize, 2), session.server.builds);
+    try std.testing.expectEqual(@as(usize, 1), session.server.live_children);
+
+    const after = try session.hover(test_uri, 2);
+    try std.testing.expect(std.mem.indexOf(u8, after, "new-word") != null);
+    try std.testing.expect(std.mem.indexOf(u8, after, "old-word") == null);
+
+    const child = session.server.documents.get(test_uri).?.child.?;
+    try std.testing.expect(child.lookupWord("old-word") == null);
+    try std.testing.expect(child.lookupWord("new-word") != null);
+}
+
+test "didClose, a replacing didOpen, and the server's teardown each free the child" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+    try ctx.loadPrelude(null);
+
+    var out_buf: [65536]u8 = undefined;
+    var session: Session = undefined;
+    session.start(std.testing.allocator, &ctx, &out_buf);
+
+    _ = try session.open("file:///a.1z", "a-word: ( -- ) [ ] ;");
+    _ = try session.open("file:///b.1z", "b-word: ( -- ) [ ] ;");
+    try std.testing.expectEqual(@as(usize, 2), session.server.live_children);
+
+    _ = try session.open("file:///a.1z", "a-word: ( -- ) [ ] ;\\na-two: ( -- ) [ ] ;");
+    try std.testing.expectEqual(@as(usize, 2), session.server.live_children);
+    try std.testing.expectEqual(@as(usize, 3), session.server.builds);
+    try std.testing.expectEqual(@as(u32, 2), session.server.documents.count());
+
+    const closed = try session.close("file:///a.1z");
+    try std.testing.expect(std.mem.indexOf(u8, closed, "\"diagnostics\":[]") != null);
+    try std.testing.expectEqual(@as(usize, 1), session.server.live_children);
+    try std.testing.expectEqual(@as(u32, 1), session.server.documents.count());
+
+    const gone = try session.hover("file:///a.1z", 2);
+    try std.testing.expect(std.mem.indexOf(u8, gone, "\"result\":null") != null);
+
+    session.stop();
+    try std.testing.expectEqual(@as(usize, 0), session.server.live_children);
+}
+
+test "a failed build publishes one analysis failed diagnostic, and queries answer empty without rebuilding" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+    try ctx.loadPrelude(null);
+
+    var out_buf: [65536]u8 = undefined;
+    var session: Session = undefined;
+    session.start(std.testing.allocator, &ctx, &out_buf);
+    defer session.stop();
+
+    const opened = try session.open(test_uri, "bad-decl: ( -- x ) [ ] ;");
+    try std.testing.expect(std.mem.indexOf(u8, opened, "bad-decl") != null);
+
+    session.server.builder = failingBuilder;
+    test_build_error = error.AnalysisTestFailure;
+
+    const failed = try session.change(test_uri, "bad-decl: ( -- x ) [ ] ;");
+    try std.testing.expect(std.mem.indexOf(u8, failed, "analysis failed: AnalysisTestFailure") != null);
+    try std.testing.expect(std.mem.indexOf(u8, failed, "bad-decl") == null);
+
+    const published = session.server.documents.get(test_uri).?.published.?;
+    try std.testing.expectEqual(@as(usize, 1), published.diagnostics.len);
+    try std.testing.expectEqual(@as(usize, 0), session.server.live_children);
+
+    const builds_after_failure = session.server.builds;
+    var round: usize = 0;
+    while (round < 3) : (round += 1) {
+        const hovered = try session.hover(test_uri, 2);
+        try std.testing.expect(std.mem.indexOf(u8, hovered, "\"result\":null") != null);
+
+        const symbols = try session.query("textDocument/documentSymbol", test_uri, 0);
+        try std.testing.expect(std.mem.indexOf(u8, symbols, "\"result\":[]") != null);
+
+        const definition = try session.query("textDocument/definition", test_uri, 2);
+        try std.testing.expect(std.mem.indexOf(u8, definition, "\"result\":null") != null);
+    }
+    try std.testing.expectEqual(builds_after_failure, session.server.builds);
+
+    session.server.builder = Server.buildAnalysis;
+    _ = try session.change(test_uri, "good: ( -- ) [ ] ;");
+    const recovered = try session.hover(test_uri, 2);
+    try std.testing.expect(std.mem.indexOf(u8, recovered, "good") != null);
+}
+
+test "a transient failure is retried on the next query and then not again" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+    try ctx.loadPrelude(null);
+
+    var out_buf: [65536]u8 = undefined;
+    var session: Session = undefined;
+    session.start(std.testing.allocator, &ctx, &out_buf);
+    defer session.stop();
+
+    session.server.builder = flakyBuilder;
+    test_transient_failures_left = 2;
+
+    const opened = try session.open(test_uri, "my-word: ( -- ) [ ] ;");
+    try std.testing.expect(std.mem.indexOf(u8, opened, "analysis failed: OutOfMemory") != null);
+    try std.testing.expectEqual(@as(usize, 1), session.server.builds);
+
+    // The retry fails again. It answers empty and does not publish the same diagnostic twice.
+    const still_failing = try session.hover(test_uri, 2);
+    try std.testing.expect(std.mem.indexOf(u8, still_failing, "\"result\":null") != null);
+    try std.testing.expect(std.mem.indexOf(u8, still_failing, "publishDiagnostics") == null);
+    try std.testing.expectEqual(@as(usize, 2), session.server.builds);
+
+    // The retry succeeds, answers, and publishes the version's real diagnostics.
+    const recovered = try session.hover(test_uri, 2);
+    try std.testing.expect(std.mem.indexOf(u8, recovered, "my-word") != null);
+    try std.testing.expect(std.mem.indexOf(u8, recovered, "publishDiagnostics") != null);
+    try std.testing.expect(std.mem.indexOf(u8, recovered, "analysis failed") == null);
+    try std.testing.expectEqual(@as(usize, 3), session.server.builds);
+
+    const record = session.server.documents.get(test_uri).?;
+    try std.testing.expect(record.failure == null);
+    try std.testing.expectEqual(@as(usize, 0), record.published.?.diagnostics.len);
+
+    _ = try session.hover(test_uri, 2);
+    try std.testing.expectEqual(@as(usize, 3), session.server.builds);
+}
+
+test "documentSymbol reads the import frame, not the top frame" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+    try ctx.loadPrelude(null);
+
+    var out_buf: [65536]u8 = undefined;
+    var session: Session = undefined;
+    session.start(std.testing.allocator, &ctx, &out_buf);
+    defer session.stop();
+
+    _ = try session.open(test_uri, "frame-word: ( -- ) [ ] ;");
+
+    const child = session.server.documents.get(test_uri).?.child.?;
+    try std.testing.expectEqual(@as(?usize, 0), child.import_frame_index);
+
+    try child.pushLocalFrame();
+    try std.testing.expectEqual(@as(usize, 2), child.local_frames.items.len);
+
+    const symbols = try session.query("textDocument/documentSymbol", test_uri, 0);
+    try std.testing.expect(std.mem.indexOf(u8, symbols, "\"frame-word\"") != null);
+}
+
+test "a parse error keeps the statements before it and republishes the last diagnostics" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+    try ctx.loadPrelude(null);
+
+    var out_buf: [65536]u8 = undefined;
+    var session: Session = undefined;
+    session.start(std.testing.allocator, &ctx, &out_buf);
+    defer session.stop();
+
+    const first = try session.open(test_uri, "kept: ( -- x ) [ ] ;\\n[ unclosed");
+    try std.testing.expect(std.mem.indexOf(u8, first, "parse error") != null);
+    try std.testing.expect(session.server.documents.get(test_uri).?.published == null);
+
+    const hovered = try session.hover(test_uri, 2);
+    try std.testing.expect(std.mem.indexOf(u8, hovered, "kept") != null);
+
+    _ = try session.change(test_uri, "kept: ( -- x ) [ ] ;");
+    const published = session.server.documents.get(test_uri).?.published.?;
+    try std.testing.expect(published.diagnostics.len > 0);
+
+    const again = try session.change(test_uri, "kept: ( -- x ) [ ] ;\\n[ unclosed");
+    try std.testing.expect(std.mem.indexOf(u8, again, "kept") != null);
+    try std.testing.expect(std.mem.indexOf(u8, again, "parse error") == null);
+}
+
+test "building a document under allocation failure leaves nothing behind" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+    try ctx.loadPrelude(null);
+
+    var fail_index: usize = 0;
+    while (true) : (fail_index += 1) {
+        var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{ .fail_index = fail_index });
+
+        var out_buf: [65536]u8 = undefined;
+        var session: Session = undefined;
+        session.start(failing.allocator(), &ctx, &out_buf);
+
+        _ = session.open(test_uri, "my-word: ( -- ) [ ] ;") catch {};
+        _ = session.hover(test_uri, 2) catch {};
+        _ = session.change(test_uri, "other: ( -- ) [ ] ;") catch {};
+        _ = session.hover(test_uri, 2) catch {};
+        session.stop();
+
+        if (!failing.has_induced_failure) break;
+    }
+}
+
+test "a large diagnostics result is kept whole and freed with its record" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+    try ctx.loadPrelude(null);
+
+    var text: std.ArrayListUnmanaged(u8) = .{};
+    defer text.deinit(std.testing.allocator);
+
+    const out_buf = try std.testing.allocator.alloc(u8, 1 << 20);
+    defer std.testing.allocator.free(out_buf);
+
+    var session: Session = undefined;
+    session.start(std.testing.allocator, &ctx, out_buf);
+    defer session.stop();
+
+    // Whether the final copy of the diagnostics needs a new arena node depends on how much room
+    // the last node has left. Growing the document one diagnostic at a time crosses that edge.
+    var words: usize = 0;
+    while (words < 160) : (words += 1) {
+        text.clearRetainingCapacity();
+        for (0..words + 1) |word| {
+            try text.writer(std.testing.allocator).print("bad-{d}: ( -- x ) [ ] ;\\n", .{word});
+        }
+
+        session.writer.end = 0;
+        _ = try session.open(test_uri, text.items);
+
+        const published = session.server.documents.get(test_uri).?.published.?;
+        try std.testing.expectEqual(words + 1, published.diagnostics.len);
+    }
+}
+
+test "a definition after a failing redefinition survives on the child" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+    try ctx.loadPrelude(null);
+
+    var out_buf: [65536]u8 = undefined;
+    var session: Session = undefined;
+    session.start(std.testing.allocator, &ctx, &out_buf);
+    defer session.stop();
+
+    _ = try session.open(test_uri, "foo: ( -- ) [ ] ;\\nfoo: ( a -- ) [ drop ] ;\\nlater: ( -- ) [ ] ;");
+
+    const child = session.server.documents.get(test_uri).?.child.?;
+    try std.testing.expect(child.lookupWord("later") != null);
+
+    const symbols = try session.query("textDocument/documentSymbol", test_uri, 0);
+    try std.testing.expect(std.mem.indexOf(u8, symbols, "\"later\"") != null);
+    try std.testing.expect(ctx.lookupWord("later") == null);
+}
+
+test "a statement that runs out of memory fails the build instead of being dropped" {
+    var ctx = Context.initWithPrelude(std.testing.allocator);
+    defer ctx.deinit();
+
+    const text = "one: ( -- ) [ ] ;\ntwo: ( -- ) [ one ] ;\nthree: ( -- ) [ two one ] ;\n";
+
+    var oom_seen: usize = 0;
+    var extra: usize = 0;
+    while (true) : (extra += 1) {
+        var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{});
+
+        var child = try Context.initChild(failing.allocator(), &ctx, .analysis);
+        defer child.deinit();
+
+        try analysis_build.begin(&child, "doc.1z", null);
+        failing.fail_index = failing.alloc_index + extra;
+
+        var failed = false;
+        if (analysis_build.runCheckStatements(&child, text)) |line| {
+            try std.testing.expectEqual(@as(?usize, null), line);
+        } else |err| {
+            try std.testing.expectEqual(error.OutOfMemory, err);
+            failed = true;
+            oom_seen += 1;
+        }
+
+        if (!failing.has_induced_failure) break;
+        try std.testing.expect(failed);
+    }
+
+    try std.testing.expect(oom_seen > 0);
 }

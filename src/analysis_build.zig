@@ -1,7 +1,7 @@
 //! The build setup for an analysis child.
 //!
-//! Today only `1z check` builds its child this way. The language server's document analysis and
-//! `onez_check` still run on their root context and will move here.
+//! `1z check` and the language server's per-document analysis build their child this way.
+//! `onez_check` still runs on its root context and will move here.
 //!
 //! An analysis child is built once, analyzed, and torn down whole. Nothing here restores state,
 //! because there is nothing to restore it to.
@@ -44,7 +44,10 @@ pub fn begin(ctx: *Context, source: []const u8, source_dir: ?[]const u8) !void {
 /// The text goes through `StatementProcessor` a line at a time, the way `1z check` and a module
 /// load feed theirs, so each statement is parsed and tested on its own. Parsing the whole document
 /// as one statement would let any top-level code beside a definition hide the definition.
-pub fn runCheckStatements(ctx: *Context, text: []const u8) ?usize {
+///
+/// A statement's own error is dropped. Running out of memory is not, because the child would then
+/// be missing definitions that its text declares, and nothing would say so.
+pub fn runCheckStatements(ctx: *Context, text: []const u8) error{OutOfMemory}!?usize {
     const saved_line_offset = ctx.parse_line_offset;
     defer ctx.parse_line_offset = saved_line_offset;
 
@@ -71,10 +74,15 @@ pub fn runCheckStatements(ctx: *Context, text: []const u8) ?usize {
 
         switch (result) {
             .needs_more_input => {},
-            .parse_error => return if (next_line != null) file_line else processor.start_line,
+            .parse_error => |err| {
+                if (err == error.OutOfMemory) return error.OutOfMemory;
+                return if (next_line != null) file_line else processor.start_line;
+            },
             .complete => |instrs| {
                 if (instrs.len > 0 and Context.isCheckStatement(instrs)) {
-                    ctx.executeQuotation(.{ .instructions = instrs }) catch {};
+                    ctx.executeQuotation(.{ .instructions = instrs }) catch |err| {
+                        if (err == error.OutOfMemory) return error.OutOfMemory;
+                    };
                 }
                 processor.reset();
             },
@@ -140,7 +148,7 @@ test "analysis children leave no key of their arena in the root's stores" {
         defer child.deinit();
 
         try begin(&child, "doc.1z", dir);
-        try std.testing.expectEqual(@as(?usize, null), runCheckStatements(&child, text));
+        try std.testing.expectEqual(@as(?usize, null), try runCheckStatements(&child, text));
 
         try std.testing.expect(child.body_stores.anyKeyOnArena(child.arena));
         try std.testing.expect(!root.body_stores.anyKeyOnArena(child.arena));
@@ -160,7 +168,7 @@ test "a redefined prelude const is accepted on a child as the root accepts it" {
     try begin(&child, "doc.1z", null);
     try std.testing.expectEqual(
         @as(?usize, null),
-        runCheckStatements(&child, "fixnum: ( -- x ) [ 0 ] ;\nafter-fixnum: ( -- x ) [ 1 ] ;\n"),
+        try runCheckStatements(&child, "fixnum: ( -- x ) [ 0 ] ;\nafter-fixnum: ( -- x ) [ 1 ] ;\n"),
     );
 
     try std.testing.expect(child.local_frames.items[0].contains("fixnum"));
