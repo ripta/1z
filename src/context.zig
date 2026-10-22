@@ -992,8 +992,16 @@ pub const Context = struct {
     tail_compiled_slot: ?*TailCompiledCall = null,
     /// Directory of the currently executing source file for relative path resolution
     current_source_dir: ?[]const u8 = null,
-    /// User-configured load paths for search-mode module resolution
+    /// User-configured load paths for search-mode module resolution.
+    ///
+    /// Each context owns only the paths added on it. A child starts empty, and the search reads up
+    /// the parent chain, so a child's teardown never frees a parent's list.
+    ///
+    /// A task can search while the context that owns the list appends, so a running program adds
+    /// through `addLoadPath` and reads through `snapshotLoadPaths`. Startup code that runs before
+    /// any task exists and tests may touch the list directly.
     load_paths: std.ArrayListUnmanaged([]const u8) = .{},
+    load_paths_mutex: std.Thread.Mutex = .{},
     /// Standard library path, which is resolved last
     stdlib_path: ?[]const u8 = null,
     /// Program arguments passed after the file path on the command line
@@ -2163,7 +2171,6 @@ pub const Context = struct {
             .current_source = parent.current_source,
             .startup_source = parent.startup_source,
             .current_source_dir = parent.current_source_dir,
-            .load_paths = parent.load_paths,
             .stdlib_path = parent.stdlib_path,
             .program_args = parent.program_args,
             .static_ffi_libs = parent.static_ffi_libs,
@@ -2191,6 +2198,10 @@ pub const Context = struct {
             .analysis, .analysis_reusing => {
                 ctx.owns_loads = true;
                 ctx.in_analysis = true;
+
+                // A definition's recursion check runs during analysis, and the root's setting is
+                // what a run of the same file would apply. A task keeps the default.
+                ctx.allow_all_recursion = parent.allow_all_recursion;
                 ctx.load_owner_id = next_load_owner_id.fetchAdd(1, .monotonic);
                 if (ctx.load_owner_id == 0) @panic("load owner identities exhausted");
                 ctx.stack.shadows = try ShadowTable.create(allocator, ctx.load_owner_id);
@@ -2767,6 +2778,36 @@ pub const Context = struct {
     /// executing task.
     pub fn stateTarget(self: *Context) *Context {
         return self.load_target orelse self;
+    }
+
+    /// Append a load path owned by this context's list. `path` must outlive the context.
+    pub fn addLoadPath(self: *Context, path: []const u8) !void {
+        self.lock_order_tracker.acquire(.load_paths);
+        self.load_paths_mutex.lock();
+        defer {
+            self.load_paths_mutex.unlock();
+            self.lock_order_tracker.release(.load_paths);
+        }
+
+        try self.load_paths.append(self.allocator, path);
+    }
+
+    /// A copy of this context's own load paths, allocated from `alloc`.
+    ///
+    /// The mutex covers only the copy, so a caller probes the filesystem without holding it. The
+    /// strings themselves are never freed while the context lives, so the copy stays valid after
+    /// the list grows.
+    pub fn snapshotLoadPaths(self: *const Context, alloc: Allocator) ![]const []const u8 {
+        const owner: *Context = @constCast(self);
+
+        owner.lock_order_tracker.acquire(.load_paths);
+        owner.load_paths_mutex.lock();
+        defer {
+            owner.load_paths_mutex.unlock();
+            owner.lock_order_tracker.release(.load_paths);
+        }
+
+        return alloc.dupe([]const u8, owner.load_paths.items);
     }
 
     /// The nearest context at or above this one that owns its loads. A task never owns its loads,
@@ -6560,24 +6601,38 @@ pub const Context = struct {
             cache_key: []const u8,
         };
         var best: ?Candidate = null;
-        self.module_cache_value.header.lock();
-        var iter = self.module_cache_value.map.iterator();
-        while (iter.next()) |entry| {
-            if (entry.value_ptr.* != .module) continue;
-            const module = entry.value_ptr.*.module;
-            const mod_word = module.words.get(name) orelse continue;
-            const better = if (best) |b| switch (std.mem.order(u8, module.name, b.module.name)) {
-                .lt => true,
-                .gt => false,
-                .eq => std.mem.lessThan(u8, entry.key_ptr.*, b.cache_key),
-            } else true;
-            if (better) {
-                best = .{ .mod_word = mod_word, .module = module, .cache_key = entry.key_ptr.* };
+        for (self.reachableModuleCaches()) |maybe_cache| {
+            const cache = maybe_cache orelse continue;
+            cache.header.lock();
+            defer cache.header.unlock();
+            var iter = cache.map.iterator();
+            while (iter.next()) |entry| {
+                if (entry.value_ptr.* != .module) continue;
+                const module = entry.value_ptr.*.module;
+                const mod_word = module.words.get(name) orelse continue;
+                const better = if (best) |b| switch (std.mem.order(u8, module.name, b.module.name)) {
+                    .lt => true,
+                    .gt => false,
+                    .eq => std.mem.lessThan(u8, entry.key_ptr.*, b.cache_key),
+                } else true;
+                if (better) {
+                    best = .{ .mod_word = mod_word, .module = module, .cache_key = entry.key_ptr.* };
+                }
             }
         }
-        self.module_cache_value.header.unlock();
         const hit = best orelse return null;
         return wordDefFromModuleWord(name, hit.mod_word, hit.module);
+    }
+
+    /// The module caches a by-name scan covers: the cache this context loads into, then the parent's
+    /// when its load owner is a reusing analysis child. A module reused from the parent is in the
+    /// parent's cache only, so a scan of the child's own cache would miss it.
+    ///
+    /// A task shares its load owner's cache and holds no reused pointer of its own, so the reused
+    /// cache is read off the load owner. A scan locks one cache at a time, never both.
+    fn reachableModuleCaches(self: *const Context) [2]?*value_mod.MutableMap {
+        const owner = @constCast(self).nearestLoadOwner();
+        return .{ self.module_cache_value, owner.reused_module_cache };
     }
 
     /// True when any cached module's public `words` holds `name`.
@@ -6596,12 +6651,15 @@ pub const Context = struct {
     /// resolve the entry word. The pre-gate scan resolved the module's word on that path too, so
     /// nothing that worked is lost.
     fn moduleCacheContainsWordLocked(self: *const Context, name: []const u8) bool {
-        self.module_cache_value.header.lock();
-        defer self.module_cache_value.header.unlock();
-        var iter = self.module_cache_value.map.iterator();
-        while (iter.next()) |entry| {
-            if (entry.value_ptr.* != .module) continue;
-            if (entry.value_ptr.*.module.words.contains(name)) return true;
+        for (self.reachableModuleCaches()) |maybe_cache| {
+            const cache = maybe_cache orelse continue;
+            cache.header.lock();
+            defer cache.header.unlock();
+            var iter = cache.map.iterator();
+            while (iter.next()) |entry| {
+                if (entry.value_ptr.* != .module) continue;
+                if (entry.value_ptr.*.module.words.contains(name)) return true;
+            }
         }
         return false;
     }
@@ -6782,14 +6840,17 @@ pub const Context = struct {
             }
         }
 
-        self.module_cache_value.header.lock();
-        defer self.module_cache_value.header.unlock();
-        var iter = self.module_cache_value.map.iterator();
-        while (iter.next()) |entry| {
-            if (entry.value_ptr.* != .module) continue;
-            const module = entry.value_ptr.*.module;
-            if (module.words.contains(name)) return null;
-            if (module.deps.contains(name)) return null;
+        for (self.reachableModuleCaches()) |maybe_cache| {
+            const cache = maybe_cache orelse continue;
+            cache.header.lock();
+            defer cache.header.unlock();
+            var iter = cache.map.iterator();
+            while (iter.next()) |entry| {
+                if (entry.value_ptr.* != .module) continue;
+                const module = entry.value_ptr.*.module;
+                if (module.words.contains(name)) return null;
+                if (module.deps.contains(name)) return null;
+            }
         }
 
         return slot;
@@ -16917,6 +16978,92 @@ test "lookupModuleCacheWordLocked: smallest module name wins a public-name colli
     ctx.runtime_image_loaded = true;
     const found = ctx.lookupWordForExecution("probe") orelse return error.TestExpectedLookup;
     try std.testing.expectEqual(@as(?*const value_mod.Module, alpha), found.source_module);
+}
+
+test "by-name module scans cover the parent's cache on a reusing child only" {
+    var root = Context.init(std.testing.allocator);
+    defer root.deinit();
+
+    const noop: dict_mod.NativeFn = struct {
+        fn f(_: *Context) anyerror!void {}
+    }.f;
+
+    const arena_alloc = root.arena.allocator();
+    const shared = try arena_alloc.create(value_mod.Module);
+    shared.* = .{ .name = "shared-mod", .words = .{} };
+    try shared.words.put(arena_alloc, "shared-probe", .{
+        .source_module = shared,
+        .action = .{ .native = noop },
+    });
+
+    const cache_alloc = root.module_cache_value.header.allocator;
+    try root.module_cache_value.map.put(
+        cache_alloc,
+        try cache_alloc.dupe(u8, "shared-mod"),
+        .{ .module = shared },
+    );
+
+    var reusing = try Context.initChild(std.testing.allocator, &root, .analysis_reusing);
+    defer reusing.deinit();
+
+    var isolated = try Context.initChild(std.testing.allocator, &root, .analysis);
+    defer isolated.deinit();
+
+    const found = reusing.lookupModuleCacheWordLocked("shared-probe") orelse return error.TestExpectedLookup;
+    try std.testing.expectEqual(@as(?*const value_mod.Module, shared), found.source_module);
+    try std.testing.expect(reusing.moduleCacheContainsWordLocked("shared-probe"));
+
+    try std.testing.expectEqual(@as(?WordDefinition, null), isolated.lookupModuleCacheWordLocked("shared-probe"));
+    try std.testing.expect(!isolated.moduleCacheContainsWordLocked("shared-probe"));
+
+    // A task shares its load owner's cache, so it reads the owner's reused cache too.
+    var task_ctx = try Context.initChild(std.testing.allocator, &reusing, .task);
+    defer task_ctx.deinit();
+
+    try std.testing.expect(task_ctx.reused_module_cache == null);
+    try std.testing.expect(task_ctx.moduleCacheContainsWordLocked("shared-probe"));
+    try std.testing.expect(task_ctx.lookupModuleCacheWordLocked("shared-probe") != null);
+
+    try std.testing.expectEqual(@as(u32, 0), reusing.module_cache_value.map.count());
+}
+
+test "initChild: a child reads its parent's load paths and leaves them intact at teardown" {
+    var root = Context.init(std.testing.allocator);
+    defer root.deinit();
+
+    try root.load_paths.append(root.allocator, "/first");
+
+    var child = try Context.initChild(std.testing.allocator, &root, .analysis_reusing);
+    child.deinit();
+
+    try std.testing.expectEqual(@as(usize, 1), root.load_paths.items.len);
+    try std.testing.expectEqualStrings("/first", root.load_paths.items[0]);
+}
+
+test "load paths: a snapshot taken while another thread appends is always a whole prefix" {
+    var root = Context.init(std.testing.allocator);
+    defer root.deinit();
+
+    const Appender = struct {
+        fn run(ctx: *Context) void {
+            var i: usize = 0;
+            while (i < 2000) : (i += 1) ctx.addLoadPath("/p") catch return;
+        }
+    };
+
+    const thread = try std.Thread.spawn(.{}, Appender.run, .{&root});
+
+    var seen: usize = 0;
+    while (seen < 2000) {
+        const snapshot = try root.snapshotLoadPaths(std.testing.allocator);
+        defer std.testing.allocator.free(snapshot);
+
+        try std.testing.expect(snapshot.len >= seen);
+        for (snapshot) |p| try std.testing.expectEqualStrings("/p", p);
+        seen = snapshot.len;
+    }
+
+    thread.join();
 }
 
 test "lookupModuleCacheWordLocked: cache key breaks a tie between same-named modules" {

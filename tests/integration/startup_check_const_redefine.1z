@@ -1,0 +1,6 @@
+\ A const the startup file defines belongs to the base scope, as the prelude's consts do. `check`
+\ accepts a redefinition of it, because its definitions never run. The analysis context starts
+\ with no frame of its own below this file's, so the guard cannot see the startup file's const.
+
+startup-const: ( -- x ) [ 2 ] ;
+use-startup-const: ( -- x ) [ startup-const ] ;

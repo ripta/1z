@@ -1,0 +1,7 @@
+\ The startup file loads `flags`, so the checked file's `flag{` definitions write the registry of a
+\ module the root loaded. Analysis writes into a copy it owns and passes, as `check` always has.
+
+use "flags" ;
+
+verbose: flag{ type: boolean description: "Verbose output" } ;
+count: flag{ type: fixnum default: 3 description: "A count" } ;

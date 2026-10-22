@@ -1,0 +1,1 @@
+tests/integration/check_parse_time_global_hook.1z:6: error 'invalid-argument' register-global-hook cannot run off the root context, since the registry outlives it

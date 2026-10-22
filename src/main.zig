@@ -32,6 +32,7 @@ const container_limits = @import("container_limits.zig");
 const task_mod = @import("task.zig");
 const trace_mod = @import("trace.zig");
 const effect_inference = @import("effect_inference.zig");
+const analysis_build = @import("analysis_build.zig");
 const aot_freeze = @import("aot_freeze.zig");
 const aot_type_inference = @import("aot_type_inference.zig");
 const builtin_override = @import("builtin_override.zig");
@@ -1726,9 +1727,18 @@ fn handleCheck(gpa: std.mem.Allocator, args: []const []const u8) u8 {
     // program. The startup file is the user's environment rather than the program.
     runStartupFile(&ec.ctx, &global, err_writer);
 
-    ec.ctx.enterCheckMode();
+    // The checked file is analyzed on a child of the root, torn down before the exit hooks fire.
+    // The child reads the modules the startup file loaded, so both see one set of types.
+    const result = blk: {
+        var child = Context.initChild(ec.allocator, &ec.ctx, .analysis_reusing) catch {
+            err_writer.writeAll("Error: out of memory\n") catch {};
+            err_writer.flush() catch {};
+            return 1;
+        };
+        defer child.deinit();
 
-    const result = batch(&ec.ctx, path, exec.show_stack);
+        break :blk checkBatch(&child, path, exec.show_stack);
+    };
     ec.fireExitHooks(result);
     ec.finalizeBenchmark(&exec);
     return result;
@@ -4935,6 +4945,29 @@ fn replPiped(ctx: *Context, verbosity: Verbosity, writer: anytype) void {
     }
 }
 
+/// The name a file's definitions are attributed to: relative to the working directory when the
+/// file lies under it.
+fn sourceNameFor(file_path: []const u8, cwd_buf: *[std.fs.max_path_bytes]u8) []const u8 {
+    const cwd_path = std.fs.cwd().realpath(".", cwd_buf) catch return file_path;
+
+    if (std.mem.startsWith(u8, file_path, cwd_path) and file_path.len > cwd_path.len and file_path[cwd_path.len] == '/') {
+        return file_path[cwd_path.len + 1 ..];
+    }
+
+    return file_path;
+}
+
+/// The directory that relative `load` and `use` paths in the file resolve against.
+///
+/// The slice lies in `abs_buf` or in `file_path`, so a caller that keeps it copies it.
+fn sourceDirFor(file_path: []const u8, abs_buf: *[std.fs.max_path_bytes]u8) ?[]const u8 {
+    if (std.fs.cwd().realpath(file_path, abs_buf)) |abs_path| {
+        return std.fs.path.dirname(abs_path);
+    } else |_| {
+        return std.fs.path.dirname(file_path);
+    }
+}
+
 fn batch(ctx: *Context, file_path: []const u8, show_stack: bool) u8 {
     const stderr_file: File = .stderr();
     var stderr_buf: [4096]u8 = undefined;
@@ -4954,29 +4987,13 @@ fn batch(ctx: *Context, file_path: []const u8, show_stack: bool) u8 {
     };
     defer file.close();
 
-    // Set source filename for error reporting
     var cwd_buf: [std.fs.max_path_bytes]u8 = undefined;
-    ctx.current_source = if (std.fs.cwd().realpath(".", &cwd_buf)) |cwd_path| blk: {
-        if (std.mem.startsWith(u8, file_path, cwd_path) and file_path.len > cwd_path.len and file_path[cwd_path.len] == '/') {
-            break :blk file_path[cwd_path.len + 1 ..];
-        }
-        break :blk file_path;
-    } else |_| file_path;
+    ctx.current_source = sourceNameFor(file_path, &cwd_buf);
 
-    // Set current_source_dir for relative path resolution in load/use
     var abs_buf: [std.fs.max_path_bytes]u8 = undefined;
-    if (std.fs.cwd().realpath(file_path, &abs_buf)) |abs_path| {
-        if (std.fs.path.dirname(abs_path)) |dir| {
-            ctx.current_source_dir = ctx.quotationAllocator().dupe(u8, dir) catch null;
-        }
-    } else |_| {
-        if (std.fs.path.dirname(file_path)) |dir| {
-            ctx.current_source_dir = dir;
-        }
+    if (sourceDirFor(file_path, &abs_buf)) |dir| {
+        ctx.current_source_dir = ctx.quotationAllocator().dupe(u8, dir) catch null;
     }
-
-    var file_buf: [4096]u8 = undefined;
-    var reader = file.reader(&file_buf);
 
     ctx.pushLocalFrame() catch return 1;
     defer ctx.popLocalFrame();
@@ -4990,6 +5007,88 @@ fn batch(ctx: *Context, file_path: []const u8, show_stack: bool) u8 {
     const old_durable_floor = ctx.durable_frame_floor;
     ctx.durable_frame_floor = ctx.import_frame_index;
     defer ctx.durable_frame_floor = old_durable_floor;
+
+    return runFileStatements(ctx, file, show_stack, err_writer, out_writer) orelse 0;
+}
+
+/// Analyze a file on a freshly built analysis child, and print what the analysis reports.
+///
+/// The child's build setup owns the frames and the source name, so nothing is restored here.
+fn checkBatch(ctx: *Context, file_path: []const u8, show_stack: bool) u8 {
+    const stderr_file: File = .stderr();
+    var stderr_buf: [4096]u8 = undefined;
+    var stderr = stderr_file.writerStreaming(&stderr_buf);
+    const err_writer = &stderr.interface;
+
+    const stdout_file: File = .stdout();
+    var stdout_buf: [4096]u8 = undefined;
+    var stdout = stdout_file.writerStreaming(&stdout_buf);
+    const out_writer = &stdout.interface;
+
+    const file = std.fs.cwd().openFile(file_path, .{}) catch |err| {
+        err_writer.print("Error opening file '{s}': {any}\n", .{ file_path, err }) catch {};
+        err_writer.flush() catch {};
+        return 1;
+    };
+    defer file.close();
+
+    var cwd_buf: [std.fs.max_path_bytes]u8 = undefined;
+    var abs_buf: [std.fs.max_path_bytes]u8 = undefined;
+    analysis_build.begin(ctx, sourceNameFor(file_path, &cwd_buf), sourceDirFor(file_path, &abs_buf)) catch {
+        err_writer.writeAll("Error: out of memory\n") catch {};
+        err_writer.flush() catch {};
+        return 1;
+    };
+
+    if (runFileStatements(ctx, file, show_stack, err_writer, out_writer)) |code| return code;
+
+    const pragma_settings = effect_inference.readCheckPragmas(ctx);
+
+    var engine = effect_inference.InferenceEngine.init(ctx, ctx.quotationAllocator(), pragma_settings.severity_override, pragma_settings.suppressed, pragma_settings.suppress_undeclared, ctx.getAnyTypeSentinel(), pragma_settings.type_check_mode, pragma_settings.arity_check_mode, pragma_settings.default_arm_mode, pragma_settings.never_returns_mode);
+    defer engine.deinit();
+    engine.analyzeAll(ctx.current_source) catch |err| {
+        err_writer.print("Error during effect inference: {any}\n", .{err}) catch {};
+        err_writer.flush() catch {};
+        return 1;
+    };
+
+    for (engine.getDiagnostics()) |diag| {
+        if (diag.source_file) |src| {
+            err_writer.print("{s}:{d}: {s}: {s}: {s}\n", .{
+                src,
+                diag.source_line,
+                @tagName(diag.severity),
+                diag.word_name,
+                diag.message,
+            }) catch {};
+        } else {
+            err_writer.print("{s}: {s}: {s}\n", .{
+                @tagName(diag.severity),
+                diag.word_name,
+                diag.message,
+            }) catch {};
+        }
+    }
+    err_writer.flush() catch {};
+
+    if (engine.hasErrors()) return 1;
+
+    return 0;
+}
+
+/// Feed a file to the statement processor a line at a time and run each complete statement.
+///
+/// In check mode only the check statements run. The result is the exit code to stop with, or null
+/// once the whole file has been read.
+fn runFileStatements(
+    ctx: *Context,
+    file: File,
+    show_stack: bool,
+    err_writer: *std.Io.Writer,
+    out_writer: *std.Io.Writer,
+) ?u8 {
+    var file_buf: [4096]u8 = undefined;
+    var reader = file.reader(&file_buf);
 
     var processor: StatementProcessor = .{};
     defer processor.deinit();
@@ -5075,40 +5174,7 @@ fn batch(ctx: *Context, file_path: []const u8, show_stack: bool) u8 {
         }
     }
 
-    if (ctx.check_mode) {
-        const pragma_settings = effect_inference.readCheckPragmas(ctx);
-
-        var engine = effect_inference.InferenceEngine.init(ctx, ctx.quotationAllocator(), pragma_settings.severity_override, pragma_settings.suppressed, pragma_settings.suppress_undeclared, ctx.getAnyTypeSentinel(), pragma_settings.type_check_mode, pragma_settings.arity_check_mode, pragma_settings.default_arm_mode, pragma_settings.never_returns_mode);
-        defer engine.deinit();
-        engine.analyzeAll(ctx.current_source) catch |err| {
-            err_writer.print("Error during effect inference: {any}\n", .{err}) catch {};
-            err_writer.flush() catch {};
-            return 1;
-        };
-
-        for (engine.getDiagnostics()) |diag| {
-            if (diag.source_file) |src| {
-                err_writer.print("{s}:{d}: {s}: {s}: {s}\n", .{
-                    src,
-                    diag.source_line,
-                    @tagName(diag.severity),
-                    diag.word_name,
-                    diag.message,
-                }) catch {};
-            } else {
-                err_writer.print("{s}: {s}: {s}\n", .{
-                    @tagName(diag.severity),
-                    diag.word_name,
-                    diag.message,
-                }) catch {};
-            }
-        }
-        err_writer.flush() catch {};
-
-        if (engine.hasErrors()) return 1;
-    }
-
-    return 0;
+    return null;
 }
 
 // =============================================================================
@@ -5122,6 +5188,7 @@ test {
     _ = @import("context.zig");
     _ = @import("body_keyed_stores.zig");
     _ = @import("arena_origin.zig");
+    _ = @import("analysis_build.zig");
     _ = @import("quotation_stamp_store.zig");
     _ = @import("carryable_scope_gate.zig");
     _ = @import("nested_name_cache.zig");

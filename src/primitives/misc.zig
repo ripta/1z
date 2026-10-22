@@ -189,9 +189,16 @@ pub fn resolveLoadPath(ctx: *Context, filename: []const u8, alloc: std.mem.Alloc
     const name_with_ext = std.fmt.allocPrint(alloc, "{s}.1z", .{filename}) catch return null;
     defer alloc.free(name_with_ext);
 
-    for (ctx.load_paths.items) |lp| {
-        if (resolveInDir(alloc, lp, name_with_ext)) |resolved| {
-            return resolved;
+    // A child holds only the paths it added itself, so the search reads up the parent chain.
+    var path_owner: ?*const Context = ctx;
+    while (path_owner) |owner| : (path_owner = owner.parent_context) {
+        const paths = owner.snapshotLoadPaths(alloc) catch return null;
+        defer alloc.free(paths);
+
+        for (paths) |lp| {
+            if (resolveInDir(alloc, lp, name_with_ext)) |resolved| {
+                return resolved;
+            }
         }
     }
 
@@ -1011,7 +1018,7 @@ fn nativeAddLoadPath(ctx: *Context) anyerror!void {
     const path_str = try popString(ctx);
     defer container_backing.releaseValue(.{ .string = path_str });
     const duped = ctx.quotationAllocator().dupe(u8, path_str.bytes) catch return error.OutOfMemory;
-    ctx.load_paths.append(ctx.allocator, duped) catch return error.OutOfMemory;
+    ctx.addLoadPath(duped) catch return error.OutOfMemory;
 }
 
 /// 1array ( elem -- array )
@@ -2240,6 +2247,31 @@ test "resolveLoadPath prefers load_paths over stdlib_path" {
     const alloc = ctx.quotationAllocator();
     const resolved = resolveLoadPath(&ctx, "precedence-probe", alloc) orelse return error.UnexpectedNull;
     try std.testing.expect(std.mem.startsWith(u8, resolved, first_path));
+}
+
+test "resolveLoadPath on a child reads the parent's load paths, including later ones" {
+    var root = Context.init(std.testing.allocator);
+    defer root.deinit();
+    root.stdlib_path = null;
+    root.load_paths.clearRetainingCapacity();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var probe = try tmp.dir.createFile("child-path-probe.1z", .{});
+    probe.close();
+    const dir = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
+    defer std.testing.allocator.free(dir);
+
+    var child = try Context.initChild(std.testing.allocator, &root, .analysis_reusing);
+    defer child.deinit();
+
+    const alloc = child.quotationAllocator();
+    try std.testing.expect(resolveLoadPath(&child, "child-path-probe", alloc) == null);
+
+    try root.load_paths.append(root.allocator, try root.quotationAllocator().dupe(u8, dir));
+
+    const resolved = resolveLoadPath(&child, "child-path-probe", alloc) orelse return error.UnexpectedNull;
+    try std.testing.expect(std.mem.startsWith(u8, resolved, dir));
 }
 
 test "resolveLoadPath prefers load_paths over embedded" {

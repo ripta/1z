@@ -1,0 +1,7 @@
+\ The checked file runs on its own analysis context, whose bodies are recorded in a layer of its own.
+\ A body missing from that layer would be admitted without a lexical check, and `got` would bind the
+\ caller's `label` instead of raising. The word `label` names no word here, so the call must raise.
+
+reader: ( -- quot ) [ [ label ] ] ;
+runner: ( quot -- s ) [ label: "CALLER-LABEL" ; call ] ;
+got: reader runner ;

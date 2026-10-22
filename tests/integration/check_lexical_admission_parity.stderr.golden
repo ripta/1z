@@ -1,0 +1,2 @@
+tests/integration/check_lexical_admission_parity.1z:5: error 'unknown-word' at word 'label'
+  called from tests/integration/check_lexical_admission_parity.1z:7: runner

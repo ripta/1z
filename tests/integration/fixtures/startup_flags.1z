@@ -1,0 +1,3 @@
+\ Startup file fixture: it loads the flags module in full mode, so the checked file reads the
+\ module's registry as a container the root owns.
+use "flags" ;

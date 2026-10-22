@@ -1,0 +1,3 @@
+\ Startup file fixture: an exit hook that reports whether a word only the checked file defines is
+\ visible to it.
+on:exit [ drop [ checked-only-word "visible" print-line ] [ drop "hidden" print-line ] recover ] add-hook

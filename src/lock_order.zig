@@ -13,6 +13,12 @@ const std = @import("std");
 /// Level 5: tz_mutex (leaf-only Mutex in time.zig)
 /// Level 6: analysis shadow table lock (leaf-only RwLock in analysis_shadow.zig)
 ///
+/// Level 7: load path list mutex (leaf-only Mutex on each context)
+///
+/// The load path mutex is held only around an append or a copy of the list's slice, never across a
+/// filesystem probe. It sits above every other level so that it can be taken from inside any
+/// other critical section.
+///
 /// The shadow table lock is held only around a map probe or insert. It is never held while a
 /// container mutex is held, because a copy is made before the lock is taken. Pops of an ancestor's
 /// container take it shared from any level, including inside a container or channel critical
@@ -38,6 +44,7 @@ pub const LockLevel = enum(u8) {
     container = 4,
     tz = 5,
     shadow_table = 6,
+    load_paths = 7,
 };
 
 /// Per-thread lock-ordering state. Each OS thread maintains its own

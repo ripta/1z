@@ -1,0 +1,5 @@
+\ The startup file's exit hook runs after `check` has torn the checked file's analysis down. The hook
+\ looks for a word that only this file defines, and finds none. The file's definitions live in a
+\ frame that is gone before the hooks fire, and `run` hides them the same way.
+
+checked-only-word: ( -- ) [ ] ;

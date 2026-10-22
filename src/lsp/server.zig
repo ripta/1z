@@ -14,7 +14,7 @@ const formatter = @import("../formatter.zig");
 const value_mod = @import("../value.zig");
 const Instruction = value_mod.Instruction;
 const DispatchKey = @import("../dispatch.zig").DispatchKey;
-const StatementProcessor = @import("../statement.zig").StatementProcessor;
+const analysis_build = @import("../analysis_build.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -41,52 +41,7 @@ fn fileUriDir(alloc: Allocator, uri: []const u8) Allocator.Error!?[]u8 {
     return try alloc.dupe(u8, dir);
 }
 
-/// Run a document's check statements on `ctx`: its definitions and its `"name" load reexport`
-/// lines. Returns the 1-based line a parse error stopped on, or null when the whole document parsed.
-///
-/// The text goes through `StatementProcessor` a line at a time, the way `1z check` and a module
-/// load feed theirs, so each statement is parsed and tested on its own. Parsing the whole document
-/// as one statement would let any top-level code beside a definition hide the definition.
-fn runCheckStatements(ctx: *Context, text: []const u8) ?usize {
-    const saved_line_offset = ctx.parse_line_offset;
-    defer ctx.parse_line_offset = saved_line_offset;
-
-    var processor: StatementProcessor = .{};
-    defer processor.deinit();
-
-    var lines = std.mem.splitScalar(u8, text, '\n');
-    var file_line: usize = 0;
-    while (true) {
-        // Re-analysis drops whatever a statement raises, and the drop must be complete: the
-        // residue would otherwise reach the next statement, the request that follows, and every
-        // later request on this long-lived context. The bracket covers the parse as well as the
-        // execution, since a parse-time word's failure clears to zero rather than to an
-        // enclosing shield's mark.
-        const saved_error_state = ctx.saveErrorState();
-        defer ctx.restoreErrorState(saved_error_state);
-
-        const next_line = lines.next();
-        const result = if (next_line) |line| blk: {
-            file_line += 1;
-            processor.trackLine(file_line);
-            if (processor.start_line > 0) ctx.parse_line_offset = processor.start_line - 1;
-            break :blk processor.feedLine(ctx.quotationAllocator(), line, ctx);
-        } else processor.flush(ctx.quotationAllocator(), ctx);
-
-        switch (result) {
-            .needs_more_input => {},
-            .parse_error => return if (next_line != null) file_line else processor.start_line,
-            .complete => |instrs| {
-                if (instrs.len > 0 and Context.isCheckStatement(instrs)) {
-                    ctx.executeQuotation(.{ .instructions = instrs }) catch {};
-                }
-                processor.reset();
-            },
-        }
-
-        if (next_line == null) return null;
-    }
-}
+const runCheckStatements = analysis_build.runCheckStatements;
 
 pub const Server = struct {
     const AnalysisResult = struct {

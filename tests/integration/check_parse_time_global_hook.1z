@@ -1,0 +1,6 @@
+\ The checked file runs on its own analysis context, so a parse-time word cannot register a global hook.
+\ The hook registry is shared with the root, and a quotation registered from the checked file's
+\ arena would dangle once the analysis is torn down.
+
+register-exit-hook: parse-time [ on:exit: [ drop ] native.register-global-hook ] ;
+register-exit-hook

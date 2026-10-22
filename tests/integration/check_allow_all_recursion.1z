@@ -1,0 +1,5 @@
+\ `--allow-all-recursion` lifts the non-tail self-call check on a definition. `check` defines the
+\ file's words on an analysis context, so the setting has to reach that context. Without the flag
+\ the definition below raises.
+
+sum-to: ( n -- n ) [ dup 0 > [ dup 1 - sum-to + ] when ] ;
