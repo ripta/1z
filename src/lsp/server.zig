@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const types = @import("types.zig");
 const Transport = @import("transport.zig").Transport;
 const Context = @import("../context.zig").Context;
@@ -118,6 +119,15 @@ pub const Server = struct {
     /// It is parsed once at startup, after the module load that makes the name resolvable, so
     /// no request repeats that resolution.
     fmt_call: ?[]const Instruction = null,
+    /// A test seam, absent from production builds. It runs once per 1z-engine formatting request,
+    /// while the request's child is still alive, because the child's arena is the thing a test
+    /// needs to inspect.
+    format_probe: if (builtin.is_test) ?FormatProbe else void = if (builtin.is_test) null else {},
+
+    pub const FormatProbe = struct {
+        state: *anyopaque,
+        run: *const fn (state: *anyopaque, root: *Context, child: *Context) void,
+    };
 
     pub fn init(allocator: Allocator, transport: *Transport, ctx: *Context, fmt_engine: formatter.Engine) Server {
         return .{
@@ -808,17 +818,21 @@ pub const Server = struct {
     ///
     /// A failure is not fatal. `fmt_call` stays null, and formatting falls back to the built-in
     /// formatter, which is what the session would have used had the engine not been asked for.
+    ///
+    /// Each request formats on a child that does not own its loads, so a module-level cache the
+    /// formatter fills on first use would be filled with child-arena values. The token lexer is
+    /// the only such cache, and it is built here on the root. A failure to build it is handled
+    /// like a failed load, since a request would otherwise fill it from a child.
     fn loadFormatterModule(self: *Server) void {
         const saved_error_state = self.ctx.saveErrorState();
         defer self.ctx.restoreErrorState(saved_error_state);
 
-        var import_tokens = Tokenizer.init("use \"formatter\" ;");
-        const import_instrs = parser.parseTopLevel(self.ctx.quotationAllocator(), &import_tokens, self.ctx) catch |err| {
+        self.runOnRoot("use \"formatter\" ;") catch |err| {
             self.log("could not load lib/formatter.1z ({any}); using the built-in formatter", .{err});
             return;
         };
-        self.ctx.executeQuotation(.{ .instructions = import_instrs }) catch |err| {
-            self.log("could not load lib/formatter.1z ({any}); using the built-in formatter", .{err});
+        self.warmLexer() catch |err| {
+            self.log("could not warm the formatter's lexer ({any}); using the built-in formatter", .{err});
             return;
         };
 
@@ -829,19 +843,24 @@ pub const Server = struct {
         };
     }
 
-    /// Run `lib/formatter.1z`'s `format-buffer` over an editor buffer, under the `.fmt.1z` rules
-    /// that apply to the document's own directory. The caller owns the result.
+    /// Build the token lexer on the root, so no request fills its cache from a child.
     ///
-    /// The context outlives every request and is shared with all of them, so the call is
-    /// bracketed on both axes a failure could leak through: a raise leaves error state behind,
-    /// and a partial run leaves operands on the stack.
-    fn formatThroughOneZ(self: *Server, call: []const Instruction, uri: []const u8, text: []const u8) ?[]u8 {
-        const path = if (std.mem.startsWith(u8, uri, "file://")) uri["file://".len..] else uri;
-        const dir = std.fs.path.dirname(path) orelse ".";
+    /// The import lands in a scratch frame popped afterward. Analysis children resolve words
+    /// through the root's scope, so a binding left there would let a document call `<1z-lexer>`
+    /// without importing `1z-tokens`.
+    fn warmLexer(self: *Server) !void {
+        const scratch = try ScratchImports.begin(self.ctx);
+        defer scratch.end(self.ctx);
 
-        const saved_error_state = self.ctx.saveErrorState();
-        defer self.ctx.restoreErrorState(saved_error_state);
+        try self.runOnRoot("use { <1z-lexer>: } \"1z-tokens\" ;");
+        try self.runOnRoot("<1z-lexer> drop");
+    }
 
+    // ( -- )   parse and run top-level source on the root
+    //
+    // A raise partway through leaves operands behind, so the stack is cut back to its depth on
+    // entry.
+    fn runOnRoot(self: *Server, source: []const u8) !void {
         const saved_depth = self.ctx.stack.depth();
         defer {
             while (self.ctx.stack.depth() > saved_depth) {
@@ -849,11 +868,49 @@ pub const Server = struct {
             }
         }
 
-        self.ctx.stack.push(value_mod.stringValue(text)) catch return null;
-        self.ctx.stack.push(value_mod.stringValue(dir)) catch return null;
-        self.ctx.executeQuotation(.{ .instructions = call }) catch return null;
+        var tokens = Tokenizer.init(source);
+        const instrs = try parser.parseTopLevel(self.ctx.quotationAllocator(), &tokens, self.ctx);
+        try self.ctx.executeQuotation(.{ .instructions = instrs });
+    }
 
-        const result = self.ctx.stack.peek() catch return null;
+    /// Run `lib/formatter.1z`'s `format-buffer` over an editor buffer, under the `.fmt.1z` rules
+    /// that apply to the document's own directory. The caller owns the result.
+    ///
+    /// The call runs on a child of the root that lives for this one request. The formatter
+    /// retains word-body definitions and allocates streams and byte arrays on the arena of the
+    /// context that runs it, and the child's teardown releases them. The child owns no loads, so
+    /// it reads the formatter module the root already loaded.
+    ///
+    /// The result is copied to the server allocator before the child dies.
+    fn formatThroughOneZ(self: *Server, call: []const Instruction, uri: []const u8, text: []const u8) ?[]u8 {
+        const path = if (std.mem.startsWith(u8, uri, "file://")) uri["file://".len..] else uri;
+        const dir = std.fs.path.dirname(path) orelse ".";
+
+        const child = self.allocator.create(Context) catch return null;
+        defer self.allocator.destroy(child);
+
+        child.* = Context.initChild(self.allocator, self.ctx, .task) catch return null;
+        defer child.deinit();
+
+        const saved_error_state = child.saveErrorState();
+        defer child.restoreErrorState(saved_error_state);
+
+        const saved_depth = child.stack.depth();
+        defer {
+            while (child.stack.depth() > saved_depth) {
+                child.stack.popAndRelease() catch break;
+            }
+        }
+
+        child.stack.push(value_mod.stringValue(text)) catch return null;
+        child.stack.push(value_mod.stringValue(dir)) catch return null;
+        child.executeQuotation(.{ .instructions = call }) catch return null;
+
+        if (comptime builtin.is_test) {
+            if (self.format_probe) |probe| probe.run(probe.state, self.ctx, child);
+        }
+
+        const result = child.stack.peek() catch return null;
         return switch (result) {
             .string => |s| self.allocator.dupe(u8, s.bytes) catch null,
             else => null,
@@ -1433,6 +1490,26 @@ fn isOperator(text: []const u8) bool {
     }
     return false;
 }
+
+/// A frame above the root's durable scope that takes the root's `use` imports for a while.
+///
+/// A runtime load moves the import target the same way. The frame is invisible to descendants
+/// of the root, and `end` drops it with every binding it took.
+const ScratchImports = struct {
+    saved_target: ?usize,
+
+    fn begin(root: *Context) !ScratchImports {
+        const saved = root.import_frame_index;
+        try root.pushLocalFrame();
+        root.import_frame_index = root.local_frames.items.len - 1;
+        return .{ .saved_target = saved };
+    }
+
+    fn end(self: ScratchImports, root: *Context) void {
+        root.import_frame_index = self.saved_target;
+        root.popLocalFrame();
+    }
+};
 
 // =========================================================================
 // Tests
@@ -3262,4 +3339,121 @@ test "a statement that runs out of memory fails the build instead of being dropp
     }
 
     try std.testing.expect(oom_seen > 0);
+}
+
+/// Whether `value`, or anything it holds, lives in `arena`. Containers are allocated on the
+/// process allocator, so their own addresses are checked along with the bytes and instruction
+/// slices they point at.
+fn holdsArenaAddress(value: value_mod.Value, arena: *const std.heap.ArenaAllocator, depth: usize) bool {
+    if (depth == 0) return false;
+    const contains = @import("../arena_origin.zig").contains;
+
+    switch (value) {
+        .string, .symbol => |s| return contains(arena, @intFromPtr(s.bytes.ptr)),
+        .quotation => |q| return contains(arena, @intFromPtr(q.instructions.ptr)),
+        .array => |a| {
+            if (contains(arena, @intFromPtr(a)) or contains(arena, @intFromPtr(a.items.ptr))) return true;
+            for (a.items) |item| if (holdsArenaAddress(item, arena, depth - 1)) return true;
+        },
+        .vector => |v| {
+            if (contains(arena, @intFromPtr(v)) or contains(arena, @intFromPtr(v.list.items.ptr))) return true;
+            for (v.list.items) |item| if (holdsArenaAddress(item, arena, depth - 1)) return true;
+        },
+        .hash => |h| {
+            if (contains(arena, @intFromPtr(h))) return true;
+            var it = h.map.iterator();
+            while (it.next()) |entry| {
+                if (contains(arena, @intFromPtr(entry.key_ptr.*.ptr))) return true;
+                if (holdsArenaAddress(entry.value_ptr.*, arena, depth - 1)) return true;
+            }
+        },
+        .struct_instance => |s| {
+            if (contains(arena, @intFromPtr(s)) or contains(arena, @intFromPtr(s.fields.ptr))) return true;
+            for (s.fields) |field| if (holdsArenaAddress(field, arena, depth - 1)) return true;
+        },
+        else => {},
+    }
+
+    return false;
+}
+
+const LexerCacheProbe = struct {
+    requests: usize = 0,
+    cache_entries: usize = 0,
+    child_addresses: usize = 0,
+    inspect_failed: bool = false,
+
+    // ( -- )   fills `cache_entries` and `child_addresses` from the root's lexer cache
+    fn run(state: *anyopaque, root: *Context, child: *Context) void {
+        const self: *LexerCacheProbe = @ptrCast(@alignCast(state));
+        self.requests += 1;
+
+        const cache = readLexerCache(root) catch {
+            self.inspect_failed = true;
+            return;
+        };
+        defer root.stack.popAndRelease() catch {};
+
+        self.cache_entries = cache.vector.list.items.len;
+        if (holdsArenaAddress(cache, child.arena, 12)) self.child_addresses += 1;
+    }
+};
+
+// ( -- vec )   leaves the root's `(1z-lexer-cache)` vector on its stack and returns it
+//
+// The import is made in a frame popped before returning, so the root's scope is unchanged.
+fn readLexerCache(root: *Context) !value_mod.Value {
+    const scratch = try ScratchImports.begin(root);
+    defer scratch.end(root);
+
+    var import_tokens = Tokenizer.init("use { (1z-lexer-cache): } \"1z-tokens\" ;");
+    const import_instrs = try parser.parseTopLevel(root.quotationAllocator(), &import_tokens, root);
+    try root.executeQuotation(.{ .instructions = import_instrs });
+
+    var read_tokens = Tokenizer.init("(1z-lexer-cache)");
+    const read_instrs = try parser.parseTopLevel(root.quotationAllocator(), &read_tokens, root);
+    try root.executeQuotation(.{ .instructions = read_instrs });
+
+    return root.stack.peek();
+}
+
+test "1z-engine formatting runs on a per-request child and the lexer cache holds nothing from one" {
+    var ctx = Context.initWithPrelude(std.testing.allocator);
+    defer ctx.deinit();
+
+    var lib_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const lib_path = try std.fs.cwd().realpath("lib", &lib_buf);
+    ctx.stdlib_path = try ctx.quotationAllocator().dupe(u8, lib_path);
+
+    var reader = IoReader.fixed("");
+    var out_buf: [256]u8 = undefined;
+    var writer = IoWriter.fixed(&out_buf);
+    var transport = Transport.init(std.testing.allocator, &reader, &writer);
+    var server = Server.init(std.testing.allocator, &transport, &ctx, .one_z);
+    defer server.deinit();
+
+    server.loadFormatterModule();
+    try std.testing.expect(server.fmt_call != null);
+
+    try std.testing.expect(ctx.lookupWord("<1z-lexer>") == null);
+
+    const warmed = try readLexerCache(&ctx);
+    try std.testing.expect(warmed.vector.list.items.len > 0);
+    try ctx.stack.popAndRelease();
+
+    var probe: LexerCacheProbe = .{};
+    server.format_probe = .{ .state = &probe, .run = LexerCacheProbe.run };
+
+    const messy = "double: ( n -- n )   [ 2    * ] ;\n";
+    const first = server.formatDocument("file:///doc.1z", messy) orelse return error.FormatFailed;
+    defer std.testing.allocator.free(first);
+    const second = server.formatDocument("file:///doc.1z", messy) orelse return error.FormatFailed;
+    defer std.testing.allocator.free(second);
+
+    try std.testing.expectEqualStrings(first, second);
+    try std.testing.expectEqual(@as(usize, 2), probe.requests);
+    try std.testing.expect(!probe.inspect_failed);
+    try std.testing.expect(probe.cache_entries > 0);
+    try std.testing.expectEqual(@as(usize, 0), probe.child_addresses);
+    try std.testing.expect(ctx.lookupWord("<1z-lexer>") == null);
 }
