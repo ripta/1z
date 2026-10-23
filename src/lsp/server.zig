@@ -3100,6 +3100,32 @@ test "a parse diagnostic carries the parser's message at the opener's line" {
     try std.testing.expectEqual(@as(usize, 1), parse_diagnostics);
 }
 
+test "an invalid escape is a parse diagnostic on the literal's line" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+    try ctx.loadPrelude(null);
+
+    var out_buf: [65536]u8 = undefined;
+    var session: Session = undefined;
+    session.start(std.testing.allocator, &ctx, &out_buf);
+    defer session.stop();
+
+    const text = "above: ( -- x ) [ 1 ] ;\\nbad: ( -- x ) [\\n  \\\"a\\\\qb\\\"\\n] ;\\nbelow: ( -- x ) [ 2 ] ;";
+    const sent = try session.open(test_uri, text);
+    try std.testing.expect(std.mem.indexOf(u8, sent, "invalid-escape-sequence") != null);
+
+    const published = session.server.documents.get(test_uri).?.published.?;
+    var found: usize = 0;
+    for (published.diagnostics) |diag| {
+        if (std.mem.indexOf(u8, diag.message, "invalid-escape-sequence") == null) continue;
+
+        found += 1;
+        try std.testing.expectEqual(@as(i64, 2), diag.range.start.line);
+        try std.testing.expectEqual(@as(i64, 1), diag.severity);
+    }
+    try std.testing.expectEqual(@as(usize, 1), found);
+}
+
 test "a version that ends in an unclosed quote recovers the definitions after it" {
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();

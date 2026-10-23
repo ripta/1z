@@ -3381,6 +3381,18 @@ test "eval error returns 1" {
     try std.testing.expect(handle.last_error != null);
 }
 
+test "eval of an invalid escape returns 1 and names the error" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    const source = "\"a\\qb\"";
+    try std.testing.expectEqual(@as(c_int, 1), onez_eval(handle_ptr, source, source.len));
+
+    const handle = castHandle(handle_ptr).?;
+    try std.testing.expectEqualStrings("InvalidEscapeSequence", handle.last_error.?);
+}
+
 test "null handle returns error" {
     try std.testing.expectEqual(@as(c_int, ONEZ_ERR_NULL_HANDLE), onez_eval(null, "", 0));
     onez_deinit(null); // should not crash!

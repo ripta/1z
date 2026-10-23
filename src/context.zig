@@ -706,6 +706,10 @@ pub const ParseDiagnostics = struct {
     message: ?[]const u8 = null,
     error_type: ?[]const u8 = null,
     opening_line: ?usize = null,
+
+    /// The tokenizer-relative line of the offending text, when the error is not about a
+    /// delimiter that opened earlier.
+    line: ?usize = null,
 };
 
 pub const AotQuotationFnTable = struct {
@@ -1136,6 +1140,10 @@ pub const Context = struct {
     /// Parse-time error diagnostics, populated by the parser catch blocks
     /// and consumed by the display sites in main.zig.
     parse_diagnostics: ?ParseDiagnostics = null,
+    /// The tokenizer-relative source line of the literal a primitive just rejected, when it read the
+    /// literal from the parse stream. `handleParseTimeError` copies it into the diagnostic only when
+    /// the error escapes to the parser, so a caught error leaves no diagnostic behind.
+    pending_error_line: ?usize = null,
     /// Pending error message set by primitives before returning an error.
     /// Used by finalizeErrorDetails for the innermost frame's message.
     pending_error_message: ?[]const u8 = null,

@@ -1,0 +1,19 @@
+\ resolve-literal applies the literal grammar to a runtime string. An invalid escape raises a
+\ runtime error instead of a parse error.
+
+use "testing" ;
+
+"resolve-literal rejects an invalid escape" test-section
+
+[ "\"a\\qb\"" resolve-literal ] [ ] recover
+error-type: @get invalid-escape-sequence: "unknown escape error type" assert=
+
+[ "\"a\\qb\"" resolve-literal ] [ ] recover
+message: @get "invalid escape sequence '\\q' in a string literal" "unknown escape message" assert=
+
+[ "\"abc\\\"" resolve-literal ] [ ] recover
+message: @get "invalid escape sequence '\\' in a string literal" "lone trailing backslash message" assert=
+
+"resolve-literal decodes a valid escape" test-section
+
+"\"a\\nb\"" resolve-literal drop "a\nb" "newline escape decoded" assert=

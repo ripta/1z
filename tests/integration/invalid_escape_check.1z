@@ -1,0 +1,3 @@
+\ Check mode reports an invalid escape like a parse error.
+"fine" print-line
+"a\qb" print-line

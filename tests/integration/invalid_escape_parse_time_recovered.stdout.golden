@@ -1,0 +1,11 @@
+Stack: [ ]
+Stack: [ ]
+=== a recovered invalid escape keeps its message ===
+Stack: [ ]
+PASS: message survives recover
+Stack: [ ]
+PASS: type survives recover
+Stack: [ ]
+Stack: [ ]
+=== an unrelated parse-time failure is reported as itself ===
+Stack: [ ]

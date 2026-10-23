@@ -1,0 +1,1 @@
+tests/integration/invalid_escape_parse_literal.1z:6: error 'invalid-escape-sequence' invalid escape sequence '\q' in a string literal

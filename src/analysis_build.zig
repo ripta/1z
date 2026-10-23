@@ -216,7 +216,7 @@ const Run = struct {
 
         const error_type = if (diag) |d| d.error_type else null;
         const message = if (diag) |d| d.message else null;
-        const opening = if (diag) |d| d.opening_line else null;
+        const opening = if (diag) |d| d.opening_line orelse d.line else null;
 
         const line = if (opening) |ol|
             (if (start > 0) ol + start - 1 else ol)
@@ -537,6 +537,8 @@ test "a trailing backslash inside a string does not hide the quote that closes i
     defer run.stop();
 
     try std.testing.expectEqual(@as(?usize, null), run.outcome.open_string_line);
-    try std.testing.expectEqual(@as(usize, 2), run.outcome.failures.len);
+    try std.testing.expectEqual(@as(usize, 3), run.outcome.failures.len);
+    try std.testing.expectEqualStrings("InvalidEscapeSequence", run.outcome.failures[1].error_type);
+    try std.testing.expectEqual(@as(usize, 2), run.outcome.failures[1].line);
     try std.testing.expect(run.defines("later"));
 }

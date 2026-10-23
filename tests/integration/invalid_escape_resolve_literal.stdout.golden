@@ -1,0 +1,15 @@
+=== resolve-literal rejects an invalid escape ===
+Stack: [ ]
+Stack: [ <error invalid-escape-sequence: invalid escape sequence '\q' in a string literal [tests/integration/invalid_escape_resolve_literal.1z:8:resolve-literal <- tests/integration/invalid_escape_resolve_literal.1z:8:recover]> ]
+PASS: unknown escape error type
+Stack: [ ]
+Stack: [ <error invalid-escape-sequence: invalid escape sequence '\q' in a string literal [tests/integration/invalid_escape_resolve_literal.1z:11:resolve-literal <- tests/integration/invalid_escape_resolve_literal.1z:11:recover]> ]
+PASS: unknown escape message
+Stack: [ ]
+Stack: [ <error invalid-escape-sequence: invalid escape sequence '\' in a string literal [tests/integration/invalid_escape_resolve_literal.1z:14:resolve-literal <- tests/integration/invalid_escape_resolve_literal.1z:14:recover]> ]
+PASS: lone trailing backslash message
+Stack: [ ]
+=== resolve-literal decodes a valid escape ===
+Stack: [ ]
+PASS: newline escape decoded
+Stack: [ ]

@@ -135,7 +135,17 @@ fn parseTokensUntilCore(ctx: *Context, delimiter: []const u8, mode: ParseMode) !
 
 /// Resolve a token string as a scalar literal value. Returns null if the token is not a
 /// recognized scalar form.
-fn resolveScalarLiteral(alloc: std.mem.Allocator, arena_alloc: std.mem.Allocator, token: []const u8) std.mem.Allocator.Error!?Value {
+///
+/// A string literal with an invalid escape fails with `InvalidEscapeSequence`. When `line` is
+/// given, the parser's diagnostic records it, so the failure reports where the literal sits.
+fn resolveScalarLiteral(
+    ctx: *Context,
+    alloc: std.mem.Allocator,
+    token: []const u8,
+    line: ?usize,
+) !?Value {
+    const arena_alloc = ctx.arena.allocator();
+
     if (tokenizer_mod.parseInteger(token)) |n| {
         return .{ .fixnum = n };
     }
@@ -149,7 +159,15 @@ fn resolveScalarLiteral(alloc: std.mem.Allocator, arena_alloc: std.mem.Allocator
     }
 
     if (tokenizer_mod.parseString(token)) |s| {
-        const s_copy = try parser.processEscapes(alloc, s);
+        var failure: parser.EscapeFailure = undefined;
+        const s_copy = parser.processEscapes(alloc, s, &failure) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.InvalidEscapeSequence => {
+                helpers.setErrorContext(ctx, "invalid escape sequence '{s}' in a string literal", .{failure.text});
+                ctx.pending_error_line = if (line) |l| l + failure.line_offset else null;
+                return error.InvalidEscapeSequence;
+            },
+        };
         return value_mod.stringValue(s_copy);
     }
 
@@ -166,7 +184,7 @@ fn resolveScalarLiteral(alloc: std.mem.Allocator, arena_alloc: std.mem.Allocator
 fn tryResolveLiteral(ctx: *Context, alloc: std.mem.Allocator, tokenizer: *tokenizer_mod.Tokenizer, tok: Token) !Value {
     const token = tok.text;
 
-    if (try resolveScalarLiteral(alloc, ctx.arena.allocator(), token)) |val| {
+    if (try resolveScalarLiteral(ctx, alloc, token, tok.line)) |val| {
         return val;
     }
 
@@ -295,12 +313,14 @@ fn nativePeekToken(ctx: *Context) anyerror!void {
 }
 
 /// resolve-literal ( string -- value true | string false )
+///
+/// A string literal with an invalid escape raises `invalid-escape-sequence` as a runtime error.
 fn nativeResolveLiteral(ctx: *Context) anyerror!void {
     const token = try popString(ctx);
     defer container_backing.releaseValue(.{ .string = token });
     const alloc = ctx.quotationAllocator();
 
-    if (try resolveScalarLiteral(alloc, ctx.arena.allocator(), token.bytes)) |val| {
+    if (try resolveScalarLiteral(ctx, alloc, token.bytes, null)) |val| {
         try ctx.stack.push(val);
         try ctx.stack.push(.{ .boolean = true });
     } else {
@@ -397,7 +417,7 @@ pub fn nativeParseLiteral(ctx: *Context) anyerror!void {
 
         const token = tok.text;
 
-        if (try resolveScalarLiteral(alloc, ctx.arena.allocator(), token)) |val| {
+        if (try resolveScalarLiteral(ctx, alloc, token, tok.line)) |val| {
             try ctx.stack.push(val);
             return;
         }

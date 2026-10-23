@@ -1,0 +1,2 @@
+\ A surrogate code point has no UTF-8 encoding, so its escape is an error.
+"a\u{D800}b" print-line

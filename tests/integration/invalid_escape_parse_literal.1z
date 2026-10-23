@@ -1,0 +1,6 @@
+\ parse-literal reads a literal from the parse stream. An invalid escape in it is a parse error on the
+\ literal's own line.
+grab-lit: parse-time [ parse-literal ] ;
+
+lit-result: grab-lit
+"a\qb" ;

@@ -1,0 +1,19 @@
+\ A parse-time word that recovers from an invalid escape must not leave a diagnostic behind. The
+\ later, unrelated parse-time failure is reported as itself, on its own line.
+
+use "testing" ;
+
+try-lit: parse-time [ [ parse-literal ] [ ] recover ] ;
+
+caught-error: try-lit "a\qb" ;
+
+"a recovered invalid escape keeps its message" test-section
+
+caught-error message: @get "invalid escape sequence '\\q' in a string literal" "message survives recover" assert=
+caught-error error-type: @get invalid-escape-sequence: "type survives recover" assert=
+
+divide: parse-time [ 1 0 / ] ;
+
+"an unrelated parse-time failure is reported as itself" test-section
+
+after: divide ;

@@ -1,0 +1,5 @@
+\ A \x escape needs two hex digits.
+[
+  "fine" print-line
+  "a\x4" print-line
+]

@@ -1,0 +1,1 @@
+tests/integration/invalid_escape_parse_time_recovered.1z:19: error 'division-by-zero'

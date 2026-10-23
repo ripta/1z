@@ -42,7 +42,7 @@ use "strings" ;
 "\t hello \n" trim "hello" "trim mixed whitespace both sides" assert=
 
 "unicode preservation" test-section
-"  cafe\u0301  " trim "cafe\u0301" "trim preserves combining accent" assert=
+"  cafe\u{0301}  " trim "cafe\u{0301}" "trim preserves combining accent" assert=
 
 "string #slice empty range" test-section
 "hello" 0 0 #slice "" "string slice 0 0" assert=

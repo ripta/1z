@@ -1,0 +1,3 @@
+\ A \u{...} escape must hold hex digits and close its brace.
+"fine" print-line
+"a\u{12zz}b" print-line

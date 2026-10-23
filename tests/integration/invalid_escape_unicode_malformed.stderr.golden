@@ -1,0 +1,1 @@
+tests/integration/invalid_escape_unicode_malformed.1z:3: error 'invalid-escape-sequence' invalid escape sequence '\u{12z' in a string literal

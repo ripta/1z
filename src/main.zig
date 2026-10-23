@@ -202,7 +202,8 @@ fn printParseDiagnostics(ctx: *Context, writer: anytype, source: []const u8, lin
     if (diag.error_type) |error_type| {
         var kebab_buf: [128]u8 = undefined;
         const kebab_name = pascalToKebabRuntime(error_type, &kebab_buf);
-        writer.print("{s}:{d}: error '{s}'", .{ source, line, kebab_name }) catch return;
+        const shown_line = if (diag.line) |dl| (if (start_line > 0) dl + start_line - 1 else dl) else line;
+        writer.print("{s}:{d}: error '{s}'", .{ source, shown_line, kebab_name }) catch return;
         if (diag.message) |msg| {
             writer.print(" {s}", .{msg}) catch return;
         }

@@ -1,0 +1,1 @@
+tests/integration/invalid_escape_surrogate.1z:2: error 'invalid-escape-sequence' invalid escape sequence '\u{D800}' in a string literal

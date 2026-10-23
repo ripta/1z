@@ -26,41 +26,91 @@ const markers_mod = @import("primitives/markers.zig");
 const Marker = value_mod.Marker;
 const constraint_analysis = @import("constraint_analysis.zig");
 
-/// Process escape sequences in a string and allocate the result; supports
-/// Zig-compatible escape sequences: \n, \r, \t, \\, \", \', \xHH, \u{HHHH}
-pub fn processEscapes(allocator: Allocator, input: []const u8) ![]u8 {
-    const result = try allocator.alloc(u8, input.len);
-    var out_idx: usize = 0;
+/// Where `processEscapes` found an escape it cannot decode.
+pub const EscapeFailure = struct {
+    /// The offending escape as written, from its backslash through the character that broke it.
+    text: []const u8,
 
+    /// Newlines in the input before the escape, so a caller can place it on a source line.
+    line_offset: usize,
+};
+
+/// Process escape sequences in a string and allocate the result; supports
+/// Zig-compatible escape sequences: \n, \r, \t, \\, \", \', \xHH, and \u{...} with one to six hex
+/// digits.
+///
+/// Any other escape fails with `InvalidEscapeSequence`. A trailing lone backslash, a `\x` with
+/// fewer than two hex digits, a `\u` without braces, a malformed `\u{...}`, and a surrogate or
+/// out-of-range code point all fail. When `failure` is given, it receives the first bad escape.
+pub fn processEscapes(
+    allocator: Allocator,
+    input: []const u8,
+    failure: ?*EscapeFailure,
+) error{ OutOfMemory, InvalidEscapeSequence }![]u8 {
+    const result = try allocator.alloc(u8, input.len);
+    errdefer allocator.free(result);
+
+    var out_idx: usize = 0;
     var i: usize = 0;
     while (i < input.len) {
-        if (input[i] == '\\') {
-            const escape_start = i;
-            const parsed = std.zig.string_literal.parseEscapeSequence(input, &i);
-            switch (parsed) {
-                .success => |codepoint| {
-                    var buf: [4]u8 = undefined;
-                    const len = std.unicode.utf8Encode(codepoint, &buf) catch 1;
-                    @memcpy(result[out_idx..][0..len], buf[0..len]);
-                    out_idx += len;
-                },
-                .failure => {
-                    // The parser has already moved past the escape, so reading `input[i]` here ran
-                    // off the end of a string that ends in a backslash.
-                    result[out_idx] = '\\';
-                    out_idx += 1;
-                    i = escape_start + 1;
-                },
-            }
+        if (input[i] != '\\') {
+            result[out_idx] = input[i];
+            out_idx += 1;
+            i += 1;
             continue;
         }
 
-        result[out_idx] = input[i];
-        out_idx += 1;
-        i += 1;
+        const escape_start = i;
+        const parsed = std.zig.string_literal.parseEscapeSequence(input, &i);
+        const bad_at: usize = switch (parsed) {
+            .success => |codepoint| blk: {
+                var buf: [4]u8 = undefined;
+                // Only a surrogate has no UTF-8 form, and `i - 1` is the brace that closes its escape.
+                const len = std.unicode.utf8Encode(codepoint, &buf) catch break :blk i - 1;
+                @memcpy(result[out_idx..][0..len], buf[0..len]);
+                out_idx += len;
+                continue;
+            },
+            .failure => |f| switch (f) {
+                inline else => |pos| if (@TypeOf(pos) == void) escape_start else pos,
+            },
+        };
+
+        if (failure) |out| {
+            var end = @min(bad_at + 1, input.len);
+            while (end < input.len and input[end] & 0xC0 == 0x80) end += 1;
+            out.* = .{
+                .text = input[escape_start..end],
+                .line_offset = std.mem.count(u8, input[0..escape_start], "\n"),
+            };
+        }
+        return error.InvalidEscapeSequence;
     }
 
     return allocator.realloc(result, out_idx);
+}
+
+/// Record an invalid escape in a string literal as the parser's diagnostic and return its error.
+///
+/// `literal_line` is the tokenizer-relative line the literal starts on.
+fn invalidEscapeDiagnostics(
+    allocator: Allocator,
+    ctx: ?*Context,
+    literal_line: usize,
+    failure: EscapeFailure,
+) ParseError {
+    if (ctx) |c| {
+        c.parse_diagnostics = .{
+            .error_type = "InvalidEscapeSequence",
+            .message = std.fmt.allocPrint(
+                allocator,
+                "invalid escape sequence '{s}' in a string literal",
+                .{failure.text},
+            ) catch "invalid escape sequence in a string literal",
+            .line = literal_line + failure.line_offset,
+        };
+    }
+    return ParseError.InvalidEscapeSequence;
 }
 
 /// Get the next non-comment, non-newline token from the tokenizer.
@@ -100,6 +150,7 @@ pub const ParseError = error{
     MalformedStackEffect,
     InvalidArrayElement,
     StatementTooLong,
+    InvalidEscapeSequence,
     OutOfMemory,
     ParseTimeExecutionError,
     DebuggerQuit,
@@ -245,6 +296,11 @@ fn handleParseTimeError(c: *Context, err: anyerror) ParseError {
         c.parse_diagnostics = .{
             .error_type = @errorName(err),
         };
+    }
+
+    if (err == error.InvalidEscapeSequence) {
+        if (c.parse_diagnostics) |*diag| diag.line = c.pending_error_line;
+        c.pending_error_line = null;
     }
     return ParseError.ParseTimeExecutionError;
 }
@@ -509,6 +565,8 @@ const ClassifyResult = union(enum) {
     value: Value,
     /// Token starts with `"` but is not a complete string literal.
     unmatched_quote,
+    /// Token is a string literal holding an escape that cannot be decoded.
+    invalid_escape: EscapeFailure,
     /// Token is not a scalar literal.
     unrecognized,
 };
@@ -528,7 +586,11 @@ fn classifyLiteral(allocator: Allocator, token: []const u8) Allocator.Error!Clas
         return .{ .value = .{ .float = f } };
     }
     if (parseString(token)) |s| {
-        const s_copy = try processEscapes(allocator, s);
+        var failure: EscapeFailure = undefined;
+        const s_copy = processEscapes(allocator, s, &failure) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.InvalidEscapeSequence => return .{ .invalid_escape = failure },
+        };
         return .{ .value = value_mod.stringValue(s_copy) };
     }
     if (token.len > 0 and token[0] == '"') {
@@ -630,6 +692,7 @@ pub fn parseTopLevel(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*Context
                     setUnmatchedDiagnostics(ctx, "UnmatchedOpenQuote", line);
                     return ParseError.UnmatchedOpenQuote;
                 },
+                .invalid_escape => |failure| return invalidEscapeDiagnostics(allocator, ctx, line, failure),
                 .unrecognized => {
                     if (ctx != null) {
                         if (try maybeParseConstraintExpression(allocator, tokenizer, ctx, token)) |constraint_val| {
@@ -827,6 +890,7 @@ fn parseQuotationBody(
                     setUnmatchedDiagnostics(ctx, "UnmatchedOpenQuote", line);
                     return ParseError.UnmatchedOpenQuote;
                 },
+                .invalid_escape => |failure| return invalidEscapeDiagnostics(allocator, ctx, line, failure),
                 .unrecognized => {
                     if (ctx != null) {
                         if (try maybeParseConstraintExpression(allocator, tokenizer, ctx, token)) |constraint_val| {
@@ -1489,6 +1553,7 @@ pub fn parseArray(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*Context, o
                     setUnmatchedDiagnostics(ctx, "UnmatchedOpenQuote", tok.line);
                     return ParseError.UnmatchedOpenQuote;
                 },
+                .invalid_escape => |failure| return invalidEscapeDiagnostics(allocator, ctx, tok.line, failure),
                 .unrecognized => {
                     if (ctx) |c| {
                         if (c.lookupWord(token)) |word| {
@@ -2495,20 +2560,73 @@ test "bare use with no filename yet reports incompleteness" {
     try std.testing.expectError(ParseError.UnterminatedTokenScan, result);
 }
 
-test "processEscapes keeps the backslash of an invalid escape and reads on after it" {
-    const keeps = try processEscapes(std.testing.allocator, "a\\qb");
-    defer std.testing.allocator.free(keeps);
-    try std.testing.expectEqualStrings("a\\qb", keeps);
+test "processEscapes decodes every supported escape" {
+    const decoded = try processEscapes(std.testing.allocator, "\\n\\r\\t\\\\\\\"\\'\\x41\\u{42}\\u{1F600}", null);
+    defer std.testing.allocator.free(decoded);
+    try std.testing.expectEqualStrings("\n\r\t\\\"'AB\u{1F600}", decoded);
+}
 
-    const trailing = try processEscapes(std.testing.allocator, "abc\\");
-    defer std.testing.allocator.free(trailing);
-    try std.testing.expectEqualStrings("abc\\", trailing);
+test "processEscapes rejects an invalid escape and reports it" {
+    const Case = struct { input: []const u8, text: []const u8, line_offset: usize };
+    const cases = [_]Case{
+        .{ .input = "a\\qb", .text = "\\q", .line_offset = 0 },
+        .{ .input = "abc\\", .text = "\\", .line_offset = 0 },
+        .{ .input = "abc\\\n", .text = "\\\n", .line_offset = 0 },
+        .{ .input = "x\\x4", .text = "\\x4", .line_offset = 0 },
+        .{ .input = "x\\x4g", .text = "\\x4g", .line_offset = 0 },
+        .{ .input = "x\\xg0", .text = "\\xg", .line_offset = 0 },
+        .{ .input = "e\\u0301", .text = "\\u0", .line_offset = 0 },
+        .{ .input = "e\\u", .text = "\\u", .line_offset = 0 },
+        .{ .input = "e\\u{}", .text = "\\u{}", .line_offset = 0 },
+        .{ .input = "e\\u{12zz}", .text = "\\u{12z", .line_offset = 0 },
+        .{ .input = "e\\u{12", .text = "\\u{12", .line_offset = 0 },
+        .{ .input = "e\\u{110000}", .text = "\\u{110000", .line_offset = 0 },
+        .{ .input = "e\\u{D800}", .text = "\\u{D800}", .line_offset = 0 },
+        .{ .input = "line one\nline two \\q", .text = "\\q", .line_offset = 1 },
+        .{ .input = "\\\u{E9}", .text = "\\\u{E9}", .line_offset = 0 },
+    };
 
-    const before_newline = try processEscapes(std.testing.allocator, "abc\\\n");
-    defer std.testing.allocator.free(before_newline);
-    try std.testing.expectEqualStrings("abc\\\n", before_newline);
+    for (cases) |case| {
+        var failure: EscapeFailure = undefined;
+        try std.testing.expectError(
+            error.InvalidEscapeSequence,
+            processEscapes(std.testing.allocator, case.input, &failure),
+        );
+        try std.testing.expectEqualStrings(case.text, failure.text);
+        try std.testing.expectEqual(case.line_offset, failure.line_offset);
+    }
 
-    const valid = try processEscapes(std.testing.allocator, "a\\nb");
-    defer std.testing.allocator.free(valid);
-    try std.testing.expectEqualStrings("a\nb", valid);
+    try std.testing.expectError(
+        error.InvalidEscapeSequence,
+        processEscapes(std.testing.allocator, "a\\qb", null),
+    );
+}
+
+test "an invalid escape on a later line of a multi-line literal reports start line plus offset" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    var tokenizer = Tokenizer.init("1\n\"first\nsecond\nthird \\q\"\n");
+    try std.testing.expectError(
+        ParseError.InvalidEscapeSequence,
+        parseTopLevel(ctx.arena.allocator(), &tokenizer, &ctx),
+    );
+
+    try std.testing.expectEqual(@as(?usize, 4), ctx.parse_diagnostics.?.line);
+}
+
+test "a string literal with an invalid escape fails the parse with a diagnostic on its line" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    var tokenizer = Tokenizer.init("1 2\n\"a\\qb\"\n");
+    try std.testing.expectError(
+        ParseError.InvalidEscapeSequence,
+        parseTopLevel(ctx.arena.allocator(), &tokenizer, &ctx),
+    );
+
+    const diag = ctx.parse_diagnostics.?;
+    try std.testing.expectEqualStrings("InvalidEscapeSequence", diag.error_type.?);
+    try std.testing.expectEqual(@as(?usize, 2), diag.line);
+    try std.testing.expect(std.mem.indexOf(u8, diag.message.?, "'\\q'") != null);
 }

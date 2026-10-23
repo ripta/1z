@@ -57,17 +57,11 @@ fn nativeSandboxParse(ctx: *Context) anyerror!void {
         if (SandboxSpec.fromString(tok.text)) |cap| {
             spec.grant(cap);
         } else {
-            ctx.parse_diagnostics = .{
-                .error_type = "TypeMismatch",
-                .message = std.fmt.allocPrint(alloc, "sandbox{{: unknown capability '{s}'. Valid capabilities: io, process, io/fs, io/net, ffi, system, eval", .{tok.text}) catch null,
-            };
+            helpers.setErrorContext(ctx, "sandbox{{: unknown capability '{s}'. Valid capabilities: io, process, io/fs, io/net, ffi, system, eval", .{tok.text});
             return error.TypeMismatch;
         }
     }
 
-    ctx.parse_diagnostics = .{
-        .error_type = "ParseError",
-        .message = "sandbox{: unexpected end of input, expected '}' to close sandbox spec",
-    };
+    helpers.setErrorContext(ctx, "sandbox{{: unexpected end of input, expected '}}' to close sandbox spec", .{});
     return error.ParseError;
 }
