@@ -43,8 +43,6 @@ fn fileUriDir(alloc: Allocator, uri: []const u8) Allocator.Error!?[]u8 {
     return try alloc.dupe(u8, dir);
 }
 
-const runCheckStatements = analysis_build.runCheckStatements;
-
 pub const Server = struct {
     pub const AnalysisResult = struct {
         arena: std.heap.ArenaAllocator,
@@ -106,10 +104,12 @@ pub const Server = struct {
     state: State = .uninitialized,
     ctx: *Context,
     documents: std.StringHashMap(Document),
-    /// Builds attempted. A test seam: tests read it to show that a query builds nothing.
-    builds: usize = 0,
-    /// Children alive. A test seam: tests read it to show that every teardown site runs.
-    live_children: usize = 0,
+    /// Builds attempted. A test seam, absent from production builds: tests read it to show that a
+    /// query builds nothing.
+    builds: if (builtin.is_test) usize else void = if (builtin.is_test) 0 else {},
+    /// Children alive. A test seam, absent from production builds: tests read it to show that
+    /// every teardown site runs.
+    live_children: if (builtin.is_test) usize else void = if (builtin.is_test) 0 else {},
     /// A test seam. Production always builds with `buildAnalysis`.
     builder: Builder = buildAnalysis,
     fmt_engine: formatter.Engine,
@@ -380,7 +380,7 @@ pub const Server = struct {
     /// Store a document's new text and drop the analysis built from the old text.
     ///
     /// No query can then answer from an older version. The record keeps the diagnostics last
-    /// published, which a version with a parse error republishes.
+    /// published.
     fn setText(self: *Server, uri: []const u8, text: []const u8) !void {
         const owned_text = try self.allocator.dupe(u8, text);
         errdefer self.allocator.free(owned_text);
@@ -409,7 +409,7 @@ pub const Server = struct {
         doc.child = null;
 
         self.destroyChild(child);
-        self.live_children -= 1;
+        if (builtin.is_test) self.live_children -= 1;
     }
 
     fn analyzeDocument(self: *Server, uri: []const u8) void {
@@ -435,7 +435,7 @@ pub const Server = struct {
     /// diagnostics. A failure is recorded on the document for this version, and `retry` keeps a
     /// repeated failure from publishing the same diagnostic again.
     fn rebuild(self: *Server, uri: []const u8, doc: *Document, retry: bool) void {
-        self.builds += 1;
+        if (builtin.is_test) self.builds += 1;
 
         const built = self.builder(self, uri, doc.text) catch |err| {
             self.recordFailure(uri, doc, err, retry);
@@ -444,7 +444,7 @@ pub const Server = struct {
 
         doc.child = built.child;
         doc.failure = null;
-        self.live_children += 1;
+        if (builtin.is_test) self.live_children += 1;
 
         const result = self.diagnose(built.child, doc.text, built.parse_failures) catch |err| {
             self.dropChild(doc);

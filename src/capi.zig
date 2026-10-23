@@ -5480,6 +5480,32 @@ test "check sees words from nested isolation frames" {
     try std.testing.expectEqual(ONEZ_OK, onez_isolation_end(handle_ptr));
 }
 
+test "check does not analyze a host word defined inside an isolation frame under the same source" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    const path = "/private/tmp/claude-501/capi_check_isolated_same_source.1z";
+    const file = std.fs.cwd().createFile(path, .{}) catch return;
+    defer std.fs.cwd().deleteFile(path) catch {};
+    file.writeAll("iso-bad: ( n -- ) [ 1 + ] ;\n") catch return;
+    file.close();
+
+    try std.testing.expectEqual(ONEZ_OK, onez_isolation_begin(handle_ptr));
+    try std.testing.expectEqual(ONEZ_OK, onez_eval_file(handle_ptr, path));
+    try std.testing.expectEqual(ONEZ_OK, onez_set_source(handle_ptr, path.ptr, path.len));
+
+    const clean = "clean: ( n -- n ) [ ] ;";
+    try std.testing.expectEqual(ONEZ_OK, onez_check(handle_ptr, clean, clean.len));
+    try std.testing.expectEqual(@as(usize, 0), onez_diag_count(handle_ptr));
+
+    const own_bad = "own-bad: ( n -- ) [ 1 + ] ;";
+    try std.testing.expectEqual(@as(c_int, 1), onez_check(handle_ptr, own_bad, own_bad.len));
+    try std.testing.expectEqual(@as(usize, 1), onez_diag_count(handle_ptr));
+
+    try std.testing.expectEqual(ONEZ_OK, onez_isolation_end(handle_ptr));
+}
+
 test "check leaves the handle's frame indices as it found them" {
     const handle_ptr = onez_init();
     try std.testing.expect(handle_ptr != null);

@@ -299,8 +299,9 @@ pub const StatementProcessor = struct {
 
     /// Whether `line` can begin a new top-level statement while another is still accumulating.
     ///
-    /// A body line is indented, so a line at column zero begins a statement. A closer or a plain comment continues the statement above it. A
-    /// doc comment begins one, so its doc attaches to the definition after it.
+    /// A body line is indented, so a line at column zero begins a statement. A closer or a plain
+    /// comment continues the statement above it. A doc comment begins one, so its doc attaches to
+    /// the definition after it.
     pub fn startsNewStatement(line: []const u8) bool {
         const body = std.mem.trimRight(u8, line, "\r\n");
         if (body.len == 0) return false;

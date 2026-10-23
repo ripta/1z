@@ -15,14 +15,14 @@ const SplitScan = statement.SplitScan;
 /// Point a freshly built analysis child at the document it analyzes.
 ///
 /// One local frame serves as the document frame, the import frame, and the durable floor. One
-/// pragma frame holds the document's pragmas. The child enters check mode and stays in it. The
-/// check dispatch log is not opened: an arm the document registers lands in the child's own
-/// dispatch table, which dies with the child.
+/// pragma frame holds the document's pragmas. The child enters check mode and stays in it. An arm
+/// the document registers lands in the child's own check overlay, which dies with the child.
 ///
 /// `source` and `source_dir` are copied onto the child's arena. A definition whose body carries
 /// no source stamp takes `current_source` as its file, so the child must own what it names.
 ///
-/// A failure leaves the child torn down by its own `deinit`.
+/// A failure leaves the child half built. The caller tears it down with `deinit`, as it does after
+/// a success. `begin` never does.
 pub fn begin(ctx: *Context, source: []const u8, source_dir: ?[]const u8) !void {
     std.debug.assert(ctx.in_analysis and ctx.owns_loads);
 

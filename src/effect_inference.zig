@@ -425,9 +425,15 @@ pub const InferenceEngine = struct {
         self.exact_windows.deinit(self.allocator);
     }
 
+    /// Infer every compound or literal word the checked source defines.
+    ///
+    /// An analysis child starts with clones of its parent's transient frames. The frames from the
+    /// child's import frame up are its own. The clones below are the parent's words, read but not
+    /// analyzed, even when a parent word carries the same source name.
     pub fn analyzeAll(self: *InferenceEngine, checked_source: ?[]const u8) Allocator.Error!void {
         self.checked_source = checked_source;
-        for (self.ctx.local_frames.items) |frame| {
+        const own_frames = self.ctx.local_frames.items[self.ctx.import_frame_index orelse 0 ..];
+        for (own_frames) |frame| {
             var iter = frame.iterator();
             while (iter.next()) |entry| {
                 const word_def = entry.value_ptr.*;
