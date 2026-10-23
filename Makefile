@@ -912,6 +912,26 @@ benchmark-task-stack-residency: release ## Record task stack residency and mappi
 	@scripts/benchmark-task-stack-residency.sh ./$(RELEASE_PREFIX)/bin/1z $(BASELINE) > tests/benchmark/task_stack_residency.sample
 	@cat tests/benchmark/task_stack_residency.sample
 
+# Checkout of the commit to compare against, with `make release` already run in it.
+BASELINE_TREE ?=
+
+.PHONY: benchmark-lsp-resident-set
+benchmark-lsp-resident-set: release ## Compare language server resident set growth and latency of this tree against BASELINE_TREE=<checkout>
+	@test -n "$(BASELINE_TREE)" || { echo "usage: make benchmark-lsp-resident-set BASELINE_TREE=<checkout>" >&2; exit 2; }
+	@python3 scripts/benchmark-lsp-resident-set.py \
+		baseline=$(BASELINE_TREE)/$(RELEASE_PREFIX)/bin/1z-lsp:$(BASELINE_TREE)/lib \
+		candidate=$(RELEASE_PREFIX)/bin/1z-lsp:lib
+
+.PHONY: benchmark-check-latency
+benchmark-check-latency: release ## Compare onez_check latency of this tree against BASELINE_TREE=<checkout>, which needs a prior `make release`
+	@test -n "$(BASELINE_TREE)" || { echo "usage: make benchmark-check-latency BASELINE_TREE=<checkout>" >&2; exit 2; }
+	$(ZIG) cc -O2 -o $(ZIG_PREFIX)/check_latency_baseline tests/benchmark/check_latency.c -I$(BASELINE_TREE)/include $(BASELINE_TREE)/$(RELEASE_PREFIX)/clib/lib1z.a $(if $(MACOS_SDK),-L$(MACOS_SDK)/usr/lib) -lffi
+	$(ZIG) cc -O2 -o $(ZIG_PREFIX)/check_latency_candidate tests/benchmark/check_latency.c -Iinclude $(RELEASE_PREFIX)/clib/lib1z.a $(if $(MACOS_SDK),-L$(MACOS_SDK)/usr/lib) -lffi
+	@echo "baseline"
+	@./$(ZIG_PREFIX)/check_latency_baseline $(BASELINE_TREE)/lib
+	@echo "candidate"
+	@./$(ZIG_PREFIX)/check_latency_candidate lib
+
 benchmark-task-shapes: release ## Record the task-shape body-entry samples: first-visit cost and its steady-state control
 	@scripts/benchmark-task-shape.sh ./$(RELEASE_PREFIX)/bin/1z 7 \
 		tests/benchmark/task_body_entry.1z auto 1 > tests/benchmark/task_body_entry.sample
