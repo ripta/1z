@@ -17,6 +17,8 @@ const StatementProcessor = statement_mod.StatementProcessor;
 
 const capi_core = @import("capi_core.zig");
 
+const analysis_build = @import("analysis_build.zig");
+
 const effect_inference = @import("effect_inference.zig");
 
 const errors_mod = @import("primitives/errors.zig");
@@ -860,66 +862,45 @@ export fn onez_eval_isolated(ptr: ?*anyopaque, code: [*]const u8, len: usize) c_
     return end_rc;
 }
 
+/// Test seam. Runs while a check's child is still alive, after analysis.
+var check_probe: if (builtin.is_test) ?*const fn (*Context) void else void = if (builtin.is_test) null else {};
+
 /// Run static analysis on a chunk of 1z source without executing
 /// non-definition statements.
 ///
-/// Parses the buffer line-by-line using the same statement processor as
-/// `onez_eval`. Definition statements (those ending in `;`) are registered
-/// into a frame the call pushes and pops; non-definition statements are parsed
-/// and dropped. After parsing, stack-effect inference, type checking, and arity
-/// validation run over every compound word whose `source_file` matches
-/// `ctx.current_source`. Diagnostics are copied onto the handle and can be
-/// iterated with the `onez_diag_*` accessors.
+/// The call analyzes on a child of the handle's context that it builds and tears down. It parses
+/// the buffer line-by-line using the same statement processor as `onez_eval`. Definition
+/// statements (those ending in `;`) register on the child. Non-definition statements are parsed
+/// and dropped. After parsing, stack-effect inference, type checking, and arity validation run
+/// over every compound word the checked source defines, attributed to the handle's current source
+/// name. Diagnostics are copied onto the handle and can be iterated with the `onez_diag_*`
+/// accessors.
 ///
-/// Checked definitions do not survive the call, and a `method{` arm it wrote
-/// to the shared dispatch table is undone. A type the source registers does
-/// survive, so a host that wants none of it kept wraps the call in
-/// `onez_isolation_begin` / `onez_isolation_end`.
+/// Nothing the checked source registers survives the call: not its words, its `method{` arms, nor
+/// its types. The handle's own definitions are read but not analyzed, even when they carry the
+/// same source name. A module the host already loaded is reused. A module the checked source
+/// loads itself is read again on each call.
 ///
 /// Returns `ONEZ_OK` (0) when no error-severity diagnostics were produced
 /// and parsing succeeded; returns `1` if any error diagnostic was produced
 /// or parsing failed. Warnings and notes do not affect the return code.
-/// Parse errors surface through `onez_last_error` and do not populate the
-/// diagnostics list.
+/// A parse or execution error stops the check. It surfaces through `onez_last_error` and
+/// `onez_print_error` and does not populate the diagnostics list.
 export fn onez_check(ptr: ?*anyopaque, code: [*]const u8, len: usize) c_int {
     const handle = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
     const ctx = handle.ctx;
-    const alloc = ctx.quotationAllocator();
     const source = code[0..len];
 
     ctx.clearExecutionDetails();
     clearLastError(handle);
     clearDiagnostics(handle);
 
-    // Scopes a `pragma{ }` in the checked source to this call, the same way a loaded file's
-    // pragmas are scoped to the file.
-    ctx.pushPragmaFrame() catch return ONEZ_ERR_ALLOC;
-    defer ctx.popPragmaFrame();
+    var child = Context.initChild(handle.allocator, ctx, .analysis_reusing) catch return ONEZ_ERR_ALLOC;
+    defer child.deinit();
 
-    // The checked source defines into a frame of its own, which is popped on the way out. The
-    // collision guards treat everything below that frame as the analyzer's base scope, so a
-    // checked definition would otherwise land in the host's live scope having skipped them, and
-    // the host's next `onez_eval` would run it.
-    //
-    // On a plain `onez_init` handle the host's scope is the prelude frame itself, so without this
-    // frame the checked source would redefine prelude words in place.
-    const saved_import_frame = ctx.import_frame_index;
-    const saved_durable_floor = ctx.durable_frame_floor;
-    ctx.pushLocalFrame() catch return ONEZ_ERR_ALLOC;
-    defer {
-        ctx.popLocalFrame();
-        ctx.import_frame_index = saved_import_frame;
-        ctx.durable_frame_floor = saved_durable_floor;
-    }
-    ctx.import_frame_index = ctx.local_frames.items.len - 1;
-    ctx.durable_frame_floor = ctx.import_frame_index;
+    analysis_build.begin(&child, ctx.current_source, ctx.current_source_dir) catch return ONEZ_ERR_ALLOC;
 
-    const prev_check_mode = ctx.check_mode;
-    ctx.enterCheckMode();
-    defer ctx.exitCheckMode(prev_check_mode);
-
-    const dispatch_log_mark = ctx.beginCheckDispatchLog();
-    defer ctx.endCheckDispatchLog(dispatch_log_mark);
+    const alloc = child.quotationAllocator();
 
     var processor: StatementProcessor = .{};
     defer processor.deinit();
@@ -930,16 +911,16 @@ export fn onez_check(ptr: ?*anyopaque, code: [*]const u8, len: usize) c_int {
         const line = source[start..end];
         start = end + 1;
 
-        switch (processor.feedLine(alloc, line, ctx)) {
+        switch (processor.feedLine(alloc, line, &child)) {
             .needs_more_input => continue,
             .parse_error => |err| {
-                captureError(handle, err);
+                captureChildError(handle, &child, err);
                 return 1;
             },
             .complete => |instrs| {
                 if (instrs.len > 0 and Context.isCheckStatement(instrs)) {
-                    ctx.executeQuotation(.{ .instructions = instrs }) catch |err| {
-                        captureError(handle, err);
+                    child.executeQuotation(.{ .instructions = instrs }) catch |err| {
+                        captureChildError(handle, &child, err);
                         return 1;
                     };
                 }
@@ -948,31 +929,31 @@ export fn onez_check(ptr: ?*anyopaque, code: [*]const u8, len: usize) c_int {
         }
     }
 
-    switch (processor.flush(alloc, ctx)) {
+    switch (processor.flush(alloc, &child)) {
         .needs_more_input => {},
         .parse_error => |err| {
-            captureError(handle, err);
+            captureChildError(handle, &child, err);
             return 1;
         },
         .complete => |instrs| {
             if (instrs.len > 0 and Context.isCheckStatement(instrs)) {
-                ctx.executeQuotation(.{ .instructions = instrs }) catch |err| {
-                    captureError(handle, err);
+                child.executeQuotation(.{ .instructions = instrs }) catch |err| {
+                    captureChildError(handle, &child, err);
                     return 1;
                 };
             }
         },
     }
 
-    const settings = effect_inference.readCheckPragmas(ctx);
+    const settings = effect_inference.readCheckPragmas(&child);
 
     var engine = effect_inference.InferenceEngine.init(
-        ctx,
-        ctx.quotationAllocator(),
+        &child,
+        child.quotationAllocator(),
         settings.severity_override,
         settings.suppressed,
         settings.suppress_undeclared,
-        ctx.getAnyTypeSentinel(),
+        child.getAnyTypeSentinel(),
         settings.type_check_mode,
         settings.arity_check_mode,
         settings.default_arm_mode,
@@ -980,10 +961,14 @@ export fn onez_check(ptr: ?*anyopaque, code: [*]const u8, len: usize) c_int {
     );
     defer engine.deinit();
 
-    engine.analyzeAll(ctx.current_source) catch {
+    engine.analyzeAll(child.current_source) catch {
         setLastError(handle, "onez_check: effect inference failed", .{});
         return 1;
     };
+
+    if (comptime builtin.is_test) {
+        if (check_probe) |probe| probe(&child);
+    }
 
     // Deep-copy diagnostics BEFORE engine.deinit frees their `message` slices.
     const handle_alloc = handle.allocator;
@@ -2892,6 +2877,14 @@ fn setLastError(handle: *OnezHandle, comptime fmt: []const u8, args: anytype) vo
 fn captureError(handle: *OnezHandle, err: anyerror) void {
     clearLastError(handle);
     handle.last_error = capi_core.formatCapturedError(handle.ctx, handle.allocator, err);
+}
+
+/// Record `err` from a failed check on the handle. The child's error details are copied onto the
+/// handle's context before the child is torn down, so `onez_print_error` still renders them.
+fn captureChildError(handle: *OnezHandle, child: *Context, err: anyerror) void {
+    clearLastError(handle);
+    handle.last_error = capi_core.formatCapturedError(child, handle.allocator, err);
+    handle.ctx.adoptErrorDetails(child, err);
 }
 
 const allocPrintZ = capi_core.allocPrintZ;
@@ -5278,7 +5271,7 @@ test "check analyzes past a native shadow on a handle with an entry frame" {
     try std.testing.expect(onez_last_error(handle_ptr) == null);
 }
 
-test "check undoes the method arms the checked source wrote" {
+test "check leaves the method arms the checked source wrote off the handle" {
     const handle_ptr = onez_init();
     try std.testing.expect(handle_ptr != null);
     defer onez_deinit(handle_ptr);
@@ -5286,7 +5279,7 @@ test "check undoes the method arms the checked source wrote" {
     const tag = "check-method-arm";
     try std.testing.expectEqual(ONEZ_OK, onez_set_source(handle_ptr, tag, tag.len));
 
-    // The first arm replaces the prelude's, and the second fills a key nothing held.
+    // The first arm shadows the prelude's, and the second fills a key nothing held.
     const src = "#in?: method{ array any } [ 2drop f ] ;\n#in?: method{ fixnum any } [ 2drop t ] ;";
     try std.testing.expectEqual(ONEZ_OK, onez_check(handle_ptr, src, src.len));
 
@@ -5298,6 +5291,304 @@ test "check undoes the method arms the checked source wrote" {
 
     const unfilled = "5 1 #in?";
     try std.testing.expect(onez_eval(handle_ptr, unfilled, unfilled.len) != ONEZ_OK);
+}
+
+test "check leaves no type the checked source registered" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    const tag = "check-type";
+    try std.testing.expectEqual(ONEZ_OK, onez_set_source(handle_ptr, tag, tag.len));
+
+    const src = "checked-wrapper: virtual{ fixnum } ;";
+    try std.testing.expectEqual(ONEZ_OK, onez_check(handle_ptr, src, src.len));
+
+    const use = "1 make-checked-wrapper";
+    try std.testing.expect(onez_eval(handle_ptr, use, use.len) != ONEZ_OK);
+
+    const type_probe = "checked-wrapper";
+    try std.testing.expect(onez_eval(handle_ptr, type_probe, type_probe.len) != ONEZ_OK);
+}
+
+test "check analyzes only the words the checked source defines" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    const tag = "check-own-words";
+    try std.testing.expectEqual(ONEZ_OK, onez_set_source(handle_ptr, tag, tag.len));
+
+    // The host defines a word under the same source name that would fail analysis.
+    const host = "host-bad: ( -- n ) [ ] ;";
+    try std.testing.expectEqual(ONEZ_OK, onez_eval(handle_ptr, host, host.len));
+
+    const src = "good: ( n -- n ) [ 1 + ] ;";
+    try std.testing.expectEqual(ONEZ_OK, onez_check(handle_ptr, src, src.len));
+    try std.testing.expectEqual(@as(usize, 0), onez_diag_count(handle_ptr));
+}
+
+test "check reads a word the host defined" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    const tag = "check-host-word";
+    try std.testing.expectEqual(ONEZ_OK, onez_set_source(handle_ptr, tag, tag.len));
+
+    const host = "host-inc: ( n -- n ) [ 1 + ] ;";
+    try std.testing.expectEqual(ONEZ_OK, onez_eval(handle_ptr, host, host.len));
+
+    const src = "use-inc: ( n -- n ) [ host-inc ] ;";
+    try std.testing.expectEqual(ONEZ_OK, onez_check(handle_ptr, src, src.len));
+    try std.testing.expectEqual(@as(usize, 0), onez_diag_count(handle_ptr));
+}
+
+test "check reuses a module the host loaded and sees its types" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    const name = "time";
+    try std.testing.expectEqual(ONEZ_OK, onez_use_module(handle_ptr, name.ptr, name.len));
+
+    const tag = "check-host-module";
+    try std.testing.expectEqual(ONEZ_OK, onez_set_source(handle_ptr, tag, tag.len));
+
+    const src = "wait-for: ( d: duration -- d ) [ ] ;";
+    try std.testing.expectEqual(ONEZ_OK, onez_check(handle_ptr, src, src.len));
+    try std.testing.expectEqual(@as(usize, 0), onez_diag_count(handle_ptr));
+
+    // The host's module is still the one it loaded.
+    const use = "5 make-duration";
+    try std.testing.expectEqual(ONEZ_OK, onez_eval(handle_ptr, use, use.len));
+}
+
+test "check failure keeps the error details on the handle" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    const tag = "check-error-details";
+    try std.testing.expectEqual(ONEZ_OK, onez_set_source(handle_ptr, tag, tag.len));
+
+    const src = "foo: ( -- ) [ ] ;\nfoo: ( a -- ) [ drop ] ;";
+    try std.testing.expectEqual(@as(c_int, 1), onez_check(handle_ptr, src, src.len));
+
+    const message = onez_last_error(handle_ptr) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(std.mem.span(message).len > 0);
+
+    // Every row the handle holds is a copy that outlives the torn-down child.
+    const handle = castHandle(handle_ptr).?;
+    for (handle.ctx.error_details.items) |row| {
+        try std.testing.expect(row.error_type.len > 0);
+        try std.testing.expect(row.message.len > 0);
+    }
+
+    onez_print_error(handle_ptr);
+    try std.testing.expectEqual(@as(usize, 0), handle.ctx.error_details.items.len);
+}
+
+var probed_child_cache_count: ?usize = null;
+
+fn probeChildCache(child: *Context) void {
+    probed_child_cache_count = child.module_cache_value.map.count();
+}
+
+/// Read `host-box` back through the handle, the way a host would observe its own state.
+fn hostBoxLength(handle_ptr: ?*anyopaque) !i64 {
+    const probe = "host-box #len";
+    try std.testing.expectEqual(ONEZ_OK, onez_eval(handle_ptr, probe, probe.len));
+    var out: i64 = 0;
+    try std.testing.expectEqual(ONEZ_OK, onez_pop_int(handle_ptr, &out));
+    return out;
+}
+
+test "check reuses the host's module without loading it again" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    const name = "time";
+    try std.testing.expectEqual(ONEZ_OK, onez_use_module(handle_ptr, name.ptr, name.len));
+
+    const tag = "check-module-reuse";
+    try std.testing.expectEqual(ONEZ_OK, onez_set_source(handle_ptr, tag, tag.len));
+
+    probed_child_cache_count = null;
+    check_probe = probeChildCache;
+    defer check_probe = null;
+
+    const src = "use \"time\" ;\nwait-for: ( d: duration -- d ) [ ] ;";
+    try std.testing.expectEqual(ONEZ_OK, onez_check(handle_ptr, src, src.len));
+    try std.testing.expectEqual(@as(?usize, 0), probed_child_cache_count);
+}
+
+test "check sees words, types, and arms the host defined inside an isolation frame" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    const tag = "check-isolated-host";
+    try std.testing.expectEqual(ONEZ_OK, onez_set_source(handle_ptr, tag, tag.len));
+
+    const generic = "iso-gen: generic ( a -- b ) [ ] ;";
+    try std.testing.expectEqual(ONEZ_OK, onez_eval(handle_ptr, generic, generic.len));
+
+    try std.testing.expectEqual(ONEZ_OK, onez_isolation_begin(handle_ptr));
+    const word = "iso-inc: ( n -- n ) [ 1 + ] ;";
+    try std.testing.expectEqual(ONEZ_OK, onez_eval(handle_ptr, word, word.len));
+    const ty = "iso-wrapper: virtual{ fixnum } ;";
+    try std.testing.expectEqual(ONEZ_OK, onez_eval(handle_ptr, ty, ty.len));
+    const arm = "iso-gen: method{ fixnum } [ 1 + ] ;";
+    try std.testing.expectEqual(ONEZ_OK, onez_eval(handle_ptr, arm, arm.len));
+
+    const src =
+        "call-word: ( n -- n ) [ iso-inc ] ;\n" ++
+        "take-type: ( w: iso-wrapper -- w ) [ ] ;\n" ++
+        "call-arm: ( n: fixnum -- n ) [ iso-gen ] ;\n";
+    try std.testing.expectEqual(ONEZ_OK, onez_check(handle_ptr, src, src.len));
+    try std.testing.expectEqual(@as(usize, 0), onez_diag_count(handle_ptr));
+    try std.testing.expect(onez_last_error(handle_ptr) == null);
+
+    try std.testing.expectEqual(ONEZ_OK, onez_isolation_end(handle_ptr));
+}
+
+test "check sees words from nested isolation frames" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    const tag = "check-nested-isolation";
+    try std.testing.expectEqual(ONEZ_OK, onez_set_source(handle_ptr, tag, tag.len));
+
+    try std.testing.expectEqual(ONEZ_OK, onez_isolation_begin(handle_ptr));
+    const outer = "outer-inc: ( n -- n ) [ 1 + ] ;";
+    try std.testing.expectEqual(ONEZ_OK, onez_eval(handle_ptr, outer, outer.len));
+
+    try std.testing.expectEqual(ONEZ_OK, onez_isolation_begin(handle_ptr));
+    const inner = "inner-inc: ( n -- n ) [ 2 + ] ;";
+    try std.testing.expectEqual(ONEZ_OK, onez_eval(handle_ptr, inner, inner.len));
+
+    // The one diagnostic is the unknown word. The host's two words are found.
+    const src = "both: ( n -- n ) [ outer-inc inner-inc nonexistent-zzz ] ;";
+    try std.testing.expectEqual(ONEZ_OK, onez_check(handle_ptr, src, src.len));
+    try std.testing.expectEqual(@as(usize, 1), onez_diag_count(handle_ptr));
+    try std.testing.expect(std.mem.indexOf(u8, std.mem.span(onez_diag_message(handle_ptr, 0).?), "nonexistent-zzz") != null);
+
+    try std.testing.expectEqual(ONEZ_OK, onez_isolation_end(handle_ptr));
+    try std.testing.expectEqual(ONEZ_OK, onez_isolation_end(handle_ptr));
+}
+
+test "check leaves the handle's frame indices as it found them" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    const handle = castHandle(handle_ptr).?;
+    const ctx = handle.ctx;
+
+    const tag = "check-indices";
+    try std.testing.expectEqual(ONEZ_OK, onez_set_source(handle_ptr, tag, tag.len));
+    try std.testing.expectEqual(ONEZ_OK, onez_isolation_begin(handle_ptr));
+
+    const floor = ctx.durable_frame_floor;
+    const import_index = ctx.import_frame_index;
+    const frames = ctx.local_frames.items.len;
+
+    const good = "ok-word: ( n -- n ) [ ] ;";
+    try std.testing.expectEqual(ONEZ_OK, onez_check(handle_ptr, good, good.len));
+    try std.testing.expectEqual(floor, ctx.durable_frame_floor);
+    try std.testing.expectEqual(import_index, ctx.import_frame_index);
+    try std.testing.expectEqual(frames, ctx.local_frames.items.len);
+
+    const failing = "foo: ( -- ) [ ] ;\nfoo: ( a -- ) [ drop ] ;";
+    try std.testing.expectEqual(@as(c_int, 1), onez_check(handle_ptr, failing, failing.len));
+    try std.testing.expectEqual(floor, ctx.durable_frame_floor);
+    try std.testing.expectEqual(import_index, ctx.import_frame_index);
+    try std.testing.expectEqual(frames, ctx.local_frames.items.len);
+
+    try std.testing.expectEqual(ONEZ_OK, onez_isolation_end(handle_ptr));
+}
+
+test "check runs a binding statement on its own container and reads its own write back" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    const tag = "check-own-write";
+    try std.testing.expectEqual(ONEZ_OK, onez_set_source(handle_ptr, tag, tag.len));
+
+    // A binding statement runs its value expression. The last one fails unless `grow` took effect.
+    const src =
+        "own: V{ 1 } ;\n" ++
+        "grow: own 5 #push! ;\n" ++
+        "verify: own #len 2 = [ 0 ] [ 1 0 / ] if ;\n";
+    try std.testing.expectEqual(ONEZ_OK, onez_check(handle_ptr, src, src.len));
+    try std.testing.expect(onez_last_error(handle_ptr) == null);
+
+    // The same check fails when the length is wrong, so the pass above is not vacuous.
+    const wrong =
+        "own: V{ 1 } ;\n" ++
+        "grow: own 5 #push! ;\n" ++
+        "verify: own #len 3 = [ 0 ] [ 1 0 / ] if ;\n";
+    try std.testing.expectEqual(@as(c_int, 1), onez_check(handle_ptr, wrong, wrong.len));
+}
+
+test "check cannot change a container the host owns through a binding statement" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    const tag = "check-binding-write";
+    try std.testing.expectEqual(ONEZ_OK, onez_set_source(handle_ptr, tag, tag.len));
+
+    const host = "host-box: V{ 1 } ;";
+    try std.testing.expectEqual(ONEZ_OK, onez_eval(handle_ptr, host, host.len));
+    try std.testing.expectEqual(@as(i64, 1), try hostBoxLength(handle_ptr));
+
+    const src = "touch: host-box 99 #push! ;\nverify: host-box #len 2 = [ 0 ] [ 1 0 / ] if ;";
+    try std.testing.expectEqual(ONEZ_OK, onez_check(handle_ptr, src, src.len));
+    try std.testing.expectEqual(@as(i64, 1), try hostBoxLength(handle_ptr));
+}
+
+test "check cannot change a host container through a host word a binding calls" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    const tag = "check-word-write";
+    try std.testing.expectEqual(ONEZ_OK, onez_set_source(handle_ptr, tag, tag.len));
+
+    const host = "host-box: V{ 1 } ;\nhost-bump: ( -- ) [ host-box 99 #push! drop ] ;";
+    try std.testing.expectEqual(ONEZ_OK, onez_eval(handle_ptr, host, host.len));
+
+    const src = "touch: host-bump 1 ;\nverify: host-box #len 2 = [ 0 ] [ 1 0 / ] if ;";
+    try std.testing.expectEqual(ONEZ_OK, onez_check(handle_ptr, src, src.len));
+    try std.testing.expectEqual(@as(i64, 1), try hostBoxLength(handle_ptr));
+}
+
+test "check cannot change a host container through a module body it loads" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    const tag = "check-module-write";
+    try std.testing.expectEqual(ONEZ_OK, onez_set_source(handle_ptr, tag, tag.len));
+
+    const host = "host-box: V{ 1 } ;\nhost-bump: ( -- ) [ host-box 99 #push! drop ] ;";
+    try std.testing.expectEqual(ONEZ_OK, onez_eval(handle_ptr, host, host.len));
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const path = try stageModuleFile(tmp.dir, "writer.1z", "touched: host-bump 1 ;\n");
+    defer std.testing.allocator.free(path);
+
+    const src = try std.fmt.allocPrint(std.testing.allocator, "\"{s}\" load reexport", .{path});
+    defer std.testing.allocator.free(src);
+
+    try std.testing.expectEqual(ONEZ_OK, onez_check(handle_ptr, src.ptr, src.len));
+    try std.testing.expectEqual(@as(i64, 1), try hostBoxLength(handle_ptr));
 }
 
 // =========================================================================

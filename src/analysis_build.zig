@@ -1,7 +1,7 @@
 //! The build setup for an analysis child.
 //!
-//! `1z check` and the language server's per-document analysis build their child this way.
-//! `onez_check` still runs on its root context and will move here.
+//! `1z check`, `onez_check`, and the language server's per-document analysis build their child this
+//! way.
 //!
 //! An analysis child is built once, analyzed, and torn down whole. Nothing here restores state,
 //! because there is nothing to restore it to.

@@ -9827,6 +9827,38 @@ pub const Context = struct {
         self.finalizeErrorDetailsAbove(err, 0, 0);
     }
 
+    /// Replace this context's error details with a copy of `from`'s, so they outlive `from`.
+    ///
+    /// `from` folds its pending frames first. Every string of every row is copied onto this
+    /// context's arena, because the rows of `from` borrow its arena and static text. The fallback
+    /// error `onez_print_error` reads when no row exists is copied too.
+    pub fn adoptErrorDetails(self: *Context, from: *Context, err: anyerror) void {
+        from.finalizeErrorDetails(err);
+
+        self.error_details.clearRetainingCapacity();
+        self.jit_pending_error = from.jit_pending_error;
+
+        const arena = self.arena.allocator();
+        for (from.error_details.items) |row| {
+            var copy = row;
+            copy.error_type = arena.dupe(u8, row.error_type) catch return;
+            copy.message = arena.dupe(u8, row.message) catch return;
+            copy.source = arena.dupe(u8, row.source) catch return;
+            copy.word_name = dupeOptional(arena, row.word_name) catch return;
+            copy.stack_effect_str = dupeOptional(arena, row.stack_effect_str) catch return;
+            copy.hint = dupeOptional(arena, row.hint) catch return;
+            copy.dispatch_actual_types = dupeOptional(arena, row.dispatch_actual_types) catch return;
+            copy.dispatch_available_methods = dupeOptional(arena, row.dispatch_available_methods) catch return;
+
+            self.error_details.append(self.allocator, copy) catch return;
+        }
+    }
+
+    fn dupeOptional(arena: Allocator, text: ?[]const u8) Allocator.Error!?[]const u8 {
+        const value = text orelse return null;
+        return try arena.dupe(u8, value);
+    }
+
     /// Append the row standing in for `count` frames the bounded pending list dropped.
     fn appendElisionRow(self: *Context, error_type: []const u8, count: usize) void {
         const message = std.fmt.allocPrint(self.arena.allocator(), "{d} frames elided", .{count}) catch "frames elided";
@@ -13686,6 +13718,59 @@ test "finalizeErrorDetails is idempotent: a second fold keeps the chain and clea
     try std.testing.expectEqual(@as(usize, 1), ctx.error_details.items.len);
     try std.testing.expectEqualStrings("inner", ctx.error_details.items[0].word_name.?);
     try std.testing.expectEqual(@as(usize, 0), ctx.jit_pending_trace_frames.items.len);
+}
+
+test "adoptErrorDetails copies every row so it outlives the child" {
+    var root = Context.init(std.testing.allocator);
+    defer root.deinit();
+
+    try root.error_details.append(root.allocator, .{
+        .error_type = "stale",
+        .message = "stale",
+        .source = "<stale>",
+        .line = 1,
+        .word_name = null,
+    });
+
+    var child = try Context.initChild(std.testing.allocator, &root, .analysis_reusing);
+    const arena = child.arena.allocator();
+
+    try child.error_details.append(child.allocator, .{
+        .error_type = try arena.dupe(u8, "type-mismatch"),
+        .message = try arena.dupe(u8, "expected fixnum"),
+        .source = try arena.dupe(u8, "<check>"),
+        .line = 7,
+        .word_name = try arena.dupe(u8, "take"),
+        .stack_effect_str = try arena.dupe(u8, "( n -- m )"),
+        .hint = try arena.dupe(u8, "pass a fixnum"),
+        .dispatch_actual_types = try arena.dupe(u8, "string"),
+        .dispatch_available_methods = try arena.dupe(u8, "fixnum"),
+    });
+    try child.error_details.append(child.allocator, .{
+        .error_type = try arena.dupe(u8, "type-mismatch"),
+        .message = try arena.dupe(u8, "3 frames elided"),
+        .source = "",
+        .line = 0,
+        .word_name = null,
+        .elided_frames = 3,
+    });
+
+    root.adoptErrorDetails(&child, error.TypeMismatch);
+    child.deinit();
+
+    const rows = root.error_details.items;
+    try std.testing.expectEqual(@as(usize, 2), rows.len);
+    try std.testing.expectEqualStrings("type-mismatch", rows[0].error_type);
+    try std.testing.expectEqualStrings("expected fixnum", rows[0].message);
+    try std.testing.expectEqualStrings("<check>", rows[0].source);
+    try std.testing.expectEqual(@as(usize, 7), rows[0].line);
+    try std.testing.expectEqualStrings("take", rows[0].word_name.?);
+    try std.testing.expectEqualStrings("( n -- m )", rows[0].stack_effect_str.?);
+    try std.testing.expectEqualStrings("pass a fixnum", rows[0].hint.?);
+    try std.testing.expectEqualStrings("string", rows[0].dispatch_actual_types.?);
+    try std.testing.expectEqualStrings("fixnum", rows[0].dispatch_available_methods.?);
+    try std.testing.expectEqual(@as(usize, 3), rows[1].elided_frames);
+    try std.testing.expectEqual(@as(?[]const u8, null), rows[1].word_name);
 }
 
 test "finalizeErrorDetailsAbove folds only the frames above the mark" {

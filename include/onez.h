@@ -512,52 +512,42 @@ void onez_print_error(onez_t ctx);
  * --------
  * - The source is parsed line-by-line using the same statement processor
  *   that onez_eval() uses.
+ * - onez_check() runs on a context of its own, built from the host
+ *   context for the call and discarded before it returns. The checked
+ *   source reads everything the host has defined and loaded, and writes
+ *   none of it.
  * - Statements ending in `;` are treated as definitions: they are
- *   registered into a frame of the call's own. All other statements are
- *   parsed and dropped; they are NOT executed.
+ *   registered on that context. All other statements are parsed and
+ *   dropped; they are NOT executed.
  * - A definition that shadows or redefines a word the host context
  *   already holds, a const included, is analyzed rather than rejected.
  *   The checked source never runs, so the host's words are not what it
  *   would collide with at run time.
- * - After parsing, the inference engine analyzes every compound word
- *   whose `source_file` matches `ctx.current_source` at the time of the
- *   call.
+ * - After parsing, the inference engine analyzes every compound word the
+ *   checked source defines, under the source name set with
+ *   onez_set_source() at the time of the call.
+ * - A module the host already loaded is reused, so the checked source
+ *   sees its types. A module the checked source loads itself is read
+ *   again on each call.
  * - Any #pragma directives in the checked source (`suppress-checks`,
  *   `suppress-undeclared`, `type-check`, `callsite-arity-mismatch`)
  *   affect severity and reporting exactly as they would under `--check`.
  *
  * Persistence
  * -----------
- * Definitions added by onez_check() do not survive the call, so a checked
- * word cannot be called afterwards. Use onez_eval() to define words the
- * host means to run. A `method{` arm the source writes to the shared
- * dispatch table is undone when the call returns.
- *
- * Types the source registers do survive. To discard those too, wrap the
- * call in an isolation bracket, which also lets the caller read
- * diagnostics BEFORE the isolation frame is popped:
- *
- *   // Check a snippet without leaking types into the host context.
- *   onez_isolation_begin(ctx);
- *   int rc = onez_check(ctx, src, len);
- *   for (size_t i = 0; i < onez_diag_count(ctx); i++) {
- *       fprintf(stderr, "%s: %s\n",
- *               onez_diag_source(ctx, i),
- *               onez_diag_message(ctx, i));
- *   }
- *   onez_isolation_end(ctx);
- *
- * No dedicated `onez_check_isolated` helper is provided because the
- * bracket form above is both trivial and more flexible.
+ * Nothing the checked source registers survives the call: not its words,
+ * its `method{` arms, nor its types. A checked word cannot be called
+ * afterwards, and a type it declares is unknown to the next onez_eval().
+ * Use onez_eval() to define words the host means to run. No isolation
+ * bracket is needed around the call.
  *
  * Source scoping
  * --------------
- * Analysis filters to words whose `source_file` equals `ctx.current_source`
- * at the time of the call. To check multiple independent snippets, set a
- * distinct source name with onez_set_source() before each call (for
- * example, a file path or a synthetic name like "snippet-1"). Without
- * explicit source control, every word defined under the default "<repl>"
- * source is re-analyzed on each call.
+ * Only the words the checked source defines are analyzed. Words the host
+ * defined earlier are not re-analyzed, even under the same source name.
+ * The source name only labels the diagnostics, so set a distinct one with
+ * onez_set_source() before each call (for example, a file path or a
+ * synthetic name like "snippet-1").
  *
  * Return code
  * -----------
@@ -572,7 +562,9 @@ void onez_print_error(onez_t ctx);
  * diagnostics list: onez_diag_count() returns 0 in that case. This
  * matches the LSP separation between syntax errors and inference output.
  * Callers that want to treat both uniformly can check onez_last_error()
- * whenever onez_check() returns a non-zero code.
+ * whenever onez_check() returns a non-zero code. An error raised while a
+ * checked statement runs behaves the same way, and stops the check.
+ * onez_print_error() then prints its details, hint and frames included.
  *
  * Diagnostic lifetime
  * -------------------

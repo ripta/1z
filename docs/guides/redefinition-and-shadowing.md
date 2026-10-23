@@ -120,7 +120,7 @@ word body, which persist after the word returns.
 without running them, so there is no running program for the guard to
 protect. `1z run` and `1z build` still report it.
 
-`onez_check` keeps that true by defining the checked source in a frame it
+`onez_check` keeps that true by analyzing on a context of its own that it
 discards when it returns. A checked word never reaches the host's scope, so
 it cannot run there later under a guard it skipped.
 
