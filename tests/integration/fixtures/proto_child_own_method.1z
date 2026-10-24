@@ -1,0 +1,11 @@
+\ A child registers its own method and then asserts. The method dies with the child, so the
+\ load's drain does not find it.
+
+showable: protocol{ show: } ;
+thing:    virtual{ fixnum } ;
+show:     generic ( v -- s ) [ drop "" ] ;
+
+[
+  show: method{ thing } [ unmake-thing >string ] ;
+  thing: showable assert-satisfies
+] task-scope

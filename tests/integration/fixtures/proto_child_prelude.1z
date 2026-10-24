@@ -1,0 +1,8 @@
+\ A child asserts a prelude protocol for a type whose method the module registers on a later line.
+\ The prelude protocol is durable, so the assert defers to the drain, where the method exists.
+
+temperature: virtual{ fixnum } ;
+
+[ temperature: comparable assert-satisfies ] task-scope
+
+cmp: method{ temperature temperature } [ swap unmake-temperature swap unmake-temperature cmp ] ;

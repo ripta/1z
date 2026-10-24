@@ -1,0 +1,9 @@
+\ A child task asserts a protocol before the module registers the method on a later line.
+
+showable: protocol{ show: } ;
+thing:    virtual{ fixnum } ;
+show:     generic ( v -- s ) [ drop "" ] ;
+
+[ thing: showable assert-satisfies ] task-scope
+
+show: method{ thing } [ unmake-thing >string ] ;

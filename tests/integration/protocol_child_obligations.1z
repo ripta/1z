@@ -1,0 +1,73 @@
+use "testing" ;
+
+\ A protocol check inside a task-scope body during a load defers to the load's drain, the same
+\ as a check on the loader's own context. A task that holds a closed handle checks same-type
+\ methods only. A constraint or type created inside a task validates eagerly.
+
+"children defer to the load" test-section
+
+test-repro-loads: ( -- ) [
+  "fixtures/proto_child_repro.1z" load drop
+  t "a child assert before the method registers loads" assert-true
+] ;
+
+test-unmet-method-fails-at-drain: ( -- ) [
+  [ "fixtures/proto_child_unmet.1z" load ]
+  protocol-error:
+  "an unmet method asserted from a child fails the load" assert-error-type
+] ;
+
+test-child-own-method-fails-at-drain: ( -- ) [
+  [ "fixtures/proto_child_own_method.1z" load ]
+  protocol-error:
+  "a method registered by the child does not satisfy the load" assert-error-type
+] ;
+
+test-prelude-protocol-from-child: ( -- ) [
+  "fixtures/proto_child_prelude.1z" load drop
+  t "a prelude protocol asserted from a child defers to the drain" assert-true
+] ;
+
+test-repro-loads
+test-unmet-method-fails-at-drain
+test-child-own-method-fails-at-drain
+test-prelude-protocol-from-child
+
+"constraints and types created in a task validate eagerly" test-section
+
+test-ancestor-type-eager-pass: ( -- ) [
+  "fixtures/proto_child_ancestor_type.1z" load drop
+  t "a grandchild asserting an ancestor task's type validates eagerly" assert-true
+] ;
+
+test-ancestor-type-eager-fail: ( -- ) [
+  [ "fixtures/proto_child_ancestor_type_unmet.1z" load ]
+  protocol-error:
+  "a grandchild asserting an unmet ancestor task type fails eagerly" assert-error-type
+] ;
+
+test-eval-constraint-eager: ( -- ) [
+  [ "fixtures/proto_child_eval_constraint.1z" load ]
+  protocol-error:
+  "a constraint made by eval-string in a child validates eagerly" assert-error-type
+] ;
+
+test-ancestor-type-eager-pass
+test-ancestor-type-eager-fail
+test-eval-constraint-eager
+
+"a child that outlives the load" test-section
+
+\ The detached child is spawned during the load and waits for the gate. The gate opens after the
+\ load returns, so the child asserts against a closed sink. It checks same-type methods only, so
+\ its cross-type method does not fail it.
+test-detached-child-after-drain: ( -- ) [
+  [
+    "fixtures/proto_child_detached.1z" load
+    dup open-gate: @get call
+    await-outcome: @get call
+    t "a detached child with a closed sink skips cross-type methods" assert=
+  ] task-scope
+] ;
+
+test-detached-child-after-drain

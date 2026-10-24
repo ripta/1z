@@ -1,0 +1,14 @@
+\ A child builds a constraint with eval-string during the load and asserts it. The constraint lives
+\ on the child's arena, so it validates eagerly. The method the module registers later is not
+\ visible yet.
+
+showable: protocol{ show: } ;
+thing:    virtual{ fixnum } ;
+show:     generic ( v -- s ) [ drop "" ] ;
+
+[
+  "stringable-ish: protocol{ show: } ;" eval-string
+  [ thing: stringable-ish assert-satisfies ] task-scope
+] task-scope
+
+show: method{ thing } [ unmake-thing >string ] ;

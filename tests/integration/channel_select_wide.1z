@@ -1,0 +1,15 @@
+use "testing" ;
+
+\ A select locks every channel at once, so the lock-order tracker sees one run of channel
+\ locks as wide as the select. A Debug build must accept any width.
+
+test-select-forty-channels: ( -- ) [
+  [
+    { } 39 [ 1 <buffered-channel> #push ] times
+    1 <buffered-channel> dup 7 swap send #push
+    select
+    drop 7 "select over forty channels picks the ready one" assert=
+  ] task-scope
+] ;
+
+test-select-forty-channels

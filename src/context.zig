@@ -1036,7 +1036,13 @@ pub const Context = struct {
     ///
     /// The scope that installed the sink owns the reference. Install and remove it through
     /// `enterObligationSink` and `leaveObligationSink`.
+    ///
+    /// A task starts with its spawner's current handle, open or closed. It holds that reference in
+    /// `inherited_obligation_sink` until it is reaped.
     obligation_sink: ?*ObligationSink = null,
+    /// The reference a task took from its spawner. It stays held after a load of the task's own
+    /// installs and removes a sink of its own, and `deinit` releases it.
+    inherited_obligation_sink: ?*ObligationSink = null,
     /// True while parsing a definition body that has a parse-time or
     /// parse-time-only marker. Used by the parser to allow parse-time-only
     /// words inside parse-time definitions.
@@ -2327,6 +2333,17 @@ pub const Context = struct {
         spawn_view.retain();
         ctx.pragma_frames.appendAssumeCapacity(.{ .view = spawn_view });
 
+        // A task inherits the spawner's current obligation sink, open or closed. It keeps its own
+        // reference, so a task that outlives the load can still read that the sink closed. An
+        // analysis context owns its loads and installs sinks of its own.
+        if (child_kind == .task) {
+            if (parent.obligation_sink) |sink| {
+                sink.retain();
+                ctx.obligation_sink = sink;
+                ctx.inherited_obligation_sink = sink;
+            }
+        }
+
         // Snapshot the parent's dynamic variable bindings into the task context.
         for (parent.parameter_env.items) |parent_frame| {
             var cloned_frame = ParameterFrame{};
@@ -2640,6 +2657,7 @@ pub const Context = struct {
         for (self.pragma_frames.items) |*frame| deinitPragmaFrame(self.allocator, frame);
         self.pragma_frames.deinit(self.allocator);
         if (self.pragma_spawn_view) |view| view.release();
+        if (self.inherited_obligation_sink) |sink| sink.release();
         self.pragma_registry.deinit(self.allocator);
         self.parse_time_deferred_emissions.deinit(self.allocator);
         container_backing.releaseValues(self.import_history.items);
@@ -7360,6 +7378,31 @@ pub const Context = struct {
         }
 
         return null;
+    }
+
+    /// True when `desc` is registered in the type frames of a context that does not own its loads.
+    /// Such a descriptor lives on a task arena and dies at reap. A load drain resolves names on
+    /// the loader, where it does not exist.
+    ///
+    /// Compares descriptor identity, so an alias or a variant of the type is found as well. A
+    /// descriptor no frame holds is a builtin or resource type, which outlives every task.
+    pub fn typeIsOnTaskArena(self: *const Context, desc: *const value_mod.TypeDescriptor) bool {
+        // Tasks share one RwLock and registration takes it exclusively, so ancestor frames cannot
+        // change under this shared read.
+        self.acquireSharedRead();
+        defer self.releaseSharedRead();
+
+        var cursor: ?*const Context = self;
+        while (cursor) |ctx| : (cursor = ctx.parent_context) {
+            for (ctx.type_registry_frames.items) |frame| {
+                var it = frame.type_descriptors.valueIterator();
+                while (it.next()) |registered| {
+                    if (registered.* == desc) return !ctx.owns_loads;
+                }
+            }
+        }
+
+        return false;
     }
 
     /// Look up a built-in type value by type name, walking the parent context chain.
@@ -12869,6 +12912,87 @@ test "initForTask: a task's own frame shares its spawner's top view" {
 
     task_ctx.deinit();
     try std.testing.expectEqual(@as(u32, 1), spawner_view.refcount.load(.monotonic));
+}
+
+test "initChild: a task holds its spawner's sink, and a closed one still reads closed" {
+    var parent = Context.init(std.testing.allocator);
+    defer parent.deinit();
+
+    const scope = try parent.enterObligationSink();
+    const sink = scope.sink;
+
+    var child = try Context.initChild(std.testing.allocator, &parent, .task);
+    try std.testing.expectEqual(sink, child.obligation_sink.?);
+    try std.testing.expectEqual(@as(u32, 2), sink.refcount.load(.monotonic));
+
+    parent.leaveObligationSink(scope);
+    try std.testing.expect(parent.obligation_sink == null);
+    try std.testing.expectEqual(@as(u32, 1), sink.refcount.load(.monotonic));
+    try std.testing.expect(!child.obligation_sink.?.isOpen());
+
+    var grandchild = try Context.initChild(std.testing.allocator, &child, .task);
+    try std.testing.expectEqual(sink, grandchild.obligation_sink.?);
+    try std.testing.expectEqual(@as(u32, 2), sink.refcount.load(.monotonic));
+
+    grandchild.deinit();
+    child.deinit();
+}
+
+test "initChild: a load of the task's own opens a sink and restores the inherited one" {
+    var parent = Context.init(std.testing.allocator);
+    defer parent.deinit();
+
+    const outer = try parent.enterObligationSink();
+    defer parent.leaveObligationSink(outer);
+
+    var child = try Context.initChild(std.testing.allocator, &parent, .task);
+    defer child.deinit();
+
+    const inner = try child.enterObligationSink();
+    try std.testing.expect(child.obligation_sink.? != outer.sink);
+
+    child.leaveObligationSink(inner);
+    try std.testing.expectEqual(outer.sink, child.obligation_sink.?);
+    try std.testing.expect(child.obligation_sink.?.isOpen());
+}
+
+test "initChild: an analysis child does not inherit the sink" {
+    var parent = Context.init(std.testing.allocator);
+    defer parent.deinit();
+
+    const scope = try parent.enterObligationSink();
+    defer parent.leaveObligationSink(scope);
+
+    var child = try Context.initChild(std.testing.allocator, &parent, .analysis);
+    defer child.deinit();
+
+    try std.testing.expect(child.obligation_sink == null);
+}
+
+test "typeIsOnTaskArena: classifies by the context that registered the descriptor" {
+    var parent = Context.init(std.testing.allocator);
+    defer parent.deinit();
+
+    const parent_desc = try std.testing.allocator.create(value_mod.TypeDescriptor);
+    defer std.testing.allocator.destroy(parent_desc);
+    parent_desc.* = .{ .kind = .{ .builtin = {} } };
+    try parent.registerTypeDescriptor("parent-type", parent_desc);
+
+    var child = try Context.initChild(std.testing.allocator, &parent, .task);
+    defer child.deinit();
+
+    const child_desc = try std.testing.allocator.create(value_mod.TypeDescriptor);
+    defer std.testing.allocator.destroy(child_desc);
+    child_desc.* = .{ .kind = .{ .builtin = {} } };
+    try child.registerTypeDescriptor("child-type", child_desc);
+
+    var grandchild = try Context.initChild(std.testing.allocator, &child, .task);
+    defer grandchild.deinit();
+
+    try std.testing.expect(!grandchild.typeIsOnTaskArena(parent_desc));
+    try std.testing.expect(grandchild.typeIsOnTaskArena(child_desc));
+    try std.testing.expect(child.typeIsOnTaskArena(child_desc));
+    try std.testing.expect(!parent.typeIsOnTaskArena(child_desc));
 }
 
 test "initForTask: a spawner's later pragma does not reach the task" {

@@ -1,0 +1,7 @@
+\ A child task asserts a protocol the module never satisfies. The load must fail at its drain.
+
+showable: protocol{ show: } ;
+thing:    virtual{ fixnum } ;
+show:     generic ( v -- s ) [ drop "" ] ;
+
+[ thing: showable assert-satisfies ] task-scope

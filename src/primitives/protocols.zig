@@ -198,11 +198,65 @@ fn nativeDefineProtocol(ctx: *Context) anyerror!void {
     });
 }
 
-/// True when the obligation went into the context's open sink, to be validated at the load's drain.
-/// False when there is no open sink, and the caller validates now.
-fn deferToSink(ctx: *Context, type_name: []const u8, constraint: obligation_sink_mod.Obligation.Constraint) !bool {
-    const sink = ctx.obligation_sink orelse return false;
-    return sink.append(type_name, constraint);
+/// How `protocolCheckHelper` handles one obligation.
+const Route = enum {
+    /// Recorded in the open sink. The load's drain validates it.
+    deferred,
+    /// The sink closed before the obligation could land. Check same-type methods only, the way
+    /// the drain would have.
+    same_type_only,
+    /// Check now, in full, with no deferral in play.
+    full,
+    /// Check now, in full. The constraint or the type was created inside a task, so no drain
+    /// could have resolved it.
+    full_task_origin,
+};
+
+/// Decide whether an obligation defers to the load's sink.
+///
+/// A context with no sink checks in full. With a sink, the obligation defers only when the
+/// constraint is durable and the type does not live on a task arena. A type that does not resolve
+/// yet defers, because the module may still define it.
+///
+/// A closed sink means the load has already drained. Every method the module registers is in
+/// place by then, so the obligation gets the drain's same-type-only check. The result then does
+/// not depend on which side of the drain the task ran on.
+fn routeObligation(
+    ctx: *Context,
+    type_name: []const u8,
+    constraint: obligation_sink_mod.Obligation.Constraint,
+    durable: bool,
+) !Route {
+    const sink = ctx.obligation_sink orelse return .full;
+
+    if (!durable) return .full_task_origin;
+    if (typeOnTaskArena(ctx, type_name)) return .full_task_origin;
+
+    if (try sink.append(type_name, constraint)) return .deferred;
+    return .same_type_only;
+}
+
+fn typeOnTaskArena(ctx: *Context, type_name: []const u8) bool {
+    const type_tv = ctx.lookupTypeValueByName(type_name) orelse return false;
+    const desc = type_tv.descriptor orelse return false;
+    return ctx.typeIsOnTaskArena(desc);
+}
+
+/// Add the task origin to a protocol-error already raised by a full check. Other errors pass
+/// through untouched.
+fn noteTaskOrigin(ctx: *Context, err: anyerror) anyerror {
+    if (err != error.UserThrown) return err;
+
+    const thrown = ctx.thrown_error orelse return err;
+    if (!std.mem.eql(u8, thrown.error_type, "protocol-error")) return err;
+
+    const message = std.fmt.allocPrint(
+        ctx.quotationAllocator(),
+        "{s}. The constraint or the type was created inside a task, so the load could not check it",
+        .{thrown.message},
+    ) catch return err;
+
+    return raiseProtocolError(ctx, message);
 }
 
 /// Trampoline helper ( type-name descriptor -- )
@@ -225,12 +279,26 @@ fn protocolCheckHelper(ctx: *Context) anyerror!void {
 
     switch (desc_val) {
         .protocol_descriptor => |descriptor| {
-            if (try deferToSink(ctx, type_name, .{ .protocol = descriptor })) return;
-            try validateProtocolObligation(ctx, type_name, descriptor);
+            const route = try routeObligation(ctx, type_name, .{ .protocol = descriptor }, descriptor.durable);
+            switch (route) {
+                .deferred => {},
+                .same_type_only => try Core.validateObligationSameTypeOnly(hostedEnv(ctx), type_name, descriptor),
+                .full => try validateProtocolObligation(ctx, type_name, descriptor),
+                .full_task_origin => validateProtocolObligation(ctx, type_name, descriptor) catch |err| {
+                    return noteTaskOrigin(ctx, err);
+                },
+            }
         },
         .constraint_combinator => |cc| {
-            if (try deferToSink(ctx, type_name, .{ .combination = cc })) return;
-            try validateCombinatorObligation(ctx, type_name, cc);
+            const route = try routeObligation(ctx, type_name, .{ .combination = cc }, cc.durable);
+            switch (route) {
+                .deferred => {},
+                .same_type_only => try validateCombinatorObligationSameTypeOnly(ctx, type_name, cc),
+                .full => try validateCombinatorObligation(ctx, type_name, cc),
+                .full_task_origin => validateCombinatorObligation(ctx, type_name, cc) catch |err| {
+                    return noteTaskOrigin(ctx, err);
+                },
+            }
         },
         else => {
             helpers.setTypeMismatchError(ctx, "constraint", desc_val);
@@ -521,4 +589,120 @@ test "typeSatisfiesConstraintSameTypeOnly skips cross-type methods at load time"
     const string_el: value_mod.ConstraintCombinator.Element = .{ .type = string_tv };
     const inter_fail = try ctx.createConstraintCombinator(.intersection, &.{ proto_el, string_el });
     try testing.expect(!try typeSatisfiesConstraintSameTypeOnly(&ctx, fixnum_tv, .{ .combinator = inter_fail }));
+}
+
+test "routeObligation: defers to an open sink, then checks same-type only once it closes" {
+    var root = Context.init(testing.allocator);
+    defer root.deinit();
+
+    const durable: ProtocolDescriptor = .{ .name = "p", .methods = &.{}, .protocol_id = 0, .durable = true };
+
+    try testing.expectEqual(Route.full, try routeObligation(&root, "fixnum", .{ .protocol = &durable }, true));
+
+    const scope = try root.enterObligationSink();
+    defer root.leaveObligationSink(scope);
+
+    var child = try Context.initChild(testing.allocator, &root, .task);
+    defer child.deinit();
+
+    const constraint: obligation_sink_mod.Obligation.Constraint = .{ .protocol = &durable };
+    try testing.expectEqual(Route.deferred, try routeObligation(&child, "fixnum", constraint, true));
+    try testing.expectEqual(Route.deferred, try routeObligation(&child, "not-defined-yet", constraint, true));
+    try testing.expectEqual(Route.full_task_origin, try routeObligation(&child, "fixnum", constraint, false));
+
+    scope.sink.discard();
+    try testing.expectEqual(Route.same_type_only, try routeObligation(&child, "fixnum", constraint, true));
+    try testing.expectEqual(Route.full_task_origin, try routeObligation(&child, "fixnum", constraint, false));
+}
+
+test "a closed sink checks same-type methods only and leaves the satisfies memo alone" {
+    var root = Context.init(testing.allocator);
+    defer root.deinit();
+
+    const inputs = [_]stack_effect_mod.StackEffectParam{
+        .{ .name = "a", .type_annotation = .{ .type = root.getSelfTypeSentinel() } },
+        .{ .name = "b", .type_annotation = .{ .type = root.getAnyTypeSentinel() } },
+    };
+    const outputs = [_]stack_effect_mod.StackEffectParam{.{ .name = "result" }};
+    const effect = StackEffect{ .inputs = &inputs, .outputs = &outputs };
+    const methods = [_]Value{ value_mod.symbolValue("scale-by"), .{ .stack_effect = effect } };
+    const scaleable = try root.createProtocolDescriptor("scaleable", &methods);
+
+    const scope = try root.enterObligationSink();
+    defer root.leaveObligationSink(scope);
+
+    var child = try Context.initChild(testing.allocator, &root, .task);
+    defer child.deinit();
+
+    scope.sink.discard();
+
+    try child.stack.push(value_mod.symbolValue("fixnum"));
+    try child.stack.push(.{ .protocol_descriptor = scaleable });
+    try protocolCheckHelper(&child);
+
+    const fixnum_tv = root.lookupBuiltinTypeValue("fixnum").?;
+    try testing.expect(child.lookupProtocolSatisfies(.{
+        .type_descriptor = fixnum_tv.descriptor.?,
+        .protocol_descriptor = scaleable,
+    }) == null);
+
+    try testing.expect(!try satisfiesByDescriptor(&child, fixnum_tv, scaleable));
+}
+
+test "children appending while the loader drains lose no obligation" {
+    var root = Context.init(testing.allocator);
+    defer root.deinit();
+
+    const scope = try root.enterObligationSink();
+    defer root.leaveObligationSink(scope);
+
+    const worker_count = 3;
+    const rounds = 300;
+
+    var children: [worker_count]Context = undefined;
+    var made: usize = 0;
+    defer for (children[0..made]) |*child| child.deinit();
+    while (made < worker_count) : (made += 1) {
+        children[made] = try Context.initChild(testing.allocator, &root, .task);
+    }
+
+    const durable: ProtocolDescriptor = .{ .name = "p", .methods = &.{}, .protocol_id = 0, .durable = true };
+
+    const Worker = struct {
+        fn run(
+            child: *Context,
+            descriptor: *const ProtocolDescriptor,
+            deferred: *std.atomic.Value(u32),
+            eager: *std.atomic.Value(u32),
+        ) void {
+            var i: usize = 0;
+            while (i < rounds) : (i += 1) {
+                const route = routeObligation(child, "fixnum", .{ .protocol = descriptor }, true) catch return;
+                switch (route) {
+                    .deferred => _ = deferred.fetchAdd(1, .monotonic),
+                    .same_type_only => _ = eager.fetchAdd(1, .monotonic),
+                    else => return,
+                }
+            }
+        }
+    };
+
+    var deferred = std.atomic.Value(u32).init(0);
+    var eager = std.atomic.Value(u32).init(0);
+    var threads: [worker_count]std.Thread = undefined;
+    for (&threads, 0..) |*thread, i| {
+        thread.* = try std.Thread.spawn(.{}, Worker.run, .{ &children[i], &durable, &deferred, &eager });
+    }
+
+    var pending = scope.sink.takeAndClose();
+    for (threads) |thread| thread.join();
+
+    var drained: u32 = 0;
+    var cursor = pending.head;
+    while (cursor) |entry| : (cursor = entry.next) drained += 1;
+    pending.deinit();
+
+    try testing.expectEqual(deferred.load(.monotonic), drained);
+    try testing.expectEqual(@as(u32, worker_count * rounds), deferred.load(.monotonic) + eager.load(.monotonic));
+    scope.sink.assertClosedAndEmpty();
 }

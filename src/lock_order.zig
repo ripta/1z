@@ -54,9 +54,24 @@ pub const LockLevel = enum(u8) {
     obligation_sink = 8,
 };
 
-/// Per-thread lock-ordering state. Each OS thread maintains its own
-/// `held_level` and `held_count` so multi-threaded schedulers can run
-/// concurrent locks without false-positive ordering violations.
+/// One run of held locks at a single level. Only channel peers repeat a level, so a select over
+/// any number of channels is one run.
+const HeldRun = struct {
+    level: LockLevel,
+    count: u32,
+};
+
+/// Deepest run stack the tracker records. Levels ascend strictly across runs, so the depth is
+/// bounded by the number of levels and not by how many peers one run holds.
+const max_runs = @typeInfo(LockLevel).@"enum".fields.len;
+
+// Per-thread lock-ordering state. Each OS thread keeps its own stack of held runs so
+// multi-threaded schedulers can run concurrent locks without false-positive ordering violations.
+//
+// `held_level` mirrors the top run, and `held_count` totals every lock held. Releasing a nested
+// lock restores the level of the lock still held beneath it.
+threadlocal var held_runs: [max_runs]HeldRun = undefined;
+threadlocal var held_run_count: u32 = 0;
 threadlocal var held_level: LockLevel = .none;
 threadlocal var held_count: u32 = 0;
 
@@ -73,28 +88,28 @@ pub const LockOrderTracker = struct {
         const new = @intFromEnum(level);
         const cur = @intFromEnum(held_level);
 
-        if (held_count == 0) {
-            // No locks held -- any level is fine.
-            held_level = level;
-            held_count = 1;
-            return;
+        if (held_count > 0) {
+            // Same-level re-entry is allowed for channel peers (address-ordered).
+            const peer = new == cur and level == .channel;
+
+            if (new <= cur and !peer) {
+                std.debug.panic(
+                    "Lock ordering violation: acquiring level {d} ({s}) while holding level {d} ({s})",
+                    .{ new, @tagName(level), cur, @tagName(held_level) },
+                );
+            }
         }
 
-        // Same-level re-entry is allowed for channel peers (address-ordered).
-        if (new == cur and level == .channel) {
-            held_count += 1;
-            return;
+        if (held_count > 0 and new == cur) {
+            held_runs[held_run_count - 1].count += 1;
+        } else {
+            std.debug.assert(held_run_count < max_runs);
+            held_runs[held_run_count] = .{ .level = level, .count = 1 };
+            held_run_count += 1;
         }
 
-        if (new <= cur) {
-            std.debug.panic(
-                "Lock ordering violation: acquiring level {d} ({s}) while holding level {d} ({s})",
-                .{ new, @tagName(level), cur, @tagName(held_level) },
-            );
-        }
-
-        held_level = level;
         held_count += 1;
+        held_level = level;
     }
 
     pub fn release(_: *LockOrderTracker, level: LockLevel) void {
@@ -115,8 +130,12 @@ pub const LockOrderTracker = struct {
         }
 
         held_count -= 1;
-        if (held_count == 0) {
-            held_level = .none;
+
+        const top = &held_runs[held_run_count - 1];
+        top.count -= 1;
+        if (top.count == 0) {
+            held_run_count -= 1;
+            held_level = if (held_run_count == 0) .none else held_runs[held_run_count - 1].level;
         }
     }
 };
@@ -172,5 +191,76 @@ test "reset after full release" {
     tracker.release(.context_rw);
 
     std.testing.expectEqual(LockLevel.none, held_level) catch unreachable;
+    std.testing.expectEqual(@as(u32, 0), held_count) catch unreachable;
+}
+
+test "releasing a nested lock restores the outer level" {
+    var tracker = LockOrderTracker{};
+
+    tracker.acquire(.context_rw);
+    tracker.acquire(.load_paths);
+    std.testing.expectEqual(LockLevel.load_paths, held_level) catch unreachable;
+
+    tracker.release(.load_paths);
+    std.testing.expectEqual(LockLevel.context_rw, held_level) catch unreachable;
+    std.testing.expectEqual(@as(u32, 1), held_count) catch unreachable;
+
+    tracker.release(.context_rw);
+    std.testing.expectEqual(LockLevel.none, held_level) catch unreachable;
+    std.testing.expectEqual(@as(u32, 0), held_count) catch unreachable;
+}
+
+test "a three-deep nest unwinds one level at a time" {
+    var tracker = LockOrderTracker{};
+
+    tracker.acquire(.channel);
+    tracker.acquire(.container);
+    tracker.acquire(.obligation_sink);
+
+    tracker.release(.obligation_sink);
+    std.testing.expectEqual(LockLevel.container, held_level) catch unreachable;
+
+    tracker.release(.container);
+    std.testing.expectEqual(LockLevel.channel, held_level) catch unreachable;
+
+    tracker.release(.channel);
+    std.testing.expectEqual(LockLevel.none, held_level) catch unreachable;
+}
+
+test "many channel peers form one run and unwind cleanly" {
+    var tracker = LockOrderTracker{};
+
+    tracker.acquire(.context_rw);
+    for (0..200) |_| tracker.acquire(.channel);
+    tracker.acquire(.container);
+    std.testing.expectEqual(@as(u32, 202), held_count) catch unreachable;
+
+    tracker.release(.container);
+    std.testing.expectEqual(LockLevel.channel, held_level) catch unreachable;
+
+    for (0..200) |_| tracker.release(.channel);
+    std.testing.expectEqual(LockLevel.context_rw, held_level) catch unreachable;
+
+    tracker.release(.context_rw);
+    std.testing.expectEqual(@as(u32, 0), held_count) catch unreachable;
+    std.testing.expectEqual(@as(u32, 0), held_run_count) catch unreachable;
+}
+
+test "channel peers nested under a lower lock unwind in order" {
+    var tracker = LockOrderTracker{};
+
+    tracker.acquire(.context_rw);
+    tracker.acquire(.channel);
+    tracker.acquire(.channel);
+    tracker.acquire(.obligation_sink);
+
+    tracker.release(.obligation_sink);
+    tracker.release(.channel);
+    std.testing.expectEqual(LockLevel.channel, held_level) catch unreachable;
+
+    tracker.release(.channel);
+    std.testing.expectEqual(LockLevel.context_rw, held_level) catch unreachable;
+
+    tracker.release(.context_rw);
     std.testing.expectEqual(@as(u32, 0), held_count) catch unreachable;
 }

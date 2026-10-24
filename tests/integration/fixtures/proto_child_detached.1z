@@ -1,0 +1,21 @@
+\ A detached child outlives this load. It waits for the gate, so it asserts after the load's drain.
+\
+\ The protocol has a cross-type method nothing registers. The drain checks same-type methods
+\ only, so a child that sees a closed sink gets the same answer and passes. A full check would
+\ fail it. The child sends t when the assert passes and f when it throws.
+
+scalable: protocol{ scale: ( a: self b: any -- result ) } ;
+scale:    generic ( a b -- c ) [ drop ] ;
+ct-val:   virtual{ fixnum } ;
+
+gate: 1 <buffered-channel> ;
+outcome: 1 <buffered-channel> ;
+
+open-gate: ( -- ) [ gate t swap send ] ;
+await-outcome: ( -- ok ) [ outcome receive ] ;
+
+[
+  gate receive drop
+  [ ct-val: scalable assert-satisfies t ] [ drop f ] recover
+  outcome send
+] spawn-detached

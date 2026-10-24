@@ -1,0 +1,30 @@
+=== children defer to the load ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: a child assert before the method registers loads
+Stack: [ ]
+PASS: an unmet method asserted from a child fails the load
+Stack: [ ]
+PASS: a method registered by the child does not satisfy the load
+Stack: [ ]
+PASS: a prelude protocol asserted from a child defers to the drain
+Stack: [ ]
+=== constraints and types created in a task validate eagerly ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: a grandchild asserting an ancestor task's type validates eagerly
+Stack: [ ]
+PASS: a grandchild asserting an unmet ancestor task type fails eagerly
+Stack: [ ]
+PASS: a constraint made by eval-string in a child validates eagerly
+Stack: [ ]
+=== a child that outlives the load ===
+Stack: [ ]
+Stack: [ ]
+PASS: a detached child with a closed sink skips cross-type methods
+Stack: [ ]

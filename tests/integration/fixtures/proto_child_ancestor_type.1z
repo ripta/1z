@@ -1,0 +1,12 @@
+\ A child defines a type and its method. A grandchild asserts a protocol for that type.
+\
+\ The type lives on the child's arena, so the load's drain could not resolve it. The grandchild
+\ validates eagerly and finds the method through its ancestor.
+
+showable: protocol{ show: } ;
+show: generic ( v -- s ) [ drop "" ] ;
+
+[
+  "inner-thing: virtual{ fixnum } ; show: method{ inner-thing } [ drop \"\" ] ;" eval-string
+  [ inner-thing: showable assert-satisfies ] task-scope
+] task-scope

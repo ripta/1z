@@ -1,0 +1,10 @@
+\ A child defines a type with no method. A grandchild asserts a protocol for it and fails eagerly,
+\ and the error names the task origin.
+
+showable: protocol{ show: } ;
+show: generic ( v -- s ) [ drop "" ] ;
+
+[
+  "inner-thing: virtual{ fixnum } ;" eval-string
+  [ inner-thing: showable assert-satisfies ] task-scope
+] task-scope

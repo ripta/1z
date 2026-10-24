@@ -1,0 +1,4 @@
+fixtures/proto_child_ancestor_type_unmet.1z:10: error 'protocol-error' type 'inner-thing' does not implement 'show' required by protocol 'showable'. The constraint or the type was created inside a task, so the load could not check it at word 'task-scope'
+  stack effect: ( quot --  )
+  called from src/prelude.1z:334: load-file
+  called from tests/integration/protocol_child_task_origin_message.1z:3: load
