@@ -1361,7 +1361,11 @@ fn discoverReachableWords(
     try drainWorklist(ctx, &worklist, &seen, &quotation_seen, &quotation_path, &result, module_ids, diagnostics, artifact_class, temp_allocator, result_allocator);
 
     // Word-body-scoped promoting walks, re-draining the BFS in a fixed-point loop since a
-    // newly-promoted callee may itself call further undiscovered words. Two walks share the loop:
+    // newly-promoted callee may itself call further undiscovered words. Three walks share the loop:
+    //
+    // Composite literals (strict builds only): every quotation buried in an array, hash, vector,
+    // or map literal in a word body. Promote its callees so the quotation compiles and carries a
+    // real `code_ptr` when a runtime lookup reaches it.
     //
     // Runtime-image dispatch containers (strict builds only): the lint registry's `.mutable_map` /
     // `.struct_instance` and the lexer rules' `.hash`. Promote the callees of a quotation found at
@@ -1372,11 +1376,6 @@ fn discoverReachableWords(
     // `case` / `cond`. Promote the buried arm callees so the arms compile and the word matches
     // interpreter behavior instead of dropping to an uncompiled arm at runtime.
     //
-    // Both walks are keyed -- to the two known container shapes plus named slots, and to the
-    // consuming combinator call -- not applied to arbitrary word-body composites: promoting
-    // composite callees found anywhere in a word body was tried once and regressed by pulling
-    // unrelated module-cached generic-dispatch getters and effect-less consts into the
-    // must-compile set.
     {
         var scanned_entry = false;
         var scanned_def_count: usize = 0;
@@ -1399,6 +1398,7 @@ fn discoverReachableWords(
                     // practice; kept only for switch exhaustiveness.
                     .native, .host_callback, .literal => continue,
                 };
+                if (strict_interpreter_free) try collectCompositeQuotationsPromoting(ctx, body, discovered.identity(), &worklist, &seen, &result.quotation_bodies, &quotation_seen, &result.composite_body_ptrs, &result.pending_call_targets, &result.pending_callee_bindings, &quotation_path, diagnostics, artifact_class, temp_allocator, result_allocator);
                 if (strict_interpreter_free) try collectDispatchContainerQuotationsPromoting(ctx, body, discovered.identity(), &worklist, &seen, &result.quotation_bodies, &quotation_seen, &result.composite_body_ptrs, &result.pending_call_targets, &result.pending_callee_bindings, &quotation_path, diagnostics, artifact_class, temp_allocator, result_allocator);
                 try collectBranchTableQuotationsPromoting(ctx, body, discovered.identity(), &worklist, &seen, &result.quotation_bodies, &quotation_seen, &result.composite_body_ptrs, &result.pending_call_targets, &result.pending_callee_bindings, &quotation_path, diagnostics, artifact_class, temp_allocator, result_allocator);
             }
@@ -2104,16 +2104,11 @@ fn collectQuotationsInValue(val: Value, quotation_bodies: *std.ArrayListUnmanage
 /// body calls, so the ongoing drain compiles those callees and a runtime-selected dispatch of
 /// the quotation has a real `code_ptr`.
 ///
-/// Used only for the *entry* instructions. A composite-nested quotation dispatched at runtime
-/// calls library words, e.g. `advance`,  that are reachable only through the dynamic dispatch,
-/// so the static BFS never discovers them and the quotation fails to compile with
-/// `.unresolvable_word`.
-///
-/// Scoped to entry composites deliberately.
-///
-/// Promoting callees of composites buried in *word bodies* pulls module-cached generic-dispatch
-/// entries and effect-less consts into the discovered set, which reroutes their AOT handling
-/// and trips the non-prelude must-compile backstop.
+/// Used for the entry instructions and every discovered word body in strict interpreter-free
+/// builds. A composite-nested quotation dispatched at runtime calls library words, e.g.
+/// `advance`, that are reachable only through the dynamic dispatch, so the static BFS never
+/// discovers them and the quotation fails to compile with `.unresolvable_word`. Its `code_ptr`
+/// then stays null and the dispatching `call` traps.
 fn collectCompositeQuotationsPromoting(
     ctx: *const Context,
     instrs: []const Instruction,
@@ -2255,8 +2250,8 @@ fn isBranchTableConsumer(name: []const u8) bool {
 /// An arm left uncompiled would drop to the interpreter at dispatch, where a metadata-only image
 /// no-ops its callees, so the arms must compile with their callees discovered.
 ///
-/// Bare arrays with no consuming call are left alone; promoting arbitrary word-body composites
-/// regressed once, as documented on the call site in `discoverReachableWords`.
+/// Bare arrays with no consuming call are left alone here. Strict builds promote them through
+/// `collectCompositeQuotationsPromoting`.
 fn collectBranchTableQuotationsPromoting(
     ctx: *const Context,
     instrs: []const Instruction,
@@ -2294,11 +2289,9 @@ fn collectBranchTableQuotationsPromoting(
 /// Entry point for the word-body-scoped dispatch-container promoting walk: scans `push_literal`
 /// instructions for the two known runtime-image dispatch-container shapes (`.mutable_map` /
 /// `.struct_instance` for the lint registry, `.hash` for lexer rules) and promotes the callees of
-/// the quotation found at a named dispatch slot inside each. Deliberately does NOT trigger on bare
-/// `.array` / `.vector` at this level -- branch tables are promoted separately by
-/// `collectBranchTableQuotationsPromoting`, keyed on the consuming combinator call, and promoting
-/// other bare word-body composites would repeat the regression documented on the call site in
-/// `discoverReachableWords`.
+/// the quotation found at a named dispatch slot inside each. Does not trigger on bare `.array` /
+/// `.vector` at this level. Branch tables are promoted separately by
+/// `collectBranchTableQuotationsPromoting`, keyed on the consuming combinator call.
 fn collectDispatchContainerQuotationsPromoting(
     ctx: *const Context,
     instrs: []const Instruction,
@@ -2451,7 +2444,7 @@ fn collectNestedQuotations(
 /// Detect-only mirror of `collectCompositeQuotations`.
 ///
 /// Descend to each composite-buried quotation and classify its callees instead of collecting its body.
-/// Never seeds the BFS worklist, so it cannot repeat the compile-set regression that scoped the promoting walks.
+/// Never seeds the BFS worklist.
 fn detectInterpretedReach(
     ctx: *const Context,
     instrs: []const Instruction,

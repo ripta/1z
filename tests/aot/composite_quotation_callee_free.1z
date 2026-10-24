@@ -1,0 +1,8 @@
+\ Interpreter-free (`--interpreter-fallback=false`) call of a quotation buried in a hash literal inside a word body.
+\
+\ `print-line` is reached only from inside the buried quotation. The quotation must still compile, or the
+\ `call` traps with `null-code-ptr`.
+mk: ( -- hash ) [ H{ a: [ drop "a ran" print-line ] } ] ;
+fire: ( key details -- ) [ swap mk swap @get call ] ;
+
+a: 1 fire
