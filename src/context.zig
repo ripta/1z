@@ -5524,9 +5524,19 @@ pub const Context = struct {
         return null;
     }
 
+    /// The shared copy of `name` that this context's binding-name store keeps until the root's
+    /// teardown. A word whose name the host supplies is defined under this copy, so the host can
+    /// free its own buffer.
+    pub fn internBindingName(self: *Context, name: []const u8) ![]const u8 {
+        self.acquireSharedWrite();
+        defer self.releaseSharedWrite();
+
+        return self.binding_names.internLocked(name);
+    }
+
     /// Remove a word from the same scope `defineWordLocked` writes to: the
     /// topmost visible local frame when one exists, otherwise the dictionary.
-    pub fn removeWord(self: *Context, name: []const u8) bool {
+    pub fn removeWord(self: *Context, name: []const u8) !bool {
         self.acquireSharedWrite();
         defer self.releaseSharedWrite();
         if (self.defineTargetFrameIndex()) |top_index| {
@@ -20028,11 +20038,11 @@ test "nonempty_transient_lexical_frames: define, remove, and pop stay balanced" 
     try std.testing.expectEqual(@as(usize, 1), ctx.nonempty_transient_lexical_frames);
 
     // Removing one word leaves the frame non-empty.
-    try std.testing.expect(ctx.removeWord("a"));
+    try std.testing.expect(try ctx.removeWord("a"));
     try std.testing.expectEqual(@as(usize, 1), ctx.nonempty_transient_lexical_frames);
 
     // Removing the last word empties the frame.
-    try std.testing.expect(ctx.removeWord("b"));
+    try std.testing.expect(try ctx.removeWord("b"));
     try std.testing.expectEqual(@as(usize, 0), ctx.nonempty_transient_lexical_frames);
 
     // A definition followed by a pop of the whole frame nets back to zero.
@@ -20097,7 +20107,7 @@ test "nonempty_transient_lexical_frames: a remove under a moved floor pairs, and
     try std.testing.expectEqual(@as(usize, 1), ctx.nonempty_transient_lexical_frames);
 
     ctx.import_frame_index = 1;
-    try std.testing.expect(ctx.removeWord("a"));
+    try std.testing.expect(try ctx.removeWord("a"));
     try std.testing.expectEqual(@as(usize, 0), ctx.nonempty_transient_lexical_frames);
 
     ctx.import_frame_index = 0;

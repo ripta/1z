@@ -53,10 +53,6 @@ const aot_image_loader = @import("aot_image_loader.zig");
 const aot_lexical_sites = @import("aot_lexical_sites.zig");
 const AotArrayLiteralCache = @import("aot_array_literal_cache.zig").AotArrayLiteralCache;
 
-const HostWordRegistration = struct {
-    name: []const u8,
-};
-
 /// Handle-owned snapshot of an InferenceEngine diagnostic. The engine frees
 /// `message` in its `deinit`, and `word_name`/`source_file` are borrowed
 /// references into the dictionary and source arena; copying all three gives
@@ -104,7 +100,6 @@ const OnezHandle = struct {
     allocator: std.mem.Allocator,
     ctx: *Context,
     last_error: ?[:0]const u8 = null,
-    host_words: std.ArrayListUnmanaged(HostWordRegistration) = .{},
 
     /// Value boxes handed out by `onez_pop_value`. Each box carries the owning reference its stack
     /// slot transferred at pop. Deïnit must release them or a popped container's refcounted
@@ -450,11 +445,6 @@ export fn onez_deinit(ptr: ?*anyopaque) void {
         allocator.destroy(dbg);
         handle.debugger = null;
     }
-
-    for (handle.host_words.items) |entry| {
-        allocator.free(entry.name);
-    }
-    handle.host_words.deinit(allocator);
 
     // Release the owning references carried by popped-value boxes before the context teardown
     // that would report their backings as leaked.
@@ -1132,19 +1122,7 @@ export fn onez_register_word(ptr: ?*anyopaque, name: ?[*:0]const u8, callback: ?
         return ONEZ_ERR_TYPE_MISMATCH;
     }
 
-    const name_copy = handle.allocator.dupe(u8, name_slice) catch {
-        setLastError(handle, "allocation failure copying word name", .{});
-        return ONEZ_ERR_ALLOC;
-    };
-    errdefer handle.allocator.free(name_copy);
-
-    handle.host_words.append(handle.allocator, .{ .name = name_copy }) catch {
-        setLastError(handle, "allocation failure tracking host word", .{});
-        return ONEZ_ERR_ALLOC;
-    };
-    errdefer _ = handle.host_words.pop();
-
-    capi_core.defineHostWord(handle.ctx, name_copy, null, callback_fn, ptr, user_data) catch |err| {
+    capi_core.defineHostWord(handle.ctx, name_slice, null, callback_fn, ptr, user_data) catch |err| {
         if (handle.ctx.pending_error_message) |msg| {
             setLastError(handle, "{s}", .{msg});
         } else {
@@ -1212,19 +1190,7 @@ export fn onez_register_word_with_effect(
         };
     } else null;
 
-    const name_copy = handle.allocator.dupe(u8, name_slice) catch {
-        setLastError(handle, "allocation failure copying word name", .{});
-        return ONEZ_ERR_ALLOC;
-    };
-    errdefer handle.allocator.free(name_copy);
-
-    handle.host_words.append(handle.allocator, .{ .name = name_copy }) catch {
-        setLastError(handle, "allocation failure tracking host word", .{});
-        return ONEZ_ERR_ALLOC;
-    };
-    errdefer _ = handle.host_words.pop();
-
-    capi_core.defineHostWord(handle.ctx, name_copy, parsed_effect, callback_fn, ptr, user_data) catch |err| {
+    capi_core.defineHostWord(handle.ctx, name_slice, parsed_effect, callback_fn, ptr, user_data) catch |err| {
         if (handle.ctx.pending_error_message) |msg| {
             setLastError(handle, "{s}", .{msg});
         } else {
@@ -1261,21 +1227,13 @@ export fn onez_unregister_word(ptr: ?*anyopaque, name: ?[*:0]const u8) c_int {
         },
     }
 
-    // Only free the tracked name once the definition is actually gone: the
-    // frame keys on the same allocation, so freeing while it remains keyed
-    // leaves a dangling hash-map key.
-    if (!handle.ctx.removeWord(name_slice)) {
+    const removed = handle.ctx.removeWord(name_slice) catch |err| {
+        captureError(handle, err);
+        return ONEZ_ERR_ALLOC;
+    };
+    if (!removed) {
         setLastError(handle, "word '{s}' could not be removed", .{name_slice});
         return ONEZ_ERR_KEY_NOT_FOUND;
-    }
-
-    const allocator = handle.allocator;
-    for (handle.host_words.items, 0..) |entry, i| {
-        if (std.mem.eql(u8, entry.name, name_slice)) {
-            allocator.free(entry.name);
-            _ = handle.host_words.swapRemove(i);
-            break;
-        }
     }
 
     return ONEZ_OK;
@@ -3366,6 +3324,53 @@ test "unregister_word removes host word" {
 
     const rc = onez_eval(handle_ptr, "temp-word", 9);
     try std.testing.expect(rc != ONEZ_OK);
+}
+
+test "unregister_word makes a pre-resolved caller raise unknown-word" {
+    resetHostCallbackTestState();
+
+    const handle_ptr = onez_init_no_prelude();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    const value: i64 = 99;
+    try std.testing.expectEqual(ONEZ_OK, onez_register_word(handle_ptr, "temp-word", constantHostCallback, @constCast(&value)));
+
+    const define = "use-temp: [ temp-word ] ;";
+    try std.testing.expectEqual(ONEZ_OK, onez_eval(handle_ptr, define, define.len));
+    try std.testing.expectEqual(ONEZ_OK, onez_eval(handle_ptr, "use-temp", 8));
+
+    var out: i64 = 0;
+    try std.testing.expectEqual(ONEZ_OK, onez_pop_int(handle_ptr, &out));
+    try std.testing.expectEqual(@as(i64, 99), out);
+
+    try std.testing.expectEqual(ONEZ_OK, onez_unregister_word(handle_ptr, "temp-word"));
+
+    try std.testing.expect(onez_eval(handle_ptr, "use-temp", 8) != ONEZ_OK);
+    try std.testing.expect(std.mem.indexOf(u8, std.mem.span(onez_last_error(handle_ptr).?), "unknown-word") != null);
+}
+
+test "unregister_word then register again revives a pre-resolved caller" {
+    resetHostCallbackTestState();
+
+    const handle_ptr = onez_init_no_prelude();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    const first: i64 = 1;
+    try std.testing.expectEqual(ONEZ_OK, onez_register_word(handle_ptr, "temp-word", constantHostCallback, @constCast(&first)));
+
+    const define = "use-temp: [ temp-word ] ;";
+    try std.testing.expectEqual(ONEZ_OK, onez_eval(handle_ptr, define, define.len));
+    try std.testing.expectEqual(ONEZ_OK, onez_unregister_word(handle_ptr, "temp-word"));
+
+    const second: i64 = 2;
+    try std.testing.expectEqual(ONEZ_OK, onez_register_word(handle_ptr, "temp-word", constantHostCallback, @constCast(&second)));
+    try std.testing.expectEqual(ONEZ_OK, onez_eval(handle_ptr, "use-temp", 8));
+
+    var out: i64 = 0;
+    try std.testing.expectEqual(ONEZ_OK, onez_pop_int(handle_ptr, &out));
+    try std.testing.expectEqual(@as(i64, 2), out);
 }
 
 test "unregister_word returns KEY_NOT_FOUND for unknown word" {

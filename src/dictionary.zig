@@ -266,6 +266,11 @@ pub const Dictionary = struct {
     /// swap there may still be readers holding the pointer, so the box stays
     /// allocated for the dictionary's lifetime and is freed in `deinit`.
     retired: std.ArrayListUnmanaged(*WordDefinition) = .{},
+    /// Slots of removed words, keyed by the slot's own name. A pre-resolved call site keeps the
+    /// slot address, so `remove` points the slot at a definition that raises unknown-word instead
+    /// of freeing it. `put` takes the slot back when the name is defined again, so those call
+    /// sites follow the name as a by-name lookup would.
+    tombstones: std.StringHashMapUnmanaged(*WordSlot) = .{},
     /// Owning references adopted by word definitions whose memory must stay
     /// alive for the dictionary's lifetime -- a closure whose body became a
     /// word's compound action. Released at teardown alongside the container
@@ -292,6 +297,13 @@ pub const Dictionary = struct {
             self.allocator.destroy(slot);
         }
         self.entries.deinit(self.allocator);
+        var tombstone_it = self.tombstones.valueIterator();
+        while (tombstone_it.next()) |slot_ptr| {
+            const slot = slot_ptr.*;
+            self.allocator.destroy(loadSlot(slot));
+            self.allocator.destroy(slot);
+        }
+        self.tombstones.deinit(self.allocator);
         for (self.retired.items) |def| self.allocator.destroy(def);
         self.retired.deinit(self.allocator);
         self.container_release_list.deinit(self.allocator);
@@ -312,6 +324,17 @@ pub const Dictionary = struct {
                 self.allocator.destroy(def_box);
                 return err;
             };
+        } else if (self.tombstones.get(name)) |slot| {
+            self.retired.ensureUnusedCapacity(self.allocator, 1) catch |err| {
+                _ = self.entries.remove(name);
+                self.allocator.destroy(def_box);
+                return err;
+            };
+            const tombstone = loadSlot(slot);
+            storeSlot(slot, def_box);
+            self.retired.appendAssumeCapacity(tombstone);
+            _ = self.tombstones.remove(name);
+            gop.value_ptr.* = slot;
         } else {
             const slot = self.allocator.create(WordSlot) catch |err| {
                 self.allocator.destroy(def_box);
@@ -343,16 +366,34 @@ pub const Dictionary = struct {
         return self.entries.get(name);
     }
 
-    pub fn remove(self: *Dictionary, name: []const u8) bool {
-        const removed = self.entries.fetchRemove(name) orelse return false;
-        const slot = removed.value;
-        const def = loadSlot(slot);
-        self.retired.append(self.allocator, def) catch {
-            // Reclamation is best-effort; on OOM the box stays leaked but
-            // the slot itself is destroyed and the entry is gone.
-        };
-        self.allocator.destroy(slot);
+    /// Remove `name`, returning whether it was present.
+    ///
+    /// The slot is kept, because a pre-resolved call site still holds its address. The slot now
+    /// points at a definition that raises unknown-word, and a later `put` of the same name takes
+    /// the slot back. The slot's name keys the tombstone, so the name the word was first put
+    /// under must outlive the dictionary.
+    ///
+    /// Nothing changes when this fails.
+    pub fn remove(self: *Dictionary, name: []const u8) !bool {
+        const slot = self.entries.get(name) orelse return false;
+
+        const tombstone = try self.allocator.create(WordDefinition);
+        errdefer self.allocator.destroy(tombstone);
+        try self.retired.ensureUnusedCapacity(self.allocator, 1);
+        try self.tombstones.ensureUnusedCapacity(self.allocator, 1);
+
+        tombstone.* = .{ .name = slot.name, .action = .{ .native = removedWord } };
+
+        const old = loadSlot(slot);
+        _ = self.entries.remove(name);
+        storeSlot(slot, tombstone);
+        self.retired.appendAssumeCapacity(old);
+        self.tombstones.putAssumeCapacity(slot.name, slot);
         return true;
+    }
+
+    fn removedWord(_: *Context) anyerror!void {
+        return error.UnknownWord;
     }
 
     /// If `instructions` contains any container-variant `push_literal`,
@@ -474,10 +515,54 @@ test "dictionary remove" {
     });
     try std.testing.expect(dict.get("removable") != null);
 
-    try std.testing.expect(dict.remove("removable"));
+    try std.testing.expect(try dict.remove("removable"));
     try std.testing.expectEqual(null, dict.get("removable"));
 
-    try std.testing.expect(!dict.remove("nonexistent"));
+    try std.testing.expect(!try dict.remove("nonexistent"));
+}
+
+test "dictionary remove keeps the slot and points it at a word that raises unknown-word" {
+    const allocator = std.testing.allocator;
+    var dict = Dictionary.init(allocator);
+    defer dict.deinit();
+
+    const testFn: NativeFn = struct {
+        fn f(_: *Context) anyerror!void {}
+    }.f;
+
+    try dict.put("gone", .{ .name = "gone", .action = .{ .native = testFn } });
+    const slot = dict.getSlot("gone").?;
+
+    try std.testing.expect(try dict.remove("gone"));
+    try std.testing.expectEqual(null, dict.getSlot("gone"));
+    try std.testing.expectEqualStrings("gone", slot.name);
+    try std.testing.expect(loadSlot(slot).action.native != testFn);
+}
+
+test "dictionary put after remove revives the same slot" {
+    const allocator = std.testing.allocator;
+    var dict = Dictionary.init(allocator);
+    defer dict.deinit();
+
+    const fnA: NativeFn = struct {
+        fn f(_: *Context) anyerror!void {}
+    }.f;
+    const fnB: NativeFn = struct {
+        fn f(_: *Context) anyerror!void {}
+    }.f;
+
+    try dict.put("again", .{ .name = "again", .action = .{ .native = fnA } });
+    const slot = dict.getSlot("again").?;
+
+    try std.testing.expect(try dict.remove("again"));
+    try dict.put("again", .{ .name = "again", .action = .{ .native = fnB } });
+
+    try std.testing.expectEqual(slot, dict.getSlot("again").?);
+    try std.testing.expectEqual(fnB, loadSlot(slot).action.native);
+    try std.testing.expectEqual(@as(usize, 0), dict.tombstones.count());
+
+    try std.testing.expect(try dict.remove("again"));
+    try std.testing.expectEqual(@as(usize, 1), dict.tombstones.count());
 }
 
 test "parse_time flag defaults to false" {

@@ -280,25 +280,30 @@ pub fn popString(ctx: *Context, mismatched_out: *Value) ![]const u8 {
     }
 }
 
-/// Construct a host-callback word definition and register it under `name` (already duped onto
-/// the caller's allocator). Shared so a host-registered word looks identical regardless of which
-/// embedding root defined it.
+/// Construct a host-callback word definition and register it under an interned copy of `name`.
+/// Shared so a host-registered word looks identical regardless of which embedding root defined it.
+///
+/// The word, its dictionary slot, and its callback all borrow the interned copy. The host can free
+/// its own buffer right away, and unregistering the word leaves the copy valid for any call site
+/// that still holds the slot.
 pub fn defineHostWord(
     ctx: *Context,
-    name_copy: []const u8,
+    name: []const u8,
     effect: ?*const StackEffect,
     callback: HostCallbackFn,
     callback_handle: ?*anyopaque,
     user_data: ?*anyopaque,
 ) !void {
-    try ctx.defineWord(name_copy, .{
-        .name = name_copy,
+    const interned = try ctx.internBindingName(name);
+
+    try ctx.defineWord(interned, .{
+        .name = interned,
         .stack_effect = effect,
         .action = .{ .host_callback = .{
             .handle = callback_handle,
             .callback = callback,
             .user_data = user_data,
-            .name = name_copy,
+            .name = interned,
         } },
     });
 }

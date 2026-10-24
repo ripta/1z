@@ -95,10 +95,6 @@ const output_vtable = StreamVTable{
     .flush = outputFlush,
 };
 
-const HostWordRegistration = struct {
-    name: []const u8,
-};
-
 const OnezHandle = struct {
     allocator: std.mem.Allocator,
     /// Non-null only on the host-test path, where the GPA is a heap-allocated stateful object
@@ -107,7 +103,6 @@ const OnezHandle = struct {
     gpa: ?*HostGpa,
     ctx: *Context,
     last_error: ?[:0]const u8 = null,
-    host_words: std.ArrayListUnmanaged(HostWordRegistration) = .{},
     popped_values: std.ArrayListUnmanaged(*Value) = .{},
 
     output_writer_ctx: ?*anyopaque = null,
@@ -290,9 +285,6 @@ export fn onez_deinit(ptr: ?*anyopaque) void {
     const alloc = handle.allocator;
 
     clearLastError(handle);
-
-    for (handle.host_words.items) |entry| alloc.free(entry.name);
-    handle.host_words.deinit(alloc);
 
     for (handle.popped_values.items) |slot| {
         container_backing.releaseValue(slot.*);
@@ -840,19 +832,7 @@ export fn onez_register_word(ptr: ?*anyopaque, name: ?[*:0]const u8, callback: ?
         return ONEZ_ERR_TYPE_MISMATCH;
     }
 
-    const name_copy = handle.allocator.dupe(u8, name_slice) catch {
-        setLastError(handle, "allocation failure copying word name", .{});
-        return ONEZ_ERR_ALLOC;
-    };
-    errdefer handle.allocator.free(name_copy);
-
-    handle.host_words.append(handle.allocator, .{ .name = name_copy }) catch {
-        setLastError(handle, "allocation failure tracking host word", .{});
-        return ONEZ_ERR_ALLOC;
-    };
-    errdefer _ = handle.host_words.pop();
-
-    capi_core.defineHostWord(handle.ctx, name_copy, null, callback_fn, ptr, user_data) catch |err| {
+    capi_core.defineHostWord(handle.ctx, name_slice, null, callback_fn, ptr, user_data) catch |err| {
         if (handle.ctx.pending_error_message) |msg| {
             setLastError(handle, "{s}", .{msg});
         } else {
@@ -904,19 +884,7 @@ export fn onez_register_word_with_effect(
         };
     } else null;
 
-    const name_copy = handle.allocator.dupe(u8, name_slice) catch {
-        setLastError(handle, "allocation failure copying word name", .{});
-        return ONEZ_ERR_ALLOC;
-    };
-    errdefer handle.allocator.free(name_copy);
-
-    handle.host_words.append(handle.allocator, .{ .name = name_copy }) catch {
-        setLastError(handle, "allocation failure tracking host word", .{});
-        return ONEZ_ERR_ALLOC;
-    };
-    errdefer _ = handle.host_words.pop();
-
-    capi_core.defineHostWord(handle.ctx, name_copy, parsed_effect, callback_fn, ptr, user_data) catch |err| {
+    capi_core.defineHostWord(handle.ctx, name_slice, parsed_effect, callback_fn, ptr, user_data) catch |err| {
         if (handle.ctx.pending_error_message) |msg| {
             setLastError(handle, "{s}", .{msg});
         } else {
@@ -953,17 +921,13 @@ export fn onez_unregister_word(ptr: ?*anyopaque, name: ?[*:0]const u8) c_int {
         },
     }
 
-    if (!handle.ctx.removeWord(name_slice)) {
+    const removed = handle.ctx.removeWord(name_slice) catch |err| {
+        captureError(handle, err);
+        return ONEZ_ERR_ALLOC;
+    };
+    if (!removed) {
         setLastError(handle, "word '{s}' could not be removed", .{name_slice});
         return ONEZ_ERR_KEY_NOT_FOUND;
-    }
-
-    for (handle.host_words.items, 0..) |entry, i| {
-        if (std.mem.eql(u8, entry.name, name_slice)) {
-            handle.allocator.free(entry.name);
-            _ = handle.host_words.swapRemove(i);
-            break;
-        }
     }
 
     return ONEZ_OK;
