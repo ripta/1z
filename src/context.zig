@@ -8,6 +8,7 @@ const dict_mod = @import("dictionary.zig");
 const Dictionary = dict_mod.Dictionary;
 const container_backing = @import("container_backing.zig");
 const PragmaView = @import("pragma_view.zig").PragmaView;
+const ObligationSink = @import("obligation_sink.zig").ObligationSink;
 const typeCheckModeOf = @import("pragma_view.zig").typeCheckModeOf;
 const TypeCheckMode = @import("pragma_view.zig").TypeCheckMode;
 
@@ -607,21 +608,13 @@ pub const AnonymousUnionKeyContext = struct {
     }
 };
 
-/// A deferred protocol obligation recorded during module loading.
+/// An obligation sink installed on a context, with the handle it replaced.
 ///
-/// Validated after all definitions in the module have been processed.
-///
-/// The constraint pointer is the durable handle to the obligation; resolving the type's `TypeValue`
-/// happens at validation time. A bare protocol bound carries a `ProtocolDescriptor`; a combinator
-/// bound (`comparable & stringable`, `fixnum | comparable`) carries a `ConstraintCombinator`.
-pub const ProtocolObligation = struct {
-    type_name: []const u8,
-    constraint: Constraint,
-
-    pub const Constraint = union(enum) {
-        protocol: *const value_mod.ProtocolDescriptor,
-        combination: *const value_mod.ConstraintCombinator,
-    };
+/// The scope holds the reference the sink was created with. `Context.leaveObligationSink` restores
+/// the saved handle and drops that reference.
+pub const ObligationSinkScope = struct {
+    saved: ?*ObligationSink,
+    sink: *ObligationSink,
 };
 
 /// Key for the per-context protocol satisfies-check memo.
@@ -1028,19 +1021,22 @@ pub const Context = struct {
     ///
     /// The field is present in every build, but only a Debug build writes or reads it.
     current_native: ?[]const u8 = null,
-    /// True while a `load` body runs on this context. Protocol validation defers its obligations
-    /// to load end under it. Constraint analysis leaves a protocol element unknown under it. In
-    /// both cases a method the module registers on a later line may still satisfy the check.
+    /// True while a `load` body runs on this context. Constraint analysis leaves a protocol element
+    /// unknown under it, because a method the module registers on a later line may still satisfy
+    /// the check. Constraint analysis is its only consumer.
     ///
-    /// A task context starts with it clear rather than inheriting it. The loader drains only its
-    /// own obligation list, so a child that deferred would append to one nobody validates.
+    /// Protocol validation defers through `obligation_sink` instead. A task context starts with
+    /// this flag clear rather than inheriting it.
     in_module_load: bool = false,
     /// Re-entrancy guard for scoped hooks (e.g., word-defined).
     firing_scoped_hooks: bool = false,
-    /// Deferred protocol obligations collected during module loading.
-    /// Validated at module load completion so that methods defined after the
-    /// protocol declaration in the same file are still found.
-    protocol_obligations: std.ArrayListUnmanaged(ProtocolObligation) = .{},
+    /// The sink that collects protocol obligations while a load runs, or null outside one. A
+    /// protocol check records into an open sink instead of validating, so a method defined after
+    /// the protocol declaration in the same file is still found.
+    ///
+    /// The scope that installed the sink owns the reference. Install and remove it through
+    /// `enterObligationSink` and `leaveObligationSink`.
+    obligation_sink: ?*ObligationSink = null,
     /// True while parsing a definition body that has a parse-time or
     /// parse-time-only marker. Used by the parser to allow parse-time-only
     /// words inside parse-time definitions.
@@ -2769,6 +2765,23 @@ pub const Context = struct {
     /// executing task.
     pub fn stateTarget(self: *Context) *Context {
         return self.load_target orelse self;
+    }
+
+    /// Install a fresh obligation sink as this context's current one. The caller passes the scope
+    /// to `leaveObligationSink` on every exit path.
+    pub fn enterObligationSink(self: *Context) !ObligationSinkScope {
+        const sink = try ObligationSink.create(self.allocator, self.lock_order_tracker);
+        const scope: ObligationSinkScope = .{ .saved = self.obligation_sink, .sink = sink };
+        self.obligation_sink = sink;
+        return scope;
+    }
+
+    /// Restore the handle `enterObligationSink` replaced, and discard whatever the sink still holds.
+    /// A sink already drained has nothing left to discard.
+    pub fn leaveObligationSink(self: *Context, scope: ObligationSinkScope) void {
+        self.obligation_sink = scope.saved;
+        scope.sink.discard();
+        scope.sink.release();
     }
 
     /// Append a load path owned by this context's list. `path` must outlive the context.

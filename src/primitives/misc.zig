@@ -586,12 +586,8 @@ pub fn nativeLoadImpl(ctx: *Context, cache: *value_mod.MutableMap, filename: []c
     ctx.loading_module = module;
     defer ctx.loading_module = old_loading_module;
 
-    const saved_obligations = ctx.protocol_obligations;
-    ctx.protocol_obligations = .{};
-    defer {
-        ctx.protocol_obligations.deinit(ctx.allocator);
-        ctx.protocol_obligations = saved_obligations;
-    }
+    const sink_scope = try ctx.enterObligationSink();
+    defer ctx.leaveObligationSink(sink_scope);
 
     const old_line_offset = ctx.parse_line_offset;
     defer ctx.parse_line_offset = old_line_offset;
@@ -630,7 +626,13 @@ pub fn nativeLoadImpl(ctx: *Context, cache: *value_mod.MutableMap, filename: []c
     // Validate deferred protocol obligations before finalizing the module.
     // Only same-type methods are checked here; cross-type (any) obligations
     // remain runtime-only.
-    try protocols.validateObligationsSameType(ctx);
+    {
+        var pending = sink_scope.sink.takeAndClose();
+        defer pending.deinit();
+
+        sink_scope.sink.assertClosedAndEmpty();
+        try protocols.validateObligationsSameType(ctx, &pending);
+    }
 
     // Capture definitions from the frame before popping
     const frame_index = ctx.local_frames.items.len - 1;
@@ -2461,6 +2463,68 @@ test "protocols and constraints are durable on a load owner and not in a bare ta
     try std.testing.expect(!task_ctx.protocol_descriptors.items[1].durable);
     try std.testing.expectEqual(@as(usize, 1), task_ctx.constraint_combinators.items.len);
     try std.testing.expect(!task_ctx.constraint_combinators.items[0].durable);
+}
+
+test "a load defers an obligation to a method defined on a later line and leaves no sink behind" {
+    var root = Context.initWithPrelude(std.testing.allocator);
+    defer root.deinit();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const path = try writeModuleFile(
+        &tmp,
+        "forward.1z",
+        "showable: protocol{ show: } ;\nthing: virtual{ fixnum } ;\nshow: generic ( v -- s ) [ drop \"\" ] ;\n" ++
+            "thing: showable assert-satisfies\nshow: method{ thing } [ unmake-thing >string ] ;\n",
+    );
+    defer std.testing.allocator.free(path);
+
+    try loadFileThrough(&root, path);
+
+    try std.testing.expect(root.obligation_sink == null);
+}
+
+test "a load that fails discards its pending obligations and leaves no sink behind" {
+    var root = Context.initWithPrelude(std.testing.allocator);
+    defer root.deinit();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const path = try writeModuleFile(
+        &tmp,
+        "failing.1z",
+        "showable: protocol{ show: } ;\nthing: virtual{ fixnum } ;\nshow: generic ( v -- s ) [ drop \"\" ] ;\n" ++
+            "thing: showable assert-satisfies\nno-such-word-for-the-failing-load\n",
+    );
+    defer std.testing.allocator.free(path);
+
+    if (loadFileThrough(&root, path)) |_| {
+        return error.TestExpectedLoadFailure;
+    } else |_| {}
+
+    try std.testing.expect(root.obligation_sink == null);
+}
+
+test "an obligation raised inside with-isolation during a load is dropped, not validated" {
+    var root = Context.initWithPrelude(std.testing.allocator);
+    defer root.deinit();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const path = try writeModuleFile(
+        &tmp,
+        "isolated.1z",
+        "showable: protocol{ show: } ;\nthing: virtual{ fixnum } ;\nshow: generic ( v -- s ) [ drop \"\" ] ;\n" ++
+            "[ thing: showable assert-satisfies ] with-isolation\n",
+    );
+    defer std.testing.allocator.free(path);
+
+    try loadFileThrough(&root, path);
+
+    try std.testing.expect(root.obligation_sink == null);
 }
 
 test "a load from an analysis child lands its types, protocols, and cache entry on the child" {

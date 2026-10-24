@@ -15,9 +15,15 @@ const std = @import("std");
 ///
 /// Level 7: load path list mutex (leaf-only Mutex on each context)
 ///
+/// Level 8: obligation sink lock (leaf-only Mutex on each load's obligation sink)
+///
 /// The load path mutex is held only around an append or a copy of the list's slice, never across a
-/// filesystem probe. It sits above every other level so that it can be taken from inside any
-/// other critical section.
+/// filesystem probe. It sits above every other level except the obligation sink lock, so that it
+/// can be taken from inside any other critical section.
+///
+/// The obligation sink lock is held only around a link into the sink's list or the take of that
+/// list, never around an allocation or a validation. Nothing is acquired under it, so it sits above
+/// every level and can be taken from inside any other critical section.
 ///
 /// The shadow table lock is held only around a map probe or insert. It is never held while a
 /// container mutex is held, because a copy is made before the lock is taken. Pops of an ancestor's
@@ -45,6 +51,7 @@ pub const LockLevel = enum(u8) {
     tz = 5,
     shadow_table = 6,
     load_paths = 7,
+    obligation_sink = 8,
 };
 
 /// Per-thread lock-ordering state. Each OS thread maintains its own

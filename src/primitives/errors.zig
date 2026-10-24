@@ -523,12 +523,11 @@ fn nativeWithIsolation(ctx: *Context) anyerror!void {
     try ctx.pushDispatchFrame();
     defer ctx.popDispatchFrame();
 
-    const saved_obligations = ctx.protocol_obligations;
-    ctx.protocol_obligations = .{};
-    defer {
-        ctx.protocol_obligations.deinit(ctx.allocator);
-        ctx.protocol_obligations = saved_obligations;
-    }
+    // Outside a load there is no sink and checks stay eager. Inside one, obligations raised in
+    // the body are intercepted and dropped unvalidated.
+    var sink_scope: ?context_mod.ObligationSinkScope = null;
+    if (ctx.obligation_sink != null) sink_scope = try ctx.enterObligationSink();
+    defer if (sink_scope) |scope| ctx.leaveObligationSink(scope);
 
     try pc.executeWithFrame(ctx);
 

@@ -110,9 +110,9 @@ const OnezHandle = struct {
     /// backing leaks.
     popped_values: std.ArrayListUnmanaged(*Value) = .{},
 
-    saved_obligation_frames: std.ArrayListUnmanaged(
-        std.ArrayListUnmanaged(context_mod.ProtocolObligation),
-    ) = .{},
+    /// One entry per open isolation, innermost last. Null for an isolation begun outside a load,
+    /// which opens no sink.
+    saved_obligation_frames: std.ArrayListUnmanaged(?context_mod.ObligationSinkScope) = .{},
     diagnostics: std.ArrayListUnmanaged(OwnedDiagnostic) = .{},
 
     /// Heap-allocated debugger, created by onez_debug_enable. Persists across
@@ -465,8 +465,10 @@ export fn onez_deinit(ptr: ?*anyopaque) void {
     // XXX(ripta): forcefully close any unclosed isolation frames to avoid leaks. This
     //             is a bit hacky but it avoids the need for a more complex ownership
     //             model for obligation frames.
-    for (handle.saved_obligation_frames.items) |*frame| {
-        frame.deinit(handle.ctx.allocator);
+    for (handle.saved_obligation_frames.items) |frame| {
+        const scope = frame orelse continue;
+        scope.sink.discard();
+        scope.sink.release();
     }
     handle.saved_obligation_frames.deinit(allocator);
 
@@ -806,17 +808,26 @@ export fn onez_isolation_begin(ptr: ?*anyopaque) c_int {
         return ONEZ_ERR_ALLOC;
     };
 
-    handle.saved_obligation_frames.append(handle.allocator, ctx.protocol_obligations) catch {
+    var sink_scope: ?context_mod.ObligationSinkScope = null;
+    if (ctx.obligation_sink != null) {
+        sink_scope = ctx.enterObligationSink() catch {
+            ctx.popDispatchFrame();
+            ctx.popTypeRegistryFrame();
+            setLastError(handle, "isolation begin: obligation sink alloc failed", .{});
+            return ONEZ_ERR_ALLOC;
+        };
+    }
+
+    handle.saved_obligation_frames.append(handle.allocator, sink_scope) catch {
+        if (sink_scope) |scope| ctx.leaveObligationSink(scope);
         ctx.popDispatchFrame();
         ctx.popTypeRegistryFrame();
         setLastError(handle, "isolation begin: obligation frame alloc failed", .{});
         return ONEZ_ERR_ALLOC;
     };
-    ctx.protocol_obligations = .{};
 
     ctx.pushLocalFrame() catch {
-        ctx.protocol_obligations.deinit(ctx.allocator);
-        ctx.protocol_obligations = handle.saved_obligation_frames.pop().?;
+        if (handle.saved_obligation_frames.pop().?) |scope| ctx.leaveObligationSink(scope);
         ctx.popDispatchFrame();
         ctx.popTypeRegistryFrame();
         setLastError(handle, "isolation begin: local frame alloc failed", .{});
@@ -839,8 +850,7 @@ export fn onez_isolation_end(ptr: ?*anyopaque) c_int {
         return ONEZ_ERR_ISOLATION_UNDERFLOW;
     }
 
-    ctx.protocol_obligations.deinit(ctx.allocator);
-    ctx.protocol_obligations = handle.saved_obligation_frames.pop().?;
+    if (handle.saved_obligation_frames.pop().?) |scope| ctx.leaveObligationSink(scope);
 
     ctx.popLocalFrame();
     ctx.popDispatchFrame();

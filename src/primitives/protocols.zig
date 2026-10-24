@@ -2,6 +2,8 @@ const std = @import("std");
 
 const context_mod = @import("../context.zig");
 const Context = context_mod.Context;
+const obligation_sink_mod = @import("../obligation_sink.zig");
+const ObligationSink = obligation_sink_mod.ObligationSink;
 
 const value_mod = @import("../value.zig");
 const Value = value_mod.Value;
@@ -196,6 +198,13 @@ fn nativeDefineProtocol(ctx: *Context) anyerror!void {
     });
 }
 
+/// True when the obligation went into the context's open sink, to be validated at the load's drain.
+/// False when there is no open sink, and the caller validates now.
+fn deferToSink(ctx: *Context, type_name: []const u8, constraint: obligation_sink_mod.Obligation.Constraint) !bool {
+    const sink = ctx.obligation_sink orelse return false;
+    return sink.append(type_name, constraint);
+}
+
 /// Trampoline helper ( type-name descriptor -- )
 ///
 /// Backs both `assert-satisfies` and the `protocol-check` registry entry. Dispatches a popped
@@ -216,24 +225,11 @@ fn protocolCheckHelper(ctx: *Context) anyerror!void {
 
     switch (desc_val) {
         .protocol_descriptor => |descriptor| {
-            if (ctx.in_module_load) {
-                // The obligation outlives the popped value.
-                try ctx.protocol_obligations.append(ctx.allocator, .{
-                    .type_name = try ctx.quotationAllocator().dupe(u8, type_name),
-                    .constraint = .{ .protocol = descriptor },
-                });
-                return;
-            }
+            if (try deferToSink(ctx, type_name, .{ .protocol = descriptor })) return;
             try validateProtocolObligation(ctx, type_name, descriptor);
         },
         .constraint_combinator => |cc| {
-            if (ctx.in_module_load) {
-                try ctx.protocol_obligations.append(ctx.allocator, .{
-                    .type_name = try ctx.quotationAllocator().dupe(u8, type_name),
-                    .constraint = .{ .combination = cc },
-                });
-                return;
-            }
+            if (try deferToSink(ctx, type_name, .{ .combination = cc })) return;
             try validateCombinatorObligation(ctx, type_name, cc);
         },
         else => {
@@ -423,9 +419,11 @@ pub fn validateProtocolObligation(
     return Core.validateProtocolObligation(hostedEnv(ctx), type_name, descriptor);
 }
 
-/// Validate deferred protocol obligations.
-pub fn validateObligationsSameType(ctx: *Context) !void {
-    for (ctx.protocol_obligations.items) |obligation| {
+/// Validate the obligations taken from a closed sink. The caller frees `pending`.
+pub fn validateObligationsSameType(ctx: *Context, pending: *const ObligationSink.Pending) !void {
+    var cursor = pending.head;
+    while (cursor) |entry| : (cursor = entry.next) {
+        const obligation = entry.obligation;
         switch (obligation.constraint) {
             .protocol => |descriptor| try Core.validateObligationSameTypeOnly(
                 hostedEnv(ctx),
@@ -439,8 +437,6 @@ pub fn validateObligationsSameType(ctx: *Context) !void {
             ),
         }
     }
-
-    ctx.protocol_obligations.clearRetainingCapacity();
 }
 
 /// Box a `protocol-error` carrying `message` into `ctx.thrown_error` and signal it.

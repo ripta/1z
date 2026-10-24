@@ -5298,6 +5298,7 @@ test {
     _ = @import("container_limits.zig");
     _ = @import("container_backing.zig");
     _ = @import("pragma_view.zig");
+    _ = @import("obligation_sink.zig");
     _ = @import("line_editor.zig");
     _ = @import("debugger/mod.zig");
     _ = @import("multiplexer.zig");
