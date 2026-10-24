@@ -1,0 +1,27 @@
+\ A child spawned inside an isolation outlives it. It waits for the gate, so it asserts after the
+\ isolation has drained and its type has gone out of scope.
+\
+\ The child sends the error type and then the message when the assert throws. It sends "ok" and
+\ an empty message when the assert passes.
+
+scalable: protocol{ scale: ( a: self -- result ) } ;
+scale: generic ( a -- c ) [ drop ] ;
+
+gate: 1 <buffered-channel> ;
+outcome: 2 <buffered-channel> ;
+
+open-gate: ( -- ) [ gate t swap send ] ;
+await-outcome: ( -- type message ) [ outcome receive outcome receive ] ;
+
+[
+  iso-val: virtual{ fixnum } ;
+  scale: method{ iso-val } [ drop 1 ] ;
+  [
+    gate receive drop
+    [ iso-val: scalable assert-satisfies "ok" "" ]
+    [ dup error-type: @get swap message: @get ]
+    recover
+    swap outcome send
+    outcome send
+  ] spawn-detached
+] with-isolation

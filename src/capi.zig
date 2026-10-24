@@ -113,7 +113,7 @@ const OnezHandle = struct {
 
     /// One entry per open isolation, innermost last. Null for an isolation begun outside a load,
     /// which opens no sink.
-    saved_obligation_frames: std.ArrayListUnmanaged(?context_mod.ObligationSinkScope) = .{},
+    saved_sink_scopes: std.ArrayListUnmanaged(?context_mod.ObligationSinkScope) = .{},
     diagnostics: std.ArrayListUnmanaged(OwnedDiagnostic) = .{},
 
     /// Heap-allocated debugger, created by onez_debug_enable. Persists across
@@ -465,13 +465,13 @@ export fn onez_deinit(ptr: ?*anyopaque) void {
 
     // XXX(ripta): forcefully close any unclosed isolation frames to avoid leaks. This
     //             is a bit hacky but it avoids the need for a more complex ownership
-    //             model for obligation frames.
-    for (handle.saved_obligation_frames.items) |frame| {
+    //             model for sink scopes.
+    for (handle.saved_sink_scopes.items) |frame| {
         const scope = frame orelse continue;
         scope.sink.discard();
         scope.sink.release();
     }
-    handle.saved_obligation_frames.deinit(allocator);
+    handle.saved_sink_scopes.deinit(allocator);
 
     if (handle.ctx.program_args.len > 0) {
         allocator.free(handle.ctx.program_args);
@@ -826,7 +826,7 @@ export fn onez_isolation_begin(ptr: ?*anyopaque) c_int {
         }
     }
 
-    handle.saved_obligation_frames.append(handle.allocator, sink_scope) catch {
+    handle.saved_sink_scopes.append(handle.allocator, sink_scope) catch {
         if (sink_scope) |scope| ctx.leaveObligationSink(scope);
         target.popDispatchFrame();
         target.popTypeRegistryFrame();
@@ -835,7 +835,7 @@ export fn onez_isolation_begin(ptr: ?*anyopaque) c_int {
     };
 
     ctx.pushLocalFrame() catch {
-        if (handle.saved_obligation_frames.pop().?) |scope| ctx.leaveObligationSink(scope);
+        if (handle.saved_sink_scopes.pop().?) |scope| ctx.leaveObligationSink(scope);
         target.popDispatchFrame();
         target.popTypeRegistryFrame();
         setLastError(handle, "isolation begin: local frame alloc failed", .{});
@@ -857,13 +857,13 @@ export fn onez_isolation_end(ptr: ?*anyopaque) c_int {
 
     clearLastError(handle);
 
-    if (handle.saved_obligation_frames.items.len == 0) {
+    if (handle.saved_sink_scopes.items.len == 0) {
         setLastError(handle, "onez_isolation_end called without matching begin", .{});
         return ONEZ_ERR_ISOLATION_UNDERFLOW;
     }
 
     const target = ctx.stateTarget();
-    const sink_scope = handle.saved_obligation_frames.pop().?;
+    const sink_scope = handle.saved_sink_scopes.pop().?;
 
     var drain_error: ?anyerror = null;
     if (sink_scope) |scope| {

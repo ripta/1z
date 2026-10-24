@@ -7387,6 +7387,9 @@ pub const Context = struct {
     ///
     /// Compares descriptor identity, so an alias or a variant of the type is found as well. A
     /// descriptor no frame holds is a builtin or resource type, which outlives every task.
+    ///
+    /// The walk stops at the first context that owns its loads. Everything at or above it is
+    /// durable, so a descriptor not found by then is not on a task arena.
     pub fn typeIsOnTaskArena(self: *const Context, desc: *const value_mod.TypeDescriptor) bool {
         // Tasks share one RwLock and registration takes it exclusively, so ancestor frames cannot
         // change under this shared read.
@@ -7401,6 +7404,8 @@ pub const Context = struct {
                     if (registered.* == desc) return !ctx.owns_loads;
                 }
             }
+
+            if (ctx.owns_loads) return false;
         }
 
         return false;
@@ -13023,6 +13028,28 @@ test "typeIsOnTaskArena: classifies by the context that registered the descripto
     try std.testing.expect(grandchild.typeIsOnTaskArena(child_desc));
     try std.testing.expect(child.typeIsOnTaskArena(child_desc));
     try std.testing.expect(!parent.typeIsOnTaskArena(child_desc));
+}
+
+test "typeIsOnTaskArena: the walk stops at the first context that owns its loads" {
+    var root = Context.init(std.testing.allocator);
+    defer root.deinit();
+
+    var task_ctx = try Context.initChild(std.testing.allocator, &root, .task);
+    defer task_ctx.deinit();
+
+    const above_desc = try std.testing.allocator.create(value_mod.TypeDescriptor);
+    defer std.testing.allocator.destroy(above_desc);
+    above_desc.* = .{ .kind = .{ .builtin = {} } };
+    try task_ctx.registerTypeDescriptor("above-type", above_desc);
+
+    var owner = try Context.initChild(std.testing.allocator, &task_ctx, .task);
+    defer owner.deinit();
+
+    // Real owners never sit under a task. Forcing the flag shows where the walk ends.
+    owner.owns_loads = true;
+
+    try std.testing.expect(!owner.typeIsOnTaskArena(above_desc));
+    try std.testing.expect(task_ctx.typeIsOnTaskArena(above_desc));
 }
 
 test "initForTask: a spawner's later pragma does not reach the task" {

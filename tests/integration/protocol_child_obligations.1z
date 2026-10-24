@@ -71,3 +71,21 @@ test-detached-child-after-drain: ( -- ) [
 ] ;
 
 test-detached-child-after-drain
+
+"a child that outlives an isolation" test-section
+
+\ The child is spawned inside an isolation and asserts after the isolation ends. Its sink is
+\ closed, so it checks same-type methods only. The isolation's method is gone by then, so the
+\ assert fails with a protocol-error and not a type-mismatch.
+test-child-after-isolation: ( -- ) [
+  [
+    "fixtures/proto_child_isolation_type_gone.1z" load
+    dup open-gate: @get call
+    await-outcome: @get call
+    "type 'iso-val' does not implement 'scale' required by protocol 'scalable'"
+    "the failure names the missing method" assert=
+    protocol-error: "the failure is a protocol-error" assert=
+  ] task-scope
+] ;
+
+test-child-after-isolation

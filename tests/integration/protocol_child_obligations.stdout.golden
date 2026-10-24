@@ -28,3 +28,9 @@ Stack: [ ]
 Stack: [ ]
 PASS: a detached child with a closed sink skips cross-type methods
 Stack: [ ]
+=== a child that outlives an isolation ===
+Stack: [ ]
+Stack: [ ]
+PASS: the failure names the missing method
+PASS: the failure is a protocol-error
+Stack: [ ]
