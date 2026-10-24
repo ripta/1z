@@ -1,0 +1,58 @@
+use "testing" ;
+
+\ An isolation inside a load validates its own protocol checks against its own definitions. It
+\ drains before its frames pop. Outside a load its checks stay eager and full.
+
+"an isolation inside a load" test-section
+
+test-local-type-and-method: ( -- ) [
+  "fixtures/proto_isolation_local.1z" load drop
+  t "a type and method local to the isolation satisfy its check" assert-true
+] ;
+
+test-forward-reference-across-isolation: ( -- ) [
+  [ "fixtures/proto_isolation_forward.1z" load ]
+  protocol-error:
+  "a method registered after the isolation does not satisfy its check" assert-error-type
+] ;
+
+test-local-type-and-method
+test-forward-reference-across-isolation
+
+"an isolation in a module loaded from a task" test-section
+
+test-isolation-in-loaded-task: ( -- ) [
+  [ "fixtures/proto_isolation_in_task.1z" load drop ] task-scope
+  t "the isolation checks its own definitions and does not leak" assert-true
+] ;
+
+test-isolation-in-loaded-task
+
+"an isolation outside a load" test-section
+
+outer-showable: protocol{ outer-show: } ;
+outer-show: generic ( v -- s ) [ drop "" ] ;
+
+test-eager-unmet: ( -- ) [
+  [
+    [
+      eager-thing: virtual{ fixnum } ;
+      eager-thing: outer-showable assert-satisfies
+      outer-show:  method{ eager-thing } [ unmake-eager-thing >string ] ;
+    ] with-isolation
+  ]
+  protocol-error:
+  "a forward reference inside an isolation outside a load fails at the assert" assert-error-type
+] ;
+
+test-eager-met: ( -- ) [
+  [
+    met-thing:  virtual{ fixnum } ;
+    outer-show: method{ met-thing } [ unmake-met-thing >string ] ;
+    met-thing:  outer-showable assert-satisfies
+  ] with-isolation
+  t "a satisfied check inside an isolation outside a load passes" assert-true
+] ;
+
+test-eager-unmet
+test-eager-met

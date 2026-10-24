@@ -517,22 +517,33 @@ fn nativeWithIsolation(ctx: *Context) anyerror!void {
     const pc = try popQuotation(ctx);
     defer pc.release();
 
-    try ctx.pushTypeRegistryFrame();
-    defer ctx.popTypeRegistryFrame();
+    // Registrations write to the state target, which is not this context during a load run from a
+    // task. The isolation's frames go there so that its registrations land in them.
+    const target = ctx.stateTarget();
 
-    try ctx.pushDispatchFrame();
-    defer ctx.popDispatchFrame();
+    try target.pushTypeRegistryFrame();
+    defer target.popTypeRegistryFrame();
 
-    // Outside a load there is no sink and checks stay eager. Inside one, obligations raised in
-    // the body are intercepted and dropped unvalidated.
+    try target.pushDispatchFrame();
+    defer target.popDispatchFrame();
+
+    // Under an open sink the isolation is a scope of its own. Its checks defer to a nested sink
+    // that drains while the body's definitions are still in place. Outside a load, and under a
+    // sink that already closed, no sink opens and checks stay as they are.
     var sink_scope: ?context_mod.ObligationSinkScope = null;
-    if (ctx.obligation_sink != null) sink_scope = try ctx.enterObligationSink();
+    if (ctx.obligation_sink) |enclosing| {
+        if (enclosing.isOpen()) sink_scope = try ctx.enterObligationSink();
+    }
     defer if (sink_scope) |scope| ctx.leaveObligationSink(scope);
 
-    try pc.executeWithFrame(ctx);
+    if (sink_scope) |scope| {
+        try pc.executeWithFrameDraining(ctx, scope.sink);
+    } else {
+        try pc.executeWithFrame(ctx);
+    }
 
     if (pc.quot.effect) |effect| {
-        const frames = ctx.type_registry_frames.items;
+        const frames = target.type_registry_frames.items;
         if (frames.len > 0) {
             try checkIsolationBoundary(ctx, effect, &frames[frames.len - 1]);
         }

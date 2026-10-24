@@ -507,6 +507,20 @@ pub fn validateObligationsSameType(ctx: *Context, pending: *const ObligationSink
     }
 }
 
+/// Close `sink` and validate everything it held, same-type methods only.
+///
+/// Cross-type obligations stay runtime-only, because the modules that contribute those methods may
+/// not have loaded yet. The caller runs this where the definitions the obligations name are still
+/// in scope. A load drains before it captures its frame, and an isolation drains before its body's
+/// local frame pops.
+pub fn drainObligationSink(ctx: *Context, sink: *ObligationSink) !void {
+    var pending = sink.takeAndClose();
+    defer pending.deinit();
+
+    sink.assertClosedAndEmpty();
+    try validateObligationsSameType(ctx, &pending);
+}
+
 /// Box a `protocol-error` carrying `message` into `ctx.thrown_error` and signal it.
 /// Caller supplies the formatted message.
 pub fn raiseProtocolError(ctx: *Context, message: []const u8) error{UserThrown} {

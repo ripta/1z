@@ -1,0 +1,10 @@
+\ An isolation asserts a protocol that a method registered after the isolation would satisfy. The
+\ isolation is the enclosing scope, so the check fails when the isolation ends.
+
+showable: protocol{ show: } ;
+thing:    virtual{ fixnum } ;
+show:     generic ( v -- s ) [ drop "" ] ;
+
+[ thing: showable assert-satisfies ] with-isolation
+
+show: method{ thing } [ unmake-thing >string ] ;

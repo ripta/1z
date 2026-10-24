@@ -624,15 +624,7 @@ pub fn nativeLoadImpl(ctx: *Context, cache: *value_mod.MutableMap, filename: []c
     }
 
     // Validate deferred protocol obligations before finalizing the module.
-    // Only same-type methods are checked here; cross-type (any) obligations
-    // remain runtime-only.
-    {
-        var pending = sink_scope.sink.takeAndClose();
-        defer pending.deinit();
-
-        sink_scope.sink.assertClosedAndEmpty();
-        try protocols.validateObligationsSameType(ctx, &pending);
-    }
+    try protocols.drainObligationSink(ctx, sink_scope.sink);
 
     // Capture definitions from the frame before popping
     const frame_index = ctx.local_frames.items.len - 1;
@@ -2507,7 +2499,7 @@ test "a load that fails discards its pending obligations and leaves no sink behi
     try std.testing.expect(root.obligation_sink == null);
 }
 
-test "an obligation raised inside with-isolation during a load is dropped, not validated" {
+test "an obligation raised inside with-isolation during a load is validated against the isolation" {
     var root = Context.initWithPrelude(std.testing.allocator);
     defer root.deinit();
 
@@ -2518,13 +2510,46 @@ test "an obligation raised inside with-isolation during a load is dropped, not v
         &tmp,
         "isolated.1z",
         "showable: protocol{ show: } ;\nthing: virtual{ fixnum } ;\nshow: generic ( v -- s ) [ drop \"\" ] ;\n" ++
-            "[ thing: showable assert-satisfies ] with-isolation\n",
+            "[ thing: showable assert-satisfies\nshow: method{ thing } [ unmake-thing >string ] ; ] with-isolation\n",
     );
     defer std.testing.allocator.free(path);
+
+    const type_frames = root.type_registry_frames.items.len;
+    const dispatch_frames = root.dispatch_frames.items.len;
 
     try loadFileThrough(&root, path);
 
     try std.testing.expect(root.obligation_sink == null);
+    try std.testing.expectEqual(type_frames, root.type_registry_frames.items.len);
+    try std.testing.expectEqual(dispatch_frames, root.dispatch_frames.items.len);
+}
+
+test "an unmet obligation inside with-isolation during a load fails the load and pops its frames" {
+    var root = Context.initWithPrelude(std.testing.allocator);
+    defer root.deinit();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const path = try writeModuleFile(
+        &tmp,
+        "isolated-unmet.1z",
+        "showable: protocol{ show: } ;\nthing: virtual{ fixnum } ;\nshow: generic ( v -- s ) [ drop \"\" ] ;\n" ++
+            "[ thing: showable assert-satisfies ] with-isolation\n" ++
+            "show: method{ thing } [ unmake-thing >string ] ;\n",
+    );
+    defer std.testing.allocator.free(path);
+
+    const type_frames = root.type_registry_frames.items.len;
+    const dispatch_frames = root.dispatch_frames.items.len;
+
+    if (loadFileThrough(&root, path)) |_| {
+        return error.TestExpectedLoadFailure;
+    } else |_| {}
+
+    try std.testing.expect(root.obligation_sink == null);
+    try std.testing.expectEqual(type_frames, root.type_registry_frames.items.len);
+    try std.testing.expectEqual(dispatch_frames, root.dispatch_frames.items.len);
 }
 
 test "a load from an analysis child lands its types, protocols, and cache entry on the child" {

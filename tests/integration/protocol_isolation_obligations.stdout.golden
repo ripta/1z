@@ -1,0 +1,25 @@
+=== an isolation inside a load ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: a type and method local to the isolation satisfy its check
+Stack: [ ]
+PASS: a method registered after the isolation does not satisfy its check
+Stack: [ ]
+=== an isolation in a module loaded from a task ===
+Stack: [ ]
+Stack: [ ]
+PASS: a method registered in the isolation runs inside it
+PASS: the isolation's method is gone once it ends
+PASS: the isolation checks its own definitions and does not leak
+Stack: [ ]
+=== an isolation outside a load ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: a forward reference inside an isolation outside a load fails at the assert
+Stack: [ ]
+PASS: a satisfied check inside an isolation outside a load passes
+Stack: [ ]

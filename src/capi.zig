@@ -25,6 +25,7 @@ const errors_mod = @import("primitives/errors.zig");
 const pascalToKebabRuntime = errors_mod.pascalToKebabRuntime;
 
 const misc = @import("primitives/misc.zig");
+const protocols = @import("primitives/protocols.zig");
 const hooks = @import("primitives/hooks.zig");
 const dictionary_mod = @import("dictionary.zig");
 const HostCallback = dictionary_mod.HostCallback;
@@ -797,39 +798,46 @@ export fn onez_isolation_begin(ptr: ?*anyopaque) c_int {
 
     clearLastError(handle);
 
-    ctx.pushTypeRegistryFrame() catch {
+    // Registrations write to the state target, so the isolation's frames go there.
+    const target = ctx.stateTarget();
+
+    target.pushTypeRegistryFrame() catch {
         setLastError(handle, "isolation begin: type registry frame alloc failed", .{});
         return ONEZ_ERR_ALLOC;
     };
 
-    ctx.pushDispatchFrame() catch {
-        ctx.popTypeRegistryFrame();
+    target.pushDispatchFrame() catch {
+        target.popTypeRegistryFrame();
         setLastError(handle, "isolation begin: dispatch frame alloc failed", .{});
         return ONEZ_ERR_ALLOC;
     };
 
+    // Under an open sink the isolation drains a nested sink of its own at its end. Outside a load,
+    // or under a sink that already closed, no sink opens.
     var sink_scope: ?context_mod.ObligationSinkScope = null;
-    if (ctx.obligation_sink != null) {
-        sink_scope = ctx.enterObligationSink() catch {
-            ctx.popDispatchFrame();
-            ctx.popTypeRegistryFrame();
-            setLastError(handle, "isolation begin: obligation sink alloc failed", .{});
-            return ONEZ_ERR_ALLOC;
-        };
+    if (ctx.obligation_sink) |enclosing| {
+        if (enclosing.isOpen()) {
+            sink_scope = ctx.enterObligationSink() catch {
+                target.popDispatchFrame();
+                target.popTypeRegistryFrame();
+                setLastError(handle, "isolation begin: obligation sink alloc failed", .{});
+                return ONEZ_ERR_ALLOC;
+            };
+        }
     }
 
     handle.saved_obligation_frames.append(handle.allocator, sink_scope) catch {
         if (sink_scope) |scope| ctx.leaveObligationSink(scope);
-        ctx.popDispatchFrame();
-        ctx.popTypeRegistryFrame();
+        target.popDispatchFrame();
+        target.popTypeRegistryFrame();
         setLastError(handle, "isolation begin: obligation frame alloc failed", .{});
         return ONEZ_ERR_ALLOC;
     };
 
     ctx.pushLocalFrame() catch {
         if (handle.saved_obligation_frames.pop().?) |scope| ctx.leaveObligationSink(scope);
-        ctx.popDispatchFrame();
-        ctx.popTypeRegistryFrame();
+        target.popDispatchFrame();
+        target.popTypeRegistryFrame();
         setLastError(handle, "isolation begin: local frame alloc failed", .{});
         return ONEZ_ERR_ALLOC;
     };
@@ -839,6 +847,10 @@ export fn onez_isolation_begin(ptr: ?*anyopaque) c_int {
 
 /// Pop an isolation frame, discarding type-system side effects created
 /// since the matching onez_isolation_begin call.
+///
+/// Under a nested sink, the deferred protocol checks are validated first, while the isolation's
+/// definitions are still in scope. A failed check is reported after every frame has popped, so a
+/// failed end leaves nothing behind.
 export fn onez_isolation_end(ptr: ?*anyopaque) c_int {
     const handle = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
     const ctx = handle.ctx;
@@ -850,11 +862,23 @@ export fn onez_isolation_end(ptr: ?*anyopaque) c_int {
         return ONEZ_ERR_ISOLATION_UNDERFLOW;
     }
 
-    if (handle.saved_obligation_frames.pop().?) |scope| ctx.leaveObligationSink(scope);
+    const target = ctx.stateTarget();
+    const sink_scope = handle.saved_obligation_frames.pop().?;
+
+    var drain_error: ?anyerror = null;
+    if (sink_scope) |scope| {
+        protocols.drainObligationSink(ctx, scope.sink) catch |err| {
+            drain_error = err;
+            captureError(handle, err);
+        };
+        ctx.leaveObligationSink(scope);
+    }
 
     ctx.popLocalFrame();
-    ctx.popDispatchFrame();
-    ctx.popTypeRegistryFrame();
+    target.popDispatchFrame();
+    target.popTypeRegistryFrame();
+
+    if (drain_error != null) return 1;
 
     return ONEZ_OK;
 }
@@ -5009,6 +5033,88 @@ test "eval_isolated cleans up frames on eval error" {
 
     // The end ran inside eval_isolated; calling end again must underflow.
     try std.testing.expectEqual(ONEZ_ERR_ISOLATION_UNDERFLOW, onez_isolation_end(handle_ptr));
+}
+
+test "isolation under an open sink validates its checks against its own definitions at end" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    const ctx = castHandle(handle_ptr).?.ctx;
+
+    const setup = "showable: protocol{ show: } ; show: generic ( v -- s ) [ drop \"\" ] ;";
+    try std.testing.expectEqual(ONEZ_OK, onez_eval(handle_ptr, setup, setup.len));
+
+    const outer = try ctx.enterObligationSink();
+    defer ctx.leaveObligationSink(outer);
+
+    const type_frames = ctx.type_registry_frames.items.len;
+    const dispatch_frames = ctx.dispatch_frames.items.len;
+
+    try std.testing.expectEqual(ONEZ_OK, onez_isolation_begin(handle_ptr));
+    try std.testing.expect(ctx.obligation_sink.? != outer.sink);
+
+    const code = "thing: virtual{ fixnum } ; thing: showable assert-satisfies show: method{ thing } [ unmake-thing >string ] ;";
+    try std.testing.expectEqual(ONEZ_OK, onez_eval(handle_ptr, code, code.len));
+    try std.testing.expect(ctx.obligation_sink.?.isOpen());
+
+    try std.testing.expectEqual(ONEZ_OK, onez_isolation_end(handle_ptr));
+
+    try std.testing.expectEqual(outer.sink, ctx.obligation_sink.?);
+    try std.testing.expect(outer.sink.isOpen());
+    try std.testing.expectEqual(type_frames, ctx.type_registry_frames.items.len);
+    try std.testing.expectEqual(dispatch_frames, ctx.dispatch_frames.items.len);
+}
+
+test "isolation under an open sink fails at end on an unmet check and still pops every frame" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    const ctx = castHandle(handle_ptr).?.ctx;
+
+    const setup = "showable: protocol{ show: } ; show: generic ( v -- s ) [ drop \"\" ] ;";
+    try std.testing.expectEqual(ONEZ_OK, onez_eval(handle_ptr, setup, setup.len));
+
+    const outer = try ctx.enterObligationSink();
+    defer ctx.leaveObligationSink(outer);
+
+    const type_frames = ctx.type_registry_frames.items.len;
+    const dispatch_frames = ctx.dispatch_frames.items.len;
+    const local_frames = ctx.local_frames.items.len;
+
+    try std.testing.expectEqual(ONEZ_OK, onez_isolation_begin(handle_ptr));
+
+    const code = "thing: virtual{ fixnum } ; thing: showable assert-satisfies";
+    try std.testing.expectEqual(ONEZ_OK, onez_eval(handle_ptr, code, code.len));
+
+    try std.testing.expect(onez_isolation_end(handle_ptr) != ONEZ_OK);
+    try std.testing.expect(castHandle(handle_ptr).?.last_error != null);
+
+    try std.testing.expectEqual(outer.sink, ctx.obligation_sink.?);
+    try std.testing.expectEqual(type_frames, ctx.type_registry_frames.items.len);
+    try std.testing.expectEqual(dispatch_frames, ctx.dispatch_frames.items.len);
+    try std.testing.expectEqual(local_frames, ctx.local_frames.items.len);
+    try std.testing.expectEqual(ONEZ_ERR_ISOLATION_UNDERFLOW, onez_isolation_end(handle_ptr));
+}
+
+test "isolation outside a load opens no sink and keeps its checks eager" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    const ctx = castHandle(handle_ptr).?.ctx;
+
+    const setup = "showable: protocol{ show: } ; show: generic ( v -- s ) [ drop \"\" ] ;";
+    try std.testing.expectEqual(ONEZ_OK, onez_eval(handle_ptr, setup, setup.len));
+
+    try std.testing.expectEqual(ONEZ_OK, onez_isolation_begin(handle_ptr));
+    try std.testing.expect(ctx.obligation_sink == null);
+
+    const code = "thing: virtual{ fixnum } ; thing: showable assert-satisfies";
+    try std.testing.expect(onez_eval(handle_ptr, code, code.len) != ONEZ_OK);
+
+    try std.testing.expectEqual(ONEZ_OK, onez_isolation_end(handle_ptr));
 }
 
 test "isolation nests" {

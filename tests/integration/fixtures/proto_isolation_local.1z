@@ -1,0 +1,11 @@
+\ An isolation defines a type, asserts a protocol, and then registers the method that satisfies it.
+\ The check is validated against the isolation's own definitions, so it passes.
+
+showable: protocol{ show: } ;
+show: generic ( v -- s ) [ drop "" ] ;
+
+[
+  thing: virtual{ fixnum } ;
+  thing: showable assert-satisfies
+  show:  method{ thing } [ unmake-thing >string ] ;
+] with-isolation

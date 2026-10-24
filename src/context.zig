@@ -1035,7 +1035,8 @@ pub const Context = struct {
     /// the protocol declaration in the same file is still found.
     ///
     /// The scope that installed the sink owns the reference. Install and remove it through
-    /// `enterObligationSink` and `leaveObligationSink`.
+    /// `enterObligationSink` and `leaveObligationSink`. An isolation under an open sink installs a
+    /// nested one and drains it before its own frames pop.
     ///
     /// A task starts with its spawner's current handle, open or closed. It holds that reference in
     /// `inherited_obligation_sink` until it is reaped.
@@ -10566,7 +10567,31 @@ pub const Context = struct {
     ///
     /// `owner` is the closure `quotation` came out of, when the body may be one that closure
     /// owns. See `executeQuotationWithOwner`.
-    pub fn executeQuotationWithFrame(self: *Context, quotation: Quotation, owner: ?*const value_mod.Closure) anyerror!void {
+    pub inline fn executeQuotationWithFrame(self: *Context, quotation: Quotation, owner: ?*const value_mod.Closure) anyerror!void {
+        return self.executeFramed(quotation, owner, false, {});
+    }
+
+    /// `executeQuotationWithFrame`, then drain `sink` in the quotation's own frame.
+    ///
+    /// A type the body defines is a word in that frame, and the drain resolves type names through
+    /// words. Draining after the frame pops would not find it. The drain runs on success only. A
+    /// failed body leaves the sink to its holder, who discards it.
+    pub fn executeQuotationWithFrameDraining(
+        self: *Context,
+        quotation: Quotation,
+        owner: ?*const value_mod.Closure,
+        sink: *ObligationSink,
+    ) anyerror!void {
+        return self.executeFramed(quotation, owner, true, sink);
+    }
+
+    fn executeFramed(
+        self: *Context,
+        quotation: Quotation,
+        owner: ?*const value_mod.Closure,
+        comptime drain: bool,
+        drain_sink: if (drain) *ObligationSink else void,
+    ) anyerror!void {
         try self.pushOwnedLocalFrame(@intFromPtr(quotation.instructions.ptr));
         // Truncation before the pop, not instead of it: a spliced quotation body inside the
         // compiled arm can leave its own transient frame open on an error return, and
@@ -10610,7 +10635,10 @@ pub const Context = struct {
                 const result = ir_codegen.ExecResult.fromStatus(func(&jit_ctx));
                 if (result != .bail) operands.release(&self.stack);
                 switch (result) {
-                    .ok => return,
+                    .ok => {
+                        if (drain) try protocols_mod.drainObligationSink(self, drain_sink);
+                        return;
+                    },
                     .error_propagate => {
                         const err = self.jit_pending_error orelse error.UserThrown;
                         self.jit_pending_error = null;
@@ -10648,6 +10676,8 @@ pub const Context = struct {
         }
 
         try self.executeQuotationWithOwner(quotation, owner);
+
+        if (drain) try protocols_mod.drainObligationSink(self, drain_sink);
     }
 
     /// Execute a quotation with a local frame but WITHOUT the TCO loop.

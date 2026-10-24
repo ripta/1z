@@ -1,5 +1,6 @@
 const container_backing = @import("container_backing.zig");
 const context_mod = @import("context.zig");
+const ObligationSink = @import("obligation_sink.zig").ObligationSink;
 const value_mod = @import("value.zig");
 
 const Closure = value_mod.Closure;
@@ -68,6 +69,11 @@ pub const Callable = struct {
     /// Run the body in a fresh lexical frame. The common form.
     pub fn executeWithFrame(self: Callable, ctx: *Context) anyerror!void {
         return ctx.executeQuotationWithFrame(self.quot, self.ownerClosure());
+    }
+
+    /// Run the body in a fresh lexical frame, then drain `sink` before that frame pops.
+    pub fn executeWithFrameDraining(self: Callable, ctx: *Context, sink: *ObligationSink) anyerror!void {
+        return ctx.executeQuotationWithFrameDraining(self.quot, self.ownerClosure(), sink);
     }
 
     /// Run the body in a fresh lexical frame but outside the tail-call loop, so a pending tail

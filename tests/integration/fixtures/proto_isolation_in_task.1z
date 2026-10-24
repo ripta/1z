@@ -1,0 +1,18 @@
+\ A module loaded from inside a task-scope runs an isolation. The isolation's registrations must
+\ land in the isolation's own frames and vanish with them, not leak into the root.
+
+use "testing" ;
+
+showable: protocol{ show: } ;
+show:     generic ( v -- s ) [ drop "" ] ;
+iso-op:   generic ( a -- b ) [ ] ;
+
+[
+  thing:  virtual{ fixnum } ;
+  show:   method{ thing } [ unmake-thing >string ] ;
+  iso-op: method{ fixnum } [ 1 + ] ;
+  thing:  showable assert-satisfies
+  43 42 iso-op "a method registered in the isolation runs inside it" assert=
+] with-isolation
+
+[ 42 iso-op ] "the isolation's method is gone once it ends" assert-error
