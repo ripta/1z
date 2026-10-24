@@ -7909,6 +7909,11 @@ pub const Context = struct {
     /// root's counter. There is no structural interning, mirroring createProtocolDescriptor.
     ///
     /// The element list is copied into the quotation arena, and deinit frees the list header.
+    ///
+    /// The combinator is durable only when its target owns loads and every protocol or combinator
+    /// element is durable. A task can hand a descriptor from its own arena to a load owner through
+    /// a channel or `await`, and neither deep-copies it. Type elements are classified at check
+    /// time instead.
     pub fn createConstraintCombinator(
         self: *Context,
         kind: value_mod.ConstraintCombinator.Kind,
@@ -7923,11 +7928,21 @@ pub const Context = struct {
         const desc = try alloc.create(value_mod.ConstraintCombinator);
         const elements_dup = try alloc.alloc(value_mod.ConstraintCombinator.Element, elements.len);
         @memcpy(elements_dup, elements);
+
+        var durable = target.owns_loads;
+        for (elements) |element| {
+            switch (element) {
+                .type => {},
+                .protocol => |pd| durable = durable and pd.durable,
+                .combinator => |cc| durable = durable and cc.durable,
+            }
+        }
+
         desc.* = .{
             .kind = kind,
             .elements = elements_dup,
             .combinator_id = self.rootContext().next_combinator_id.fetchAdd(1, .monotonic),
-            .durable = target.owns_loads,
+            .durable = durable,
         };
         try target.constraint_combinators.append(target.allocator, desc);
         return desc;

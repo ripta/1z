@@ -101,8 +101,13 @@ pub const ObligationSink = struct {
         self.tracker.release(.obligation_sink);
     }
 
-    /// Record an obligation for the load's drain. Returns false when the sink is closed, and the
-    /// caller then validates eagerly. `type_name` is borrowed. The sink keeps its own copy.
+    /// Record an obligation for the load's drain.
+    ///
+    /// Returns true when the sink took the obligation. Returns false when the sink is closed.
+    ///
+    /// On false the caller validates the obligation eagerly instead.
+    ///
+    /// `type_name` is borrowed. The sink keeps its own copy.
     pub fn append(self: *ObligationSink, type_name: []const u8, constraint: Obligation.Constraint) !bool {
         const name = try self.allocator.dupe(u8, type_name);
         errdefer self.allocator.free(name);

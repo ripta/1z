@@ -2457,6 +2457,46 @@ test "protocols and constraints are durable on a load owner and not in a bare ta
     try std.testing.expect(!task_ctx.constraint_combinators.items[0].durable);
 }
 
+test "a load owner's combinator over a task-arena descriptor is not durable" {
+    var root = Context.initWithPrelude(std.testing.allocator);
+    defer root.deinit();
+
+    var task_ctx = try Context.initChild(std.testing.allocator, &root, .task);
+    defer task_ctx.deinit();
+
+    try task_ctx.stack.push(value_mod.stringValue("tshape: protocol{ area: } ;\n"));
+    try nativeEvalString(&task_ctx);
+
+    try std.testing.expectEqual(@as(usize, 1), task_ctx.protocol_descriptors.items.len);
+    const from_task = task_ctx.protocol_descriptors.items[0];
+    try std.testing.expect(!from_task.durable);
+
+    const tasks = @import("tasks.zig");
+    const copied = try tasks.deepCopyForTransfer(
+        &task_ctx,
+        .{ .protocol_descriptor = from_task },
+        std.testing.allocator,
+        std.testing.allocator,
+        std.testing.allocator,
+    );
+    try std.testing.expect(copied.protocol_descriptor == from_task);
+
+    const own = try root.createProtocolDescriptor("own", &.{});
+    try std.testing.expect(own.durable);
+
+    const mixed = try root.createConstraintCombinator(.intersection, &.{
+        .{ .protocol = own },
+        .{ .protocol = copied.protocol_descriptor },
+    });
+    try std.testing.expect(!mixed.durable);
+
+    const nested = try root.createConstraintCombinator(.@"union", &.{.{ .combinator = mixed }});
+    try std.testing.expect(!nested.durable);
+
+    const clean = try root.createConstraintCombinator(.intersection, &.{.{ .protocol = own }});
+    try std.testing.expect(clean.durable);
+}
+
 test "a load defers an obligation to a method defined on a later line and leaves no sink behind" {
     var root = Context.initWithPrelude(std.testing.allocator);
     defer root.deinit();

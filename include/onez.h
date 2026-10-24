@@ -193,8 +193,9 @@ int onez_eval_file(onez_t ctx, const char *path);
 
 /*
  * Push an isolation frame. Word definitions, type registrations, dispatch
- * entries, and protocol obligations created after this call are scoped: they
- * will be discarded when onez_isolation_end is called. Stack values are
+ * entries, and protocol obligations created after this call are scoped: the
+ * definitions are discarded when onez_isolation_end is called, and the
+ * obligations are validated then. Stack values are
  * not affected -- only definitions and type-system side effects are isolated.
  *
  * Isolation frames nest: each begin must have a matching end.
@@ -210,8 +211,16 @@ int onez_isolation_begin(onez_t ctx);
  * Must be called even if evaluation within the isolation scope failed,
  * to ensure frames are properly cleaned up.
  *
+ * When the isolation began inside a module load, the protocol obligations
+ * created in the scope are validated here, while the scope's definitions
+ * are still visible. Outside a load, they are checked at the point they
+ * are created and nothing is validated at the end.
+ *
  * Returns ONEZ_OK on success.
  * Returns ONEZ_ERR_ISOLATION_UNDERFLOW if no isolation frame is active.
+ * Returns a positive error code, as onez_eval does, if a deferred protocol
+ * check fails. Every frame is popped before it returns, so a failed end
+ * leaves nothing behind. Call `onez_last_error` for the message.
  */
 int onez_isolation_end(onez_t ctx);
 

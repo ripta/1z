@@ -783,8 +783,9 @@ export fn onez_eval_file(ptr: ?*anyopaque, path: ?[*:0]const u8) c_int {
 }
 
 /// Push an isolation frame. Word definitions, type registrations, dispatch
-/// entries, and protocol obligations created after this call are scoped: they
-/// will be discarded when onez_isolation_end is called. Stack values are
+/// entries, and protocol obligations created after this call are scoped: the
+/// definitions are discarded when onez_isolation_end is called, and the
+/// obligations are validated then. Stack values are
 /// not affected.
 ///
 /// The local frame mirrors what `with-isolation` already does for 1z-level
@@ -851,6 +852,9 @@ export fn onez_isolation_begin(ptr: ?*anyopaque) c_int {
 /// Under a nested sink, the deferred protocol checks are validated first, while the isolation's
 /// definitions are still in scope. A failed check is reported after every frame has popped, so a
 /// failed end leaves nothing behind.
+///
+/// A failed check returns 1, the literal `onez_eval` returns for an error. No named code covers a
+/// user-level evaluation failure.
 export fn onez_isolation_end(ptr: ?*anyopaque) c_int {
     const handle = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
     const ctx = handle.ctx;
@@ -5088,7 +5092,7 @@ test "isolation under an open sink fails at end on an unmet check and still pops
     const code = "thing: virtual{ fixnum } ; thing: showable assert-satisfies";
     try std.testing.expectEqual(ONEZ_OK, onez_eval(handle_ptr, code, code.len));
 
-    try std.testing.expect(onez_isolation_end(handle_ptr) != ONEZ_OK);
+    try std.testing.expectEqual(@as(c_int, 1), onez_isolation_end(handle_ptr));
     try std.testing.expect(castHandle(handle_ptr).?.last_error != null);
 
     try std.testing.expectEqual(outer.sink, ctx.obligation_sink.?);
