@@ -1220,7 +1220,7 @@ fn genericMarkers() [1]*Marker {
 }
 
 test "boundedDispatchFor: unary generic bounded by a requiring protocol" {
-    const pd = ProtocolDescriptor{ .name = "flyable", .methods = &[_]Value{value_mod.symbolValue("soar")}, .protocol_id = 0 };
+    const pd = ProtocolDescriptor{ .name = "flyable", .methods = &[_]Value{value_mod.symbolValue("soar")}, .protocol_id = 0, .durable = true };
     const effect = StackEffect{
         .inputs = &[_]StackEffectParam{.{ .name = "x", .type_annotation = .{ .protocol = &pd } }},
         .outputs = &[_]StackEffectParam{.{ .name = "y" }},
@@ -1232,7 +1232,7 @@ test "boundedDispatchFor: unary generic bounded by a requiring protocol" {
 }
 
 test "boundedDispatchFor: binary generic with one protocol on both operands" {
-    const pd = ProtocolDescriptor{ .name = "comparable", .methods = &[_]Value{value_mod.symbolValue("cmp")}, .protocol_id = 0 };
+    const pd = ProtocolDescriptor{ .name = "comparable", .methods = &[_]Value{value_mod.symbolValue("cmp")}, .protocol_id = 0, .durable = true };
     const effect = StackEffect{
         .inputs = &[_]StackEffectParam{
             .{ .name = "a", .type_annotation = .{ .protocol = &pd } },
@@ -1247,7 +1247,7 @@ test "boundedDispatchFor: binary generic with one protocol on both operands" {
 }
 
 test "boundedDispatchFor: non-generic word returns null" {
-    const pd = ProtocolDescriptor{ .name = "flyable", .methods = &[_]Value{value_mod.symbolValue("soar")}, .protocol_id = 0 };
+    const pd = ProtocolDescriptor{ .name = "flyable", .methods = &[_]Value{value_mod.symbolValue("soar")}, .protocol_id = 0, .durable = true };
     const effect = StackEffect{
         .inputs = &[_]StackEffectParam{.{ .name = "x", .type_annotation = .{ .protocol = &pd } }},
         .outputs = &[_]StackEffectParam{.{ .name = "y" }},
@@ -1257,7 +1257,7 @@ test "boundedDispatchFor: non-generic word returns null" {
 }
 
 test "boundedDispatchFor: protocol not requiring the generic returns null" {
-    const pd = ProtocolDescriptor{ .name = "flyable", .methods = &[_]Value{value_mod.symbolValue("fly")}, .protocol_id = 0 };
+    const pd = ProtocolDescriptor{ .name = "flyable", .methods = &[_]Value{value_mod.symbolValue("fly")}, .protocol_id = 0, .durable = true };
     const effect = StackEffect{
         .inputs = &[_]StackEffectParam{.{ .name = "x", .type_annotation = .{ .protocol = &pd } }},
         .outputs = &[_]StackEffectParam{.{ .name = "y" }},
@@ -1268,8 +1268,8 @@ test "boundedDispatchFor: protocol not requiring the generic returns null" {
 }
 
 test "boundedDispatchFor: mixed protocols return null" {
-    const fly = ProtocolDescriptor{ .name = "flyable", .methods = &[_]Value{value_mod.symbolValue("go")}, .protocol_id = 0 };
-    const swim = ProtocolDescriptor{ .name = "swimmable", .methods = &[_]Value{value_mod.symbolValue("go")}, .protocol_id = 1 };
+    const fly = ProtocolDescriptor{ .name = "flyable", .methods = &[_]Value{value_mod.symbolValue("go")}, .protocol_id = 0, .durable = true };
+    const swim = ProtocolDescriptor{ .name = "swimmable", .methods = &[_]Value{value_mod.symbolValue("go")}, .protocol_id = 1, .durable = true };
     const effect = StackEffect{
         .inputs = &[_]StackEffectParam{
             .{ .name = "a", .type_annotation = .{ .protocol = &fly } },
@@ -1292,7 +1292,7 @@ test "boundedDispatchFor: concrete-type annotation returns null" {
 }
 
 test "boundedDispatchFor: more than two inputs returns null" {
-    const pd = ProtocolDescriptor{ .name = "p", .methods = &[_]Value{value_mod.symbolValue("m")}, .protocol_id = 0 };
+    const pd = ProtocolDescriptor{ .name = "p", .methods = &[_]Value{value_mod.symbolValue("m")}, .protocol_id = 0, .durable = true };
     const effect = StackEffect{
         .inputs = &[_]StackEffectParam{
             .{ .name = "a", .type_annotation = .{ .protocol = &pd } },
@@ -1306,7 +1306,7 @@ test "boundedDispatchFor: more than two inputs returns null" {
 }
 
 test "boundedDispatchFor: unannotated input returns null" {
-    const pd = ProtocolDescriptor{ .name = "p", .methods = &[_]Value{value_mod.symbolValue("m")}, .protocol_id = 0 };
+    const pd = ProtocolDescriptor{ .name = "p", .methods = &[_]Value{value_mod.symbolValue("m")}, .protocol_id = 0, .durable = true };
     const effect = StackEffect{
         .inputs = &[_]StackEffectParam{
             .{ .name = "a", .type_annotation = .{ .protocol = &pd } },
@@ -1324,6 +1324,7 @@ test "protocolRequiresMethod: skips stack-effect entries" {
         .name = "p",
         .methods = &[_]Value{ value_mod.symbolValue("m"), .{ .stack_effect = empty }, value_mod.symbolValue("n") },
         .protocol_id = 0,
+        .durable = true,
     };
     try std.testing.expect(protocolRequiresMethod(&pd, "m"));
     try std.testing.expect(protocolRequiresMethod(&pd, "n"));
@@ -1331,12 +1332,13 @@ test "protocolRequiresMethod: skips stack-effect entries" {
 }
 
 test "combinatorGuaranteesMethod: intersection needs one guaranteeing element" {
-    const requires_m = ProtocolDescriptor{ .name = "a", .methods = &[_]Value{value_mod.symbolValue("m")}, .protocol_id = 0 };
-    const requires_other = ProtocolDescriptor{ .name = "b", .methods = &[_]Value{value_mod.symbolValue("n")}, .protocol_id = 1 };
+    const requires_m = ProtocolDescriptor{ .name = "a", .methods = &[_]Value{value_mod.symbolValue("m")}, .protocol_id = 0, .durable = true };
+    const requires_other = ProtocolDescriptor{ .name = "b", .methods = &[_]Value{value_mod.symbolValue("n")}, .protocol_id = 1, .durable = true };
     const cc = ConstraintCombinator{
         .kind = .intersection,
         .elements = &[_]ConstraintCombinator.Element{ .{ .protocol = &requires_m }, .{ .protocol = &requires_other } },
         .combinator_id = 0,
+        .durable = true,
     };
     // One element (`a`) requires `m`, so the intersection guarantees it.
     try std.testing.expect(combinatorGuaranteesMethod(&cc, "m"));
@@ -1345,14 +1347,15 @@ test "combinatorGuaranteesMethod: intersection needs one guaranteeing element" {
 }
 
 test "combinatorGuaranteesMethod: union needs every element to guarantee" {
-    const requires_m = ProtocolDescriptor{ .name = "a", .methods = &[_]Value{value_mod.symbolValue("m")}, .protocol_id = 0 };
-    const also_m = ProtocolDescriptor{ .name = "b", .methods = &[_]Value{value_mod.symbolValue("m")}, .protocol_id = 1 };
-    const not_m = ProtocolDescriptor{ .name = "c", .methods = &[_]Value{value_mod.symbolValue("n")}, .protocol_id = 2 };
+    const requires_m = ProtocolDescriptor{ .name = "a", .methods = &[_]Value{value_mod.symbolValue("m")}, .protocol_id = 0, .durable = true };
+    const also_m = ProtocolDescriptor{ .name = "b", .methods = &[_]Value{value_mod.symbolValue("m")}, .protocol_id = 1, .durable = true };
+    const not_m = ProtocolDescriptor{ .name = "c", .methods = &[_]Value{value_mod.symbolValue("n")}, .protocol_id = 2, .durable = true };
 
     const both = ConstraintCombinator{
         .kind = .@"union",
         .elements = &[_]ConstraintCombinator.Element{ .{ .protocol = &requires_m }, .{ .protocol = &also_m } },
         .combinator_id = 0,
+        .durable = true,
     };
     try std.testing.expect(combinatorGuaranteesMethod(&both, "m"));
 
@@ -1360,18 +1363,20 @@ test "combinatorGuaranteesMethod: union needs every element to guarantee" {
         .kind = .@"union",
         .elements = &[_]ConstraintCombinator.Element{ .{ .protocol = &requires_m }, .{ .protocol = &not_m } },
         .combinator_id = 1,
+        .durable = true,
     };
     try std.testing.expect(!combinatorGuaranteesMethod(&one_misses, "m"));
 }
 
 test "combinatorGuaranteesMethod: concrete-type element never guarantees" {
     var tv = value_mod.TypeValue{ .name = "fixnum", .descriptor = null };
-    const requires_m = ProtocolDescriptor{ .name = "a", .methods = &[_]Value{value_mod.symbolValue("m")}, .protocol_id = 0 };
+    const requires_m = ProtocolDescriptor{ .name = "a", .methods = &[_]Value{value_mod.symbolValue("m")}, .protocol_id = 0, .durable = true };
     // A union with a type element can never guarantee the method for the type arm.
     const u = ConstraintCombinator{
         .kind = .@"union",
         .elements = &[_]ConstraintCombinator.Element{ .{ .protocol = &requires_m }, .{ .type = &tv } },
         .combinator_id = 0,
+        .durable = true,
     };
     try std.testing.expect(!combinatorGuaranteesMethod(&u, "m"));
     // But an intersection only needs the protocol arm to require it.
@@ -1379,17 +1384,19 @@ test "combinatorGuaranteesMethod: concrete-type element never guarantees" {
         .kind = .intersection,
         .elements = &[_]ConstraintCombinator.Element{ .{ .protocol = &requires_m }, .{ .type = &tv } },
         .combinator_id = 1,
+        .durable = true,
     };
     try std.testing.expect(combinatorGuaranteesMethod(&i, "m"));
 }
 
 test "boundedDispatchFor: combinator intersection bound by a guaranteeing element" {
-    const requires_m = ProtocolDescriptor{ .name = "a", .methods = &[_]Value{value_mod.symbolValue("m")}, .protocol_id = 0 };
-    const requires_n = ProtocolDescriptor{ .name = "b", .methods = &[_]Value{value_mod.symbolValue("n")}, .protocol_id = 1 };
+    const requires_m = ProtocolDescriptor{ .name = "a", .methods = &[_]Value{value_mod.symbolValue("m")}, .protocol_id = 0, .durable = true };
+    const requires_n = ProtocolDescriptor{ .name = "b", .methods = &[_]Value{value_mod.symbolValue("n")}, .protocol_id = 1, .durable = true };
     const cc = ConstraintCombinator{
         .kind = .intersection,
         .elements = &[_]ConstraintCombinator.Element{ .{ .protocol = &requires_m }, .{ .protocol = &requires_n } },
         .combinator_id = 0,
+        .durable = true,
     };
     const effect = StackEffect{
         .inputs = &[_]StackEffectParam{.{ .name = "x", .type_annotation = .{ .combination = &cc } }},
@@ -1402,12 +1409,13 @@ test "boundedDispatchFor: combinator intersection bound by a guaranteeing elemen
 }
 
 test "boundedDispatchFor: non-guaranteeing union combinator returns null" {
-    const requires_m = ProtocolDescriptor{ .name = "a", .methods = &[_]Value{value_mod.symbolValue("m")}, .protocol_id = 0 };
-    const requires_n = ProtocolDescriptor{ .name = "b", .methods = &[_]Value{value_mod.symbolValue("n")}, .protocol_id = 1 };
+    const requires_m = ProtocolDescriptor{ .name = "a", .methods = &[_]Value{value_mod.symbolValue("m")}, .protocol_id = 0, .durable = true };
+    const requires_n = ProtocolDescriptor{ .name = "b", .methods = &[_]Value{value_mod.symbolValue("n")}, .protocol_id = 1, .durable = true };
     const cc = ConstraintCombinator{
         .kind = .@"union",
         .elements = &[_]ConstraintCombinator.Element{ .{ .protocol = &requires_m }, .{ .protocol = &requires_n } },
         .combinator_id = 0,
+        .durable = true,
     };
     const effect = StackEffect{
         .inputs = &[_]StackEffectParam{.{ .name = "x", .type_annotation = .{ .combination = &cc } }},
@@ -1419,11 +1427,12 @@ test "boundedDispatchFor: non-guaranteeing union combinator returns null" {
 }
 
 test "boundedDispatchFor: mixed protocol and combinator bounds return null" {
-    const requires_m = ProtocolDescriptor{ .name = "a", .methods = &[_]Value{value_mod.symbolValue("m")}, .protocol_id = 0 };
+    const requires_m = ProtocolDescriptor{ .name = "a", .methods = &[_]Value{value_mod.symbolValue("m")}, .protocol_id = 0, .durable = true };
     const cc = ConstraintCombinator{
         .kind = .intersection,
         .elements = &[_]ConstraintCombinator.Element{.{ .protocol = &requires_m }},
         .combinator_id = 0,
+        .durable = true,
     };
     const effect = StackEffect{
         .inputs = &[_]StackEffectParam{

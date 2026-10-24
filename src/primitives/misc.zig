@@ -2414,6 +2414,55 @@ fn loadFileThrough(ctx: *Context, path: []const u8) !void {
     try std.testing.expect(module == .module);
 }
 
+test "protocols and constraints are durable on a load owner and not in a bare task" {
+    var root = Context.initWithPrelude(std.testing.allocator);
+    defer root.deinit();
+
+    try std.testing.expect(root.protocol_descriptors.items.len > 0);
+    for (root.protocol_descriptors.items) |pd| try std.testing.expect(pd.durable);
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const path = try writeModuleFile(
+        &tmp,
+        "durable.1z",
+        "shapely: protocol{ area: } ;\nsized: protocol{ size: } ;\nboth: ( x: shapely & sized -- ) [ drop ] ;\n",
+    );
+    defer std.testing.allocator.free(path);
+
+    const protocols_before = root.protocol_descriptors.items.len;
+    const combinators_before = root.constraint_combinators.items.len;
+
+    {
+        var task_ctx = try Context.initChild(std.testing.allocator, &root, .task);
+        defer task_ctx.deinit();
+
+        try loadFileThrough(&task_ctx, path);
+
+        try std.testing.expectEqual(@as(usize, 0), task_ctx.protocol_descriptors.items.len);
+        try std.testing.expectEqual(protocols_before + 2, root.protocol_descriptors.items.len);
+        try std.testing.expect(root.protocol_descriptors.items[protocols_before].durable);
+        try std.testing.expect(root.protocol_descriptors.items[protocols_before + 1].durable);
+        try std.testing.expectEqual(combinators_before + 1, root.constraint_combinators.items.len);
+        try std.testing.expect(root.constraint_combinators.items[combinators_before].durable);
+    }
+
+    var task_ctx = try Context.initChild(std.testing.allocator, &root, .task);
+    defer task_ctx.deinit();
+
+    try task_ctx.stack.push(value_mod.stringValue(
+        "lshape: protocol{ area: } ;\nlsized: protocol{ size: } ;\nlboth: ( x: lshape & lsized -- ) [ drop ] ;\n",
+    ));
+    try nativeEvalString(&task_ctx);
+
+    try std.testing.expectEqual(@as(usize, 2), task_ctx.protocol_descriptors.items.len);
+    try std.testing.expect(!task_ctx.protocol_descriptors.items[0].durable);
+    try std.testing.expect(!task_ctx.protocol_descriptors.items[1].durable);
+    try std.testing.expectEqual(@as(usize, 1), task_ctx.constraint_combinators.items.len);
+    try std.testing.expect(!task_ctx.constraint_combinators.items[0].durable);
+}
+
 test "a load from an analysis child lands its types, protocols, and cache entry on the child" {
     var root = Context.initWithPrelude(std.testing.allocator);
     defer root.deinit();

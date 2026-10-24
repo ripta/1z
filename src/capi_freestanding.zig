@@ -785,6 +785,8 @@ const FreestandingPopulateEnv = struct {
             .name = name,
             .methods = methods_dup,
             .protocol_id = protocol_id,
+            // The freestanding runtime has no task arena, so every object is durable.
+            .durable = true,
         };
         return pd;
     }
@@ -802,6 +804,8 @@ const FreestandingPopulateEnv = struct {
             .kind = kind,
             .elements = elements,
             .combinator_id = combinator_id,
+            // The freestanding runtime has no task arena, so every object is durable.
+            .durable = true,
         };
         return cc;
     }

@@ -4954,7 +4954,7 @@ test "protocol-bounded output flowing into same-protocol input emits no diagnost
     defer ctx.deinit();
     const dict = &ctx.dictionary;
 
-    var p_desc = value_mod.ProtocolDescriptor{ .name = "P", .methods = &.{}, .protocol_id = 1 };
+    var p_desc = value_mod.ProtocolDescriptor{ .name = "P", .methods = &.{}, .protocol_id = 1, .durable = true };
 
     const dummy: dictionary_mod.NativeFn = struct {
         fn f(_: *Context) anyerror!void {}
@@ -5001,8 +5001,8 @@ test "protocol-bounded output flowing into different-protocol input defers silen
     defer ctx.deinit();
     const dict = &ctx.dictionary;
 
-    var p_desc = value_mod.ProtocolDescriptor{ .name = "P", .methods = &.{}, .protocol_id = 1 };
-    var q_desc = value_mod.ProtocolDescriptor{ .name = "Q", .methods = &.{}, .protocol_id = 2 };
+    var p_desc = value_mod.ProtocolDescriptor{ .name = "P", .methods = &.{}, .protocol_id = 1, .durable = true };
+    var q_desc = value_mod.ProtocolDescriptor{ .name = "Q", .methods = &.{}, .protocol_id = 2, .durable = true };
 
     const dummy: dictionary_mod.NativeFn = struct {
         fn f(_: *Context) anyerror!void {}
@@ -5049,7 +5049,7 @@ test "protocol-bounded output flowing into concrete input defers silently" {
     defer ctx.deinit();
     const dict = &ctx.dictionary;
 
-    var p_desc = value_mod.ProtocolDescriptor{ .name = "P", .methods = &.{}, .protocol_id = 1 };
+    var p_desc = value_mod.ProtocolDescriptor{ .name = "P", .methods = &.{}, .protocol_id = 1, .durable = true };
     var fixnum_tv = TypeValue{ .name = "fixnum", .descriptor = null };
     try ctx.builtin_type_values.put(ctx.allocator, "fixnum", &fixnum_tv);
 
@@ -5098,7 +5098,7 @@ test "concrete typed entry flowing into protocol input without ctx is silently s
     defer ctx.deinit();
     const dict = &ctx.dictionary;
 
-    var p_desc = value_mod.ProtocolDescriptor{ .name = "P", .methods = &.{}, .protocol_id = 1 };
+    var p_desc = value_mod.ProtocolDescriptor{ .name = "P", .methods = &.{}, .protocol_id = 1, .durable = true };
     var fixnum_tv = TypeValue{ .name = "fixnum", .descriptor = null };
     try ctx.builtin_type_values.put(ctx.allocator, "fixnum", &fixnum_tv);
 

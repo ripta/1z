@@ -886,7 +886,7 @@ test "type_annotation parameterized type" {
 }
 
 test "type_annotation protocol write format" {
-    const pd = ProtocolDescriptor{ .name = "comparable", .methods = &.{}, .protocol_id = 0 };
+    const pd = ProtocolDescriptor{ .name = "comparable", .methods = &.{}, .protocol_id = 0, .durable = true };
     const param = StackEffectParam{ .name = "n", .type_annotation = .{ .protocol = &pd } };
 
     var buf: [128]u8 = undefined;
@@ -896,8 +896,8 @@ test "type_annotation protocol write format" {
 }
 
 test "type_annotation protocol equality" {
-    const pd_a = ProtocolDescriptor{ .name = "comparable", .methods = &.{}, .protocol_id = 0 };
-    const pd_b = ProtocolDescriptor{ .name = "stringable", .methods = &.{}, .protocol_id = 1 };
+    const pd_a = ProtocolDescriptor{ .name = "comparable", .methods = &.{}, .protocol_id = 0, .durable = true };
+    const pd_b = ProtocolDescriptor{ .name = "stringable", .methods = &.{}, .protocol_id = 1, .durable = true };
     var tv = TypeValue{ .name = "fixnum", .descriptor = null };
 
     const a = StackEffectParam{ .name = "n", .type_annotation = .{ .protocol = &pd_a } };
@@ -912,7 +912,7 @@ test "type_annotation protocol equality" {
 }
 
 test "type_annotation combination write format" {
-    const cc = ConstraintCombinator{ .kind = .intersection, .elements = &.{}, .combinator_id = 0 };
+    const cc = ConstraintCombinator{ .kind = .intersection, .elements = &.{}, .combinator_id = 0, .durable = true };
     const param = StackEffectParam{ .name = "n", .type_annotation = .{ .combination = &cc } };
 
     var buf: [128]u8 = undefined;
@@ -922,9 +922,9 @@ test "type_annotation combination write format" {
 }
 
 test "type_annotation combination equality" {
-    const cc_a = ConstraintCombinator{ .kind = .intersection, .elements = &.{}, .combinator_id = 0 };
-    const cc_b = ConstraintCombinator{ .kind = .@"union", .elements = &.{}, .combinator_id = 1 };
-    const pd = ProtocolDescriptor{ .name = "comparable", .methods = &.{}, .protocol_id = 0 };
+    const cc_a = ConstraintCombinator{ .kind = .intersection, .elements = &.{}, .combinator_id = 0, .durable = true };
+    const cc_b = ConstraintCombinator{ .kind = .@"union", .elements = &.{}, .combinator_id = 1, .durable = true };
+    const pd = ProtocolDescriptor{ .name = "comparable", .methods = &.{}, .protocol_id = 0, .durable = true };
     var tv = TypeValue{ .name = "fixnum", .descriptor = null };
 
     const a = StackEffectParam{ .name = "n", .type_annotation = .{ .combination = &cc_a } };

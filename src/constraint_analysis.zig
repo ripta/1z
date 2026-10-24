@@ -220,8 +220,8 @@ test "two protocols under & cannot be decided" {
     var ctx = Context.init(testing.allocator);
     defer ctx.deinit();
 
-    var p1 = value_mod.ProtocolDescriptor{ .name = "p1", .methods = &.{}, .protocol_id = 0 };
-    var p2 = value_mod.ProtocolDescriptor{ .name = "p2", .methods = &.{}, .protocol_id = 1 };
+    var p1 = value_mod.ProtocolDescriptor{ .name = "p1", .methods = &.{}, .protocol_id = 0, .durable = true };
+    var p2 = value_mod.ProtocolDescriptor{ .name = "p2", .methods = &.{}, .protocol_id = 1, .durable = true };
     const elements = [_]Element{ .{ .protocol = &p1 }, .{ .protocol = &p2 } };
     const res = try analyzeIntersection(&ctx, testing.allocator, &elements);
     try testing.expectEqual(Verdict.unknown, res.verdict);
@@ -231,7 +231,7 @@ test "type & protocol is deferred to runtime during a module load" {
     var ctx = Context.init(testing.allocator);
     defer ctx.deinit();
 
-    var p1 = value_mod.ProtocolDescriptor{ .name = "p1", .methods = &.{}, .protocol_id = 0 };
+    var p1 = value_mod.ProtocolDescriptor{ .name = "p1", .methods = &.{}, .protocol_id = 0, .durable = true };
     const elements = [_]Element{ builtinElement(&ctx, "fixnum"), .{ .protocol = &p1 } };
 
     ctx.in_module_load = true;

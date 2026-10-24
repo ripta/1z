@@ -1200,6 +1200,9 @@ pub const ProtocolDescriptor = struct {
     name: []const u8,
     methods: []const Value,
     protocol_id: u32,
+    /// True when the descriptor sits on the arena of a context that owns its loads. A task arena
+    /// is never durable. Required, so a construction site cannot leave it unset.
+    durable: bool,
 };
 
 /// ConstraintCombinator carries an algebraic combination over constraints: an
@@ -1223,6 +1226,9 @@ pub const ConstraintCombinator = struct {
     kind: Kind,
     elements: []const Element,
     combinator_id: u32,
+    /// True when the combinator sits on the arena of a context that owns its loads. A task arena
+    /// is never durable. Required, so a construction site cannot leave it unset.
+    durable: bool,
 };
 
 /// StructData carries the metadata of a struct-defined type.

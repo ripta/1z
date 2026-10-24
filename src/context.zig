@@ -7835,6 +7835,7 @@ pub const Context = struct {
             .name = name_dup,
             .methods = methods_dup,
             .protocol_id = self.rootContext().next_protocol_id.fetchAdd(1, .monotonic),
+            .durable = target.owns_loads,
         };
         try target.protocol_descriptors.append(target.allocator, desc);
         return desc;
@@ -7864,6 +7865,7 @@ pub const Context = struct {
             .kind = kind,
             .elements = elements_dup,
             .combinator_id = self.rootContext().next_combinator_id.fetchAdd(1, .monotonic),
+            .durable = target.owns_loads,
         };
         try target.constraint_combinators.append(target.allocator, desc);
         return desc;
