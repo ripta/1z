@@ -255,7 +255,7 @@ benchmark-entry-census: entry-census-build ## Report the live body entries per r
 	exit $$status
 
 test-threads-1: ## Run all tests with default --threads=1 for integration tests
-	timeout $(TARGET_TIMEOUT) $(ZIG) build test --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT)
+	$(MAKE) unit-test
 	$(MAKE) embed-stdlib-test
 	timeout $(TARGET_TIMEOUT) $(ZIG) build integration-test --prefix $(ZIG_PREFIX) $(ZIG_TEST_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) -Dtest-threads=1 $(TEST_FILTER_ARG)
 	timeout $(TARGET_TIMEOUT) $(ZIG) build fmt-test --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) $(TEST_FILTER_ARG)
@@ -267,7 +267,7 @@ test-threads-1: ## Run all tests with default --threads=1 for integration tests
 	$(MAKE) games-test
 
 test-threads-auto: ## Run all tests with default --threads=auto for integration tests
-	timeout $(TARGET_TIMEOUT) $(ZIG) build test --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT)
+	$(MAKE) unit-test
 	$(MAKE) embed-stdlib-test
 	timeout $(TARGET_TIMEOUT) $(ZIG) build integration-test --prefix $(ZIG_PREFIX) $(ZIG_TEST_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) -Dtest-threads=auto $(TEST_FILTER_ARG)
 	timeout $(TARGET_TIMEOUT) $(ZIG) build fmt-test --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) $(TEST_FILTER_ARG)
@@ -278,7 +278,10 @@ test-threads-auto: ## Run all tests with default --threads=auto for integration 
 	$(MAKE) lib-test
 	$(MAKE) games-test
 
+# The compile runs outside the timeout. Only the run is held to TARGET_TIMEOUT, so a slow compile under
+# load cannot masquerade as a hung test.
 unit-test: ## Run unit tests
+	$(ZIG) build test-build --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG)
 	timeout $(TARGET_TIMEOUT) $(ZIG) build test --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT)
 
 capi-test: ## Run hosted C-API embedding-library unit tests
@@ -290,6 +293,7 @@ capi-release-run: ## Build the embedding example against a ReleaseFast lib1z and
 	./$(RELEASE_PREFIX)/embed
 
 embed-stdlib-test: ## Run unit tests with -Dembed-stdlib=true
+	$(ZIG) build test-build --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) -Dembed-stdlib=true
 	timeout $(TARGET_TIMEOUT) $(ZIG) build test --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) -Dembed-stdlib=true
 
 unit-coverage: ## Measure unit-test coverage with kcov (report under $(COVERAGE_DIR)/unit)

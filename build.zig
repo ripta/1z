@@ -275,6 +275,10 @@ pub fn build(b: *std.Build) void {
     capi_test_step.dependOn(&run_hosted_capi_unit_tests.step);
     capi_test_step.dependOn(&run_wasm_capi_unit_tests.step);
 
+    const test_build_step = b.step("test-build", "Compile the unit-test binaries without running them");
+    test_build_step.dependOn(&lib_unit_tests.step);
+    test_build_step.dependOn(&freestanding_capi_unit_tests.step);
+
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_lib_unit_tests.step);
     test_step.dependOn(&run_freestanding_capi_unit_tests.step);
