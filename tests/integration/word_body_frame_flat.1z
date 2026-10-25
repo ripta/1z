@@ -9,7 +9,7 @@ count-down: ( n -- ) [
   n 0 > [ n 1 - count-down ] when
 ] ;
 
-200000 count-down
+50000 count-down
 
 render-len: ( a b -- n ) [
   #append
