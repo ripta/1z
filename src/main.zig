@@ -249,7 +249,7 @@ fn runReplStartupStatement(ctx: *Context, writer: anytype, statement: []const u8
             processor.reset();
         },
         .needs_more_input => {
-            processor.reset();
+            processor.abandon(ctx);
         },
     }
 }

@@ -141,10 +141,7 @@ pub const StatementProcessor = struct {
     /// A parse suspended on the buffered lines is resumed to its end first. Its frames restore
     /// fields of the context on the way out, and abandoning it would leave those fields stale.
     fn statementTooLong(self: *StatementProcessor, allocator: Allocator, ctx: ?*Context, line_len: usize) Result {
-        if (self.coroutine != null) {
-            self.resumeCoroutine(ctx);
-            self.coroutine = null;
-        }
+        self.unwindSuspendedParse(ctx);
 
         const c = ctx orelse return .{ .parse_error = parser.ParseError.StatementTooLong };
 
@@ -280,7 +277,27 @@ pub const StatementProcessor = struct {
         return .{ .complete = instrs };
     }
 
+    /// Resume a suspended parse to its end and drop it.
+    ///
+    /// The suspended frames restore fields of the context on the way out. Dropping the coroutine
+    /// without resuming it would leave those fields holding the abandoned parse's values.
+    fn unwindSuspendedParse(self: *StatementProcessor, ctx: ?*Context) void {
+        if (self.coroutine != null) {
+            self.resumeCoroutine(ctx);
+            self.coroutine = null;
+        }
+    }
+
+    /// Discard the buffered statement, including a parse suspended on it.
+    pub fn abandon(self: *StatementProcessor, ctx: ?*Context) void {
+        self.unwindSuspendedParse(ctx);
+        self.reset();
+    }
+
     /// Reset buffer after successful execution or fatal error.
+    ///
+    /// A suspended parse is dropped without unwinding. Use `abandon` for a statement that is
+    /// still accumulating.
     pub fn reset(self: *StatementProcessor) void {
         self.coroutine = null;
         self.stmt_len = 0;
@@ -681,6 +698,31 @@ test "StatementProcessor unwinds a suspended parse when a line overflows the buf
     try std.testing.expect(ctx.parse_body_effect == null);
     try std.testing.expect(!ctx.parse_body_start);
     try std.testing.expectEqualStrings("StatementTooLong", ctx.parse_diagnostics.?.error_type.?);
+}
+
+test "StatementProcessor unwinds a suspended parse when the statement is abandoned" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var processor: StatementProcessor = .{};
+    defer processor.deinit();
+
+    processor.trackLine(1);
+    switch (processor.feedLine(arena.allocator(), "foo: ( -- x ) [", &ctx)) {
+        .needs_more_input => {},
+        else => return error.UnexpectedResult,
+    }
+    try std.testing.expect(ctx.parse_body_effect != null);
+
+    processor.abandon(&ctx);
+
+    try std.testing.expect(processor.coroutine == null);
+    try std.testing.expect(!processor.isAccumulating());
+    try std.testing.expect(ctx.parse_body_effect == null);
+    try std.testing.expect(!ctx.parse_body_start);
 }
 
 test "StatementProcessor accepts a statement that exactly fills the buffer" {
