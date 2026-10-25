@@ -289,7 +289,7 @@ capi-test: ## Run hosted C-API embedding-library unit tests
 
 capi-release-run: ## Build the embedding example against a ReleaseFast lib1z and run it
 	$(ZIG) build --release=fast --prefix $(RELEASE_PREFIX) $(ZIG_CPU_ARG)
-	zig cc -o $(RELEASE_PREFIX)/embed examples/embed.c -Iinclude $(RELEASE_PREFIX)/clib/lib1z.a -lffi
+	$(ZIG) cc -o $(RELEASE_PREFIX)/embed examples/embed.c -Iinclude $(RELEASE_PREFIX)/clib/lib1z.a $(if $(MACOS_SDK),-L$(MACOS_SDK)/usr/lib) -lffi
 	./$(RELEASE_PREFIX)/embed
 
 embed-stdlib-test: ## Run unit tests with -Dembed-stdlib=true
@@ -1030,7 +1030,7 @@ profiles: build ## Run profile sample workloads and refresh their .sample files
 	done
 
 build-example: build ## Build the C embedding example
-	zig cc -o $(ZIG_PREFIX)/embed examples/embed.c -Iinclude $(ZIG_PREFIX)/clib/lib1z.a -lffi
+	$(ZIG) cc -o $(ZIG_PREFIX)/embed examples/embed.c -Iinclude $(ZIG_PREFIX)/clib/lib1z.a $(if $(MACOS_SDK),-L$(MACOS_SDK)/usr/lib) -lffi
 
 freestanding-build: ## Compile-check the freestanding capi library for riscv64
 	@echo "Building lib1z.a for riscv64-freestanding-none..."
