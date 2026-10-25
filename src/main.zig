@@ -13,6 +13,7 @@ const ErrorObject = value_mod.ErrorObject;
 const StackFrame = value_mod.StackFrame;
 const Value = value_mod.Value;
 const StatementProcessor = @import("statement.zig").StatementProcessor;
+const SourceLineReader = @import("source_line.zig").SourceLineReader;
 const formatter = @import("formatter.zig");
 const benchmark = @import("benchmark.zig");
 const container_backing = @import("container_backing.zig");
@@ -468,9 +469,12 @@ fn runStartupFile(ctx: *Context, global: *const GlobalFlags, err_writer: anytype
     var processor: StatementProcessor = .{};
     defer processor.deinit();
 
+    var line_reader: SourceLineReader = .{};
+    defer line_reader.deinit(std.heap.page_allocator);
+
     var file_line: usize = 0;
     while (true) {
-        const line = reader.interface.takeDelimiterInclusive('\n') catch |err| switch (err) {
+        const line = line_reader.next(std.heap.page_allocator, &reader.interface) catch |err| switch (err) {
             error.EndOfStream => {
                 const flushed = processor.flush(ctx.quotationAllocator(), ctx);
                 _ = applyStartupStatement(ctx, err_writer, &processor, flushed, file_line);
@@ -4877,6 +4881,9 @@ fn replPiped(ctx: *Context, verbosity: Verbosity, writer: anytype) void {
 
     var processor: StatementProcessor = .{};
     defer processor.deinit();
+    var line_reader: SourceLineReader = .{};
+    defer line_reader.deinit(std.heap.page_allocator);
+
     var repl_line: usize = 0;
     while (true) {
         if (verbosity != .silent) {
@@ -4888,7 +4895,7 @@ fn replPiped(ctx: *Context, verbosity: Verbosity, writer: anytype) void {
             writer.flush() catch return;
         }
 
-        const line = reader.takeDelimiterInclusive('\n') catch |err| switch (err) {
+        const line = line_reader.next(std.heap.page_allocator, reader) catch |err| switch (err) {
             error.EndOfStream => {
                 if (verbosity != .silent) {
                     writer.writeAll("\nGoodbye!\n") catch {};
@@ -5101,9 +5108,12 @@ fn runFileStatements(
 
     var processor: StatementProcessor = .{};
     defer processor.deinit();
+    var line_reader: SourceLineReader = .{};
+    defer line_reader.deinit(std.heap.page_allocator);
+
     var file_line: usize = 0;
     while (true) {
-        const line = reader.interface.takeDelimiterInclusive('\n') catch |err| switch (err) {
+        const line = line_reader.next(std.heap.page_allocator, &reader.interface) catch |err| switch (err) {
             error.EndOfStream => {
                 // Try to execute any remaining buffered content
                 switch (processor.flush(ctx.quotationAllocator(), ctx)) {
@@ -5290,6 +5300,7 @@ test {
     _ = @import("primitives.zig");
     _ = @import("parser.zig");
     _ = @import("statement.zig");
+    _ = @import("source_line.zig");
     _ = @import("formatter.zig");
     _ = @import("benchmark.zig");
     _ = @import("profile.zig");

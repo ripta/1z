@@ -10,6 +10,7 @@ const Instruction = value_mod.Instruction;
 const Value = value_mod.Value;
 
 const StatementProcessor = @import("statement.zig").StatementProcessor;
+const SourceLineReader = @import("source_line.zig").SourceLineReader;
 
 const ir_codegen = @import("ir_codegen.zig");
 const AotWordDesc = ir_codegen.AotWordDesc;
@@ -991,8 +992,11 @@ fn executeAndCollectEntry(
         .parse_failure = parse_failed,
     };
 
+    var line_reader: SourceLineReader = .{};
+    defer line_reader.deinit(std.heap.page_allocator);
+
     while (true) {
-        const line = reader.interface.takeDelimiterInclusive('\n') catch |err| switch (err) {
+        const line = line_reader.next(std.heap.page_allocator, &reader.interface) catch |err| switch (err) {
             error.EndOfStream => {
                 switch (processor.flush(ctx.quotationAllocator(), ctx)) {
                     .needs_more_input => {},

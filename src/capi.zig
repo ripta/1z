@@ -14,6 +14,7 @@ const Context = context_mod.Context;
 
 const statement_mod = @import("statement.zig");
 const StatementProcessor = statement_mod.StatementProcessor;
+const SourceLineReader = @import("source_line.zig").SourceLineReader;
 
 const capi_core = @import("capi_core.zig");
 
@@ -740,8 +741,11 @@ export fn onez_eval_file(ptr: ?*anyopaque, path: ?[*:0]const u8) c_int {
     var processor: StatementProcessor = .{};
     defer processor.deinit();
 
+    var line_reader: SourceLineReader = .{};
+    defer line_reader.deinit(alloc);
+
     while (true) {
-        const line = reader.interface.takeDelimiterInclusive('\n') catch |err| switch (err) {
+        const line = line_reader.next(alloc, &reader.interface) catch |err| switch (err) {
             error.EndOfStream => {
                 switch (capi_core.evalFlush(ctx, &processor, alloc)) {
                     .needs_more_input => {},

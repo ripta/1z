@@ -6,6 +6,7 @@ const Instruction = value_mod.Instruction;
 const context_mod = @import("../context.zig");
 const Context = context_mod.Context;
 const LineEditor = @import("../line_editor.zig").LineEditor;
+const SourceLineReader = @import("../source_line.zig").SourceLineReader;
 
 const Stepper = @import("stepper.zig").Stepper;
 const DisplayRenderer = @import("display.zig").DisplayRenderer;
@@ -120,10 +121,10 @@ pub const Debugger = struct {
         var buf: [4096]u8 = undefined;
         var stdin = stdin_file.reader(&buf);
         const reader = &stdin.interface;
-        const line = reader.takeDelimiterInclusive('\n') catch |err| switch (err) {
-            error.EndOfStream => return null,
-            else => return null,
-        };
+        var line_reader: SourceLineReader = .{};
+        defer line_reader.deinit(self.allocator);
+
+        const line = line_reader.next(self.allocator, reader) catch return null;
         const trimmed = std.mem.trimRight(u8, line, "\n\r");
 
         // XXX: Need to allocate a copy so it outlives this stack frame

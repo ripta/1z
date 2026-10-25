@@ -1,0 +1,7 @@
+=== a line past the reader buffer loads ===
+PASS: the run succeeds
+PASS: the statement after the long line runs
+=== a line past the statement buffer names the limit ===
+PASS: the run fails
+PASS: the error names its type
+PASS: the error names the limit

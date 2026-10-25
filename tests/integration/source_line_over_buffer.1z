@@ -1,0 +1,63 @@
+\ A source line longer than the file reader's 4096-byte buffer still loads. A line past the 64 KiB
+\ statement buffer is a statement-too-long parse error. The fixtures are generated in a temporary
+\ directory, so no long line sits in the repository.
+\
+\ The interpreter path arrives as the sole command-line argument via the harness @self-exe
+\ directive. The case runs @raw so the harness supplies the standard library through the
+\ environment.
+
+use { using-temp-directory: } "os/fs" ;
+use { path-join: } "os/path" ;
+use { repeat: } "strings" ;
+use "process" ;
+use "testing" ;
+
+\ A comment of `width` bytes followed by a statement that prints a marker.
+(write-fixture): ( path: string width: fixnum -- ) [
+  wf-width: swap ;
+  wf-text: "\\ " "x" wf-width repeat #append "\n\"loaded\" print-line\n" #append ;
+
+  write: stream-open
+  dup wf-text stream-write-string drop
+  stream-close
+] ;
+
+"a line past the reader buffer loads" test-section
+
+[
+  [
+    slb-dir:  swap ;
+    slb-self: command-line-args 0 #nth ;
+    slb-path: slb-dir "wide.1z" path-join ;
+
+    slb-path 40000 (write-fixture)
+
+    slb-self "run" slb-path 3 array-n
+    <stdio-opts> capture-all
+    slb-result: swap ;
+
+    slb-result exit-code>> 0 = "the run succeeds" assert-true
+    slb-result stdout>> bytes> "loaded" #in? "the statement after the long line runs" assert-true
+  ] using-temp-directory
+] task-scope
+
+"a line past the statement buffer names the limit" test-section
+
+[
+  [
+    slb-dir:  swap ;
+    slb-self: command-line-args 0 #nth ;
+    slb-path: slb-dir "wider.1z" path-join ;
+
+    slb-path 70000 (write-fixture)
+
+    slb-self "run" slb-path 3 array-n
+    <stdio-opts> capture-all
+    slb-result: swap ;
+    slb-text: slb-result stderr>> bytes> ;
+
+    slb-result exit-code>> 0 > "the run fails" assert-true
+    slb-text "statement-too-long" #in? "the error names its type" assert-true
+    slb-text "65536" #in? "the error names the limit" assert-true
+  ] using-temp-directory
+] task-scope

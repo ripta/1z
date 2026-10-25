@@ -9,6 +9,7 @@ const Module = value_mod.Module;
 const ModuleWord = value_mod.ModuleWord;
 const Instruction = value_mod.Instruction;
 const StatementProcessor = @import("../statement.zig").StatementProcessor;
+const SourceLineReader = @import("../source_line.zig").SourceLineReader;
 const parser_mod = @import("../parser.zig");
 
 const markers_mod = @import("markers.zig");
@@ -598,9 +599,12 @@ pub fn nativeLoadImpl(ctx: *Context, cache: *value_mod.MutableMap, filename: []c
             if (comptime is_freestanding) unreachable;
             var file_buf: [4096]u8 = undefined;
             var reader = file_handle.?.reader(&file_buf);
+            var line_reader: SourceLineReader = .{};
+            defer line_reader.deinit(alloc);
+
             var file_line: usize = 0;
             while (true) {
-                const line = reader.interface.takeDelimiterInclusive('\n') catch |err| switch (err) {
+                const line = line_reader.next(alloc, &reader.interface) catch |err| switch (err) {
                     error.EndOfStream => {
                         try flushProcessor(ctx, alloc, &processor);
                         break;
