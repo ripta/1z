@@ -1,0 +1,3 @@
+"start" print-line
+"pragma{ require-doc: f } \"require-doc ok\" print-line" eval-string
+"pragma{ type-check: \"off\" } \"type-check ok\" print-line" eval-string

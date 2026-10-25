@@ -1843,6 +1843,54 @@ pub const Context = struct {
         return null;
     }
 
+    /// Register the built-in pragma keys. Every validator is native, so none depends on prelude
+    /// code. `init` calls this so a context that never loads the prelude still accepts them.
+    fn registerBuiltinPragmas(self: *Context) !void {
+        try self.pragma_registry.put(self.allocator, "require-doc", .{
+            .native_validator = &control.nativeRequireDocValidator,
+        });
+
+        try self.pragma_registry.put(self.allocator, "suppress-checks", .{
+            .native_validator = &nativeSuppressChecksValidator,
+        });
+
+        try self.pragma_registry.put(self.allocator, "suppress-undeclared", .{});
+
+        try self.pragma_registry.put(self.allocator, "redefinition-arity-mismatch", .{
+            .native_validator = &control.nativeRedefinitionArityMismatchValidator,
+        });
+
+        try self.pragma_registry.put(self.allocator, "type-check", .{
+            .native_validator = &control.nativeTypeCheckValidator,
+        });
+
+        try self.pragma_registry.put(self.allocator, "callsite-arity-mismatch", .{
+            .native_validator = &control.nativeCallsiteArityMismatchValidator,
+        });
+
+        try self.pragma_registry.put(self.allocator, "missing-default-arm", .{
+            .native_validator = &control.nativeMissingDefaultArmValidator,
+        });
+
+        try self.pragma_registry.put(self.allocator, "never-returns-consistency", .{
+            .native_validator = &control.nativeNeverReturnsConsistencyValidator,
+        });
+
+        try self.pragma_registry.put(self.allocator, "dictionary-shadow", .{
+            .native_validator = &control.nativeDictionaryShadowValidator,
+        });
+
+        try self.pragma_registry.put(self.allocator, "import-collision", .{
+            .native_validator = &control.nativeImportCollisionValidator,
+        });
+
+        try self.pragma_registry.put(self.allocator, "allow-uninhabited-constraint", .{});
+
+        try self.pragma_registry.put(self.allocator, "lint-suppress", .{
+            .native_validator = &control.nativeLintSuppressValidator,
+        });
+    }
+
     /// Initialize a new interpreter context with an empty stack and primitives.
     /// Note: This does NOT load the prelude. Call loadPrelude() separately.
     pub fn init(allocator: Allocator) Context {
@@ -1959,6 +2007,10 @@ pub const Context = struct {
 
         primitives.registerNativeDispatch(&ctx.dispatch, &ctx) catch |err| {
             std.debug.panic("Failed to register native dispatch: {any}", .{err});
+        };
+
+        ctx.registerBuiltinPragmas() catch |err| {
+            std.debug.panic("Failed to register built-in pragmas: {any}", .{err});
         };
 
         return ctx;
@@ -2534,52 +2586,6 @@ pub const Context = struct {
         // Push the base pragma frame for file-scoped pragmas
         try self.pushPragmaFrame();
         errdefer self.popPragmaFrame();
-
-        // Register require-doc pragma with a native validator so enforcement
-        // does not depend on prelude definitions.
-        try self.pragma_registry.put(self.allocator, "require-doc", .{
-            .native_validator = &control.nativeRequireDocValidator,
-        });
-
-        try self.pragma_registry.put(self.allocator, "suppress-checks", .{
-            .native_validator = &nativeSuppressChecksValidator,
-        });
-
-        try self.pragma_registry.put(self.allocator, "suppress-undeclared", .{});
-
-        try self.pragma_registry.put(self.allocator, "redefinition-arity-mismatch", .{
-            .native_validator = &control.nativeRedefinitionArityMismatchValidator,
-        });
-
-        try self.pragma_registry.put(self.allocator, "type-check", .{
-            .native_validator = &control.nativeTypeCheckValidator,
-        });
-
-        try self.pragma_registry.put(self.allocator, "callsite-arity-mismatch", .{
-            .native_validator = &control.nativeCallsiteArityMismatchValidator,
-        });
-
-        try self.pragma_registry.put(self.allocator, "missing-default-arm", .{
-            .native_validator = &control.nativeMissingDefaultArmValidator,
-        });
-
-        try self.pragma_registry.put(self.allocator, "never-returns-consistency", .{
-            .native_validator = &control.nativeNeverReturnsConsistencyValidator,
-        });
-
-        try self.pragma_registry.put(self.allocator, "dictionary-shadow", .{
-            .native_validator = &control.nativeDictionaryShadowValidator,
-        });
-
-        try self.pragma_registry.put(self.allocator, "import-collision", .{
-            .native_validator = &control.nativeImportCollisionValidator,
-        });
-
-        try self.pragma_registry.put(self.allocator, "allow-uninhabited-constraint", .{});
-
-        try self.pragma_registry.put(self.allocator, "lint-suppress", .{
-            .native_validator = &control.nativeLintSuppressValidator,
-        });
 
         // Split prelude into lines and process incrementally
         const source = external_source orelse prelude_source;
