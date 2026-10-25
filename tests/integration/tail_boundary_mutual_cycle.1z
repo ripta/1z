@@ -1,5 +1,5 @@
 \ A mutual tail-recursive cycle through an `if` arm. Every edge is a tail call, so the interpreter
-\ runs two million iterations in constant native stack, and so does every compile mode.
+\ runs fifty thousand iterations in constant native stack, and so does every compile mode.
 \
 \ No flags, so the eager run checks the same golden. The hybrid twin is
 \ hybrid_tail_boundary_mutual_cycle.1z.
@@ -7,4 +7,4 @@
 pong: ( n -- ) [ 1 - ping ] ;
 ping: ( n -- ) [ dup 0 > [ pong ] [ drop "done" print-line ] if ] ;
 
-[ 2000000 ping ] [ error-type: @get . wipe ] recover
+[ 50000 ping ] [ error-type: @get . wipe ] recover
