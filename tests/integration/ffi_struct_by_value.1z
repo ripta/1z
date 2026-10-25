@@ -1,0 +1,29 @@
+use "testing" ;
+use "ffi" ;
+
+big: ffi-struct{ a: i32 b: i32 c: i32 d: i32 e: i32 } ;
+
+toy-lib-ext: ( -- ext ) [
+  sys-info "os" @get "macos" = [ ".dylib" ] [ ".so" ] if
+] ;
+
+toy-lib-path: ( -- path ) [
+  environ "PWD" @get "/zig-out/ext/libtoy" #append toy-lib-ext #append
+] ;
+
+"a callee that edits its by-value struct parameter" test-section
+
+toy-lib-path lib-open
+
+\\ toy_big_overwrite sets its own copy of field a to 99, then returns a + e.
+dup "toy_big_overwrite" lib-symbol ffi{ big -> i32 } bind-sig
+
+1 2 3 4 5 make-big
+dup 2 pick-n ffi-call
+104 "callee sees its own write" assert=
+
+dup a>> 1 "caller's struct keeps field a" assert=
+dup e>> 5 "caller's struct keeps field e" assert=
+drop drop
+
+resource-close

@@ -749,8 +749,8 @@ fn nativeFfiCall(ctx: *Context) anyerror!void {
             stack_arg_idx += 1;
         } else if (param_type.tag == .struct_type) {
             arg_types[pi] = ffiTypeToLibffiExt(param_type);
-            const ba = try extractStructByteArray(ctx, param_type, arg_vals[stack_arg_idx], stack_arg_idx);
-            arg_ptrs[pi] = @ptrCast(ba.slice().ptr);
+            const copy = try copyStructArg(ctx, param_type, arg_vals[stack_arg_idx], stack_arg_idx);
+            arg_ptrs[pi] = @ptrCast(copy.ptr);
             arg_slots[pi] = std.mem.zeroes(ArgSlot);
             out_ptr_slots[pi] = null;
             stack_arg_idx += 1;
@@ -980,8 +980,8 @@ fn nativeFfiCallVariadic(ctx: *Context, ffi_fn: *Resource, sig: *const FfiSignat
             stack_arg_idx += 1;
         } else if (param_type.tag == .struct_type) {
             arg_types[pi] = ffiTypeToLibffiExt(param_type);
-            const ba = try extractStructByteArray(ctx, param_type, fixed_vals[stack_arg_idx], stack_arg_idx);
-            arg_ptrs[pi] = @ptrCast(ba.slice().ptr);
+            const copy = try copyStructArg(ctx, param_type, fixed_vals[stack_arg_idx], stack_arg_idx);
+            arg_ptrs[pi] = @ptrCast(copy.ptr);
             arg_slots[pi] = std.mem.zeroes(ArgSlot);
             out_ptr_slots[pi] = null;
             stack_arg_idx += 1;
@@ -1160,7 +1160,21 @@ fn marshalArg(ctx: *Context, param_type: FfiType, val: Value, arg_index: usize) 
     }
 }
 
-/// Extract the byte array data from an FFI struct tagged value for passing to libffi.
+/// Copy the byte array data of an FFI struct tagged value onto the arena for passing to libffi.
+///
+/// The struct is passed by value, but libffi hands a large struct to the callee by pointer on some
+/// ABIs. A callee that edits its parameter would then write into the caller's value. The copy
+/// keeps that write off a value the call does not own, and off a container an analysis ancestor
+/// owns.
+fn copyStructArg(ctx: *Context, param_type: FfiType, val: Value, arg_index: usize) ![]u8 {
+    const ba = try extractStructByteArray(ctx, param_type, val, arg_index);
+    const src = ba.slice();
+    const copy = try ctx.arena.allocator().alignedAlloc(u8, .@"16", src.len);
+    @memcpy(copy, src);
+    return copy;
+}
+
+/// Extract the byte array data from an FFI struct tagged value.
 fn extractStructByteArray(ctx: *Context, param_type: FfiType, val: Value, arg_index: usize) !*ByteArray {
     const inner = switch (val) {
         .tagged => |t| t.inner.*,

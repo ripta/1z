@@ -210,6 +210,15 @@ toy_vec2 toy_vec2_add(toy_vec2 a, toy_vec2 b) {
     return result;
 }
 
+// Kept out of toy.h so the header-parsing goldens do not carry it. It exists to show that a
+// by-value struct argument cannot be written through.
+typedef struct { int a; int b; int c; int d; int e; } toy_big;
+
+int toy_big_overwrite(toy_big v) {
+    v.a = 99;
+    return v.a + v.e;
+}
+
 int toy_sum_variadic(int count, ...) {
     va_list args;
     va_start(args, count);
