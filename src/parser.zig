@@ -268,7 +268,10 @@ fn handleParseTimeError(c: *Context, err: anyerror) ParseError {
         };
     }
 
-    c.finalizeErrorDetails(err);
+    // A primitive that set diagnostics directly has already said what went wrong. Rows built
+    // from the Zig error name here would outlive the diagnostic and render in its place once a
+    // caller such as eval-string boxes it.
+    if (c.parse_diagnostics == null) c.finalizeErrorDetails(err);
 
     if (c.parse_diagnostics != null) {
         // Primitive already set diagnostics directly; preserve them.

@@ -1,0 +1,2 @@
+tests/integration/eval_string_uninhabited_constraint.1z:3: error 'uninhabited-constraint' uninhabited constraint: 'fixnum' cannot satisfy 'no-method' at word 'eval-string'
+  stack effect: ( string --  )

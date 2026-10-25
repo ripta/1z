@@ -1,0 +1,3 @@
+\ An uninhabited constraint reached through eval-string keeps its own error type and message.
+"no-method: protocol{ no-such: } ;" eval-string
+"foo: ( x: no-method & fixnum -- ) [ drop ] ;" eval-string
