@@ -113,11 +113,11 @@ pub const Server = struct {
     /// A test seam. Production always builds with `buildAnalysis`.
     builder: Builder = buildAnalysis,
     fmt_engine: formatter.Engine,
-    /// The parsed `format-buffer` call, or null when the 1z formatter is not in use or failed
+    /// The bound `format-buffer` call, or null when the 1z formatter is not in use or failed
     /// to load.
     ///
-    /// It is parsed once at startup, after the module load that makes the name resolvable, so
-    /// no request repeats that resolution.
+    /// It is built once at startup and carries the word's definition, so no request resolves the
+    /// name.
     fmt_call: ?[]const Instruction = null,
     /// A test seam, absent from production builds. It runs once per 1z-engine formatting request,
     /// while the request's child is still alive, because the child's arena is the thing a test
@@ -814,7 +814,7 @@ pub const Server = struct {
         try self.transport.writeResponse(id, result);
     }
 
-    /// Load `lib/formatter.1z` and parse the `format-buffer` call the formatting requests run.
+    /// Load `lib/formatter.1z` and build the `format-buffer` call the formatting requests run.
     ///
     /// A failure is not fatal. `fmt_call` stays null, and formatting falls back to the built-in
     /// formatter, which is what the session would have used had the engine not been asked for.
@@ -827,7 +827,7 @@ pub const Server = struct {
         const saved_error_state = self.ctx.saveErrorState();
         defer self.ctx.restoreErrorState(saved_error_state);
 
-        self.runOnRoot("use \"formatter\" ;") catch |err| {
+        const call = self.resolveFormatCall() catch |err| {
             self.log("could not load lib/formatter.1z ({any}); using the built-in formatter", .{err});
             return;
         };
@@ -836,11 +836,32 @@ pub const Server = struct {
             return;
         };
 
-        var call_tokens = Tokenizer.init("format-buffer");
-        self.fmt_call = parser.parseTopLevel(self.ctx.quotationAllocator(), &call_tokens, self.ctx) catch |err| {
-            self.log("could not resolve format-buffer ({any}); using the built-in formatter", .{err});
-            return;
-        };
+        self.fmt_call = call;
+    }
+
+    /// A call to `format-buffer` bound to its definition, so a request needs no name in scope.
+    ///
+    /// The import lands in a scratch frame popped afterward. Analysis children resolve words
+    /// through the root's scope, so a binding left there would let a document call
+    /// `format-buffer` without importing `formatter`.
+    ///
+    /// The parser never pre-binds a module word, so the call is built here. The copied definition
+    /// borrows its body from the formatter module, which the root's module cache keeps loaded.
+    fn resolveFormatCall(self: *Server) ![]const Instruction {
+        const scratch = try ScratchImports.begin(self.ctx);
+        defer scratch.end(self.ctx);
+
+        try self.runOnRoot("use { format-buffer: } \"formatter\" ;");
+        const def = self.ctx.lookupWord("format-buffer") orelse return error.UnknownWord;
+
+        const alloc = self.ctx.quotationAllocator();
+        var bound = def;
+        bound.name = try alloc.dupe(u8, def.name);
+        const slot = try dict_mod.createDetachedSlot(alloc, bound.name, bound);
+
+        const call = try alloc.alloc(Instruction, 1);
+        call[0] = .{ .op = .{ .call_word_module = slot }, .line = 1 };
+        return call;
     }
 
     /// Build the token lexer on the root, so no request fills its cache from a child.
@@ -3482,4 +3503,29 @@ test "1z-engine formatting runs on a per-request child and the lexer cache holds
     try std.testing.expect(probe.cache_entries > 0);
     try std.testing.expectEqual(@as(usize, 0), probe.child_addresses);
     try std.testing.expect(ctx.lookupWord("<1z-lexer>") == null);
+}
+
+test "loading the 1z formatter leaves its words unresolvable in an analyzed document" {
+    var ctx = Context.initWithPrelude(std.testing.allocator);
+    defer ctx.deinit();
+
+    var lib_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const lib_path = try std.fs.cwd().realpath("lib", &lib_buf);
+    ctx.stdlib_path = try ctx.quotationAllocator().dupe(u8, lib_path);
+
+    var reader = IoReader.fixed("");
+    var out_buf: [256]u8 = undefined;
+    var writer = IoWriter.fixed(&out_buf);
+    var transport = Transport.init(std.testing.allocator, &reader, &writer);
+    var server = Server.init(std.testing.allocator, &transport, &ctx, .one_z);
+    defer server.deinit();
+
+    server.loadFormatterModule();
+    try std.testing.expect(server.fmt_call != null);
+
+    const child = try server.newAnalysisChild("file:///doc.1z", null);
+    defer server.destroyChild(child);
+
+    try std.testing.expect(child.lookupWord("format-buffer") == null);
+    try std.testing.expect(ctx.lookupWord("format-buffer") == null);
 }
