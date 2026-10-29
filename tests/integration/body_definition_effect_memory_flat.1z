@@ -1,0 +1,56 @@
+\ Bounded-memory regression for the metadata `;` records per definition.
+\
+\ `;` used to copy a definition's stack effect and marker list onto the context arena on every
+\ definition, so a typed or marked helper defined inside a word body cost bytes on each call. That
+\ exhausted the 4 MB cap in the `.flags` sidecar partway through the loops below. Equal effects and
+\ equal marker lists are now interned once per state target, so every loop stays flat.
+
+typed-single: ( n -- n ) [
+  helper: ( n -- n ) [ 1 + ] ;
+  helper
+] ;
+
+typed-multi: ( a b -- c d ) [
+  helper: ( a b -- c d ) [ swap ] ;
+  helper
+] ;
+
+typed-annotated: ( n -- n ) [
+  helper: ( x: fixnum y: fixnum -- sum: fixnum ) [ + ] ;
+  1 helper
+] ;
+
+typed-quotation-param: ( n -- n ) [
+  helper: ( n q: ( n -- n ) -- n ) [ call ] ;
+  [ 1 + ] helper
+] ;
+
+marked: ( n -- n ) [
+  helper: typed const ( n -- n ) [ 1 + ] ;
+  helper
+] ;
+
+named-constraint: ( n -- n ) [
+  both: comparable & stringable ;
+  1 +
+] ;
+
+recursive-non-tail: ( n -- n ) [
+  walk: stack-recursive ( n -- n ) [ dup 0 > [ 1 - walk 1 + ] when ] ;
+  walk
+] ;
+
+20000 [ 1 typed-single drop ] times
+20000 [ 1 2 typed-multi 2drop ] times
+20000 [ 1 typed-annotated drop ] times
+20000 [ 1 typed-quotation-param drop ] times
+20000 [ 1 marked drop ] times
+20000 [ 1 named-constraint drop ] times
+20000 [ 3 recursive-non-tail drop ] times
+
+20000 [
+  top-level: ( n -- n ) [ 1 + ] ;
+  1 top-level drop
+] times
+
+"flat" print-line

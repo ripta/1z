@@ -74,6 +74,7 @@ const pascalToKebabRuntime = @import("primitives/errors.zig").pascalToKebabRunti
 const markers_mod = @import("primitives/markers.zig");
 const HookRegistry = @import("primitives/hooks.zig").HookRegistry;
 
+const effect_intern = @import("effect_intern.zig");
 const stack_effect_mod = @import("stack_effect.zig");
 const StackEffect = stack_effect_mod.StackEffect;
 const StackEffectParam = stack_effect_mod.StackEffectParam;
@@ -1312,6 +1313,10 @@ pub const Context = struct {
     /// serves every struct with a field of the name, so one effect describes them all, widened as
     /// each struct joins. Written through `stateTarget`, beside the dispatch entries it describes.
     generic_accessor_effects: std.StringHashMapUnmanaged(*const StackEffect) = .{},
+    /// Stack effects and marker lists that `;` shares between definitions of equal content. Written
+    /// through `stateTarget`, so the contents live on the arena that outlives every definition
+    /// holding them.
+    definition_metadata: effect_intern.Tables = .{},
     /// Set true when `aot_image_loader.loadIntoContext` has populated
     /// this context from an AOT runtime image. Gates the module-cache
     /// fallback in `lookupWordForExecution` so the fallback only fires
@@ -2643,6 +2648,7 @@ pub const Context = struct {
         self.aot_generic_dispatch_ids.deinit(self.allocator);
         self.generic_accessor_dispatch_ids.deinit(self.allocator);
         self.generic_accessor_effects.deinit(self.allocator);
+        self.definition_metadata.deinit(self.allocator);
         for (self.parameter_env.items) |*frame| {
             self.deinitParameterFrame(frame);
         }
@@ -6005,6 +6011,27 @@ pub const Context = struct {
 
         try target.generic_accessor_effects.put(target.allocator, name, joining);
         return joining;
+    }
+
+    /// The one copy of `effect` the state target holds for its content, owning its parameter names.
+    ///
+    /// Every definition with an equal effect points at the same box, so the box is read-only. An
+    /// accessor effect is widened in place and must never come from here.
+    pub fn internStackEffect(self: *Context, effect: StackEffect) !*const StackEffect {
+        self.acquireSharedWrite();
+        defer self.releaseSharedWrite();
+
+        const target = self.stateTarget();
+        return target.definition_metadata.internEffect(target.allocator, target.arena.allocator(), effect);
+    }
+
+    /// The one copy of `markers` the state target holds for its content, in order.
+    pub fn internMarkerList(self: *Context, markers: []const *value_mod.Marker) ![]const *value_mod.Marker {
+        self.acquireSharedWrite();
+        defer self.releaseSharedWrite();
+
+        const target = self.stateTarget();
+        return target.definition_metadata.internMarkers(target.allocator, target.arena.allocator(), markers);
     }
 
     /// The one dispatch_id every `struct{`-generated accessor named `name` shares. The first struct

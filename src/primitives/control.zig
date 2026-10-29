@@ -477,6 +477,25 @@ pub fn nativeCall(ctx: *Context) anyerror!void {
     try pc.executeWithFrame(ctx);
 }
 
+/// Markers `;` collects on the stack before it spills to the heap. A definition rarely carries more.
+const scratch_marker_slots = 16;
+const scratch_marker_bytes = scratch_marker_slots * @sizeOf(*Marker);
+
+/// Scratch space for the markers `;` collects. Spills onto the state target's heap allocator, never
+/// its arena, so the list is gone once the definition is made. The caller takes the allocator from
+/// its own local copy, since the buffer lives inside the returned value.
+fn markerScratchFallback(ctx: *Context) std.heap.StackFallbackAllocator(scratch_marker_bytes) {
+    return std.heap.stackFallback(scratch_marker_bytes, ctx.stateTarget().allocator);
+}
+
+fn hasMarker(list: []const *Marker, marker: *const Marker) bool {
+    for (list) |mk| {
+        if (mk == marker) return true;
+    }
+
+    return false;
+}
+
 /// ; ( name: quot -- ) or ( name: value -- ) or ( name: marker -- )
 ///
 /// Polymorphic definition, depending on TOS type, with optional metadata:
@@ -556,8 +575,10 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
                     return error.TypeMismatch;
                 };
 
+                var scratch_fallback = markerScratchFallback(ctx);
+                const scratch = scratch_fallback.get();
                 var collected_markers = std.ArrayListUnmanaged(*Marker){};
-                defer collected_markers.deinit(alloc);
+                defer collected_markers.deinit(scratch);
                 var captured_doc: ?[]const u8 = null;
 
                 while (true) {
@@ -565,7 +586,7 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
                     switch (next_val) {
                         .marker => |mk| {
                             try ctx.stack.popAndRelease();
-                            try collected_markers.append(alloc, mk);
+                            try collected_markers.append(scratch, mk);
                         },
                         .doc_string => |d| {
                             try ctx.stack.popAndRelease();
@@ -629,8 +650,10 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
                 // Fall back to normal word definition
                 var stack_effect_val: ?*const StackEffect = null;
                 var doc_val: ?[]const u8 = null;
+                var scratch_fallback = markerScratchFallback(ctx);
+                const scratch = scratch_fallback.get();
                 var collected_markers = std.ArrayListUnmanaged(*Marker){};
-                defer collected_markers.deinit(alloc);
+                defer collected_markers.deinit(scratch);
                 // A definition whose body resolves to a single constraint value
                 // becomes a parse-time const that pushes it, so the name is
                 // usable in annotation positions. This covers named composed
@@ -650,18 +673,19 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
                     else => null,
                 };
 
-                // The definition owns its effect rather than sharing the value's. One parsed body
-                // is executed once per scope that loads it, so the same parse-owned effect would
-                // otherwise be reached by definitions on arenas that outlive each other in either
-                // order.
-                if (top_effect) |eff| stack_effect_val = try stack_effect_mod.copyOnto(alloc, eff.*);
+                // The definition holds the state target's interned copy rather than the value's
+                // effect. One parsed body is executed once per scope that loads it, so the same
+                // parse-owned effect would otherwise be reached by definitions on arenas that
+                // outlive each other in either order. Interning also keeps a definition made on
+                // every call of a word from adding a copy per call.
+                if (top_effect) |eff| stack_effect_val = try ctx.internStackEffect(eff.*);
 
                 while (true) {
                     const next_val = try ctx.stack.peek();
                     switch (next_val) {
                         .marker => |mk| {
                             try ctx.stack.popAndRelease();
-                            try collected_markers.append(alloc, mk);
+                            try collected_markers.append(scratch, mk);
                         },
                         .doc_string => |d| {
                             try ctx.stack.popAndRelease();
@@ -670,7 +694,7 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
                         .stack_effect => |eff| {
                             try ctx.stack.popAndRelease();
                             if (stack_effect_val == null) {
-                                stack_effect_val = try stack_effect_mod.box(alloc, eff);
+                                stack_effect_val = try ctx.internStackEffect(eff);
                             }
                         },
                         .symbol => break,
@@ -725,53 +749,32 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
                     else => .{ .literal = top_val },
                 };
 
-                var markers_slice = try alloc.dupe(*Marker, collected_markers.items);
+                // Read off the markers the definition declared. The extensions below append to the
+                // same scratch list, and these answers are about what the source wrote.
+                const has_stack_recursive = for (collected_markers.items) |mk| {
+                    if (markers_mod.isStackRecursiveMarker(mk)) break true;
+                } else false;
+
+                const has_once = for (collected_markers.items) |mk| {
+                    if (markers_mod.isOnceMarker(mk)) break true;
+                } else false;
 
                 if (is_named_constraint) {
-                    const has_parse_time_marker = for (markers_slice) |mk| {
-                        if (mk == @as(*const Marker, &markers_mod.parse_time_marker)) break true;
-                    } else false;
-                    const has_const_marker = for (markers_slice) |mk| {
-                        if (mk == @as(*const Marker, &markers_mod.const_marker)) break true;
-                    } else false;
-                    const has_typed_marker = for (markers_slice) |mk| {
-                        if (mk == @as(*const Marker, &markers_mod.typed_marker)) break true;
-                    } else false;
+                    const implied = [_]*Marker{
+                        @constCast(&markers_mod.parse_time_marker),
+                        @constCast(&markers_mod.const_marker),
+                        @constCast(&markers_mod.typed_marker),
+                    };
 
-                    var extra: usize = 0;
-                    if (!has_parse_time_marker) extra += 1;
-                    if (!has_const_marker) extra += 1;
-                    if (!has_typed_marker) extra += 1;
-
-                    if (extra != 0) {
-                        const extended = try alloc.alloc(*Marker, markers_slice.len + extra);
-                        @memcpy(extended[0..markers_slice.len], markers_slice);
-                        var idx = markers_slice.len;
-                        if (!has_parse_time_marker) {
-                            extended[idx] = @constCast(&markers_mod.parse_time_marker);
-                            idx += 1;
-                        }
-                        if (!has_const_marker) {
-                            extended[idx] = @constCast(&markers_mod.const_marker);
-                            idx += 1;
-                        }
-                        if (!has_typed_marker) {
-                            extended[idx] = @constCast(&markers_mod.typed_marker);
-                        }
-                        markers_slice = extended;
+                    for (implied) |marker| {
+                        if (hasMarker(collected_markers.items, marker)) continue;
+                        try collected_markers.append(scratch, marker);
                     }
                 }
 
                 if (action == .compound and !ctx.allow_all_recursion and containsNonTailSelfCall(ctx, action.compound, name)) {
-                    const has_stack_recursive = for (collected_markers.items) |mk| {
-                        if (markers_mod.isStackRecursiveMarker(mk)) break true;
-                    } else false;
-
                     if (has_stack_recursive) {
-                        const extended = try alloc.alloc(*Marker, markers_slice.len + 1);
-                        @memcpy(extended[0..markers_slice.len], markers_slice);
-                        extended[markers_slice.len] = @constCast(&markers_mod.recursive_non_tco_marker);
-                        markers_slice = extended;
+                        try collected_markers.append(scratch, @constCast(&markers_mod.recursive_non_tco_marker));
                     } else {
                         helpers.setErrorContext(ctx, "word '{s}' contains a non-tail self-call", .{name});
                         helpers.setErrorHint(ctx, "add the 'stack-recursive' marker if intentional");
@@ -783,11 +786,7 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
                 // the check here is about order rather than reach. It runs ahead of the `once`
                 // rules below so `once inline` reports the combination rather than the effect
                 // shape, and so a rejected definition never installs a once cell on its way out.
-                if (markers_mod.inlineViolation(markers_slice)) |violation| return violation.raise(ctx);
-
-                const has_once = for (collected_markers.items) |mk| {
-                    if (markers_mod.isOnceMarker(mk)) break true;
-                } else false;
+                if (markers_mod.inlineViolation(collected_markers.items)) |violation| return violation.raise(ctx);
 
                 if (has_once) {
                     if (action != .compound) {
@@ -815,6 +814,8 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
                     // force, and the closure stays alive on the teardown list either way.
                     body_owner = null;
                 }
+
+                const markers_slice = try ctx.internMarkerList(collected_markers.items);
 
                 const interned = try ctx.defineBinding(name, WordDefinition{
                     .name = name,
@@ -946,6 +947,179 @@ test "semicolon copies the declared effect onto its own arena, parameters includ
     try std.testing.expectEqualStrings("q", effect.inputs[0].name);
     try std.testing.expectEqualStrings("b", effect.outputs[0].name);
     try std.testing.expectEqual(@as(usize, 0), effect.inputs[0].quotation_effect.?.inputs.len);
+}
+
+test "semicolon interned effect owns its parameter names" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    var parse_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    errdefer parse_arena.deinit();
+    const parse_alloc = parse_arena.allocator();
+
+    const nested_inputs = try parse_alloc.dupe(stack_effect_mod.StackEffectParam, &.{.{ .name = try parse_alloc.dupe(u8, "inner") }});
+    const nested = try stack_effect_mod.box(parse_alloc, .{ .inputs = nested_inputs, .outputs = &.{} });
+    const parse_effect = try stack_effect_mod.box(parse_alloc, .{
+        .inputs = try parse_alloc.dupe(stack_effect_mod.StackEffectParam, &.{
+            .{ .name = try parse_alloc.dupe(u8, "quot"), .quotation_effect = nested },
+        }),
+        .outputs = try parse_alloc.dupe(stack_effect_mod.StackEffectParam, &.{.{ .name = try parse_alloc.dupe(u8, "out") }}),
+    });
+
+    try defineEmptyBody(&ctx, "owned-names", parse_effect, &.{});
+    parse_arena.deinit();
+
+    const effect = (ctx.lookupWord("owned-names") orelse return error.TestExpectedWord).stack_effect.?;
+    try std.testing.expectEqualStrings("quot", effect.inputs[0].name);
+    try std.testing.expectEqualStrings("out", effect.outputs[0].name);
+    try std.testing.expectEqualStrings("inner", effect.inputs[0].quotation_effect.?.inputs[0].name);
+}
+
+test "semicolon shares one effect box between definitions whose effects are equal" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const fixnum_tv = ctx.lookupBuiltinTypeValue("fixnum").?;
+    const string_tv = ctx.lookupBuiltinTypeValue("string").?;
+
+    const first = StackEffect{
+        .inputs = &.{.{ .name = "x", .type_annotation = .{ .type = fixnum_tv } }},
+        .outputs = &.{.{ .name = "x" }},
+    };
+    const equal = StackEffect{
+        .inputs = &.{.{ .name = "x", .type_annotation = .{ .type = fixnum_tv } }},
+        .outputs = &.{.{ .name = "x" }},
+    };
+    const other_annotation = StackEffect{
+        .inputs = &.{.{ .name = "x", .type_annotation = .{ .type = string_tv } }},
+        .outputs = &.{.{ .name = "x" }},
+    };
+    const no_annotation = StackEffect{
+        .inputs = &.{.{ .name = "x" }},
+        .outputs = &.{.{ .name = "x" }},
+    };
+    const other_name = StackEffect{
+        .inputs = &.{.{ .name = "y", .type_annotation = .{ .type = fixnum_tv } }},
+        .outputs = &.{.{ .name = "x" }},
+    };
+
+    try defineEmptyBody(&ctx, "shared-a", &first, &.{});
+    try defineEmptyBody(&ctx, "shared-b", &equal, &.{});
+    try defineEmptyBody(&ctx, "shared-c", &other_annotation, &.{});
+    try defineEmptyBody(&ctx, "shared-d", &no_annotation, &.{});
+    try defineEmptyBody(&ctx, "shared-e", &other_name, &.{});
+
+    const a = ctx.lookupWord("shared-a").?.stack_effect.?;
+    try std.testing.expect(a != &first);
+    try std.testing.expectEqual(a, ctx.lookupWord("shared-b").?.stack_effect.?);
+    try std.testing.expect(a != ctx.lookupWord("shared-c").?.stack_effect.?);
+    try std.testing.expect(a != ctx.lookupWord("shared-d").?.stack_effect.?);
+    try std.testing.expect(a != ctx.lookupWord("shared-e").?.stack_effect.?);
+    try std.testing.expectEqual(string_tv, ctx.lookupWord("shared-c").?.stack_effect.?.inputs[0].type_annotation.?.type);
+}
+
+test "semicolon shares one marker slice between definitions whose markers are equal" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const typed: *Marker = @constCast(&markers_mod.typed_marker);
+    const constant: *Marker = @constCast(&markers_mod.const_marker);
+
+    try defineEmptyBody(&ctx, "marked-a", null, &.{ typed, constant });
+    try defineEmptyBody(&ctx, "marked-b", null, &.{ typed, constant });
+    try defineEmptyBody(&ctx, "marked-c", null, &.{ constant, typed });
+
+    const a = ctx.lookupWord("marked-a").?.markers;
+    try std.testing.expectEqual(@as(usize, 2), a.len);
+    try std.testing.expectEqual(a.ptr, ctx.lookupWord("marked-b").?.markers.ptr);
+    try std.testing.expect(a.ptr != ctx.lookupWord("marked-c").?.markers.ptr);
+}
+
+test "semicolon keeps every marker when a definition carries more than the scratch list holds" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    var storage: [scratch_marker_slots + 4]Marker = undefined;
+    var markers: [storage.len]*Marker = undefined;
+    for (&storage, &markers) |*marker, *slot| {
+        marker.* = .{ .name = "many" };
+        slot.* = marker;
+    }
+
+    try defineEmptyBody(&ctx, "many-markers", null, &markers);
+
+    const defined = ctx.lookupWord("many-markers").?.markers;
+    try std.testing.expectEqualSlices(*Marker, &markers, defined);
+}
+
+test "semicolon adds the named-constraint markers to the one interned slice" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const fixnum_tv = ctx.lookupBuiltinTypeValue("fixnum").?;
+    const bignum_tv = ctx.lookupBuiltinTypeValue("bignum").?;
+    const union_tv = try ctx.getOrCreateAnonymousUnionTypeValue(&.{ fixnum_tv, bignum_tv });
+
+    for ([_][]const u8{ "constraint-a", "constraint-b" }) |name| {
+        try ctx.stack.push(value_mod.symbolValue(name));
+        try ctx.stack.push(.{ .type_val = union_tv });
+        try nativeSemicolon(&ctx);
+    }
+
+    const a = ctx.lookupWord("constraint-a").?.markers;
+    try std.testing.expectEqual(@as(usize, 3), a.len);
+    try std.testing.expectEqual(a.ptr, ctx.lookupWord("constraint-b").?.markers.ptr);
+}
+
+test "redefining a typed and marked word across many calls adds no durable growth per call" {
+    const multi_param = StackEffect{
+        .inputs = &.{ .{ .name = "a" }, .{ .name = "b" } },
+        .outputs = &.{ .{ .name = "c" }, .{ .name = "d" } },
+    };
+    const typed: *Marker = @constCast(&markers_mod.typed_marker);
+    const deprecated: *Marker = @constCast(&markers_mod.deprecated_marker);
+
+    const iterations: usize = 8_192;
+    const plain_growth = try redefinitionSecondBatchGrowth(null, &.{}, iterations);
+    const effect_growth = try redefinitionSecondBatchGrowth(&multi_param, &.{}, iterations);
+    const marker_growth = try redefinitionSecondBatchGrowth(null, &.{ typed, deprecated }, iterations);
+    const both_growth = try redefinitionSecondBatchGrowth(&multi_param, &.{ typed, deprecated }, iterations);
+
+    // The slack absorbs arena chunk boundaries.
+    const slack: usize = 64 * 1024;
+    try std.testing.expect(effect_growth < plain_growth + slack);
+    try std.testing.expect(marker_growth < plain_growth + slack);
+    try std.testing.expect(both_growth < plain_growth + slack);
+}
+
+fn defineEmptyBody(ctx: *Context, name: []const u8, effect: ?*const StackEffect, markers: []const *Marker) !void {
+    try ctx.stack.push(value_mod.symbolValue(name));
+
+    // `;` collects markers from the top of the stack down, so the list is pushed last first.
+    var remaining = markers.len;
+    while (remaining > 0) {
+        remaining -= 1;
+        try ctx.stack.push(.{ .marker = markers[remaining] });
+    }
+
+    try ctx.stack.push(.{ .quotation = .{ .instructions = &.{}, .effect = effect } });
+    try nativeSemicolon(ctx);
+}
+
+/// Bytes the tracked allocator grows by over a second batch of `iterations` redefinitions of one
+/// word, after a first batch of the same size has absorbed the one-time costs.
+fn redefinitionSecondBatchGrowth(effect: ?*const StackEffect, markers: []const *Marker, iterations: usize) !usize {
+    var mem_limit = MemoryLimitAllocator.init(std.testing.allocator, 0);
+    var ctx = Context.init(mem_limit.allocator());
+    defer ctx.deinit();
+
+    var i: usize = 0;
+    while (i < iterations) : (i += 1) try defineEmptyBody(&ctx, "redefined", effect, markers);
+    const mid_bytes = mem_limit.currentBytes();
+
+    while (i < 2 * iterations) : (i += 1) try defineEmptyBody(&ctx, "redefined", effect, markers);
+
+    return mem_limit.currentBytes() -| mid_bytes;
 }
 
 test "fireWordDefinedHook skips buildWordInfo when no word-defined-hooks are registered" {

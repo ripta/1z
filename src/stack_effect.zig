@@ -393,8 +393,9 @@ pub fn box(alloc: std.mem.Allocator, effect: StackEffect) !*const StackEffect {
 /// effect reaches definitions whose home arenas differ and outlive each other in either order.
 /// Copying the box alone would leave the holder pointing at the other arena's parameters.
 ///
-/// Parameter names are not copied. A name borrows the source text, which outlives any arena a
-/// definition lives on.
+/// Parameter names are not copied. The parser dupes each name onto its own allocator, so a name
+/// lives as long as the arena that parsed the effect. A holder on an arena that can outlive the
+/// parser's must copy the names too, as the definition intern does.
 pub fn copyOnto(alloc: std.mem.Allocator, effect: StackEffect) std.mem.Allocator.Error!*const StackEffect {
     return box(alloc, .{
         .inputs = try copyParams(alloc, effect.inputs),
