@@ -79,6 +79,12 @@ pub const JitEntry = struct {
     /// bail restores this many slots under the entry stack pointer. Null where no bail re-runs
     /// the body, as on an AOT entry.
     input_count: ?u8 = null,
+    /// What shared compiled code baked in, owned by the table. Empty for code that one definition
+    /// owns.
+    baked: []const BakedCallee = &.{},
+    /// The address of the body that shared code was compiled from, which decides which frames can
+    /// shadow what it baked in. Zero when unknown.
+    lexical_body: usize = 0,
 
     /// The name traces, profiles, and error frames display for this word.
     pub fn displayName(self: JitEntry) []const u8 {
@@ -86,9 +92,70 @@ pub const JitEntry = struct {
     }
 };
 
+/// What a definition must match for the entry minted for its body to serve it too.
+///
+/// The id indexes this table, so the map that holds these lives with the table and not in a store
+/// shared between contexts. The key is the address of a durable body, and the rest is every
+/// definition fact that compiled code or the entry records.
+pub const BodyEntry = struct {
+    id: u32,
+    len: usize,
+    effect: ?*const StackEffect,
+    markers_ptr: usize,
+    markers_len: usize,
+    module: ?*const Module,
+};
+
+/// A callee that code shared by several definitions resolved when it compiled.
+///
+/// The record is what a later definition of the same body must find again before it may run that
+/// code. `ident` is the identity of the callee's body or native, and the counts are the arity the
+/// code assumed. A callee reached by name bakes only the arity, so `ident` is not compared.
+pub const BakedCallee = struct {
+    name: []const u8,
+    ident: usize,
+    inputs: u8,
+    outputs: u8,
+    by_name: bool,
+};
+
+/// Names a word for the interpreter fallback of a compiled call, and nothing else.
+const NameKey = struct {
+    name: []const u8,
+    module: ?*const Module,
+};
+
+const NameKeyContext = struct {
+    pub fn hash(_: NameKeyContext, key: NameKey) u64 {
+        var hasher = std.hash.Wyhash.init(@intFromPtr(key.module));
+        hasher.update(key.name);
+        return hasher.final();
+    }
+
+    pub fn eql(_: NameKeyContext, a: NameKey, b: NameKey) bool {
+        return a.module == b.module and std.mem.eql(u8, a.name, b.name);
+    }
+};
+
 pub const JitDispatchTable = struct {
     entries: std.ArrayListUnmanaged(JitEntry),
     allocator: Allocator,
+
+    /// The entry minted for each durable body, by body address. An entry is never removed, so a
+    /// key must outlive this table. See `Context.durableBodyKey`.
+    body_entries: std.AutoHashMapUnmanaged(usize, BodyEntry) = .{},
+
+    /// The code-less entry for each word a compiled call reaches through the interpreter by name.
+    /// The name is borrowed and must outlive this table.
+    name_entries: std.HashMapUnmanaged(NameKey, u32, NameKeyContext, 80) = .{},
+
+    /// The shared entries whose code baked in the callee a name resolved to. The name is borrowed
+    /// from a durable body.
+    baked_index: std.StringHashMapUnmanaged(std.ArrayListUnmanaged(u32)) = .{},
+
+    /// Buffers of revoked code. A compiled frame below the revoking definition may still return
+    /// into one, so they are freed with the table.
+    retired: std.ArrayListUnmanaged(JitBuffer) = .{},
 
     pub fn init(allocator: Allocator) JitDispatchTable {
         return .{
@@ -97,7 +164,108 @@ pub const JitDispatchTable = struct {
         };
     }
 
+    /// The entry recorded for the body at `key`, if any.
+    pub fn bodyEntry(self: *const JitDispatchTable, key: usize) ?BodyEntry {
+        return self.body_entries.get(key);
+    }
+
+    /// Record `entry` for the body at `key`. The first record for a key stays.
+    pub fn rememberBody(self: *JitDispatchTable, key: usize, entry: BodyEntry) Allocator.Error!void {
+        const gop = try self.body_entries.getOrPut(self.allocator, key);
+        if (!gop.found_existing) gop.value_ptr.* = entry;
+    }
+
+    /// The one code-less entry that names `name` under `module`, minted on first use.
+    ///
+    /// A compiled call to a word whose body does not outlive its frame reaches the interpreter
+    /// through this entry. The fallback looks the word up by name, so the entry carries no
+    /// identity of any one definition and one serves every definition of the name.
+    pub fn nameOnlyId(self: *JitDispatchTable, name: []const u8, module: ?*const Module) Allocator.Error!u32 {
+        const gop = try self.name_entries.getOrPut(self.allocator, .{ .name = name, .module = module });
+        if (gop.found_existing) return gop.value_ptr.*;
+
+        errdefer _ = self.name_entries.remove(.{ .name = name, .module = module });
+
+        const id = try self.assignId(name);
+        self.entries.items[id].defining_module = module;
+        self.entries.items[id].uncompilable = true;
+        gop.value_ptr.* = id;
+        return id;
+    }
+
+    /// Record what the shared code installed under `word_id` baked in, taking ownership of
+    /// `baked`. The names of the callees whose identity it baked are indexed for `revokeBaked`.
+    pub fn setBaked(self: *JitDispatchTable, word_id: u32, baked: []const BakedCallee, lexical_body: usize) Allocator.Error!void {
+        const entry = &self.entries.items[word_id];
+
+        for (baked) |callee| {
+            if (callee.by_name) continue;
+
+            const gop = try self.baked_index.getOrPut(self.allocator, callee.name);
+            if (!gop.found_existing) gop.value_ptr.* = .{};
+
+            for (gop.value_ptr.items) |id| {
+                if (id == word_id) break;
+            } else try gop.value_ptr.append(self.allocator, word_id);
+        }
+
+        self.allocator.free(entry.baked);
+        entry.baked = baked;
+        entry.lexical_body = lexical_body;
+    }
+
+    /// Stop dispatching to shared code that baked in the callee `name` resolved to, because a
+    /// definition now shadows it.
+    ///
+    /// `scope.reaches(entry)` says whether the definition can be seen from the code the entry
+    /// holds. Resolution is lexical, so a definition in an unrelated frame cannot shadow anything
+    /// for that code, and it leaves the entry alone.
+    ///
+    /// The code is retired, not freed, since a compiled frame below the definition may still be
+    /// running it. The entry can compile again, and a definition adopting it will see no code.
+    pub fn revokeBaked(self: *JitDispatchTable, name: []const u8, scope: anytype) void {
+        const ids = self.baked_index.getPtr(name) orelse return;
+
+        var kept: usize = 0;
+        for (ids.items) |id| {
+            const entry = &self.entries.items[id];
+
+            if (entry.code_ptr != null and !scope.reaches(entry.*)) {
+                ids.items[kept] = id;
+                kept += 1;
+                continue;
+            }
+            if (entry.code_ptr == null) continue;
+
+            if (entry.jit_buf) |buf| {
+                self.retired.append(self.allocator, buf) catch {
+                    // The buffer stays attached, so the table frees it.
+                    entry.code_ptr = null;
+                    entry.uncompilable = true;
+                    continue;
+                };
+            }
+
+            entry.code_ptr = null;
+            entry.jit_buf = null;
+            entry.call_count = 0;
+            entry.uncompilable = false;
+            self.allocator.free(entry.baked);
+            entry.baked = &.{};
+        }
+        ids.shrinkRetainingCapacity(kept);
+    }
+
     pub fn deinit(self: *JitDispatchTable) void {
+        var index_it = self.baked_index.valueIterator();
+        while (index_it.next()) |ids| ids.deinit(self.allocator);
+        self.baked_index.deinit(self.allocator);
+
+        for (self.retired.items) |buf| buf.deinit();
+        self.retired.deinit(self.allocator);
+
+        self.body_entries.deinit(self.allocator);
+        self.name_entries.deinit(self.allocator);
         for (self.entries.items) |*entry| {
             if (entry.jit_buf) |buf| {
                 buf.deinit();
@@ -116,6 +284,7 @@ pub const JitDispatchTable = struct {
                 self.allocator.free(q);
             }
             self.allocator.free(entry.local_read_names);
+            self.allocator.free(entry.baked);
         }
         self.entries.deinit(self.allocator);
     }
@@ -183,6 +352,8 @@ pub const JitDispatchTable = struct {
         self.entries.items[word_id].dispatch_pic = null;
         self.allocator.free(self.entries.items[word_id].local_read_names);
         self.entries.items[word_id].local_read_names = &.{};
+        self.allocator.free(self.entries.items[word_id].baked);
+        self.entries.items[word_id].baked = &.{};
 
         // A redefinition invalidates the id its callers hold, and those callers then reach the
         // new definition by name. Left in place, the module would answer with the word replaced.
@@ -511,4 +682,52 @@ test "setCodePtr sets pointer without JitBuffer" {
     try std.testing.expectEqual(fake_ptr, table.get(1).?.code_ptr.?);
     try std.testing.expectEqual(null, table.get(1).?.jit_buf);
     try std.testing.expectEqual(null, table.get(2).?.code_ptr);
+}
+
+const ScopeReaches = struct {
+    reaches_all: bool,
+
+    pub fn reaches(self: ScopeReaches, _: JitEntry) bool {
+        return self.reaches_all;
+    }
+};
+
+fn entryBakingHelper(table: *JitDispatchTable, body: usize) !u32 {
+    var dummy: u8 = 0;
+    const fake_ptr: *const anyopaque = &dummy;
+
+    const id = try table.assignId("caller");
+    table.update(id, fake_ptr, .{ .code = @constCast(fake_ptr), .size = 0 }, 0);
+
+    const baked = try std.testing.allocator.dupe(BakedCallee, &.{
+        .{ .name = "helper", .ident = 1, .inputs = 1, .outputs = 1, .by_name = false },
+    });
+    try table.setBaked(id, baked, body);
+    return id;
+}
+
+test "revokeBaked leaves code alone when the definition cannot be seen from it" {
+    var table = JitDispatchTable.init(std.testing.allocator);
+    defer table.deinit();
+
+    const id = try entryBakingHelper(&table, 0x1000);
+
+    table.revokeBaked("helper", ScopeReaches{ .reaches_all = false });
+    try std.testing.expect(table.get(id).?.code_ptr != null);
+    try std.testing.expectEqual(@as(usize, 0), table.retired.items.len);
+    try std.testing.expectEqual(@as(usize, 1), table.get(id).?.baked.len);
+}
+
+test "revokeBaked retires code once and drops the entry from the index" {
+    var table = JitDispatchTable.init(std.testing.allocator);
+    defer table.deinit();
+
+    const id = try entryBakingHelper(&table, 0x1000);
+
+    table.revokeBaked("helper", ScopeReaches{ .reaches_all = true });
+    try std.testing.expect(table.get(id).?.code_ptr == null);
+    try std.testing.expectEqual(@as(usize, 1), table.retired.items.len);
+
+    table.revokeBaked("helper", ScopeReaches{ .reaches_all = true });
+    try std.testing.expectEqual(@as(usize, 1), table.retired.items.len);
 }

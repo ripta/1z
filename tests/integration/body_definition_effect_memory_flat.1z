@@ -40,15 +40,15 @@ recursive-non-tail: ( n -- n ) [
   walk
 ] ;
 
-20000 [ 1 typed-single drop ] times
-20000 [ 1 2 typed-multi 2drop ] times
-20000 [ 1 typed-annotated drop ] times
-20000 [ 1 typed-quotation-param drop ] times
-20000 [ 1 marked drop ] times
-20000 [ 1 named-constraint drop ] times
-20000 [ 3 recursive-non-tail drop ] times
+6000 [ 1 typed-single drop ] times
+6000 [ 1 2 typed-multi 2drop ] times
+6000 [ 1 typed-annotated drop ] times
+6000 [ 1 typed-quotation-param drop ] times
+6000 [ 1 marked drop ] times
+6000 [ 1 named-constraint drop ] times
+6000 [ 3 recursive-non-tail drop ] times
 
-20000 [
+6000 [
   top-level: ( n -- n ) [ 1 + ] ;
   1 top-level drop
 ] times

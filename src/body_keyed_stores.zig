@@ -6,18 +6,22 @@ const CarryableScopeGate = @import("carryable_scope_gate.zig").CarryableScopeGat
 const NestedNameCache = @import("nested_name_cache.zig").NestedNameCache;
 const LexicalParentMap = @import("lexical_parent_map.zig").LexicalParentMap;
 const InlineRegionTable = @import("inline_region_table.zig").InlineRegionTable;
+const InlineExpansionCache = @import("inline_expansion_cache.zig").InlineExpansionCache;
 const arena_origin = @import("arena_origin.zig");
 
-/// The six stores keyed by the address of a parsed body, as one layer.
+/// The seven stores keyed by the address of a parsed body, as one layer.
 ///
-/// Each store is write-once and lock-free to read. An entry is never removed, so a key must outlive
-/// the layer that holds it. The root's layer lives for the process. A context that owns its loads
+/// Six of the stores are write-once and lock-free to read. The seventh, the inline expansion
+/// cache, is read and written under the shared write lock, and holds several entries for a key. See
+/// its own doc. In every store an entry is never changed or removed, so a key must outlive the
+/// layer that holds it. The root's layer lives for the process. A context that owns its loads
 /// has a layer of its own, linked to its parent's, and the layer dies with that context. A body
 /// that context parses lands in its layer, so no key of its arena can reach a layer that outlives
 /// it. Every other context aliases the set of its nearest load owner.
 ///
 /// A reader probes its own layer and then each parent's. A writer checks the whole chain before it
-/// inserts, so the first write for a key wins across layers.
+/// inserts, so the first write for a key wins across layers. The expansion cache applies the same
+/// rule to each set of answers an expansion depends on.
 ///
 /// A context must not outlive the layer it aliases. Every task under a load owner is reaped before
 /// the owner's teardown.
@@ -48,6 +52,10 @@ pub const BodyKeyedStores = struct {
 
     /// The inlined runs of expanded bodies, read on the error path to put an erased frame back.
     inline_regions: InlineRegionTable,
+
+    /// The expanded body of each parsed body whose definition calls an `inline` word, so a body
+    /// defined again reuses the one expansion. Read and written under the shared write lock.
+    inline_expansions: InlineExpansionCache,
 
     /// A set linked under `parent`, or the base set when `parent` is null. `parent` must outlive
     /// the set.
@@ -93,12 +101,18 @@ pub const BodyKeyedStores = struct {
             if (parent) |p| &p.inline_regions else null,
         );
 
+        self.inline_expansions = InlineExpansionCache.init(
+            allocator,
+            if (parent) |p| &p.inline_expansions else null,
+        );
+
         return self;
     }
 
     pub fn destroy(self: *BodyKeyedStores) void {
         const allocator = self.allocator;
 
+        self.inline_expansions.deinit();
         self.inline_regions.deinit();
         self.lexical_parents.deinit();
         self.nested_name_cache.deinit();
@@ -119,6 +133,11 @@ pub const BodyKeyedStores = struct {
                 return arena_origin.contains(a, key);
             }
         };
+
+        var expansion_keys = self.inline_expansions.map.keyIterator();
+        while (expansion_keys.next()) |key| {
+            if (Probe.on(arena, key.*)) return true;
+        }
 
         return self.quotation_stamp_store.map.anyKey(arena, Probe.on) or
             self.quotation_source_store.map.anyKey(arena, Probe.on) or

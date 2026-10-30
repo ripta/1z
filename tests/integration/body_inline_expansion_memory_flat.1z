@@ -1,0 +1,30 @@
+\ Bounded-memory regression for a helper defined inside a word body that calls an `inline` word.
+\
+\ The words below are defined before `add-one`, so their helpers still hold plain calls to it when
+\ each call into the word defines them. Expansion built a new body for the helper on every
+\ definition and listed it for teardown, which exhausted the cap in the `.flags` sidecar. A body
+\ defined again now reuses the expansion of its first definition, so every loop stays flat.
+
+single: ( n -- n ) [
+  helper: ( n -- n ) [ add-one { 1 2 } drop add-one ] ;
+  helper
+] ;
+
+nested: ( n -- n ) [
+  helper: ( n -- n ) [ [ add-one { 1 2 } drop ] call add-one ] ;
+  helper
+] ;
+
+captures: ( n -- n ) [
+  x: swap ;
+  helper: ( n -- n ) [ add-one x + ] ;
+  1 helper
+] ;
+
+add-one: ( n -- n ) const inline [ 1 + ] ;
+
+40000 [ 1 single drop ] times
+40000 [ 1 nested drop ] times
+3000 [ 0 captures drop ] times
+
+"flat" print-line

@@ -1,0 +1,34 @@
+\ A helper that every call into its word defines again must compute the same results however many
+\ calls share its compiled body. Each loop below runs long enough to cross the compile threshold.
+use "testing" ;
+
+sum-pure: ( count -- n ) [
+  inc: ( n -- n ) [ 3 + ] ;
+  0 swap [ inc ] times
+] ;
+
+sum-rebound: ( count -- n ) [
+  step: ( n -- n ) [ 1 + ] ;
+  step: ( n -- n ) [ 2 + ] ;
+  0 swap [ step ] times
+] ;
+
+sum-captured: ( k -- n ) [
+  x: swap ;
+  add-x: ( n -- n ) [ x + ] ;
+  0 120 [ add-x ] times
+] ;
+
+"a helper without locals" test-section
+150 sum-pure 450 "first call" assert=
+150 sum-pure 450 "second call, reusing the compiled body" assert=
+5 sum-pure 15 "a call too short to compile it" assert=
+
+"a helper defined twice in one call" test-section
+150 sum-rebound 300 "the later definition wins" assert=
+150 sum-rebound 300 "and again in the next call" assert=
+
+"a helper over a local that differs per call" test-section
+1 sum-captured 120 "first local" assert=
+2 sum-captured 240 "second local" assert=
+3 sum-captured 360 "third local" assert=

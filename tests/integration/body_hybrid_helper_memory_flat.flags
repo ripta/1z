@@ -1,0 +1,4 @@
+--compile=hybrid
+--max-memory=3M
+--no-show-stack
+--no-jit

@@ -1,0 +1,25 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+=== a helper without locals ===
+Stack: [ ]
+PASS: first call
+Stack: [ ]
+PASS: second call, reusing the compiled body
+Stack: [ ]
+PASS: a call too short to compile it
+Stack: [ ]
+=== a helper defined twice in one call ===
+Stack: [ ]
+PASS: the later definition wins
+Stack: [ ]
+PASS: and again in the next call
+Stack: [ ]
+=== a helper over a local that differs per call ===
+Stack: [ ]
+PASS: first local
+Stack: [ ]
+PASS: second local
+Stack: [ ]
+PASS: third local
+Stack: [ ]

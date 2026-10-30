@@ -1,0 +1,5 @@
+@raw
+run
+--compile=eager
+--trace-jit
+tests/integration/body_local_named_global_compile_once.1z

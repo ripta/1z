@@ -1,0 +1,23 @@
+\ Bounded-memory regression for a local that has the name of a global word.
+\
+\ `bump` is defined inside `user` and calls the global `count`, so the code compiled for it bakes that
+\ word in. `other` binds a local named `count` in its own body. That frame is unrelated to `bump`,
+\ since a body's names resolve lexically, so the local cannot shadow anything for it. Shared code was
+\ revoked and compiled again whenever any frame defined a name it had baked in, which left a code
+\ buffer behind on every call. The loop below stays flat now.
+
+count: ( n -- n ) [ 1 + ] ;
+
+user: ( -- n ) [
+  bump: ( n -- n ) [ count 0 + ] ;
+  0 101 [ bump ] times
+] ;
+
+other: ( k -- n ) [
+  count: swap ;
+  count
+] ;
+
+300 [ user drop 1 other drop ] times
+
+"flat" print-line

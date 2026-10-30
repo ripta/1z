@@ -1,0 +1,17 @@
+\ A local with the name of a global word must not make code compiled for an unrelated helper compile
+\ again. `bump` calls the global `count`. `other` binds a local named `count` in its own body, which
+\ `bump` cannot see. The trace shows `bump` compiling once however many times `other` runs.
+
+count: ( n -- n ) [ 1 + ] ;
+
+user: ( -- n ) [
+  bump: ( n -- n ) [ count 0 + ] ;
+  0 3 [ bump ] times
+] ;
+
+other: ( k -- n ) [
+  count: swap ;
+  count
+] ;
+
+20 [ user drop 1 other drop ] times

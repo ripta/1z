@@ -1,0 +1,3 @@
+--compile=hybrid
+--no-show-stack
+--no-jit

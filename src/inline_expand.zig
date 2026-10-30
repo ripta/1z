@@ -19,6 +19,95 @@ const container_backing = @import("container_backing.zig");
 const markers_mod = @import("primitives/markers.zig");
 const Context = @import("context.zig").Context;
 const InlineRegion = @import("inline_region_table.zig").InlineRegion;
+const cache_mod = @import("inline_expansion_cache.zig");
+const Answer = cache_mod.Answer;
+const Consult = cache_mod.Consult;
+
+/// The questions one expansion asked, for the cache to replay.
+pub const Recorder = struct {
+    consults: std.ArrayListUnmanaged(Consult) = .{},
+
+    /// Cleared when an answer cannot be compared later, so the expansion is not cached.
+    cacheable: bool = true,
+
+    pub fn deinit(self: *Recorder, allocator: Allocator) void {
+        self.consults.deinit(allocator);
+    }
+
+    fn note(self: *Recorder, allocator: Allocator, op: Instruction.Op, phase: Consult.Phase, answer: Answer) void {
+        self.consults.append(allocator, .{ .op = op, .phase = phase, .answer = answer }) catch {
+            self.cacheable = false;
+        };
+    }
+};
+
+/// The definition a call instruction targets, or null when it resolves to nothing.
+fn targetOf(ctx: *Context, op: Instruction.Op) ?WordDefinition {
+    return switch (op) {
+        .push_literal => null,
+        .call_word => |name| ctx.inlineCallTargetLocked(name),
+        .call_word_direct, .call_word_module => |slot| dict_mod.loadSlot(slot).*,
+    };
+}
+
+/// What the pass reads from `callee`. Null when the answer cannot be compared later: a value
+/// binding carries no identity to compare, and a closure-owned body can die with its frame, so
+/// its address could name another body by then.
+fn resolveAnswer(callee: ?WordDefinition) ?Answer {
+    const def = callee orelse return .{ .kind = .unresolved };
+    if (!shouldInline(def)) return .{ .kind = .plain };
+
+    return switch (def.action) {
+        .compound => |instrs| blk: {
+            if (def.body_owner != null) break :blk null;
+
+            const file = def.source_file orelse "";
+            break :blk .{
+                .kind = .body,
+                .body_ptr = @intFromPtr(instrs.ptr),
+                .body_len = instrs.len,
+                .name_ptr = @intFromPtr(def.name.ptr),
+                .name_len = def.name.len,
+                .file_ptr = @intFromPtr(file.ptr),
+                .file_len = file.len,
+            };
+        },
+        .literal => null,
+        .native, .host_callback => .{ .kind = .plain },
+    };
+}
+
+fn relocateAnswer(ctx: *const Context, op: Instruction.Op) Answer {
+    const name = switch (op) {
+        .call_word => |n| n,
+        .call_word_module => return .{ .kind = .unbound },
+        .push_literal, .call_word_direct => return .{ .kind = .plain },
+    };
+    const slot = ctx.preResolveCallTargetLocked(name) orelse return .{ .kind = .unbound };
+    return .{ .kind = .bound, .slot = @intFromPtr(slot) };
+}
+
+/// Whether every question `entry` recorded still gets the answer it got.
+pub fn stillHolds(
+    ctx: *Context,
+    defining: []const u8,
+    caller_file: []const u8,
+    source_len: usize,
+    entry: *const cache_mod.Entry,
+) bool {
+    if (entry.source_len != source_len) return false;
+    if (!std.mem.eql(u8, entry.defining, defining)) return false;
+    if (!std.mem.eql(u8, entry.caller_file, caller_file)) return false;
+
+    for (entry.consults) |consult| {
+        const now: ?Answer = switch (consult.phase) {
+            .resolve => resolveAnswer(targetOf(ctx, consult.op)),
+            .relocate => relocateAnswer(ctx, consult.op),
+        };
+        if (now == null or !std.meta.eql(now.?, consult.answer)) return false;
+    }
+    return true;
+}
 
 /// Whether this pass expands calls to `def`. The trigger is the marker and nothing else.
 pub fn shouldInline(def: WordDefinition) bool {
@@ -66,12 +155,14 @@ pub fn expandBody(
     defining: []const u8,
     caller_file: []const u8,
     body: []const Instruction,
+    rec: *Recorder,
 ) Allocator.Error!?[]const Instruction {
     var ex: Expander = .{
         .ctx = ctx,
         .defining = defining,
         .caller_file = caller_file,
         .alloc = ctx.quotationAllocator(),
+        .rec = rec,
     };
     defer ex.open.deinit(ctx.allocator);
     defer ex.regions.deinit(ctx.allocator);
@@ -155,6 +246,7 @@ const Expander = struct {
     defining: []const u8,
     caller_file: []const u8,
     alloc: Allocator,
+    rec: *Recorder,
     out: std.ArrayListUnmanaged(Instruction) = .{},
 
     /// The bodies currently being copied, innermost last, identified by their instruction-array
@@ -176,11 +268,14 @@ const Expander = struct {
     /// The definition a call instruction targets, or null when it resolves to nothing. A miss is
     /// not an error: the call stays a call and resolves at run time as it does today.
     fn target(self: *const Expander, op: Instruction.Op) ?WordDefinition {
-        return switch (op) {
-            .push_literal => null,
-            .call_word => |name| self.ctx.inlineCallTargetLocked(name),
-            .call_word_direct, .call_word_module => |slot| dict_mod.loadSlot(slot).*,
-        };
+        const callee = targetOf(self.ctx, op);
+
+        if (resolveAnswer(callee)) |answer| {
+            self.rec.note(self.ctx.allocator, op, .resolve, answer);
+        } else {
+            self.rec.cacheable = false;
+        }
+        return callee;
     }
 
     /// What this pass would put in place of a call to `op`'s target, or null when it would put
@@ -353,6 +448,13 @@ const Expander = struct {
             return true;
         }
 
+        switch (instr.op) {
+            .call_word, .call_word_module => {
+                self.rec.note(self.ctx.allocator, instr.op, .relocate, relocateAnswer(self.ctx, instr.op));
+            },
+            .push_literal, .call_word_direct => {},
+        }
+
         const op = relocateOp(self.ctx, instr.op) orelse return false;
         try self.out.append(self.alloc, .{ .op = op, .line = instr.line, .column = instr.column });
         return true;
@@ -497,7 +599,15 @@ var const_inline = [_]*Marker{
 };
 
 /// Define `name` over `body` directly, bypassing `;` so a test names an exact instruction array.
+///
+/// The body is copied onto the context's arena, which is where a parsed body lives. A body built on
+/// the test's stack could not be a key for the expansion cache.
 fn define(ctx: *Context, file: []const u8, name: []const u8, body: []const Instruction, marked: bool) !void {
+    try defineBody(ctx, file, name, try ctx.arena.allocator().dupe(Instruction, body), marked);
+}
+
+/// `define` over `body` as given, so two definitions can share one array.
+fn defineBody(ctx: *Context, file: []const u8, name: []const u8, body: []const Instruction, marked: bool) !void {
     try ctx.defineWord(name, .{
         .name = name,
         .source_file = file,
@@ -678,6 +788,58 @@ test "a call_word_direct target is expanded like any other" {
     }, false);
 
     try expectOps(&ctx, "quadruple", &.{ "#", "*" });
+}
+
+test "a body defined again reuses its expansion until a word it called becomes inline" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+    ctx.current_source = here;
+
+    try define(&ctx, here, "doubled", &.{
+        .{ .op = .{ .push_literal = .{ .fixnum = 2 } }, .line = 1 },
+        .{ .op = .{ .call_word = "*" }, .line = 1 },
+    }, true);
+
+    // Not `inline`, so a call to it stays a call, and the expansion still depends on that answer.
+    try define(&ctx, here, "bump", &.{
+        .{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 2 },
+        .{ .op = .{ .call_word = "+" }, .line = 2 },
+    }, false);
+
+    const caller = try ctx.arena.allocator().dupe(Instruction, &.{
+        .{ .op = .{ .call_word = "doubled" }, .line = 3 },
+        .{ .op = .{ .call_word = "bump" }, .line = 3 },
+    });
+
+    try defineBody(&ctx, here, "first", caller, false);
+    const first = ctx.lookupWord("first").?.action.compound;
+    try expectOps(&ctx, "first", &.{ "#", "*", "bump" });
+
+    // The same body defined again gets the same array, so nothing new is allocated or registered.
+    try defineBody(&ctx, here, "first", caller, false);
+    const second = ctx.lookupWord("first").?.action.compound;
+    try testing.expectEqual(first.ptr, second.ptr);
+
+    // `bump` becomes `inline`, which changes what the call reaches. The old expansion no longer
+    // stands for this body.
+    try define(&ctx, here, "bump", &.{
+        .{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 2 },
+        .{ .op = .{ .call_word = "+" }, .line = 2 },
+    }, true);
+
+    try defineBody(&ctx, here, "first", caller, false);
+    const third = ctx.lookupWord("first").?.action.compound;
+    try testing.expect(third.ptr != first.ptr);
+    try expectOps(&ctx, "first", &.{ "#", "*", "#", "+" });
+
+    // The new expansion is recorded beside the old one, so it is reused in turn.
+    try defineBody(&ctx, here, "first", caller, false);
+    try testing.expectEqual(third.ptr, ctx.lookupWord("first").?.action.compound.ptr);
+    try testing.expectEqual(@as(usize, 2), ctx.body_stores.inline_expansions.versionCount(@intFromPtr(caller.ptr)));
+
+    // The name being defined decides which copies decline, so another name gets its own.
+    try defineBody(&ctx, here, "other", caller, false);
+    try testing.expect(ctx.lookupWord("other").?.action.compound.ptr != third.ptr);
 }
 
 test "an unmarked word is left alone" {

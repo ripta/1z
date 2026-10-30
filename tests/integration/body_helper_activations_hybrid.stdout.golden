@@ -1,0 +1,14 @@
+=== a callee that a later call binds in the frame ===
+PASS: a call that runs the helper only after the frame word exists
+PASS: the same call after another call compiled the helper
+=== a helper without locals ===
+PASS: first call
+PASS: second call, reusing the compiled body
+PASS: a call too short to compile it
+=== a helper defined twice in one call ===
+PASS: the later definition wins
+PASS: and again in the next call
+=== a helper over a local that differs per call ===
+PASS: first local
+PASS: second local
+PASS: third local

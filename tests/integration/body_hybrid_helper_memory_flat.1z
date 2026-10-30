@@ -1,0 +1,37 @@
+\ Bounded-memory regression for hybrid compilation of helpers defined inside a word body.
+\
+\ Hybrid mode gave every definition its own dispatch entry. A helper that every call into its word
+\ defines again therefore never reached the compile threshold, and each call left an entry behind.
+\ A sibling that called a helper which dies with its frame left another entry per call, and
+\ compiling it left a code buffer. The `forward` loop below exhausted the 3 MB cap in the `.flags`
+\ sidecar. Definitions of one body now share an entry, so every loop stays flat.
+
+hot-pure: ( n -- n ) [
+  inc: ( n -- n ) [ 1 + ] ;
+  150 [ 1 inc drop ] times
+  1 inc
+] ;
+
+forward: ( n -- n ) [
+  x: swap ;
+  caller: ( n -- n ) [ helper ] ;
+  helper: ( n -- n ) [ x + ] ;
+  101 [ 1 caller drop ] times
+  1 caller
+] ;
+
+pinned-and-frame-owned: ( n -- n ) [
+  x: swap ;
+  acc: [ ] make-vector ;
+  caller: ( n -- n ) [ pinned helper ] ;
+  pinned: ( n -- n ) [ acc #len + ] ;
+  helper: ( n -- n ) [ x + ] ;
+  150 [ 1 caller drop ] times
+  1 caller
+] ;
+
+200 [ 0 hot-pure drop ] times
+2500 [ 0 forward drop ] times
+20 [ 0 pinned-and-frame-owned drop ] times
+
+"flat" print-line

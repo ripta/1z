@@ -45,6 +45,10 @@ const pic_mod = @import("pic.zig");
 const PicTable = pic_mod.PicTable;
 const PolymorphicCache = pic_mod.PolymorphicCache;
 const JitDispatchTable = @import("jit_dispatch.zig").JitDispatchTable;
+const JitEntry = @import("jit_dispatch.zig").JitEntry;
+const JitBodyEntry = @import("jit_dispatch.zig").BodyEntry;
+const JitBakedCallee = @import("jit_dispatch.zig").BakedCallee;
+const InlineExpansionEntry = @import("inline_expansion_cache.zig").Entry;
 const StackSnapshot = @import("stack_snapshot.zig").StackSnapshot;
 const CatchSnapshots = @import("stack_snapshot.zig").CatchSnapshots;
 const ir_codegen = @import("ir_codegen.zig");
@@ -587,6 +591,15 @@ fn computeExecFlagsWithMayDefine(def: WordDefinition, body_may_define: bool) dic
 fn markersContainGeneric(markers: []const *value_mod.Marker) bool {
     for (markers) |mk| {
         if (markers_mod.isGenericMarker(mk)) return true;
+    }
+    return false;
+}
+
+/// Whether a definition's marker slice carries the `const` marker, which bars defining the name
+/// again in any scope.
+fn markersContainConst(markers: []const *value_mod.Marker) bool {
+    for (markers) |mk| {
+        if (markers_mod.isConstMarker(mk)) return true;
     }
     return false;
 }
@@ -3116,6 +3129,16 @@ pub const Context = struct {
         if (closure_body_registry.isLive(key)) return;
 
         std.debug.panic("body-keyed store write for key 0x{x} outside every allowed origin", .{key});
+    }
+
+    /// Debug-only. `assertBodyKeyOrigin` for a table that lives with a context, which also admits
+    /// the static data of the executable. That data lives for the process, and the unit tests build
+    /// their bodies from it.
+    fn assertDurableBodyKey(layer_owner: *const Context, key: usize) void {
+        if (comptime builtin.mode != .Debug) return;
+        if (arena_origin.inLoadedImage(key)) return;
+
+        assertBodyKeyOrigin(layer_owner, key);
     }
 
     /// Debug-only. Assert that a frame key a site copies by reference outlives the copy.
@@ -5704,7 +5727,34 @@ pub const Context = struct {
         // `parse_stamp_source` holds the invoking one.
         const caller_file = self.parse_stamp_source orelse self.current_source;
 
-        const expanded = try inline_expand.expandBody(self, name, caller_file, body) orelse return;
+        // A body defined again reuses its earlier expansion while the dictionary still answers
+        // every question that expansion asked. The side effects below belong to the expanded array,
+        // so they ran when it was built and run only then.
+        const target = self.stateTarget();
+        const keyed = target.owns_loads and body.len != 0;
+        if (keyed) {
+            const Replay = struct {
+                ctx: *Context,
+                name: []const u8,
+                caller_file: []const u8,
+                len: usize,
+
+                pub fn holds(replay: @This(), entry: *const InlineExpansionEntry) bool {
+                    return inline_expand.stillHolds(replay.ctx, replay.name, replay.caller_file, replay.len, entry);
+                }
+            };
+
+            const replay = Replay{ .ctx = self, .name = name, .caller_file = caller_file, .len = body.len };
+            if (target.body_stores.inline_expansions.firstMatch(@intFromPtr(body.ptr), replay)) |entry| {
+                def.action = .{ .compound = entry.expanded };
+                return;
+            }
+        }
+
+        var rec: inline_expand.Recorder = .{};
+        defer rec.deinit(self.allocator);
+
+        const expanded = try inline_expand.expandBody(self, name, caller_file, body, &rec) orelse return;
         def.action = .{ .compound = expanded };
 
         // All three are keyed on the array's address, so the new one starts with none. The source
@@ -5717,6 +5767,20 @@ pub const Context = struct {
         try self.stampQuotationBodySource(expanded);
         try self.cacheQuotationBodyNestedNames(expanded);
         try self.recordLexicalAlias(expanded, body);
+
+        if (keyed and rec.cacheable) {
+            assertDurableBodyKey(target, @intFromPtr(body.ptr));
+
+            // A failed copy only costs the reuse.
+            target.body_stores.inline_expansions.put(
+                @intFromPtr(body.ptr),
+                body.len,
+                expanded,
+                name,
+                caller_file,
+                rec.consults.items,
+            ) catch {};
+        }
     }
 
     /// The definition a bare-word call in a body being defined here would reach, for the inline
@@ -6187,6 +6251,21 @@ pub const Context = struct {
             if (same_scope_existing) |displaced| {
                 if (ownedBinding(displaced)) |v| container_backing.releaseValue(v);
             }
+            // Code shared by several definitions may have baked in the word this name used to
+            // reach. It can no longer be told apart from a call to the one just defined.
+            if (self.isTransientLexicalFrame(top_index)) {
+                const Reach = struct {
+                    ctx: *const Context,
+                    frame: usize,
+
+                    pub fn reaches(reach: @This(), entry: JitEntry) bool {
+                        return reach.ctx.frameAdmits(reach.frame, entry.lexical_body);
+                    }
+                };
+
+                self.jit_dispatch.revokeBaked(name, Reach{ .ctx = self, .frame = top_index });
+            }
+
             if (was_empty and self.isTransientLexicalFrame(top_index)) {
                 // `removeWord` clears the flag whenever it empties a frame.
                 std.debug.assert(!self.local_frame_counted.items[top_index]);
@@ -6328,8 +6407,10 @@ pub const Context = struct {
 
     /// Attempt JIT compilation of a newly defined word. Silently ignores
     /// all errors so the word falls back to the interpreter.
-    fn tryAutoCompile(self: *Context, name: []const u8, def: WordDefinition) void {
+    fn tryAutoCompile(self: *Context, name: []const u8, definition: WordDefinition) void {
         if (comptime is_freestanding) return;
+
+        var def = definition;
 
         const instrs = switch (def.action) {
             .compound => |i| i,
@@ -6351,12 +6432,27 @@ pub const Context = struct {
 
         if (stack_effect_mod.hasAnyRowVariable(effect.*)) return;
 
+        // An earlier definition of this body already has an entry. Its code serves this definition,
+        // so compiling again would only replace buffers that frames may still be running.
+        var reused = false;
+        if (def.word_id == null) {
+            if (self.reusableBodyId(name, def)) |id| {
+                if (!self.adoptBodyId(name, def, id)) return;
+
+                const entry = self.jit_dispatch.get(id).?;
+                if (entry.code_ptr != null or entry.uncompilable) return;
+
+                def.word_id = id;
+                reused = true;
+            }
+        }
+
         // A member compiled alone calls its partner natively, so the cycle nests one native frame
         // per hop. The whole group is compiled together so each member's tail call is a hop.
         //
         // A partner that already has code is left alone. Its frames may be live below this compile,
         // and replacing its code unmaps the buffer they would return into.
-        if (call_graph_mod.hasTailCallToGroupCandidate(self, instrs, name, effect.inputs.len, effect.outputs.len)) {
+        if (!reused and call_graph_mod.hasTailCallToGroupCandidate(self, instrs, name, effect.inputs.len, effect.outputs.len)) {
             if (call_graph_mod.detectMutualGroup(self, name)) |members| {
                 defer self.allocator.free(members);
                 if (!self.groupPartnerHasCode(name, members) and (self.compileMutualGroup(members) catch false)) return;
@@ -6390,12 +6486,50 @@ pub const Context = struct {
         // reach the check below.
         for (members) |member| try checkWordIdSlot(self, member);
 
+        // A body the frame frees with the call has no entry to give out. Its caller stays
+        // interpreted.
+        for (members) |member| {
+            const member_def = self.lookupWord(member) orelse continue;
+            if (member_def.frame_owned) return false;
+        }
+
+        // A group compiled for earlier definitions of these bodies already has its code. Compiling
+        // again would replace buffers that frames may still be running, so every member takes the
+        // existing entry or none does.
+        var shared: usize = 0;
+        var lacking: usize = 0;
+        for (members) |member| {
+            const member_def = self.lookupWord(member) orelse continue;
+            if (member_def.word_id != null) continue;
+
+            lacking += 1;
+            const id = self.reusableBodyId(member, member_def) orelse continue;
+            const entry = self.jit_dispatch.get(id) orelse continue;
+            if (entry.code_ptr != null) shared += 1;
+        }
+        if (shared != 0) {
+            if (shared != lacking) return false;
+
+            for (members) |member| {
+                const member_def = self.lookupWord(member) orelse continue;
+                if (member_def.word_id != null) continue;
+
+                const id = self.reusableBodyId(member, member_def).?;
+                if (!self.adoptBodyId(member, member_def, id)) return false;
+            }
+            return true;
+        }
+
         // Every member's code bakes its partners' ids, so all of them exist before any compiles.
         for (members) |member| {
             const member_def = self.lookupWord(member) orelse continue;
             if (member_def.word_id != null) continue;
 
-            const id = self.mintJitId(member, member_def) catch return false;
+            const id = if (self.reusableBodyId(member, member_def)) |existing| existing else blk: {
+                const minted = self.mintJitId(member, member_def) catch return false;
+                self.rememberBodyId(member_def, minted);
+                break :blk minted;
+            };
             if (self.jit_dispatch.getMut(id)) |em| em.stack_effect = member_def.stack_effect;
             try propagateWordId(self, member, id);
         }
@@ -6435,7 +6569,12 @@ pub const Context = struct {
         word: ir_codegen.CompiledWord,
         pic_snapshot: ?*PicTable,
 
+        /// The callees the code baked in, recorded only for code that definitions share. Owned
+        /// until installed.
+        baked: []const JitBakedCallee = &.{},
+
         fn discard(self: CompiledBody, ctx: *Context) void {
+            ctx.allocator.free(self.baked);
             self.word.jit_buf.deinit();
             var word = self.word;
             word.freeLocalReadNames();
@@ -6459,7 +6598,15 @@ pub const Context = struct {
         const input_count: u8 = @intCast(effect.concreteInputCount());
         const output_count: u8 = @intCast(effect.concreteOutputCount());
 
-        var resolver_ctx = ResolverState{ .context = self };
+        var baked: std.ArrayListUnmanaged(JitBakedCallee) = .{};
+        defer baked.deinit(self.allocator);
+
+        var resolver_ctx = ResolverState{
+            .context = self,
+            .self_body = instrs,
+            .group = mutual_group,
+            .baked = if (self.durableBodyKey(def) != null and resolvesInTransientFrame(self, name)) &baked else null,
+        };
         const resolver = ir_codegen.WordResolver{
             .resolve = &resolveWordForDispatch,
             .user_data = @ptrCast(&resolver_ctx),
@@ -6478,7 +6625,21 @@ pub const Context = struct {
             }
             return null;
         };
-        return .{ .word = word, .pic_snapshot = pic_snapshot };
+
+        // A record that could not be kept would let the code run in a scope it was never checked
+        // for, so the code is dropped.
+        if (resolver_ctx.baked_failed) {
+            const dropped: CompiledBody = .{ .word = word, .pic_snapshot = pic_snapshot };
+            dropped.discard(self);
+            return null;
+        }
+
+        const owned = baked.toOwnedSlice(self.allocator) catch {
+            const dropped: CompiledBody = .{ .word = word, .pic_snapshot = pic_snapshot };
+            dropped.discard(self);
+            return null;
+        };
+        return .{ .word = word, .pic_snapshot = pic_snapshot, .baked = owned };
     }
 
     /// Install compiled code under the word's id, minting one when it has none.
@@ -6508,6 +6669,20 @@ pub const Context = struct {
             propagateWordId(self, name, new_id) catch {};
             break :blk new_id;
         };
+
+        self.rememberBodyId(def, final_id);
+
+        // The record must be kept, since it is what revokes the code when a definition shadows a
+        // callee it baked in.
+        if (body.baked.len != 0) {
+            self.jit_dispatch.setBaked(final_id, body.baked, @intFromPtr(instrs.ptr)) catch {
+                self.allocator.free(body.baked);
+                self.jit_dispatch.invalidate(final_id);
+                return;
+            };
+        } else {
+            self.allocator.free(body.baked);
+        }
 
         self.jit_dispatch.replacePicSnapshot(final_id, body.pic_snapshot);
         if (self.jit_dispatch.getMut(final_id)) |em| {
@@ -6571,7 +6746,14 @@ pub const Context = struct {
 
         if (def.word_id != null) return;
 
+        // Calls accumulate on the entry an earlier definition of this body minted, so a hot helper
+        // that every call into its word defines again can still reach the compile threshold.
+        if (self.reusableBodyId(name, def)) |id| {
+            if (self.adoptBodyId(name, def, id)) return;
+        }
+
         const new_id = self.mintJitId(name, def) catch return;
+        self.rememberBodyId(def, new_id);
         if (self.jit_dispatch.getMut(new_id)) |em| em.stack_effect = def.stack_effect;
 
         // A refusal leaves the word without an id, so it runs interpreted.
@@ -7085,6 +7267,100 @@ pub const Context = struct {
         const id = try self.jit_dispatch.assignId(name);
         if (self.jit_dispatch.getMut(id)) |em| em.defining_module = def.source_module;
         return id;
+    }
+
+    /// The body of `def` when one JIT entry can serve every definition that shares it, or null.
+    ///
+    /// This is the rule the stamp store enforces. The body must be a parsed slice that the arena
+    /// of the state target's load owner holds, so the key outlives the table that records it. A
+    /// closure body, a frame-owned body, and a `once` guard are each made for one definition, so
+    /// none can be shared. A body must also carry the source stamp the parser and the expansion
+    /// pass give every body they place on a load owner's arena. That stamp is the proof that the
+    /// address outlives this table, since the other builders of word bodies leave none.
+    fn durableBodyKey(self: *Context, def: WordDefinition) ?[]const Instruction {
+        const instrs = switch (def.action) {
+            .compound => |i| i,
+            .native, .host_callback, .literal => return null,
+        };
+        if (instrs.len == 0) return null;
+        if (def.body_owner != null or def.frame_owned or def.once_cell != null) return null;
+        if (!self.stateTarget().owns_loads) return null;
+
+        // The parser and the expansion pass stamp every body they place on a load owner's arena,
+        // under the same gate. A body with no stamp was built some other way, such as by a
+        // generator or a host, and nothing says its address outlives this table.
+        if (self.quotationBodySource(instrs) == null) return null;
+        return instrs;
+    }
+
+    fn bodyEntryRecord(id: u32, instrs: []const Instruction, def: WordDefinition) JitBodyEntry {
+        return .{
+            .id = id,
+            .len = instrs.len,
+            .effect = def.stack_effect,
+            .markers_ptr = @intFromPtr(def.markers.ptr),
+            .markers_len = def.markers.len,
+            .module = def.source_module,
+        };
+    }
+
+    /// The id of the entry an earlier definition of `def`'s body minted, when that entry stands for
+    /// this definition as well.
+    ///
+    /// Compiled code and the entry record the body, the name the fallback looks up, the declared
+    /// effect, the markers, and the defining module. Interned effects and marker lists compare by
+    /// address. A definition that differs in any of them gets an entry of its own.
+    ///
+    /// The source file is not compared. A parsed body is stamped with its file when it is parsed,
+    /// and the definition reads the file from that stamp, so one body has one file. The definition
+    /// the compiler is handed can predate the file being filled in, so comparing it would refuse
+    /// the same body at random.
+    fn reusableBodyId(self: *Context, name: []const u8, def: WordDefinition) ?u32 {
+        const instrs = self.durableBodyKey(def) orelse return null;
+        const rec = self.jit_dispatch.bodyEntry(@intFromPtr(instrs.ptr)) orelse return null;
+
+        const want = bodyEntryRecord(rec.id, instrs, def);
+        if (!std.meta.eql(rec, want)) return null;
+
+        const entry = self.jit_dispatch.get(rec.id) orelse return null;
+        if (!std.mem.eql(u8, entry.word_name, name)) return null;
+        if (!self.bakedHolds(entry.baked)) return null;
+
+        return rec.id;
+    }
+
+    /// Whether this scope resolves every callee that shared code baked in to what it resolved to
+    /// when the code compiled. A callee reached by name must still have the arity the code
+    /// assumed, if it exists yet.
+    fn bakedHolds(self: *Context, baked: []const JitBakedCallee) bool {
+        for (baked) |b| {
+            const callee = self.lookupWord(b.name) orelse {
+                if (b.by_name) continue;
+                return false;
+            };
+
+            const effect = callee.stack_effect orelse return false;
+            if (effect.concreteInputCount() != b.inputs or effect.concreteOutputCount() != b.outputs) return false;
+            if (!b.by_name and ResolverState.identOf(callee) != b.ident) return false;
+        }
+        return true;
+    }
+
+    fn rememberBodyId(self: *Context, def: WordDefinition, id: u32) void {
+        const instrs = self.durableBodyKey(def) orelse return;
+        assertDurableBodyKey(self.stateTarget(), @intFromPtr(instrs.ptr));
+        self.jit_dispatch.rememberBody(@intFromPtr(instrs.ptr), bodyEntryRecord(id, instrs, def)) catch {};
+    }
+
+    /// Make `id` the id of the word `name` resolves to. False when the slot refuses the write.
+    fn adoptBodyId(self: *Context, name: []const u8, def: WordDefinition, id: u32) bool {
+        propagateWordId(self, name, id) catch return false;
+
+        // An invalidated entry has lost its module, and the new definition names it again.
+        if (self.jit_dispatch.getMut(id)) |em| {
+            if (em.defining_module == null) em.defining_module = def.source_module;
+        }
+        return true;
     }
 
     /// Record, on the JIT entry of every word and dep of a module just finalized, the module the
@@ -12566,7 +12842,81 @@ fn currentThreadStackBounds() ?ThreadStackBounds {
 
 const ResolverState = struct {
     context: *Context,
+
+    /// The body being compiled. A call that reaches it again is a self-call.
+    self_body: []const Instruction = &.{},
+
+    /// The words compiled together with the body.
+    group: ?[]const []const u8 = null,
+
+    /// Where to record each callee the code bakes in, for code that every definition of the body
+    /// shares. The definitions run in different activations, and a call's callee can differ
+    /// between them. Null for code that one definition owns.
+    baked: ?*std.ArrayListUnmanaged(JitBakedCallee) = null,
+
+    /// Set when a callee could not be recorded.
+    baked_failed: bool = false,
+
+    /// The identity of what `callee` runs, which a later definition compares.
+    fn identOf(callee: WordDefinition) usize {
+        return switch (callee.action) {
+            .native => |func| @intFromPtr(func),
+            .compound => |body| @intFromPtr(body.ptr),
+            .literal => 1,
+            .host_callback => 2,
+        };
+    }
+
+    fn note(self: *ResolverState, name: []const u8, callee: WordDefinition, effect: *const StackEffect, by_name: bool) void {
+        const list = self.baked orelse return;
+        if (self.compilesTogether(name, callee)) return;
+
+        for (list.items) |seen| {
+            if (std.mem.eql(u8, seen.name, name)) return;
+        }
+
+        // The record outlives the body being compiled, which may be a callee's inlined body, so
+        // it keeps the interned copy of the name.
+        const interned = self.context.internBindingName(name) catch {
+            self.baked_failed = true;
+            return;
+        };
+
+        list.append(self.context.allocator, .{
+            .name = interned,
+            .ident = identOf(callee),
+            .inputs = @intCast(effect.concreteInputCount()),
+            .outputs = @intCast(effect.concreteOutputCount()),
+            .by_name = by_name,
+        }) catch {
+            self.baked_failed = true;
+        };
+    }
+
+    fn compilesTogether(self: ResolverState, name: []const u8, callee: WordDefinition) bool {
+        if (callee.action == .compound and self.self_body.len != 0 and
+            callee.action.compound.ptr == self.self_body.ptr) return true;
+
+        const members = self.group orelse return false;
+        for (members) |member| {
+            if (std.mem.eql(u8, member, name)) return true;
+        }
+        return false;
+    }
 };
+
+/// Whether the word `name` resolves to sits in a transient lexical frame, which the call that
+/// made it pops.
+///
+/// Walks the frames the way `findWordIdSlot` does.
+fn resolvesInTransientFrame(ctx: *Context, name: []const u8) bool {
+    var i = ctx.local_frames.items.len;
+    while (i > 0) {
+        i -= 1;
+        if (ctx.local_frames.items[i].contains(name)) return ctx.isTransientLexicalFrame(i);
+    }
+    return false;
+}
 
 fn hasNeverReturnsMarker(markers: []const *const value_mod.Marker) bool {
     for (markers) |mk| {
@@ -12594,6 +12944,8 @@ fn resolveWordForDispatch(name: []const u8, user_data: *anyopaque) ?ir_codegen.R
         .compound, .literal => {},
         .native => |func| {
             const effect = callee.stack_effect orelse return null;
+            state.note(name, callee, effect, false);
+
             var result = ir_codegen.ResolvedWord{
                 .word_id = 0,
                 .input_count = @intCast(effect.inputs.len),
@@ -12616,16 +12968,40 @@ fn resolveWordForDispatch(name: []const u8, user_data: *anyopaque) ?ir_codegen.R
 
     const effect = callee.stack_effect orelse return null;
 
-    const word_id = if (callee.word_id) |id| id else blk: {
+    // A word that lives only as long as one call differs from one activation to the next, so code
+    // shared by the definitions of a body must not bake in its identity. The call reaches the
+    // interpreter by name, which finds whichever definition is live, and the interpreter holds
+    // that definition's owner for the call.
+    //
+    // Shared code does bake in every other callee. It records what each resolved to, so a later
+    // definition can check that its own scope resolves the same, and a definition that shadows one
+    // revokes the code.
+    const by_name = resolvesInTransientFrame(ctx, name) and !state.compilesTogether(name, callee);
+    state.note(name, callee, effect, by_name);
+
+    const word_id = if (by_name) blk: {
+        const interned = ctx.internBindingName(name) catch return null;
+        break :blk ctx.jit_dispatch.nameOnlyId(interned, callee.source_module) catch return null;
+    } else if (callee.word_id) |id| id else blk: {
+        if (ctx.reusableBodyId(name, callee)) |existing| {
+            if (ctx.adoptBodyId(name, callee, existing)) break :blk existing;
+        }
+
         const id = ctx.mintJitId(name, callee) catch return null;
+        ctx.rememberBodyId(callee, id);
         propagateWordId(ctx, name, id) catch return null;
         break :blk id;
     };
-    if (ctx.jit_dispatch.getMut(word_id)) |em| {
-        if (em.stack_effect == null) em.stack_effect = callee.stack_effect;
+    if (!by_name) {
+        if (ctx.jit_dispatch.getMut(word_id)) |em| {
+            if (em.stack_effect == null) em.stack_effect = callee.stack_effect;
+        }
     }
 
     const bounded = dispatch_helpers.boundedDispatchFor(effect, callee.markers, name);
+
+    // A generic call bakes the callee's dispatch id, which every definition gets afresh.
+    if (by_name and (bounded != null or markersContainGeneric(callee.markers))) return null;
 
     var result = ir_codegen.ResolvedWord{
         .word_id = word_id,
@@ -12639,8 +13015,8 @@ fn resolveWordForDispatch(name: []const u8, user_data: *anyopaque) ?ir_codegen.R
         .bounded_trace_name = if (bounded) |b| ctx.boundedConstraintTraceName(b.constraint) else null,
         .output_params = output_params,
         .input_params = input_params,
-        .body = if (callee.action == .compound) callee.action.compound else null,
-        .source_file = if (callee.action == .compound) callee.source_file else null,
+        .body = if (callee.action == .compound and !by_name) callee.action.compound else null,
+        .source_file = if (callee.action == .compound and !by_name) callee.source_file else null,
     };
     if (stack_effect_mod.hasAnyRowVariable(effect.*)) {
         result.callee_effect = effect;
@@ -21102,6 +21478,206 @@ test "defineBindingAdoptingOwner: a closure outside a transient frame is pinned 
     try std.testing.expect(!def.frame_owned);
     try std.testing.expect(!cl.frame_owned_body);
     try std.testing.expectEqual(@as(u32, 2), cl.header.refcountValue());
+}
+
+/// A one-instruction body on the context's arena that pushes `n`, stamped with a file the way a
+/// parsed body is. Only such a body can share a JIT entry.
+fn parsedBody(ctx: *Context, n: i64) ![]const Instruction {
+    const body = try ctx.arena.allocator().dupe(Instruction, &.{
+        .{ .op = .{ .push_literal = .{ .fixnum = n } }, .line = 0 },
+    });
+    try ctx.stampQuotationBodySourceAs(body, "shared_entry.1z");
+    return body;
+}
+
+/// Define `name` over `body` in a transient frame, the way a body-level `;` does, and return the id
+/// its definition carries.
+fn defineInTransientFrame(ctx: *Context, name: []const u8, body: []const Instruction, effect: *const StackEffect) !?u32 {
+    try ctx.pushLocalFrame();
+    defer ctx.popLocalFrame();
+
+    _ = try ctx.defineBinding(name, .{
+        .name = name,
+        .stack_effect = effect,
+        .action = .{ .compound = body },
+    });
+    return ctx.lookupWord(name).?.word_id;
+}
+
+test "a durable body defined in a frame again shares the entry its first definition minted" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    ctx.compile_mode = .hybrid;
+    const effect = try ctx.internStackEffect(.{ .inputs = &.{}, .outputs = &eager_probe_outputs });
+    const body_a = try parsedBody(&ctx, 1);
+
+    const first = (try defineInTransientFrame(&ctx, "helper", body_a, effect)).?;
+    const entries = ctx.jit_dispatch.entries.items.len;
+
+    var i: usize = 0;
+    while (i < 50) : (i += 1) {
+        const again = (try defineInTransientFrame(&ctx, "helper", body_a, effect)).?;
+        try std.testing.expectEqual(first, again);
+    }
+    try std.testing.expectEqual(entries, ctx.jit_dispatch.entries.items.len);
+}
+
+test "a definition that differs from the first in name, effect, or body gets an entry of its own" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    ctx.compile_mode = .hybrid;
+    const effect = try ctx.internStackEffect(.{ .inputs = &.{}, .outputs = &eager_probe_outputs });
+    const other_effect = try ctx.internStackEffect(.{ .inputs = &eager_probe_outputs, .outputs = &eager_probe_outputs });
+    const body_a = try parsedBody(&ctx, 1);
+    const body_b = try parsedBody(&ctx, 2);
+
+    const first = (try defineInTransientFrame(&ctx, "helper", body_a, effect)).?;
+
+    const renamed = (try defineInTransientFrame(&ctx, "renamed", body_a, effect)).?;
+    try std.testing.expect(renamed != first);
+
+    const retyped = (try defineInTransientFrame(&ctx, "helper", body_a, other_effect)).?;
+    try std.testing.expect(retyped != first);
+
+    const rebodied = (try defineInTransientFrame(&ctx, "helper", body_b, effect)).?;
+    try std.testing.expect(rebodied != first);
+}
+
+test "a body nothing stamped as parsed gets an entry per definition" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    ctx.compile_mode = .hybrid;
+    const effect = try ctx.internStackEffect(.{ .inputs = &.{}, .outputs = &eager_probe_outputs });
+    const unstamped = try ctx.arena.allocator().dupe(Instruction, &.{
+        .{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 0 },
+    });
+
+    const first = (try defineInTransientFrame(&ctx, "helper", unstamped, effect)).?;
+    const second = (try defineInTransientFrame(&ctx, "helper", unstamped, effect)).?;
+    try std.testing.expect(first != second);
+}
+
+test "eager mode compiles a durable body once however many times it is defined" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    ctx.compile_mode = .eager;
+    const effect = try ctx.internStackEffect(.{ .inputs = &.{}, .outputs = &eager_probe_outputs });
+    const body_a = try parsedBody(&ctx, 1);
+
+    const first = (try defineInTransientFrame(&ctx, "helper", body_a, effect)).?;
+    const code = ctx.jit_dispatch.get(first).?.code_ptr;
+    try std.testing.expect(code != null);
+
+    const entries = ctx.jit_dispatch.entries.items.len;
+    var i: usize = 0;
+    while (i < 20) : (i += 1) {
+        const again = (try defineInTransientFrame(&ctx, "helper", body_a, effect)).?;
+        try std.testing.expectEqual(first, again);
+        try std.testing.expectEqual(code, ctx.jit_dispatch.get(first).?.code_ptr);
+    }
+    try std.testing.expectEqual(entries, ctx.jit_dispatch.entries.items.len);
+}
+
+test "resolveWordForDispatch: code shared by several definitions records each callee it bakes in once" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const effect = try ctx.internStackEffect(.{ .inputs = &.{}, .outputs = &eager_probe_outputs });
+    const body_a = try parsedBody(&ctx, 1);
+    try ctx.defineWord("plain", .{ .name = "plain", .stack_effect = effect, .action = .{ .compound = body_a } });
+
+    var baked: std.ArrayListUnmanaged(JitBakedCallee) = .{};
+    defer baked.deinit(std.testing.allocator);
+
+    var shared = ResolverState{ .context = &ctx, .baked = &baked };
+    try std.testing.expect(resolveWordForDispatch("plain", &shared) != null);
+    try std.testing.expect(resolveWordForDispatch("plain", &shared) != null);
+
+    try std.testing.expectEqual(@as(usize, 1), baked.items.len);
+    try std.testing.expectEqualStrings("plain", baked.items[0].name);
+    try std.testing.expect(!baked.items[0].by_name);
+    try std.testing.expect(ctx.bakedHolds(baked.items));
+
+    // A word of the same name in a nearer scope is a different callee.
+    try ctx.pushLocalFrame();
+    defer ctx.popLocalFrame();
+    const body_b = try parsedBody(&ctx, 2);
+    _ = try ctx.defineBinding("plain", .{ .name = "plain", .stack_effect = effect, .action = .{ .compound = body_b } });
+    try std.testing.expect(!ctx.bakedHolds(baked.items));
+}
+
+test "a definition in a transient frame revokes shared code that baked in the word it shadows" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    var dummy: u8 = 0;
+    const fake_ptr: *const anyopaque = &dummy;
+
+    const id = try ctx.jit_dispatch.assignId("caller");
+    ctx.jit_dispatch.update(id, fake_ptr, .{ .code = @constCast(fake_ptr), .size = 0 }, 0);
+
+    const baked = try std.testing.allocator.dupe(JitBakedCallee, &.{
+        .{ .name = "helper", .ident = 1, .inputs = 1, .outputs = 1, .by_name = false },
+    });
+    try ctx.jit_dispatch.setBaked(id, baked, 0);
+
+    const effect = try ctx.internStackEffect(.{ .inputs = &.{}, .outputs = &eager_probe_outputs });
+    const body = try parsedBody(&ctx, 1);
+
+    // A definition outside a transient frame leaves the code alone.
+    try ctx.defineWord("helper", .{ .name = "helper", .stack_effect = effect, .action = .{ .compound = body } });
+    try std.testing.expect(ctx.jit_dispatch.get(id).?.code_ptr != null);
+
+    try ctx.pushLocalFrame();
+    defer ctx.popLocalFrame();
+    _ = try ctx.defineBinding("helper", .{ .name = "helper", .stack_effect = effect, .action = .{ .compound = body } });
+    try std.testing.expect(ctx.jit_dispatch.get(id).?.code_ptr == null);
+    try std.testing.expect(!ctx.jit_dispatch.get(id).?.uncompilable);
+    try std.testing.expectEqual(@as(usize, 1), ctx.jit_dispatch.retired.items.len);
+}
+
+test "resolveWordForDispatch: a callee that lives in a transient frame resolves to one entry by name" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const effect = try ctx.internStackEffect(.{ .inputs = &.{}, .outputs = &eager_probe_outputs });
+
+    var state = ResolverState{ .context = &ctx };
+
+    var first: ?u32 = null;
+    var entries: usize = 0;
+    var i: usize = 0;
+    while (i < 20) : (i += 1) {
+        try ctx.pushLocalFrame();
+        defer ctx.popLocalFrame();
+
+        const cl = try frameOwnedClosureProbe(&ctx, &frame_owned_probe_body);
+        defer container_backing.releaseValue(.{ .closure = cl });
+        _ = try ctx.defineBindingAdoptingOwner("helper", .{
+            .name = "helper",
+            .stack_effect = effect,
+            .action = .{ .compound = cl.instructions },
+            .body_owner = cl,
+        });
+        try std.testing.expect(ctx.lookupWord("helper").?.frame_owned);
+
+        const resolved = resolveWordForDispatch("helper", &state).?;
+        try std.testing.expect(resolved.body == null);
+
+        if (first) |id| {
+            try std.testing.expectEqual(id, resolved.word_id);
+            try std.testing.expectEqual(entries, ctx.jit_dispatch.entries.items.len);
+        } else {
+            first = resolved.word_id;
+            entries = ctx.jit_dispatch.entries.items.len;
+            try std.testing.expect(ctx.jit_dispatch.get(resolved.word_id).?.uncompilable);
+        }
+        try std.testing.expect(ctx.lookupWord("helper").?.word_id == null);
+    }
 }
 
 /// A closure over a static body, holding one reference for the frame that owns it and one for the
