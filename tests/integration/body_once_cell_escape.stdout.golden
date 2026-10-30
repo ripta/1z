@@ -1,0 +1,15 @@
+=== escaping quotation ===
+PASS: an escaped quotation forces a cell after its frame popped
+PASS: the first force publishes
+PASS: a second call reads the published value
+=== spawned task ===
+PASS: a spawned task forces a cell whose frame popped
+=== recursion ===
+PASS: each activation owns its own cell
+=== tail call out of a frame ===
+PASS: a word tail calling a cell out of its defining frame
+=== value reaches a container ===
+PASS: a cell whose value holds a closure over the cell
+=== word info ===
+PASS: a kept word info array holds its once body after the frame popped
+escape

@@ -207,6 +207,23 @@ fn buildOwnedStringsArray(alloc: Allocator, parts: []const []const u8) Allocator
     return try strings.finish();
 }
 
+/// A closure whose body is a copy of a frame-owned `once` word's guard. The copy retains the
+/// cell, and the closure releases it when it is destroyed.
+fn onceGuardClosure(alloc: Allocator, cell: *value_mod.OnceCell, guard: []const Instruction) !Value {
+    const body = try alloc.dupe(Instruction, guard);
+    errdefer alloc.free(body);
+
+    const closure = try value_mod.Closure.create(alloc, .{
+        .instructions = body,
+        .segments = &.{},
+        .owns_body = true,
+        .header = undefined,
+    }, cell.owner_tag);
+
+    container_backing.retainInstructionsContainerLiterals(body);
+    return .{ .closure = closure };
+}
+
 /// Build the raw word-info array on `ctx.allocator`, so the result outlives the context that
 /// built it. `scratch` holds only temporaries and the one-instruction body of a literal word.
 pub fn buildWordInfo(scratch: Allocator, ctx: *const Context, name: []const u8, word: WordDefinition) !Value {
@@ -250,8 +267,13 @@ pub fn buildWordInfo(scratch: Allocator, ctx: *const Context, name: []const u8, 
     //
     // A body a frame owns dies with the frame, so the array holds a reference to the closure
     // instead of borrowing its instructions.
+    //
+    // A frame-owned `once` word has no closure to name. Its guard dies with its cell, so the
+    // array holds a closure over a copy of the guard that holds the cell.
     info.items[5] = switch (word.action) {
         .compound => |instrs| if (word.frame_owned) blk: {
+            if (word.once_cell) |cell| break :blk try onceGuardClosure(alloc, cell, instrs);
+
             const owner: Value = .{ .closure = @constCast(word.body_owner.?) };
             container_backing.retainValue(owner);
             break :blk owner;

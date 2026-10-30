@@ -133,6 +133,12 @@ fn runForce(ctx: *Context, cell: *OnceCell) anyerror!void {
     };
     container_backing.retainValue(produced);
 
+    ctx.pinPublishedOnceCell(cell, produced) catch |err| {
+        container_backing.releaseValue(produced);
+        failForce(ctx, cell, err);
+        return err;
+    };
+
     ctx.assertWriteAllowed(cell.owner_tag);
     var woken = cell.publish(produced);
     defer woken.deinit(cell.allocator);
@@ -522,4 +528,56 @@ test "force-once: a contended force with nothing to park raises once-force-wait"
         "cannot wait for a 'once' value here; 'held' is being computed elsewhere and this execution cannot park",
         thrown.message,
     );
+}
+
+fn frameOwnedTestCell(body: []const value_mod.Instruction) !*OnceCell {
+    return OnceCell.createFrameOwned(testing.allocator, .{ .instructions = body }, false, "held", 0, .{ .line = 0, .column = 0 });
+}
+
+test "force-once: a frame-owned cell is freed with its last reference, value and all" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    const body = [_]value_mod.Instruction{
+        .{ .op = .{ .push_literal = value_mod.stringValue("hi") }, .line = 0 },
+    };
+    const cell = try frameOwnedTestCell(&body);
+
+    try forceCell(&ctx, cell);
+    try ctx.stack.popAndRelease();
+    try testing.expectEqual(@as(u32, 1), cell.header.refcountValue());
+    try testing.expectEqual(@as(usize, 0), ctx.dictionary.once_cells.items.len);
+
+    container_backing.releaseValue(.{ .once_cell = cell });
+}
+
+test "force-once: a frame-owned cell whose value reaches a container is listed for teardown" {
+    const items = try testing.allocator.alloc(value_mod.Value, 1);
+    items[0] = .{ .fixnum = 1 };
+    const arr = try value_mod.Array.fromOwnedSlice(testing.allocator, items, 0);
+    const literal = value_mod.Value{ .array = arr };
+    defer container_backing.releaseValue(literal);
+
+    const body = [_]value_mod.Instruction{
+        .{ .op = .{ .push_literal = literal }, .line = 0 },
+    };
+    const cell = try frameOwnedTestCell(&body);
+    defer container_backing.releaseValue(.{ .once_cell = cell });
+
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    try forceCell(&ctx, cell);
+    try ctx.stack.popAndRelease();
+
+    // The list holds a reference of its own. Teardown drops the value, then that reference.
+    try testing.expect(cell.pinned);
+    try testing.expectEqual(@as(usize, 1), ctx.dictionary.once_cells.items.len);
+    try testing.expectEqual(@as(u32, 2), cell.header.refcountValue());
+
+    // A second read neither lists it again nor takes a reference.
+    try forceCell(&ctx, cell);
+    try ctx.stack.popAndRelease();
+    try testing.expectEqual(@as(usize, 1), ctx.dictionary.once_cells.items.len);
+    try testing.expectEqual(@as(u32, 2), cell.header.refcountValue());
 }

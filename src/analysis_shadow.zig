@@ -38,9 +38,10 @@ pub fn mutableHeader(v: Value) ?*ContainerHeader {
 /// The table holds a reference to each original container, so an original's address cannot be reused
 /// while its entry exists. The key of an entry is therefore never a stale address.
 ///
-/// A once cell is keyed with no hold. An ancestor's cell sits on the ancestor's arena, which lives as
-/// long as the ancestor, and an ancestor outlives every analysis child under it. The cell's address is
-/// therefore never reused while the table lives.
+/// A once cell is keyed with a hold only when a frame owns it. An ancestor's other cells sit on the
+/// ancestor's arena, which lives as long as the ancestor, and an ancestor outlives every analysis child
+/// under it. A frame-owned cell can die with its frame, so the table retains it until it dies, which
+/// keeps the borrowed body and name valid and the address from being reused.
 ///
 /// The table lock is a leaf. It is held only around a map probe or insert, never while a container
 /// lock is held and never while a copy is made. Reads share it, so tasks that pop ancestor containers
@@ -88,11 +89,13 @@ pub const ShadowTable = struct {
         for (self.buffers.items) |buffer| self.allocator.free(buffer);
         self.buffers.deinit(self.allocator);
 
-        var copies = self.cells.valueIterator();
-        while (copies.next()) |copy| {
-            if (copy.*.value) |forced| container_backing.releaseValue(forced);
-            copy.*.deinit();
-            self.allocator.destroy(copy.*);
+        var copies = self.cells.iterator();
+        while (copies.next()) |entry| {
+            const copy = entry.value_ptr.*;
+            if (copy.value) |forced| container_backing.releaseValue(forced);
+            copy.deinit();
+            self.allocator.destroy(copy);
+            container_backing.releaseValue(.{ .once_cell = @constCast(entry.key_ptr.*) });
         }
         self.cells.deinit(self.allocator);
 
@@ -192,6 +195,10 @@ pub const ShadowTable = struct {
         };
 
         try self.cells.put(self.allocator, original, copy);
+
+        // The copy borrows the original's body, owner, and name, so a frame-owned original has to
+        // outlive it.
+        container_backing.retainValue(.{ .once_cell = original });
         return copy;
     }
 

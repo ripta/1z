@@ -1,0 +1,28 @@
+\ Bounded-memory regression for a `once` definition made inside a word body.
+\
+\ `;` used to allocate the cell, its name, and its guard on the state target's arena, and to list the
+\ cell for teardown. Each call into the word then kept all of it until exit. The loops below exhausted
+\ the 4 MB cap in the `.flags` sidecar within a few thousand calls. A cell made in a transient frame is
+\ owned by that frame and dies with its last reference, so every loop stays flat.
+
+plain: ( -- n ) [
+  c: once ( -- n ) [ 42 ] ;
+  c
+] ;
+
+captures: ( n -- n ) [
+  x: swap ;
+  c: once ( -- n ) [ x 1 + ] ;
+  c c +
+] ;
+
+typed-string: ( -- s ) [
+  c: once ( -- s ) [ "hello" ] ;
+  c
+] ;
+
+20000 [ plain drop ] times
+10000 [ 1 captures drop ] times
+10000 [ typed-string drop ] times
+
+"flat" print-line

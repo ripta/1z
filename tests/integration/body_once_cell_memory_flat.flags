@@ -1,0 +1,3 @@
+--max-memory=4M
+--no-jit
+--no-show-stack

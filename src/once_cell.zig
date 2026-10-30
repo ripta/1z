@@ -3,8 +3,12 @@ const Allocator = std.mem.Allocator;
 
 const value_mod = @import("value.zig");
 const Closure = value_mod.Closure;
+const Instruction = value_mod.Instruction;
 const Quotation = value_mod.Quotation;
 const Value = value_mod.Value;
+
+const container_backing = @import("container_backing.zig");
+const ContainerHeader = container_backing.ContainerHeader;
 
 const task_mod = @import("task.zig");
 const Task = task_mod.Task;
@@ -12,9 +16,14 @@ const Task = task_mod.Task;
 /// The compute-once state of a `once`-marked word, allocated alongside its definition and read
 /// by the two-instruction body `;` installs in place of the source body.
 ///
-/// The cell lives on the arena a module load redirects to, so its lifetime is the root
-/// context's and a `reload` builds a new one. `value` is an owning reference the dictionary's
-/// teardown releases.
+/// A cell made at top level lives on the arena a module load redirects to, so its lifetime is
+/// the root context's and a `reload` builds a new one. `value` is an owning reference the
+/// dictionary's teardown releases.
+///
+/// A cell made in a transient frame is `frame_owned`. It, its name, and its guard live on the
+/// cross-worker allocator and die with the last reference, so a word body that defines one on
+/// every call does not grow memory. Only a frame-owned cell is refcounted. Every other cell
+/// passes through `retainValue` and `releaseValue` untouched.
 ///
 /// This struct is the state machine only. The suspend, wake, and cancellation orchestration
 /// lives with the `once` natives, mirroring the channel/`channels.zig` and
@@ -23,10 +32,32 @@ pub const OnceCell = struct {
     /// The source body, moved here so the stored body can be the guard instead.
     body: Quotation,
 
-    /// The closure `body` came out of, for a body it owns. Borrowed on the same terms as
-    /// `Parameter.default_owner`: it carries the body's captured scope and defining module to
-    /// each attempt to force. Null for a plain quotation body.
+    /// The closure `body` came out of, for a body it owns. It carries the body's captured scope
+    /// and defining module to each attempt to force. Null for a plain quotation body.
+    ///
+    /// A frame-owned cell holds one reference to it and releases that reference on destroy. For
+    /// every other cell it is borrowed on the same terms as `Parameter.default_owner`.
     owner: ?*const Closure = null,
+
+    /// The two-instruction body that stands in for `body` on the word: push this cell, call the
+    /// native that forces it. Owned by a frame-owned cell, and by the arena otherwise.
+    guard: []const Instruction = &.{},
+
+    /// Whether a transient frame owns this cell. Such a cell is refcounted through `header`, and
+    /// nothing address-keyed may admit its `body` or `guard`, since both die with the cell.
+    ///
+    /// Set once at creation and never cleared, so a cell that was ever frame-owned keeps being
+    /// refused by the stores that key on a body address.
+    frame_owned: bool = false,
+
+    /// Whether the dictionary's teardown list holds a reference to this frame-owned cell. A cell
+    /// whose published value reaches a container is put there, because that value can come to
+    /// hold a closure that holds the cell, and refcounting alone cannot break that cycle.
+    pinned: bool = false,
+
+    /// The refcount of a frame-owned cell. Inert for every other cell, which is never retained
+    /// or released through it.
+    header: ContainerHeader = inert_header,
 
     /// Whether `body` calls a defining native at its top level, so forcing runs it in a
     /// transient lexical frame. Computed from the source body, since the stored body's own
@@ -234,10 +265,107 @@ pub const OnceCell = struct {
         return removed;
     }
 
-    /// Release the waiter list's backing. The cell itself belongs to an arena and is not freed.
+    /// Release the waiter list's backing. The cell itself belongs to an arena or to its
+    /// refcount and is not freed here.
+    ///
+    /// Safe to call twice: a teardown drains the list while a reference to the cell can still
+    /// be live, and the last release drains it again.
     pub fn deinit(self: *OnceCell) void {
         self.waiters.deinit(self.allocator);
+        self.waiters = .{};
     }
+
+    /// Where `createFrameOwned` places the guard's two instructions.
+    pub const GuardSite = struct {
+        line: usize,
+        column: usize,
+    };
+
+    /// Allocate a frame-owned cell with its name copy and guard, with a refcount of one.
+    ///
+    /// `owner` is not taken here. The caller sets `owner` once nothing else can fail, so a
+    /// failure above this call never has to tell a cell that owns its closure from one that does
+    /// not.
+    pub fn createFrameOwned(
+        allocator: Allocator,
+        body: Quotation,
+        may_define: bool,
+        name: []const u8,
+        owner_tag: u32,
+        site: GuardSite,
+    ) error{OutOfMemory}!*OnceCell {
+        const cell = try allocator.create(OnceCell);
+        errdefer allocator.destroy(cell);
+
+        const name_copy = try allocator.dupe(u8, name);
+        errdefer allocator.free(name_copy);
+
+        const guard = try allocator.alloc(Instruction, 2);
+        errdefer allocator.free(guard);
+
+        cell.* = .{
+            .body = body,
+            .guard = guard,
+            .frame_owned = true,
+            .may_define = may_define,
+            .name = name_copy,
+            .owner_tag = owner_tag,
+            .allocator = allocator,
+        };
+        cell.header.init(allocator, destroyFrameOwned, owner_tag);
+
+        guard[0] = .{ .op = .{ .push_literal = .{ .once_cell = cell } }, .line = site.line, .column = site.column };
+        guard[1] = .{ .op = .{ .call_word = "native.force-once" }, .line = site.line, .column = site.column };
+
+        return cell;
+    }
+
+    /// Last-release callback for a frame-owned cell. Frees memory and drops references. It never
+    /// runs user code.
+    ///
+    /// The value goes first. Releasing it can release closures that hold other cells, and each of
+    /// those cells is kept alive by whoever else holds it.
+    fn destroyFrameOwned(header: *ContainerHeader) void {
+        const self: *OnceCell = @fieldParentPtr("header", header);
+        const allocator = self.allocator;
+
+        if (self.value) |v| container_backing.releaseValue(v);
+        self.deinit();
+
+        if (self.owner) |owner| container_backing.releaseValue(.{ .closure = @constCast(owner) });
+
+        allocator.free(self.guard);
+        allocator.free(self.name);
+        allocator.destroy(self);
+    }
+};
+
+fn inertDestroy(_: *ContainerHeader) void {}
+
+fn inertAlloc(_: *anyopaque, _: usize, _: std.mem.Alignment, _: usize) ?[*]u8 {
+    return null;
+}
+
+/// An allocator that never allocates. A freestanding target has no default allocator to name.
+const inert_vtable: std.mem.Allocator.VTable = .{
+    .alloc = inertAlloc,
+    .resize = std.mem.Allocator.noResize,
+    .remap = std.mem.Allocator.noRemap,
+    .free = std.mem.Allocator.noFree,
+};
+
+/// The header of a cell that is not frame-owned. Nothing retains or releases through it, so the
+/// destroy callback and the allocator are never used.
+const inert_header: ContainerHeader = .{
+    .refcount = std.atomic.Value(u32).init(1),
+    .mutex = .{},
+    .len = 0,
+    .capacity = 0,
+    .storage = null,
+    .allocator = .{ .ptr = @ptrFromInt(1), .vtable = &inert_vtable },
+    .destroy_fn = inertDestroy,
+    .flags = 0,
+    .shareable = std.atomic.Value(container_backing.Shareable).init(.unknown),
 };
 
 /// Copy as much of `src` into `dst` as fits, ending a truncated copy with an ellipsis, and

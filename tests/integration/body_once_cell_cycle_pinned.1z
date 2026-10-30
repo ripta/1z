@@ -1,0 +1,28 @@
+\ A `once` cell whose published value is a closure over the cell is a reference cycle. The cell holds
+\ the closure as its value, and the closure's captured scope holds the cell. Refcounting cannot free
+\ it, so the cell is pinned to teardown, which releases the value. Each call still keeps one cell
+\ until exit, as a container-valued cell does, but nothing outlives teardown. A Debug build reports
+\ anything that does as a leak on stderr, which the harness compares with an empty golden.
+
+selfq: ( -- q ) [
+  c: stack-recursive once ( -- q ) [ [ c ] ] ;
+  c
+] ;
+
+forces-then-returns: ( -- n ) [
+  c: stack-recursive once ( -- q ) [ [ c ] ] ;
+  c drop
+  1
+] ;
+
+via-helper: ( -- q ) [
+  c: stack-recursive once ( -- q ) [ [ h ] ] ;
+  h: ( -- q ) [ c ] ;
+  c
+] ;
+
+200 [ selfq drop ] times
+200 [ forces-then-returns drop ] times
+200 [ via-helper drop ] times
+
+"cycles" print-line

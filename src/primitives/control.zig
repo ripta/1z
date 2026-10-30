@@ -45,23 +45,57 @@ fn isOnceEffectShape(effect: StackEffect) bool {
     return true;
 }
 
-/// Move a `once` word's source body into a cell and return the two-instruction guard that stands
-/// in for it: push the cell, call the native that forces it.
+/// Move a `once` word's source body into a cell and return the cell, whose guard is the
+/// two-instruction body that stands in for it: push the cell, call the native that forces it.
 ///
-/// `alloc` is the definition's own allocator, which a module load redirects to the root, so the
-/// cell's lifetime is the root context's and a `reload` gets a fresh one.
+/// A cell the frame will own is allocated on the cross-worker allocator and dies with its last
+/// reference. It takes over the caller's reference to `owner` once this returns, and releases it
+/// when it dies. The caller decides which kind of cell this is with `frameMayOwnOnceCell`.
+///
+/// Any other cell is allocated on `alloc`, the definition's own allocator, which a module load
+/// redirects to the root. Its lifetime is the root context's, a `reload` gets a fresh one, and
+/// `owner` is borrowed from the teardown list.
 fn installOnceCell(
     ctx: *Context,
     alloc: std.mem.Allocator,
     name: []const u8,
     body: []const Instruction,
     owner: ?*const value_mod.Closure,
-) ![]const Instruction {
+    frame_owned: bool,
+) !*value_mod.OnceCell {
+    const line = if (body.len > 0) body[0].line else 0;
+    const column = if (body.len > 0) body[0].column else 0;
+    const calls_defining_native = may_define.bodyCallsDefiningNative(body);
+
+    // A body the owner closure owns releases its own container literals when the closure is
+    // destroyed, so the dictionary's release list must not name it as well.
+    const closure_owns_body = if (owner) |closure| closure.ownsBodyTransitively() else false;
+
+    if (frame_owned) {
+        const cell = try value_mod.OnceCell.createFrameOwned(
+            ctx.allocator,
+            .{ .instructions = body },
+            calls_defining_native,
+            name,
+            ctx.stateTarget().containerOwnerTag(),
+            .{ .line = line, .column = column },
+        );
+        errdefer container_backing.releaseValue(.{ .once_cell = cell });
+
+        if (!closure_owns_body) {
+            ctx.unregisterQuotationContainerLiterals(body);
+            try ctx.registerCompoundBody(body);
+        }
+
+        cell.owner = owner;
+        return cell;
+    }
+
     const cell = try alloc.create(value_mod.OnceCell);
     cell.* = .{
         .body = .{ .instructions = body },
         .owner = owner,
-        .may_define = may_define.bodyCallsDefiningNative(body),
+        .may_define = calls_defining_native,
         // The name is what a cycle diagnostic prints, so the cell keeps a copy of its own: the
         // caller's slice is parse-owned and `defineBinding` has not interned it yet.
         .name = try alloc.dupe(u8, name),
@@ -74,16 +108,16 @@ fn installOnceCell(
     // The definition no longer stores the source body, so the ownership transfer
     // `defineWordLocked` would have performed for it happens here instead. Its captured
     // container literals are reachable only through the cell now.
-    ctx.unregisterQuotationContainerLiterals(body);
-    try ctx.registerCompoundBody(body);
-
-    const line = if (body.len > 0) body[0].line else 0;
-    const column = if (body.len > 0) body[0].column else 0;
+    if (!closure_owns_body) {
+        ctx.unregisterQuotationContainerLiterals(body);
+        try ctx.registerCompoundBody(body);
+    }
 
     const guard = try alloc.alloc(Instruction, 2);
     guard[0] = .{ .op = .{ .push_literal = .{ .once_cell = cell } }, .line = line, .column = column };
     guard[1] = .{ .op = .{ .call_word = "native.force-once" }, .line = line, .column = column };
-    return guard;
+    cell.guard = guard;
+    return cell;
 }
 
 /// Check if a value is a definition descriptor, which is a hash or mutable-map with a `define:` quotation.
@@ -723,6 +757,12 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
                 // value the way the same body would when it is invoked as one.
                 var body_owner: ?*const value_mod.Closure = null;
 
+                // The cell behind a `once` definition. The caller's reference to a frame-owned
+                // one is ours until the definition installs, which hands it to the frame.
+                var once_cell: ?*value_mod.OnceCell = null;
+                var once_cell_owned: ?*value_mod.OnceCell = null;
+                errdefer if (once_cell_owned) |cell| container_backing.releaseValue(.{ .once_cell = cell });
+
                 const has_once = for (collected_markers.items) |mk| {
                     if (markers_mod.isOnceMarker(mk)) break true;
                 } else false;
@@ -742,13 +782,8 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
                     // The word borrows the closure's body, so the popped reference has to outlive
                     // every call of the word. The definition decides who holds it: the frame
                     // when the closure cannot reach a container, the dictionary's teardown list
-                    // otherwise. A `once` definition drops `body_owner` below, so its reference
-                    // goes to the teardown list here instead.
+                    // otherwise. A `once` definition hands the reference to its cell below.
                     .closure => |c| blk: {
-                        if (has_once) {
-                            try ctx.retainValueForTeardown(top_val);
-                            top_owned = false;
-                        }
                         body_owner = c;
                         break :blk .{ .compound = c.instructions };
                     },
@@ -810,10 +845,30 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
                         }
                     }
 
-                    action = .{ .compound = try installOnceCell(ctx, alloc, name, action.compound, body_owner) };
+                    // The frame owns the cell when the definition lands in a transient frame and
+                    // the closure cannot reach a container. Otherwise the cell stays on the
+                    // arena, and the closure is pinned to teardown as any other closure is.
+                    const frame_owned_cell = ctx.frameMayOwnOnceCell(body_owner);
+                    if (body_owner != null and !frame_owned_cell) {
+                        try ctx.retainValueForTeardown(top_val);
+                        top_owned = false;
+                    }
+
+                    const cell = try installOnceCell(ctx, alloc, name, action.compound, body_owner, frame_owned_cell);
+                    if (frame_owned_cell) {
+                        // The cell holds the popped closure reference from here on, and the
+                        // caller's reference to the cell goes to the frame once the definition
+                        // installs.
+                        if (body_owner != null) top_owned = false;
+                        once_cell_owned = cell;
+                    }
+
+                    action = .{ .compound = cell.guard };
+                    once_cell = cell;
+
                     // The guard did not come out of the closure the source body did, so the
                     // definition stops naming one. The cell carries the owner to each attempt to
-                    // force, and the closure stays alive on the teardown list either way.
+                    // force.
                     body_owner = null;
                 }
 
@@ -827,6 +882,7 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
                     .markers = markers_slice,
                     .doc = doc_val,
                     .body_owner = body_owner,
+                    .once_cell = once_cell,
                     .action = action,
                 };
 
@@ -841,6 +897,7 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
                 // between the pop and here -- a const or arity rejection, or an allocation
                 // failure -- still has to release it.
                 top_owned = false;
+                once_cell_owned = null;
                 fireWordDefinedHook(ctx, alloc, interned);
             }
         },
@@ -1183,11 +1240,23 @@ fn defineOnce(
     effect: ?StackEffect,
     body: []const Instruction,
 ) anyerror!void {
+    try defineOnceValue(ctx, name, effect, .{ .quotation = .{ .instructions = body } });
+}
+
+fn defineOnceValue(ctx: *Context, name: []const u8, effect: ?StackEffect, body: Value) anyerror!void {
     try ctx.stack.push(value_mod.symbolValue(name));
     if (effect) |eff| try ctx.stack.push(.{ .stack_effect = eff });
     try ctx.stack.push(.{ .marker = @constCast(&markers_mod.once_marker) });
-    try ctx.stack.push(.{ .quotation = .{ .instructions = body } });
+    try ctx.stack.push(body);
     try nativeSemicolon(ctx);
+}
+
+fn onceCellOf(ctx: *Context, name: []const u8) !*value_mod.OnceCell {
+    const word = ctx.lookupWord(name) orelse return error.TestExpectedWord;
+    return switch (word.action) {
+        .compound => |instrs| instrs[0].op.push_literal.once_cell,
+        else => error.TestExpectedCompound,
+    };
 }
 
 fn oneOutputParam(name: []const u8) [1]stack_effect_mod.StackEffectParam {
@@ -1293,6 +1362,131 @@ test "semicolon rejects once on a bracket-less binding" {
         ctx.pending_error_message.?,
     );
     try std.testing.expect(ctx.lookupWord("eager") == null);
+}
+
+const once_probe_body = [_]Instruction{.{ .op = .{ .push_literal = .{ .fixnum = 7 } }, .line = 1 }};
+
+test "a once word defined in a transient frame is owned by the frame and freed when it pops" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const outputs = oneOutputParam("v");
+    const effect: StackEffect = .{ .inputs = &.{}, .outputs = &outputs };
+
+    try ctx.pushLocalFrame();
+    try defineOnce(&ctx, "held", effect, &once_probe_body);
+
+    const word = ctx.lookupWord("held") orelse return error.TestExpectedWord;
+    const cell = try onceCellOf(&ctx, "held");
+    try std.testing.expect(word.frame_owned);
+    try std.testing.expect(cell.frame_owned);
+    try std.testing.expectEqual(word.once_cell, cell);
+    try std.testing.expectEqual(@as(u32, 1), cell.header.refcountValue());
+    try std.testing.expectEqual(@as(usize, 0), ctx.dictionary.once_cells.items.len);
+
+    // The guard names its cell, and the cell names its guard.
+    try std.testing.expectEqual(cell.guard.ptr, word.action.compound.ptr);
+
+    // The testing allocator reports the cell, its name, and its guard if the pop leaves any.
+    ctx.popLocalFrame();
+}
+
+test "rebinding a frame-owned once word in the same frame frees the displaced cell" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const outputs = oneOutputParam("v");
+    const effect: StackEffect = .{ .inputs = &.{}, .outputs = &outputs };
+
+    try ctx.pushLocalFrame();
+    try defineOnce(&ctx, "held", effect, &once_probe_body);
+    try defineOnce(&ctx, "held", effect, &once_probe_body);
+
+    ctx.popLocalFrame();
+}
+
+test "a once word defined outside a transient frame keeps its arena cell on the teardown list" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const outputs = oneOutputParam("v");
+    try defineOnce(&ctx, "held", .{ .inputs = &.{}, .outputs = &outputs }, &once_probe_body);
+
+    const word = ctx.lookupWord("held") orelse return error.TestExpectedWord;
+    const cell = try onceCellOf(&ctx, "held");
+    try std.testing.expect(!word.frame_owned);
+    try std.testing.expect(!cell.frame_owned);
+    try std.testing.expectEqual(@as(usize, 1), ctx.dictionary.once_cells.items.len);
+}
+
+test "a once body that captures a leaf is frame-owned and its cell owns the closure" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const outputs = oneOutputParam("v");
+    const effect: StackEffect = .{ .inputs = &.{}, .outputs = &outputs };
+
+    const cl = try value_mod.Closure.create(std.testing.allocator, .{
+        .instructions = &once_probe_body,
+        .segments = &.{},
+        .header = undefined,
+    }, ctx.containerOwnerTag());
+    defer container_backing.releaseValue(.{ .closure = cl });
+
+    try ctx.pushLocalFrame();
+
+    // The push takes the reference `;` pops, and the cell takes it over.
+    try defineOnceValue(&ctx, "held", effect, .{ .closure = cl });
+    try std.testing.expectEqual(@as(u32, 2), cl.header.refcountValue());
+
+    const cell = try onceCellOf(&ctx, "held");
+    try std.testing.expect(cell.frame_owned);
+    try std.testing.expectEqual(@as(?*const value_mod.Closure, cl), cell.owner);
+    try std.testing.expect(cl.frame_owned_body);
+    try std.testing.expect(ctx.lookupWord("held").?.body_owner == null);
+
+    ctx.popLocalFrame();
+    try std.testing.expectEqual(@as(u32, 1), cl.header.refcountValue());
+}
+
+test "a once body that captures a container is pinned at definition" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const outputs = oneOutputParam("v");
+    const effect: StackEffect = .{ .inputs = &.{}, .outputs = &outputs };
+
+    const items = try std.testing.allocator.alloc(Value, 1);
+    items[0] = .{ .fixnum = 1 };
+    const arr = try value_mod.Array.fromOwnedSlice(std.testing.allocator, items, 0);
+    defer container_backing.releaseValue(.{ .array = arr });
+
+    // A curry product shape: the closure owns a body that carries the container.
+    const boxed = try std.testing.allocator.alloc(Instruction, 1);
+    boxed[0] = .{ .op = .{ .push_literal = .{ .array = arr } }, .line = 1 };
+    container_backing.retainValue(.{ .array = arr });
+
+    const cl = try value_mod.Closure.create(std.testing.allocator, .{
+        .instructions = boxed,
+        .segments = &.{},
+        .owns_body = true,
+        .header = undefined,
+    }, ctx.containerOwnerTag());
+    defer container_backing.releaseValue(.{ .closure = cl });
+
+    try ctx.pushLocalFrame();
+    try defineOnceValue(&ctx, "held", effect, .{ .closure = cl });
+
+    // The closure did not qualify, so the cell stays on the arena and the closure on the teardown
+    // list, which is what the definition did before cells could be frame-owned.
+    const cell = try onceCellOf(&ctx, "held");
+    try std.testing.expect(!cell.frame_owned);
+    try std.testing.expect(!cl.frame_owned_body);
+    try std.testing.expect(!ctx.lookupWord("held").?.frame_owned);
+    try std.testing.expectEqual(@as(usize, 1), ctx.dictionary.once_cells.items.len);
+    try std.testing.expectEqual(@as(usize, 1), ctx.dictionary.retained_values.items.len);
+
+    ctx.popLocalFrame();
 }
 
 /// Define `name` through `;` with `marks` and `body`, a quotation body when `body` is given and a

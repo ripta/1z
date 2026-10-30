@@ -1,0 +1,79 @@
+\ A `once` cell made in a word body is owned by the frame, and a holder that outlives the frame takes a
+\ reference of its own. Each case below keeps the cell reachable after the defining call has returned,
+\ so a missing reference would read freed memory.
+
+use "testing" ;
+
+"escaping quotation" test-section
+
+make-reader: ( n -- q ) [
+  x: swap ;
+  c: once ( -- n ) [ x 10 * ] ;
+  [ c ]
+] ;
+
+3 make-reader
+call 30 "an escaped quotation forces a cell after its frame popped" assert=
+
+4 make-reader dup
+call 40 "the first force publishes" assert=
+call 40 "a second call reads the published value" assert=
+
+"spawned task" test-section
+
+spawn-reader: ( n -- ch ) [
+  x:   swap ;
+  out: 1 <buffered-channel> ;
+  c:   once ( -- n ) [ x 2 * ] ;
+  [ c out send ] spawn drop
+  out
+] ;
+
+[
+  5 spawn-reader receive 10 "a spawned task forces a cell whose frame popped" assert=
+] task-scope
+
+"recursion" test-section
+
+count-down: ( n -- n ) [
+  c: once ( -- n ) [ 7 ] ;
+  dup 0 > [ 1 - count-down ] [ drop c ] if
+] ;
+
+3 count-down 7 "each activation owns its own cell" assert=
+
+"tail call out of a frame" test-section
+
+tail-out: ( -- n ) [
+  c: once ( -- n ) [ 11 ] ;
+  c
+] ;
+
+tail-caller: ( -- n ) [ tail-out ] ;
+tail-caller 11 "a word tail calling a cell out of its defining frame" assert=
+
+"value reaches a container" test-section
+
+box-cell: ( -- v ) [
+  c: once ( -- v ) [ V{ } ] ;
+  c [ c ] #push! drop
+  c #len
+] ;
+
+box-cell 1 "a cell whose value holds a closure over the cell" assert=
+
+"word info" test-section
+
+stash: V{ } ;
+{ } word-defined-hooks [
+  on:word-defined stash [ swap #push! drop ] curry add-hook
+  hooked: ( -- ) [
+    c: once ( -- n ) [ 9 ] ;
+  ] ;
+  hooked
+] with-parameter
+
+stash dup #len 1 - #nth (raw>word-info) body>> call
+9 "a kept word info array holds its once body after the frame popped" assert=
+
+"escape" print-line

@@ -255,6 +255,7 @@ pub fn retainValue(v: Value) void {
         .string, .symbol => |s| if (s.backing) |b| b.header.retain(),
         .bignum => |b| if (b.backing) |bk| bk.header.retain(),
         .closure => |c| c.header.retain(),
+        .once_cell => |cell| if (cell.frame_owned) cell.header.retain(),
         else => {},
     }
 }
@@ -284,6 +285,7 @@ pub fn releaseValue(v: Value) void {
         .string, .symbol => |s| if (s.backing) |b| b.header.release(),
         .bignum => |b| if (b.backing) |bk| bk.header.release(),
         .closure => |c| c.header.release(),
+        .once_cell => |cell| if (cell.frame_owned) cell.header.release(),
         else => {},
     }
 }
@@ -303,6 +305,7 @@ pub fn valueCarriesBacking(v: Value) bool {
         .string, .symbol => |s| s.backing != null,
         .bignum => |b| b.backing != null,
         .closure => true,
+        .once_cell => |cell| cell.frame_owned,
         else => false,
     };
 }
@@ -502,6 +505,10 @@ pub fn valueHoldsRefcountedBacking(val: Value) bool {
             return false;
         },
         .error_value => |err| if (err.data) |data| valueHoldsRefcountedBacking(data.*) else false,
+        // A once cell rides its own guard as a `push_literal`, and that operand holds no
+        // reference. The guard belongs to the cell, so a release list that named it would walk
+        // freed memory once the cell is gone.
+        .once_cell => false,
         else => false,
     };
 }

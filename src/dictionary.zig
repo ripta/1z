@@ -130,12 +130,17 @@ pub const WordDefinition = struct {
     /// pointer is what carries the body's captured scope and defining module to the call. Null for
     /// every body a module or the dictionary arena owns.
     body_owner: ?*const value_mod.Closure = null,
+    /// The cell behind a `once` word, whose compound body is the guard that cell owns. Null for
+    /// every other word. A `once` word names its closure through the cell, so `body_owner` is
+    /// null for it.
+    once_cell: ?*value_mod.OnceCell = null,
     /// The action performed by this word: either a native function or a
     /// compound quotation. Unfortunate naming.
     action: Action,
 
     /// Whether the frame holds one owning reference to the value this definition carries. That is
-    /// `action.literal` for a literal, or `body_owner` for a compound.
+    /// `action.literal` for a literal, the `once_cell` for a `once` word, or `body_owner` for any
+    /// other compound.
     ///
     /// Set for a `name: swap ;` binding in a transient lexical frame, where the frame is the owner
     /// and drops the reference when it dies. Any copy of such a definition that outlives that frame
@@ -442,14 +447,21 @@ pub const Dictionary = struct {
         self.retained_values.clearRetainingCapacity();
     }
 
-    /// Record a `once` word's cell so teardown can release whatever it published. The cell
-    /// itself belongs to an arena and is not freed here.
+    /// Record a `once` word's cell so teardown can release whatever it published.
+    ///
+    /// An arena cell is not freed here. A frame-owned cell is recorded with a reference of its
+    /// own, which the caller has already taken and teardown drops.
     pub fn registerOnceCell(self: *Dictionary, cell: *value_mod.OnceCell) !void {
         try self.once_cells.append(self.allocator, cell);
     }
 
-    /// Release the published value of every registered cell and free its waiter list, then
-    /// clear the list. Runs at teardown, before the arena holding the cells goes away.
+    /// Release the published value of every registered cell and free its waiter list, then drop
+    /// the reference each frame-owned cell's entry holds, then clear the list. Runs at teardown,
+    /// before the arena holding the other cells goes away.
+    ///
+    /// Two passes. A value can hold a closure whose scope holds another listed cell, so no
+    /// reference may be dropped until every value has been. The entry's own reference keeps a
+    /// cell alive while the first pass runs.
     pub fn releaseOnceCellValues(self: *Dictionary) void {
         for (self.once_cells.items) |cell| {
             if (cell.value) |v| container_backing.releaseValue(v);
@@ -457,6 +469,11 @@ pub const Dictionary = struct {
             cell.state.store(.cold, .release);
             cell.deinit();
         }
+
+        for (self.once_cells.items) |cell| {
+            if (cell.frame_owned) container_backing.releaseValue(.{ .once_cell = cell });
+        }
+
         self.once_cells.clearRetainingCapacity();
     }
 

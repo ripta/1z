@@ -1133,7 +1133,14 @@ pub fn deepCopyValue(val: Value, alloc: Allocator, owner: Allocator, longlived: 
         // safe. The parse-time variants (marker, struct_type, sandbox_spec, constraint_combinator)
         // are main-context-owned in practice; `eval-string` inside a task can produce arena-owned
         // ones that this tag-based check cannot distinguish, a documented limitation.
-        .module, .marker, .struct_type, .task, .channel, .type_val, .type_descriptor, .protocol_descriptor, .constraint_combinator, .sandbox_spec, .once_cell => val,
+        .module, .marker, .struct_type, .task, .channel, .type_val, .type_descriptor, .protocol_descriptor, .constraint_combinator, .sandbox_spec => val,
+
+        // A frame-owned cell dies with its last reference, so the copy takes one. Any other cell
+        // is arena-owned and shared by pointer.
+        .once_cell => blk: {
+            container_backing.retainValue(val);
+            break :blk val;
+        },
 
         // Arena-owned reference types die with the sending task's arena. A new variant must be
         // classified here deliberately; never default a reference type to pass-through.

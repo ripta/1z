@@ -365,13 +365,17 @@ pub fn releaseFrameBindings(frame: *const LocalFrame) void {
 /// copied and rewritten to another action, and reading an inactive union field would panic in a
 /// safe build and read garbage in a fast one.
 ///
-/// A frame-owned compound owns its `body_owner` closure. The closure pointer is borrowed const
+/// A frame-owned `once` word owns its cell, and the cell owns the closure its body came out of. Any
+/// other frame-owned compound owns its `body_owner` closure. The closure pointer is borrowed const
 /// everywhere else, so the cast here only lets the refcount be adjusted.
 fn ownedBinding(def: WordDefinition) ?Value {
     if (!def.frame_owned) return null;
     return switch (def.action) {
         .literal => |v| v,
-        .compound => .{ .closure = @constCast(def.body_owner.?) },
+        .compound => if (def.once_cell) |cell|
+            .{ .once_cell = cell }
+        else
+            .{ .closure = @constCast(def.body_owner.?) },
         .native, .host_callback => null,
     };
 }
@@ -385,8 +389,11 @@ fn ownedBinding(def: WordDefinition) ?Value {
 ///
 /// The walk covers the body literals the closure owns, its `bases`, and the owned bindings of the
 /// scope it owns. A closure reached on the way is walked in turn. A push-promoted closure owns
-/// neither a body nor bases. Its scope copy was cloned before it existed and retains only leaves
-/// and closures that already passed this test, so it always qualifies.
+/// neither a body nor bases. Its scope copy was cloned before it existed and retains only leaves,
+/// closures that already passed this test, and `once` cells. A cell that publishes a value which
+/// reaches a container, or reaches the cell again through a closure's scope, is pinned to teardown
+/// at that publish, so a cell in a scope needs no answer here. A push-promoted closure therefore
+/// always qualifies.
 fn closureReachesContainer(c: *const value_mod.Closure) bool {
     // A frame-owned closure already passed this walk. Stopping here keeps a chain of helpers that
     // each capture every earlier one linear, where re-walking would double at every link.
@@ -422,10 +429,84 @@ fn closureReachesContainer(c: *const value_mod.Closure) bool {
     return false;
 }
 
+/// Whether holding `v` can reach `target` through closures and published cells.
+///
+/// A closure's captured scope can retain a frame-owned cell, and the cell holds its published value.
+/// When that value reaches the cell again, refcounting cannot free either. The walk follows what a
+/// closure owns: body literals, `bases`, and the owned bindings of its scope. A forced cell is
+/// followed into its value. `seen` holds the closures already walked, so a chain of helpers that
+/// each capture every earlier one is walked once per link. An allocation failure answers yes, which
+/// pins the cell and costs a leak instead of a dangling cycle.
+fn valueReachesCell(
+    allocator: Allocator,
+    target: *const value_mod.OnceCell,
+    v: Value,
+    seen: *std.ArrayListUnmanaged(*const value_mod.Closure),
+) bool {
+    switch (v) {
+        .once_cell => |cell| {
+            if (cell == target) return true;
+            if (cell.state.load(.acquire) != .forced) return false;
+            return valueReachesCell(allocator, target, cell.value.?, seen);
+        },
+        .closure => |c| {
+            for (seen.items) |s| {
+                if (s == c) return false;
+            }
+            seen.append(allocator, c) catch return true;
+
+            if (c.owns_body) {
+                for (c.instructions) |instr| {
+                    switch (instr.op) {
+                        .push_literal => |lit| if (valueReachesCell(allocator, target, lit, seen)) return true,
+                        .call_word, .call_word_direct, .call_word_module => {},
+                    }
+                }
+            }
+
+            for (c.bases) |base| {
+                if (valueReachesCell(allocator, target, .{ .closure = base }, seen)) return true;
+            }
+
+            if (c.captured_scope) |scope| {
+                for (scope.lexical_frames) |*frame| {
+                    var it = frame.iterator();
+                    while (it.next()) |e| {
+                        const owned = ownedBinding(e.value_ptr.*) orelse continue;
+                        if (valueReachesCell(allocator, target, owned, seen)) return true;
+                    }
+                }
+            }
+
+            return false;
+        },
+        else => return false,
+    }
+}
+
+/// Whether `instructions` is the guard of a frame-owned `once` cell. The cell names its own guard,
+/// so the shape is confirmed against the cell rather than assumed.
+fn isFrameOwnedOnceGuard(instructions: []const Instruction) bool {
+    if (instructions.len != 2) return false;
+
+    return switch (instructions[0].op) {
+        .push_literal => |v| switch (v) {
+            .once_cell => |cell| cell.frame_owned and cell.guard.ptr == instructions.ptr,
+            else => false,
+        },
+        else => false,
+    };
+}
+
 /// Whether holding `v` can reach a container: a container itself, or a closure that reaches one.
+///
+/// A `once` cell is not a container. A published cell is walked through its value, which is
+/// immutable once visible. A cold or forcing cell answers no, since publishing runs this test
+/// again on the value and pins the cell when it fails.
 fn valueReachesContainer(v: Value) bool {
     return switch (v) {
         .closure => |c| closureReachesContainer(c),
+        .once_cell => |cell| cell.state.load(.acquire) == .forced and valueReachesContainer(cell.value.?),
         else => container_backing.valueCarriesBacking(v) and !container_backing.valueCarriesLeafBacking(v),
     };
 }
@@ -1019,13 +1100,14 @@ pub const Context = struct {
     /// The trampoline gives such a body a lexical frame of its own for its one iteration, the frame
     /// the native's helper would have pushed, and closes it at the next transition.
     tail_call_arm: bool = false,
-    /// The reference that keeps a tail-called closure's body alive, set alongside
-    /// `tail_call_instructions` when the selected quotation is a closure. The trampoline takes it
-    /// and holds it while that body runs.
+    /// The reference that keeps a tail-called body alive, set alongside `tail_call_instructions`
+    /// when the selected quotation is a closure or the callee is a frame-owned word. The
+    /// trampoline takes it and holds it while that body runs.
     ///
-    /// Only a closure's reference ever needs holding, so the pointer is kept rather than a whole
-    /// value. The trampoline carries it in its own frame, where every byte is paid per body entry.
-    tail_call_owner_ref: ?*value_mod.Closure = null,
+    /// Only a closure's or a `once` cell's reference ever needs holding, and both carry a
+    /// `ContainerHeader`, so the header pointer is kept rather than a whole value. The trampoline
+    /// carries it in its own frame, where every byte is paid per body entry.
+    tail_call_owner_ref: ?*container_backing.ContainerHeader = null,
     /// The lowest frame index a transition out of the running trampoline iteration would pop.
     ///
     /// A tail-position `if` or `call` reads it to check that none of those frames holds a binding.
@@ -3389,6 +3471,47 @@ pub const Context = struct {
         try target.dictionary.registerOnceCell(cell);
     }
 
+    /// Whether a `once` definition made now would be owned by the frame it lands in.
+    ///
+    /// The definition decides on the same terms a closure body does: the target frame is transient
+    /// and the closure the body came out of cannot reach a container. A body that captures nothing
+    /// has no closure to test. The answer picks where the cell is allocated, so `defineWordLocked`
+    /// must reach the same one. It asserts that it does.
+    pub fn frameMayOwnOnceCell(self: *const Context, owner: ?*const value_mod.Closure) bool {
+        const target = self.defineTargetFrameIndex() orelse return false;
+        if (!self.isTransientLexicalFrame(target)) return false;
+        if (owner) |closure| return !closureReachesContainer(closure);
+        return true;
+    }
+
+    /// Put a frame-owned cell on the root dictionary's teardown list when the value it is about to
+    /// publish can reach a container, or can reach the cell itself through a closure's scope.
+    ///
+    /// A container can come to hold a closure whose scope holds this cell, and the cell holds the
+    /// container. A published closure can hold the cell directly through its scope. Refcounting
+    /// alone cannot break either cycle, so teardown releases the value instead. The
+    /// root's list is used because the cell is shared with whoever else holds it, and a task's own
+    /// dictionary dies first. Runs ahead of the publish, so a failed append fails the force.
+    pub fn pinPublishedOnceCell(self: *Context, cell: *value_mod.OnceCell, produced: Value) !void {
+        if (!cell.frame_owned or cell.pinned) return;
+
+        if (!valueReachesContainer(produced)) {
+            var seen: std.ArrayListUnmanaged(*const value_mod.Closure) = .{};
+            defer seen.deinit(self.allocator);
+            if (!valueReachesCell(self.allocator, cell, produced, &seen)) return;
+        }
+
+        const root = self.rootContext();
+        root.acquireSharedWrite();
+        defer root.releaseSharedWrite();
+
+        container_backing.retainValue(.{ .once_cell = cell });
+        errdefer container_backing.releaseValue(.{ .once_cell = cell });
+
+        try root.dictionary.registerOnceCell(cell);
+        cell.pinned = true;
+    }
+
     /// Record a compound body's container literals on the durable-state
     /// target's dictionary release list.
     pub fn registerCompoundBody(self: *Context, instructions: []const Instruction) !void {
@@ -4699,6 +4822,10 @@ pub const Context = struct {
     ) error{OutOfMemory}!void {
         if (instructions.len == 0) return;
 
+        // A frame-owned cell's guard can reach here through a module word, which has no frame-owned
+        // bit to carry. It dies with the cell and names no bare word, so it takes no stamp.
+        if (isFrameOwnedOnceGuard(instructions)) return;
+
         assertBodyKeyOrigin(layer_owner, @intFromPtr(instructions.ptr));
 
         // The store applies first-stamp-wins across the layers: the first module to stamp a body is
@@ -4768,7 +4895,10 @@ pub const Context = struct {
             // A `once` word's source body never reaches a push site, so the stamp is its only
             // route to a defining module when the guard is not the thing executing -- which is
             // every AOT build, where the guard is compiled C and carries no deps visibility.
-            .once_cell => |cell| try self.stampBodiesIn(layer_owner, cell.body.instructions, module),
+            //
+            // A frame-owned cell stays out for the same reason a frame-owned closure does: the
+            // store keys by body address and never forgets, and this body dies with the cell.
+            .once_cell => |cell| if (!cell.frame_owned) try self.stampBodiesIn(layer_owner, cell.body.instructions, module),
             .array => |a| for (a.items) |item| try self.stampValueIn(layer_owner, item, module),
             .vector => |v| for (v.list.items) |item| try self.stampValueIn(layer_owner, item, module),
             .set => |s| for (s.map.keys()) |item| try self.stampValueIn(layer_owner, item, module),
@@ -6006,14 +6136,20 @@ pub const Context = struct {
             .literal => |val| target_frame_index != null and
                 self.isTransientLexicalFrame(target_frame_index.?) and
                 container_backing.valueCarriesLeafBacking(val),
-            .compound => adopts_owner and target_frame_index != null and
+            .compound => if (definition.once_cell) |cell| blk: {
+                // `;` chose where to allocate the cell with the same test, ahead of this call.
+                std.debug.assert(!cell.frame_owned or (target_frame_index != null and
+                    self.isTransientLexicalFrame(target_frame_index.?)));
+                break :blk cell.frame_owned;
+            } else adopts_owner and target_frame_index != null and
                 self.isTransientLexicalFrame(target_frame_index.?) and
                 !closureReachesContainer(def.body_owner.?),
             .native, .host_callback => false,
         };
 
         if (def.frame_owned and def.action == .compound) {
-            @constCast(def.body_owner.?).frame_owned_body = true;
+            const owner = if (def.once_cell) |cell| cell.owner else def.body_owner;
+            if (owner) |closure| @constCast(closure).frame_owned_body = true;
         }
 
         // A closure the frame does not own is pinned until teardown instead. The pin takes a
@@ -10521,7 +10657,7 @@ pub const Context = struct {
     /// the call ends, so a body that removes or rebinds its own name mid-run keeps its owner alive.
     ///
     /// A null `held` borrows `owner` exactly as `executeQuotationWithPic` does.
-    pub inline fn executeQuotationWithPicHeld(self: *Context, quotation: Quotation, pic_table: ?*PicTable, initial_module: ?*const value_mod.Module, owner: ?*const value_mod.Closure, held: ?*value_mod.Closure, body_defines: bool) anyerror!void {
+    pub inline fn executeQuotationWithPicHeld(self: *Context, quotation: Quotation, pic_table: ?*PicTable, initial_module: ?*const value_mod.Module, owner: ?*const value_mod.Closure, held: ?*container_backing.ContainerHeader, body_defines: bool) anyerror!void {
         return self.runTrampoline(quotation, pic_table, initial_module, owner, body_defines, .{ .owner_ref = held });
     }
 
@@ -10534,7 +10670,7 @@ pub const Context = struct {
         arm: bool = false,
         /// The reference keeping the body alive, which the trampoline takes over. See
         /// `tail_call_owner_ref`.
-        owner_ref: ?*value_mod.Closure = null,
+        owner_ref: ?*container_backing.ContainerHeader = null,
         /// The file that was current before an arm's own was installed. It is put back when the
         /// arm's iteration ends, as the helper that would have run the arm puts it back on return.
         arm_return_source: []const u8 = "",
@@ -10550,13 +10686,15 @@ pub const Context = struct {
         var current_pic = pic_table;
         var current_module: ?*const value_mod.Module = null;
         var body_module: ?*const value_mod.Module = initial_module;
-        // The closure behind the running body. It is held, with a reference this loop owns, when
-        // the body is frame-owned or an arm's, and borrowed otherwise. A held one is the same
-        // closure `first.owner_ref` or the tail-call slots carried in.
+        // The closure behind the running body. It is borrowed.
         var current_owner = owner;
-        var owner_held = first.owner_ref != null;
-        std.debug.assert(first.owner_ref == null or first.owner_ref == owner);
-        defer if (owner_held) releaseHeldClosure(@constCast(current_owner.?));
+
+        // The reference this loop owns while the body is frame-owned or an arm's, which
+        // `first.owner_ref` or the tail-call slots carried in. It is the closure's own header, or
+        // a `once` cell's, which has no closure to name.
+        var held_ref = first.owner_ref;
+        std.debug.assert(heldRefMatchesOwner(held_ref, owner));
+        defer releaseHeld(held_ref);
 
         var owns_frame = false;
         var body_may_define = body_defines;
@@ -10675,9 +10813,9 @@ pub const Context = struct {
                 // next body brings its own, so this one is let go once that one is in hand.
                 const next_ref = self.tail_call_owner_ref;
                 self.tail_call_owner_ref = null;
-                if (owner_held) releaseHeldClosure(@constCast(current_owner.?));
-                owner_held = next_ref != null;
-                std.debug.assert(next_ref == null or next_ref == self.tail_call_body_owner);
+                releaseHeld(held_ref);
+                held_ref = next_ref;
+                std.debug.assert(heldRefMatchesOwner(next_ref, self.tail_call_body_owner));
 
                 // Taken now, while the caller's frame is already gone, so a raise from the compiled
                 // code pends no row for it. That is what an interpreted tail callee does.
@@ -11185,35 +11323,50 @@ pub const Context = struct {
         self.tail_call_may_define = false;
         self.tail_call_arm = false;
 
-        if (self.tail_call_owner_ref) |c| {
+        if (self.tail_call_owner_ref) |header| {
             self.tail_call_owner_ref = null;
-            releaseHeldClosure(c);
+            releaseHeldHeader(header);
         }
     }
 
     /// Out of line so the release's own locals stay out of the frame of every body entry.
-    noinline fn releaseHeldClosure(c: *value_mod.Closure) void {
-        container_backing.releaseValue(.{ .closure = c });
+    noinline fn releaseHeldHeader(header: *container_backing.ContainerHeader) void {
+        header.release();
     }
 
     /// Release the reference a hold took, or nothing for a body that took none.
-    pub inline fn releaseHeld(held: ?*value_mod.Closure) void {
-        if (held) |c| releaseHeldClosure(c);
+    pub inline fn releaseHeld(held: ?*container_backing.ContainerHeader) void {
+        if (held) |header| releaseHeldHeader(header);
     }
 
-    /// Take a reference to the closure behind `word`'s body when the frame owns it, answering null
-    /// for a body that is pinned.
+    /// Whether a held reference is the one a body's owner closure comes with. A body with no
+    /// closure, the guard of a frame-owned `once` word, holds its cell instead and names none.
+    fn heldRefMatchesOwner(held: ?*container_backing.ContainerHeader, owner: ?*const value_mod.Closure) bool {
+        const header = held orelse return true;
+        const closure = owner orelse return true;
+        return header == &closure.header;
+    }
+
+    /// Take a reference to what keeps `word`'s body alive when the frame owns it, answering null
+    /// for a body that is pinned. That is the closure the body came out of, or the cell of a
+    /// `once` word, which in turn holds its closure.
     ///
     /// A frame-owned word's definition can be removed or rebound while its body runs, and the
     /// frame's reference goes with it. The call holds its own, so the body and everything read off
     /// the closure stay valid for the whole call. A pinned closure lives to teardown and pays nothing.
-    pub fn heldBodyOwner(word: *const WordDefinition) ?*value_mod.Closure {
+    pub fn heldBodyOwner(word: *const WordDefinition) ?*container_backing.ContainerHeader {
         if (!word.frame_owned) return null;
         if (word.action != .compound) return null;
-        const owner = word.body_owner orelse return null;
-        const c: *value_mod.Closure = @constCast(owner);
-        container_backing.retainValue(.{ .closure = c });
-        return c;
+
+        const header: *container_backing.ContainerHeader = if (word.once_cell) |cell|
+            &cell.header
+        else if (word.body_owner) |owner|
+            &@constCast(owner).header
+        else
+            return null;
+
+        header.retain();
+        return header;
     }
 
     /// Hold the owner of a word's body for the tail call being set up, which the trampoline picks
@@ -11327,7 +11480,7 @@ pub const Context = struct {
         self.tail_call_arm = true;
 
         switch (chosen.owner) {
-            .closure => |c| self.tail_call_owner_ref = c,
+            .closure => |c| self.tail_call_owner_ref = &c.header,
             else => chosen.release(),
         }
     }
@@ -12008,6 +12161,10 @@ pub const Context = struct {
                 if (self.quotation_scope_info.get(key)) |info| break :blk info;
             }
             if (body_module != null or instructions.len == 0) break :blk .{};
+
+            // The guard of a frame-owned `once` cell dies with the cell, so its address must not
+            // enter the map. It names no bare word that a scope could resolve.
+            if (isFrameOwnedOnceGuard(instructions)) break :blk .{};
 
             // The ancestor walk runs before the publish takes this context's map mutex: it takes
             // one ancestor mutex at a time and never this context's own, and self is the map's
@@ -21122,6 +21279,46 @@ test "a body that removes its own frame-owned name mid-call keeps running on a h
     ctx.popLocalFrame();
 }
 
+test "a frame-owned once word that removes its own name while forced finishes on the force's reference" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+    try heldProbeContext(&ctx);
+
+    const body = [_]Instruction{
+        .{ .op = .{ .call_word = "remove-helper" }, .line = 0 },
+        .{ .op = .{ .push_literal = .{ .fixnum = 5 } }, .line = 0 },
+    };
+    const cell = try value_mod.OnceCell.createFrameOwned(
+        ctx.allocator,
+        .{ .instructions = &body },
+        false,
+        "helper",
+        ctx.containerOwnerTag(),
+        .{ .line = 0, .column = 0 },
+    );
+
+    // The frame holds the creation reference. Removing the name releases it mid-force.
+    try ctx.local_frames.items[1].put(ctx.allocator, "helper", .{
+        .name = "helper",
+        .action = .{ .compound = cell.guard },
+        .once_cell = cell,
+        .frame_owned = true,
+    });
+
+    const outer = [_]Instruction{
+        .{ .op = .{ .call_word = "helper" }, .line = 0 },
+        .{ .op = .{ .push_literal = .{ .fixnum = 9 } }, .line = 0 },
+    };
+    try ctx.executeQuotation(.{ .instructions = &outer });
+
+    try std.testing.expectEqual(@as(usize, 2), ctx.stack.depth());
+    try std.testing.expectEqual(@as(i64, 9), (try ctx.stack.pop()).fixnum);
+    try std.testing.expectEqual(@as(i64, 5), (try ctx.stack.pop()).fixnum);
+    try std.testing.expect(ctx.lookupWord("helper") == null);
+
+    ctx.popLocalFrame();
+}
+
 test "a tail-called frame-owned body that removes its own name keeps running on a held owner" {
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
@@ -21185,7 +21382,7 @@ test "a failing deps frame push in runPropagatedTailBody releases the carried re
     ctx.tail_call_instructions = cl.instructions;
     ctx.tail_call_module = &module;
     ctx.tail_call_body_owner = cl;
-    ctx.tail_call_owner_ref = cl;
+    ctx.tail_call_owner_ref = &cl.header;
     try std.testing.expectEqual(@as(u32, 2), cl.header.refcountValue());
 
     failing.fail_index = failing.alloc_index;
@@ -21205,7 +21402,7 @@ test "an error return that leaves a tail call pending releases its reference" {
 
     ctx.tail_call_instructions = cl.instructions;
     ctx.tail_call_body_owner = cl;
-    ctx.tail_call_owner_ref = cl;
+    ctx.tail_call_owner_ref = &cl.header;
 
     try std.testing.expectEqual(error.OutOfMemory, ctx.wordErrorCleanup("w", error.OutOfMemory));
 
