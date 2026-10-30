@@ -1467,7 +1467,7 @@ test "semicolon binds a container-backed plain value as .literal at durable scop
         .compound, .native, .host_callback => try std.testing.expect(false),
     }
     // A durable binding has no frame to reclaim its reference, so the dictionary holds it.
-    try std.testing.expect(!word.owns_literal);
+    try std.testing.expect(!word.frame_owned);
 
     const body = [_]Instruction{.{ .op = .{ .call_word = "xs" }, .line = 0 }};
     try ctx.executeQuotation(.{ .instructions = &body });

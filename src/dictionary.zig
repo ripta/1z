@@ -134,15 +134,18 @@ pub const WordDefinition = struct {
     /// compound quotation. Unfortunate naming.
     action: Action,
 
-    /// Whether this definition holds an owning reference to `action.literal`.
+    /// Whether the frame holds one owning reference to the value this definition carries. That is
+    /// `action.literal` for a literal, or `body_owner` for a compound.
     ///
     /// Set for a `name: swap ;` binding in a transient lexical frame, where the frame is the owner
     /// and drops the reference when it dies. Any copy of such a definition that outlives that frame
     /// takes a reference of its own and carries the flag with it.
     ///
     /// Every other definition leaves it false: a durable binding transfers its reference to the
-    /// dictionary's teardown list instead, and no other action variant carries a value at all.
-    owns_literal: bool = false,
+    /// dictionary's teardown list instead, and a native or host callback carries no value at all.
+    /// Every retain and release goes through `ownedBinding` in context.zig, which checks the
+    /// action tag.
+    frame_owned: bool = false,
 
     /// Either a native function, a host callback, a compound quotation body,
     /// or a directly-bound literal value.
@@ -152,7 +155,7 @@ pub const WordDefinition = struct {
         compound: []const Instruction,
         /// A `name: swap ;`-style local or marker definition's bound value, stored directly with
         /// no `Instruction` slice allocated. A refcounted value is stored the same way; who owns
-        /// its reference is recorded in `owns_literal` and decided by `Context.defineWordLocked`.
+        /// its reference is recorded in `frame_owned` and decided by `Context.defineWordLocked`.
         literal: Value,
     };
 
@@ -702,11 +705,11 @@ test "literal action is not native-like or builtin-native" {
     try std.testing.expectEqual(false, word.isBuiltinNative());
 }
 
-test "a definition defaults to not owning its literal" {
+test "a definition defaults to not frame-owned" {
     const word = WordDefinition{
         .name = "x",
         .action = .{ .literal = .{ .fixnum = 5 } },
     };
 
-    try std.testing.expectEqual(false, word.owns_literal);
+    try std.testing.expectEqual(false, word.frame_owned);
 }

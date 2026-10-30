@@ -358,14 +358,21 @@ pub fn releaseFrameBindings(frame: *const LocalFrame) void {
 
 /// The value `def` owns a reference to, or null when it owns none.
 ///
-/// The action tag is checked rather than trusted from `owns_literal` alone: a definition can be
+/// This is the tag-checked reader that every retain and release of a frame's binding goes
+/// through.
+///
+/// The action tag is checked rather than trusted from `frame_owned` alone: a definition can be
 /// copied and rewritten to another action, and reading an inactive union field would panic in a
 /// safe build and read garbage in a fast one.
+///
+/// A frame-owned compound owns its `body_owner` closure. The closure pointer is borrowed const
+/// everywhere else, so the cast here only lets the refcount be adjusted.
 fn ownedBinding(def: WordDefinition) ?Value {
-    if (!def.owns_literal) return null;
+    if (!def.frame_owned) return null;
     return switch (def.action) {
         .literal => |v| v,
-        .native, .host_callback, .compound => null,
+        .compound => .{ .closure = @constCast(def.body_owner.?) },
+        .native, .host_callback => null,
     };
 }
 
@@ -4778,7 +4785,7 @@ pub const Context = struct {
                 .literal => |v| blk: {
                     const instrs = try alloc.alloc(Instruction, 1);
                     instrs[0] = .{ .op = .{ .push_literal = v }, .line = 0 };
-                    if (def.owns_literal) {
+                    if (def.frame_owned) {
                         container_backing.retainValue(v);
                         errdefer container_backing.releaseValue(v);
                         try self.retainValueForTeardown(v);
@@ -5554,7 +5561,7 @@ pub const Context = struct {
         if (self.defineTargetFrameIndex()) |top_index| {
             const entry = self.local_frames.items[top_index].fetchRemove(name);
             if (entry) |e| {
-                if (e.value.owns_literal) container_backing.releaseValue(e.value.action.literal);
+                if (ownedBinding(e.value)) |v| container_backing.releaseValue(v);
             }
             const removed = entry != null;
             // The flag is cleared along with the count, so the next definition into this frame
@@ -5909,7 +5916,7 @@ pub const Context = struct {
         //
         // Only a leaf backing takes frame ownership. A container would be reclaimed by a frame it
         // can outlive through a captured scope that also owns it; see `valueCarriesLeafBacking`.
-        def.owns_literal = switch (def.action) {
+        def.frame_owned = switch (def.action) {
             .literal => |val| target_frame_index != null and
                 self.isTransientLexicalFrame(target_frame_index.?) and
                 container_backing.valueCarriesLeafBacking(val),
@@ -5920,7 +5927,7 @@ pub const Context = struct {
             const was_empty = self.local_frames.items[top_index].count() == 0;
             try self.local_frames.items[top_index].put(self.allocator, name, def);
             if (same_scope_existing) |displaced| {
-                if (displaced.owns_literal) container_backing.releaseValue(displaced.action.literal);
+                if (ownedBinding(displaced)) |v| container_backing.releaseValue(v);
             }
             if (was_empty and self.isTransientLexicalFrame(top_index)) {
                 // `removeWord` clears the flag whenever it empties a frame.
@@ -5963,7 +5970,7 @@ pub const Context = struct {
             .literal => |val| {
                 // The teardown list is the same lifetime the compound-body release list gave a
                 // bound container before bindings stopped allocating a body.
-                if (!def.owns_literal and container_backing.valueCarriesBacking(val)) {
+                if (!def.frame_owned and container_backing.valueCarriesBacking(val)) {
                     try self.retainValueForTeardown(val);
                 }
             },
@@ -13215,7 +13222,7 @@ test "initForTask: a failure at any allocation strands nothing" {
     try parent.local_frames.items[0].put(std.testing.allocator, "probe-word", .{
         .name = "probe-word",
         .action = .{ .literal = .{ .array = array } },
-        .owns_literal = true,
+        .frame_owned = true,
     });
 
     const scheduler = try createTestScheduler();
@@ -13250,7 +13257,7 @@ test "initChild: a failure at any allocation strands nothing" {
     try parent.local_frames.items[0].put(std.testing.allocator, "probe-word", .{
         .name = "probe-word",
         .action = .{ .literal = .{ .array = array } },
-        .owns_literal = true,
+        .frame_owned = true,
     });
 
     try std.testing.checkAllAllocationFailures(
@@ -20416,7 +20423,7 @@ test "defineWordLocked: a leaf-backed binding in a transient frame is released w
 
     try ctx.defineWord("s", .{ .name = "s", .action = .{ .literal = str } });
     const def = ctx.lookupWord("s") orelse return error.TestExpectedWord;
-    try std.testing.expect(def.owns_literal);
+    try std.testing.expect(def.frame_owned);
     try std.testing.expectEqual(@as(u32, 2), backing.header.refcountValue());
 
     ctx.popLocalFrame();
@@ -20439,7 +20446,7 @@ test "defineWordLocked: a container binding keeps the durable path even inside a
     // and close a cycle through any closure the vector comes to hold, so the dictionary keeps the
     // reference until teardown instead.
     const def = ctx.lookupWord("v") orelse return error.TestExpectedWord;
-    try std.testing.expect(!def.owns_literal);
+    try std.testing.expect(!def.frame_owned);
     try std.testing.expectEqual(@as(u32, 1), vec.header.refcountValue());
 
     ctx.popLocalFrame();
@@ -20469,6 +20476,165 @@ test "defineWordLocked: rebinding a name in the same frame releases the displace
 
     try ctx.defineWord("s", .{ .name = "s", .action = .{ .literal = second } });
     try std.testing.expectEqual(@as(u32, 1), first_backing.header.refcountValue());
+}
+
+/// A closure over a static body, holding one reference for the frame that owns it and one for the
+/// test, so the count stays observable after the frame lets go.
+fn frameOwnedClosureProbe(ctx: *Context, body: []const Instruction) !*value_mod.Closure {
+    const cl = try value_mod.Closure.create(ctx.allocator, .{
+        .instructions = body,
+        .segments = &.{},
+        .header = undefined,
+    }, ctx.containerOwnerTag());
+    container_backing.retainValue(.{ .closure = cl });
+
+    return cl;
+}
+
+fn putFrameOwnedCompound(ctx: *Context, name: []const u8, cl: *value_mod.Closure, owned: bool) !void {
+    const frame = &ctx.local_frames.items[ctx.local_frames.items.len - 1];
+    try frame.put(ctx.allocator, name, .{
+        .name = name,
+        .action = .{ .compound = cl.instructions },
+        .body_owner = cl,
+        .frame_owned = owned,
+    });
+}
+
+const frame_owned_probe_body = [_]Instruction{.{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 0 }};
+
+test "frame pop releases the closure a frame-owned compound definition owns, exactly once" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    try ctx.pushLocalFrame();
+    const cl = try frameOwnedClosureProbe(&ctx, &frame_owned_probe_body);
+    defer container_backing.releaseValue(.{ .closure = cl });
+    try putFrameOwnedCompound(&ctx, "helper", cl, true);
+    try std.testing.expectEqual(@as(u32, 2), cl.header.refcountValue());
+
+    ctx.popLocalFrame();
+    try std.testing.expectEqual(@as(u32, 1), cl.header.refcountValue());
+}
+
+test "a compound definition without the frame-owned bit keeps its closure untouched" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    try ctx.pushLocalFrame();
+    const cl = try frameOwnedClosureProbe(&ctx, &frame_owned_probe_body);
+    defer container_backing.releaseValue(.{ .closure = cl });
+    try putFrameOwnedCompound(&ctx, "helper", cl, false);
+
+    // No frame owns the second reference here, so the test drops it.
+    defer container_backing.releaseValue(.{ .closure = cl });
+
+    ctx.popLocalFrame();
+    try std.testing.expectEqual(@as(u32, 2), cl.header.refcountValue());
+}
+
+test "a same-frame rebind releases the closure a frame-owned compound definition owns" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    try ctx.pushLocalFrame();
+    ctx.import_frame_index = 0;
+    ctx.durable_frame_floor = 0;
+    try ctx.pushLocalFrame();
+
+    const cl = try frameOwnedClosureProbe(&ctx, &frame_owned_probe_body);
+    defer container_backing.releaseValue(.{ .closure = cl });
+    try putFrameOwnedCompound(&ctx, "helper", cl, true);
+    try std.testing.expectEqual(@as(u32, 2), cl.header.refcountValue());
+
+    try ctx.defineWord("helper", .{ .name = "helper", .action = .{ .literal = .{ .fixnum = 7 } } });
+    try std.testing.expectEqual(@as(u32, 1), cl.header.refcountValue());
+
+    ctx.popLocalFrame();
+    try std.testing.expectEqual(@as(u32, 1), cl.header.refcountValue());
+}
+
+test "removeWord releases the closure a frame-owned compound definition owns" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    try ctx.pushLocalFrame();
+    ctx.import_frame_index = 0;
+    ctx.durable_frame_floor = 0;
+    try ctx.pushLocalFrame();
+
+    const cl = try frameOwnedClosureProbe(&ctx, &frame_owned_probe_body);
+    defer container_backing.releaseValue(.{ .closure = cl });
+    try putFrameOwnedCompound(&ctx, "helper", cl, true);
+    try std.testing.expectEqual(@as(u32, 2), cl.header.refcountValue());
+
+    try std.testing.expect(try ctx.removeWord("helper"));
+    try std.testing.expectEqual(@as(u32, 1), cl.header.refcountValue());
+
+    ctx.popLocalFrame();
+    try std.testing.expectEqual(@as(u32, 1), cl.header.refcountValue());
+}
+
+test "removeWord leaves the closure of a compound definition without the bit untouched" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    try ctx.pushLocalFrame();
+    ctx.import_frame_index = 0;
+    ctx.durable_frame_floor = 0;
+    try ctx.pushLocalFrame();
+
+    const cl = try frameOwnedClosureProbe(&ctx, &frame_owned_probe_body);
+    defer container_backing.releaseValue(.{ .closure = cl });
+    try putFrameOwnedCompound(&ctx, "helper", cl, false);
+
+    // No frame owns the second reference here, so the test drops it.
+    defer container_backing.releaseValue(.{ .closure = cl });
+
+    try std.testing.expect(try ctx.removeWord("helper"));
+    try std.testing.expectEqual(@as(u32, 2), cl.header.refcountValue());
+}
+
+fn frameOwnedProbeNative(_: *Context) anyerror!void {}
+
+test "removeWord ignores a stale frame-owned bit on a definition that carries no value" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    try ctx.pushLocalFrame();
+    ctx.import_frame_index = 0;
+    ctx.durable_frame_floor = 0;
+    try ctx.pushLocalFrame();
+
+    try ctx.local_frames.items[1].put(ctx.allocator, "native-word", .{
+        .name = "native-word",
+        .action = .{ .native = frameOwnedProbeNative },
+        .frame_owned = true,
+    });
+
+    try std.testing.expect(try ctx.removeWord("native-word"));
+}
+
+test "removeWord releases a frame-owned literal binding" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    try ctx.pushLocalFrame();
+    ctx.import_frame_index = 0;
+    ctx.durable_frame_floor = 0;
+    try ctx.pushLocalFrame();
+
+    const bytes = try std.testing.allocator.dupe(u8, "removed");
+    const str = try value_mod.ownedStringValue(std.testing.allocator, bytes, 0);
+    const backing = str.string.backing.?;
+    container_backing.retainValue(str);
+    defer container_backing.releaseValue(str);
+
+    try ctx.defineWord("s", .{ .name = "s", .action = .{ .literal = str } });
+    try std.testing.expectEqual(@as(u32, 2), backing.header.refcountValue());
+
+    try std.testing.expect(try ctx.removeWord("s"));
+    try std.testing.expectEqual(@as(u32, 1), backing.header.refcountValue());
 }
 
 test "captureQuotationScope: a cloned binding outlives the frame it was captured from" {
