@@ -723,6 +723,10 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
                 // value the way the same body would when it is invoked as one.
                 var body_owner: ?*const value_mod.Closure = null;
 
+                const has_once = for (collected_markers.items) |mk| {
+                    if (markers_mod.isOnceMarker(mk)) break true;
+                } else false;
+
                 // Only a quotation or closure body can contain a self-call: the non-quotation
                 // branch stores the bound value directly and allocates no instructions at all,
                 // so containsNonTailSelfCall below is only ever meaningful for the
@@ -735,14 +739,16 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
                     // below, which would store the closure as a `.literal` -- turning the defined
                     // word into one that pushes the closure as a constant instead of calling it.
                     //
-                    // The word borrows the closure's body, so the popped reference is adopted by
-                    // the dictionary and released only at teardown, keeping the body alive for
-                    // every later call of the word.
+                    // The word borrows the closure's body, so the popped reference has to outlive
+                    // every call of the word. The definition decides who holds it: the frame
+                    // when the closure cannot reach a container, the dictionary's teardown list
+                    // otherwise. A `once` definition drops `body_owner` below, so its reference
+                    // goes to the teardown list here instead.
                     .closure => |c| blk: {
-                        try ctx.retainValueForTeardown(top_val);
-                        // The dictionary adopted the popped reference here rather than at the
-                        // definition, so this arm alone hands ownership over early.
-                        top_owned = false;
+                        if (has_once) {
+                            try ctx.retainValueForTeardown(top_val);
+                            top_owned = false;
+                        }
                         body_owner = c;
                         break :blk .{ .compound = c.instructions };
                     },
@@ -753,10 +759,6 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
                 // same scratch list, and these answers are about what the source wrote.
                 const has_stack_recursive = for (collected_markers.items) |mk| {
                     if (markers_mod.isStackRecursiveMarker(mk)) break true;
-                } else false;
-
-                const has_once = for (collected_markers.items) |mk| {
-                    if (markers_mod.isOnceMarker(mk)) break true;
                 } else false;
 
                 if (is_named_constraint) {
@@ -817,7 +819,7 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
 
                 const markers_slice = try ctx.internMarkerList(collected_markers.items);
 
-                const interned = try ctx.defineBinding(name, WordDefinition{
+                const definition = WordDefinition{
                     .name = name,
                     .parse_time = has_parse_time or has_parse_time_only or is_named_constraint,
                     .parse_time_only = has_parse_time_only,
@@ -826,18 +828,19 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
                     .doc = doc_val,
                     .body_owner = body_owner,
                     .action = action,
-                });
+                };
+
+                // A closure body whose reference is still ours is handed to the definition, which
+                // decides whether the frame or the teardown list holds it.
+                const interned = if (body_owner != null)
+                    try ctx.defineBindingAdoptingOwner(name, definition)
+                else
+                    try ctx.defineBinding(name, definition);
+
                 // The definition now holds the popped reference. Until it does, every failure
                 // between the pop and here -- a const or arity rejection, or an allocation
                 // failure -- still has to release it.
                 top_owned = false;
-                // For a chain-owned closure body the retained closure's destroy is the single
-                // release path for the embedded literals, so remove the generic compound
-                // registration `defineBinding` just made; leaving both would double-release, and
-                // the destroy's body free would leave the dictionary walking a dead slice.
-                if (top_val == .closure and top_val.closure.ownsBodyTransitively()) {
-                    ctx.unregisterCompoundBody(top_val.closure.instructions);
-                }
                 fireWordDefinedHook(ctx, alloc, interned);
             }
         },

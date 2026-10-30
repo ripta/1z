@@ -1,0 +1,3 @@
+=== long chain ===
+PASS: a chain of composed helpers defines and runs
+chain

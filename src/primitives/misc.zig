@@ -654,7 +654,7 @@ pub fn nativeLoadImpl(ctx: *Context, cache: *value_mod.MutableMap, filename: []c
             if (word_def.source_module) |sm| {
                 if (@import("../context.zig").isSyntheticScopeModule(sm)) {
                     switch (word_def.action) {
-                        .compound => |instrs| try ctx.stampQuotationBodies(instrs, module),
+                        .compound => |instrs| if (!word_def.frame_owned) try ctx.stampQuotationBodies(instrs, module),
                         .literal => |v| try ctx.stampValueQuotations(v, module),
                         else => {},
                     }
@@ -663,7 +663,7 @@ pub fn nativeLoadImpl(ctx: *Context, cache: *value_mod.MutableMap, filename: []c
         } else {
             try module.words.put(alloc, entry.key_ptr.*, mod_word);
             switch (word_def.action) {
-                .compound => |instrs| try ctx.stampQuotationBodies(instrs, module),
+                .compound => |instrs| if (!word_def.frame_owned) try ctx.stampQuotationBodies(instrs, module),
                 .literal => |v| try ctx.stampValueQuotations(v, module),
                 else => {},
             }

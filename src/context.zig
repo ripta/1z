@@ -376,6 +376,60 @@ fn ownedBinding(def: WordDefinition) ?Value {
     };
 }
 
+/// Whether `c` can reach a container through anything it owns.
+///
+/// A transient frame may own a closure only when this is false. A container can come to hold a
+/// closure whose captured scope holds the binding that owns the container, and refcounting alone
+/// cannot break that cycle. A closure is immutable and its scope is a snapshot, so the answer is
+/// fixed when the closure is defined.
+///
+/// The walk covers the body literals the closure owns, its `bases`, and the owned bindings of the
+/// scope it owns. A closure reached on the way is walked in turn. A push-promoted closure owns
+/// neither a body nor bases. Its scope copy was cloned before it existed and retains only leaves
+/// and closures that already passed this test, so it always qualifies.
+fn closureReachesContainer(c: *const value_mod.Closure) bool {
+    // A frame-owned closure already passed this walk. Stopping here keeps a chain of helpers that
+    // each capture every earlier one linear, where re-walking would double at every link.
+    if (c.frame_owned_body) return false;
+
+    if (!c.owns_body and c.bases.len == 0) return false;
+
+    if (c.owns_body) {
+        for (c.instructions) |instr| {
+            switch (instr.op) {
+                .push_literal => |v| if (valueReachesContainer(v)) return true,
+                .call_word, .call_word_direct, .call_word_module => {},
+            }
+        }
+    }
+
+    for (c.bases) |base| {
+        if (closureReachesContainer(base)) return true;
+    }
+
+    if (c.owns_scope) {
+        if (c.captured_scope) |scope| {
+            for (scope.lexical_frames) |*frame| {
+                var it = frame.iterator();
+                while (it.next()) |e| {
+                    const owned = ownedBinding(e.value_ptr.*) orelse continue;
+                    if (valueReachesContainer(owned)) return true;
+                }
+            }
+        }
+    }
+
+    return false;
+}
+
+/// Whether holding `v` can reach a container: a container itself, or a closure that reaches one.
+fn valueReachesContainer(v: Value) bool {
+    return switch (v) {
+        .closure => |c| closureReachesContainer(c),
+        else => container_backing.valueCarriesBacking(v) and !container_backing.valueCarriesLeafBacking(v),
+    };
+}
+
 /// Everything resolution knows about one quotation/word body, keyed in `quotation_scope_info` by
 /// the body's instruction-slice pointer.
 ///
@@ -4704,6 +4758,10 @@ pub const Context = struct {
             .quotation => |q| try self.stampBodiesIn(layer_owner, q.instructions, module),
             .closure => |c| {
                 if (c.defining_module == null) c.defining_module = module;
+
+                // The stamp store keys by body address and never forgets, so a body that dies with
+                // its frame must stay out. The module on the value above is what such a body reads.
+                if (c.frame_owned_body) return;
                 try self.stampBodiesIn(layer_owner, c.instructions, module);
             },
             .parameter => |p| try self.stampBodiesIn(layer_owner, p.default_quotation.instructions, module),
@@ -4766,7 +4824,8 @@ pub const Context = struct {
     ///
     /// A module outlives the frame that defined its words, so a frame-owned value needs a reference
     /// of its own here; the dictionary's teardown list holds it, which is the same lifetime a
-    /// durable binding's own definition would have given it.
+    /// durable binding's own definition would have given it. A compound's closure is held the same
+    /// way, which is what lets a module-word call site run its body without holding the owner.
     ///
     /// Every path that promotes a frame into a module goes through here: a file's own words at load
     /// finalization, `private{ }`'s scope capture, and `>module`.
@@ -4779,7 +4838,16 @@ pub const Context = struct {
         var mod_word: value_mod.ModuleWord = .{
             .may_define = def.exec_flags.may_define,
             .action = switch (def.action) {
-                .compound => |instrs| .{ .compound = instrs },
+                .compound => |instrs| blk: {
+                    // The module word carries `body_owner` unretained, so a closure only the
+                    // frame owns gets a reference of its own that outlives the frame.
+                    if (ownedBinding(def)) |owner| {
+                        container_backing.retainValue(owner);
+                        errdefer container_backing.releaseValue(owner);
+                        try self.retainValueForTeardown(owner);
+                    }
+                    break :blk .{ .compound = instrs };
+                },
                 .native => |func| .{ .native = func },
                 .host_callback => |host| .{ .host_callback = host },
                 .literal => |v| blk: {
@@ -5438,7 +5506,7 @@ pub const Context = struct {
             self.acquireSharedWrite();
             defer self.releaseSharedWrite();
             try self.expandInlineCallsLocked(name, &def);
-            try self.defineWordLocked(name, def);
+            _ = try self.defineWordLocked(name, def, false);
         }
 
         self.compileAfterDefine(name, def);
@@ -5452,6 +5520,20 @@ pub const Context = struct {
     /// what the frame key, `WordDefinition.name`, and a defined marker's `name` carry. Every other
     /// definer keeps `defineWord`.
     pub fn defineBinding(self: *Context, name: []const u8, definition: WordDefinition) ![]const u8 {
+        return self.defineBindingWith(name, definition, false);
+    }
+
+    /// `defineBinding` for a definition whose `body_owner` is a closure `;` just popped.
+    ///
+    /// The caller hands over its reference to that closure. On success the definition holds it: the
+    /// frame when the closure qualifies for frame ownership, the dictionary's teardown list
+    /// otherwise. On error the caller still holds it and must release it.
+    pub fn defineBindingAdoptingOwner(self: *Context, name: []const u8, definition: WordDefinition) ![]const u8 {
+        std.debug.assert(definition.body_owner != null and definition.action == .compound);
+        return self.defineBindingWith(name, definition, true);
+    }
+
+    fn defineBindingWith(self: *Context, name: []const u8, definition: WordDefinition, adopts_owner: bool) ![]const u8 {
         var def = definition;
 
         {
@@ -5459,7 +5541,7 @@ pub const Context = struct {
             defer self.releaseSharedWrite();
             def.name = try self.binding_names.internLocked(name);
             try self.expandInlineCallsLocked(def.name, &def);
-            try self.defineWordLocked(def.name, def);
+            def.frame_owned = try self.defineWordLocked(def.name, def, adopts_owner);
         }
 
         self.compileAfterDefine(def.name, def);
@@ -5620,7 +5702,8 @@ pub const Context = struct {
         return null;
     }
 
-    fn defineWordLocked(self: *Context, name: []const u8, definition: WordDefinition) !void {
+    /// Install `definition`, and return whether the definition's frame owns its value or closure.
+    fn defineWordLocked(self: *Context, name: []const u8, definition: WordDefinition, adopts_owner: bool) !bool {
         self.assertDefiningNativeDeclared();
 
         // Every definer in the tree reaches this function, so the `inline` marker rules are read
@@ -5916,12 +5999,51 @@ pub const Context = struct {
         //
         // Only a leaf backing takes frame ownership. A container would be reclaimed by a frame it
         // can outlive through a captured scope that also owns it; see `valueCarriesLeafBacking`.
+        //
+        // A closure body takes frame ownership on the same terms when the closure cannot reach a
+        // container. Only a definition that adopts the popped closure reference can claim it.
         def.frame_owned = switch (def.action) {
             .literal => |val| target_frame_index != null and
                 self.isTransientLexicalFrame(target_frame_index.?) and
                 container_backing.valueCarriesLeafBacking(val),
-            .native, .host_callback, .compound => false,
+            .compound => adopts_owner and target_frame_index != null and
+                self.isTransientLexicalFrame(target_frame_index.?) and
+                !closureReachesContainer(def.body_owner.?),
+            .native, .host_callback => false,
         };
+
+        if (def.frame_owned and def.action == .compound) {
+            @constCast(def.body_owner.?).frame_owned_body = true;
+        }
+
+        // A closure the frame does not own is pinned until teardown instead. The pin takes a
+        // reference of its own ahead of every change, so a failure leaves the caller's reference
+        // intact. The caller's reference is dropped once the definition is installed.
+        const pinned_owner: ?Value = if (adopts_owner and !def.frame_owned)
+            .{ .closure = @constCast(def.body_owner.?) }
+        else
+            null;
+        if (pinned_owner) |owner| {
+            container_backing.retainValue(owner);
+            errdefer container_backing.releaseValue(owner);
+            try self.retainValueForTeardown(owner);
+        }
+
+        // Recorded ahead of the install, so a failure here leaves the frame holding nothing. The
+        // frame would otherwise release the adopted reference at pop, and so would the caller.
+        //
+        // A body the adopted closure owns releases its own literals when the closure is
+        // destroyed, so the dictionary's release list must not name it as well.
+        switch (def.action) {
+            .compound => |instrs| {
+                const closure_owns_body = adopts_owner and def.body_owner.?.ownsBodyTransitively();
+                if (!closure_owns_body) {
+                    self.unregisterQuotationContainerLiterals(instrs);
+                    try self.registerCompoundBody(instrs);
+                }
+            },
+            .literal, .native, .host_callback => {},
+        }
 
         if (target_frame_index) |top_index| {
             const was_empty = self.local_frames.items[top_index].count() == 0;
@@ -5963,10 +6085,7 @@ pub const Context = struct {
         // it there before re-registering on the dictionary so teardown
         // doesn't double-release.
         switch (def.action) {
-            .compound => |instrs| {
-                self.unregisterQuotationContainerLiterals(instrs);
-                try self.registerCompoundBody(instrs);
-            },
+            .compound => {},
             .literal => |val| {
                 // The teardown list is the same lifetime the compound-body release list gave a
                 // bound container before bindings stopped allocating a body.
@@ -5977,11 +6096,15 @@ pub const Context = struct {
             .native, .host_callback => {},
         }
 
+        if (pinned_owner) |owner| container_backing.releaseValue(owner);
+
         // Arms the expansion pass for every definition that follows. Set here rather than at the
         // marker's own validation so a word installed by any other definer arms it too.
         if (inline_expand.shouldInline(def)) {
             self.rootContext().any_inline_words.store(true, .monotonic);
         }
+
+        return def.frame_owned;
     }
 
     /// Overwrite the `dispatch_id` of an already-defined word in place, in the same scope
@@ -6078,6 +6201,8 @@ pub const Context = struct {
             // no instruction body to compile.
             .native, .host_callback, .literal => return,
         };
+
+        if (def.frame_owned) return;
 
         const effect = def.stack_effect orelse return;
 
@@ -6205,6 +6330,10 @@ pub const Context = struct {
             .dispatch_table_ptr = @ptrCast(&self.jit_dispatch),
         };
 
+        // Compiled code bakes the body and its owner in as constants, and a frame-owned body is
+        // freed with its frame.
+        if (def.frame_owned) return null;
+
         const pic_snapshot = self.clonePicSnapshotForInstructions(instrs);
         const word = ir_codegen.compileWordWithPicSnapshot(instrs, input_count, output_count, resolver, name, pic_snapshot, self, mutual_group, effect, def.source_file, def.body_owner) catch {
             if (pic_snapshot) |ps| {
@@ -6291,6 +6420,7 @@ pub const Context = struct {
             .native, .host_callback, .literal => return,
         }
 
+        if (def.frame_owned) return;
         if (def.stack_effect == null) return;
         const effect = def.stack_effect.?;
 
@@ -11621,7 +11751,10 @@ pub const Context = struct {
                 }
             }
 
-            const callee_pic = if (word.action == .compound) self.getOrAllocPicTable(word.action.compound) else null;
+            const callee_pic = if (word.action == .compound and !word.frame_owned)
+                self.getOrAllocPicTable(word.action.compound)
+            else
+                null;
 
             if (word.isNativeLike()) {
                 self.current_pic_entry = if (pic_table) |pt| pt.get(idx) else null;
@@ -20562,6 +20695,256 @@ test "defineWordLocked: rebinding a name in the same frame releases the displace
 
     try ctx.defineWord("s", .{ .name = "s", .action = .{ .literal = second } });
     try std.testing.expectEqual(@as(u32, 1), first_backing.header.refcountValue());
+}
+
+fn bodyOwningClosure(
+    alloc: Allocator,
+    body: []const Instruction,
+    bases: []const *value_mod.Closure,
+) !*value_mod.Closure {
+    return value_mod.Closure.create(alloc, .{
+        .instructions = body,
+        .segments = &.{},
+        .header = undefined,
+        .owns_body = true,
+        .bases = bases,
+    }, 0);
+}
+
+test "closureReachesContainer: a closure that owns neither a body nor bases never reaches one" {
+    const cl = try value_mod.Closure.create(std.testing.allocator, .{
+        .instructions = &frame_owned_probe_body,
+        .segments = &.{},
+        .header = undefined,
+    }, 0);
+    defer container_backing.releaseValue(.{ .closure = cl });
+
+    try std.testing.expect(!closureReachesContainer(cl));
+}
+
+test "closureReachesContainer: an owned body literal decides, as a curry product's does" {
+    const alloc = std.testing.allocator;
+
+    const leaf = try alloc.alloc(Instruction, 2);
+    leaf[0] = .{ .op = .{ .push_literal = .{ .fixnum = 4 } }, .line = 0 };
+    leaf[1] = .{ .op = .{ .push_literal = .{ .boolean = true } }, .line = 0 };
+    const leaf_cl = try bodyOwningClosure(alloc, leaf, &.{});
+    defer container_backing.releaseValue(.{ .closure = leaf_cl });
+    try std.testing.expect(!closureReachesContainer(leaf_cl));
+
+    const vec = try value_mod.Vector.create(alloc, 0);
+    const boxed = try alloc.alloc(Instruction, 1);
+    boxed[0] = .{ .op = .{ .push_literal = .{ .vector = vec } }, .line = 0 };
+    const boxed_cl = try bodyOwningClosure(alloc, boxed, &.{});
+    defer container_backing.releaseValue(.{ .closure = boxed_cl });
+    try std.testing.expect(closureReachesContainer(boxed_cl));
+}
+
+test "closureReachesContainer: a base is walked, as a compose or attach-stack-effect product's is" {
+    const alloc = std.testing.allocator;
+
+    const vec = try value_mod.Vector.create(alloc, 0);
+    const boxed = try alloc.alloc(Instruction, 1);
+    boxed[0] = .{ .op = .{ .push_literal = .{ .vector = vec } }, .line = 0 };
+    const base = try bodyOwningClosure(alloc, boxed, &.{});
+
+    const bases = try alloc.alloc(*value_mod.Closure, 1);
+    bases[0] = base;
+    const derived = try value_mod.Closure.create(alloc, .{
+        .instructions = base.instructions,
+        .segments = &.{},
+        .header = undefined,
+        .bases = bases,
+    }, 0);
+    defer container_backing.releaseValue(.{ .closure = derived });
+
+    try std.testing.expect(closureReachesContainer(derived));
+}
+
+test "closureReachesContainer: a closure literal in a body is walked in turn" {
+    const alloc = std.testing.allocator;
+
+    const vec = try value_mod.Vector.create(alloc, 0);
+    const boxed = try alloc.alloc(Instruction, 1);
+    boxed[0] = .{ .op = .{ .push_literal = .{ .vector = vec } }, .line = 0 };
+    const inner = try bodyOwningClosure(alloc, boxed, &.{});
+
+    const outer_body = try alloc.alloc(Instruction, 1);
+    outer_body[0] = .{ .op = .{ .push_literal = .{ .closure = inner } }, .line = 0 };
+    const outer = try bodyOwningClosure(alloc, outer_body, &.{});
+    defer container_backing.releaseValue(.{ .closure = outer });
+
+    try std.testing.expect(closureReachesContainer(outer));
+}
+
+test "defineBindingAdoptingOwner: a qualifying closure in a transient frame is frame-owned and not compiled" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    ctx.compile_mode = .hybrid;
+    const effect = try ctx.internStackEffect(.{ .inputs = &.{}, .outputs = &.{} });
+
+    try ctx.pushLocalFrame();
+    const cl = try frameOwnedClosureProbe(&ctx, &frame_owned_probe_body);
+    defer container_backing.releaseValue(.{ .closure = cl });
+
+    _ = try ctx.defineBindingAdoptingOwner("helper", .{
+        .name = "helper",
+        .stack_effect = effect,
+        .action = .{ .compound = cl.instructions },
+        .body_owner = cl,
+    });
+
+    const def = ctx.lookupWord("helper").?;
+    try std.testing.expect(def.frame_owned);
+    try std.testing.expect(cl.frame_owned_body);
+    try std.testing.expectEqual(@as(u32, 2), cl.header.refcountValue());
+    try std.testing.expect(def.word_id == null);
+    try std.testing.expect(ctx.compileBody("helper", def, def.action.compound, effect, null) == null);
+
+    ctx.popLocalFrame();
+    try std.testing.expectEqual(@as(u32, 1), cl.header.refcountValue());
+}
+
+/// Define a frame-owned helper with the allocator failing at the `fail_after`th allocation made
+/// from the define onward. Returns whether the define succeeded.
+fn adoptingDefineFailingAt(fail_after: usize) !bool {
+    var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{});
+    const alloc = failing.allocator();
+
+    const body = try std.testing.allocator.alloc(Instruction, 1);
+    defer std.testing.allocator.free(body);
+
+    var ctx = Context.init(alloc);
+    defer ctx.deinit();
+
+    try ctx.pushLocalFrame();
+
+    const vec = try value_mod.Vector.create(alloc, 0);
+    body[0] = .{ .op = .{ .push_literal = .{ .vector = vec } }, .line = 0 };
+
+    const cl = try value_mod.Closure.create(alloc, .{
+        .instructions = body,
+        .segments = &.{},
+        .header = undefined,
+    }, 0);
+
+    const dictionary = &ctx.stateTarget().dictionary;
+    const registered_before = dictionary.container_release_list.items.len;
+
+    failing.fail_index = failing.alloc_index + fail_after;
+    const result = ctx.defineBindingAdoptingOwner("helper", .{
+        .name = "helper",
+        .action = .{ .compound = body },
+        .body_owner = cl,
+    });
+    failing.fail_index = std.math.maxInt(usize);
+
+    if (result) |_| {
+        ctx.popLocalFrame();
+        return true;
+    } else |_| {
+        // The caller still holds the closure. The dictionary releases the body literal only when
+        // it recorded the body.
+        container_backing.releaseValue(.{ .closure = cl });
+        ctx.popLocalFrame();
+        if (dictionary.container_release_list.items.len == registered_before) {
+            container_backing.releaseValue(.{ .vector = vec });
+        }
+        return false;
+    }
+}
+
+test "defineBindingAdoptingOwner: a failure leaves the closure with the caller" {
+    var fail_after: usize = 0;
+    while (!try adoptingDefineFailingAt(fail_after)) : (fail_after += 1) {
+        try std.testing.expect(fail_after < 256);
+    }
+}
+
+const eager_probe_outputs = [_]StackEffectParam{.{ .name = "n" }};
+
+test "defineBindingAdoptingOwner: eager mode compiles a pinned closure body and refuses a frame-owned one" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    ctx.compile_mode = .eager;
+    const effect = try ctx.internStackEffect(.{ .inputs = &.{}, .outputs = &eager_probe_outputs });
+
+    const pinned = try frameOwnedClosureProbe(&ctx, &frame_owned_probe_body);
+    defer container_backing.releaseValue(.{ .closure = pinned });
+    _ = try ctx.defineBindingAdoptingOwner("pinned", .{
+        .name = "pinned",
+        .stack_effect = effect,
+        .action = .{ .compound = pinned.instructions },
+        .body_owner = pinned,
+    });
+    const pinned_def = ctx.lookupWord("pinned").?;
+    try std.testing.expect(!pinned_def.frame_owned);
+    try std.testing.expect(pinned_def.word_id != null);
+
+    try ctx.pushLocalFrame();
+    const owned = try frameOwnedClosureProbe(&ctx, &frame_owned_probe_body);
+    defer container_backing.releaseValue(.{ .closure = owned });
+    _ = try ctx.defineBindingAdoptingOwner("owned", .{
+        .name = "owned",
+        .stack_effect = effect,
+        .action = .{ .compound = owned.instructions },
+        .body_owner = owned,
+    });
+    const owned_def = ctx.lookupWord("owned").?;
+    try std.testing.expect(owned_def.frame_owned);
+    try std.testing.expect(owned_def.word_id == null);
+
+    ctx.popLocalFrame();
+}
+
+test "moduleWordFor: a frame-owned compound's closure outlives the frame" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    try ctx.pushLocalFrame();
+    const cl = try frameOwnedClosureProbe(&ctx, &frame_owned_probe_body);
+    defer container_backing.releaseValue(.{ .closure = cl });
+
+    _ = try ctx.defineBindingAdoptingOwner("helper", .{
+        .name = "helper",
+        .action = .{ .compound = cl.instructions },
+        .body_owner = cl,
+    });
+    const def = ctx.lookupWord("helper").?;
+    try std.testing.expect(def.frame_owned);
+
+    const mod_word = try ctx.moduleWordFor(std.testing.allocator, "helper", def);
+    try std.testing.expectEqual(@as(?*const value_mod.Closure, cl), mod_word.body_owner);
+    try std.testing.expectEqual(@as(u32, 3), cl.header.refcountValue());
+
+    ctx.popLocalFrame();
+    try std.testing.expectEqual(@as(u32, 2), cl.header.refcountValue());
+}
+
+test "defineBindingAdoptingOwner: a closure outside a transient frame is pinned to teardown" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    ctx.compile_mode = .hybrid;
+    const effect = try ctx.internStackEffect(.{ .inputs = &.{}, .outputs = &.{} });
+
+    const cl = try frameOwnedClosureProbe(&ctx, &frame_owned_probe_body);
+    defer container_backing.releaseValue(.{ .closure = cl });
+
+    _ = try ctx.defineBindingAdoptingOwner("helper", .{
+        .name = "helper",
+        .stack_effect = effect,
+        .action = .{ .compound = cl.instructions },
+        .body_owner = cl,
+    });
+
+    const def = ctx.lookupWord("helper").?;
+    try std.testing.expect(def.word_id != null);
+    try std.testing.expect(!def.frame_owned);
+    try std.testing.expect(!cl.frame_owned_body);
+    try std.testing.expectEqual(@as(u32, 2), cl.header.refcountValue());
 }
 
 /// A closure over a static body, holding one reference for the frame that owns it and one for the

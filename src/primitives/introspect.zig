@@ -247,8 +247,15 @@ pub fn buildWordInfo(scratch: Allocator, ctx: *const Context, name: []const u8, 
     // A .literal word has no instruction body; wrap its value in the same
     // single-instruction shape a one-element .compound body would have
     // produced before this variant existed, so `body>>` reads the same either way.
+    //
+    // A body a frame owns dies with the frame, so the array holds a reference to the closure
+    // instead of borrowing its instructions.
     info.items[5] = switch (word.action) {
-        .compound => |instrs| .{ .quotation = .{ .instructions = instrs } },
+        .compound => |instrs| if (word.frame_owned) blk: {
+            const owner: Value = .{ .closure = @constCast(word.body_owner.?) };
+            container_backing.retainValue(owner);
+            break :blk owner;
+        } else .{ .quotation = .{ .instructions = instrs } },
         .literal => |v| blk: {
             const instrs = try scratch.alloc(Instruction, 1);
             instrs[0] = .{ .op = .{ .push_literal = v }, .line = 0 };

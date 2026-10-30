@@ -1,0 +1,63 @@
+\ Bounded-memory regression for a closure definition made inside a word body.
+\
+\ A helper that reads one of its word's locals is a closure, and `;` used to park every one on the
+\ teardown list. Each call into the word then kept a closure, its captured scope, and its
+\ metadata until exit. The loops below exhausted the 4 MB cap in the `.flags` sidecar within a few
+\ thousand calls. A cycle-free closure is now owned by the frame that defines it and
+\ is released when the call returns, so every loop stays flat.
+
+outer: ( n -- n ) [
+  x: swap ;
+  helper: ( n -- n ) [ x + ] ;
+  1 helper
+] ;
+
+typed-annotated: ( n -- n ) [
+  x: swap ;
+  helper: ( a: fixnum -- sum: fixnum ) [ x + ] ;
+  1 helper
+] ;
+
+sibling: ( n -- n ) [
+  x: swap ;
+  inner: ( n -- n ) [ x + ] ;
+  outer-helper: ( n -- n ) [ inner inner ] ;
+  1 outer-helper
+] ;
+
+curried: ( n -- n ) [
+  k: swap ;
+  add-k: k [ + ] curry ;
+  1 add-k
+] ;
+
+composed: ( n -- n ) [
+  k: swap ;
+  add-k: ( n -- n ) [ k + ] ;
+  both: [ add-k ] [ add-k ] compose ;
+  1 both
+] ;
+
+rebinds-itself: ( n -- n ) [
+  x: swap ;
+  helper: ( n -- n ) [ x + ] ;
+  helper: ( n -- n ) [ x 2 * + ] ;
+  1 helper
+] ;
+
+counts-down: ( n -- n ) [
+  x: swap ;
+  step: ( n -- n ) [ dup 0 > [ 1 - step ] when ] ;
+  3 step drop
+  x
+] ;
+
+20000 [ 0 outer drop ] times
+3000 [ 0 typed-annotated drop ] times
+3000 [ 0 sibling drop ] times
+3000 [ 0 curried drop ] times
+3000 [ 0 composed drop ] times
+3000 [ 0 rebinds-itself drop ] times
+3000 [ 0 counts-down drop ] times
+
+"flat" print-line

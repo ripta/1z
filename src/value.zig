@@ -1822,6 +1822,11 @@ pub const Closure = struct {
     owns_scope: bool = false,
     bases: []const *Closure = &.{},
 
+    /// Set when a transient frame owns a word definition over this closure. The body is then not
+    /// process-lifetime, so no address-keyed store may admit it. The bit is never cleared: a
+    /// closure that was ever frame-owned keeps being refused, which costs a stamp and nothing else.
+    frame_owned_body: bool = false,
+
     // The freestanding mirror in capi_freestanding.zig re-declares the three leading fields
     // and reads `segments` through its own layout. Both declarations pin the offsets to the
     // same constants, so a compiler reordering on either side fails the build.

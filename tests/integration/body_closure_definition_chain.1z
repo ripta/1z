@@ -1,0 +1,39 @@
+\ A chain of composed helpers, each closing over every earlier one, must define in linear time.
+\ The cycle walk visits a closure once per way it can be reached. Without a stop at a closure that
+\ already passed the walk, each helper doubles the work of the one before it.
+
+use "testing" ;
+
+chain: ( -- n ) [
+  h0:  ( n -- n ) [ 1 + ] ;
+  h1:  [ h0 ] [ h0 ] compose ;
+  h2:  [ h1 ] [ h1 ] compose ;
+  h3:  [ h2 ] [ h2 ] compose ;
+  h4:  [ h3 ] [ h3 ] compose ;
+  h5:  [ h4 ] [ h4 ] compose ;
+  h6:  [ h5 ] [ h5 ] compose ;
+  h7:  [ h6 ] [ h6 ] compose ;
+  h8:  [ h7 ] [ h7 ] compose ;
+  h9:  [ h8 ] [ h8 ] compose ;
+  h10: [ h9 ] [ h9 ] compose ;
+  h11: [ h10 ] [ h10 ] compose ;
+  h12: [ h11 ] [ h11 ] compose ;
+  h13: [ h12 ] [ h12 ] compose ;
+  h14: [ h13 ] [ h13 ] compose ;
+  h15: [ h14 ] [ h14 ] compose ;
+  h16: [ h15 ] [ h15 ] compose ;
+  h17: [ h16 ] [ h16 ] compose ;
+  h18: [ h17 ] [ h17 ] compose ;
+  h19: [ h18 ] [ h18 ] compose ;
+  h20: [ h19 ] [ h19 ] compose ;
+  h21: [ h20 ] [ h20 ] compose ;
+  h22: [ h21 ] [ h21 ] compose ;
+  h23: [ h22 ] [ h22 ] compose ;
+  h24: [ h23 ] [ h23 ] compose ;
+  0 h3
+] ;
+
+"long chain" test-section
+chain 8 "a chain of composed helpers defines and runs" assert=
+
+"chain" print-line

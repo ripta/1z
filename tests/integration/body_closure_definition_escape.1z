@@ -1,0 +1,105 @@
+\ A closure definition made in a word body is owned by the frame, and a holder that outlives the
+\ frame takes a reference of its own. Each case below keeps the helper reachable after the defining
+\ call has returned, so a missing reference would read freed memory.
+
+use "testing" ;
+
+"escaping quotation" test-section
+
+make-adder: ( n -- q ) [
+  x: swap ;
+  helper: ( n -- n ) [ x + ] ;
+  [ helper ]
+] ;
+
+5 make-adder
+10 swap call
+15 "an escaped quotation calls the helper after its frame popped" assert=
+
+"stored in a container" test-section
+
+make-stored: ( -- q ) [
+  x: 7 ;
+  helper: ( n -- n ) [ x * ] ;
+  [ helper ]
+] ;
+
+holder: V{ } ;
+holder make-stored #push! drop
+holder make-stored #push! drop
+6 holder 0 #nth call 42 "a stored quotation calls its helper" assert=
+6 holder 1 #nth call 42 "a second stored quotation calls its own helper" assert=
+
+"spawned task" test-section
+
+spawn-helper: ( n -- ch ) [
+  x: swap ;
+  out: 1 <buffered-channel> ;
+  helper: ( n -- n ) [ x + ] ;
+  [ 5 helper out send ] spawn drop
+  out
+] ;
+
+[
+  3 spawn-helper receive 8 "a spawned task calls a helper whose frame popped" assert=
+] task-scope
+
+"curry over a leaf" test-section
+
+make-curried: ( n -- q ) [
+  k: swap ;
+  add-k: k [ + ] curry ;
+  [ add-k ]
+] ;
+
+4 make-curried
+1 swap call
+5 "an escaped quotation calls a curried helper" assert=
+
+"cycle shape stays pinned" test-section
+
+cycle-shape: ( -- n ) [
+  acc: V{ } ;
+  helper: acc [ swap #push! drop ] curry ;
+  acc [ 1 helper ] #push! drop
+  1 helper
+  acc #len
+] ;
+
+cycle-shape 2 "a curried helper over a container still works" assert=
+
+"word info and local scope" test-section
+
+\ A word-defined hook receives the info array while the frame is live, and this one keeps it.
+stash: V{ } ;
+{ } word-defined-hooks [
+  on:word-defined stash [ swap #push! drop ] curry add-hook
+  hooked: ( -- ) [
+    x: 3 ;
+    helper: ( n -- n ) [ x + ] ;
+  ] ;
+  hooked
+] with-parameter
+
+5 stash dup #len 1 - #nth (raw>word-info) body>> call
+8 "a kept word info array holds its body after the frame popped" assert=
+
+[
+  x: 3 ;
+  (helper): ( n -- n ) [ x + ] ;
+  local-scope
+] call import
+1 (helper) 4 "a helper captured by local-scope outlives its frame" assert=
+
+"tail call out of a frame" test-section
+
+tail-out: ( n -- n ) [
+  x: swap ;
+  helper: ( n -- n ) [ x + ] ;
+  1 helper
+] ;
+
+tail-caller: ( n -- n ) [ tail-out ] ;
+2 tail-caller 3 "a word tail calling out of a defining frame" assert=
+
+"escape" print-line

@@ -1,0 +1,17 @@
+=== escaping quotation ===
+PASS: an escaped quotation calls the helper after its frame popped
+=== stored in a container ===
+PASS: a stored quotation calls its helper
+PASS: a second stored quotation calls its own helper
+=== spawned task ===
+PASS: a spawned task calls a helper whose frame popped
+=== curry over a leaf ===
+PASS: an escaped quotation calls a curried helper
+=== cycle shape stays pinned ===
+PASS: a curried helper over a container still works
+=== word info and local scope ===
+PASS: a kept word info array holds its body after the frame popped
+PASS: a helper captured by local-scope outlives its frame
+=== tail call out of a frame ===
+PASS: a word tail calling out of a defining frame
+escape
