@@ -1,0 +1,20 @@
+\ Shared code whose baked-in callee gets shadowed must not compile again on every call. The code
+\ for `caller` bakes in the global `helper`. Each call to `run` then binds a frame word named
+\ `helper`, which revokes that code. The next call must compile it so that `helper` is reached by
+\ name. The entry is then revoked once for that name, and the trace shows a bounded number of
+\ compiles however many calls run.
+
+use "testing" ;
+
+helper: ( n -- n ) [ 100 + ] ;
+
+run: ( count -- n ) [
+  caller: ( n -- n ) [ helper 0 + ] ;
+  [ 1 caller drop ] times
+  helper: ( n -- n ) [ 1000 + ] ;
+  1 caller
+] ;
+
+20 [ 2 run drop ] times
+
+2 run 1001 "the frame word wins once it is bound" assert=

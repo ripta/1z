@@ -85,6 +85,10 @@ pub const JitEntry = struct {
     /// The address of the body that shared code was compiled from, which decides which frames can
     /// shadow what it baked in. Zero when unknown.
     lexical_body: usize = 0,
+    /// The names whose baked callee a definition has shadowed, owned by the table. The entry
+    /// compiles these by name from then on, so it is revoked at most once per name. The strings
+    /// are the interned names its baked records carried.
+    revoked_names: []const []const u8 = &.{},
 
     /// The name traces, profiles, and error frames display for this word.
     pub fn displayName(self: JitEntry) []const u8 {
@@ -237,6 +241,18 @@ pub const JitDispatchTable = struct {
             }
             if (entry.code_ptr == null) continue;
 
+            if (!self.rememberRevoked(entry, name)) {
+                // Without the record the entry would bake the name again and retire a buffer on
+                // every call, so it stays out of the compiler.
+                entry.code_ptr = null;
+                entry.uncompilable = true;
+                if (entry.jit_buf) |buf| {
+                    self.retired.append(self.allocator, buf) catch continue;
+                    entry.jit_buf = null;
+                }
+                continue;
+            }
+
             if (entry.jit_buf) |buf| {
                 self.retired.append(self.allocator, buf) catch {
                     // The buffer stays attached, so the table frees it.
@@ -254,6 +270,27 @@ pub const JitDispatchTable = struct {
             entry.baked = &.{};
         }
         ids.shrinkRetainingCapacity(kept);
+    }
+
+    /// Record that `entry` must resolve `name` by name from now on. False when the record could
+    /// not be kept.
+    fn rememberRevoked(self: *JitDispatchTable, entry: *JitEntry, name: []const u8) bool {
+        for (entry.revoked_names) |seen| {
+            if (std.mem.eql(u8, seen, name)) return true;
+        }
+
+        // The baked record owns the interned copy, which outlives the entry's code.
+        const interned = for (entry.baked) |callee| {
+            if (!callee.by_name and std.mem.eql(u8, callee.name, name)) break callee.name;
+        } else return false;
+
+        const grown = self.allocator.alloc([]const u8, entry.revoked_names.len + 1) catch return false;
+        @memcpy(grown[0..entry.revoked_names.len], entry.revoked_names);
+        grown[entry.revoked_names.len] = interned;
+
+        self.allocator.free(entry.revoked_names);
+        entry.revoked_names = grown;
+        return true;
     }
 
     pub fn deinit(self: *JitDispatchTable) void {
@@ -285,6 +322,7 @@ pub const JitDispatchTable = struct {
             }
             self.allocator.free(entry.local_read_names);
             self.allocator.free(entry.baked);
+            self.allocator.free(entry.revoked_names);
         }
         self.entries.deinit(self.allocator);
     }
@@ -730,4 +768,15 @@ test "revokeBaked retires code once and drops the entry from the index" {
 
     table.revokeBaked("helper", ScopeReaches{ .reaches_all = true });
     try std.testing.expectEqual(@as(usize, 1), table.retired.items.len);
+}
+
+test "revokeBaked remembers the name it revoked for the entry" {
+    var table = JitDispatchTable.init(std.testing.allocator);
+    defer table.deinit();
+
+    const id = try entryBakingHelper(&table, 0x1000);
+
+    table.revokeBaked("helper", ScopeReaches{ .reaches_all = true });
+    try std.testing.expectEqual(@as(usize, 1), table.get(id).?.revoked_names.len);
+    try std.testing.expectEqualStrings("helper", table.get(id).?.revoked_names[0]);
 }

@@ -1,0 +1,5 @@
+=== a helper over a once word ===
+PASS: first call
+PASS: second call, reusing the compiled helper
+=== memory stays flat ===
+PASS: after many calls

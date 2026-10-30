@@ -595,15 +595,6 @@ fn markersContainGeneric(markers: []const *value_mod.Marker) bool {
     return false;
 }
 
-/// Whether a definition's marker slice carries the `const` marker, which bars defining the name
-/// again in any scope.
-fn markersContainConst(markers: []const *value_mod.Marker) bool {
-    for (markers) |mk| {
-        if (markers_mod.isConstMarker(mk)) return true;
-    }
-    return false;
-}
-
 /// PragmaRegistration holds metadata for a registered pragma key.
 /// If both validators are null, the pragma accepts only boolean values.
 /// If validator is a quotation, it is called with the value on the stack
@@ -3512,9 +3503,10 @@ pub const Context = struct {
     ///
     /// A container can come to hold a closure whose scope holds this cell, and the cell holds the
     /// container. A published closure can hold the cell directly through its scope. Refcounting
-    /// alone cannot break either cycle, so teardown releases the value instead. The
-    /// root's list is used because the cell is shared with whoever else holds it, and a task's own
-    /// dictionary dies first. Runs ahead of the publish, so a failed append fails the force.
+    /// alone cannot break either cycle, so teardown releases the value instead.
+    ///
+    /// The root's list is used because the cell is shared with whoever else holds it, and a task's
+    /// own dictionary dies first. Runs ahead of the publish, so a failed append fails the force.
     pub fn pinPublishedOnceCell(self: *Context, cell: *value_mod.OnceCell, produced: Value) !void {
         if (!cell.frame_owned or cell.pinned) return;
 
@@ -5720,7 +5712,10 @@ pub const Context = struct {
         // A closure's body has to keep its address. `ownsBody` compares it to decide whether the
         // closure's captured scope applies to an execution, so a fresh array would silently lose
         // the scope the body resolves its bare words against.
-        if (def.body_owner != null) return;
+        //
+        // A `once` word's definition holds its guard, which calls the native that runs the cell. The
+        // guard has no source calls to expand, and nothing may rewrite it.
+        if (def.body_owner != null or def.once_cell != null) return;
 
         // The file the parser is reading, which is the file this definition belongs to. A
         // parse-time word executing points `current_source` at its own file, and
@@ -5731,7 +5726,7 @@ pub const Context = struct {
         // every question that expansion asked. The side effects below belong to the expanded array,
         // so they ran when it was built and run only then.
         const target = self.stateTarget();
-        const keyed = target.owns_loads and body.len != 0;
+        const keyed = self.durableBodyKey(def.*) != null;
         if (keyed) {
             const Replay = struct {
                 ctx: *Context,
@@ -6601,11 +6596,19 @@ pub const Context = struct {
         var baked: std.ArrayListUnmanaged(JitBakedCallee) = .{};
         defer baked.deinit(self.allocator);
 
+        const body_key = self.durableBodyKey(def);
+        const revoked_names: []const []const u8 = if (body_key) |key| blk: {
+            const rec = self.jit_dispatch.bodyEntry(@intFromPtr(key.ptr)) orelse break :blk &.{};
+            const entry = self.jit_dispatch.get(rec.id) orelse break :blk &.{};
+            break :blk entry.revoked_names;
+        } else &.{};
+
         var resolver_ctx = ResolverState{
             .context = self,
             .self_body = instrs,
             .group = mutual_group,
-            .baked = if (self.durableBodyKey(def) != null and resolvesInTransientFrame(self, name)) &baked else null,
+            .baked = if (body_key != null and resolvesInTransientFrame(self, name)) &baked else null,
+            .revoked_names = revoked_names,
         };
         const resolver = ir_codegen.WordResolver{
             .resolve = &resolveWordForDispatch,
@@ -7269,7 +7272,8 @@ pub const Context = struct {
         return id;
     }
 
-    /// The body of `def` when one JIT entry can serve every definition that shares it, or null.
+    /// The body of `def` when its address may key a store that outlives the definition, or null.
+    /// The JIT entry map and the inline expansion cache both key on it.
     ///
     /// This is the rule the stamp store enforces. The body must be a parsed slice that the arena
     /// of the state target's load owner holds, so the key outlives the table that records it. A
@@ -12857,6 +12861,10 @@ const ResolverState = struct {
     /// Set when a callee could not be recorded.
     baked_failed: bool = false,
 
+    /// The names a definition has already shadowed for the entry this code installs under. They
+    /// are reached by name, so the code cannot be revoked for them again.
+    revoked_names: []const []const u8 = &.{},
+
     /// The identity of what `callee` runs, which a later definition compares.
     fn identOf(callee: WordDefinition) usize {
         return switch (callee.action) {
@@ -12891,6 +12899,13 @@ const ResolverState = struct {
         }) catch {
             self.baked_failed = true;
         };
+    }
+
+    fn wasRevoked(self: ResolverState, name: []const u8) bool {
+        for (self.revoked_names) |seen| {
+            if (std.mem.eql(u8, seen, name)) return true;
+        }
+        return false;
     }
 
     fn compilesTogether(self: ResolverState, name: []const u8, callee: WordDefinition) bool {
@@ -12976,7 +12991,11 @@ fn resolveWordForDispatch(name: []const u8, user_data: *anyopaque) ?ir_codegen.R
     // Shared code does bake in every other callee. It records what each resolved to, so a later
     // definition can check that its own scope resolves the same, and a definition that shadows one
     // revokes the code.
-    const by_name = resolvesInTransientFrame(ctx, name) and !state.compilesTogether(name, callee);
+    //
+    // A name that a definition already shadowed for this code is reached by name as well, wherever
+    // it resolves now. Baking it again would be revoked again by the next call's definition.
+    const by_name = (resolvesInTransientFrame(ctx, name) or state.wasRevoked(name)) and
+        !state.compilesTogether(name, callee);
     state.note(name, callee, effect, by_name);
 
     const word_id = if (by_name) blk: {

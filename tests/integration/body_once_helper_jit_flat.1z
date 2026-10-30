@@ -1,0 +1,28 @@
+\ Bounded-memory regression for a helper that calls a frame-owned `once` word and crosses the
+\ compile threshold. Each call to `run` makes a fresh cell and a fresh helper. The helper's code is
+\ shared across calls, so it must reach the cell by name and must not keep a cell alive after its
+\ frame returns. The loops below exhaust the 4 MB cap in the `.flags` sidecar when any call leaks.
+
+use "testing" ;
+
+run: ( count -- n ) [
+  c: once ( -- n ) [ 42 ] ;
+  helper: ( n -- n ) [ c + ] ;
+  0 swap [ helper ] times
+] ;
+
+captured: ( count -- n ) [
+  x: swap ;
+  c: once ( -- n ) [ x 2 * ] ;
+  helper: ( n -- n ) [ c + ] ;
+  0 x [ helper ] times
+] ;
+
+"a helper over a once word" test-section
+150 run 6300 "first call" assert=
+150 run 6300 "second call, reusing the compiled helper" assert=
+
+"memory stays flat" test-section
+200 [ 150 run drop ] times
+200 [ 150 captured drop ] times
+150 run 6300 "after many calls" assert=

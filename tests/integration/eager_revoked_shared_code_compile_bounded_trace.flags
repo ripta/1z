@@ -1,0 +1,5 @@
+@raw
+run
+--compile=eager
+--trace-jit
+tests/integration/body_revoked_shared_code_compile_bounded.1z

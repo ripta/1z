@@ -811,8 +811,12 @@ test "a body defined again reuses its expansion until a word it called becomes i
         .{ .op = .{ .call_word = "bump" }, .line = 3 },
     });
 
+    // The parser stamps every body it places on the arena, and only a stamped body may key the
+    // cache.
+    try ctx.stampQuotationBodySourceAs(caller, here);
+
     try defineBody(&ctx, here, "first", caller, false);
-    const first = ctx.lookupWord("first").?.action.compound;
+    const first =ctx.lookupWord("first").?.action.compound;
     try expectOps(&ctx, "first", &.{ "#", "*", "bump" });
 
     // The same body defined again gets the same array, so nothing new is allocated or registered.

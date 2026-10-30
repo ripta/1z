@@ -1,0 +1,5 @@
+@raw
+run
+--compile=hybrid
+--max-memory=4M
+tests/integration/body_once_helper_jit_flat.1z
