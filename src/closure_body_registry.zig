@@ -28,6 +28,9 @@ const enabled = builtin.mode == .Debug;
 var mu: std.Thread.Mutex = .{};
 var live: std.AutoHashMapUnmanaged(usize, void) = .{};
 
+/// How many executions of each closure-owned body are in flight, by body address.
+var running: std.AutoHashMapUnmanaged(usize, u32) = .{};
+
 /// The registry's own bookkeeping rides the page allocator so it stays outside the interpreter's
 /// tracked memory limit; a Debug diagnostic must not change what a capped run can allocate.
 const gpa = std.heap.page_allocator;
@@ -48,13 +51,43 @@ pub fn register(key: usize, len: usize) void {
 /// Forget the body at `key` on the owning closure's destroy path, before the body is freed, so
 /// the registry never holds a freed address. Deregistering an address that was never registered
 /// asserts, since it means ownership was minted somewhere other than the registration site.
+///
+/// This is the choke point of the running-body invariant: a closure released to zero must not own
+/// a body that is executing. Every body entered through `enterRunning` is counted until its
+/// `exitRunning`, and a count above zero here means the closure was released while its body ran,
+/// so the interpreter would read freed instructions on its next step.
 pub fn deregister(key: usize, len: usize) void {
     if (comptime !enabled) return;
     if (len == 0) return;
 
     mu.lock();
     defer mu.unlock();
+    if (running.get(key)) |depth|
+        std.debug.panic("closure released to zero while its body is running 0x{x} (depth {d})", .{ key, depth });
     std.debug.assert(live.remove(key));
+}
+
+/// Record that the body at `key` started executing. Nested and recursive runs of one body count.
+pub fn enterRunning(key: usize, len: usize) void {
+    if (comptime !enabled) return;
+    if (len == 0) return;
+
+    mu.lock();
+    defer mu.unlock();
+    const gop = running.getOrPut(gpa, key) catch |err|
+        std.debug.panic("closure body registry allocation failed: {s}", .{@errorName(err)});
+    if (gop.found_existing) gop.value_ptr.* += 1 else gop.value_ptr.* = 1;
+}
+
+/// Record that a run `enterRunning` counted has ended.
+pub fn exitRunning(key: usize, len: usize) void {
+    if (comptime !enabled) return;
+    if (len == 0) return;
+
+    mu.lock();
+    defer mu.unlock();
+    const depth = running.getPtr(key) orelse std.debug.panic("exit of a body that was not running 0x{x}", .{key});
+    if (depth.* == 1) _ = running.remove(key) else depth.* -= 1;
 }
 
 /// Whether a live closure owns the body at `key`. False outside Debug builds.

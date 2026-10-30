@@ -17971,6 +17971,7 @@ export fn jitRunInPlaceUnchecked(ctx_raw: usize, word_id_raw: usize) callconv(.c
     ctx.tail_call_module = word.source_module;
     ctx.tail_call_source = word.source_file;
     ctx.tail_call_body_owner = word.body_owner;
+    ctx.holdTailOwner(&word);
     ctx.tail_call_may_define = word.exec_flags.may_define;
     ctx.tail_call_compiled = false;
     ctx.tail_call_arm = false;
@@ -18001,11 +18002,15 @@ export fn aotRunInPlaceUnchecked(ctx_raw: usize, word_id_raw: usize, src_ptr_raw
     ctx.current_source = word.source_file orelse ctx.traceFrameSource(src_ptr_raw, src_len_raw);
 
     ctx.pushCallFrame(display_name, ctx.current_source, 0, 0, word.stack_effect);
+    const held = Context.heldBodyOwner(&word);
     const result = if (word.source_module) |mod| blk: {
-        ctx.pushModuleDepsFrame(mod) catch |e| break :blk @as(anyerror!void, e);
+        ctx.pushModuleDepsFrame(mod) catch |e| {
+            Context.releaseHeld(held);
+            break :blk @as(anyerror!void, e);
+        };
         defer ctx.popModuleDepsFrameTraced(mod);
-        break :blk ctx.executeQuotationWithPic(.{ .instructions = body }, entry.pic_snapshot, mod, word.body_owner, word.exec_flags.may_define);
-    } else ctx.executeQuotationWithPic(.{ .instructions = body }, entry.pic_snapshot, null, word.body_owner, word.exec_flags.may_define);
+        break :blk ctx.executeQuotationWithPicHeld(.{ .instructions = body }, entry.pic_snapshot, mod, word.body_owner, held, word.exec_flags.may_define);
+    } else ctx.executeQuotationWithPicHeld(.{ .instructions = body }, entry.pic_snapshot, null, word.body_owner, held, word.exec_flags.may_define);
 
     result catch |err| {
         ctx.popCallFrame();
@@ -20117,6 +20122,7 @@ export fn jitInterpretedCall(ctx_raw: usize, word_id_raw: usize, src_ptr_raw: us
             ctx.tail_call_module = word.source_module;
             ctx.tail_call_source = word.source_file;
             ctx.tail_call_body_owner = word.body_owner;
+            ctx.holdTailOwner(&word);
             ctx.tail_call_may_define = word.exec_flags.may_define;
             ctx.tail_call_compiled = false;
             ctx.tail_call_arm = false;
@@ -20132,9 +20138,13 @@ export fn jitInterpretedCall(ctx_raw: usize, word_id_raw: usize, src_ptr_raw: us
         if (word.source_module) |mod| {
             switch (word.action) {
                 .compound => |instrs| {
-                    ctx.pushModuleDepsFrame(mod) catch |e| break :blk @as(anyerror!void, e);
+                    const held = Context.heldBodyOwner(&word);
+                    ctx.pushModuleDepsFrame(mod) catch |e| {
+                        Context.releaseHeld(held);
+                        break :blk @as(anyerror!void, e);
+                    };
                     defer ctx.popModuleDepsFrameTraced(mod);
-                    break :blk ctx.executeQuotationWithPic(.{ .instructions = instrs }, entry.pic_snapshot, mod, word.body_owner, word.exec_flags.may_define);
+                    break :blk ctx.executeQuotationWithPicHeld(.{ .instructions = instrs }, entry.pic_snapshot, mod, word.body_owner, held, word.exec_flags.may_define);
                 },
                 .native => |func| break :blk func(ctx),
                 .host_callback => |host| break :blk host.invoke(ctx),
@@ -20144,7 +20154,7 @@ export fn jitInterpretedCall(ctx_raw: usize, word_id_raw: usize, src_ptr_raw: us
             break :blk switch (word.action) {
                 .native => |func| func(ctx),
                 .host_callback => |host| host.invoke(ctx),
-                .compound => |instrs| ctx.executeQuotationWithPic(.{ .instructions = instrs }, entry.pic_snapshot, null, word.body_owner, word.exec_flags.may_define),
+                .compound => |instrs| ctx.executeQuotationWithPicHeld(.{ .instructions = instrs }, entry.pic_snapshot, null, word.body_owner, Context.heldBodyOwner(&word), word.exec_flags.may_define),
                 .literal => |v| ctx.stack.push(v),
             };
         }

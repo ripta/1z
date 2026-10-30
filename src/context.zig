@@ -8774,11 +8774,15 @@ pub const Context = struct {
                     defer self.current_source = saved_source;
                     if (module_word.source_file) |source| self.current_source = source;
                     if (module_word.source_module) |mod| {
-                        try self.pushModuleDepsFrame(mod);
+                        const held = heldBodyOwner(&module_word);
+                        self.pushModuleDepsFrame(mod) catch |err| {
+                            releaseHeld(held);
+                            return err;
+                        };
                         defer self.popModuleDepsFrameTraced(mod);
-                        try self.executeQuotationWithPic(.{ .instructions = instrs }, null, mod, module_word.body_owner, module_word.exec_flags.may_define);
+                        try self.executeQuotationWithPicHeld(.{ .instructions = instrs }, null, mod, module_word.body_owner, held, module_word.exec_flags.may_define);
                     } else {
-                        try self.executeQuotationWithPic(.{ .instructions = instrs }, null, null, module_word.body_owner, module_word.exec_flags.may_define);
+                        try self.executeQuotationWithPicHeld(.{ .instructions = instrs }, null, null, module_word.body_owner, heldBodyOwner(&module_word), module_word.exec_flags.may_define);
                     }
                 },
                 .literal => |v| try self.stack.push(v),
@@ -10382,6 +10386,15 @@ pub const Context = struct {
         return self.runTrampoline(quotation, pic_table, initial_module, owner, body_defines, .{});
     }
 
+    /// `executeQuotationWithPic` for a word body whose owner the caller holds, answering the
+    /// reference from `heldBodyOwner`. The trampoline takes the reference over and releases it when
+    /// the call ends, so a body that removes or rebinds its own name mid-run keeps its owner alive.
+    ///
+    /// A null `held` borrows `owner` exactly as `executeQuotationWithPic` does.
+    pub inline fn executeQuotationWithPicHeld(self: *Context, quotation: Quotation, pic_table: ?*PicTable, initial_module: ?*const value_mod.Module, owner: ?*const value_mod.Closure, held: ?*value_mod.Closure, body_defines: bool) anyerror!void {
+        return self.runTrampoline(quotation, pic_table, initial_module, owner, body_defines, .{ .owner_ref = held });
+    }
+
     /// How the first body `runTrampoline` runs arrived, for a body taken out of the tail-call slots
     /// rather than called directly.
     const TrampolineEntry = struct {
@@ -10407,7 +10420,14 @@ pub const Context = struct {
         var current_pic = pic_table;
         var current_module: ?*const value_mod.Module = null;
         var body_module: ?*const value_mod.Module = initial_module;
+        // The closure behind the running body. It is held, with a reference this loop owns, when
+        // the body is frame-owned or an arm's, and borrowed otherwise. A held one is the same
+        // closure `first.owner_ref` or the tail-call slots carried in.
         var current_owner = owner;
+        var owner_held = first.owner_ref != null;
+        std.debug.assert(first.owner_ref == null or first.owner_ref == owner);
+        defer if (owner_held) releaseHeldClosure(@constCast(current_owner.?));
+
         var owns_frame = false;
         var body_may_define = body_defines;
         var owns_lexical_frame = false;
@@ -10421,11 +10441,6 @@ pub const Context = struct {
         var arm_frame_index: usize = 0;
         var arm_return_source = first.arm_return_source;
 
-        // The closure behind the running arm, if any. One iteration's body is that closure's own
-        // array, so the reference is let go once the next body's is in hand.
-        var held_owner: ?*value_mod.Closure = first.owner_ref;
-        defer if (held_owner) |c| releaseHeldClosure(c);
-
         const saved_pop_floor = self.tail_pop_floor;
         defer self.tail_pop_floor = saved_pop_floor;
 
@@ -10434,18 +10449,16 @@ pub const Context = struct {
         const entry_frame_len = self.local_frames.items.len;
         errdefer self.truncateLocalFrames(entry_frame_len);
 
+        // An error leaves no tail call for anyone to pick up, and a reference it carried goes with it.
+        errdefer self.clearTailCall();
+
         // Taken once, before any tail call. A declared effect describes the quotation as a whole,
         // and its tail callees run as part of it.
         const depth_before = self.stack.depth();
 
         while (true) {
             self.assertNoPendingTailOwner();
-            self.tail_call_instructions = null;
-            self.tail_call_module = null;
-            self.tail_call_source = null;
-            self.tail_call_body_owner = null;
-            self.tail_call_may_define = false;
-            self.tail_call_arm = false;
+            self.clearTailCall();
             if (!pending_compiled) self.tail_call_compiled = false;
 
             // Push module deps frame on first entry into a module context. On
@@ -10528,11 +10541,13 @@ pub const Context = struct {
                 self.tail_call_arm = false;
                 std.debug.assert(!is_arm or (self.tail_call_module == null and !self.tail_call_compiled));
 
-                // A held reference covers exactly the iteration that runs its closure's body.
-                const next_owner = self.tail_call_owner_ref;
+                // A held reference covers exactly the iteration that runs its closure's body. The
+                // next body brings its own, so this one is let go once that one is in hand.
+                const next_ref = self.tail_call_owner_ref;
                 self.tail_call_owner_ref = null;
-                if (held_owner) |c| releaseHeldClosure(c);
-                held_owner = next_owner;
+                if (owner_held) releaseHeldClosure(@constCast(current_owner.?));
+                owner_held = next_ref != null;
+                std.debug.assert(next_ref == null or next_ref == self.tail_call_body_owner);
 
                 // Taken now, while the caller's frame is already gone, so a raise from the compiled
                 // code pends no row for it. That is what an interpreted tail callee does.
@@ -10795,6 +10810,7 @@ pub const Context = struct {
     /// interpreted callers appended later during the unwind still land in the chain, and the
     /// fold runs once at the consumption point that owns the error.
     pub fn wordErrorCleanup(self: *Context, name: []const u8, err: anyerror) anyerror {
+        self.clearTailCall();
         if (self.benchmark) |b| b.endWordProfile(self.allocator, name);
         if (self.profile) |p| p.recordWordEnd(self.allocator, name);
         if (self.call_stack.items.len > 0) {
@@ -10831,6 +10847,7 @@ pub const Context = struct {
     pub fn tailCombinatorErrorCleanup(self: *Context, name: []const u8, err: anyerror, mark: usize) anyerror {
         if (self.pendingErrorFrameCount() == mark) return self.wordErrorCleanup(name, err);
 
+        self.clearTailCall();
         if (self.benchmark) |b| b.endWordProfile(self.allocator, name);
         if (self.profile) |p| p.recordWordEnd(self.allocator, name);
         self.popCallFrame();
@@ -10888,6 +10905,7 @@ pub const Context = struct {
         if (stack_effect) |effect| {
             const depth_after = self.stack.depth();
             if (depth_after < effect.minOutputCount()) {
+                self.clearTailCall();
                 self.captureStackEffectMismatch(name, effect.*, depth_after);
                 if (self.benchmark) |b| b.endWordProfile(self.allocator, name);
                 if (self.profile) |p| p.recordWordEnd(self.allocator, name);
@@ -10990,13 +11008,16 @@ pub const Context = struct {
         const tci_arm = self.tail_call_arm;
         self.tail_call_arm = false;
 
-        // The trampoline below takes this reference over. Only an arm carries one, and an arm
-        // carries no module, so nothing between here and that call can fail and leak it.
+        // The trampoline below takes this reference over. An arm or a frame-owned word body
+        // carries one, and the deps frame push can fail before the trampoline has it, so the
+        // reference is let go here when it does.
         const tci_owner_ref = self.tail_call_owner_ref;
         self.tail_call_owner_ref = null;
-        std.debug.assert(tci_owner_ref == null or (tci_arm and tci_module == null));
 
-        if (tci_module) |mod| try self.pushModuleDepsFrame(mod);
+        if (tci_module) |mod| self.pushModuleDepsFrame(mod) catch |err| {
+            releaseHeld(tci_owner_ref);
+            return err;
+        };
         defer if (tci_module) |mod| self.popModuleDepsFrameTraced(mod);
 
         const saved_source = self.current_source;
@@ -11014,19 +11035,65 @@ pub const Context = struct {
     /// Debug-only invariant: no tail-called closure's reference is pending when the trampoline
     /// clears the slots.
     ///
-    /// `setQuotationTailCall` fills the slot right before `.tail_call_set` is returned, and both
-    /// consumers of that signal, `runTrampoline`'s transition and `runPropagatedTailBody`, empty it.
-    /// A reference found here was dropped by some other path, and it leaks.
+    /// The setters fill the slot right before they signal a tail call, and both consumers of that
+    /// signal, `runTrampoline`'s transition and `runPropagatedTailBody`, empty it. A reference found
+    /// here was dropped by some other path. `clearTailCall` still releases it, so a release build
+    /// does not leak, but the path that dropped it is the bug.
     fn assertNoPendingTailOwner(self: *const Context) void {
         std.debug.assert(self.tail_call_owner_ref == null);
     }
 
-    /// Release the closure reference `runTrampoline` held for an arm.
+    /// Empty the tail-call slots, releasing the owner reference a pending call carries.
     ///
-    /// Out of line so the release's own locals stay out of the trampoline's frame, which every
-    /// interpreted body entry pays for.
+    /// `tail_call_compiled` is left to the caller, since the trampoline keeps it while a compiled
+    /// tail call is pending.
+    inline fn clearTailCall(self: *Context) void {
+        self.tail_call_instructions = null;
+        self.tail_call_module = null;
+        self.tail_call_source = null;
+        self.tail_call_body_owner = null;
+        self.tail_call_may_define = false;
+        self.tail_call_arm = false;
+
+        if (self.tail_call_owner_ref) |c| {
+            self.tail_call_owner_ref = null;
+            releaseHeldClosure(c);
+        }
+    }
+
+    /// Out of line so the release's own locals stay out of the frame of every body entry.
     noinline fn releaseHeldClosure(c: *value_mod.Closure) void {
         container_backing.releaseValue(.{ .closure = c });
+    }
+
+    /// Release the reference a hold took, or nothing for a body that took none.
+    pub inline fn releaseHeld(held: ?*value_mod.Closure) void {
+        if (held) |c| releaseHeldClosure(c);
+    }
+
+    /// Take a reference to the closure behind `word`'s body when the frame owns it, answering null
+    /// for a body that is pinned.
+    ///
+    /// A frame-owned word's definition can be removed or rebound while its body runs, and the
+    /// frame's reference goes with it. The call holds its own, so the body and everything read off
+    /// the closure stay valid for the whole call. A pinned closure lives to teardown and pays nothing.
+    pub fn heldBodyOwner(word: *const WordDefinition) ?*value_mod.Closure {
+        if (!word.frame_owned) return null;
+        if (word.action != .compound) return null;
+        const owner = word.body_owner orelse return null;
+        const c: *value_mod.Closure = @constCast(owner);
+        container_backing.retainValue(.{ .closure = c });
+        return c;
+    }
+
+    /// Hold the owner of a word's body for the tail call being set up, which the trampoline picks
+    /// up from `tail_call_owner_ref`.
+    ///
+    /// The reference is taken here, while the caller's frame still binds the word. The caller's
+    /// frame can be gone by the time the callee's body starts.
+    pub fn holdTailOwner(self: *Context, word: *const WordDefinition) void {
+        std.debug.assert(self.tail_call_owner_ref == null);
+        self.tail_call_owner_ref = heldBodyOwner(word);
     }
 
     const CombinatorTailOutcome = enum { taken, fallback, not_combinator };
@@ -11396,8 +11463,8 @@ pub const Context = struct {
                         return self.wordErrorCleanup(name, err);
                     };
                     defer self.popModuleDepsFrameTraced(mod);
-                    break :blk self.executeCompiledRunningHandoff(wid, &tail_body);
-                } else self.executeCompiledRunningHandoff(wid, &tail_body);
+                    break :blk self.executeCompiledRunningHandoff(&word, wid, &tail_body);
+                } else self.executeCompiledRunningHandoff(&word, wid, &tail_body);
                 self.current_source = saved_source;
                 if (self.trace.trace_jit) {
                     var tw = trace_mod.TraceWriter.init();
@@ -11486,6 +11553,7 @@ pub const Context = struct {
                     self.tail_call_module = word.source_module;
                     self.tail_call_source = word.source_file;
                     self.tail_call_body_owner = word.body_owner;
+                    self.holdTailOwner(&word);
                     self.tail_call_may_define = word.exec_flags.may_define;
                     self.tail_call_compiled = false;
                     self.tail_call_arm = false;
@@ -11496,7 +11564,7 @@ pub const Context = struct {
                         return self.wordErrorCleanup(name, err);
                     if (outcome == .taken) return .tail_call_set;
 
-                    self.tail_call_instructions = null;
+                    self.clearTailCall();
                     self.tail_call_compiled = false;
                     self.current_pic_entry = if (pic_table) |pt| pt.get(idx) else null;
                     defer self.current_pic_entry = null;
@@ -11511,7 +11579,7 @@ pub const Context = struct {
                     }
                 },
                 .host_callback => |host| {
-                    self.tail_call_instructions = null;
+                    self.clearTailCall();
                     self.tail_call_compiled = false;
                     self.current_pic_entry = if (pic_table) |pt| pt.get(idx) else null;
                     defer self.current_pic_entry = null;
@@ -11525,7 +11593,7 @@ pub const Context = struct {
                 .literal => |v| {
                     // No tail-call setup: a literal push has nothing further
                     // to call into, so it finishes like a native word does.
-                    self.tail_call_instructions = null;
+                    self.clearTailCall();
                     self.tail_call_compiled = false;
                     self.current_pic_entry = if (pic_table) |pt| pt.get(idx) else null;
                     defer self.current_pic_entry = null;
@@ -11570,9 +11638,13 @@ pub const Context = struct {
                 if (word.source_module) |mod| {
                     switch (word.action) {
                         .compound => |instrs| {
-                            self.pushModuleDepsFrame(mod) catch |e| break :blk @as(anyerror!void, e);
+                            const held = heldBodyOwner(&word);
+                            self.pushModuleDepsFrame(mod) catch |e| {
+                                releaseHeld(held);
+                                break :blk @as(anyerror!void, e);
+                            };
                             defer self.popModuleDepsFrameTraced(mod);
-                            break :blk self.executeQuotationWithPic(.{ .instructions = instrs }, callee_pic, mod, word.body_owner, word.exec_flags.may_define);
+                            break :blk self.executeQuotationWithPicHeld(.{ .instructions = instrs }, callee_pic, mod, word.body_owner, held, word.exec_flags.may_define);
                         },
                         .native => |func| break :blk func(self),
                         .host_callback => |host| break :blk host.invoke(self),
@@ -11585,7 +11657,7 @@ pub const Context = struct {
                     break :blk switch (word.action) {
                         .native => |func| func(self),
                         .host_callback => |host| host.invoke(self),
-                        .compound => |instrs| self.executeQuotationWithPic(.{ .instructions = instrs }, callee_pic, null, word.body_owner, word.exec_flags.may_define),
+                        .compound => |instrs| self.executeQuotationWithPicHeld(.{ .instructions = instrs }, callee_pic, null, word.body_owner, heldBodyOwner(&word), word.exec_flags.may_define),
                         .literal => |v| self.stack.push(v),
                     };
                 }
@@ -11607,8 +11679,14 @@ pub const Context = struct {
     /// No trampoline sits above this call to loop into that body, so it runs here. The caller keeps
     /// the word's module-deps frame open around this call, as the interpreter keeps it open while
     /// the word's tail callee runs. The body's own outcome lands in `tail_body`.
-    fn executeCompiledRunningHandoff(self: *Context, wid: u32, tail_body: *anyerror!void) ir_codegen.ExecResult {
+    ///
+    /// A frame-owned word's owner is held for the compiled run. It is let go before the handed-back
+    /// body runs, since that body holds its own.
+    fn executeCompiledRunningHandoff(self: *Context, word: *const WordDefinition, wid: u32, tail_body: *anyerror!void) ir_codegen.ExecResult {
+        const held = heldBodyOwner(word);
         const result = ir_codegen.executeCompiled(self, wid);
+        releaseHeld(held);
+
         if (result == .tail_call) {
             self.popCallFrame();
             tail_body.* = self.runPropagatedTailBody();
@@ -11677,6 +11755,7 @@ pub const Context = struct {
         self.tail_call_module = word.source_module;
         self.tail_call_source = word.source_file;
         self.tail_call_body_owner = word.body_owner;
+        self.holdTailOwner(&word);
         self.tail_call_may_define = word.exec_flags.may_define;
         self.tail_call_compiled = true;
         self.tail_call_arm = false;
@@ -11776,6 +11855,13 @@ pub const Context = struct {
         // a caller threading a stale value all fall through to the map instead of borrowing a scope
         // that belongs to different code.
         const from_closure = if (owner) |c| c.ownsBody(instructions) else false;
+
+        if (comptime builtin.mode == .Debug) {
+            if (from_closure) closure_body_registry.enterRunning(@intFromPtr(instructions.ptr), instructions.len);
+        }
+        defer if (comptime builtin.mode == .Debug) {
+            if (from_closure) closure_body_registry.exitRunning(@intFromPtr(instructions.ptr), instructions.len);
+        };
 
         const scope_info: QuotationScopeInfo = if (from_closure) .{
             // The store still has the last word where the value has none: `;` turns a closure into
@@ -20593,6 +20679,156 @@ test "removeWord leaves the closure of a compound definition without the bit unt
 
     try std.testing.expect(try ctx.removeWord("helper"));
     try std.testing.expectEqual(@as(u32, 2), cl.header.refcountValue());
+}
+
+/// A closure that owns a heap copy of `body`, holding the one reference a frame would own.
+fn ownedBodyClosure(ctx: *Context, body: []const Instruction) !*value_mod.Closure {
+    const owned = try ctx.allocator.dupe(Instruction, body);
+    errdefer ctx.allocator.free(owned);
+
+    return value_mod.Closure.create(ctx.allocator, .{
+        .instructions = owned,
+        .segments = &.{},
+        .owns_body = true,
+        .header = undefined,
+    }, ctx.containerOwnerTag());
+}
+
+var held_probe_closure: ?*value_mod.Closure = null;
+
+fn heldProbeRemoveHelper(ctx: *Context) anyerror!void {
+    try std.testing.expect(try ctx.removeWord("helper"));
+}
+
+fn heldProbeDefineHelper(ctx: *Context) anyerror!void {
+    try putFrameOwnedCompound(ctx, "helper", held_probe_closure.?, true);
+}
+
+fn heldProbeContext(ctx: *Context) !void {
+    try ctx.pushLocalFrame();
+    ctx.import_frame_index = 0;
+    ctx.durable_frame_floor = 0;
+    try ctx.pushLocalFrame();
+
+    const frame = &ctx.local_frames.items[1];
+    try frame.put(ctx.allocator, "remove-helper", .{ .name = "remove-helper", .action = .{ .native = heldProbeRemoveHelper } });
+    try frame.put(ctx.allocator, "define-helper", .{ .name = "define-helper", .action = .{ .native = heldProbeDefineHelper } });
+}
+
+test "a body that removes its own frame-owned name mid-call keeps running on a held owner" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+    try heldProbeContext(&ctx);
+
+    const cl = try ownedBodyClosure(&ctx, &.{
+        .{ .op = .{ .call_word = "remove-helper" }, .line = 0 },
+        .{ .op = .{ .push_literal = .{ .fixnum = 5 } }, .line = 0 },
+    });
+    try putFrameOwnedCompound(&ctx, "helper", cl, true);
+
+    const outer = [_]Instruction{
+        .{ .op = .{ .call_word = "helper" }, .line = 0 },
+        .{ .op = .{ .push_literal = .{ .fixnum = 9 } }, .line = 0 },
+    };
+    try ctx.executeQuotation(.{ .instructions = &outer });
+
+    try std.testing.expectEqual(@as(usize, 2), ctx.stack.depth());
+    try std.testing.expectEqual(@as(i64, 9), (try ctx.stack.pop()).fixnum);
+    try std.testing.expectEqual(@as(i64, 5), (try ctx.stack.pop()).fixnum);
+
+    ctx.popLocalFrame();
+}
+
+test "a tail-called frame-owned body that removes its own name keeps running on a held owner" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+    try heldProbeContext(&ctx);
+
+    const cl = try ownedBodyClosure(&ctx, &.{
+        .{ .op = .{ .call_word = "remove-helper" }, .line = 0 },
+        .{ .op = .{ .push_literal = .{ .fixnum = 5 } }, .line = 0 },
+    });
+    try putFrameOwnedCompound(&ctx, "helper", cl, true);
+
+    const outer = [_]Instruction{.{ .op = .{ .call_word = "helper" }, .line = 0 }};
+    try ctx.executeQuotation(.{ .instructions = &outer });
+
+    try std.testing.expectEqual(@as(usize, 1), ctx.stack.depth());
+    try std.testing.expectEqual(@as(i64, 5), (try ctx.stack.pop()).fixnum);
+
+    ctx.popLocalFrame();
+}
+
+test "a tail call out of a frame that does not admit the callee holds the callee's owner past the pop" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+    try heldProbeContext(&ctx);
+
+    const cl = try ownedBodyClosure(&ctx, &.{
+        .{ .op = .{ .push_literal = .{ .fixnum = 5 } }, .line = 0 },
+    });
+    held_probe_closure = cl;
+    defer held_probe_closure = null;
+
+    const outer = [_]Instruction{
+        .{ .op = .{ .call_word = "define-helper" }, .line = 0 },
+        .{ .op = .{ .call_word = "helper" }, .line = 0 },
+    };
+    try ctx.executeQuotationWithPic(.{ .instructions = &outer }, null, null, null, true);
+
+    try std.testing.expectEqual(@as(usize, 1), ctx.stack.depth());
+    try std.testing.expectEqual(@as(i64, 5), (try ctx.stack.pop()).fixnum);
+
+    ctx.popLocalFrame();
+}
+
+test "a failing deps frame push in runPropagatedTailBody releases the carried reference" {
+    var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{});
+    var ctx = Context.init(failing.allocator());
+    defer ctx.deinit();
+
+    // The closure is made on the testing allocator, so the failing one only decides the push.
+    const cl = try value_mod.Closure.create(std.testing.allocator, .{
+        .instructions = &frame_owned_probe_body,
+        .segments = &.{},
+        .header = undefined,
+    }, ctx.containerOwnerTag());
+    defer container_backing.releaseValue(.{ .closure = cl });
+
+    var module: value_mod.Module = .{ .name = "m", .words = .{} };
+
+    // The carried reference is the second one: the test keeps the first.
+    container_backing.retainValue(.{ .closure = cl });
+    ctx.tail_call_instructions = cl.instructions;
+    ctx.tail_call_module = &module;
+    ctx.tail_call_body_owner = cl;
+    ctx.tail_call_owner_ref = cl;
+    try std.testing.expectEqual(@as(u32, 2), cl.header.refcountValue());
+
+    failing.fail_index = failing.alloc_index;
+    try std.testing.expectError(error.OutOfMemory, ctx.runPropagatedTailBody());
+
+    try std.testing.expect(ctx.tail_call_owner_ref == null);
+    try std.testing.expectEqual(@as(u32, 1), cl.header.refcountValue());
+}
+
+test "an error return that leaves a tail call pending releases its reference" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const cl = try frameOwnedClosureProbe(&ctx, &frame_owned_probe_body);
+    defer container_backing.releaseValue(.{ .closure = cl });
+    try std.testing.expectEqual(@as(u32, 2), cl.header.refcountValue());
+
+    ctx.tail_call_instructions = cl.instructions;
+    ctx.tail_call_body_owner = cl;
+    ctx.tail_call_owner_ref = cl;
+
+    try std.testing.expectEqual(error.OutOfMemory, ctx.wordErrorCleanup("w", error.OutOfMemory));
+
+    try std.testing.expect(ctx.tail_call_owner_ref == null);
+    try std.testing.expect(ctx.tail_call_instructions == null);
+    try std.testing.expectEqual(@as(u32, 1), cl.header.refcountValue());
 }
 
 fn frameOwnedProbeNative(_: *Context) anyerror!void {}
