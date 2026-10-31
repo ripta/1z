@@ -103,6 +103,9 @@ pub const Writer = struct {
     }
 
     /// Append the close record, then release the file and the mapping.
+    ///
+    /// This runs at teardown after the context, and so its lock-order tracker, is gone. No other
+    /// thread records a load by then, so the mutex is uncontended and needs no tracker entry.
     pub fn close(self: *Writer) void {
         if (comptime !supported) return;
 
@@ -133,8 +136,9 @@ pub const Writer = struct {
         var rec: [load_record_size]u8 = undefined;
         const tid: u32 = @truncate(std.Thread.getCurrentId());
 
+        var warn = false;
+
         self.mutex.lock();
-        defer self.mutex.unlock();
 
         // The timestamp is taken under the lock so records appear in non-decreasing time order.
         encodeRecordHeader(&rec, record_load, @intCast(load_record_size + name_len + size), self.stampLocked());
@@ -147,7 +151,15 @@ pub const Writer = struct {
 
         self.next_index += 1;
 
-        self.appendLocked(&.{ &rec, name, &[_]u8{0}, code[0..size] }) catch return self.fail();
+        self.appendLocked(&.{ &rec, name, &[_]u8{0}, code[0..size] }) catch {
+            warn = self.markFailed();
+        };
+
+        self.mutex.unlock();
+
+        if (warn) {
+            std.debug.print("Warning: writing {s} failed; JIT symbol names stop here for the rest of the run.\n", .{self.path});
+        }
     }
 
     /// Append the parts as one record with a single `writev`. A short or failed write is rolled
@@ -193,10 +205,11 @@ pub const Writer = struct {
         return self.last_timestamp;
     }
 
-    fn fail(self: *Writer) void {
+    /// Stop the map for the rest of the run. Returns true for the first failure, which is the one
+    /// that prints the warning. The caller prints it after releasing the mutex.
+    fn markFailed(self: *Writer) bool {
         self.disabled.store(true, .release);
-        if (self.warnings.fetchAdd(1, .acq_rel) != 0) return;
-        std.debug.print("Warning: writing {s} failed; JIT symbol names stop here for the rest of the run.\n", .{self.path});
+        return self.warnings.fetchAdd(1, .acq_rel) == 0;
     }
 };
 

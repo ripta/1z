@@ -50,7 +50,8 @@ Two platform limits apply:
 - On macOS the absolute path of the file may be at most 244 bytes. A longer
   path fails at startup. samply would otherwise ignore it without a diagnostic.
 - On Linux 1z maps the file executable, because `perf` finds the file from that
-  mapping. A directory on a `noexec` mount makes the open fail.
+  mapping. A directory on a `noexec` mount makes that executable mapping fail,
+  and 1z stops at startup with an error that suggests a `noexec` mount.
 
 ## How Words Are Named
 

@@ -734,8 +734,8 @@ jit-symbol-verify: build ## Verify samply names JIT-compiled words from the jitd
 		echo "SKIP samply: not installed"; exit 0; \
 	fi; \
 	echo "--- samply (jitdump) ---"; \
-	if ! samply record --save-only --no-open -o $(_dir)/with.json.gz -- ./$(ZIG_PREFIX)/bin/1z run --compile=eager --jitdump-dir=$(_dir) tests/benchmark/jit_symbol_verify_workload.1z > $(_dir)/with.log 2>&1; then \
-		rc=$$?; \
+	samply record --save-only --no-open -o $(_dir)/with.json.gz -- ./$(ZIG_PREFIX)/bin/1z run --compile=eager --jitdump-dir=$(_dir) tests/benchmark/jit_symbol_verify_workload.1z > $(_dir)/with.log 2>&1; rc=$$?; \
+	if [ $$rc -ne 0 ]; then \
 		if grep -qiE 'samply setup|task_for_pid|entitle|codesign|not permitted|permission denied|perf_event' $(_dir)/with.log; then \
 			echo "SKIP samply: record exited $$rc on a permission problem; try samply setup"; \
 			tail -20 $(_dir)/with.log | sed 's/^/  /'; exit 0; \
