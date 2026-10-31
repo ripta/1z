@@ -32,6 +32,7 @@ Execution options:
   --dump-jit-bytes          Dump JIT native code bytes to stderr (xxd format)
   --dump-jit-bin-dir=DIR    Write per-word JIT native code to DIR/ID-name.bin
   --dump-jit-word=PAT       Restrict JIT dumps to comma-separated word names
+  --jitdump-dir=DIR         Write DIR/jit-<pid>.dump so samply and perf name compiled words
   --deadlock-detect[=SECS]  Tune the detection threshold and report stalls (default 5s)
   --no-deadlock-detect      Disable deadlock and stall detection
   --test-timeout=SECS       Set test timeout in seconds

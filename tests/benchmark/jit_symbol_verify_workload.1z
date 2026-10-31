@@ -1,0 +1,18 @@
+\ Workload fixture for `make jit-symbol-verify`. Runs under `--compile=eager` so each word
+\ below is JIT-compiled, and spends enough CPU in them that samply and perf take samples whose
+\ frames land in the compiled code. The check then looks for the word names in those frames.
+
+jit-verify-inner: ( n -- result ) [
+  0 swap [ 1 + ] times
+] ;
+
+jit-verify-outer: ( n -- result ) [
+  jit-verify-inner 1 +
+] ;
+
+jit-verify-sum: ( n -- result ) [
+  0 swap [ 2 + ] times
+] ;
+
+100000000 jit-verify-outer .
+100000000 jit-verify-sum .

@@ -17,6 +17,12 @@ const std = @import("std");
 ///
 /// Level 8: obligation sink lock (leaf-only Mutex on each load's obligation sink)
 ///
+/// Level 9: jitdump writer mutex (leaf-only Mutex in jitdump.zig)
+///
+/// The jitdump mutex is held around one record's timestamp and `writev`. Nothing is acquired under
+/// it, and an install can reach it from inside any other critical section, so it sits above every
+/// level.
+///
 /// The load path mutex is held only around an append or a copy of the list's slice, never across a
 /// filesystem probe. It sits above every other level except the obligation sink lock, so that it
 /// can be taken from inside any other critical section.
@@ -52,6 +58,7 @@ pub const LockLevel = enum(u8) {
     shadow_table = 6,
     load_paths = 7,
     obligation_sink = 8,
+    jitdump = 9,
 };
 
 /// One run of held locks at a single level. Only channel peers repeat a level, so a select over

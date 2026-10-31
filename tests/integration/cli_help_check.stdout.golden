@@ -7,6 +7,7 @@ The following execution flags are NOT accepted by `check`:
 
 Execution options:
   --threads=N|auto          Worker threads, or 'auto' to detect (default: auto)
+  --jitdump-dir=DIR         Write DIR/jit-<pid>.dump; needs ONEZ_COMPILE=eager or hybrid, since `check` takes no --compile
 
 Global options:
   --max-memory=SIZE         Set memory limit (e.g. 128M, 1G; default 256M)

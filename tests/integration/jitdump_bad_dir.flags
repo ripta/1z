@@ -1,0 +1,2 @@
+--compile=eager
+--jitdump-dir=/nonexistent-jitdump-dir

@@ -1,0 +1,2 @@
+\ A jitdump directory that does not exist stops the run before any code executes.
+"not reached" print-line

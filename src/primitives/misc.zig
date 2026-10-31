@@ -20,6 +20,7 @@ const Primitive = @import("types.zig").Primitive;
 const Capability = @import("types.zig").Capability;
 const trace_mod = @import("../trace.zig");
 const jit_dump = @import("../jit_dump.zig");
+const jitdump_mod = @import("../jitdump.zig");
 const call_graph_mod = @import("../call_graph.zig");
 const ir_codegen = @import("../ir_codegen.zig");
 const stack_effect_mod = @import("../stack_effect.zig");
@@ -676,6 +677,7 @@ pub fn nativeLoadImpl(ctx: *Context, cache: *value_mod.MutableMap, filename: []c
 
     ctx.stampModuleJitIdentities(module);
     ctx.revokeModuleShadowedLocalReads(module);
+    ctx.recordModuleJitdumpNames(module);
 
     if (ctx.trace.trace_modules.lifecycle) {
         var tw = trace_mod.TraceWriter.init();
@@ -2192,6 +2194,68 @@ test "reload-file pins filesystem module across mid-session unavailability" {
     try std.testing.expectEqualStrings("foo", reloaded.module.name);
 
     try std.testing.expect(!ctx.module_cache_value.map.contains("<stdlib>/foo.1z"));
+}
+
+test "a loaded module's compiled word is registered bare, then under module/word" {
+    var ctx = Context.initWithPrelude(std.testing.allocator);
+    defer ctx.deinit();
+    ctx.stdlib_path = null;
+    ctx.load_paths.clearRetainingCapacity();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_path = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
+    defer std.testing.allocator.free(tmp_path);
+
+    var mod_file = try tmp.dir.createFile("jdmod.1z", .{});
+    try mod_file.writeAll("jd-answer: ( -- n ) [ 42 ] ;\n");
+    mod_file.close();
+
+    try tmp.dir.makeDir("dump");
+    const dump_path = try tmp.dir.realpathAlloc(std.testing.allocator, "dump");
+    defer std.testing.allocator.free(dump_path);
+
+    const tmp_path_owned = try ctx.quotationAllocator().dupe(u8, tmp_path);
+    try ctx.load_paths.append(ctx.allocator, tmp_path_owned);
+
+    const w = try jitdump_mod.Writer.open(std.testing.allocator, dump_path);
+    const pid = w.pid;
+    ctx.jitdump = w;
+    ctx.compile_mode = .eager;
+
+    try ctx.stack.push(.{ .mutable_map = ctx.module_cache_value });
+    try ctx.stack.push(value_mod.stringValue("jdmod"));
+    try nativeLoadFile(&ctx);
+    const loaded = try ctx.stack.pop();
+    defer container_backing.releaseValue(loaded);
+
+    w.close();
+
+    var name_buf: [64]u8 = undefined;
+    const file_name = try std.fmt.bufPrint(&name_buf, "dump/jit-{d}.dump", .{pid});
+    const bytes = try tmp.dir.readFileAlloc(std.testing.allocator, file_name, 1 << 20);
+    defer std.testing.allocator.free(bytes);
+    var parsed = try jitdump_mod.parseDump(bytes);
+    defer parsed.deinit();
+
+    var bare_at: ?u64 = null;
+    var qualified_at: ?u64 = null;
+    var bare_addr: u64 = 0;
+    var qualified_addr: u64 = 1;
+    for (parsed.loads.items) |rec| {
+        if (std.mem.eql(u8, rec.name, "jd-answer")) {
+            bare_at = rec.stamp;
+            bare_addr = rec.code_addr;
+        }
+        if (std.mem.eql(u8, rec.name, "jdmod/jd-answer")) {
+            qualified_at = rec.stamp;
+            qualified_addr = rec.code_addr;
+        }
+    }
+    try std.testing.expect(bare_at != null);
+    try std.testing.expect(qualified_at != null);
+    try std.testing.expect(qualified_at.? >= bare_at.?);
+    try std.testing.expectEqual(bare_addr, qualified_addr);
 }
 
 test "resolveLoadPath prefers configured stdlib_path over embedded" {

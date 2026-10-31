@@ -1,0 +1,3 @@
+\ --jitdump-dir with compilation disabled prints a one-line stderr note, opens nothing, and
+\ still runs the program normally.
+"ran" print-line

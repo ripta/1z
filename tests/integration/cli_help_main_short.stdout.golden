@@ -35,6 +35,7 @@ Environment variables:
   ONEZ_MAX_MEMORY         Default memory limit (overridden by --max-memory)
   ONEZ_TASK_STACK_CAP     Default task stack cap (overridden by --task-stack-cap)
   ONEZ_COMPILE            Default compile mode (overridden by --compile)
+  ONEZ_JITDUMP_DIR        Default jitdump directory (overridden by --jitdump-dir)
   ONEZ_PRELUDE            Default prelude path (overridden by --prelude)
   ONEZ_LOAD_PATH          Colon-separated module search paths
   ONEZ_STDLIB             Default standard library path

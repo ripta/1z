@@ -150,6 +150,11 @@ pub const TraceConfig = struct {
     dump_jit_bytes: bool = false,
     dump_jit_bin_dir: ?[]const u8 = null,
 
+    // `--jitdump-dir=DIR` / `ONEZ_JITDUMP_DIR`: the directory that takes `jit-<pid>.dump`, the
+    // symbol map external samplers read. Null leaves the map off. It is not a trace axis, so it
+    // stays out of `isEnabled`.
+    jitdump_dir: ?[]const u8 = null,
+
     // `--dump-jit-word=PAT` name filter over both dump sinks. Null matches every word.
     dump_jit_word_pattern: ?[]const u8 = null,
 

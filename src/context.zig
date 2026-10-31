@@ -73,6 +73,7 @@ const StatementProcessor = @import("statement.zig").StatementProcessor;
 
 const trace_mod = @import("trace.zig");
 const jit_dump = @import("jit_dump.zig");
+const jitdump_mod = @import("jitdump.zig");
 const TraceConfig = trace_mod.TraceConfig;
 
 const pascalToKebabRuntime = @import("primitives/errors.zig").pascalToKebabRuntime;
@@ -1333,6 +1334,9 @@ pub const Context = struct {
     debugger: ?*debugger_mod.Debugger = null,
     /// Execution tracing configuration, parsed from CLI flags.
     trace: TraceConfig = .{},
+    /// The jitdump file every compiled body is registered in, or null when the map is off. The
+    /// run's owner opens and closes it, and child contexts share the parent's.
+    jitdump: ?*jitdump_mod.Writer = null,
     /// Wall-clock no-progress threshold in nanoseconds, tuned by --deadlock-detect[=SECS] and
     /// cleared by --no-deadlock-detect. Null disables both verdicts.
     deadlock_detect_ns: ?i128 = scheduler_mod.startup_deadlock_detect_ns,
@@ -2364,6 +2368,7 @@ pub const Context = struct {
             .parent_context = parent,
 
             .trace = parent.trace,
+            .jitdump = parent.jitdump,
             .deadlock_detect_ns = parent.deadlock_detect_ns,
             .report_stall_verdict = parent.report_stall_verdict,
             .task_stack_cap = parent.task_stack_cap,
@@ -6711,6 +6716,68 @@ pub const Context = struct {
         const dump_cfg = jit_dump.DumpConfig{ .dump_bytes = self.trace.dump_jit_bytes, .bin_dir = self.trace.dump_jit_bin_dir };
         if (dump_cfg.enabled() and trace_mod.matchesPattern(name, self.trace.dump_jit_word_pattern))
             jit_dump.dumpJitCode(dump_cfg, name, final_id, compiled.code_ptr, compiled.jit_buf.size);
+
+        // Outside the dump filter on purpose: a sampler needs every compiled body named.
+        if (self.jitdump) |w| self.recordJitdumpLoad(w, name, final_id, compiled.code_ptr, compiled.jit_buf.size);
+    }
+
+    /// Register code with the jitdump file under the word's identity string.
+    ///
+    /// A word the loading file defines names no module until its module is final, so it is
+    /// registered bare here. `recordModuleJitdumpNames` registers it again under `module/word`.
+    /// A private scope also names no module here, since the module that owns it is only known at
+    /// finalization.
+    fn recordJitdumpLoad(self: *Context, w: *jitdump_mod.Writer, name: []const u8, id: u32, code: *const anyopaque, size: usize) void {
+        const module = if (self.jit_dispatch.get(id)) |em| em.defining_module else null;
+        const module_name: ?[]const u8 = if (module != null and !isSyntheticScopeModule(module)) module.?.name else null;
+        self.writeJitdumpName(w, module_name, name, code, size);
+    }
+
+    fn writeJitdumpName(self: *Context, w: *jitdump_mod.Writer, module_name: ?[]const u8, name: []const u8, code: *const anyopaque, size: usize) void {
+        if (comptime is_freestanding) return;
+
+        // The writer's own allocator, since the context's may enforce the run's memory limit. A
+        // record must not drop under `--max-memory`, and the map must not shift benchmark counts.
+        const symbol = ir_codegen.jitSymbolName(w.allocator, module_name, name) catch return;
+        defer w.allocator.free(symbol);
+
+        self.lock_order_tracker.acquire(.jitdump);
+        defer self.lock_order_tracker.release(.jitdump);
+
+        w.recordLoad(symbol, code, size);
+    }
+
+    /// Register, under `module/word`, the compiled code of each word of a module just finalized
+    /// whose install named no module.
+    ///
+    /// A sampler switches an address to the new name from this record's timestamp onward. Code the
+    /// finalization revoked is skipped, since nothing runs it. A word that carried a module at
+    /// install already has its record.
+    pub fn recordModuleJitdumpNames(self: *Context, module: *const value_mod.Module) void {
+        const w = self.jitdump orelse return;
+
+        var words = module.words.iterator();
+        while (words.next()) |entry| {
+            const sm = entry.value_ptr.source_module;
+            if (sm != null and !isSyntheticScopeModule(sm)) continue;
+            self.recordFinalizedWord(w, module, entry.key_ptr.*, entry.value_ptr.word_id);
+        }
+
+        // A dep is another module's word, already named by its own module. Only a private helper
+        // belongs to this one.
+        var deps = module.deps.iterator();
+        while (deps.next()) |entry| {
+            if (!isSyntheticScopeModule(entry.value_ptr.source_module)) continue;
+            self.recordFinalizedWord(w, module, entry.key_ptr.*, entry.value_ptr.word_id);
+        }
+    }
+
+    fn recordFinalizedWord(self: *Context, w: *jitdump_mod.Writer, module: *const value_mod.Module, name: []const u8, word_id: ?u32) void {
+        const wid = word_id orelse return;
+        const em = self.jit_dispatch.get(wid) orelse return;
+        const code = em.code_ptr orelse return;
+        const buf = em.jit_buf orelse return;
+        self.writeJitdumpName(w, module.name, name, code, buf.size);
     }
 
     /// The id a compile minted for the definition it was compiling, if any.
@@ -21643,6 +21710,161 @@ test "eager mode compiles a durable body once however many times it is defined" 
         try std.testing.expectEqual(code, ctx.jit_dispatch.get(first).?.code_ptr);
     }
     try std.testing.expectEqual(entries, ctx.jit_dispatch.entries.items.len);
+}
+
+fn jitdumpProbeBytes(tmp: *std.testing.TmpDir, pid: u32) ![]u8 {
+    var name_buf: [64]u8 = undefined;
+    const file_name = try std.fmt.bufPrint(&name_buf, "jit-{d}.dump", .{pid});
+    return tmp.dir.readFileAlloc(std.testing.allocator, file_name, 1 << 20);
+}
+
+test "jitdump: an install writes a load record for the entry's code" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const dir = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
+    defer std.testing.allocator.free(dir);
+
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const w = try jitdump_mod.Writer.open(std.testing.allocator, dir);
+    const pid = w.pid;
+    ctx.jitdump = w;
+    ctx.compile_mode = .eager;
+
+    const effect = try ctx.internStackEffect(.{ .inputs = &.{}, .outputs = &eager_probe_outputs });
+    const first = (try defineInTransientFrame(&ctx, "helper", try parsedBody(&ctx, 1), effect)).?;
+    const entry_one = ctx.jit_dispatch.get(first).?;
+    const code_one = @intFromPtr(entry_one.code_ptr.?);
+    const size_one = entry_one.jit_buf.?.size;
+
+    // A different body under the same name is a redefinition and installs again.
+    const second = (try defineInTransientFrame(&ctx, "helper", try parsedBody(&ctx, 2), effect)).?;
+    const entry_two = ctx.jit_dispatch.get(second).?;
+    const code_two = @intFromPtr(entry_two.code_ptr.?);
+    const size_two = entry_two.jit_buf.?.size;
+
+    w.close();
+
+    const bytes = try jitdumpProbeBytes(&tmp, pid);
+    defer std.testing.allocator.free(bytes);
+    var parsed = try jitdump_mod.parseDump(bytes);
+    defer parsed.deinit();
+
+    var seen_one = false;
+    var seen_two = false;
+    for (parsed.loads.items) |rec| {
+        if (!std.mem.eql(u8, rec.name, "helper")) continue;
+        if (rec.code_addr == code_one and rec.code_size == size_one) seen_one = true;
+        if (rec.code_addr == code_two and rec.code_size == size_two) seen_two = true;
+    }
+    try std.testing.expect(seen_one);
+    try std.testing.expect(seen_two);
+}
+
+test "jitdump: a word of a finalized module gets its qualified record" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const dir = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
+    defer std.testing.allocator.free(dir);
+
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const w = try jitdump_mod.Writer.open(std.testing.allocator, dir);
+    const pid = w.pid;
+    ctx.jitdump = w;
+    ctx.compile_mode = .eager;
+
+    const effect = try ctx.internStackEffect(.{ .inputs = &.{}, .outputs = &eager_probe_outputs });
+    const id = (try defineInTransientFrame(&ctx, "util-word", try parsedBody(&ctx, 1), effect)).?;
+    const code = @intFromPtr(ctx.jit_dispatch.get(id).?.code_ptr.?);
+
+    var module = value_mod.Module{ .name = "lib/util", .words = .{} };
+    defer module.words.deinit(std.testing.allocator);
+    try module.words.put(std.testing.allocator, "util-word", .{ .action = .{ .compound = &.{} }, .word_id = id });
+
+    ctx.recordModuleJitdumpNames(&module);
+    w.close();
+
+    const bytes = try jitdumpProbeBytes(&tmp, pid);
+    defer std.testing.allocator.free(bytes);
+    var parsed = try jitdump_mod.parseDump(bytes);
+    defer parsed.deinit();
+
+    var bare_at: ?u64 = null;
+    var qualified_at: ?u64 = null;
+    for (parsed.loads.items) |rec| {
+        if (rec.code_addr != code) continue;
+        if (std.mem.eql(u8, rec.name, "util-word")) bare_at = rec.stamp;
+        if (std.mem.eql(u8, rec.name, "lib/util/util-word")) qualified_at = rec.stamp;
+    }
+    try std.testing.expect(bare_at != null);
+    try std.testing.expect(qualified_at != null);
+    try std.testing.expect(qualified_at.? >= bare_at.?);
+}
+
+test "jitdump: a child context registers the code it compiles in the parent's file" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const dir = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
+    defer std.testing.allocator.free(dir);
+
+    var parent = Context.init(std.testing.allocator);
+    defer parent.deinit();
+
+    const w = try jitdump_mod.Writer.open(std.testing.allocator, dir);
+    const pid = w.pid;
+    parent.jitdump = w;
+
+    var child = try Context.initChild(std.testing.allocator, &parent, .task);
+    defer child.deinit();
+    try std.testing.expectEqual(@as(?*jitdump_mod.Writer, w), child.jitdump);
+
+    child.compile_mode = .eager;
+    const effect = try child.internStackEffect(.{ .inputs = &.{}, .outputs = &eager_probe_outputs });
+    const id = (try defineInTransientFrame(&child, "child-word", try parsedBody(&child, 1), effect)).?;
+    const code = @intFromPtr(child.jit_dispatch.get(id).?.code_ptr.?);
+
+    w.close();
+
+    const bytes = try jitdumpProbeBytes(&tmp, pid);
+    defer std.testing.allocator.free(bytes);
+    var parsed = try jitdump_mod.parseDump(bytes);
+    defer parsed.deinit();
+
+    var seen = false;
+    for (parsed.loads.items) |rec| {
+        if (rec.code_addr == code and std.mem.eql(u8, rec.name, "child-word")) seen = true;
+    }
+    try std.testing.expect(seen);
+}
+
+test "jitdump: a hostile word name falls back to the mangled name" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const dir = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
+    defer std.testing.allocator.free(dir);
+
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const w = try jitdump_mod.Writer.open(std.testing.allocator, dir);
+    const pid = w.pid;
+    ctx.jitdump = w;
+    ctx.compile_mode = .eager;
+
+    const effect = try ctx.internStackEffect(.{ .inputs = &.{}, .outputs = &eager_probe_outputs });
+    _ = try defineInTransientFrame(&ctx, "q\"uote", try parsedBody(&ctx, 1), effect);
+    w.close();
+
+    const bytes = try jitdumpProbeBytes(&tmp, pid);
+    defer std.testing.allocator.free(bytes);
+    var parsed = try jitdump_mod.parseDump(bytes);
+    defer parsed.deinit();
+
+    try std.testing.expectEqual(@as(usize, 1), parsed.loads.items.len);
+    try std.testing.expectEqualStrings("onez_w_q_x22_uote", parsed.loads.items[0].name);
 }
 
 test "resolveWordForDispatch: code shared by several definitions records each callee it bakes in once" {

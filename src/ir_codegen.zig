@@ -12297,6 +12297,29 @@ fn emitWordCAotPass(
     return .{ .body = body, .peak_stack_depth = state.peak_sp, .returns_row = returns_row, .row_aware_self_loop = state.row_aware_loop_detected, .discovered_output = discovered_output, .restart_used = state.restart_used, .runs_in_place = state.runs_in_place };
 }
 
+/// Whether a name can reach a symbol table byte-for-byte. NUL, `"`, `\`, and ASCII control
+/// characters including DEL cannot: they break a C string literal, the assembler, the linker, or
+/// the NUL-terminated name a jitdump record carries. AOT emission and the JIT symbol map share this
+/// rule so the two name a word identically.
+pub fn isVerbatimSymbolName(name: []const u8) bool {
+    for (name) |b| {
+        if (b == 0 or b < 0x20 or b == 0x7F) return false;
+        if (b == '"' or b == '\\') return false;
+    }
+    return true;
+}
+
+/// The symbol a JIT-compiled word is named by in a sampler's map: its identity string, or the
+/// mangled C identifier of that identity when a byte cannot be spelled verbatim. This is the name
+/// the AOT emitter gives the same word.
+pub fn jitSymbolName(allocator: Allocator, module: ?[]const u8, name: []const u8) Allocator.Error![:0]u8 {
+    const identity = try wordIdentityString(allocator, module, name);
+    defer allocator.free(identity);
+
+    if (!isVerbatimSymbolName(identity)) return mangleWordName(identity, allocator);
+    return allocator.dupeZ(u8, identity);
+}
+
 /// Append an `asm("name")` declaration attribute to `out` so the C compiler renames the linker symbol
 /// to the verbatim 1z word name. `asm("...")` affects `DW_AT_linkage_name` and the ELFl / Mach-O linker
 /// symbol. Tools that read those (e.g., `perf`, `samply`, `nm`) display the 1z name instead of the
@@ -12307,10 +12330,7 @@ fn emitWordCAotPass(
 /// characters including DEL. On any hostile byte, this writes nothing, so the forward declaration falls
 /// back to its mangled C identifier.
 fn appendAsmNameClause(out: *std.ArrayListUnmanaged(u8), allocator: Allocator, name: []const u8) Allocator.Error!void {
-    for (name) |b| {
-        if (b == 0 or b < 0x20 or b == 0x7F) return;
-        if (b == '"' or b == '\\') return;
-    }
+    if (!isVerbatimSymbolName(name)) return;
     try out.appendSlice(allocator, " asm(\"");
     try out.appendSlice(allocator, name);
     try out.appendSlice(allocator, "\")");
@@ -24708,6 +24728,25 @@ test "mangle word name preserves digits and underscores" {
     const name = try mangleWordName("foo_bar2", testing.allocator);
     defer testing.allocator.free(name);
     try testing.expectEqualStrings("onez_w_foo_bar2", name);
+}
+
+test "jit symbol name is the identity string, mangled when a byte is hostile" {
+    const bare = try jitSymbolName(testing.allocator, null, "#map");
+    defer testing.allocator.free(bare);
+    try testing.expectEqualStrings("#map", bare);
+
+    const qualified = try jitSymbolName(testing.allocator, "lib/util", "double");
+    defer testing.allocator.free(qualified);
+    try testing.expectEqualStrings("lib/util/double", qualified);
+
+    const hostile = try jitSymbolName(testing.allocator, "m", "a\"b");
+    defer testing.allocator.free(hostile);
+    try testing.expectEqualStrings("onez_w_m_Da_x22_b", hostile);
+
+    try testing.expect(!isVerbatimSymbolName("a\\b"));
+    try testing.expect(!isVerbatimSymbolName("a\x7fb"));
+    try testing.expect(!isVerbatimSymbolName("a\x00b"));
+    try testing.expect(isVerbatimSymbolName("name>>"));
 }
 
 fn emitEntryCheckTestWord(ctx: *const Context, effect: *const StackEffect, reason: ?*?NotCompilable, interpreter_free: bool) ![]u8 {

@@ -1217,7 +1217,8 @@ fn hasExcludedJitFlag(flags_lines: ?[]const u8) bool {
             std.mem.startsWith(u8, trimmed, "--trace-") or
             std.mem.startsWith(u8, trimmed, "--break=") or
             std.mem.startsWith(u8, trimmed, "--dump-scope=") or
-            std.mem.startsWith(u8, trimmed, "--dump-jit-"))
+            std.mem.startsWith(u8, trimmed, "--dump-jit-") or
+            std.mem.startsWith(u8, trimmed, "--jitdump-dir"))
         {
             return true;
         }
@@ -2181,6 +2182,10 @@ fn configureIntegrationRun(
     if (!envLinesSetKey(te.env_lines, "ONEZ_STARTUP")) {
         run.setEnvironmentVariable("ONEZ_NO_STARTUP", "1");
     }
+
+    // A variable left in a developer's shell would print the compile-off note into every stderr
+    // golden. A case that wants the map sets it in its `.env`, which is applied after this.
+    run.removeEnvironmentVariable("ONEZ_JITDUMP_DIR");
 
     var raw_mode = false;
     var detected_subcommand: ?[]const u8 = null;

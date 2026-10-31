@@ -721,6 +721,74 @@ aot-symbol-verify-linux: ## Run aot-symbol-verify inside the project's Debian Do
 	    1z-build:local \
 	    bash -c 'echo 1 > /proc/sys/kernel/perf_event_paranoid 2>/dev/null || true; make build && make aot-symbol-verify'
 
+# Words in tests/benchmark/jit_symbol_verify_workload.1z that jit-symbol-verify looks for.
+JIT_VERIFY_WORDS := jit-verify-inner jit-verify-outer jit-verify-sum
+
+# samply must launch 1z itself. A launch through make or /bin/sh strips DYLD_INSERT_LIBRARIES, which
+# is how samply finds the jitdump on macOS.
+jit-symbol-verify: build ## Verify samply names JIT-compiled words from the jitdump (SKIP without samply)
+	$(eval _dir := $(call mktemp_or_die,/tmp/1z-jit-symbol-verify-XXXXXX))
+	@trap 'rm -rf $(_dir)' EXIT; \
+	rm -f $(_dir); mkdir -p $(_dir); \
+	if ! command -v samply > /dev/null 2>&1; then \
+		echo "SKIP samply: not installed"; exit 0; \
+	fi; \
+	echo "--- samply (jitdump) ---"; \
+	if ! samply record --save-only --no-open -o $(_dir)/with.json.gz -- ./$(ZIG_PREFIX)/bin/1z run --compile=eager --jitdump-dir=$(_dir) tests/benchmark/jit_symbol_verify_workload.1z > $(_dir)/with.log 2>&1; then \
+		rc=$$?; \
+		if grep -qiE 'samply setup|task_for_pid|entitle|codesign|not permitted|permission denied|perf_event' $(_dir)/with.log; then \
+			echo "SKIP samply: record exited $$rc on a permission problem; try samply setup"; \
+			tail -20 $(_dir)/with.log | sed 's/^/  /'; exit 0; \
+		fi; \
+		echo "FAIL samply: record exited $$rc; samply passes on the exit status of 1z itself"; \
+		tail -20 $(_dir)/with.log | sed 's/^/  /'; exit 1; \
+	fi; \
+	python3 -I scripts/jit-symbol-profile-check.py $(_dir)/with.json.gz $(JIT_VERIFY_WORDS) || exit 1; \
+	echo "--- samply (no jitdump, control) ---"; \
+	if ! samply record --save-only --no-open -o $(_dir)/without.json.gz -- ./$(ZIG_PREFIX)/bin/1z run --compile=eager tests/benchmark/jit_symbol_verify_workload.1z > $(_dir)/without.log 2>&1; then \
+		echo "FAIL control: record failed"; tail -20 $(_dir)/without.log | sed 's/^/  /'; exit 1; \
+	fi; \
+	python3 -I scripts/jit-symbol-profile-check.py $(_dir)/without.json.gz $(JIT_VERIFY_WORDS) > /dev/null 2>&1; rc=$$?; \
+	if [ $$rc -eq 0 ]; then \
+		echo "FAIL control: the words are named without a jitdump, so the check proves nothing"; exit 1; \
+	elif [ $$rc -ne 1 ]; then \
+		echo "FAIL control: the profile could not be read (status $$rc)"; exit 1; \
+	fi; \
+	echo "PASS control: the words are anonymous without a jitdump"; \
+	echo "PASS: jit-symbol-verify"
+
+jit-symbol-verify-linux: ## Run jit-symbol-verify and the perf inject path inside the project's Debian Docker image
+	docker build --build-arg BASE_IMAGE=gcr.io/$(GCP_PROJECT_ID)/zag:v0.15.2.1 --tag 1z-build:local .
+	docker run --rm \
+	    --security-opt seccomp=unconfined \
+	    --cap-add SYS_ADMIN \
+	    --volume $(CURDIR):/workspace \
+	    --workdir /workspace \
+	    --user 0:0 \
+	    1z-build:local \
+	    bash -c 'echo 1 > /proc/sys/kernel/perf_event_paranoid 2>/dev/null || true; make build && make jit-symbol-verify && make jit-symbol-verify-perf'
+
+jit-symbol-verify-perf: build ## Verify perf inject --jit names JIT-compiled words (Linux, needs perf)
+	$(eval _dir := $(call mktemp_or_die,/tmp/1z-jit-symbol-perf-XXXXXX))
+	@trap 'rm -rf $(_dir)' EXIT; \
+	rm -f $(_dir); mkdir -p $(_dir); \
+	if ! command -v perf > /dev/null 2>&1; then \
+		echo "SKIP perf: not installed (Linux-only)"; exit 0; \
+	fi; \
+	if ! perf record -k 1 -F 99 -g -o $(_dir)/perf.data -- ./$(ZIG_PREFIX)/bin/1z run --compile=eager --jitdump-dir=$(_dir) tests/benchmark/jit_symbol_verify_workload.1z > /dev/null 2>&1; then \
+		echo "SKIP perf: record failed (likely perf_event_paranoid restricts perf_event_open under Docker)"; exit 0; \
+	fi; \
+	perf inject --jit -i $(_dir)/perf.data -o $(_dir)/perf.jitted.data > /dev/null 2>&1 || { echo "FAIL perf: inject --jit failed"; exit 1; }; \
+	perf report --stdio --no-children -i $(_dir)/perf.jitted.data > $(_dir)/report.txt 2>&1; \
+	for name in $(JIT_VERIFY_WORDS); do \
+		if grep -qF "$$name" $(_dir)/report.txt; then \
+			echo "PASS perf: $$name present in report"; \
+		else \
+			echo "FAIL perf: $$name missing from report"; head -50 $(_dir)/report.txt | sed 's/^/  /'; exit 1; \
+		fi; \
+	done; \
+	echo "PASS: jit-symbol-verify-perf"
+
 aot-interpreter-strip-check: build ## Verify linker GC strips the prelude loader from interpreter-free AOT binaries
 	$(eval _free_bin := $(call mktemp_or_die,/tmp/1z-strip-check-free-XXXXXX))
 	$(eval _linked_bin := $(call mktemp_or_die,/tmp/1z-strip-check-linked-XXXXXX))

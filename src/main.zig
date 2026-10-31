@@ -32,6 +32,7 @@ const MemoryLimitAllocator = memory_limit.MemoryLimitAllocator;
 const container_limits = @import("container_limits.zig");
 const task_mod = @import("task.zig");
 const trace_mod = @import("trace.zig");
+const jitdump_mod = @import("jitdump.zig");
 const effect_inference = @import("effect_inference.zig");
 const analysis_build = @import("analysis_build.zig");
 const aot_freeze = @import("aot_freeze.zig");
@@ -285,6 +286,36 @@ fn resolveMemoryDefault(global: *GlobalFlags, trace_enabled: bool) void {
     }
     const det = container_limits.detectMemory(trace_enabled);
     if (det.source != .fallback) global.max_memory_bytes = det.cap;
+}
+
+/// Settle the jitdump directory: `--jitdump-dir` wins over `ONEZ_JITDUMP_DIR`, and an empty
+/// variable counts as unset. With compilation off nothing is compiled, so the map has nothing to
+/// name. The directory is dropped, one note says why, and the run goes on.
+fn resolveJitdumpDir(exec: *ExecutionFlags, env_val: ?[]const u8, err_writer: anytype) void {
+    if (exec.trace_config.jitdump_dir == null) {
+        if (env_val) |v| {
+            if (v.len > 0) exec.trace_config.jitdump_dir = v;
+        }
+    }
+
+    if (exec.trace_config.jitdump_dir == null) return;
+    if (exec.compile_mode != .off) return;
+
+    exec.trace_config.jitdump_dir = null;
+    err_writer.writeAll("Note: the JIT symbol map requires --compile=eager or --compile=hybrid (or ONEZ_COMPILE); no jitdump file will be written.\n") catch {};
+    err_writer.flush() catch {};
+}
+
+fn jitdumpOpenErrorText(err: jitdump_mod.OpenError) []const u8 {
+    return switch (err) {
+        error.Unsupported => "this platform has no jitdump support",
+        error.PathTooLong => "the file path is longer than samply reads; use a shorter directory",
+        error.DirectoryUnavailable => "the directory does not exist or is not readable",
+        error.OpenFailed => "the file could not be opened for writing",
+        error.MapFailed => "perf needs the file mapped executable, so the directory may be on a noexec mount; use another directory",
+        error.HeaderWriteFailed => "the header could not be written",
+        error.OutOfMemory => "out of memory",
+    };
 }
 
 /// Resolve the task stack cap when --task-stack-cap was not given on the CLI.
@@ -737,6 +768,21 @@ fn parseExecutionFlag(
         state.trace_config.dump_jit_bin_dir = value;
         return .consumed;
     }
+    if (std.mem.eql(u8, arg, "--jitdump-dir")) {
+        err_writer.print("Error: --jitdump-dir requires a value (e.g. --jitdump-dir=DIR)\n", .{}) catch {};
+        err_writer.flush() catch {};
+        return error.InvalidFlagValue;
+    }
+    if (std.mem.startsWith(u8, arg, "--jitdump-dir=")) {
+        const value = arg["--jitdump-dir=".len..];
+        if (value.len == 0) {
+            err_writer.print("Error: --jitdump-dir requires a non-empty directory\n", .{}) catch {};
+            err_writer.flush() catch {};
+            return error.InvalidFlagValue;
+        }
+        state.trace_config.jitdump_dir = value;
+        return .consumed;
+    }
     if (std.mem.eql(u8, arg, "--dump-jit-word")) {
         err_writer.print("Error: --dump-jit-word requires a value (e.g. --dump-jit-word=my-word)\n", .{}) catch {};
         err_writer.flush() catch {};
@@ -916,6 +962,7 @@ fn printUsage() void {
         \\  ONEZ_MAX_MEMORY         Default memory limit (overridden by --max-memory)
         \\  ONEZ_TASK_STACK_CAP     Default task stack cap (overridden by --task-stack-cap)
         \\  ONEZ_COMPILE            Default compile mode (overridden by --compile)
+        \\  ONEZ_JITDUMP_DIR        Default jitdump directory (overridden by --jitdump-dir)
         \\  ONEZ_PRELUDE            Default prelude path (overridden by --prelude)
         \\  ONEZ_LOAD_PATH          Colon-separated module search paths
         \\  ONEZ_STDLIB             Default standard library path
@@ -947,6 +994,7 @@ const execution_flags_help =
     \\  --dump-jit-bytes          Dump JIT native code bytes to stderr (xxd format)
     \\  --dump-jit-bin-dir=DIR    Write per-word JIT native code to DIR/ID-name.bin
     \\  --dump-jit-word=PAT       Restrict JIT dumps to comma-separated word names
+    \\  --jitdump-dir=DIR         Write DIR/jit-<pid>.dump so samply and perf name compiled words
     \\  --deadlock-detect[=SECS]  Tune the detection threshold and report stalls (default 5s)
     \\  --no-deadlock-detect      Disable deadlock and stall detection
     \\  --test-timeout=SECS       Set test timeout in seconds
@@ -1013,7 +1061,8 @@ fn printCheckHelp() void {
     w.writeAll("The following execution flags are NOT accepted by `check`:\n") catch {};
     w.writeAll("  --compile=MODE, --benchmark, --benchmark=verbose, --benchmark=json, --profile, --profile-top=N, --profile-out=FILE\n\n") catch {};
     w.writeAll("Execution options:\n") catch {};
-    w.writeAll("  --threads=N|auto          Worker threads, or 'auto' to detect (default: auto)\n\n") catch {};
+    w.writeAll("  --threads=N|auto          Worker threads, or 'auto' to detect (default: auto)\n") catch {};
+    w.writeAll("  --jitdump-dir=DIR         Write DIR/jit-<pid>.dump; needs ONEZ_COMPILE=eager or hybrid, since `check` takes no --compile\n\n") catch {};
     w.writeAll("Global options:\n") catch {};
     w.writeAll(global_flags_help) catch {};
     w.writeAll("\n") catch {};
@@ -1207,6 +1256,7 @@ const ExecutionContext = struct {
     profile_enabled: bool,
     profile_top: usize,
     profile_out_path: ?[]const u8,
+    jitdump: ?*jitdump_mod.Writer,
 
     fn init(
         gpa: std.mem.Allocator,
@@ -1234,6 +1284,8 @@ const ExecutionContext = struct {
             err_writer.print("Note: JIT dump flags require --compile=eager or --compile=hybrid; no dumps will be produced.\n", .{}) catch {};
             err_writer.flush() catch {};
         }
+
+        resolveJitdumpDir(exec, std.posix.getenv("ONEZ_JITDUMP_DIR"), err_writer);
 
         const ec = gpa.create(ExecutionContext) catch {
             err_writer.writeAll("Error: out of memory\n") catch {};
@@ -1302,6 +1354,7 @@ const ExecutionContext = struct {
             .profile_enabled = exec.profile_config.enabled,
             .profile_top = exec.profile_config.top_n,
             .profile_out_path = exec.profile_config.out_path,
+            .jitdump = null,
         };
         errdefer ec.ctx.deinit();
 
@@ -1310,6 +1363,17 @@ const ExecutionContext = struct {
         ec.ctx.setStackBoundsFromCurrentThread();
 
         ec.ctx.trace = exec.trace_config;
+
+        if (exec.trace_config.jitdump_dir) |dir| {
+            ec.jitdump = jitdump_mod.Writer.open(gpa, dir) catch |err| {
+                err_writer.print("Error: cannot create the jitdump file in '{s}': {s}\n", .{ dir, jitdumpOpenErrorText(err) }) catch {};
+                err_writer.flush() catch {};
+                return error.ExecutionContextInitFailed;
+            };
+            ec.ctx.jitdump = ec.jitdump;
+        }
+        errdefer if (ec.jitdump) |w| w.close();
+
         ec.ctx.deadlock_detect_ns = exec.deadlock_detect_ns;
         ec.ctx.report_stall_verdict = exec.report_stall_verdict;
         ec.ctx.worker_count = exec.worker_count;
@@ -1512,6 +1576,7 @@ const ExecutionContext = struct {
         if (self.watchdog) |t| t.detach();
         if (self.dbg != null) self.dbg.?.deinit();
         self.ctx.deinit();
+        if (self.jitdump) |w| w.close();
         if (self.external_prelude) |ep| self.gpa.free(ep);
         self.profile_stats.deinit(self.allocator);
         self.gpa.destroy(self.counting_allocator);
@@ -5569,6 +5634,102 @@ test "parseExecutionFlag: malformed and missing --dump-jit-bin-dir value" {
         try std.testing.expectError(error.InvalidFlagValue, parseExecutionFlag("--dump-jit-bin-dir=", &state, &w));
         try std.testing.expectEqualStrings("Error: --dump-jit-bin-dir requires a non-empty directory\n", w.buffered());
     }
+}
+
+test "parseExecutionFlag: --jitdump-dir takes a directory" {
+    var buf: [256]u8 = undefined;
+
+    {
+        var w = std.Io.Writer.fixed(&buf);
+        var state = ExecutionFlags{};
+        try std.testing.expectEqual(FlagParseResult.consumed, try parseExecutionFlag("--jitdump-dir=/tmp/x", &state, &w));
+        try std.testing.expectEqualStrings("/tmp/x", state.trace_config.jitdump_dir.?);
+    }
+
+    {
+        var w = std.Io.Writer.fixed(&buf);
+        var state = ExecutionFlags{};
+        try std.testing.expectError(error.InvalidFlagValue, parseExecutionFlag("--jitdump-dir", &state, &w));
+        try std.testing.expectEqualStrings("Error: --jitdump-dir requires a value (e.g. --jitdump-dir=DIR)\n", w.buffered());
+    }
+
+    {
+        var w = std.Io.Writer.fixed(&buf);
+        var state = ExecutionFlags{};
+        try std.testing.expectError(error.InvalidFlagValue, parseExecutionFlag("--jitdump-dir=", &state, &w));
+        try std.testing.expectEqualStrings("Error: --jitdump-dir requires a non-empty directory\n", w.buffered());
+    }
+}
+
+test "ExecutionContext.init opens the jitdump file and hands the writer to the context" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const dir = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
+    defer std.testing.allocator.free(dir);
+
+    var buf: [512]u8 = undefined;
+    var w = std.Io.Writer.fixed(&buf);
+    var global = GlobalFlags{};
+    defer global.deinit(std.testing.allocator);
+    var exec = ExecutionFlags{ .compile_mode = .eager };
+    exec.trace_config.jitdump_dir = dir;
+
+    const ec = try ExecutionContext.init(std.testing.allocator, &global, &exec, &w);
+    defer ec.deinit();
+
+    const writer = ec.jitdump orelse return error.TestExpectedWriter;
+    try std.testing.expectEqual(@as(?*jitdump_mod.Writer, writer), ec.ctx.jitdump);
+
+    var name_buf: [64]u8 = undefined;
+    const file_name = try std.fmt.bufPrint(&name_buf, "jit-{d}.dump", .{writer.pid});
+    try tmp.dir.access(file_name, .{});
+}
+
+test "resolveJitdumpDir: the flag overrides the environment" {
+    var buf: [512]u8 = undefined;
+
+    {
+        var w = std.Io.Writer.fixed(&buf);
+        var exec = ExecutionFlags{ .compile_mode = .eager };
+        resolveJitdumpDir(&exec, "/from/env", &w);
+        try std.testing.expectEqualStrings("/from/env", exec.trace_config.jitdump_dir.?);
+        try std.testing.expectEqualStrings("", w.buffered());
+    }
+
+    {
+        var w = std.Io.Writer.fixed(&buf);
+        var exec = ExecutionFlags{ .compile_mode = .eager };
+        exec.trace_config.jitdump_dir = "/from/flag";
+        resolveJitdumpDir(&exec, "/from/env", &w);
+        try std.testing.expectEqualStrings("/from/flag", exec.trace_config.jitdump_dir.?);
+    }
+
+    {
+        var w = std.Io.Writer.fixed(&buf);
+        var exec = ExecutionFlags{ .compile_mode = .eager };
+        resolveJitdumpDir(&exec, "", &w);
+        try std.testing.expectEqual(@as(?[]const u8, null), exec.trace_config.jitdump_dir);
+    }
+
+    {
+        var w = std.Io.Writer.fixed(&buf);
+        var exec = ExecutionFlags{ .compile_mode = .eager };
+        resolveJitdumpDir(&exec, null, &w);
+        try std.testing.expectEqual(@as(?[]const u8, null), exec.trace_config.jitdump_dir);
+    }
+}
+
+test "resolveJitdumpDir: compilation off prints a note and opens nothing" {
+    var buf: [512]u8 = undefined;
+    var w = std.Io.Writer.fixed(&buf);
+    var exec = ExecutionFlags{ .compile_mode = .off };
+    resolveJitdumpDir(&exec, "/from/env", &w);
+
+    try std.testing.expectEqual(@as(?[]const u8, null), exec.trace_config.jitdump_dir);
+    try std.testing.expectEqualStrings(
+        "Note: the JIT symbol map requires --compile=eager or --compile=hybrid (or ONEZ_COMPILE); no jitdump file will be written.\n",
+        w.buffered(),
+    );
 }
 
 test "parseExecutionFlag: --dump-jit-word filter" {
