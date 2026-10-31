@@ -1,0 +1,3 @@
+use "1z-tokens" ;
+
+3000 [ "pi: 3.14 ;\ne: 2.71 ;\ntau: 6.28 ;\n" 1z-tokenize #collect drop ] times
