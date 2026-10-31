@@ -74,6 +74,9 @@ workloads=(
     "combinator_contention.1z|tests/benchmark/combinator_contention.1z|--threads=auto"
     "call_word_micro.1z|tests/benchmark/call_word_micro.1z|"
     "mutation_heavy.1z|tests/benchmark/mutation_heavy.1z|"
+    "format_source_loop.1z|tests/benchmark/format_source_loop.1z|"
+    "deque.1z|tests/integration/deque.1z|"
+    "body_definition_walk.1z|tests/benchmark/body_definition_walk.1z|"
 )
 
 # median of the integers passed as args

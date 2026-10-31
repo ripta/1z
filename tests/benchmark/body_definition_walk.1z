@@ -1,0 +1,11 @@
+\ A non-tail recursive helper defined inside a word body, called through that word. Every call
+\ defines the helper again, so the file measures what a body-level definition costs per call in each
+\ compile mode. On a release build the compiled helper runs slower than the interpreter in hybrid and
+\ eager.
+
+recursive-non-tail: ( n -- n ) [
+  walk: stack-recursive ( n -- n ) [ dup 0 > [ 1 - walk 1 + ] when ] ;
+  walk
+] ;
+
+20000 [ 3 recursive-non-tail drop ] times

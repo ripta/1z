@@ -1,0 +1,7 @@
+use "formatter" ;
+
+\ A loop over `format-source` on a three-line source. The count is small enough that a build which
+\ pins every body-level definition until exit finishes it at the default memory limit, so the same
+\ file runs on both sides of an A/B.
+
+500 [ "pi: 3.14 ;\ne: 2.71 ;\ntau: 6.28 ;\n" format-source drop ] times

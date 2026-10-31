@@ -61,6 +61,12 @@ done
 # call_word_micro belongs to neither. It is here so the workload filter reaches
 # it, and it stays out of the archetype suite, whose curation and recorded
 # baseline another row would change.
+#
+# format_source_loop, deque, and body_definition_walk measure what a definition made inside a word
+# body costs per call.
+#
+# The first is a loop over the formatter, the second is where word-body frames once cost the
+# interpreter about 1.7x, and the third is a recursive helper defined in a body.
 workloads=(
     "quotation_seq.1z|tests/benchmark/quotation_seq.1z|"
     "fibonacci.1z|tests/benchmark/fibonacci.1z|"
@@ -75,6 +81,9 @@ workloads=(
     "combinator_contention.1z|tests/benchmark/combinator_contention.1z|--threads=auto"
     "call_word_micro.1z|tests/benchmark/call_word_micro.1z|"
     "mutation_heavy.1z|tests/benchmark/mutation_heavy.1z|"
+    "format_source_loop.1z|tests/benchmark/format_source_loop.1z|"
+    "deque.1z|tests/integration/deque.1z|"
+    "body_definition_walk.1z|tests/benchmark/body_definition_walk.1z|"
 )
 
 # median of the integers passed as args
