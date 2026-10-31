@@ -101,6 +101,14 @@ Filter the main context by `task_name=main`: pprof's tag views treat a
 zero-valued numeric label as unset, so the main context's `task=0` and
 `worker=0` do not appear under the `task` and `worker` tags.
 
+## Profiling JIT-Compiled Code
+
+`--profile` does not see a compiled word calling another compiled word, and its
+per-call timestamps add overhead. To sample code that runs under
+`--compile=hybrid` or `--compile=eager`, use an external sampler with
+`--jitdump-dir=DIR`. That flag writes a symbol map so `samply` and `perf` name
+the compiled words. See [Sampled Profiles of JIT-Compiled Code](jit-symbols.md).
+
 ## Profiling AOT Binaries
 
 `1z build` produces a native executable with no built-in pprof emitter. Profile

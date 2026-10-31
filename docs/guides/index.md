@@ -34,17 +34,19 @@ definitions, and control flow.
     source loading and freezing through C emission, linking, and startup
 16. [AOT Symbol Names for Profilers](aot-symbols.md) -- how `nm`, `perf`,
     and `samply` see 1z words in AOT binaries
-17. [Profiling](profiling.md) -- the interpreter's pprof export and the external
+17. [Sampled Profiles of JIT-Compiled Code](jit-symbols.md) -- the jitdump
+    symbol map that lets `samply` and `perf` name compiled words
+18. [Profiling](profiling.md) -- the interpreter's pprof export and the external
     `perf` / `samply` -> pprof path for AOT binaries
-18. [Bare-Metal AOT Builds](bare-metal.md) -- freestanding executables that run
+19. [Bare-Metal AOT Builds](bare-metal.md) -- freestanding executables that run
     on QEMU riscv64 with no operating system
-19. [Coming from Forth or Factor](coming-from-forth.md) -- side-by-side syntax
+20. [Coming from Forth or Factor](coming-from-forth.md) -- side-by-side syntax
     comparison for experienced stack-language programmers
-20. [Tree-sitter Grammar](tree-sitter.md) -- installing and registering the 1z
+21. [Tree-sitter Grammar](tree-sitter.md) -- installing and registering the 1z
     tree-sitter parser in Neovim, Helix, and Zed
-21. [Code Formatting](formatting.md) -- the `.fmt.1z` config file, the rules it
+22. [Code Formatting](formatting.md) -- the `.fmt.1z` config file, the rules it
     sets, and how the formatter finds it
-22. [Data-Only Config Files](config-files.md) -- the literal grammar the
+23. [Data-Only Config Files](config-files.md) -- the literal grammar the
     formatter, highlight themes, and message catalogs read, and what it rejects
 
 All examples are runnable. Save any snippet to a `.1z` file and run it with

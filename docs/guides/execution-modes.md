@@ -28,6 +28,10 @@ codegen, runtime images, name mangling, and linking, see
 `ONEZ_COMPILE=off|eager|hybrid` can set the default compile mode for
 interpreter-side commands. An explicit `--compile=...` flag wins.
 
+`ONEZ_JITDUMP_DIR=DIR` (or `--jitdump-dir=DIR`) writes a symbol map so external
+samplers can name JIT-compiled words. See
+[Sampled Profiles of JIT-Compiled Code](jit-symbols.md).
+
 ## A Small All-Modes Program
 
 Save this as `/tmp/modes-core.1z`:
