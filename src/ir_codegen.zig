@@ -652,7 +652,7 @@ pub const EntryWordInput = struct {
     name: []const u8,
     effect_body: ?[]const u8,
     word_id: ?u32,
-    dispatch_id: u32,
+    dispatch_id: u64,
     generated: bool,
     is_const: bool,
     is_generic: bool,
@@ -692,7 +692,7 @@ pub const AotWordDesc = struct {
     /// Monotonic dispatch id of this word, used to build the runtime
     /// name -> dispatch_id map the AOT loader replays for the protocol
     /// satisfies-check. Zero when the word carries no dispatch id.
-    dispatch_id: u32 = 0,
+    dispatch_id: u64 = 0,
     /// True when the word carries the `generic` marker. AOT codegen emits a
     /// dispatch helper at its call sites so a registered method runs, falling
     /// to the word's default body on a miss.
@@ -752,7 +752,7 @@ pub const AotWordDesc = struct {
     parent: ?[]const u8 = null,
     /// Dispatch ID for bounded call sites. Zero when the word is not a
     /// bounded generic.
-    bounded_dispatch_id: u32 = 0,
+    bounded_dispatch_id: u64 = 0,
     /// When non-null, this word is a bounded generic (protocol- or
     /// combinator-bound). AOT codegen emits the satisfies-and-dispatch helper at
     /// call sites, referencing the descriptor via a slot-table index instead of a
@@ -1108,7 +1108,7 @@ pub const ResolvedWord = struct {
     never_returns: bool = false,
     /// Monotonic dispatch ID of the callee, used by the protocol-bounded
     /// dispatch helper to resolve the concrete-type method.
-    dispatch_id: u32 = 0,
+    dispatch_id: u64 = 0,
     /// When non-null, this call is a bounded generic dispatch site (protocol- or
     /// combinator-bound): the compiler emits `satisfiesAndDispatch` instead of
     /// installing a PIC or an ordinary dispatch. Carries the bound and arity.
@@ -12866,7 +12866,7 @@ pub fn emitProgramC(
         \\extern void *onez_init(void);
         \\extern void *onez_init_no_prelude(void);
         \\extern int onez_push_entry_frame(void *rt);
-        \\extern int onez_seed_entry_words(void *rt, const char **names, const char **effects, const int32_t *word_ids, const uint32_t *dispatch_ids, const uint8_t *flags, uint32_t count);
+        \\extern int onez_seed_entry_words(void *rt, const char **names, const char **effects, const int32_t *word_ids, const uint64_t *dispatch_ids, const uint8_t *flags, uint32_t count);
         \\extern int onez_seed_entry_imports(void *rt, const char **names, const char **sources, uint32_t count);
         \\extern int onez_register_base_scope(void *rt, const char **names, const char **sources, const uint8_t *flags, uint32_t count);
         \\extern int onez_set_args(void *ctx, int argc, char **argv);
@@ -14135,7 +14135,7 @@ pub fn emitProgramC(
         }
         try out.appendSlice(allocator, "};\n");
 
-        try out.appendSlice(allocator, "static const uint32_t onez_entry_word_dispatch_ids[] = {\n");
+        try out.appendSlice(allocator, "static const uint64_t onez_entry_word_dispatch_ids[] = {\n");
         for (sorted_entry_words) |ew| {
             var did_buf: [24]u8 = undefined;
             const did_str = std.fmt.bufPrint(&did_buf, "    {d},\n", .{ew.dispatch_id}) catch unreachable;
@@ -14300,7 +14300,7 @@ pub fn emitProgramC(
         // rows can carry the generic word name; the loader replays it into the
         // runtime name -> dispatch_id map. Built from the post-freeze word list
         // because user generics are no longer in the dictionary at this point.
-        var dispatch_id_names: std.AutoHashMapUnmanaged(u32, []const u8) = .{};
+        var dispatch_id_names: std.AutoHashMapUnmanaged(u64, []const u8) = .{};
         defer dispatch_id_names.deinit(allocator);
         for (words) |w| {
             if (w.dispatch_id != 0) try dispatch_id_names.put(allocator, w.dispatch_id, w.name);
@@ -17607,7 +17607,7 @@ fn emitParamValidation(state: *CompileState, effect_ptr: usize) void {
 /// fresh process) keeps its own path.
 fn emitSatisfiesAndDispatch(
     state: *CompileState,
-    dispatch_id: u32,
+    dispatch_id: u64,
     descriptor_ptr: usize,
     arity: dispatch_helpers.ProtocolArity,
     trace_name: []const u8,
@@ -17645,7 +17645,7 @@ fn emitSatisfiesAndDispatch(
 /// `word_id`). One call, no call-site branch -- the helper handles both paths.
 fn emitAotGenericDispatch(
     state: *CompileState,
-    dispatch_id: u32,
+    dispatch_id: u64,
     word_id: u32,
     name: []const u8,
     line: usize,
@@ -17667,7 +17667,7 @@ fn emitAotGenericDispatch(
 /// baking process-local descriptor pointers into the AOT binary.
 fn emitAotSatisfiesAndDispatch(
     state: *CompileState,
-    dispatch_id: u32,
+    dispatch_id: u64,
     protocol: *const value_mod.ProtocolDescriptor,
     arity: dispatch_helpers.ProtocolArity,
     trace_name: []const u8,
@@ -17696,7 +17696,7 @@ fn emitAotSatisfiesAndDispatch(
 /// combinator pointer.
 fn emitSatisfiesAndDispatchCombinator(
     state: *CompileState,
-    dispatch_id: u32,
+    dispatch_id: u64,
     combinator_ptr: usize,
     arity: dispatch_helpers.ProtocolArity,
     trace_name: []const u8,
@@ -17730,7 +17730,7 @@ fn emitSatisfiesAndDispatchCombinator(
 /// call to `aotSatisfiesAndDispatchCombinator`.
 fn emitAotSatisfiesAndDispatchCombinator(
     state: *CompileState,
-    dispatch_id: u32,
+    dispatch_id: u64,
     combinator: *const value_mod.ConstraintCombinator,
     arity: dispatch_helpers.ProtocolArity,
     trace_name: []const u8,
@@ -20910,7 +20910,7 @@ test "jitPushLexicalFrame: the frame is tagged with the owner compiled code name
 }
 
 /// Define a generic word so it has a resolvable dispatch id, and assign it a compiled-call word id.
-fn defineDispatchTestWord(ctx: *Context, name: []const u8) !struct { dispatch_id: u32, word_id: u32 } {
+fn defineDispatchTestWord(ctx: *Context, name: []const u8) !struct { dispatch_id: u64, word_id: u32 } {
     try ctx.defineWord(name, .{ .name = name, .action = .{ .compound = &[_]value_mod.Instruction{} } });
     return .{
         .dispatch_id = ctx.resolveDispatchId(name).?,
@@ -22248,7 +22248,7 @@ test "emitProgramC: entry-word seed tables are sorted, escaped, and gated on the
     // Each row's own freeze-time dispatch id rides along, so the seeded binding keeps the
     // identity replayed method entries and compiled call sites already carry.
     try testing.expect(std.mem.indexOf(u8, source,
-        \\static const uint32_t onez_entry_word_dispatch_ids[] = {
+        \\static const uint64_t onez_entry_word_dispatch_ids[] = {
         \\    40,
         \\    41,
         \\};

@@ -56,6 +56,7 @@ const call_graph_mod = @import("call_graph.zig");
 const bail_stats_mod = @import("bail_stats.zig");
 const entry_census_mod = @import("entry_census.zig");
 const scheduler_mod = @import("scheduler.zig");
+const portable_atomic = @import("portable_atomic.zig");
 const Scheduler = scheduler_mod.Scheduler;
 const task_mod = @import("task.zig");
 const WorkerPool = @import("worker.zig").WorkerPool;
@@ -1344,14 +1345,14 @@ pub const Context = struct {
     mem_limit: ?*MemoryLimitAllocator = null,
     /// Monotonic counter for assigning unique dispatch IDs to word definitions.
     /// Atomic for future thread-safety requirements.
-    next_dispatch_id: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+    next_dispatch_id: portable_atomic.WideCounter(u64) = portable_atomic.WideCounter(u64).init(0),
     /// The dispatch id each identity-carrying native's entries were registered under, indexed by
     /// `NativeDispatchWord`.
     ///
     /// Populated once by `captureNativeDispatchIds` during init and immutable after; task contexts
     /// inherit the values by copy in `initForTask`. Reading this instead of resolving the native's
     /// name keeps a shadowing binding from capturing the native's entries.
-    native_dispatch_ids: std.enums.EnumArray(dispatch_mod.NativeDispatchWord, u32) = std.enums.EnumArray(dispatch_mod.NativeDispatchWord, u32).initFill(0),
+    native_dispatch_ids: std.enums.EnumArray(dispatch_mod.NativeDispatchWord, u64) = std.enums.EnumArray(dispatch_mod.NativeDispatchWord, u64).initFill(0),
     /// Monotonic counter for assigning unique IDs to protocol descriptors.
     /// Atomic for future thread-safety requirements (M:N scheduler).
     next_protocol_id: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
@@ -1446,7 +1447,7 @@ pub const Context = struct {
     /// generic by name (e.g. the protocol satisfies-check on a user type).
     /// Keys borrow the image's static strings. Populated only on the context
     /// the loader runs on; reads walk the parent chain.
-    aot_generic_dispatch_ids: std.StringHashMapUnmanaged(u32) = .{},
+    aot_generic_dispatch_ids: std.StringHashMapUnmanaged(u64) = .{},
     /// name -> dispatch_id for `struct{`-generated field getters, field setters, and hash
     /// converters, independent of interpreter lexical scope. `struct{` may run in an unrelated
     /// module or script scope each time a field of a given name is first seen, which would
@@ -1455,7 +1456,7 @@ pub const Context = struct {
     /// occurrence of a given generated name share one dispatch table program-wide, regardless of
     /// which scope's `struct{` happened to define it first. Unrelated to `aot_generic_dispatch_ids`
     /// above, which reconstitutes dispatch_ids lost to AOT image serialization.
-    generic_accessor_dispatch_ids: std.StringHashMapUnmanaged(u32) = .{},
+    generic_accessor_dispatch_ids: std.StringHashMapUnmanaged(u64) = .{},
     /// name -> stack effect for `struct{`-generated field getters and setters. One dispatch table
     /// serves every struct with a field of the name, so one effect describes them all, widened as
     /// each struct joins. Written through `stateTarget`, beside the dispatch entries it describes.
@@ -5084,7 +5085,7 @@ pub const Context = struct {
         name: []const u8,
         effect: ?*const StackEffect,
         word_id: ?u32,
-        dispatch_id: u32,
+        dispatch_id: u64,
         generated: bool,
         is_const: bool,
         is_generic: bool,
@@ -5095,14 +5096,14 @@ pub const Context = struct {
     /// Replayed method entries and seeded entry words carry ids the freeze's counter issued, not
     /// this process's. Without the advance a later runtime definition can mint an id equal to one
     /// of them and inherit that identity's registered methods.
-    pub fn advanceDispatchIdPast(self: *Context, id: u32) void {
+    pub fn advanceDispatchIdPast(self: *Context, id: u64) void {
         _ = self.rootContext().next_dispatch_id.fetchMax(id +| 1, .monotonic);
     }
 
     /// Debug-only choke-point check for the id-uniqueness invariant: a freshly-minted dispatch id
     /// must carry no dispatch state installed under a freeze-time id. Boot reconciles the counter
     /// through `advanceDispatchIdPast`; this catches a future install site that forgets to.
-    fn assertMintedDispatchIdFresh(self: *Context, id: u32) void {
+    fn assertMintedDispatchIdFresh(self: *Context, id: u64) void {
         if (builtin.mode != .Debug) return;
 
         const keys = self.dispatchKeysForIdLocked(id, self.arena.allocator()) catch return;
@@ -6323,7 +6324,7 @@ pub const Context = struct {
     /// this lets a caller then force it onto a dispatch_id shared across scopes instead, e.g. a
     /// `struct{`-generated field accessor that must dispatch through the same table as an
     /// identically-named accessor a different, mutually-invisible scope already defined.
-    pub fn overrideWordDispatchId(self: *Context, name: []const u8, dispatch_id: u32) void {
+    pub fn overrideWordDispatchId(self: *Context, name: []const u8, dispatch_id: u64) void {
         self.acquireSharedWrite();
         defer self.releaseSharedWrite();
         if (self.local_frames.items.len > 0) {
@@ -6379,7 +6380,7 @@ pub const Context = struct {
     ///
     /// The registry lives on the state target. A task's load and the owner's own top-level code can
     /// both write it, so the lookup and the insert happen under the shared write lock.
-    pub fn shareAccessorDispatchId(self: *Context, name: []const u8, local_dispatch_id: u32) !u32 {
+    pub fn shareAccessorDispatchId(self: *Context, name: []const u8, local_dispatch_id: u64) !u64 {
         self.acquireSharedWrite();
         defer self.releaseSharedWrite();
 
@@ -7642,13 +7643,13 @@ pub const Context = struct {
     /// Look up a binary dispatch entry by walking dispatch frames (top to
     /// bottom), then the base dispatch table, then the parent context chain.
     /// In check mode each level's check overlay answers first.
-    pub fn lookupBinaryDispatch(self: *const Context, dispatch_id: u32, type_a: *const value_mod.TypeDescriptor, type_b: *const value_mod.TypeDescriptor) ?DispatchEntry {
+    pub fn lookupBinaryDispatch(self: *const Context, dispatch_id: u64, type_a: *const value_mod.TypeDescriptor, type_b: *const value_mod.TypeDescriptor) ?DispatchEntry {
         self.acquireSharedRead();
         defer self.releaseSharedRead();
         return self.lookupBinaryDispatchLocked(dispatch_id, type_a, type_b);
     }
 
-    fn lookupBinaryDispatchLocked(self: *const Context, dispatch_id: u32, type_a: *const value_mod.TypeDescriptor, type_b: *const value_mod.TypeDescriptor) ?DispatchEntry {
+    fn lookupBinaryDispatchLocked(self: *const Context, dispatch_id: u64, type_a: *const value_mod.TypeDescriptor, type_b: *const value_mod.TypeDescriptor) ?DispatchEntry {
         if (self.check_mode) return self.lookupBinaryDispatchChecked(dispatch_id, type_a, type_b);
 
         const any_sentinel = self.getDispatchAnySentinel().descriptor.?;
@@ -7678,13 +7679,13 @@ pub const Context = struct {
     /// Look up a unary dispatch entry by walking dispatch frames (top to
     /// bottom), then the base dispatch table, then the parent context chain.
     /// In check mode each level's check overlay answers first.
-    pub fn lookupUnaryDispatch(self: *const Context, dispatch_id: u32, type_a: *const value_mod.TypeDescriptor) ?DispatchEntry {
+    pub fn lookupUnaryDispatch(self: *const Context, dispatch_id: u64, type_a: *const value_mod.TypeDescriptor) ?DispatchEntry {
         self.acquireSharedRead();
         defer self.releaseSharedRead();
         return self.lookupUnaryDispatchLocked(dispatch_id, type_a);
     }
 
-    fn lookupUnaryDispatchLocked(self: *const Context, dispatch_id: u32, type_a: *const value_mod.TypeDescriptor) ?DispatchEntry {
+    fn lookupUnaryDispatchLocked(self: *const Context, dispatch_id: u64, type_a: *const value_mod.TypeDescriptor) ?DispatchEntry {
         if (self.check_mode) return self.lookupUnaryDispatchChecked(dispatch_id, type_a);
 
         const any_sentinel = self.getDispatchAnySentinel().descriptor.?;
@@ -7732,7 +7733,7 @@ pub const Context = struct {
     /// At each context level, every precedence step probes all three layers before the next step
     /// runs. A live arm on the exact types therefore still beats a checked `any` arm, as it did
     /// when both sat in one table.
-    fn lookupBinaryDispatchChecked(self: *const Context, dispatch_id: u32, type_a: *const value_mod.TypeDescriptor, type_b: *const value_mod.TypeDescriptor) ?DispatchEntry {
+    fn lookupBinaryDispatchChecked(self: *const Context, dispatch_id: u64, type_a: *const value_mod.TypeDescriptor, type_b: *const value_mod.TypeDescriptor) ?DispatchEntry {
         var level: ?*const Context = self;
         while (level) |ctx| : (level = ctx.parent_context) {
             const any_sentinel = ctx.getDispatchAnySentinel().descriptor.?;
@@ -7751,7 +7752,7 @@ pub const Context = struct {
 
     /// The unary lookup while check mode is on. Exact, then `any`, each across all three layers
     /// of a level before the next step runs.
-    fn lookupUnaryDispatchChecked(self: *const Context, dispatch_id: u32, type_a: *const value_mod.TypeDescriptor) ?DispatchEntry {
+    fn lookupUnaryDispatchChecked(self: *const Context, dispatch_id: u64, type_a: *const value_mod.TypeDescriptor) ?DispatchEntry {
         var level: ?*const Context = self;
         while (level) |ctx| : (level = ctx.parent_context) {
             const any_sentinel = ctx.getDispatchAnySentinel().descriptor.?;
@@ -7768,7 +7769,7 @@ pub const Context = struct {
     }
 
     /// Resolve a word name to its dispatch ID by looking up the word definition.
-    pub fn resolveDispatchId(self: *const Context, word_name: []const u8) ?u32 {
+    pub fn resolveDispatchId(self: *const Context, word_name: []const u8) ?u64 {
         if (self.lookupWord(word_name)) |def| return def.dispatch_id;
         var c: ?*const Context = self;
         while (c) |cur| {
@@ -7782,13 +7783,13 @@ pub const Context = struct {
     ///
     /// This is the native's own identity, so a shadowing binding of the name never answers in
     /// its place.
-    pub fn nativeDispatchId(self: *const Context, word: dispatch_mod.NativeDispatchWord) u32 {
+    pub fn nativeDispatchId(self: *const Context, word: dispatch_mod.NativeDispatchWord) u64 {
         return self.native_dispatch_ids.get(word);
     }
 
     /// Whether `id` is the dispatch id of a native that consults the dispatch table on its own
     /// identity, and so is the only kind of native a method arm can reach.
-    pub fn isNativeDispatchId(self: *const Context, id: u32) bool {
+    pub fn isNativeDispatchId(self: *const Context, id: u64) bool {
         for (self.native_dispatch_ids.values) |did| {
             if (did == id) return true;
         }
@@ -7883,13 +7884,13 @@ pub const Context = struct {
 
     /// Look up a binary dispatch entry in the native-only shadow table,
     /// walking the parent context chain.
-    pub fn lookupNativeBinaryDispatch(self: *const Context, dispatch_id: u32, type_a: *const value_mod.TypeDescriptor, type_b: *const value_mod.TypeDescriptor) ?DispatchEntry {
+    pub fn lookupNativeBinaryDispatch(self: *const Context, dispatch_id: u64, type_a: *const value_mod.TypeDescriptor, type_b: *const value_mod.TypeDescriptor) ?DispatchEntry {
         self.acquireSharedRead();
         defer self.releaseSharedRead();
         return self.lookupNativeBinaryDispatchLocked(dispatch_id, type_a, type_b);
     }
 
-    fn lookupNativeBinaryDispatchLocked(self: *const Context, dispatch_id: u32, type_a: *const value_mod.TypeDescriptor, type_b: *const value_mod.TypeDescriptor) ?DispatchEntry {
+    fn lookupNativeBinaryDispatchLocked(self: *const Context, dispatch_id: u64, type_a: *const value_mod.TypeDescriptor, type_b: *const value_mod.TypeDescriptor) ?DispatchEntry {
         if (self.dispatch.lookupNativeBinary(dispatch_id, type_a, type_b, self.getDispatchAnySentinel().descriptor.?)) |entry| return entry;
 
         var ancestor = self.parent_context;
@@ -7903,13 +7904,13 @@ pub const Context = struct {
 
     /// Look up a unary dispatch entry in the native-only shadow table,
     /// walking the parent context chain.
-    pub fn lookupNativeUnaryDispatch(self: *const Context, dispatch_id: u32, type_a: *const value_mod.TypeDescriptor) ?DispatchEntry {
+    pub fn lookupNativeUnaryDispatch(self: *const Context, dispatch_id: u64, type_a: *const value_mod.TypeDescriptor) ?DispatchEntry {
         self.acquireSharedRead();
         defer self.releaseSharedRead();
         return self.lookupNativeUnaryDispatchLocked(dispatch_id, type_a);
     }
 
-    fn lookupNativeUnaryDispatchLocked(self: *const Context, dispatch_id: u32, type_a: *const value_mod.TypeDescriptor) ?DispatchEntry {
+    fn lookupNativeUnaryDispatchLocked(self: *const Context, dispatch_id: u64, type_a: *const value_mod.TypeDescriptor) ?DispatchEntry {
         if (self.dispatch.lookupNativeUnary(dispatch_id, type_a, self.getDispatchAnySentinel().descriptor.?, self.getDispatchUnarySentinel().descriptor.?)) |entry| return entry;
 
         var ancestor = self.parent_context;
@@ -9050,7 +9051,7 @@ pub const Context = struct {
     /// Collect all dispatch key-entry pairs for a given dispatch ID, including
     /// entries from all frames, the base table, and parent contexts. The check
     /// overlay joins them in check mode only. See `analysisDispatchEntriesForId`.
-    pub fn dispatchEntriesForId(self: *const Context, dispatch_id: u32, alloc: Allocator) ![]DispatchTable.KeyEntryPair {
+    pub fn dispatchEntriesForId(self: *const Context, dispatch_id: u64, alloc: Allocator) ![]DispatchTable.KeyEntryPair {
         self.acquireSharedRead();
         defer self.releaseSharedRead();
         return self.dispatchEntriesForIdLocked(dispatch_id, alloc);
@@ -9062,7 +9063,7 @@ pub const Context = struct {
         return self.dispatchEntriesForId(did, alloc);
     }
 
-    fn dispatchEntriesForIdLocked(self: *const Context, dispatch_id: u32, alloc: Allocator) ![]DispatchTable.KeyEntryPair {
+    fn dispatchEntriesForIdLocked(self: *const Context, dispatch_id: u64, alloc: Allocator) ![]DispatchTable.KeyEntryPair {
         const slice = try self.collectDispatchEntriesLocked(dispatch_id, self.check_mode, alloc);
         self.sortDispatchEntries(slice, .by_type_name);
         return slice;
@@ -9076,7 +9077,7 @@ pub const Context = struct {
     /// overlay alone.
     pub fn analysisDispatchEntriesForId(
         self: *const Context,
-        dispatch_id: u32,
+        dispatch_id: u64,
         order: DispatchEntryOrder,
         alloc: Allocator,
     ) ![]DispatchTable.KeyEntryPair {
@@ -9120,7 +9121,7 @@ pub const Context = struct {
     /// entry, which is the one a lookup answers with.
     fn collectDispatchEntriesLocked(
         self: *const Context,
-        dispatch_id: u32,
+        dispatch_id: u64,
         include_overlay: bool,
         alloc: Allocator,
     ) ![]DispatchTable.KeyEntryPair {
@@ -9131,7 +9132,7 @@ pub const Context = struct {
     /// each context's entries in the result, innermost context first.
     fn collectDispatchEntriesLevels(
         self: *const Context,
-        dispatch_id: u32,
+        dispatch_id: u64,
         include_overlay: bool,
         level_ends: ?*std.ArrayListUnmanaged(usize),
         alloc: Allocator,
@@ -9164,7 +9165,7 @@ pub const Context = struct {
 
     fn collectUnseenDispatchEntries(
         entries: *const dispatch_mod.EntriesMap,
-        dispatch_id: u32,
+        dispatch_id: u64,
         seen: *std.HashMapUnmanaged(DispatchKey, void, dispatch_mod.DispatchKeyContext, 80),
         results: *std.ArrayListUnmanaged(DispatchTable.KeyEntryPair),
         alloc: Allocator,
@@ -9212,7 +9213,7 @@ pub const Context = struct {
     /// Collect all dispatch keys for a given dispatch ID, including
     /// entries from all frames, the base table, and parent contexts. The check
     /// overlay joins them in check mode only.
-    pub fn dispatchKeysForId(self: *const Context, dispatch_id: u32, alloc: Allocator) ![]DispatchKey {
+    pub fn dispatchKeysForId(self: *const Context, dispatch_id: u64, alloc: Allocator) ![]DispatchKey {
         self.acquireSharedRead();
         defer self.releaseSharedRead();
         return self.dispatchKeysForIdLocked(dispatch_id, alloc);
@@ -9224,7 +9225,7 @@ pub const Context = struct {
         return self.dispatchKeysForId(did, alloc);
     }
 
-    fn dispatchKeysForIdLocked(self: *const Context, dispatch_id: u32, alloc: Allocator) ![]DispatchKey {
+    fn dispatchKeysForIdLocked(self: *const Context, dispatch_id: u64, alloc: Allocator) ![]DispatchKey {
         const pairs = try self.collectDispatchEntriesLocked(dispatch_id, self.check_mode, alloc);
         defer alloc.free(pairs);
 
@@ -16947,6 +16948,49 @@ test "seedEntryWord: the baked dispatch id keeps another word's replayed methods
     });
 }
 
+test "defineWord: minted dispatch ids stay distinct past the 32-bit boundary" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const boundary: u64 = std.math.maxInt(u32);
+    ctx.next_dispatch_id.store(boundary - 1, .monotonic);
+
+    const names = [_][]const u8{ "w0", "w1", "w2", "w3" };
+    for (names) |n| {
+        try ctx.defineWord(n, .{ .name = n, .action = .{ .literal = .{ .fixnum = 1 } } });
+    }
+
+    var ids: [names.len]u64 = undefined;
+    for (names, 0..) |n, i| ids[i] = ctx.lookupWord(n).?.dispatch_id;
+
+    try std.testing.expectEqual(boundary - 1, ids[0]);
+    try std.testing.expectEqual(boundary, ids[1]);
+    try std.testing.expectEqual(boundary + 1, ids[2]);
+    try std.testing.expectEqual(boundary + 2, ids[3]);
+
+    const fixnum = ctx.lookupBuiltinTypeValue("fixnum").?.descriptor.?;
+    const unary = ctx.dispatch_unary_sentinel.?.descriptor.?;
+    for (ids) |id| {
+        try ctx.registerDispatch(
+            .{ .dispatch_id = id, .type_a = fixnum, .type_b = unary },
+            .{ .body = .{ .native_fn = struct {
+                fn run(_: *Context) anyerror!void {}
+            }.run } },
+            false,
+        );
+    }
+
+    for (ids) |id| {
+        const keys = try ctx.dispatchKeysForId(id, std.testing.allocator);
+        defer std.testing.allocator.free(keys);
+        try std.testing.expectEqual(@as(usize, 1), keys.len);
+        try std.testing.expectEqual(id, keys[0].dispatch_id);
+    }
+
+    ctx.advanceDispatchIdPast(boundary + 100);
+    try std.testing.expectEqual(boundary + 101, ctx.next_dispatch_id.load(.monotonic));
+}
+
 test "seedEntryWord: seeding advances the mint counter past the baked id" {
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
@@ -19458,7 +19502,7 @@ test "cloneWordFrameCapacityMatched: copies every entry and stays a mutable map"
     try std.testing.expectEqual(src.count(), dst.count());
     for (names, 0..) |n, i| {
         const d = dst.get(n) orelse return error.MissingKey;
-        try std.testing.expectEqual(@as(u32, @intCast(i + 1)), d.dispatch_id);
+        try std.testing.expectEqual(@as(u64, @intCast(i + 1)), d.dispatch_id);
         try std.testing.expectEqualStrings(n, d.name);
     }
 
@@ -19511,9 +19555,9 @@ test "pushModuleDepsFrame: clones the template, word overrides same-named dep" {
     try std.testing.expectEqual(FrameKind.module_deps, ctx.local_frame_kinds.items[idx]);
 
     const frame = ctx.local_frames.items[idx];
-    try std.testing.expectEqual(@as(u32, 20), (frame.get("shared") orelse return error.Missing).dispatch_id);
-    try std.testing.expectEqual(@as(u32, 11), (frame.get("dep-only") orelse return error.Missing).dispatch_id);
-    try std.testing.expectEqual(@as(u32, 21), (frame.get("word-only") orelse return error.Missing).dispatch_id);
+    try std.testing.expectEqual(@as(u64, 20), (frame.get("shared") orelse return error.Missing).dispatch_id);
+    try std.testing.expectEqual(@as(u64, 11), (frame.get("dep-only") orelse return error.Missing).dispatch_id);
+    try std.testing.expectEqual(@as(u64, 21), (frame.get("word-only") orelse return error.Missing).dispatch_id);
 
     // The frame entries carry the module word's compiled id, so a frame hit
     // dispatches compiled.
@@ -19824,23 +19868,23 @@ test "lookupWordForExecutionOwnScope: words beat deps, defining module beats amb
     // The defining module's `words` wins over its own `deps`, every ambient module, and the
     // durable frame; the synthesized definition matches what the module's deps frame would hold.
     const shared = ctx.lookupWordForExecutionOwnScope("shared", null, &mod_a, &ambient, 0) orelse return error.TestExpectedResolution;
-    try std.testing.expectEqual(@as(u32, 20), shared.dispatch_id);
+    try std.testing.expectEqual(@as(u64, 20), shared.dispatch_id);
     try std.testing.expectEqual(@as(?*const value_mod.Module, &mod_a), shared.source_module);
     try std.testing.expectEqual(@as(?[]const u8, null), shared.source_file);
 
     // The defining module's `deps` is probed when `words` misses.
     const dep_only = ctx.lookupWordForExecutionOwnScope("dep-only", null, &mod_a, &ambient, 0) orelse return error.TestExpectedResolution;
-    try std.testing.expectEqual(@as(u32, 11), dep_only.dispatch_id);
+    try std.testing.expectEqual(@as(u64, 11), dep_only.dispatch_id);
 
     // With no defining module, an ambient-deps module's binding still outranks the durable frame.
     const ambient_shared = ctx.lookupWordForExecutionOwnScope("shared", null, null, &ambient, 0) orelse return error.TestExpectedResolution;
-    try std.testing.expectEqual(@as(u32, 30), ambient_shared.dispatch_id);
+    try std.testing.expectEqual(@as(u64, 30), ambient_shared.dispatch_id);
 
     // An ambient module is reached for names the defining module lacks, its `deps` included.
     const b_only = ctx.lookupWordForExecutionOwnScope("b-only", null, &mod_a, &ambient, 0) orelse return error.TestExpectedResolution;
-    try std.testing.expectEqual(@as(u32, 31), b_only.dispatch_id);
+    try std.testing.expectEqual(@as(u64, 31), b_only.dispatch_id);
     const b_dep_only = ctx.lookupWordForExecutionOwnScope("b-dep-only", null, &mod_a, &ambient, 0) orelse return error.TestExpectedResolution;
-    try std.testing.expectEqual(@as(u32, 32), b_dep_only.dispatch_id);
+    try std.testing.expectEqual(@as(u64, 32), b_dep_only.dispatch_id);
 
     // A probe miss falls through to the ordinary ladder.
     const frame_only = ctx.lookupWordForExecutionOwnScope("frame-only", null, null, &.{}, 0) orelse return error.TestExpectedResolution;

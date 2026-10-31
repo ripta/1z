@@ -458,7 +458,7 @@ fn defineConstructor(ctx: *Context, name: []const u8, struct_type: *const Struct
 ///
 /// Not used by the `>NAME` hash converter: see the comment at its own dispatch registration for why
 /// that one must stay scope-local.
-fn sharedAccessorDispatchId(ctx: *Context, name: []const u8, local_dispatch_id: u32) !u32 {
+fn sharedAccessorDispatchId(ctx: *Context, name: []const u8, local_dispatch_id: u64) !u64 {
     return ctx.shareAccessorDispatchId(name, local_dispatch_id);
 }
 

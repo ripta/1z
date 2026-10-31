@@ -16,7 +16,7 @@ const Module = @import("value.zig").Module;
 pub const NativeLeafData = struct {
     fn_ptr: dictionary_mod.NativeFn,
     /// Mirrors `WordDefinition.dispatch_id`; passed to `tryDispatchGenericById`.
-    dispatch_id: u32,
+    dispatch_id: u64,
     /// Borrowed from the definition this leaf was resolved from. The definition boxes its own
     /// effect on a context arena, so the pointer is valid for the process's lifetime whether the
     /// leaf came from the dictionary or from a module's word map.

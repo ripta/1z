@@ -1210,7 +1210,7 @@ const FreestandingDispatchHit = struct {
 fn freestandingLookupBinary(
     handle: *OnezHandle,
     table: *const dispatch_mod.DispatchTable,
-    dispatch_id: u32,
+    dispatch_id: u64,
     a: Value,
     b: Value,
 ) ?FreestandingDispatchHit {
@@ -1261,7 +1261,7 @@ fn freestandingLookupBinary(
 fn freestandingLookupUnary(
     handle: *OnezHandle,
     table: *const dispatch_mod.DispatchTable,
-    dispatch_id: u32,
+    dispatch_id: u64,
     a: Value,
 ) ?FreestandingDispatchHit {
     const any_desc = handle.dispatch_any_sentinel.?.descriptor.?;
@@ -1313,7 +1313,7 @@ fn runFreestandingDispatchBody(handle: *OnezHandle, entry: dispatch_mod.Dispatch
 /// Freestanding mirror of the hosted `tryDispatchGenericById` minus the PIC path: binary attempt
 /// when two operands are present, then unary. Returns the body's status on a hit, null on a
 /// miss. A null registry means replay never ran (zero-entry image), which is a plain miss.
-fn tryFreestandingGenericDispatch(handle: *OnezHandle, dispatch_id: u32) ?i32 {
+fn tryFreestandingGenericDispatch(handle: *OnezHandle, dispatch_id: u64) ?i32 {
     const table: *const dispatch_mod.DispatchTable = if (handle.method_dispatch) |*t| t else return null;
 
     if (handle.stack_len >= 2) {
@@ -1540,7 +1540,7 @@ const FreestandingSatisfiesEnv = struct {
 
     pub const ThrownState = ?[:0]const u8;
 
-    pub fn resolveDispatchId(self: FreestandingSatisfiesEnv, name: []const u8) ?u32 {
+    pub fn resolveDispatchId(self: FreestandingSatisfiesEnv, name: []const u8) ?u64 {
         const rows = self.handle.image_dispatch_entry_descriptions orelse return null;
         var i: u32 = 0;
         while (i < self.handle.image_dispatch_entry_count) : (i += 1) {
@@ -1551,14 +1551,14 @@ const FreestandingSatisfiesEnv = struct {
         return null;
     }
 
-    pub fn hasUnaryDispatch(self: FreestandingSatisfiesEnv, dispatch_id: u32, type_a: *const value_mod.TypeDescriptor) bool {
+    pub fn hasUnaryDispatch(self: FreestandingSatisfiesEnv, dispatch_id: u64, type_a: *const value_mod.TypeDescriptor) bool {
         const table: *const dispatch_mod.DispatchTable = if (self.handle.method_dispatch) |*t| t else return false;
         const any_desc = self.handle.dispatch_any_sentinel.?.descriptor.?;
         const unary_desc = self.handle.dispatch_unary_sentinel.?.descriptor.?;
         return table.lookupUnary(dispatch_id, type_a, any_desc, unary_desc) != null;
     }
 
-    pub fn hasBinaryDispatch(self: FreestandingSatisfiesEnv, dispatch_id: u32, type_a: *const value_mod.TypeDescriptor, type_b: *const value_mod.TypeDescriptor) bool {
+    pub fn hasBinaryDispatch(self: FreestandingSatisfiesEnv, dispatch_id: u64, type_a: *const value_mod.TypeDescriptor, type_b: *const value_mod.TypeDescriptor) bool {
         const table: *const dispatch_mod.DispatchTable = if (self.handle.method_dispatch) |*t| t else return false;
         const any_desc = self.handle.dispatch_any_sentinel.?.descriptor.?;
         return table.lookupBinary(dispatch_id, type_a, type_b, any_desc) != null;
@@ -1701,7 +1701,7 @@ fn freestandingCheckOperand(handle: *OnezHandle, v: Value, constraint: Freestand
 /// default-body fallback.
 fn freestandingSatisfiesAndDispatch(
     handle: *OnezHandle,
-    dispatch_id: u32,
+    dispatch_id: u64,
     constraint: FreestandingBoundedConstraint,
     arity: ProtocolArity,
 ) i32 {
@@ -1901,7 +1901,7 @@ fn onez_seed_entry_words(
     names: ?[*]const [*:0]const u8,
     effects: ?[*]const ?[*:0]const u8,
     word_ids: ?[*]const i32,
-    dispatch_ids: ?[*]const u32,
+    dispatch_ids: ?[*]const u64,
     flags: ?[*]const u8,
     count: u32,
 ) callconv(.c) c_int {

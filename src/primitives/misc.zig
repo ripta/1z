@@ -774,7 +774,7 @@ pub fn importWord(ctx: *Context, name: []const u8, mod_word: ModuleWord, module:
 ///
 /// Under check mode the module's arms sit in the check overlay, so the copy reads the overlay over
 /// the base table.
-fn mergeDispatchEntries(ctx: *Context, from_id: u32, to_id: u32) !void {
+fn mergeDispatchEntries(ctx: *Context, from_id: u64, to_id: u64) !void {
     const dispatch_mod = @import("../dispatch.zig");
     const pairs = if (ctx.check_mode)
         try ctx.analysisDispatchEntriesForId(from_id, .by_sequence, ctx.allocator)
@@ -1994,7 +1994,7 @@ test "importWord: a generic dispatch-merge drops the compiled id" {
     // The imported def dispatches through the merged table, whose entries the
     // baked compiled body would not consult, so the id stays null.
     const def = ctx.lookupWord("gword") orelse return error.TestExpectedImport;
-    try std.testing.expectEqual(@as(u32, 100), def.dispatch_id);
+    try std.testing.expectEqual(@as(u64, 100), def.dispatch_id);
     try std.testing.expectEqual(@as(?u32, null), def.word_id);
 }
 

@@ -50,7 +50,7 @@ pub const MethodSource = struct {
     /// "no dispatch identity" sentinel here, because `Context.next_dispatch_id` starts at zero and
     /// the first primitive registered owns that id. The supplier is what knows which ids own
     /// methods, and it is the place to cache the answer.
-    anyMethodMayDefine: *const fn (user_data: *anyopaque, dispatch_id: u32, walk: *Walk) bool,
+    anyMethodMayDefine: *const fn (user_data: *anyopaque, dispatch_id: u64, walk: *Walk) bool,
     user_data: *anyopaque,
 };
 
@@ -247,7 +247,7 @@ pub fn bodyCallsDefiningNative(body: []const Instruction) bool {
 /// per-id result memo would: the walk answers false for a back edge, and caching that answer would
 /// hand it to a later query that is not on the cycle.
 pub const DispatchMethodIndex = struct {
-    groups: std.AutoHashMapUnmanaged(u32, std.ArrayListUnmanaged(dispatch_mod.DispatchBody)) = .{},
+    groups: std.AutoHashMapUnmanaged(u64, std.ArrayListUnmanaged(dispatch_mod.DispatchBody)) = .{},
     allocator: Allocator,
 
     pub fn init(allocator: Allocator, table: *const DispatchTable) !DispatchMethodIndex {
@@ -273,7 +273,7 @@ pub const DispatchMethodIndex = struct {
         return .{ .anyMethodMayDefine = &DispatchMethodIndex.anyMethodMayDefine, .user_data = @ptrCast(self) };
     }
 
-    fn anyMethodMayDefine(user_data: *anyopaque, dispatch_id: u32, walk: *Walk) bool {
+    fn anyMethodMayDefine(user_data: *anyopaque, dispatch_id: u64, walk: *Walk) bool {
         const self: *const DispatchMethodIndex = @ptrCast(@alignCast(user_data));
         const bodies = self.groups.getPtr(dispatch_id) orelse return false;
 
@@ -300,7 +300,7 @@ const TestWord = struct {
     name: []const u8,
     is_native: bool = false,
     defines_word: bool = false,
-    dispatch_id: u32 = 0,
+    dispatch_id: u64 = 0,
     body: ?[]const Instruction = null,
 };
 
@@ -337,10 +337,10 @@ const TestResolver = struct {
 
 /// A method source over one dispatch id's bodies. Every other id reports no methods.
 const TestMethods = struct {
-    dispatch_id: u32,
+    dispatch_id: u64,
     bodies: []const []const Instruction,
 
-    fn anyMethodMayDefine(user_data: *anyopaque, dispatch_id: u32, walk: *Walk) bool {
+    fn anyMethodMayDefine(user_data: *anyopaque, dispatch_id: u64, walk: *Walk) bool {
         const self: *const TestMethods = @ptrCast(@alignCast(user_data));
         if (dispatch_id != self.dispatch_id) return false;
         for (self.bodies) |b| {
@@ -700,7 +700,7 @@ const IndexFixture = struct {
     table: DispatchTable,
     desc: *value_mod.TypeDescriptor,
 
-    fn init(dispatch_id: u32, body: dispatch_mod.DispatchBody) !IndexFixture {
+    fn init(dispatch_id: u64, body: dispatch_mod.DispatchBody) !IndexFixture {
         var self = IndexFixture{
             .table = DispatchTable.init(std.testing.allocator),
             .desc = try testDescriptor(),

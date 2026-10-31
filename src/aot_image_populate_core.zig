@@ -409,7 +409,7 @@ pub const once_body_uncompiled_sentinel: u32 = 0xFFFFFFFF;
 /// above), the body through the quotation-function table by `quotation_id`, and the defining
 /// module by name, then replays the entry into `ctx.dispatch`.
 pub const DispatchEntryDescription = extern struct {
-    dispatch_id: u32,
+    dispatch_id: u64,
     type_a_slot: u32,
     type_b_slot: u32,
     quotation_id: u32,
@@ -424,6 +424,33 @@ pub const DispatchEntryDescription = extern struct {
     body_bytecode: ?[*]const u8,
     body_bytecode_len: u32,
 };
+
+// The loader casts the emitted C rows to this struct without a check. This block derives the layout
+// a C compiler gives `onez_image_dispatch_entry_description_t` on the build's target: the 64-bit
+// `dispatch_id` first, then the 32-bit slots, then the pointer and length pairs. It uses the
+// target's own `u64` and pointer alignments, so it holds on targets where `u64` aligns to 4.
+//
+// This pins the Zig half of the pairing. The other half is the emit test in `aot_image_emit.zig`
+// that checks the typedef declares `uint64_t    dispatch_id;`. A change to one side alone fails
+// the build here or that test.
+comptime {
+    const ptr_size = @sizeOf(*const u8);
+    const ptr_align = @alignOf(*const u8);
+    const row_align = @max(@alignOf(u64), ptr_align);
+
+    const module_name_off = std.mem.alignForward(usize, 20, ptr_align);
+    const generic_name_off = std.mem.alignForward(usize, module_name_off + ptr_size + 4, ptr_align);
+    const body_off = std.mem.alignForward(usize, generic_name_off + ptr_size + 4, ptr_align);
+    const row_size = std.mem.alignForward(usize, body_off + ptr_size + 4, row_align);
+
+    std.debug.assert(@offsetOf(DispatchEntryDescription, "dispatch_id") == 0);
+    std.debug.assert(@offsetOf(DispatchEntryDescription, "type_a_slot") == 8);
+    std.debug.assert(@offsetOf(DispatchEntryDescription, "quotation_id") == 16);
+    std.debug.assert(@offsetOf(DispatchEntryDescription, "module_name") == module_name_off);
+    std.debug.assert(@offsetOf(DispatchEntryDescription, "generic_name") == generic_name_off);
+    std.debug.assert(@offsetOf(DispatchEntryDescription, "body_bytecode") == body_off);
+    std.debug.assert(@sizeOf(DispatchEntryDescription) == row_size);
+}
 
 /// Zig mirror of `onez_image_reified_quotation_module_t`.
 ///

@@ -295,7 +295,7 @@ export fn onez_seed_entry_words(
     names: ?[*]const [*:0]const u8,
     effects: ?[*]const ?[*:0]const u8,
     word_ids: ?[*]const i32,
-    dispatch_ids: ?[*]const u32,
+    dispatch_ids: ?[*]const u64,
     flags: ?[*]const u8,
     count: u32,
 ) c_int {
@@ -2606,7 +2606,7 @@ test "registerNativeLeaf: binds a cached module's own native through the segment
     const entry = ctx.jit_dispatch.get(0).?;
     const leaf = entry.native orelse return error.TestExpectedLeafData;
     try std.testing.expectEqual(noop, leaf.fn_ptr);
-    try std.testing.expectEqual(@as(u32, 7), leaf.dispatch_id);
+    try std.testing.expectEqual(@as(u64, 7), leaf.dispatch_id);
     // The leaf borrows the module word's own boxed effect rather than copying it, so a caller
     // reading the leaf and a caller reading the module word see one address.
     try std.testing.expectEqual(&probe_effect, leaf.stack_effect.?);
@@ -3079,7 +3079,7 @@ test "seed_entry_words: a runtime redefinition of a seeded word takes the interp
     const names = [_][*:0]const u8{"val"};
     const effects = [_]?[*:0]const u8{" -- s"};
     const ids = [_]i32{-1};
-    const dids = [_]u32{900};
+    const dids = [_]u64{900};
     const flags = [_]u8{0};
     try std.testing.expectEqual(ONEZ_OK, onez_seed_entry_words(handle_ptr, &names, &effects, &ids, &dids, &flags, 1));
 
@@ -3118,7 +3118,7 @@ test "seed_entry_words: the generated flag keeps the arity exemption and the con
     const names = [_][*:0]const u8{ "acc>>", "PI" };
     const effects = [_]?[*:0]const u8{ "s -- v", null };
     const ids = [_]i32{ -1, -1 };
-    const dids = [_]u32{ 901, 902 };
+    const dids = [_]u64{ 901, 902 };
     const flags = [_]u8{ 1, 2 };
     try std.testing.expectEqual(ONEZ_OK, onez_seed_entry_words(handle_ptr, &names, &effects, &ids, &dids, &flags, 2));
 
@@ -3145,7 +3145,7 @@ test "seed_entry_words: a boot that never pushed is a no-op, and a present name 
     const names = [_][*:0]const u8{"taken"};
     const effects = [_]?[*:0]const u8{null};
     const ids = [_]i32{-1};
-    const dids = [_]u32{903};
+    const dids = [_]u64{903};
     const flags = [_]u8{0};
 
     // No push: the embedder shape. The seed succeeds without touching anything.
@@ -3175,7 +3175,7 @@ test "seed_entry_words: a name the base scope resolves is not seeded" {
     const names = [_][*:0]const u8{"dup"};
     const effects = [_]?[*:0]const u8{"a b -- c"};
     const ids = [_]i32{-1};
-    const dids = [_]u32{904};
+    const dids = [_]u64{904};
     const flags = [_]u8{0};
     try std.testing.expectEqual(ONEZ_OK, onez_seed_entry_words(handle_ptr, &names, &effects, &ids, &dids, &flags, 1));
 
@@ -3193,7 +3193,7 @@ test "seed_entry_words: a seeded binding carries the compiled-dispatch shape" {
     const names = [_][*:0]const u8{"greet"};
     const effects = [_]?[*:0]const u8{" -- "};
     const ids = [_]i32{5};
-    const dids = [_]u32{905};
+    const dids = [_]u64{905};
     const flags = [_]u8{0};
     try std.testing.expectEqual(ONEZ_OK, onez_seed_entry_words(handle_ptr, &names, &effects, &ids, &dids, &flags, 1));
 
@@ -3204,7 +3204,7 @@ test "seed_entry_words: a seeded binding carries the compiled-dispatch shape" {
     const seeded = ctx.lookupWord("greet").?;
     try std.testing.expectEqual(@as(?u32, 5), seeded.word_id);
     try std.testing.expect(seeded.action == .native);
-    try std.testing.expectEqual(@as(u32, 905), seeded.dispatch_id);
+    try std.testing.expectEqual(@as(u64, 905), seeded.dispatch_id);
 }
 
 test "root allocator gate matches build mode" {

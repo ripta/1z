@@ -215,7 +215,7 @@ fn extractTypeValue(ctx: *Context, val: value_mod.Value) !*const value_mod.TypeV
 }
 
 const ResolvedWord = struct {
-    dispatch_id: u32,
+    dispatch_id: u64,
     markers: []const *value_mod.Marker,
     action: union(enum) {
         native,

@@ -105,7 +105,7 @@ pub const EntryWord = struct {
     /// The definition's own freeze-time dispatch id. Replayed method entries and compiled call
     /// sites carry freeze-time ids verbatim, so the seeded binding must reuse this identity: a
     /// runtime-minted id would alias some other word's replayed methods.
-    dispatch_id: u32,
+    dispatch_id: u64,
     /// The definition carried provenance, which exempts it from the redefinition arity check.
     generated: bool,
     /// The definition carried the const marker, which refuses redefinition outright.

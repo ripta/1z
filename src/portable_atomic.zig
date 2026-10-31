@@ -9,8 +9,8 @@ const is_freestanding = builtin.os.tag == .freestanding;
 /// cooperative scheduling has no concurrent caller to race against). Hosted targets keep the
 /// real atomic ops, since they have genuine multi-worker concurrent callers.
 ///
-/// Exposes the same method surface (`init`, `load`, `store`, `fetchAdd`, `fetchSub`,
-/// `cmpxchgStrong`) as `std.atomic.Value(T)` so call sites are unchanged; only the field's
+/// Exposes the same method surface (`init`, `load`, `store`, `fetchAdd`, `fetchSub`, `fetchMax`,
+/// `cmpxchgStrong`) as `std.atomic.Value(T)` so call sites are unchanged. Only the field's
 /// declared type and `.init(...)` call site switch over.
 pub fn WideCounter(comptime T: type) type {
     return struct {
@@ -53,6 +53,15 @@ pub fn WideCounter(comptime T: type) type {
             return self.inner.fetchSub(operand, order);
         }
 
+        pub fn fetchMax(self: *Self, operand: T, comptime order: std.builtin.AtomicOrder) T {
+            if (comptime is_freestanding) {
+                const old = self.inner.raw;
+                self.inner.raw = @max(old, operand);
+                return old;
+            }
+            return self.inner.fetchMax(operand, order);
+        }
+
         pub fn cmpxchgStrong(self: *Self, expected: T, new: T, comptime success_order: std.builtin.AtomicOrder, comptime fail_order: std.builtin.AtomicOrder) ?T {
             if (comptime is_freestanding) {
                 if (self.inner.raw == expected) {
@@ -75,6 +84,14 @@ test "WideCounter load/store/fetchAdd/fetchSub round-trip" {
     try std.testing.expectEqual(@as(u64, 11), c.load(.acquire));
     try std.testing.expectEqual(@as(u64, 11), c.fetchSub(1, .acq_rel));
     try std.testing.expectEqual(@as(u64, 10), c.load(.acquire));
+}
+
+test "WideCounter fetchMax keeps the larger value" {
+    var c = WideCounter(u64).init(5);
+    try std.testing.expectEqual(@as(u64, 5), c.fetchMax(3, .monotonic));
+    try std.testing.expectEqual(@as(u64, 5), c.load(.acquire));
+    try std.testing.expectEqual(@as(u64, 5), c.fetchMax(1 << 40, .monotonic));
+    try std.testing.expectEqual(@as(u64, 1 << 40), c.load(.acquire));
 }
 
 test "WideCounter cmpxchgStrong success and failure" {

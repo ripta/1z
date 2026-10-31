@@ -360,7 +360,7 @@ typedef struct onez_image_constraintcombinator_description {
 /* quotation_id, and the defining module by name, then replays the     */
 /* entry into the runtime dispatch table via registerDispatch.         */
 typedef struct onez_image_dispatch_entry_description {
-    uint32_t    dispatch_id;     /* freeze-time generic-word id, verbatim */
+    uint64_t    dispatch_id;     /* freeze-time generic-word id, verbatim */
     uint32_t    type_a_slot;     /* 1-based typevalue slot, or a reserved sentinel */
     uint32_t    type_b_slot;     /* 1-based typevalue slot, or a reserved sentinel */
     uint32_t    quotation_id;    /* index into onez_quotation_table */
@@ -1179,7 +1179,7 @@ static const onez_image_entry_import_t onez_image_entry_imports_storage[] = {
 };
 
 __attribute__((used)) const onez_image_header_t onez_image_v1 = {
-    .format_version = 24,
+    .format_version = 25,
     .module_count = 1,
     .word_count = 2,
     .marker_pool_count = 2,

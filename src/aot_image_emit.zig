@@ -74,7 +74,7 @@ pub const flag_bit_image_decode: u8 = 1 << 6;
 
 /// Format version emitted into `onez_image_header.format_version`. Bumped
 /// when the on-disk layout changes in a way the loader cannot ignore.
-pub const format_version: u32 = 24;
+pub const format_version: u32 = 25;
 
 /// Counts that the metadata emitter plumbs back into `AotMetadata`. The
 /// codegen knows these as it walks the manifest, so emitting them here
@@ -292,7 +292,7 @@ pub fn emitImageCFromCollection(
     collection: *ImageCollection,
     options: ImageEmitOptions,
     quotation_id_map: ?*const std.AutoHashMapUnmanaged(usize, u32),
-    dispatch_id_names: ?*const std.AutoHashMapUnmanaged(u32, []const u8),
+    dispatch_id_names: ?*const std.AutoHashMapUnmanaged(u64, []const u8),
     interpreter_run_bodies: ?*const std.AutoHashMapUnmanaged(u32, []const u8),
     reified_quotation_modules: []const ReifiedQuotationModuleInput,
     entry_imports: []const EntryImportInput,
@@ -2571,7 +2571,7 @@ const dispatch_type_any: u32 = 0xFFFFFFFE;
 /// rows can be sorted into a deterministic order independent of the
 /// dispatch HashMap's iteration order.
 const DispatchEntryRow = struct {
-    dispatch_id: u32,
+    dispatch_id: u64,
     type_a_slot: u32,
     type_b_slot: u32,
     quotation_id: u32,
@@ -2641,7 +2641,7 @@ fn emitDispatchEntryTable(
     // compiled methods only.
     emit_unreached_interp_run: bool,
     quotation_id_map: ?*const std.AutoHashMapUnmanaged(usize, u32),
-    dispatch_id_names: ?*const std.AutoHashMapUnmanaged(u32, []const u8),
+    dispatch_id_names: ?*const std.AutoHashMapUnmanaged(u64, []const u8),
     interpreter_run_bodies: ?*const std.AutoHashMapUnmanaged(u32, []const u8),
 ) Allocator.Error!u32 {
     const map = quotation_id_map orelse return 0;
@@ -4105,7 +4105,7 @@ fn emitTypeDeclarations(
         \\/* quotation_id, and the defining module by name, then replays the     */
         \\/* entry into the runtime dispatch table via registerDispatch.         */
         \\typedef struct onez_image_dispatch_entry_description {
-        \\    uint32_t    dispatch_id;     /* freeze-time generic-word id, verbatim */
+        \\    uint64_t    dispatch_id;     /* freeze-time generic-word id, verbatim */
         \\    uint32_t    type_a_slot;     /* 1-based typevalue slot, or a reserved sentinel */
         \\    uint32_t    type_b_slot;     /* 1-based typevalue slot, or a reserved sentinel */
         \\    uint32_t    quotation_id;    /* index into onez_quotation_table */
@@ -8393,6 +8393,52 @@ test "emitDispatchEntryTable: one row per reachable user quotation entry, types 
     // With no interpreter-run-bodies map, compiled rows carry no body bytecode.
     try testing.expect(std.mem.indexOf(u8, out.items, ".body_bytecode = NULL, .body_bytecode_len = 0") != null);
     try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_dispatch_q_0_body[]") == null);
+}
+
+test "emitDispatchEntryTable: a dispatch id above 32 bits is emitted whole in a 64-bit field" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+    const arena = ctx.quotationAllocator();
+
+    const fixnum_tv = ctx.builtin_type_values.get("fixnum").?;
+    const unary = ctx.dispatch_unary_sentinel.?.descriptor.?;
+
+    const m = try arena.create(Module);
+    m.* = .{ .name = "demo", .words = .{} };
+
+    const body = try arena.dupe(Instruction, &.{
+        .{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 0, .column = 0 },
+    });
+
+    const wide_id: u64 = (1 << 32) + 7;
+    try ctx.registerDispatch(
+        .{ .dispatch_id = wide_id, .type_a = fixnum_tv.descriptor.?, .type_b = unary },
+        .{ .body = .{ .quotation = .{ .instructions = body } }, .source_module = m },
+        false,
+    );
+
+    var manifest = try aot_image.buildImageManifest(&ctx, testing.allocator);
+    defer manifest.deinit(testing.allocator);
+    var lookup: std.StringHashMapUnmanaged(u32) = .{};
+    defer lookup.deinit(testing.allocator);
+
+    var qmap: std.AutoHashMapUnmanaged(usize, u32) = .{};
+    defer qmap.deinit(testing.allocator);
+    try qmap.put(testing.allocator, @intFromPtr(body.ptr), 0);
+
+    var collection = try collectImageSlots(testing.allocator, &ctx, manifest, .{}, &.{});
+    defer collection.deinit();
+
+    var out: std.ArrayListUnmanaged(u8) = .{};
+    defer out.deinit(testing.allocator);
+
+    _ = try emitImageCFromCollection(&out, testing.allocator, &ctx, manifest, &lookup, &collection, .{}, &qmap, null, null, &.{}, &.{});
+
+    var row_buf: [64]u8 = undefined;
+    const row = std.fmt.bufPrint(&row_buf, ".dispatch_id = {d},", .{wide_id}) catch unreachable;
+    try testing.expect(std.mem.indexOf(u8, out.items, row) != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, "uint64_t    dispatch_id;") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, "uint32_t    dispatch_id;") == null);
 }
 
 test "emitDispatchEntryTable: a shared descriptor resolves to the smallest interned slot" {

@@ -1543,7 +1543,7 @@ pub const ModuleWord = struct {
     source_column: usize = 0,
     provenance: ?WordProvenance = null,
     capability: Capability = .none,
-    dispatch_id: u32 = 0,
+    dispatch_id: u64 = 0,
     /// JIT dispatch table ID, populated when this word is registered for
     /// AOT-compiled execution. The runtime-image loader sets this from
     /// the embedded image so module-private dictionary entries can fall

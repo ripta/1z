@@ -117,7 +117,7 @@ pub const AutoUnwrap = struct {
 /// 3. a's variant name with b's enum name
 /// 4. Both enum names
 /// 5. Either or both base types, for a parameterized operand, which the caller unwraps first
-pub fn lookupBinaryWithFallback(ctx: *Context, dispatch_id: u32, a: Value, b: Value) ?AutoUnwrap {
+pub fn lookupBinaryWithFallback(ctx: *Context, dispatch_id: u64, a: Value, b: Value) ?AutoUnwrap {
     const a_type = dispatch_mod.dispatchDescriptor(a, ctx);
     const b_type = dispatch_mod.dispatchDescriptor(b, ctx);
     if (ctx.lookupBinaryDispatch(dispatch_id, a_type, b_type)) |entry| return .{ .entry = entry, .unwrap_a = false, .unwrap_b = false };
@@ -159,7 +159,7 @@ pub fn lookupBinaryWithFallback(ctx: *Context, dispatch_id: u32, a: Value, b: Va
 /// Precedence:
 /// 1. Exact variant type name (includes wildcard expansion)
 /// 2. Enum name fallback
-fn lookupUnaryWithFallback(ctx: *Context, dispatch_id: u32, a: Value) ?AutoUnwrap {
+fn lookupUnaryWithFallback(ctx: *Context, dispatch_id: u64, a: Value) ?AutoUnwrap {
     const a_type = dispatch_mod.dispatchDescriptor(a, ctx);
     if (ctx.lookupUnaryDispatch(dispatch_id, a_type)) |entry| return .{ .entry = entry, .unwrap_a = false, .unwrap_b = false };
 
@@ -183,7 +183,7 @@ fn lookupUnaryWithFallback(ctx: *Context, dispatch_id: u32, a: Value) ?AutoUnwra
 /// natives that branch on operand types (arithmetic, comparison, inspect, sequence ops, etc.)
 /// should opt in; type-agnostic natives (dup, drop, swap, etc.) must not dispatch. See also notes
 /// in the implementation of `nativeDefineMethod`.
-pub fn tryDispatchBinary(ctx: *Context, dispatch_id: u32) !bool {
+pub fn tryDispatchBinary(ctx: *Context, dispatch_id: u64) !bool {
     if (ctx.stack.depth() < 2) return false;
 
     const a = try ctx.stack.peekPlainN(1);
@@ -238,7 +238,7 @@ pub fn tryDispatchBinary(ctx: *Context, dispatch_id: u32) !bool {
 /// operand left on the stack. Returns true if dispatched.
 ///
 /// Same opt-in rules as tryDispatchBinary.
-pub fn tryDispatchUnary(ctx: *Context, dispatch_id: u32) !bool {
+pub fn tryDispatchUnary(ctx: *Context, dispatch_id: u64) !bool {
     if (ctx.stack.depth() < 1) return false;
 
     const a = try ctx.stack.peekPlain();
@@ -289,7 +289,7 @@ pub fn tryDispatchUnary(ctx: *Context, dispatch_id: u32) !bool {
 /// Unlike `tryDispatchUnary`, the operand is in the caller's hands rather than on the stack, and
 /// no PIC is consulted: `ctx.current_pic_entry` belongs to the enclosing word's call site, and
 /// seeding it with another word's entries would poison that cache.
-pub fn dispatchUnaryOnValue(ctx: *Context, dispatch_id: u32, val: Value) !bool {
+pub fn dispatchUnaryOnValue(ctx: *Context, dispatch_id: u64, val: Value) !bool {
     const result = lookupUnaryWithFallback(ctx, dispatch_id, val) orelse return false;
     try ctx.stack.push(val);
     if (result.unwrap_a) {
@@ -310,7 +310,7 @@ pub fn dispatchUnaryOnValue(ctx: *Context, dispatch_id: u32, val: Value) !bool {
 ///
 /// Returns true when an arm ran. Returns false when no arm matched, leaving the stack untouched so the
 /// caller can pop and report its own type error.
-pub fn tryDispatchContainerAtDepth(ctx: *Context, dispatch_id: u32, depth: usize, unwrap_base: bool) !bool {
+pub fn tryDispatchContainerAtDepth(ctx: *Context, dispatch_id: u64, depth: usize, unwrap_base: bool) !bool {
     if (ctx.stack.depth() < depth + 1) return false;
 
     const peeked = try ctx.stack.peekPlainN(depth);
@@ -408,7 +408,7 @@ pub fn tryDispatchGenericWithPic(ctx: *Context, word_name: []const u8, pic: ?*Po
 ///
 /// Used by the execution loop where the WordDefinition (and its dispatch_id)
 /// is already in hand, avoiding an extra dictionary lookup.
-pub fn tryDispatchGenericById(ctx: *Context, dispatch_id: u32, pic: ?*PolymorphicCache) !bool {
+pub fn tryDispatchGenericById(ctx: *Context, dispatch_id: u64, pic: ?*PolymorphicCache) !bool {
     if (pic) |cache| {
         if (!cache.megamorphic) {
             if (cache.count > 0 and cache.generation != ctx.dispatch.generation) {
@@ -539,7 +539,7 @@ fn checkOperand(ctx: *Context, val: Value, constraint: BoundedConstraint) !void 
 /// consulted or installed at bounded sites.
 pub fn satisfiesAndDispatch(
     ctx: *Context,
-    dispatch_id: u32,
+    dispatch_id: u64,
     constraint: BoundedConstraint,
     arity: ProtocolArity,
     trace_name: []const u8,
@@ -861,7 +861,7 @@ test "tryDispatchGeneric dispatches unary method for native type" {
     const body = &[_]Instruction{
         .{ .op = .{ .call_word = "inspect" }, .line = 0 },
     };
-    const dispatch_id: u32 = 1;
+    const dispatch_id: u64 = 1;
     try ctx.dispatch.register(
         .{ .dispatch_id = dispatch_id, .type_a = fixnum_tv.descriptor.?, .type_b = ctx.getDispatchUnarySentinel().descriptor.? },
         .{ .body = .{ .quotation = .{ .instructions = body } } },
@@ -894,7 +894,7 @@ test "tryDispatchGeneric tries binary before unary" {
         .{ .op = .{ .call_word = "inspect" }, .line = 0 },
     };
 
-    const dispatch_id: u32 = 2;
+    const dispatch_id: u64 = 2;
     try ctx.dispatch.register(
         .{ .dispatch_id = dispatch_id, .type_a = fixnum_tv.descriptor.?, .type_b = fixnum_tv.descriptor.? },
         .{ .body = .{ .quotation = .{ .instructions = binary_body } } },
@@ -928,7 +928,7 @@ test "tryDispatchGenericWithPic populates cache on miss" {
     const body = &[_]Instruction{
         .{ .op = .{ .call_word = "+" }, .line = 0 },
     };
-    const dispatch_id: u32 = 3;
+    const dispatch_id: u64 = 3;
     try ctx.dispatch.register(
         .{ .dispatch_id = dispatch_id, .type_a = fixnum_tv.descriptor.?, .type_b = fixnum_tv.descriptor.? },
         .{ .body = .{ .quotation = .{ .instructions = body } } },
@@ -960,7 +960,7 @@ test "tryDispatchGenericWithPic hits cache on matching types" {
     const body = &[_]Instruction{
         .{ .op = .{ .call_word = "+" }, .line = 0 },
     };
-    const dispatch_id: u32 = 3;
+    const dispatch_id: u64 = 3;
     try ctx.dispatch.register(
         .{ .dispatch_id = dispatch_id, .type_a = fixnum_tv.descriptor.?, .type_b = fixnum_tv.descriptor.? },
         .{ .body = .{ .quotation = .{ .instructions = body } } },
@@ -1041,7 +1041,7 @@ test "tryDispatchGenericWithPic with null pic_entry falls back to full lookup" {
     const body = &[_]Instruction{
         .{ .op = .{ .call_word = "+" }, .line = 0 },
     };
-    const dispatch_id: u32 = 3;
+    const dispatch_id: u64 = 3;
     try ctx.dispatch.register(
         .{ .dispatch_id = dispatch_id, .type_a = fixnum_tv.descriptor.?, .type_b = fixnum_tv.descriptor.? },
         .{ .body = .{ .quotation = .{ .instructions = body } } },
@@ -1065,7 +1065,7 @@ test "tryDispatchGenericWithPic caches unary dispatch" {
     const body = &[_]Instruction{
         .{ .op = .{ .call_word = "inspect" }, .line = 0 },
     };
-    const dispatch_id: u32 = 4;
+    const dispatch_id: u64 = 4;
     try ctx.dispatch.register(
         .{ .dispatch_id = dispatch_id, .type_a = fixnum_tv.descriptor.?, .type_b = ctx.getDispatchUnarySentinel().descriptor.? },
         .{ .body = .{ .quotation = .{ .instructions = body } } },
@@ -1089,7 +1089,7 @@ test "tryDispatchGenericWithPic caches unary dispatch" {
 
 /// Define a generic word `name`, so that it has a dispatch_id resolvable by the protocol
 /// satisfies-check, and return that dispatch_id.
-fn defineGenericForTest(ctx: *Context, name: []const u8) !u32 {
+fn defineGenericForTest(ctx: *Context, name: []const u8) !u64 {
     try ctx.defineWord(name, .{ .name = name, .action = .{ .compound = &[_]Instruction{} } });
     return ctx.resolveDispatchId(name).?;
 }

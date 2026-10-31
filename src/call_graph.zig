@@ -31,7 +31,7 @@ pub const DispatchSource = union(enum) {
     /// The context's analysis view, which adds the arms a check-mode load registered.
     context: *const Context,
 
-    fn entriesForDispatchId(self: DispatchSource, dispatch_id: u32, allocator: Allocator) ![]DispatchTable.KeyEntryPair {
+    fn entriesForDispatchId(self: DispatchSource, dispatch_id: u64, allocator: Allocator) ![]DispatchTable.KeyEntryPair {
         return switch (self) {
             .table => |table| table.entriesForDispatchId(dispatch_id, allocator),
             .context => |ctx| ctx.analysisDispatchEntriesForId(dispatch_id, .by_sequence, allocator),

@@ -9,9 +9,9 @@
 //! dispatch frames, parent-context chains, tracing, and call frames stay in the shells, behind
 //! the environment's methods. The environment must provide:
 //!
-//! - `resolveDispatchId(name: []const u8) ?u32`
-//! - `hasUnaryDispatch(dispatch_id: u32, type_a: *const TypeDescriptor) bool`
-//! - `hasBinaryDispatch(dispatch_id: u32, type_a: *const TypeDescriptor, type_b: *const TypeDescriptor) bool`
+//! - `resolveDispatchId(name: []const u8) ?u64`
+//! - `hasUnaryDispatch(dispatch_id: u64, type_a: *const TypeDescriptor) bool`
+//! - `hasBinaryDispatch(dispatch_id: u64, type_a: *const TypeDescriptor, type_b: *const TypeDescriptor) bool`
 //! - `dispatchKeysForWord(name: []const u8, alloc: Allocator) anyerror![]DispatchKey`
 //! - `selfTypeSentinel()`, `anyTypeSentinel()`, `dispatchUnarySentinel()`, and
 //!   `dispatchAnySentinel()`, each returning `*const TypeValue`

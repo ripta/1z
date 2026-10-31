@@ -44,15 +44,15 @@ const HostedEnv = struct {
 
     pub const ThrownState = ?*value_mod.ErrorObject;
 
-    pub fn resolveDispatchId(self: HostedEnv, name: []const u8) ?u32 {
+    pub fn resolveDispatchId(self: HostedEnv, name: []const u8) ?u64 {
         return self.ctx.resolveDispatchId(name);
     }
 
-    pub fn hasUnaryDispatch(self: HostedEnv, dispatch_id: u32, type_a: *const value_mod.TypeDescriptor) bool {
+    pub fn hasUnaryDispatch(self: HostedEnv, dispatch_id: u64, type_a: *const value_mod.TypeDescriptor) bool {
         return self.ctx.lookupUnaryDispatch(dispatch_id, type_a) != null;
     }
 
-    pub fn hasBinaryDispatch(self: HostedEnv, dispatch_id: u32, type_a: *const value_mod.TypeDescriptor, type_b: *const value_mod.TypeDescriptor) bool {
+    pub fn hasBinaryDispatch(self: HostedEnv, dispatch_id: u64, type_a: *const value_mod.TypeDescriptor, type_b: *const value_mod.TypeDescriptor) bool {
         return self.ctx.lookupBinaryDispatch(dispatch_id, type_a, type_b) != null;
     }
 

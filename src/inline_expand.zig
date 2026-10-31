@@ -816,7 +816,7 @@ test "a body defined again reuses its expansion until a word it called becomes i
     try ctx.stampQuotationBodySourceAs(caller, here);
 
     try defineBody(&ctx, here, "first", caller, false);
-    const first =ctx.lookupWord("first").?.action.compound;
+    const first = ctx.lookupWord("first").?.action.compound;
     try expectOps(&ctx, "first", &.{ "#", "*", "bump" });
 
     // The same body defined again gets the same array, so nothing new is allocated or registered.

@@ -120,7 +120,7 @@ pub const WordDefinition = struct {
     /// Monotonic dispatch ID assigned by Context.defineWord. Used as the
     /// identity component of DispatchKey so that same-named words in
     /// different modules get separate dispatch entries.
-    dispatch_id: u32 = 0,
+    dispatch_id: u64 = 0,
     /// Precomputed per-call facts. Derived cache; see `ExecFlags`. Populated at
     /// definition finalization, defaults to the "nothing special" all-false case.
     exec_flags: ExecFlags = .{},

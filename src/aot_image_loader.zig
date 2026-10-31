@@ -1778,7 +1778,7 @@ pub fn replayMethodDispatch(ctx: *Context) LoaderError!void {
         // dispatch_id verbatim and the key reuses it directly. The loader never
         // re-mints replayed ids from the `next_dispatch_id` counter, so a
         // replayed entry's dispatch_id equals the id a compiled call site bakes
-        // as a u32 literal for the same generic; otherwise dispatch would
+        // as a literal for the same generic; otherwise dispatch would
         // silently misroute. The counter is only advanced past the row ids,
         // which preserves them.
         const key = dispatch_mod.DispatchKey{
@@ -4644,7 +4644,7 @@ test "replayMethodDispatch: patches an entry-import frame def's dispatch_id" {
 
     const frame_idx = ctx.image_entry_import_frame orelse return error.TestExpectedFrame;
     const def = ctx.local_frames.items[frame_idx].get(generic_name) orelse return error.TestExpectedImport;
-    try testing.expectEqual(@as(u32, 7), def.dispatch_id);
+    try testing.expectEqual(@as(u64, 7), def.dispatch_id);
 }
 
 test "replayMethodDispatch: advances the mint counter past the replayed ids" {
@@ -4680,6 +4680,44 @@ test "replayMethodDispatch: advances the mint counter past the replayed ids" {
     try replayMethodDispatch(&ctx);
 
     try testing.expect(ctx.next_dispatch_id.load(.monotonic) > 5000);
+}
+
+test "replayMethodDispatch: a dispatch id above 32 bits survives the row and advances the counter" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    const wide_id: u64 = (1 << 32) + 5;
+
+    const body = [_]value_mod.Instruction{
+        .{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 0, .column = 0 },
+    };
+    var encoded: std.ArrayListUnmanaged(u8) = .{};
+    defer encoded.deinit(testing.allocator);
+    try instruction_bytecode.serializeInstructionsInto(&encoded, &body, null, testing.allocator, null, null);
+
+    const generic_name = "wide-gword";
+    const rows = [_]DispatchEntryDescription{.{
+        .dispatch_id = wide_id,
+        .type_a_slot = dispatch_type_any,
+        .type_b_slot = dispatch_type_unary,
+        .quotation_id = populate_core.dispatch_interp_quotation_id_sentinel,
+        .module_name = null,
+        .module_name_len = 0,
+        .generic_name = generic_name.ptr,
+        .generic_name_len = generic_name.len,
+        .body_bytecode = encoded.items.ptr,
+        .body_bytecode_len = @intCast(encoded.items.len),
+    }};
+
+    var header = emptyHeader();
+    header.dispatch_entry_slot_count = 1;
+    header.dispatch_entry_descriptions = &rows;
+
+    try loadIntoContext(&ctx, &header, .{}, null);
+    try replayMethodDispatch(&ctx);
+
+    try testing.expect(ctx.next_dispatch_id.load(.monotonic) > wide_id);
+    try testing.expectEqual(wide_id, ctx.aot_generic_dispatch_ids.get(generic_name).?);
 }
 
 test "registerReplayedEntry: a row replaces a builtin native entry but not a live method" {
@@ -4765,9 +4803,9 @@ test "replayMethodDispatch: patches a dep entry's dispatch_id like a word entry"
     const owner = (ctx.module_cache_value.map.get(owner_name) orelse return error.TestExpectedModule).module;
     const source = (ctx.module_cache_value.map.get(source_name) orelse return error.TestExpectedModule).module;
     const word = source.words.get(generic_name) orelse return error.TestExpectedWord;
-    try testing.expectEqual(@as(u32, 7), word.dispatch_id);
+    try testing.expectEqual(@as(u64, 7), word.dispatch_id);
     const dep = owner.deps.get(generic_name) orelse return error.TestExpectedDep;
-    try testing.expectEqual(@as(u32, 7), dep.dispatch_id);
+    try testing.expectEqual(@as(u64, 7), dep.dispatch_id);
 }
 
 test "populateModulesAndWords: private-flagged rows land in deps, coexisting with a same-named word" {
@@ -5013,7 +5051,7 @@ test "replayMethodDispatch: patches a private deps entry and templates the helpe
 
     const module_ptr = (ctx.module_cache_value.map.get(m_name) orelse return error.TestExpectedModule).module;
     const dep = module_ptr.deps.get(generic_name) orelse return error.TestExpectedDep;
-    try testing.expectEqual(@as(u32, 7), dep.dispatch_id);
+    try testing.expectEqual(@as(u64, 7), dep.dispatch_id);
 
     // The warmed deps template merges `deps` under `words`, so the private helper is present and
     // the template fast path admits probes for it.

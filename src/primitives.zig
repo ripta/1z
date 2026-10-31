@@ -19,6 +19,7 @@ const all_primitives = primitives_mod.extracted_primitives;
 const all_registry_entries = primitives_mod.extracted_registry_entries;
 
 const dispatch_mod = @import("dispatch.zig");
+const portable_atomic = @import("portable_atomic.zig");
 const DispatchTable = dispatch_mod.DispatchTable;
 
 const arithmetic_mod = @import("primitives/arithmetic.zig");
@@ -76,7 +77,7 @@ pub fn nativeNameDefinesWord(name: []const u8) bool {
     return false;
 }
 
-pub fn registerPrimitives(dict: *Dictionary, allocator: Allocator, dispatch_counter: *std.atomic.Value(u32)) !void {
+pub fn registerPrimitives(dict: *Dictionary, allocator: Allocator, dispatch_counter: *portable_atomic.WideCounter(u64)) !void {
     for (all_primitives) |p| {
         const effect: ?*const StackEffect = if (p.stack_effect) |raw|
             try makeBoxedEffect(allocator, raw)
@@ -106,7 +107,7 @@ pub fn registerNativeDispatch(dispatch: *DispatchTable, ctx: *Context) !void {
     try associative_mod.registerNativeDispatch(dispatch, ctx);
 }
 
-pub fn createNativeModule(dict: *Dictionary, allocator: Allocator, dispatch_counter: *std.atomic.Value(u32)) !void {
+pub fn createNativeModule(dict: *Dictionary, allocator: Allocator, dispatch_counter: *portable_atomic.WideCounter(u64)) !void {
     const module = try allocator.create(Module);
     module.* = .{
         .name = "native",

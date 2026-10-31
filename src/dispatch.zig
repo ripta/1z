@@ -157,12 +157,12 @@ pub fn unwrapBaseType(val: Value) Value {
 /// Key for dispatch table lookups: (dispatch_id, type_a, type_b).
 /// For unary dispatch, type_b is `&unary_sentinel`.
 pub const DispatchKey = struct {
-    dispatch_id: u32,
+    dispatch_id: u64,
     type_a: *const TypeDescriptor,
     type_b: *const TypeDescriptor,
 };
 
-/// HashMap context for DispatchKey: hashes dispatch_id as u32, type_a/type_b as pointers.
+/// HashMap context for DispatchKey: hashes dispatch_id as u64, type_a/type_b as pointers.
 pub const DispatchKeyContext = struct {
     pub fn hash(_: @This(), key: DispatchKey) u64 {
         var h = std.hash.Wyhash.init(0);
@@ -418,7 +418,7 @@ pub const DispatchTable = struct {
     /// 4. (word, "*", "*") both wildcards
     pub fn lookupBinary(
         self: *const DispatchTable,
-        dispatch_id: u32,
+        dispatch_id: u64,
         type_a: *const TypeDescriptor,
         type_b: *const TypeDescriptor,
         any_sentinel: *const TypeDescriptor,
@@ -444,7 +444,7 @@ pub const DispatchTable = struct {
     /// 2. (word, "*", "") wildcard
     pub fn lookupUnary(
         self: *const DispatchTable,
-        dispatch_id: u32,
+        dispatch_id: u64,
         type_a: *const TypeDescriptor,
         any_sentinel: *const TypeDescriptor,
         unary_sentinel: *const TypeDescriptor,
@@ -460,7 +460,7 @@ pub const DispatchTable = struct {
 
     /// Collect all dispatch keys registered for a given dispatch ID.
     /// Caller owns the returned slice.
-    pub fn keysForDispatchId(self: *const DispatchTable, dispatch_id: u32, alloc: Allocator) ![]DispatchKey {
+    pub fn keysForDispatchId(self: *const DispatchTable, dispatch_id: u64, alloc: Allocator) ![]DispatchKey {
         var results: std.ArrayListUnmanaged(DispatchKey) = .{};
         var iter = self.entries.iterator();
         while (iter.next()) |entry| {
@@ -491,7 +491,7 @@ pub const DispatchTable = struct {
     /// Register a native function dispatch entry with "native" provenance.
     pub fn registerNative(
         self: *DispatchTable,
-        dispatch_id: u32,
+        dispatch_id: u64,
         type_a: anytype,
         type_b: anytype,
         func: NativeFn,
@@ -512,7 +512,7 @@ pub const DispatchTable = struct {
     /// Look up a binary dispatch entry in the native-only shadow table.
     pub fn lookupNativeBinary(
         self: *const DispatchTable,
-        dispatch_id: u32,
+        dispatch_id: u64,
         type_a: *const TypeDescriptor,
         type_b: *const TypeDescriptor,
         any_sentinel: *const TypeDescriptor,
@@ -535,7 +535,7 @@ pub const DispatchTable = struct {
     /// Look up a unary dispatch entry in the native-only shadow table.
     pub fn lookupNativeUnary(
         self: *const DispatchTable,
-        dispatch_id: u32,
+        dispatch_id: u64,
         type_a: *const TypeDescriptor,
         any_sentinel: *const TypeDescriptor,
         unary_sentinel: *const TypeDescriptor,
@@ -552,7 +552,7 @@ pub const DispatchTable = struct {
     /// Collect all dispatch keys and entries registered for a given dispatch ID, sorted by
     /// registration sequence. The map itself iterates in pointer-hash order, which differs run to
     /// run. Caller owns the returned slice.
-    pub fn entriesForDispatchId(self: *const DispatchTable, dispatch_id: u32, alloc: Allocator) ![]KeyEntryPair {
+    pub fn entriesForDispatchId(self: *const DispatchTable, dispatch_id: u64, alloc: Allocator) ![]KeyEntryPair {
         var results: std.ArrayListUnmanaged(KeyEntryPair) = .{};
         var iter = self.entries.iterator();
         while (iter.next()) |entry| {
@@ -602,7 +602,7 @@ pub const EntriesMap = std.HashMapUnmanaged(DispatchKey, DispatchEntry, Dispatch
 /// 4-step precedence: exact, wildcard-b, wildcard-a, both-wildcards.
 pub fn lookupBinaryInEntries(
     entries: *const EntriesMap,
-    dispatch_id: u32,
+    dispatch_id: u64,
     type_a: *const TypeDescriptor,
     type_b: *const TypeDescriptor,
     any_sentinel: *const TypeDescriptor,
@@ -626,7 +626,7 @@ pub fn lookupBinaryInEntries(
 /// 2-step precedence: exact, wildcard.
 pub fn lookupUnaryInEntries(
     entries: *const EntriesMap,
-    dispatch_id: u32,
+    dispatch_id: u64,
     type_a: *const TypeDescriptor,
     any_sentinel: *const TypeDescriptor,
     unary_sentinel: *const TypeDescriptor,
@@ -641,7 +641,7 @@ pub fn lookupUnaryInEntries(
 }
 
 /// Collect dispatch keys from an entries map for a given dispatch ID, appending to results.
-pub fn collectKeysForDispatchId(entries: *const EntriesMap, dispatch_id: u32, results: *std.ArrayListUnmanaged(DispatchKey), alloc: Allocator) !void {
+pub fn collectKeysForDispatchId(entries: *const EntriesMap, dispatch_id: u64, results: *std.ArrayListUnmanaged(DispatchKey), alloc: Allocator) !void {
     var iter = entries.iterator();
     while (iter.next()) |entry| {
         if (entry.key_ptr.dispatch_id == dispatch_id) {
@@ -651,7 +651,7 @@ pub fn collectKeysForDispatchId(entries: *const EntriesMap, dispatch_id: u32, re
 }
 
 /// Collect dispatch key-entry pairs from an entries map for a given dispatch ID, appending to results.
-pub fn collectEntriesForDispatchId(entries: *const EntriesMap, dispatch_id: u32, results: *std.ArrayListUnmanaged(DispatchTable.KeyEntryPair), alloc: Allocator) !void {
+pub fn collectEntriesForDispatchId(entries: *const EntriesMap, dispatch_id: u64, results: *std.ArrayListUnmanaged(DispatchTable.KeyEntryPair), alloc: Allocator) !void {
     var iter = entries.iterator();
     while (iter.next()) |entry| {
         if (entry.key_ptr.dispatch_id == dispatch_id) {
@@ -1055,7 +1055,7 @@ test "entriesForDispatchId returns entries in registration order" {
     defer for (descs) |d| value_mod.destroyTypeDescriptor(std.testing.allocator, d);
 
     for (descs, 0..) |d, i| {
-        const dispatch_id: u32 = if (i % 2 == 0) 1 else 9;
+        const dispatch_id: u64 = if (i % 2 == 0) 1 else 9;
         try table.register(
             .{ .dispatch_id = dispatch_id, .type_a = d, .type_b = d },
             .{ .body = .{ .native_fn = dummyNativeFn } },
@@ -1082,7 +1082,7 @@ test "allEntriesSorted returns every entry in registration order" {
     defer for (descs) |d| value_mod.destroyTypeDescriptor(std.testing.allocator, d);
 
     for (descs, 0..) |d, i| {
-        const dispatch_id: u32 = if (i % 2 == 0) 1 else 9;
+        const dispatch_id: u64 = if (i % 2 == 0) 1 else 9;
         try table.register(
             .{ .dispatch_id = dispatch_id, .type_a = d, .type_b = d },
             .{ .body = .{ .native_fn = dummyNativeFn } },
